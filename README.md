@@ -61,6 +61,13 @@ examples/    four real plant projects — lift-station, batch-skid, remote-fleet
 | `hist.Sink` | where process history is archived — Postgres + `naut historian` ship in `hist/` |
 | `alarm.Journal` / `alarm.Notifier` | where alarm events land — a ring, rotated JSONL, and Postgres ship in `alarm/` |
 
+Those interfaces, and the `io`, `runtime`, `server` and `acceptance`
+packages a Go program imports, are the whole stable Go API; every other
+package is internal and can change in any release. See
+[CONTRIBUTING.md § Go API](CONTRIBUTING.md#go-api). Contributing,
+security reports and accessibility: [CONTRIBUTING.md](CONTRIBUTING.md),
+[SECURITY.md](SECURITY.md), [ACCESSIBILITY.md](ACCESSIBILITY.md).
+
 ## Getting started
 
 **New to PLCs or to nautilus? Start with the
