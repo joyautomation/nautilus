@@ -76,9 +76,30 @@ func TestSixteenServersReconnectEachOnItsOwn(t *testing.T) {
 						t.Errorf("cycle %d: driver %d Speed quality %v while down, want stale", cycle, i, q)
 					}
 				}
-				for i := range n {
+				// Fifteen come back first. Each must recover on its own while the
+				// sixteenth, whose server is still down, stays offline with its
+				// values Stale: a recovery that waited for, or was hidden by,
+				// the last one would show here.
+				last := n - 1
+				for i := range last {
 					servers[i] = startServer(t, ports[i])
 				}
+				waitFor(t, fmt.Sprintf("cycle %d: the first %d drivers back with Speed good", cycle, last), func() bool {
+					for _, d := range drivers[:last] {
+						if !d.Online() || read(t, d)["Speed"] != 12.5 {
+							return false
+						}
+					}
+					return true
+				})
+				time.Sleep(500 * time.Millisecond) // the sixteenth has had retries to wrongly come back
+				if drivers[last].Online() {
+					t.Errorf("cycle %d: driver %d is online with its server down", cycle, last)
+				}
+				if q := drivers[last].Quality()["Speed"]; q != nio.Stale {
+					t.Errorf("cycle %d: driver %d Speed quality %v while its server is down, want stale", cycle, last, q)
+				}
+				servers[last] = startServer(t, ports[last])
 				all(fmt.Sprintf("cycle %d: every driver back online", cycle), func(d *Driver) bool { return d.Online() })
 				all(fmt.Sprintf("cycle %d: every Speed good again", cycle), func(d *Driver) bool {
 					return read(t, d)["Speed"] == 12.5
