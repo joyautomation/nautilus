@@ -419,9 +419,11 @@ Measured on an AXC F 2152 with a DO16 output module (#863):
   firmware does nothing. The PLC stays Running, the bus stays up, and the
   shim keeps writing naut's last frame, so the outputs **hold**, for as
   long as naut is down. The firmware doesn't zero them when naut's
-  BusConductor/gRPC session drops. gRPC is the same: nothing writes the
-  outputs, and they hold. With the default `output-watchdog: 1s`, the shim
-  drives the frame to zero one second after naut's last write.
+  BusConductor/gRPC session drops.
+- Not run on the bench, but they follow from the above by design:
+  - On transport grpc nothing else writes the outputs either, so they hold.
+  - With the default `output-watchdog: 1s`, the shim drives the frame to
+    zero one second after naut's last write.
 - **The shim killed:** the firmware treats it as fatal ("Process
   'NautilusIo' has exited unexpectedly"). Within about 4 s the hardware
   watchdog reboots the whole controller, and the outputs go off with it.
