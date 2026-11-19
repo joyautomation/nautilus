@@ -44,7 +44,7 @@ func (b *bench) node(t *testing.T, i int, dir string, lead Leadership) *Node {
 		file = filepath.Join(dir, fmt.Sprintf("n%d.jsonl", i))
 	}
 	n, err := New(Options{
-		Self: b.urls[i], Peers: b.urls, Leadership: lead, File: file, Token: "t",
+		Self: b.urls[i], Peers: b.urls, Leadership: lead, File: file, Token: "t", Ephemeral: file == "",
 		Apply: func(e Entry) error {
 			b.mu.Lock()
 			b.applied[i] = append(b.applied[i], e)
@@ -166,12 +166,14 @@ func TestMinorityIsReadOnlyAndNothingLeaks(t *testing.T) {
 	}
 	b.servers[2].Close()
 	_, err := b.nodes[0].Propose(ctx, Entry{Kind: KindAck, IDs: []string{"b"}, By: "op"})
-	if !errors.Is(err, ErrReadOnly) {
-		t.Fatalf("1 of 3 must be read-only, got %v", err)
+	if !errors.Is(err, ErrReadOnly) || !errors.Is(err, ErrUnconfirmed) {
+		t.Fatalf("1 of 3 must be read-only, the write unconfirmed; got %v", err)
 	}
-	// The failed write is gone from the leader's log and was never applied.
-	if b.nodes[0].LastSeq() != 1 || b.count(0) != 1 {
-		t.Fatalf("a refused write leaked: last %d applied %d", b.nodes[0].LastSeq(), b.count(0))
+	// The unconfirmed write stays in the leader's log (its outcome is
+	// unknown: a later majority may still commit it), but nothing applies
+	// it while no majority holds it.
+	if b.nodes[0].LastSeq() != 2 || b.count(0) != 1 {
+		t.Fatalf("an unconfirmed write: last %d applied %d; want it kept (2) and not applied (1)", b.nodes[0].LastSeq(), b.count(0))
 	}
 	if st := b.nodes[0].Status(); st.Writable {
 		t.Error("leader without a majority must report read-only")

@@ -16,10 +16,16 @@
 // applies it, and answers the client. Followers store what the leader
 // sends and apply only up to the commit index the leader advertises, so
 // no instance applies an entry a majority does not hold. A write that
-// misses the majority is removed from the leader's log and the client is
-// told no; a follower that stored it replaces it when the leader reuses
-// the number. A peer that was away asks the leader for everything after
-// its last entry. Entries carry the leader's term; a stale leader's
+// misses the majority is NOT CONFIRMED (ErrUnconfirmed): it stays in the
+// leader's log and on any follower that stored it, and it may still be
+// committed and applied (by this leader's next write, or by the next
+// leader, which takes the most up-to-date log), so its outcome is unknown,
+// never "no"; a client re-reads the state. A number is never reused for a
+// different entry in the same term. Replication carries the leader's
+// previous entry (Raft's consistency check), so a follower takes entries
+// only on top of a log equal to the leader's, and a stale entry it holds is
+// replaced. A peer that was away asks the leader for everything after its
+// commit index. Entries carry the leader's term; a stale leader's
 // replication is refused.
 //
 // Each instance keeps the log in memory and appends it to a local file
@@ -63,9 +69,23 @@ type Entry struct {
 	Kind   string   `json:"kind"`
 	IDs    []string `json:"ids,omitempty"`   // ack
 	ID     string   `json:"id,omitempty"`    // shelve, unshelve
-	Until  int64    `json:"until,omitempty"` // shelve, epoch ms
+	Until  int64    `json:"until,omitempty"` // shelve, substitute: epoch ms
 	By     string   `json:"by"`
 	Origin string   `json:"origin,omitempty"` // the instance that took the write
+
+	// Substitute values (#707). A substitute entry's Seq is the
+	// substitute's ID; unsubstitute and suback name entries by that Seq
+	// (Ref, Refs), never by tag, so a stale stop cannot end a newer
+	// substitute of the same tag. Every field is omitempty: a log written
+	// before them loads unchanged, and an entry of another kind carries
+	// none.
+	Tag        string          `json:"tag,omitempty"`        // substitute: the address
+	Value      json.RawMessage `json:"value,omitempty"`      // substitute: the value, as JSON
+	GrantedMs  int64           `json:"grantedMs,omitempty"`  // substitute: the duration granted
+	AckOnStart bool            `json:"ackOnStart,omitempty"` // substitute
+	Ref        uint64          `json:"ref,omitempty"`        // unsubstitute: the substitute's Seq
+	Refs       []uint64        `json:"refs,omitempty"`       // suback: the substitutes' Seqs
+	Reason     string          `json:"reason,omitempty"`     // unsubstitute: "" (a person) or "expired"
 }
 
 func (e Entry) same(o Entry) bool {
@@ -78,6 +98,17 @@ const (
 	KindAck      = "ack"
 	KindShelve   = "shelve"
 	KindUnshelve = "unshelve"
+
+	// Substitute values (#707): see Entry.
+	KindSubstitute   = "substitute"
+	KindUnsubstitute = "unsubstitute"
+	KindSuback       = "suback"
+
+	// KindNoop is a new leader's empty entry of its own term (SyncLeader):
+	// committing it commits everything before it, which is how a leader
+	// commits entries an earlier term stored but never committed (Raft
+	// §5.4.2). Apply never sees it.
+	KindNoop = "noop"
 )
 
 // Leadership is who the sequencer is right now. A Kubernetes Lease elector
@@ -123,8 +154,15 @@ type Options struct {
 	Peers []string
 	// Leadership says who sequences. Required with more than one peer.
 	Leadership Leadership
-	// File is the local append-only copy; "" keeps the log in memory only.
+	// File is the local append-only copy. "" keeps the log in memory only,
+	// which New refuses with more than one peer unless Ephemeral is set:
+	// a restarted leader with an empty log and an unchanged term would
+	// number entries again with (seq, term) pairs a follower already holds
+	// for other entries, and the previous-entry check would pass them.
 	File string
+	// Ephemeral allows several peers with no File. For tests only: it is
+	// unsafe in production (see File).
+	Ephemeral bool
 	// Apply is called for every committed entry, in order, exactly once per
 	// process lifetime (replayed from File at startup).
 	Apply Applier
@@ -174,6 +212,12 @@ type Status struct {
 // ErrReadOnly says this instance cannot commit a write right now.
 var ErrReadOnly = errors.New("oplog: read-only: no quorum reachable")
 
+// ErrUnconfirmed says a write was stored by the leader but not confirmed
+// by a majority: it may still be committed and applied later, so the
+// write's outcome is unknown, not refused. It always comes wrapped with
+// ErrReadOnly (errors.Is matches both).
+var ErrUnconfirmed = errors.New("oplog: write not confirmed: it may still be applied")
+
 // New opens the node, replaying the file into Apply up to its commit mark.
 func New(o Options) (*Node, error) {
 	if o.Now == nil {
@@ -197,6 +241,9 @@ func New(o Options) (*Node, error) {
 		}
 		if !contains(o.Peers, o.Self) {
 			return nil, fmt.Errorf("oplog: Self %q is not among Peers", o.Self)
+		}
+		if o.File == "" && !o.Ephemeral {
+			return nil, errors.New("oplog: several peers need a File; an in-memory log restarted under the same term would reuse sequence numbers its peers hold for other entries")
 		}
 	}
 	n := &Node{o: o, client: &http.Client{Timeout: o.Timeout}, log: o.Log, lastContact: map[string]time.Time{}}
@@ -432,13 +479,22 @@ func truncateStr(s string, n int) string {
 
 var errGap = errors.New("gap")
 var errConflict = errors.New("conflict")
+var errMismatch = errors.New("mismatch")
 
 // accept stores entries from the leader (or the leader's own), in order:
 // a duplicate with the same content is skipped; a different entry at an
-// UNCOMMITTED number replaces it and everything after (the old one was
-// never committed, or a newer term says otherwise); a different entry at a
-// committed number is a conflict; a number beyond last+1 is a gap. Caller
-// holds mu. Returns how many were new.
+// UNCOMMITTED number replaces it and everything after; a different entry
+// at a committed number is a conflict; a number beyond last+1 is a gap.
+// Caller holds mu. Returns how many were new.
+//
+// Every caller hands it an authoritative log, so an uncommitted entry is
+// replaced whatever its term (Raft's follower rule): replication from the
+// current leader whose previous entry matched (the replicate handler's
+// prevSeq/prevTerm check), a follower's catch-up from the leader, and a
+// new leader's catch-up from the most up-to-date log a majority holds
+// (leaderCatchUp). An older term's uncommitted entry can sit at a seq where
+// that log holds a lower term's entry, so a term comparison here would
+// refuse the very replacement that keeps the logs equal.
 func (n *Node) acceptLocked(es []Entry) (int, error) {
 	fresh := 0
 	for _, e := range es {
@@ -460,9 +516,6 @@ func (n *Node) acceptLocked(es []Entry) (int, error) {
 			}
 			if e.Seq <= n.commit {
 				return fresh, fmt.Errorf("%w: a different entry at committed seq %d", errConflict, e.Seq)
-			}
-			if e.Term < have.Term {
-				return fresh, fmt.Errorf("%w: seq %d from term %d, have term %d", errConflict, e.Seq, e.Term, have.Term)
 			}
 			// Replace the uncommitted suffix.
 			n.entries = append(n.entries[:i:i], e)
@@ -501,7 +554,7 @@ func (n *Node) commitTo(seq uint64) {
 }
 
 func (n *Node) apply(e Entry) {
-	if n.o.Apply == nil {
+	if n.o.Apply == nil || e.Kind == KindNoop {
 		return
 	}
 	if err := n.o.Apply(e); err != nil {
@@ -509,25 +562,20 @@ func (n *Node) apply(e Entry) {
 	}
 }
 
-// truncateLocked drops the uncommitted suffix from seq on. Caller holds mu.
-func (n *Node) truncateLocked(seq uint64) {
-	i := sort.Search(len(n.entries), func(i int) bool { return n.entries[i].Seq >= seq })
-	if i >= len(n.entries) {
-		return
-	}
-	n.entries = n.entries[:i:i]
-	if err := n.rewrite(); err != nil {
-		n.log.Warn("oplog: truncate", "error", err)
-	}
-}
-
 // ── the wire ──
 
 type replicateReq struct {
-	From    string  `json:"from"`
-	Term    uint64  `json:"term"`
-	Commit  uint64  `json:"commit"`
-	Entries []Entry `json:"entries"`
+	From   string `json:"from"`
+	Term   uint64 `json:"term"`
+	Commit uint64 `json:"commit"`
+	// PrevSeq and PrevTerm name the leader's entry just before Entries (its
+	// last entry, for a heartbeat): the follower takes Entries, and the
+	// commit index, only when it holds that same entry (Raft's
+	// prevLogIndex/prevLogTerm), so a stale entry it holds is replaced,
+	// never kept and later applied.
+	PrevSeq  uint64  `json:"prevSeq"`
+	PrevTerm uint64  `json:"prevTerm"`
+	Entries  []Entry `json:"entries"`
 }
 
 type replicateResp struct {
@@ -544,6 +592,11 @@ type afterResp struct {
 	Entries []Entry `json:"entries"`
 	Commit  uint64  `json:"commit"`
 	Term    uint64  `json:"term"`
+	// LastSeq and LastTerm are the answering log's last entry: a new
+	// leader compares whole logs by them (Raft's up-to-date rule), not by
+	// the entries after the commit index, which may be none.
+	LastSeq  uint64 `json:"lastSeq"`
+	LastTerm uint64 `json:"lastTerm"`
 }
 
 // Propose takes an operator event from this instance's client: sequenced
@@ -562,19 +615,14 @@ func (n *Node) Propose(ctx context.Context, e Entry) (Entry, error) {
 	if err := n.call(ctx, leader, "/api/oplog/propose", e, &out); err != nil {
 		return Entry{}, fmt.Errorf("%w (leader %s: %v)", ErrReadOnly, leader, err)
 	}
-	// Committed by the leader: take it and its commit mark now, so the
-	// client that asked sees it at once; a gap means we are behind, so
-	// catch up instead.
-	n.mu.Lock()
-	_, err := n.acceptLocked([]Entry{out.Entry})
-	if err == nil {
-		n.commitTo(out.Commit)
-	}
-	n.mu.Unlock()
-	if err != nil {
-		if cerr := n.CatchUp(ctx); cerr != nil {
-			n.log.Warn("oplog: catch-up after propose", "error", cerr)
-		}
+	// Committed by the leader: catch up from it now, so the client that
+	// asked sees it at once. Through CatchUp (from this instance's commit
+	// index), not by taking the answer's entry and commit index alone: an
+	// entry this instance holds below it may be stale, and only the
+	// leader's log from the commit on proves which entries are the
+	// committed ones (the previous-entry check, as replication has it).
+	if err := n.CatchUp(ctx); err != nil {
+		n.log.Warn("oplog: catch-up after propose", "error", err)
 	}
 	return out.Entry, nil
 }
@@ -586,60 +634,144 @@ func (n *Node) Propose(ctx context.Context, e Entry) (Entry, error) {
 // over entries its peers already committed. Raft restricts votes to the
 // most advanced log; here the leader is elected elsewhere, so it catches
 // up instead. Caller holds seqMu.
-func (n *Node) leaderCatchUp(ctx context.Context, term uint64) {
+//
+// It succeeds only when the peers that answered and this instance make a
+// majority: a committed entry is stored on a majority, and any majority
+// meets it, so then the most advanced answer holds every committed entry.
+// Fewer answers and it returns ErrReadOnly and the term stays unsynced, so
+// the next call asks again.
+func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 	n.mu.Lock()
 	if n.syncedTerm == term {
 		n.mu.Unlock()
-		return
+		return nil
 	}
+	// From the COMMIT index, not the last entry: an uncommitted suffix of
+	// this leader's own may be stale (stored, never replicated, and since
+	// overtaken by a committed entry at the same seq), and only answers
+	// from its commit on carry the entries that replace it. Its own suffix
+	// is one of the candidates.
+	from := n.commit
 	last := n.lastLocked()
+	own := afterResp{Entries: n.afterLocked(from), Commit: n.commit, LastSeq: last, LastTerm: n.termAtLocked(last)}
 	n.mu.Unlock()
-	// The most advanced peer is Raft's "up to date": the higher term on its
-	// last entry wins, then the longer log, so an older term's uncommitted
-	// leftovers never outrank a committed suffix.
-	lastTerm := func(r afterResp) uint64 {
-		if len(r.Entries) == 0 {
-			return 0
-		}
-		return r.Entries[len(r.Entries)-1].Term
+	// The most advanced log is Raft's "up to date", compared on each WHOLE
+	// log's last entry: the higher term wins, then the higher seq, so an
+	// older term's uncommitted leftovers never outrank a newer term's
+	// committed log, even one that ends at the commit index (and so sends
+	// no entries). This leader's own log wins a tie.
+	better := func(a, b afterResp) bool {
+		return a.LastTerm > b.LastTerm || a.LastTerm == b.LastTerm && a.LastSeq > b.LastSeq
 	}
-	var best afterResp
-	found := false
+	best, bestSelf := own, true
+	commit := own.Commit
+	answered := 1 // this instance
+	var errs []string
 	for _, p := range n.o.Peers {
 		if p == n.o.Self {
 			continue
 		}
 		var got afterResp
-		if err := n.call(ctx, p, fmt.Sprintf("/api/oplog?after=%d", last), nil, &got); err != nil {
+		if err := n.call(ctx, p, fmt.Sprintf("/api/oplog?after=%d", from), nil, &got); err != nil {
+			errs = append(errs, p+": "+err.Error())
 			continue
 		}
-		if !found || lastTerm(got) > lastTerm(best) || (lastTerm(got) == lastTerm(best) && len(got.Entries) > len(best.Entries)) {
-			best, found = got, true
+		if got.Term > term {
+			// A peer has seen a newer term: this leadership is over.
+			return fmt.Errorf("%w: a peer is at term %d, this leader at %d", ErrReadOnly, got.Term, term)
 		}
+		answered++
+		commit = max(commit, got.Commit)
+		if better(got, best) {
+			best, bestSelf = got, false
+		}
+	}
+	if answered < n.majority() {
+		return fmt.Errorf("%w: catch-up heard from %d of %d (%s)", ErrReadOnly, answered, len(n.o.Peers), strings.Join(errs, "; "))
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if found && len(best.Entries) > 0 {
+	if !bestSelf && len(best.Entries) > 0 {
 		if _, err := n.acceptLocked(best.Entries); err != nil {
 			n.log.Warn("oplog: leader catch-up", "error", err)
-			return
+			return err
 		}
-		n.commitTo(best.Commit)
 	}
+	// The best log a majority answered with holds every committed entry,
+	// so any commit index one of them reported is safe here.
+	n.commitTo(commit)
 	n.syncedTerm = term
+	return nil
+}
+
+// SyncLeader brings a new leader's log up to every committed entry, and
+// commits and applies them, before it returns: what a takeover needs
+// before its first scan, since the lazy catch-up in front of the first
+// write (Propose) may come much later, or never. It catches up (see
+// leaderCatchUp: an error unless a majority answered) and then, if it
+// holds entries past its commit index (another term stored them and its
+// leader died before advertising the commit), appends and commits a
+// KindNoop of its own term, which commits everything before it.
+//
+// Nil on a standalone node and once this term is synced. Errors:
+//   - ErrReadOnly: this instance is not the leader, a majority did not
+//     answer, or a peer has seen a newer term (this leadership is over);
+//   - ErrReadOnly wrapping ErrUnconfirmed: the noop missed its majority
+//     (the entries before it are still not known committed);
+//   - a conflict: the most up-to-date log differs from this one at a seq
+//     this instance had committed, which means the logs diverged and
+//     needs a person;
+//   - the log file's write error.
+//
+// On any error the term stays unsynced, and the next call tries again.
+func (n *Node) SyncLeader(ctx context.Context) error {
+	if n.standalone() {
+		return nil
+	}
+	n.seqMu.Lock()
+	defer n.seqMu.Unlock()
+	if !n.isLeader() {
+		return fmt.Errorf("%w: not the leader", ErrReadOnly)
+	}
+	if err := n.leaderCatchUp(ctx, n.currentTerm()); err != nil {
+		return err
+	}
+	n.mu.Lock()
+	behind := n.lastLocked() > n.commit
+	n.mu.Unlock()
+	if !behind {
+		return nil
+	}
+	_, err := n.sequenceLocked(ctx, Entry{Kind: KindNoop, By: "system", Origin: n.o.Self})
+	return err
 }
 
 // sequence is the leader's path, one proposal at a time: number, store,
 // replicate to a majority, commit, apply. A proposal that misses the
-// majority is removed again and the client is told no.
+// majority stays in the log, unconfirmed (see ErrUnconfirmed).
 func (n *Node) sequence(ctx context.Context, e Entry) (Entry, error) {
 	n.seqMu.Lock()
 	defer n.seqMu.Unlock()
 	if !n.isLeader() {
 		return Entry{}, fmt.Errorf("%w: no longer the leader", ErrReadOnly)
 	}
+	// No write is numbered without a synced term: catch-up and
+	// replication are different requests, and a write that replicated to
+	// a majority after a failed catch-up could take the number of an
+	// entry that majority already committed.
+	if err := n.leaderCatchUp(ctx, n.currentTerm()); err != nil {
+		return Entry{}, err
+	}
+	return n.sequenceLocked(ctx, e)
+}
+
+// sequenceLocked numbers, stores, replicates and commits one entry.
+// Caller holds seqMu.
+func (n *Node) sequenceLocked(ctx context.Context, e Entry) (Entry, error) {
+	if !n.isLeader() {
+		return Entry{}, fmt.Errorf("%w: no longer the leader", ErrReadOnly)
+	}
 	term := n.currentTerm()
-	n.leaderCatchUp(ctx, term)
 	n.mu.Lock()
 	e.Seq = n.lastLocked() + 1
 	e.Term = term
@@ -666,11 +798,15 @@ func (n *Node) sequence(ctx context.Context, e Entry) (Entry, error) {
 		stored++
 	}
 	if stored < n.majority() {
+		// Kept, not truncated: a follower whose reply was lost may hold
+		// it, and the number reused for another entry of this term would
+		// pass that follower's previous-entry check and leave it applying
+		// a different entry at the same seq. The next write (or leader)
+		// carries it to a majority, or a newer term's leader replaces it.
 		n.mu.Lock()
-		n.truncateLocked(e.Seq)
 		n.syncedTerm = 0 // a peer may know more than we do: catch up before the next write
 		n.mu.Unlock()
-		return Entry{}, fmt.Errorf("%w: %d of %d stored (%s)", ErrReadOnly, stored, len(n.o.Peers), strings.Join(errs, "; "))
+		return Entry{}, fmt.Errorf("%w: %w: %d of %d stored (%s)", ErrReadOnly, ErrUnconfirmed, stored, len(n.o.Peers), strings.Join(errs, "; "))
 	}
 	n.mu.Lock()
 	n.commitTo(e.Seq)
@@ -680,20 +816,52 @@ func (n *Node) sequence(ctx context.Context, e Entry) (Entry, error) {
 
 // replicateTo sends entries to one peer, filling a gap it reports.
 func (n *Node) replicateTo(ctx context.Context, peer string, es []Entry, term, commit uint64) error {
-	var resp replicateResp
-	err := n.call(ctx, peer, "/api/oplog/replicate", replicateReq{From: n.o.Self, Term: term, Commit: commit, Entries: es}, &resp)
-	var he *httpError
-	if errors.As(err, &he) && he.code == http.StatusConflict && he.gap {
-		// The peer is behind: send everything it lacks.
+	send := func(es []Entry) (replicateResp, error) {
+		n.mu.Lock()
+		prev := n.lastLocked() // a heartbeat: the leader's last entry
+		if len(es) > 0 {
+			prev = es[0].Seq - 1
+		}
+		pt := n.termAtLocked(prev)
+		n.mu.Unlock()
+		var resp replicateResp
+		err := n.call(ctx, peer, "/api/oplog/replicate",
+			replicateReq{From: n.o.Self, Term: term, Commit: commit, PrevSeq: prev, PrevTerm: pt, Entries: es}, &resp)
+		return resp, err
+	}
+	resp, err := send(es)
+	// The peer is behind (a gap: Have is its last entry) or its entry
+	// before these is not ours (a mismatch: Have is its commit index):
+	// send everything after Have, and again from what the peer answers
+	// then (a gap's resend can meet a mismatch below it), until it takes
+	// them. Each step moves Have down, to the peer's commit index at
+	// worst, where the logs agree, so a few steps settle it; the bound
+	// only guards a peer that answers nonsense, and the next heartbeat
+	// tries again.
+	for range 8 {
+		var he *httpError
+		if !errors.As(err, &he) || he.code != http.StatusConflict || !he.resend {
+			return err
+		}
 		n.mu.Lock()
 		missing := n.afterLocked(resp.Have)
 		n.mu.Unlock()
 		if len(missing) == 0 {
 			return err
 		}
-		err = n.call(ctx, peer, "/api/oplog/replicate", replicateReq{From: n.o.Self, Term: term, Commit: commit, Entries: missing}, &resp)
+		resp, err = send(missing)
 	}
 	return err
+}
+
+// termAtLocked is the term of the entry at seq (0 for seq 0, or none).
+// Caller holds mu.
+func (n *Node) termAtLocked(seq uint64) uint64 {
+	i := sort.Search(len(n.entries), func(i int) bool { return n.entries[i].Seq >= seq })
+	if seq == 0 || i >= len(n.entries) || n.entries[i].Seq != seq {
+		return 0
+	}
+	return n.entries[i].Term
 }
 
 // Heartbeat is the leader's periodic empty replication: it carries the
@@ -727,8 +895,11 @@ func (n *Node) CatchUp(ctx context.Context) error {
 	if leader == "" {
 		return ErrReadOnly
 	}
+	// From the commit index, not the last entry: an uncommitted entry this
+	// instance holds may be stale, and only the leader's entries from the
+	// commit on replace it (see acceptLocked).
 	var got afterResp
-	if err := n.call(ctx, leader, fmt.Sprintf("/api/oplog?after=%d", n.LastSeq()), nil, &got); err != nil {
+	if err := n.call(ctx, leader, fmt.Sprintf("/api/oplog?after=%d", n.Commit()), nil, &got); err != nil {
 		return err
 	}
 	n.mu.Lock()
@@ -794,8 +965,10 @@ func (n *Node) Ping(ctx context.Context) {
 
 type httpError struct {
 	code int
-	gap  bool
-	body string
+	// resend: a replicate refused for a gap or a mismatched previous
+	// entry; the answer's Have says where to resend from.
+	resend bool
+	body   string
 }
 
 func (e *httpError) Error() string { return fmt.Sprintf("HTTP %d: %s", e.code, e.body) }
@@ -831,7 +1004,7 @@ func (n *Node) call(ctx context.Context, base, path string, body any, out any) e
 		he := &httpError{code: resp.StatusCode, body: strings.TrimSpace(string(data))}
 		if resp.StatusCode == http.StatusConflict && out != nil {
 			_ = json.Unmarshal(data, out) // a gap answer carries the peer's last seq
-			he.gap = strings.Contains(he.body, `"gap"`)
+			he.resend = strings.Contains(he.body, `"gap"`) || strings.Contains(he.body, `"mismatch"`)
 		}
 		return he
 	}
@@ -870,7 +1043,8 @@ func (n *Node) Handler() http.Handler {
 		var after uint64
 		_, _ = fmt.Sscanf(r.URL.Query().Get("after"), "%d", &after)
 		n.mu.Lock()
-		resp := afterResp{Entries: n.afterLocked(after), Commit: n.commit, Term: n.term}
+		last := n.lastLocked()
+		resp := afterResp{Entries: n.afterLocked(after), Commit: n.commit, Term: n.term, LastSeq: last, LastTerm: n.termAtLocked(last)}
 		n.mu.Unlock()
 		writeJSON(w, http.StatusOK, resp)
 	}))
@@ -913,11 +1087,28 @@ func (n *Node) Handler() http.Handler {
 		if req.Term > n.term {
 			n.term = req.Term
 		}
-		_, err := n.acceptLocked(req.Entries)
+		// Raft's consistency check: take these entries, and the commit
+		// index, only on top of the leader's own previous entry. Without
+		// it a stale entry this instance holds (stored, never committed)
+		// would stay under the leader's next ones and be applied once the
+		// commit index passed it.
+		var err error
+		switch {
+		case req.PrevSeq > n.lastLocked():
+			err = fmt.Errorf("%w: have %d, the leader's previous entry is %d", errGap, n.lastLocked(), req.PrevSeq)
+		case n.termAtLocked(req.PrevSeq) != req.PrevTerm:
+			err = errMismatch
+		default:
+			_, err = n.acceptLocked(req.Entries)
+		}
 		if err == nil {
-			n.commitTo(req.Commit)
+			// Only as far as this request proved the logs equal.
+			n.commitTo(min(req.Commit, req.PrevSeq+uint64(len(req.Entries))))
 		}
 		have := n.lastLocked()
+		if errors.Is(err, errMismatch) {
+			have = n.commit // resend from what is committed here
+		}
 		commit := n.commit
 		if l := n.leaderAddr(); l != "" {
 			n.lastContact[l] = n.o.Now()
@@ -925,8 +1116,11 @@ func (n *Node) Handler() http.Handler {
 		n.mu.Unlock()
 		if err != nil {
 			kind := "conflict"
-			if errors.Is(err, errGap) {
+			switch {
+			case errors.Is(err, errGap):
 				kind = "gap"
+			case errors.Is(err, errMismatch):
+				kind = "mismatch"
 			}
 			writeJSON(w, http.StatusConflict, map[string]any{"error": kind, "detail": err.Error(), "have": have, "commit": commit})
 			return
