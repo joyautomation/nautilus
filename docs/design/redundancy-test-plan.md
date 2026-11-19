@@ -105,6 +105,25 @@ with random durations from 0.1·lease to 10·lease. That is 2,000 seeds on every
 nightly. A failing seed gets minimised to the shortest schedule that still fails, then added
 to the matrix as a named regression case.
 
+**As built (PR 2b, `quorum/sim`).**
+- **The simulator.** Virtual time is in integer nanoseconds, and clock rates are integer ppm, so a seed replays identically on amd64 and arm64. Every message goes through the real codec.
+- **The oracles** are judged on exact intervals after each run:
+  - **I1:** gate intervals, mapped through each node's clock history.
+  - **The lease oracle:** while a gate is open, two counted voters hold running promises to that controller. It is judged from a ledger of every grant a real `Voter` emitted.
+  - **The ledger rule:** no voter grants inside a running promise to another.
+  - **I2:** a simulated device.
+  - **I4:** per voter, and per term led.
+  - **I6:** the bound is 3.5 leases after the last heal. On top of the §4.5 takeover, a leader that lapses just after the heal backs off two leases, and a late duplicate of a renewal can hold a standby off one lease past its arrival.
+  - **I7:** changes of gate holder.
+  - **Steady state:** once settled, one unbroken holder, every counted voter backing it, and no vote term moving. Every safety oracle passed while a stuck standby churned the terms, which is why this oracle exists.
+- **The matrix** runs 1,728 cases, with expectations from a connectivity rule that is independent of the protocol: with two of three vote links cut, the fully-up link decides the leader.
+- **The seeds.** `go test ./quorum/sim` runs seeds 1–2000. `QUORUM_SEEDS=N` runs 1–N, and `QUORUM_SEEDS=a-b` runs a range. `QUORUM_SEED=k ... -run '^TestSeeds$' -v` runs one seed with its trace. Every failure prints that line and a shrunk schedule as a Go literal.
+- **The runtime:** about 2 s, or 21 s under `-race`.
+- **Excluded by name:**
+  - F22b, a frozen controller clock, which must breach I1;
+  - skew beyond ρ, which must breach I1 at some phase;
+  - #976, two lost controller files, a named expected failure until the handshake PR. The generator draws at most one lost controller file per schedule.
+
 ### 3.3 Mutation checks (T2, nightly; required to pass before each milestone)
 
 Each mutation below is a build tag that breaks one rule of the design. Each one **must** make
@@ -139,6 +158,26 @@ case caught it. A mutation joins the nightly run in the PR that builds the rule 
 | leases timed on `CLOCK_MONOTONIC`, which stops across a suspend | design §3.1, clocks | 2 |
 | the override opens the gate before its journal fsync | I8 | 5 |
 | the override survives hearing a peer | design §7 | 5 |
+
+**Not yet caught by the T2 simulator alone** (measured on #981; each is pinned in T1 by
+`quorum`'s own tests, and 2c adds a targeted sim case for each before its tag joins the
+nightly):
+- a voter answers before its fsync (needs a crash inside a slow fsync, then a same-term
+  request from the other candidate);
+- the lapse back-off, removed or cut to one lease (the unheard-campaign back-off masks it in
+  the matrix);
+- a grant matched by term, not by request id (needs a late grant for an earlier renewal);
+- renewals seen when refused (#973), `Candidate.Observe`, and a retry that moves the look
+  (#979): liveness rules the current schedules don't stress enough to fail.
+
+The sim does catch these (with the cases that go red):
+- no ρ: 32 seeds and the skew test;
+- the lease timed from the reply: 2 seeds and the skew test;
+- a restarted voter granting at once: 23 seeds and named cases;
+- grants from any incarnation: 16 seeds and named cases;
+- a promise of half a lease: 256 matrix cases and 137 seeds;
+- no re-term: 704 matrix cases and 144 seeds;
+- no yield: the livelock regressions and one seed.
 
 A formal model (TLA+ or PlusCal of the vote protocol, checked by TLC) is **optional**. It gets
 decided after PR 2, from what the simulation finds.
@@ -447,15 +486,17 @@ requirements agreed on #707. They join the run in #707's oplog PR, which builds 
      (seconds) is accepted. Then it times that remainder on `CLOCK_BOOTTIME`. A takeover
      never restarts the full duration.
    - **A remainder outside its bounds** means the new leader's wall clock was stepped: below
-     zero, the substitute has expired. Above the granted duration plus the skew bound, it is
-     capped at the granted duration and raises the alarm.
+     zero, the substitute has expired. Above the granted duration plus the skew bound of
+     **30 s** (a named constant in the #707 code), it is capped at the granted duration and
+     raises `__Substitute_Fault`.
    - **A single controller across a restart** works the same way: the remainder comes from
      `until`, so downtime counts toward the duration.
    - Steps: step the leader's clock ±1 h mid-substitute; it still ends at its granted time.
      Then step the standby's clock before a takeover. Set 1 h ahead, the remainder
      shrinks by 1 h: it ends early, at worst at once, with the usual expiry audit and
      `__Substitute_Expired` pulse. Set 1 h behind, the remainder grows past the granted
-     duration: it is capped there, and the alarm is raised.
+     duration: it is capped there, and `__Substitute_Fault` is raised. At the bound: 29 s
+     behind is accepted as skew (no cap, no fault), and 31 s behind is capped and faults.
    - **Repeated takeovers inside one substitute:** take over A→B→A→B at intervals shorter than
      the granted duration. The substitute still ends at its granted time, ± the skew.
    - Mutations: expiry taken from the wall-clock `until` on a steady leader (a step then
