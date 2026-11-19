@@ -1,0 +1,773 @@
+// Package sim is a deterministic discrete-event simulator for the vote
+// protocol of package quorum (test plan tier T2). It drives the real
+// quorum.Voter and quorum.Candidate, through the real wire codec, over a
+// simulated network, disk and set of clocks, and records what happened so
+// the oracles (oracle.go) can judge the run on exact intervals.
+//
+// Everything is a function of Options: one seed and one fault schedule
+// replay bit for bit. Time is integer nanoseconds, clock rates are integer
+// ppm, every random draw comes from a PRNG seeded from Options.Seed, the
+// event queue breaks ties by sequence number, and no map is iterated.
+package sim
+
+import (
+	"container/heap"
+	"fmt"
+	"hash/fnv"
+	"math/rand/v2"
+	"time"
+
+	"github.com/joyautomation/nautilus/quorum"
+)
+
+// Addr is a node's place in the simulated network. Several nodes may carry
+// the same quorum.NodeID (a second witness copy is also "W"), so the sim
+// routes by Addr, never by name.
+type Addr int
+
+// The nodes of every run. A, B and W are the pair and its witness. W2 is
+// a second witness copy under the same name (F15b), and Z a voter under a
+// name the pair does not know; both are down unless a fault starts them.
+const (
+	A Addr = iota
+	B
+	W
+	W2
+	Z
+	nNodes
+)
+
+var addrNames = [nNodes]string{"A", "B", "W", "W2", "Z"}
+
+func (a Addr) String() string {
+	if a >= 0 && a < nNodes {
+		return addrNames[a]
+	}
+	return fmt.Sprintf("Addr(%d)", int(a))
+}
+
+var nodeIDs = [nNodes]quorum.NodeID{"A", "B", "W", "W", "Z"}
+
+func isController(a Addr) bool { return a == A || a == B }
+
+func peerOf(a Addr) Addr {
+	if a == A {
+		return B
+	}
+	return A
+}
+
+// Options is one run: the configuration, the start times, and the faults.
+type Options struct {
+	Seed  uint64
+	Lease time.Duration // default 2 s
+	Rho   float64       // default 0.01
+
+	// Delay is every link's base one-way delay, Jitter the most added to
+	// it at random per message (so messages reorder). LinkDelay overrides
+	// Delay per directed link when non-zero.
+	Delay, Jitter time.Duration
+	LinkDelay     [nNodes][nNodes]time.Duration
+
+	// Fsync is how long a durable write takes.
+	Fsync time.Duration
+	// InPlace: the state file is rewritten in place, so a crash during a
+	// write leaves it torn (unreadable, F26). Otherwise a write is atomic
+	// (temp file and rename) and a crash leaves the old file.
+	InPlace bool
+
+	// Rates are the clock rates of A, B and W (and W2, Z). 0 means Perfect.
+	Rates [nNodes]PPM
+
+	// Start is when A, B and W first start. W2 and Z start only by fault.
+	Start [3]time.Duration
+
+	// Tick is how often (on its own clock) a controller's candidate looks,
+	// and Scan how often it writes the device when its gate is open.
+	// Defaults lease/8 and lease/10.
+	Tick, Scan time.Duration
+
+	// NoJitter turns off the candidates' retry jitter, and SameNonce gives
+	// every boot of every controller nonce 1: both only to set up hostile
+	// cases (a nonce collision) deliberately.
+	NoJitter, SameNonce bool
+
+	// Faults is the schedule. Until is when the run stops.
+	Faults []Fault
+	Until  time.Duration
+
+	// Trace keeps a human-readable line per event in Result.Trace.
+	Trace bool
+}
+
+func (o *Options) defaults() {
+	if o.Lease == 0 {
+		o.Lease = 2 * time.Second
+	}
+	if o.Rho == 0 {
+		o.Rho = 0.01
+	}
+	if o.Tick == 0 {
+		o.Tick = o.Lease / 8
+	}
+	if o.Scan == 0 {
+		o.Scan = o.Lease / 10
+	}
+	for i := range o.Rates {
+		if o.Rates[i] == 0 {
+			o.Rates[i] = Perfect
+		}
+	}
+	if o.Until == 0 {
+		o.Until = 30 * o.Lease
+	}
+}
+
+// --- events -------------------------------------------------------------
+
+type evKind int
+
+const (
+	evStart evKind = iota
+	evTick
+	evScan
+	evDeliver
+	evDiskDone
+	evFault
+	evHeal
+)
+
+type event struct {
+	at   time.Duration
+	seq  uint64
+	kind evKind
+	node Addr
+	boot int // the node's boot the event belongs to (timers, disk, deferred)
+	gen  int // timer generation: a clock change re-arms timers
+
+	from Addr
+	msg  []byte
+
+	fault int // index into Options.Faults
+}
+
+type queue []*event
+
+func (q queue) Len() int { return len(q) }
+func (q queue) Less(i, j int) bool {
+	if q[i].at != q[j].at {
+		return q[i].at < q[j].at
+	}
+	return q[i].seq < q[j].seq
+}
+func (q queue) Swap(i, j int) { q[i], q[j] = q[j], q[i] }
+func (q *queue) Push(x any)   { *q = append(*q, x.(*event)) }
+func (q *queue) Pop() any {
+	old := *q
+	e := old[len(old)-1]
+	*q = old[:len(old)-1]
+	return e
+}
+
+// --- nodes --------------------------------------------------------------
+
+type write struct {
+	seq   uint64
+	bytes []byte
+}
+
+type disk struct {
+	file     []byte // nil: no file
+	queue    []write
+	busy     bool
+	inflight write
+	slow     []time.Duration // active slow-disk faults: the latency is their max
+	failing  int             // active EIO faults
+}
+
+type node struct {
+	addr  Addr
+	clock *Clock
+	rng   *rand.Rand
+
+	up, paused bool
+	deferred   []*event
+	boot       int
+	disk       disk
+
+	voter *quorum.Voter
+	cand  *quorum.Candidate
+	nonce uint64
+	sent  []sentReq // this boot's requests, for the hostile-delivery check
+
+	// timers: local deadlines, re-armed in global time on a clock change.
+	// tickGen names the one live tick event (it moves earlier when the
+	// candidate's next look does), gen the live scan event.
+	tickAt, scanAt quorum.Instant
+	gen, tickGen   int
+
+	// grantEnd remembers the promise end (local) each held grant was given
+	// at Handle, keyed by the request it answers, until Persisted emits it.
+	grantEnd []pendingGrant
+
+	downs, pauses, freezes int // active crash, pause and freeze faults
+	savedRate              PPM
+}
+
+type sentReq struct {
+	term, id uint64
+	at       quorum.Instant
+}
+
+type pendingGrant struct {
+	to       Addr
+	req      quorum.Request
+	start    time.Duration
+	endLocal quorum.Instant
+}
+
+// --- the world ----------------------------------------------------------
+
+// World is one run in progress.
+type World struct {
+	o     Options
+	now   time.Duration
+	seq   uint64
+	q     queue
+	nodes [nNodes]*node
+	net   *rand.Rand
+
+	witnessInc uint64 // the incarnation A and B were commissioned with
+
+	// link state, per directed link
+	cut    [nNodes][nNodes]int
+	delay  [nNodes][nNodes][]time.Duration // active extra-delay faults
+	loss   [nNodes][nNodes][]int           // active loss faults, percent
+	dup    [nNodes][nNodes][]time.Duration // active duplicate faults: the copy's extra delay bound
+	mirror [nNodes][nNodes][]Addr          // active mirrors: a copy also goes to these
+
+	rec  Record
+	hash uint64
+}
+
+func newWorld(o Options) *World {
+	o.defaults()
+	w := &World{o: o, net: rand.New(rand.NewPCG(o.Seed, 0x6e6574))}
+	for a := Addr(0); a < nNodes; a++ {
+		w.nodes[a] = &node{
+			addr:  a,
+			clock: NewClock(0, 0, o.Rates[a]),
+			rng:   rand.New(rand.NewPCG(o.Seed, 0x6e6f6465+uint64(a))),
+		}
+	}
+	w.witnessInc = drawNonZero(rand.New(rand.NewPCG(o.Seed, 0x696e63)))
+	// Commissioning: A, B and W all hold the witness incarnation.
+	st, _ := quorum.VoterState{Incarnation: w.witnessInc}.MarshalBinary()
+	for _, a := range []Addr{A, B, W} {
+		w.nodes[a].disk.file = append([]byte(nil), st...)
+	}
+	for i, a := range []Addr{A, B, W} {
+		w.push(&event{at: o.Start[i], kind: evStart, node: a})
+	}
+	for i, f := range o.Faults {
+		w.push(&event{at: f.At, kind: evFault, fault: i})
+		if f.For > 0 {
+			w.push(&event{at: f.At + f.For, kind: evHeal, fault: i})
+		}
+	}
+	w.rec.lease = o.Lease
+	w.rec.witnessInc = w.witnessInc
+	return w
+}
+
+func drawNonZero(r *rand.Rand) uint64 {
+	for {
+		if v := r.Uint64(); v != 0 {
+			return v
+		}
+	}
+}
+
+func (w *World) push(e *event) {
+	w.seq++
+	e.seq = w.seq
+	heap.Push(&w.q, e)
+}
+
+func (w *World) tracef(format string, args ...any) {
+	if w.o.Trace {
+		w.rec.Trace = append(w.rec.Trace, fmt.Sprintf("%12v ", w.now)+fmt.Sprintf(format, args...))
+	}
+}
+
+// mix folds an event into the run's hash, so two runs of one seed can be
+// compared without keeping the trace.
+func (w *World) mix(vals ...uint64) {
+	h := fnv.New64a()
+	var b [8]byte
+	put := func(v uint64) {
+		for i := range b {
+			b[i] = byte(v >> (8 * i))
+		}
+		h.Write(b[:])
+	}
+	put(w.hash)
+	for _, v := range vals {
+		put(v)
+	}
+	w.hash = h.Sum64()
+}
+
+// Run runs o to completion and returns what happened.
+func Run(o Options) *Record {
+	w := newWorld(o)
+	for w.q.Len() > 0 {
+		e := heap.Pop(&w.q).(*event)
+		if e.at > w.o.Until {
+			break
+		}
+		w.now = e.at
+		w.mix(uint64(e.at), uint64(e.kind), uint64(e.node), e.seq)
+		w.step(e)
+	}
+	w.now = w.o.Until
+	for _, n := range w.nodes {
+		if n.up && isController(n.addr) {
+			w.gate(n) // a last snapshot so open gates are closed at Until
+		}
+	}
+	w.rec.until = w.o.Until
+	w.rec.Hash = w.hash
+	for a := Addr(0); a < nNodes; a++ {
+		w.rec.clocks[a] = w.nodes[a].clock
+	}
+	return &w.rec
+}
+
+func (w *World) step(e *event) {
+	switch e.kind {
+	case evFault:
+		w.applyFault(e.fault, true)
+		return
+	case evHeal:
+		w.applyFault(e.fault, false)
+		return
+	case evStart:
+		w.start(w.nodes[e.node])
+		return
+	}
+	n := w.nodes[e.node]
+	if !n.up || (e.boot >= 0 && e.boot != n.boot) {
+		return // the process that armed it is gone (a message, boot -1, goes to whoever is up)
+	}
+	if n.paused {
+		n.deferred = append(n.deferred, e)
+		return
+	}
+	switch e.kind {
+	case evTick:
+		if e.gen == n.tickGen {
+			w.tick(n)
+		}
+	case evScan:
+		if e.gen == n.gen {
+			w.scan(n)
+		}
+	case evDeliver:
+		w.deliver(n, e.from, e.msg)
+	case evDiskDone:
+		w.diskDone(n)
+	}
+}
+
+func (w *World) local(n *node) quorum.Instant { return n.clock.Local(w.now) }
+
+// start boots n's process from its disk: a voter, and on a controller a
+// candidate, with a fresh nonce.
+func (w *World) start(n *node) {
+	if n.up || n.downs > 0 {
+		return
+	}
+	n.up, n.deferred = true, nil
+	n.paused = n.pauses > 0 || n.freezes > 0
+	n.boot++
+	n.sent, n.grantEnd = nil, nil
+	n.disk.queue, n.disk.busy = nil, false
+	now := w.local(n)
+
+	var st quorum.VoterState
+	readable := false
+	if n.disk.file != nil {
+		if err := st.UnmarshalBinary(n.disk.file); err == nil {
+			readable = true
+		} else {
+			st = quorum.VoterState{}
+		}
+	}
+	w.rec.voterStart(n.addr, n.boot, w.now, readable)
+	id := nodeIDs[n.addr]
+	if n.addr == W || n.addr == W2 {
+		v, p := quorum.NewWitness(id, w.o.Lease, st, now, func() uint64 { return drawNonZero(n.rng) })
+		n.voter = v
+		if p != nil {
+			w.persist(n, p)
+		}
+		w.tracef("%v start (witness, readable=%v, inc=%d)", n.addr, readable, v.State().Incarnation)
+	} else {
+		n.voter = quorum.NewVoter(id, w.o.Lease, st, now)
+	}
+	if !isController(n.addr) {
+		if n.addr != W && n.addr != W2 {
+			w.tracef("%v start (voter, readable=%v)", n.addr, readable)
+		}
+		return
+	}
+	n.nonce = drawNonZero(n.rng)
+	if w.o.SameNonce {
+		n.nonce = 1
+	}
+	cfg := quorum.Config{
+		Self: nodeIDs[n.addr], Peer: nodeIDs[peerOf(n.addr)], Witness: "W",
+		Lease: w.o.Lease, Rho: w.o.Rho, Incarnation: st.Incarnation, Nonce: n.nonce,
+	}
+	if !w.o.NoJitter {
+		r := n.rng
+		cfg.Jitter = func() time.Duration { return time.Duration(r.Int64N(int64(w.o.Lease / 4))) }
+	}
+	c, err := quorum.NewCandidate(cfg, st.Promised, now)
+	if err != nil {
+		panic(err) // a sim bug: the config is built here
+	}
+	n.cand = c
+	w.tracef("%v start (controller, readable=%v, promised=%d, inc=%d)", n.addr, readable, st.Promised, st.Incarnation)
+	w.gate(n)
+	n.tickAt, n.scanAt = now, now.Add(w.o.Scan)
+	w.arm(n)
+}
+
+// arm schedules n's tick and scan timers at the global times its clock
+// reaches their local deadlines. A clock change re-arms (gen).
+func (w *World) arm(n *node) {
+	if !isController(n.addr) || !n.up {
+		return
+	}
+	n.gen++
+	w.armTick(n, n.tickAt)
+	if t := n.clock.Global(n.scanAt, w.now); t != Never {
+		w.push(&event{at: t, kind: evScan, node: n.addr, boot: n.boot, gen: n.gen})
+	}
+}
+
+// armTick makes the tick at local deadline at n's one live tick, as a
+// driver arms one timer for its candidate's next look.
+func (w *World) armTick(n *node, at quorum.Instant) {
+	n.tickAt = at
+	n.tickGen++
+	if t := n.clock.Global(at, w.now); t != Never {
+		w.push(&event{at: t, kind: evTick, node: n.addr, boot: n.boot, gen: n.tickGen})
+	}
+}
+
+// soonerLook moves n's tick earlier when its candidate's next look is.
+func (w *World) soonerLook(n *node) {
+	if nl := n.cand.NextLook(); nl < n.tickAt {
+		w.armTick(n, max(nl, w.local(n)))
+	}
+}
+
+func (w *World) tick(n *node) {
+	now := w.local(n)
+	from, until := n.voter.LeaderSeen()
+	if r := n.cand.Tick(now, from, until, true); r != nil {
+		n.sent = append(n.sent, sentReq{term: r.Term, id: r.ID, at: now})
+		w.tracef("%v sends term=%d id=%d", n.addr, r.Term, r.ID)
+		b, _ := r.MarshalBinary()
+		w.selfDeliver(n, b)
+		w.send(n.addr, peerOf(n.addr), b)
+		w.send(n.addr, W, b)
+	}
+	w.gate(n)
+	next := now.Add(w.o.Tick)
+	if nl := n.cand.NextLook(); nl > now && nl < next {
+		next = nl
+	}
+	w.armTick(n, next)
+}
+
+func (w *World) scan(n *node) {
+	now := w.local(n)
+	if n.cand.Leading(now) {
+		w.rec.Writes = append(w.rec.Writes, DeviceWrite{At: w.now, From: n.addr, Term: n.cand.Term()})
+	}
+	n.scanAt = now.Add(w.o.Scan)
+	if t := n.clock.Global(n.scanAt, w.now); t != Never {
+		w.push(&event{at: t, kind: evScan, node: n.addr, boot: n.boot, gen: n.gen})
+	}
+}
+
+// gate records n's gate after a call into its candidate: open until its
+// lease end (local), or closed.
+func (w *World) gate(n *node) {
+	now := w.local(n)
+	if n.up && n.cand != nil && n.cand.Leading(now) {
+		w.rec.gate(n.addr, w.now, true, n.cand.LeaseEnd(), n.cand.VoteTerm())
+		return
+	}
+	w.rec.gate(n.addr, w.now, false, 0, 0)
+}
+
+// selfDeliver hands a controller's request to its own voter: same process,
+// no network, but through the queue so ordering stays deterministic.
+func (w *World) selfDeliver(n *node, b []byte) {
+	w.push(&event{at: w.now, kind: evDeliver, node: n.addr, boot: n.boot, from: n.addr, msg: b})
+}
+
+// send puts b on the directed link from→to, and on every mirror of it.
+func (w *World) send(from, to Addr, b []byte) {
+	w.sendOne(from, to, b)
+	for _, m := range w.mirror[from][to] {
+		w.sendOne(from, m, b)
+	}
+}
+
+func (w *World) sendOne(from, to Addr, b []byte) {
+	if w.cut[from][to] > 0 {
+		w.tracef("%v→%v dropped (cut)", from, to)
+		return
+	}
+	if p := maxInt(w.loss[from][to]); p > 0 && w.net.IntN(100) < p {
+		w.tracef("%v→%v lost", from, to)
+		return
+	}
+	d := w.o.Delay
+	if ld := w.o.LinkDelay[from][to]; ld != 0 {
+		d = ld
+	}
+	d += maxDur(w.delay[from][to])
+	if w.o.Jitter > 0 {
+		d += time.Duration(w.net.Int64N(int64(w.o.Jitter) + 1))
+	}
+	w.push(&event{at: w.now + d, kind: evDeliver, node: to, from: from, msg: b, boot: -1})
+	if bound := maxDur(w.dup[from][to]); bound > 0 {
+		extra := time.Duration(w.net.Int64N(int64(bound) + 1))
+		w.push(&event{at: w.now + d + extra, kind: evDeliver, node: to, from: from, msg: b, boot: -1})
+	}
+}
+
+func maxInt(xs []int) int {
+	m := 0
+	for _, x := range xs {
+		m = max(m, x)
+	}
+	return m
+}
+
+func maxDur(xs []time.Duration) time.Duration {
+	var m time.Duration
+	for _, x := range xs {
+		m = max(m, x)
+	}
+	return m
+}
+
+func (w *World) deliver(n *node, from Addr, b []byte) {
+	now := w.local(n)
+	var req quorum.Request
+	if err := req.UnmarshalBinary(b); err == nil {
+		w.handle(n, from, now, req)
+		return
+	}
+	var rep quorum.Reply
+	if err := rep.UnmarshalBinary(b); err != nil {
+		w.tracef("%v drops a corrupt frame from %v", n.addr, from)
+		return
+	}
+	if n.cand == nil {
+		return
+	}
+	w.noteHostile(n, rep)
+	w.tracef("%v hears %v: term=%d id=%d granted=%v to=%s", n.addr, from, rep.Term, rep.ID, rep.Granted, rep.To)
+	n.cand.OnReply(now, rep)
+	w.soonerLook(n)
+	w.gate(n)
+}
+
+// noteHostile records a reply a correct candidate must not count, that
+// reached OnReply while this boot had a request of the same (term, id) in
+// its last lease: the must-fail cases assert they were really exercised.
+func (w *World) noteHostile(n *node, r quorum.Reply) {
+	if !r.Granted {
+		return
+	}
+	var why string
+	switch {
+	case r.From != "A" && r.From != "B" && r.From != "W":
+		why = "unknown sender"
+	case r.From == "W" && r.Incarnation != w.nodes[n.addr].candInc():
+		why = "other witness incarnation"
+	case r.To != nodeIDs[n.addr]:
+		why = "meant for the peer"
+	case r.Nonce != n.nonce:
+		why = "earlier boot"
+	default:
+		return
+	}
+	now := w.local(n)
+	for _, s := range n.sent {
+		if s.term == r.Term && s.id == r.ID && now < s.at.Add(w.o.Lease) {
+			w.rec.Hostile = append(w.rec.Hostile, Hostile{At: w.now, To: n.addr, Why: why})
+			w.tracef("%v receives a hostile grant (%s) matching an open request", n.addr, why)
+			return
+		}
+	}
+}
+
+func (n *node) candInc() uint64 {
+	if n.voter == nil {
+		return 0
+	}
+	return n.voter.State().Incarnation
+}
+
+func (w *World) handle(n *node, from Addr, now quorum.Instant, r quorum.Request) {
+	if n.cand != nil && from != n.addr {
+		n.cand.Observe(r.Term)
+		if quorum.YieldTo(now, n.voter, n.cand, r) {
+			w.rec.released = append(w.rec.released, release{voter: n.addr, at: w.now})
+			w.tracef("%v yields its own promise to %v's term %d", n.addr, from, r.Term)
+			w.gate(n)
+		}
+	}
+	p, replies := n.voter.Handle(now, r)
+	term, to, until := n.voter.PromiseUntil()
+	if p != nil || (len(replies) == 1 && replies[0].Granted) {
+		if term == r.Term && to == r.From {
+			n.grantEnd = append(n.grantEnd, pendingGrant{to: from, req: r, start: w.now, endLocal: until})
+		}
+	}
+	if p != nil {
+		w.persist(n, p)
+	}
+	w.reply(n, from, replies)
+}
+
+// reply sends a voter's replies back to where each request came from,
+// recording every grant in the ledger.
+func (w *World) reply(n *node, to Addr, replies []quorum.Reply) {
+	for _, rep := range replies {
+		dst := to
+		if rep.Granted {
+			dst = w.ledger(n, rep)
+		}
+		b, _ := rep.MarshalBinary()
+		if dst == n.addr {
+			w.push(&event{at: w.now, kind: evDeliver, node: n.addr, boot: n.boot, from: n.addr, msg: b})
+			continue
+		}
+		w.send(n.addr, dst, b)
+	}
+}
+
+// ledger records a grant n emits and returns where it goes.
+func (w *World) ledger(n *node, rep quorum.Reply) Addr {
+	for i, g := range n.grantEnd {
+		if g.req.From == rep.To && g.req.Term == rep.Term && g.req.Nonce == rep.Nonce && g.req.ID == rep.ID {
+			n.grantEnd = append(n.grantEnd[:i], n.grantEnd[i+1:]...)
+			w.rec.grant(Grant{Voter: n.addr, Inc: rep.Incarnation, To: g.to, ToID: rep.To, Term: rep.Term,
+				Start: g.start, EndLocal: g.endLocal})
+			w.tracef("%v grants %s term=%d id=%d", n.addr, rep.To, rep.Term, rep.ID)
+			return g.to
+		}
+	}
+	panic(fmt.Sprintf("sim: %v emitted a grant it never decided: %+v", n.addr, rep))
+}
+
+// --- the disk -----------------------------------------------------------
+
+func (w *World) persist(n *node, p *quorum.Persist) {
+	b, _ := p.State.MarshalBinary()
+	n.disk.queue = append(n.disk.queue, write{seq: p.Seq, bytes: b})
+	w.nextWrite(n)
+}
+
+func (w *World) fsync(n *node) time.Duration {
+	return max(w.o.Fsync, maxDur(n.disk.slow))
+}
+
+func (w *World) nextWrite(n *node) {
+	if n.disk.busy || len(n.disk.queue) == 0 {
+		return
+	}
+	n.disk.inflight, n.disk.queue = n.disk.queue[0], n.disk.queue[1:]
+	n.disk.busy = true
+	w.push(&event{at: w.now + w.fsync(n), kind: evDiskDone, node: n.addr, boot: n.boot})
+}
+
+func (w *World) diskDone(n *node) {
+	wr := n.disk.inflight
+	n.disk.busy = false
+	ok := n.disk.failing == 0
+	if ok {
+		n.disk.file = wr.bytes
+	}
+	w.tracef("%v fsync seq=%d ok=%v", n.addr, wr.seq, ok)
+	replies := n.voter.Persisted(wr.seq, ok)
+	w.replyHeld(n, replies)
+	w.nextWrite(n)
+}
+
+// replyHeld sends grants released by Persisted to the node each request
+// came from.
+func (w *World) replyHeld(n *node, replies []quorum.Reply) {
+	for _, rep := range replies {
+		dst := w.ledger(n, rep)
+		b, _ := rep.MarshalBinary()
+		if dst == n.addr {
+			w.push(&event{at: w.now, kind: evDeliver, node: n.addr, boot: n.boot, from: n.addr, msg: b})
+			continue
+		}
+		w.send(n.addr, dst, b)
+	}
+}
+
+// crash stops n's process. A write in flight tears the file when it is
+// rewritten in place; queued writes are lost.
+func (w *World) crash(n *node, wipe bool) {
+	if !n.up {
+		if wipe {
+			n.disk.file = nil
+		}
+		return
+	}
+	if n.disk.busy && w.o.InPlace {
+		b := n.disk.inflight.bytes
+		k := w.net.IntN(len(b))
+		n.disk.file = append([]byte(nil), b[:k]...)
+		w.tracef("%v crash tears its state file at byte %d", n.addr, k)
+	}
+	if wipe {
+		n.disk.file = nil
+	}
+	n.up = false
+	n.disk.busy, n.disk.queue = false, nil
+	n.voter, n.cand = nil, nil
+	n.deferred = nil
+	w.tracef("%v crash (wipe=%v)", n.addr, wipe)
+	if isController(n.addr) {
+		w.rec.gate(n.addr, w.now, false, 0, 0)
+	}
+}
+
+func (w *World) pause(n *node, on bool) {
+	if on || !n.up {
+		n.paused = on
+		return
+	}
+	n.paused = false
+	d := n.deferred
+	n.deferred = nil
+	for _, e := range d {
+		e.at = w.now
+		w.push(e)
+	}
+}
