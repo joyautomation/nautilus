@@ -124,7 +124,7 @@ iolink:
 | `pd-valid` | a BOOL point that says the master holds valid process data in (optional) |
 | `vendor-id`, `device-id` | integer points holding the attached device's identity (optional, see §6) |
 | `status` | a point holding the port's mode or connection status (optional) |
-| `isdu` | optional: `{ mode, object, read, write, data, max-octets, doc | unverified }`. `mode` is `opc-30120` (the IO-Link companion specification's `ReadISDU`/`WriteISDU` on the port device's object, a Byte[]) or `methods` (the master's own, e.g. the ifm's, a hex text); `object`, `read` and `write` are node id templates with `{n}` (and the profile's `{params}`); `data` is `bytes` or `hex`; `max-octets` bounds one call (the ifm's 64 hex digits are 32 octets; default 232); one of `doc` and `unverified` is required. Absent: the master offers none, and `naut devices show` says so |
+| `isdu` | optional: `{ mode, object, read, write, data, max-octets, doc | unverified }`. `mode` is `opc-30120` (the IO-Link companion specification's `ReadISDU`/`WriteISDU` on the port device's object, a Byte[]) or `methods` (the master's own: the ifm's, a hex text; the P+F's, a ByteString and no ErrorType or Status, a refusal being the call's status code); `object`, `read` and `write` are node id templates with `{n}` (and the profile's `{params}`); `data` is `bytes`, `hex` or `bytestring`; `max-octets` bounds one call (the ifm's 64 hex digits are 32 octets; default 232); one of `doc` and `unverified` is required. Absent: the master offers none, and `naut devices show` says so |
 
 Every template is expanded for `n` = 1..`ports`, and `devprofile` checks
 that each expansion names a point the profile has, with a type its key
@@ -136,7 +136,7 @@ the SICK, PR 3b):
 
 | Master | PD in | PD out | Ids | Status | ISDU | Notes |
 |---|---|---|---|---|---|---|
-| P+F ICE3 | `PdiBytes` (bytes, ByteString) | `PdoBytes` (bytes) | yes | `Status`, `Mode` | none yet | pf §12.2 pp. 171-172 document the Byte String nodes, 1 to 32 octets; the U32 points stay for projects that read them. The Byte Array twins are not served |
+| P+F ICE3 | `PdiBytes` (bytes, ByteString) | `PdoBytes` (bytes) | yes | `Status`, `Mode` | the master's own methods, ByteString, no ErrorType (pf §12.3 p. 174, unverified) | pf §12.2 pp. 171-172 document the Byte String nodes, 1 to 32 octets; the U32 points stay for projects that read them. The Byte Array twins are not served. ISDU Read/Write: the object they hang off, the data argument of a write (the table prints it under Output Arguments) and the status code of a refusal are not stated; a port serves ISDU Write only with "Allow OPC UA clients to write ISDU data" on |
 | ifm AL1590 | `Pdin` (hex, measured) | `Pdout` (hex, unverified) | `VendorID`, `DeviceID` (unverified) | `Status` (unverified) | none yet | only pdin was measured; the others follow its naming. The AL1427 manual spells them differently (ProcessDataOutput, VendorID, DeviceID) with no node ids |
 | SICK SIG300 | `PdiBytes` (bytes, ByteArray) | `PdoBytes` | yes | `Status` | none yet | OPC 30120's variables (Byte[], UInt16/UInt32 ids, Byte status) named and typed as the NodeSet has them; every node id and the namespace index are stand-ins, `unverified` until a real SIG300's address space is exported |
 

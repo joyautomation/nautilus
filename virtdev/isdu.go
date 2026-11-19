@@ -117,6 +117,14 @@ func key(idx, sub int) uint32 { return uint32(idx)<<8 | uint32(sub) }
 // ErrorType and the master's Status.
 func (st *isduStore) answer(read bool, value []byte, errType uint16, status int64) []*ua.Variant {
 	var out []*ua.Variant
+	if st.data == devprofile.ISDUDataByteString {
+		// A master's own methods: the value of a read, nothing for a write.
+		if read {
+			v, _ := ua.NewVariant([]byte(value))
+			out = append(out, v)
+		}
+		return out
+	}
 	if read {
 		var v *ua.Variant
 		if st.data == devprofile.ISDUDataHex {
@@ -137,6 +145,23 @@ func (st *isduStore) answer(read bool, value []byte, errType uint16, status int6
 }
 
 func (st *isduStore) refuse(read bool, errType uint16) ([]*ua.Variant, ua.StatusCode) {
+	if st.data == devprofile.ISDUDataByteString {
+		// No ErrorType in the answer: a refusal is the call's status code.
+		// Which code a real master picks is unknown (unverified); these
+		// keep the cases apart for a test.
+		switch errType {
+		case errIndexNotAvailable, errSubindexNotAvailable:
+			return nil, ua.StatusBadNotFound
+		case errAccessDenied:
+			if read {
+				return nil, ua.StatusBadNotReadable
+			}
+			return nil, ua.StatusBadNotWritable
+		case errValueOutOfRange:
+			return nil, ua.StatusBadOutOfRange
+		}
+		return nil, ua.StatusBadInvalidArgument
+	}
 	return st.answer(read, nil, errType, isduStatusDevice(st.mode)), ua.StatusOK
 }
 
@@ -200,6 +225,9 @@ func (st *isduStore) write(args []*ua.Variant) ([]*ua.Variant, ua.StatusCode) {
 	case []byte:
 		data = x
 	case ua.ByteArray:
+		if st.data == devprofile.ISDUDataByteString {
+			return nil, ua.StatusBadTypeMismatch // a ByteString is asked for, not a Byte[]
+		}
 		data = x
 	case string:
 		b, err := hex.DecodeString(strings.TrimPrefix(strings.TrimPrefix(x, "0x"), "0X"))

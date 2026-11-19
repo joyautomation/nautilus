@@ -2,7 +2,7 @@ profile: pepperl-fuchs-ice3
 title: Pepperl+Fuchs ICE3 8-port IO-Link master, OPC UA server
 maker: Pepperl+Fuchs
 model: ICE3-8IOL
-version: 4
+version: 5
 docs:
   - id: pf
     title: "IO-Link master PROFINET IO (PNIO) and Modbus/TCP User Guide, ICE3-8IOL family, ch. 12 OPC UA Supporting Information (2025-06)"
@@ -29,12 +29,25 @@ iolink:                # docs/design/iolink.md §3: which points hold each port'
   vendor-id: "Port{n}_VendorID"
   device-id: "Port{n}_DeviceID"
   status: "Port{n}_Status"
-  # ISDU: explicitly none. The ICE3's ReadISDU/WriteISDU methods are in the
-  # manual's node table (pf §12.2, after the process data rows) but their node
-  # ids and argument shapes have not been read for this profile.
+  # ISDU: the master's own methods (pf §12.3 p. 174): "IOLM/Port n/ISDU Read"
+  # (Index UInt16, Subindex Byte -> ByteString) and "IOLM/Port n/ISDU Write"
+  # (Index UInt16, Subindex Byte, the data as a ByteString). The table lists
+  # no ErrorType or Status output, so a refusal is the call's own status code.
+  # UNVERIFIED, nothing has been read from a device: the object the methods
+  # hang off is not in the table (the Port object is assumed, as the ids
+  # suggest); the table prints the write's ByteString under Output Arguments,
+  # taken here as the value to write (a write would otherwise carry none);
+  # which status code a refusal gets is not stated; and a port serves ISDU
+  # Write only when "Allow OPC UA clients to write ISDU data" is enabled for
+  # it (pf §12.2 note [3]).
   isdu:
-    mode: none
-    note: "The P+F manual (pf §12.2) lists ISDU methods for the ICE3, but this profile has not taken their node ids and arguments from it yet, so nautilus does not read or write parameters through this master."
+    mode: methods
+    object: "ns=1;s=IOLM/Port {n}"
+    read: "ns=1;s=IOLM/Port {n}/ISDU Read"
+    write: "ns=1;s=IOLM/Port {n}/ISDU Write"
+    data: bytestring
+    unverified: true
+    doc: "pf §12.3 p. 174, ISDU Read and ISDU Write; §12.2 p. 173 note [3] for the write setting"
 points:
   # The master (pf §12.2, p. 170)
   - { name: Model,        type: STRING, init: "ICE3-8IOL-K45S-RJ45", node-id: "ns=1;s=IOLM/Model",        path: "IOLM/Model",        desc: "IO-Link master type name", doc: "pf §12.2 p. 170" }
@@ -69,6 +82,6 @@ notes: |
   PDI/PDO Data Byte String are served (version 3, as ByteString nodes holding
   hex text); the Byte Array twins (pf §12.2 pp. 171-172) are not, a client
   reads either the same. Not served yet: the Event Queue nodes, IODD-parsed PDI/PDO Fields, and the ISDU
-  methods. A real ICE3 writes PDO only on ports enabled for it (pf §12.1);
+  Data/Index/Subindex/Request nodes (the methods are served, UNVERIFIED). A real ICE3 writes PDO only on ports enabled for it (pf §12.1);
   here every PDO node is writable (the manual's footnote: a port must allow OPC UA clients to write PDO). Aux Input is R/W in the table with a
   condition; here it is the process model's to set.

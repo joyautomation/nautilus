@@ -59,8 +59,11 @@ type ISDUSpec struct {
 	Object string `yaml:"object"`
 	Read   string `yaml:"read"`
 	Write  string `yaml:"write"`
-	// Data is how a value travels: ISDUDataBytes (a Byte[], OPC 30120) or
-	// ISDUDataHex (hex text, "0x" first on a write: the ifm masters).
+	// Data is how a value travels: ISDUDataBytes (a Byte[], OPC 30120),
+	// ISDUDataHex (hex text, "0x" first on a write: the ifm masters) or
+	// ISDUDataByteString (a ByteString, and the methods answer the value
+	// only: no ErrorType or Status, a refusal is the call's own status code;
+	// the P+F masters).
 	Data string `yaml:"data"`
 	// MaxOctets is the most octets one call carries; a value over it is
 	// refused, never cut (the ifm master's 64 hex digits are 32 octets).
@@ -84,6 +87,8 @@ const (
 
 	ISDUDataBytes = "bytes"
 	ISDUDataHex   = "hex"
+
+	ISDUDataByteString = "bytestring"
 )
 
 // MaxISDUOctets is the longest ISDU value (IO-Link: 232 octets).
@@ -303,14 +308,14 @@ func (p *Profile) validateISDU(s *ISDUSpec) error {
 		return fmt.Errorf("mode %q is not %s, %s or %s", s.Mode, ISDUOPC30120, ISDUMethods, ISDUNone)
 	}
 	switch s.Data {
-	case ISDUDataBytes, ISDUDataHex:
+	case ISDUDataBytes, ISDUDataHex, ISDUDataByteString:
 	case "":
-		return fmt.Errorf("data is required (%s or %s)", ISDUDataBytes, ISDUDataHex)
+		return fmt.Errorf("data is required (%s, %s or %s)", ISDUDataBytes, ISDUDataHex, ISDUDataByteString)
 	default:
-		return fmt.Errorf("data %q is not %s or %s", s.Data, ISDUDataBytes, ISDUDataHex)
+		return fmt.Errorf("data %q is not %s, %s or %s", s.Data, ISDUDataBytes, ISDUDataHex, ISDUDataByteString)
 	}
 	if s.Mode == ISDUOPC30120 && s.Data != ISDUDataBytes {
-		return fmt.Errorf("opc-30120 carries a value as a Byte[]: data is %s, not %s", ISDUDataBytes, s.Data)
+		return fmt.Errorf("opc-30120 carries a value as a Byte[]: data is %s, not %s (a ByteString with no ErrorType or Status is a master's own methods: mode %s)", ISDUDataBytes, s.Data, ISDUMethods)
 	}
 	if s.MaxOctets < 0 || s.MaxOctets > MaxISDUOctets {
 		return fmt.Errorf("max-octets %d is not 1-%d", s.MaxOctets, MaxISDUOctets)

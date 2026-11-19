@@ -9,7 +9,6 @@ package opcua_test
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -550,7 +549,7 @@ IF n > 100 THEN D_Port1_DeviceID := 1048999; END_IF;`,
 // hex text, a Byte[]), its identity is CHECKED (a swap is WrongDevice and the
 // bytes are no longer decoded), and its parameters are READ AND WRITTEN through
 // the master by ISDU, each by that maker's mechanism (OPC 30120's Byte[]
-// methods, the ifm's hex-text methods); the P+F master offers none, and says so.
+// methods, the ifm's hex-text methods); the P+F master's own ByteString methods, which answer the value and nothing else.
 func TestIOLinkDoneWhen(t *testing.T) {
 	const (
 		levelFile  = "acme-level100-20261118-IODD1.1.xml"
@@ -563,8 +562,8 @@ func TestIOLinkDoneWhen(t *testing.T) {
 		model               string
 		// members are what the IODD's decode of the raw bytes must give.
 		members map[string]any
-		// isduParam, isduDefault, isduWrite: nil isduParam means the master
-		// offers no ISDU.
+		// isduParam, isduDefault, isduWrite: the parameter read, its IODD
+		// default and the value written.
 		isduParam   string
 		isduDefault any
 		isduWrite   any
@@ -573,7 +572,8 @@ func TestIOLinkDoneWhen(t *testing.T) {
 			name: "pepperl-fuchs", profile: "pepperl-fuchs-ice3", iodd: levelFile,
 			model: `D_Port1_PdiBytes := 'fe0dffd1'; D_Port1_VendorID := 65261; D_Port1_DeviceID := 1048577; D_Port1_PdiValid := TRUE;
 IF n > 60 THEN D_Port1_DeviceID := 1048999; END_IF;`,
-			members: map[string]any{"Level": -12.5, "Temperature": int64(-3), "Ready": true, "Switch_point_1": true, "Switch_point_2": false, "PdValid": true},
+			members:   map[string]any{"Level": -12.5, "Temperature": int64(-3), "Ready": true, "Switch_point_1": true, "Switch_point_2": false, "PdValid": true},
+			isduParam: "V_Setpoint", isduDefault: uint64(100), isduWrite: uint64(500),
 		},
 		{
 			name: "ifm", profile: "ifm-al1590", iodd: switchFile,
@@ -592,9 +592,7 @@ IF n > 60 THEN D_Port1_DeviceID := 1048999; END_IF;`,
 	} {
 		t.Run(mk.name, func(t *testing.T) {
 			ms := matrixServer{virtual: mk.profile, modelVars: "n : INT;", model: "n := n + 1;\n" + mk.model}
-			if mk.isduParam != "" { // a virtual master answers ISDU for a port that has an IODD; the P+F's has none to answer
-				ms.ports, ms.ioddFiles = "{ 1: { iodd: "+mk.iodd+" } }", map[string]string{mk.iodd: dir + mk.iodd}
-			}
+			ms.ports, ms.ioddFiles = "{ 1: { iodd: "+mk.iodd+" } }", map[string]string{mk.iodd: dir + mk.iodd}
 			v := startVirtual(t, ms)
 			prof, err := os.ReadFile("../devprofile/profiles/" + mk.profile + ".yaml")
 			if err != nil {
@@ -695,19 +693,34 @@ IF n > 60 THEN D_Port1_DeviceID := 1048999; END_IF;`,
 			}
 
 			// PARAMETERIZED, by this maker's mechanism.
-			if mk.isduParam == "" {
-				if _, err := w.ISDURead(ctx, "S1", "V_Setpoint"); err == nil || !errors.Is(err, devbind.ErrISDURefused) || !strings.Contains(err.Error(), "offers no ISDU") {
-					t.Errorf("a master with no ISDU: %v, want a refusal saying so", err)
+			if res, err := w.ISDURead(ctx, "S1", mk.isduParam); err != nil || res.Value != mk.isduDefault || res.Identity != iolink.Ok {
+				t.Errorf("%s read %+v, %v, want the IODD's default %v", mk.isduParam, res, err, mk.isduDefault)
+			}
+			if res, err := w.ISDUWrite(ctx, "S1", mk.isduParam, mk.isduWrite); err != nil || res.Value != mk.isduWrite {
+				t.Fatalf("%s write %+v, %v", mk.isduParam, res, err)
+			}
+			if res, err := w.ISDURead(ctx, "S1", mk.isduParam); err != nil || res.Value != mk.isduWrite {
+				t.Errorf("%s read back %+v, %v, want %v", mk.isduParam, res, err, mk.isduWrite)
+			}
+			if mk.name == "pepperl-fuchs" {
+				// The P+F's methods carry no ErrorType: what a device refuses
+				// is the call's own status code (a simulator's choice, not a
+				// measurement), and nothing was written.
+				obj := opcua.NodeRef{NodeID: "ns=1;s=IOLM/Port 1"}
+				rd := opcua.NodeRef{NodeID: "ns=1;s=IOLM/Port 1/ISDU Read"}
+				wr := opcua.NodeRef{NodeID: "ns=1;s=IOLM/Port 1/ISDU Write"}
+				bad, _ := ua.NewVariant(uint16(999))
+				sub, _ := ua.NewVariant(uint8(0))
+				if _, err := d.Call(ctx, obj, rd, bad, sub); err == nil || !strings.Contains(err.Error(), "BadNotFound") {
+					t.Errorf("a read of an index the device lacks: %v, want BadNotFound", err)
 				}
-			} else {
-				if res, err := w.ISDURead(ctx, "S1", mk.isduParam); err != nil || res.Value != mk.isduDefault || res.Identity != iolink.Ok {
-					t.Errorf("%s read %+v, %v, want the IODD's default %v", mk.isduParam, res, err, mk.isduDefault)
-				}
-				if res, err := w.ISDUWrite(ctx, "S1", mk.isduParam, mk.isduWrite); err != nil || res.Value != mk.isduWrite {
-					t.Fatalf("%s write %+v, %v", mk.isduParam, res, err)
+				i64, _ := ua.NewVariant(uint16(64))
+				over, _ := ua.NewVariant([]byte{0x07, 0xD0}) // 2000, outside 0..1000
+				if _, err := d.Call(ctx, obj, wr, i64, sub, over); err == nil || !strings.Contains(err.Error(), "BadOutOfRange") {
+					t.Errorf("a value outside the IODD's range, written raw: %v, want BadOutOfRange", err)
 				}
 				if res, err := w.ISDURead(ctx, "S1", mk.isduParam); err != nil || res.Value != mk.isduWrite {
-					t.Errorf("%s read back %+v, %v, want %v", mk.isduParam, res, err, mk.isduWrite)
+					t.Errorf("the device accepted what it refused: %+v, %v", res, err)
 				}
 			}
 
@@ -716,13 +729,11 @@ IF n > 60 THEN D_Port1_DeviceID := 1048999; END_IF;`,
 				n, _ := read()["S1__Identity"].(int64)
 				return n == int64(iolink.WrongDevice)
 			})
-			if mk.isduParam != "" {
-				if _, err := w.ISDUWrite(ctx, "S1", mk.isduParam, mk.isduDefault); err == nil || !strings.Contains(err.Error(), "WrongDevice") {
-					t.Errorf("a write after the swap: %v, want a refusal naming WrongDevice", err)
-				}
-				if res, err := w.ISDURead(ctx, "S1", mk.isduParam); err != nil || res.Value != mk.isduWrite || res.Identity != iolink.WrongDevice {
-					t.Errorf("a read after the swap %+v, %v: want the written value with WrongDevice flagged", res, err)
-				}
+			if _, err := w.ISDUWrite(ctx, "S1", mk.isduParam, mk.isduDefault); err == nil || !strings.Contains(err.Error(), "WrongDevice") {
+				t.Errorf("a write after the swap: %v, want a refusal naming WrongDevice", err)
+			}
+			if res, err := w.ISDURead(ctx, "S1", mk.isduParam); err != nil || res.Value != mk.isduWrite || res.Identity != iolink.WrongDevice {
+				t.Errorf("a read after the swap %+v, %v: want the written value with WrongDevice flagged", res, err)
 			}
 		})
 	}
