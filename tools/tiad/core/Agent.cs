@@ -71,6 +71,10 @@ namespace Tiad
         // TiaStarted tells the host how the TIA side's start went (error is
         // null when it started), which is when the licence becomes known.
         void TiaStarted(Exception error);
+
+        // TiaFailed tells the host a TIA call failed after the start: a
+        // licence error there fails the licence gate too.
+        void TiaFailed(Exception error);
     }
 
     public sealed partial class Agent

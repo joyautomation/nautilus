@@ -94,14 +94,18 @@ namespace Tiad.Openness
         static void CheckSelections()
         {
             var missing = new List<string>();
-            System.Reflection.Assembly asm = typeof(DownloadConfiguration).Assembly;
+            // Configuration types live in the base assembly and in STEP 7's
+            // (DataBlockReinitialization* are STEP 7's).
+            System.Reflection.Assembly[] asms = { typeof(DownloadConfiguration).Assembly, typeof(PlcSoftware).Assembly };
             foreach (KeyValuePair<string, string> w in DownloadChecks.Selections())
             {
                 Type t = null;
-                foreach (string ns in ConfigurationNamespaces)
+                foreach (System.Reflection.Assembly asm in asms)
                 {
-                    t = asm.GetType(ns + w.Key, false);
-                    if (t != null) break;
+                    foreach (string ns in ConfigurationNamespaces)
+                    {
+                        if (t == null) t = asm.GetType(ns + w.Key, false);
+                    }
                 }
                 var prop = t == null ? null : t.GetProperty("CurrentSelection");
                 if (prop == null || !prop.PropertyType.IsEnum || !Enum.IsDefined(prop.PropertyType, w.Value))

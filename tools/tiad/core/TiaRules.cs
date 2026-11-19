@@ -12,11 +12,11 @@ using System.Text;
 namespace Tiad
 {
     // LicenceLatch is the licence gate. TIA's licence is not readable
-    // before TIA's first start (on a fresh machine that start begins the
-    // trial), so the gate is unknown, which blocks nothing, until TIA
-    // starts. Then it latches: ok when TIA started, failed when the start
-    // failed on a licence error. A failed latch blocks every TIA call until
-    // the agent restarts.
+    // before TIA starts, so the gate is unknown, which blocks nothing,
+    // until TIA starts. Then it latches: ok when TIA started, failed when
+    // the start or any later TIA call failed on a licence error (TIA starts
+    // headless without one, and refuses at the first call that needs it). A
+    // failed latch blocks every TIA call until the agent restarts.
     public sealed class LicenceLatch
     {
         public const string StartedDetail = "TIA started, so its licence lets Openness run";
@@ -29,6 +29,18 @@ namespace Tiad
         // Started records how a TIA start went: error is null when TIA
         // started. An error that is not a licence error says nothing about
         // the licence, and leaves the gate as it was.
+        // Failed records a TIA call that failed after the start: a licence
+        // error fails the gate; any other error says nothing about it.
+        public void Failed(Exception error)
+        {
+            lock (mu)
+            {
+                if (state == Gate.StateFailed || !IsLicenceError(error)) return;
+                state = Gate.StateFailed;
+                detail = "TIA refused a call: " + error.Message;
+            }
+        }
+
         public void Started(Exception error)
         {
             lock (mu)

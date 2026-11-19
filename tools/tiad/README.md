@@ -81,8 +81,9 @@ Mono:
   it), PROFINET devices, rack modules, the web server, the I-device GSDML
   export, and any upload configuration (a password, missing products).
 - **The licence latch.** The `licence` gate is unknown until TIA starts,
-  then latches: `ok` once TIA started, `failed` when the start failed on a
-  licence error. Failed blocks every TIA call until the agent restarts.
+  then latches: `ok` once TIA started, `failed` at the first licence error,
+  from the start or any later TIA call. Failed blocks every TIA call until
+  the agent restarts. A headless start does not activate TIA's trial.
 
 ## C# 5, no project file
 
@@ -126,7 +127,7 @@ a pure evaluator over the machine's facts):
 | `tia` | Openness V21 is registered in HKLM (64-bit view), and its net48 `Siemens.Engineering.Base.dll` and `.Step7.dll` exist. Failed with `TIAD_NO_TIA=1` |
 | `openness-group` | The process token holds "Siemens TIA Openness". A member added after logon must log off and on |
 | `openness-allowlist` | The Openness allowlist entry TIA requires: an entry under `HKLM\Software\Siemens\Automation\Openness\AllowList\tiad.exe` whose `Path` names this exe (case-insensitive), whose `DateModified` is its last write time (UTC, `yyyy/MM/dd HH:mm:ss.fff`) and whose `FileHash` is its SHA-256 (base64). Every rebuild needs a new entry; the installer writes it |
-| `licence` | `unknown` until TIA's first start, which creates the trial. Then `ok` once TIA started, or `failed` when the start failed on a licence error (until the agent restarts) |
+| `licence` | `unknown` until TIA's first start. Then `ok` once TIA started, or `failed` at the first licence error, from the start or any later call (TIA starts headless without a licence and refuses the first call that needs one), until the agent restarts |
 | `workdir` | The work dir is writable |
 
 ## Installing on a TIA machine

@@ -280,6 +280,30 @@ func TestLicenceLatch(t *testing.T) {
 		}
 	})
 
+	// TIA starts headless without a licence and refuses the first call
+	// that needs one: the gate fails then, not at the start.
+	t.Run("licence error after the start", func(t *testing.T) {
+		p, c := start(t, "")
+		if err := install(c); err != nil {
+			t.Fatal(err)
+		}
+		const refused = "Error when calling method 'CreateWithItem'. Necessary license 'STEP 7 Professional' is missing."
+		p.SetScript(t, tiadtest.Script{Failures: []tiadtest.ScriptedCall{{Call: "CreateProject", Message: refused}}})
+		if _, err := c.CreateProject(ctx, "p", tiad.Station{CPU: tiad.CPU{Name: "PLC_1", Order: "6ES7 510-1DK03-0AB0", Firmware: "V3.1",
+			Address: "192.0.2.10", SubnetMask: "255.255.255.0", ProfinetName: "plc-1"}}, tiad.Secrets{}); tiad.Kind(err) != tiad.KindOperationFailed {
+			t.Fatalf("a call TIA refuses for its licence: %v, want operation_failed", err)
+		}
+		l, usable := licence(t, c)
+		if l.State != tiad.GateFailed || l.Detail != "TIA refused a call: "+refused || l.Remedy == "" || usable {
+			t.Fatalf("after a licence refusal: licence %+v, usable %v; want failed with TIA's text", l, usable)
+		}
+		p.SetScript(t, tiadtest.Script{})
+		var te *tiad.Error
+		if err := install(c); !errors.As(err, &te) || te.Kind != tiad.KindGate || !strings.Contains(te.Message, "gate licence") {
+			t.Fatalf("a TIA call after a licence refusal: %v, want 412 gate licence", err)
+		}
+	})
+
 	t.Run("other error", func(t *testing.T) {
 		p, c := start(t, "the TIA Portal process ended")
 		if err := install(c); tiad.Kind(err) != tiad.KindOperationFailed {
@@ -291,6 +315,11 @@ func TestLicenceLatch(t *testing.T) {
 		p.SetScript(t, tiadtest.Script{})
 		if err := install(c); err != nil {
 			t.Fatalf("a TIA call once TIA starts: %v", err)
+		}
+		// A later failure that is no licence error leaves the gate ok.
+		p.SetScript(t, tiadtest.Script{Failures: []tiadtest.ScriptedCall{{Call: "InstallGsd", Message: "the catalogue is busy"}}})
+		if err := install(c); tiad.Kind(err) != tiad.KindOperationFailed {
+			t.Fatalf("a failing call: %v", err)
 		}
 		if l, _ := licence(t, c); l.State != tiad.GateOK {
 			t.Fatalf("after TIA started: licence %+v, want ok", l)

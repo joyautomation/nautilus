@@ -490,11 +490,15 @@ Openness comes with STEP 7, and Professional is needed for the S7-1500
 *(verify)*. D1: we run on the trial licence, and the TIA VM is recreated
 from the golden image for testing, so every clone starts with its own
 fresh trial. The golden image never starts TIA, so no trial time is baked
-into it. On a clone, the trial starts at the first call that starts TIA
-(§3.4). Whether that start needs one GUI acknowledgement is an S2b
-question. Until TIA's first start the `licence` gate is `unknown`. If a
-clone's trial ends, `probe` fails the `licence` gate and every call that
-needs TIA fails with `gate`.
+into it. **S2a found that a headless Openness start does not activate the
+trial:** TIA starts, creates a project, and then refuses the first call
+that needs STEP 7 ("Necessary license 'STEP 7 Professional' is missing"),
+and the first start leaves no licence state behind. So a licence has to be
+in place before tiad is useful: the trial, activated once through TIA's
+own UI, or a real one. Until TIA's first start the `licence` gate is
+`unknown`; it latches `failed` at the first licence refusal, from the
+start or any later call, and then every call that needs TIA fails with
+`gate` until the agent restarts.
 
 **Redone on every clone.** Nothing survives one, by design:
 

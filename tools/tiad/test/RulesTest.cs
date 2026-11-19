@@ -70,6 +70,7 @@ namespace Tiad.Test
                 T("LicenceFailsOnALicenceError", LicenceFailsOnALicenceError),
                 T("LicenceIgnoresOtherErrors", LicenceIgnoresOtherErrors),
                 T("LicenceFailedStaysFailed", LicenceFailedStaysFailed),
+                T("LicenceFailsOnALaterCall", LicenceFailsOnALaterCall),
                 T("QuestionIds", QuestionIdsOfConfigurations),
                 T("Settings", SettingsForAnswers),
                 T("DecideOnceAtTheFirstCallback", DecideOnceAtTheFirstCallback),
@@ -192,6 +193,31 @@ namespace Tiad.Test
             l.Started(new TiaException("license expired"));
             l.Started(null);
             Eq(l.Current().State, Gate.StateFailed, "a start after a licence failure");
+        }
+
+        static void LicenceFailsOnALaterCall()
+        {
+            // TIA starts headless without a licence, then refuses the first
+            // call that needs one.
+            var l = new LicenceLatch();
+            l.Started(null);
+            l.Failed(new TiaException("Error when calling method 'CreateWithItem'.\r\n\r\nNecessary license 'STEP 7 Professional' is missing."));
+            Gate g = l.Current();
+            Eq(g.State, Gate.StateFailed, "state");
+            Contains(g.Detail, "TIA refused a call: ", "detail");
+            Contains(g.Detail, "Necessary license 'STEP 7 Professional' is missing.", "detail");
+            Eq(g.Remedy, LicenceLatch.FailedRemedy, "remedy");
+            // Another failure says nothing about the licence.
+            var o = new LicenceLatch();
+            o.Started(null);
+            o.Failed(new TiaException("The connection to the CPU was lost"));
+            Eq(o.Current().State, Gate.StateOk, "after another failure");
+            // A failed latch keeps its first reason.
+            l.Failed(new TiaException("license expired"));
+            Contains(l.Current().Detail, "STEP 7 Professional", "a second licence error");
+            var u = new LicenceLatch();
+            u.Failed(new TiaException("licence missing"));
+            Eq(u.Current().State, Gate.StateFailed, "a licence error before any start was recorded");
         }
 
         // ---- download configurations ----
