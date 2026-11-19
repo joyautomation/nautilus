@@ -100,9 +100,9 @@ func (v *scanView) snapshot(names []string) {
 // suppressed and generations stamped by writeLocked, exactly as a direct
 // write would be. A tag the program assigned only members of is merged
 // onto what the store holds now when it changed since the snapshot, or is
-// forced (merged onto its actual value, so the forced members do not leak
-// into what the tag returns to when the force is removed); see
-// membermerge.go.
+// forced or substituted (merged onto its live value, so the forced or
+// substituted members do not leak into what the tag returns to when the
+// force or substitute ends); see membermerge.go and substitute.go.
 func (v *scanView) commit() {
 	if len(v.dirty) == 0 {
 		return
@@ -112,7 +112,7 @@ func (v *scanView) commit() {
 		val := v.vals[name]
 		if m != nil {
 			if !m.all {
-				if cur, key, ok := v.store.lookupLocked(name); ok && (cur.gen > v.snapGen || cur.forced) {
+				if cur, key, ok := v.store.lookupLocked(name); ok && (cur.gen > v.snapGen || cur.forced || cur.substituted) {
 					val = m.merge(v.store.writeBase(key, cur), val)
 				}
 			}

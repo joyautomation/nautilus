@@ -42,7 +42,8 @@ import (
 // operator's value, not a reading, and keeps its quality. The first scan
 // after a takeover restores the sources above. A driver's Substituted is
 // not such a verdict: it vouches for a value the standby is not serving,
-// so it reads Stale too.
+// so it reads Stale too. A driver's Bad on a substituted input does stand
+// (Bad, not Stale): the more conservative reading of a sensor known bad.
 //
 // Called on demand — by the server's broadcast tick and by GET /api/state,
 // a few times a second — never from the scan loop, so quality costs the

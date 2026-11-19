@@ -371,3 +371,51 @@ END_PROGRAM`
 		}
 	}
 }
+
+// The program assigning one MEMBER of a substituted struct input must not
+// write the substituted snapshot back as the live value: the commit merges
+// the assigned member onto the live value, as for a forced tag. Without
+// that, the live Speed became the substitute 55, the retain read held 55,
+// and Restore left the tag at 55 instead of the delivered 20.
+func TestProgramMemberWriteKeepsTheSubstituteOutOfLive(t *testing.T) {
+	const lib = "TYPE Pump : STRUCT Run : BOOL; Speed : REAL; END_STRUCT; END_TYPE"
+	fd := &fieldDriver{in: nio.Values{}}
+	rt, err := New(Options{
+		Program:   "PROGRAM M\nVAR_EXTERNAL P1 : Pump; END_VAR\nP1.Run := TRUE;\nEND_PROGRAM",
+		Libraries: []string{lib}, Driver: fd,
+		Tags: []TagDef{Typed("P1", RoleInput, "Pump")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pt := rt.tags.types[ir.NameKey("P1")]
+	pv, err := ir.SetFieldTyped(ir.Zero(pt), pt, []string{"Speed"}, 20.0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fd.set("P1", pv)
+	rt.Scan()
+	fd.mu.Lock()
+	delete(fd.in, "P1") // the driver goes silent
+	fd.mu.Unlock()
+	s := sub(t, rt, "P1.Speed", 55)
+	for i := 0; i < 3; i++ {
+		rt.Scan()
+	}
+	if v, _ := rt.Tags().ReadPath("P1.Speed"); v != 55.0 {
+		t.Fatalf("P1.Speed = %v; want the substitute 55", v)
+	}
+	if l := rt.Substitutes(); len(l) != 1 || l[0].Live != 20.0 {
+		t.Fatalf("Substitutes() = %+v; want Live 20, the delivered value", l)
+	}
+	if live, _ := rt.tags.readActual("P1"); live.Fld[1].F != 20 {
+		t.Fatalf("live (retained) Speed = %v; want 20", live.Fld[1].F)
+	}
+	rt.Restore(s.ID)
+	if v, _ := rt.Tags().ReadPath("P1.Speed"); v != 20.0 {
+		t.Fatalf("P1.Speed = %v after Restore; want the delivered 20", v)
+	}
+	if v, _ := rt.Tags().ReadPath("P1.Run"); v != true {
+		t.Fatalf("P1.Run = %v; the program's member write was lost", v)
+	}
+}
