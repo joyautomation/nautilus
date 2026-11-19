@@ -81,6 +81,11 @@ type IOConfig struct {
 	// faults are, per unit, why putting back a failed apply failed: what
 	// runs there is not known (Fault) until an apply re-establishes it.
 	faults map[string]string
+
+	// gen counts what changed what runs: every apply and every revert. A
+	// watch reverts only over its own apply's generation.
+	gen   int
+	watch *ioWatch // the last apply's (IOWatch)
 }
 
 // swapped is a driver swapped in whole, and how to hear what the first scan
@@ -347,6 +352,11 @@ type IOValidation struct {
 // IOResult is what an apply did.
 type IOResult struct {
 	Changes []IOChange `json:"changes"`
+	// Answered are the changed devices that had read when the apply
+	// returned; Pending, those not yet. Watch follows them after (Watch).
+	Answered []string `json:"answered,omitempty"`
+	Pending  []string `json:"pending,omitempty"`
+	Watch    *IOWatch `json:"watch,omitempty"`
 	// Commanded is what the first scan after the apply handed the changed
 	// devices and drivers and they queued to send, by the driver's own
 	// rule (its write gate, a parked source, a held baseline).
@@ -941,9 +951,31 @@ func keysOf(m map[string]bool) []string {
 // those units unknown (Differs) and sets Fault. by is who applies it.
 //
 // The result's Commanded is what the first scan after the apply handed the
-// changed devices and drivers, waited for up to firstPushWait. Whether a
-// moved device answers is not checked (live probes are #706 PR 4).
+// changed devices and drivers, waited for up to firstPushWait. Answered and
+// Pending say which changed devices had read when it returned; a watch
+// (IOConfig.Watch) follows the pending ones after, off the apply lock: a
+// device still silent at its deadline stays applied, reads Bad and alarms,
+// and the operator decides (#706, James's decision), unless the apply asked
+// for ApplyOptions.RevertIfSilent.
 func (io *IOConfig) Apply(ctx context.Context, c *IOCandidate, by string) (*IOResult, error) {
+	return io.ApplyWith(ctx, c, by, ApplyOptions{})
+}
+
+// ApplyOptions are an apply's choices.
+type ApplyOptions struct {
+	// RevertIfSilent, when set, has the apply's watch put the whole apply
+	// back if a changed device has not read by then: unless a newer apply
+	// has landed meanwhile, or the revert was cancelled (CancelRevert). Off
+	// by default: a reversion on a running plant can be its own surprise.
+	RevertIfSilent time.Duration
+}
+
+// answerWait is how long an apply's watch waits for its changed devices
+// to read when it is not asked to revert.
+var answerWait = 5 * time.Second
+
+// ApplyWith is Apply with options.
+func (io *IOConfig) ApplyWith(ctx context.Context, c *IOCandidate, by string, opts ApplyOptions) (*IOResult, error) {
 	if !io.applying.TryLock() {
 		return nil, ErrApplyBusy
 	}
@@ -1072,13 +1104,14 @@ func (io *IOConfig) Apply(ctx context.Context, c *IOCandidate, by string) (*IORe
 		io.running[k] = u
 		delete(io.faults, k) // what runs there is known again
 	}
+	io.gen++
 	io.mu.Unlock()
 	for _, ch := range val.Changes {
 		io.log(ch, c, by, nil)
 	}
 
 	res := &IOResult{Changes: val.Changes, Commanded: []IOCommand{},
-		Notes: []string{"applied; each changed device was probed before the apply where its check is live (validation.probes); one that stops answering reads Bad quality"}}
+		Notes: []string{"applied; each changed device was probed before the apply where its check is live (validation.probes)"}}
 	wait, cancel := context.WithTimeout(ctx, firstPushWait)
 	defer cancel()
 	cmds := map[string]any{}
@@ -1134,7 +1167,317 @@ func (io *IOConfig) Apply(ctx context.Context, c *IOCandidate, by string) (*IORe
 	for _, n := range sortedNames(keysOf2(cmds)) {
 		res.Commanded = append(res.Commanded, IOCommand{Tag: n, Value: cmds[n]})
 	}
+
+	// What the changed devices say from here is the watch's: it runs on a
+	// context of its own (a client that goes away must never make a
+	// silence, nor a revert) and the apply lock is given back now.
+	deadline := answerWait
+	if opts.RevertIfSilent > 0 {
+		deadline = opts.RevertIfSilent
+	}
+	io.mu.Lock()
+	gen := io.gen
+	io.mu.Unlock()
+	w := &ioWatch{
+		IOWatch: IOWatch{Gen: gen, From: c.From, By: by, Deadline: time.Now().Add(deadline),
+			Revert: opts.RevertIfSilent > 0, State: WatchWatching},
+		targets: io.answerTargets(c, val.Changes),
+		revert: func() (left, lost []string) {
+			for i := len(undo) - 1; i >= 0; i-- {
+				if uerr := undo[i].run(); uerr != nil {
+					left = append(left, fmt.Sprintf("%s (%v)", undo[i].what, uerr))
+					lost = append(lost, undo[i].keys...)
+				}
+			}
+			return left, lost
+		},
+		restore: func() {
+			for k := range c.units {
+				if u, ok := running[k]; ok {
+					io.running[k] = u
+				}
+			}
+		},
+	}
+	w.answer()
+	res.Answered, res.Pending = w.Answered, w.Pending
+	io.startWatch(w)
+	snap := w.snapshot()
+	res.Watch = &snap
 	return res, nil
+}
+
+// The watch's states.
+const (
+	WatchWatching   = "watching"      // devices still pending, before the deadline
+	WatchAnswered   = "answered"      // every changed device read
+	WatchSilent     = "silent"        // one did not by the deadline; the change stays
+	WatchReverted   = "reverted"      // one did not, and the apply was put back
+	WatchRevertFail = "revert-failed" // putting it back failed (Fault)
+	WatchCancelled  = "cancelled"     // CancelRevert: the revert will not happen
+	WatchSuperseded = "superseded"    // a newer apply landed; this one is not reverted
+)
+
+// IOWatch is the last apply's watch over its changed devices: which have
+// read, which are pending, by when, and whether it will revert.
+//
+// It is held in this process's memory only: a restart or a takeover drops
+// it, pending revert included (#706 PR 5, which keeps applied
+// configurations across both, must carry it or refuse it; today a
+// redundant project's apply is refused).
+type IOWatch struct {
+	Gen      int       `json:"gen"` // the apply generation it watches
+	From     string    `json:"from"`
+	By       string    `json:"by"`
+	Deadline time.Time `json:"deadline"`
+	Revert   bool      `json:"revert"` // reverts the apply if a device is still silent at the deadline
+	Answered []string  `json:"answered,omitempty"`
+	Pending  []string  `json:"pending,omitempty"`
+	Silent   []string  `json:"silent,omitempty"`
+	State    string    `json:"state"`
+	Reason   string    `json:"reason,omitempty"`
+}
+
+type answerTarget struct {
+	what    string
+	names   []string
+	quality func() map[string]nio.Quality
+}
+
+type ioWatch struct {
+	mu sync.Mutex
+	IOWatch
+	targets []answerTarget
+	read    []map[string]bool
+	revert  func() (left, lost []string) // under the apply lock
+	restore func()                       // under io.mu
+	stop    context.CancelFunc
+}
+
+func (w *ioWatch) snapshot() IOWatch {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	s := w.IOWatch
+	s.Answered = append([]string(nil), s.Answered...)
+	s.Pending = append([]string(nil), s.Pending...)
+	s.Silent = append([]string(nil), s.Silent...)
+	return s
+}
+
+// answer looks once at the drivers that run and moves the targets whose
+// every tag has read to Answered.
+func (w *ioWatch) answer() {
+	if w.read == nil {
+		w.read = make([]map[string]bool, len(w.targets))
+		for i := range w.read {
+			w.read[i] = map[string]bool{}
+		}
+	}
+	var answered, pending []string
+	for i, tg := range w.targets {
+		q := tg.quality()
+		all := true
+		for _, n := range tg.names {
+			if qq, bad := q[n]; !bad || qq.IsGood() {
+				w.read[i][n] = true
+			}
+			all = all && w.read[i][n]
+		}
+		if all {
+			answered = append(answered, tg.what)
+		} else {
+			pending = append(pending, tg.what)
+		}
+	}
+	w.mu.Lock()
+	w.Answered, w.Pending = answered, pending
+	w.mu.Unlock()
+}
+
+// answerTargets are the changed devices, each with its data tags and the
+// quality the driver that runs reports for them.
+func (io *IOConfig) answerTargets(c *IOCandidate, changes []IOChange) []answerTarget {
+	var targets []answerTarget
+	modbusTarget := func(driver string, u ioUnit) answerTarget {
+		var names []string
+		for _, t := range u.tags {
+			if !t.WriteOnly {
+				names = append(names, t.Name)
+			}
+		}
+		return answerTarget{"device " + u.device, names, func() map[string]nio.Quality {
+			if mb := modbusOf(io.currentDriver(driver)); mb != nil {
+				return mb.Quality()
+			}
+			return nil
+		}}
+	}
+	for _, ch := range changes {
+		switch {
+		case ch.Device != "":
+			targets = append(targets, modbusTarget(ch.Driver, c.units[unitKey(ch.Driver, ch.Device)]))
+		case c.units[ch.Driver].typ == "modbus":
+			for _, k := range sortedKeys(c.units) {
+				if u := c.units[k]; u.driver == ch.Driver && u.device != "" {
+					targets = append(targets, modbusTarget(ch.Driver, u))
+				}
+			}
+		default:
+			name := ch.Driver
+			ua := opcuaOf(io.currentDriver(name))
+			if ua == nil {
+				continue
+			}
+			var names []string
+			for _, n := range ua.InputNames() {
+				if n != ua.OnlineTagName() {
+					names = append(names, n)
+				}
+			}
+			targets = append(targets, answerTarget{"driver " + name, names, func() map[string]nio.Quality {
+				if ua := opcuaOf(io.currentDriver(name)); ua != nil {
+					return ua.Quality()
+				}
+				return nil
+			}})
+		}
+	}
+	return targets
+}
+
+// startWatch makes w the watch, superseding the one before, and runs it on
+// a context of the engine's own.
+func (io *IOConfig) startWatch(w *ioWatch) {
+	ctx, cancel := context.WithCancel(context.Background())
+	w.stop = cancel
+	io.mu.Lock()
+	prev := io.watch
+	io.watch = w
+	io.mu.Unlock()
+	if prev != nil {
+		prev.finish(WatchSuperseded, "a newer apply landed")
+	}
+	go io.runWatch(ctx, w)
+}
+
+// finish ends w in state (when it is still watching) and stops it.
+func (w *ioWatch) finish(state, reason string) {
+	w.mu.Lock()
+	if w.State == WatchWatching {
+		w.State, w.Reason = state, reason
+	}
+	w.mu.Unlock()
+	if w.stop != nil {
+		w.stop()
+	}
+}
+
+func (io *IOConfig) runWatch(ctx context.Context, w *ioWatch) {
+	defer w.stop()
+	for {
+		w.answer()
+		w.mu.Lock()
+		pending, deadline := len(w.Pending), w.Deadline
+		w.mu.Unlock()
+		if pending == 0 {
+			w.finish(WatchAnswered, "")
+			return
+		}
+		if !time.Now().Before(deadline) {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return // superseded or cancelled: whoever stopped it said why
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+	// The deadline: silence is what the drivers that run say now.
+	w.answer()
+	snap := w.snapshot()
+	if len(snap.Pending) == 0 {
+		w.finish(WatchAnswered, "")
+		return
+	}
+	silent := strings.Join(snap.Pending, ", ")
+	w.mu.Lock()
+	w.Silent = snap.Pending
+	w.mu.Unlock()
+	if !snap.Revert {
+		w.finish(WatchSilent, silent+" did not read by the deadline: the change stays, its tags read Bad")
+		return
+	}
+	// Revert: exclusive with any apply, and only over this apply's own
+	// generation (a newer one has landed otherwise).
+	io.applying.Lock()
+	defer io.applying.Unlock()
+	if ctx.Err() != nil {
+		return // cancelled or superseded while waiting for the lock
+	}
+	io.mu.Lock()
+	gen := io.gen
+	io.mu.Unlock()
+	if gen != snap.Gen {
+		w.finish(WatchSuperseded, "a newer apply landed; not reverted")
+		return
+	}
+	reason := silent + " did not read by the deadline (revertIfSilent)"
+	left, lost := w.revert()
+	if len(left) > 0 {
+		msg := fmt.Sprintf("%s; putting it back failed for %s: what runs there is not known; apply a candidate for it, or restart", reason, strings.Join(left, ", "))
+		io.markUnknown(lost, snap.By, msg)
+		slog.Error("config.apply: revert failed", "err", msg)
+		w.finish(WatchRevertFail, msg)
+		return
+	}
+	io.mu.Lock()
+	w.restore()
+	io.gen++
+	io.mu.Unlock()
+	slog.Warn("config.apply", "result", "reverted", "reason", reason, "by", snap.By)
+	w.finish(WatchReverted, reason)
+}
+
+// Watch is the last apply's watch, nil before any apply.
+func (io *IOConfig) Watch() *IOWatch {
+	io.mu.Lock()
+	w := io.watch
+	io.mu.Unlock()
+	if w == nil {
+		return nil
+	}
+	s := w.snapshot()
+	return &s
+}
+
+// CancelRevert stops a pending revert: the watch ends cancelled, and the
+// apply stays whatever its devices say. False when no revert is pending.
+func (io *IOConfig) CancelRevert(by string) (*IOWatch, bool) {
+	io.mu.Lock()
+	w := io.watch
+	io.mu.Unlock()
+	if w == nil {
+		return nil, false
+	}
+	w.mu.Lock()
+	pending := w.State == WatchWatching && w.Revert
+	w.mu.Unlock()
+	if !pending {
+		return nil, false
+	}
+	w.finish(WatchCancelled, "the revert was cancelled by "+by)
+	s := w.snapshot()
+	return &s, true
+}
+
+// Close stops the watch (a test, or a controller shutting down).
+func (io *IOConfig) Close() {
+	io.mu.Lock()
+	w := io.watch
+	io.mu.Unlock()
+	if w != nil && w.stop != nil {
+		w.stop()
+	}
 }
 
 func keysOf2(m map[string]any) []string {

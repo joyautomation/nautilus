@@ -693,6 +693,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/io/staged/{id}", s.handleIOStaged)
 	mux.Handle("POST /api/io/staged/{id}/validate", s.audited("config.validate", ioStagedTarget, s.handleIOValidate))
 	mux.Handle("POST /api/io/staged/{id}/apply", s.audited("config.apply", ioStagedTarget, s.handleIOApply))
+	mux.Handle("POST /api/io/revert/cancel", s.audited("config.revert.cancel", nil, s.handleIOCancelRevert))
 	mux.HandleFunc("GET /api/forces", s.handleForces)
 	mux.Handle("POST /api/forces", s.audited("force.set", s.forceTarget, s.handleForce))
 	mux.Handle("POST /api/forces/clear", s.audited("force.clear-all", s.unforceAllTarget, s.handleUnforceAll))

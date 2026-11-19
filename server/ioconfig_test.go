@@ -26,6 +26,9 @@ type fakeIO struct {
 	differs  []IODiffer
 	fault    string
 	applied  int
+	revert   time.Duration // what the last apply was asked to revert after
+	watch    *IOWatch
+	cancels  int
 }
 
 func (f *fakeIO) hook() *IOHook {
@@ -47,7 +50,8 @@ func (f *fakeIO) hook() *IOHook {
 			}
 			return f.valid, f.drivers, map[string]any{"valid": f.valid, "cand": cand}
 		},
-		Apply: func(ctx context.Context, cand any, by string) (any, error) {
+		Apply: func(ctx context.Context, cand any, by string, revertIfSilent time.Duration) (any, error) {
+			f.revert = revertIfSilent
 			if f.applyErr != nil {
 				return nil, f.applyErr
 			}
@@ -56,6 +60,17 @@ func (f *fakeIO) hook() *IOHook {
 			return map[string]any{"commanded": []any{}}, nil
 		},
 		Running: func() any { return []string{"modbus"} },
+		Watch:   func() *IOWatch { return f.watch },
+		CancelRevert: func(by string) (*IOWatch, bool) {
+			if f.watch == nil || f.watch.State != "watching" || !f.watch.Revert {
+				return nil, false
+			}
+			f.cancels++
+			w := *f.watch
+			w.State, w.Reason = "cancelled", "the revert was cancelled by "+by
+			f.watch = &w
+			return &w, true
+		},
 		Differs: func() []IODiffer { return f.differs },
 		Fault:   func() string { return f.fault },
 	}
@@ -327,4 +342,79 @@ func TestIOValidateDoesNotOverwriteAnApply(t *testing.T) {
 	if _, st := doJSON(t, h, "GET", "/api/io/staged/"+id, nil); st["state"] != "applied" {
 		t.Fatalf("after the raced validate, state %v, want applied", st["state"])
 	}
+}
+
+// revertIfSilent rides the apply's optional body to the engine; a bad one
+// is refused before anything is applied.
+func TestIORoutesApplyRevertIfSilent(t *testing.T) {
+	for _, tc := range []struct {
+		body any
+		code int
+		want time.Duration
+	}{
+		{nil, http.StatusOK, 0},
+		{map[string]any{"revertIfSilent": "2s"}, http.StatusOK, 2 * time.Second},
+		{map[string]any{"revertIfSilent": "soon"}, http.StatusBadRequest, 0},
+		{map[string]any{"revertIfSilent": "1h"}, http.StatusBadRequest, 0},
+		{map[string]any{"revertIfSilent": "-1s"}, http.StatusBadRequest, 0},
+	} {
+		f := &fakeIO{valid: true}
+		h := ioServer(t, f, true)
+		_, st := doJSON(t, h, "POST", "/api/io/staged", map[string]any{"sha": "abc1234"})
+		id := st["id"].(string)
+		doJSON(t, h, "POST", "/api/io/staged/"+id+"/validate", nil)
+		w, _ := doJSON(t, h, "POST", "/api/io/staged/"+id+"/apply", tc.body)
+		applied := 1
+		if tc.code != http.StatusOK {
+			applied = 0
+		}
+		if w.Code != tc.code || f.revert != tc.want || f.applied != applied {
+			t.Errorf("%v: %d, revert %v, applied %d; want %d, %v, %d", tc.body, w.Code, f.revert, f.applied, tc.code, tc.want, applied)
+		}
+	}
+}
+
+// A pending revert is on the config block while it watches, and the cancel
+// route stops it; with none pending it answers 409. Cancelling needs the
+// write authorisation like every I/O write.
+func TestIORoutesPendingRevert(t *testing.T) {
+	f := &fakeIO{}
+	h := ioServer(t, f, true)
+	if w, _ := doJSON(t, h, "POST", "/api/io/revert/cancel", nil); w.Code != http.StatusConflict {
+		t.Fatalf("no watch: %d, want 409", w.Code)
+	}
+	f.watch = &IOWatch{Gen: 3, Revert: true, State: "watching", Pending: []string{"device DEV_A"}, Deadline: time.Now().Add(time.Minute)}
+	_, st := doJSON(t, h, "GET", "/api/state", nil)
+	if c, _ := st["config"].(map[string]any); !strings.Contains(fmt.Sprint(c["watch"]), "DEV_A") {
+		t.Fatalf("config = %v, want the pending revert", st["config"])
+	}
+	if _, st := doJSON(t, h, "GET", "/api/io", nil); !strings.Contains(fmt.Sprint(st["watch"]), "watching") {
+		t.Fatalf("/api/io watch = %v", st["watch"])
+	}
+	if code := ioPost(t, New(newTestRuntime(t), func() Options { o := ioOptions(f, false); return o }()).Handler(), "/api/io/revert/cancel", nil, ""); code != http.StatusForbidden || f.cancels != 0 {
+		t.Fatalf("online edits off: %d, cancels %d", code, f.cancels)
+	}
+	w, st := doJSON(t, h, "POST", "/api/io/revert/cancel", nil)
+	if w.Code != http.StatusOK || st["state"] != "cancelled" || f.cancels != 1 {
+		t.Fatalf("cancel: %d %v", w.Code, st)
+	}
+	_, st = doJSON(t, h, "GET", "/api/state", nil)
+	if c, _ := st["config"].(map[string]any); c["watch"] != nil {
+		t.Fatalf("config = %v after the cancel, want no pending watch", st["config"])
+	}
+}
+
+func ioPost(t *testing.T, h http.Handler, path string, body any, token string) int {
+	t.Helper()
+	var buf bytes.Buffer
+	if body != nil {
+		json.NewEncoder(&buf).Encode(body)
+	}
+	req := httptest.NewRequest("POST", "http://localhost"+path, &buf)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	return w.Code
 }

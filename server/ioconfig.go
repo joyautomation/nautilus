@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"sort"
@@ -38,16 +39,38 @@ type IOHook struct {
 	// Validate checks a candidate against what runs. drivers are the
 	// drivers it changes; body is the validation, as JSON.
 	Validate func(cand any) (valid bool, drivers []string, body any)
-	// Apply applies a validated candidate and returns its result. Errors
-	// wrapping ErrIOConflict answer 409 (busy, stale); ErrIORollbackFailed
-	// 500; any other, 422.
-	Apply func(ctx context.Context, cand any, by string) (body any, err error)
+	// Apply applies a validated candidate and returns its result.
+	// revertIfSilent, when set, puts the apply back if a changed device has
+	// not read within it. Errors wrapping ErrIOConflict answer 409 (busy,
+	// stale); ErrIORollbackFailed 500; any other, 422.
+	Apply func(ctx context.Context, cand any, by string, revertIfSilent time.Duration) (body any, err error)
 	// Running is every unit's state, as JSON.
 	Running func() any
 	// Differs is the units whose running configuration is not the
 	// manifest's; Fault what a failed rollback left unknown.
 	Differs func() []IODiffer
 	Fault   func() string
+	// Watch is the last apply's watch over its changed devices (nil
+	// before any); CancelRevert stops a pending revert, false when none.
+	Watch        func() *IOWatch
+	CancelRevert func(by string) (*IOWatch, bool)
+}
+
+// IOWatch is the last apply's watch: which changed devices have read,
+// which are pending, by when, and whether it reverts the apply if one is
+// still silent then. State: watching | answered | silent | reverted |
+// revert-failed | cancelled | superseded.
+type IOWatch struct {
+	Gen      int       `json:"gen"`
+	From     string    `json:"from"`
+	By       string    `json:"by"`
+	Deadline time.Time `json:"deadline"`
+	Revert   bool      `json:"revert"`
+	Answered []string  `json:"answered,omitempty"`
+	Pending  []string  `json:"pending,omitempty"`
+	Silent   []string  `json:"silent,omitempty"`
+	State    string    `json:"state"`
+	Reason   string    `json:"reason,omitempty"`
 }
 
 // IODiffer is one driver (or Modbus device) whose running configuration is
@@ -71,6 +94,9 @@ type IOConfigState struct {
 	Differs []IODiffer `json:"differs,omitempty"`
 	// Fault is what a failed rollback left unknown.
 	Fault string `json:"fault,omitempty"`
+	// Watch is the last apply's watch while it is still watching: its
+	// pending devices, its deadline, and whether it will then revert.
+	Watch *IOWatch `json:"watch,omitempty"`
 }
 
 // The errors an IOHook wraps to choose a status.
@@ -82,6 +108,10 @@ var (
 
 // maxStaged bounds the candidates kept; the oldest finished ones go first.
 const maxStaged = 32
+
+// maxRevertIfSilent bounds how long an apply may wait for its devices
+// before putting itself back.
+const maxRevertIfSilent = 5 * time.Minute
 
 // maxUpload bounds an uploaded candidate's body.
 const maxUpload = 4 << 20
@@ -117,6 +147,11 @@ func (s *Server) ioConfigState() *IOConfigState {
 	}
 	if len(st.Differs) > 0 {
 		st.Source = "applied"
+	}
+	if s.io.Watch != nil {
+		if w := s.io.Watch(); w != nil && w.State == "watching" {
+			st.Watch = w
+		}
 	}
 	return st
 }
@@ -156,7 +191,33 @@ func (s *Server) handleIO(w http.ResponseWriter, r *http.Request) {
 	if s.io.Running != nil {
 		running = s.io.Running()
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"config": s.ioConfigState(), "running": running, "staged": list})
+	var watch *IOWatch
+	if s.io.Watch != nil {
+		watch = s.io.Watch()
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"config": s.ioConfigState(), "running": running, "staged": list, "watch": watch})
+}
+
+// handleIOCancelRevert stops the last apply's pending revert.
+func (s *Server) handleIOCancelRevert(w http.ResponseWriter, r *http.Request) {
+	if code, msg := s.authorizeProgramEdit(r); code != 0 {
+		writeJSON(w, code, map[string]string{"error": msg})
+		return
+	}
+	if s.ioUnavailable(w) {
+		return
+	}
+	if s.io.CancelRevert == nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "no revert is pending"})
+		return
+	}
+	watch, ok := s.io.CancelRevert(s.requester())
+	if !ok {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "no revert is pending"})
+		return
+	}
+	slog.Info("config.revert.cancel", "gen", watch.Gen, "by", s.requester())
+	writeJSON(w, http.StatusOK, watch)
 }
 
 type stageRequest struct {
@@ -331,6 +392,28 @@ func (s *Server) handleIOApply(w http.ResponseWriter, r *http.Request) {
 	if st == nil {
 		return
 	}
+	// The body is optional: {"revertIfSilent": "10s"} has the apply's watch
+	// put it back if a changed device has not read within 10 s. The apply
+	// answers at once; the watch is GET /api/io's, and the config block's
+	// while it watches.
+	var req struct {
+		RevertIfSilent string `json:"revertIfSilent"`
+	}
+	if r.Body != nil {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<10)).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": `body must be empty or {"revertIfSilent": "<duration>"}`})
+			return
+		}
+	}
+	var revert time.Duration
+	if req.RevertIfSilent != "" {
+		d, err := time.ParseDuration(req.RevertIfSilent)
+		if err != nil || d <= 0 || d > maxRevertIfSilent {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("revertIfSilent %q: a duration from 1ms to %s", req.RevertIfSilent, maxRevertIfSilent)})
+			return
+		}
+		revert = d
+	}
 	s.staging.mu.Lock()
 	if st.State != "valid" {
 		state := st.State
@@ -343,7 +426,7 @@ func (s *Server) handleIOApply(w http.ResponseWriter, r *http.Request) {
 	s.staging.mu.Unlock()
 
 	by := s.requester()
-	body, err := s.io.Apply(r.Context(), st.cand, by)
+	body, err := s.io.Apply(r.Context(), st.cand, by, revert)
 	s.staging.mu.Lock()
 	code := http.StatusOK
 	switch {

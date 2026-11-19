@@ -94,6 +94,9 @@ var actionClass = map[string]string{
 	"config.stage":     elevated,
 	"config.validate":  elevated,
 	"config.apply":     elevated,
+	// Cancelling a pending revert keeps a change its device has not
+	// answered: it overrides a safeguard the apply asked for.
+	"config.revert.cancel": elevated,
 }
 
 const (
