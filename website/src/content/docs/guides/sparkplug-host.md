@@ -301,6 +301,15 @@ value back after a restart, write it again as a change (for example
 through a different value), or drive it from the site's own birth values
 in your program.
 
+The same goes for a command lost when the host loses its broker.
+Commands go out at QoS 0, as Sparkplug specifies, so the host can't tell
+whether one sent just as the broker closed its session ever arrived. If
+it didn't, the site's birth after the reconnect reports the old value,
+the host adopts it, and the program's command isn't sent again until it
+changes. To be sure a command took, read the value back from the site's
+data; a command the host couldn't send at all (no session) is still
+delivered once it reconnects.
+
 ## Writing template members
 
 Most of the controls on a water-utility HMI live *inside* a UDT —
