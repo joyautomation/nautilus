@@ -56,6 +56,7 @@ export type SubstituteFailure =
 	| 'notFound' // 404: not active (already ended)
 	| 'conflict' // 409: reused requestId, superseded, or nothing to ack — re-read, decide again
 	| 'noLeader' // 503: standby / no leader — nothing was started
+	| 'noMajority' // 503: the operator-intent log has no majority (a pair's peer down) — nothing was changed
 	| 'notSaved' // 503: the retain store refused — nothing was started
 	| 'unknown' // 503 outcome unknown — it MAY still take effect: re-read
 	| 'unreachable' // network: no answer at all, the same as unknown
@@ -118,7 +119,10 @@ export function classify(status: number, text: string, outcomeHeader: string | n
 	const message = text.trim() || `request failed (${status})`;
 	if ((outcomeHeader ?? '').toLowerCase() !== 'refused') return { kind: 'unknown', message };
 	const lower = message.toLowerCase();
-	if (status === 503) return { kind: lower.includes('no leader') ? 'noLeader' : 'notSaved', message };
+	if (status === 503) {
+		if (lower.includes('no majority')) return { kind: 'noMajority', message };
+		return { kind: lower.includes('no leader') ? 'noLeader' : 'notSaved', message };
+	}
 	if (status === 409) return { kind: 'conflict', message };
 	if (status === 404) return { kind: 'notFound', message };
 	if (status === 403 || status === 401) return { kind: 'forbidden', message };
@@ -238,6 +242,8 @@ export function failureText(r: Extract<SubstituteResult, { ok: false }>): string
 			return `Nothing was started — this controller has no leader to take the change. (${r.message})`;
 		case 'notSaved':
 			return `Nothing was started — the change could not be saved. (${r.message})`;
+		case 'noMajority':
+			return `Nothing was changed — the operator-intent log has no majority, so substitutes cannot be started, stopped or acknowledged until the other controller is back. (${r.message})`;
 		default:
 			return r.message;
 	}

@@ -33,6 +33,10 @@ tasks:
     scan: 50ms
 tags:
   - { name: SP, role: setpoint, init: 0.0 }
+  - { name: Level, role: input, type: REAL, init: 0.0 }
+substitutes:
+  rules:
+    - { match: Level, substitute: 90.0, ack-on-start: true }
 redundancy:
   experimental: true
   peers:
@@ -41,7 +45,7 @@ redundancy:
   witness: %s
   lease: 500ms
 `, a, b, w))},
-		"main.st": &fstest.MapFile{Data: []byte("PROGRAM Main\nVAR_EXTERNAL SP : REAL; END_VAR\nVAR n : DINT; END_VAR\nn := n + 1;\nSP := SP;\nEND_PROGRAM\n")},
+		"main.st": &fstest.MapFile{Data: []byte("PROGRAM Main\nVAR_EXTERNAL SP : REAL; Level : REAL; END_VAR\nVAR n : DINT; END_VAR\nn := n + 1;\nSP := SP + 0.0 * Level;\nEND_PROGRAM\n")},
 	}
 }
 
@@ -207,12 +211,17 @@ func startPairNodeAPI(t *testing.T, files fstest.MapFS, env map[string]string, l
 	if err != nil {
 		t.Fatal(err)
 	}
+	sl, err := m.startLog(rt, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
 	gate := gateOnLiveScans(proj, m.q, rt, localGateLease)
 	ctx, cancel := context.WithCancel(context.Background())
 	n := &pairNode{m: m, rt: rt, cancel: cancel, done: make(chan struct{})}
 	if api != nil {
 		sopts := proj.Server
 		sopts.Cluster = m.q
+		sopts.SubstituteLog = sl
 		srv := server.New(rt, sopts)
 		hs := &http.Server{Handler: srv.Handler()}
 		go hs.Serve(api)

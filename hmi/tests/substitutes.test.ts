@@ -87,6 +87,15 @@ describe('start — answers', () => {
 		expect(a.maybeApplied).toBe(false);
 		expect(b.maybeApplied).toBe(false);
 	});
+	it('503 no majority WITH the refused header is certain: nothing changed', async () => {
+		const msg = 'operator-intent log has no majority: the peer is down; substitutes cannot be started, stopped or acknowledged until it returns';
+		const { client } = fake([text(msg, 503, R)]);
+		const r = fail(await client.start('T', 1, 1));
+		expect(r.kind).toBe('noMajority');
+		expect(r.maybeApplied).toBe(false);
+		expect(failureText(r).includes('Nothing was changed')).toBe(true);
+		expect(failureText(r).includes(msg)).toBe(true);
+	});
 	it('409 refused is a conflict: never retried blind, never "maybe applied"', async () => {
 		const { client } = fake([text('requestId reused with a different request', 409, R)]);
 		const r = fail(await client.start('T', 1, 1));

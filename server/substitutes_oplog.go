@@ -38,10 +38,47 @@ import (
 // entry with the same ID (runtime.ApplySubstitute), so a retry never
 // starts two.
 
+// # No majority
+//
+// A log that cannot reach a majority of its replicas (oplog Status not
+// Writable: a pair's peer down, while the witness is not a replica, #710)
+// refuses a start, a stop or an acknowledgement BEFORE proposing it:
+// nothing is stored, so the answer is a certain "no" (503, outcome
+// refused), never "unknown". A write proposed while the log looked
+// writable and then missing its majority is still "outcome unknown".
+
 // SubstituteLog adapts an oplog node for a runtime's substitutes.
 type SubstituteLog struct {
 	rt   *runtime.Runtime
 	node *oplog.Node
+	// noMajority is the no-majority refusal's text (SetNoMajority).
+	noMajority string
+}
+
+// DefaultNoMajority is the no-majority refusal's text unless the wiring
+// names its replicas (SetNoMajority).
+const DefaultNoMajority = "operator-intent log has no majority: substitutes cannot be started, stopped or acknowledged until a majority of its replicas is reachable again"
+
+// SetNoMajority sets the no-majority refusal's text: a redundant pair
+// names its peer. Call it before the server serves.
+func (l *SubstituteLog) SetNoMajority(msg string) { l.noMajority = msg }
+
+// refuseWithoutMajority answers the no-majority refusal and reports true
+// when the log cannot reach a majority now; nothing has been proposed.
+func (s *Server) refuseWithoutMajority(w http.ResponseWriter) bool {
+	st := s.subLog.node.Status()
+	if st.Writable {
+		return false
+	}
+	msg := s.subLog.noMajority
+	if msg == "" {
+		msg = DefaultNoMajority
+	}
+	if st.Reason != "" {
+		msg += " (" + st.Reason + ")"
+	}
+	refuse(w, msg, http.StatusServiceUnavailable)
+	return true
 }
 
 // NewSubstituteLog is a SubstituteLog for rt. Attach its node once the
@@ -115,6 +152,9 @@ func (s *Server) startThroughLog(w http.ResponseWriter, r *http.Request, tag str
 		refuse(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if s.refuseWithoutMajority(w) {
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), substituteProposeWait)
 	defer cancel()
 	e, err := s.subLog.propose(ctx, oplog.Entry{
@@ -159,6 +199,9 @@ func (s *Server) stopThroughLog(w http.ResponseWriter, r *http.Request, id uint6
 		refuse(w, fmt.Sprintf("no substitute %d is active (it ended, expired, or a newer one replaced it)", id), http.StatusNotFound)
 		return
 	}
+	if s.refuseWithoutMajority(w) {
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), substituteProposeWait)
 	defer cancel()
 	if _, err := s.subLog.propose(ctx, oplog.Entry{Kind: oplog.KindUnsubstitute, Ref: id, By: s.principal(r)}); err != nil {
@@ -186,6 +229,9 @@ func (s *Server) ackThroughLog(w http.ResponseWriter, r *http.Request, ids []uin
 	}
 	if len(refs) == 0 {
 		refuse(w, "nothing to acknowledge: those substitutes ended, were replaced, do not wait for an acknowledgement, or already have one", http.StatusConflict)
+		return
+	}
+	if s.refuseWithoutMajority(w) {
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), substituteProposeWait)

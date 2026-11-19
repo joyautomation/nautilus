@@ -790,7 +790,7 @@ func (n *Node) sequenceLocked(ctx context.Context, e Entry) (Entry, error) {
 		return Entry{}, fmt.Errorf("oplog: seq %d was not fresh", e.Seq)
 	}
 	stored := 1
-	var errs []string
+	var errs, holders []string
 	for _, p := range n.o.Peers {
 		if p == n.o.Self {
 			continue
@@ -800,6 +800,7 @@ func (n *Node) sequenceLocked(ctx context.Context, e Entry) (Entry, error) {
 			continue
 		}
 		stored++
+		holders = append(holders, p)
 	}
 	if stored < n.majority() {
 		// Kept, not truncated: a follower whose reply was lost may hold
@@ -815,6 +816,20 @@ func (n *Node) sequenceLocked(ctx context.Context, e Entry) (Entry, error) {
 	n.mu.Lock()
 	n.commitTo(e.Seq)
 	n.mu.Unlock()
+	// The followers stored the entry under the commit index from before
+	// it: tell those that hold it that it is committed before the proposer
+	// hears so. A leader that dies after answering would otherwise leave
+	// them holding it uncommitted, and a follower that takes over without
+	// a majority to catch up with (a redundant pair, #710) would not apply
+	// a write the operator was told was done. Best effort, and only to the
+	// replicas that stored it (one that is down would cost every write a
+	// second timeout): one the push misses learns it at the next heartbeat
+	// or write.
+	for _, p := range holders {
+		if err := n.replicateTo(ctx, p, nil, term, e.Seq); err != nil {
+			n.log.Debug("oplog: commit push", "peer", p, "error", err)
+		}
+	}
 	return e, nil
 }
 
