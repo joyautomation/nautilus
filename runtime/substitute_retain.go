@@ -39,11 +39,17 @@ import (
 //
 // # A takeover from a shared store (a coordinator)
 //
-// The store is what the last leader held, and a standby cannot start a
-// substitute, so this replica's own table (from an earlier spell as leader)
-// is stale by definition: the store's set REPLACES it. Entries are matched
-// by identity (ID, address and start), since two leaders can each issue
-// the same next ID. An entry in both is kept as this process holds it; one
+// The store's set REPLACES this replica's table. Every start, stop,
+// replace and acknowledgement the API answered was saved before it was
+// answered (substitute_durable.go), and a standby takes none, so the store
+// holds every answered change. What only this replica's table can hold is
+// an expiry it decided but had not saved yet, which re-deriving from until
+// decides again, or a change whose save failed: a refused start (already
+// undone) or a stop or acknowledgement answered as not kept (a fault was
+// raised). Entries are matched by identity (ID, address and start): an ID
+// is issued from the store's high-water mark, so two leaders issue the
+// same one only when a start's save failed, and the identity keeps them
+// apart even then. An entry in both is kept as this process holds it; one
 // only here ends as a stop (reason superseded, journalled: the store may
 // never have seen it, so no other leader recorded its end); one only in
 // the store is applied untimed, and takeover's retimeSubstitutes computes

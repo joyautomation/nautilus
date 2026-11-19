@@ -1,7 +1,9 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -73,6 +75,12 @@ type substitutesResponse struct {
 	Rules       []SubstituteRule `json:"rules"`
 	// Started is the entry a POST just began.
 	Started *substituteView `json:"started,omitempty"`
+	// Kept says whether the change this answer reports is saved in the
+	// retain store, so it survives a restart or takeover. A start is
+	// always kept (one that cannot be saved is refused); a stop or an
+	// acknowledgement that could not be saved still took effect, and
+	// __Substitute_Fault says so until the next save.
+	Kept *bool `json:"kept,omitempty"`
 }
 
 func (s *Server) substituteRule(name string) (SubstituteRule, bool) {
@@ -116,6 +124,10 @@ func (s *Server) refuseSubstitute(w http.ResponseWriter) bool {
 	}
 	return false
 }
+
+// substituteSaveWait bounds how long a substitute request waits for the
+// saver to take its save; the store bounds the save itself.
+const substituteSaveWait = 10 * time.Second
 
 // refuseNotLeading answers 503 when this replica does not lead: a start,
 // stop or acknowledgement it took would be undone at its next takeover
@@ -177,15 +189,23 @@ func (s *Server) handleSubstituteStart(w http.ResponseWriter, r *http.Request) {
 			d = time.Duration(sec * float64(time.Second))
 		}
 	}
-	e, err := s.rt.Substitute(rule.Tag, runtime.SubstituteRequest{Value: value, For: d, By: s.principal(r), AckOnStart: rule.AckOnStart})
+	ctx, cancel := context.WithTimeout(r.Context(), substituteSaveWait)
+	defer cancel()
+	e, err := s.rt.SubstituteSaved(ctx, rule.Tag, runtime.SubstituteRequest{Value: value, For: d, By: s.principal(r), AckOnStart: rule.AckOnStart})
+	if errors.Is(err, runtime.ErrSubstituteNotSaved) {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	logAction(r, "substitute: started", "tag", e.Name, "id", e.ID, "for", d)
+	kept := true
 	resp := s.substitutesResponse()
 	v := s.substituteView(e)
 	resp.Started = &v
+	resp.Kept = &kept
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -206,13 +226,17 @@ func (s *Server) handleSubstituteStop(w http.ResponseWriter, r *http.Request) {
 	if s.refuseNotLeading(w) {
 		return
 	}
-	e, ok := s.rt.Restore(id, s.principal(r))
+	ctx, cancel := context.WithTimeout(r.Context(), substituteSaveWait)
+	defer cancel()
+	e, ok, kept, serr := s.rt.RestoreSaved(ctx, id, s.principal(r))
 	if !ok {
 		http.Error(w, fmt.Sprintf("no substitute %d is active (it ended, expired, or a newer one replaced it)", id), http.StatusNotFound)
 		return
 	}
-	logAction(r, "substitute: ended", "tag", e.Name, "id", e.ID)
-	writeJSON(w, http.StatusOK, s.substitutesResponse())
+	logAction(r, "substitute: ended", "tag", e.Name, "id", e.ID, "kept", kept, "saveError", serr)
+	resp := s.substitutesResponse()
+	resp.Kept = &kept
+	writeJSON(w, http.StatusOK, resp)
 }
 
 type substituteAckRequest struct {
@@ -236,13 +260,17 @@ func (s *Server) handleSubstituteAck(w http.ResponseWriter, r *http.Request) {
 	if s.refuseNotLeading(w) {
 		return
 	}
-	acked := s.rt.AckSubstitutes(req.IDs, s.principal(r))
+	ctx, cancel := context.WithTimeout(r.Context(), substituteSaveWait)
+	defer cancel()
+	acked, kept, serr := s.rt.AckSubstitutesSaved(ctx, req.IDs, s.principal(r))
 	if len(acked) == 0 {
 		http.Error(w, "nothing to acknowledge: those substitutes ended, were replaced, do not wait for an acknowledgement, or already have one", http.StatusConflict)
 		return
 	}
-	logAction(r, "substitute: acknowledged", "count", len(acked))
-	writeJSON(w, http.StatusOK, s.substitutesResponse())
+	logAction(r, "substitute: acknowledged", "count", len(acked), "kept", kept, "saveError", serr)
+	resp := s.substitutesResponse()
+	resp.Kept = &kept
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // substituteByID finds the active entry with this ID.

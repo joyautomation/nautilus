@@ -61,8 +61,12 @@ type SubstituteState struct {
 	// Entries are the active substitutes.
 	Entries []SubstituteRetain `json:"entries,omitempty"`
 	// HighID is the highest entry ID ever issued, ended entries included,
-	// so a restart never issues an ID again: a stale stop naming an ended
-	// entry must not end a newer one.
+	// so a restart does not issue an ID again: a stale stop naming an ended
+	// entry must not end a newer one. Every API change is saved before it
+	// is answered, so every ID an operator saw is covered. Rolling back to
+	// a binary from before substitutes drops this whole block at its next
+	// save (it does not know the field): HighID starts again from zero
+	// after such a rollback and forward, and so do the entries.
 	HighID uint64 `json:"highId,omitempty"`
 	// LastSeenMs is the wall clock (epoch ms, rounded down to 30 s) the
 	// last time the controller saved while a substitute was active. A

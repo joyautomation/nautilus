@@ -206,7 +206,7 @@ func (t *Tags) syncSubLocked() {
 		tv, _, ok := t.lookupLocked(c.root)
 		t.setOwnedLocked(c.flag, ok && tv.substituted)
 	}
-	fault := t.subLoadFault
+	fault := t.subLoadFault || t.subSaveFault
 	for _, ss := range t.subs {
 		for i := range ss.entries {
 			if ss.entries[i].Fault != "" {

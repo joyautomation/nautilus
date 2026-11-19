@@ -1,7 +1,9 @@
 package server
 
 import (
+	"context"
 	"errors"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -36,6 +38,9 @@ func (s *subStore) Load() (retain.State, error) {
 func (s *subStore) Save(st retain.State) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.fail {
+		return errors.New("store unwritable")
+	}
 	s.st = st
 	return nil
 }
@@ -184,5 +189,51 @@ func TestSubstituteRoutesRefusedWhenNotLeading(t *testing.T) {
 		if r := call(t, s, c.method, c.path, c.body); r.Code != 503 || !strings.Contains(r.Body.String(), "no leader") {
 			t.Errorf("%s %s on a standby = %d %s; want 503 no leader", c.method, c.path, r.Code, r.Body)
 		}
+	}
+}
+
+// Over the API: a start the retain store does not take is refused with
+// 503 and nothing runs; a stop it does not take still ends the substitute
+// and answers kept: false.
+func TestSubstituteRoutesSaveBeforeAnswering(t *testing.T) {
+	store := &subStore{}
+	rt, err := runtime.New(runtime.Options{
+		Program: testProgram, Driver: nio.NewMemory(), Retain: store,
+		Inputs: []string{"Level", "Flow"}, Outputs: []string{"Out"},
+		Seed:          nio.Values{"Level": 40.0, "Flow": 3.0, "SP": 65.0, "Out": 0.0},
+		Substitutable: []string{"Level", "Flow"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt.LoadRetained()
+	s := New(rt, Options{Substitutes: subRules})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { rt.Run(ctx); close(done) }()
+	defer func() { cancel(); <-done }()
+	var first *httptest.ResponseRecorder
+	for i := 0; i < 200; i++ { // until the first scan has taken over
+		if first = call(t, s, "POST", "/api/substitutes", `{"name":"Flow","value":7}`); first.Code == 200 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if first.Code != 200 || !strings.Contains(first.Body.String(), `"kept":true`) {
+		t.Fatalf("start = %d %s; want 200 kept", first.Code, first.Body)
+	}
+	id := decodeSubs(t, first.Body.Bytes()).Started.ID
+	store.mu.Lock()
+	store.fail = true
+	store.mu.Unlock()
+	if r := call(t, s, "POST", "/api/substitutes", `{"name":"Level"}`); r.Code != 503 {
+		t.Fatalf("a start the store refused = %d %s; want 503", r.Code, r.Body)
+	}
+	if l := rt.Substitutes(); len(l) != 1 || l[0].Name != "Flow" {
+		t.Fatalf("%+v; want only Flow: the refused start must not run", l)
+	}
+	r := call(t, s, "DELETE", "/api/substitutes/"+subID(id), "")
+	if r.Code != 200 || !strings.Contains(r.Body.String(), `"kept":false`) || len(rt.Substitutes()) != 0 {
+		t.Fatalf("a stop the store refused = %d %s; want 200, kept false, and the stop live", r.Code, r.Body)
 	}
 }
