@@ -96,6 +96,7 @@ namespace Tiad.Test
                 T("AFailedWriteCancels", AFailedWriteCancels),
                 T("InDoubtOnceEntered", InDoubtOnceEntered),
                 T("Selections", SelectionsWritten),
+                T("ALoadAfterADeclineIsInDoubt", ALoadAfterADeclineIsInDoubt),
                 T("TypeIdentifiers", TypeIdentifiers),
                 T("PcInterfaces", PcInterfaces),
                 T("Only", OnlyOne),
@@ -354,7 +355,7 @@ namespace Tiad.Test
             var r = new Run(AllYes);
             N(r, start, "StartModules", "start", delegate { return List(P(start, "StartModules", "start")); });
             Eq(r.Seen.Count, 1, "questions");
-            Eq(A(r.D, "StartModules"), "NoAction", "after loading, already applied: still never TIA's default");
+            Eq(A(r.D, "StartModules"), "StartModule", "after loading, already applied: the decided answer again, never NoAction over it");
         }
 
         static void Cancelled(Run r, Action f, string sub, bool declined, string what)
@@ -653,6 +654,57 @@ namespace Tiad.Test
             }
             e = r.D.Finish(true, "Success", "", null);
             True(e.InDoubt && e.Failure != null, "a swallowed cancel before decide");
+        }
+
+        // Declined runs a decider whose decide says no, and returns the
+        // cancel its first callback threw.
+        static DownloadCancel Declined(out Run r)
+        {
+            r = new Run(delegate { return null; });
+            object k = new object();
+            try
+            {
+                r.D.Next(k, "StopModules", "stop", delegate { return List(P(k, "StopModules", "stop")); });
+            }
+            catch (DownloadCancel c)
+            {
+                return c;
+            }
+            Fail("decide said no, but the callback did not cancel");
+            return null;
+        }
+
+        static void ALoadAfterADeclineIsInDoubt()
+        {
+            Run r;
+            // TIA swallowed the decline and loaded; then writing start-after
+            // failed, and TIA threw that failure.
+            DownloadCancel declined = Declined(out r);
+            Step st = r.D.After(DownloadDecider.StartAfterType);
+            Eq(S(st), "NoAction", "start-after after an undecided load");
+            DownloadCancel failed = r.D.Fail("writing NoAction into StartModules failed: lost");
+            True(!object.ReferenceEquals(failed, declined) && !failed.Declined, "a failure after a decline is a new, undeclined cancel");
+            DownloadEnd e = r.D.Finish(true, null, "", new InvalidOperationException("wrapped", failed));
+            True(!e.Declined && e.Failure != null && e.InDoubt, "write failed after a swallowed decline: in doubt, not declined (" + e.Failure + ")");
+
+            // TIA swallowed the decline, loaded, wrote start-after, then
+            // threw the decline after all.
+            declined = Declined(out r);
+            r.D.Wrote(r.D.After(DownloadDecider.StartAfterType));
+            e = r.D.Finish(true, null, "", new InvalidOperationException("wrapped", declined));
+            True(!e.Declined && e.InDoubt, "the decline thrown after a load");
+            Contains(e.Failure, "TIA went on after tiad cancelled the download", "the decline thrown after a load");
+
+            // TIA swallowed the decline, then failed for its own reason.
+            Declined(out r);
+            e = r.D.Finish(true, null, "", new TiaException("The connection to the CPU was lost"));
+            True(!e.Declined && e.InDoubt, "another failure after a decline");
+            Contains(e.Failure, "The connection to the CPU was lost", "another failure after a decline");
+
+            // The decline itself, thrown back by TIA: declined, not in doubt.
+            declined = Declined(out r);
+            e = r.D.Finish(true, null, "", new InvalidOperationException("wrapped", declined));
+            True(e.Declined && e.Failure == null && !e.InDoubt, "a plain decline");
         }
 
         static void SelectionsWritten()

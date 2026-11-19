@@ -485,7 +485,7 @@ namespace Tiad.Openness
         {
             Project p = Of(project).Project;
             var decider = new DownloadDecider(decide);
-            DownloadResult r = null;
+            string state = null, messages = "";
             Exception error = null;
             bool entered = false;
             try
@@ -502,7 +502,7 @@ namespace Tiad.Openness
                 if (hardware) options |= DownloadOptions.Hardware;
                 if (software) options |= DownloadOptions.Software;
                 entered = true;
-                r = dp.Download(target, at,
+                DownloadResult r = dp.Download(target, at,
                     delegate(DownloadConfiguration c)
                     {
                         Step st = decider.Next(c, c.GetType().Name, c.Message ?? "", delegate { return PendingOf(c); });
@@ -515,13 +515,18 @@ namespace Tiad.Openness
                         else Log.Line("download: after loading, TIA reports {0}: {1}", c.GetType().Name, c.Message ?? "");
                     },
                     options);
+                // Read inside the try: a failure reading the result of a
+                // download TIA ran is in doubt too.
+                messages = DownloadMessages(r.Messages);
+                state = r.State.ToString();
             }
             catch (Exception e)
             {
+                state = null;
                 error = e;
             }
             // How it ended is decided in core (DownloadDecider.Finish).
-            DownloadEnd end = decider.Finish(entered, r == null ? null : r.State.ToString(), r == null ? "" : DownloadMessages(r.Messages), error);
+            DownloadEnd end = decider.Finish(entered, state, messages, error);
             if (end.Failure != null) throw new TiaException(end.Failure, error, end.InDoubt);
             return new DownloadOutcome { Questions = decider.Asked, Loaded = end.Loaded };
         }
@@ -733,8 +738,9 @@ namespace Tiad.Openness
                 Project p = Of(project).Project;
                 StationUploadProvider sup = p.GetService<StationUploadProvider>();
                 ConfigurationPcInterface pc = PcInterface(sup.Configuration);
-                // As the Openness manual's station upload does: the address
-                // on the PC interface (no station, so no target interface).
+                // Provisional until S2a: the address on the PC interface, as
+                // the Openness manual's station upload does (no station yet,
+                // so no target interface).
                 ConfigurationAddress at = pc.Addresses.Create(address);
                 foreach (HwDevice d in new List<HwDevice>(p.Devices)) d.Delete();
                 string asked = null;

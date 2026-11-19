@@ -314,9 +314,13 @@ namespace Tiad
         // It returns the cancel to throw.
         public DownloadCancel Fail(string why)
         {
-            if (Cancelled == null) Cancelled = new DownloadCancel(why, false);
+            // A failure after a decline is no decline: TIA went on.
+            if (Cancelled == null || Cancelled.Declined) Cancelled = new DownloadCancel(why, false);
             return Cancelled;
         }
+
+        // loadSeen is set by TIA's after-download callback: TIA loaded.
+        bool loadSeen;
 
         void Decide(object key, string type, string message, Func<List<Pending>> list)
         {
@@ -387,18 +391,22 @@ namespace Tiad
 
         // After answers TIA's after-download callback for a configuration
         // of type: the decided answer to the same configuration when it is
-        // still unapplied. Starting the CPU is never left to TIA's default:
-        // with no such answer (asked already, or a load nobody approved),
+        // still unapplied, and start-after's again if TIA asks it again
+        // after loading. Starting the CPU is never left to TIA's
+        // default: with nothing decided (a load nobody approved),
         // start-after is written NoAction, so the CPU stays as it is. For
         // any other configuration, null: TIA's own setting stands, since it
-        // cannot change what was loaded.
+        // cannot change what was loaded. Any after-download callback means
+        // TIA loaded.
         public Step After(string type)
         {
+            loadSeen = true;
             if (Approved)
             {
+                // The decided answer, written again if TIA asks again.
                 for (int i = 0; i < pending.Count; i++)
                 {
-                    if (!applied[i] && pending[i].Type == type) return new Step { Setting = settings[i], Index = i };
+                    if (pending[i].Type == type && (!applied[i] || type == StartAfterType)) return new Step { Setting = settings[i], Index = i };
                 }
             }
             if (type == StartAfterType) return new Step { Setting = Setting.Choose("NoAction") };
@@ -421,6 +429,15 @@ namespace Tiad
             return end;
         }
 
+        static bool Wraps(Exception error, Exception what)
+        {
+            for (Exception i = error; i != null; i = i.InnerException)
+            {
+                if (object.ReferenceEquals(i, what)) return true;
+            }
+            return false;
+        }
+
         DownloadEnd Ended(string state, string messages, Exception error)
         {
             var end = new DownloadEnd();
@@ -428,7 +445,10 @@ namespace Tiad
             {
                 if (Cancelled != null)
                 {
-                    if (Cancelled.Declined) end.Declined = true;
+                    // A decline only when TIA threw that very cancel and
+                    // nothing shows it loaded anyway.
+                    if (Cancelled.Declined && !loadSeen && Wraps(error, Cancelled)) end.Declined = true;
+                    else if (Cancelled.Declined) end.Failure = "TIA went on after tiad cancelled the download (" + Cancelled.Message + "): " + TiaNames.Message(error);
                     else end.Failure = Cancelled.Message;
                     return end;
                 }
