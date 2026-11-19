@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -262,5 +263,43 @@ func TestParamBusyIs429(t *testing.T) {
 	}
 	if len(f.writes) != 0 {
 		t.Error("a busy write reached the device")
+	}
+}
+
+// With an auth: block a parameter write needs the config permission: a viewer
+// gets 403, journalled as refused under their principal, and nothing reaches
+// the device; the administrator's token is accepted. Reads need nothing.
+func TestParamWriteNeedsConfigUnderAnAuthBlock(t *testing.T) {
+	f := newFakeParams()
+	srv := paramServer(t, f, Options{})
+	enforce(t, srv)
+	put := func(tok string) (*httptest.ResponseRecorder, int) {
+		n := len(srv.audit.ring.Recent())
+		rec := call(t, srv, "PUT", "/api/iolink/LEVEL1/params/V_Setpoint", `{"value": 500}`, func(r *http.Request) {
+			r.Header.Del("X-Nautilus-Token")
+			if tok != "" {
+				r.Header.Set("Authorization", "Bearer "+tok)
+			}
+		})
+		return rec, len(srv.audit.ring.Recent()) - n
+	}
+	rec, n := put("v-secret")
+	if rec.Code != http.StatusForbidden || n != 1 {
+		t.Fatalf("a viewer's write: %d (%d entries) %s", rec.Code, n, rec.Body)
+	}
+	if e := srv.audit.ring.Recent()[0]; e.Action != "param.write" || e.User != "token:viewer" || e.Result != "refused" {
+		t.Errorf("the journal: %+v, want a refused param.write by token:viewer", e)
+	}
+	if len(f.writes) != 0 {
+		t.Errorf("a refused write reached the device: %v", f.writes)
+	}
+	if rec, _ := put(""); rec.Code != http.StatusUnauthorized {
+		t.Errorf("a write with no credential: %d, want 401", rec.Code)
+	}
+	if rec, _ := put("admin-secret"); rec.Code != http.StatusOK || len(f.writes) != 1 {
+		t.Errorf("the administrator's write: %d %s (writes %v)", rec.Code, rec.Body, f.writes)
+	}
+	if rec := call(t, srv, "GET", "/api/iolink/LEVEL1/params/V_Setpoint", "", func(r *http.Request) { r.Header.Del("X-Nautilus-Token") }); rec.Code != http.StatusOK {
+		t.Errorf("a read with no credential: %d (reads need only what GET /api/io needs)", rec.Code)
 	}
 }

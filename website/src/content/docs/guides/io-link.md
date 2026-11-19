@@ -80,7 +80,8 @@ naut iolink param set   --host plc1 LEVEL1 V_Setpoint 500
 
 - A **read** works whichever device is on the port and says which; one taken
   from a device that is not the one expected says so.
-- A **write** needs the controller's write credential (`NAUTILUS_TOKEN`), is
+- A **write** needs the `config` permission (or, without an `auth:` block, the
+  controller's write credential, `NAUTILUS_TOKEN`), is
   journalled as `param.write <port device>/<variable>` with the value held
   before and after, and is **refused** unless the device on the port is the
   expected one, so a parameter is not sent to a device the controller knows

@@ -27,9 +27,10 @@ const iolinkParamUsage = `usage: naut iolink param <cmd> --host <controller> [--
   list <port device>                    the device's parameters, from its IODD
   get  <port device> <parameter>        read one (works whichever device is on
                                         the port, and says which)
-  set  <port device> <parameter> <value> write one: needs the controller's
-                                        write credential (NAUTILUS_TOKEN),
-                                        goes in its audit journal, and is
+  set  <port device> <parameter> <value> write one: needs the config
+                                        permission (or, with no auth: block,
+                                        the write credential: NAUTILUS_TOKEN),
+                                        goes in the audit journal, and is
                                         refused unless the device on the port
                                         is the one expected
 
