@@ -49,6 +49,12 @@ const (
 	// is baked into CONNECT, so a leadership change can only be honoured by
 	// reconnecting.
 	leaderPoll = time.Second
+	// stopDeathWait bounds how long Stop waits for the broker to take the
+	// STATE death certificate. A broker that has not acknowledged it by then
+	// is not answering; Stop disconnects anyway, and the broker fires the
+	// will when the session drops. tokenTimeout (10 s) here held a stop past
+	// a supervisor's budget (#942).
+	stopDeathWait = 2 * time.Second
 )
 
 // stateBody is the Sparkplug 3.0 STATE birth/death certificate. Field order
@@ -542,7 +548,12 @@ func (d *Driver) publishStateOffline(p publisher, ts int64) {
 		return
 	}
 	if err := p.publish(stateTopic(d.cfg.HostID), 1, true, body); err != nil {
-		d.log.Error("host: publish STATE death", "error", err)
+		if d.deathAbandoned.Load() {
+			// Stop already gave up on it (#942); the will stands in.
+			d.log.Warn("host: publish STATE death after Stop stopped waiting", "error", err)
+		} else {
+			d.log.Error("host: publish STATE death", "error", err)
+		}
 	}
 	if d.cfg.StateForm == StateForm2x || d.cfg.StateForm == StateFormBoth {
 		if err := p.publish(legacyStateTopic(d.cfg.HostID), 1, true, []byte("OFFLINE")); err != nil {

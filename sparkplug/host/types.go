@@ -16,6 +16,7 @@ import (
 	"context"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	nio "github.com/joyautomation/nautilus/io"
@@ -390,6 +391,10 @@ type Driver struct {
 	done           chan struct{}
 
 	// ── leadership under redundancy: (driver.go SetWriteGate, mqtt.go) ──
+	// deathAbandoned is set when Stop stopped waiting for the STATE death
+	// (#942): its publish may still fail as the session goes, which is
+	// expected by then and logged as a warning, not an error.
+	deathAbandoned atomic.Bool
 	// gateMu guards this block.
 	gateMu sync.Mutex
 	// writeGate is the leadership gate `naut run` installs through
