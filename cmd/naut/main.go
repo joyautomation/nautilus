@@ -124,6 +124,9 @@ Usage:
                           What "Download Program to Controller" sends.
   naut historian      Archive a controller's tags into Postgres and
                           serve downsampled history (-source, -db).
+  naut witness        Run the witness of a redundant controller pair: the
+                          third voter, on its peer port (--listen, --state,
+                          --lease; needs NAUTILUS_PEER_TOKEN).
   naut audit verify   Check the runtime audit journal's hash chain
                           (default dir: audit).
   naut fbd graph <f>  Emit a .fbd file's diagram render model as JSON
@@ -212,6 +215,8 @@ func main() {
 		os.Exit(runCompose(os.Args[2:]))
 	case "historian":
 		os.Exit(runHistorian(os.Args[2:]))
+	case "witness":
+		os.Exit(runWitness(os.Args[2:]))
 	case "audit":
 		os.Exit(runAudit(os.Args[2:]))
 	case "fbd":

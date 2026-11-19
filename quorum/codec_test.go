@@ -86,3 +86,18 @@ func TestStateFileTornAtEveryOffset(t *testing.T) {
 		}
 	}
 }
+
+// A state file of another format version (1: before VoterState.Lease)
+// reads as ErrVersion, not as corrupt.
+func TestStateFileVersion(t *testing.T) {
+	b, _ := VoterState{Promised: 3, Incarnation: 9, Lease: lease}.MarshalBinary()
+	if b[len(stateMagic)] != 2 {
+		t.Fatalf("state version %d, want 2", b[len(stateMagic)])
+	}
+	old := append([]byte(nil), b[:len(b)-4]...)
+	old[len(stateMagic)] = 1
+	var st VoterState
+	if err := st.UnmarshalBinary(sealCRC(old)); !errors.Is(err, ErrVersion) {
+		t.Fatalf("a version-1 file: %v, want ErrVersion", err)
+	}
+}

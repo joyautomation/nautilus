@@ -36,7 +36,7 @@ type mutation struct {
 var table = []mutation{
 	{"no_rho", []string{"TestCandidateLeaseFromSendMinusRho", "TestSkewWithinRhoHoldsBeyondBreaks", "TestSeeds"}},
 	{"restart_grants", []string{"TestVoterRestartWait", "TestMustFailPreRestartGrant", "TestSeeds"}},
-	{"answer_before_fsync", []string{"TestVoterGrantsOnlyAfterPersist", "TestTargetedFsyncBeforeAnswer"}},
+	{"answer_before_fsync", []string{"TestVoterGrantsOnlyAfterPersist", "TestTargetedFsyncBeforeAnswer", "TestGrantLeavesOnlyAfterTheWrite"}},
 	{"lease_from_reply", []string{"TestCandidateLeaseFromSendMinusRho", "TestSkewWithinRhoHoldsBeyondBreaks"}},
 	{"no_backoff", []string{"TestCandidateBackOffAfterLapse", "TestTargetedOneWayLeaderBacksOff"}},
 	{"one_lease_backoff", []string{"TestCandidateBackOffAfterLapse", "TestTargetedOneWayLeaderBacksOff", "TestTargetedOneWayLeaderSkewed"}},
@@ -97,6 +97,30 @@ var table = []mutation{
 		"TestRegressionBothUncommissionedStray", "TestRegression976WitnessUnreachable"}},
 	{"alarm_on_heard", []string{"TestHeardCommittedIncarnationRaisesNoAlarm"}},
 	{"recommission_any_floor", []string{"TestRecommissionFloorAboveTheKnown"}},
+	// The driver, quorum/node (#710 PR 3a): the real transport, file and
+	// clock. Its loopback tests skip under a core mutation (above).
+	{"gate_on_tick", []string{"TestGateJudgedWhenRead"}},
+	{"peer_host_trusted", []string{"TestGuardRequiresThePeerToken"}},
+	{"persisted_before_write", []string{"TestGrantLeavesOnlyAfterTheWrite"}},
+	{"state_in_place", []string{"TestStateCrashMidWriteKeepsTheOld"}},
+	{"nonce_fixed", []string{"TestBootNonceDrawnPerStartNeverPersisted"}},
+	{"lease_unchecked", []string{"TestVoteLeaseLongerThanThePromiseRefused", "TestReviewWitnessShorterLeaseRestart"}},
+	{"witness_rebuilds_silently", []string{"TestWitnessRefusesUnreadableStateWithoutRebuild"}},
+	// The #1021 review: a restart with a shorter lease (core and driver),
+	// and the driver rules no test pinned.
+	{"restart_wait_current_lease", []string{"TestVoterRestartWaitsTheLongerLease", "TestReviewWitnessShorterLeaseRestart"}},
+	{"controller_lease_unchecked", []string{"TestReviewControllerRefusesALongerLease"}},
+	{"controller_write_ignored", []string{"TestReviewControllerFailedWriteSendsNoGrant"}},
+	{"witness_write_ignored", []string{"TestReviewWitnessFailedWriteSendsNoGrant"}},
+	{"gate_ignores_health", []string{"TestLoopbackUnhealthyLeaderClosesItsGate", "TestLoopbackReleaseClosesTheGate"}},
+	{"controller_unlocked", []string{"TestReviewControllerStateLocked"}},
+	{"witness_unlocked", []string{"TestReviewWitnessDirLocked"}},
+	{"no_term_cap", []string{"TestReviewWitnessTermJumpRefused"}},
+	{"controller_no_term_cap", []string{"TestReviewControllerTermJumpRefused"}},
+	{"hello_unbound", []string{"TestReviewHelloReflectedAnswerFails"}},
+	// The #1021 re-review.
+	{"lease_raise_volatile", []string{"TestVoterLongerLeaseDurableBeforeAnyGrant", "TestReviewLengthenThenShorten"}},
+	{"term_cap_narrow", []string{"TestReviewIsolatedControllerRejoins"}},
 }
 
 // event is one line of `go test -json`.

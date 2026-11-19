@@ -3,6 +3,7 @@ package quorum
 import (
 	"encoding/binary"
 	"hash/crc32"
+	"time"
 )
 
 // Mark is how far a standby is in sync (design §3.3): the (Term, Scan) of
@@ -44,9 +45,20 @@ type VoterState struct {
 	// adoption to the highest term either controller (and, for a lost
 	// file, the witness) knew was promised, so no term is granted twice.
 	Floor uint64
+
+	// Lease is the longest lease a promise of this voter may still be
+	// running under. A voter restarted with a shorter lease waits this one
+	// out before it grants (NewVoter): its last promise was made under it
+	// (#1021 review). It drops to the voter's own lease at its first grant
+	// after that wait, written with the grant.
+	Lease time.Duration
 }
 
 const stateMagic = "nqv"
+
+// stateVersion is the state file's format: 2 since VoterState.Lease. A
+// file of another version reads as ErrVersion, not as corrupt.
+const stateVersion = 2
 
 // MarshalBinary encodes s for its state file: a magic, a version byte, a
 // length, the fields, and a CRC-32C, so a torn write is detected.
@@ -65,10 +77,10 @@ func (s VoterState) MarshalBinary() ([]byte, error) {
 	p = append(p, flags)
 	p = binary.BigEndian.AppendUint64(p, s.InSync.Term)
 	p = binary.BigEndian.AppendUint64(p, s.InSync.Scan)
-	for _, v := range []uint64{s.Gen, s.PendingGen, s.PendingInc, s.Floor} {
+	for _, v := range []uint64{s.Gen, s.PendingGen, s.PendingInc, s.Floor, uint64(s.Lease)} {
 		p = binary.BigEndian.AppendUint64(p, v)
 	}
-	b := append([]byte(stateMagic), wireVersion)
+	b := append([]byte(stateMagic), stateVersion)
 	b = binary.BigEndian.AppendUint32(b, uint32(len(p)))
 	b = append(b, p...)
 	return binary.BigEndian.AppendUint32(b, crc32.Checksum(b, castagnoli)), nil
@@ -90,7 +102,7 @@ func (s *VoterState) UnmarshalBinary(b []byte) error {
 	if crc32.Checksum(body, castagnoli) != binary.BigEndian.Uint32(b[head+n:]) {
 		return ErrCorrupt
 	}
-	if b[len(stateMagic)] != wireVersion {
+	if b[len(stateMagic)] != stateVersion {
 		return ErrVersion
 	}
 	rd := &reader{b: b[head : head+n]}
@@ -98,7 +110,8 @@ func (s *VoterState) UnmarshalBinary(b []byte) error {
 	flags := rd.byte1()
 	v.InSync = Mark{Known: flags&1 != 0, Current: flags&2 != 0, Term: rd.u64(), Scan: rd.u64()}
 	v.Gen, v.PendingGen, v.PendingInc, v.Floor = rd.u64(), rd.u64(), rd.u64(), rd.u64()
-	if rd.bad || len(rd.b) != 0 || flags&^3 != 0 {
+	v.Lease = time.Duration(rd.u64())
+	if rd.bad || len(rd.b) != 0 || flags&^3 != 0 || v.Lease < 0 {
 		return ErrCorrupt
 	}
 	*s = v

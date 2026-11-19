@@ -41,6 +41,64 @@ func TestVoterRestartWait(t *testing.T) {
 	}
 }
 
+// A voter restarted with a shorter lease waits out the longer one its
+// last promise was made under, recorded in its state; a write before then
+// keeps the longer one, and its first grant after records its own (#1021
+// review, I1 at the witness).
+func TestVoterRestartWaitsTheLongerLease(t *testing.T) {
+	long := 2 * lease
+	v := NewVoter("W", long, VoterState{}, 0)
+	p, _ := v.Handle(at(long), Request{From: "A", Term: 7, ID: 1})
+	if p == nil || p.State.Lease != long {
+		t.Fatalf("the grant's write records lease %v, want %v", p.State.Lease, long)
+	}
+	st := p.State
+	// Restarted at once with the short lease: A's promise runs to 2·long.
+	r := NewVoter("W", lease, st, at(long))
+	if got := r.State().Lease; got != long {
+		t.Fatalf("restarted state lease %v, want %v kept until a grant", got, long)
+	}
+	if got := r.MaxRequestLease(at(long)); got != long {
+		t.Fatalf("in the wait it accepts requests up to %v, want %v", got, long)
+	}
+	if grant(t, r, at(long+lease+time.Millisecond), Request{From: "B", Term: 8, ID: 2}) {
+		t.Fatal("granted B after the short lease, inside the promise made to A under the long one")
+	}
+	if !grant(t, r, at(2*long), Request{From: "B", Term: 8, ID: 3}) {
+		t.Fatal("refused once the long lease was over")
+	}
+	if got := r.State().Lease; got != lease {
+		t.Fatalf("after its first grant the state records %v, want its own %v", got, lease)
+	}
+	if got := r.MaxRequestLease(at(2 * long)); got != lease {
+		t.Fatalf("past the wait it accepts requests up to %v, want %v", got, lease)
+	}
+}
+
+// A voter restarted with a LONGER lease than its file records writes it
+// before any grant, even an unchanged renewal that changes nothing else:
+// otherwise the file still says the shorter one, and a restart back to it
+// waits too little (#1021 re-review).
+func TestVoterLongerLeaseDurableBeforeAnyGrant(t *testing.T) {
+	long := 2 * lease
+	r := NewVoter("W", long, VoterState{Promised: 7, GrantedTo: "A", Lease: lease}, 0)
+	p, out := r.Handle(at(long), Request{From: "A", Term: 7, ID: 1, Renewal: true})
+	if p == nil || len(out) != 0 {
+		t.Fatalf("an unchanged renewal answered at once (persist %v, replies %v): the longer lease isn't on disk", p, out)
+	}
+	if p.State.Lease != long {
+		t.Fatalf("the write records %v, want %v", p.State.Lease, long)
+	}
+	if out := r.Persisted(p.Seq, true); len(out) != 1 || !out[0].Granted {
+		t.Fatalf("after the write: %+v", out)
+	}
+	// With the file already at the voter's lease, nothing extra is written.
+	same := NewVoter("W", lease, VoterState{Promised: 7, GrantedTo: "A", Lease: lease}, 0)
+	if p, out := same.Handle(at(lease), Request{From: "A", Term: 7, ID: 2, Renewal: true}); p != nil || len(out) != 1 {
+		t.Fatalf("an unchanged lease: persist %v, replies %v; want answered at once", p, out)
+	}
+}
+
 // The grant exists only after its state is durable, and a failed write
 // sends nothing (F25).
 func TestVoterGrantsOnlyAfterPersist(t *testing.T) {

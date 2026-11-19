@@ -34,6 +34,16 @@ func rules(u universe) []rule {
 			why:  "substrates and seams import no other nautilus package",
 		},
 		{
+			from: []string{"quorum"},
+			to:   u.allBut("quorum"),
+			why:  "quorum is a substrate: the vote protocol, its driver (quorum/node) and its simulator import only each other",
+		},
+		{
+			from: u.allBut("quorum", "leader", "cmd"),
+			to:   []string{"quorum"},
+			why:  "only leader (which adapts it to leader.Elector) and the CLI (naut witness) know the vote protocol",
+		},
+		{
 			from: []string{"retain"},
 			to:   u.allBut("internal/k8sapi"),
 			why:  "retain is a seam: a store interface plus a file and a ConfigMap adapter",
