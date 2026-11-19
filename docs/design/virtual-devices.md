@@ -182,8 +182,10 @@ The real drivers' companions (`<source>__Online`, `__Outages`, an OPC UA
 driver's `__Online`) are delivered. Before every read the plant is stepped
 to the controller's virtual time, so two runs are identical.
 
-It also keeps the Modbus driver's start-up baseline: the first output push
-is recorded and never sent, and after it only changes go out. That is the
+It also keeps the drivers' start-up baseline, Modbus and OPC UA alike: the
+first output push is recorded and never sent, and after it only changes go
+out, so a device's own value (a power-up value, or one the plant set since)
+survives an output the program never changes. That is the
 trap a start sequence falls into when it relies on its first-scan control
 word reaching a drive (the bin-fill tests keep a case of it).
 
