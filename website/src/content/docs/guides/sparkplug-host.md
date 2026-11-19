@@ -287,6 +287,20 @@ parked, `QueuedWrites` how many are waiting *right now* (per site in
 never be sent at all — a node no topic addresses, or a site whose queue
 is full.
 
+### After a site restarts
+
+**After an edge node or device restarts, the host adopts the value it
+reports; the program's held command is not re-sent until it changes.**
+
+If a program holds a setpoint at 11 and the site reboots and births with
+50, the site stays at 50. Writing 11 again changes nothing, because the
+program's value didn't change; the next different value goes out as
+usual. A command written *while* the site
+was down is the case above, and is delivered when it comes back. To put a
+value back after a restart, write it again as a change (for example
+through a different value), or drive it from the site's own birth values
+in your program.
+
 ## Writing template members
 
 Most of the controls on a water-utility HMI live *inside* a UDT —

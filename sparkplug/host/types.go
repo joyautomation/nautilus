@@ -407,11 +407,15 @@ type Driver struct {
 	deathAbandoned atomic.Bool
 	// gateMu guards this block.
 	gateMu sync.Mutex
-	// writeGate is the leadership gate `naut run` installs through
-	// SetWriteGate when — and only when — the manifest has a redundancy:
-	// section. nil (a single host) is always open. isLeader ANDs it with
-	// Config.Leader.
+	// writeGate is the gate `naut run` installs through SetWriteGate: the
+	// leadership gate when the manifest has a redundancy: section, else
+	// (plainGate) the liveness gate, open while the scans are live (#625).
+	// nil is always open. As a leadership gate isLeader ANDs it with
+	// Config.Leader; as a plain gate it decides only whether commands
+	// leave the driver (commandsAllowed), never who is primary (#943).
 	writeGate func() bool
+	// plainGate is set by PlainWriteGate: writeGate is a liveness gate.
+	plainGate bool
 	// replicaID tells the replicas of a redundant pair apart on the broker:
 	// they run one manifest, so without it they would share an MQTT client
 	// ID and take each other's sessions over in a loop. Set alongside the

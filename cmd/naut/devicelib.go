@@ -222,10 +222,12 @@ func runDevicesRender(args []string, w io.Writer) int {
 // existingCopy reports whether dir/name is already a regular file holding
 // data. It refuses a name that is not a plain file name (whatever a source
 // file says, the copy lands in dir itself), a symlink (dangling or not: a
-// write through it would land outside dir), and a different file.
+// write through it would land outside dir), and a different file. dir is
+// a project folder (profiles/, iodd/); messages name it by its base name.
 func existingCopy(dir, name string, data []byte) (bool, error) {
+	folder := filepath.Base(dir)
 	if !devprofile.IsFileName(name) {
-		return false, fmt.Errorf("%q would be written outside %s/", name, devprofile.ProjectDir)
+		return false, fmt.Errorf("%q would be written outside %s/", name, folder)
 	}
 	fi, err := os.Lstat(filepath.Join(dir, name))
 	switch {
@@ -234,14 +236,14 @@ func existingCopy(dir, name string, data []byte) (bool, error) {
 	case err != nil:
 		return false, err
 	case !fi.Mode().IsRegular():
-		return false, fmt.Errorf("%s/%s is a symlink or not a regular file: add writes only regular files in %s/", devprofile.ProjectDir, name, devprofile.ProjectDir)
+		return false, fmt.Errorf("%s/%s is a symlink or not a regular file: naut writes only regular files in %s/", folder, name, folder)
 	}
 	have, err := os.ReadFile(filepath.Join(dir, name))
 	if err != nil {
 		return false, err
 	}
 	if !bytes.Equal(have, data) {
-		return false, fmt.Errorf("%s/%s is already there and differs", devprofile.ProjectDir, name)
+		return false, fmt.Errorf("%s/%s is already there and differs", folder, name)
 	}
 	return true, nil
 }
@@ -251,7 +253,7 @@ func existingCopy(dir, name string, data []byte) (bool, error) {
 // planted after existingCopy looked is not followed either.
 func createInDir(dir, name string, data []byte) error {
 	if !devprofile.IsFileName(name) {
-		return fmt.Errorf("%q would be written outside %s/", name, devprofile.ProjectDir)
+		return fmt.Errorf("%q would be written outside %s/", name, filepath.Base(dir))
 	}
 	f, err := os.OpenFile(filepath.Join(dir, name), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {

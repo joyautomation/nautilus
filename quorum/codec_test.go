@@ -6,7 +6,7 @@ import (
 )
 
 func TestMessageRoundTrip(t *testing.T) {
-	rq := Request{From: "A", Term: 7, Nonce: 0xA1, ID: 99}
+	rq := Request{From: "A", Term: 7, Nonce: 0xA1, ID: 99, Renewal: true}
 	b, _ := rq.MarshalBinary()
 	var got Request
 	if err := got.UnmarshalBinary(b); err != nil || got != rq {

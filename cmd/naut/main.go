@@ -85,6 +85,9 @@ Usage:
                           on the real device's protocol and register map,
                           with simulators and a process model), check,
                           profiles, show.
+  naut iolink <cmd>   IO-Link tools: import (check an IODD and copy it
+                          into the project's iodd/ folder) and show (what
+                          an IODD's process data and variables are).
   naut scene <cmd>    3D HMI scene tools: init (generate a starter
                           *.scene.json from the manifest's struct tags —
                           one node per UDT tag a kind can draw, laid out
@@ -135,9 +138,11 @@ func main() {
 	// rides embedded on the executable's tail, and running it hosts the
 	// scan loop directly (NAUTILUS_CLI=1 recovers the CLI).
 	if fsys, ok := embeddedProject(); ok {
-		if wantsHelp(os.Args[1:]) {
-			fmt.Print(builtUsage(filepath.Base(os.Args[0])))
-			os.Exit(0)
+		// Any argument is answered, or refused, without starting: run by
+		// hand next to its service, a controller must never start a second
+		// instance against the same I/O (#968).
+		if code, done := builtArgs(os.Args[1:], filepath.Base(os.Args[0]), os.Stdout, os.Stderr); done {
+			os.Exit(code)
 		}
 		os.Exit(runProject(fsys, embeddedManifest(fsys), "built", ""))
 	}
@@ -181,6 +186,8 @@ func main() {
 		os.Exit(runOPCUA(os.Args[2:]))
 	case "devices":
 		os.Exit(runDevices(os.Args[2:]))
+	case "iolink":
+		os.Exit(runIOLink(os.Args[2:]))
 	case "optommp":
 		os.Exit(runOptommp(os.Args[2:]))
 	case "plcnext":

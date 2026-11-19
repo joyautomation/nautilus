@@ -173,11 +173,10 @@ func gateOnLiveScans(proj *project.Project, el *leader.Elector, rt *runtime.Runt
 	if gate == nil {
 		gate = leader.NewLocal(proj.Name, lease)
 		if proj.Runtime.Driver != nil {
-			// Only drivers whose gate is just a gate (io.PlainGated): a
-			// Sparkplug host reads any gate as "one replica of a redundant
-			// set" and would change how it behaves. optommp takes it and
-			// is told it is plain (#865), so a hung scan lets the unit's
-			// watchdog act.
+			// Only drivers whose gate is just a gate (io.PlainGated), each
+			// told it is plain: optommp lets the unit's watchdog act on a
+			// hung scan (#865); a Sparkplug host holds its commands and
+			// stays the primary host (#943).
 			nio.SetPlainGate(proj.Runtime.Driver, gate.IsLeader)
 		}
 	}
@@ -201,6 +200,23 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	if env := os.Getenv("NAUTILUS_ADDR"); env != "" {
 		addr = env
 	}
+
+	// The tag API's port is bound first, before the elector, the retained
+	// state, a driver or a protocol server touches anything: it is what
+	// keeps a second instance of this controller (one started by hand next
+	// to the service, #968) from connecting to the same I/O. One that finds
+	// it held refuses to start, rather than running its I/O without an API.
+	apiLn, addr, err := bindAPI(addr, dir, proj.Redundancy != nil)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "naut run:", err)
+		return 1
+	}
+	apiUp := apiLn != nil
+	defer func() {
+		if apiLn != nil {
+			apiLn.Close() // an early return; an orderly stop closes it first (below)
+		}
+	}()
 
 	// Redundancy and retained state wire in before the runtime compiles,
 	// so the first scan already answers to the elector and sees what the
@@ -351,6 +367,18 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		}
 		return project.Sources(snap, manifest)
 	}
+	// Live I/O configuration (#706): a changed device or driver staged,
+	// validated and applied over /api/io while the scan runs, and what runs
+	// against the manifest on every frame.
+	if ioc, err := project.NewIOConfig(proj, rt, fsys, manifest); err != nil {
+		fmt.Fprintln(os.Stderr, "naut run: live I/O configuration is off:", err)
+	} else {
+		ioc.Gate = gate.IsLeader
+		sopts.IO = ioc.Hook(func(sha string) (fs.FS, bool) {
+			snap, ok := vcs.SnapshotFS(hist(), sha)
+			return snap, ok
+		}, fsys)
+	}
 	// naut's own build of the HMI (an app with src/routes, or the default
 	// app from the mimics): served at "/", the dashboard moves to /_nautilus/
 	builtHMI := buildHMIForRun(proj, dir, os.Stderr)
@@ -360,29 +388,8 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	srv := server.New(rt, sopts)
 	go srv.Run(ctx)
 
-	apiUp := false
-	var apiLn net.Listener
-	ln, err := net.Listen("tcp", addr)
-	// On a bench (naut run from a project), a port another controller
-	// already holds moves this one to the next free port, said out loud,
-	// instead of running with no tag API, screen or dashboard at all. A
-	// built controller, an address from NAUTILUS_ADDR and a redundant
-	// replica keep the address they were given.
-	if err != nil && dir != "" && os.Getenv("NAUTILUS_ADDR") == "" && proj.Redundancy == nil && addrInUse(err) {
-		if alt, altLn := nextFreePort(addr); altLn != nil {
-			fmt.Fprintf(os.Stderr, "tag api: %s is in use (another naut run?), so this one is on %s\n", addr, alt)
-			addr, ln, err = alt, altLn, nil
-		}
-	}
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "tag api: %v (continuing without it)\n", err)
-	} else {
-		apiUp = true
-		apiLn = ln
-		// Name the port actually bound: with server.addr ":0" (or
-		// "127.0.0.1:0") the banner and the warnings below would otherwise
-		// say port 0, and nothing could find the tag API.
-		addr = boundAddr(addr, ln)
+	if apiUp {
+		ln := apiLn
 		if sopts.AuthToken == "" && !loopbackListen(addr) {
 			fmt.Fprintf(os.Stderr, openListenWarning, addr)
 		}
@@ -391,7 +398,7 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		// the last scan and the deferred stops above (OPC UA sessions, the
 		// Sparkplug death certificate, a driver's teardown), so a `naut
 		// run` started again meanwhile still gets its port (nautilus#423,
-		// #599). No defer: nothing returns between here and that close.
+		// #599). The deferred close above is only for an early return.
 		go func() {
 			if err := http.Serve(ln, srv.Handler()); err != nil && ctx.Err() == nil {
 				fmt.Fprintln(os.Stderr, "tag api:", err)
@@ -449,6 +456,7 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	// tag API while this process finished its last scan (nautilus#599).
 	if apiLn != nil {
 		apiLn.Close()
+		apiLn = nil
 	}
 	// Wait for the last scan and the last retain save before the deferred
 	// teardown (the lease release, driver stops) runs, but not forever: a
@@ -460,6 +468,45 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		fmt.Fprintf(os.Stderr, "naut run: the scan loop did not stop within %s; exiting without its last retain save\n", runStopTimeout)
 	}
 	return 0
+}
+
+// bindAPI binds the tag API's address before anything else starts (#968).
+// An address another process holds refuses the start: that is another
+// controller, maybe this one's own service, and two must never drive the
+// same I/O. On a bench (naut run from a project: dir set), with no
+// NAUTILUS_ADDR and no redundancy, it moves to the next free port instead,
+// said out loud. It returns the address actually bound.
+//
+// A built controller (dir "") must hold a fixed address, since that is its
+// only exclusion: port 0 (a new port each start) and any bind failure
+// refuse the start too. naut run, a bench tool, keeps running without its
+// tag API on another failure, as before.
+func bindAPI(addr, dir string, redundant bool) (net.Listener, string, error) {
+	const why = "a built controller needs its tag API on a fixed address: holding it is what keeps a second instance off the same I/O"
+	if _, port, err := net.SplitHostPort(addr); dir == "" && err == nil && port == "0" {
+		return nil, addr, fmt.Errorf("tag api address %s has port 0: %s; set server.addr or NAUTILUS_ADDR to a port", addr, why)
+	}
+	ln, err := net.Listen("tcp", addr)
+	if err != nil && addrInUse(err) {
+		if dir != "" && os.Getenv("NAUTILUS_ADDR") == "" && !redundant {
+			if alt, altLn := nextFreePort(addr); altLn != nil {
+				fmt.Fprintf(os.Stderr, "tag api: %s is in use (another naut run?), so this one is on %s\n", addr, alt)
+				return altLn, boundAddr(alt, altLn), nil
+			}
+		}
+		return nil, addr, fmt.Errorf("%s is in use: another controller (this one's service?) is running; refusing to start a second one against the same I/O", addr)
+	}
+	if err != nil && dir == "" {
+		return nil, addr, fmt.Errorf("tag api: %v: %s", err, why)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "tag api: %v (continuing without it)\n", err)
+		return nil, addr, nil
+	}
+	// Name the port actually bound: with server.addr ":0" (or
+	// "127.0.0.1:0") the banner and the warnings would otherwise say port
+	// 0, and nothing could find the tag API.
+	return ln, boundAddr(addr, ln), nil
 }
 
 // runStopTimeout bounds how long an orderly stop waits for the scan loop's
@@ -1059,14 +1106,38 @@ func wantsHelp(args []string) bool {
 	return false
 }
 
+// builtArgs answers a built controller's arguments: help and its version,
+// each printed without starting it, and anything else refused, also
+// without starting (#968). done is false only with no arguments: then it
+// runs.
+func builtArgs(args []string, name string, stdout, stderr io.Writer) (code int, done bool) {
+	if len(args) == 0 {
+		return 0, false
+	}
+	switch {
+	case wantsHelp(args):
+		fmt.Fprint(stdout, builtUsage(name))
+		return 0, true
+	case args[0] == "version" || args[0] == "-v" || args[0] == "--version" || args[0] == "-version":
+		fmt.Fprintln(stdout, "nautilus", lsp.Version)
+		return 0, true
+	}
+	fmt.Fprintf(stderr, "%s: unknown argument %q: a built controller takes none (it starts with none; %s version prints its version, %s --help how it is configured)\n", name, args[0], name, name)
+	return 2, true
+}
+
 // builtUsage is what a built controller prints for --help: how it is
 // configured, since it has no flags to list.
 func builtUsage(name string) string {
 	return "usage: " + name + `
 
-A controller built by naut build. It takes no arguments: running it starts
-the scan loop, the dashboard, and the tag API, using the project embedded in
-this file.
+A controller built by naut build. Run with no arguments, it starts the scan
+loop, the dashboard, and the tag API, using the project embedded in this
+file. It refuses to start while another process holds its tag API address
+(another instance, or its own service): two must never drive the same I/O.
+
+  ` + name + ` version    print the naut version it was built with
+  ` + name + ` --help     this
 
 Environment:
   NAUTILUS_ADDR            listen address, overriding server.addr in the manifest

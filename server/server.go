@@ -188,6 +188,10 @@ type Frame struct {
 	// none is. Never delta-gated (it is a handful of entries at most), so
 	// on any stream "absent" means "nothing is forced". See force.go.
 	Forces map[string]any `json:"forces,omitempty"`
+	// Config is what runs against the manifest the controller booted
+	// from (live I/O configuration, #706): present when the controller
+	// has it, on /api/state and every full frame.
+	Config *IOConfigState `json:"config,omitempty"`
 }
 
 // Options tunes the server; zero values mean defaults.
@@ -289,6 +293,12 @@ type Options struct {
 	// live in one place; nil disables activation while leaving the history
 	// readable.
 	SourcesAt func(sha string) (map[string]string, error)
+
+	// IO, when set, serves the live I/O configuration routes (/api/io*,
+	// ioconfig.go) and puts the config block (what runs against the
+	// manifest) on every full frame. naut run wires the project loader's
+	// IOConfig into it.
+	IO *IOHook
 
 	// HMI, when set, serves a built HMI — a SvelteKit `adapter-static`
 	// build, or any other static SPA bundle — at "/", so the controller is
@@ -441,6 +451,8 @@ type Server struct {
 	historian   string
 	historyFn   func() *ProgramHistory
 	sourcesAt   func(sha string) (map[string]string, error)
+	io          *IOHook   // live I/O configuration (ioconfig.go); nil: none
+	staging     ioStaging // its staged candidates
 	hmi         fs.FS
 	alarms      *alarm.Engine
 	shelveTimes []time.Duration
@@ -526,6 +538,7 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 		s.historian = opts[0].HistorianURL
 		s.historyFn = opts[0].History
 		s.sourcesAt = opts[0].SourcesAt
+		s.io = opts[0].IO
 		s.hmi = opts[0].HMI
 		s.alarms = opts[0].Alarms
 		s.shelveTimes = opts[0].AlarmShelveTimes
@@ -585,6 +598,7 @@ func (s *Server) frame(pats []string) Frame {
 		Forces:  s.rt.Tags().ForcedValues(),
 	}
 	f.Alarms = s.alarmSummary()
+	f.Config = s.ioConfigState()
 	return f
 }
 
@@ -628,6 +642,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/program/rollback", s.handleRollback)
 	mux.HandleFunc("GET /api/program/history", s.handleProgramHistory)
 	mux.HandleFunc("POST /api/program/activate", s.handleActivate)
+	mux.HandleFunc("GET /api/io", s.handleIO)
+	mux.HandleFunc("POST /api/io/staged", s.handleIOStage)
+	mux.HandleFunc("GET /api/io/staged/{id}", s.handleIOStaged)
+	mux.HandleFunc("POST /api/io/staged/{id}/validate", s.handleIOValidate)
+	mux.HandleFunc("POST /api/io/staged/{id}/apply", s.handleIOApply)
 	mux.HandleFunc("GET /api/forces", s.handleForces)
 	mux.HandleFunc("POST /api/forces", s.handleForce)
 	mux.HandleFunc("POST /api/forces/clear", s.handleUnforceAll)

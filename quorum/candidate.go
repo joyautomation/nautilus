@@ -75,8 +75,17 @@ type round struct {
 type Candidate struct {
 	cfg Config
 
-	term     uint64 // the term held, or being campaigned for
-	maxSeen  uint64 // highest term heard of, from any voter
+	term    uint64 // the vote term the lease rests on, or the one being campaigned for
+	maxSeen uint64 // highest term heard of, from any voter
+	// epoch is the term leadership was acquired in, after a gap: the
+	// fencing token Term reports. A re-term on renewal (renewTerm) leaves
+	// it alone, so writes posted under it stay valid across one lease.
+	epoch     uint64
+	renewTerm uint64 // the term renewals go out at while leading
+	// reterm: a voter refused a renewal at a term it had promised to
+	// another (a standby's lost campaign); the next renewal asks for a
+	// higher term, which that voter can grant once its promise runs out.
+	reterm   bool
 	nextID   uint64
 	rounds   []*round
 	leading  bool
@@ -104,18 +113,35 @@ func NewCandidate(cfg Config, known uint64, now Instant) (*Candidate, error) {
 // renewals stopped closes its gate on time even if Tick is late.
 func (c *Candidate) Leading(now Instant) bool { return c.leading && now < c.leaseEnd }
 
-// Term returns the term held or last campaigned for.
-func (c *Candidate) Term() uint64 { return c.term }
+// Term is the fencing token: while leading, the term leadership was
+// acquired in (the epoch), stable across renewals that move the vote term
+// (VoteTerm); 0 when not leading, so a standby never holds a token above
+// the live leader's. A gap in leadership and a new acquisition always
+// change it (terms only rise, and no term is led twice). A receiver
+// compares a token against the highest token it has received FROM A
+// LEADER, never against its own Term.
+func (c *Candidate) Term() uint64 {
+	if c.leading {
+		return c.epoch
+	}
+	return 0
+}
+
+// VoteTerm returns the vote term the current lease rests on (the term last
+// campaigned for when not leading).
+func (c *Candidate) VoteTerm() uint64 { return c.term }
 
 // LeaseEnd returns when the current lease ends on this node's clock.
 func (c *Candidate) LeaseEnd() Instant { return c.leaseEnd }
 
-// Tick runs the candidate's look at now. promiseTo, promiseUntil are its
-// own voter's current promise (Voter.PromiseUntil). healthy is whether
+// Tick runs the candidate's look at now. seenFrom, seenUntil are the other
+// candidate its own voter last saw holding a lease, and until when
+// (Voter.LeaderSeen): a standby campaigns only once that has run out,
+// plus ρ. healthy is whether
 // this replica's scans are live (#621): an unhealthy leader stops renewing
 // and an unhealthy standby does not campaign. It returns the request to
 // send to every voter (self included), or nil.
-func (c *Candidate) Tick(now Instant, promiseTo NodeID, promiseUntil Instant, healthy bool) *Request {
+func (c *Candidate) Tick(now Instant, seenFrom NodeID, seenUntil Instant, healthy bool) *Request {
 	c.expire(now)
 	if now < c.nextLook || now < c.backoffUntil {
 		return nil
@@ -125,12 +151,16 @@ func (c *Candidate) Tick(now Instant, promiseTo NodeID, promiseUntil Instant, he
 		return nil
 	}
 	if c.Leading(now) {
-		return c.send(now, c.term) // renewal: the same term
+		if c.reterm {
+			c.reterm = false
+			c.renewTerm = c.maxSeen + 1
+		}
+		return c.send(now, c.renewTerm) // renewal
 	}
-	// A standby campaigns once the promise its own voter last gave
-	// another has run out by its own clock, plus ρ.
-	if promiseTo != "" && promiseTo != c.cfg.Self &&
-		now < promiseUntil.Add(time.Duration(c.cfg.Rho*float64(c.cfg.Lease))) {
+	// A standby campaigns once the lease its own voter last saw another
+	// hold has run out by its own clock, plus ρ.
+	if seenFrom != "" && seenFrom != c.cfg.Self &&
+		now < seenUntil.Add(time.Duration(c.cfg.Rho*float64(c.cfg.Lease))) {
 		return nil
 	}
 	if now < c.retryAt || c.pending != nil {
@@ -151,7 +181,7 @@ func (c *Candidate) send(now Instant, term uint64) *Request {
 		c.pending = rd
 	}
 	c.rounds = append(c.rounds, rd)
-	return &Request{From: c.cfg.Self, Term: term, Nonce: c.cfg.Nonce, ID: c.nextID}
+	return &Request{From: c.cfg.Self, Term: term, Nonce: c.cfg.Nonce, ID: c.nextID, Renewal: !rd.campaign}
 }
 
 // OnReply takes a voter's reply, received at now. Only the three voters
@@ -187,6 +217,14 @@ func (c *Candidate) OnReply(now Instant, r Reply) {
 	rd.replies[r.From] = true
 	if r.Granted {
 		rd.grants[r.From] = true
+	} else if c.leading && !rd.campaign && rd.term == c.renewTerm && r.Promised >= rd.term {
+		// A voter refused our renewal at the term we renew at now: it
+		// promised this term or a later one elsewhere (a standby's lost
+		// campaign). Renew at a higher term from now on, so it can grant us
+		// again once that runs out. A refusal of an older round (late, or
+		// a duplicate refused because we re-termed since) changes nothing,
+		// or stragglers would re-term us without end.
+		c.reterm = true
 	}
 	if !r.Granted && !c.leading && len(rd.replies) >= 2 && len(rd.grants) < 2 {
 		// Heard, and refused by a majority: retry on a later look, after
@@ -200,7 +238,7 @@ func (c *Candidate) OnReply(now Instant, r Reply) {
 			c.pending = nil
 		}
 	}
-	if len(rd.grants) < 2 || rd.term != c.term {
+	if len(rd.grants) < 2 || rd.term < c.term || (!c.leading && rd.term != c.term) {
 		return
 	}
 	if !c.leading && now < c.backoffUntil {
@@ -216,23 +254,32 @@ func (c *Candidate) OnReply(now Instant, r Reply) {
 		}
 		c.leading = true
 		c.leaseEnd = end
+		c.epoch, c.renewTerm = rd.term, rd.term
+		c.reterm = false // a refusal from before this lease means nothing to it
 	} else if end > c.leaseEnd {
+		// A renewal majority, possibly at a higher vote term (a re-term):
+		// the lease now rests on it. The epoch stays.
 		c.leaseEnd = end
+		c.term = rd.term
 	}
 }
 
 // expire ends a lapsed lease, and drops rounds no reply can still matter
 // to. A lapsed lease, or a campaign not even HEARD by a majority within a
 // lease (this controller can send but not hear, or reaches nobody), backs
-// the candidate off: it sends nothing for one full lease after the lease
-// or the round ran out, so the promises it may be keeping alive run out
-// and a reachable controller can win (design §3.1, one-way partitions).
+// the candidate off: it sends nothing for two leases after the lease ended,
+// or after the round was sent, so the promises it may be keeping alive run
+// out and a reachable controller wins first (design §3.1, one-way
+// partitions). Two, not one: the standby campaigns up to lease + ρ·lease +
+// lease/4 after the last renewal it saw, and a candidate back sooner would
+// win its voter again with a campaign it can't hear answered.
 // The back-off silences only the candidate; this node's voter keeps
 // answering.
 func (c *Candidate) expire(now Instant) {
 	if c.leading && now >= c.leaseEnd {
 		c.leading = false
-		c.backoffUntil = c.leaseEnd.Add(c.cfg.Lease)
+		c.reterm = false
+		c.backoffUntil = c.leaseEnd.Add(2 * c.cfg.Lease)
 	}
 	keep := c.rounds[:0]
 	for _, rd := range c.rounds {

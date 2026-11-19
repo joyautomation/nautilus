@@ -274,6 +274,10 @@ func (s *Server) broadcast() {
 		// gated, so "absent" means "nothing forced" on every kind of
 		// stream. Nil (omitted) costs one length check when nothing is.
 		Forces: tags.ForcedValues(),
+		// What runs against the manifest rides every frame while the
+		// controller has it: a few entries, and a dashboard's banner must
+		// not wait for a resync to show (or clear) a drift.
+		Config: s.ioConfigState(),
 	}
 	quality := qualityJSON(s.rt.Quality())
 
