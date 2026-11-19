@@ -76,10 +76,9 @@ func (s *Set) Mapped(d Instance) (m *uaserver.Mapped, writable []string, err err
 		tag := d.Name + "_" + pt.Name
 		m.Nodes = append(m.Nodes, uaserver.MappedNode{
 			NodeID: subst(pt.NodeID), Parent: parent, Name: name, Desc: pt.Desc, Tag: tag,
-			// Octets on the wire, hex in the tag. A ByteArray point is served
-			// as a ByteString too: the simulator has no Byte[] node, and a
-			// client reads either the same (opcua/bytes.go).
-			Wire: wireOf(pt),
+			// Octets on the wire, hex in the tag: as a ByteString or Byte[],
+			// as the profile says (opcua/bytes.go).
+			Wire: pt.Wire,
 		})
 		if pt.Writable {
 			writable = append(writable, tag)
@@ -143,13 +142,4 @@ func startOPCUA(ctx context.Context, rt *runtime.Runtime, s *Set, d Instance, lo
 		return nil, fmt.Errorf("device %s: %w", d.Name, err)
 	}
 	return srv, nil
-}
-
-// wireOf is the OPC UA wire shape a point's node is served as: "ByteString"
-// for a point carried as octets (wire: ByteString or ByteArray), else "".
-func wireOf(pt devprofile.Point) string {
-	if pt.Wire != "" {
-		return "ByteString"
-	}
-	return ""
 }

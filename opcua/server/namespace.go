@@ -486,11 +486,14 @@ func (ns *namespace) Attribute(nid *ua.NodeID, attr ua.AttributeID) *ua.DataValu
 	case ua.AttributeIDDataType:
 		return value(ns.dataTypeID(m))
 	case ua.AttributeIDValueRank:
-		if m.val.Kind == ir.TypeArray {
+		if m.val.Kind == ir.TypeArray || isByteArray(m) {
 			return value(int32(1))
 		}
 		return value(int32(-1))
 	case ua.AttributeIDArrayDimensions:
+		if isByteArray(m) {
+			return value([]uint32{0}) // one dimension, length unknown
+		}
 		if m.val.Kind == ir.TypeArray {
 			return value([]uint32{uint32(len(m.val.Arr))})
 		}

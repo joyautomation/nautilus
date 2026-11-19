@@ -266,6 +266,9 @@ func runDevicesShow(args []string, w io.Writer) int {
 		src := pt.Doc
 		if pt.Unverified {
 			src = "UNVERIFIED"
+			if pt.Doc != "" {
+				src += " (" + pt.Doc + ")" // where the name comes from, though nothing read it from a device
+			}
 		}
 		format := pt.Format
 		if pt.Wire != "" {
@@ -289,6 +292,9 @@ func runDevicesShow(args []string, w io.Writer) int {
 			src := c.c.Doc
 			if c.c.Unverified {
 				src = "UNVERIFIED"
+				if c.c.Doc != "" {
+					src += " (" + c.c.Doc + ")"
+				}
 			}
 			fmt.Fprintf(w, "  %-9s %s as %s  (form: %s)\n", c.key, c.c.Point, c.c.Form, src)
 		}

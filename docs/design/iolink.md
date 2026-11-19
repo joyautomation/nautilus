@@ -141,8 +141,9 @@ the SICK, PR 3b):
 
 OPC 30120 types process data and ISDU values as `Byte[]`, not as a
 ByteString, so a profile says which it is with `wire:`; a read accepts
-either, a write sends the declared one. The simulators serve both as a
-ByteString.
+either, a write sends the declared one. The simulators serve each as
+declared (a Byte[] node has ValueRank 1), and both refuse more than 232
+octets, a read as Bad and a write as Bad_OutOfRange.
 
 ### 3.1 The `u32` form
 

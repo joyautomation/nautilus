@@ -32,7 +32,7 @@ iolink:                # docs/design/iolink.md §3
   # pdin's (see notes), so they are unverified until read from a real
   # AL1590, and a port's identity check stands on them.
   pd-in: { point: "Port{n}_Pdin", form: hex, doc: "measured pdin hex text, '0286' is 0x0286" }
-  pd-out: { point: "Port{n}_Pdout", form: hex, unverified: true }
+  pd-out: { point: "Port{n}_Pdout", form: hex, unverified: true, doc: "al1427 p. 168, as ProcessDataOutput (BYTE ARRAY, rw only when DeviceConfigurationDisabled is false); not read from an AL1590" }
   vendor-id: "Port{n}_VendorID"
   device-id: "Port{n}_DeviceID"
   status: "Port{n}_Status"
@@ -44,19 +44,19 @@ points:
   - { name: "Port{n}_Pdout", type: STRING, repeat: 8, writable: true,
       node-id: "ns=5;s={location}/iolinkmaster/port[{n}]/iolinkdevice/pdout",
       path: "{location}/iolinkmaster/port[{n}]/iolinkdevice/pdout",
-      desc: "Port {n}: IO-Link process data out, as hex text", unverified: true }
+      desc: "Port {n}: IO-Link process data out, as hex text", doc: "al1427 p. 168, as ProcessDataOutput", unverified: true }
   - { name: "Port{n}_VendorID", type: UDINT, repeat: 8,
       node-id: "ns=5;s={location}/iolinkmaster/port[{n}]/iolinkdevice/vendorid",
       path: "{location}/iolinkmaster/port[{n}]/iolinkdevice/vendorid",
-      desc: "Port {n}: attached device vendor id (0: no device)", unverified: true }
+      desc: "Port {n}: attached device vendor id (0: no device)", doc: "al1427 p. 163, as VendorID (UINT16)", unverified: true }
   - { name: "Port{n}_DeviceID", type: UDINT, repeat: 8,
       node-id: "ns=5;s={location}/iolinkmaster/port[{n}]/iolinkdevice/deviceid",
       path: "{location}/iolinkmaster/port[{n}]/iolinkdevice/deviceid",
-      desc: "Port {n}: attached device id (0: no device)", unverified: true }
+      desc: "Port {n}: attached device id (0: no device)", doc: "al1427 p. 162, as DeviceID (UINT32)", unverified: true }
   - { name: "Port{n}_Status", type: BYTE, repeat: 8,
       node-id: "ns=5;s={location}/iolinkmaster/port[{n}]/status",
       path: "{location}/iolinkmaster/port[{n}]/status",
-      desc: "Port {n}: port status (4 = OPERATE)", unverified: true }
+      desc: "Port {n}: port status (4 = OPERATE)", doc: "al1427 p. 162, as Status (BYTE)", unverified: true }
 simulator: { block: IFM_AL1590_SIM, source: ifm-al1590.st }
 notes: |
   The simulator turns a word the process model writes (<Master>_Port<n>_Word)

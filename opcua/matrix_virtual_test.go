@@ -16,7 +16,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
+	nio "github.com/joyautomation/nautilus/io"
+	"github.com/joyautomation/nautilus/opcua"
 	"github.com/joyautomation/nautilus/virtdev"
 )
 
@@ -243,5 +246,36 @@ func (r *relay) close() {
 	r.ln.Close()
 	for _, c := range conns {
 		c.Close()
+	}
+}
+
+// A Byte[] written by the driver reaches a virtual master and is read back
+// (#705): the SICK profile's process data out is a ByteArray point, served
+// as Byte[] with ValueRank 1, where a ByteString server would refuse the
+// array. A value over the 232 octets a byte node carries is refused by the
+// server and never stored.
+func TestVirtualMasterByteArrayWrite(t *testing.T) {
+	var s matrixServer
+	for _, c := range virtualServers {
+		if c.name == "iolink-sick" {
+			s = c
+		}
+	}
+	v := startVirtual(t, s)
+	const node = "ns=4;s=SIG300/Port 1/Device/ProcessDataOutput"
+	m := opcua.Manifest{Tags: []opcua.TagBinding{{
+		Name: "Pdo", NodeID: node, Namespace: "http://opcfoundation.org/UA/IOLink/", Type: opcua.ByteArray, Writable: true,
+	}}}
+	d := startMatrixDriver(t, v.url(), m, opcua.WithSecurity("None", "None"))
+	waitUntil(t, "online", 30*time.Second, d.Online)
+	_ = d.WriteOutputs(nio.Values{"Pdo": ""}) // the baseline write the driver's rule skips
+	if err := d.WriteOutputs(nio.Values{"Pdo": "BEEF01"}); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, "the Byte[] to be read back", 10*time.Second, func() bool { return readAll(t, d)["Pdo"] == "beef01" })
+	_ = d.WriteOutputs(nio.Values{"Pdo": strings.Repeat("ab", opcua.MaxBytes+1)})
+	time.Sleep(time.Second)
+	if got := readAll(t, d)["Pdo"]; got != "beef01" {
+		t.Errorf("after a write over %d octets the node holds %v, want the earlier beef01", opcua.MaxBytes, got)
 	}
 }

@@ -62,9 +62,10 @@ type MappedNode struct {
 	// Tag is the tag address a Variable reads and writes; empty makes the
 	// node an Object that only organizes others.
 	Tag string
-	// Wire, "ByteString" for a STRING tag that holds octets as lowercase
-	// hex (opcua/bytes.go): the node is served as a ByteString, and a
-	// ByteString written to it is stored as hex. Only a STRING tag takes it.
+	// Wire is "ByteString" or "ByteArray" (Byte[], ValueRank 1) for a STRING
+	// tag that holds octets as lowercase hex (opcua/bytes.go): the node is
+	// served as that, and a value written to it is stored as hex. At most
+	// MaxBytes octets either way. Only a STRING tag takes it.
 	Wire string
 }
 
@@ -103,8 +104,8 @@ func newMappedTree(m *Mapped) (*mappedTree, error) {
 		if n.Name == "" {
 			return nil, fmt.Errorf("mapped node %s: no name", n.NodeID)
 		}
-		if n.Wire != "" && (n.Wire != "ByteString" || n.Tag == "") {
-			return nil, fmt.Errorf("mapped node %s: wire %q: only a Variable can be a ByteString", n.NodeID, n.Wire)
+		if n.Wire != "" && (n.Wire != "ByteString" && n.Wire != "ByteArray" || n.Tag == "") {
+			return nil, fmt.Errorf("mapped node %s: wire %q: only a Variable can be a ByteString or a ByteArray", n.NodeID, n.Wire)
 		}
 		mn := &mnode{nid: nid, name: n.Name, desc: n.Desc, tag: n.Tag, wire: n.Wire}
 		if n.Parent != "" {
