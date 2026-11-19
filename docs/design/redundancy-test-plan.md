@@ -123,7 +123,7 @@ to the matrix as a named regression case.
   - F22b, a frozen controller clock, which must breach I1;
   - skew beyond ρ, which must breach I1 at some phase;
   - **the two-of-three case** (design §3.1, the costs; `Record.TwoOfThreeLost`): a controller's file lost while its peer's committed witness incarnation dies (the witness wiped, or an adopted second copy gone) before it re-commissions, or both files lost and re-commissioned on a stray's incarnation. It needs an operator, so I2, I4, I6, I7 and steady state are excused; I1, the lease and the ledger are not. The seed runner logs and counts it (736 of 200,000), `TestExcusedShare` bounds its share, `TestTwoOfThreeLostTeeth` checks it fires on that case and on nothing else, and every named case asserts it was not excused. After the PR that makes the case reliably wait for an operator, I2 and I4 are asserted there too.
-- **#976 is closed** (H2): two lost controller files with the witness intact are judged in full (`TestRegression976TwoLostControllerFiles`, red under `no_floor`), and the generator no longer caps lost controller files.
+- **#976 is closed** (H2): two lost controller files with the witness intact are judged in full (`TestRegression976TwoLostControllerFiles`, red under `no_quiet` and `restart_counts_at_once`; the floor's own sim case is `TestFloorCarriesTheUnseenTerm`), and the generator no longer caps lost controller files.
 
 ### 3.3 Mutation checks (T2, nightly; required to pass before each milestone)
 
@@ -244,8 +244,9 @@ every lost-file case but the two-of-three case (§3.2). Seed 57197 of class 1 is
     promise (the lease oracle);
   - the lapse back-off, removed or cut to one lease: a one-way leader must send nothing for two
     leases after its lapse.
-- **Three liveness rules are caught only in T1** (`quorum/standby_test.go`): renewals seen when
-  refused (#973), `Candidate.Observe`, and a retry that moves the look (#979). With the re-term,
+- **Four liveness rules are caught only in T1** (`quorum/standby_test.go`): renewals seen when
+  refused (#973), `Candidate.Observe`, a retry that moves the look (#979), and, since H2, the
+  yield: both livelock seeds now re-adopt the witness and elect with three voters. With the re-term,
   the yield and timers armed at `NextLook`, the simulator elects without them in every schedule
   tried (200 two-voter cold starts included). They stay as defence in depth, and the lockstep
   T1 harness, with instant delivery and 10 ms steps, pins each.

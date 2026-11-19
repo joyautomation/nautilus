@@ -40,7 +40,7 @@ var table = []mutation{
 	{"lease_from_reply", []string{"TestCandidateLeaseFromSendMinusRho", "TestSkewWithinRhoHoldsBeyondBreaks"}},
 	{"no_backoff", []string{"TestCandidateBackOffAfterLapse", "TestTargetedOneWayLeaderBacksOff"}},
 	{"one_lease_backoff", []string{"TestCandidateBackOffAfterLapse", "TestTargetedOneWayLeaderBacksOff", "TestTargetedOneWayLeaderSkewed"}},
-	{"any_incarnation", []string{"TestCandidateWitnessIncarnation", "TestMustFailSecondWitnessCopy", "TestSeeds"}},
+	{"any_incarnation", []string{"TestCandidateWitnessIncarnation", "TestMustFailSecondWitnessCopy", "TestMustFailSwitchQuietPeriod", "TestSeeds"}},
 	{"any_sender", []string{"TestCandidateCountsOnlyItsVoters", "TestMustFailUnknownSender"}},
 	{"no_grantee_check", []string{"TestCandidateGranteeCheckedEvenOnANonceCollision", "TestMustFailGrantMeantForThePeer"}},
 	{"no_nonce_check", []string{"TestCandidateIgnoresAGrantFromAnEarlierBoot", "TestMustFailPreRestartGrant"}},
@@ -50,19 +50,23 @@ var table = []mutation{
 	// catches this one (test plan §3.3).
 	{"renewals_unseen", []string{"TestVoterLeaderSeen"}},
 	{"no_reterm", []string{"TestStandbyRejoinsTheLeader", "TestMatrix", "TestSeeds"}},
-	{"no_yield", []string{"TestTwoCountedVotersElect", "TestRegressionTwoVoterLivelock"}},
+	// Since the handshake (H2) the two livelock seeds re-adopt the witness
+	// and elect with three voters, so only T1 pins the yield.
+	{"no_yield", []string{"TestTwoCountedVotersElect", "TestYieldCancelsOpenRounds"}},
 	{"no_observe", []string{"TestObserveLiftsTheNextCampaign"}},
 	{"retry_on_grid", []string{"TestCandidateRetryJitter"}},
 	{"renew_on_look", []string{"TestCandidateRenewsAtOnceOnWinning", "TestNightlySlowFsyncWinner"}},
-	// The witness-incarnation handshake (#976). H1 catches them in T1; the
-	// sim cases join with H2.
+	// The witness-incarnation handshake (#976): T1 since H1, the sim since H2.
 	{"no_quiet", []string{"TestRebuiltWitnessAdopted", "TestQuietPeriodHoldsOffTheNewWitness", "TestLostControllerReadoptsThePeer",
-		"TestReadoptOverPendingOwesTheQuietPeriod", "TestSecondAdoptionInFlightKeepsTheQuiet"}},
-	{"no_floor", []string{"TestRebuiltWitnessAdopted", "TestLostControllerReadoptsThePeer"}},
-	{"count_while_pending", []string{"TestRebuiltWitnessAdopted"}},
-	{"no_adopt_gen", []string{"TestStaleProposalRefused", "TestConcurrentProposals", "TestLateProposalCannotSplitThePair"}},
-	{"no_holdoff", []string{"TestSwitchHoldOffGrows"}},
-	{"restart_counts_at_once", []string{"TestRestartOwesTheQuietPeriod", "TestReviewRestartSkipsQuiet"}},
+		"TestReadoptOverPendingOwesTheQuietPeriod", "TestSecondAdoptionInFlightKeepsTheQuiet",
+		"TestMustFailSwitchQuietPeriod", "TestRegression976TwoLostControllerFiles", "TestSeeds"}},
+	{"no_floor", []string{"TestRebuiltWitnessAdopted", "TestLostControllerReadoptsThePeer", "TestFloorCarriesTheUnseenTerm", "TestSeeds"}},
+	{"count_while_pending", []string{"TestRebuiltWitnessAdopted", "TestReadoptOverPendingOwesTheQuietPeriod", "TestSeeds"}},
+	{"no_adopt_gen", []string{"TestStaleProposalRefused", "TestConcurrentProposals", "TestLateProposalCannotSplitThePair",
+		"TestLateEarlierBootProposalRefused"}},
+	{"no_holdoff", []string{"TestSwitchHoldOffGrows", "TestFlappingStrayBounded"}},
+	{"restart_counts_at_once", []string{"TestRestartOwesTheQuietPeriod", "TestReviewRestartSkipsQuiet",
+		"TestRegression976TwoLostControllerFiles", "TestSeeds"}},
 	{"no_adopt_echo", []string{"TestLostControllerIgnoresAnAckToItsEarlierBoot", "TestReviewStaleProposeFloor"}},
 	{"switch_without_peer", []string{"TestSwitchNeedsThePeer"}},
 	{"peer_from_any_adopt", []string{"TestLateAdoptToAnEarlierBootIsNotThePeer"}},
