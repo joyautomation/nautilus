@@ -287,6 +287,7 @@ type Elector struct {
 	token      ClientToken
 	users, tls CredState // the credential check (#708)
 	usersMsg   string    // the users condition last raised (it names who can't read)
+	tlsMsg     string    // the TLS condition last raised
 	writeErr   string
 	mismatch   map[string]string // the last lease-mismatch report per voter, to report each change once
 	durable    uint64            // the highest Seq known on disk
@@ -1069,23 +1070,24 @@ func (e *Elector) checkToken(ctx context.Context) {
 	e.selfInfo().query(q)
 	body, err := e.call.call(ctx, max(e.o.Lease, time.Second), http.MethodGet, e.peer+Prefix+e.o.Cluster+"/hello?"+q.Encode(), nil)
 	if err != nil {
+		e.credentialsUnknown() // the check can't run: no stale banner
 		return
 	}
 	var h helloAnswer
 	if json.Unmarshal(body, &h) != nil {
+		e.credentialsUnknown()
 		return
 	}
 	if h.Node != string(e.o.Peer) {
 		e.log.Error("redundancy: the peer's address answers as another node", "addr", e.o.PeerAddr, "want", e.o.Peer, "got", h.Node)
+		e.credentialsUnknown()
 		return
 	}
-	if n, err := strconv.ParseUint(h.Nonce, 16, 64); err == nil && n != 0 {
-		pi := peerInfo{Config: h.Config, Nonce: n, Caps: h.Caps}
-		if sameMAC(h.InfoMAC, infoMAC(e.o.Token, c, e.o.Self, e.o.Peer, pi)) {
-			e.heard(pi)
-		}
+	pi, verified := e.answerVerified(c, h)
+	if verified {
+		e.heard(pi)
 	}
-	e.checkCredentials(c, h)
+	e.checkCredentials(c, h, verified)
 	got := TokenDiffers
 	if sameMAC(h.MAC, tokenMAC(e.o.Token, c, e.o.Self, e.o.Peer, e.o.ClientToken)) {
 		got = TokenSame
@@ -1107,56 +1109,105 @@ func (e *Elector) checkToken(ctx context.Context) {
 
 // checkCredentials judges the peer's credential answer for challenge c
 // against this controller's own, read now (so a users file edited on one
-// box shows within one hello), and reports each part that changed: an
-// event (the banner's condition) and a log line. Report only (#708).
-func (e *Elector) checkCredentials(c string, h helloAnswer) {
+// box shows within one hello), and reports each part whose message
+// changed: an event (the banner's condition) and a log line. verified says
+// the answer proved itself under the peer token (judgeCred). Report only
+// (#708): nothing here holds a campaign or touches the gate.
+func (e *Elector) checkCredentials(c string, h helloAnswer, verified bool) {
 	own := e.credentials()
-	users := judgeCred(e.o.Token, c, e.o.Self, e.o.Peer, "users", h.Users, h.UsersMAC, own.Users, own.UsersErr)
-	tls := judgeCred(e.o.Token, c, e.o.Self, e.o.Peer, "tls", h.TLS, h.TLSMAC, own.TLS, "")
-	msg := e.usersMessage(users, own.UsersErr)
+	users := judgeCred(e.o.Token, c, e.o.Self, e.o.Peer, "users", h.Users, h.UsersMAC, own.Users, own.UsersErr, verified)
+	tls := judgeCred(e.o.Token, c, e.o.Self, e.o.Peer, "tls", h.TLS, h.TLSMAC, own.TLS, "", verified)
+	if users == CredUnreadable && own.UsersErr != "" {
+		// The detail stays in this controller's log: /api/cluster, where
+		// the condition shows, answers without a token (#1046 review).
+		e.log.Error("redundancy: this controller cannot read its users file, so the pair's users cannot be compared", "error", own.UsersErr)
+	}
+	e.reportCredentials(users, e.usersMessage(users, own.UsersErr), tls, e.tlsMessage(tls))
+}
+
+// answerVerified reports whether a hello answer proved itself under the
+// peer token for challenge c, from the peer to this controller (its
+// peer-info MAC binds both names and the challenge), with the peer info it
+// carries.
+func (e *Elector) answerVerified(c string, h helloAnswer) (peerInfo, bool) {
+	n, err := strconv.ParseUint(h.Nonce, 16, 64)
+	if err != nil || n == 0 {
+		return peerInfo{}, false
+	}
+	pi := peerInfo{Config: h.Config, Nonce: n, Caps: h.Caps}
+	return pi, sameMAC(h.InfoMAC, infoMAC(e.o.Token, c, e.o.Self, e.o.Peer, pi))
+}
+
+// credentialsUnknown is the check that could not run (the peer did not
+// answer, or answered as another node): a condition raised earlier is
+// cleared rather than left standing on a state nobody re-checks.
+func (e *Elector) credentialsUnknown() {
+	e.reportCredentials(CredUnknown, "", CredUnknown, "")
+}
+
+// reportCredentials records each part's state and raises its event when
+// its message changed ("" clears the condition).
+func (e *Elector) reportCredentials(users CredState, uMsg string, tls CredState, tMsg string) {
 	e.mu.Lock()
-	uChanged := users != CredUnknown && (users != e.users || msg != e.usersMsg)
-	tChanged := tls != e.tls
+	uChanged, tChanged := uMsg != e.usersMsg, tMsg != e.tlsMsg
 	e.users, e.tls = users, tls
 	if uChanged {
-		e.usersMsg = msg
-		e.event(Event{Kind: EventUsersDiffer, Detail: msg})
+		e.usersMsg = uMsg
+		e.event(Event{Kind: EventUsersDiffer, Detail: uMsg})
+	}
+	if tChanged {
+		e.tlsMsg = tMsg
+		e.event(Event{Kind: EventTLSDiffers, Detail: tMsg})
 	}
 	e.mu.Unlock()
 	if uChanged {
-		if msg != "" {
-			e.log.Error("redundancy: " + msg)
+		if uMsg != "" {
+			e.log.Error("redundancy: " + uMsg)
 		} else {
-			e.log.Info("redundancy: the peer's users file matches this controller's", "state", users.String())
+			e.log.Info("redundancy: the users condition cleared", "state", users.String())
 		}
 	}
-	if tChanged && tls != CredUnknown {
-		msg := ""
-		if tls == CredDiffers {
-			msg = "the tag API's TLS certificates differ between " + string(e.o.Self) + " and " + string(e.o.Peer) + ": expected for a few minutes while a renewed certificate is copied to both; otherwise copy the same certificate and key to both controllers, or a standby cannot forward to the leader"
-		}
-		e.mu.Lock()
-		e.event(Event{Kind: EventTLSDiffers, Detail: msg})
-		e.mu.Unlock()
-		if msg != "" {
-			e.log.Warn("redundancy: " + msg)
+	if tChanged {
+		if tMsg != "" {
+			e.log.Warn("redundancy: " + tMsg)
 		} else {
-			e.log.Info("redundancy: the peer serves the same TLS certificate", "state", tls.String())
+			e.log.Info("redundancy: the TLS condition cleared", "state", tls.String())
 		}
 	}
 }
 
+// unverifiedMessage is the condition for an answer that did not prove
+// itself: the files are not blamed.
+func (e *Elector) unverifiedMessage(part string) string {
+	return "the peer's " + part + " answer could not be verified, so the pair's " + part + " cannot be compared: " + string(e.o.Self) + " and " + string(e.o.Peer) + " may hold different NAUTILUS_PEER_TOKENs, or something else answers in the peer's place"
+}
+
 // usersMessage is the operator's text for a users-file state ("" when the
-// files match, or neither controller has users).
+// files match, neither has users, or nothing is known). It never carries
+// a path or an OS error: /api/cluster shows it without a token.
 func (e *Elector) usersMessage(st CredState, ownErr string) string {
 	switch st {
 	case CredDiffers:
 		return "the users files differ between " + string(e.o.Self) + " and " + string(e.o.Peer) + ": copy the same users.json to both controllers (scp it into the state directory; each reloads it within a second), and never add users separately on each box: each box salts its own hashes, so the same password still makes a different file. Until then a user may be refused, or still let in, after a takeover"
 	case CredUnreadable:
 		if ownErr != "" {
-			return "this controller (" + string(e.o.Self) + ") cannot read its users file, so the pair's users cannot be compared: " + ownErr
+			return "this controller (" + string(e.o.Self) + ") cannot read its users file, so the pair's users cannot be compared: see its log"
 		}
 		return "the peer controller (" + string(e.o.Peer) + ") cannot read its users file, so the pair's users cannot be compared: see its log"
+	case CredUnverified:
+		return e.unverifiedMessage("users")
+	}
+	return ""
+}
+
+// tlsMessage is the operator's text for a TLS state ("" when it matches,
+// neither serves TLS, or nothing is known).
+func (e *Elector) tlsMessage(st CredState) string {
+	switch st {
+	case CredDiffers:
+		return "the tag API's TLS certificates differ between " + string(e.o.Self) + " and " + string(e.o.Peer) + ": expected for a few minutes while a renewed certificate is copied to both; otherwise copy the same certificate and key to both controllers, or a standby cannot forward to the leader"
+	case CredUnverified:
+		return e.unverifiedMessage("TLS certificate")
 	}
 	return ""
 }

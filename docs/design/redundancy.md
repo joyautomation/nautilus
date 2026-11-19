@@ -831,8 +831,11 @@ when its members address each other by DNS name, so peer traffic is kept apart f
   client token itself. The same handshake compares the pair's **credential set** (#708), read
   anew at every hello: the users file's digest (`auth/users.Digest`) and the tag API
   certificate's leaf (`server.CertSource.Pin`), each as its own HMAC under the peer token, so a
-  digest never leaves either. Each part is same, differs, unreadable or off, and a mismatch is a
-  condition on `/api/cluster` and the banner. It is **report only**: it never holds a campaign
+  digest never leaves either. Each part is same, differs, unreadable or off, or **unverified** when
+  the answer does not prove itself under the peer token (different peer tokens, a reflected or
+  replayed answer): then the files are not blamed. A mismatch is a condition on `/api/cluster`
+  and the banner, cleared when the check cannot run (the peer silent), and it never carries a
+  path or an OS error, since `/api/cluster` answers without a token: those stay in the log. It is **report only**: it never holds a campaign
   or closes the gate, since a users change or a certificate renewal reaches A and B at slightly
   different times.
 - **Clients that follow the leader (#716).** `/api/cluster` advertises each controller's API

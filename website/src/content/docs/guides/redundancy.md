@@ -431,7 +431,9 @@ example with scp, into each one's state directory; each reloads it
 within a second), and never add users separately on each box, since each
 box salts its own password hashes and the same password still makes a
 different file. A certificate renewal shows as a difference for the few
-minutes it takes to reach both.
+minutes it takes to reach both. "Could not be verified" means the two
+controllers hold different `NAUTILUS_PEER_TOKEN`s (or something else
+answers in the peer's place), not that the files differ.
 
 Both controllers must run the same `redundancy:` section (`peers:` and
 `witness:`). If they don't (an edited manifest deployed to one box

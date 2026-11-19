@@ -63,6 +63,11 @@ const (
 	CredUnreadable
 	// CredOff: neither has any (no users, no server.tls).
 	CredOff
+	// CredUnverified: the peer's answer did not prove itself under the
+	// peer token (a forged, reflected or replayed answer, or the two
+	// controllers hold different peer tokens): nothing can be said about
+	// its credentials.
+	CredUnverified
 )
 
 func (c CredState) String() string {
@@ -75,6 +80,8 @@ func (c CredState) String() string {
 		return "unreadable"
 	case CredOff:
 		return "off"
+	case CredUnverified:
+		return "unverified"
 	}
 	return "unknown"
 }
@@ -93,6 +100,12 @@ const (
 func credMAC(peerToken, challenge string, asker, answerer quorum.NodeID, part, state string, digest [32]byte) string {
 	m := hmac.New(sha256.New, []byte(peerToken))
 	parts := []string{"nautilus credential answer", part, string(asker), string(answerer), challenge, state}
+	switch {
+	case mut("creds_names_unbound"):
+		parts = []string{"nautilus credential answer", part, challenge, state}
+	case mut("creds_challenge_unbound"):
+		parts = []string{"nautilus credential answer", part, string(asker), string(answerer), state}
+	}
 	if state == credOK && !mut("creds_unbound") {
 		parts = append(parts, hex.EncodeToString(digest[:]))
 	}
@@ -104,24 +117,33 @@ func credMAC(peerToken, challenge string, asker, answerer quorum.NodeID, part, s
 }
 
 // judgeCred is what the asker makes of one part: the answerer's state and
-// MAC against its own digest (or its own read error).
-func judgeCred(peerToken, challenge string, asker, answerer quorum.NodeID, part, peerState, peerMAC string, own [32]byte, ownErr string) CredState {
+// MAC against its own digest (or its own read error). verified says the
+// answer as a whole proved itself under the peer token for this challenge
+// and these names (its peer-info MAC): only then does a credential MAC
+// that does not match mean the credentials differ; otherwise nothing is
+// known (CredUnverified), and the files are not blamed.
+func judgeCred(peerToken, challenge string, asker, answerer quorum.NodeID, part, peerState, peerMAC string, own [32]byte, ownErr string, verified bool) CredState {
 	switch {
 	case peerState == "":
 		return CredUnknown // a build before the check
-	case ownErr != "":
-		return CredUnreadable
-	case peerState == credUnreadable && sameMAC(peerMAC, credMAC(peerToken, challenge, asker, answerer, part, credUnreadable, [32]byte{})):
-		return CredUnreadable
+	case peerState != credOK && peerState != credUnreadable:
+		return CredUnverified
 	case peerState == credOK && sameMAC(peerMAC, credMAC(peerToken, challenge, asker, answerer, part, credOK, own)):
+		if ownErr != "" {
+			return CredUnreadable
+		}
 		if own == ([32]byte{}) {
 			return CredOff
 		}
 		return CredSame
-	case peerState == credOK || peerState == credUnreadable:
-		return CredDiffers
+	case peerState == credUnreadable && sameMAC(peerMAC, credMAC(peerToken, challenge, asker, answerer, part, credUnreadable, [32]byte{})):
+		return CredUnreadable
+	case !verified:
+		return CredUnverified
+	case ownErr != "":
+		return CredUnreadable
 	}
-	return CredUnknown
+	return CredDiffers
 }
 
 // helloAnswer is GET {pair}/hello's JSON answer: the answering node and
