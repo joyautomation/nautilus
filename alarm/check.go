@@ -31,16 +31,18 @@ func (e *Engine) UnackedIDs() []string {
 	return out
 }
 
-// CheckAck is what Ack(ids) would refuse (an id naming no alarm), and how
-// many alarms it would change.
-func (e *Engine) CheckAck(ids []string) (int, error) {
+// AckableIDs is what Ack(ids) would refuse (an id naming no alarm), and
+// the ids among them it would change: a pair proposes only those, so an
+// ack of an alarm with nothing to acknowledge is never recorded (#1033
+// review).
+func (e *Engine) AckableIDs(ids []string) ([]string, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	n := 0
+	var out []string
 	for _, id := range ids {
 		i, ok := e.byID[id]
 		if !ok {
-			return 0, fmt.Errorf("%w %q", ErrNoAlarm, id)
+			return nil, fmt.Errorf("%w %q", ErrNoAlarm, id)
 		}
 		in := &e.inst[i]
 		st := in.state
@@ -48,10 +50,26 @@ func (e *Engine) CheckAck(ids []string) (int, error) {
 			st = in.prior
 		}
 		if st == UnackActive || st == UnackRTN {
-			n++
+			out = append(out, id)
 		}
 	}
-	return n, nil
+	return out, nil
+}
+
+// AckHeldIDs are the alarms whose current occurrence is acknowledged:
+// ack-active, or shelved over ack-active. A pair's leader reconciles its
+// log's alarm view against it.
+func (e *Engine) AckHeldIDs() map[string]bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	out := map[string]bool{}
+	for i := range e.inst {
+		in := &e.inst[i]
+		if in.state == AckActive || (in.state == Shelved && in.prior == AckActive) {
+			out[in.def.ID] = true
+		}
+	}
+	return out
 }
 
 // CheckShelve is what Shelve(id, until) would refuse.

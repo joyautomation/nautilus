@@ -157,6 +157,8 @@ var table = []mutation{
 	{"lapse_ignored", []string{"TestLateUnknownStartLapses", "TestAdoptedCopyStillLapses"}},
 	{"ack_clear_off", []string{"TestPairAckDoesNotCarryToANewOccurrence"}},
 	{"alarm_view_ignored", []string{"TestPairAckCarriesAcrossASyncedTakeover"}},
+	// #1033 review: a re-leading replica's frozen engine.
+	{"engine_not_reset", []string{"TestReviewFrozenEngineIsReset", "TestReviewFrozenShelfIsReset"}},
 }
 
 // rowPkgs are the packages a row runs instead of ./quorum/..., filtered
@@ -165,6 +167,7 @@ var rowPkgs = map[string][]string{
 	"lapse_ignored":      {"./oplog"},
 	"ack_clear_off":      {"./cmd/naut"},
 	"alarm_view_ignored": {"./cmd/naut"},
+	"engine_not_reset":   {"./server"},
 }
 
 // args are the go test arguments for m.

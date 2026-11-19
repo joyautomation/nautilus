@@ -10,7 +10,9 @@ import "os"
 //   - ack_clear_off: an acknowledged alarm back to normal proposes no
 //     ack-clear, so a takeover carries the ack to a new occurrence;
 //   - alarm_view_ignored: a synced takeover restores the replica's own
-//     retain instead of the log's alarm view.
+//     retain instead of the log's alarm view;
+//   - engine_not_reset: a takeover restores the view over the engine's
+//     frozen operator state instead of resetting it first.
 var mutOn = os.Getenv("QUORUM_MUT")
 
 func mutServer(name string) bool { return name == mutOn }

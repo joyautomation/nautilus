@@ -140,6 +140,7 @@ case caught it. A mutation joins the nightly run in the PR that builds the rule 
 | the gate is judged on the elector's tick, not when it is read | design §3.2 | 3a (`gate_on_tick`) |
 | a new leader applies alarm state before its `oplog` catch-up (as built: a synced takeover restores its own retain instead of the log's alarm view, `alarm_view_ignored`) | design §1, `oplog` | 3b-2c |
 | an acknowledged alarm back to normal proposes no ack-clear, so a takeover pre-acknowledges a new occurrence (`ack_clear_off`) | design §1, occurrences | 3b-2c |
+| a takeover restores the view over a re-leading replica's frozen engine (`engine_not_reset`) | design §1, takeovers reset the engine | 3b-2c (#1033 review) |
 | a late substitute start a lapse entry names is carried out (`lapse_ignored`; a runner row since 3b-2c) | design §1 | lapse |
 | `Liveness` ignores a loop between scans (the behaviour before #858) | design §3.2, starvation | 3 |
 | a standby's gated ticks don't count as on schedule | design §3.2, starvation | 3 |

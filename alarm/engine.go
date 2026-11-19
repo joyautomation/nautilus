@@ -669,6 +669,24 @@ func (e *Engine) RetainedAlarms() map[string]retain.AlarmRetain {
 	return out
 }
 
+// ResetOperatorState forgets every acknowledgement and shelf, and every
+// alarm's state, as a fresh engine would start: the next Evaluate
+// re-derives each alarm from the field. A redundant pair calls it at
+// every takeover, before RestoreAlarms, because a replica that led before
+// keeps an engine frozen at its last leadership: acks of occurrences that
+// ended since, shelves undone since (#1033 review). Nothing is journalled;
+// Rename's names stay.
+func (e *Engine) ResetOperatorState() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for i := range e.inst {
+		in := &e.inst[i]
+		lent, def := in.lent, in.def
+		*in = instance{def: def, lent: lent}
+	}
+	e.rev++
+}
+
 // RestoreAlarms reapplies retained operator state. Call it once, before the
 // first Evaluate: the acknowledgement is held aside and applied to the
 // FIRST activation of each alarm, because the field will re-assert the

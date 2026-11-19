@@ -83,6 +83,7 @@ var Mutations = []string{
 	"lapse_ignored",      // oplog: a committed KindLapse is not looked at; a late start runs (#1030 review)
 	"ack_clear_off",      // server: an acked alarm back to normal proposes no ack-clear (#710 PR 3b-2c)
 	"alarm_view_ignored", // server: a synced takeover restores its own retain, not the log's alarm view
+	"engine_not_reset",   // server: a takeover restores the view over the engine's frozen operator state
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")

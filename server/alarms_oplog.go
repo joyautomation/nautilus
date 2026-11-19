@@ -5,12 +5,14 @@ import (
 	"log/slog"
 	"maps"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 
 	"github.com/joyautomation/nautilus/alarm"
 	"github.com/joyautomation/nautilus/oplog"
 	"github.com/joyautomation/nautilus/retain"
+	"github.com/joyautomation/nautilus/runtime"
 )
 
 // Alarm acknowledgements and shelves through the replicated log of
@@ -30,13 +32,41 @@ import (
 //
 // # Occurrences
 //
-// An acknowledgement is of an occurrence. When an acknowledged alarm
-// returns to normal on the leader, the leader proposes an ack-clear for it
-// (retried until committed, as an expiry is), and the view drops the ack:
-// a takeover then never carries it to a new occurrence. The residual is
-// the leader dying between that return to normal and the ack-clear's
-// commit: one log round trip (well under lease/2) with the peer up. Acks
-// bound to an activation proper come with #715.
+// An acknowledgement is of an occurrence. The invariant (#1033 review):
+// the view holds an ack for an alarm only while the leader's engine has
+// that alarm's current occurrence acknowledged (ack-active, or shelved
+// over it). So:
+//   - an ack that would change nothing is refused (409), never recorded;
+//   - every transition out of ack-active on the leader (a return to
+//     normal, an RTN to unack-rtn of a latched alarm, a new activation, a
+//     suppress) proposes an ack-clear, retried until committed, batched;
+//   - the leader reconciles the view against its engine at every log tick
+//     (driveLog), clearing any ack its engine doesn't hold;
+//   - an unsynced takeover clears the view's acks outright.
+// The residual is the leader dying between such a transition and the
+// ack-clear's commit: one log round trip and a scan with the peer up, up
+// to the peer's outage plus a retry (2 s) with it down. Acks bound to an
+// activation proper come with #715.
+//
+// # Takeovers reset the engine
+//
+// A replica that led before keeps an engine frozen at its last leadership.
+// Every takeover resets its operator state (alarm.Engine.
+// ResetOperatorState) before restoring the view, so an ack of an
+// occurrence that ended, or a shelf undone, while it stood by never
+// survives in it (#1033 review).
+//
+// # Late entries lapse
+//
+// An ack or a shelve proposed while the log had no majority, and committed
+// by a later leader more than AlarmIntentCommitBound after it was
+// proposed, is lapsed (oplog.KindLapse, as a late substitute start is): it
+// would act on whatever occurrence is live by then. Unshelves and
+// ack-clears never lapse: late, they are safe.
+
+// AlarmIntentCommitBound is how old an ack or a shelve may be, by the
+// committing leader's clock, and still apply (the substitutes' bound).
+const AlarmIntentCommitBound = runtime.SubstituteStartCommitBound
 
 // PairNoMajorityAlarms is a pair's no-majority refusal for alarm writes.
 const PairNoMajorityAlarms = "operator-intent log has no majority: the peer is down; alarm acknowledgements and shelves cannot be made until it returns"
@@ -62,8 +92,10 @@ type alarmIntent struct {
 	acked        bool
 	ackBy        string
 	ackMs        int64
+	ackSeq       uint64 // the log entry the ack came from (a KindLapse may name it)
 	shelfUntilMs int64
 	shelfBy      string
+	shelfSeq     uint64
 	shelfSet     bool // the log shelved or unshelved it: its shelf is the log's
 }
 
@@ -84,12 +116,16 @@ func (l *AlarmLog) Attach(n *oplog.Node) { l.node = n }
 // whether it was one.
 func (l *AlarmLog) Apply(e oplog.Entry) (bool, error) {
 	live := l.leading()
+	if e.Lapsed && (e.Kind == oplog.KindAck || e.Kind == oplog.KindShelve) {
+		slog.Warn("alarm: an operator's ack or shelve lapsed: it was committed too late to apply to the occurrence it was for", "kind", e.Kind, "ids", e.IDs, "id", e.ID, "by", e.By)
+		return true, nil
+	}
 	switch e.Kind {
 	case oplog.KindAck:
 		l.mu.Lock()
 		for _, id := range e.IDs {
 			v := l.view[id]
-			v.acked, v.ackBy, v.ackMs = true, e.By, e.TS
+			v.acked, v.ackBy, v.ackMs, v.ackSeq = true, e.By, e.TS, e.Seq
 			l.view[id] = v
 		}
 		l.mu.Unlock()
@@ -101,7 +137,7 @@ func (l *AlarmLog) Apply(e oplog.Entry) (bool, error) {
 	case oplog.KindShelve:
 		l.mu.Lock()
 		v := l.view[e.ID]
-		v.shelfUntilMs, v.shelfBy, v.shelfSet = e.Until, e.By, true
+		v.shelfUntilMs, v.shelfBy, v.shelfSet, v.shelfSeq = e.Until, e.By, true, e.Seq
 		l.view[e.ID] = v
 		l.mu.Unlock()
 		if live {
@@ -122,10 +158,29 @@ func (l *AlarmLog) Apply(e oplog.Entry) (bool, error) {
 		}
 	case oplog.KindAckClear:
 		l.mu.Lock()
-		v := l.view[e.ID]
-		v.acked, v.ackBy, v.ackMs = false, "", 0
-		l.view[e.ID] = v
+		for _, id := range append(slices.Clone(e.IDs), e.ID) {
+			if v, ok := l.view[id]; ok && id != "" {
+				v.acked, v.ackBy, v.ackMs, v.ackSeq = false, "", 0, 0
+				l.view[id] = v
+			}
+		}
 		l.mu.Unlock()
+	case oplog.KindLapse:
+		// A replica that applied a named ack or shelve before the lapse
+		// reached it (a 3-replica case) drops it from its view; the leader
+		// that wrote the lapse never applied it.
+		l.mu.Lock()
+		for id, v := range l.view {
+			if v.acked && slices.Contains(e.Refs, v.ackSeq) {
+				v.acked, v.ackBy, v.ackMs, v.ackSeq = false, "", 0, 0
+			}
+			if v.shelfSet && v.shelfUntilMs > 0 && slices.Contains(e.Refs, v.shelfSeq) {
+				v.shelfUntilMs, v.shelfBy, v.shelfSeq = 0, "", 0
+			}
+			l.view[id] = v
+		}
+		l.mu.Unlock()
+		return false, nil // the substitutes' Apply sees it too
 	default:
 		return false, nil
 	}
@@ -133,10 +188,15 @@ func (l *AlarmLog) Apply(e oplog.Entry) (bool, error) {
 }
 
 // engineEvent hears the leader's engine (under its lock: no blocking, no
-// engine calls). An acknowledged alarm back to normal is an occurrence
-// over: its ack is cleared in the log.
+// engine calls). Any transition that leaves an alarm not ack-active ends
+// the acknowledged occurrence: its ack is cleared in the log. A shelve
+// keeps it (shelved over ack-active still holds the ack); its unshelve
+// lands on the state the shelf interrupted, judged like any other.
 func (l *AlarmLog) engineEvent(ev alarm.Event) {
-	if ev.State != "normal" || (ev.Kind != alarm.KindRTN && ev.Kind != alarm.KindAck) || mutServer("ack_clear_off") {
+	if ev.State == "ack-active" || ev.Kind == alarm.KindShelve || ev.State == "shelved" || mutServer("ack_clear_off") {
+		return
+	}
+	if !l.leading() {
 		return
 	}
 	l.mu.Lock()
@@ -147,12 +207,54 @@ func (l *AlarmLog) engineEvent(ev alarm.Event) {
 	}
 }
 
+// Reconcile clears from the log any ack the leader's engine doesn't hold
+// (an occurrence that ended by a path no event caught, or a view left
+// stale by an unsynced takeover). naut run calls it at every log tick.
+func (l *AlarmLog) Reconcile() {
+	if !l.leading() || mutServer("ack_clear_off") {
+		return
+	}
+	held := l.eng.AckHeldIDs()
+	l.mu.Lock()
+	var stale []string
+	for id, v := range l.view {
+		if v.acked && !held[id] {
+			stale = append(stale, id)
+		}
+	}
+	l.mu.Unlock()
+	for _, id := range stale {
+		l.queueClear(id)
+	}
+}
+
+// dropAcks clears every ack from this replica's view (an unsynced
+// takeover: the log could not say which are current).
+func (l *AlarmLog) dropAcks() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for id, v := range l.view {
+		v.acked, v.ackBy, v.ackMs, v.ackSeq = false, "", 0, 0
+		l.view[id] = v
+	}
+}
+
+// Lapse is the log's Options.Lapse for alarm intent: an ack or a shelve
+// a new leader commits from an earlier term lapses when it was proposed
+// more than AlarmIntentCommitBound before now, on that leader's clock.
+func (l *AlarmLog) Lapse(e oplog.Entry, now time.Time) bool {
+	return (e.Kind == oplog.KindAck || e.Kind == oplog.KindShelve) && now.Sub(time.UnixMilli(e.TS)) > AlarmIntentCommitBound
+}
+
 // queueClear proposes an ack-clear in the background, retrying what the
-// log does not take (no majority) until it does.
+// log does not take (no majority) until it does; the ids queued meanwhile
+// go in one entry.
 func (l *AlarmLog) queueClear(id string) {
 	l.clrMu.Lock()
 	defer l.clrMu.Unlock()
-	l.clr = append(l.clr, id)
+	if !slices.Contains(l.clr, id) {
+		l.clr = append(l.clr, id)
+	}
 	if !l.clrRunning && l.node != nil {
 		l.clrRunning = true
 		go l.proposeClears()
@@ -167,18 +269,18 @@ func (l *AlarmLog) proposeClears() {
 			l.clrMu.Unlock()
 			return
 		}
-		id := l.clr[0]
+		ids := slices.Clone(l.clr)
 		l.clrMu.Unlock()
 		ctx, cancel := context.WithTimeout(context.Background(), substituteProposeWait)
-		_, err := l.node.Propose(ctx, oplog.Entry{Kind: oplog.KindAckClear, ID: id, By: "system"})
+		_, err := l.node.Propose(ctx, oplog.Entry{Kind: oplog.KindAckClear, IDs: ids, By: "system"})
 		cancel()
 		if err != nil {
-			slog.Warn("alarm: ack-clear not committed yet; retrying", "id", id, "err", err)
+			slog.Warn("alarm: ack-clear not committed yet; retrying", "ids", ids, "err", err)
 			time.Sleep(l.clrRetry)
 			continue
 		}
 		l.clrMu.Lock()
-		l.clr = l.clr[1:]
+		l.clr = slices.DeleteFunc(l.clr, func(id string) bool { return slices.Contains(ids, id) })
 		l.clrMu.Unlock()
 	}
 }
@@ -250,9 +352,17 @@ func (p PairAlarms) RestoreAlarms(m map[string]retain.AlarmRetain) { p.RestoreAl
 
 // RestoreAlarmsSynced restores the view (Held) into the engine.
 func (p PairAlarms) RestoreAlarmsSynced(m map[string]retain.AlarmRetain, synced bool) {
-	if !synced && p.Log.hasAcks(m) {
-		p.Engine.Note("system", "acks not carried: takeover unsynced (the operator-intent log could not be caught up, so acknowledged alarms re-annunciate)")
-		slog.Warn("alarm: acknowledgements not carried: the takeover's log catch-up failed; acknowledged alarms re-annunciate")
+	if !synced {
+		if p.Log.hasAcks(m) {
+			p.Engine.Note("system", "acks not carried: takeover unsynced (the operator-intent log could not be caught up, so acknowledged alarms re-annunciate)")
+			slog.Warn("alarm: acknowledgements not carried: the takeover's log catch-up failed; acknowledged alarms re-annunciate")
+		}
+		p.Log.dropAcks() // the view can't say which acks are current: none are
+	}
+	// A frozen engine from an earlier leadership forgets what it held;
+	// the view (or, unsynced, the shelves alone) is what applies now.
+	if !mutServer("engine_not_reset") {
+		p.Engine.ResetOperatorState()
 	}
 	p.Engine.RestoreAlarms(p.Log.Held(synced, m))
 }
@@ -282,11 +392,18 @@ func (s *Server) alarmAckThroughLog(w http.ResponseWriter, r *http.Request, ids 
 			return
 		}
 	}
-	n, err := s.alarms.CheckAck(ids)
+	ids, err := s.alarms.AckableIDs(ids)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
+	if len(ids) == 0 {
+		// Nothing to acknowledge: recorded in the log, it would sit in the
+		// view as an ack no occurrence holds (#1033 review).
+		refuse(w, "nothing to acknowledge: those alarms are not active-unacknowledged or returned-unacknowledged", http.StatusConflict)
+		return
+	}
+	n := len(ids)
 	if s.refuseAlarmWithoutMajority(w) {
 		return
 	}

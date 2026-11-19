@@ -65,6 +65,7 @@ type pairMember struct {
 	// once the runtime exists (startLog); 503 until then.
 	logH    swapHandler
 	log     *oplog.Node
+	al      *server.AlarmLog // nil without alarms
 	logStop context.CancelFunc
 	logDone chan struct{}
 }
@@ -406,10 +407,18 @@ func (m *pairMember) startLog(rt *runtime.Runtime, wait time.Duration, eng *alar
 	// runtime restores the view at a takeover (PairAlarms).
 	var al *server.AlarmLog
 	if eng != nil {
-		al = server.NewAlarmLog(eng, rt.Leading)
+		// Live while the election's gate is open, from the takeover's
+		// start: an entry applied before the takeover's restore is reset
+		// and restored with the view; one after it reaches the engine
+		// (#1033 review).
+		al = server.NewAlarmLog(eng, m.q.IsLeader)
 		rt.SetAlarms(server.PairAlarms{Engine: eng, Log: al})
 	}
+	m.al = al
 	apply := func(e oplog.Entry) error {
+		if e.Kind == oplog.KindLapse && al != nil {
+			_, _ = al.Apply(e) // its view drops a lapsed ack or shelf; the substitutes' below
+		}
 		if done, err := sl.Apply(e); done {
 			return err
 		}
@@ -425,8 +434,10 @@ func (m *pairMember) startLog(rt *runtime.Runtime, wait time.Duration, eng *alar
 		Leadership: pairLeadership{q: m.q, peers: m.peers},
 		File:       filepath.Join(filepath.Dir(m.o.StatePath), pairLogFile),
 		Apply:      apply,
-		Lapse:      sl.Lapse,
-		Token:      m.o.Token, Timeout: max(m.o.Lease/2, 500*time.Millisecond),
+		Lapse: func(e oplog.Entry, now time.Time) bool {
+			return sl.Lapse(e, now) || (al != nil && al.Lapse(e, now))
+		},
+		Token: m.o.Token, Timeout: max(m.o.Lease/2, 500*time.Millisecond),
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("operator-intent log: %w", err)
@@ -469,6 +480,9 @@ func (m *pairMember) driveLog(ctx context.Context) {
 		_ = m.log.CatchUp(cctx)
 		m.log.Ping(cctx)
 		cancel()
+		if m.al != nil {
+			m.al.Reconcile() // the leader's view holds only acks its engine holds
+		}
 	}
 }
 

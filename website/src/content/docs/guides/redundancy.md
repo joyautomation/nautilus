@@ -349,8 +349,17 @@ other controller takes over and could catch the log up (a handover, or
 a fault while the old leader's box still answers), an alarm acknowledged
 before the takeover stays acknowledged, and a shelf stays until its own
 end. An acknowledgement is of an occurrence: once an acknowledged alarm
-returns to normal, its acknowledgement is cleared, so a new occurrence
-always annunciates.
+leaves that occurrence (it returns to normal, a latched alarm returns
+unacknowledged, its tag goes dark, or it activates anew), the leader
+clears the acknowledgement in the log, so a new occurrence annunciates
+after a takeover. **The window:** if the leader dies after that and
+before the clear is committed, the next leader can still carry the old
+acknowledgement to the new occurrence. With both controllers up that is
+a few tens of milliseconds; while the other controller is down the clear
+waits for it, so the window lasts as long as the outage plus about 2 s.
+An acknowledgement or a shelve made just before a controller died and
+committed more than 60 s later is dropped, not applied to whatever
+occurrence is live by then.
 
 **When the takeover could not catch the log up** (with the log on the two
 controllers only, that is every takeover after the leader died), no
