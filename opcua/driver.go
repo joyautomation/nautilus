@@ -185,6 +185,8 @@ type Driver struct {
 	mu       sync.Mutex
 	snapshot nio.Values
 	online   bool
+	// live is the connected session, for Call; nil between sessions.
+	live     *Session
 	answered bool // a read succeeded on this session (resets backoff)
 	primed   bool // every scan class has been read once on this session
 	state    string
@@ -832,6 +834,7 @@ func (d *Driver) run(ctx context.Context) {
 			continue
 		}
 
+		d.setLive(sess)
 		d.onConnect(ctx, sess)
 		if d.readMode == ReadModeSubscribe {
 			d.serveSubscribed(ctx, sess)
@@ -848,6 +851,7 @@ func (d *Driver) run(ctx context.Context) {
 		// answers the priming read but refuses to subscribe climbs it).
 		answered := d.answered && (d.readMode != ReadModeSubscribe || d.primed)
 		d.online, d.primed = false, false
+		d.live = nil // no call may start on a session that is going away
 		d.mu.Unlock()
 		if ctx.Err() == nil {
 			d.setState("error", nil)
