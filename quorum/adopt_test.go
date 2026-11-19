@@ -623,3 +623,22 @@ func TestReadoptOverPendingOwesTheQuietPeriod(t *testing.T) {
 		t.Fatalf("counts %d from %v, want %d from %v (the quiet period)", inc, from, incI, now.Add(lease))
 	}
 }
+
+// #1008 re-review (b): a late Adopt sent to an EARLIER boot of A (it
+// echoes A's old nonce) says nothing about the peer now: it may be down.
+// It must not count as hearing the peer, or A proposes a switch to a
+// stray it then waits on, counting no witness, until the peer is back.
+func TestLateAdoptToAnEarlierBootIsNotThePeer(t *testing.T) {
+	a := newCtl(t, "A", commissioned(1, incI, 0), 0)
+	a.peerDown = true
+	now := at(lease)
+	a.hear(now, incK, 0)
+	a.recv(now, Adopt{From: "B", Kind: State, Gen: 1, Incarnation: incI, Nonce: 0xB1, Echo: 0xA0})
+	if q, _ := a.tick(now); len(q) != 0 || a.v.State().PendingGen != 0 {
+		t.Fatalf("a late Adopt to an earlier boot let A propose a switch: %+v", q)
+	}
+	a.recv(now, Adopt{From: "B", Kind: State, Gen: 1, Incarnation: incI, Nonce: 0xB1, Echo: 0xA1})
+	if q, _ := a.tick(now); len(q) != 1 || q[0].Echo != 0xB1 {
+		t.Fatalf("an Adopt to this boot: no switch to the peer's boot: %+v", q)
+	}
+}

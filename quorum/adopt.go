@@ -288,12 +288,20 @@ func (a *Adoption) OnAdopt(now Instant, m Adopt) (*Persist, []Adopt) {
 	if m.From != a.peer {
 		return nil, nil
 	}
-	a.peerAt, a.peerNonce = now, m.Nonce
 	st := a.v.st
 	// fresh: m was sent to this boot. An uncommissioned controller (a lost
 	// file) takes nothing that isn't: a proposal or an ack from before the
 	// loss carries a floor that misses what was led since (#1008 review).
 	fresh := m.Echo == a.c.cfg.Nonce || mut("no_adopt_echo")
+	// The peer is heard, and its boot learnt, only from a message that
+	// answers this boot: a late one sent before this controller restarted
+	// would say the peer is up when it may be down (a switch then waits on
+	// it), or name a boot the peer has left. A peer's first message after
+	// its own restart echoes no boot of ours; the reply to it echoes its
+	// nonce directly, and its next message echoes ours.
+	if m.Echo == a.c.cfg.Nonce || mut("peer_from_any_adopt") {
+		a.peerAt, a.peerNonce = now, m.Nonce
+	}
 	switch m.Kind {
 	case Propose:
 		if m.Gen != 0 && m.Gen == st.Gen && m.Incarnation == st.Incarnation {

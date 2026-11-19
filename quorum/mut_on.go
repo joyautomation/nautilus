@@ -39,6 +39,7 @@ var Mutations = []string{
 	"no_adopt_echo",          // an uncommissioned controller takes an Adopt sent before its restart
 	"switch_without_peer",    // a switch is proposed with the peer unheard (it may be down)
 	"readopt_skips_quiet",    // re-adopting the old incarnation over a pending proposal skips the quiet period
+	"peer_from_any_adopt",    // an Adopt to an earlier boot of this controller says the peer is up
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")
