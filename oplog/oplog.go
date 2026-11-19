@@ -154,8 +154,15 @@ type Options struct {
 	Peers []string
 	// Leadership says who sequences. Required with more than one peer.
 	Leadership Leadership
-	// File is the local append-only copy; "" keeps the log in memory only.
+	// File is the local append-only copy. "" keeps the log in memory only,
+	// which New refuses with more than one peer unless Ephemeral is set:
+	// a restarted leader with an empty log and an unchanged term would
+	// number entries again with (seq, term) pairs a follower already holds
+	// for other entries, and the previous-entry check would pass them.
 	File string
+	// Ephemeral allows several peers with no File. For tests only: it is
+	// unsafe in production (see File).
+	Ephemeral bool
 	// Apply is called for every committed entry, in order, exactly once per
 	// process lifetime (replayed from File at startup).
 	Apply Applier
@@ -234,6 +241,9 @@ func New(o Options) (*Node, error) {
 		}
 		if !contains(o.Peers, o.Self) {
 			return nil, fmt.Errorf("oplog: Self %q is not among Peers", o.Self)
+		}
+		if o.File == "" && !o.Ephemeral {
+			return nil, errors.New("oplog: several peers need a File; an in-memory log restarted under the same term would reuse sequence numbers its peers hold for other entries")
 		}
 	}
 	n := &Node{o: o, client: &http.Client{Timeout: o.Timeout}, log: o.Log, lastContact: map[string]time.Time{}}
@@ -582,6 +592,11 @@ type afterResp struct {
 	Entries []Entry `json:"entries"`
 	Commit  uint64  `json:"commit"`
 	Term    uint64  `json:"term"`
+	// LastSeq and LastTerm are the answering log's last entry: a new
+	// leader compares whole logs by them (Raft's up-to-date rule), not by
+	// the entries after the commit index, which may be none.
+	LastSeq  uint64 `json:"lastSeq"`
+	LastTerm uint64 `json:"lastTerm"`
 }
 
 // Propose takes an operator event from this instance's client: sequenced
@@ -600,19 +615,14 @@ func (n *Node) Propose(ctx context.Context, e Entry) (Entry, error) {
 	if err := n.call(ctx, leader, "/api/oplog/propose", e, &out); err != nil {
 		return Entry{}, fmt.Errorf("%w (leader %s: %v)", ErrReadOnly, leader, err)
 	}
-	// Committed by the leader: take it and its commit mark now, so the
-	// client that asked sees it at once; a gap means we are behind, so
-	// catch up instead.
-	n.mu.Lock()
-	_, err := n.acceptLocked([]Entry{out.Entry})
-	if err == nil {
-		n.commitTo(out.Commit)
-	}
-	n.mu.Unlock()
-	if err != nil {
-		if cerr := n.CatchUp(ctx); cerr != nil {
-			n.log.Warn("oplog: catch-up after propose", "error", cerr)
-		}
+	// Committed by the leader: catch up from it now, so the client that
+	// asked sees it at once. Through CatchUp (from this instance's commit
+	// index), not by taking the answer's entry and commit index alone: an
+	// entry this instance holds below it may be stale, and only the
+	// leader's log from the commit on proves which entries are the
+	// committed ones (the previous-entry check, as replication has it).
+	if err := n.CatchUp(ctx); err != nil {
+		n.log.Warn("oplog: catch-up after propose", "error", err)
 	}
 	return out.Entry, nil
 }
@@ -642,16 +652,16 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 	// from its commit on carry the entries that replace it. Its own suffix
 	// is one of the candidates.
 	from := n.commit
-	own := afterResp{Entries: n.afterLocked(from), Commit: n.commit}
+	last := n.lastLocked()
+	own := afterResp{Entries: n.afterLocked(from), Commit: n.commit, LastSeq: last, LastTerm: n.termAtLocked(last)}
 	n.mu.Unlock()
-	// The most advanced log is Raft's "up to date": the higher term on its
-	// last entry wins, then the longer log, so an older term's uncommitted
-	// leftovers never outrank a committed suffix.
-	lastTerm := func(r afterResp) uint64 {
-		if len(r.Entries) == 0 {
-			return 0
-		}
-		return r.Entries[len(r.Entries)-1].Term
+	// The most advanced log is Raft's "up to date", compared on each WHOLE
+	// log's last entry: the higher term wins, then the higher seq, so an
+	// older term's uncommitted leftovers never outrank a newer term's
+	// committed log, even one that ends at the commit index (and so sends
+	// no entries). This leader's own log wins a tie.
+	better := func(a, b afterResp) bool {
+		return a.LastTerm > b.LastTerm || a.LastTerm == b.LastTerm && a.LastSeq > b.LastSeq
 	}
 	best, bestSelf := own, true
 	commit := own.Commit
@@ -672,7 +682,7 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 		}
 		answered++
 		commit = max(commit, got.Commit)
-		if lastTerm(got) > lastTerm(best) || (lastTerm(got) == lastTerm(best) && len(got.Entries) > len(best.Entries)) {
+		if better(got, best) {
 			best, bestSelf = got, false
 		}
 	}
@@ -1033,7 +1043,8 @@ func (n *Node) Handler() http.Handler {
 		var after uint64
 		_, _ = fmt.Sscanf(r.URL.Query().Get("after"), "%d", &after)
 		n.mu.Lock()
-		resp := afterResp{Entries: n.afterLocked(after), Commit: n.commit, Term: n.term}
+		last := n.lastLocked()
+		resp := afterResp{Entries: n.afterLocked(after), Commit: n.commit, Term: n.term, LastSeq: last, LastTerm: n.termAtLocked(last)}
 		n.mu.Unlock()
 		writeJSON(w, http.StatusOK, resp)
 	}))

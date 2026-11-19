@@ -44,7 +44,7 @@ func (b *bench) node(t *testing.T, i int, dir string, lead Leadership) *Node {
 		file = filepath.Join(dir, fmt.Sprintf("n%d.jsonl", i))
 	}
 	n, err := New(Options{
-		Self: b.urls[i], Peers: b.urls, Leadership: lead, File: file, Token: "t",
+		Self: b.urls[i], Peers: b.urls, Leadership: lead, File: file, Token: "t", Ephemeral: file == "",
 		Apply: func(e Entry) error {
 			b.mu.Lock()
 			b.applied[i] = append(b.applied[i], e)
