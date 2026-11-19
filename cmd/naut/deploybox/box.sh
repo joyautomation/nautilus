@@ -180,8 +180,9 @@ hold() {
 # every minute. It starts the current release unless it is running: through
 # naut-launch when that sits in ROOT (rt/plcnext-io: it carries the
 # capability for priority:), pinned with taskset when ROOT/cpu holds a CPU,
-# in STATE (where retain.json goes) with ROOT/env's variables. Output goes
-# to STATE/nautilus.log, one generation of a megabyte kept.
+# in STATE (where retain.json goes, exported as STATE_DIRECTORY as systemd
+# does) with ROOT/env's variables. Output goes to STATE/nautilus.log, one
+# generation of a megabyte kept.
 writekeepalive() {
 	cat >"$ROOT/keepalive.sh.new" <<EOF
 #!/bin/sh
@@ -215,6 +216,11 @@ run=$ROOT/current/controller
 [ -x "$ROOT/naut-launch" ] && run=$ROOT/naut-launch
 pin=
 if [ -f "$ROOT/cpu" ] && command -v taskset >/dev/null; then pin="taskset -c $(cat "$ROOT/cpu")"; fi
+# STATE is the controller's state directory, as systemd's StateDirectory=
+# is in service mode: retain.json, the voter state and the users file live
+# there, and every deploy keeps it. ROOT/env may still name another.
+STATE_DIRECTORY=$STATE
+export STATE_DIRECTORY
 if [ -f "$ROOT/env" ]; then set -a; . "$ROOT/env"; set +a; fi
 how=cron
 [ "${1:-}" = start ] && how="naut deploy"
