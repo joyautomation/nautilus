@@ -115,6 +115,9 @@
         }
       }
     },
+    "substitutes": {
+      "$ref": "#/definitions/substitutes"
+    },
     "audit": {
       "type": [
         "object",
@@ -325,6 +328,85 @@
     }
   },
   "definitions": {
+    "substitutes": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "Inputs a person may run the program on a chosen value for while the real sensor is bad or wrong (a stuck level switch reads Good and wrong), for a bounded time, flagged everywhere (quality `substituted`, the <tag>__Substituted tag) and audited. Not alarm shelving, and not a force.",
+      "additionalProperties": false,
+      "properties": {
+        "defaults": {
+          "$ref": "#/definitions/substitute-defaults"
+        },
+        "rules": {
+          "type": "array",
+          "description": "Tried in order; the first rule that matches an input decides it.",
+          "items": {
+            "$ref": "#/definitions/substitute-rule"
+          }
+        }
+      }
+    },
+    "substitute-defaults": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": false,
+      "description": "What a rule gets for a key it leaves out.",
+      "properties": {
+        "max": {
+          "type": "string",
+          "description": "Longest grant, 1m to 168h (7 days). Default 8h."
+        },
+        "role": {
+          "type": "string",
+          "description": "The role allowed to start one (default supervisor). Shown by the API; enforced when roles land (#708)."
+        },
+        "ack-on-start": {
+          "type": "boolean",
+          "description": "The program's start interlock waits (__SubstitutesUnacked) until the substitute is acknowledged. Default false."
+        },
+        "operator-value": {
+          "type": "boolean",
+          "description": "A person may choose the value at start (checked against the tag's type). Default false: the engineer chose the safe value."
+        }
+      }
+    },
+    "substitute-rule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "match",
+        "substitute"
+      ],
+      "properties": {
+        "match": {
+          "type": "string",
+          "description": "An input tag name or glob (case-insensitive). A name with a dot (IOL_P3.Level) substitutes one member of each matching struct tag."
+        },
+        "substitute": {
+          "description": "The value the program runs on. Checked against the tag's type as a write is."
+        },
+        "max": {
+          "type": "string",
+          "description": "Longest grant, 1m to 168h (7 days)."
+        },
+        "role": {
+          "type": "string",
+          "description": "The role allowed to start one."
+        },
+        "ack-on-start": {
+          "type": "boolean",
+          "description": "Wait for an acknowledgement of this substitute before the program's start interlock opens."
+        },
+        "operator-value": {
+          "type": "boolean",
+          "description": "A person may choose the value at start."
+        }
+      }
+    },
     "device": {
       "type": "object",
       "additionalProperties": false,

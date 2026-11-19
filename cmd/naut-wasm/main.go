@@ -494,7 +494,7 @@ func runSuitesAs(root, pattern string, list, text, verbose bool) (string, int, e
 			acceptance.ReportListJSON(&listBuf, suite)
 			continue
 		}
-		rs, err := acceptance.RunSuite(suite, proj.Runtime, acceptance.WithAlarms(proj.AlarmEngine))
+		rs, err := acceptance.RunSuite(suite, proj.Runtime, acceptance.WithAlarms(proj.AlarmEngine), acceptance.WithSubstitutes(proj.AcceptanceSubstitutes()))
 		if err != nil {
 			return "", 0, err
 		}

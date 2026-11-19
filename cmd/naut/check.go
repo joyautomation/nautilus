@@ -769,6 +769,17 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 		fmt.Printf("%s: %d alarm definitions\n", loc.file, len(defs))
 	}
 
+	// Substitutes: every rule's value really fits its tag's type (the rules
+	// themselves were resolved against the input tags when the project
+	// loaded, so one matching nothing is already an error).
+	for _, m := range proj.CheckSubstitutes(rt) {
+		errs++
+		fmt.Printf("%s: error: %s\n", loc.file, m)
+	}
+	if n := len(proj.Substitutes()); n > 0 {
+		fmt.Printf("%s: %d substitutable inputs\n", loc.file, n)
+	}
+
 	// Scenes: every *.scene.json at the root really binds struct tags the
 	// manifest declares, and every kind really finds its members on them.
 	// Same offline discipline as alarms; docs/design/spatial-hmi.md §3b.

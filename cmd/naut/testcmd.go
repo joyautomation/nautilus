@@ -143,7 +143,7 @@ func runTest(args []string) int {
 
 	// The project's virtual devices, when it has any: a suite with
 	// `devices: true` runs against them, in process and in virtual time.
-	runOpts := []acceptance.Option{acceptance.WithAlarms(proj.AlarmEngine)}
+	runOpts := []acceptance.Option{acceptance.WithAlarms(proj.AlarmEngine), acceptance.WithSubstitutes(proj.AcceptanceSubstitutes())}
 	if set, err := composeVirtualDevices(dir, proj.Devices()); err != nil && !errors.Is(err, os.ErrNotExist) && !*list {
 		fmt.Fprintln(os.Stderr, "naut test:", err)
 		return 1

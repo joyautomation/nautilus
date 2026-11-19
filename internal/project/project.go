@@ -101,6 +101,10 @@ type Manifest struct {
 	// ReadManifest, so check, run and the language server see one set.
 	Alarms     *AlarmsConfig `yaml:"alarms"`
 	AlarmFiles []string      `yaml:"alarm-files"`
+	// Substitutes names the driver-fed inputs a person may run the
+	// program on a chosen value for, while the real sensor is bad or
+	// wrong (#707): the value, the longest grant, the role.
+	Substitutes *SubstitutesConfig `yaml:"substitutes"`
 	// Target names a controller this project is DEPLOYED to instead of
 	// being run by the nautilus runtime: an Allen-Bradley Logix
 	// controller (docs/design/logix-authoring.md) or a Siemens S7-1500
@@ -737,6 +741,10 @@ type Project struct {
 	// side-effect-free so check, build and the LSP can use it.
 	Alarms *AlarmsConfig
 
+	// substitutes is the manifest's `substitutes:` resolved against the
+	// input tags (Substitutes).
+	substitutes []SubstituteSpec
+
 	//OPCUA
 	OPCUA *OPCUAConfig
 
@@ -1082,6 +1090,11 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 		return nil, err
 	}
 	markReplicas(opts.Driver, m.Redundancy != nil)
+	substitutes, err := resolveSubstitutes(m.Substitutes, opts.Tags)
+	if err != nil {
+		return nil, err
+	}
+	opts.Substitutable = substitutableRoots(substitutes)
 	if err := checkNetworkSections(m); err != nil {
 		return nil, err
 	}
@@ -1187,18 +1200,19 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 			HistorianURL: m.Server.Historian,
 			HMI:          hmiFS,
 		},
-		sparkplug:  m.Sparkplug,
-		drivers:    drivers,
-		devices:    m.devices,
-		OPCUA:      m.OPCUA,
-		Retain:     m.Retain,
-		Audit:      m.Audit,
-		Redundancy: m.Redundancy,
-		Alarms:     m.Alarms,
-		HMIDir:     hmiDir,
-		HMIMissing: hmiMissing,
-		HMIApp:     hmiApp,
-		HMIScreens: screens,
+		sparkplug:   m.Sparkplug,
+		substitutes: substitutes,
+		drivers:     drivers,
+		devices:     m.devices,
+		OPCUA:       m.OPCUA,
+		Retain:      m.Retain,
+		Audit:       m.Audit,
+		Redundancy:  m.Redundancy,
+		Alarms:      m.Alarms,
+		HMIDir:      hmiDir,
+		HMIMissing:  hmiMissing,
+		HMIApp:      hmiApp,
+		HMIScreens:  screens,
 	}, nil
 }
 

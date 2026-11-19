@@ -130,6 +130,9 @@ func TestSchemaMatchesLoader(t *testing.T) {
 		{"an alarm notifier", goKeys(AlarmNotifyConfig{}), schemaKeys(s.Definitions["alarm-notify"].Properties)},
 		{"an alarm rule", goKeys(alarm.Rule{}), schemaKeys(s.Definitions["alarm-rule"].Properties)},
 		{"an alarm rule's match", goKeys(alarm.Match{}), schemaKeys(s.Definitions["alarm-match"].Properties)},
+		{"substitutes", goKeys(SubstitutesConfig{}), schemaKeys(s.Definitions["substitutes"].Properties)},
+		{"substitute defaults", goKeys(SubstituteDefaults{}), schemaKeys(s.Definitions["substitute-defaults"].Properties)},
+		{"a substitute rule", goKeys(SubstituteRule{}), schemaKeys(s.Definitions["substitute-rule"].Properties)},
 	} {
 		if !reflect.DeepEqual(tc.got, tc.schema) {
 			t.Errorf("%s: the loader accepts %v, the extension's schema declares %v\n"+
