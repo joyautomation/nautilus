@@ -98,10 +98,11 @@ func (g *groovAPI) put(kind string, index int, v float64) error {
 	return err
 }
 
-// get reads one element. The spec documents the answer in the shape of its
-// memory-map reads ({"values":[{"numberValue":…}]}); a bare {"value":…} or
-// [{"value":…}] is accepted too, so a firmware that answers otherwise fails
-// with the body in the message rather than a wrong number.
+// get reads one element. A groov EPIC on firmware 4.1 answers
+// {"dataType":"float","mmpValues":[…]} (checked on the bench); the shape of
+// the spec's memory-map reads ({"values":[{"numberValue":…}]}), a bare
+// {"value":…} and [{"value":…}] are accepted too, so a firmware that answers
+// otherwise fails with the body in the message rather than a wrong number.
 func (g *groovAPI) get(kind string, index int) (float64, error) {
 	raw, err := g.do(http.MethodGet, fmt.Sprintf("%s/index/%d", kind, index), nil)
 	if err != nil {
@@ -112,9 +113,13 @@ func (g *groovAPI) get(kind string, index int) (float64, error) {
 			NumberValue *float64 `json:"numberValue"`
 			Value       *float64 `json:"value"`
 		} `json:"values"`
-		Value *float64 `json:"value"`
+		Value     *float64  `json:"value"`
+		MMPValues []float64 `json:"mmpValues"`
 	}
 	if json.Unmarshal(raw, &shaped) == nil {
+		if len(shaped.MMPValues) > 0 {
+			return shaped.MMPValues[0], nil
+		}
 		if shaped.Value != nil {
 			return *shaped.Value, nil
 		}
