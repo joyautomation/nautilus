@@ -109,14 +109,17 @@ func TestCandidateWitnessIncarnation(t *testing.T) {
 	}
 }
 
-// A lease that lapses silences the candidate for one full lease after its
-// end: 1.98 s + 2 s = 3.98 s (design §3.1, one-way partitions).
+// A lease that lapses silences the candidate for two leases after its end:
+// 1.98 s + 2 × 2 s = 5.98 s (design §3.1, one-way partitions). The
+// standby campaigns up to lease + ρ·lease + lease/4 after the leader's
+// last renewal, so one lease would let a leader that can send but not hear
+// campaign first and win the standby's voter for another lease.
 func TestCandidateBackOffAfterLapse(t *testing.T) {
 	c := newC(t, cfgA(), 0, 0)
 	r := c.Tick(0, "", 0, true)
 	c.OnReply(at(10*ms), granted("A", r, 0))
 	c.OnReply(at(10*ms), granted("B", r, 0))
-	for now := 500 * ms; now < 3980*ms; now += 500 * ms {
+	for now := 500 * ms; now < 5980*ms; now += 500 * ms {
 		if r := c.Tick(at(now), "A", 0, true); r != nil && now >= 1980*ms {
 			t.Fatalf("sent %+v at %v, inside the back-off", r, now)
 		}
@@ -124,7 +127,7 @@ func TestCandidateBackOffAfterLapse(t *testing.T) {
 	if c.Leading(at(1980 * ms)) {
 		t.Fatal("still leading after the lease end")
 	}
-	r = c.Tick(at(3980*ms), "A", 0, true)
+	r = c.Tick(at(5980*ms), "A", 0, true)
 	if r == nil || r.Term != 2 {
 		t.Fatalf("after the back-off: %+v, want a campaign for term 2", r)
 	}

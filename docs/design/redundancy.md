@@ -109,8 +109,17 @@ redundancy:
   than every term it has promised, and its current promise to anyone else has run out. A grant
   promises not to grant to anyone else for `lease`, timed from when the voter **received** the
   request.
-- **Renewal** is the same request at the same term, every `lease/4`. A renewal that changes
-  nothing the voter has persisted is answered without a new fsync.
+- **Renewal** is the same request at the same term, every `lease/4`, marked as a renewal. A
+  renewal that changes nothing the voter has persisted is answered without a new fsync.
+- **Re-term on a refused renewal.** A voter can hold a promise that the leader's renewals
+  can't satisfy: a standby that lost a contested campaign has promised itself the same term
+  (or a higher one), and a voter that was in its restart wait when the leader won may have
+  promised its own candidate since. A leader whose renewal is refused by a voter that has
+  promised its term or a later one renews at `maxSeen + 1` from then on. A majority at the new
+  term extends the lease, and the old lease keeps running until then. Once the standby's
+  promise to itself runs out, its voter grants the leader again. Without this, the pair
+  runs on {leader, witness} alone and a witness blip ends a healthy lease (found by the
+  simulator, test plan F13 and F19).
 - **Every request is named, and its grant answers only it.** A request carries a per-boot
   random nonce and an id; a grant echoes both and names the controller it was granted to. A
   grant counts only toward the request it answers: addressed to this controller, from this
@@ -123,7 +132,13 @@ redundancy:
   under another name included. A configuration with ρ outside (0, 10%], a zero nonce, or
   names that aren't three distinct voters is refused at start.
 - **Campaigning.** A standby looks every `lease/4`. It campaigns on its first look after the
-  lease it last saw renewed has expired by its own clock, plus ρ. One campaign is in flight at
+  lease it last saw renewed has expired by its own clock, plus ρ. "Saw renewed" counts every
+  renewal its own voter received from the other controller, **granted or refused**, timed
+  one lease from receipt. Without that, a standby whose voter refused the leader (in its
+  restart wait, or promised to itself) campaigns under a live leader at every look, and its
+  voter keeps promising itself. That only delays a campaign: a leader that can send but not
+  hear stops sending when it backs off (below), so the standby's wait ends one lease after its
+  last renewal. One campaign is in flight at
   a time. A campaign refused by a majority is retried after a seeded per-node jitter in
   `[0, lease/4)`, so two controllers refused in the same round don't retry in lockstep.
 - **The leader's own clock.** The leader times its lease from when it **sent** the request,
@@ -150,9 +165,18 @@ redundancy:
 - **One-way partitions and the back-off.** A leader that can send but not receive keeps the
   voters' promises alive with renewals it never hears answered, so nobody else can be elected.
   A leader whose lease has lapsed without a confirmed majority therefore **sends nothing to the
-  voters for one full lease** before it campaigns again. A campaign that no majority even
-  answered within a lease backs off the same way. The voters' promises run out and a
-  reachable controller can win. The back-off silences only the candidate: the same node's
+  voters for two leases** after its lease ended before it campaigns again. A campaign that no
+  majority even answered within a lease backs off for two leases from its send. The voters'
+  promises run out and a reachable controller wins first. Two, not one: the standby campaigns
+  up to `lease + ρ·lease + lease/4` after the last renewal it saw. A leader back after one
+  lease would campaign at about the same moment, win the standby's voter with a campaign it
+  can't hear answered, and hold the takeover off for another lease (the simulator measured
+  a takeover 6.3–6.55 s after the cut with one lease, 3.8–4.55 s with two, at a 2 s lease).
+  **The trade, accepted:** a lapsed leader that is the only viable candidate also waits two
+  leases. With the standby already down and the witness link out for a full lease, the pair
+  is leaderless for 4.0 s instead of 2.0 s (a half-lease blip costs nothing either way). That
+  is a double fault, and the one-way leader is a single fault whose recovery the plant sees,
+  so the faster F9 takeover wins. The back-off silences only the candidate: the same node's
   voter keeps answering.
 - **The witness incarnation.** The witness draws a random incarnation id when it first starts
   and keeps it in its state file. A and B record, in their own fsynced state, the incarnation
@@ -187,7 +211,16 @@ redundancy:
     Deployment: Kubernetes won't start a second copy of a StatefulSet pod while it can't
     confirm that the first is gone. The incarnation check covers a force-delete.
 - **The term is the fencing token.** It goes on every stream frame and every proxied API call,
-  and receivers refuse an older term. Field devices can't check a token: a Modbus relay board
+  and receivers refuse an older term. The token is the **epoch**: the term leadership was
+  acquired in. A re-term on renewal (above) moves the vote term but not the epoch, so a write
+  posted under the token is still valid while the lease runs on without a gap (#797 checks it
+  right before the send). Any gap followed by a new acquisition changes it, because terms only
+  rise and no term is led twice. The voters and the witness work with the vote term.
+  **The rule for every other part (the gate, the stream, the proxy, oplog): stamp and compare
+  the epoch (`Term()`) only, and never compare it with a vote term (`VoteTerm()`).** `Term()` is
+  0 on a controller that isn't leading, so a receiver refuses a token older than the highest
+  token it has received **from a leader**, never one compared against its own `Term()`. They are two
+  number spaces. A test keeps `VoteTerm` from being called outside `quorum/`. Field devices can't check a token: a Modbus relay board
   knows no terms. **At the field, safety rests on timing**: the old leader's gate has closed
   before a new lease can be granted, and the devices' own comm watchdogs act on silence.
 
