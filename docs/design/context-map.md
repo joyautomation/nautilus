@@ -95,7 +95,11 @@ break one changes this section first and says why.
   of them.
 - `devbind` never imports `runtime`, `server`, `alarm`, `acceptance`,
   `internal/project`, `virtdev` or the CLI: the manifest composes it.
-  Field drivers never import `devbind` or `devprofile`.
+  Field drivers never import `devbind`, `devprofile` or `iolink`.
+- `iolink/iodd` (the IODD model and process data codec) imports no other
+  nautilus package. `iolink` keeps devbind's distance: no `runtime`,
+  `server`, `alarm`, `acceptance`, `internal/project`, `internal/lsp`,
+  `virtdev` or the CLI. `devbind` may import either.
 - `virtdev` is imported only by the CLI and Verification: virtual
   devices are a test and commissioning context, never part of a running
   controller.

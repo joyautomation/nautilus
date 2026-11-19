@@ -55,8 +55,8 @@ func rules(u universe) []rule {
 		},
 		{
 			from: []string{"modbus", "eip", "optommp", "plcnext", "profinet", "hw", "snmp", "redfish", "prom", "replay", "sparkplug/host"},
-			to:   []string{"runtime", "server", "alarm", "acceptance", "internal/project", "internal/lsp", "cmd", "devbind", "devprofile"},
-			why:  "drivers sit behind io.Driver and the tag file; the protocol side of the map never reaches back into the runtime side, nor knows the device library above it",
+			to:   []string{"runtime", "server", "alarm", "acceptance", "internal/project", "internal/lsp", "cmd", "devbind", "devprofile", "iolink"},
+			why:  "drivers sit behind io.Driver and the tag file; the protocol side of the map never reaches back into the runtime side, nor knows the device library or the IO-Link layer above it",
 		},
 		{
 			from: []string{"siemens/station", "siemens/tiad", "siemens/webapi", "siemens/writer", "siemens/importer"},
@@ -72,6 +72,16 @@ func rules(u universe) []rule {
 			from: []string{"devprofile"},
 			to:   u.allBut(),
 			why:  "the device profile format is a published language: the manifest, virtual devices and the CLI read it, and it reads none of them",
+		},
+		{
+			from: []string{"iolink/iodd"},
+			to:   u.allBut(),
+			why:  "the IODD model and process data codec are a published language like the profile format: the device library, the IO-Link adapter and the CLI read it, and it reads none of them",
+		},
+		{
+			from: []string{"iolink"},
+			to:   []string{"runtime", "server", "alarm", "acceptance", "internal/project", "internal/lsp", "virtdev", "cmd"},
+			why:  "the IO-Link layer derives a port device and adapts its master's driver, as devbind does; the manifest composes it, so it never reaches into the runtime side",
 		},
 		{
 			from: []string{"devbind"},
