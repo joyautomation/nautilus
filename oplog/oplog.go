@@ -823,8 +823,10 @@ func (n *Node) sequenceLocked(ctx context.Context, e Entry) (Entry, error) {
 	// a majority to catch up with (a redundant pair, #710) would not apply
 	// a write the operator was told was done. Best effort, and only to the
 	// replicas that stored it (one that is down would cost every write a
-	// second timeout): one the push misses learns it at the next heartbeat
-	// or write.
+	// second timeout): one the push misses (the leader dies first, or the
+	// push to it fails, only logged) learns it at its next heartbeat
+	// (≤ lease/2 in a pair) or write. It runs under seqMu, so a holder that
+	// stalls delays every write by up to the call timeout.
 	for _, p := range holders {
 		if err := n.replicateTo(ctx, p, nil, term, e.Seq); err != nil {
 			n.log.Debug("oplog: commit push", "peer", p, "error", err)

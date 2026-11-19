@@ -55,8 +55,9 @@ bumpless, and the measured takeover time is published instead.
     proposed once the leader knows (its pings, every half lease). A write sent before it
     knew is stored and answered "outcome unknown"; it commits when the peer returns. The
     leader pushes each write's commit to the follower before answering, so a follower that
-    takes over after the leader died still applies a write the operator was told was done
-    (unless that one push was lost too).
+    takes over after the leader died still applies a write the operator was told was done.
+    The residual window: the leader dies between its commit and the push, or the push to a
+    replica fails (its error is only logged), until that replica's next heartbeat (≤ lease/2).
 - **The witness can be rebuilt from scratch.** A witness that comes back with an empty disk
   loses no committed entry while both controllers are up:
   - **Its votes:** it grants nothing for one lease (§3.1).
@@ -658,6 +659,11 @@ Takeover time is published as a formula and measured, never promised as a single
 | `L_op` | a pair's operator-intent log catch-up before the first scan (`SyncLeader`, §1): about 0 when the old leader's box refuses the connection or answers, and up to the log's call timeout (`lease/2`, at least 500 ms) when it is silent; the runtime gives up at 2 s and runs not synced. Until the witness is the log's third replica (#710 3b-4), a takeover after the old leader died never has the majority to sync, so it always runs not synced (it keeps what it applied, `catch-up-failed` on what came from retain) |
 | `S` | one scan |
 | `O` | the full output set going out |
+
+**Operator writes, not takeover time.** The leader pushes each operator-intent write's commit to
+the replicas that stored it before answering, under the log's sequencing lock, so a holder that
+stalls delays every write by up to the log's call timeout (`lease/2`). It is not in the takeover
+path, and no fix is needed now (#1030 review).
 
 **An I/O-health handover** (§3.2) waits for its hold-off (3 × lease) first, then hands over by
 `Release`, so `L_rem` is 0.
