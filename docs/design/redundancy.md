@@ -116,6 +116,15 @@ redundancy:
     `a` under any other until that promise has run out, and raises
     `redundancy.duplicate-member`. A real restart of `a` waits out its restart wait first, by
     when the promise is over, so it costs a restart nothing.
+  - **The known gap (#1029, blocks lifting `experimental`).** The rule acts only at a voter
+    that holds a running promise to the original. A clone brings its own copy of the
+    original's voter, so it needs just one more grant. When the original is partitioned from
+    one voter (the A–B link down, or A cut from the witness), that voter's promise to it
+    lapses, and the clone wins it after waiting out a lease. It then leads on {clone, that
+    voter} alongside the original on the other two, and `Duplicates` stays 0, because that
+    voter never saw the original's nonce. Candidate fixes are on #1029: the 3b-2 hello's
+    instance nonce, binding the state to the box (machine-id), or the witness relaying the
+    leader's nonce. The guide says never to clone a controller's disk.
 - **`NAUTILUS_NODE` set with no pair in the manifest** is refused: each box would run as its
   own leader against the same I/O.
 - **A pair member's tag API must be reachable by its peer.** The manifest's default

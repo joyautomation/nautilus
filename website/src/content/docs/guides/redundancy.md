@@ -311,10 +311,19 @@ The voter state, `quorum.state`, lives in the systemd state directory
 (`/var/lib/nautilus` under `naut deploy`) or in `redundancy: state-dir:`.
 Every `naut deploy` step keeps it, and a backup never contains it. It
 records which controller wrote it: a controller refuses to start over
-the other one's file, and two processes running as the same member (a
-copied env file, a cloned disk or VM) are refused by the voters and
-reported as `redundancy.duplicate-member`. Don't clone a running
-controller to make the other one.
+the other one's file. A second process running as the same member (a
+cloned disk or VM, whose state and env both match) is refused by every
+voter that still holds a running promise to the original, and reported
+as `redundancy.duplicate-member`.
+
+:::danger[Never clone a controller's disk]
+The voters' check is not complete. A clone that waits out a lease while
+the original is partitioned from its peer or from the witness can still
+lead alongside it (tracked in
+[#1029](https://github.com/joyautomation/nautilus/issues/1029), which
+blocks lifting `experimental`). Build the second controller from a fresh
+install, never from a copy of the first.
+:::
 
 Each controller's tag API must be reachable by the other (a standby
 forwards writes to the leader). The manifest's default address is
