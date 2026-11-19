@@ -1,7 +1,9 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -73,6 +75,37 @@ type substitutesResponse struct {
 	Rules       []SubstituteRule `json:"rules"`
 	// Started is the entry a POST just began.
 	Started *substituteView `json:"started,omitempty"`
+	// Kept says whether the change this answer reports is saved in the
+	// retain store, so it survives a restart or takeover. A start is
+	// always kept (one that cannot be saved is refused); a stop or an
+	// acknowledgement that could not be saved still took effect, and
+	// __Substitute_Fault says so until the next save.
+	Kept *bool `json:"kept,omitempty"`
+	// Warning says what an answer with kept false means for the plant.
+	Warning string `json:"warning,omitempty"`
+}
+
+// substituteStartRefusal is the answer to a refused start: 503 when it
+// could not be saved (nothing runs; retry), 409 when a newer change to
+// the address won while it was being saved (re-read and decide again),
+// 400 for a start that was never valid.
+func substituteStartRefusal(err error) (int, string) {
+	switch {
+	case errors.Is(err, runtime.ErrSubstituteNotSaved):
+		return http.StatusServiceUnavailable, err.Error()
+	case errors.Is(err, runtime.ErrSubstituteSuperseded):
+		return http.StatusConflict, err.Error() + ": re-read GET /api/substitutes and decide again"
+	}
+	return http.StatusBadRequest, err.Error()
+}
+
+// notKept is the warning for a stop or acknowledgement that took effect
+// here but was not saved.
+func notKept(serr error) string {
+	if errors.Is(serr, runtime.ErrNotLeading) {
+		return "this controller lost the lease during the save: the change took effect here, but the substitute may still be active (or unacknowledged) on the next leader"
+	}
+	return "the change took effect but could not be saved (__Substitute_Fault is up): a restart before the next save may bring the old state back"
 }
 
 func (s *Server) substituteRule(name string) (SubstituteRule, bool) {
@@ -117,6 +150,22 @@ func (s *Server) refuseSubstitute(w http.ResponseWriter) bool {
 	return false
 }
 
+// substituteSaveWait bounds how long a substitute request waits for the
+// saver to take its save; the store bounds the save itself.
+const substituteSaveWait = 10 * time.Second
+
+// refuseNotLeading answers 503 when this replica does not lead: a start,
+// stop or acknowledgement it took would be undone at its next takeover
+// (the shared store's set replaces its table). The request reaches a
+// standby only when no leader is known to forward it to.
+func (s *Server) refuseNotLeading(w http.ResponseWriter) bool {
+	if s.rt.Leading() {
+		return false
+	}
+	http.Error(w, "no leader: this replica is standing by; retry once a leader is elected", http.StatusServiceUnavailable)
+	return true
+}
+
 func (s *Server) handleSubstituteStart(w http.ResponseWriter, r *http.Request) {
 	var req substituteRequest
 	derr := json.NewDecoder(r.Body).Decode(&req)
@@ -129,6 +178,9 @@ func (s *Server) handleSubstituteStart(w http.ResponseWriter, r *http.Request) {
 	}
 	if derr != nil || req.Name == "" {
 		http.Error(w, `expected {"name": ..., "value"?: ..., "seconds"?: ...}`, http.StatusBadRequest)
+		return
+	}
+	if s.refuseNotLeading(w) {
 		return
 	}
 	rule, ok := s.substituteRule(req.Name)
@@ -162,15 +214,20 @@ func (s *Server) handleSubstituteStart(w http.ResponseWriter, r *http.Request) {
 			d = time.Duration(sec * float64(time.Second))
 		}
 	}
-	e, err := s.rt.Substitute(rule.Tag, runtime.SubstituteRequest{Value: value, For: d, By: s.principal(r), AckOnStart: rule.AckOnStart})
+	ctx, cancel := context.WithTimeout(r.Context(), substituteSaveWait)
+	defer cancel()
+	e, err := s.rt.SubstituteSaved(ctx, rule.Tag, runtime.SubstituteRequest{Value: value, For: d, By: s.principal(r), AckOnStart: rule.AckOnStart})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		code, msg := substituteStartRefusal(err)
+		http.Error(w, msg, code)
 		return
 	}
 	logAction(r, "substitute: started", "tag", e.Name, "id", e.ID, "for", d)
+	kept := true
 	resp := s.substitutesResponse()
 	v := s.substituteView(e)
 	resp.Started = &v
+	resp.Kept = &kept
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -188,13 +245,23 @@ func (s *Server) handleSubstituteStop(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "the substitute's id is a number", http.StatusBadRequest)
 		return
 	}
-	e, ok := s.rt.Restore(id, s.principal(r))
+	if s.refuseNotLeading(w) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), substituteSaveWait)
+	defer cancel()
+	e, ok, kept, serr := s.rt.RestoreSaved(ctx, id, s.principal(r))
 	if !ok {
 		http.Error(w, fmt.Sprintf("no substitute %d is active (it ended, expired, or a newer one replaced it)", id), http.StatusNotFound)
 		return
 	}
-	logAction(r, "substitute: ended", "tag", e.Name, "id", e.ID)
-	writeJSON(w, http.StatusOK, s.substitutesResponse())
+	logAction(r, "substitute: ended", "tag", e.Name, "id", e.ID, "kept", kept, "saveError", serr)
+	resp := s.substitutesResponse()
+	resp.Kept = &kept
+	if !kept {
+		resp.Warning = notKept(serr)
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 type substituteAckRequest struct {
@@ -215,13 +282,23 @@ func (s *Server) handleSubstituteAck(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `expected {"ids": [1, 2]}: an empty list acknowledges nothing`, http.StatusBadRequest)
 		return
 	}
-	acked := s.rt.AckSubstitutes(req.IDs, s.principal(r))
+	if s.refuseNotLeading(w) {
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), substituteSaveWait)
+	defer cancel()
+	acked, kept, serr := s.rt.AckSubstitutesSaved(ctx, req.IDs, s.principal(r))
 	if len(acked) == 0 {
 		http.Error(w, "nothing to acknowledge: those substitutes ended, were replaced, do not wait for an acknowledgement, or already have one", http.StatusConflict)
 		return
 	}
-	logAction(r, "substitute: acknowledged", "count", len(acked))
-	writeJSON(w, http.StatusOK, s.substitutesResponse())
+	logAction(r, "substitute: acknowledged", "count", len(acked), "kept", kept, "saveError", serr)
+	resp := s.substitutesResponse()
+	resp.Kept = &kept
+	if !kept {
+		resp.Warning = notKept(serr)
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // substituteByID finds the active entry with this ID.
@@ -319,24 +396,66 @@ func (s *Server) substituteAckTarget(_ *http.Request, body []byte) auditTarget {
 	return auditTarget{target: s.substituteNames(req.IDs), detail: map[string]any{"ids": req.IDs}}
 }
 
-// auditSubstituteEvent journals what the runtime did on its own: an expiry
-// has no request, so it is recorded here, by "system", with the value the
-// program ran on and the live value it went back to. A start, stop and
-// acknowledgement are already journalled by the route that made them.
+// auditSubstituteEvent journals what the runtime did on its own:
+//
+//   - an expiry (substitute.expire) has no request, so it is recorded here,
+//     by "system", with the value the program ran on and the live value it
+//     went back to; its reason says expired, expired-while-down (a restart)
+//     or refused-at-load (a deploy no longer allows it);
+//
+//   - a fault and its clearing (substitute.fault, substitute.fault-clear),
+//     so a transient __Substitute_Fault is never invisible: the alarm
+//     layer latches, the journal records.
+//
+//   - a takeover's superseded stop (substitute.stop by system): the entry
+//     was not in the shared store, and if it began just before this
+//     replica lost the lease, nobody else recorded its end.
+//
+// A start, stop and acknowledgement are already journalled by the route
+// that made them.
 func (s *Server) auditSubstituteEvent(ev runtime.SubstituteEvent) {
-	if ev.Kind != runtime.SubstituteEventExpire {
-		return
-	}
 	e := ev.Entry
-	s.audit.record(audit.Entry{
-		TS:     time.UnixMilli(ev.AtMs),
-		User:   ev.By,
-		Source: audit.SourceSystem,
-		Action: "substitute.expire",
-		Target: e.Name,
-		Before: map[string]any{"id": e.ID, "value": e.Value, "by": e.By},
-		After:  map[string]any{"live": e.Live},
-		Detail: map[string]any{"reason": ev.Reason, "grantedMs": e.GrantedMs, "untilMs": e.UntilMs},
-		Result: audit.ResultOK,
-	})
+	switch ev.Kind {
+	case runtime.SubstituteEventExpire:
+		s.audit.record(audit.Entry{
+			TS:     time.UnixMilli(ev.AtMs),
+			User:   ev.By,
+			Source: audit.SourceSystem,
+			Action: "substitute.expire",
+			Target: e.Name,
+			Before: map[string]any{"id": e.ID, "value": e.Value, "by": e.By},
+			After:  map[string]any{"live": e.Live},
+			Detail: map[string]any{"reason": ev.Reason, "grantedMs": e.GrantedMs, "untilMs": e.UntilMs},
+			Result: audit.ResultOK,
+		})
+	case runtime.SubstituteEventStop:
+		if ev.Reason != runtime.SubstituteReasonSuperseded {
+			return // a person's stop or a replace: its route journalled it
+		}
+		s.audit.record(audit.Entry{
+			TS:     time.UnixMilli(ev.AtMs),
+			User:   ev.By,
+			Source: audit.SourceSystem,
+			Action: "substitute.stop",
+			Target: e.Name,
+			Before: map[string]any{"id": e.ID, "value": e.Value, "by": e.By},
+			After:  map[string]any{"live": e.Live},
+			Detail: map[string]any{"reason": ev.Reason, "untilMs": e.UntilMs},
+			Result: audit.ResultOK,
+		})
+	case runtime.SubstituteEventFault, runtime.SubstituteEventFaultClear:
+		detail := map[string]any{"reason": ev.Reason}
+		if e.ID != 0 {
+			detail["id"], detail["untilMs"], detail["grantedMs"] = e.ID, e.UntilMs, e.GrantedMs
+		}
+		s.audit.record(audit.Entry{
+			TS:     time.UnixMilli(ev.AtMs),
+			User:   ev.By,
+			Source: audit.SourceSystem,
+			Action: "substitute." + ev.Kind,
+			Target: e.Name,
+			Detail: detail,
+			Result: audit.ResultOK,
+		})
+	}
 }

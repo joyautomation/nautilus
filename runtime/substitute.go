@@ -68,6 +68,10 @@ type Substitution struct {
 	// acknowledgement of this substitute. Acked says whether it has had one.
 	AckOnStart bool `json:"ackOnStart"`
 	Acked      bool `json:"acked"`
+	// Fault, when set, says what about this entry needs a person while it
+	// runs on (SubstituteReasonClockCapped); __Substitute_Fault is true
+	// while any entry has one. It clears when the entry ends.
+	Fault string `json:"fault,omitempty"`
 	// RemainingMs is the time left, on the clock the runtime times it on
 	// (not the wall clock: see substitute_expiry.go). Filled in by
 	// Runtime.Substitutes.
@@ -144,7 +148,7 @@ func (ss *subSet) whole() bool {
 // substituteLocked starts a substitute on addr (a tag or a member path)
 // with the entry e (its ID, timing and who are filled in by the caller),
 // and returns any entry it replaced on the same address. Caller holds t.mu.
-func (t *Tags) substituteLocked(addr string, v any, e subEntry) (Substitution, *Substitution, error) {
+func (t *Tags) substituteLocked(addr string, v any, e subEntry) (Substitution, *subEntry, error) {
 	root, path, tv, err := t.resolveForceAddr(addr)
 	if err != nil {
 		return Substitution{}, nil, err
@@ -178,10 +182,11 @@ func (t *Tags) substituteLocked(addr string, v any, e subEntry) (Substitution, *
 	}
 	e.Name, e.path, e.val = ir.JoinPath(root, path), path, ir.CopyValue(sv)
 	e.Value = plain(e.val)
-	var replaced *Substitution
+	var replaced *subEntry
 	for i := range ss.entries {
 		if ss.entries[i].Name == e.Name {
-			old := ss.entries[i].Substitution
+			old := ss.entries[i]
+			old.Substitution = t.reportLocked(ss, &old)
 			replaced = &old
 			ss.entries = append(ss.entries[:i], ss.entries[i+1:]...)
 			break
@@ -346,25 +351,32 @@ func (t *Tags) eachSubstitutedRoot(fn func(root string, s subState)) {
 // already has one ends that entry (a stop, reason "replaced") and starts
 // a new one (never an extension). The returned entry carries its ID.
 func (r *Runtime) Substitute(addr string, req SubstituteRequest) (Substitution, error) {
+	s, _, err := r.substitute(addr, req)
+	return s, err
+}
+
+// substitute is Substitute, and also returns the entry it replaced (with
+// its timing), for undoStart.
+func (r *Runtime) substitute(addr string, req SubstituteRequest) (Substitution, *subEntry, error) {
 	if req.For <= 0 {
-		return Substitution{}, fmt.Errorf("substitute %s: a duration is required", addr)
+		return Substitution{}, nil, fmt.Errorf("substitute %s: a duration is required", addr)
 	}
 	// Only the leader starts one: a start a standby took would be hidden
 	// from the leader's list and stop, yet survive a takeover and go live
 	// later. A replicated entry brings its own ID (PR 3's oplog) and is
 	// every replica's to apply.
 	if req.ID == 0 && r.standby() {
-		return Substitution{}, fmt.Errorf("substitute %s: this replica is not leading: start it on the leader", addr)
+		return Substitution{}, nil, fmt.Errorf("substitute %s: this replica is not leading: start it on the leader", addr)
 	}
 	root, _ := ir.SplitAddress(addr)
 	if _, _, whole := r.tags.lookupName(addr); whole {
 		root = addr
 	}
 	if !r.isInput(root) {
-		return Substitution{}, fmt.Errorf("substitute %s: only a driver-bound input can be substituted", addr)
+		return Substitution{}, nil, fmt.Errorf("substitute %s: only a driver-bound input can be substituted", addr)
 	}
 	if !r.substitutable(root) {
-		return Substitution{}, fmt.Errorf("substitute %s: %s is not substitutable (no substitutes: rule names it), so it has no %s flag for the logic to interlock on", addr, root, SubstitutedSuffix)
+		return Substitution{}, nil, fmt.Errorf("substitute %s: %s is not substitutable (no substitutes: rule names it), so it has no %s flag for the logic to interlock on", addr, root, SubstitutedSuffix)
 	}
 	r.subMu.Lock()
 	defer r.subMu.Unlock()
@@ -373,7 +385,13 @@ func (r *Runtime) Substitute(addr string, req SubstituteRequest) (Substitution, 
 		id = r.subSeq + 1
 	}
 	if r.tags.hasSubstituteID(id) {
-		return Substitution{}, fmt.Errorf("substitute %s: entry %d is already active", addr, id)
+		return Substitution{}, nil, fmt.Errorf("substitute %s: entry %d is already active", addr, id)
+	}
+	// An ID is not issued twice, across restarts too (the high-water
+	// mark is retained): an entry at or below it that is not active has
+	// ended, and a stale stop naming it must not end a new one.
+	if id <= r.subSeq {
+		return Substitution{}, nil, fmt.Errorf("substitute %s: entry %d has ended, and an entry's ID is never reused", addr, id)
 	}
 	wall := r.wallNow()
 	e := subEntry{
@@ -388,31 +406,41 @@ func (r *Runtime) Substitute(addr string, req SubstituteRequest) (Substitution, 
 	s, replaced, err := r.tags.substituteLocked(addr, req.Value, e)
 	r.tags.mu.Unlock()
 	if err != nil {
-		return Substitution{}, fmt.Errorf("substitute %s: %w", addr, err)
+		return Substitution{}, nil, fmt.Errorf("substitute %s: %w", addr, err)
 	}
 	if id > r.subSeq {
 		r.subSeq = id
 	}
 	evs := make([]SubstituteEvent, 0, 2)
 	if replaced != nil {
-		evs = append(evs, SubstituteEvent{Kind: SubstituteEventStop, Reason: SubstituteReasonReplaced, Entry: *replaced, By: req.By, AtMs: s.StartMs})
+		evs = append(evs, SubstituteEvent{Kind: SubstituteEventStop, Reason: SubstituteReasonReplaced, Entry: replaced.Substitution, By: req.By, AtMs: s.StartMs})
+		evs = append(evs, faultCleared(replaced.Substitution, s.StartMs)...)
 	}
 	r.subEvents.push(append(evs, SubstituteEvent{Kind: SubstituteEventStart, Entry: s, By: req.By, AtMs: s.StartMs}))
-	return s, nil
+	return s, replaced, nil
 }
 
 // Restore ends the substitute entry with this ID on behalf of by, and
 // reports it; false when no such entry is active (it ended already,
-// expired, or a newer entry has replaced it). The address goes back to its
-// live value at once.
+// expired, or a newer entry has replaced it), or when this replica is not
+// leading: a stop a standby took would be undone at its next takeover,
+// when the store's (or the log's) set replaces its table. The address
+// goes back to its live value at once.
 func (r *Runtime) Restore(id uint64, by string) (Substitution, bool) {
+	if r.standby() {
+		return Substitution{}, false
+	}
 	r.subMu.Lock()
 	defer r.subMu.Unlock()
 	r.tags.mu.Lock()
 	s, ok := r.tags.unsubstituteLocked(id)
 	r.tags.mu.Unlock()
+	if !ok {
+		s, ok = r.pendingRestore(id) // retained, still waiting for its input
+	}
 	if ok {
-		r.subEvents.push([]SubstituteEvent{{Kind: SubstituteEventStop, Entry: s, By: by, AtMs: r.wallNow().UnixMilli()}})
+		at := r.wallNow().UnixMilli()
+		r.subEvents.push(append([]SubstituteEvent{{Kind: SubstituteEventStop, Entry: s, By: by, AtMs: at}}, faultCleared(s, at)...))
 	}
 	return s, ok
 }
@@ -429,18 +457,17 @@ func (r *Runtime) Substitutes() []Substitution {
 	return out
 }
 
+// Leading reports whether this replica takes operator intent on
+// substitutes: a start, stop or acknowledgement (always, without a
+// coordinator). A server answers 503 otherwise, rather than change a table
+// the next takeover would replace.
+func (r *Runtime) Leading() bool { return !r.standby() }
+
 // hasSubstituteID reports whether an entry with this ID is active.
 func (t *Tags) hasSubstituteID(id uint64) bool {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	for _, ss := range t.subs {
-		for i := range ss.entries {
-			if ss.entries[i].ID == id {
-				return true
-			}
-		}
-	}
-	return false
+	return t.hasIDLocked(id)
 }
 
 // lookupName reports a tag's stored name, and whether name itself is a

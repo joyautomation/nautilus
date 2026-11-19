@@ -45,7 +45,7 @@ func TestSubstituteRemainderTable(t *testing.T) {
 		{"takeover 31 s behind: capped, a fault", remainTakeover, t0.Add(-31 * time.Second), h, false, true},
 		{"takeover 1 h behind: capped, a fault", remainTakeover, t0.Add(-h), h, false, true},
 	} {
-		got := substituteRemainder(t0, until, h, tc.now, tc.mode)
+		got := substituteRemainder(t0, until, h, tc.now, time.Time{}, tc.mode)
 		want := remainder{left: tc.left, expired: tc.expired, capped: tc.capped}
 		if got != want {
 			t.Errorf("%s: got %+v; want %+v", tc.name, got, want)
@@ -519,14 +519,7 @@ func TestTakeoverRetimesSubstitutesFromUntil(t *testing.T) {
 		if l := rt.Substitutes(); len(l) != 1 || l[0].RemainingMs != (20*time.Minute).Milliseconds() {
 			t.Fatalf("after the takeover: %+v; want the 20 min this process still held", l)
 		}
-		select {
-		case e := <-events:
-			if e.Kind != SubstituteEventFault || e.Reason != SubstituteReasonClockCapped {
-				t.Fatalf("event %+v; want fault/clock-capped", e)
-			}
-		case <-time.After(5 * time.Second):
-			t.Fatal("no fault event for the stepped clock")
-		}
+		waitFault(t, events, SubstituteReasonClockCapped)
 		clk.advance(20 * time.Minute)
 		rt.Scan()
 		if rt.Tags().SubstituteCount() != 0 {
@@ -548,15 +541,28 @@ func TestTakeoverRetimesSubstitutesFromUntil(t *testing.T) {
 		if l := rt.Substitutes(); len(l) != 1 || l[0].RemainingMs != time.Hour.Milliseconds() {
 			t.Fatalf("after the takeover: %+v; want capped at the granted hour", l)
 		}
+		waitFault(t, events, SubstituteReasonClockCapped)
+	})
+}
+
+// waitFault waits for a fault event with this reason, passing over the
+// events before it (the start, delivered to the first listener).
+func waitFault(t *testing.T, events <-chan SubstituteEvent, reason string) SubstituteEvent {
+	t.Helper()
+	deadline := time.After(5 * time.Second)
+	for {
 		select {
 		case e := <-events:
-			if e.Kind != SubstituteEventFault || e.Reason != SubstituteReasonClockCapped {
-				t.Fatalf("event %+v; want fault/clock-capped", e)
+			if e.Kind == SubstituteEventFault {
+				if e.Reason != reason {
+					t.Fatalf("fault event %+v; want reason %s", e, reason)
+				}
+				return e
 			}
-		case <-time.After(5 * time.Second):
-			t.Fatal("no fault event for the capped remainder")
+		case <-deadline:
+			t.Fatalf("no fault event (%s)", reason)
 		}
-	})
+	}
 }
 
 // A standby never scans, so it never expires a substitute on its own

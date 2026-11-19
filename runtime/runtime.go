@@ -133,7 +133,7 @@ type Options struct {
 	// Substitutable names the inputs a substitute may be started on
 	// (#707; Runtime.Substitute refuses any other). Each gets a read-only
 	// BOOL companion <name>__Substituted, and a non-empty list adds
-	// __SubstitutesUnacked and __Substitute_Expired: declared here, so the
+	// __SubstitutesUnacked, __Substitute_Expired and __Substitute_Fault: declared here, so the
 	// programs bind them like any tag. See substitute_expiry.go.
 	Substitutable []string
 }
@@ -241,6 +241,17 @@ type Runtime struct {
 	subRoots  map[string]struct{}
 	mono      func() time.Duration
 	subEvents subEventQueue
+	// subPending are retained substitutes waiting for their input to
+	// exist (its first read), with how to derive their remainder; guarded
+	// by subMu, counted in subPendingN for the scan. See
+	// substitute_retain.go.
+	subPending         []retain.SubstituteRetain
+	subPendingMode     remainderMode
+	subPendingLastSeen time.Time
+	subPendingN        atomic.Int32
+	// subStarts are API starts reserved and being saved, not yet applied
+	// (substitute_durable.go); guarded by subMu.
+	subStarts []*pendingStart
 	// loopSleep is Options.LoopSleep: nil sleeps on the wall clock.
 	loopSleep func(task string, ctx context.Context, until time.Time) bool
 
