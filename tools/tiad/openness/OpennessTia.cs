@@ -127,9 +127,9 @@ namespace Tiad.Openness
                 {
                     Log.Line("online: reading a TLS question failed ({0}); answered {1}", e.GetType().Name, trust ? "TRUSTED BLINDLY" : "not trusted");
                 }
-                string ask = OnlineChecks.Ask(type, plc, info, fps);
-                if (trust) TrustedBlindly.Add(ask);
-                else Asked.Add(ask);
+                string question = OnlineChecks.Ask(type, plc, info, fps);
+                if (trust) TrustedBlindly.Add(question);
+                else Asked.Add(question);
                 return;
             }
             string ask = OnlineChecks.Ask(type, "", "", new List<string>());
