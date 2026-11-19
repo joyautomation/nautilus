@@ -820,18 +820,26 @@ func (n *Node) replicateTo(ctx context.Context, peer string, es []Entry, term, c
 		return resp, err
 	}
 	resp, err := send(es)
-	var he *httpError
-	if errors.As(err, &he) && he.code == http.StatusConflict && he.resend {
-		// The peer is behind (a gap: Have is its last entry) or its entry
-		// before these is not ours (a mismatch: Have is its commit index):
-		// send everything after Have.
+	// The peer is behind (a gap: Have is its last entry) or its entry
+	// before these is not ours (a mismatch: Have is its commit index):
+	// send everything after Have, and again from what the peer answers
+	// then (a gap's resend can meet a mismatch below it), until it takes
+	// them. Each step moves Have down, to the peer's commit index at
+	// worst, where the logs agree, so a few steps settle it; the bound
+	// only guards a peer that answers nonsense, and the next heartbeat
+	// tries again.
+	for range 8 {
+		var he *httpError
+		if !errors.As(err, &he) || he.code != http.StatusConflict || !he.resend {
+			return err
+		}
 		n.mu.Lock()
 		missing := n.afterLocked(resp.Have)
 		n.mu.Unlock()
 		if len(missing) == 0 {
 			return err
 		}
-		_, err = send(missing)
+		resp, err = send(missing)
 	}
 	return err
 }
