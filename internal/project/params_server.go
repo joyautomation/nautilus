@@ -115,6 +115,8 @@ func paramError(err error) error {
 		return fmt.Errorf("%w: %w", server.ErrParamInvalid, err)
 	case errors.Is(err, devbind.ErrISDUUncertain):
 		return fmt.Errorf("%w: %w", server.ErrParamUncertain, err)
+	case errors.Is(err, devbind.ErrISDUBusy):
+		return fmt.Errorf("%w: %w", server.ErrParamBusy, err)
 	case errors.Is(err, devbind.ErrISDURefused):
 		return fmt.Errorf("%w: %w", server.ErrParamRefused, err)
 	}

@@ -41,6 +41,9 @@ func (f *fakeParams) hook() *ParamHook {
 		Read: func(_ context.Context, port, ref string) (ParamAnswer, error) {
 			f.mu.Lock()
 			defer f.mu.Unlock()
+			if ref == "busy" {
+				return ParamAnswer{}, fmt.Errorf("%w: an ISDU call is in flight; retry", ErrParamBusy)
+			}
 			v, ok := f.values[ref]
 			if port != "LEVEL1" || !ok {
 				return ParamAnswer{}, fmt.Errorf("%w: no %s on %s", ErrParamUnknown, ref, port)
@@ -50,6 +53,9 @@ func (f *fakeParams) hook() *ParamHook {
 		Write: func(_ context.Context, port, ref string, value any) (ParamAnswer, error) {
 			f.mu.Lock()
 			defer f.mu.Unlock()
+			if ref == "busy" {
+				return ParamAnswer{}, fmt.Errorf("%w: an ISDU call is in flight; retry", ErrParamBusy)
+			}
 			if _, ok := f.values[ref]; port != "LEVEL1" || !ok {
 				return ParamAnswer{}, fmt.Errorf("%w: no %s on %s", ErrParamUnknown, ref, port)
 			}
@@ -234,5 +240,27 @@ func TestParamWriteOutcomeUncertain(t *testing.T) {
 	es := s.audit.ring.Recent()
 	if len(es) != 1 || es[0].Result != "unknown" || es[0].Action != "param.write" {
 		t.Errorf("the journal: %+v, want one param.write with result unknown", es)
+	}
+}
+
+// One ISDU call at a time per port: a second is 429 with Retry-After, nothing
+// sent, and a write refused that way is journalled as refused.
+func TestParamBusyIs429(t *testing.T) {
+	f := newFakeParams()
+	s := paramServer(t, f, Options{})
+	rec := call(t, s, "GET", "/api/iolink/LEVEL1/params/busy", "")
+	if rec.Code != http.StatusTooManyRequests || rec.Header().Get("Retry-After") == "" || !strings.Contains(rec.Body.String(), "retry") {
+		t.Errorf("a busy read: %d %q %s", rec.Code, rec.Header().Get("Retry-After"), rec.Body)
+	}
+	rec = call(t, s, "PUT", "/api/iolink/LEVEL1/params/busy", `{"value": 1}`)
+	if rec.Code != http.StatusTooManyRequests || rec.Header().Get("Retry-After") == "" {
+		t.Errorf("a busy write: %d %q %s", rec.Code, rec.Header().Get("Retry-After"), rec.Body)
+	}
+	es := s.audit.ring.Recent()
+	if len(es) != 1 || es[0].Action != "param.write" || es[0].Result != "refused" {
+		t.Errorf("the journal: %+v, want one refused param.write", es)
+	}
+	if len(f.writes) != 0 {
+		t.Error("a busy write reached the device")
 	}
 }

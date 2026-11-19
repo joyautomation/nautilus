@@ -103,6 +103,7 @@ func TestParamErrorKinds(t *testing.T) {
 		devbind.ErrISDUInvalid:   server.ErrParamInvalid,
 		devbind.ErrISDURefused:   server.ErrParamRefused,
 		devbind.ErrISDUUncertain: server.ErrParamUncertain,
+		devbind.ErrISDUBusy:      server.ErrParamBusy,
 	} {
 		err := paramError(fmt.Errorf("%w: x", kind))
 		if !errors.Is(err, want) || !errors.Is(err, kind) {

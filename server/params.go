@@ -40,6 +40,9 @@ var (
 	ErrParamInvalid = errors.New("not allowed by the IODD")
 	// ErrParamRefused: the port cannot take it now (409).
 	ErrParamRefused = errors.New("refused")
+	// ErrParamBusy: an ISDU call is in flight for the port; nothing was sent
+	// (429, Retry-After).
+	ErrParamBusy = errors.New("busy")
 	// ErrParamUncertain: the device on the port changed while a write was
 	// under way, so whether the right device took it is not known (502, and
 	// the journal records the outcome as unknown).
@@ -115,6 +118,8 @@ func paramStatus(err error) int {
 		return http.StatusUnprocessableEntity
 	case errors.Is(err, ErrParamRefused):
 		return http.StatusConflict
+	case errors.Is(err, ErrParamBusy):
+		return http.StatusTooManyRequests
 	}
 	return http.StatusBadGateway
 }
@@ -139,7 +144,11 @@ func (s *Server) handleParamRead(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	ans, err := s.params.Read(ctx, r.PathValue("port"), r.PathValue("ref"))
 	if err != nil {
-		writeJSON(w, paramStatus(err), map[string]string{"error": err.Error()})
+		code := paramStatus(err)
+		if code == http.StatusTooManyRequests {
+			w.Header().Set("Retry-After", "1")
+		}
+		writeJSON(w, code, map[string]string{"error": err.Error()})
 		return
 	}
 	writeJSON(w, http.StatusOK, ans)
@@ -203,6 +212,9 @@ func (s *Server) handleParamWrite(w http.ResponseWriter, r *http.Request) {
 	ans, err := s.params.Write(ctx, port, r.PathValue("ref"), value)
 	if err != nil {
 		code := paramStatus(err)
+		if code == http.StatusTooManyRequests {
+			w.Header().Set("Retry-After", "1")
+		}
 		switch {
 		case errors.Is(err, ErrParamUncertain):
 			w.Header().Set(outcomeHeader, "unknown")

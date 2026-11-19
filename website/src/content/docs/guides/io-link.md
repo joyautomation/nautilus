@@ -86,10 +86,17 @@ naut iolink param set   --host plc1 LEVEL1 V_Setpoint 500
   expected one, so a parameter never reaches the wrong sensor.
 - A value is checked against the IODD (access rights, range, type) before
   anything is sent.
-- If the device on the port changes *while* a write is under way, the answer is
-  **outcome uncertain** (502, and the journal records it as unknown), not
-  success. The check is as fresh as the master's last scan of its ids, so the
-  window is narrowed, not closed.
+- If the device on the port changes *while* a write is under way, or the
+  write was sent and the master did not answer (a timeout, a lost
+  connection), the answer is **outcome uncertain** (502, and the journal
+  records it as unknown), not success and not failure: the device may have
+  taken it. `naut iolink param set` says so, does not retry, and tells you to
+  check with `get`. The identity check is as fresh as the master's last scan
+  of its ids, so the window is narrowed, not closed.
+- One ISDU call at a time per port: a second request (read or write) while one
+  is in flight is refused with `429` and `Retry-After`, with nothing sent to
+  the master, so parameter reads cannot flood it. Reads will sit behind the
+  read gate of the auth work (#708) when that lands.
 - Over a master that carries a parameter as hex text (the ifm masters), a
   parameter over 32 octets cannot be read or written.
 

@@ -5,6 +5,7 @@ package devbind
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -350,5 +351,84 @@ func TestISDUWriteIsUncertainWhenTheDeviceChangesDuringIt(t *testing.T) {
 	c.answer = func(string, []*ua.Variant) ([]*ua.Variant, error) { return nil, errors.New("timed out") }
 	if _, err := ps.isduWrite(context.Background(), c, "LEVEL1", "V_Setpoint", uint64(500)); err == nil || errors.Is(err, ErrISDUUncertain) {
 		t.Errorf("a failed call with the device unchanged: %v, want its own error", err)
+	}
+}
+
+// One ISDU call at a time per port: a second, read or write, is refused as
+// busy with nothing sent, and the port is free again when the first is done,
+// however it ended.
+func TestISDUOneCallPerPort(t *testing.T) {
+	ps := isduPorts(t, "sick-sig300", nil)
+	ps.take(sickVals(levelVendor, levelDevice))
+	release, entered := make(chan struct{}), make(chan struct{})
+	c := &fakeCaller{}
+	c.answer = func(string, []*ua.Variant) ([]*ua.Variant, error) {
+		close(entered)
+		<-release
+		return variants(t, ua.ByteArray{0x03, 0xE8}, uint16(0), int32(0)), nil
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := ps.isduRead(context.Background(), c, "LEVEL1", "V_Setpoint")
+		done <- err
+	}()
+	<-entered
+	other := &fakeCaller{answer: readOK(t, ua.ByteArray{0x03, 0xE8})}
+	if _, err := ps.isduRead(context.Background(), other, "LEVEL1", "V_Setpoint"); !errors.Is(err, ErrISDUBusy) {
+		t.Errorf("a second read while one is in flight: %v, want busy", err)
+	}
+	if _, err := ps.isduWrite(context.Background(), other, "LEVEL1", "V_Setpoint", uint64(500)); !errors.Is(err, ErrISDUBusy) {
+		t.Errorf("a write while a read is in flight: %v, want busy", err)
+	}
+	if len(other.calls) != 0 {
+		t.Errorf("%d calls reached the master while the port was busy", len(other.calls))
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ps.isduRead(context.Background(), other, "LEVEL1", "V_Setpoint"); err != nil {
+		t.Errorf("the port is not free after the call: %v", err)
+	}
+	// A call that ended in an error frees it too.
+	other.answer = func(string, []*ua.Variant) ([]*ua.Variant, error) { return nil, errors.New("timed out") }
+	_, _ = ps.isduRead(context.Background(), other, "LEVEL1", "V_Setpoint")
+	other.answer = readOK(t, ua.ByteArray{0x03, 0xE8})
+	if _, err := ps.isduRead(context.Background(), other, "LEVEL1", "V_Setpoint"); err != nil {
+		t.Errorf("the port is not free after a failed call: %v", err)
+	}
+}
+
+// A write that was sent and got no answer (a timeout, a lost connection) is
+// uncertain, not an error: the device may have taken it. One never sent, and
+// one the master answered with a failure, are plain errors.
+func TestISDUWriteSentWithNoAnswerIsUncertain(t *testing.T) {
+	for name, tc := range map[string]struct {
+		err       error
+		uncertain bool
+	}{
+		"no answer":                 {fmt.Errorf("call x: %w: %w", opcua.ErrCallUnknown, errors.New("i/o timeout")), true},
+		"never sent":                {errors.New("opcua-client: not connected"), false},
+		"the master said it failed": {errors.New("call x: BadNotExecutable"), false},
+	} {
+		ps := isduPorts(t, "sick-sig300", nil)
+		ps.take(sickVals(levelVendor, levelDevice))
+		c := &fakeCaller{answer: func(string, []*ua.Variant) ([]*ua.Variant, error) { return nil, tc.err }}
+		_, err := ps.isduWrite(context.Background(), c, "LEVEL1", "V_Setpoint", uint64(500))
+		if err == nil || errors.Is(err, ErrISDUUncertain) != tc.uncertain {
+			t.Errorf("%s: %v, want uncertain=%v", name, err, tc.uncertain)
+		}
+		if tc.uncertain && !strings.Contains(err.Error(), "read it back") {
+			t.Errorf("%s: %v does not say to read it back", name, err)
+		}
+	}
+	// A read that gets no answer is just an error.
+	ps := isduPorts(t, "sick-sig300", nil)
+	ps.take(sickVals(levelVendor, levelDevice))
+	c := &fakeCaller{answer: func(string, []*ua.Variant) ([]*ua.Variant, error) {
+		return nil, fmt.Errorf("call x: %w", opcua.ErrCallUnknown)
+	}}
+	if _, err := ps.isduRead(context.Background(), c, "LEVEL1", "V_Setpoint"); err == nil || errors.Is(err, ErrISDUUncertain) {
+		t.Errorf("a read with no answer: %v, want a plain error", err)
 	}
 }

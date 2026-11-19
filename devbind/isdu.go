@@ -37,6 +37,10 @@ var (
 	// ErrISDUUncertain: the device on the port changed while a write was
 	// under way, so whether the right device took it is not known.
 	ErrISDUUncertain = errors.New("outcome uncertain")
+	// ErrISDUBusy: an ISDU call is already in flight for the port (one at a
+	// time: a master is easy to flood with parameter reads). Nothing was
+	// sent; retry.
+	ErrISDUBusy = errors.New("busy")
 	// ErrISDURefused: the port is not in a state to take it (a write while
 	// the identity is not Ok, or before it has been checked), or its master
 	// cannot carry it.
@@ -125,11 +129,25 @@ func (ps *ports) isduParam(port, ref string) (*portIn, *iolink.Param, error) {
 	return p, prm, nil
 }
 
+// enter claims the port's one ISDU call; exit releases it.
+func (p *portIn) enter() error {
+	if !p.isduBusy.CompareAndSwap(false, true) {
+		return fmt.Errorf("%w: port device %s has an ISDU call in flight; retry", ErrISDUBusy, p.Name)
+	}
+	return nil
+}
+
+func (p *portIn) exit() { p.isduBusy.Store(false) }
+
 func (ps *ports) isduRead(ctx context.Context, c Caller, port, ref string) (ISDUResult, error) {
 	p, prm, err := ps.isduParam(port, ref)
 	if err != nil {
 		return ISDUResult{}, err
 	}
+	if err := p.enter(); err != nil {
+		return ISDUResult{}, err
+	}
+	defer p.exit()
 	if !prm.CanRead() {
 		return ISDUResult{}, fmt.Errorf("%w: port device %s: %s is write-only", ErrISDUInvalid, p.Name, prm.Variable.ID)
 	}
@@ -151,6 +169,10 @@ func (ps *ports) isduWrite(ctx context.Context, c Caller, port, ref string, v an
 	if err != nil {
 		return ISDUResult{}, err
 	}
+	if err := p.enter(); err != nil {
+		return ISDUResult{}, err
+	}
+	defer p.exit()
 	st, checked := ps.identity(p)
 	res := ISDUResult{Variable: prm.Variable.ID, Index: prm.Index(), Subindex: prm.Subindex, Identity: st, Checked: checked}
 	switch {
@@ -179,6 +201,12 @@ func (ps *ports) isduWrite(ctx context.Context, c Caller, port, ref string, v an
 			"port", p.Name, "master", p.Master, "number", p.Num, "variable", prm.Variable.ID, "before", st.String(), "after", st3.String())
 		res.Identity = st3
 		return res, fmt.Errorf("%w: port device %s: the device on %s port %d changed during the write of %s (%s, then %s): the right device may or may not have taken it, and the wrong one may have", ErrISDUUncertain, p.Name, p.Master, p.Num, prm.Variable.ID, st, st3)
+	}
+	if errors.Is(callErr, opcua.ErrCallUnknown) {
+		// Sent, and nothing came back: the device may have taken it.
+		slog.Warn("iolink: a parameter write was sent and the master did not answer; the outcome is uncertain",
+			"port", p.Name, "master", p.Master, "number", p.Num, "variable", prm.Variable.ID, "error", callErr.Error())
+		return res, fmt.Errorf("%w: port device %s: write %s was sent to %s and no answer came back (%v): the device may or may not have taken it; read it back", ErrISDUUncertain, p.Name, prm.Variable.ID, p.Master, callErr)
 	}
 	if callErr != nil {
 		return res, fmt.Errorf("port device %s: write %s: %w", p.Name, prm.Variable.ID, callErr)

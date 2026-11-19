@@ -38,6 +38,15 @@ record, the item after a dot (Window.2). A value is a number, true/false or
 text; --string forces text.
 `
 
+// The client's time limits. A read is one ISDU call, which the controller
+// bounds at 10 s. A write is the controller's read of the value before it
+// (10 s), then the write (10 s): the client must outwait both, or it would
+// call a write that is still under way a failure to reach the controller.
+var (
+	paramGetTimeout = 20 * time.Second
+	paramPutTimeout = 45 * time.Second
+)
+
 type paramListResp struct {
 	Port   string `json:"port"`
 	Master string `json:"master"`
@@ -179,9 +188,20 @@ func paramCall(method, u string, body []byte, into any, errw io.Writer) int {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	apiclient.Authorize(req)
-	client := http.Client{Timeout: 20 * time.Second}
+	write := method == http.MethodPut
+	client := http.Client{Timeout: paramGetTimeout}
+	if write {
+		client.Timeout = paramPutTimeout
+	}
 	resp, err := client.Do(req)
 	if err != nil {
+		if write {
+			// The request was sent. Whether the device took the value is not
+			// known, and a retry could write it twice, to a device that has
+			// since been swapped: say so, and never retry.
+			fmt.Fprintf(errw, "naut iolink param: outcome unknown: the write was sent to %s and no answer came back (%v). The parameter may or may not have been written: check it with `naut iolink param get`; do not repeat the write until you have\n", u, err)
+			return 2
+		}
 		fmt.Fprintf(errw, "naut iolink param: no controller at %s: %v\n", u, err)
 		return 2
 	}
@@ -195,7 +215,12 @@ func paramCall(method, u string, body []byte, into any, errw io.Writer) int {
 		if json.Unmarshal(raw, &e) == nil && e.Error != "" {
 			msg = e.Error
 		}
-		fmt.Fprintf(errw, "naut iolink param: %s: %s\n", resp.Status, msg)
+		unknown := write && (strings.EqualFold(resp.Header.Get("X-Nautilus-Outcome"), "unknown") || resp.StatusCode >= 500)
+		if unknown {
+			fmt.Fprintf(errw, "naut iolink param: outcome unknown: %s: %s. The parameter may or may not have been written: check it with `naut iolink param get`\n", resp.Status, msg)
+		} else {
+			fmt.Fprintf(errw, "naut iolink param: %s: %s\n", resp.Status, msg)
+		}
 		if resp.StatusCode >= 500 {
 			return 2
 		}

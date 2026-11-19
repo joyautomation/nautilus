@@ -5,9 +5,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/runtime"
@@ -159,5 +162,57 @@ func TestParamValueOf(t *testing.T) {
 	}
 	if got := paramValueOf("500", true); got != "500" {
 		t.Errorf("--string: %#v", got)
+	}
+}
+
+// A write outwaits the controller's own two calls (the read before it, then
+// the write): a slow master is not "no controller", and a write that was
+// sent and got no answer says the outcome is unknown, is not retried, and
+// never says the parameter now holds the value.
+func TestIOLinkParamWriteTimeoutsAndUncertainty(t *testing.T) {
+	t.Setenv("NAUTILUS_TOKEN", "")
+	oldGet, oldPut := paramGetTimeout, paramPutTimeout
+	t.Cleanup(func() { paramGetTimeout, paramPutTimeout = oldGet, oldPut })
+	paramGetTimeout, paramPutTimeout = 150*time.Millisecond, 2*time.Second
+	var puts atomic.Int32
+	hang := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET":
+			time.Sleep(400 * time.Millisecond) // a slow master, longer than a read's limit here
+			w.Write([]byte(`{}`))
+		case strings.HasSuffix(r.URL.Path, "/slow"): // slower than a read may take, within a write's
+			time.Sleep(400 * time.Millisecond)
+			w.Write([]byte(`{"variable":"V","value":1,"identity":"Ok","identityChecked":true}`))
+		case strings.HasSuffix(r.URL.Path, "/hang"):
+			puts.Add(1)
+			<-hang
+		case strings.HasSuffix(r.URL.Path, "/uncertain"):
+			w.Header().Set("X-Nautilus-Outcome", "unknown")
+			http.Error(w, `{"error":"the device on the port changed during the write"}`, http.StatusBadGateway)
+		}
+	}))
+	t.Cleanup(func() { close(hang); srv.Close() })
+
+	if code, _, errs := param(t, srv.URL, "get", "LEVEL1", "V"); code != 2 || !strings.Contains(errs, "no controller at") {
+		t.Errorf("a read slower than its limit: %d %q", code, errs)
+	}
+	if code, out, errs := param(t, srv.URL, "set", "LEVEL1", "slow", "1"); code != 0 || !strings.Contains(out, "now holds") {
+		t.Errorf("a write that takes longer than a read may: %d %q %q (it must outwait the controller)", code, out, errs)
+	}
+	// Sent, never answered: outcome unknown, exit 2, no 'now holds', one request.
+	paramPutTimeout = 200 * time.Millisecond
+	code, out, errs := param(t, srv.URL, "set", "LEVEL1", "hang", "1")
+	if code != 2 || !strings.Contains(errs, "outcome unknown") || strings.Contains(errs, "no controller") || strings.Contains(out, "now holds") || !strings.Contains(errs, "naut iolink param get") {
+		t.Errorf("a write sent and not answered: %d %q %q", code, out, errs)
+	}
+	if n := puts.Load(); n != 1 {
+		t.Errorf("the CLI sent the write %d times, want once: it never retries", n)
+	}
+	// The controller's own 'outcome unknown' answer: the same words, exit 2,
+	// and not a word of 'now holds'.
+	code, out, errs = param(t, srv.URL, "set", "LEVEL1", "uncertain", "1")
+	if code != 2 || !strings.Contains(errs, "outcome unknown") || !strings.Contains(errs, "changed during the write") || strings.Contains(out, "now holds") {
+		t.Errorf("an uncertain write: %d %q %q", code, out, errs)
 	}
 }
