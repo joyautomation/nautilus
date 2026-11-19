@@ -85,14 +85,19 @@ type OutPlan struct {
 // given and sends it to whatever device is on the port:
 //
 //   - nothing is sent, and Valid is false, until the port has been
-//     ARMED. The FIRST identity check arms it when it is Ok (or
-//     Unchecked): at a power-up or a takeover (a new leader builds a new
-//     gate) an Ok identity is the device the program was written for, so
-//     neither needs a pulse. After that only an explicit Rearm arms it (a
-//     pulse on the port's __Rearm tag, journalled like any write): the
-//     normal industrial "confirm after a device swap";
-//   - a port whose first check is Wrong or NoDevice is not armed, and stays
-//     so when the right device appears, until Rearm;
+//     ARMED. The FIRST Ok (or Unchecked) arms it: at a power-up or a
+//     takeover (a new leader builds a new gate) an Ok identity is the
+//     device the program was written for, so neither needs a pulse. A
+//     NoDevice before the device has ever been seen is a power-up
+//     transient (a port takes a moment to start, or was empty since the
+//     start and the device is plugged in later) and does not use that
+//     chance up. After that only an explicit Rearm arms it (a pulse on the
+//     port's __Rearm tag, journalled like any write): the normal industrial
+//     "confirm after a device swap";
+//   - a Wrong device at any time before the first Ok never arms the port,
+//     and the right device appearing later does not either, until Rearm;
+//     once the device has been seen Ok, ANY break (NoDevice or Wrong)
+//     disarms the port, and the device coming back does not arm it;
 //   - while the identity is not Ok (or Unchecked), nothing is sent, Valid
 //     is false, and the port is disarmed: not zeros either, since "off" is
 //     not always safe. When the right device is back the port stays quiet
@@ -111,8 +116,10 @@ type OutGate struct {
 	state  State
 	values []any // the program's current value per item; nil is zero
 	armed  bool
-	// checked is set by the first SetState: the check that may arm.
-	checked bool
+	// settled is set when the one chance to arm without a pulse has been
+	// used: the first Ok (or Unchecked) armed the port, or a Wrong device
+	// showed first. A NoDevice before either does not settle it.
+	settled bool
 }
 
 // NewOutGate is a gate for a port device whose process data out is out,
@@ -122,16 +129,19 @@ func NewOutGate(out *iodd.Image, s State) *OutGate {
 	return &OutGate{out: out, state: s, values: make([]any, len(out.Items))}
 }
 
-// SetState records the identity check. The first one arms the port when it
-// is Ok or Unchecked; leaving a driving state disarms it.
+// SetState records the identity check. The first Ok or Unchecked arms the
+// port unless a Wrong device was seen before it; a NoDevice before either
+// changes nothing but the state; leaving a driving state disarms it.
 func (g *OutGate) SetState(s State) {
-	first := !g.checked
-	g.checked = true
 	if g.state.Drives() && !s.Drives() {
 		g.armed = false
 	}
 	g.state = s
-	if first && s.Drives() {
+	if g.settled || s == NoDevice {
+		return
+	}
+	g.settled = true
+	if s.Drives() {
 		g.armed = true
 	}
 }

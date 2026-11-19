@@ -325,20 +325,18 @@ D_Port1_PdiValid := TRUE;`,
 	od := set.OPCUADevices()[0]
 	probeCtx, cancelProbe := context.WithCancel(context.Background())
 	t.Cleanup(cancelProbe)
-	// A second driver on the same nodes reads what reached the master, and
-	// tells when the master serves the sensor's ids: the port's FIRST check
-	// arms it only if it is Ok, and the plant serves zeros until its first scan.
+	// A second driver on the same nodes reads what reached the master. (The
+	// plant serves zeros until its first scan, so the port's first check is
+	// NoDevice: a power-up transient that does not use up the first Ok.)
 	probe, err := opcua.New(v.url(), opcua.Manifest{Namespaces: od.Manifest.Namespaces, Tags: []opcua.TagBinding{
 		{Name: "Pdo", NodeID: "ns=1;s=IOLM/Port 1/Attached Device/PDO Data Byte String", Type: opcua.ByteString},
 		{Name: "Valid", NodeID: "ns=1;s=IOLM/Port 1/Attached Device/PDO Valid", Type: "Boolean"},
-		{Name: "Vendor", NodeID: "ns=1;s=IOLM/Port 1/Attached Device/Vendor ID", Type: "UInt32"},
 	}}, opcua.WithName("probe"), opcua.WithScanRate(100*time.Millisecond), opcua.WithSecurity("None", "None"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	probe.Start(probeCtx)
 	t.Cleanup(probe.Stop)
-	waitUntil(t, "the master to serve the sensor's ids", 20*time.Second, func() bool { pv, _ := probe.ReadInputs(); return pv["Vendor"] == int64(65261) })
 	d, err := opcua.New(v.url(), od.Manifest, opcua.WithName("M"), opcua.WithOnlineTag("M__Online"),
 		opcua.WithScanRate(100*time.Millisecond), opcua.WithTimeout(2*time.Second), opcua.WithSecurity("None", "None"))
 	if err != nil {

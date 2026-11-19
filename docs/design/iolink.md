@@ -318,14 +318,18 @@ not safe, and a port with process data out is **armed explicitly**
   either: off is not always safe) and, where the profile has
   `pd-out-valid`, drives it **false**, so the master stops sending the
   last image and the device falls back to its own fail-safe values;
-- the **first identity check arms the port when it is Ok** (or
-  Unchecked): at a power-up, and at a takeover (a new leader builds new
-  ports and checks again), an Ok identity is the device the program was
-  written for, so neither needs a pulse. A port whose first check is
-  `WrongDevice` or `NoDevice` is not armed, and the right device
-  appearing later does not arm it;
-- after that, a port is disarmed when the device on it stops being the
-  right one **while running** (a swap), and only a **pulse on
+- the **first Ok (or Unchecked) arms the port**: at a power-up, and at
+  a takeover (a new leader builds new ports and checks again), an Ok
+  identity is the device the program was written for, so neither needs a
+  pulse. A `NoDevice` before the device has ever been seen is a power-up
+  transient (an IO-Link port takes a moment to start) and does not use
+  that up; a device hot-plugged into a port that was empty since the start
+  also arms on its first Ok, being the device the program was written for.
+  A `WrongDevice` at any time before the first Ok means the port is never
+  armed by an Ok: the right device appearing later does not arm it;
+- after the device has been seen Ok, **any** break while running (a
+  swap, or `NoDevice` as much as `WrongDevice`) disarms the port, and only
+  a **pulse on
   `<Port device>__Rearm`** arms it again (a writable BOOL tag, false then
   true): the "confirm after a device swap" an operator does, journalled by
   the audit journal like any tag write (who, when, from where), and logged
@@ -350,10 +354,7 @@ not safe, and a port with process data out is **armed explicitly**
 
 The pulse is seen as a push in which `__Rearm` is true after one in which
 it was false (the first push after a start is only the state of the
-world); a pulse shorter than a scan is not seen. A master that reports no
-device on a port while the port starts up (IO-Link ports take a moment) can
-make a power-up's first check `NoDevice`: that port then needs the pulse,
-once. Under `naut test` the
+world); a pulse shorter than a scan is not seen. Under `naut test` the
 in-process face sends a port's outputs through the same gate.
 
 A master profile with no `pd-out-valid` cannot do the first step's second

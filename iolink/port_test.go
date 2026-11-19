@@ -117,9 +117,9 @@ func TestOutGateSendsNothingUntilRearmed(t *testing.T) {
 func TestOutGateBreakDisarmsAndRearmSendsTheCurrentValues(t *testing.T) {
 	for _, bad := range []State{WrongDevice, NoDevice} {
 		t.Run(bad.String(), func(t *testing.T) {
-			g := gate(t, Ok)
+			g := gate(t, NoDevice)
 			setAll(t, g, true, 5, true)
-			_ = g.Rearm()
+			g.SetState(Ok) // the first Ok arms it
 			if !plan(t, g).Valid {
 				t.Fatal("not driving a right device")
 			}
@@ -178,25 +178,84 @@ func TestOutGateFirstOkArmsIt(t *testing.T) {
 	}
 }
 
-// A first check that is not Ok does not arm it, and the right device
-// appearing later does not either: only a pulse does.
+// A Wrong device before the first Ok never arms the port, and the right
+// device appearing later does not either: only a pulse does.
 func TestOutGateFirstWrongNeedsAPulse(t *testing.T) {
-	for _, first := range []State{WrongDevice, NoDevice} {
+	for name, history := range map[string][]State{
+		"wrong first":             {WrongDevice},
+		"no device, then wrong":   {NoDevice, WrongDevice},
+		"no device, wrong, no":    {NoDevice, WrongDevice, NoDevice},
+		"wrong, no device, wrong": {WrongDevice, NoDevice, WrongDevice},
+	} {
 		g := gate(t, NoDevice)
 		setAll(t, g, true, 5, true)
-		g.SetState(first)
+		for _, s := range history {
+			g.SetState(s)
+		}
 		g.SetState(Ok)
 		if g.Armed() {
-			t.Errorf("first check %v, then Ok: armed with no pulse", first)
+			t.Errorf("%s, then Ok: armed with no pulse", name)
 		}
 		if p := plan(t, g); p.Valid || p.Image != nil {
-			t.Errorf("first check %v, then Ok: plan %+v, want nothing until Rearm", first, p)
+			t.Errorf("%s, then Ok: plan %+v, want nothing until Rearm", name, p)
 		}
 		if err := g.Rearm(); err != nil {
 			t.Fatal(err)
 		}
 		if p := plan(t, g); !p.Valid || !bytes.Equal(p.Image, []byte{0x8B}) {
-			t.Errorf("after Rearm: plan %+v", p)
+			t.Errorf("%s: after Rearm, plan %+v", name, p)
+		}
+	}
+}
+
+// A NoDevice before the device has ever been seen is a power-up transient
+// (a port takes a moment to start, or was empty and the device is plugged
+// in later): the first Ok still arms the port with no pulse.
+func TestOutGatePowerUpNoDeviceThenOkArms(t *testing.T) {
+	g := gate(t, NoDevice)
+	setAll(t, g, true, 5, true)
+	for i := 0; i < 3; i++ {
+		g.SetState(NoDevice)
+		if g.Armed() {
+			t.Fatal("armed with no device on the port")
+		}
+		if err := g.Rearm(); err == nil {
+			t.Fatal("Rearm with no device on the port was accepted")
+		}
+	}
+	g.SetState(Ok)
+	if !g.Armed() {
+		t.Fatal("the first Ok after a power-up NoDevice did not arm the port")
+	}
+	if p := plan(t, g); !p.Valid || !bytes.Equal(p.Image, []byte{0x8B}) {
+		t.Errorf("plan %+v, want valid 8B with no pulse", p)
+	}
+}
+
+// Once the device has been seen Ok, any break needs the pulse, NoDevice as
+// much as Wrong.
+func TestOutGateSeenOkThenAnyBreakNeedsAPulse(t *testing.T) {
+	for _, bad := range []State{NoDevice, WrongDevice} {
+		g := gate(t, NoDevice)
+		setAll(t, g, true, 5, true)
+		g.SetState(NoDevice) // the power-up transient
+		g.SetState(Ok)       // armed
+		if !g.Armed() {
+			t.Fatal("not armed by the first Ok")
+		}
+		g.SetState(bad)
+		g.SetState(Ok)
+		if g.Armed() {
+			t.Errorf("seen Ok, then %v, then Ok: armed with no pulse", bad)
+		}
+		if p := plan(t, g); p.Valid || p.Image != nil {
+			t.Errorf("seen Ok, then %v, then Ok: plan %+v, want nothing", bad, p)
+		}
+		if err := g.Rearm(); err != nil {
+			t.Fatal(err)
+		}
+		if !plan(t, g).Valid {
+			t.Errorf("after %v and Rearm the port sends nothing", bad)
 		}
 	}
 }

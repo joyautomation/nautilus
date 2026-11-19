@@ -468,3 +468,37 @@ func TestPortWithoutProcessDataOutHasNoGate(t *testing.T) {
 		t.Error("its data was not decoded")
 	}
 }
+
+// A power-up transient (the port reports no device while it starts), or a
+// device plugged into a port that was empty since the start, is not a break:
+// the first Ok arms the port with no pulse. A Wrong device before the first
+// Ok is, and so is any break after it.
+func TestPortDevicePowerUpNoDeviceThenOkIsArmed(t *testing.T) {
+	ps := portsOf(t, pfMaster(t, nil))
+	v := masterVals(0, 0, levelImage, true)
+	ps.take(v)
+	if v["LEVEL1__Identity"] != int64(iolink.NoDevice) || v["LEVEL1__IdentityFault"] != true {
+		t.Errorf("no device yet: identity %v fault %v", v["LEVEL1__Identity"], v["LEVEL1__IdentityFault"])
+	}
+	v = masterVals(levelVendor, levelDevice, levelImage, true)
+	ps.take(v)
+	if v["LEVEL1__Identity"] != int64(iolink.Ok) || v["LEVEL1__IdentityFault"] != false {
+		t.Errorf("the device appeared: identity %v fault %v, want Ok (armed with no pulse)", v["LEVEL1__Identity"], v["LEVEL1__IdentityFault"])
+	}
+	// Seen Ok, then no device, then Ok: a break, so it needs the pulse.
+	ps.take(masterVals(0, 0, levelImage, true))
+	v = masterVals(levelVendor, levelDevice, levelImage, true)
+	ps.take(v)
+	if v["LEVEL1__Identity"] != int64(iolink.AwaitingRearm) {
+		t.Errorf("seen Ok, no device, Ok: identity %v, want AwaitingRearm", v["LEVEL1__Identity"])
+	}
+	// A Wrong device before the first Ok: needs the pulse once Ok.
+	ps2 := portsOf(t, pfMaster(t, nil))
+	ps2.take(masterVals(0, 0, levelImage, true))
+	ps2.take(masterVals(levelVendor, levelDevice+100, levelImage, true))
+	v = masterVals(levelVendor, levelDevice, levelImage, true)
+	ps2.take(v)
+	if v["LEVEL1__Identity"] != int64(iolink.AwaitingRearm) {
+		t.Errorf("no device, wrong, Ok: identity %v, want AwaitingRearm", v["LEVEL1__Identity"])
+	}
+}
