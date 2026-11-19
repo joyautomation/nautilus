@@ -99,6 +99,11 @@ namespace Tiad.Fake
             licence.Started(error);
         }
 
+        public void TiaFailed(Exception error)
+        {
+            licence.Failed(error);
+        }
+
         public object SetGates(Call c)
         {
             var r = c.Json();

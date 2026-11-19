@@ -88,7 +88,15 @@ namespace Tiad
                     }
                     host.TiaStarted(null);
                 }
-                return f(tia);
+                try
+                {
+                    return f(tia);
+                }
+                catch (TiaException e)
+                {
+                    host.TiaFailed(e);
+                    throw;
+                }
             });
         }
 

@@ -146,6 +146,11 @@ namespace Tiad.Host
             return MachineGates.Evaluate(machine, noTia, licence.Current());
         }
 
+        public void TiaFailed(Exception error)
+        {
+            licence.Failed(error);
+        }
+
         public void TiaStarted(Exception error)
         {
             licence.Started(error);
