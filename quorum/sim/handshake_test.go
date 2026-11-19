@@ -73,15 +73,17 @@ func TestMustFailSwitchQuietPeriod(t *testing.T) {
 
 // The term floor (design §3.1). B leads a term A never saw: A is not yet
 // up, B's campaigns climb while W restarts three times (each restart wait
-// refuses them), and B leads term 17 on {B, W}. Every vote B sends A is
+// refuses them), and B leads term 13 on {B, W}. Every vote B sends A is
 // lost from the start (requests and replies; the handshake gets through),
 // so A learns no term of B's that way. W is then rebuilt (a new
-// incarnation, promised 0), B's lease lapses, A comes up, and the pair
-// adopts the rebuilt witness: B's proposal carries its floor, 17. B dies
-// at 21 s, before its quiet period ends, so the new witness never hears a
-// term of B's either. A then wins on {A, W′}: above 17 with the floor.
-// Without it A campaigns from the terms it knows and leads term 2 after
-// B's 17: I2 (the fencing token goes back).
+// incarnation, promised 0), B's lease lapses, A comes up at 20 s, and
+// once its own voter's restart wait is over (the restart hold) it
+// campaigns, so B hears it and the pair adopts the rebuilt witness: B's
+// proposal carries its floor, 14. B dies at 23 s, before its quiet period
+// ends, so the new witness never hears a term of B's either. A then wins
+// on {A, W′}: above 14 with the floor. Without it A campaigns from the
+// terms it knows and leads term 2 after B's 13: I2 (the fencing token goes
+// back).
 func TestFloorCarriesTheUnseenTerm(t *testing.T) {
 	o := Options{Seed: 5, Delay: ms, Jitter: ms / 2, Fsync: ms, Until: 40 * sec, Trace: true,
 		Start: [3]time.Duration{20 * sec, 0, 0},
@@ -91,7 +93,7 @@ func TestFloorCarriesTheUnseenTerm(t *testing.T) {
 			{Kind: Crash, At: 5900 * ms, For: 100 * ms, Node: W},
 			{Kind: Wipe, At: 17 * sec, For: 500 * ms, Node: W},
 			{Kind: Cut, At: 0, From: B, To: A, Value: CutRequests | CutReplies},
-			{Kind: Crash, At: 21 * sec, Node: B},
+			{Kind: Crash, At: 23 * sec, Node: B},
 		}}
 	rec := Run(o)
 	defer trace(t, rec)
@@ -105,7 +107,7 @@ func TestFloorCarriesTheUnseenTerm(t *testing.T) {
 		switch {
 		case iv.Node == B:
 			bTop = max(bTop, iv.Term)
-		case iv.Node == A && iv.From > 21*sec:
+		case iv.Node == A && iv.From > 23*sec:
 			aLed = true
 		}
 	}
@@ -193,7 +195,7 @@ func switchOnce(extra ...Fault) Options {
 // would count W2's incarnation while A counts W's: red under no_adopt_gen.
 func TestLateEarlierBootProposalRefused(t *testing.T) {
 	o := switchOnce(
-		Fault{Kind: Replay, At: 10150 * ms, For: 100 * ms, From: A, To: B, Value: int64(15 * time.Second)},
+		Fault{Kind: Replay, At: 9750 * ms, For: 100 * ms, From: A, To: B, Value: int64(15 * time.Second)},
 		Fault{Kind: Crash, At: 22 * sec, For: 100 * ms, Node: A})
 	rec := Run(o)
 	defer trace(t, rec)

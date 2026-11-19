@@ -192,8 +192,10 @@ func TestTwoOfThreeLostTeeth(t *testing.T) {
 	// The default range's, and three of the first 200,000 with the handshake
 	// that are excused only since the rule looks at the peer's committed
 	// incarnation (a peer pending a switch counts nothing, yet the lost
-	// controller can only re-adopt what it committed: dead here).
-	for _, seed := range []uint64{686, 966, 1158, 1235, 1272, 1411, 1482, 1492, 1713, 45754, 56148, 70430} {
+	// controller can only re-adopt what it committed: dead here). With the
+	// restart hold (#1021 review) 686 and 1158 re-commission before the
+	// witness dies and are held to every oracle; 208 and 1886 joined.
+	for _, seed := range []uint64{208, 966, 1235, 1272, 1411, 1482, 1492, 1713, 1886, 45754, 56148, 70430} {
 		if o := randomRun(seed, profDefault); !Run(o).TwoOfThreeLost() {
 			t.Errorf("seed %d: no longer judged two-of-three", seed)
 		}

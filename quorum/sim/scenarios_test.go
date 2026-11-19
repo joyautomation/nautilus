@@ -78,8 +78,9 @@ func TestMustFailGrantMeantForThePeer(t *testing.T) {
 
 // F31: a grant for A's request from before a restart must not count for
 // the same (term, id) asked again after it. A's first boot asks W for
-// term 1 with id 1 (its own voter is still in its restart wait) and
-// crashes; W's grant is delayed 2.55 s. A's new boot is paused (SIGSTOP)
+// term 1 with id 1 once its own voter's restart wait is over (it can't
+// campaign before: the restart hold); its voter's write of term 1 fails
+// (a disk fault), and A crashes; W's grant is delayed 2.55 s. A's new boot is paused (SIGSTOP)
 // until its restart wait and the restart's quiet period are over, so the
 // old grant can't be ignored as quiet, then asks its own voter for term 1
 // with id 1 again (its voter never persisted term 1), but not W (cut).
@@ -90,8 +91,9 @@ func TestMustFailGrantMeantForThePeer(t *testing.T) {
 func TestMustFailPreRestartGrant(t *testing.T) {
 	o := Options{
 		Seed: 1, Delay: 1 * ms, Fsync: 1 * ms, NoJitter: true, Until: 12 * sec, Trace: true,
-		Start: [3]time.Duration{2 * sec, 60 * sec, 0}, // A starts once W's restart wait is over
+		Start: [3]time.Duration{0, 60 * sec, 0}, // A's and W's restart waits end together, at 2 s
 		Faults: []Fault{
+			{Kind: DiskFail, At: 1900 * ms, For: 300 * ms, Node: A}, // term 1 never reaches A's file
 			{Kind: Cut, At: 2050 * ms, From: A, To: W},
 			{Kind: Crash, At: 2100 * ms, For: 50 * ms, Node: A},
 			{Kind: Pause, At: 2150 * ms, For: 2350 * ms, Node: A},

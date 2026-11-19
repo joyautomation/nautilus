@@ -39,7 +39,9 @@ var table = []mutation{
 	{"answer_before_fsync", []string{"TestVoterGrantsOnlyAfterPersist", "TestTargetedFsyncBeforeAnswer", "TestGrantLeavesOnlyAfterTheWrite"}},
 	{"lease_from_reply", []string{"TestCandidateLeaseFromSendMinusRho", "TestSkewWithinRhoHoldsBeyondBreaks"}},
 	{"no_backoff", []string{"TestCandidateBackOffAfterLapse", "TestTargetedOneWayLeaderBacksOff"}},
-	{"one_lease_backoff", []string{"TestCandidateBackOffAfterLapse", "TestTargetedOneWayLeaderBacksOff", "TestTargetedOneWayLeaderSkewed"}},
+	// Since the restart hold, TestTargetedOneWayLeaderSkewed's restarted
+	// controller campaigns a lease later and no longer reaches this path.
+	{"one_lease_backoff", []string{"TestCandidateBackOffAfterLapse", "TestTargetedOneWayLeaderBacksOff"}},
 	{"any_incarnation", []string{"TestCandidateWitnessIncarnation", "TestMustFailSecondWitnessCopy", "TestMustFailSwitchQuietPeriod", "TestSeeds"}},
 	{"any_sender", []string{"TestCandidateCountsOnlyItsVoters", "TestMustFailUnknownSender"}},
 	{"no_grantee_check", []string{"TestCandidateGranteeCheckedEvenOnANonceCollision", "TestMustFailGrantMeantForThePeer"}},
@@ -55,7 +57,9 @@ var table = []mutation{
 	{"no_yield", []string{"TestTwoCountedVotersElect", "TestYieldCancelsOpenRounds"}},
 	{"no_observe", []string{"TestObserveLiftsTheNextCampaign"}},
 	{"retry_on_grid", []string{"TestCandidateRetryJitter"}},
-	{"renew_on_look", []string{"TestCandidateRenewsAtOnceOnWinning", "TestNightlySlowFsyncWinner"}},
+	// Since the restart hold the nightly slow-fsync seed's first election
+	// moves and no longer depends on it: T1 pins it.
+	{"renew_on_look", []string{"TestCandidateRenewsAtOnceOnWinning"}},
 	// The witness-incarnation handshake (#976): T1 since H1, the sim since H2.
 	{"no_quiet", []string{"TestRebuiltWitnessAdopted", "TestQuietPeriodHoldsOffTheNewWitness", "TestLostControllerReadoptsThePeer",
 		"TestReadoptOverPendingOwesTheQuietPeriod", "TestSecondAdoptionInFlightKeepsTheQuiet",
@@ -67,13 +71,18 @@ var table = []mutation{
 	{"no_adopt_gen", []string{"TestStaleProposalRefused", "TestConcurrentProposals", "TestLateProposalCannotSplitThePair",
 		"TestLateEarlierBootProposalRefused"}},
 	{"no_holdoff", []string{"TestSwitchHoldOffGrows", "TestFlappingStrayBounded"}},
-	{"restart_counts_at_once", []string{"TestRestartOwesTheQuietPeriod", "TestReviewRestartSkipsQuiet",
-		"TestRegression976TwoLostControllerFiles", "TestSeeds"}},
+	// Since the restart hold a restarted controller doesn't campaign for
+	// the lease its quiet period covers, so counting at once changes
+	// nothing it does (the hold is a second guard on the same window): the
+	// sim no longer sees it, and T1 pins the count's own rule.
+	{"restart_counts_at_once", []string{"TestRestartOwesTheQuietPeriod", "TestReviewRestartSkipsQuiet"}},
 	{"no_adopt_echo", []string{"TestLostControllerIgnoresAnAckToItsEarlierBoot", "TestReviewStaleProposeFloor"}},
 	{"switch_without_peer", []string{"TestSwitchNeedsThePeer"}},
 	{"peer_from_any_adopt", []string{"TestLateAdoptToAnEarlierBootIsNotThePeer", "TestLateAdoptToAnEarlierBootInTheSim"}},
 	{"bump_cuts_quiet", []string{"TestGenBumpKeepsTheRestartQuiet"}},
-	{"quiet_reply_unheard", []string{"TestQuietReplyIsHeardNotCounted", "TestTargetedOneWayLeaderSkewed"}},
+	// Since the restart hold, TestTargetedOneWayLeaderSkewed no longer
+	// reaches it (see one_lease_backoff): T1 pins it.
+	{"quiet_reply_unheard", []string{"TestQuietReplyIsHeardNotCounted"}},
 	{"uncommissioned_grants", []string{"TestUncommissionedControllerGrantsNothing", "TestRegression976WitnessUnreachable"}},
 	// #1014 review: belt and braces against counting an adoption while a
 	// proposal is pending. Either rule alone closes the failed- and
@@ -109,6 +118,10 @@ var table = []mutation{
 	// The #1021 review: a restart with a shorter lease (core and driver),
 	// and the driver rules no test pinned.
 	{"restart_wait_current_lease", []string{"TestVoterRestartWaitsTheLongerLease", "TestReviewWitnessShorterLeaseRestart"}},
+	// The restart hold. TestLoopbackRestartedStandbyHoldsItsCampaigns
+	// catches it too, but the loopback tests skip under a core mutation
+	// (QUORUM_LOOPBACK=1 runs them).
+	{"campaign_in_restart_wait", []string{"TestRestartedStandbyHoldsItsCampaigns", "TestCampaignHoldEndsWithTheRestartWait"}},
 	{"controller_lease_unchecked", []string{"TestReviewControllerRefusesALongerLease"}},
 	{"controller_write_ignored", []string{"TestReviewControllerFailedWriteSendsNoGrant"}},
 	{"witness_write_ignored", []string{"TestReviewWitnessFailedWriteSendsNoGrant"}},

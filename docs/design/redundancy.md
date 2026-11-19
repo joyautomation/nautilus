@@ -104,7 +104,13 @@ redundancy:
   and the witness keep it. The in-sync mark is §3.3. A voter **fsyncs its state before it answers**: this replaces the Lease's
   compare-and-swap, which was the whole correctness argument in Kubernetes mode. A voter that
   restarts, or lost its state file, **grants nothing for one full lease**, because it has lost
-  its timer.
+  its timer. That lease is the longer of its own and the one its state says its last promises
+  were made under (§6.2). Its controller **doesn't campaign during that wait either**, because
+  without its own vote the campaign can't win. The campaign could still take the witness's
+  first grant from a leader that rests on the two controllers (the witness still in its own
+  restart wait), and this voter would then refuse that leader's renewals too, so the leader's
+  lease would lapse with nobody able to take over (#1021 review). The cost is at most one
+  lease of takeover time after a restart.
 - **Granting a term.** A candidate asks for term T+1. A voter grants it when T+1 is greater
   than every term it has promised, and its current promise to anyone else has run out. A grant
   promises not to grant to anyone else for `lease`, timed from when the voter **received** the
@@ -197,7 +203,9 @@ redundancy:
   F9 schedules per link delay with clocks skewed within ρ, the worst takeover at 1–100 ms
   delays is 6.4–6.9 s with one lease and 3.9–4.3 s with two. With perfect clocks, the yield and
   the moved retry of #979 hide the difference (3.5–3.7 s either way); a standby only 0.25%
-  fast brings it back. `TestTargetedOneWayLeaderSkewed` pins that schedule.
+  fast brings it back. `TestTargetedOneWayLeaderSkewed` pinned that schedule until the restart
+  hold moved its first election (#1021 review); the back-off is now pinned by
+  `TestTargetedOneWayLeaderBacksOff` and the T1 tests.
   **The trade, accepted:** a lapsed leader that is the only viable candidate also waits two
   leases. With the standby already down and the witness link out for a full lease, the pair
   is leaderless for 4.0 s instead of 2.0 s (a half-lease blip costs nothing either way). That

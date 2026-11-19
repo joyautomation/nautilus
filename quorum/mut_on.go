@@ -52,6 +52,7 @@ var Mutations = []string{
 	"recommission_any_floor",      // an operator's floor at or below what the controller knows is taken
 	"restart_wait_current_lease",  // a voter restarted with a shorter lease waits only that one (#1021 review)
 	"lease_raise_volatile",        // a longer lease after a restart isn't written before an unchanged grant (#1021 re-review)
+	"campaign_in_restart_wait",    // a controller campaigns while its own voter is in its restart wait (#1021 review)
 	// The driver's (quorum/node, #710 PR 3a): switched on there, listed
 	// here so this init accepts them.
 	"gate_on_tick",               // the gate is judged on the elector's look, not when it is read

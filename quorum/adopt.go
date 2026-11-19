@@ -170,6 +170,15 @@ func NewAdoption(v *Voter, c *Candidate, now Instant) *Adoption {
 		c.Count(st.Incarnation, now.Add(a.lease))
 	}
 	c.raiseSeen(st.Floor)
+	// No campaign while this controller's own voter is in its restart
+	// wait: the campaign can't win without that vote, and it can take the
+	// witness's first grant from a leader resting on the two controllers
+	// (the witness in its own restart wait), whose renewals this voter
+	// then refuses: the leader's lease lapses (#1021 review). It costs at
+	// most one lease of takeover time after a restart.
+	if !mut("campaign_in_restart_wait") {
+		c.holdUntil = v.waitUntil
+	}
 	return a
 }
 
