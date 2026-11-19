@@ -53,6 +53,7 @@ var table = []mutation{
 	{"no_yield", []string{"TestTwoCountedVotersElect", "TestRegressionTwoVoterLivelock"}},
 	{"no_observe", []string{"TestObserveLiftsTheNextCampaign"}},
 	{"retry_on_grid", []string{"TestCandidateRetryJitter"}},
+	{"renew_on_look", []string{"TestCandidateRenewsAtOnceOnWinning", "TestNightlySlowFsyncWinner"}},
 }
 
 // event is one line of `go test -json`.

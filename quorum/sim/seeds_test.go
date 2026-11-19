@@ -75,7 +75,11 @@ func randomRun(seed uint64, p profile) Options {
 			f.Kind = Cut
 			link(&f)
 		case 3:
-			f.Kind, f.Value = Delay, int64(dur(ms, lease/2))
+			// Within the documented rule, lease ≥ 4 × the worst one-way
+			// vote-link delay (test plan §3.3): base + jitter + fault ≤
+			// lease/4. Longer links are the measured F21 case, not a
+			// liveness guarantee (#998).
+			f.Kind, f.Value = Delay, int64(dur(ms, max(ms, lease/4-o.Delay-o.Jitter)))
 			link(&f)
 		case 4:
 			f.Kind, f.Value = Loss, int64(1+r.IntN(30))
@@ -131,27 +135,15 @@ func healAt(o Options) time.Duration {
 func checksFor(o Options) Checks {
 	h := healAt(o)
 	faults := 0
-	wiped := false
-	var ctlWiped [2]bool
 	for _, f := range o.Faults {
 		if f.Kind == Start {
 			continue // half of a stray-voter fault; its Mirror counts
 		}
 		faults++
-		switch {
-		case f.Kind == Wipe && f.Node == W:
-			wiped = true
-		case f.Kind == Wipe:
-			ctlWiped[f.Node] = true
-		}
 	}
+	// The witness backs the leader in steady state unless a node lost its
+	// state file; Check drops it then, from the record (#998).
 	voters := []Addr{A, B, W}
-	if wiped || ctlWiped[A] && ctlWiped[B] {
-		// A rebuilt witness isn't adopted until the handshake PR, and a
-		// controller that lost its file lost the incarnation it accepts:
-		// with both lost, neither counts the witness (#976).
-		voters = voters[:2]
-	}
 	c := Checks{HealAt: h, Bound: bound, MaxTakeovers: faults,
 		SteadyFrom: h + bound + 2*lease, SteadyTo: o.Until, SteadyVoters: voters}
 	for _, f := range o.Faults {

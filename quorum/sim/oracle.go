@@ -124,6 +124,18 @@ func (r *Record) faultEvent(at time.Duration, i int, on bool) {
 	r.faults = append(r.faults, faultEdge{at: at, fault: i, on: on})
 }
 
+// lostFile reports whether A, B or W ever restarted from a state file it
+// could not read: wiped, or torn by a crash mid-write. Taken from what the
+// run did, not from the schedule, so a torn file counts (#998).
+func (r *Record) lostFile() bool {
+	for _, s := range r.starts {
+		if (s.node == A || s.node == B || s.node == W) && !s.readable {
+			return true
+		}
+	}
+	return false
+}
+
 // Interval is one stretch of a controller's open gate, in global time:
 // [From, To) in Term.
 type Interval struct {
@@ -257,7 +269,16 @@ func Check(r *Record, c Checks) []Violation {
 		}
 	}
 	if c.SteadyTo > c.SteadyFrom {
-		for _, v := range r.checkSteady(gates, c.SteadyFrom, c.SteadyTo, c.SteadyVoters) {
+		voters := c.SteadyVoters
+		if r.lostFile() {
+			// Until the handshake PR, a rebuilt witness (a new incarnation)
+			// isn't adopted, and a controller that lost its file lost the
+			// incarnation it accepts, so the witness can't back it: the
+			// pair runs on A and B alone (#976). The handshake flips this
+			// back, beside TestKnownGap976TwoLostControllerFiles.
+			voters = slices.DeleteFunc(slices.Clone(voters), func(a Addr) bool { return a == W })
+		}
+		for _, v := range r.checkSteady(gates, c.SteadyFrom, c.SteadyTo, voters) {
 			add(v)
 		}
 	}

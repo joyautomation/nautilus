@@ -625,3 +625,34 @@ func selfGrant(t *testing.T, v *Voter, now Instant, r Request) Reply {
 	}
 	return reps[0]
 }
+
+// A lease won renews at once (#998). A campaign's grants can arrive late (a
+// voter's slow fsync), leaving less of the lease than a look: granted at
+// 1.75 s on a send at 0, the lease ends at 1.98 s, before the next look on
+// the grid (2 s). The next look is the instant of winning instead, and
+// that renewal (same term, same grantee) is answered without a write.
+func TestCandidateRenewsAtOnceOnWinning(t *testing.T) {
+	c := newC(t, cfgA(), 0, 0)
+	r := c.Tick(0, "", 0, true)
+	won := at(1750 * time.Millisecond)
+	c.OnReply(won, granted("A", r, 0))
+	c.OnReply(won, granted("W", r, 42))
+	if !c.Leading(won) || c.LeaseEnd() != at(1980*time.Millisecond) {
+		t.Fatalf("set-up: leading %v until %v", c.Leading(won), time.Duration(c.LeaseEnd()))
+	}
+	if c.NextLook() != won {
+		t.Fatalf("next look %v, want the winning instant %v", time.Duration(c.NextLook()), time.Duration(won))
+	}
+	rn := c.Tick(won, "", 0, true)
+	if rn == nil || !rn.Renewal || rn.Term != r.Term {
+		t.Fatalf("at the winning instant: %+v, want a renewal of term %d", rn, r.Term)
+	}
+	// Its own voter, which granted the campaign after a durable write,
+	// answers the renewal with no new write.
+	v := NewVoter("A", lease, VoterState{}, 0)
+	ps, _ := v.Handle(at(lease), Request{From: "A", Term: 1, ID: 1})
+	v.Persisted(ps.Seq, true)
+	if p, out := v.Handle(at(lease+time.Second), Request{From: "A", Term: 1, ID: 2, Renewal: true}); p != nil || len(out) != 1 || !out[0].Granted {
+		t.Fatalf("a renewal needed a write or was refused: persist %v, %+v", p, out)
+	}
+}
