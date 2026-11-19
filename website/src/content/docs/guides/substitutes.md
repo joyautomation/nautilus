@@ -14,7 +14,7 @@ with the guard rails a held reading needs:
 | Quality | the forced value reads Good | the tag reads **`substituted`** everywhere, and the alarm layer and the HMI say so |
 | Who | whoever may write | a project **rule** names what may be substituted and on what value; starting and acknowledging are audited |
 | Restart | lost | **kept**: a deploy must not put the bad reading back mid-run |
-| Redundancy | this controller only | replicated through the operator-intent log, so a takeover keeps it |
+| Redundancy | this controller only | built to replicate through the operator-intent log (see [A redundant pair](#a-redundant-pair) for what is and is not wired yet) |
 
 A substitute is for the logic to keep running. It is not a way to hide a
 dead sensor: the live reading and its quality stay visible beside the
@@ -146,12 +146,24 @@ A substitute survives a restart; the plant should not lose it in a deploy.
   the end from the monotonic remainder.
 - An entry the project no longer allows (its rule, input or type changed in
   a deploy) ends at load as an expiry with reason `refused-at-load`.
+- **Rolling back to an older binary** (one from before substitutes) and
+  forward again loses them: the older binary does not know the substitute
+  block and drops it, entries and the highest id issued, at its next save.
+  Ids then start again from zero, and any substitute that was running is
+  gone.
 - A retain store that cannot be read leaves the table as it is and raises
   `__Substitute_Fault` (`retain-load-failed`).
 
 ## A redundant pair
 
-In a redundant pair a start, stop or acknowledgement is **proposed to the
+**Status: built and tested in process, not yet running in `naut run`.** The
+server and runtime code below is exercised by tests that run three in-process
+oplog nodes. `naut run` does not yet mount the oplog or the substitute log
+(that is #710 PR 3), and it has not been run in the simulator or on hardware.
+Until then a pair does not replicate substitutes; the single-controller
+rules above are what runs.
+
+The design: a start, stop or acknowledgement is **proposed to the
 operator-intent log**, and every instance applies the committed entry, so
 the standby holds exactly what the leader does. At a takeover the new
 leader first **catches up the log, and applies every substitute, before its
@@ -169,26 +181,48 @@ raised. Expiry is **leader-only** and is itself an entry in the log
 
 ## When the answer is not certain
 
-A write that has to be committed or saved can finish without the caller
+A write that has to be saved or committed can finish without the caller
 knowing how. The API is explicit about it, and a screen must be too.
 
-| Answer | Meaning | What to do |
-|---|---|---|
-| `200`, `kept: true` | applied and saved | nothing |
-| `200`, `kept: false`, `warning` | **took effect, not saved**: it may not survive a restart, or on a lost lease it may still be active on the next leader. `__Substitute_Fault` says so until the next save | show the warning; do not call it a failure |
-| `400` | the request is invalid, or no rule names the tag | fix the request |
-| `403` | a value the rule does not allow (no `operator-value`) | |
-| `404` | no such entry is active (it expired, ended, or was replaced) | re-read |
-| `409` | the `requestId` was used for a different request, or a newer change won ("re-read and decide again"), or nothing to acknowledge | **re-read and decide again; never retry blind** |
-| `503` "no leader" | this replica is standing by and no leader is known | nothing was started; retry |
-| `503` "not saved" | the retain store refused a start | nothing was started; retry |
-| `503` "outcome unknown", header `X-Nautilus-Outcome: unknown` | the change may still be committed and applied | **re-read `GET /api/substitutes`**, show that it may still take effect; retry only with the same `requestId` |
+**Only an answer that carries `X-Nautilus-Outcome: refused` is certain**: the
+server refused it before changing anything. Every other failure is
+**unknown**: the `X-Nautilus-Outcome: unknown` 503, and also a 500, a 502, a
+504 or a 503 without the header (a proxy, `tailscale serve` or a follower's
+forward can return those *after* the leader applied the change), and a
+connection that dropped. A start also has a crash case: a start is saved and
+then applied, so a controller that dies between the two answers nothing, yet
+the substitute is there after the restart. That is an unknown outcome too.
+
+| Answer | Meaning |
+|---|---|
+| `200`, `kept: true` | applied and saved |
+| `200`, `kept: false`, `warning` | **took effect, not saved** (a stop or an acknowledgement; a start that cannot be saved is refused): it may not survive a restart, or on a lost lease it may still be active on the next leader |
+| `400`, `403`, `404` with `refused` | the request is invalid or no rule names the tag (400); a value the rule does not allow, or the permission (403); no such entry is active (404) |
+| `401` | not authenticated |
+| `409` with `refused` | the `requestId` was used for a different request, or a newer change won, or nothing was waiting for an acknowledgement |
+| `501` with `refused` | this server mirrors a controller it does not run: substitute on that controller |
+| `503` `no leader`, `refused` | this replica is standing by and no leader is known: nothing happened |
+| `503` not saved, `refused` | the retain store refused a start: nothing was started |
+| anything else | **unknown** |
+
+What to do:
+
+- **Unknown outcome of a start:** re-read `GET /api/substitutes`. If an entry
+  with your `requestId` is there, it started. If not, retry **only with the
+  same `requestId`** (a start retried with the same id is answered with the
+  entry the first one began, never a second), or wait and re-read again. Never
+  retry with a new id, and never start a second one on the same tag until it
+  is settled.
+- **Unknown outcome of a stop or an acknowledgement:** they carry no
+  `requestId`. Re-read and decide from what the list shows.
+- **`kept: false`:** it is in effect. Check `__Substitute_Fault`, and stop it
+  or re-save it later (any later successful change saves the whole table).
+- **409:** re-read and decide again; never retry blind.
 
 Send a fresh **`requestId`** with every start, one per user action, and
-**reuse it on every retry of that action**. A start retried with the same
-id is answered with the entry the first one began, never a second entry;
-the same id used for a different request is a `409`. The id is remembered
-for 8 days. The kit's `SubstituteClient` does all of this.
+reuse it on every retry of that action. The same id used for a different
+request is a `409`. It is remembered for 8 days. The kit's
+`SubstituteClient` and `SubstituteSession` do all of this.
 
 ## Test it
 

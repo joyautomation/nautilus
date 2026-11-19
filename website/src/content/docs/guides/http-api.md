@@ -643,8 +643,10 @@ is bad or wrong, flagged everywhere as quality `substituted`, for a
 bounded time. Which inputs may be substituted, on what value, for how
 long at most, is the manifest's `substitutes:` block. See
 [Substitute values](/guides/substitutes/) for the rules, the companion
-tags, restarts and takeovers. The three write calls need the same
-authorization as `POST /api/tags`.
+tags, restarts and takeovers. The three write calls go through the
+`substitute` permission, whose policy today is that of `POST /api/tags`:
+`401` when unauthenticated, `403` when refused, and `501` on a server that
+mirrors a controller it does not run.
 
 ```sh
 curl -s localhost:8080/api/substitutes | jq -c '.rules'
@@ -678,14 +680,17 @@ it on every retry.** A start retried with the same id is answered with the
 entry the first one began, never a second; the same id for a different
 request is `409`. Ids are remembered for 8 days.
 
+**Only an answer with the header `X-Nautilus-Outcome: refused` is certain**:
+nothing changed. Everything else, including any 500, 502, 504, a 503 without
+that header, the header `X-Nautilus-Outcome: unknown`, and a dropped
+connection, is **unknown**: the change may have been applied.
+
 | Answer | Meaning |
 | --- | --- |
 | `200` with `kept: true` | applied and saved |
 | `200` with `kept: false` and a `warning` | **took effect but was not saved** (a stop or an acknowledge; a start that cannot be saved is refused). It may not survive a restart, or may still be active on the next leader. Show the warning |
-| `409` | the `requestId` was used for a different request, or a newer change won (re-read and decide again), or nothing was waiting for an acknowledgement. Do not retry blind |
-| `503` `no leader` | this replica stands by and no leader is known: nothing happened; retry |
-| `503` not saved | the retain store refused a start: nothing was started |
-| `503` `outcome unknown`, header `X-Nautilus-Outcome: unknown` | the change may still be committed and applied. Re-read `GET /api/substitutes`; retry only with the same `requestId` |
+| `400`, `403`, `404`, `409`, `501`, `503` with `refused` | nothing happened. `409`: the `requestId` was used for a different request, a newer change won, or nothing was waiting for an acknowledgement; re-read and decide, do not retry blind. `503`: `no leader` (a standby) or not saved (the retain store refused a start) |
+| anything else | unknown. Re-read `GET /api/substitutes`. Retry a **start** only with the same `requestId`. A stop or an acknowledgement has no `requestId`: re-read and decide |
 
 Starting and acknowledging are elevated actions, refused while the audit
 journal cannot be written; ending one is a way back to normal and is
