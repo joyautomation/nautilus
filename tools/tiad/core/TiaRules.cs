@@ -564,6 +564,39 @@ namespace Tiad
             return apiDir + "\\" + name + ".dll";
         }
 
+        // Fingerprint is a certificate's SHA-256 over its DER bytes, as
+        // lower-case hex: what a caller compares to trust one.
+        public static string Fingerprint(byte[] der)
+        {
+            using (var h = System.Security.Cryptography.SHA256.Create())
+            {
+                var b = new StringBuilder();
+                foreach (byte x in h.ComputeHash(der)) b.Append(x.ToString("x2", CultureInfo.InvariantCulture));
+                return b.ToString();
+            }
+        }
+
+        // OnlineAsk describes one question TIA asked going online: a TLS
+        // certificate to trust (with the PLC's name, TIA's text and the
+        // certificates' fingerprints), or credentials of a kind.
+        public static string OnlineAsk(string type, string plc, string info, List<string> fingerprints)
+        {
+            if (type != "TlsVerificationConfiguration") return type + " (credentials tiad does not hold)";
+            string s = "trust the TLS certificate of " + (plc == "" ? "the PLC" : plc);
+            if (fingerprints.Count > 0) s += " (SHA-256 " + string.Join(", ", fingerprints.ToArray()) + ")";
+            if (info != "") s += ": " + info;
+            return s;
+        }
+
+        // OnlineRefused is the failure when TIA asked questions going online
+        // that tiad answered no: it trusts no certificate and holds no CPU
+        // credentials yet.
+        public static string OnlineRefused(string address, List<string> asked, string tiaMessage)
+        {
+            return "going online to " + address + ", TIA asked: " + string.Join("; ", asked.ToArray()) +
+                ". tiad trusts no CPU certificate and holds no CPU credentials yet, so it answered no (TIA: " + tiaMessage + ")";
+        }
+
         // Message is an exception's text with the inner ones it wraps, each
         // once: Openness wraps the reason in its own exceptions.
         public static string Message(Exception e)

@@ -36,6 +36,8 @@ using Siemens.Engineering.Download.Configurations;
 using Siemens.Engineering.HW;
 using Siemens.Engineering.HW.Features;
 using Siemens.Engineering.Online;
+using Siemens.Engineering.Online.Configurations;
+using Siemens.Engineering.Online.Security;
 using Siemens.Engineering.SW;
 using Siemens.Engineering.SW.Blocks;
 using Siemens.Engineering.SW.ExternalSources;
@@ -52,6 +54,54 @@ namespace Tiad.Openness
     {
         public Project Project;
         public string Full = "";
+    }
+
+    // OnlineAsks answers what TIA asks when it goes online to a CPU
+    // (ConnectionConfiguration.OnlineLegitimation): a TLS certificate to
+    // trust, or credentials. tiad trusts no CPU certificate and holds no CPU
+    // credentials yet, so every answer is no, and each question is recorded
+    // so the failure names it: the certificate's fingerprint is what a
+    // later, explicit trust decision has to match.
+    sealed class OnlineAsks
+    {
+        readonly ConnectionConfiguration cc;
+        public readonly List<string> Asked = new List<string>();
+
+        public OnlineAsks(ConnectionConfiguration cc)
+        {
+            this.cc = cc;
+            cc.OnlineLegitimation += Handle;
+        }
+
+        public void Stop()
+        {
+            cc.OnlineLegitimation -= Handle;
+        }
+
+        void Handle(OnlineConfiguration c)
+        {
+            var tls = c as TlsVerificationConfiguration;
+            if (tls != null)
+            {
+                var fps = new List<string>();
+                foreach (VerificationCertificate v in tls.Certificates)
+                {
+                    if (v.Certificate != null) fps.Add(TiaNames.Fingerprint(v.Certificate.RawData));
+                }
+                Asked.Add(TiaNames.OnlineAsk("TlsVerificationConfiguration", tls.PlcName ?? "", tls.VerificationInfo ?? "", fps));
+                tls.CurrentSelection = TlsVerificationConfigurationSelection.NonTrusted;
+                return;
+            }
+            Asked.Add(TiaNames.OnlineAsk(c.GetType().Name, "", "", new List<string>()));
+        }
+
+        // Explain is the failure for e: TIA's own text, or, when TIA asked
+        // something going online, what it asked.
+        public TiaException Explain(string address, Exception e)
+        {
+            if (Asked.Count == 0) return null;
+            return new TiaException(TiaNames.OnlineRefused(address, Asked, TiaNames.Message(e)), e);
+        }
     }
 
     public sealed class OpennessTia : ITia
@@ -492,11 +542,13 @@ namespace Tiad.Openness
             string state = null, messages = "";
             Exception error = null;
             bool entered = false;
+            OnlineAsks online = null;
             try
             {
                 HwDevice d = StationOf(p);
                 if (d == null) throw new TiaException("the project has no CPU");
                 DownloadProvider dp = CpuOf(d).GetService<DownloadProvider>();
+                online = new OnlineAsks(dp.Configuration);
                 ConfigurationPcInterface pc = PcInterface(dp.Configuration);
                 ConfigurationTargetInterface target = TargetInterface(pc);
                 // Provisional until S2b: the address on the target
@@ -529,9 +581,18 @@ namespace Tiad.Openness
                 state = null;
                 error = e;
             }
+            finally
+            {
+                if (online != null) online.Stop();
+            }
             // How it ended is decided in core (DownloadDecider.Finish).
             DownloadEnd end = decider.Finish(entered, state, messages, error);
-            if (end.Failure != null) throw new TiaException(end.Failure, error, end.InDoubt);
+            if (end.Failure != null)
+            {
+                string why = end.Failure;
+                if (online != null && online.Asked.Count > 0) why = TiaNames.OnlineRefused(address, online.Asked, end.Failure);
+                throw new TiaException(why, error, end.InDoubt);
+            }
             return new DownloadOutcome { Questions = decider.Asked, Loaded = end.Loaded };
         }
 
@@ -618,10 +679,29 @@ namespace Tiad.Openness
                 OnlineProvider op = cpu.GetService<OnlineProvider>();
                 ConfigurationPcInterface pc = PcInterface(op.Configuration);
                 ConfigurationAddress at = TargetInterface(pc).Addresses.Create(address);
-                OnlineState st = op.GoOnline(at);
+                var online = new OnlineAsks(op.Configuration);
+                OnlineState st;
                 try
                 {
-                    if (st != OnlineState.Online) throw new TiaException("TIA could not go online to " + address + ": " + st);
+                    st = op.GoOnline(at);
+                }
+                catch (Exception e)
+                {
+                    TiaException refused = online.Explain(address, e);
+                    if (refused != null) throw refused;
+                    throw;
+                }
+                finally
+                {
+                    online.Stop();
+                }
+                try
+                {
+                    if (st != OnlineState.Online)
+                    {
+                        if (online.Asked.Count > 0) throw new TiaException(TiaNames.OnlineRefused(address, online.Asked, "online state " + st));
+                        throw new TiaException("TIA could not go online to " + address + ": " + st);
+                    }
                     CompareResult cr = ((PlcSoftware)cpu.GetService<SoftwareContainer>().Software).CompareToOnline();
                     Walk(cr.RootElement, differences);
                 }
@@ -749,6 +829,7 @@ namespace Tiad.Openness
                 foreach (HwDevice d in new List<HwDevice>(p.Devices)) d.Delete();
                 string asked = null;
                 UploadResult r;
+                var online = new OnlineAsks(sup.Configuration);
                 try
                 {
                     r = sup.StationUpload(at, delegate(UploadConfiguration c)
@@ -760,7 +841,13 @@ namespace Tiad.Openness
                 catch (Exception e)
                 {
                     if (asked != null) throw new TiaException("upload asked " + asked + ", which tiad does not answer; nothing was uploaded", e);
+                    TiaException refused = online.Explain(address, e);
+                    if (refused != null) throw refused;
                     throw;
+                }
+                finally
+                {
+                    online.Stop();
                 }
                 // A refusal TIA swallowed is still a refusal.
                 if (asked != null) throw new TiaException("upload asked " + asked + ", which tiad does not answer; TIA went on anyway");
