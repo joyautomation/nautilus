@@ -179,8 +179,11 @@ namespace Tiad
         // paths it wrote.
         List<string> Export(object project, string dir, ExportOptions o);
 
-        // Upload loads the CPU at address into the project.
-        void Upload(object project, string address);
+        // Upload loads the CPU at address into the project. With
+        // trustUnverifiedCertificate, the request's explicit opt-in, a TLS
+        // certificate question is answered trusted, blindly; Upload returns
+        // the questions it so answered (empty when none was asked).
+        List<string> Upload(object project, string address, bool trustUnverifiedCertificate);
 
         // Save saves the project, or writes a project archive, and returns
         // its full path.

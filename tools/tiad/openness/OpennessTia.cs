@@ -65,11 +65,22 @@ namespace Tiad.Openness
     sealed class OnlineAsks
     {
         readonly ConnectionConfiguration cc;
+        readonly bool trustUnverifiedCertificate;
+        readonly string address;
         public readonly List<string> Asked = new List<string>();
+        // TrustedBlindly are the certificate questions answered Trusted,
+        // on the upload's explicit opt-in.
+        public readonly List<string> TrustedBlindly = new List<string>();
 
-        public OnlineAsks(ConnectionConfiguration cc)
+        public OnlineAsks(ConnectionConfiguration cc) : this(cc, false, "")
+        {
+        }
+
+        public OnlineAsks(ConnectionConfiguration cc, bool trustUnverifiedCertificate, string address)
         {
             this.cc = cc;
+            this.trustUnverifiedCertificate = trustUnverifiedCertificate;
+            this.address = address;
             cc.OnlineLegitimation += Handle;
         }
 
@@ -86,9 +97,11 @@ namespace Tiad.Openness
         {
             string type = c.GetType().Name;
             var tls = c as TlsVerificationConfiguration;
-            if (OnlineChecks.Answer(type) == OnlineChecks.NotTrusted && tls != null)
+            string answer = OnlineChecks.Answer(type, trustUnverifiedCertificate);
+            if ((answer == OnlineChecks.NotTrusted || answer == OnlineChecks.Trusted) && tls != null)
             {
-                tls.CurrentSelection = TlsVerificationConfigurationSelection.NonTrusted;
+                bool trust = answer == OnlineChecks.Trusted;
+                tls.CurrentSelection = trust ? TlsVerificationConfigurationSelection.Trusted : TlsVerificationConfigurationSelection.NonTrusted;
                 string plc = "", info = "";
                 var fps = new List<string>();
                 try
@@ -106,13 +119,17 @@ namespace Tiad.Openness
                             TiaNames.LogSafe(v.Certificate.Subject), TiaNames.LogSafe(v.Certificate.Issuer),
                             v.Certificate.NotBefore.ToUniversalTime(), v.Certificate.NotAfter.ToUniversalTime());
                     }
-                    Log.Line("online: {0} asks TLS trust ({1} certificate(s)); answered not trusted; {2}", TiaNames.LogSafe(plc), n, TiaNames.LogSafe(Describe(tls)));
+                    Log.Line("online: {0} asks TLS trust ({1} certificate(s)); answered {2}; {3}", TiaNames.LogSafe(plc), n,
+                        trust ? "TRUSTED BLINDLY on the request's trustUnverifiedCertificate opt-in (target " + TiaNames.LogSafe(address) + ")" : "not trusted",
+                        TiaNames.LogSafe(Describe(tls)));
                 }
                 catch (Exception e)
                 {
-                    Log.Line("online: reading a TLS question failed ({0}); answered not trusted", e.GetType().Name);
+                    Log.Line("online: reading a TLS question failed ({0}); answered {1}", e.GetType().Name, trust ? "TRUSTED BLINDLY" : "not trusted");
                 }
-                Asked.Add(OnlineChecks.Ask(type, plc, info, fps));
+                string ask = OnlineChecks.Ask(type, plc, info, fps);
+                if (trust) TrustedBlindly.Add(ask);
+                else Asked.Add(ask);
                 return;
             }
             string ask = OnlineChecks.Ask(type, "", "", new List<string>());
@@ -877,9 +894,9 @@ namespace Tiad.Openness
         // Upload replaces the project's station with the one the CPU at
         // address holds. It answers no upload configuration: one that
         // asks (a password, missing products) cancels it, naming it.
-        public void Upload(object project, string address)
+        public List<string> Upload(object project, string address, bool trustUnverifiedCertificate)
         {
-            Tia(delegate
+            return Tia(delegate
             {
                 Project p = Of(project).Project;
                 StationUploadProvider sup = p.GetService<StationUploadProvider>();
@@ -891,7 +908,7 @@ namespace Tiad.Openness
                 foreach (HwDevice d in new List<HwDevice>(p.Devices)) d.Delete();
                 string asked = null;
                 UploadResult r;
-                var online = new OnlineAsks(sup.Configuration);
+                var online = new OnlineAsks(sup.Configuration, trustUnverifiedCertificate, address);
                 try
                 {
                     r = sup.StationUpload(at, delegate(UploadConfiguration c)
@@ -917,6 +934,7 @@ namespace Tiad.Openness
                 string state = r.State.ToString();
                 if (!TiaNames.DownloadLoaded(state)) throw new TiaException("TIA's upload ended " + state);
                 if (StationOf(p) == null) throw new TiaException("the upload brought no CPU into the project");
+                return online.TrustedBlindly;
             });
         }
     }

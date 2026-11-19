@@ -56,9 +56,12 @@ type Script struct {
 	// NoDryRun makes the fake's TIA side one that cannot promise a dry
 	// run loads nothing (tiad.Openness until S2b): the agent refuses dry
 	// runs.
-	NoDryRun bool           `json:"noDryRun,omitempty"`
-	Delays   []ScriptedCall `json:"delays,omitempty"`
-	Failures []ScriptedCall `json:"failures,omitempty"`
+	NoDryRun bool `json:"noDryRun,omitempty"`
+	// UploadAsksTLS makes going online for an upload ask TLS trust, as a
+	// CPU with secure PG/PC communication and no known certificate does.
+	UploadAsksTLS bool           `json:"uploadAsksTls,omitempty"`
+	Delays        []ScriptedCall `json:"delays,omitempty"`
+	Failures      []ScriptedCall `json:"failures,omitempty"`
 }
 
 // ScriptedCall names an ITia call ("Compile", "OpenProject", ...).

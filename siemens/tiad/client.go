@@ -749,10 +749,34 @@ func (s *Session) Export(ctx context.Context, req ExportRequest) (ExportResult, 
 }
 
 // Upload loads the CPU's program into the session's project, for bringing
-// a running CPU's program into nautilus.
+// a running CPU's program into nautilus. It trusts no CPU certificate.
 func (s *Session) Upload(ctx context.Context) error {
-	_, err := s.c.doJSON(ctx, http.MethodPost, s.path("upload"), struct{}{}, nil)
+	_, err := s.UploadWith(ctx, UploadRequest{})
 	return err
+}
+
+// UploadRequest is an upload's options.
+type UploadRequest struct {
+	// TrustUnverifiedCertificate answers TIA's TLS question going online
+	// to the CPU "trusted", blindly: TIA shows no certificate to check. An
+	// explicit, per-call opt-in for a read-only upload from a CPU in
+	// TIAD_TARGETS; credentials and other questions still cancel. Download
+	// and compare have no such option.
+	TrustUnverifiedCertificate bool `json:"trustUnverifiedCertificate,omitempty"`
+}
+
+// UploadResult is what an upload did.
+type UploadResult struct {
+	// TrustedBlindly are the certificate questions answered trusted on
+	// the request's opt-in.
+	TrustedBlindly []string `json:"trustedBlindly"`
+}
+
+// UploadWith is Upload with options.
+func (s *Session) UploadWith(ctx context.Context, req UploadRequest) (UploadResult, error) {
+	var r UploadResult
+	_, err := s.c.doJSON(ctx, http.MethodPost, s.path("upload"), req, &r)
+	return r, err
 }
 
 // Save saves the project, or with archive set writes a project archive,

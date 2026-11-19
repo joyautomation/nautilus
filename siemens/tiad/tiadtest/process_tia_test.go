@@ -770,3 +770,26 @@ func TestAgentRefusesADryRunTIACannotCancel(t *testing.T) {
 		t.Fatalf("a real download: %+v %v", r, err)
 	}
 }
+
+// TestAgentTrustsACertificateOnlyOnTheUploadsOptIn: a CPU that asks TLS
+// trust going online fails an upload by default, naming the question; with
+// the upload's explicit trustUnverifiedCertificate it is trusted, blindly,
+// and the result and the audit log say so.
+func TestAgentTrustsACertificateOnlyOnTheUploadsOptIn(t *testing.T) {
+	p, s := downloadReady(t)
+	p.SetScript(t, tiadtest.Script{UploadAsksTLS: true})
+	err := s.Upload(ctx)
+	if tiad.Kind(err) != tiad.KindOperationFailed || !strings.Contains(err.Error(), "trust the TLS certificate of PLC_1") || !strings.Contains(err.Error(), "tiad trusts no CPU certificate") {
+		t.Fatalf("an upload a CPU asks TLS trust for, no opt-in: %v, want operation_failed naming the question", err)
+	}
+	r, err := s.UploadWith(ctx, tiad.UploadRequest{TrustUnverifiedCertificate: true})
+	if err != nil || len(r.TrustedBlindly) != 1 || !strings.Contains(r.TrustedBlindly[0], "trust the TLS certificate of PLC_1") {
+		t.Fatalf("an upload with the opt-in: %+v %v, want the question trusted blindly", r, err)
+	}
+	line := waitLog(t, p, "audit upload")
+	for _, want := range []string{"address=\"192.0.2.10\"", "trustUnverifiedCertificate=yes", "trustedBlindly=[\"trust the TLS certificate of PLC_1"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("the audit line lacks %s:\n%s", want, line)
+		}
+	}
+}

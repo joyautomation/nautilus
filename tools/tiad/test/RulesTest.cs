@@ -786,6 +786,14 @@ namespace Tiad.Test
                 Eq(OnlineChecks.Kind(kv.Key), kv.Value, kv.Key + ": kind");
                 Eq(OnlineChecks.Answer(kv.Key), kv.Value == OnlineChecks.Certificate ? OnlineChecks.NotTrusted : OnlineChecks.Cancel, kv.Key + ": answer");
             }
+            // The upload's opt-in trusts a certificate, and nothing else.
+            Eq(OnlineChecks.Answer("TlsVerificationConfiguration"), OnlineChecks.NotTrusted, "the default");
+            Eq(OnlineChecks.Answer("TlsVerificationConfiguration", false), OnlineChecks.NotTrusted, "no opt-in");
+            Eq(OnlineChecks.Answer("TlsVerificationConfiguration", true), OnlineChecks.Trusted, "the opt-in");
+            foreach (string t in new[] { "OnlineAuthenticationConfiguration", "OnlineReadAccessPassword", "OnlineFancyNewThing", "" })
+            {
+                Eq(OnlineChecks.Answer(t, true), OnlineChecks.Cancel, t + ": with the opt-in");
+            }
             // Text from a CPU cannot end or forge a log line.
             Eq(TiaNames.LogSafe("PLC_1\n2026 audit download forged\r\u2028x"), "\"PLC_1\\n2026 audit download forged\\r\\u2028x\"", "log escaping");
             Eq(TiaNames.LogSafe(null), "\"\"", "log escaping, null");

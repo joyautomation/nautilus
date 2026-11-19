@@ -999,7 +999,8 @@ func (f *Fake) upload(r *http.Request) (any, *failure) {
 	if fl != nil {
 		return nil, fl
 	}
-	if fl := decode(r, &struct{}{}); fl != nil {
+	var req tiad.UploadRequest
+	if fl := decode(r, &req); fl != nil {
 		return nil, fl
 	}
 	if s.station == nil || !contains(f.Targets, s.station.CPU.Address) {
@@ -1008,7 +1009,8 @@ func (f *Fake) upload(r *http.Request) (any, *failure) {
 	s.compiled = false
 	s.changed = true
 	s.uploaded = true
-	return struct{}{}, nil
+	// The fake's CPU asks no TLS question, so nothing is trusted.
+	return tiad.UploadResult{TrustedBlindly: []string{}}, nil
 }
 
 func (f *Fake) save(r *http.Request) (any, *failure) {
