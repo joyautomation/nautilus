@@ -2,7 +2,7 @@ profile: sick-sig300
 title: SICK SIG300 8-port IO-Link master, OPC UA server
 maker: SICK
 model: SIG300
-version: 3
+version: 4
 docs:
   - id: opc30120
     title: "OPC 30120 IO-Link companion specification, NodeSet 1.00.1 (2022-03-24): the type model a SIG300's server is said to follow (datasheets); namespace http://opcfoundation.org/UA/IOLink/"
@@ -38,9 +38,9 @@ iolink:                # docs/design/iolink.md §3, over OPC 30120's variables (
   # node ids here are stand-ins like the points' (UNVERIFIED).
   isdu:
     mode: opc-30120
-    object: "ns=4;s=SIG300/Port {n}/Device"
-    read: "ns=4;s=SIG300/Port {n}/Device/ReadISDU"
-    write: "ns=4;s=SIG300/Port {n}/Device/WriteISDU"
+    object: "ns=3;s=SIG300/Port {n}/Device"
+    read: "ns=3;s=SIG300/Port {n}/Device/ReadISDU"
+    write: "ns=3;s=SIG300/Port {n}/Device/WriteISDU"
     data: bytes
     unverified: true
     doc: "opc30120 ReadISDU (ns=1;i=7005) and WriteISDU (ns=1;i=7006) on IOLinkDeviceType"

@@ -83,8 +83,8 @@ func TestISDUReadThroughOPC30120(t *testing.T) {
 		t.Errorf("result %+v", res)
 	}
 	call := c.calls[0]
-	if call.object.NodeID != "ns=4;s=SIG300/Port 1/Device" || call.method.NodeID != "ns=4;s=SIG300/Port 1/Device/ReadISDU" || call.method.Namespace != "http://opcfoundation.org/UA/IOLink/" {
-		t.Errorf("called %+v on %+v", call.method, call.object)
+	if call.object.NodeID != "ns=3;s=SIG300/Port 1/Device" || call.method.NodeID != "ns=3;s=SIG300/Port 1/Device/ReadISDU" || call.method.Namespace != "" || call.object.Namespace != "" {
+		t.Errorf("called %+v on %+v (ns=3 is the profile's placeholder namespace: bound by index)", call.method, call.object)
 	}
 	if len(call.args) != 2 || call.args[0] != uint16(64) || call.args[1] != uint8(0) {
 		t.Errorf("arguments %v, want index 64, subindex 0", call.args)
@@ -158,7 +158,7 @@ func TestISDUWriteThroughOPC30120(t *testing.T) {
 		t.Fatal(err)
 	}
 	call := c.calls[0]
-	if call.method.NodeID != "ns=4;s=SIG300/Port 1/Device/WriteISDU" || len(call.args) != 3 {
+	if call.method.NodeID != "ns=3;s=SIG300/Port 1/Device/WriteISDU" || len(call.args) != 3 {
 		t.Fatalf("call %+v", call)
 	}
 	if b, _ := call.args[2].(ua.ByteArray); string(b) != "\x01\xf4" {

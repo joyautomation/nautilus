@@ -23,6 +23,12 @@ func composeVirtualDevices(dir string, devs *devbind.Set) (*virtdev.Set, error) 
 	var declared []virtdev.Instance
 	for _, r := range devs.Rows() {
 		d := virtdev.Instance{Name: r.Name, Profile: r.Profile, Endpoint: r.Endpoint, Params: r.Params}
+		for n, p := range r.Ports {
+			if d.Ports == nil {
+				d.Ports = map[int]virtdev.InstancePort{}
+			}
+			d.Ports[n] = virtdev.InstancePort{IODD: p.IODD}
+		}
 		if r.UnitID != nil {
 			u := uint8(*r.UnitID) // devbind.Resolve checked 0-255
 			d.UnitID = &u

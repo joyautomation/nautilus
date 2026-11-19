@@ -100,6 +100,11 @@ type matrixServer struct {
 	// (matrix_virtual_test.go), with model (and modelVars) as its plant
 	// program, the device named D.
 	virtual, model, modelVars string
+	// ports, for an IO-Link master, is the instance's ports: (flow YAML,
+	// "{ 1: { iodd: level.xml } }") and ioddFiles the IODDs it names, by
+	// file name with the path to copy each from.
+	ports     string
+	ioddFiles map[string]string
 	// readOnlyDevice: a server with nothing writable; the writes and quiet
 	// scenarios are skipped and the import does not expect writability.
 	readOnlyDevice bool

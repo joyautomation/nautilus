@@ -95,6 +95,9 @@ func FindParam(d *iodd.IODD, ref string) (*Param, error) {
 	return p, nil
 }
 
+// Type is the parameter's IODD type (the item's, for a record item).
+func (p *Param) Type() iodd.Type { return p.typ }
+
 // Index is the ISDU index.
 func (p *Param) Index() int { return p.Variable.Index }
 

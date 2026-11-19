@@ -84,6 +84,11 @@ func (s *Set) Mapped(d Instance) (m *uaserver.Mapped, writable []string, err err
 			writable = append(writable, tag)
 		}
 	}
+	extra, err := s.isduNodes(d, p, subst, ensure)
+	if err != nil {
+		return nil, nil, err
+	}
+	m.Nodes = append(m.Nodes, extra...)
 	return m, writable, nil
 }
 

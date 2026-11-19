@@ -63,6 +63,15 @@ type Instance struct {
 	Params map[string]string `yaml:"params"`
 	// OPCUA is an OPC UA device's simulation-only server settings.
 	OPCUA *InstanceOPCUA `yaml:"opcua"`
+	// Ports are an IO-Link master's ports that have a device on them, by
+	// number: the master answers ISDU for each from its IODD (isdu.go).
+	Ports map[int]InstancePort `yaml:"ports"`
+}
+
+// InstancePort is the device a virtual IO-Link master simulates on a port.
+type InstancePort struct {
+	// IODD is the device's IODD, a file name in the project's iodd/ folder.
+	IODD string `yaml:"iodd"`
 }
 
 // InstanceOPCUA is how an OPC UA virtual device's wire face serves.
