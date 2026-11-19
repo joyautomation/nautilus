@@ -51,14 +51,27 @@ var probeCap = 5 * time.Second
 const probeRetries = 3
 
 // probeTarget is one device to probe: a driver for it alone, built and not
-// started, the data tags it must read, and how to ask if it is connected.
+// started, the data tags it must read with their quality, and how to ask
+// how its connection fares.
 type probeTarget struct {
 	IOProbe
-	addr   string
-	build  func() (nio.Driver, error)
-	inputs func(nio.Driver) []string
-	health func(nio.Driver) (connected bool, lastErr string, retries uint64)
+	addr    string // host:port, the unit of "one probe at a time"
+	build   func() (nio.Driver, error)
+	inputs  func(nio.Driver) []string
+	quality func(nio.Driver) map[string]nio.Quality // by the inputs' own names
+	// health is how the connection fares: answered once the device has
+	// spoken its protocol (a Modbus exception, an OPC UA session), even
+	// with no tag read yet; a connection accepted and closed at once has
+	// not.
+	health func(nio.Driver) (answered bool, lastErr string, retries uint64)
 }
+
+// probeParallel bounds how many devices are probed at once; one address is
+// only ever probed once at a time (devices behind one gateway share it).
+const probeParallel = 4
+
+// probeStopWait bounds a probe driver's stop (an OPC UA session's close).
+const probeStopWait = time.Second
 
 // modeFor resolves how the device (a Modbus source, or the OPC UA device
 // an opcua-client driver is) of the candidate's driver is checked.
@@ -85,36 +98,47 @@ func modeFor(c *IOCandidate, driver, device string) (mode, why string) {
 	return devbind.ValidateLive, "no connection limit documented (not a device of the library)"
 }
 
-// probeTargets are what the changes put on the wire: a changed Modbus
-// device, each device of a Modbus driver swapped whole, an OPC UA driver.
-func probeTargets(c *IOCandidate, changes []IOChange) []probeTarget {
+// probeTargets are the changed devices, as the changes put them on the
+// wire: a changed Modbus device, the changed devices of a Modbus driver
+// swapped whole (an unchanged one is left alone), an OPC UA driver.
+func probeTargets(c *IOCandidate, changes []IOChange, running map[string]ioUnit) []probeTarget {
 	var out []probeTarget
 	modbusSource := func(driver string, u ioUnit) probeTarget {
 		mode, why := modeFor(c, driver, u.device)
+		cfg := c.configs[driver]
 		src, tags := u.src, append([]modbus.TagBinding(nil), u.tags...)
 		return probeTarget{
 			IOProbe: IOProbe{Driver: driver, Device: u.device, Mode: mode, Why: why},
 			addr:    endpointOf(src),
 			build: func() (nio.Driver, error) {
-				return modbus.New(modbus.Manifest{Sources: []modbus.Source{src}, Tags: tags},
-					modbus.WithScanRate(50*time.Millisecond), modbus.WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil))))
+				// As the apply builds it, its scan classes and tag classes
+				// included, every class polled at the probe's own rate.
+				opts := []modbus.Option{modbus.WithScanRate(probeRate), modbus.WithLogger(slog.New(slog.NewTextHandler(io.Discard, nil)))}
+				for name := range cfg.ScanClasses {
+					opts = append(opts, modbus.WithScanClass(name, probeRate))
+				}
+				for class, patterns := range cfg.TagClasses {
+					opts = append(opts, modbus.WithTagClass(class, patterns...))
+				}
+				return modbus.New(modbus.Manifest{Sources: []modbus.Source{src}, Tags: tags}, opts...)
 			},
 			inputs: func(nio.Driver) []string {
 				var names []string
 				for _, t := range tags {
-					if !t.WriteOnly {
+					if !t.WriteOnly && t.ScanClass != modbus.NoPoll {
 						names = append(names, t.Name)
 					}
 				}
 				return names
 			},
+			quality: func(d nio.Driver) map[string]nio.Quality { return d.(*modbus.Driver).Quality() },
 			health: func(d nio.Driver) (bool, string, uint64) {
 				h := d.(*modbus.Driver).Health()
 				if len(h.Sources) == 0 {
 					return false, "", 0
 				}
 				s := h.Sources[0]
-				return s.State == "connected", s.LastError, s.Retries
+				return s.Exceptions > 0, s.LastError, s.Retries
 			},
 		}
 	}
@@ -124,7 +148,7 @@ func probeTargets(c *IOCandidate, changes []IOChange) []probeTarget {
 			out = append(out, modbusSource(ch.Driver, c.units[unitKey(ch.Driver, ch.Device)]))
 		case c.units[ch.Driver].typ == "modbus":
 			for _, k := range sortedKeys(c.units) {
-				if u := c.units[k]; u.driver == ch.Driver && u.device != "" {
+				if u := c.units[k]; u.driver == ch.Driver && u.device != "" && u.hash != running[k].hash {
 					out = append(out, modbusSource(ch.Driver, u))
 				}
 			}
@@ -135,6 +159,8 @@ func probeTargets(c *IOCandidate, changes []IOChange) []probeTarget {
 				IOProbe: IOProbe{Driver: ch.Driver, Device: cfg.opcuaDevice, Mode: mode, Why: why},
 				addr:    cfg.Endpoint,
 				build:   func() (nio.Driver, error) { return buildDriver(fsys, cfg) },
+				// The OPC UA driver's own names: an OPC UA devices: row's
+				// wrapper rolls its members into the device's struct.
 				inputs: func(d nio.Driver) []string {
 					ua := opcuaOf(d)
 					var names []string
@@ -145,6 +171,7 @@ func probeTargets(c *IOCandidate, changes []IOChange) []probeTarget {
 					}
 					return names
 				},
+				quality: func(d nio.Driver) map[string]nio.Quality { return opcuaOf(d).Quality() },
 				health: func(d nio.Driver) (bool, string, uint64) {
 					h := opcuaOf(d).Health()
 					return h.State == "connected", h.LastError, h.Retries
@@ -154,6 +181,9 @@ func probeTargets(c *IOCandidate, changes []IOChange) []probeTarget {
 	}
 	return out
 }
+
+// probeRate is how often a probe's driver polls, every class alike.
+const probeRate = 50 * time.Millisecond
 
 // opcuaOf is the OPC UA client driver d is or wraps (devbind.OPCUADriver).
 func opcuaOf(d nio.Driver) *opcua.Driver {
@@ -170,28 +200,46 @@ func opcuaOf(d nio.Driver) *opcua.Driver {
 	return nil
 }
 
-// probe runs the live targets, at once, and returns every target's result.
+// probe runs the live targets: one address at a time (devices behind one
+// gateway share it, and each probe is a connection of its own), at most
+// probeParallel addresses at once. It returns every target's result.
 func probe(targets []probeTarget) []IOProbe {
 	out := make([]IOProbe, len(targets))
-	var wg sync.WaitGroup
+	byAddr := map[string][]int{}
+	var addrs []string
 	for i, tg := range targets {
 		if tg.Mode != devbind.ValidateLive {
 			out[i] = tg.IOProbe
 			out[i].OK = true
 			continue
 		}
+		if _, ok := byAddr[tg.addr]; !ok {
+			addrs = append(addrs, tg.addr)
+		}
+		byAddr[tg.addr] = append(byAddr[tg.addr], i)
+	}
+	slots := make(chan struct{}, probeParallel)
+	var wg sync.WaitGroup
+	for _, addr := range addrs {
 		wg.Add(1)
-		go func() {
+		go func(idx []int) {
 			defer wg.Done()
-			out[i] = runProbe(tg)
-		}()
+			slots <- struct{}{}
+			defer func() { <-slots }()
+			for _, i := range idx {
+				out[i] = runProbe(targets[i])
+			}
+		}(byAddr[addr])
 	}
 	wg.Wait()
 	return out
 }
 
 // runProbe starts a driver for the target alone, never writing, until every
-// data tag has read once (passed) or probeCap passes (failed).
+// data tag has read once (passed) or probeCap passes (failed). A device
+// that has not delivered one tag after probeRetries failed connections
+// (refused, or accepted and closed at once, as a device at its connection
+// limit does) fails at once.
 func runProbe(tg probeTarget) IOProbe {
 	p := tg.IOProbe
 	d, err := tg.build()
@@ -208,19 +256,20 @@ func runProbe(tg probeTarget) IOProbe {
 		s.Start(ctx)
 	}
 	defer func() {
-		if s, ok := d.(interface{ Stop() }); ok {
-			s.Stop()
+		s, ok := d.(interface{ Stop() })
+		if !ok {
+			return
+		}
+		stopped := make(chan struct{})
+		go func() { s.Stop(); close(stopped) }()
+		select {
+		case <-stopped:
+		case <-time.After(probeStopWait): // a session's close does not hold the validation
 		}
 	}()
 	inputs := tg.inputs(d)
-	quality := func() map[string]nio.Quality {
-		if q, ok := d.(nio.QualityReporter); ok {
-			return q.Quality()
-		}
-		return nil
-	}
-	everConnected, lastErr := false, ""
 	read := map[string]bool{} // the tags that have read once
+	lastErr, answered := "", false
 	refused := func() {
 		p.Detail = fmt.Sprintf("the device at %s did not answer a connection of the check's own", tg.addr)
 		if lastErr != "" {
@@ -229,41 +278,36 @@ func runProbe(tg probeTarget) IOProbe {
 		p.Detail += "; it may allow only one connection: set validate: static on its devices: row or its driver"
 	}
 	for {
-		connected, le, retries := tg.health(d)
-		everConnected = everConnected || connected
+		spoke, le, retries := tg.health(d)
+		answered = answered || spoke
 		if le != "" {
 			lastErr = le
 		}
-		if !everConnected && retries >= probeRetries {
-			refused() // refused outright, again and again: no need to wait out the cap
+		q := tg.quality(d)
+		all := true
+		for _, n := range inputs {
+			if qq, bad := q[n]; !bad || qq.IsGood() {
+				read[n] = true
+			}
+			all = all && read[n]
+		}
+		if all {
+			p.OK = true
 			return p
 		}
-		if connected {
-			// Each tag must read once; one that read and went stale since
-			// (a later block's exception upsetting the source) has.
-			q := quality()
-			all := true
-			for _, n := range inputs {
-				if qq, bad := q[n]; !bad || qq.IsGood() {
-					read[n] = true
-				}
-				all = all && read[n]
-			}
-			if all {
-				p.OK = true
-				return p
-			}
+		if len(read) == 0 && !answered && retries >= probeRetries {
+			refused() // refused, or closed at once, again and again
+			return p
 		}
 		select {
 		case <-ctx.Done():
-			q := quality()
 			for _, n := range inputs {
 				if !read[n] {
 					p.Bad = append(p.Bad, fmt.Sprintf("%s (%s)", n, q[n]))
 				}
 			}
 			sort.Strings(p.Bad)
-			if !everConnected {
+			if len(read) == 0 && !answered {
 				refused()
 				return p
 			}

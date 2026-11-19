@@ -564,7 +564,7 @@ func (io *IOConfig) Validate(c *IOCandidate) *IOValidation {
 		statically = statically && ck.OK
 	}
 	if statically {
-		v.Probes = probe(probeTargets(c, v.Changes))
+		v.Probes = probe(probeTargets(c, v.Changes, running))
 		live = liveCheck(v.Probes)
 	}
 	return finish()

@@ -1678,6 +1678,9 @@ func withDevices(configs []DriverConfig, set *devbind.Set) ([]DriverConfig, erro
 			at = len(out) - 1
 		}
 		out[at].devices = set
+		if err := liveOnOneConnection(out[at], set); err != nil {
+			return nil, err
+		}
 	}
 	taken := map[string]bool{}
 	for _, n := range driverNames(out) {
@@ -1694,6 +1697,28 @@ func withDevices(configs []DriverConfig, set *devbind.Set) ([]DriverConfig, erro
 		})
 	}
 	return out, nil
+}
+
+// liveOnOneConnection refuses a driver's validate: live over a device whose
+// profile documents a single Modbus connection: a live check's own
+// connection would be the controller's (#706), as devbind refuses on the
+// device's row.
+func liveOnOneConnection(c DriverConfig, set *devbind.Set) error {
+	if c.Validate != devbind.ValidateLive {
+		return nil
+	}
+	profiles := map[string]*devprofile.Profile{}
+	for _, p := range set.Profiles() {
+		profiles[p.ID] = p
+	}
+	for _, r := range set.Rows() {
+		p := profiles[r.Profile]
+		if p == nil || p.Modbus == nil || p.Modbus.MaxConnections != 1 || r.Validate != "" {
+			continue
+		}
+		return fmt.Errorf("driver %s: validate: live, but device %s's profile %s documents max-connections 1 (%s): a live check's connection would be the controller's; set validate: static on the driver, or on the rows that allow a second connection", c.Type, r.Name, p.ID, p.Modbus.MaxConnectionsDoc)
+	}
+	return nil
 }
 
 // driverNames resolves each configured driver's name: its name: when it has

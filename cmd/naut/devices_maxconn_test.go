@@ -129,9 +129,10 @@ func TestDevicesOneConnection(t *testing.T) {
 
 // #706 PR 4 against a device documented at one Modbus connection, its
 // virtual twin enforcing it, the project's own driver holding that one
-// connection: the default is a static check, which never connects; a
-// driver set to validate: live probes it anyway, is refused by the device
-// (counted), and the candidate is refused with what to do.
+// connection: the default is a static check, which never connects, and a
+// driver set to validate: live over it is refused at load, naming the
+// device (its check's connection would be the controller's), as devbind
+// refuses it on the row. Either way the device is never connected to.
 func TestDevicesOneConnectionLiveCheck(t *testing.T) {
 	dir := driveProject(t)
 	pf := filepath.Join(dir, devprofile.ProjectFile("abb-acs355-fmbt21"))
@@ -210,10 +211,16 @@ func TestDevicesOneConnectionLiveCheck(t *testing.T) {
 
 	live := strings.Replace(respelled, "devices:", "drivers: [{ type: modbus, validate: live }]\ndevices:", 1)
 	v = validate(live)
-	if v.Valid || len(v.Probes) != 1 || v.Probes[0].Mode != devbind.ValidateLive || !strings.Contains(v.Probes[0].Detail, "set validate: static") {
-		t.Fatalf("live on the driver: valid %v probes %+v", v.Valid, v.Probes)
+	var schema string
+	for _, ck := range v.Checks {
+		if ck.Name == "schema" {
+			schema = ck.Detail
+		}
 	}
-	if n := run.Refused("CONV"); n < 1 {
-		t.Fatalf("the device refused %d connections, want the probe's", n)
+	if v.Valid || len(v.Probes) != 0 || !strings.Contains(schema, "device CONV's profile abb-acs355-fmbt21 documents max-connections 1") {
+		t.Fatalf("live on the driver: valid %v schema %q probes %+v", v.Valid, schema, v.Probes)
+	}
+	if n := run.Refused("CONV"); n != 0 {
+		t.Fatalf("the device refused %d connections: something connected to it", n)
 	}
 }
