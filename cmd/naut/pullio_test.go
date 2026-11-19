@@ -42,10 +42,18 @@ func ioState(booted, running string) server.IOFiles {
 	}
 }
 
+// projectWith is a project whose manifest names modbus.yaml (and
+// profiles/x.yaml as a second driver's), with name holding body.
 func projectWith(t *testing.T, name, body string) string {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+	manifest := "name: p\ndrivers:\n  - {type: modbus, manifest: modbus.yaml}\n  - {type: modbus, name: two, manifest: profiles/x.yaml}\n"
+	if err := os.MkdirAll(filepath.Join(dir, "profiles"), 0o755); err != nil {
 		t.Fatal(err)
+	}
+	for n, b := range map[string]string{"nautilus.yaml": manifest, name: body} {
+		if err := os.WriteFile(filepath.Join(dir, n), []byte(b), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 	return dir
 }
@@ -125,7 +133,6 @@ func TestPullIOWritesNothingWhenOneFileIsRefused(t *testing.T) {
 	st.Files = append(st.Files, server.IOFile{Path: "profiles/x.yaml", Running: "new\n", Booted: sha256hex("old\n")})
 	host, port := ioController(t, st)
 	dir := projectWith(t, "modbus.yaml", "a: 1\n")
-	os.MkdirAll(filepath.Join(dir, "profiles"), 0o755)
 	os.WriteFile(filepath.Join(dir, "profiles/x.yaml"), []byte("edited\n"), 0o644)
 	if c := pullIO(host, port, dir, false, false, false); c != 2 {
 		t.Fatalf("exit %d, want 2", c)
@@ -148,26 +155,108 @@ func TestPullIOStandbyRefused(t *testing.T) {
 	}
 }
 
-func TestPullIONewFileAndPathsOutsideTheProject(t *testing.T) {
+func TestPullIOWritesANewFileTheManifestNames(t *testing.T) {
 	st := server.IOFiles{Leading: true, Units: []server.IODiffer{{Driver: "d"}},
-		Files: []server.IOFile{{Path: "profiles/new.yaml", Running: "x\n"}}}
+		Files: []server.IOFile{{Path: "profiles/x.yaml", Running: "x\n"}}}
 	host, port := ioController(t, st)
-	dir := t.TempDir()
+	dir := projectWith(t, "modbus.yaml", "a: 1\n")
 	if c := pullIO(host, port, dir, false, false, false); c != 0 {
 		t.Fatalf("exit %d, want 0: a file the change added", c)
 	}
-	if got := readFile(t, dir, "profiles/new.yaml"); got != "x\n" {
+	if got := readFile(t, dir, "profiles/x.yaml"); got != "x\n" {
 		t.Fatalf("new file = %q", got)
 	}
-	for _, bad := range []string{"../escape.yaml", "/etc/passwd", "a/../../b"} {
-		st.Files = []server.IOFile{{Path: bad, Running: "x"}}
+}
+
+// The controller's list of paths grants nothing: only files the project's
+// own manifest names are written, as plain data files.
+func TestPullIOWritesOnlyFilesTheManifestNames(t *testing.T) {
+	for _, bad := range []string{
+		"../escape.yaml", "/etc/passwd", "a/../../b", ".git/hooks/pre-commit", ".git/config",
+		"evil.st", "evil.fbd", "main.st", ".hidden.yaml", "sub/.x/y.yaml", "other.yaml", "profiles/../modbus.yaml",
+		"nautilus.yaml/../x.yaml",
+	} {
+		st := server.IOFiles{Leading: true, Units: []server.IODiffer{{Driver: "d"}},
+			Files: []server.IOFile{{Path: "modbus.yaml", Running: "ok\n", Booted: sha256hex("a: 1\n")}, {Path: bad, Running: "x"}}}
 		host, port := ioController(t, st)
+		dir := projectWith(t, "modbus.yaml", "a: 1\n")
 		if c := pullIO(host, port, dir, false, false, true); c != 2 {
 			t.Fatalf("%q: exit %d, want 2", bad, c)
 		}
+		if got := readFile(t, dir, "modbus.yaml"); got != "a: 1\n" {
+			t.Fatalf("%q: modbus.yaml = %q, want nothing written when one path is refused", bad, got)
+		}
+		if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(bad))); err == nil && filepath.IsLocal(filepath.FromSlash(bad)) && filepath.Clean(filepath.FromSlash(bad)) != "modbus.yaml" {
+			t.Fatalf("%q was written", bad)
+		}
 	}
-	if _, err := os.Stat(filepath.Join(filepath.Dir(dir), "escape.yaml")); err == nil {
-		t.Fatal("a path outside the project was written")
+}
+
+// A manifest the controller sends that names a new driver file extends the
+// allow-list by that name, still only for a data file.
+func TestPullIOFollowsThePulledManifestsNames(t *testing.T) {
+	manifest := "name: p\ndrivers:\n  - {type: modbus, manifest: modbus.yaml}\n  - {type: modbus, name: two, manifest: profiles/x.yaml}\n  - {type: modbus, name: three, manifest: extra.yaml}\n  - {type: modbus, name: four, manifest: run.st}\n"
+	st := server.IOFiles{Leading: true, Units: []server.IODiffer{{Driver: "d"}},
+		Files: []server.IOFile{{Path: "nautilus.yaml", Running: manifest}, {Path: "extra.yaml", Running: "e\n"}}}
+	host, port := ioController(t, st)
+	dir := projectWith(t, "modbus.yaml", "a: 1\n")
+	if c := pullIO(host, port, dir, false, false, true); c != 0 {
+		t.Fatalf("exit %d, want 0", c)
+	}
+	if readFile(t, dir, "extra.yaml") != "e\n" {
+		t.Fatal("a file the pulled manifest names was not written")
+	}
+	st.Files = append(st.Files, server.IOFile{Path: "run.st", Running: "evil"})
+	host, port = ioController(t, st)
+	if c := pullIO(host, port, dir, false, false, true); c != 2 {
+		t.Fatalf("a program source named by the manifest: exit %d, want 2", c)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "run.st")); err == nil {
+		t.Fatal("run.st was written")
+	}
+}
+
+// A symlink in the project that leads out of it is not written through.
+func TestPullIORefusesASymlinkOutOfTheProject(t *testing.T) {
+	out := t.TempDir()
+	dir := projectWith(t, "modbus.yaml", "a: 1\n")
+	if err := os.RemoveAll(filepath.Join(dir, "profiles")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(out, filepath.Join(dir, "profiles")); err != nil {
+		t.Skip(err)
+	}
+	st := server.IOFiles{Leading: true, Units: []server.IODiffer{{Driver: "d"}},
+		Files: []server.IOFile{{Path: "profiles/x.yaml", Running: "x\n"}}}
+	host, port := ioController(t, st)
+	if c := pullIO(host, port, dir, false, false, true); c != 2 {
+		t.Fatalf("exit %d, want 2", c)
+	}
+	if _, err := os.Stat(filepath.Join(out, "x.yaml")); err == nil {
+		t.Fatal("wrote through a symlink out of the project")
+	}
+}
+
+func TestPullForceNeedsIO(t *testing.T) {
+	if c := runPull([]string{"--host", "127.0.0.1", "--force"}); c != 2 {
+		t.Fatalf("--force without --io: exit %d, want 2", c)
+	}
+}
+
+// --force names every file it overwrites.
+func TestPullIOForcePrintsWhatItOverwrites(t *testing.T) {
+	host, port := ioController(t, ioState("a: 1\n", "a: 2\n"))
+	dir := projectWith(t, "modbus.yaml", "mine\n")
+	old := os.Stderr
+	r, w, _ := os.Pipe()
+	os.Stderr = w
+	c := pullIO(host, port, dir, false, false, true)
+	w.Close()
+	os.Stderr = old
+	buf := make([]byte, 4096)
+	n, _ := r.Read(buf)
+	if c != 0 || !strings.Contains(string(buf[:n]), "overwriting modbus.yaml") {
+		t.Fatalf("exit %d, stderr %q, want it to name modbus.yaml", c, buf[:n])
 	}
 }
 

@@ -55,7 +55,12 @@ Flags:
   --io      Also pull the live I/O configuration into the project files.
   --dry-run Print what would change as a unified diff and write nothing
             (exit 0). --check keeps its meaning and wins over it.
-  --force   With --io, overwrite a project file you edited locally.
+  --force   With --io, overwrite a project file you edited locally. It skips
+            the one check that your copy is the file the controller booted
+            from (it trusts the controller's word for that), so your edits to
+            that file are replaced with no diff shown; each such path is
+            printed. Only the files the manifest names as I/O files are ever
+            written, with or without --force.
 `
 
 // programInfo mirrors the server's GET /api/program response — the selected
@@ -94,6 +99,10 @@ func runPull(args []string) int {
 		return 2
 	}
 
+	if *force && !*withIO {
+		fmt.Fprintln(os.Stderr, "naut pull: --force applies to --io only")
+		return 2
+	}
 	code := pullPrograms(*host, *port, *dir, *check, *dry)
 	if *withIO {
 		if c := pullIO(*host, *port, *dir, *check, *dry, *force); c == 2 || (c == 1 && code == 0) {

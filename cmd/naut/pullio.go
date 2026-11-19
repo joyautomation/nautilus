@@ -8,11 +8,13 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/joyautomation/nautilus/internal/apiclient"
+	"github.com/joyautomation/nautilus/internal/project"
 	"github.com/joyautomation/nautilus/server"
 )
 
@@ -57,18 +59,34 @@ func pullIO(host string, port int, dir string, check, dry, force bool) int {
 		local   string
 		exists  bool
 		refused bool
+		edited  bool // differs from the booted file (written only with --force)
 	}
+	// The controller chooses these paths and bytes, so none of them is
+	// trusted: only files this project's own manifest names are written
+	// (never program sources, hidden paths or .git), and every read and
+	// write goes through os.Root, which refuses a symlink out of the project.
+	allowed := ioPullAllowed(dir, st.Files)
+	var disallowed []string
+	for _, f := range st.Files {
+		if !allowed[f.Path] {
+			disallowed = append(disallowed, f.Path)
+		}
+	}
+	if len(disallowed) > 0 {
+		return fail("%s offers files this project's manifest does not name as I/O files (only %s, the manifests drivers: name and profiles/<id>.yaml of devices: are pulled; never hidden paths, .git or program sources), so nothing was written: %s", host, project.ManifestName, strings.Join(disallowed, ", "))
+	}
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		return fail("%v", err)
+	}
+	defer root.Close()
 	var changes []change
 	for _, f := range st.Files {
-		// The controller chooses these paths: keep them inside dir.
-		if !filepath.IsLocal(filepath.FromSlash(f.Path)) {
-			return fail("%s names a file outside the project: %q", host, f.Path)
-		}
-		dst := filepath.Join(dir, filepath.FromSlash(f.Path))
-		was, err := os.ReadFile(dst)
+		dst := filepath.FromSlash(f.Path)
+		was, err := root.ReadFile(dst)
 		exists := err == nil
 		if err != nil && !os.IsNotExist(err) {
-			return fail("%v", err)
+			return fail("%s: %v", f.Path, err)
 		}
 		if exists && string(was) == f.Running {
 			continue
@@ -76,7 +94,8 @@ func pullIO(host string, port int, dir string, check, dry, force bool) int {
 		c := change{file: f, dst: dst, local: string(was), exists: exists}
 		if exists {
 			sum := sha256.Sum256(was)
-			c.refused = !force && hex.EncodeToString(sum[:]) != f.Booted
+			c.edited = hex.EncodeToString(sum[:]) != f.Booted
+			c.refused = !force && c.edited
 		}
 		changes = append(changes, c)
 	}
@@ -112,11 +131,16 @@ func pullIO(host string, port int, dir string, check, dry, force bool) int {
 		return fail("not the files the controller booted from, so pulling would overwrite your edits: %s. Review with --dry-run, or pass --force", strings.Join(refused, ", "))
 	}
 	for _, c := range changes {
-		if err := os.MkdirAll(filepath.Dir(c.dst), 0o755); err != nil {
-			return fail("%v", err)
+		if c.edited {
+			fmt.Fprintf(os.Stderr, "naut pull --io: --force: overwriting %s, which differs from the file the controller booted from\n", c.file.Path)
 		}
-		if err := os.WriteFile(c.dst, []byte(c.file.Running), 0o644); err != nil {
-			return fail("%v", err)
+	}
+	for _, c := range changes {
+		if err := root.MkdirAll(filepath.Dir(c.dst), 0o755); err != nil {
+			return fail("%s: %v", c.file.Path, err)
+		}
+		if err := root.WriteFile(c.dst, []byte(c.file.Running), 0o644); err != nil {
+			return fail("%s: %v", c.file.Path, err)
 		}
 		fmt.Printf("updated %s from %s (I/O: %s)\n", c.file.Path, host, strings.Join(names, ", "))
 	}
@@ -150,4 +174,68 @@ func fetchIOFiles(host string, port int) (server.IOFiles, error) {
 		return out, fmt.Errorf("bad response from %s: %w", url, err)
 	}
 	return out, nil
+}
+
+// ioPullAllowed is the project paths a pull may write: the manifest, the
+// manifest files its drivers: name and the profiles its devices: use, as
+// the local manifest and the one being pulled name them, and only plain
+// data files (.yaml, .yml, .json) with no hidden path component. Computed
+// here: the controller's list of paths is never what grants a write.
+func ioPullAllowed(dir string, files []server.IOFile) map[string]bool {
+	names := map[string]bool{project.ManifestName: true}
+	add := func(m *project.Manifest) {
+		if m == nil {
+			return
+		}
+		if m.Driver.Manifest != "" {
+			names[path.Clean(m.Driver.Manifest)] = true
+		}
+		for _, d := range m.Drivers {
+			if d.Manifest != "" {
+				names[path.Clean(d.Manifest)] = true
+			}
+		}
+		for _, d := range m.Devices {
+			if d.Profile != "" {
+				names["profiles/"+d.Profile+".yaml"] = true
+			}
+		}
+	}
+	base := os.DirFS(dir)
+	if m, err := project.ReadManifest(base, ""); err == nil {
+		add(m)
+	}
+	for _, f := range files {
+		if f.Path == project.ManifestName {
+			overlay := project.OverlayFS(base, map[string][]byte{project.ManifestName: []byte(f.Running)})
+			if m, err := project.ReadManifest(overlay, ""); err == nil {
+				add(m)
+			}
+		}
+	}
+	out := map[string]bool{}
+	for _, f := range files {
+		if names[f.Path] && ioPullSafePath(f.Path) {
+			out[f.Path] = true
+		}
+	}
+	return out
+}
+
+// ioPullSafePath: a clean relative slash path inside the project, of a
+// data file, with no hidden component.
+func ioPullSafePath(p string) bool {
+	if p == "" || path.Clean(p) != p || !filepath.IsLocal(filepath.FromSlash(p)) {
+		return false
+	}
+	for _, part := range strings.Split(p, "/") {
+		if strings.HasPrefix(part, ".") {
+			return false
+		}
+	}
+	switch strings.ToLower(path.Ext(p)) {
+	case ".yaml", ".yml", ".json":
+		return true
+	}
+	return false
 }
