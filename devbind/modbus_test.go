@@ -125,7 +125,7 @@ func TestNewAssemblyIsFresh(t *testing.T) {
 	}
 	// Nor has the driver's own adapter.
 	own := nio.Values{}
-	w.assemble(own)
+	w.st.assemble(own)
 	if _, ok := own["CONV"]; ok {
 		t.Errorf("the driver's adapter delivered an assembly's values: %v", own)
 	}

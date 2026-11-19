@@ -327,13 +327,13 @@
         },
         "endpoint": {
           "type": "string",
-          "description": "Where the device answers: a Modbus host[:port]. The port defaults to the profile's, then 502."
+          "description": "Where the device answers: a Modbus host[:port] (the port defaults to the profile's, then 502), or an OPC UA host[:port] or opc.tcp://host[:port] (the port defaults to the profile's, then 4840)."
         },
         "unit-id": {
           "type": "integer",
           "minimum": 0,
           "maximum": 255,
-          "description": "The Modbus unit id; defaults to the profile's."
+          "description": "The Modbus unit id; defaults to the profile's. An OPC UA device has none."
         },
         "points": {
           "type": "array",
@@ -352,6 +352,20 @@
         "desc": {
           "type": "string",
           "description": "One line for the device's tags."
+        },
+        "ports": {
+          "type": "object",
+          "propertyNames": { "pattern": "^[0-9]+$" },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name"],
+            "properties": {
+              "name": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$", "description": "The port's device tag, unique among the project's devices and ports." },
+              "iodd": { "type": "string", "description": "The sensor's IODD: a file name in the project's iodd/ folder." }
+            }
+          },
+          "description": "An IO-Link master's ports by number: the sensor on each. Only a profile that declares IO-Link ports takes them."
         }
       }
     },

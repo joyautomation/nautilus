@@ -169,33 +169,52 @@ func runDevicesRender(args []string, w io.Writer) int {
 	}
 	tw.Flush()
 
-	mm := set.ModbusManifest()
-	fmt.Fprint(w, "\n# modbus\n\n")
-	tw = tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "SOURCE\tHOST\tPORT\tUNIT\tWORD ORDER")
-	for _, s := range mm.Sources {
-		order := s.WordOrder
-		if order == "" {
-			order = "big"
+	if set.Modbus() {
+		mm := set.ModbusManifest()
+		fmt.Fprint(w, "\n# modbus\n\n")
+		tw = tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+		fmt.Fprintln(tw, "SOURCE\tHOST\tPORT\tUNIT\tWORD ORDER")
+		for _, s := range mm.Sources {
+			order := s.WordOrder
+			if order == "" {
+				order = "big"
+			}
+			fmt.Fprintf(tw, "%s\t%s\t%d\t%d\t%s\n", s.ID, s.Host, s.Port, s.UnitID, order)
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%d\t%d\t%s\n", s.ID, s.Host, s.Port, s.UnitID, order)
+		tw.Flush()
+		fmt.Fprintln(w)
+		tw = tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+		fmt.Fprintln(tw, "BINDING\tACCESS\tTABLE\tADDRESS\tFORMAT")
+		for _, b := range mm.Tags {
+			access := "read"
+			if b.Writable {
+				access = "write"
+			}
+			format := b.Format
+			if b.Scale != 0 && b.Scale != 1 {
+				format += fmt.Sprintf(" ×%g", b.Scale)
+			}
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\n", b.Name, access, b.Table, b.Address, format)
+		}
+		tw.Flush()
 	}
-	tw.Flush()
-	fmt.Fprintln(w)
-	tw = tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "BINDING\tACCESS\tTABLE\tADDRESS\tFORMAT")
-	for _, b := range mm.Tags {
-		access := "read"
-		if b.Writable {
-			access = "write"
+	for _, od := range set.OPCUADevices() {
+		fmt.Fprintf(w, "\n# opcua %s (driver %s, %s)\n\n", od.Name, od.Name, od.Endpoint)
+		tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
+		fmt.Fprintln(tw, "BINDING\tACCESS\tTYPE\tNODE ID\tNAMESPACE")
+		for _, b := range od.Manifest.Tags {
+			access := "read"
+			if b.Writable {
+				access = "write"
+			}
+			ns := b.Namespace
+			if ns == "" {
+				ns = "(by index)"
+			}
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", b.Name, access, b.Type, b.NodeID, ns)
 		}
-		format := b.Format
-		if b.Scale != 0 && b.Scale != 1 {
-			format += fmt.Sprintf(" ×%g", b.Scale)
-		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\n", b.Name, access, b.Table, b.Address, format)
+		tw.Flush()
 	}
-	tw.Flush()
 	fmt.Fprintf(w, "\n%s.<point> bindings are the struct's members (read back); %s_<point> are the command tags.\n", "<device>", "<device>")
 	return 0
 }

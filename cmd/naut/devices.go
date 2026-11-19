@@ -41,9 +41,12 @@ A project declares its devices in nautilus.yaml:
 
   devices:
     - { name: CONV, profile: abb-acs355-fmbt21, endpoint: 10.0.0.11 }
+    - { name: IOLM, profile: pepperl-fuchs-ice3, endpoint: 10.0.0.12 }
 
 CONV is then one struct tag of the profile's type (CONV.StatusWord reads the
-drive back) plus a command tag per writable point (CONV_ControlWord). See
+drive back) plus a command tag per writable point (CONV_ControlWord). A
+Modbus device joins the project's Modbus driver; an OPC UA device is an
+opcua-client driver of its own, named after it. See
 docs/design/device-library.md.
 
 A virtual device speaks the real device's protocol and register map, built

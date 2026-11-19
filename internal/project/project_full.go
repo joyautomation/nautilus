@@ -259,6 +259,10 @@ func declaredOnly(devs []sparkplug.Device, declared map[string]bool) []sparkplug
 // roots refused, read member by member) a DBIRTH sent as soon as the link
 // came up carried only the tags read so far, and the rest rebirthed the node.
 func driverHealth(d nio.Driver) func() bool {
+	if u, ok := d.(interface{ Unwrap() nio.Driver }); ok {
+		// a driver carrying devices (devbind) is as healthy as the driver it is
+		return driverHealth(u.Unwrap())
+	}
 	switch drv := d.(type) {
 	case *eip.Driver:
 		return func() bool { h := drv.Health(); return h.Connected && h.Primed }
@@ -570,16 +574,26 @@ func buildDriver(fsys fs.FS, d DriverConfig) (nio.Driver, error) {
 		if d.Endpoint == "" {
 			return nil, fmt.Errorf("driver opcua-client: endpoint is required (opc.tcp://host:4840)")
 		}
-		if d.Manifest == "" {
-			return nil, fmt.Errorf("driver opcua-client: manifest (the opcua_manifest.yaml `naut opcua import` writes) is required")
-		}
-		raw, err := fs.ReadFile(fsys, path.Clean(d.Manifest))
-		if err != nil {
-			return nil, fmt.Errorf("driver opcua-client: %w", err)
-		}
-		om, err := opcua.ParseManifest(raw)
-		if err != nil {
-			return nil, fmt.Errorf("driver opcua-client: %s: %w", d.Manifest, err)
+		var om opcua.Manifest
+		if d.opcuaDevice != "" {
+			// An OPC UA devices: row (device-library.md §3): its manifest
+			// is derived from the vendored profile, never a file.
+			for _, od := range d.devices.OPCUADevices() {
+				if od.Name == d.opcuaDevice {
+					om = od.Manifest
+				}
+			}
+		} else {
+			if d.Manifest == "" {
+				return nil, fmt.Errorf("driver opcua-client: manifest (the opcua_manifest.yaml `naut opcua import` writes) is required")
+			}
+			raw, err := fs.ReadFile(fsys, path.Clean(d.Manifest))
+			if err != nil {
+				return nil, fmt.Errorf("driver opcua-client: %w", err)
+			}
+			if om, err = opcua.ParseManifest(raw); err != nil {
+				return nil, fmt.Errorf("driver opcua-client: %s: %w", d.Manifest, err)
+			}
 		}
 		// The session's status, as a BOOL input the logic checks before
 		// trusting its values: "<driver name>__Online" — opcua_client__Online for
@@ -608,7 +622,11 @@ func buildDriver(fsys fs.FS, d DriverConfig) (nio.Driver, error) {
 		for class, patterns := range d.TagClasses {
 			opts = append(opts, opcua.WithTagClass(class, patterns...))
 		}
-		return opcua.New(d.Endpoint, om, opts...)
+		od, err := opcua.New(d.Endpoint, om, opts...)
+		if err != nil || d.opcuaDevice == "" {
+			return od, err
+		}
+		return d.devices.WrapOPCUA(d.opcuaDevice, od)
 	case "profinet-device":
 		// nautilus as a PROFINET IO device to a PLC (brief
 		// docs/design/profinet.md). New never opens a socket, so check and

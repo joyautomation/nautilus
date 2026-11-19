@@ -561,8 +561,12 @@ type DriverConfig struct {
 	ReadMode string `yaml:"read-mode"`
 
 	// devices are the project's devices this driver carries (Load sets
-	// it on the Modbus driver); not a manifest key.
+	// it on the Modbus driver, and on each OPC UA device's own driver);
+	// not a manifest key.
 	devices *devbind.Set `yaml:"-"`
+	// opcuaDevice is the OPC UA device an opcua-client driver Load made
+	// for a devices: row is; not a manifest key.
+	opcuaDevice string `yaml:"-"`
 
 	// Tags binds a `type: runtime` status driver's inputs to the
 	// runtime's own health (runtimestatus.go, #850).
@@ -1608,24 +1612,45 @@ func withDeviceTypes(libs []stproject.Library, set *devbind.Set) []stproject.Lib
 	return out
 }
 
-// withDevices hands the project's devices to its Modbus driver, adding one
-// when the project declares none. The configs are copied, not changed.
+// withDevices hands the project's devices to their drivers: the Modbus
+// devices to the project's Modbus driver, adding one when it declares none,
+// and each OPC UA device to an opcua-client driver of its own, named after
+// it (an OPC UA client talks to one server). The configs are copied, not
+// changed.
 func withDevices(configs []DriverConfig, set *devbind.Set) ([]DriverConfig, error) {
 	out := append([]DriverConfig(nil), configs...)
-	at := -1
-	for i, c := range out {
-		if strings.EqualFold(c.Type, "modbus") {
-			if at >= 0 {
-				return nil, fmt.Errorf("devices: the project has more than one modbus driver; devices go to one, so keep one")
+	if set.Modbus() {
+		at := -1
+		for i, c := range out {
+			if strings.EqualFold(c.Type, "modbus") {
+				if at >= 0 {
+					return nil, fmt.Errorf("devices: the project has more than one modbus driver; devices go to one, so keep one")
+				}
+				at = i
 			}
-			at = i
 		}
+		if at < 0 {
+			out = append(out, DriverConfig{Type: "modbus"})
+			at = len(out) - 1
+		}
+		out[at].devices = set
 	}
-	if at < 0 {
-		out = append(out, DriverConfig{Type: "modbus"})
-		at = len(out) - 1
+	taken := map[string]bool{}
+	for _, n := range driverNames(out) {
+		taken[strings.ToLower(n)] = true
 	}
-	out[at].devices = set
+	for _, od := range set.OPCUARows() {
+		if taken[strings.ToLower(od.Name)] {
+			return nil, fmt.Errorf("devices: device %s is an OPC UA device, whose driver is named after it, and the project already has a driver %s: rename one", od.Name, od.Name)
+		}
+		out = append(out, DriverConfig{
+			Type: "opcua-client", Name: od.Name, Endpoint: od.Endpoint,
+			// What the profiles document their servers offer; a row's
+			// own security is not supported yet.
+			Security: "None", SecurityMode: "None",
+			devices: set, opcuaDevice: od.Name,
+		})
+	}
 	return out, nil
 }
 
