@@ -1244,3 +1244,36 @@ func TestJournalDownRefusesIOConfig(t *testing.T) {
 		t.Errorf("the engine was reached: staged %v, applied %d", f.staged, f.applied)
 	}
 }
+
+// The seam reads a body as the handlers do: the first JSON value, whatever
+// follows. A write with trailing bytes is carried out, so its entry must
+// name the same target and values as without them.
+func TestTrailingBytesKeepTheTarget(t *testing.T) {
+	n := 0
+	for _, row := range auditRows() {
+		if row.result != "ok" || !strings.HasPrefix(row.body, "{") {
+			continue
+		}
+		n++
+		entry := func(body string) audit.Entry {
+			srv := row.server(t)
+			if row.prep != nil {
+				row.prep(t, srv)
+			}
+			call(t, srv, row.method, row.path, body, func(r *http.Request) {
+				for k, v := range row.header {
+					r.Header.Set(k, v)
+				}
+			})
+			return srv.audit.ring.Recent()[0]
+		}
+		clean, trailing := entry(row.body), entry(row.body+" x")
+		if trailing.Result != clean.Result || trailing.Target != clean.Target || fmt.Sprint(trailing.After) != fmt.Sprint(clean.After) {
+			t.Errorf("%s: with trailing bytes the entry is %s %q %v, without %s %q %v",
+				row.name, trailing.Result, trailing.Target, trailing.After, clean.Result, clean.Target, clean.After)
+		}
+	}
+	if n < 8 {
+		t.Fatalf("only %d accepted rows with a body", n)
+	}
+}

@@ -718,15 +718,23 @@ func byDetail(by string) map[string]any {
 
 // The targets of the write routes.
 
+// decodeBody reads a request body into v as the handlers do, with a
+// json.Decoder: the first JSON value, whatever follows it. json.Unmarshal
+// refuses trailing bytes, so a body the handler accepted and acted on
+// (`{"name":"SP","value":70} x`) would be journalled with no target.
+func decodeBody(body []byte, v any) {
+	json.NewDecoder(bytes.NewReader(body)).Decode(v)
+}
+
 func (s *Server) tagTarget(_ *http.Request, body []byte) auditTarget {
 	var req writeTagRequest
-	json.Unmarshal(body, &req)
+	decodeBody(body, &req)
 	return auditTarget{target: req.Name, before: s.valueOf(req.Name), after: req.Value}
 }
 
 func (s *Server) forceTarget(_ *http.Request, body []byte) auditTarget {
 	var req forceRequest
-	json.Unmarshal(body, &req)
+	decodeBody(body, &req)
 	return auditTarget{target: req.Name, before: s.forcedValue(req.Name), after: req.Value}
 }
 
@@ -742,7 +750,7 @@ func (s *Server) unforceAllTarget(*http.Request, []byte) auditTarget {
 func sfcTarget(step bool) targetFunc {
 	return func(_ *http.Request, body []byte) auditTarget {
 		var req sfcCommand
-		json.Unmarshal(body, &req)
+		decodeBody(body, &req)
 		name := req.Transition
 		if step {
 			name = req.Step
@@ -756,7 +764,7 @@ func sfcTarget(step bool) targetFunc {
 
 func ackTarget(_ *http.Request, body []byte) auditTarget {
 	var req ackRequest
-	json.Unmarshal(body, &req)
+	decodeBody(body, &req)
 	target := strings.Join(req.IDs, ",")
 	if req.All {
 		target = "*"
@@ -766,7 +774,7 @@ func ackTarget(_ *http.Request, body []byte) auditTarget {
 
 func shelveTarget(_ *http.Request, body []byte) auditTarget {
 	var req shelveRequest
-	json.Unmarshal(body, &req)
+	decodeBody(body, &req)
 	var after any
 	if req.Until != "" {
 		after = map[string]any{"until": req.Until}
@@ -778,7 +786,7 @@ func shelveTarget(_ *http.Request, body []byte) auditTarget {
 
 func unshelveTarget(_ *http.Request, body []byte) auditTarget {
 	var req unshelveRequest
-	json.Unmarshal(body, &req)
+	decodeBody(body, &req)
 	return auditTarget{target: req.ID, detail: byDetail(req.By)}
 }
 
@@ -788,7 +796,7 @@ func unshelveTarget(_ *http.Request, body []byte) auditTarget {
 // source's full SHA-256 and length.
 func (s *Server) programTarget(r *http.Request, body []byte) auditTarget {
 	var req putProgramRequest
-	json.Unmarshal(body, &req)
+	decodeBody(body, &req)
 	p, task, _ := s.selectProgram(r)
 	if r.URL.Query().Get("task") == "" && r.URL.Query().Get("pou") == "" {
 		if pou := runtime.POUOf(req.Source); pou != "" {
@@ -823,7 +831,7 @@ func (s *Server) activateTarget(_ *http.Request, body []byte) auditTarget {
 	var req struct {
 		Sha string `json:"sha"`
 	}
-	json.Unmarshal(body, &req)
+	decodeBody(body, &req)
 	s.mu.Lock()
 	before := s.active
 	s.mu.Unlock()
@@ -839,7 +847,7 @@ func (s *Server) activateTarget(_ *http.Request, body []byte) auditTarget {
 // contents); after is the id and state the staged candidate was given.
 func ioStageTarget(_ *http.Request, body []byte) auditTarget {
 	var req stageRequest
-	json.Unmarshal(body, &req)
+	decodeBody(body, &req)
 	t := auditTarget{target: req.Sha, answered: stagedState}
 	if req.Sha == "" {
 		t.target = "upload"

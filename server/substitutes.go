@@ -401,7 +401,7 @@ func (s *Server) substituteLive(name string) any {
 
 func (s *Server) substituteStartTarget(_ *http.Request, body []byte) auditTarget {
 	var req substituteRequest
-	json.Unmarshal(body, &req)
+	decodeBody(body, &req)
 	t := auditTarget{target: req.Name}
 	rule, ok := s.substituteRule(req.Name)
 	if !ok {
@@ -447,7 +447,7 @@ func (s *Server) substituteStopTarget(r *http.Request, _ []byte) auditTarget {
 
 func (s *Server) substituteAckTarget(_ *http.Request, body []byte) auditTarget {
 	var req substituteAckRequest
-	json.Unmarshal(body, &req)
+	decodeBody(body, &req)
 	return auditTarget{target: s.substituteNames(req.IDs), detail: map[string]any{"ids": req.IDs}}
 }
 
