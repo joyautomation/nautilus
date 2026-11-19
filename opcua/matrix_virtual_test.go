@@ -11,7 +11,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,10 +25,13 @@ import (
 
 	"github.com/gopcua/opcua/ua"
 	"github.com/joyautomation/nautilus/devbind"
+	"github.com/joyautomation/nautilus/internal/project"
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/iolink"
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/opcua"
+	"github.com/joyautomation/nautilus/runtime"
+	"github.com/joyautomation/nautilus/server"
 	"github.com/joyautomation/nautilus/virtdev"
 )
 
@@ -719,5 +725,90 @@ IF n > 60 THEN D_Port1_DeviceID := 1048999; END_IF;`,
 				}
 			}
 		})
+	}
+}
+
+// The whole of 5b in one run: the controller's HTTP routes over the project's
+// hook over a real master driver over a virtual SICK master serving a level
+// sensor's IODD. A GET lists and reads, a PUT writes and is journalled, and a
+// read-back through the API sees it.
+func TestParameterAPIThroughAVirtualMaster(t *testing.T) {
+	const levelFile = "acme-level100-20261118-IODD1.1.xml"
+	levelPath := "../iolink/iodd/testdata/" + levelFile
+	v := startVirtual(t, matrixServer{
+		virtual:   "sick-sig300",
+		ports:     "{ 1: { iodd: " + levelFile + " } }",
+		ioddFiles: map[string]string{levelFile: levelPath},
+		model: `D_Port1_PdiBytes := 'fe0dffd1';
+D_Port1_VendorID := 65261;
+D_Port1_DeviceID := 1048577;`,
+	})
+	prof, _ := os.ReadFile("../devprofile/profiles/sick-sig300.yaml")
+	level, _ := os.ReadFile(levelPath)
+	set, err := devbind.Resolve(fstest.MapFS{
+		"profiles/sick-sig300.yaml": {Data: prof},
+		"iodd/" + levelFile:         {Data: level},
+	}, []devbind.Device{{Name: "M", Profile: "sick-sig300", Endpoint: "h", Points: []string{"Port1_*"},
+		Ports: map[int]devbind.Port{1: {Name: "LEVEL1", IODD: levelFile}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	od := set.OPCUADevices()[0]
+	d, err := opcua.New(v.url(), od.Manifest, opcua.WithName("M"), opcua.WithOnlineTag("M__Online"),
+		opcua.WithScanRate(100*time.Millisecond), opcua.WithTimeout(2*time.Second), opcua.WithSecurity("None", "None"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := set.WrapOPCUA("M", d, "None", "None")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	d.Start(ctx)
+	t.Cleanup(func() { cancel(); d.Stop() })
+	waitUntil(t, "the right device on the port", 30*time.Second, func() bool {
+		vals, _ := w.ReadInputs()
+		n, ok := vals["LEVEL1__Identity"].(int64)
+		return ok && (n == int64(iolink.Ok) || n == int64(iolink.AwaitingRearm))
+	})
+
+	rt, err := runtime.New(runtime.Options{Program: "PROGRAM Main\nEND_PROGRAM\n", Driver: nio.NewMemory()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	api := httptest.NewServer(server.New(rt, server.Options{Params: project.NewParamHook(func() []nio.NamedDriver {
+		return []nio.NamedDriver{{Name: "M", Driver: w}}
+	})}).Handler())
+	t.Cleanup(api.Close)
+	do := func(method, path, body string) (int, string) {
+		req, _ := http.NewRequest(method, api.URL+path, strings.NewReader(body))
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b)
+	}
+	if code, body := do("GET", "/api/iolink/LEVEL1/params", ""); code != 200 || !strings.Contains(body, `"V_Setpoint"`) || !strings.Contains(body, `"0..1000"`) {
+		t.Errorf("list: %d %s", code, body)
+	}
+	if code, body := do("GET", "/api/iolink/LEVEL1/params/V_Setpoint", ""); code != 200 || !strings.Contains(body, `"value":100`) || !strings.Contains(body, `"identity":"Ok"`) {
+		t.Errorf("read: %d %s", code, body)
+	}
+	if code, body := do("PUT", "/api/iolink/LEVEL1/params/V_Setpoint", `{"value": 500}`); code != 200 || !strings.Contains(body, `"value":500`) {
+		t.Errorf("write: %d %s", code, body)
+	}
+	if code, body := do("GET", "/api/iolink/LEVEL1/params/V_Setpoint", ""); code != 200 || !strings.Contains(body, `"value":500`) {
+		t.Errorf("read back: %d %s", code, body)
+	}
+	if code, body := do("PUT", "/api/iolink/LEVEL1/params/V_Setpoint", `{"value": 5000}`); code != 422 || !strings.Contains(body, "range") {
+		t.Errorf("a value outside the range: %d %s", code, body)
+	}
+	if code, body := do("PUT", "/api/iolink/LEVEL1/params/V_SerialNumber", `{"value": "x"}`); code != 422 {
+		t.Errorf("a read-only variable: %d %s", code, body)
+	}
+	if code, _ := do("GET", "/api/iolink/LEVEL1/params/V_Nothing", ""); code != 404 {
+		t.Errorf("an unknown parameter: %d", code)
 	}
 }

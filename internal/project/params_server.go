@@ -23,7 +23,7 @@ func (p *Project) ParamHook() *server.ParamHook {
 	if len(p.devices.Ports()) == 0 {
 		return nil
 	}
-	return paramHook(func() []nio.NamedDriver {
+	return NewParamHook(func() []nio.NamedDriver {
 		if m, ok := p.Runtime.Driver.(*nio.Multi); ok {
 			return m.Children()
 		}
@@ -31,8 +31,8 @@ func (p *Project) ParamHook() *server.ParamHook {
 	})
 }
 
-// paramHook is ParamHook over a source of the live drivers.
-func paramHook(live func() []nio.NamedDriver) *server.ParamHook {
+// NewParamHook is ParamHook over a source of the live drivers.
+func NewParamHook(live func() []nio.NamedDriver) *server.ParamHook {
 	find := func(port string) *devbind.OPCUADriver {
 		for _, nd := range live() {
 			if d := opcuaMaster(nd.Driver); d != nil {

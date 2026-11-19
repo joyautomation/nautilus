@@ -59,7 +59,7 @@ func portMaster(t *testing.T) *devbind.OPCUADriver {
 // is the master's own failure (none of the three).
 func TestParamHookFindsThePortDevice(t *testing.T) {
 	m := portMaster(t)
-	h := paramHook(func() []nio.NamedDriver {
+	h := NewParamHook(func() []nio.NamedDriver {
 		return []nio.NamedDriver{{Name: "other", Driver: nio.NewMemory()}, {Name: "M", Driver: wrapped{m}}}
 	})
 	list, ok := h.List("LEVEL1")
