@@ -91,14 +91,22 @@ A `devices:` row has:
 | `name` | the device's tag name (an IEC identifier) |
 | `profile` | the profile id; resolved in the project's `profiles/` folder only |
 | `endpoint` | Modbus `host[:port]`, or OPC UA `opc.tcp://host[:port]` or a bare host |
-| `unit-id` | Modbus unit id; defaults from the profile |
+| `unit-id` | Modbus unit id; defaults from the profile; an OPC UA device has none |
 | `points` | globs over point names: poll and expose only these (an 8-port master need not poll 8 ports); default all |
 | `params` | values for the profile's `params:` (an ifm master's location) |
 | `desc` | one line for the tag and the faceplate |
+| `ports` | an IO-Link master's ports by number, `{ 2: { name: LEVEL1, iodd: sensor.xml } }` (#705): each port's name shares the devices' one namespace, and its IODD is a file in the project's `iodd/` folder. Only a profile that declares IO-Link ports takes them, and none does until #705 adds the profile's `iolink:` block, so until then a row's `ports:` is refused rather than ignored |
 
 A row has no driver keys. A Modbus device polls at the scan rate and scan
 classes of the project's Modbus driver (`drivers:`, one is added if there
-is none), which is where those keys are written.
+is none), which is where those keys are written. An OPC UA device is a
+driver of its own (§3.1) at the default scan rate, with security None and
+anonymous access, which is what the profiles document their servers
+offering. A row's own security and credentials are not supported yet: an
+opcua-client driver's default, the strongest endpoint offered, needs a
+`pki-dir` a row has nowhere to name. So that a device offering more is not
+downgraded without a word, `naut check` warns per row: "device X connects
+with security None, anonymous".
 
 A project names a point its own way with the existing `alias:` (`BinHigh`
 aliases `IOLM.Port1_SioInput`), not a new rename key.
@@ -114,9 +122,26 @@ hand-declared one is an error naming both.
 - **Modbus:** one source per device (`endpoint`, `unit-id`, the profile's
   word and byte order) and one binding per selected point, merged into the
   project's Modbus driver. If the project declares none, one is added.
-- **OPC UA:** one opcua-client driver per OPC UA device, with a binding per
-  selected point (node id, namespace URI from the profile's namespace
-  array, type from the point's IEC type).
+- **OPC UA:** one opcua-client driver per OPC UA device, since an OPC UA
+  client talks to one server. The driver is named after the device, so its
+  companion is `<Device>__Online`, as a Modbus device's source is. A
+  device whose name is already a driver's is an error. The driver has a
+  binding per selected point: the node id with the row's `params:`
+  substituted, and the OPC UA type from the point's IEC type (BOOL is
+  Boolean, WORD is UInt16, DWORD is UInt32, REAL is Float, and so on). It
+  also has a binding per writable point under its command tag's name,
+  written and never polled (scan class `none`), the OPC UA spelling of a
+  Modbus command's write-only binding.
+- **Namespaces:** a node's namespace URI comes from the profile's
+  namespace array when the profile's URI is verified. The driver then
+  resolves the index against the server's live table at connect, so a
+  server that renumbers its namespaces is still read correctly. A URI
+  starting `urn:virtual:` is a stand-in the profile made up because the
+  maker does not publish the real one, so the binding trusts the index the
+  profile documents instead. That is a known risk, not a silent one:
+  `naut check` warns "device X binds by namespace index N". Every shipped
+  OPC UA profile's URIs are stand-ins today. A node id in a namespace
+  past the profile's array is refused when the profile is read.
 
 The drivers are only ever handed manifests, the same structures their own
 files decode to. No change to `modbus/` or `opcua/`.
@@ -138,7 +163,11 @@ members is an error. A `udt:` may not be a standard type or block name
   and reads back the device.
 - `CONV_ControlWord`, role output, of the point's type, for every writable
   point.
-- The drivers' `__Online` and `__Outages` companions stay as they are.
+- `CONV__Online` (BOOL), and for a Modbus device `CONV__Outages` (DINT),
+  role input: the driver's companions for the device, declared by the row
+  so a program can gate on them. Being declared tags, they are also in the
+  Sparkplug DBIRTH with the device's other tags. A hand-declared tag of the
+  same name is a load error naming both.
 
 The types are composed by `internal/stproject` beside the dialect's
 block library (`nautilus.yaml#devices`), so every tool that compiles the

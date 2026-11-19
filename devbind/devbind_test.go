@@ -104,7 +104,7 @@ func TestTypesAndTags(t *testing.T) {
 	for _, tg := range s.Tags() {
 		tags = append(tags, tg.Name+":"+tg.Role+":"+tg.Type)
 	}
-	if want := "CONV:input:ABB_ACS355_FMBT21 CONV_ControlWord:output:WORD"; strings.Join(tags, " ") != want {
+	if want := "CONV:input:ABB_ACS355_FMBT21 CONV__Online:input:BOOL CONV__Outages:input:DINT CONV_ControlWord:output:WORD"; strings.Join(tags, " ") != want {
 		t.Errorf("tags %v, want %s", tags, want)
 	}
 }
@@ -144,7 +144,10 @@ func TestResolveErrors(t *testing.T) {
 		{Device{Name: "C", Profile: "abb-acs355-fmbt21", Endpoint: "h", UnitID: intp(300)}, "not 0-255"},
 		{Device{Name: "C", Profile: "abb-acs355-fmbt21", Endpoint: "h", Params: map[string]string{"x": "1"}}, `no param "x"`},
 		{Device{Name: "C", Profile: "abb-acs355-fmbt21", Endpoint: "h", Points: []string{"["}}, "points"},
-		{Device{Name: "C", Profile: "pepperl-fuchs-ice3", Endpoint: "h"}, "only Modbus devices"},
+		{Device{Name: "C", Profile: "pepperl-fuchs-ice3", Endpoint: "h", UnitID: intp(1)}, "unit-id is a Modbus device's"},
+		{Device{Name: "C", Profile: "pepperl-fuchs-ice3", Endpoint: "http://h"}, "want host[:port] or opc.tcp://host[:port]"},
+		{Device{Name: "C", Profile: "pepperl-fuchs-ice3", Endpoint: "opc.tcp://h:0"}, "bad port"},
+		{Device{Name: "C", Profile: "pepperl-fuchs-ice3", Endpoint: "opc.tcp://:4840"}, "want host[:port]"},
 	} {
 		if _, err := Resolve(fsys, []Device{tc.row}); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%+v: %v, want %q", tc.row, err, tc.want)

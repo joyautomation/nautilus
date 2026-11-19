@@ -9,9 +9,11 @@ import (
 	"testing/fstest"
 	"time"
 
+	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/modbus"
 	"github.com/joyautomation/nautilus/modbus/slave"
+	"github.com/joyautomation/nautilus/opcua"
 	"github.com/joyautomation/nautilus/runtime"
 )
 
@@ -287,5 +289,94 @@ devices:
 	_, err := Load(fsys, "")
 	if err == nil || !strings.Contains(err.Error(), "declared in both devices: CONV and devices: CONV_ControlWord") {
 		t.Errorf("clash: %v", err)
+	}
+}
+
+// An OPC UA device is an opcua-client driver of its own, named after it
+// (an OPC UA client talks to one server): no Modbus driver is added for a
+// project without Modbus devices, and the driver is the OPC UA driver to
+// everything that asks (its status row, its health, comms).
+func TestOPCUADevicesAreDriversOfTheirOwn(t *testing.T) {
+	ice3, err := os.ReadFile("../../devprofile/profiles/pepperl-fuchs-ice3.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	project := func(manifest string) fstest.MapFS {
+		fsys := devicesProject(t, "name: d\ntasks: [{ program: main.st }]\n"+manifest, "PROGRAM Main\nEND_PROGRAM\n")
+		fsys["profiles/pepperl-fuchs-ice3.yaml"] = &fstest.MapFile{Data: ice3}
+		return fsys
+	}
+	proj, err := Load(project("devices: [{ name: PF1, profile: pepperl-fuchs-ice3, endpoint: 10.0.0.21 }]\n"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := proj.Drivers(); len(got) != 1 || got[0].Name != "PF1" {
+		t.Fatalf("drivers %+v, want PF1's own", got)
+	}
+	drv := proj.Runtime.Driver
+	rows := driverStatusFuncs(drv)
+	if len(rows) != 1 || rows[0]().Kind != opcuaClientStatus(opcua.Health{}).Kind {
+		t.Errorf("status rows %d, want the one OPC UA client row", len(rows))
+	}
+	if driverHealth(drv) == nil {
+		t.Error("no health for the device's driver")
+	}
+	if !commsDriver(drv) {
+		t.Error("the device's driver is not a comms driver")
+	}
+	u, ok := drv.(interface{ Unwrap() nio.Driver })
+	if !ok {
+		t.Fatalf("%T carries no devices", drv)
+	}
+	od, ok := u.Unwrap().(*opcua.Driver)
+	if !ok || od.Endpoint() != "opc.tcp://10.0.0.21:4840" || od.OnlineTagName() != "PF1__Online" {
+		t.Errorf("driver %T", u.Unwrap())
+	}
+	for _, td := range proj.Runtime.Tags {
+		if td.Name == "PF1" && (td.Type != "PEPPERL_FUCHS_ICE3" || !td.Comms) {
+			t.Errorf("PF1: %+v", td)
+		}
+	}
+
+	proj, err = Load(project("devices:\n  - { name: CONV, profile: abb-acs355-fmbt21, endpoint: 10.0.0.9 }\n  - { name: PF1, profile: pepperl-fuchs-ice3, endpoint: 10.0.0.21 }\n"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, d := range proj.Drivers() {
+		names = append(names, d.Name)
+	}
+	if strings.Join(names, " ") != "modbus PF1" {
+		t.Errorf("drivers %v, want the Modbus devices' driver and PF1's", names)
+	}
+
+	_, err = Load(project("drivers: [{ type: memory, name: pf1 }]\ndevices: [{ name: PF1, profile: pepperl-fuchs-ice3, endpoint: 10.0.0.21 }]\n"), "")
+	if err == nil || !strings.Contains(err.Error(), "the project already has a driver PF1") {
+		t.Errorf("a device named as a driver: %v", err)
+	}
+}
+
+// ports: decodes from nautilus.yaml in #705's shape (a map by port number,
+// a typo an error), and is refused while no profile declares IO-Link
+// ports, rather than ignored.
+func TestDevicePortsInTheManifest(t *testing.T) {
+	ifm, err := os.ReadFile("../../devprofile/profiles/ifm-al1590.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct{ ports, want string }{
+		"refused": {"{ 2: { name: LEVEL1, iodd: sensor.xml } }", "device MASTER1: ports: profile ifm-al1590 declares no IO-Link ports"},
+		"typo":    {"{ 2: { nme: LEVEL1 } }", "field nme not found"},
+		"by name": {"{ two: { name: LEVEL1 } }", "cannot unmarshal"},
+	} {
+		fsys := fstest.MapFS{
+			"nautilus.yaml":            {Data: []byte("name: d\ntasks: [{ program: main.st }]\ndevices:\n  - { name: MASTER1, profile: ifm-al1590, endpoint: 10.0.0.20, ports: " + tc.ports + " }\n")},
+			"main.st":                  {Data: []byte("PROGRAM Main\nEND_PROGRAM\n")},
+			"profiles/ifm-al1590.yaml": {Data: ifm},
+			"iodd/sensor.xml":          {Data: []byte("<IODevice/>")},
+		}
+		if _, err := ReadManifest(fsys, ""); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: %v, want %q", name, err, tc.want)
+		}
 	}
 }

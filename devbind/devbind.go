@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -32,9 +33,11 @@ type Device struct {
 	Name string `yaml:"name"`
 	// Profile is the id of a profile vendored in profiles/.
 	Profile string `yaml:"profile"`
-	// Endpoint is where the device answers: a Modbus host[:port].
+	// Endpoint is where the device answers: a Modbus host[:port], or an
+	// OPC UA host[:port] or opc.tcp://host[:port].
 	Endpoint string `yaml:"endpoint"`
-	// UnitID is the Modbus unit id; nil takes the profile's.
+	// UnitID is the Modbus unit id; nil takes the profile's. An OPC UA
+	// device has none.
 	UnitID *int `yaml:"unit-id"`
 	// Points selects the points to poll and expose, as globs over point
 	// names; empty selects all. The struct has the selected points only.
@@ -43,7 +46,23 @@ type Device struct {
 	Params map[string]string `yaml:"params"`
 	// Desc is one line for the device's tags.
 	Desc string `yaml:"desc"`
+	// Ports are an IO-Link master's ports, by number: the sensor on each
+	// (#705). Nothing consumes them yet, so a row may name only ports its
+	// profile declares (devprofile.Profile.IOLinkPorts).
+	Ports map[int]Port `yaml:"ports"`
 }
+
+// Port is one IO-Link port of a master's row.
+type Port struct {
+	// Name is the port's device tag, an IEC identifier unique among the
+	// project's devices, ports and device types.
+	Name string `yaml:"name"`
+	// IODD is the sensor's IODD, a file name in the project's iodd/ folder.
+	IODD string `yaml:"iodd"`
+}
+
+// IODDDir is the folder a project's vendored IODDs live in.
+const IODDDir = "iodd"
 
 // Set is a project's devices, resolved against its vendored profiles.
 type Set struct {
@@ -103,11 +122,11 @@ func Resolve(fsys fs.FS, rows []Device) (*Set, error) {
 			}
 			profiles[r.Profile] = p
 		}
-		if p.Protocol != devprofile.ProtoModbus {
-			return nil, fmt.Errorf("%s: profile %s speaks %s; only Modbus devices are supported so far", where, p.ID, p.Protocol)
-		}
 		d := &device{Device: r, prof: p}
 		if err := d.check(where); err != nil {
+			return nil, err
+		}
+		if err := d.checkPorts(fsys, where, names); err != nil {
 			return nil, err
 		}
 		st := devprofile.Struct{Name: p.TypeName(), Points: d.points}
@@ -149,11 +168,23 @@ func (d *device) check(where string) error {
 	if d.Endpoint == "" {
 		return fmt.Errorf("%s: endpoint is required", where)
 	}
-	if _, _, err := d.hostPort(); err != nil {
-		return fmt.Errorf("%s: %w", where, err)
-	}
-	if d.UnitID != nil && (*d.UnitID < 0 || *d.UnitID > 255) {
-		return fmt.Errorf("%s: unit-id %d is not 0-255", where, *d.UnitID)
+	switch p.Protocol {
+	case devprofile.ProtoModbus:
+		if _, _, err := d.hostPort(); err != nil {
+			return fmt.Errorf("%s: %w", where, err)
+		}
+		if d.UnitID != nil && (*d.UnitID < 0 || *d.UnitID > 255) {
+			return fmt.Errorf("%s: unit-id %d is not 0-255", where, *d.UnitID)
+		}
+	case devprofile.ProtoOPCUA:
+		if _, err := p.OPCUAEndpoint(d.Endpoint); err != nil {
+			return fmt.Errorf("%s: %w", where, err)
+		}
+		if d.UnitID != nil {
+			return fmt.Errorf("%s: unit-id is a Modbus device's; profile %s speaks OPC UA", where, p.ID)
+		}
+	default:
+		return fmt.Errorf("%s: profile %s speaks %s, which devices: rows do not support", where, p.ID, p.Protocol)
 	}
 	for k := range d.Params {
 		if _, ok := p.Params[k]; !ok {
@@ -165,6 +196,61 @@ func (d *device) check(where string) error {
 		return fmt.Errorf("%s: %w", where, err)
 	}
 	d.points = pts
+	return nil
+}
+
+// checkPorts validates an IO-Link master's ports:, adding each port's
+// name to names (lower-cased name -> as written) so it shares the devices'
+// one namespace.
+func (d *device) checkPorts(fsys fs.FS, where string, names map[string]string) error {
+	if len(d.Ports) == 0 {
+		return nil
+	}
+	nums := make([]int, 0, len(d.Ports))
+	for k := range d.Ports {
+		nums = append(nums, k)
+	}
+	sort.Ints(nums)
+	for _, k := range nums {
+		pt := d.Ports[k]
+		at := fmt.Sprintf("%s: port %d", where, k)
+		if !devprofile.IsIdent(pt.Name) {
+			return fmt.Errorf("%s: name %q is not an IEC identifier", at, pt.Name)
+		}
+		if prev, dup := names[strings.ToLower(pt.Name)]; dup {
+			return fmt.Errorf("%s: %s is already the name of %s", at, pt.Name, prev)
+		}
+		names[strings.ToLower(pt.Name)] = pt.Name
+		if pt.IODD == "" {
+			continue
+		}
+		if !devprofile.IsFileName(pt.IODD) {
+			return fmt.Errorf("%s: iodd %q must be a file name in %s/", at, pt.IODD, IODDDir)
+		}
+		if _, err := fs.Stat(fsys, path.Join(IODDDir, pt.IODD)); err != nil {
+			return fmt.Errorf("%s: iodd %s is not in %s/", at, pt.IODD, IODDDir)
+		}
+	}
+	// Until profiles declare IO-Link ports (#705), a row's ports: is
+	// refused, not ignored.
+	n := d.prof.IOLinkPorts()
+	if n == 0 {
+		return fmt.Errorf("%s: ports: profile %s declares no IO-Link ports", where, d.prof.ID)
+	}
+	if err := portRange(nums, n); err != nil {
+		return fmt.Errorf("%s: ports: profile %s %w", where, d.prof.ID, err)
+	}
+	return nil
+}
+
+// portRange checks a row's port numbers (sorted) against a master's n
+// ports, numbered 1 to n.
+func portRange(nums []int, n int) error {
+	for _, k := range nums {
+		if k < 1 || k > n {
+			return fmt.Errorf("has ports 1-%d, not %d", n, k)
+		}
+	}
 	return nil
 }
 
@@ -205,6 +291,50 @@ func (s *Set) Rows() []Device {
 	out := make([]Device, len(s.devices))
 	for i, d := range s.devices {
 		out[i] = d.Device
+	}
+	return out
+}
+
+// protocol is the set's devices of one protocol, in declaration order.
+func (s *Set) protocol(proto string) []*device {
+	if s == nil {
+		return nil
+	}
+	var out []*device
+	for _, d := range s.devices {
+		if d.prof.Protocol == proto {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// Modbus reports whether the set has a Modbus device, for the project's
+// Modbus driver to carry.
+func (s *Set) Modbus() bool { return len(s.protocol(devprofile.ProtoModbus)) > 0 }
+
+// OPCUARow is an OPC UA device's driver: the device's name, which its
+// opcua-client driver takes, where it answers, and how it connects.
+type OPCUARow struct {
+	Name string
+	// Endpoint is opc.tcp://host:port.
+	Endpoint string
+	// Security and SecurityMode are the endpoint policy and mode: None,
+	// anonymous, what the profiles document their servers offering. A row
+	// cannot set its own yet (an opcua-client driver's default, the
+	// strongest offered, needs a pki-dir a row has nowhere to name), so
+	// the device's driver says so in naut check rather than downgrade a
+	// device that offers more without a word.
+	Security, SecurityMode string
+}
+
+// OPCUARows are the set's OPC UA devices, in declaration order: an OPC UA
+// client talks to one server, so each is a driver of its own.
+func (s *Set) OPCUARows() []OPCUARow {
+	var out []OPCUARow
+	for _, d := range s.protocol(devprofile.ProtoOPCUA) {
+		ep, _ := d.prof.OPCUAEndpoint(d.Endpoint) // Resolve checked it
+		out = append(out, OPCUARow{Name: d.Name, Endpoint: ep, Security: "None", SecurityMode: "None"})
 	}
 	return out
 }

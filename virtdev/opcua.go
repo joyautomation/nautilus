@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -27,19 +25,7 @@ func (s *Set) Mapped(d Instance) (m *uaserver.Mapped, writable []string, err err
 	if p == nil || p.Protocol != devprofile.ProtoOPCUA {
 		return nil, nil, fmt.Errorf("device %s is not an OPC UA device", d.Name)
 	}
-	params := map[string]string{}
-	for k, v := range p.Params {
-		params[k] = v
-	}
-	for k, v := range d.Params {
-		params[k] = v
-	}
-	subst := func(s string) string {
-		for k, v := range params {
-			s = strings.ReplaceAll(s, "{"+k+"}", v)
-		}
-		return s
-	}
+	subst := func(s string) string { return p.Substitute(s, d.Params) }
 	objNS := p.OPCUA.ObjectNamespace
 	if objNS == 0 {
 		objNS = 1
@@ -112,23 +98,7 @@ func opcuaEndpoint(d Instance, p *devprofile.Profile) (string, error) {
 	if d.Endpoint == "" {
 		return "", nil
 	}
-	raw := d.Endpoint
-	if !strings.Contains(raw, "://") {
-		raw = "opc.tcp://" + raw
-	}
-	u, err := url.Parse(raw)
-	if err != nil || u.Scheme != "opc.tcp" || u.Hostname() == "" {
-		return "", fmt.Errorf("endpoint %q: want opc.tcp://host[:port]", d.Endpoint)
-	}
-	port := u.Port()
-	if port == "" {
-		n := 4840
-		if p.OPCUA.Port != 0 {
-			n = p.OPCUA.Port
-		}
-		port = strconv.Itoa(n)
-	}
-	return "opc.tcp://" + net.JoinHostPort(u.Hostname(), port), nil
+	return p.OPCUAEndpoint(d.Endpoint)
 }
 
 // startOPCUA brings one OPC UA instance's server up over the plant.

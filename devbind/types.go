@@ -21,7 +21,9 @@ func (s *Set) TypesST() (string, error) {
 }
 
 // Tags are the tags the devices declare: each device's struct tag (an
-// input) and a command tag (an output) per selected writable point.
+// input), its driver's companions (<Device>__Online, and a Modbus
+// device's <Device>__Outages), and a command tag (an output) per selected
+// writable point.
 func (s *Set) Tags() []tagfile.Tag {
 	var out []tagfile.Tag
 	for _, dt := range s.TagsByDevice() {
@@ -49,6 +51,12 @@ func (s *Set) TagsByDevice() []DeviceTags {
 		}
 		dt := DeviceTags{Device: d.Name}
 		dt.Tags = append(dt.Tags, tagfile.Tag{Name: d.Name, Role: "input", Type: d.prof.TypeName(), Desc: desc})
+		// The driver's companions for the device (its Modbus source, or
+		// its own OPC UA driver), so a program can gate on them.
+		dt.Tags = append(dt.Tags, tagfile.Tag{Name: d.Name + "__Online", Role: "input", Type: "BOOL", Desc: d.Name + ": the device answers"})
+		if d.prof.Protocol == devprofile.ProtoModbus {
+			dt.Tags = append(dt.Tags, tagfile.Tag{Name: d.Name + "__Outages", Role: "input", Type: "DINT", Desc: d.Name + ": times it stopped answering since start"})
+		}
 		for _, pt := range d.points {
 			if !pt.Writable {
 				continue

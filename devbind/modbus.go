@@ -4,8 +4,8 @@ package devbind
 
 import (
 	"fmt"
-	"sort"
 
+	"github.com/joyautomation/nautilus/devprofile"
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/modbus"
 )
@@ -17,7 +17,7 @@ import (
 // writable point under its command tag's name.
 func (s *Set) ModbusManifest() modbus.Manifest {
 	var m modbus.Manifest
-	for _, d := range s.devices {
+	for _, d := range s.protocol(devprofile.ProtoModbus) {
 		host, port, _ := d.hostPort() // Resolve checked it
 		src := modbus.Source{ID: d.Name, Host: host, Port: port, UnitID: d.unitID()}
 		if mb := d.prof.Modbus; mb != nil {
@@ -74,33 +74,13 @@ func (s *Set) MergeModbus(own modbus.Manifest) (modbus.Manifest, error) {
 // translated: members in, structs out.
 type ModbusDriver struct {
 	*modbus.Driver
-	asm    []*assembler
-	member map[string]int // internal member name -> index into asm
-	inputs []string
+	st structs
 }
 
 // WrapModbus wraps the project's Modbus driver, built from MergeModbus's
 // manifest.
 func (s *Set) WrapModbus(d *modbus.Driver) *ModbusDriver {
-	w := &ModbusDriver{Driver: d, member: map[string]int{}}
-	for _, dev := range s.devices {
-		a := newAssembler(dev)
-		for _, m := range a.members {
-			w.member[m] = len(w.asm)
-		}
-		w.asm = append(w.asm, a)
-	}
-	seen := map[string]bool{}
-	for _, n := range d.InputNames() {
-		if i, ok := w.member[n]; ok {
-			n = w.asm[i].dev
-		}
-		if !seen[n] {
-			seen[n] = true
-			w.inputs = append(w.inputs, n)
-		}
-	}
-	return w
+	return &ModbusDriver{Driver: d, st: newStructs(s.protocol(devprofile.ProtoModbus), d.InputNames())}
 }
 
 // NewAssembly is a fresh copy of the adapter's input side: a func that
@@ -109,17 +89,7 @@ func (s *Set) WrapModbus(d *modbus.Driver) *ModbusDriver {
 // the driver's own, so the in-process face of virtual devices (one per
 // test) delivers through the same code without one test's values leaking
 // into the next.
-func (w *ModbusDriver) NewAssembly() func(nio.Values) {
-	asm := make([]*assembler, len(w.asm))
-	for i, a := range w.asm {
-		asm[i] = &assembler{dev: a.dev, def: a.def, members: a.members}
-	}
-	return func(vals nio.Values) {
-		for _, a := range asm {
-			a.take(vals)
-		}
-	}
-}
+func (w *ModbusDriver) NewAssembly() func(nio.Values) { return w.st.newAssembly() }
 
 // Unwrap is the Modbus driver underneath.
 func (w *ModbusDriver) Unwrap() nio.Driver { return w.Driver }
@@ -130,66 +100,36 @@ func (w *ModbusDriver) ReadInputs() (nio.Values, error) {
 	if err != nil {
 		return nil, err
 	}
-	w.assemble(vals)
+	w.st.assemble(vals)
 	return vals, nil
 }
 
 // ReadInputsInto is ReadInputs into the runtime's map (io.BatchReader).
 func (w *ModbusDriver) ReadInputsInto(dst nio.Values) error {
-	// The driver keeps dst to exactly its own keys and takes a slower
-	// path when it finds others: hand it the map without the devices.
-	for _, a := range w.asm {
-		delete(dst, a.dev)
-	}
+	w.st.clear(dst)
 	if err := w.Driver.ReadInputsInto(dst); err != nil {
 		return err
 	}
-	w.assemble(dst)
+	w.st.assemble(dst)
 	return nil
 }
 
-func (w *ModbusDriver) assemble(vals nio.Values) {
-	for _, a := range w.asm {
-		a.take(vals)
-	}
-}
-
 // InputNames lists the device tags in place of their members.
-func (w *ModbusDriver) InputNames() []string { return append([]string(nil), w.inputs...) }
+func (w *ModbusDriver) InputNames() []string { return append([]string(nil), w.st.inputs...) }
 
 // InputType is a device's struct type, else the driver's own answer.
 func (w *ModbusDriver) InputType(name string) string {
-	for _, a := range w.asm {
-		if a.dev == name {
-			return a.def.Name
-		}
+	if t, ok := w.st.inputType(name); ok {
+		return t
 	}
 	return w.Driver.InputType(name)
 }
 
 // Quality reports a device by its members (rollup); other tags pass
 // through.
-func (w *ModbusDriver) Quality() map[string]nio.Quality {
-	return rollup(w.asm, w.member, w.Driver.Quality())
-}
+func (w *ModbusDriver) Quality() map[string]nio.Quality { return w.st.quality(w.Driver.Quality()) }
 
 // Connections names the device tags in place of their members.
 func (w *ModbusDriver) Connections() []nio.Connection {
-	cs := w.Driver.Connections()
-	for i := range cs {
-		seen := map[string]bool{}
-		var tags []string
-		for _, t := range cs[i].Inputs {
-			if j, ok := w.member[t]; ok {
-				t = w.asm[j].dev
-			}
-			if !seen[t] {
-				seen[t] = true
-				tags = append(tags, t)
-			}
-		}
-		sort.Strings(tags)
-		cs[i].Inputs = tags
-	}
-	return cs
+	return w.st.connections(w.Driver.Connections())
 }
