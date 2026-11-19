@@ -109,6 +109,13 @@ RestartSec=2
   starts in 10 s) never catches it, because each round takes the
   watchdog's 10 s and more. To stop after five rounds, widen the window
   in `[Unit]`: `StartLimitIntervalSec=5min` and `StartLimitBurst=5`.
+- **One instance per box.** Run by hand next to the service,
+  `controller version` (or `-v`, `--version`) prints the naut it was built
+  with, and `controller --help` how it is configured; neither starts it,
+  and any other argument is refused. A controller binds its tag API's
+  address before anything else starts, and one that finds the address
+  held (by its own service, say) refuses to start, so two never drive the
+  same I/O.
 
 ## To a box over SSH
 
