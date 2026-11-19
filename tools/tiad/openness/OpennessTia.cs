@@ -81,12 +81,7 @@ namespace Tiad.Openness
         // Message is an Openness exception's text, with its inner ones.
         static string Message(Exception e)
         {
-            string m = e.Message;
-            for (Exception i = e.InnerException; i != null; i = i.InnerException)
-            {
-                if (!string.IsNullOrEmpty(i.Message) && m.IndexOf(i.Message, StringComparison.Ordinal) < 0) m += ": " + i.Message;
-            }
-            return m;
+            return TiaNames.Message(e);
         }
 
         // Tia runs f and turns an Openness failure into TIA's own text.
@@ -446,17 +441,13 @@ namespace Tiad.Openness
         {
             Project p = Of(project).Project;
             var decider = new DownloadDecider(decide);
-            var outcome = new DownloadOutcome();
-            DownloadResult r;
+            DownloadResult r = null;
+            Exception error = null;
             try
             {
-                DeviceItem cpu = Tia(delegate
-                {
-                    HwDevice d = StationOf(p);
-                    if (d == null) throw new TiaException("the project has no CPU");
-                    return CpuOf(d);
-                });
-                DownloadProvider dp = cpu.GetService<DownloadProvider>();
+                HwDevice d = StationOf(p);
+                if (d == null) throw new TiaException("the project has no CPU");
+                DownloadProvider dp = CpuOf(d).GetService<DownloadProvider>();
                 ConfigurationPcInterface pc = PcInterface(dp.Configuration);
                 ConfigurationTargetInterface target = TargetInterface(pc);
                 ConfigurationAddress at = target.Addresses.Create(address);
@@ -479,36 +470,12 @@ namespace Tiad.Openness
             }
             catch (Exception e)
             {
-                outcome.Questions = decider.Asked;
-                if (decider.Cancelled != null)
-                {
-                    if (decider.Cancelled.Declined) return outcome;
-                    throw new TiaException(decider.Cancelled.Message, e);
-                }
-                if (e is TiaException) throw;
-                for (Exception i = e; i != null; i = i.InnerException)
-                {
-                    if (i is DownloadCancel) throw new TiaException(i.Message, e);
-                }
-                throw new TiaException(Message(e), e);
+                error = e;
             }
-            outcome.Questions = decider.Asked;
-            string state = r.State.ToString();
-            if (!decider.Approved)
-            {
-                throw new TiaException("TIA finished a download (" + state + ") that was never decided");
-            }
-            if (!TiaNames.DownloadLoaded(state))
-            {
-                throw new TiaException("TIA's download ended " + state + ": " + DownloadMessages(r.Messages));
-            }
-            List<string> missed = decider.Unapplied();
-            if (missed.Count > 0)
-            {
-                throw new TiaException("TIA loaded without asking " + string.Join(", ", missed.ToArray()) + " again, so its answer was never written");
-            }
-            outcome.Loaded = true;
-            return outcome;
+            // How it ended is decided in core (DownloadDecider.Finish).
+            DownloadEnd end = decider.Finish(r == null ? null : r.State.ToString(), r == null ? "" : DownloadMessages(r.Messages), error);
+            if (end.Failure != null) throw new TiaException(end.Failure, error);
+            return new DownloadOutcome { Questions = decider.Asked, Loaded = end.Loaded };
         }
 
         // Pending lists every configuration pending with c, from c's parent.

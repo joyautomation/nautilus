@@ -86,6 +86,12 @@ namespace Tiad.Test
                 T("UnappliedNamesWhatTiaSkipped", UnappliedNamesWhatTiaSkipped),
                 T("AfterOnlyOnceApproved", AfterOnlyOnceApproved),
                 T("CertificateDetailIsLeftEmpty", CertificateDetailIsLeftEmpty),
+                T("FinishLoaded", FinishLoaded),
+                T("FinishDeclined", FinishDeclined),
+                T("FinishFailures", FinishFailures),
+                T("FinishSwallowedCancel", FinishSwallowedCancel),
+                T("FinishWithoutACallback", FinishWithoutACallback),
+                T("Messages", Messages),
                 T("TypeIdentifiers", TypeIdentifiers),
                 T("PcInterfaces", PcInterfaces),
                 T("Only", OnlyOne),
@@ -449,6 +455,118 @@ namespace Tiad.Test
             r.D.Next(c, "TlsVerificationConfiguration", "trust?", delegate { return List(P(c, "TlsVerificationConfiguration", "trust?")); });
             Eq(r.Seen[0].Id, QuestionIds.Certificate, "id");
             Eq(r.Seen[0].Detail, "", "detail");
+        }
+
+        // ---- how a download ended ----
+
+        static void End(DownloadEnd e, bool loaded, bool declined, string failure, string what)
+        {
+            Eq(e.Loaded, loaded, what + ": loaded");
+            Eq(e.Declined, declined, what + ": declined");
+            if (failure == null) Eq(e.Failure, null, what + ": failure");
+            else Contains(e.Failure, failure, what + ": failure");
+        }
+
+        // Approved runs a decider through an approved first callback.
+        static Run Approved(object key)
+        {
+            var r = new Run(AllYes);
+            r.D.Next(key, "StopModules", "stop", delegate { return List(P(key, "StopModules", "stop")); });
+            return r;
+        }
+
+        static void FinishLoaded()
+        {
+            foreach (string st in new[] { "Success", "Information", "Warning" })
+            {
+                End(Approved(new object()).D.Finish(st, "", null), true, false, null, st);
+            }
+        }
+
+        static void FinishDeclined()
+        {
+            var r = new Run(delegate { return null; });
+            object k = new object();
+            Exception thrown = null;
+            try
+            {
+                r.D.Next(k, "StopModules", "stop", delegate { return List(P(k, "StopModules", "stop")); });
+            }
+            catch (DownloadCancel c)
+            {
+                thrown = new InvalidOperationException("wrapped by TIA", c);
+            }
+            End(r.D.Finish(null, "", thrown), false, true, null, "declined, as TIA rethrows it");
+        }
+
+        static void FinishFailures()
+        {
+            // A load that ended in an error.
+            End(Approved(new object()).D.Finish("Error", "the CPU refused", null), false, false, "TIA's download ended Error: the CPU refused", "error state");
+            End(Approved(new object()).D.Finish("Bogus", "", null), false, false, "TIA's download ended Bogus", "unknown state");
+            // TIA failed while loading.
+            End(Approved(new object()).D.Finish(null, "", new TiaException("connection lost", new Exception("timeout"))), false, false, "connection lost: timeout", "TIA threw");
+            // A cancel after the decision, wrapped by TIA.
+            var r = Approved(new object());
+            Exception thrown = null;
+            try
+            {
+                r.D.Next(new object(), "OverwriteSystemData", "over", null);
+            }
+            catch (DownloadCancel c)
+            {
+                thrown = new InvalidOperationException("wrapped", c);
+            }
+            End(r.D.Finish(null, "", thrown), false, false, "after the decision", "a cancel after approval");
+            // A cancel the glue threw itself, found inside TIA's exception.
+            DownloadEnd own = Approved(new object()).D.Finish(null, "", new InvalidOperationException("wrapped", new DownloadCancel("no protection password", false)));
+            End(own, false, false, "no protection password", "the glue's own cancel");
+            Eq(own.Failure, "no protection password", "the glue's own cancel, without TIA's wrapping");
+            // A decided configuration TIA never asked about.
+            object a = new object(), b = new object();
+            var u = new Run(AllYes);
+            u.D.Next(a, "StopModules", "stop", delegate { return List(P(a, "StopModules", "stop"), P(b, "OverwriteSystemData", "over")); });
+            End(u.D.Finish("Success", "", null), false, false, "without asking OverwriteSystemData (over)", "unapplied");
+            // Before any callback: TIA refused, nothing decided.
+            End(new DownloadDecider(AllYes).Finish(null, "", new TiaException("no route")), false, false, "no route", "before any callback");
+        }
+
+        static void FinishSwallowedCancel()
+        {
+            foreach (bool declined in new[] { true, false })
+            {
+                var r = declined ? new Run(delegate { return null; }) : Approved(new object());
+                object k = new object();
+                try
+                {
+                    r.D.Next(k, "StopModules", "stop", delegate { return List(P(k, "StopModules", "stop")); });
+                }
+                catch (DownloadCancel)
+                {
+                }
+                // TIA caught the cancel and returned instead.
+                foreach (string st in new[] { "Success", "Error" })
+                {
+                    End(r.D.Finish(st, "", null), false, false, "TIA went on after tiad cancelled", (declined ? "declined" : "cancelled") + ", then " + st);
+                }
+            }
+        }
+
+        static void FinishWithoutACallback()
+        {
+            // TIA loaded without asking anything: loaded, undecided, which
+            // the agent reports as outcome_unknown.
+            foreach (string st in new[] { "Success", "Error" })
+            {
+                End(new DownloadDecider(AllYes).Finish(st, "", null), true, false, null, st);
+            }
+        }
+
+        static void Messages()
+        {
+            Eq(TiaNames.Message(new Exception("a", new Exception("b", new Exception("a")))), "a: b", "nested, repeats once");
+            Eq(TiaNames.Message(new Exception("outer: inner", new Exception("inner"))), "outer: inner", "already included");
+            Eq(TiaNames.Message(new Exception("a", new Exception(""))), "a", "empty inner");
         }
 
         // ---- names ----

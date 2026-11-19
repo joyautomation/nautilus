@@ -60,8 +60,11 @@ Mono:
   asked before loading too. It cancels (throws from the callback) on a list
   it cannot read, a configuration missing from the list or asked twice, an
   answer it cannot apply, or a no. A failure once decided answers
-  `outcome_unknown`. Provisional until S2b proves the list and that a
-  cancel loads nothing.
+  `outcome_unknown`, and so do a cancel TIA swallowed and a download TIA
+  made without a single callback (nothing to cancel from: a dry run would
+  load). How a download ended is decided in core too
+  (`DownloadDecider.Finish`). Provisional until S2b proves that TIA always
+  asks, the list, and that a cancel loads nothing.
 - **Names are checked, not guessed.** The CPU's attributes (address, subnet
   mask, router, PROFINET name, generated names off) are checked against
   `GetAttributeInfos` before each is set; a missing one fails, naming the

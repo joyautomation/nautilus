@@ -169,6 +169,15 @@ namespace Tiad
         }
     }
 
+    // DownloadEnd is how a download ended, as ITia.Download reports it:
+    // loaded, declined (decide said no, nothing approved), or a failure,
+    // which the agent reports as outcome_unknown once decide has run.
+    public sealed class DownloadEnd
+    {
+        public bool Loaded, Declined;
+        public string Failure; // null unless the download failed
+    }
+
     // DownloadDecider keeps ITia.Download's promise over Openness's
     // pre-download callback, which TIA calls once per configuration:
     // decide runs exactly once, at the first callback, with every pending
@@ -340,6 +349,61 @@ namespace Tiad
             return null;
         }
 
+        // Finish reads how TIA's download call ended: state is its result's
+        // state when it returned (null when it threw), messages its
+        // result's messages, error what it threw. A cancel TIA swallowed,
+        // a failed state, or a decided configuration TIA never asked about
+        // is a failure. A download TIA ran without one callback is loaded
+        // undecided: the agent reports that as outcome_unknown (decide ran
+        // zero times), never as a refusal.
+        public DownloadEnd Finish(string state, string messages, Exception error)
+        {
+            var end = new DownloadEnd();
+            if (error != null)
+            {
+                if (Cancelled != null)
+                {
+                    if (Cancelled.Declined) end.Declined = true;
+                    else end.Failure = Cancelled.Message;
+                    return end;
+                }
+                for (Exception i = error; i != null; i = i.InnerException)
+                {
+                    if (i is DownloadCancel)
+                    {
+                        end.Failure = i.Message;
+                        return end;
+                    }
+                }
+                end.Failure = TiaNames.Message(error);
+                return end;
+            }
+            string ended = "TIA's download ended " + (state ?? "without a state") + (string.IsNullOrEmpty(messages) ? "" : ": " + messages);
+            if (Cancelled != null)
+            {
+                end.Failure = "TIA went on after tiad cancelled the download (" + Cancelled.Message + "); " + ended;
+                return end;
+            }
+            if (!Decided)
+            {
+                end.Loaded = true;
+                return end;
+            }
+            if (!TiaNames.DownloadLoaded(state))
+            {
+                end.Failure = ended;
+                return end;
+            }
+            List<string> missed = Unapplied();
+            if (missed.Count > 0)
+            {
+                end.Failure = "TIA loaded without asking " + string.Join(", ", missed.ToArray()) + " again, so its answer was never written";
+                return end;
+            }
+            end.Loaded = true;
+            return end;
+        }
+
         // Unapplied names the decided pre-download configurations TIA
         // never asked about in a callback, so never got their answer. The
         // start-after question asked for the after-download callback is
@@ -401,6 +465,18 @@ namespace Tiad
             if (name != "Siemens.Engineering" && !name.StartsWith("Siemens.Engineering.", StringComparison.Ordinal)) return null;
             if (name.IndexOfAny(new[] { '/', '\\', ':' }) >= 0 || name.Contains("..")) return null;
             return apiDir + "\\" + name + ".dll";
+        }
+
+        // Message is an exception's text with the inner ones it wraps, each
+        // once: Openness wraps the reason in its own exceptions.
+        public static string Message(Exception e)
+        {
+            string m = e.Message ?? "";
+            for (Exception i = e.InnerException; i != null; i = i.InnerException)
+            {
+                if (!string.IsNullOrEmpty(i.Message) && m.IndexOf(i.Message, StringComparison.Ordinal) < 0) m += ": " + i.Message;
+            }
+            return m;
         }
 
         // Only picks the one name in names, for what TIA lists more than one

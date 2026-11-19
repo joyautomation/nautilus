@@ -406,6 +406,15 @@ behaviour. So, until then:
   `certificate` question's fingerprint is not read yet, so a trust decision
   cannot match it: a TLS check refuses until S2b. All of this is pure code
   in `tools/tiad/core/TiaRules.cs`, unit-tested without TIA.
+- **The gap: a download TIA asks nothing about.** With no pre-download
+  callback, `tiad.Openness` has nothing to cancel from, so "decide even
+  when TIA asks nothing" cannot hold: such a download, a dry run too,
+  loads, and the agent answers `outcome_unknown` (decide ran zero times).
+  The first question for S2b is whether TIA always asks at least one
+  check. No dry run before that is answered.
+- **Start-after is always asked.** A real download needs a `startAfter`
+  decision, or it answers `decision_required`, even when TIA would not stop
+  the CPU.
 - **Every download is audited**: one log line with the address, the
   question IDs asked (never TIA's text), the decisions (request-supplied
   names quoted), whether a protection password was set (never its
@@ -595,9 +604,11 @@ The CLI hands the writer what it needs from the manifest.
      user, with a minimal SCL program.
    - compile → dry run → download → compare.
    - Then the Web API checks run (`Api.Version`, `Api.GetMethods`).
+   - First, before any dry run: does TIA always make at least one
+     pre-download callback, does a configuration's parent list them all,
+     and does a cancel load nothing (§3.5)?
    - Also in S2b: does the trial start headless on a clone's first TIA
-     start, and can a download's checks be listed and cancelled with
-     nothing loaded (§3.5)?
+     start?
 4. **S3, the adoption spike (§2a).**
    - Import the SCL blocks of a legacy-style project and edit one.
    - Download only that block, in RUN.
