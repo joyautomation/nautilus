@@ -29,7 +29,7 @@ type rule struct {
 func rules(u universe) []rule {
 	return []rule{
 		{
-			from: []string{"io", "lang/ir", "hist", "oplog", "audit"},
+			from: []string{"io", "lang/ir", "hist", "oplog", "audit", "auth"},
 			to:   u.allBut(),
 			why:  "substrates and seams import no other nautilus package",
 		},

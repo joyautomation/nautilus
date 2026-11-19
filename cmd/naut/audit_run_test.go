@@ -25,7 +25,8 @@ func TestNautRunJournalsWrites(t *testing.T) {
 	bin := buildNautCLI(t, t.TempDir(), nil)
 	for _, c := range []struct{ name, section, dir string }{
 		{"default", "", "audit"},
-		{"audit.path", "audit:\n  path: var/journal\n  keep-days: 30\n", filepath.Join("var", "journal")},
+		// With an auth: block too, which naut run warns is not enforced yet.
+		{"audit.path", "audit:\n  path: var/journal\n  keep-days: 30\nauth:\n  token-role: operator\n", filepath.Join("var", "journal")},
 		// A path that cannot be a directory: the controller runs, with the
 		// journal in memory only, said on stderr and on the drivers block;
 		// it refuses a force and raises the system alarm beside the
@@ -119,6 +120,9 @@ func TestNautRunJournalsWrites(t *testing.T) {
 					time.Sleep(50 * time.Millisecond)
 				}
 				return
+			}
+			if strings.Contains(c.section, "auth:") != strings.Contains(stderr.String(), "NOT ENFORCED") {
+				t.Errorf("the auth: warning on stderr does not match the manifest:\n%s", stderr.String())
 			}
 			// Answered, so already on disk: no waiting.
 			jdir := filepath.Join(dir, c.dir)

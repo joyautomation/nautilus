@@ -50,7 +50,7 @@ into another's.
 | **IT drivers** | `hw` `snmp/…` `redfish/…` `prom/…` | source, scan class, the shared UDT set (SwitchPort, PSU, …), counter→rate. `hw` is to these what `runtime` is to the languages. | nothing above the seam | Same ACL rule as field drivers; `hw` owns the shared UDTs so a port is one struct whether it came from IF-MIB or REST |
 | **Sparkplug edge** | `sparkplug` `sparkplug/spb` | node, device, metric, birth, rebirth, NCMD, RBE. | Sparkplug host (payload codec) | The one adapter that imports `runtime` directly: it publishes a runtime's store, so it is downstream of Runtime, not a driver |
 | **Alarms** | `alarm` | ISA-18.2: definition, rule, active, unacked, shelved, journal, notifier. | Operator surface | Imports only `lang/ir` and `retain`; the manifest hands it a tag store. It does not import `runtime`, and that is the point |
-| **Operator surface** | `server` `oplog` `hist`, and `audit` `auth` (planned, [identity-audit.md](identity-audit.md)) | tag API, snapshot, SSE stream, write, program history, operator intent, sink; principal, role, area, permission, elevation, session, audit entry, chain. | HMI 2D, HMI 3D, external clients | Serves Runtime and Alarms; knows no protocol |
+| **Operator surface** | `server` `oplog` `hist`, `audit` and `auth` ([identity-audit.md](identity-audit.md)) | tag API, snapshot, SSE stream, write, program history, operator intent, sink; principal, role, area, permission, elevation, session, audit entry, chain. | HMI 2D, HMI 3D, external clients | Serves Runtime and Alarms; knows no protocol |
 | **Manifest** | `internal/project` `internal/dialect` `cmd/naut` | `nautilus.yaml` nouns: tags, tasks, drivers, alarms, scene, dialect. | nothing; it is the composition root | Every context's manifest form lives here (`project.TagConfig` ↔ `runtime.TagDef`). It is the only package allowed to import everything |
 | **Verification** | `acceptance` `lang/conformance` `internal/vcs` | suite, case, expect, virtual time, corpus. | CLI, Authoring | Composes whatever it tests; held to no import rule |
 | **Authoring** | `internal/lsp` `tools/vscode-iec` | diagnostics, hover, completion, diagram editor, live values, component preview, kind editor. | the person | Reads the Manifest and Languages; the only non-CLI importer of `internal/project` |
@@ -65,7 +65,7 @@ into another's.
 
 Two packages are substrates rather than contexts and import nothing of
 ours: `lang/ir` (types and values) and `io` (the driver seam and `Quality`).
-`hist`, `oplog` and `audit` (the runtime audit journal, #709) are seams in the same sense.
+`hist`, `oplog`, `audit` (the runtime audit journal, #709) and `auth` (who may do what, #708) are seams in the same sense.
 `quorum` (the vote protocol of a redundant pair and its witness,
 [redundancy.md](redundancy.md) §3) is one too: voter, candidate, lease, term,
 incarnation, adoption. Its core is sans-IO; `quorum/node` drives it over
@@ -82,7 +82,7 @@ break one changes this section first and says why.
 
 ### 2.1 Direction
 
-- Substrates (`io`, `lang/ir`, `hist`, `oplog`, `audit`) import no other nautilus
+- Substrates (`io`, `lang/ir`, `hist`, `oplog`, `audit`, `auth`) import no other nautilus
   package. `audit` imports only the standard library, not even a third-party
   module. `retain` imports only `internal/k8sapi`. `quorum` and its subtree
   import only each other, and only `leader`, the CLI and Verification import

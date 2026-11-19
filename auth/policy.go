@@ -1,0 +1,395 @@
+package auth
+
+import (
+	"fmt"
+	"path"
+	"sort"
+	"strings"
+)
+
+// Settings is a manifest's auth: block, already parsed (internal/project
+// reads the YAML). Names are matched ignoring case.
+type Settings struct {
+	// Anonymous is what a request with no credential may do: "none" (the
+	// default: sign-in required) or "viewer" (a wallboard).
+	Anonymous string
+	// TokenRole is NAUTILUS_TOKEN's role; "" is administrator, as before
+	// the auth: block existed.
+	TokenRole string
+	// Areas are named sets of tag patterns ("RCV_*"), matched against a
+	// target's tag (its name before any member or index).
+	Areas map[string][]string
+	// Roles are custom roles, each inheriting a built-in or another
+	// custom role and adding or removing permissions.
+	Roles map[string]RoleDef
+	// Users are the local and OIDC users' grants (credentials are never
+	// here).
+	Users map[string][]Grant
+	// ServiceTokens are named tokens for scripts and services: name to
+	// role. Their secrets are not here either.
+	ServiceTokens map[string]string
+}
+
+// RoleDef is a custom role.
+type RoleDef struct {
+	Inherits    string
+	Allow, Deny []string
+}
+
+// Grant is a role, over the whole controller or over named areas.
+type Grant struct {
+	Role  string
+	Areas []string
+}
+
+// Policy answers what a principal may do. Build one with Compile.
+type Policy struct {
+	roles     map[string]map[string]bool
+	areas     map[string][]string // lowercased patterns
+	anonymous []Grant
+	token     []Grant
+	services  map[string][]Grant
+	users     map[string][]Grant
+}
+
+// Compile checks c and builds its Policy. Every name it refers to must
+// exist, and every pattern must be valid: a typo is an error at load, not
+// a grant that silently matches nothing or everything.
+func Compile(c Settings) (*Policy, error) {
+	p := &Policy{roles: map[string]map[string]bool{}, areas: map[string][]string{},
+		services: map[string][]Grant{}, users: map[string][]Grant{}}
+	for name, set := range builtinRoles {
+		p.roles[name] = set
+	}
+
+	for name, pats := range c.Areas {
+		key := lower(name)
+		if err := validName("area", key); err != nil {
+			return nil, err
+		}
+		if _, dup := p.areas[key]; dup {
+			return nil, fmt.Errorf("auth: area %q is declared twice", name)
+		}
+		if len(pats) == 0 {
+			return nil, fmt.Errorf("auth: area %q names no tags", name)
+		}
+		for _, pat := range pats {
+			pat = lower(pat)
+			if pat == "" {
+				return nil, fmt.Errorf("auth: area %q has an empty tag pattern", name)
+			}
+			if _, err := path.Match(pat, ""); err != nil {
+				return nil, fmt.Errorf("auth: area %q: tag pattern %q: %v", name, pat, err)
+			}
+			p.areas[key] = append(p.areas[key], pat)
+		}
+	}
+
+	if err := p.compileRoles(c.Roles); err != nil {
+		return nil, err
+	}
+
+	switch lower(c.Anonymous) {
+	case "", "none":
+	case Viewer:
+		p.anonymous = []Grant{{Role: Viewer}}
+	default:
+		// Never more than viewing: a role that writes would need the
+		// cross-site defences the credential gives (#811, #815).
+		return nil, fmt.Errorf("auth: anonymous: %q: use none or viewer", c.Anonymous)
+	}
+
+	tokenRole := lower(c.TokenRole)
+	if tokenRole == "" {
+		tokenRole = Administrator
+	}
+	if p.roles[tokenRole] == nil {
+		return nil, fmt.Errorf("auth: token-role: no role %q", c.TokenRole)
+	}
+	p.token = []Grant{{Role: tokenRole}}
+
+	for name, role := range c.ServiceTokens {
+		key := lower(name)
+		if err := validName("service token", key); err != nil {
+			return nil, err
+		}
+		if _, dup := p.services[key]; dup {
+			return nil, fmt.Errorf("auth: service token %q is declared twice", name)
+		}
+		if p.roles[lower(role)] == nil {
+			return nil, fmt.Errorf("auth: service token %q: no role %q", name, role)
+		}
+		p.services[key] = []Grant{{Role: lower(role)}}
+	}
+
+	for name, grants := range c.Users {
+		key := lower(name)
+		if err := validName("user", key); err != nil {
+			return nil, err
+		}
+		if _, dup := p.users[key]; dup {
+			return nil, fmt.Errorf("auth: user %q is declared twice", name)
+		}
+		if len(grants) == 0 {
+			return nil, fmt.Errorf("auth: user %q has no role", name)
+		}
+		var out []Grant
+		for _, g := range grants {
+			role := lower(g.Role)
+			if p.roles[role] == nil {
+				return nil, fmt.Errorf("auth: user %q: no role %q", name, g.Role)
+			}
+			ng := Grant{Role: role}
+			for _, a := range g.Areas {
+				if p.areas[lower(a)] == nil {
+					return nil, fmt.Errorf("auth: user %q: no area %q", name, a)
+				}
+				ng.Areas = append(ng.Areas, lower(a))
+			}
+			out = append(out, ng)
+		}
+		p.users[key] = out
+	}
+	return p, nil
+}
+
+// compileRoles resolves the custom roles: each inherits a built-in or
+// another custom role (no cycles, no redefining a built-in) and adds or
+// removes known permissions.
+func (p *Policy) compileRoles(defs map[string]RoleDef) error {
+	byName := map[string]RoleDef{}
+	for name, d := range defs {
+		key := lower(name)
+		if err := validName("role", key); err != nil {
+			return err
+		}
+		if builtinRoles[key] != nil {
+			return fmt.Errorf("auth: role %q is built in: name your own role differently", name)
+		}
+		if _, dup := byName[key]; dup {
+			return fmt.Errorf("auth: role %q is declared twice", name)
+		}
+		for _, perm := range append(append([]string{}, d.Allow...), d.Deny...) {
+			if !IsPermission(lower(perm)) {
+				return fmt.Errorf("auth: role %q: no permission %q (permissions: %s)", name, perm, strings.Join(Permissions, ", "))
+			}
+		}
+		byName[key] = d
+	}
+	var resolve func(name string, seen []string) (map[string]bool, error)
+	resolve = func(name string, seen []string) (map[string]bool, error) {
+		if set := p.roles[name]; set != nil {
+			return set, nil
+		}
+		d, ok := byName[name]
+		if !ok {
+			return nil, fmt.Errorf("auth: role %q inherits %q, which is not a role", seen[len(seen)-1], name)
+		}
+		for _, s := range seen {
+			if s == name {
+				return nil, fmt.Errorf("auth: roles inherit in a cycle: %s", strings.Join(append(seen, name), " → "))
+			}
+		}
+		parent := lower(d.Inherits)
+		if parent == "" {
+			return nil, fmt.Errorf("auth: role %q inherits nothing: name a role to start from (viewer, operator, …)", name)
+		}
+		base, err := resolve(parent, append(seen, name))
+		if err != nil {
+			return nil, err
+		}
+		set := make(map[string]bool, len(base))
+		for perm := range base {
+			set[perm] = true
+		}
+		for _, perm := range d.Allow {
+			set[lower(perm)] = true
+		}
+		for _, perm := range d.Deny {
+			delete(set, lower(perm))
+		}
+		p.roles[name] = set
+		return set, nil
+	}
+	names := make([]string, 0, len(byName))
+	for n := range byName {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		if _, err := resolve(n, nil); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// grants are a principal's grants; nil when it has none.
+func (p *Policy) grants(pr Principal) []Grant {
+	switch pr.Kind {
+	case KindAnonymous, "":
+		return p.anonymous
+	case KindToken:
+		return p.token
+	case KindService:
+		return p.services[lower(pr.Name)]
+	case KindUser:
+		return p.users[lower(pr.Name)]
+	}
+	return nil
+}
+
+// HasServiceToken reports whether name is a declared service token.
+func (p *Policy) HasServiceToken(name string) bool { return p.services[lower(name)] != nil }
+
+// ServiceTokens lists the declared service tokens' names.
+func (p *Policy) ServiceTokens() []string {
+	out := make([]string, 0, len(p.services))
+	for n := range p.services {
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// Decision is Can's answer: whether the action is allowed, and if not,
+// a sentence saying why.
+type Decision struct {
+	Allowed bool
+	Reason  string
+}
+
+// Can reports whether pr may use perm on target. For an area-scoped
+// permission (write, ack, shelve, substitute, force) target is the tag
+// acted on (a member path or index is matched by its tag), or All; an
+// empty target is never allowed, so a request whose target could not be
+// read is refused. Other permissions ignore target.
+func (p *Policy) Can(pr Principal, perm, target string) Decision {
+	perm = lower(perm)
+	if !IsPermission(perm) {
+		return Decision{Reason: fmt.Sprintf("%s: no permission %q", pr, perm)}
+	}
+	gs := p.grants(pr)
+	if len(gs) == 0 {
+		return Decision{Reason: fmt.Sprintf("%s has no role here", pr)}
+	}
+	held := false
+	var outside []string
+	for _, g := range gs {
+		if !p.roles[g.Role][perm] {
+			continue
+		}
+		held = true
+		if !areaScoped[perm] || len(g.Areas) == 0 && target != "" {
+			return Decision{Allowed: true}
+		}
+		if target == "" || target == All {
+			outside = append(outside, g.Areas...)
+			continue
+		}
+		for _, a := range g.Areas {
+			if p.inArea(a, target) {
+				return Decision{Allowed: true}
+			}
+		}
+		outside = append(outside, g.Areas...)
+	}
+	switch {
+	case !held:
+		return Decision{Reason: fmt.Sprintf("%s (%s) may not %s", pr, p.roleNames(gs), perm)}
+	case target == "":
+		return Decision{Reason: fmt.Sprintf("%s may not %s: no tag named", pr, perm)}
+	case target == All:
+		return Decision{Reason: fmt.Sprintf("%s may %s only in %s, not every tag", pr, perm, strings.Join(dedupe(outside), ", "))}
+	}
+	return Decision{Reason: fmt.Sprintf("%s may not %s %s: it is outside %s", pr, perm, target, strings.Join(dedupe(outside), ", "))}
+}
+
+// Holds reports whether pr holds perm anywhere: on the whole controller
+// or in some area. A request's credential is checked against it before
+// its body is read; Can, with the target, decides.
+func (p *Policy) Holds(pr Principal, perm string) bool {
+	for _, g := range p.grants(pr) {
+		if p.roles[g.Role][lower(perm)] {
+			return true
+		}
+	}
+	return false
+}
+
+// inArea reports whether target's tag matches one of area's patterns.
+func (p *Policy) inArea(area, target string) bool {
+	tag := lower(target)
+	if i := strings.IndexAny(tag, ".["); i >= 0 {
+		tag = tag[:i]
+	}
+	for _, pat := range p.areas[area] {
+		if ok, _ := path.Match(pat, tag); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *Policy) roleNames(gs []Grant) string {
+	var out []string
+	for _, g := range gs {
+		out = append(out, g.Role)
+	}
+	return strings.Join(dedupe(out), ", ")
+}
+
+// Me is what a principal may do, for GET /api/me: its roles, and its
+// permissions on the whole controller ("*") and per area.
+type Me struct {
+	Principal   string              `json:"principal"`
+	Roles       []string            `json:"roles"`
+	Permissions map[string][]string `json:"permissions"`
+}
+
+// Describe is pr's Me.
+func (p *Policy) Describe(pr Principal) Me {
+	me := Me{Principal: pr.String(), Roles: []string{}, Permissions: map[string][]string{}}
+	held := map[string]map[string]bool{}
+	add := func(scope, perm string) {
+		if held[scope] == nil {
+			held[scope] = map[string]bool{}
+		}
+		held[scope][perm] = true
+	}
+	gs := p.grants(pr)
+	for _, g := range gs {
+		for perm := range p.roles[g.Role] {
+			if !areaScoped[perm] || len(g.Areas) == 0 {
+				add(All, perm)
+				continue
+			}
+			for _, a := range g.Areas {
+				add(a, perm)
+			}
+		}
+	}
+	if len(gs) > 0 {
+		me.Roles = strings.Split(p.roleNames(gs), ", ")
+	}
+	for scope, set := range held {
+		for _, perm := range Permissions {
+			if set[perm] && (scope == All || !held[All][perm]) {
+				me.Permissions[scope] = append(me.Permissions[scope], perm)
+			}
+		}
+	}
+	return me
+}
+
+func dedupe(in []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, s := range in {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	return out
+}
