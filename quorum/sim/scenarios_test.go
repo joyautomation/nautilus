@@ -12,10 +12,21 @@ const (
 	lease = 2 * time.Second
 )
 
+// judged runs every oracle over a named case's run, and fails t if the
+// run is the two-of-three case (Record.TwoOfThreeLost), whose oracles are
+// partly excused: a named case must be judged in full.
+func judged(t *testing.T, rec *Record, c Checks) []Violation {
+	t.Helper()
+	if rec.TwoOfThreeLost() {
+		t.Error("the run is the two-of-three case: its oracles are partly excused, so the case proves less than it says")
+	}
+	return Check(rec, c)
+}
+
 // clean fails t on any violation, with the trace for the first ones.
 func clean(t *testing.T, rec *Record, c Checks) {
 	t.Helper()
-	vs := Check(rec, c)
+	vs := judged(t, rec, c)
 	for _, v := range vs {
 		t.Error(v)
 	}
@@ -67,28 +78,26 @@ func TestMustFailGrantMeantForThePeer(t *testing.T) {
 
 // F31: a grant for A's request from before a restart must not count for
 // the same (term, id) asked again after it. A's first boot asks W for
-// term 1 with id 1 and crashes before W's grant (delayed 1.5 s) arrives;
-// its own voter never persisted term 1, so the new boot asks for term 1
-// with id 1 again, reaching B but not W. The old grant then lands in the
-// new round. Pins the nonce check (`r.Nonce != c.cfg.Nonce`): without it
-// A counts {B, W-from-before}, times its lease from the new send (until
-// 4.13 s), and leads past W's promise (until 4.001 s): the lease oracle
-// fails.
+// term 1 with id 1 (its own voter is still in its restart wait) and
+// crashes; W's grant is delayed 2.55 s. A's new boot is paused (SIGSTOP)
+// until its restart wait and the restart's quiet period are over, so the
+// old grant can't be ignored as quiet, then asks its own voter for term 1
+// with id 1 again (its voter never persisted term 1), but not W (cut).
+// The old grant lands in the new round. Pins the nonce check
+// (`r.Nonce != c.cfg.Nonce`): without it A counts {A, W-from-before},
+// times its lease from the new send, and leads past W's promise (until
+// about 4 s): the lease oracle fails. B never starts.
 func TestMustFailPreRestartGrant(t *testing.T) {
 	o := Options{
 		Seed: 1, Delay: 1 * ms, Fsync: 1 * ms, NoJitter: true, Until: 12 * sec, Trace: true,
-		Start: [3]time.Duration{2 * sec, 0, 0}, // A starts once B's and W's restart waits are over
+		Start: [3]time.Duration{2 * sec, 60 * sec, 0}, // A starts once W's restart wait is over
 		Faults: []Fault{
-			// B can't reach W and A isn't up: B's first campaign goes
-			// unheard, so its candidate backs off until 4 s, and only its
-			// voter answers.
-			{Kind: Cut, At: 0, From: B, To: W, Both: true},
-			{Kind: Cut, At: 0, For: 2050 * ms, From: A, To: B},
 			{Kind: Cut, At: 2050 * ms, From: A, To: W},
 			{Kind: Crash, At: 2100 * ms, For: 50 * ms, Node: A},
+			{Kind: Pause, At: 2150 * ms, For: 2350 * ms, Node: A},
 		},
 	}
-	o.LinkDelay[W][A] = 1500 * ms
+	o.LinkDelay[W][A] = 2550 * ms
 	rec := Run(o)
 	hostile(t, rec, "earlier boot", A)
 	clean(t, rec, Checks{MaxTakeovers: -1})

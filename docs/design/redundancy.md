@@ -230,7 +230,11 @@ redundancy:
     - **Boots.** Every `Adopt` carries its sender's boot nonce and echoes the nonce of the
       peer's boot it answers. A controller that lost its file takes only messages sent to its
       current boot. A proposal or an ack sent before the loss carries a floor that misses
-      terms led since, and would let it lead one of them again (#1008 review).
+      terms led since, and would let it lead one of them again (#1008 review). The peer
+      counts as heard, and its boot as learnt, only from an `Adopt` that echoes this boot: a
+      late one sent before this controller restarted would say the peer is up when it may be
+      down. A peer's first message after its own restart echoes no boot of ours; the reply
+      echoes its nonce, and its next message echoes ours.
   - **Agreement isn't enough at a switch.** Suppose A leads on grants from itself and the old
     witness, and B's promise to A has lapsed. If the pair switched to a second copy that has
     been up for hours (its restart wait long over), B and that copy would make a majority while
@@ -243,8 +247,25 @@ redundancy:
       ended. **A restart owes it again**: a restarted controller counts its adopted
       incarnation only one lease after it starts. It may have adopted just before it went down,
       and the peer may hold a lease that rests on this node's own **pre-restart** grant (with the
-      old witness), which its restart wait doesn't cover (#1008 review). A generation bump that
-      keeps the incarnation needs no quiet period.
+      old witness), which its restart wait doesn't cover (#1008 review).
+      - **One rule decides it,** at the write: an adoption counts its incarnation at once only
+        if the controller was already counting that incarnation (a generation bump that kept
+        it), and then a quiet period still owed (a restart's) is not cut short. Every other
+        adoption counts it one lease after the write. A proposer counts nothing while its
+        proposal is in flight, so re-adopting the **old** incarnation over a pending proposal
+        owes the quiet period too: the peer may have adopted the proposed one with its ack
+        lost, and may lead on it still. So does a bump that lands on the same write as the
+        adoption of a new incarnation.
+      - **Nothing counts while a proposal is in flight,** whatever adoption a write makes
+        durable: a proposal drops an adoption still waiting for its write (a failed or slow
+        one), and a write that lands while a proposal is pending counts nothing. Otherwise a
+        failed write of (2, J), then a proposal of (3, I) whose write succeeds, would count J
+        while B moves to I with its acks lost: each leads on its own witness (#1014 review).
+        The hold-off runs from the last adoption, durable or not.
+      - **Heard, not counted.** In its quiet period the counted incarnation's replies show the
+        witness hears this controller, so a campaign it refuses is "refused by a majority" and
+        retries on a later look. Its grants never count. Otherwise every restart would back off
+        two leases as if unheard.
     - **Forward only.** A controller stops counting the old incarnation, durably, before it
       asks the other to switch. It counts again only on the matching ack. Generations only
       rise. An old incarnation comes back only through a full handshake at a higher
@@ -283,7 +304,10 @@ redundancy:
       is always refused. The refusal carries the incarnation and the promised term.
     - **Strays.** It never proposes an incarnation of its own while its peer is commissioned, so
       a stray copy can't move the pair. Only when both are uncommissioned (first commissioning,
-      or both files lost) does a controller propose the incarnation it hears.
+      or both files lost) does a controller propose the incarnation it heard last. It proposes
+      again, above both generations, when that is no longer the one pending: two proposals can
+      each be refused by the other side (an incarnation it never heard, a lower generation),
+      and only a change in what answers (a stray gone, the real witness back) ends that.
     - **It gives way.** If its proposal meets one of the peer's at the same or a higher
       generation (a switch the lost controller can't hear), it re-proposes the peer's current
       incarnation above both, and the peer takes that over its own switch. Neither waits on the
@@ -297,8 +321,15 @@ redundancy:
       controller's file and the witness's, or both controllers' with only a stray copy
       answering): no surviving majority remembers the terms, so the floor can miss terms only
       those two knew. This needs operator re-commissioning (§7). The simulator names the case
-      and doesn't count it against I2 or I4. Both controllers' files lost with the witness
-      intact (#976) is covered in full.
+      (a controller's file lost, and its peer's committed incarnation dying before it
+      re-commissions; or both files lost and re-commissioned on a stray's incarnation) and
+      excuses it against I2, I4 and liveness (I6, I7, steady state), never I1, the lease or the
+      ledger. Both controllers' files lost with the witness intact (#976) is covered in full.
+      **Not yet reliable:** a peer's pending switch can still re-commission the lost controller
+      automatically, at a floor that may miss its own earlier terms. The PR after H2, before
+      PR 3, makes it reliably wait for an operator: an uncommissioned controller adopts only a
+      re-adoption of its peer's committed incarnation, else stays uncommissioned and raises
+      "re-commission by hand"; then the simulator asserts I2 and I4 in this case too.
   - **On an HA cluster** the witness must be a StatefulSet with a persistent volume, never a
     Deployment: Kubernetes won't start a second copy of a StatefulSet pod while it can't
     confirm that the first is gone. The incarnation check covers a force-delete.

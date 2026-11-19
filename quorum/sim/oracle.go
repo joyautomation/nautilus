@@ -31,11 +31,80 @@ type Record struct {
 	// OnReply while a matching request of this boot was open.
 	Hostile []Hostile
 
+	// Adoptions are the durable witness-incarnation adoptions (EventAdopted)
+	// and Proposals the proposals made, by controller, in order.
+	Adoptions, Proposals []AdoptRec
+	// StaleProposals are proposals delivered below the receiver's adopted
+	// generation, of another incarnation (a late or earlier-boot one).
+	StaleProposals []AdoptRec
+	// EarlierBootAdopts are Adopts from the peer delivered to a controller
+	// whose earlier boot they were sent to (they echo an older nonce).
+	EarlierBootAdopts []AdoptRec
+	// TwoIncarnations counts the "two witness copies" events.
+	TwoIncarnations int
+
 	Trace []string
 	Hash  uint64
 
+	// counts is, per controller, what the protocol says it counts
+	// (countTruth in sim.go), after each change.
+	counts [2][]countSnap
+	// stops are when each node's process stopped (crashed, or a Start
+	// fault ended).
+	stops [nNodes][]time.Duration
+	// grantIdx finds a ledger grant by (voter, nonce, id, term), to note
+	// when its grantee first received it.
+	grantIdx map[grantKey]int
+
 	ends     []time.Duration // promise end of each Grant, global; built once by Check
 	released []release
+}
+
+// AdoptRec is one adoption (durable) or proposal (made) by a controller.
+type AdoptRec struct {
+	Node     Addr
+	At       time.Duration
+	Gen, Inc uint64
+}
+
+type countSnap struct {
+	at time.Duration
+	countState
+}
+
+type grantKey struct {
+	voter           Addr
+	to              quorum.NodeID
+	nonce, id, term uint64
+}
+
+func (r *Record) count(a Addr, at time.Duration, c countState) {
+	r.counts[a] = append(r.counts[a], countSnap{at: at, countState: c})
+}
+
+// countsAt reports whether controller a counted witness incarnation inc at
+// global time t, by the protocol's rules (the quiet period included).
+func (r *Record) countsAt(a Addr, inc uint64, t time.Duration) bool {
+	if a != A && a != B || inc == 0 {
+		return false
+	}
+	snaps := r.counts[a]
+	i := sort.Search(len(snaps), func(i int) bool { return snaps[i].at > t }) - 1
+	if i < 0 || snaps[i].inc != inc {
+		return false
+	}
+	return r.clocks[a].Local(t) >= snaps[i].from
+}
+
+// received notes that grant rep from voter reached controller to at t.
+func (r *Record) received(voter Addr, rep quorum.Reply, to Addr, t time.Duration) {
+	i, ok := r.grantIdx[grantKey{voter, rep.To, rep.Nonce, rep.ID, rep.Term}]
+	if !ok {
+		return
+	}
+	if g := &r.Grants[i]; g.To == to && g.Recv == 0 {
+		g.Recv = t
+	}
 }
 
 // release is a voter dropping its promise to its own candidate at At (a
@@ -63,8 +132,12 @@ type Grant struct {
 	To       Addr
 	ToID     quorum.NodeID
 	Term     uint64
+	ID       uint64
+	Nonce    uint64
 	Start    time.Duration
 	EndLocal quorum.Instant
+	// Recv is when the grantee first received it (0: never).
+	Recv time.Duration
 }
 
 // DeviceWrite is one write the simulated device received.
@@ -97,6 +170,7 @@ type voterStart struct {
 	boot     int
 	at       time.Duration
 	readable bool
+	inc      uint64 // a witness's incarnation, or a controller's adopted one, at this start
 }
 
 type faultEdge struct {
@@ -114,10 +188,16 @@ func (r *Record) gate(a Addr, at time.Duration, open bool, end quorum.Instant, t
 	*g = append(*g, s)
 }
 
-func (r *Record) grant(g Grant) { r.Grants = append(r.Grants, g) }
+func (r *Record) grant(g Grant) {
+	if r.grantIdx == nil {
+		r.grantIdx = map[grantKey]int{}
+	}
+	r.grantIdx[grantKey{g.Voter, g.ToID, g.Nonce, g.ID, g.Term}] = len(r.Grants)
+	r.Grants = append(r.Grants, g)
+}
 
-func (r *Record) voterStart(a Addr, boot int, at time.Duration, readable bool) {
-	r.starts = append(r.starts, voterStart{node: a, boot: boot, at: at, readable: readable})
+func (r *Record) voterStart(a Addr, boot int, at time.Duration, readable bool, inc uint64) {
+	r.starts = append(r.starts, voterStart{node: a, boot: boot, at: at, readable: readable, inc: inc})
 }
 
 func (r *Record) faultEvent(at time.Duration, i int, on bool) {
@@ -134,6 +214,153 @@ func (r *Record) lostFile() bool {
 		}
 	}
 	return false
+}
+
+// TwoOfThreeLost reports whether the run is design §3.1's two-of-three
+// case: two of the three voters' state lost before either re-commissioned,
+// so no surviving majority remembers the terms and the pair needs an
+// operator (§7). Two shapes:
+//
+//   - a controller lost its file, and before it re-commissioned (its next
+//     durable adoption), an incarnation its peer had committed (durably
+//     adopted) in that window died for good (the witness wiped, or an adopted second copy gone): it
+//     can only re-adopt what its peer counts, after hearing it, and the
+//     terms it led on the dead one are known to nobody;
+//   - both controllers lost their files, their windows overlapping, and the
+//     adoption that ended one of them was of an incarnation the real witness
+//     never had (a stray copy's).
+//
+// Both controllers' files lost with the witness intact is NOT this case,
+// nor one controller's file or the witness's alone.
+func (r *Record) TwoOfThreeLost() bool {
+	const never = time.Duration(1<<63 - 1)
+	type window struct {
+		node     Addr
+		from, to time.Duration
+		inc      uint64 // the incarnation the ending adoption took
+	}
+	var ws []window
+	for _, s := range r.starts {
+		if s.readable || (s.node != A && s.node != B) {
+			continue
+		}
+		w := window{node: s.node, from: s.at, to: never}
+		for _, a := range r.Adoptions {
+			if a.Node == s.node && a.At >= s.at {
+				w.to, w.inc = a.At, a.Inc
+				break
+			}
+		}
+		ws = append(ws, w)
+	}
+	for _, w := range ws {
+		peer := peerOf(w.node)
+		for _, inc := range r.committedIn(peer, w.from, w.to) {
+			if r.death(inc) < w.to {
+				return true
+			}
+		}
+	}
+	real := map[uint64]bool{}
+	for _, s := range r.starts {
+		if s.node == W {
+			real[s.inc] = true
+		}
+	}
+	for i, x := range ws {
+		for _, y := range ws[i+1:] {
+			if x.node != y.node && x.from < y.to && y.from < x.to &&
+				(x.to != never && !real[x.inc] || y.to != never && !real[y.inc]) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// committedIn returns the incarnations controller a had durably adopted
+// (from its file at a start, or by an adoption) at some time in [from, to).
+func (r *Record) committedIn(a Addr, from, to time.Duration) []uint64 {
+	type ev struct {
+		at  time.Duration
+		inc uint64
+	}
+	var evs []ev
+	for _, s := range r.starts {
+		if s.node == a {
+			evs = append(evs, ev{s.at, s.inc})
+		}
+	}
+	for _, ad := range r.Adoptions {
+		if ad.Node == a {
+			evs = append(evs, ev{ad.At, ad.Inc})
+		}
+	}
+	sort.SliceStable(evs, func(i, j int) bool { return evs[i].at < evs[j].at })
+	var incs []uint64
+	for i, e := range evs {
+		end := to
+		if i+1 < len(evs) {
+			end = evs[i+1].at
+		}
+		if e.inc != 0 && e.at < to && end > from && !slices.Contains(incs, e.inc) {
+			incs = append(incs, e.inc)
+		}
+	}
+	return incs
+}
+
+// death is when witness incarnation inc stopped answering for good: the
+// stop of the node running it after which that node never starts again at
+// it. Never, while it runs at the end.
+func (r *Record) death(inc uint64) time.Duration {
+	const never = time.Duration(1<<63 - 1)
+	for _, n := range []Addr{W, W2} {
+		alive := false
+		var stopped time.Duration
+		for _, e := range r.lifeOf(n) {
+			switch {
+			case e.start && e.inc == inc:
+				alive = true
+			case e.start:
+				if alive {
+					return stopped // restarted at another incarnation: inc is gone
+				}
+			case alive:
+				alive, stopped = false, e.at
+			}
+		}
+		if stopped != 0 && !alive {
+			return stopped
+		}
+	}
+	return never
+}
+
+type lifeEvent struct {
+	at    time.Duration
+	start bool
+	inc   uint64
+}
+
+// lifeOf merges node n's starts and stops in time order.
+func (r *Record) lifeOf(n Addr) []lifeEvent {
+	var ev []lifeEvent
+	for _, s := range r.starts {
+		if s.node == n {
+			ev = append(ev, lifeEvent{at: s.at, start: true, inc: s.inc})
+		}
+	}
+	for _, t := range r.stops[n] {
+		ev = append(ev, lifeEvent{at: t})
+	}
+	sort.SliceStable(ev, func(i, j int) bool {
+		if ev[i].at != ev[j].at {
+			return ev[i].at < ev[j].at
+		}
+		return !ev[i].start && ev[j].start // a stop before a start at one instant
+	})
+	return ev
 }
 
 // Interval is one stretch of a controller's open gate, in global time:
@@ -196,15 +423,25 @@ func (r *Record) promiseEnd(i int) time.Duration {
 }
 
 // counted reports whether g comes from one of the pair's three voters as
-// the pair counts them: A, B, or W at the commissioned incarnation.
+// its grantee counted them when it received it: A, B, or a witness copy
+// (W, or W2 under the same name) at the incarnation the grantee counted
+// then, past its quiet period (design §3.1). Z never counts.
 func (r *Record) counted(g Grant) bool {
 	switch g.Voter {
 	case A, B:
 		return true
-	case W:
-		return g.Inc == r.witnessInc
+	case W, W2:
+		return g.Recv > 0 && r.countsAt(g.To, g.Inc, g.Recv)
 	}
 	return false
+}
+
+// slot is the voter a grant counts as: both witness copies are "W".
+func slot(a Addr) Addr {
+	if a == W2 {
+		return W
+	}
+	return a
 }
 
 // Violation is one oracle failing.
@@ -232,6 +469,13 @@ type Checks struct {
 	// Zero SteadyTo skips the steady-state check.
 	SteadyFrom, SteadyTo time.Duration
 	SteadyVoters         []Addr
+	// SettleAdoptions, when non-zero, is how long after HealAt the pair may
+	// still adopt (the switch hold-off, design §3.1: a copy that answered
+	// one controller may have made the pair switch, and the switch back
+	// waits up to 32 leases). Steady state is then judged from a quiet
+	// period and a lease after the last adoption, and an adoption later
+	// than HealAt + SettleAdoptions is a violation ("settle").
+	SettleAdoptions time.Duration
 }
 
 // Check runs every oracle over r.
@@ -241,6 +485,13 @@ func Check(r *Record, c Checks) []Violation {
 		if !slices.Contains(c.Exclude, v.Oracle) {
 			vs = append(vs, v)
 		}
+	}
+	if r.TwoOfThreeLost() {
+		// The operator's case: the term floor may miss terms only the two
+		// lost voters knew (I2, I4), and nothing re-commissions reliably
+		// without a person (I6, I7, steady). I1, the lease and the ledger
+		// still hold.
+		c.Exclude = append(slices.Clone(c.Exclude), "I2", "I4", "I6", "I7", "steady")
 	}
 	gates := r.Gates()
 	for _, v := range checkI1(gates) {
@@ -268,17 +519,15 @@ func Check(r *Record, c Checks) []Violation {
 			add(v)
 		}
 	}
-	if c.SteadyTo > c.SteadyFrom {
-		voters := c.SteadyVoters
-		if r.lostFile() {
-			// Until the handshake PR, a rebuilt witness (a new incarnation)
-			// isn't adopted, and a controller that lost its file lost the
-			// incarnation it accepts, so the witness can't back it: the
-			// pair runs on A and B alone (#976). The handshake flips this
-			// back, beside TestKnownGap976TwoLostControllerFiles.
-			voters = slices.DeleteFunc(slices.Clone(voters), func(a Addr) bool { return a == W })
+	if c.SettleAdoptions > 0 && len(r.Adoptions) > 0 {
+		last := r.Adoptions[len(r.Adoptions)-1].At
+		if last > c.HealAt+c.SettleAdoptions {
+			add(Violation{"settle", last, fmt.Sprintf("an adoption %v after the last heal: the switch hold-off allows %v", last-c.HealAt, c.SettleAdoptions)})
 		}
-		for _, v := range r.checkSteady(gates, c.SteadyFrom, c.SteadyTo, voters) {
+		c.SteadyFrom = max(c.SteadyFrom, last+2*r.lease)
+	}
+	if c.SteadyTo > c.SteadyFrom {
+		for _, v := range r.checkSteady(gates, c.SteadyFrom, c.SteadyTo, c.SteadyVoters) {
 			add(v)
 		}
 	}
@@ -324,7 +573,7 @@ func (r *Record) checkSteady(gates []Interval, from, to time.Duration, voters []
 		for {
 			next := cov
 			for i, g := range r.Grants {
-				if g.Voter == v && g.To == holder.Node && (v != W || g.Inc == r.witnessInc) &&
+				if g.Voter == v && g.To == holder.Node && r.counted(g) &&
 					g.Start <= cov && r.promiseEnd(i) > next {
 					next = r.promiseEnd(i)
 				}
@@ -396,8 +645,8 @@ func (r *Record) checkLease(gates []Interval) []Violation {
 			var by [nNodes]bool
 			n := 0
 			for _, s := range spans {
-				if s.from <= p && p < s.to && !by[s.voter] {
-					by[s.voter] = true
+				if s.from <= p && p < s.to && !by[slot(s.voter)] {
+					by[slot(s.voter)] = true
 					n++
 				}
 			}

@@ -107,7 +107,6 @@ type heldAdopt struct {
 type commit struct {
 	need     uint64
 	gen, inc uint64
-	quiet    bool // a new incarnation: count it one lease after the write
 }
 
 // NewAdoption starts the handshake for a controller at now, from the state
@@ -257,6 +256,12 @@ func (a *Adoption) propose(gen, inc uint64) (*Persist, []Adopt) {
 	if !mut("count_while_pending") {
 		a.c.Count(0, 0)
 	}
+	// An adoption still waiting for its write (a failed or slow one) is
+	// superseded: the write that carries this proposal must not start
+	// counting it (#1014 review).
+	if !mut("propose_keeps_commit") {
+		a.commit = nil
+	}
 	a.v.st.PendingGen, a.v.st.PendingInc = gen, inc
 	p := a.v.change()
 	return p, a.hold(a.msg(Propose, gen, inc, a.floorFor(), a.peerNonce))
@@ -288,12 +293,20 @@ func (a *Adoption) OnAdopt(now Instant, m Adopt) (*Persist, []Adopt) {
 	if m.From != a.peer {
 		return nil, nil
 	}
-	a.peerAt, a.peerNonce = now, m.Nonce
 	st := a.v.st
 	// fresh: m was sent to this boot. An uncommissioned controller (a lost
 	// file) takes nothing that isn't: a proposal or an ack from before the
 	// loss carries a floor that misses what was led since (#1008 review).
 	fresh := m.Echo == a.c.cfg.Nonce || mut("no_adopt_echo")
+	// The peer is heard, and its boot learnt, only from a message that
+	// answers this boot: a late one sent before this controller restarted
+	// would say the peer is up when it may be down (a switch then waits on
+	// it), or name a boot the peer has left. A peer's first message after
+	// its own restart echoes no boot of ours; the reply to it echoes its
+	// nonce directly, and its next message echoes ours.
+	if m.Echo == a.c.cfg.Nonce || mut("peer_from_any_adopt") {
+		a.peerAt, a.peerNonce = now, m.Nonce
+	}
 	switch m.Kind {
 	case Propose:
 		if m.Gen != 0 && m.Gen == st.Gen && m.Incarnation == st.Incarnation {
@@ -343,10 +356,14 @@ func (a *Adoption) OnAdopt(now Instant, m Adopt) (*Persist, []Adopt) {
 			return nil, nil
 		}
 		// Both uncommissioned (first commissioning, or both files lost):
-		// propose the incarnation that answered last.
-		if st.Incarnation == 0 && st.PendingGen == 0 {
-			if inc := a.newest(); inc != 0 {
-				return a.propose(max(m.Gen, m.Pending, st.Gen)+1, inc)
+		// propose the incarnation that answered last, and propose again,
+		// above both, when it is no longer the one pending. Two proposals
+		// can each be refused by the other side (an incarnation it never
+		// heard, a lower generation), and only a change of what answers
+		// (a stray gone, the real witness back) can end that.
+		if st.Incarnation == 0 {
+			if inc := a.newest(); inc != 0 && (st.PendingGen == 0 || (inc != st.PendingInc && !mut("stale_pending_kept"))) {
+				return a.propose(max(m.Gen, m.Pending, st.Gen, st.PendingGen)+1, inc)
 			}
 		}
 	}
@@ -377,10 +394,20 @@ func (a *Adoption) newest() uint64 {
 // incarnation stops the old one counting now, before any Ack leaves.
 func (a *Adoption) adopt(now Instant, gen, inc, peerFloor uint64) *Persist {
 	st := &a.v.st
+	// A new incarnation stops the old one counting now, before any Ack
+	// leaves. Over a proposal in flight nothing counts already (forward
+	// only), so re-adopting the old incarnation then also waits for its
+	// quiet period (Persisted): the peer may have adopted the proposed one
+	// with its Ack lost, and may lead on it still (#1008 re-review).
 	quiet := inc != st.Incarnation
 	if quiet && st.Incarnation != 0 {
 		a.switches++
 		a.standing = now
+	}
+	// The hold-off runs from this adoption, durable or not: a failed write
+	// must not leave it measured from boot (#1014 review).
+	if !mut("holdoff_from_boot") {
+		a.current = now
 	}
 	floor := max(peerFloor, a.floorFor())
 	st.Gen, st.Incarnation, st.PendingGen, st.PendingInc = gen, inc, 0, 0
@@ -392,7 +419,7 @@ func (a *Adoption) adopt(now Instant, gen, inc, peerFloor uint64) *Persist {
 		a.c.Count(0, 0)
 	}
 	p := a.v.change()
-	a.commit = &commit{need: p.Seq, gen: gen, inc: inc, quiet: quiet}
+	a.commit = &commit{need: p.Seq, gen: gen, inc: inc}
 	return p
 }
 
@@ -412,10 +439,26 @@ func (a *Adoption) Persisted(now Instant, seq uint64, ok bool) ([]Reply, []Adopt
 		}
 	}
 	a.held = keep
+	if ok && a.commit != nil && seq >= a.commit.need && a.v.st.PendingGen != 0 && !mut("count_over_pending") {
+		a.commit = nil // forward only: nothing counts while a proposal is in flight
+	}
 	if ok && a.commit != nil && seq >= a.commit.need {
-		from := now
-		if a.commit.quiet && !mut("no_quiet") {
-			from = now.Add(a.lease)
+		// The incarnation counts one lease after the write, unless this
+		// controller was already counting it (a generation bump that kept
+		// it): then it goes on as before, and a quiet period still owed (a
+		// restart's, NewAdoption) is not cut short. Judged on what the
+		// candidate counts now, not on this adoption alone: an earlier
+		// adoption of a new incarnation still waiting for this same write
+		// stopped the counting, and owes its quiet period here.
+		from := now.Add(a.lease)
+		if inc, f := a.c.Counting(); inc == a.commit.inc {
+			from = max(now, f)
+			if mut("bump_cuts_quiet") {
+				from = now
+			}
+		}
+		if mut("no_quiet") {
+			from = now
 		}
 		a.c.Count(a.commit.inc, from)
 		a.current = now

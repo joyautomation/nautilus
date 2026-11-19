@@ -10,7 +10,10 @@ import (
 type FaultKind int
 
 const (
-	// Cut drops every message on From→To (and To→From when Both).
+	// Cut drops every message on From→To (and To→From when Both), or,
+	// when Value is non-zero, only the frames of the kinds it names
+	// (CutRequests, CutReplies, CutAdopts): a stand-in for a loss pattern
+	// that happens to take, say, every renewal and no reply.
 	Cut FaultKind = iota
 	// Delay adds Value ns to each message on the link(s) (F21).
 	Delay
@@ -42,11 +45,22 @@ const (
 	Skew
 	// Start runs Node (W2 or Z) for For.
 	Start
+	// Replay delivers every message on the link(s) while on a second time,
+	// exactly Value ns later: a deterministic late copy (a named case's
+	// "a message from the peer's earlier boot arrives now").
+	Replay
 	nKinds
 )
 
+// The frame kinds a Cut's Value may name (wire kind bits).
+const (
+	CutRequests = 1 << 1
+	CutReplies  = 1 << 2
+	CutAdopts   = 1 << 3
+)
+
 var kindNames = [nKinds]string{"Cut", "Delay", "Loss", "Duplicate", "Mirror", "Crash", "Wipe",
-	"Pause", "Freeze", "SlowDisk", "DiskFail", "Skew", "Start"}
+	"Pause", "Freeze", "SlowDisk", "DiskFail", "Skew", "Start", "Replay"}
 
 func (k FaultKind) String() string {
 	if k >= 0 && k < nKinds {
@@ -70,14 +84,14 @@ type Fault struct {
 func (f Fault) GoString() string {
 	s := fmt.Sprintf("{Kind: %v, At: %s, For: %s", f.Kind, durLit(f.At), durLit(f.For))
 	switch f.Kind {
-	case Cut, Delay, Loss, Duplicate, Mirror:
+	case Cut, Delay, Loss, Duplicate, Mirror, Replay:
 		s += fmt.Sprintf(", From: %v, To: %v", f.From, f.To)
 		if f.Both {
 			s += ", Both: true"
 		}
 	}
 	switch f.Kind {
-	case Cut, Delay, Loss, Duplicate:
+	case Cut, Delay, Loss, Duplicate, Replay:
 	default:
 		s += fmt.Sprintf(", Node: %v", f.Node)
 	}
@@ -118,22 +132,20 @@ func (w *World) applyFault(i int, on bool) {
 	w.tracef("fault %s %#v", map[bool]string{true: "start", false: "heal"}[on], f)
 	w.rec.faultEvent(w.now, i, on)
 	switch f.Kind {
-	case Cut, Delay, Loss, Duplicate:
+	case Cut, Delay, Loss, Duplicate, Replay:
 		for _, l := range w.links(f) {
 			x, y := l[0], l[1]
 			switch f.Kind {
 			case Cut:
-				if on {
-					w.cut[x][y]++
-				} else {
-					w.cut[x][y]--
-				}
+				w.cut[x][y] = addOrRemove(w.cut[x][y], f.Value, on)
 			case Delay:
 				w.delay[x][y] = addOrRemove(w.delay[x][y], time.Duration(f.Value), on)
 			case Loss:
 				w.loss[x][y] = addOrRemove(w.loss[x][y], int(f.Value), on)
 			case Duplicate:
 				w.dup[x][y] = addOrRemove(w.dup[x][y], time.Duration(f.Value), on)
+			case Replay:
+				w.replay[x][y] = addOrRemove(w.replay[x][y], time.Duration(f.Value), on)
 			}
 		}
 	case Mirror:

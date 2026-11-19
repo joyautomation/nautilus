@@ -197,8 +197,14 @@ type node struct {
 
 	voter *quorum.Voter
 	cand  *quorum.Candidate
+	adopt *quorum.Adoption
 	nonce uint64
-	sent  []sentReq // this boot's requests, for the hostile-delivery check
+	// seen is the voter's handshake state after the last call into the
+	// adoption, so a change (a proposal, an adoption in memory) is seen;
+	// cnt is what the protocol says this controller counts (countTruth).
+	seen quorum.VoterState
+	cnt  countState
+	sent []sentReq // this boot's requests, for the hostile-delivery check
 	// legit are the grants this boot's candidate may count, by request:
 	// a hostile grant is decisive when one of these is already in.
 	legit []legitGrant
@@ -248,10 +254,11 @@ type World struct {
 	witnessInc uint64 // the incarnation A and B were commissioned with
 
 	// link state, per directed link
-	cut    [nNodes][nNodes]int
+	cut    [nNodes][nNodes][]int64         // active cuts: the frame kinds each drops (0: all)
 	delay  [nNodes][nNodes][]time.Duration // active extra-delay faults
 	loss   [nNodes][nNodes][]int           // active loss faults, percent
 	dup    [nNodes][nNodes][]time.Duration // active duplicate faults: the copy's extra delay bound
+	replay [nNodes][nNodes][]time.Duration // active replay faults: a copy exactly this much later
 	mirror [nNodes][nNodes][]Addr          // active mirrors: a copy also goes to these
 
 	rec  Record
@@ -412,17 +419,18 @@ func (w *World) start(n *node) {
 			st = quorum.VoterState{}
 		}
 	}
-	w.rec.voterStart(n.addr, n.boot, w.now, readable)
 	id := nodeIDs[n.addr]
 	if n.addr == W || n.addr == W2 {
 		v, p := quorum.NewWitness(id, w.o.Lease, st, now, func() uint64 { return drawNonZero(n.rng) })
 		n.voter = v
+		w.rec.voterStart(n.addr, n.boot, w.now, readable, v.State().Incarnation)
 		if p != nil {
 			w.persist(n, p)
 		}
 		w.tracef("%v start (witness, readable=%v, inc=%d)", n.addr, readable, v.State().Incarnation)
 	} else {
 		n.voter = quorum.NewVoter(id, w.o.Lease, st, now)
+		w.rec.voterStart(n.addr, n.boot, w.now, readable, st.Incarnation)
 	}
 	if !isController(n.addr) {
 		if n.addr != W && n.addr != W2 {
@@ -447,7 +455,18 @@ func (w *World) start(n *node) {
 		panic(err) // a sim bug: the config is built here
 	}
 	n.cand = c
-	w.tracef("%v start (controller, readable=%v, promised=%d, inc=%d)", n.addr, readable, st.Promised, st.Incarnation)
+	n.adopt = quorum.NewAdoption(n.voter, c, now)
+	n.seen = st
+	// The ground truth of what counts (design §3.1), kept apart from the
+	// candidate's own bookkeeping so the oracles judge it: a restart owes
+	// the quiet period; a proposal in flight counts nothing.
+	switch {
+	case st.PendingGen != 0 || st.Incarnation == 0:
+		w.count(n, 0, 0)
+	default:
+		w.count(n, st.Incarnation, now.Add(w.o.Lease))
+	}
+	w.tracef("%v start (controller, readable=%v, promised=%d, inc=%d, gen=%d, pending=%d)", n.addr, readable, st.Promised, st.Incarnation, st.Gen, st.PendingGen)
 	w.gate(n)
 	n.tickAt, n.scanAt = now, now.Add(w.o.Scan)
 	w.arm(n)
@@ -495,6 +514,17 @@ func (w *World) tick(n *node) {
 		w.send(n.addr, peerOf(n.addr), b)
 		w.send(n.addr, W, b)
 	}
+	p, msgs, probe := n.adopt.Tick(now)
+	if p != nil {
+		w.persist(n, p)
+	}
+	w.sendAdopts(n, msgs)
+	if probe != nil {
+		// Only to the witness, and not a request the candidate keeps.
+		b, _ := probe.MarshalBinary()
+		w.send(n.addr, W, b)
+	}
+	w.observe(n)
 	w.gate(n)
 	next := now.Add(w.o.Tick)
 	if nl := n.cand.NextLook(); nl > now && nl < next {
@@ -540,9 +570,11 @@ func (w *World) send(from, to Addr, b []byte) {
 }
 
 func (w *World) sendOne(from, to Addr, b []byte) {
-	if w.cut[from][to] > 0 {
-		w.tracef("%v→%v dropped (cut)", from, to)
-		return
+	for _, m := range w.cut[from][to] {
+		if m == 0 || len(b) > 1 && m&(1<<b[1]) != 0 {
+			w.tracef("%v→%v dropped (cut)", from, to)
+			return
+		}
 	}
 	if p := maxInt(w.loss[from][to]); p > 0 && w.net.IntN(100) < p {
 		w.tracef("%v→%v lost", from, to)
@@ -557,6 +589,9 @@ func (w *World) sendOne(from, to Addr, b []byte) {
 		d += time.Duration(w.net.Int64N(int64(w.o.Jitter) + 1))
 	}
 	w.push(&event{at: w.now + d, kind: evDeliver, node: to, from: from, msg: b, boot: -1})
+	for _, r := range w.replay[from][to] {
+		w.push(&event{at: w.now + d + r, kind: evDeliver, node: to, from: from, msg: b, boot: -1})
+	}
 	if bound := maxDur(w.dup[from][to]); bound > 0 {
 		extra := time.Duration(w.net.Int64N(int64(bound) + 1))
 		w.push(&event{at: w.now + d + extra, kind: evDeliver, node: to, from: from, msg: b, boot: -1})
@@ -583,7 +618,34 @@ func (w *World) deliver(n *node, from Addr, b []byte) {
 	now := w.local(n)
 	var req quorum.Request
 	if err := req.UnmarshalBinary(b); err == nil {
+		if n.adopt != nil && from == peerOf(n.addr) {
+			n.adopt.OnPeer(now)
+		}
 		w.handle(n, from, now, req)
+		return
+	}
+	var m quorum.Adopt
+	if err := m.UnmarshalBinary(b); err == nil {
+		if n.adopt == nil {
+			return
+		}
+		w.tracef("%v hears %v: %v gen=%d inc=%d floor=%d pending=%d fresh=%v", n.addr, from, m.Kind, m.Gen, m.Incarnation, m.Floor, m.Pending, m.Echo == n.nonce)
+		if st := n.voter.State(); m.Kind == quorum.Propose && m.Gen != 0 && m.Gen < st.Gen && m.Incarnation != st.Incarnation {
+			// A late proposal of another incarnation, below what this
+			// controller adopted since: the generations must refuse it.
+			w.rec.StaleProposals = append(w.rec.StaleProposals, AdoptRec{Node: n.addr, At: w.now, Gen: m.Gen, Inc: m.Incarnation})
+		}
+		if m.From == nodeIDs[peerOf(n.addr)] && m.Echo != 0 && m.Echo != n.nonce {
+			// Sent to an earlier boot of this controller.
+			w.rec.EarlierBootAdopts = append(w.rec.EarlierBootAdopts, AdoptRec{Node: n.addr, At: w.now, Gen: m.Gen, Inc: m.Incarnation})
+		}
+		p, msgs := n.adopt.OnAdopt(now, m)
+		if p != nil {
+			w.persist(n, p)
+		}
+		w.sendAdopts(n, msgs)
+		w.observe(n)
+		w.gate(n)
 		return
 	}
 	var rep quorum.Reply
@@ -594,11 +656,80 @@ func (w *World) deliver(n *node, from Addr, b []byte) {
 	if n.cand == nil {
 		return
 	}
+	if rep.Granted {
+		w.rec.received(from, rep, n.addr, w.now)
+	}
 	w.noteHostile(n, rep)
-	w.tracef("%v hears %v: term=%d id=%d granted=%v to=%s", n.addr, from, rep.Term, rep.ID, rep.Granted, rep.To)
+	w.tracef("%v hears %v: term=%d id=%d granted=%v to=%s inc=%d", n.addr, from, rep.Term, rep.ID, rep.Granted, rep.To, rep.Incarnation)
 	n.cand.OnReply(now, rep)
+	switch {
+	case from == peerOf(n.addr):
+		n.adopt.OnPeer(now)
+	case rep.From == "W":
+		n.adopt.OnWitness(now, rep)
+		w.observe(n)
+	}
 	w.soonerLook(n)
 	w.gate(n)
+}
+
+// sendAdopts sends a controller's handshake messages to its peer, over the
+// A–B link, so every fault on it applies.
+func (w *World) sendAdopts(n *node, msgs []quorum.Adopt) {
+	for _, m := range msgs {
+		w.tracef("%v sends %v gen=%d inc=%d floor=%d", n.addr, m.Kind, m.Gen, m.Incarnation, m.Floor)
+		b, _ := m.MarshalBinary()
+		w.send(n.addr, peerOf(n.addr), b)
+	}
+}
+
+// countState is what a controller counts, as the protocol says: the
+// witness incarnation inc (0: none) from local instant from.
+type countState struct {
+	inc  uint64
+	from quorum.Instant
+}
+
+func (w *World) count(n *node, inc uint64, from quorum.Instant) {
+	if inc == 0 {
+		from = 0
+	}
+	n.cnt = countState{inc: inc, from: from}
+	w.rec.count(n.addr, w.now, n.cnt)
+}
+
+// observe applies design §3.1's counting rules to what the adoption just
+// did, independently of the candidate: a proposal stops all counting
+// (forward only); adopting a new incarnation stops it at once; a durable
+// adoption counts its incarnation one lease after the write (the quiet
+// period), unless it was already counted, when nothing changes but a
+// later start stays. It also logs adoptions and events in the record.
+func (w *World) observe(n *node) {
+	st := n.voter.State()
+	if st.PendingGen != 0 && (st.PendingGen != n.seen.PendingGen || st.PendingInc != n.seen.PendingInc) {
+		w.count(n, 0, 0)
+		w.rec.Proposals = append(w.rec.Proposals, AdoptRec{Node: n.addr, At: w.now, Gen: st.PendingGen, Inc: st.PendingInc})
+	}
+	if st.Incarnation != n.seen.Incarnation {
+		w.count(n, 0, 0)
+	}
+	n.seen = st
+	for _, e := range n.adopt.Events() {
+		switch e.Kind {
+		case quorum.EventAdopted:
+			now := w.local(n)
+			from := now.Add(w.o.Lease)
+			if n.cnt.inc == e.Incarnation {
+				from = max(now, n.cnt.from)
+			}
+			w.count(n, e.Incarnation, from)
+			w.rec.Adoptions = append(w.rec.Adoptions, AdoptRec{Node: n.addr, At: w.now, Gen: e.Gen, Inc: e.Incarnation})
+			w.tracef("%v adopted gen=%d inc=%d (durable), counts it from local %v", n.addr, e.Gen, e.Incarnation, from)
+		case quorum.EventTwoIncarnations:
+			w.rec.TwoIncarnations++
+			w.tracef("%v hears two witness incarnations: %d and %d", n.addr, e.Incarnation, e.Other)
+		}
+	}
 }
 
 // noteHostile records a reply a correct candidate must not count, that
@@ -615,8 +746,10 @@ func (w *World) noteHostile(n *node, r quorum.Reply) {
 	switch {
 	case r.From != "A" && r.From != "B" && r.From != "W":
 		why = "unknown sender"
-	case r.From == "W" && r.Incarnation != w.nodes[n.addr].candInc():
+	case r.From == "W" && r.Incarnation != n.cnt.inc:
 		why = "other witness incarnation"
+	case r.From == "W" && w.local(n) < n.cnt.from:
+		why = "quiet period"
 	case r.To != nodeIDs[n.addr]:
 		why = "meant for the peer"
 	case r.Nonce != n.nonce:
@@ -644,13 +777,6 @@ func (w *World) noteHostile(n *node, r quorum.Reply) {
 			return
 		}
 	}
-}
-
-func (n *node) candInc() uint64 {
-	if n.voter == nil {
-		return 0
-	}
-	return n.voter.State().Incarnation
 }
 
 func (w *World) handle(n *node, from Addr, now quorum.Instant, r quorum.Request) {
@@ -698,7 +824,7 @@ func (w *World) ledger(n *node, rep quorum.Reply) Addr {
 		if g.req.From == rep.To && g.req.Term == rep.Term && g.req.Nonce == rep.Nonce && g.req.ID == rep.ID {
 			n.grantEnd = append(n.grantEnd[:i], n.grantEnd[i+1:]...)
 			w.rec.grant(Grant{Voter: n.addr, Inc: rep.Incarnation, To: g.to, ToID: rep.To, Term: rep.Term,
-				Start: g.start, EndLocal: g.endLocal})
+				ID: rep.ID, Nonce: rep.Nonce, Start: g.start, EndLocal: g.endLocal})
 			w.tracef("%v grants %s term=%d id=%d", n.addr, rep.To, rep.Term, rep.ID)
 			return g.to
 		}
@@ -735,8 +861,15 @@ func (w *World) diskDone(n *node) {
 		n.disk.file = wr.bytes
 	}
 	w.tracef("%v fsync seq=%d ok=%v", n.addr, wr.seq, ok)
-	replies := n.voter.Persisted(wr.seq, ok)
-	w.replyHeld(n, replies)
+	if n.adopt != nil {
+		replies, msgs := n.adopt.Persisted(w.local(n), wr.seq, ok)
+		w.replyHeld(n, replies)
+		w.sendAdopts(n, msgs)
+		w.observe(n)
+		w.gate(n)
+	} else {
+		w.replyHeld(n, n.voter.Persisted(wr.seq, ok))
+	}
 	w.nextWrite(n)
 }
 
@@ -773,12 +906,14 @@ func (w *World) crash(n *node, wipe bool) {
 		n.disk.file = nil
 	}
 	n.up = false
+	w.rec.stops[n.addr] = append(w.rec.stops[n.addr], w.now)
 	n.disk.busy, n.disk.queue = false, nil
-	n.voter, n.cand = nil, nil
+	n.voter, n.cand, n.adopt = nil, nil, nil
 	n.deferred = nil
 	w.tracef("%v crash (wipe=%v)", n.addr, wipe)
 	if isController(n.addr) {
 		w.rec.gate(n.addr, w.now, false, 0, 0)
+		w.count(n, 0, 0)
 	}
 }
 

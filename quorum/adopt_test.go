@@ -598,3 +598,119 @@ func TestFloorOverEveryIncarnationHeard(t *testing.T) {
 		t.Fatalf("floor %d, want ≥ 20 (the stray's promised term)", f)
 	}
 }
+
+// #1008 re-review (a): A proposed (2, J) and pends. The peer may have
+// adopted J with its Ack lost, and lead on J's witness. A proposal of the
+// OLD incarnation at a higher generation then reaches A: A re-adopts I,
+// which it never stopped holding, but it must still count I only one
+// lease after the write. Counting at once, it could win on {A, W_I} while
+// the peer's lease on W_J runs: a split brain.
+func TestReadoptOverPendingOwesTheQuietPeriod(t *testing.T) {
+	a := newCtl(t, "A", commissioned(1, incI, 0), 0)
+	now := at(lease)
+	a.hear(now, incJ, 0)
+	if q, _ := a.tick(now); len(q) != 1 || a.v.State().PendingGen != 2 {
+		t.Fatalf("no proposal of J: %+v", q)
+	}
+	out := a.recv(now, Adopt{From: "B", Kind: Propose, Gen: 3, Incarnation: incI, Nonce: 0xB1, Echo: 0xA1})
+	if len(out) != 1 || out[0].Kind != Ack {
+		t.Fatalf("the higher proposal of I not acked: %+v", out)
+	}
+	if g, i := adopted(a.v.State()); g != 3 || i != incI || a.v.State().PendingGen != 0 {
+		t.Fatalf("not re-adopted: %+v", a.v.State())
+	}
+	if inc, from := a.c.Counting(); inc != incI || from < now.Add(lease) {
+		t.Fatalf("counts %d from %v, want %d from %v (the quiet period)", inc, from, incI, now.Add(lease))
+	}
+}
+
+// #1008 re-review (b): a late Adopt sent to an EARLIER boot of A (it
+// echoes A's old nonce) says nothing about the peer now: it may be down.
+// It must not count as hearing the peer, or A proposes a switch to a
+// stray it then waits on, counting no witness, until the peer is back.
+func TestLateAdoptToAnEarlierBootIsNotThePeer(t *testing.T) {
+	a := newCtl(t, "A", commissioned(1, incI, 0), 0)
+	a.peerDown = true
+	now := at(lease)
+	a.hear(now, incK, 0)
+	a.recv(now, Adopt{From: "B", Kind: State, Gen: 1, Incarnation: incI, Nonce: 0xB1, Echo: 0xA0})
+	if q, _ := a.tick(now); len(q) != 0 || a.v.State().PendingGen != 0 {
+		t.Fatalf("a late Adopt to an earlier boot let A propose a switch: %+v", q)
+	}
+	a.recv(now, Adopt{From: "B", Kind: State, Gen: 1, Incarnation: incI, Nonce: 0xB1, Echo: 0xA1})
+	if q, _ := a.tick(now); len(q) != 1 || q[0].Echo != 0xB1 {
+		t.Fatalf("an Adopt to this boot: no switch to the peer's boot: %+v", q)
+	}
+}
+
+// A generation bump that keeps the incarnation needs no quiet period of
+// its own, but must not cut short one already owed: B restarted at T owes
+// one lease before it counts I (NewAdoption). A proposal of (2, I) that it
+// adopts at T + lease/4 must leave it counting I only from T + lease.
+func TestGenBumpKeepsTheRestartQuiet(t *testing.T) {
+	T := at(10 * lease)
+	b := newCtl(t, "B", commissioned(1, incI, 0), T)
+	now := T.Add(lease / 4)
+	out := b.recv(now, Adopt{From: "A", Kind: Propose, Gen: 2, Incarnation: incI, Nonce: 0xA1, Echo: 0xB1})
+	if len(out) != 1 || out[0].Kind != Ack {
+		t.Fatalf("the proposal of (2, I) not acked: %+v", out)
+	}
+	if inc, from := b.c.Counting(); inc != incI || from < T.Add(lease) {
+		t.Fatalf("counts %d from %v, want %d from %v (the restart's quiet period)", inc, from, incI, T.Add(lease))
+	}
+}
+
+// Two adoptions before the first one's write lands: (2, J) is new, so it
+// owes the quiet period; (3, J) keeps J. The write that makes both durable
+// must still start J's quiet period then, not count J at once.
+func TestSecondAdoptionInFlightKeepsTheQuiet(t *testing.T) {
+	b := newCtl(t, "B", commissioned(1, incI, 0), 0)
+	now := at(2 * lease)
+	b.hold = true
+	b.recv(now, Adopt{From: "A", Kind: Propose, Gen: 2, Incarnation: incJ, Nonce: 0xA1, Echo: 0xB1})
+	b.recv(now, Adopt{From: "A", Kind: Propose, Gen: 3, Incarnation: incJ, Nonce: 0xA1, Echo: 0xB1})
+	b.flush(now, true)
+	if g, i := adopted(b.v.State()); g != 3 || i != incJ {
+		t.Fatalf("not adopted (3, J): %+v", b.v.State())
+	}
+	if inc, from := b.c.Counting(); inc != incJ || from < now.Add(lease) {
+		t.Fatalf("counts %d from %v, want %d from %v (J's quiet period)", inc, from, incJ, now.Add(lease))
+	}
+}
+
+// Both controllers uncommissioned (both files lost) and each pending its
+// own proposal: A (1, I) from the real witness, B (2, J) from a stray copy
+// only it heard. A can't take J (never heard), B won't take a lower
+// generation. Once the stray is gone and B hears I, B must re-propose I
+// above both, or the pair waits for ever.
+func TestBothUncommissionedFollowTheNewest(t *testing.T) {
+	now := at(lease)
+	a := newCtl(t, "A", VoterState{}, 0)
+	b := newCtl(t, "B", VoterState{}, 0)
+	a.hear(now, incI, 3)
+	b.hear(now, incJ, 0)
+	a.a.peerNonce, b.a.peerNonce = 0xB1, 0xA1 // each knows the other's boot
+	pa := a.a
+	pb := b.a
+	qa, qb := pa.msg(Propose, 0, 0, 0, 0xB1), pb.msg(Propose, 0, 0, 0, 0xA1)
+	talk(now, a, b, []Adopt{qa})
+	talk(now, b, a, []Adopt{qb})
+	if a.v.State().PendingInc != incI || b.v.State().PendingInc != incJ {
+		t.Fatalf("setup: A pends %+v, B pends %+v", a.v.State(), b.v.State())
+	}
+	later := now.Add(2 * lease)
+	b.hear(later, incI, 3) // the stray is gone; B now hears the real witness
+	for k := range 4 {
+		tt := later.Add(lease / 4 * time.Duration(k))
+		ra, _ := a.tick(tt)
+		talk(tt, a, b, ra)
+		rb, _ := b.tick(tt)
+		talk(tt, b, a, rb)
+	}
+	if _, i := adopted(a.v.State()); i != incI {
+		t.Fatalf("A not on I: %+v", a.v.State())
+	}
+	if _, i := adopted(b.v.State()); i != incI {
+		t.Fatalf("B not on I: %+v", b.v.State())
+	}
+}

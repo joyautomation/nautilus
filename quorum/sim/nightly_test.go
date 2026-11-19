@@ -36,25 +36,43 @@ func itoa(k uint64) string {
 // Fixed by renewing at once on winning (Candidate.OnReply); each is red
 // with the renew_on_look mutation.
 func TestNightlySlowFsyncWinner(t *testing.T) {
-	nightly(t, []uint64{52814, 57197, 129636, 142433, 162345, 176221, 184642, 193654}, func(t *testing.T, o Options) {
-		for _, v := range Check(Run(o), checksFor(o)) {
+	nightly(t, []uint64{52814, 129636, 142433, 162345, 176221, 184642, 193654}, func(t *testing.T, o Options) {
+		for _, v := range judged(t, Run(o), checksFor(o)) {
+			t.Error(v)
+		}
+	})
+}
+
+// Seed 57197 was class 1 too, but B's file is lost (7.1–19.0 s) and the
+// witness wiped (from 18.7 s) before B re-commissions: the two-of-three
+// case, which needs an operator (design §3.1, §7). Its liveness oracles
+// are excused; the safety ones (I1, the lease, the ledger) still hold.
+func TestNightlyTwoOfThree(t *testing.T) {
+	nightly(t, []uint64{57197}, func(t *testing.T, o Options) {
+		rec := Run(o)
+		if !rec.TwoOfThreeLost() {
+			t.Fatal("not the two-of-three case: move it back to its class")
+		}
+		for _, v := range Check(rec, checksFor(o)) {
 			t.Error(v)
 		}
 	})
 }
 
 // Classes 3 and 4: a node lost its state file, wiped (30099 54172 84269)
-// or torn by a crash during the witness's slow in-place write (21198). Until the handshake PR the witness can't back a controller that
-// lost its accepted incarnation, nor is a rebuilt witness counted, so
-// steady state is judged on A and B alone, from the record (#976). Every
-// oracle holds then; red if the steady check still demands the witness.
+// or torn by a crash during the witness's slow in-place write (21198).
+// Before the handshake, steady state was judged on A and B alone: a rebuilt
+// witness wasn't adopted, and a controller that lost its file lost the
+// incarnation it counts (#976). Now the pair re-adopts, so the witness must
+// back the leader in steady state too (checksFor's voters, with no
+// exclusion), and none of these is the two-of-three case (judged).
 func TestNightlyLostFileSteady(t *testing.T) {
 	nightly(t, []uint64{21198, 30099, 54172, 84269}, func(t *testing.T, o Options) {
 		rec := Run(o)
 		if !rec.lostFile() {
 			t.Fatal("no node lost its file: the case proves nothing")
 		}
-		for _, v := range Check(rec, checksFor(o)) {
+		for _, v := range judged(t, rec, checksFor(o)) {
 			t.Error(v)
 		}
 	})
@@ -79,7 +97,7 @@ func TestNightlyBeyondRuleDelay(t *testing.T) {
 		}
 		c := checksFor(o)
 		c.Exclude = []string{"I7"}
-		for _, v := range Check(Run(o), c) {
+		for _, v := range judged(t, Run(o), c) {
 			t.Error(v)
 		}
 	})
@@ -104,14 +122,14 @@ func TestNightlyBeyondRuleLoss(t *testing.T) {
 		}
 		rec := Run(o)
 		all := checksFor(o)
-		for _, v := range Check(rec, all) {
+		for _, v := range judged(t, rec, all) {
 			if v.Oracle == "I7" {
 				t.Logf("measured: %v", v)
 			}
 		}
 		c := all
 		c.Exclude = []string{"I7"}
-		for _, v := range Check(rec, c) {
+		for _, v := range judged(t, rec, c) {
 			t.Error(v)
 		}
 	})
@@ -124,7 +142,7 @@ func TestNightlyBeyondRuleLoss(t *testing.T) {
 // lost-file rule carries it. Either way every oracle holds.
 func TestNightlyTornWitnessTimingShifted(t *testing.T) {
 	nightly(t, []uint64{61535}, func(t *testing.T, o Options) {
-		for _, v := range Check(Run(o), checksFor(o)) {
+		for _, v := range judged(t, Run(o), checksFor(o)) {
 			t.Error(v)
 		}
 	})
