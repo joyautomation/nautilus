@@ -229,6 +229,13 @@ func auditRows() []auditRow {
 			method: "POST", path: "/api/forces/clear",
 			action: "force.clear-all", user: "anonymous", source: "api", result: "refused"},
 
+		{name: "parameter write", pattern: "PUT /api/iolink/{port}/params/{ref}", server: paramAuditServer(newFakeParams()),
+			method: "PUT", path: "/api/iolink/LEVEL1/params/V_Setpoint", body: `{"value":500}`,
+			action: "param.write", target: "LEVEL1/V_Setpoint", user: "anonymous", source: "api", result: "ok", before: int64(100), after: int64(500)},
+		{name: "parameter write to the wrong device", pattern: "PUT /api/iolink/{port}/params/{ref}", server: paramAuditServer(wrongDeviceParams()),
+			method: "PUT", path: "/api/iolink/LEVEL1/params/V_Setpoint", body: `{"value":500}`,
+			action: "param.write", target: "LEVEL1/V_Setpoint", user: "anonymous", source: "api", result: "refused",
+			check: wantReason("WrongDevice")},
 		{name: "substitute start", pattern: "POST /api/substitutes", server: subAuditServer,
 			method: "POST", path: "/api/substitutes", body: `{"name":"Level"}`,
 			action: "substitute.start", target: "Level", user: "anonymous", source: "api", result: "ok",
@@ -1096,7 +1103,8 @@ func TestAuditUpkeepDoesNotStallTheFrames(t *testing.T) {
 func TestJournalDownRefusesElevatedActions(t *testing.T) {
 	captureLog(t)
 	j := &flaky{down: true}
-	srv := auditServer(t, Options{Audit: j})
+	params := newFakeParams()
+	srv := auditServer(t, Options{Audit: j, Params: params.hook()})
 	edit(editedProgram)(t, srv) // something to roll back
 	if srv.AuditJournalDown() {
 		t.Fatal("down before any write failed")
@@ -1112,6 +1120,8 @@ func TestJournalDownRefusesElevatedActions(t *testing.T) {
 		{"PUT", "/api/program", `{"source":"` + strings.ReplaceAll(editedProgram, "\n", `\n`) + `"}`},
 		{"POST", "/api/program/activate", `{"sha":"abc"}`},
 		{"POST", "/api/forces", `{"name":"SP","value":12}`},
+		// A parameter written to a device on an IO-Link port (#705).
+		{"PUT", "/api/iolink/LEVEL1/params/V_Setpoint", `{"value": 500}`},
 	}
 	for _, c := range elevated {
 		rec := call(t, srv, c.method, c.path, c.body)
@@ -1122,8 +1132,15 @@ func TestJournalDownRefusesElevatedActions(t *testing.T) {
 	if fv := srv.rt.Tags().ForcedValues(); len(fv) != 0 {
 		t.Errorf("a refused force was applied: %v", fv)
 	}
+	if len(params.writes) != 0 {
+		t.Errorf("a parameter write the journal refused reached the device: %v", params.writes)
+	}
 	es := srv.audit.ring.Recent()
-	if e := es[0]; e.Action != "force.set" || e.Target != "SP" || e.Detail["status"] != http.StatusServiceUnavailable {
+	// Newest first: the parameter write was the last request.
+	if e := es[0]; e.Action != "param.write" || e.Target != "LEVEL1/V_Setpoint" || e.Detail["status"] != http.StatusServiceUnavailable {
+		t.Errorf("the refused parameter write's entry: %+v", e)
+	}
+	if e := es[1]; e.Action != "force.set" || e.Target != "SP" || e.Detail["status"] != http.StatusServiceUnavailable {
 		t.Errorf("the refused force's entry: %+v", e)
 	}
 	// Operator actions, and the ways back to normal (clearing forces,

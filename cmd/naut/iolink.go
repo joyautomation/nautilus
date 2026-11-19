@@ -31,6 +31,10 @@ const iolinkUsage = `usage: naut iolink <cmd>
   show <iodd.xml>                   print what an IODD says: identity,
                                     process data items and their IEC types,
                                     variables
+  param list|get|set <port device> ...
+                                    the parameters of the device on a port,
+                                    through a running controller's API
+                                    (naut iolink param -h)
 `
 
 func runIOLink(args []string) int {
@@ -43,6 +47,8 @@ func runIOLink(args []string) int {
 		return runIOLinkImport(args[1:], os.Stdout)
 	case "show":
 		return runIOLinkShow(args[1:], os.Stdout)
+	case "param":
+		return runIOLinkParam(args[1:], os.Stdout, os.Stderr)
 	case "help", "-h", "--help":
 		fmt.Print(iolinkUsage)
 		return 0

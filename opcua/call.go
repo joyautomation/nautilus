@@ -17,6 +17,13 @@ import (
 	"github.com/gopcua/opcua/ua"
 )
 
+// ErrCallUnknown wraps the error of a call that was SENT and got no answer
+// (a timeout, a connection lost under it): the server may have run it. An
+// error that does not wrap it is certain: the call was never sent (no
+// session, an id that does not resolve), or the server answered it with a
+// failure of its own.
+var ErrCallUnknown = errors.New("the call was sent and no answer came back")
+
 // NodeRef addresses a node as a binding does: a node id and, optionally,
 // the namespace URI that decides the node id's index on the live server
 // (an index the server renumbered since the project was written is
@@ -76,7 +83,11 @@ func (d *Driver) Call(ctx context.Context, object, method NodeRef, args ...*ua.V
 	defer cancel()
 	res, err := sess.Client.Call(rctx, &ua.CallMethodRequest{ObjectID: obj, MethodID: meth, InputArguments: args})
 	if err != nil {
-		return nil, fmt.Errorf("call %s: %w", method.NodeID, err)
+		var answered ua.StatusCode
+		if errors.As(err, &answered) {
+			return nil, fmt.Errorf("call %s: %w", method.NodeID, err) // the server answered, with a failure
+		}
+		return nil, fmt.Errorf("call %s: %w: %w", method.NodeID, ErrCallUnknown, err)
 	}
 	if !good(res.StatusCode) {
 		return nil, fmt.Errorf("call %s: %w", method.NodeID, res.StatusCode)

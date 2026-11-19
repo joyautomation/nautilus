@@ -410,6 +410,19 @@ variable's name or index. The faceplate lists a port device's variables
 with their values, value names and access rights. Keeping parameter
 values in step with git is #718's job, built on these reads and writes.
 
+One ISDU call is in flight per port at a time (a second, read or write, is
+refused as busy with nothing sent: 429 on the API): a master is easy to flood
+with parameter reads. A write that was sent and got no answer is as uncertain
+as one whose device changed under it (the device may have taken it); a call
+that was never sent, or that the master answered with a failure, is a plain
+error.
+
+A parameter write is a command to a device, not replicated state: it is
+**leader-only with no entry in the operator-intent log** (#710): the
+parameter lives on the device, so a new leader has nothing to replay, and the
+audit journal (`param.write`) is the record. A standby refuses a write like any
+other; reads are answered by whichever controller holds the master's session.
+
 ## 8. Commands
 
 | Command | Does | PR |

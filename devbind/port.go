@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/joyautomation/nautilus/devprofile"
 	nio "github.com/joyautomation/nautilus/io"
@@ -293,6 +294,9 @@ type portIn struct {
 	loggedState                   iolink.State
 	last                          ir.Value
 	boxed                         any
+	// isduBusy is set while an ISDU call is in flight for this port: one at
+	// a time, so a client cannot flood a master with parameter reads.
+	isduBusy atomic.Bool
 }
 
 func newPortIn(p *portDev, gate *iolink.OutGate) *portIn {

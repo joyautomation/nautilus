@@ -2,6 +2,7 @@ package opcua
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -78,5 +79,52 @@ func TestDriverCall(t *testing.T) {
 	status, argStatus = ua.StatusOK, []ua.StatusCode{ua.StatusOK, ua.StatusBadTypeMismatch}
 	if _, err := d.Call(context.Background(), obj, meth, idx, sub); err == nil || !strings.Contains(err.Error(), "argument 2") {
 		t.Errorf("a bad argument: %v", err)
+	}
+}
+
+// A call that was sent and got no answer is of a kind of its own: the server
+// may have run it. One never sent (no session), and one the server answered
+// with a failure, are certain.
+func TestDriverCallErrorKinds(t *testing.T) {
+	answer := make(chan struct{})
+	var mode string
+	ts := startServerHooked(t, freePort(t), "urn:nautilus:test", 12.5, func(s *server.Server) {
+		s.RegisterHandler(id.CallRequest_Encoding_DefaultBinary,
+			func(_ *uasc.SecureChannel, r ua.Request, _ uint32) (ua.Response, error) {
+				req := r.(*ua.CallRequest)
+				switch mode {
+				case "silent":
+					<-answer // never answers within the call's timeout
+				case "fault":
+					return nil, ua.StatusBadServiceUnsupported
+				}
+				return &ua.CallResponse{
+					ResponseHeader: &ua.ResponseHeader{Timestamp: time.Now(), RequestHandle: req.RequestHeader.RequestHandle, ServiceResult: ua.StatusOK,
+						ServiceDiagnostics: &ua.DiagnosticInfo{}, StringTable: []string{}, AdditionalHeader: ua.NewExtensionObject(nil)},
+					Results: []*ua.CallMethodResult{{StatusCode: ua.StatusOK}},
+				}, nil
+			})
+	})
+	t.Cleanup(func() { close(answer) })
+	d, err := New(ts.url, manifest(2), fastOpts(WithTimeout(500*time.Millisecond))...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	obj, meth := NodeRef{NodeID: "ns=1;s=Plant"}, NodeRef{NodeID: "ns=1;s=Read"}
+	if _, err := d.Call(context.Background(), obj, meth); err == nil || errors.Is(err, ErrCallUnknown) {
+		t.Errorf("a call with no session: %v, want a certain failure", err)
+	}
+	startHooked(t, d)
+	waitFor(t, "online", d.Online)
+	if _, err := d.Call(context.Background(), NodeRef{NodeID: "ns=1;s=Plant", Namespace: "urn:not:there"}, meth); err == nil || errors.Is(err, ErrCallUnknown) {
+		t.Errorf("an id that does not resolve: %v, want a certain failure", err)
+	}
+	mode = "fault"
+	if _, err := d.Call(context.Background(), obj, meth); err == nil || errors.Is(err, ErrCallUnknown) {
+		t.Errorf("a service fault: %v, want the server's own answer, certain", err)
+	}
+	mode = "silent"
+	if _, err := d.Call(context.Background(), obj, meth); !errors.Is(err, ErrCallUnknown) {
+		t.Errorf("a call that was sent and not answered: %v, want ErrCallUnknown", err)
 	}
 }

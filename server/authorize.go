@@ -50,9 +50,12 @@ var actionPerm = map[string]string{
 	"config.validate":      PermConfig,
 	"config.apply":         PermConfig,
 	"config.revert.cancel": PermConfig,
-	"substitute.start":     PermSubstitute,
-	"substitute.stop":      PermSubstitute,
-	"substitute.ack":       PermSubstitute,
+	// A parameter written to a device on an IO-Link port is a change to a
+	// device, like a configuration apply (#705): the config permission.
+	"param.write":      PermConfig,
+	"substitute.start": PermSubstitute,
+	"substitute.stop":  PermSubstitute,
+	"substitute.ack":   PermSubstitute,
 }
 
 // presentedToken is the credential a request carries, in either
