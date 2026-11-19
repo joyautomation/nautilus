@@ -54,20 +54,22 @@ type pushWatch struct {
 	ch    chan nio.Values
 }
 
-// deliverPush answers a pushWatch with the outputs just handed over. It runs
-// in the scan, under mainMu.
+// deliverPush answers every pushWatch with the outputs just handed over.
+// It runs in the scan, under mainMu, as the swaps that arm them do.
 func (r *Runtime) deliverPush(out nio.Values) {
-	w := r.pushWatch.Swap(nil)
-	if w == nil {
+	if len(r.pushWatches) == 0 {
 		return
 	}
-	got := make(nio.Values, len(w.names))
-	for _, n := range w.names {
-		if v, ok := out[n]; ok {
-			got[n] = v
+	for _, w := range r.pushWatches {
+		got := make(nio.Values, len(w.names))
+		for _, n := range w.names {
+			if v, ok := out[n]; ok {
+				got[n] = v
+			}
 		}
+		w.ch <- got // buffered for one, and each watch is answered once
 	}
-	w.ch <- got
+	r.pushWatches = r.pushWatches[:0]
 }
 
 func (r *Runtime) replaceDriver(ctx context.Context, name string, d nio.Driver, observe bool) (nio.Driver, <-chan nio.Values, error) {
@@ -102,7 +104,7 @@ func (r *Runtime) replaceDriver(ctx context.Context, name string, d nio.Driver, 
 		if o, ok := d.(tagNames); ok {
 			names = o.OutputNames()
 		}
-		r.pushWatch.Store(&pushWatch{names: names, ch: pushed})
+		r.pushWatches = append(r.pushWatches, &pushWatch{names: names, ch: pushed})
 	}
 	return prev, pushed, nil
 }

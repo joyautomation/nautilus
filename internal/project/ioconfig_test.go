@@ -447,7 +447,14 @@ func uaServer(t *testing.T, level float64) string {
 	if err := srv.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = srv.Close() })
+	t.Cleanup(func() {
+		// gopcua's server (v0.9.1) races its Close against the goroutine
+		// still handling a client's disconnect (channelBroker: Close writes
+		// what RegisterConn reads). The drivers are stopped by now; give the
+		// server a moment to see their connections go before closing it.
+		time.Sleep(200 * time.Millisecond)
+		_ = srv.Close()
+	})
 	return fmt.Sprintf("opc.tcp://127.0.0.1:%d", port)
 }
 
@@ -646,10 +653,10 @@ func TestIOApplyRollsBackADriverSwap(t *testing.T) {
 
 	var calls []string
 	real := r.io.swapDriver
-	r.io.swapDriver = func(ctx context.Context, name string, fsys fs.FS, cfg DriverConfig) (nio.Driver, <-chan nio.Values, error) {
+	r.io.swapDriver = func(ctx context.Context, name string, fsys fs.FS, cfg DriverConfig) (*swapped, error) {
 		calls = append(calls, name)
 		if name == "opcua-client" {
-			return nil, nil, errors.New("injected")
+			return nil, errors.New("injected")
 		}
 		return real(ctx, name, fsys, cfg)
 	}
@@ -804,6 +811,19 @@ func TestIOApplyRollbackFailure(t *testing.T) {
 	if !strings.Contains(r.io.Fault(), "DEV_A") {
 		t.Fatalf("fault = %q", r.io.Fault())
 	}
+
+	// An apply that re-establishes DEV_A clears the fault.
+	r.io.replaceSource = real
+	c = r.io.Stage(files, "upload", "tester")
+	if v := r.io.Validate(c); !v.Valid || len(v.Changes) != 1 || v.Changes[0].Device != "DEV_A" {
+		t.Fatalf("re-establishing DEV_A: %+v", v)
+	}
+	if _, err := r.io.Apply(r.ctx, c, "tester"); err != nil {
+		t.Fatal(err)
+	}
+	if f, d := r.io.Fault(), r.io.Differs(); f != "" || len(d) != 0 {
+		t.Fatalf("after DEV_A is re-established: fault %q, differs %+v; want neither", f, d)
+	}
 }
 
 // With the write gate closed, a changed device commands nothing, and
@@ -816,5 +836,30 @@ func TestIOWillCommandWithTheGateClosed(t *testing.T) {
 	v := r.io.Validate(r.io.Stage(withFile(files, "modbus.yaml", modbusYAML(slavePort(s3), slavePort(s2), "", "")), "upload", "tester"))
 	if !v.Valid || len(v.WillCommand) != 0 || !strings.Contains(strings.Join(v.Notes, " "), "gate is closed") {
 		t.Fatalf("valid %v willCommand %v notes %v; want nothing, the gate named", v.Valid, v.WillCommand, v.Notes)
+	}
+}
+
+// A whole Modbus swap with the write gate closed commands nothing, and the
+// apply says so: Commanded is what the new driver's sources queued, not
+// what the scan handed over (#960 re-check).
+func TestIOApplyWholeModbusSwapWithTheGateClosed(t *testing.T) {
+	s1, s2 := newSlave(t, 4), newSlave(t, 7)
+	ua := uaServer(t, 1.5)
+	files := ioFiles(slavePort(s1), slavePort(s2), ua)
+	r := startIORig(t, files, false)
+	eventually(t, "polled", func() bool { return r.value("A_In") == "4" && r.value("B_In") == "7" })
+	nio.SetPlainGate(r.p.Runtime.Driver, func() bool { return false })
+
+	c := r.io.Stage(withFile(files, "nautilus.yaml", strings.Replace(string(files["nautilus.yaml"].Data), "scan-rate: 10ms", "scan-rate: 15ms", 1)), "upload", "tester")
+	v := r.io.Validate(c)
+	if !v.Valid || len(v.WillCommand) != 0 {
+		t.Fatalf("validate: valid %v willCommand %v", v.Valid, v.WillCommand)
+	}
+	res, err := r.io.Apply(r.ctx, c, "tester")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Commanded) != 0 || !strings.Contains(strings.Join(res.Notes, " "), "gate was closed") {
+		t.Fatalf("commanded %v notes %v; want nothing, the closed gate said", res.Commanded, res.Notes)
 	}
 }

@@ -257,7 +257,7 @@ type Runtime struct {
 	holdOnSwap  bool
 	outGen      atomic.Uint64
 	outSent     atomic.Bool
-	pushWatch   atomic.Pointer[pushWatch] // ReplaceDriverObserved's (#706)
+	pushWatches []*pushWatch // ReplaceDriverObserved's, one per swap (#706); under mainMu
 	// asker is the driver as an io.OutputsRequester, nil when it is not
 	// one: asked every scan whether it wants the whole output set.
 	asker nio.OutputsRequester

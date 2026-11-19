@@ -186,7 +186,9 @@ type ReplaceOptions struct {
 	// or why it sent nothing. It is how a staged apply reports the commands
 	// the new connection was actually handed (#706), from the rule the
 	// driver itself follows, not a copy of it. It runs on the scan's
-	// goroutine, outside the driver's locks; keep it short.
+	// goroutine at the end of WriteOutputs, under the driver's source lock
+	// (srcMu, read) but no source's: keep it short, and never call back
+	// into the driver from it.
 	Observe func(FirstShare)
 }
 
@@ -199,6 +201,24 @@ type FirstShare struct {
 	// Parked: the source's enable tag is false; the commands wait in the
 	// queue until it is enabled.
 	Parked bool
+}
+
+// ObserveFirstShares has every source report its next share of an output
+// snapshot, as ReplaceOptions.Observe does for one replaced source: for a
+// driver swapped in whole (#706), arm it before the swap, and f hears what
+// each source's first share queued (its start-up baseline, the write gate
+// and a parked source all applied). Same rules for f as Observe's. It
+// returns how many sources will report.
+func (d *Driver) ObserveFirstShares(f func(id string, s FirstShare)) int {
+	d.srcMu.RLock()
+	defer d.srcMu.RUnlock()
+	for _, s := range d.sources {
+		id := s.cfg.ID
+		s.mu.Lock()
+		s.observe = func(fs FirstShare) { f(id, fs) }
+		s.mu.Unlock()
+	}
+	return len(d.sources)
 }
 
 // HeldAtBaseline reports whether b's command, when it lands in a start-up

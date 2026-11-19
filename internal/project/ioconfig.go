@@ -71,16 +71,34 @@ type IOConfig struct {
 	// replaceSource is modbus.(*Driver).ReplaceSource and swapDriver is
 	// (*IOConfig).swap; a test makes either fail.
 	replaceSource func(mb *modbus.Driver, src modbus.Source, tags []modbus.TagBinding, opts modbus.ReplaceOptions) error
-	swapDriver    func(ctx context.Context, name string, fsys fs.FS, cfg DriverConfig) (nio.Driver, <-chan nio.Values, error)
+	swapDriver    func(ctx context.Context, name string, fsys fs.FS, cfg DriverConfig) (*swapped, error)
 
 	// Gate, when set, is the write gate naut run installs on the drivers:
 	// a driver without a look of its own (the OPC UA client) commands
 	// nothing while it is closed, and willCommand says so.
 	Gate func() bool
 
-	// fault is set when putting back a failed apply failed too: what runs
-	// is then not known (Fault).
-	fault string
+	// faults are, per unit, why putting back a failed apply failed: what
+	// runs there is not known (Fault) until an apply re-establishes it.
+	faults map[string]string
+}
+
+// swapped is a driver swapped in whole, and how to hear what the first scan
+// after the swap commanded through it.
+type swapped struct {
+	d nio.Driver
+	// pushed is what the first push handed d (runtime.ReplaceDriverObserved).
+	pushed <-chan nio.Values
+	// shares, for a Modbus driver, is each source's first share, as the
+	// driver decided it (its baseline, the write gate, a parked source):
+	// nsrc of them.
+	shares <-chan srcShare
+	nsrc   int
+}
+
+type srcShare struct {
+	id string
+	modbus.FirstShare
 }
 
 // ErrRollbackFailed is an apply that failed and could not put back all it
@@ -939,19 +957,18 @@ func (io *IOConfig) Apply(ctx context.Context, c *IOCandidate, by string) (*IORe
 	fail := func(ch IOChange, what string, err error) (*IOResult, error) {
 		io.log(ch, c, by, err)
 		var left []string
+		var lost []string
 		for i := len(undo) - 1; i >= 0; i-- {
 			if uerr := undo[i].run(); uerr != nil {
 				left = append(left, fmt.Sprintf("%s (%v)", undo[i].what, uerr))
-				io.markUnknown(undo[i].keys, by)
+				lost = append(lost, undo[i].keys...)
 			}
 		}
 		if len(left) == 0 {
 			return nil, fmt.Errorf("%s: %w (nothing was changed)", what, err)
 		}
 		msg := fmt.Sprintf("%s: %v; putting back failed for %s: what runs there is not known; apply a candidate for it, or restart", what, err, strings.Join(left, ", "))
-		io.mu.Lock()
-		io.fault = msg
-		io.mu.Unlock()
+		io.markUnknown(lost, by, msg)
 		slog.Error("config.apply: rollback failed", "err", msg)
 		return nil, fmt.Errorf("%w: %s", ErrRollbackFailed, msg)
 	}
@@ -963,8 +980,7 @@ func (io *IOConfig) Apply(ctx context.Context, c *IOCandidate, by string) (*IORe
 	var shares []share
 	type push struct {
 		name string
-		mb   map[string]modbus.TagBinding // a whole Modbus swap's bindings, by tag
-		ch   <-chan nio.Values
+		sw   *swapped
 	}
 	var pushes []push
 
@@ -997,24 +1013,11 @@ func (io *IOConfig) Apply(ctx context.Context, c *IOCandidate, by string) (*IORe
 		ch := ch
 		what := "driver " + ch.Driver
 		prev := running[ch.Driver]
-		d, pushed, err := io.swapDriver(ctx, ch.Driver, c.fsys, c.configs[ch.Driver])
+		sw, err := io.swapDriver(ctx, ch.Driver, c.fsys, c.configs[ch.Driver])
 		if err != nil {
 			return fail(ch, what, err)
 		}
-		var mbTags map[string]modbus.TagBinding
-		if modbusOf(d) != nil {
-			mbTags = map[string]modbus.TagBinding{}
-			for _, u := range c.units {
-				if u.driver == ch.Driver {
-					for _, t := range u.tags {
-						if t.Writable {
-							mbTags[t.Name] = t
-						}
-					}
-				}
-			}
-		}
-		pushes = append(pushes, push{ch.Driver, mbTags, pushed})
+		pushes = append(pushes, push{ch.Driver, sw})
 		var keys []string
 		for k, u := range running {
 			if u.driver == ch.Driver {
@@ -1024,7 +1027,7 @@ func (io *IOConfig) Apply(ctx context.Context, c *IOCandidate, by string) (*IORe
 		undo = append(undo, undoStep{what, keys, func() error {
 			uctx, cancel := context.WithTimeout(context.Background(), undoTimeout)
 			defer cancel()
-			_, _, err := io.swapDriver(uctx, ch.Driver, prev.fsys, prev.cfg)
+			_, err := io.swapDriver(uctx, ch.Driver, prev.fsys, prev.cfg)
 			return err
 		}})
 	}
@@ -1042,6 +1045,7 @@ func (io *IOConfig) Apply(ctx context.Context, c *IOCandidate, by string) (*IORe
 			u.from, u.at, u.by = c.From, at, by
 		}
 		io.running[k] = u
+		delete(io.faults, k) // what runs there is known again
 	}
 	io.mu.Unlock()
 	for _, ch := range val.Changes {
@@ -1053,40 +1057,50 @@ func (io *IOConfig) Apply(ctx context.Context, c *IOCandidate, by string) (*IORe
 	wait, cancel := context.WithTimeout(ctx, firstPushWait)
 	defer cancel()
 	cmds := map[string]any{}
+	took := func(what string, s modbus.FirstShare) {
+		switch {
+		case s.GateClosed:
+			res.Notes = append(res.Notes, what+": the write gate was closed, so the first scan after the apply commanded nothing")
+		case s.Parked:
+			res.Notes = append(res.Notes, what+": parked by its enable tag; its commands wait until it is enabled")
+		}
+		for n, v := range s.Queued {
+			cmds[n] = v
+		}
+	}
 	for _, sh := range shares {
 		select {
 		case s := <-sh.ch:
-			switch {
-			case s.GateClosed:
-				res.Notes = append(res.Notes, sh.what+": the write gate was closed, so the first scan after the apply commanded nothing")
-			case s.Parked:
-				res.Notes = append(res.Notes, sh.what+": parked by its enable tag; its commands wait until it is enabled")
-			}
-			for n, v := range s.Queued {
-				cmds[n] = v
-			}
+			took(sh.what, s)
 		case <-wait.Done():
 			res.Notes = append(res.Notes, sh.what+": no scan has handed it its commands yet")
 		}
 	}
 	for _, p := range pushes {
+		if p.sw.shares != nil {
+			// A Modbus driver: each source's first share, as it decided it.
+			for i := 0; i < p.sw.nsrc; i++ {
+				select {
+				case s := <-p.sw.shares:
+					took("device "+s.id, s.FirstShare)
+				case <-wait.Done():
+					res.Notes = append(res.Notes, "driver "+p.name+": no scan has handed every device its commands yet")
+					i = p.sw.nsrc
+				}
+			}
+			continue
+		}
 		select {
-		case vals := <-p.ch:
-			if p.mb == nil && io.Gate != nil && !io.Gate() {
+		case vals := <-p.sw.pushed:
+			switch {
+			case io.Gate != nil && !io.Gate():
 				res.Notes = append(res.Notes, "driver "+p.name+": the write gate is closed, so the first scan after the apply commanded nothing")
-				continue
-			}
-			for n, v := range vals {
-				if p.mb != nil && io.hold && modbus.HeldAtBaseline(p.mb[n]) {
-					continue // recorded as the new driver's baseline, not sent
-				}
-				if p.mb == nil && io.hold {
-					continue
-				}
-				cmds[n] = v
-			}
-			if p.mb == nil && io.hold {
+			case io.hold:
 				res.Notes = append(res.Notes, "driver "+p.name+": held, its first commands are its baseline")
+			default:
+				for n, v := range vals {
+					cmds[n] = v
+				}
 			}
 		case <-wait.Done():
 			res.Notes = append(res.Notes, "driver "+p.name+": no scan has handed it its commands yet")
@@ -1107,35 +1121,57 @@ func keysOf2(m map[string]any) []string {
 }
 
 // markUnknown marks units whose configuration a failed rollback left
-// unknown.
-func (io *IOConfig) markUnknown(keys []string, by string) {
+// unknown, with why (Fault).
+func (io *IOConfig) markUnknown(keys []string, by, why string) {
 	io.mu.Lock()
 	defer io.mu.Unlock()
+	if io.faults == nil {
+		io.faults = map[string]string{}
+	}
 	for _, k := range keys {
 		u := io.running[k]
 		u.hash, u.from, u.at, u.by = unknownHash, "rollback failed", time.Now(), by
 		io.running[k] = u
+		io.faults[k] = why
 	}
 }
 
-// Fault is what a failed rollback left unknown, "" when nothing has.
+// Fault is what failed rollbacks left unknown and no apply since has
+// re-established, "" when nothing.
 func (io *IOConfig) Fault() string {
 	io.mu.Lock()
 	defer io.mu.Unlock()
-	return io.fault
+	seen := map[string]bool{}
+	var out []string
+	for _, k := range sortedKeys(io.faults) {
+		if why := io.faults[k]; !seen[why] {
+			seen[why] = true
+			out = append(out, why)
+		}
+	}
+	return strings.Join(out, "; ")
 }
 
 // swap builds the driver cfg describes, gates and starts it, swaps it in for
 // the one named name and stops that one. It returns the new driver and the
 // outputs the first push after the swap hands it.
-func (io *IOConfig) swap(ctx context.Context, name string, fsys fs.FS, cfg DriverConfig) (nio.Driver, <-chan nio.Values, error) {
+func (io *IOConfig) swap(ctx context.Context, name string, fsys fs.FS, cfg DriverConfig) (*swapped, error) {
 	set, ok := io.p.Runtime.Driver.(*nio.Multi)
 	if !ok {
-		return nil, nil, errors.New("the runtime's driver is not a composite")
+		return nil, errors.New("the runtime's driver is not a composite")
 	}
 	d, err := buildDriver(fsys, cfg)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
+	}
+	sw := &swapped{d: d}
+	if mb := modbusOf(d); mb != nil {
+		// One slot per source, so a share never blocks the scan that reports
+		// it: d is not swapped in yet, so its sources cannot change before
+		// ObserveFirstShares arms them.
+		ch := make(chan srcShare, len(mb.Health().Sources))
+		sw.nsrc = mb.ObserveFirstShares(func(id string, s modbus.FirstShare) { ch <- srcShare{id, s} })
+		sw.shares = ch
 	}
 	set.Gate(d)
 	if s, ok := d.(interface{ Start(context.Context) }); ok {
@@ -1144,10 +1180,11 @@ func (io *IOConfig) swap(ctx context.Context, name string, fsys fs.FS, cfg Drive
 	prev, pushed, err := io.rt.ReplaceDriverObserved(ctx, name, d)
 	if err != nil {
 		stopDriver(d)
-		return nil, nil, err
+		return nil, err
 	}
+	sw.pushed = pushed
 	stopDriver(prev)
-	return d, pushed, nil
+	return sw, nil
 }
 
 func stopDriver(d nio.Driver) {
