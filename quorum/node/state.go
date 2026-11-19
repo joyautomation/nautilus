@@ -25,6 +25,8 @@ type State struct {
 	// .Cluster), and CheckOwner compares a loaded file with them.
 	Owner   quorum.NodeID
 	Cluster string
+	// Box is stamped on every write too (VoterState.Box, box.go).
+	Box string
 
 	// write writes b to f; tests replace it to crash part-way.
 	write func(f *os.File, b []byte) (int, error)
@@ -54,7 +56,7 @@ func (s *State) Load() (quorum.VoterState, error) {
 // (both the file's data and the rename), or an error, when the old state
 // still stands.
 func (s *State) Save(st quorum.VoterState) error {
-	st.Owner, st.Cluster = s.Owner, s.Cluster
+	st.Owner, st.Cluster, st.Box = s.Owner, s.Cluster, s.Box
 	b, err := st.MarshalBinary()
 	if err != nil {
 		return err

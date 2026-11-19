@@ -84,10 +84,77 @@ func (s *swapHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 type pairDeps struct {
 	getenv func(string) string
 	listen func(addr string) (net.Listener, error)
+	// box is this box's fingerprint, given the addresses of the pair's
+	// links (hostBox): an error refuses the start, "" means not readable
+	// yet. dial, when set, opens the peer connections (tests cut links
+	// with it).
+	box  func(links []string) (string, error)
+	dial func(ctx context.Context, network, addr string) (net.Conn, error)
 }
 
 func osPairDeps() pairDeps {
-	return pairDeps{getenv: os.Getenv, listen: func(addr string) (net.Listener, error) { return net.Listen("tcp", addr) }}
+	return pairDeps{getenv: os.Getenv, listen: func(addr string) (net.Listener, error) { return net.Listen("tcp", addr) }, box: hostBox}
+}
+
+// machineIDFiles are where a box's machine-id is read from, in order.
+var machineIDFiles = []string{"/etc/machine-id", "/var/lib/dbus/machine-id"}
+
+// hostBox is this box's fingerprint for the voter state (#1029): its
+// machine-id and the MACs of the interfaces the links to the peer and the
+// witness leave by. Not the other NICs: a USB NIC plugged in, or a NIC
+// the pair doesn't use, must not make a box "changed". With no machine-id
+// it is an error (the start is refused); "" while a link's address
+// doesn't resolve yet, and the controller then waits, neither voting nor
+// campaigning, until it does (node.Options.BoxFunc): never a check
+// skipped (#1034 review). That costs no liveness: it can't reach its
+// peers without resolving them either.
+func hostBox(links []string) (string, error) {
+	var id string
+	for _, f := range machineIDFiles {
+		if b, err := os.ReadFile(f); err == nil && strings.TrimSpace(string(b)) != "" {
+			id = string(b)
+			break
+		}
+	}
+	if id == "" {
+		return "", fmt.Errorf("no machine-id (%s): a pair member binds its voter state to its box, so a cloned disk never votes as the original (#1029); give this box a machine-id (systemd-machine-id-setup)", strings.Join(machineIDFiles, ", "))
+	}
+	var macs []string
+	for _, l := range links {
+		mac, ok := linkMAC(l)
+		if !ok {
+			return "", nil
+		}
+		if mac != "" {
+			macs = append(macs, mac)
+		}
+	}
+	return node.BoxFingerprint(id, macs), nil
+}
+
+// linkMAC is the MAC of the interface a connection to addr would leave
+// by ("" for one without, such as loopback). A UDP "dial" only picks the
+// route; nothing is sent.
+func linkMAC(addr string) (string, bool) {
+	c, err := net.Dial("udp", addr)
+	if err != nil {
+		return "", false
+	}
+	local := c.LocalAddr().(*net.UDPAddr).IP
+	c.Close()
+	ifs, err := net.Interfaces()
+	if err != nil {
+		return "", false
+	}
+	for _, in := range ifs {
+		addrs, _ := in.Addrs()
+		for _, a := range addrs {
+			if n, ok := a.(*net.IPNet); ok && n.IP.Equal(local) {
+				return in.HardwareAddr.String(), true
+			}
+		}
+	}
+	return "", false
 }
 
 // newPairMember builds the election of a pair member and starts its peer
@@ -100,6 +167,14 @@ func newPairMember(r *project.RedundancyConfig, apiAddr, dir string, d pairDeps)
 	if err != nil {
 		return nil, err
 	}
+	if d.box != nil {
+		links := []string{o.PeerAddr, o.WitnessAddr}
+		if _, err := d.box(links); err != nil {
+			return nil, err
+		}
+		o.BoxFunc = func() string { b, _ := d.box(links); return b }
+	}
+	o.Dial = d.dial
 	if err := os.MkdirAll(filepath.Dir(o.StatePath), 0o750); err != nil {
 		return nil, fmt.Errorf("state directory: %w", err)
 	}

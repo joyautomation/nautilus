@@ -155,15 +155,36 @@ redundancy:
     under a nonce it had given up for a newer one (N1, N2, N1) is two processes, and raises
     `redundancy.duplicate-member`. It needs both processes to reach the controller that
     checks, so it detects; it doesn't refuse.
-  - **The known gap (#1029, blocks lifting `experimental`).** The rule acts only at a voter
-    that holds a running promise to the original. A clone brings its own copy of the
-    original's voter, so it needs just one more grant. When the original is partitioned from
-    one voter (the A–B link down, or A cut from the witness), that voter's promise to it
-    lapses, and the clone wins it after waiting out a lease. It then leads on {clone, that
-    voter} alongside the original on the other two, and `Duplicates` stays 0, because that
-    voter never saw the original's nonce. Candidate fixes are on #1029: the 3b-2 hello's
-    instance nonce, binding the state to the box (machine-id), or the witness relaying the
-    leader's nonce. The guide says never to clone a controller's disk.
+  - **The gap the voters alone leave (#1029).** The rule acts only at a voter that holds a
+    running promise to the original. A clone brings its own copy of the original's voter, so
+    it needs just one more grant. When the original is partitioned from one voter (the A–B
+    link down, or A cut from the witness), that voter's promise to it lapses, and the clone
+    wins it after a lease. It then leads alongside the original, and `Duplicates` stays 0.
+  - **The fix: the state is bound to its box (#1029, layer 1).** `quorum.state` records the
+    fingerprint of the box that wrote it (`node.BoxFingerprint`):
+    - **The fingerprint** is a hash of `/etc/machine-id` and the MACs of the interfaces the
+      peer and witness links leave by. Other NICs don't count, so a USB NIC plugged in doesn't
+      change a box. Either component changed is a changed box: a cloned VM usually keeps its
+      machine-id and gets a new MAC.
+    - **A file from another box is treated as lost:** moved aside, and the controller starts
+      uncommissioned, raising `redundancy.box-changed` with which part changed.
+    - **A real change** (a NIC swap, a migration) re-adopts from the healthy peer within
+      seconds (#976). **A clone stays uncommissioned for good:** the peer's `Adopt` goes to
+      the original's address. That difference is how an operator tells the two apart, and the
+      event says so.
+    - **When the fingerprint can't be read yet** (a peer or witness address that doesn't
+      resolve), the check is never skipped (#1034 review). The controller neither votes nor
+      campaigns and leaves its file untouched, re-reading every quarter lease, and starts once
+      it can read it. That costs no liveness, since it can't reach its peers without resolving
+      them either, and it raises no false "changed". With no machine-id at all, a pair member
+      refuses to start.
+    - **Never change both boxes at once:** both uncommissioned is the operator's case (B2).
+      3c's `recommission` refuses a box-changed controller without `--box-replaced`.
+    - **The residual:** a clone that keeps both the machine-id and the peer-link MAC (a
+      MAC-spoofed clone).
+  - **Layer 2, still to build (after 3b-3; #1029 stays open and blocks lifting
+    `experimental`).** Voters relay the running promise they hold (grantee, nonce, remaining)
+    on every vote frame, and refuse that name under another nonce.
 - **`NAUTILUS_NODE` set with no pair in the manifest** is refused: each box would run as its
   own leader against the same I/O.
 - **A pair member's tag API must be reachable by its peer.** The manifest's default
@@ -845,9 +866,9 @@ same driver contract as the simulator.
     keeps the file aside. The witness refuses to start over an unreadable file unless
     `--rebuild` is given: the file is then kept aside and the pair gets a new incarnation.
 - **The boot nonce** is drawn from `crypto/rand` at every start and written nowhere.
-- **The state file's format is version 3** since `Owner` and `Cluster` (§2). The driver stamps
-  them on every write: the member and the cluster ID on a controller, `w` and the pair's
-  cluster ID on the witness. A file another member or pair wrote stops the start
+- **The state file's format is version 4** since `Box` (version 3 added `Owner` and `Cluster`,
+  §2). The driver stamps them on every write: the member, the cluster ID and the box
+  fingerprint on a controller; `w`, the pair's cluster ID and no box on the witness. A file another member or pair wrote stops the start
   (`ErrNotOwner`) and is left where it is.
 - **Controllers** refuse to start without `CLOCK_BOOTTIME` (Linux). The witness runs anywhere.
 - **In `naut run`** (#710 PR 3b-1), a member's peer listener binds its own `peers:` port on

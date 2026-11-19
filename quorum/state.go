@@ -61,14 +61,20 @@ type VoterState struct {
 	// promise as (#1028 review). Empty in a file never written.
 	Owner   NodeID
 	Cluster string
+	// Box is the fingerprint of the box that wrote the file (the driver's
+	// node.Options.Box: its machine-id and the MACs of the interfaces that
+	// carry the pair's links). A controller whose box differs treats the
+	// file as lost: a cloned disk must not vote as the original (#1029).
+	// Empty on the witness, and in a file never written.
+	Box string
 }
 
 const stateMagic = "nqv"
 
 // stateVersion is the state file's format: 2 since VoterState.Lease, 3
-// since Owner and Cluster. A file of another version reads as ErrVersion,
-// not as corrupt.
-const stateVersion = 3
+// since Owner and Cluster, 4 since Box. A file of another version reads
+// as ErrVersion, not as corrupt.
+const stateVersion = 4
 
 // MarshalBinary encodes s for its state file: a magic, a version byte, a
 // length, the fields, and a CRC-32C, so a torn write is detected.
@@ -92,6 +98,7 @@ func (s VoterState) MarshalBinary() ([]byte, error) {
 	}
 	p = putString(p, string(s.Owner))
 	p = putString(p, s.Cluster)
+	p = putString(p, s.Box)
 	b := append([]byte(stateMagic), stateVersion)
 	b = binary.BigEndian.AppendUint32(b, uint32(len(p)))
 	b = append(b, p...)
@@ -123,7 +130,7 @@ func (s *VoterState) UnmarshalBinary(b []byte) error {
 	v.InSync = Mark{Known: flags&1 != 0, Current: flags&2 != 0, Term: rd.u64(), Scan: rd.u64()}
 	v.Gen, v.PendingGen, v.PendingInc, v.Floor = rd.u64(), rd.u64(), rd.u64(), rd.u64()
 	v.Lease = time.Duration(rd.u64())
-	v.Owner, v.Cluster = NodeID(rd.str()), rd.str()
+	v.Owner, v.Cluster, v.Box = NodeID(rd.str()), rd.str(), rd.str()
 	if rd.bad || len(rd.b) != 0 || flags&^3 != 0 || v.Lease < 0 {
 		return ErrCorrupt
 	}

@@ -310,16 +310,24 @@ under `naut deploy`):
 The voter state, `quorum.state`, lives in the systemd state directory
 (`/var/lib/nautilus` under `naut deploy`) or in `redundancy: state-dir:`.
 Every `naut deploy` step keeps it, and a backup never contains it. It
-records which controller wrote it: a controller refuses to start over
-the other one's file. A second process running as the same member (a
-cloned disk or VM, whose state and env both match) is refused by every
-voter that still holds a running promise to the original, and reported
-as `redundancy.duplicate-member`.
+records which controller wrote it, and on which box (its machine-id and
+the network cards the pair's links use): a controller refuses to start
+over the other one's file, and a file from another box is treated as
+lost. So a **cloned disk or VM** starts uncommissioned and never votes,
+and says so (`redundancy.box-changed`).
+
+**Replacing a controller's network card, or migrating it** to other
+hardware, is fine while the **other** controller is healthy: the changed
+one starts uncommissioned, reports `redundancy.box-changed`, and
+re-adopts from the other within seconds. If it stays uncommissioned
+while the other controller is up, it is a copy of a controller: stop it.
+**Never change both controllers at once**: both would start
+uncommissioned, and only an operator can re-commission the pair.
 
 :::danger[Never clone a controller's disk]
-The voters' check is not complete. A clone that waits out a lease while
-the original is partitioned from its peer or from the witness can still
-lead alongside it (tracked in
+A clone that keeps both the original's machine-id and its network
+card's MAC address is not caught by the box check, and the voters' own
+check is not complete yet (tracked in
 [#1029](https://github.com/joyautomation/nautilus/issues/1029), which
 blocks lifting `experimental`). Build the second controller from a fresh
 install, never from a copy of the first.

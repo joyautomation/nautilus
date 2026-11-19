@@ -143,6 +143,14 @@ var table = []mutation{
 	// TestPairConfigDiffersHoldsCampaigns catches the first end to end.
 	{"config_differs_campaigns", []string{"TestHelloPeerInfo"}},
 	{"hello_duplicate_unseen", []string{"TestHelloPeerInfo"}},
+	// #1029: a cloned disk votes as the original. cmd/naut's
+	// TestCloneWithTheABLinkDown and TestCloneWithACutFromTheWitness lead
+	// twice under it too.
+	{"box_unchecked", []string{"TestStateFromAnotherBoxIsLost"}},
+	// #1034 review: a box that can't be read yet must hold the vote, never
+	// skip the check. cmd/naut's TestCloneWithAnUnresolvableLinkNeverVotes
+	// leads twice under it.
+	{"box_wait_skipped", []string{"TestUnreadableBoxHoldsTheVoter"}},
 }
 
 // event is one line of `go test -json`.
