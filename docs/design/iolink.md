@@ -437,8 +437,15 @@ A virtual master serves raw process data and identity from its
 simulator, as #712's masters do now. A port device has no simulator of
 its own in the first pass. The process model writes the port's raw
 image (bytes, a U32 or hex) through the master's simulator. ISDU answers
-(PR 5) come from the IODD's variables and defaults, served by the
-virtual master's method handlers (virtdev's code, naut-virtdev's review).
+come from the IODD's variables and defaults, served by the virtual
+master's method handlers: a `ports:` entry on the virtual instance
+(`{ 1: { iodd: level.xml } }`, the file in `iodd/`) makes the master serve
+`ReadISDU` and `WriteISDU` for that port where the profile's `isdu:` puts
+them. Parameters start at the IODD's defaults (zeros where it has none); a
+write is checked as a device would check it (access rights, length, range)
+and refused with the IO-Link ErrorType, and a read answers what was last
+written. The ErrorType values are from memory of the interface
+specification and unverified: a simulator's, not a device's.
 
 ## 10. Not a tautology
 
