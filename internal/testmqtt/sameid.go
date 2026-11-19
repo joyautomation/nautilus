@@ -81,11 +81,15 @@ func expires(cl *mqttsrv.Client) bool {
 }
 
 // HoldTeardown holds the first ending session of client ClientID inside its
-// own teardown for Hold: after mochi's IsTakenOver check and before its
+// own teardown: after mochi's IsTakenOver check and before its
 // Clients.Delete, where OnUnsubscribed runs (it needs the session to have
 // had a subscription). That is the window SameIDSerializer closes; a test
 // uses HoldTeardown to land a reconnect in it every time instead of by
-// chance. Disconnected closes once that teardown has begun. Build it with
+// chance. Disconnected closes once that teardown is held, past its
+// IsTakenOver check. The hold ends when a new session with the same ID is
+// established (mochi has added it to its client map by then), or after
+// Hold, whichever comes first: with SameIDSerializer the new session waits
+// for the old one to be gone, so only Hold ends it. Build it with
 // NewHoldTeardown.
 type HoldTeardown struct {
 	mqttsrv.HookBase
@@ -96,11 +100,12 @@ type HoldTeardown struct {
 	mu      sync.Mutex
 	tearing *mqttsrv.Client
 	held    bool
+	next    chan struct{} // closed when a new same-ID session is established
 }
 
-// NewHoldTeardown holds client id's first ending session for hold.
+// NewHoldTeardown holds client id's first ending session for at most hold.
 func NewHoldTeardown(id string, hold time.Duration) *HoldTeardown {
-	return &HoldTeardown{ClientID: id, Hold: hold, Disconnected: make(chan struct{})}
+	return &HoldTeardown{ClientID: id, Hold: hold, Disconnected: make(chan struct{}), next: make(chan struct{})}
 }
 
 // ID implements mqttsrv.Hook.
@@ -108,7 +113,7 @@ func (h *HoldTeardown) ID() string { return "hold-teardown" }
 
 // Provides implements mqttsrv.Hook.
 func (h *HoldTeardown) Provides(b byte) bool {
-	return b == mqttsrv.OnDisconnect || b == mqttsrv.OnUnsubscribed
+	return b == mqttsrv.OnDisconnect || b == mqttsrv.OnUnsubscribed || b == mqttsrv.OnSessionEstablished
 }
 
 // OnDisconnect marks the start of the session's own teardown.
@@ -117,7 +122,6 @@ func (h *HoldTeardown) OnDisconnect(cl *mqttsrv.Client, _ error, _ bool) {
 	defer h.mu.Unlock()
 	if cl.ID == h.ClientID && h.tearing == nil {
 		h.tearing = cl
-		close(h.Disconnected)
 	}
 }
 
@@ -128,9 +132,29 @@ func (h *HoldTeardown) OnDisconnect(cl *mqttsrv.Client, _ error, _ bool) {
 func (h *HoldTeardown) OnUnsubscribed(cl *mqttsrv.Client, _ packets.Packet) {
 	h.mu.Lock()
 	hold := cl == h.tearing && !h.held
-	h.held = h.held || hold
+	if hold {
+		h.held = true
+		close(h.Disconnected)
+	}
 	h.mu.Unlock()
 	if hold {
-		time.Sleep(h.Hold)
+		select {
+		case <-h.next:
+		case <-time.After(h.Hold):
+		}
+	}
+}
+
+// OnSessionEstablished ends the hold once a new session with the ID is in
+// mochi's client map (mochi adds it before this hook runs).
+func (h *HoldTeardown) OnSessionEstablished(cl *mqttsrv.Client, _ packets.Packet) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.held && cl.ID == h.ClientID && cl != h.tearing {
+		select {
+		case <-h.next:
+		default:
+			close(h.next)
+		}
 	}
 }
