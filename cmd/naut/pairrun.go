@@ -84,10 +84,70 @@ func (s *swapHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 type pairDeps struct {
 	getenv func(string) string
 	listen func(addr string) (net.Listener, error)
+	// box is this box's fingerprint, given the addresses of the pair's
+	// links (hostBox); dial, when set, opens the peer connections (tests
+	// cut links with it).
+	box  func(links []string) string
+	dial func(ctx context.Context, network, addr string) (net.Conn, error)
 }
 
 func osPairDeps() pairDeps {
-	return pairDeps{getenv: os.Getenv, listen: func(addr string) (net.Listener, error) { return net.Listen("tcp", addr) }}
+	return pairDeps{getenv: os.Getenv, listen: func(addr string) (net.Listener, error) { return net.Listen("tcp", addr) }, box: hostBox}
+}
+
+// hostBox is this box's fingerprint for the voter state (#1029): its
+// machine-id and the MACs of the interfaces the links to the peer and the
+// witness leave by. Not the other NICs: a USB NIC plugged in, or a NIC
+// the pair doesn't use, must not make a box "changed". "" when any part
+// can't be read this start (an address that doesn't resolve yet, no
+// machine-id): the check is then skipped once, never failed on a guess,
+// so a DNS outage at boot can't leave both controllers uncommissioned.
+func hostBox(links []string) string {
+	id, err := os.ReadFile("/etc/machine-id")
+	if err != nil {
+		if id, err = os.ReadFile("/var/lib/dbus/machine-id"); err != nil {
+			return ""
+		}
+	}
+	if strings.TrimSpace(string(id)) == "" {
+		return ""
+	}
+	var macs []string
+	for _, l := range links {
+		mac, ok := linkMAC(l)
+		if !ok {
+			return ""
+		}
+		if mac != "" {
+			macs = append(macs, mac)
+		}
+	}
+	return node.BoxFingerprint(string(id), macs)
+}
+
+// linkMAC is the MAC of the interface a connection to addr would leave
+// by ("" for one without, such as loopback). A UDP "dial" only picks the
+// route; nothing is sent.
+func linkMAC(addr string) (string, bool) {
+	c, err := net.Dial("udp", addr)
+	if err != nil {
+		return "", false
+	}
+	local := c.LocalAddr().(*net.UDPAddr).IP
+	c.Close()
+	ifs, err := net.Interfaces()
+	if err != nil {
+		return "", false
+	}
+	for _, in := range ifs {
+		addrs, _ := in.Addrs()
+		for _, a := range addrs {
+			if n, ok := a.(*net.IPNet); ok && n.IP.Equal(local) {
+				return in.HardwareAddr.String(), true
+			}
+		}
+	}
+	return "", false
 }
 
 // newPairMember builds the election of a pair member and starts its peer
@@ -100,6 +160,13 @@ func newPairMember(r *project.RedundancyConfig, apiAddr, dir string, d pairDeps)
 	if err != nil {
 		return nil, err
 	}
+	if d.box != nil {
+		o.Box = d.box([]string{o.PeerAddr, o.WitnessAddr})
+		if o.Box == "" {
+			slog.Warn("redundancy: this box's fingerprint can't be read this start (no machine-id, or a peer address that doesn't resolve yet): the cloned-disk check (#1029) is skipped once")
+		}
+	}
+	o.Dial = d.dial
 	if err := os.MkdirAll(filepath.Dir(o.StatePath), 0o750); err != nil {
 		return nil, fmt.Errorf("state directory: %w", err)
 	}

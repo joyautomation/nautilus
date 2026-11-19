@@ -196,13 +196,23 @@ func startPairNode(t *testing.T, files fstest.MapFS, env map[string]string, ln n
 // startPairNodeAPI also serves the tag API on api, as runProject does,
 // when api is not nil.
 func startPairNodeAPI(t *testing.T, files fstest.MapFS, env map[string]string, ln, api net.Listener) *pairNode {
+	return startPairNodeWith(t, files, env, ln, api, nil)
+}
+
+// startPairNodeWith is startPairNodeAPI with mod applied to the member's
+// pairDeps first (a box fingerprint, a dialer that cuts links).
+func startPairNodeWith(t *testing.T, files fstest.MapFS, env map[string]string, ln, api net.Listener, mod func(*pairDeps)) *pairNode {
 	t.Helper()
 	proj := loadPair(t, files)
 	apiAddr := "127.0.0.1:18080"
 	if api != nil {
 		apiAddr = api.Addr().String()
 	}
-	m, err := newPairMember(proj.Redundancy, apiAddr, "", pairDeps{getenv: pairEnv(env), listen: func(string) (net.Listener, error) { return ln, nil }})
+	deps := pairDeps{getenv: pairEnv(env), listen: func(string) (net.Listener, error) { return ln, nil }}
+	if mod != nil {
+		mod(&deps)
+	}
+	m, err := newPairMember(proj.Redundancy, apiAddr, "", deps)
 	if err != nil {
 		t.Fatal(err)
 	}

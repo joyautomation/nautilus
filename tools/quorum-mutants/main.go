@@ -143,6 +143,10 @@ var table = []mutation{
 	// TestPairConfigDiffersHoldsCampaigns catches the first end to end.
 	{"config_differs_campaigns", []string{"TestHelloPeerInfo"}},
 	{"hello_duplicate_unseen", []string{"TestHelloPeerInfo"}},
+	// #1029: a cloned disk votes as the original. cmd/naut's
+	// TestCloneWithTheABLinkDown and TestCloneWithACutFromTheWitness lead
+	// twice under it too.
+	{"box_unchecked", []string{"TestStateFromAnotherBoxIsLost"}},
 }
 
 // event is one line of `go test -json`.

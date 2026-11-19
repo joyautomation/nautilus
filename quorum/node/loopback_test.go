@@ -225,7 +225,7 @@ func (c *cluster) isCut(from, to quorum.NodeID) bool {
 // transport is the production peer transport, dialing names through the
 // cluster's map.
 func (c *cluster) transport() http.RoundTripper {
-	tr := newClient().Transport.(*http.Transport).Clone()
+	tr := newClient(nil).Transport.(*http.Transport).Clone()
 	var d net.Dialer
 	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 		c.mu.Lock()

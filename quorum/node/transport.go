@@ -181,10 +181,13 @@ func baseURL(addr string) string {
 
 // newClient is the HTTP client for peer calls: connections kept alive,
 // a few per peer, and no overall timeout (each call has its own deadline).
-func newClient() *http.Client {
+func newClient(dial func(ctx context.Context, network, addr string) (net.Conn, error)) *http.Client {
+	if dial == nil {
+		dial = (&net.Dialer{Timeout: 2 * time.Second, KeepAlive: 15 * time.Second}).DialContext
+	}
 	return &http.Client{Transport: &http.Transport{
 		Proxy:               nil, // peers are reached directly, never through an HTTP proxy
-		DialContext:         (&net.Dialer{Timeout: 2 * time.Second, KeepAlive: 15 * time.Second}).DialContext,
+		DialContext:         dial,
 		MaxIdleConnsPerHost: 4,
 		IdleConnTimeout:     90 * time.Second,
 		ForceAttemptHTTP2:   false,

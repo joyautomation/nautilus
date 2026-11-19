@@ -9,10 +9,12 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -72,6 +74,13 @@ type Options struct {
 	// skips the comparison.
 	Config string
 	Caps   []string
+	// Box is the fingerprint of the box this controller runs on
+	// (BoxFingerprint), stamped in the state file. A file written on
+	// another box is treated as lost (box.go, #1029). "": no check.
+	Box string
+	// Dial, when set, opens the peer connections (default: net.Dialer).
+	// Tests cut links with it.
+	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
 	// Log defaults to slog.Default.
 	Log *slog.Logger
 	// OnEvent, when set, gets every Event, in order, from one goroutine.
@@ -126,7 +135,20 @@ const (
 	// the pair (Detail says so), or "same" once it matches again. While
 	// it differs, a controller that does not lead does not campaign.
 	EventConfigDiffers EventKind = "redundancy.config-differs"
+	// EventBoxChanged: the voter state was written on another box (#1029):
+	// treated as lost, so this controller starts uncommissioned. Detail
+	// says what changed and how to tell a NIC swap from a clone.
+	EventBoxChanged EventKind = "redundancy.box-changed"
 )
+
+// boxChangedMsg is the box-changed report.
+func boxChangedMsg(changed []string) string {
+	return "the voter state was written on another box (" + strings.Join(changed, " and ") + " changed), so this controller starts " +
+		"uncommissioned and does not vote. If this box's network card was replaced or the box was migrated, nothing is needed: " +
+		"it re-adopts from the other controller within seconds (redundancy.witness.incarnation). If it stays uncommissioned while " +
+		"the other controller is up, this box is a COPY of a controller (a cloned disk or VM): stop it, since a clone must never " +
+		"run as a member, and never re-commission it"
+}
 
 // dupEvery paces the duplicate-member report while it goes on.
 const dupEvery = 10 * time.Second
@@ -180,6 +202,9 @@ type Status struct {
 	// Duplicates counts votes this controller's voter refused because two
 	// processes claim one member (EventDuplicateMember).
 	Duplicates uint64
+	// BoxChanged is the box-changed report when this start found its state
+	// written on another box (EventBoxChanged), else "".
+	BoxChanged string
 	// ConfigDiffers: the peer's hello named another configuration of the
 	// pair (EventConfigDiffers). HelloDuplicates counts hellos that showed
 	// two processes behind the peer's name.
@@ -225,6 +250,7 @@ type Elector struct {
 	peerKnown  bool
 	cfgDiffers bool
 	cfgDiffAt  time.Time // the last hello that showed it
+	boxChanged string    // EventBoxChanged's report, set at New
 	peerNonces []uint64  // the boot nonces the peer's name answered under, oldest first
 	helloDups  uint64
 	helloDupAt time.Time
@@ -290,11 +316,11 @@ func New(o Options) (*Elector, error) {
 	}
 	client := o.client
 	if client == nil {
-		client = newClient()
+		client = newClient(o.Dial)
 	}
 	e := &Elector{
 		o: o, log: o.Log.With("cluster", o.Cluster, "node", string(o.Self)), now: now,
-		file: &State{Path: o.StatePath, Owner: o.Self, Cluster: o.Cluster, write: o.write},
+		file: &State{Path: o.StatePath, Owner: o.Self, Cluster: o.Cluster, Box: o.Box, write: o.write},
 		call: caller{client: client, token: o.Token, lease: o.Lease, members: members(o.Self, o.Peer)},
 		peer: baseURL(o.PeerAddr), wit: baseURL(o.WitnessAddr), nonce: drawNonce(),
 		waiters: map[waitKey]chan quorum.Reply{}, written: make(chan struct{}), mismatch: map[string]string{},
@@ -313,6 +339,24 @@ func New(o Options) (*Elector, error) {
 		if err := e.file.CheckOwner(st); err != nil {
 			free()
 			return nil, err
+		}
+		if o.Box == "" && st.Box != "" {
+			// This start could not read its box (Options.Box ""): keep the
+			// one the file names rather than forget it; the check is
+			// skipped once, never failed on a guess.
+			e.file.Box = st.Box
+		}
+		if changed := boxChanges(st.Box, o.Box); changed != nil {
+			// Written on another box: a cloned disk, or this box's NIC or
+			// host changed. As lost (#976): uncommissioned until it
+			// re-adopts from its peer, which a clone never does (#1029).
+			aside := fmt.Sprintf("%s.other-box-%d", o.StatePath, time.Now().Unix())
+			_ = os.Rename(o.StatePath, aside)
+			st = quorum.VoterState{}
+			msg := boxChangedMsg(changed)
+			e.boxChanged = msg
+			e.event(Event{Kind: EventBoxChanged, Detail: msg})
+			e.log.Error("redundancy: "+msg, "file", o.StatePath, "kept", aside)
 		}
 	}
 	switch {
@@ -986,7 +1030,7 @@ func (e *Elector) Status() Status {
 		WitnessIncarnation: e.witInc, WitnessAge: -1, PeerAge: -1,
 		RecommissionNeeded: e.needOp && st.Incarnation == 0, ClientToken: e.token,
 		StateWriteError: e.writeErr, Acquisitions: e.acquired, Duplicates: e.dupSeen,
-		ConfigDiffers: e.cfgDiffers, HelloDuplicates: e.helloDups,
+		ConfigDiffers: e.cfgDiffers, HelloDuplicates: e.helloDups, BoxChanged: e.boxChanged,
 	}
 	g := e.gate.Load()
 	s.Leading = g.open && now < g.end

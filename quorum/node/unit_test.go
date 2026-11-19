@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -524,5 +525,82 @@ func TestHelloInfoBoundByItsMAC(t *testing.T) {
 		if sameMAC(m, other) {
 			t.Errorf("%s: the MAC still verifies", name)
 		}
+	}
+}
+
+// A state file written on another box (#1029) is treated as lost: the
+// controller starts uncommissioned (so a cloned disk never votes as the
+// original), keeps the file aside, and reports which part of the box
+// changed. The same box loads it as before (box_unchecked turns this
+// red).
+func TestStateFromAnotherBoxIsLost(t *testing.T) {
+	clk := newFakeClock()
+	here := BoxFingerprint("machine-1", []string{"aa:bb:cc:00:00:01"})
+	for _, c := range []struct {
+		name, written, want string
+	}{
+		{"the same box", here, ""},
+		{"another NIC", BoxFingerprint("machine-1", []string{"aa:bb:cc:00:00:02"}), "peer-link MAC changed"},
+		{"another machine", BoxFingerprint("machine-2", []string{"aa:bb:cc:00:00:01"}), "machine-id changed"},
+		{"both", BoxFingerprint("machine-2", []string{"aa:bb:cc:00:00:09"}), "machine-id and peer-link MAC changed"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			o := testOptions(t, "a", "b")
+			o.clock, o.Box = clk.now, here
+			st := &State{Path: o.StatePath, Owner: "a", Cluster: testCluster, Box: c.written}
+			if err := st.Save(quorum.VoterState{Promised: 1002, GrantedTo: "a", Incarnation: 7, Gen: 1, Floor: 1000, Lease: o.Lease}); err != nil {
+				t.Fatal(err)
+			}
+			e, err := New(o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer e.Close()
+			s := e.Status()
+			if c.want == "" {
+				if !s.Commissioned || s.BoxChanged != "" {
+					t.Fatalf("the same box: commissioned %v, box changed %q", s.Commissioned, s.BoxChanged)
+				}
+				return
+			}
+			if s.Commissioned || !strings.Contains(s.BoxChanged, c.want) || !strings.Contains(s.BoxChanged, "COPY") {
+				t.Fatalf("commissioned %v, box changed %q; want uncommissioned, naming %q and how to tell a clone", s.Commissioned, s.BoxChanged, c.want)
+			}
+			if _, err := os.Stat(o.StatePath); !os.IsNotExist(err) {
+				t.Error("the other box's file is still in place")
+			}
+			kept, _ := filepath.Glob(o.StatePath + ".other-box-*")
+			if len(kept) != 1 {
+				t.Errorf("the other box's file was not kept aside: %v", kept)
+			}
+		})
+	}
+}
+
+// A start that can't read its box (Options.Box "": a peer address that
+// doesn't resolve yet) skips the check once and keeps the box the file
+// names, so the next start checks against it rather than against nothing.
+func TestUnknownBoxKeepsTheStoredOne(t *testing.T) {
+	o := testOptions(t, "a", "b")
+	o.clock = newFakeClock().now
+	stored := BoxFingerprint("machine-1", []string{"aa:bb:cc:00:00:01"})
+	st := &State{Path: o.StatePath, Owner: "a", Cluster: testCluster, Box: stored}
+	if err := st.Save(quorum.VoterState{Promised: 1002, GrantedTo: "a", Incarnation: 7, Gen: 1, Floor: 1000, Lease: o.Lease}); err != nil {
+		t.Fatal(err)
+	}
+	e, err := New(o) // Box ""
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !e.Status().Commissioned {
+		t.Fatal("an unknown box failed the check")
+	}
+	if err := e.file.Save(quorum.VoterState{Promised: 1003, Incarnation: 7, Gen: 1, Floor: 1000, Lease: o.Lease}); err != nil {
+		t.Fatal(err)
+	}
+	e.Close()
+	got, err := (&State{Path: o.StatePath}).Load()
+	if err != nil || got.Box != stored {
+		t.Fatalf("after a write with the box unknown the file names %q (%v); want %q kept", got.Box, err, stored)
 	}
 }
