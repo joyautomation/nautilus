@@ -290,53 +290,65 @@ and whenever either value changes.
 | `Ok` | the ids match | from the process data (§6.1) |
 | `NoDevice` | the port reports no device (ids 0, or `status` says so) | Bad |
 | `WrongDevice` | the ids differ | Bad, and the bytes are not decoded |
+| `AwaitingRearm` | the ids match but a port with process data out has not been re-armed (§6.2) | from the process data (§6.1); the fault stays active |
 | `Unchecked` | the master profile has no id points | from the process data (§12) |
 
 Every port device gets two companion tags, beside the drivers'
 `__Online`:
 
 - `<Port device>__Identity : INT`, the state (0 `Ok`, 1 `NoDevice`,
-  2 `WrongDevice`, 3 `Unchecked`), always Good, so an alarm or a program
+  2 `WrongDevice`, 3 `Unchecked`, 4 `AwaitingRearm`), always Good, so an alarm or a program
   can read it while the device's values are Bad;
-- `<Port device>__IdentityFault : BOOL`, true in `NoDevice` and
-  `WrongDevice`, with a default alarm: "{name}: wrong or missing device on
-  {master} port {n}".
+- `<Port device>__IdentityFault : BOOL`, true in `NoDevice`,
+  `WrongDevice` and `AwaitingRearm`, with a default alarm: "{name}: wrong,
+  missing or unconfirmed device on {master} port {n}".
 
 A `WrongDevice` is also logged once per change, naming the port, the
 expected pair and the pair read, so the cause is in the log and not only
 in an alarm's text.
 
-### 6.2 Outputs and a wrong device
+### 6.2 Outputs, a wrong device and re-arming
 
 A master keeps the last process data out it was given and sends it to
 whatever device is on the port, including a wrong one. So not writing is
-not safe, and the adapter does these (`iolink.OutGate`):
+not safe, and a port with process data out is **armed explicitly**
+(`iolink.OutGate`):
 
-- while the identity is not `Ok` (`NoDevice`, `WrongDevice`), **nothing is
-  written to the port's process data out**, and not zeros either (off is
-  not always safe), and a write to a command tag is refused naming the
-  state;
-- where the profile has `pd-out-valid`, it is driven **false** in those
-  states, so the master stops sending the last image and the device falls
-  back to its own fail-safe values;
-- when the right device is back, **nothing is resent** from what was
-  written before or during the break: `pd-out-valid` returns to true, and
-  the image goes out, only after a program has written every item again.
-  The runtime pushes the whole output set whenever any output changes, so
-  the adapter cannot tell a write from a push: like the driver's own rule
-  (outputs are commands, an unchanged output since start is not one), an
-  item counts as written when its value differs from the last one seen,
-  and the last one seen follows every push, a refused one too. After an
-  identity break a program re-arms the port by changing every item of the
-  image; a program that holds the same values never does, and the port
-  stays quiet. The image is handed to the master one push before the valid
-  flag, so the master holds the new image before it is told it is valid;
-- `Unchecked` (no id points) writes as told, since nothing can be
-  compared, and `naut check` says so.
+- a port starts **not armed**, and so does a port whose device went
+  wrong: it sends **nothing** (no image, not zeros either: off is not
+  always safe) and, where the profile has `pd-out-valid`, drives it
+  **false**, so the master stops sending the last image and the device
+  falls back to its own fail-safe values;
+- it is armed by a **pulse on `<Port device>__Rearm`** (a writable BOOL
+  tag, false then true): the "confirm after a device swap" an operator
+  does, journalled by the audit journal like any tag write (who, when,
+  from where), and logged by the adapter. A pulse while the device on the
+  port is not the one expected is **refused**, naming the state, and
+  changes nothing;
+- an armed port sends the program's **current** value of every item (the
+  image first and, where there is one, `pd-out-valid` true a push later,
+  so the master holds the new image before it is told it is valid), and
+  follows the program from then on. Nothing a program wrote before or
+  during a break is replayed, and a program that holds constant values
+  stalls nothing: the pulse takes the values it holds;
+- until it is armed the identity reads **`AwaitingRearm`** (4) and
+  `__IdentityFault` stays true, so the alarm stays active and the operator
+  sees why the port is quiet. A program that wants a port armed at start
+  pulses `__Rearm` itself: the controller has not been told the device is
+  the one the program means to drive;
+- `Unchecked` (no id points) is armed the same way, then writes as told,
+  since nothing can be compared; `naut check` says so;
+- a port with no process data out has no gate, no `__Rearm` and no
+  `AwaitingRearm`.
 
-A master profile with no `pd-out-valid` cannot do the second step: a
-wrong device on that port is sent the master's last process data out
-until the identity fault is seen (it is raised as an alarm) and the
+The pulse is seen as a push in which `__Rearm` is true after one in which
+it was false (the first push after a start is only the state of the
+world); a pulse shorter than a scan is not seen. Under `naut test` the
+in-process face sends a port's outputs through the same gate.
+
+A master profile with no `pd-out-valid` cannot do the first step's second
+half: a wrong device on that port is sent the master's last process data
+out until the identity fault is seen (it is raised as an alarm) and the
 program or an operator stops it. `naut devices show` says so for such a
 profile (today the ifm AL1590 and the SICK SIG300). The identity is
 checked when the ids arrive, so for up to one scan of the id points after

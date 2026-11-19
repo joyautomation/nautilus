@@ -415,7 +415,7 @@ func TestPortDeviceIdentityFaultIsAnAlarm(t *testing.T) {
 		t.Fatalf("defs %+v, want the one identity fault", defs)
 	}
 	d := defs[0]
-	if d.Tag != "LEVEL3__IdentityFault" || d.Priority != alarm.High || d.Enable != "M__Online" || d.Name != "LEVEL3: wrong or missing device on M port 3" {
+	if d.Tag != "LEVEL3__IdentityFault" || d.Priority != alarm.High || d.Enable != "M__Online" || d.Name != "LEVEL3: wrong, missing or unconfirmed device on M port 3" {
 		t.Errorf("def %+v", d)
 	}
 	if got := (&Project{}).deviceAlarmFiles(); got != nil {

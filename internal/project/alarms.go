@@ -235,11 +235,11 @@ func (p *Project) deviceAlarmFiles() []alarm.File {
 		defs = append(defs, alarm.Def{
 			ID:       devbind.IdentityFaultTag(port.Name),
 			Tag:      devbind.IdentityFaultTag(port.Name),
-			Name:     fmt.Sprintf("%s: wrong or missing device on %s port %d", port.Name, port.Master, port.Num),
+			Name:     fmt.Sprintf("%s: wrong, missing or unconfirmed device on %s port %d", port.Name, port.Master, port.Num),
 			Priority: alarm.High,
 			Class:    "iolink",
 			Enable:   port.Master + "__Online",
-			Notes:    "The IO-Link identity check: the device on the port is not the one its IODD describes (docs/design/iolink.md §6). Its process data out is held back.",
+			Notes:    "The IO-Link identity check: the device on the port is not the one its IODD describes, or the port has not been re-armed since the controller started or the device went wrong (docs/design/iolink.md §6.2). Its process data out is held back; pulse the port's __Rearm once the device is confirmed.",
 		})
 	}
 	if len(defs) == 0 {
