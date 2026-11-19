@@ -135,6 +135,8 @@ func randomRun(seed uint64, p profile) Options {
 // by TestMeasureSolePathLoss: over 20,000 windows of 10 leases per rate, a
 // second takeover in one window (more than the loss fault's own one) never
 // happened at 1–3% and first did at 4% (1, then 4 at 5%, 156 at 10%).
+// A simulator measurement with a thin margin, not a proof: if a nightly
+// seed at 3% ever breaches I7, drop this to 2%.
 const maxSoleLoss = 3
 
 // solePath reports whether link fault i of o may be the sole vote path: a
