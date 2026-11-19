@@ -264,11 +264,13 @@ func ioUnits(fsys fs.FS, m *Manifest) ([]DriverConfig, map[string]ioUnit, error)
 			if err != nil {
 				return nil, nil, fmt.Errorf("driver %s: %w", c.Name, err)
 			}
+			hc := c
+			hc.Validate = "" // how a change is checked, not what runs
 			units[c.Name] = ioUnit{driver: c.Name, typ: typ, cfg: c, fsys: fsys, hash: hashOf(struct {
 				Config   DriverConfig
 				Device   string
 				Manifest opcua.Manifest
-			}{c, c.opcuaDevice, om})}
+			}{hc, c.opcuaDevice, om})}
 			continue
 		}
 		var file string
@@ -337,6 +339,9 @@ type IOValidation struct {
 	WillCommand []IOCommand `json:"willCommand"`
 	Held        bool        `json:"held,omitempty"`
 	Notes       []string    `json:"notes,omitempty"`
+	// Probes are the live checks of each changed device (live or static,
+	// and why), run once every static check has passed.
+	Probes []IOProbe `json:"probes,omitempty"`
 }
 
 // IOResult is what an apply did.
@@ -424,9 +429,9 @@ func (io *IOConfig) Validate(c *IOCandidate) *IOValidation {
 		}
 		v.Checks = append(v.Checks, ck)
 	}
+	live := IOCheck{Name: "live", Skipped: true, OK: true, Detail: "not run: the candidate failed a static check"}
 	finish := func() *IOValidation {
-		v.Checks = append(v.Checks, IOCheck{Name: "live", Skipped: true, OK: true,
-			Detail: "not run: probing a changed device before the apply comes with #706 PR 4"})
+		v.Checks = append(v.Checks, live)
 		v.Valid = true
 		for _, ck := range v.Checks {
 			v.Valid = v.Valid && ck.OK
@@ -552,6 +557,16 @@ func (io *IOConfig) Validate(c *IOCandidate) *IOValidation {
 			v.Notes = append(v.Notes, fmt.Sprintf("driver %s is swapped whole: the new driver connects before the old one disconnects, so a device that allows a single connection may refuse it until the old one has gone", ch.Driver))
 		}
 	}
+	// Probe the changed devices only once the candidate passes every
+	// static check: an invalid one is refused whatever the devices say.
+	statically := true
+	for _, ck := range v.Checks {
+		statically = statically && ck.OK
+	}
+	if statically {
+		v.Probes = probe(probeTargets(c, v.Changes, running))
+		live = liveCheck(v.Probes)
+	}
 	return finish()
 }
 
@@ -646,10 +661,10 @@ var (
 	liveSource   = fieldSet("Host", "Port", "UnitID")
 	liveModbus   = fieldSet("Table", "Address", "ScanClass")
 	liveOPCUA    = fieldSet("NodeID", "Namespace", "ScanClass")
-	liveRow      = fieldSet("Name", "Endpoint", "UnitID", "Profile", "Points") // profile and points: device-type's
+	liveRow      = fieldSet("Name", "Endpoint", "UnitID", "Profile", "Points", "Validate") // profile and points: device-type's
 	liveDriverOf = map[string]map[string]bool{
-		"modbus":       fieldSet("Type", "Name", "Manifest", "ScanRate", "ScanClasses", "TagClasses"),
-		"opcua-client": fieldSet("Type", "Name", "Manifest", "Endpoint", "ScanRate", "ScanClasses", "TagClasses"),
+		"modbus":       fieldSet("Type", "Name", "Manifest", "ScanRate", "ScanClasses", "TagClasses", "Validate"),
+		"opcua-client": fieldSet("Type", "Name", "Manifest", "Endpoint", "ScanRate", "ScanClasses", "TagClasses", "Validate"),
 	}
 )
 
@@ -761,7 +776,7 @@ func (io *IOConfig) fieldProblems(c *IOCandidate, running map[string]ioUnit) []s
 	}
 	for _, r := range c.m.Devices {
 		if b, ok := rows[r.Name]; ok {
-			refuse("devices: row "+r.Name, changedFields(b, r, liveRow), fieldSet("Endpoint", "UnitID"))
+			refuse("devices: row "+r.Name, changedFields(b, r, liveRow), fieldSet("Endpoint", "UnitID", "Validate"))
 		}
 	}
 	if len(out) > 0 {
@@ -1063,7 +1078,7 @@ func (io *IOConfig) Apply(ctx context.Context, c *IOCandidate, by string) (*IORe
 	}
 
 	res := &IOResult{Changes: val.Changes, Commanded: []IOCommand{},
-		Notes: []string{"applied; whether each changed device answers was not checked (a device that does not reads Bad quality); probing it first comes with #706 PR 4"}}
+		Notes: []string{"applied; each changed device was probed before the apply where its check is live (validation.probes); one that stops answering reads Bad quality"}}
 	wait, cancel := context.WithTimeout(ctx, firstPushWait)
 	defer cancel()
 	cmds := map[string]any{}

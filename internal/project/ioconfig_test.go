@@ -250,8 +250,8 @@ func TestIOApplyModbusDeviceAddress(t *testing.T) {
 	if fmt.Sprint(res.Commanded) != "[{A_Cmd 7}]" {
 		t.Fatalf("commanded = %v, want what the first scan handed DEV_A: [{A_Cmd 7}]", res.Commanded)
 	}
-	if len(res.Notes) == 0 || !strings.Contains(res.Notes[0], "not checked") {
-		t.Fatalf("notes = %v, want reachability not checked said", res.Notes)
+	if len(res.Notes) == 0 || !strings.Contains(res.Notes[0], "probed before the apply") {
+		t.Fatalf("notes = %v, want the probe before the apply said", res.Notes)
 	}
 	// The new device gets the command willCommand listed, unchanged since
 	// (In is 6 on both): only the push after the swap sends it.
@@ -751,6 +751,9 @@ func TestIOValidateAllowsOnlyAddressing(t *testing.T) {
 	pa, pb := slavePort(s1), slavePort(s2)
 	ua := uaServer(t, 1.5)
 	files := ioFiles(pa, pb, ua)
+	// A validation of the configuration alone: the moved devices do not
+	// exist, so they are checked static.
+	files = withFile(files, "nautilus.yaml", strings.Replace(string(files["nautilus.yaml"].Data), "    scan-rate: 10ms\n", "    scan-rate: 10ms\n    validate: static\n", 1))
 	src := modbusYAML(pa, pb, "", "")
 	srcA := mbSource("DEV_A", pa)
 	nau := string(files["nautilus.yaml"].Data)
@@ -1063,8 +1066,8 @@ func TestIOApplyOPCUADeviceRows(t *testing.T) {
 	const manifest = `name: d
 tasks: [{ program: main.st, scan: 20ms }]
 devices:
-  - { name: PF1, profile: pepperl-fuchs-ice3, endpoint: "127.0.0.1:1" }
-  - { name: PF2, profile: pepperl-fuchs-ice3, endpoint: "127.0.0.1:2" }
+  - { name: PF1, profile: pepperl-fuchs-ice3, endpoint: "127.0.0.1:1", validate: static }
+  - { name: PF2, profile: pepperl-fuchs-ice3, endpoint: "127.0.0.1:2", validate: static }
 `
 	project := func(manifest, profile string) fstest.MapFS {
 		fsys := devicesProject(t, manifest, "PROGRAM Main\nEND_PROGRAM\n")

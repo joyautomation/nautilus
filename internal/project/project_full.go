@@ -352,6 +352,11 @@ func buildDriver(fsys fs.FS, d DriverConfig) (nio.Driver, error) {
 	if err := statusTagsOnlyOnRuntime(d); err != nil {
 		return nil, err
 	}
+	switch d.Validate {
+	case "", "live", "static":
+	default:
+		return nil, fmt.Errorf("driver %s: validate: %q is not live or static", d.Type, d.Validate)
+	}
 	switch strings.ToLower(d.Type) {
 	case "", "memory":
 		// Loopback for bring-up: inputs read back whatever was written,

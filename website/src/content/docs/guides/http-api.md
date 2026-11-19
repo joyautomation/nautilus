@@ -947,8 +947,21 @@ curl -s -X POST localhost:8080/api/io/staged/1/apply
   the device: nothing while the write gate is closed (a standby, or scans
   not live), and a device parked by its enable tag holds its commands
   until it is enabled.
-- **Not checked yet:** whether a changed device answers. A device that
-  does not reads bad quality.
+- **Live check.** Once a candidate passes every static check, each
+  changed device is probed before the apply: a driver for that device
+  alone, built as the apply would build it, is started on a connection of
+  its own until every tag has read once (at most 5 s). It never writes.
+  A device that refuses the connection, or a tag that does not read (a
+  wrong unit id, a register or node the device does not have), makes the
+  candidate invalid, named under `validation.probes` and the `live` check.
+- **Live or static.** A device that allows few connections cannot spare
+  one for the check, so how it is checked is, in order: its `devices:`
+  row's `validate:`, its driver's `validate:`, then its profile's default
+  (`static` when the profile documents Modbus `max-connections` of 2 or
+  fewer, `live` otherwise). A static check reads nothing from the device.
+  Each probe says which mode it ran and why. A failed connection says so,
+  and suggests `validate: static`: the device may allow only one
+  connection.
 - **Not kept yet:** an applied configuration lasts until the controller
   restarts, which runs the manifest again. Until it is kept, an apply is
   refused on a project with `redundancy:`. While what runs differs from

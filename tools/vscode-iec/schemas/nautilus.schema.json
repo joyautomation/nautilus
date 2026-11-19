@@ -663,6 +663,10 @@
           },
           "description": "eip / modbus / opcua-client: glob patterns assigning tags to a scan class. Overrides the generated manifest, so imports stay regenerable and policy stays here."
         },
+        "validate": {
+          "enum": ["live", "static"],
+          "description": "modbus / opcua-client: how a live I/O configuration change checks this driver's devices: live probes each changed device on a connection of its own before the apply, static checks the configuration only. A devices: row's own validate: overrides it. Default: the device profile's (static when it documents modbus max-connections of 2 or fewer), else live."
+        },
         "broker": {
           "type": "string",
           "minLength": 1,
