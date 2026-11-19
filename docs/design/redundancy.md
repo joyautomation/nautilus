@@ -669,6 +669,41 @@ when its members address each other by DNS name, so peer traffic is kept apart f
   - **Other clients.** OPC UA clients aren't affected: the rule is HTTP-only. Scripts and
     `naut` subcommands send `NAUTILUS_TOKEN`, as #846 already makes them.
 
+### 6.2 The vote transport and the state files (`quorum/node`, #710 PR 3a)
+
+`quorum` is sans-IO; `quorum/node` drives it on real sockets, files and clocks, under the
+same driver contract as the simulator.
+
+- **Votes are HTTP.** A vote is `POST /quorum/v1/<pair>/vote` with the binary `Request`
+  frame, answered with the `Reply` frame. A handshake message is `POST …/adopt`, answered
+  204. The client-token check is `GET …/hello`. Connections are kept alive, and each call has
+  a deadline of lease/8. A grant waiting for its voter's fsync is answered when the write
+  completes, or not at all.
+- **Two headers on every call.** `X-Nautilus-Cluster` carries the peer token, the header
+  `oplog` already uses, so one check guards the whole peer port. `X-Nautilus-Lease` carries the
+  sender's lease. A voter refuses a request whose lease is longer than its own, because the
+  lease would outlive the promise it rests on. That covers two controllers with different
+  `lease:` values and a witness started with a shorter `--lease` than the pair's. A longer
+  witness lease is safe; it only slows a takeover.
+- **The client-token check** sends HMAC-SHA256, keyed with the peer token, over a fresh
+  challenge and the client token. The client token never leaves the process, and the
+  challenge keeps an old answer from being replayed.
+- **State files.** Each is written whole to a temporary file, fsynced, renamed over the old
+  one, and the directory fsynced. A crash at any instant leaves the old state or the new
+  one. An exclusive lock keeps a second process off the same file.
+  - **On a controller,** `quorum.state` lives in its **state directory**, systemd's
+    `StateDirectory` that `naut deploy` uses, beside the retain file. It never lives in the
+    project tree: a deploy replaces the project, and every redeploy would then need a
+    re-commission. A manifest or flag override exists. PR 3b wires it and checks that a
+    redeploy keeps it.
+  - **On the witness,** `naut witness --state <dir>` (default `$STATE_DIRECTORY`) holds one
+    `<pair>.quorum` per pair. A pair with no file gets a new incarnation at its first vote.
+  - **An unreadable file.** A controller with an unreadable file starts uncommissioned and
+    keeps the file aside. The witness refuses to start over an unreadable file unless
+    `--rebuild` is given: the file is then kept aside and the pair gets a new incarnation.
+- **The boot nonce** is drawn from `crypto/rand` at every start and written nowhere.
+- **Controllers** refuse to start without `CLOCK_BOOTTIME` (Linux). The witness runs anywhere.
+
 ## 7. Lone survivor and the engineer override
 
 A controller alone can't tell "both others are dead" from "I'm cut off and the other side has

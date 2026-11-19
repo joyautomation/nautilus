@@ -137,7 +137,7 @@ case caught it. A mutation joins the nightly run in the PR that builds the rule 
 | a restarted voter grants at once | design §3.1, the restart wait | 2 |
 | a voter answers before its fsync | design §3.1, fsync before answer | 2 |
 | the leader times its lease from the reply, not the request | design §3.1 | 2 |
-| the gate is judged on the elector's tick, not when it is read | design §3.2 | 3 |
+| the gate is judged on the elector's tick, not when it is read | design §3.2 | 3a (`gate_on_tick`) |
 | a new leader applies alarm state before its `oplog` catch-up | design §1, `oplog` | 3 |
 | `Liveness` ignores a loop between scans (the behaviour before #858) | design §3.2, starvation | 3 |
 | a standby's gated ticks don't count as on schedule | design §3.2, starvation | 3 |
@@ -149,7 +149,7 @@ case caught it. A mutation joins the nightly run in the PR that builds the rule 
 | a send with no deadline | design §3.4 | 3 |
 | no fence margin (the gate closes at lease expiry) | design §3.4 | 3 |
 | sockets closed with FIN, not RST, on fence | design §3.4, RST on fence | 3 |
-| the peer listener trusts a Host instead of requiring the peer token | design §6.1 | 3 |
+| the peer listener trusts a Host instead of requiring the peer token | design §6.1 | 3a (`peer_host_trusted`) |
 | the standby's proxy drops or rewrites the client's Host or token | design §6.1 | 3 |
 | no back-off after a lease lapses unconfirmed | design §3.1, one-way partitions | 2 |
 | grants accepted from any witness incarnation | design §3.1, the witness incarnation | 2 |
@@ -158,6 +158,11 @@ case caught it. A mutation joins the nightly run in the PR that builds the rule 
 | an incarnation adopted without the term floor | I4 | 2 (handshake) |
 | a proposer keeps counting the old incarnation while its proposal is in flight | design §3.1, forward only | 2 (handshake) |
 | a proposal adopted whatever its generation (a late or earlier-boot one splits the pair) | design §3.1, generations | 2 (handshake) |
+| the driver reports a write durable before it is on disk, so a grant leaves ahead of its fsync | design §3.1, fsync before answer; §6.2 | 3a |
+| the state file is rewritten in place, so a crash mid-write tears it | design §6.2 | 3a |
+| the boot nonce is the same at every start | design §3.1, request ids; §6.2 | 3a |
+| a voter grants a request whose lease outlives its own promise | design §6.2 | 3a |
+| the witness draws a new incarnation over a state file it can't read, without `--rebuild` | design §6.2 | 3a |
 | no switch hold-off: a stray copy answering on and off switches the pair every lease | design §3.1, when a switch is proposed | 2 (handshake) |
 | a restarted controller counts its adopted incarnation at once (no quiet period owed) | design §3.1, the quiet period | 2 (handshake) |
 | a lost controller takes an `Adopt` sent before its restart (a stale floor) | design §3.1, boots | 2 (handshake) |

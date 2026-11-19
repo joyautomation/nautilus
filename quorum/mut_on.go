@@ -50,6 +50,15 @@ var Mutations = []string{
 	"both_lost_recommission",      // both controllers uncommissioned, the pair re-commissions on its own (#976's automatic recovery)
 	"alarm_on_heard",              // an uncommissioned controller alarms although its peer's committed incarnation answered it
 	"recommission_any_floor",      // an operator's floor at or below what the controller knows is taken
+	// The driver's (quorum/node, #710 PR 3a): switched on there, listed
+	// here so this init accepts them.
+	"gate_on_tick",              // the gate is judged on the elector's look, not when it is read
+	"peer_host_trusted",         // the peer listener answers a trusted Host without the peer token
+	"persisted_before_write",    // a write is reported durable before it is on disk
+	"state_in_place",            // the state file is rewritten in place, so a crash tears it
+	"nonce_fixed",               // the boot nonce is the same at every start
+	"lease_unchecked",           // a voter grants a request whose lease outlives its own promise
+	"witness_rebuilds_silently", // the witness draws a new incarnation over a state file it can't read
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")

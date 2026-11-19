@@ -97,6 +97,15 @@ var table = []mutation{
 		"TestRegressionBothUncommissionedStray", "TestRegression976WitnessUnreachable"}},
 	{"alarm_on_heard", []string{"TestHeardCommittedIncarnationRaisesNoAlarm"}},
 	{"recommission_any_floor", []string{"TestRecommissionFloorAboveTheKnown"}},
+	// The driver, quorum/node (#710 PR 3a): the real transport, file and
+	// clock. Its loopback tests skip under a core mutation (above).
+	{"gate_on_tick", []string{"TestGateJudgedWhenRead"}},
+	{"peer_host_trusted", []string{"TestGuardRequiresThePeerToken"}},
+	{"persisted_before_write", []string{"TestGrantLeavesOnlyAfterTheWrite"}},
+	{"state_in_place", []string{"TestStateCrashMidWriteKeepsTheOld"}},
+	{"nonce_fixed", []string{"TestBootNonceDrawnPerStartNeverPersisted"}},
+	{"lease_unchecked", []string{"TestVoteLeaseLongerThanThePromiseRefused"}},
+	{"witness_rebuilds_silently", []string{"TestWitnessRefusesUnreadableStateWithoutRebuild"}},
 }
 
 // event is one line of `go test -json`.

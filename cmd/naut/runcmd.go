@@ -51,7 +51,7 @@ import (
 // electorFor builds the elector for a manifest with a `redundancy:` section
 // and wires the project to it (wireRedundancy); nil, and nothing wired, for
 // a manifest without one.
-func electorFor(proj *project.Project, addr string) (*leader.Elector, error) {
+func electorFor(proj *project.Project, addr string) (leader.Election, error) {
 	if proj.Redundancy == nil {
 		return nil, nil
 	}
@@ -171,7 +171,7 @@ const localGateLease = 4 * time.Second
 // device's watchdog acts. The runtime stays uncoordinated (no takeover at
 // start, forces kept) and the gate is open from the start, so a healthy
 // project's drivers see what they saw without it.
-func gateOnLiveScans(proj *project.Project, el *leader.Elector, rt *runtime.Runtime, lease time.Duration) *leader.Elector {
+func gateOnLiveScans(proj *project.Project, el leader.Election, rt *runtime.Runtime, lease time.Duration) leader.Election {
 	gate := el
 	if gate == nil {
 		gate = leader.NewLocal(proj.Name, lease)
