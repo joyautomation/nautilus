@@ -50,17 +50,35 @@ import (
 
 // electorFor builds the elector for a manifest with a `redundancy:` section
 // and wires the project to it (wireRedundancy); nil, and nothing wired, for
-// a manifest without one.
-func electorFor(proj *project.Project, addr string) (leader.Election, error) {
+// a manifest without one. A section with peers: makes this controller a
+// member of a redundant pair (pairrun.go): the member comes back too, its
+// peer listener already serving, for the caller to Close after the
+// election's last Release. dir is the project's checkout ("" for a built
+// controller).
+func electorFor(proj *project.Project, addr, dir string) (leader.Election, *pairMember, error) {
+	return electorWith(proj, addr, dir, osPairDeps())
+}
+
+// electorWith is electorFor with a pair member's environment and listen
+// call given (tests).
+func electorWith(proj *project.Project, addr, dir string, deps pairDeps) (leader.Election, *pairMember, error) {
 	if proj.Redundancy == nil {
-		return nil, nil
+		return nil, nil, nil
+	}
+	if proj.Redundancy.Pair() {
+		m, err := newPairMember(proj.Redundancy, addr, dir, deps)
+		if err != nil {
+			return nil, nil, err
+		}
+		wireRedundancy(proj, m.q)
+		return m.q, m, nil
 	}
 	el, err := leader.New(proj.LeaseName(), os.Getenv("POD_NAME"), selfAddr(addr))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	wireRedundancy(proj, el)
-	return el, nil
+	return el, nil, nil
 }
 
 // firstDecisionTimeout bounds how long runProject waits for the elector's
@@ -187,6 +205,23 @@ func gateOnLiveScans(proj *project.Project, el leader.Election, rt *runtime.Runt
 	return gate
 }
 
+// replicaReady is runProject's READY=1 rule: scanned, or as a replica
+// decided to stand by, or as a pair member up for firstDecisionTimeout.
+func replicaReady(scanned bool, el leader.Election, pair bool, up time.Duration) bool {
+	if scanned {
+		return true
+	}
+	if el == nil {
+		return false
+	}
+	select {
+	case <-el.Decided():
+		return !el.IsLeader()
+	default:
+		return pair && up >= firstDecisionTimeout
+	}
+}
+
 // runProject hosts a loaded project: scan loop + tag API, Ctrl+C to stop.
 // dir is the project's on-disk path when running from a checkout ("" for a
 // built binary's embedded project) — it's where live git history capture
@@ -226,10 +261,18 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	// last leader saved. Outside a cluster the elector is standalone
 	// (always leader) and the retain store is the JSON file — the same
 	// manifest runs on a bench and as a replica set.
-	el, err := electorFor(proj, addr)
+	el, pair, err := electorFor(proj, addr, dir)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "naut run: redundancy:", err)
 		return 1
+	}
+	if pair != nil {
+		// Registered first, so it runs last: the peer listener answers
+		// votes until the election below has stopped and released.
+		defer pair.Close()
+		for _, h := range pair.untrustedAPIs(append(server.EnvAllowedHosts(), proj.Server.AllowedHosts...)) {
+			fmt.Fprintf(os.Stderr, "naut run: redundancy: the pair advertises a tag API at %s, which NAUTILUS_ALLOWED_HOSTS does not list: a browser HMI that follows the leader there is refused (403). Add it to NAUTILUS_ALLOWED_HOSTS on both controllers, or name the controllers by IP in redundancy.peers\n", h)
+		}
 	}
 	if proj.Retain != nil {
 		cm, file := proj.RetainNames()
@@ -483,20 +526,14 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	banner += schedBannerSuffix(settledSched(rt, 500*time.Millisecond))
 	fmt.Println(wrapBanner(banner+" — Ctrl+C to stop", consoleWidth(os.Stdout)))
 	// READY=1 once a scan has completed or, as a replica, once the elector
-	// has decided this one is a standby, which does not scan.
+	// has decided this one is a standby, which does not scan. A pair
+	// member is a voter too, and must stay up with no leader to vote for
+	// (a new pair waiting to be commissioned, a peer and witness both
+	// away): it is ready after firstDecisionTimeout either way, or systemd
+	// would restart it in a loop, each restart a new restart wait.
+	started := time.Now()
 	go systemdNotify(ctx, sd, watch, func() bool {
-		if rt.Stats().Count > 0 {
-			return true
-		}
-		if el == nil {
-			return false
-		}
-		select {
-		case <-el.Decided():
-			return !el.IsLeader()
-		default:
-			return false
-		}
+		return replicaReady(rt.Stats().Count > 0, el, pair != nil, time.Since(started))
 	})
 	<-ctx.Done()
 	// Give the HTTP port back first. Held through the wait below, a `naut
@@ -1253,6 +1290,10 @@ Environment:
                            answers by without the token, besides localhost
                            and an IP address
   NAUTILUS_HISTORIAN_URL   historian the dashboard queries for trends
+  NAUTILUS_NODE            a or b: which controller of a redundant pair
+                           (redundancy: peers:) this one is
+  NAUTILUS_PEER_TOKEN      the secret every peer and witness request carries
+  NAUTILUS_CLUSTER         the pair's cluster ID, drawn when it is commissioned
   NAUTILUS_CLI=1           run the naut command line instead of the controller
 
 Retained state (the manifest's retain: block) is written to retain.json in the

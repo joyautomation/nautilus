@@ -13,10 +13,12 @@ import (
 	"io"
 	"io/fs"
 	"math"
+	"net"
 	"os"
 	"path"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"time"
 
@@ -312,14 +314,122 @@ func (p *Project) AuditJournal() (dir string, keep time.Duration) {
 	return dir, keep
 }
 
-// RedundancyConfig turns on Lease-based leader election: replicas of this
-// controller elect one scanning leader, the rest stand by. Outside a
-// cluster the elector is standalone and always leader, so the same
-// manifest runs on a bench and in the cluster. `redundancy: {}` takes the
-// default lease name.
+// RedundancyConfig turns on leader election: replicas of this controller
+// elect one scanning leader, the rest stand by. It has two modes:
+//
+//   - The Kubernetes Lease (no peers:): replicas in a cluster elect through
+//     a coordination.k8s.io Lease. Outside a cluster the elector is
+//     standalone and always leader, so the same manifest runs on a bench
+//     and in the cluster. `redundancy: {}` takes the default lease name.
+//   - A redundant pair with a witness (peers: and witness:,
+//     docs/design/redundancy.md §2): two controllers and a third voter,
+//     without Kubernetes. NAUTILUS_NODE says which of the two this one is.
 type RedundancyConfig struct {
-	// Lease names the coordination.k8s.io Lease (default: the project name).
+	// Lease is the coordination.k8s.io Lease's name without peers:
+	// (default: the project name). With peers: it is the lease time
+	// (default 2s), a duration: a name there is refused.
 	Lease string `yaml:"lease"`
+	// Peers names the pair's two controllers, a and b, by their peer
+	// listeners (host:port). Both controllers run the same file.
+	Peers map[string]string `yaml:"peers"`
+	// Witness is the third voter's peer listener (host:port, `naut
+	// witness`). Required with peers:.
+	Witness string `yaml:"witness"`
+	// StateDir is where a pair member keeps its voter state (an absolute
+	// path). Default: $STATE_DIRECTORY, which systemd's StateDirectory=
+	// sets (naut deploy's /var/lib/nautilus). Never the project tree: a
+	// deploy replaces the project.
+	StateDir string `yaml:"state-dir"`
+}
+
+// Pair reports whether the section names a redundant pair (peers:)
+// rather than the Kubernetes Lease.
+func (r *RedundancyConfig) Pair() bool { return r != nil && len(r.Peers) > 0 }
+
+// DefaultPairLease is a pair's lease time when the manifest names none
+// (design §2).
+const DefaultPairLease = 2 * time.Second
+
+// Bounds on a pair's lease: shorter, and a vote round with its fsync
+// (deadline lease/8) does not fit; longer, and a takeover waits minutes.
+const (
+	minPairLease = 200 * time.Millisecond
+	maxPairLease = time.Minute
+)
+
+// LeaseTime is a pair's lease (DefaultPairLease when unset). Load has
+// checked it.
+func (r *RedundancyConfig) LeaseTime() time.Duration {
+	d, err := time.ParseDuration(r.Lease)
+	if r.Lease == "" || err != nil {
+		return DefaultPairLease
+	}
+	return d
+}
+
+// checkRedundancy validates a pair's section: two named controllers, a
+// witness, a lease time, an absolute state directory. The Kubernetes mode
+// takes only lease:, so a witness or a state directory without peers: is
+// refused rather than ignored.
+func checkRedundancy(r *RedundancyConfig) error {
+	if r == nil {
+		return nil
+	}
+	if !r.Pair() {
+		switch {
+		case r.Peers != nil:
+			return errors.New("redundancy.peers is empty: a redundant pair names its two controllers, a and b (host:port of each peer listener)")
+		case r.Witness != "":
+			return errors.New("redundancy.witness needs peers: (the pair's two controllers, a and b); without peers: the section selects the Kubernetes Lease, which has no witness")
+		case r.StateDir != "":
+			return errors.New("redundancy.state-dir needs peers:; the Kubernetes Lease mode keeps no voter state")
+		}
+		return nil
+	}
+	for name := range r.Peers {
+		if name != "a" && name != "b" {
+			return fmt.Errorf("redundancy.peers: %q is not a controller of the pair: name them a and b (NAUTILUS_NODE says which one runs)", name)
+		}
+	}
+	for _, name := range []string{"a", "b"} {
+		if err := checkPeerAddr("redundancy.peers."+name, r.Peers[name]); err != nil {
+			return err
+		}
+	}
+	if r.Peers["a"] == r.Peers["b"] {
+		return fmt.Errorf("redundancy.peers: a and b are both %s: each controller has its own peer listener", r.Peers["a"])
+	}
+	if r.Witness == "" {
+		return errors.New("redundancy.witness is required with peers:: the pair's third voter (host:port of `naut witness`)")
+	}
+	if err := checkPeerAddr("redundancy.witness", r.Witness); err != nil {
+		return err
+	}
+	if r.Lease != "" {
+		d, err := time.ParseDuration(r.Lease)
+		switch {
+		case err != nil:
+			return fmt.Errorf("redundancy.lease %q: with peers: the lease is a time (e.g. 2s), not a name; a Lease name belongs to the Kubernetes mode, which has no peers:", r.Lease)
+		case d < minPairLease || d > maxPairLease:
+			return fmt.Errorf("redundancy.lease %s: want between %s and %s", d, minPairLease, maxPairLease)
+		}
+	}
+	if r.StateDir != "" && !filepath.IsAbs(r.StateDir) {
+		return fmt.Errorf("redundancy.state-dir %q: want an absolute path outside the project (the voter state must outlive a deploy)", r.StateDir)
+	}
+	return nil
+}
+
+// checkPeerAddr wants host:port with both parts.
+func checkPeerAddr(key, addr string) error {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil || host == "" {
+		return fmt.Errorf("%s %q: want host:port", key, addr)
+	}
+	if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+		return fmt.Errorf("%s %q: want a port from 1 to 65535", key, addr)
+	}
+	return nil
 }
 
 // maxDeviceDeathDelay bounds sparkplug.device-death-delay: a held death
@@ -1100,6 +1210,9 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 	}
 	opts.Substitutable = substitutableRoots(substitutes)
 	if err := checkNetworkSections(m); err != nil {
+		return nil, err
+	}
+	if err := checkRedundancy(m.Redundancy); err != nil {
 		return nil, err
 	}
 	if opts.Channels, err = buildChannels(m); err != nil {

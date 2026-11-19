@@ -81,12 +81,24 @@ redundancy:
     b: ctl-b:9450
   witness: witness-host:9460
   lease: 2s              # default; the takeover time it gives is published
+  state-dir: /srv/naut   # optional: default $STATE_DIRECTORY (systemd)
   stream: every-scan     # or {every: 5}: one image per 5 scans
   stream-link: ctl-a-link:9451   # optional dedicated A–B cable (§6)
 ```
 
+- **Two modes, one section.** `peers:` selects the pair. Without it, `redundancy:` is the
+  Kubernetes Lease as before, and `lease:` is the Lease's name. With it, `lease:` is a time
+  (200 ms to 1 min), and a name there is refused. `witness:` or `state-dir:` without `peers:`
+  is refused rather than ignored.
 - **Self.** Both controllers run one build, so the manifest can't say which controller it is.
   `NAUTILUS_NODE=a|b` says so, and `tools/deploy` sets it per box.
+- **The cluster ID** (§6.2) is `NAUTILUS_CLUSTER`, beside `NAUTILUS_PEER_TOKEN` in
+  `/etc/nautilus/env`, outside the state directory. A controller whose state directory is wiped
+  therefore still starts, and re-adopts the pair's witness incarnation from its peer (#976).
+  Commissioning (3c) draws it and installs it on A, B and the witness. A member started
+  without it is refused, with a message that says how to commission.
+- **The tag API addresses** that `/api/cluster` and the standby's proxy use are each
+  controller's `peers:` host with this controller's API port: both run one manifest.
 - **Misconfiguration is refused at start, never resolved quietly.** A peer list that differs
   between A and B is refused. So are two processes that both claim to be `a`: each process
   carries a random instance id, and the voters see two different ids under one name.
@@ -736,8 +748,11 @@ same driver contract as the simulator.
   - **On a controller,** `quorum.state` lives in its **state directory**, systemd's
     `StateDirectory` that `naut deploy` uses, beside the retain file. It never lives in the
     project tree: a deploy replaces the project, and every redeploy would then need a
-    re-commission. A manifest or flag override exists. PR 3b wires it and checks that a
-    redeploy keeps it.
+    re-commission. `redundancy: state-dir:` overrides it; without either, a member refuses to
+    start, and so does one whose state directory is inside the project's checkout. Every
+    `naut deploy` step (install, update, a failed update's rollback, rollback, restore,
+    uninstall without `-purge`) leaves the file untouched, and a backup never carries it: an
+    old voter state put back would unsay a promise (`TestDeployBoxKeepsTheVoterState`).
   - **On the witness,** `naut witness --state <dir>` (default `$STATE_DIRECTORY`) holds one
     `<cluster>.quorum` and one `<cluster>.members` per pair. A pair with no file gets a new
     incarnation at its first vote.
@@ -746,6 +761,16 @@ same driver contract as the simulator.
     `--rebuild` is given: the file is then kept aside and the pair gets a new incarnation.
 - **The boot nonce** is drawn from `crypto/rand` at every start and written nowhere.
 - **Controllers** refuse to start without `CLOCK_BOOTTIME` (Linux). The witness runs anywhere.
+- **In `naut run`** (#710 PR 3b-1), a member's peer listener binds its own `peers:` port on
+  every address, behind the peer token, with the witness's timeouts and at most 64
+  connections. The state file's lock is taken first, so a second process of the same
+  controller stops before it binds or votes. The listener closes only after the election's
+  last `Release`. A member is a voter even with no leader to elect, so it sends systemd
+  `READY=1` after the first-decision timeout (5 s) either way: otherwise `TimeoutStartSec`
+  would restart it in a loop, and every restart is a new restart wait.
+- **Retained values in a pair** are each controller's own `retain.json` until the state
+  stream (§4): a cold takeover loads the new leader's file, which holds what it last saved
+  as a leader. Live I/O applies stay refused for a pair (a file store reaches one replica).
 
 ## 7. Lone survivor and the engineer override
 
