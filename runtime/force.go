@@ -177,6 +177,11 @@ func (t *Tags) force(addr string, v any, strict bool) error {
 	if tv.v.Kind == ir.TypeFB {
 		return fmt.Errorf("tag %s is a function-block instance — force one of its pins' tags instead", root)
 	}
+	if tv.owned {
+		// The runtime stores a companion past the force layer: a force on
+		// one would show in the table and hold nothing.
+		return fmt.Errorf("tag %s is set by the runtime from the substitute table and cannot be forced: %w", root, ErrReadOnly)
+	}
 	fs := t.forces[root]
 	base := tv.v
 	if fs != nil {

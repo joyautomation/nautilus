@@ -108,6 +108,16 @@ type Tags struct {
 	// every change to the table.
 	subs   map[string]*subSet
 	subRev uint64
+	// The substitute companions and the expiry pulse (substitute_expiry.go):
+	// each substitutable root's __Substituted flag, the resource-wide
+	// flags' stored names ("" when undeclared), the pulse, and subBusy,
+	// which a scan loads to skip the substitute step when there is
+	// nothing to time.
+	subComp                      []subCompanion
+	subUnackedTag, subExpiredTag string
+	pulseOn, pulseSeen           bool
+	pulseAt                      time.Duration
+	subBusy                      atomic.Bool
 }
 
 // tagVal is one stored tag: its value and the store generation at which
@@ -123,6 +133,10 @@ type tagVal struct {
 	forced bool // the tag has an entry in Tags.forces; see force.go
 	// substituted: the tag has an entry in Tags.subs; see substitute.go
 	substituted bool
+	// owned: a substitute companion, which only the runtime sets. A write
+	// to it from anyone else is refused (Tags.Write, Force) or dropped (a
+	// program's), as a write to a forced tag is. See substitute_expiry.go.
+	owned bool
 	// held: an output seeded at its type's zero (no init:) that nothing has
 	// written yet. The logic and every reader see the zero; readMany, the
 	// driver push, leaves it out until the first write. See Tags.hold.
@@ -188,6 +202,9 @@ func (t *Tags) WriteGlobal(name string, v ir.Value) error {
 func (t *Tags) writeLocked(name string, v ir.Value) bool {
 	if cur, key, ok := t.lookupLocked(name); ok {
 		name = key
+		if cur.owned {
+			return false
+		}
 		if cur.substituted {
 			// A substituted input: what the writer delivered becomes its
 			// LIVE value, and the substitutes are laid over it, under any

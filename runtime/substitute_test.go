@@ -14,6 +14,27 @@ import (
 // Substitute values (#707): the store layering, the API's entry rules and
 // quality. Expiry, companions, acknowledgement and events come in PR 1b.
 
+// newSubRig is newForceRig's seal-in rig with its three inputs
+// substitutable.
+func newSubRig(t *testing.T, coord Coordinator) (*Runtime, *fieldDriver) {
+	t.Helper()
+	d := &fieldDriver{in: nio.Values{"StartPB": false, "StopPB": false, "Level": 10.0}}
+	rt, err := New(Options{
+		Program: sealInProgram,
+		Driver:  d,
+		Tags: []TagDef{
+			Input("StartPB"), Input("StopPB"), Input("Level"),
+			Output("Motor", Init(false)), Output("Alarm", Init(false)),
+		},
+		Coordinator:   coord,
+		Substitutable: []string{"StartPB", "StopPB", "Level"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return rt, d
+}
+
 func sub(t *testing.T, rt *Runtime, addr string, v any) Substitution {
 	t.Helper()
 	s, err := rt.Substitute(addr, SubstituteRequest{Value: v, For: time.Hour, By: "op"})
@@ -28,7 +49,7 @@ func sub(t *testing.T, rt *Runtime, addr string, v any) Substitution {
 // value as Live, and Restore puts the live value back at once (not on the
 // next delivery).
 func TestSubstituteInputOverridesDriver(t *testing.T) {
-	rt, d := newForceRig(t, nil)
+	rt, d := newSubRig(t, nil)
 	rt.Scan()
 	s := sub(t, rt, "Level", 95)
 	if s.ID == 0 || s.Name != "Level" || s.Value != 95.0 || s.By != "op" || s.GrantedMs != time.Hour.Milliseconds() {
@@ -44,7 +65,7 @@ func TestSubstituteInputOverridesDriver(t *testing.T) {
 	if len(list) != 1 || list[0].Live != 10.0 || list[0].LiveQuality != "good" || list[0].ID != s.ID {
 		t.Fatalf("Substitutes() = %+v; want Live 10 and LiveQuality good", list)
 	}
-	if _, ok := rt.Restore(s.ID); !ok {
+	if _, ok := rt.Restore(s.ID, "op"); !ok {
 		t.Fatal("Restore of the active entry reported none")
 	}
 	if got := rt.Tags().Real("Level"); got != 10 {
@@ -74,7 +95,7 @@ func TestSubstituteUnderForce(t *testing.T) {
 			}
 			*id = s.ID
 		},
-		"restore": func(rt *Runtime, id *uint64) { rt.Restore(*id) },
+		"restore": func(rt *Runtime, id *uint64) { rt.Restore(*id, "op") },
 	}
 	for _, tc := range []struct {
 		order []string
@@ -86,7 +107,7 @@ func TestSubstituteUnderForce(t *testing.T) {
 		{[]string{"force", "substitute", "restore", "unforce"}, []float64{50, 50, 50, 10}},
 	} {
 		t.Run(strings.Join(tc.order, ","), func(t *testing.T) {
-			rt, _ := newForceRig(t, nil)
+			rt, _ := newSubRig(t, nil)
 			rt.Scan()
 			var id uint64
 			// While both hold, the force's Actual is the substitute, from
@@ -175,7 +196,7 @@ func TestSubstituteStructMember(t *testing.T) {
 // A substitute started again on the same address is a new entry: the old
 // ID is gone, so a late Restore naming it does not end the newer one.
 func TestRestoreStaleIDKeepsTheNewerEntry(t *testing.T) {
-	rt, _ := newForceRig(t, nil)
+	rt, _ := newSubRig(t, nil)
 	rt.Scan()
 	old := sub(t, rt, "Level", 90)
 	newer := sub(t, rt, "Level", 95)
@@ -185,20 +206,20 @@ func TestRestoreStaleIDKeepsTheNewerEntry(t *testing.T) {
 	if n := rt.Tags().SubstituteCount(); n != 1 {
 		t.Fatalf("%d entries after re-substituting one address; want 1", n)
 	}
-	if _, ok := rt.Restore(old.ID); ok {
+	if _, ok := rt.Restore(old.ID, "op"); ok {
 		t.Fatal("Restore of the replaced entry reported success")
 	}
 	rt.Scan()
 	if got := rt.Tags().Real("Level"); got != 95 {
 		t.Fatalf("Level = %v; a stale Restore ended the newer substitute", got)
 	}
-	if _, ok := rt.Restore(newer.ID); !ok {
+	if _, ok := rt.Restore(newer.ID, "op"); !ok {
 		t.Fatal("Restore of the newer entry failed")
 	}
 }
 
 func TestSubstituteRefusals(t *testing.T) {
-	rt, _ := newForceRig(t, nil)
+	rt, _ := newSubRig(t, nil)
 	rt.Scan()
 	for _, tc := range []struct {
 		name string
@@ -225,7 +246,7 @@ func TestSubstituteRefusals(t *testing.T) {
 
 // A replicated entry brings its own ID; the next assigned one follows it.
 func TestSubstituteSuppliedIDAdvancesTheSequence(t *testing.T) {
-	rt, _ := newForceRig(t, nil)
+	rt, _ := newSubRig(t, nil)
 	rt.Scan()
 	if _, err := rt.Substitute("Level", SubstituteRequest{Value: 5, For: time.Hour, ID: 41}); err != nil {
 		t.Fatal(err)
@@ -239,7 +260,7 @@ func TestSubstituteSuppliedIDAdvancesTheSequence(t *testing.T) {
 // run the plant, and PR 3 replicates them).
 func TestTakeoverKeepsSubstitutes(t *testing.T) {
 	coord := &flag{lead: true}
-	rt, _ := newForceRig(t, coord)
+	rt, _ := newSubRig(t, coord)
 	rt.Scan()
 	sub(t, rt, "Level", 95)
 	_ = rt.Tags().Force("StartPB", true)
@@ -328,7 +349,8 @@ END_PROGRAM`
 		qd := &qualDriver{fieldDriver: fd, q: map[string]nio.Quality{}}
 		rt, err := New(Options{
 			Program: prog, Libraries: []string{lib}, Driver: qd, Coordinator: coord,
-			Tags: []TagDef{Input("Level"), Typed("P1", RoleInput, "Pump"), Input("Flow"), Output("Out", Init(0.0))},
+			Substitutable: []string{"Level", "P1", "Flow"},
+			Tags:          []TagDef{Input("Level"), Typed("P1", RoleInput, "Pump"), Input("Flow"), Output("Out", Init(0.0))},
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -383,7 +405,8 @@ func TestProgramMemberWriteKeepsTheSubstituteOutOfLive(t *testing.T) {
 	rt, err := New(Options{
 		Program:   "PROGRAM M\nVAR_EXTERNAL P1 : Pump; END_VAR\nP1.Run := TRUE;\nEND_PROGRAM",
 		Libraries: []string{lib}, Driver: fd,
-		Tags: []TagDef{Typed("P1", RoleInput, "Pump")},
+		Tags:          []TagDef{Typed("P1", RoleInput, "Pump")},
+		Substitutable: []string{"P1"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -411,7 +434,7 @@ func TestProgramMemberWriteKeepsTheSubstituteOutOfLive(t *testing.T) {
 	if live, _ := rt.tags.readActual("P1"); live.Fld[1].F != 20 {
 		t.Fatalf("live (retained) Speed = %v; want 20", live.Fld[1].F)
 	}
-	rt.Restore(s.ID)
+	rt.Restore(s.ID, "op")
 	if v, _ := rt.Tags().ReadPath("P1.Speed"); v != 20.0 {
 		t.Fatalf("P1.Speed = %v after Restore; want the delivered 20", v)
 	}

@@ -1,6 +1,11 @@
 package runtime
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+
+	"github.com/joyautomation/nautilus/lang/ir"
+)
 
 // The write front door: every write from outside a program — an operator's
 // POST /api/tags, an OPC UA client's Write — goes through Tags.Write, so
@@ -16,6 +21,8 @@ import "errors"
 //     member of an enumeration (#421: an INT used to take 70000).
 //   - It refuses a forced address (ErrForced): the force would swallow the
 //     write, and answering "done" for it would be a lie.
+//   - It refuses a tag only the runtime sets (ErrReadOnly): a substitute
+//     companion follows the substitute table, nothing else.
 //
 // A request's items apply in order under one store lock, so a scan's
 // snapshot sees all of a request's accepted items or none: a Hi/Lo limit
@@ -37,7 +44,24 @@ var (
 	// ErrForced: the address, a member of it or a tag containing it is
 	// forced.
 	ErrForced = errors.New("forced")
+	// ErrReadOnly: the tag is one only the runtime sets (a substitute
+	// companion, such as LS_1__Substituted).
+	ErrReadOnly = errors.New("read-only")
 )
+
+// readOnlyLocked returns ErrReadOnly, named, when path is (in) a tag only
+// the runtime sets. Caller holds t.mu.
+func (t *Tags) readOnlyLocked(path string) error {
+	tv, key, ok := t.lookupLocked(path)
+	if !ok {
+		root, _ := ir.SplitAddress(path)
+		tv, key, ok = t.lookupLocked(root)
+	}
+	if ok && tv.owned {
+		return fmt.Errorf("tag %s is set by the runtime from the substitute table: %w", key, ErrReadOnly)
+	}
+	return nil
+}
 
 // ForcedError names the force a write was refused for.
 type ForcedError struct {
@@ -61,6 +85,10 @@ func (t *Tags) Write(ops []WriteOp) []error {
 	for i, op := range ops {
 		if f := t.forcedOverlapLocked(op.Path); f != "" {
 			errs[i] = &ForcedError{Path: op.Path, Force: f}
+			continue
+		}
+		if err := t.readOnlyLocked(op.Path); err != nil {
+			errs[i] = err
 			continue
 		}
 		errs[i] = t.setPathLocked(op.Path, op.Value, true)

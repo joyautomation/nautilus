@@ -482,13 +482,16 @@ requirements agreed on #707. They join the run in #707's oplog PR, which builds 
    - **The leader that applies it** times the granted duration on `CLOCK_BOOTTIME`, from
      when it applied it.
    - **A new leader** computes the remainder **once, at takeover**, from the entry's
-     wall-clock `until` on its own clock: `until − now`. NTP-level skew between the pair
-     (seconds) is accepted. Then it times that remainder on `CLOCK_BOOTTIME`. A takeover
-     never restarts the full duration.
+     wall-clock `until` on its own clock: `until − now`. Skew between the pair up to the
+     skew bound, **30 s** (`runtime.SubstituteSkew`), is accepted. Then it times that
+     remainder on `CLOCK_BOOTTIME`. A takeover never restarts the full duration.
    - **A remainder outside its bounds** means the new leader's wall clock was stepped: below
-     zero, the substitute has expired. Above the granted duration plus the skew bound of
-     **30 s** (a named constant in the #707 code), it is capped at the granted duration and
-     raises `__Substitute_Fault`.
+     zero, the substitute has expired. Above the granted duration it is capped there; above
+     the granted duration plus the 30 s skew bound, the cap also raises the alarm
+     (`__Substitute_Fault`, PR 3; until then a `fault` event, reason `clock-capped`).
+     A leader that was already timing the entry (it led before, as in A→B→A) keeps the
+     earlier of its own deadline and the one from `until`: a wall clock stepped back while
+     it stood by never stretches the substitute.
    - **A single controller across a restart** works the same way: the remainder comes from
      `until`, so downtime counts toward the duration.
    - Steps: step the leader's clock ±1 h mid-substitute; it still ends at its granted time.

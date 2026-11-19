@@ -130,6 +130,12 @@ type Options struct {
 	// Channels are the communication channels READ and WRITE blocks run
 	// on, by name (see channels.go). Run closes them when it returns.
 	Channels []Channel
+	// Substitutable names the inputs a substitute may be started on
+	// (#707; Runtime.Substitute refuses any other). Each gets a read-only
+	// BOOL companion <name>__Substituted, and a non-empty list adds
+	// __SubstitutesUnacked and __Substitute_Expired: declared here, so the
+	// programs bind them like any tag. See substitute_expiry.go.
+	Substitutable []string
 }
 
 // Task is one additional program in the resource: its source, its own
@@ -229,6 +235,12 @@ type Runtime struct {
 	// is the highest entry ID seen.
 	subMu  sync.Mutex
 	subSeq uint64
+	// subRoots is Options.Substitutable by NameKey; mono is the clock
+	// substitutes are timed on; subEvents hands their events out. See
+	// substitute_expiry.go.
+	subRoots  map[string]struct{}
+	mono      func() time.Duration
+	subEvents subEventQueue
 	// loopSleep is Options.LoopSleep: nil sleeps on the wall clock.
 	loopSleep func(task string, ctx context.Context, until time.Time) bool
 
@@ -458,6 +470,12 @@ func New(o Options) (*Runtime, error) {
 	if len(o.Libraries) > 0 {
 		o.Program = stproject.Join(o.Libraries, o.Program)
 	}
+	// Substitute companions are tags the programs bind: declared before
+	// anything compiles.
+	comps, err := declareSubstituteCompanions(&o)
+	if err != nil {
+		return nil, err
+	}
 	scope, err := tagScopeFor(o)
 	if err != nil {
 		return nil, err
@@ -619,6 +637,10 @@ func New(o Options) (*Runtime, error) {
 		retainStore: o.Retain, retainTags: retainTags, coord: o.Coordinator,
 		alwaysWrite: o.AlwaysWriteOutputs, holdOnSwap: o.HoldOutputsOnSwap, untypedComms: untyped,
 	}
+	if err := r.ownSubstituteCompanions(o.Substitutable, comps); err != nil {
+		return nil, err
+	}
+	r.mono = monoFor(o.Clock)
 	if a, ok := o.Driver.(nio.OutputsRequester); ok {
 		r.asker = a
 	}
@@ -1448,10 +1470,14 @@ func (r *Runtime) scanAt(due time.Time) {
 	if r.dtTag != "" {
 		r.tags.SetReal(r.dtTag, dt)
 	}
+	// Substitutes expire here: after the read, whether or not it
+	// succeeded, and before the logic (substitute_expiry.go).
+	r.expireSubstitutes()
 	t1 := time.Now()
 
 	// 2. execute one scan
 	logicErr := r.prog.Run(r.tags)
+	r.pulseSeen()
 	t2 := time.Now()
 
 	// 3. outputs — a push of what CHANGED. The generation stamp over the

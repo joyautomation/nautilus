@@ -66,6 +66,10 @@ type Substitution struct {
 	// acknowledgement of this substitute. Acked says whether it has had one.
 	AckOnStart bool `json:"ackOnStart"`
 	Acked      bool `json:"acked"`
+	// RemainingMs is the time left, on the clock the runtime times it on
+	// (not the wall clock: see substitute_expiry.go). Filled in by
+	// Runtime.Substitutes.
+	RemainingMs int64 `json:"remainingMs"`
 }
 
 // SubstituteRequest is what starting a substitute takes besides the address.
@@ -102,6 +106,11 @@ type subEntry struct {
 	Substitution
 	path []string // member path below the root; nil = the whole tag
 	val  ir.Value // the substitute, coerced to the member's type
+	// deadline is when it expires on the runtime's monotonic clock
+	// (Runtime.mono), once timed is set: this process has timed it since
+	// it applied it. See substitute_expiry.go.
+	deadline time.Duration
+	timed    bool
 }
 
 // apply lays every substitute of the set over v. Entries were checked and
@@ -110,6 +119,13 @@ type subEntry struct {
 func (ss *subSet) apply(v ir.Value) ir.Value {
 	for i := range ss.entries {
 		e := &ss.entries[i]
+		if e.path == nil {
+			// The whole tag, coerced to its type at the start: laid
+			// directly, without boxing it for SetFieldTyped (an allocation
+			// on every delivery).
+			v = ir.CopyValue(e.val)
+			continue
+		}
 		if nv, err := ir.SetFieldTyped(v, ss.typ, e.path, e.val, ""); err == nil {
 			v = nv
 		}
@@ -175,6 +191,7 @@ func (t *Tags) substituteLocked(addr string, v any, e subEntry) (Substitution, *
 	}
 	t.restackLocked(root, tv, ss)
 	t.subRev++
+	t.syncSubLocked()
 	return e.Substitution, replaced, nil
 }
 
@@ -201,6 +218,7 @@ func (t *Tags) unsubstituteLocked(id uint64) (Substitution, bool) {
 				t.restackLocked(root, tv, ss)
 			}
 			t.subRev++
+			t.syncSubLocked()
 			return t.reportLocked(ss, &e), true
 		}
 	}
@@ -244,14 +262,17 @@ func (t *Tags) reportLocked(ss *subSet, e *subEntry) Substitution {
 	return s
 }
 
-// substitutions lists the active substitutes, sorted by address.
-func (t *Tags) substitutions() []Substitution {
+// substitutions lists the active substitutes, sorted by address, with
+// their time left at now on the runtime's monotonic clock.
+func (t *Tags) substitutions(now time.Duration) []Substitution {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	var out []Substitution
 	for _, ss := range t.subs {
 		for i := range ss.entries {
-			out = append(out, t.reportLocked(ss, &ss.entries[i]))
+			s := t.reportLocked(ss, &ss.entries[i])
+			s.RemainingMs = max(0, (ss.entries[i].deadline - now).Milliseconds())
+			out = append(out, s)
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
@@ -318,9 +339,10 @@ func (t *Tags) eachSubstitutedRoot(fn func(root string, s subState)) {
 	}
 }
 
-// Substitute starts a substitute on addr, a driver-bound input or a member
-// of one, for req.For. The value is checked as a write to addr would be.
-// Substituting an address that already has one ends that entry and starts
+// Substitute starts a substitute on addr, a substitutable input
+// (Options.Substitutable) or a member of one, for req.For. The value is
+// checked as a write to addr would be. Substituting an address that
+// already has one ends that entry (a stop, reason "replaced") and starts
 // a new one (never an extension). The returned entry carries its ID.
 func (r *Runtime) Substitute(addr string, req SubstituteRequest) (Substitution, error) {
 	if req.For <= 0 {
@@ -332,6 +354,9 @@ func (r *Runtime) Substitute(addr string, req SubstituteRequest) (Substitution, 
 	}
 	if !r.isInput(root) {
 		return Substitution{}, fmt.Errorf("substitute %s: only a driver-bound input can be substituted", addr)
+	}
+	if !r.substitutable(root) {
+		return Substitution{}, fmt.Errorf("substitute %s: %s is not substitutable (no substitutes: rule names it), so it has no %s flag for the logic to interlock on", addr, root, SubstitutedSuffix)
 	}
 	r.subMu.Lock()
 	defer r.subMu.Unlock()
@@ -349,9 +374,10 @@ func (r *Runtime) Substitute(addr string, req SubstituteRequest) (Substitution, 
 			StartMs: wall.UnixMilli(), UntilMs: wall.Add(req.For).UnixMilli(),
 			GrantedMs: req.For.Milliseconds(),
 		},
+		deadline: r.mono() + req.For, timed: true,
 	}
 	r.tags.mu.Lock()
-	s, _, err := r.tags.substituteLocked(addr, req.Value, e)
+	s, replaced, err := r.tags.substituteLocked(addr, req.Value, e)
 	r.tags.mu.Unlock()
 	if err != nil {
 		return Substitution{}, fmt.Errorf("substitute %s: %w", addr, err)
@@ -359,25 +385,34 @@ func (r *Runtime) Substitute(addr string, req SubstituteRequest) (Substitution, 
 	if id > r.subSeq {
 		r.subSeq = id
 	}
+	evs := make([]SubstituteEvent, 0, 2)
+	if replaced != nil {
+		evs = append(evs, SubstituteEvent{Kind: SubstituteEventStop, Reason: SubstituteReasonReplaced, Entry: *replaced, By: req.By, AtMs: s.StartMs})
+	}
+	r.subEvents.push(append(evs, SubstituteEvent{Kind: SubstituteEventStart, Entry: s, By: req.By, AtMs: s.StartMs}))
 	return s, nil
 }
 
-// Restore ends the substitute entry with this ID and reports it; false
-// when no such entry is active (it ended already, or a newer entry has
-// replaced it). The address goes back to its live value at once.
-func (r *Runtime) Restore(id uint64) (Substitution, bool) {
+// Restore ends the substitute entry with this ID on behalf of by, and
+// reports it; false when no such entry is active (it ended already,
+// expired, or a newer entry has replaced it). The address goes back to its
+// live value at once.
+func (r *Runtime) Restore(id uint64, by string) (Substitution, bool) {
 	r.subMu.Lock()
 	defer r.subMu.Unlock()
 	r.tags.mu.Lock()
 	s, ok := r.tags.unsubstituteLocked(id)
 	r.tags.mu.Unlock()
+	if ok {
+		r.subEvents.push([]SubstituteEvent{{Kind: SubstituteEventStop, Entry: s, By: by, AtMs: r.wallNow().UnixMilli()}})
+	}
 	return s, ok
 }
 
 // Substitutes lists the active substitutes, sorted by address, each with
 // the quality its address would have without it.
 func (r *Runtime) Substitutes() []Substitution {
-	out := r.tags.substitutions()
+	out := r.tags.substitutions(r.mono())
 	standby := r.standby()
 	for i := range out {
 		root, _ := ir.SplitAddress(out[i].Name)
@@ -408,6 +443,12 @@ func (t *Tags) lookupName(name string) (string, *tagVal, bool) {
 	defer t.mu.RUnlock()
 	tv, key, ok := t.lookupLocked(name)
 	return key, tv, ok
+}
+
+// substitutable reports whether the root name is in Options.Substitutable.
+func (r *Runtime) substitutable(name string) bool {
+	_, ok := r.subRoots[ir.NameKey(name)]
+	return ok
 }
 
 // isInput reports whether name is one of the driver-bound inputs.
