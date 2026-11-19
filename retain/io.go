@@ -31,6 +31,10 @@ type IOState struct {
 	// so a restart or takeover meanwhile comes back on the configuration
 	// before it. Recorded only so that comeback can say what it did not carry.
 	Provisional *IOProvisional `json:"provisional,omitempty"`
+	// Seq moves on with every change the leader makes to what is kept: a
+	// standby follows only a store newer than what it runs, so a slow read
+	// of an older store never undoes a newer apply.
+	Seq uint64 `json:"seq,omitempty"`
 }
 
 // IOUnit is one kept unit: a whole driver, or one Modbus device.

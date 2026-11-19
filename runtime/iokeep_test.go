@@ -123,9 +123,9 @@ func TestTakeoverNoIOHoldWhenCurrent(t *testing.T) {
 // A restore that does not finish holds the gate no longer than
 // takeoverIOWait; the scans go on after it.
 func TestTakeoverIOHoldIsBounded(t *testing.T) {
-	saved := takeoverIOWait
-	takeoverIOWait = 50 * time.Millisecond
-	t.Cleanup(func() { takeoverIOWait = saved })
+	saved, grace := takeoverIOWait, ioGrace
+	takeoverIOWait, ioGrace = 30*time.Millisecond, 20*time.Millisecond
+	t.Cleanup(func() { takeoverIOWait, ioGrace = saved, grace })
 	store := &fakeStore{state: retain.State{IO: keptIO()}}
 	rt := newRetained(t, store, nil)
 	k := &fakeKeeper{release: make(chan struct{}), deaf: true}
@@ -268,4 +268,75 @@ func TestTakeoverReadsTheStoreOnce(t *testing.T) {
 	if got := rt.Tags().Real("SP"); got != 72.5 {
 		t.Fatalf("SP = %v, want the store's 72.5: takeover loaded what the edge read", got)
 	}
+}
+
+// conflictStore refuses its first save as a changed store would.
+type conflictStore struct {
+	*fakeStore
+	conflicts atomic.Int32
+}
+
+func (c *conflictStore) Save(s retain.State) error {
+	if c.conflicts.Add(1) == 1 {
+		return retain.ErrConflict
+	}
+	return c.fakeStore.Save(s)
+}
+
+// slowSave saves after a delay.
+type slowSave struct {
+	*fakeStore
+	delay time.Duration
+}
+
+func (s *slowSave) Save(st retain.State) error {
+	time.Sleep(s.delay)
+	return s.fakeStore.Save(st)
+}
+
+// SaveRetained writes over a store another writer changed (once), and its
+// answer is the store's once the saver has taken the request, however long
+// the store takes: a definite result for an API handler.
+func TestSaveRetainedConflictAndDefinite(t *testing.T) {
+	run := func(t *testing.T, store retain.Store) *Runtime {
+		rt := newRetained(t, store, nil)
+		rt.SetIO(&fakeKeeper{current: true, keep: keptIO()})
+		c, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() { rt.Run(c); close(done) }()
+		t.Cleanup(func() { cancel(); <-done })
+		deadline := time.Now().Add(2 * time.Second)
+		for scanned(rt) == 0 && time.Now().Before(deadline) {
+			time.Sleep(5 * time.Millisecond)
+		}
+		return rt
+	}
+	t.Run("a conflict is written over once", func(t *testing.T) {
+		store := &conflictStore{fakeStore: &fakeStore{}}
+		rt := run(t, store)
+		if err := rt.SaveRetained(context.Background()); err != nil {
+			t.Fatalf("err %v, want the retry to land", err)
+		}
+		store.mu.Lock()
+		got := store.state.IO
+		store.mu.Unlock()
+		if got == nil {
+			t.Fatal("nothing saved")
+		}
+	})
+	t.Run("a slow store is waited for", func(t *testing.T) {
+		store := &slowSave{fakeStore: &fakeStore{}, delay: 200 * time.Millisecond}
+		rt := run(t, store)
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+		err := rt.SaveRetained(ctx)
+		store.mu.Lock()
+		got := store.state.IO
+		store.mu.Unlock()
+		// The saver was idle, so it took the request at once: the answer is
+		// the store's, after the store's 200 ms, not ctx's 50 ms.
+		if err != nil || got == nil {
+			t.Fatalf("err %v, stored %v: want nil once the store holds it", err, got != nil)
+		}
+	})
 }

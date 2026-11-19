@@ -35,6 +35,11 @@ const DefaultTakeoverIOWait = 10 * time.Second
 // takeoverIOWait is DefaultTakeoverIOWait; a test shortens it.
 var takeoverIOWait = DefaultTakeoverIOWait
 
+// ioGrace is how long past takeoverIOWait the edge still waits for the
+// keeper to return: its restore ends at the deadline and records what it
+// holds on the way out. A keeper that never returns is not waited for.
+var ioGrace = 2 * time.Second
+
 // ErrNotLeading refuses SaveRetained on a replica that does not lead (or
 // has not finished taking over): only the leader writes the store.
 var ErrNotLeading = errors.New("this controller does not lead; only the leader saves retained state")
@@ -144,7 +149,7 @@ func (r *Runtime) ioReady() bool {
 		return true
 	default:
 	}
-	if time.Since(r.iok.since) < takeoverIOWait {
+	if time.Since(r.iok.since) < takeoverIOWait+ioGrace {
 		return false
 	}
 	slog.Warn("runtime: the kept I/O configuration is still being re-applied; scanning, with what it changes holding its outputs", "waited", time.Since(r.iok.since).Round(time.Millisecond))
@@ -159,11 +164,18 @@ func (r *Runtime) saveRequests() chan chan error {
 
 // SaveRetained saves the retained state now, through the saver, and
 // returns once the store holds it: nil also when nothing changed since the
-// last save. It returns ErrNotLeading on a replica that does not lead (or
-// has not finished taking over), ErrNoRetainStore without a store, the
-// store's error when the save fails, and ctx's when Run's saver is not
-// running. A caller that must not answer before its change is durable (a
-// live I/O apply, #706) waits on it instead of the saver's next tick.
+// last save. It is for a caller that must not answer before its change is
+// durable (an API handler: a live I/O apply, #706; a substitute, #707).
+//
+// The result is definite. ctx bounds only the wait for the saver to take
+// the request (ctx's error: nothing was written by this call); once taken,
+// SaveRetained waits for the store's own answer, which the store bounds
+// (a ConfigMap request times out, and a write that may have landed is
+// read back). It returns ErrNotLeading on a replica that does not lead (or
+// has not finished taking over), ErrNoRetainStore without a store, and the
+// store's error when the save fails. A store that another writer changed
+// since this replica read it (retain.ErrConflict, a deposed leader's late
+// write) is written over once: this replica leads.
 func (r *Runtime) SaveRetained(ctx context.Context) error {
 	if r.retainStore == nil {
 		return ErrNoRetainStore
@@ -174,10 +186,5 @@ func (r *Runtime) SaveRetained(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
-	select {
-	case err := <-req:
-		return err
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	return <-req
 }

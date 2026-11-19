@@ -110,6 +110,9 @@ func (d *Driver) ReplaceSource(src Source, tags []TagBinding, opts ReplaceOption
 	}
 	ns.baseline = opts.HoldOutputs
 	ns.observe = opts.Observe
+	if opts.Held {
+		ns.held, ns.state = true, "held"
+	}
 	old.mu.Lock()
 	ns.enabled = old.enabled
 	ns.outages = old.outages // since the driver started; a replace is not one
@@ -168,8 +171,16 @@ func (d *Driver) ReplaceSource(src Source, tags []TagBinding, opts ReplaceOption
 		d.startSource(ns)
 	}
 	d.wanted.Store(true) // the new connection starts from the current commands
-	d.log.Info("modbus: source replaced", "source", src.ID, "addr", src.Addr(), "unit", src.UnitID, "bindings", len(eff))
+	d.log.Info("modbus: source replaced", "source", src.ID, "addr", src.Addr(), "unit", src.UnitID, "bindings", len(eff), "held", opts.Held)
 	return nil
+}
+
+// Held reports whether the source id is held (ReplaceOptions.Held).
+func (d *Driver) Held(id string) bool {
+	d.srcMu.RLock()
+	defer d.srcMu.RUnlock()
+	s := d.bySource[id]
+	return s != nil && s.held
 }
 
 // ReplaceOptions are ReplaceSource's choices.
@@ -190,6 +201,13 @@ type ReplaceOptions struct {
 	// (srcMu, read) but no source's: keep it short, and never call back
 	// into the driver from it.
 	Observe func(FirstShare)
+
+	// Held puts the source in with no connection: it is not polled and
+	// sends nothing, and every tag it binds reads Bad, until a replace
+	// without Held. A controller holds a device this way when the
+	// configuration it should run there could not be put in (#706): what
+	// it would read from the address it has is not to be trusted.
+	Held bool
 }
 
 // FirstShare is a replaced source's first share of an output snapshot.

@@ -994,8 +994,10 @@ curl -s -X POST localhost:8080/api/io/staged/1/apply
     is kept only once its devices answer, or its revert is cancelled. A
     restart or takeover before that comes back on the configuration
     before it, and `config.discarded` says so.
-  - **A change that cannot be re-applied** holds its driver's outputs
-    (`config.fault` says why) until an apply re-establishes what runs.
+  - **A change that cannot be re-applied is held.** The device (or
+    driver) is not polled, its tags read Bad, and it is sent nothing,
+    until an apply re-establishes what runs. `config.fault` says why. An
+    apply is refused while a restart or takeover is still re-applying.
   - **A save that fails.** On a project with `redundancy:` the apply is
     put back (`503`); a takeover would otherwise undo it. Standalone, it
     stays applied with `kept: false` and `keptWhy`, and the save is
@@ -1004,6 +1006,11 @@ curl -s -X POST localhost:8080/api/io/staged/1/apply
     manifest again. The apply answers `kept: false`. An apply on a
     project with `redundancy:` and no `retain:` block is refused (check
     `kept`).
+  - **Not while a pair runs mixed versions.** A controller built before
+    this ignores what is kept: if it takes over, it runs the manifest's
+    addresses and its next save clears what was kept. During a rolling
+    upgrade of a redundant pair, make no live I/O apply until both
+    replicas run the new build.
 
   While what runs differs from the manifest, `config` on every frame
   says so (and `config.notKept` says if it would not survive a restart),

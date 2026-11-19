@@ -50,6 +50,7 @@ import (
 type IORuntime interface {
 	ReplaceDriverObserved(ctx context.Context, name string, d nio.Driver) (nio.Driver, <-chan nio.Values, error)
 	ReplaceDriverAtStart(ctx context.Context, name string, d nio.Driver) (nio.Driver, error)
+	ReplaceDriver(ctx context.Context, name string, d nio.Driver) (nio.Driver, error)
 	Tags() *runtime.Tags
 }
 
@@ -111,8 +112,14 @@ type IOConfig struct {
 	discarded      map[string]retain.IOUnit
 	discardedFiles map[string]string
 	dropped        []IODiscard
-	// held are the drivers a restore that did not finish holds closed.
+	// held are the units a restore holds (holdUnits), until replaced.
 	held map[string]bool
+	// seq orders what the store keeps: every change to it moves it on, and
+	// a standby follows only a store newer than what it runs (Follow).
+	seq uint64
+	// restoring: a restore runs; edgeSeen: a leadership edge has re-applied
+	// (or found current) what the store keeps. An apply waits for both.
+	restoring, edgeSeen bool
 	// unsaved says why the store does not hold what an apply kept (its
 	// save failed); a retry clears it once a save lands. closed ends that
 	// retry (Close).
@@ -1047,6 +1054,15 @@ var answerWait = 5 * time.Second
 
 // ApplyWith is Apply with options.
 func (io *IOConfig) ApplyWith(ctx context.Context, c *IOCandidate, by string, opts ApplyOptions) (*IOResult, error) {
+	io.mu.Lock()
+	restoring, starting := io.restoring, io.Keep != nil && !io.edgeSeen
+	io.mu.Unlock()
+	switch {
+	case restoring:
+		return nil, fmt.Errorf("%w: the kept I/O configuration is being re-applied", ErrApplyBusy)
+	case starting:
+		return nil, fmt.Errorf("%w: the controller has not yet re-applied its kept I/O configuration (it is starting, or stands by)", ErrApplyBusy)
+	}
 	if !io.applying.TryLock() {
 		return nil, ErrApplyBusy
 	}
@@ -1203,13 +1219,15 @@ func (io *IOConfig) apply(ctx context.Context, c *IOCandidate, by string, opts A
 	case opts.RevertIfSilent > 0:
 		io.provisional = &retain.IOProvisional{Gen: gen, From: c.From, By: by, At: at,
 			Deadline: at.Add(opts.RevertIfSilent)}
+		io.seq++
 	default:
 		io.kept, io.provisional = copyUnits(io.running), nil
+		io.seq++
+	}
+	if !c.restore {
+		io.held = nil // a full candidate replaced every unit that was held
 	}
 	io.mu.Unlock()
-	if !c.restore {
-		io.liftHolds() // a full candidate applied over a known state
-	}
 	for _, ch := range val.Changes {
 		io.log(ch, c, by, nil)
 	}
@@ -1237,8 +1255,18 @@ func (io *IOConfig) apply(ctx context.Context, c *IOCandidate, by string, opts A
 		}
 		io.kept, io.provisional = prevKept, prevProv
 		io.gen++
+		io.seq++ // newer than anything the failed save may yet leave
 		io.mu.Unlock()
 		msg := "the apply was not kept in the retain store (" + keptWhy + "), so a takeover would bring back the old configuration"
+		// The put-back is saved too: behind the failed save in the store's
+		// one writer, and by compare-and-swap, so it is what the store holds
+		// last, whatever the failed one did.
+		pctx, pcancel := context.WithTimeout(context.Background(), putBackWait)
+		perr := io.Keep(pctx)
+		pcancel()
+		if perr != nil {
+			msg += "; saving the put-back failed too (" + perr.Error() + "): the store may still hold the apply until the next save"
+		}
 		if len(left) > 0 {
 			msg = fmt.Sprintf("%s; putting it back failed for %s: what runs there is not known; apply a candidate for it, or restart", msg, strings.Join(left, ", "))
 			io.markUnknown(lost, by, msg)

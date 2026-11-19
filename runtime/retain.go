@@ -500,6 +500,12 @@ func (r *Runtime) retainSaver(ctx context.Context) []byte {
 		case req := <-r.saveRequests():
 			var err error
 			lastSaved, err = r.saveRetainedErr(lastSaved)
+			if errors.Is(err, retain.ErrConflict) {
+				// Another writer changed the store since this replica read
+				// it; the store has re-read its version, and the leader's
+				// state wins.
+				lastSaved, err = r.saveRetainedErr(lastSaved)
+			}
 			req <- err
 		}
 	}

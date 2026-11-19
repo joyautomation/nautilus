@@ -22,11 +22,13 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	nio "github.com/joyautomation/nautilus/io"
+	"github.com/joyautomation/nautilus/modbus"
 	"github.com/joyautomation/nautilus/retain"
 )
 
@@ -43,6 +45,9 @@ var keepLimit = 512 << 10
 
 // keepTimeout bounds the save an apply waits for before it answers.
 var keepTimeout = 5 * time.Second
+
+// putBackWait bounds the save of a put-back apply (ErrNotKept).
+var putBackWait = 10 * time.Second
 
 // followInterval is how often a standby reads the store to follow what the
 // leader applied (Follow); the store's own save cadence.
@@ -236,6 +241,9 @@ func (io *IOConfig) watchEnded(w IOWatch) {
 	if io.provisional != nil && io.provisional.Gen == w.Gen && w.State != WatchSuperseded {
 		io.provisional, changed = nil, true
 	}
+	if changed {
+		io.seq++
+	}
 	io.mu.Unlock()
 	if !changed || io.Keep == nil {
 		return
@@ -284,7 +292,8 @@ func (io *IOConfig) RetainedIO() *retain.IOState {
 		p := *io.provisional
 		st.Provisional = &p
 	}
-	if st.Units == nil && st.Discarded == nil && st.Provisional == nil {
+	st.Seq = io.seq
+	if st.Units == nil && st.Discarded == nil && st.Provisional == nil && st.Seq == 0 {
 		return nil
 	}
 	return st
@@ -301,39 +310,58 @@ func (io *IOConfig) IOCurrent(st *retain.IOState) bool {
 	h := hashOf(st)
 	io.mu.Lock()
 	defer io.mu.Unlock()
-	return h == io.memo.st && io.gen == io.memo.gen
+	current := h == io.memo.st && io.gen == io.memo.gen
+	if current {
+		io.edgeSeen = true // the runtime asks only at an edge
+	}
+	return current
 }
 
 // leads reports whether this replica leads (always, standalone).
 func (io *IOConfig) leads() bool { return io.Gate == nil || io.Gate() }
 
-// RestoreIO makes what runs what st keeps (runtime.IOKeeper): each kept
-// unit whose base is still the deployed manifest's, rebuilt from the kept
-// files and checked to hash to what was applied, composed with the
-// manifest's units for the rest, checked statically against what runs (no
-// live probes: it ran before; a silent device reads Bad, as after any
-// apply) and applied, every unit back on the origin it was kept with. A
-// unit st does not keep goes back to the manifest's (a replica that led
-// before and stood by while the store changed). What is dropped is
-// reported (Discarded) and kept in the store for recovery by hand.
+// RestoreIO makes what runs what st keeps, at a leadership edge
+// (runtime.IOKeeper): each kept unit whose base is still the deployed
+// manifest's, rebuilt from the kept files and checked to hash to what was
+// applied, composed with the manifest's units for the rest, checked
+// statically against what runs (no live probes: it ran before; a silent
+// device reads Bad, as after any apply) and applied, every unit back on
+// the origin it was kept with. A unit st does not keep goes back to the
+// manifest's (a replica that led before and stood by while the store
+// changed). What is dropped is reported (Discarded) and kept in the store
+// for recovery by hand. At an edge the store is what the last leader
+// left, and it wins.
 //
-// While it applies, each changed driver holds its outputs (its write gate
-// closed); a restore that fails or is cut short leaves them held, and
-// Fault says why, until an apply re-establishes what runs. The scan is
-// held meanwhile at a leadership edge, so the hold costs nothing there.
+// Every unit it changes is held first, before it waits on anything: not
+// polled, its tags Bad, nothing sent (holdUnit). The apply replaces each
+// held unit with what the store keeps; any way out short of that (a
+// failure, ctx's end, an apply in progress) leaves it held, with Fault
+// saying why, until an apply re-establishes what runs (decision 2 on
+// #706), and the store's state is kept as it was.
 func (io *IOConfig) RestoreIO(ctx context.Context, st *retain.IOState) error {
-	for !io.applying.TryLock() {
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("waiting for an apply in progress: %w", ctx.Err())
-		case <-time.After(10 * time.Millisecond):
-		}
-	}
-	defer io.applying.Unlock()
+	return io.restoreFrom(ctx, st, false)
+}
 
+// restoreFrom is RestoreIO, or with follow a standby following the store
+// (Follow): nothing held (a standby neither scans nor sends), and acting
+// only on a store newer than what it runs, while it still stands by, as
+// checked again under the apply lock.
+func (io *IOConfig) restoreFrom(ctx context.Context, st *retain.IOState, follow bool) error {
+	if follow && io.followSkip(st) {
+		return nil
+	}
 	io.mu.Lock()
 	boot, running := copyUnits(io.boot), copyUnits(io.running)
+	io.restoring = true
 	io.mu.Unlock()
+	defer func() {
+		io.mu.Lock()
+		io.restoring = false
+		if !follow {
+			io.edgeSeen = true
+		}
+		io.mu.Unlock()
+	}()
 
 	r := restore{st: st, discarded: map[string]retain.IOUnit{}}
 	if st != nil {
@@ -341,7 +369,7 @@ func (io *IOConfig) RestoreIO(ctx context.Context, st *retain.IOState) error {
 			r.discarded[k] = u
 		}
 		r.discardedFiles = st.DiscardedFiles
-		if p := st.Provisional; p != nil && io.leads() {
+		if p := st.Provisional; p != nil && !follow {
 			r.dropped = append(r.dropped, IODiscard{From: p.From, At: p.At, By: p.By,
 				Why: fmt.Sprintf("an apply was waiting for its changed devices to answer (revertIfSilent, until %s) when the controller restarted or another took over; it was not carried, and the configuration before it runs", p.Deadline.Format(time.RFC3339))})
 		}
@@ -351,6 +379,24 @@ func (io *IOConfig) RestoreIO(ctx context.Context, st *retain.IOState) error {
 	for k, u := range keep {
 		target[k] = u
 	}
+	if !follow {
+		io.holdUnits(changedKeys(target, running), running)
+	}
+
+	for !io.applying.TryLock() {
+		select {
+		case <-ctx.Done():
+			return io.restoreFailed(&r, target, running, !follow, fmt.Errorf("waiting for an apply in progress: %w", ctx.Err()))
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	defer io.applying.Unlock()
+	if follow && io.followSkip(st) {
+		return nil // it leads now, or what it runs is newer: the edge decides
+	}
+	io.mu.Lock()
+	running = copyUnits(io.running)
+	io.mu.Unlock()
 
 	var c *IOCandidate
 	if !sameHashes(target, running) {
@@ -371,24 +417,20 @@ func (io *IOConfig) RestoreIO(ctx context.Context, st *retain.IOState) error {
 			}
 		}
 		if err != nil {
-			return io.restoreFailed(&r, target, running, err)
+			return io.restoreFailed(&r, target, running, !follow, err)
 		}
 	}
 	if c != nil {
 		v := io.validate(c, false)
 		if !v.Valid {
-			return io.restoreFailed(&r, target, running, errors.New("the configuration to restore fails validation: "+failedChecks(v)))
+			return io.restoreFailed(&r, target, running, !follow, errors.New("the configuration to restore fails validation: "+failedChecks(v)))
 		}
-		// No hold before: the scan is held at the edge (and a standby does
-		// not scan), and closing a gate would disarm the start-up baseline
-		// of every device of the driver. A failure holds (restoreFailed).
-		io.atStart = io.p.Redundancy == nil
+		io.atStart = !follow && io.p.Redundancy == nil
 		_, err := io.apply(ctx, c, "retain", ApplyOptions{})
 		io.atStart = false
 		if err != nil {
-			return io.restoreFailed(&r, target, running, err)
+			return io.restoreFailed(&r, target, running, !follow, err)
 		}
-		io.liftHolds()
 		io.mu.Lock()
 		w := io.watch
 		io.mu.Unlock()
@@ -396,14 +438,48 @@ func (io *IOConfig) RestoreIO(ctx context.Context, st *retain.IOState) error {
 			w.finish(WatchSuperseded, "the configuration was re-applied from the retain store")
 		}
 	}
-	io.settle(&r, target)
+	// A unit held above that the apply did not replace (what runs changed
+	// while it waited) goes back to what runs, unheld.
+	io.liftHeld(ctx)
+	io.settle(&r, target, follow)
 	for _, d := range r.dropped {
 		slog.Warn("config.io: a kept I/O change was not brought back", "driver", d.Driver, "device", d.Device, "from", d.From, "by", d.By, "why", d.Why)
 	}
 	if c != nil {
-		slog.Info("config.io: kept I/O configuration re-applied", "units", len(keep))
+		slog.Info("config.io: kept I/O configuration re-applied", "units", len(keep), "following", follow)
 	}
 	return nil
+}
+
+// followSkip: a follower does nothing while it leads (the edge re-applies,
+// and a leader's applies are newer than any store it could read), nor for a
+// store no newer than what it runs (a slow read from before an apply).
+func (io *IOConfig) followSkip(st *retain.IOState) bool {
+	return io.leads() || seqOf(st) <= io.seqNow()
+}
+
+func seqOf(st *retain.IOState) uint64 {
+	if st == nil {
+		return 0
+	}
+	return st.Seq
+}
+
+func (io *IOConfig) seqNow() uint64 {
+	io.mu.Lock()
+	defer io.mu.Unlock()
+	return io.seq
+}
+
+// changedKeys are the units whose configuration differs between a and b.
+func changedKeys(a, b map[string]ioUnit) []string {
+	var out []string
+	for _, k := range sortedKeys(a) {
+		if a[k].hash != b[k].hash {
+			out = append(out, k)
+		}
+	}
+	return out
 }
 
 // restore is one RestoreIO's bookkeeping.
@@ -493,16 +569,26 @@ func (io *IOConfig) restoreCandidate(cand *IOCandidate, target map[string]ioUnit
 		built: cand.built, units: target}, nil
 }
 
-// restoreFailed holds the outputs of every driver target changes, marks
-// those units' configuration not known (Fault), and still records what the
-// store keeps: a leader's next save must not drop it.
-func (io *IOConfig) restoreFailed(r *restore, target, running map[string]ioUnit, err error) error {
-	why := "the kept I/O configuration was not re-applied (" + err.Error() + "): its driver holds its outputs until an apply re-establishes what runs, or a restart"
-	var lost []string
-	for _, k := range sortedKeys(target) {
-		if target[k].hash != running[k].hash {
-			io.holdDriver(target[k].driver)
-			lost = append(lost, k)
+// restoreFailed holds every unit target changes (again: a failed apply
+// put back what it had replaced, unheld), unless hold is false (a standby
+// following: its edge re-applies), marks those units' configuration not
+// known (Fault), and still records what the store keeps: a leader's next
+// save must not drop it.
+func (io *IOConfig) restoreFailed(r *restore, target, running map[string]ioUnit, hold bool, err error) error {
+	why := "the kept I/O configuration was not re-applied (" + err.Error() + ")"
+	lost := changedKeys(target, running)
+	if hold {
+		why += ": what it changes is held, reading Bad and sending nothing, until an apply re-establishes it, or a restart"
+		io.holdUnits(lost, running)
+		// A held driver's devices are held with it.
+		for _, k := range lost {
+			if u := target[k]; u.device == "" {
+				for kk, uu := range running {
+					if uu.driver == u.driver && !slices.Contains(lost, kk) {
+						lost = append(lost, kk)
+					}
+				}
+			}
 		}
 	}
 	io.markUnknown(lost, "retain", why)
@@ -515,8 +601,10 @@ func (io *IOConfig) restoreFailed(r *restore, target, running map[string]ioUnit,
 	return errors.New(why)
 }
 
-// settle records a restore that made target run.
-func (io *IOConfig) settle(r *restore, target map[string]ioUnit) {
+// settle records a restore that made target run. A follower takes the
+// store's sequence; a leader's edge moves past it, so what it saves next is
+// newer than anything a standby followed.
+func (io *IOConfig) settle(r *restore, target map[string]ioUnit, follow bool) {
 	io.mu.Lock()
 	defer io.mu.Unlock()
 	io.kept = copyUnits(target)
@@ -526,6 +614,11 @@ func (io *IOConfig) settle(r *restore, target map[string]ioUnit) {
 		io.discarded, io.discardedFiles = nil, nil
 	}
 	io.memo.st, io.memo.gen = hashOf(r.st), io.gen
+	if follow {
+		io.seq = seqOf(r.st)
+	} else {
+		io.seq = max(io.seq, seqOf(r.st)) + 1
+	}
 }
 
 func sameHashes(a, b map[string]ioUnit) bool {
@@ -550,50 +643,105 @@ func failedChecks(v *IOValidation) string {
 	return strings.Join(out, "; ")
 }
 
-// gateSetter is d, or what it wraps, that takes a write gate.
-func gateSetter(d any) interface{ SetWriteGate(func() bool) } {
-	for d != nil {
-		if g, ok := d.(interface{ SetWriteGate(func() bool) }); ok {
-			return g
-		}
-		u, ok := d.(interface{ Unwrap() nio.Driver })
-		if !ok {
-			return nil
-		}
-		d = u.Unwrap()
+// heldDriver stands in for a driver a restore could not re-apply: the tags
+// of the driver it replaced (which is stopped), every input Bad, nothing
+// read and nothing sent.
+type heldDriver struct{ inner nio.Driver }
+
+func (h *heldDriver) names() (in, out []string) {
+	if t, ok := h.inner.(tagNames); ok {
+		return t.InputNames(), t.OutputNames()
 	}
-	return nil
+	return nil, nil
+}
+func (h *heldDriver) InputNames() []string            { in, _ := h.names(); return in }
+func (h *heldDriver) OutputNames() []string           { _, out := h.names(); return out }
+func (h *heldDriver) ReadInputs() (nio.Values, error) { return nio.Values{}, nil }
+func (h *heldDriver) WriteOutputs(nio.Values) error   { return nil }
+func (h *heldDriver) InputType(name string) string {
+	if t, ok := h.inner.(inputTyper); ok {
+		return t.InputType(name)
+	}
+	return ""
+}
+func (h *heldDriver) Quality() map[string]nio.Quality {
+	out := map[string]nio.Quality{}
+	for _, n := range h.InputNames() {
+		out[n] = nio.Bad
+	}
+	return out
 }
 
-func closedGate() bool { return false }
-
-// holdDriver closes the write gate of the driver named driver: it commands
-// nothing until liftHolds.
-func (io *IOConfig) holdDriver(driver string) {
-	g := gateSetter(io.currentDriver(driver))
-	if g == nil {
-		return
+// holdUnits holds each unit of keys as it runs (running[k]): a Modbus
+// device is replaced by itself, held (modbus.ReplaceOptions.Held); a driver
+// by a heldDriver. Best effort: a unit it cannot hold is logged.
+func (io *IOConfig) holdUnits(keys []string, running map[string]ioUnit) {
+	drivers := map[string]bool{}
+	for _, k := range keys {
+		if u := running[k]; u.device == "" {
+			drivers[u.driver] = true
+		}
 	}
-	g.SetWriteGate(closedGate)
-	io.mu.Lock()
-	if io.held == nil {
-		io.held = map[string]bool{}
+	for _, k := range keys {
+		u := running[k]
+		if drivers[u.driver] && u.device != "" {
+			continue // held with its driver
+		}
+		var err error
+		if u.device != "" {
+			if mb := modbusOf(io.currentDriver(u.driver)); mb != nil {
+				err = io.replaceSource(mb, u.src, u.tags, modbus.ReplaceOptions{Held: true})
+			}
+		} else if d := io.currentDriver(u.driver); d != nil {
+			if _, held := d.(*heldDriver); !held {
+				ctx, cancel := context.WithTimeout(context.Background(), undoTimeout)
+				var prev nio.Driver
+				prev, err = io.rt.ReplaceDriver(ctx, u.driver, &heldDriver{inner: d})
+				cancel()
+				if err == nil {
+					stopDriver(prev)
+				}
+			}
+		}
+		if err != nil {
+			slog.Error("config.io: could not hold a unit", "unit", k, "err", err)
+			continue
+		}
+		io.mu.Lock()
+		if io.held == nil {
+			io.held = map[string]bool{}
+		}
+		io.held[k] = true
+		io.mu.Unlock()
 	}
-	io.held[driver] = true
-	io.mu.Unlock()
 }
 
-// liftHolds gives every held driver the controller's write gate back: it
-// sends every output with the next push (a reopened gate forgets what it
-// sent).
-func (io *IOConfig) liftHolds() {
+// liftHeld gives each held unit that an apply has not replaced since back
+// what runs there, unheld; one an apply replaced is unheld already.
+func (io *IOConfig) liftHeld(ctx context.Context) {
 	io.mu.Lock()
-	held := io.held
+	held, running := io.held, copyUnits(io.running)
 	io.held = nil
 	io.mu.Unlock()
-	for _, name := range sortedKeys(held) {
-		if g := gateSetter(io.currentDriver(name)); g != nil {
-			g.SetWriteGate(io.Gate)
+	for _, k := range sortedKeys(held) {
+		u := running[k]
+		if u.hash == unknownHash {
+			continue
+		}
+		switch d := io.currentDriver(u.driver).(type) {
+		case *heldDriver:
+			if _, err := io.swapDriver(ctx, u.driver, u.fsys, u.cfg); err != nil {
+				slog.Error("config.io: could not release a held driver", "driver", u.driver, "err", err)
+			}
+		default:
+			if u.device == "" {
+				continue
+			}
+			if mb := modbusOf(d); mb != nil && mb.Held(u.device) {
+				if err := io.replaceSource(mb, u.src, u.tags, modbus.ReplaceOptions{}); err != nil {
+					slog.Error("config.io: could not release a held device", "unit", k, "err", err)
+				}
+			}
 		}
 	}
 }
@@ -617,11 +765,11 @@ func (io *IOConfig) Follow(ctx context.Context, load func() (retain.State, error
 			continue
 		}
 		st, err := load()
-		if err != nil || io.IOCurrent(st.IO) {
+		if err != nil || seqOf(st.IO) <= io.seqNow() {
 			continue
 		}
 		rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		if err := io.RestoreIO(rctx, st.IO); err != nil {
+		if err := io.restoreFrom(rctx, st.IO, true); err != nil {
 			slog.Warn("config.io: the standby could not follow the kept I/O configuration; its takeover re-applies it", "err", err)
 		}
 		cancel()

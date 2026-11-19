@@ -256,6 +256,7 @@ type source struct {
 	excs     uint64
 	rttMs    float64 // EWMA of request round-trip
 	enabled  bool
+	held     bool // ReplaceOptions.Held: never started, its tags Bad
 
 	// pending is the last-value write queue (tag name → desired value),
 	// held across disconnects and flushed on reconnect. written is the last
@@ -753,7 +754,7 @@ func (d *Driver) Started() bool { return d.started.Load() }
 func (d *Driver) startSource(s *source) {
 	d.lifeMu.Lock()
 	defer d.lifeMu.Unlock()
-	if d.stopped {
+	if d.stopped || s.held {
 		return
 	}
 	var ctx context.Context

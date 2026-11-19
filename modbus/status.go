@@ -110,6 +110,8 @@ func (d *Driver) Quality() map[string]nio.Quality {
 		for _, br := range s.blocks {
 			for _, t := range br.Bindings {
 				switch {
+				case s.held:
+					mark(t.Name, nio.Bad)
 				case s.online && br.bad:
 					mark(t.Name, nio.Bad)
 				case s.online:

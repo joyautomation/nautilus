@@ -20,6 +20,7 @@ import (
 	"testing/fstest"
 	"time"
 
+	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/modbus"
 	"github.com/joyautomation/nautilus/modbus/slave"
 	"github.com/joyautomation/nautilus/retain"
@@ -353,7 +354,7 @@ func TestIOKeptBaseHashRule(t *testing.T) {
 			t.Fatalf("discarded = %+v, want none: it was deployed, not replaced", d)
 		}
 		r.stop()
-		if st := store.io(t); st != nil {
+		if st := store.io(t); st != nil && (len(st.Units) != 0 || len(st.Discarded) != 0) {
 			t.Fatalf("store io = %+v, want nothing kept", st)
 		}
 	})
@@ -700,14 +701,23 @@ func TestIOKeptRestoreFailureHoldsOutputs(t *testing.T) {
 		}
 	}})
 	r.leading(t)
-	if f := r.io.Fault(); !strings.Contains(f, "not re-applied") || !strings.Contains(f, "holds its outputs") {
+	if f := r.io.Fault(); !strings.Contains(f, "not re-applied") || !strings.Contains(f, "reading Bad") {
 		t.Fatalf("fault = %q, want the failed re-apply and the hold", f)
 	}
+	// Held: not polled at the manifest's address, its tags Bad, nothing sent.
 	s1.Unit(1).SetHolding(0, 6)
-	eventually(t, "DEV_A polled at the manifest's address", func() bool { return r.value("A_In") == "6" })
-	time.Sleep(150 * time.Millisecond)
+	time.Sleep(200 * time.Millisecond)
+	if q := r.rt.TagQuality("A_In"); q != nio.Bad {
+		t.Fatalf("A_In quality %v, want Bad: the held device must not be trusted", q)
+	}
+	if got := r.value("A_In"); got == "6" {
+		t.Fatal("the held device was polled at the manifest's address")
+	}
 	if got := s1.Unit(1).Holding(10); got != 999 {
-		t.Fatalf("the held driver commanded the manifest's address: Cmd %d", got)
+		t.Fatalf("the held device was commanded at the manifest's address: Cmd %d", got)
+	}
+	if q := r.rt.TagQuality("B_In"); !q.IsGood() {
+		t.Fatalf("B_In quality %v, want Good: only DEV_A is held", q)
 	}
 	// An apply establishes what runs again, and lifts the hold.
 	s4 := newSlave(t, 13)
@@ -715,6 +725,9 @@ func TestIOKeptRestoreFailureHoldsOutputs(t *testing.T) {
 	eventually(t, "the applied device commanded", func() bool { return s4.Unit(1).Holding(10) == 14 })
 	if f := r.io.Fault(); f != "" {
 		t.Fatalf("fault = %q after the apply, want none", f)
+	}
+	if q := r.rt.TagQuality("A_In"); !q.IsGood() {
+		t.Fatalf("A_In quality %v after the apply, want Good", q)
 	}
 }
 
@@ -766,9 +779,16 @@ func TestIOKeptRestartKeepsTheStartBaseline(t *testing.T) {
 	store, _, s2, s3, files := keptThenRestart(t)
 	s3.Unit(1).SetHolding(10, 999)
 	s2.Unit(1).SetHolding(10, 999)
+	// Inputs at their seed (0), so each Cmd is 1 whether the first scan ran
+	// before the first read or after: the first push is the only write a
+	// held baseline holds back, whatever the timing.
+	s3.Unit(1).SetHolding(0, 0)
+	s2.Unit(1).SetHolding(0, 0)
 	r := startKeepRig(t, files, keepOpts{store: store})
 	r.leading(t)
-	eventually(t, "both devices polled", func() bool { return r.value("A_In") == "9" && r.value("B_In") == "7" })
+	eventually(t, "both devices polled", func() bool {
+		return r.rt.TagQuality("A_In").IsGood() && r.rt.TagQuality("B_In").IsGood()
+	})
 	time.Sleep(150 * time.Millisecond)
 	if a, b := s3.Unit(1).Holding(10), s2.Unit(1).Holding(10); a != 999 || b != 999 {
 		t.Fatalf("Cmd on the re-applied device %d, on the untouched one %d: a restart sent what a boot holds back", a, b)
@@ -798,12 +818,16 @@ func TestIOKeptDriverSwapAtStartKeepsTheBaseline(t *testing.T) {
 	r.stop()
 	s3.Unit(1).SetHolding(10, 999)
 	s2.Unit(1).SetHolding(10, 999)
+	s3.Unit(1).SetHolding(0, 0) // seed values: see TestIOKeptRestartKeepsTheStartBaseline
+	s2.Unit(1).SetHolding(0, 0)
 	r2 := startKeepRig(t, files, keepOpts{store: store})
 	r2.leading(t)
 	if d, ok := unitOf(r2.io.Differs(), "modbus"); !ok || d.RunningHash == d.ManifestHash {
 		t.Fatalf("differs = %+v, want the modbus driver swapped whole", r2.io.Differs())
 	}
-	eventually(t, "both devices polled", func() bool { return r2.value("A_In") == "9" && r2.value("B_In") == "7" })
+	eventually(t, "both devices polled", func() bool {
+		return r2.rt.TagQuality("A_In").IsGood() && r2.rt.TagQuality("B_In").IsGood()
+	})
 	time.Sleep(150 * time.Millisecond)
 	if a, b := s3.Unit(1).Holding(10), s2.Unit(1).Holding(10); a != 999 || b != 999 {
 		t.Fatalf("Cmd %d and %d: the restored driver sent what a boot holds back", a, b)
@@ -853,5 +877,170 @@ func TestIOKeptPendingRevertAcrossATakeover(t *testing.T) {
 	}
 	if d := b.io.Differs(); len(d) != 0 {
 		t.Fatalf("differs = %+v, want the configuration before the pending apply", d)
+	}
+}
+
+// A standby's follow never acts on the leader it has become, nor on a store
+// older than what it runs (naut-lead's review of #1010, finding 1): a slow
+// read of the store from before an apply must not undo the apply.
+func TestIOFollowNeverUndoesANewerApply(t *testing.T) {
+	s1, s2, s3 := newSlave(t, 4), newSlave(t, 7), newSlave(t, 9)
+	files := ioFiles(slavePort(s1), slavePort(s2), "")
+	store := &memStore{}
+	coord := &keepCoord{}
+	coord.lead.Store(true)
+	coord.term.Store(1)
+	r := startKeepRig(t, files, keepOpts{store: store, coord: coord, noFollow: true})
+	r.leading(t)
+	before := store.io(t) // the store as a slow read would return it
+	r.applyMove(t, files, slavePort(s3), slavePort(s2), ApplyOptions{})
+	if len(r.io.Differs()) != 1 {
+		t.Fatal("the apply did not land")
+	}
+	ctx := context.Background()
+	// Leading: a follow does nothing, whatever the store says, even one
+	// that looks newer (it would take DEV_A back to the manifest).
+	if err := r.io.restoreFrom(ctx, &retain.IOState{Seq: r.io.seqNow() + 1}, true); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.io.Differs()) != 1 {
+		t.Fatal("a follow on the leader undid the apply")
+	}
+	// Stood down, a follow of an older store still does nothing.
+	coord.lead.Store(false)
+	stale := &retain.IOState{Seq: 0}
+	if before != nil {
+		stale = before
+	}
+	if err := r.io.restoreFrom(ctx, stale, true); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.io.Differs()) != 1 {
+		t.Fatal("a follow of an older store undid the apply")
+	}
+	// While a newer one is followed.
+	newer := *store.io(t)
+	newer.Units, newer.Files = nil, nil
+	newer.Seq++
+	if err := r.io.restoreFrom(ctx, &newer, true); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.io.Differs()) != 0 {
+		t.Fatalf("differs = %+v, want a newer store followed back to the manifest", r.io.Differs())
+	}
+}
+
+// A restore that cannot take the apply lock before its deadline still
+// holds what it would change, reports it, and keeps the store's state
+// (finding 4).
+func TestIORestoreLockTimeoutHolds(t *testing.T) {
+	store, s1, _, _, files := keptThenRestart(t)
+	kept := store.io(t)
+	s1.Unit(1).SetHolding(10, 999)
+	r := startKeepRig(t, files, keepOpts{store: &memStore{}}) // its own store: nothing to restore at its edge
+	r.leading(t)
+	r.io.applying.Lock()
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	err := r.io.RestoreIO(ctx, kept)
+	cancel()
+	r.io.applying.Unlock()
+	if err == nil || !strings.Contains(err.Error(), "an apply in progress") {
+		t.Fatalf("err = %v, want the lock wait named", err)
+	}
+	if f := r.io.Fault(); !strings.Contains(f, "reading Bad") {
+		t.Fatalf("fault = %q, want the hold", f)
+	}
+	s1.Unit(1).SetHolding(0, 6)
+	time.Sleep(200 * time.Millisecond)
+	if q := r.rt.TagQuality("A_In"); q != nio.Bad || r.value("A_In") == "6" {
+		t.Fatalf("A_In %s quality %v, want held: not polled, Bad", r.value("A_In"), q)
+	}
+	if got := r.io.RetainedIO(); got == nil || got.Units["modbus/DEV_A"].Hash != kept.Units["modbus/DEV_A"].Hash {
+		t.Fatalf("retained %+v, want the store's DEV_A kept, not dropped", got)
+	}
+}
+
+// slowStore saves after a delay.
+type slowStore struct {
+	memStore
+	delay time.Duration
+}
+
+func (s *slowStore) Save(st retain.State) error {
+	time.Sleep(s.delay)
+	return s.memStore.Save(st)
+}
+
+// A save slower than the apply's own wait is still a definite answer: the
+// apply waits for the store, and is kept (finding 3).
+func TestIOKeptSlowStoreIsDefinite(t *testing.T) {
+	saved := keepTimeout
+	keepTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { keepTimeout = saved })
+	s1, s2, s3 := newSlave(t, 4), newSlave(t, 7), newSlave(t, 9)
+	files := ioFiles(slavePort(s1), slavePort(s2), "")
+	store := &slowStore{delay: 300 * time.Millisecond}
+	coord := &keepCoord{}
+	coord.lead.Store(true)
+	coord.term.Store(1)
+	r := startKeepRig(t, files, keepOpts{store: store, coord: coord, noFollow: true})
+	r.leading(t)
+	res := r.applyMove(t, files, slavePort(s3), slavePort(s2), ApplyOptions{})
+	if !res.Kept {
+		t.Fatalf("kept false (%s), want the slow save waited for", res.KeptWhy)
+	}
+	if st := store.io(t); st == nil || st.Units["modbus/DEV_A"].Hash == "" {
+		t.Fatalf("store io = %+v, want DEV_A kept", st)
+	}
+}
+
+// An apply waits for the controller's leadership edge to have re-applied
+// what the store keeps: until then it is refused.
+func TestIOApplyRefusedBeforeTheEdge(t *testing.T) {
+	s1, s2, s3 := newSlave(t, 4), newSlave(t, 7), newSlave(t, 9)
+	files := ioFiles(slavePort(s1), slavePort(s2), "")
+	r := startIORig(t, files, false)
+	r.io.Keep = func(context.Context) error { return nil }
+	c := r.io.Stage(withFile(files, "modbus.yaml", modbusYAML(slavePort(s3), slavePort(s2), "", "")), "upload", "tester")
+	if v := r.io.Validate(c); !v.Valid {
+		t.Fatalf("validate: %v", failed(v))
+	}
+	if _, err := r.io.Apply(r.ctx, c, "tester"); !errors.Is(err, ErrApplyBusy) || !strings.Contains(err.Error(), "not yet re-applied") {
+		t.Fatalf("apply before the edge: %v, want refused", err)
+	}
+	r.io.IOCurrent(nil) // the edge: nothing kept, what runs is current
+	if _, err := r.io.Apply(r.ctx, c, "tester"); err != nil {
+		t.Fatalf("apply after the edge: %v", err)
+	}
+}
+
+// The follow's checks hold under the apply lock too: a follow that passed
+// them while standing by, then waited for the lock while this replica took
+// over and applied, does nothing (the reviewer's sequence on #1010).
+func TestIOFollowRechecksUnderTheLock(t *testing.T) {
+	s1, s2, s3 := newSlave(t, 4), newSlave(t, 7), newSlave(t, 9)
+	files := ioFiles(slavePort(s1), slavePort(s2), "")
+	store := &memStore{}
+	coord := &keepCoord{}
+	coord.lead.Store(true)
+	coord.term.Store(1)
+	r := startKeepRig(t, files, keepOpts{store: store, coord: coord, noFollow: true})
+	r.leading(t)
+	r.applyMove(t, files, slavePort(s3), slavePort(s2), ApplyOptions{})
+	// A store that would take DEV_A back to the manifest, newer than what
+	// runs as far as a standby could tell when it read it.
+	stale := &retain.IOState{Seq: r.io.seqNow() + 1}
+	coord.lead.Store(false)
+	r.io.applying.Lock() // an apply in progress: the follow waits here
+	done := make(chan error, 1)
+	go func() { done <- r.io.restoreFrom(context.Background(), stale, true) }()
+	time.Sleep(50 * time.Millisecond) // past its first check, waiting
+	coord.lead.Store(true)            // this replica took over meanwhile
+	r.io.applying.Unlock()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if d := r.io.Differs(); len(d) != 1 {
+		t.Fatalf("differs = %+v: the follow acted on the leader", d)
 	}
 }
