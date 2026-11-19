@@ -118,7 +118,7 @@ func TestVoterTermsOnlyRise(t *testing.T) {
 		t.Fatal("granted term 5 to a second candidate")
 	}
 	p, out := v.Handle(later, Request{From: "B", Term: 4, ID: 3})
-	if p != nil || out[0].Promised != 5 {
+	if p != nil || len(out) != 1 || out[0].Promised != 5 {
 		t.Fatalf("a refusal must name the promised term: %+v", out)
 	}
 }
@@ -135,8 +135,8 @@ func TestWitnessIncarnation(t *testing.T) {
 		t.Fatalf("nothing was waiting: %v", got)
 	}
 	_, out := w.Handle(0, Request{From: "A", Term: 1, ID: 1})
-	if out[0].Incarnation != 42 {
-		t.Fatalf("witness reply incarnation = %d, want 42", out[0].Incarnation)
+	if len(out) != 1 || out[0].Incarnation != 42 {
+		t.Fatalf("witness reply %+v, want one refusal (restart wait) stamped incarnation 42", out)
 	}
 	w2, p2 := NewWitness("W", lease, VoterState{Incarnation: 9, Promised: 3}, 0, func() uint64 { return 42 })
 	if p2 != nil || w2.State().Incarnation != 9 || w2.State().Promised != 3 {
@@ -144,8 +144,8 @@ func TestWitnessIncarnation(t *testing.T) {
 	}
 	c := NewVoter("B", lease, VoterState{Incarnation: 9}, 0)
 	_, out = c.Handle(0, Request{From: "A", Term: 1, ID: 1})
-	if out[0].Incarnation != 0 {
-		t.Fatalf("a controller stamped incarnation %d", out[0].Incarnation)
+	if len(out) != 1 || out[0].Incarnation != 0 {
+		t.Fatalf("controller reply %+v, want one refusal stamped incarnation 0", out)
 	}
 }
 
@@ -154,7 +154,7 @@ func TestWitnessIncarnation(t *testing.T) {
 func TestVoterReplyAddressesTheRequester(t *testing.T) {
 	v := NewVoter("W", lease, VoterState{}, 0)
 	_, out := v.Handle(0, Request{From: "B", Term: 1, Nonce: 77, ID: 3})
-	if out[0].To != "B" || out[0].Nonce != 77 || out[0].ID != 3 {
-		t.Fatalf("reply %+v does not address B's request (nonce 77, id 3)", out[0])
+	if len(out) != 1 || out[0].To != "B" || out[0].Nonce != 77 || out[0].ID != 3 {
+		t.Fatalf("replies %+v: want one addressing B's request (nonce 77, id 3)", out)
 	}
 }

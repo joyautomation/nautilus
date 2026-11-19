@@ -54,6 +54,9 @@ func (c Config) Validate() error {
 }
 
 func (c Config) leaseFor() time.Duration {
+	if mut("no_rho") {
+		return c.Lease
+	}
 	return time.Duration(float64(c.Lease) * (1 - c.Rho))
 }
 
@@ -119,7 +122,7 @@ func (c *Candidate) Leading(now Instant) bool { return c.leading && now < c.leas
 // maxSeen+1 from them land on equal terms, which never yield
 // (YieldTo), round after round.
 func (c *Candidate) Observe(term uint64) {
-	if term > c.maxSeen {
+	if term > c.maxSeen && !mut("no_observe") {
 		c.maxSeen = term
 	}
 }
@@ -240,10 +243,12 @@ func (c *Candidate) OnReply(now Instant, r Reply) {
 	switch {
 	case r.From == c.cfg.Self, r.From == c.cfg.Peer:
 	case r.From == c.cfg.Witness && r.Incarnation == c.cfg.Incarnation && r.Incarnation != 0:
+	case r.From == c.cfg.Witness && mut("any_incarnation"):
+	case mut("any_sender") && r.From != c.cfg.Witness:
 	default:
 		return // not one of our voters, or a witness incarnation we don't count
 	}
-	if r.To != c.cfg.Self || r.Nonce != c.cfg.Nonce {
+	if (r.To != c.cfg.Self && !mut("no_grantee_check")) || (r.Nonce != c.cfg.Nonce && !mut("no_nonce_check")) {
 		return // meant for the other controller, or for an earlier boot
 	}
 	if r.Promised > c.maxSeen {
@@ -251,7 +256,7 @@ func (c *Candidate) OnReply(now Instant, r Reply) {
 	}
 	var rd *round
 	for _, x := range c.rounds {
-		if x.id == r.ID && x.term == r.Term {
+		if (x.id == r.ID || mut("match_by_term")) && x.term == r.Term {
 			rd = x
 		}
 	}
@@ -268,7 +273,7 @@ func (c *Candidate) OnReply(now Instant, r Reply) {
 		// again once that runs out. A refusal of an older round (late, or
 		// a duplicate refused because we re-termed since) changes nothing,
 		// or stragglers would re-term us without end.
-		c.reterm = true
+		c.reterm = !mut("no_reterm")
 	}
 	if !r.Granted && !c.leading && len(rd.replies) >= 2 && len(rd.grants) < 2 {
 		// Heard, and refused by a majority: retry on a later look, after
@@ -282,7 +287,9 @@ func (c *Candidate) OnReply(now Instant, r Reply) {
 		// lease/4 would change nothing, and two controllers started
 		// together would campaign in lockstep at equal terms for ever.
 		c.retryAt = now.Add(c.cfg.look()/2 + j)
-		c.nextLook = c.retryAt
+		if !mut("retry_on_grid") {
+			c.nextLook = c.retryAt
+		}
 		if c.pending == rd {
 			c.pending = nil
 		}
@@ -294,6 +301,9 @@ func (c *Candidate) OnReply(now Instant, r Reply) {
 		return // a lapse is final: no lease from a late majority in the back-off
 	}
 	end := rd.sent.Add(c.cfg.leaseFor())
+	if mut("lease_from_reply") {
+		end = now.Add(c.cfg.leaseFor())
+	}
 	if !c.leading {
 		if c.pending == rd {
 			c.pending = nil
@@ -328,7 +338,13 @@ func (c *Candidate) expire(now Instant) {
 	if c.leading && now >= c.leaseEnd {
 		c.leading = false
 		c.reterm = false
-		c.backoffUntil = c.leaseEnd.Add(2 * c.cfg.Lease)
+		switch {
+		case mut("no_backoff"):
+		case mut("one_lease_backoff"):
+			c.backoffUntil = c.leaseEnd.Add(c.cfg.Lease)
+		default:
+			c.backoffUntil = c.leaseEnd.Add(2 * c.cfg.Lease)
+		}
 	}
 	keep := c.rounds[:0]
 	for _, rd := range c.rounds {
@@ -336,7 +352,7 @@ func (c *Candidate) expire(now Instant) {
 			keep = append(keep, rd)
 			continue
 		}
-		if rd.campaign && len(rd.replies) < 2 {
+		if rd.campaign && len(rd.replies) < 2 && !mut("no_backoff") {
 			if b := rd.sent.Add(2 * c.cfg.Lease); b > c.backoffUntil {
 				c.backoffUntil = b
 			}
