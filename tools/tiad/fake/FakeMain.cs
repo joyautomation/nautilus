@@ -44,6 +44,9 @@ namespace Tiad.Fake
         // machine, when scripted, replaces the scripted gates: probe then
         // runs the real gate evaluator (MachineGates) over it.
         ScriptedMachine machine;
+        // licence is latched by the TIA side's start, as the real host's
+        // is; probe shows it with a scripted machine.
+        readonly LicenceLatch licence = new LicenceLatch();
 
         static List<Gate> Defaults()
         {
@@ -84,11 +87,16 @@ namespace Tiad.Fake
         public List<Gate> Gates()
         {
             var m = Machine();
-            if (m != null) return MachineGates.Evaluate(m, m.NoTia);
+            if (m != null) return MachineGates.Evaluate(m, m.NoTia, licence.Current());
             lock (mu)
             {
                 return new List<Gate>(gates);
             }
+        }
+
+        public void TiaStarted(Exception error)
+        {
+            licence.Started(error);
         }
 
         public object SetGates(Call c)
@@ -451,7 +459,7 @@ namespace Tiad.Fake
         {
             script.Enter("ApplyStation");
             var p = (FakeProject)project;
-            List<string> changes = StationChanges(previous, next);
+            List<string> changes = Station.Changes(previous, next);
             p.Station = next;
             if (changes.Count > 0) p.Changed = true;
             return changes;
@@ -610,70 +618,6 @@ namespace Tiad.Fake
             return null;
         }
 
-        static bool Same(object a, object b)
-        {
-            return Json.Write(a) == Json.Write(b);
-        }
-
-        // StationChanges is tiadtest.StationChanges: in words, what applying
-        // next over prev changes.
-        static List<string> StationChanges(Station prev, Station next)
-        {
-            var outp = new List<string>();
-            if (prev == null)
-            {
-                outp.Add("station created");
-                return outp;
-            }
-            if (!Same(prev.Cpu.ToJson(), next.Cpu.ToJson())) outp.Add("cpu " + next.Cpu.Name + " changed");
-            if (!Same(prev.WebServer == null ? null : prev.WebServer.ToJson(), next.WebServer == null ? null : next.WebServer.ToJson()))
-            {
-                outp.Add("web server changed");
-            }
-            var pm = new SortedDictionary<int, Module>();
-            foreach (var m in prev.Modules) pm[m.Slot] = m;
-            var nm = new SortedDictionary<int, Module>();
-            foreach (var m in next.Modules) nm[m.Slot] = m;
-            var slots = new SortedSet<int>(pm.Keys);
-            slots.UnionWith(nm.Keys);
-            foreach (int slot in slots)
-            {
-                Module a, b;
-                bool inA = pm.TryGetValue(slot, out a), inB = nm.TryGetValue(slot, out b);
-                string s = slot.ToString(System.Globalization.CultureInfo.InvariantCulture);
-                if (!inA) outp.Add("module slot " + s + " added");
-                else if (!inB) outp.Add("module slot " + s + " removed");
-                else if (!Same(a.ToJson(), b.ToJson())) outp.Add("module slot " + s + " changed");
-            }
-            var pd = Devices(prev.Profinet);
-            var nd = Devices(next.Profinet);
-            var names = new SortedSet<string>(pd.Keys, StringComparer.Ordinal);
-            names.UnionWith(nd.Keys);
-            foreach (string n in names)
-            {
-                Device a, b;
-                bool inA = pd.TryGetValue(n, out a), inB = nd.TryGetValue(n, out b);
-                if (!inA) outp.Add("device " + n + " added");
-                else if (!inB) outp.Add("device " + n + " removed");
-                else if (!Same(a.ToJson(), b.ToJson())) outp.Add("device " + n + " changed");
-            }
-            if ((prev.Profinet == null) != (next.Profinet == null) ||
-                prev.Profinet != null && next.Profinet != null && prev.Profinet.UpdateTime != next.Profinet.UpdateTime)
-            {
-                outp.Add("IO system changed");
-            }
-            return outp;
-        }
-
-        static Dictionary<string, Device> Devices(Profinet p)
-        {
-            var m = new Dictionary<string, Device>(StringComparer.Ordinal);
-            if (p != null)
-            {
-                foreach (var d in p.Devices) m[d.Name] = d;
-            }
-            return m;
-        }
     }
 
     static class Program

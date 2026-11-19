@@ -346,6 +346,71 @@ namespace Tiad
             if (input.HasValue && input.Value < 0) errs.Add(at + ".inputStart " + I(input.Value) + " is negative");
             if (output.HasValue && output.Value < 0) errs.Add(at + ".outputStart " + I(output.Value) + " is negative");
         }
+
+        static bool Same(object a, object b)
+        {
+            return Json.Write(a) == Json.Write(b);
+        }
+
+        // Changes is tiadtest.StationChanges: in words, what applying next
+        // over prev changes. tiad-fake and tiad.Openness both report it.
+        public static List<string> Changes(Station prev, Station next)
+        {
+            var outp = new List<string>();
+            if (prev == null)
+            {
+                outp.Add("station created");
+                return outp;
+            }
+            if (!Same(prev.Cpu.ToJson(), next.Cpu.ToJson())) outp.Add("cpu " + next.Cpu.Name + " changed");
+            if (!Same(prev.WebServer == null ? null : prev.WebServer.ToJson(), next.WebServer == null ? null : next.WebServer.ToJson()))
+            {
+                outp.Add("web server changed");
+            }
+            var pm = new SortedDictionary<int, Module>();
+            foreach (var m in prev.Modules) pm[m.Slot] = m;
+            var nm = new SortedDictionary<int, Module>();
+            foreach (var m in next.Modules) nm[m.Slot] = m;
+            var slots = new SortedSet<int>(pm.Keys);
+            slots.UnionWith(nm.Keys);
+            foreach (int slot in slots)
+            {
+                Module a, b;
+                bool inA = pm.TryGetValue(slot, out a), inB = nm.TryGetValue(slot, out b);
+                string s = slot.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                if (!inA) outp.Add("module slot " + s + " added");
+                else if (!inB) outp.Add("module slot " + s + " removed");
+                else if (!Same(a.ToJson(), b.ToJson())) outp.Add("module slot " + s + " changed");
+            }
+            var pd = Devices(prev.Profinet);
+            var nd = Devices(next.Profinet);
+            var names = new SortedSet<string>(pd.Keys, StringComparer.Ordinal);
+            names.UnionWith(nd.Keys);
+            foreach (string n in names)
+            {
+                Device a, b;
+                bool inA = pd.TryGetValue(n, out a), inB = nd.TryGetValue(n, out b);
+                if (!inA) outp.Add("device " + n + " added");
+                else if (!inB) outp.Add("device " + n + " removed");
+                else if (!Same(a.ToJson(), b.ToJson())) outp.Add("device " + n + " changed");
+            }
+            if ((prev.Profinet == null) != (next.Profinet == null) ||
+                prev.Profinet != null && next.Profinet != null && prev.Profinet.UpdateTime != next.Profinet.UpdateTime)
+            {
+                outp.Add("IO system changed");
+            }
+            return outp;
+        }
+
+        static Dictionary<string, Device> Devices(Profinet p)
+        {
+            var m = new Dictionary<string, Device>(StringComparer.Ordinal);
+            if (p != null)
+            {
+                foreach (var d in p.Devices) m[d.Name] = d;
+            }
+            return m;
+        }
     }
 
     // StationRules are the siemens/station primitives.

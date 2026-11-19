@@ -394,6 +394,18 @@ behaviour. So, until then:
   "a cancel loads nothing" is what S2 must prove), a load tiad did not
   approve, decide called zero times or twice. Never success, never a
   plain refusal. The session stays open for the compare.
+- **How `tiad.Openness` keeps "decide once".** Openness calls its
+  pre-download callback once per configuration. At the first callback
+  `tiad.Openness` lists every pending configuration from that
+  configuration's parent, calls decide once with all of them as questions
+  (plus `start-after` when none asks it, so starting the CPU is decided
+  before loading and applied in the after-download callback), then writes
+  each configuration's resolved answer in its own callback, `NoAction`
+  included. A list it cannot read, a configuration missing from it or
+  asked twice, or an answer it cannot write cancels the download. The
+  `certificate` question's fingerprint is not read yet, so a trust decision
+  cannot match it: a TLS check refuses until S2b. All of this is pure code
+  in `tools/tiad/core/TiaRules.cs`, unit-tested without TIA.
 - **Every download is audited**: one log line with the address, the
   question IDs asked (never TIA's text), the decisions (request-supplied
   names quoted), whether a protection password was set (never its
@@ -565,12 +577,19 @@ The CLI hands the writer what it needs from the manifest.
    - The S7 identity read confirmed the CPU and FW 3.1.3.
    - The web server is off (80/443 closed), and OPC UA and SNMP don't answer.
    - The Web API checks therefore move to S2b.
-2. **S2a, the first TIA session, read-only towards the CPU.**
-   - probe;
-   - upload from the CPU;
-   - export everything (SCL, SimaticML, station) twice and diff the two
-     exports (determinism);
-   - learn the rack modules and the protection level.
+2. **S2a, the first TIA session, read-only towards the CPU.** Two steps,
+   each OK'd first.
+   - **A, TIA starts, no CPU contact:** reinstall without `-NoTia`; diff
+     the licence manager's and ProgramData's state across the first start;
+     show the allowlist entry spares the consent prompt; Openness thread
+     affinity; create a project with the bench CPU's spec offline (the
+     attribute names are checked and logged); compile; export twice and
+     diff; list the PC interfaces; observe one GSDML install through TIA's
+     own UI, to find the route Openness lacks.
+   - **B, read-only towards the CPU:** probe; upload from the CPU into a
+     fresh project; export everything (SCL, SimaticML, station) twice and
+     diff the two exports (determinism); learn the rack modules and the
+     protection level.
 3. **S2b, the regenerate loop on the bench** (naut-lead told first).
    - The station spec is the uploaded modules plus the web server and a
      user, with a minimal SCL program.

@@ -22,9 +22,10 @@
 
 .NOTES
     - tiad.exe never references Siemens.Engineering. The TIA side,
-      tiad.Openness.dll, is built separately and loaded on the first call
-      that needs TIA. This script does not build it yet, so the agent it
-      installs cannot start TIA.
+      tiad.Openness.dll, is built against the registered Openness public
+      API and loaded on the first call that needs TIA. With -NoTia it is
+      not built, and a copy left by an earlier install is removed, so
+      nothing installed can start TIA.
     - TIA's Openness allowlist is checked against the exe's path, last write
       time and SHA-256, so the entry is rewritten after every build. That
       the entry spares the consent prompt is verified at the first TIA
@@ -47,7 +48,11 @@ param(
     [string] $Targets    = '',
     # Overridable so a second install does not unregister the first.
     [string] $TaskName   = 'tiad',
-    # Fail the tia gate: no call can start TIA (and the trial clock).
+    # The PC interface TIA reaches CPUs through (TIAD_PC_INTERFACE), when TIA
+    # lists more than one in PN/IE mode.
+    [string] $PcInterface = '',
+    # Fail the tia gate, and build no tiad.Openness.dll: no call can start
+    # TIA (and the trial clock).
     [switch] $NoTia,
     [switch] $Uninstall
 )
@@ -265,6 +270,10 @@ if (-not $loopback -and -not (Get-NetIPAddress -AddressFamily IPv4 -IPAddress $L
     Die "-Listen $Listen is not an address of this machine"
 }
 Ok "listening on $Listen"
+# It goes into the runner as one cmd variable: nothing cmd would expand.
+if ($PcInterface -cnotmatch '^[A-Za-z0-9 ()._#,:/\-]*$') {
+    Die "-PcInterface may hold letters, digits, spaces and ()._#,:/\- only"
+}
 $v = RegValue $OpennessKey 'PortalVersion'
 if ($v -ne 'V21') { Die "TIA Portal V21 with Openness is not registered (HKLM\$OpennessKey PortalVersion: '$v')" }
 $base = RegValue $PublicApiKey 'Siemens.Engineering.Base'
@@ -305,6 +314,17 @@ if ($LASTEXITCODE -ne 0) { Die "building tiad-core.dll failed" }
 & $csc @common /target:exe "/out:$exe" "/r:$core" (Join-Path $src 'host\*.cs')
 if ($LASTEXITCODE -ne 0) { Die "building $ExeName failed" }
 Ok "built $exe (C# 5, stock csc)"
+$opn = Join-Path $InstallDir 'tiad.Openness.dll'
+if ($NoTia) {
+    if (Test-Path -LiteralPath $opn) { Remove-Item -LiteralPath $opn -Force }
+    Ok "tiad.Openness.dll not built (-NoTia): nothing installed can start TIA"
+} else {
+    if (-not (Test-Path (Join-Path $src 'openness\*.cs'))) { Die "no openness\*.cs beside this script: run it from a copy of tools/tiad" }
+    $api = Split-Path $base
+    & $csc @common /target:library "/out:$opn" "/r:$core" "/r:$api\Siemens.Engineering.Base.dll" "/r:$api\Siemens.Engineering.Step7.dll" (Join-Path $src 'openness\*.cs')
+    if ($LASTEXITCODE -ne 0) { Die "building tiad.Openness.dll failed" }
+    Ok "built $opn against the Openness public API: TIA starts at the first call that needs it"
+}
 
 # ------------------------------------------------------ 3. Openness allowlist
 Write-Host "`n3. Openness allowlist"
@@ -374,6 +394,7 @@ set TIAD_TOKEN_FILE=$TokenFile
 set TIAD_WORKDIR=$WorkDir
 set TIAD_TARGETS=$Targets
 $noTiaLine
+set "TIAD_PC_INTERFACE=$PcInterface"
 set TIAD_EXIT_ON_STDIN=
 cd /d "$InstallDir"
 "$exe" >> "$CfgDir\$TaskName.out.log" 2>> "$CfgDir\$TaskName.err.log"
