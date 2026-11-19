@@ -62,6 +62,9 @@ func (f *fakeParams) hook() *ParamHook {
 			if n, ok := value.(int64); ok && n > 1000 {
 				return ParamAnswer{}, fmt.Errorf("%w: %d is outside the IODD's range", ErrParamInvalid, n)
 			}
+			if ref == "swap" {
+				return ParamAnswer{}, fmt.Errorf("%w: the device changed during the write", ErrParamUncertain)
+			}
 			if ref == "boom" {
 				return ParamAnswer{}, errors.New("the master timed out")
 			}
@@ -216,4 +219,20 @@ func wrongDeviceParams() *fakeParams {
 	f := newFakeParams()
 	f.identity = "WrongDevice"
 	return f
+}
+
+// A write whose outcome is uncertain (the device on the port changed during
+// it) is not success and not a refusal: 502, and the journal says unknown.
+func TestParamWriteOutcomeUncertain(t *testing.T) {
+	f := newFakeParams()
+	f.values["swap"] = int64(0)
+	s := paramServer(t, f, Options{})
+	rec := call(t, s, "PUT", "/api/iolink/LEVEL1/params/swap", `{"value": 1}`)
+	if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "changed during the write") {
+		t.Errorf("an uncertain write: %d %s", rec.Code, rec.Body)
+	}
+	es := s.audit.ring.Recent()
+	if len(es) != 1 || es[0].Result != "unknown" || es[0].Action != "param.write" {
+		t.Errorf("the journal: %+v, want one param.write with result unknown", es)
+	}
 }

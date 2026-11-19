@@ -40,6 +40,10 @@ var (
 	ErrParamInvalid = errors.New("not allowed by the IODD")
 	// ErrParamRefused: the port cannot take it now (409).
 	ErrParamRefused = errors.New("refused")
+	// ErrParamUncertain: the device on the port changed while a write was
+	// under way, so whether the right device took it is not known (502, and
+	// the journal records the outcome as unknown).
+	ErrParamUncertain = errors.New("outcome uncertain")
 )
 
 // ParamHook is what the parameter routes need of the project.
@@ -199,7 +203,10 @@ func (s *Server) handleParamWrite(w http.ResponseWriter, r *http.Request) {
 	ans, err := s.params.Write(ctx, port, r.PathValue("ref"), value)
 	if err != nil {
 		code := paramStatus(err)
-		if code != http.StatusBadGateway {
+		switch {
+		case errors.Is(err, ErrParamUncertain):
+			w.Header().Set(outcomeHeader, "unknown")
+		case code != http.StatusBadGateway:
 			w.Header().Set(outcomeHeader, "refused")
 		}
 		writeJSON(w, code, map[string]string{"error": err.Error()})

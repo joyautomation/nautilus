@@ -99,9 +99,10 @@ func TestParamHookFindsThePortDevice(t *testing.T) {
 
 func TestParamErrorKinds(t *testing.T) {
 	for kind, want := range map[error]error{
-		devbind.ErrISDUUnknown: server.ErrParamUnknown,
-		devbind.ErrISDUInvalid: server.ErrParamInvalid,
-		devbind.ErrISDURefused: server.ErrParamRefused,
+		devbind.ErrISDUUnknown:   server.ErrParamUnknown,
+		devbind.ErrISDUInvalid:   server.ErrParamInvalid,
+		devbind.ErrISDURefused:   server.ErrParamRefused,
+		devbind.ErrISDUUncertain: server.ErrParamUncertain,
 	} {
 		err := paramError(fmt.Errorf("%w: x", kind))
 		if !errors.Is(err, want) || !errors.Is(err, kind) {
