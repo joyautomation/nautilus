@@ -497,6 +497,9 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 			return snap, ok
 		}, fsys)
 	}
+	// IO-Link device parameters (#705): the port devices' ISDU behind
+	// /api/iolink, when the project has any.
+	sopts.Params = proj.ParamHook()
 	// naut's own build of the HMI (an app with src/routes, or the default
 	// app from the mimics): served at "/", the dashboard moves to /_nautilus/
 	builtHMI := buildHMIForRun(proj, dir, os.Stderr)
