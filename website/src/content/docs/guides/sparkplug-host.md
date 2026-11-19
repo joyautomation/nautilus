@@ -254,18 +254,25 @@ metrics) or `spBv1.0/<group>/DCMD/<edge>/<device>` (device metrics), QoS
 
 ### Writes to a site that is down
 
-**A command to a dark site is delivered when it comes back, once, unless
-the site already reports that value.**
+**A command to a dark site is delivered when it comes back, once.**
 
 An operator who dials a setpoint on a site showing `__Online: false` has
 still asked for something, and the ask outlives the outage: the write is
 held per site (the latest value per tag, up to 256 tags) and delivered on
-that site's next `NBIRTH` — after the birth has settled what the site
-actually holds. If the site comes back already at the commanded value,
-the command is satisfied and nothing goes on the wire; if it comes back
-at anything else, one command goes out, and only for the members the
-operator touched. Write twice while the site is down and the second value
-is what lands, because that is what the operator asked for last.
+that site's next birth. Write twice while the site is down and the second
+value is what lands, because that is what the operator asked for last;
+the first, superseded one never goes out. Writing the setpoint back to
+its value from before the outage is a write like any other: for a plain
+output, that value goes out at the birth (below).
+
+- **A plain output:** the parked command always goes out at the birth.
+  A site that died or reborn may hold anything, and the host does not
+  read a plain output's value from the birth, so it does not assume the
+  command has already happened.
+- **A template member output:** the command settles against the value
+  the birth reports. If the site comes back already at the commanded
+  value nothing goes on the wire; if it comes back at anything else, one
+  command goes out, for the members the operator touched.
 
 A device works the same way. A command for a dark device is held even
 when its node is online, and goes out on that device's next `DBIRTH`. A

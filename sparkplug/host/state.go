@@ -107,6 +107,7 @@ func (d *Driver) handleMessage(topic string, payload []byte) {
 	}
 	d.mu.Unlock()
 	d.flushRebirths()
+	d.flushForgets() // before flushAdopts: a birth's adoptions are newer
 	d.flushAdopts()
 	// A birth is what a command parked for a dark site was waiting for. It
 	// runs after flushAdopts on purpose: the birth's own values are this
@@ -197,6 +198,7 @@ func (d *Driver) nodeLocked(nk nodeKey) *nodeState {
 // to offline until its own DBIRTH, and the birth's metric values applied.
 // Caller holds d.mu.
 func (d *Driver) applyNBirthLocked(ns *nodeState, p sparkplug.Payload) {
+	d.forgetQ = append(d.forgetQ, forgetSite{node: ns.edge, all: true})
 	if p.Seq != 0 {
 		// Not fatal — accept it and resynchronise from what we were sent,
 		// rather than deadlocking on a non-conformant edge.
@@ -237,6 +239,7 @@ func (d *Driver) applyNBirthLocked(ns *nodeState, p sparkplug.Payload) {
 // Device aliases join the node's single table — the spec scopes aliases to the
 // edge node including its devices. Caller holds d.mu.
 func (d *Driver) applyDBirthLocked(ns *nodeState, device string, p sparkplug.Payload) {
+	d.forgetQ = append(d.forgetQ, forgetSite{node: ns.edge, device: device})
 	dev := ns.device(device)
 	dev.setOnline(true)
 	dev.birthMs = birthTimestamp(p)
@@ -327,6 +330,7 @@ func birthTimestamp(p sparkplug.Payload) int64 {
 // Sparkplug's last value *is* the value, and quality rides on the synthesized
 // __Online companion tags. Caller holds d.mu.
 func (d *Driver) applyNDeathLocked(ns *nodeState, p sparkplug.Payload) {
+	d.forgetQ = append(d.forgetQ, forgetSite{node: ns.edge, all: true})
 	bd, ok := bdSeqOf(p.Metrics)
 	if !ok {
 		d.stateLogger().Warn("sparkplug host: NDEATH without bdSeq, ignored",
@@ -368,6 +372,7 @@ func (d *Driver) applyNDeathLocked(ns *nodeState, p sparkplug.Payload) {
 func (d *Driver) brokerLostLocked() {
 	d.sessionDown = true
 	for _, ns := range d.nodes {
+		d.forgetQ = append(d.forgetQ, forgetSite{node: ns.edge, all: true})
 		ns.stopGap()
 		ns.pending = nil
 		ns.seqPrimed = false
@@ -389,6 +394,7 @@ func (d *Driver) brokerLostLocked() {
 // applyDDeathLocked takes one device offline, keeping its values.
 // Caller holds d.mu.
 func (d *Driver) applyDDeathLocked(ns *nodeState, device string) {
+	d.forgetQ = append(d.forgetQ, forgetSite{node: ns.edge, device: device})
 	dev := ns.device(device)
 	dev.setOnline(false)
 	d.syncTagsLocked(ns)
