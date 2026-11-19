@@ -894,8 +894,11 @@ A changed device address, unit id, register address, OPC UA endpoint or
 node id applies while the scan runs: no restart, and only the changed
 device's tags read anything but good during the swap. A candidate goes
 through four visible steps: **pending** (staged), **valid** or **invalid**
-(checked against what runs), then **applied** or **failed**. A refused or
-failed apply leaves what runs as it was.
+(checked against what runs), then **applied** or **failed**. A refused
+apply changes nothing. A failed one puts back what it had changed, so what
+runs is as it was; only if putting it back fails too does the apply answer
+`500`, with `config.fault` naming what is left in an unknown state until
+an apply re-establishes it.
 
 ```sh
 # stage: from a commit in the controller's history, or uploaded files
@@ -932,7 +935,11 @@ curl -s -X POST localhost:8080/api/io/staged/1/apply
 - **The unit applied** is one Modbus device (a `devices:` row is one),
   inside the driver that runs. Anything else swaps the whole driver; that
   works for `modbus` and `opcua-client` drivers, in a project with two or
-  more drivers.
+  more drivers. A Modbus device applied on its own disconnects before it
+  reconnects at its new address. A whole-driver swap starts the new driver
+  before it stops the old one, so for a moment both are connected: a
+  device that allows a single connection may refuse the new one until the
+  old has gone.
 - **`willCommand`** lists the outputs the first scan after the apply will
   send to what changes, with their values now (they can change before the
   apply). The apply's `commanded` is what that scan actually queued for

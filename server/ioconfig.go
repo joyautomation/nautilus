@@ -21,7 +21,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"sort"
 	"strconv"
@@ -99,6 +98,7 @@ type stagedIO struct {
 	Result     any       `json:"result,omitempty"`
 
 	cand any
+	gen  int // bumped on every state change: a validate that raced one does not overwrite it
 }
 
 type ioStaging struct {
@@ -121,17 +121,14 @@ func (s *Server) ioConfigState() *IOConfigState {
 	return st
 }
 
-// requester is who a request is from, for the record: the auth token's
-// holder until users exist (#708), else the client's address.
-func requester(r *http.Request) string {
-	if r.Header.Get("Authorization") != "" || r.Header.Get("X-Nautilus-Token") != "" {
+// requester is who a write is from, for the record: until users exist
+// (#708, #894's caller identity), "token" on a server with a token (a write
+// got here only by presenting it), else "anonymous".
+func (s *Server) requester() string {
+	if s.authToken != "" {
 		return "token"
 	}
-	host := r.RemoteAddr
-	if h, _, err := net.SplitHostPort(host); err == nil {
-		host = h
-	}
-	return host
+	return "anonymous"
 }
 
 func (s *Server) ioUnavailable(w http.ResponseWriter) bool {
@@ -182,17 +179,30 @@ func (s *Server) handleIOStage(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": `body must be {"sha": "<commit>"} or {"files": {"<path>": "<content>"}, "driver": "<name>"}`})
 		return
 	}
-	by := requester(r)
+	by := s.requester()
 	var files map[string][]byte
 	from := req.Sha
-	if req.Sha == "" {
+	if req.Sha != "" {
+		// The commit as the controller's history knows it, recorded in
+		// full, not the prefix typed.
+		c := s.history().Find(req.Sha)
+		if c == nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "no commit " + req.Sha + " in this controller's history"})
+			return
+		}
+		from = c.Sha
+	} else {
 		from = "upload"
 		files = make(map[string][]byte, len(req.Files))
 		for p, c := range req.Files {
 			files[p] = []byte(c)
 		}
 	}
-	cand, err := s.io.Stage(req.Sha, files, by)
+	sha := ""
+	if req.Sha != "" {
+		sha = from
+	}
+	cand, err := s.io.Stage(sha, files, by)
 	if err != nil {
 		code := http.StatusUnprocessableEntity
 		if errors.Is(err, ErrIONoSnapshot) {
@@ -276,6 +286,7 @@ func (s *Server) handleIOValidate(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "candidate " + st.ID + " is " + state})
 		return
 	}
+	gen := st.gen
 	s.staging.mu.Unlock()
 	valid, drivers, body := s.io.Validate(st.cand)
 	errText := ""
@@ -288,14 +299,23 @@ func (s *Server) handleIOValidate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.staging.mu.Lock()
+	if st.gen != gen {
+		// An apply (or another validate) moved it on meanwhile: what this
+		// validate found is about a state that is gone.
+		state := st.State
+		s.staging.mu.Unlock()
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "candidate " + st.ID + " changed while it was validated (now " + state + "); validate it again"})
+		return
+	}
 	st.Validation, st.Error = body, errText
 	st.State = "invalid"
 	if valid {
 		st.State = "valid"
 	}
+	st.gen++
 	out := *st
 	s.staging.mu.Unlock()
-	slog.Info("config.validate", "id", st.ID, "result", out.State, "by", requester(r))
+	slog.Info("config.validate", "id", st.ID, "result", out.State, "by", s.requester())
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -319,9 +339,10 @@ func (s *Server) handleIOApply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	st.State = "applying"
+	st.gen++
 	s.staging.mu.Unlock()
 
-	by := requester(r)
+	by := s.requester()
 	body, err := s.io.Apply(r.Context(), st.cand, by)
 	s.staging.mu.Lock()
 	code := http.StatusOK
@@ -339,6 +360,7 @@ func (s *Server) handleIOApply(w http.ResponseWriter, r *http.Request) {
 		st.State, st.Error = "failed", err.Error()
 		code = http.StatusUnprocessableEntity
 	}
+	st.gen++
 	out := *st
 	s.staging.mu.Unlock()
 	writeJSON(w, code, out)

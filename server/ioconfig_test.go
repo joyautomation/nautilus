@@ -5,16 +5,21 @@ package server
 // stream. The engine itself is tested in internal/project.
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 type fakeIO struct {
-	staged   []string // what Stage was asked for
+	gate     chan struct{} // when set, Validate waits for it
+	staged   []string      // what Stage was asked for
 	valid    bool
 	drivers  []string
 	applyErr error
@@ -26,7 +31,7 @@ type fakeIO struct {
 func (f *fakeIO) hook() *IOHook {
 	return &IOHook{
 		Stage: func(sha string, files map[string][]byte, by string) (any, error) {
-			if sha == "nosnap" {
+			if strings.HasPrefix(sha, "deadbeef") {
 				return nil, fmt.Errorf("%w: nosnap", ErrIONoSnapshot)
 			}
 			what := sha
@@ -37,6 +42,9 @@ func (f *fakeIO) hook() *IOHook {
 			return what, nil
 		},
 		Validate: func(cand any) (bool, []string, any) {
+			if f.gate != nil {
+				<-f.gate
+			}
 			return f.valid, f.drivers, map[string]any{"valid": f.valid, "cand": cand}
 		},
 		Apply: func(ctx context.Context, cand any, by string) (any, error) {
@@ -53,9 +61,17 @@ func (f *fakeIO) hook() *IOHook {
 	}
 }
 
+// The controller's history: abc1234… has a file snapshot, deadbeef… not.
+const shaA, shaNoSnap = "abc1234567890abc1234567890abc1234567890a", "deadbeef0123456789deadbeef0123456789dead"
+
+func ioOptions(f *fakeIO, online bool) Options {
+	h := &ProgramHistory{Commits: []ProgramCommit{{Sha: shaA, Short: "abc1234"}, {Sha: shaNoSnap, Short: "deadbee"}}}
+	return Options{OnlineEdits: online, IO: f.hook(), History: func() *ProgramHistory { return h }}
+}
+
 func ioServer(t *testing.T, f *fakeIO, online bool) http.Handler {
 	t.Helper()
-	return New(newTestRuntime(t), Options{OnlineEdits: online, IO: f.hook()}).Handler()
+	return New(newTestRuntime(t), ioOptions(f, online)).Handler()
 }
 
 // pending → valid → applying → applied, each visible, and the drift on
@@ -112,7 +128,7 @@ func TestIORoutesRefuse(t *testing.T) {
 	}
 	t.Run("online edits off", func(t *testing.T) {
 		f := &fakeIO{valid: true}
-		w, _ := doJSON(t, ioServer(t, f, false), "POST", "/api/io/staged", map[string]any{"sha": "abc"})
+		w, _ := doJSON(t, ioServer(t, f, false), "POST", "/api/io/staged", map[string]any{"sha": "abc1234"})
 		if w.Code != http.StatusForbidden || len(f.staged) != 0 {
 			t.Fatalf("%d, staged %v; want 403, nothing staged", w.Code, f.staged)
 		}
@@ -126,8 +142,21 @@ func TestIORoutesRefuse(t *testing.T) {
 		}
 	})
 	t.Run("no snapshot of the commit", func(t *testing.T) {
-		if w, _ := doJSON(t, ioServer(t, &fakeIO{}, true), "POST", "/api/io/staged", map[string]any{"sha": "nosnap"}); w.Code != http.StatusConflict {
+		if w, _ := doJSON(t, ioServer(t, &fakeIO{}, true), "POST", "/api/io/staged", map[string]any{"sha": "deadbee"}); w.Code != http.StatusConflict {
 			t.Fatalf("%d, want 409", w.Code)
+		}
+	})
+	t.Run("a commit not in the history", func(t *testing.T) {
+		f := &fakeIO{}
+		if w, _ := doJSON(t, ioServer(t, f, true), "POST", "/api/io/staged", map[string]any{"sha": "1234567"}); w.Code != http.StatusNotFound || len(f.staged) != 0 {
+			t.Fatalf("%d, staged %v; want 404, nothing staged", w.Code, f.staged)
+		}
+	})
+	t.Run("a commit is recorded resolved", func(t *testing.T) {
+		f := &fakeIO{}
+		w, st := doJSON(t, ioServer(t, f, true), "POST", "/api/io/staged", map[string]any{"sha": "abc1234"})
+		if w.Code != http.StatusCreated || st["from"] != shaA || fmt.Sprint(f.staged) != "["+shaA+"]" {
+			t.Fatalf("%d from %v, engine got %v; want the full commit %s", w.Code, st["from"], f.staged, shaA)
 		}
 	})
 	t.Run("an unknown candidate", func(t *testing.T) {
@@ -138,7 +167,7 @@ func TestIORoutesRefuse(t *testing.T) {
 	t.Run("apply before validate", func(t *testing.T) {
 		f := &fakeIO{valid: true}
 		h := ioServer(t, f, true)
-		id := stage(t, h, map[string]any{"sha": "abc"})
+		id := stage(t, h, map[string]any{"sha": "abc1234"})
 		if w, _ := doJSON(t, h, "POST", "/api/io/staged/"+id+"/apply", nil); w.Code != http.StatusConflict || f.applied != 0 {
 			t.Fatalf("%d, applied %d; want 409, nothing applied", w.Code, f.applied)
 		}
@@ -146,7 +175,7 @@ func TestIORoutesRefuse(t *testing.T) {
 	t.Run("an invalid candidate", func(t *testing.T) {
 		f := &fakeIO{valid: false}
 		h := ioServer(t, f, true)
-		id := stage(t, h, map[string]any{"sha": "abc"})
+		id := stage(t, h, map[string]any{"sha": "abc1234"})
 		if _, st := doJSON(t, h, "POST", "/api/io/staged/"+id+"/validate", nil); st["state"] != "invalid" {
 			t.Fatalf("validate: %v", st)
 		}
@@ -175,7 +204,7 @@ func TestIORoutesRefuse(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := &fakeIO{valid: true, applyErr: tc.err}
 			h := ioServer(t, f, true)
-			id := stage(t, h, map[string]any{"sha": "abc"})
+			id := stage(t, h, map[string]any{"sha": "abc1234"})
 			doJSON(t, h, "POST", "/api/io/staged/"+id+"/validate", nil)
 			w, st := doJSON(t, h, "POST", "/api/io/staged/"+id+"/apply", nil)
 			if w.Code != tc.code || st["state"] != tc.state || st["error"] == "" {
@@ -201,5 +230,101 @@ func TestIOConfigOnTheStream(t *testing.T) {
 	}
 	if New(newTestRuntime(t), Options{}).ioConfigState() != nil {
 		t.Fatal("a controller without live I/O configuration put a config block on its frames")
+	}
+}
+
+// Every write route needs online edits AND the write authorisation: with
+// either missing, stage, validate and apply are refused and nothing moves.
+func TestIORoutesAuthorise(t *testing.T) {
+	type call struct {
+		path string
+		body any
+	}
+	calls := func(id string) []call {
+		return []call{
+			{"/api/io/staged", map[string]any{"sha": "abc1234"}},
+			{"/api/io/staged/" + id + "/validate", nil},
+			{"/api/io/staged/" + id + "/apply", nil},
+		}
+	}
+	do := func(h http.Handler, path string, body any, token string) int {
+		var buf bytes.Buffer
+		if body != nil {
+			json.NewEncoder(&buf).Encode(body)
+		}
+		req := httptest.NewRequest("POST", "http://localhost"+path, &buf)
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		return w.Code
+	}
+	// A candidate already staged and valid, put in directly: validate and
+	// apply must refuse it on their own check, not for want of one.
+	seeded := func(srv *Server) {
+		srv.staging.all = map[string]*stagedIO{"1": {ID: "1", State: "valid", cand: shaA}}
+	}
+	t.Run("online edits off", func(t *testing.T) {
+		f := &fakeIO{valid: true}
+		srv := New(newTestRuntime(t), ioOptions(f, false))
+		seeded(srv)
+		for _, c := range calls("1") {
+			if code := do(srv.Handler(), c.path, c.body, ""); code != http.StatusForbidden {
+				t.Errorf("%s: %d, want 403", c.path, code)
+			}
+		}
+		if len(f.staged) != 0 || f.applied != 0 || srv.staging.all["1"].State != "valid" {
+			t.Fatalf("refused writes moved something: staged %v applied %d state %s", f.staged, f.applied, srv.staging.all["1"].State)
+		}
+	})
+	t.Run("no token", func(t *testing.T) {
+		f := &fakeIO{valid: true}
+		o := ioOptions(f, true)
+		o.AuthToken = "s3cret"
+		srv := New(newTestRuntime(t), o)
+		seeded(srv)
+		for _, c := range calls("1") {
+			if code := do(srv.Handler(), c.path, c.body, ""); code != http.StatusUnauthorized {
+				t.Errorf("%s without the token: %d, want 401", c.path, code)
+			}
+		}
+		if len(f.staged) != 0 || f.applied != 0 || srv.staging.all["1"].State != "valid" {
+			t.Fatalf("refused writes moved something: staged %v applied %d state %s", f.staged, f.applied, srv.staging.all["1"].State)
+		}
+		if code := do(srv.Handler(), "/api/io/staged/1/apply", nil, "s3cret"); code != http.StatusOK || f.applied != 1 {
+			t.Fatalf("with the token: %d, applied %d", code, f.applied)
+		}
+		if by := srv.staging.all["1"]; by.State != "applied" {
+			t.Fatalf("state %s", by.State)
+		}
+	})
+}
+
+// A validate that was still running when an apply finished does not put
+// the candidate back to valid: it answers 409 and leaves "applied".
+func TestIOValidateDoesNotOverwriteAnApply(t *testing.T) {
+	f := &fakeIO{valid: true}
+	h := ioServer(t, f, true)
+	_, st := doJSON(t, h, "POST", "/api/io/staged", map[string]any{"sha": "abc1234"})
+	id := st["id"].(string)
+	doJSON(t, h, "POST", "/api/io/staged/"+id+"/validate", nil) // valid
+
+	f.gate = make(chan struct{})
+	done := make(chan int)
+	go func() {
+		w, _ := doJSON(t, h, "POST", "/api/io/staged/"+id+"/validate", nil)
+		done <- w.Code
+	}()
+	time.Sleep(50 * time.Millisecond) // the second validate is in the engine
+	if w, st := doJSON(t, h, "POST", "/api/io/staged/"+id+"/apply", nil); w.Code != http.StatusOK || st["state"] != "applied" {
+		t.Fatalf("apply: %d %v", w.Code, st)
+	}
+	close(f.gate)
+	if code := <-done; code != http.StatusConflict {
+		t.Fatalf("the raced validate answered %d, want 409", code)
+	}
+	if _, st := doJSON(t, h, "GET", "/api/io/staged/"+id, nil); st["state"] != "applied" {
+		t.Fatalf("after the raced validate, state %v, want applied", st["state"])
 	}
 }
