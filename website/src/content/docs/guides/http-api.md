@@ -641,35 +641,61 @@ authorization.
 A substitute runs the program on a value the project chose while a sensor
 is bad or wrong, flagged everywhere as quality `substituted`, for a
 bounded time. Which inputs may be substituted, on what value, for how
-long at most, is the manifest's `substitutes:` block. The three write
-calls need the same authorization as `POST /api/tags`.
+long at most, is the manifest's `substitutes:` block. See
+[Substitute values](/guides/substitutes/) for the rules, the companion
+tags, restarts and takeovers. The three write calls go through the
+`substitute` permission, whose policy today is that of `POST /api/tags`:
+`401` when unauthenticated, `403` when refused, and `501` on a server that
+mirrors a controller it does not run.
 
 ```sh
 curl -s localhost:8080/api/substitutes | jq -c '.rules'
-curl -s -X POST localhost:8080/api/substitutes -d '{"name": "LS_High"}'
+curl -s -X POST localhost:8080/api/substitutes \
+  -d '{"name": "LS_High", "requestId": "0b1c…"}'
 curl -s -X POST localhost:8080/api/substitutes/ack -d '{"ids": [1]}'
 curl -s -X DELETE localhost:8080/api/substitutes/1
 ```
 
 - **`GET`** answers `{"substitutes": […], "rules": […]}`: each active entry
-  with its `id`, `value`, the `live` value and `liveQuality` under it, who
-  started it (`by`), `untilMs`, `remainingMs`, `ackOnStart` and `acked`,
-  and its rule's `role`, `maxMs` and `operatorValue`.
-- **`POST`** `{"name", "value"?, "seconds"?}` starts one. The value is the
-  rule's unless the rule has `operator-value: true` (`403` otherwise);
-  `seconds` defaults to the rule's maximum, may not exceed it, and is at
-  least 1 (`400` otherwise). Starting
-  an address that already has one replaces it with a new entry and a new
-  `id`: a substitute is never extended. `400` for a tag no rule names.
+  with its `id` (a number), `name`, `value`, the `live` value and
+  `liveQuality` under it, who started it (`by`), `startMs`, `untilMs`,
+  `grantedMs`, `remainingMs`, `ackOnStart`, `acked`, `fault` (when it needs
+  a person), its `requestId` and its rule's `role`, `maxMs` and
+  `operatorValue`. Each rule is `{tag, value, maxMs, role, ackOnStart,
+  operatorValue, rule}`.
+- **`POST`** `{"name", "value"?, "seconds"?, "requestId"?}` starts one. The
+  value is the rule's unless the rule has `operator-value: true` (`403`
+  otherwise); `seconds` defaults to the rule's maximum, may not exceed it,
+  and is at least 1 (`400` otherwise). Starting an address that already has
+  one replaces it with a new entry and a new `id`: a substitute is never
+  extended. `400` for a tag no rule names. The answer carries the new entry
+  as `started`.
 - **`DELETE /api/substitutes/{id}`** ends that entry (`404` when it is
   not active: it expired, ended, or a newer one replaced it).
 - **`POST /api/substitutes/ack`** `{"ids": […]}` acknowledges the entries
   that wait for it; `409` when none did.
 
+**Send a fresh `requestId` with every start, one per user action, and reuse
+it on every retry.** A start retried with the same id is answered with the
+entry the first one began, never a second; the same id for a different
+request is `409`. Ids are remembered for 8 days.
+
+**Only an answer with the header `X-Nautilus-Outcome: refused` is certain**:
+nothing changed. Everything else, including any 500, 502, 504, a 503 without
+that header, the header `X-Nautilus-Outcome: unknown`, and a dropped
+connection, is **unknown**: the change may have been applied.
+
+| Answer | Meaning |
+| --- | --- |
+| `200` with `kept: true` | applied and saved |
+| `200` with `kept: false` and a `warning` | **took effect but was not saved** (a stop or an acknowledge; a start that cannot be saved is refused). It may not survive a restart, or may still be active on the next leader. Show the warning |
+| `400`, `403`, `404`, `409`, `501`, `503` with `refused` | nothing happened. `409`: the `requestId` was used for a different request, a newer change won, or nothing was waiting for an acknowledgement; re-read and decide, do not retry blind. `503`: `no leader` (a standby) or not saved (the retain store refused a start) |
+| anything else | unknown. Re-read `GET /api/substitutes`. Retry a **start** only with the same `requestId`. A stop or an acknowledgement has no `requestId`: re-read and decide |
+
 Starting and acknowledging are elevated actions, refused while the audit
 journal cannot be written; ending one is a way back to normal and is
-allowed. An expiry has no request: it is journalled as `substitute.expire`
-by `system`.
+allowed. Each is journalled (`substitute.start`, `.stop`, `.ack`); an
+expiry has no request and is journalled as `substitute.expire` by `system`.
 
 ## SFC commands
 
