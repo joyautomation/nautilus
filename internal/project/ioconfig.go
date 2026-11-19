@@ -1078,7 +1078,7 @@ func (io *IOConfig) Apply(ctx context.Context, c *IOCandidate, by string) (*IORe
 	}
 
 	res := &IOResult{Changes: val.Changes, Commanded: []IOCommand{},
-		Notes: []string{"applied; whether each changed device answers was not checked (a device that does not reads Bad quality); probing it first comes with #706 PR 4"}}
+		Notes: []string{"applied; each changed device was probed before the apply where its check is live (validation.probes); one that stops answering reads Bad quality"}}
 	wait, cancel := context.WithTimeout(ctx, firstPushWait)
 	defer cancel()
 	cmds := map[string]any{}

@@ -250,8 +250,8 @@ func TestIOApplyModbusDeviceAddress(t *testing.T) {
 	if fmt.Sprint(res.Commanded) != "[{A_Cmd 7}]" {
 		t.Fatalf("commanded = %v, want what the first scan handed DEV_A: [{A_Cmd 7}]", res.Commanded)
 	}
-	if len(res.Notes) == 0 || !strings.Contains(res.Notes[0], "not checked") {
-		t.Fatalf("notes = %v, want reachability not checked said", res.Notes)
+	if len(res.Notes) == 0 || !strings.Contains(res.Notes[0], "probed before the apply") {
+		t.Fatalf("notes = %v, want the probe before the apply said", res.Notes)
 	}
 	// The new device gets the command willCommand listed, unchanged since
 	// (In is 6 on both): only the push after the swap sends it.
