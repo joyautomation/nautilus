@@ -93,6 +93,7 @@ namespace Tiad.Test
                 T("FinishSwallowedCancel", FinishSwallowedCancel),
                 T("FinishWithoutACallback", FinishWithoutACallback),
                 T("Messages", Messages),
+                T("OnlineAsks", OnlineAsks),
                 T("AnsweredOnlyOnceWritten", AnsweredOnlyOnceWritten),
                 T("AFailedWriteCancels", AFailedWriteCancels),
                 T("InDoubtOnceEntered", InDoubtOnceEntered),
@@ -755,6 +756,42 @@ namespace Tiad.Test
             }
             // After's NoAction for start-after is among them.
             True(got.Contains("StartModules." + new DownloadDecider(AllYes).After(DownloadDecider.StartAfterType).Setting.Value), "after-download NoAction");
+        }
+
+        static void OnlineAsks()
+        {
+            Eq(TiaNames.Fingerprint(new byte[0]), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "the SHA-256 of nothing");
+            Eq(TiaNames.Fingerprint(System.Text.Encoding.ASCII.GetBytes("abc")), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad", "the SHA-256 of abc");
+            Eq(OnlineChecks.Ask("TlsVerificationConfiguration", "PLC_1", "The certificate is not trusted.", new List<string> { "aa", "bb" }),
+                "trust the TLS certificate of PLC_1 (SHA-256 aa, bb): The certificate is not trusted.", "a certificate");
+            Eq(OnlineChecks.Ask("TlsVerificationConfiguration", "", "", new List<string>()), "trust the TLS certificate of the PLC", "a certificate, nothing known");
+            Eq(OnlineChecks.Ask("OnlineAuthenticationConfiguration", "PLC_1", "x", new List<string> { "aa" }),
+                "credentials (OnlineAuthenticationConfiguration)", "credentials");
+            Eq(OnlineChecks.Ask("OnlineFancyNewThing", "", "", new List<string>()), "a question tiad does not know (OnlineFancyNewThing)", "unknown");
+            // Never trusted: a certificate is answered not trusted, the rest
+            // cancel.
+            var kinds = new Dictionary<string, string>
+            {
+                { "TlsVerificationConfiguration", OnlineChecks.Certificate },
+                { "OnlineAuthenticationConfiguration", OnlineChecks.Credentials },
+                { "OnlinePasswordConfiguration", OnlineChecks.Credentials },
+                { "OnlineReadAccessPassword", OnlineChecks.Credentials },
+                { "OnlineWriteAccessPassword", OnlineChecks.Credentials },
+                { "OnlineFancyNewThing", OnlineChecks.Unknown },
+                { "", OnlineChecks.Unknown },
+                { "tlsverificationconfiguration", OnlineChecks.Unknown },
+            };
+            foreach (var kv in kinds)
+            {
+                Eq(OnlineChecks.Kind(kv.Key), kv.Value, kv.Key + ": kind");
+                Eq(OnlineChecks.Answer(kv.Key), kv.Value == OnlineChecks.Certificate ? OnlineChecks.NotTrusted : OnlineChecks.Cancel, kv.Key + ": answer");
+            }
+            // Text from a CPU cannot end or forge a log line.
+            Eq(TiaNames.LogSafe("PLC_1\n2026 audit download forged\r\u2028x"), "\"PLC_1\\n2026 audit download forged\\r\\u2028x\"", "log escaping");
+            Eq(TiaNames.LogSafe(null), "\"\"", "log escaping, null");
+            Eq(TiaNames.OnlineRefused("192.0.2.10", new List<string> { "one", "two" }, "Online connection failed."),
+                "going online to 192.0.2.10, TIA asked: one; two. tiad trusts no CPU certificate and holds no CPU credentials yet, so it answered no (TIA: Online connection failed.)",
+                "the refusal");
         }
 
         static void Messages()

@@ -517,6 +517,60 @@ namespace Tiad
         }
     }
 
+    // OnlineChecks decides how tiad answers what TIA asks when it goes
+    // online to a CPU (ConnectionConfiguration.OnlineLegitimation), by the
+    // question's Openness type name. tiad trusts no CPU certificate and holds
+    // no CPU credentials yet: a certificate is answered not trusted, and
+    // anything else cancels. Nothing is ever answered Trusted, and any
+    // question asked fails the operation, even one TIA then carried on with.
+    public static class OnlineChecks
+    {
+        public const string Certificate = "certificate", Credentials = "credentials", Unknown = "unknown";
+        public const string NotTrusted = "not-trusted", Cancel = "cancel";
+
+        public static string Kind(string type)
+        {
+            switch (type)
+            {
+                case "TlsVerificationConfiguration":
+                    return Certificate;
+                case "OnlineAuthenticationConfiguration":
+                case "OnlinePasswordConfiguration":
+                case "OnlineReadAccessPassword":
+                case "OnlineWriteAccessPassword":
+                    return Credentials;
+                default:
+                    return Unknown;
+            }
+        }
+
+        // Answer is how a question of type is answered: NotTrusted (the
+        // selection NonTrusted) for a certificate, Cancel for the rest.
+        public static string Answer(string type)
+        {
+            return Kind(type) == Certificate ? NotTrusted : Cancel;
+        }
+
+        // Ask describes one question: a certificate to trust (with the PLC's
+        // name, TIA's text and the certificates' fingerprints), credentials
+        // of a kind, or a question tiad does not know.
+        public static string Ask(string type, string plc, string info, List<string> fingerprints)
+        {
+            switch (Kind(type))
+            {
+                case Certificate:
+                    string s = "trust the TLS certificate of " + (plc == "" ? "the PLC" : plc);
+                    if (fingerprints.Count > 0) s += " (SHA-256 " + string.Join(", ", fingerprints.ToArray()) + ")";
+                    if (info != "") s += ": " + info;
+                    return s;
+                case Credentials:
+                    return "credentials (" + type + ")";
+                default:
+                    return "a question tiad does not know (" + type + ")";
+            }
+        }
+    }
+
     // TiaNames are the small mappings from TIA's names to the agent's.
     public static class TiaNames
     {
@@ -562,6 +616,35 @@ namespace Tiad
             if (name != "Siemens.Engineering" && !name.StartsWith("Siemens.Engineering.", StringComparison.Ordinal)) return null;
             if (name.IndexOfAny(new[] { '/', '\\', ':' }) >= 0 || name.Contains("..")) return null;
             return apiDir + "\\" + name + ".dll";
+        }
+
+        // Fingerprint is a certificate's SHA-256 over its DER bytes, as
+        // lower-case hex: what a caller compares to trust one.
+        public static string Fingerprint(byte[] der)
+        {
+            using (var h = System.Security.Cryptography.SHA256.Create())
+            {
+                var b = new StringBuilder();
+                foreach (byte x in h.ComputeHash(der)) b.Append(x.ToString("x2", CultureInfo.InvariantCulture));
+                return b.ToString();
+            }
+        }
+
+        // LogSafe is text from TIA or a CPU made safe for one log line:
+        // quoted, with every control character escaped (Json.Quote), so it
+        // can neither end the line nor forge another.
+        public static string LogSafe(string s)
+        {
+            return Json.Quote(s ?? "");
+        }
+
+        // OnlineRefused is the failure when TIA asked questions going online:
+        // tiad answered no (it trusts no certificate and holds no CPU
+        // credentials yet), and the operation fails even if TIA went on.
+        public static string OnlineRefused(string address, List<string> asked, string tiaMessage)
+        {
+            return "going online to " + address + ", TIA asked: " + string.Join("; ", asked.ToArray()) +
+                ". tiad trusts no CPU certificate and holds no CPU credentials yet, so it answered no (TIA: " + tiaMessage + ")";
         }
 
         // Message is an exception's text with the inner ones it wraps, each
