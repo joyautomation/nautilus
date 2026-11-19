@@ -30,6 +30,30 @@ func (p *Profile) Namespace(ns int) string {
 	return p.OPCUA.Namespaces[ns-1]
 }
 
+// NodeNamespace is a node id's ns= index, 0 without one (or with one that
+// is not a number).
+func NodeNamespace(nid string) int {
+	rest, ok := strings.CutPrefix(nid, "ns=")
+	if !ok {
+		return 0
+	}
+	n, _, _ := strings.Cut(rest, ";")
+	ns, err := strconv.Atoi(n)
+	if err != nil {
+		return 0
+	}
+	return ns
+}
+
+// checkNamespace refuses a node id in a namespace the profile's array does
+// not have: a binding to it could name neither a URI nor a known index.
+func (p *Profile) checkNamespace(nid string) error {
+	if ns := NodeNamespace(nid); ns > len(p.OPCUA.Namespaces) {
+		return fmt.Errorf("node-id %q: namespace %d is past the profile's namespaces (1-%d)", nid, ns, len(p.OPCUA.Namespaces))
+	}
+	return nil
+}
+
 // Substitute replaces each {param} in s with the instance's value, else
 // the profile's default: an ifm master's {location} in its node ids.
 func (p *Profile) Substitute(s string, params map[string]string) string {

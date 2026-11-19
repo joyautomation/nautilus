@@ -63,9 +63,14 @@ func TestDevicesOPCUARowOnTheWire(t *testing.T) {
 		t.Errorf("naut check does not warn of the index-only binding:\n%s", out)
 	}
 	// The driver a row makes is the profiles' documented security None,
-	// which needs no certificate store.
+	// which needs no certificate store, and naut check says so: a row
+	// cannot set its own security yet, and a device that offers more is
+	// not downgraded without a word.
 	if strings.Contains(out, "pki-dir") {
 		t.Errorf("naut check warns of a certificate store:\n%s", out)
+	}
+	if !strings.Contains(out, "warning: device PF1 connects with security None, anonymous") {
+		t.Errorf("naut check does not warn that the device connects unsecured:\n%s", out)
 	}
 
 	var b strings.Builder

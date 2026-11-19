@@ -314,11 +314,18 @@ func (s *Set) protocol(proto string) []*device {
 func (s *Set) Modbus() bool { return len(s.protocol(devprofile.ProtoModbus)) > 0 }
 
 // OPCUARow is an OPC UA device's driver: the device's name, which its
-// opcua-client driver takes, and where it answers.
+// opcua-client driver takes, where it answers, and how it connects.
 type OPCUARow struct {
 	Name string
 	// Endpoint is opc.tcp://host:port.
 	Endpoint string
+	// Security and SecurityMode are the endpoint policy and mode: None,
+	// anonymous, what the profiles document their servers offering. A row
+	// cannot set its own yet (an opcua-client driver's default, the
+	// strongest offered, needs a pki-dir a row has nowhere to name), so
+	// the device's driver says so in naut check rather than downgrade a
+	// device that offers more without a word.
+	Security, SecurityMode string
 }
 
 // OPCUARows are the set's OPC UA devices, in declaration order: an OPC UA
@@ -327,7 +334,7 @@ func (s *Set) OPCUARows() []OPCUARow {
 	var out []OPCUARow
 	for _, d := range s.protocol(devprofile.ProtoOPCUA) {
 		ep, _ := d.prof.OPCUAEndpoint(d.Endpoint) // Resolve checked it
-		out = append(out, OPCUARow{Name: d.Name, Endpoint: ep})
+		out = append(out, OPCUARow{Name: d.Name, Endpoint: ep, Security: "None", SecurityMode: "None"})
 	}
 	return out
 }

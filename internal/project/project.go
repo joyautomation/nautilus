@@ -1645,9 +1645,7 @@ func withDevices(configs []DriverConfig, set *devbind.Set) ([]DriverConfig, erro
 		}
 		out = append(out, DriverConfig{
 			Type: "opcua-client", Name: od.Name, Endpoint: od.Endpoint,
-			// What the profiles document their servers offer; a row's
-			// own security is not supported yet.
-			Security: "None", SecurityMode: "None",
+			Security: od.Security, SecurityMode: od.SecurityMode,
 			devices: set, opcuaDevice: od.Name,
 		})
 	}

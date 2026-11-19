@@ -1,6 +1,7 @@
 package devprofile
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -77,6 +78,28 @@ func TestProfileErrors(t *testing.T) {
 	}
 	if _, err := ParseProfile([]byte("profile: x\nprotocol: canbus\n"), "x.yaml"); err == nil {
 		t.Error("unknown protocol: no error")
+	}
+}
+
+// A node id, an Object's or a point's, and the object namespace must sit in
+// the profile's namespace array: one past it can be bound by neither URI
+// nor a known index.
+func TestOPCUANamespaceIndices(t *testing.T) {
+	head := "profile: x\nprotocol: opcua\nopcua: { namespaces: [urn:a, urn:b]%s }\npoints:\n  - { name: A, type: BOOL, node-id: \"%s\", path: \"D/A\", unverified: true }\n"
+	for _, tc := range []struct{ extra, nid, want string }{
+		{"", "ns=2;s=D/A", ""},
+		{"", "ns=0;i=2258", ""},
+		{"", "ns=3;s=D/A", `node-id "ns=3;s=D/A": namespace 3 is past the profile's namespaces (1-2)`},
+		{", objects: [{ path: D, node-id: \"ns=4;s=D\" }]", "ns=1;s=D/A", "object D: node-id \"ns=4;s=D\": namespace 4 is past"},
+		{", object-namespace: 3", "ns=1;s=D/A", "object-namespace 3 is not an index of namespaces (1-2)"},
+	} {
+		_, err := ParseProfile([]byte(fmt.Sprintf(head, tc.extra, tc.nid)), "x.yaml")
+		if tc.want == "" && err != nil {
+			t.Errorf("%s%s: %v", tc.nid, tc.extra, err)
+		}
+		if tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)) {
+			t.Errorf("%s%s: %v, want %q", tc.nid, tc.extra, err, tc.want)
+		}
 	}
 }
 
