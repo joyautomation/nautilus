@@ -219,6 +219,7 @@ check comes before the token check. See [Online edits](/guides/online-edits/).
 | `POST` | [`/api/io/staged/{id}/validate`](#live-io-configuration) | Check it against what runs |
 | `POST` | [`/api/io/staged/{id}/apply`](#live-io-configuration) | Apply it while the scan runs |
 | `GET` | [`/api/io/staged/{id}`](#live-io-configuration) | One candidate's state |
+| `GET` | [`/api/io/files`](#live-io-configuration) | The project files the running I/O configuration differs in (`naut pull --io`) |
 | `GET` | [`/api/history`, `/api/history/…`](#historian-proxy) | Forwarded to the historian |
 | `GET` | [`/api/audit`](#audit-journal) | Who changed what: the audit journal's recent entries |
 
@@ -1054,8 +1055,36 @@ curl -s -X POST localhost:8080/api/io/staged/1/apply
 
   While what runs differs from the manifest, `config` on every frame
   says so (and `config.notKept` says if it would not survive a restart),
-  and the built-in dashboard shows it. Commit the change to make it
+  and the built-in dashboard shows it, as does each driver's row on
+  `/api/drivers` (`differs: true`). Commit the change to make it
   permanent.
+- **Pulling it back.** `GET /api/io/files` returns, for every unit that
+  differs, where it came from (`units`) and the project files it was read
+  from that differ from the ones the controller booted from: per file its
+  `path`, the bytes that `running`, and the sha-256 of the `booted` file
+  (absent when the change added the file). `leading` is false on a standby.
+  `conflicts` lists a path held with two different contents. `nonIO` is
+  true when the applied manifest also changes sections an apply does not
+  apply, which never ran. `naut pull --host <controller> --io` writes
+  those files into `--dir`. It refuses and names a file you edited locally
+  since the build unless `--force`, and it writes nothing at all if it
+  refuses one. `--dry-run` prints a unified diff and writes nothing;
+  `--check` writes nothing and exits non-zero while anything differs. A
+  standby is refused: ask the leader, or the service address. `naut pull`
+writes only `.yaml`/`.yml` files that the project's own manifest names as
+I/O files (the manifest, the `manifest:` files of `drivers:`,
+`profiles/<id>.yaml` of `devices:`). A file only the controller's manifest
+names (a driver an apply added) is listed and written only with `--new`;
+review the listed paths first, because any YAML file the controller's
+manifest names (a `docker-compose.yml`, say) is written as it sends it.
+It never writes a hidden path, `.git` or a program source, and never
+through a symlink out of the project; it does not trust the controller's
+list of paths. `--force` skips the check that your copy is the booted one
+and replaces your edits without a diff; the paths are printed. **`GET
+/api/io/files` returns whole file bodies and, like every read, needs no
+token until users and roles (#708) land (a token guards writes): anyone
+who can reach the port can read the project's I/O files.** Keep the port
+off untrusted networks.
 
 | Status | When |
 | --- | --- |

@@ -29,7 +29,17 @@ import (
 // server.Options.Drivers so /api/drivers and the stream frame carry it, with
 // the server package staying free of any driver dependency.
 func (p *Project) DriverStatus(node *sparkplug.Node, opc *opcuaserver.Server) func() []server.DriverStatus {
-	rows := driverStatusFuncs(p.Runtime.Driver)
+	differs := func(name string) bool { return p.ioDiffers != nil && p.ioDiffers(name) }
+	rows := driverStatusRows(p.Runtime.Driver, differs)
+	if len(rows) == 1 && len(p.drivers) == 1 && !isMulti(p.Runtime.Driver) {
+		// A lone driver is not wrapped in a Multi: its row is the one driver's.
+		row, name := rows[0], p.drivers[0].Name
+		rows[0] = func() server.DriverStatus {
+			s := row()
+			s.Differs = differs(name)
+			return s
+		}
+	}
 	if len(rows) == 0 && node == nil && opc == nil {
 		return nil
 	}
@@ -48,14 +58,35 @@ func (p *Project) DriverStatus(node *sparkplug.Node, opc *opcuaserver.Server) fu
 	}
 }
 
+// isMulti reports whether d is (or wraps) a composite of several drivers.
+func isMulti(d nio.Driver) bool {
+	for {
+		if _, ok := d.(*nio.Multi); ok {
+			return true
+		}
+		u, ok := d.(interface{ Unwrap() nio.Driver })
+		if !ok {
+			return false
+		}
+		d = u.Unwrap()
+	}
+}
+
 // driverStatusFuncs maps a driver onto the per-kind adapters below — one
 // row per driver, so a multi-driver set flattens to one row per CHILD and
 // /api/drivers (already a list) needs no new shape. The memory loopback
 // reports nothing, exactly as before.
 func driverStatusFuncs(d nio.Driver) []func() server.DriverStatus {
+	return driverStatusRows(d, nil)
+}
+
+// driverStatusRows is driverStatusFuncs with differs, which says whether the
+// named configured driver runs an I/O configuration other than the
+// manifest's: its row carries Differs (#706).
+func driverStatusRows(d nio.Driver, differs func(name string) bool) []func() server.DriverStatus {
 	if u, ok := d.(interface{ Unwrap() nio.Driver }); ok {
 		// a driver carrying devices (devbind) reports as the driver it is
-		return driverStatusFuncs(u.Unwrap())
+		return driverStatusRows(u.Unwrap(), differs)
 	}
 	switch drv := d.(type) {
 	case *eip.Driver:
@@ -83,7 +114,7 @@ func driverStatusFuncs(d nio.Driver) []func() server.DriverStatus {
 	case *nio.Multi:
 		var out []func() server.DriverStatus
 		for _, c := range drv.Children() {
-			rows := driverStatusFuncs(c.Driver)
+			rows := driverStatusRows(c.Driver, nil)
 			if len(rows) != 1 {
 				out = append(out, rows...)
 				continue
@@ -93,12 +124,15 @@ func driverStatusFuncs(d nio.Driver) []func() server.DriverStatus {
 			// must report the driver that runs, not the one stopped.
 			name, first := c.Name, rows[0]
 			out = append(out, func() server.DriverStatus {
+				st := first
 				if cur, ok := drv.Child(name); ok && !sameDriver(cur, c.Driver) {
 					if now := driverStatusFuncs(cur); len(now) == 1 {
-						return now[0]()
+						st = now[0]
 					}
 				}
-				return first()
+				s := st()
+				s.Differs = differs != nil && differs(name)
+				return s
 			})
 		}
 		return out

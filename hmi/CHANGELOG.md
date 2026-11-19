@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Added
+
+- **`DriverStatus.differs`** (#706): a driver that runs an I/O configuration
+  applied live, not the manifest's, carries `differs`, and `DriverStatusCard`
+  badges it.
+
 ### Changed
 
 - **`Quality` gains `'substituted'`** (#707): a value an operator put in

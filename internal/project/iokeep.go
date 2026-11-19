@@ -18,6 +18,8 @@ package project
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -846,4 +848,92 @@ func (io *IOConfig) Follow(ctx context.Context, load func() (retain.State, error
 		}
 		cancel()
 	}
+}
+
+// IOFile is one project file a live I/O change reads that differs from the
+// file the controller booted from (naut pull --io writes it back).
+type IOFile struct {
+	Path    string `json:"path"`
+	Running string `json:"running"` // what runs
+	// Booted is the sha-256 of the file the controller booted from; "" when
+	// the boot project has no such file (the change added it).
+	Booted string `json:"booted,omitempty"`
+}
+
+// IOFilesState is what naut pull --io needs of a controller: the project
+// files its live I/O configuration differs in.
+type IOFilesState struct {
+	// Leading is false on a standby, whose running configuration is not the
+	// one a pull should write back.
+	Leading bool `json:"leading"`
+	// Units are the differing units, with where each came from.
+	Units []IOUnitState `json:"units"`
+	Files []IOFile      `json:"files"`
+	// Conflicts are paths two differing units hold with different contents
+	// (they came from different candidates): pull writes neither.
+	Conflicts []string `json:"conflicts,omitempty"`
+	// NonIO is true when the applied manifest also changes sections an apply
+	// does not apply (the program, retain, ...): they never ran.
+	NonIO bool `json:"nonIO,omitempty"`
+}
+
+// Files is the project files the running I/O configuration differs in: the
+// bytes that run, and a hash of the file the controller booted from.
+func (io *IOConfig) Files() IOFilesState {
+	st := IOFilesState{Leading: io.leads(), Units: []IOUnitState{}, Files: []IOFile{}}
+	io.mu.Lock()
+	var files map[string]string
+	conflict := map[string]bool{}
+	for _, k := range sortedKeys(io.running) {
+		u := io.running[k]
+		if u.hash == io.boot[k].hash {
+			continue
+		}
+		st.Units = append(st.Units, IOUnitState{
+			Driver: u.driver, Device: u.device, ManifestHash: io.boot[k].hash, RunningHash: u.hash,
+			AppliedFrom: u.from, At: u.at, By: u.by,
+		})
+		for p, b := range u.files {
+			if files == nil {
+				files = map[string]string{}
+			}
+			if was, ok := files[p]; ok && was != b {
+				conflict[p] = true
+			}
+			files[p] = b
+		}
+	}
+	io.mu.Unlock()
+	st.Conflicts = sortedKeys(conflict)
+	for _, p := range sortedKeys(files) {
+		f := IOFile{Path: p, Running: files[p]}
+		if io.bootFS != nil {
+			if was, err := fs.ReadFile(io.bootFS, p); err == nil {
+				sum := sha256.Sum256(was)
+				f.Booted = hex.EncodeToString(sum[:])
+			}
+		}
+		st.Files = append(st.Files, f)
+	}
+	name := io.manifest
+	if name == "" {
+		name = ManifestName
+	}
+	if b, ok := files[name]; ok && io.bootFS != nil {
+		if m, err := ReadManifest(OverlayFS(io.bootFS, map[string][]byte{name: []byte(b)}), name); err == nil {
+			st.NonIO = nonIOYAML(m) != io.bootYAML
+		}
+	}
+	return st
+}
+
+// driverDiffers reports whether any unit of driver name runs a
+// configuration other than the manifest's (the dashboard's per-driver flag).
+func (io *IOConfig) driverDiffers(name string) bool {
+	for _, d := range io.Differs() {
+		if d.Driver == name {
+			return true
+		}
+	}
+	return false
 }

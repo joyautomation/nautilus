@@ -218,6 +218,7 @@ func NewIOConfig(p *Project, rt IORuntime, fsys fs.FS, manifest string) (*IOConf
 		},
 	}
 	io.swapDriver = io.swap
+	p.ioDiffers = io.driverDiffers
 	io.bootFS = fsys
 	io.kept = copyUnits(running) // its own map: an apply changes running, not this
 	io.memo.st = hashOf((*retain.IOState)(nil))

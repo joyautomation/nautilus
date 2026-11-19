@@ -281,6 +281,7 @@ func TestHashDriversIgnoresWhatFreeRuns(t *testing.T) {
 		{"a non-volatile metric", func(d *DriverStatus) { d.Metrics[1].Value = 4 }},
 		{"extra", func(d *DriverStatus) { d.Extra["born"] = false }},
 		{"a metric's label", func(d *DriverStatus) { d.Metrics[0].Label = "msgs" }},
+		{"differs (an I/O configuration applied live)", func(d *DriverStatus) { d.Differs = true }},
 	} {
 		c := oneDriver("connected", "Publishing · bdSeq 3", true, 100)
 		tc.fn(&c[0])

@@ -476,6 +476,11 @@ func hashDrivers(ds []DriverStatus) uint64 {
 		str(d.Message)
 		str(d.LastError)
 		u64(uint64(d.SinceMs))
+		if d.Differs {
+			u64(1)
+		} else {
+			u64(0)
+		}
 		u64(uint64(len(d.Metrics)))
 		for j := range d.Metrics {
 			m := &d.Metrics[j]

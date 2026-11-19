@@ -65,6 +65,12 @@ and exits non-zero, so CI can fail a build when a controller has un-pulled
 edits. Composition is a single definition shared by the runtime, the language
 server, download, and pull, so a program round-trips losslessly.
 
+A live I/O configuration (a driver or a device applied over the API, not a
+program edit) comes back the same way: `naut pull --host <controller> --io`
+writes the project files it was read from, `--dry-run` shows the diff first,
+and a file you changed locally since the build is refused unless `--force`.
+See [Live I/O configuration](/guides/http-api/#live-io-configuration).
+
 In VS Code, Pull previews the change and asks before writing. If the program
 file is open, the pull goes through its editor — the text and any diagram view
 show the controller's program, and the file is saved — so the editor and the

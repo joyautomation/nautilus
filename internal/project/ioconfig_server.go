@@ -74,6 +74,17 @@ func (io *IOConfig) Hook(snapshot func(sha string) (fs.FS, bool), base fs.FS) *s
 			return out
 		},
 		NotKept: io.NotKept,
+		Files: func() server.IOFiles {
+			f := io.Files()
+			out := server.IOFiles{Leading: f.Leading, Conflicts: f.Conflicts, NonIO: f.NonIO, Units: []server.IODiffer{}, Files: []server.IOFile{}}
+			for _, u := range f.Units {
+				out.Units = append(out.Units, server.IODiffer(u))
+			}
+			for _, x := range f.Files {
+				out.Files = append(out.Files, server.IOFile(x))
+			}
+			return out
+		},
 		Watch: func() *server.IOWatch {
 			if w := io.Watch(); w != nil {
 				sw := server.IOWatch(*w)
