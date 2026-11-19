@@ -113,9 +113,17 @@ func (r *Runtime) gateEdge() (bool, uint64) {
 	// leader never asks.
 	if !lead {
 		r.readySince = time.Time{}
-	} else if (!r.leading || termed != nil && termed.Term() != r.ledTerm) && !r.inputsReady() {
-		r.unfresh() // nothing scans: the tags are frozen
-		return false, r.edges
+		r.ioReset()
+	} else if !r.leading || termed != nil && termed.Term() != r.ledTerm {
+		// A takeover (not the same leadership resumed) first re-applies
+		// the kept I/O configuration (#706), so the inputs it then waits
+		// for come from the applied addresses and the first output goes
+		// to them (ioReady).
+		resume := !r.leading && termed != nil && r.ledTerm != 0 && termed.Term() == r.ledTerm
+		if !resume && !r.ioReady() || !r.inputsReady() {
+			r.unfresh() // nothing scans: the tags are frozen
+			return false, r.edges
+		}
 	}
 	switch {
 	case lead && !r.leading && termed != nil && r.ledTerm != 0 && termed.Term() == r.ledTerm:
@@ -136,6 +144,7 @@ func (r *Runtime) gateEdge() (bool, uint64) {
 		// replica may have led meanwhile.
 		r.unfresh() // until this leadership's first read
 		r.takeover()
+		r.ioReset()
 		r.leading = true
 		if termed != nil {
 			r.ledTerm = termed.Term()
@@ -293,7 +302,7 @@ func (r *Runtime) dropForces(why string) {
 // but does not block the rest of the load; the current program keeps
 // running, which is Swap's contract.
 func (r *Runtime) loadRetained() error {
-	st, err := r.retainStore.Load()
+	st, err := r.loadStore()
 	if err != nil {
 		return err
 	}
@@ -488,6 +497,10 @@ func (r *Runtime) retainSaver(ctx context.Context) []byte {
 			return lastSaved
 		case <-t.C:
 			lastSaved = r.saveRetained(lastSaved)
+		case req := <-r.saveRequests():
+			var err error
+			lastSaved, err = r.saveRetainedErr(lastSaved)
+			req <- err
 		}
 	}
 }
@@ -496,8 +509,15 @@ func (r *Runtime) retainSaver(ctx context.Context) []byte {
 // changed, keep the old encoding on failure so the next tick retries.
 // Returns the encoding of what the store now holds.
 func (r *Runtime) saveRetained(lastSaved []byte) []byte {
+	enc, _ := r.saveRetainedErr(lastSaved)
+	return enc
+}
+
+// saveRetainedErr is saveRetained, and says why it did not save: as a
+// standby (ErrNotLeading), or the store's error (SaveRetained).
+func (r *Runtime) saveRetainedErr(lastSaved []byte) ([]byte, error) {
 	if r.coord != nil && !r.coord.IsLeader() {
-		return lastSaved
+		return lastSaved, ErrNotLeading
 	}
 	// Leading by the lease is not enough: until this runtime's own takeover
 	// has loaded the store (gate, before its next scan), its tags hold seeds
@@ -507,18 +527,21 @@ func (r *Runtime) saveRetained(lastSaved []byte) []byte {
 	leading := r.leading
 	r.leadMu.Unlock()
 	if !leading {
-		return lastSaved
+		return lastSaved, ErrNotLeading
 	}
 	st := r.retainState()
 	enc, err := json.Marshal(st)
-	if err != nil || string(enc) == string(lastSaved) {
-		return lastSaved
+	if err != nil {
+		return lastSaved, err
+	}
+	if string(enc) == string(lastSaved) {
+		return lastSaved, nil
 	}
 	if err := r.retainStore.Save(st); err != nil {
 		r.noteRetainError(err)
-		return lastSaved
+		return lastSaved, err
 	}
-	return enc
+	return enc, nil
 }
 
 // retainState assembles what this controller persists: the retained tags'
@@ -622,6 +645,12 @@ func (r *Runtime) retainState() retain.State {
 		if m := a.RetainedAlarms(); len(m) > 0 {
 			st.Alarms = m
 		}
+	}
+	// The live I/O configuration an apply changed (#706): nil while what
+	// runs is the manifest, so a project that never applied writes what it
+	// wrote before.
+	if k := r.ioKeeper(); k != nil {
+		st.IO = k.RetainedIO()
 	}
 	return st
 }

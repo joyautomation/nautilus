@@ -34,7 +34,7 @@ type replacer interface {
 // gated closed. ctx bounds the wait for the scan in progress: a hung scan
 // does not hang the apply.
 func (r *Runtime) ReplaceDriver(ctx context.Context, name string, d nio.Driver) (nio.Driver, error) {
-	prev, _, err := r.replaceDriver(ctx, name, d, false)
+	prev, _, err := r.replaceDriver(ctx, name, d, false, false)
 	return prev, err
 }
 
@@ -45,7 +45,16 @@ func (r *Runtime) ReplaceDriver(ctx context.Context, name string, d nio.Driver) 
 // apply reports what it actually commanded (#706); what d then sends of it
 // is d's rule (a held baseline, its write gate).
 func (r *Runtime) ReplaceDriverObserved(ctx context.Context, name string, d nio.Driver) (nio.Driver, <-chan nio.Values, error) {
-	return r.replaceDriver(ctx, name, d, true)
+	return r.replaceDriver(ctx, name, d, true, false)
+}
+
+// ReplaceDriverAtStart is ReplaceDriver for a swap made before the first
+// scan has pushed anything (a kept I/O configuration re-applied as a
+// standalone controller starts, #706): d's start-up baseline stays armed,
+// so its first push is a baseline, as any driver's is at start.
+func (r *Runtime) ReplaceDriverAtStart(ctx context.Context, name string, d nio.Driver) (nio.Driver, error) {
+	prev, _, err := r.replaceDriver(ctx, name, d, false, true)
+	return prev, err
 }
 
 // pushWatch asks for the outputs the next successful push hands over.
@@ -72,7 +81,7 @@ func (r *Runtime) deliverPush(out nio.Values) {
 	r.pushWatches = r.pushWatches[:0]
 }
 
-func (r *Runtime) replaceDriver(ctx context.Context, name string, d nio.Driver, observe bool) (nio.Driver, <-chan nio.Values, error) {
+func (r *Runtime) replaceDriver(ctx context.Context, name string, d nio.Driver, observe, atStart bool) (nio.Driver, <-chan nio.Values, error) {
 	rp, ok := r.driver.(replacer)
 	if !ok {
 		return nil, nil, fmt.Errorf("replace driver %q: the runtime's driver (%T) is not a composite; a live swap needs the drivers composed (io.Multi)", name, r.driver)
@@ -88,7 +97,7 @@ func (r *Runtime) replaceDriver(ctx context.Context, name string, d nio.Driver, 
 		return nil, nil, fmt.Errorf("replace driver %q: waiting for the scan in progress: %w", name, err)
 	}
 	defer r.mainMu.Unlock()
-	if bd, ok := d.(nio.BaselineDisarmer); ok && !r.holdOnSwap {
+	if bd, ok := d.(nio.BaselineDisarmer); ok && !r.holdOnSwap && !atStart {
 		bd.DisarmBaseline()
 	}
 	prev, err := rp.Replace(name, d)

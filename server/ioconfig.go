@@ -50,6 +50,11 @@ type IOHook struct {
 	// manifest's; Fault what a failed rollback left unknown.
 	Differs func() []IODiffer
 	Fault   func() string
+	// Discarded is what the last restart or takeover did not bring back of
+	// what the retain store kept; NotKept says why what runs would not
+	// survive a restart ("" when it would, or nothing differs).
+	Discarded func() []IODiscard
+	NotKept   func() string
 	// Watch is the last apply's watch over its changed devices (nil
 	// before any); CancelRevert stops a pending revert, or says why not
 	// (none asked for, one under way, one done).
@@ -87,6 +92,21 @@ type IODiffer struct {
 	By           string    `json:"by,omitempty"`
 }
 
+// IODiscard is a kept change a restart or takeover did not bring back: the
+// deployed manifest moved under it (a deploy replaces a live change), or
+// what was kept no longer rebuilds. One with no driver is an apply not
+// carried at all (it was waiting to revert if its devices stayed silent).
+type IODiscard struct {
+	Driver   string    `json:"driver,omitempty"`
+	Device   string    `json:"device,omitempty"`
+	Base     string    `json:"base,omitempty"`
+	Manifest string    `json:"manifest,omitempty"`
+	From     string    `json:"from,omitempty"`
+	At       time.Time `json:"at,omitzero"`
+	By       string    `json:"by,omitempty"`
+	Why      string    `json:"why"`
+}
+
 // IOConfigState is the frame's config block: what runs against the
 // manifest the controller booted from.
 type IOConfigState struct {
@@ -96,6 +116,11 @@ type IOConfigState struct {
 	Differs []IODiffer `json:"differs,omitempty"`
 	// Fault is what a failed rollback left unknown.
 	Fault string `json:"fault,omitempty"`
+	// Discarded is what the last restart or takeover dropped of what the
+	// retain store kept (the I/O counterpart of retainDiscardedEdits).
+	Discarded []IODiscard `json:"discarded,omitempty"`
+	// NotKept says why what runs would not come back after a restart.
+	NotKept string `json:"notKept,omitempty"`
 	// Watch is the last apply's watch while it is still watching: its
 	// pending devices, its deadline, and whether it will then revert.
 	Watch *IOWatch `json:"watch,omitempty"`
@@ -106,6 +131,9 @@ var (
 	ErrIONoSnapshot     = errors.New("no file snapshot of that commit on this controller")
 	ErrIOConflict       = errors.New("conflict")
 	ErrIORollbackFailed = errors.New("rollback failed")
+	// ErrIONotKept is an apply the retain store could not keep on a
+	// redundant project: it was put back (503).
+	ErrIONotKept = errors.New("not kept")
 )
 
 // maxStaged bounds the candidates kept; the oldest finished ones go first.
@@ -149,6 +177,12 @@ func (s *Server) ioConfigState() *IOConfigState {
 	}
 	if len(st.Differs) > 0 {
 		st.Source = "applied"
+	}
+	if s.io.Discarded != nil {
+		st.Discarded = s.io.Discarded()
+	}
+	if s.io.NotKept != nil {
+		st.NotKept = s.io.NotKept()
 	}
 	if s.io.Watch != nil {
 		if w := s.io.Watch(); w != nil && w.State == "watching" {
@@ -441,6 +475,10 @@ func (s *Server) handleIOApply(w http.ResponseWriter, r *http.Request) {
 	case errors.Is(err, ErrIORollbackFailed):
 		st.State, st.Error = "failed", err.Error()
 		code = http.StatusInternalServerError
+	case errors.Is(err, ErrIONotKept):
+		// Applied, not kept, put back: what runs is as before.
+		st.State, st.Error = "failed", err.Error()
+		code = http.StatusServiceUnavailable
 	default:
 		st.State, st.Error = "failed", err.Error()
 		code = http.StatusUnprocessableEntity
