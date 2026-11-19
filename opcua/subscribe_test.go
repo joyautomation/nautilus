@@ -2,11 +2,13 @@ package opcua
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/gopcua/opcua"
 	"github.com/gopcua/opcua/id"
 	"github.com/gopcua/opcua/server"
 	"github.com/gopcua/opcua/ua"
@@ -329,5 +331,84 @@ func TestSubscribeRefusedSubscriptionBacksOff(t *testing.T) {
 	}
 	if d.Online() {
 		t.Error("online with no subscription")
+	}
+}
+
+// ── the paths a subscribed session is lost by (#704, from the #740 review) ──
+//
+// Each of these ends the session so the driver closes, backs off, dials and
+// subscribes again. Without the end, a subscribed driver would go on
+// reporting Good for values nothing updates any more.
+
+// A server that has dropped the subscription answers the probe's
+// SetPublishingMode with Bad_SubscriptionIdInvalid in the result for that
+// id (the service itself succeeds). The session is lost, again and again,
+// and the error says why.
+func TestSubscribeDroppedSubscriptionLosesTheSession(t *testing.T) {
+	_, d := subscribedHooked(t, func(s *server.Server) {
+		s.RegisterHandler(id.SetPublishingModeRequest_Encoding_DefaultBinary,
+			func(_ *uasc.SecureChannel, r ua.Request, _ uint32) (ua.Response, error) {
+				req := r.(*ua.SetPublishingModeRequest)
+				res := make([]ua.StatusCode, len(req.SubscriptionIDs))
+				for i := range res {
+					res[i] = ua.StatusBadSubscriptionIDInvalid
+				}
+				return &ua.SetPublishingModeResponse{
+					ResponseHeader: &ua.ResponseHeader{
+						Timestamp: time.Now(), RequestHandle: req.RequestHeader.RequestHandle,
+						ServiceResult: ua.StatusOK, ServiceDiagnostics: &ua.DiagnosticInfo{},
+						StringTable: []string{}, AdditionalHeader: ua.NewExtensionObject(nil),
+					},
+					Results: res,
+				}, nil
+			})
+	})
+	startHooked(t, d)
+	waitFor(t, "three lost sessions", func() bool { return d.Health().Retries >= 3 })
+	if e := d.Health().LastError; !strings.Contains(e, "subscription") || !strings.Contains(e, ua.StatusBadSubscriptionIDInvalid.Error()) {
+		t.Errorf("lastError %q does not name the dropped subscription", e)
+	}
+}
+
+// notified ends the session on an error gopcua put on the channel and on a
+// StatusChangeNotification with a bad status (the server telling the
+// client the subscription is gone, Bad_Timeout), and only on those.
+func TestSubscribeNotifiedEndsTheSession(t *testing.T) {
+	cases := []struct {
+		name    string
+		n       *opcua.PublishNotificationData
+		keep    bool
+		wantErr string
+	}{
+		{"nil", nil, true, ""},
+		{"error", &opcua.PublishNotificationData{SubscriptionID: 7, Error: errors.New("publish loop failed")}, false, "publish loop failed"},
+		{"bad status change", &opcua.PublishNotificationData{SubscriptionID: 7, Value: &ua.StatusChangeNotification{Status: ua.StatusBadTimeout}}, false, ua.StatusBadTimeout.Error()},
+		{"good status change", &opcua.PublishNotificationData{SubscriptionID: 7, Value: &ua.StatusChangeNotification{Status: ua.StatusOK}}, true, ""},
+		{"an empty data change", &opcua.PublishNotificationData{SubscriptionID: 7, Value: &ua.DataChangeNotification{}}, true, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			d, err := New("opc.tcp://127.0.0.1:1", manifest(2), fastOpts(subscribed()...)...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			before := d.Health().Retries
+			if got := d.notified(&subSession{}, c.n); got != c.keep {
+				t.Fatalf("notified = %v, want %v (false ends the session)", got, c.keep)
+			}
+			h := d.Health()
+			if c.keep {
+				if h.Retries != before || h.LastError != "" {
+					t.Errorf("a notification that keeps the session counted a failure: %+v", h)
+				}
+				return
+			}
+			if h.Retries != before+1 {
+				t.Errorf("retries %d, want %d: the lost session is counted", h.Retries, before+1)
+			}
+			if !strings.Contains(h.LastError, c.wantErr) || !strings.Contains(h.LastError, "subscription 7") {
+				t.Errorf("lastError %q, want it to name subscription 7 and %q", h.LastError, c.wantErr)
+			}
+		})
 	}
 }
