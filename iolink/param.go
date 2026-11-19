@@ -2,6 +2,8 @@ package iolink
 
 import (
 	"fmt"
+	"math"
+	"math/big"
 	"strconv"
 	"strings"
 
@@ -115,6 +117,9 @@ func (p *Param) Decode(raw []byte) (any, error) {
 	if !p.CanRead() {
 		return nil, fmt.Errorf("%s is write-only", p.Variable.ID)
 	}
+	if len(raw) != p.Octets() {
+		return nil, fmt.Errorf("%s: the device answered %d octets, and the parameter is %d", p.Variable.ID, len(raw), p.Octets())
+	}
 	vals, err := p.img.Decode(raw)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", p.Variable.ID, err)
@@ -140,31 +145,71 @@ func (p *Param) Encode(v any) ([]byte, error) {
 }
 
 func (p *Param) checkRanges(v any) error {
-	if len(p.typ.Ranges) == 0 || (p.typ.Kind != iodd.UInteger && p.typ.Kind != iodd.Integer && p.typ.Kind != iodd.Float32) {
+	if len(p.typ.Ranges) == 0 {
 		return nil
 	}
-	var f float64
+	switch p.typ.Kind {
+	case iodd.UInteger, iodd.Integer:
+		return p.checkIntRanges(v)
+	case iodd.Float32:
+		var f float64
+		switch x := v.(type) {
+		case float64:
+			f = x
+		case float32:
+			f = float64(x)
+		case uint64:
+			f = float64(x)
+		case int64:
+			f = float64(x)
+		case int:
+			f = float64(x)
+		default:
+			return nil // the codec refuses what is not a number
+		}
+		for _, r := range p.typ.Ranges {
+			lo, err1 := strconv.ParseFloat(r.Lower, 64)
+			hi, err2 := strconv.ParseFloat(r.Upper, 64)
+			if err1 == nil && err2 == nil && f >= lo && f <= hi {
+				return nil
+			}
+		}
+		return p.outsideRange(v)
+	}
+	return nil
+}
+
+// checkIntRanges compares an integer with the IODD's bounds as integers: a
+// float64 loses the low bits of anything near 2^64, which is where a 64-bit
+// unsigned range ends.
+func (p *Param) checkIntRanges(v any) error {
+	var n *big.Int
 	switch x := v.(type) {
 	case uint64:
-		f = float64(x)
+		n = new(big.Int).SetUint64(x)
 	case int64:
-		f = float64(x)
+		n = big.NewInt(x)
 	case int:
-		f = float64(x)
+		n = big.NewInt(int64(x))
 	case float64:
-		f = x
-	case float32:
-		f = float64(x)
+		if x != math.Trunc(x) || math.IsInf(x, 0) || math.IsNaN(x) {
+			return nil // the codec refuses what is not an integer
+		}
+		n, _ = new(big.Float).SetFloat64(x).Int(nil)
 	default:
 		return nil // the codec refuses what is not a number
 	}
 	for _, r := range p.typ.Ranges {
-		lo, err1 := strconv.ParseFloat(r.Lower, 64)
-		hi, err2 := strconv.ParseFloat(r.Upper, 64)
-		if err1 == nil && err2 == nil && f >= lo && f <= hi {
+		lo, ok1 := new(big.Int).SetString(r.Lower, 10)
+		hi, ok2 := new(big.Int).SetString(r.Upper, 10)
+		if ok1 && ok2 && n.Cmp(lo) >= 0 && n.Cmp(hi) <= 0 {
 			return nil
 		}
 	}
+	return p.outsideRange(v)
+}
+
+func (p *Param) outsideRange(v any) error {
 	var parts []string
 	for _, r := range p.typ.Ranges {
 		parts = append(parts, r.Lower+".."+r.Upper)

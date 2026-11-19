@@ -310,3 +310,45 @@ func TestISDUParamsListing(t *testing.T) {
 		t.Error("a device with no ports listed parameters")
 	}
 }
+
+// A device swapped while a write is under way may be the one that took it:
+// the answer is "outcome uncertain", not success, even when the call came
+// back clean. (The window is narrowed, not closed.)
+func TestISDUWriteIsUncertainWhenTheDeviceChangesDuringIt(t *testing.T) {
+	ps := isduPorts(t, "sick-sig300", nil)
+	ps.take(sickVals(levelVendor, levelDevice))
+	c := &fakeCaller{}
+	c.answer = func(string, []*ua.Variant) ([]*ua.Variant, error) {
+		ps.take(sickVals(levelVendor, levelDevice+100)) // swapped during the call
+		return variants(t, uint16(0), int32(0)), nil
+	}
+	res, err := ps.isduWrite(context.Background(), c, "LEVEL1", "V_Setpoint", uint64(500))
+	if !errors.Is(err, ErrISDUUncertain) || !strings.Contains(err.Error(), "may or may not") {
+		t.Fatalf("a swap during the write: %v, want an uncertain outcome", err)
+	}
+	if res.Identity != iolink.WrongDevice {
+		t.Errorf("the answer says the identity is %v, want the state after the swap", res.Identity)
+	}
+	// A call that failed while the device changed is uncertain too: it may
+	// have been the timeout of a write that landed.
+	ps = isduPorts(t, "sick-sig300", nil)
+	ps.take(sickVals(levelVendor, levelDevice))
+	c.answer = func(string, []*ua.Variant) ([]*ua.Variant, error) {
+		ps.take(sickVals(0, 0))
+		return nil, errors.New("timed out")
+	}
+	if _, err := ps.isduWrite(context.Background(), c, "LEVEL1", "V_Setpoint", uint64(500)); !errors.Is(err, ErrISDUUncertain) {
+		t.Errorf("a failed call over a swap: %v", err)
+	}
+	// Unchanged, a clean call is success and a failed one is its own error.
+	ps = isduPorts(t, "sick-sig300", nil)
+	ps.take(sickVals(levelVendor, levelDevice))
+	c.answer = func(string, []*ua.Variant) ([]*ua.Variant, error) { return variants(t, uint16(0), int32(0)), nil }
+	if _, err := ps.isduWrite(context.Background(), c, "LEVEL1", "V_Setpoint", uint64(500)); err != nil {
+		t.Errorf("an ordinary write: %v", err)
+	}
+	c.answer = func(string, []*ua.Variant) ([]*ua.Variant, error) { return nil, errors.New("timed out") }
+	if _, err := ps.isduWrite(context.Background(), c, "LEVEL1", "V_Setpoint", uint64(500)); err == nil || errors.Is(err, ErrISDUUncertain) {
+		t.Errorf("a failed call with the device unchanged: %v, want its own error", err)
+	}
+}

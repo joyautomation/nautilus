@@ -136,7 +136,7 @@ func startOPCUA(ctx context.Context, rt *runtime.Runtime, s *Set, d Instance, lo
 		Writable: writable,
 		// A virtual device takes writes the way the real ones do in their
 		// default setup: anonymously, on the None endpoint.
-		AnonymousWrites: len(writable) > 0,
+		AnonymousWrites: len(writable) > 0 || s.hasISDUWrite(d),
 		PKI:             opcuaPKI(s, d),
 		Logger:          log,
 	})

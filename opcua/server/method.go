@@ -18,6 +18,7 @@ package server
 import (
 	"github.com/gopcua/opcua/id"
 	"github.com/gopcua/opcua/ua"
+	"github.com/joyautomation/nautilus/opcua/internal/uasc"
 	opcserver "github.com/joyautomation/nautilus/opcua/internal/uaserver"
 )
 
@@ -67,7 +68,7 @@ func executable(nid *ua.NodeID) bool {
 // Bad_NodeIdInvalid; a method id that is not a Method of that object (a
 // component of it or of its type or a supertype) Bad_MethodInvalid; a
 // method that is one but is not implemented Bad_NotExecutable.
-func callMethods(srv *opcserver.Server, ns *namespace, r ua.Request) (ua.Response, error) {
+func callMethods(srv *opcserver.Server, ns *namespace, sc *uasc.SecureChannel, r ua.Request) (ua.Response, error) {
 	req, ok := r.(*ua.CallRequest)
 	if !ok {
 		return nil, ua.StatusBadRequestTypeInvalid
@@ -79,13 +80,23 @@ func callMethods(srv *opcserver.Server, ns *namespace, r ua.Request) (ua.Respons
 		return nil, ua.StatusBadTooManyOperations
 	}
 	results := make([]*ua.CallMethodResult, len(req.MethodsToCall))
+	// The session's write standing, as the Write service judges it, asked
+	// once per request and only when a method that changes a device is called.
+	var standing *bool
+	writer := func() bool {
+		if standing == nil {
+			w := ns.w.who(srv, sc, req.RequestHeader).writer
+			standing = &w
+		}
+		return *standing
+	}
 	for i, m := range req.MethodsToCall {
-		results[i] = callOne(srv, ns, req.RequestHeader, m)
+		results[i] = callOne(srv, ns, req.RequestHeader, m, writer)
 	}
 	return &ua.CallResponse{ResponseHeader: header(req.RequestHeader), Results: results, DiagnosticInfos: []*ua.DiagnosticInfo{}}, nil
 }
 
-func callOne(srv *opcserver.Server, ns *namespace, hdr *ua.RequestHeader, m *ua.CallMethodRequest) *ua.CallMethodResult {
+func callOne(srv *opcserver.Server, ns *namespace, hdr *ua.RequestHeader, m *ua.CallMethodRequest, writer func() bool) *ua.CallMethodResult {
 	if m == nil || m.ObjectID == nil {
 		return callResult(ua.StatusBadNodeIDInvalid)
 	}
@@ -102,7 +113,7 @@ func callOne(srv *opcserver.Server, ns *namespace, hdr *ua.RequestHeader, m *ua.
 	if !hasMethod(srv, m.ObjectID, class, m.MethodID) {
 		return callResult(ua.StatusBadMethodInvalid)
 	}
-	if r, ok := ns.callMapped(m.ObjectID, m.MethodID, m.InputArguments); ok {
+	if r, ok := ns.callMapped(m.ObjectID, m.MethodID, m.InputArguments, writer); ok {
 		return r
 	}
 	run := implemented(m.ObjectID, m.MethodID)

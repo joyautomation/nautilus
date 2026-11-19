@@ -3,6 +3,7 @@ package virtdev
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -138,5 +139,21 @@ END_PROGRAM
 	push(true, 5, true, false)
 	if flag() {
 		t.Error("the valid flag stayed true with a swapped device on the port")
+	}
+}
+
+// A ports: entry on a row that is not an OPC UA master is refused, not
+// ignored: the simulator would answer nothing for it.
+func TestVirtualPortsOnANonOPCUARowAreRefused(t *testing.T) {
+	dir := t.TempDir()
+	body := "devices:\n  - { name: D, profile: abb-acs355-fmbt21, endpoint: 10.1.1.9, ports: { 1: { iodd: x.xml } } }\nmodel:\n  program: plant.st\n  scan: 100ms\n"
+	if err := os.WriteFile(filepath.Join(dir, "virtual-devices.yaml"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "plant.st"), []byte("PROGRAM Plant\nEND_PROGRAM\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadSet(dir); err == nil || !strings.Contains(err.Error(), "only an OPC UA master has port devices") {
+		t.Errorf("ports: on a Modbus row: %v", err)
 	}
 }

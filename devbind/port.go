@@ -205,7 +205,7 @@ func (d *device) loadPorts(fsys fs.FS, where string) error {
 			pd.def.Fields = append(pd.def.Fields, ir.StructField{Name: m.Name, Type: irType(m.Type)})
 			pd.def.FieldIndex[m.Name] = i
 		}
-		if is := spec.ISDU; is != nil {
+		if is := spec.ISDU; is.Offers() {
 			pd.isdu = &isduRefs{spec: is, object: d.nodeRef(is.Object, k), read: d.nodeRef(is.Read, k), write: d.nodeRef(is.Write, k)}
 		}
 		d.ports = append(d.ports, pd)

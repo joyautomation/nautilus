@@ -154,3 +154,33 @@ func TestISDUBlock(t *testing.T) {
 		}
 	}
 }
+
+// "No ISDU" is a statement, not an omission: mode none needs a note and takes
+// nothing else, and does not count as offering ISDU.
+func TestISDUNone(t *testing.T) {
+	const pre = "  ports: 2\n  pd-in: { point: \"P{n}_In\", form: u32, doc: \"man p. 1\" }\n  isdu: "
+	p, err := ParseProfile([]byte(iolinkProfile(pre+`{ mode: none, note: "the manual's methods are not read yet" }`)), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.IOLink.ISDU.Offers() || p.IOLink.ISDU.Note == "" {
+		t.Errorf("isdu: %+v", p.IOLink.ISDU)
+	}
+	var none *ISDUSpec
+	if none.Offers() {
+		t.Error("a missing isdu: offers ISDU")
+	}
+	for name, body := range map[string]string{
+		"no note":             `{ mode: none }`,
+		"a blank note":        `{ mode: none, note: "  " }`,
+		"a note and a method": `{ mode: none, note: "x", read: "ns=1;s=P{n}/R" }`,
+		"a note and a doc":    `{ mode: none, note: "x", doc: "man p. 3" }`,
+	} {
+		if _, err := ParseProfile([]byte(iolinkProfile(pre+body)), "test"); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	if pf, _ := loadBuiltin("pepperl-fuchs-ice3"); pf.IOLink.ISDU == nil || pf.IOLink.ISDU.Mode != ISDUNone {
+		t.Errorf("the P+F profile says nothing about ISDU, or not none: %+v", pf.IOLink.ISDU)
+	}
+}

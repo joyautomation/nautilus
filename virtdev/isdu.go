@@ -54,7 +54,7 @@ func (s *Set) isduNodes(d Instance, p *devprofile.Profile, subst func(string) st
 	if len(d.Ports) == 0 {
 		return nil, nil
 	}
-	if p.IOLink == nil || p.IOLink.ISDU == nil {
+	if p.IOLink == nil || !p.IOLink.ISDU.Offers() {
 		return nil, fmt.Errorf("device %s: ports: profile %s has no isdu: for the master to answer with", d.Name, p.ID)
 	}
 	spec := p.IOLink.ISDU
@@ -95,7 +95,7 @@ func (s *Set) isduNodes(d Instance, p *devprofile.Profile, subst func(string) st
 		store := &isduStore{iodd: dev, mode: spec.Mode, data: spec.Data, max: spec.Octets(), raw: map[uint32][]byte{}}
 		out = append(out, uaserver.MappedNode{NodeID: expand(spec.Read), Parent: objID, Name: "ReadISDU", Method: store.read})
 		if spec.Write != "" {
-			out = append(out, uaserver.MappedNode{NodeID: expand(spec.Write), Parent: objID, Name: "WriteISDU", Method: store.write})
+			out = append(out, uaserver.MappedNode{NodeID: expand(spec.Write), Parent: objID, Name: "WriteISDU", Method: store.write, Writes: true})
 		}
 	}
 	return out, nil
@@ -282,4 +282,12 @@ func defaultOctets(prm *iolink.Param) []byte {
 		}
 	}
 	return raw
+}
+
+// hasISDUWrite says the instance's master has a WriteISDU to serve: its wire
+// face then takes writes as a device does in its default setup (a lab's
+// anonymous session on None), as it does for writable points.
+func (s *Set) hasISDUWrite(d Instance) bool {
+	p := s.Profile(d.Name)
+	return len(d.Ports) > 0 && p != nil && p.IOLink != nil && p.IOLink.ISDU.Offers() && p.IOLink.ISDU.Write != ""
 }

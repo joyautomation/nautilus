@@ -113,3 +113,46 @@ func browseClasses(t *testing.T, c interface {
 	}
 	return out
 }
+
+// A method that changes a device (Writes) runs only for a session a variable
+// write would be allowed from; one that only reads runs for every session.
+func TestMappedWritingMethodNeedsAWriterSession(t *testing.T) {
+	ran := 0
+	handler := func([]*ua.Variant) ([]*ua.Variant, ua.StatusCode) { ran++; return nil, ua.StatusOK }
+	nodes := []MappedNode{
+		{NodeID: "ns=1;s=Dev", Name: "Dev"},
+		{NodeID: "ns=1;s=Dev/Read", Parent: "ns=1;s=Dev", Name: "Read", Method: handler},
+		{NodeID: "ns=1;s=Dev/Write", Parent: "ns=1;s=Dev", Name: "Write", Method: handler, Writes: true},
+	}
+	for _, anon := range []bool{false, true} {
+		ran = 0
+		_, c := bytesFixtureWith(t, anon, []runtime.TagDef{runtime.State("T", "00")}, nodes)
+		call := func(meth string) ua.StatusCode {
+			resp, err := c.Call(context.Background(), &ua.CallMethodRequest{ObjectID: ua.MustParseNodeID("ns=1;s=Dev"), MethodID: ua.MustParseNodeID(meth)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return resp.StatusCode
+		}
+		if st := call("ns=1;s=Dev/Read"); st != ua.StatusOK {
+			t.Errorf("anonymous writes %v: the read-only method: %v", anon, st)
+		}
+		want := ua.StatusBadUserAccessDenied
+		if anon {
+			want = ua.StatusOK
+		}
+		if st := call("ns=1;s=Dev/Write"); st != want {
+			t.Errorf("anonymous writes %v: the writing method: %v, want %v", anon, st, want)
+		}
+		wantRan := 1
+		if anon {
+			wantRan = 2
+		}
+		if ran != wantRan {
+			t.Errorf("anonymous writes %v: the handlers ran %d times, want %d (a refused call must not run it)", anon, ran, wantRan)
+		}
+	}
+	if _, err := newMappedTree(&Mapped{Namespaces: []string{"u"}, Nodes: []MappedNode{{NodeID: "ns=1;s=O", Name: "O", Writes: true}}}); err == nil {
+		t.Error("Writes on a node that is not a Method was accepted")
+	}
+}

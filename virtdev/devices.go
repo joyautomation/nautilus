@@ -262,6 +262,9 @@ func (s *Set) resolve() error {
 		if d.OPCUA != nil && p.Protocol != devprofile.ProtoOPCUA {
 			return fmt.Errorf("device %s: opcua: is an OPC UA device's; profile %s speaks %s", d.Name, p.ID, p.Protocol)
 		}
+		if len(d.Ports) > 0 && p.Protocol != devprofile.ProtoOPCUA {
+			return fmt.Errorf("device %s: ports: only an OPC UA master has port devices; profile %s speaks %s", d.Name, p.ID, p.Protocol)
+		}
 		if p.Protocol == devprofile.ProtoOPCUA {
 			ep, err := opcuaEndpoint(*d, p)
 			if err != nil {

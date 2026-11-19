@@ -2,7 +2,7 @@ profile: pepperl-fuchs-ice3
 title: Pepperl+Fuchs ICE3 8-port IO-Link master, OPC UA server
 maker: Pepperl+Fuchs
 model: ICE3-8IOL
-version: 3
+version: 4
 docs:
   - id: pf
     title: "IO-Link master PROFINET IO (PNIO) and Modbus/TCP User Guide, ICE3-8IOL family, ch. 12 OPC UA Supporting Information (2025-06)"
@@ -29,6 +29,12 @@ iolink:                # docs/design/iolink.md §3: which points hold each port'
   vendor-id: "Port{n}_VendorID"
   device-id: "Port{n}_DeviceID"
   status: "Port{n}_Status"
+  # ISDU: explicitly none. The ICE3's ReadISDU/WriteISDU methods are in the
+  # manual's node table (pf §12.2, after the process data rows) but their node
+  # ids and argument shapes have not been read for this profile.
+  isdu:
+    mode: none
+    note: "The P+F manual (pf §12.2) lists ISDU methods for the ICE3, but this profile has not taken their node ids and arguments from it yet, so nautilus does not read or write parameters through this master."
 points:
   # The master (pf §12.2, p. 170)
   - { name: Model,        type: STRING, init: "ICE3-8IOL-K45S-RJ45", node-id: "ns=1;s=IOLM/Model",        path: "IOLM/Model",        desc: "IO-Link master type name", doc: "pf §12.2 p. 170" }

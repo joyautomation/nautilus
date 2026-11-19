@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/joyautomation/nautilus/iolink/iodd"
 )
 
 func TestFindParam(t *testing.T) {
@@ -93,5 +95,41 @@ func TestParamEncodeRefuses(t *testing.T) {
 	}
 	if !reflect.DeepEqual([]bool{sp.CanRead(), sp.CanWrite(), serial.CanWrite(), cmd.CanRead()}, []bool{true, true, false, false}) {
 		t.Error("access rights")
+	}
+}
+
+// Integer ranges are compared as integers: a 64-bit unsigned range ends where
+// a float64 cannot tell its last two values apart.
+func TestParamRangeIsExactNearTwoToTheSixtyFourth(t *testing.T) {
+	p := &Param{
+		Variable: iodd.Variable{ID: "V_Big", Access: "rw"},
+		typ:      iodd.Type{Kind: iodd.UInteger, Name: "UIntegerT", BitLength: 64, Ranges: []iodd.Range{{Lower: "0", Upper: "18446744073709551614"}}},
+	}
+	if err := p.checkRanges(uint64(18446744073709551614)); err != nil {
+		t.Errorf("the top of the range: %v", err)
+	}
+	if err := p.checkRanges(uint64(18446744073709551615)); err == nil {
+		t.Error("one past the top of the range was accepted (a float64 comparison cannot tell them apart)")
+	}
+	n := &Param{Variable: iodd.Variable{ID: "V_Neg", Access: "rw"},
+		typ: iodd.Type{Kind: iodd.Integer, Name: "IntegerT", BitLength: 16, Ranges: []iodd.Range{{Lower: "-100", Upper: "100"}}}}
+	for v, ok := range map[any]bool{int64(-100): true, int64(100): true, int64(-101): false, int64(101): false, 5.0: true, 5.5: true /* the codec refuses it */} {
+		if err := n.checkRanges(v); (err == nil) != ok {
+			t.Errorf("%v: %v, want accepted %v", v, err, ok)
+		}
+	}
+	f := &Param{Variable: iodd.Variable{ID: "V_F", Access: "rw"},
+		typ: iodd.Type{Kind: iodd.Float32, Name: "Float32T", BitLength: 32, Ranges: []iodd.Range{{Lower: "0.5", Upper: "1.5"}}}}
+	if f.checkRanges(1.0) != nil || f.checkRanges(2.0) == nil {
+		t.Error("float ranges")
+	}
+}
+
+// A read's length error is the ISDU's own, not process data's.
+func TestParamDecodeLengthWording(t *testing.T) {
+	sp, _ := FindParam(levelIODD(t), "V_Setpoint")
+	_, err := sp.Decode([]byte{1})
+	if err == nil || !strings.Contains(err.Error(), "the device answered 1 octets, and the parameter is 2") || strings.Contains(err.Error(), "process data") {
+		t.Errorf("a short ISDU value: %v", err)
 	}
 }

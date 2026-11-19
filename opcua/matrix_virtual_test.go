@@ -510,6 +510,17 @@ IF n > 100 THEN D_Port1_DeviceID := 1048999; END_IF;`,
 			t.Errorf("%s: %v %v, want ErrorType 0x%04X and Status -3", name, out, err, c.want)
 		}
 	}
+	// The device's own range check, which the client's pre-check hides: a raw
+	// call writes 2000 (outside 0..1000) to the setpoint, and the master
+	// answers the device's ErrorType (0x8030 value out of range), Status -3.
+	idx64, _ := ua.NewVariant(uint16(64))
+	over, _ := ua.NewVariant(ua.ByteArray{0x07, 0xD0})
+	if out, err := d.Call(ctx, obj, meth, idx64, sub, over); err != nil || len(out) != 2 || out[0].Value() != uint16(0x8030) || out[1].Value() != int32(-3) {
+		t.Errorf("a value outside the IODD's range, written raw: %v %v, want ErrorType 0x8030 and Status -3", out, err)
+	}
+	if res, _ := w.ISDURead(ctx, "LEVEL1", "V_Setpoint"); res.Value != uint64(500) {
+		t.Errorf("the device accepted what it refused: setpoint %v", res.Value)
+	}
 	// The sensor is swapped: a read still works and says so, a write is
 	// refused by the master's own gate, naming the state.
 	waitUntil(t, "the swapped device", 40*time.Second, func() bool { return identity() == int64(iolink.WrongDevice) })

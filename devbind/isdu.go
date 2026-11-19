@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 
@@ -33,6 +34,9 @@ var (
 	// ErrISDUInvalid: the request is not one the IODD allows (a value
 	// outside its range or that does not fit, a read-only variable).
 	ErrISDUInvalid = errors.New("not allowed by the IODD")
+	// ErrISDUUncertain: the device on the port changed while a write was
+	// under way, so whether the right device took it is not known.
+	ErrISDUUncertain = errors.New("outcome uncertain")
 	// ErrISDURefused: the port is not in a state to take it (a write while
 	// the identity is not Ok, or before it has been checked), or its master
 	// cannot carry it.
@@ -161,8 +165,23 @@ func (ps *ports) isduWrite(ctx context.Context, c Caller, port, ref string, v an
 	if err != nil {
 		return res, fmt.Errorf("%w: port device %s: %w", ErrISDUInvalid, p.Name, err)
 	}
-	if _, err := callISDU(ctx, c, p.isdu, p.isdu.write, prm, raw); err != nil {
-		return res, fmt.Errorf("port device %s: write %s: %w", p.Name, prm.Variable.ID, err)
+	// The identity is looked at again right before the call, and once more
+	// after it: a call lasts up to the master's timeout, and a device
+	// swapped meanwhile may be the one that took the value. The window is
+	// narrowed, not closed: an OPC UA call is not atomic with the identity
+	// (which is itself only as fresh as the master's last scan of its ids).
+	if st2, ch2 := ps.identity(p); !ch2 || !st2.Drives() {
+		return res, fmt.Errorf("%w: port device %s: the device on %s port %d is no longer the one expected (%s): a parameter would reach the wrong device", ErrISDURefused, p.Name, p.Master, p.Num, st2)
+	}
+	_, callErr := callISDU(ctx, c, p.isdu, p.isdu.write, prm, raw)
+	if st3, ch3 := ps.identity(p); !ch3 || st3 != st {
+		slog.Warn("iolink: the device on a port changed during a parameter write; the outcome is uncertain",
+			"port", p.Name, "master", p.Master, "number", p.Num, "variable", prm.Variable.ID, "before", st.String(), "after", st3.String())
+		res.Identity = st3
+		return res, fmt.Errorf("%w: port device %s: the device on %s port %d changed during the write of %s (%s, then %s): the right device may or may not have taken it, and the wrong one may have", ErrISDUUncertain, p.Name, p.Master, p.Num, prm.Variable.ID, st, st3)
+	}
+	if callErr != nil {
+		return res, fmt.Errorf("port device %s: write %s: %w", p.Name, prm.Variable.ID, callErr)
 	}
 	res.Raw = raw
 	if res.Value, err = prm.Decode(raw); err != nil && !prm.CanRead() {

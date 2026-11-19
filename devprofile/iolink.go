@@ -49,7 +49,8 @@ type IOLinkSpec struct {
 // device's object, named by node id templates ({n} the port number, the
 // profile's {params} as in a point's node id).
 type ISDUSpec struct {
-	// Mode is ISDUOPC30120 (the IO-Link companion specification's
+	// Mode is ISDUNone (the master offers no parameter access: Note says
+	// why, and nothing else is set), ISDUOPC30120 (the IO-Link companion specification's
 	// IOLinkDeviceType methods) or ISDUMethods (the master's own).
 	Mode string `yaml:"mode"`
 	// Object is the node id of the port device's object, Read and Write
@@ -70,10 +71,14 @@ type ISDUSpec struct {
 	// measurement supports them. One is required.
 	Doc        string `yaml:"doc"`
 	Unverified bool   `yaml:"unverified"`
+	// Note says why a master has none (mode none): required then, so that
+	// "no ISDU" is a statement about the master, not an omission.
+	Note string `yaml:"note"`
 }
 
 // ISDU modes and data forms.
 const (
+	ISDUNone     = "none"
 	ISDUOPC30120 = "opc-30120"
 	ISDUMethods  = "methods"
 
@@ -83,6 +88,10 @@ const (
 
 // MaxISDUOctets is the longest ISDU value (IO-Link: 232 octets).
 const MaxISDUOctets = 232
+
+// Offers says the master carries ISDU at all: an isdu: block that is not
+// mode none.
+func (s *ISDUSpec) Offers() bool { return s != nil && s.Mode != ISDUNone }
 
 // Octets is the most octets one call carries.
 func (s *ISDUSpec) Octets() int {
@@ -277,12 +286,21 @@ func (p *Profile) validateISDU(s *ISDUSpec) error {
 	if s == nil {
 		return nil
 	}
+	if s.Mode == ISDUNone {
+		if strings.TrimSpace(s.Note) == "" {
+			return fmt.Errorf("mode none needs a note: say why the master offers no parameter access")
+		}
+		if s.Object != "" || s.Read != "" || s.Write != "" || s.Data != "" || s.MaxOctets != 0 || s.Doc != "" || s.Unverified {
+			return fmt.Errorf("mode none takes a note and nothing else")
+		}
+		return nil
+	}
 	switch s.Mode {
 	case ISDUOPC30120, ISDUMethods:
 	case "":
-		return fmt.Errorf("mode is required (%s or %s)", ISDUOPC30120, ISDUMethods)
+		return fmt.Errorf("mode is required (%s, %s or %s)", ISDUOPC30120, ISDUMethods, ISDUNone)
 	default:
-		return fmt.Errorf("mode %q is not %s or %s", s.Mode, ISDUOPC30120, ISDUMethods)
+		return fmt.Errorf("mode %q is not %s, %s or %s", s.Mode, ISDUOPC30120, ISDUMethods, ISDUNone)
 	}
 	switch s.Data {
 	case ISDUDataBytes, ISDUDataHex:

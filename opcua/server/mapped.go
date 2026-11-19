@@ -72,6 +72,12 @@ type MappedNode struct {
 	// answers its output arguments, or a bad status. A Method has no tag,
 	// is executable by any session the Call service admits, and is a leaf.
 	Method func(args []*ua.Variant) (out []*ua.Variant, status ua.StatusCode)
+	// Writes says the method changes the device it belongs to (WriteISDU):
+	// a Call of it needs a session a variable write would be allowed from (a
+	// SignAndEncrypt channel from a trusted certificate, or, in a lab,
+	// opcua.anonymous-writes), else it is Bad_UserAccessDenied. A method
+	// that only reads (ReadISDU) is open to every session, as a read is.
+	Writes bool
 }
 
 // mnode is a MappedNode resolved.
@@ -83,6 +89,7 @@ type mnode struct {
 	tag      string
 	wire     string
 	method   func(args []*ua.Variant) ([]*ua.Variant, ua.StatusCode)
+	writes   bool
 	children []*mnode
 }
 
@@ -116,7 +123,10 @@ func newMappedTree(m *Mapped) (*mappedTree, error) {
 		if n.Method != nil && (n.Tag != "" || n.Parent == "" || n.Wire != "") {
 			return nil, fmt.Errorf("mapped node %s: a Method has a Parent Object and no tag or wire", n.NodeID)
 		}
-		mn := &mnode{nid: nid, name: n.Name, desc: n.Desc, tag: n.Tag, wire: n.Wire, method: n.Method}
+		if n.Writes && n.Method == nil {
+			return nil, fmt.Errorf("mapped node %s: Writes is for a Method", n.NodeID)
+		}
+		mn := &mnode{nid: nid, name: n.Name, desc: n.Desc, tag: n.Tag, wire: n.Wire, method: n.Method, writes: n.Writes}
 		if n.Parent != "" {
 			pid, err := ua.ParseNodeID(n.Parent)
 			if err != nil {
@@ -222,13 +232,16 @@ func (ns *namespace) mappedAttribute(n *mnode, attr ua.AttributeID) (dv *ua.Data
 // A Method called on an object that is not its parent is Bad_MethodInvalid;
 // callOne's hasMethod has refused that already, so the check here is the
 // second lock, not what a test can see alone.
-func (ns *namespace) callMapped(objectID, methodID *ua.NodeID, args []*ua.Variant) (*ua.CallMethodResult, bool) {
+func (ns *namespace) callMapped(objectID, methodID *ua.NodeID, args []*ua.Variant, writer func() bool) (*ua.CallMethodResult, bool) {
 	n, ok := ns.mapped.node(methodID)
 	if !ok || n.method == nil {
 		return nil, false
 	}
 	if n.parent == nil || !n.parent.nid.Equal(objectID) {
 		return callResult(ua.StatusBadMethodInvalid), true
+	}
+	if n.writes && !writer() {
+		return callResult(ua.StatusBadUserAccessDenied), true
 	}
 	out, st := n.method(args)
 	r := callResult(st)
