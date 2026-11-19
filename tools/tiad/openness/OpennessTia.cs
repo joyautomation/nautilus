@@ -84,15 +84,43 @@ namespace Tiad.Openness
             if (tls != null)
             {
                 var fps = new List<string>();
+                int n = 0;
                 foreach (VerificationCertificate v in tls.Certificates)
                 {
-                    if (v.Certificate != null) fps.Add(TiaNames.Fingerprint(v.Certificate.RawData));
+                    n++;
+                    if (v.Certificate == null) continue;
+                    fps.Add(TiaNames.Fingerprint(v.Certificate.RawData));
+                    Log.Line("online: TLS certificate {0}: subject {1}, issuer {2}, valid {3:o} to {4:o}", n, v.Certificate.Subject, v.Certificate.Issuer,
+                        v.Certificate.NotBefore.ToUniversalTime(), v.Certificate.NotAfter.ToUniversalTime());
                 }
+                Log.Line("online: {0} asks TLS trust, {1} certificate(s), {2}", tls.PlcName ?? "", n, Describe(tls));
                 Asked.Add(TiaNames.OnlineAsk("TlsVerificationConfiguration", tls.PlcName ?? "", tls.VerificationInfo ?? "", fps));
                 tls.CurrentSelection = TlsVerificationConfigurationSelection.NonTrusted;
                 return;
             }
             Asked.Add(TiaNames.OnlineAsk(c.GetType().Name, "", "", new List<string>()));
+        }
+
+        // Describe lists an online question's attributes and their values,
+        // for the log: what TIA offers beyond its typed properties.
+        static string Describe(IEngineeringObject o)
+        {
+            var parts = new List<string>();
+            foreach (EngineeringAttributeInfo a in o.GetAttributeInfos())
+            {
+                string v;
+                try
+                {
+                    object x = o.GetAttribute(a.Name);
+                    v = x == null ? "null" : x.ToString();
+                }
+                catch (Exception e)
+                {
+                    v = "(" + e.GetType().Name + ")";
+                }
+                parts.Add(a.Name + "=" + v);
+            }
+            return string.Join(", ", parts.ToArray());
         }
 
         // Explain is the failure for e: TIA's own text, or, when TIA asked
