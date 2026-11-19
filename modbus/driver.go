@@ -289,6 +289,9 @@ type source struct {
 	// ReplaceSource with ReplaceOptions.HoldOutputs; the next WriteOutputs
 	// clears it, gate open or not (a takeover's push is a command).
 	baseline bool
+	// observe, when set, is told what the next share of an output snapshot
+	// queued (ReplaceOptions.Observe), then cleared. Under mu.
+	observe func(FirstShare)
 
 	// kick wakes the loop: a queued write, an enable flip, a stop.
 	kick chan struct{}
@@ -910,10 +913,17 @@ func (d *Driver) WriteOutputs(vals nio.Values) error {
 	d.baseline = false
 	d.wmu.Unlock()
 
+	var told []func()
 	for _, s := range d.sources {
 		s.mu.Lock()
 		held := s.baseline
 		s.baseline = false
+		var share *FirstShare
+		if obs := s.observe; obs != nil {
+			s.observe = nil
+			share = &FirstShare{Queued: map[string]any{}, GateClosed: !open, Parked: !s.enabled}
+			told = append(told, func() { obs(*share) })
+		}
 		if !open {
 			s.mu.Unlock()
 			continue
@@ -923,7 +933,7 @@ func (d *Driver) WriteOutputs(vals nio.Values) error {
 			if !ok {
 				continue
 			}
-			if (baseline || held) && s.byName[name].b.Rewrite <= 0 {
+			if (baseline || held) && HeldAtBaseline(s.byName[name].b) {
 				// Record, never send. A tag with a command already
 				// queued keeps it: that one WAS asked for.
 				if _, queued := s.pending[name]; !queued {
@@ -935,12 +945,18 @@ func (d *Driver) WriteOutputs(vals nio.Values) error {
 				s.written[name] = v
 				s.pending[name] = v
 				kicked[s] = true
+				if share != nil {
+					share.Queued[name] = v
+				}
 			}
 		}
 		s.mu.Unlock()
 	}
 	for s := range kicked {
 		nudge(s.kick)
+	}
+	for _, f := range told {
+		f()
 	}
 	return nil
 }
