@@ -49,10 +49,11 @@ type Server struct {
 	sessions    map[uint32]*session
 	nextSession uint32
 
-	tcpLn  net.Listener
-	udpLn  *net.UDPConn
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	tcpLn   net.Listener
+	udpLn   *net.UDPConn
+	cancel  context.CancelFunc // set by Run, under mu
+	stopped bool               // Stop was called, under mu
+	wg      sync.WaitGroup
 }
 
 // session is per-TCP-connection state. SessionHandle is the value handed to
@@ -131,7 +132,16 @@ func (s *Server) BoundAddr() string {
 // (for explicit messaging) and the UDP listener on the same port (for
 // broadcast ListIdentity from RSLinx / Studio 5000 discovery).
 func (s *Server) Run(ctx context.Context) error {
-	ctx, s.cancel = context.WithCancel(ctx)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	// Stop may run on another goroutine at any time, even before this
+	// line: it and Run meet under mu, and a Stop that came first is kept.
+	s.mu.Lock()
+	s.cancel = cancel
+	if s.stopped {
+		cancel()
+	}
+	s.mu.Unlock()
 	if err := s.Listen(); err != nil {
 		return err
 	}
@@ -149,10 +159,15 @@ func (s *Server) Run(ctx context.Context) error {
 	return nil
 }
 
-// Stop tears the server down.
+// Stop tears the server down. It is safe from any goroutine, and before
+// Run has started: Run then returns as soon as it has.
 func (s *Server) Stop() {
-	if s.cancel != nil {
-		s.cancel()
+	s.mu.Lock()
+	s.stopped = true
+	cancel := s.cancel
+	s.mu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
 }
 
