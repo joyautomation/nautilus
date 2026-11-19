@@ -204,6 +204,42 @@ func TestContextMap(t *testing.T) {
 // (docs/design/identity-audit.md §4).
 var stdlibOnly = []string{"audit"}
 
+// moduleAllowed are the packages that may import, beyond the standard
+// library, only the named module path prefixes: auth/users takes argon2id
+// from golang.org/x/crypto (docs/design/identity-audit.md §2, question 4).
+var moduleAllowed = map[string][]string{
+	"auth/users": {"golang.org/x/crypto/", "golang.org/x/sys/cpu"},
+}
+
+func TestModuleAllowedPackages(t *testing.T) {
+	out, err := exec.Command("go", "env", "GOMOD").Output()
+	if err != nil {
+		t.Fatalf("go env GOMOD: %v", err)
+	}
+	root := filepath.Dir(strings.TrimSpace(string(out)))
+	for pkg, allowed := range moduleAllowed {
+		cmd := exec.Command("go", "list", "-deps", "-f", "{{.ImportPath}} {{.Standard}}", "./"+pkg)
+		cmd.Dir = root
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("go list -deps ./%s: %v", pkg, err)
+		}
+		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			imp, std, _ := strings.Cut(line, " ")
+			if std == "true" || imp == module+"/"+pkg {
+				continue
+			}
+			ok := false
+			for _, a := range allowed {
+				ok = ok || strings.HasPrefix(imp, a) || imp == strings.TrimSuffix(a, "/")
+			}
+			if !ok {
+				t.Errorf("%s depends on %s: it imports only the standard library and %v (docs/design/context-map.md §2)", pkg, imp, allowed)
+			}
+		}
+	}
+}
+
 func TestStdlibOnlyPackages(t *testing.T) {
 	out, err := exec.Command("go", "env", "GOMOD").Output()
 	if err != nil {

@@ -81,6 +81,7 @@ import (
 	"github.com/joyautomation/nautilus/alarm"
 	"github.com/joyautomation/nautilus/audit"
 	"github.com/joyautomation/nautilus/auth"
+	"github.com/joyautomation/nautilus/auth/users"
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/leader"
 	"github.com/joyautomation/nautilus/runtime"
@@ -295,6 +296,12 @@ type Options struct {
 	// reads each from NAUTILUS_TOKEN_<NAME>). A request presenting one acts
 	// as "token:<name>", with the grants the auth: block gives it.
 	ServiceTokens map[string]string
+
+	// Users is the controller's users file (#708): a personal access token
+	// it holds is a credential acting as "user:<name>", with the grants
+	// the auth: block gives that user. Each change to the file is
+	// journalled (users.change). Run re-reads it once a second.
+	Users *users.Store
 
 	// OnlineEdits enables the program endpoints (PUT /api/program, POST
 	// /api/program/rollback) — PLC-style online edits of the running ST
@@ -556,6 +563,8 @@ type Server struct {
 	tagGen  uint64
 	tagSnap map[string]any
 
+	users *users.Store
+
 	// unforceAllChecked, when set (tests only), runs between clear-all's
 	// check of the forced tags and its clearing of them.
 	unforceAllChecked func()
@@ -632,6 +641,13 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 			}
 			s.services[strings.ToLower(name)] = secret
 		}
+		if u := opts[0].Users; u != nil {
+			s.users = u
+			u.OnChange(s.journalUsersChange)
+			u.OnHealth(s.journalUsersHealth)
+			// What changed while the controller was stopped.
+			u.CatchUp()
+		}
 	}
 	if unavailable != nil {
 		s.audit.unavailable = unavailable.Error()
@@ -660,6 +676,9 @@ func (s *Server) Run(ctx context.Context) {
 		defer close(upkept)
 		s.audit.upkeep(ctx)
 	}()
+	if s.users != nil {
+		go s.users.Run(ctx)
+	}
 	defer func() { <-upkept }()
 	for {
 		select {

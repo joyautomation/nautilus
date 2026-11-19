@@ -271,6 +271,10 @@
             }
           }
         },
+        "state-dir": {
+          "type": "string",
+          "description": "Where the controller keeps its users file (users.json: password hashes and personal access tokens, managed with naut users). Default: systemd's $STATE_DIRECTORY. Never inside the project, so no hash reaches git."
+        },
         "service-tokens": {
           "type": "object",
           "propertyNames": {

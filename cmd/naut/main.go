@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 
 	"github.com/joyautomation/nautilus/internal/lsp"
+	"github.com/joyautomation/nautilus/internal/project"
 )
 
 const usage = `nautilus — SCADA, built like software
@@ -129,6 +130,8 @@ Usage:
                           --lease; needs NAUTILUS_PEER_TOKEN).
   naut audit verify   Check the runtime audit journal's hash chain
                           (default dir: audit).
+  naut users          Local users and personal access tokens of a
+                          controller with an auth: block (on the box).
   naut fbd graph <f>  Emit a .fbd file's diagram render model as JSON
                           (used by the VS Code FBD preview).
   naut sfc check <f>  Parse a .sfc file and run its structural checks
@@ -144,6 +147,14 @@ func main() {
 		// Any argument is answered, or refused, without starting: run by
 		// hand next to its service, a controller must never start a second
 		// instance against the same I/O (#968).
+		// naut users, against the embedded manifest: run on the box, it
+		// never starts the controller (#708).
+		if len(os.Args) > 1 && os.Args[1] == "users" {
+			os.Exit(usersMain(os.Args[2:], func(string) (*project.Manifest, string, error) {
+				m, err := project.ReadManifest(fsys, embeddedManifest(fsys))
+				return m, "", err
+			}, false, os.Getenv, os.Stdin, os.Stdout, os.Stderr))
+		}
 		if code, done := builtArgs(os.Args[1:], filepath.Base(os.Args[0]), os.Stdout, os.Stderr); done {
 			os.Exit(code)
 		}
@@ -219,6 +230,8 @@ func main() {
 		os.Exit(runWitness(os.Args[2:]))
 	case "audit":
 		os.Exit(runAudit(os.Args[2:]))
+	case "users":
+		os.Exit(runUsers(os.Args[2:]))
 	case "fbd":
 		os.Exit(runFBD(os.Args[2:]))
 	case "ld":

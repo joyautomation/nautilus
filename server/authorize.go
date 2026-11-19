@@ -4,10 +4,13 @@ import (
 	"context"
 	"crypto/subtle"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 
+	"github.com/joyautomation/nautilus/audit"
 	"github.com/joyautomation/nautilus/auth"
+	"github.com/joyautomation/nautilus/auth/users"
 )
 
 // The permission names (#708, docs/design/identity-audit.md §2): what
@@ -104,11 +107,19 @@ func (s *Server) credential(r *http.Request) (pr auth.Principal, presented, vali
 	if name != "" {
 		return auth.Service(name), true, true
 	}
+	// A personal access token names its user (#708 PR 5a): found by its
+	// id, its secret compared in constant time; a disabled user's or a
+	// revoked one is no credential.
+	if s.users != nil && users.IsToken(got) {
+		if user, ok := s.users.TokenUser(got); ok {
+			return auth.User(user), true, true
+		}
+	}
 	return auth.Anonymous, true, false
 }
 
 // validCredential reports whether r carries a credential the server
-// knows: NAUTILUS_TOKEN or a service token.
+// knows: NAUTILUS_TOKEN, a service token or a personal access token.
 func (s *Server) validCredential(r *http.Request) bool {
 	_, presented, valid := s.credential(r)
 	return presented && valid
@@ -116,7 +127,37 @@ func (s *Server) validCredential(r *http.Request) bool {
 
 // credentialsConfigured reports whether any credential exists: a request
 // may then come from any origin or Host with it.
-func (s *Server) credentialsConfigured() bool { return s.authToken != "" || len(s.services) > 0 }
+func (s *Server) credentialsConfigured() bool {
+	return s.authToken != "" || len(s.services) > 0 || s.users != nil
+}
+
+// journalUsersChange records each change naut users made to the users
+// file, by the operating-system user who made it ("os:<name>"), never a
+// hash or a secret.
+func (s *Server) journalUsersChange(by string, changes []users.Change) {
+	who := "os:unknown"
+	if by != "" {
+		who = "os:" + by
+	}
+	for _, c := range changes {
+		detail := map[string]any{"change": c.What}
+		if c.Token != "" {
+			detail["token"] = c.Token
+		}
+		if c.Stopped {
+			// Found at the start: made while the controller was stopped.
+			detail["while"] = "stopped"
+		}
+		s.audit.record(audit.Entry{
+			User:   who,
+			Source: audit.SourceCLI,
+			Action: "users.change",
+			Target: "user:" + c.User,
+			Detail: detail,
+			Result: audit.ResultOK,
+		})
+	}
+}
 
 // authorize reports whether r may do perm to target: 0 means allowed,
 // otherwise the status and message to refuse with.
@@ -251,3 +292,23 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, meResponse{Auth: true, Me: s.policy.Describe(pr)})
 }
+
+// journalUsersHealth records the users file becoming unreadable (no
+// local user can authenticate until it is fixed; the system alarm
+// nautilus.users-file is up meanwhile) and readable again.
+func (s *Server) journalUsersHealth(err error) {
+	e := audit.Entry{User: "system", Source: audit.SourceSystem, Target: s.users.Path()}
+	if err != nil {
+		slog.Error("users file: no local user can authenticate until it is fixed", "err", err)
+		e.Action, e.Result, e.Detail = "users.unavailable", audit.ResultError, map[string]any{"reason": err.Error()}
+	} else {
+		slog.Info("users file: readable again", "path", s.users.Path())
+		e.Action, e.Result = "users.recovered", audit.ResultOK
+	}
+	s.audit.record(e)
+}
+
+// UsersFileDown reports whether the controller's users file cannot be
+// read: no local user can authenticate (the nautilus.users-file system
+// alarm).
+func (s *Server) UsersFileDown() bool { return s.users != nil && s.users.Err() != nil }

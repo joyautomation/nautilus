@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/joyautomation/nautilus/audit"
+	"github.com/joyautomation/nautilus/auth/users"
 )
 
 // `naut run` with an auth: block (#708): service tokens from
@@ -27,7 +28,8 @@ func TestNautRunEnforcesAuth(t *testing.T) {
 		"tags:\n  - { name: RCV_SP, role: setpoint, type: REAL, init: 1 }\n  - { name: RST_SP, role: setpoint, type: REAL, init: 1 }\n" +
 		"server:\n  addr: \"127.0.0.1:0\"\n" +
 		"auth:\n  token-role: supervisor\n  areas:\n    receiving: {tags: [RCV_*]}\n" +
-		"  service-tokens:\n    historian: viewer\n    rcv_script: [{role: operator, areas: [receiving]}]\n"
+		"  service-tokens:\n    historian: viewer\n    rcv_script: [{role: operator, areas: [receiving]}]\n" +
+		"  users:\n    akhan: [{role: operator, areas: [receiving]}]\n"
 	// launch starts naut run in a fresh project directory with env added
 	// (and no NAUTILUS_* of the caller's).
 	launch := func(t *testing.T, env ...string) (dir string, stdout, stderr *lockedBuffer, exited chan struct{}) {
@@ -41,6 +43,11 @@ func TestNautRunEnforcesAuth(t *testing.T) {
 				cmd.Env = append(cmd.Env, kv)
 			}
 		}
+		// The users file's state directory, so the test never depends
+		// on the runner's systemd environment or home directory.
+		sd := t.TempDir()
+		os.Chmod(sd, 0o700)
+		cmd.Env = append(cmd.Env, "STATE_DIRECTORY="+sd, "XDG_STATE_HOME=")
 		cmd.Env = append(cmd.Env, env...)
 		stdout, stderr = &lockedBuffer{}, &lockedBuffer{}
 		cmd.Stdout, cmd.Stderr = stdout, stderr
@@ -69,7 +76,16 @@ func TestNautRunEnforcesAuth(t *testing.T) {
 	})
 
 	t.Run("enforced", func(t *testing.T) {
-		dir, stdout, stderr, exited := launch(t, "NAUTILUS_TOKEN=admin-secret", "NAUTILUS_TOKEN_HISTORIAN=h-secret", "NAUTILUS_TOKEN_RCV_SCRIPT=r-secret")
+		// akhan's personal access token, on the box before the start.
+		state := t.TempDir()
+		os.Chmod(state, 0o700)
+		uf := users.New()
+		uf.Add("akhan", "hunter22")
+		pat, _, _ := uf.NewToken("akhan")
+		if err := uf.Save(filepath.Join(state, users.FileName), "opsadmin"); err != nil {
+			t.Fatal(err)
+		}
+		dir, stdout, stderr, exited := launch(t, "NAUTILUS_TOKEN=admin-secret", "NAUTILUS_TOKEN_HISTORIAN=h-secret", "NAUTILUS_TOKEN_RCV_SCRIPT=r-secret", "STATE_DIRECTORY="+state)
 		api := apiAddrFromBanner(t, stdout.String, exited, stderr.String)
 		do := func(method, path, body, token string) (int, string) {
 			t.Helper()
@@ -100,6 +116,8 @@ func TestNautRunEnforcesAuth(t *testing.T) {
 			{"script in its area", "POST", "/api/tags", `{"name":"RCV_SP","value":3}`, "r-secret", http.StatusNoContent},
 			{"script outside its area", "POST", "/api/tags", `{"name":"RST_SP","value":3}`, "r-secret", http.StatusForbidden},
 			{"a wrong token", "POST", "/api/tags", `{"name":"RCV_SP","value":4}`, "guess", http.StatusUnauthorized},
+			{"akhan's token in akhan's area", "POST", "/api/tags", `{"name":"RCV_SP","value":6}`, pat, http.StatusNoContent},
+			{"akhan's token outside it", "POST", "/api/tags", `{"name":"RST_SP","value":6}`, pat, http.StatusForbidden},
 			{"NAUTILUS_TOKEN (supervisor) write", "POST", "/api/tags", `{"name":"RST_SP","value":5}`, "admin-secret", http.StatusNoContent},
 			{"NAUTILUS_TOKEN (supervisor) force", "POST", "/api/forces", `{"name":"RST_SP","value":5}`, "admin-secret", http.StatusForbidden},
 			{"reads stay open", "GET", "/api/state", "", "", http.StatusOK},
@@ -114,6 +132,25 @@ func TestNautRunEnforcesAuth(t *testing.T) {
 		if _, body := do("GET", "/api/me", "", "r-secret"); !strings.Contains(body, `"principal":"token:rcv_script"`) || !strings.Contains(body, `"receiving":["write"`) {
 			t.Errorf("/api/me = %s", body)
 		}
+		// naut users on the box while the controller runs: the new token
+		// works within a second or two, and the change is journalled.
+		cli := exec.Command(bin, "users", "--project", dir, "token", "akhan")
+		cli.Env = append(os.Environ(), "STATE_DIRECTORY="+state)
+		out, err := cli.Output()
+		pat2 := strings.TrimSpace(string(out))
+		if err != nil || pat2 == "" {
+			t.Fatalf("naut users token: %v %s", err, out)
+		}
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			if code, _ := do("POST", "/api/tags", `{"name":"RCV_SP","value":7}`, pat2); code == http.StatusNoContent {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("a token naut users issued is not accepted 10 s later")
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
 		if !strings.Contains(stderr.String(), "reads are NOT GATED") {
 			t.Errorf("no warning on stderr:\n%s", stderr.String())
 		}
@@ -125,12 +162,12 @@ func TestNautRunEnforcesAuth(t *testing.T) {
 				log += string(b)
 			}
 		}
-		for _, want := range []string{`"user":"token:historian"`, `"user":"token:rcv_script"`, `"user":"token"`, `"user":"anonymous"`} {
+		for _, want := range []string{`"user":"token:historian"`, `"user":"token:rcv_script"`, `"user":"token"`, `"user":"anonymous"`, `"user":"user:akhan"`, `"action":"users.change"`} {
 			if !strings.Contains(log, want) {
 				t.Errorf("the journal has no %s:\n%s", want, log)
 			}
 		}
-		for _, secret := range []string{"admin-secret", "h-secret", "r-secret"} {
+		for _, secret := range []string{"admin-secret", "h-secret", "r-secret", pat, pat2} {
 			if strings.Contains(log, secret) || strings.Contains(stderr.String(), secret) {
 				t.Errorf("a secret (%s) is in the journal or the log", secret)
 			}

@@ -873,6 +873,9 @@ type Project struct {
 	Audit      *AuditConfig
 	// Auth is the compiled auth: block, or nil when the manifest has none.
 	Auth *auth.Policy
+	// AuthStateDir is the auth: block's state-dir (where the users file
+	// lives), "" when it names none.
+	AuthStateDir string
 
 	// Alarms is the composed `alarms:` section (alarm-files folded in),
 	// or nil when the manifest declares none. Load composes and validates
@@ -1366,8 +1369,22 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 		HMIMissing:  hmiMissing,
 		HMIApp:      hmiApp,
 		HMIScreens:  screens,
+
+		AuthStateDir: m.authStateDir(),
 	}, nil
 }
+
+// authStateDir is the auth: block's state-dir, "" without one.
+func (m *Manifest) authStateDir() string {
+	if m.Auth == nil {
+		return ""
+	}
+	return m.Auth.StateDir
+}
+
+// AuthStateDir is the auth: block's state-dir, "" without one: where the
+// users file lives (naut users reads the manifest, not a Project).
+func (m *Manifest) AuthStateDir() string { return m.authStateDir() }
 
 // BuiltHMIDir is where `naut build` puts the HMI it built into a
 // controller's embedded project: served as it is, never rebuilt.
