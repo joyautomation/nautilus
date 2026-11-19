@@ -85,9 +85,10 @@ type pairDeps struct {
 	getenv func(string) string
 	listen func(addr string) (net.Listener, error)
 	// box is this box's fingerprint, given the addresses of the pair's
-	// links (hostBox); dial, when set, opens the peer connections (tests
-	// cut links with it).
-	box  func(links []string) string
+	// links (hostBox): an error refuses the start, "" means not readable
+	// yet. dial, when set, opens the peer connections (tests cut links
+	// with it).
+	box  func(links []string) (string, error)
 	dial func(ctx context.Context, network, addr string) (net.Conn, error)
 }
 
@@ -95,34 +96,40 @@ func osPairDeps() pairDeps {
 	return pairDeps{getenv: os.Getenv, listen: func(addr string) (net.Listener, error) { return net.Listen("tcp", addr) }, box: hostBox}
 }
 
+// machineIDFiles are where a box's machine-id is read from, in order.
+var machineIDFiles = []string{"/etc/machine-id", "/var/lib/dbus/machine-id"}
+
 // hostBox is this box's fingerprint for the voter state (#1029): its
 // machine-id and the MACs of the interfaces the links to the peer and the
 // witness leave by. Not the other NICs: a USB NIC plugged in, or a NIC
-// the pair doesn't use, must not make a box "changed". "" when any part
-// can't be read this start (an address that doesn't resolve yet, no
-// machine-id): the check is then skipped once, never failed on a guess,
-// so a DNS outage at boot can't leave both controllers uncommissioned.
-func hostBox(links []string) string {
-	id, err := os.ReadFile("/etc/machine-id")
-	if err != nil {
-		if id, err = os.ReadFile("/var/lib/dbus/machine-id"); err != nil {
-			return ""
+// the pair doesn't use, must not make a box "changed". With no machine-id
+// it is an error (the start is refused); "" while a link's address
+// doesn't resolve yet, and the controller then waits, neither voting nor
+// campaigning, until it does (node.Options.BoxFunc): never a check
+// skipped (#1034 review). That costs no liveness: it can't reach its
+// peers without resolving them either.
+func hostBox(links []string) (string, error) {
+	var id string
+	for _, f := range machineIDFiles {
+		if b, err := os.ReadFile(f); err == nil && strings.TrimSpace(string(b)) != "" {
+			id = string(b)
+			break
 		}
 	}
-	if strings.TrimSpace(string(id)) == "" {
-		return ""
+	if id == "" {
+		return "", fmt.Errorf("no machine-id (%s): a pair member binds its voter state to its box, so a cloned disk never votes as the original (#1029); give this box a machine-id (systemd-machine-id-setup)", strings.Join(machineIDFiles, ", "))
 	}
 	var macs []string
 	for _, l := range links {
 		mac, ok := linkMAC(l)
 		if !ok {
-			return ""
+			return "", nil
 		}
 		if mac != "" {
 			macs = append(macs, mac)
 		}
 	}
-	return node.BoxFingerprint(string(id), macs)
+	return node.BoxFingerprint(id, macs), nil
 }
 
 // linkMAC is the MAC of the interface a connection to addr would leave
@@ -161,10 +168,11 @@ func newPairMember(r *project.RedundancyConfig, apiAddr, dir string, d pairDeps)
 		return nil, err
 	}
 	if d.box != nil {
-		o.Box = d.box([]string{o.PeerAddr, o.WitnessAddr})
-		if o.Box == "" {
-			slog.Warn("redundancy: this box's fingerprint can't be read this start (no machine-id, or a peer address that doesn't resolve yet): the cloned-disk check (#1029) is skipped once")
+		links := []string{o.PeerAddr, o.WitnessAddr}
+		if _, err := d.box(links); err != nil {
+			return nil, err
 		}
+		o.BoxFunc = func() string { b, _ := d.box(links); return b }
 	}
 	o.Dial = d.dial
 	if err := os.MkdirAll(filepath.Dir(o.StatePath), 0o750); err != nil {

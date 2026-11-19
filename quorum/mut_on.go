@@ -77,6 +77,7 @@ var Mutations = []string{
 	"config_differs_campaigns",   // a controller campaigns while its peer's hello names another configuration of the pair
 	"hello_duplicate_unseen",     // two processes behind the peer's name (nonces N1, N2, N1 at the hello) raise nothing
 	"box_unchecked",              // a controller votes from a state file written on another box (a cloned disk, #1029)
+	"box_wait_skipped",           // a controller whose box can't be read yet votes on the stored identity (#1034 review)
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")

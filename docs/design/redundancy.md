@@ -172,9 +172,12 @@ redundancy:
       seconds (#976). **A clone stays uncommissioned for good:** the peer's `Adopt` goes to
       the original's address. That difference is how an operator tells the two apart, and the
       event says so.
-    - **When the fingerprint can't be read** at a start (an address that doesn't resolve yet,
-      no machine-id), the check is skipped once and the stored fingerprint kept. It never fails
-      on a guess, so a DNS outage at boot can't leave both controllers uncommissioned.
+    - **When the fingerprint can't be read yet** (a peer or witness address that doesn't
+      resolve), the check is never skipped (#1034 review). The controller neither votes nor
+      campaigns and leaves its file untouched, re-reading every quarter lease, and starts once
+      it can read it. That costs no liveness, since it can't reach its peers without resolving
+      them either, and it raises no false "changed". With no machine-id at all, a pair member
+      refuses to start.
     - **Never change both boxes at once:** both uncommissioned is the operator's case (B2).
       3c's `recommission` refuses a box-changed controller without `--box-replaced`.
     - **The residual:** a clone that keeps both the machine-id and the peer-link MAC (a

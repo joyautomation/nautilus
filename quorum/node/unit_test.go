@@ -577,30 +577,65 @@ func TestStateFromAnotherBoxIsLost(t *testing.T) {
 	}
 }
 
-// A start that can't read its box (Options.Box "": a peer address that
-// doesn't resolve yet) skips the check once and keeps the box the file
-// names, so the next start checks against it rather than against nothing.
-func TestUnknownBoxKeepsTheStoredOne(t *testing.T) {
-	o := testOptions(t, "a", "b")
-	o.clock = newFakeClock().now
+// A box that can't be read yet (BoxFunc answers "": a peer address that
+// doesn't resolve) holds the controller: it neither votes nor campaigns,
+// and leaves its file untouched, until it can be read; then the check
+// runs (#1034 review: never skipped). A box that turns out the same
+// carries on commissioned; another is treated as lost (box_wait_skipped
+// turns this red).
+func TestUnreadableBoxHoldsTheVoter(t *testing.T) {
 	stored := BoxFingerprint("machine-1", []string{"aa:bb:cc:00:00:01"})
-	st := &State{Path: o.StatePath, Owner: "a", Cluster: testCluster, Box: stored}
-	if err := st.Save(quorum.VoterState{Promised: 1002, GrantedTo: "a", Incarnation: 7, Gen: 1, Floor: 1000, Lease: o.Lease}); err != nil {
-		t.Fatal(err)
-	}
-	e, err := New(o) // Box ""
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !e.Status().Commissioned {
-		t.Fatal("an unknown box failed the check")
-	}
-	if err := e.file.Save(quorum.VoterState{Promised: 1003, Incarnation: 7, Gen: 1, Floor: 1000, Lease: o.Lease}); err != nil {
-		t.Fatal(err)
-	}
-	e.Close()
-	got, err := (&State{Path: o.StatePath}).Load()
-	if err != nil || got.Box != stored {
-		t.Fatalf("after a write with the box unknown the file names %q (%v); want %q kept", got.Box, err, stored)
+	for _, c := range []struct {
+		name, later string
+		lost        bool
+	}{
+		{"then the same box", stored, false},
+		{"then another box (a clone)", BoxFingerprint("machine-1", []string{"aa:bb:cc:00:00:09"}), true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			o := testOptions(t, "a", "b")
+			var box atomic.Value
+			box.Store("")
+			o.BoxFunc = func() string { return box.Load().(string) }
+			st := &State{Path: o.StatePath, Owner: "a", Cluster: testCluster, Box: stored}
+			if err := st.Save(quorum.VoterState{Promised: 1002, GrantedTo: "a", Incarnation: 7, Gen: 1, Floor: 1000, Lease: o.Lease}); err != nil {
+				t.Fatal(err)
+			}
+			e, err := New(o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer e.Close()
+			if !e.Status().BoxPending {
+				t.Fatal("an unreadable box did not hold the controller")
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan struct{})
+			go func() { e.Run(ctx); close(done) }()
+			defer func() { cancel(); <-done }()
+			time.Sleep(4 * o.Lease)
+			if e.running.Load() || !e.Status().BoxPending {
+				t.Fatal("the controller runs (votes) while its box can't be read")
+			}
+			if got, err := (&State{Path: o.StatePath}).Load(); err != nil || got.Box != stored {
+				t.Fatalf("the file was touched while held: %+v, %v", got, err)
+			}
+			box.Store(c.later)
+			deadline := time.Now().Add(5 * time.Second)
+			for e.Status().BoxPending || !e.running.Load() {
+				if time.Now().After(deadline) {
+					t.Fatal("the controller did not start once its box could be read")
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			s := e.Status()
+			if c.lost {
+				if s.Commissioned || !strings.Contains(s.BoxChanged, "peer-link MAC") {
+					t.Fatalf("another box: commissioned %v, box changed %q; want treated as lost", s.Commissioned, s.BoxChanged)
+				}
+			} else if !s.Commissioned || s.BoxChanged != "" {
+				t.Fatalf("the same box: commissioned %v, box changed %q", s.Commissioned, s.BoxChanged)
+			}
+		})
 	}
 }

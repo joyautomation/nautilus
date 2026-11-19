@@ -11,6 +11,7 @@ import (
 	goruntime "runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -133,8 +134,23 @@ func newBoxRig(t *testing.T) *boxRig {
 // start runs member id (a, b, or clone) on box with env, listening on ln.
 func (r *boxRig) start(id, box string, env map[string]string, ln net.Listener) {
 	r.t.Helper()
+	var b atomic.Value
+	b.Store(box)
+	r.startBox(id, &b, env, ln)
+}
+
+// startBox is start with a box the test changes: "" while it can't be
+// read (a link that doesn't resolve).
+func (r *boxRig) startBox(id string, box *atomic.Value, env map[string]string, ln net.Listener) {
+	r.t.Helper()
 	r.nodes[id] = startPairNodeWith(r.t, r.files, env, ln, nil, func(d *pairDeps) {
-		d.box = func([]string) string { return node.BoxFingerprint(box, []string{"02:00:00:00:00:" + box[len(box)-1:]}) }
+		d.box = func([]string) (string, error) {
+			b := box.Load().(string)
+			if b == "" {
+				return "", nil
+			}
+			return node.BoxFingerprint(b, []string{"02:00:00:00:00:" + b[len(b)-1:]}), nil
+		}
 		d.dial = r.links.dialer(id)
 	})
 }
@@ -225,11 +241,60 @@ func TestHostBox(t *testing.T) {
 	if _, err := os.Stat("/etc/machine-id"); err != nil {
 		t.Skip("no /etc/machine-id here")
 	}
-	a, b := hostBox([]string{"127.0.0.1:9450"}), hostBox([]string{"127.0.0.1:9450"})
+	a, _ := hostBox([]string{"127.0.0.1:9450"})
+	b, _ := hostBox([]string{"127.0.0.1:9450"})
 	if a == "" || a != b {
 		t.Fatalf("hostBox %q then %q; want one stable fingerprint", a, b)
 	}
-	if got := hostBox([]string{"no-such-host.invalid:9450"}); got != "" {
-		t.Fatalf("an address that doesn't resolve gave %q; want \"\" (the check skipped)", got)
+	if got, err := hostBox([]string{"no-such-host.invalid:9450"}); got != "" || err != nil {
+		t.Fatalf("an address that doesn't resolve gave %q, %v; want \"\" (not readable yet: wait)", got, err)
+	}
+	old := machineIDFiles
+	t.Cleanup(func() { machineIDFiles = old })
+	machineIDFiles = []string{filepath.Join(t.TempDir(), "none")}
+	if _, err := hostBox([]string{"127.0.0.1:9450"}); err == nil || !strings.Contains(err.Error(), "machine-id") {
+		t.Fatalf("no machine-id: %v; want the start refused, naming it", err)
+	}
+}
+
+// A clone booted where its links don't resolve (an isolated network, a DNS
+// outage) can't read its box. It must not vote on the identity it carries
+// (#1034 review): it waits, neither voting nor campaigning, so the pair
+// never has two leaders in shape 1; once its box can be read, it is
+// another box, so the copied state is treated as lost (box_wait_skipped
+// turns this red).
+func TestCloneWithAnUnresolvableLinkNeverVotes(t *testing.T) {
+	r := newBoxRig(t)
+	r.links.cutLink("a", r.lns[1].Addr().String())
+	r.links.cutLink("b", r.lns[0].Addr().String())
+	time.Sleep(2 * time.Second) // B's promise to A has run out
+	dir := t.TempDir()
+	b, err := os.ReadFile(filepath.Join(r.env["a"]["STATE_DIRECTORY"], pairStateFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, pairStateFile), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := maps.Clone(r.env["a"])
+	env["STATE_DIRECTORY"] = dir
+	var box atomic.Value
+	box.Store("")
+	r.startBox("clone", &box, env, r.lns[2])
+	c := r.el("clone")
+	els := map[string]*node.Elector{"a": r.el("a"), "b": r.el("b"), "clone": c}
+	if led := watchOneLeader(t, 5*time.Second, els); led["clone"] {
+		t.Fatal("the clone led while its box couldn't be read")
+	}
+	if !c.Status().BoxPending {
+		t.Fatal("the clone isn't held while its box can't be read")
+	}
+	box.Store("box-c") // its links resolve: it is another box
+	pairWait(t, "the clone to read its box", 5*time.Second, func() bool { return !c.Status().BoxPending })
+	if led := watchOneLeader(t, 5*time.Second, els); led["clone"] {
+		t.Fatal("the clone led once its box could be read")
+	}
+	if s := c.Status(); s.Commissioned || !strings.Contains(s.BoxChanged, "COPY") {
+		t.Fatalf("the clone: commissioned %v, box changed %q", s.Commissioned, s.BoxChanged)
 	}
 }

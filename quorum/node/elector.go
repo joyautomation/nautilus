@@ -78,6 +78,12 @@ type Options struct {
 	// (BoxFingerprint), stamped in the state file. A file written on
 	// another box is treated as lost (box.go, #1029). "": no check.
 	Box string
+	// BoxFunc, when set, reads the fingerprint instead of Box, and is read
+	// again until it answers: while it answers "" (a peer address that
+	// doesn't resolve yet), the controller neither votes nor campaigns
+	// (Run waits), and leaves its file untouched. It never skips the
+	// check (#1034 review).
+	BoxFunc func() string
 	// Dial, when set, opens the peer connections (default: net.Dialer).
 	// Tests cut links with it.
 	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
@@ -205,6 +211,9 @@ type Status struct {
 	// BoxChanged is the box-changed report when this start found its state
 	// written on another box (EventBoxChanged), else "".
 	BoxChanged string
+	// BoxPending: this box's fingerprint can't be read yet, so this
+	// controller neither votes nor campaigns (Options.BoxFunc).
+	BoxPending bool
 	// ConfigDiffers: the peer's hello named another configuration of the
 	// pair (EventConfigDiffers). HelloDuplicates counts hellos that showed
 	// two processes behind the peer's name.
@@ -250,7 +259,9 @@ type Elector struct {
 	peerKnown  bool
 	cfgDiffers bool
 	cfgDiffAt  time.Time // the last hello that showed it
-	boxChanged string    // EventBoxChanged's report, set at New
+	boxChanged string    // EventBoxChanged's report
+	boxPending bool      // the box can't be read yet: Run waits (BoxFunc)
+	storedBox  string    // the box the state file named
 	peerNonces []uint64  // the boot nonces the peer's name answered under, oldest first
 	helloDups  uint64
 	helloDupAt time.Time
@@ -334,30 +345,32 @@ func New(o Options) (*Elector, error) {
 		}
 		free = f
 	}
+	box := o.Box
+	if o.BoxFunc != nil {
+		box = o.BoxFunc()
+	}
+	e.file.Box = box
 	st, err := e.file.Load()
 	if err == nil {
 		if err := e.file.CheckOwner(st); err != nil {
 			free()
 			return nil, err
 		}
-		if o.Box == "" && st.Box != "" {
-			// This start could not read its box (Options.Box ""): keep the
-			// one the file names rather than forget it; the check is
-			// skipped once, never failed on a guess.
-			e.file.Box = st.Box
+		e.storedBox = st.Box
+		if box == "" && o.BoxFunc != nil && !mut("box_wait_skipped") {
+			// This box can't be read yet: no vote and no campaign until it
+			// can (Run), and the file untouched. Never a check skipped on
+			// a guess (#1034 review).
+			e.boxPending = true
+			e.log.Warn("redundancy: this box's fingerprint can't be read yet (a peer or witness address doesn't resolve): this controller neither votes nor campaigns until it can", "file", o.StatePath)
+		} else if box == "" {
+			e.file.Box = st.Box // box_wait_skipped: the stored one carries on
 		}
-		if changed := boxChanges(st.Box, o.Box); changed != nil {
-			// Written on another box: a cloned disk, or this box's NIC or
-			// host changed. As lost (#976): uncommissioned until it
-			// re-adopts from its peer, which a clone never does (#1029).
-			aside := fmt.Sprintf("%s.other-box-%d", o.StatePath, time.Now().Unix())
-			_ = os.Rename(o.StatePath, aside)
-			st = quorum.VoterState{}
-			msg := boxChangedMsg(changed)
-			e.boxChanged = msg
-			e.event(Event{Kind: EventBoxChanged, Detail: msg})
-			e.log.Error("redundancy: "+msg, "file", o.StatePath, "kept", aside)
+		if changed := boxChanges(st.Box, box); changed != nil && !e.boxPending {
+			st = e.lostToAnotherBox(changed)
 		}
+	} else if box == "" && o.BoxFunc != nil && !mut("box_wait_skipped") {
+		e.boxPending = true // nothing to protect, but nothing written without the box either
 	}
 	switch {
 	case errors.Is(err, ErrNoState):
@@ -367,21 +380,74 @@ func New(o Options) (*Elector, error) {
 		_ = os.Rename(o.StatePath, aside)
 		e.log.Error("redundancy: the voter state can't be read: this controller is uncommissioned and grants nothing until it re-adopts the pair's witness incarnation, from its peer or an operator", "file", o.StatePath, "kept", aside, "err", err)
 	}
-	cfg := quorum.Config{Self: o.Self, Peer: o.Peer, Witness: o.Witness, Lease: o.Lease, Rho: o.Rho,
-		Incarnation: st.Incarnation, Nonce: e.nonce, Jitter: jitter(o.Lease)}
 	t := now()
-	e.v = quorum.NewVoter(o.Self, o.Lease, st, t)
-	c, err := quorum.NewCandidate(cfg, st.Promised, t)
-	if err != nil {
+	if err := e.initProtocol(st, t); err != nil {
 		free()
 		return nil, err
 	}
-	e.c = c
-	e.a = quorum.NewAdoption(e.v, c, t)
 	e.free = free
 	e.w = newWriter(e.file.Save, e.persisted)
 	e.publish(t)
 	return e, nil
+}
+
+// initProtocol builds the voter, candidate and adoption from st.
+func (e *Elector) initProtocol(st quorum.VoterState, t quorum.Instant) error {
+	cfg := quorum.Config{Self: e.o.Self, Peer: e.o.Peer, Witness: e.o.Witness, Lease: e.o.Lease, Rho: e.o.Rho,
+		Incarnation: st.Incarnation, Nonce: e.nonce, Jitter: jitter(e.o.Lease)}
+	e.v = quorum.NewVoter(e.o.Self, e.o.Lease, st, t)
+	c, err := quorum.NewCandidate(cfg, st.Promised, t)
+	if err != nil {
+		return err
+	}
+	e.c = c
+	e.a = quorum.NewAdoption(e.v, c, t)
+	return nil
+}
+
+// lostToAnotherBox treats the state file as lost: written on another box,
+// a cloned disk, or this box's NIC or host changed. Uncommissioned until
+// it re-adopts from its peer (#976), which a clone never does (#1029).
+func (e *Elector) lostToAnotherBox(changed []string) quorum.VoterState {
+	aside := fmt.Sprintf("%s.other-box-%d", e.o.StatePath, time.Now().Unix())
+	_ = os.Rename(e.o.StatePath, aside)
+	msg := boxChangedMsg(changed)
+	e.boxChanged = msg
+	e.event(Event{Kind: EventBoxChanged, Detail: msg})
+	e.log.Error("redundancy: "+msg, "file", e.o.StatePath, "kept", aside)
+	return quorum.VoterState{}
+}
+
+// waitBox holds Run until the box can be read (Options.BoxFunc), then
+// checks the stored state against it. False when ctx ends first.
+func (e *Elector) waitBox(ctx context.Context) bool {
+	every := max(e.o.Lease/4, 50*time.Millisecond)
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(every):
+		}
+		box := e.o.BoxFunc()
+		if box == "" {
+			continue
+		}
+		e.mu.Lock()
+		e.boxPending = false
+		e.file.Box = box
+		if changed := boxChanges(e.storedBox, box); changed != nil {
+			st := e.lostToAnotherBox(changed)
+			if err := e.initProtocol(st, e.now()); err != nil {
+				e.mu.Unlock()
+				e.log.Error("redundancy: can't restart the vote protocol", "err", err)
+				return false
+			}
+			e.publish(e.now())
+		}
+		e.mu.Unlock()
+		e.log.Info("redundancy: this box's fingerprint is readable: this controller votes and campaigns")
+		return true
+	}
 }
 
 // drawNonce draws a boot nonce: random, non-zero, never persisted.
@@ -474,7 +540,13 @@ func (e *Elector) Run(ctx context.Context) {
 		return
 	}
 	e.ctx = ctx
+	pending := e.boxPending
 	e.mu.Unlock()
+	// No vote, no campaign and no write until the box can be read: a
+	// clone booted where DNS fails must not vote as the original.
+	if pending && !e.waitBox(ctx) {
+		return
+	}
 	// Run returns only once its writer is done: nothing touches the state
 	// file after it.
 	var wg sync.WaitGroup
@@ -1030,7 +1102,7 @@ func (e *Elector) Status() Status {
 		WitnessIncarnation: e.witInc, WitnessAge: -1, PeerAge: -1,
 		RecommissionNeeded: e.needOp && st.Incarnation == 0, ClientToken: e.token,
 		StateWriteError: e.writeErr, Acquisitions: e.acquired, Duplicates: e.dupSeen,
-		ConfigDiffers: e.cfgDiffers, HelloDuplicates: e.helloDups, BoxChanged: e.boxChanged,
+		ConfigDiffers: e.cfgDiffers, HelloDuplicates: e.helloDups, BoxChanged: e.boxChanged, BoxPending: e.boxPending,
 	}
 	g := e.gate.Load()
 	s.Leading = g.open && now < g.end

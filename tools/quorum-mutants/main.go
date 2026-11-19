@@ -147,6 +147,10 @@ var table = []mutation{
 	// TestCloneWithTheABLinkDown and TestCloneWithACutFromTheWitness lead
 	// twice under it too.
 	{"box_unchecked", []string{"TestStateFromAnotherBoxIsLost"}},
+	// #1034 review: a box that can't be read yet must hold the vote, never
+	// skip the check. cmd/naut's TestCloneWithAnUnresolvableLinkNeverVotes
+	// leads twice under it.
+	{"box_wait_skipped", []string{"TestUnreadableBoxHoldsTheVoter"}},
 }
 
 // event is one line of `go test -json`.
