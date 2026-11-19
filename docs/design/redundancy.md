@@ -227,6 +227,10 @@ redundancy:
       incarnation one generation up.
     - **Persist before send.** Every `Adopt` leaves only once the state it vouches for is
       fsynced, like a grant.
+    - **Boots.** Every `Adopt` carries its sender's boot nonce and echoes the nonce of the
+      peer's boot it answers. A controller that lost its file takes only messages sent to its
+      current boot. A proposal or an ack sent before the loss carries a floor that misses
+      terms led since, and would let it lead one of them again (#1008 review).
   - **Agreement isn't enough at a switch.** Suppose A leads on grants from itself and the old
     witness, and B's promise to A has lapsed. If the pair switched to a second copy that has
     been up for hours (its restart wait long over), B and that copy would make a majority while
@@ -236,8 +240,11 @@ redundancy:
       one full lease after it has persisted the adoption. Each side stopped counting the old
       incarnation before the other persisted: the proposer when it proposed, the acceptor when
       it adopted, before its ack. So by then every lease granted under the old voter set has
-      ended. A restart needs no extra rule: the restarted voter's own wait outlasts every such
-      lease. A generation bump that keeps the incarnation needs no quiet period.
+      ended. **A restart owes it again**: a restarted controller counts its adopted
+      incarnation only one lease after it starts. It may have adopted just before it went down,
+      and the peer may hold a lease that rests on this node's own **pre-restart** grant (with the
+      old witness), which its restart wait doesn't cover (#1008 review). A generation bump that
+      keeps the incarnation needs no quiet period.
     - **Forward only.** A controller stops counting the old incarnation, durably, before it
       asks the other to switch. It counts again only on the matching ack. Generations only
       rise. An old incarnation comes back only through a full handshake at a higher
@@ -246,15 +253,19 @@ redundancy:
       retire the real witness for good.
     - **A term floor.** A rebuilt witness has promised term 0. The handshake carries each
       controller's floor: the highest term its voter promised, its candidate has heard of, and
-      the witness at that incarnation said it promised. Both raise their voters (which then
+      any witness incarnation said it promised in this boot (a stray copy's only raises it). Both raise their voters (which then
       grant no term at or below it) and their candidates to the higher floor before counting
       the new witness, so no term is granted twice (I4). The rebuilt witness itself needs no
       floor: every majority of the new set includes a controller voter that holds it.
   - **When a switch is proposed.** A commissioned controller proposes a new incarnation only
-    when that incarnation has answered and the counted one has been silent for a **hold-off**:
+    while it has heard from the peer within a lease, when that incarnation has answered, and
+    when the counted one has been silent for a **hold-off**:
     one lease, doubling with each switch since the controller started, up to 32 leases. A stray
     copy that answers on and off therefore can't make the pair switch every lease, each switch
-    costing a lease with no witness. Every adoption is an event
+    costing a lease with no witness. The peer must be heard because a proposer counts no
+    witness until the peer acks, and can't safely fall back: the peer may have adopted with
+    the ack lost. So a peer that fails after the proposal leaves it with none until the peer
+    answers. That is the one-controller-down cost below. Every adoption is an event
     (`redundancy.witness.incarnation`). So is any time two incarnations answer within a lease of
     each other: two witness copies are running, a misconfiguration the operator must fix.
   - **A controller that lost its state file** (wiped, or torn by a crash during an in-place
@@ -273,6 +284,10 @@ redundancy:
     - **Strays.** It never proposes an incarnation of its own while its peer is commissioned, so
       a stray copy can't move the pair. Only when both are uncommissioned (first commissioning,
       or both files lost) does a controller propose the incarnation it hears.
+    - **It gives way.** If its proposal meets one of the peer's at the same or a higher
+      generation (a switch the lost controller can't hear), it re-proposes the peer's current
+      incarnation above both, and the peer takes that over its own switch. Neither waits on the
+      other for ever. The peer may switch later, after its hold-off.
   - **The costs.**
     - **One controller down:** a rebuilt witness can't be adopted. That is already a two-fault
       case (witness disk and a controller), so the survivor behaves as in §7.

@@ -158,6 +158,9 @@ case caught it. A mutation joins the nightly run in the PR that builds the rule 
 | a proposer keeps counting the old incarnation while its proposal is in flight | design §3.1, forward only | 2 (handshake) |
 | a proposal adopted whatever its generation (a late or earlier-boot one splits the pair) | design §3.1, generations | 2 (handshake) |
 | no switch hold-off: a stray copy answering on and off switches the pair every lease | design §3.1, when a switch is proposed | 2 (handshake) |
+| a restarted controller counts its adopted incarnation at once (no quiet period owed) | design §3.1, the quiet period | 2 (handshake) |
+| a lost controller takes an `Adopt` sent before its restart (a stale floor) | design §3.1, boots | 2 (handshake) |
+| a switch proposed with the peer unheard | design §3.1, when a switch is proposed | 2 (handshake) |
 | leases timed on `CLOCK_MONOTONIC`, which stops across a suspend | design §3.1, clocks | 2 |
 | the override opens the gate before its journal fsync | I8 | 5 |
 | the override survives hearing a peer | design §7 | 5 |
@@ -173,9 +176,9 @@ constant false, so the checks cost nothing. `go run ./tools/quorum-mutants` does
 - it prints a Markdown table and exits non-zero on any survivor.
 
 Its own table test checks those verdicts, and that every mutation in `quorum/mut_on.go` has a
-row. All 17 are caught, in about 50 s. The handshake adds five (`no_quiet`, `no_floor`,
-`count_while_pending`, `no_adopt_gen`, `no_holdoff`): T1 catches each in H1, and the sim cases
-join them in H2.
+row. All 17 are caught, in about 50 s. The handshake adds eight (`no_quiet`, `no_floor`,
+`count_while_pending`, `no_adopt_gen`, `no_holdoff`, `restart_counts_at_once`, `no_adopt_echo`,
+`switch_without_peer`): T1 catches each in H1, and the sim cases join them in H2.
 
 **The first 200,000-seed nightly (#998)** failed 20 seeds on main (78d234e8), all liveness or
 steady state, none safety. They are named cases in `quorum/sim/nightly_test.go`, in four classes:

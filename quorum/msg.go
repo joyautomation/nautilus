@@ -74,13 +74,20 @@ func (k AdoptKind) String() string {
 // over the A–B link only (design §3.1, "The witness incarnation"). Gen is
 // the adoption generation, which only rises, so a late, duplicated or
 // earlier-boot message can't move a peer that has moved on. Floor is the
-// sender's term floor: the highest term it knows was promised.
+// sender's term floor: the highest term it knows was promised. Nonce names
+// the sender's boot (its candidate's nonce); Echo is the nonce of the
+// peer's boot it answers or addresses, so a message from before a
+// receiver's restart (a lost file) can't commission it with a stale floor.
+// Pending is the sender's proposal in flight, by generation (0: none).
 type Adopt struct {
 	From        NodeID
 	Kind        AdoptKind
 	Gen         uint64
 	Incarnation uint64
 	Floor       uint64
+	Nonce       uint64
+	Echo        uint64
+	Pending     uint64
 }
 
 const (
@@ -151,7 +158,9 @@ func (a Adopt) MarshalBinary() ([]byte, error) {
 	b = append(b, byte(a.Kind))
 	b = binary.BigEndian.AppendUint64(b, a.Gen)
 	b = binary.BigEndian.AppendUint64(b, a.Incarnation)
-	b = binary.BigEndian.AppendUint64(b, a.Floor)
+	for _, v := range []uint64{a.Floor, a.Nonce, a.Echo, a.Pending} {
+		b = binary.BigEndian.AppendUint64(b, v)
+	}
 	return sealCRC(b), nil
 }
 
@@ -269,6 +278,7 @@ func (a *Adopt) UnmarshalBinary(b []byte) error {
 	}
 	v := Adopt{From: NodeID(rd.str()), Kind: AdoptKind(rd.byte1())}
 	v.Gen, v.Incarnation, v.Floor = rd.u64(), rd.u64(), rd.u64()
+	v.Nonce, v.Echo, v.Pending = rd.u64(), rd.u64(), rd.u64()
 	if rd.bad || len(rd.b) != 0 || v.Kind < Propose || v.Kind > State {
 		return ErrCorrupt
 	}

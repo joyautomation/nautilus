@@ -61,6 +61,9 @@ var table = []mutation{
 	{"count_while_pending", []string{"TestRebuiltWitnessAdopted"}},
 	{"no_adopt_gen", []string{"TestStaleProposalRefused", "TestConcurrentProposals", "TestLateProposalCannotSplitThePair"}},
 	{"no_holdoff", []string{"TestSwitchHoldOffGrows"}},
+	{"restart_counts_at_once", []string{"TestRestartOwesTheQuietPeriod", "TestReviewRestartSkipsQuiet"}},
+	{"no_adopt_echo", []string{"TestLostControllerIgnoresAnAckToItsEarlierBoot", "TestReviewStaleProposeFloor"}},
+	{"switch_without_peer", []string{"TestSwitchNeedsThePeer"}},
 }
 
 // event is one line of `go test -json`.

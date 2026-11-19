@@ -16,17 +16,19 @@ type ctl struct {
 	a    *Adoption
 	slow []*Persist // writes not yet confirmed (when slow)
 	hold bool       // keep writes unconfirmed until flush
+	// peerDown: the peer is not heard (tick doesn't call OnPeer).
+	peerDown bool
 }
 
 const incI, incJ, incK = 42, 77, 99
 
 func newCtl(t *testing.T, self NodeID, st VoterState, now Instant) *ctl {
 	t.Helper()
-	peer := NodeID("B")
+	peer, nonce := NodeID("B"), uint64(0xA1)
 	if self == "B" {
-		peer = "A"
+		peer, nonce = "A", 0xB1
 	}
-	cfg := Config{Self: self, Peer: peer, Witness: "W", Lease: lease, Rho: 0.01, Incarnation: st.Incarnation, Nonce: 0xA1}
+	cfg := Config{Self: self, Peer: peer, Witness: "W", Lease: lease, Rho: 0.01, Incarnation: st.Incarnation, Nonce: nonce}
 	v := NewVoter(self, lease, st, now)
 	c := newC(t, cfg, st.Promised, now)
 	return &ctl{t: t, self: self, v: v, c: c, a: NewAdoption(v, c, now)}
@@ -62,6 +64,9 @@ func (x *ctl) recv(now Instant, m Adopt) []Adopt {
 }
 
 func (x *ctl) tick(now Instant) ([]Adopt, *Request) {
+	if !x.peerDown {
+		x.a.OnPeer(now)
+	}
 	p, out, probe := x.a.Tick(now)
 	return append(out, x.write(now, p)...), probe
 }
@@ -473,7 +478,7 @@ func TestTwoIncarnationsReported(t *testing.T) {
 // promised term. It answers with its State (uncommissioned) instead.
 func TestLostControllerAdoptsOnlyAHeardIncarnation(t *testing.T) {
 	a := newCtl(t, "A", VoterState{}, 0)
-	m := Adopt{From: "B", Kind: Propose, Gen: 4, Incarnation: incI, Floor: 3}
+	m := Adopt{From: "B", Kind: Propose, Gen: 4, Incarnation: incI, Floor: 3, Echo: 0xA1}
 	out := a.recv(at(lease), m)
 	if _, i := adopted(a.v.State()); i != 0 || len(out) != 1 || out[0].Kind != State {
 		t.Fatalf("adopted an unheard incarnation: %+v, out %+v", a.v.State(), out)
@@ -482,5 +487,114 @@ func TestLostControllerAdoptsOnlyAHeardIncarnation(t *testing.T) {
 	a.recv(at(lease), m)
 	if g, i := adopted(a.v.State()); g != 4 || i != incI || a.v.State().Floor < 11 {
 		t.Fatalf("after hearing it: %+v", a.v.State())
+	}
+}
+
+// A restarted controller owes the quiet period again: it may have adopted
+// its incarnation just before it went down (#1008 review, F1).
+func TestRestartOwesTheQuietPeriod(t *testing.T) {
+	T := at(10 * lease)
+	x := newCtl(t, "B", commissioned(2, incJ, 0), T)
+	if inc, from := x.c.Counting(); inc != incJ || from != T.Add(lease) {
+		t.Fatalf("counts (%d from %v), want %d from %v", inc, from, incJ, T.Add(lease))
+	}
+}
+
+// The stale-Ack path of #1008's F2: a lost controller's own exchange is
+// pending (g, I) when an Ack for the same pair, sent to its earlier boot
+// with a stale floor, arrives. It is not taken; the fresh one is.
+func TestLostControllerIgnoresAnAckToItsEarlierBoot(t *testing.T) {
+	now := at(lease)
+	a := newCtl(t, "A", VoterState{}, 0)
+	a.hear(now, incI, 3)
+	a.recv(now, Adopt{From: "B", Kind: State, Gen: 3, Incarnation: incI, Floor: 3, Nonce: 0xB1, Echo: 0xA1})
+	if st := a.v.State(); st.PendingGen != 4 || st.PendingInc != incI {
+		t.Fatalf("no proposal after the peer's state: %+v", st)
+	}
+	a.recv(now, Adopt{From: "B", Kind: Ack, Gen: 4, Incarnation: incI, Floor: 3, Nonce: 0xB1, Echo: 0xA0})
+	if _, i := adopted(a.v.State()); i != 0 {
+		t.Fatalf("adopted on an Ack to an earlier boot: %+v", a.v.State())
+	}
+	a.recv(now, Adopt{From: "B", Kind: Ack, Gen: 4, Incarnation: incI, Floor: 14, Nonce: 0xB1, Echo: 0xA1})
+	if g, i := adopted(a.v.State()); g != 4 || i != incI || a.v.State().Floor < 14 {
+		t.Fatalf("the fresh Ack: %+v", a.v.State())
+	}
+}
+
+// A switch is proposed only while the peer is heard: a proposer counts no
+// witness until the peer acks, so with the peer down a stray copy
+// answering while the real witness is silent would leave it with none.
+func TestSwitchNeedsThePeer(t *testing.T) {
+	a := newCtl(t, "A", commissioned(1, incI, 0), 0)
+	a.peerDown = true
+	now := at(lease)
+	a.hear(now, incK, 0)
+	if q, _ := a.tick(now); len(q) != 0 || a.v.State().PendingGen != 0 {
+		t.Fatalf("proposed a switch with the peer unheard: %+v", q)
+	}
+	if inc, _ := a.c.Counting(); inc != incI {
+		t.Fatalf("stopped counting %d", incI)
+	}
+	a.peerDown = false
+	if q, _ := a.tick(now); len(q) != 1 {
+		t.Fatal("no switch with the peer heard")
+	}
+}
+
+// #1008 review, 4b: B is uncommissioned and can't hear J; A pends (2, J),
+// B pends (2, I) with I < J. Each refuses the other. The uncommissioned
+// side gives way: outbid, it re-proposes I above A's pending, A takes it,
+// and the pair is on I (A may switch to J later, after its hold-off).
+func TestUncommissionedSideBreaksTheDeadlock(t *testing.T) {
+	now := at(lease)
+	a := newCtl(t, "A", commissioned(1, incI, 0), 0)
+	b := newCtl(t, "B", VoterState{}, 0)
+	b.hear(now, incI, 0)
+	// B's own exchange: query, A's state, B proposes (2, I).
+	q, _ := b.tick(now)
+	st := a.recv(now, q[0])
+	pb := b.recv(now, st[0])
+	if len(pb) != 1 || pb[0].Gen != 2 || pb[0].Incarnation != incI {
+		t.Fatalf("B's proposal: %+v", pb)
+	}
+	// Meanwhile A heard J and proposed (2, J); B can't take it.
+	a.hear(now.Add(lease), incJ, 0)
+	pa, _ := a.tick(now.Add(lease))
+	if len(pa) != 1 || pa[0].Gen != 2 || pa[0].Incarnation != incJ {
+		t.Fatalf("A's proposal: %+v", pa)
+	}
+	toA, toB := pb, pa
+	for range 10 {
+		var na, nb []Adopt
+		for _, m := range toA {
+			nb = append(nb, a.recv(now, m)...)
+		}
+		for _, m := range toB {
+			na = append(na, b.recv(now, m)...)
+		}
+		toA, toB = na, nb
+	}
+	ga, ia := adopted(a.v.State())
+	gb, ib := adopted(b.v.State())
+	if ia != incI || ib != incI || ga != gb || a.v.State().PendingGen != 0 || b.v.State().PendingGen != 0 {
+		t.Fatalf("not settled on I: A %+v, B %+v", a.v.State(), b.v.State())
+	}
+}
+
+// The floor counts every incarnation heard this boot, not only the one
+// adopted: a stray's promised term only raises it (#1008 review, 3).
+func TestFloorOverEveryIncarnationHeard(t *testing.T) {
+	now := at(lease)
+	a := newCtl(t, "A", VoterState{}, 0)
+	b := newCtl(t, "B", commissioned(3, incI, 5), 0)
+	a.hear(now, incI, 6)
+	a.hear(now, incK, 20)
+	q, _ := a.tick(now)
+	talk(now, a, b, q)
+	if _, i := adopted(a.v.State()); i != incI {
+		t.Fatalf("not re-commissioned on %d: %+v", incI, a.v.State())
+	}
+	if f := a.v.State().Floor; f < 20 {
+		t.Fatalf("floor %d, want ≥ 20 (the stray's promised term)", f)
 	}
 }
