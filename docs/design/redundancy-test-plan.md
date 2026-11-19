@@ -222,7 +222,33 @@ schedule. The handshake PR flips this back.
   At 900 ms (about lease/2.2), 54 runs flap, taking over up to three times. **The rule: lease ≥ 4
   × the worst one-way vote-link delay.** The guide states it, and `naut check` warns when a
   configured lease is below it for a declared link latency (the guide and config PR, on the
-  #710 plan). The seeds keep delays within lease/2.
+  #710 plan). The seeds keep delays within lease/4.
+- **Loss on the sole vote path flaps (F20, measured above 3%).** Seed 260567 (an extra sample
+  on #999) wipes the witness, so A–B carries every majority, and drops 27% of A–B both ways: a
+  renewal round fails about half the time, a lease spans only three or four rounds, and
+  takeovers flap. No lease protocol keeps I7 there. `TestMeasureSolePathLoss` measures it: the
+  witness cut off from both controllers, p% loss on A–B both ways for 10 leases (the generator's
+  longest fault), on 20,000 seeded networks, disks and clocks per rate, at a 2 s lease:
+
+  | loss each way | windows with a takeover | with a second takeover (an I7 breach) |
+  |---|---|---|
+  | 1% | 5 | 0 |
+  | 2% | 38 | 0 |
+  | 3% | 114 | 0 |
+  | 4% | 252 | 1 |
+  | 5% | 484 | 4 |
+  | 10% | 2,969 | 156 |
+  | 27% | 14,074 | 5,357 |
+
+  **The rule: on a sole vote path, I7 is claimed up to 3% loss each way**: in the simulator,
+  no second takeover in 20,000 ten-lease windows at 1–3% (first at 4%); one takeover is the
+  loss fault's own. That is a measurement with a thin margin, not a proof, and T3/T4 are to
+  confirm it. If a 3% nightly seed ever breaches I7, the cap drops to 2%. Above the bound,
+  takeovers are measured, not guaranteed. The guide states it. The
+  generator caps loss at 3% on a link whose third voter the schedule also faults (down, paused,
+  its disk, or a link to it), and still draws 1–30% elsewhere. Seed 260567 stays a named case
+  (`TestNightlyBeyondRuleLoss`): I7 is excluded, and every other oracle, safety included, is
+  asserted.
 
 **What the sim catches on its own** (with the cases that go red):
 - no ρ: 32 seeds and the skew test;
@@ -341,7 +367,7 @@ T4 where only hardware can.
 | F17 | Witness + leader down | stop both | The standby has no majority: it stays standby, raises no-quorum, and offers the override. | ✓ | ✓ | ✓ |
 | F18 | Both controllers down, witness up; restart in each order, at each delay | stop and start | The first controller back forms a majority with the witness and leads. It takes over hot only on a current image. If it was the out-of-sync standby, or the mark is unknown, it takes over cold with the alarm (decision 4). The second joins as standby and resyncs. | ✓ | ✓ | ✓ |
 | F19 | **Cold start of all three**, in all six orders, with start offsets from 0 to 2 × lease | start | Exactly one leader. No write before the election (I1, I3). | ✓ | ✓ | ✓ |
-| F20 | **Flapping links**: each link toggled with periods of lease/4, lease/2, lease and 2 × lease, at 50% duty, for 5 min | nftables loop; netem loss 1–30% | I1 holds. Takeovers stay within the I7 bound, and the hold-off stops ping-pong. | ✓ | ✓ | ✓ (scripted switch port, if the switch allows) |
+| F20 | **Flapping links**: each link toggled with periods of lease/4, lease/2, lease and 2 × lease, at 50% duty, for 5 min | nftables loop; netem loss 1–30% | I1 holds. Takeovers stay within the I7 bound, and the hold-off stops ping-pong. **Loss on the sole vote path** (the third voter out, so one link carries every majority): I7 is claimed up to **3% loss each way**: in the simulator, no second takeover in 20,000 ten-lease windows at 1–3% (first at 4%); T3/T4 to confirm. Above it, takeovers are measured, not guaranteed; every other oracle still holds (§3.3, the loss rule). Where the third voter is counted, loss up to 30% is covered. | ✓ | ✓ | ✓ (scripted switch port, if the switch allows) |
 | F21 | Latency and jitter: 1 ms to lease/2 delay, with ±50% jitter and reordering | tc netem | I1 holds. Delay near lease/2 may cost renewals: that is measured and the guide gets a minimum lease per link latency. | ✓ | ✓ | |
 | F22 | **Clock-rate skew**: ±0.1%, ±0.5%, ±1% (= ρ) between any two voters | T2: per-node clock rate. T3: a `quorumtest` build tag that scales the elector's monotonic clock (containers share one kernel clock). | I1 holds up to ρ. At 2× ρ, T2 shows where the margin breaks, and the guide states the limit. | ✓ | ✓ | |
 | F22b | **Stopped leader clock**: a VM paused or live-migrated, a host suspend | T2: the leader's clock frozen while others run. T3: `incus pause` of a VM leader for 0.5–3 × lease, and a guest suspend. | **Host suspend:** safe, because leases run on `CLOCK_BOOTTIME`. **VM pause:** an expected I1 breach, measured. The guide lists pausable or migratable VMs as unsupported for controllers (design §3.1). The resumed leader writes, so the case is excluded from I1, I2, I2-PN and I3 by name. | ✓ | ✓ | |

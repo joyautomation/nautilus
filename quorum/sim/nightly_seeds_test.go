@@ -3,7 +3,8 @@ package sim
 import "time"
 
 // nightlySeeds are the 20 schedules the first 200,000-seed nightly run failed on
-// main 78d234e8 (#998), as the generator drew them then (before the delay cap).
+// main 78d234e8 (#998), as the generator drew them then (before the delay cap),
+// and seed 260567 of an extra sample on #999 (7096e217, before the loss cap).
 var nightlySeeds = map[uint64]Options{
 	14523: {Seed: 14523, Delay: 1723540, Jitter: 1572771, Fsync: 1015924, InPlace: false,
 		Rates: [nNodes]PPM{998823, 1001615, 1000346}, Start: [3]time.Duration{2406314719, 231851332, 2915693495}, Until: 50613719034,
@@ -141,5 +142,11 @@ var nightlySeeds = map[uint64]Options{
 		Faults: []Fault{
 			{Kind: SlowDisk, At: 17427824772, For: 18563134543, Node: W, Value: 1768984124},
 			{Kind: Crash, At: 17368373361, For: 10144696476, Node: B},
+		}},
+	260567: {Seed: 260567, Delay: 4750421, Jitter: 237678, Fsync: 3978334, InPlace: true,
+		Rates: [nNodes]PPM{1002523, 995366, 1001859}, Start: [3]time.Duration{1212372590, 6409606, 3392069297}, Until: 53951806983,
+		Faults: []Fault{
+			{Kind: Wipe, At: 16697899751, For: 18253907232, Node: W},
+			{Kind: Loss, At: 16176031702, For: 13185058393, From: A, To: B, Both: true, Value: 27},
 		}},
 }

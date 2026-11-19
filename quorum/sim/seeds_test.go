@@ -117,9 +117,55 @@ func randomRun(seed uint64, p profile) Options {
 	if p == profFreeze {
 		o.Faults = append(o.Faults, Fault{Kind: Freeze, At: dur(6*sec, 6*sec+8*lease), For: dur(lease/2, 3*lease), Node: pick(A, B)})
 	}
+	// Within the documented loss rule (test plan F20): loss on a link that
+	// may be the sole vote path stays at or under maxSoleLoss. Capped after
+	// the draws, so the other faults of every seed stay as they were.
+	for i, f := range o.Faults {
+		if f.Kind == Loss && f.Value > maxSoleLoss && solePath(o, i) {
+			o.Faults[i].Value = maxSoleLoss
+		}
+	}
 	h := healAt(o)
 	o.Until = h + bound + 6*lease
 	return o
+}
+
+// maxSoleLoss is the documented loss rule (test plan F20): I7 is claimed
+// on a sole vote path only up to this loss, in percent, each way. Measured
+// by TestMeasureSolePathLoss: over 20,000 windows of 10 leases per rate, a
+// second takeover in one window (more than the loss fault's own one) never
+// happened at 1–3% and first did at 4% (1, then 4 at 5%, 156 at 10%).
+// A simulator measurement with a thin margin, not a proof: if a nightly
+// seed at 3% ever breaches I7, drop this to 2%.
+const maxSoleLoss = 3
+
+// solePath reports whether link fault i of o may be the sole vote path: a
+// controller can win a majority only over it while the third voter is out,
+// because o also faults that voter (down, paused, its disk) or a link to
+// it. Judged over the whole schedule, overlap or not: a wiped witness stays
+// out until the handshake PR, past its fault's end.
+func solePath(o Options, i int) bool {
+	f := o.Faults[i]
+	if f.From > W || f.To > W || f.From == f.To {
+		return false // not a vote link between A, B and W
+	}
+	third := A + B + W - f.From - f.To
+	for j, g := range o.Faults {
+		if j == i {
+			continue
+		}
+		switch g.Kind {
+		case Crash, Wipe, Pause, Freeze, SlowDisk, DiskFail:
+			if g.Node == third {
+				return true
+			}
+		case Cut, Loss, Delay:
+			if g.From == third || g.To == third {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func healAt(o Options) time.Duration {
