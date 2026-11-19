@@ -190,6 +190,18 @@ func (w *OPCUADriver) Quality() map[string]nio.Quality {
 	return out
 }
 
+// PortWrites is what the driver is handed for a push, as WriteOutputs
+// makes it: virtdev's in-process face (naut test) answers the master's
+// command bindings itself, and must get the ports' gated output through
+// the same gate, not a silent drop of the ports' command tags. A master
+// with no ports gets the push as it is.
+func (w *OPCUADriver) PortWrites(vals nio.Values) (nio.Values, error) {
+	if w.ports == nil {
+		return vals, nil
+	}
+	return w.ports.transform(vals)
+}
+
 // WriteOutputs hands the driver what the runtime pushed. A master with
 // port devices takes its ports' command tags out and puts each port's
 // gated process data out in their place (port.go).

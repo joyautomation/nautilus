@@ -21,6 +21,7 @@ import (
 
 	"github.com/joyautomation/nautilus/devbind"
 	nio "github.com/joyautomation/nautilus/io"
+	"github.com/joyautomation/nautilus/iolink"
 	"github.com/joyautomation/nautilus/opcua"
 	"github.com/joyautomation/nautilus/virtdev"
 )
@@ -337,22 +338,22 @@ D_Port1_PdiValid := TRUE;`,
 	waitUntil(t, "the port device to be read through the wire", 30*time.Second, func() bool {
 		vals, _ := w.ReadInputs()
 		_, ok := vals["LEVEL1"]
-		return ok && vals["LEVEL1__Identity"] == int64(0)
+		return ok && vals["LEVEL1__Identity"] == int64(iolink.AwaitingRearm)
 	})
-	vals, _ := w.ReadInputs()
-	if vals["LEVEL1__IdentityFault"] != false {
-		t.Errorf("fault %v with the right device on the port", vals["LEVEL1__IdentityFault"])
+	// The right device, decoded, and the port quiet until it is armed.
+	if vals, _ := w.ReadInputs(); vals["LEVEL1__IdentityFault"] != true {
+		t.Errorf("fault %v: an unarmed port keeps the fault active", vals["LEVEL1__IdentityFault"])
 	}
 
 	// Drive it: the first push is the baseline, then every item changes.
-	push := func(teach bool, mode int64, lock bool) {
+	push := func(teach bool, mode int64, lock, rearm bool) {
 		t.Helper()
-		if err := w.WriteOutputs(nio.Values{"LEVEL1_Teach": teach, "LEVEL1_Mode": mode, "LEVEL1_Lock": lock}); err != nil {
+		if err := w.WriteOutputs(nio.Values{"LEVEL1_Teach": teach, "LEVEL1_Mode": mode, "LEVEL1_Lock": lock, "LEVEL1__Rearm": rearm}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	push(false, 0, false)
-	push(true, 5, true)
+	push(false, 0, false, false)
+	push(true, 5, true, false)
 	// Read what reached the master through a second driver on the same nodes.
 	probe, err := opcua.New(v.url(), opcua.Manifest{Namespaces: od.Manifest.Namespaces, Tags: []opcua.TagBinding{
 		{Name: "Pdo", NodeID: "ns=1;s=IOLM/Port 1/Attached Device/PDO Data Byte String", Type: opcua.ByteString},
@@ -363,8 +364,13 @@ D_Port1_PdiValid := TRUE;`,
 	}
 	probe.Start(ctx)
 	t.Cleanup(probe.Stop)
+	waitUntil(t, "the probe's first read", 10*time.Second, func() bool { pv, _ := probe.ReadInputs(); return pv["Valid"] != nil })
+	if pv, _ := probe.ReadInputs(); pv["Pdo"] != nil && pv["Pdo"] != "" || pv["Valid"] != false {
+		t.Errorf("an unarmed port reached the master: pdo %v valid %v", pv["Pdo"], pv["Valid"])
+	}
+	push(true, 5, true, true) // the pulse
 	waitUntil(t, "the image 8b with the valid flag on the master", 20*time.Second, func() bool {
-		push(true, 5, true) // the runtime pushes while anything changes; here, until it lands
+		push(true, 5, true, true) // the runtime pushes while anything changes; here, until it lands
 		pv, _ := probe.ReadInputs()
 		return pv["Pdo"] == "8b" && pv["Valid"] == true
 	})
@@ -377,7 +383,7 @@ D_Port1_PdiValid := TRUE;`,
 		return vals["LEVEL1__IdentityFault"] == true && vals["LEVEL1__Identity"] == int64(2)
 	})
 	waitUntil(t, "the master's valid flag to drop", 20*time.Second, func() bool {
-		push(true, 5, true)
+		push(true, 5, true, false)
 		pv, _ := probe.ReadInputs()
 		return pv["Valid"] == false
 	})

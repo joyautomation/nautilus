@@ -58,7 +58,7 @@ func TestPortDeviceTagsAndTypes(t *testing.T) {
 	}
 	for name, want := range map[string]string{
 		"M": "input:PEPPERL_FUCHS_ICE3", "LEVEL1": "input:ACME_LEVEL100", "LEVEL1__Identity": "input:INT",
-		"LEVEL1__IdentityFault": "input:BOOL", "LEVEL1_Teach": "output:BOOL", "LEVEL1_Mode": "output:USINT", "LEVEL1_Lock": "output:BOOL",
+		"LEVEL1__IdentityFault": "input:BOOL", "LEVEL1__Rearm": "output:BOOL", "LEVEL1_Teach": "output:BOOL", "LEVEL1_Mode": "output:USINT", "LEVEL1_Lock": "output:BOOL",
 	} {
 		if got[name] != want && !strings.HasSuffix(got[name], strings.TrimPrefix(want, "input:")) {
 			t.Errorf("tag %s = %q, want %q", name, got[name], want)
@@ -166,8 +166,10 @@ func TestPortDeviceReadsAndChecksIdentity(t *testing.T) {
 	if st.Fld[0].F != -12.5 || st.Fld[1].I != -3 || !st.Fld[2].B || !st.Fld[3].B || st.Fld[4].B || !st.Fld[5].B {
 		t.Errorf("members %+v, want Level -12.5, Temperature -3, Ready, SP1, not SP2, PdValid", st.Fld)
 	}
-	if v["LEVEL1__Identity"] != int64(0) || v["LEVEL1__IdentityFault"] != false {
-		t.Errorf("identity %v fault %v, want Ok", v["LEVEL1__Identity"], v["LEVEL1__IdentityFault"])
+	// level100 has process data out, so until the port is armed it reads
+	// AwaitingRearm and the fault stays (see the gate test); its data decode.
+	if v["LEVEL1__Identity"] != int64(iolink.AwaitingRearm) || v["LEVEL1__IdentityFault"] != true {
+		t.Errorf("identity %v fault %v, want AwaitingRearm", v["LEVEL1__Identity"], v["LEVEL1__IdentityFault"])
 	}
 	if q := ps.quality(map[string]nio.Quality{}, nil); len(q) != 0 {
 		t.Errorf("a good port has quality %v, want no entry", q)
@@ -197,7 +199,7 @@ func TestPortDeviceReadsAndChecksIdentity(t *testing.T) {
 	// The right one back, but the master says its data is invalid: Bad.
 	v = masterVals(levelVendor, levelDevice, levelImage, false)
 	ps.take(v)
-	if v["LEVEL1__Identity"] != int64(iolink.Ok) {
+	if v["LEVEL1__Identity"] != int64(iolink.AwaitingRearm) {
 		t.Errorf("identity %v", v["LEVEL1__Identity"])
 	}
 	if q := ps.quality(map[string]nio.Quality{}, nil)["LEVEL1"]; q != nio.Bad {
@@ -212,50 +214,78 @@ func TestPortDeviceReadsAndChecksIdentity(t *testing.T) {
 	}
 }
 
-// Outputs: nothing until a program changes every item; a wrong device
-// gets nothing and the master's valid flag goes false; the right one back
-// is sent nothing until the program writes again; the image goes out
-// before the flag.
+// Outputs: nothing until the port is armed by a pulse on __Rearm, and
+// then the program's current values; a wrong device gets nothing and the
+// master's valid flag goes false; the right one back is sent nothing until
+// the next pulse, which sends the CURRENT values; the image goes out before
+// the flag; a pulse with the wrong device on the port is refused.
 func TestPortDeviceOutputsFollowTheGate(t *testing.T) {
 	ps := portsOf(t, pfMaster(t, nil))
 	drv := &fakeDriver{}
-	push := func(teach bool, mode int64, lock bool) nio.Values {
+	push := func(teach bool, mode int64, lock, rearm bool) (nio.Values, error) {
 		t.Helper()
-		if err := ps.write(drv, nio.Values{"LEVEL1_Teach": teach, "LEVEL1_Mode": mode, "LEVEL1_Lock": lock}); err != nil {
+		err := ps.write(drv, nio.Values{"LEVEL1_Teach": teach, "LEVEL1_Mode": mode, "LEVEL1_Lock": lock, "LEVEL1__Rearm": rearm})
+		return drv.got[len(drv.got)-1], err
+	}
+	must := func(teach bool, mode int64, lock, rearm bool) nio.Values {
+		t.Helper()
+		got, err := push(teach, mode, lock, rearm)
+		if err != nil {
 			t.Fatal(err)
 		}
-		return drv.got[len(drv.got)-1]
+		return got
 	}
-	ok := func() { v := masterVals(levelVendor, levelDevice, levelImage, true); ps.take(v) }
+	take := func(device int64) nio.Values {
+		v := masterVals(levelVendor, device, levelImage, true)
+		ps.take(v)
+		return v
+	}
 	check := func(step string, got nio.Values, image any, valid bool) {
 		t.Helper()
 		if got["M_Port1_PdoBytes"] != image || got["M_Port1_PdoValid"] != valid {
 			t.Errorf("%s: pdo %v valid %v, want %v / %v", step, got["M_Port1_PdoBytes"], got["M_Port1_PdoValid"], image, valid)
 		}
-		for _, tag := range []string{"LEVEL1_Teach", "LEVEL1_Mode", "LEVEL1_Lock"} {
+		for _, tag := range []string{"LEVEL1_Teach", "LEVEL1_Mode", "LEVEL1_Lock", "LEVEL1__Rearm"} {
 			if _, leaked := got[tag]; leaked {
-				t.Errorf("%s: the port's command tag %s reached the master's driver", step, tag)
+				t.Errorf("%s: the port's tag %s reached the master's driver", step, tag)
 			}
 		}
 	}
-	ok()
-	check("first push (the baseline)", push(false, 0, false), nil, false)
-	check("only Mode changed", push(false, 5, false), nil, false)
-	check("every item changed: image first, flag not yet", push(true, 5, true), "8b", false)
-	check("next push: the flag", push(true, 5, true), "8b", true)
+	identity := func(step string, v nio.Values, want iolink.State, fault bool) {
+		t.Helper()
+		if v["LEVEL1__Identity"] != int64(want) || v["LEVEL1__IdentityFault"] != fault {
+			t.Errorf("%s: identity %v fault %v, want %v / %v", step, v["LEVEL1__Identity"], v["LEVEL1__IdentityFault"], int64(want), fault)
+		}
+	}
+	// The right device, but the port has not been armed: quiet, and the
+	// fault stays active so the operator sees why.
+	identity("right device, unarmed", take(levelDevice), iolink.AwaitingRearm, true)
+	check("first push", must(false, 0, false, false), nil, false)
+	check("values set, never armed", must(true, 5, true, false), nil, false)
 
-	// A wrong device: no image, the flag false.
-	v := masterVals(levelVendor, levelDevice+100, levelImage, true)
-	ps.take(v)
-	check("wrong device", push(true, 5, true), nil, false)
-	check("wrong device, still", push(true, 5, true), nil, false)
+	// The pulse: the current values, the image first and the flag a push later.
+	check("pulse: image first, flag not yet", must(true, 5, true, true), "8b", false)
+	check("next push: the flag", must(true, 5, true, true), "8b", true)
+	identity("armed", take(levelDevice), iolink.Ok, false)
 
-	// The right one back: the program has not written since, so nothing.
-	ok()
-	check("right device back, no new write", push(true, 5, true), nil, false)
-	check("right device back, one item changed", push(false, 5, true), nil, false)
-	check("right device back, every item written since the break (Teach, Mode, Lock)", push(true, 2, false), "05", false)
-	check("and then the flag", push(true, 2, false), "05", true)
+	// A wrong device: no image, the flag false, and a pulse refused.
+	identity("wrong device", take(levelDevice+100), iolink.WrongDevice, true)
+	check("wrong device", must(true, 5, true, false), nil, false)
+	if got, err := push(true, 5, true, true); err == nil || !strings.Contains(err.Error(), "LEVEL1__Rearm") || !strings.Contains(err.Error(), "WrongDevice") {
+		t.Errorf("a pulse with the wrong device on the port: %v, want a refusal naming LEVEL1__Rearm and the state", err)
+	} else {
+		check("refused pulse", got, nil, false)
+	}
+
+	// The program changes its values during the break; the right device is
+	// back: quiet, AwaitingRearm, until the next pulse, which sends the
+	// values the program holds NOW, not those from before.
+	_, _ = push(false, 2, false, false)
+	identity("right device back", take(levelDevice), iolink.AwaitingRearm, true)
+	check("right device back, no pulse", must(false, 2, false, false), nil, false)
+	check("pulse: the current values", must(false, 2, false, true), "04", false)
+	check("and the flag", must(false, 2, false, true), "04", true)
+	identity("re-armed", take(levelDevice), iolink.Ok, false)
 }
 
 // Without a pd-out-valid point there is no flag to drop: a wrong device on
@@ -270,8 +300,8 @@ func TestPortDeviceOutputsWithoutAValidFlag(t *testing.T) {
 	}
 	ps := portsOf(t, s)
 	drv := &fakeDriver{}
-	push := func(teach bool, mode int64, lock bool) nio.Values {
-		if err := ps.write(drv, nio.Values{"LEVEL1_Teach": teach, "LEVEL1_Mode": mode, "LEVEL1_Lock": lock}); err != nil {
+	push := func(teach bool, mode int64, lock, rearm bool) nio.Values {
+		if err := ps.write(drv, nio.Values{"LEVEL1_Teach": teach, "LEVEL1_Mode": mode, "LEVEL1_Lock": lock, "LEVEL1__Rearm": rearm}); err != nil {
 			t.Fatal(err)
 		}
 		return drv.got[len(drv.got)-1]
@@ -280,8 +310,8 @@ func TestPortDeviceOutputsWithoutAValidFlag(t *testing.T) {
 		ps.take(nio.Values{"M.Port1_Pdin": "FE0DFFD1", "M.Port1_VendorID": vendor, "M.Port1_DeviceID": device})
 	}
 	take(levelVendor, levelDevice)
-	push(false, 0, false)
-	got := push(true, 5, true)
+	push(false, 0, false, false)
+	got := push(true, 5, true, true)
 	if got["M_Port1_Pdout"] != "8B" {
 		t.Fatalf("pdout %v, want 8B (this profile's form is hex)", got["M_Port1_Pdout"])
 	}
@@ -291,7 +321,7 @@ func TestPortDeviceOutputsWithoutAValidFlag(t *testing.T) {
 		}
 	}
 	take(levelVendor, levelDevice+100)
-	if got := push(false, 1, false); got["M_Port1_Pdout"] != nil {
+	if got := push(false, 1, false, false); got["M_Port1_Pdout"] != nil {
 		t.Errorf("a wrong device was sent %v", got["M_Port1_Pdout"])
 	}
 }
@@ -303,8 +333,8 @@ func TestPortDeviceRefusesAValueThatDoesNotFit(t *testing.T) {
 	drv := &fakeDriver{}
 	v := masterVals(levelVendor, levelDevice, levelImage, true)
 	ps.take(v)
-	_ = ps.write(drv, nio.Values{"LEVEL1_Teach": false, "LEVEL1_Mode": int64(0), "LEVEL1_Lock": false})
-	err := ps.write(drv, nio.Values{"LEVEL1_Teach": true, "LEVEL1_Mode": int64(9), "LEVEL1_Lock": true})
+	_ = ps.write(drv, nio.Values{"LEVEL1_Teach": false, "LEVEL1_Mode": int64(0), "LEVEL1_Lock": false, "LEVEL1__Rearm": false})
+	err := ps.write(drv, nio.Values{"LEVEL1_Teach": true, "LEVEL1_Mode": int64(9), "LEVEL1_Lock": true, "LEVEL1__Rearm": false})
 	if err == nil || !strings.Contains(err.Error(), "LEVEL1_Mode") {
 		t.Errorf("Mode 9 (3 bits): %v, want an error naming LEVEL1_Mode", err)
 	}
@@ -332,7 +362,7 @@ func TestPortWarnings(t *testing.T) {
 }
 
 // A master profile with no id points is Unchecked: its port is warned
-// about, and its outputs are driven as the program says.
+// about, and it is armed by the pulse like any other.
 func TestPortWithoutIDsIsUncheckedAndWarned(t *testing.T) {
 	raw := builtin(t, "ifm-al1590")
 	raw = []byte(strings.NewReplacer(`  vendor-id: "Port{n}_VendorID"`+"\n", "", `  device-id: "Port{n}_DeviceID"`+"\n", "").Replace(string(raw)))
@@ -353,16 +383,51 @@ func TestPortWithoutIDsIsUncheckedAndWarned(t *testing.T) {
 	ps := newPorts(s.devices[0].ports)
 	v := nio.Values{"M.Port1_Pdin": "FE0DFFD1"}
 	ps.take(v)
-	if v["LEVEL1__Identity"] != int64(iolink.Unchecked) || v["LEVEL1__IdentityFault"] != false {
-		t.Errorf("identity %v fault %v, want Unchecked and no fault", v["LEVEL1__Identity"], v["LEVEL1__IdentityFault"])
+	if v["LEVEL1__Identity"] != int64(iolink.AwaitingRearm) || v["LEVEL1__IdentityFault"] != true {
+		t.Errorf("identity %v fault %v, want AwaitingRearm until the pulse", v["LEVEL1__Identity"], v["LEVEL1__IdentityFault"])
 	}
 	if _, ok := v["LEVEL1"]; !ok {
 		t.Error("an unchecked port's data was not decoded")
 	}
 	drv := &fakeDriver{}
-	_ = ps.write(drv, nio.Values{"LEVEL1_Teach": false, "LEVEL1_Mode": int64(0), "LEVEL1_Lock": false})
-	_ = ps.write(drv, nio.Values{"LEVEL1_Teach": true, "LEVEL1_Mode": int64(5), "LEVEL1_Lock": true})
+	_ = ps.write(drv, nio.Values{"LEVEL1_Teach": true, "LEVEL1_Mode": int64(5), "LEVEL1_Lock": true, "LEVEL1__Rearm": false})
+	_ = ps.write(drv, nio.Values{"LEVEL1_Teach": true, "LEVEL1_Mode": int64(5), "LEVEL1_Lock": true, "LEVEL1__Rearm": true})
 	if got := drv.got[1]["M_Port1_Pdout"]; got != "8B" {
-		t.Errorf("an unchecked port was sent %v, want 8B (driven as told)", got)
+		t.Errorf("an unchecked port was sent %v after the pulse, want 8B", got)
+	}
+	v = nio.Values{"M.Port1_Pdin": "FE0DFFD1"}
+	ps.take(v)
+	if v["LEVEL1__Identity"] != int64(iolink.Unchecked) || v["LEVEL1__IdentityFault"] != false {
+		t.Errorf("armed: identity %v fault %v, want Unchecked and no fault", v["LEVEL1__Identity"], v["LEVEL1__IdentityFault"])
+	}
+}
+
+// A port whose IODD has no process data out has no gate, no command tag and
+// no __Rearm: nothing to arm, so the identity is plainly Ok.
+func TestPortWithoutProcessDataOutHasNoGate(t *testing.T) {
+	fsys := portFS(t, "pepperl-fuchs-ice3")
+	raw, err := os.ReadFile("../iolink/iodd/testdata/acme-press200-20261118-IODD1.0.1.xml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fsys["iodd/press.xml"] = &fstest.MapFile{Data: raw}
+	s, err := Resolve(fsys, []Device{{Name: "M", Profile: "pepperl-fuchs-ice3", Endpoint: "h", Ports: map[int]Port{1: {Name: "PRESS1", IODD: "press.xml"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tg := range s.Tags() {
+		if tg.Name == "PRESS1__Rearm" || strings.HasPrefix(tg.Name, "PRESS1_") && tg.Role == "output" {
+			t.Errorf("a port with no process data out has the output tag %s", tg.Name)
+		}
+	}
+	ps := portsOf(t, s)
+	// press200's image is six octets; the P+F's byte string carries it.
+	v := nio.Values{"M.Port1_PdiBytes": "402000008101", "M.Port1_VendorID": int64(65261), "M.Port1_DeviceID": int64(2097153), "M.Port1_PdiValid": true}
+	ps.take(v)
+	if v["PRESS1__Identity"] != int64(iolink.Ok) || v["PRESS1__IdentityFault"] != false {
+		t.Errorf("identity %v fault %v, want Ok (nothing to arm)", v["PRESS1__Identity"], v["PRESS1__IdentityFault"])
+	}
+	if _, ok := v["PRESS1"]; !ok {
+		t.Error("its data was not decoded")
 	}
 }

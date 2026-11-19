@@ -72,12 +72,18 @@ func (s *Set) TagsByDevice() []DeviceTags {
 			where := fmt.Sprintf("%s port %d: %s", d.Name, pd.Num, pd.dev.IODD.Identity.DeviceName)
 			dt.Tags = append(dt.Tags,
 				tagfile.Tag{Name: pd.Name, Role: "input", Type: pd.dev.TypeName, Desc: where},
-				tagfile.Tag{Name: IdentityTag(pd.Name), Role: "input", Type: "INT", Desc: pd.Name + ": identity check (0 Ok, 1 NoDevice, 2 WrongDevice, 3 Unchecked)"},
-				tagfile.Tag{Name: IdentityFaultTag(pd.Name), Role: "input", Type: "BOOL", Desc: pd.Name + ": wrong or missing device on " + d.Name + " port " + fmt.Sprint(pd.Num)})
+				tagfile.Tag{Name: IdentityTag(pd.Name), Role: "input", Type: "INT", Desc: pd.Name + ": identity check (0 Ok, 1 NoDevice, 2 WrongDevice, 3 Unchecked, 4 AwaitingRearm)"},
+				tagfile.Tag{Name: IdentityFaultTag(pd.Name), Role: "input", Type: "BOOL", Desc: pd.Name + ": wrong, missing or unconfirmed device on " + d.Name + " port " + fmt.Sprint(pd.Num) + " (true until the port is re-armed)"})
 			for _, c := range pd.dev.Commands {
 				dt.Tags = append(dt.Tags, tagfile.Tag{
 					Name: CommandPortTag(pd.Name, c.Name), Role: "output", Type: c.Type,
 					Unit: c.Unit, Desc: joinDesc(pd.Name, c.Desc),
+				})
+			}
+			if pd.rearm != "" {
+				dt.Tags = append(dt.Tags, tagfile.Tag{
+					Name: pd.rearm, Role: "output", Type: "BOOL",
+					Desc: pd.Name + ": pulse to let the port send its process data out, after the controller starts or the device on the port is swapped",
 				})
 			}
 		}

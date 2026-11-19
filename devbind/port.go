@@ -40,6 +40,8 @@ type portDev struct {
 	outC, outValidC string
 	// cmds maps a command tag (<Port>_<Item>) to its process data out item.
 	cmds map[string]int
+	// rearm is the port's __Rearm tag, "" for a port with no process data out.
+	rearm string
 }
 
 // structType is the port device's struct type: one member per process data
@@ -77,7 +79,13 @@ func (s *Set) Ports() []PortInfo {
 }
 
 // IdentityTag and IdentityFaultTag are a port device's companion tags.
-func IdentityTag(port string) string      { return port + "__Identity" }
+func IdentityTag(port string) string { return port + "__Identity" }
+
+// RearmTag is the command a port with process data out is armed by: a
+// pulse (false then true) on it, once the device on the port is the right
+// one, lets the port send the program's current values. An operator's
+// write to it is journalled by the audit journal like any tag write.
+func RearmTag(port string) string         { return port + "__Rearm" }
 func IdentityFaultTag(port string) string { return port + "__IdentityFault" }
 
 // loadPorts resolves a master row's ports: each port's IODD is read from
@@ -158,6 +166,7 @@ func (d *device) loadPorts(fsys fs.FS, where string) error {
 			for _, c := range dev.Commands {
 				pd.cmds[CommandPortTag(p.Name, c.Name)] = c.Item
 			}
+			pd.rearm = RearmTag(p.Name)
 		}
 		pd.inM, pd.validM, pd.vendorM, pd.deviceM = mem(d.Name, pin), mem(d.Name, pv), mem(d.Name, vid), mem(d.Name, did)
 		pd.outC, pd.outValidC = cmd(d.Name, pout), cmd(d.Name, pov)
@@ -316,8 +325,15 @@ func (p *portIn) take(vals map[string]any) {
 		p.loggedState = state
 	}
 	p.state, p.checked = state, true
-	vals[IdentityTag(p.Name)] = int64(state)
-	vals[IdentityFaultTag(p.Name)] = state.Fault()
+	// A port that can be armed and has not been reads AwaitingRearm: the
+	// right device, nothing sent, and the fault stays active so the
+	// operator sees why.
+	shown := state
+	if p.gate != nil && state.Drives() && !p.gate.Armed() {
+		shown = iolink.AwaitingRearm
+	}
+	vals[IdentityTag(p.Name)] = int64(shown)
+	vals[IdentityFaultTag(p.Name)] = shown.Fault()
 	p.bad = false
 	if !state.Drives() {
 		p.bad = true // the bytes are not decoded: whatever is on the port is not the device
@@ -353,8 +369,10 @@ func (p *portIn) deliver(vals map[string]any) {
 	}
 }
 
-// copyFresh is a port reader sharing no state with p and no write side.
-func (p *portIn) copyFresh() *portIn { return newPortIn(p.portDev, nil) }
+// copyFresh is a port reader with decode state of its own that feeds the
+// same gate: virtdev's in-process face reads through copies, and the gate
+// must see the identity they check.
+func (p *portIn) copyFresh() *portIn { return newPortIn(p.portDev, p.gate) }
 
 // quality is the port device's quality (§6.1): NotConnected until the
 // master's process data has arrived once; Bad while the identity is wrong
@@ -441,6 +459,8 @@ func (ps *ports) newAssembly() func(nio.Values) {
 		fresh[i] = p.copyFresh()
 	}
 	return func(vals nio.Values) {
+		ps.mu.Lock()
+		defer ps.mu.Unlock()
 		for _, p := range fresh {
 			p.take(vals)
 		}
@@ -470,12 +490,14 @@ func (ps *ports) quality(in map[string]nio.Quality, out map[string]nio.Quality) 
 	return out
 }
 
-// write hands the master's driver what the runtime pushed, with the ports'
-// command tags taken out and each port's gated process data out (and its
-// valid flag) put in as the master's own command bindings. A refused value
-// is the returned error; everything else is still pushed.
-func (ps *ports) write(drv nio.Driver, vals nio.Values) error {
+// transform is what the master's driver is handed for what the runtime
+// pushed: the ports' command tags (and __Rearm) taken out, and each port's
+// gated process data out and valid flag put in as the master's own command
+// bindings. A refused value or re-arm is the returned error; everything
+// else is still in the result.
+func (ps *ports) transform(vals nio.Values) (nio.Values, error) {
 	ps.mu.Lock()
+	defer ps.mu.Unlock()
 	into := make(nio.Values, len(vals)+len(ps.out))
 	for k, v := range vals {
 		into[k] = v
@@ -487,6 +509,7 @@ func (ps *ports) write(drv nio.Driver, vals nio.Values) error {
 		for tag := range o.cmds {
 			delete(into, tag)
 		}
+		delete(into, o.rearm)
 	}
 	var first error
 	for _, o := range ps.out {
@@ -497,7 +520,13 @@ func (ps *ports) write(drv nio.Driver, vals nio.Values) error {
 			first = err
 		}
 	}
-	ps.mu.Unlock()
+	return into, first
+}
+
+// write hands the master's driver what transform makes of a push; a
+// refused value is the returned error after everything else was pushed.
+func (ps *ports) write(drv nio.Driver, vals nio.Values) error {
+	into, first := ps.transform(vals)
 	if err := drv.WriteOutputs(into); err != nil {
 		return err
 	}
@@ -506,20 +535,21 @@ func (ps *ports) write(drv nio.Driver, vals nio.Values) error {
 
 // ── writing ─────────────────────────────────────────────────────────────
 
-// portOut is the write side of one port with process data out: the program
-// writes command tags, and the gate decides what reaches the master.
+// portOut is the write side of one port with process data out: the
+// program sets command tags and pulses __Rearm, and the gate decides what
+// reaches the master.
 type portOut struct {
 	*portDev
 	gate *iolink.OutGate
-	// ref is each item's last value seen: the runtime pushes the whole set
-	// whenever any output changes, so a value is a WRITE only when it
-	// differs from the last one seen (the driver's own baseline rule). It is
-	// nil before the first push. It follows every push, a refused one too,
-	// so after an identity break a program re-arms the port by changing
-	// every item, never by being pushed the values it had before.
-	ref     []any
-	pending bool // the image is going out this call: the valid flag follows the next
-	valid   bool // the valid flag last handed to the master
+	// ref is each item's value last handed to the gate, so an unchanged
+	// push costs nothing; nil before the first push.
+	ref []any
+	// rearmSeen and rearmPrev detect the pulse: the first push is only the
+	// state of the world, a pulse is a later push that has it true after one
+	// that had it false.
+	rearmSeen, rearmPrev bool
+	pending              bool // the image is going out this call: the valid flag follows the next
+	valid                bool // the valid flag last handed to the master
 }
 
 func newPortOut(p *portDev) *portOut {
@@ -529,37 +559,49 @@ func newPortOut(p *portDev) *portOut {
 	return &portOut{portDev: p, gate: iolink.NewOutGate(p.dev.Out, iolink.NoDevice)}
 }
 
-// push takes the values the runtime pushed and returns what to hand the
-// master's driver for this port: its process data out image when there is
-// one to send and the valid flag.
+// push takes the values the runtime pushed and puts into what to hand the
+// master's driver for this port: its process data out image when the gate
+// has one to send, and the valid flag.
 func (o *portOut) push(vals nio.Values, into nio.Values) error {
-	cur := make([]any, len(o.dev.Commands))
-	for tag, item := range o.cmds {
-		cur[item] = vals[tag]
-	}
 	var first error
-	if o.ref == nil {
-		o.ref = cur // the state of the world, not a set of commands
-	} else {
-		for i, v := range cur {
-			if sameValue(o.ref[i], v) {
-				continue
-			}
-			o.ref[i] = v
-			if err := o.gate.Write(i, v); err != nil && o.gate.Drives() && first == nil {
-				first = fmt.Errorf("%s: %w", o.portTag(i), err)
-			}
+	fail := func(err error) {
+		if first == nil {
+			first = err
 		}
 	}
+	if o.ref == nil {
+		o.ref = make([]any, len(o.dev.Commands))
+	}
+	for tag, item := range o.cmds {
+		v := vals[tag]
+		if sameValue(o.ref[item], v) {
+			continue
+		}
+		if err := o.gate.Set(item, v); err != nil {
+			fail(fmt.Errorf("%s: %w", tag, err))
+			continue
+		}
+		o.ref[item] = v
+	}
+	rv, _ := vals[o.rearm].(bool)
+	if o.rearmSeen && rv && !o.rearmPrev {
+		if err := o.gate.Rearm(); err != nil {
+			slog.Warn("iolink: re-arm refused", "port", o.Name, "master", o.Master, "number", o.Num, "reason", err.Error())
+			fail(fmt.Errorf("%s: %w", o.rearm, err))
+		} else {
+			slog.Info("iolink: port re-armed: it sends the program's current values", "port", o.Name, "master", o.Master, "number", o.Num)
+		}
+	}
+	o.rearmSeen, o.rearmPrev = true, rv
 	plan, err := o.gate.Plan()
-	if err != nil && first == nil {
-		first = fmt.Errorf("%s: %w", o.Name, err)
+	if err != nil {
+		fail(fmt.Errorf("%s: %w", o.Name, err))
 	}
 	if plan.Image != nil && o.outC != "" {
 		carrier, err := iolink.Carrier(o.spec.PDOut.Form, plan.Image)
-		if err != nil && first == nil {
-			first = fmt.Errorf("%s: %w", o.Name, err)
-		} else if err == nil {
+		if err != nil {
+			fail(fmt.Errorf("%s: %w", o.Name, err))
+		} else {
 			into[o.outC] = carrier
 		}
 	}
