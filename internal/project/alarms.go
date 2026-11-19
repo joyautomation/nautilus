@@ -313,6 +313,9 @@ func (p *Project) CheckAlarms(rt *runtime.Runtime) (defs []alarm.Def, errs, warn
 	check := func(what, path string) {
 		root, member, dotted := strings.Cut(path, ".")
 		info, declared := byName[ir.NameKey(root)]
+		if !declared && p.substituteCompanion(root) {
+			return // runtime-owned BOOL of a project that has substitutes: (#707)
+		}
 		if !declared {
 			warns = append(warns, fmt.Sprintf("%s watches %q, which %s declares no tag for — "+
 				"correct if the tag arrives from the field, dead otherwise", what, path, ManifestName))

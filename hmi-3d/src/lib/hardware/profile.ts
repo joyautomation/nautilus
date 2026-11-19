@@ -225,10 +225,16 @@ export function portReading(v: unknown): { up?: boolean; gbps?: number } {
 	return { up: typeof up === 'boolean' ? up : undefined, gbps };
 }
 
-export function partState(part: Pick<ServerPart, 'tag' | 'static'>, value: unknown, good: boolean): PartState {
+/**
+ * `substituted` is an operator-held value (#707): the logic runs on it, but it
+ * is not the part's own reading, so it is drawn as unverified ('assumed'),
+ * never as healthy and never as stale (it is being refreshed, by the hold).
+ */
+export function partState(part: Pick<ServerPart, 'tag' | 'static'>, value: unknown, good: boolean, substituted = false): PartState {
 	if (!part.tag) return part.static ? 'assumed' : 'unbound';
 	if (value === undefined || value === null) return 'missing';
 	if (member(value, 'Present') === false) return 'absent';
+	if (substituted) return 'assumed';
 	if (!good) return 'stale';
 	const health = member(value, 'Health');
 	if (member(value, 'Fault') === true || health === 2) return 'critical';

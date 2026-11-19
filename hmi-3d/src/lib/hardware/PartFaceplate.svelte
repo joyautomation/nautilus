@@ -40,7 +40,8 @@
 	};
 
 	let shown = $derived(value ?? part?.static);
-	let state = $derived<PartState>(part ? partState(part, value, quality === 'good') : value ? 'ok' : 'missing');
+	// `as string`: the kit's Quality gains 'substituted' in the release after 0.10.0 (#707).
+	let state = $derived<PartState>(part ? partState(part, value, quality === 'good', (quality as string) === 'substituted') : value ? 'ok' : 'missing');
 	let facts = $derived([...(part ? partFacts(part.kind, shown) : server?.kind === 'switch' ? switchFacts(shown, server.portsUp) : serverFacts(shown)), ...extra]);
 	let headline = $derived(part ? partStatus(part.kind, shown, state === 'assumed' ? 'ok' : state) : '');
 	let title = $derived(part ? part.slot : (server?.label ?? ''));

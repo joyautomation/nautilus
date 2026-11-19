@@ -223,8 +223,9 @@ func sameScalar(a, b ir.Value) bool {
 // rollup turns a driver's per-binding quality into per-device quality: a
 // device is NotConnected while none of its polled members has arrived,
 // Bad if any polled member is Bad (or a quality this build does not know)
-// or still missing while others arrived, else Substituted if any is, else
-// Stale if any is. Bindings that are not members pass through.
+// or still missing while others arrived, else Stale if any is, else
+// Substituted if any is (a member that is not being refreshed outranks one
+// that is held on purpose). Bindings that are not members pass through.
 func rollup(asm []*assembler, member map[string]int, in map[string]nio.Quality) map[string]nio.Quality {
 	var out map[string]nio.Quality
 	mark := func(name string, q nio.Quality) {
@@ -260,10 +261,10 @@ func rollup(asm []*assembler, member map[string]int, in map[string]nio.Quality) 
 			mark(a.dev, nio.NotConnected)
 		case bad || notConn > 0:
 			mark(a.dev, nio.Bad)
-		case subst:
-			mark(a.dev, nio.Substituted)
 		case stale:
 			mark(a.dev, nio.Stale)
+		case subst:
+			mark(a.dev, nio.Substituted)
 		}
 	}
 	return out

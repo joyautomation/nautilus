@@ -189,6 +189,8 @@ func TestSubstituteRoutesRefusedWhenNotLeading(t *testing.T) {
 	} {
 		if r := call(t, s, c.method, c.path, c.body); r.Code != 503 || !strings.Contains(r.Body.String(), "no leader") {
 			t.Errorf("%s %s on a standby = %d %s; want 503 no leader", c.method, c.path, r.Code, r.Body)
+		} else if r.Header().Get("X-Nautilus-Outcome") != "refused" {
+			t.Errorf("%s %s: a certain refusal must say so in X-Nautilus-Outcome (a proxy's 503 cannot)", c.method, c.path)
 		}
 	}
 }

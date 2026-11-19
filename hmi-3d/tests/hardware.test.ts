@@ -118,6 +118,10 @@ describe('part state', () => {
 		expect(partState(bound, undefined, true)).toBe('missing');
 		expect(partState(bound, { ...drive, Present: false }, true)).toBe('absent');
 		expect(partState(bound, drive, false)).toBe('stale');
+		// A substituted reading is held, not stale and not healthy (#707).
+		expect(partState(bound, drive, false, true)).toBe('assumed');
+		expect(partState(bound, { ...drive, Fault: true }, false, true)).toBe('assumed');
+		expect(partState(bound, { ...drive, Present: false }, false, true)).toBe('absent');
 		expect(partState(bound, { ...drive, Fault: true }, true)).toBe('critical');
 		expect(partState(bound, { ...drive, Health: 2 }, true)).toBe('critical');
 		expect(partState(bound, { ...drive, PredictedFailure: true }, true)).toBe('warning');

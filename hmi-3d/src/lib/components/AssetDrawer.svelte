@@ -34,7 +34,7 @@
 			{@const Panel = def.panel}
 			<Panel {value} label={node.label || node.id} good={quality === 'good'} />
 		{/if}
-		<p class="q">Quality: {quality}</p>
+		<p class="q">Quality: {quality}{#if quality === 'substituted'} — held by an operator; not the plant's reading{/if}</p>
 		{#if members.length}
 			<dl>
 				{#each members as [k, x]}

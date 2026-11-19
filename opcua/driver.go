@@ -255,8 +255,11 @@ type serverInfo struct {
 // Quality. All guarded by Driver.mu once Start has run.
 type binding struct {
 	TagBinding
-	node      *ua.NodeID
-	bad       bool
+	node *ua.NodeID
+	bad  bool
+	// subst: the last value came with Uncertain_SubstituteValue — the server
+	// says it is standing in for the real reading. Kept, reported Substituted.
+	subst     bool
 	delivered bool
 	// answered: the server has answered this binding on THIS session. A
 	// value carried over from the last session is Stale until it has.
@@ -912,7 +915,7 @@ func (d *Driver) onConnect(ctx context.Context, sess *Session) {
 	remapped := 0
 	missing := 0
 	for _, b := range d.bindings {
-		b.bad, b.answered, b.missing, b.notMonitored = false, false, false, false
+		b.bad, b.subst, b.answered, b.missing, b.notMonitored = false, false, false, false, false
 		if b.Namespace == "" {
 			continue
 		}
@@ -1136,6 +1139,16 @@ func (d *Driver) apply(b *binding, dv *ua.DataValue) {
 		b.bad = true
 		return
 	}
+	if dv != nil && substituted(dv.Status) {
+		// Not Bad: the server stands behind the number as a deliberate
+		// stand-in. Keep it and say so (#707); a non-scalar is still Bad.
+		if v, ok := toValue(dv.Value); ok {
+			b.bad, b.subst, b.delivered = false, true, true
+			d.snapshot[b.Name] = v
+			return
+		}
+	}
+	b.subst = false
 	if dv == nil || !good(dv.Status) {
 		if !b.bad && dv != nil {
 			d.lastErr = fmt.Errorf("tag %s: %v", b.Name, dv.Status)

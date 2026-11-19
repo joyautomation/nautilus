@@ -107,12 +107,12 @@ func unknownOutcome(w http.ResponseWriter, err error) {
 // before Propose returns.
 func (s *Server) startThroughLog(w http.ResponseWriter, r *http.Request, tag string, value any, d time.Duration, ackOnStart bool, reqID string) {
 	if err := s.rt.ValidateSubstitute(tag, value); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		refuse(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	raw, err := json.Marshal(value)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		refuse(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), substituteProposeWait)
@@ -127,11 +127,11 @@ func (s *Server) startThroughLog(w http.ResponseWriter, r *http.Request, tag str
 	}
 	started, ok := s.substituteByIDOrRequest(e.Seq, reqID)
 	if ok && started.ID != e.Seq && !runtime.SameRequest(started, tag, value, d) {
-		http.Error(w, fmt.Sprintf("%v: entry %d was started with it for something else", runtime.ErrRequestReused, started.ID), http.StatusConflict)
+		refuse(w, fmt.Sprintf("%v: entry %d was started with it for something else", runtime.ErrRequestReused, started.ID), http.StatusConflict)
 		return
 	}
 	if !ok {
-		http.Error(w, fmt.Sprintf("entry %d committed but did not start here (see the controller log): re-read GET /api/substitutes", e.Seq), http.StatusConflict)
+		refuse(w, fmt.Sprintf("entry %d committed but did not start here (see the controller log): re-read GET /api/substitutes", e.Seq), http.StatusConflict)
 		return
 	}
 	logAction(r, "substitute: started (replicated)", "tag", started.Name, "id", started.ID, "for", d)
@@ -156,7 +156,7 @@ func (s *Server) substituteByIDOrRequest(id uint64, reqID string) (runtime.Subst
 func (s *Server) stopThroughLog(w http.ResponseWriter, r *http.Request, id uint64) {
 	name, _ := s.substituteByID(id)
 	if name == "" {
-		http.Error(w, fmt.Sprintf("no substitute %d is active (it ended, expired, or a newer one replaced it)", id), http.StatusNotFound)
+		refuse(w, fmt.Sprintf("no substitute %d is active (it ended, expired, or a newer one replaced it)", id), http.StatusNotFound)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), substituteProposeWait)
@@ -185,7 +185,7 @@ func (s *Server) ackThroughLog(w http.ResponseWriter, r *http.Request, ids []uin
 		}
 	}
 	if len(refs) == 0 {
-		http.Error(w, "nothing to acknowledge: those substitutes ended, were replaced, do not wait for an acknowledgement, or already have one", http.StatusConflict)
+		refuse(w, "nothing to acknowledge: those substitutes ended, were replaced, do not wait for an acknowledgement, or already have one", http.StatusConflict)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), substituteProposeWait)

@@ -114,6 +114,11 @@ export { default as AlarmTable } from './components/AlarmTable.svelte';
 export { default as AlarmJournal } from './components/AlarmJournal.svelte';
 export { default as AckButton, worstFirst, ackLine } from './components/AckButton.svelte';
 export { AlarmClient, createAlarmClient, shouldRefetch, PRIORITY_ORDER, PRIORITY_META, PRIORITY_SIGN, STATE_META, DEFAULT_SHELVE_TIMES_S } from './alarms.svelte.js';
+// Substitute values (#707) — GET/POST/DELETE /api/substitutes. The client owns
+// the contract (requestId per action, unknown outcome, 409, kept:false).
+export { default as SubstitutesPanel } from './components/SubstitutesPanel.svelte';
+export { SubstituteClient, SubstituteSession, failureText, keptText, formatRemaining, unacked, validateStart } from './substitutes.js';
+export type { SubstituteEntry, SubstituteRule, SubstituteList, SubstituteResult, PendingStart, SubstituteFailure } from './substitutes.js';
 export { default as AlarmSign } from './components/AlarmSign.svelte';
 export type {
 	Priority,

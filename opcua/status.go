@@ -123,6 +123,8 @@ func (d *Driver) Quality() map[string]nio.Quality {
 			switch {
 			case d.online && b.bad:
 				mark(b.Name, nio.Bad)
+			case d.online && b.answered && b.subst:
+				mark(b.Name, nio.Substituted)
 			case d.online && b.answered:
 				// Good: the server answered it on this session.
 			case b.delivered:
