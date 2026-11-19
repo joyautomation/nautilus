@@ -8,11 +8,15 @@ package project
 // refusal, and the three apply guards.
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,6 +32,7 @@ import (
 	"github.com/joyautomation/nautilus/modbus"
 	"github.com/joyautomation/nautilus/modbus/slave"
 	"github.com/joyautomation/nautilus/runtime"
+	"github.com/joyautomation/nautilus/server"
 )
 
 func newSlave(t *testing.T, in uint16) *slave.Server {
@@ -444,6 +449,9 @@ func uaServer(t *testing.T, level float64) string {
 	n := ns.AddNewVariableStringNode("Level", level)
 	_ = n.SetAttribute(ua.AttributeIDDataType, uasrv.DataValueFromValue(ua.NewNumericNodeID(0, id.Double)))
 	plant.AddRef(n, id.HasComponent, true)
+	n2 := ns.AddNewVariableStringNode("Level2", level+10) // a second node to rebind GW_Level to
+	_ = n2.SetAttribute(ua.AttributeIDDataType, uasrv.DataValueFromValue(ua.NewNumericNodeID(0, id.Double)))
+	plant.AddRef(n2, id.HasComponent, true)
 	if err := srv.Start(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -861,5 +869,125 @@ func TestIOApplyWholeModbusSwapWithTheGateClosed(t *testing.T) {
 	}
 	if len(res.Commanded) != 0 || !strings.Contains(strings.Join(res.Notes, " "), "gate was closed") {
 		t.Fatalf("commanded %v notes %v; want nothing, the closed gate said", res.Commanded, res.Notes)
+	}
+}
+
+// #706's done-when, over the HTTP API: under a 1 ms scan, a Modbus device's
+// address and an OPC UA node id change in one apply, with no scan overrun
+// and bad quality only on what changed; an invalid change is refused and
+// what runs is untouched.
+func TestIODoneWhenOverTheAPI(t *testing.T) {
+	s1, s2, s3 := newSlave(t, 4), newSlave(t, 7), newSlave(t, 4)
+	ua := uaServer(t, 1.5)
+	files := ioFiles(slavePort(s1), slavePort(s2), ua)
+	files = withFile(files, "nautilus.yaml", strings.Replace(string(files["nautilus.yaml"].Data), "scan: 5ms", "scan: 1ms", 1))
+	r := startIORig(t, files, false)
+	h := server.New(r.rt, server.Options{OnlineEdits: true, IO: r.io.Hook(nil, files)}).Handler()
+	call := func(method, path string, body any) (int, map[string]any) {
+		t.Helper()
+		var buf bytes.Buffer
+		if body != nil {
+			json.NewEncoder(&buf).Encode(body)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(method, "http://localhost"+path, &buf))
+		out := map[string]any{}
+		json.Unmarshal(w.Body.Bytes(), &out)
+		return w.Code, out
+	}
+	stage := func(changed map[string]string) string {
+		t.Helper()
+		code, st := call("POST", "/api/io/staged", map[string]any{"files": changed})
+		if code != http.StatusCreated {
+			t.Fatalf("stage: %d %v", code, st)
+		}
+		return st["id"].(string)
+	}
+	eventually(t, "polled", func() bool {
+		return r.value("A_In") == "4" && r.value("B_In") == "7" && r.value("GW_Level") == "1.5"
+	})
+	overruns := r.rt.Stats().Lateness.Overruns
+	stop := watchGood(r, "B_In", "B_Cmd")
+
+	// Invalid: a new tag. Refused; nothing changes.
+	id := stage(map[string]string{"modbus.yaml": modbusYAML(slavePort(s3), slavePort(s2), "",
+		"  - {name: A_More, source: DEV_A, table: holding, address: 3, format: int16}\n")})
+	if _, st := call("POST", "/api/io/staged/"+id+"/validate", nil); st["state"] != "invalid" {
+		t.Fatalf("an invalid change validated: %v", st)
+	}
+	if code, _ := call("POST", "/api/io/staged/"+id+"/apply", nil); code != http.StatusConflict {
+		t.Fatalf("an invalid change: apply %d, want 409", code)
+	}
+	if _, st := call("GET", "/api/state", nil); fmt.Sprint(st["config"]) != "map[source:manifest]" {
+		t.Fatalf("after a refused change, config = %v", st["config"])
+	}
+
+	// Valid: DEV_A to another address, GW_Level to another node.
+	id = stage(map[string]string{
+		"modbus.yaml": modbusYAML(slavePort(s3), slavePort(s2), "", ""),
+		"opcua.yaml":  strings.Replace(string(files["opcua.yaml"].Data), "s=Level", "s=Level2", 1),
+	})
+	if _, st := call("POST", "/api/io/staged/"+id+"/validate", nil); st["state"] != "valid" {
+		t.Fatalf("validate: %v", st)
+	}
+	if code, st := call("POST", "/api/io/staged/"+id+"/apply", nil); code != http.StatusOK || st["state"] != "applied" {
+		t.Fatalf("apply: %d %v", code, st)
+	}
+	eventually(t, "GW_Level from its new node", func() bool { return r.value("GW_Level") == "11.5" })
+	s3.Unit(1).SetHolding(0, 9)
+	eventually(t, "A_In from its new address", func() bool { return r.value("A_In") == "9" })
+	if bad := stop(); len(bad) > 0 {
+		t.Fatalf("DEV_B, which did not change, left Good: %v", bad[:min(5, len(bad))])
+	}
+	if n := r.rt.Stats().Lateness.Overruns - overruns; n != 0 {
+		t.Fatalf("%d scan overruns during the apply", n)
+	}
+	_, st := call("GET", "/api/state", nil)
+	c, _ := st["config"].(map[string]any)
+	if c["source"] != "applied" || !strings.Contains(fmt.Sprint(c["differs"]), "DEV_A") || !strings.Contains(fmt.Sprint(c["differs"]), "opcua-client") {
+		t.Fatalf("config = %v, want DEV_A and opcua-client differing", st["config"])
+	}
+}
+
+// The server hook maps the engine's outcomes onto the statuses the routes
+// answer: no snapshot 409, busy and stale conflicts, a failed rollback its
+// own.
+func TestIOHookMapsOutcomes(t *testing.T) {
+	s1, s2, s3, s4 := newSlave(t, 4), newSlave(t, 7), newSlave(t, 4), newSlave(t, 7)
+	files := ioFiles(slavePort(s1), slavePort(s2), "")
+	r := startIORig(t, files, false)
+	h := r.io.Hook(func(sha string) (fs.FS, bool) { return nil, false }, files)
+	if _, err := h.Stage("abc", nil, "tester"); !errors.Is(err, server.ErrIONoSnapshot) {
+		t.Fatalf("no snapshot: %v", err)
+	}
+	stage := func(y string) any {
+		c, err := h.Stage("", map[string][]byte{"modbus.yaml": []byte(y)}, "tester")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ok, drivers, _ := h.Validate(c); !ok || fmt.Sprint(drivers) != "[modbus]" {
+			t.Fatalf("validate: %v %v", ok, drivers)
+		}
+		return c
+	}
+	c1, c2 := stage(modbusYAML(slavePort(s3), slavePort(s2), "", "")), stage(modbusYAML(slavePort(s1), slavePort(s4), "", ""))
+	if _, err := h.Apply(r.ctx, c1, "tester"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.Apply(r.ctx, c2, "tester"); !errors.Is(err, server.ErrIOConflict) || !errors.Is(err, ErrIOStale) {
+		t.Fatalf("stale: %v, want a conflict", err)
+	}
+	c3 := stage(modbusYAML(slavePort(s1), slavePort(s4), "", ""))
+	r.io.replaceSource = func(mb *modbus.Driver, src modbus.Source, tags []modbus.TagBinding, opts modbus.ReplaceOptions) error {
+		if src.ID == "DEV_A" && src.Port == slavePort(s1) {
+			return nil // DEV_A applied
+		}
+		return errors.New("injected") // DEV_B fails, and so does putting DEV_A back
+	}
+	if _, err := h.Apply(r.ctx, c3, "tester"); !errors.Is(err, server.ErrIORollbackFailed) {
+		t.Fatalf("a failed rollback: %v", err)
+	}
+	if len(h.Differs()) == 0 || h.Fault() == "" {
+		t.Fatalf("differs %v fault %q after a failed rollback", h.Differs(), h.Fault())
 	}
 }

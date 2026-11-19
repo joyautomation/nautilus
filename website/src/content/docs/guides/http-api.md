@@ -100,6 +100,7 @@ carries the token (below). Every endpoint that changes something is a
 | `POST /api/sfc/step`, `POST /api/sfc/transition` |
 | `POST /api/alarms/ack`, `POST /api/alarms/shelve`, `POST /api/alarms/unshelve` |
 | `PUT /api/program`, `POST /api/program/rollback`, `POST /api/program/activate` |
+| `POST /api/io/staged`, `POST /api/io/staged/{id}/validate`, `POST /api/io/staged/{id}/apply` |
 
 A write is checked before its body is read, in one of two modes.
 
@@ -175,8 +176,9 @@ missing or invalid auth token
 With a valid token, a write is allowed from any origin. That is how an HMI
 served from another host writes.
 
-**Program endpoints need one more switch.** `PUT /api/program`,
-`POST /api/program/rollback` and `POST /api/program/activate` are refused
+**Program and I/O configuration endpoints need one more switch.**
+`PUT /api/program`, `POST /api/program/rollback`,
+`POST /api/program/activate` and the `POST /api/io/…` routes are refused
 with `403` unless the manifest sets `server.online-edits: true`. That
 check comes before the token check. See [Online edits](/guides/online-edits/).
 
@@ -207,6 +209,11 @@ check comes before the token check. See [Online edits](/guides/online-edits/).
 | `POST` | [`/api/program/rollback`](#programs) | Back to the previous source |
 | `GET` | [`/api/program/history`](#programs) | The project's commit history |
 | `POST` | [`/api/program/activate`](#programs) | Warm-swap to a commit's sources |
+| `GET` | [`/api/io`](#live-io-configuration) | What I/O configuration runs, against the manifest |
+| `POST` | [`/api/io/staged`](#live-io-configuration) | Stage a candidate I/O configuration |
+| `POST` | [`/api/io/staged/{id}/validate`](#live-io-configuration) | Check it against what runs |
+| `POST` | [`/api/io/staged/{id}/apply`](#live-io-configuration) | Apply it while the scan runs |
+| `GET` | [`/api/io/staged/{id}`](#live-io-configuration) | One candidate's state |
 | `GET` | [`/api/history`, `/api/history/…`](#historian-proxy) | Forwarded to the historian |
 
 Outside `/api/`, `GET /` is the built-in dashboard and `/assets/…` its logo
@@ -249,6 +256,7 @@ curl -s 'localhost:8080/api/state?tags=P101,Level'
 | `quality` | when any tag is not good | Tag name → `stale`, `bad`, `notConnected` or `substituted`. Absent means every tag is good. See [quality](/guides/tag-model/#what-a-value-is-worth-quality) |
 | `alarms` | when the project has `alarms:` | Counts only. See [Alarms](/guides/alarms/#the-api) |
 | `forces` | while anything is forced | Forced address → forced value |
+| `config` | on `naut run` and built controllers | What I/O configuration runs: `source` is `manifest`, or `applied` with the drivers and devices that differ listed under `differs`. See [Live I/O configuration](#live-io-configuration) |
 
 | Status | When |
 | --- | --- |
@@ -879,6 +887,78 @@ curl -s -X POST localhost:8080/api/program/activate -d '{"sha":"e230fc4"}'
 | `500` | A swap failed after every source compiled; the body's `programs` lists the tasks already swapped | |
 | `503` | The server cannot rebuild sources from history. `naut run` and built controllers always can; an embedded Go server may not | |
 | `401`, `403` | Authorization | |
+
+## Live I/O configuration
+
+A changed device address, unit id, register address, OPC UA endpoint or
+node id applies while the scan runs: no restart, and only the changed
+device's tags read anything but good during the swap. A candidate goes
+through four visible steps: **pending** (staged), **valid** or **invalid**
+(checked against what runs), then **applied** or **failed**. A refused or
+failed apply leaves what runs as it was.
+
+```sh
+# stage: from a commit in the controller's history, or uploaded files
+curl -s -X POST localhost:8080/api/io/staged -d '{"sha":"e230fc4"}'
+curl -s -X POST localhost:8080/api/io/staged \
+  -d '{"driver":"modbus","files":{"modbus_manifest.yaml":"sources: …"}}'
+# → {"id":"1","state":"pending","from":"upload",…}
+
+curl -s -X POST localhost:8080/api/io/staged/1/validate
+# → {"id":"1","state":"valid","validation":{"valid":true,"checks":[…],
+#    "changes":[{"driver":"modbus","device":"DEV_A",…}],
+#    "willCommand":[{"tag":"A_Cmd","value":7}],"notes":[…]}}
+
+curl -s -X POST localhost:8080/api/io/staged/1/apply
+# → {"id":"1","state":"applied","result":{"changes":[…],
+#    "commanded":[{"tag":"A_Cmd","value":7}],"notes":[…]}}
+```
+
+- **A commit** needs the controller's file snapshot of it (a controller
+  built with `naut build` in a git repo, or `naut run` from one).
+  **Uploaded files** replace the project's files of the same path; with
+  `driver`, the candidate may change only that driver.
+- **What may change** is addressing:
+  - a Modbus device's `host`, `port` and `unitid`;
+  - a binding's `table`, `address` and scan class;
+  - an OPC UA client's `endpoint` and a binding's `nodeid` and
+    `namespace`;
+  - a driver's scan rate and classes;
+  - a `devices:` row's `endpoint` and `unit-id`.
+  
+  Anything else is refused by name, with "restart to apply the rest":
+  the tag set, the drivers and devices, a device's profile or points,
+  word order, timeouts, keep-alives, scaling, security.
+- **The unit applied** is one Modbus device (a `devices:` row is one),
+  inside the driver that runs. Anything else swaps the whole driver; that
+  works for `modbus` and `opcua-client` drivers, in a project with two or
+  more drivers.
+- **`willCommand`** lists the outputs the first scan after the apply will
+  send to what changes, with their values now (they can change before the
+  apply). The apply's `commanded` is what that scan actually queued for
+  the device: nothing while the write gate is closed (a standby, or scans
+  not live), and a device parked by its enable tag holds its commands
+  until it is enabled.
+- **Not checked yet:** whether a changed device answers. A device that
+  does not reads bad quality.
+- **Not kept yet:** an applied configuration lasts until the controller
+  restarts, which runs the manifest again. Until it is kept, an apply is
+  refused on a project with `redundancy:`. While what runs differs from
+  the manifest, `config` on every frame says so and the built-in
+  dashboard shows it; commit the change to make it permanent.
+
+| Status | When |
+| --- | --- |
+| `201` | Staged |
+| `200` | Validated (valid or invalid: see `state`), applied, or read |
+| `400` | A body with neither or both of `sha` and `files` |
+| `403` | `online-edits` is off |
+| `404` | No such candidate |
+| `409` | No snapshot of the commit; applying a candidate that is not valid; another apply is in progress, or what runs changed since it was validated (validate again) |
+| `422` | The candidate does not load, or an apply failed and was put back: nothing changed |
+| `500` | An apply failed and putting it back failed too; `config.fault` names what is left |
+| `503` | No live I/O configuration on this server (an embedded Go server) |
+| `401`, `403` | Authorization |
 
 ## Historian proxy
 
