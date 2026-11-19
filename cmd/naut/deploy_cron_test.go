@@ -174,7 +174,7 @@ func main() {
 	}
 	wd, _ := os.Getwd()
 	holds, _ := filepath.Glob("../hold.*") // run in state/, under the root
-	fmt.Println("sleeper up in", wd, "X="+os.Getenv("X"), "holds="+fmt.Sprint(len(holds)))
+	fmt.Println("sleeper up in", wd, "X="+os.Getenv("X"), "holds="+fmt.Sprint(len(holds)), "STATE_DIRECTORY="+os.Getenv("STATE_DIRECTORY"))
 	time.Sleep(time.Hour)
 }
 `), 0o644)
@@ -271,9 +271,20 @@ esac
 	}
 	logText := func() string { b, _ := os.ReadFile(filepath.Join(root, "state", "nautilus.log")); return string(b) }
 	// box.sh starts the release while it still holds, so a keepalive tick
-	// in that moment cannot start a second one.
-	if !strings.Contains(logText(), "sleeper up in "+filepath.Join(root, "state")+" X=from-env holds=1") {
+	// in that moment cannot start a second one. STATE_DIRECTORY is the
+	// state directory, as systemd's StateDirectory= sets it: the voter
+	// state (pairStateDir) and the users file (#708) find it in cron mode
+	// too, in the directory every deploy keeps.
+	if !strings.Contains(logText(), "sleeper up in "+filepath.Join(root, "state")+" X=from-env holds=1 STATE_DIRECTORY="+filepath.Join(root, "state")) {
 		t.Errorf("the controller runs in state/ with env's variables, started under box.sh's hold; log:\n%s", logText())
+	}
+	// What lives in STATE_DIRECTORY must outlast every deploy step below
+	// (updates, a failed one, a late one, rollback), as in service mode
+	// (TestDeployBoxKeepsTheVoterState): the voter state, the pair's log
+	// and the users file.
+	kept := map[string]string{"quorum.state": "voter state: promised 1042", "oplog.jsonl": `{"seq":1,"term":1002}`, "users.json": `{"version":1,"users":{}}`}
+	for n, v := range kept {
+		os.WriteFile(filepath.Join(root, "state", n), []byte(v), 0o600)
 	}
 
 	// update
@@ -408,6 +419,12 @@ esac
 	last := pid()
 	if !alive(last) || link("current") != "r3" || holds() != 0 {
 		t.Errorf("after the update r3 should run with no hold left: alive %v, current %q, holds %d", alive(last), link("current"), holds())
+	}
+
+	for n, v := range kept {
+		if b, err := os.ReadFile(filepath.Join(root, "state", n)); err != nil || string(b) != v {
+			t.Errorf("after the deploys, state/%s = %q, %v; want it untouched", n, b, err)
+		}
 	}
 
 	// uninstall: only what deploy made; naut-launch and root stay
