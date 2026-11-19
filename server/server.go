@@ -71,6 +71,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/netip"
 	"net/url"
 	"os"
 	"path"
@@ -259,6 +260,17 @@ type Options struct {
 	// GET /api/substitutes lists and POST /api/substitutes holds a start
 	// to. Empty: no start is accepted (the runtime has none to offer).
 	Substitutes []SubstituteRule
+	// TLS, when set (server.tls, #708), is the certificate the tag API
+	// serves (the caller wraps its listener in TLS.Config()). On a
+	// redundant pair a standby then forwards to the leader over TLS,
+	// accepting the leader only if it serves this certificate (current or
+	// previous: CertSource.Pinned).
+	TLS *CertSource
+	// TrustedProxies (server.trusted-proxies) are the addresses whose
+	// X-Forwarded-Proto and X-Forwarded-For are believed: a TLS-terminating
+	// proxy that keeps the Host (tailscale serve, nginx). Empty: none.
+	TrustedProxies []netip.Prefix
+
 	// SubstituteLog, on a redundant pair, sends substitute starts, stops
 	// and acknowledgements through the replicated operator-intent log
 	// (#707 PR 3b, substitutes_oplog.go). Nil: they apply here and are
@@ -568,6 +580,12 @@ type Server struct {
 	// unforceAllChecked, when set (tests only), runs between clear-all's
 	// check of the forced tags and its clearing of them.
 	unforceAllChecked func()
+
+	tls       *CertSource
+	leaderTLS *http.Transport // forwards to the leader over TLS, pinned
+	proxies   []netip.Prefix
+	pinMu     sync.Mutex
+	pinRefuse bool // a pin mismatch is journalled (once, until a forward succeeds)
 }
 
 // New builds a Server over a runtime.
@@ -632,6 +650,14 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 	s.audit = newAuditor(rec)
 	if len(opts) > 0 {
 		s.policy = opts[0].Auth
+		s.proxies = opts[0].TrustedProxies
+		if c := opts[0].TLS; c != nil {
+			s.tls, s.leaderTLS = c, c.leaderTransport()
+			c.OnReload(s.journalTLSReload)
+			// A connection to the leader was verified against the leaves
+			// accepted then; when they change, make it again.
+			c.OnPinsChange(s.leaderTLS.CloseIdleConnections)
+		}
 		for name, secret := range opts[0].ServiceTokens {
 			if secret == "" {
 				continue // an empty secret must never match an empty credential
@@ -970,7 +996,25 @@ func (s *Server) forwardTo(w http.ResponseWriter, r *http.Request, addr string, 
 		r.Body = io.NopCloser(bytes.NewReader(body))
 		r.ContentLength = int64(len(body))
 	}
-	proxy := httputil.NewSingleHostReverseProxy(&url.URL{Scheme: "http", Host: addr})
+	scheme := "http"
+	if s.leaderTLS != nil {
+		scheme = "https"
+	}
+	proxy := httputil.NewSingleHostReverseProxy(&url.URL{Scheme: scheme, Host: addr})
+	direct := proxy.Director
+	proxy.Director = func(out *http.Request) {
+		direct(out)
+		s.forwardHeaders(out)
+	}
+	if s.leaderTLS != nil {
+		proxy.Transport = s.leaderTLS
+		proxy.ModifyResponse = func(*http.Response) error {
+			s.pinMu.Lock()
+			s.pinRefuse = false
+			s.pinMu.Unlock()
+			return nil
+		}
+	}
 	// -1 disables buffering: an SSE frame must reach the client the
 	// instant the leader emits it, not whenever the proxy's timer next
 	// fires.
@@ -989,6 +1033,13 @@ func (s *Server) forwardTo(w http.ResponseWriter, r *http.Request, addr string, 
 				s.forwardTo(w, r, next, routes, mux, body, false)
 				return
 			}
+		}
+		if errors.Is(err, errNotOurCert) {
+			s.journalPinMismatch(addr)
+			auditedAnswer(routes, w, r, func(w http.ResponseWriter, _ *http.Request) {
+				http.Error(w, "leader unavailable: "+errNotOurCert.Error(), http.StatusBadGateway)
+			})
+			return
 		}
 		auditedAnswer(routes, w, r, func(w http.ResponseWriter, _ *http.Request) {
 			http.Error(w, "leader unavailable: "+err.Error(), http.StatusBadGateway)

@@ -21,7 +21,7 @@ import (
 // nothing (TestNautRunServesOPCUA, run 44237698507). Configure port 0 and ask
 // the banner instead.
 
-var bannerAPI = regexp.MustCompile(`tag API on http://(\S+)`)
+var bannerAPI = regexp.MustCompile(`tag API on https?://(\S+)`)
 
 // apiAddrFromBanner waits for naut run's banner and returns the tag API
 // address it names: the port actually bound, after any move.

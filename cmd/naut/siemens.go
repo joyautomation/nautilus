@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -142,6 +141,9 @@ type siemensServeConfig struct {
 	// tokens' secrets (#708), enforced as under naut run; nil without one.
 	auth     *auth.Policy
 	services map[string]string
+	// tls is the project's server.tls (or NAUTILUS_TLS_CERT/_KEY), nil
+	// without one.
+	tls *server.CertSource
 }
 
 // resolveSiemensServe merges flags over the project's target.siemens and
@@ -150,6 +152,7 @@ func resolveSiemensServe(host, user, pin, projectDir string, roots []facade.Root
 	getenv func(string) string) (siemensServeConfig, error) {
 	c := siemensServeConfig{host: host, user: user, pin: pin, roots: roots, poll: poll, listen: listen,
 		password: getenv("NAUTILUS_SIEMENS_PASSWORD"), token: getenv("NAUTILUS_TOKEN")}
+	var cert, key string // server.tls, when the project has one
 	if projectDir != "" {
 		m, err := project.ReadManifest(os.DirFS(projectDir), "")
 		if err != nil && !errors.Is(err, os.ErrNotExist) && !strings.Contains(err.Error(), "no nautilus.yaml") {
@@ -163,6 +166,9 @@ func resolveSiemensServe(host, user, pin, projectDir string, roots []facade.Root
 				return c, fmt.Errorf("auth: %w", err)
 			}
 			c.auth, c.services = sopts.Auth, sopts.ServiceTokens
+		}
+		if err == nil && m.Server.TLS != nil {
+			cert, key = m.Server.TLS.Cert, m.Server.TLS.Key
 		}
 		if err == nil && m.Target != nil && m.Target.Siemens != nil {
 			t := m.Target.Siemens
@@ -179,6 +185,13 @@ func resolveSiemensServe(host, user, pin, projectDir string, roots []facade.Root
 			}
 		}
 	}
+	// HTTPS: the project's server.tls, or NAUTILUS_TLS_CERT and _KEY with
+	// or without a project.
+	src, err := tlsSource(cert, key, projectDir, getenv)
+	if err != nil {
+		return c, err
+	}
+	c.tls = src
 	switch {
 	case c.host == "":
 		return c, errors.New("--host is required (or a project whose target.siemens names the CPU's address)")
@@ -251,7 +264,7 @@ func siemensFacadeOptions(cfg siemensServeConfig, client *webapi.Client) facade.
 		Host:   cfg.host,
 		Roots:  cfg.roots,
 		Poll:   cfg.poll,
-		Server: server.Options{AuthToken: cfg.token, Auth: cfg.auth, ServiceTokens: cfg.services},
+		Server: server.Options{AuthToken: cfg.token, Auth: cfg.auth, ServiceTokens: cfg.services, TLS: cfg.tls},
 	}
 }
 
@@ -283,17 +296,19 @@ func serveSiemens(ctx context.Context, cfg siemensServeConfig, client *webapi.Cl
 		fmt.Fprintln(stderr, "naut siemens serve:", err)
 		return 1
 	}
+	ln, scheme := facadeListener(ln, cfg.tls, cfg.listen, "naut siemens serve", stderr)
 	runCtx, stopRun := context.WithCancel(ctx)
 	defer stopRun()
 	go f.Run(runCtx)
 	// Requests carry runCtx (derived from ctx), so stopping serve ends the
 	// open /api/stream connections (VS Code keeps one) instead of Shutdown
 	// waiting them out.
-	srv := &http.Server{Handler: f.Handler(), BaseContext: func(net.Listener) context.Context { return runCtx }}
+	srv := apiHTTPServer(f.Handler())
+	srv.BaseContext = func(net.Listener) context.Context { return runCtx }
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve(ln) }()
-	fmt.Fprintf(stdout, "nautilus · Siemens %s — %d tags on http://%s — Ctrl+C to stop\n",
-		cfg.host, len(f.Bindings()), displayAddr(ln.Addr()))
+	fmt.Fprintf(stdout, "nautilus · Siemens %s — %d tags on %s://%s — Ctrl+C to stop\n",
+		cfg.host, len(f.Bindings()), scheme, displayAddr(ln.Addr()))
 	if ready != nil {
 		ready <- ln.Addr().String()
 	}

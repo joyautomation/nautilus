@@ -36,7 +36,8 @@ const iolinkParamUsage = `usage: naut iolink param <cmd> --host <controller> [--
 
 A parameter is a variable id (V_Setpoint), its name, or its index (64); for a
 record, the item after a dot (Window.2). A value is a number, true/false or
-text; --string forces text.
+text; --string forces text. --host is a hostname or IP, or the controller's
+URL (https://plc.example:8443 for one with server.tls).
 `
 
 // The client's time limits. A read is one ISDU call, which the controller
@@ -95,7 +96,12 @@ func runIOLinkParam(args []string, out, errw io.Writer) int {
 		fmt.Fprintln(errw, "naut iolink param: --host is required")
 		return 2
 	}
-	return iolinkParamAt(fmt.Sprintf("http://%s:%d", *host, *port), cmd, fl.Args(), *asText, out, errw)
+	base, err := apiclient.BaseURL(*host, *port)
+	if err != nil {
+		fmt.Fprintln(errw, "naut iolink param:", err)
+		return 2
+	}
+	return iolinkParamAt(base, cmd, fl.Args(), *asText, out, errw)
 }
 
 // iolinkParamAt runs cmd against the controller at base.

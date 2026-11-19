@@ -309,6 +309,68 @@ box. It installs, updates, rolls back, backs up and restores, deploys a
 release that cannot start and one that hangs, and asserts after every
 step which release answers and that a retained setpoint survived.
 
+## HTTPS
+
+The tag API serves HTTPS with a certificate you put on the box:
+
+```yaml
+server:
+  addr: ":8443"
+  tls:
+    cert: /etc/nautilus/tls/plc.crt   # PEM: the certificate (and chain)
+    key:  /etc/nautilus/tls/plc.key   # PEM: its private key
+```
+
+- **Where the files go.** Both paths are absolute and outside the project: a private key never belongs in a checkout, a build or git. The controller refuses a key every user on the box may read. A group may read it (the `ssl-cert` convention).
+- **Setting them without the manifest.** `NAUTILUS_TLS_CERT` and `NAUTILUS_TLS_KEY` override `server.tls`, for example in `/etc/nautilus/env`.
+- **Renewal.** The controller looks at both files at most once a minute and serves a new certificate as soon as it loads; no restart is needed. A renewal it can't load yet (half copied, a key that doesn't match) leaves the old certificate in place until it can. That failure is journalled once (`tls.reload-failed`), and so is the next renewal that loads (`tls.reloaded`).
+- **Protocol.** TLS 1.2 at least, and 1.3 where the client has it.
+- **Clients verify it.** The historian, the VS Code extension and your scripts check the certificate as any HTTPS client does. Use one they trust: from a CA they know, or add your CA to their trust store.
+
+**Under `naut deploy`'s service.** The unit runs as a dynamic user (`DynamicUser=yes`), which can't read a root-owned key in `/etc`. Hand the files to the service as systemd credentials, with a drop-in (`systemctl edit nautilus`):
+
+```ini
+[Service]
+LoadCredential=tls.crt:/etc/nautilus/tls/plc.crt
+LoadCredential=tls.key:/etc/nautilus/tls/plc.key
+```
+
+Then point the controller at the copies systemd makes, in `/etc/nautilus/env`:
+
+```sh
+NAUTILUS_TLS_CERT=/run/credentials/nautilus.service/tls.crt
+NAUTILUS_TLS_KEY=/run/credentials/nautilus.service/tls.key
+```
+
+systemd copies credentials when the service starts, so **under `DynamicUser` a renewal needs a service restart**: the controller's own re-reading never sees the new files. With certbot, restart from the deploy hook:
+
+```sh
+certbot renew --deploy-hook "systemctl restart nautilus"
+```
+
+**Behind a proxy.** A proxy that terminates TLS and keeps the Host header (`tailscale serve`, nginx) can stand in for `server.tls`. Name it in `server.trusted-proxies`, by address or prefix:
+
+```yaml
+server:
+  trusted-proxies: ["127.0.0.1"]   # tailscale serve on the same box
+```
+
+Only a request from one of those addresses has its `X-Forwarded-Proto: https` believed: that request counts as secure, which is what decides Secure cookies and password sign-in. Its `X-Forwarded-For` is believed too, so the [audit journal](/guides/http-api/) names the client rather than the proxy. The journal takes the right-most address that isn't itself a trusted proxy. With the list empty (the default), neither header is believed.
+
+**A redundant pair.** A standby forwards writes to the leader's tag API, over HTTPS when `server.tls` is set.
+
+- **Which certificate it accepts.** The leader is reached by the address in `peers:`, often an IP the certificate doesn't name, so the standby doesn't check the name. It accepts the leader only if the leader serves the same certificate as this box: the one it serves now, or the one that renewal replaced. So give A and B **the same certificate**.
+- **What forwarding covers.** The standby forwards reads and the live stream as well as writes. A pair on different certificates therefore leaves the standby's HMI blank, not only its writes refused.
+- **Renewing, with re-reading.** Copy the renewal to both boxes; the standby first is safest. A standby that meets a certificate it doesn't know re-reads its own files at once. So forwarding keeps working whichever box loads the renewal first, as long as the files are on the standby by then.
+- **How long the replaced certificate is accepted.** Only until the leader shows the new one, and for a day at most.
+- **After an emergency re-key** (a leaked key), restart both boxes: a running controller would otherwise go on accepting the old certificate from its peer for up to that day.
+- **Renewing, with restarts** (`DynamicUser`, above). A restart forgets the certificate that was replaced, so between restarting one box and the other, forwarded requests are refused. Restart them one after the other.
+- **A pair on different certificates.** The standby refuses to forward (502, "the leader's certificate is not this controller's") and journals `cluster.forward-refused` once, until a forward succeeds again.
+- **What the leader sees.** A standby drops any `X-Forwarded-*` header a client wrote itself; it sends its own hop and `X-Forwarded-Proto: https` only when the request reached it over TLS. The leader believes those only if it lists the standby in its `server.trusted-proxies`. Otherwise the journal records the standby's address as the source of a forwarded write.
+- **Whether a forwarded request counts as secure.** The leader judges that by the standby-to-leader hop: over `server.tls` that hop is always TLS. So it says nothing about how the *client* connected. Password sign-in and its cookies, when they come (#708), are decided at the box the client reached, never after a forward.
+
+**`naut logix serve` and `naut siemens serve`** take the project's `server.tls` (or the two variables) the same way, but not `server.trusted-proxies`. Without TLS, listening beyond localhost, they warn that tokens and every value written cross the network in cleartext.
+
 ## The artifact carries its own provenance
 
 `naut build` embeds the project's git history in the binary it emits —

@@ -274,6 +274,9 @@ func (s *Server) principalOf(r *http.Request) string {
 // writes follow the token-or-same-origin rule, not roles.
 type meResponse struct {
 	Auth bool `json:"auth"`
+	// Secure says the request came over TLS (the controller's own, or a
+	// trusted proxy's): where password sign-in and Secure cookies work.
+	Secure bool `json:"secure"`
 	auth.Me
 }
 
@@ -287,10 +290,10 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		pr = auth.Anonymous
 	}
 	if s.policy == nil {
-		writeJSON(w, http.StatusOK, meResponse{Me: auth.Me{Principal: pr.String(), Roles: []string{}, Permissions: map[string][]string{}}})
+		writeJSON(w, http.StatusOK, meResponse{Secure: s.secure(r), Me: auth.Me{Principal: pr.String(), Roles: []string{}, Permissions: map[string][]string{}}})
 		return
 	}
-	writeJSON(w, http.StatusOK, meResponse{Auth: true, Me: s.policy.Describe(pr)})
+	writeJSON(w, http.StatusOK, meResponse{Auth: true, Secure: s.secure(r), Me: s.policy.Describe(pr)})
 }
 
 // journalUsersHealth records the users file becoming unreadable (no

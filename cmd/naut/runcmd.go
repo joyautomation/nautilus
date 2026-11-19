@@ -11,6 +11,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/tls"
 	"debug/elf"
 	"encoding/binary"
 	"encoding/json"
@@ -19,7 +20,6 @@ import (
 	"io"
 	"io/fs"
 	"net"
-	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -238,6 +238,14 @@ func replicaReady(scanned bool, el leader.Election, pair bool, up time.Duration)
 func runProject(fsys fs.FS, manifest, label, dir string) int {
 	useConsoleLog()
 	proj, err := project.Load(fsys, manifest)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "naut run:", err)
+		return 1
+	}
+	// HTTPS (#708, server.tls): the certificate, re-read on renewal. Loaded
+	// first, so a bad one refuses the start before the pair or the I/O.
+	certFile, keyFile := proj.TLSFiles()
+	tlsSrc, err := tlsSource(certFile, keyFile, dir, os.Getenv)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "naut run:", err)
 		return 1
@@ -524,6 +532,7 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	if msg := authNotice(proj); msg != "" {
 		fmt.Fprint(os.Stderr, msg)
 	}
+	sopts.TLS = tlsSrc
 	// The audit journal (#709): every write through the tag API, accepted
 	// or refused, fsynced before it is answered. If it cannot be opened the
 	// controller still runs: setting forces and program edits are refused,
@@ -549,6 +558,9 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 
 	if apiUp {
 		ln := apiLn
+		if tlsSrc != nil {
+			ln = tls.NewListener(apiLn, tlsSrc.Config())
+		}
 		if sopts.AuthToken == "" && !loopbackListen(addr) {
 			fmt.Fprintf(os.Stderr, openListenWarning, addr)
 		}
@@ -559,7 +571,7 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		// run` started again meanwhile still gets its port (nautilus#423,
 		// #599). The deferred close above is only for an early return.
 		go func() {
-			if err := http.Serve(ln, srv.Handler()); err != nil && ctx.Err() == nil {
+			if err := apiHTTPServer(srv.Handler()).Serve(ln); err != nil && ctx.Err() == nil {
 				fmt.Fprintln(os.Stderr, "tag api:", err)
 			}
 		}()
@@ -570,7 +582,11 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		banner += " (" + label + ")"
 	}
 	if apiUp {
-		banner += hmiBannerSuffix(proj, addr, builtHMI, os.Stderr)
+		suffix := hmiBannerSuffix(proj, addr, builtHMI, os.Stderr)
+		if tlsSrc != nil {
+			suffix = strings.Replace(suffix, "tag API on http://", "tag API on https://", 1)
+		}
+		banner += suffix
 		warnStaleHMI("naut run", fsys, proj, os.Stderr)
 	}
 	if sparkplugUp {
