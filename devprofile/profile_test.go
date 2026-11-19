@@ -81,6 +81,30 @@ func TestProfileErrors(t *testing.T) {
 	}
 }
 
+// A documented connection limit cites the document that says so: the
+// default of a configuration check (static at 2 or fewer) stands on it.
+func TestMaxConnections(t *testing.T) {
+	row := "points:\n  - { name: A, type: WORD, table: holding, address: 0, doc: d }\n"
+	for _, tc := range []struct{ modbus, want string }{
+		{"{ max-connections: 1, max-connections-doc: \"d §7.1\" }", ""},
+		{"{ unit-id: 1 }", ""},
+		{"{ max-connections: 1 }", "cite the document that says so"},
+		{"{ max-connections: 2, max-connections-doc: \"nope §1\" }", `"nope" is not the id of a document`},
+		{"{ max-connections: -1, max-connections-doc: d }", "want 1 or more"},
+		{"{ max-connections-doc: d }", "max-connections does not give"},
+	} {
+		p, err := ParseProfile([]byte("profile: x\nprotocol: modbus\ndocs: [{ id: d }]\nmodbus: "+tc.modbus+"\n"+row), "x.yaml")
+		switch {
+		case tc.want == "" && err != nil:
+			t.Errorf("%s: %v", tc.modbus, err)
+		case tc.want == "" && strings.Contains(tc.modbus, "max-connections: 1") && p.Modbus.MaxConnections != 1:
+			t.Errorf("%s: max-connections %d", tc.modbus, p.Modbus.MaxConnections)
+		case tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)):
+			t.Errorf("%s: %v, want %q", tc.modbus, err, tc.want)
+		}
+	}
+}
+
 // A node id, an Object's or a point's, and the object namespace must sit in
 // the profile's namespace array: one past it can be bound by neither URI
 // nor a known index.

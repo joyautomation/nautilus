@@ -112,6 +112,17 @@ type ModbusSpec struct {
 	// of answering exception 02. For a device whose documentation does not
 	// say what it refuses.
 	Open bool `yaml:"open"`
+	// MaxConnections is how many Modbus TCP connections the device
+	// documents it accepts at once; 0 means its documentation does not
+	// say. A live check of a configuration change (#706) opens a
+	// connection of its own, so a device documented at 2 or fewer is
+	// checked statically by default, and its virtual twin refuses the
+	// connection past the limit.
+	MaxConnections int `yaml:"max-connections"`
+	// MaxConnectionsDoc cites where the documentation says so, as a
+	// point's doc: does ("fmbt21 §7.1, p. 50"). Required with
+	// MaxConnections: the default above stands on it.
+	MaxConnectionsDoc string `yaml:"max-connections-doc"`
 }
 
 // OPCUASpec is an OPC UA device's server.
@@ -362,6 +373,11 @@ func (p *Profile) validate() error {
 		}
 		docs[d.ID] = true
 	}
+	if m := p.Modbus; m != nil {
+		if err := m.checkMaxConnections(docs); err != nil {
+			return fmt.Errorf("modbus: %w", err)
+		}
+	}
 	seen := map[string]bool{}
 	for i := range p.Points {
 		pt := &p.Points[i]
@@ -396,6 +412,24 @@ func (p *Profile) validate() error {
 	}
 	if s := p.Simulator; s != nil && !IsFileName(s.Source) {
 		return fmt.Errorf("simulator: source %q must be a file name beside the profile, with no directory", s.Source)
+	}
+	return nil
+}
+
+// checkMaxConnections refuses a connection limit the profile does not
+// cite, and a citation of no document.
+func (m *ModbusSpec) checkMaxConnections(docs map[string]bool) error {
+	switch {
+	case m.MaxConnections < 0:
+		return fmt.Errorf("max-connections %d: want 1 or more (or leave it out when the documentation does not say)", m.MaxConnections)
+	case m.MaxConnections == 0 && m.MaxConnectionsDoc != "":
+		return fmt.Errorf("max-connections-doc cites a limit max-connections does not give")
+	case m.MaxConnections > 0 && m.MaxConnectionsDoc == "":
+		return fmt.Errorf("max-connections %d: cite the document that says so (max-connections-doc:); the default of a configuration check stands on it", m.MaxConnections)
+	case m.MaxConnections > 0:
+		if id, _, _ := strings.Cut(m.MaxConnectionsDoc, " "); !docs[id] {
+			return fmt.Errorf("max-connections-doc %q: %q is not the id of a document under docs", m.MaxConnectionsDoc, id)
+		}
 	}
 	return nil
 }

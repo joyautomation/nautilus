@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -145,13 +146,17 @@ func runDevicesUp(args []string) int {
 
 func printEndpoints(w io.Writer, eps []virtdev.Endpoint) {
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "DEVICE\tPROFILE\tLISTEN\tUNIT\tSTANDS IN FOR")
+	fmt.Fprintln(tw, "DEVICE\tPROFILE\tLISTEN\tUNIT\tMAX CONN\tSTANDS IN FOR")
 	for _, e := range eps {
 		stands := e.Endpoint
 		if stands == "" {
 			stands = "-"
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\n", e.Device, e.Profile, e.Listen, e.Unit, stands)
+		limit := "-"
+		if e.MaxConnections > 0 {
+			limit = strconv.Itoa(e.MaxConnections)
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\t%s\n", e.Device, e.Profile, e.Listen, e.Unit, limit, stands)
 	}
 	tw.Flush()
 }

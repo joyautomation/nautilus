@@ -31,6 +31,10 @@ type Server struct {
 	ln      net.Listener
 	conns   map[net.Conn]struct{}
 	closed  bool
+	// maxConns is how many connections are served at once (0: no limit);
+	// refused counts the ones closed for want of a slot.
+	maxConns int
+	refused  int
 
 	wg sync.WaitGroup
 }
@@ -73,6 +77,23 @@ func (s *Server) SetLatency(d time.Duration) {
 	s.mu.Lock()
 	s.latency = d
 	s.mu.Unlock()
+}
+
+// SetMaxConnections limits how many clients are served at once, as a
+// device with a small connection table does: a connection past n is
+// accepted and closed at once (the client's first request fails), and
+// counted in Refused; a closed connection frees its slot. 0 is no limit.
+func (s *Server) SetMaxConnections(n int) {
+	s.mu.Lock()
+	s.maxConns = n
+	s.mu.Unlock()
+}
+
+// Refused is how many connections were closed for want of a slot.
+func (s *Server) Refused() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.refused
 }
 
 // Start listens and begins serving. It returns once the listener is bound,
@@ -127,6 +148,13 @@ func (s *Server) accept(ln net.Listener) {
 			s.mu.Unlock()
 			c.Close()
 			return
+		}
+		if s.maxConns > 0 && len(s.conns) >= s.maxConns {
+			s.refused++
+			s.mu.Unlock()
+			s.log.Debug("slave: connection refused: the device's connections are all in use", "max", s.maxConns, "remote", c.RemoteAddr())
+			c.Close()
+			continue
 		}
 		s.conns[c] = struct{}{}
 		s.mu.Unlock()

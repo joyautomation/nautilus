@@ -132,3 +132,64 @@ func TestStoreAccessorsAndConcurrency(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// With a connection limit the slave serves that many clients at once: the
+// next is accepted and closed (its request gets no answer), counted, and a
+// closed connection frees its slot for a new client.
+func TestMaxConnections(t *testing.T) {
+	srv := NewServer("", nil)
+	srv.SetMaxConnections(1)
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(srv.Stop)
+	srv.Unit(1).SetHolding(0, 42)
+	dial := func() net.Conn {
+		t.Helper()
+		c, err := net.Dial("tcp", srv.Addr())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+	read := []byte{0, 0, 0, 1}
+
+	first := dial()
+	if fc, data := rawRequest(t, first, 1, 1, 0x03, read); fc != 0x03 || binary.BigEndian.Uint16(data[1:]) != 42 {
+		t.Fatalf("the first client: fc %02X data % X", fc, data)
+	}
+	second := dial()
+	defer second.Close()
+	req := []byte{0, 2, 0, 0, 0, 6, 1, 0x03, 0, 0, 0, 1}
+	if _, err := second.Write(req); err == nil {
+		second.SetReadDeadline(time.Now().Add(2 * time.Second))
+		if n, err := second.Read(make([]byte, 16)); err == nil {
+			t.Fatalf("the second client was answered (%d bytes)", n)
+		} else if ne, ok := err.(net.Error); ok && ne.Timeout() {
+			t.Fatal("the second connection was held open, not closed")
+		}
+	}
+	if got := srv.Refused(); got != 1 {
+		t.Errorf("refused %d, want 1", got)
+	}
+
+	first.Close()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		third := dial()
+		third.SetDeadline(time.Now().Add(500 * time.Millisecond))
+		_, err := third.Write(req)
+		var hdr [7]byte
+		if err == nil {
+			_, err = io.ReadFull(third, hdr[:])
+		}
+		third.Close()
+		if err == nil {
+			break // the freed slot serves a new client
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("a closed connection did not free its slot")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
