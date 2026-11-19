@@ -180,7 +180,23 @@ func TestISDUNone(t *testing.T) {
 			t.Errorf("%s: accepted", name)
 		}
 	}
-	if pf, _ := loadBuiltin("pepperl-fuchs-ice3"); pf.IOLink.ISDU == nil || pf.IOLink.ISDU.Mode != ISDUNone {
-		t.Errorf("the P+F profile says nothing about ISDU, or not none: %+v", pf.IOLink.ISDU)
+}
+
+// The P+F master's own methods answer a ByteString and nothing else (pf §12.3
+// p. 174): the profile says so, cites the manual's page and is marked
+// unverified; the ByteString form belongs to a master's own methods, not to
+// OPC 30120's, whose answers carry an ErrorType and a Status.
+func TestISDUByteStringMethods(t *testing.T) {
+	pf, err := loadBuiltin("pepperl-fuchs-ice3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := pf.IOLink.ISDU
+	if s == nil || s.Mode != ISDUMethods || s.Data != ISDUDataByteString || !s.Unverified || !strings.Contains(s.Doc, "p. 174") || !s.Offers() {
+		t.Errorf("the P+F profile's isdu: %+v", s)
+	}
+	const pre = "  ports: 2\n  pd-in: { point: \"P{n}_In\", form: u32, doc: \"man p. 1\" }\n  isdu: "
+	if _, err := ParseProfile([]byte(iolinkProfile(pre+`{ mode: opc-30120, object: "ns=1;s=P{n}", read: "ns=1;s=P{n}/R", data: bytestring, unverified: true }`)), "test"); err == nil {
+		t.Error("opc-30120 with a ByteString and no ErrorType or Status was accepted")
 	}
 }

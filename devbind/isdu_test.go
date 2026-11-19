@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/gopcua/opcua/ua"
 	nio "github.com/joyautomation/nautilus/io"
@@ -230,8 +231,26 @@ func TestISDUThroughTheIfmMethods(t *testing.T) {
 	}
 }
 
+// pfMasterWithoutISDU is the P+F master with its isdu: made none, as a master
+// without parameter access has it.
+func pfMasterWithoutISDU(t *testing.T) *Set {
+	t.Helper()
+	fsys := portFS(t, "pepperl-fuchs-ice3")
+	prof := string(fsys["profiles/pepperl-fuchs-ice3.yaml"].Data)
+	a, b := strings.Index(prof, "  isdu:\n"), strings.Index(prof, "points:\n")
+	if a < 0 || b < a {
+		t.Fatal("the P+F profile has no isdu: block to replace")
+	}
+	fsys["profiles/pepperl-fuchs-ice3.yaml"] = &fstest.MapFile{Data: []byte(prof[:a] + "  isdu: { mode: none, note: \"a test master without ISDU\" }\n" + prof[b:])}
+	set, err := Resolve(fsys, []Device{{Name: "M", Profile: "pepperl-fuchs-ice3", Endpoint: "h", Ports: map[int]Port{1: {Name: "LEVEL1", IODD: levelFile}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return set
+}
+
 func TestISDUWithoutMethodsOrPort(t *testing.T) {
-	ps := portsOf(t, pfMaster(t, nil)) // the P+F's isdu: is none
+	ps := portsOf(t, pfMasterWithoutISDU(t))
 	if _, err := ps.isduRead(context.Background(), &fakeCaller{}, "LEVEL1", "V_Setpoint"); err == nil || !strings.Contains(err.Error(), "offers no ISDU") {
 		t.Errorf("a master with no isdu:: %v", err)
 	}
@@ -268,7 +287,7 @@ func TestISDURefusalKinds(t *testing.T) {
 	check("a value outside the range", err, ErrISDUInvalid)
 	_, err = ps.isduWrite(ctx, c, "LEVEL1", "V_SerialNumber", "x")
 	check("a write to a read-only variable", err, ErrISDUInvalid)
-	_, err = portsOf(t, pfMaster(t, nil)).isduRead(ctx, c, "LEVEL1", "V_Setpoint")
+	_, err = portsOf(t, pfMasterWithoutISDU(t)).isduRead(ctx, c, "LEVEL1", "V_Setpoint")
 	check("a master with no isdu:", err, ErrISDURefused)
 }
 
@@ -433,5 +452,42 @@ func TestISDUWriteSentWithNoAnswerIsUncertain(t *testing.T) {
 	}}
 	if _, err := ps.isduRead(context.Background(), c, "LEVEL1", "V_Setpoint"); err == nil || errors.Is(err, ErrISDUUncertain) {
 		t.Errorf("a read with no answer: %v, want a plain error", err)
+	}
+}
+
+// The P+F master's own methods (pf §12.3 p. 174, unverified) take the index, the
+// subindex and, for a write, the data as a ByteString (not a Byte[]); a read
+// answers the value alone and a write answers nothing; a refusal is the call's
+// own error. A master answering the OPC 30120 shape instead is not understood.
+func TestISDUByteStringMethods(t *testing.T) {
+	ps := isduPorts(t, "pepperl-fuchs-ice3", nil)
+	ps.take(sickVals(levelVendor, levelDevice)) // the same member names
+	ctx := context.Background()
+	c := &fakeCaller{answer: func(string, []*ua.Variant) ([]*ua.Variant, error) { return variants(t, []byte{0x03, 0xE8}), nil }}
+	res, err := ps.isduRead(ctx, c, "LEVEL1", "V_Setpoint")
+	if err != nil || res.Value != uint64(1000) {
+		t.Fatalf("a read: %+v, %v, want 1000", res, err)
+	}
+	if got := c.calls[0]; got.method.NodeID != "ns=1;s=IOLM/Port 1/ISDU Read" || got.object.NodeID != "ns=1;s=IOLM/Port 1" || len(got.args) != 2 {
+		t.Errorf("the read call: %+v", got)
+	}
+	c = &fakeCaller{answer: func(string, []*ua.Variant) ([]*ua.Variant, error) { return nil, nil }}
+	if _, err := ps.isduWrite(ctx, c, "LEVEL1", "V_Setpoint", uint64(500)); err != nil {
+		t.Fatalf("a write: %v", err)
+	}
+	if got := c.calls[0]; got.method.NodeID != "ns=1;s=IOLM/Port 1/ISDU Write" || len(got.args) != 3 {
+		t.Fatalf("the write call: %+v", got)
+	} else if b, ok := got.args[2].([]byte); !ok || fmt.Sprintf("%T", got.args[2]) != "[]uint8" || len(b) != 2 || b[0] != 0x01 || b[1] != 0xF4 {
+		t.Errorf("the data argument is %T %v, want the ByteString 01F4", got.args[2], got.args[2])
+	}
+	// The call's own error is the refusal.
+	c = &fakeCaller{answer: func(string, []*ua.Variant) ([]*ua.Variant, error) { return nil, errors.New("call: BadNotWritable") }}
+	if _, err := ps.isduWrite(ctx, c, "LEVEL1", "V_Setpoint", uint64(500)); err == nil || !strings.Contains(err.Error(), "BadNotWritable") {
+		t.Errorf("a refused write: %v", err)
+	}
+	// An answer in the OPC 30120 shape (value, ErrorType, Status) is refused, not guessed at.
+	c = &fakeCaller{answer: readOK(t, ua.ByteArray{0x03, 0xE8})}
+	if _, err := ps.isduRead(ctx, c, "LEVEL1", "V_Setpoint"); err == nil || !strings.Contains(err.Error(), "want 1") {
+		t.Errorf("the wrong answer shape: %v", err)
 	}
 }

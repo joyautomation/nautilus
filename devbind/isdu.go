@@ -229,9 +229,12 @@ func callISDU(ctx context.Context, c Caller, r *isduRefs, method nodeRef, prm *i
 	if data != nil {
 		var d *ua.Variant
 		var err error
-		if r.spec.Data == devprofile.ISDUDataHex {
+		switch r.spec.Data {
+		case devprofile.ISDUDataHex:
 			d, err = ua.NewVariant("0x" + hex.EncodeToString(data))
-		} else {
+		case devprofile.ISDUDataByteString:
+			d, err = ua.NewVariant([]byte(data)) // a ByteString, not a Byte[]
+		default:
 			d, err = ua.NewVariant(ua.ByteArray(data))
 		}
 		if err != nil {
@@ -242,6 +245,22 @@ func callISDU(ctx context.Context, c Caller, r *isduRefs, method nodeRef, prm *i
 	out, err := c.Call(ctx, opcua.NodeRef{NodeID: r.object.ID, Namespace: r.object.URI}, opcua.NodeRef{NodeID: method.ID, Namespace: method.URI}, args...)
 	if err != nil {
 		return nil, err
+	}
+	if r.spec.Data == devprofile.ISDUDataByteString {
+		// The master's own methods answer the value (a read) or nothing (a
+		// write); a refusal is the call's status code, which Call returned
+		// as an error above.
+		want := 0
+		if data == nil {
+			want = 1
+		}
+		if len(out) != want {
+			return nil, fmt.Errorf("the master answered %d output arguments, want %d", len(out), want)
+		}
+		if data != nil {
+			return nil, nil
+		}
+		return octetsOf(out[0])
 	}
 	// ReadISDU answers (value, ErrorType, Status); WriteISDU (ErrorType, Status).
 	want := 2
