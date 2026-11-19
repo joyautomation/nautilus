@@ -57,6 +57,8 @@ jobs:
         run: .github/scripts/ci-scope.test.sh
       - name: the ci-ok gate passes its own table test
         run: .github/scripts/ci-ok.test.sh
+      - name: quorum-nightly's rolling-issue script passes its own table test
+        run: .github/scripts/quorum-nightly-issue.test.sh
       - name: scope
         id: scope
         env:
