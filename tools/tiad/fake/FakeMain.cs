@@ -247,6 +247,20 @@ namespace Tiad.Fake
         string failAfterDecide = "";
         string failInDoubt = "";
         bool noDryRun;
+        bool uploadAsksTls;
+
+        // UploadAsksTls makes going online for an upload ask TLS trust, as
+        // a CPU with secure PG/PC communication and no known certificate does.
+        public bool UploadAsksTls
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return uploadAsksTls;
+                }
+            }
+        }
 
         // NoDryRun makes the fake's TIA side one that cannot promise a dry
         // run loads nothing, as tiad.Openness cannot until S2b.
@@ -401,6 +415,7 @@ namespace Tiad.Fake
             string after = r.Str("failAfterDecide");
             string inDoubt = r.Str("failInDoubt");
             bool noDry = r.Bool("noDryRun");
+            bool asksTls = r.Bool("uploadAsksTls");
             var qs = new List<Question>();
             foreach (var x in r.Children("questions"))
             {
@@ -418,6 +433,7 @@ namespace Tiad.Fake
                 failAfterDecide = after;
                 failInDoubt = inDoubt;
                 noDryRun = noDry;
+                uploadAsksTls = asksTls;
             }
             return new Obj();
         }
@@ -626,10 +642,23 @@ namespace Tiad.Fake
             return outp;
         }
 
-        public void Upload(object project, string address)
+        public List<string> Upload(object project, string address, bool trustUnverifiedCertificate)
         {
             script.Enter("Upload");
+            var trusted = new List<string>();
+            // As tiad.Openness answers TIA's TLS question going online.
+            if (script.UploadAsksTls)
+            {
+                const string type = "TlsVerificationConfiguration";
+                string ask = OnlineChecks.Ask(type, "PLC_1 [" + address + "]", "certificate not matching", new List<string>());
+                if (OnlineChecks.Answer(type, trustUnverifiedCertificate) != OnlineChecks.Trusted)
+                {
+                    throw new TiaException(TiaNames.OnlineRefused(address, new List<string> { ask }, "Online connection failed."));
+                }
+                trusted.Add(ask);
+            }
             ((FakeProject)project).Changed = true;
+            return trusted;
         }
 
         public string Save(object project, bool archive)

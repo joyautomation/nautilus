@@ -438,6 +438,26 @@ func contractExportUploadSave(t *testing.T, start Starter) {
 	if err := s.Upload(ctx); err != nil {
 		t.Fatalf("upload: %v", err)
 	}
+	// Only an upload takes trustUnverifiedCertificate, as an explicit
+	// opt-in; download and compare refuse it as an unknown field.
+	if r, err := s.UploadWith(ctx, tiad.UploadRequest{TrustUnverifiedCertificate: true}); err != nil || r.TrustedBlindly == nil || len(r.TrustedBlindly) != 0 {
+		t.Fatalf("upload with the opt-in, no TLS question: %+v %v", r, err)
+	}
+	for _, call := range []struct {
+		path string
+		body map[string]any
+	}{
+		{"compare", map[string]any{"trustUnverifiedCertificate": true}},
+		{"download", map[string]any{"address": benchCPU, "software": true, "announced": true, "trustUnverifiedCertificate": true}},
+	} {
+		status, b := rawJSON(t, c, "POST", "/v1/sessions/"+s.ID+"/"+call.path, call.body)
+		if status != http.StatusBadRequest || envelopeKind(b) != tiad.KindBadRequest || !strings.Contains(string(b), "trustUnverifiedCertificate") {
+			t.Errorf("%s with trustUnverifiedCertificate: HTTP %d %s, want 400 bad_request naming it", call.path, status, b)
+		}
+	}
+	if l := a.Loaded(t); len(l) != 0 {
+		t.Fatalf("a refused download loaded %+v", l)
+	}
 	// After an upload the project no longer matches its spec.
 	if _, err := s.Download(ctx, tiad.DownloadRequest{Address: benchCPU, Software: true, Announced: true}); tiad.Kind(err) != tiad.KindBadRequest || !strings.Contains(err.Error(), "no station spec") {
 		t.Fatalf("download after an upload: %v", err)

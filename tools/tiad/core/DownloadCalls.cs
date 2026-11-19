@@ -301,23 +301,34 @@ namespace Tiad
             return WithSession(c, delegate(Session s)
             {
                 var r = c.Json();
+                // An explicit, per-call opt-in, only here: trust the CPU's
+                // TLS certificate blindly for this read-only upload.
+                bool trust = r.Bool("trustUnverifiedCertificate");
                 r.Done();
                 string address = s.Address;
                 if (address == "" || !Target(address))
                 {
                     throw new TiadException(403, Kinds.TargetRefused, "the project's CPU is not in TIAD_TARGETS");
                 }
-                OnSession<object>(s, delegate(ITia t)
+                List<string> trusted = OnSession(s, delegate(ITia t)
                 {
                     // The CPU's program replaces the project's: it no
                     // longer matches its spec, and it must take a spec and
                     // compile again before anything is downloaded.
                     s.Compiled = false;
                     s.Station = null;
-                    t.Upload(s.Handle, address);
-                    return null;
+                    return t.Upload(s.Handle, address, trust);
                 });
-                return new Obj();
+                if (trust || trusted.Count > 0)
+                {
+                    var q = new List<string>();
+                    foreach (string x in trusted) q.Add(Json.Quote(x));
+                    Log.Line("audit upload session={0} project={1} address={2} trustUnverifiedCertificate={3} trustedBlindly=[{4}]",
+                        s.Id, Json.Quote(s.Project), Json.Quote(address), trust ? "yes" : "no", string.Join(",", q.ToArray()));
+                }
+                var o = new Obj();
+                o["trustedBlindly"] = trusted.ToArray();
+                return o;
             });
         }
 

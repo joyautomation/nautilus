@@ -519,14 +519,17 @@ namespace Tiad
 
     // OnlineChecks decides how tiad answers what TIA asks when it goes
     // online to a CPU (ConnectionConfiguration.OnlineLegitimation), by the
-    // question's Openness type name. tiad trusts no CPU certificate and holds
-    // no CPU credentials yet: a certificate is answered not trusted, and
-    // anything else cancels. Nothing is ever answered Trusted, and any
-    // question asked fails the operation, even one TIA then carried on with.
+    // question's Openness type name. tiad holds no CPU credentials and, by
+    // default, trusts no CPU certificate: a certificate is answered not
+    // trusted, and anything else cancels. The one exception is an upload
+    // whose request opts in (trustUnverifiedCertificate): then a certificate
+    // question is answered Trusted, blindly, since TIA shows no certificate
+    // to check. Any question not answered Trusted fails the operation, even
+    // one TIA then carried on with.
     public static class OnlineChecks
     {
         public const string Certificate = "certificate", Credentials = "credentials", Unknown = "unknown";
-        public const string NotTrusted = "not-trusted", Cancel = "cancel";
+        public const string NotTrusted = "not-trusted", Trusted = "trusted", Cancel = "cancel";
 
         public static string Kind(string type)
         {
@@ -548,7 +551,15 @@ namespace Tiad
         // selection NonTrusted) for a certificate, Cancel for the rest.
         public static string Answer(string type)
         {
-            return Kind(type) == Certificate ? NotTrusted : Cancel;
+            return Answer(type, false);
+        }
+
+        // Answer with trustUnverifiedCertificate, the upload's explicit
+        // opt-in: a certificate is answered Trusted; nothing else changes.
+        public static string Answer(string type, bool trustUnverifiedCertificate)
+        {
+            if (Kind(type) != Certificate) return Cancel;
+            return trustUnverifiedCertificate ? Trusted : NotTrusted;
         }
 
         // Ask describes one question: a certificate to trust (with the PLC's
