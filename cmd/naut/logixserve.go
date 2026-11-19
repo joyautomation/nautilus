@@ -64,7 +64,9 @@ Flags:
               must say "yes": true; tag values are kept as by
               naut logix deploy --download unless the body says
               "resetValues": true), with progress streamed as NDJSON.
-              --host defaults to target.logix.host.
+              --host defaults to target.logix.host. The project's auth:
+              block decides every write and deploy, as under naut run;
+              each service token's secret is NAUTILUS_TOKEN_<NAME>.
 
 Writes are open to non-browser clients and same-origin pages on
 localhost, an IP address or a name in NAUTILUS_ALLOWED_HOSTS, like
@@ -94,6 +96,7 @@ func runLogixServe(args []string) int {
 	}
 	var plane *facade.ProgramPlane
 	release := func() {}
+	sopts := server.Options{AuthToken: os.Getenv("NAUTILUS_TOKEN")}
 	if *projectDir != "" {
 		p, err := loadLogixProject(*projectDir)
 		if err != nil {
@@ -116,6 +119,15 @@ func runLogixServe(args []string) int {
 		if p.target.CommPath == "" {
 			fmt.Fprintln(os.Stderr, "naut logix serve: --project needs target.logix.comm-path, the FactoryTalk Linx path logixd deploys to")
 			return 2
+		}
+		// The project's auth: block decides its writes, deploys included,
+		// as under naut run (#708): a viewer token may not download.
+		if err := withAuth(&sopts, p.auth, os.Getenv); err != nil {
+			fmt.Fprintln(os.Stderr, "naut logix serve: auth:", err)
+			return 2
+		}
+		if p.auth != nil {
+			fmt.Fprint(os.Stderr, authReadsNotice)
 		}
 		client := logixd.New(agentURL, os.Getenv("NAUTILUS_LOGIXD_TOKEN"))
 		plane, release = logixProgramPlane(*projectDir, p, client)
@@ -150,7 +162,7 @@ func runLogixServe(args []string) int {
 		Tags:    splitPatterns(*tags),
 		Poll:    *poll,
 		Meta:    meta,
-		Server:  server.Options{AuthToken: os.Getenv("NAUTILUS_TOKEN")},
+		Server:  sopts,
 		Program: plane,
 	})
 	cancel()

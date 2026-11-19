@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -299,4 +300,59 @@ func TestLogixServeNautilusTokenGuardsWrites(t *testing.T) {
 			t.Errorf("controller holds %s, want 33", held())
 		}
 	})
+}
+
+// #708: with --project, the project's auth: block decides the serve's
+// writes as under naut run. With token-role: viewer, NAUTILUS_TOKEN may
+// not download (403) and a same-origin loopback client without a token
+// is refused too (401); a service token's secret comes from
+// NAUTILUS_TOKEN_<NAME>, and an operator's write goes through.
+func TestLogixServeProjectEnforcesAuth(t *testing.T) {
+	host, port, em := emulateSpec(t, moduleIOController())
+	dir := t.TempDir()
+	for _, name := range []string{"nautilus.yaml", "MainProgram.ld"} {
+		b, err := os.ReadFile(filepath.Join(demoProject, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if name == "nautilus.yaml" {
+			b = append(b, "auth:\n  token-role: viewer\n  service-tokens:\n    script: operator\n"...)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), b, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("NAUTILUS_TOKEN", "admin-secret")
+	t.Setenv("NAUTILUS_TOKEN_SCRIPT", "script-secret")
+	// Nothing may reach a logixd: a deploy let through fails, not 403.
+	t.Setenv("NAUTILUS_LOGIXD_URL", "http://127.0.0.1:1")
+	base := serveLogix(t, "--host", host, "--port", port, "--poll", "30ms", "--project", dir)
+	send := func(method, path, body, token string) int {
+		t.Helper()
+		req, _ := http.NewRequest(method, base+path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		return res.StatusCode
+	}
+	download := `{"mode": "download", "source": "x", "yes": true}`
+	if code := send("POST", "/api/logix/deploy", download, "admin-secret"); code != http.StatusForbidden {
+		t.Errorf("a download with NAUTILUS_TOKEN as a viewer = %d, want 403", code)
+	}
+	if code := send("POST", "/api/logix/deploy", download, ""); code != http.StatusUnauthorized {
+		t.Errorf("a download without a token = %d, want 401", code)
+	}
+	held := func() string { _, v, _ := em.Store.Resolve("Speed"); return fmt.Sprint(v) }
+	if code := send("POST", "/api/tags", `{"name": "Speed", "value": 7}`, "admin-secret"); code != http.StatusForbidden || held() == "7" {
+		t.Errorf("a write by a viewer = %d, controller holds %s", code, held())
+	}
+	if code := send("POST", "/api/tags", `{"name": "Speed", "value": 8}`, "script-secret"); code != http.StatusNoContent || held() != "8" {
+		t.Errorf("a write by the operator service token = %d, controller holds %s", code, held())
+	}
 }

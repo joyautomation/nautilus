@@ -548,6 +548,10 @@ type Server struct {
 	tagMu   sync.Mutex
 	tagGen  uint64
 	tagSnap map[string]any
+
+	// unforceAllChecked, when set (tests only), runs between clear-all's
+	// check of the forced tags and its clearing of them.
+	unforceAllChecked func()
 }
 
 // New builds a Server over a runtime.

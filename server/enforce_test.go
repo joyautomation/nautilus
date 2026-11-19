@@ -301,3 +301,62 @@ func TestUnmappedActionIsRefused(t *testing.T) {
 		t.Errorf("a mapped one: %d", code)
 	}
 }
+
+// An id that names no active substitute is a 404 for anyone holding
+// substitute, the administrator and an area-fenced principal alike: there
+// is no tag to authorize over, so it is answered before the target is
+// (#1035). A malformed id is a 400 the same way; a viewer, who holds no
+// substitute at all, is still refused by the seam.
+func TestSubstituteStopOfNoneIsNotFound(t *testing.T) {
+	srv := subAuditServer(t)
+	enforce(t, srv)
+	for _, c := range []struct {
+		path, tok string
+		want      int
+		reason    string
+	}{
+		{"/api/substitutes/999", "admin-secret", http.StatusNotFound, "no substitute 999 is active"},
+		{"/api/substitutes/999", "f-secret", http.StatusNotFound, "no substitute 999 is active"},
+		{"/api/substitutes/x", "admin-secret", http.StatusBadRequest, "is a number"},
+		{"/api/substitutes/999", "v-secret", http.StatusForbidden, ""},
+	} {
+		rec := call(t, srv, "DELETE", c.path, "", func(r *http.Request) { r.Header.Set("Authorization", "Bearer "+c.tok) })
+		if rec.Code != c.want || !strings.Contains(rec.Body.String(), c.reason) {
+			t.Errorf("DELETE %s with %s: %d %s, want %d %q", c.path, c.tok, rec.Code, rec.Body, c.want, c.reason)
+		}
+		es := srv.audit.ring.Recent()
+		if len(es) == 0 || es[0].Result != "refused" || es[0].Detail["status"] != c.want {
+			t.Errorf("DELETE %s with %s: journal %+v", c.path, c.tok, es)
+		}
+	}
+}
+
+// Clearing every force clears only the forces it checked: one set in
+// another area between the check and the clear is left for its own
+// clear, not removed unchecked (#1035).
+func TestClearAllForcesClearsOnlyWhatItChecked(t *testing.T) {
+	srv := auditServer(t, Options{})
+	p, err := auth.Compile(auth.Settings{
+		Areas:         map[string][]string{"a": {"SP"}, "b": {"Out"}},
+		ServiceTokens: map[string][]auth.Grant{"eng_a": {{Role: auth.Engineer, Areas: []string{"a"}}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.policy, srv.services = p, map[string]string{"eng_a": "a-secret"}
+	if err := srv.rt.Tags().Force("SP", 5.0); err != nil {
+		t.Fatal(err)
+	}
+	srv.unforceAllChecked = func() {
+		if err := srv.rt.Tags().Force("Out", 1.0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rec := call(t, srv, "POST", "/api/forces/clear", "", func(r *http.Request) { r.Header.Set("Authorization", "Bearer a-secret") })
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"removed":1`) {
+		t.Errorf("clear all by area a: %d %s", rec.Code, rec.Body)
+	}
+	if got := fmt.Sprint(srv.rt.Tags().ForcedValues()); got != "map[Out:1]" {
+		t.Errorf("forced after the clear: %s, want only area b's Out", got)
+	}
+}

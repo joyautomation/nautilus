@@ -1032,6 +1032,11 @@ func ReadManifest(fsys fs.FS, name string) (*Manifest, error) {
 // when it declares none.
 func (m *Manifest) DeviceSet() *devbind.Set { return m.devices }
 
+// AuthPolicy is the manifest's auth: block compiled (#708), or nil when
+// it has none: what a command serving the project without Load (naut
+// logix serve --project) enforces.
+func (m *Manifest) AuthPolicy() *auth.Policy { return m.authPolicy }
+
 // projectPath keeps a manifest-referenced file inside the project. The
 // deployable artifact is the directory (or the archive built from it), so a
 // path that escapes it would load in development and vanish once built.

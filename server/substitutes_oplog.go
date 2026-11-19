@@ -214,7 +214,7 @@ func (s *Server) substituteByIDOrRequest(id uint64, reqID string) (runtime.Subst
 func (s *Server) stopThroughLog(w http.ResponseWriter, r *http.Request, id uint64) {
 	name, _ := s.substituteByID(id)
 	if name == "" {
-		refuse(w, fmt.Sprintf("no substitute %d is active (it ended, expired, or a newer one replaced it)", id), http.StatusNotFound)
+		refuse(w, noSubstitute(id), http.StatusNotFound)
 		return
 	}
 	if s.refuseWithoutMajority(w) {

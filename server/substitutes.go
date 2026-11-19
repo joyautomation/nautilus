@@ -279,17 +279,33 @@ func (s *Server) handleSubstituteStart(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSubstituteStop(w http.ResponseWriter, r *http.Request) {
-	id, idErr := strconv.ParseUint(r.PathValue("id"), 10, 64)
-	name, _ := s.substituteByID(id)
-	if code, msg := s.authorize(r, PermSubstitute, name); code != 0 {
+	// The write rule first (under an auth: block the seam has checked the
+	// principal holds substitute). Then an id that is not a number, or
+	// names no active substitute, is answered before the target is
+	// checked: there is no tag to authorize over, and an administrator
+	// asking for one that ended is told so, not refused (#1035). A standby
+	// says it is one: its list may be behind the leader's.
+	if code, msg := s.authorizeWrite(r); code != 0 {
 		refuse(w, msg, code)
 		return
 	}
 	if s.refuseSubstitute(w) {
 		return
 	}
-	if idErr != nil {
+	id, err := strconv.ParseUint(r.PathValue("id"), 10, 64)
+	if err != nil {
 		refuse(w, "the substitute's id is a number", http.StatusBadRequest)
+		return
+	}
+	name, _ := s.substituteByID(id)
+	if name == "" {
+		if !s.refuseNotLeading(w) {
+			refuse(w, noSubstitute(id), http.StatusNotFound)
+		}
+		return
+	}
+	if code, msg := s.authorize(r, PermSubstitute, name); code != 0 {
+		refuse(w, msg, code)
 		return
 	}
 	if s.refuseNotLeading(w) {
@@ -303,7 +319,7 @@ func (s *Server) handleSubstituteStop(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	e, ok, kept, serr := s.rt.RestoreSaved(ctx, id, s.principal(r))
 	if !ok {
-		refuse(w, fmt.Sprintf("no substitute %d is active (it ended, expired, or a newer one replaced it)", id), http.StatusNotFound)
+		refuse(w, noSubstitute(id), http.StatusNotFound)
 		return
 	}
 	logAction(r, "substitute: ended", "tag", e.Name, "id", e.ID, "kept", kept, "saveError", serr)
@@ -313,6 +329,11 @@ func (s *Server) handleSubstituteStop(w http.ResponseWriter, r *http.Request) {
 		resp.Warning = notKept(serr)
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// noSubstitute is the 404 for an id that names no active substitute.
+func noSubstitute(id uint64) string {
+	return fmt.Sprintf("no substitute %d is active (it ended, expired, or a newer one replaced it)", id)
 }
 
 type substituteAckRequest struct {

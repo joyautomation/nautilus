@@ -36,6 +36,7 @@ import (
 	"github.com/joyautomation/nautilus/acceptance"
 	"github.com/joyautomation/nautilus/alarm"
 	"github.com/joyautomation/nautilus/audit"
+	"github.com/joyautomation/nautilus/auth"
 	"github.com/joyautomation/nautilus/devprofile"
 	"github.com/joyautomation/nautilus/internal/lsp"
 	"github.com/joyautomation/nautilus/internal/project"
@@ -450,13 +451,9 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	// NAUTILUS_TOKEN_<NAME>: one that is unset, or shared, refuses to start
 	// rather than run with a token nobody can present or two that look
 	// alike.
-	if proj.Auth != nil {
-		secrets, err := serviceTokenSecrets(proj.Auth.ServiceTokens(), sopts.AuthToken, os.Getenv)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "naut run: auth:", err)
-			return 1
-		}
-		sopts.Auth, sopts.ServiceTokens = proj.Auth, secrets
+	if err := withAuth(&sopts, proj.Auth, os.Getenv); err != nil {
+		fmt.Fprintln(os.Stderr, "naut run: auth:", err)
+		return 1
 	}
 	if h := os.Getenv("NAUTILUS_HISTORIAN_URL"); h != "" {
 		sopts.HistorianURL = h
@@ -1058,13 +1055,39 @@ func embeddedManifest(fsys fs.FS) string {
 
 // authNotice is what naut run says about the manifest's auth: block, so
 // nobody runs a controller believing a block protects it before it does.
-// Today (#708 PR 4) the block is checked but not yet enforced.
+// Today (#708 PR 4b) it decides every write through the HTTP API and
+// /api/audit; reads (until sign-in, PR 5), the OPC UA server and
+// Sparkplug writes (#708 step 8) are not covered yet.
 func authNotice(proj *project.Project) string {
 	if proj.Auth == nil {
 		return ""
 	}
-	return "auth: WARNING: reads are NOT GATED yet (#708, until sign-in): anyone who can reach this controller\n" +
-		"      can read its tags, alarms and program. Writes and the audit journal follow the auth: block.\n"
+	return authReadsNotice + authSurfacesNotice
+}
+
+// authReadsNotice is the part of authNotice naut logix serve --project
+// says too: it serves the HTTP API only.
+const authReadsNotice = "auth: WARNING: reads are NOT GATED yet (#708, until sign-in): anyone who can reach this controller\n" +
+	"      can read its tags, alarms and program. Writes and the audit journal follow the auth: block.\n"
+
+const authSurfacesNotice = "auth: WARNING: the OPC UA server and Sparkplug writes are NOT covered by the auth: block yet (#708):\n" +
+	"      a client that reaches them is not asked for a role.\n"
+
+// withAuth puts the manifest's auth: block (#708) on sopts, with each
+// service token's secret from NAUTILUS_TOKEN_<NAME> (serviceTokenSecrets).
+// Nil (no block) leaves sopts as it is. naut run and naut logix serve
+// --project both serve a manifest that can hold the block, so both
+// enforce it through here.
+func withAuth(sopts *server.Options, pol *auth.Policy, getenv func(string) string) error {
+	if pol == nil {
+		return nil
+	}
+	secrets, err := serviceTokenSecrets(pol.ServiceTokens(), sopts.AuthToken, getenv)
+	if err != nil {
+		return err
+	}
+	sopts.Auth, sopts.ServiceTokens = pol, secrets
+	return nil
 }
 
 // serviceTokenSecrets reads each service token's secret from
