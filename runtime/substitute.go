@@ -3,6 +3,7 @@ package runtime
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/joyautomation/nautilus/lang/ir"
@@ -49,8 +50,9 @@ type Substitution struct {
 	Name string `json:"name"`
 	// Value is the substitute, in the plain JSON form All() uses.
 	Value any `json:"value"`
-	// Live is what the driver last delivered at this address. Absent when
-	// nothing has been delivered since the substitute began.
+	// Live is what the driver last delivered at this address: the value
+	// the tag held when the substitute began, until the next delivery
+	// (a sensor that stays quiet is still known by its last reading).
 	Live any `json:"live,omitempty"`
 	// LiveQuality is the address's quality without the substitute, as
 	// TagQuality would report it. Filled in by Runtime.Substitutes.
@@ -83,8 +85,9 @@ type SubstituteRequest struct {
 	By string
 	// AckOnStart: see Substitution.AckOnStart.
 	AckOnStart bool
-	// ID names the entry. Zero lets the runtime assign the next one; a
-	// replicated entry brings its own (#707's oplog seq).
+	// ID names the entry. Zero lets the runtime assign the next one (and
+	// only a leader may start one); a replicated entry brings its own
+	// (#707's oplog seq) and is accepted on a standby too.
 	ID uint64
 }
 
@@ -254,10 +257,8 @@ func (t *Tags) liveLocked(root string, tv *tagVal) ir.Value {
 // Caller holds t.mu.
 func (t *Tags) reportLocked(ss *subSet, e *subEntry) Substitution {
 	s := e.Substitution
-	if ss.wrote {
-		if a, ok := leafAt(ss.live, e.path); ok {
-			s.Live = plain(a)
-		}
+	if a, ok := leafAt(ss.live, e.path); ok {
+		s.Live = plain(a)
 	}
 	return s
 }
@@ -347,6 +348,13 @@ func (t *Tags) eachSubstitutedRoot(fn func(root string, s subState)) {
 func (r *Runtime) Substitute(addr string, req SubstituteRequest) (Substitution, error) {
 	if req.For <= 0 {
 		return Substitution{}, fmt.Errorf("substitute %s: a duration is required", addr)
+	}
+	// Only the leader starts one: a start a standby took would be hidden
+	// from the leader's list and stop, yet survive a takeover and go live
+	// later. A replicated entry brings its own ID (PR 3's oplog) and is
+	// every replica's to apply.
+	if req.ID == 0 && r.standby() {
+		return Substitution{}, fmt.Errorf("substitute %s: this replica is not leading: start it on the leader", addr)
 	}
 	root, _ := ir.SplitAddress(addr)
 	if _, _, whole := r.tags.lookupName(addr); whole {
@@ -483,6 +491,9 @@ func (r *Runtime) CheckSubstituteValue(addr string, v any) error {
 	}
 	rt := r.tags.TypeOf(root)
 	if rt == nil {
+		if len(path) > 0 {
+			return fmt.Errorf("%s has no declared type, so it has no member %q to substitute", root, strings.Join(path, "."))
+		}
 		return nil
 	}
 	nv, err := ir.SetFieldTypedStrict(ir.Zero(rt), rt, path, v, "tag "+root)

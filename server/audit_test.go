@@ -229,6 +229,43 @@ func auditRows() []auditRow {
 			method: "POST", path: "/api/forces/clear",
 			action: "force.clear-all", user: "anonymous", source: "api", result: "refused"},
 
+		{name: "substitute start", pattern: "POST /api/substitutes", server: subAuditServer,
+			method: "POST", path: "/api/substitutes", body: `{"name":"Level"}`,
+			action: "substitute.start", target: "Level", user: "anonymous", source: "api", result: "ok",
+			before: map[string]any{"quality": "good", "value": 40.0},
+			check: func(t *testing.T, e audit.Entry) {
+				after, _ := e.After.(map[string]any)
+				if after["value"] != 95.0 || after["id"] == nil || after["untilMs"] == nil {
+					t.Errorf("after = %v; want the substitute's value, id and until", e.After)
+				}
+				if e.Detail["role"] != "supervisor" || e.Detail["ackOnStart"] != true {
+					t.Errorf("detail = %v; want the rule's role and ack-on-start", e.Detail)
+				}
+			}},
+		{name: "substitute start of a tag no rule names", pattern: "POST /api/substitutes", server: subAuditServer,
+			method: "POST", path: "/api/substitutes", body: `{"name":"SP"}`,
+			action: "substitute.start", target: "SP", user: "anonymous", source: "api", result: "refused",
+			check: wantReason("not substitutable")},
+		{name: "substitute stop", pattern: "DELETE /api/substitutes/{id}", server: subAuditServer, prep: startSub("Level", 95.0),
+			method: "DELETE", path: "/api/substitutes/1",
+			action: "substitute.stop", target: "Level", user: "anonymous", source: "api", result: "ok",
+			check: func(t *testing.T, e audit.Entry) {
+				before, _ := e.Before.(map[string]any)
+				if before["value"] != 95.0 || before["live"] != 40.0 {
+					t.Errorf("before = %v; want the substitute and the live value", e.Before)
+				}
+			}},
+		{name: "substitute stop of none", pattern: "DELETE /api/substitutes/{id}", server: subAuditServer,
+			method: "DELETE", path: "/api/substitutes/9",
+			action: "substitute.stop", user: "anonymous", source: "api", result: "refused",
+			check: wantReason("no substitute 9 is active")},
+		{name: "substitute ack", pattern: "POST /api/substitutes/ack", server: subAuditServer, prep: startSub("Level", 95.0),
+			method: "POST", path: "/api/substitutes/ack", body: `{"ids":[1]}`,
+			action: "substitute.ack", target: "Level", user: "anonymous", source: "api", result: "ok"},
+		{name: "substitute ack of nothing", pattern: "POST /api/substitutes/ack", server: subAuditServer,
+			method: "POST", path: "/api/substitutes/ack", body: `{"ids":[]}`,
+			action: "substitute.ack", user: "anonymous", source: "api", result: "refused"},
+
 		{name: "sfc step", pattern: "POST /api/sfc/step", server: sfcServer,
 			method: "POST", path: "/api/sfc/step", body: `{"step":"Fill","pou":"Batch"}`,
 			action: "sfc.step", target: "Batch.Fill", user: "anonymous", source: "api", result: "ok"},

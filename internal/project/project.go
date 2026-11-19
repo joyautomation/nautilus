@@ -1199,6 +1199,7 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 			OnlineEdits:  m.Server.OnlineEdits,
 			HistorianURL: m.Server.Historian,
 			HMI:          hmiFS,
+			Substitutes:  serverSubstitutes(substitutes),
 		},
 		sparkplug:   m.Sparkplug,
 		substitutes: substitutes,

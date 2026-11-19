@@ -85,10 +85,13 @@ var actionClass = map[string]string{
 	"sfc.transition": operator,
 
 	"force.clear":      recovery,
+	"substitute.stop":  recovery, // a way back to the real reading
 	"force.clear-all":  recovery,
 	"program.rollback": recovery,
 
 	"force.set":        elevated,
+	"substitute.start": elevated,
+	"substitute.ack":   elevated,
 	"program.edit":     elevated,
 	"program.activate": elevated,
 	"config.stage":     elevated,

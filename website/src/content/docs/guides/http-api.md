@@ -97,6 +97,7 @@ carries the token (below). Every endpoint that changes something is a
 | --- |
 | `POST /api/tags` |
 | `POST /api/forces`, `DELETE /api/forces/{name}`, `POST /api/forces/clear` |
+| `POST /api/substitutes`, `DELETE /api/substitutes/{id}`, `POST /api/substitutes/ack` |
 | `POST /api/sfc/step`, `POST /api/sfc/transition` |
 | `POST /api/alarms/ack`, `POST /api/alarms/shelve`, `POST /api/alarms/unshelve` |
 | `PUT /api/program`, `POST /api/program/rollback`, `POST /api/program/activate` |
@@ -196,6 +197,10 @@ check comes before the token check. See [Online edits](/guides/online-edits/).
 | `POST` | [`/api/forces`](#forces) | Force a tag or member, or change a force |
 | `DELETE` | [`/api/forces/{name}`](#forces) | Remove one force |
 | `POST` | [`/api/forces/clear`](#forces) | Remove every force |
+| `GET` | [`/api/substitutes`](#substitute-values) | The active substitutes, and the rules that say what may be |
+| `POST` | [`/api/substitutes`](#substitute-values) | Start a substitute value on an input |
+| `DELETE` | [`/api/substitutes/{id}`](#substitute-values) | End one |
+| `POST` | [`/api/substitutes/ack`](#substitute-values) | Acknowledge the ones that wait for it |
 | `GET` | [`/api/sfc`](#sfc-commands) | Running SFC charts |
 | `POST` | [`/api/sfc/step`](#sfc-commands) | Jump a chart to a step |
 | `POST` | [`/api/sfc/transition`](#sfc-commands) | Fire a transition once |
@@ -630,6 +635,41 @@ curl -s -X POST localhost:8080/api/forces/clear
 `200`, with `{"removed":0}` when nothing was forced; `401` or `403` on
 authorization.
 
+## Substitute values
+
+A substitute runs the program on a value the project chose while a sensor
+is bad or wrong, flagged everywhere as quality `substituted`, for a
+bounded time. Which inputs may be substituted, on what value, for how
+long at most, is the manifest's `substitutes:` block. The three write
+calls need the same authorization as `POST /api/tags`.
+
+```sh
+curl -s localhost:8080/api/substitutes | jq -c '.rules'
+curl -s -X POST localhost:8080/api/substitutes -d '{"name": "LS_High"}'
+curl -s -X POST localhost:8080/api/substitutes/ack -d '{"ids": [1]}'
+curl -s -X DELETE localhost:8080/api/substitutes/1
+```
+
+- **`GET`** answers `{"substitutes": […], "rules": […]}`: each active entry
+  with its `id`, `value`, the `live` value and `liveQuality` under it, who
+  started it (`by`), `untilMs`, `remainingMs`, `ackOnStart` and `acked`,
+  and its rule's `role`, `maxMs` and `operatorValue`.
+- **`POST`** `{"name", "value"?, "seconds"?}` starts one. The value is the
+  rule's unless the rule has `operator-value: true` (`403` otherwise);
+  `seconds` defaults to the rule's maximum, may not exceed it, and is at
+  least 1 (`400` otherwise). Starting
+  an address that already has one replaces it with a new entry and a new
+  `id`: a substitute is never extended. `400` for a tag no rule names.
+- **`DELETE /api/substitutes/{id}`** ends that entry (`404` when it is
+  not active: it expired, ended, or a newer one replaced it).
+- **`POST /api/substitutes/ack`** `{"ids": […]}` acknowledges the entries
+  that wait for it; `409` when none did.
+
+Starting and acknowledging are elevated actions, refused while the audit
+journal cannot be written; ending one is a way back to normal and is
+allowed. An expiry has no request: it is journalled as `substitute.expire`
+by `system`.
+
 ## SFC commands
 
 Jump a running chart to a step, or fire a transition once. See
@@ -1033,12 +1073,13 @@ unwritable `audit.path`, or another `naut run` already using it):
 
 - **Elevated actions are refused** with `503`: setting a force, a program
   edit or activation, staging, validating or applying a live I/O
-  configuration, and any action not listed below. The refusal is
+  configuration, starting or acknowledging a substitute value, and any
+  action not listed below. The refusal is
   journalled, in memory.
 - **Operator actions are allowed**: tag writes, alarm acknowledgement and
   shelving, SFC commands.
 - **The ways back to normal are allowed**: clearing a force or all of
-  them, and rolling a program edit back.
+  them, ending a substitute value, and rolling a program edit back.
 - An allowed action's response carries `X-Nautilus-Audit-Journal: down`,
   and its entry is kept in memory (up to 10,000; past that the oldest are
   counted in an `audit.dropped` entry) and written, with its id, once the

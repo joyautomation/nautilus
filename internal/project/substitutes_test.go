@@ -25,8 +25,8 @@ func TestResolveSubstitutes(t *testing.T) {
 	cfg := &SubstitutesConfig{
 		Defaults: SubstituteDefaults{Max: Duration(2 * time.Hour), Role: "operator", AckOnStart: &yes},
 		Rules: []SubstituteRule{
-			{Match: "ls_*", Substitute: false},
-			{Match: "LS_Low", Substitute: true, Max: Duration(10 * time.Minute)}, // the first rule already took it
+			{Match: "LS_High", Substitute: true, Max: Duration(10 * time.Minute)}, // a specific rule first
+			{Match: "ls_*", Substitute: false},                                    // the glob decides the rest
 			{Match: "TT_101", Substitute: 21.5, Max: Duration(30 * time.Minute), Role: "supervisor", OperatorValue: &yes},
 			{Match: "Pump.Speed", Substitute: 0.0},
 		},
@@ -43,8 +43,8 @@ func TestResolveSubstitutes(t *testing.T) {
 		rule       int
 	}
 	want := []row{
-		{"LS_High", "operator", 2 * time.Hour, true, false, false, 0},
-		{"LS_Low", "operator", 2 * time.Hour, true, false, false, 0}, // rule 0 won, not rule 1
+		{"LS_High", "operator", 10 * time.Minute, true, false, true, 0}, // rule 0 won, not the glob after it
+		{"LS_Low", "operator", 2 * time.Hour, true, false, false, 1},
 		{"TT_101", "supervisor", 30 * time.Minute, true, true, 21.5, 2},
 		{"Pump.Speed", "operator", 2 * time.Hour, true, false, 0.0, 3},
 	}
@@ -76,17 +76,18 @@ func TestResolveSubstitutesRefusals(t *testing.T) {
 		cfg  SubstitutesConfig
 		want string
 	}{
-		"no rules":             {SubstitutesConfig{}, "at least one rule"},
-		"an empty match":       {SubstitutesConfig{Rules: []SubstituteRule{{Substitute: 1}}}, "match: is required"},
-		"no value":             {SubstitutesConfig{Rules: []SubstituteRule{{Match: "TT_101"}}}, "substitute: is required"},
-		"matches nothing":      {SubstitutesConfig{Rules: []SubstituteRule{{Match: "XX_*", Substitute: 1}}}, "matches no input tag"},
-		"matches an output":    {SubstitutesConfig{Rules: []SubstituteRule{{Match: "Valve", Substitute: 1}}}, "Valve, which is not an input"},
-		"matches a setpoint":   {SubstitutesConfig{Rules: []SubstituteRule{{Match: "SP", Substitute: 1}}}, "SP, which is not an input"},
-		"the same match twice": {SubstitutesConfig{Rules: []SubstituteRule{{Match: "TT_101", Substitute: 1}, {Match: "tt_101", Substitute: 2}}}, "repeats rules[0]"},
-		"max too short":        {SubstitutesConfig{Rules: []SubstituteRule{{Match: "TT_101", Substitute: 1, Max: Duration(30 * time.Second)}}}, "outside 1m0s to 168h0m0s"},
-		"max too long":         {SubstitutesConfig{Rules: []SubstituteRule{{Match: "TT_101", Substitute: 1, Max: Duration(169 * time.Hour)}}}, "outside"},
-		"defaults too long":    {SubstitutesConfig{Defaults: SubstituteDefaults{Max: Duration(200 * time.Hour)}, Rules: []SubstituteRule{{Match: "TT_101", Substitute: 1}}}, "substitutes.defaults"},
-		"a bad glob":           {SubstitutesConfig{Rules: []SubstituteRule{{Match: "[", Substitute: 1}}}, "match"},
+		"no rules":                           {SubstitutesConfig{}, "at least one rule"},
+		"an empty match":                     {SubstitutesConfig{Rules: []SubstituteRule{{Substitute: 1}}}, "match: is required"},
+		"no value":                           {SubstitutesConfig{Rules: []SubstituteRule{{Match: "TT_101"}}}, "substitute: is required"},
+		"matches nothing":                    {SubstitutesConfig{Rules: []SubstituteRule{{Match: "XX_*", Substitute: 1}}}, "matches no input tag"},
+		"matches an output":                  {SubstitutesConfig{Rules: []SubstituteRule{{Match: "Valve", Substitute: 1}}}, "Valve, which is not an input"},
+		"matches a setpoint":                 {SubstitutesConfig{Rules: []SubstituteRule{{Match: "SP", Substitute: 1}}}, "SP, which is not an input"},
+		"the same match twice":               {SubstitutesConfig{Rules: []SubstituteRule{{Match: "TT_101", Substitute: 1}, {Match: "tt_101", Substitute: 2}}}, "repeats rules[0]"},
+		"max too short":                      {SubstitutesConfig{Rules: []SubstituteRule{{Match: "TT_101", Substitute: 1, Max: Duration(30 * time.Second)}}}, "outside 1m0s to 168h0m0s"},
+		"max too long":                       {SubstitutesConfig{Rules: []SubstituteRule{{Match: "TT_101", Substitute: 1, Max: Duration(169 * time.Hour)}}}, "outside"},
+		"defaults too long":                  {SubstitutesConfig{Defaults: SubstituteDefaults{Max: Duration(200 * time.Hour)}, Rules: []SubstituteRule{{Match: "TT_101", Substitute: 1}}}, "substitutes.defaults"},
+		"a rule shadowed by an earlier glob": {SubstitutesConfig{Rules: []SubstituteRule{{Match: "LS_*", Substitute: 1}, {Match: "LS_High", Substitute: 2}}}, "shadowed by rules[0]"},
+		"a bad glob":                         {SubstitutesConfig{Rules: []SubstituteRule{{Match: "[", Substitute: 1}}}, "match"},
 	} {
 		cfg := tc.cfg
 		_, err := resolveSubstitutes(&cfg, subTags())

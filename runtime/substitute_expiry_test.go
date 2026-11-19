@@ -738,3 +738,29 @@ func TestAckOfAnEntryNotAckOnStart(t *testing.T) {
 	case <-time.After(50 * time.Millisecond):
 	}
 }
+
+// Only a leader starts a substitute: one a standby took would be hidden
+// from the leader's list and stop, yet survive a takeover and go live
+// later. A replicated entry brings its own ID and is every replica's to
+// apply.
+func TestStandbyRefusesAStartButAppliesAReplicatedEntry(t *testing.T) {
+	coord := &flag{lead: true}
+	rt, _, _ := newExpiryRig(t, coord)
+	rt.Scan()
+	coord.lead = false
+	rt.Scan()
+	if _, err := rt.Substitute("Level", SubstituteRequest{Value: 95.0, For: time.Hour, By: "op"}); err == nil || !strings.Contains(err.Error(), "not leading") {
+		t.Fatalf("a standby's start: %v; want it refused", err)
+	}
+	if rt.Tags().SubstituteCount() != 0 {
+		t.Fatal("a standby holds a substitute it refused")
+	}
+	if _, err := rt.Substitute("Level", SubstituteRequest{Value: 95.0, For: time.Hour, By: "op", ID: 41}); err != nil {
+		t.Fatalf("a replicated entry on a standby: %v", err)
+	}
+	coord.lead = true
+	rt.Scan() // takeover
+	if _, err := rt.Substitute("Flow", SubstituteRequest{Value: 1.0, For: time.Hour, By: "op"}); err != nil {
+		t.Fatalf("the new leader's start: %v", err)
+	}
+}
