@@ -9,14 +9,17 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"io"
 	"math/big"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -167,6 +170,11 @@ func TestNautRunServesHTTPS(t *testing.T) {
 	go func() { cmd.Wait(); close(exited) }()
 	t.Cleanup(func() { cmd.Process.Kill(); <-exited })
 	api := apiAddrFromBanner(t, stdout.String, exited, stderr.String)
+	// A connection that sends nothing is cut off by the header timeout
+	// (10 s), checked beside the rest.
+	cut := make(chan struct{})
+	go func() { defer close(cut); assertCutOff(t, api, apiReadHeaderTimeout+5*time.Second) }()
+	defer func() { <-cut }()
 	if !strings.Contains(stdout.String(), "tag API on https://") {
 		t.Errorf("the banner does not say https: %s", stdout.String())
 	}
@@ -185,5 +193,93 @@ func TestNautRunServesHTTPS(t *testing.T) {
 		if res.StatusCode == http.StatusOK {
 			t.Error("plain HTTP to the TLS port was answered")
 		}
+	}
+}
+
+// naut pull, naut pull --io and naut iolink param reach a controller with
+// server.tls by its https:// URL, checking its certificate against the
+// trusted roots (here the test server's, in place of the system's).
+func TestToolsReachAnHTTPSController(t *testing.T) {
+	var mu sync.Mutex
+	var hits []string
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		hits = append(hits, r.URL.Path)
+		mu.Unlock()
+		switch r.URL.Path {
+		case "/api/program":
+			w.Write([]byte(`{"task":"Main","pou":"Main","source":"","language":"st"}`))
+		case "/api/io/files":
+			w.Write([]byte(`{"files":[]}`))
+		default:
+			w.Write([]byte(`{"port":"LEVEL1","params":[]}`))
+		}
+	}))
+	defer ts.Close()
+	old := http.DefaultTransport
+	http.DefaultTransport = ts.Client().Transport
+	t.Cleanup(func() { http.DefaultTransport = old })
+	t.Setenv("NAUTILUS_TOKEN", "")
+
+	if _, err := fetchProgram(ts.URL, 0, ""); err != nil {
+		t.Errorf("naut pull: %v", err)
+	}
+	if _, err := fetchIOFiles(ts.URL, 0); err != nil {
+		t.Errorf("naut pull --io: %v", err)
+	}
+	var out, errb bytes.Buffer
+	runIOLinkParam([]string{"list", "--host", ts.URL, "LEVEL1"}, &out, &errb)
+	mu.Lock()
+	defer mu.Unlock()
+	if len(hits) != 3 || hits[0] != "/api/program" || hits[1] != "/api/io/files" || !strings.HasPrefix(hits[2], "/api/io") {
+		t.Errorf("reached over TLS: %v (iolink: %s)", hits, errb.String())
+	}
+}
+
+// naut siemens serve takes NAUTILUS_TLS_CERT and _KEY without a project
+// too (naut-lead's #1043 finding: it served plain HTTP).
+func TestSiemensServeTakesTheTLSVariablesWithoutAProject(t *testing.T) {
+	cert, key, _ := selfSigned(t, t.TempDir())
+	env := func(k string) string {
+		return map[string]string{"NAUTILUS_SIEMENS_PASSWORD": "pw", "NAUTILUS_TLS_CERT": cert, "NAUTILUS_TLS_KEY": key}[k]
+	}
+	c, err := resolveSiemensServe("192.0.2.10", "naut", "ab", "", nil, time.Second, "127.0.0.1:0", env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.tls == nil {
+		t.Error("no TLS without a project")
+	}
+}
+
+// A client that connects and sends nothing (a stalled TLS handshake) is
+// cut off after the header timeout rather than holding the connection.
+func TestLogixServeCutsOffAStalledConnection(t *testing.T) {
+	old := apiReadHeaderTimeout
+	apiReadHeaderTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { apiReadHeaderTimeout = old })
+	host, port, _ := emulateSpec(t, moduleIOController())
+	cert, key, pool := selfSigned(t, t.TempDir())
+	t.Setenv("NAUTILUS_TOKEN", "")
+	t.Setenv("NAUTILUS_TLS_CERT", cert)
+	t.Setenv("NAUTILUS_TLS_KEY", key)
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool}}, Timeout: 10 * time.Second}
+	base := serveLogixOver(t, "https", client, "--host", host, "--port", port, "--poll", "30ms")
+	assertCutOff(t, strings.TrimPrefix(base, "https://"), 5*time.Second)
+}
+
+// assertCutOff opens a connection to addr, sends nothing, and expects the
+// server to close it within limit. Safe on another goroutine.
+func assertCutOff(t *testing.T, addr string, limit time.Duration) {
+	t.Helper()
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Error(err) // not Fatal: it may run on another goroutine
+		return
+	}
+	defer conn.Close()
+	conn.SetReadDeadline(time.Now().Add(limit))
+	if _, err := conn.Read(make([]byte, 1)); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Errorf("a connection that sent nothing is still open after %v (%v)", limit, err)
 	}
 }

@@ -162,7 +162,11 @@ func pullIO(host string, port int, dir string, check, dry, force, allowNew bool)
 // fetchIOFiles GETs a controller's /api/io/files.
 func fetchIOFiles(host string, port int) (server.IOFiles, error) {
 	var out server.IOFiles
-	url := fmt.Sprintf("http://%s:%d/api/io/files", host, port)
+	base, err := apiclient.BaseURL(host, port)
+	if err != nil {
+		return out, err
+	}
+	url := base + "/api/io/files"
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
 		return out, err

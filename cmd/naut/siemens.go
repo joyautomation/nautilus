@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -153,6 +152,7 @@ func resolveSiemensServe(host, user, pin, projectDir string, roots []facade.Root
 	getenv func(string) string) (siemensServeConfig, error) {
 	c := siemensServeConfig{host: host, user: user, pin: pin, roots: roots, poll: poll, listen: listen,
 		password: getenv("NAUTILUS_SIEMENS_PASSWORD"), token: getenv("NAUTILUS_TOKEN")}
+	var cert, key string // server.tls, when the project has one
 	if projectDir != "" {
 		m, err := project.ReadManifest(os.DirFS(projectDir), "")
 		if err != nil && !errors.Is(err, os.ErrNotExist) && !strings.Contains(err.Error(), "no nautilus.yaml") {
@@ -167,15 +167,9 @@ func resolveSiemensServe(host, user, pin, projectDir string, roots []facade.Root
 			}
 			c.auth, c.services = sopts.Auth, sopts.ServiceTokens
 		}
-		var cert, key string
 		if err == nil && m.Server.TLS != nil {
 			cert, key = m.Server.TLS.Cert, m.Server.TLS.Key
 		}
-		src, terr := tlsSource(cert, key, projectDir, getenv)
-		if terr != nil {
-			return c, terr
-		}
-		c.tls = src
 		if err == nil && m.Target != nil && m.Target.Siemens != nil {
 			t := m.Target.Siemens
 			if c.host == "" {
@@ -191,6 +185,13 @@ func resolveSiemensServe(host, user, pin, projectDir string, roots []facade.Root
 			}
 		}
 	}
+	// HTTPS: the project's server.tls, or NAUTILUS_TLS_CERT and _KEY with
+	// or without a project.
+	src, err := tlsSource(cert, key, projectDir, getenv)
+	if err != nil {
+		return c, err
+	}
+	c.tls = src
 	switch {
 	case c.host == "":
 		return c, errors.New("--host is required (or a project whose target.siemens names the CPU's address)")
@@ -302,7 +303,8 @@ func serveSiemens(ctx context.Context, cfg siemensServeConfig, client *webapi.Cl
 	// Requests carry runCtx (derived from ctx), so stopping serve ends the
 	// open /api/stream connections (VS Code keeps one) instead of Shutdown
 	// waiting them out.
-	srv := &http.Server{Handler: f.Handler(), BaseContext: func(net.Listener) context.Context { return runCtx }}
+	srv := apiHTTPServer(f.Handler())
+	srv.BaseContext = func(net.Listener) context.Context { return runCtx }
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve(ln) }()
 	fmt.Fprintf(stdout, "nautilus · Siemens %s — %d tags on %s://%s — Ctrl+C to stop\n",

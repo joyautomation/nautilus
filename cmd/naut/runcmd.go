@@ -20,7 +20,6 @@ import (
 	"io"
 	"io/fs"
 	"net"
-	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -572,7 +571,7 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		// run` started again meanwhile still gets its port (nautilus#423,
 		// #599). The deferred close above is only for an early return.
 		go func() {
-			if err := http.Serve(ln, srv.Handler()); err != nil && ctx.Err() == nil {
+			if err := apiHTTPServer(srv.Handler()).Serve(ln); err != nil && ctx.Err() == nil {
 				fmt.Fprintln(os.Stderr, "tag api:", err)
 			}
 		}()

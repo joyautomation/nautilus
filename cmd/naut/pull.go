@@ -43,7 +43,9 @@ Usage:
             [--dry-run] [--force] [--new]
 
 Flags:
-  --host    Controller hostname or IP serving the tag API (required).
+  --host    Controller hostname or IP serving the tag API (required), or
+            its URL: https://plc.example:8443 for a controller with
+            server.tls (checked against the system's certificate roots).
             A controller with a token answers a name not in its
             NAUTILUS_ALLOWED_HOSTS only with the token: set NAUTILUS_TOKEN
             here and naut pull sends it.
@@ -271,7 +273,11 @@ func pouStart(src, pou string) int {
 // fetchProgram GETs a program's info; task selects one on a multi-task
 // controller ("" = the main program, which also carries the directory).
 func fetchProgram(host string, port int, task string) (programInfo, error) {
-	url := fmt.Sprintf("http://%s:%d/api/program", host, port)
+	base, err := apiclient.BaseURL(host, port)
+	if err != nil {
+		return programInfo{}, err
+	}
+	url := base + "/api/program"
 	if task != "" {
 		url += "?task=" + task
 	}

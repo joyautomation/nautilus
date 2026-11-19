@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"fmt"
 	"math/big"
 	"net"
 	"net/http"
@@ -129,6 +130,9 @@ func TestTrustedProxies(t *testing.T) {
 	}
 	if _, err := ParseTrustedProxies([]string{"proxy.example"}); err == nil {
 		t.Error("a name is not an address")
+	}
+	if _, err := ParseTrustedProxies([]string{"10.0.0.5/8"}); err == nil || !strings.Contains(err.Error(), "host bits") {
+		t.Errorf("10.0.0.5/8 is a typo, not a /8: %v", err)
 	}
 	srv := New(newTestRuntime(t), Options{TrustedProxies: p})
 	for _, c := range []struct {
@@ -265,6 +269,9 @@ func TestStandbyForwardsOverTLSToItsOwnCertificate(t *testing.T) {
 	writeCert(t, dir, "plc", "plc.example")
 	clock = clock.Add(certRecheck)
 	mine.Pin() // picks the renewal up
+	// A new connection, so the leader's leaf is checked now: it is this
+	// box's PREVIOUS one.
+	srv.leaderTLS.CloseIdleConnections()
 	if rec := write(); rec.Code != http.StatusNoContent {
 		t.Errorf("forward to a leader still on our previous certificate: %d %s", rec.Code, rec.Body)
 	}
@@ -358,5 +365,133 @@ func TestStandbyForwardDropsClientForwardedHeaders(t *testing.T) {
 	defer mu.Unlock()
 	if xff := got.Get("X-Forwarded-For"); strings.Contains(xff, "203.0.113.66") || got.Get("X-Forwarded-Proto") != "" || got.Get("X-Forwarded-Host") != "" {
 		t.Errorf("the leader saw a client's own forwarded headers: %v", got)
+	}
+}
+
+// A connection a standby keeps to the leader was checked against the
+// leaves accepted then: after two renewals here (neither of which the
+// leader has), the next forward is checked again and refused, not sent on
+// the old connection.
+func TestStandbyRechecksPooledConnectionsAfterARenewal(t *testing.T) {
+	dir := t.TempDir()
+	cp, kp, _ := writeCert(t, dir, "plc", "plc.example")
+	leaderAddr, hits := tlsLeader(t, cp, kp) // stays on the first
+	mine, err := NewCertSource(cp, kp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := time.Now()
+	mine.now = func() time.Time { return clock }
+	srv := auditServer(t, Options{TLS: mine, Cluster: &movingCluster{st: leader.Status{Mode: "cluster", Pod: "plc-1", Leader: "plc-0", LeaderAddr: leaderAddr}}})
+	write := func() int { return call(t, srv, "POST", "/api/tags", `{"name":"SP","value":70}`).Code }
+	if code := write(); code != http.StatusNoContent {
+		t.Fatalf("the first forward: %d", code)
+	}
+	for range 2 {
+		writeCert(t, dir, "plc", "plc.example")
+		clock = clock.Add(certRecheck)
+		mine.Pin()
+	}
+	if code := write(); code != http.StatusBadGateway || hits() != 1 {
+		t.Errorf("after two renewals the leader's leaf is neither: %d, leader saw %d", code, hits())
+	}
+}
+
+// The replaced leaf is accepted only until the leader shows the current
+// one, and for a day at most.
+func TestPreviousLeafIsBounded(t *testing.T) {
+	dir := t.TempDir()
+	cp, kp, first := writeCert(t, dir, "plc", "plc.example")
+	c, err := NewCertSource(cp, kp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := time.Now()
+	c.now = func() time.Time { return clock }
+	_, _, second := writeCert(t, dir, "plc", "plc.example")
+	clock = clock.Add(certRecheck)
+	c.Pin()
+	if !c.Pinned(first) {
+		t.Fatal("the previous leaf, right after the renewal")
+	}
+	if !c.Pinned(second) || c.Pinned(first) {
+		t.Error("once the leader shows the current leaf, the previous one is no longer accepted")
+	}
+	_, _, third := writeCert(t, dir, "plc", "plc.example")
+	clock = clock.Add(certRecheck)
+	c.Pin()
+	if !c.Pinned(second) {
+		t.Fatal("the previous leaf after another renewal")
+	}
+	clock = clock.Add(prevKeep)
+	if c.Pinned(second) || !c.Pinned(third) {
+		t.Error("the previous leaf a day later")
+	}
+}
+
+// The key's mode is checked on a renewal too: one every user may read is
+// refused, the certificate served is kept, and the failure journalled.
+func TestRenewalWithAWorldReadableKeyIsRefused(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("mode bits")
+	}
+	dir := t.TempDir()
+	cp, kp, first := writeCert(t, dir, "plc", "plc.example")
+	src, err := NewCertSource(cp, kp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := time.Now()
+	src.now = func() time.Time { return clock }
+	srv := auditServer(t, Options{TLS: src})
+	writeCert(t, dir, "plc", "plc.example")
+	os.Chmod(kp, 0o644)
+	clock = clock.Add(certRecheck)
+	if cert, _ := src.GetCertificate(nil); string(cert.Certificate[0]) != string(first) {
+		t.Error("a renewal with a world-readable key replaced the certificate")
+	}
+	found := false
+	for _, e := range srv.audit.ring.Recent() {
+		found = found || (e.Action == "tls.reload-failed" && strings.Contains(fmt.Sprint(e.Detail), "chmod o-r"))
+	}
+	if !found {
+		t.Error("the refused renewal is not journalled")
+	}
+}
+
+// What the leader judges "secure" for a request a standby forwarded is
+// the standby-to-leader hop (TLS here), not the client's request to the
+// standby (plain here): /api/me through the standby says secure. 5b must
+// decide password sign-in and Secure cookies at the hop the client
+// reached, not after a forward (#708 5b plan).
+func TestSecureThroughAStandbyIsTheForwardHop(t *testing.T) {
+	dir := t.TempDir()
+	cp, kp, _ := writeCert(t, dir, "plc", "plc.example")
+	lsrc, err := NewCertSource(cp, kp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaderSrv := New(newTestRuntime(t), Options{TLS: lsrc})
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hs := &http.Server{Handler: leaderSrv.Handler()}
+	go hs.Serve(tls.NewListener(ln, lsrc.Config()))
+	t.Cleanup(func() { hs.Close() })
+	mine, err := NewCertSource(cp, kp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	standby := New(newTestRuntime(t), Options{TLS: mine, Cluster: fakeCluster{status: leader.Status{
+		Mode: "cluster", Pod: "plc-1", Leader: "plc-0", LeaderAddr: ln.Addr().String(),
+	}}})
+	r := httptest.NewRequest("GET", "http://localhost/api/me", nil) // no TLS
+	if standby.secure(r) {
+		t.Fatal("the plain request is secure at the standby")
+	}
+	rec := serve(standby, r)
+	if !strings.Contains(rec.Body.String(), `"secure":true`) {
+		t.Errorf("/api/me forwarded over TLS: %s", rec.Body)
 	}
 }

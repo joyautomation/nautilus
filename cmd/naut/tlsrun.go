@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/joyautomation/nautilus/server"
 )
@@ -60,4 +62,20 @@ func facadeListener(ln net.Listener, src *server.CertSource, listen, cmd string,
 		fmt.Fprintf(stderr, "%s: WARNING: --listen %s reaches beyond this machine over plain HTTP: tokens, and every value written, cross the network in CLEARTEXT. Give the project a server.tls (or set NAUTILUS_TLS_CERT and NAUTILUS_TLS_KEY), or listen on localhost.\n", cmd, listen)
 	}
 	return ln, "http"
+}
+
+// The tag API's connection limits (naut run, naut logix serve, naut
+// siemens serve): a client gets apiReadHeaderTimeout to finish its TLS
+// handshake and send a request's headers, so one that stalls (or opens
+// connections and sends nothing) cannot hold them forever; a kept-alive
+// connection idle for apiIdleTimeout is closed. There is no write timeout:
+// the live stream (/api/stream) stays open as long as its client reads.
+var (
+	apiReadHeaderTimeout = 10 * time.Second
+	apiIdleTimeout       = 2 * time.Minute
+)
+
+// apiHTTPServer is the tag API's http.Server, with those limits.
+func apiHTTPServer(h http.Handler) *http.Server {
+	return &http.Server{Handler: h, ReadHeaderTimeout: apiReadHeaderTimeout, IdleTimeout: apiIdleTimeout}
 }

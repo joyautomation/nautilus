@@ -654,6 +654,9 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 		if c := opts[0].TLS; c != nil {
 			s.tls, s.leaderTLS = c, c.leaderTransport()
 			c.OnReload(s.journalTLSReload)
+			// A connection to the leader was verified against the leaves
+			// accepted then; when they change, make it again.
+			c.OnPinsChange(s.leaderTLS.CloseIdleConnections)
 		}
 		for name, secret := range opts[0].ServiceTokens {
 			if secret == "" {

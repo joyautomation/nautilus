@@ -34,6 +34,31 @@ type CertSource struct {
 	checked   time.Time
 	failed    string      // the last reload's error, "" when it loaded
 	onReload  func(error) // told a failed reload once, and its recovery
+	prevSince time.Time   // when prev was replaced (it is kept prevKeep at most)
+	onPins    []func()    // told the accepted leaves changed
+}
+
+// prevKeep is the longest the replaced leaf stays accepted: a rolling
+// renewal takes minutes, and an old certificate (a re-key after a leak)
+// must not be trusted for long.
+const prevKeep = 24 * time.Hour
+
+// OnPinsChange adds what is told when the leaves Pinned accepts change (a
+// renewal, the replaced one dropped): connections a standby holds to the
+// leader were verified against the old ones and must be made again.
+func (c *CertSource) OnPinsChange(fn func()) {
+	c.mu.Lock()
+	c.onPins = append(c.onPins, fn)
+	c.mu.Unlock()
+}
+
+func (c *CertSource) pinsChanged() {
+	c.mu.Lock()
+	fns := append([]func(){}, c.onPins...)
+	c.mu.Unlock()
+	for _, fn := range fns {
+		fn()
+	}
 }
 
 // certRecheck is how often the files are looked at for a renewal.
@@ -81,11 +106,15 @@ func (c *CertSource) load() error {
 	}
 	pin := sha256.Sum256(pair.Certificate[0])
 	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.cert != nil && pin != c.pin {
-		c.prev = c.pin
+	changed := c.cert != nil && pin != c.pin
+	if changed {
+		c.prev, c.prevSince = c.pin, c.now()
 	}
 	c.cert, c.pin, c.stamp, c.checked = &pair, pin, stamp, c.now()
+	c.mu.Unlock()
+	if changed {
+		c.pinsChanged()
+	}
 	return nil
 }
 
@@ -162,12 +191,23 @@ func (c *CertSource) Pin() [32]byte {
 // current certificate or the one it replaced. A leaf it does not know
 // sends it to its own files at once, not in a minute: the leader may have
 // loaded a renewal already copied here too.
+//
+// The replaced leaf is accepted only until the leader shows the current
+// one (the renewal has reached it) and for prevKeep at most.
 func (c *CertSource) Pinned(der []byte) bool {
 	sum := sha256.Sum256(der)
 	known := func() bool {
 		c.mu.Lock()
-		defer c.mu.Unlock()
-		return sum == c.pin || (c.prev != [32]byte{} && sum == c.prev)
+		dropped := false
+		if c.prev != [32]byte{} && (sum == c.pin || c.now().Sub(c.prevSince) >= prevKeep) {
+			c.prev, dropped = [32]byte{}, true
+		}
+		ok := sum == c.pin || (c.prev != [32]byte{} && sum == c.prev)
+		c.mu.Unlock()
+		if dropped {
+			c.pinsChanged()
+		}
+		return ok
 	}
 	c.refresh(false)
 	if known() {
@@ -210,7 +250,12 @@ func ParseTrustedProxies(list []string) ([]netip.Prefix, error) {
 	for _, s := range list {
 		s = strings.TrimSpace(s)
 		if p, err := netip.ParsePrefix(s); err == nil {
-			out = append(out, p.Masked())
+			if p != p.Masked() {
+				// 10.0.0.5/8 is a typo for an address or for 10.0.0.0/8;
+				// guessing which would trust the wrong range.
+				return nil, fmt.Errorf("trusted-proxies: %q has host bits set: give the address (%s) or the prefix (%s)", s, p.Addr(), p.Masked())
+			}
+			out = append(out, p)
 			continue
 		}
 		a, err := netip.ParseAddr(s)

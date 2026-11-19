@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"sync"
@@ -192,7 +191,7 @@ func runLogixServe(args []string) int {
 	}
 	ln, scheme := facadeListener(ln, tlsSrc, *listen, "naut logix serve", os.Stderr)
 	go f.Run(ctx)
-	srv := &http.Server{Handler: f.Handler()}
+	srv := apiHTTPServer(f.Handler())
 	go func() {
 		<-ctx.Done()
 		_ = srv.Close()
