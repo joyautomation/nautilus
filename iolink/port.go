@@ -76,25 +76,34 @@ type OutPlan struct {
 // each of them there because a master keeps the last PD-out image it was
 // given and sends it to whatever device is on the port:
 //
-//   - nothing is sent until a program has written an item;
+//   - nothing is sent until a program has written EVERY item of the image
+//     since the last time the device went wrong (or since the start): an
+//     image with an item no program has written would send that item as
+//     zero with the image marked valid, a command nobody gave (a valve
+//     and a setpoint: the setpoint written, the valve left to zero);
 //   - while the identity is not Ok (or Unchecked), nothing is sent and
 //     Valid is false: not zeros either, since "off" is not always safe;
 //   - writes made while it is not Ok are refused, not kept: when the right
 //     device is back, the image is NOT resent from what was written before
 //     or during the break; a program must write again, so a command is
 //     never delivered to a device it was not written for.
+//
+// Unchecked (the master profile has no id points) drives like Ok: there is
+// nothing to compare, so a wrong device cannot be told from the right one
+// here. naut devices show and naut check say so for such a master, and the
+// pd-out-valid rule below cannot protect it.
 type OutGate struct {
 	out     *iodd.Image
 	state   State
 	values  []any
-	written bool
+	written []bool // per item: written since the last forget
 }
 
 // NewOutGate is a gate for a port device whose process data out is out,
 // starting in state s (the port has not been checked yet: pass the first
 // Check, or NoDevice to hold everything until it has).
 func NewOutGate(out *iodd.Image, s State) *OutGate {
-	return &OutGate{out: out, state: s, values: make([]any, len(out.Items))}
+	return &OutGate{out: out, state: s, values: make([]any, len(out.Items)), written: make([]bool, len(out.Items))}
 }
 
 // SetState records the identity check. Leaving a driving state forgets
@@ -108,7 +117,7 @@ func (g *OutGate) SetState(s State) {
 
 func (g *OutGate) forget() {
 	clear(g.values)
-	g.written = false
+	clear(g.written)
 }
 
 // Write records item i's value. It is refused when the identity does not
@@ -128,7 +137,7 @@ func (g *OutGate) Write(i int, v any) error {
 		g.values[i] = prev
 		return err
 	}
-	g.written = true
+	g.written[i] = true
 	return nil
 }
 
@@ -140,10 +149,12 @@ func (g *OutGate) Plan() (OutPlan, error) {
 	if !g.state.Drives() {
 		return OutPlan{}, nil
 	}
-	if !g.written {
-		// Right device, nothing written yet: valid only once a program has
-		// meant to drive it.
-		return OutPlan{}, nil
+	for _, w := range g.written {
+		if !w {
+			// An item no program has written since the last forget: the image
+			// is not complete, so none of it is sent.
+			return OutPlan{}, nil
+		}
 	}
 	img, err := g.out.Encode(g.values)
 	if err != nil {

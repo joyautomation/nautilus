@@ -67,6 +67,16 @@ func mustOut(t *testing.T, d *iodd.IODD) *iodd.Image {
 	return pd.Out
 }
 
+// writeAll writes level100's three items: Teach off, Mode mode, Lock set.
+func writeAll(t *testing.T, g *OutGate, mode uint64) {
+	t.Helper()
+	for i, v := range []any{false, mode, true} {
+		if err := g.Write(i, v); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func plan(t *testing.T, g *OutGate) OutPlan {
 	t.Helper()
 	p, err := g.Plan()
@@ -77,20 +87,40 @@ func plan(t *testing.T, g *OutGate) OutPlan {
 }
 
 // Items of level100's process data out: Teach (bit 0), Mode (bits 3..1),
-// Lock (bit 7); Mode 5 with Lock set is 0x8A.
-func TestOutGateDrivesOnlyWhatWasWritten(t *testing.T) {
+// Lock (bit 7); Teach off, Mode 5 and Lock set is 0x8A.
+func TestOutGateSendsNothingUntilEveryItemIsWritten(t *testing.T) {
 	g := gate(t, Ok)
 	if p := plan(t, g); p.Valid || p.Image != nil {
 		t.Errorf("nothing written yet, plan %+v", p)
 	}
-	if err := g.Write(1, uint64(5)); err != nil {
-		t.Fatal(err)
+	for _, w := range []struct {
+		item int
+		v    any
+	}{{1, uint64(5)}, {2, true}} {
+		if err := g.Write(w.item, w.v); err != nil {
+			t.Fatal(err)
+		}
+		if p := plan(t, g); p.Valid || p.Image != nil {
+			t.Errorf("item %d written but Teach is not: plan %+v, want none (an unwritten item would go out as zero, marked valid)", w.item, p)
+		}
 	}
-	if err := g.Write(2, true); err != nil {
+	if err := g.Write(0, false); err != nil {
 		t.Fatal(err)
 	}
 	if p := plan(t, g); !p.Valid || !bytes.Equal(p.Image, []byte{0x8A}) {
-		t.Errorf("plan %+v, want valid 8A (Teach, never written, is zero)", p)
+		t.Errorf("every item written: plan %+v, want valid 8A", p)
+	}
+	// Leaving a driving state forgets all of them, not just the last.
+	g.SetState(WrongDevice)
+	g.SetState(Ok)
+	_ = g.Write(0, false)
+	_ = g.Write(1, uint64(5))
+	if p := plan(t, g); p.Valid || p.Image != nil {
+		t.Errorf("after a break two of three items are rewritten: plan %+v, want none", p)
+	}
+	_ = g.Write(2, true)
+	if p := plan(t, g); !p.Valid || !bytes.Equal(p.Image, []byte{0x8A}) {
+		t.Errorf("all three rewritten: plan %+v", p)
 	}
 }
 
@@ -101,7 +131,7 @@ func TestOutGateWrongDeviceGetsNothingAndNothingReturns(t *testing.T) {
 	for _, bad := range []State{WrongDevice, NoDevice} {
 		t.Run(bad.String(), func(t *testing.T) {
 			g := gate(t, Ok)
-			_ = g.Write(1, uint64(5))
+			writeAll(t, g, 5)
 			if !plan(t, g).Valid {
 				t.Fatal("not driving a right device")
 			}
@@ -116,12 +146,10 @@ func TestOutGateWrongDeviceGetsNothingAndNothingReturns(t *testing.T) {
 			if p := plan(t, g); p.Valid || p.Image != nil {
 				t.Errorf("the right device is back: plan %+v, want nothing until a program writes again", p)
 			}
-			if err := g.Write(1, uint64(2)); err != nil {
-				t.Fatal(err)
-			}
-			// Only the fresh write: the Mode 5 from before the break is gone.
-			if p := plan(t, g); !p.Valid || !bytes.Equal(p.Image, []byte{0x04}) {
-				t.Errorf("after a fresh write, plan %+v, want valid 04", p)
+			writeAll(t, g, 2)
+			// Only the fresh writes: the Mode 5 from before the break is gone.
+			if p := plan(t, g); !p.Valid || !bytes.Equal(p.Image, []byte{0x84}) {
+				t.Errorf("after fresh writes, plan %+v, want valid 84", p)
 			}
 		})
 	}
@@ -143,9 +171,7 @@ func TestOutGateStartsClosed(t *testing.T) {
 // is forced off.
 func TestOutGateUncheckedWritesAsTold(t *testing.T) {
 	g := gate(t, Unchecked)
-	if err := g.Write(2, true); err != nil {
-		t.Fatal(err)
-	}
+	writeAll(t, g, 0)
 	if p := plan(t, g); !p.Valid || !bytes.Equal(p.Image, []byte{0x80}) {
 		t.Errorf("plan %+v, want valid 80", p)
 	}
@@ -155,12 +181,12 @@ func TestOutGateUncheckedWritesAsTold(t *testing.T) {
 // leaves the last good value in place.
 func TestOutGateRefusesWhatDoesNotFit(t *testing.T) {
 	g := gate(t, Ok)
-	_ = g.Write(1, uint64(5))
+	writeAll(t, g, 5)
 	if err := g.Write(1, uint64(9)); err == nil {
 		t.Fatal("Mode 9 does not fit 3 bits, yet was accepted")
 	}
-	if p := plan(t, g); !bytes.Equal(p.Image, []byte{0x0A}) {
-		t.Errorf("plan %+v after a refused write, want the earlier 0A", p)
+	if p := plan(t, g); !bytes.Equal(p.Image, []byte{0x8A}) {
+		t.Errorf("plan %+v after a refused write, want the earlier 8A", p)
 	}
 	if err := g.Write(7, true); err == nil {
 		t.Error("a write to an item that does not exist was accepted")
