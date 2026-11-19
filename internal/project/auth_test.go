@@ -81,6 +81,7 @@ func TestLoadAuthRefuses(t *testing.T) {
 		{"auth:\n  users:\n    jsmith: [{role: operator, areas: []}]\n", "areas is empty"},
 		{"auth:\n  users:\n    jsmith: [{role: operator, areas: }]\n", "areas is empty"},
 		{"auth:\n  users:\n    jsmith: [{role: operator, areas: null}]\n", "areas is empty"},
+		{"auth:\n  state-dir: state/nautilus\n", "state-dir \"state/nautilus\" is relative"},
 		{"auth:\n  users:\n    jsmith: [{areas: [x]}]\n", "a grant names no role"},
 		// F4, F5 through the manifest.
 		{"auth:\n  service-tokens:\n    pit-script: viewer\n", "use letters, digits and '_'"},

@@ -37,6 +37,7 @@ import (
 	"github.com/joyautomation/nautilus/alarm"
 	"github.com/joyautomation/nautilus/audit"
 	"github.com/joyautomation/nautilus/auth"
+	"github.com/joyautomation/nautilus/auth/users"
 	"github.com/joyautomation/nautilus/devprofile"
 	"github.com/joyautomation/nautilus/internal/lsp"
 	"github.com/joyautomation/nautilus/internal/project"
@@ -454,6 +455,16 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	if err := withAuth(&sopts, proj.Auth, os.Getenv); err != nil {
 		fmt.Fprintln(os.Stderr, "naut run: auth:", err)
 		return 1
+	}
+	// The local users' passwords and tokens (#708): the users file in the
+	// state directory, never the project, opened when the block grants a
+	// user a role. One that cannot be read, or that others may read,
+	// refuses to start.
+	if store, err := openUsers(proj, dir, os.Getenv); err != nil {
+		fmt.Fprintln(os.Stderr, "naut run: auth:", err)
+		return 1
+	} else if store != nil {
+		sopts.Users = store
 	}
 	if h := os.Getenv("NAUTILUS_HISTORIAN_URL"); h != "" {
 		sopts.HistorianURL = h
@@ -1077,6 +1088,23 @@ const authFacadeNotice = "auth: WARNING: reads are NOT GATED yet (#708, until si
 const authSurfacesNotice = "auth: WARNING: the OPC UA server and Sparkplug writes are NOT covered by the auth: block yet (#708):\n" +
 	"      a client that reaches them is not asked for a role.\n"
 
+// openUsers opens the controller's users file when its auth: block grants
+// a user a role (nil, nil otherwise: no state directory is needed, so a
+// box not under systemd starts as before): auth.state-dir, else
+// $STATE_DIRECTORY, else (naut run in a checkout, outside systemd) the
+// developer's $XDG_STATE_HOME/nautilus/<name>. A built controller has no
+// checkout (dir is ""), so it never falls back to a home directory.
+func openUsers(proj *project.Project, dir string, getenv func(string) string) (*users.Store, error) {
+	if proj.Auth == nil || !proj.Auth.HasUsers() {
+		return nil, nil
+	}
+	path, err := usersFile(proj.AuthStateDir, proj.Name, dir, dir != "", getenv)
+	if err != nil {
+		return nil, err
+	}
+	return users.Open(path)
+}
+
 // withAuth puts the manifest's auth: block (#708) on sopts, with each
 // service token's secret from NAUTILUS_TOKEN_<NAME> (serviceTokenSecrets).
 // Nil (no block) leaves sopts as it is. naut run and naut logix serve
@@ -1400,6 +1428,8 @@ file. It refuses to start while another process holds its tag API address
 (another instance, or its own service): two must never drive the same I/O.
 
   ` + name + ` version    print the naut version it was built with
+  ` + name + ` users …    the local users of its auth: block (naut users --help);
+                     it does not start the controller
   ` + name + ` --help     this
 
 Environment:

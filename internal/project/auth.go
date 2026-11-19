@@ -2,6 +2,7 @@ package project
 
 import (
 	"fmt"
+	"path/filepath"
 
 	"github.com/joyautomation/nautilus/auth"
 	"gopkg.in/yaml.v3"
@@ -30,6 +31,10 @@ type AuthConfig struct {
 	// user's ({role, areas}); its secret comes from the environment
 	// (NAUTILUS_TOKEN_<NAME>), never the manifest.
 	ServiceTokens map[string]AuthGrants `yaml:"service-tokens"`
+	// StateDir is where the controller keeps its users file (users.json:
+	// password hashes and personal access tokens). Default: systemd's
+	// $STATE_DIRECTORY. Never inside the project, so no hash reaches git.
+	StateDir string `yaml:"state-dir"`
 }
 
 // AuthArea is an area: the tags it covers, as patterns ("RCV_*").
@@ -149,6 +154,11 @@ func (c *AuthConfig) settings() auth.Settings {
 func compileAuth(c *AuthConfig) (*auth.Policy, error) {
 	if c == nil {
 		return nil, nil
+	}
+	// naut users and the controller resolve a relative path against
+	// different working directories, and would read different files.
+	if c.StateDir != "" && !filepath.IsAbs(c.StateDir) {
+		return nil, fmt.Errorf("auth: state-dir %q is relative: give an absolute path outside the project", c.StateDir)
 	}
 	// The auth package's errors already begin "auth: ".
 	return auth.Compile(c.settings())

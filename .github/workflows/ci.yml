@@ -500,7 +500,7 @@ jobs:
         with: {go-version: '1.25'}
       # retain: the retained values' file store renames over the old file
       # and keeps a corrupt one aside (#842).
-      - run: go test ./oplog/ ./alarm/ ./retain/ ./audit/
+      - run: go test ./oplog/ ./alarm/ ./retain/ ./audit/ ./auth/users/
   # PROFINET's raw-Ethernet transport (AF_PACKET) on a veth pair. The test
   # runs itself as root of a new user + network namespace, so it needs no
   # privilege and touches no host interface; ubuntu-latest restricts

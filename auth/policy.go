@@ -264,6 +264,11 @@ func (p *Policy) ServiceTokens() []string {
 	return out
 }
 
+// HasUsers reports whether the block grants any user a role: without
+// one, no local user could do anything, and a controller needs no users
+// file.
+func (p *Policy) HasUsers() bool { return len(p.users) > 0 }
+
 // Decision is Can's answer: whether the action is allowed, and if not,
 // a sentence saying why.
 type Decision struct {

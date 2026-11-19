@@ -13,6 +13,7 @@ require (
 	github.com/gosnmp/gosnmp v1.45.0
 	github.com/lib/pq v1.10.9
 	github.com/mochi-mqtt/server/v2 v2.7.9
+	golang.org/x/crypto v0.47.0
 	golang.org/x/sys v0.40.0
 	golang.org/x/term v0.39.0
 	google.golang.org/grpc v1.80.0

@@ -84,7 +84,10 @@ break one changes this section first and says why.
 
 - Substrates (`io`, `lang/ir`, `hist`, `oplog`, `audit`, `auth`) import no other nautilus
   package. `audit` imports only the standard library, not even a third-party
-  module. `retain` imports only `internal/k8sapi`. `quorum` and its subtree
+  module. `auth/users` (the users file on the box: argon2id password hashes
+  and personal access tokens, #708) imports only the standard library and
+  `golang.org/x/crypto` (with the `golang.org/x/sys/cpu` it needs), the one
+  module the maintainer approved for it. `retain` imports only `internal/k8sapi`. `quorum` and its subtree
   import only each other, and only `leader`, the CLI and Verification import
   them: nothing else learns the vote protocol.
 - Languages import only each other and the tag-file shared kernel.
