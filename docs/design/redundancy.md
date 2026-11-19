@@ -171,7 +171,12 @@ redundancy:
   up to `lease + ρ·lease + lease/4` after the last renewal it saw. A leader back after one
   lease would campaign at about the same moment, win the standby's voter with a campaign it
   can't hear answered, and hold the takeover off for another lease (the simulator measured
-  a takeover 6.3–6.55 s after the cut with one lease, 3.8–4.55 s with two, at a 2 s lease). The back-off silences only the candidate: the same node's
+  a takeover 6.3–6.55 s after the cut with one lease, 3.8–4.55 s with two, at a 2 s lease).
+  **The trade, accepted:** a lapsed leader that is the only viable candidate also waits two
+  leases. With the standby already down and the witness link out for a full lease, the pair
+  is leaderless for 4.0 s instead of 2.0 s (a half-lease blip costs nothing either way). That
+  is a double fault, and the one-way leader is a single fault whose recovery the plant sees,
+  so the faster F9 takeover wins. The back-off silences only the candidate: the same node's
   voter keeps answering.
 - **The witness incarnation.** The witness draws a random incarnation id when it first starts
   and keeps it in its state file. A and B record, in their own fsynced state, the incarnation
@@ -210,7 +215,10 @@ redundancy:
   acquired in. A re-term on renewal (above) moves the vote term but not the epoch, so a write
   posted under the token is still valid while the lease runs on without a gap (#797 checks it
   right before the send). Any gap followed by a new acquisition changes it, because terms only
-  rise and no term is led twice. The voters and the witness work with the vote term. Field devices can't check a token: a Modbus relay board
+  rise and no term is led twice. The voters and the witness work with the vote term.
+  **The rule for every other part (the gate, the stream, the proxy, oplog): stamp and compare
+  the epoch (`Term()`) only, and never compare it with a vote term (`VoteTerm()`).** They are two
+  number spaces. A test keeps `VoteTerm` from being called outside `quorum/`. Field devices can't check a token: a Modbus relay board
   knows no terms. **At the field, safety rests on timing**: the old leader's gate has closed
   before a new lease can be granted, and the devices' own comm watchdogs act on silence.
 
