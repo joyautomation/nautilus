@@ -85,6 +85,38 @@ func TestNightlyBeyondRuleDelay(t *testing.T) {
 	})
 }
 
+// Beyond the documented loss rule (test plan F20): seed 260567 of an extra
+// sample on #999 wipes the witness (so A–B is the sole vote path) and drops
+// 27% of A–B both ways for 6.6 leases. A renewal round then fails about
+// half the time and takeovers flap (I7): measured, not guaranteed, above
+// maxSoleLoss. Every other oracle, safety and steady state included, still
+// holds. The generator no longer draws such loss (TestGeneratorLossWithinRule).
+func TestNightlyBeyondRuleLoss(t *testing.T) {
+	nightly(t, []uint64{260567}, func(t *testing.T, o Options) {
+		beyond := false
+		for i, f := range o.Faults {
+			if f.Kind == Loss && f.Value > maxSoleLoss && solePath(o, i) {
+				beyond = true
+			}
+		}
+		if !beyond {
+			t.Fatal("no loss beyond maxSoleLoss on a sole vote path: the case is misfiled")
+		}
+		rec := Run(o)
+		all := checksFor(o)
+		for _, v := range Check(rec, all) {
+			if v.Oracle == "I7" {
+				t.Logf("measured: %v", v)
+			}
+		}
+		c := all
+		c.Exclude = []string{"I7"}
+		for _, v := range Check(rec, c) {
+			t.Error(v)
+		}
+	})
+}
+
 // Seed 61535 failed steady state on main because a crash during the
 // witness's slow in-place write tore its file (class 4). Renewing at once
 // shifts the run's timing so the crash no longer lands mid-write; with the
@@ -108,5 +140,57 @@ func TestGeneratorDelayWithinRule(t *testing.T) {
 				t.Fatalf("seed %d draws %v + %v + %v > lease/4", seed, o.Delay, o.Jitter, time.Duration(f.Value))
 			}
 		}
+	}
+}
+
+// The generator keeps loss on a link that may be the sole vote path within
+// the documented rule (maxSoleLoss), and still draws loss up to 30% where
+// the third voter stays counted.
+func TestGeneratorLossWithinRule(t *testing.T) {
+	high := 0
+	for seed := uint64(1); seed <= 20000; seed++ {
+		o := randomRun(seed, profDefault)
+		for i, f := range o.Faults {
+			if f.Kind != Loss {
+				continue
+			}
+			if solePath(o, i) && f.Value > maxSoleLoss {
+				t.Fatalf("seed %d draws %d%% loss on a sole vote path: %#v", seed, f.Value, f)
+			}
+			if f.Value > maxSoleLoss {
+				high++
+			}
+		}
+	}
+	if high == 0 {
+		t.Fatal("no loss above maxSoleLoss drawn at all: the cap is too wide")
+	}
+}
+
+// solePath judges a loss by the third voter's faults.
+func TestSolePath(t *testing.T) {
+	loss := Fault{Kind: Loss, From: A, To: B, Both: true, Value: 27}
+	for _, c := range []struct {
+		other Fault
+		want  bool
+	}{
+		{Fault{Kind: Wipe, Node: W}, true},
+		{Fault{Kind: Crash, Node: W}, true},
+		{Fault{Kind: SlowDisk, Node: W}, true},
+		{Fault{Kind: Cut, From: B, To: W}, true},
+		{Fault{Kind: Loss, From: W, To: A}, true},
+		{Fault{Kind: Crash, Node: A}, false},
+		{Fault{Kind: Skew, Node: W}, false},
+		{Fault{Kind: Duplicate, From: A, To: W}, false},
+		{Fault{Kind: Start, Node: W2}, false},
+	} {
+		o := Options{Faults: []Fault{loss, c.other}}
+		if got := solePath(o, 0); got != c.want {
+			t.Errorf("A–B loss with %#v: sole path %v, want %v", c.other, got, c.want)
+		}
+	}
+	o := Options{Faults: []Fault{{Kind: Loss, From: A, To: W, Value: 9}, {Kind: Crash, Node: B}}}
+	if !solePath(o, 0) {
+		t.Error("A–W loss with B down: not judged a sole path")
 	}
 }
