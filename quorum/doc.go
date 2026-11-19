@@ -30,6 +30,7 @@
 // epoch, the term leadership was acquired in), and Candidate.VoteTerm is
 // the vote term the lease rests on, which a re-term on renewal moves while
 // the lease runs on. Everything outside this package stamps and compares
-// Term only, and never compares it with a vote term
-// (TestVoteTermStaysInsideQuorum guards it).
+// Term only (0 when not leading), never compares it with a vote term
+// (TestVoteTermStaysInsideQuorum guards it), and refuses a token below the
+// highest received from a leader, not below its own Term.
 package quorum

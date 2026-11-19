@@ -115,14 +115,16 @@ func (c *Candidate) Leading(now Instant) bool { return c.leading && now < c.leas
 
 // Term is the fencing token: while leading, the term leadership was
 // acquired in (the epoch), stable across renewals that move the vote term
-// (VoteTerm); otherwise the term last campaigned for. A gap in leadership
-// and a new acquisition always change it (terms only rise, and no term is
-// led twice).
+// (VoteTerm); 0 when not leading, so a standby never holds a token above
+// the live leader's. A gap in leadership and a new acquisition always
+// change it (terms only rise, and no term is led twice). A receiver
+// compares a token against the highest token it has received FROM A
+// LEADER, never against its own Term.
 func (c *Candidate) Term() uint64 {
 	if c.leading {
 		return c.epoch
 	}
-	return c.term
+	return 0
 }
 
 // VoteTerm returns the vote term the current lease rests on (the term last
@@ -253,6 +255,7 @@ func (c *Candidate) OnReply(now Instant, r Reply) {
 		c.leading = true
 		c.leaseEnd = end
 		c.epoch, c.renewTerm = rd.term, rd.term
+		c.reterm = false // a refusal from before this lease means nothing to it
 	} else if end > c.leaseEnd {
 		// A renewal majority, possibly at a higher vote term (a re-term):
 		// the lease now rests on it. The epoch stays.
@@ -275,6 +278,7 @@ func (c *Candidate) OnReply(now Instant, r Reply) {
 func (c *Candidate) expire(now Instant) {
 	if c.leading && now >= c.leaseEnd {
 		c.leading = false
+		c.reterm = false
 		c.backoffUntil = c.leaseEnd.Add(2 * c.cfg.Lease)
 	}
 	keep := c.rounds[:0]

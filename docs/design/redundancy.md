@@ -217,7 +217,9 @@ redundancy:
   right before the send). Any gap followed by a new acquisition changes it, because terms only
   rise and no term is led twice. The voters and the witness work with the vote term.
   **The rule for every other part (the gate, the stream, the proxy, oplog): stamp and compare
-  the epoch (`Term()`) only, and never compare it with a vote term (`VoteTerm()`).** They are two
+  the epoch (`Term()`) only, and never compare it with a vote term (`VoteTerm()`).** `Term()` is
+  0 on a controller that isn't leading, so a receiver refuses a token older than the highest
+  token it has received **from a leader**, never one compared against its own `Term()`. They are two
   number spaces. A test keeps `VoteTerm` from being called outside `quorum/`. Field devices can't check a token: a Modbus relay board
   knows no terms. **At the field, safety rests on timing**: the old leader's gate has closed
   before a new lease can be granted, and the devices' own comm watchdogs act on silence.

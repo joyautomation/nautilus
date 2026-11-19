@@ -58,6 +58,7 @@ func (p *pair) step(now Instant) {
 			reqs = append(reqs, r)
 		}
 	}
+	defer p.oneLeader(now)
 	for _, vid := range []NodeID{"A", "B", "W"} {
 		if p.down[vid] || p.v[vid] == nil {
 			continue
@@ -82,6 +83,21 @@ func (p *pair) step(now Instant) {
 				}
 			}
 		}
+	}
+}
+
+// oneLeader fails the test if both controllers lead at once (I1, the
+// reviewer's invariant). Every hand-driven case calls it on every step.
+func (p *pair) oneLeader(now Instant) {
+	p.t.Helper()
+	n := 0
+	for _, id := range ids {
+		if c := p.c[id]; c != nil && !p.down[id] && c.Leading(now) {
+			n++
+		}
+	}
+	if n > 1 {
+		p.t.Fatalf("both controllers lead at %v", time.Duration(now))
 	}
 }
 
@@ -155,6 +171,12 @@ func TestStandbyRejoinsTheLeader(t *testing.T) {
 					}
 					settledTerm = p.c[sb].VoteTerm()
 					leadTerm = p.c[lead].VoteTerm()
+					// The standby holds no token, so it is never above
+					// the leader's (a receiver could otherwise refuse the
+					// live leader against it).
+					if p.c[sb].Term() != 0 || p.c[lead].Term() == 0 {
+						t.Fatalf("tokens: standby %d, leader %d; want 0 and the leader's epoch", p.c[sb].Term(), p.c[lead].Term())
+					}
 				case now > at(3*time.Second) && p.leader(now) != lead:
 					t.Fatalf("leader %s lost its lease at %v (standby's vote term %d)", lead, time.Duration(now),
 						p.c[map[NodeID]NodeID{"A": "B", "B": "A"}[lead]].VoteTerm())
@@ -189,6 +211,7 @@ func TestEpochStableAcrossReterm(t *testing.T) {
 		if now%step == 0 {
 			p.step(now)
 		}
+		p.oneLeader(now)
 		c := p.c["A"]
 		if postedOK && c.Leading(now) && c.Term() != posted {
 			drops++
@@ -349,5 +372,38 @@ func TestOneWayLeaderLosesTheRace(t *testing.T) {
 		if took == 0 || took-cut > at(4600*time.Millisecond) {
 			t.Errorf("phase %d: B led %v after the cut, want ≤ 4.6 s", k, time.Duration(took-cut))
 		}
+	}
+}
+
+// A re-term owed when the lease lapses is forgotten: the next lease's
+// first renewal goes out at the term it was won in.
+func TestRetermForgottenAcrossALapse(t *testing.T) {
+	c := newC(t, cfgA(), 0, 0)
+	r := c.Tick(0, "", 0, true)
+	c.OnReply(at(10*time.Millisecond), granted("A", r, 0))
+	c.OnReply(at(10*time.Millisecond), granted("W", r, 42))
+	c.Tick(at(500*time.Millisecond), "", 0, true)
+	c.Tick(at(1000*time.Millisecond), "", 0, true)
+	r2 := c.Tick(at(1500*time.Millisecond), "", 0, true)         // the last look while leading
+	c.OnReply(at(1600*time.Millisecond), refused("B", r2, 1, 0)) // owes a re-term
+	// No renewal is answered: the lease lapses at 1.98 s with the re-term
+	// still owed, the back-off runs to 5.98 s, then a campaign wins.
+	for now := 1700 * time.Millisecond; now < 5980*time.Millisecond; now += 100 * time.Millisecond {
+		c.Tick(at(now), "", 0, true)
+	}
+	if c.Leading(at(5980 * time.Millisecond)) {
+		t.Fatal("still leading")
+	}
+	rc := c.Tick(at(5980*time.Millisecond), "", 0, true)
+	if rc == nil || rc.Renewal {
+		t.Fatalf("after the back-off: %+v, want a campaign", rc)
+	}
+	c.OnReply(at(5990*time.Millisecond), granted("A", rc, 0))
+	c.OnReply(at(5990*time.Millisecond), granted("W", rc, 42))
+	if !c.Leading(at(5990 * time.Millisecond)) {
+		t.Fatal("did not win the campaign")
+	}
+	if rn := c.Tick(at(6480*time.Millisecond), "", 0, true); rn == nil || rn.Term != rc.Term {
+		t.Fatalf("first renewal %+v, want term %d: a re-term owed by the lapsed lease carried over", rn, rc.Term)
 	}
 }
