@@ -216,7 +216,7 @@ What to do:
 - **Unknown outcome of a stop or an acknowledgement:** they carry no
   `requestId`. Re-read and decide from what the list shows.
 - **`kept: false`:** it is in effect. Check `__Substitute_Fault`, and stop it
-  or re-save it later (any later successful change saves the whole table).
+  and stop it once the store is healthy (`__Substitute_Fault` says when a save failed).
 - **409:** re-read and decide again; never retry blind.
 
 Send a fresh **`requestId`** with every start, one per user action, and
