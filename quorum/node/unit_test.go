@@ -243,6 +243,11 @@ func TestGrantLeavesOnlyAfterTheWrite(t *testing.T) {
 	}
 	defer w.Close()
 	running(t, w.Run)
+	// Runs before running's cleanup (LIFO): a failure below must not leave
+	// the writer blocked, or stopping Run would wait for it for ever.
+	var freed sync.Once
+	free := func() { freed.Do(func() { close(release) }) }
+	t.Cleanup(free)
 	waitFor(t, time.Second, func() bool { return w.running.Load() })
 	h := w.Handler()
 	vote := func(req quorum.Request) chan *httptest.ResponseRecorder {
@@ -272,7 +277,7 @@ func TestGrantLeavesOnlyAfterTheWrite(t *testing.T) {
 		t.Fatalf("answered (%d, granted=%v) while its state write was still blocked", rec.Code, rep.Granted)
 	case <-time.After(150 * time.Millisecond):
 	}
-	close(release)
+	free()
 	select {
 	case rec := <-got:
 		var rep quorum.Reply
