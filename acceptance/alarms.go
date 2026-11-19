@@ -91,8 +91,9 @@ type AlarmBuilder func(*runtime.Runtime) (*alarm.Engine, error)
 type Option func(*runOptions)
 
 type runOptions struct {
-	alarms  AlarmBuilder
-	devices DeviceBuilder
+	alarms      AlarmBuilder
+	devices     DeviceBuilder
+	substitutes []SubstituteRule
 }
 
 // DeviceDriver is what a DeviceBuilder returns: the driver that answers

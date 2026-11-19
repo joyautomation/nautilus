@@ -149,6 +149,9 @@ type testRun struct {
 	// an acknowledgement in one test cannot leak into the next. Nil when
 	// the project declares no alarms.
 	alarms *alarm.Engine
+	// substitutes are the manifest's `substitutes:` rules, by address
+	// (WithSubstitutes).
+	substitutes []SubstituteRule
 }
 
 func runTest(s *Suite, t *Test, opts runtime.Options, cfg runOptions) (Result, error) {
@@ -194,6 +197,7 @@ func runTest(s *Suite, t *Test, opts runtime.Options, cfg runOptions) (Result, e
 		meta:  rt.Meta(),
 		preds: map[string]*predicate{},
 	}
+	r.substitutes = cfg.substitutes
 	// The alarm engine registers itself on the runtime's post-scan hook,
 	// so it evaluates in lockstep with the scans the scheduler drives —
 	// which is what makes an on-delay walk exactly with `advance:`.
@@ -311,6 +315,9 @@ func (r *testRun) runStep(st *Step) (*Failure, error) {
 		return nil, err
 	}
 	if err := r.forces(st); err != nil {
+		return nil, err
+	}
+	if err := r.substitute(st); err != nil {
 		return nil, err
 	}
 	if err := r.plant(st.Plant); err != nil {

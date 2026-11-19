@@ -103,6 +103,16 @@ type Step struct {
 	Force   map[string]any `yaml:"force"`
 	Unforce *UnforceList   `yaml:"unforce"`
 
+	// Substitute starts a substitute value (#707) on a tag the manifest's
+	// `substitutes:` names, as a person with the right would through the
+	// API; Restore ends them (a list of tags, or `all`); AckSubstitutes
+	// acknowledges the ones that wait for it. Their time is the test's
+	// virtual time, so an expiry is a step that spends it. See
+	// substitutes.go.
+	Substitute     *SubstituteStep `yaml:"substitute"`
+	Restore        *UnforceList    `yaml:"restore"`
+	AckSubstitutes *UnforceList    `yaml:"ack-substitutes"`
+
 	// Plant writes the virtual devices' plant tags (<Device>_<Point>, a
 	// simulator hook, the process model's) before the step's time is
 	// spent: how a sequence test makes the process do something the model

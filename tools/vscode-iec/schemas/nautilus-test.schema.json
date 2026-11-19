@@ -258,6 +258,15 @@
         },
         "unforce": {
           "$ref": "#/definitions/unforce"
+        },
+        "substitute": {
+          "$ref": "#/definitions/substitute"
+        },
+        "restore": {
+          "$ref": "#/definitions/restore"
+        },
+        "ack-substitutes": {
+          "$ref": "#/definitions/ack-substitutes"
         }
       },
       "dependencies": {
@@ -619,6 +628,69 @@
           "string"
         ]
       }
+    },
+    "substitute": {
+      "type": "object",
+      "required": [
+        "tag"
+      ],
+      "additionalProperties": false,
+      "description": "Start a substitute value on an input the manifest's `substitutes:` names, as a person with the right would: the rule's value (another only if the rule has `operator-value: true`), for the rule's `max` unless `for:` says less. The substitute runs on the test's virtual time, so an expiry is a step that advances past it.",
+      "properties": {
+        "tag": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The substitutable tag, or a member path the rule names."
+        },
+        "value": {
+          "type": [
+            "number",
+            "boolean",
+            "string"
+          ],
+          "description": "The value to run on; needs `operator-value: true` on the rule unless it is the rule's own."
+        },
+        "for": {
+          "type": "string",
+          "description": "How long, at most the rule's `max` (default: the max)."
+        },
+        "by": {
+          "type": "string",
+          "description": "Who starts it (default test)."
+        }
+      }
+    },
+    "restore": {
+      "description": "End substitutes: a list of substituted tags, or `all`. A restored tag returns at once to what the field last delivered.",
+      "oneOf": [
+        {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        },
+        {
+          "const": "all"
+        }
+      ]
+    },
+    "ack-substitutes": {
+      "description": "Acknowledge the substitutes that wait for it (`ack-on-start: true`): a list of tags, or `all`. Until then __SubstitutesUnacked is true.",
+      "oneOf": [
+        {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "minItems": 1
+        },
+        {
+          "const": "all"
+        }
+      ]
     },
     "unforce": {
       "description": "Release forces: a list of forced names, or `all`. A released tag returns at once to what its driver or its logic last wrote.",

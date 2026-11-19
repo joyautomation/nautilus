@@ -469,3 +469,32 @@ func (r *Runtime) wallNow() time.Time {
 	}
 	return time.Now()
 }
+
+// CheckSubstituteValue reports whether v is a value addr (a tag, or a
+// member path of one) could be substituted with, checked exactly as a
+// write to it would be, without starting anything. It is what a
+// manifest's `substitutes:` rule is held to by `naut check`. An address
+// whose type the runtime does not know (an undeclared tag) is not
+// checked.
+func (r *Runtime) CheckSubstituteValue(addr string, v any) error {
+	root, path := ir.SplitAddress(addr)
+	if _, _, whole := r.tags.lookupName(addr); whole {
+		root, path = addr, nil
+	}
+	rt := r.tags.TypeOf(root)
+	if rt == nil {
+		return nil
+	}
+	nv, err := ir.SetFieldTypedStrict(ir.Zero(rt), rt, path, v, "tag "+root)
+	if err != nil {
+		return err
+	}
+	sv, _, err := ir.FieldAt(nv, rt, path, root)
+	if err != nil {
+		return err
+	}
+	if sv.Kind == ir.TypeFB {
+		return fmt.Errorf("%s is a function-block instance: it has no value to substitute", addr)
+	}
+	return nil
+}
