@@ -37,6 +37,7 @@ func (f *fakeParams) hook() *ParamHook {
 			return ParamList{Port: "LEVEL1", Master: "M", Params: []ParamInfo{
 				{ID: "V_Setpoint", Index: 64, Ref: "64", Type: "UIntegerT", Access: "rw", Octets: 2, Range: []string{"0..1000"}, Default: "100", Carried: true},
 				{ID: "V_SerialNumber", Index: 21, Ref: "21", Type: "StringT", Access: "ro", Octets: 16, Carried: true},
+				{ID: "V_OutputMode", Index: 66, Ref: "66", Type: "UIntegerT", Access: "rw", Octets: 1, Values: []ParamValue{{Value: "0", Name: "Off"}, {Value: "1", Name: "Auto"}}, Carried: true},
 			}}, true
 		},
 		Read: func(_ context.Context, port, ref string) (ParamAnswer, error) {
@@ -92,7 +93,7 @@ func TestParamRoutes(t *testing.T) {
 	f := newFakeParams()
 	s := paramServer(t, f, Options{})
 	// The listing and a read.
-	if rec := call(t, s, "GET", "/api/iolink/LEVEL1/params", ""); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"V_Setpoint"`) || !strings.Contains(rec.Body.String(), `"0..1000"`) {
+	if rec := call(t, s, "GET", "/api/iolink/LEVEL1/params", ""); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"V_Setpoint"`) || !strings.Contains(rec.Body.String(), `"0..1000"`) || !strings.Contains(rec.Body.String(), `{"value":"1","name":"Auto"}`) {
 		t.Errorf("list: %d %s", rec.Code, rec.Body)
 	}
 	if rec := call(t, s, "GET", "/api/iolink/NOPE/params", ""); rec.Code != 404 {
@@ -235,7 +236,7 @@ func TestParamWriteOutcomeUncertain(t *testing.T) {
 	f.values["swap"] = int64(0)
 	s := paramServer(t, f, Options{})
 	rec := call(t, s, "PUT", "/api/iolink/LEVEL1/params/swap", `{"value": 1}`)
-	if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "changed during the write") {
+	if rec.Code != http.StatusBadGateway || !strings.Contains(rec.Body.String(), "changed during the write") || !strings.Contains(rec.Body.String(), `"outcome":"unknown"`) {
 		t.Errorf("an uncertain write: %d %s", rec.Code, rec.Body)
 	}
 	es := s.audit.ring.Recent()

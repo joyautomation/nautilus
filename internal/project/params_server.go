@@ -55,8 +55,12 @@ func NewParamHook(live func() []nio.NamedDriver) *server.ParamHook {
 			params, master, _ := d.ISDUParams(port)
 			out := server.ParamList{Port: port, Master: master}
 			for _, q := range params {
-				out.Params = append(out.Params, server.ParamInfo{ID: q.ID, Name: q.Name, Index: q.Index, Ref: q.Ref, Type: q.Type,
-					Access: q.Access, Octets: q.Octets, Range: q.Range, Default: q.Default, Carried: q.Carried})
+				info := server.ParamInfo{ID: q.ID, Name: q.Name, Index: q.Index, Ref: q.Ref, Type: q.Type,
+					Access: q.Access, Octets: q.Octets, Range: q.Range, Default: q.Default, Carried: q.Carried}
+				for _, nv := range q.Values {
+					info.Values = append(info.Values, server.ParamValue{Value: nv.Value, Name: nv.Name})
+				}
+				out.Params = append(out.Params, info)
 			}
 			return out, true
 		},

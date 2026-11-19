@@ -329,10 +329,15 @@ type ISDUParamInfo struct {
 	Octets  int
 	Range   []string
 	Default string
+	// Values are the IODD's named values (an enumeration): "1" is "Auto".
+	Values []ISDUNamedValue
 	// Carried says the master can carry it in one call (Octets within its
 	// limit) and the codec can decode it.
 	Carried bool
 }
+
+// ISDUNamedValue is one of a parameter's named values.
+type ISDUNamedValue struct{ Value, Name string }
 
 // ISDUParams lists a port device's parameters from its IODD, with no
 // traffic to the device; ok is false for a port device this master does
@@ -371,6 +376,9 @@ func (w *OPCUADriver) ISDUParams(port string) (params []ISDUParamInfo, master st
 			}
 			for _, r := range t.Ranges {
 				info.Range = append(info.Range, r.Lower+".."+r.Upper)
+			}
+			for _, nv := range t.Values {
+				info.Values = append(info.Values, ISDUNamedValue{Value: nv.Value, Name: nv.Name})
 			}
 			info.Carried = p.isdu != nil && info.Octets <= limit
 			params = append(params, info)

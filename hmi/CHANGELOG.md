@@ -4,6 +4,17 @@
 
 ### Added
 
+- **`PortParameters`, `PortParamClient`** (#705): the parameters of the device
+  on an IO-Link port, over `/api/iolink/{port}/params`: what the device's
+  IODD says each is (access, allowed range, named values), what it holds,
+  and a confirmed write. A read says which device answered (the identity is
+  shown, and a value from a device that is not the one expected is marked);
+  a refused write changed nothing and says why; a write whose outcome is
+  uncertain (the device on the port changed during it, a 5xx, a lost
+  connection) is neither a failure nor a success: the panel says the outcome
+  is not known and reads the parameter back. Needs a mounted
+  `<ConfirmDialog/>`.
+
 - **`SubstitutesPanel`, `SubstituteClient`** (#707): list, start, stop and
   acknowledge substitute values over `/api/substitutes`. The client sends a
   fresh `requestId` per action and reuses it on retry, treats a 503 "outcome

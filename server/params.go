@@ -80,8 +80,16 @@ type ParamInfo struct {
 	Octets  int      `json:"octets,omitempty"`
 	Range   []string `json:"range,omitempty"`
 	Default string   `json:"default,omitempty"`
+	// Values are its named values (an enumeration).
+	Values []ParamValue `json:"values,omitempty"`
 	// Carried says the port's master can carry it in one call.
 	Carried bool `json:"carried"`
+}
+
+// ParamValue is one named value of a parameter: "1" is "Auto".
+type ParamValue struct {
+	Value string `json:"value"`
+	Name  string `json:"name"`
 }
 
 // ParamAnswer is a parameter as read or as written, with the port's
@@ -215,13 +223,15 @@ func (s *Server) handleParamWrite(w http.ResponseWriter, r *http.Request) {
 		if code == http.StatusTooManyRequests {
 			w.Header().Set("Retry-After", "1")
 		}
+		body := map[string]string{"error": err.Error()}
 		switch {
 		case errors.Is(err, ErrParamUncertain):
 			w.Header().Set(outcomeHeader, "unknown")
+			body["outcome"] = "unknown" // a client must not call it a failure or a success
 		case code != http.StatusBadGateway:
 			w.Header().Set(outcomeHeader, "refused")
 		}
-		writeJSON(w, code, map[string]string{"error": err.Error()})
+		writeJSON(w, code, body)
 		return
 	}
 	writeJSON(w, http.StatusOK, ans)

@@ -117,8 +117,15 @@ export { AlarmClient, createAlarmClient, shouldRefetch, PRIORITY_ORDER, PRIORITY
 // Substitute values (#707) — GET/POST/DELETE /api/substitutes. The client owns
 // the contract (requestId per action, unknown outcome, 409, kept:false).
 export { default as SubstitutesPanel } from './components/SubstitutesPanel.svelte';
+export { default as PortParameters } from './components/PortParameters.svelte';
 export { SubstituteClient, SubstituteSession, failureText, keptText, formatRemaining, unacked, validateStart } from './substitutes.js';
 export type { SubstituteEntry, SubstituteRule, SubstituteList, SubstituteLapse, SubstituteResult, PendingStart, SubstituteFailure } from './substitutes.js';
+
+// IO-Link device parameters (#705) — /api/iolink/{port}/params. The client owns
+// the contract (a refused write changed nothing; an uncertain one is neither a
+// failure nor a success) and PortParameters only renders its answers.
+export { PortParamClient, canRead, canWrite, valueLabel, identityTone, identityText, parseInput, failureText as paramFailureText } from './iolink.js';
+export type { ParamInfo, ParamList, ParamAnswer, ParamResult, ParamFailure, ParamValueName } from './iolink.js';
 export { default as AlarmSign } from './components/AlarmSign.svelte';
 export type {
 	Priority,

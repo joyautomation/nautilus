@@ -298,6 +298,9 @@ func TestISDUParamsListing(t *testing.T) {
 	if vn := by["16"]; vn.Octets != 64 || vn.Carried {
 		t.Errorf("vendor name %+v: 64 octets do not fit the ifm's 32", vn)
 	}
+	if om := by["66"]; om.ID != "V_OutputMode" || len(om.Values) != 2 || om.Values[0] != (ISDUNamedValue{Value: "0", Name: "Off"}) || om.Values[1] != (ISDUNamedValue{Value: "1", Name: "Auto"}) || om.Octets != 1 {
+		t.Errorf("output mode %+v: want its two named values", om)
+	}
 	if _, whole := by["65"]; whole {
 		t.Error("a record is listed whole")
 	}
