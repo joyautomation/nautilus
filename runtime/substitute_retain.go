@@ -29,10 +29,13 @@ import (
 // does every entry when the clock went backwards across the restart: now
 // before an entry's start, or before lastSeen. lastSeen is written only
 // while a substitute is active, at most once per lastSeenStep, so it costs
-// one store write per 30 s while one runs and none otherwise; a backwards
-// step smaller than that across a restart is not seen, which is within
-// SubstituteSkew. From then on the remainder is timed on the monotonic
-// clock, as any entry is.
+// one store write per 30 s while one runs and none otherwise. A step back
+// during the downtime by less than the downtime (plus that 30 s) still
+// reads later than last-seen, so it is not seen, and the entry runs up to
+// that much longer: inherent, since nothing measures the downtime. A step
+// while the entry runs does not stretch it: each save re-anchors the end
+// from the monotonic remainder (retain.SubstituteRetain.DeadlineMs). From
+// then on the remainder is timed on the monotonic clock, as any entry is.
 //
 // # A takeover from a shared store (a coordinator)
 //
@@ -63,16 +66,23 @@ func (r *Runtime) retainedSubstitutes() *retain.SubstituteState {
 	r.subMu.Lock()
 	defer r.subMu.Unlock()
 	t := r.tags
+	wall, now := r.wallNow(), r.mono()
 	t.mu.RLock()
 	var es []retain.SubstituteRetain
 	for _, ss := range t.subs {
 		for i := range ss.entries {
 			e := &ss.entries[i]
-			es = append(es, retain.SubstituteRetain{
+			re := retain.SubstituteRetain{
 				ID: e.ID, Name: e.Name, Value: e.Value, By: e.By,
 				StartMs: e.StartMs, UntilMs: e.UntilMs, GrantedMs: e.GrantedMs,
 				AckOnStart: e.AckOnStart, Acked: e.Acked,
-			})
+			}
+			if e.timed {
+				// The end as this process times it, on today's wall clock:
+				// stable from save to save unless the wall clock steps.
+				re.DeadlineMs = wall.Add(e.deadline - now).Truncate(time.Second).UnixMilli()
+			}
+			es = append(es, re)
 		}
 	}
 	t.mu.RUnlock()
@@ -172,11 +182,20 @@ func (r *Runtime) installLocked(entries []retain.SubstituteRetain, now time.Dura
 	refused := false
 	for _, re := range entries {
 		if held, ok := t.entryLocked(re.ID); ok && sameEntry(held, re) {
-			continue // this process holds it already, timed
+			// This process holds it already, timed. An acknowledgement on
+			// either copy counts: the leader since then may have taken one.
+			if re.Acked && !held.Acked {
+				t.markAckedLocked(re.ID)
+			}
+			continue
+		}
+		until := re.UntilMs
+		if re.DeadlineMs > 0 && re.DeadlineMs < until {
+			until = re.DeadlineMs // re-anchored at the save: see retain.SubstituteRetain
 		}
 		s := Substitution{
 			ID: re.ID, Name: re.Name, Value: re.Value, By: re.By,
-			StartMs: re.StartMs, UntilMs: re.UntilMs, GrantedMs: re.GrantedMs,
+			StartMs: re.StartMs, UntilMs: until, GrantedMs: re.GrantedMs,
 			AckOnStart: re.AckOnStart, Acked: re.Acked,
 		}
 		if t.addressActiveLocked(re.Name) || t.hasIDLocked(re.ID) {
@@ -311,6 +330,19 @@ func (t *Tags) entryLocked(id uint64) (Substitution, bool) {
 		}
 	}
 	return Substitution{}, false
+}
+
+// markAckedLocked records an acknowledgement of the entry id. Caller holds
+// t.mu and calls syncSubLocked after.
+func (t *Tags) markAckedLocked(id uint64) {
+	for _, ss := range t.subs {
+		for i := range ss.entries {
+			if ss.entries[i].ID == id {
+				ss.entries[i].Acked = true
+				t.subRev++
+			}
+		}
+	}
 }
 
 // hasIDLocked reports whether an entry with this ID is active. Caller

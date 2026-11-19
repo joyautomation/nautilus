@@ -77,13 +77,19 @@ type SubstituteRetain struct {
 	// Name is the address: a tag, or a member path of one.
 	Name string `json:"name"`
 	// Value is the substitute in plain JSON form, as Tags holds values.
-	Value      any    `json:"value"`
-	By         string `json:"by,omitempty"`
-	StartMs    int64  `json:"startMs"`
-	UntilMs    int64  `json:"untilMs"`
-	GrantedMs  int64  `json:"grantedMs"`
-	AckOnStart bool   `json:"ackOnStart,omitempty"`
-	Acked      bool   `json:"acked,omitempty"`
+	Value     any    `json:"value"`
+	By        string `json:"by,omitempty"`
+	StartMs   int64  `json:"startMs"`
+	UntilMs   int64  `json:"untilMs"`
+	GrantedMs int64  `json:"grantedMs"`
+	// DeadlineMs is when the entry ends, re-anchored on the wall clock at
+	// the save from the running controller's monotonic remainder (rounded
+	// down to a second). A load takes the earlier of it and UntilMs, so a
+	// wall clock stepped back while the entry ran does not stretch it
+	// after a restart. Zero when the saving controller was not timing it.
+	DeadlineMs int64 `json:"deadlineMs,omitempty"`
+	AckOnStart bool  `json:"ackOnStart,omitempty"`
+	Acked      bool  `json:"acked,omitempty"`
 }
 
 // AlarmRetain is one alarm's retained operator state. Every field is

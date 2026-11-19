@@ -586,8 +586,14 @@ requirements agreed on #707. They join the run in #707's oplog PR, which builds 
        `expired-while-down`. "Backwards" means the clock now reads earlier than the entry's
        start, or earlier than the last-seen wall time the retain store keeps.
      - Last-seen is written only while a substitute is active, rounded down to 30 s
-       (`SubstituteSkew`). A backwards step of under 30 s across a restart is therefore not
-       caught; that bound is the skew bound.
+       (`SubstituteSkew`).
+     - **The bound for a step during the downtime is the downtime plus 30 s**, and that is
+       inherent. A clock stepped back while the controller is down, by less than the
+       downtime, still reads later than last-seen, so the restart can't see the step. The
+       entry then runs up to that much longer.
+     - A step **while the entry runs** does not stretch it. Each save re-anchors the entry's
+       end on the wall clock from its monotonic remainder, and the restart takes the earlier
+       of that and `until`.
    - Steps: step the leader's clock ±1 h mid-substitute; it still ends at its granted time.
      Then step the standby's clock before a takeover. Set 1 h ahead, the remainder
      shrinks by 1 h: it ends early, at worst at once, with the usual expiry audit and

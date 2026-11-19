@@ -117,6 +117,18 @@ func (s *Server) refuseSubstitute(w http.ResponseWriter) bool {
 	return false
 }
 
+// refuseNotLeading answers 503 when this replica does not lead: a start,
+// stop or acknowledgement it took would be undone at its next takeover
+// (the shared store's set replaces its table). The request reaches a
+// standby only when no leader is known to forward it to.
+func (s *Server) refuseNotLeading(w http.ResponseWriter) bool {
+	if s.rt.Leading() {
+		return false
+	}
+	http.Error(w, "no leader: this replica is standing by; retry once a leader is elected", http.StatusServiceUnavailable)
+	return true
+}
+
 func (s *Server) handleSubstituteStart(w http.ResponseWriter, r *http.Request) {
 	var req substituteRequest
 	derr := json.NewDecoder(r.Body).Decode(&req)
@@ -129,6 +141,9 @@ func (s *Server) handleSubstituteStart(w http.ResponseWriter, r *http.Request) {
 	}
 	if derr != nil || req.Name == "" {
 		http.Error(w, `expected {"name": ..., "value"?: ..., "seconds"?: ...}`, http.StatusBadRequest)
+		return
+	}
+	if s.refuseNotLeading(w) {
 		return
 	}
 	rule, ok := s.substituteRule(req.Name)
@@ -188,6 +203,9 @@ func (s *Server) handleSubstituteStop(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "the substitute's id is a number", http.StatusBadRequest)
 		return
 	}
+	if s.refuseNotLeading(w) {
+		return
+	}
 	e, ok := s.rt.Restore(id, s.principal(r))
 	if !ok {
 		http.Error(w, fmt.Sprintf("no substitute %d is active (it ended, expired, or a newer one replaced it)", id), http.StatusNotFound)
@@ -213,6 +231,9 @@ func (s *Server) handleSubstituteAck(w http.ResponseWriter, r *http.Request) {
 	}
 	if derr != nil || len(req.IDs) == 0 {
 		http.Error(w, `expected {"ids": [1, 2]}: an empty list acknowledges nothing`, http.StatusBadRequest)
+		return
+	}
+	if s.refuseNotLeading(w) {
 		return
 	}
 	acked := s.rt.AckSubstitutes(req.IDs, s.principal(r))

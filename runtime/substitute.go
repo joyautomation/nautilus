@@ -414,9 +414,14 @@ func (r *Runtime) Substitute(addr string, req SubstituteRequest) (Substitution, 
 
 // Restore ends the substitute entry with this ID on behalf of by, and
 // reports it; false when no such entry is active (it ended already,
-// expired, or a newer entry has replaced it). The address goes back to its
-// live value at once.
+// expired, or a newer entry has replaced it), or when this replica is not
+// leading: a stop a standby took would be undone at its next takeover,
+// when the store's (or the log's) set replaces its table. The address
+// goes back to its live value at once.
 func (r *Runtime) Restore(id uint64, by string) (Substitution, bool) {
+	if r.standby() {
+		return Substitution{}, false
+	}
 	r.subMu.Lock()
 	defer r.subMu.Unlock()
 	r.tags.mu.Lock()
@@ -443,6 +448,12 @@ func (r *Runtime) Substitutes() []Substitution {
 	}
 	return out
 }
+
+// Leading reports whether this replica takes operator intent on
+// substitutes: a start, stop or acknowledgement (always, without a
+// coordinator). A server answers 503 otherwise, rather than change a table
+// the next takeover would replace.
+func (r *Runtime) Leading() bool { return !r.standby() }
 
 // hasSubstituteID reports whether an entry with this ID is active.
 func (t *Tags) hasSubstituteID(id uint64) bool {

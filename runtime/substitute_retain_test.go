@@ -598,3 +598,72 @@ func TestLoadNeverHoldsTwoEntriesWithOneID(t *testing.T) {
 		t.Fatalf("%+v: want only the Level entry under ID 1", rt2.Substitutes())
 	}
 }
+
+// A wall clock stepped back WHILE the entry runs does not stretch it
+// across a restart: the save re-anchors the end from the monotonic
+// remainder, and the load takes the earlier of that and until. Started
+// 12:00 for 8 h; at a true 13:00 the clock steps back 2 h; saved at a
+// true 13:30; restarted at a true 14:30 (the clock reads 12:30). It must
+// end at a true 20:00: 5.5 h left, not until − now = 7.5 h.
+func TestRestartAfterAClockStepBackWhileRunning(t *testing.T) {
+	store, clk := &fakeStore{}, noon()
+	rt, _ := newRetainSubRig(t, nil, store, clk)
+	rt.LoadRetained()
+	rt.Scan()
+	subFor(t, rt, "Level", 95, 8*time.Hour, false)
+	clk.advance(time.Hour)
+	clk.step(-2 * time.Hour)
+	clk.advance(30 * time.Minute)
+	save(t, rt)
+	clk.advance(time.Hour)
+	rt2, _ := newRetainSubRig(t, nil, store, clk)
+	rt2.LoadRetained()
+	rt2.Scan()
+	if l := rt2.Substitutes(); len(l) != 1 || l[0].RemainingMs != (5*time.Hour+30*time.Minute).Milliseconds() {
+		t.Fatalf("%+v; want 5.5 h left (the step back while running must not stretch it)", l)
+	}
+}
+
+// At a takeover from the shared store, an acknowledgement on either copy
+// counts: the leader since then acknowledged this replica's own entry.
+func TestTakeoverMergesAnAcknowledgement(t *testing.T) {
+	store, clk := &fakeStore{}, noon()
+	coord := &flag{lead: true}
+	rt, _ := newRetainSubRig(t, coord, store, clk)
+	rt.Scan()
+	subFor(t, rt, "Level", 95, time.Hour, true)
+	save(t, rt)
+	coord.lead = false
+	rt.Scan()
+	store.mu.Lock()
+	store.state.Substitutes.Entries[0].Acked = true // the other leader's ack
+	store.mu.Unlock()
+	coord.lead = true
+	rt.Scan()
+	if l := rt.Substitutes(); len(l) != 1 || !l[0].Acked || rt.Tags().Bool(SubstitutesUnackedTag) || !rt.Tags().Bool("Permit") {
+		t.Fatalf("%+v, unacked %v: want the acknowledgement kept", l, rt.Tags().Bool(SubstitutesUnackedTag))
+	}
+}
+
+// A standby neither stops nor acknowledges a substitute: its next
+// takeover would undo either.
+func TestStandbyRefusesStopAndAck(t *testing.T) {
+	coord := &flag{lead: true}
+	rt, _, _ := newExpiryRig(t, coord)
+	rt.Scan()
+	s := subFor(t, rt, "Level", 95, time.Hour, true)
+	coord.lead = false
+	rt.Scan()
+	if rt.Leading() {
+		t.Fatal("Leading() on a standby")
+	}
+	if _, ok := rt.Restore(s.ID, "op"); ok {
+		t.Fatal("a standby ended a substitute")
+	}
+	if a := rt.AckSubstitutes([]uint64{s.ID}, "op"); len(a) != 0 {
+		t.Fatal("a standby acknowledged a substitute")
+	}
+	if l := rt.Substitutes(); len(l) != 1 || l[0].Acked {
+		t.Fatalf("%+v; want the entry untouched", l)
+	}
+}

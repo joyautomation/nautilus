@@ -2,6 +2,7 @@ package server
 
 import (
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -153,5 +154,35 @@ func TestSupersededStopIsJournalled(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].User != "system" || got[0].Detail["reason"] != runtime.SubstituteReasonSuperseded || got[0].Target != "Level" {
 		t.Fatalf("substitute.stop entries %+v; want exactly the superseded one", got)
+	}
+}
+
+type standbyCoord struct{}
+
+func (standbyCoord) IsLeader() bool { return false }
+
+// On a replica that is not leading (a request reaches one only when no
+// leader is known to forward it to), a start, stop or acknowledgement is
+// refused with 503: its next takeover would undo it.
+func TestSubstituteRoutesRefusedWhenNotLeading(t *testing.T) {
+	clk := &subClock{t: time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)}
+	rt, err := runtime.New(runtime.Options{
+		Program: testProgram, Driver: nio.NewMemory(), Clock: clk, Coordinator: standbyCoord{},
+		Inputs: []string{"Level", "Flow"}, Outputs: []string{"Out"},
+		Seed:          nio.Values{"Level": 40.0, "Flow": 3.0, "SP": 65.0, "Out": 0.0},
+		Substitutable: []string{"Level", "Flow"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := New(rt, Options{Substitutes: subRules})
+	for _, c := range []struct{ method, path, body string }{
+		{"POST", "/api/substitutes", `{"name":"Flow","value":7}`},
+		{"DELETE", "/api/substitutes/1", ""},
+		{"POST", "/api/substitutes/ack", `{"ids":[1]}`},
+	} {
+		if r := call(t, s, c.method, c.path, c.body); r.Code != 503 || !strings.Contains(r.Body.String(), "no leader") {
+			t.Errorf("%s %s on a standby = %d %s; want 503 no leader", c.method, c.path, r.Code, r.Body)
+		}
 	}
 }

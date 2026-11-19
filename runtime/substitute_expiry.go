@@ -412,6 +412,9 @@ func (r *Runtime) retimeSubstitutes() {
 // is passed over, so acknowledging a stale list never acknowledges a
 // newer substitute.
 func (r *Runtime) AckSubstitutes(ids []uint64, by string) []Substitution {
+	if r.standby() {
+		return nil // see Restore: a standby's ack would be undone at its takeover
+	}
 	r.subMu.Lock()
 	defer r.subMu.Unlock()
 	want := make(map[uint64]bool, len(ids))
