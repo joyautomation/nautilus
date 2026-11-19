@@ -650,7 +650,10 @@ func isDefinition(m sparkplug.Metric) bool {
 // Caller holds d.mu.
 func (d *Driver) applyBindingLocked(ns *nodeState, b Binding, m sparkplug.Metric) {
 	if m.IsNull {
-		return // "no value" — keep whatever we had
+		// "No value": keep the last one, but it is not a reading any
+		// more, so Quality says Bad until a real value arrives (#941).
+		d.markNullLocked(b.Name, "", true)
+		return
 	}
 	if d.values == nil {
 		d.values = nio.Values{}
@@ -681,7 +684,52 @@ func (d *Driver) applyBindingLocked(ns *nodeState, b Binding, m sparkplug.Metric
 			"tag", b.Name, "type", b.Type, "member", u)
 	}
 	d.values[b.Name] = plainOrIR(v)
+	d.markNullLocked(b.Name, "", false)
+	if t, ok := m.Value.(*sparkplug.Template); ok && t != nil {
+		// A member that arrived null keeps its last value (a partial
+		// update merges onto the previous struct), and is no reading
+		// either; one omitted keeps its verdict (#941).
+		d.markMemberNullsLocked(b.Name, "", t)
+	}
 	d.adoptMembersLocked(b, v)
+}
+
+// markNullLocked records whether path ("" for the whole metric) of a
+// binding last arrived null. Caller holds d.mu.
+func (d *Driver) markNullLocked(name, path string, null bool) {
+	if null {
+		if d.nulled == nil {
+			d.nulled = map[string]map[string]bool{}
+		}
+		if d.nulled[name] == nil {
+			d.nulled[name] = map[string]bool{}
+		}
+		d.nulled[name][path] = true
+		return
+	}
+	if n := d.nulled[name]; n != nil {
+		delete(n, path)
+		if len(n) == 0 {
+			delete(d.nulled, name)
+		}
+	}
+}
+
+// markMemberNullsLocked walks a template instance's members (nested ones
+// too) and records each one present as null or not. Caller holds d.mu.
+func (d *Driver) markMemberNullsLocked(name, prefix string, t *sparkplug.Template) {
+	for _, mm := range t.Metrics {
+		if mm.Name == "" {
+			continue
+		}
+		path := prefix + mm.Name
+		if nested, ok := mm.Value.(*sparkplug.Template); ok && nested != nil && !mm.IsNull {
+			d.markNullLocked(name, path, false)
+			d.markMemberNullsLocked(name, path+".", nested)
+			continue
+		}
+		d.markNullLocked(name, path, mm.IsNull)
+	}
 }
 
 // adoptMembersLocked queues the live value of every member OUTPUT bound to
