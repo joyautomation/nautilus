@@ -14,13 +14,14 @@ type pair struct {
 	v     map[NodeID]*Voter
 	c     map[NodeID]*Candidate
 	down  map[NodeID]bool // a node that is down sends and answers nothing
+	deaf  map[NodeID]bool // a node that can send but hears nothing (F9)
 	nonce uint64
 }
 
 var ids = []NodeID{"A", "B"}
 
 func newPair(t *testing.T) *pair {
-	p := &pair{t: t, v: map[NodeID]*Voter{}, c: map[NodeID]*Candidate{}, down: map[NodeID]bool{}, nonce: 0x100}
+	p := &pair{t: t, v: map[NodeID]*Voter{}, c: map[NodeID]*Candidate{}, down: map[NodeID]bool{}, deaf: map[NodeID]bool{}, nonce: 0x100}
 	w, _ := NewWitness("W", lease, VoterState{Incarnation: 42}, 0, func() uint64 { return 42 })
 	p.v["W"] = w
 	return p
@@ -68,12 +69,15 @@ func (p *pair) step(now Instant) {
 			}
 		}
 		for _, r := range order {
+			if p.deaf[vid] && r.From != vid {
+				continue
+			}
 			ps, reps := p.v[vid].Handle(now, *r)
 			if ps != nil {
 				reps = append(reps, p.v[vid].Persisted(ps.Seq, true)...)
 			}
 			for _, rep := range reps {
-				if c := p.c[rep.To]; c != nil && !p.down[rep.To] {
+				if c := p.c[rep.To]; c != nil && !p.down[rep.To] && (!p.deaf[rep.To] || rep.From == rep.To) {
 					c.OnReply(now, rep)
 				}
 			}
@@ -311,5 +315,39 @@ func TestCandidateRetermsOnRefusedRenewal(t *testing.T) {
 	c.OnReply(at(2510*time.Millisecond), refused("B", r6, 1, 0))
 	if r7 := c.Tick(at(3000*time.Millisecond), "", 0, true); r7.Term != 2 {
 		t.Fatalf("a refusal below our term re-termed the leader to %d", r7.Term)
+	}
+}
+
+// F9: a leader that can send but not hear fences at its lease end and
+// backs off long enough for the standby to win first. Its renewals keep
+// the standby waiting until one lease after the last of them; had it come
+// back after one lease, its campaign would win the standby's voter (it
+// still hears A) and hold the takeover off another lease. With a 2 s
+// lease, B must lead within 4.6 s of the cut at every phase of the
+// renewal cycle (A's lease ≤ 2 s, B's wait one lease + ρ after A's last
+// renewal, a look ≤ 0.5 s, and the vote).
+func TestOneWayLeaderLosesTheRace(t *testing.T) {
+	for k := range 8 {
+		cut := at(4*time.Second) + Instant(k)*Instant(lease/8)
+		cut -= cut % step
+		p := newPair(t)
+		p.start("A", 0)
+		p.start("B", at(300*time.Millisecond))
+		var took Instant
+		for now := Instant(0); now < at(20*time.Second); now += step {
+			if now == cut {
+				if p.leader(now) != "A" {
+					t.Fatalf("phase %d: A not leading at the cut", k)
+				}
+				p.deaf["A"] = true
+			}
+			p.step(now)
+			if took == 0 && now >= cut && p.leader(now) == "B" {
+				took = now
+			}
+		}
+		if took == 0 || took-cut > at(4600*time.Millisecond) {
+			t.Errorf("phase %d: B led %v after the cut, want ≤ 4.6 s", k, time.Duration(took-cut))
+		}
 	}
 }

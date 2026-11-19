@@ -165,9 +165,13 @@ redundancy:
 - **One-way partitions and the back-off.** A leader that can send but not receive keeps the
   voters' promises alive with renewals it never hears answered, so nobody else can be elected.
   A leader whose lease has lapsed without a confirmed majority therefore **sends nothing to the
-  voters for one full lease** before it campaigns again. A campaign that no majority even
-  answered within a lease backs off the same way. The voters' promises run out and a
-  reachable controller can win. The back-off silences only the candidate: the same node's
+  voters for two leases** after its lease ended before it campaigns again. A campaign that no
+  majority even answered within a lease backs off for two leases from its send. The voters'
+  promises run out and a reachable controller wins first. Two, not one: the standby campaigns
+  up to `lease + ρ·lease + lease/4` after the last renewal it saw. A leader back after one
+  lease would campaign at about the same moment, win the standby's voter with a campaign it
+  can't hear answered, and hold the takeover off for another lease (the simulator measured
+  a takeover 6.3–6.55 s after the cut with one lease, 3.8–4.55 s with two, at a 2 s lease). The back-off silences only the candidate: the same node's
   voter keeps answering.
 - **The witness incarnation.** The witness draws a random incarnation id when it first starts
   and keeps it in its state file. A and B record, in their own fsynced state, the incarnation

@@ -264,15 +264,18 @@ func (c *Candidate) OnReply(now Instant, r Reply) {
 // expire ends a lapsed lease, and drops rounds no reply can still matter
 // to. A lapsed lease, or a campaign not even HEARD by a majority within a
 // lease (this controller can send but not hear, or reaches nobody), backs
-// the candidate off: it sends nothing for one full lease after the lease
-// or the round ran out, so the promises it may be keeping alive run out
-// and a reachable controller can win (design §3.1, one-way partitions).
+// the candidate off: it sends nothing for two leases after the lease ended,
+// or after the round was sent, so the promises it may be keeping alive run
+// out and a reachable controller wins first (design §3.1, one-way
+// partitions). Two, not one: the standby campaigns up to lease + ρ·lease +
+// lease/4 after the last renewal it saw, and a candidate back sooner would
+// win its voter again with a campaign it can't hear answered.
 // The back-off silences only the candidate; this node's voter keeps
 // answering.
 func (c *Candidate) expire(now Instant) {
 	if c.leading && now >= c.leaseEnd {
 		c.leading = false
-		c.backoffUntil = c.leaseEnd.Add(c.cfg.Lease)
+		c.backoffUntil = c.leaseEnd.Add(2 * c.cfg.Lease)
 	}
 	keep := c.rounds[:0]
 	for _, rd := range c.rounds {
