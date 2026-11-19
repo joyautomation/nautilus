@@ -81,6 +81,31 @@ type substitutesResponse struct {
 	// acknowledgement that could not be saved still took effect, and
 	// __Substitute_Fault says so until the next save.
 	Kept *bool `json:"kept,omitempty"`
+	// Warning says what an answer with kept false means for the plant.
+	Warning string `json:"warning,omitempty"`
+}
+
+// substituteStartRefusal is the answer to a refused start: 503 when it
+// could not be saved (nothing runs; retry), 409 when a newer change to
+// the address won while it was being saved (re-read and decide again),
+// 400 for a start that was never valid.
+func substituteStartRefusal(err error) (int, string) {
+	switch {
+	case errors.Is(err, runtime.ErrSubstituteNotSaved):
+		return http.StatusServiceUnavailable, err.Error()
+	case errors.Is(err, runtime.ErrSubstituteSuperseded):
+		return http.StatusConflict, err.Error() + ": re-read GET /api/substitutes and decide again"
+	}
+	return http.StatusBadRequest, err.Error()
+}
+
+// notKept is the warning for a stop or acknowledgement that took effect
+// here but was not saved.
+func notKept(serr error) string {
+	if errors.Is(serr, runtime.ErrNotLeading) {
+		return "this controller lost the lease during the save: the change took effect here, but the substitute may still be active (or unacknowledged) on the next leader"
+	}
+	return "the change took effect but could not be saved (__Substitute_Fault is up): a restart before the next save may bring the old state back"
 }
 
 func (s *Server) substituteRule(name string) (SubstituteRule, bool) {
@@ -192,12 +217,9 @@ func (s *Server) handleSubstituteStart(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), substituteSaveWait)
 	defer cancel()
 	e, err := s.rt.SubstituteSaved(ctx, rule.Tag, runtime.SubstituteRequest{Value: value, For: d, By: s.principal(r), AckOnStart: rule.AckOnStart})
-	if errors.Is(err, runtime.ErrSubstituteNotSaved) {
-		http.Error(w, err.Error(), http.StatusServiceUnavailable)
-		return
-	}
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		code, msg := substituteStartRefusal(err)
+		http.Error(w, msg, code)
 		return
 	}
 	logAction(r, "substitute: started", "tag", e.Name, "id", e.ID, "for", d)
@@ -236,6 +258,9 @@ func (s *Server) handleSubstituteStop(w http.ResponseWriter, r *http.Request) {
 	logAction(r, "substitute: ended", "tag", e.Name, "id", e.ID, "kept", kept, "saveError", serr)
 	resp := s.substitutesResponse()
 	resp.Kept = &kept
+	if !kept {
+		resp.Warning = notKept(serr)
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -270,6 +295,9 @@ func (s *Server) handleSubstituteAck(w http.ResponseWriter, r *http.Request) {
 	logAction(r, "substitute: acknowledged", "count", len(acked), "kept", kept, "saveError", serr)
 	resp := s.substitutesResponse()
 	resp.Kept = &kept
+	if !kept {
+		resp.Warning = notKept(serr)
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 

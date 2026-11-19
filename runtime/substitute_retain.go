@@ -92,7 +92,8 @@ func (r *Runtime) retainedSubstitutes() *retain.SubstituteState {
 		}
 	}
 	t.mu.RUnlock()
-	es = append(es, r.subPending...) // still waiting for their input: kept
+	es = append(es, r.subPending...)        // still waiting for their input: kept
+	es = r.pendingInSnapshot(es, wall, now) // starts being saved (substitute_durable.go)
 	if len(es) == 0 && r.subSeq == 0 {
 		return nil
 	}

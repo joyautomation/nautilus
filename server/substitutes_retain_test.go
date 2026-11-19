@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -235,5 +236,25 @@ func TestSubstituteRoutesSaveBeforeAnswering(t *testing.T) {
 	r := call(t, s, "DELETE", "/api/substitutes/"+subID(id), "")
 	if r.Code != 200 || !strings.Contains(r.Body.String(), `"kept":false`) || len(rt.Substitutes()) != 0 {
 		t.Fatalf("a stop the store refused = %d %s; want 200, kept false, and the stop live", r.Code, r.Body)
+	}
+}
+
+// A refused start's answer says what to do: 503 (not saved: nothing runs,
+// retry), 409 (a newer change won: re-read), 400 (never valid).
+func TestSubstituteStartRefusal(t *testing.T) {
+	for _, c := range []struct {
+		err  error
+		code int
+	}{
+		{fmt.Errorf("x: %w", runtime.ErrSubstituteNotSaved), 503},
+		{fmt.Errorf("x: %w", runtime.ErrSubstituteSuperseded), 409},
+		{errors.New("not substitutable"), 400},
+	} {
+		if code, _ := substituteStartRefusal(c.err); code != c.code {
+			t.Errorf("%v: %d, want %d", c.err, code, c.code)
+		}
+	}
+	if code, msg := substituteStartRefusal(runtime.ErrSubstituteSuperseded); code != 409 || !strings.Contains(msg, "re-read GET /api/substitutes") {
+		t.Errorf("superseded: %d %q", code, msg)
 	}
 }

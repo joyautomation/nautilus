@@ -249,6 +249,9 @@ type Runtime struct {
 	subPendingMode     remainderMode
 	subPendingLastSeen time.Time
 	subPendingN        atomic.Int32
+	// subStarts are API starts reserved and being saved, not yet applied
+	// (substitute_durable.go); guarded by subMu.
+	subStarts []*pendingStart
 	// loopSleep is Options.LoopSleep: nil sleeps on the wall clock.
 	loopSleep func(task string, ctx context.Context, until time.Time) bool
 
