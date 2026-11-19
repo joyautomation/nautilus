@@ -118,11 +118,12 @@ to the matrix as a named regression case.
   - **Steady state:** once settled, one unbroken holder, every counted voter backing it, and no vote term moving. Every safety oracle passed while a stuck standby churned the terms, which is why this oracle exists.
 - **The matrix** runs 1,728 cases, with expectations from a connectivity rule that is independent of the protocol: with two of three vote links cut, the fully-up link decides the leader.
 - **The seeds.** `go test ./quorum/sim` runs seeds 1–2000. `QUORUM_SEEDS=N` runs 1–N, and `QUORUM_SEEDS=a-b` runs a range. `QUORUM_SEED=k ... -run '^TestSeeds$' -v` runs one seed with its trace. Every failure prints that line and a shrunk schedule as a Go literal.
-- **The runtime:** about 2 s, or 21 s under `-race`.
+- **The runtime:** about 7 s, or 46 s under `-race` (the handshake, the longer switch-fault runs and the named cases).
 - **Excluded by name:**
   - F22b, a frozen controller clock, which must breach I1;
   - skew beyond ρ, which must breach I1 at some phase;
-  - #976, two lost controller files, a named expected failure until the handshake PR. The generator draws at most one lost controller file per schedule.
+  - **the two-of-three case** (design §3.1, the costs; `Record.TwoOfThreeLost`): a controller's file lost while its peer's committed witness incarnation dies (the witness wiped, or an adopted second copy gone) before it re-commissions, or both files lost and re-commissioned on a stray's incarnation. It needs an operator, so I2, I4, I6, I7 and steady state are excused; I1, the lease and the ledger are not. The seed runner logs and counts it (736 of 200,000), `TestExcusedShare` bounds its share, `TestTwoOfThreeLostTeeth` checks it fires on that case and on nothing else, and every named case asserts it was not excused. After the PR that makes the case reliably wait for an operator, I2 and I4 are asserted there too.
+- **#976 is closed** (H2): two lost controller files with the witness intact are judged in full (`TestRegression976TwoLostControllerFiles`, red under `no_floor`), and the generator no longer caps lost controller files.
 
 ### 3.3 Mutation checks (T2, nightly; required to pass before each milestone)
 
@@ -161,6 +162,10 @@ case caught it. A mutation joins the nightly run in the PR that builds the rule 
 | a restarted controller counts its adopted incarnation at once (no quiet period owed) | design §3.1, the quiet period | 2 (handshake) |
 | a lost controller takes an `Adopt` sent before its restart (a stale floor) | design §3.1, boots | 2 (handshake) |
 | a switch proposed with the peer unheard | design §3.1, when a switch is proposed | 2 (handshake) |
+| a generation bump that keeps the incarnation ends a quiet period still owed (a restart's) | design §3.1, the quiet period | 2 (handshake) |
+| an `Adopt` sent to an earlier boot of this controller counts as hearing the peer | design §3.1, boots | 2 (handshake) |
+| a reply in the quiet period isn't counted as heard, so a restart backs off two leases | design §3.1, heard, not counted | 2 (handshake) |
+| both uncommissioned, a proposal of an incarnation no longer answering is kept (the pair waits for ever) | design §3.1, strays | 2 (handshake) |
 | leases timed on `CLOCK_MONOTONIC`, which stops across a suspend | design §3.1, clocks | 2 |
 | the override opens the gate before its journal fsync | I8 | 5 |
 | the override survives hearing a peer | design §7 | 5 |
@@ -178,7 +183,39 @@ constant false, so the checks cost nothing. `go run ./tools/quorum-mutants` does
 Its own table test checks those verdicts, and that every mutation in `quorum/mut_on.go` has a
 row. All 17 are caught, in about 50 s. The handshake adds eight (`no_quiet`, `no_floor`,
 `count_while_pending`, `no_adopt_gen`, `no_holdoff`, `restart_counts_at_once`, `no_adopt_echo`,
-`switch_without_peer`): T1 catches each in H1, and the sim cases join them in H2.
+`switch_without_peer`): T1 catches each in H1, and the sim cases join them in H2. H2 adds four
+more (`bump_cuts_quiet`, `peer_from_any_adopt`, `quiet_reply_unheard`, `stale_pending_kept`),
+for holes found while driving the handshake in the sim.
+
+**The handshake in the simulator (H2).** The sim drives `quorum.Adoption` as PR 3 will:
+`Adopt` over A–B (every link fault applies), witness replies to `OnWitness`, `OnPeer` for every
+other peer message, the probe to the witness, controller writes through `Adoption.Persisted`.
+What each controller counts is kept as ground truth, apart from the candidate's bookkeeping,
+by the design's rules (a restart owes the quiet period; a proposal counts nothing; an adoption
+counts at once only what was counted). The lease, hostile and steady checks judge each witness
+grant by what its grantee counted when it arrived. The generator adds the **switch fault**
+(F15b) on its own random stream, so other seeds keep their schedules: a second copy up from 0,
+which one controller reaches while the real witness is cut from it. A switch-fault run's steady
+state is judged from a lease after its last adoption, which must come within the hold-off cap
+(33 leases) of the last heal. Named cases (`quorum/sim/handshake_test.go`):
+- **The must-fail quiet period (F15b switch).** A leads on {A, W}; B reaches only W2 and loses
+  every request from A (a `Cut` that drops one frame kind), so it proposes W2 while A's lease
+  runs. With the quiet period, I1 holds and a W2 grant reached B inside it when it would have
+  made B's majority (the DECISIVE guard). Red under `no_quiet` (I1).
+- **The term floor.** B leads term 17, which A never saw (B→A votes are lost, the handshake isn't);
+  the witness is rebuilt, the pair adopts it, and B dies. A leads above 17. Red under `no_floor`
+  (I2: term 2 after 17).
+- **F15**, the rebuilt witness adopted by both, each counting it a lease after its write; with B
+  down it is not adopted and nobody leads until B is back.
+- **A late proposal from the peer's earlier boot** (a `Replay` fault) is refused after the pair
+  moved on. Red under `no_adopt_gen`.
+- **The flapping stray:** a copy answering A 4 s in every 8 makes at most three switches in 12
+  windows. Red under `no_holdoff`.
+
+The first 200,000-seed run with the handshake failed 42 seeds, none on safety. 36 were switch-fault
+runs whose return to the real witness waited out the hold-off (the settle-aware steady window
+above). 6 were a real liveness hole: both controllers uncommissioned, each pending a proposal the
+other can't take, stuck after the stray was gone (fixed: `stale_pending_kept`).
 
 **The first 200,000-seed nightly (#998)** failed 20 seeds on main (78d234e8), all liveness or
 steady state, none safety. They are named cases in `quorum/sim/nightly_test.go`, in four classes:
@@ -193,9 +230,10 @@ steady state, none safety. They are named cases in `quorum/sim/nightly_test.go`,
 4. **A witness file torn by a crash mid-write, 2 seeds.** That is a rebuilt witness, not yet
    counted.
 
-For classes 3 and 4, steady state is judged on A and B alone when the record shows a node
-restarting from an unreadable file. The oracle used to look only for explicit wipes in the
-schedule. The handshake PR flips this back.
+For classes 3 and 4, steady state was judged on A and B alone when the record showed a node
+restarting from an unreadable file. H2 flipped it back: the witness must back the leader in
+every lost-file case but the two-of-three case (§3.2). Seed 57197 of class 1 is now that case
+(B's file and the witness both lost) and has its own test.
 
 **Where each is caught.**
 - **Targeted sim cases (`quorum/sim/targeted_test.go`)** catch three rules the matrix and the
