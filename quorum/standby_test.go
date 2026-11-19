@@ -77,14 +77,10 @@ func (p *pair) step(now Instant) {
 			if p.deaf[vid] && r.From != vid {
 				continue
 			}
-			// The driver's yield (Voter.WouldYield): its own candidate
-			// gives up its rounds first, and only then the voter its
-			// promise to it.
+			// The driver contract: Observe, then YieldTo, then Handle.
 			if c := p.c[vid]; c != nil && r.From != vid {
 				c.Observe(r.Term)
-				if p.v[vid].WouldYield(now, *r) && c.Yield(now) {
-					p.v[vid].ReleaseSelf()
-				}
+				YieldTo(now, p.v[vid], c, *r)
 			}
 			ps, reps := p.v[vid].Handle(now, *r)
 			if ps != nil {
@@ -425,8 +421,8 @@ func TestRetermForgottenAcrossALapse(t *testing.T) {
 // (§5, "everything starts at once"), a witness at an incarnation the pair
 // hasn't adopted (rebuilt, before the handshake PR), or one controller
 // back while the other runs alone with the witness down. Each campaign
-// makes the own voter promise itself; without the yield (Voter.WouldYield,
-// Candidate.Yield) the two can refuse each other forever (found by the 2b
+// makes the own voter promise itself; without the yield (YieldTo) the two
+// can refuse each other forever (found by the 2b
 // seeds 275, 540, 1068, 1653). The last case comes back at 16 offsets
 // across B's campaign cycle, so some land inside B's promise to itself.
 // A leader within 6 s, then held to the end.
@@ -516,27 +512,82 @@ func TestZombieCannotBlockTheStandby(t *testing.T) {
 	t.Logf("B led at %v", time.Duration(won))
 }
 
-// Yield gives up every open round: a grant still in flight for the
-// campaign it gave up can't make it lead, so the promise its voter drops
-// never backs a lease. While it leads, it refuses to yield.
+// YieldTo gives up every open round: a grant still in flight for the
+// campaign it gave up can't make the candidate lead, so the promise its
+// voter drops never backs a lease. While the candidate leads, nothing
+// yields. A request from anyone but the peer never yields either.
 func TestYieldCancelsOpenRounds(t *testing.T) {
-	c := newC(t, cfgA(), 0, 0)
-	r := c.Tick(0, "", 0, true)
-	c.OnReply(at(10*time.Millisecond), granted("A", r, 0)) // its own voter: one of two
-	if !c.Yield(at(20 * time.Millisecond)) {
-		t.Fatal("a candidate that doesn't lead refused to yield")
+	v := NewVoter("A", lease, VoterState{Incarnation: 42}, 0)
+	c := newC(t, cfgA(), 0, at(lease))
+	r := c.Tick(at(lease), "", 0, true) // term 1
+	ps, reps := v.Handle(at(lease), *r)
+	reps = append(reps, v.Persisted(ps.Seq, true)...)
+	c.OnReply(at(lease), reps[0]) // its own voter: one of two
+	now := at(lease + 20*time.Millisecond)
+	if YieldTo(now, v, c, Request{From: "Z", Term: 2, ID: 1}) {
+		t.Fatal("yielded to a request from outside the pair")
 	}
-	c.OnReply(at(30*time.Millisecond), granted("W", r, 42)) // the late second grant
-	if c.Leading(at(30 * time.Millisecond)) {
+	if !YieldTo(now, v, c, Request{From: "B", Term: 2, ID: 1}) {
+		t.Fatal("a candidate that doesn't lead refused to yield to a higher term")
+	}
+	c.OnReply(at(lease+30*time.Millisecond), granted("W", r, 42)) // the late second grant
+	if c.Leading(at(lease + 30*time.Millisecond)) {
 		t.Fatal("led on a round it had yielded")
 	}
+	if _, out := v.Handle(now, Request{From: "B", Term: 2, ID: 1}); len(out) != 0 {
+		t.Fatalf("after the yield the grant waits for its fsync, got %+v", out)
+	}
 
-	c = newC(t, cfgA(), 0, 0)
-	r = c.Tick(0, "", 0, true)
-	c.OnReply(at(10*time.Millisecond), granted("A", r, 0))
-	c.OnReply(at(10*time.Millisecond), granted("W", r, 42))
-	if c.Yield(at(20*time.Millisecond)) || !c.Leading(at(20*time.Millisecond)) {
+	v = NewVoter("A", lease, VoterState{Incarnation: 42}, 0)
+	c = newC(t, cfgA(), 0, at(lease))
+	r = c.Tick(at(lease), "", 0, true)
+	ps, reps = v.Handle(at(lease), *r)
+	reps = append(reps, v.Persisted(ps.Seq, true)...)
+	c.OnReply(at(lease), reps[0])
+	c.OnReply(at(lease), granted("W", r, 42))
+	if YieldTo(at(lease+20*time.Millisecond), v, c, Request{From: "B", Term: 2, ID: 1}) {
 		t.Fatal("a leader yielded")
+	}
+}
+
+// naut-lead's interleaving on #979: had anything run between the
+// candidate giving up its rounds and the voter dropping its promise (here
+// the candidate's own next campaign, granted by its own voter), the drop
+// would orphan an OPEN round, which could then lead beside the peer. The
+// release re-checks for itself and keeps the promise backing the new
+// round; YieldTo makes the two steps one call, so the gap can't occur.
+func TestReleaseKeepsAPromiseBehindANewRound(t *testing.T) {
+	v := NewVoter("A", lease, VoterState{Incarnation: 42}, 0)
+	c := newC(t, cfgA(), 0, at(lease))
+	t0 := at(lease)
+	r1 := c.Tick(t0, "", 0, true) // term 1, its own voter promises it
+	ps, _ := v.Handle(t0, *r1)
+	c.OnReply(t0, v.Persisted(ps.Seq, true)[0])
+	c.OnReply(t0, refused("W", r1, 0, 42)) // heard, so no back-off
+	peer := Request{From: "B", Term: 2, ID: 1}
+	if !v.wouldYield(t0, peer) || !c.yield(t0) {
+		t.Fatal("set-up: the yield should be allowed")
+	}
+	// The gap: the candidate campaigns again (term 2) and its voter grants.
+	r2 := c.Tick(at(lease+time.Second), "", 0, true)
+	if r2 == nil || r2.Term != 2 {
+		t.Fatalf("set-up: second campaign %+v", r2)
+	}
+	ps, _ = v.Handle(at(lease+time.Second), *r2)
+	v.Persisted(ps.Seq, true)
+	if v.releaseSelf(at(lease+time.Second), peer) {
+		t.Fatal("released the promise behind an open round (both could lead)")
+	}
+	if _, out := v.Handle(at(lease+time.Second), peer); len(out) != 1 || out[0].Granted {
+		t.Fatalf("the peer's term-2 request: %+v, want a refusal", out)
+	}
+}
+
+// Terms saturate rather than wrap to 0.
+func TestTermsSaturate(t *testing.T) {
+	c := newC(t, cfgA(), ^uint64(0), 0)
+	if r := c.Tick(0, "", 0, true); r == nil || r.Term != ^uint64(0) {
+		t.Fatalf("campaign after the top term: %+v", r)
 	}
 }
 
@@ -548,5 +599,21 @@ func TestObserveLiftsTheNextCampaign(t *testing.T) {
 	c.Observe(9)
 	if r := c.Tick(0, "", 0, true); r == nil || r.Term != 10 {
 		t.Fatalf("campaign %+v, want term 10 after observing 9", r)
+	}
+}
+
+// A yielded campaign that no majority had heard backs the candidate off
+// as expire would have: two leases from its send.
+func TestYieldKeepsTheUnheardBackOff(t *testing.T) {
+	v := NewVoter("A", lease, VoterState{Incarnation: 42}, 0)
+	c := newC(t, cfgA(), 0, at(lease))
+	r := c.Tick(at(lease), "", 0, true)
+	ps, _ := v.Handle(at(lease), *r)
+	c.OnReply(at(lease), v.Persisted(ps.Seq, true)[0]) // heard by itself only
+	if !YieldTo(at(lease+time.Second), v, c, Request{From: "B", Term: 2, ID: 1}) {
+		t.Fatal("did not yield")
+	}
+	if c.NextLook() != at(3*lease) {
+		t.Fatalf("next look %v, want 6 s (sent 2 s + two leases)", time.Duration(c.NextLook()))
 	}
 }

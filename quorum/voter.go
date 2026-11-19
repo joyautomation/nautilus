@@ -103,30 +103,48 @@ func (v *Voter) LeaderSeen() (NodeID, Instant) {
 	return from, until
 }
 
-// WouldYield reports whether r, received at now, is the other candidate's
-// request for a term strictly above the one this voter promised to its
-// OWN candidate, while that promise runs. Two controllers counting only
-// each other (the witness down, or at an incarnation not adopted) would
-// otherwise refuse each other forever: each campaign makes the own voter
-// promise itself for a whole lease. The driver then asks its candidate to
-// yield (Candidate.Yield, refused while leading, which cancels every open
-// round so the promise can never back a lease) and, only if it did, calls
-// ReleaseSelf before Handle. Equal terms never yield: one term, one
-// grantee. The driver also passes every request's term to its candidate
-// (Candidate.Observe), so the next campaign goes strictly above the
-// peer's and this yield can happen.
-func (v *Voter) WouldYield(now Instant, r Request) bool {
+// wouldYield reports whether r, received at now, asks for a term strictly
+// above the one this voter promised to its OWN candidate, while that
+// promise runs (YieldTo).
+func (v *Voter) wouldYield(now Instant, r Request) bool {
 	return r.From != v.self && v.st.GrantedTo == v.self && now >= v.waitUntil &&
 		now < v.promiseUntil && r.Term > v.st.Promised
 }
 
-// ReleaseSelf ends this voter's running promise to its own candidate, once
-// that candidate has yielded (WouldYield). The promised term stays: terms
-// only rise.
-func (v *Voter) ReleaseSelf() {
-	if v.st.GrantedTo == v.self {
-		v.promiseUntil = 0
+// releaseSelf ends this voter's running promise to its own candidate for
+// r, re-checking wouldYield itself rather than trusting the caller: had
+// the candidate campaigned again since it yielded, its voter's promise
+// would back that open round, and is kept (it then refuses r as usual).
+// The promised term stays: terms only rise.
+func (v *Voter) releaseSelf(now Instant, r Request) bool {
+	if !v.wouldYield(now, r) {
+		return false
 	}
+	v.promiseUntil = 0
+	return true
+}
+
+// YieldTo lets two counted voters elect. Sometimes only the two
+// controllers count (the witness down, at an incarnation not adopted, or
+// a controller that lost the one it accepts). Each campaign then makes
+// the own voter promise itself for a whole lease, and the two would
+// refuse each other for ever. So when v's running promise is to its own
+// candidate c and the other controller asks for a strictly higher term,
+// c gives up every open round (unless it leads, when nothing happens),
+// and only then does v drop its promise, in one call. Nothing can run in
+// between, so the dropped promise never backs a lease. Equal terms never
+// yield: one term, one grantee. YieldTo reports whether it yielded; the
+// driver calls it, then Handle, for every request from the other
+// controller, after Candidate.Observe. The witness has no candidate and
+// never yields.
+func YieldTo(now Instant, v *Voter, c *Candidate, r Request) bool {
+	if v == nil || c == nil || r.From != c.cfg.Peer || c.cfg.Self != v.self || !v.wouldYield(now, r) {
+		return false
+	}
+	if !c.yield(now) {
+		return false
+	}
+	return v.releaseSelf(now, r)
 }
 
 // Handle answers r, received at now. A refusal comes back at once. A grant

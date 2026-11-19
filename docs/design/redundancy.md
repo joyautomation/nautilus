@@ -151,7 +151,8 @@ redundancy:
   to itself, and the two would refuse each other forever (found by the simulator). So a voter
   whose running promise is to its **own** candidate yields it to the other controller's
   request for a **strictly higher** term, but only if that candidate isn't leading, and only
-  after the candidate has given up every open round. The yielded promise can then never back
+  after the candidate has given up every open round. Both happen in one call (`YieldTo`), so
+  nothing can open a round in between. The yielded promise can then never back
   a lease, and the voter grants the request as usual. Equal terms never yield, so one term
   still has one grantee. A controller that can send but not hear can make a campaigning
   standby yield once per back-off. That delays the standby by about a lease at most; it never

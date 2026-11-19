@@ -117,7 +117,7 @@ func (c *Candidate) Leading(now Instant) bool { return c.leading && now < c.leas
 // other controller. Its next campaign goes above it: the replies alone
 // carry only promised terms, and two controllers campaigning at
 // maxSeen+1 from them land on equal terms, which never yield
-// (Voter.WouldYield), round after round.
+// (YieldTo), round after round.
 func (c *Candidate) Observe(term uint64) {
 	if term > c.maxSeen {
 		c.maxSeen = term
@@ -128,19 +128,33 @@ func (c *Candidate) Observe(term uint64) {
 // timer for it (and ticks again after any reply).
 func (c *Candidate) NextLook() Instant { return max(c.nextLook, c.backoffUntil) }
 
-// Yield gives up every open campaign and renewal round at now, so no
+// yield gives up every open campaign and renewal round at now, so no
 // grant still in flight can make this candidate lead, and reports true;
-// or, while it leads, does nothing and reports false. The driver calls it
-// before its own voter drops its promise to this candidate for the other
-// controller's higher-term request (Voter.WouldYield).
-func (c *Candidate) Yield(now Instant) bool {
+// or, while it leads, does nothing and reports false (YieldTo). A dropped
+// campaign that no majority had heard backs the candidate off as expire
+// would have.
+func (c *Candidate) yield(now Instant) bool {
 	c.expire(now)
 	if c.Leading(now) {
 		return false
 	}
+	for _, rd := range c.rounds {
+		if rd.campaign && len(rd.replies) < 2 {
+			c.backoffUntil = max(c.backoffUntil, rd.sent.Add(2*c.cfg.Lease))
+		}
+	}
 	c.rounds = c.rounds[:0]
 	c.pending = nil
 	return true
+}
+
+// above returns the term after t, saturating: terms are uint64 and never
+// wrap to 0.
+func above(t uint64) uint64 {
+	if t == ^uint64(0) {
+		return t
+	}
+	return t + 1
 }
 
 // Term is the fencing token: while leading, the term leadership was
@@ -183,7 +197,7 @@ func (c *Candidate) Tick(now Instant, seenFrom NodeID, seenUntil Instant, health
 	if c.Leading(now) {
 		if c.reterm {
 			c.reterm = false
-			c.renewTerm = c.maxSeen + 1
+			c.renewTerm = above(c.maxSeen)
 		}
 		return c.send(now, c.renewTerm) // renewal
 	}
@@ -196,7 +210,7 @@ func (c *Candidate) Tick(now Instant, seenFrom NodeID, seenUntil Instant, health
 	if now < c.retryAt || c.pending != nil {
 		return nil
 	}
-	return c.send(now, c.maxSeen+1)
+	return c.send(now, above(c.maxSeen))
 }
 
 func (c *Candidate) send(now Instant, term uint64) *Request {
