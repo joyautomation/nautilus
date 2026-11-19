@@ -44,18 +44,17 @@ func TestCheck(t *testing.T) {
 			t.Errorf("%s: %v, want %v", c.name, got, c.want)
 		}
 	}
-	if !Ok.Drives() || !Unchecked.Drives() || NoDevice.Drives() || WrongDevice.Drives() {
+	if !Ok.Drives() || !Unchecked.Drives() || NoDevice.Drives() || WrongDevice.Drives() || AwaitingRearm.Drives() {
 		t.Error("Drives: only Ok and Unchecked may drive a port")
 	}
-	if Ok.Fault() || Unchecked.Fault() || !NoDevice.Fault() || !WrongDevice.Fault() {
-		t.Error("Fault: only NoDevice and WrongDevice raise the identity fault")
+	if Ok.Fault() || Unchecked.Fault() || !NoDevice.Fault() || !WrongDevice.Fault() || !AwaitingRearm.Fault() {
+		t.Error("Fault: NoDevice, WrongDevice and AwaitingRearm raise the identity fault")
 	}
 }
 
 func gate(t *testing.T, s State) *OutGate {
 	t.Helper()
-	out := mustOut(t, levelIODD(t))
-	return NewOutGate(out, s)
+	return NewOutGate(mustOut(t, levelIODD(t)), s)
 }
 
 func mustOut(t *testing.T, d *iodd.IODD) *iodd.Image {
@@ -67,16 +66,6 @@ func mustOut(t *testing.T, d *iodd.IODD) *iodd.Image {
 	return pd.Out
 }
 
-// writeAll writes level100's three items: Teach off, Mode mode, Lock set.
-func writeAll(t *testing.T, g *OutGate, mode uint64) {
-	t.Helper()
-	for i, v := range []any{false, mode, true} {
-		if err := g.Write(i, v); err != nil {
-			t.Fatal(err)
-		}
-	}
-}
-
 func plan(t *testing.T, g *OutGate) OutPlan {
 	t.Helper()
 	p, err := g.Plan()
@@ -86,52 +75,51 @@ func plan(t *testing.T, g *OutGate) OutPlan {
 	return p
 }
 
-// Items of level100's process data out: Teach (bit 0), Mode (bits 3..1),
-// Lock (bit 7); Teach off, Mode 5 and Lock set is 0x8A.
-func TestOutGateSendsNothingUntilEveryItemIsWritten(t *testing.T) {
-	g := gate(t, Ok)
-	if p := plan(t, g); p.Valid || p.Image != nil {
-		t.Errorf("nothing written yet, plan %+v", p)
-	}
-	for _, w := range []struct {
-		item int
-		v    any
-	}{{1, uint64(5)}, {2, true}} {
-		if err := g.Write(w.item, w.v); err != nil {
+// setAll sets level100's three items: Teach, Mode and Lock (Teach bit 0,
+// Mode bits 3..1, Lock bit 7).
+func setAll(t *testing.T, g *OutGate, teach bool, mode uint64, lock bool) {
+	t.Helper()
+	for i, v := range []any{teach, mode, lock} {
+		if err := g.Set(i, v); err != nil {
 			t.Fatal(err)
 		}
-		if p := plan(t, g); p.Valid || p.Image != nil {
-			t.Errorf("item %d written but Teach is not: plan %+v, want none (an unwritten item would go out as zero, marked valid)", w.item, p)
-		}
 	}
-	if err := g.Write(0, false); err != nil {
+}
+
+// A port is armed by an explicit Rearm and by nothing else: values set
+// before it are held, not sent, and a controller that has just started has
+// not been told the device is the right one.
+func TestOutGateSendsNothingUntilRearmed(t *testing.T) {
+	g := gate(t, Ok)
+	setAll(t, g, true, 5, true)
+	if p := plan(t, g); p.Valid || p.Image != nil {
+		t.Errorf("values set but never armed: plan %+v", p)
+	}
+	if g.Armed() {
+		t.Error("armed with no Rearm")
+	}
+	if err := g.Rearm(); err != nil {
 		t.Fatal(err)
 	}
-	if p := plan(t, g); !p.Valid || !bytes.Equal(p.Image, []byte{0x8A}) {
-		t.Errorf("every item written: plan %+v, want valid 8A", p)
+	if p := plan(t, g); !p.Valid || !bytes.Equal(p.Image, []byte{0x8B}) {
+		t.Errorf("armed: plan %+v, want valid 8B (Teach, Mode 5, Lock)", p)
 	}
-	// Leaving a driving state forgets all of them, not just the last.
-	g.SetState(WrongDevice)
-	g.SetState(Ok)
-	_ = g.Write(0, false)
-	_ = g.Write(1, uint64(5))
-	if p := plan(t, g); p.Valid || p.Image != nil {
-		t.Errorf("after a break two of three items are rewritten: plan %+v, want none", p)
-	}
-	_ = g.Write(2, true)
-	if p := plan(t, g); !p.Valid || !bytes.Equal(p.Image, []byte{0x8A}) {
-		t.Errorf("all three rewritten: plan %+v", p)
+	// An armed port follows the program's values.
+	setAll(t, g, false, 2, false)
+	if p := plan(t, g); !p.Valid || !bytes.Equal(p.Image, []byte{0x04}) {
+		t.Errorf("new values: plan %+v, want valid 04", p)
 	}
 }
 
 // The safety rules: a wrong or missing device gets nothing and the master's
-// valid flag goes false; the right one coming back is NOT sent the old
-// image.
-func TestOutGateWrongDeviceGetsNothingAndNothingReturns(t *testing.T) {
+// valid flag goes false; the right one coming back is sent nothing until
+// Rearm, and then the program's CURRENT values, not the ones from before.
+func TestOutGateBreakDisarmsAndRearmSendsTheCurrentValues(t *testing.T) {
 	for _, bad := range []State{WrongDevice, NoDevice} {
 		t.Run(bad.String(), func(t *testing.T) {
 			g := gate(t, Ok)
-			writeAll(t, g, 5)
+			setAll(t, g, true, 5, true)
+			_ = g.Rearm()
 			if !plan(t, g).Valid {
 				t.Fatal("not driving a right device")
 			}
@@ -139,27 +127,34 @@ func TestOutGateWrongDeviceGetsNothingAndNothingReturns(t *testing.T) {
 			if p := plan(t, g); p.Valid || p.Image != nil {
 				t.Errorf("%v: plan %+v, want no image and valid false (not zeros either)", bad, p)
 			}
-			if err := g.Write(1, uint64(2)); err == nil || !strings.Contains(err.Error(), bad.String()) {
-				t.Errorf("a write to a %v port: %v, want a refusal naming the state", bad, err)
+			if g.Armed() {
+				t.Errorf("still armed with a %v on the port", bad)
 			}
+			if err := g.Rearm(); err == nil || !strings.Contains(err.Error(), bad.String()) {
+				t.Errorf("Rearm with a %v on the port: %v, want a refusal naming the state", bad, err)
+			}
+			// The program goes on setting values during the break.
+			setAll(t, g, false, 2, false)
 			g.SetState(Ok)
 			if p := plan(t, g); p.Valid || p.Image != nil {
-				t.Errorf("the right device is back: plan %+v, want nothing until a program writes again", p)
+				t.Errorf("the right device is back: plan %+v, want nothing until Rearm", p)
 			}
-			writeAll(t, g, 2)
-			// Only the fresh writes: the Mode 5 from before the break is gone.
-			if p := plan(t, g); !p.Valid || !bytes.Equal(p.Image, []byte{0x84}) {
-				t.Errorf("after fresh writes, plan %+v, want valid 84", p)
+			if err := g.Rearm(); err != nil {
+				t.Fatal(err)
+			}
+			if p := plan(t, g); !p.Valid || !bytes.Equal(p.Image, []byte{0x04}) {
+				t.Errorf("after Rearm, plan %+v, want the current values (04), not the pre-break 8B", p)
 			}
 		})
 	}
 }
 
-// A port that starts with the device not yet checked drives nothing.
+// A port that starts with the device not yet checked drives nothing, and
+// cannot be armed.
 func TestOutGateStartsClosed(t *testing.T) {
 	g := gate(t, NoDevice)
-	if err := g.Write(0, true); err == nil {
-		t.Error("a write before the first identity check was accepted")
+	if err := g.Rearm(); err == nil {
+		t.Error("Rearm before the first identity check was accepted")
 	}
 	g.SetState(Ok)
 	if p := plan(t, g); p.Valid {
@@ -167,28 +162,36 @@ func TestOutGateStartsClosed(t *testing.T) {
 	}
 }
 
-// Without id points nothing can be checked: it writes as told, and never
-// is forced off.
-func TestOutGateUncheckedWritesAsTold(t *testing.T) {
+// Unchecked drives like Ok, but is armed the same way.
+func TestOutGateUncheckedNeedsRearmToo(t *testing.T) {
 	g := gate(t, Unchecked)
-	writeAll(t, g, 0)
+	setAll(t, g, false, 0, true)
+	if p := plan(t, g); p.Valid {
+		t.Errorf("unchecked and never armed: plan %+v", p)
+	}
+	if err := g.Rearm(); err != nil {
+		t.Fatal(err)
+	}
 	if p := plan(t, g); !p.Valid || !bytes.Equal(p.Image, []byte{0x80}) {
 		t.Errorf("plan %+v, want valid 80", p)
 	}
 }
 
-// A value that does not fit is refused on the write, naming the item, and
-// leaves the last good value in place.
+// A value that does not fit is refused naming the item, and the last good
+// value stays; an item never set is zero when the operator arms the port.
 func TestOutGateRefusesWhatDoesNotFit(t *testing.T) {
 	g := gate(t, Ok)
-	writeAll(t, g, 5)
-	if err := g.Write(1, uint64(9)); err == nil {
+	if err := g.Set(1, uint64(5)); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.Set(1, uint64(9)); err == nil {
 		t.Fatal("Mode 9 does not fit 3 bits, yet was accepted")
 	}
-	if p := plan(t, g); !bytes.Equal(p.Image, []byte{0x8A}) {
-		t.Errorf("plan %+v after a refused write, want the earlier 8A", p)
+	_ = g.Rearm()
+	if p := plan(t, g); !bytes.Equal(p.Image, []byte{0x0A}) {
+		t.Errorf("plan %+v, want 0A: Mode 5 kept, Teach and Lock never set are zero", p)
 	}
-	if err := g.Write(7, true); err == nil {
-		t.Error("a write to an item that does not exist was accepted")
+	if err := g.Set(7, true); err == nil {
+		t.Error("a value for an item that does not exist was accepted")
 	}
 }
