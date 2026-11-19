@@ -525,6 +525,11 @@ func (a *auditedRoute) answer(w http.ResponseWriter, r *http.Request, t auditTar
 		From:   hostOf(r.RemoteAddr),
 		Result: resultOf(status),
 	}
+	if buf.header.Get(outcomeHeader) == "unknown" {
+		// Passed to the replicated log, not confirmed: it may still take
+		// effect (substitutes_oplog.go).
+		e.Result = audit.ResultUnknown
+	}
 	valueCap := valueMax
 	if e.Result == audit.ResultOK {
 		if t.done != nil {

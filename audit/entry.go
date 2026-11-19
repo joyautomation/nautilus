@@ -41,7 +41,7 @@ type Entry struct {
 	// Before and After are the target's value or state around the action.
 	Before any `json:"before,omitempty"`
 	After  any `json:"after,omitempty"`
-	// Result is ResultOK, ResultRefused or ResultError.
+	// Result is ResultOK, ResultRefused, ResultError or ResultUnknown.
 	Result string `json:"result"`
 	// Detail holds what is particular to the action: a refusal's reason,
 	// an area, a takeover's terms.
@@ -63,6 +63,10 @@ const (
 	ResultOK      = "ok"
 	ResultRefused = "refused"
 	ResultError   = "error"
+	// ResultUnknown: the request was passed on (to a replicated log) and
+	// its outcome is not known: it may still take effect. The client is
+	// told to re-read the state.
+	ResultUnknown = "unknown"
 )
 
 // Sources: the surface an action came through.

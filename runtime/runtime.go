@@ -252,6 +252,8 @@ type Runtime struct {
 	// subStarts are API starts reserved and being saved, not yet applied
 	// (substitute_durable.go); guarded by subMu.
 	subStarts []*pendingStart
+	// intent is the operator-intent log's side (substitute_intent.go).
+	intent intentState
 	// loopSleep is Options.LoopSleep: nil sleeps on the wall clock.
 	loopSleep func(task string, ctx context.Context, until time.Time) bool
 

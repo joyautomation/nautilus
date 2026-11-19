@@ -258,6 +258,11 @@ type Options struct {
 	// GET /api/substitutes lists and POST /api/substitutes holds a start
 	// to. Empty: no start is accepted (the runtime has none to offer).
 	Substitutes []SubstituteRule
+	// SubstituteLog, on a redundant pair, sends substitute starts, stops
+	// and acknowledgements through the replicated operator-intent log
+	// (#707 PR 3b, substitutes_oplog.go). Nil: they apply here and are
+	// saved to the retain store before the answer.
+	SubstituteLog *SubstituteLog
 
 	// Audit is the runtime audit journal (#709): every write route records
 	// one entry per request to it, accepted or refused, before the client
@@ -486,6 +491,7 @@ type Server struct {
 	shelveTimes []time.Duration
 	tagWriter   func(name string, value any) error
 	subRules    []SubstituteRule // Options.Substitutes
+	subLog      *SubstituteLog   // Options.SubstituteLog
 	audit       *auditor
 
 	resync time.Duration
@@ -574,6 +580,7 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 		s.shelveTimes = opts[0].AlarmShelveTimes
 		s.tagWriter = opts[0].TagWriter
 		s.subRules = opts[0].Substitutes
+		s.subLog = opts[0].SubstituteLog
 	}
 	var rec audit.Recorder
 	var unavailable error

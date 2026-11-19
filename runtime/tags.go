@@ -121,7 +121,10 @@ type Tags struct {
 	subLoadFault bool
 	// subSaveFault is set while a stop or acknowledgement the API took
 	// is not yet saved (substitute_durable.go).
-	subSaveFault       bool
+	subSaveFault bool
+	// subSyncFault is set while a takeover's catch-up of the
+	// operator-intent log has not succeeded (substitute_intent.go).
+	subSyncFault       bool
 	pulseOn, pulseSeen bool
 	pulseAt            time.Duration
 	subBusy            atomic.Bool

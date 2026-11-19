@@ -81,7 +81,7 @@ func (r *Runtime) retainedSubstitutes() *retain.SubstituteState {
 			re := retain.SubstituteRetain{
 				ID: e.ID, Name: e.Name, Value: e.Value, By: e.By,
 				StartMs: e.StartMs, UntilMs: e.UntilMs, GrantedMs: e.GrantedMs,
-				AckOnStart: e.AckOnStart, Acked: e.Acked,
+				AckOnStart: e.AckOnStart, Acked: e.Acked, RequestID: e.RequestID,
 			}
 			if e.timed {
 				// The end as this process times it, on today's wall clock:
@@ -108,7 +108,7 @@ func (r *Runtime) retainedSubstitutes() *retain.SubstituteState {
 // loadSubstitutes applies the store's substitute section (see above).
 // Called from loadRetained once the store has loaded.
 func (r *Runtime) loadSubstitutes(st *retain.SubstituteState) {
-	if st == nil && r.tags.SubstituteCount() == 0 && !r.subLoadFaulted() && r.subPendingN.Load() == 0 {
+	if st == nil && r.tags.SubstituteCount() == 0 && !r.subLoadFaulted() && r.subPendingN.Load() == 0 && r.intentLog() == nil {
 		return
 	}
 	r.subMu.Lock()
@@ -141,6 +141,16 @@ func (r *Runtime) loadSubstitutes(st *retain.SubstituteState) {
 	if t.subLoadFault {
 		t.subLoadFault = false
 		evs = append(evs, SubstituteEvent{Kind: SubstituteEventFaultClear, Reason: SubstituteReasonRetainLoadFailed, By: "system", AtMs: at})
+	}
+	if r.intentLog() != nil {
+		// The log wins; the store fills in only what a failed catch-up
+		// could not deliver (substitute_intent.go).
+		evs = append(evs, r.loadIntentFallback(entries, now, at)...)
+		t.syncSubLocked()
+		t.mu.Unlock()
+		r.subPendingN.Store(int32(len(r.subPending)))
+		r.publishSub(evs)
+		return
 	}
 	if r.coord != nil {
 		// By identity, not ID alone: two leaders each issue IDs from the
@@ -203,7 +213,7 @@ func (r *Runtime) installLocked(entries []retain.SubstituteRetain, now time.Dura
 		s := Substitution{
 			ID: re.ID, Name: re.Name, Value: re.Value, By: re.By,
 			StartMs: re.StartMs, UntilMs: until, GrantedMs: re.GrantedMs,
-			AckOnStart: re.AckOnStart, Acked: re.Acked,
+			AckOnStart: re.AckOnStart, Acked: re.Acked, RequestID: re.RequestID,
 		}
 		if t.addressActiveLocked(re.Name) || t.hasIDLocked(re.ID) {
 			// Only without a coordinator (with one, the table was just
@@ -248,6 +258,7 @@ func (r *Runtime) applyPendingSubstitutes() []SubstituteEvent {
 	evs := r.installLocked(pending, now, wall.UnixMilli())
 	if len(r.subPending) < len(pending) {
 		evs = append(evs, t.rederiveLocked(wall, r.subPendingLastSeen, now, r.subPendingMode)...)
+		evs = append(evs, r.markUnconfirmedLocked(wall.UnixMilli())...)
 	}
 	t.syncSubLocked()
 	t.mu.Unlock()
@@ -267,7 +278,7 @@ func (r *Runtime) pendingRestore(id uint64) (Substitution, bool) {
 		return Substitution{
 			ID: re.ID, Name: re.Name, Value: re.Value, By: re.By,
 			StartMs: re.StartMs, UntilMs: re.UntilMs, GrantedMs: re.GrantedMs,
-			AckOnStart: re.AckOnStart, Acked: re.Acked,
+			AckOnStart: re.AckOnStart, Acked: re.Acked, RequestID: re.RequestID,
 		}, true
 	}
 	return Substitution{}, false

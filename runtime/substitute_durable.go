@@ -146,7 +146,7 @@ func (r *Runtime) reserveStart(addr string, req SubstituteRequest) (*pendingStar
 		re: retain.SubstituteRetain{
 			ID: r.subSeq, Name: name, Value: plain(sv), By: req.By,
 			StartMs: wall.UnixMilli(), UntilMs: wall.Add(req.For).UnixMilli(), GrantedMs: req.For.Milliseconds(),
-			AckOnStart: req.AckOnStart,
+			AckOnStart: req.AckOnStart, RequestID: req.RequestID,
 		},
 		value: req.Value, prevID: prev, end: now + req.For,
 	}
@@ -186,7 +186,7 @@ func (r *Runtime) finishStart(p *pendingStart, serr error) (Substitution, error)
 	}
 	e := subEntry{
 		Substitution: Substitution{
-			ID: p.re.ID, By: p.re.By, AckOnStart: p.re.AckOnStart,
+			ID: p.re.ID, By: p.re.By, AckOnStart: p.re.AckOnStart, RequestID: p.re.RequestID,
 			StartMs: p.re.StartMs, UntilMs: p.re.UntilMs, GrantedMs: p.re.GrantedMs,
 		},
 		deadline: p.end, timed: true,

@@ -61,6 +61,10 @@ type substituteRequest struct {
 	Name    string   `json:"name"`
 	Value   any      `json:"value"`
 	Seconds *float64 `json:"seconds"`
+	// RequestID makes a retry idempotent: a start retried after an
+	// unknown outcome with the same ID is answered with the entry the
+	// first one started, never a second entry.
+	RequestID string `json:"requestId"`
 }
 
 type substituteView struct {
@@ -214,9 +218,25 @@ func (s *Server) handleSubstituteStart(w http.ResponseWriter, r *http.Request) {
 			d = time.Duration(sec * float64(time.Second))
 		}
 	}
+	if req.RequestID != "" {
+		if e, ok := s.rt.SubstituteByRequest(req.RequestID); ok {
+			// A retry of a start that did start: the same entry, not a second.
+			resp := s.substitutesResponse()
+			v := s.substituteView(e)
+			resp.Started = &v
+			kept := true
+			resp.Kept = &kept
+			writeJSON(w, http.StatusOK, resp)
+			return
+		}
+	}
+	if s.subLog != nil {
+		s.startThroughLog(w, r, rule.Tag, value, d, rule.AckOnStart, req.RequestID)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), substituteSaveWait)
 	defer cancel()
-	e, err := s.rt.SubstituteSaved(ctx, rule.Tag, runtime.SubstituteRequest{Value: value, For: d, By: s.principal(r), AckOnStart: rule.AckOnStart})
+	e, err := s.rt.SubstituteSaved(ctx, rule.Tag, runtime.SubstituteRequest{Value: value, For: d, By: s.principal(r), AckOnStart: rule.AckOnStart, RequestID: req.RequestID})
 	if err != nil {
 		code, msg := substituteStartRefusal(err)
 		http.Error(w, msg, code)
@@ -246,6 +266,10 @@ func (s *Server) handleSubstituteStop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.refuseNotLeading(w) {
+		return
+	}
+	if s.subLog != nil {
+		s.stopThroughLog(w, r, id)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), substituteSaveWait)
@@ -283,6 +307,10 @@ func (s *Server) handleSubstituteAck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.refuseNotLeading(w) {
+		return
+	}
+	if s.subLog != nil {
+		s.ackThroughLog(w, r, req.IDs)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), substituteSaveWait)
@@ -414,6 +442,9 @@ func (s *Server) substituteAckTarget(_ *http.Request, body []byte) auditTarget {
 // A start, stop and acknowledgement are already journalled by the route
 // that made them.
 func (s *Server) auditSubstituteEvent(ev runtime.SubstituteEvent) {
+	if ev.Replicated {
+		return // an oplog entry applied here: the instance that took it journals it
+	}
 	e := ev.Entry
 	switch ev.Kind {
 	case runtime.SubstituteEventExpire:

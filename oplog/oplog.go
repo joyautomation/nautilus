@@ -86,6 +86,10 @@ type Entry struct {
 	Ref        uint64          `json:"ref,omitempty"`        // unsubstitute: the substitute's Seq
 	Refs       []uint64        `json:"refs,omitempty"`       // suback: the substitutes' Seqs
 	Reason     string          `json:"reason,omitempty"`     // unsubstitute: "" (a person) or "expired"
+	// Req is the client's request ID on a substitute (optional): a start
+	// retried after an unknown outcome carries the same one, and the
+	// runtime applies only the first entry that names it.
+	Req string `json:"req,omitempty"`
 }
 
 func (e Entry) same(o Entry) bool {

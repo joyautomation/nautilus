@@ -128,6 +128,12 @@ type SubstituteEvent struct {
 	Entry  Substitution `json:"entry"`
 	By     string       `json:"by"`
 	AtMs   int64        `json:"atMs"`
+	// Replicated: the change is an operator-intent log entry applied here
+	// (substitute_intent.go). The instance that took the request, or the
+	// leader that expired the entry, journals it; a replica applying it
+	// (or replaying its log at start) does not, so nothing is journalled
+	// twice.
+	Replicated bool `json:"replicated,omitempty"`
 }
 
 // goMonoClock is Go's monotonic clock, as a duration since it was taken.
@@ -206,7 +212,7 @@ func (t *Tags) syncSubLocked() {
 		tv, _, ok := t.lookupLocked(c.root)
 		t.setOwnedLocked(c.flag, ok && tv.substituted)
 	}
-	fault := t.subLoadFault || t.subSaveFault
+	fault := t.subLoadFault || t.subSaveFault || t.subSyncFault
 	for _, ss := range t.subs {
 		for i := range ss.entries {
 			if ss.entries[i].Fault != "" {
@@ -345,8 +351,7 @@ func (r *Runtime) expireSubstitutes() {
 	r.tags.mu.Lock()
 	evs = append(evs, r.tags.expireLocked(now, r.wallNow().UnixMilli())...)
 	r.tags.mu.Unlock()
-	logSubEvents(evs)
-	r.subEvents.push(evs)
+	r.publishSub(evs)
 }
 
 // logSubEvents puts the changes the runtime made on its own (an expiry, a
@@ -402,8 +407,7 @@ func (r *Runtime) retimeSubstitutes() {
 	r.tags.mu.Lock()
 	evs := r.tags.rederiveLocked(r.wallNow(), time.Time{}, r.mono(), remainTakeover)
 	r.tags.mu.Unlock()
-	logSubEvents(evs)
-	r.subEvents.push(evs)
+	r.publishSub(evs)
 }
 
 // AckSubstitutes acknowledges the named entries that are active, wait for
@@ -415,6 +419,12 @@ func (r *Runtime) AckSubstitutes(ids []uint64, by string) []Substitution {
 	if r.standby() {
 		return nil // see Restore: a standby's ack would be undone at its takeover
 	}
+	return r.ackSubstitutes(ids, by, false)
+}
+
+// ackSubstitutes is AckSubstitutes; replicated marks its events as an
+// oplog entry applied here (ApplySuback), which a standby applies too.
+func (r *Runtime) ackSubstitutes(ids []uint64, by string, replicated bool) []Substitution {
 	r.subMu.Lock()
 	defer r.subMu.Unlock()
 	want := make(map[uint64]bool, len(ids))
@@ -435,7 +445,7 @@ func (r *Runtime) AckSubstitutes(ids []uint64, by string) []Substitution {
 			e.Acked = true
 			s := t.reportLocked(ss, e)
 			acked = append(acked, s)
-			evs = append(evs, SubstituteEvent{Kind: SubstituteEventAck, Entry: s, By: by, AtMs: at})
+			evs = append(evs, SubstituteEvent{Kind: SubstituteEventAck, Entry: s, By: by, AtMs: at, Replicated: replicated})
 		}
 	}
 	if len(acked) > 0 {

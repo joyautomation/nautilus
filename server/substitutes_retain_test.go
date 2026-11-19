@@ -258,3 +258,18 @@ func TestSubstituteStartRefusal(t *testing.T) {
 		t.Errorf("superseded: %d %q", code, msg)
 	}
 }
+
+// Without a log, a start retried with the same request ID (its first
+// answer was lost) is answered with the entry it started, never a second.
+func TestARetriedStartIsIdempotentOnOneController(t *testing.T) {
+	s := subServer(t, Options{})
+	first := call(t, s, "POST", "/api/substitutes", `{"name":"Flow","value":7,"requestId":"r-9"}`)
+	if first.Code != 200 {
+		t.Fatalf("start = %d %s", first.Code, first.Body)
+	}
+	id := decodeSubs(t, first.Body.Bytes()).Started.ID
+	again := call(t, s, "POST", "/api/substitutes", `{"name":"Flow","value":7,"requestId":"r-9"}`)
+	if again.Code != 200 || decodeSubs(t, again.Body.Bytes()).Started.ID != id || len(s.rt.Substitutes()) != 1 {
+		t.Fatalf("retry = %d %s; want entry %d again, and one entry", again.Code, again.Body, id)
+	}
+}
