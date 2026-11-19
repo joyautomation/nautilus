@@ -16,6 +16,7 @@ import (
 	"github.com/joyautomation/nautilus/internal/project"
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/modbus"
+	"github.com/joyautomation/nautilus/runtime"
 	"github.com/joyautomation/nautilus/virtdev"
 )
 
@@ -124,4 +125,95 @@ func TestDevicesOneConnection(t *testing.T) {
 	waitFor(t, "the refusal is counted", func() bool { return run.Refused("CONV") >= 1 })
 	time.Sleep(50 * time.Millisecond)
 	waitFor(t, "the project's driver still reads the device", reads)
+}
+
+// #706 PR 4 against a device documented at one Modbus connection, its
+// virtual twin enforcing it, the project's own driver holding that one
+// connection: the default is a static check, which never connects; a
+// driver set to validate: live probes it anyway, is refused by the device
+// (counted), and the candidate is refused with what to do.
+func TestDevicesOneConnectionLiveCheck(t *testing.T) {
+	dir := driveProject(t)
+	pf := filepath.Join(dir, devprofile.ProjectFile("abb-acs355-fmbt21"))
+	raw, err := os.ReadFile(pf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	limited := strings.Replace(string(raw), "modbus:\n  port: 502\n", "modbus:\n  port: 502\n  max-connections: 1\n  max-connections-doc: \"fena §7.1\"\n", 1)
+	if err := os.WriteFile(pf, []byte(limited), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	set, err := loadVirtualDevices(dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	run, err := virtdev.Start(ctx, set, virtdev.StartOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer run.Stop()
+	listen := run.Endpoints[0].Listen
+	manifest := filepath.Join(dir, project.ManifestName)
+	orig, _ := os.ReadFile(manifest)
+	onTwin := strings.Replace(string(orig), "endpoint: 10.0.0.11", "endpoint: \""+listen+"\"", 1)
+	if err := os.WriteFile(manifest, []byte(onTwin), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	fsys := os.DirFS(dir)
+	proj, err := project.Load(fsys, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt, err := runtime.New(proj.Runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	drv := proj.Runtime.Driver.(interface {
+		Start(context.Context)
+		Stop()
+	})
+	drv.Start(ctx)
+	defer drv.Stop()
+	done := make(chan struct{})
+	go func() { rt.Run(ctx); close(done) }()
+	defer func() { cancel(); <-done }()
+	waitFor(t, "the project's driver on the device's one connection", func() bool {
+		v, _ := rt.Tags().ReadPath("CONV__Online")
+		return v == true
+	})
+	ioc, err := project.NewIOConfig(proj, rt, fsys, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The same device by another spelling of its address: a change, and
+	// the device the project's driver already holds.
+	host, port, _ := net.SplitHostPort(listen)
+	if host != "127.0.0.1" {
+		t.Skipf("virtual device on %s", listen)
+	}
+	respelled := strings.Replace(onTwin, "\""+listen+"\"", "\"localhost:"+port+"\"", 1)
+	validate := func(m string) *project.IOValidation {
+		return ioc.Validate(ioc.Stage(project.OverlayFS(fsys, map[string][]byte{project.ManifestName: []byte(m)}), "upload", "tester"))
+	}
+
+	v := validate(respelled)
+	if !v.Valid || len(v.Probes) != 1 || v.Probes[0].Mode != devbind.ValidateStatic || !strings.Contains(v.Probes[0].Why, "max-connections 1") {
+		t.Fatalf("the default: valid %v probes %+v checks %+v", v.Valid, v.Probes, v.Checks)
+	}
+	if n := run.Refused("CONV"); n != 0 {
+		t.Fatalf("a static check connected: %d refused", n)
+	}
+
+	live := strings.Replace(respelled, "devices:", "drivers: [{ type: modbus, validate: live }]\ndevices:", 1)
+	v = validate(live)
+	if v.Valid || len(v.Probes) != 1 || v.Probes[0].Mode != devbind.ValidateLive || !strings.Contains(v.Probes[0].Detail, "set validate: static") {
+		t.Fatalf("live on the driver: valid %v probes %+v", v.Valid, v.Probes)
+	}
+	if n := run.Refused("CONV"); n < 1 {
+		t.Fatalf("the device refused %d connections, want the probe's", n)
+	}
 }

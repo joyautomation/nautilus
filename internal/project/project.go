@@ -547,6 +547,13 @@ type DriverConfig struct {
 	ScanRate    Duration            `yaml:"scan-rate"`
 	ScanClasses map[string]Duration `yaml:"scan-classes"`
 	TagClasses  map[string][]string `yaml:"tag-classes"`
+	// Validate is how a live I/O configuration change checks this
+	// driver's devices (#706): live probes each changed one on a
+	// connection of its own before the apply, static checks the
+	// configuration only. A devices: row's own validate: overrides it.
+	// Default: the device profile's (static when it documents Modbus
+	// max-connections of 2 or fewer), else live.
+	Validate string `yaml:"validate"`
 
 	// sparkplug-host. The MQTT password is NEVER in the file — set
 	// NAUTILUS_MQTT_PASSWORD, the same rule the sparkplug: section keeps.
