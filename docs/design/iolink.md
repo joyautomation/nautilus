@@ -74,7 +74,7 @@ devices:
     endpoint: 192.0.2.21
     ports:
       2: { name: BinLevel, iodd: acme-level100-20261118-IODD1.1.xml }
-      5: { name: AirPress, iodd: acme-press200-20261118-IODD1.1.xml }
+      5: { name: AirPress, iodd: acme-press200-20261118-IODD1.0.1.xml }
 ```
 
 | Key | Meaning |
@@ -148,7 +148,11 @@ truncated value.
 Where a process data image shorter than four bytes sits inside the U32
 (in the low bytes or the high bytes) is not in the P+F manual's table.
 PR 3 takes the low bytes, marked `unverified` in the profile, until a
-real ICE3 is read.
+real ICE3 is read: the U32 is written out as four big-endian octets and
+the image is the LAST `n` of them (a 2-octet image of 0x0286 is the U32
+0x00000286). The leading octets must be zero; if they are not, that is a
+decode fault naming the form, so a wrong guess shows up as Bad values
+rather than as plausible wrong ones. PR 3 tests both.
 
 ## 4. What an IODD gives a port device
 
@@ -248,8 +252,8 @@ at 0.
   how its octets would be laid out.
 - **Length:** the image the master delivers must be the IODD's length.
   A shorter image is a decode fault (the struct's quality is Bad), never
-  zero-padded. A longer one is decoded from its first bytes only for the
-  `u32` form (§3.1), where the master always delivers four.
+  zero-padded. The `u32` form always delivers four octets; a shorter
+  image is their last octets, with the leading ones zero (§3.1).
 
 `hex` text is decoded strictly: an even number of hex digits, nothing
 else. `0286` is the bytes 0x02 0x86.
@@ -349,7 +353,10 @@ values in step with git is #718's job, built on these reads and writes.
 `import` reuses `naut devices add`'s writer: `iodd/` must be the
 project's own folder (not a symlink), files are created with `O_EXCL`,
 and an existing copy is never replaced (it is the pin). It refuses an
-IODD that does not parse or that the codec cannot decode (§4.1). It does
+IODD that does not parse, or none of whose process data layouts the
+codec can decode (§4.1); a layout it cannot decode is named in a note,
+since a device with variants may run in one it can (§4.3). Load
+refuses a port whose chosen layout the codec cannot decode. Import does
 not follow `xi:include` or fetch anything.
 
 `naut build` ships `iodd/*.xml`, since load needs them, and the virtual
@@ -412,9 +419,10 @@ or the CLI); field drivers import neither.
 - **The writer helper.** `existingCopy` and `createInDir` live in
   `cmd/naut/devicelib.go` and name `profiles/` in their messages.
   Making them take the folder is a small change in naut-virtdev's file.
-- **`ports:` in devbind** waits on #717 PR 4 (OPC UA devices through
-  devbind).; who writes it, this layer or naut-virtdev, is to
-  be agreed.
+- **`ports:` in devbind.** #717 PR 4a parses and validates it (the name
+  check, the `iodd/` file, the port number against
+  `(*devprofile.Profile).IOLinkPorts()`, which PR 3 here fills from
+  `iolink.ports`); this layer's PR 4 consumes it.
 - **`opc-30120`, not `opc-30100`.** The agreed format spelled the value
   after OPC 30100, which is not the IO-Link companion specification;
   OPC 30120 is. The spelling here follows the specification.
