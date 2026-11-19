@@ -962,6 +962,21 @@ curl -s -X POST localhost:8080/api/io/staged/1/apply
   Each probe says which mode it ran and why. A failed connection says so,
   and suggests `validate: static`: the device may allow only one
   connection.
+- **After the apply** the response comes at once: `answered` lists the
+  changed devices that had read by then, `pending` the rest, and `watch`
+  follows them from there, off the apply (another apply is not held up):
+  `GET /api/io` shows it, and the frame's `config.watch` while it is
+  still watching. A device still silent at the deadline (5 s) stays
+  applied, reads bad quality and alarms, and the operator decides
+  (`watch.state` `silent`). To have it put back instead, ask for it:
+  `POST /api/io/staged/{id}/apply` with `{"revertIfSilent": "10s"}` (up
+  to 5 min) reverts the whole apply if a changed device has not read by
+  then (`reverted`, with `watch.reason` naming it), unless a newer apply
+  has landed meanwhile (`superseded`) or the revert was cancelled:
+  `POST /api/io/revert/cancel` (`cancelled`). A client that goes away
+  changes nothing: the watch is the controller's. It is held in memory, so
+  a restart drops a pending revert. Off by default: a reversion on a
+  running plant can be its own surprise.
 - **Not kept yet:** an applied configuration lasts until the controller
   restarts, which runs the manifest again. Until it is kept, an apply is
   refused on a project with `redundancy:`. While what runs differs from
@@ -972,7 +987,7 @@ curl -s -X POST localhost:8080/api/io/staged/1/apply
 | --- | --- |
 | `201` | Staged |
 | `200` | Validated (valid or invalid: see `state`), applied, or read |
-| `400` | A body with neither or both of `sha` and `files` |
+| `400` | A body with neither or both of `sha` and `files`; a `revertIfSilent` that is not a duration up to 5 min |
 | `403` | `online-edits` is off |
 | `404` | No such candidate |
 | `409` | No snapshot of the commit; applying a candidate that is not valid; another apply is in progress, or what runs changed since it was validated (validate again) |

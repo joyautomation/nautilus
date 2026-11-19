@@ -7,9 +7,14 @@ package project
 // that a probe never stalls the scan.
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"sync"
@@ -23,6 +28,9 @@ import (
 
 	"github.com/joyautomation/nautilus/devbind"
 	nio "github.com/joyautomation/nautilus/io"
+	"github.com/joyautomation/nautilus/modbus"
+	"github.com/joyautomation/nautilus/modbus/slave"
+	"github.com/joyautomation/nautilus/server"
 )
 
 func probeOf(t *testing.T, v *IOValidation) IOProbe {
@@ -392,4 +400,263 @@ func TestIOProbeClosesTheWriteGate(t *testing.T) {
 	if !p.OK || writes != 0 {
 		t.Fatalf("probe %+v, %d writes: want none", p, writes)
 	}
+}
+
+// waitWatch waits for the last apply's watch to end, and returns it.
+func waitWatch(t *testing.T, r *ioRig) *IOWatch {
+	t.Helper()
+	var w *IOWatch
+	eventually(t, "the watch to end", func() bool {
+		w = r.io.Watch()
+		return w != nil && w.State != WatchWatching && w.State != WatchReverting
+	})
+	return w
+}
+
+// After an apply, its watch follows the changed devices off the apply lock
+// and on a context of its own. A silent one stays applied and reads Bad,
+// unless the apply asked to revert if silent (#706, James's decision).
+func TestIOApplyAnswersAndRevertIfSilent(t *testing.T) {
+	s1, s2, s3, s4 := newSlave(t, 4), newSlave(t, 7), newSlave(t, 4), newSlave(t, 7)
+	base := ioFiles(slavePort(s1), slavePort(s2), "")
+	// Static, so a candidate pointing at nothing passes validation, as a
+	// device that answered its probe and dropped after would.
+	base = withFile(base, "nautilus.yaml", strings.Replace(string(base["nautilus.yaml"].Data), "  scan-rate: 10ms\n", "  scan-rate: 10ms\n  validate: static\n", 1))
+	stage := func(r *ioRig, y string) *IOCandidate {
+		t.Helper()
+		c := r.io.Stage(withFile(base, "modbus.yaml", y), "upload", "tester")
+		if v := r.io.Validate(c); !v.Valid {
+			t.Fatalf("validate: %+v", v.Checks)
+		}
+		return c
+	}
+	apply := func(r *ioRig, y string, opts ApplyOptions) (*IOResult, error) {
+		t.Helper()
+		return r.io.ApplyWith(r.ctx, stage(r, y), "tester", opts)
+	}
+
+	t.Run("a device that answers", func(t *testing.T) {
+		r := startIORig(t, base, false)
+		if _, err := apply(r, modbusYAML(slavePort(s3), slavePort(s2), "", ""), ApplyOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		if w := waitWatch(t, r); w.State != WatchAnswered || fmt.Sprint(w.Answered) != "[device DEV_A]" {
+			t.Fatalf("watch %+v", w)
+		}
+	})
+	t.Run("silent, no revert asked", func(t *testing.T) {
+		r := startIORig(t, base, false)
+		if _, err := apply(r, modbusYAML(deadPort(t), slavePort(s2), "", ""), ApplyOptions{}); err != nil {
+			t.Fatal(err)
+		}
+		if w := waitWatch(t, r); w.State != WatchSilent || fmt.Sprint(w.Silent) != "[device DEV_A]" || !strings.Contains(w.Reason, "the change stays") {
+			t.Fatalf("watch %+v", w)
+		}
+		if d := r.io.Differs(); len(d) != 1 || d[0].Device != "DEV_A" {
+			t.Fatalf("differs %+v, want DEV_A applied", d)
+		}
+		eventually(t, "A_In reads Bad", func() bool { return !r.rt.TagQuality("A_In").IsGood() })
+	})
+	t.Run("silent, revert asked", func(t *testing.T) {
+		r := startIORig(t, base, false)
+		eventually(t, "polled", func() bool { return r.value("A_In") == "4" })
+		if _, err := apply(r, modbusYAML(deadPort(t), slavePort(s2), "", ""), ApplyOptions{RevertIfSilent: time.Second}); err != nil {
+			t.Fatal(err)
+		}
+		if w := waitWatch(t, r); w.State != WatchReverted || !strings.Contains(w.Reason, "DEV_A") {
+			t.Fatalf("watch %+v", w)
+		}
+		if d := r.io.Differs(); len(d) != 0 {
+			t.Fatalf("differs %+v after the revert, want none", d)
+		}
+		s1.Unit(1).SetHolding(0, 13)
+		eventually(t, "A_In from DEV_A's old address again", func() bool { return r.value("A_In") == "13" })
+	})
+	t.Run("silent, the revert fails", func(t *testing.T) {
+		r := startIORig(t, base, false)
+		real := r.io.replaceSource
+		calls := 0
+		r.io.replaceSource = func(mb *modbus.Driver, src modbus.Source, tags []modbus.TagBinding, opts modbus.ReplaceOptions) error {
+			calls++
+			if calls > 1 {
+				return errors.New("injected") // putting it back
+			}
+			return real(mb, src, tags, opts)
+		}
+		if _, err := apply(r, modbusYAML(deadPort(t), slavePort(s2), "", ""), ApplyOptions{RevertIfSilent: 500 * time.Millisecond}); err != nil {
+			t.Fatal(err)
+		}
+		if w := waitWatch(t, r); w.State != WatchRevertFail || !strings.Contains(r.io.Fault(), "DEV_A") {
+			t.Fatalf("watch %+v fault %q", w, r.io.Fault())
+		}
+	})
+	t.Run("the apply answers at once and keeps no lock", func(t *testing.T) {
+		r := startIORig(t, base, false)
+		deadA := deadPort(t)
+		start := time.Now()
+		res, err := apply(r, modbusYAML(deadA, slavePort(s2), "", ""), ApplyOptions{RevertIfSilent: 3 * time.Second})
+		if err != nil || res.Watch == nil || res.Watch.State != WatchWatching || !res.Watch.Revert {
+			t.Fatalf("err %v result %+v", err, res)
+		}
+		if d := time.Since(start); d > 2500*time.Millisecond {
+			t.Fatalf("the apply took %v: it waited for its devices", d)
+		}
+		// Another apply goes through meanwhile, and the first is then not
+		// reverted: a newer apply landed.
+		if _, err := apply(r, modbusYAML(deadA, slavePort(s4), "", ""), ApplyOptions{}); err != nil {
+			t.Fatalf("an apply during the first one's watch: %v", err)
+		}
+		time.Sleep(3500 * time.Millisecond)
+		if d := r.io.Differs(); len(d) != 2 {
+			t.Fatalf("differs %+v, want DEV_A and DEV_B still applied (the first apply not reverted)", d)
+		}
+	})
+	t.Run("a client that goes away makes no silence", func(t *testing.T) {
+		slow := newSlave(t, 4)
+		slow.SetLatency(400 * time.Millisecond) // answers, slowly
+		r := startIORig(t, base, false)
+		ctx, cancel := context.WithCancel(r.ctx)
+		c := stage(r, modbusYAML(slavePort(slow), slavePort(s2), "", ""))
+		if _, err := r.io.ApplyWith(ctx, c, "tester", ApplyOptions{RevertIfSilent: 3 * time.Second}); err != nil {
+			t.Fatal(err)
+		}
+		cancel() // the browser tab closed
+		if w := waitWatch(t, r); w.State != WatchAnswered {
+			t.Fatalf("watch %+v: a client going away must not decide the device was silent", w)
+		}
+		if d := r.io.Differs(); len(d) != 1 {
+			t.Fatalf("differs %+v, want DEV_A still applied", d)
+		}
+	})
+	t.Run("a pending revert cancelled", func(t *testing.T) {
+		r := startIORig(t, base, false)
+		if _, err := apply(r, modbusYAML(deadPort(t), slavePort(s2), "", ""), ApplyOptions{RevertIfSilent: time.Second}); err != nil {
+			t.Fatal(err)
+		}
+		w, err := r.io.CancelRevert("tester")
+		if err != nil || w.State != WatchCancelled || !strings.Contains(w.Reason, "tester") {
+			t.Fatalf("cancel: %v %+v", err, w)
+		}
+		time.Sleep(1500 * time.Millisecond)
+		if d := r.io.Differs(); len(d) != 1 || d[0].Device != "DEV_A" {
+			t.Fatalf("differs %+v, want DEV_A still applied after the cancelled revert's deadline", d)
+		}
+		if _, err := r.io.CancelRevert("tester"); !errors.Is(err, ErrNoRevert) {
+			t.Fatalf("a second cancel: %v, want no revert pending", err)
+		}
+	})
+}
+
+// #994 re-check: the watch through the real server hook, a revert under
+// way refused a cancel, silence re-sampled under the lock, and a whole
+// swap's unchanged devices left out of the watch.
+func TestIOWatchReCheck(t *testing.T) {
+	s1, s2 := newSlave(t, 4), newSlave(t, 7)
+	base := ioFiles(slavePort(s1), slavePort(s2), "")
+	base = withFile(base, "nautilus.yaml", strings.Replace(string(base["nautilus.yaml"].Data), "  scan-rate: 10ms\n", "  scan-rate: 10ms\n  validate: static\n", 1))
+	stage := func(r *ioRig, files fstest.MapFS) *IOCandidate {
+		t.Helper()
+		c := r.io.Stage(files, "upload", "tester")
+		if v := r.io.Validate(c); !v.Valid {
+			t.Fatalf("validate: %+v", v.Checks)
+		}
+		return c
+	}
+
+	t.Run("through the real hook", func(t *testing.T) {
+		r := startIORig(t, base, false)
+		h := server.New(r.rt, server.Options{OnlineEdits: true, IO: r.io.Hook(nil, base)}).Handler()
+		call := func(method, path string, body any) (int, map[string]any) {
+			var buf bytes.Buffer
+			if body != nil {
+				json.NewEncoder(&buf).Encode(body)
+			}
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, httptest.NewRequest(method, "http://localhost"+path, &buf))
+			out := map[string]any{}
+			json.Unmarshal(w.Body.Bytes(), &out)
+			return w.Code, out
+		}
+		_, st := call("POST", "/api/io/staged", map[string]any{"files": map[string]string{"modbus.yaml": modbusYAML(deadPort(t), slavePort(s2), "", "")}})
+		id := st["id"].(string)
+		call("POST", "/api/io/staged/"+id+"/validate", nil)
+		if code, st := call("POST", "/api/io/staged/"+id+"/apply", map[string]any{"revertIfSilent": "5s"}); code != http.StatusOK {
+			t.Fatalf("apply: %d %v", code, st)
+		}
+		_, st = call("GET", "/api/state", nil)
+		if c, _ := st["config"].(map[string]any); !strings.Contains(fmt.Sprint(c["watch"]), "device DEV_A") {
+			t.Fatalf("config = %v, want the pending revert", st["config"])
+		}
+		if code, st := call("POST", "/api/io/revert/cancel", nil); code != http.StatusOK || st["state"] != WatchCancelled {
+			t.Fatalf("cancel: %d %v", code, st)
+		}
+		if _, st := call("GET", "/api/io", nil); !strings.Contains(fmt.Sprint(st["watch"]), WatchCancelled) {
+			t.Fatalf("/api/io watch = %v", st["watch"])
+		}
+	})
+
+	t.Run("a revert under way refuses a cancel", func(t *testing.T) {
+		r := startIORig(t, base, false)
+		real := r.io.replaceSource
+		calls := 0
+		r.io.replaceSource = func(mb *modbus.Driver, src modbus.Source, tags []modbus.TagBinding, opts modbus.ReplaceOptions) error {
+			calls++
+			if calls > 1 {
+				time.Sleep(800 * time.Millisecond) // a slow revert
+			}
+			return real(mb, src, tags, opts)
+		}
+		if _, err := r.io.ApplyWith(r.ctx, stage(r, withFile(base, "modbus.yaml", modbusYAML(deadPort(t), slavePort(s2), "", ""))), "tester", ApplyOptions{RevertIfSilent: 300 * time.Millisecond}); err != nil {
+			t.Fatal(err)
+		}
+		eventually(t, "the revert under way", func() bool { w := r.io.Watch(); return w != nil && w.State == WatchReverting })
+		if _, err := r.io.CancelRevert("tester"); !errors.Is(err, ErrNoRevert) || !strings.Contains(err.Error(), "in progress") {
+			t.Fatalf("cancel during the revert: %v", err)
+		}
+		w := waitWatch(t, r)
+		if w.State != WatchReverted || strings.Contains(w.Reason, "cancelled") {
+			t.Fatalf("watch %+v: the revert ran, and must say so", w)
+		}
+		if _, err := r.io.CancelRevert("tester"); err == nil || !strings.Contains(err.Error(), "already reverted at") {
+			t.Fatalf("cancel after the revert: %v", err)
+		}
+	})
+
+	t.Run("a device that answers while the revert waits for the lock", func(t *testing.T) {
+		r := startIORig(t, base, false)
+		late := deadPort(t)
+		if _, err := r.io.ApplyWith(r.ctx, stage(r, withFile(base, "modbus.yaml", modbusYAML(late, slavePort(s2), "", ""))), "tester", ApplyOptions{RevertIfSilent: 300 * time.Millisecond}); err != nil {
+			t.Fatal(err)
+		}
+		r.io.applying.Lock() // an apply in progress: the watch's revert waits
+		time.Sleep(500 * time.Millisecond)
+		srv := slave.NewServer(fmt.Sprintf("127.0.0.1:%d", late), nil) // the device comes up meanwhile
+		if err := srv.Start(); err != nil {
+			r.io.applying.Unlock()
+			t.Fatal(err)
+		}
+		t.Cleanup(srv.Stop)
+		srv.Unit(1).SetHolding(0, 4)
+		eventually(t, "DEV_A reads", func() bool { return r.rt.TagQuality("A_In").IsGood() })
+		r.io.applying.Unlock()
+		if w := waitWatch(t, r); w.State != WatchAnswered {
+			t.Fatalf("watch %+v: the device answered before the revert could run", w)
+		}
+		if d := r.io.Differs(); len(d) != 1 {
+			t.Fatalf("differs %+v, want DEV_A applied", d)
+		}
+	})
+
+	t.Run("a whole swap's unchanged devices are not watched", func(t *testing.T) {
+		ua := uaServer(t, 1.5)
+		files := ioFiles(slavePort(s1), deadPort(t), ua) // DEV_B silent all along
+		r := startIORig(t, files, false)
+		c := stage(r, withFile(files, "nautilus.yaml", strings.Replace(string(files["nautilus.yaml"].Data), "    scan-rate: 10ms\n", "    scan-rate: 15ms\n", 1)))
+		if _, err := r.io.ApplyWith(r.ctx, c, "tester", ApplyOptions{RevertIfSilent: 500 * time.Millisecond}); err != nil {
+			t.Fatal(err)
+		}
+		if w := waitWatch(t, r); w.State != WatchAnswered {
+			t.Fatalf("watch %+v: a scan-rate apply must not answer for (or revert over) a device it did not change", w)
+		}
+	})
 }

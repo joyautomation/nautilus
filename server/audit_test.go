@@ -336,7 +336,19 @@ func auditRows() []auditRow {
 		{name: "io apply nothing", pattern: "POST /api/io/staged/{id}/apply", server: ioSrv,
 			method: "POST", path: "/api/io/staged/9/apply",
 			action: "config.apply", target: "9", user: "anonymous", source: "api", result: "refused"},
+		{name: "io cancel a pending revert", pattern: "POST /api/io/revert/cancel", server: ioRevertSrv,
+			method: "POST", path: "/api/io/revert/cancel",
+			action: "config.revert.cancel", target: "", user: "anonymous", source: "api", result: "ok"},
+		{name: "io cancel with none pending", pattern: "POST /api/io/revert/cancel", server: ioSrv,
+			method: "POST", path: "/api/io/revert/cancel",
+			action: "config.revert.cancel", target: "", user: "anonymous", source: "api", result: "refused"},
 	}
+}
+
+// ioRevertSrv has an apply whose watch will revert it.
+func ioRevertSrv(t *testing.T) *Server {
+	f := &fakeIO{valid: true, watch: &IOWatch{Gen: 1, Revert: true, State: "watching", Pending: []string{"device DEV_A"}}}
+	return New(newTestRuntime(t), ioOptions(f, true))
 }
 
 func ioSrv(t *testing.T) *Server {
