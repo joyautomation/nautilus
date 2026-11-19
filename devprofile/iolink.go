@@ -40,6 +40,13 @@ type PDCarrier struct {
 	Point string `yaml:"point"`
 	// Form is how the point carries the octets: FormU32 or FormHex.
 	Form string `yaml:"form"`
+	// Doc cites where the form (and, for u32, where a short image sits)
+	// is documented or was measured, "<docs id> <where>", as a point's
+	// doc: does. The form is a claim of its own, beyond the point's.
+	Doc string `yaml:"doc"`
+	// Unverified marks a form no document or measurement supports.
+	// A carrier needs Doc or Unverified.
+	Unverified bool `yaml:"unverified"`
 }
 
 // Process data forms.
@@ -111,6 +118,17 @@ func (p *Profile) validateIOLink() error {
 		}
 		return check{}, fmt.Errorf("iolink: %s: form %q is not %s or %s", key, c.Form, FormU32, FormHex)
 	}
+	for _, c := range []struct {
+		key string
+		c   *PDCarrier
+	}{{"pd-in", s.PDIn}, {"pd-out", s.PDOut}} {
+		if c.c == nil {
+			continue
+		}
+		if err := p.citation(c.c.Doc, c.c.Unverified); err != nil {
+			return fmt.Errorf("iolink: %s: %w", c.key, err)
+		}
+	}
 	var checks []check
 	in, err := carrier("pd-in", s.PDIn, &no)
 	if err != nil {
@@ -156,4 +174,23 @@ func (p *Profile) validateIOLink() error {
 		}
 	}
 	return nil
+}
+
+// citation applies a point's provenance rule to another claim: a doc: whose
+// first word is the id of one of the profile's documents, or
+// unverified: true.
+func (p *Profile) citation(doc string, unverified bool) error {
+	if doc == "" {
+		if !unverified {
+			return fmt.Errorf("cite a document for the form (doc:) or mark it unverified: true")
+		}
+		return nil
+	}
+	id, _, _ := strings.Cut(doc, " ")
+	for _, d := range p.Docs {
+		if d.ID == id {
+			return nil
+		}
+	}
+	return fmt.Errorf("doc %q is not the id of a document under docs", id)
 }

@@ -274,6 +274,27 @@ func runDevicesShow(args []string, w io.Writer) int {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", pt.Name, pt.Type, access, addr, format, src, pt.Desc)
 	}
 	tw.Flush()
+	if l := p.IOLink; l != nil {
+		fmt.Fprintf(w, "\niolink: %d ports\n", l.Ports)
+		for _, c := range []struct {
+			key string
+			c   *devprofile.PDCarrier
+		}{{"pd-in", l.PDIn}, {"pd-out", l.PDOut}} {
+			if c.c == nil {
+				continue
+			}
+			src := c.c.Doc
+			if c.c.Unverified {
+				src = "UNVERIFIED"
+			}
+			fmt.Fprintf(w, "  %-9s %s as %s  (form: %s)\n", c.key, c.c.Point, c.c.Form, src)
+		}
+		for _, k := range []struct{ key, tmpl string }{{"pd-valid", l.PDValid}, {"vendor-id", l.VendorID}, {"device-id", l.DeviceID}, {"status", l.Status}} {
+			if k.tmpl != "" {
+				fmt.Fprintf(w, "  %-9s %s\n", k.key, k.tmpl)
+			}
+		}
+	}
 	if p.Simulator != nil {
 		fmt.Fprintf(w, "\nsimulator: %s (%s)\n", p.Simulator.Block, filepath.Base(p.Simulator.Source))
 	}

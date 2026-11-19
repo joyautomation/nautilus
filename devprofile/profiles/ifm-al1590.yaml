@@ -30,7 +30,7 @@ iolink:                # docs/design/iolink.md §3
   # pdin is hex text, two digits per octet (measured: '0286' is 02 86).
   # No pd-out, ids or status yet: they are not served (see notes), so a
   # port on this master is not identity-checked.
-  pd-in: { point: "Port{n}_Pdin", form: hex }
+  pd-in: { point: "Port{n}_Pdin", form: hex, doc: "measured pdin hex text, '0286' is 0x0286" }
 points:
   - { name: "Port{n}_Pdin", type: STRING, repeat: 8,
       node-id: "ns=5;s={location}/iolinkmaster/port[{n}]/iolinkdevice/pdin",
