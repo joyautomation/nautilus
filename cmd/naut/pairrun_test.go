@@ -16,6 +16,7 @@ import (
 	"testing/fstest"
 	"time"
 
+	"github.com/joyautomation/nautilus/alarm"
 	"github.com/joyautomation/nautilus/internal/project"
 	"github.com/joyautomation/nautilus/leader"
 	"github.com/joyautomation/nautilus/quorum/node"
@@ -34,6 +35,10 @@ tasks:
 tags:
   - { name: SP, role: setpoint, init: 0.0 }
   - { name: Level, role: input, type: REAL, init: 0.0 }
+  - { name: Trip, role: setpoint, type: BOOL, init: false }
+alarms:
+  defs:
+    - { id: Trip, tag: Trip }
 substitutes:
   rules:
     - { match: Level, substitute: 90.0, ack-on-start: true }
@@ -183,6 +188,8 @@ func TestRedundancyWithoutPeersIsTheLease(t *testing.T) {
 // it: the member (peer listener serving), the project wired to its
 // election, the gate on live scans, the election and the scan loop.
 type pairNode struct {
+	eng    *alarm.Engine    // nil without alarms
+	al     *server.AlarmLog // nil without alarms
 	m      *pairMember
 	rt     *runtime.Runtime
 	cancel context.CancelFunc
@@ -221,17 +228,29 @@ func startPairNodeWith(t *testing.T, files fstest.MapFS, env map[string]string, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	sl, err := m.startLog(rt, 0)
+	var eng *alarm.Engine
+	alarms, err := startAlarms(proj, rt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if alarms != nil {
+		eng = alarms.Engine
+		t.Cleanup(func() { alarms.Close() })
+	}
+	sl, al, err := m.startLog(rt, 0, eng)
 	if err != nil {
 		t.Fatal(err)
 	}
 	gate := gateOnLiveScans(proj, m.q, rt, localGateLease)
 	ctx, cancel := context.WithCancel(context.Background())
-	n := &pairNode{m: m, rt: rt, cancel: cancel, done: make(chan struct{})}
+	n := &pairNode{m: m, rt: rt, cancel: cancel, done: make(chan struct{}), eng: eng, al: al}
 	if api != nil {
 		sopts := proj.Server
 		sopts.Cluster = m.q
 		sopts.SubstituteLog = sl
+		if eng != nil {
+			sopts.Alarms, sopts.AlarmLog = eng, al
+		}
 		srv := server.New(rt, sopts)
 		hs := &http.Server{Handler: srv.Handler()}
 		go hs.Serve(api)

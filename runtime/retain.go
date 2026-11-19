@@ -54,6 +54,14 @@ func (r *Runtime) SetAlarms(a retain.AlarmRetainer) {
 	r.alarmMu.Unlock()
 }
 
+// SyncedAlarmRestorer is an alarm retainer that restores from a
+// replicated log of operator intent (a redundant pair, #710 PR 3b-2c):
+// takeover tells it whether the log's catch-up succeeded, so an unsynced
+// takeover carries no acknowledgement (they re-annunciate instead).
+type SyncedAlarmRestorer interface {
+	RestoreAlarmsSynced(m map[string]retain.AlarmRetain, synced bool)
+}
+
 // alarmRetainer reads the registered engine. Its own mutex, not leadMu:
 // loadRetained runs inside takeover, which already holds leadMu.
 func (r *Runtime) alarmRetainer() retain.AlarmRetainer {
@@ -256,6 +264,10 @@ func (r *Runtime) takeover() {
 		if err := r.loadRetained(); err != nil {
 			r.retainLoadFailed(err)
 		}
+	} else if sa, ok := r.alarmRetainer().(SyncedAlarmRestorer); ok && r.coord != nil && r.intentLog() != nil {
+		// A pair with no retain: block still restores its log's alarm
+		// view (#710 PR 3b-2c): the log, not a store, holds the acks.
+		sa.RestoreAlarmsSynced(nil, r.intent.synced)
 	}
 	// A substitute's remainder is computed once, from its wall-clock
 	// until: the leadership that timed it may have been another replica's,
@@ -385,7 +397,13 @@ func (r *Runtime) loadRetained() error {
 	// correct: takeover() re-reads the store on the standby→leader edge, so
 	// a failover cannot resurrect hundreds of acked alarms as unacked.
 	if a := r.alarmRetainer(); a != nil {
-		a.RestoreAlarms(st.Alarms)
+		if sa, ok := a.(SyncedAlarmRestorer); ok && r.intentLog() != nil {
+			// A pair: its operator-intent log holds the alarm state, and
+			// says whether this takeover's catch-up succeeded (#710).
+			sa.RestoreAlarmsSynced(st.Alarms, r.intent.synced)
+		} else {
+			a.RestoreAlarms(st.Alarms)
+		}
 	}
 	// Earlier discards ride along until a newer one for the same task
 	// replaces them, so a save never loses a recoverable edit.

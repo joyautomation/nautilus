@@ -151,6 +151,29 @@ var table = []mutation{
 	// skip the check. cmd/naut's TestCloneWithAnUnresolvableLinkNeverVotes
 	// leads twice under it.
 	{"box_wait_skipped", []string{"TestUnreadableBoxHoldsTheVoter"}},
+	// Outside the quorum tree (rowPkgs): the operator-intent log's late-
+	// start lapse (#1030, #1032 reviews) and the pair's alarm acks (#710
+	// PR 3b-2c).
+	{"lapse_ignored", []string{"TestLateUnknownStartLapses", "TestAdoptedCopyStillLapses"}},
+	{"ack_clear_off", []string{"TestPairAckDoesNotCarryToANewOccurrence"}},
+	{"alarm_view_ignored", []string{"TestPairAckCarriesAcrossASyncedTakeover"}},
+}
+
+// rowPkgs are the packages a row runs instead of ./quorum/..., filtered
+// to its tests: a switch outside the quorum tree.
+var rowPkgs = map[string][]string{
+	"lapse_ignored":      {"./oplog"},
+	"ack_clear_off":      {"./cmd/naut"},
+	"alarm_view_ignored": {"./cmd/naut"},
+}
+
+// args are the go test arguments for m.
+func (m mutation) args() []string {
+	pkgs, ok := rowPkgs[m.name]
+	if !ok {
+		return []string{"./quorum/..."}
+	}
+	return append([]string{"-run", "^(" + strings.Join(m.expect, "|") + ")$"}, pkgs...)
 }
 
 // event is one line of `go test -json`.
@@ -244,8 +267,8 @@ func baseline(r result) (bool, string) {
 	return true, "green"
 }
 
-func run(name string) []byte {
-	cmd := exec.Command("go", "test", "-tags", "quorum_mut", "-count=1", "-json", "./quorum/...")
+func run(name string, args []string) []byte {
+	cmd := exec.Command("go", append([]string{"test", "-tags", "quorum_mut", "-count=1", "-json"}, args...)...)
 	cmd.Env = append(os.Environ(), "QUORUM_MUT="+name)
 	out, _ := cmd.CombinedOutput() // a red run exits non-zero; the stream says why
 	return out
@@ -256,7 +279,12 @@ func main() {
 	flag.Parse()
 	ok := true
 	fmt.Println("| mutation | result |\n|---|---|")
-	b, why := baseline(parse(run("")))
+	b, why := baseline(parse(run("", mutation{}.args())))
+	for _, m := range table {
+		if _, out := rowPkgs[m.name]; out && b {
+			b, why = baseline(parse(run("", m.args()))) // the rows outside the tree, green first
+		}
+	}
 	fmt.Printf("| (baseline: the tag on, no mutation) | %s |\n", why)
 	if !b {
 		os.Exit(1)
@@ -267,7 +295,7 @@ func main() {
 			continue
 		}
 		found = true
-		caught, why := verdict(m, parse(run(m.name)))
+		caught, why := verdict(m, parse(run(m.name, m.args())))
 		ok = ok && caught
 		fmt.Printf("| %s | %s |\n", m.name, why)
 	}

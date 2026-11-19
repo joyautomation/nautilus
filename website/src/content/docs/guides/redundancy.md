@@ -344,10 +344,20 @@ still happens on time. (Making the witness the log's third copy, so one
 controller down is not enough to stop these writes, is under
 discussion.)
 
-Alarm acknowledgements and shelves do **not** go through that log yet:
-an acknowledgement or a shelve made on the old leader may be lost at a
-failover, and the alarm comes back unacknowledged on the new one. This
-is being built next.
+Alarm acknowledgements and shelves go through the same log. When the
+other controller takes over and could catch the log up (a handover, or
+a fault while the old leader's box still answers), an alarm acknowledged
+before the takeover stays acknowledged, and a shelf stays until its own
+end. An acknowledgement is of an occurrence: once an acknowledged alarm
+returns to normal, its acknowledgement is cleared, so a new occurrence
+always annunciates.
+
+**When the takeover could not catch the log up** (with the log on the two
+controllers only, that is every takeover after the leader died), no
+acknowledgement is carried at all: acknowledged alarms annunciate again
+on the new leader (the safe direction), and the alarm journal says
+"acks not carried: takeover unsynced". Shelves still carry. Starting,
+stopping or acknowledging is refused while the other controller is down.
 
 Both controllers must run the same `redundancy:` section (`peers:` and
 `witness:`). If they don't (an edited manifest deployed to one box

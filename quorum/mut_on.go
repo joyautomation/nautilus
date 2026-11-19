@@ -78,6 +78,11 @@ var Mutations = []string{
 	"hello_duplicate_unseen",     // two processes behind the peer's name (nonces N1, N2, N1 at the hello) raise nothing
 	"box_unchecked",              // a controller votes from a state file written on another box (a cloned disk, #1029)
 	"box_wait_skipped",           // a controller whose box can't be read yet votes on the stored identity (#1034 review)
+	// Outside the quorum tree, listed so this init accepts them when a
+	// package that imports quorum runs under one (the runner's pkgs rows).
+	"lapse_ignored",      // oplog: a committed KindLapse is not looked at; a late start runs (#1030 review)
+	"ack_clear_off",      // server: an acked alarm back to normal proposes no ack-clear (#710 PR 3b-2c)
+	"alarm_view_ignored", // server: a synced takeover restores its own retain, not the log's alarm view
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")

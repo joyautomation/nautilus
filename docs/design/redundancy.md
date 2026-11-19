@@ -44,7 +44,22 @@ bumpless, and the measured takeover time is published instead.
   survives a failover. The leader sequences. The witness stores the entries (kilobytes a day)
   and follows the leader that its own vote state names.
   - **Where acks come from.** The state stream still carries alarm state for a hot takeover,
-    but the log is where an ack comes from.
+    but the log is where an ack comes from (#710 PR 3b-2c, `server/alarms_oplog.go`).
+    - **The write path.** Ack, shelve and unshelve are validated against the leader's engine,
+      then proposed. "Ack all" becomes the leader's unacknowledged ids.
+    - **Applying.** The leader applies each committed entry to its live engine, which journals
+      it; a standby records it in a replicated view.
+    - **At a takeover,** after the catch-up and before the first scan, the new leader restores
+      the view: acks held for each alarm's first activation, and shelves until their own ends.
+    - **Unsynced takeovers carry no ack** (naut-lead): those alarms re-annunciate and the alarm
+      journal says "acks not carried: takeover unsynced". Shelves carry. In the 2-of-2 interim
+      that is every takeover after the leader died.
+    - **Occurrences.** When an acknowledged alarm returns to normal, the leader proposes an
+      `ack-clear`, retried until committed. Without it a new occurrence would come up
+      pre-acknowledged after a takeover. The residual window is the leader dying between the
+      return to normal and that commit: one log round trip plus a scan, measured at 20-60 ms on
+      loopback (`TestPairAckDoesNotCarryToANewOccurrence`). Acks bound to an activation proper
+      come with #715.
   - **A new leader catches up first.** It catches up the log from the other peers (`oplog`'s
     `leaderCatchUp`) before it applies alarm state or accepts operator writes.
   - **No quorum, no operator writes.** A lone survivor has no majority, so its operator writes

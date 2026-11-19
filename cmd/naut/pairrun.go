@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/joyautomation/nautilus/alarm"
 	"github.com/joyautomation/nautilus/internal/project"
 	"github.com/joyautomation/nautilus/leader"
 	"github.com/joyautomation/nautilus/oplog"
@@ -397,22 +398,43 @@ const PairNoMajority = "operator-intent log has no majority: the peer is down; s
 // catches the log up before its first scan, waiting up to wait). The
 // returned log goes to the server's Options.SubstituteLog. Call it before
 // the election's Run and the runtime's Run.
-func (m *pairMember) startLog(rt *runtime.Runtime, wait time.Duration) (*server.SubstituteLog, error) {
+func (m *pairMember) startLog(rt *runtime.Runtime, wait time.Duration, eng *alarm.Engine) (*server.SubstituteLog, *server.AlarmLog, error) {
 	sl := server.NewSubstituteLog(rt)
 	sl.SetNoMajority(PairNoMajority)
+	// Alarm acknowledgements and shelves (#710 PR 3b-2c): applied to the
+	// live engine on the leader, to the replicated view on a standby; the
+	// runtime restores the view at a takeover (PairAlarms).
+	var al *server.AlarmLog
+	if eng != nil {
+		al = server.NewAlarmLog(eng, rt.Leading)
+		rt.SetAlarms(server.PairAlarms{Engine: eng, Log: al})
+	}
+	apply := func(e oplog.Entry) error {
+		if done, err := sl.Apply(e); done {
+			return err
+		}
+		if al != nil {
+			_, err := al.Apply(e)
+			return err
+		}
+		return nil
+	}
 	self := peerURL(m.peers[string(m.o.Self)])
 	n, err := oplog.New(oplog.Options{
 		Self: self, Peers: []string{peerURL(m.peers["a"]), peerURL(m.peers["b"])},
 		Leadership: pairLeadership{q: m.q, peers: m.peers},
 		File:       filepath.Join(filepath.Dir(m.o.StatePath), pairLogFile),
-		Apply:      func(e oplog.Entry) error { _, err := sl.Apply(e); return err },
+		Apply:      apply,
 		Lapse:      sl.Lapse,
 		Token:      m.o.Token, Timeout: max(m.o.Lease/2, 500*time.Millisecond),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("operator-intent log: %w", err)
+		return nil, nil, fmt.Errorf("operator-intent log: %w", err)
 	}
 	sl.Attach(n)
+	if al != nil {
+		al.Attach(n)
+	}
 	rt.SetIntentLog(sl, wait)
 	m.log = n
 	h := n.Handler()
@@ -425,7 +447,7 @@ func (m *pairMember) startLog(rt *runtime.Runtime, wait time.Duration) (*server.
 	n.Ping(pctx)
 	pcancel()
 	go m.driveLog(ctx)
-	return sl, nil
+	return sl, al, nil
 }
 
 // driveLog is the log's periodic work, every half lease: the leader's
