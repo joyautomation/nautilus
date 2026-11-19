@@ -229,8 +229,13 @@ func TestCandidateRetryJitter(t *testing.T) {
 	r := c.Tick(0, "", 0, true)
 	c.OnReply(at(10*ms), refused("B", r, 5, 0))
 	c.OnReply(at(10*ms), refused("W", r, 5, 42))
-	// retryAt = 10 ms + 300 ms; the look at 500 ms is past it.
-	r = c.Tick(at(500*ms), "A", 0, true)
+	// The retry is the next look: 10 ms + 250 ms (half a look) + 300 ms,
+	// off the 500 ms grid, so two controllers refused together don't stay
+	// in lockstep.
+	if c.NextLook() != at(560*ms) || c.Tick(at(559*ms), "A", 0, true) != nil {
+		t.Fatalf("next look %v, want 560 ms and nothing before it", time.Duration(c.NextLook()))
+	}
+	r = c.Tick(at(560*ms), "A", 0, true)
 	if r == nil || r.Term != 6 {
 		t.Fatalf("retry: %+v, want term 6 (promised 5 seen + 1)", r)
 	}
@@ -238,10 +243,9 @@ func TestCandidateRetryJitter(t *testing.T) {
 	c.OnReply(at(600*ms), refused("W", r, 6, 42))
 	cfg.Jitter = func() time.Duration { return 450 * ms }
 	c.cfg.Jitter = cfg.Jitter
-	// retryAt = 600 + 300 = 900 ms (the jitter is drawn at the refusal):
-	// the look at 1 s retries.
-	if c.Tick(at(1000*ms), "A", 0, true) == nil {
-		t.Fatal("no retry at 1 s")
+	// 600 + 250 + 300 = 1.15 s (the jitter is drawn at the refusal).
+	if c.Tick(at(1149*ms), "A", 0, true) != nil || c.Tick(at(1150*ms), "A", 0, true) == nil {
+		t.Fatal("the retry is not at 1.15 s")
 	}
 }
 

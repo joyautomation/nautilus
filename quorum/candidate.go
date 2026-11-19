@@ -113,6 +113,36 @@ func NewCandidate(cfg Config, known uint64, now Instant) (*Candidate, error) {
 // renewals stopped closes its gate on time even if Tick is late.
 func (c *Candidate) Leading(now Instant) bool { return c.leading && now < c.leaseEnd }
 
+// Observe tells the candidate a term its own voter was asked for by the
+// other controller. Its next campaign goes above it: the replies alone
+// carry only promised terms, and two controllers campaigning at
+// maxSeen+1 from them land on equal terms, which never yield
+// (Voter.WouldYield), round after round.
+func (c *Candidate) Observe(term uint64) {
+	if term > c.maxSeen {
+		c.maxSeen = term
+	}
+}
+
+// NextLook returns when Tick will next do anything: a driver arms one
+// timer for it (and ticks again after any reply).
+func (c *Candidate) NextLook() Instant { return max(c.nextLook, c.backoffUntil) }
+
+// Yield gives up every open campaign and renewal round at now, so no
+// grant still in flight can make this candidate lead, and reports true;
+// or, while it leads, does nothing and reports false. The driver calls it
+// before its own voter drops its promise to this candidate for the other
+// controller's higher-term request (Voter.WouldYield).
+func (c *Candidate) Yield(now Instant) bool {
+	c.expire(now)
+	if c.Leading(now) {
+		return false
+	}
+	c.rounds = c.rounds[:0]
+	c.pending = nil
+	return true
+}
+
 // Term is the fencing token: while leading, the term leadership was
 // acquired in (the epoch), stable across renewals that move the vote term
 // (VoteTerm); 0 when not leading, so a standby never holds a token above
@@ -233,7 +263,12 @@ func (c *Candidate) OnReply(now Instant, r Reply) {
 		if c.cfg.Jitter != nil {
 			j = c.cfg.Jitter()
 		}
-		c.retryAt = now.Add(j)
+		// The retry moves the look itself, to half a look plus the jitter
+		// (lease/8 to 3·lease/8 on): on the lease/4 grid a jitter under
+		// lease/4 would change nothing, and two controllers started
+		// together would campaign in lockstep at equal terms for ever.
+		c.retryAt = now.Add(c.cfg.look()/2 + j)
+		c.nextLook = c.retryAt
 		if c.pending == rd {
 			c.pending = nil
 		}

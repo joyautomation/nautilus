@@ -103,6 +103,32 @@ func (v *Voter) LeaderSeen() (NodeID, Instant) {
 	return from, until
 }
 
+// WouldYield reports whether r, received at now, is the other candidate's
+// request for a term strictly above the one this voter promised to its
+// OWN candidate, while that promise runs. Two controllers counting only
+// each other (the witness down, or at an incarnation not adopted) would
+// otherwise refuse each other forever: each campaign makes the own voter
+// promise itself for a whole lease. The driver then asks its candidate to
+// yield (Candidate.Yield, refused while leading, which cancels every open
+// round so the promise can never back a lease) and, only if it did, calls
+// ReleaseSelf before Handle. Equal terms never yield: one term, one
+// grantee. The driver also passes every request's term to its candidate
+// (Candidate.Observe), so the next campaign goes strictly above the
+// peer's and this yield can happen.
+func (v *Voter) WouldYield(now Instant, r Request) bool {
+	return r.From != v.self && v.st.GrantedTo == v.self && now >= v.waitUntil &&
+		now < v.promiseUntil && r.Term > v.st.Promised
+}
+
+// ReleaseSelf ends this voter's running promise to its own candidate, once
+// that candidate has yielded (WouldYield). The promised term stays: terms
+// only rise.
+func (v *Voter) ReleaseSelf() {
+	if v.st.GrantedTo == v.self {
+		v.promiseUntil = 0
+	}
+}
+
 // Handle answers r, received at now. A refusal comes back at once. A grant
 // that changes the persisted state comes back as a Persist, and the grant
 // itself only from Persisted. A renewal that changes nothing durable is
