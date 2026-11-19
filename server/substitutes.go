@@ -328,9 +328,12 @@ func (s *Server) substituteAckTarget(_ *http.Request, body []byte) auditTarget {
 //     so a transient __Substitute_Fault is never invisible: the alarm
 //     layer latches, the journal records.
 //
+//   - a takeover's superseded stop (substitute.stop by system): the entry
+//     was not in the shared store, and if it began just before this
+//     replica lost the lease, nobody else recorded its end.
+//
 // A start, stop and acknowledgement are already journalled by the route
-// that made them; a takeover's superseded stop was journalled by the
-// leader that ended the entry.
+// that made them.
 func (s *Server) auditSubstituteEvent(ev runtime.SubstituteEvent) {
 	e := ev.Entry
 	switch ev.Kind {
@@ -344,6 +347,21 @@ func (s *Server) auditSubstituteEvent(ev runtime.SubstituteEvent) {
 			Before: map[string]any{"id": e.ID, "value": e.Value, "by": e.By},
 			After:  map[string]any{"live": e.Live},
 			Detail: map[string]any{"reason": ev.Reason, "grantedMs": e.GrantedMs, "untilMs": e.UntilMs},
+			Result: audit.ResultOK,
+		})
+	case runtime.SubstituteEventStop:
+		if ev.Reason != runtime.SubstituteReasonSuperseded {
+			return // a person's stop or a replace: its route journalled it
+		}
+		s.audit.record(audit.Entry{
+			TS:     time.UnixMilli(ev.AtMs),
+			User:   ev.By,
+			Source: audit.SourceSystem,
+			Action: "substitute.stop",
+			Target: e.Name,
+			Before: map[string]any{"id": e.ID, "value": e.Value, "by": e.By},
+			After:  map[string]any{"live": e.Live},
+			Detail: map[string]any{"reason": ev.Reason, "untilMs": e.UntilMs},
 			Result: audit.ResultOK,
 		})
 	case runtime.SubstituteEventFault, runtime.SubstituteEventFaultClear:

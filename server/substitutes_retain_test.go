@@ -135,3 +135,23 @@ func TestSubstituteRestoredAtTheLoadIsListed(t *testing.T) {
 		t.Fatalf("list %+v; want entry 2 with 50 min left", l)
 	}
 }
+
+// A takeover's superseded stop is journalled (the store may never have
+// seen the entry, so nobody else recorded its end); a person's stop and a
+// replace are not journalled here a second time.
+func TestSupersededStopIsJournalled(t *testing.T) {
+	s := subAuditServer(t)
+	entry := runtime.Substitution{ID: 9, Name: "Level", Value: 95.0, By: "op"}
+	s.auditSubstituteEvent(runtime.SubstituteEvent{Kind: runtime.SubstituteEventStop, Entry: entry, By: "op", AtMs: 1})
+	s.auditSubstituteEvent(runtime.SubstituteEvent{Kind: runtime.SubstituteEventStop, Reason: runtime.SubstituteReasonReplaced, Entry: entry, By: "op", AtMs: 2})
+	s.auditSubstituteEvent(runtime.SubstituteEvent{Kind: runtime.SubstituteEventStop, Reason: runtime.SubstituteReasonSuperseded, Entry: entry, By: "system", AtMs: 3})
+	var got []audit.Entry
+	for _, x := range s.audit.ring.Recent() {
+		if x.Action == "substitute.stop" {
+			got = append(got, x)
+		}
+	}
+	if len(got) != 1 || got[0].User != "system" || got[0].Detail["reason"] != runtime.SubstituteReasonSuperseded || got[0].Target != "Level" {
+		t.Fatalf("substitute.stop entries %+v; want exactly the superseded one", got)
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	nio "github.com/joyautomation/nautilus/io"
+	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/retain"
 )
 
@@ -474,5 +475,126 @@ func TestPendingRetainedSubstitute(t *testing.T) {
 	rt2.Scan()
 	if l := rt2.Substitutes(); len(l) != 1 || l[0].ID != a.ID || rt2.Tags().Real("Flow") != 3 {
 		t.Fatalf("%+v, Flow %v: want only Level's entry; the stopped one never applies", l, rt2.Tags().Real("Flow"))
+	}
+}
+
+// Two leaders can issue the same ID: this replica started entry N and lost
+// the lease before saving it, and the next leader, reading the store's
+// high-water mark, started its own entry N on another tag. At this
+// replica's takeover the store's entry wins by identity (ID, address,
+// start): its own stale entry stops, and the other one applies.
+func TestTakeoverMatchesEntriesByIdentity(t *testing.T) {
+	store, clk := &fakeStore{}, noon()
+	coord := &flag{lead: true}
+	rt, _ := newRetainSubRig(t, coord, store, clk)
+	rt.Scan()
+	save(t, rt) // the store's high-water mark: none yet
+	mine := subFor(t, rt, "Level", 95, time.Hour, false)
+	coord.lead = false // lost before the next save
+	rt.Scan()
+
+	clk.advance(time.Minute)
+	theirs := retain.SubstituteRetain{
+		ID: mine.ID, Name: "Flow", Value: 7.0, By: "op2",
+		StartMs: clk.Now().UnixMilli(), UntilMs: clk.Now().Add(time.Hour).UnixMilli(),
+		GrantedMs: time.Hour.Milliseconds(),
+	}
+	store.mu.Lock()
+	store.state.Substitutes = &retain.SubstituteState{Entries: []retain.SubstituteRetain{theirs}, HighID: theirs.ID}
+	store.mu.Unlock()
+	events := collect(rt)
+	coord.lead = true
+	rt.Scan()
+	l := rt.Substitutes()
+	if len(l) != 1 || l[0].Name != "Flow" || l[0].ID != theirs.ID {
+		t.Fatalf("after the takeover: %+v; want only the store's Flow entry", l)
+	}
+	if rt.Tags().Real("Flow") != 7 || rt.Tags().Real("Level") != 10 || rt.Tags().Real("Mirror") != 10 {
+		t.Fatalf("Flow %v Level %v Mirror %v: want the store's substitute and the live Level in the first scan",
+			rt.Tags().Real("Flow"), rt.Tags().Real("Level"), rt.Tags().Real("Mirror"))
+	}
+	if evs := events(); !hasEvent(evs, SubstituteEventStop, SubstituteReasonSuperseded) {
+		t.Fatalf("events %+v; want this replica's stale entry stopped, superseded", evs)
+	}
+}
+
+// Through the real file store (JSON on disk): an INT input, a BOOL member
+// and a REAL member of a struct input come back with their types, so the
+// program's first scan after the restart runs on them.
+func TestSubstitutesThroughTheFileStore(t *testing.T) {
+	const lib = "TYPE Pump : STRUCT Run : BOOL; Speed : REAL; END_STRUCT; END_TYPE"
+	const prog = `PROGRAM M
+VAR_EXTERNAL P1 : Pump; Count : INT; P1__Substituted : BOOL; Count__Substituted : BOOL;
+  __SubstitutesUnacked : BOOL; __Substitute_Expired : BOOL; __Substitute_Fault : BOOL;
+  Ran : BOOL; Sp : REAL; N : INT; END_VAR
+Ran := P1.Run; Sp := P1.Speed; N := Count + 1;
+END_PROGRAM`
+	path := t.TempDir() + "/retain.json"
+	clk := noon()
+	build := func() *Runtime {
+		fd := &fieldDriver{in: nio.Values{"Count": int64(2)}}
+		rt, err := New(Options{
+			Program: prog, Libraries: []string{lib}, Clock: clk, Retain: retain.New("unused", path),
+			Driver: fd,
+			Tags: []TagDef{Typed("P1", RoleInput, "Pump"), Typed("Count", RoleInput, "INT"),
+				State("Ran", false), State("Sp", 0.0), State("N", int64(0))},
+			Substitutable: []string{"P1", "Count"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		rt.mono = clk.monoNow
+		fd.set("P1", ir.Zero(rt.tags.types[ir.NameKey("P1")]))
+		return rt
+	}
+	rt := build()
+	rt.LoadRetained()
+	rt.Scan()
+	subFor(t, rt, "P1.Run", true, time.Hour, false)
+	subFor(t, rt, "P1.Speed", 5, time.Hour, false)
+	subFor(t, rt, "Count", 7, time.Hour, false)
+	save(t, rt)
+
+	clk.advance(time.Minute)
+	rt2 := build()
+	rt2.LoadRetained()
+	rt2.Scan()
+	if l := rt2.Substitutes(); len(l) != 3 {
+		t.Fatalf("after the restart: %+v; want all three", l)
+	}
+	if !rt2.Tags().Bool("Ran") || rt2.Tags().Real("Sp") != 5 {
+		t.Fatalf("Ran %v Sp %v: the members' substitutes did not come back", rt2.Tags().Bool("Ran"), rt2.Tags().Real("Sp"))
+	}
+	v, err := rt2.Tags().ReadGlobal("Count")
+	n, _ := rt2.Tags().ReadGlobal("N")
+	if err != nil || v.Kind != ir.TypeInt || v.I != 7 || n.I != 8 {
+		t.Fatalf("Count = %+v (%v), N = %+v: want the INT substitute 7", v, err, n)
+	}
+}
+
+// Without a coordinator and without LoadRetained (an embedder), a
+// substitute started before the first scan's load is the newer intent: a
+// retained entry with the same ID (another substitute from before the
+// restart) does not run beside it under that ID.
+func TestLoadNeverHoldsTwoEntriesWithOneID(t *testing.T) {
+	store, clk := &fakeStore{}, noon()
+	store.state.Substitutes = &retain.SubstituteState{Entries: []retain.SubstituteRetain{{
+		ID: 1, Name: "Flow", Value: 7.0, By: "old",
+		StartMs: clk.Now().Add(-time.Minute).UnixMilli(), UntilMs: clk.Now().Add(time.Hour).UnixMilli(),
+		GrantedMs: time.Hour.Milliseconds(),
+	}}, HighID: 1}
+	rt2, _ := newRetainSubRig(t, nil, store, clk)
+	rt2.tags.setAny("Level", ir.RealVal(10)) // the input exists before the first scan
+	s := subFor(t, rt2, "Level", 95, time.Hour, false)
+	if s.ID != 1 {
+		t.Fatalf("the start before the load got ID %d; this test needs it to collide with the store's 1", s.ID)
+	}
+	rt2.Scan() // the first takeover loads the store
+	ids := map[uint64]int{}
+	for _, e := range rt2.Substitutes() {
+		ids[e.ID]++
+	}
+	if ids[1] != 1 || len(rt2.Substitutes()) != 1 || rt2.Tags().Real("Flow") != 3 {
+		t.Fatalf("%+v: want only the Level entry under ID 1", rt2.Substitutes())
 	}
 }

@@ -109,8 +109,9 @@ const (
 	SubstituteReasonRefusedAtLoad = "refused-at-load"
 	// SubstituteReasonSuperseded: at a takeover from a shared retain store,
 	// an entry this replica held from an earlier leadership was not in the
-	// store, so the leader since then ended it (a stop, never journalled
-	// twice).
+	// store (the leader since then ended it, or it began just before this
+	// replica lost the lease and was never saved), so it stops here. It is
+	// journalled, since in the second case nobody else recorded its end.
 	SubstituteReasonSuperseded = "superseded"
 	// SubstituteReasonRetainLoadFailed: the retain store could not be
 	// loaded, so substitutes it held may be missing (a fault with no
@@ -370,7 +371,7 @@ func logSubEvents(evs []SubstituteEvent) {
 			slog.Info("runtime: substitute fault cleared", "substitute", e.Entry.Name, "id", e.Entry.ID, "reason", e.Reason)
 		case SubstituteEventStop:
 			if e.Reason == SubstituteReasonSuperseded {
-				slog.Info("runtime: substitute ended at takeover: the retain store no longer holds it",
+				slog.Info("runtime: substitute ended at the retain load: the store holds another entry for it, or none",
 					"substitute", e.Entry.Name, "id", e.Entry.ID)
 			}
 		}

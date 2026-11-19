@@ -3,6 +3,7 @@ package runtime
 import (
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"time"
 
@@ -37,9 +38,11 @@ import (
 //
 // The store is what the last leader held, and a standby cannot start a
 // substitute, so this replica's own table (from an earlier spell as leader)
-// is stale by definition: the store's set REPLACES it. An entry in both is
-// kept as this process holds it; one only here ends as a stop (reason
-// superseded, not journalled: the leader that ended it did); one only in
+// is stale by definition: the store's set REPLACES it. Entries are matched
+// by identity (ID, address and start), since two leaders can each issue
+// the same next ID. An entry in both is kept as this process holds it; one
+// only here ends as a stop (reason superseded, journalled: the store may
+// never have seen it, so no other leader recorded its end); one only in
 // the store is applied untimed, and takeover's retimeSubstitutes computes
 // its remainder once from until (remainTakeover).
 //
@@ -123,15 +126,16 @@ func (r *Runtime) loadSubstitutes(st *retain.SubstituteState) {
 		evs = append(evs, SubstituteEvent{Kind: SubstituteEventFaultClear, Reason: SubstituteReasonRetainLoadFailed, By: "system", AtMs: at})
 	}
 	if r.coord != nil {
-		inStore := make(map[uint64]bool, len(entries))
-		for _, e := range entries {
-			inStore[e.ID] = true
-		}
+		// By identity, not ID alone: two leaders each issue IDs from the
+		// store's high-water mark, so one that started an entry and lost
+		// the lease before saving it may share an ID with an entry the
+		// next leader started.
 		var gone []uint64
 		for _, ss := range t.subs {
 			for i := range ss.entries {
-				if !inStore[ss.entries[i].ID] {
-					gone = append(gone, ss.entries[i].ID)
+				e := &ss.entries[i]
+				if !slices.ContainsFunc(entries, func(re retain.SubstituteRetain) bool { return sameEntry(e.Substitution, re) }) {
+					gone = append(gone, e.ID)
 				}
 			}
 		}
@@ -167,7 +171,7 @@ func (r *Runtime) installLocked(entries []retain.SubstituteRetain, now time.Dura
 	var evs []SubstituteEvent
 	refused := false
 	for _, re := range entries {
-		if t.hasIDLocked(re.ID) {
+		if held, ok := t.entryLocked(re.ID); ok && sameEntry(held, re) {
 			continue // this process holds it already, timed
 		}
 		s := Substitution{
@@ -175,11 +179,11 @@ func (r *Runtime) installLocked(entries []retain.SubstituteRetain, now time.Dura
 			StartMs: re.StartMs, UntilMs: re.UntilMs, GrantedMs: re.GrantedMs,
 			AckOnStart: re.AckOnStart, Acked: re.Acked,
 		}
-		if t.addressActiveLocked(re.Name) {
+		if t.addressActiveLocked(re.Name) || t.hasIDLocked(re.ID) {
 			// Only without a coordinator (with one, the table was just
 			// cut to the store's set): a substitute started before the
 			// load, by an embedder that never called LoadRetained, is
-			// the newer intent, as a replace would be.
+			// the newer intent, as a replace would be, and keeps its ID.
 			evs = append(evs, SubstituteEvent{Kind: SubstituteEventStop, Reason: SubstituteReasonSuperseded, Entry: s, By: "system", AtMs: at})
 			continue
 		}
@@ -289,6 +293,24 @@ func (r *Runtime) loadableLocked(re retain.SubstituteRetain) (string, error) {
 		return root, fmt.Errorf("%s is no longer substitutable (no substitutes: rule names it)", root)
 	}
 	return root, nil
+}
+
+// sameEntry reports whether an active entry and a retained one are the
+// same substitute: the same ID, address and start.
+func sameEntry(s Substitution, re retain.SubstituteRetain) bool {
+	return s.ID == re.ID && s.StartMs == re.StartMs && ir.SameName(s.Name, re.Name)
+}
+
+// entryLocked is the active entry with this ID. Caller holds t.mu.
+func (t *Tags) entryLocked(id uint64) (Substitution, bool) {
+	for _, ss := range t.subs {
+		for i := range ss.entries {
+			if ss.entries[i].ID == id {
+				return ss.entries[i].Substitution, true
+			}
+		}
+	}
+	return Substitution{}, false
 }
 
 // hasIDLocked reports whether an entry with this ID is active. Caller
