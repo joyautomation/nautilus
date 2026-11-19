@@ -90,6 +90,10 @@ break one changes this section first and says why.
   module the maintainer approved for it. `retain` imports only `internal/k8sapi`. `quorum` and its subtree
   import only each other, and only `leader`, the CLI and Verification import
   them: nothing else learns the vote protocol.
+- `internal/fence` (how a write leaves in time on a redundant pair,
+  redundancy design §3.4) imports only `io`, so every field and IT driver
+  may use it without learning the vote protocol: the pair's gate reaches a
+  driver only as `io.SendGate`.
 - Languages import only each other and the tag-file shared kernel.
 - Runtime imports only Languages, `io`, `retain`, `internal/stproject`.
   It never knows a driver, the server, alarms or the manifest.

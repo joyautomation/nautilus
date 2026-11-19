@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/joyautomation/nautilus/internal/fence"
 	nio "github.com/joyautomation/nautilus/io"
 )
 
@@ -205,6 +206,19 @@ type Driver struct {
 	// that finds the gate reopened while another is still forgetting waits
 	// for the forget instead of reading the previous term's written.
 	turnMu sync.Mutex
+	// leaseTerm is the lease's term the last open look saw (0: none yet,
+	// or no pair). A look that finds the gate open under another term
+	// treats it as a reopen, closed between two looks or not: the lease
+	// was lost and won again, and nothing queued before may go (#1040).
+	leaseTerm atomic.Uint64
+	// reopens counts forgetWritten: a flush that took its queue before a
+	// reopen sends none of it after (the reopen forgot it as the previous
+	// leadership's), as eip's term does (#1040 review).
+	reopens atomic.Uint64
+	// sendGate is a pair's gate with its send budget (SetSendGate): when
+	// installed it is the gate every look reads, and each request gets the
+	// budget as its deadline (design §3.4).
+	sendGate nio.SendGate
 
 	// baseline is armed by Start: the first WriteOutputs snapshot after it
 	// describes the world, it does not command it (sparkplug-host's rule).
@@ -239,8 +253,10 @@ type outBinding struct {
 // the only writer of conn state; mu guards what other goroutines read
 // (snapshot, health) and write (pending, enabled).
 type source struct {
-	cfg    Source
-	blocks []*blockRun
+	cfg Source
+	// explicitTimeout: the manifest set cfg.Timeout (WriteTimeouts).
+	explicitTimeout bool
+	blocks          []*blockRun
 
 	mu       sync.Mutex
 	snapshot nio.Values // decoded values, held across disconnects
@@ -470,6 +486,7 @@ func (d *Driver) buildSources() error {
 
 // newSource is one source's runtime state before its blocks and outputs.
 func newSource(cfg Source) *source {
+	explicit := cfg.Timeout > 0
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = defaultTimeout
 	}
@@ -480,15 +497,16 @@ func newSource(cfg Source) *source {
 		cfg.RetryMax = defaultRetryMax
 	}
 	return &source{
-		cfg:      cfg,
-		snapshot: nio.Values{},
-		state:    "connecting",
-		enabled:  true,
-		pending:  map[string]any{},
-		written:  map[string]any{},
-		stuck:    map[string]*stuckWrite{},
-		byName:   map[string]outBinding{},
-		kick:     make(chan struct{}, 1),
+		cfg:             cfg,
+		explicitTimeout: explicit,
+		snapshot:        nio.Values{},
+		state:           "connecting",
+		enabled:         true,
+		pending:         map[string]any{},
+		written:         map[string]any{},
+		stuck:           map[string]*stuckWrite{},
+		byName:          map[string]outBinding{},
+		kick:            make(chan struct{}, 1),
 	}
 }
 
@@ -556,6 +574,42 @@ func (d *Driver) SetWriteGate(gate func() bool) {
 	d.gateMu.Unlock()
 }
 
+// SetSendGate installs a pair's gate with its send budget (io.SendGated,
+// design §3.4): read immediately before every write request, which gets
+// the budget as its deadline; a request still unanswered at its deadline
+// resets the socket (SO_LINGER 0) so nothing queued leaves late.
+func (d *Driver) SetSendGate(g nio.SendGate) {
+	d.gateMu.Lock()
+	d.sendGate = g
+	d.gateMu.Unlock()
+}
+
+var _ nio.SendGated = (*Driver)(nil)
+
+// RequestTimeout is source id's request timeout as the driver runs it (the
+// manifest's, or the default); 0 for an unknown source.
+func (d *Driver) RequestTimeout(id string) time.Duration {
+	if s, ok := d.bySource[id]; ok {
+		return s.cfg.Timeout
+	}
+	return 0
+}
+
+// WriteTimeouts is each source with a writable binding whose manifest sets
+// a request timeout, with that timeout: naut check compares it with a
+// redundant pair's send budget (design §3.4). A write on a pair is cut at
+// its send deadline whatever the timeout; only one the manifest sets is
+// reported, since a default is nothing the operator chose.
+func (d *Driver) WriteTimeouts() map[string]time.Duration {
+	out := map[string]time.Duration{}
+	for _, s := range d.sources {
+		if len(s.byName) > 0 && s.explicitTimeout {
+			out[s.cfg.ID] = s.cfg.Timeout
+		}
+	}
+	return out
+}
+
 // PlainWriteGate marks this driver's write gate as only a gate
 // (io.PlainGated): open, it acts as with none. naut run gives it one in a
 // project without redundancy too, open while the scans are live (#625).
@@ -571,18 +625,35 @@ var _ nio.PlainGated = (*Driver)(nil)
 // raced the close and recorded a value after it. Callers do not hold any
 // source's mu or wmu.
 func (d *Driver) gateOpen() bool {
+	open, _, _ := d.look()
+	return open
+}
+
+// look is gateOpen with the send budget (negative: no deadline) and the
+// lease's term the same read of the gate gave (io.SendGate), for a look
+// made right before a request.
+func (d *Driver) look() (bool, time.Duration, uint64) {
 	d.gateMu.Lock()
-	gate := d.writeGate
+	gate, send := d.writeGate, d.sendGate
 	d.gateMu.Unlock()
-	if gate == nil {
-		return true
+	if gate == nil && send == nil {
+		return true, -1, 0
 	}
-	open := gate()
+	open, budget, term := false, time.Duration(-1), uint64(0)
+	if send != nil {
+		open, budget, term = send()
+	} else {
+		open = gate()
+	}
 	// Steady state is one atomic load. A transition is made under turnMu,
 	// and gateShut is cleared only AFTER the forget: a second looker that
 	// finds the gate open meanwhile still sees gateShut, waits on turnMu,
 	// and so cannot re-assert the previous term's written (#600).
-	if shut := d.gateShut.Load(); shut == open {
+	if open && term != 0 && d.leaseTerm.Load() == 0 {
+		d.leaseTerm.CompareAndSwap(0, term) // the first term seen: nothing to forget
+	}
+	moved := open && term != 0 && d.leaseTerm.Load() != term && !mut("old_term_kept")
+	if shut := d.gateShut.Load(); shut == open || moved {
 		d.turnMu.Lock()
 		switch {
 		case !open && !d.gateShut.Load():
@@ -591,34 +662,44 @@ func (d *Driver) gateOpen() bool {
 			d.wmu.Lock()
 			d.baseline = false // a standby has no baseline (#606)
 			d.wmu.Unlock()
-		case open && d.gateShut.Load():
+		case open && (d.gateShut.Load() || term != 0 && d.leaseTerm.Load() != term && !mut("old_term_kept")):
 			d.forgetWritten()
+			if term != 0 {
+				d.leaseTerm.Store(term)
+			}
 			d.gateShut.Store(false)
 			d.wanted.Store(true)
 			d.log.Info("modbus: write gate open again; every output goes out with the next push")
 		}
 		d.turnMu.Unlock()
 	}
-	return open
+	return open, budget, term
 }
+
+// flushGenHook, when a test sets it, runs in flushWrites right after the
+// reopen generation is read, before the queue is taken.
+var flushGenHook func()
 
 // reopenHook, when a test sets it, runs at the start of forgetWritten: the
 // window another looker must not slip through, which must still see
 // gateShut set while it lasts.
 var reopenHook func()
 
-// forgetWritten empties every source's written: no value is the on-change
-// reference any more, so the next push sends them all, and no rewrite:
-// binding has anything to re-assert until it does.
+// forgetWritten empties every source's written and pending: no value is
+// the on-change reference any more, so the next push sends them all, no
+// rewrite: binding has anything to re-assert until it does, and no write
+// queued or requeued before the reopen goes out after it (#1040 review).
 func (d *Driver) forgetWritten() {
 	if reopenHook != nil {
 		reopenHook()
 	}
+	d.reopens.Add(1)
 	d.srcMu.RLock()
 	defer d.srcMu.RUnlock()
 	for _, s := range d.sources {
 		s.mu.Lock()
 		clear(s.written)
+		clear(s.pending) // a requeued write is the previous leadership's too (#1040)
 		s.mu.Unlock()
 	}
 }
@@ -1470,6 +1551,10 @@ func (d *Driver) pollBlock(ctx context.Context, s *source, c conn, br *blockRun)
 // the write gate closed the queue is dropped instead, and if the gate
 // closes partway through, the rest of the flush is (see SetWriteGate).
 func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
+	gen := d.reopens.Load() // before the queue is taken: see send
+	if flushGenHook != nil {
+		flushGenHook()
+	}
 	s.mu.Lock()
 	if len(s.pending) == 0 {
 		s.mu.Unlock()
@@ -1491,7 +1576,7 @@ func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
 	// (not recorded as written), so the next WriteOutputs push after the
 	// gate reopens commands the same value again. A drop is not a failure:
 	// no error is counted and __Online is left to the reads.
-	drop := func(names []string) {
+	drop := func(names []string, why string) {
 		s.mu.Lock()
 		for _, n := range names {
 			// Forget only what this flush dropped: a tag WriteOutputs has
@@ -1503,14 +1588,14 @@ func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
 		}
 		s.mu.Unlock()
 		d.wanted.Store(true) // the commands it dropped: ask for them (#601)
-		d.log.Warn("modbus: write gate closed; queued writes dropped", "source", s.cfg.ID, "count", len(names))
+		d.log.Warn("modbus: queued writes dropped", "why", why, "source", s.cfg.ID, "count", len(names))
 	}
 	if !d.gateOpen() {
 		names := make([]string, 0, len(work))
 		for n := range work {
 			names = append(names, n)
 		}
-		drop(names)
+		drop(names, "the write gate is closed")
 		return true
 	}
 
@@ -1546,31 +1631,54 @@ func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
 		s.mu.Unlock()
 	}
 
-	// gateClosed drops the write at bi/ri/ci and every one after it when
-	// the gate has closed since the flush began. The flush returns as soon
-	// as it does, so a drop is logged at most once per flush.
-	gateClosed := func(bi, ri, ci int) bool {
-		if d.gateOpen() {
-			return false
+	// send looks at the gate immediately before the request at bi/ri/ci
+	// (design §3.4): open, it returns the request's context, bounded by
+	// the gate's send budget; closed, or with the budget used up, it drops
+	// that write and every one after it, and the flush returns, so a drop
+	// is logged at most once per flush.
+	send := func(bi, ri, ci int) (context.Context, context.CancelFunc, bool) {
+		deadline, _, ok := fence.Begin(d.look, time.Now()) // the budget counts from before the read
+		if !ok || !fence.Started(deadline, time.Now()) {
+			drop(rest(bi, ri, ci), "the write gate closed, or the send's budget ran out")
+			return nil, nil, false
 		}
-		drop(rest(bi, ri, ci))
-		return true
+		if d.reopens.Load() != gen && !mut("old_term_kept") {
+			// A reopen since this flush read its generation (a lease lost
+			// and won again, seen now or by another look): none of the
+			// rest is sent. It is dropped, not just left: the queue may
+			// hold a write the push answering the reopen already queued
+			// and recorded as written, and a write kept as written would
+			// never go out until it changed (#1040 re-review). drop
+			// forgets it and asks for the outputs again.
+			drop(rest(bi, ri, ci), "the gate reopened since this flush began (the lease was lost and won again); the outputs are asked for again")
+			return nil, nil, false
+		}
+		wctx, cancel := fence.Context(ctx, deadline)
+		return wctx, cancel, true
 	}
 
 	// bit:N writables read-modify-write their register one at a time — the
 	// other 15 bits belong to the device (or to sibling bindings).
 	for i, bw := range bitWrites {
-		if gateClosed(i, 0, 0) {
+		rctx, cancel, ok := send(i, 0, 0)
+		if !ok {
 			return true
 		}
-		cur, err := readRegisters(ctx, c, s.cfg.UnitID, FCReadHoldingRegisters, bw.addr, 1)
+		cur, err := readRegisters(rctx, c, s.cfg.UnitID, FCReadHoldingRegisters, bw.addr, 1)
+		cancel()
 		if err == nil {
 			// Merge in normalized (big-endian) space, then restore the
 			// source's wire order — wireOrder is its own inverse.
 			w := wireOrder(cur, s.cfg.WordOrder, s.cfg.ByteOrder)[0]
 			w = setBit(w, bw.bit, bw.on)
 			out := wireOrder([]uint16{w}, s.cfg.WordOrder, s.cfg.ByteOrder)[0]
-			err = writeSingleRegister(ctx, c, s.cfg.UnitID, bw.addr, out)
+			// The write is its own send: the gate is looked at again.
+			wctx, cancel, ok := send(i, 0, 0)
+			if !ok {
+				return true
+			}
+			err = writeSingleRegister(wctx, c, s.cfg.UnitID, bw.addr, out)
+			cancel()
 		}
 		if !d.wroteOK(ctx, s, work, bw.names, retryAt, err) {
 			requeue(i, 0, 0)
@@ -1579,30 +1687,34 @@ func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
 	}
 
 	for i, run := range regRuns {
-		if gateClosed(len(bitWrites), i, 0) {
+		wctx, cancel, ok := send(len(bitWrites), i, 0)
+		if !ok {
 			return true
 		}
 		var err error
 		if len(run.values) == 1 {
-			err = writeSingleRegister(ctx, c, s.cfg.UnitID, run.addr, run.values[0])
+			err = writeSingleRegister(wctx, c, s.cfg.UnitID, run.addr, run.values[0])
 		} else {
-			err = writeMultipleRegisters(ctx, c, s.cfg.UnitID, run.addr, run.values)
+			err = writeMultipleRegisters(wctx, c, s.cfg.UnitID, run.addr, run.values)
 		}
+		cancel()
 		if !d.wroteOK(ctx, s, work, run.names, retryAt, err) {
 			requeue(len(bitWrites), i, 0)
 			return false
 		}
 	}
 	for i, run := range coilRuns {
-		if gateClosed(len(bitWrites), len(regRuns), i) {
+		wctx, cancel, ok := send(len(bitWrites), len(regRuns), i)
+		if !ok {
 			return true
 		}
 		var err error
 		if len(run.values) == 1 {
-			err = writeSingleCoil(ctx, c, s.cfg.UnitID, run.addr, run.values[0])
+			err = writeSingleCoil(wctx, c, s.cfg.UnitID, run.addr, run.values[0])
 		} else {
-			err = writeMultipleCoils(ctx, c, s.cfg.UnitID, run.addr, run.values)
+			err = writeMultipleCoils(wctx, c, s.cfg.UnitID, run.addr, run.values)
 		}
+		cancel()
 		if !d.wroteOK(ctx, s, work, run.names, retryAt, err) {
 			requeue(len(bitWrites), len(regRuns), i)
 			return false

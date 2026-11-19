@@ -163,6 +163,19 @@ var table = []mutation{
 	// restored it. cmd/naut's TestPairAckCarriesWhileTheTakeoverWaits
 	// loses the ack under it too.
 	{"reconcile_before_restore", []string{"TestAlarmLogWaitsForTheRestore"}},
+	// #710 PR 3b-3a, design §3.4: writes leave in time, on every output
+	// path. The four test plan §3.3 rows.
+	{"no_fence_margin", []string{"TestGateClosesAFenceMarginBeforeTheLeaseEnd"}},
+	{"gate_per_batch", []string{"TestGateClosedMidBatchStopsTheRest"}},
+	// #1040 review: a command from an earlier term of the lease.
+	{"old_term_sent", []string{"TestCommandsFromAnEarlierTermAreNotSent"}},
+	{"send_no_deadline", []string{"TestBegin", "TestEachCommandRunsToItsSendDeadline", "TestModbusEachWriteRunsToItsSendDeadline", "TestModbusFencedWriteResetsTheSocketAtItsDeadline", "TestEIPEachRequestRunsToItsSendDeadline", "TestArmResetsAtTheDeadline", "TestModbusResetIsATimerAtTheDeadline", "TestFencedSendUnitDataResetIsATimer"}},
+	{"fence_fin", []string{"TestResetSendsAnRSTAndDropsQueuedBytes", "TestModbusFencedWriteResetsTheSocketAtItsDeadline", "TestFencedSendUnitDataResetsAtItsDeadline", "TestFencedPostResetsAtItsDeadline"}},
+	// #1040 review: a Modbus write queued or requeued under an earlier
+	// term of the lease.
+	{"old_term_kept", []string{"TestModbusRequeuedWriteDoesNotSurviveAReLead"}},
+	// #1040 review: an SNMP SET retransmitted after a lost answer.
+	{"set_retried", []string{"TestSetIsSentOnce"}},
 }
 
 // rowPkgs are the packages a row runs instead of ./quorum/..., filtered
@@ -173,6 +186,12 @@ var rowPkgs = map[string][]string{
 	"alarm_view_ignored":       {"./cmd/naut"},
 	"engine_not_reset":         {"./server"},
 	"reconcile_before_restore": {"./server"},
+	"gate_per_batch":           {"./hw"},
+	"old_term_sent":            {"./hw"},
+	"send_no_deadline":         {"./internal/fence", "./hw", "./modbus", "./eip", "./eip/cip"},
+	"fence_fin":                {"./internal/fence", "./modbus", "./eip/cip", "./redfish"},
+	"old_term_kept":            {"./modbus"},
+	"set_retried":              {"./snmp"},
 }
 
 // args are the go test arguments for m.

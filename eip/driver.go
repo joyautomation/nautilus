@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/joyautomation/nautilus/eip/logix"
+	"github.com/joyautomation/nautilus/internal/fence"
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/lang/ir"
 )
@@ -84,6 +85,11 @@ type Driver struct {
 	// wanted is the request OutputsWanted answers.
 	gateMu    sync.Mutex
 	writeGate func() bool
+	sendGate  nio.SendGate // a pair's gate with its send budget (SetSendGate)
+	// leaseTerm is the lease's term the last open look saw (0: none yet,
+	// or no pair): a look under another term is a reopen, closed between
+	// two looks or not (#1040 review).
+	leaseTerm atomic.Uint64
 	gateShut  atomic.Bool
 	turnMu    sync.Mutex
 	wanted    atomic.Bool
@@ -580,6 +586,17 @@ func (d *Driver) SetWriteGate(gate func() bool) {
 	d.gateMu.Unlock()
 }
 
+// SetSendGate installs a pair's gate with its send budget (io.SendGated,
+// design §3.4): read immediately before every write request (each scalar,
+// each struct member), which gets the budget as its deadline; a request
+// still unanswered at its deadline resets the session's socket
+// (SO_LINGER 0), and the session is dialed again.
+func (d *Driver) SetSendGate(g nio.SendGate) {
+	d.gateMu.Lock()
+	d.sendGate = g
+	d.gateMu.Unlock()
+}
+
 // PlainWriteGate marks this driver's write gate as only a gate
 // (io.PlainGated): open, it acts as with none. naut run gives it one in a
 // project without redundancy too, open while the scans are live (#625).
@@ -592,31 +609,51 @@ var _ nio.PlainGated = (*Driver)(nil)
 // finds it open again after one found it closed forgets every written and
 // queued value and asks for the outputs. Callers do not hold wmu.
 func (d *Driver) gateOpen() bool {
+	open, _, _ := d.look()
+	return open
+}
+
+// look is gateOpen with the send budget (negative: no deadline) and the
+// lease's term the same read of the gate gave (io.SendGate), for a look
+// made right before a request.
+func (d *Driver) look() (bool, time.Duration, uint64) {
 	d.gateMu.Lock()
-	gate := d.writeGate
+	gate, send := d.writeGate, d.sendGate
 	d.gateMu.Unlock()
-	if gate == nil {
-		return true
+	if gate == nil && send == nil {
+		return true, -1, 0
 	}
-	open := gate()
+	open, budget, term := false, time.Duration(-1), uint64(0)
+	if send != nil {
+		open, budget, term = send()
+	} else {
+		open = gate()
+	}
 	// Steady state is one atomic load. A transition is made under turnMu,
 	// and gateShut is cleared only AFTER the forget: a second looker that
 	// finds the gate open meanwhile still sees gateShut, waits on turnMu,
 	// and so cannot queue against the previous term's written.
-	if shut := d.gateShut.Load(); shut == open {
+	if open && term != 0 && d.leaseTerm.Load() == 0 {
+		d.leaseTerm.CompareAndSwap(0, term) // the first term seen: nothing to forget
+	}
+	moved := open && term != 0 && d.leaseTerm.Load() != term
+	if shut := d.gateShut.Load(); shut == open || moved {
 		d.turnMu.Lock()
 		switch {
 		case !open && !d.gateShut.Load():
 			d.gateShut.Store(true)
-		case open && d.gateShut.Load():
+		case open && (d.gateShut.Load() || term != 0 && d.leaseTerm.Load() != term):
 			d.forgetWritten()
+			if term != 0 {
+				d.leaseTerm.Store(term)
+			}
 			d.gateShut.Store(false)
 			d.wanted.Store(true)
 			d.log.Info("eip: write gate open again; every output goes out with the next push", "host", d.host)
 		}
 		d.turnMu.Unlock()
 	}
-	return open
+	return open, budget, term
 }
 
 // forgetWritten empties written and pending and starts a new term: no
@@ -640,6 +677,7 @@ func (d *Driver) OutputsWanted() bool {
 var (
 	_ nio.OutputsRequester                   = (*Driver)(nil)
 	_ interface{ SetWriteGate(func() bool) } = (*Driver)(nil)
+	_ nio.SendGated                          = (*Driver)(nil)
 )
 
 // ── connection / poll loop ──────────────────────────────────────────────
@@ -1006,15 +1044,30 @@ var (
 // goOn looks at the gate before a write of the flush that took its queue
 // in term: nil to send it, errGateClosed or errNewTerm to stop.
 func (d *Driver) goOn(term uint64) error {
-	if !d.gateOpen() {
-		return errGateClosed
+	_, cancel, err := d.send(context.Background(), term)
+	if err == nil {
+		cancel()
+	}
+	return err
+}
+
+// send is goOn immediately before one request (design §3.4): it reads the
+// gate once and returns the request's context, bounded by the gate's send
+// budget and marked fenced, so the transport resets its socket if the
+// request is still unanswered at that deadline.
+func (d *Driver) send(ctx context.Context, term uint64) (context.Context, context.CancelFunc, error) {
+	deadline, _, ok := fence.Begin(d.look, time.Now()) // the budget counts from before the read
+	if !ok || !fence.Started(deadline, time.Now()) {
+		return nil, nil, errGateClosed
 	}
 	d.wmu.Lock()
-	defer d.wmu.Unlock()
-	if d.term != term {
-		return errNewTerm
+	newTerm := d.term != term
+	d.wmu.Unlock()
+	if newTerm {
+		return nil, nil, errNewTerm
 	}
-	return nil
+	sctx, cancel := fence.Context(ctx, deadline)
+	return sctx, cancel, nil
 }
 
 // flushWrites pushes pending writes to the controller, in tag-name order.
@@ -1136,7 +1189,12 @@ func (d *Driver) writeOne(ctx context.Context, sess *session, b TagBinding, v an
 		if err != nil {
 			return nil, err
 		}
-		return nil, sess.ctrl.WriteTag(ctx, b.Device, code, 1, data)
+		sctx, cancel, err := d.send(ctx, term)
+		if err != nil {
+			return nil, err
+		}
+		defer cancel()
+		return nil, sess.ctrl.WriteTag(sctx, b.Device, code, 1, data)
 	}
 	iv, ok := v.(ir.Value)
 	if !ok {
@@ -1210,10 +1268,13 @@ func (d *Driver) writeStructLeaves(ctx context.Context, sess *session, devPath s
 			if err != nil {
 				return fmt.Errorf("%s: %w", leaf, err)
 			}
-			if err := d.goOn(term); err != nil {
+			sctx, cancel, err := d.send(ctx, term)
+			if err != nil {
 				return err
 			}
-			if err := sess.ctrl.WriteTag(ctx, leaf, code, 1, data); err != nil {
+			err = sess.ctrl.WriteTag(sctx, leaf, code, 1, data)
+			cancel()
+			if err != nil {
 				return err
 			}
 			held.Fld[i] = fv

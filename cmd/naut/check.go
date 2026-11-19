@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/joyautomation/nautilus/internal/hmibuild"
 	"github.com/joyautomation/nautilus/internal/project"
@@ -501,6 +502,10 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 	// missing secret file, a weak SNMP auth. Warnings, never errors — this
 	// runs on laptops that have none of the secrets a controller will.
 	for _, w := range driverWarnings(proj.Runtime.Driver) {
+		warns++
+		fmt.Printf("%s: warning: %s\n", loc.file, w)
+	}
+	for _, w := range sendBudgetWarnings(proj) {
 		warns++
 		fmt.Printf("%s: warning: %s\n", loc.file, w)
 	}
@@ -1118,6 +1123,47 @@ func caseOnlyBindings(tags []runtime.TagDef, d nio.Driver) []caseMismatch {
 		}
 		out = append(out, caseMismatch{tag: t.Name, binding: b, never: never})
 	}
+	return out
+}
+
+// sendBudgetWarnings names, on a redundant pair, each source that takes
+// writes whose manifest SETS a request timeout longer than the pair's send
+// budget (a default is nothing the operator chose; every write on a pair
+// is cut at its send deadline whatever the timeout)
+// (design §3.4): on a healthy leader, a write such a device answers that
+// slowly is abandoned at its deadline and its connection reset (a Modbus
+// write is then sent again; an SNMP or Redfish command is reported
+// failed).
+func sendBudgetWarnings(proj *project.Project) []string {
+	if !proj.Redundancy.Pair() {
+		return nil
+	}
+	budget, lease := proj.Redundancy.SendBudget(), proj.Redundancy.LeaseTime()
+	var out []string
+	var walk func(prefix string, d nio.Driver)
+	walk = func(prefix string, d nio.Driver) {
+		switch drv := d.(type) {
+		case *nio.Multi:
+			for _, c := range drv.Children() {
+				walk(prefix+c.Name+": ", c.Driver)
+			}
+		case interface {
+			WriteTimeouts() map[string]time.Duration
+		}:
+			wt := drv.WriteTimeouts()
+			ids := make([]string, 0, len(wt))
+			for id := range wt {
+				ids = append(ids, id)
+			}
+			sort.Strings(ids)
+			for _, id := range ids {
+				if t := wt[id]; t > budget {
+					out = append(out, fmt.Sprintf("%ssource %s: the request timeout it sets (%s) is longer than this pair's send budget (as little as %s at the %s lease): every write is cut at that budget, so on a healthy leader a write the device answers slower is abandoned at its deadline and its connection reset (a Modbus or EtherNet/IP write is sent again; an SNMP or Redfish command is reported outcome unknown). Lower the source's timeout below the budget if the device answers in time, or lengthen redundancy.lease", prefix, id, t, budget.Round(time.Millisecond), lease))
+				}
+			}
+		}
+	}
+	walk("", proj.Runtime.Driver)
 	return out
 }
 

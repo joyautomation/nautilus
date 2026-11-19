@@ -347,6 +347,15 @@ type RedundancyConfig struct {
 	// sets (naut deploy's /var/lib/nautilus). Never the project tree: a
 	// deploy replaces the project.
 	StateDir string `yaml:"state-dir"`
+	// NetDelay (d_net) is the plant network's assumed one-way delivery
+	// bound and SendMargin (m_send) the gap allowed between a send path's
+	// gate check and its send (design §3.4): the write gate closes their
+	// sum, the fence margin, before the lease ends, and every field write
+	// gets the lease left minus NetDelay as its deadline. Unset, both
+	// scale with the lease (50 ms and 20 ms at the default 2 s lease). Set,
+	// their sum must stay under a quarter of the lease. Pair only.
+	NetDelay   Duration `yaml:"net-delay"`
+	SendMargin Duration `yaml:"send-margin"`
 	// Experimental opts in to a pair before state streaming (#710 step
 	// 4): until then a takeover starts from the new leader's own retained
 	// values, so a setpoint the old leader took is lost. A pair without it
@@ -402,6 +411,8 @@ func checkRedundancy(r *RedundancyConfig) error {
 			return errors.New("redundancy.state-dir needs peers:; the Kubernetes Lease mode keeps no voter state")
 		case r.Experimental:
 			return errors.New("redundancy.experimental applies to a redundant pair (peers:); the Kubernetes Lease mode is not experimental")
+		case r.NetDelay != 0 || r.SendMargin != 0:
+			return errors.New("redundancy.net-delay and send-margin apply to a redundant pair (peers:): they set its write gate's fence margin")
 		}
 		return nil
 	}
@@ -436,12 +447,58 @@ func checkRedundancy(r *RedundancyConfig) error {
 			return fmt.Errorf("redundancy.lease %s: want between %s and %s", d, minPairLease, maxPairLease)
 		}
 	}
+	if err := checkFence(r); err != nil {
+		return err
+	}
 	// A controller's path, judged the same wherever Load runs (naut check
 	// on a Windows laptop): pair members are Linux-only.
 	if r.StateDir != "" && !strings.HasPrefix(r.StateDir, "/") {
 		return fmt.Errorf("redundancy.state-dir %q: want an absolute path (from /) outside the project (the voter state must outlive a deploy)", r.StateDir)
 	}
 	return nil
+}
+
+// checkFence refuses a fence margin set in the manifest that is negative,
+// or not under a quarter of the lease (design §3.4): the gate would close
+// for good between two renewals. Unset parts scale with the lease, under
+// it by construction (the elector's FenceDefaults).
+func checkFence(r *RedundancyConfig) error {
+	if r.NetDelay == 0 && r.SendMargin == 0 {
+		return nil
+	}
+	if r.NetDelay < 0 || r.SendMargin < 0 {
+		return fmt.Errorf("redundancy.net-delay %s, send-margin %s: want durations of zero or more", time.Duration(r.NetDelay), time.Duration(r.SendMargin))
+	}
+	dn, ms := r.FenceParts()
+	lease := r.LeaseTime()
+	if dn+ms >= lease/4 {
+		return fmt.Errorf("redundancy.net-delay %s + send-margin %s = %s: the fence margin must be under a quarter of the lease (%s), or the write gate closes before each renewal; lengthen the lease or shorten them", dn, ms, dn+ms, lease)
+	}
+	return nil
+}
+
+// FenceParts are a pair's net delay and send margin: the manifest's, or
+// the defaults scaled to the lease (quorum/node's FenceDefaults: at most
+// 50 ms and lease/8, 20 ms and lease/16).
+func (r *RedundancyConfig) FenceParts() (netDelay, sendMargin time.Duration) {
+	lease := r.LeaseTime()
+	netDelay, sendMargin = time.Duration(r.NetDelay), time.Duration(r.SendMargin)
+	if netDelay == 0 {
+		netDelay = min(50*time.Millisecond, lease/8)
+	}
+	if sendMargin == 0 {
+		sendMargin = min(20*time.Millisecond, lease/16)
+	}
+	return netDelay, sendMargin
+}
+
+// SendBudget is the least time a pair's write may take in normal running
+// (design §3.4): the leader renews every quarter lease, so the lease left
+// falls to about three quarters of it before each renewal, and a write's
+// deadline is that minus the net delay.
+func (r *RedundancyConfig) SendBudget() time.Duration {
+	dn, _ := r.FenceParts()
+	return r.LeaseTime()*3/4 - dn
 }
 
 // checkPeerAddr wants host:port with both parts.
@@ -1267,6 +1324,10 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 	}
 	if err := checkRedundancy(m.Redundancy); err != nil {
 		return nil, err
+	}
+	if m.Redundancy.Pair() && m.Sparkplug != nil {
+		// #798: both controllers would publish as the same edge node.
+		return nil, errors.New("sparkplug: a redundant pair can't run a Sparkplug edge node yet: both controllers would publish as the same edge node, fighting over its session (#798). Remove sparkplug: from this project, or run the edge on one controller outside the pair")
 	}
 	if opts.Channels, err = buildChannels(m); err != nil {
 		return nil, err

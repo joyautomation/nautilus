@@ -82,6 +82,9 @@ func WithClock(now func() time.Time) Option { return func(d *Driver) { d.now = n
 // Driver polls a set of BMCs. io.Driver, io.BatchReader and
 // io.QualityReporter through hw.Base.
 type Driver struct {
+	// explicit names the sources whose manifest sets a timeout
+	// (WriteTimeouts).
+	explicit   map[string]bool
 	m          Manifest
 	base       *hw.Base
 	log        *slog.Logger
@@ -136,6 +139,21 @@ type memberPlan struct {
 // Warnings are the manifest's non-fatal findings (unset credential
 // variables, TLS verification off) for `naut check`.
 func (d *Driver) Warnings() []string { return d.m.Warnings() }
+
+// WriteTimeouts is each source that takes commands and whose manifest sets
+// a request timeout, with that timeout: naut check compares it with a
+// redundant pair's send budget (design §3.4). A command on a pair is cut
+// at its send deadline whatever the timeout; only one the manifest sets is
+// reported, since a default is nothing the operator chose.
+func (d *Driver) WriteTimeouts() map[string]time.Duration {
+	out := map[string]time.Duration{}
+	for _, id := range d.base.WriteSources() {
+		if s, ok := d.srcs[id]; ok && d.explicit[id] {
+			out[id] = s.cfg.Timeout
+		}
+	}
+	return out
+}
 
 // New validates the manifest offline and builds the driver. It never dials.
 func New(m Manifest, opts ...Option) (*Driver, error) {
@@ -205,6 +223,12 @@ func New(m Manifest, opts ...Option) (*Driver, error) {
 		return nil, err
 	}
 	d.base = base
+	d.explicit = map[string]bool{}
+	for id, s := range d.srcs {
+		if s.cfg.Timeout > 0 {
+			d.explicit[id] = true
+		}
+	}
 
 	// Plan each (source, class) from Base's own class routing, so the
 	// class a member polls in is decided in exactly one place.
@@ -295,6 +319,10 @@ func (d *Driver) ScanClasses() map[string][]string { return d.base.ScanClasses()
 
 // SetWriteGate installs the leadership gate for commands.
 func (d *Driver) SetWriteGate(g func() bool) { d.base.SetWriteGate(g) }
+
+// SetSendGate installs a pair's gate with its send budget, read before
+// each command (hw.Base.SetSendGate, design §3.4).
+func (d *Driver) SetSendGate(g nio.SendGate) { d.base.SetSendGate(g) }
 
 // StructDefs is the contract type set.
 func (d *Driver) StructDefs() map[string]*ir.StructDef { return d.base.StructDefs() }

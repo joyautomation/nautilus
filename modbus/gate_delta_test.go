@@ -143,7 +143,7 @@ func TestStandbyReconnectQueuesNothing(t *testing.T) {
 		return cd.dials.Load() > dials && d.Health().Sources[0].State == "connected"
 	})
 	time.Sleep(60 * time.Millisecond)
-	if n, _ := logs.count("modbus: write gate closed; queued writes dropped", ""); n != 0 {
+	if n, _ := logs.count("modbus: queued writes dropped", ""); n != 0 {
 		t.Errorf("a standby's reconnect queued a re-assert and dropped it (%d drop warnings)", n)
 	}
 	if d.OutputsWanted() {

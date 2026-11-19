@@ -576,11 +576,16 @@ three rules:
 1. **Check before each send.** The gate is read immediately before every send: one request,
    one datagram or one frame. It is never read once per batch.
 2. **A fence margin and a send deadline.** The gate closes a margin **before** the lease
-   expires, not at expiry: `IsLeader` is false once `remaining() < m_fence`.
+   expires, not at expiry: `IsLeader` is false once `remaining() < m_fence`. A driver reads
+   the gate, the send budget and the lease's term in one call (`io.SendGate`), so nothing it
+   holds from an earlier term of the lease leaves under a later one.
    - `m_fence = d_net + m_send`. `d_net` is an assumed one-way delivery bound for the plant
      network, 50 ms by default. `m_send` bounds the gap between a send path's gate check and
      its send system call under normal scheduling, 20 ms by default. Both are set in the
-     manifest.
+     manifest (`redundancy: net-delay:` and `send-margin:`). Unset, they scale down with a
+     short lease (at most lease/8 and lease/16), so the margin is under a quarter of any lease;
+     set, their sum must be under a quarter of the lease, or the manifest is refused: the gate
+     would close before each renewal.
    - Each send also runs with a deadline of `remaining() − d_net`, and a send whose deadline
      has passed is not started.
    - **Why the margin is needed.** Any sender that checks and then sends can let one frame
@@ -588,9 +593,16 @@ three rules:
      sending goroutine). With the margin, that frame still leaves while the lease is valid,
      and it arrives before any voter's promise expires.
    - The margin comes out of the time the leader may write. It is not added to takeover time.
-3. **Fencing closes sockets.** When the gate closes, every field socket with a write in flight
-   or queued is closed with `SO_LINGER` 0. The close sends a reset and discards whatever was
-   still in the kernel's send buffer.
+3. **Fencing resets sockets.** A write still in flight at its send deadline (unanswered, or
+   with bytes still in the kernel's send buffer) has its field socket closed with
+   `SO_LINGER` 0. The close sends a reset and discards whatever the kernel still held. The
+   instant is that send's deadline (`remaining() − d_net` from its own gate check), not the
+   gate's close `m_send` earlier: a byte that left before the deadline arrives before the
+   lease ends, so the deadline is the last moment a byte may leave. The reset is a timer armed
+   at that deadline, not something done after a read's own timeout returns, so a stalled or
+   blocked sender does not delay it. Writes queued in the driver never start after the gate
+   closes (rule 1), and never under a later term of the lease than the one they were computed
+   in.
 
 **The residual risk, stated.** The margin covers ordinary scheduling delay between check and
 send. It does not cover a **freeze longer than `m_fence`** (a SIGSTOP, a long GC pause, a
@@ -604,14 +616,14 @@ plan measures it with a pause hook in exactly that spot.
 
 | Path | Gate today | Needed for the pair |
 |---|---|---|
-| Modbus TCP | before each write (`modbus/driver.go`) | send deadline; RST on fence |
-| EtherNet/IP | before each write (`eip/driver.go`) | send deadline; RST on fence |
+| Modbus TCP | before each write (`modbus/driver.go`) | send deadline; RST on fence. **Done (3b-3a)**: before every request, including a bit's write after its read-modify-write read, which went out on the read's look; the RST is a timer at the deadline; a reopen, or a look under another term of the lease, forgets what is queued, and a flush that took its queue before stops (#1040 review) |
+| EtherNet/IP | before each write (`eip/driver.go`) | send deadline; RST on fence. **Done (3b-3a)**: before every request (a scalar, each struct member), RST through `eip/cip` |
 | OPC UA client | in `WriteOutputs` and its flush | check before each write; deadline |
 | OptoMMP | looked at per scan, datagram and stream check | check before each datagram; deadline |
-| Redfish, SNMP, Prometheus (`hw/base.go`) | **once per batch** (`flushWrites`) | check before each command; deadline |
+| Redfish, SNMP, Prometheus (`hw/base.go`) | **once per batch** (`flushWrites`) | check before each command; deadline. **Done (3b-3a)**: a close mid-batch drops the rest, logged once, never put back; each queued command carries the lease's term it was computed in, and one from an earlier term (the lease lost and won again) is dropped, never sent; Redfish's socket is reset at the deadline too (linger 0 set as the request takes its connection, since net/http may close it itself), and a command unanswered by then is "outcome unknown", never sent again (#1040 review) |
 | READ/WRITE channels (#699) | **none**: fixed in #797 (#796) | deadline |
 | Sparkplug host NCMD/DCMD | gated (#325) | check before each publish |
-| Sparkplug edge | **none** (#798): every replica publishes | only the leader holds the session; NDEATH on step-down |
+| Sparkplug edge | **none** (#798): every replica publishes | only the leader holds the session; NDEATH on step-down. **Until #798, a pair with `sparkplug:` is refused at load** (3b-3a) |
 | PROFINET device (#790) | gate look every 200 ms | check before each RT, DCP and LLDP frame (test plan F33) |
 | OPC UA server Write service | refused on a standby | unchanged |
 | HTTP API writes | proxied to the leader, or refused (503) | unchanged |

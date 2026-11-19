@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/joyautomation/nautilus/internal/fence"
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/lang/ir"
 )
@@ -185,6 +186,7 @@ type Base struct {
 
 	gateMu    sync.Mutex
 	writeGate func() bool
+	sendGate  nio.SendGate // a pair's gate with its send budget (SetSendGate)
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -213,6 +215,7 @@ type queuedWrite struct {
 	name string
 	v    ir.Value
 	at   time.Time // when the runtime handed it over: too old, it is dropped
+	term uint64    // the lease's term it was computed under (0: no pair)
 }
 
 type writeRun struct {
@@ -578,11 +581,57 @@ func (b *Base) SetWriteGate(gate func() bool) {
 	b.gateMu.Unlock()
 }
 
-func (b *Base) gateOpen() bool {
+// WriteSources lists the sources that take commands (sorted), for a
+// driver's WriteTimeouts.
+func (b *Base) WriteSources() []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, w := range b.writes {
+		if id := w.src.cfg.ID; !seen[id] {
+			seen[id] = true
+			out = append(out, id)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// SetSendGate installs a pair's gate with its send budget (design §3.4):
+// read immediately before each command, it is the gate this driver obeys,
+// and each command gets the budget as its deadline.
+func (b *Base) SetSendGate(g nio.SendGate) {
 	b.gateMu.Lock()
-	g := b.writeGate
+	b.sendGate = g
 	b.gateMu.Unlock()
-	return g == nil || g()
+}
+
+// gate is the gate a command checks: the send gate when installed, else
+// the plain gate with no deadline; nil means always open.
+func (b *Base) gate() nio.SendGate {
+	b.gateMu.Lock()
+	defer b.gateMu.Unlock()
+	if b.sendGate != nil {
+		return b.sendGate
+	}
+	if g := b.writeGate; g != nil {
+		return func() (bool, time.Duration, uint64) { return g(), -1, 0 }
+	}
+	return nil
+}
+
+func (b *Base) gateOpen() bool {
+	ok, _ := b.look()
+	return ok
+}
+
+// look reads the gate once: open, and the lease's term (0 without a pair).
+func (b *Base) look() (bool, uint64) {
+	g := b.gate()
+	if g == nil {
+		return true, 0
+	}
+	ok, _, term := g()
+	return ok, term
 }
 
 // Start launches one poll loop per source. Idempotent: a second Start is a
@@ -771,7 +820,8 @@ func (b *Base) WriteOutputs(vals nio.Values) error {
 			continue
 		}
 		s := w.src
-		if !b.gateOpen() || !s.isEnabled() {
+		open, term := b.look()
+		if !open || !s.isEnabled() {
 			// Rules 2 and 5: neither queued nor recorded; forget the last
 			// value too, so the first one after is a baseline.
 			s.mu.Lock()
@@ -791,7 +841,7 @@ func (b *Base) WriteOutputs(vals nio.Values) error {
 			continue
 		}
 		s.written[name] = v
-		s.pending = append(s.pending, queuedWrite{name, v, b.now()})
+		s.pending = append(s.pending, queuedWrite{name, v, b.now(), term})
 		s.mu.Unlock()
 		s.wake()
 	}
@@ -1059,8 +1109,21 @@ func (b *Base) mergeLocked(s *Source, c *classRun, res Result) {
 // the write gate is open. A refused command is dropped with its error on
 // the row: retrying a Set the device rejected would only repeat the
 // refusal, and a transport failure shows up on the next poll anyway.
+//
+// The gate is read again immediately before EACH command, which runs with
+// the gate's send budget as its deadline (design §3.4): a batch never goes
+// out on one look. When the gate closes partway through, the command it
+// stopped and every one after it are dropped, logged once: never put
+// back. A flush that finds the gate closed at its start leaves the queue
+// for the reopen, and then a command is sent only under the lease's term
+// it was computed in: one queued before this replica lost the lease and
+// won it again is dropped (logged once), whatever StaleAfter says (#1040
+// review); a same-term reopen (scans stalled and resumed) keeps it. A
+// command unanswered at its deadline is "outcome unknown", never sent
+// again.
 func (b *Base) flushWrites(ctx context.Context, s *Source) {
-	if b.write == nil || !b.gateOpen() {
+	open, batchTerm := b.look()
+	if b.write == nil || !open {
 		return
 	}
 	s.mu.Lock()
@@ -1072,7 +1135,9 @@ func (b *Base) flushWrites(ctx context.Context, s *Source) {
 	s.pending = nil
 	s.mu.Unlock()
 	now := b.now()
-	for _, q := range batch {
+	var oldTerm []string
+	defer func() { b.dropOldTerm(s, oldTerm) }()
+	for i, q := range batch {
 		name := q.name
 		if age := now.Sub(q.at); age > s.cfg.StaleAfter {
 			// Rule 5: too old to be what anyone means now.
@@ -1085,8 +1150,33 @@ func (b *Base) flushWrites(ctx context.Context, s *Source) {
 			continue
 		}
 		w := b.writes[name]
-		err := b.write(ctx, s.cfg.ID, w.decl, q.v)
+		deadline, term, ok := time.Time{}, batchTerm, true
+		if !mut("gate_per_batch") {
+			deadline, term, ok = fence.Begin(b.gate(), time.Now())
+		}
+		if !ok || !fence.Started(deadline, time.Now()) {
+			b.dropRest(s, batch[i:])
+			return
+		}
+		if q.term != term && !mut("old_term_sent") {
+			oldTerm = append(oldTerm, name)
+			continue
+		}
+		wctx, cancel := fence.Context(ctx, deadline)
+		fence.BeforeSend()
+		err := b.write(wctx, s.cfg.ID, w.decl, q.v)
+		cancel()
 		if errors.Is(err, ErrNoWrite) {
+			continue
+		}
+		if err != nil && !deadline.IsZero() && !time.Now().Before(deadline) {
+			// Unanswered at its send deadline (design §3.4): the device may
+			// have run it (a slow BMC's reset), so it is neither failed nor
+			// sent again; the row says the outcome is unknown.
+			s.mu.Lock()
+			s.lastWrite = fmt.Errorf("write %s: outcome unknown: no answer by its send deadline, so the connection was reset; the device may have carried it out, and it is not sent again (%w)", name, err)
+			s.mu.Unlock()
+			b.log.Warn(b.kind+": command outcome unknown (no answer by its send deadline; not sent again)", "source", s.cfg.ID, "tag", name, "error", err)
 			continue
 		}
 		if err != nil {
@@ -1103,6 +1193,31 @@ func (b *Base) flushWrites(ctx context.Context, s *Source) {
 		s.mu.Unlock()
 		b.writesN.Add(1)
 	}
+}
+
+// dropRest drops the commands a closed gate stopped, the first of rest and
+// every one after it, with one log line and the reason on the row.
+func (b *Base) dropRest(s *Source, rest []queuedWrite) {
+	names := make([]string, len(rest))
+	for i, q := range rest {
+		names[i] = q.name
+	}
+	s.mu.Lock()
+	s.lastWrite = fmt.Errorf("write gate closed: %d queued command(s) dropped (%s); not sent: this controller no longer leads, or its scans are not live", len(names), strings.Join(names, ", "))
+	s.mu.Unlock()
+	b.log.Warn(b.kind+": write gate closed; queued commands dropped", "source", s.cfg.ID, "count", len(names), "tags", names)
+}
+
+// dropOldTerm drops the commands a flush found computed under an earlier
+// term of the lease, with one log line and the reason on the row.
+func (b *Base) dropOldTerm(s *Source, names []string) {
+	if len(names) == 0 {
+		return
+	}
+	s.mu.Lock()
+	s.lastWrite = fmt.Errorf("%d queued command(s) dropped (%s): computed under an earlier leadership of this controller, which lost the lease and won it again since", len(names), strings.Join(names, ", "))
+	s.mu.Unlock()
+	b.log.Warn(b.kind+": commands from an earlier leadership dropped", "source", s.cfg.ID, "count", len(names), "tags", names)
 }
 
 func (s *Source) isEnabled() bool {

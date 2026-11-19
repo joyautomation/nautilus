@@ -53,6 +53,13 @@ type Options struct {
 	// Lease defaults to DefaultLease, Rho to DefaultRho.
 	Lease time.Duration
 	Rho   float64
+	// NetDelay (d_net) is the plant network's assumed one-way delivery
+	// bound and SendMargin (m_send) the gap a send path may leave between
+	// its gate check and its send system call (design §3.4). The write
+	// gate closes NetDelay+SendMargin before the lease ends (the fence
+	// margin), and a send's budget is the lease left minus NetDelay. Zero
+	// takes FenceDefaults(Lease).
+	NetDelay, SendMargin time.Duration
 	// StatePath is this controller's voter state file. It belongs in the
 	// controller's state directory, never in the project tree: a deploy
 	// replaces the project, and a lost file needs the peer, or an
@@ -306,6 +313,17 @@ func New(o Options) (*Elector, error) {
 	if o.Rho == 0 {
 		o.Rho = DefaultRho
 	}
+	if dn, ms := FenceDefaults(o.Lease); o.NetDelay == 0 || o.SendMargin == 0 {
+		if o.NetDelay == 0 {
+			o.NetDelay = dn
+		}
+		if o.SendMargin == 0 {
+			o.SendMargin = ms
+		}
+	}
+	if f := o.NetDelay + o.SendMargin; o.NetDelay < 0 || o.SendMargin < 0 || f >= o.Lease/4 {
+		return nil, fmt.Errorf("quorum: fence margin %s (net delay %s + send margin %s) must be under a quarter of the lease (%s)", f, o.NetDelay, o.SendMargin, o.Lease)
+	}
 	if o.Log == nil {
 		o.Log = slog.Default()
 	}
@@ -495,16 +513,46 @@ func (e *Elector) SetHealth(h func() bool) {
 	e.mu.Unlock()
 }
 
+// FenceDefaults are the fence margin's parts for a lease when the
+// manifest names none (design §3.4): 50 ms of network delay and 20 ms of
+// send margin, scaled down for a short lease (at most lease/8 and
+// lease/16), so the margin stays under a quarter of any lease.
+func FenceDefaults(lease time.Duration) (netDelay, sendMargin time.Duration) {
+	return min(50*time.Millisecond, lease/8), min(20*time.Millisecond, lease/16)
+}
+
+// Fence is the fence margin: the gate closes this long before the lease
+// ends.
+func (e *Elector) Fence() time.Duration {
+	if mut("no_fence_margin") {
+		return 0
+	}
+	return e.o.NetDelay + e.o.SendMargin
+}
+
 // IsLeader reports whether the write gate is open: this controller holds a
-// majority lease, judged against the clock now (not at the elector's last
-// look, so a stalled elector can't hold the gate open past the lease), and
-// its scans were live at its last look, and it hasn't released.
+// majority lease with more than the fence margin left, judged against the
+// clock now (not at the elector's last look, so a stalled elector can't
+// hold the gate open past the lease), and its scans were live at its last
+// look, and it hasn't released.
 func (e *Elector) IsLeader() bool {
+	ok, _, _ := e.SendGate()
+	return ok
+}
+
+// SendGate is IsLeader with the budget a send that starts now has (the
+// lease left minus the network delay) and the term it leads under (Term),
+// read in one look (io.SendGate, design §3.4).
+func (e *Elector) SendGate() (bool, time.Duration, uint64) {
 	g := e.gate.Load()
 	if mut("gate_on_tick") {
-		return g.open
+		return g.open, g.end.Sub(e.now()) - e.o.NetDelay, g.epoch
 	}
-	return g.open && e.now() < g.end
+	left := g.end.Sub(e.now())
+	if !g.open || left <= e.Fence() {
+		return false, 0, g.epoch
+	}
+	return true, left - e.o.NetDelay, g.epoch
 }
 
 // Term returns the last fencing token this controller led under: the term
@@ -1105,7 +1153,7 @@ func (e *Elector) Status() Status {
 		ConfigDiffers: e.cfgDiffers, HelloDuplicates: e.helloDups, BoxChanged: e.boxChanged, BoxPending: e.boxPending,
 	}
 	g := e.gate.Load()
-	s.Leading = g.open && now < g.end
+	s.Leading = g.open && g.end.Sub(now) > e.Fence()
 	s.Term = g.epoch
 	switch from, until := e.v.LeaderSeen(); {
 	case s.Leading:

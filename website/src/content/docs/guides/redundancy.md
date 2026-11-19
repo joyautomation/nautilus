@@ -297,6 +297,54 @@ says so at start, in `GET /api/cluster` (`warnings`) and on the
 dashboard. Live I/O applies are refused on a pair.
 :::
 
+**Writes leave in time.** The leader stops writing a little before its
+lease ends, not at the end: the fence margin, `net-delay` (the plant
+network's delivery time) plus `send-margin` (scheduling slack), 70 ms at
+the default 2 s lease. Every write to a device checks leadership just
+before it goes out and must be done within the lease left minus
+`net-delay`; a write still unanswered then has its connection reset, so
+nothing it queued arrives late. Modbus TCP, EtherNet/IP, Redfish, SNMP
+and Prometheus commands work this way now; the other drivers follow.
+Leave both keys unset unless the plant network is slow: then set them,
+and keep their sum under a quarter of the lease (a longer one is
+refused).
+
+**A slow device costs a write.** A write may take as little as three
+quarters of the lease minus `net-delay` (1.45 s at the default 2 s
+lease). A device that answers slower than that has the write abandoned
+and its connection reset, even with the leader healthy. A Modbus or
+EtherNet/IP write is sent again after the reconnect: a Modbus write sets
+a value and EtherNet/IP writes a tag, so a second one does the same. An
+SNMP or Redfish command is never queued again: the source reports its
+**outcome unknown**, because the device may have carried it out (a slow
+BMC's reset) after nautilus stopped waiting. A Redfish action is never
+retried, and an SNMP set goes out once (`retries:` applies to polls
+only), so an action-valued object (an outlet reboot) never runs twice
+because an answer was lost.
+
+A source's `timeout:` is kept as it is (it bounds its polls too): on a
+pair, each write is cut at its own send deadline whatever the timeout
+says. `naut check` warns when a timeout a source that takes writes sets
+is longer than the budget, since that device's slower writes will be
+cut: lower it if the device answers well within it, or lengthen the
+lease. EtherNet/IP has no
+timeout setting, so the same applies to a controller slower than the
+budget. A command queued under one leadership is never sent after the
+controller lost the lease and won it back: it is dropped and the source
+says why.
+
+```yaml
+redundancy:
+  # ...
+  net-delay: 50ms         # default: 50 ms, less on a lease under 400 ms
+  send-margin: 20ms       # default: 20 ms, less on a lease under 320 ms
+```
+
+**No Sparkplug edge node on a pair yet.** Both controllers would publish
+as the same edge node (#798), so a pair whose project has `sparkplug:`
+is refused at load. Run the edge on a controller outside the pair until
+#798 lands.
+
 Each controller also needs, in its environment (`/etc/nautilus/env`
 under `naut deploy`):
 

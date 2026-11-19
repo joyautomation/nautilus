@@ -250,6 +250,16 @@ func (s *session) Set(ctx context.Context, vb walk.Varbind) error {
 		return err
 	}
 	s.g.Context = ctx
+	// One datagram per SET (design §3.4, #1040 review): gosnmp would
+	// otherwise send it again after each per-try timeout, and an
+	// action-valued object (an outlet reboot) runs twice when only the
+	// answer was lost. A SET with no answer is reported, not repeated;
+	// GETs keep their retries.
+	if !mut("set_retried") {
+		retries := s.g.Retries
+		s.g.Retries = 0
+		defer func() { s.g.Retries = retries }()
+	}
 	pkt, err := s.g.Set([]gosnmp.SnmpPDU{pdu})
 	if err != nil {
 		return s.explain(ctx, err)

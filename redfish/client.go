@@ -25,12 +25,15 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/joyautomation/nautilus/internal/fence"
 )
 
 // DefaultTimeout bounds one request (brief §3.2).
@@ -300,6 +303,31 @@ func (c *Client) sendLocked(ctx context.Context, method, path string, body []byt
 		req.Header.Set("X-Auth-Token", c.token)
 	case c.mode == AuthBasic || c.basic:
 		req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(c.user+":"+c.password)))
+	}
+	if dl, ok := ctx.Deadline(); ok && fence.Fenced(ctx) {
+		// A command on a redundant pair (design §3.4, rule 3): the socket
+		// that carries it is reset at its send deadline, never closed
+		// with a FIN, so a POST the kernel still holds (a partition) is
+		// dropped rather than delivered after the lease. SO_LINGER 0 is
+		// set as the connection is taken, since net/http may close it
+		// itself at the context's deadline, and lifted again if the
+		// command is answered in time (the connection is kept for reads).
+		var mu sync.Mutex
+		var conn net.Conn
+		var stop func() bool
+		req = req.WithContext(httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{GotConn: func(i httptrace.GotConnInfo) {
+			fence.Linger0(i.Conn)
+			mu.Lock()
+			conn, stop = i.Conn, fence.Arm(i.Conn, dl)
+			mu.Unlock()
+		}}))
+		defer func() {
+			mu.Lock()
+			defer mu.Unlock()
+			if stop != nil && !stop() && time.Now().Before(dl) {
+				fence.LingerDefault(conn)
+			}
+		}()
 	}
 	resp, err := c.hc.Do(req)
 	if err != nil {

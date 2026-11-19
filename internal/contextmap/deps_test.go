@@ -44,6 +44,11 @@ func rules(u universe) []rule {
 			why:  "only leader (which adapts it to leader.Elector) and the CLI (naut witness) know the vote protocol",
 		},
 		{
+			from: []string{"internal/fence"},
+			to:   u.allBut("io"),
+			why:  "the send fence is a seam: drivers use it, and it knows only io (the pair's gate arrives as io.SendGate)",
+		},
+		{
 			from: []string{"retain"},
 			to:   u.allBut("internal/k8sapi"),
 			why:  "retain is a seam: a store interface plus a file and a ConfigMap adapter",
