@@ -110,6 +110,12 @@ break one changes this section first and says why.
 Verification packages, `examples/`, `testdata/` and `tools/` compose freely
 and are excluded from the check. Test files may import anything.
 
+One exception for what users copy: `examples/` and the `naut new` templates
+(`cmd/naut/templates`) import only the stable Go API, `io`, `runtime`,
+`server` and `acceptance` (CONTRIBUTING.md, "Go API"), so no scaffold
+teaches a dependency on an internal package
+(`TestSDKSourcesImportOnlyTheStableAPI`).
+
 ### 2.2 Anti-corruption layers
 
 A driver or writer package owns its protocol's names and nothing above it
@@ -171,7 +177,7 @@ Legitimate per-context meanings, so nobody "deduplicates" them:
 |---|---|
 | **Tag** | Runtime: a cell in the store (`TagDef`, `Tags`, `TagMeta`). Manifest: its YAML form (`TagConfig`). Tag file: one generated row (`tagfile.Tag`). Field/IT drivers: a binding from a tag to an address (`TagBinding`, `snmp.Tag`, `redfish.Tag`, `prom.Tag`, `replay.Tag`). Logix: a controller symbol (`l5x.Tag`, `cip.TagSegment`). Logix emulator: the served surface (`TagSpec`, `TagSurfaceSpec`, `TagConfig`, `TagStore`) |
 | **Node** | ST and SFC: an AST node. FBD: a netlist node. Sparkplug edge: this edge node. Sparkplug host: its view of a remote edge node. Oplog: one replica. Scene: one placed thing |
-| **Device** | Sparkplug edge: a device under this node. Sparkplug host: a device under a remote node. Modbus codegen: a device *type* in the committed device map (`DeviceMap`, `DeviceType`), which is a kind of hardware, not an instance. Drivers call a polled instance a **source**. Device library: a device *type* is a **device profile** (`devprofile.Profile`); a project's instance of one is a **device**. Virtual devices: an instance in `virtual-devices.yaml` (`virtdev.Instance`). Siemens target: a PROFINET IO device placed in a CPU's station spec (`tiad.Device`), always with an explicit name of station. Note `devices.yaml` is the Modbus device map, not a list of devices |
+| **Device** | Sparkplug edge: a device under this node. Sparkplug host: a device under a remote node. Modbus codegen: a device *type* in the committed device map (`DeviceMap`, `DeviceType`), which is a kind of hardware, not an instance. Drivers call a polled instance a **source**. Device library: a device *type* is a **device profile** (`devprofile.Profile`); a project's instance of one is a **device**. Virtual devices: an instance (`virtdev.Instance`), one per `devices:` row plus each device of its own in `virtual-devices.yaml`. Siemens target: a PROFINET IO device placed in a CPU's station spec (`tiad.Device`), always with an explicit name of station. Note `devices.yaml` is the Modbus device map, not a list of devices |
 | **Profile** | Device library: a device type (`devprofile.Profile`). SNMP: a walk-to-UDT expansion in Go (`snmp/profiles`, `naut snmp import --profile`). HMI 3D: a chassis profile. Say "device profile" when more than one is in play |
 | **Program** | IEC: a POU scheduled by a task, everywhere in nautilus. Logix: a container of routines. The writer translates; "program" never means the Logix thing outside `logix/` |
 | **Quality** | One meaning, `io.Quality`, in every context. Keep it that way |

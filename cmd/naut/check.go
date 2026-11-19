@@ -66,7 +66,7 @@ func runCheck(args []string) int {
 	}
 
 	var files []string
-	var deviceDirs []string // directories holding a virtual-devices.yaml
+	var deviceDirs []string // directories that may have virtual devices: a virtual-devices.yaml or a nautilus.yaml
 	for _, p := range paths {
 		info, err := os.Stat(p)
 		if err != nil {
@@ -89,8 +89,8 @@ func runCheck(args []string) int {
 				}
 				return nil
 			}
-			if d.Name() == virtdev.FileName {
-				deviceDirs = append(deviceDirs, filepath.Dir(path))
+			if d.Name() == virtdev.FileName || d.Name() == project.ManifestName || (*manifest != "" && d.Name() == filepath.Base(*manifest)) {
+				deviceDirs = appendDeviceDir(deviceDirs, filepath.Dir(path))
 			}
 			if ext := strings.ToLower(filepath.Ext(path)); ext == ".st" || ext == ".fbd" || ext == ".ld" || ext == ".sfc" {
 				files = append(files, path)
@@ -112,7 +112,17 @@ func runCheck(args []string) int {
 		skip := map[string]bool{}
 		for _, dir := range deviceDirs {
 			where := filepath.Join(dir, virtdev.FileName)
-			set, err := virtdev.LoadSet(dir)
+			if _, err := os.Stat(where); err != nil {
+				where = filepath.Join(dir, project.ManifestName)
+			}
+			// A manifest that does not read is reported by its own check;
+			// the plant is then virtual-devices.yaml's entries alone, so
+			// its sources still stay out of the controller's pass.
+			devs, _ := manifestDevices(dir, plantManifest(dir, paths, *manifest))
+			set, err := composeVirtualDevices(dir, devs)
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
 			if err != nil {
 				plantBad++
 				fmt.Printf("%s: %v\n", where, err)
@@ -1129,4 +1139,28 @@ func checkPlant(set *virtdev.Set) error {
 	}
 	_, err = runtime.New(plant.Options())
 	return err
+}
+
+// appendDeviceDir adds dir, once, to the directories whose virtual devices
+// check compiles: one with a virtual-devices.yaml, or a nautilus.yaml (its
+// devices: rows are virtual devices too; one without any has none).
+func appendDeviceDir(dirs []string, dir string) []string {
+	for _, d := range dirs {
+		if d == dir {
+			return dirs
+		}
+	}
+	return append(dirs, dir)
+}
+
+// plantManifest is the manifest whose devices: dir's virtual devices come
+// from: -m's for the project it names, nautilus.yaml for any other.
+func plantManifest(dir string, paths []string, manifest string) string {
+	if manifest == "" {
+		return ""
+	}
+	if mdir, ok := manifestDir(paths, manifest); ok && filepath.Clean(mdir) == filepath.Clean(dir) {
+		return manifest
+	}
+	return ""
 }

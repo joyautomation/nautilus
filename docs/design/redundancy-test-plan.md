@@ -133,6 +133,9 @@ case caught it. A mutation joins the nightly run in the PR that builds the rule 
 | the standby's proxy drops or rewrites the client's Host or token | design §6.1 | 3 |
 | no back-off after a lease lapses unconfirmed | design §3.1, one-way partitions | 2 |
 | grants accepted from any witness incarnation | design §3.1, the witness incarnation | 2 |
+| a grant counted toward a request it doesn't answer (matched by term, not id) | design §3.1, request ids | 2 |
+| a new incarnation's grants counted with no quiet period | design §3.1, the witness incarnation | 2 (handshake) |
+| an incarnation adopted without the term floor | I4 | 2 (handshake) |
 | leases timed on `CLOCK_MONOTONIC`, which stops across a suspend | design §3.1, clocks | 2 |
 | the override opens the gate before its journal fsync | I8 | 5 |
 | the override survives hearing a peer | design §7 | 5 |
@@ -239,8 +242,8 @@ T4 where only hardware can.
 | F12 | **Leader isolated from B and W** | nftables | The leader fences at the end of its lease. B+W elect B, which takes over hot or cold. When it is healed, A returns as standby, writes nothing, and resyncs. | ✓ | ✓ | ✓ |
 | F13 | Witness down | stop it | No change. Alarm: "one more failure stops control". | ✓ | ✓ | ✓ |
 | F14 | Witness restart, state file kept | restart | No change. | ✓ | ✓ | ✓ |
-| F15 | Witness restart **without** its state file (HA-cluster reschedule) | wipe the file and restart; T3 also runs it as a pod on a kind cluster | It comes back as a new incarnation and grants nothing for one lease, and no double grant happens. It counts only after A and B adopt it together over the A–B link (design §3.1). It re-copies the whole `oplog` from the leader, and no committed ack is lost while both controllers are up (§8.1). Rerun with one controller down: the rebuilt witness is not adopted, and the survivor behaves as F16 or F17. | ✓ | ✓ | |
-| F15b | **Two witness copies at once**: the old pod on a partitioned node and its rescheduled copy, or a force-deleted pod, with the A–B link cut | T2: two incarnations. T3: kind, a StatefulSet with the node's network cut, then a force-delete. | I1 holds. Neither controller accepts the new incarnation without the other's concurrence (design §3.1). Kubernetes starts no second StatefulSet pod until the node is confirmed gone. | ✓ | ✓ | |
+| F15 | Witness restart **without** its state file (HA-cluster reschedule) | wipe the file and restart; T3 also runs it as a pod on a kind cluster | It comes back as a new incarnation and grants nothing for one lease, and no double grant happens. It counts only after A and B adopt it together over the A–B link, and only once the quiet period (one lease after adoption) has passed; the adoption raises both voters to the higher of their promised terms (design §3.1). It re-copies the whole `oplog` from the leader, and no committed ack is lost while both controllers are up (§8.1). Rerun with one controller down: the rebuilt witness is not adopted, and the survivor behaves as F16 or F17. | ✓ | ✓ | |
+| F15b | **Two witness copies at once**: the old pod on a partitioned node and its rescheduled copy, or a force-deleted pod, with the A–B link cut | T2: two incarnations. T3: kind, a StatefulSet with the node's network cut, then a force-delete. | I1 holds. Neither controller accepts the new incarnation without the other's concurrence (design §3.1). Kubernetes starts no second StatefulSet pod until the node is confirmed gone. **The switch case:** A leads on the old copy, B's promise to A has lapsed, and the pair adopts a second copy that has been up for hours. I1 holds because of the quiet period; the same case with the quiet period removed must break I1 (the handshake PR's mutation). | ✓ | ✓ | |
 | F16 | Witness + standby down | stop both | With one voter of three left, the leader has no majority, so it fences at the end of its lease. The no-quorum alarm is raised, and the device watchdogs act. | ✓ | ✓ | ✓ |
 | F17 | Witness + leader down | stop both | The standby has no majority: it stays standby, raises no-quorum, and offers the override. | ✓ | ✓ | ✓ |
 | F18 | Both controllers down, witness up; restart in each order, at each delay | stop and start | The first controller back forms a majority with the witness and leads. It takes over hot only on a current image. If it was the out-of-sync standby, or the mark is unknown, it takes over cold with the alarm (decision 4). The second joins as standby and resyncs. | ✓ | ✓ | ✓ |
@@ -416,7 +419,58 @@ changed manifest.
    it read-only.
 6. **The witness only follows the leader its votes name.** Replication from any other source
    is refused, a stale term included.
-7. **Every case runs** in T2 (the simulated disk and network), and cases 1–5 also run in T3.
+
+**Substitute values (#707)** go through `oplog` as operator intent: `substitute`, `unsubstitute`
+and `suback` entries, the last two naming the substitute's entry by `seq`. Cases 7–10 are the
+requirements agreed on #707. They join the run in #707's oplog PR, which builds the kinds.
+
+7. **A new leader's first scan sees every committed substitute.**
+   - Setup: partition A from B (F8); substitute a bad input on A, committed by A and the
+     witness; kill A.
+   - B's takeover catches up `oplog` and applies the substitute **before its first scan**,
+     in the same step as the retain load. The `oplog` copy wins over B's retained one.
+   - The first scan's input value is the substitute: checked on the scan, not after it.
+   - If catch-up fails within its bounded wait, B keeps its retained substitutes and raises
+     the alarm flag. A substitute is never dropped silently.
+   - Mutation: catch-up deferred to the first `oplog` write (today's lazy `leaderCatchUp`).
+     Case 7 must go red.
+8. **Only the leader expires a substitute, and the expiry is an entry.**
+   - At the end of the granted duration the leader appends `unsubstitute` (`by: system`,
+     `reason: expired`). The standby never expires one on its own.
+   - A takeover evaluates expiry once, as in case 9.
+   - A substitute that expired on the old leader just before a takeover is not revived.
+9. **How a leader times a substitute, and a wall-clock step** (F23-style).
+   - **The leader that applies it** times the granted duration on `CLOCK_BOOTTIME`, from
+     when it applied it.
+   - **A new leader** computes the remainder **once, at takeover**, from the entry's
+     wall-clock `until` on its own clock: `until − now`. NTP-level skew between the pair
+     (seconds) is accepted. Then it times that remainder on `CLOCK_BOOTTIME`. A takeover
+     never restarts the full duration.
+   - **A remainder outside its bounds** means the new leader's wall clock was stepped: below
+     zero, the substitute has expired. Above the granted duration plus the skew bound, it is
+     capped at the granted duration and raises the alarm.
+   - **A single controller across a restart** works the same way: the remainder comes from
+     `until`, so downtime counts toward the duration.
+   - Steps: step the leader's clock ±1 h mid-substitute; it still ends at its granted time.
+     Then step the standby's clock before a takeover. Set 1 h ahead, the remainder
+     shrinks by 1 h: it ends early, at worst at once, with the usual expiry audit and
+     `__Substitute_Expired` pulse. Set 1 h behind, the remainder grows past the granted
+     duration: it is capped there, and the alarm is raised.
+   - **Repeated takeovers inside one substitute:** take over A→B→A→B at intervals shorter than
+     the granted duration. The substitute still ends at its granted time, ± the skew.
+   - Mutations: expiry taken from the wall-clock `until` on a steady leader (a step then
+     moves it), and a takeover restarting the full duration. Both turn case 9 red.
+10. **Expiry doesn't wait for quorum.**
+    - With no quorum, starting or stopping a substitute is refused like any operator write
+      (case 5).
+    - On the override path a substitute still ends on time: the expiry is journalled locally
+      and reconciled at the heal (design §7, PR 5's open question).
+    - A late or merged `unsubstitute` naming an older entry's `seq` does not end a newer
+      substitute of the same tag.
+    - Mutation: expiry gated on an `oplog` commit. Case 10 must go red.
+
+11. **Every case runs** in T2 (the simulated disk and network). Cases 1–5 and 7–10 also run
+    in T3.
 
 ### 8.2 Peer traffic and the Host rule (design §6.1)
 

@@ -110,6 +110,7 @@
 	--q-bad: var(--crit); /* the source says the value is wrong */
 	--q-notpublished: var(--crit); /* the runtime does not publish this point at all */
 	--q-simulated: var(--serious); /* substituted upstream of alarming — not the plant */
+	--q-substituted: var(--serious); /* an operator replaced a bad sensor's value (#707) — not the plant */
 
 	/* Equipment state, the same four facts every symbol in every package
 	   shows. `--eq-state-unknown` is deliberately NOT `--eq-state-stop`: an

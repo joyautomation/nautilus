@@ -292,13 +292,25 @@ module stayed powered.
   `network-online.target`, which Torizon OS reaches about 17.7 s after the
   kernel starts (`NetworkManager-wait-online` alone takes 6.7 s); see
   `systemd-analyze critical-chain nautilus.service`.
-- A **cold** power-on adds the power supply, the boot ROM and the
-  bootloader before the kernel. It has not been measured yet.
+
+**A cold power-on**, timed once (one sample; a second would firm it up):
+the supply was cut for 3.9 s (the module itself was off about 18 s), and
+the box reached its **first good scan 32.5 s after power returned**.
+
+| power returned → | |
+|---|---|
+| kernel start (boot ROM, bootloader, loading the kernel) | 12.3 s |
+| naut started | 31.7 s |
+| first good scan (on the box) | 32.5 s |
+| first good scan, seen from another machine | 32.8 s |
+
+From kernel start the cold boot took what the warm ones did: naut
+started at 19.4 s and scanned at 20.1 s. A warm reboot's 35–37 s includes
+the shutdown; a cold power-on has none.
 
 ## What it does not do yet
 
-- **A cold power-on** has not been timed; the numbers above are warm
-  reboots.
+- **A cold power-on** has been timed once, not repeated.
 - **A `PREEMPT_RT` kernel** has not been tried on the Verdin, nor
   `isolcpus` to keep a core for the controller. Both change the real-time
   numbers above.

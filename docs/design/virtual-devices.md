@@ -152,10 +152,13 @@ model:
 
 `virtual-devices.yaml` is dev-time, like `*_test.yaml`, and stays out of
 `nautilus.yaml` (the deployment artifact). An entry's first three keys are
-the shape a project will declare its *real* devices with once profiles live
-in `nautilus.yaml` (#717): name, profile, endpoint. At that point the
-virtual devices derive from the manifest, and `virtual-devices.yaml` keeps only what
-a simulation adds (listen, init, the model).
+the shape a project declares its *real* devices with in `nautilus.yaml`'s
+`devices:` (#717, `docs/design/device-library.md`). Each `devices:` row is a
+virtual device too, simulating the project's vendored profile
+(`profiles/<id>.yaml`), with no entry here. An entry here that names a
+`devices:` row may add only what a simulation needs (`listen`, `init`); the
+file also keeps the process model and any device the manifest does not
+declare (a hand-mapped one).
 
 `endpoint` is matched against the project's own driver configuration, so
 `nautilus.yaml` is never edited to test: the in-process face answers there,

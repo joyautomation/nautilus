@@ -412,14 +412,20 @@ func mapInts[T any](arr []ir.Value, f func(int64) T) []T {
 // still worth showing, which is exactly what Uncertain_LastUsableValue
 // means — and the two Bad qualities are Bad, so a client that only checks
 // the severity bit treats them the way an HMI treats a bad binding.
+// Substituted is Uncertain_SubstituteValue, the code OPC UA has for exactly
+// that (#707). A quality this build does not know is Bad, never Good.
 func statusOf(q nio.Quality) ua.StatusCode {
 	switch q {
+	case nio.Good:
+		return ua.StatusGood
 	case nio.Stale:
 		return ua.StatusUncertainLastUsableValue
 	case nio.Bad:
 		return ua.StatusBadDeviceFailure
 	case nio.NotConnected:
 		return ua.StatusBadNotConnected
+	case nio.Substituted:
+		return ua.StatusUncertainSubstituteValue
 	}
-	return ua.StatusGood
+	return ua.StatusBad
 }

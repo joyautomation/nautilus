@@ -168,7 +168,7 @@ func runTest(s *Suite, t *Test, opts runtime.Options, cfg runOptions) (Result, e
 	clk := NewClock()
 	if s.Devices {
 		if cfg.devices == nil {
-			return res, fmt.Errorf("%s: devices: true, but the project has no virtual devices (virtual-devices.yaml)", s.Path)
+			return res, fmt.Errorf("%s: devices: true, but the project has no virtual devices (devices: in nautilus.yaml, or virtual-devices.yaml)", s.Path)
 		}
 		var err error
 		if dev, err = cfg.devices(clk); err != nil {

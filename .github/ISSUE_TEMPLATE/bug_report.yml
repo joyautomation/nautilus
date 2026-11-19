@@ -1,0 +1,45 @@
+name: Bug report
+description: Something in nautilus does the wrong thing.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. This repository is public: leave out plant, site and customer names, real tag names, IP addresses, serial numbers and credentials. Use made-up names instead. A security problem goes to SECURITY.md, not here.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `naut version` (and the extension or HMI kit version, if it's about those).
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: OS and architecture, and the controller or driver if it matters (for example "linux/arm64, Modbus TCP").
+    validations:
+      required: true
+  - type: textarea
+    id: manifest
+    attributes:
+      label: Manifest or program snippet
+      description: The smallest part of nautilus.yaml or the program that shows the problem.
+      render: yaml
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. naut new ...
+        2. naut run
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and what happened instead
+      description: Include the error output or logs.
+    validations:
+      required: true

@@ -283,6 +283,10 @@ type RedundancyConfig struct {
 	Lease string `yaml:"lease"`
 }
 
+// maxDeviceDeathDelay bounds sparkplug.device-death-delay: a held death
+// hides a lost link from every host for that long.
+const maxDeviceDeathDelay = time.Minute
+
 // SparkplugConfig republishes the tag store as a Sparkplug B edge node —
 // the manifest form of sparkplug.Config + its options. The MQTT password
 // is NEVER in the file: set NAUTILUS_MQTT_PASSWORD.
@@ -319,6 +323,10 @@ type SparkplugConfig struct {
 	// working directory, like bdseq-file. Empty (the default): memory only.
 	// Needs store-forward.
 	StoreForwardFile string `yaml:"store-forward-file"`
+	// DeviceDeathDelay holds a device's DDEATH until it has been unhealthy
+	// this long; a recovery inside it sends nothing (sparkplug.Config).
+	// Zero (the default) sends DDEATH at once.
+	DeviceDeathDelay Duration `yaml:"device-death-delay"`
 	// FlattenUDTs publishes each UDT member as a plain metric
 	// ("P101/Running") instead of the tag as one Sparkplug Template, for
 	// hosts that do not read Templates. Default false: Templates.
@@ -1057,6 +1065,9 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 		}
 		if m.Sparkplug.StoreForwardFile != "" && m.Sparkplug.StoreForward <= 0 {
 			return nil, fmt.Errorf("sparkplug.store-forward-file needs store-forward: the file journals that buffer")
+		}
+		if d := time.Duration(m.Sparkplug.DeviceDeathDelay); d < 0 || d > maxDeviceDeathDelay {
+			return nil, fmt.Errorf("sparkplug.device-death-delay: %s: from 0 (DDEATH at once, the default) to %s", d, maxDeviceDeathDelay)
 		}
 	}
 	if m.Sparkplug != nil && m.Sparkplug.Device != "" {

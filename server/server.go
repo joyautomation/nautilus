@@ -157,7 +157,7 @@ type Frame struct {
 	Drivers []DriverStatus     `json:"drivers,omitempty"`
 	// Quality is the tags whose value is not to be trusted — ONLY the
 	// non-Good ones, keyed by tag name, valued with io.Quality's token
-	// ("stale" | "bad" | "notConnected"). Absent from the map means Good,
+	// ("stale" | "bad" | "notConnected" | "substituted"). Absent from the map means Good,
 	// which is what keeps a healthy 10,000-tag plant paying nothing for the
 	// feature: the field is omitted entirely. A name here need not appear
 	// in Tags — "notConnected" is exactly the source that has never
