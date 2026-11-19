@@ -102,6 +102,9 @@ func callOne(srv *opcserver.Server, ns *namespace, hdr *ua.RequestHeader, m *ua.
 	if !hasMethod(srv, m.ObjectID, class, m.MethodID) {
 		return callResult(ua.StatusBadMethodInvalid)
 	}
+	if r, ok := ns.callMapped(m.ObjectID, m.MethodID, m.InputArguments); ok {
+		return r
+	}
 	run := implemented(m.ObjectID, m.MethodID)
 	if run == nil {
 		return callResult(ua.StatusBadNotExecutable)

@@ -67,6 +67,11 @@ type MappedNode struct {
 	// served as that, and a value written to it is stored as hex. At most
 	// MaxBytes octets either way. Only a STRING tag takes it.
 	Wire string
+	// Method makes the node a Method of its Parent Object (the parent is
+	// required): a Call of it runs this with the input arguments and
+	// answers its output arguments, or a bad status. A Method has no tag,
+	// is executable by any session the Call service admits, and is a leaf.
+	Method func(args []*ua.Variant) (out []*ua.Variant, status ua.StatusCode)
 }
 
 // mnode is a MappedNode resolved.
@@ -77,6 +82,7 @@ type mnode struct {
 	desc     string
 	tag      string
 	wire     string
+	method   func(args []*ua.Variant) ([]*ua.Variant, ua.StatusCode)
 	children []*mnode
 }
 
@@ -107,7 +113,10 @@ func newMappedTree(m *Mapped) (*mappedTree, error) {
 		if n.Wire != "" && (n.Wire != "ByteString" && n.Wire != "ByteArray" || n.Tag == "") {
 			return nil, fmt.Errorf("mapped node %s: wire %q: only a Variable can be a ByteString or a ByteArray", n.NodeID, n.Wire)
 		}
-		mn := &mnode{nid: nid, name: n.Name, desc: n.Desc, tag: n.Tag, wire: n.Wire}
+		if n.Method != nil && (n.Tag != "" || n.Parent == "" || n.Wire != "") {
+			return nil, fmt.Errorf("mapped node %s: a Method has a Parent Object and no tag or wire", n.NodeID)
+		}
+		mn := &mnode{nid: nid, name: n.Name, desc: n.Desc, tag: n.Tag, wire: n.Wire, method: n.Method}
 		if n.Parent != "" {
 			pid, err := ua.ParseNodeID(n.Parent)
 			if err != nil {
@@ -119,6 +128,9 @@ func newMappedTree(m *Mapped) (*mappedTree, error) {
 			}
 			if p.tag != "" {
 				return nil, fmt.Errorf("mapped node %s: parent %s is a Variable", n.NodeID, n.Parent)
+			}
+			if p.method != nil {
+				return nil, fmt.Errorf("mapped node %s: parent %s is a Method", n.NodeID, n.Parent)
 			}
 			mn.parent = p
 			p.children = append(p.children, mn)
@@ -184,6 +196,17 @@ func (ns *namespace) mappedAttribute(n *mnode, attr ua.AttributeID) (dv *ua.Data
 	if n.tag != "" {
 		return nil, false
 	}
+	if n.method != nil {
+		switch attr {
+		case ua.AttributeIDNodeClass:
+			return value(int32(ua.NodeClassMethod)), true
+		case ua.AttributeIDWriteMask, ua.AttributeIDUserWriteMask:
+			return value(uint32(0)), true
+		case ua.AttributeIDExecutable, ua.AttributeIDUserExecutable:
+			return value(true), true
+		}
+		return status(ua.StatusBadAttributeIDInvalid), true
+	}
 	switch attr {
 	case ua.AttributeIDNodeClass:
 		return value(int32(ua.NodeClassObject)), true
@@ -193,6 +216,26 @@ func (ns *namespace) mappedAttribute(n *mnode, attr ua.AttributeID) (dv *ua.Data
 		return value(uint8(0)), true
 	}
 	return status(ua.StatusBadAttributeIDInvalid), true
+}
+
+// callMapped runs a mapped Method: ok is false when methodID is not one.
+// A Method called on an object that is not its parent is Bad_MethodInvalid;
+// callOne's hasMethod has refused that already, so the check here is the
+// second lock, not what a test can see alone.
+func (ns *namespace) callMapped(objectID, methodID *ua.NodeID, args []*ua.Variant) (*ua.CallMethodResult, bool) {
+	n, ok := ns.mapped.node(methodID)
+	if !ok || n.method == nil {
+		return nil, false
+	}
+	if n.parent == nil || !n.parent.nid.Equal(objectID) {
+		return callResult(ua.StatusBadMethodInvalid), true
+	}
+	out, st := n.method(args)
+	r := callResult(st)
+	if out != nil {
+		r.OutputArguments = out
+	}
+	return r, true
 }
 
 // mappedVariable resolves a mapped Variable to its tag member; ok is false
@@ -215,6 +258,9 @@ func (ns *namespace) mappedRef(n *mnode, refType uint32, forward bool) *ua.Refer
 	if n.tag != "" {
 		class, typeDef = ua.NodeClassVariable, id.BaseDataVariableType
 	}
+	if n.method != nil {
+		class, typeDef = ua.NodeClassMethod, 0 // a Method has no type definition
+	}
 	return &ua.ReferenceDescription{
 		ReferenceTypeID: ua.NewNumericNodeID(0, refType),
 		IsForward:       forward,
@@ -230,9 +276,11 @@ func (ns *namespace) mappedRef(n *mnode, refType uint32, forward bool) *ua.Refer
 // (inverse) and its children.
 func (ns *namespace) mappedBrowse(n *mnode, bd *ua.BrowseDescription) *ua.BrowseResult {
 	var refs []*ua.ReferenceDescription
-	if n.tag != "" {
+	switch {
+	case n.method != nil: // no type definition
+	case n.tag != "":
 		refs = append(refs, ns.typeRef(id.BaseDataVariableType))
-	} else {
+	default:
 		refs = append(refs, ns.typeRef(id.FolderType))
 	}
 	if n.parent == nil {
@@ -263,7 +311,7 @@ func (ns *namespace) mappedBrowse(n *mnode, bd *ua.BrowseDescription) *ua.Browse
 // childRefType is how a parent refers to a mapped child: Organizes for an
 // Object (a folder of things), HasComponent for a Variable.
 func childRefType(n *mnode) uint32 {
-	if n.tag == "" {
+	if n.tag == "" && n.method == nil {
 		return id.Organizes
 	}
 	return id.HasComponent
