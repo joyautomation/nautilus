@@ -143,7 +143,7 @@
 		await settle(r, `${s.name} restored.`);
 	}
 
-	async function ack(ids: string[]) {
+	async function ack(ids: number[]) {
 		busy = true;
 		const r = await client.ack(ids);
 		busy = false;
@@ -214,7 +214,7 @@
 				</select>
 			</label>
 			{#if rule?.operatorValue}
-				<label>Hold at
+				<label>Hold at <span class="q">(blank: {String(rule.value ?? '—')})</span>
 					<input bind:value={valueText} inputmode="decimal" autocomplete="off" />
 				</label>
 			{:else if rule}

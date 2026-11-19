@@ -14,7 +14,8 @@
 //     again, never retry blind.
 
 export interface SubstituteEntry {
-	id: string;
+	/** A number on the wire; send it back unchanged. */
+	id: number;
 	name: string;
 	value: unknown;
 	live?: unknown;
@@ -169,12 +170,12 @@ export class SubstituteClient {
 	}
 
 	/** End a substitute early. `kept: false` = took effect, not saved. */
-	stop(id: string): Promise<SubstituteResult> {
+	stop(id: number | string): Promise<SubstituteResult> {
 		return this.#send(`${this.#url}/${encodeURIComponent(id)}`, 'DELETE', undefined, undefined);
 	}
 
 	/** Acknowledge substitutes started with ackOnStart. */
-	ack(ids: string[]): Promise<SubstituteResult> {
+	ack(ids: Array<number | string>): Promise<SubstituteResult> {
 		return this.#send(`${this.#url}/ack`, 'POST', { ids }, undefined);
 	}
 
@@ -272,6 +273,8 @@ export function validateStart(rule: SubstituteRule | undefined, value: unknown, 
 	if (!Number.isFinite(seconds) || seconds <= 0) return 'Enter a duration in seconds.';
 	const max = maxSeconds(rule);
 	if (max && seconds > max) return `At most ${formatRemaining(rule.maxMs)} for ${rule.tag}.`;
-	if (rule.operatorValue && (value === undefined || value === '' || value === null)) return 'Enter the value to hold.';
+	// A rule with operator-value may be started without one: the server then
+	// holds the rule's own value. A rule without it refuses any other value.
+	void value;
 	return null;
 }

@@ -105,7 +105,7 @@ describe('start — answers', () => {
 describe('kept:false', () => {
 	it('a success with kept:false carries its warning to the operator', async () => {
 		const { client } = fake([json({ kept: false, warning: 'may still be active on the next leader' })]);
-		const r = await client.stop('abc');
+		const r = await client.stop(1);
 		expect(r.ok).toBe(true);
 		if (!r.ok) return;
 		expect(r.kept).toBe(false);
@@ -122,7 +122,7 @@ describe('kept:false', () => {
 	});
 	it('kept:false without a warning still says something', async () => {
 		const { client } = fake([json({ kept: false })]);
-		const r = await client.stop('abc');
+		const r = await client.stop(1);
 		if (!r.ok) throw new Error('ok expected');
 		expect(keptText(r)?.includes('not saved')).toBe(true);
 	});
@@ -131,12 +131,12 @@ describe('kept:false', () => {
 describe('stop / ack / list', () => {
 	it('stop DELETEs the escaped id; ack POSTs ids', async () => {
 		const { sent, client } = fake([json({ kept: true }), json({ kept: true })]);
-		await client.stop('a/b');
-		await client.ack(['x', 'y']);
-		expect(sent[0].url).toBe('/api/substitutes/a%2Fb');
+		await client.stop(7);
+		await client.ack([7, 8]);
+		expect(sent[0].url).toBe('/api/substitutes/7');
 		expect(sent[0].method).toBe('DELETE');
 		expect(sent[1].url).toBe('/api/substitutes/ack');
-		expect(sent[1].body).toEqual({ ids: ['x', 'y'] });
+		expect(sent[1].body).toEqual({ ids: [7, 8] });
 	});
 	it('list tolerates a missing array and reports a read error', async () => {
 		const a = fake([json({ rules: [{ tag: 'T' }] })]);
@@ -155,15 +155,16 @@ describe('display rules', () => {
 		expect(formatRemaining(undefined)).toBe('—');
 	});
 	it('lists the substitutes still waiting for an ack', () => {
-		const e = (id: string, ackOnStart: boolean, acked: boolean) => ({ id, name: id, value: 1, startMs: 0, untilMs: 0, remainingMs: 0, ackOnStart, acked });
-		expect(unacked([e('a', true, false), e('b', true, true), e('c', false, false)]).map((s) => s.id)).toEqual(['a']);
+		const e = (id: number, ackOnStart: boolean, acked: boolean) => ({ id, name: String(id), value: 1, startMs: 0, untilMs: 0, remainingMs: 0, ackOnStart, acked });
+		expect(unacked([e(1, true, false), e(2, true, true), e(3, false, false)]).map((s) => s.id)).toEqual([1]);
 	});
 	it('validates what the server would refuse', () => {
 		const rule = { tag: 'T', maxMs: 600_000, operatorValue: true };
 		expect(validateStart(undefined, 1, 5)).toBe('Pick a tag.');
 		expect(validateStart(rule, 1, 0)).toBe('Enter a duration in seconds.');
 		expect(validateStart(rule, 1, 601)?.startsWith('At most')).toBe(true);
-		expect(validateStart(rule, '', 5)).toBe('Enter the value to hold.');
+		// No value on an operator-value rule is fine: the rule's own is held.
+		expect(validateStart(rule, undefined, 5)).toBeNull();
 		expect(validateStart(rule, 1, 600)).toBeNull();
 		expect(validateStart({ tag: 'T' }, undefined, 5)).toBeNull();
 	});
