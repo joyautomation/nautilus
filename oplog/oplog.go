@@ -457,13 +457,22 @@ func truncateStr(s string, n int) string {
 
 var errGap = errors.New("gap")
 var errConflict = errors.New("conflict")
+var errMismatch = errors.New("mismatch")
 
 // accept stores entries from the leader (or the leader's own), in order:
 // a duplicate with the same content is skipped; a different entry at an
-// UNCOMMITTED number replaces it and everything after (the old one was
-// never committed, or a newer term says otherwise); a different entry at a
-// committed number is a conflict; a number beyond last+1 is a gap. Caller
-// holds mu. Returns how many were new.
+// UNCOMMITTED number replaces it and everything after; a different entry
+// at a committed number is a conflict; a number beyond last+1 is a gap.
+// Caller holds mu. Returns how many were new.
+//
+// Every caller hands it an authoritative log, so an uncommitted entry is
+// replaced whatever its term (Raft's follower rule): replication from the
+// current leader whose previous entry matched (the replicate handler's
+// prevSeq/prevTerm check), a follower's catch-up from the leader, and a
+// new leader's catch-up from the most up-to-date log a majority holds
+// (leaderCatchUp). An older term's uncommitted entry can sit at a seq where
+// that log holds a lower term's entry, so a term comparison here would
+// refuse the very replacement that keeps the logs equal.
 func (n *Node) acceptLocked(es []Entry) (int, error) {
 	fresh := 0
 	for _, e := range es {
@@ -485,9 +494,6 @@ func (n *Node) acceptLocked(es []Entry) (int, error) {
 			}
 			if e.Seq <= n.commit {
 				return fresh, fmt.Errorf("%w: a different entry at committed seq %d", errConflict, e.Seq)
-			}
-			if e.Term < have.Term {
-				return fresh, fmt.Errorf("%w: seq %d from term %d, have term %d", errConflict, e.Seq, e.Term, have.Term)
 			}
 			// Replace the uncommitted suffix.
 			n.entries = append(n.entries[:i:i], e)
@@ -549,10 +555,17 @@ func (n *Node) truncateLocked(seq uint64) {
 // ── the wire ──
 
 type replicateReq struct {
-	From    string  `json:"from"`
-	Term    uint64  `json:"term"`
-	Commit  uint64  `json:"commit"`
-	Entries []Entry `json:"entries"`
+	From   string `json:"from"`
+	Term   uint64 `json:"term"`
+	Commit uint64 `json:"commit"`
+	// PrevSeq and PrevTerm name the leader's entry just before Entries (its
+	// last entry, for a heartbeat): the follower takes Entries, and the
+	// commit index, only when it holds that same entry (Raft's
+	// prevLogIndex/prevLogTerm), so a stale entry it holds is replaced,
+	// never kept and later applied.
+	PrevSeq  uint64  `json:"prevSeq"`
+	PrevTerm uint64  `json:"prevTerm"`
+	Entries  []Entry `json:"entries"`
 }
 
 type replicateResp struct {
@@ -623,9 +636,15 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 		n.mu.Unlock()
 		return nil
 	}
-	last := n.lastLocked()
+	// From the COMMIT index, not the last entry: an uncommitted suffix of
+	// this leader's own may be stale (stored, never replicated, and since
+	// overtaken by a committed entry at the same seq), and only answers
+	// from its commit on carry the entries that replace it. Its own suffix
+	// is one of the candidates.
+	from := n.commit
+	own := afterResp{Entries: n.afterLocked(from), Commit: n.commit}
 	n.mu.Unlock()
-	// The most advanced peer is Raft's "up to date": the higher term on its
+	// The most advanced log is Raft's "up to date": the higher term on its
 	// last entry wins, then the longer log, so an older term's uncommitted
 	// leftovers never outrank a committed suffix.
 	lastTerm := func(r afterResp) uint64 {
@@ -634,8 +653,8 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 		}
 		return r.Entries[len(r.Entries)-1].Term
 	}
-	var best afterResp
-	found := false
+	best, bestSelf := own, true
+	commit := own.Commit
 	answered := 1 // this instance
 	var errs []string
 	for _, p := range n.o.Peers {
@@ -643,13 +662,14 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 			continue
 		}
 		var got afterResp
-		if err := n.call(ctx, p, fmt.Sprintf("/api/oplog?after=%d", last), nil, &got); err != nil {
+		if err := n.call(ctx, p, fmt.Sprintf("/api/oplog?after=%d", from), nil, &got); err != nil {
 			errs = append(errs, p+": "+err.Error())
 			continue
 		}
 		answered++
-		if !found || lastTerm(got) > lastTerm(best) || (lastTerm(got) == lastTerm(best) && len(got.Entries) > len(best.Entries)) {
-			best, found = got, true
+		commit = max(commit, got.Commit)
+		if lastTerm(got) > lastTerm(best) || (lastTerm(got) == lastTerm(best) && len(got.Entries) > len(best.Entries)) {
+			best, bestSelf = got, false
 		}
 	}
 	if answered < n.majority() {
@@ -657,13 +677,15 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if found && len(best.Entries) > 0 {
+	if !bestSelf && len(best.Entries) > 0 {
 		if _, err := n.acceptLocked(best.Entries); err != nil {
 			n.log.Warn("oplog: leader catch-up", "error", err)
 			return err
 		}
-		n.commitTo(best.Commit)
 	}
+	// The best log a majority answered with holds every committed entry,
+	// so any commit index one of them reported is safe here.
+	n.commitTo(commit)
 	n.syncedTerm = term
 	return nil
 }
@@ -710,10 +732,12 @@ func (n *Node) sequence(ctx context.Context, e Entry) (Entry, error) {
 	if !n.isLeader() {
 		return Entry{}, fmt.Errorf("%w: no longer the leader", ErrReadOnly)
 	}
-	// A failed catch-up leaves the term unsynced, so the next write asks
-	// again; this one goes on, and a missed majority fails it below.
+	// No write is numbered without a synced term: catch-up and
+	// replication are different requests, and a write that replicated to
+	// a majority after a failed catch-up could take the number of an
+	// entry that majority already committed.
 	if err := n.leaderCatchUp(ctx, n.currentTerm()); err != nil {
-		n.log.Debug("oplog: leader catch-up before a write", "error", err)
+		return Entry{}, err
 	}
 	return n.sequenceLocked(ctx, e)
 }
@@ -765,20 +789,44 @@ func (n *Node) sequenceLocked(ctx context.Context, e Entry) (Entry, error) {
 
 // replicateTo sends entries to one peer, filling a gap it reports.
 func (n *Node) replicateTo(ctx context.Context, peer string, es []Entry, term, commit uint64) error {
-	var resp replicateResp
-	err := n.call(ctx, peer, "/api/oplog/replicate", replicateReq{From: n.o.Self, Term: term, Commit: commit, Entries: es}, &resp)
+	send := func(es []Entry) (replicateResp, error) {
+		n.mu.Lock()
+		prev := n.lastLocked() // a heartbeat: the leader's last entry
+		if len(es) > 0 {
+			prev = es[0].Seq - 1
+		}
+		pt := n.termAtLocked(prev)
+		n.mu.Unlock()
+		var resp replicateResp
+		err := n.call(ctx, peer, "/api/oplog/replicate",
+			replicateReq{From: n.o.Self, Term: term, Commit: commit, PrevSeq: prev, PrevTerm: pt, Entries: es}, &resp)
+		return resp, err
+	}
+	resp, err := send(es)
 	var he *httpError
-	if errors.As(err, &he) && he.code == http.StatusConflict && he.gap {
-		// The peer is behind: send everything it lacks.
+	if errors.As(err, &he) && he.code == http.StatusConflict && he.resend {
+		// The peer is behind (a gap: Have is its last entry) or its entry
+		// before these is not ours (a mismatch: Have is its commit index):
+		// send everything after Have.
 		n.mu.Lock()
 		missing := n.afterLocked(resp.Have)
 		n.mu.Unlock()
 		if len(missing) == 0 {
 			return err
 		}
-		err = n.call(ctx, peer, "/api/oplog/replicate", replicateReq{From: n.o.Self, Term: term, Commit: commit, Entries: missing}, &resp)
+		_, err = send(missing)
 	}
 	return err
+}
+
+// termAtLocked is the term of the entry at seq (0 for seq 0, or none).
+// Caller holds mu.
+func (n *Node) termAtLocked(seq uint64) uint64 {
+	i := sort.Search(len(n.entries), func(i int) bool { return n.entries[i].Seq >= seq })
+	if seq == 0 || i >= len(n.entries) || n.entries[i].Seq != seq {
+		return 0
+	}
+	return n.entries[i].Term
 }
 
 // Heartbeat is the leader's periodic empty replication: it carries the
@@ -812,8 +860,11 @@ func (n *Node) CatchUp(ctx context.Context) error {
 	if leader == "" {
 		return ErrReadOnly
 	}
+	// From the commit index, not the last entry: an uncommitted entry this
+	// instance holds may be stale, and only the leader's entries from the
+	// commit on replace it (see acceptLocked).
 	var got afterResp
-	if err := n.call(ctx, leader, fmt.Sprintf("/api/oplog?after=%d", n.LastSeq()), nil, &got); err != nil {
+	if err := n.call(ctx, leader, fmt.Sprintf("/api/oplog?after=%d", n.Commit()), nil, &got); err != nil {
 		return err
 	}
 	n.mu.Lock()
@@ -879,8 +930,10 @@ func (n *Node) Ping(ctx context.Context) {
 
 type httpError struct {
 	code int
-	gap  bool
-	body string
+	// resend: a replicate refused for a gap or a mismatched previous
+	// entry; the answer's Have says where to resend from.
+	resend bool
+	body   string
 }
 
 func (e *httpError) Error() string { return fmt.Sprintf("HTTP %d: %s", e.code, e.body) }
@@ -916,7 +969,7 @@ func (n *Node) call(ctx context.Context, base, path string, body any, out any) e
 		he := &httpError{code: resp.StatusCode, body: strings.TrimSpace(string(data))}
 		if resp.StatusCode == http.StatusConflict && out != nil {
 			_ = json.Unmarshal(data, out) // a gap answer carries the peer's last seq
-			he.gap = strings.Contains(he.body, `"gap"`)
+			he.resend = strings.Contains(he.body, `"gap"`) || strings.Contains(he.body, `"mismatch"`)
 		}
 		return he
 	}
@@ -998,11 +1051,28 @@ func (n *Node) Handler() http.Handler {
 		if req.Term > n.term {
 			n.term = req.Term
 		}
-		_, err := n.acceptLocked(req.Entries)
+		// Raft's consistency check: take these entries, and the commit
+		// index, only on top of the leader's own previous entry. Without
+		// it a stale entry this instance holds (stored, never committed)
+		// would stay under the leader's next ones and be applied once the
+		// commit index passed it.
+		var err error
+		switch {
+		case req.PrevSeq > n.lastLocked():
+			err = fmt.Errorf("%w: have %d, the leader's previous entry is %d", errGap, n.lastLocked(), req.PrevSeq)
+		case n.termAtLocked(req.PrevSeq) != req.PrevTerm:
+			err = errMismatch
+		default:
+			_, err = n.acceptLocked(req.Entries)
+		}
 		if err == nil {
-			n.commitTo(req.Commit)
+			// Only as far as this request proved the logs equal.
+			n.commitTo(min(req.Commit, req.PrevSeq+uint64(len(req.Entries))))
 		}
 		have := n.lastLocked()
+		if errors.Is(err, errMismatch) {
+			have = n.commit // resend from what is committed here
+		}
 		commit := n.commit
 		if l := n.leaderAddr(); l != "" {
 			n.lastContact[l] = n.o.Now()
@@ -1010,8 +1080,11 @@ func (n *Node) Handler() http.Handler {
 		n.mu.Unlock()
 		if err != nil {
 			kind := "conflict"
-			if errors.Is(err, errGap) {
+			switch {
+			case errors.Is(err, errGap):
 				kind = "gap"
+			case errors.Is(err, errMismatch):
+				kind = "mismatch"
 			}
 			writeJSON(w, http.StatusConflict, map[string]any{"error": kind, "detail": err.Error(), "have": have, "commit": commit})
 			return
