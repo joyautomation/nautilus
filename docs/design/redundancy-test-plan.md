@@ -167,6 +167,9 @@ case caught it. A mutation joins the nightly run in the PR that builds the rule 
 | a reply in the quiet period isn't counted as heard, so a restart backs off two leases | design §3.1, heard, not counted | 2 (handshake) |
 | both uncommissioned, a proposal of an incarnation no longer answering is kept (the pair waits for ever) | design §3.1, strays | 2 (handshake) |
 | a controller that lost its file grants before it re-commissions (#976) | design §3.1, a controller that lost its state file | 2 (handshake) |
+| a proposal leaves an adoption waiting for its write to count on a later write (#1014 review) | design §3.1, nothing counts while a proposal is in flight | 2 (handshake) |
+| a write counts an adoption while a proposal is pending (#1014 review) | design §3.1, nothing counts while a proposal is in flight | 2 (handshake) |
+| a failed adoption write leaves the hold-off measured from boot | design §3.1, when a switch is proposed | 2 (handshake) |
 | leases timed on `CLOCK_MONOTONIC`, which stops across a suspend | design §3.1, clocks | 2 |
 | the override opens the gate before its journal fsync | I8 | 5 |
 | the override survives hearing a peer | design §7 | 5 |
@@ -187,7 +190,10 @@ row. All 17 are caught, in about 50 s. The handshake adds eight (`no_quiet`, `no
 `switch_without_peer`): T1 catches each in H1, and the sim cases join them in H2. H2 adds five
 more: four for holes found while driving the handshake in the sim (`bump_cuts_quiet`,
 `peer_from_any_adopt`, `quiet_reply_unheard`, `stale_pending_kept`), and `uncommissioned_grants`,
-#976's own rule, which H1 tested in T1 only.
+#976's own rule, which H1 tested in T1 only. naut-lead's review of #1014 added three
+(`propose_keeps_commit`, `count_over_pending`, `holdoff_from_boot`). The first two are belt and
+braces, so each alone closes the failed-write split brain and is pinned by a test of its own
+invariant; the scenario tests go red only with both removed.
 
 **The handshake in the simulator (H2).** The sim drives `quorum.Adoption` as PR 3 will:
 `Adopt` over A–B (every link fault applies), witness replies to `OnWitness`, `OnPeer` for every

@@ -74,6 +74,14 @@ var table = []mutation{
 	{"quiet_reply_unheard", []string{"TestQuietReplyIsHeardNotCounted", "TestTargetedOneWayLeaderSkewed"}},
 	{"stale_pending_kept", []string{"TestBothUncommissionedFollowTheNewest", "TestRegressionBothUncommissionedUnstick"}},
 	{"uncommissioned_grants", []string{"TestUncommissionedControllerGrantsNothing", "TestRegression976WitnessUnreachable"}},
+	// #1014 review: belt and braces against counting an adoption while a
+	// proposal is pending. Either rule alone closes the failed- and
+	// slow-write split brain (TestReviewFailedWriteCountsWhilePending,
+	// TestReviewSlowWriteCountsWhilePending, red with both removed), so
+	// each is pinned by a test of its own invariant.
+	{"propose_keeps_commit", []string{"TestProposeDropsAnAdoptionInFlight"}},
+	{"count_over_pending", []string{"TestNoCountWhilePending"}},
+	{"holdoff_from_boot", []string{"TestHoldOffFromAFailedAdoption"}},
 }
 
 // event is one line of `go test -json`.

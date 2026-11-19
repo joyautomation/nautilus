@@ -256,6 +256,12 @@ redundancy:
         owes the quiet period too: the peer may have adopted the proposed one with its ack
         lost, and may lead on it still. So does a bump that lands on the same write as the
         adoption of a new incarnation.
+      - **Nothing counts while a proposal is in flight,** whatever adoption a write makes
+        durable: a proposal drops an adoption still waiting for its write (a failed or slow
+        one), and a write that lands while a proposal is pending counts nothing. Otherwise a
+        failed write of (2, J), then a proposal of (3, I) whose write succeeds, would count J
+        while B moves to I with its acks lost: each leads on its own witness (#1014 review).
+        The hold-off runs from the last adoption, durable or not.
       - **Heard, not counted.** In its quiet period the counted incarnation's replies show the
         witness hears this controller, so a campaign it refuses is "refused by a majority" and
         retries on a later look. Its grants never count. Otherwise every restart would back off

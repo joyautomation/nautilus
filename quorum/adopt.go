@@ -256,6 +256,12 @@ func (a *Adoption) propose(gen, inc uint64) (*Persist, []Adopt) {
 	if !mut("count_while_pending") {
 		a.c.Count(0, 0)
 	}
+	// An adoption still waiting for its write (a failed or slow one) is
+	// superseded: the write that carries this proposal must not start
+	// counting it (#1014 review).
+	if !mut("propose_keeps_commit") {
+		a.commit = nil
+	}
 	a.v.st.PendingGen, a.v.st.PendingInc = gen, inc
 	p := a.v.change()
 	return p, a.hold(a.msg(Propose, gen, inc, a.floorFor(), a.peerNonce))
@@ -398,6 +404,11 @@ func (a *Adoption) adopt(now Instant, gen, inc, peerFloor uint64) *Persist {
 		a.switches++
 		a.standing = now
 	}
+	// The hold-off runs from this adoption, durable or not: a failed write
+	// must not leave it measured from boot (#1014 review).
+	if !mut("holdoff_from_boot") {
+		a.current = now
+	}
 	floor := max(peerFloor, a.floorFor())
 	st.Gen, st.Incarnation, st.PendingGen, st.PendingInc = gen, inc, 0, 0
 	if !mut("no_floor") {
@@ -428,6 +439,9 @@ func (a *Adoption) Persisted(now Instant, seq uint64, ok bool) ([]Reply, []Adopt
 		}
 	}
 	a.held = keep
+	if ok && a.commit != nil && seq >= a.commit.need && a.v.st.PendingGen != 0 && !mut("count_over_pending") {
+		a.commit = nil // forward only: nothing counts while a proposal is in flight
+	}
 	if ok && a.commit != nil && seq >= a.commit.need {
 		// The incarnation counts one lease after the write, unless this
 		// controller was already counting it (a generation bump that kept
