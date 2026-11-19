@@ -40,6 +40,56 @@ type IOLinkSpec struct {
 	// Status names a point holding the port's mode or connection status
 	// (optional).
 	Status string `yaml:"status"`
+	// ISDU says how a parameter of the device on a port is read and
+	// written through the master (optional; absent: none, §7).
+	ISDU *ISDUSpec `yaml:"isdu"`
+}
+
+// ISDUSpec is how a master carries ISDU: two OPC UA methods on the port
+// device's object, named by node id templates ({n} the port number, the
+// profile's {params} as in a point's node id).
+type ISDUSpec struct {
+	// Mode is ISDUOPC30120 (the IO-Link companion specification's
+	// IOLinkDeviceType methods) or ISDUMethods (the master's own).
+	Mode string `yaml:"mode"`
+	// Object is the node id of the port device's object, Read and Write
+	// the node ids of its ReadISDU and WriteISDU methods. Write may be
+	// empty for a master that cannot write parameters.
+	Object string `yaml:"object"`
+	Read   string `yaml:"read"`
+	Write  string `yaml:"write"`
+	// Data is how a value travels: ISDUDataBytes (a Byte[], OPC 30120) or
+	// ISDUDataHex (hex text, "0x" first on a write: the ifm masters).
+	Data string `yaml:"data"`
+	// MaxOctets is the most octets one call carries; a value over it is
+	// refused, never cut (the ifm master's 64 hex digits are 32 octets).
+	// 0 takes 232, the longest ISDU value.
+	MaxOctets int `yaml:"max-octets"`
+	// Doc cites where the method names, argument shapes and limits come
+	// from, as a point's doc: does; Unverified says no document or
+	// measurement supports them. One is required.
+	Doc        string `yaml:"doc"`
+	Unverified bool   `yaml:"unverified"`
+}
+
+// ISDU modes and data forms.
+const (
+	ISDUOPC30120 = "opc-30120"
+	ISDUMethods  = "methods"
+
+	ISDUDataBytes = "bytes"
+	ISDUDataHex   = "hex"
+)
+
+// MaxISDUOctets is the longest ISDU value (IO-Link: 232 octets).
+const MaxISDUOctets = 232
+
+// Octets is the most octets one call carries.
+func (s *ISDUSpec) Octets() int {
+	if s.MaxOctets > 0 {
+		return s.MaxOctets
+	}
+	return MaxISDUOctets
 }
 
 // PDCarrier is where a master keeps a port's process data in one
@@ -148,6 +198,9 @@ func (p *Profile) validateIOLink() error {
 			return fmt.Errorf("iolink: %s: %w", c.key, err)
 		}
 	}
+	if err := p.validateISDU(s.ISDU); err != nil {
+		return fmt.Errorf("iolink: isdu: %w", err)
+	}
 	var checks []check
 	in, err := carrier("pd-in", s.PDIn, &no)
 	if err != nil {
@@ -216,4 +269,47 @@ func (p *Profile) citation(doc string, unverified bool) error {
 		}
 	}
 	return fmt.Errorf("doc %q is not the id of a document under docs", id)
+}
+
+// validateISDU checks an isdu: block: the mode and data form, node ids in a
+// namespace the profile has, a bounded length, and a citation.
+func (p *Profile) validateISDU(s *ISDUSpec) error {
+	if s == nil {
+		return nil
+	}
+	switch s.Mode {
+	case ISDUOPC30120, ISDUMethods:
+	case "":
+		return fmt.Errorf("mode is required (%s or %s)", ISDUOPC30120, ISDUMethods)
+	default:
+		return fmt.Errorf("mode %q is not %s or %s", s.Mode, ISDUOPC30120, ISDUMethods)
+	}
+	switch s.Data {
+	case ISDUDataBytes, ISDUDataHex:
+	case "":
+		return fmt.Errorf("data is required (%s or %s)", ISDUDataBytes, ISDUDataHex)
+	default:
+		return fmt.Errorf("data %q is not %s or %s", s.Data, ISDUDataBytes, ISDUDataHex)
+	}
+	if s.Mode == ISDUOPC30120 && s.Data != ISDUDataBytes {
+		return fmt.Errorf("opc-30120 carries a value as a Byte[]: data is %s, not %s", ISDUDataBytes, s.Data)
+	}
+	if s.MaxOctets < 0 || s.MaxOctets > MaxISDUOctets {
+		return fmt.Errorf("max-octets %d is not 1-%d", s.MaxOctets, MaxISDUOctets)
+	}
+	if s.Object == "" || s.Read == "" {
+		return fmt.Errorf("object and read are required")
+	}
+	for key, tmpl := range map[string]string{"object": s.Object, "read": s.Read, "write": s.Write} {
+		if tmpl == "" {
+			continue
+		}
+		if !strings.Contains(tmpl, "{n}") {
+			return fmt.Errorf("%s %q has no {n}: each port has its own", key, tmpl)
+		}
+		if err := p.checkNamespace(tmpl); err != nil {
+			return fmt.Errorf("%s: %w", key, err)
+		}
+	}
+	return p.citation(s.Doc, s.Unverified)
 }

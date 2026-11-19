@@ -298,6 +298,22 @@ func runDevicesShow(args []string, w io.Writer) int {
 			}
 			fmt.Fprintf(w, "  %-9s %s as %s  (form: %s)\n", c.key, c.c.Point, c.c.Form, src)
 		}
+		if is := l.ISDU; is != nil {
+			src := is.Doc
+			if is.Unverified {
+				src = "UNVERIFIED"
+				if is.Doc != "" {
+					src += " (" + is.Doc + ")"
+				}
+			}
+			w2 := "no write method"
+			if is.Write != "" {
+				w2 = "write " + is.Write
+			}
+			fmt.Fprintf(w, "  isdu: %s, read %s, %s; data as %s, at most %d octets  (%s)\n", is.Mode, is.Read, w2, is.Data, is.Octets(), src)
+		} else {
+			fmt.Fprintf(w, "  isdu: none. This master's device parameters cannot be read or written through it.\n")
+		}
 		if l.PDOut != nil && l.PDOutValid == "" {
 			fmt.Fprintf(w, "  pd-out-valid: none. With the wrong device on a port this master keeps sending its last process data out to it; only the identity fault (alarm) says so.\n")
 		}
