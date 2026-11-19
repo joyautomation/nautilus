@@ -49,6 +49,15 @@ bumpless, and the measured takeover time is published instead.
     `leaderCatchUp`) before it applies alarm state or accepts operator writes.
   - **No quorum, no operator writes.** A lone survivor has no majority, so its operator writes
     are refused. This matches the read-only HMI in §7.
+  - **The interim, until #710 Q4 (3b-4).** The log runs on A and B only, so its majority is
+    both: with either controller down, substitute starts, stops and acknowledgements are
+    refused ("operator-intent log has no majority: the peer is down"), before anything is
+    proposed once the leader knows (its pings, every half lease). A write sent before it
+    knew is stored and answered "outcome unknown"; it commits when the peer returns. The
+    leader pushes each write's commit to the follower before answering, so a follower that
+    takes over after the leader died still applies a write the operator was told was done.
+    The residual window: the leader dies between its commit and the push, or the push to a
+    replica fails (its error is only logged), until that replica's next heartbeat (≤ lease/2).
 - **The witness can be rebuilt from scratch.** A witness that comes back with an empty disk
   loses no committed entry while both controllers are up:
   - **Its votes:** it grants nothing for one lease (§3.1).
@@ -637,7 +646,7 @@ time spent waiting for inputs counts in the takeover time.
 
 Takeover time is published as a formula and measured, never promised as a single number:
 
-> `T ≈ L_rem + ρ·lease + C + (RTT + f) + W_r + I + S + O`
+> `T ≈ L_rem + ρ·lease + C + (RTT + f) + W_r + L_op + I + S + O`
 
 | Term | Meaning |
 |---|---|
@@ -647,8 +656,14 @@ Takeover time is published as a formula and measured, never promised as a single
 | `RTT + f` | one vote round, including each voter's fsync |
 | `W_r` | up to one lease more, if a voter has just restarted and is waiting out its timer (§3.1) |
 | `I` | the inputs wait, up to #786's cap: about 0 when the standby polls, a session connect and first read when it does not. When a frozen old leader still holds a device's **only** session, it lasts until that device's own session timeout, and may hit the cap. |
+| `L_op` | a pair's operator-intent log catch-up before the first scan (`SyncLeader`, §1): about 0 when the old leader's box refuses the connection or answers, and up to the log's call timeout (`lease/2`, at least 500 ms) when it is silent; the runtime gives up at 2 s and runs not synced. Until the witness is the log's third replica (#710 3b-4), a takeover after the old leader died never has the majority to sync, so it always runs not synced (it keeps what it applied, `catch-up-failed` on what came from retain) |
 | `S` | one scan |
 | `O` | the full output set going out |
+
+**Operator writes, not takeover time.** The leader pushes each operator-intent write's commit to
+the replicas that stored it before answering, under the log's sequencing lock, so a holder that
+stalls delays every write by up to the log's call timeout (`lease/2`). It is not in the takeover
+path, and no fix is needed now (#1030 review).
 
 **An I/O-health handover** (§3.2) waits for its hold-off (3 × lease) first, then hands over by
 `Release`, so `L_rem` is 0.

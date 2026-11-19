@@ -1,13 +1,18 @@
 package oplog
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -17,6 +22,26 @@ type bench struct {
 	applied [][]Entry
 	mu      sync.Mutex
 	urls    []string
+	// dropPush makes the followers refuse a replication that carries no
+	// entries (a heartbeat, the commit push after a write), as if the
+	// leader died between its commit and the push. movingThree only.
+	dropPush atomic.Bool
+}
+
+// pushGate serves h, refusing an entry-less replication while drop is set.
+func pushGate(h http.Handler, drop *atomic.Bool) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if drop.Load() && r.URL.Path == "/api/oplog/replicate" {
+			body, _ := io.ReadAll(r.Body)
+			var q replicateReq
+			if json.Unmarshal(body, &q) == nil && len(q.Entries) == 0 {
+				http.Error(w, "push lost", http.StatusServiceUnavailable)
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewReader(body))
+		}
+		h.ServeHTTP(w, r)
+	})
 }
 
 // three nodes, the first the leader, each applying into its own slice.

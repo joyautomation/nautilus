@@ -53,7 +53,7 @@ func movingThree(t *testing.T) (*bench, *moving) {
 	m.set(b.urls[0], 1)
 	for i := range b.urls {
 		b.nodes = append(b.nodes, b.node(t, i, "", view{self: b.urls[i], m: m}))
-		b.servers[i].Config.Handler = b.nodes[i].Handler()
+		b.servers[i].Config.Handler = pushGate(b.nodes[i].Handler(), &b.dropPush)
 		b.servers[i].Start()
 	}
 	return b, m
@@ -77,9 +77,11 @@ func TestSyncLeaderCommitsWhatTheLastTermStored(t *testing.T) {
 	b, m := movingThree(t)
 	defer b.close()
 	ctx := context.Background()
+	b.dropPush.Store(true) // the commit push after the write never arrives
 	if _, err := b.nodes[0].Propose(ctx, Entry{Kind: KindAck, IDs: []string{"X"}, By: "op"}); err != nil {
 		t.Fatal(err)
 	}
+	b.dropPush.Store(false)
 	if b.count(1) != 0 || b.nodes[1].LastSeq() != 1 {
 		t.Fatalf("precondition: B applied %d, stored up to %d; want X stored, not applied", b.count(1), b.nodes[1].LastSeq())
 	}
@@ -167,5 +169,23 @@ func TestSubstituteKindsReplicate(t *testing.T) {
 	}
 	if u.Kind != KindUnsubstitute || u.Ref != s.Seq || u.Reason != "expired" || u.By != "system" {
 		t.Fatalf("unsubstitute entry %+v; want it naming seq %d", u, s.Seq)
+	}
+}
+
+// A write's answer means its followers know it is committed: the leader
+// pushes the new commit index before Propose returns, so a follower that
+// takes over without a majority to catch up with (a redundant pair whose
+// peer died, #710) still applies a write the operator was told was done.
+func TestCommitPushedBeforeTheAnswer(t *testing.T) {
+	b, _ := movingThree(t)
+	defer b.close()
+	e, err := b.nodes[0].Propose(context.Background(), Entry{Kind: KindAck, IDs: []string{"X"}, By: "op"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i < 3; i++ {
+		if b.nodes[i].Commit() != e.Seq || b.count(i) != 1 {
+			t.Errorf("follower %d: commit %d, applied %d when the write was answered; want %d and 1", i, b.nodes[i].Commit(), b.count(i), e.Seq)
+		}
 	}
 }

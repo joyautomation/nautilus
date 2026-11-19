@@ -308,10 +308,15 @@ func TestCase9AClockBehindIsCappedAndFaults(t *testing.T) {
 	}
 }
 
-// Case 10: without quorum a start or stop is answered "outcome unknown"
-// (503, journalled as unknown), the expiry still happens on time locally,
-// and is recorded once the log heals; a stale unsubstitute naming an
-// older entry never ends a newer one.
+// Case 10: without quorum, a write the leader proposed before it knew is
+// answered "outcome unknown" (503, journalled as unknown): it is stored,
+// and may commit later. Once the log knows it has no majority (that write
+// failed, or the wiring's pings found the peers gone), a start, stop or
+// acknowledgement is refused before anything is proposed (503, refused,
+// the no-majority text: test plan case 10, "refused like any operator
+// write"). The expiry still happens on time locally, and is recorded once
+// the log heals; a stale unsubstitute naming an older entry never ends a
+// newer one.
 func TestCase10NoQuorum(t *testing.T) {
 	p := newPair(t)
 	firstScan(t, p.rts[0])
@@ -326,17 +331,21 @@ func TestCase10NoQuorum(t *testing.T) {
 	if r := startOn(t, p.srvs[0], `{"name":"Level"}`); r.Code != 503 || !strings.Contains(r.Body.String(), "outcome unknown") {
 		t.Fatalf("a start without quorum = %d %s; want 503 outcome unknown", r.Code, r.Body)
 	}
-	if r := call(t, p.srvs[0], "DELETE", "/api/substitutes/"+subID(flow), ""); r.Code != 503 || !strings.Contains(r.Body.String(), "outcome unknown") {
-		t.Fatalf("a stop without quorum = %d %s; want 503 outcome unknown", r.Code, r.Body)
+	r = call(t, p.srvs[0], "DELETE", "/api/substitutes/"+subID(flow), "")
+	if r.Code != 503 || r.Header().Get(outcomeHeader) != "refused" || !strings.Contains(r.Body.String(), DefaultNoMajority) {
+		t.Fatalf("a stop once the log knows it has no majority = %d %q %s; want 503 refused, no majority", r.Code, r.Header().Get(outcomeHeader), r.Body)
 	}
-	unknown := 0
+	unknown, refused := 0, 0
 	for _, e := range p.srvs[0].audit.ring.Recent() {
-		if strings.HasPrefix(e.Action, "substitute.") && e.Result == audit.ResultUnknown {
+		switch {
+		case strings.HasPrefix(e.Action, "substitute.") && e.Result == audit.ResultUnknown:
 			unknown++
+		case e.Action == "substitute.stop" && e.Result == audit.ResultError: // a 5xx, as the no-leader refusal is journalled
+			refused++
 		}
 	}
-	if unknown != 2 {
-		t.Fatalf("%d journal entries with result unknown; want the start and the stop", unknown)
+	if unknown != 1 || refused != 1 {
+		t.Fatalf("journal: %d unknown, %d refused stops; want the start unknown and the stop refused (journalled as error, a 5xx)", unknown, refused)
 	}
 	// The expiry does not wait for quorum.
 	p.clks[0].t = p.clks[0].t.Add(2 * time.Minute)
@@ -394,6 +403,9 @@ func TestARetriedStartIsIdempotent(t *testing.T) {
 	}
 	p.gates[1].loseWrites.Store(false)
 	p.gates[2].loseWrites.Store(false)
+	// The lost writes marked the peers unreachable; the wiring's pings
+	// (every half lease) find them again before a retry is refused.
+	p.nodes[0].Ping(context.Background())
 	r := startOn(t, p.srvs[0], `{"name":"Level","requestId":"r-1"}`)
 	if r.Code != 200 {
 		t.Fatalf("retry = %d %s", r.Code, r.Body)

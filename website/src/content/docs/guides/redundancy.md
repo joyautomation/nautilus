@@ -325,6 +325,17 @@ blocks lifting `experimental`). Build the second controller from a fresh
 install, never from a copy of the first.
 :::
 
+Operator intent (substitute starts, stops and acknowledgements) goes
+through a log replicated on both controllers, so a takeover keeps it.
+**For now that log lives on A and B only, so it needs both:** while one
+controller is down, the other keeps controlling the plant and keeps the
+substitutes it already has, but starting, stopping or acknowledging a
+substitute is refused with "operator-intent log has no majority: the
+peer is down" until the other controller returns. A substitute's expiry
+still happens on time. (Making the witness the log's third copy, so one
+controller down is not enough to stop these writes, is under
+discussion.)
+
 Each controller's tag API must be reachable by the other (a standby
 forwards writes to the leader). The manifest's default address is
 `localhost:8080`, so set `server.addr` (for example `:8080`) or

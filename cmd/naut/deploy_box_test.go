@@ -380,13 +380,18 @@ func TestDeployBoxStatewriteClearsStaleTempFiles(t *testing.T) {
 // backup holds only retain.json and release.
 func TestDeployBoxKeepsTheVoterState(t *testing.T) {
 	e := newBoxEnv(t)
-	voter := filepath.Join(e.state, "quorum.state")
-	const v = "voter state: promised 1042"
-	os.WriteFile(voter, []byte(v), 0o600)
+	// The pair's operator-intent log (oplog.jsonl, #710 PR 3b-2) lives
+	// beside it and is kept the same way.
+	kept := map[string]string{"quorum.state": "voter state: promised 1042", "oplog.jsonl": `{"seq":1,"term":1002}`}
+	for n, v := range kept {
+		os.WriteFile(filepath.Join(e.state, n), []byte(v), 0o600)
+	}
 	check := func(step string) {
 		t.Helper()
-		if b, err := os.ReadFile(voter); err != nil || string(b) != v {
-			t.Fatalf("after %s: quorum.state %q, %v; want it untouched", step, b, err)
+		for n, v := range kept {
+			if b, err := os.ReadFile(filepath.Join(e.state, n)); err != nil || string(b) != v {
+				t.Fatalf("after %s: %s %q, %v; want it untouched", step, n, b, err)
+			}
 		}
 	}
 	steps := []struct {

@@ -11,12 +11,16 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/joyautomation/nautilus/internal/project"
 	"github.com/joyautomation/nautilus/leader"
+	"github.com/joyautomation/nautilus/oplog"
 	"github.com/joyautomation/nautilus/quorum"
 	"github.com/joyautomation/nautilus/quorum/node"
+	"github.com/joyautomation/nautilus/runtime"
+	"github.com/joyautomation/nautilus/server"
 )
 
 // A redundant pair member (docs/design/redundancy.md §2, §6.1): `naut run`
@@ -51,9 +55,28 @@ const pairMaxConns = 64
 
 // pairMember is a pair member's election and its peer listener.
 type pairMember struct {
-	q   *leader.Quorum
-	srv *http.Server
-	o   node.Options
+	q     *leader.Quorum
+	srv   *http.Server
+	o     node.Options
+	peers map[string]string // the manifest's peers:, by name
+
+	// The replicated log of operator intent, mounted on the peer listener
+	// once the runtime exists (startLog); 503 until then.
+	logH    swapHandler
+	log     *oplog.Node
+	logStop context.CancelFunc
+	logDone chan struct{}
+}
+
+// swapHandler serves the handler it is given later, 503 before.
+type swapHandler struct{ h atomic.Pointer[http.Handler] }
+
+func (s *swapHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if h := s.h.Load(); h != nil {
+		(*h).ServeHTTP(w, r)
+		return
+	}
+	http.Error(w, "the operator-intent log is not started yet", http.StatusServiceUnavailable)
 }
 
 // pairDeps are what newPairMember reads from the process: its
@@ -86,7 +109,15 @@ func newPairMember(r *project.RedundancyConfig, apiAddr, dir string, d pairDeps)
 	if err != nil {
 		return nil, err
 	}
-	h, err := node.Guard(o.Token, q.Node().Handler())
+	m := &pairMember{q: q, o: o, peers: r.Peers}
+	// One listener, one token: the vote protocol and the operator-intent
+	// log's replication (design §6.1). Nothing here is a browser surface.
+	mux := http.NewServeMux()
+	mux.Handle(node.Prefix, q.Node().Handler())
+	for _, p := range []string{"/api/oplog", "/api/oplog/", "/api/quorum"} {
+		mux.Handle(p, &m.logH)
+	}
+	h, err := node.Guard(o.Token, mux)
 	if err != nil {
 		q.Node().Close()
 		return nil, err
@@ -96,7 +127,7 @@ func newPairMember(r *project.RedundancyConfig, apiAddr, dir string, d pairDeps)
 		q.Node().Close()
 		return nil, fmt.Errorf("peer port %s: %w: is another controller (this one's service?) running?", listenAddr, err)
 	}
-	m := &pairMember{q: q, srv: peerServer(h), o: o}
+	m.srv = peerServer(h)
 	go func() {
 		if err := m.srv.Serve(node.LimitListener(ln, pairMaxConns)); !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("redundancy: the peer listener stopped: the peer and the witness no longer reach this controller's voter", "err", err)
@@ -228,15 +259,108 @@ func (m *pairMember) untrustedAPIs(allowed []string) []string {
 	return out
 }
 
-// Close stops the peer listener and frees the state file. Call it after
-// the election's Run has returned and Release has run: the peer listener
-// answers votes until then.
+// Close stops the peer listener, the log and frees the state file. Call it
+// after the election's Run has returned and Release has run: the peer
+// listener answers votes until then.
 func (m *pairMember) Close() {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	_ = m.srv.Shutdown(ctx)
+	if m.logStop != nil {
+		m.logStop()
+		<-m.logDone
+		m.log.Close()
+	}
 	m.q.Node().Close()
 }
+
+// pairLogFile is a member's copy of the operator-intent log, in its state
+// directory beside quorum.state.
+const pairLogFile = "oplog.jsonl"
+
+// PairNoMajority is a pair's no-majority refusal (naut-lead, #710): with
+// the log on A and B only, its majority is both of them.
+const PairNoMajority = "operator-intent log has no majority: the peer is down; substitutes cannot be started, stopped or acknowledged until it returns"
+
+// startLog builds the pair's replicated log of operator intent (oplog,
+// design §1) over rt and mounts it on the peer listener: A and B are its
+// replicas (the witness is not, until #710 Q4), so its majority is both.
+// Order as #1017's wiring: the SubstituteLog, the node (which replays its
+// file into Apply), Attach, then the runtime's SetIntentLog (a takeover
+// catches the log up before its first scan, waiting up to wait). The
+// returned log goes to the server's Options.SubstituteLog. Call it before
+// the election's Run and the runtime's Run.
+func (m *pairMember) startLog(rt *runtime.Runtime, wait time.Duration) (*server.SubstituteLog, error) {
+	sl := server.NewSubstituteLog(rt)
+	sl.SetNoMajority(PairNoMajority)
+	self := peerURL(m.peers[string(m.o.Self)])
+	n, err := oplog.New(oplog.Options{
+		Self: self, Peers: []string{peerURL(m.peers["a"]), peerURL(m.peers["b"])},
+		Leadership: pairLeadership{q: m.q, peers: m.peers},
+		File:       filepath.Join(filepath.Dir(m.o.StatePath), pairLogFile),
+		Apply:      func(e oplog.Entry) error { _, err := sl.Apply(e); return err },
+		Token:      m.o.Token, Timeout: max(m.o.Lease/2, 500*time.Millisecond),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("operator-intent log: %w", err)
+	}
+	sl.Attach(n)
+	rt.SetIntentLog(sl, wait)
+	m.log = n
+	h := n.Handler()
+	m.logH.h.Store(&h)
+	ctx, cancel := context.WithCancel(context.Background())
+	m.logStop, m.logDone = cancel, make(chan struct{})
+	// One ping before the server answers, so a write in the first second
+	// is not refused for a peer merely not heard from yet.
+	pctx, pcancel := context.WithTimeout(ctx, max(m.o.Lease, time.Second))
+	n.Ping(pctx)
+	pcancel()
+	go m.driveLog(ctx)
+	return sl, nil
+}
+
+// driveLog is the log's periodic work, every half lease: the leader's
+// heartbeat (it carries the commit index, so the follower applies what is
+// committed), the follower's catch-up, and the pings that keep its
+// reachability (Status, the no-majority refusal) current.
+func (m *pairMember) driveLog(ctx context.Context) {
+	defer close(m.logDone)
+	t := time.NewTicker(max(m.o.Lease/2, 250*time.Millisecond))
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		cctx, cancel := context.WithTimeout(ctx, max(m.o.Lease, time.Second))
+		m.log.Heartbeat(cctx)
+		_ = m.log.CatchUp(cctx)
+		m.log.Ping(cctx)
+		cancel()
+	}
+}
+
+// pairLeadership is the log's view of the pair's election: the sequencer
+// is the quorum's leader, addressed by its peer listener exactly as Peers
+// names it, and the log's term is the quorum's (it only rises).
+type pairLeadership struct {
+	q     *leader.Quorum
+	peers map[string]string
+}
+
+func (l pairLeadership) IsLeader() bool { return l.q.IsLeader() }
+func (l pairLeadership) Term() uint64   { return l.q.Term() }
+func (l pairLeadership) LeaderAddr() string {
+	if a, ok := l.peers[l.q.Status().Leader]; ok {
+		return peerURL(a)
+	}
+	return ""
+}
+
+// peerURL is a peer listener's base URL, as the log names its replicas.
+func peerURL(addr string) string { return "http://" + addr }
 
 // peerServer serves a peer listener (a pair member's, the witness's): a
 // vote is one small frame, so a slow or idle client is cut off.

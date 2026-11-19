@@ -202,6 +202,7 @@ the substitute is there after the restart. That is an unknown outcome too.
 | `409` with `refused` | the `requestId` was used for a different request, or a newer change won, or nothing was waiting for an acknowledgement |
 | `501` with `refused` | this server mirrors a controller it does not run: substitute on that controller |
 | `503` `no leader`, `refused` | this replica is standing by and no leader is known: nothing happened |
+| `503` `operator-intent log has no majority`, `refused` | a redundant pair whose replicated log can't reach a majority (the other controller is down): nothing was proposed, nothing changed. Starts, stops and acknowledgements are refused until it returns. A write sent before the leader noticed the loss is answered **unknown** instead |
 | `503` not saved, `refused` | the retain store refused a start: nothing was started |
 | anything else | **unknown** |
 
