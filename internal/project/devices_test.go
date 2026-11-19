@@ -357,15 +357,16 @@ func TestOPCUADevicesAreDriversOfTheirOwn(t *testing.T) {
 }
 
 // ports: decodes from nautilus.yaml in #705's shape (a map by port number,
-// a typo an error), and is refused while no profile declares IO-Link
-// ports, rather than ignored.
+// a typo an error), is checked against the master's IO-Link ports, and is
+// refused while nothing derives a port device yet, rather than ignored.
 func TestDevicePortsInTheManifest(t *testing.T) {
 	ifm, err := os.ReadFile("../../devprofile/profiles/ifm-al1590.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
 	for name, tc := range map[string]struct{ ports, want string }{
-		"refused": {"{ 2: { name: LEVEL1, iodd: sensor.xml } }", "device MASTER1: ports: profile ifm-al1590 declares no IO-Link ports"},
+		"refused": {"{ 2: { name: LEVEL1, iodd: sensor.xml } }", "device MASTER1: ports: port devices are not loaded yet (#705)"},
+		"range":   {"{ 9: { name: LEVEL1, iodd: sensor.xml } }", "device MASTER1: ports: profile ifm-al1590 has ports 1-8, not 9"},
 		"typo":    {"{ 2: { nme: LEVEL1 } }", "field nme not found"},
 		"by name": {"{ two: { name: LEVEL1 } }", "cannot unmarshal"},
 	} {

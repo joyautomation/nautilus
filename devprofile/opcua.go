@@ -93,8 +93,3 @@ func (p *Profile) OPCUAEndpoint(raw string) (string, error) {
 	}
 	return "opc.tcp://" + net.JoinHostPort(u.Hostname(), port), nil
 }
-
-// IOLinkPorts is how many IO-Link ports an IO-Link master profile has: the
-// numbers a devices: row's ports: may use. 0 until profiles describe their
-// IO-Link side (#705), so a row's ports: is refused rather than ignored.
-func (p *Profile) IOLinkPorts() int { return 0 }

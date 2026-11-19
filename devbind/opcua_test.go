@@ -187,7 +187,7 @@ func TestOPCUADriver(t *testing.T) {
 // is a file in iodd/, and a profile that declares no IO-Link ports
 // refuses them rather than ignore them.
 func TestResolvePorts(t *testing.T) {
-	fsys := vendored(t, "ifm-al1590", "abb-acs355-fmbt21")
+	fsys := vendored(t, "ifm-al1590", "abb-acs355-fmbt21", "sick-sig300")
 	fsys["iodd/sensor.xml"] = &fstest.MapFile{Data: []byte("<IODevice/>")}
 	master := func(ports map[int]Port) []Device {
 		return []Device{
@@ -204,11 +204,17 @@ func TestResolvePorts(t *testing.T) {
 		"two ports":         {map[int]Port{1: {Name: "LEVEL"}, 2: {Name: "Level"}}, "port 2: Level is already the name of LEVEL"},
 		"iodd path":         {map[int]Port{1: {Name: "LEVEL", IODD: "../sensor.xml"}}, `iodd "../sensor.xml" must be a file name in iodd/`},
 		"iodd missing":      {map[int]Port{1: {Name: "LEVEL", IODD: "other.xml"}}, "iodd other.xml is not in iodd/"},
-		"no io-link ports":  {map[int]Port{1: {Name: "LEVEL", IODD: "sensor.xml"}}, "ports: profile ifm-al1590 declares no IO-Link ports"},
+		"past the ports":    {map[int]Port{9: {Name: "LEVEL", IODD: "sensor.xml"}}, "ports: profile ifm-al1590 has ports 1-8, not 9"},
+		"not loaded yet":    {map[int]Port{8: {Name: "LEVEL", IODD: "sensor.xml"}}, "ports: port devices are not loaded yet (#705)"},
 	} {
 		if _, err := Resolve(fsys, master(tc.ports)); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: %v, want %q", name, err, tc.want)
 		}
+	}
+	// A profile with no iolink: block has no IO-Link ports.
+	sick := []Device{{Name: "MASTER1", Profile: "sick-sig300", Endpoint: "h", Ports: map[int]Port{1: {Name: "LEVEL", IODD: "sensor.xml"}}}}
+	if _, err := Resolve(fsys, sick); err == nil || !strings.Contains(err.Error(), "ports: profile sick-sig300 declares no IO-Link ports") {
+		t.Errorf("sick-sig300: %v", err)
 	}
 }
 

@@ -110,19 +110,19 @@ iolink:
   vendor-id: "Port{n}_VendorID"
   device-id: "Port{n}_DeviceID"
   status: "Port{n}_Status"
-  isdu: none        # methods in PR 5
+  # isdu: comes with PR 5
 ```
 
 | Key | Meaning |
 |---|---|
 | `ports` | how many IO-Link ports the master has |
 | `pd-in.point` | the point holding a port's raw process data in |
-| `pd-in.form` | how that point carries the bytes: `bytes` (a ByteString, as is), `hex` (text, two hex digits per byte, as on the ifm), `u32` (an unsigned 32-bit integer, as the P+F's PDI Data Unsigned32) |
+| `pd-in.form` | how that point carries the bytes: `hex` (text, two hex digits per byte, as on the ifm), `u32` (an unsigned 32-bit integer, as the P+F's PDI Data Unsigned32); `bytes` (a ByteString, as is) comes with PR 3b, which gives profiles a byte-string point type |
 | `pd-out` | the same for process data out; absent means the master offers no PD out |
 | `pd-valid` | a BOOL point that says the master holds valid process data in (optional) |
 | `vendor-id`, `device-id` | integer points holding the attached device's identity (optional, see §6) |
 | `status` | a point holding the port's mode or connection status (optional) |
-| `isdu` | `methods` (vendor OPC UA methods, their node ids as templates under it), `opc-30120` (the IO-Link companion specification's objects), or `none` |
+| `isdu` | (PR 5) `methods` (vendor OPC UA methods, their node ids as templates under it), `opc-30120` (the IO-Link companion specification's objects), or `none`; until then the key is refused as unknown |
 
 Every template is expanded for `n` = 1..`ports`, and `devprofile` checks
 that each expansion names a point the profile has, with a type its key

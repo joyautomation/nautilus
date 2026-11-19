@@ -231,8 +231,8 @@ func (d *device) checkPorts(fsys fs.FS, where string, names map[string]string) e
 			return fmt.Errorf("%s: iodd %s is not in %s/", at, pt.IODD, IODDDir)
 		}
 	}
-	// Until profiles declare IO-Link ports (#705), a row's ports: is
-	// refused, not ignored.
+	// A profile without an iolink: block has no IO-Link ports: its row's
+	// ports: is refused, not ignored.
 	n := d.prof.IOLinkPorts()
 	if n == 0 {
 		return fmt.Errorf("%s: ports: profile %s declares no IO-Link ports", where, d.prof.ID)
@@ -240,7 +240,9 @@ func (d *device) checkPorts(fsys fs.FS, where string, names map[string]string) e
 	if err := portRange(nums, n); err != nil {
 		return fmt.Errorf("%s: ports: profile %s %w", where, d.prof.ID, err)
 	}
-	return nil
+	// Nothing derives a port device yet (#705 PR 4): refuse a valid
+	// ports: rather than load a project whose sensors silently do nothing.
+	return fmt.Errorf("%s: ports: port devices are not loaded yet (#705); remove ports: until they are", where)
 }
 
 // portRange checks a row's port numbers (sorted) against a master's n
