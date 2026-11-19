@@ -84,6 +84,9 @@ Mono:
   then latches: `ok` once TIA started, `failed` at the first licence error,
   from the start or any later TIA call. Failed blocks every TIA call until
   the agent restarts. A headless start does not activate TIA's trial.
+  After installing or activating a licence, restart the agent
+  (`Stop-ScheduledTask tiad; Start-ScheduledTask tiad`, or rerun
+  `install-tiad.ps1`) so a latched `failed` clears.
 
 ## C# 5, no project file
 
