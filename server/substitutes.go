@@ -322,7 +322,7 @@ type substituteAckRequest struct {
 func (s *Server) handleSubstituteAck(w http.ResponseWriter, r *http.Request) {
 	var req substituteAckRequest
 	derr := json.NewDecoder(r.Body).Decode(&req)
-	if code, msg := s.authorize(r, PermSubstitute, s.substituteNames(req.IDs)); code != 0 {
+	if code, msg := s.authorizeEach(r, PermSubstitute, s.substituteNameList(req.IDs)); code != 0 {
 		refuse(w, msg, code)
 		return
 	}
@@ -369,13 +369,19 @@ func (s *Server) substituteByID(id uint64) (string, runtime.Substitution) {
 // substituteNames is the tags of the active entries with these IDs,
 // comma-separated, for a target.
 func (s *Server) substituteNames(ids []uint64) string {
+	return strings.Join(s.substituteNameList(ids), ",")
+}
+
+// substituteNameList is the addresses the substitutes ids name, the
+// targets an ack is authorized over, one by one.
+func (s *Server) substituteNameList(ids []uint64) []string {
 	var names []string
 	for _, id := range ids {
 		if n, _ := s.substituteByID(id); n != "" {
 			names = append(names, n)
 		}
 	}
-	return strings.Join(names, ",")
+	return names
 }
 
 // The audit targets of the substitute routes.

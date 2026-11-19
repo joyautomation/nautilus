@@ -78,6 +78,10 @@ func (s *Server) handleForce(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `expected {"name": ..., "value": ...}`, http.StatusBadRequest)
 		return
 	}
+	if code, msg := s.authorize(r, PermForce, req.Name); code != 0 {
+		http.Error(w, msg, code)
+		return
+	}
 	if err := s.rt.Tags().Force(req.Name, req.Value); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -95,6 +99,10 @@ func (s *Server) handleUnforce(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := r.PathValue("name")
+	if code, msg := s.authorize(r, PermForce, name); code != 0 {
+		http.Error(w, msg, code)
+		return
+	}
 	if !s.rt.Tags().Unforce(name) {
 		http.Error(w, fmt.Sprintf("%s is not forced", name), http.StatusNotFound)
 		return
@@ -110,6 +118,15 @@ func (s *Server) handleUnforceAll(w http.ResponseWriter, r *http.Request) {
 	}
 	if s.refuseForce(w) {
 		return
+	}
+	// Clearing every force needs force over every tag that is forced: an
+	// engineer in one area clears all of that area's forces, and is refused
+	// when another area's tag is forced too.
+	for name := range s.rt.Tags().ForcedValues() {
+		if code, msg := s.authorize(r, PermForce, name); code != 0 {
+			http.Error(w, msg, code)
+			return
+		}
 	}
 	n := s.rt.Tags().UnforceAll()
 	logAction(r, "force: cleared all", "removed", n)

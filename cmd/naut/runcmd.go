@@ -446,6 +446,18 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	if tok := os.Getenv("NAUTILUS_TOKEN"); tok != "" {
 		sopts.AuthToken = tok
 	}
+	// The auth: block (#708) and its service tokens' secrets, each from
+	// NAUTILUS_TOKEN_<NAME>: one that is unset, or shared, refuses to start
+	// rather than run with a token nobody can present or two that look
+	// alike.
+	if proj.Auth != nil {
+		secrets, err := serviceTokenSecrets(proj.Auth.ServiceTokens(), sopts.AuthToken, os.Getenv)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "naut run: auth:", err)
+			return 1
+		}
+		sopts.Auth, sopts.ServiceTokens = proj.Auth, secrets
+	}
 	if h := os.Getenv("NAUTILUS_HISTORIAN_URL"); h != "" {
 		sopts.HistorianURL = h
 	}
@@ -1051,8 +1063,38 @@ func authNotice(proj *project.Project) string {
 	if proj.Auth == nil {
 		return ""
 	}
-	return "auth: WARNING: the auth: block is checked but NOT ENFORCED yet (#708): writes keep the rule without it\n" +
-		"      (NAUTILUS_TOKEN when set, else a same-origin request), and reads are not gated\n"
+	return "auth: WARNING: reads are NOT GATED yet (#708, until sign-in): anyone who can reach this controller\n" +
+		"      can read its tags, alarms and program. Writes and the audit journal follow the auth: block.\n"
+}
+
+// serviceTokenSecrets reads each service token's secret from
+// NAUTILUS_TOKEN_<NAME>. A missing one is an error naming the variable
+// (never a value), and so is a secret that is NAUTILUS_TOKEN's or another
+// token's: a request presenting it would be two principals.
+func serviceTokenSecrets(names []string, authToken string, getenv func(string) string) (map[string]string, error) {
+	out := map[string]string{}
+	seen := map[string]string{}
+	if authToken != "" {
+		seen[authToken] = "NAUTILUS_TOKEN"
+	}
+	var missing []string
+	for _, name := range names {
+		env := "NAUTILUS_TOKEN_" + strings.ToUpper(name)
+		secret := getenv(env)
+		if secret == "" {
+			missing = append(missing, env)
+			continue
+		}
+		if other, dup := seen[secret]; dup {
+			return nil, fmt.Errorf("%s is the same secret as %s: give each token its own", env, other)
+		}
+		seen[secret] = env
+		out[name] = secret
+	}
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("service tokens without a secret: set %s", strings.Join(missing, ", "))
+	}
+	return out, nil
 }
 
 // openAudit opens the audit journal the manifest's audit: section places

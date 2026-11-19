@@ -33,6 +33,7 @@ import (
 	"time"
 
 	"github.com/joyautomation/nautilus/alarm"
+	"github.com/joyautomation/nautilus/auth"
 )
 
 // noAlarms is the 404 body. It names the manifest key, because "404" on a
@@ -241,10 +242,20 @@ func (s *Server) handleAlarmAck(w http.ResponseWriter, r *http.Request) {
 	ids := req.IDs
 	if req.All {
 		ids = nil // nil means everything, per Engine.Ack
+		if code, msg := s.authorize(r, PermAck, auth.All); code != 0 {
+			http.Error(w, msg, code)
+			return
+		}
 	} else if len(ids) == 0 {
 		http.Error(w, `ack needs "ids" or "all": true — an empty ids list would silently ack nothing`,
 			http.StatusBadRequest)
 		return
+	}
+	for _, id := range ids {
+		if code, msg := s.authorize(r, PermAck, s.alarmTag(id)); code != 0 {
+			http.Error(w, msg, code)
+			return
+		}
 	}
 	if s.alarmLog != nil {
 		s.alarmAckThroughLog(w, r, ids, req.By)
@@ -279,6 +290,10 @@ func (s *Server) handleAlarmShelve(w http.ResponseWriter, r *http.Request) {
 	var req shelveRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ID == "" {
 		http.Error(w, `expected {"id": "...", "until"|"seconds": ..., "by": "..."}`, http.StatusBadRequest)
+		return
+	}
+	if code, msg := s.authorize(r, PermShelve, s.alarmTag(req.ID)); code != 0 {
+		http.Error(w, msg, code)
 		return
 	}
 	var until time.Time
@@ -326,6 +341,10 @@ func (s *Server) handleAlarmUnshelve(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `expected {"id": "...", "by": "..."}`, http.StatusBadRequest)
 		return
 	}
+	if code, msg := s.authorize(r, PermShelve, s.alarmTag(req.ID)); code != 0 {
+		http.Error(w, msg, code)
+		return
+	}
 	if s.alarmLog != nil {
 		s.shelveThroughLog(w, r, req.ID, time.Time{}, req.By)
 		return
@@ -335,6 +354,20 @@ func (s *Server) handleAlarmUnshelve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeAlarmRecord(w, req.ID)
+}
+
+// alarmTag is the tag an alarm watches, the target areas scope its ack
+// and shelving by; an id that names no alarm is its own target (refused
+// to an area-limited principal; the engine says 404 to the rest). An
+// alarm with no tag of the project's, such as the audit journal's system
+// alarm, is in no area: only a grant over the whole controller acks it.
+func (s *Server) alarmTag(id string) string {
+	for _, rec := range s.alarms.Records() {
+		if rec.ID == id {
+			return rec.Tag
+		}
+	}
+	return id
 }
 
 // alarmErrStatus maps an engine refusal to a status: an id that names no

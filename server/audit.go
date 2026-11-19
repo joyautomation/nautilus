@@ -453,11 +453,19 @@ func (s *Server) audited(action string, tf targetFunc, h http.HandlerFunc) *audi
 }
 
 func (a *auditedRoute) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if code, _ := a.s.authorizeWrite(r); code != 0 {
+	if code, msg := a.s.preAuthorize(r, a.action); code != 0 {
 		r.Body, r.ContentLength = http.NoBody, 0
-		a.answer(w, r, auditTarget{}, a.h)
+		if a.s.policy == nil {
+			// The handler answers, as it always has: it refuses first.
+			a.answer(w, r, auditTarget{}, a.h)
+			return
+		}
+		a.answer(w, r, auditTarget{}, func(w http.ResponseWriter, _ *http.Request) {
+			writeJSON(w, code, map[string]string{"error": msg})
+		})
 		return
 	}
+	r = withSeamDecision(r)
 	var body []byte
 	if r.Body != nil {
 		body, _ = io.ReadAll(io.LimitReader(r.Body, maxWriteBody+1))
@@ -582,15 +590,10 @@ func resultOf(status int) string {
 	return audit.ResultOK
 }
 
-// principal is who the request acts as, with today's identities: "token"
-// when it presents the server's token, else "anonymous". Nothing the
-// client names (an alarm's "by") is ever taken as the principal.
-func (s *Server) principal(r *http.Request) string {
-	if s.authToken != "" && tokenMatches(r, s.authToken) {
-		return "token"
-	}
-	return "anonymous"
-}
+// principal is who the request acts as (principalOf): "anonymous",
+// "token" or "token:<name>". Nothing the client names (an alarm's "by")
+// is ever taken as the principal.
+func (s *Server) principal(r *http.Request) string { return s.principalOf(r) }
 
 // clientSource is the surface a request came through: X-Nautilus-Client
 // when it names a known one, else "hmi" for a browser (it sends an Origin
@@ -892,7 +895,14 @@ type auditResponse struct {
 // entries say who did what from where. The users and roles PRs give it
 // the "audit" permission (design §4).
 func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
-	if s.authToken != "" && !tokenMatches(r, s.authToken) {
+	if s.policy != nil {
+		// With an auth: block, reading the journal is the audit permission
+		// (design §6 Q1).
+		if code, msg := s.authorize(r, PermAudit, ""); code != 0 {
+			writeJSON(w, code, map[string]string{"error": msg})
+			return
+		}
+	} else if s.authToken != "" && !tokenMatches(r, s.authToken) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "the audit journal needs the auth token"})
 		return
 	}

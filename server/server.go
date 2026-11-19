@@ -61,7 +61,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"crypto/subtle"
 	"embed"
 	"encoding/hex"
 	"encoding/json"
@@ -81,6 +80,7 @@ import (
 
 	"github.com/joyautomation/nautilus/alarm"
 	"github.com/joyautomation/nautilus/audit"
+	"github.com/joyautomation/nautilus/auth"
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/leader"
 	"github.com/joyautomation/nautilus/runtime"
@@ -283,6 +283,19 @@ type Options struct {
 	// refused meanwhile (#709, design §6 question 5).
 	AuditUnavailable error
 
+	// Auth is the manifest's compiled auth: block (#708): who may do what.
+	// Nil keeps the write rule of before it existed (AuthToken when set,
+	// else a same-origin request). With it, every write route asks the
+	// policy (authorize), NAUTILUS_TOKEN is the principal "token" with the
+	// block's token-role, and GET /api/audit needs the audit permission.
+	// Reads are not gated yet: that comes with sign-in (#708 PR 5).
+	Auth *auth.Policy
+
+	// ServiceTokens are the service tokens' secrets, by name (naut run
+	// reads each from NAUTILUS_TOKEN_<NAME>). A request presenting one acts
+	// as "token:<name>", with the grants the auth: block gives it.
+	ServiceTokens map[string]string
+
 	// OnlineEdits enables the program endpoints (PUT /api/program, POST
 	// /api/program/rollback) — PLC-style online edits of the running ST
 	// program. Off by default: pushing logic is remote code execution on a
@@ -481,6 +494,8 @@ type Server struct {
 	rt          *runtime.Runtime
 	interval    time.Duration
 	authToken   string
+	policy      *auth.Policy      // Options.Auth; nil without an auth: block
+	services    map[string]string // service token name (lowercased) → secret
 	allowHosts  map[string]bool
 	onlineEdits bool
 	drivers     func() []DriverStatus
@@ -594,6 +609,18 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 		rec, unavailable = opts[0].Audit, opts[0].AuditUnavailable
 	}
 	s.audit = newAuditor(rec)
+	if len(opts) > 0 {
+		s.policy = opts[0].Auth
+		for name, secret := range opts[0].ServiceTokens {
+			if secret == "" {
+				continue // an empty secret must never match an empty credential
+			}
+			if s.services == nil {
+				s.services = map[string]string{}
+			}
+			s.services[strings.ToLower(name)] = secret
+		}
+	}
 	if unavailable != nil {
 		s.audit.unavailable = unavailable.Error()
 	}
@@ -735,6 +762,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/sfc/transition", s.audited("sfc.transition", sfcTarget(false), s.handleSFCTransition))
 	mux.HandleFunc("GET /api/cluster", s.handleCluster)
 	mux.HandleFunc("GET /api/audit", s.handleAudit)
+	mux.HandleFunc("GET /api/me", s.handleMe)
 	mux.HandleFunc("GET /api/history", s.handleHistory)
 	mux.HandleFunc("GET /api/history/", s.handleHistory)
 	if s.hmi != nil {
@@ -985,7 +1013,7 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 			s.answerPreflight(w, r)
 			return
 		}
-		if origin != "" && (s.corsOrigin(r, origin) || s.authToken != "" && tokenMatches(r, s.authToken)) {
+		if origin != "" && (s.corsOrigin(r, origin) || s.validCredential(r)) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			// A page may read whether its action was journalled to disk.
 			w.Header().Set("Access-Control-Expose-Headers", auditJournalHeader)
@@ -998,7 +1026,7 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 // trusted origin (any origin when a token is configured) the methods and
 // headers a cross-origin page may use. It never reaches a route.
 func (s *Server) answerPreflight(w http.ResponseWriter, r *http.Request) {
-	if origin := r.Header.Get("Origin"); origin != "" && (s.corsOrigin(r, origin) || s.authToken != "") {
+	if origin := r.Header.Get("Origin"); origin != "" && (s.corsOrigin(r, origin) || s.credentialsConfigured()) {
 		w.Header().Set("Access-Control-Allow-Origin", origin)
 		// Every method a route below answers: PUT is the online-edit
 		// push (PUT /api/program), DELETE the per-tag unforce.
@@ -1026,13 +1054,13 @@ func (s *Server) GuardHost(next http.Handler) http.Handler {
 		// server a genuine one is answered here (204, no data) and never
 		// passed to a route of the handler this wraps; the request it asks
 		// about still needs the token.
-		if !trusted && s.authToken != "" && r.Method == http.MethodOptions && r.Header.Get("Access-Control-Request-Method") != "" {
+		if !trusted && s.credentialsConfigured() && r.Method == http.MethodOptions && r.Header.Get("Access-Control-Request-Method") != "" {
 			w.Header().Add("Vary", "Origin")
 			s.answerPreflight(w, r)
 			return
 		}
-		if !trusted && !(s.authToken != "" && tokenMatches(r, s.authToken)) {
-			refuseHost(w, r, "controller", s.authToken != "")
+		if !trusted && !s.validCredential(r) {
+			refuseHost(w, r, "controller", s.credentialsConfigured())
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -1417,10 +1445,21 @@ func nonNilStrings(s []string) []string {
 // attacker's page can't read or guess it, so CORS is irrelevant to safety).
 // AuthorizeWrite applies the server's write policy — the auth token, else
 // same-origin — to a request another handler serves, so a facade that adds
-// an endpoint keeps the same rule for it. 0 means allowed.
+// an endpoint keeps the same rule for it. 0 means allowed. With an auth:
+// block it needs write over every tag; an endpoint that does something
+// else asks Authorize for its own permission.
 func (s *Server) AuthorizeWrite(r *http.Request) (int, string) { return s.authorizeWrite(r) }
 
 func (s *Server) authorizeWrite(r *http.Request) (int, string) {
+	if s.policy != nil {
+		// The audit seam has checked the route's own permission (and a
+		// handler then checks its target); anything else needs write over
+		// every tag.
+		if decidedBySeam(r) {
+			return 0, ""
+		}
+		return s.authorize(r, PermWrite, auth.All)
+	}
 	if s.authToken != "" {
 		if tokenMatches(r, s.authToken) {
 			return 0, ""
@@ -1468,21 +1507,6 @@ func hostOnly(host string) string {
 	return strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
 }
 
-// tokenMatches reports whether the request carries the expected token, in
-// either "Authorization: Bearer <t>" or "X-Nautilus-Token: <t>" form.
-// Comparison is constant-time.
-func tokenMatches(r *http.Request, token string) bool {
-	got := r.Header.Get("X-Nautilus-Token")
-	if got == "" {
-		// The scheme is case-insensitive (RFC 9110 §11.1): "bearer x"
-		// is the same credential as "Bearer x".
-		if scheme, cred, ok := strings.Cut(r.Header.Get("Authorization"), " "); ok && strings.EqualFold(scheme, "Bearer") {
-			got = strings.TrimSpace(cred)
-		}
-	}
-	return got != "" && subtle.ConstantTimeCompare([]byte(got), []byte(token)) == 1
-}
-
 // sameOrigin reports whether a request is safe from a CSRF standpoint: it
 // either carries no Origin header (a non-browser client) or an Origin whose
 // host matches the request's Host.
@@ -1520,6 +1544,10 @@ func (s *Server) handleWriteTag(w http.ResponseWriter, r *http.Request) {
 	var req writeTagRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
 		http.Error(w, `expected {"name": ..., "value": ...}`, http.StatusBadRequest)
+		return
+	}
+	if code, msg := s.authorize(r, PermWrite, req.Name); code != 0 {
+		http.Error(w, msg, code)
 		return
 	}
 	if s.tagWriter == nil {

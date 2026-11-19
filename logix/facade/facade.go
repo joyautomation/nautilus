@@ -134,7 +134,7 @@ func New(ctx context.Context, o Options) (*Facade, error) {
 	sopts.Drivers = f.driverStatus
 	f.srv = server.New(rt, sopts)
 	if o.Program != nil {
-		f.prog = &programPlane{cfg: *o.Program, source: o.Program.Source, auth: f.srv.AuthorizeWrite}
+		f.prog = &programPlane{cfg: *o.Program, source: o.Program.Source, auth: func(r *http.Request, perm string) (int, string) { return f.srv.Authorize(r, perm, "") }}
 	}
 	return f, nil
 }
