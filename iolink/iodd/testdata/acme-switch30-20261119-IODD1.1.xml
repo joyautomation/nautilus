@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Synthetic test IODD: "Acme" is a made-up vendor and its ids are made
+     up; no real device is described. A sensor whose whole process data is
+     16 bits (four hex digits: what the ifm simulator carries), written to the
+     IODD 1.1 schema's shape for nautilus's tests (docs/design/iolink.md §10). -->
+<IODevice xmlns="http://www.io-link.com/IODD/2010/10" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+  <DocumentInfo version="V1.0" releaseDate="2026-11-19" copyright="nautilus test data"/>
+  <ProfileHeader>
+    <ProfileIdentification>IO Device Profile</ProfileIdentification>
+    <ProfileRevision>1.1</ProfileRevision>
+    <ProfileName>Device Profile for IO Devices</ProfileName>
+    <ProfileSource>IO-Link Consortium</ProfileSource>
+    <ProfileClassID>Device</ProfileClassID>
+  </ProfileHeader>
+  <ProfileBody>
+    <DeviceIdentity vendorId="65261" vendorName="Acme" deviceId="3145729">
+      <VendorText textId="TI_VendorText"/>
+      <VendorUrl textId="TI_VendorUrl"/>
+      <DeviceName textId="TI_DeviceName"/>
+      <DeviceFamily textId="TI_DeviceFamily"/>
+    </DeviceIdentity>
+    <DeviceFunction>
+      <Features blockParameter="false" dataStorage="true" profileCharacteristic="1"/>
+      <VariableCollection>
+        <StdVariableRef id="V_DirectParameters_1"/>
+        <StdVariableRef id="V_SystemCommand"/>
+        <StdVariableRef id="V_VendorName" defaultValue="Acme"/>
+        <StdVariableRef id="V_SerialNumber"/>
+        <StdVariableRef id="V_ApplicationSpecificTag" defaultValue="***"/>
+        <StdVariableRef id="V_DeviceStatus"/>
+        <Variable id="V_Threshold" index="64" accessRights="rw" defaultValue="2048">
+          <Datatype xsi:type="UIntegerT" bitLength="16">
+            <ValueRange lowerValue="0" upperValue="4095"/>
+          </Datatype>
+          <Name textId="TN_V_Threshold"/>
+        </Variable>
+      </VariableCollection>
+      <ProcessDataCollection>
+        <ProcessData id="PD_Switch">
+          <!-- PD in, 16 bits; bit 0 is the LSB of the last octet.
+               bits 15..4 Position  UIntegerT 12
+               bit  1     Alarm     BooleanT
+               bit  0     Closed    BooleanT -->
+          <ProcessDataIn id="PDI_Switch" bitLength="16">
+            <Datatype xsi:type="RecordT" bitLength="16" subindexAccessSupported="false">
+              <RecordItem subindex="1" bitOffset="4">
+                <SimpleDatatype xsi:type="UIntegerT" bitLength="12"/>
+                <Name textId="TN_PDI_Position"/>
+              </RecordItem>
+              <RecordItem subindex="2" bitOffset="1">
+                <SimpleDatatype xsi:type="BooleanT"/>
+                <Name textId="TN_PDI_Alarm"/>
+              </RecordItem>
+              <RecordItem subindex="3" bitOffset="0">
+                <SimpleDatatype xsi:type="BooleanT"/>
+                <Name textId="TN_PDI_Closed"/>
+              </RecordItem>
+            </Datatype>
+            <Name textId="TN_PDI"/>
+          </ProcessDataIn>
+        </ProcessData>
+      </ProcessDataCollection>
+      <UserInterface>
+        <MenuCollection>
+          <Menu id="M_Ident"><VariableRef variableId="V_VendorName"/></Menu>
+        </MenuCollection>
+      </UserInterface>
+    </DeviceFunction>
+  </ProfileBody>
+  <CommNetworkProfile xsi:type="IOLinkCommNetworkProfileT" iolinkRevision="V1.1">
+    <TransportLayers>
+      <PhysicalLayer bitrate="COM2" minCycleTime="2300" sioSupported="true" mSequenceCapability="1"/>
+    </TransportLayers>
+  </CommNetworkProfile>
+  <ExternalTextCollection>
+    <PrimaryLanguage xml:lang="en">
+      <Text id="TI_VendorText" value="Acme test devices"/>
+      <Text id="TI_VendorUrl" value="https://example.com"/>
+      <Text id="TI_DeviceName" value="SW-30 position switch"/>
+      <Text id="TI_DeviceFamily" value="Switch"/>
+      <Text id="TN_V_Threshold" value="Threshold"/>
+      <Text id="TN_PDI_Position" value="Position"/>
+      <Text id="TN_PDI_Alarm" value="Alarm"/>
+      <Text id="TN_PDI_Closed" value="Closed"/>
+      <Text id="TN_PDI" value="Process data in"/>
+    </PrimaryLanguage>
+  </ExternalTextCollection>
+  <Stamp crc="0"><Checker name="none" version="0"/></Stamp>
+</IODevice>

@@ -9,6 +9,7 @@ package opcua_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -23,6 +24,7 @@ import (
 	"github.com/joyautomation/nautilus/devbind"
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/iolink"
+	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/opcua"
 	"github.com/joyautomation/nautilus/virtdev"
 )
@@ -532,5 +534,190 @@ IF n > 100 THEN D_Port1_DeviceID := 1048999; END_IF;`,
 	}
 	if res, _ := w.ISDURead(ctx, "LEVEL1", "V_Setpoint"); res.Value != uint64(500) {
 		t.Errorf("the refused write changed the parameter: %v", res.Value)
+	}
+}
+
+// #705's done-when, in one test: a virtual master of each of three makers is
+// BROWSED (every node its profile binds is in its address space), the sensor
+// on its port is DECODED from the IODD with no hand-written decode (the test
+// supplies only the raw bytes, each in its maker's own spelling: a byte string,
+// hex text, a Byte[]), its identity is CHECKED (a swap is WrongDevice and the
+// bytes are no longer decoded), and its parameters are READ AND WRITTEN through
+// the master by ISDU, each by that maker's mechanism (OPC 30120's Byte[]
+// methods, the ifm's hex-text methods); the P+F master offers none, and says so.
+func TestIOLinkDoneWhen(t *testing.T) {
+	const (
+		levelFile  = "acme-level100-20261118-IODD1.1.xml"
+		switchFile = "acme-switch30-20261119-IODD1.1.xml"
+		dir        = "../iolink/iodd/testdata/"
+	)
+	// Each plant swaps the sensor for another model after 60 scans (6 s).
+	for _, mk := range []struct {
+		name, profile, iodd string
+		model               string
+		// members are what the IODD's decode of the raw bytes must give.
+		members map[string]any
+		// isduParam, isduDefault, isduWrite: nil isduParam means the master
+		// offers no ISDU.
+		isduParam   string
+		isduDefault any
+		isduWrite   any
+	}{
+		{
+			name: "pepperl-fuchs", profile: "pepperl-fuchs-ice3", iodd: levelFile,
+			model: `D_Port1_PdiBytes := 'fe0dffd1'; D_Port1_VendorID := 65261; D_Port1_DeviceID := 1048577; D_Port1_PdiValid := TRUE;
+IF n > 60 THEN D_Port1_DeviceID := 1048999; END_IF;`,
+			members: map[string]any{"Level": -12.5, "Temperature": int64(-3), "Ready": true, "Switch_point_1": true, "Switch_point_2": false, "PdValid": true},
+		},
+		{
+			name: "ifm", profile: "ifm-al1590", iodd: switchFile,
+			model: `D_Port1_Word := 646; D_Port1_VendorID := 65261; D_Port1_DeviceID := 3145729;
+IF n > 60 THEN D_Port1_DeviceID := 3145999; END_IF;`,
+			members:   map[string]any{"Position": int64(40), "Alarm": true, "Closed": false},
+			isduParam: "V_Threshold", isduDefault: uint64(2048), isduWrite: uint64(3000),
+		},
+		{
+			name: "sick", profile: "sick-sig300", iodd: levelFile,
+			model: `D_Port1_PdiBytes := 'fe0dffd1'; D_Port1_VendorID := 65261; D_Port1_DeviceID := 1048577;
+IF n > 60 THEN D_Port1_DeviceID := 1048999; END_IF;`,
+			members:   map[string]any{"Level": -12.5, "Temperature": int64(-3), "Ready": true, "Switch_point_1": true, "Switch_point_2": false},
+			isduParam: "V_Setpoint", isduDefault: uint64(100), isduWrite: uint64(500),
+		},
+	} {
+		t.Run(mk.name, func(t *testing.T) {
+			ms := matrixServer{virtual: mk.profile, modelVars: "n : INT;", model: "n := n + 1;\n" + mk.model}
+			if mk.isduParam != "" { // a virtual master answers ISDU for a port that has an IODD; the P+F's has none to answer
+				ms.ports, ms.ioddFiles = "{ 1: { iodd: "+mk.iodd+" } }", map[string]string{mk.iodd: dir + mk.iodd}
+			}
+			v := startVirtual(t, ms)
+			prof, err := os.ReadFile("../devprofile/profiles/" + mk.profile + ".yaml")
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, err := os.ReadFile(dir + mk.iodd)
+			if err != nil {
+				t.Fatal(err)
+			}
+			set, err := devbind.Resolve(fstest.MapFS{
+				"profiles/" + mk.profile + ".yaml": {Data: prof},
+				"iodd/" + mk.iodd:                  {Data: raw},
+			}, []devbind.Device{{Name: "M", Profile: mk.profile, Endpoint: "h", Points: []string{"Port1_*"},
+				Ports: map[int]devbind.Port{1: {Name: "S1", IODD: mk.iodd}}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			od := set.OPCUADevices()[0]
+
+			// BROWSED: every node the profile binds for the port is in the
+			// master's address space.
+			ctx, cancel := context.WithCancel(context.Background())
+			t.Cleanup(cancel)
+			sess, err := opcua.Dial(ctx, v.url(), opcua.Connect{Timeout: 5 * time.Second, PKIDir: t.TempDir(), Security: opcua.Security{Policy: "None", Mode: "None"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			res, err := opcua.Browse(ctx, sess.Client, opcua.ObjectsFolder, 0, nil)
+			sess.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+			served := map[string]bool{}
+			for _, bv := range res.Variables {
+				served[bv.NodeID] = true
+			}
+			for _, b := range od.Manifest.Tags {
+				if !served[b.NodeID] && !strings.HasPrefix(b.Name, "M_") { // a command binding shares its read binding's node
+					t.Errorf("the profile binds %s (%s), and the master's browse does not have it", b.Name, b.NodeID)
+				}
+			}
+
+			d, err := opcua.New(v.url(), od.Manifest, opcua.WithName("M"), opcua.WithOnlineTag("M__Online"),
+				opcua.WithScanRate(100*time.Millisecond), opcua.WithTimeout(2*time.Second), opcua.WithSecurity("None", "None"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			w, err := set.WrapOPCUA("M", d, "None", "None")
+			if err != nil {
+				t.Fatal(err)
+			}
+			d.Start(ctx)
+			t.Cleanup(d.Stop)
+			read := func() nio.Values { vals, _ := w.ReadInputs(); return vals }
+
+			// DECODED from the IODD, IDENTITY-CHECKED.
+			waitUntil(t, "the sensor, decoded and identified", 30*time.Second, func() bool {
+				vals := read()
+				n, ok := vals["S1__Identity"].(int64)
+				_, have := vals["S1"]
+				return ok && have && (n == int64(iolink.Ok) || n == int64(iolink.AwaitingRearm))
+			})
+			// What the IODD's decode of the raw bytes gives, member by member (a
+			// maker's simulator may take a scan to carry the bytes: wait for them).
+			mismatch := func() []string {
+				st, ok := read()["S1"].(ir.Value)
+				if !ok {
+					return []string{"the sensor is not a struct"}
+				}
+				var bad []string
+				for name, want := range mk.members {
+					i, found := st.Struct.FieldIndex[name]
+					if !found {
+						bad = append(bad, fmt.Sprintf("the derived type %s has no member %s", st.Struct.Name, name))
+						continue
+					}
+					var got any
+					switch f := st.Fld[i]; f.Kind {
+					case ir.TypeBool:
+						got = f.B
+					case ir.TypeReal:
+						got = f.F
+					default:
+						got = f.I
+					}
+					if got != want {
+						bad = append(bad, fmt.Sprintf("%s decoded as %v, want %v", name, got, want))
+					}
+				}
+				return bad
+			}
+			deadline := time.Now().Add(15 * time.Second)
+			for len(mismatch()) > 0 && time.Now().Before(deadline) {
+				time.Sleep(100 * time.Millisecond)
+			}
+			for _, m := range mismatch() {
+				t.Error(m)
+			}
+
+			// PARAMETERIZED, by this maker's mechanism.
+			if mk.isduParam == "" {
+				if _, err := w.ISDURead(ctx, "S1", "V_Setpoint"); err == nil || !errors.Is(err, devbind.ErrISDURefused) || !strings.Contains(err.Error(), "offers no ISDU") {
+					t.Errorf("a master with no ISDU: %v, want a refusal saying so", err)
+				}
+			} else {
+				if res, err := w.ISDURead(ctx, "S1", mk.isduParam); err != nil || res.Value != mk.isduDefault || res.Identity != iolink.Ok {
+					t.Errorf("%s read %+v, %v, want the IODD's default %v", mk.isduParam, res, err, mk.isduDefault)
+				}
+				if res, err := w.ISDUWrite(ctx, "S1", mk.isduParam, mk.isduWrite); err != nil || res.Value != mk.isduWrite {
+					t.Fatalf("%s write %+v, %v", mk.isduParam, res, err)
+				}
+				if res, err := w.ISDURead(ctx, "S1", mk.isduParam); err != nil || res.Value != mk.isduWrite {
+					t.Errorf("%s read back %+v, %v, want %v", mk.isduParam, res, err, mk.isduWrite)
+				}
+			}
+
+			// The swap: WrongDevice, and a parameter is not written to it.
+			waitUntil(t, "the swapped sensor", 40*time.Second, func() bool {
+				n, _ := read()["S1__Identity"].(int64)
+				return n == int64(iolink.WrongDevice)
+			})
+			if mk.isduParam != "" {
+				if _, err := w.ISDUWrite(ctx, "S1", mk.isduParam, mk.isduDefault); err == nil || !strings.Contains(err.Error(), "WrongDevice") {
+					t.Errorf("a write after the swap: %v, want a refusal naming WrongDevice", err)
+				}
+				if res, err := w.ISDURead(ctx, "S1", mk.isduParam); err != nil || res.Value != mk.isduWrite || res.Identity != iolink.WrongDevice {
+					t.Errorf("a read after the swap %+v, %v: want the written value with WrongDevice flagged", res, err)
+				}
+			}
+		})
 	}
 }
