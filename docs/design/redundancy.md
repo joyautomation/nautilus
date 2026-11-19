@@ -828,7 +828,13 @@ when its members address each other by DNS name, so peer traffic is kept apart f
   `NAUTILUS_ALLOWED_HOSTS`. `tools/deploy` installs both on both boxes. At the peer handshake
   each side compares an HMAC of its client token, keyed with the peer token, and raises
   "client token differs between A and B" when they don't match. The handshake never sends the
-  client token itself.
+  client token itself. The same handshake compares the pair's **credential set** (#708), read
+  anew at every hello: the users file's digest (`auth/users.Digest`) and the tag API
+  certificate's leaf (`server.CertSource.Pin`), each as its own HMAC under the peer token, so a
+  digest never leaves either. Each part is same, differs, unreadable or off, and a mismatch is a
+  condition on `/api/cluster` and the banner. It is **report only**: it never holds a campaign
+  or closes the gate, since a users change or a certificate renewal reaches A and B at slightly
+  different times.
 - **Clients that follow the leader (#716).** `/api/cluster` advertises each controller's API
   address, and a browser HMI that follows it can't send a token.
   - **What has to be trusted.** Each advertised name must be in `NAUTILUS_ALLOWED_HOSTS` on

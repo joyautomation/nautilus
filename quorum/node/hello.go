@@ -35,6 +35,95 @@ func (t ClientToken) String() string {
 	return "unknown"
 }
 
+// Credentials is what a controller serves its clients with (#708),
+// compared with the peer's at every hello (report only: it never holds a
+// campaign or closes the gate). Zero parts are "none".
+type Credentials struct {
+	// Users is auth/users.Digest of the users file (zero: no users, or
+	// none file); UsersErr says why it could not be read.
+	Users    [32]byte
+	UsersErr string
+	// TLS is the tag API's certificate leaf, server.CertSource.Pin (zero:
+	// no server.tls).
+	TLS [32]byte
+}
+
+// CredState is what the credential check found about one part.
+type CredState int
+
+const (
+	// CredUnknown: no answer from the peer yet, or a build that sends
+	// none.
+	CredUnknown CredState = iota
+	// CredSame: both controllers hold the same.
+	CredSame
+	// CredDiffers: they hold different ones.
+	CredDiffers
+	// CredUnreadable: one of them can't read its own (Detail says which).
+	CredUnreadable
+	// CredOff: neither has any (no users, no server.tls).
+	CredOff
+)
+
+func (c CredState) String() string {
+	switch c {
+	case CredSame:
+		return "same"
+	case CredDiffers:
+		return "differs"
+	case CredUnreadable:
+		return "unreadable"
+	case CredOff:
+		return "off"
+	}
+	return "unknown"
+}
+
+// The states an answerer reports for a part, bound in its MAC.
+const (
+	credOK         = "ok"
+	credUnreadable = "unreadable"
+)
+
+// credMAC proves one part of the answerer's credentials to the asker, as
+// tokenMAC proves the client token: keyed with the peer token, over its
+// own label, the part, who asks, who answers, a fresh challenge, the
+// answerer's state for the part and, when it could read it, the digest.
+// The digest itself never leaves.
+func credMAC(peerToken, challenge string, asker, answerer quorum.NodeID, part, state string, digest [32]byte) string {
+	m := hmac.New(sha256.New, []byte(peerToken))
+	parts := []string{"nautilus credential answer", part, string(asker), string(answerer), challenge, state}
+	if state == credOK && !mut("creds_unbound") {
+		parts = append(parts, hex.EncodeToString(digest[:]))
+	}
+	for _, p := range parts {
+		m.Write([]byte(p))
+		m.Write([]byte{0})
+	}
+	return hex.EncodeToString(m.Sum(nil))
+}
+
+// judgeCred is what the asker makes of one part: the answerer's state and
+// MAC against its own digest (or its own read error).
+func judgeCred(peerToken, challenge string, asker, answerer quorum.NodeID, part, peerState, peerMAC string, own [32]byte, ownErr string) CredState {
+	switch {
+	case peerState == "":
+		return CredUnknown // a build before the check
+	case ownErr != "":
+		return CredUnreadable
+	case peerState == credUnreadable && sameMAC(peerMAC, credMAC(peerToken, challenge, asker, answerer, part, credUnreadable, [32]byte{})):
+		return CredUnreadable
+	case peerState == credOK && sameMAC(peerMAC, credMAC(peerToken, challenge, asker, answerer, part, credOK, own)):
+		if own == ([32]byte{}) {
+			return CredOff
+		}
+		return CredSame
+	case peerState == credOK || peerState == credUnreadable:
+		return CredDiffers
+	}
+	return CredUnknown
+}
+
 // helloAnswer is GET {pair}/hello's JSON answer: the answering node and
 // its MAC of its client token for the asker's challenge.
 type helloAnswer struct {
@@ -47,6 +136,12 @@ type helloAnswer struct {
 	Nonce   string   `json:"nonce,omitempty"`
 	Caps    []string `json:"caps,omitempty"`
 	InfoMAC string   `json:"infoMac,omitempty"`
+	// The answerer's credentials (Credentials), each part as its state
+	// and its MAC (credMAC). A build before #708's check sends none.
+	Users    string `json:"users,omitempty"`
+	UsersMAC string `json:"usersMac,omitempty"`
+	TLS      string `json:"tls,omitempty"`
+	TLSMAC   string `json:"tlsMac,omitempty"`
 }
 
 // tokenMAC is the client-token proof the answerer sends the asker: an

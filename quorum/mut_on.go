@@ -73,6 +73,7 @@ var Mutations = []string{
 	"no_term_cap",                // the witness takes a vote that jumps the terms
 	"controller_no_term_cap",     // a controller's voter takes a vote that jumps the terms
 	"hello_unbound",              // the client-token MAC binds no names or direction: a reflected question passes
+	"creds_unbound",              // the credential check's MAC leaves the digest out, so differing users files read as the same (#708)
 	"term_cap_narrow",            // the term-jump cap is 2^20: an isolated controller crosses it in about 50 days and is refused for good
 	"state_owner_unchecked",      // a controller starts over a state file another member (or another pair) wrote
 	"config_differs_campaigns",   // a controller campaigns while its peer's hello names another configuration of the pair

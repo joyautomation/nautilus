@@ -81,6 +81,10 @@ type Options struct {
 	// skips the comparison.
 	Config string
 	Caps   []string
+	// Credentials, when set, is read at every hello and compared with the
+	// peer's (#708, report only): EventUsersDiffer, EventTLSDiffers.
+	// Nil: neither part.
+	Credentials func() Credentials
 	// Box is the fingerprint of the box this controller runs on
 	// (BoxFingerprint), stamped in the state file. A file written on
 	// another box is treated as lost (box.go, #1029). "": no check.
@@ -148,6 +152,12 @@ const (
 	// the pair (Detail says so), or "same" once it matches again. While
 	// it differs, a controller that does not lead does not campaign.
 	EventConfigDiffers EventKind = "redundancy.config-differs"
+	// EventUsersDiffer and EventTLSDiffers: the credential check (#708)
+	// found the pair's users files, or its tag API certificates, not the
+	// same, or one unreadable (Detail is the message), or "" once they
+	// match again (or neither has any). Report only.
+	EventUsersDiffer EventKind = "redundancy.credentials.users"
+	EventTLSDiffers  EventKind = "redundancy.credentials.tls"
 	// EventBoxChanged: the voter state was written on another box (#1029):
 	// treated as lost, so this controller starts uncommissioned. Detail
 	// says what changed and how to tell a NIC swap from a clone.
@@ -207,6 +217,8 @@ type Status struct {
 	// controller is still uncommissioned.
 	RecommissionNeeded bool
 	ClientToken        ClientToken
+	// Users and TLS are what the credential check (#708) last found.
+	Users, TLS CredState
 	// StateWriteError is the last state write's error, "" while writes
 	// succeed.
 	StateWriteError string
@@ -273,6 +285,8 @@ type Elector struct {
 	helloDups  uint64
 	helloDupAt time.Time
 	token      ClientToken
+	users, tls CredState // the credential check (#708)
+	usersMsg   string    // the users condition last raised (it names who can't read)
 	writeErr   string
 	mismatch   map[string]string // the last lease-mismatch report per voter, to report each change once
 	durable    uint64            // the highest Seq known on disk
@@ -1011,9 +1025,24 @@ func (e *Elector) serveHello(w http.ResponseWriter, r *http.Request) {
 	}
 	self := e.selfInfo()
 	w.Header().Set("Content-Type", "application/json")
+	cr := e.credentials()
+	us := credOK
+	if cr.UsersErr != "" {
+		us = credUnreadable
+	}
 	_ = json.NewEncoder(w).Encode(helloAnswer{Node: string(e.o.Self), MAC: tokenMAC(e.o.Token, c, e.o.Peer, e.o.Self, e.o.ClientToken),
 		Config: self.Config, Nonce: strconv.FormatUint(self.Nonce, 16), Caps: self.Caps,
-		InfoMAC: infoMAC(e.o.Token, c, e.o.Peer, e.o.Self, self)})
+		InfoMAC: infoMAC(e.o.Token, c, e.o.Peer, e.o.Self, self),
+		Users:   us, UsersMAC: credMAC(e.o.Token, c, e.o.Peer, e.o.Self, "users", us, cr.Users),
+		TLS: credOK, TLSMAC: credMAC(e.o.Token, c, e.o.Peer, e.o.Self, "tls", credOK, cr.TLS)})
+}
+
+// credentials reads this controller's credentials now (Options.Credentials).
+func (e *Elector) credentials() Credentials {
+	if e.o.Credentials == nil {
+		return Credentials{}
+	}
+	return e.o.Credentials()
 }
 
 // helloEvery is the hello's interval: 16 leases, at least 5 s.
@@ -1056,6 +1085,7 @@ func (e *Elector) checkToken(ctx context.Context) {
 			e.heard(pi)
 		}
 	}
+	e.checkCredentials(c, h)
 	got := TokenDiffers
 	if sameMAC(h.MAC, tokenMAC(e.o.Token, c, e.o.Self, e.o.Peer, e.o.ClientToken)) {
 		got = TokenSame
@@ -1073,6 +1103,62 @@ func (e *Elector) checkToken(ctx context.Context) {
 	case changed:
 		e.log.Info("redundancy: the peer holds the same client token")
 	}
+}
+
+// checkCredentials judges the peer's credential answer for challenge c
+// against this controller's own, read now (so a users file edited on one
+// box shows within one hello), and reports each part that changed: an
+// event (the banner's condition) and a log line. Report only (#708).
+func (e *Elector) checkCredentials(c string, h helloAnswer) {
+	own := e.credentials()
+	users := judgeCred(e.o.Token, c, e.o.Self, e.o.Peer, "users", h.Users, h.UsersMAC, own.Users, own.UsersErr)
+	tls := judgeCred(e.o.Token, c, e.o.Self, e.o.Peer, "tls", h.TLS, h.TLSMAC, own.TLS, "")
+	msg := e.usersMessage(users, own.UsersErr)
+	e.mu.Lock()
+	uChanged := users != CredUnknown && (users != e.users || msg != e.usersMsg)
+	tChanged := tls != e.tls
+	e.users, e.tls = users, tls
+	if uChanged {
+		e.usersMsg = msg
+		e.event(Event{Kind: EventUsersDiffer, Detail: msg})
+	}
+	e.mu.Unlock()
+	if uChanged {
+		if msg != "" {
+			e.log.Error("redundancy: " + msg)
+		} else {
+			e.log.Info("redundancy: the peer's users file matches this controller's", "state", users.String())
+		}
+	}
+	if tChanged && tls != CredUnknown {
+		msg := ""
+		if tls == CredDiffers {
+			msg = "the tag API's TLS certificates differ between " + string(e.o.Self) + " and " + string(e.o.Peer) + ": expected for a few minutes while a renewed certificate is copied to both; otherwise copy the same certificate and key to both controllers, or a standby cannot forward to the leader"
+		}
+		e.mu.Lock()
+		e.event(Event{Kind: EventTLSDiffers, Detail: msg})
+		e.mu.Unlock()
+		if msg != "" {
+			e.log.Warn("redundancy: " + msg)
+		} else {
+			e.log.Info("redundancy: the peer serves the same TLS certificate", "state", tls.String())
+		}
+	}
+}
+
+// usersMessage is the operator's text for a users-file state ("" when the
+// files match, or neither controller has users).
+func (e *Elector) usersMessage(st CredState, ownErr string) string {
+	switch st {
+	case CredDiffers:
+		return "the users files differ between " + string(e.o.Self) + " and " + string(e.o.Peer) + ": copy the same users.json to both controllers (scp it into the state directory; each reloads it within a second), and never add users separately on each box: each box salts its own hashes, so the same password still makes a different file. Until then a user may be refused, or still let in, after a takeover"
+	case CredUnreadable:
+		if ownErr != "" {
+			return "this controller (" + string(e.o.Self) + ") cannot read its users file, so the pair's users cannot be compared: " + ownErr
+		}
+		return "the peer controller (" + string(e.o.Peer) + ") cannot read its users file, so the pair's users cannot be compared: see its log"
+	}
+	return ""
 }
 
 // Recommission is the operator's way out of EventRecommissionNeeded
@@ -1148,7 +1234,7 @@ func (e *Elector) Status() Status {
 		Commissioned: st.Incarnation != 0, Gen: st.Gen, Incarnation: st.Incarnation,
 		PendingGen: st.PendingGen, PendingInc: st.PendingInc, Floor: st.Floor, KnownFloor: e.a.KnownFloor(),
 		WitnessIncarnation: e.witInc, WitnessAge: -1, PeerAge: -1,
-		RecommissionNeeded: e.needOp && st.Incarnation == 0, ClientToken: e.token,
+		RecommissionNeeded: e.needOp && st.Incarnation == 0, ClientToken: e.token, Users: e.users, TLS: e.tls,
 		StateWriteError: e.writeErr, Acquisitions: e.acquired, Duplicates: e.dupSeen,
 		ConfigDiffers: e.cfgDiffers, HelloDuplicates: e.helloDups, BoxChanged: e.boxChanged, BoxPending: e.boxPending,
 	}

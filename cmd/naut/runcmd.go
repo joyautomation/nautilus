@@ -287,7 +287,9 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	// last leader saved. Outside a cluster the elector is standalone
 	// (always leader) and the retain store is the JSON file — the same
 	// manifest runs on a bench and as a replica set.
-	el, pair, err := electorFor(proj, addr, dir)
+	deps := osPairDeps()
+	deps.creds = pairCredentials(proj, dir, tlsSrc, os.Getenv)
+	el, pair, err := electorWith(proj, addr, dir, deps)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "naut run: redundancy:", err)
 		return 1

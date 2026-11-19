@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/joyautomation/nautilus/alarm"
+	"github.com/joyautomation/nautilus/auth/users"
 	"github.com/joyautomation/nautilus/internal/project"
 	"github.com/joyautomation/nautilus/leader"
 	"github.com/joyautomation/nautilus/oplog"
@@ -92,6 +93,9 @@ type pairDeps struct {
 	// with it).
 	box  func(links []string) (string, error)
 	dial func(ctx context.Context, network, addr string) (net.Conn, error)
+	// creds, when set, is this controller's credentials, read at every
+	// hello (pairCredentials, #708).
+	creds func() node.Credentials
 }
 
 func osPairDeps() pairDeps {
@@ -177,6 +181,7 @@ func newPairMember(r *project.RedundancyConfig, apiAddr, dir string, d pairDeps)
 		o.BoxFunc = func() string { b, _ := d.box(links); return b }
 	}
 	o.Dial = d.dial
+	o.Credentials = d.creds
 	if err := os.MkdirAll(filepath.Dir(o.StatePath), 0o750); err != nil {
 		return nil, fmt.Errorf("state directory: %w", err)
 	}
@@ -328,12 +333,47 @@ func apiOn(peerAddr, apiAddr string) string {
 // onEvent shows the pair's conditions where an operator looks:
 // /api/cluster's warnings and the dashboard's banner (leader.Status).
 func (m *pairMember) onEvent(ev node.Event) {
-	if ev.Kind == node.EventConfigDiffers {
+	switch ev.Kind {
+	case node.EventConfigDiffers:
 		msg := ev.Detail
 		if msg == "same" {
 			msg = ""
 		}
 		m.q.SetCondition("config-differs", msg)
+	case node.EventUsersDiffer:
+		m.q.SetCondition("credentials-users", ev.Detail) // "" clears it
+	case node.EventTLSDiffers:
+		m.q.SetCondition("credentials-tls", ev.Detail)
+	}
+}
+
+// pairCredentials is what a pair member compares with its peer at every
+// hello (#708, report only): the users file's digest, when the manifest
+// names users (read anew each time, so an edit shows within one hello),
+// and the tag API certificate's leaf (tlsSrc nil: no server.tls).
+func pairCredentials(proj *project.Project, dir string, tlsSrc *server.CertSource, getenv func(string) string) func() node.Credentials {
+	var path string
+	var pathErr error
+	if proj.Auth != nil && proj.Auth.HasUsers() {
+		path, pathErr = usersFile(proj.AuthStateDir, proj.Name, dir, dir != "", getenv)
+	}
+	return func() node.Credentials {
+		var c node.Credentials
+		switch {
+		case pathErr != nil:
+			c.UsersErr = pathErr.Error()
+		case path != "":
+			d, err := users.Digest(path)
+			if err != nil {
+				c.UsersErr = err.Error()
+			} else {
+				c.Users = d
+			}
+		}
+		if tlsSrc != nil {
+			c.TLS = tlsSrc.Pin()
+		}
+		return c
 	}
 }
 

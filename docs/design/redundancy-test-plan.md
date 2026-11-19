@@ -183,6 +183,7 @@ case caught it. A mutation joins the nightly run in the PR that builds the rule 
 | a controller starts over a state file another member, or another pair, wrote | design §2, §6.2 | 3b-1 (review, `state_owner_unchecked`) |
 | a controller campaigns while its peer's hello names another configuration of the pair | design §2 (F30) | 3b-2b (`config_differs_campaigns`) |
 | two processes behind the peer's name (nonces N1, N2, N1 at the hello) raise nothing | design §2 (F30) | 3b-2b (`hello_duplicate_unseen`) |
+| the credential check's MAC leaves the digest out, so different users files read as the same | design §6.1, credential set (#708) | credential digest (`creds_unbound`) |
 | a controller votes from a state file written on another box (a cloned disk; red in both #1029 shapes end to end) | design §2, #1029 | #1029 layer 1 (`box_unchecked`) |
 | no switch hold-off: a stray copy answering on and off switches the pair every lease | design §3.1, when a switch is proposed | 2 (handshake) |
 | a restarted controller counts its adopted incarnation at once (no quiet period owed) | design §3.1, the quiet period | 2 (handshake) |
