@@ -166,10 +166,9 @@ func TestPortDeviceReadsAndChecksIdentity(t *testing.T) {
 	if st.Fld[0].F != -12.5 || st.Fld[1].I != -3 || !st.Fld[2].B || !st.Fld[3].B || st.Fld[4].B || !st.Fld[5].B {
 		t.Errorf("members %+v, want Level -12.5, Temperature -3, Ready, SP1, not SP2, PdValid", st.Fld)
 	}
-	// level100 has process data out, so until the port is armed it reads
-	// AwaitingRearm and the fault stays (see the gate test); its data decode.
-	if v["LEVEL1__Identity"] != int64(iolink.AwaitingRearm) || v["LEVEL1__IdentityFault"] != true {
-		t.Errorf("identity %v fault %v, want AwaitingRearm", v["LEVEL1__Identity"], v["LEVEL1__IdentityFault"])
+	// A first check that is Ok arms the port: no fault.
+	if v["LEVEL1__Identity"] != int64(iolink.Ok) || v["LEVEL1__IdentityFault"] != false {
+		t.Errorf("identity %v fault %v, want Ok", v["LEVEL1__Identity"], v["LEVEL1__IdentityFault"])
 	}
 	if q := ps.quality(map[string]nio.Quality{}, nil); len(q) != 0 {
 		t.Errorf("a good port has quality %v, want no entry", q)
@@ -214,8 +213,8 @@ func TestPortDeviceReadsAndChecksIdentity(t *testing.T) {
 	}
 }
 
-// Outputs: nothing until the port is armed by a pulse on __Rearm, and
-// then the program's current values; a wrong device gets nothing and the
+// Outputs: a port whose first check was not Ok sends nothing until it is
+// armed by a pulse on __Rearm, and then the program's current values; a wrong device gets nothing and the
 // master's valid flag goes false; the right one back is sent nothing until
 // the next pulse, which sends the CURRENT values; the image goes out before
 // the flag; a pulse with the wrong device on the port is refused.
@@ -257,8 +256,10 @@ func TestPortDeviceOutputsFollowTheGate(t *testing.T) {
 			t.Errorf("%s: identity %v fault %v, want %v / %v", step, v["LEVEL1__Identity"], v["LEVEL1__IdentityFault"], int64(want), fault)
 		}
 	}
-	// The right device, but the port has not been armed: quiet, and the
-	// fault stays active so the operator sees why.
+	// The first check is a wrong device, so the port is not armed, and the
+	// right one appearing does not arm it: quiet, with the fault active so
+	// the operator sees why.
+	identity("first check wrong", take(levelDevice+100), iolink.WrongDevice, true)
 	identity("right device, unarmed", take(levelDevice), iolink.AwaitingRearm, true)
 	check("first push", must(false, 0, false, false), nil, false)
 	check("values set, never armed", must(true, 5, true, false), nil, false)
@@ -383,22 +384,58 @@ func TestPortWithoutIDsIsUncheckedAndWarned(t *testing.T) {
 	ps := newPorts(s.devices[0].ports)
 	v := nio.Values{"M.Port1_Pdin": "FE0DFFD1"}
 	ps.take(v)
-	if v["LEVEL1__Identity"] != int64(iolink.AwaitingRearm) || v["LEVEL1__IdentityFault"] != true {
-		t.Errorf("identity %v fault %v, want AwaitingRearm until the pulse", v["LEVEL1__Identity"], v["LEVEL1__IdentityFault"])
+	if v["LEVEL1__Identity"] != int64(iolink.Unchecked) || v["LEVEL1__IdentityFault"] != false {
+		t.Errorf("identity %v fault %v, want Unchecked and no fault (the first check arms it)", v["LEVEL1__Identity"], v["LEVEL1__IdentityFault"])
 	}
 	if _, ok := v["LEVEL1"]; !ok {
 		t.Error("an unchecked port's data was not decoded")
 	}
 	drv := &fakeDriver{}
 	_ = ps.write(drv, nio.Values{"LEVEL1_Teach": true, "LEVEL1_Mode": int64(5), "LEVEL1_Lock": true, "LEVEL1__Rearm": false})
-	_ = ps.write(drv, nio.Values{"LEVEL1_Teach": true, "LEVEL1_Mode": int64(5), "LEVEL1_Lock": true, "LEVEL1__Rearm": true})
+	_ = ps.write(drv, nio.Values{"LEVEL1_Teach": true, "LEVEL1_Mode": int64(5), "LEVEL1_Lock": true, "LEVEL1__Rearm": false})
 	if got := drv.got[1]["M_Port1_Pdout"]; got != "8B" {
-		t.Errorf("an unchecked port was sent %v after the pulse, want 8B", got)
+		t.Errorf("an unchecked port was sent %v on the second push, want 8B (driven as told)", got)
 	}
-	v = nio.Values{"M.Port1_Pdin": "FE0DFFD1"}
-	ps.take(v)
-	if v["LEVEL1__Identity"] != int64(iolink.Unchecked) || v["LEVEL1__IdentityFault"] != false {
-		t.Errorf("armed: identity %v fault %v, want Unchecked and no fault", v["LEVEL1__Identity"], v["LEVEL1__IdentityFault"])
+}
+
+// A cold start with the right device on the port, and a takeover (a new
+// leader builds new ports and its first check is Ok), arm the port with no
+// pulse: the first push sends the program's current values, image first.
+func TestPortDeviceColdStartAndTakeoverNeedNoPulse(t *testing.T) {
+	s := pfMaster(t, nil)
+	for _, start := range []string{"cold start", "takeover"} {
+		ps := portsOf(t, s) // a takeover is a new driver: new ports
+		v := masterVals(levelVendor, levelDevice, levelImage, true)
+		ps.take(v)
+		if v["LEVEL1__Identity"] != int64(iolink.Ok) || v["LEVEL1__IdentityFault"] != false {
+			t.Errorf("%s: identity %v fault %v, want Ok", start, v["LEVEL1__Identity"], v["LEVEL1__IdentityFault"])
+		}
+		drv := &fakeDriver{}
+		vals := nio.Values{"LEVEL1_Teach": true, "LEVEL1_Mode": int64(5), "LEVEL1_Lock": true, "LEVEL1__Rearm": false}
+		if err := ps.write(drv, vals); err != nil {
+			t.Fatal(err)
+		}
+		// The master's driver records its first push as the state of the
+		// world and never sends it: the image waits for the second.
+		if got := drv.got[0]; got["M_Port1_PdoBytes"] != nil || got["M_Port1_PdoValid"] != false {
+			t.Errorf("%s: first push pdo %v valid %v, want none / false (held back for the driver's baseline)", start, got["M_Port1_PdoBytes"], got["M_Port1_PdoValid"])
+		}
+		_ = ps.write(drv, vals)
+		if got := drv.got[1]; got["M_Port1_PdoBytes"] != "8b" || got["M_Port1_PdoValid"] != false {
+			t.Errorf("%s: second push pdo %v valid %v, want 8b / false (the image first)", start, got["M_Port1_PdoBytes"], got["M_Port1_PdoValid"])
+		}
+		_ = ps.write(drv, vals)
+		if got := drv.got[2]; got["M_Port1_PdoValid"] != true {
+			t.Errorf("%s: the flag never followed the image", start)
+		}
+		// A break seen while running does need the pulse.
+		v = masterVals(levelVendor, levelDevice+100, levelImage, true)
+		ps.take(v)
+		v = masterVals(levelVendor, levelDevice, levelImage, true)
+		ps.take(v)
+		if v["LEVEL1__Identity"] != int64(iolink.AwaitingRearm) {
+			t.Errorf("%s: after a break, identity %v, want AwaitingRearm", start, v["LEVEL1__Identity"])
+		}
 	}
 }
 

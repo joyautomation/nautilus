@@ -107,24 +107,16 @@ END_PROGRAM
 			t.Fatal(err)
 		}
 	}
-	if vals := tick(); vals["LEVEL1__Identity"] != int64(4) {
-		t.Fatalf("the sensor under naut test reads identity %v, want AwaitingRearm (4): %v", vals["LEVEL1__Identity"], vals)
+	if vals := tick(); vals["LEVEL1__Identity"] != int64(0) {
+		t.Fatalf("the sensor under naut test reads identity %v, want Ok (0): the first check arms the port: %v", vals["LEVEL1__Identity"], vals)
 	}
-	push(false, 0, false, false)
+	push(false, 0, false, false) // the baseline push of the face; the gate sends the current values on it
 	push(true, 5, true, false)
 	tick()
-	if str("D_Port1_PdoBytes") != "" || flag() {
-		t.Fatalf("an unarmed port reached the device: pdo %q valid %v", str("D_Port1_PdoBytes"), flag())
-	}
-	push(true, 5, true, true) // the pulse
-	tick()
 	if got := str("D_Port1_PdoBytes"); got != "8b" {
-		t.Fatalf("after the pulse the device holds %q, want 8b: the port's command tags must reach the device through the gate", got)
+		t.Fatalf("the device holds %q, want 8b: the port's command tags must reach the device through the gate", got)
 	}
-	if flag() {
-		t.Error("the valid flag came with the image: it follows a push later")
-	}
-	push(true, 5, true, true)
+	push(true, 5, true, false)
 	tick()
 	if !flag() {
 		t.Error("the valid flag never came")

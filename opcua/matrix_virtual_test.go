@@ -288,7 +288,8 @@ func TestVirtualMasterByteArrayWrite(t *testing.T) {
 // integers; a master row with a port derives the sensor from its IODD, the
 // driver reads it through the real wire, identity-checks it, and drives the
 // sensor's process data out through the gate, the image first and the
-// master's PDO Valid after, until the device is swapped.
+// master's PDO Valid after, with no pulse (the first check was Ok), until
+// the device is swapped.
 func TestPortDeviceThroughAVirtualMaster(t *testing.T) {
 	// The sensor is swapped for another model after 60 scans (6 s).
 	v := startVirtual(t, matrixServer{
@@ -322,6 +323,22 @@ D_Port1_PdiValid := TRUE;`,
 		t.Fatal(err)
 	}
 	od := set.OPCUADevices()[0]
+	probeCtx, cancelProbe := context.WithCancel(context.Background())
+	t.Cleanup(cancelProbe)
+	// A second driver on the same nodes reads what reached the master, and
+	// tells when the master serves the sensor's ids: the port's FIRST check
+	// arms it only if it is Ok, and the plant serves zeros until its first scan.
+	probe, err := opcua.New(v.url(), opcua.Manifest{Namespaces: od.Manifest.Namespaces, Tags: []opcua.TagBinding{
+		{Name: "Pdo", NodeID: "ns=1;s=IOLM/Port 1/Attached Device/PDO Data Byte String", Type: opcua.ByteString},
+		{Name: "Valid", NodeID: "ns=1;s=IOLM/Port 1/Attached Device/PDO Valid", Type: "Boolean"},
+		{Name: "Vendor", NodeID: "ns=1;s=IOLM/Port 1/Attached Device/Vendor ID", Type: "UInt32"},
+	}}, opcua.WithName("probe"), opcua.WithScanRate(100*time.Millisecond), opcua.WithSecurity("None", "None"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	probe.Start(probeCtx)
+	t.Cleanup(probe.Stop)
+	waitUntil(t, "the master to serve the sensor's ids", 20*time.Second, func() bool { pv, _ := probe.ReadInputs(); return pv["Vendor"] == int64(65261) })
 	d, err := opcua.New(v.url(), od.Manifest, opcua.WithName("M"), opcua.WithOnlineTag("M__Online"),
 		opcua.WithScanRate(100*time.Millisecond), opcua.WithTimeout(2*time.Second), opcua.WithSecurity("None", "None"))
 	if err != nil {
@@ -338,39 +355,24 @@ D_Port1_PdiValid := TRUE;`,
 	waitUntil(t, "the port device to be read through the wire", 30*time.Second, func() bool {
 		vals, _ := w.ReadInputs()
 		_, ok := vals["LEVEL1"]
-		return ok && vals["LEVEL1__Identity"] == int64(iolink.AwaitingRearm)
+		return ok && vals["LEVEL1__Identity"] == int64(iolink.Ok)
 	})
-	// The right device, decoded, and the port quiet until it is armed.
-	if vals, _ := w.ReadInputs(); vals["LEVEL1__IdentityFault"] != true {
-		t.Errorf("fault %v: an unarmed port keeps the fault active", vals["LEVEL1__IdentityFault"])
+	// The right device on the first check: decoded, no fault, and armed
+	// with no pulse (a power-up never needs one).
+	if vals, _ := w.ReadInputs(); vals["LEVEL1__IdentityFault"] != false {
+		t.Errorf("fault %v with the right device on the first check", vals["LEVEL1__IdentityFault"])
 	}
 
-	// Drive it: the first push is the baseline, then every item changes.
+	// Drive it: the first check was Ok, so the port is armed and sends the
+	// program's current values.
 	push := func(teach bool, mode int64, lock, rearm bool) {
 		t.Helper()
 		if err := w.WriteOutputs(nio.Values{"LEVEL1_Teach": teach, "LEVEL1_Mode": mode, "LEVEL1_Lock": lock, "LEVEL1__Rearm": rearm}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	push(false, 0, false, false)
-	push(true, 5, true, false)
-	// Read what reached the master through a second driver on the same nodes.
-	probe, err := opcua.New(v.url(), opcua.Manifest{Namespaces: od.Manifest.Namespaces, Tags: []opcua.TagBinding{
-		{Name: "Pdo", NodeID: "ns=1;s=IOLM/Port 1/Attached Device/PDO Data Byte String", Type: opcua.ByteString},
-		{Name: "Valid", NodeID: "ns=1;s=IOLM/Port 1/Attached Device/PDO Valid", Type: "Boolean"},
-	}}, opcua.WithName("probe"), opcua.WithScanRate(100*time.Millisecond), opcua.WithSecurity("None", "None"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	probe.Start(ctx)
-	t.Cleanup(probe.Stop)
-	waitUntil(t, "the probe's first read", 10*time.Second, func() bool { pv, _ := probe.ReadInputs(); return pv["Valid"] != nil })
-	if pv, _ := probe.ReadInputs(); pv["Pdo"] != nil && pv["Pdo"] != "" || pv["Valid"] != false {
-		t.Errorf("an unarmed port reached the master: pdo %v valid %v", pv["Pdo"], pv["Valid"])
-	}
-	push(true, 5, true, true) // the pulse
 	waitUntil(t, "the image 8b with the valid flag on the master", 20*time.Second, func() bool {
-		push(true, 5, true, true) // the runtime pushes while anything changes; here, until it lands
+		push(true, 5, true, false) // the runtime pushes while anything changes; here, until it lands
 		pv, _ := probe.ReadInputs()
 		return pv["Pdo"] == "8b" && pv["Valid"] == true
 	})

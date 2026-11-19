@@ -156,22 +156,57 @@ func TestOutGateStartsClosed(t *testing.T) {
 	if err := g.Rearm(); err == nil {
 		t.Error("Rearm before the first identity check was accepted")
 	}
-	g.SetState(Ok)
-	if p := plan(t, g); p.Valid {
-		t.Errorf("plan %+v", p)
+	if p := plan(t, g); p.Valid || p.Image != nil {
+		t.Errorf("before the first check: plan %+v", p)
 	}
 }
 
-// Unchecked drives like Ok, but is armed the same way.
-func TestOutGateUncheckedNeedsRearmToo(t *testing.T) {
-	g := gate(t, Unchecked)
+// The first check arms the port when it is Ok: a power-up, or a takeover (a
+// new leader builds a new gate), needs no pulse, and sends the program's
+// current values.
+func TestOutGateFirstOkArmsIt(t *testing.T) {
+	for _, first := range []State{Ok, Unchecked} {
+		g := gate(t, NoDevice)
+		setAll(t, g, true, 5, true)
+		g.SetState(first)
+		if !g.Armed() {
+			t.Errorf("a first check of %v did not arm the port", first)
+		}
+		if p := plan(t, g); !p.Valid || !bytes.Equal(p.Image, []byte{0x8B}) {
+			t.Errorf("first %v: plan %+v, want valid 8B with no pulse", first, p)
+		}
+	}
+}
+
+// A first check that is not Ok does not arm it, and the right device
+// appearing later does not either: only a pulse does.
+func TestOutGateFirstWrongNeedsAPulse(t *testing.T) {
+	for _, first := range []State{WrongDevice, NoDevice} {
+		g := gate(t, NoDevice)
+		setAll(t, g, true, 5, true)
+		g.SetState(first)
+		g.SetState(Ok)
+		if g.Armed() {
+			t.Errorf("first check %v, then Ok: armed with no pulse", first)
+		}
+		if p := plan(t, g); p.Valid || p.Image != nil {
+			t.Errorf("first check %v, then Ok: plan %+v, want nothing until Rearm", first, p)
+		}
+		if err := g.Rearm(); err != nil {
+			t.Fatal(err)
+		}
+		if p := plan(t, g); !p.Valid || !bytes.Equal(p.Image, []byte{0x8B}) {
+			t.Errorf("after Rearm: plan %+v", p)
+		}
+	}
+}
+
+// Unchecked drives like Ok: armed by its first check, disarmed by nothing
+// (there is no identity to lose), and sent the program's values.
+func TestOutGateUncheckedDrivesLikeOk(t *testing.T) {
+	g := gate(t, NoDevice)
 	setAll(t, g, false, 0, true)
-	if p := plan(t, g); p.Valid {
-		t.Errorf("unchecked and never armed: plan %+v", p)
-	}
-	if err := g.Rearm(); err != nil {
-		t.Fatal(err)
-	}
+	g.SetState(Unchecked)
 	if p := plan(t, g); !p.Valid || !bytes.Equal(p.Image, []byte{0x80}) {
 		t.Errorf("plan %+v, want valid 80", p)
 	}

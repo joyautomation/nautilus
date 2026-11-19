@@ -23,8 +23,8 @@ const (
 	Unchecked
 	// AwaitingRearm is not a result of Check: the identity is Ok (or
 	// Unchecked) but a port with process data out has not been re-armed
-	// since it started or since the device went wrong, so it sends
-	// nothing. It is what the identity tag reads then, and it is a fault
+	// since its device went wrong (or since a first check that was not
+	// Ok), so it sends nothing. It is what the identity tag reads then, and it is a fault
 	// (the alarm stays active) until the pulse on __Rearm.
 	AwaitingRearm
 )
@@ -85,11 +85,14 @@ type OutPlan struct {
 // given and sends it to whatever device is on the port:
 //
 //   - nothing is sent, and Valid is false, until the port has been
-//     ARMED, which only an explicit Rearm does (a pulse on the port's
-//     __Rearm tag, journalled like any write). That is the normal
-//     industrial "confirm after a device swap", and it holds at start too:
-//     a controller that has just come up has not been told the device on
-//     the port is the one the program means to drive;
+//     ARMED. The FIRST identity check arms it when it is Ok (or
+//     Unchecked): at a power-up or a takeover (a new leader builds a new
+//     gate) an Ok identity is the device the program was written for, so
+//     neither needs a pulse. After that only an explicit Rearm arms it (a
+//     pulse on the port's __Rearm tag, journalled like any write): the
+//     normal industrial "confirm after a device swap";
+//   - a port whose first check is Wrong or NoDevice is not armed, and stays
+//     so when the right device appears, until Rearm;
 //   - while the identity is not Ok (or Unchecked), nothing is sent, Valid
 //     is false, and the port is disarmed: not zeros either, since "off" is
 //     not always safe. When the right device is back the port stays quiet
@@ -108,22 +111,29 @@ type OutGate struct {
 	state  State
 	values []any // the program's current value per item; nil is zero
 	armed  bool
+	// checked is set by the first SetState: the check that may arm.
+	checked bool
 }
 
 // NewOutGate is a gate for a port device whose process data out is out,
-// starting in state s (the port has not been checked yet: pass the first
-// Check, or NoDevice to hold everything until it has) and not armed.
+// starting in state s (the port has not been checked yet: pass NoDevice to
+// hold everything until it has) and not armed; the first SetState decides.
 func NewOutGate(out *iodd.Image, s State) *OutGate {
 	return &OutGate{out: out, state: s, values: make([]any, len(out.Items))}
 }
 
-// SetState records the identity check. Leaving a driving state disarms the
-// port.
+// SetState records the identity check. The first one arms the port when it
+// is Ok or Unchecked; leaving a driving state disarms it.
 func (g *OutGate) SetState(s State) {
+	first := !g.checked
+	g.checked = true
 	if g.state.Drives() && !s.Drives() {
 		g.armed = false
 	}
 	g.state = s
+	if first && s.Drives() {
+		g.armed = true
+	}
 }
 
 // Drives reports whether the identity now allows the port to be driven.

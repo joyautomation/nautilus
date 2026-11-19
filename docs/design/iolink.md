@@ -314,17 +314,23 @@ whatever device is on the port, including a wrong one. So not writing is
 not safe, and a port with process data out is **armed explicitly**
 (`iolink.OutGate`):
 
-- a port starts **not armed**, and so does a port whose device went
-  wrong: it sends **nothing** (no image, not zeros either: off is not
-  always safe) and, where the profile has `pd-out-valid`, drives it
-  **false**, so the master stops sending the last image and the device
-  falls back to its own fail-safe values;
-- it is armed by a **pulse on `<Port device>__Rearm`** (a writable BOOL
-  tag, false then true): the "confirm after a device swap" an operator
-  does, journalled by the audit journal like any tag write (who, when,
-  from where), and logged by the adapter. A pulse while the device on the
-  port is not the one expected is **refused**, naming the state, and
-  changes nothing;
+- a port that is **not armed** sends **nothing** (no image, not zeros
+  either: off is not always safe) and, where the profile has
+  `pd-out-valid`, drives it **false**, so the master stops sending the
+  last image and the device falls back to its own fail-safe values;
+- the **first identity check arms the port when it is Ok** (or
+  Unchecked): at a power-up, and at a takeover (a new leader builds new
+  ports and checks again), an Ok identity is the device the program was
+  written for, so neither needs a pulse. A port whose first check is
+  `WrongDevice` or `NoDevice` is not armed, and the right device
+  appearing later does not arm it;
+- after that, a port is disarmed when the device on it stops being the
+  right one **while running** (a swap), and only a **pulse on
+  `<Port device>__Rearm`** arms it again (a writable BOOL tag, false then
+  true): the "confirm after a device swap" an operator does, journalled by
+  the audit journal like any tag write (who, when, from where), and logged
+  by the adapter. A pulse while the device on the port is not the one
+  expected is **refused**, naming the state, and changes nothing;
 - an armed port sends the program's **current** value of every item (the
   image first and, where there is one, `pd-out-valid` true a push later,
   so the master holds the new image before it is told it is valid), and
@@ -333,17 +339,21 @@ not safe, and a port with process data out is **armed explicitly**
   stalls nothing: the pulse takes the values it holds;
 - until it is armed the identity reads **`AwaitingRearm`** (4) and
   `__IdentityFault` stays true, so the alarm stays active and the operator
-  sees why the port is quiet. A program that wants a port armed at start
-  pulses `__Rearm` itself: the controller has not been told the device is
-  the one the program means to drive;
-- `Unchecked` (no id points) is armed the same way, then writes as told,
-  since nothing can be compared; `naut check` says so;
+  sees why the port is quiet;
+- `Unchecked` (no id points) is armed by its first check and then writes
+  as told, since nothing can be compared; `naut check` says so;
+- the master's driver takes the first push after it starts as the state
+  of the world and never sends it, so a port armed by its first check
+  sends its image with the next push, a scan later, not with the first;
 - a port with no process data out has no gate, no `__Rearm` and no
   `AwaitingRearm`.
 
 The pulse is seen as a push in which `__Rearm` is true after one in which
 it was false (the first push after a start is only the state of the
-world); a pulse shorter than a scan is not seen. Under `naut test` the
+world); a pulse shorter than a scan is not seen. A master that reports no
+device on a port while the port starts up (IO-Link ports take a moment) can
+make a power-up's first check `NoDevice`: that port then needs the pulse,
+once. Under `naut test` the
 in-process face sends a port's outputs through the same gate.
 
 A master profile with no `pd-out-valid` cannot do the first step's second

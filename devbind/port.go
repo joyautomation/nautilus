@@ -548,6 +548,7 @@ type portOut struct {
 	// state of the world, a pulse is a later push that has it true after one
 	// that had it false.
 	rearmSeen, rearmPrev bool
+	started              bool // a push has been seen: see push
 	pending              bool // the image is going out this call: the valid flag follows the next
 	valid                bool // the valid flag last handed to the master
 }
@@ -597,7 +598,14 @@ func (o *portOut) push(vals nio.Values, into nio.Values) error {
 	if err != nil {
 		fail(fmt.Errorf("%s: %w", o.Name, err))
 	}
-	if plan.Image != nil && o.outC != "" {
+	// The master's driver takes the FIRST push after it starts as the state
+	// of the world, records it and never sends it (its start-up baseline), so
+	// an image planned on this push would be lost. A port armed by its first
+	// check (a power-up, a takeover) has one ready now: it goes with the
+	// next push, a scan later.
+	firstPush := !o.started
+	o.started = true
+	if plan.Image != nil && o.outC != "" && !firstPush {
 		carrier, err := iolink.Carrier(o.spec.PDOut.Form, plan.Image)
 		if err != nil {
 			fail(fmt.Errorf("%s: %w", o.Name, err))
@@ -611,6 +619,8 @@ func (o *portOut) push(vals nio.Values, into nio.Values) error {
 		switch {
 		case !plan.Valid:
 			o.pending, o.valid = false, false
+		case firstPush:
+			// the image is held back (above): the flag waits for it
 		case o.valid:
 		case o.pending:
 			o.valid = true
