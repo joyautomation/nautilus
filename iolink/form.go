@@ -25,6 +25,8 @@ import (
 //     than four octets cannot be carried.
 //   - hex: two hex digits per octet, nothing else (no 0x, no spaces); the
 //     text must be exactly octets octets long.
+//   - bytes: the same text, from a point carried as octets on the wire; it
+//     is written back lowercase, as the opcua driver does.
 func Image(form string, v any, octets int) ([]byte, error) {
 	switch form {
 	case devprofile.FormU32:
@@ -43,6 +45,19 @@ func Image(form string, v any, octets int) ([]byte, error) {
 			}
 		}
 		return append([]byte(nil), b[4-octets:]...), nil
+	case devprofile.FormBytes:
+		s, ok := v.(string)
+		if !ok {
+			return nil, fmt.Errorf("bytes: %v (%T) is not hex text", v, v)
+		}
+		if len(s) != 2*octets {
+			return nil, fmt.Errorf("bytes: %q is %d digits; a %d-octet image is %d", s, len(s), octets, 2*octets)
+		}
+		b, err := hex.DecodeString(s)
+		if err != nil {
+			return nil, fmt.Errorf("bytes: %q is not hex digits", s)
+		}
+		return b, nil
 	case devprofile.FormHex:
 		s, ok := v.(string)
 		if !ok {
@@ -57,7 +72,7 @@ func Image(form string, v any, octets int) ([]byte, error) {
 		}
 		return b, nil
 	}
-	return nil, fmt.Errorf("form %q is not %s or %s", form, devprofile.FormU32, devprofile.FormHex)
+	return nil, fmt.Errorf("form %q is not %s, %s or %s", form, devprofile.FormU32, devprofile.FormHex, devprofile.FormBytes)
 }
 
 // Carrier turns a port's process data out image into the value its
@@ -71,13 +86,19 @@ func Carrier(form string, image []byte) (any, error) {
 		var b [4]byte
 		copy(b[4-len(image):], image)
 		return binary.BigEndian.Uint32(b[:]), nil
+	case devprofile.FormBytes:
+		// The lowercase hex the opcua driver reads and writes octets as.
+		if len(image) == 0 {
+			return nil, fmt.Errorf("bytes: an empty image")
+		}
+		return hex.EncodeToString(image), nil
 	case devprofile.FormHex:
 		if len(image) == 0 {
 			return nil, fmt.Errorf("hex: an empty image")
 		}
 		return strings.ToUpper(hex.EncodeToString(image)), nil
 	}
-	return nil, fmt.Errorf("form %q is not %s or %s", form, devprofile.FormU32, devprofile.FormHex)
+	return nil, fmt.Errorf("form %q is not %s, %s or %s", form, devprofile.FormU32, devprofile.FormHex, devprofile.FormBytes)
 }
 
 // u32Of takes the integer a UDINT or DWORD point delivers.

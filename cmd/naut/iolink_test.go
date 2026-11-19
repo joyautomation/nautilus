@@ -197,8 +197,8 @@ func TestIOLinkReadsAtMostMaxSize(t *testing.T) {
 // carried as octets shows its wire type, so a reader sees both.
 func TestDevicesShowIOLinkProvenance(t *testing.T) {
 	for id, want := range map[string][]string{
-		"pepperl-fuchs-ice3": {"iolink: 8 ports", "pd-in Port{n}_PdiBytes as bytes (form: pf §12.2 p. 171)", "pd-out Port{n}_PdoBytes as bytes (form: pf §12.2 p. 172)", "pd-valid Port{n}_PdiValid", "device-id Port{n}_DeviceID", "wire ByteString"},
-		"ifm-al1590":         {"iolink: 8 ports", "pd-in Port{n}_Pdin as hex (form: measured pdin hex text, '0286' is 0x0286)", "pd-out Port{n}_Pdout as hex (form: UNVERIFIED (al1427 p. 168", "vendor-id Port{n}_VendorID"},
+		"pepperl-fuchs-ice3": {"iolink: 8 ports", "pd-in Port{n}_PdiBytes as bytes (form: pf §12.2 p. 171)", "pd-out Port{n}_PdoBytes as bytes (form: pf §12.2 p. 172)", "pd-valid Port{n}_PdiValid", "device-id Port{n}_DeviceID", "wire ByteString", "pd-out-valid Port{n}_PdoValid"},
+		"ifm-al1590":         {"iolink: 8 ports", "pd-in Port{n}_Pdin as hex (form: measured pdin hex text, '0286' is 0x0286)", "pd-out Port{n}_Pdout as hex (form: UNVERIFIED (al1427 p. 168", "vendor-id Port{n}_VendorID", "pd-out-valid: none. With the wrong device on a port this master keeps sending its last process data out to it"},
 		"sick-sig300":        {"iolink: 8 ports", "pd-in Port{n}_PdiBytes as bytes (form: opc30120 ProcessDataInput", "wire ByteArray", "UNVERIFIED"},
 	} {
 		var out bytes.Buffer

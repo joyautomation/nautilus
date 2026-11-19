@@ -37,6 +37,7 @@ points:
   - { name: "P{n}_Hex",    type: STRING, repeat: 2, node-id: "ns=1;s=P{n}/Hex", path: "P{n}/Hex", unverified: true }
   - { name: "P{n}_Oct",    type: STRING, wire: ByteString, repeat: 2, node-id: "ns=1;s=P{n}/Oct", path: "P{n}/Oct", unverified: true }
   - { name: "P{n}_OctOut", type: STRING, wire: ByteArray, repeat: 2, writable: true, node-id: "ns=1;s=P{n}/OctOut", path: "P{n}/OctOut", unverified: true }
+  - { name: "P{n}_OutValid", type: BOOL, repeat: 2, writable: true, node-id: "ns=1;s=P{n}/OV", path: "P{n}/OV", unverified: true }
   - { name: "P{n}_Valid",  type: BOOL,   repeat: 2, node-id: "ns=1;s=P{n}/V", path: "P{n}/V",   unverified: true }
   - { name: "P{n}_Vendor", type: UINT,   repeat: 2, node-id: "ns=1;s=P{n}/Ven", path: "P{n}/Ven", unverified: true }
   - { name: "P{n}_Device", type: UDINT,  repeat: 2, node-id: "ns=1;s=P{n}/Dev", path: "P{n}/Dev", unverified: true }
@@ -62,6 +63,11 @@ func TestIOLinkBlock(t *testing.T) {
 	if bp, err := ParseProfile([]byte(iolinkProfile(bytes)), "test"); err != nil || bp.IOLink.PDIn.Form != FormBytes {
 		t.Fatalf("bytes carriers: %v", err)
 	}
+	// pd-out-valid, with pd-out, is a writable BOOL per port.
+	withOV := strings.Replace(ok, `  pd-valid:`, `  pd-out-valid: "P{n}_OutValid"`+"\n"+`  pd-valid:`, 1)
+	if ov, err := ParseProfile([]byte(iolinkProfile(withOV)), "test"); err != nil || PortPoint(ov.IOLink.PDOutValid, 2) != "P2_OutValid" {
+		t.Fatalf("pd-out-valid: %v", err)
+	}
 	// A wire is for a STRING point, and one of the two byte types.
 	for name, bad := range map[string]string{
 		"wire on a BOOL":  strings.Replace(iolinkProfile(ok), `name: "P{n}_Valid",  type: BOOL,`, `name: "P{n}_Valid",  type: BOOL, wire: ByteString,`, 1),
@@ -85,6 +91,9 @@ func TestIOLinkBlock(t *testing.T) {
 		{"hex on a UDINT", in, `{ point: "P{n}_In", form: hex, doc: "man p. 1" }`, "point P1_In is UDINT"},
 		{"pd-in writable", in, `{ point: "P{n}_Out", form: u32, doc: "man p. 1" }`, "pd-in: point P1_Out is writable"},
 		{"pd-out read-only", out, `{ point: "P{n}_In", form: u32, unverified: true }`, "pd-out: point P1_In is not writable"},
+		{"pd-out-valid not BOOL", `pd-valid: "P{n}_Valid"`, `pd-out-valid: "P{n}_Out"` + "\n  " + `pd-valid: "P{n}_Valid"`, "pd-out-valid: point P1_Out is UDINT"},
+		{"pd-out-valid read-only", `pd-valid: "P{n}_Valid"`, `pd-out-valid: "P{n}_Valid"` + "\n  " + `pd-valid: "P{n}_Valid"`, "pd-out-valid: point P1_Valid is not writable"},
+		{"pd-out-valid without pd-out", "  pd-out: " + out + "\n", `  pd-out-valid: "P{n}_OutValid"` + "\n", "pd-out-valid goes with pd-out"},
 		{"pd-valid not BOOL", `pd-valid: "P{n}_Valid"`, `pd-valid: "P{n}_In"`, "pd-valid: point P1_In is UDINT"},
 		{"vendor without device", `  device-id: "P{n}_Device"` + "\n", "", "vendor-id and device-id go together"},
 		{"device id in 16 bits", `device-id: "P{n}_Device"`, `device-id: "P{n}_Vendor"`, "device-id: point P1_Vendor is UINT"},

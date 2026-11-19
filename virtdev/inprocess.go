@@ -91,6 +91,10 @@ type uaFace struct {
 	// assemble is the device library's input side when the driver
 	// carries a devices: row (bindDevices); nil otherwise.
 	assemble func(nio.Values)
+	// ports, when the master has IO-Link port devices, turns a push into
+	// the master's own bindings through the ports' gate (devbind): their
+	// command tags are no node of the device, and are never dropped here.
+	ports func(nio.Values) (nio.Values, error)
 	// baselined and written are the driver's write rule (opcua.Driver's
 	// WriteOutputs): the first push is recorded, never sent; after it
 	// only a value changed since the last one accounted for is a write.
@@ -205,6 +209,11 @@ func (ip *InProcess) bindDevices(d interface{ Unwrap() nio.Driver }) error {
 			return err
 		}
 		f.assemble = asm.NewAssembly()
+		if pw, ok := d.(interface {
+			PortWrites(nio.Values) (nio.Values, error)
+		}); ok {
+			f.ports = pw.PortWrites
+		}
 		ip.ua = append(ip.ua, f)
 	default:
 		return fmt.Errorf("%T: virtual devices answer the devices: of a modbus or opcua-client driver only", d)
@@ -524,12 +533,24 @@ func (ip *InProcess) WriteOutputs(vals nio.Values) error {
 	for _, f := range ip.ua {
 		baseline := !f.baselined
 		f.baselined = true
-		for _, name := range names {
+		fvals, fnames := vals, names
+		if f.ports != nil {
+			var err error
+			if fvals, err = f.ports(vals); err != nil {
+				ip.fault("opcua ports (%s): %v", f.device, err)
+			}
+			fnames = make([]string, 0, len(fvals))
+			for k := range fvals {
+				fnames = append(fnames, k)
+			}
+			sort.Strings(fnames)
+		}
+		for _, name := range fnames {
 			n, ok := f.nodes[name]
 			if !ok || !n.b.Writable {
 				continue
 			}
-			v := vals[name]
+			v := fvals[name]
 			if prev, ok := f.written[name]; ok && reflect.DeepEqual(prev, v) {
 				continue // unchanged since it was last accounted for
 			}

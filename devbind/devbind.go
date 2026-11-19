@@ -89,6 +89,8 @@ type device struct {
 	// points are the selected points, in profile order: the struct's
 	// members.
 	points []devprofile.Point
+	// ports are an IO-Link master's port devices (loadPorts).
+	ports []*portDev
 }
 
 // Resolve checks rows against the profiles vendored in fsys (profiles/).
@@ -144,14 +146,30 @@ func Resolve(fsys fs.FS, rows []Device) (*Set, error) {
 		if err := d.checkValidate(where); err != nil {
 			return nil, err
 		}
-		st := devprofile.Struct{Name: p.TypeName(), Points: d.points}
-		if prev := byType[strings.ToLower(st.Name)]; prev != nil {
-			if err := sameMembers(prev.st, st); err != nil {
-				return nil, fmt.Errorf("devices %s and %s are both of type %s, %w: select the same points, or give one profile a udt of its own", prev.dev, r.Name, st.Name, err)
+		structs := []struct {
+			st  devprofile.Struct
+			dev string
+			why string
+		}{{devprofile.Struct{Name: p.TypeName(), Points: d.points}, r.Name, "select the same points, or give one profile a udt of its own"}}
+		for _, pd := range d.ports {
+			structs = append(structs, struct {
+				st  devprofile.Struct
+				dev string
+				why string
+			}{pd.structType(), pd.Name, "two IODDs derive the same type name: rename one file"})
+		}
+		for _, x := range structs {
+			if err := reservedType(x.st.Name); err != nil && x.dev != r.Name {
+				return nil, fmt.Errorf("port device %s: %w", x.dev, err)
 			}
-		} else {
-			byType[strings.ToLower(st.Name)] = &typed{st: st, dev: r.Name}
-			s.types = append(s.types, st)
+			if prev := byType[strings.ToLower(x.st.Name)]; prev != nil {
+				if err := sameMembers(prev.st, x.st); err != nil {
+					return nil, fmt.Errorf("devices %s and %s are both of type %s, %w: %s", prev.dev, x.dev, x.st.Name, err, x.why)
+				}
+			} else {
+				byType[strings.ToLower(x.st.Name)] = &typed{st: x.st, dev: x.dev}
+				s.types = append(s.types, x.st)
+			}
 		}
 		s.devices = append(s.devices, d)
 	}
@@ -258,9 +276,7 @@ func (d *device) checkPorts(fsys fs.FS, where string, names map[string]string) e
 	if err := portRange(nums, n); err != nil {
 		return fmt.Errorf("%s: ports: profile %s %w", where, d.prof.ID, err)
 	}
-	// Nothing derives a port device yet (#705 PR 4): refuse a valid
-	// ports: rather than load a project whose sensors silently do nothing.
-	return fmt.Errorf("%s: ports: port devices are not loaded yet (#705); remove ports: until they are", where)
+	return d.loadPorts(fsys, where)
 }
 
 // portRange checks a row's port numbers (sorted) against a master's n

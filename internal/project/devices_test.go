@@ -365,10 +365,10 @@ func TestDevicePortsInTheManifest(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, tc := range map[string]struct{ ports, want string }{
-		"refused": {"{ 2: { name: LEVEL1, iodd: sensor.xml } }", "device MASTER1: ports: port devices are not loaded yet (#705)"},
-		"range":   {"{ 9: { name: LEVEL1, iodd: sensor.xml } }", "device MASTER1: ports: profile ifm-al1590 has ports 1-8, not 9"},
-		"typo":    {"{ 2: { nme: LEVEL1 } }", "field nme not found"},
-		"by name": {"{ two: { name: LEVEL1 } }", "cannot unmarshal"},
+		"not an iodd": {"{ 2: { name: LEVEL1, iodd: sensor.xml } }", "device MASTER1: port 2: iodd sensor.xml: not an IODD"},
+		"range":       {"{ 9: { name: LEVEL1, iodd: sensor.xml } }", "device MASTER1: ports: profile ifm-al1590 has ports 1-8, not 9"},
+		"typo":        {"{ 2: { nme: LEVEL1 } }", "field nme not found"},
+		"by name":     {"{ two: { name: LEVEL1 } }", "cannot unmarshal"},
 	} {
 		fsys := fstest.MapFS{
 			"nautilus.yaml":            {Data: []byte("name: d\ntasks: [{ program: main.st }]\ndevices:\n  - { name: MASTER1, profile: ifm-al1590, endpoint: 10.0.0.20, ports: " + tc.ports + " }\n")},

@@ -21,6 +21,15 @@ type IOLinkSpec struct {
 	// PDOut is the point a port's process data out is written to; nil
 	// when the master offers none.
 	PDOut *PDCarrier `yaml:"pd-out"`
+	// PDOutValid names a writable BOOL point that says the master's process
+	// data out is valid (the P+F's PDO Valid), optional, with PDOut. The
+	// adapter drives it false while the device on the port is not the one
+	// expected, so the master stops sending its last image and the device
+	// falls back to its own fail-safe values, and true again only after the
+	// right device is back AND a program has written. A master without one
+	// keeps sending its last image to whatever is on the port: say so
+	// (naut devices show does), and rely on the identity fault alone.
+	PDOutValid string `yaml:"pd-out-valid"`
 	// PDValid names a BOOL point that says the master holds valid process
 	// data in for the port (optional).
 	PDValid string `yaml:"pd-valid"`
@@ -102,6 +111,9 @@ func (p *Profile) validateIOLink() error {
 	if s.PDIn == nil {
 		return fmt.Errorf("iolink: pd-in is required (where the master keeps a port's process data)")
 	}
+	if s.PDOutValid != "" && s.PDOut == nil {
+		return fmt.Errorf("iolink: pd-out-valid goes with pd-out: the master offers no process data out to validate")
+	}
 	if (s.VendorID == "") != (s.DeviceID == "") {
 		return fmt.Errorf("iolink: vendor-id and device-id go together: the identity check needs both")
 	}
@@ -151,6 +163,7 @@ func (p *Profile) validateIOLink() error {
 	}
 	for _, c := range []check{
 		{"pd-valid", s.PDValid, map[string]bool{"BOOL": true}, &no, false},
+		{"pd-out-valid", s.PDOutValid, map[string]bool{"BOOL": true}, &yes, false},
 		{"vendor-id", s.VendorID, vendorIDTypes, &no, false},
 		{"device-id", s.DeviceID, deviceIDTypes, &no, false},
 		{"status", s.Status, anyPointType, &no, false},

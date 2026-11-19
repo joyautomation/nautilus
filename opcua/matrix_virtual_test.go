@@ -16,9 +16,12 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/fstest"
 	"time"
 
+	"github.com/joyautomation/nautilus/devbind"
 	nio "github.com/joyautomation/nautilus/io"
+	"github.com/joyautomation/nautilus/iolink"
 	"github.com/joyautomation/nautilus/opcua"
 	"github.com/joyautomation/nautilus/virtdev"
 )
@@ -277,5 +280,114 @@ func TestVirtualMasterByteArrayWrite(t *testing.T) {
 	time.Sleep(time.Second)
 	if got := readAll(t, d)["Pdo"]; got != "beef01" {
 		t.Errorf("after a write over %d octets the node holds %v, want the earlier beef01", opcua.MaxBytes, got)
+	}
+}
+
+// A port device end to end (#705): a P+F master served by virtdev holds a
+// level sensor's process data as a ByteString node and its identity as
+// integers; a master row with a port derives the sensor from its IODD, the
+// driver reads it through the real wire, identity-checks it, and drives the
+// sensor's process data out through the gate, the image first and the
+// master's PDO Valid after, with no pulse (the first check was Ok), until
+// the device is swapped.
+func TestPortDeviceThroughAVirtualMaster(t *testing.T) {
+	// The sensor is swapped for another model after 60 scans (6 s).
+	v := startVirtual(t, matrixServer{
+		virtual:   "pepperl-fuchs-ice3",
+		modelVars: "n : INT;",
+		model: `n := n + 1;
+D_Port1_PdiBytes := 'fe0dffd1';
+D_Port1_VendorID := 65261;
+D_Port1_DeviceID := 1048577;
+IF n > 60 THEN D_Port1_DeviceID := 1048999; END_IF;
+D_Port1_PdiValid := TRUE;`,
+	})
+	prof, err := os.ReadFile("../devprofile/profiles/pepperl-fuchs-ice3.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	level, err := os.ReadFile("../iolink/iodd/testdata/acme-level100-20261118-IODD1.1.xml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fsys := fstest.MapFS{
+		"profiles/pepperl-fuchs-ice3.yaml":        {Data: prof},
+		"iodd/acme-level100-20261118-IODD1.1.xml": {Data: level},
+	}
+	set, err := devbind.Resolve(fsys, []devbind.Device{{
+		Name: "M", Profile: "pepperl-fuchs-ice3", Endpoint: "h",
+		Points: []string{"Port1_*"},
+		Ports:  map[int]devbind.Port{1: {Name: "LEVEL1", IODD: "acme-level100-20261118-IODD1.1.xml"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	od := set.OPCUADevices()[0]
+	probeCtx, cancelProbe := context.WithCancel(context.Background())
+	t.Cleanup(cancelProbe)
+	// A second driver on the same nodes reads what reached the master. (The
+	// plant serves zeros until its first scan, so the port's first check is
+	// NoDevice: a power-up transient that does not use up the first Ok.)
+	probe, err := opcua.New(v.url(), opcua.Manifest{Namespaces: od.Manifest.Namespaces, Tags: []opcua.TagBinding{
+		{Name: "Pdo", NodeID: "ns=1;s=IOLM/Port 1/Attached Device/PDO Data Byte String", Type: opcua.ByteString},
+		{Name: "Valid", NodeID: "ns=1;s=IOLM/Port 1/Attached Device/PDO Valid", Type: "Boolean"},
+	}}, opcua.WithName("probe"), opcua.WithScanRate(100*time.Millisecond), opcua.WithSecurity("None", "None"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	probe.Start(probeCtx)
+	t.Cleanup(probe.Stop)
+	d, err := opcua.New(v.url(), od.Manifest, opcua.WithName("M"), opcua.WithOnlineTag("M__Online"),
+		opcua.WithScanRate(100*time.Millisecond), opcua.WithTimeout(2*time.Second), opcua.WithSecurity("None", "None"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w, err := set.WrapOPCUA("M", d, "None", "None")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	d.Start(ctx)
+	t.Cleanup(func() { cancel(); d.Stop() })
+
+	waitUntil(t, "the port device to be read through the wire", 30*time.Second, func() bool {
+		vals, _ := w.ReadInputs()
+		_, ok := vals["LEVEL1"]
+		return ok && vals["LEVEL1__Identity"] == int64(iolink.Ok)
+	})
+	// The right device on the first check: decoded, no fault, and armed
+	// with no pulse (a power-up never needs one).
+	if vals, _ := w.ReadInputs(); vals["LEVEL1__IdentityFault"] != false {
+		t.Errorf("fault %v with the right device on the first check", vals["LEVEL1__IdentityFault"])
+	}
+
+	// Drive it: the first check was Ok, so the port is armed and sends the
+	// program's current values.
+	push := func(teach bool, mode int64, lock, rearm bool) {
+		t.Helper()
+		if err := w.WriteOutputs(nio.Values{"LEVEL1_Teach": teach, "LEVEL1_Mode": mode, "LEVEL1_Lock": lock, "LEVEL1__Rearm": rearm}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	waitUntil(t, "the image 8b with the valid flag on the master", 20*time.Second, func() bool {
+		push(true, 5, true, false) // the runtime pushes while anything changes; here, until it lands
+		pv, _ := probe.ReadInputs()
+		return pv["Pdo"] == "8b" && pv["Valid"] == true
+	})
+
+	// The swap: the fault is raised, the sensor's bytes are no longer
+	// decoded, and the master's valid flag drops, so the new device is not
+	// sent the old image.
+	waitUntil(t, "the identity fault after the swap", 30*time.Second, func() bool {
+		vals, _ := w.ReadInputs()
+		return vals["LEVEL1__IdentityFault"] == true && vals["LEVEL1__Identity"] == int64(2)
+	})
+	waitUntil(t, "the master's valid flag to drop", 20*time.Second, func() bool {
+		push(true, 5, true, false)
+		pv, _ := probe.ReadInputs()
+		return pv["Valid"] == false
+	})
+	if q := w.Quality()["LEVEL1"]; q != nio.Bad {
+		t.Errorf("the swapped port's quality %v, want Bad", q)
 	}
 }

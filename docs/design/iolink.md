@@ -120,6 +120,7 @@ iolink:
 | `pd-in.form` | how that point carries the bytes: `hex` (text, two hex digits per byte, as on the ifm), `u32` (an unsigned 32-bit integer, as the P+F's PDI Data Unsigned32); `bytes` (octets on the wire, a ByteString or a Byte[] array: a STRING point with `wire: ByteString` or `wire: ByteArray`, holding the octets as lowercase hex, any length up to 232 octets) |
 | `pd-in.doc`, `pd-in.unverified` | where the form is documented or was measured, as a point's `doc:` (a docs id, then where); or `unverified: true`. One is required: the form is a claim of its own (for `u32`, where a short image sits), and `naut devices show` prints it |
 | `pd-out` | the same for process data out; absent means the master offers no PD out |
+| `pd-out-valid` | a writable BOOL point that says the master's process data out is valid (the P+F's PDO Valid), with `pd-out` (optional): the adapter drives it false while the device on the port is not the expected one (§6.2) |
 | `pd-valid` | a BOOL point that says the master holds valid process data in (optional) |
 | `vendor-id`, `device-id` | integer points holding the attached device's identity (optional, see §6) |
 | `status` | a point holding the port's mode or connection status (optional) |
@@ -289,21 +290,81 @@ and whenever either value changes.
 | `Ok` | the ids match | from the process data (§6.1) |
 | `NoDevice` | the port reports no device (ids 0, or `status` says so) | Bad |
 | `WrongDevice` | the ids differ | Bad, and the bytes are not decoded |
+| `AwaitingRearm` | the ids match but a port with process data out has not been re-armed (§6.2) | from the process data (§6.1); the fault stays active |
 | `Unchecked` | the master profile has no id points | from the process data (§12) |
 
 Every port device gets two companion tags, beside the drivers'
 `__Online`:
 
 - `<Port device>__Identity : INT`, the state (0 `Ok`, 1 `NoDevice`,
-  2 `WrongDevice`, 3 `Unchecked`), always Good, so an alarm or a program
+  2 `WrongDevice`, 3 `Unchecked`, 4 `AwaitingRearm`), always Good, so an alarm or a program
   can read it while the device's values are Bad;
-- `<Port device>__IdentityFault : BOOL`, true in `NoDevice` and
-  `WrongDevice`, with a default alarm: "{name}: wrong or missing device on
-  {master} port {n}".
+- `<Port device>__IdentityFault : BOOL`, true in `NoDevice`,
+  `WrongDevice` and `AwaitingRearm`, with a default alarm: "{name}: wrong,
+  missing or unconfirmed device on {master} port {n}".
 
 A `WrongDevice` is also logged once per change, naming the port, the
 expected pair and the pair read, so the cause is in the log and not only
 in an alarm's text.
+
+### 6.2 Outputs, a wrong device and re-arming
+
+A master keeps the last process data out it was given and sends it to
+whatever device is on the port, including a wrong one. So not writing is
+not safe, and a port with process data out is **armed explicitly**
+(`iolink.OutGate`):
+
+- a port that is **not armed** sends **nothing** (no image, not zeros
+  either: off is not always safe) and, where the profile has
+  `pd-out-valid`, drives it **false**, so the master stops sending the
+  last image and the device falls back to its own fail-safe values;
+- the **first Ok (or Unchecked) arms the port**: at a power-up, and at
+  a takeover (a new leader builds new ports and checks again), an Ok
+  identity is the device the program was written for, so neither needs a
+  pulse. A `NoDevice` before the device has ever been seen is a power-up
+  transient (an IO-Link port takes a moment to start) and does not use
+  that up; a device hot-plugged into a port that was empty since the start
+  also arms on its first Ok, being the device the program was written for.
+  A `WrongDevice` at any time before the first Ok means the port is never
+  armed by an Ok: the right device appearing later does not arm it;
+- after the device has been seen Ok, **any** break while running (a
+  swap, or `NoDevice` as much as `WrongDevice`) disarms the port, and only
+  a **pulse on
+  `<Port device>__Rearm`** arms it again (a writable BOOL tag, false then
+  true): the "confirm after a device swap" an operator does, journalled by
+  the audit journal like any tag write (who, when, from where), and logged
+  by the adapter. A pulse while the device on the port is not the one
+  expected is **refused**, naming the state, and changes nothing;
+- an armed port sends the program's **current** value of every item (the
+  image first and, where there is one, `pd-out-valid` true a push later,
+  so the master holds the new image before it is told it is valid), and
+  follows the program from then on. Nothing a program wrote before or
+  during a break is replayed, and a program that holds constant values
+  stalls nothing: the pulse takes the values it holds;
+- until it is armed the identity reads **`AwaitingRearm`** (4) and
+  `__IdentityFault` stays true, so the alarm stays active and the operator
+  sees why the port is quiet;
+- `Unchecked` (no id points) is armed by its first check and then writes
+  as told, since nothing can be compared; `naut check` says so;
+- the master's driver takes the first push after it starts as the state
+  of the world and never sends it, so a port armed by its first check
+  sends its image with the next push, a scan later, not with the first;
+- a port with no process data out has no gate, no `__Rearm` and no
+  `AwaitingRearm`.
+
+The pulse is seen as a push in which `__Rearm` is true after one in which
+it was false (the first push after a start is only the state of the
+world); a pulse shorter than a scan is not seen. Under `naut test` the
+in-process face sends a port's outputs through the same gate.
+
+A master profile with no `pd-out-valid` cannot do the first step's second
+half: a wrong device on that port is sent the master's last process data
+out until the identity fault is seen (it is raised as an alarm) and the
+program or an operator stops it. `naut devices show` says so for such a
+profile (today the ifm AL1590 and the SICK SIG300). The identity is
+checked when the ids arrive, so for up to one scan of the id points after
+a swap the new device is sent the old image; IO-Link's own validation
+and backup (a port setting on the master) is what closes that window.
 
 ### 6.1 Quality
 

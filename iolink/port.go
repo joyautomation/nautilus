@@ -21,6 +21,12 @@ const (
 	// Unchecked: the master profile has no id points, so nothing can be
 	// compared.
 	Unchecked
+	// AwaitingRearm is not a result of Check: the identity is Ok (or
+	// Unchecked) but a port with process data out has not been re-armed
+	// since its device went wrong (or since a first check that was not
+	// Ok), so it sends nothing. It is what the identity tag reads then, and it is a fault
+	// (the alarm stays active) until the pulse on __Rearm.
+	AwaitingRearm
 )
 
 func (s State) String() string {
@@ -33,12 +39,14 @@ func (s State) String() string {
 		return "WrongDevice"
 	case Unchecked:
 		return "Unchecked"
+	case AwaitingRearm:
+		return "AwaitingRearm"
 	}
 	return fmt.Sprintf("State(%d)", int(s))
 }
 
 // Fault is true in the states that raise the identity fault (the alarm).
-func (s State) Fault() bool { return s == NoDevice || s == WrongDevice }
+func (s State) Fault() bool { return s == NoDevice || s == WrongDevice || s == AwaitingRearm }
 
 // Drives is true in the states in which the port's outputs may be driven:
 // the right device is known to be there, or nothing can be known.
@@ -76,60 +84,92 @@ type OutPlan struct {
 // each of them there because a master keeps the last PD-out image it was
 // given and sends it to whatever device is on the port:
 //
-//   - nothing is sent until a program has written EVERY item of the image
-//     since the last time the device went wrong (or since the start): an
-//     image with an item no program has written would send that item as
-//     zero with the image marked valid, a command nobody gave (a valve
-//     and a setpoint: the setpoint written, the valve left to zero);
-//   - while the identity is not Ok (or Unchecked), nothing is sent and
-//     Valid is false: not zeros either, since "off" is not always safe;
-//   - writes made while it is not Ok are refused, not kept: when the right
-//     device is back, the image is NOT resent from what was written before
-//     or during the break; a program must write again, so a command is
-//     never delivered to a device it was not written for.
+//   - nothing is sent, and Valid is false, until the port has been
+//     ARMED. The FIRST Ok (or Unchecked) arms it: at a power-up or a
+//     takeover (a new leader builds a new gate) an Ok identity is the
+//     device the program was written for, so neither needs a pulse. A
+//     NoDevice before the device has ever been seen is a power-up
+//     transient (a port takes a moment to start, or was empty since the
+//     start and the device is plugged in later) and does not use that
+//     chance up. After that only an explicit Rearm arms it (a pulse on the
+//     port's __Rearm tag, journalled like any write): the normal industrial
+//     "confirm after a device swap";
+//   - a Wrong device at any time before the first Ok never arms the port,
+//     and the right device appearing later does not either, until Rearm;
+//     once the device has been seen Ok, ANY break (NoDevice or Wrong)
+//     disarms the port, and the device coming back does not arm it;
+//   - while the identity is not Ok (or Unchecked), nothing is sent, Valid
+//     is false, and the port is disarmed: not zeros either, since "off" is
+//     not always safe. When the right device is back the port stays quiet
+//     (the identity reads AwaitingRearm) until Rearm;
+//   - Rearm while the identity is not Ok is refused;
+//   - an armed port sends the program's CURRENT value of every item, so
+//     nothing a program wrote before or during the break is replayed: the
+//     values sent are the ones it holds when the operator confirms.
 //
 // Unchecked (the master profile has no id points) drives like Ok: there is
 // nothing to compare, so a wrong device cannot be told from the right one
-// here. naut devices show and naut check say so for such a master, and the
-// pd-out-valid rule below cannot protect it.
+// here. naut check says so for such a master, and the pd-out-valid rule
+// cannot protect it. A port with no process data out has no gate.
 type OutGate struct {
-	out     *iodd.Image
-	state   State
-	values  []any
-	written []bool // per item: written since the last forget
+	out    *iodd.Image
+	state  State
+	values []any // the program's current value per item; nil is zero
+	armed  bool
+	// settled is set when the one chance to arm without a pulse has been
+	// used: the first Ok (or Unchecked) armed the port, or a Wrong device
+	// showed first. A NoDevice before either does not settle it.
+	settled bool
 }
 
 // NewOutGate is a gate for a port device whose process data out is out,
-// starting in state s (the port has not been checked yet: pass the first
-// Check, or NoDevice to hold everything until it has).
+// starting in state s (the port has not been checked yet: pass NoDevice to
+// hold everything until it has) and not armed; the first SetState decides.
 func NewOutGate(out *iodd.Image, s State) *OutGate {
-	return &OutGate{out: out, state: s, values: make([]any, len(out.Items)), written: make([]bool, len(out.Items))}
+	return &OutGate{out: out, state: s, values: make([]any, len(out.Items))}
 }
 
-// SetState records the identity check. Leaving a driving state forgets
-// every value written, so the next drive needs fresh writes.
+// SetState records the identity check. The first Ok or Unchecked arms the
+// port unless a Wrong device was seen before it; a NoDevice before either
+// changes nothing but the state; leaving a driving state disarms it.
 func (g *OutGate) SetState(s State) {
 	if g.state.Drives() && !s.Drives() {
-		g.forget()
+		g.armed = false
 	}
 	g.state = s
+	if g.settled || s == NoDevice {
+		return
+	}
+	g.settled = true
+	if s.Drives() {
+		g.armed = true
+	}
 }
 
-func (g *OutGate) forget() {
-	clear(g.values)
-	clear(g.written)
+// Drives reports whether the identity now allows the port to be driven.
+func (g *OutGate) Drives() bool { return g.state.Drives() }
+
+// Armed reports whether the port has been armed since the identity last
+// stopped allowing it.
+func (g *OutGate) Armed() bool { return g.armed }
+
+// Rearm arms the port. It is refused while the identity does not allow
+// driving it, naming the state.
+func (g *OutGate) Rearm() error {
+	if !g.state.Drives() {
+		return fmt.Errorf("refused: the device on the port is not the one expected (%s)", g.state)
+	}
+	g.armed = true
+	return nil
 }
 
-// Write records item i's value. It is refused when the identity does not
-// allow driving the port, and when the value does not fit its item (the
-// image is encoded here, so a value that cannot be sent is an error on the
-// write, naming the item, not on a later push).
-func (g *OutGate) Write(i int, v any) error {
+// Set records item i's current value, whether the port is armed or not (an
+// armed port sends it; a disarmed one holds it for the next Rearm). A value
+// that does not fit its item is refused naming the item, and the last good
+// value stays.
+func (g *OutGate) Set(i int, v any) error {
 	if i < 0 || i >= len(g.values) {
 		return fmt.Errorf("process data out has no item %d", i)
-	}
-	if !g.state.Drives() {
-		return fmt.Errorf("%s: the device on the port is not the one expected (%s): not sent", g.out.Items[i].Name, g.state)
 	}
 	prev := g.values[i]
 	g.values[i] = v
@@ -137,24 +177,15 @@ func (g *OutGate) Write(i int, v any) error {
 		g.values[i] = prev
 		return err
 	}
-	g.written[i] = true
 	return nil
 }
 
 // Plan is what to send now.
 func (g *OutGate) Plan() (OutPlan, error) {
-	// SetState has already forgotten what was written when the device went
-	// wrong, so this check is not what stops a send today; it is the second
-	// lock on a rule that must hold if SetState ever changes.
-	if !g.state.Drives() {
+	// SetState has already disarmed the port when the device went wrong, so
+	// the state check is not what stops a send today; it is the second lock.
+	if !g.state.Drives() || !g.armed {
 		return OutPlan{}, nil
-	}
-	for _, w := range g.written {
-		if !w {
-			// An item no program has written since the last forget: the image
-			// is not complete, so none of it is sent.
-			return OutPlan{}, nil
-		}
 	}
 	img, err := g.out.Encode(g.values)
 	if err != nil {

@@ -79,6 +79,8 @@ type OPCUADriver struct {
 	*opcua.Driver
 	st       structs
 	warnings []string
+	// ports are the master's port devices (#705); nil for a device with none.
+	ports *ports
 }
 
 // WrapOPCUA wraps the driver built for device name from OPCUADevices;
@@ -91,6 +93,11 @@ func (s *Set) WrapOPCUA(name string, d *opcua.Driver, policy, mode string) (*OPC
 			continue
 		}
 		w := &OPCUADriver{Driver: d, st: newStructs([]*device{dev}, d.InputNames())}
+		if len(dev.ports) > 0 {
+			w.ports = newPorts(dev.ports)
+			w.st.inputs = append(w.st.inputs, w.ports.names()...)
+			w.warnings = append(w.warnings, portWarnings(dev.ports)...)
+		}
 		for _, od := range s.OPCUADevices() {
 			if od.Name != name {
 				continue
@@ -116,7 +123,14 @@ func (s *Set) WrapOPCUA(name string, d *opcua.Driver, policy, mode string) (*OPC
 
 // NewAssembly is a fresh copy of the adapter's input side (see
 // ModbusDriver.NewAssembly).
-func (w *OPCUADriver) NewAssembly() func(nio.Values) { return w.st.newAssembly() }
+func (w *OPCUADriver) NewAssembly() func(nio.Values) {
+	f := w.st.newAssembly()
+	if w.ports == nil {
+		return f
+	}
+	g := w.ports.newAssembly()
+	return func(vals nio.Values) { g(vals); f(vals) }
+}
 
 // Unwrap is the OPC UA driver underneath.
 func (w *OPCUADriver) Unwrap() nio.Driver { return w.Driver }
@@ -127,6 +141,9 @@ func (w *OPCUADriver) ReadInputs() (nio.Values, error) {
 	if err != nil {
 		return nil, err
 	}
+	if w.ports != nil {
+		w.ports.take(vals) // before the master's own struct takes its members
+	}
 	w.st.assemble(vals)
 	return vals, nil
 }
@@ -134,8 +151,14 @@ func (w *OPCUADriver) ReadInputs() (nio.Values, error) {
 // ReadInputsInto is ReadInputs into the runtime's map (io.BatchReader).
 func (w *OPCUADriver) ReadInputsInto(dst nio.Values) error {
 	w.st.clear(dst)
+	if w.ports != nil {
+		w.ports.clear(dst)
+	}
 	if err := w.Driver.ReadInputsInto(dst); err != nil {
 		return err
+	}
+	if w.ports != nil {
+		w.ports.take(dst)
 	}
 	w.st.assemble(dst)
 	return nil
@@ -149,11 +172,45 @@ func (w *OPCUADriver) InputType(name string) string {
 	if t, ok := w.st.inputType(name); ok {
 		return t
 	}
+	if w.ports != nil {
+		if t, ok := w.ports.inputType(name); ok {
+			return t
+		}
+	}
 	return w.Driver.InputType(name)
 }
 
 // Quality reports the device by its members (rollup).
-func (w *OPCUADriver) Quality() map[string]nio.Quality { return w.st.quality(w.Driver.Quality()) }
+func (w *OPCUADriver) Quality() map[string]nio.Quality {
+	raw := w.Driver.Quality()
+	out := w.st.quality(raw)
+	if w.ports != nil {
+		out = w.ports.quality(raw, out)
+	}
+	return out
+}
+
+// PortWrites is what the driver is handed for a push, as WriteOutputs
+// makes it: virtdev's in-process face (naut test) answers the master's
+// command bindings itself, and must get the ports' gated output through
+// the same gate, not a silent drop of the ports' command tags. A master
+// with no ports gets the push as it is.
+func (w *OPCUADriver) PortWrites(vals nio.Values) (nio.Values, error) {
+	if w.ports == nil {
+		return vals, nil
+	}
+	return w.ports.transform(vals)
+}
+
+// WriteOutputs hands the driver what the runtime pushed. A master with
+// port devices takes its ports' command tags out and puts each port's
+// gated process data out in their place (port.go).
+func (w *OPCUADriver) WriteOutputs(vals nio.Values) error {
+	if w.ports == nil {
+		return w.Driver.WriteOutputs(vals)
+	}
+	return w.ports.write(w.Driver, vals)
+}
 
 // Warnings are the driver's own, plus each namespace the device is bound
 // to by index alone.

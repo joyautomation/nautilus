@@ -233,7 +233,8 @@ func TestResolvePorts(t *testing.T) {
 		"iodd path":         {map[int]Port{1: {Name: "LEVEL", IODD: "../sensor.xml"}}, `iodd "../sensor.xml" must be a file name in iodd/`},
 		"iodd missing":      {map[int]Port{1: {Name: "LEVEL", IODD: "other.xml"}}, "iodd other.xml is not in iodd/"},
 		"past the ports":    {map[int]Port{9: {Name: "LEVEL", IODD: "sensor.xml"}}, "ports: profile ifm-al1590 has ports 1-8, not 9"},
-		"not loaded yet":    {map[int]Port{8: {Name: "LEVEL", IODD: "sensor.xml"}}, "ports: port devices are not loaded yet (#705)"},
+		"not an IODD":       {map[int]Port{8: {Name: "LEVEL", IODD: "sensor.xml"}}, "port 8: iodd sensor.xml:"},
+		"no iodd":           {map[int]Port{8: {Name: "LEVEL"}}, "port 8: iodd is required"},
 	} {
 		if _, err := Resolve(fsys, master(tc.ports)); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: %v, want %q", name, err, tc.want)
