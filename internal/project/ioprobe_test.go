@@ -360,3 +360,36 @@ devices:
 		t.Fatalf("row static under driver live: valid %v probe %+v", v.Valid, p)
 	}
 }
+
+// writingDriver writes on start unless a write gate says no: a driver that
+// asserts its outputs on connect. A probe must close its gate first.
+type writingDriver struct {
+	gate   func() bool
+	writes *int
+}
+
+func (d *writingDriver) ReadInputs() (nio.Values, error) { return nio.Values{}, nil }
+func (d *writingDriver) WriteOutputs(nio.Values) error   { return nil }
+func (d *writingDriver) SetWriteGate(g func() bool)      { d.gate = g }
+func (d *writingDriver) Start(context.Context) {
+	if d.gate == nil || d.gate() {
+		*d.writes++
+	}
+}
+
+// A probe's driver writes nothing: its write gate is closed before it
+// starts, whatever the driver would assert on its own.
+func TestIOProbeClosesTheWriteGate(t *testing.T) {
+	writes := 0
+	p := runProbe(probeTarget{
+		IOProbe: IOProbe{Mode: devbind.ValidateLive},
+		addr:    "device:502",
+		build:   func() (nio.Driver, error) { return &writingDriver{writes: &writes}, nil },
+		inputs:  func(nio.Driver) []string { return []string{"x"} },
+		quality: func(nio.Driver) map[string]nio.Quality { return nil },
+		health:  func(nio.Driver) (bool, string, uint64) { return true, "", 0 },
+	})
+	if !p.OK || writes != 0 {
+		t.Fatalf("probe %+v, %d writes: want none", p, writes)
+	}
+}

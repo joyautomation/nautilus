@@ -1716,7 +1716,11 @@ func liveOnOneConnection(c DriverConfig, set *devbind.Set) error {
 		if p == nil || p.Modbus == nil || p.Modbus.MaxConnections != 1 || r.Validate != "" {
 			continue
 		}
-		return fmt.Errorf("driver %s: validate: live, but device %s's profile %s documents max-connections 1 (%s): a live check's connection would be the controller's; set validate: static on the driver, or on the rows that allow a second connection", c.Type, r.Name, p.ID, p.Modbus.MaxConnectionsDoc)
+		name := c.Name
+		if name == "" {
+			name = c.Type // the Modbus driver the devices were given, unnamed
+		}
+		return fmt.Errorf("driver %s: validate: live, but device %s's profile %s documents max-connections 1 (%s): a live check's connection would be the controller's; set validate: static on the driver, or on the rows that allow a second connection", name, r.Name, p.ID, p.Modbus.MaxConnectionsDoc)
 	}
 	return nil
 }
