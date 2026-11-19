@@ -91,6 +91,11 @@ type uaFace struct {
 	// assemble is the device library's input side when the driver
 	// carries a devices: row (bindDevices); nil otherwise.
 	assemble func(nio.Values)
+	// baselined and written are the driver's write rule (opcua.Driver's
+	// WriteOutputs): the first push is recorded, never sent; after it
+	// only a value changed since the last one accounted for is a write.
+	baselined bool
+	written   map[string]any
 }
 
 type uaNode struct {
@@ -254,7 +259,7 @@ func (ip *InProcess) bindOPCUA(d *opcua.Driver) (*uaFace, error) {
 	for _, t := range writable {
 		open[t] = true
 	}
-	f := &uaFace{drv: d, device: inst.Name, online: d.OnlineTagName(), nodes: map[string]uaNode{}}
+	f := &uaFace{drv: d, device: inst.Name, online: d.OnlineTagName(), nodes: map[string]uaNode{}, written: map[string]any{}}
 	for _, b := range d.Manifest().Tags {
 		n := uaNode{b: b}
 		nid, err := ua.ParseNodeID(b.NodeID)
@@ -517,10 +522,20 @@ func (ip *InProcess) WriteOutputs(vals nio.Values) error {
 	}
 	tags := ip.prt.Tags()
 	for _, f := range ip.ua {
+		baseline := !f.baselined
+		f.baselined = true
 		for _, name := range names {
 			n, ok := f.nodes[name]
 			if !ok || !n.b.Writable {
 				continue
+			}
+			v := vals[name]
+			if prev, ok := f.written[name]; ok && reflect.DeepEqual(prev, v) {
+				continue // unchanged since it was last accounted for
+			}
+			f.written[name] = v
+			if baseline {
+				continue // recorded, never sent: the driver's start-up baseline
 			}
 			switch {
 			case n.tag == "":
@@ -528,7 +543,7 @@ func (ip *InProcess) WriteOutputs(vals nio.Values) error {
 			case !n.writable:
 				ip.fault("opcua write %s (%s): Bad_NotWritable: %s is read-only on the device", name, f.device, n.b.NodeID)
 			default:
-				if err := tags.SetPath(n.tag, vals[name]); err != nil {
+				if err := tags.SetPath(n.tag, v); err != nil {
 					ip.fault("opcua write %s (%s): %v", name, f.device, err)
 				}
 			}
