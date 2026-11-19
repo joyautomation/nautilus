@@ -311,3 +311,48 @@ func TestLateAdoptToAnEarlierBootInTheSim(t *testing.T) {
 	}
 	clean(t, rec, Checks{MaxTakeovers: -1})
 }
+
+// The two-of-three case waits for the operator (design §3.1, the
+// committed-incarnation rule; §7). B is down from 6 s to 60 s. Meanwhile
+// A leads on {A, W} at terms B never sees: each pause of A ends its lease,
+// and it wins again one term up. Then A's file is lost (40 s) and the
+// witness is rebuilt at a new incarnation (41 s): only the dead
+// incarnation knew A's terms. B comes back committed to it, hears the
+// rebuilt one and proposes the switch. A must refuse it, stay
+// uncommissioned and raise "re-commission by hand"; nobody leads again,
+// which is the operator's case (liveness excused), but I2 and I4 are
+// asserted. Taking the switch, A re-commissions at B's floor, below the
+// terms it led, and the pair leads one of them again (red under
+// uncommissioned_takes_switch).
+func TestTwoOfThreeWaitsForTheOperator(t *testing.T) {
+	o := Options{Seed: 5, Delay: ms, Jitter: ms / 2, Fsync: ms, Until: 120 * sec, Trace: true,
+		Start: [3]time.Duration{0, 2 * sec, 0},
+		Faults: []Fault{
+			{Kind: Crash, At: 6 * sec, For: 54 * sec, Node: B},
+			{Kind: Pause, At: 10 * sec, For: 6 * sec, Node: A},
+			{Kind: Pause, At: 20 * sec, For: 6 * sec, Node: A},
+			{Kind: Pause, At: 30 * sec, For: 6 * sec, Node: A},
+			{Kind: Wipe, At: 40 * sec, For: 2 * sec, Node: A},
+			{Kind: Wipe, At: 41 * sec, For: 2 * sec, Node: W},
+		}}
+	rec := Run(o)
+	defer trace(t, rec)
+	if dead, stray := rec.twoOfThree(); !dead || stray {
+		t.Fatalf("not the two-of-three case's first shape (dead %v, stray %v)", dead, stray)
+	}
+	for _, v := range Check(rec, checksFor(o)) {
+		t.Error(v)
+	}
+	for _, a := range rec.Adoptions {
+		if a.Node == A && a.At >= 40*sec {
+			t.Errorf("A re-commissioned without an operator: %+v", a)
+		}
+	}
+	var alarmed bool
+	for _, r := range rec.Recommissions {
+		alarmed = alarmed || r.Node == A
+	}
+	if !alarmed {
+		t.Error("A raised no re-commission alarm")
+	}
+}

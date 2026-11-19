@@ -82,6 +82,14 @@ var table = []mutation{
 	{"propose_keeps_commit", []string{"TestProposeDropsAnAdoptionInFlight"}},
 	{"count_over_pending", []string{"TestNoCountWhilePending"}},
 	{"holdoff_from_boot", []string{"TestHoldOffFromAFailedAdoption"}},
+	// The two-of-three case waits for the operator (#710 (B)). With this
+	// switch on, the 200,000 seeds still pass, I2/I4 asserted and I4 also
+	// flagging a term re-led after a restart: no random schedule has the
+	// lost controller lead a term its peer never saw. So the named sim case
+	// builds one, and TestSeeds is not in the row.
+	{"uncommissioned_takes_switch", []string{"TestUncommissionedRefusesASwitch", "TestUncommissionedAlarmsOnADeadIncarnation",
+		"TestRecommissionByHand", "TestTwoOfThreeWaitsForTheOperator"}},
+	{"proposal_floor_volatile", []string{"TestProposalFloorSurvivesARestart"}},
 }
 
 // event is one line of `go test -json`.

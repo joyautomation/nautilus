@@ -122,7 +122,7 @@ to the matrix as a named regression case.
 - **Excluded by name:**
   - F22b, a frozen controller clock, which must breach I1;
   - skew beyond ρ, which must breach I1 at some phase;
-  - **the two-of-three case** (design §3.1, the costs; `Record.TwoOfThreeLost`): a controller's file lost while its peer's committed witness incarnation dies (the witness wiped, or an adopted second copy gone) before it re-commissions, or both files lost and re-commissioned on a stray's incarnation. It needs an operator, so I2, I4, I6, I7 and steady state are excused; I1, the lease and the ledger are not. The seed runner logs and counts it (777 of 200,000, 0.39%), `TestExcusedShare` bounds its share, `TestTwoOfThreeLostTeeth` checks it fires on that case and on nothing else, and every named case asserts it was not excused. After the PR that makes the case reliably wait for an operator, I2 and I4 are asserted there too.
+  - **the two-of-three case** (design §3.1, the costs; `Record.TwoOfThreeLost`): a controller's file lost while its peer's committed witness incarnation dies (the witness wiped, or an adopted second copy gone) before it re-commissions, or both files lost and re-commissioned on a stray's incarnation. It needs an operator, so I6, I7 and steady state are excused; I1, I2, I4, the lease and the ledger are not, because the lost controller waits for the operator instead of re-commissioning at a floor that may miss its terms (the committed-incarnation rule, design §3.1). In the stray shape (both files lost) I2 and I4 stay excused: neither controller committed anything, so the rule doesn't apply (none of the first 200,000 seeds has that shape). The seed runner logs and counts the case (777 of 200,000, 0.39%), `TestExcusedShare` bounds its share, `TestTwoOfThreeLostTeeth` checks it fires on that case and on nothing else, and every named case asserts it was not excused. `TestTwoOfThreeWaitsForTheOperator` builds the case with terms the peer never saw, and asserts I2 and I4 in it.
 - **#976 is closed** (H2): two lost controller files with the witness intact are judged in full (`TestRegression976TwoLostControllerFiles`, red under `no_quiet` and `restart_counts_at_once`; the floor's own sim case is `TestFloorCarriesTheUnseenTerm`), and the generator no longer caps lost controller files.
 
 ### 3.3 Mutation checks (T2, nightly; required to pass before each milestone)
@@ -193,7 +193,11 @@ more: four for holes found while driving the handshake in the sim (`bump_cuts_qu
 #976's own rule, which H1 tested in T1 only. naut-lead's review of #1014 added three
 (`propose_keeps_commit`, `count_over_pending`, `holdoff_from_boot`). The first two are belt and
 braces, so each alone closes the failed-write split brain and is pinned by a test of its own
-invariant; the scenario tests go red only with both removed.
+invariant; the scenario tests go red only with both removed. The two-of-three PR (#710 (B))
+adds two: `uncommissioned_takes_switch` (a lost controller takes its peer's switch, not only
+its committed incarnation; T1 and `TestTwoOfThreeWaitsForTheOperator`) and
+`proposal_floor_volatile` (a proposal's floor isn't written with it, so a restart re-sends it
+lower; T1 only).
 
 **The handshake in the simulator (H2).** The sim drives `quorum.Adoption` as PR 3 will:
 `Adopt` over A–B (every link fault applies), witness replies to `OnWitness`, `OnPeer` for every
@@ -231,6 +235,23 @@ The first 200,000-seed run with the handshake failed 42 seeds, none on safety:
   only re-adopt what it committed, here dead). They are in `TestTwoOfThreeLostTeeth`.
 
 Then the 200,000 seeds pass (283 s), 777 of them excused as the two-of-three case.
+
+**The two-of-three case waits for the operator (#710 (B)).** An uncommissioned controller now
+adopts only a re-adoption of its peer's committed incarnation (design §3.1), so the case's
+excuse drops I2 and I4 (§3.2). Measured without the rule (unchanged code, and again under
+`uncommissioned_takes_switch` with the stricter I4 below): asserting I2 and I4 in the 777
+excused seeds broke none, because no random schedule has the lost controller lead a term its
+peer never saw. So the case is built by hand: `TestTwoOfThreeWaitsForTheOperator` keeps B down
+while A, paused three times, leads terms 5 to 8 on {A, W}; then A's file is lost and the witness
+rebuilt; B comes back and proposes the switch. A must refuse, stay uncommissioned and raise the
+alarm. Under `uncommissioned_takes_switch` A takes the switch at B's floor and leads term 8 again.
+I4 now catches that too: besides a term led by two controllers, it flags a term one controller
+leads before and after its own restart (a restarted candidate always campaigns above its durable
+promise, so only a lost file brings a term back). The 200,000 seeds pass with the stricter I2/I4
+(288 s, the same 777 excused). Seed 57197 now also asserts that B never re-commissions after its
+file loss and raises the alarm. The residual the rule leaves (design §3.1: a stray copy adopted
+with its ack lost, then lost with the controller's file) is pinned in T1 as
+`TestKnownGapPendingStray`, which flips when it is closed.
 
 Also named: `TestRegression976WitnessUnreachable` (both files lost with the witness cut off: the
 pair re-commissions inside the restart wait when the witness answers, so only this case shows
