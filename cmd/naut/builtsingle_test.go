@@ -162,4 +162,14 @@ tags:
 		t.Fatalf("a second instance: exit %d, output %q; want a refusal naming the address in use", code, out)
 	}
 	noIO("a second instance")
+
+	// With no fixed address held, nothing would exclude a second instance:
+	// a built controller refuses port 0 and an address it cannot bind.
+	for _, addr := range []string{"127.0.0.1:0", "192.0.2.1:18090"} { // 192.0.2.0/24: TEST-NET, on no host
+		code, out := run(addr)
+		if code <= 0 || !strings.Contains(out, "fixed address") {
+			t.Fatalf("tag api %s: exit %d, output %q; want a refusal", addr, code, out)
+		}
+		noIO("tag api " + addr)
+	}
 }

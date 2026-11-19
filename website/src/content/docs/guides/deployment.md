@@ -115,7 +115,10 @@ RestartSec=2
   and any other argument is refused. A controller binds its tag API's
   address before anything else starts, and one that finds the address
   held (by its own service, say) refuses to start, so two never drive the
-  same I/O.
+  same I/O. That address is its only exclusion, so a built controller
+  also refuses to start on port 0 (a new port each start) or on an
+  address it cannot bind. (`naut run`, a bench tool, still moves to the
+  next free port, or runs without its tag API.)
 
 ## To a box over SSH
 

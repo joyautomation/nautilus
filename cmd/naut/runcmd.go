@@ -464,9 +464,17 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 // controller, maybe this one's own service, and two must never drive the
 // same I/O. On a bench (naut run from a project: dir set), with no
 // NAUTILUS_ADDR and no redundancy, it moves to the next free port instead,
-// said out loud. Any other bind failure leaves the controller running
-// without its tag API, as before. It returns the address actually bound.
+// said out loud. It returns the address actually bound.
+//
+// A built controller (dir "") must hold a fixed address, since that is its
+// only exclusion: port 0 (a new port each start) and any bind failure
+// refuse the start too. naut run, a bench tool, keeps running without its
+// tag API on another failure, as before.
 func bindAPI(addr, dir string, redundant bool) (net.Listener, string, error) {
+	const why = "a built controller needs its tag API on a fixed address: holding it is what keeps a second instance off the same I/O"
+	if _, port, err := net.SplitHostPort(addr); dir == "" && err == nil && port == "0" {
+		return nil, addr, fmt.Errorf("tag api address %s has port 0: %s; set server.addr or NAUTILUS_ADDR to a port", addr, why)
+	}
 	ln, err := net.Listen("tcp", addr)
 	if err != nil && addrInUse(err) {
 		if dir != "" && os.Getenv("NAUTILUS_ADDR") == "" && !redundant {
@@ -476,6 +484,9 @@ func bindAPI(addr, dir string, redundant bool) (net.Listener, string, error) {
 			}
 		}
 		return nil, addr, fmt.Errorf("%s is in use: another controller (this one's service?) is running; refusing to start a second one against the same I/O", addr)
+	}
+	if err != nil && dir == "" {
+		return nil, addr, fmt.Errorf("tag api: %v: %s", err, why)
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "tag api: %v (continuing without it)\n", err)
