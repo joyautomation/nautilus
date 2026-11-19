@@ -28,6 +28,7 @@ var mutations = []string{
 	"no_term_cap",                // the witness takes a vote that jumps the terms
 	"controller_no_term_cap",     // a controller's voter takes a vote that jumps the terms
 	"hello_unbound",              // the client-token MAC binds no names or direction: a reflected question passes
+	"term_cap_narrow",            // the term-jump cap is 2^20: an isolated controller crosses it in about 50 days and is refused for good
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")

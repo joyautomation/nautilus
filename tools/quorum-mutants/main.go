@@ -118,6 +118,9 @@ var table = []mutation{
 	{"no_term_cap", []string{"TestReviewWitnessTermJumpRefused"}},
 	{"controller_no_term_cap", []string{"TestReviewControllerTermJumpRefused"}},
 	{"hello_unbound", []string{"TestReviewHelloReflectedAnswerFails"}},
+	// The #1021 re-review.
+	{"lease_raise_volatile", []string{"TestVoterLongerLeaseDurableBeforeAnyGrant", "TestReviewLengthenThenShorten"}},
+	{"term_cap_narrow", []string{"TestReviewIsolatedControllerRejoins"}},
 }
 
 // event is one line of `go test -json`.

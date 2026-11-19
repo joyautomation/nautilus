@@ -75,6 +75,30 @@ func TestVoterRestartWaitsTheLongerLease(t *testing.T) {
 	}
 }
 
+// A voter restarted with a LONGER lease than its file records writes it
+// before any grant, even an unchanged renewal that changes nothing else:
+// otherwise the file still says the shorter one, and a restart back to it
+// waits too little (#1021 re-review).
+func TestVoterLongerLeaseDurableBeforeAnyGrant(t *testing.T) {
+	long := 2 * lease
+	r := NewVoter("W", long, VoterState{Promised: 7, GrantedTo: "A", Lease: lease}, 0)
+	p, out := r.Handle(at(long), Request{From: "A", Term: 7, ID: 1, Renewal: true})
+	if p == nil || len(out) != 0 {
+		t.Fatalf("an unchanged renewal answered at once (persist %v, replies %v): the longer lease isn't on disk", p, out)
+	}
+	if p.State.Lease != long {
+		t.Fatalf("the write records %v, want %v", p.State.Lease, long)
+	}
+	if out := r.Persisted(p.Seq, true); len(out) != 1 || !out[0].Granted {
+		t.Fatalf("after the write: %+v", out)
+	}
+	// With the file already at the voter's lease, nothing extra is written.
+	same := NewVoter("W", lease, VoterState{Promised: 7, GrantedTo: "A", Lease: lease}, 0)
+	if p, out := same.Handle(at(lease), Request{From: "A", Term: 7, ID: 2, Renewal: true}); p != nil || len(out) != 1 {
+		t.Fatalf("an unchanged lease: persist %v, replies %v; want answered at once", p, out)
+	}
+}
+
 // The grant exists only after its state is durable, and a failed write
 // sends nothing (F25).
 func TestVoterGrantsOnlyAfterPersist(t *testing.T) {

@@ -43,10 +43,18 @@ const maxFrame = 4 << 10
 // MaxTermJump bounds how far one request may lift a voter's promise: a
 // request for a term more than this above what the voter has promised (or
 // its floor) is refused and logged. A token holder (or a bug) can't push a
-// pair's terms to the top of the range and jam it for good (#1021 review).
-// A fresh voter (nothing promised) takes any first term. An operator's
-// re-commission floor stays within half of it (Elector.Recommission).
-const MaxTermJump = 1 << 20
+// pair's terms to the top of the range and jam it for good (#1021 review):
+// that now takes about 16 million forced jumps. It is wide enough that an
+// isolated controller campaigning every few seconds for decades still
+// rejoins (2^20 was crossed in about 50 days). A fresh voter (nothing
+// promised) takes any first term; that, like the cap itself, is liveness
+// only. An operator's re-commission floor stays within half of it
+// (Elector.Recommission).
+const MaxTermJump = 1 << 40
+
+// RefusedHeader says why a voter refused a vote with 409: "lease" (the
+// stated lease is longer than the voter's) or "term-jump" (MaxTermJump).
+const RefusedHeader = "X-Nautilus-Refused"
 
 var clusterID = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
@@ -78,13 +86,18 @@ func members(x, y quorum.NodeID) string {
 // promised promised (floor floor) by more than MaxTermJump.
 func termJump(term, promised, floor uint64) bool {
 	base := max(promised, floor)
-	return base != 0 && term > base && term-base > MaxTermJump
+	limit := uint64(MaxTermJump)
+	if mut("term_cap_narrow") {
+		limit = 1 << 20 // the first cap: an isolated controller crossed it in about 50 days
+	}
+	return base != 0 && term > base && term-base > limit
 }
 
 // statusError is a peer call answered with an HTTP error.
 type statusError struct {
-	code int
-	msg  string
+	code   int
+	msg    string
+	reason string // RefusedHeader
 }
 
 func (e *statusError) Error() string { return e.msg }
@@ -217,7 +230,8 @@ func (c *caller) call(ctx context.Context, d time.Duration, method, url string, 
 	case resp.StatusCode == http.StatusNoContent:
 		return nil, nil
 	case resp.StatusCode != http.StatusOK:
-		return nil, &statusError{code: resp.StatusCode, msg: fmt.Sprintf("%s %s: %s: %s", method, url, resp.Status, bytes.TrimSpace(b))}
+		return nil, &statusError{code: resp.StatusCode, reason: resp.Header.Get(RefusedHeader),
+			msg: fmt.Sprintf("%s %s: %s: %s", method, url, resp.Status, bytes.TrimSpace(b))}
 	}
 	return b, nil
 }
@@ -254,4 +268,10 @@ func writeFrame(w http.ResponseWriter, b []byte) {
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(b)
+}
+
+// refuse answers 409 with why (RefusedHeader).
+func refuse(w http.ResponseWriter, why, msg string) {
+	w.Header().Set(RefusedHeader, why)
+	http.Error(w, msg, http.StatusConflict)
 }

@@ -68,8 +68,17 @@ func NewVoter(self NodeID, lease time.Duration, st VoterState, now Instant) *Vot
 	if mut("restart_grants") {
 		wait = now
 	}
-	st.Lease = bound
-	return &Voter{self: self, lease: lease, st: st, waitUntil: wait}
+	v := &Voter{self: self, lease: lease, st: st, waitUntil: wait}
+	if st.Lease != bound && !mut("lease_raise_volatile") {
+		// The longer lease isn't in the file yet: it must be before any
+		// grant, even an unchanged renewal (which writes nothing of its
+		// own), or a promise made under it outlives the next restart's
+		// shorter wait (#1021 re-review). Dirty, so the first grant comes
+		// back as a Persist and leaves only once it is durable.
+		v.dirty++
+	}
+	v.st.Lease = bound
+	return v
 }
 
 // MaxRequestLease is the longest lease a request may state at now (the

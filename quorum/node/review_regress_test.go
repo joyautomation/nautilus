@@ -371,3 +371,84 @@ func TestReviewMembersFile(t *testing.T) {
 		t.Fatalf("members file %q, %v", b, err)
 	}
 }
+
+// (re-review 2) An isolated controller's terms climb with every campaign
+// (about one each 4 s); rejoining after months, its term may be millions
+// above what the other voters promised. Both still take it; only a jump
+// past MaxTermJump is refused, with its own event.
+func TestReviewIsolatedControllerRejoins(t *testing.T) {
+	high := uint64(3 + 1<<20 + 5) // past the first cap (2^20): about 50 days of campaigns
+	var mu sync.Mutex
+	var evs []Event
+	e, _, o := commissioned(t, nil, func(ev Event) { mu.Lock(); evs = append(evs, ev); mu.Unlock() })
+	waitFor(t, 2*time.Second, func() bool {
+		_, rep := vote(t, e.Handler(), o.Lease, "", quorum.Request{From: "b", Term: 3, Nonce: 7, ID: 1})
+		return rep.Granted
+	})
+	if code, rep := vote(t, e.Handler(), o.Lease, "", quorum.Request{From: "b", Term: high, Nonce: 7, ID: 2}); code != http.StatusOK || !rep.Granted {
+		t.Fatalf("the controller refused the rejoining term %d: %d %+v", high, code, rep)
+	}
+	if code, _ := vote(t, e.Handler(), o.Lease, "", quorum.Request{From: "b", Term: high + MaxTermJump + 1, Nonce: 7, ID: 3}); code != http.StatusConflict {
+		t.Fatalf("a jump past MaxTermJump: %d, want 409", code)
+	}
+	waitFor(t, time.Second, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, ev := range evs {
+			if ev.Kind == EventTermJumpRefused {
+				return true
+			}
+			if ev.Kind == EventLeaseMismatch {
+				t.Fatalf("a term jump reported as a lease mismatch: %+v", ev)
+			}
+		}
+		return false
+	})
+
+	clk := newFakeClock()
+	w, stop := startWitness(t, WitnessOptions{Dir: t.TempDir(), Lease: time.Second, clock: clk.now})
+	defer stop()
+	vote(t, w.Handler(), time.Second, "a,b", quorum.Request{From: "a", Term: 3, Nonce: 1, ID: 1})
+	clk.add(2 * time.Second)
+	waitFor(t, 2*time.Second, func() bool {
+		_, rep := vote(t, w.Handler(), time.Second, "a,b", quorum.Request{From: "a", Term: 3, Nonce: 1, ID: 2})
+		return rep.Granted
+	})
+	clk.add(2 * time.Second) // A's promise runs out
+	if code, rep := vote(t, w.Handler(), time.Second, "a,b", quorum.Request{From: "b", Term: high, Nonce: 2, ID: 1}); code != http.StatusOK || !rep.Granted {
+		t.Fatalf("the witness refused the rejoining term %d: %d %+v", high, code, rep)
+	}
+}
+
+// (re-review 2) The sender hears why: a term-jump refusal from a voter is
+// raised as such, never as a lease mismatch.
+func TestReviewTermJumpRefusalReportedAsSuch(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		refuse(w, "term-jump", "term 9 is too far above 1")
+	}))
+	defer srv.Close()
+	u, _ := url.Parse(srv.URL)
+	o := testOptions(t, "a", "b")
+	o.WitnessAddr = u.Host
+	var mu sync.Mutex
+	var evs []Event
+	o.OnEvent = func(ev Event) { mu.Lock(); evs = append(evs, ev); mu.Unlock() }
+	e, err := New(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close()
+	running(t, e.Run)
+	waitFor(t, time.Second, e.running.Load)
+	e.vote(WitnessID, e.wit, quorum.Request{From: "a", Term: 9, Nonce: e.nonce, ID: 99})
+	waitFor(t, 2*time.Second, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, ev := range evs {
+			if ev.Kind == EventTermJumpRefused {
+				return true
+			}
+		}
+		return false
+	})
+}

@@ -693,16 +693,23 @@ same driver contract as the simulator.
   file records the longest lease a promise may still run under (`VoterState.Lease`). A voter
   restarted with a shorter lease waits that longer one out before it grants. Until then it
   still accepts requests stating it, so a live leader's renewals are seen. Its first grant
-  after the wait records its own lease. Without this, a witness rolled from 4 s to 2 s
-  granted B inside A's 4 s lease (#1021 review).
+  after the wait records its own lease. A voter restarted with a longer lease than its file
+  says writes it before its first grant, even an unchanged renewal. Without these, a witness
+  rolled from 4 s to 2 s granted B inside A's 4 s lease, and so did one rolled 2 → 4 → 2 s
+  (#1021 review and re-review). The state file's format is version 2 since this field; a
+  file of another version reads as unreadable (`ErrVersion`), not as damaged.
 - **Pairs never share a voter.** The witness keys each pair by a **cluster ID**: 128 random
   bits drawn when the pair is commissioned (3c), not the project name, so two sites that run
   one project never meet. At its first vote, a cluster is bound to its two controllers, in a
   `<cluster>.members` file made durable before its voter exists. A vote from anyone else, or
   naming other members, is refused.
-- **No term jumps.** A request for a term more than 2^20 above what a voter has promised (or
-  its floor) is refused and logged, so a token holder or a bug can't push a pair's terms to
-  the top of the range. An operator's re-commission floor must stay within 2^19 of the known
+- **No term jumps.** A request for a term more than 2^40 above what a voter has promised (or
+  its floor) is refused, logged, and raised on both sides as `redundancy.term-jump-refused`.
+  A token holder or a bug then needs about 16 million forced jumps to push a pair's terms to
+  the top of the range. The cap is wide enough that an isolated controller, campaigning every
+  few seconds, still rejoins after decades; the first cap, 2^20, was crossed in about 50 days.
+  A fresh voter, with nothing promised, takes any first term. That gap, like the cap itself,
+  is liveness only. An operator's re-commission floor must stay within 2^39 of the known
   terms.
 - **The client-token check** sends HMAC-SHA256, keyed with the peer token, over the direction,
   the asker's and answerer's names, a fresh challenge and the client token.

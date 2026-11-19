@@ -168,6 +168,8 @@ case caught it. A mutation joins the nightly run in the PR that builds the rule 
 | the gate stays open for unhealthy scans or after `Release` | design §3.2 | 3a (review) |
 | a voter's state isn't locked to one process (controller; witness) | design §6.2 | 3a (review) |
 | a voter takes a vote that jumps the terms (controller; witness) | design §6.2 | 3a (review) |
+| a longer lease after a restart isn't written before an unchanged grant | design §6.2 | 3a (re-review) |
+| the term-jump cap is 2^20, so an isolated controller is refused for good | design §6.2 | 3a (re-review) |
 | the client-token answer binds no names or direction | design §6.1 | 3a (review) |
 | no switch hold-off: a stray copy answering on and off switches the pair every lease | design §3.1, when a switch is proposed | 2 (handshake) |
 | a restarted controller counts its adopted incarnation at once (no quiet period owed) | design §3.1, the quiet period | 2 (handshake) |

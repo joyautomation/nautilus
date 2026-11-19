@@ -56,6 +56,10 @@ type VoterState struct {
 
 const stateMagic = "nqv"
 
+// stateVersion is the state file's format: 2 since VoterState.Lease. A
+// file of another version reads as ErrVersion, not as corrupt.
+const stateVersion = 2
+
 // MarshalBinary encodes s for its state file: a magic, a version byte, a
 // length, the fields, and a CRC-32C, so a torn write is detected.
 func (s VoterState) MarshalBinary() ([]byte, error) {
@@ -76,7 +80,7 @@ func (s VoterState) MarshalBinary() ([]byte, error) {
 	for _, v := range []uint64{s.Gen, s.PendingGen, s.PendingInc, s.Floor, uint64(s.Lease)} {
 		p = binary.BigEndian.AppendUint64(p, v)
 	}
-	b := append([]byte(stateMagic), wireVersion)
+	b := append([]byte(stateMagic), stateVersion)
 	b = binary.BigEndian.AppendUint32(b, uint32(len(p)))
 	b = append(b, p...)
 	return binary.BigEndian.AppendUint32(b, crc32.Checksum(b, castagnoli)), nil
@@ -98,7 +102,7 @@ func (s *VoterState) UnmarshalBinary(b []byte) error {
 	if crc32.Checksum(body, castagnoli) != binary.BigEndian.Uint32(b[head+n:]) {
 		return ErrCorrupt
 	}
-	if b[len(stateMagic)] != wireVersion {
+	if b[len(stateMagic)] != stateVersion {
 		return ErrVersion
 	}
 	rd := &reader{b: b[head : head+n]}

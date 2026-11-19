@@ -333,13 +333,13 @@ func (w *Witness) serveVote(rw http.ResponseWriter, r *http.Request) {
 			p.log.Error("witness: refused a vote for its lease: the pair's lease is longer than --lease", "detail", msg)
 		}
 		p.mu.Unlock()
-		http.Error(rw, msg, http.StatusConflict)
+		refuse(rw, "lease", msg)
 		return
 	}
 	if st := p.v.State(); termJump(req.Term, st.Promised, st.Floor) && !mut("no_term_cap") {
 		p.mu.Unlock()
 		p.log.Error("witness: refused a vote that would jump the terms", "from", req.From, "term", req.Term, "promised", st.Promised)
-		http.Error(rw, "term jump", http.StatusConflict)
+		refuse(rw, "term-jump", fmt.Sprintf("term %d is more than %d above the %d this witness promised", req.Term, uint64(MaxTermJump), max(st.Promised, st.Floor)))
 		return
 	}
 	persist, replies := p.v.Handle(now, req)

@@ -103,6 +103,10 @@ const (
 	// leases). The pair's members (or the witness's --lease) disagree.
 	// Raised on each side once per change.
 	EventLeaseMismatch EventKind = "redundancy.lease-mismatch"
+	// EventTermJumpRefused: a voter refused a vote asking for a term more
+	// than MaxTermJump above what it promised (Detail: which voter, the
+	// terms). Raised on each side once per change.
+	EventTermJumpRefused EventKind = "redundancy.term-jump-refused"
 )
 
 // Event is something the operator should see.
@@ -576,7 +580,11 @@ func (e *Elector) vote(to quorum.NodeID, base string, r quorum.Request) {
 		body, err := e.call.call(ctx, e.o.Lease/8, http.MethodPost, base+Prefix+e.o.Cluster+"/vote", b)
 		var se *statusError
 		if errors.As(err, &se) && se.code == http.StatusConflict {
-			e.mismatched(string(to), se.msg)
+			kind := EventLeaseMismatch
+			if se.reason == "term-jump" {
+				kind = EventTermJumpRefused
+			}
+			e.mismatched(kind, string(to), se.msg)
 		}
 		if err != nil || body == nil {
 			return
@@ -609,17 +617,23 @@ func (e *Elector) reply(from quorum.NodeID, r quorum.Reply) {
 	e.poke()
 }
 
-// mismatched reports a lease refusal between this controller and voter,
-// sent or received: logged and raised once per change of what it says.
-func (e *Elector) mismatched(voter, msg string) {
+// mismatched reports a refusal between this controller and voter, sent
+// or received (a lease mismatch, or a term jump): logged and raised once
+// per change of what it says.
+func (e *Elector) mismatched(kind EventKind, voter, msg string) {
+	key := string(kind) + "/" + voter
 	e.mu.Lock()
-	changed := e.mismatch[voter] != msg
-	e.mismatch[voter] = msg
+	changed := e.mismatch[key] != msg
+	e.mismatch[key] = msg
 	if changed {
-		e.event(Event{Kind: EventLeaseMismatch, Detail: msg})
+		e.event(Event{Kind: kind, Detail: msg})
 	}
 	e.mu.Unlock()
-	if changed {
+	switch {
+	case !changed:
+	case kind == EventTermJumpRefused:
+		e.log.Error("redundancy: a vote was refused as a term jump", "voter", voter, "detail", msg)
+	default:
 		e.log.Error("redundancy: a vote was refused for its lease: the pair's leases (or the witness's --lease) disagree", "voter", voter, "detail", msg)
 	}
 }
@@ -670,14 +684,15 @@ func (e *Elector) serveVote(w http.ResponseWriter, r *http.Request) {
 	if limit := e.v.MaxRequestLease(now); !leaseFits(stated, limit) && !mut("controller_lease_unchecked") {
 		e.mu.Unlock()
 		msg := fmt.Sprintf("%s's lease %v is longer than this voter's %v (or missing)", req.From, stated, limit)
-		e.mismatched(string(req.From), msg)
-		http.Error(w, msg, http.StatusConflict)
+		e.mismatched(EventLeaseMismatch, string(req.From), msg)
+		refuse(w, "lease", msg)
 		return
 	}
 	if st := e.v.State(); termJump(req.Term, st.Promised, st.Floor) && !mut("controller_no_term_cap") {
 		e.mu.Unlock()
-		e.log.Error("redundancy: refused a vote that would jump the terms", "from", req.From, "term", req.Term, "promised", st.Promised)
-		http.Error(w, "term jump", http.StatusConflict)
+		msg := fmt.Sprintf("%s asked for term %d, more than %d above the %d this voter promised", req.From, req.Term, uint64(MaxTermJump), max(st.Promised, st.Floor))
+		e.mismatched(EventTermJumpRefused, string(req.From), msg)
+		refuse(w, "term-jump", msg)
 		return
 	}
 	e.a.OnPeer(now)
