@@ -198,7 +198,7 @@ the substitute is there after the restart. That is an unknown outcome too.
 | `200`, `kept: true` | applied and saved |
 | `200`, `kept: false`, `warning` | **took effect, not saved** (a stop or an acknowledgement; a start that cannot be saved is refused): it may not survive a restart, or on a lost lease it may still be active on the next leader |
 | `400`, `403`, `404` with `refused` | the request is invalid or no rule names the tag (400); a value the rule does not allow, or the permission (403); no such entry is active (404) |
-| `401` | not authenticated |
+| `401` | not authenticated. The substitute handlers send it with `refused`; a 401 from a proxy in front does not, and reads as unknown: sign in, then re-read |
 | `409` with `refused` | the `requestId` was used for a different request, or a newer change won, or nothing was waiting for an acknowledgement |
 | `501` with `refused` | this server mirrors a controller it does not run: substitute on that controller |
 | `503` `no leader`, `refused` | this replica is standing by and no leader is known: nothing happened |
@@ -215,8 +215,10 @@ What to do:
   is settled.
 - **Unknown outcome of a stop or an acknowledgement:** they carry no
   `requestId`. Re-read and decide from what the list shows.
-- **`kept: false`:** it is in effect. Check `__Substitute_Fault`, and stop it
-  and stop it once the store is healthy (`__Substitute_Fault` says when a save failed).
+- **`kept: false`:** it is in effect now but not saved. `__Substitute_Fault`
+  says the save failed. Once the store is healthy (the fault clears), repeat
+  the stop or acknowledgement so it is saved; until then it may undo itself
+  after a restart, or be active on the next leader.
 - **409:** re-read and decide again; never retry blind.
 
 Send a fresh **`requestId`** with every start, one per user action, and
