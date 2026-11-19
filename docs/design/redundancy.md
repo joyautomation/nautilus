@@ -111,6 +111,13 @@ redundancy:
   request.
 - **Renewal** is the same request at the same term, every `lease/4`, marked as a renewal. A
   renewal that changes nothing the voter has persisted is answered without a new fsync.
+  A lease just won renews **at once**, not at the next look. The campaign's grants can arrive
+  late (a voter's slow fsync), leaving less of the lease than a look. Answering that renewal
+  needs no write, and that is safe: the request is for the same term from the same grantee,
+  so nothing durable changes, only the in-memory promise end moves later. A voter that
+  restarts before persisting anything newer waits a full lease before granting anyone, which
+  outlasts any promise extension it gave and didn't persist. This keeps a lease alive while
+  fsync stays under about `lease(1−ρ) − 2·RTT` (found by the nightly seeds, #998).
 - **Re-term on a refused renewal.** A voter can hold a promise that the leader's renewals
   can't satisfy: a standby that lost a contested campaign has promised itself the same term
   (or a higher one), and a voter that was in its restart wait when the leader won may have

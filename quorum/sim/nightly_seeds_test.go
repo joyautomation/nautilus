@@ -1,0 +1,145 @@
+package sim
+
+import "time"
+
+// nightlySeeds are the 20 schedules the first 200,000-seed nightly run failed on
+// main 78d234e8 (#998), as the generator drew them then (before the delay cap).
+var nightlySeeds = map[uint64]Options{
+	14523: {Seed: 14523, Delay: 1723540, Jitter: 1572771, Fsync: 1015924, InPlace: false,
+		Rates: [nNodes]PPM{998823, 1001615, 1000346}, Start: [3]time.Duration{2406314719, 231851332, 2915693495}, Until: 50613719034,
+		Faults: []Fault{
+			{Kind: Delay, At: 8639595692, For: 18165940987, From: A, To: B, Both: true, Value: 865685225},
+			{Kind: Wipe, At: 12914613267, For: 18699105767, Node: W},
+		}},
+	21198: {Seed: 21198, Delay: 2826615, Jitter: 2242369, Fsync: 3601340, InPlace: true,
+		Rates: [nNodes]PPM{1000160, 1000097, 1004215}, Start: [3]time.Duration{2823570223, 2436623123, 3441290665}, Until: 42593807044,
+		Faults: []Fault{
+			{Kind: SlowDisk, At: 7773468964, For: 10825717026, Node: W, Value: 2909606404},
+			{Kind: Pause, At: 9422018218, For: 2905721724, Node: A},
+			{Kind: Crash, At: 18839342275, For: 4754464769, Node: W},
+		}},
+	30099: {Seed: 30099, Delay: 2377549, Jitter: 2319077, Fsync: 757474, InPlace: false,
+		Rates: [nNodes]PPM{999515, 1000838, 1001856}, Start: [3]time.Duration{3284398667, 3500686773, 2949018979}, Until: 42242568001,
+		Faults: []Fault{
+			{Kind: Crash, At: 14339587711, For: 7418421472, Node: B},
+			{Kind: Wipe, At: 19850978271, For: 3391589730, Node: A},
+			{Kind: Loss, At: 10807576889, For: 10184333051, From: A, To: W, Value: 6},
+		}},
+	38969: {Seed: 38969, Delay: 3211556, Jitter: 961101, Fsync: 2542348, InPlace: false,
+		Rates: [nNodes]PPM{995697, 1002531, 998737}, Start: [3]time.Duration{3277593245, 1982835378, 2287763563}, Until: 45995852275,
+		Faults: []Fault{
+			{Kind: Wipe, At: 7303426661, For: 5699176477, Node: W},
+			{Kind: Start, At: 7244149281, For: 7827217753, Node: W2},
+			{Kind: Mirror, At: 7244149281, For: 7827217753, From: A, To: W, Node: W2},
+			{Kind: Delay, At: 14169159651, For: 12826692624, From: A, To: B, Both: true, Value: 935298623},
+		}},
+	47591: {Seed: 47591, Delay: 2168515, Jitter: 1136918, Fsync: 2346364, InPlace: true,
+		Rates: [nNodes]PPM{1001880, 1000433, 997303}, Start: [3]time.Duration{3987210568, 14758916, 3758953419}, Until: 57005006042,
+		Faults: []Fault{
+			{Kind: Start, At: 18160306739, For: 19844699303, Node: W2},
+			{Kind: Mirror, At: 18160306739, For: 19844699303, From: A, To: W, Node: W2},
+			{Kind: Wipe, At: 19759734627, For: 7595923490, Node: W},
+			{Kind: Delay, At: 12679489302, For: 19684758184, From: A, To: B, Both: true, Value: 860917019},
+		}},
+	52814: {Seed: 52814, Delay: 1318691, Jitter: 594773, Fsync: 4328681, InPlace: true,
+		Rates: [nNodes]PPM{1001601, 1002329, 1004341}, Start: [3]time.Duration{2615105049, 1963010633, 1757030462}, Until: 46419359639,
+		Faults: []Fault{
+			{Kind: SlowDisk, At: 8075445004, For: 19343914635, Node: B, Value: 1749002944},
+			{Kind: Crash, At: 6749935668, For: 6449366968, Node: A},
+		}},
+	54172: {Seed: 54172, Delay: 2187762, Jitter: 1991061, Fsync: 2275668, InPlace: false,
+		Rates: [nNodes]PPM{1004051, 1000725, 997199}, Start: [3]time.Duration{1983218132, 2275967223, 342169992}, Until: 56058592316,
+		Faults: []Fault{
+			{Kind: Wipe, At: 19920866997, For: 17137725319, Node: A},
+			{Kind: Crash, At: 16518609451, For: 1797767160, Node: B},
+			{Kind: Crash, At: 17652724871, For: 17654174026, Node: B},
+		}},
+	57197: {Seed: 57197, Delay: 4364598, Jitter: 1063709, Fsync: 4554672, InPlace: true,
+		Rates: [nNodes]PPM{998996, 1001664, 1003304}, Start: [3]time.Duration{605313319, 3071580147, 3401944119}, Until: 56883473628,
+		Faults: []Fault{
+			{Kind: SlowDisk, At: 8027722378, For: 17933022308, Node: A, Value: 1734136179},
+			{Kind: Wipe, At: 7100106552, For: 11889516877, Node: B},
+			{Kind: Wipe, At: 18698247570, For: 19185226058, Node: W},
+		}},
+	61535: {Seed: 61535, Delay: 1880132, Jitter: 414026, Fsync: 3223793, InPlace: true,
+		Rates: [nNodes]PPM{1001271, 996880, 1000089}, Start: [3]time.Duration{3604808839, 3879978178, 375344803}, Until: 47180649266,
+		Faults: []Fault{
+			{Kind: SlowDisk, At: 6204362093, For: 14935134266, Node: W, Value: 2221699234},
+			{Kind: Cut, At: 8772831729, For: 11821770652, From: A, To: W, Both: true},
+			{Kind: Crash, At: 13503442819, For: 14677206447, Node: W},
+		}},
+	63039: {Seed: 63039, Delay: 4160462, Jitter: 1172619, Fsync: 2922940, InPlace: true,
+		Rates: [nNodes]PPM{1004237, 1003270, 1001096}, Start: [3]time.Duration{3741515672, 294997604, 1712524540}, Until: 59225658416,
+		Faults: []Fault{
+			{Kind: Delay, At: 21007551203, For: 19218107213, From: A, To: B, Both: true, Value: 881571338},
+			{Kind: Wipe, At: 21767677882, For: 9519269331, Node: W},
+			{Kind: DiskFail, At: 20386086501, For: 6485359501, Node: A},
+		}},
+	84269: {Seed: 84269, Delay: 3080025, Jitter: 1608260, Fsync: 2569670, InPlace: false,
+		Rates: [nNodes]PPM{996330, 1003223, 1004707}, Start: [3]time.Duration{2881172874, 309386734, 197355869}, Until: 41323276653,
+		Faults: []Fault{
+			{Kind: Wipe, At: 18835413027, For: 3487863626, Node: A},
+			{Kind: DiskFail, At: 8221042906, For: 6517221940, Node: W},
+			{Kind: Crash, At: 9159179891, For: 10592563291, Node: B},
+		}},
+	89414: {Seed: 89414, Delay: 3073499, Jitter: 969117, Fsync: 279680, InPlace: false,
+		Rates: [nNodes]PPM{996944, 996334, 997398}, Start: [3]time.Duration{3161164694, 635339531, 3180978459}, Until: 53663700388,
+		Faults: []Fault{
+			{Kind: Loss, At: 7982038549, For: 7638909750, From: A, To: W, Both: true, Value: 28},
+			{Kind: Wipe, At: 15638410859, For: 12675066513, Node: W},
+			{Kind: Delay, At: 16587835182, For: 18075865206, From: A, To: B, Both: true, Value: 959387371},
+		}},
+	129636: {Seed: 129636, Delay: 2147129, Jitter: 850660, Fsync: 2959746, InPlace: false,
+		Rates: [nNodes]PPM{1003081, 998315, 997434}, Start: [3]time.Duration{2281928517, 2553046256, 1695923817}, Until: 52430373153,
+		Faults: []Fault{
+			{Kind: SlowDisk, At: 17267165798, For: 16163207355, Node: B, Value: 1569432420},
+			{Kind: Wipe, At: 13757750172, For: 4020622359, Node: B},
+			{Kind: Cut, At: 18523593374, For: 11115400606, From: A, To: W},
+		}},
+	142433: {Seed: 142433, Delay: 627781, Jitter: 435115, Fsync: 2572541, InPlace: false,
+		Rates: [nNodes]PPM{1002231, 996072, 996236}, Start: [3]time.Duration{2485972364, 979066986, 3603289213}, Until: 42000102724,
+		Faults: []Fault{
+			{Kind: SlowDisk, At: 7928390749, For: 15071711975, Node: B, Value: 1820035659},
+			{Kind: Wipe, At: 10333989557, For: 6135565976, Node: A},
+		}},
+	153106: {Seed: 153106, Delay: 263599, Jitter: 50950, Fsync: 778888, InPlace: true,
+		Rates: [nNodes]PPM{1001746, 996731, 998412}, Start: [3]time.Duration{3491868339, 3777368121, 3248260588}, Until: 48308509800,
+		Faults: []Fault{
+			{Kind: Delay, At: 16976742480, For: 12331767320, From: A, To: B, Both: true, Value: 922877146},
+			{Kind: Skew, At: 12279128281, For: 956760291, Node: A, Value: 1000803},
+			{Kind: Wipe, At: 14983545723, For: 4598983761, Node: W},
+		}},
+	157046: {Seed: 157046, Delay: 4513371, Jitter: 944886, Fsync: 1455563, InPlace: true,
+		Rates: [nNodes]PPM{1001465, 1001860, 1002092}, Start: [3]time.Duration{3219443038, 3242609926, 1451881349}, Until: 47548287185,
+		Faults: []Fault{
+			{Kind: Cut, At: 6581587858, For: 14287799226, From: A, To: B, Both: true},
+			{Kind: Wipe, At: 8793616268, For: 9628879170, Node: W},
+			{Kind: Delay, At: 15756784016, For: 12791503169, From: A, To: B, Both: true, Value: 955900830},
+		}},
+	162345: {Seed: 162345, Delay: 4359202, Jitter: 3812407, Fsync: 3783723, InPlace: false,
+		Rates: [nNodes]PPM{1003339, 1000978, 1003109}, Start: [3]time.Duration{3252329549, 1291185037, 1001041392}, Until: 46703894619,
+		Faults: []Fault{
+			{Kind: SlowDisk, At: 9295984691, For: 18407909928, Node: B, Value: 1654367125},
+			{Kind: Wipe, At: 10134561223, For: 9847754136, Node: A},
+		}},
+	176221: {Seed: 176221, Delay: 668196, Jitter: 650933, Fsync: 4342870, InPlace: true,
+		Rates: [nNodes]PPM{1003280, 1003857, 997392}, Start: [3]time.Duration{3449996288, 3646878514, 1913663639}, Until: 47543642144,
+		Faults: []Fault{
+			{Kind: SlowDisk, At: 11745553262, For: 16798088882, Node: A, Value: 1622252149},
+			{Kind: Wipe, At: 10115022995, For: 3883176834, Node: A},
+			{Kind: Crash, At: 14936900295, For: 9319592636, Node: W},
+		}},
+	184642: {Seed: 184642, Delay: 3040929, Jitter: 899183, Fsync: 1680097, InPlace: false,
+		Rates: [nNodes]PPM{1004703, 1001781, 1001440}, Start: [3]time.Duration{3338885798, 34726736, 1006380310}, Until: 46228667743,
+		Faults: []Fault{
+			{Kind: SlowDisk, At: 13667241137, For: 13561426606, Node: B, Value: 1877654569},
+			{Kind: Pause, At: 7745601990, For: 5766303648, Node: B},
+			{Kind: Wipe, At: 10436240547, For: 3081766884, Node: W},
+		}},
+	193654: {Seed: 193654, Delay: 4077068, Jitter: 877791, Fsync: 636243, InPlace: false,
+		Rates: [nNodes]PPM{1001468, 995728, 1000367}, Start: [3]time.Duration{425068763, 2277914906, 2517757244}, Until: 54990959315,
+		Faults: []Fault{
+			{Kind: SlowDisk, At: 17427824772, For: 18563134543, Node: W, Value: 1768984124},
+			{Kind: Crash, At: 17368373361, For: 10144696476, Node: B},
+		}},
+}

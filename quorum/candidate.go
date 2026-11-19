@@ -315,6 +315,13 @@ func (c *Candidate) OnReply(now Instant, r Reply) {
 		c.leaseEnd = end
 		c.epoch, c.renewTerm = rd.term, rd.term
 		c.reterm = false // a refusal from before this lease means nothing to it
+		// Renew at once, not at the next look: a slow vote (a voter's
+		// fsync, a long link) may have left less of this lease than a look.
+		// The renewal changes nothing durable at a voter (same term, same
+		// grantee), so it is answered without waiting for a write.
+		if !mut("renew_on_look") {
+			c.nextLook = now
+		}
 	} else if end > c.leaseEnd {
 		// A renewal majority, possibly at a higher vote term (a re-term):
 		// the lease now rests on it. The epoch stays.

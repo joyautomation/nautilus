@@ -29,6 +29,7 @@ var Mutations = []string{
 	"no_yield",            // a voter never yields its own candidate's promise (#979)
 	"no_observe",          // a candidate doesn't see the peer's requested terms (#979)
 	"retry_on_grid",       // a refused campaign retries on the look grid (#979)
+	"renew_on_look",       // a lease won waits for the next look to renew (#998)
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")

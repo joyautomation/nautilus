@@ -170,7 +170,24 @@ constant false, so the checks cost nothing. `go run ./tools/quorum-mutants` does
 - it prints a Markdown table and exits non-zero on any survivor.
 
 Its own table test checks those verdicts, and that every mutation in `quorum/mut_on.go` has a
-row. All 16 are caught, in about 50 s.
+row. All 17 are caught, in about 50 s.
+
+**The first 200,000-seed nightly (#998)** failed 20 seeds on main (78d234e8), all liveness or
+steady state, none safety. They are named cases in `quorum/sim/nightly_test.go`, in four classes:
+1. **A liveness bug, 8 seeds.** A voter the majority needs fsyncs in 1.6–1.9 s, so a won lease
+   had less left than a look and lapsed before its first renewal. Fixed by renewing at once on
+   winning (design §3.1; switch `renew_on_look`).
+2. **Beyond the documented link rule, 7 seeds.** The witness is wiped and the A–B link has a
+   0.86–0.96 s one-way delay, so takeovers may flap (F21). Every other oracle holds. The
+   generator now caps a delay fault at base + jitter + fault ≤ lease/4.
+3. **A lost controller file, 3 seeds.** The controller lost its accepted incarnation, so the
+   witness can't back it (#976).
+4. **A witness file torn by a crash mid-write, 2 seeds.** That is a rebuilt witness, not yet
+   counted.
+
+For classes 3 and 4, steady state is judged on A and B alone when the record shows a node
+restarting from an unreadable file. The oracle used to look only for explicit wipes in the
+schedule. The handshake PR flips this back.
 
 **Where each is caught.**
 - **Targeted sim cases (`quorum/sim/targeted_test.go`)** catch three rules the matrix and the
@@ -329,7 +346,7 @@ T4 where only hardware can.
 | F22 | **Clock-rate skew**: ±0.1%, ±0.5%, ±1% (= ρ) between any two voters | T2: per-node clock rate. T3: a `quorumtest` build tag that scales the elector's monotonic clock (containers share one kernel clock). | I1 holds up to ρ. At 2× ρ, T2 shows where the margin breaks, and the guide states the limit. | ✓ | ✓ | |
 | F22b | **Stopped leader clock**: a VM paused or live-migrated, a host suspend | T2: the leader's clock frozen while others run. T3: `incus pause` of a VM leader for 0.5–3 × lease, and a guest suspend. | **Host suspend:** safe, because leases run on `CLOCK_BOOTTIME`. **VM pause:** an expected I1 breach, measured. The guide lists pausable or migratable VMs as unsupported for controllers (design §3.1). The resumed leader writes, so the case is excluded from I1, I2, I2-PN and I3 by name. | ✓ | ✓ | |
 | F23 | Wall-clock steps: ±1 h jumps, NTP slewing | T3: the pair in two incus VMs, `date -s` in one. T4: `date -s` on one box. | No effect: only monotonic durations are used. The VMs share no monotonic clock, so the recorder (I2) arbitrates I1 here. | ✓ | ✓ | ✓ |
-| F24 | **Slow disk**: fsync at 10 ms, 100 ms, lease/2 and over lease, on the voter state, retain and the journal | T2: simulated disk. T3: a dm-delay device in the rig VM. | A voter whose fsync has not finished has not answered, so the grant is late but never early. A slow retain save does not stall the scan. | ✓ | ✓ | |
+| F24 | **Slow disk**: fsync at 10 ms, 100 ms, lease/2 and over lease, on the voter state, retain and the journal | T2: simulated disk. T3: a dm-delay device in the rig VM. | A voter whose fsync has not finished has not answered, so the grant is late but never early. A slow retain save does not stall the scan. **Liveness bound:** a lease won renews at once with no write (design §3.1), so the pair keeps a leader while fsync stays under about `lease(1−ρ) − 2·RTT` (1.9 s at a 2 s lease). Slower, a voter the majority needs can't grant in time, and no lease is won while it is needed (measured, not failed). | ✓ | ✓ | |
 | F25 | Disk full, EIO | T3: a size-limited tmpfs; T2: injected | A voter that cannot persist does not grant. Alarm. The leader's fate follows from the votes. | ✓ | ✓ | |
 | F26 | Torn state files: the voter file, retain and the journal truncated at every byte offset | T2, and T1 for the decoders | The torn tail is dropped, and a voter that cannot read its state waits one lease. | ✓ | | |
 | F27 | **I/O lost on the leader only** (#626) | nftables leader↔recorder | On a polled device, the leader hands over after the hold-off, because the standby is strictly better (design §3.2), and the standby's inputs are already live. On a no-session device (EtherNet/IP, IO-Link, OptoMMP with a watchdog), nothing hands over: a driver fault is raised, and the recorder's watchdog trips. | ✓ | ✓ | ✓ |
