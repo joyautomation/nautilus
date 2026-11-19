@@ -47,6 +47,43 @@ type State struct {
 	// IO is the live I/O configuration applied over /api/io and not yet in
 	// the deployed manifest (#706); see IOState.
 	IO *IOState `json:"io,omitempty"`
+	// Substitutes are the active substitute values (#707) and the
+	// bookkeeping a restart needs to honour them: a substitute is bounded
+	// operator intent meant to run the plant through a bad sensor, so a
+	// restart must not put the bad reading back into the logic mid-run.
+	// Nil until the first substitute; a store written before substitutes
+	// existed loads unchanged.
+	Substitutes *SubstituteState `json:"substitutes,omitempty"`
+}
+
+// SubstituteState is what a controller keeps of its substitutes.
+type SubstituteState struct {
+	// Entries are the active substitutes.
+	Entries []SubstituteRetain `json:"entries,omitempty"`
+	// HighID is the highest entry ID ever issued, ended entries included,
+	// so a restart never issues an ID again: a stale stop naming an ended
+	// entry must not end a newer one.
+	HighID uint64 `json:"highId,omitempty"`
+	// LastSeenMs is the wall clock (epoch ms, rounded down to 30 s) the
+	// last time the controller saved while a substitute was active. A
+	// restart whose clock reads earlier went backwards across the
+	// restart, and its substitutes expire (#707).
+	LastSeenMs int64 `json:"lastSeenMs,omitempty"`
+}
+
+// SubstituteRetain is one active substitute.
+type SubstituteRetain struct {
+	ID uint64 `json:"id"`
+	// Name is the address: a tag, or a member path of one.
+	Name string `json:"name"`
+	// Value is the substitute in plain JSON form, as Tags holds values.
+	Value      any    `json:"value"`
+	By         string `json:"by,omitempty"`
+	StartMs    int64  `json:"startMs"`
+	UntilMs    int64  `json:"untilMs"`
+	GrantedMs  int64  `json:"grantedMs"`
+	AckOnStart bool   `json:"ackOnStart,omitempty"`
+	Acked      bool   `json:"acked,omitempty"`
 }
 
 // AlarmRetain is one alarm's retained operator state. Every field is

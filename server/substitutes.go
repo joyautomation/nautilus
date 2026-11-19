@@ -319,24 +319,46 @@ func (s *Server) substituteAckTarget(_ *http.Request, body []byte) auditTarget {
 	return auditTarget{target: s.substituteNames(req.IDs), detail: map[string]any{"ids": req.IDs}}
 }
 
-// auditSubstituteEvent journals what the runtime did on its own: an expiry
-// has no request, so it is recorded here, by "system", with the value the
-// program ran on and the live value it went back to. A start, stop and
-// acknowledgement are already journalled by the route that made them.
+// auditSubstituteEvent journals what the runtime did on its own:
+//   - an expiry (substitute.expire) has no request, so it is recorded here,
+//     by "system", with the value the program ran on and the live value it
+//     went back to; its reason says expired, expired-while-down (a restart)
+//     or refused-at-load (a deploy no longer allows it);
+//   - a fault and its clearing (substitute.fault, substitute.fault-clear),
+//     so a transient __Substitute_Fault is never invisible: the alarm
+//     layer latches, the journal records.
+//
+// A start, stop and acknowledgement are already journalled by the route
+// that made them; a takeover's superseded stop was journalled by the
+// leader that ended the entry.
 func (s *Server) auditSubstituteEvent(ev runtime.SubstituteEvent) {
-	if ev.Kind != runtime.SubstituteEventExpire {
-		return
-	}
 	e := ev.Entry
-	s.audit.record(audit.Entry{
-		TS:     time.UnixMilli(ev.AtMs),
-		User:   ev.By,
-		Source: audit.SourceSystem,
-		Action: "substitute.expire",
-		Target: e.Name,
-		Before: map[string]any{"id": e.ID, "value": e.Value, "by": e.By},
-		After:  map[string]any{"live": e.Live},
-		Detail: map[string]any{"reason": ev.Reason, "grantedMs": e.GrantedMs, "untilMs": e.UntilMs},
-		Result: audit.ResultOK,
-	})
+	switch ev.Kind {
+	case runtime.SubstituteEventExpire:
+		s.audit.record(audit.Entry{
+			TS:     time.UnixMilli(ev.AtMs),
+			User:   ev.By,
+			Source: audit.SourceSystem,
+			Action: "substitute.expire",
+			Target: e.Name,
+			Before: map[string]any{"id": e.ID, "value": e.Value, "by": e.By},
+			After:  map[string]any{"live": e.Live},
+			Detail: map[string]any{"reason": ev.Reason, "grantedMs": e.GrantedMs, "untilMs": e.UntilMs},
+			Result: audit.ResultOK,
+		})
+	case runtime.SubstituteEventFault, runtime.SubstituteEventFaultClear:
+		detail := map[string]any{"reason": ev.Reason}
+		if e.ID != 0 {
+			detail["id"], detail["untilMs"], detail["grantedMs"] = e.ID, e.UntilMs, e.GrantedMs
+		}
+		s.audit.record(audit.Entry{
+			TS:     time.UnixMilli(ev.AtMs),
+			User:   ev.By,
+			Source: audit.SourceSystem,
+			Action: "substitute." + ev.Kind,
+			Target: e.Name,
+			Detail: detail,
+			Result: audit.ResultOK,
+		})
+	}
 }

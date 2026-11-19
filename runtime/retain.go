@@ -429,6 +429,8 @@ func (r *Runtime) loadRetained() error {
 	// VAR RETAIN locals are held for takeover, which writes them back after
 	// it resets the frames (restoreLocals).
 	r.pendingLocals = st.Locals
+	// Substitutes (substitute_retain.go): their own block, last.
+	r.loadSubstitutes(st.Substitutes)
 	return errors.Join(errs...)
 }
 
@@ -661,6 +663,8 @@ func (r *Runtime) retainState() retain.State {
 	if k := r.ioKeeper(); k != nil {
 		st.IO = k.RetainedIO()
 	}
+	// Substitutes (substitute_retain.go): their own block, last.
+	st.Substitutes = r.retainedSubstitutes()
 	return st
 }
 
@@ -700,6 +704,7 @@ func (r *Runtime) retainLoadFailed(err error) {
 	slog.Error("runtime: retained values could not be loaded; the tags start from their initial values",
 		"store", r.retainStore.Kind(), "error", err)
 	r.noteRetainError(err)
+	r.substituteLoadFailed()
 }
 
 func (r *Runtime) noteRetainError(err error) {

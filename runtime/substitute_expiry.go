@@ -67,6 +67,13 @@ const (
 	SubstitutesUnackedTag = "__SubstitutesUnacked"
 	// SubstituteExpiredTag pulses when a substitute expires.
 	SubstituteExpiredTag = "__Substitute_Expired"
+	// SubstituteFaultTag is true while a substitute needs a person: an
+	// entry's remainder was capped against a stepped clock, or the retain
+	// store could not be loaded, so substitutes it held may be missing.
+	// It is not latched (the alarm layer latches); every set and clear is
+	// an event (fault, fault-clear) and a log line, so a transient fault
+	// is never invisible.
+	SubstituteFaultTag = "__Substitute_Fault"
 )
 
 // substitutePulse is the least time __Substitute_Expired stays true.
@@ -79,6 +86,9 @@ const (
 	SubstituteEventExpire = "expire" // ended by its duration (By "system")
 	SubstituteEventAck    = "ack"
 	SubstituteEventFault  = "fault" // the entry runs on, but something needs a person (Reason says what)
+	// SubstituteEventFaultClear: a fault is over (Reason is the fault's).
+	// An entry's fault clears when the entry ends.
+	SubstituteEventFaultClear = "fault-clear"
 )
 
 // Substitute event reasons.
@@ -89,6 +99,23 @@ const (
 	// granted duration plus SubstituteSkew ahead of this replica's clock;
 	// the remainder was capped at the granted duration.
 	SubstituteReasonClockCapped = "clock-capped"
+	// SubstituteReasonExpiredWhileDown: at a restart, the entry's time ran
+	// out while the controller was down, or the wall clock went backwards
+	// across the restart (substitute_retain.go).
+	SubstituteReasonExpiredWhileDown = "expired-while-down"
+	// SubstituteReasonRefusedAtLoad: a retained entry the project no longer
+	// allows (its rule, its input or its type changed in a deploy) ended
+	// at the load instead of running on.
+	SubstituteReasonRefusedAtLoad = "refused-at-load"
+	// SubstituteReasonSuperseded: at a takeover from a shared retain store,
+	// an entry this replica held from an earlier leadership was not in the
+	// store, so the leader since then ended it (a stop, never journalled
+	// twice).
+	SubstituteReasonSuperseded = "superseded"
+	// SubstituteReasonRetainLoadFailed: the retain store could not be
+	// loaded, so substitutes it held may be missing (a fault with no
+	// entry).
+	SubstituteReasonRetainLoadFailed = "retain-load-failed"
 )
 
 // SubstituteEvent is one change to the substitute table, as audit and
@@ -141,9 +168,16 @@ type remainder struct {
 // − now, so time the controller was down counts. Zero or less has expired.
 // It never exceeds the granted duration. An entry the process is already
 // timing never ends later for it (rederiveLocked).
-func substituteRemainder(start, until time.Time, granted time.Duration, now time.Time, m remainderMode) remainder {
+//
+// In restart mode the clock must not have gone backwards across the
+// restart: a now before the start, or before lastSeen (the last time the
+// controller saved while a substitute ran; zero when unknown), has, and
+// the entry expires rather than trust it. Example: started 12:00 for 8 h,
+// restarted at a true 15:00 with the clock reading 12:30; until − now
+// would leave 7.5 h, but lastSeen (about 15:00) is later than now.
+func substituteRemainder(start, until time.Time, granted time.Duration, now, lastSeen time.Time, m remainderMode) remainder {
 	left := until.Sub(now)
-	if left <= 0 || m == remainRestart && now.Before(start) {
+	if left <= 0 || m == remainRestart && (now.Before(start) || now.Before(lastSeen)) {
 		return remainder{expired: true}
 	}
 	if left > granted {
@@ -171,8 +205,17 @@ func (t *Tags) syncSubLocked() {
 		tv, _, ok := t.lookupLocked(c.root)
 		t.setOwnedLocked(c.flag, ok && tv.substituted)
 	}
+	fault := t.subLoadFault
+	for _, ss := range t.subs {
+		for i := range ss.entries {
+			if ss.entries[i].Fault != "" {
+				fault = true
+			}
+		}
+	}
 	t.setOwnedLocked(t.subUnackedTag, unacked)
 	t.setOwnedLocked(t.subExpiredTag, t.pulseOn)
+	t.setOwnedLocked(t.subFaultTag, fault)
 	t.subBusy.Store(len(t.subs) > 0 || t.pulseOn)
 }
 
@@ -201,14 +244,14 @@ func (t *Tags) expireLocked(now time.Duration, at int64) []SubstituteEvent {
 			}
 		}
 	}
-	evs := t.endExpiredLocked(ids, now, at)
+	evs := t.endExpiredLocked(ids, now, at, SubstituteReasonExpired)
 	t.syncSubLocked()
 	return evs
 }
 
-// endExpiredLocked ends the entries ids as expired and arms the pulse.
-// Caller holds t.mu and calls syncSubLocked after.
-func (t *Tags) endExpiredLocked(ids []uint64, now time.Duration, at int64) []SubstituteEvent {
+// endExpiredLocked ends the entries ids as expired, for reason, and arms
+// the pulse. Caller holds t.mu and calls syncSubLocked after.
+func (t *Tags) endExpiredLocked(ids []uint64, now time.Duration, at int64, reason string) []SubstituteEvent {
 	if len(ids) == 0 {
 		return nil
 	}
@@ -216,23 +259,41 @@ func (t *Tags) endExpiredLocked(ids []uint64, now time.Duration, at int64) []Sub
 	evs := make([]SubstituteEvent, 0, len(ids))
 	for _, id := range ids {
 		if s, ok := t.unsubstituteLocked(id); ok {
-			evs = append(evs, SubstituteEvent{Kind: SubstituteEventExpire, Reason: SubstituteReasonExpired, Entry: s, By: "system", AtMs: at})
+			evs = append(evs, SubstituteEvent{Kind: SubstituteEventExpire, Reason: reason, Entry: s, By: "system", AtMs: at})
+			evs = append(evs, faultCleared(s, at)...)
 		}
 	}
-	t.pulseOn, t.pulseAt, t.pulseSeen = true, now, false
+	t.armPulseLocked(now)
 	return evs
 }
 
+// armPulseLocked starts (or restarts) the __Substitute_Expired pulse: a
+// substitute ended without anyone stopping it, and the live value is back
+// in the logic. Caller holds t.mu and calls syncSubLocked after.
+func (t *Tags) armPulseLocked(now time.Duration) {
+	t.pulseOn, t.pulseAt, t.pulseSeen = true, now, false
+}
+
+// faultCleared is the fault-clear event for an entry that ended while it
+// carried a fault, or nothing.
+func faultCleared(s Substitution, at int64) []SubstituteEvent {
+	if s.Fault == "" {
+		return nil
+	}
+	return []SubstituteEvent{{Kind: SubstituteEventFaultClear, Reason: s.Fault, Entry: s, By: "system", AtMs: at}}
+}
+
 // rederiveLocked re-times every entry from its wall-clock until (see
-// substituteRemainder), ending those that have expired. Caller holds t.mu.
-func (t *Tags) rederiveLocked(wall time.Time, now time.Duration, m remainderMode) []SubstituteEvent {
+// substituteRemainder), ending those that have expired. lastSeen counts in
+// restart mode only (zero: unknown). Caller holds t.mu.
+func (t *Tags) rederiveLocked(wall, lastSeen time.Time, now time.Duration, m remainderMode) []SubstituteEvent {
 	var ids []uint64
 	var evs []SubstituteEvent
 	for _, ss := range t.subs {
 		for i := range ss.entries {
 			e := &ss.entries[i]
 			rm := substituteRemainder(time.UnixMilli(e.StartMs), time.UnixMilli(e.UntilMs),
-				time.Duration(e.GrantedMs)*time.Millisecond, wall, m)
+				time.Duration(e.GrantedMs)*time.Millisecond, wall, lastSeen, m)
 			if rm.expired {
 				ids = append(ids, e.ID)
 				continue
@@ -244,13 +305,18 @@ func (t *Tags) rederiveLocked(wall time.Time, now time.Duration, m remainderMode
 				e.deadline = now + rm.left
 			}
 			e.timed = true
-			if rm.capped {
+			if rm.capped && e.Fault == "" {
+				e.Fault = SubstituteReasonClockCapped
 				evs = append(evs, SubstituteEvent{Kind: SubstituteEventFault, Reason: SubstituteReasonClockCapped,
 					Entry: t.reportLocked(ss, e), By: "system", AtMs: wall.UnixMilli()})
 			}
 		}
 	}
-	evs = append(evs, t.endExpiredLocked(ids, now, wall.UnixMilli())...)
+	reason := SubstituteReasonExpired
+	if m == remainRestart {
+		reason = SubstituteReasonExpiredWhileDown
+	}
+	evs = append(evs, t.endExpiredLocked(ids, now, wall.UnixMilli(), reason)...)
 	t.syncSubLocked()
 	return evs
 }
@@ -258,14 +324,25 @@ func (t *Tags) rederiveLocked(wall time.Time, now time.Duration, m remainderMode
 // expireSubstitutes is the main scan's substitute step, after the read
 // and before the logic. Idle (no entry, no pulse) it is one atomic load.
 func (r *Runtime) expireSubstitutes() {
-	if !r.tags.subBusy.Load() {
+	if !r.tags.subBusy.Load() && r.subPendingN.Load() == 0 {
 		return
 	}
 	now := r.mono()
 	r.subMu.Lock()
 	defer r.subMu.Unlock()
+	// The read before this step may have hung past the lease: a replica
+	// that is no longer leading leaves the entry for the leader, as the
+	// output step leaves the outputs (#621). Checked under subMu, so no
+	// start or stop slips in between.
+	if r.coord != nil && !r.coord.IsLeader() {
+		return
+	}
+	var evs []SubstituteEvent
+	if r.subPendingN.Load() > 0 {
+		evs = r.applyPendingSubstitutes()
+	}
 	r.tags.mu.Lock()
-	evs := r.tags.expireLocked(now, r.wallNow().UnixMilli())
+	evs = append(evs, r.tags.expireLocked(now, r.wallNow().UnixMilli())...)
 	r.tags.mu.Unlock()
 	logSubEvents(evs)
 	r.subEvents.push(evs)
@@ -282,8 +359,20 @@ func logSubEvents(evs []SubstituteEvent) {
 			slog.Info("runtime: substitute expired; the live value is back",
 				"substitute", e.Entry.Name, "id", e.Entry.ID, "reason", e.Reason, "grantedMs", e.Entry.GrantedMs)
 		case SubstituteEventFault:
-			slog.Warn("runtime: substitute's until lies beyond its granted duration on this clock; capped at the granted duration",
-				"substitute", e.Entry.Name, "id", e.Entry.ID, "reason", e.Reason, "until", time.UnixMilli(e.Entry.UntilMs), "now", time.UnixMilli(e.AtMs))
+			switch e.Reason {
+			case SubstituteReasonClockCapped:
+				slog.Warn("runtime: substitute's until lies beyond its granted duration on this clock; capped at the granted duration",
+					"substitute", e.Entry.Name, "id", e.Entry.ID, "reason", e.Reason, "until", time.UnixMilli(e.Entry.UntilMs), "now", time.UnixMilli(e.AtMs))
+			default:
+				slog.Warn("runtime: substitute fault", "substitute", e.Entry.Name, "id", e.Entry.ID, "reason", e.Reason)
+			}
+		case SubstituteEventFaultClear:
+			slog.Info("runtime: substitute fault cleared", "substitute", e.Entry.Name, "id", e.Entry.ID, "reason", e.Reason)
+		case SubstituteEventStop:
+			if e.Reason == SubstituteReasonSuperseded {
+				slog.Info("runtime: substitute ended at takeover: the retain store no longer holds it",
+					"substitute", e.Entry.Name, "id", e.Entry.ID)
+			}
 		}
 	}
 }
@@ -310,7 +399,7 @@ func (r *Runtime) retimeSubstitutes() {
 	r.subMu.Lock()
 	defer r.subMu.Unlock()
 	r.tags.mu.Lock()
-	evs := r.tags.rederiveLocked(r.wallNow(), r.mono(), remainTakeover)
+	evs := r.tags.rederiveLocked(r.wallNow(), time.Time{}, r.mono(), remainTakeover)
 	r.tags.mu.Unlock()
 	logSubEvents(evs)
 	r.subEvents.push(evs)
@@ -384,6 +473,13 @@ func (e *subEventQueue) add(fn func(SubstituteEvent)) func() {
 	e.next++
 	id := e.next
 	e.listeners = append(e.listeners, subListener{id, fn})
+	// Events queued before anyone listened (a restart's expired-while-down,
+	// from the retain load before the server registers) go to the first
+	// listener.
+	if len(e.q) > 0 && !e.running {
+		e.running = true
+		go e.drain()
+	}
 	return func() {
 		e.mu.Lock()
 		defer e.mu.Unlock()
@@ -396,18 +492,28 @@ func (e *subEventQueue) add(fn func(SubstituteEvent)) func() {
 	}
 }
 
+// subEventBacklog bounds the events kept while nobody listens.
+const subEventBacklog = 1024
+
 // push queues evs. Callers hold the lock that ordered the changes (subMu),
-// so the queue's order is theirs.
+// so the queue's order is theirs. While nobody listens they are kept, up
+// to subEventBacklog (the oldest go first, logged), for the first
+// listener: the retain load runs before the server registers its audit
+// listener, and an expired-while-down record must reach the journal.
 func (e *subEventQueue) push(evs []SubstituteEvent) {
 	if len(evs) == 0 {
 		return
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	e.q = append(e.q, evs...)
 	if len(e.listeners) == 0 {
+		if n := len(e.q) - subEventBacklog; n > 0 {
+			slog.Warn("runtime: substitute events dropped: nobody is listening", "dropped", n)
+			e.q = append(e.q[:0:0], e.q[n:]...)
+		}
 		return
 	}
-	e.q = append(e.q, evs...)
 	if !e.running {
 		e.running = true
 		go e.drain()
@@ -479,7 +585,7 @@ func declareSubstituteCompanions(o *Options) ([]string, error) {
 		seen[ir.NameKey(n)] = true
 		names = append(names, n+SubstitutedSuffix)
 	}
-	names = append(names, SubstitutesUnackedTag, SubstituteExpiredTag)
+	names = append(names, SubstitutesUnackedTag, SubstituteExpiredTag, SubstituteFaultTag)
 	tags := slices.Clone(o.Tags)
 	for _, n := range names {
 		if other, ok := used[ir.NameKey(n)]; ok {
@@ -516,7 +622,7 @@ func (r *Runtime) ownSubstituteCompanions(subs, comps []string) error {
 		r.subRoots[ir.NameKey(root)] = struct{}{}
 		t.subComp = append(t.subComp, subCompanion{root: root, flag: comps[i]})
 	}
-	t.subUnackedTag, t.subExpiredTag = comps[len(subs)], comps[len(subs)+1]
+	t.subUnackedTag, t.subExpiredTag, t.subFaultTag = comps[len(subs)], comps[len(subs)+1], comps[len(subs)+2]
 	for _, n := range comps {
 		tv := t.vals[n]
 		if tv == nil {

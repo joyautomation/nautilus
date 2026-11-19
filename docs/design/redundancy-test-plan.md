@@ -582,6 +582,12 @@ requirements agreed on #707. They join the run in #707's oplog PR, which builds 
      it stood by never stretches the substitute.
    - **A single controller across a restart** works the same way: the remainder comes from
      `until`, so downtime counts toward the duration.
+     - A clock that went backwards across the restart expires the entry, audited as
+       `expired-while-down`. "Backwards" means the clock now reads earlier than the entry's
+       start, or earlier than the last-seen wall time the retain store keeps.
+     - Last-seen is written only while a substitute is active, rounded down to 30 s
+       (`SubstituteSkew`). A backwards step of under 30 s across a restart is therefore not
+       caught; that bound is the skew bound.
    - Steps: step the leader's clock ±1 h mid-substitute; it still ends at its granted time.
      Then step the standby's clock before a takeover. Set 1 h ahead, the remainder
      shrinks by 1 h: it ends early, at worst at once, with the usual expiry audit and

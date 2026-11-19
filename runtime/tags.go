@@ -115,9 +115,13 @@ type Tags struct {
 	// nothing to time.
 	subComp                      []subCompanion
 	subUnackedTag, subExpiredTag string
-	pulseOn, pulseSeen           bool
-	pulseAt                      time.Duration
-	subBusy                      atomic.Bool
+	// subFaultTag is __Substitute_Fault's stored name; subLoadFault is
+	// set while the last retain load failed (substitute_retain.go).
+	subFaultTag        string
+	subLoadFault       bool
+	pulseOn, pulseSeen bool
+	pulseAt            time.Duration
+	subBusy            atomic.Bool
 }
 
 // tagVal is one stored tag: its value and the store generation at which

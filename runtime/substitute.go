@@ -68,6 +68,10 @@ type Substitution struct {
 	// acknowledgement of this substitute. Acked says whether it has had one.
 	AckOnStart bool `json:"ackOnStart"`
 	Acked      bool `json:"acked"`
+	// Fault, when set, says what about this entry needs a person while it
+	// runs on (SubstituteReasonClockCapped); __Substitute_Fault is true
+	// while any entry has one. It clears when the entry ends.
+	Fault string `json:"fault,omitempty"`
 	// RemainingMs is the time left, on the clock the runtime times it on
 	// (not the wall clock: see substitute_expiry.go). Filled in by
 	// Runtime.Substitutes.
@@ -375,6 +379,12 @@ func (r *Runtime) Substitute(addr string, req SubstituteRequest) (Substitution, 
 	if r.tags.hasSubstituteID(id) {
 		return Substitution{}, fmt.Errorf("substitute %s: entry %d is already active", addr, id)
 	}
+	// An ID is never issued twice, across restarts too (the high-water
+	// mark is retained): an entry at or below it that is not active has
+	// ended, and a stale stop naming it must not end a new one.
+	if id <= r.subSeq {
+		return Substitution{}, fmt.Errorf("substitute %s: entry %d has ended, and an entry's ID is never reused", addr, id)
+	}
 	wall := r.wallNow()
 	e := subEntry{
 		Substitution: Substitution{
@@ -396,6 +406,7 @@ func (r *Runtime) Substitute(addr string, req SubstituteRequest) (Substitution, 
 	evs := make([]SubstituteEvent, 0, 2)
 	if replaced != nil {
 		evs = append(evs, SubstituteEvent{Kind: SubstituteEventStop, Reason: SubstituteReasonReplaced, Entry: *replaced, By: req.By, AtMs: s.StartMs})
+		evs = append(evs, faultCleared(*replaced, s.StartMs)...)
 	}
 	r.subEvents.push(append(evs, SubstituteEvent{Kind: SubstituteEventStart, Entry: s, By: req.By, AtMs: s.StartMs}))
 	return s, nil
@@ -411,8 +422,12 @@ func (r *Runtime) Restore(id uint64, by string) (Substitution, bool) {
 	r.tags.mu.Lock()
 	s, ok := r.tags.unsubstituteLocked(id)
 	r.tags.mu.Unlock()
+	if !ok {
+		s, ok = r.pendingRestore(id) // retained, still waiting for its input
+	}
 	if ok {
-		r.subEvents.push([]SubstituteEvent{{Kind: SubstituteEventStop, Entry: s, By: by, AtMs: r.wallNow().UnixMilli()}})
+		at := r.wallNow().UnixMilli()
+		r.subEvents.push(append([]SubstituteEvent{{Kind: SubstituteEventStop, Entry: s, By: by, AtMs: at}}, faultCleared(s, at)...))
 	}
 	return s, ok
 }
@@ -433,14 +448,7 @@ func (r *Runtime) Substitutes() []Substitution {
 func (t *Tags) hasSubstituteID(id uint64) bool {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	for _, ss := range t.subs {
-		for i := range ss.entries {
-			if ss.entries[i].ID == id {
-				return true
-			}
-		}
-	}
-	return false
+	return t.hasIDLocked(id)
 }
 
 // lookupName reports a tag's stored name, and whether name itself is a
