@@ -341,10 +341,13 @@ an acknowledgement or a shelve made on the old leader may be lost at a
 failover, and the alarm comes back unacknowledged on the new one. This
 is being built next.
 
-Both controllers must run the same `redundancy:` section. If they don't
-(an edited manifest deployed to one box only), both report it, and the
-one that isn't leading won't take over until they match again; a
-leader keeps leading. A live I/O apply is refused while the other
+Both controllers must run the same `redundancy:` section (`peers:` and
+`witness:`). If they don't (an edited manifest deployed to one box
+only), both report it in `GET /api/cluster` and on the dashboard's
+banner, and the one that isn't leading won't take over until they match
+again; a leader keeps leading. **That can stop control after a second
+fault**: if the leader's lease lapses while the other controller still
+runs a different section, neither leads until the sections match. A live I/O apply is refused while the other
 controller runs an older build that can't keep it: finish the upgrade on
 both, then apply.
 

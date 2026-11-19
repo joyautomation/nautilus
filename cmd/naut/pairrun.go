@@ -103,13 +103,15 @@ func newPairMember(r *project.RedundancyConfig, apiAddr, dir string, d pairDeps)
 	if err := os.MkdirAll(filepath.Dir(o.StatePath), 0o750); err != nil {
 		return nil, fmt.Errorf("state directory: %w", err)
 	}
+	m := &pairMember{peers: r.Peers}
+	o.OnEvent = m.onEvent // events start with the election's Run, after m.q is set
 	// The election first: it locks the state file, so a second process of
 	// this controller stops here, before it binds anything.
 	q, err := leader.NewQuorum(o)
 	if err != nil {
 		return nil, err
 	}
-	m := &pairMember{q: q, o: o, peers: r.Peers}
+	m.q, m.o = q, o
 	// One listener, one token: the vote protocol and the operator-intent
 	// log's replication (design §6.1). Nothing here is a browser surface.
 	mux := http.NewServeMux()
@@ -243,6 +245,18 @@ func apiOn(peerAddr, apiAddr string) string {
 		return ""
 	}
 	return net.JoinHostPort(host, port)
+}
+
+// onEvent shows the pair's conditions where an operator looks:
+// /api/cluster's warnings and the dashboard's banner (leader.Status).
+func (m *pairMember) onEvent(ev node.Event) {
+	if ev.Kind == node.EventConfigDiffers {
+		msg := ev.Detail
+		if msg == "same" {
+			msg = ""
+		}
+		m.q.SetCondition("config-differs", msg)
+	}
 }
 
 // peersKeepIO is the live I/O apply's mixed-version guard (#1013): ""

@@ -106,7 +106,7 @@ func (e *Elector) heard(pi peerInfo) {
 	if differs != e.cfgDiffers {
 		e.cfgDiffers = differs
 		if differs {
-			msg := fmt.Sprintf("the pair's configuration differs between %s and %s (peers:, witness: or lease: in redundancy:): both must run the same section. Until it is fixed %s does not campaign; a leader keeps its lease", e.o.Self, e.o.Peer, e.o.Self)
+			msg := fmt.Sprintf("the pair's members differ between %s and %s (redundancy: peers: or witness:): both must run the same section. Until they match, the controller that is not leading will not take over, so if the leader's lease lapses meanwhile control stops", e.o.Self, e.o.Peer)
 			e.event(Event{Kind: EventConfigDiffers, Detail: msg})
 			e.log.Error("redundancy: "+msg, "self", e.o.Config, "peer", pi.Config)
 		} else {

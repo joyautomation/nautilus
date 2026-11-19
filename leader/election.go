@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"maps"
+	"slices"
 	"sync"
 	"time"
 
@@ -46,6 +48,23 @@ type Quorum struct {
 	mu        sync.Mutex
 	unhealthy string
 	warnings  []string
+	conds     map[string]string // SetCondition, by key
+}
+
+// SetCondition shows msg in Status's warnings under key until it is set
+// again; "" clears it. For a condition that comes and goes (the pair's
+// members differing, #710).
+func (q *Quorum) SetCondition(key, msg string) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if msg == "" {
+		delete(q.conds, key)
+		return
+	}
+	if q.conds == nil {
+		q.conds = map[string]string{}
+	}
+	q.conds[key] = msg
 }
 
 // Warn adds a standing warning to Status (shown by /api/cluster and the
@@ -79,6 +98,9 @@ func (q *Quorum) Status() Status {
 	st := quorumStatus(q.n.Status())
 	q.mu.Lock()
 	st.Warnings = append([]string(nil), q.warnings...)
+	for _, k := range slices.Sorted(maps.Keys(q.conds)) {
+		st.Warnings = append(st.Warnings, q.conds[k])
+	}
 	q.mu.Unlock()
 	return st
 }

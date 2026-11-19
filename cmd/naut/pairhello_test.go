@@ -85,6 +85,15 @@ func TestPairConfigDiffersHoldsCampaigns(t *testing.T) {
 	pairWait(t, "both to see the configurations differ", 10*time.Second, func() bool {
 		return ea.Status().ConfigDiffers && eb.Status().ConfigDiffers
 	})
+	// Loud: /api/cluster's warnings (the dashboard's banner) on both.
+	pairWait(t, "the mismatch in both controllers' status warnings", 5*time.Second, func() bool {
+		for _, n := range []string{"a", "b"} {
+			if !strings.Contains(strings.Join(r.nodes[n].m.q.Status().Warnings, "|"), "members differ") {
+				return false
+			}
+		}
+		return true
+	})
 	for end := time.Now().Add(4 * time.Second); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {
 		if ea.IsLeader() || eb.IsLeader() {
 			t.Fatal("a member led while the pair's configurations differ")
