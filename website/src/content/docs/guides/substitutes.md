@@ -214,6 +214,24 @@ What to do:
   entry the first one began, never a second), or wait and re-read again. Never
   retry with a new id, and never start a second one on the same tag until it
   is settled.
+- **On a redundant pair, an unknown start has a deadline.** A start answered
+  "unknown" because the pair's log could not confirm it is carried out
+  only if the log commits it within **60 s** of when it was proposed
+  (`SubstituteStartCommitBound`, measured on the leader that commits it;
+  it covers the 30 s clock skew allowed between the controllers). One
+  committed later (say, the controller that took it died and came back
+  an hour later) is **lapsed**: never started. `GET /api/substitutes`
+  lists it under `lapsed` as "lapsed (outcome was unknown; not started)",
+  with its `requestId`, and the journal records `substitute.lapse`. It
+  raises no alarm. Its `requestId` stays free, so a retry with it starts
+  the substitute. Stops and acknowledgements have no deadline: a late
+  stop is safe.
+- **Ended at a takeover:** in rare cases a start that had already begun
+  on one controller is lapsed by the next leader (its commit could not
+  be confirmed by the controllers that answered). It is then ended there,
+  journalled as "substitute ended: lapsed at takeover (its commit could
+  not be confirmed)", and listed under `lapsed` with `ended: true`. Check
+  the plant, and start it again if it is still needed.
 - **Unknown outcome of a stop or an acknowledgement:** they carry no
   `requestId`. Re-read and decide from what the list shows.
 - **`kept: false`:** it is in effect now but not saved. `__Substitute_Fault`

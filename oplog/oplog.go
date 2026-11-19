@@ -90,6 +90,11 @@ type Entry struct {
 	// retried after an unknown outcome carries the same one, and the
 	// runtime applies only the first entry that names it.
 	Req string `json:"req,omitempty"`
+
+	// Lapsed is set by the node, never stored: this entry is one a
+	// KindLapse entry committed with it names (see KindLapse). Apply sees
+	// it on the entry and records it instead of carrying it out.
+	Lapsed bool `json:"-"`
 }
 
 func (e Entry) same(o Entry) bool {
@@ -113,6 +118,18 @@ const (
 	// commits entries an earlier term stored but never committed (Raft
 	// §5.4.2). Apply never sees it.
 	KindNoop = "noop"
+
+	// KindLapse is a new leader's KindNoop that also names, in Refs, the
+	// entries it commits that an earlier term stored but never committed
+	// and that are too old to carry out now (Options.Lapse): a substitute
+	// start whose proposer answered "outcome unknown" must not begin
+	// minutes or hours later, when that proposer comes back (#1030
+	// review). Every replica applies the named entries as lapsed (Entry.
+	// Lapsed), deciding by this entry alone, never by its own clock, so
+	// they all agree; and Apply sees the KindLapse itself, so a replica
+	// that had already carried out a named entry (its commit was known
+	// only outside the majority the new leader heard) ends it.
+	KindLapse = "lapse"
 )
 
 // Leadership is who the sequencer is right now. A Kubernetes Lease elector
@@ -177,6 +194,11 @@ type Options struct {
 	Timeout time.Duration
 	Now     func() time.Time
 	Log     *slog.Logger
+	// Lapse, when set, picks the entries a new leader names in its
+	// KindLapse: those it commits from an earlier term, stored on fewer
+	// than a majority of the replicas its catch-up heard, for which
+	// Lapse(entry, the leader's now) is true. Nil: nothing lapses.
+	Lapse func(e Entry, now time.Time) bool
 }
 
 // Node is one instance's view of the log.
@@ -190,11 +212,15 @@ type Node struct {
 	// and the replication arrive in order.
 	seqMu sync.Mutex
 	// mu guards the state below.
-	mu          sync.Mutex
-	entries     []Entry
-	commit      uint64 // applied up to here
-	term        uint64 // highest term seen
-	syncedTerm  uint64 // the term this leader last caught up for
+	mu         sync.Mutex
+	entries    []Entry
+	commit     uint64 // applied up to here
+	term       uint64 // highest term seen
+	syncedTerm uint64 // the term this leader last caught up for
+	// onMajority are the entries past the commit index the last catch-up
+	// saw stored on a majority of the replicas that answered (seq → term):
+	// committed, so never lapsed (KindLapse).
+	onMajority  map[uint64]uint64
 	file        *os.File
 	lastContact map[string]time.Time
 }
@@ -319,11 +345,7 @@ func (n *Node) open() error {
 		return err
 	}
 	n.file = f
-	for _, e := range n.entries {
-		if e.Seq <= n.commit {
-			n.apply(e)
-		}
-	}
+	n.applyRange(n.entries, n.commit)
 	return nil
 }
 
@@ -544,16 +566,33 @@ func (n *Node) commitTo(seq uint64) {
 	if seq <= n.commit {
 		return
 	}
-	for _, e := range n.afterLocked(n.commit) {
-		if e.Seq > seq {
-			break
-		}
-		n.apply(e)
-	}
+	n.applyRange(n.afterLocked(n.commit), seq)
 	n.commit = seq
 	c := seq
 	if err := n.writeLine(fileLine{C: &c}); err != nil {
 		n.log.Warn("oplog: commit mark", "error", err)
+	}
+}
+
+// applyRange applies the entries of es up to seq, the range being
+// committed, in order. An entry a KindLapse in that same range names is
+// applied as Lapsed: the look ahead stops at seq, since an uncommitted
+// KindLapse may yet be replaced by a newer term's leader.
+func (n *Node) applyRange(es []Entry, seq uint64) {
+	lapsed := map[uint64]bool{}
+	for _, e := range es {
+		if e.Seq <= seq && e.Kind == KindLapse && !mutOplog("lapse_ignored") {
+			for _, r := range e.Refs {
+				lapsed[r] = true
+			}
+		}
+	}
+	for _, e := range es {
+		if e.Seq > seq {
+			break
+		}
+		e.Lapsed = lapsed[e.Seq] && e.Kind != KindLapse
+		n.apply(e)
 	}
 }
 
@@ -670,6 +709,11 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 	best, bestSelf := own, true
 	commit := own.Commit
 	answered := 1 // this instance
+	type at struct{ seq, term uint64 }
+	stored := map[at]int{}
+	for _, e := range own.Entries {
+		stored[at{e.Seq, e.Term}]++
+	}
 	var errs []string
 	for _, p := range n.o.Peers {
 		if p == n.o.Self {
@@ -686,6 +730,9 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 		}
 		answered++
 		commit = max(commit, got.Commit)
+		for _, e := range got.Entries {
+			stored[at{e.Seq, e.Term}]++
+		}
 		if better(got, best) {
 			best, bestSelf = got, false
 		}
@@ -704,9 +751,44 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 	// The best log a majority answered with holds every committed entry,
 	// so any commit index one of them reported is safe here.
 	n.commitTo(commit)
+	n.onMajority = map[uint64]uint64{}
+	for k, c := range stored {
+		if c >= n.majority() {
+			n.onMajority[k.seq] = k.term
+		}
+	}
 	n.syncedTerm = term
 	return nil
 }
+
+// carrierLocked is what a leader of term sequences to commit the entries
+// an earlier term stored past its commit index: a KindLapse naming those
+// Options.Lapse picks, or a KindNoop. An entry the catch-up saw stored on
+// a majority was committed, and is never named. Caller holds mu.
+func (n *Node) carrierLocked(term uint64) Entry {
+	var refs []uint64
+	if n.o.Lapse != nil {
+		now := n.o.Now()
+		for _, e := range n.afterLocked(n.commit) {
+			if e.Term >= term || e.Kind == KindNoop || e.Kind == KindLapse {
+				continue
+			}
+			if t, ok := n.onMajority[e.Seq]; ok && t == e.Term && !mutOplog("lapse_majority_stored") {
+				continue
+			}
+			if n.o.Lapse(e, now) {
+				refs = append(refs, e.Seq)
+			}
+		}
+	}
+	if len(refs) > 0 {
+		return Entry{Kind: KindLapse, Refs: refs, By: "system", Origin: n.o.Self}
+	}
+	return Entry{Kind: KindNoop, By: "system", Origin: n.o.Self}
+}
+
+// Self is this instance's base URL (Options.Self).
+func (n *Node) Self() string { return n.o.Self }
 
 // SyncLeader brings a new leader's log up to every committed entry, and
 // commits and applies them, before it returns: what a takeover needs
@@ -746,7 +828,10 @@ func (n *Node) SyncLeader(ctx context.Context) error {
 	if !behind {
 		return nil
 	}
-	_, err := n.sequenceLocked(ctx, Entry{Kind: KindNoop, By: "system", Origin: n.o.Self})
+	n.mu.Lock()
+	c := n.carrierLocked(n.currentTerm())
+	n.mu.Unlock()
+	_, err := n.sequenceLocked(ctx, c)
 	return err
 }
 
@@ -763,8 +848,20 @@ func (n *Node) sequence(ctx context.Context, e Entry) (Entry, error) {
 	// replication are different requests, and a write that replicated to
 	// a majority after a failed catch-up could take the number of an
 	// entry that majority already committed.
-	if err := n.leaderCatchUp(ctx, n.currentTerm()); err != nil {
+	term := n.currentTerm()
+	if err := n.leaderCatchUp(ctx, term); err != nil {
 		return Entry{}, err
+	}
+	// The first write of a term commits what an earlier term left: when
+	// some of it must lapse, the KindLapse goes first, so it is committed
+	// with them (KindLapse).
+	n.mu.Lock()
+	c := n.carrierLocked(term)
+	n.mu.Unlock()
+	if c.Kind == KindLapse {
+		if _, err := n.sequenceLocked(ctx, c); err != nil {
+			return Entry{}, err
+		}
 	}
 	return n.sequenceLocked(ctx, e)
 }

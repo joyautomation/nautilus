@@ -171,6 +171,21 @@ describe('SubstituteSession — the start state machine', () => {
 		s.reconcile([{ id: 9, name: 'T1', value: 5, startMs: 0, untilMs: 0, remainingMs: 0, requestId: id }]);
 		expect(s.pending().length).toBe(0);
 	});
+	it('a re-read that shows the pending start LAPSED clears the block and reports it (#710)', async () => {
+		const { client } = fake([text('x', 503, U), text('x', 503, U)]);
+		const s = new SubstituteSession(client);
+		await s.start('T1', 5, 60);
+		await s.start('T2', 5, 60);
+		const id = s.pending().find((p) => p.name === 'T1')!.requestId;
+		const gone = s.reconcile([], [{ id: 7, name: 'T1', value: 5, requestId: id, proposedMs: 0, atMs: 0, note: 'lapsed (outcome was unknown; not started)' }]);
+		expect(gone.length).toBe(1);
+		expect(gone[0].name).toBe('T1');
+		expect(s.pending().length).toBe(1);
+		expect(s.pending()[0].name).toBe('T2');
+		// A lapse with another requestId, or none, clears nothing.
+		expect(s.reconcile([], [{ id: 8, name: 'T2', value: 5, proposedMs: 0, atMs: 0, note: 'x' }]).length).toBe(0);
+		expect(s.pending().length).toBe(1);
+	});
 	it('a fresh action after a certain refusal gets a new requestId', async () => {
 		const { sent, client } = fake([text('no leader', 503, { 'X-Nautilus-Outcome': 'refused' }), json({})]);
 		const s = new SubstituteSession(client);

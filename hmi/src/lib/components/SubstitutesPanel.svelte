@@ -20,7 +20,8 @@
 		maxSeconds,
 		type SubstituteEntry,
 		type SubstituteResult,
-		type SubstituteRule
+		type SubstituteRule,
+		type SubstituteLapse
 	} from '../substitutes.js';
 	import { confirm } from '../confirm.svelte.js';
 	import StatusPill from './StatusPill.svelte';
@@ -56,6 +57,7 @@
 	// the same request, never a second substitute.
 	const session = $derived(new SubstituteSession(client));
 	let pending = $state<PendingStart[]>([]);
+	let lapsed = $state<SubstituteLapse[]>([]);
 	const blocked = $derived(pending.some((p) => p.name.toLowerCase() === tag.toLowerCase()));
 
 	const rule = $derived(rules.find((r) => r.tag === tag));
@@ -80,8 +82,15 @@
 		readError = null;
 		subs = r.substitutes;
 		rules = r.rules;
+		lapsed = r.lapsed ?? [];
 		readAt = Date.now();
-		session.reconcile(r.substitutes);
+		const gone = session.reconcile(r.substitutes, lapsed);
+		if (gone.length) {
+			notice = {
+				kind: 'warn',
+				text: `The start of ${gone.map((p) => p.name).join(', ')} lapsed: its outcome was unknown and it was committed too late, so it was NOT started. Start it again if it is still needed.`
+			};
+		}
 		pending = session.pending();
 		if (!tag && r.rules.length) tag = r.rules[0].tag;
 	}
@@ -208,6 +217,16 @@
 		</table>
 	{:else if !readError}
 		<p class="empty">Nothing is substituted.</p>
+	{/if}
+
+	{#if lapsed.length}
+		<div class="lapsed" aria-label="Lapsed starts">
+			{#each lapsed as l (l.id)}
+				<div class="msg {l.ended ? 'error' : 'warn'}" role={l.ended ? 'alert' : 'status'}>
+					<b>{l.name}</b> = {String(l.value)}{l.by ? ` (by ${l.by})` : ''}: {l.note}
+				</div>
+			{/each}
+		</div>
 	{/if}
 
 	{#if waiting.length}

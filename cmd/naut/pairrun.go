@@ -331,6 +331,7 @@ func (m *pairMember) startLog(rt *runtime.Runtime, wait time.Duration) (*server.
 		Leadership: pairLeadership{q: m.q, peers: m.peers},
 		File:       filepath.Join(filepath.Dir(m.o.StatePath), pairLogFile),
 		Apply:      func(e oplog.Entry) error { _, err := sl.Apply(e); return err },
+		Lapse:      sl.Lapse,
 		Token:      m.o.Token, Timeout: max(m.o.Lease/2, 500*time.Millisecond),
 	})
 	if err != nil {

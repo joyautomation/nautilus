@@ -58,6 +58,18 @@ bumpless, and the measured takeover time is published instead.
     takes over after the leader died still applies a write the operator was told was done.
     The residual window: the leader dies between its commit and the push, or the push to a
     replica fails (its error is only logged), until that replica's next heartbeat (≤ lease/2).
+  - **A late start lapses (#1030 review).** A start answered "outcome unknown" sits on its
+    proposer alone. If that proposer dies and returns much later, the new leader's catch-up
+    adopts the start, and committing it would start the substitute then.
+    - **Instead, the leader names it in a lapse entry.** The entry that commits an earlier
+      term's leftovers is `oplog.KindLapse`. It names the substitute starts older than
+      `SubstituteStartCommitBound` (60 s) on that leader's clock, unless the catch-up saw the
+      start stored on a majority (then it was committed).
+    - **Every replica decides by that entry,** never by its own clock, so they agree. A named
+      start found in the same committed range is applied as lapsed: listed and journalled, and
+      it raises no alarm. A replica that had already started it (its commit known only outside
+      the majority the new leader heard, a 3-replica case) ends it loudly. Stops and acks never
+      lapse.
 - **The witness can be rebuilt from scratch.** A witness that comes back with an empty disk
   loses no committed entry while both controllers are up:
   - **Its votes:** it grants nothing for one lease (§3.1).

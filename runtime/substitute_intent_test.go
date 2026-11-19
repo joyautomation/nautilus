@@ -465,3 +465,50 @@ func TestExpiryRetryStopsOnLeaseLoss(t *testing.T) {
 		t.Fatalf("proposed %v, pending %v; a replica that lost the lease must leave expiry to the new leader", p, rt.PendingExpiries())
 	}
 }
+
+// A start the log delivers as lapsed (substitute_lapse.go) after a
+// catch-up that failed: this replica's retained copy (catch-up-failed)
+// ends, the fault clears, the lapse is listed as ended (a copy ran here),
+// and applied moves past it, so a later fallback never brings
+// it back from the retain store.
+func TestLapsedStartEndsTheRetainedCopy(t *testing.T) {
+	clk := noon()
+	store := &fakeStore{state: retain.State{Substitutes: &retain.SubstituteState{
+		Entries: []retain.SubstituteRetain{{ID: 5, Name: "Level", Value: 95.0, By: "op", RequestID: "r-5",
+			StartMs: clk.Now().UnixMilli(), UntilMs: clk.Now().Add(time.Hour).UnixMilli(), GrantedMs: time.Hour.Milliseconds()}},
+		HighID: 5,
+	}}}
+	coord := lead(false)
+	rt, _ := newRetainSubRig(t, coord, store, clk)
+	rt.Scan()
+	log := &fakeLog{syncErr: errors.New("no majority")}
+	rt.SetIntentLog(log, 50*time.Millisecond)
+	coord.set(true)
+	scanUntilLogic(t, rt)
+	if l := rt.Substitutes(); len(l) != 1 || l[0].Fault != SubstituteReasonCatchUpFailed {
+		t.Fatalf("%+v; want the retained entry running catch-up-failed", l)
+	}
+	log.set(func(f *fakeLog) {
+		f.syncErr = nil
+		f.onSync = func() {
+			rt.ApplyLapsedSubstitute(ReplicatedSubstitute{ID: 5, Name: "Level", Value: 95.0, By: "op", RequestID: "r-5",
+				UntilMs: clk.Now().Add(time.Hour).UnixMilli(), GrantedMs: time.Hour.Milliseconds()})
+		}
+	})
+	waitFor(t, "the fault to clear", func() bool { return !rt.Tags().Bool(SubstituteFaultTag) })
+	if l := rt.Substitutes(); len(l) != 0 {
+		t.Fatalf("%+v; the lapsed start's retained copy runs on", l)
+	}
+	if l := rt.SubstituteLapses(); len(l) != 1 || l[0].ID != 5 || !l[0].Ended || l[0].RequestID != "r-5" {
+		t.Fatalf("lapses %+v", l)
+	}
+	rt.subMu.Lock()
+	applied, _, reqTaken := rt.intent.applied, 0, rt.intent.reqs["r-5"]
+	rt.subMu.Unlock()
+	if applied < 5 {
+		t.Errorf("applied %d after the lapse; a later fallback would re-add entry 5 from retain", applied)
+	}
+	if reqTaken.id != 0 {
+		t.Errorf("the lapsed start's request ID is taken (%+v): a retry would not start", reqTaken)
+	}
+}
