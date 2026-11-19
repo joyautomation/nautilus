@@ -1,0 +1,88 @@
+package quorum
+
+import (
+	"encoding/binary"
+	"hash/crc32"
+)
+
+// Mark is how far a standby is in sync (design §3.3): the (Term, Scan) of
+// the last state image it acknowledged, and whether that was current.
+// The zero Mark is unknown, and an unknown mark counts as out of sync. It
+// is carried and persisted from the first format so PR 4 need not change
+// the file; nothing in this package reads it yet.
+type Mark struct {
+	Known   bool
+	Current bool
+	Term    uint64
+	Scan    uint64
+}
+
+// VoterState is what a voter persists, and fsyncs, before it answers.
+// promiseUntil is NOT here: it is a reading of this boot's clock, and a
+// restarted voter covers it by granting nothing for one lease instead.
+type VoterState struct {
+	// Promised is the highest term this voter has granted. It only rises.
+	Promised uint64
+	// GrantedTo is the candidate Promised was granted to.
+	GrantedTo NodeID
+	// Incarnation is, on the witness, its own incarnation, drawn at first
+	// start; on a controller, the witness incarnation it accepts.
+	Incarnation uint64
+	// InSync is the last in-sync mark recorded (§3.3).
+	InSync Mark
+}
+
+const stateMagic = "nqv"
+
+// MarshalBinary encodes s for its state file: a magic, a version byte, a
+// length, the fields, and a CRC-32C, so a torn write is detected.
+func (s VoterState) MarshalBinary() ([]byte, error) {
+	var p []byte
+	p = binary.BigEndian.AppendUint64(p, s.Promised)
+	p = putString(p, string(s.GrantedTo))
+	p = binary.BigEndian.AppendUint64(p, s.Incarnation)
+	flags := byte(0)
+	if s.InSync.Known {
+		flags |= 1
+	}
+	if s.InSync.Current {
+		flags |= 2
+	}
+	p = append(p, flags)
+	p = binary.BigEndian.AppendUint64(p, s.InSync.Term)
+	p = binary.BigEndian.AppendUint64(p, s.InSync.Scan)
+	b := append([]byte(stateMagic), wireVersion)
+	b = binary.BigEndian.AppendUint32(b, uint32(len(p)))
+	b = append(b, p...)
+	return binary.BigEndian.AppendUint32(b, crc32.Checksum(b, castagnoli)), nil
+}
+
+// UnmarshalBinary decodes a state file. Any damage (a torn tail, a flipped
+// bit, a foreign file) is ErrCorrupt and leaves s unchanged: the caller
+// starts the voter with no state, which waits one lease (NewVoter).
+func (s *VoterState) UnmarshalBinary(b []byte) error {
+	const head = len(stateMagic) + 1 + 4
+	if len(b) < head+4 || string(b[:len(stateMagic)]) != stateMagic {
+		return ErrCorrupt
+	}
+	n := int(binary.BigEndian.Uint32(b[len(stateMagic)+1:]))
+	if len(b) != head+n+4 {
+		return ErrCorrupt
+	}
+	body := b[:head+n]
+	if crc32.Checksum(body, castagnoli) != binary.BigEndian.Uint32(b[head+n:]) {
+		return ErrCorrupt
+	}
+	if b[len(stateMagic)] != wireVersion {
+		return ErrVersion
+	}
+	rd := &reader{b: b[head : head+n]}
+	v := VoterState{Promised: rd.u64(), GrantedTo: NodeID(rd.str()), Incarnation: rd.u64()}
+	flags := rd.byte1()
+	v.InSync = Mark{Known: flags&1 != 0, Current: flags&2 != 0, Term: rd.u64(), Scan: rd.u64()}
+	if rd.bad || len(rd.b) != 0 || flags&^3 != 0 {
+		return ErrCorrupt
+	}
+	*s = v
+	return nil
+}

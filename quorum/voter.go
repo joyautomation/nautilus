@@ -1,0 +1,146 @@
+package quorum
+
+import "time"
+
+// Persist asks the driver to write State durably (fsync) and then call
+// Voter.Persisted with Seq. The driver may coalesce: persisting a later
+// Seq covers every earlier one.
+type Persist struct {
+	Seq   uint64
+	State VoterState
+}
+
+// Voter is one voter's state machine (design §3.1). Every controller and
+// the witness runs one. Not safe for concurrent use; the driver serialises
+// calls.
+type Voter struct {
+	self  NodeID
+	lease time.Duration
+
+	st           VoterState // in memory: what this voter has promised
+	promiseUntil Instant    // when the promise to st.GrantedTo runs out
+	waitUntil    Instant    // the restart wait: no grant before this
+
+	// dirty is the Seq of the last change to st, durable the highest Seq
+	// the driver has confirmed. A grant waits until durable covers the
+	// state it promises (held), so no grant ever leaves ahead of its fsync.
+	dirty, durable uint64
+	held           []heldGrant
+
+	// isWitness: this voter is the witness, and stamps its incarnation on
+	// every reply. Set by NewWitness.
+	isWitness bool
+}
+
+type heldGrant struct {
+	need  uint64
+	reply Reply
+}
+
+// NewVoter starts a voter at now from the state its file held: st is the
+// zero VoterState when there was no file or it could not be read. Either
+// way the voter grants nothing for one full lease. It has lost its
+// promise timer, and any promise it made before the restart has run out
+// by then (design §3.1).
+func NewVoter(self NodeID, lease time.Duration, st VoterState, now Instant) *Voter {
+	return &Voter{self: self, lease: lease, st: st, waitUntil: now.Add(lease)}
+}
+
+// NewWitness starts the witness's voter, like NewVoter. A witness with no
+// readable state is a new incarnation: it draws one with draw (a random
+// non-zero id) and persists it before it can grant, so the controllers
+// count none of its grants until they adopt it (design §3.1). The first
+// Persist is returned with the voter; until the driver confirms it, the
+// witness grants nothing anyway (the restart wait is longer).
+func NewWitness(self NodeID, lease time.Duration, st VoterState, now Instant, draw func() uint64) (*Voter, *Persist) {
+	v := NewVoter(self, lease, st, now)
+	v.isWitness = true
+	if st.Incarnation != 0 {
+		return v, nil
+	}
+	inc := draw()
+	for inc == 0 {
+		inc = draw()
+	}
+	v.st = VoterState{Incarnation: inc}
+	v.dirty++
+	return v, &Persist{Seq: v.dirty, State: v.st}
+}
+
+// State returns the voter's in-memory state.
+func (v *Voter) State() VoterState { return v.st }
+
+// PromiseUntil returns the term promised, to whom, and until when on this
+// node's clock. A candidate on the same node reads it to know when the
+// leader's renewals stopped (Candidate.Tick).
+func (v *Voter) PromiseUntil() (term uint64, to NodeID, until Instant) {
+	return v.st.Promised, v.st.GrantedTo, v.promiseUntil
+}
+
+// Handle answers r, received at now. A refusal comes back at once. A grant
+// that changes the persisted state comes back as a Persist, and the grant
+// itself only from Persisted. A renewal that changes nothing durable is
+// answered at once, unless an earlier change is still unconfirmed.
+func (v *Voter) Handle(now Instant, r Request) (*Persist, []Reply) {
+	refuse := []Reply{v.reply(r, false)}
+	if now < v.waitUntil || r.Term < v.st.Promised {
+		return nil, refuse
+	}
+	active := now < v.promiseUntil
+	switch {
+	case r.Term == v.st.Promised && v.st.GrantedTo != r.From:
+		return nil, refuse // this term is someone else's
+	case r.Term > v.st.Promised && active && v.st.GrantedTo != r.From:
+		return nil, refuse // promised to another, and not run out
+	}
+	// Grant. The promise runs from when the request was RECEIVED.
+	v.promiseUntil = now.Add(v.lease)
+	if r.Term != v.st.Promised || r.From != v.st.GrantedTo {
+		v.st.Promised, v.st.GrantedTo = r.Term, r.From
+		v.dirty++
+	}
+	g := v.reply(r, true)
+	if v.durable >= v.dirty {
+		return nil, []Reply{g}
+	}
+	v.held = append(v.held, heldGrant{need: v.dirty, reply: g})
+	return &Persist{Seq: v.dirty, State: v.st}, nil
+}
+
+// Persisted reports the driver's write of Seq seq: ok when it is durable.
+// It releases every grant that write covers. On a failed write the grants
+// waiting on it are dropped, never sent (F25); the in-memory promise
+// stands, which only refuses others, and the next grant retries the write.
+func (v *Voter) Persisted(seq uint64, ok bool) []Reply {
+	var out []Reply
+	keep := v.held[:0]
+	for _, h := range v.held {
+		switch {
+		case ok && h.need <= seq:
+			out = append(out, h.reply)
+		case !ok && h.need <= seq:
+			// dropped
+		default:
+			keep = append(keep, h)
+		}
+	}
+	v.held = keep
+	if ok && seq > v.durable {
+		v.durable = seq
+	}
+	return out
+}
+
+func (v *Voter) reply(r Request, granted bool) Reply {
+	return Reply{From: v.self, To: r.From, Term: r.Term, Nonce: r.Nonce, ID: r.ID, Granted: granted,
+		Promised: v.st.Promised, Incarnation: v.witnessIncarnation()}
+}
+
+// witnessIncarnation is what this voter stamps on its replies: the
+// witness's incarnation, or 0 from a controller.
+func (v *Voter) witnessIncarnation() uint64 {
+	if v.isWitness {
+		return v.st.Incarnation
+	}
+	return 0
+}

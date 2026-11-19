@@ -109,17 +109,33 @@ redundancy:
   than every term it has promised, and its current promise to anyone else has run out. A grant
   promises not to grant to anyone else for `lease`, timed from when the voter **received** the
   request.
-- **Renewal** is the same request at the same term, every `lease/4`.
+- **Renewal** is the same request at the same term, every `lease/4`. A renewal that changes
+  nothing the voter has persisted is answered without a new fsync.
+- **Every request is named, and its grant answers only it.** A request carries a per-boot
+  random nonce and an id; a grant echoes both and names the controller it was granted to. A
+  grant counts only toward the request it answers: addressed to this controller, from this
+  boot, with the same id and term. A lease is timed from the send instant of **one** request
+  that a majority granted, so a late grant for an earlier renewal never stretches a later
+  one, and a replayed or misdelivered grant (the other controller's, or an earlier boot's)
+  counts for nothing.
+- **Only the three voters count.** A controller counts replies from itself, its peer, and the
+  witness at the accepted incarnation, and ignores any other sender: a second witness copy
+  under another name included. A configuration with ρ outside (0, 10%], a zero nonce, or
+  names that aren't three distinct voters is refused at start.
 - **Campaigning.** A standby looks every `lease/4`. It campaigns on its first look after the
-  lease it last saw renewed has expired by its own clock, plus ρ.
+  lease it last saw renewed has expired by its own clock, plus ρ. One campaign is in flight at
+  a time. A campaign refused by a majority is retried after a seeded per-node jitter in
+  `[0, lease/4)`, so two controllers refused in the same round don't retry in lockstep.
 - **The leader's own clock.** The leader times its lease from when it **sent** the request,
   shortened by a clock-rate margin ρ (1%). Its lease therefore ends before any voter's promise
   does.
 - **Clocks.** Every timing uses local durations. Wall-clock times are never compared across
   hosts. Leases are timed on `CLOCK_BOOTTIME`, which keeps counting through a host suspend,
   unlike `CLOCK_MONOTONIC`.
-- **The clock assumption.** The argument holds only while each voter's clock advances at real
-  rate within ρ, **including while its process isn't running**.
+- **The clock assumption.** ρ bounds the **relative** rate of any two voters' clocks, as
+  F22 sweeps it, not each clock against real time: two clocks each off by ρ the other way
+  are 2ρ apart, and a lease shortened by ρ would then outlive a promise. The argument holds
+  only while that bound holds, **including while a process isn't running**.
   - **Where it breaks:** the leader's clock stops or slows without bound when a VM is paused,
     snapshotted or live-migrated, when a hypervisor deschedules the guest for long, or when the
     host suspends and the hypervisor stops the guest's boot clock.
@@ -134,8 +150,10 @@ redundancy:
 - **One-way partitions and the back-off.** A leader that can send but not receive keeps the
   voters' promises alive with renewals it never hears answered, so nobody else can be elected.
   A leader whose lease has lapsed without a confirmed majority therefore **sends nothing to the
-  voters for one full lease** before it campaigns again. The voters' promises run out and a
-  reachable controller can win.
+  voters for one full lease** before it campaigns again. A campaign that no majority even
+  answered within a lease backs off the same way. The voters' promises run out and a
+  reachable controller can win. The back-off silences only the candidate: the same node's
+  voter keeps answering.
 - **The witness incarnation.** The witness draws a random incarnation id when it first starts
   and keeps it in its state file. A and B record, in their own fsynced state, the incarnation
   they accept.
@@ -146,6 +164,23 @@ redundancy:
     only when the other controller concurs over the A–B link, which happens at commissioning or
     after a witness rebuild. Both controllers therefore always agree on which witness counts,
     and that witness's promise goes to one of them.
+  - **Agreement isn't enough at a switch.** Suppose A leads on grants from itself and the old
+    witness, and B's promise to A has lapsed. If the pair switched to a second copy that has
+    been up for hours (its restart wait long over), B and that copy would make a majority while
+    A's last lease still runs: the voter set changed, so the two majorities need not
+    intersect. Three rules close it:
+    - **A quiet period.** A controller counts no grant from a newly adopted incarnation for
+      one full lease after it has persisted the adoption. By then every lease granted under
+      the old voter set has ended.
+    - **Forward only.** A controller stops counting the old incarnation before it asks the
+      other to switch, and never goes back. Concurrent proposals break ties deterministically
+      (the higher incarnation id wins).
+    - **A term floor.** A rebuilt witness has promised term 0. The adoption handshake carries
+      each controller's highest promised term, and both raise their voters to it before
+      counting the new witness, so no term is granted twice (I4).
+  - **When it ships.** The handshake is its own PR, after the simulator (PR 2's split), with a
+    simulated case that fails without the quiet period. Until then a controller counts grants
+    only from the incarnation it was commissioned with.
   - **The cost.** A rebuilt witness can't be adopted while one controller is down. That is
     already a two-fault case (witness disk and a controller), so the survivor behaves as in §7.
   - **On an HA cluster** the witness must be a StatefulSet with a persistent volume, never a
@@ -570,7 +605,8 @@ Settled with the maintainer, 2026-11-17:
    - When a dedicated SCADA/historian box exists, it runs there.
    - That box may sit on an HA cluster. There the witness runs as a pod. A reschedule that
      loses its state file comes back as a new incarnation: it grants nothing for one lease, and
-     counts once both controllers have adopted it over the A–B link (§3.1). Until then the pair
+     counts once both controllers have adopted it over the A–B link and a further lease of
+     quiet period has passed (§3.1). Until then the pair
      runs on its two controllers alone, so a controller fault in that window stops control. A
      persistent volume avoids all of this, which is why the StatefulSet needs one.
    - In every case, the witness must not share a single point of failure with one controller,
