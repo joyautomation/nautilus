@@ -157,15 +157,15 @@ func TestGateClosesAFenceMarginBeforeTheLeaseEnd(t *testing.T) {
 	}
 	defer e.Close()
 	e.gate.Store(&gateState{epoch: 3, end: clk.now().Add(time.Second), open: true})
-	if ok, budget := e.SendGate(); !ok || budget != 950*time.Millisecond {
-		t.Fatalf("1 s left: SendGate %v %s; want open with 950 ms (the lease left minus the 50 ms net delay)", ok, budget)
+	if ok, budget, term := e.SendGate(); !ok || budget != 950*time.Millisecond || term != 3 {
+		t.Fatalf("1 s left: SendGate %v %s term %d; want open with 950 ms (the lease left minus the 50 ms net delay), term 3", ok, budget, term)
 	}
 	clk.add(929 * time.Millisecond) // 71 ms left: just over the 70 ms margin
-	if ok, budget := e.SendGate(); !ok || budget != 21*time.Millisecond || !e.Status().Leading {
+	if ok, budget, _ := e.SendGate(); !ok || budget != 21*time.Millisecond || !e.Status().Leading {
 		t.Fatalf("71 ms left: SendGate %v %s, Leading %v; want open with 21 ms", ok, budget, e.Status().Leading)
 	}
 	clk.add(time.Millisecond) // 70 ms left: the margin
-	if ok, budget := e.SendGate(); ok || budget != 0 || e.IsLeader() || e.Status().Leading {
+	if ok, budget, _ := e.SendGate(); ok || budget != 0 || e.IsLeader() || e.Status().Leading {
 		t.Fatalf("70 ms left: SendGate %v %s, IsLeader %v, Leading %v; want closed a fence margin before the lease end", ok, budget, e.IsLeader(), e.Status().Leading)
 	}
 }

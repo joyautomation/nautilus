@@ -30,7 +30,7 @@ func TestMultiSendGateReachesChildrenAndReplaceClosesIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.SetWriteGate(func() bool { return true })
-	m.SetSendGate(func() (bool, time.Duration) { return true, time.Second })
+	m.SetSendGate(func() (bool, time.Duration, uint64) { return true, time.Second, 1 })
 	if sA == nil {
 		t.Fatal("the send-gated child has no send gate")
 	}
@@ -44,7 +44,7 @@ func TestMultiSendGateReachesChildrenAndReplaceClosesIt(t *testing.T) {
 	if sA2 == nil {
 		t.Fatal("the replacement has no send gate")
 	}
-	if ok, _ := sA(); ok {
+	if ok, _, _ := sA(); ok {
 		t.Fatal("the replaced child's send gate is still open: it would keep sending")
 	}
 }

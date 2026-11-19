@@ -10,8 +10,8 @@ import (
 	"time"
 )
 
-func gate(ok bool, budget time.Duration) func() (bool, time.Duration) {
-	return func() (bool, time.Duration) { return ok, budget }
+func gate(ok bool, budget time.Duration) func() (bool, time.Duration, uint64) {
+	return func() (bool, time.Duration, uint64) { return ok, budget, 4 }
 }
 
 // Begin reads the gate once: closed or out of budget, the send is not
@@ -19,19 +19,19 @@ func gate(ok bool, budget time.Duration) func() (bool, time.Duration) {
 // deadline; otherwise the deadline is now plus the budget.
 func TestBegin(t *testing.T) {
 	now := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
-	if d, ok := Begin(nil, now); !ok || !d.IsZero() {
+	if d, term, ok := Begin(nil, now); !ok || !d.IsZero() || term != 0 {
 		t.Errorf("no gate: %v %v; want started, no deadline", d, ok)
 	}
-	if _, ok := Begin(gate(false, time.Second), now); ok {
+	if _, _, ok := Begin(gate(false, time.Second), now); ok {
 		t.Error("a closed gate started a send")
 	}
-	if _, ok := Begin(gate(true, 0), now); ok {
+	if _, _, ok := Begin(gate(true, 0), now); ok {
 		t.Error("a send with no budget left started")
 	}
-	if d, ok := Begin(gate(true, -1), now); !ok || !d.IsZero() {
+	if d, _, ok := Begin(gate(true, -1), now); !ok || !d.IsZero() {
 		t.Errorf("a plain gate: %v %v; want started with no deadline", d, ok)
 	}
-	if d, ok := Begin(gate(true, 300*time.Millisecond), now); !ok || !d.Equal(now.Add(300*time.Millisecond)) {
+	if d, term, ok := Begin(gate(true, 300*time.Millisecond), now); !ok || !d.Equal(now.Add(300*time.Millisecond)) || term != 4 {
 		t.Errorf("300 ms of budget: %v %v; want a deadline 300 ms out", d, ok)
 	}
 	if Started(now, now) || !Started(now.Add(time.Millisecond), now) || !Started(time.Time{}, now) {
@@ -97,5 +97,44 @@ func TestResetSendsAnRSTAndDropsQueuedBytes(t *testing.T) {
 	_, err = io.Copy(io.Discard, peer)
 	if !errors.Is(err, syscall.ECONNRESET) {
 		t.Fatalf("the peer read to %v; want ECONNRESET (a reset, not a FIN that delivers the queued bytes late)", err)
+	}
+}
+
+// Arm resets the socket from a timer AT the deadline, with nothing else
+// touching it (the sending goroutine stalled, or waiting on a read with a
+// later timeout): the peer reads ECONNRESET about then. A send answered in
+// time disarms it.
+func TestArmResetsAtTheDeadline(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	acc := make(chan net.Conn, 1)
+	go func() {
+		if c, err := ln.Accept(); err == nil {
+			acc <- c
+		}
+	}()
+	c, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	peer := <-acc
+	defer peer.Close()
+	start := time.Now()
+	stop := Arm(c, start.Add(150*time.Millisecond))
+	_ = peer.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_, err = io.Copy(io.Discard, peer)
+	took := time.Since(start)
+	if !errors.Is(err, syscall.ECONNRESET) || took < 100*time.Millisecond || took > 2*time.Second {
+		t.Fatalf("the peer read to %v after %s; want ECONNRESET at about 150 ms", err, took)
+	}
+	if !stop() {
+		t.Error("stop after the reset says it never fired")
+	}
+	if Arm(c, time.Now().Add(time.Hour))() {
+		t.Error("a send done before its deadline reports a reset")
 	}
 }

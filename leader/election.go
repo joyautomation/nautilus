@@ -91,9 +91,10 @@ func (q *Quorum) Node() *node.Elector { return q.n }
 
 func (q *Quorum) IsLeader() bool { return q.n.IsLeader() }
 
-// SendGate is the pair's write gate with its send budget, read in one look
-// (io.SendGate, design §3.4): drivers that check before each send take it.
-func (q *Quorum) SendGate() (bool, time.Duration) { return q.n.SendGate() }
+// SendGate is the pair's write gate with its send budget and term, read in
+// one look (io.SendGate, design §3.4): drivers that check before each send
+// take it.
+func (q *Quorum) SendGate() (bool, time.Duration, uint64) { return q.n.SendGate() }
 
 func (q *Quorum) Term() uint64             { return q.n.Term() }
 func (q *Quorum) Decided() <-chan struct{} { return q.n.Decided() }

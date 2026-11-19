@@ -150,6 +150,8 @@ case caught it. A mutation joins the nightly run in the PR that builds the rule 
 | hot takeover with no image-age check | I5 | 4 |
 | hot takeover on an image with a different build hash | I5 | 4 |
 | the gate is checked once per batch, not before each send (as `hw/base.go` did) | design §3.4 | 3b-3a (`gate_per_batch`) |
+| a command queued under one term of the lease is sent after the replica lost it and won it again | design §3.4, `io.SendGate` term | 3b-3a (`old_term_sent`, #1040 review) |
+| a Modbus write queued or requeued under one term is sent after the replica lost the lease and won it again | design §3.4 | 3b-3a (`old_term_kept`, #1040 review) |
 | a send with no deadline | design §3.4 | 3b-3a (`send_no_deadline`) |
 | no fence margin (the gate closes at lease expiry) | design §3.4 | 3b-3a (`no_fence_margin`) |
 | sockets closed with FIN, not RST, on fence | design §3.4, RST on fence | 3b-3a (`fence_fin`) |

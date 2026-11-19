@@ -179,7 +179,13 @@ func (c *tcpConn) Request(ctx context.Context, unit uint8, fc byte, pdu []byte) 
 		return nil, err // not started: nothing was sent
 	}
 	if c.nc != nil && fence.Fenced(ctx) {
+		// A timer resets the socket AT the send deadline (rule 3), whether
+		// or not this goroutine is awake then; a failure after it resets
+		// it too.
+		dl, _ := ctx.Deadline()
+		stop := fence.Arm(c.nc, dl)
 		defer func() {
+			stop()
 			var exc ExceptionError
 			if err != nil && !errors.As(err, &exc) {
 				fence.Reset(c.nc)

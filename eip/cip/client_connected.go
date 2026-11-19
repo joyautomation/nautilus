@@ -44,6 +44,11 @@ func (c *Client) SendUnitData(ctx context.Context, connID uint32, seq uint16, se
 	}
 	hdr := EncapHeader{Command: CmdSendUnitData, SessionHandle: c.sessHdl}
 	defer arm(ctx, c.tcp)()
+	if dl, ok := ctx.Deadline(); ok && fence.Fenced(ctx) {
+		// A timer resets the socket AT the send deadline (design §3.4,
+		// rule 3), whether or not this goroutine is awake then.
+		defer fence.Arm(c.tcp, dl)()
+	}
 	fence.BeforeSend()
 	if _, err := c.tcp.Write(EncodeFrame(hdr, body)); err != nil {
 		c.resetIfFenced(ctx)

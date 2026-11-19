@@ -61,3 +61,58 @@ func TestFencedSendUnitDataResetsAtItsDeadline(t *testing.T) {
 		t.Fatal("the client still holds the reset socket")
 	}
 }
+
+// deafConn ignores deadlines, as a goroutine stalled past its read timeout
+// would: only a timer can end its request.
+type deafConn struct{ *net.TCPConn }
+
+func (c deafConn) SetDeadline(time.Time) error      { return nil }
+func (c deafConn) SetReadDeadline(time.Time) error  { return nil }
+func (c deafConn) SetWriteDeadline(time.Time) error { return nil }
+func (c deafConn) NetConn() net.Conn                { return c.TCPConn }
+
+// #1040 review (5) on EtherNet/IP: the session's socket is reset by a timer
+// AT the send deadline, not after the read's own timeout returns.
+func TestFencedSendUnitDataResetIsATimer(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	peerErr := make(chan error, 1)
+	go func() {
+		pc, err := ln.Accept()
+		if err != nil {
+			peerErr <- err
+			return
+		}
+		defer pc.Close()
+		_ = pc.SetReadDeadline(time.Now().Add(10 * time.Second))
+		_, err = io.Copy(io.Discard, pc)
+		peerErr <- err
+	}()
+	nc, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &Client{Log: slog.Default(), tcp: deafConn{nc.(*net.TCPConn)}}
+	ctx, cancel := fence.Context(context.Background(), time.Now().Add(200*time.Millisecond))
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := c.SendUnitData(ctx, 1, 1, 0x4D, []byte{0x91, 0x02, 'S', 'P'}, []byte{0xCA, 0, 1, 0, 0, 0, 0, 0})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("an unanswered request succeeded")
+		}
+	case <-time.After(3 * time.Second):
+		nc.Close()
+		t.Fatal("the unanswered request never ended: nothing reset the socket at its deadline")
+	}
+	if err := <-peerErr; !errors.Is(err, syscall.ECONNRESET) {
+		t.Fatalf("the controller side read to %v; want ECONNRESET", err)
+	}
+}

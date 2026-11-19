@@ -86,6 +86,10 @@ type Driver struct {
 	gateMu    sync.Mutex
 	writeGate func() bool
 	sendGate  nio.SendGate // a pair's gate with its send budget (SetSendGate)
+	// leaseTerm is the lease's term the last open look saw (0: none yet,
+	// or no pair): a look under another term is a reopen, closed between
+	// two looks or not (#1040 review).
+	leaseTerm atomic.Uint64
 	gateShut  atomic.Bool
 	turnMu    sync.Mutex
 	wanted    atomic.Bool
@@ -605,22 +609,23 @@ var _ nio.PlainGated = (*Driver)(nil)
 // finds it open again after one found it closed forgets every written and
 // queued value and asks for the outputs. Callers do not hold wmu.
 func (d *Driver) gateOpen() bool {
-	open, _ := d.look()
+	open, _, _ := d.look()
 	return open
 }
 
-// look is gateOpen with the send budget the same read of the gate gave
-// (negative: no deadline), for a look made right before a request.
-func (d *Driver) look() (bool, time.Duration) {
+// look is gateOpen with the send budget (negative: no deadline) and the
+// lease's term the same read of the gate gave (io.SendGate), for a look
+// made right before a request.
+func (d *Driver) look() (bool, time.Duration, uint64) {
 	d.gateMu.Lock()
 	gate, send := d.writeGate, d.sendGate
 	d.gateMu.Unlock()
 	if gate == nil && send == nil {
-		return true, -1
+		return true, -1, 0
 	}
-	open, budget := false, time.Duration(-1)
+	open, budget, term := false, time.Duration(-1), uint64(0)
 	if send != nil {
-		open, budget = send()
+		open, budget, term = send()
 	} else {
 		open = gate()
 	}
@@ -628,20 +633,27 @@ func (d *Driver) look() (bool, time.Duration) {
 	// and gateShut is cleared only AFTER the forget: a second looker that
 	// finds the gate open meanwhile still sees gateShut, waits on turnMu,
 	// and so cannot queue against the previous term's written.
-	if shut := d.gateShut.Load(); shut == open {
+	if open && term != 0 && d.leaseTerm.Load() == 0 {
+		d.leaseTerm.CompareAndSwap(0, term) // the first term seen: nothing to forget
+	}
+	moved := open && term != 0 && d.leaseTerm.Load() != term
+	if shut := d.gateShut.Load(); shut == open || moved {
 		d.turnMu.Lock()
 		switch {
 		case !open && !d.gateShut.Load():
 			d.gateShut.Store(true)
-		case open && d.gateShut.Load():
+		case open && (d.gateShut.Load() || term != 0 && d.leaseTerm.Load() != term):
 			d.forgetWritten()
+			if term != 0 {
+				d.leaseTerm.Store(term)
+			}
 			d.gateShut.Store(false)
 			d.wanted.Store(true)
 			d.log.Info("eip: write gate open again; every output goes out with the next push", "host", d.host)
 		}
 		d.turnMu.Unlock()
 	}
-	return open, budget
+	return open, budget, term
 }
 
 // forgetWritten empties written and pending and starts a new term: no
@@ -1044,7 +1056,7 @@ func (d *Driver) goOn(term uint64) error {
 // budget and marked fenced, so the transport resets its socket if the
 // request is still unanswered at that deadline.
 func (d *Driver) send(ctx context.Context, term uint64) (context.Context, context.CancelFunc, error) {
-	deadline, ok := fence.Begin(d.look, time.Now()) // the budget counts from before the read
+	deadline, _, ok := fence.Begin(d.look, time.Now()) // the budget counts from before the read
 	if !ok || !fence.Started(deadline, time.Now()) {
 		return nil, nil, errGateClosed
 	}

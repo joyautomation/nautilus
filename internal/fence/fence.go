@@ -19,7 +19,9 @@ package fence
 
 import (
 	"context"
+	"log/slog"
 	"net"
+	"sync"
 	"time"
 
 	nio "github.com/joyautomation/nautilus/io"
@@ -28,25 +30,28 @@ import (
 // Begin reads g once, immediately before a send. ok false: the send is
 // not started (the gate is closed, or the send's budget is already used
 // up). deadline is when the send must be done by; zero means none (no
-// gate, or a gate that is not a pair's lease). now is the wall clock.
-func Begin(g nio.SendGate, now time.Time) (deadline time.Time, ok bool) {
+// gate, or a gate that is not a pair's lease). term is the lease's term
+// from the same read (0 without a pair), for a driver that holds queued
+// commands to check they were computed under it. now is the wall clock,
+// taken before the read, so the budget counts from before it.
+func Begin(g nio.SendGate, now time.Time) (deadline time.Time, term uint64, ok bool) {
 	if g == nil {
-		return time.Time{}, true
+		return time.Time{}, 0, true
 	}
-	open, budget := g()
+	open, budget, term := g()
 	pause(AfterCheck)
 	if !open {
-		return time.Time{}, false
+		return time.Time{}, term, false
 	}
 	if budget < 0 || mut("send_no_deadline") {
-		return time.Time{}, true
+		return time.Time{}, term, true
 	}
 	if budget == 0 {
-		return time.Time{}, false
+		return time.Time{}, term, false
 	}
 	deadline = now.Add(budget)
 	pause(AfterDeadline)
-	return deadline, true
+	return deadline, term, true
 }
 
 // Started reports whether a send with deadline may still start now: the
@@ -86,10 +91,57 @@ func Reset(c net.Conn) error {
 	if c == nil {
 		return nil
 	}
-	if tc := tcpOf(c); tc != nil && !mut("fence_fin") {
-		_ = tc.SetLinger(0)
-	}
+	Linger0(c)
 	return c.Close()
+}
+
+// Linger0 sets SO_LINGER 0 on c's TCP socket, so whatever closes it
+// (Reset, or a transport that closes it on its own at a deadline) sends a
+// reset. A failure is logged: the close is then a FIN, and what the kernel
+// held may still leave.
+func Linger0(c net.Conn) {
+	tc := tcpOf(c)
+	if tc == nil || mut("fence_fin") {
+		return
+	}
+	if err := tc.SetLinger(0); err != nil {
+		slog.Warn("fence: SO_LINGER 0 failed; this socket's close is a FIN, so bytes it holds may still leave", "remote", c.RemoteAddr(), "error", err)
+	}
+}
+
+// LingerDefault lifts Linger0 from c's socket: a connection kept for more
+// requests after a fenced one was answered in time closes normally again.
+func LingerDefault(c net.Conn) {
+	if tc := tcpOf(c); tc != nil {
+		_ = tc.SetLinger(-1)
+	}
+}
+
+// Arm resets c with a timer AT deadline (design §3.4, rule 3), whatever the
+// sending goroutine is doing then: stalled, or waiting on a read whose own
+// timeout comes later. stop disarms it once the send is done and reports
+// whether the reset already fired (the send then failed, and c is closed).
+// A zero deadline or a nil conn arms nothing.
+func Arm(c net.Conn, deadline time.Time) (stop func() (fired bool)) {
+	if c == nil || deadline.IsZero() || mut("send_no_deadline") {
+		return func() bool { return false }
+	}
+	var mu sync.Mutex
+	fired := false
+	t := time.AfterFunc(time.Until(deadline), func() {
+		mu.Lock()
+		fired = true
+		mu.Unlock()
+		_ = Reset(c)
+	})
+	return func() bool {
+		if t.Stop() {
+			return false
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		return fired
+	}
 }
 
 // tcpOf finds the *net.TCPConn under c: c itself, or what a wrapper

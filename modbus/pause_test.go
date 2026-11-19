@@ -46,7 +46,7 @@ func TestModbusPauseBetweenCheckAndSend(t *testing.T) {
 			}()
 			d, s := fencedDriver(t)
 			s.pending = map[string]any{"SP1": float64(1)}
-			d.SetSendGate(func() (bool, time.Duration) { return true, budget })
+			d.SetSendGate(func() (bool, time.Duration, uint64) { return true, budget, 1 })
 			tc, err := dialTCP(context.Background(), ln.Addr().String(), time.Second)
 			if err != nil {
 				t.Fatal(err)

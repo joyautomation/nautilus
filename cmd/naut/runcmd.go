@@ -178,7 +178,9 @@ func wireRedundancy(proj *project.Project, el runtime.Coordinator) {
 	}
 	// A pair's elector also has the send budget (design §3.4): a driver
 	// that checks before each send reads it instead, in one look.
-	if sg, ok := el.(interface{ SendGate() (bool, time.Duration) }); ok {
+	if sg, ok := el.(interface {
+		SendGate() (bool, time.Duration, uint64)
+	}); ok {
 		if g, ok := proj.Runtime.Driver.(nio.SendGated); ok {
 			g.SetSendGate(sg.SendGate)
 		}

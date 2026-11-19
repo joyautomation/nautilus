@@ -357,6 +357,19 @@ func (d *Driver) ConnectionUp(id string) bool   { return d.base.ConnectionUp(id)
 // variables, missing credential files, MD5/DES.
 func (d *Driver) Warnings() []string { return d.manifest.Warnings() }
 
+// WriteTimeouts is each source that takes commands, with its per-request
+// timeout: naut check compares it with a redundant pair's send budget
+// (design §3.4).
+func (d *Driver) WriteTimeouts() map[string]time.Duration {
+	out := map[string]time.Duration{}
+	for _, id := range d.base.WriteSources() {
+		if s, ok := d.sources[id]; ok {
+			out[id] = s.cfg.timeout()
+		}
+	}
+	return out
+}
+
 // Plan describes the requests one poll of each (source, class) sends, for
 // `naut snmp import --plan` and the tests.
 func (d *Driver) Plan() string {

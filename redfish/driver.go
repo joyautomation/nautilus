@@ -137,6 +137,23 @@ type memberPlan struct {
 // variables, TLS verification off) for `naut check`.
 func (d *Driver) Warnings() []string { return d.m.Warnings() }
 
+// WriteTimeouts is each source that takes commands, with its per-request
+// timeout: naut check compares it with a redundant pair's send budget
+// (design §3.4).
+func (d *Driver) WriteTimeouts() map[string]time.Duration {
+	out := map[string]time.Duration{}
+	for _, id := range d.base.WriteSources() {
+		if s, ok := d.srcs[id]; ok {
+			t := s.cfg.Timeout
+			if t <= 0 {
+				t = DefaultTimeout
+			}
+			out[id] = t
+		}
+	}
+	return out
+}
+
 // New validates the manifest offline and builds the driver. It never dials.
 func New(m Manifest, opts ...Option) (*Driver, error) {
 	d := &Driver{

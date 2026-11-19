@@ -206,6 +206,15 @@ type Driver struct {
 	// that finds the gate reopened while another is still forgetting waits
 	// for the forget instead of reading the previous term's written.
 	turnMu sync.Mutex
+	// leaseTerm is the lease's term the last open look saw (0: none yet,
+	// or no pair). A look that finds the gate open under another term
+	// treats it as a reopen, closed between two looks or not: the lease
+	// was lost and won again, and nothing queued before may go (#1040).
+	leaseTerm atomic.Uint64
+	// reopens counts forgetWritten: a flush that took its queue before a
+	// reopen sends none of it after (the reopen forgot it as the previous
+	// leadership's), as eip's term does (#1040 review).
+	reopens atomic.Uint64
 	// sendGate is a pair's gate with its send budget (SetSendGate): when
 	// installed it is the gate every look reads, and each request gets the
 	// budget as its deadline (design §3.4).
@@ -573,6 +582,19 @@ func (d *Driver) SetSendGate(g nio.SendGate) {
 
 var _ nio.SendGated = (*Driver)(nil)
 
+// WriteTimeouts is each source with a writable binding, with its
+// per-request timeout: naut check compares it with a redundant pair's send
+// budget (design §3.4).
+func (d *Driver) WriteTimeouts() map[string]time.Duration {
+	out := map[string]time.Duration{}
+	for _, s := range d.sources {
+		if len(s.byName) > 0 {
+			out[s.cfg.ID] = s.cfg.Timeout
+		}
+	}
+	return out
+}
+
 // PlainWriteGate marks this driver's write gate as only a gate
 // (io.PlainGated): open, it acts as with none. naut run gives it one in a
 // project without redundancy too, open while the scans are live (#625).
@@ -588,22 +610,23 @@ var _ nio.PlainGated = (*Driver)(nil)
 // raced the close and recorded a value after it. Callers do not hold any
 // source's mu or wmu.
 func (d *Driver) gateOpen() bool {
-	open, _ := d.look()
+	open, _, _ := d.look()
 	return open
 }
 
-// look is gateOpen with the send budget the same read of the gate gave
-// (negative: no deadline), for a look made right before a request.
-func (d *Driver) look() (bool, time.Duration) {
+// look is gateOpen with the send budget (negative: no deadline) and the
+// lease's term the same read of the gate gave (io.SendGate), for a look
+// made right before a request.
+func (d *Driver) look() (bool, time.Duration, uint64) {
 	d.gateMu.Lock()
 	gate, send := d.writeGate, d.sendGate
 	d.gateMu.Unlock()
 	if gate == nil && send == nil {
-		return true, -1
+		return true, -1, 0
 	}
-	open, budget := false, time.Duration(-1)
+	open, budget, term := false, time.Duration(-1), uint64(0)
 	if send != nil {
-		open, budget = send()
+		open, budget, term = send()
 	} else {
 		open = gate()
 	}
@@ -611,7 +634,11 @@ func (d *Driver) look() (bool, time.Duration) {
 	// and gateShut is cleared only AFTER the forget: a second looker that
 	// finds the gate open meanwhile still sees gateShut, waits on turnMu,
 	// and so cannot re-assert the previous term's written (#600).
-	if shut := d.gateShut.Load(); shut == open {
+	if open && term != 0 && d.leaseTerm.Load() == 0 {
+		d.leaseTerm.CompareAndSwap(0, term) // the first term seen: nothing to forget
+	}
+	moved := open && term != 0 && d.leaseTerm.Load() != term && !mut("old_term_kept")
+	if shut := d.gateShut.Load(); shut == open || moved {
 		d.turnMu.Lock()
 		switch {
 		case !open && !d.gateShut.Load():
@@ -620,15 +647,18 @@ func (d *Driver) look() (bool, time.Duration) {
 			d.wmu.Lock()
 			d.baseline = false // a standby has no baseline (#606)
 			d.wmu.Unlock()
-		case open && d.gateShut.Load():
+		case open && (d.gateShut.Load() || term != 0 && d.leaseTerm.Load() != term && !mut("old_term_kept")):
 			d.forgetWritten()
+			if term != 0 {
+				d.leaseTerm.Store(term)
+			}
 			d.gateShut.Store(false)
 			d.wanted.Store(true)
 			d.log.Info("modbus: write gate open again; every output goes out with the next push")
 		}
 		d.turnMu.Unlock()
 	}
-	return open, budget
+	return open, budget, term
 }
 
 // reopenHook, when a test sets it, runs at the start of forgetWritten: the
@@ -636,18 +666,21 @@ func (d *Driver) look() (bool, time.Duration) {
 // gateShut set while it lasts.
 var reopenHook func()
 
-// forgetWritten empties every source's written: no value is the on-change
-// reference any more, so the next push sends them all, and no rewrite:
-// binding has anything to re-assert until it does.
+// forgetWritten empties every source's written and pending: no value is
+// the on-change reference any more, so the next push sends them all, no
+// rewrite: binding has anything to re-assert until it does, and no write
+// queued or requeued before the reopen goes out after it (#1040 review).
 func (d *Driver) forgetWritten() {
 	if reopenHook != nil {
 		reopenHook()
 	}
+	d.reopens.Add(1)
 	d.srcMu.RLock()
 	defer d.srcMu.RUnlock()
 	for _, s := range d.sources {
 		s.mu.Lock()
 		clear(s.written)
+		clear(s.pending) // a requeued write is the previous leadership's too (#1040)
 		s.mu.Unlock()
 	}
 }
@@ -1499,6 +1532,7 @@ func (d *Driver) pollBlock(ctx context.Context, s *source, c conn, br *blockRun)
 // the write gate closed the queue is dropped instead, and if the gate
 // closes partway through, the rest of the flush is (see SetWriteGate).
 func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
+	gen := d.reopens.Load() // before the queue is taken: see send
 	s.mu.Lock()
 	if len(s.pending) == 0 {
 		s.mu.Unlock()
@@ -1581,9 +1615,16 @@ func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
 	// that write and every one after it, and the flush returns, so a drop
 	// is logged at most once per flush.
 	send := func(bi, ri, ci int) (context.Context, context.CancelFunc, bool) {
-		deadline, ok := fence.Begin(d.look, time.Now()) // the budget counts from before the read
+		deadline, _, ok := fence.Begin(d.look, time.Now()) // the budget counts from before the read
 		if !ok || !fence.Started(deadline, time.Now()) {
 			drop(rest(bi, ri, ci))
+			return nil, nil, false
+		}
+		if d.reopens.Load() != gen && !mut("old_term_kept") {
+			// A reopen since this flush took its queue (a lease lost and
+			// won again, seen now or by another look): the rest is the
+			// previous leadership's, already forgotten; the push that
+			// answers the reopen sends this one's.
 			return nil, nil, false
 		}
 		wctx, cancel := fence.Context(ctx, deadline)

@@ -114,3 +114,24 @@ func TestPairRefusesASparkplugEdge(t *testing.T) {
 		t.Fatalf("the Kubernetes Lease mode with a Sparkplug edge: %v; want it loaded as before", err)
 	}
 }
+
+// The least budget a pair's write gets in normal running: three quarters
+// of the lease (it renews every quarter) minus the net delay.
+func TestPairSendBudget(t *testing.T) {
+	for _, c := range []struct {
+		red  string
+		want time.Duration
+	}{
+		{pairOK, 1450 * time.Millisecond},
+		{pairOK + "  lease: 200ms\n", 125 * time.Millisecond},
+		{pairOK + "  lease: 4s\n  net-delay: 100ms\n", 2900 * time.Millisecond},
+	} {
+		p, err := Load(pairFS(c.red), "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := p.Redundancy.SendBudget(); got != c.want {
+			t.Errorf("%q: budget %s, want %s", c.red, got, c.want)
+		}
+	}
+}

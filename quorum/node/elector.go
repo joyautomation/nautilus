@@ -536,23 +536,23 @@ func (e *Elector) Fence() time.Duration {
 // hold the gate open past the lease), and its scans were live at its last
 // look, and it hasn't released.
 func (e *Elector) IsLeader() bool {
-	ok, _ := e.SendGate()
+	ok, _, _ := e.SendGate()
 	return ok
 }
 
 // SendGate is IsLeader with the budget a send that starts now has (the
-// lease left minus the network delay), read in one look (io.SendGate,
-// design §3.4).
-func (e *Elector) SendGate() (bool, time.Duration) {
+// lease left minus the network delay) and the term it leads under (Term),
+// read in one look (io.SendGate, design §3.4).
+func (e *Elector) SendGate() (bool, time.Duration, uint64) {
 	g := e.gate.Load()
 	if mut("gate_on_tick") {
-		return g.open, g.end.Sub(e.now()) - e.o.NetDelay
+		return g.open, g.end.Sub(e.now()) - e.o.NetDelay, g.epoch
 	}
 	left := g.end.Sub(e.now())
 	if !g.open || left <= e.Fence() {
-		return false, 0
+		return false, 0, g.epoch
 	}
-	return true, left - e.o.NetDelay
+	return true, left - e.o.NetDelay, g.epoch
 }
 
 // Term returns the last fencing token this controller led under: the term

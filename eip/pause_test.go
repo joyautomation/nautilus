@@ -38,7 +38,7 @@ func TestEIPPauseBeforeSendPastTheBudget(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			d.SetSendGate(func() (bool, time.Duration) { return true, 150 * time.Millisecond })
+			d.SetSendGate(func() (bool, time.Duration, uint64) { return true, 150 * time.Millisecond, 1 })
 			d.Start(context.Background())
 			t.Cleanup(d.Stop)
 			waitFor(t, "connect", func() bool { return d.Health().Connected })

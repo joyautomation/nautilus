@@ -463,24 +463,42 @@ func checkRedundancy(r *RedundancyConfig) error {
 // for good between two renewals. Unset parts scale with the lease, under
 // it by construction (the elector's FenceDefaults).
 func checkFence(r *RedundancyConfig) error {
-	dn, ms := time.Duration(r.NetDelay), time.Duration(r.SendMargin)
-	if dn == 0 && ms == 0 {
+	if r.NetDelay == 0 && r.SendMargin == 0 {
 		return nil
 	}
-	if dn < 0 || ms < 0 {
-		return fmt.Errorf("redundancy.net-delay %s, send-margin %s: want durations of zero or more", dn, ms)
+	if r.NetDelay < 0 || r.SendMargin < 0 {
+		return fmt.Errorf("redundancy.net-delay %s, send-margin %s: want durations of zero or more", time.Duration(r.NetDelay), time.Duration(r.SendMargin))
 	}
+	dn, ms := r.FenceParts()
 	lease := r.LeaseTime()
-	if dn == 0 {
-		dn = min(50*time.Millisecond, lease/8)
-	}
-	if ms == 0 {
-		ms = min(20*time.Millisecond, lease/16)
-	}
 	if dn+ms >= lease/4 {
 		return fmt.Errorf("redundancy.net-delay %s + send-margin %s = %s: the fence margin must be under a quarter of the lease (%s), or the write gate closes before each renewal; lengthen the lease or shorten them", dn, ms, dn+ms, lease)
 	}
 	return nil
+}
+
+// FenceParts are a pair's net delay and send margin: the manifest's, or
+// the defaults scaled to the lease (quorum/node's FenceDefaults: at most
+// 50 ms and lease/8, 20 ms and lease/16).
+func (r *RedundancyConfig) FenceParts() (netDelay, sendMargin time.Duration) {
+	lease := r.LeaseTime()
+	netDelay, sendMargin = time.Duration(r.NetDelay), time.Duration(r.SendMargin)
+	if netDelay == 0 {
+		netDelay = min(50*time.Millisecond, lease/8)
+	}
+	if sendMargin == 0 {
+		sendMargin = min(20*time.Millisecond, lease/16)
+	}
+	return netDelay, sendMargin
+}
+
+// SendBudget is the least time a pair's write may take in normal running
+// (design §3.4): the leader renews every quarter lease, so the lease left
+// falls to about three quarters of it before each renewal, and a write's
+// deadline is that minus the net delay.
+func (r *RedundancyConfig) SendBudget() time.Duration {
+	dn, _ := r.FenceParts()
+	return r.LeaseTime()*3/4 - dn
 }
 
 // checkPeerAddr wants host:port with both parts.
