@@ -247,6 +247,22 @@ func (d *Driver) SetWriteGate(gate func() bool) {
 	}
 }
 
+// PlainWriteGate marks the write gate as naut run's liveness gate
+// (io.PlainGated), closed while the scans are hung, in a project without
+// redundancy:. It stops commands (NCMD/DCMD) and nothing else: this host
+// stays the primary host, STATE stays as it is, and the client ID stays
+// the configured one (maintainer's decision, #943). Commands written while
+// it is closed are held as under a leadership gate and the latest goes out
+// when it reopens.
+func (d *Driver) PlainWriteGate() {
+	d.gateMu.Lock()
+	defer d.gateMu.Unlock()
+	d.plainGate = true
+	d.replicaID = "" // not a replica: SetWriteGate set it for a leadership gate
+}
+
+var _ nio.PlainGated = (*Driver)(nil)
+
 // replicaIdentity is this replica's name among its peers: POD_NAME (what
 // `naut run` hands the elector), else the hostname.
 func replicaIdentity() string {
