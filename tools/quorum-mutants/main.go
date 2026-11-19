@@ -54,6 +54,16 @@ var table = []mutation{
 	{"no_observe", []string{"TestObserveLiftsTheNextCampaign"}},
 	{"retry_on_grid", []string{"TestCandidateRetryJitter"}},
 	{"renew_on_look", []string{"TestCandidateRenewsAtOnceOnWinning", "TestNightlySlowFsyncWinner"}},
+	// The witness-incarnation handshake (#976). H1 catches them in T1; the
+	// sim cases join with H2.
+	{"no_quiet", []string{"TestRebuiltWitnessAdopted", "TestQuietPeriodHoldsOffTheNewWitness", "TestLostControllerReadoptsThePeer"}},
+	{"no_floor", []string{"TestRebuiltWitnessAdopted", "TestLostControllerReadoptsThePeer"}},
+	{"count_while_pending", []string{"TestRebuiltWitnessAdopted"}},
+	{"no_adopt_gen", []string{"TestStaleProposalRefused", "TestConcurrentProposals", "TestLateProposalCannotSplitThePair"}},
+	{"no_holdoff", []string{"TestSwitchHoldOffGrows"}},
+	{"restart_counts_at_once", []string{"TestRestartOwesTheQuietPeriod", "TestReviewRestartSkipsQuiet"}},
+	{"no_adopt_echo", []string{"TestLostControllerIgnoresAnAckToItsEarlierBoot", "TestReviewStaleProposeFloor"}},
+	{"switch_without_peer", []string{"TestSwitchNeedsThePeer"}},
 }
 
 // event is one line of `go test -json`.

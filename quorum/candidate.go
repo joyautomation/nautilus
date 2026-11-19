@@ -17,8 +17,9 @@ type Config struct {
 	// 0.01). The leader's lease is shortened by it, so it ends before any
 	// voter's promise does.
 	Rho float64
-	// Incarnation is the witness incarnation this controller accepts; a
-	// witness grant from any other is not counted. 0 accepts none.
+	// Incarnation is the witness incarnation this controller accepts at
+	// start; a witness grant from any other is not counted. 0 accepts
+	// none. An Adoption changes it later (Candidate.Count).
 	Incarnation uint64
 	// Jitter returns a delay in [0, lease/4) added before each retry of a
 	// refused campaign, so two candidates refused in the same round don't
@@ -100,6 +101,12 @@ type Candidate struct {
 	// pending is the campaign in flight: no new campaign starts until a
 	// majority has answered it or a lease has passed (expire).
 	pending *round
+
+	// countInc is the witness incarnation whose grants count (0: none),
+	// and countFrom when they start to: a newly adopted incarnation is
+	// counted only after its quiet period (Count).
+	countInc  uint64
+	countFrom Instant
 }
 
 // NewCandidate starts a candidate at now that knows of terms up to known
@@ -108,7 +115,22 @@ func NewCandidate(cfg Config, known uint64, now Instant) (*Candidate, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	return &Candidate{cfg: cfg, maxSeen: known, nextLook: now}, nil
+	return &Candidate{cfg: cfg, maxSeen: known, nextLook: now, countInc: cfg.Incarnation}, nil
+}
+
+// Count sets which witness incarnation's grants count: inc (0: none), and
+// only grants received at or after from. The Adoption calls it.
+func (c *Candidate) Count(inc uint64, from Instant) { c.countInc, c.countFrom = inc, from }
+
+// Counting returns the witness incarnation whose grants count, and from
+// when.
+func (c *Candidate) Counting() (inc uint64, from Instant) { return c.countInc, c.countFrom }
+
+// raiseSeen lifts the highest term heard of to t: an adoption's term floor.
+func (c *Candidate) raiseSeen(t uint64) {
+	if t > c.maxSeen {
+		c.maxSeen = t
+	}
 }
 
 // Leading reports whether this controller holds a lease at now. It is
@@ -242,7 +264,7 @@ func (c *Candidate) OnReply(now Instant, r Reply) {
 	c.expire(now)
 	switch {
 	case r.From == c.cfg.Self, r.From == c.cfg.Peer:
-	case r.From == c.cfg.Witness && r.Incarnation == c.cfg.Incarnation && r.Incarnation != 0:
+	case r.From == c.cfg.Witness && r.Incarnation == c.countInc && r.Incarnation != 0 && now >= c.countFrom:
 	case r.From == c.cfg.Witness && mut("any_incarnation"):
 	case mut("any_sender") && r.From != c.cfg.Witness:
 	default:

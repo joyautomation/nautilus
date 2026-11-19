@@ -1,0 +1,426 @@
+package quorum
+
+import "time"
+
+// EventKind names something an Adoption reports for the operator.
+type EventKind int
+
+const (
+	// EventAdopted: this controller durably adopted (Gen, Incarnation).
+	EventAdopted EventKind = iota + 1
+	// EventTwoIncarnations: two witness incarnations (Incarnation and
+	// Other) answered this controller within a lease of each other. Two
+	// copies of the witness are running: a misconfiguration the operator
+	// must see (design §3.1).
+	EventTwoIncarnations
+)
+
+// Event is one thing an Adoption reports (Adoption.Events).
+type Event struct {
+	Kind             EventKind
+	Gen, Incarnation uint64
+	Other            uint64 // EventTwoIncarnations: the other incarnation
+}
+
+// maxHoldShift caps the switch hold-off at lease << 5 = 32 leases.
+const maxHoldShift = 5
+
+// Adoption is a controller's side of the witness-incarnation handshake
+// (design §3.1, "The witness incarnation"; #976). It decides which witness
+// incarnation the controller's Candidate counts, and when, and raises the
+// term floor of its Voter. The two controllers adopt an incarnation only
+// together, over the A–B link:
+//
+//   - A proposal (Propose) names a generation above the proposer's own;
+//     generations only rise, so a late, duplicated or earlier-boot message
+//     can't move a peer that has moved on. The peer adopts it, persists,
+//     then acks (Ack); otherwise it answers with what it counts (State).
+//   - Forward only: a proposer stops counting any witness, durably, before
+//     it asks, and counts again only on the matching Ack.
+//   - Quiet period: a newly adopted incarnation counts only one lease after
+//     the adoption is durable, by when every lease granted under the old
+//     voter set has ended.
+//   - Term floor: both voters, and both candidates' highest term seen, rise
+//     to the higher of the two floors before the new incarnation counts.
+//   - Uncommissioned (no incarnation adopted: a new install, or a lost
+//     file), the voter grants nothing. It re-adopts its commissioned
+//     peer's incarnation at a new generation, after hearing the witness
+//     answer at it, so its floor includes the witness's promised term, and
+//     takes only messages sent to its current boot (Adopt.Echo).
+//   - A restart owes the quiet period again (NewAdoption).
+//
+// Like Voter and Candidate it does no I/O and is not safe for concurrent
+// use. The driver, per controller:
+//
+//   - creates it with NewAdoption after the Voter and the Candidate;
+//   - passes every witness reply to OnWitness (after Candidate.OnReply);
+//   - passes every Adopt from the peer to OnAdopt, and calls OnPeer for
+//     every other message from the peer (a request or a reply);
+//   - calls Tick at every look of the candidate;
+//   - persists every *Persist returned, and reports writes to
+//     Adoption.Persisted (not Voter.Persisted);
+//   - sends every Adopt returned to the peer, and the probe to the witness;
+//   - drains Events for the operator.
+type Adoption struct {
+	v *Voter
+	c *Candidate
+
+	self, peer, witness NodeID
+	lease               time.Duration
+
+	// heard is every witness incarnation that answered this controller in
+	// this boot: when last, and the highest term it said it promised.
+	heard map[uint64]heardInc
+	// current is when the counted incarnation last answered (or this
+	// boot, or its adoption): the silence a switch waits on.
+	current Instant
+
+	held   []heldAdopt
+	commit *commit
+
+	// switches counts adoptions of a new incarnation replacing another,
+	// in this boot: the switch hold-off doubles with each (holdoff).
+	// standing is when the last one was made; one that stands 2 × the cap
+	// resets the count.
+	switches int
+	standing Instant
+	lastTwo  Instant // the last EventTwoIncarnations
+	events   []Event
+
+	// peerNonce is the boot nonce of the peer's last message (Echo), and
+	// peerAt when the peer was last heard from at all (OnPeer).
+	peerNonce uint64
+	peerAt    Instant
+}
+
+type heardInc struct {
+	at       Instant
+	promised uint64
+}
+
+type heldAdopt struct {
+	need uint64
+	msg  Adopt
+}
+
+// commit is an adoption waiting for its write.
+type commit struct {
+	need     uint64
+	gen, inc uint64
+	quiet    bool // a new incarnation: count it one lease after the write
+}
+
+// NewAdoption starts the handshake for a controller at now, from the state
+// its voter started with. It marks the voter as a controller's, which
+// grants nothing while uncommissioned. A controller restarted with an
+// adopted incarnation counts it only one lease after the restart: it may
+// have adopted it just before it went down, so the quiet period is owed
+// again. The peer may hold a lease granted under the old voter set by
+// this node's own pre-restart voter, which the restart wait doesn't cover
+// (#1008 review). One restarted with a proposal in flight counts none,
+// and re-sends it.
+func NewAdoption(v *Voter, c *Candidate, now Instant) *Adoption {
+	v.commission = true
+	a := &Adoption{v: v, c: c, self: c.cfg.Self, peer: c.cfg.Peer, witness: c.cfg.Witness,
+		lease: c.cfg.Lease, heard: map[uint64]heardInc{}, current: now, standing: now}
+	st := v.st
+	switch {
+	case st.PendingGen != 0 && !mut("count_while_pending"):
+		c.Count(0, 0)
+	case mut("restart_counts_at_once"):
+		c.Count(st.Incarnation, now)
+	default:
+		c.Count(st.Incarnation, now.Add(a.lease))
+	}
+	c.raiseSeen(st.Floor)
+	return a
+}
+
+// Events returns what happened since the last call, and forgets it.
+func (a *Adoption) Events() []Event {
+	e := a.events
+	a.events = nil
+	return e
+}
+
+// OnWitness notes a witness reply this controller received at now,
+// granted or refused: which incarnation answered, and the term it has
+// promised.
+func (a *Adoption) OnWitness(now Instant, r Reply) {
+	if r.From != a.witness || r.To != a.self || r.Incarnation == 0 {
+		return
+	}
+	h := a.heard[r.Incarnation]
+	a.heard[r.Incarnation] = heardInc{at: now, promised: max(h.promised, r.Promised)}
+	if r.Incarnation == a.v.st.Incarnation {
+		a.current = now
+	}
+	for inc, o := range a.heard {
+		if inc != r.Incarnation && now < o.at.Add(a.lease) && (a.lastTwo == 0 || now >= a.lastTwo.Add(a.lease)) {
+			a.lastTwo = now
+			a.events = append(a.events, Event{Kind: EventTwoIncarnations, Incarnation: r.Incarnation, Other: inc})
+			break
+		}
+	}
+}
+
+// holdoff is how long the counted incarnation must have been silent
+// before this controller proposes a new one: a lease, doubling with each
+// switch this boot, up to 32 leases, so a stray copy that answers on and
+// off can't make the pair switch back and forth every lease.
+func (a *Adoption) holdoff() time.Duration {
+	if mut("no_holdoff") {
+		return a.lease
+	}
+	return a.lease << min(a.switches, maxHoldShift)
+}
+
+// floorFor is the term floor this controller vouches for when it proposes
+// or adopts: the highest term its voter promised, its floor, the highest
+// its candidate heard of, and the highest any witness incarnation said it
+// promised in this boot (a stray's only raises it).
+func (a *Adoption) floorFor() uint64 {
+	st := a.v.st
+	f := max(st.Promised, st.Floor, a.c.maxSeen)
+	for _, h := range a.heard {
+		f = max(f, h.promised)
+	}
+	return f
+}
+
+// OnPeer notes that a message from the peer (a request, a reply or an
+// Adopt) arrived at now. A switch is proposed only while the peer has been
+// heard within a lease: a proposer counts no witness until the peer acks,
+// so proposing to a peer that is down would leave it with none.
+func (a *Adoption) OnPeer(now Instant) { a.peerAt = now }
+
+// Tick runs the handshake at the candidate's look: it re-sends a proposal
+// in flight, asks an uncommissioned controller's peer what it counts, and
+// proposes a rebuilt witness's new incarnation once the counted one has
+// been silent for the hold-off. It returns a write to persist (the Adopt
+// then comes from Persisted), messages for the peer, and, while
+// uncommissioned, a probe for the witness: a term-0 request, always
+// refused, whose reply says the witness's incarnation and promised term
+// (a standby under a live leader sends the witness nothing else).
+func (a *Adoption) Tick(now Instant) (*Persist, []Adopt, *Request) {
+	for inc, h := range a.heard {
+		if now >= h.at.Add(64*a.lease) {
+			delete(a.heard, inc)
+		}
+	}
+	if a.switches > 0 && now >= a.standing.Add(2*(a.lease<<maxHoldShift)) {
+		a.switches = 0
+	}
+	st := a.v.st
+	var probe *Request
+	if st.Incarnation == 0 {
+		probe = &Request{From: a.self, Nonce: a.c.cfg.Nonce}
+	}
+	if len(a.held) > 0 {
+		return nil, nil, probe // a message waits for its write; it goes then
+	}
+	switch {
+	case st.PendingGen != 0:
+		return a.flush(), a.hold(a.msg(Propose, st.PendingGen, st.PendingInc, a.floorFor(), a.peerNonce)), probe
+	case st.Incarnation == 0:
+		return nil, []Adopt{a.msg(Propose, 0, 0, 0, a.peerNonce)}, probe // a query
+	}
+	if now < a.current.Add(a.holdoff()) || (now >= a.peerAt.Add(a.lease) && !mut("switch_without_peer")) {
+		return nil, nil, nil
+	}
+	// The counted incarnation has been silent for the hold-off: propose
+	// the newest that answered within the last lease (a rebuilt witness).
+	var next uint64
+	var at Instant
+	for inc, h := range a.heard {
+		if inc != st.Incarnation && now < h.at.Add(a.lease) && (h.at > at || (h.at == at && inc > next)) {
+			next, at = inc, h.at
+		}
+	}
+	if next == 0 {
+		return nil, nil, nil
+	}
+	p, out := a.propose(st.Gen+1, next)
+	return p, out, nil
+}
+
+// msg builds an Adopt addressed to the peer's boot echo.
+func (a *Adoption) msg(k AdoptKind, gen, inc, floor, echo uint64) Adopt {
+	return Adopt{From: a.self, Kind: k, Gen: gen, Incarnation: inc, Floor: floor,
+		Nonce: a.c.cfg.Nonce, Echo: echo, Pending: a.v.st.PendingGen}
+}
+
+// propose asks the peer to adopt (gen, inc). Forward only: it stops
+// counting any witness first, and the proposal leaves only once that is
+// durable.
+func (a *Adoption) propose(gen, inc uint64) (*Persist, []Adopt) {
+	if !mut("count_while_pending") {
+		a.c.Count(0, 0)
+	}
+	a.v.st.PendingGen, a.v.st.PendingInc = gen, inc
+	p := a.v.change()
+	return p, a.hold(a.msg(Propose, gen, inc, a.floorFor(), a.peerNonce))
+}
+
+// flush returns a write of the in-memory state when it isn't durable: a
+// failed write is retried by the next message that depends on it.
+func (a *Adoption) flush() *Persist {
+	if a.v.durable >= a.v.dirty {
+		return nil
+	}
+	return &Persist{Seq: a.v.dirty, State: a.v.st}
+}
+
+// hold returns m to send now when the voter's state is durable, or keeps
+// it for Persisted: no Adopt leaves ahead of the state it vouches for.
+func (a *Adoption) hold(m Adopt) []Adopt {
+	if a.v.durable >= a.v.dirty {
+		return []Adopt{m}
+	}
+	a.held = append(a.held, heldAdopt{need: a.v.dirty, msg: m})
+	return nil
+}
+
+// OnAdopt takes a handshake message from the peer, received at now. It
+// returns a write to persist and messages for the peer (any that depend
+// on the write come from Persisted instead).
+func (a *Adoption) OnAdopt(now Instant, m Adopt) (*Persist, []Adopt) {
+	if m.From != a.peer {
+		return nil, nil
+	}
+	a.peerAt, a.peerNonce = now, m.Nonce
+	st := a.v.st
+	// fresh: m was sent to this boot. An uncommissioned controller (a lost
+	// file) takes nothing that isn't: a proposal or an ack from before the
+	// loss carries a floor that misses what was led since (#1008 review).
+	fresh := m.Echo == a.c.cfg.Nonce || mut("no_adopt_echo")
+	switch m.Kind {
+	case Propose:
+		if m.Gen != 0 && m.Gen == st.Gen && m.Incarnation == st.Incarnation {
+			return a.flush(), a.hold(a.msg(Ack, st.Gen, st.Incarnation, st.Floor, m.Nonce)) // a re-sent proposal
+		}
+		accept := m.Gen > st.Gen && m.Incarnation != 0 &&
+			(st.PendingGen == 0 || m.Gen > st.PendingGen ||
+				(m.Gen == st.PendingGen && m.Incarnation >= st.PendingInc))
+		if mut("no_adopt_gen") {
+			accept = m.Gen != 0 && m.Incarnation != 0
+		}
+		// Uncommissioned, adopt only a proposal sent to this boot, of an
+		// incarnation heard answering in this boot: the floor needs its
+		// promised term.
+		if st.Incarnation == 0 && (!fresh || !a.heardAt(m.Incarnation)) {
+			accept = false
+		}
+		if !accept {
+			return a.flush(), a.hold(a.msg(State, st.Gen, st.Incarnation, st.Floor, m.Nonce))
+		}
+		p := a.adopt(now, m.Gen, m.Incarnation, m.Floor)
+		return p, a.hold(a.msg(Ack, m.Gen, m.Incarnation, a.v.st.Floor, m.Nonce))
+	case Ack:
+		if fresh && st.PendingGen != 0 && m.Gen == st.PendingGen && m.Incarnation == st.PendingInc {
+			return a.adopt(now, m.Gen, m.Incarnation, m.Floor), nil
+		}
+	case State:
+		if !fresh {
+			return nil, nil // it answers an earlier boot of ours
+		}
+		if m.Incarnation != 0 {
+			// The peer counts (Gen, Incarnation). A proposal of ours it
+			// can't take is dead (stale). An uncommissioned controller
+			// re-adopts what its commissioned peer counts (lost), and gives
+			// way when the peer has a proposal of its own at the same or a
+			// higher generation (outbid): it re-proposes the peer's
+			// incarnation above both, which the peer takes over its own,
+			// so neither waits on the other for ever. Either way only
+			// once it has heard the witness at it (the floor needs its
+			// promised term).
+			stale := st.PendingGen != 0 && m.Gen >= st.PendingGen
+			lost := st.Incarnation == 0 && st.PendingGen == 0
+			outbid := st.Incarnation == 0 && st.PendingGen != 0 && m.Pending >= st.PendingGen
+			if (stale || lost || outbid) && (st.Incarnation != 0 || a.heardAt(m.Incarnation)) {
+				return a.propose(max(m.Gen, m.Pending)+1, m.Incarnation)
+			}
+			return nil, nil
+		}
+		// Both uncommissioned (first commissioning, or both files lost):
+		// propose the incarnation that answered last.
+		if st.Incarnation == 0 && st.PendingGen == 0 {
+			if inc := a.newest(); inc != 0 {
+				return a.propose(max(m.Gen, m.Pending, st.Gen)+1, inc)
+			}
+		}
+	}
+	return nil, nil
+}
+
+func (a *Adoption) heardAt(inc uint64) bool {
+	_, ok := a.heard[inc]
+	return ok
+}
+
+// newest is the incarnation that answered last (the higher id on a tie),
+// or 0.
+func (a *Adoption) newest() uint64 {
+	var inc uint64
+	var at Instant
+	for i, h := range a.heard {
+		if h.at > at || (h.at == at && i > inc) {
+			inc, at = i, h.at
+		}
+	}
+	return inc
+}
+
+// adopt takes (gen, inc) as the adoption, raises the term floor, and
+// returns the write; the incarnation counts once it is durable
+// (Persisted), after the quiet period if it is a new one. A new
+// incarnation stops the old one counting now, before any Ack leaves.
+func (a *Adoption) adopt(now Instant, gen, inc, peerFloor uint64) *Persist {
+	st := &a.v.st
+	quiet := inc != st.Incarnation
+	if quiet && st.Incarnation != 0 {
+		a.switches++
+		a.standing = now
+	}
+	floor := max(peerFloor, a.floorFor())
+	st.Gen, st.Incarnation, st.PendingGen, st.PendingInc = gen, inc, 0, 0
+	if !mut("no_floor") {
+		st.Floor = max(st.Floor, floor)
+		a.c.raiseSeen(st.Floor)
+	}
+	if quiet {
+		a.c.Count(0, 0)
+	}
+	p := a.v.change()
+	a.commit = &commit{need: p.Seq, gen: gen, inc: inc, quiet: quiet}
+	return p
+}
+
+// Persisted reports the driver's write of Seq seq, ok when durable, at
+// now. It returns the grants (Voter.Persisted) and the Adopt messages the
+// write releases, and starts counting an adoption the write made durable.
+func (a *Adoption) Persisted(now Instant, seq uint64, ok bool) ([]Reply, []Adopt) {
+	replies := a.v.Persisted(seq, ok)
+	var out []Adopt
+	keep := a.held[:0]
+	for _, h := range a.held {
+		switch {
+		case h.need > seq:
+			keep = append(keep, h)
+		case ok:
+			out = append(out, h.msg)
+		}
+	}
+	a.held = keep
+	if ok && a.commit != nil && seq >= a.commit.need {
+		from := now
+		if a.commit.quiet && !mut("no_quiet") {
+			from = now.Add(a.lease)
+		}
+		a.c.Count(a.commit.inc, from)
+		a.current = now
+		a.events = append(a.events, Event{Kind: EventAdopted, Gen: a.commit.gen, Incarnation: a.commit.inc})
+		a.commit = nil
+	}
+	return replies, out
+}

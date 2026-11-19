@@ -26,10 +26,24 @@ type VoterState struct {
 	// GrantedTo is the candidate Promised was granted to.
 	GrantedTo NodeID
 	// Incarnation is, on the witness, its own incarnation, drawn at first
-	// start; on a controller, the witness incarnation it accepts.
+	// start; on a controller, the witness incarnation it last adopted. A
+	// controller with none (0) is uncommissioned: a new install, or a lost
+	// file. Its voter grants nothing until it adopts one (Adoption).
 	Incarnation uint64
 	// InSync is the last in-sync mark recorded (§3.3).
 	InSync Mark
+
+	// The rest is a controller's handshake state (Adoption, design §3.1).
+	// Gen is the adoption generation of Incarnation; it only rises.
+	Gen uint64
+	// PendingGen, PendingInc are a proposal in flight (PendingGen 0: none).
+	// While one is, the controller counts no witness at all: it stopped
+	// counting the old incarnation before it asked (forward only).
+	PendingGen, PendingInc uint64
+	// Floor: this voter grants no term at or below it. Raised at every
+	// adoption to the highest term either controller (and, for a lost
+	// file, the witness) knew was promised, so no term is granted twice.
+	Floor uint64
 }
 
 const stateMagic = "nqv"
@@ -51,6 +65,9 @@ func (s VoterState) MarshalBinary() ([]byte, error) {
 	p = append(p, flags)
 	p = binary.BigEndian.AppendUint64(p, s.InSync.Term)
 	p = binary.BigEndian.AppendUint64(p, s.InSync.Scan)
+	for _, v := range []uint64{s.Gen, s.PendingGen, s.PendingInc, s.Floor} {
+		p = binary.BigEndian.AppendUint64(p, v)
+	}
 	b := append([]byte(stateMagic), wireVersion)
 	b = binary.BigEndian.AppendUint32(b, uint32(len(p)))
 	b = append(b, p...)
@@ -80,6 +97,7 @@ func (s *VoterState) UnmarshalBinary(b []byte) error {
 	v := VoterState{Promised: rd.u64(), GrantedTo: NodeID(rd.str()), Incarnation: rd.u64()}
 	flags := rd.byte1()
 	v.InSync = Mark{Known: flags&1 != 0, Current: flags&2 != 0, Term: rd.u64(), Scan: rd.u64()}
+	v.Gen, v.PendingGen, v.PendingInc, v.Floor = rd.u64(), rd.u64(), rd.u64(), rd.u64()
 	if rd.bad || len(rd.b) != 0 || flags&^3 != 0 {
 		return ErrCorrupt
 	}
