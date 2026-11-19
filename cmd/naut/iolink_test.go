@@ -191,3 +191,29 @@ func TestIOLinkReadsAtMostMaxSize(t *testing.T) {
 		t.Errorf("import of an oversize file: %v", err)
 	}
 }
+
+// naut devices show prints a master's iolink: block with each carrier's
+// provenance: the u32 alignment on the P+F is a claim no document makes,
+// and a reader must see it is unverified.
+func TestDevicesShowIOLinkProvenance(t *testing.T) {
+	for id, want := range map[string][]string{
+		"pepperl-fuchs-ice3": {"iolink: 8 ports", "pd-in Port{n}_PdiU32 as u32 (form: UNVERIFIED)", "pd-out Port{n}_PdoU32 as u32 (form: UNVERIFIED)", "pd-valid Port{n}_PdiValid", "device-id Port{n}_DeviceID"},
+		"ifm-al1590":         {"iolink: 8 ports", "pd-in Port{n}_Pdin as hex (form: measured pdin hex text, '0286' is 0x0286)"},
+	} {
+		var out bytes.Buffer
+		if code := runDevicesShow([]string{id}, &out); code != 0 {
+			t.Fatalf("%s: exit %d", id, code)
+		}
+		got := strings.Join(strings.Fields(out.String()), " ")
+		for _, w := range want {
+			if !strings.Contains(got, w) {
+				t.Errorf("%s: show lacks %q:\n%s", id, w, out.String())
+			}
+		}
+	}
+	var out bytes.Buffer
+	runDevicesShow([]string{"sick-sig300"}, &out)
+	if strings.Contains(out.String(), "iolink:") {
+		t.Errorf("sick-sig300 has no iolink: block, yet show prints one:\n%s", out.String())
+	}
+}

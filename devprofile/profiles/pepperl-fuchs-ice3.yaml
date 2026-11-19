@@ -17,12 +17,13 @@ opcua:
     - urn:virtual:pepperl-fuchs:iolm    # index 1 per pf §12.2; the URI itself is not published
 iolink:                # docs/design/iolink.md §3: which points hold each port's IO-Link side
   ports: 8
-  # PDI/PDO Data Unsigned32 carry up to 4 octets. UNVERIFIED: where a
-  # shorter image sits in the U32 is not in pf §12.2; taken as the last
-  # big-endian octets (0x0286 for 02 86), and a U32 whose leading octets
-  # are not zero is refused, so a wrong guess reads Bad.
-  pd-in:  { point: "Port{n}_PdiU32", form: u32 }
-  pd-out: { point: "Port{n}_PdoU32", form: u32 }
+  # PDI/PDO Data Unsigned32 carry up to 4 octets. Where a shorter image
+  # sits in the U32 is not in pf §12.2: taken as the last big-endian
+  # octets (0x0286 for 02 86), and a U32 whose leading octets are not
+  # zero is refused, so a wrong guess reads Bad. Unverified until a real
+  # ICE3 is read.
+  pd-in:  { point: "Port{n}_PdiU32", form: u32, unverified: true }
+  pd-out: { point: "Port{n}_PdoU32", form: u32, unverified: true }
   pd-valid: "Port{n}_PdiValid"
   vendor-id: "Port{n}_VendorID"
   device-id: "Port{n}_DeviceID"

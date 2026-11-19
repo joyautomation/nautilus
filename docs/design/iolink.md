@@ -104,8 +104,8 @@ Rules, all in `devbind` so there is one copy of each:
 # pepperl-fuchs-ice3.yaml (added in PR 3)
 iolink:
   ports: 8
-  pd-in:  { point: "Port{n}_PdiU32", form: u32 }
-  pd-out: { point: "Port{n}_PdoU32", form: u32 }
+  pd-in:  { point: "Port{n}_PdiU32", form: u32, unverified: true }   # §3.1
+  pd-out: { point: "Port{n}_PdoU32", form: u32, unverified: true }
   pd-valid: "Port{n}_PdiValid"
   vendor-id: "Port{n}_VendorID"
   device-id: "Port{n}_DeviceID"
@@ -118,6 +118,7 @@ iolink:
 | `ports` | how many IO-Link ports the master has |
 | `pd-in.point` | the point holding a port's raw process data in |
 | `pd-in.form` | how that point carries the bytes: `hex` (text, two hex digits per byte, as on the ifm), `u32` (an unsigned 32-bit integer, as the P+F's PDI Data Unsigned32); `bytes` (a ByteString, as is) comes with PR 3b, which gives profiles a byte-string point type |
+| `pd-in.doc`, `pd-in.unverified` | where the form is documented or was measured, as a point's `doc:` (a docs id, then where); or `unverified: true`. One is required: the form is a claim of its own (for `u32`, where a short image sits), and `naut devices show` prints it |
 | `pd-out` | the same for process data out; absent means the master offers no PD out |
 | `pd-valid` | a BOOL point that says the master holds valid process data in (optional) |
 | `vendor-id`, `device-id` | integer points holding the attached device's identity (optional, see §6) |
