@@ -58,7 +58,9 @@ Flags:
   --new     With --io, also write files that only the controller's manifest
             names (a driver an apply added). They are listed first; without
             --new such a pull writes nothing. Only .yaml/.yml files are ever
-            written.
+            written. Review the listed paths before
+            using --new: a YAML file the controller's manifest names (a
+            docker-compose.yml, say) is written as it sends it.
   --force   With --io, overwrite a project file you edited locally. It skips
             the one check that your copy is the file the controller booted
             from (it trusts the controller's word for that), so your edits to
