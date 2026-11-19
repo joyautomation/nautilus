@@ -76,6 +76,12 @@ func TestPlainGateHoldsCommandsAndKeepsState(t *testing.T) {
 // W6; it returns the host, its watcher and the gate.
 func startPlain(t *testing.T, id string) (*Driver, *stateLog, *atomic.Bool) {
 	t.Helper()
+	return startWithGate(t, id, func(d *Driver, g func() bool) { nio.SetPlainGate(d, g) })
+}
+
+// startWithGate is startPlain with the gate installed by install.
+func startWithGate(t *testing.T, id string, install func(*Driver, func() bool)) (*Driver, *stateLog, *atomic.Bool) {
+	t.Helper()
 	srv, addr := startBroker(t, "")
 	t.Cleanup(func() { _ = closeBroker(srv) })
 	cfg := testConfig(addr, id)
@@ -87,7 +93,7 @@ func startPlain(t *testing.T, id string) (*Driver, *stateLog, *atomic.Bool) {
 	}
 	live := new(atomic.Bool)
 	live.Store(true)
-	nio.SetPlainGate(d, live.Load)
+	install(d, live.Load)
 	d.Start(context.Background())
 	t.Cleanup(d.Stop)
 	waitConnected(t, d)
@@ -110,6 +116,27 @@ func TestPlainGateShortClosureReleasesItsCommand(t *testing.T) {
 	waitUntil(t, "the command held by a 250 ms closure", func() bool { return len(w.commands(t)) == 1 })
 	if c := w.commands(t); c[0] != 22.0 {
 		t.Fatalf("commands = %v, want [22]", c)
+	}
+}
+
+// So does a redundancy leadership gate closed for less than leaderPoll:
+// serve never sees the replica demoted, so no reconnect kicks the writer,
+// and the held command used to wait for the next write, birth or reconnect.
+// The conformance row hid this: a 1 s MQTT keepalive made its broker drop
+// the host every second, and each reconnect sent the command (#943).
+func TestLeadershipGateShortClosureReleasesItsCommand(t *testing.T) {
+	d, w, leader := startWithGate(t, "h-lead-short", func(d *Driver, g func() bool) { d.SetWriteGate(g) })
+	states := len(w.states(t))
+	leader.Store(false)
+	writeSpeed(t, d, 22)
+	time.Sleep(250 * time.Millisecond) // well under leaderPoll
+	leader.Store(true)
+	waitUntil(t, "the command held by a 250 ms leadership-gate closure", func() bool { return len(w.commands(t)) == 1 })
+	if c := w.commands(t); c[0] != 22.0 {
+		t.Fatalf("commands = %v, want [22]", c)
+	}
+	if s := w.states(t); len(s) != states {
+		t.Fatalf("STATE certificates = %+v, want the %d from before: the closure was meant to go unseen by serve, with no reconnect", s, states)
 	}
 }
 

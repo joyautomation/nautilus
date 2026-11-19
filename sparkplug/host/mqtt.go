@@ -284,10 +284,11 @@ func (d *Driver) serve(ctx context.Context, lost <-chan struct{}) bool {
 			d.log.Warn("host: connection lost", "broker", d.cfg.BrokerURL)
 			return true
 		case <-t.C:
-			// Commands held by a plain write gate go out once it is open
-			// again (#943); nothing else would kick the writer. Looked at
-			// on every tick, not on a change between two ticks: a gate
-			// closed for less than leaderPoll would otherwise hold its
+			// Commands held by a closed gate go out once it is open again
+			// (#943): a plain gate, or a leadership gate closed for less
+			// than leaderPoll, which the check below never sees, so no
+			// reconnect kicks the writer. Looked at on every tick, not on
+			// a change between two ticks, or such a closure would hold its
 			// command until the next write, birth or reconnect.
 			if d.commandsAllowed() && d.hasPending() {
 				d.kickWriter()
