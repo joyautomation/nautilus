@@ -320,10 +320,12 @@ func (s *Server) substituteAckTarget(_ *http.Request, body []byte) auditTarget {
 }
 
 // auditSubstituteEvent journals what the runtime did on its own:
+//
 //   - an expiry (substitute.expire) has no request, so it is recorded here,
 //     by "system", with the value the program ran on and the live value it
 //     went back to; its reason says expired, expired-while-down (a restart)
 //     or refused-at-load (a deploy no longer allows it);
+//
 //   - a fault and its clearing (substitute.fault, substitute.fault-clear),
 //     so a transient __Substitute_Fault is never invisible: the alarm
 //     layer latches, the journal records.
