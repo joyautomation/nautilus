@@ -83,7 +83,8 @@ naut iolink param set   --host plc1 LEVEL1 V_Setpoint 500
 - A **write** needs the controller's write credential (`NAUTILUS_TOKEN`), is
   journalled as `param.write <port device>/<variable>` with the value held
   before and after, and is **refused** unless the device on the port is the
-  expected one, so a parameter never reaches the wrong sensor.
+  expected one, so a parameter is not sent to a device the controller knows
+  is wrong (a swap during the write is covered below).
 - A value is checked against the IODD (access rights, range, type) before
   anything is sent.
 - If the device on the port changes *while* a write is under way, or the
