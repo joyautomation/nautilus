@@ -5,10 +5,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -51,6 +53,14 @@ type cluster struct {
 	// fail reports an oracle breach: t.Errorf, or a recorder in the
 	// monitor's own test.
 	fail func(format string, args ...any)
+	// votes is every vote request sent, as it left (faultRT).
+	votes []sentVote
+}
+
+type sentVote struct {
+	from quorum.NodeID
+	at   time.Time
+	req  quorum.Request
 }
 
 type member struct {
@@ -61,6 +71,7 @@ type member struct {
 	cancel context.CancelFunc
 	ran    chan struct{}
 	sick   atomic.Bool // its scans are not live (SetHealth)
+	born   time.Time   // when its current Elector was built
 }
 
 type witnessMember struct {
@@ -142,6 +153,7 @@ func (c *cluster) stopWitness() {
 func (c *cluster) start(id quorum.NodeID) *Elector {
 	c.t.Helper()
 	m := c.ctl[id]
+	m.born = time.Now()
 	peer := quorum.NodeID("b")
 	if id == "b" {
 		peer = "a"
@@ -237,6 +249,16 @@ type faultRT struct {
 
 func (f *faultRT) RoundTrip(r *http.Request) (*http.Response, error) {
 	to := f.c.byHP[r.URL.Host]
+	if strings.HasSuffix(r.URL.Path, "/vote") && r.Body != nil {
+		b, _ := io.ReadAll(r.Body)
+		r.Body = io.NopCloser(bytes.NewReader(b))
+		var q quorum.Request
+		if q.UnmarshalBinary(b) == nil {
+			f.c.mu.Lock()
+			f.c.votes = append(f.c.votes, sentVote{from: f.from, at: time.Now(), req: q})
+			f.c.mu.Unlock()
+		}
+	}
 	if f.c.isCut(f.from, to) {
 		return nil, errCut
 	}
@@ -600,6 +622,33 @@ func TestLoopbackReleaseClosesTheGate(t *testing.T) {
 		t.Fatal("the released controller leads")
 	}
 	c.steady(next, 4)
+}
+
+// The restart hold on the real transport (#1021 review): a standby
+// restarted right after the pair's first election, while the witness may
+// not back the leader yet, sends no campaign until its own voter's restart
+// wait is over; before the hold it campaigned at once and could take the
+// witness's first grant from the leader.
+func TestLoopbackRestartedStandbyHoldsItsCampaigns(t *testing.T) {
+	c := newCluster(t)
+	c.startAll()
+	c.commission()
+	who := c.waitLeader(leases(20)) // not settled: the case needs it raw
+	sb := c.other(who)
+	c.kill(sb)
+	c.start(sb)
+	born := c.ctl[sb].born
+	time.Sleep(leases(3))
+	c.mu.Lock()
+	for _, v := range c.votes {
+		if v.from == sb && v.req.Term != 0 && !v.req.Renewal && v.at.After(born) && v.at.Before(born.Add(loopLease)) {
+			c.mu.Unlock()
+			t.Fatalf("the restarted %s campaigned (term %d) %v after its start, inside its voter's restart wait (%v)",
+				sb, v.req.Term, v.at.Sub(born), loopLease)
+		}
+	}
+	c.mu.Unlock()
+	c.settledLeader(leases(20))
 }
 
 // F8: the witness is down. The two controllers are a majority: the leader

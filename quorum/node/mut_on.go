@@ -39,4 +39,9 @@ func mut(name string) bool { return name == mutOn }
 // quorum rather than of this driver. The loopback tests skip then: the
 // core's own suite and the simulator catch those, and the runner runs the
 // whole tree once per mutation.
-func coreMutation() bool { return mutOn != "" && !slices.Contains(mutations, mutOn) }
+//
+// QUORUM_LOOPBACK=1 runs them anyway, to check by hand that a loopback
+// case catches a core mutation too.
+func coreMutation() bool {
+	return mutOn != "" && !slices.Contains(mutations, mutOn) && os.Getenv("QUORUM_LOOPBACK") == ""
+}

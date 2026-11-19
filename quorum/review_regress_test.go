@@ -28,6 +28,15 @@ func TestReviewRestartSkipsQuiet(t *testing.T) {
 	a := newCtl(t, "A", commissioned(1, incI, 5), T0)
 	t1 := T0.Add(lease / 10)
 	rq := a.c.Tick(t1, "", 0, true)
+	if rq == nil {
+		// Since the restart hold (#1021 review), A doesn't campaign while
+		// its own voter waits, so no lease can rest on B's voter and W_I
+		// then. The count's own rule still has to hold.
+		if inc, from := a.c.Counting(); inc != incI || from != T0.Add(lease) {
+			t.Fatalf("restarted A counts (%d from %v), want %d from %v", inc, from, incI, T0.Add(lease))
+		}
+		return
+	}
 	a.c.OnReply(t1, rv(t, a.v, t1, *rq)) // refused: restart wait
 	a.c.OnReply(t1, rv(t, b.v, t1, *rq)) // B's voter grants
 	a.c.OnReply(t1, rv(t, wI, t1, *rq))  // W_I grants

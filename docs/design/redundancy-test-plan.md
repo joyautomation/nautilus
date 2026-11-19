@@ -171,6 +171,7 @@ case caught it. A mutation joins the nightly run in the PR that builds the rule 
 | a longer lease after a restart isn't written before an unchanged grant | design §6.2 | 3a (re-review) |
 | the term-jump cap is 2^20, so an isolated controller is refused for good | design §6.2 | 3a (re-review) |
 | the client-token answer binds no names or direction | design §6.1 | 3a (review) |
+| a controller campaigns while its own voter is in its restart wait | design §3.1, the restart wait | restart hold |
 | no switch hold-off: a stray copy answering on and off switches the pair every lease | design §3.1, when a switch is proposed | 2 (handshake) |
 | a restarted controller counts its adopted incarnation at once (no quiet period owed) | design §3.1, the quiet period | 2 (handshake) |
 | a lost controller takes an `Adopt` sent before its restart (a stale floor) | design §3.1, boots | 2 (handshake) |
@@ -316,8 +317,10 @@ every lost-file case but the two-of-three case (§3.2). Seed 57197 of class 1 is
 - **The two-lease lapse back-off still pays (design §3.1).** With perfect clocks, #979 makes F9
   take 3.5–3.7 s with one lease or two. With clocks skewed within ρ it does not: over 160 F9
   schedules per delay, the worst takeover at 1–100 ms is 6.4–6.9 s with one lease and 3.9–4.3 s
-  with two. `TestTargetedOneWayLeaderSkewed` (A 0.5% slow, B 0.25% fast) is red with one lease
-  at 6.43 s. Its cost stays the double fault.
+  with two. `TestTargetedOneWayLeaderSkewed` (A 0.5% slow, B 0.25% fast) was red with one lease
+  at 6.43 s. Since the restart hold moved its first election (#1021 review), it no longer
+  reaches that phase, and `TestTargetedOneWayLeaderBacksOff` and T1 pin the back-off. Its cost
+  stays the double fault. The sweep's numbers are from before the hold.
 - **Long links flap (F21, measured, not failed).** The same F9 sweep at a 2 s lease, with the
   worst one-way delay counted as delay plus jitter:
 

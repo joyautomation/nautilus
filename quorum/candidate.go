@@ -107,6 +107,12 @@ type Candidate struct {
 	// counted only after its quiet period (Count).
 	countInc  uint64
 	countFrom Instant
+
+	// holdUntil: no campaign before this, the end of its own voter's
+	// restart wait (set by NewAdoption). A campaign then can't win without
+	// its own vote, and it can take the witness's first grant from a
+	// leader that rests on the two controllers (#1021 review).
+	holdUntil Instant
 }
 
 // NewCandidate starts a candidate at now that knows of terms up to known
@@ -151,7 +157,12 @@ func (c *Candidate) Observe(term uint64) {
 
 // NextLook returns when Tick will next do anything: a driver arms one
 // timer for it (and ticks again after any reply).
-func (c *Candidate) NextLook() Instant { return max(c.nextLook, c.backoffUntil) }
+func (c *Candidate) NextLook() Instant {
+	if !c.leading {
+		return max(c.nextLook, c.backoffUntil, c.holdUntil)
+	}
+	return max(c.nextLook, c.backoffUntil)
+}
 
 // yield gives up every open campaign and renewal round at now, so no
 // grant still in flight can make this candidate lead, and reports true;
@@ -234,6 +245,9 @@ func (c *Candidate) Tick(now Instant, seenFrom NodeID, seenUntil Instant, health
 	}
 	if now < c.retryAt || c.pending != nil {
 		return nil
+	}
+	if now < c.holdUntil {
+		return nil // its own voter is in its restart wait
 	}
 	return c.send(now, above(c.maxSeen))
 }
