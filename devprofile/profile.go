@@ -54,6 +54,10 @@ type Profile struct {
 	// OPCUA holds an OPC UA device's server: port, namespace array, the
 	// objects its tree is built from.
 	OPCUA *OPCUASpec `yaml:"opcua"`
+	// IOLink is an IO-Link master's iolink: block: which of its points
+	// hold each port's process data, identity and status
+	// (docs/design/iolink.md §3). nil for a device that is not a master.
+	IOLink *IOLinkSpec `yaml:"iolink"`
 	// Params are values an instance may set and the node columns refer to
 	// as {name}: an ifm master's location name prefixes every node id.
 	// The map holds each one's default.
@@ -406,6 +410,9 @@ func (p *Profile) validate() error {
 		if err != nil {
 			return fmt.Errorf("point %s: %w", pt.Name, err)
 		}
+	}
+	if err := p.validateIOLink(); err != nil {
+		return err
 	}
 	if s := p.Simulator; s != nil && (s.Block == "" || s.Source == "") {
 		return fmt.Errorf("simulator: block and source are both required")

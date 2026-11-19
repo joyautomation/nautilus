@@ -2,7 +2,7 @@ profile: ifm-al1590
 title: ifm AL1590 8-port IO-Link master, OPC UA server
 maker: ifm electronic
 model: AL1590
-version: 1
+version: 2
 docs:
   - id: al1427
     title: "AL1427 IO-Link master with EtherNet/IP interface, operating instructions, §5.6 OPC UA server and §10.4.3 address space (11/2025), the ifm OPC UA tree the AL1590's follows"
@@ -25,6 +25,12 @@ opcua:
     - urn:virtual:ifm:ns4
     - urn:virtual:ifm:al1590   # index 5: where the ports are
   object-namespace: 5
+iolink:                # docs/design/iolink.md §3
+  ports: 8
+  # pdin is hex text, two digits per octet (measured: '0286' is 02 86).
+  # No pd-out, ids or status yet: they are not served (see notes), so a
+  # port on this master is not identity-checked.
+  pd-in: { point: "Port{n}_Pdin", form: hex }
 points:
   - { name: "Port{n}_Pdin", type: STRING, repeat: 8,
       node-id: "ns=5;s={location}/iolinkmaster/port[{n}]/iolinkdevice/pdin",
