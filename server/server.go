@@ -347,6 +347,12 @@ type Options struct {
 	// IOConfig into it.
 	IO *IOHook
 
+	// Params, when set, serves the IO-Link device parameter routes
+	// (/api/iolink/{port}/params*, params.go, #705): reads of the
+	// parameters of the device on a port, and writes of them through its
+	// master. naut run wires the project's port devices into it.
+	Params *ParamHook
+
 	// HMI, when set, serves a built HMI — a SvelteKit `adapter-static`
 	// build, or any other static SPA bundle — at "/", so the controller is
 	// a one-process deploy: no separate web server for the operator screen.
@@ -503,8 +509,9 @@ type Server struct {
 	historian   string
 	historyFn   func() *ProgramHistory
 	sourcesAt   func(sha string) (map[string]string, error)
-	io          *IOHook   // live I/O configuration (ioconfig.go); nil: none
-	staging     ioStaging // its staged candidates
+	io          *IOHook    // live I/O configuration (ioconfig.go); nil: none
+	params      *ParamHook // IO-Link device parameters (params.go); nil: none
+	staging     ioStaging  // its staged candidates
 	hmi         fs.FS
 	alarms      *alarm.Engine
 	shelveTimes []time.Duration
@@ -599,6 +606,7 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 		s.historyFn = opts[0].History
 		s.sourcesAt = opts[0].SourcesAt
 		s.io = opts[0].IO
+		s.params = opts[0].Params
 		s.hmi = opts[0].HMI
 		s.alarms = opts[0].Alarms
 		s.shelveTimes = opts[0].AlarmShelveTimes
@@ -747,6 +755,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/program/history", s.handleProgramHistory)
 	mux.Handle("POST /api/program/activate", s.audited("program.activate", s.activateTarget, s.handleActivate))
 	mux.HandleFunc("GET /api/io", s.handleIO)
+	mux.HandleFunc("GET /api/iolink/{port}/params", s.handleParamList)
+	mux.HandleFunc("GET /api/iolink/{port}/params/{ref}", s.handleParamRead)
+	mux.Handle("PUT /api/iolink/{port}/params/{ref}", s.audited("param.write", s.paramTarget, s.handleParamWrite))
 	mux.HandleFunc("GET /api/io/files", s.handleIOFiles)
 	mux.Handle("POST /api/io/staged", s.audited("config.stage", ioStageTarget, s.handleIOStage))
 	mux.HandleFunc("GET /api/io/staged/{id}", s.handleIOStaged)

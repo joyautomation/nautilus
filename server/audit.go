@@ -97,6 +97,9 @@ var actionClass = map[string]string{
 	"config.stage":     elevated,
 	"config.validate":  elevated,
 	"config.apply":     elevated,
+	// A parameter is written to the device on an IO-Link port, through its
+	// master: a change to a device, like a configuration apply.
+	"param.write": elevated,
 	// Cancelling a pending revert keeps a change its device has not
 	// answered: it overrides a safeguard the apply asked for.
 	"config.revert.cancel": elevated,
