@@ -176,6 +176,7 @@ case caught it. A mutation joins the nightly run in the PR that builds the rule 
 | a controller starts over a state file another member, or another pair, wrote | design §2, §6.2 | 3b-1 (review, `state_owner_unchecked`) |
 | a controller campaigns while its peer's hello names another configuration of the pair | design §2 (F30) | 3b-2b (`config_differs_campaigns`) |
 | two processes behind the peer's name (nonces N1, N2, N1 at the hello) raise nothing | design §2 (F30) | 3b-2b (`hello_duplicate_unseen`) |
+| a late substitute start a lapse entry names is carried out (`oplog`, by hand: `QUORUM_MUT=lapse_ignored go test -tags quorum_mut ./oplog`) | design §1, a late start lapses | lapse (#1030 review) |
 | no switch hold-off: a stray copy answering on and off switches the pair every lease | design §3.1, when a switch is proposed | 2 (handshake) |
 | a restarted controller counts its adopted incarnation at once (no quiet period owed) | design §3.1, the quiet period | 2 (handshake) |
 | a lost controller takes an `Adopt` sent before its restart (a stale floor) | design §3.1, boots | 2 (handshake) |

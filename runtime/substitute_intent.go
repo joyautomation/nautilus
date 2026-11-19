@@ -139,6 +139,10 @@ type intentState struct {
 	// ended.
 	reqs map[string]reqSeen
 
+	// lapses are the recent lapsed starts (substitute_lapse.go); guarded
+	// by subMu.
+	lapses []SubstituteLapse
+
 	// expiries are expired IDs not yet committed as unsubstitute entries.
 	expMu      sync.Mutex
 	expiries   []uint64

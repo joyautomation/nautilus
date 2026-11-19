@@ -87,7 +87,23 @@ type substitutesResponse struct {
 	Kept *bool `json:"kept,omitempty"`
 	// Warning says what an answer with kept false means for the plant.
 	Warning string `json:"warning,omitempty"`
+	// Lapsed are the recent substitute starts a redundant pair's log
+	// committed too late to carry out (runtime.SubstituteLapse): never
+	// started, or ended at a takeover; Note says which.
+	Lapsed []lapseView `json:"lapsed,omitempty"`
 }
+
+// lapseView is a lapsed start as GET /api/substitutes lists it.
+type lapseView struct {
+	runtime.SubstituteLapse
+	Note string `json:"note"`
+}
+
+// Lapse notes, as the HMI and the journal say them.
+const (
+	lapseNotStarted = "lapsed (outcome was unknown; not started)"
+	lapseEnded      = "substitute ended: lapsed at takeover (its commit could not be confirmed)"
+)
 
 // substituteStartRefusal is the answer to a refused start: 503 when it
 // could not be saved (nothing runs; retry), 409 when a newer change to
@@ -136,6 +152,13 @@ func (s *Server) substitutesResponse() substitutesResponse {
 	}
 	for _, e := range s.rt.Substitutes() {
 		resp.Substitutes = append(resp.Substitutes, s.substituteView(e))
+	}
+	for _, l := range s.rt.SubstituteLapses() {
+		note := lapseNotStarted
+		if l.Ended {
+			note = lapseEnded
+		}
+		resp.Lapsed = append(resp.Lapsed, lapseView{SubstituteLapse: l, Note: note})
 	}
 	return resp
 }
@@ -463,9 +486,24 @@ func (s *Server) auditSubstituteEvent(ev runtime.SubstituteEvent) {
 			Detail: map[string]any{"reason": ev.Reason, "grantedMs": e.GrantedMs, "untilMs": e.UntilMs},
 			Result: audit.ResultOK,
 		})
+	case runtime.SubstituteEventLapse:
+		s.audit.record(audit.Entry{
+			TS:     time.UnixMilli(ev.AtMs),
+			User:   ev.By,
+			Source: audit.SourceSystem,
+			Action: "substitute.lapse",
+			Target: e.Name,
+			Before: map[string]any{"id": e.ID, "value": e.Value, "by": e.By, "proposedMs": e.StartMs},
+			Detail: map[string]any{"reason": ev.Reason, "note": lapseNotStarted},
+			Result: audit.ResultOK,
+		})
 	case runtime.SubstituteEventStop:
-		if ev.Reason != runtime.SubstituteReasonSuperseded {
+		if ev.Reason != runtime.SubstituteReasonSuperseded && ev.Reason != runtime.SubstituteReasonLapsed {
 			return // a person's stop or a replace: its route journalled it
+		}
+		detail := map[string]any{"reason": ev.Reason, "untilMs": e.UntilMs}
+		if ev.Reason == runtime.SubstituteReasonLapsed {
+			detail["note"] = lapseEnded
 		}
 		s.audit.record(audit.Entry{
 			TS:     time.UnixMilli(ev.AtMs),
@@ -475,7 +513,7 @@ func (s *Server) auditSubstituteEvent(ev runtime.SubstituteEvent) {
 			Target: e.Name,
 			Before: map[string]any{"id": e.ID, "value": e.Value, "by": e.By},
 			After:  map[string]any{"live": e.Live},
-			Detail: map[string]any{"reason": ev.Reason, "untilMs": e.UntilMs},
+			Detail: detail,
 			Result: audit.ResultOK,
 		})
 	case runtime.SubstituteEventFault, runtime.SubstituteEventFaultClear:

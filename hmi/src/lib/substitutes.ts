@@ -44,9 +44,29 @@ export interface SubstituteRule {
 	rule?: string;
 }
 
+/**
+ * A start a redundant pair's log committed too late to carry out (#710):
+ * `ended` false, it never started ("lapsed (outcome was unknown; not
+ * started)"); `ended` true, it had started and was ended at a takeover
+ * (its commit could not be confirmed). `note` says which.
+ */
+export interface SubstituteLapse {
+	id: number;
+	name: string;
+	value: unknown;
+	by?: string;
+	requestId?: string;
+	proposedMs: number;
+	atMs: number;
+	ended?: boolean;
+	note: string;
+}
+
 export interface SubstituteList {
 	substitutes: SubstituteEntry[];
 	rules: SubstituteRule[];
+	/** Recent lapsed starts (a redundant pair); absent when there are none. */
+	lapsed?: SubstituteLapse[];
 }
 
 /** Why an action did not (certainly) happen. */
@@ -341,11 +361,26 @@ export class SubstituteSession {
 		this.#pending.delete(name.toLowerCase());
 	}
 
-	/** A re-read that shows the entry means the start did apply: clear it. */
-	reconcile(entries: SubstituteEntry[]): void {
+	/**
+	 * A re-read that shows the entry means the start did apply: clear it.
+	 * One that shows it LAPSED means it never will (a redundant pair
+	 * committed it too late): clear it too, and return those, so the
+	 * operator is told the start did not happen.
+	 */
+	reconcile(entries: SubstituteEntry[], lapsed: SubstituteLapse[] = []): PendingStart[] {
 		for (const e of entries) {
 			for (const [k, p] of this.#pending) if (e.requestId === p.requestId) this.#pending.delete(k);
 		}
+		const gone: PendingStart[] = [];
+		for (const l of lapsed) {
+			for (const [k, p] of this.#pending) {
+				if (l.requestId && l.requestId === p.requestId) {
+					this.#pending.delete(k);
+					gone.push(p);
+				}
+			}
+		}
+		return gone;
 	}
 
 	async #send(p: PendingStart): Promise<SubstituteResult> {

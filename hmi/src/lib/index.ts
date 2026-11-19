@@ -118,7 +118,7 @@ export { AlarmClient, createAlarmClient, shouldRefetch, PRIORITY_ORDER, PRIORITY
 // the contract (requestId per action, unknown outcome, 409, kept:false).
 export { default as SubstitutesPanel } from './components/SubstitutesPanel.svelte';
 export { SubstituteClient, SubstituteSession, failureText, keptText, formatRemaining, unacked, validateStart } from './substitutes.js';
-export type { SubstituteEntry, SubstituteRule, SubstituteList, SubstituteResult, PendingStart, SubstituteFailure } from './substitutes.js';
+export type { SubstituteEntry, SubstituteRule, SubstituteList, SubstituteLapse, SubstituteResult, PendingStart, SubstituteFailure } from './substitutes.js';
 export { default as AlarmSign } from './components/AlarmSign.svelte';
 export type {
 	Priority,

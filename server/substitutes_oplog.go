@@ -99,10 +99,20 @@ func (l *SubstituteLog) Apply(e oplog.Entry) (bool, error) {
 				return true, fmt.Errorf("substitute entry %d: value: %w", e.Seq, err)
 			}
 		}
-		return true, l.rt.ApplySubstitute(runtime.ReplicatedSubstitute{
+		rs := runtime.ReplicatedSubstitute{
 			ID: e.Seq, Name: e.Tag, Value: v, By: e.By,
 			UntilMs: e.Until, GrantedMs: e.GrantedMs, AckOnStart: e.AckOnStart, RequestID: e.Req,
-		})
+		}
+		if e.Lapsed {
+			// Committed too late to be carried out (Lapse, oplog.KindLapse).
+			l.rt.ApplyLapsedSubstitute(rs)
+			return true, nil
+		}
+		return true, l.rt.ApplySubstitute(rs)
+	case oplog.KindLapse:
+		// Journalled once, by the leader that named the starts.
+		l.rt.ApplyLapse(e.Refs, e.By, l.node != nil && e.Origin == l.node.Self())
+		return true, nil
 	case oplog.KindUnsubstitute:
 		l.rt.ApplyUnsubstitute(e.Ref, e.By, e.Reason)
 		return true, nil
@@ -111,6 +121,14 @@ func (l *SubstituteLog) Apply(e oplog.Entry) (bool, error) {
 		return true, nil
 	}
 	return false, nil
+}
+
+// Lapse is the log's Options.Lapse for substitutes: a start a new leader
+// commits from an earlier term lapses when it was proposed more than
+// runtime.SubstituteStartCommitBound before now, on that leader's clock
+// (#1030 review). The leader decides, once, and writes it in the log.
+func (l *SubstituteLog) Lapse(e oplog.Entry, now time.Time) bool {
+	return e.Kind == oplog.KindSubstitute && now.Sub(time.UnixMilli(e.TS)) > runtime.SubstituteStartCommitBound
 }
 
 // SyncLeader is runtime.IntentLog's: the node's catch-up at a takeover.
