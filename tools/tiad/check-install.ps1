@@ -17,7 +17,9 @@
       5. an install on this machine's own address verifies on that address
          and opens a firewall rule for it;
       6. a reinstall on loopback, or an uninstall given another port,
-         leaves no tiad firewall rule.
+         leaves no tiad firewall rule;
+      7. -NoTia builds no tiad.Openness.dll and removes one left behind,
+         so nothing installed can start TIA.
 
     Then it reinstalls on loopback with -NoTia. Run it in an elevated Windows
     PowerShell, from a copy of tools/tiad, only where tiad may be reinstalled.
@@ -185,6 +187,15 @@ if ($own) {
 # Leave the standard install, and no rule behind.
 foreach ($r in TiadRules) { Remove-NetFirewallRule -Name $r.Name }
 Check "the final loopback install succeeds" ((Install) -eq 0) "exit code"
+
+# 7. -NoTia leaves nothing that can start TIA: no tiad.Openness.dll, and
+#    one left by an install without -NoTia is removed.
+$opn = Join-Path $InstallDir 'tiad.Openness.dll'
+Check "-NoTia builds no tiad.Openness.dll" (-not (Test-Path -LiteralPath $opn)) "it is there"
+Stop-ScheduledTask -TaskName $TaskName -EA SilentlyContinue
+[IO.File]::WriteAllText($opn, 'left behind')
+Check "a reinstall with a tiad.Openness.dll left behind succeeds" ((Install) -eq 0) "exit code"
+Check "-NoTia removes a tiad.Openness.dll left behind" (-not (Test-Path -LiteralPath $opn)) "it is still there"
 if (Get-Process Siemens.Automation.Portal -EA SilentlyContinue) { Check "TIA never started" $false "TIA Portal is running" }
 
 Write-Host ""

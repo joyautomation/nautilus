@@ -75,7 +75,19 @@ namespace Tiad
         {
             return tiaThread.Run(delegate
             {
-                if (tia == null) tia = makeTia();
+                if (tia == null)
+                {
+                    try
+                    {
+                        tia = makeTia();
+                    }
+                    catch (Exception e)
+                    {
+                        host.TiaStarted(e);
+                        throw;
+                    }
+                    host.TiaStarted(null);
+                }
                 return f(tia);
             });
         }

@@ -873,6 +873,15 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 	if qs == nil {
 		qs = []tiad.Question{}
 	}
+	// As tiad.Openness does: whether the CPU starts after loading is
+	// always decided before loading.
+	startAsked := false
+	for _, q := range qs {
+		startAsked = startAsked || q.ID == tiad.QuestionStartAfter
+	}
+	if !startAsked {
+		qs = append(append([]tiad.Question{}, qs...), tiad.Question{ID: tiad.QuestionStartAfter, Message: "start the CPU after loading", Detail: "StartModules"})
+	}
 	// A dry run loading nothing is the contract tiad aims for. Whether
 	// Openness can list the checks and cancel with nothing loaded is
 	// provisional until S2 (siemens-ide.md §3.5); the fake models the aim.

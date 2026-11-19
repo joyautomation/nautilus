@@ -87,6 +87,14 @@ namespace Tiad
             return NotInstalled(m) == null ? PortalVersion : "";
         }
 
+        // PublicApiDir is the folder of the registered Openness public API
+        // assemblies, or "" when Openness V21 is not installed.
+        public static string PublicApiDir(IMachine m)
+        {
+            if (NotInstalled(m) != null) return "";
+            return Dir(m.RegString(PublicApiKey, "Siemens.Engineering.Base") ?? "");
+        }
+
         // OpennessVersion is the registered public API's assembly version,
         // or "" when Openness V21 is not installed.
         public static string OpennessVersion(IMachine m)
@@ -97,14 +105,15 @@ namespace Tiad
 
         // Evaluate computes the machine's gates, in order: tia,
         // openness-group, openness-allowlist, licence. noTia (TIAD_NO_TIA)
-        // fails the tia gate, so no call can start TIA.
-        public static List<Gate> Evaluate(IMachine m, bool noTia)
+        // fails the tia gate, so no call can start TIA. licence is the
+        // licence latch's gate: the machine cannot tell before TIA starts.
+        public static List<Gate> Evaluate(IMachine m, bool noTia, Gate licence)
         {
             var gs = new List<Gate>();
             gs.Add(TiaGate(m, noTia));
             gs.Add(GroupGate(m));
             gs.Add(AllowListGate(m));
-            gs.Add(new Gate { Name = "licence", State = Gate.StateUnknown, Detail = LicenceUnknown });
+            gs.Add(licence);
             return gs;
         }
 

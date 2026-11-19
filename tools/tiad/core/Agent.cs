@@ -67,6 +67,10 @@ namespace Tiad
         // Gates are the machine's gates, in order: tia, openness-group,
         // openness-allowlist, licence. The agent adds workdir itself.
         List<Gate> Gates();
+
+        // TiaStarted tells the host how the TIA side's start went (error is
+        // null when it started), which is when the licence becomes known.
+        void TiaStarted(Exception error);
     }
 
     public sealed partial class Agent

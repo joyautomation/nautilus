@@ -49,9 +49,16 @@ type Script struct {
 	DecideCalls *int `json:"decideCalls,omitempty"`
 	// FailAfterDecide makes the fake fail the way TIA fails after decide
 	// answered.
-	FailAfterDecide string         `json:"failAfterDecide,omitempty"`
-	Delays          []ScriptedCall `json:"delays,omitempty"`
-	Failures        []ScriptedCall `json:"failures,omitempty"`
+	FailAfterDecide string `json:"failAfterDecide,omitempty"`
+	// FailInDoubt makes the fake fail the way TIA fails inside a
+	// download it had begun, before asking anything.
+	FailInDoubt string `json:"failInDoubt,omitempty"`
+	// NoDryRun makes the fake's TIA side one that cannot promise a dry
+	// run loads nothing (tiad.Openness until S2b): the agent refuses dry
+	// runs.
+	NoDryRun bool           `json:"noDryRun,omitempty"`
+	Delays   []ScriptedCall `json:"delays,omitempty"`
+	Failures []ScriptedCall `json:"failures,omitempty"`
 }
 
 // ScriptedCall names an ITia call ("Compile", "OpenProject", ...).

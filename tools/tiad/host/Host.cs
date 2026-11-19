@@ -123,6 +123,7 @@ namespace Tiad.Host
     {
         readonly IMachine machine;
         readonly bool noTia;
+        readonly LicenceLatch licence = new LicenceLatch();
 
         public WindowsHost(IMachine machine, bool noTia)
         {
@@ -142,7 +143,14 @@ namespace Tiad.Host
 
         public List<Gate> Gates()
         {
-            return MachineGates.Evaluate(machine, noTia);
+            return MachineGates.Evaluate(machine, noTia, licence.Current());
+        }
+
+        public void TiaStarted(Exception error)
+        {
+            licence.Started(error);
+            if (error == null) Log.Line("TIA started");
+            else Log.Line("TIA did not start: {0}", error.Message);
         }
     }
 
@@ -151,9 +159,13 @@ namespace Tiad.Host
         public const string Assembly = "tiad.Openness.dll";
         public const string Type = "Tiad.Openness.OpennessTia";
 
+        static string apiDir;
+
         // Load makes the TIA side from tiad.Openness.dll beside tiad.exe.
         // It runs on the TIA thread, at the first call that needs TIA.
-        public static ITia Load()
+        // Siemens.Engineering's assemblies resolve from the Openness
+        // public API folder TIA's setup registered, and only from there.
+        public static ITia Load(IMachine machine)
         {
             string dir = Path.GetDirectoryName(System.Reflection.Assembly.GetEntryAssembly().Location);
             string path = Path.Combine(dir, Assembly);
@@ -161,12 +173,35 @@ namespace Tiad.Host
             {
                 throw new TiaException(Assembly + " is not installed beside tiad.exe, so this agent cannot start TIA");
             }
+            if (apiDir == null)
+            {
+                string api = MachineGates.PublicApiDir(machine);
+                if (api == "") throw new TiaException("TIA Openness V21 is not registered, so its assemblies cannot be found");
+                apiDir = api;
+                AppDomain.CurrentDomain.AssemblyResolve += Resolve;
+            }
             Type t = System.Reflection.Assembly.LoadFrom(path).GetType(Type, false);
             if (t == null || !typeof(ITia).IsAssignableFrom(t))
             {
                 throw new TiaException(Assembly + " has no " + Type + " implementing ITia");
             }
-            return (ITia)Activator.CreateInstance(t);
+            try
+            {
+                return (ITia)Activator.CreateInstance(t);
+            }
+            catch (TargetInvocationException e)
+            {
+                // The constructor starts TIA: its own failure, unwrapped.
+                if (e.InnerException is TiaException) throw e.InnerException;
+                throw;
+            }
+        }
+
+        static System.Reflection.Assembly Resolve(object sender, ResolveEventArgs args)
+        {
+            string file = TiaNames.OpennessAssembly(apiDir, new AssemblyName(args.Name).Name);
+            if (file == null || !File.Exists(file)) return null;
+            return System.Reflection.Assembly.LoadFrom(file);
         }
     }
 
@@ -190,8 +225,9 @@ namespace Tiad.Host
                 return 2;
             }
 
-            var host = new WindowsHost(new WindowsMachine(), cfg.NoTia);
-            var agent = new Agent(cfg, host, Openness.Load, "");
+            var machine = new WindowsMachine();
+            var host = new WindowsHost(machine, cfg.NoTia);
+            var agent = new Agent(cfg, host, delegate { return Openness.Load(machine); }, "");
             var router = new Router();
             agent.Register(router);
             var server = new Server(cfg, router);

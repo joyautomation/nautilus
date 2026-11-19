@@ -213,3 +213,87 @@ func TestNoTIAStopsEveryTIACall(t *testing.T) {
 		t.Fatalf("TIA was reached: %s", callNames(cs))
 	}
 }
+
+// TestLicenceLatch: the licence gate is unknown, and blocks nothing,
+// until the TIA side starts. Then it latches: ok once TIA started, failed
+// when the start failed on a licence error, after which every TIA call
+// answers gate without starting TIA again. A start that failed for any
+// other reason says nothing about the licence.
+func TestLicenceLatch(t *testing.T) {
+	const g = "GSDML-V2.4-Example-Device-20261117.xml"
+	start := func(t *testing.T, failure string) (*tiadtest.Process, *tiad.Client) {
+		p := tiadtest.StartProcess(t, fakeBin(t), tiadtest.Config{})
+		c := p.Client()
+		p.SetMachine(t, machine(goodEntry()))
+		if failure != "" {
+			p.SetScript(t, tiadtest.Script{Failures: []tiadtest.ScriptedCall{{Call: "start", Message: failure}}})
+		}
+		if _, err := c.PutFile(ctx, "gsd/"+g, []byte("<ISO15745Profile/>")); err != nil {
+			t.Fatal(err)
+		}
+		return p, c
+	}
+	licence := func(t *testing.T, c *tiad.Client) (tiad.Gate, bool) {
+		t.Helper()
+		pr, err := c.Probe(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tiadtest.CheckGateShape(t, pr)
+		return gate(t, pr, "licence"), pr.Usable
+	}
+	install := func(c *tiad.Client) error { _, err := c.InstallGSD(ctx, "gsd/"+g); return err }
+
+	t.Run("started", func(t *testing.T) {
+		_, c := start(t, "")
+		if l, usable := licence(t, c); l.State != tiad.GateUnknown || !usable {
+			t.Fatalf("before TIA starts: licence %+v, usable %v; want unknown and usable", l, usable)
+		}
+		if err := install(c); err != nil {
+			t.Fatal(err)
+		}
+		l, usable := licence(t, c)
+		if l.State != tiad.GateOK || !l.OK || !strings.Contains(l.Detail, "TIA started") || l.Remedy != "" || !usable {
+			t.Fatalf("after TIA started: licence %+v, usable %v; want ok", l, usable)
+		}
+	})
+
+	t.Run("licence error", func(t *testing.T) {
+		p, c := start(t, "No valid license for STEP 7 Professional")
+		err := install(c)
+		if tiad.Kind(err) != tiad.KindOperationFailed || !strings.Contains(err.Error(), "No valid license") {
+			t.Fatalf("a start without a licence: %v, want operation_failed with TIA's text", err)
+		}
+		l, usable := licence(t, c)
+		if l.State != tiad.GateFailed || l.Detail != "TIA did not start: No valid license for STEP 7 Professional" || l.Remedy == "" || usable {
+			t.Fatalf("after a licence error: licence %+v, usable %v; want failed with TIA's text and a remedy", l, usable)
+		}
+		// Latched: even once TIA would start, nothing tries until the
+		// agent restarts.
+		p.SetScript(t, tiadtest.Script{})
+		var te *tiad.Error
+		if err := install(c); !errors.As(err, &te) || te.Kind != tiad.KindGate || !strings.Contains(te.Message, "gate licence") {
+			t.Fatalf("a TIA call after a licence error: %v, want 412 gate licence", err)
+		}
+		if cs := callNames(p.Calls(t)); cs != "start" {
+			t.Fatalf("TIA calls = %q, want the one failed start", cs)
+		}
+	})
+
+	t.Run("other error", func(t *testing.T) {
+		p, c := start(t, "the TIA Portal process ended")
+		if err := install(c); tiad.Kind(err) != tiad.KindOperationFailed {
+			t.Fatalf("a failed start: %v, want operation_failed", err)
+		}
+		if l, usable := licence(t, c); l.State != tiad.GateUnknown || l.Detail != "not readable until TIA's first start" || !usable {
+			t.Fatalf("after another start failure: licence %+v, usable %v; want unknown and usable", l, usable)
+		}
+		p.SetScript(t, tiadtest.Script{})
+		if err := install(c); err != nil {
+			t.Fatalf("a TIA call once TIA starts: %v", err)
+		}
+		if l, _ := licence(t, c); l.State != tiad.GateOK {
+			t.Fatalf("after TIA started: licence %+v, want ok", l)
+		}
+	})
+}

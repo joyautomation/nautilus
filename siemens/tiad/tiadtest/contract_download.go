@@ -184,11 +184,11 @@ func contractDownloadRules(t *testing.T, start Starter) {
 	base := tiad.DownloadRequest{Address: benchCPU, Software: true, Announced: true}
 
 	_, err := s.Download(ctx, base)
-	if tiad.Kind(err) != tiad.KindDecisionRequired || questionIDs(tiad.Questions(err)) != "stop-cpu,reinitialize" {
+	if tiad.Kind(err) != tiad.KindDecisionRequired || questionIDs(tiad.Questions(err)) != "stop-cpu,reinitialize,start-after" {
 		t.Fatalf("no decisions: %v %+v", err, tiad.Questions(err))
 	}
 	no := base
-	no.Decisions = tiad.Decisions{StopCPU: tiad.No(), Reinitialize: []string{"Main_DB"}}
+	no.Decisions = tiad.Decisions{StopCPU: tiad.No(), Reinitialize: []string{"Main_DB"}, StartAfter: tiad.No()}
 	if _, err := s.Download(ctx, no); tiad.Kind(err) != tiad.KindDeclined || questionIDs(tiad.Questions(err)) != "stop-cpu" {
 		t.Fatalf("declined stop: %v", err)
 	}
@@ -207,10 +207,19 @@ func contractDownloadRules(t *testing.T, start Starter) {
 	if l := a.Loaded(t); len(l) != 0 {
 		t.Fatalf("refusals loaded %+v", l)
 	}
+	// Whether the CPU starts after loading is always decided before
+	// loading, even when TIA would not ask (tiad.Openness asks it).
 	yes := base
 	yes.Decisions = tiad.Decisions{StopCPU: tiad.Yes(), Reinitialize: []string{"main_db"}}
+	if _, err := s.Download(ctx, yes); tiad.Kind(err) != tiad.KindDecisionRequired || questionIDs(tiad.Questions(err)) != "start-after" {
+		t.Fatalf("no startAfter decision: %v, want decision_required start-after", err)
+	}
+	if l := a.Loaded(t); len(l) != 0 {
+		t.Fatalf("an undecided start-after loaded %+v", l)
+	}
+	yes.Decisions.StartAfter = tiad.No()
 	if r, err := s.Download(ctx, yes); err != nil || r.State != "STOP" {
-		t.Fatalf("stopped without startAfter stays in STOP: %+v %v", r, err)
+		t.Fatalf("stopped with startAfter no stays in STOP: %+v %v", r, err)
 	}
 	a.SetQuestions(t, []tiad.Question{qStop, {ID: tiad.QuestionStartAfter}})
 	stay := base
@@ -231,7 +240,13 @@ func contractResolve(t *testing.T, start Starter) {
 	loads := 0
 	for _, rc := range ResolveCases {
 		a.SetQuestions(t, rc.Questions)
-		body := map[string]any{"address": benchCPU, "software": true, "announced": true, "decisions": rc.Decisions}
+		// The agent asks start-after when TIA does not; "no" (stay as it
+		// is) leaves each case's outcome to its own questions.
+		d := rc.Decisions
+		if !strings.Contains(questionIDs(rc.Questions), "start-after") && d.StartAfter == nil {
+			d.StartAfter = tiad.No()
+		}
+		body := map[string]any{"address": benchCPU, "software": true, "announced": true, "decisions": d}
 		if rc.Protection {
 			body["secrets"] = map[string]string{"protection": "pw"}
 		}
@@ -473,7 +488,7 @@ func contractS2aSequence(t *testing.T, start Starter) {
 	if _, err := s.Compare(ctx); err != nil {
 		t.Fatalf("compare after the upload: %v", err)
 	}
-	dl := tiad.DownloadRequest{Address: benchCPU, Hardware: true, Software: true, Announced: true}
+	dl := tiad.DownloadRequest{Address: benchCPU, Hardware: true, Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}}
 	if _, err := s.Download(ctx, dl); tiad.Kind(err) != tiad.KindBadRequest || !strings.Contains(err.Error(), "no station spec") {
 		t.Fatalf("download straight after the upload: %v", err)
 	}
@@ -510,7 +525,7 @@ func contractOneCPU(t *testing.T, start Starter) {
 		return s
 	}
 	one, two := mk("one"), mk("two")
-	dl := tiad.DownloadRequest{Address: benchCPU, Software: true, Announced: true}
+	dl := tiad.DownloadRequest{Address: benchCPU, Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}}
 	dry := dl
 	dry.DryRun = true
 	if _, err := one.Download(ctx, dry); err != nil {

@@ -10,9 +10,10 @@ contract suite.
 **Status:** the core serves every call (health, probe, files, GSDML install,
 projects, sessions, station, software, compile, download, compare, export,
 upload, save). `tiad.exe`, the agent with its Windows host, and
-`install-tiad.ps1` are tested on a TIA machine without starting TIA. The TIA
-side (`tiad.Openness`) follows: it is first exercised at the first TIA start.
-The plan is on #789.
+`install-tiad.ps1` are tested on a TIA machine without starting TIA.
+`tiad.Openness`, the TIA side, is written and compiles against the Openness
+V21 public API, but it has never run: its first run is the first TIA start
+(S2a). The plan is on #789.
 
 ## How a TIA call runs
 
@@ -31,10 +32,57 @@ with TIA's text, and the thread carries on.
 |---|---|
 | `core/` | `tiad-core.dll`: HTTP, the envelope, the token, the work-dir sandbox, the agent's calls. It references nothing of Siemens's |
 | `host/` | `tiad.exe`: the core with the Windows host. It reads the machine gates and loads `tiad.Openness.dll` from beside itself on the first TIA call |
+| `openness/` | `tiad.Openness.dll`: the TIA side, `ITia` over Openness V21. The only assembly that references Siemens.Engineering, and glue only (below). `install-tiad.ps1` builds it on the TIA machine, never with `-NoTia` |
+| `test/` | `tiad-test.exe`: unit tests of everything `tiad.Openness` decides (`core/TiaRules.cs`). `build-fake.sh` builds and runs it |
 | `fake/` | `tiad-fake.exe`: the core with a scripted host instead of TIA, for tests only. `install-tiad.ps1` never builds it |
 | `install-tiad.ps1` | Builds `tiad.exe` on the TIA machine with its stock `csc` and installs it (below) |
 | `check-install.ps1` | Checks an install's security properties on the TIA machine (below) |
-| `build-fake.sh` | Builds `out/tiad-core.dll` and `out/tiad-fake.exe` with Mono's `mcs`, and `out/tiad.exe` only to hold the host to C# 5 |
+| `build-fake.sh` | Builds `out/tiad-core.dll` and `out/tiad-fake.exe` with Mono's `mcs`, and `out/tiad.exe` only to hold the host to C# 5; builds and runs `out/tiad-test.exe` |
+
+## The TIA side
+
+`tiad.exe` loads `tiad.Openness.dll` from beside itself at the first call
+that needs TIA, after every gate holds, and resolves `Siemens.Engineering*`
+assemblies only from the public API folder TIA's setup registered. Its
+constructor starts TIA Portal without a user interface; it is the one place
+tiad starts TIA.
+
+CI has no Siemens assemblies, so `tiad.Openness` decides nothing itself. Every
+decision is pure code in `core/TiaRules.cs`, unit-tested by `test/` under
+Mono:
+
+- **Download, decide once.** Openness calls the pre-download callback once
+  per configuration, but `ITia.Download` calls `decide` once, with every
+  question, before anything loads. At the first callback the glue lists
+  every pending configuration (from that configuration's parent), asks
+  `decide` once, and then writes each configuration's resolved answer in its
+  own callback, `NoAction` included. Whether to start the CPU afterwards is
+  asked before loading too. It cancels (throws from the callback) on a list
+  it cannot read, a configuration missing from the list or asked twice, an
+  answer it cannot apply, a write that fails, or a no. A configuration is
+  answered only once its write succeeded. After loading, start-after is
+  always written, `NoAction` unless decided. Once TIA's download call is
+  entered, any failure answers `outcome_unknown`, and so does a download
+  TIA made without a single callback. How a download ended is decided in
+  core too (`DownloadDecider.Finish`). Before TIA starts, every selection
+  tiad may write is checked against this Openness's enum types.
+- **No dry runs yet.** With no pre-download callback there is nothing to
+  cancel from, so a dry run could load. `ITia.CanDryRun` is false for
+  `tiad.Openness`, and the agent refuses every dry run before TIA hears of
+  it, until S2b proves TIA always asks, the list, and that a cancel loads
+  nothing.
+- **Names are checked, not guessed.** The CPU's attributes (address, subnet
+  mask, router, PROFINET name, generated names off) are checked against
+  `GetAttributeInfos` before each is set; a missing one fails, naming the
+  ones there are, and the first time tiad meets a kind of object it logs
+  its attribute names. The PC interface is the only PN/IE one TIA lists,
+  or `TIAD_PC_INTERFACE`.
+- **Refused until S2a:** GSDML install (Openness has no public call for
+  it), PROFINET devices, rack modules, the web server, the I-device GSDML
+  export, and any upload configuration (a password, missing products).
+- **The licence latch.** The `licence` gate is unknown until TIA starts,
+  then latches: `ok` once TIA started, `failed` when the start failed on a
+  licence error. Failed blocks every TIA call until the agent restarts.
 
 ## C# 5, no project file
 
@@ -62,6 +110,7 @@ From the environment only; nothing in a request changes it.
 | `TIAD_TARGETS` | none | The only CPU addresses tiad goes online or downloads to. Strict dotted quads |
 | `TIAD_SESSION_IDLE` | `1h` | The idle reaper closes sessions unused this long (a Go duration) |
 | `TIAD_NO_TIA` | unset | `1` fails the `tia` gate, so no call can start TIA (or a trial clock) |
+| `TIAD_PC_INTERFACE` | none | The PC interface TIA reaches CPUs through, when it lists more than one in PN/IE mode (`install-tiad.ps1 -PcInterface`) |
 | `TIAD_EXIT_ON_STDIN` | unset | `1` ends the agent when its stdin closes (the test harness sets it). Off by default: a scheduled task's stdin may be closed from the start |
 
 ## Gates
@@ -77,7 +126,7 @@ a pure evaluator over the machine's facts):
 | `tia` | Openness V21 is registered in HKLM (64-bit view), and its net48 `Siemens.Engineering.Base.dll` and `.Step7.dll` exist. Failed with `TIAD_NO_TIA=1` |
 | `openness-group` | The process token holds "Siemens TIA Openness". A member added after logon must log off and on |
 | `openness-allowlist` | The Openness allowlist entry TIA requires: an entry under `HKLM\Software\Siemens\Automation\Openness\AllowList\tiad.exe` whose `Path` names this exe (case-insensitive), whose `DateModified` is its last write time (UTC, `yyyy/MM/dd HH:mm:ss.fff`) and whose `FileHash` is its SHA-256 (base64). Every rebuild needs a new entry; the installer writes it |
-| `licence` | `unknown`: not readable until TIA's first start, which creates the trial |
+| `licence` | `unknown` until TIA's first start, which creates the trial. Then `ok` once TIA started, or `failed` when the start failed on a licence error (until the agent restarts) |
 | `workdir` | The work dir is writable |
 
 ## Installing on a TIA machine
@@ -91,7 +140,8 @@ Copy `tools/tiad` to the machine and run, in an elevated Windows PowerShell:
 ```
 
 It checks for TIA V21 and the compiler, adds the account to the Openness
-group, builds `tiad-core.dll` and `tiad.exe` into `C:\Program Files\tiad`,
+group, builds `tiad-core.dll`, `tiad.exe` and (without `-NoTia`)
+`tiad.Openness.dll` into `C:\Program Files\tiad`,
 writes the allowlist entry for that build, and writes the token to
 `%ProgramData%\tiad\tiad.token` (the agent reads it through
 `TIAD_TOKEN_FILE`). It then registers an interactive scheduled task at
@@ -118,7 +168,8 @@ were for.
 
 `check-install.ps1` checks all of this on a TIA machine. It reinstalls with
 `-NoTia` several times (TIA never starts) and exits with the number of
-failed checks.
+failed checks. It also checks that `-NoTia` builds no `tiad.Openness.dll`
+and removes one left behind.
 
 A request with an `Origin` header (a browser) is refused with 403, whatever
 its token. A JSON body must be `application/json` and a file
