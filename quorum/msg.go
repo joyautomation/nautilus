@@ -3,6 +3,7 @@ package quorum
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"hash/crc32"
 )
 
@@ -41,10 +42,52 @@ type Reply struct {
 	Incarnation uint64
 }
 
+// AdoptKind is what an Adopt message says.
+type AdoptKind uint8
+
+const (
+	// Propose asks the peer to adopt (Gen, Incarnation). Gen 0 is a query:
+	// always refused, it asks for the peer's State.
+	Propose AdoptKind = 1
+	// Ack says the sender has durably adopted exactly (Gen, Incarnation),
+	// in answer to the proposal of the same pair.
+	Ack AdoptKind = 2
+	// State says what the sender counts: (Gen, Incarnation) durably
+	// adopted, (0, 0) when it is uncommissioned. It answers a proposal the
+	// sender refuses, and a query.
+	State AdoptKind = 3
+)
+
+func (k AdoptKind) String() string {
+	switch k {
+	case Propose:
+		return "Propose"
+	case Ack:
+		return "Ack"
+	case State:
+		return "State"
+	}
+	return fmt.Sprintf("AdoptKind(%d)", uint8(k))
+}
+
+// Adopt is the witness-incarnation handshake between the two controllers,
+// over the A–B link only (design §3.1, "The witness incarnation"). Gen is
+// the adoption generation, which only rises, so a late, duplicated or
+// earlier-boot message can't move a peer that has moved on. Floor is the
+// sender's term floor: the highest term it knows was promised.
+type Adopt struct {
+	From        NodeID
+	Kind        AdoptKind
+	Gen         uint64
+	Incarnation uint64
+	Floor       uint64
+}
+
 const (
 	wireVersion = 1
 	kindRequest = 1
 	kindReply   = 2
+	kindAdopt   = 3
 )
 
 var castagnoli = crc32.MakeTable(crc32.Castagnoli)
@@ -98,6 +141,17 @@ func (r Reply) MarshalBinary() ([]byte, error) {
 	b = append(b, boolByte(r.Granted))
 	b = binary.BigEndian.AppendUint64(b, r.Promised)
 	b = binary.BigEndian.AppendUint64(b, r.Incarnation)
+	return sealCRC(b), nil
+}
+
+// MarshalBinary encodes a like Request.MarshalBinary.
+func (a Adopt) MarshalBinary() ([]byte, error) {
+	b := []byte{wireVersion, kindAdopt}
+	b = putString(b, string(a.From))
+	b = append(b, byte(a.Kind))
+	b = binary.BigEndian.AppendUint64(b, a.Gen)
+	b = binary.BigEndian.AppendUint64(b, a.Incarnation)
+	b = binary.BigEndian.AppendUint64(b, a.Floor)
 	return sealCRC(b), nil
 }
 
@@ -200,5 +254,24 @@ func (r *Reply) UnmarshalBinary(b []byte) error {
 		return ErrCorrupt
 	}
 	*r = v
+	return nil
+}
+
+// UnmarshalBinary decodes an Adopt like Request.UnmarshalBinary, refusing
+// an unknown kind too.
+func (a *Adopt) UnmarshalBinary(b []byte) error {
+	kind, rd, err := open(b)
+	if err != nil {
+		return err
+	}
+	if kind != kindAdopt {
+		return ErrKind
+	}
+	v := Adopt{From: NodeID(rd.str()), Kind: AdoptKind(rd.byte1())}
+	v.Gen, v.Incarnation, v.Floor = rd.u64(), rd.u64(), rd.u64()
+	if rd.bad || len(rd.b) != 0 || v.Kind < Propose || v.Kind > State {
+		return ErrCorrupt
+	}
+	*a = v
 	return nil
 }

@@ -30,6 +30,10 @@ type Voter struct {
 	// isWitness: this voter is the witness, and stamps its incarnation on
 	// every reply. Set by NewWitness.
 	isWitness bool
+	// commission: this is a controller's voter run with an Adoption, so it
+	// grants nothing while uncommissioned (no incarnation adopted: a new
+	// install or a lost file, #976). Set by NewAdoption.
+	commission bool
 
 	// renewalFrom renewed a lease through this voter last, granted or
 	// not, and renewalUntil is one lease after it arrived. In memory only:
@@ -160,8 +164,11 @@ func (v *Voter) Handle(now Instant, r Request) (*Persist, []Reply) {
 	if r.Renewal && r.From != v.self && now.Add(v.lease) > v.renewalUntil {
 		v.renewalFrom, v.renewalUntil = r.From, now.Add(v.lease)
 	}
-	if now < v.waitUntil || r.Term < v.st.Promised {
-		return nil, refuse
+	if now < v.waitUntil || r.Term < v.st.Promised || r.Term == 0 || r.Term <= v.st.Floor {
+		return nil, refuse // a term-0 request is a probe: always refused
+	}
+	if v.commission && v.st.Incarnation == 0 {
+		return nil, refuse // uncommissioned: no floor yet, so no grant (#976)
 	}
 	active := now < v.promiseUntil
 	switch {
@@ -213,7 +220,14 @@ func (v *Voter) Persisted(seq uint64, ok bool) []Reply {
 
 func (v *Voter) reply(r Request, granted bool) Reply {
 	return Reply{From: v.self, To: r.From, Term: r.Term, Nonce: r.Nonce, ID: r.ID, Granted: granted,
-		Promised: v.st.Promised, Incarnation: v.witnessIncarnation()}
+		Promised: max(v.st.Promised, v.st.Floor), Incarnation: v.witnessIncarnation()}
+}
+
+// change marks the in-memory state changed and returns the write that
+// makes it durable.
+func (v *Voter) change() *Persist {
+	v.dirty++
+	return &Persist{Seq: v.dirty, State: v.st}
 }
 
 // witnessIncarnation is what this voter stamps on its replies: the

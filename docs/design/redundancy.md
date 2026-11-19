@@ -214,25 +214,76 @@ redundancy:
     only when the other controller concurs over the A–B link, which happens at commissioning or
     after a witness rebuild. Both controllers therefore always agree on which witness counts,
     and that witness's promise goes to one of them.
+  - **The handshake** (`quorum.Adoption`, #976). The two controllers exchange `Adopt` messages
+    over the A–B link: a proposal, an ack, and a state message ("this is what I count").
+    - **Generations.** Each adoption is an `(generation, incarnation)` pair, and the generation
+      only rises. A controller adopts a proposal only above its own generation. Two proposals
+      at one generation are concurrent, and the higher incarnation id wins on both sides. A
+      late, duplicated or earlier-boot proposal therefore can't move a controller that has moved
+      on. Without generations, A could end up counting one copy while B counts another.
+    - **Order.** The acceptor adopts and persists, then acks. The proposer adopts only on the
+      ack that matches its own proposal, never on a state message, which may be stale. A
+      proposer whose proposal is refused learns the other's generation and proposes the other's
+      incarnation one generation up.
+    - **Persist before send.** Every `Adopt` leaves only once the state it vouches for is
+      fsynced, like a grant.
   - **Agreement isn't enough at a switch.** Suppose A leads on grants from itself and the old
     witness, and B's promise to A has lapsed. If the pair switched to a second copy that has
     been up for hours (its restart wait long over), B and that copy would make a majority while
     A's last lease still runs: the voter set changed, so the two majorities need not
     intersect. Three rules close it:
     - **A quiet period.** A controller counts no grant from a newly adopted incarnation for
-      one full lease after it has persisted the adoption. By then every lease granted under
-      the old voter set has ended.
-    - **Forward only.** A controller stops counting the old incarnation before it asks the
-      other to switch, and never goes back. Concurrent proposals break ties deterministically
-      (the higher incarnation id wins).
-    - **A term floor.** A rebuilt witness has promised term 0. The adoption handshake carries
-      each controller's highest promised term, and both raise their voters to it before
-      counting the new witness, so no term is granted twice (I4).
-  - **When it ships.** The handshake is its own PR, after the simulator (PR 2's split), with a
-    simulated case that fails without the quiet period. Until then a controller counts grants
-    only from the incarnation it was commissioned with.
-  - **The cost.** A rebuilt witness can't be adopted while one controller is down. That is
-    already a two-fault case (witness disk and a controller), so the survivor behaves as in §7.
+      one full lease after it has persisted the adoption. Each side stopped counting the old
+      incarnation before the other persisted: the proposer when it proposed, the acceptor when
+      it adopted, before its ack. So by then every lease granted under the old voter set has
+      ended. A restart needs no extra rule: the restarted voter's own wait outlasts every such
+      lease. A generation bump that keeps the incarnation needs no quiet period.
+    - **Forward only.** A controller stops counting the old incarnation, durably, before it
+      asks the other to switch. It counts again only on the matching ack. Generations only
+      rise. An old incarnation comes back only through a full handshake at a higher
+      generation, with its quiet period: the same argument as any adoption. A strict
+      never-again list was rejected, because a stray copy adopted once in a double fault would
+      retire the real witness for good.
+    - **A term floor.** A rebuilt witness has promised term 0. The handshake carries each
+      controller's floor: the highest term its voter promised, its candidate has heard of, and
+      the witness at that incarnation said it promised. Both raise their voters (which then
+      grant no term at or below it) and their candidates to the higher floor before counting
+      the new witness, so no term is granted twice (I4). The rebuilt witness itself needs no
+      floor: every majority of the new set includes a controller voter that holds it.
+  - **When a switch is proposed.** A commissioned controller proposes a new incarnation only
+    when that incarnation has answered and the counted one has been silent for a **hold-off**:
+    one lease, doubling with each switch since the controller started, up to 32 leases. A stray
+    copy that answers on and off therefore can't make the pair switch every lease, each switch
+    costing a lease with no witness. Every adoption is an event
+    (`redundancy.witness.incarnation`). So is any time two incarnations answer within a lease of
+    each other: two witness copies are running, a misconfiguration the operator must fix.
+  - **A controller that lost its state file** (wiped, or torn by a crash during an in-place
+    write) is **uncommissioned**: it has no adopted incarnation and no floor. Its voter grants
+    nothing, and its candidate counts no witness, until it has re-commissioned (#976). Without
+    this, two such controllers make a majority on their own and grant terms below one already
+    led, so the fencing token goes back.
+    - **What it asks.** Its peer is authoritative. It asks the peer what it counts, and re-adopts
+      that incarnation one generation up.
+    - **When.** Only after it has heard the witness answer at that incarnation, so its floor
+      includes the witness's promised term. Every term led before the loss was granted by a
+      majority that included the peer or the witness.
+    - **Probes.** A standby doesn't campaign under a live leader, so it would never hear the
+      witness. Until it is commissioned, it sends the witness a term-0 probe each look, which
+      is always refused. The refusal carries the incarnation and the promised term.
+    - **Strays.** It never proposes an incarnation of its own while its peer is commissioned, so
+      a stray copy can't move the pair. Only when both are uncommissioned (first commissioning,
+      or both files lost) does a controller propose the incarnation it hears.
+  - **The costs.**
+    - **One controller down:** a rebuilt witness can't be adopted. That is already a two-fault
+      case (witness disk and a controller), so the survivor behaves as in §7.
+    - **A lost controller file with the witness unreachable:** that controller grants nothing
+      until the witness answers. Two faults; the pair behaves as in §7.
+    - **Two of the three voters losing their state before either has re-commissioned** (a
+      controller's file and the witness's, or both controllers' with only a stray copy
+      answering): no surviving majority remembers the terms, so the floor can miss terms only
+      those two knew. This needs operator re-commissioning (§7). The simulator names the case
+      and doesn't count it against I2 or I4. Both controllers' files lost with the witness
+      intact (#976) is covered in full.
   - **On an HA cluster** the witness must be a StatefulSet with a persistent volume, never a
     Deployment: Kubernetes won't start a second copy of a StatefulSet pod while it can't
     confirm that the first is gone. The incarnation check covers a force-delete.
@@ -572,6 +623,13 @@ something that is not true. The record exists for that case. If the other side w
 alive with a majority, it may have elected the same term: that breaks I4 (test plan §2) as well
 as I1, and only in this case.
 
+**Re-commissioning by hand.** When two of the three voters have lost their state before
+either re-commissioned (§3.1, the witness incarnation), no majority remembers which terms were
+led. The pair can elect again, but a term it grants may fall below one a device has already
+seen. The guide says so: the engineer checks that the devices accept the new leader, and
+re-commissions the pair (which re-adopts the witness at a new generation) before trusting the
+fencing token again.
+
 **Open questions for PR 5**, recorded here so they're decided before the override ships:
 - **Whose operator intent survives the heal.** Acks and shelves made under the override and on
   the other side's majority diverge. The candidate rule: the majority side's `oplog` wins, and
@@ -605,7 +663,7 @@ Every redundancy event is written as a #709 entry. The fields are `ts`, `user`, 
 | Takeover | `redundancy.takeover`, with hot or cold, the image age and both terms |
 | Handover | `redundancy.handover`, with the reason: orderly or I/O health |
 | Quorum | `redundancy.quorum.lost` and `.regained` |
-| Witness | `redundancy.witness.incarnation`, when one is adopted |
+| Witness | `redundancy.witness.incarnation`, when one is adopted; `redundancy.witness.copies`, when two incarnations answer within a lease |
 | Stale takeover | `redundancy.stale`, a cold takeover with its staleness |
 
 **Where records go.** With quorum, a record goes through `oplog`, as #709 specifies. Without

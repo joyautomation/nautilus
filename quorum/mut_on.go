@@ -30,6 +30,11 @@ var Mutations = []string{
 	"no_observe",          // a candidate doesn't see the peer's requested terms (#979)
 	"retry_on_grid",       // a refused campaign retries on the look grid (#979)
 	"renew_on_look",       // a lease won waits for the next look to renew (#998)
+	"no_quiet",            // a newly adopted witness incarnation counts at once (#976)
+	"no_floor",            // an adoption doesn't raise the term floor (#976)
+	"count_while_pending", // a proposer keeps counting the old incarnation (forward only)
+	"no_adopt_gen",        // a proposal is adopted whatever its generation
+	"no_holdoff",          // a switch never waits longer than a lease, however many came before
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")
