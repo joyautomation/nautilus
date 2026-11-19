@@ -1065,10 +1065,14 @@ func authNotice(proj *project.Project) string {
 	return authReadsNotice + authSurfacesNotice
 }
 
-// authReadsNotice is the part of authNotice naut logix serve --project
-// says too: it serves the HTTP API only.
 const authReadsNotice = "auth: WARNING: reads are NOT GATED yet (#708, until sign-in): anyone who can reach this controller\n" +
 	"      can read its tags, alarms and program. Writes and the audit journal follow the auth: block.\n"
+
+// authFacadeNotice is what naut logix serve --project and naut siemens
+// serve say about an auth: block: they serve the HTTP API only, with no
+// audit journal.
+const authFacadeNotice = "auth: WARNING: reads are NOT GATED yet (#708, until sign-in): anyone who can reach this serve\n" +
+	"      can read the controller's tags and program. Writes and deploys follow the auth: block.\n"
 
 const authSurfacesNotice = "auth: WARNING: the OPC UA server and Sparkplug writes are NOT covered by the auth: block yet (#708):\n" +
 	"      a client that reaches them is not asked for a role.\n"

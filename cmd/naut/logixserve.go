@@ -127,7 +127,7 @@ func runLogixServe(args []string) int {
 			return 2
 		}
 		if p.auth != nil {
-			fmt.Fprint(os.Stderr, authReadsNotice)
+			fmt.Fprint(os.Stderr, authFacadeNotice)
 		}
 		client := logixd.New(agentURL, os.Getenv("NAUTILUS_LOGIXD_TOKEN"))
 		plane, release = logixProgramPlane(*projectDir, p, client)
