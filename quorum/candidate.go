@@ -262,9 +262,16 @@ func (c *Candidate) send(now Instant, term uint64) *Request {
 // of one round that a majority granted.
 func (c *Candidate) OnReply(now Instant, r Reply) {
 	c.expire(now)
+	// quiet: the counted incarnation answered inside its quiet period
+	// (Count). Its reply shows the witness hears this controller, so the
+	// round counts it as heard (no back-off as if unheard), but its grant
+	// does not count toward a lease.
+	quiet := r.From == c.cfg.Witness && r.Incarnation == c.countInc && r.Incarnation != 0 && now < c.countFrom &&
+		!mut("quiet_reply_unheard")
 	switch {
 	case r.From == c.cfg.Self, r.From == c.cfg.Peer:
 	case r.From == c.cfg.Witness && r.Incarnation == c.countInc && r.Incarnation != 0 && now >= c.countFrom:
+	case quiet:
 	case r.From == c.cfg.Witness && mut("any_incarnation"):
 	case mut("any_sender") && r.From != c.cfg.Witness:
 	default:
@@ -287,7 +294,9 @@ func (c *Candidate) OnReply(now Instant, r Reply) {
 	}
 	rd.replies[r.From] = true
 	if r.Granted {
-		rd.grants[r.From] = true
+		if !quiet {
+			rd.grants[r.From] = true
+		}
 	} else if c.leading && !rd.campaign && rd.term == c.renewTerm && r.Promised >= rd.term {
 		// A voter refused our renewal at the term we renew at now: it
 		// promised this term or a later one elsewhere (a standby's lost

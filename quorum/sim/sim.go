@@ -204,7 +204,7 @@ type node struct {
 	// cnt is what the protocol says this controller counts (countTruth).
 	seen quorum.VoterState
 	cnt  countState
-	sent  []sentReq // this boot's requests, for the hostile-delivery check
+	sent []sentReq // this boot's requests, for the hostile-delivery check
 	// legit are the grants this boot's candidate may count, by request:
 	// a hostile grant is decisive when one of these is already in.
 	legit []legitGrant
