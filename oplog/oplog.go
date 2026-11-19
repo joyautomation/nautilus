@@ -63,9 +63,23 @@ type Entry struct {
 	Kind   string   `json:"kind"`
 	IDs    []string `json:"ids,omitempty"`   // ack
 	ID     string   `json:"id,omitempty"`    // shelve, unshelve
-	Until  int64    `json:"until,omitempty"` // shelve, epoch ms
+	Until  int64    `json:"until,omitempty"` // shelve, substitute: epoch ms
 	By     string   `json:"by"`
 	Origin string   `json:"origin,omitempty"` // the instance that took the write
+
+	// Substitute values (#707). A substitute entry's Seq is the
+	// substitute's ID; unsubstitute and suback name entries by that Seq
+	// (Ref, Refs), never by tag, so a stale stop cannot end a newer
+	// substitute of the same tag. Every field is omitempty: a log written
+	// before them loads unchanged, and an entry of another kind carries
+	// none.
+	Tag        string          `json:"tag,omitempty"`        // substitute: the address
+	Value      json.RawMessage `json:"value,omitempty"`      // substitute: the value, as JSON
+	GrantedMs  int64           `json:"grantedMs,omitempty"`  // substitute: the duration granted
+	AckOnStart bool            `json:"ackOnStart,omitempty"` // substitute
+	Ref        uint64          `json:"ref,omitempty"`        // unsubstitute: the substitute's Seq
+	Refs       []uint64        `json:"refs,omitempty"`       // suback: the substitutes' Seqs
+	Reason     string          `json:"reason,omitempty"`     // unsubstitute: "" (a person) or "expired"
 }
 
 func (e Entry) same(o Entry) bool {
@@ -78,6 +92,17 @@ const (
 	KindAck      = "ack"
 	KindShelve   = "shelve"
 	KindUnshelve = "unshelve"
+
+	// Substitute values (#707): see Entry.
+	KindSubstitute   = "substitute"
+	KindUnsubstitute = "unsubstitute"
+	KindSuback       = "suback"
+
+	// KindNoop is a new leader's empty entry of its own term (SyncLeader):
+	// committing it commits everything before it, which is how a leader
+	// commits entries an earlier term stored but never committed (Raft
+	// §5.4.2). Apply never sees it.
+	KindNoop = "noop"
 )
 
 // Leadership is who the sequencer is right now. A Kubernetes Lease elector
@@ -501,7 +526,7 @@ func (n *Node) commitTo(seq uint64) {
 }
 
 func (n *Node) apply(e Entry) {
-	if n.o.Apply == nil {
+	if n.o.Apply == nil || e.Kind == KindNoop {
 		return
 	}
 	if err := n.o.Apply(e); err != nil {
@@ -586,11 +611,17 @@ func (n *Node) Propose(ctx context.Context, e Entry) (Entry, error) {
 // over entries its peers already committed. Raft restricts votes to the
 // most advanced log; here the leader is elected elsewhere, so it catches
 // up instead. Caller holds seqMu.
-func (n *Node) leaderCatchUp(ctx context.Context, term uint64) {
+//
+// It succeeds only when the peers that answered and this instance make a
+// majority: a committed entry is stored on a majority, and any majority
+// meets it, so then the most advanced answer holds every committed entry.
+// Fewer answers and it returns ErrReadOnly and the term stays unsynced, so
+// the next call asks again.
+func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 	n.mu.Lock()
 	if n.syncedTerm == term {
 		n.mu.Unlock()
-		return
+		return nil
 	}
 	last := n.lastLocked()
 	n.mu.Unlock()
@@ -605,28 +636,69 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) {
 	}
 	var best afterResp
 	found := false
+	answered := 1 // this instance
+	var errs []string
 	for _, p := range n.o.Peers {
 		if p == n.o.Self {
 			continue
 		}
 		var got afterResp
 		if err := n.call(ctx, p, fmt.Sprintf("/api/oplog?after=%d", last), nil, &got); err != nil {
+			errs = append(errs, p+": "+err.Error())
 			continue
 		}
+		answered++
 		if !found || lastTerm(got) > lastTerm(best) || (lastTerm(got) == lastTerm(best) && len(got.Entries) > len(best.Entries)) {
 			best, found = got, true
 		}
+	}
+	if answered < n.majority() {
+		return fmt.Errorf("%w: catch-up heard from %d of %d (%s)", ErrReadOnly, answered, len(n.o.Peers), strings.Join(errs, "; "))
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if found && len(best.Entries) > 0 {
 		if _, err := n.acceptLocked(best.Entries); err != nil {
 			n.log.Warn("oplog: leader catch-up", "error", err)
-			return
+			return err
 		}
 		n.commitTo(best.Commit)
 	}
 	n.syncedTerm = term
+	return nil
+}
+
+// SyncLeader brings a new leader's log up to every committed entry, and
+// commits and applies them, before it returns: what a takeover needs
+// before its first scan, since the lazy catch-up in front of the first
+// write (Propose) may come much later, or never. It catches up (see
+// leaderCatchUp: an error unless a majority answered) and then, if it
+// holds entries past its commit index (another term stored them and its
+// leader died before advertising the commit), appends and commits a
+// KindNoop of its own term, which commits everything before it.
+//
+// Nil on a standalone node and once this term is synced. ErrReadOnly when
+// this instance is not the leader, or a majority cannot be reached.
+func (n *Node) SyncLeader(ctx context.Context) error {
+	if n.standalone() {
+		return nil
+	}
+	n.seqMu.Lock()
+	defer n.seqMu.Unlock()
+	if !n.isLeader() {
+		return fmt.Errorf("%w: not the leader", ErrReadOnly)
+	}
+	if err := n.leaderCatchUp(ctx, n.currentTerm()); err != nil {
+		return err
+	}
+	n.mu.Lock()
+	behind := n.lastLocked() > n.commit
+	n.mu.Unlock()
+	if !behind {
+		return nil
+	}
+	_, err := n.sequenceLocked(ctx, Entry{Kind: KindNoop, By: "system", Origin: n.o.Self})
+	return err
 }
 
 // sequence is the leader's path, one proposal at a time: number, store,
@@ -638,8 +710,21 @@ func (n *Node) sequence(ctx context.Context, e Entry) (Entry, error) {
 	if !n.isLeader() {
 		return Entry{}, fmt.Errorf("%w: no longer the leader", ErrReadOnly)
 	}
+	// A failed catch-up leaves the term unsynced, so the next write asks
+	// again; this one goes on, and a missed majority fails it below.
+	if err := n.leaderCatchUp(ctx, n.currentTerm()); err != nil {
+		n.log.Debug("oplog: leader catch-up before a write", "error", err)
+	}
+	return n.sequenceLocked(ctx, e)
+}
+
+// sequenceLocked numbers, stores, replicates and commits one entry.
+// Caller holds seqMu.
+func (n *Node) sequenceLocked(ctx context.Context, e Entry) (Entry, error) {
+	if !n.isLeader() {
+		return Entry{}, fmt.Errorf("%w: no longer the leader", ErrReadOnly)
+	}
 	term := n.currentTerm()
-	n.leaderCatchUp(ctx, term)
 	n.mu.Lock()
 	e.Seq = n.lastLocked() + 1
 	e.Term = term
