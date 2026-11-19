@@ -102,7 +102,11 @@ classes of the project's Modbus driver (`drivers:`, one is added if there
 is none), which is where those keys are written. An OPC UA device is a
 driver of its own (§3.1) at the default scan rate, with security None and
 anonymous access, which is what the profiles document their servers
-offering; a row's own security and credentials are not supported yet.
+offering. A row's own security and credentials are not supported yet: an
+opcua-client driver's default, the strongest endpoint offered, needs a
+`pki-dir` a row has nowhere to name. So that a device offering more is not
+downgraded without a word, `naut check` warns per row: "device X connects
+with security None, anonymous".
 
 A project names a point its own way with the existing `alias:` (`BinHigh`
 aliases `IOLM.Port1_SioInput`), not a new rename key.
@@ -136,7 +140,8 @@ hand-declared one is an error naming both.
   maker does not publish the real one, so the binding trusts the index the
   profile documents instead. That is a known risk, not a silent one:
   `naut check` warns "device X binds by namespace index N". Every shipped
-  OPC UA profile's URIs are stand-ins today.
+  OPC UA profile's URIs are stand-ins today. A node id in a namespace
+  past the profile's array is refused when the profile is read.
 
 The drivers are only ever handed manifests, the same structures their own
 files decode to. No change to `modbus/` or `opcua/`.
@@ -160,7 +165,9 @@ members is an error. A `udt:` may not be a standard type or block name
   point.
 - `CONV__Online` (BOOL), and for a Modbus device `CONV__Outages` (DINT),
   role input: the driver's companions for the device, declared by the row
-  so a program can gate on them.
+  so a program can gate on them. Being declared tags, they are also in the
+  Sparkplug DBIRTH with the device's other tags. A hand-declared tag of the
+  same name is a load error naming both.
 
 The types are composed by `internal/stproject` beside the dialect's
 block library (`nautilus.yaml#devices`), so every tool that compiles the

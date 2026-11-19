@@ -344,6 +344,14 @@ func (p *Profile) validate() error {
 		if p.OPCUA == nil || len(p.OPCUA.Namespaces) == 0 {
 			return fmt.Errorf("opcua: namespaces is required (the namespace array from index 1)")
 		}
+		if n := p.OPCUA.ObjectNamespace; n < 0 || n > len(p.OPCUA.Namespaces) {
+			return fmt.Errorf("opcua: object-namespace %d is not an index of namespaces (1-%d)", n, len(p.OPCUA.Namespaces))
+		}
+		for _, o := range p.OPCUA.Objects {
+			if err := p.checkNamespace(o.NodeID); err != nil {
+				return fmt.Errorf("opcua: object %s: %w", o.Path, err)
+			}
+		}
 	default:
 		return fmt.Errorf("protocol must be modbus or opcua (got %q)", p.Protocol)
 	}
@@ -417,6 +425,9 @@ func (p *Profile) validateOPCUA(pt *Point) error {
 	}
 	if pt.NodeID == "" || pt.Path == "" {
 		return fmt.Errorf("an OPC UA point needs node-id and path")
+	}
+	if err := p.checkNamespace(pt.NodeID); err != nil {
+		return err
 	}
 	return nil
 }

@@ -127,8 +127,8 @@ func TestOPCUANamespaces(t *testing.T) {
 	if w, err = s.WrapOPCUA("PF1", drv); err != nil {
 		t.Fatal(err)
 	}
-	if ws := w.Warnings(); len(ws) != 0 {
-		t.Errorf("warnings with a verified URI: %q", ws)
+	if ws := strings.Join(w.Warnings(), "\n"); strings.Contains(ws, "namespace index") {
+		t.Errorf("an index warning with a verified URI: %q", ws)
 	}
 }
 
@@ -159,6 +159,12 @@ func TestOPCUADriver(t *testing.T) {
 	// The driver's one companion, as an input; no Modbus __Outages.
 	if want := "MASTER1:input:IFM_AL1590 MASTER1__Online:input:BOOL"; strings.Join(tags, " ") != want {
 		t.Errorf("tags %v, want %s", tags, want)
+	}
+	if od.Security != "None" || od.SecurityMode != "None" {
+		t.Errorf("security %q/%q, want None/None", od.Security, od.SecurityMode)
+	}
+	if ws := strings.Join(w.Warnings(), "\n"); !strings.Contains(ws, "device MASTER1 connects with security None, anonymous: a devices: row cannot set its own OPC UA security yet") {
+		t.Errorf("warnings %q, want the unsecured session named", ws)
 	}
 	if got := w.InputType("MASTER1"); got != "IFM_AL1590" {
 		t.Errorf("type %q", got)

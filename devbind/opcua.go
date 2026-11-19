@@ -4,7 +4,6 @@ package devbind
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/joyautomation/nautilus/devprofile"
@@ -46,7 +45,7 @@ func (s *Set) OPCUADevices() []OPCUADevice {
 		for _, pt := range d.points {
 			nid := p.Substitute(pt.NodeID, d.Params)
 			b := opcua.TagBinding{Name: memberName(d.Name, pt.Name), NodeID: nid, Type: opcuaTypes[pt.Type], Desc: pt.Desc}
-			if ns := nodeNamespace(nid); ns > 0 {
+			if ns := devprofile.NodeNamespace(nid); ns > 0 {
 				if uri := p.Namespace(ns); uri != "" && !devprofile.IsPlaceholderNamespace(uri) {
 					b.Namespace = uri
 				} else {
@@ -69,20 +68,6 @@ func (s *Set) OPCUADevices() []OPCUADevice {
 	return out
 }
 
-// nodeNamespace is a node id's ns= index, 0 without one.
-func nodeNamespace(nid string) int {
-	rest, ok := strings.CutPrefix(nid, "ns=")
-	if !ok {
-		return 0
-	}
-	n, _, _ := strings.Cut(rest, ";")
-	ns, err := strconv.Atoi(n)
-	if err != nil {
-		return 0
-	}
-	return ns
-}
-
 // OPCUADriver is an OPC UA device's driver, its points arriving as the
 // device's struct tag. It is the driver itself (health, the write gate,
 // start and stop are still there), with the input side translated:
@@ -103,6 +88,11 @@ func (s *Set) WrapOPCUA(name string, d *opcua.Driver) (*OPCUADriver, error) {
 		for _, od := range s.OPCUADevices() {
 			if od.Name != name {
 				continue
+			}
+			if strings.EqualFold(od.Security, "None") {
+				w.warnings = append(w.warnings, fmt.Sprintf(
+					"device %s connects with security None, anonymous: a devices: row cannot set its own OPC UA security yet, so the session is neither signed nor encrypted even if the device offers more",
+					name))
 			}
 			for _, ns := range od.IndexOnly {
 				w.warnings = append(w.warnings, fmt.Sprintf(
