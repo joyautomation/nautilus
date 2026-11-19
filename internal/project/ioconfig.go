@@ -257,6 +257,20 @@ func ioUnits(fsys fs.FS, m *Manifest) ([]DriverConfig, map[string]ioUnit, error)
 			}
 			continue
 		}
+		if typ == "opcua-client" {
+			// What it binds, an OPC UA devices: row's derived from its
+			// profile: an edited profile node id is a change too.
+			om, err := opcuaManifest(fsys, c)
+			if err != nil {
+				return nil, nil, fmt.Errorf("driver %s: %w", c.Name, err)
+			}
+			units[c.Name] = ioUnit{driver: c.Name, typ: typ, cfg: c, fsys: fsys, hash: hashOf(struct {
+				Config   DriverConfig
+				Device   string
+				Manifest opcua.Manifest
+			}{c, c.opcuaDevice, om})}
+			continue
+		}
 		var file string
 		if c.Manifest != "" {
 			raw, err := fs.ReadFile(fsys, path.Clean(c.Manifest))
@@ -758,11 +772,7 @@ func (io *IOConfig) fieldProblems(c *IOCandidate, running map[string]ioUnit) []s
 
 // uaBindings reads an OPC UA client unit's manifest, by tag.
 func uaBindings(u ioUnit) (map[string]opcua.TagBinding, error) {
-	raw, err := fs.ReadFile(u.fsys, path.Clean(u.cfg.Manifest))
-	if err != nil {
-		return nil, err
-	}
-	m, err := opcua.ParseManifest(raw)
+	m, err := opcuaManifest(u.fsys, u.cfg) // a devices: row's, derived from its profile
 	if err != nil {
 		return nil, err
 	}
