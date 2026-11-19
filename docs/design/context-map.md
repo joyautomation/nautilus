@@ -45,7 +45,7 @@ into another's.
 | Context | Packages | Language | Upstream of | Translation |
 |---|---|---|---|---|
 | **Languages** | `lang/st` `lang/ld` `lang/fbd` `lang/sfc` `lang/ir` `lang/fbcatalog` `lang/stgen` `internal/stproject` | IEC 61131-3: POU, program, function block, task, retain, rung, network, step, transition. `lang/ir` is the substrate every other context shares for types and values. | Runtime, Authoring, Logix target, every codegen | `lang/l5x` turns a Logix export into ladder and ST (an importer, see Logix target) |
-| **Runtime** | `runtime` `io` `retain` `leader` | scan, task, tag store, quality, generation, lateness, force, retained, coordinator. `io.Driver` is the published seam; `io.Quality` the one quality enum. | Operator surface, Sparkplug edge, Verification, Logix facade | Manifest tags become `runtime.TagDef` in `internal/project` |
+| **Runtime** | `runtime` `io` `retain` `leader` | scan, task, tag store, quality, generation, lateness, force, retained, coordinator, elector. `io.Driver` is the published seam; `io.Quality` the one quality enum; `leader.Elector` the one interface both electors (the Kubernetes Lease and the quorum pair) meet. | Operator surface, Sparkplug edge, Verification, Logix facade | Manifest tags become `runtime.TagDef` in `internal/project` |
 | **Field drivers** | `modbus/…` `eip/…` (`cip`, `logix`, `codegen`) `optommp/…` `plcnext/…` `profinet/…` `sparkplug/host/…` `replay` (and the pending `opcua` client) | each protocol's own: register, coil, holding; CIP path, symbol, UDT; AR, IOCR, IOPS, station name; metric, NBIRTH. | nothing above the seam | **Anti-corruption layer.** The protocol's names stop at the package. What crosses is `io.Driver` upward and `internal/tagfile.Tag` into the tag file. |
 | **IT drivers** | `hw` `snmp/…` `redfish/…` `prom/…` | source, scan class, the shared UDT set (SwitchPort, PSU, …), counter→rate. `hw` is to these what `runtime` is to the languages. | nothing above the seam | Same ACL rule as field drivers; `hw` owns the shared UDTs so a port is one struct whether it came from IF-MIB or REST |
 | **Sparkplug edge** | `sparkplug` `sparkplug/spb` | node, device, metric, birth, rebirth, NCMD, RBE. | Sparkplug host (payload codec) | The one adapter that imports `runtime` directly: it publishes a runtime's store, so it is downstream of Runtime, not a driver |
@@ -65,7 +65,13 @@ into another's.
 
 Two packages are substrates rather than contexts and import nothing of
 ours: `lang/ir` (types and values) and `io` (the driver seam and `Quality`).
-`hist`, `oplog` and `audit` (the runtime audit journal, #709) are seams in the same sense. They are what DDD calls a
+`hist`, `oplog` and `audit` (the runtime audit journal, #709) are seams in the same sense.
+`quorum` (the vote protocol of a redundant pair and its witness,
+[redundancy.md](redundancy.md) §3) is one too: voter, candidate, lease, term,
+incarnation, adoption. Its core is sans-IO; `quorum/node` drives it over
+the peer listener, the state file and the clock, and `quorum/sim` over a
+simulated world. The subtree imports only itself; `leader` adapts it to
+`leader.Elector`, and the CLI runs `naut witness` on it. They are what DDD calls a
 *published language*: small, stable, and the price of changing one is paid
 by every context.
 
@@ -78,7 +84,9 @@ break one changes this section first and says why.
 
 - Substrates (`io`, `lang/ir`, `hist`, `oplog`, `audit`) import no other nautilus
   package. `audit` imports only the standard library, not even a third-party
-  module. `retain` imports only `internal/k8sapi`.
+  module. `retain` imports only `internal/k8sapi`. `quorum` and its subtree
+  import only each other, and only `leader`, the CLI and Verification import
+  them: nothing else learns the vote protocol.
 - Languages import only each other and the tag-file shared kernel.
 - Runtime imports only Languages, `io`, `retain`, `internal/stproject`.
   It never knows a driver, the server, alarms or the manifest.
