@@ -40,6 +40,9 @@ func commStatus(err error) int {
 	if err == nil {
 		return ir.CommOK
 	}
+	if errors.Is(err, fence.ErrGateClosed) {
+		return ir.CommLost // refused by the pair's gate mid-write, as do() refuses one
+	}
 	var s interface{ CommStatus() int }
 	if errors.As(err, &s) && s.CommStatus() != ir.CommOK {
 		return s.CommStatus()

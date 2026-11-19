@@ -11,6 +11,7 @@ import (
 
 	"github.com/joyautomation/nautilus/eip/cip"
 	"github.com/joyautomation/nautilus/eip/logixserver"
+	"github.com/joyautomation/nautilus/internal/fence"
 	"github.com/joyautomation/nautilus/lang/ir"
 )
 
@@ -327,5 +328,38 @@ func TestChannelForgetsAfterRefusal(t *testing.T) {
 	}
 	if len(ch.peer) != 0 {
 		t.Fatal("a refusal should drop what the channel learned")
+	}
+}
+
+// #1048 review: a request the pair's gate refuses BEFORE sending (its
+// fence: nothing went out) leaves the session as it was. The channel keeps
+// it, with the templates learned on it, so the next write does not dial
+// again and relearn everything inside its one lease-sized budget (a WRITE
+// to a structure in a big scope would never land). A refusal reads as
+// lost (the gate's), not unreachable.
+func TestChannelRefusedRequestKeepsTheSession(t *testing.T) {
+	ch, get, _ := newTestChannel(t)
+	if err := ch.Write(ctx(t), "SpeedCmd", ir.RealVal(1.5), "REAL"); err != nil {
+		t.Fatal(err)
+	}
+	ch.mu.Lock()
+	sess := ch.ctrl
+	ch.mu.Unlock()
+	closed := func() (bool, time.Duration, uint64) { return false, time.Second, 5 }
+	err := ch.Write(fence.WithGate(ctx(t), closed, 5), "SpeedCmd", ir.RealVal(2.5), "REAL")
+	if !errors.Is(err, fence.ErrGateClosed) || !errors.Is(err, cip.ErrNotStarted) {
+		t.Fatalf("a write the gate refused: %v; want not started, gate closed", err)
+	}
+	if sess.Broken() {
+		t.Fatal("a request refused before sending marked the session broken: it would be dialled again")
+	}
+	if err := ch.Write(ctx(t), "SpeedCmd", ir.RealVal(3.5), "REAL"); err != nil || get("SpeedCmd") != float64(3.5) {
+		t.Fatalf("the next write: %v, SpeedCmd = %v", err, get("SpeedCmd"))
+	}
+	ch.mu.Lock()
+	same := ch.ctrl == sess
+	ch.mu.Unlock()
+	if !same {
+		t.Fatal("the next write dialled a new session (and forgot what the old one learned)")
 	}
 }
