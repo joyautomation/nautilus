@@ -99,6 +99,11 @@ type IOConfig struct {
 	// KeepStore is the retain store's kind ("file", "configmap"): a file
 	// is one replica's own, so a redundant project cannot keep in it.
 	KeepStore string
+	// PeersKeepIO, when set (a redundant pair, naut run), says why the
+	// other replica can't keep a live apply across a takeover (its build
+	// predates retain io, #1013), or "" when it can: a mixed-version pair
+	// refuses a live apply at validate.
+	PeersKeepIO func() string
 	// atStart: the restore under way is a standalone controller's, before
 	// its first scan, so a driver swapped whole keeps its start-up
 	// baseline (as at any start) instead of starting from the commands.

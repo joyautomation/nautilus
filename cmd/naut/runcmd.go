@@ -339,6 +339,9 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		ioc = nil
 	} else {
 		ioc.Gate = gate.IsLeader
+		if pair != nil {
+			ioc.PeersKeepIO = pair.peersKeepIO
+		}
 		if proj.Runtime.Retain != nil {
 			ioc.Keep = rt.SaveRetained
 			ioc.KeepStore = proj.Runtime.Retain.Kind()

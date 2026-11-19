@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -65,6 +66,12 @@ type Options struct {
 	// (host:port): Status.LeaderAddr names the leader's, for a standby's
 	// proxy and for clients that follow the leader.
 	SelfAPI, PeerAPI string
+	// Config is a hash of the pair's section as this controller read it
+	// (ConfigHash), and Caps what its build does that the peer must too
+	// (KeepsLiveIO): both sent at every hello (peerinfo.go). Config ""
+	// skips the comparison.
+	Config string
+	Caps   []string
 	// Log defaults to slog.Default.
 	Log *slog.Logger
 	// OnEvent, when set, gets every Event, in order, from one goroutine.
@@ -115,6 +122,10 @@ const (
 	// the wrong box, a cloned disk; design §2). Detail names it. Raised at
 	// most once every dupEvery while it goes on.
 	EventDuplicateMember EventKind = "redundancy.duplicate-member"
+	// EventConfigDiffers: the peer's hello names another configuration of
+	// the pair (Detail says so), or "same" once it matches again. While
+	// it differs, a controller that does not lead does not campaign.
+	EventConfigDiffers EventKind = "redundancy.config-differs"
 )
 
 // dupEvery paces the duplicate-member report while it goes on.
@@ -169,6 +180,11 @@ type Status struct {
 	// Duplicates counts votes this controller's voter refused because two
 	// processes claim one member (EventDuplicateMember).
 	Duplicates uint64
+	// ConfigDiffers: the peer's hello named another configuration of the
+	// pair (EventConfigDiffers). HelloDuplicates counts hellos that showed
+	// two processes behind the peer's name.
+	ConfigDiffers   bool
+	HelloDuplicates uint64
 }
 
 // Elector is a controller's side of the vote: its voter, its candidate and
@@ -203,11 +219,20 @@ type Elector struct {
 	needOp    bool
 	dupSeen   uint64    // the voter's Duplicates count last reported
 	dupAt     time.Time // when it was last reported
-	token     ClientToken
-	writeErr  string
-	mismatch  map[string]string // the last lease-mismatch report per voter, to report each change once
-	durable   uint64            // the highest Seq known on disk
-	written   chan struct{}     // closed and replaced at every write report
+
+	// The peer's part of the hello (peerinfo.go).
+	peerCaps   []string
+	peerKnown  bool
+	cfgDiffers bool
+	cfgDiffAt  time.Time // the last hello that showed it
+	peerNonces []uint64  // the boot nonces the peer's name answered under, oldest first
+	helloDups  uint64
+	helloDupAt time.Time
+	token      ClientToken
+	writeErr   string
+	mismatch   map[string]string // the last lease-mismatch report per voter, to report each change once
+	durable    uint64            // the highest Seq known on disk
+	written    chan struct{}     // closed and replaced at every write report
 
 	gate    atomic.Pointer[gateState]
 	wake    chan struct{}
@@ -458,7 +483,7 @@ func (e *Elector) look() time.Duration {
 	now := e.now()
 	from, until := e.v.LeaderSeen()
 	e.unhealthy = !healthy
-	req := e.c.Tick(now, from, until, healthy && !e.released)
+	req := e.c.Tick(now, from, until, healthy && !e.released && e.mayCampaign(now))
 	p, msgs, probe := e.a.Tick(now)
 	var selfP *quorum.Persist
 	if req != nil {
@@ -817,15 +842,24 @@ func (e *Elector) serveHello(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not this pair's peer", http.StatusForbidden)
 		return
 	}
+	if pi, ok := infoFromQuery(r.URL.Query()); ok {
+		e.heard(pi)
+	}
+	self := e.selfInfo()
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(helloAnswer{Node: string(e.o.Self), MAC: tokenMAC(e.o.Token, c, e.o.Peer, e.o.Self, e.o.ClientToken)})
+	_ = json.NewEncoder(w).Encode(helloAnswer{Node: string(e.o.Self), MAC: tokenMAC(e.o.Token, c, e.o.Peer, e.o.Self, e.o.ClientToken),
+		Config: self.Config, Nonce: strconv.FormatUint(self.Nonce, 16), Caps: self.Caps,
+		InfoMAC: infoMAC(e.o.Token, c, e.o.Peer, e.o.Self, self)})
 }
+
+// helloEvery is the hello's interval: 16 leases, at least 5 s.
+func helloEvery(lease time.Duration) time.Duration { return max(16*lease, 5*time.Second) }
 
 // hello runs the client-token check against the peer: at start and every
 // 16 leases (at least every 5 s), raising EventClientToken when the
 // answer changes.
 func (e *Elector) hello(ctx context.Context) {
-	every := max(16*e.o.Lease, 5*time.Second)
+	every := helloEvery(e.o.Lease)
 	for {
 		e.checkToken(ctx)
 		select {
@@ -839,6 +873,7 @@ func (e *Elector) hello(ctx context.Context) {
 func (e *Elector) checkToken(ctx context.Context) {
 	c := newChallenge()
 	q := url.Values{"c": {c}, "from": {string(e.o.Self)}}
+	e.selfInfo().query(q)
 	body, err := e.call.call(ctx, max(e.o.Lease, time.Second), http.MethodGet, e.peer+Prefix+e.o.Cluster+"/hello?"+q.Encode(), nil)
 	if err != nil {
 		return
@@ -850,6 +885,12 @@ func (e *Elector) checkToken(ctx context.Context) {
 	if h.Node != string(e.o.Peer) {
 		e.log.Error("redundancy: the peer's address answers as another node", "addr", e.o.PeerAddr, "want", e.o.Peer, "got", h.Node)
 		return
+	}
+	if n, err := strconv.ParseUint(h.Nonce, 16, 64); err == nil && n != 0 {
+		pi := peerInfo{Config: h.Config, Nonce: n, Caps: h.Caps}
+		if sameMAC(h.InfoMAC, infoMAC(e.o.Token, c, e.o.Self, e.o.Peer, pi)) {
+			e.heard(pi)
+		}
 	}
 	got := TokenDiffers
 	if sameMAC(h.MAC, tokenMAC(e.o.Token, c, e.o.Self, e.o.Peer, e.o.ClientToken)) {
@@ -945,6 +986,7 @@ func (e *Elector) Status() Status {
 		WitnessIncarnation: e.witInc, WitnessAge: -1, PeerAge: -1,
 		RecommissionNeeded: e.needOp && st.Incarnation == 0, ClientToken: e.token,
 		StateWriteError: e.writeErr, Acquisitions: e.acquired, Duplicates: e.dupSeen,
+		ConfigDiffers: e.cfgDiffers, HelloDuplicates: e.helloDups,
 	}
 	g := e.gate.Load()
 	s.Leading = g.open && now < g.end
