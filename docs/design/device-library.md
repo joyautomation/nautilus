@@ -95,19 +95,46 @@ A `devices:` row has:
 | `points` | globs over point names: poll and expose only these (an 8-port master need not poll 8 ports); default all |
 | `params` | values for the profile's `params:` (an ifm master's location) |
 | `desc` | one line for the tag and the faceplate |
+| `driver` | an OPC UA device's connection: an opcua-client template section of `drivers:` (below) |
 | `validate` | `live` or `static`: how a live I/O configuration change checks the device (#706). Overrides the driver's. Default: `static` when the profile documents `modbus.max-connections` of 2 or fewer, else `live`. `live` on a profile documenting one connection is an error, since the check's connection would be the controller's. devbind gives #706 the row's setting, the default and why (`Set.Validate`); #706 applies row, then driver, then default |
 | `ports` | an IO-Link master's ports by number, `{ 2: { name: LEVEL1, iodd: sensor.xml } }` (#705): each port's name shares the devices' one namespace, and its IODD is a file in the project's `iodd/` folder. Only a profile that declares IO-Link ports takes them, and none does until #705 adds the profile's `iolink:` block, so until then a row's `ports:` is refused rather than ignored |
 
-A row has no driver keys. A Modbus device polls at the scan rate and scan
-classes of the project's Modbus driver (`drivers:`, one is added if there
-is none), which is where those keys are written. An OPC UA device is a
-driver of its own (§3.1) at the default scan rate, with security None and
-anonymous access, which is what the profiles document their servers
-offering. A row's own security and credentials are not supported yet: an
-opcua-client driver's default, the strongest endpoint offered, needs a
-`pki-dir` a row has nowhere to name. So that a device offering more is not
-downgraded without a word, `naut check` warns per row: "device X connects
-with security None, anonymous".
+A row has no driver keys of its own. A Modbus device polls at the scan
+rate and scan classes of the project's Modbus driver (`drivers:`, one is
+added if there is none), which is where those keys are written.
+
+An OPC UA device is a driver of its own (§3.1). A row with no `driver:`
+connects with security None and anonymous access, which is what the
+profiles document their servers offering, and `naut check` warns per row
+("device X connects with security None, anonymous") so that a device
+offering more is not downgraded without a word. A row that names a
+`driver:` section (#975) connects as that section says:
+
+```yaml
+drivers:
+  - { name: iolm-secure, type: opcua-client, security: Basic256Sha256,
+      security-mode: SignAndEncrypt, pki-dir: pki/opcua-client, username: plc }
+devices:
+  - { name: PF1, profile: pepperl-fuchs-ice3, endpoint: 10.0.0.21, driver: iolm-secure }
+```
+
+- The section is a **template**: an opcua-client section with no
+  `endpoint` (the row's) and no `manifest` (derived). It is never built or
+  started; each device that names it gets its own driver, named after the
+  device, with the section's `security`, `security-mode`, `pki-dir`,
+  `username`, `read-mode` and `scan-rate` (no other key: `scan-classes`
+  and `tag-classes` would match derived binding names, and `points:`
+  selects what is polled). The password is the opcua-client driver's,
+  `NAUTILUS_OPCUA_PASSWORD`, never in a file.
+- Any number of rows may share a section; each is its own session, and
+  they share the client certificate in its `pki-dir`.
+- No None warning for such a row: the security is the author's. A section
+  that sets None is still said once ("device X connects with security
+  None, as its driver: section S sets"), and the driver's own findings
+  (no `pki-dir` for the default strongest endpoint, a username without
+  Sign) appear under the device's name.
+- `driver:` on a Modbus row is an error for now; it is kept for naming
+  which Modbus driver a device joins.
 
 A project names a point its own way with the existing `alias:` (`BinHigh`
 aliases `IOLM.Port1_SioInput`), not a new rename key.
@@ -255,8 +282,8 @@ A project with `devices:` gets virtual devices from the same rows, with or
 without `virtual-devices.yaml`. Each simulates the vendored copy (the one
 the controller derives from) and the whole device, whatever `points:`
 selects. `virtual-devices.yaml` keeps the process model, devices the
-manifest does not declare, and the simulation-only keys (`listen`, `init`)
-of a declared device by name; repeating a row's `profile`, `endpoint`,
+manifest does not declare, and the simulation-only keys (`listen`, `init`,
+`opcua`) of a declared device by name; repeating a row's `profile`, `endpoint`,
 `unit-id` or `params` there is an error. `naut test`'s in-process face
 delivers a device, Modbus or OPC UA, through a fresh copy of the adapter's
 own input side, so a sequence test proves the adapter that ships. `naut build` ships the

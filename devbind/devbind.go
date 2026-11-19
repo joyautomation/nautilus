@@ -46,6 +46,13 @@ type Device struct {
 	Params map[string]string `yaml:"params"`
 	// Desc is one line for the device's tags.
 	Desc string `yaml:"desc"`
+	// Driver names the drivers: section the device's driver is made from.
+	// For an OPC UA device it is an opcua-client section with no endpoint
+	// or manifest (a template: the row gives the endpoint, the profile the
+	// manifest) whose security, credentials and pki-dir the device's own
+	// driver takes. "" connects with security None, anonymous. Not yet on
+	// a Modbus device, which joins the project's one Modbus driver.
+	Driver string `yaml:"driver"`
 	// Validate is how a live configuration change checks the device
 	// (#706): "live" probes it on a connection of its own, "static" checks
 	// the configuration only; "" leaves it to the driver, then the
@@ -183,6 +190,9 @@ func (d *device) check(where string) error {
 		}
 		if d.UnitID != nil && (*d.UnitID < 0 || *d.UnitID > 255) {
 			return fmt.Errorf("%s: unit-id %d is not 0-255", where, *d.UnitID)
+		}
+		if d.Driver != "" {
+			return fmt.Errorf("%s: driver: is an OPC UA device's (the section its connection is made from); a Modbus device joins the project's Modbus driver", where)
 		}
 	case devprofile.ProtoOPCUA:
 		if _, err := p.OPCUAEndpoint(d.Endpoint); err != nil {
@@ -382,12 +392,16 @@ type OPCUARow struct {
 	Name string
 	// Endpoint is opc.tcp://host:port.
 	Endpoint string
-	// Security and SecurityMode are the endpoint policy and mode: None,
-	// anonymous, what the profiles document their servers offering. A row
-	// cannot set its own yet (an opcua-client driver's default, the
-	// strongest offered, needs a pki-dir a row has nowhere to name), so
+	// Driver is the row's driver: section, whose connection settings the
+	// device's driver takes; "" when the row names none.
+	Driver string
+	// Security and SecurityMode are the endpoint policy and mode of a row
+	// that names no driver: section: None, anonymous, what the profiles
+	// document their servers offering (an opcua-client driver's default,
+	// the strongest offered, needs a pki-dir only a section can name), and
 	// the device's driver says so in naut check rather than downgrade a
-	// device that offers more without a word.
+	// device that offers more without a word. "" when Driver is set: the
+	// section's are the device's.
 	Security, SecurityMode string
 }
 
@@ -397,7 +411,11 @@ func (s *Set) OPCUARows() []OPCUARow {
 	var out []OPCUARow
 	for _, d := range s.protocol(devprofile.ProtoOPCUA) {
 		ep, _ := d.prof.OPCUAEndpoint(d.Endpoint) // Resolve checked it
-		out = append(out, OPCUARow{Name: d.Name, Endpoint: ep, Security: "None", SecurityMode: "None"})
+		r := OPCUARow{Name: d.Name, Endpoint: ep, Driver: d.Driver}
+		if d.Driver == "" {
+			r.Security, r.SecurityMode = "None", "None"
+		}
+		out = append(out, r)
 	}
 	return out
 }

@@ -279,6 +279,8 @@ func TestSchemaRequiresWhatLoaderRequires(t *testing.T) {
 
 	// opcua-client needs an endpoint and a manifest; opcua.New never
 	// dials either, so a complete config builds with no server in sight.
+	// (A section with neither is a devices: row's connection template,
+	// #975, which withDevices never builds; the schema allows both shapes.)
 	opcuaFS := fstest.MapFS{"opcua_manifest.yaml": &fstest.MapFile{Data: []byte(
 		"namespaces: [\"http://opcfoundation.org/UA/\", \"urn:x\"]\ntags:\n" +
 			"  - {name: T, nodeid: \"ns=1;s=T\", namespace: \"urn:x\", type: Double}\n")}}

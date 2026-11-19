@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -83,6 +84,18 @@ func (s *Set) Mapped(d Instance) (m *uaserver.Mapped, writable []string, err err
 	return m, writable, nil
 }
 
+// opcuaPKI is an instance's certificate store, relative to the project;
+// "" serves None alone.
+func opcuaPKI(s *Set, d Instance) string {
+	if d.OPCUA == nil || d.OPCUA.PKI == "" {
+		return ""
+	}
+	if filepath.IsAbs(d.OPCUA.PKI) {
+		return d.OPCUA.PKI
+	}
+	return filepath.Join(s.Dir, d.OPCUA.PKI)
+}
+
 // opcuaListen is the host:port an OPC UA instance's wire face binds:
 // Listen, else an ephemeral loopback port.
 func opcuaListen(d Instance) string {
@@ -116,6 +129,7 @@ func startOPCUA(ctx context.Context, rt *runtime.Runtime, s *Set, d Instance, lo
 		// A virtual device takes writes the way the real ones do in their
 		// default setup: anonymously, on the None endpoint.
 		AnonymousWrites: len(writable) > 0,
+		PKI:             opcuaPKI(s, d),
 		Logger:          log,
 	})
 	if err != nil {

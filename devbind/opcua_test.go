@@ -75,6 +75,29 @@ func TestOPCUADevices(t *testing.T) {
 	}
 }
 
+// A row with no driver: section connects with security None; a row that
+// names one leaves its security to the section (#975), and a Modbus row
+// has no driver: at all.
+func TestOPCUARowsDriver(t *testing.T) {
+	s, err := Resolve(vendored(t, "pepperl-fuchs-ice3"), []Device{
+		{Name: "PF1", Profile: "pepperl-fuchs-ice3", Endpoint: "h"},
+		{Name: "PF2", Profile: "pepperl-fuchs-ice3", Endpoint: "h2", Driver: "sec"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := s.OPCUARows()
+	if r := rows[0]; r.Driver != "" || r.Security != "None" || r.SecurityMode != "None" {
+		t.Errorf("PF1 %+v, want None/None and no section", r)
+	}
+	if r := rows[1]; r.Driver != "sec" || r.Security != "" || r.SecurityMode != "" {
+		t.Errorf("PF2 %+v, want the section's security, none of its own", r)
+	}
+	if _, err := Resolve(vendored(t, "abb-acs355-fmbt21"), []Device{{Name: "C", Profile: "abb-acs355-fmbt21", Endpoint: "h", Driver: "sec"}}); err == nil || !strings.Contains(err.Error(), "driver: is an OPC UA device's") {
+		t.Errorf("driver: on a Modbus row: %v", err)
+	}
+}
+
 // A profile's verified namespace URI is bound by URI, which the driver
 // resolves against the server's live table; a placeholder (urn:virtual:)
 // leaves the index to be trusted, and the device's driver says so.
@@ -96,7 +119,7 @@ func TestOPCUANamespaces(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w, err := s.WrapOPCUA("PF1", drv)
+	w, err := s.WrapOPCUA("PF1", drv, "None")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +147,7 @@ func TestOPCUANamespaces(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if w, err = s.WrapOPCUA("PF1", drv); err != nil {
+	if w, err = s.WrapOPCUA("PF1", drv, "None"); err != nil {
 		t.Fatal(err)
 	}
 	if ws := strings.Join(w.Warnings(), "\n"); strings.Contains(ws, "namespace index") {
@@ -145,7 +168,7 @@ func TestOPCUADriver(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w, err := s.WrapOPCUA("MASTER1", drv)
+	w, err := s.WrapOPCUA("MASTER1", drv, "None")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,7 +186,7 @@ func TestOPCUADriver(t *testing.T) {
 	if od.Security != "None" || od.SecurityMode != "None" {
 		t.Errorf("security %q/%q, want None/None", od.Security, od.SecurityMode)
 	}
-	if ws := strings.Join(w.Warnings(), "\n"); !strings.Contains(ws, "device MASTER1 connects with security None, anonymous: a devices: row cannot set its own OPC UA security yet") {
+	if ws := strings.Join(w.Warnings(), "\n"); !strings.Contains(ws, "device MASTER1 connects with security None, anonymous: its row names no driver: section with its own security") {
 		t.Errorf("warnings %q, want the unsecured session named", ws)
 	}
 	if got := w.InputType("MASTER1"); got != "IFM_AL1590" {
@@ -178,7 +201,7 @@ func TestOPCUADriver(t *testing.T) {
 	if _, ok := vals["MASTER1.Port3_Pdin"]; ok {
 		t.Error("a member stayed in the delivery")
 	}
-	if _, err := s.WrapOPCUA("OTHER", drv); err == nil {
+	if _, err := s.WrapOPCUA("OTHER", drv, "None"); err == nil {
 		t.Error("wrapped a device the set does not have")
 	}
 }

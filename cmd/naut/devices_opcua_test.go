@@ -77,7 +77,7 @@ func TestDevicesOPCUARowOnTheWire(t *testing.T) {
 	if code := runDevicesRender([]string{dir}, &b); code != 0 {
 		t.Fatalf("naut devices render exited %d", code)
 	}
-	for _, want := range []string{"# opcua PF1 (driver PF1, opc.tcp://10.0.0.21:4840)", "PF1.Port1_PdiU32  read", "PF1_Port1_PdoU32  write", "(by index)"} {
+	for _, want := range []string{"# opcua PF1 (driver PF1, opc.tcp://10.0.0.21:4840, security None, anonymous)", "PF1.Port1_PdiU32  read", "PF1_Port1_PdoU32  write", "(by index)"} {
 		if !strings.Contains(b.String(), want) {
 			t.Errorf("render lacks %q:\n%s", want, b.String())
 		}

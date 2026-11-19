@@ -1676,17 +1676,74 @@ func withDevices(configs []DriverConfig, set *devbind.Set) ([]DriverConfig, erro
 	for _, n := range driverNames(out) {
 		taken[strings.ToLower(n)] = true
 	}
+	// The opcua-client sections rows name in driver: are templates: each
+	// device's own driver is made from one, and the section itself is
+	// never built.
+	template := map[int]bool{}
 	for _, od := range set.OPCUARows() {
 		if taken[strings.ToLower(od.Name)] {
 			return nil, fmt.Errorf("devices: device %s is an OPC UA device, whose driver is named after it, and the project already has a driver %s: rename one", od.Name, od.Name)
 		}
-		out = append(out, DriverConfig{
-			Type: "opcua-client", Name: od.Name, Endpoint: od.Endpoint,
-			Security: od.Security, SecurityMode: od.SecurityMode,
-			devices: set, opcuaDevice: od.Name,
-		})
+		c := DriverConfig{Type: "opcua-client", Security: od.Security, SecurityMode: od.SecurityMode}
+		if od.Driver != "" {
+			i, err := opcuaTemplate(out, od)
+			if err != nil {
+				return nil, err
+			}
+			template[i] = true
+			c = out[i]
+		}
+		c.Name, c.Endpoint, c.devices, c.opcuaDevice = od.Name, od.Endpoint, set, od.Name
+		out = append(out, c)
 	}
-	return out, nil
+	kept := out[:0:0]
+	for i, c := range out {
+		if !template[i] {
+			kept = append(kept, c)
+		}
+	}
+	return kept, nil
+}
+
+// templateKeys are the keys an opcua-client section a devices: row names
+// in driver: may set: how the device's driver connects. The row gives the
+// endpoint and the profile the manifest; a scan or tag class would match
+// binding names the device derives (a row selects its points instead).
+var templateKeys = map[string]bool{
+	"type": true, "name": true, "security": true, "security-mode": true,
+	"pki-dir": true, "username": true, "read-mode": true, "scan-rate": true,
+}
+
+// opcuaTemplate finds the section an OPC UA row's driver: names and
+// checks it is one a device's driver can be made from.
+func opcuaTemplate(configs []DriverConfig, od devbind.OPCUARow) (int, error) {
+	at := -1
+	for i, c := range configs {
+		if c.Name != "" && strings.EqualFold(c.Name, od.Driver) {
+			at = i
+		}
+	}
+	if at < 0 {
+		return 0, fmt.Errorf("devices: device %s: driver: %s is not a section of drivers: (an opcua-client section with the device's security, credentials and pki-dir)", od.Name, od.Driver)
+	}
+	c := configs[at]
+	if !strings.EqualFold(c.Type, "opcua-client") {
+		return 0, fmt.Errorf("devices: device %s: driver: %s is a %s driver; an OPC UA device's is an opcua-client section", od.Name, c.Name, c.Type)
+	}
+	var set []string
+	v := reflect.ValueOf(c)
+	for i := 0; i < v.NumField(); i++ {
+		f := v.Type().Field(i)
+		key, _, _ := strings.Cut(f.Tag.Get("yaml"), ",")
+		if f.PkgPath != "" || key == "" || key == "-" || templateKeys[key] || v.Field(i).IsZero() {
+			continue
+		}
+		set = append(set, key)
+	}
+	if len(set) > 0 {
+		return 0, fmt.Errorf("devices: device %s: driver: %s is the section its connection is made from, which may set only security, security-mode, pki-dir, username, read-mode and scan-rate, not %s (the row gives the endpoint, the profile the manifest, and points: what is polled)", od.Name, c.Name, strings.Join(set, ", "))
+	}
+	return at, nil
 }
 
 // driverNames resolves each configured driver's name: its name: when it has

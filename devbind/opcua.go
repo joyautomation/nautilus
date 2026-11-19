@@ -78,8 +78,10 @@ type OPCUADriver struct {
 	warnings []string
 }
 
-// WrapOPCUA wraps the driver built for device name from OPCUADevices.
-func (s *Set) WrapOPCUA(name string, d *opcua.Driver) (*OPCUADriver, error) {
+// WrapOPCUA wraps the driver built for device name from OPCUADevices;
+// security is the policy it was built with (the row's, or its driver:
+// section's), which naut check names when it is None.
+func (s *Set) WrapOPCUA(name string, d *opcua.Driver, security string) (*OPCUADriver, error) {
 	for _, dev := range s.protocol(devprofile.ProtoOPCUA) {
 		if dev.Name != name {
 			continue
@@ -89,10 +91,13 @@ func (s *Set) WrapOPCUA(name string, d *opcua.Driver) (*OPCUADriver, error) {
 			if od.Name != name {
 				continue
 			}
-			if strings.EqualFold(od.Security, "None") {
+			switch {
+			case od.Driver == "":
 				w.warnings = append(w.warnings, fmt.Sprintf(
-					"device %s connects with security None, anonymous: a devices: row cannot set its own OPC UA security yet, so the session is neither signed nor encrypted even if the device offers more",
+					"device %s connects with security None, anonymous: its row names no driver: section with its own security, so the session is neither signed nor encrypted even if the device offers more",
 					name))
+			case strings.EqualFold(security, "None"):
+				w.warnings = append(w.warnings, fmt.Sprintf("device %s connects with security None, as its driver: section %s sets", name, od.Driver))
 			}
 			for _, ns := range od.IndexOnly {
 				w.warnings = append(w.warnings, fmt.Sprintf(

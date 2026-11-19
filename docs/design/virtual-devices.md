@@ -164,7 +164,11 @@ the shape a project declares its *real* devices with in `nautilus.yaml`'s
 `devices:` (#717, `docs/design/device-library.md`). Each `devices:` row is a
 virtual device too, simulating the project's vendored profile
 (`profiles/<id>.yaml`), with no entry here. An entry here that names a
-`devices:` row may add only what a simulation needs (`listen`, `init`); the
+`devices:` row may add only what a simulation needs (`listen`, `init`, and
+for an OPC UA device `opcua: { pki: dir }`, a certificate store with which
+the wire face also offers the secure endpoints to a trusted client
+certificate, to test a row that connects through a secured `driver:`
+section); the
 file also keeps the process model and any device the manifest does not
 declare (a hand-mapped one).
 
