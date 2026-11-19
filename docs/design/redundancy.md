@@ -76,20 +76,64 @@ bumpless, and the measured takeover time is published instead.
 
 ```yaml
 redundancy:
+  experimental: true     # required until the state stream (§4) lands
   peers:                 # the same file on both controllers
     a: ctl-a:9450
     b: ctl-b:9450
   witness: witness-host:9460
   lease: 2s              # default; the takeover time it gives is published
+  state-dir: /srv/naut   # optional: default $STATE_DIRECTORY (systemd)
   stream: every-scan     # or {every: 5}: one image per 5 scans
   stream-link: ctl-a-link:9451   # optional dedicated A–B cable (§6)
 ```
 
+- **An explicit opt-in until §4.** Until the state stream (step 4), a pair needs
+  `experimental: true`, and Load refuses one without it, because a takeover starts from the
+  new leader's own retain file and loses a setpoint the old leader took. A running pair says
+  so at start, in `/api/cluster`'s `warnings` and on the dashboard (#1028, naut-lead's call).
+  The key goes when step 4 lands.
+- **Two modes, one section.** `peers:` selects the pair. Without it, `redundancy:` is the
+  Kubernetes Lease as before, and `lease:` is the Lease's name. With it, `lease:` is a time
+  (200 ms to 1 min), and a name there is refused. `witness:` or `state-dir:` without `peers:`
+  is refused rather than ignored.
 - **Self.** Both controllers run one build, so the manifest can't say which controller it is.
   `NAUTILUS_NODE=a|b` says so, and `tools/deploy` sets it per box.
+- **The cluster ID** (§6.2) is `NAUTILUS_CLUSTER`, beside `NAUTILUS_PEER_TOKEN` in
+  `/etc/nautilus/env`, outside the state directory. A controller whose state directory is wiped
+  therefore still starts, and re-adopts the pair's witness incarnation from its peer (#976).
+  Commissioning (3c) draws it and installs it on A, B and the witness. A member started
+  without it is refused, with a message that says how to commission.
+- **The tag API addresses** that `/api/cluster` and the standby's proxy use are each
+  controller's `peers:` host with this controller's API port: both run one manifest.
 - **Misconfiguration is refused at start, never resolved quietly.** A peer list that differs
-  between A and B is refused. So are two processes that both claim to be `a`: each process
-  carries a random instance id, and the voters see two different ids under one name.
+  between A and B is refused (the peer handshake, #710 PR 3b-2). So are two processes that
+  both claim to be `a`, in two layers (#1028 review):
+  - **The state file names its owner.** `quorum.state` records the member and the cluster ID
+    that wrote it, and a controller refuses to start over a file another member or another
+    pair wrote. That catches an env file copied to the wrong box with its own state kept.
+  - **The voters bind a name to a boot nonce.** A cloned disk carries a matching state file
+    and env. So a voter whose running promise to `a` was granted under one boot nonce refuses
+    `a` under any other until that promise has run out, and raises
+    `redundancy.duplicate-member`. A real restart of `a` waits out its restart wait first, by
+    when the promise is over, so it costs a restart nothing.
+  - **The known gap (#1029, blocks lifting `experimental`).** The rule acts only at a voter
+    that holds a running promise to the original. A clone brings its own copy of the
+    original's voter, so it needs just one more grant. When the original is partitioned from
+    one voter (the A–B link down, or A cut from the witness), that voter's promise to it
+    lapses, and the clone wins it after waiting out a lease. It then leads on {clone, that
+    voter} alongside the original on the other two, and `Duplicates` stays 0, because that
+    voter never saw the original's nonce. Candidate fixes are on #1029: the 3b-2 hello's
+    instance nonce, binding the state to the box (machine-id), or the witness relaying the
+    leader's nonce. The guide says never to clone a controller's disk.
+- **`NAUTILUS_NODE` set with no pair in the manifest** is refused: each box would run as its
+  own leader against the same I/O.
+- **A pair member's tag API must be reachable by its peer.** The manifest's default
+  `server.addr` is `localhost:8080`, and `naut deploy` sets no address. A member whose tag API
+  listens on loopback only, while its `peers:` address is on the network, is refused at start
+  with what to set (`server.addr` or `NAUTILUS_ADDR`).
+- **With no leader known, a standby refuses writes** (503 "no leader") rather than taking them
+  into a store that doesn't scan, and still answers reads (#621's rule for a gate-closed
+  lease holder).
 - **Peer calls carry a peer token** (`NAUTILUS_PEER_TOKEN`), compared in constant time as
   `oplog` does. It is a separate secret from the client token `NAUTILUS_TOKEN`, so a client
   that can write tags can't cast a vote. `naut run` refuses to start a pair member or a witness
@@ -736,8 +780,11 @@ same driver contract as the simulator.
   - **On a controller,** `quorum.state` lives in its **state directory**, systemd's
     `StateDirectory` that `naut deploy` uses, beside the retain file. It never lives in the
     project tree: a deploy replaces the project, and every redeploy would then need a
-    re-commission. A manifest or flag override exists. PR 3b wires it and checks that a
-    redeploy keeps it.
+    re-commission. `redundancy: state-dir:` overrides it; without either, a member refuses to
+    start, and so does one whose state directory is inside the project's checkout. Every
+    `naut deploy` step (install, update, a failed update's rollback, rollback, restore,
+    uninstall without `-purge`) leaves the file untouched, and a backup never carries it: an
+    old voter state put back would unsay a promise (`TestDeployBoxKeepsTheVoterState`).
   - **On the witness,** `naut witness --state <dir>` (default `$STATE_DIRECTORY`) holds one
     `<cluster>.quorum` and one `<cluster>.members` per pair. A pair with no file gets a new
     incarnation at its first vote.
@@ -745,7 +792,21 @@ same driver contract as the simulator.
     keeps the file aside. The witness refuses to start over an unreadable file unless
     `--rebuild` is given: the file is then kept aside and the pair gets a new incarnation.
 - **The boot nonce** is drawn from `crypto/rand` at every start and written nowhere.
+- **The state file's format is version 3** since `Owner` and `Cluster` (§2). The driver stamps
+  them on every write: the member and the cluster ID on a controller, `w` and the pair's
+  cluster ID on the witness. A file another member or pair wrote stops the start
+  (`ErrNotOwner`) and is left where it is.
 - **Controllers** refuse to start without `CLOCK_BOOTTIME` (Linux). The witness runs anywhere.
+- **In `naut run`** (#710 PR 3b-1), a member's peer listener binds its own `peers:` port on
+  every address, behind the peer token, with the witness's timeouts and at most 64
+  connections. The state file's lock is taken first, so a second process of the same
+  controller stops before it binds or votes. The listener closes only after the election's
+  last `Release`. A member is a voter even with no leader to elect, so it sends systemd
+  `READY=1` after the first-decision timeout (5 s) either way: otherwise `TimeoutStartSec`
+  would restart it in a loop, and every restart is a new restart wait.
+- **Retained values in a pair** are each controller's own `retain.json` until the state
+  stream (§4): a cold takeover loads the new leader's file, which holds what it last saved
+  as a leader. Live I/O applies stay refused for a pair (a file store reaches one replica).
 
 ## 7. Lone survivor and the engineer override
 

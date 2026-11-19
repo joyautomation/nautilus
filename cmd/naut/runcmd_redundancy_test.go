@@ -80,7 +80,7 @@ func startReplica(t *testing.T, files fstest.MapFS, pod string, coord *flagCoord
 			t.Fatal("the manifest's redundancy: section did not reach the project")
 		}
 		wireRedundancy(proj, coord)
-	} else if _, err := electorFor(proj, "127.0.0.1:0"); err != nil {
+	} else if _, _, err := electorFor(proj, "127.0.0.1:0", ""); err != nil {
 		t.Fatal(err)
 	}
 	drv, ok := proj.Runtime.Driver.(*sphost.Driver)

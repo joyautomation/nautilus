@@ -45,6 +45,15 @@ type Quorum struct {
 
 	mu        sync.Mutex
 	unhealthy string
+	warnings  []string
+}
+
+// Warn adds a standing warning to Status (shown by /api/cluster and the
+// dashboard).
+func (q *Quorum) Warn(msg string) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.warnings = append(q.warnings, msg)
 }
 
 // NewQuorum builds a pair member's election. Mount Node().Handler() on the
@@ -66,7 +75,13 @@ func (q *Quorum) Term() uint64             { return q.n.Term() }
 func (q *Quorum) Decided() <-chan struct{} { return q.n.Decided() }
 func (q *Quorum) Run(ctx context.Context)  { q.n.Run(ctx) }
 func (q *Quorum) Release()                 { q.n.Release() }
-func (q *Quorum) Status() Status           { return quorumStatus(q.n.Status()) }
+func (q *Quorum) Status() Status {
+	st := quorumStatus(q.n.Status())
+	q.mu.Lock()
+	st.Warnings = append([]string(nil), q.warnings...)
+	q.mu.Unlock()
+	return st
+}
 func quorumStatus(s node.Status) Status {
 	return Status{Mode: "quorum", Pod: s.Self, Leader: s.Leader, LeaderAddr: s.LeaderAddr, IsLeader: s.Leading, Transitions: s.Acquisitions}
 }

@@ -52,13 +52,23 @@ type VoterState struct {
 	// (#1021 review). It drops to the voter's own lease at its first grant
 	// after that wait, written with the grant.
 	Lease time.Duration
+
+	// Owner and Cluster name who wrote the file: the member (a, b, or the
+	// witness) and the pair's cluster ID. The driver stamps them on every
+	// write and refuses to start over a file another member or another
+	// pair wrote, so a state file carried to the wrong box (an env file
+	// copied with NAUTILUS_NODE in it) never votes under a name it did not
+	// promise as (#1028 review). Empty in a file never written.
+	Owner   NodeID
+	Cluster string
 }
 
 const stateMagic = "nqv"
 
-// stateVersion is the state file's format: 2 since VoterState.Lease. A
-// file of another version reads as ErrVersion, not as corrupt.
-const stateVersion = 2
+// stateVersion is the state file's format: 2 since VoterState.Lease, 3
+// since Owner and Cluster. A file of another version reads as ErrVersion,
+// not as corrupt.
+const stateVersion = 3
 
 // MarshalBinary encodes s for its state file: a magic, a version byte, a
 // length, the fields, and a CRC-32C, so a torn write is detected.
@@ -80,6 +90,8 @@ func (s VoterState) MarshalBinary() ([]byte, error) {
 	for _, v := range []uint64{s.Gen, s.PendingGen, s.PendingInc, s.Floor, uint64(s.Lease)} {
 		p = binary.BigEndian.AppendUint64(p, v)
 	}
+	p = putString(p, string(s.Owner))
+	p = putString(p, s.Cluster)
 	b := append([]byte(stateMagic), stateVersion)
 	b = binary.BigEndian.AppendUint32(b, uint32(len(p)))
 	b = append(b, p...)
@@ -111,6 +123,7 @@ func (s *VoterState) UnmarshalBinary(b []byte) error {
 	v.InSync = Mark{Known: flags&1 != 0, Current: flags&2 != 0, Term: rd.u64(), Scan: rd.u64()}
 	v.Gen, v.PendingGen, v.PendingInc, v.Floor = rd.u64(), rd.u64(), rd.u64(), rd.u64()
 	v.Lease = time.Duration(rd.u64())
+	v.Owner, v.Cluster = NodeID(rd.str()), rd.str()
 	if rd.bad || len(rd.b) != 0 || flags&^3 != 0 || v.Lease < 0 {
 		return ErrCorrupt
 	}

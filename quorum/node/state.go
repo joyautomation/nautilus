@@ -21,6 +21,10 @@ var ErrNoState = errors.New("quorum: no state file")
 // (quorum.ErrCorrupt): the caller treats it as no state.
 type State struct {
 	Path string
+	// Owner and Cluster are stamped on every write (VoterState.Owner,
+	// .Cluster), and CheckOwner compares a loaded file with them.
+	Owner   quorum.NodeID
+	Cluster string
 
 	// write writes b to f; tests replace it to crash part-way.
 	write func(f *os.File, b []byte) (int, error)
@@ -50,6 +54,7 @@ func (s *State) Load() (quorum.VoterState, error) {
 // (both the file's data and the rename), or an error, when the old state
 // still stands.
 func (s *State) Save(st quorum.VoterState) error {
+	st.Owner, st.Cluster = s.Owner, s.Cluster
 	b, err := st.MarshalBinary()
 	if err != nil {
 		return err
@@ -95,4 +100,23 @@ func writeFile(path string, b []byte, write func(*os.File, []byte) (int, error))
 		return err
 	}
 	return f.Close()
+}
+
+// ErrNotOwner: the state file was written by another member, or for
+// another pair. Starting over it would vote under a name, or for a pair,
+// its promises were never made as.
+var ErrNotOwner = errors.New("quorum: the state file belongs to another member or pair")
+
+// CheckOwner refuses st when a write stamped it with another owner or
+// cluster than s's. A file never written (no owner) passes.
+func (s *State) CheckOwner(st quorum.VoterState) error {
+	if mut("state_owner_unchecked") || (st.Owner == "" && st.Cluster == "") {
+		return nil
+	}
+	if st.Owner != s.Owner || st.Cluster != s.Cluster {
+		return fmt.Errorf("%w: %s was written by %q for cluster %s, and this is %q for cluster %s. "+
+			"NAUTILUS_NODE differs per box, and each box keeps its own state directory; a state file copied from another box must not be used",
+			ErrNotOwner, s.Path, st.Owner, st.Cluster, s.Owner, s.Cluster)
+	}
+	return nil
 }

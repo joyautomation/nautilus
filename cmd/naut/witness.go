@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -108,8 +107,7 @@ func witnessMain(ctx context.Context, args []string, getenv func(string) string,
 	go func() { w.Run(wctx); close(done) }()
 	// A vote is one small frame: a slow or idle client is cut off, and at
 	// most witnessMaxConns connections are served at once.
-	srv := &http.Server{Handler: h, ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 5 * time.Second,
-		WriteTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute, MaxHeaderBytes: 8 << 10}
+	srv := peerServer(h)
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve(node.LimitListener(ln, witnessMaxConns)) }()
 	fmt.Fprintf(stdout, "naut witness — peer port %s — state %s — lease %v — Ctrl+C to stop\n", ln.Addr(), *state, *lease)

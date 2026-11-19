@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
@@ -14,7 +15,7 @@ import (
 func TestQuorumStatusMapping(t *testing.T) {
 	got := quorumStatus(node.Status{Self: "a", Peer: "b", Leader: "b", LeaderAddr: "ctl-b:8080", Leading: false, Acquisitions: 3})
 	want := Status{Mode: "quorum", Pod: "a", Leader: "b", LeaderAddr: "ctl-b:8080", IsLeader: false, Transitions: 3}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("status %+v, want %+v", got, want)
 	}
 }

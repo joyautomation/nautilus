@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -367,4 +368,67 @@ func TestDeployBoxStatewriteClearsStaleTempFiles(t *testing.T) {
 	if _, err := os.Stat(fresh); err != nil {
 		t.Error("a fresh temp file (maybe a concurrent run's) was removed")
 	}
+}
+
+// A redundant pair member's voter state (quorum.state, design §6.2) lives
+// in the state directory beside retain.json, and no deploy step may lose
+// it, roll it back, or carry it in a backup. A lost file needs the peer or
+// an operator to re-commission; an OLD one put back by a restore would
+// unsay a promise the voter made, which is how two leaders get one term.
+// So: install, update, a failed update's rollback, rollback, backup,
+// restore and uninstall (without -purge) all leave it byte for byte, and a
+// backup holds only retain.json and release.
+func TestDeployBoxKeepsTheVoterState(t *testing.T) {
+	e := newBoxEnv(t)
+	voter := filepath.Join(e.state, "quorum.state")
+	const v = "voter state: promised 1042"
+	os.WriteFile(voter, []byte(v), 0o600)
+	check := func(step string) {
+		t.Helper()
+		if b, err := os.ReadFile(voter); err != nil || string(b) != v {
+			t.Fatalf("after %s: quorum.state %q, %v; want it untouched", step, b, err)
+		}
+	}
+	steps := []struct {
+		name string
+		run  func() (string, int)
+		code int
+	}{
+		{"install", func() (string, int) { return e.deploy("install", "one", e.good) }, 0},
+		{"update", func() (string, int) { return e.deploy("update", "two", e.good2) }, 0},
+		{"a failed update", func() (string, int) { return e.deploy("update", "bad", e.bad) }, 3},
+		{"rollback", func() (string, int) { return e.box("rollback") }, 0},
+	}
+	for _, s := range steps {
+		if out, code := s.run(); code != s.code {
+			t.Fatalf("%s: exit %d, want %d\n%s", s.name, code, s.code, out)
+		}
+		check(s.name)
+	}
+	os.WriteFile(filepath.Join(e.state, "retain.json"), []byte(`{"tags":{"SP":1}}`), 0o644)
+	c := exec.Command("sh", "-s", "--", "backup")
+	c.Env, c.Stdin = e.env, strings.NewReader(deployBoxSh)
+	tgz, err := c.Output()
+	if err != nil {
+		t.Fatalf("backup: %v", err)
+	}
+	check("backup")
+	l := exec.Command("tar", "-tzf", "-")
+	l.Stdin = bytes.NewReader(tgz)
+	names, err := l.Output()
+	if err != nil {
+		t.Fatalf("listing the backup: %v", err)
+	}
+	if got := strings.Fields(string(names)); len(got) != 2 || got[0] != "retain.json" || got[1] != "release" {
+		t.Errorf("the backup holds %q; want only retain.json and release (never the voter state)", got)
+	}
+	os.WriteFile(filepath.Join(e.root, "incoming", "restore.tgz"), tgz, 0o644)
+	if out, code := e.box("restore"); code != 0 {
+		t.Fatalf("restore: exit %d\n%s", code, out)
+	}
+	check("restore")
+	if out, code := e.box("uninstall"); code != 0 {
+		t.Fatalf("uninstall: exit %d\n%s", code, out)
+	}
+	check("uninstall")
 }

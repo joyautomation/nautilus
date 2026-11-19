@@ -51,6 +51,10 @@ type Status struct {
 	LeaderAddr  string `json:"-"` // host:port for standby proxying; json-excluded so pod IPs never reach a browser
 	IsLeader    bool   `json:"isLeader"`
 	Transitions int    `json:"transitions"`
+	// Warnings are standing conditions an operator must know about, shown
+	// by /api/cluster and the dashboard: a redundant pair's retained
+	// values not being replicated yet (#710), for one.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 type Elector struct {

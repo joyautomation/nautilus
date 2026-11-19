@@ -238,3 +238,56 @@ func TestGateClosedLeaseHolderDoesNotProxyToItself(t *testing.T) {
 		t.Fatalf("the request was forwarded to the replica's own address %d times", n)
 	}
 }
+
+// A standing warning of the redundancy (a pair's retained values not
+// replicated yet, #710) reaches /api/cluster, on the leader and on a
+// standby alike (/api/cluster is never proxied), and the dashboard shows
+// what it carries.
+func TestClusterEndpointCarriesWarnings(t *testing.T) {
+	const warn = "retained state not replicated: test"
+	for _, lead := range []bool{true, false} {
+		srv := New(newTestRuntime(t), Options{Cluster: fakeCluster{status: leader.Status{
+			Mode: "quorum", Pod: "a", Leader: "b", LeaderAddr: "127.0.0.1:1", IsLeader: lead, Warnings: []string{warn},
+		}}})
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/api/cluster", nil))
+		var st leader.Status
+		if err := json.Unmarshal(rec.Body.Bytes(), &st); err != nil {
+			t.Fatal(err)
+		}
+		if len(st.Warnings) != 1 || st.Warnings[0] != warn {
+			t.Errorf("leader %v: warnings %q, want %q", lead, st.Warnings, warn)
+		}
+	}
+	page := string(indexHTML)
+	for _, want := range []string{`id="cluster-warn"`, `fetch("/api/cluster")`, `st.warnings`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("the dashboard does not show the cluster's warnings: no %s", want)
+		}
+	}
+}
+
+// A redundant pair's standby that knows no leader refuses a write (503 no
+// leader) rather than taking it into a store that does not scan (#1028
+// review), and still answers reads; the Kubernetes mode is unchanged.
+func TestPairStandbyWithNoLeaderRefusesWrites(t *testing.T) {
+	for _, c := range []struct {
+		mode string
+		want int
+	}{{"quorum", http.StatusServiceUnavailable}, {"cluster", http.StatusNoContent}} {
+		srv := New(newTestRuntime(t), Options{Cluster: fakeCluster{status: leader.Status{Mode: c.mode, Pod: "a"}}})
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "http://localhost/api/tags", strings.NewReader(`{"name":"x","value":1}`)))
+		if c.mode == "quorum" && (rec.Code != c.want || !strings.Contains(rec.Body.String(), "no leader")) {
+			t.Errorf("%s: a write with no leader known = %d %s, want %d no leader", c.mode, rec.Code, rec.Body, c.want)
+		}
+		if c.mode == "cluster" && rec.Code == http.StatusServiceUnavailable {
+			t.Errorf("cluster mode refused a write with no leader known: %s", rec.Body)
+		}
+		rec = httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/api/meta", nil))
+		if rec.Code != http.StatusOK {
+			t.Errorf("%s: a read with no leader known = %d", c.mode, rec.Code)
+		}
+	}
+}

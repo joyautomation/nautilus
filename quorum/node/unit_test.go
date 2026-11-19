@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -374,4 +375,60 @@ func running(t *testing.T, run func(context.Context)) (stop func()) {
 	stop = func() { once.Do(func() { cancel(); <-done }) }
 	t.Cleanup(stop)
 	return stop
+}
+
+// A state file is bound to the member and the pair that wrote it (#1028
+// review): a controller refuses to start over one another member wrote
+// (NAUTILUS_NODE copied with an env file, the state kept) or one written
+// for another pair, and starts over its own. The witness refuses another
+// pair's file under a pair's name.
+func TestStateFileBoundToItsOwner(t *testing.T) {
+	clk := newFakeClock()
+	write := func(path string, owner quorum.NodeID, cluster string) {
+		st := &State{Path: path, Owner: owner, Cluster: cluster}
+		if err := st.Save(quorum.VoterState{Promised: 1002, GrantedTo: owner, Incarnation: 7, Gen: 1, Floor: 1000, Lease: 400 * time.Millisecond}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, c := range []struct {
+		name    string
+		owner   quorum.NodeID
+		cluster string
+		ok      bool
+	}{
+		{"its own", "a", testCluster, true},
+		{"the other member's", "b", testCluster, false},
+		{"another pair's", "a", NewClusterID(), false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			o := testOptions(t, "a", "b")
+			o.clock = clk.now
+			write(o.StatePath, c.owner, c.cluster)
+			e, err := New(o)
+			if c.ok {
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer e.Close()
+				if !e.Status().Commissioned {
+					t.Error("its own state was not loaded")
+				}
+				return
+			}
+			if !errors.Is(err, ErrNotOwner) {
+				t.Fatalf("started over %s state file: %v", c.name, err)
+			}
+			if _, err := os.Stat(o.StatePath); err != nil {
+				t.Errorf("the refused file was moved or removed: %v", err)
+			}
+		})
+	}
+	// The witness: another pair's file under this pair's name.
+	dir := t.TempDir()
+	write(filepath.Join(dir, testCluster+stateSuffix), WitnessID, NewClusterID())
+	w, stop := startWitness(t, WitnessOptions{Dir: dir, Lease: time.Second, clock: clk.now})
+	defer stop()
+	if _, err := w.pair(testCluster, "a,b"); !errors.Is(err, ErrNotOwner) {
+		t.Fatalf("the witness took another pair's state file: %v", err)
+	}
 }

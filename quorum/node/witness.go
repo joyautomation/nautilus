@@ -71,6 +71,8 @@ type witnessPair struct {
 	waiters map[waitKey]chan quorum.Reply
 	failing string
 	refused map[string]string // the last lease refusal reported per sender
+	dupSeen uint64            // the voter's Duplicates count last reported
+	dupAt   time.Time         // when it was last reported
 	log     *slog.Logger
 }
 
@@ -250,11 +252,16 @@ func (w *Witness) pair(name, members string) (*witnessPair, error) {
 	case err != nil:
 		return nil, err
 	}
-	file := &State{Path: filepath.Join(w.o.Dir, name+stateSuffix), write: w.o.write}
+	file := &State{Path: filepath.Join(w.o.Dir, name+stateSuffix), Owner: w.o.Self, Cluster: name, write: w.o.write}
 	st, err := file.Load()
 	if err != nil && !errors.Is(err, ErrNoState) {
 		// Unreadable since the start checked it: never redrawn quietly.
 		return nil, err
+	}
+	if err == nil {
+		if err := file.CheckOwner(st); err != nil {
+			return nil, err // another pair's file under this one's name
+		}
 	}
 	p := &witnessPair{name: name, members: members, waiters: map[waitKey]chan quorum.Reply{},
 		refused: map[string]string{}, log: w.log.With("cluster", name, "members", members)}
@@ -343,6 +350,13 @@ func (w *Witness) serveVote(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	persist, replies := p.v.Handle(now, req)
+	if n, who := p.v.Duplicates(); n != p.dupSeen {
+		p.dupSeen = n
+		if t := time.Now(); t.Sub(p.dupAt) >= dupEvery {
+			p.dupAt = t
+			p.log.Error("witness: " + duplicateMsg(who))
+		}
+	}
 	var ch chan quorum.Reply
 	if len(replies) == 0 && persist != nil {
 		ch = make(chan quorum.Reply, 1)
