@@ -147,4 +147,20 @@ func validName(what, name string) error {
 	return nil
 }
 
+// validTokenName is a service token's name: letters, digits and '_'
+// only, since it names the variable its secret comes from
+// (NAUTILUS_TOKEN_<NAME>), and a-b, a_b and a.b must not be three tokens
+// with one secret.
+func validTokenName(name string) error {
+	if name == "" {
+		return fmt.Errorf("auth: an empty service token name")
+	}
+	for _, r := range name {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_') {
+			return fmt.Errorf("auth: service token %q: use letters, digits and '_' (it names NAUTILUS_TOKEN_<NAME>)", name)
+		}
+	}
+	return nil
+}
+
 func lower(s string) string { return strings.ToLower(strings.TrimSpace(s)) }

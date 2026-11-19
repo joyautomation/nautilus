@@ -68,7 +68,20 @@ func TestLoadAuthBlock(t *testing.T) {
 func TestLoadAuthRefuses(t *testing.T) {
 	for _, c := range []struct{ block, want string }{
 		{"auth:\n  users:\n    jsmith: [{role: operator, area: [receiving]}]\n", "field area not found in a grant"},
-		{"auth:\n  users:\n    jsmith: [boss]\n", `nautilus.yaml: auth: user "jsmith": no role "boss"`},
+		{"auth:\n  users:\n    jsmith: [boss]\n", `nautilus.yaml: auth: user "jsmith": a grant's role is not a role`},
+		// F1: a key given twice, which the decoder would refuse and the
+		// last of which would otherwise win.
+		{"auth:\n  users:\n    jsmith: [{role: viewer, role: administrator}]\n", "role is given twice in a grant"},
+		{"auth:\n  areas:\n    receiving: {tags: [RCV_*]}\n  users:\n    jsmith: [{role: operator, areas: [receiving], areas: []}]\n", "areas is given twice in a grant"},
+		// F2: an empty or null areas covers nothing; it must not load as
+		// the whole controller.
+		{"auth:\n  users:\n    jsmith: [{role: operator, areas: []}]\n", "areas is empty"},
+		{"auth:\n  users:\n    jsmith: [{role: operator, areas: }]\n", "areas is empty"},
+		{"auth:\n  users:\n    jsmith: [{role: operator, areas: null}]\n", "areas is empty"},
+		{"auth:\n  users:\n    jsmith: [{areas: [x]}]\n", "a grant names no role"},
+		// F4, F5 through the manifest.
+		{"auth:\n  service-tokens:\n    pit-script: viewer\n", "use letters, digits and '_'"},
+		{"auth:\n  areas:\n    p: {tags: [PUMP_1.Speed]}\n", "names a member"},
 		{"auth:\n  areas:\n    r: {tags: []}\n", `area "r" names no tags`},
 		{"auth:\n  anonymous: operator\n", `use none or viewer`},
 		{"auth:\n  session: 12h\n", "field session not found"},

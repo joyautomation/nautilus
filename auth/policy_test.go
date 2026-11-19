@@ -140,25 +140,67 @@ func TestCompileRefuses(t *testing.T) {
 		c    Settings
 		want string
 	}{
-		{Settings{Anonymous: "operator"}, `anonymous: "operator": use none or viewer`},
-		{Settings{TokenRole: "admin"}, `token-role: no role "admin"`},
+		{Settings{Anonymous: "operator"}, `anonymous: use none or viewer`},
+		{Settings{TokenRole: "admin"}, `token-role is not a role: the roles are viewer, operator`},
 		{Settings{Areas: map[string][]string{"a": {}}}, `area "a" names no tags`},
 		{Settings{Areas: map[string][]string{"a": {"[x"}}}, `area "a": tag pattern "[x"`},
 		{Settings{Areas: map[string][]string{"bad name": {"X"}}}, `area "bad name"`},
 		{Settings{Roles: map[string]RoleDef{"operator": {Inherits: Viewer}}}, `role "operator" is built in`},
-		{Settings{Roles: map[string]RoleDef{"r": {Inherits: "nobody"}}}, `role "r" inherits "nobody", which is not a role`},
+		{Settings{Roles: map[string]RoleDef{"r": {Inherits: "nobody"}}}, `role "r" inherits something that is not a role`},
 		{Settings{Roles: map[string]RoleDef{"r": {}}}, `role "r" inherits nothing`},
 		{Settings{Roles: map[string]RoleDef{"r": {Inherits: Viewer, Allow: []string{"fly"}}}}, `role "r": no permission "fly"`},
 		{Settings{Roles: map[string]RoleDef{"a": {Inherits: "b"}, "b": {Inherits: "a"}}}, "inherit in a cycle"},
 		{Settings{Users: map[string][]Grant{"u": nil}}, `user "u" has no role`},
-		{Settings{Users: map[string][]Grant{"u": {{Role: "boss"}}}}, `user "u": no role "boss"`},
+		{Settings{Users: map[string][]Grant{"u": {{Role: "boss"}}}}, `user "u": a grant's role is not a role`},
 		{Settings{Users: map[string][]Grant{"u": {{Role: Operator, Areas: []string{"nowhere"}}}}}, `user "u": no area "nowhere"`},
-		{Settings{ServiceTokens: map[string]string{"h": "reader"}}, `service token "h": no role "reader"`},
+		{Settings{ServiceTokens: map[string]string{"h": "reader"}}, `service token "h": its role is not a role`},
+		// F2: an explicit empty areas list covers nothing; it must not
+		// load as the whole controller.
+		{Settings{Users: map[string][]Grant{"u": {{Role: Operator, Areas: []string{}}}}}, `areas: [] covers nothing`},
+		// F4: a token's name is its secret's variable's name.
+		{Settings{ServiceTokens: map[string]string{"pit-script": Viewer}}, `use letters, digits and '_'`},
+		{Settings{ServiceTokens: map[string]string{"a.b": Viewer}}, `use letters, digits and '_'`},
+		// F5: an area covers tags; a member pattern could never match.
+		{Settings{Areas: map[string][]string{"a": {"PUMP_1.Speed"}}}, `names a member`},
 		{Settings{Users: map[string][]Grant{"A": {{Role: Viewer}}, "a": {{Role: Viewer}}}}, "declared twice"},
 	} {
 		_, err := Compile(tc.c)
 		if err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("Compile(%+v) = %v, want %q", tc.c, err, tc.want)
+		}
+	}
+	// F6: a refused value is never echoed: it may be a secret pasted into
+	// the wrong field.
+	const secret = "s3cr3t-pasted-here"
+	for _, c := range []Settings{
+		{Anonymous: secret},
+		{TokenRole: secret},
+		{Roles: map[string]RoleDef{"r": {Inherits: secret}}},
+		{Users: map[string][]Grant{"u": {{Role: secret}}}},
+		{ServiceTokens: map[string]string{"h": secret}},
+	} {
+		if _, err := Compile(c); err == nil || strings.Contains(err.Error(), secret) {
+			t.Errorf("Compile(%+v) = %v: refused, without echoing the value", c, err)
+		}
+	}
+}
+
+// F3: Can decides the target once. Only All is every tag; a padded,
+// member-only, index-only or patterned target is refused, even under an
+// area whose pattern would match it.
+func TestCanNormalisesTheTarget(t *testing.T) {
+	p := mustCompile(t, Settings{
+		Areas: map[string][]string{"every": {"*"}},
+		Users: map[string][]Grant{"u": {{Role: Engineer, Areas: []string{"every"}}}},
+	})
+	for _, target := range []string{" *", "* ", "[0]", ".x", " ", "PUMP_*", "PUMP_?", "[ab]", All} {
+		if d := p.Can(User("u"), Force, target); d.Allowed {
+			t.Errorf("force %q under a '*' area was allowed", target)
+		}
+	}
+	for _, target := range []string{"PUMP_1", " PUMP_1 ", "pump_1.Speed", "PUMP_1[2]"} {
+		if d := p.Can(User("u"), Force, target); !d.Allowed {
+			t.Errorf("force %q: %s", target, d.Reason)
 		}
 	}
 }

@@ -260,6 +260,7 @@
                     },
                     "areas": {
                       "type": "array",
+                      "minItems": 1,
                       "items": {
                         "type": "string"
                       }
@@ -272,6 +273,9 @@
         },
         "service-tokens": {
           "type": "object",
+          "propertyNames": {
+            "pattern": "^[A-Za-z0-9_]+$"
+          },
           "description": "Named tokens for scripts and services, each with its role. A token's secret comes from NAUTILUS_TOKEN_<NAME>, never the manifest.",
           "additionalProperties": {
             "type": "string"

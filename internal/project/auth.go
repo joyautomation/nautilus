@@ -50,9 +50,13 @@ type AuthGrant struct {
 	Areas []string `yaml:"areas"`
 }
 
-// UnmarshalYAML takes a bare role name or a {role, areas} mapping, and
-// refuses any other key: a misspelt "area:" must not grant the whole
-// controller.
+// UnmarshalYAML takes a bare role name or a {role, areas} mapping. It
+// walks the node itself, so it refuses here what the decoder would: any
+// other key (a misspelt "area:" must not grant the whole controller) and
+// a key given twice (the last would win: {role: viewer, role:
+// administrator}). And an areas: that is empty or null covers nothing;
+// leaving areas out is the whole controller, so deleting someone's last
+// area must not widen them.
 func (g *AuthGrant) UnmarshalYAML(n *yaml.Node) error {
 	if n.Kind == yaml.ScalarNode {
 		g.Role = n.Value
@@ -61,19 +65,31 @@ func (g *AuthGrant) UnmarshalYAML(n *yaml.Node) error {
 	if n.Kind != yaml.MappingNode {
 		return fmt.Errorf("line %d: a grant is a role, or {role: …, areas: […]}", n.Line)
 	}
+	seen := map[string]bool{}
 	for i := 0; i+1 < len(n.Content); i += 2 {
-		switch k := n.Content[i]; k.Value {
+		k, v := n.Content[i], n.Content[i+1]
+		if seen[k.Value] {
+			return fmt.Errorf("line %d: %s is given twice in a grant", k.Line, k.Value)
+		}
+		seen[k.Value] = true
+		switch k.Value {
 		case "role":
-			if err := n.Content[i+1].Decode(&g.Role); err != nil {
+			if err := v.Decode(&g.Role); err != nil {
 				return err
 			}
 		case "areas":
-			if err := n.Content[i+1].Decode(&g.Areas); err != nil {
+			if v.Tag == "!!null" || v.Kind == yaml.SequenceNode && len(v.Content) == 0 {
+				return fmt.Errorf("line %d: areas is empty, which covers nothing; leave areas out for the whole controller", k.Line)
+			}
+			if err := v.Decode(&g.Areas); err != nil {
 				return err
 			}
 		default:
 			return fmt.Errorf("line %d: field %s not found in a grant (role, areas)", k.Line, k.Value)
 		}
+	}
+	if !seen["role"] {
+		return fmt.Errorf("line %d: a grant names no role", n.Line)
 	}
 	return nil
 }

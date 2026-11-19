@@ -81,6 +81,12 @@ func Compile(c Settings) (*Policy, error) {
 			if _, err := path.Match(pat, ""); err != nil {
 				return nil, fmt.Errorf("auth: area %q: tag pattern %q: %v", name, pat, err)
 			}
+			// A target is matched by its tag, never a member: a pattern
+			// with a '.' could never match, and must not load as one that
+			// silently grants nothing.
+			if strings.ContainsAny(pat, ".") {
+				return nil, fmt.Errorf("auth: area %q: tag pattern %q names a member; an area covers whole tags", name, pat)
+			}
 			p.areas[key] = append(p.areas[key], pat)
 		}
 	}
@@ -96,7 +102,7 @@ func Compile(c Settings) (*Policy, error) {
 	default:
 		// Never more than viewing: a role that writes would need the
 		// cross-site defences the credential gives (#811, #815).
-		return nil, fmt.Errorf("auth: anonymous: %q: use none or viewer", c.Anonymous)
+		return nil, fmt.Errorf("auth: anonymous: use none or viewer")
 	}
 
 	tokenRole := lower(c.TokenRole)
@@ -104,20 +110,20 @@ func Compile(c Settings) (*Policy, error) {
 		tokenRole = Administrator
 	}
 	if p.roles[tokenRole] == nil {
-		return nil, fmt.Errorf("auth: token-role: no role %q", c.TokenRole)
+		return nil, fmt.Errorf("auth: token-role is not a role: %s", p.roleList())
 	}
 	p.token = []Grant{{Role: tokenRole}}
 
 	for name, role := range c.ServiceTokens {
 		key := lower(name)
-		if err := validName("service token", key); err != nil {
+		if err := validTokenName(key); err != nil {
 			return nil, err
 		}
 		if _, dup := p.services[key]; dup {
 			return nil, fmt.Errorf("auth: service token %q is declared twice", name)
 		}
 		if p.roles[lower(role)] == nil {
-			return nil, fmt.Errorf("auth: service token %q: no role %q", name, role)
+			return nil, fmt.Errorf("auth: service token %q: its role is not a role: %s", name, p.roleList())
 		}
 		p.services[key] = []Grant{{Role: lower(role)}}
 	}
@@ -137,7 +143,12 @@ func Compile(c Settings) (*Policy, error) {
 		for _, g := range grants {
 			role := lower(g.Role)
 			if p.roles[role] == nil {
-				return nil, fmt.Errorf("auth: user %q: no role %q", name, g.Role)
+				return nil, fmt.Errorf("auth: user %q: a grant's role is not a role: %s", name, p.roleList())
+			}
+			if g.Areas != nil && len(g.Areas) == 0 {
+				// No areas is the whole controller; an empty list must not
+				// be, or deleting someone's last area would widen them.
+				return nil, fmt.Errorf("auth: user %q: a grant with areas: [] covers nothing; leave areas out for the whole controller", name)
 			}
 			ng := Grant{Role: role}
 			for _, a := range g.Areas {
@@ -183,7 +194,7 @@ func (p *Policy) compileRoles(defs map[string]RoleDef) error {
 		}
 		d, ok := byName[name]
 		if !ok {
-			return nil, fmt.Errorf("auth: role %q inherits %q, which is not a role", seen[len(seen)-1], name)
+			return nil, fmt.Errorf("auth: role %q inherits something that is not a role: %s", seen[len(seen)-1], p.roleList())
 		}
 		for _, s := range seen {
 			if s == name {
@@ -273,6 +284,21 @@ func (p *Policy) Can(pr Principal, perm, target string) Decision {
 	if len(gs) == 0 {
 		return Decision{Reason: fmt.Sprintf("%s has no role here", pr)}
 	}
+	// The target as areas see it, decided once: All exactly, or a tag
+	// (the name before any member or index, ignoring case), never empty
+	// and never a pattern.
+	raw := target
+	if target != All && areaScoped[perm] {
+		tag := tagOf(target)
+		switch {
+		case tag == "":
+			target = ""
+		case strings.ContainsAny(tag, "*?[]\\"):
+			return Decision{Reason: fmt.Sprintf("%s may not %s %q: a target names a tag, not a pattern", pr, perm, target)}
+		default:
+			target = tag
+		}
+	}
 	held := false
 	var outside []string
 	for _, g := range gs {
@@ -302,7 +328,7 @@ func (p *Policy) Can(pr Principal, perm, target string) Decision {
 	case target == All:
 		return Decision{Reason: fmt.Sprintf("%s may %s only in %s, not every tag", pr, perm, strings.Join(dedupe(outside), ", "))}
 	}
-	return Decision{Reason: fmt.Sprintf("%s may not %s %s: it is outside %s", pr, perm, target, strings.Join(dedupe(outside), ", "))}
+	return Decision{Reason: fmt.Sprintf("%s may not %s %s: it is outside %s", pr, perm, raw, strings.Join(dedupe(outside), ", "))}
 }
 
 // Holds reports whether pr holds perm anywhere: on the whole controller
@@ -317,12 +343,35 @@ func (p *Policy) Holds(pr Principal, perm string) bool {
 	return false
 }
 
-// inArea reports whether target's tag matches one of area's patterns.
-func (p *Policy) inArea(area, target string) bool {
+// tagOf is the tag a target names: lowercased, without spaces, member or
+// index ("Pump_1.Speed" → "pump_1").
+func tagOf(target string) string {
 	tag := lower(target)
 	if i := strings.IndexAny(tag, ".["); i >= 0 {
 		tag = tag[:i]
 	}
+	return strings.TrimSpace(tag)
+}
+
+// roleList names the roles, for an error that must not echo the value it
+// refuses (a secret pasted into the wrong field).
+func (p *Policy) roleList() string {
+	var names []string
+	for _, b := range builtins {
+		names = append(names, b.name)
+	}
+	var custom []string
+	for n := range p.roles {
+		if builtinRoles[n] == nil {
+			custom = append(custom, n)
+		}
+	}
+	sort.Strings(custom)
+	return "the roles are " + strings.Join(append(names, custom...), ", ")
+}
+
+// inArea reports whether tag (from tagOf) matches one of area's patterns.
+func (p *Policy) inArea(area, tag string) bool {
 	for _, pat := range p.areas[area] {
 		if ok, _ := path.Match(pat, tag); ok {
 			return true
