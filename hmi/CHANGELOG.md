@@ -4,6 +4,12 @@
 
 ### Added
 
+- **`SubstitutesPanel`, `SubstituteClient`** (#707): list, start, stop and
+  acknowledge substitute values over `/api/substitutes`. The client sends a
+  fresh `requestId` per action and reuses it on retry, treats a 503 "outcome
+  unknown" as neither success nor failure (it re-reads and says the change
+  may still take effect), never retries a 409 blind, and shows a
+  `kept: false` warning. Needs a mounted `<ConfirmDialog/>`.
 - **`DriverStatus.differs`** (#706): a driver that runs an I/O configuration
   applied live, not the manifest's, carries `differs`, and `DriverStatusCard`
   badges it.
@@ -13,7 +19,8 @@
 - **`Quality` gains `'substituted'`** (#707): a value an operator put in
   place of a bad sensor's, which the logic runs on. A new `ValueStatus`
   `substituted` draws it in `--q-substituted` with the badge `SUBST`,
-  degraded and not commandable; precedence is notPublished > bad >
+  degraded and, unlike stale and bad, still commandable (the badge is the
+  cue); precedence is notPublished > bad >
   substituted > simulated > stale > good. `StateChip` and `EquipmentCard`
   (a dotted border) know it. A `switch` over `Quality` in your own code
   needs the new case.

@@ -279,6 +279,39 @@ Each renders the refusal on the control rather than swallowing it, and each take
 `readonlyReason` (or `disabled` + `disabledReason`) for a point the runtime will not accept — a
 faceplate that silently fails to command is worse than one that says it cannot.
 
+## Substitute values
+
+A substituted value is one an operator holds in place of a sensor's, for a
+bounded time, while the logic keeps running on it (`quality: 'substituted'`,
+the `SUBST` badge; it stays commandable, because the equipment still runs).
+`SubstitutesPanel` is the whole screen for it: what is held, the live value
+and its quality beside it, who holds it, the time left, Stop, an
+acknowledge bar for rules with `ack-on-start`, and a start form built from the
+manifest's `substitutes:` rules (the operator-value field only where a rule
+allows one, seconds capped at the rule's `max`).
+
+```svelte
+<ConfirmDialog />
+<SubstitutesPanel client={new SubstituteClient({ token })} />
+```
+
+The panel is thin on purpose: `SubstituteClient` carries the contract, and
+you can use it without the panel.
+
+- Every user action gets **one `requestId`**, made before the first send and
+  reused on every retry (`start(name, value, seconds, requestId)`), so a lost
+  answer can never start a second substitute.
+- **503 "outcome unknown"** (the `X-Nautilus-Outcome: unknown` header) is
+  `kind: 'unknown'`, `maybeApplied: true`: it is neither done nor failed. The
+  panel re-reads and says it may still take effect; "Retry same request"
+  resends under the same id. A dropped connection is treated the same.
+- **409** (`conflict`) means another change got there first (or the id was
+  reused for a different request): re-read and decide again, never retry blind.
+- **`kept: false`** on a success means it took effect but was not saved (the
+  `warning` says what that costs, e.g. it may still be active on the next
+  leader): it is shown, not swallowed.
+- 503 "no leader" and 503 "not saved" are certain: nothing was started.
+
 ## Faceplates, cards and confirmation
 
 Three pieces that go together: one faceplate layout for every equipment family, one card for what a

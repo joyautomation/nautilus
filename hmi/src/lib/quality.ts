@@ -82,7 +82,9 @@ export const STATUS_META: Record<ValueStatus, StatusMeta> = {
 		description: 'Substituted: an operator put this value in place of the sensor\'s; the logic runs on it, and it is not the plant\'s reading',
 		token: 'var(--q-substituted)',
 		degraded: true,
-		writable: false
+		// Commands stay enabled: the SUBST badge is the cue, and an operator
+		// who has substituted a sensor still runs the equipment (#707).
+		writable: true
 	},
 	simulated: {
 		label: 'Sim',

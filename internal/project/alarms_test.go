@@ -338,3 +338,42 @@ alarms:
 		t.Errorf("want a capture-group error, got %v", err)
 	}
 }
+
+// The runtime owns the substitute companion BOOLs, so an alarm on one is not
+// "dead" (#707) — but only in a project that has substitutes:, and only for
+// a substitutable input's own <tag>__Substituted.
+func TestCheckAlarmsKnowsSubstituteCompanions(t *testing.T) {
+	withSubs := `
+tasks:
+  - program: program.st
+tags:
+  - { name: Level, role: input, type: REAL, init: 0.0 }
+  - { name: Other, role: input, type: REAL, init: 0.0 }
+substitutes:
+  rules:
+    - { match: Level, substitute: 50.0 }
+alarms:
+  defs:
+    - { id: exp, tag: __Substitute_Expired }
+    - { id: flt, tag: __Substitute_Fault }
+    - { id: una, tag: __SubstitutesUnacked }
+    - { id: lvl, tag: Level__Substituted }
+    - { id: oth, tag: Other__Substituted }
+`
+	proj, rt := loadAlarms(t, alarmFS(withSubs, nil))
+	_, errs, warns, err := proj.CheckAlarms(rt)
+	if err != nil || len(errs) != 0 {
+		t.Fatalf("errs %v err %v", errs, err)
+	}
+	// Only Other__Substituted (Other is not substitutable) is unknown.
+	if len(warns) != 1 || !strings.Contains(warns[0], "Other__Substituted") {
+		t.Fatalf("want one warning, for Other__Substituted: %v", warns)
+	}
+
+	noSubs := strings.Replace(withSubs, "substitutes:\n  rules:\n    - { match: Level, substitute: 50.0 }\n", "", 1)
+	proj, rt = loadAlarms(t, alarmFS(noSubs, nil))
+	_, _, warns, _ = proj.CheckAlarms(rt)
+	if len(warns) != 5 {
+		t.Fatalf("without substitutes: every companion is an undeclared tag: %v", warns)
+	}
+}

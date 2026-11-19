@@ -55,9 +55,11 @@ describe('valueStatus — substituted, and a token this kit does not know (#707)
 		expect(isWritable({ quality: 'excellent' as never })).toBe(false);
 	});
 
-	it('a substituted value is degraded and not commandable', () => {
+	it('a substituted value is degraded and still commandable (James, #707)', () => {
 		expect(STATUS_META.substituted.degraded).toBe(true);
-		expect(isWritable({ quality: 'substituted' })).toBe(false);
+		expect(isWritable({ quality: 'substituted' })).toBe(true);
+		expect(isWritable({ quality: 'stale' })).toBe(false);
+		expect(isWritable({ quality: 'bad' })).toBe(false);
 	});
 });
 

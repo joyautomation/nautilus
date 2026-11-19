@@ -268,3 +268,25 @@ func serverSubstitutes(specs []SubstituteSpec) []server.SubstituteRule {
 	}
 	return out
 }
+
+// substituteCompanion reports whether name is one of the BOOL tags the
+// runtime owns for a project with a `substitutes:` block (#707): the three
+// resource tags, or <input>__Substituted for a substitutable input. An alarm
+// may watch them though the manifest declares no tag of that name.
+func (p *Project) substituteCompanion(name string) bool {
+	if len(p.substitutes) == 0 {
+		return false
+	}
+	switch strings.ToLower(name) {
+	case strings.ToLower(runtime.SubstitutesUnackedTag), strings.ToLower(runtime.SubstituteExpiredTag), strings.ToLower(runtime.SubstituteFaultTag):
+		return true
+	}
+	if root, ok := strings.CutSuffix(name, runtime.SubstitutedSuffix); ok {
+		for _, r := range substitutableRoots(p.substitutes) {
+			if strings.EqualFold(r, root) {
+				return true
+			}
+		}
+	}
+	return false
+}

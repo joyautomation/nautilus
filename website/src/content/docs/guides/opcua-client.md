@@ -140,7 +140,9 @@ the smaller size for later sessions.
   one, `opcua-client-2`, gets `opcua_client_2__Online`).
 - A node the server refuses (unknown id, wrong namespace, a dead device
   behind a gateway, an array) is **Bad** while the rest of the class keeps
-  delivering. `Uncertain` statuses count as not good, on purpose.
+  delivering. `Uncertain` statuses count as not good, on purpose, with one
+  exception: `Uncertain_SubstituteValue` (a value the server itself holds in
+  place of the real one) keeps its value and reads **Substituted**.
 - A transport failure reconnects with backoff (1 s doubling to 60 s,
   reset once the server answers a read). Values hold, their quality goes
   **Stale**, and `__Online` goes false. After a reconnect each value stays

@@ -818,3 +818,29 @@ func (b *lockedBuffer) String() string {
 	defer b.mu.Unlock()
 	return b.buf.String()
 }
+
+// Uncertain_SubstituteValue keeps its value and reports Substituted; any other
+// Uncertain code is still Bad; a later Good read clears it (#707).
+func TestSubstituteValueStatus(t *testing.T) {
+	d := &Driver{snapshot: map[string]any{}, online: true}
+	b := &binding{TagBinding: TagBinding{Name: "Speed"}}
+	d.classes = []*scanClass{{bindings: []*binding{b}}}
+	dv := func(sc ua.StatusCode, v float64) *ua.DataValue {
+		return &ua.DataValue{EncodingMask: ua.DataValueValue | ua.DataValueStatusCode, Status: sc, Value: ua.MustVariant(v)}
+	}
+	q := func() nio.Quality { return d.Quality()["Speed"] }
+
+	d.apply(b, dv(0x40910000, 41.5))
+	if q() != nio.Substituted || d.snapshot["Speed"] != 41.5 {
+		t.Errorf("substitute value: quality %v value %v", q(), d.snapshot["Speed"])
+	}
+	d.apply(b, dv(0x40900000, 1)) // Uncertain_LastUsableValue
+	if q() != nio.Bad {
+		t.Errorf("other uncertain: quality %v, want bad", q())
+	}
+	d.apply(b, dv(0x40910000, 42))
+	d.apply(b, dv(0, 43))
+	if _, ok := d.Quality()["Speed"]; ok || d.snapshot["Speed"] != 43.0 {
+		t.Errorf("good again: %v %v", d.Quality(), d.snapshot["Speed"])
+	}
+}

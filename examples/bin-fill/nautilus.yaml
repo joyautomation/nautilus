@@ -23,3 +23,17 @@ tags:
   - { name: Plugged,    role: input,    type: BOOL, init: false, desc: "Conveyor discharge plug switch" }
   - { name: Step,       role: state,    type: INT,  init: 0, desc: "0 idle, 1 conveyor starting, 2 filling, 3 purging, 4 done, 9 fault" }
   - { name: GateOpen,   role: state,    type: BOOL, init: false, desc: "Gate open limit made" }
+
+# A held-in-place sensor reading (#707): a supervisor may hold the plug switch
+# at "not plugged" for up to half an hour while it is replaced, and must
+# acknowledge it before the logic treats it as a deliberate hold. The runtime
+# owns the companion tags; these alarms are the part that is yours to
+# declare: a substitute that ran out, and a retain/clock/takeover problem.
+substitutes:
+  rules:
+    - { match: Plugged, substitute: false, max: 30m, ack-on-start: true }
+alarms:
+  defaults: { ack-required: true, auto-clear: true }
+  defs:
+    - { id: SubstituteExpired, tag: __Substitute_Expired, name: "A substituted value expired and went back to its sensor", priority: high, class: process }
+    - { id: SubstituteFault, tag: __Substitute_Fault, name: "A substitute could not be kept (clock, retain or takeover)", priority: high, class: process }

@@ -266,7 +266,7 @@ func TestResolveTypeRules(t *testing.T) {
 }
 
 // The device roll-up: a substituted member makes the device Substituted
-// (below Bad, above Stale), and a quality this build does not know counts as
+// (below Bad and Stale), and a quality this build does not know counts as
 // Bad, never as Good (#707).
 func TestRollupSubstitutedAndUnknown(t *testing.T) {
 	asm := []*assembler{{dev: "P1", members: []string{"a", "b"}}}
@@ -288,7 +288,7 @@ func TestRollupSubstitutedAndUnknown(t *testing.T) {
 		good bool
 	}{
 		{map[string]nio.Quality{"a": nio.Substituted}, nio.Substituted, false},
-		{map[string]nio.Quality{"a": nio.Substituted, "b": nio.Stale}, nio.Substituted, false},
+		{map[string]nio.Quality{"a": nio.Substituted, "b": nio.Stale}, nio.Stale, false},
 		{map[string]nio.Quality{"a": nio.Substituted, "b": nio.Bad}, nio.Bad, false},
 		{map[string]nio.Quality{"a": nio.Quality(len(nio.AllQualities()))}, nio.Bad, false},
 		{map[string]nio.Quality{"a": nio.Good}, nio.Good, true},
