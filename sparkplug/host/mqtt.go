@@ -117,9 +117,20 @@ func (d *Driver) isLeader() bool {
 }
 
 // commandsAllowed reports whether tag commands (NCMD/DCMD) may leave the
-// driver now: mayPublish, and a plain write gate (#943) open.
+// driver now: mayPublish, on a session opened as the primary host, and a
+// plain write gate (#943) open. A standby that has just been promoted is
+// still on its standby session until serve reconnects it; a command sent
+// there could be lost with the session as it is torn down, yet be marked
+// written. Its commands wait for the primary session's connect, which
+// kicks the writer.
 func (d *Driver) commandsAllowed() bool {
 	if !d.mayPublish() {
+		return false
+	}
+	d.mu.Lock()
+	primarySession := d.sessionPrimary
+	d.mu.Unlock()
+	if !primarySession {
 		return false
 	}
 	d.gateMu.Lock()
