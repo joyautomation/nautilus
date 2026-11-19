@@ -2,6 +2,7 @@ package oplog
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -234,5 +235,19 @@ func TestFollowerCatchUpReplacesAStaleEntry(t *testing.T) {
 	}
 	if got := sw.appliedIDs(2); len(got) != 2 || got[0] != "C1" || got[1] != "C2" {
 		t.Fatalf("W applied %v after CatchUp; want C1, C2", got)
+	}
+}
+
+// A leader whose catch-up hears a newer term from a peer is no longer the
+// leader: SyncLeader refuses instead of syncing an old term.
+func TestSyncLeaderRefusesWhenAPeerIsAhead(t *testing.T) {
+	sw := switchableThree(t)
+	defer sw.close()
+	storeOnly(t, sw.nodes[1], Entry{Seq: 1, Term: 2, Kind: KindAck, IDs: []string{"NEWER"}, By: "op"})
+	if err := sw.nodes[0].SyncLeader(context.Background()); !errors.Is(err, ErrReadOnly) {
+		t.Fatalf("SyncLeader at term 1 with a peer at term 2: %v; want ErrReadOnly", err)
+	}
+	if got := sw.appliedIDs(0); len(got) != 0 {
+		t.Fatalf("A applied %v", got)
 	}
 }

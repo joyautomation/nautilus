@@ -16,10 +16,16 @@
 // applies it, and answers the client. Followers store what the leader
 // sends and apply only up to the commit index the leader advertises, so
 // no instance applies an entry a majority does not hold. A write that
-// misses the majority is removed from the leader's log and the client is
-// told no; a follower that stored it replaces it when the leader reuses
-// the number. A peer that was away asks the leader for everything after
-// its last entry. Entries carry the leader's term; a stale leader's
+// misses the majority is NOT CONFIRMED (ErrUnconfirmed): it stays in the
+// leader's log and on any follower that stored it, and it may still be
+// committed and applied (by this leader's next write, or by the next
+// leader, which takes the most up-to-date log), so its outcome is unknown,
+// never "no"; a client re-reads the state. A number is never reused for a
+// different entry in the same term. Replication carries the leader's
+// previous entry (Raft's consistency check), so a follower takes entries
+// only on top of a log equal to the leader's, and a stale entry it holds is
+// replaced. A peer that was away asks the leader for everything after its
+// commit index. Entries carry the leader's term; a stale leader's
 // replication is refused.
 //
 // Each instance keeps the log in memory and appends it to a local file
@@ -198,6 +204,12 @@ type Status struct {
 
 // ErrReadOnly says this instance cannot commit a write right now.
 var ErrReadOnly = errors.New("oplog: read-only: no quorum reachable")
+
+// ErrUnconfirmed says a write was stored by the leader but not confirmed
+// by a majority: it may still be committed and applied later, so the
+// write's outcome is unknown, not refused. It always comes wrapped with
+// ErrReadOnly (errors.Is matches both).
+var ErrUnconfirmed = errors.New("oplog: write not confirmed: it may still be applied")
 
 // New opens the node, replaying the file into Apply up to its commit mark.
 func New(o Options) (*Node, error) {
@@ -540,18 +552,6 @@ func (n *Node) apply(e Entry) {
 	}
 }
 
-// truncateLocked drops the uncommitted suffix from seq on. Caller holds mu.
-func (n *Node) truncateLocked(seq uint64) {
-	i := sort.Search(len(n.entries), func(i int) bool { return n.entries[i].Seq >= seq })
-	if i >= len(n.entries) {
-		return
-	}
-	n.entries = n.entries[:i:i]
-	if err := n.rewrite(); err != nil {
-		n.log.Warn("oplog: truncate", "error", err)
-	}
-}
-
 // ── the wire ──
 
 type replicateReq struct {
@@ -666,6 +666,10 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 			errs = append(errs, p+": "+err.Error())
 			continue
 		}
+		if got.Term > term {
+			// A peer has seen a newer term: this leadership is over.
+			return fmt.Errorf("%w: a peer is at term %d, this leader at %d", ErrReadOnly, got.Term, term)
+		}
 		answered++
 		commit = max(commit, got.Commit)
 		if lastTerm(got) > lastTerm(best) || (lastTerm(got) == lastTerm(best) && len(got.Entries) > len(best.Entries)) {
@@ -699,8 +703,17 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 // leader died before advertising the commit), appends and commits a
 // KindNoop of its own term, which commits everything before it.
 //
-// Nil on a standalone node and once this term is synced. ErrReadOnly when
-// this instance is not the leader, or a majority cannot be reached.
+// Nil on a standalone node and once this term is synced. Errors:
+//   - ErrReadOnly: this instance is not the leader, a majority did not
+//     answer, or a peer has seen a newer term (this leadership is over);
+//   - ErrReadOnly wrapping ErrUnconfirmed: the noop missed its majority
+//     (the entries before it are still not known committed);
+//   - a conflict: the most up-to-date log differs from this one at a seq
+//     this instance had committed, which means the logs diverged and
+//     needs a person;
+//   - the log file's write error.
+//
+// On any error the term stays unsynced, and the next call tries again.
 func (n *Node) SyncLeader(ctx context.Context) error {
 	if n.standalone() {
 		return nil
@@ -725,7 +738,7 @@ func (n *Node) SyncLeader(ctx context.Context) error {
 
 // sequence is the leader's path, one proposal at a time: number, store,
 // replicate to a majority, commit, apply. A proposal that misses the
-// majority is removed again and the client is told no.
+// majority stays in the log, unconfirmed (see ErrUnconfirmed).
 func (n *Node) sequence(ctx context.Context, e Entry) (Entry, error) {
 	n.seqMu.Lock()
 	defer n.seqMu.Unlock()
@@ -775,11 +788,15 @@ func (n *Node) sequenceLocked(ctx context.Context, e Entry) (Entry, error) {
 		stored++
 	}
 	if stored < n.majority() {
+		// Kept, not truncated: a follower whose reply was lost may hold
+		// it, and the number reused for another entry of this term would
+		// pass that follower's previous-entry check and leave it applying
+		// a different entry at the same seq. The next write (or leader)
+		// carries it to a majority, or a newer term's leader replaces it.
 		n.mu.Lock()
-		n.truncateLocked(e.Seq)
 		n.syncedTerm = 0 // a peer may know more than we do: catch up before the next write
 		n.mu.Unlock()
-		return Entry{}, fmt.Errorf("%w: %d of %d stored (%s)", ErrReadOnly, stored, len(n.o.Peers), strings.Join(errs, "; "))
+		return Entry{}, fmt.Errorf("%w: %w: %d of %d stored (%s)", ErrReadOnly, ErrUnconfirmed, stored, len(n.o.Peers), strings.Join(errs, "; "))
 	}
 	n.mu.Lock()
 	n.commitTo(e.Seq)
