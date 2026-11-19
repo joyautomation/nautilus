@@ -330,6 +330,21 @@ func (c *cluster) leader() quorum.NodeID {
 	return ""
 }
 
+// settledLeader waits for a leader whose lease the witness backs too.
+// Right after commissioning the witness may still be in its restart wait,
+// so the first lease rests on the two controllers alone: a test that cuts
+// A–B or replaces the standby at that moment takes a majority away (a
+// lapse the protocol allows), not the case it means to test.
+func (c *cluster) settledLeader(d time.Duration) quorum.NodeID {
+	c.t.Helper()
+	who := c.waitLeader(d)
+	c.waitFor("the witness to back the leader", d, func() bool {
+		ps := c.wit.w.Pairs()
+		return len(ps) == 1 && ps[0].GrantedTo == string(who) && c.leader() == who
+	})
+	return who
+}
+
 func (c *cluster) waitLeader(d time.Duration) quorum.NodeID {
 	c.t.Helper()
 	var who quorum.NodeID
@@ -393,7 +408,7 @@ func TestLoopbackNewPairCommissionsAndElects(t *testing.T) {
 	c := newCluster(t)
 	c.startAll()
 	c.commission()
-	who := c.waitLeader(leases(20))
+	who := c.settledLeader(leases(20))
 	c.steady(who, 8)
 	c.waitFor("the standby to see the leader", leases(4), func() bool {
 		s := c.status(c.other(who))
@@ -414,7 +429,7 @@ func TestLoopbackLeaderDiesStandbyTakesOver(t *testing.T) {
 	c := newCluster(t)
 	c.startAll()
 	c.commission()
-	old := c.waitLeader(leases(20))
+	old := c.settledLeader(leases(20))
 	term := c.elector(old).Term()
 	c.kill(old)
 	next := c.waitLeader(leases(20))
@@ -436,7 +451,7 @@ func TestLoopbackLeaderIsolated(t *testing.T) {
 	c := newCluster(t)
 	c.startAll()
 	c.commission()
-	old := c.waitLeader(leases(20))
+	old := c.settledLeader(leases(20))
 	c.isolate(old, true)
 	c.waitFor("the isolated leader's gate to close", leases(2), func() bool { return !c.elector(old).IsLeader() })
 	next := c.waitLeader(leases(20))
@@ -455,7 +470,7 @@ func TestLoopbackLeaderDeaf(t *testing.T) {
 	c := newCluster(t)
 	c.startAll()
 	c.commission()
-	old := c.waitLeader(leases(20))
+	old := c.settledLeader(leases(20))
 	term := c.elector(old).Term()
 	c.mu.Lock()
 	for _, o := range []quorum.NodeID{c.other(old), WitnessID} {
@@ -477,7 +492,7 @@ func TestLoopbackPeerLinkCut(t *testing.T) {
 	c := newCluster(t)
 	c.startAll()
 	c.commission()
-	old := c.waitLeader(leases(20))
+	old := c.settledLeader(leases(20))
 	c.mu.Lock()
 	c.cut[[2]quorum.NodeID{"a", "b"}] = true
 	c.cut[[2]quorum.NodeID{"b", "a"}] = true
@@ -496,7 +511,7 @@ func TestLoopbackLeaderMute(t *testing.T) {
 	c := newCluster(t)
 	c.startAll()
 	c.commission()
-	old := c.waitLeader(leases(20))
+	old := c.settledLeader(leases(20))
 	term := c.elector(old).Term()
 	c.mu.Lock()
 	for _, o := range []quorum.NodeID{c.other(old), WitnessID} {
@@ -519,7 +534,7 @@ func TestLoopbackWitnessRestartAndRebuild(t *testing.T) {
 	c := newCluster(t)
 	c.startAll()
 	c.commission()
-	who := c.waitLeader(leases(20))
+	who := c.settledLeader(leases(20))
 	inc := c.status("a").Incarnation
 	c.stopWitness()
 	c.startWitness()
@@ -552,7 +567,7 @@ func TestLoopbackUnhealthyLeaderClosesItsGate(t *testing.T) {
 	c := newCluster(t)
 	c.startAll()
 	c.commission()
-	old := c.waitLeader(leases(20))
+	old := c.settledLeader(leases(20))
 	c.steady(old, 2)
 	c.ctl[old].sick.Store(true)
 	start := time.Now()
@@ -573,7 +588,7 @@ func TestLoopbackReleaseClosesTheGate(t *testing.T) {
 	c := newCluster(t)
 	c.startAll()
 	c.commission()
-	old := c.waitLeader(leases(20))
+	old := c.settledLeader(leases(20))
 	c.elector(old).Release()
 	if c.elector(old).IsLeader() {
 		t.Fatal("still leading after Release")
@@ -591,7 +606,7 @@ func TestLoopbackWitnessDownLeaderHolds(t *testing.T) {
 	c := newCluster(t)
 	c.startAll()
 	c.commission()
-	who := c.waitLeader(leases(20))
+	who := c.settledLeader(leases(20))
 	c.steady(who, 2)
 	c.stopWitness()
 	c.steady(who, 10)
@@ -605,13 +620,7 @@ func TestLoopbackStandbyRestarts(t *testing.T) {
 	c := newCluster(t)
 	c.startAll()
 	c.commission()
-	who := c.waitLeader(leases(20))
-	// Settle first: right after commissioning the witness may still be in
-	// its restart wait, so the leader rests on {itself, standby}, and a
-	// standby restarted then campaigns at once (it has seen no leader in
-	// this boot) and takes the witness's first grant, so the leader loses
-	// its lease (liveness only; reported on #1021).
-	c.steady(who, 3)
+	who := c.settledLeader(leases(20))
 	sb := c.other(who)
 	inc, gen := c.status(sb).Incarnation, c.status(sb).Gen
 	c.kill(sb)
@@ -640,7 +649,7 @@ func TestLoopbackWrongPeerTokenRefused(t *testing.T) {
 	c := newCluster(t)
 	c.startAll()
 	c.commission()
-	who := c.waitLeader(leases(20))
+	who := c.settledLeader(leases(20))
 	sb := c.other(who)
 	c.kill(sb)
 	c.mu.Lock()
