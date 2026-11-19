@@ -243,6 +243,10 @@ func (r *Runtime) takeover() {
 			r.retainLoadFailed(err)
 		}
 	}
+	// A substitute's remainder is computed once, from its wall-clock
+	// until: the leadership that timed it may have been another replica's,
+	// or this one's before a spell as standby (substitute_expiry.go).
+	r.retimeSubstitutes()
 	r.prog.ResetFrame()
 	for _, tr := range r.tasks {
 		tr.prog.ResetFrame()
