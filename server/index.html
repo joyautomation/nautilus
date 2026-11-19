@@ -379,6 +379,7 @@
       .phlegend .io { margin-left: auto; font-weight: 600; }
       .phlegend .io.bad { color: var(--crit); }
       .phlegend .io.ok { color: var(--good); }
+      #io-config { margin-top: 6px; font-weight: 600; color: var(--crit); }
 
       /* ── field-driver status cards ────────────────────────────────────── */
       .drivers { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 0.7rem; margin-top: 0.75rem; }
@@ -562,6 +563,9 @@
             <span><i class="ph-write"></i>output write <b id="ph-write-v">—</b></span>
             <span class="io" id="ph-io">—</span>
           </div>
+          <!-- Live I/O configuration (#706): shown while what runs is not
+               the manifest the controller booted from. -->
+          <div class="io bad" id="io-config" style="display:none"></div>
         </div>
         <!-- Tasks: shown only when the resource runs more than one program.
              The main task (which owns field I/O) leads; additional tasks
@@ -1197,7 +1201,23 @@
         lastLocals = frame.locals ?? {};
         renderScan(frame.scan);
         renderDrivers(frame.drivers ?? []);
+        renderConfig(frame.config);
         renderTable();
+      }
+
+      // What runs against the manifest (live I/O configuration, #706).
+      function renderConfig(c) {
+        const el = $("io-config");
+        const differs = c?.differs ?? [];
+        if (!c || (!differs.length && !c.fault)) {
+          el.style.display = "none";
+          return;
+        }
+        const names = [...new Set(differs.map((d) => d.device ? d.driver + "/" + d.device : d.driver))];
+        let text = differs.length ? "I/O CONFIG DIFFERS FROM THE MANIFEST for " + names.join(", ") : "";
+        if (c.fault) text += (text ? " · " : "") + "I/O APPLY FAULT — " + c.fault;
+        el.textContent = text;
+        el.style.display = "";
       }
 
       // ── field drivers ────────────────────────────────────────────────

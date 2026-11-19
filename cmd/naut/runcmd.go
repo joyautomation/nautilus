@@ -350,6 +350,18 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		}
 		return project.Sources(snap, manifest)
 	}
+	// Live I/O configuration (#706): a changed device or driver staged,
+	// validated and applied over /api/io while the scan runs, and what runs
+	// against the manifest on every frame.
+	if ioc, err := project.NewIOConfig(proj, rt, fsys, manifest); err != nil {
+		fmt.Fprintln(os.Stderr, "naut run: live I/O configuration is off:", err)
+	} else {
+		ioc.Gate = gate.IsLeader
+		sopts.IO = ioc.Hook(func(sha string) (fs.FS, bool) {
+			snap, ok := vcs.SnapshotFS(hist(), sha)
+			return snap, ok
+		}, fsys)
+	}
 	// naut's own build of the HMI (an app with src/routes, or the default
 	// app from the mimics): served at "/", the dashboard moves to /_nautilus/
 	builtHMI := buildHMIForRun(proj, dir, os.Stderr)
