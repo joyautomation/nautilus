@@ -127,12 +127,6 @@ func WithTagClass(class string, patterns ...string) Option {
 	}
 }
 
-// WithWriteTimeoutCap caps the request timeout of a source that takes
-// writes and names no timeout of its own at cap: a redundant pair's send
-// budget (design §3.4), so its default never runs past a write's deadline.
-// A timeout the manifest sets is kept (naut check warns when it is longer).
-func WithWriteTimeoutCap(cap time.Duration) Option { return func(d *Driver) { d.writeCap = cap } }
-
 // WithBlockGap sets the block-coalescing gap tolerance in registers/coils:
 // how many unaddressed addresses one read may span to avoid a second
 // round-trip. 0 never bridges a hole — the escape hatch for devices that
@@ -212,8 +206,6 @@ type Driver struct {
 	// that finds the gate reopened while another is still forgetting waits
 	// for the forget instead of reading the previous term's written.
 	turnMu sync.Mutex
-	// writeCap caps a writing source's default timeout (WithWriteTimeoutCap).
-	writeCap time.Duration
 	// leaseTerm is the lease's term the last open look saw (0: none yet,
 	// or no pair). A look that finds the gate open under another term
 	// treats it as a reopen, closed between two looks or not: the lease
@@ -262,8 +254,7 @@ type outBinding struct {
 // (snapshot, health) and write (pending, enabled).
 type source struct {
 	cfg Source
-	// explicitTimeout: the manifest set cfg.Timeout (a default one may be
-	// capped by WithWriteTimeoutCap).
+	// explicitTimeout: the manifest set cfg.Timeout (WriteTimeouts).
 	explicitTimeout bool
 	blocks          []*blockRun
 
@@ -406,13 +397,6 @@ func New(m Manifest, opts ...Option) (*Driver, error) {
 	}
 	if err := d.buildSources(); err != nil {
 		return nil, err
-	}
-	if d.writeCap > 0 {
-		for _, s := range d.sources {
-			if len(s.byName) > 0 && !s.explicitTimeout {
-				s.cfg.Timeout = min(s.cfg.Timeout, d.writeCap)
-			}
-		}
 	}
 	return d, nil
 }
@@ -602,9 +586,8 @@ func (d *Driver) SetSendGate(g nio.SendGate) {
 
 var _ nio.SendGated = (*Driver)(nil)
 
-// RequestTimeout is source id's request timeout as the driver runs it: the
-// manifest's, or the default (capped for a writing source on a pair, see
-// WithWriteTimeoutCap); 0 for an unknown source.
+// RequestTimeout is source id's request timeout as the driver runs it (the
+// manifest's, or the default); 0 for an unknown source.
 func (d *Driver) RequestTimeout(id string) time.Duration {
 	if s, ok := d.bySource[id]; ok {
 		return s.cfg.Timeout
@@ -614,8 +597,9 @@ func (d *Driver) RequestTimeout(id string) time.Duration {
 
 // WriteTimeouts is each source with a writable binding whose manifest sets
 // a request timeout, with that timeout: naut check compares it with a
-// redundant pair's send budget (design §3.4). A default one is capped at
-// the budget instead (WithWriteTimeoutCap).
+// redundant pair's send budget (design §3.4). A write on a pair is cut at
+// its send deadline whatever the timeout; only one the manifest sets is
+// reported, since a default is nothing the operator chose.
 func (d *Driver) WriteTimeouts() map[string]time.Duration {
 	out := map[string]time.Duration{}
 	for _, s := range d.sources {
@@ -691,6 +675,10 @@ func (d *Driver) look() (bool, time.Duration, uint64) {
 	}
 	return open, budget, term
 }
+
+// flushGenHook, when a test sets it, runs in flushWrites right after the
+// reopen generation is read, before the queue is taken.
+var flushGenHook func()
 
 // reopenHook, when a test sets it, runs at the start of forgetWritten: the
 // window another looker must not slip through, which must still see
@@ -1564,6 +1552,9 @@ func (d *Driver) pollBlock(ctx context.Context, s *source, c conn, br *blockRun)
 // closes partway through, the rest of the flush is (see SetWriteGate).
 func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
 	gen := d.reopens.Load() // before the queue is taken: see send
+	if flushGenHook != nil {
+		flushGenHook()
+	}
 	s.mu.Lock()
 	if len(s.pending) == 0 {
 		s.mu.Unlock()
@@ -1585,7 +1576,7 @@ func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
 	// (not recorded as written), so the next WriteOutputs push after the
 	// gate reopens commands the same value again. A drop is not a failure:
 	// no error is counted and __Online is left to the reads.
-	drop := func(names []string) {
+	drop := func(names []string, why string) {
 		s.mu.Lock()
 		for _, n := range names {
 			// Forget only what this flush dropped: a tag WriteOutputs has
@@ -1597,14 +1588,14 @@ func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
 		}
 		s.mu.Unlock()
 		d.wanted.Store(true) // the commands it dropped: ask for them (#601)
-		d.log.Warn("modbus: write gate closed; queued writes dropped", "source", s.cfg.ID, "count", len(names))
+		d.log.Warn("modbus: queued writes dropped", "why", why, "source", s.cfg.ID, "count", len(names))
 	}
 	if !d.gateOpen() {
 		names := make([]string, 0, len(work))
 		for n := range work {
 			names = append(names, n)
 		}
-		drop(names)
+		drop(names, "the write gate is closed")
 		return true
 	}
 
@@ -1648,14 +1639,18 @@ func (d *Driver) flushWrites(ctx context.Context, s *source, c conn) bool {
 	send := func(bi, ri, ci int) (context.Context, context.CancelFunc, bool) {
 		deadline, _, ok := fence.Begin(d.look, time.Now()) // the budget counts from before the read
 		if !ok || !fence.Started(deadline, time.Now()) {
-			drop(rest(bi, ri, ci))
+			drop(rest(bi, ri, ci), "the write gate closed, or the send's budget ran out")
 			return nil, nil, false
 		}
 		if d.reopens.Load() != gen && !mut("old_term_kept") {
-			// A reopen since this flush took its queue (a lease lost and
-			// won again, seen now or by another look): the rest is the
-			// previous leadership's, already forgotten; the push that
-			// answers the reopen sends this one's.
+			// A reopen since this flush read its generation (a lease lost
+			// and won again, seen now or by another look): none of the
+			// rest is sent. It is dropped, not just left: the queue may
+			// hold a write the push answering the reopen already queued
+			// and recorded as written, and a write kept as written would
+			// never go out until it changed (#1040 re-review). drop
+			// forgets it and asks for the outputs again.
+			drop(rest(bi, ri, ci), "the gate reopened since this flush began (the lease was lost and won again); the outputs are asked for again")
 			return nil, nil, false
 		}
 		wctx, cancel := fence.Context(ctx, deadline)

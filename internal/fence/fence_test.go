@@ -138,3 +138,46 @@ func TestArmResetsAtTheDeadline(t *testing.T) {
 		t.Error("a send done before its deadline reports a reset")
 	}
 }
+
+// #1040 re-review (3): a timer that has already started when its send
+// finishes must not reset the connection, which the next send (after the
+// caller's lock) may already be using. The hook holds the timer just
+// after it fired; stop runs then; released, the timer leaves c alone.
+func TestArmTimerThatLostTheRaceLeavesTheConnAlone(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	acc := make(chan net.Conn, 1)
+	go func() {
+		if c, err := ln.Accept(); err == nil {
+			acc <- c
+		}
+	}()
+	c, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	peer := <-acc
+	defer peer.Close()
+	fired, release := make(chan struct{}), make(chan struct{})
+	armFireHook = func() { close(fired); <-release }
+	defer func() { armFireHook = nil }()
+	stop := Arm(c, time.Now().Add(20*time.Millisecond))
+	<-fired // the timer has started
+	if stop() {
+		t.Fatal("stop says the reset fired; it has not yet")
+	}
+	close(release)
+	time.Sleep(50 * time.Millisecond)
+	if _, err := c.Write([]byte("next send")); err != nil {
+		t.Fatalf("the next send on the connection failed (%v): the late timer reset it", err)
+	}
+	buf := make([]byte, 9)
+	_ = peer.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if _, err := io.ReadFull(peer, buf); err != nil {
+		t.Fatalf("the peer did not get the next send: %v", err)
+	}
+}

@@ -23,7 +23,6 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -61,13 +60,6 @@ func WithTagClass(class string, patterns ...string) Option {
 	}
 }
 
-// WithWriteTimeoutCap caps the request timeout of a source that takes
-// commands and names no timeout of its own at cap: a redundant pair's send
-// budget (design §3.4), so its default never runs past a command's
-// deadline. A timeout the manifest sets is kept (naut check warns when it
-// is longer).
-func WithWriteTimeoutCap(cap time.Duration) Option { return func(d *Driver) { d.writeCap = cap } }
-
 // WithLogger sets the structured logger.
 func WithLogger(l *slog.Logger) Option {
 	return func(d *Driver) {
@@ -90,9 +82,8 @@ func WithClock(now func() time.Time) Option { return func(d *Driver) { d.now = n
 // Driver polls a set of BMCs. io.Driver, io.BatchReader and
 // io.QualityReporter through hw.Base.
 type Driver struct {
-	// writeCap caps a writing source's default timeout (WithWriteTimeoutCap);
-	// explicit names the sources whose manifest sets a timeout.
-	writeCap   time.Duration
+	// explicit names the sources whose manifest sets a timeout
+	// (WriteTimeouts).
 	explicit   map[string]bool
 	m          Manifest
 	base       *hw.Base
@@ -151,8 +142,9 @@ func (d *Driver) Warnings() []string { return d.m.Warnings() }
 
 // WriteTimeouts is each source that takes commands and whose manifest sets
 // a request timeout, with that timeout: naut check compares it with a
-// redundant pair's send budget (design §3.4). A default one is capped at
-// the budget instead (WithWriteTimeoutCap).
+// redundant pair's send budget (design §3.4). A command on a pair is cut
+// at its send deadline whatever the timeout; only one the manifest sets is
+// reported, since a default is nothing the operator chose.
 func (d *Driver) WriteTimeouts() map[string]time.Duration {
 	out := map[string]time.Duration{}
 	for _, id := range d.base.WriteSources() {
@@ -235,8 +227,6 @@ func New(m Manifest, opts ...Option) (*Driver, error) {
 	for id, s := range d.srcs {
 		if s.cfg.Timeout > 0 {
 			d.explicit[id] = true
-		} else if d.writeCap > 0 && slices.Contains(base.WriteSources(), id) {
-			s.cfg.Timeout = min(DefaultTimeout, d.writeCap)
 		}
 	}
 

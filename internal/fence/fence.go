@@ -121,28 +121,41 @@ func LingerDefault(c net.Conn) {
 // sending goroutine is doing then: stalled, or waiting on a read whose own
 // timeout comes later. stop disarms it once the send is done and reports
 // whether the reset already fired (the send then failed, and c is closed).
-// A zero deadline or a nil conn arms nothing.
+// After stop returns the timer never resets c: a timer that had started
+// finds the send done and leaves c alone, and one already resetting
+// finishes before stop returns, so a later send that reuses c (after the
+// caller's own lock) is never hit (#1040 re-review). A zero deadline or a
+// nil conn arms nothing.
 func Arm(c net.Conn, deadline time.Time) (stop func() (fired bool)) {
 	if c == nil || deadline.IsZero() || mut("send_no_deadline") {
 		return func() bool { return false }
 	}
 	var mu sync.Mutex
-	fired := false
+	fired, done := false, false
 	t := time.AfterFunc(time.Until(deadline), func() {
-		mu.Lock()
-		fired = true
-		mu.Unlock()
-		_ = Reset(c)
-	})
-	return func() bool {
-		if t.Stop() {
-			return false
+		if armFireHook != nil {
+			armFireHook()
 		}
 		mu.Lock()
 		defer mu.Unlock()
+		if done {
+			return // the send finished first: c may already carry the next one
+		}
+		fired = true
+		_ = Reset(c)
+	})
+	return func() bool {
+		t.Stop()
+		mu.Lock()
+		defer mu.Unlock()
+		done = true
 		return fired
 	}
 }
+
+// armFireHook, when a test sets it, runs as an Arm timer fires, before it
+// looks at whether its send is done.
+var armFireHook func()
 
 // tcpOf finds the *net.TCPConn under c: c itself, or what a wrapper
 // exposes with NetConn (as *tls.Conn does).

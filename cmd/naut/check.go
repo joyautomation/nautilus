@@ -1128,7 +1128,8 @@ func caseOnlyBindings(tags []runtime.TagDef, d nio.Driver) []caseMismatch {
 
 // sendBudgetWarnings names, on a redundant pair, each source that takes
 // writes whose manifest SETS a request timeout longer than the pair's send
-// budget (a default one runs capped at the budget, buildDrivers)
+// budget (a default is nothing the operator chose; every write on a pair
+// is cut at its send deadline whatever the timeout)
 // (design §3.4): on a healthy leader, a write such a device answers that
 // slowly is abandoned at its deadline and its connection reset (a Modbus
 // write is then sent again; an SNMP or Redfish command is reported
@@ -1157,7 +1158,7 @@ func sendBudgetWarnings(proj *project.Project) []string {
 			sort.Strings(ids)
 			for _, id := range ids {
 				if t := wt[id]; t > budget {
-					out = append(out, fmt.Sprintf("%ssource %s: the request timeout it sets (%s) is longer than this pair's send budget (as little as %s at the %s lease): on a healthy leader, a write the device answers slower than that is abandoned at its deadline and its connection reset (a Modbus or EtherNet/IP write is sent again; an SNMP or Redfish command is reported outcome unknown). Lower the source's timeout below the budget if the device answers in time, or lengthen redundancy.lease", prefix, id, t, budget.Round(time.Millisecond), lease))
+					out = append(out, fmt.Sprintf("%ssource %s: the request timeout it sets (%s) is longer than this pair's send budget (as little as %s at the %s lease): every write is cut at that budget, so on a healthy leader a write the device answers slower is abandoned at its deadline and its connection reset (a Modbus or EtherNet/IP write is sent again; an SNMP or Redfish command is reported outcome unknown). Lower the source's timeout below the budget if the device answers in time, or lengthen redundancy.lease", prefix, id, t, budget.Round(time.Millisecond), lease))
 				}
 			}
 		}

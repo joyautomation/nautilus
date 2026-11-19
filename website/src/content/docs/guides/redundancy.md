@@ -322,11 +322,12 @@ retried, and an SNMP set goes out once (`retries:` applies to polls
 only), so an action-valued object (an outlet reboot) never runs twice
 because an answer was lost.
 
-On a pair, a source that takes writes and sets no `timeout:` runs with
-its driver's default capped at that budget (Modbus and SNMP default to
-3 s, Redfish to 10 s). A timeout the source sets is kept, and
-`naut check` warns when it is longer than the budget: lower it if the
-device answers well within it, or lengthen the lease. EtherNet/IP has no
+A source's `timeout:` is kept as it is (it bounds its polls too): on a
+pair, each write is cut at its own send deadline whatever the timeout
+says. `naut check` warns when a timeout a source that takes writes sets
+is longer than the budget, since that device's slower writes will be
+cut: lower it if the device answers well within it, or lengthen the
+lease. EtherNet/IP has no
 timeout setting, so the same applies to a controller slower than the
 budget. A command queued under one leadership is never sent after the
 controller lost the lease and won it back: it is dropped and the source

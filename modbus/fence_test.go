@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/joyautomation/nautilus/internal/fence"
+	nio "github.com/joyautomation/nautilus/io"
 )
 
 // fenceReq is one request the fenceConn saw: its function code, the
@@ -310,5 +311,55 @@ func TestModbusResetIsATimerAtTheDeadline(t *testing.T) {
 	}
 	if err := <-peerErr; !errors.Is(err, syscall.ECONNRESET) {
 		t.Fatalf("the device side read to %v; want ECONNRESET", err)
+	}
+}
+
+// #1040 re-review (1): a flush reads its reopen generation, then a scan
+// sees the reopen (the lease won again) and the push answering it queues
+// SP1=5, recording it as written, before the flush takes the queue. The
+// flush must not send it (the generation moved), and must not lose it
+// either: it is forgotten as written and the outputs are asked for, so the
+// next push queues SP1=5 again.
+func TestModbusFlushRacingAReopenDoesNotLoseTheNewWrite(t *testing.T) {
+	d, s := fencedDriver(t)
+	s.pending = map[string]any{}
+	var mu sync.Mutex
+	term := uint64(5)
+	d.SetSendGate(func() (bool, time.Duration, uint64) { mu.Lock(); defer mu.Unlock(); return true, time.Second, term })
+	d.look()                                                              // term 5 seen
+	if err := d.WriteOutputs(nio.Values{"SP1": float64(1)}); err != nil { // the first push: a baseline
+		t.Fatal(err)
+	}
+	d.OutputsWanted()
+	flushGenHook = func() {
+		flushGenHook = nil
+		mu.Lock()
+		term = 9 // the lease lost and won again
+		mu.Unlock()
+		d.look() // a scan sees the reopen: forgetWritten, a new generation
+		d.OutputsWanted()
+		if err := d.WriteOutputs(nio.Values{"SP1": float64(5)}); err != nil { // the answering push
+			t.Error(err)
+		}
+	}
+	defer func() { flushGenHook = nil }()
+	c := &fenceConn{}
+	d.flushWrites(context.Background(), s, c)
+	if w := c.writes(); len(w) != 0 {
+		t.Fatalf("the racing flush sent %d write(s); want none (its generation moved)", len(w))
+	}
+	s.mu.Lock()
+	_, kept := s.written["SP1"]
+	s.mu.Unlock()
+	wanted := d.OutputsWanted()
+	if kept || !wanted {
+		t.Fatalf("SP1=5 kept as written %v, outputs asked for %v: the next push would skip it and the device never get it", kept, wanted)
+	}
+	if err := d.WriteOutputs(nio.Values{"SP1": float64(5)}); err != nil {
+		t.Fatal(err)
+	}
+	d.flushWrites(context.Background(), s, c)
+	if w := c.writes(); len(w) != 1 {
+		t.Fatalf("after the next push %d write(s); want SP1=5 sent once", len(w))
 	}
 }
