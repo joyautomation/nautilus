@@ -51,9 +51,10 @@ type IOHook struct {
 	Differs func() []IODiffer
 	Fault   func() string
 	// Watch is the last apply's watch over its changed devices (nil
-	// before any); CancelRevert stops a pending revert, false when none.
+	// before any); CancelRevert stops a pending revert, or says why not
+	// (none asked for, one under way, one done).
 	Watch        func() *IOWatch
-	CancelRevert func(by string) (*IOWatch, bool)
+	CancelRevert func(by string) (*IOWatch, error)
 }
 
 // IOWatch is the last apply's watch: which changed devices have read,
@@ -71,6 +72,7 @@ type IOWatch struct {
 	Silent   []string  `json:"silent,omitempty"`
 	State    string    `json:"state"`
 	Reason   string    `json:"reason,omitempty"`
+	Ended    time.Time `json:"ended,omitzero"`
 }
 
 // IODiffer is one driver (or Modbus device) whose running configuration is
@@ -211,9 +213,9 @@ func (s *Server) handleIOCancelRevert(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "no revert is pending"})
 		return
 	}
-	watch, ok := s.io.CancelRevert(s.requester())
-	if !ok {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "no revert is pending"})
+	watch, err := s.io.CancelRevert(s.requester())
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
 	}
 	slog.Info("config.revert.cancel", "gen", watch.Gen, "by", s.requester())

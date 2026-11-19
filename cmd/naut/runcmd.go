@@ -379,6 +379,7 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	if ioc, err := project.NewIOConfig(proj, rt, fsys, manifest); err != nil {
 		fmt.Fprintln(os.Stderr, "naut run: live I/O configuration is off:", err)
 	} else {
+		defer ioc.Close() // its watch, and a revert it would make, end with the controller
 		ioc.Gate = gate.IsLeader
 		sopts.IO = ioc.Hook(func(sha string) (fs.FS, bool) {
 			snap, ok := vcs.SnapshotFS(hist(), sha)

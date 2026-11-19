@@ -64,5 +64,20 @@ func (io *IOConfig) Hook(snapshot func(sha string) (fs.FS, bool), base fs.FS) *s
 			return out
 		},
 		Fault: io.Fault,
+		Watch: func() *server.IOWatch {
+			if w := io.Watch(); w != nil {
+				sw := server.IOWatch(*w)
+				return &sw
+			}
+			return nil
+		},
+		CancelRevert: func(by string) (*server.IOWatch, error) {
+			w, err := io.CancelRevert(by)
+			if err != nil {
+				return nil, err
+			}
+			sw := server.IOWatch(*w)
+			return &sw, nil
+		},
 	}
 }

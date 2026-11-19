@@ -61,15 +61,15 @@ func (f *fakeIO) hook() *IOHook {
 		},
 		Running: func() any { return []string{"modbus"} },
 		Watch:   func() *IOWatch { return f.watch },
-		CancelRevert: func(by string) (*IOWatch, bool) {
+		CancelRevert: func(by string) (*IOWatch, error) {
 			if f.watch == nil || f.watch.State != "watching" || !f.watch.Revert {
-				return nil, false
+				return nil, errors.New("no revert is pending")
 			}
 			f.cancels++
 			w := *f.watch
 			w.State, w.Reason = "cancelled", "the revert was cancelled by "+by
 			f.watch = &w
-			return &w, true
+			return &w, nil
 		},
 		Differs: func() []IODiffer { return f.differs },
 		Fault:   func() string { return f.fault },

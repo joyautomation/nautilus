@@ -1181,7 +1181,7 @@ func (io *IOConfig) ApplyWith(ctx context.Context, c *IOCandidate, by string, op
 	w := &ioWatch{
 		IOWatch: IOWatch{Gen: gen, From: c.From, By: by, Deadline: time.Now().Add(deadline),
 			Revert: opts.RevertIfSilent > 0, State: WatchWatching},
-		targets: io.answerTargets(c, val.Changes),
+		targets: io.answerTargets(c, val.Changes, running),
 		revert: func() (left, lost []string) {
 			for i := len(undo) - 1; i >= 0; i-- {
 				if uerr := undo[i].run(); uerr != nil {
@@ -1213,6 +1213,7 @@ const (
 	WatchAnswered   = "answered"      // every changed device read
 	WatchSilent     = "silent"        // one did not by the deadline; the change stays
 	WatchReverted   = "reverted"      // one did not, and the apply was put back
+	WatchReverting  = "reverting"     // putting it back: a cancel is refused from here
 	WatchRevertFail = "revert-failed" // putting it back failed (Fault)
 	WatchCancelled  = "cancelled"     // CancelRevert: the revert will not happen
 	WatchSuperseded = "superseded"    // a newer apply landed; this one is not reverted
@@ -1236,6 +1237,7 @@ type IOWatch struct {
 	Silent   []string  `json:"silent,omitempty"`
 	State    string    `json:"state"`
 	Reason   string    `json:"reason,omitempty"`
+	Ended    time.Time `json:"ended,omitzero"` // when it left watching
 }
 
 type answerTarget struct {
@@ -1296,7 +1298,7 @@ func (w *ioWatch) answer() {
 
 // answerTargets are the changed devices, each with its data tags and the
 // quality the driver that runs reports for them.
-func (io *IOConfig) answerTargets(c *IOCandidate, changes []IOChange) []answerTarget {
+func (io *IOConfig) answerTargets(c *IOCandidate, changes []IOChange, running map[string]ioUnit) []answerTarget {
 	var targets []answerTarget
 	modbusTarget := func(driver string, u ioUnit) answerTarget {
 		var names []string
@@ -1318,7 +1320,9 @@ func (io *IOConfig) answerTargets(c *IOCandidate, changes []IOChange) []answerTa
 			targets = append(targets, modbusTarget(ch.Driver, c.units[unitKey(ch.Driver, ch.Device)]))
 		case c.units[ch.Driver].typ == "modbus":
 			for _, k := range sortedKeys(c.units) {
-				if u := c.units[k]; u.driver == ch.Driver && u.device != "" {
+				// Only a device the swap changed: one that was already
+				// silent is not this apply's to answer for (nor to revert).
+				if u := c.units[k]; u.driver == ch.Driver && u.device != "" && u.hash != running[k].hash {
 					targets = append(targets, modbusTarget(ch.Driver, u))
 				}
 			}
@@ -1360,11 +1364,12 @@ func (io *IOConfig) startWatch(w *ioWatch) {
 	go io.runWatch(ctx, w)
 }
 
-// finish ends w in state (when it is still watching) and stops it.
+// finish ends w in state (when it is still watching, or reverting) and
+// stops it.
 func (w *ioWatch) finish(state, reason string) {
 	w.mu.Lock()
-	if w.State == WatchWatching {
-		w.State, w.Reason = state, reason
+	if w.State == WatchWatching || w.State == WatchReverting {
+		w.State, w.Reason, w.Ended = state, reason, time.Now()
 	}
 	w.mu.Unlock()
 	if w.stop != nil {
@@ -1421,6 +1426,24 @@ func (io *IOConfig) runWatch(ctx context.Context, w *ioWatch) {
 		w.finish(WatchSuperseded, "a newer apply landed; not reverted")
 		return
 	}
+	// Silence once more, now that nothing else can change what runs: a
+	// device that answered while this waited for the lock is not silent.
+	w.answer()
+	snap = w.snapshot()
+	if len(snap.Pending) == 0 {
+		w.finish(WatchAnswered, "")
+		return
+	}
+	silent = strings.Join(snap.Pending, ", ")
+	// Reverting: a cancel is refused from here on, and the record never
+	// says cancelled for a revert that ran.
+	w.mu.Lock()
+	if w.State != WatchWatching {
+		w.mu.Unlock()
+		return // cancelled just before
+	}
+	w.State, w.Silent = WatchReverting, snap.Pending
+	w.mu.Unlock()
 	reason := silent + " did not read by the deadline (revertIfSilent)"
 	left, lost := w.revert()
 	if len(left) > 0 {
@@ -1450,24 +1473,42 @@ func (io *IOConfig) Watch() *IOWatch {
 	return &s
 }
 
+// ErrNoRevert refuses a cancel: no revert is pending (none was asked for,
+// it is under way, or it has happened). Its message says which.
+var ErrNoRevert = errors.New("no revert is pending")
+
 // CancelRevert stops a pending revert: the watch ends cancelled, and the
-// apply stays whatever its devices say. False when no revert is pending.
-func (io *IOConfig) CancelRevert(by string) (*IOWatch, bool) {
+// apply stays whatever its devices say. A revert already under way, or
+// done, is not cancelled: the error says so.
+func (io *IOConfig) CancelRevert(by string) (*IOWatch, error) {
 	io.mu.Lock()
 	w := io.watch
 	io.mu.Unlock()
 	if w == nil {
-		return nil, false
+		return nil, fmt.Errorf("%w: no apply has been made", ErrNoRevert)
 	}
 	w.mu.Lock()
-	pending := w.State == WatchWatching && w.Revert
-	w.mu.Unlock()
-	if !pending {
-		return nil, false
+	switch {
+	case w.State == WatchWatching && w.Revert:
+		w.State, w.Reason, w.Ended = WatchCancelled, "the revert was cancelled by "+by, time.Now()
+		w.mu.Unlock()
+		w.stop()
+		s := w.snapshot()
+		return &s, nil
+	case w.State == WatchReverting:
+		w.mu.Unlock()
+		return nil, fmt.Errorf("%w: a revert is in progress and cannot be stopped", ErrNoRevert)
+	case w.State == WatchReverted || w.State == WatchRevertFail:
+		state, at, reason := w.State, w.Ended, w.Reason
+		w.mu.Unlock()
+		return nil, fmt.Errorf("%w: already %s at %s (%s)", ErrNoRevert, state, at.Format(time.RFC3339), reason)
 	}
-	w.finish(WatchCancelled, "the revert was cancelled by "+by)
-	s := w.snapshot()
-	return &s, true
+	state, revert := w.State, w.Revert
+	w.mu.Unlock()
+	if !revert {
+		return nil, fmt.Errorf("%w: the last apply did not ask to revert", ErrNoRevert)
+	}
+	return nil, fmt.Errorf("%w: the last apply's watch is %s", ErrNoRevert, state)
 }
 
 // Close stops the watch (a test, or a controller shutting down).

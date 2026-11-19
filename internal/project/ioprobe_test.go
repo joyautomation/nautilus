@@ -7,10 +7,14 @@ package project
 // that a probe never stalls the scan.
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"sync"
@@ -25,6 +29,8 @@ import (
 	"github.com/joyautomation/nautilus/devbind"
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/modbus"
+	"github.com/joyautomation/nautilus/modbus/slave"
+	"github.com/joyautomation/nautilus/server"
 )
 
 func probeOf(t *testing.T, v *IOValidation) IOProbe {
@@ -402,7 +408,7 @@ func waitWatch(t *testing.T, r *ioRig) *IOWatch {
 	var w *IOWatch
 	eventually(t, "the watch to end", func() bool {
 		w = r.io.Watch()
-		return w != nil && w.State != WatchWatching
+		return w != nil && w.State != WatchWatching && w.State != WatchReverting
 	})
 	return w
 }
@@ -527,16 +533,130 @@ func TestIOApplyAnswersAndRevertIfSilent(t *testing.T) {
 		if _, err := apply(r, modbusYAML(deadPort(t), slavePort(s2), "", ""), ApplyOptions{RevertIfSilent: time.Second}); err != nil {
 			t.Fatal(err)
 		}
-		w, ok := r.io.CancelRevert("tester")
-		if !ok || w.State != WatchCancelled || !strings.Contains(w.Reason, "tester") {
-			t.Fatalf("cancel: %v %+v", ok, w)
+		w, err := r.io.CancelRevert("tester")
+		if err != nil || w.State != WatchCancelled || !strings.Contains(w.Reason, "tester") {
+			t.Fatalf("cancel: %v %+v", err, w)
 		}
 		time.Sleep(1500 * time.Millisecond)
 		if d := r.io.Differs(); len(d) != 1 || d[0].Device != "DEV_A" {
 			t.Fatalf("differs %+v, want DEV_A still applied after the cancelled revert's deadline", d)
 		}
-		if _, ok := r.io.CancelRevert("tester"); ok {
-			t.Fatal("a second cancel found a revert pending")
+		if _, err := r.io.CancelRevert("tester"); !errors.Is(err, ErrNoRevert) {
+			t.Fatalf("a second cancel: %v, want no revert pending", err)
+		}
+	})
+}
+
+// #994 re-check: the watch through the real server hook, a revert under
+// way refused a cancel, silence re-sampled under the lock, and a whole
+// swap's unchanged devices left out of the watch.
+func TestIOWatchReCheck(t *testing.T) {
+	s1, s2 := newSlave(t, 4), newSlave(t, 7)
+	base := ioFiles(slavePort(s1), slavePort(s2), "")
+	base = withFile(base, "nautilus.yaml", strings.Replace(string(base["nautilus.yaml"].Data), "  scan-rate: 10ms\n", "  scan-rate: 10ms\n  validate: static\n", 1))
+	stage := func(r *ioRig, files fstest.MapFS) *IOCandidate {
+		t.Helper()
+		c := r.io.Stage(files, "upload", "tester")
+		if v := r.io.Validate(c); !v.Valid {
+			t.Fatalf("validate: %+v", v.Checks)
+		}
+		return c
+	}
+
+	t.Run("through the real hook", func(t *testing.T) {
+		r := startIORig(t, base, false)
+		h := server.New(r.rt, server.Options{OnlineEdits: true, IO: r.io.Hook(nil, base)}).Handler()
+		call := func(method, path string, body any) (int, map[string]any) {
+			var buf bytes.Buffer
+			if body != nil {
+				json.NewEncoder(&buf).Encode(body)
+			}
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, httptest.NewRequest(method, "http://localhost"+path, &buf))
+			out := map[string]any{}
+			json.Unmarshal(w.Body.Bytes(), &out)
+			return w.Code, out
+		}
+		_, st := call("POST", "/api/io/staged", map[string]any{"files": map[string]string{"modbus.yaml": modbusYAML(deadPort(t), slavePort(s2), "", "")}})
+		id := st["id"].(string)
+		call("POST", "/api/io/staged/"+id+"/validate", nil)
+		if code, st := call("POST", "/api/io/staged/"+id+"/apply", map[string]any{"revertIfSilent": "5s"}); code != http.StatusOK {
+			t.Fatalf("apply: %d %v", code, st)
+		}
+		_, st = call("GET", "/api/state", nil)
+		if c, _ := st["config"].(map[string]any); !strings.Contains(fmt.Sprint(c["watch"]), "device DEV_A") {
+			t.Fatalf("config = %v, want the pending revert", st["config"])
+		}
+		if code, st := call("POST", "/api/io/revert/cancel", nil); code != http.StatusOK || st["state"] != WatchCancelled {
+			t.Fatalf("cancel: %d %v", code, st)
+		}
+		if _, st := call("GET", "/api/io", nil); !strings.Contains(fmt.Sprint(st["watch"]), WatchCancelled) {
+			t.Fatalf("/api/io watch = %v", st["watch"])
+		}
+	})
+
+	t.Run("a revert under way refuses a cancel", func(t *testing.T) {
+		r := startIORig(t, base, false)
+		real := r.io.replaceSource
+		calls := 0
+		r.io.replaceSource = func(mb *modbus.Driver, src modbus.Source, tags []modbus.TagBinding, opts modbus.ReplaceOptions) error {
+			calls++
+			if calls > 1 {
+				time.Sleep(800 * time.Millisecond) // a slow revert
+			}
+			return real(mb, src, tags, opts)
+		}
+		if _, err := r.io.ApplyWith(r.ctx, stage(r, withFile(base, "modbus.yaml", modbusYAML(deadPort(t), slavePort(s2), "", ""))), "tester", ApplyOptions{RevertIfSilent: 300 * time.Millisecond}); err != nil {
+			t.Fatal(err)
+		}
+		eventually(t, "the revert under way", func() bool { w := r.io.Watch(); return w != nil && w.State == WatchReverting })
+		if _, err := r.io.CancelRevert("tester"); !errors.Is(err, ErrNoRevert) || !strings.Contains(err.Error(), "in progress") {
+			t.Fatalf("cancel during the revert: %v", err)
+		}
+		w := waitWatch(t, r)
+		if w.State != WatchReverted || strings.Contains(w.Reason, "cancelled") {
+			t.Fatalf("watch %+v: the revert ran, and must say so", w)
+		}
+		if _, err := r.io.CancelRevert("tester"); err == nil || !strings.Contains(err.Error(), "already reverted at") {
+			t.Fatalf("cancel after the revert: %v", err)
+		}
+	})
+
+	t.Run("a device that answers while the revert waits for the lock", func(t *testing.T) {
+		r := startIORig(t, base, false)
+		late := deadPort(t)
+		if _, err := r.io.ApplyWith(r.ctx, stage(r, withFile(base, "modbus.yaml", modbusYAML(late, slavePort(s2), "", ""))), "tester", ApplyOptions{RevertIfSilent: 300 * time.Millisecond}); err != nil {
+			t.Fatal(err)
+		}
+		r.io.applying.Lock() // an apply in progress: the watch's revert waits
+		time.Sleep(500 * time.Millisecond)
+		srv := slave.NewServer(fmt.Sprintf("127.0.0.1:%d", late), nil) // the device comes up meanwhile
+		if err := srv.Start(); err != nil {
+			r.io.applying.Unlock()
+			t.Fatal(err)
+		}
+		t.Cleanup(srv.Stop)
+		srv.Unit(1).SetHolding(0, 4)
+		eventually(t, "DEV_A reads", func() bool { return r.rt.TagQuality("A_In").IsGood() })
+		r.io.applying.Unlock()
+		if w := waitWatch(t, r); w.State != WatchAnswered {
+			t.Fatalf("watch %+v: the device answered before the revert could run", w)
+		}
+		if d := r.io.Differs(); len(d) != 1 {
+			t.Fatalf("differs %+v, want DEV_A applied", d)
+		}
+	})
+
+	t.Run("a whole swap's unchanged devices are not watched", func(t *testing.T) {
+		ua := uaServer(t, 1.5)
+		files := ioFiles(slavePort(s1), deadPort(t), ua) // DEV_B silent all along
+		r := startIORig(t, files, false)
+		c := stage(r, withFile(files, "nautilus.yaml", strings.Replace(string(files["nautilus.yaml"].Data), "    scan-rate: 10ms\n", "    scan-rate: 15ms\n", 1)))
+		if _, err := r.io.ApplyWith(r.ctx, c, "tester", ApplyOptions{RevertIfSilent: 500 * time.Millisecond}); err != nil {
+			t.Fatal(err)
+		}
+		if w := waitWatch(t, r); w.State != WatchAnswered {
+			t.Fatalf("watch %+v: a scan-rate apply must not answer for (or revert over) a device it did not change", w)
 		}
 	})
 }
