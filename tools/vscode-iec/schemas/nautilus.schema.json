@@ -136,6 +136,153 @@
         }
       }
     },
+    "auth": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "Who may do what (#708): roles, areas, users and service tokens, reviewed in git. Credentials never go here. Absent, writes keep today's rule (the auth token when one is set, else a same-origin request).",
+      "additionalProperties": false,
+      "properties": {
+        "anonymous": {
+          "type": "string",
+          "enum": [
+            "none",
+            "viewer"
+          ],
+          "description": "What a request with no credential may do: none (the default: sign-in required) or viewer (a wallboard)."
+        },
+        "token-role": {
+          "type": "string",
+          "description": "NAUTILUS_TOKEN's role (default administrator): a built-in role (viewer, operator, supervisor, engineer, administrator) or one under roles."
+        },
+        "areas": {
+          "type": "object",
+          "description": "Named sets of tags that scope a grant's write, ack, shelve, substitute and force.",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "tags"
+            ],
+            "properties": {
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "minItems": 1,
+                "description": "Tag patterns (RCV_*), matched ignoring case against a tag's name."
+              }
+            }
+          }
+        },
+        "roles": {
+          "type": "object",
+          "description": "Custom roles: one to inherit, plus permissions to allow or deny.",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "inherits"
+            ],
+            "properties": {
+              "inherits": {
+                "type": "string",
+                "description": "The role this one starts from: viewer, operator, supervisor, engineer, administrator, or another custom role."
+              },
+              "allow": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "read",
+                    "write",
+                    "ack",
+                    "shelve",
+                    "substitute",
+                    "force",
+                    "sfc",
+                    "edit",
+                    "activate",
+                    "deploy",
+                    "config",
+                    "audit",
+                    "users",
+                    "override"
+                  ]
+                }
+              },
+              "deny": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "read",
+                    "write",
+                    "ack",
+                    "shelve",
+                    "substitute",
+                    "force",
+                    "sfc",
+                    "edit",
+                    "activate",
+                    "deploy",
+                    "config",
+                    "audit",
+                    "users",
+                    "override"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "users": {
+          "type": "object",
+          "description": "Each user's grants: a role, or {role, areas}. No secrets here.",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "role"
+                  ],
+                  "properties": {
+                    "role": {
+                      "type": "string"
+                    },
+                    "areas": {
+                      "type": "array",
+                      "minItems": 1,
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "service-tokens": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[A-Za-z0-9_]+$"
+          },
+          "description": "Named tokens for scripts and services, each with its role. A token's secret comes from NAUTILUS_TOKEN_<NAME>, never the manifest.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
     "redundancy": {
       "type": [
         "object",

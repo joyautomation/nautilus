@@ -483,6 +483,9 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	if proj.Server.HMI != nil {
 		sopts.HMI = proj.Server.HMI
 	}
+	if msg := authNotice(proj); msg != "" {
+		fmt.Fprint(os.Stderr, msg)
+	}
 	// The audit journal (#709): every write through the tag API, accepted
 	// or refused, fsynced before it is answered. If it cannot be opened the
 	// controller still runs: setting forces and program edits are refused,
@@ -1028,6 +1031,17 @@ func embeddedManifest(fsys fs.FS) string {
 		return ""
 	}
 	return strings.TrimSpace(string(raw))
+}
+
+// authNotice is what naut run says about the manifest's auth: block, so
+// nobody runs a controller believing a block protects it before it does.
+// Today (#708 PR 4) the block is checked but not yet enforced.
+func authNotice(proj *project.Project) string {
+	if proj.Auth == nil {
+		return ""
+	}
+	return "auth: WARNING: the auth: block is checked but NOT ENFORCED yet (#708): writes keep the rule without it\n" +
+		"      (NAUTILUS_TOKEN when set, else a same-origin request), and reads are not gated\n"
 }
 
 // openAudit opens the audit journal the manifest's audit: section places

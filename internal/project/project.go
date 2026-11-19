@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/joyautomation/nautilus/auth"
 	"github.com/joyautomation/nautilus/devbind"
 	"github.com/joyautomation/nautilus/devprofile"
 	"github.com/joyautomation/nautilus/internal/dialect"
@@ -94,6 +95,12 @@ type Manifest struct {
 	// Audit places the runtime audit journal `naut run` always keeps
 	// (#709); absent takes the defaults.
 	Audit *AuditConfig `yaml:"audit"`
+	// Auth is who may do what (#708): roles, areas, users and service
+	// tokens. Absent, writes keep today's rule (the auth token when one is
+	// set, else a same-origin request).
+	Auth *AuthConfig `yaml:"auth"`
+	// authPolicy is Auth compiled (ReadManifest).
+	authPolicy *auth.Policy `yaml:"-"`
 	// Alarms turns BOOL tags into ISA-18.2 alarm state — the active list,
 	// acknowledge, shelve, and the journal behind /api/alarms. Absent (the
 	// default): no engine, and behaviour identical to before it existed.
@@ -864,6 +871,8 @@ type Project struct {
 	Retain     *RetainConfig
 	Redundancy *RedundancyConfig
 	Audit      *AuditConfig
+	// Auth is the compiled auth: block, or nil when the manifest has none.
+	Auth *auth.Policy
 
 	// Alarms is the composed `alarms:` section (alarm-files folded in),
 	// or nil when the manifest declares none. Load composes and validates
@@ -1012,6 +1021,9 @@ func ReadManifest(fsys fs.FS, name string) (*Manifest, error) {
 	}
 	if err := composeAlarms(fsys, &m); err != nil {
 		return nil, err
+	}
+	if m.authPolicy, err = compileAuth(m.Auth); err != nil {
+		return nil, fmt.Errorf("%s: %w", name, err)
 	}
 	return &m, nil
 }
@@ -1342,6 +1354,7 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 		OPCUA:       m.OPCUA,
 		Retain:      m.Retain,
 		Audit:       m.Audit,
+		Auth:        m.authPolicy,
 		Redundancy:  m.Redundancy,
 		Alarms:      m.Alarms,
 		HMIDir:      hmiDir,
