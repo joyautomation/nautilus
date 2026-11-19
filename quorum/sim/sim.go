@@ -488,6 +488,7 @@ func (w *World) tick(n *node) {
 	from, until := n.voter.LeaderSeen()
 	if r := n.cand.Tick(now, from, until, true); r != nil {
 		n.sent = append(n.sent, sentReq{term: r.Term, id: r.ID, at: now})
+		w.rec.Requests = append(w.rec.Requests, SentRequest{At: w.now, From: n.addr, Term: r.Term, Renewal: r.Renewal})
 		w.tracef("%v sends term=%d id=%d", n.addr, r.Term, r.ID)
 		b, _ := r.MarshalBinary()
 		w.selfDeliver(n, b)

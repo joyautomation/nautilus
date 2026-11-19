@@ -159,18 +159,55 @@ case caught it. A mutation joins the nightly run in the PR that builds the rule 
 | the override opens the gate before its journal fsync | I8 | 5 |
 | the override survives hearing a peer | design §7 | 5 |
 
-**Not yet caught by the T2 simulator alone** (measured on #981; each is pinned in T1 by
-`quorum`'s own tests, and 2c adds a targeted sim case for each before its tag joins the
-nightly):
-- a voter answers before its fsync (needs a crash inside a slow fsync, then a same-term
-  request from the other candidate);
-- the lapse back-off, removed or cut to one lease (the unheard-campaign back-off masks it in
-  the matrix);
-- a grant matched by term, not by request id (needs a late grant for an earlier renewal);
-- renewals seen when refused (#973), `Candidate.Observe`, and a retry that moves the look
-  (#979): liveness rules the current schedules don't stress enough to fail.
+**The runner (2c).** Every PR-2 rule has a switch in package `quorum`. It exists only in a
+build with the `quorum_mut` tag, and `QUORUM_MUT=<name>` turns one on; a normal build compiles a
+constant false, so the checks cost nothing. `go run ./tools/quorum-mutants` does the following:
+- it runs `go test ./quorum/...` once per mutation;
+- it requires the named tests to go red;
+- it counts a build or setup failure as a failure, and says so when a test panicked (which
+  hides the tests after it);
+- it checks the baseline (the tag on, no mutation) is green first;
+- it prints a Markdown table and exits non-zero on any survivor.
 
-The sim does catch these (with the cases that go red):
+Its own table test checks those verdicts, and that every mutation in `quorum/mut_on.go` has a
+row. All 16 are caught, in about 50 s.
+
+**Where each is caught.**
+- **Targeted sim cases (`quorum/sim/targeted_test.go`)** catch three rules the matrix and the
+  seeds miss:
+  - a voter answering before its fsync: a crash inside a slow fsync lets one term be led twice
+    (I4, I2);
+  - a grant matched by term, not request id: late grants stretch a lease past the witness's
+    promise (the lease oracle);
+  - the lapse back-off, removed or cut to one lease: a one-way leader must send nothing for two
+    leases after its lapse.
+- **Three liveness rules are caught only in T1** (`quorum/standby_test.go`): renewals seen when
+  refused (#973), `Candidate.Observe`, and a retry that moves the look (#979). With the re-term,
+  the yield and timers armed at `NextLook`, the simulator elects without them in every schedule
+  tried (200 two-voter cold starts included). They stay as defence in depth, and the lockstep
+  T1 harness, with instant delivery and 10 ms steps, pins each.
+- **The two-lease lapse back-off still pays (design §3.1).** With perfect clocks, #979 makes F9
+  take 3.5–3.7 s with one lease or two. With clocks skewed within ρ it does not: over 160 F9
+  schedules per delay, the worst takeover at 1–100 ms is 6.4–6.9 s with one lease and 3.9–4.3 s
+  with two. `TestTargetedOneWayLeaderSkewed` (A 0.5% slow, B 0.25% fast) is red with one lease
+  at 6.43 s. Its cost stays the double fault.
+- **Long links flap (F21, measured, not failed).** The same F9 sweep at a 2 s lease, with the
+  worst one-way delay counted as delay plus jitter:
+
+  | worst one-way delay | flapping runs (of 160) | worst takeover |
+  |---|---|---|
+  | 450 ms (lease/delay 4.4) | 0 | 4.8 s |
+  | 525 ms (3.8) | 0 | 4.9 s |
+  | 600 ms (3.3) | 1 | 6.5 s |
+  | 750 ms (2.7) | 9 | 7.1 s |
+  | 825 ms (2.4) | 18 | 7.4 s |
+
+  At 900 ms (about lease/2.2), 54 runs flap, taking over up to three times. **The rule: lease ≥ 4
+  × the worst one-way vote-link delay.** The guide states it, and `naut check` warns when a
+  configured lease is below it for a declared link latency (the guide and config PR, on the
+  #710 plan). The seeds keep delays within lease/2.
+
+**What the sim catches on its own** (with the cases that go red):
 - no ρ: 32 seeds and the skew test;
 - the lease timed from the reply: 2 seeds and the skew test;
 - a restarted voter granting at once: 23 seeds and named cases;
@@ -275,7 +312,7 @@ T4 where only hardware can.
 | F6b | **Leader starved between scans** (#858): its scan loop gets no CPU after a scan ends, while the elector's goroutine still runs | T2: the loop's ticks stop. T3: a `quorumtest` hook that blocks the loop between `end()` and the next `begin()`, plus a real case: the task pinned with `cpu:` and a SCHED_FIFO hog on the same core | `Liveness` flags it within `B = StallBound(period, lease/2)`. The elector stops renewing, and the gate closes within `B + lease/4 + lease/2` of the **first missed slot** (a slow task isn't late before its slot comes due). B takes over after the lease, with no overlap (I1). Rerun with the standby starved, which doesn't campaign, and with a healthy standby ticking but not scanning, which still acquires. | ✓ | ✓ | ✓ (FIFO hog: only with the #836 safeguards in place and the maintainer's explicit OK, never pinned to a vendor runtime's core; no RT load runs on a bench controller otherwise) |
 | F7 | Starved elector (CPU throttled to 1–5%) | cgroup `cpu.max` | The gate is judged when read, so it closes on time. I1 holds. | ✓ | ✓ | |
 | F8 | **Partition A–B**, both directions | nftables | W renews the leader. The stream stops, and the standby is marked out of sync. | ✓ | ✓ | ✓ (cable pull) |
-| F9 | One-way cuts: A→B, B→A, **leader→voters only** (it can send but not receive) and voters→leader only | nftables, one direction | A–B one way: as F8, no flapping. A leader that can send but not receive fences at the end of its lease, backs off for two leases (design §3.1), and B is elected before it is back: 3.8–4.55 s after the cut at a 2 s lease (6.3–6.55 s with a one-lease back-off). The accepted cost, measured too: with the standby down, a full-lease witness blip leaves the pair leaderless 4.0 s (2.0 s with one lease). A leader that can receive but not send fences, and B is elected. | ✓ | ✓ | |
+| F9 | One-way cuts: A→B, B→A, **leader→voters only** (it can send but not receive) and voters→leader only | nftables, one direction | A–B one way: as F8, no flapping. A leader that can send but not receive fences at the end of its lease, backs off for two leases (design §3.1), and B is elected before it is back: within 4.6 s of the cut at a 2 s lease, with clocks skewed within ρ (6.4–6.9 s at worst with a one-lease back-off; `TestTargetedOneWayLeaderSkewed`). The accepted cost, measured too: with the standby down, a full-lease witness blip leaves the pair leaderless 4.0 s (2.0 s with one lease). A leader that can receive but not send fences, and B is elected. | ✓ | ✓ | |
 | F10 | **Leader cut from the witness** | nftables | A+B are a majority, so nothing changes. "Witness unreachable" alarm. | ✓ | ✓ | ✓ |
 | F11 | Standby cut from the witness | nftables | No change. Alarm. | ✓ | ✓ | ✓ |
 | F12 | **Leader isolated from B and W** | nftables | The leader fences at the end of its lease. B+W elect B, which takes over hot or cold. When it is healed, A returns as standby, writes nothing, and resyncs. | ✓ | ✓ | ✓ |

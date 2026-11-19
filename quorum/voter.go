@@ -49,7 +49,11 @@ type heldGrant struct {
 // promise timer, and any promise it made before the restart has run out
 // by then (design §3.1).
 func NewVoter(self NodeID, lease time.Duration, st VoterState, now Instant) *Voter {
-	return &Voter{self: self, lease: lease, st: st, waitUntil: now.Add(lease)}
+	wait := now.Add(lease)
+	if mut("restart_grants") {
+		wait = now
+	}
+	return &Voter{self: self, lease: lease, st: st, waitUntil: wait}
 }
 
 // NewWitness starts the witness's voter, like NewVoter. A witness with no
@@ -97,7 +101,7 @@ func (v *Voter) LeaderSeen() (NodeID, Instant) {
 	if v.st.GrantedTo != "" && v.st.GrantedTo != v.self {
 		from, until = v.st.GrantedTo, v.promiseUntil
 	}
-	if v.renewalFrom != "" && v.renewalUntil > until {
+	if v.renewalFrom != "" && v.renewalUntil > until && !mut("renewals_unseen") {
 		from, until = v.renewalFrom, v.renewalUntil
 	}
 	return from, until
@@ -138,7 +142,7 @@ func (v *Voter) releaseSelf(now Instant, r Request) bool {
 // controller, after Candidate.Observe. The witness has no candidate and
 // never yields.
 func YieldTo(now Instant, v *Voter, c *Candidate, r Request) bool {
-	if v == nil || c == nil || r.From != c.cfg.Peer || c.cfg.Self != v.self || !v.wouldYield(now, r) {
+	if mut("no_yield") || v == nil || c == nil || r.From != c.cfg.Peer || c.cfg.Self != v.self || !v.wouldYield(now, r) {
 		return false
 	}
 	if !c.yield(now) {
@@ -175,6 +179,9 @@ func (v *Voter) Handle(now Instant, r Request) (*Persist, []Reply) {
 	g := v.reply(r, true)
 	if v.durable >= v.dirty {
 		return nil, []Reply{g}
+	}
+	if mut("answer_before_fsync") {
+		return &Persist{Seq: v.dirty, State: v.st}, []Reply{g}
 	}
 	v.held = append(v.held, heldGrant{need: v.dirty, reply: g})
 	return &Persist{Seq: v.dirty, State: v.st}, nil

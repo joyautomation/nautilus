@@ -186,8 +186,11 @@ redundancy:
   promises run out and a reachable controller wins first. Two, not one: the standby campaigns
   up to `lease + ρ·lease + lease/4` after the last renewal it saw. A leader back after one
   lease would campaign at about the same moment, win the standby's voter with a campaign it
-  can't hear answered, and hold the takeover off for another lease (the simulator measured
-  a takeover 6.3–6.55 s after the cut with one lease, 3.8–4.55 s with two, at a 2 s lease).
+  can't hear answered, and hold the takeover off for another lease. At a 2 s lease, over 160
+  F9 schedules per link delay with clocks skewed within ρ, the worst takeover at 1–100 ms
+  delays is 6.4–6.9 s with one lease and 3.9–4.3 s with two. With perfect clocks, the yield and
+  the moved retry of #979 hide the difference (3.5–3.7 s either way); a standby only 0.25%
+  fast brings it back. `TestTargetedOneWayLeaderSkewed` pins that schedule.
   **The trade, accepted:** a lapsed leader that is the only viable candidate also waits two
   leases. With the standby already down and the witness link out for a full lease, the pair
   is leaderless for 4.0 s instead of 2.0 s (a half-lease blip costs nothing either way). That

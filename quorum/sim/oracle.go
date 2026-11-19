@@ -24,6 +24,9 @@ type Record struct {
 	// Writes are what the simulated device received (I2): a controller
 	// writes it on each scan while its gate is open.
 	Writes []DeviceWrite
+	// Requests are every request a candidate sent: who, when, which term,
+	// and whether it was a renewal.
+	Requests []SentRequest
 	// Hostile are replies a correct candidate must not count that reached
 	// OnReply while a matching request of this boot was open.
 	Hostile []Hostile
@@ -69,6 +72,14 @@ type DeviceWrite struct {
 	At   time.Duration
 	From Addr
 	Term uint64
+}
+
+// SentRequest is one request a candidate sent.
+type SentRequest struct {
+	At      time.Duration
+	From    Addr
+	Term    uint64
+	Renewal bool
 }
 
 // Hostile is a reply that must not count, delivered while it could have.

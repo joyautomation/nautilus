@@ -519,10 +519,8 @@ func TestZombieCannotBlockTheStandby(t *testing.T) {
 func TestYieldCancelsOpenRounds(t *testing.T) {
 	v := NewVoter("A", lease, VoterState{Incarnation: 42}, 0)
 	c := newC(t, cfgA(), 0, at(lease))
-	r := c.Tick(at(lease), "", 0, true) // term 1
-	ps, reps := v.Handle(at(lease), *r)
-	reps = append(reps, v.Persisted(ps.Seq, true)...)
-	c.OnReply(at(lease), reps[0]) // its own voter: one of two
+	r := c.Tick(at(lease), "", 0, true)                  // term 1
+	c.OnReply(at(lease), selfGrant(t, v, at(lease), *r)) // its own voter: one of two
 	now := at(lease + 20*time.Millisecond)
 	if YieldTo(now, v, c, Request{From: "Z", Term: 2, ID: 1}) {
 		t.Fatal("yielded to a request from outside the pair")
@@ -541,9 +539,7 @@ func TestYieldCancelsOpenRounds(t *testing.T) {
 	v = NewVoter("A", lease, VoterState{Incarnation: 42}, 0)
 	c = newC(t, cfgA(), 0, at(lease))
 	r = c.Tick(at(lease), "", 0, true)
-	ps, reps = v.Handle(at(lease), *r)
-	reps = append(reps, v.Persisted(ps.Seq, true)...)
-	c.OnReply(at(lease), reps[0])
+	c.OnReply(at(lease), selfGrant(t, v, at(lease), *r))
 	c.OnReply(at(lease), granted("W", r, 42))
 	if YieldTo(at(lease+20*time.Millisecond), v, c, Request{From: "B", Term: 2, ID: 1}) {
 		t.Fatal("a leader yielded")
@@ -561,8 +557,7 @@ func TestReleaseKeepsAPromiseBehindANewRound(t *testing.T) {
 	c := newC(t, cfgA(), 0, at(lease))
 	t0 := at(lease)
 	r1 := c.Tick(t0, "", 0, true) // term 1, its own voter promises it
-	ps, _ := v.Handle(t0, *r1)
-	c.OnReply(t0, v.Persisted(ps.Seq, true)[0])
+	c.OnReply(t0, selfGrant(t, v, t0, *r1))
 	c.OnReply(t0, refused("W", r1, 0, 42)) // heard, so no back-off
 	peer := Request{From: "B", Term: 2, ID: 1}
 	if !v.wouldYield(t0, peer) || !c.yield(t0) {
@@ -573,8 +568,7 @@ func TestReleaseKeepsAPromiseBehindANewRound(t *testing.T) {
 	if r2 == nil || r2.Term != 2 {
 		t.Fatalf("set-up: second campaign %+v", r2)
 	}
-	ps, _ = v.Handle(at(lease+time.Second), *r2)
-	v.Persisted(ps.Seq, true)
+	selfGrant(t, v, at(lease+time.Second), *r2)
 	if v.releaseSelf(at(lease+time.Second), peer) {
 		t.Fatal("released the promise behind an open round (both could lead)")
 	}
@@ -608,12 +602,26 @@ func TestYieldKeepsTheUnheardBackOff(t *testing.T) {
 	v := NewVoter("A", lease, VoterState{Incarnation: 42}, 0)
 	c := newC(t, cfgA(), 0, at(lease))
 	r := c.Tick(at(lease), "", 0, true)
-	ps, _ := v.Handle(at(lease), *r)
-	c.OnReply(at(lease), v.Persisted(ps.Seq, true)[0]) // heard by itself only
+	c.OnReply(at(lease), selfGrant(t, v, at(lease), *r)) // heard by itself only
 	if !YieldTo(at(lease+time.Second), v, c, Request{From: "B", Term: 2, ID: 1}) {
 		t.Fatal("did not yield")
 	}
 	if c.NextLook() != at(3*lease) {
 		t.Fatalf("next look %v, want 6 s (sent 2 s + two leases)", time.Duration(c.NextLook()))
 	}
+}
+
+// selfGrant has v answer r and confirms the write; it returns the grant,
+// failing the test (never panicking, so a mutation can't hide the tests
+// after it) when there is none.
+func selfGrant(t *testing.T, v *Voter, now Instant, r Request) Reply {
+	t.Helper()
+	ps, reps := v.Handle(now, r)
+	if ps != nil {
+		reps = append(reps, v.Persisted(ps.Seq, true)...)
+	}
+	if len(reps) == 0 || !reps[0].Granted {
+		t.Fatalf("set-up: no grant for %+v: %+v", r, reps)
+	}
+	return reps[0]
 }
