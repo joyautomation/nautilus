@@ -144,6 +144,40 @@ every 50 ms. The box's own times are `ExecMainStartTimestampMonotonic` and
 critical-chain nautilus.service`: `network-online.target` at 17.7 s,
 reached through `NetworkManager-wait-online.service` (+6.7 s).
 
+## Cold power-on to the first good scan (one sample)
+
+2026-11-18, `tools/deploy/boot-probe` installed with `naut deploy`,
+`GOMAXPROCS=4` in `/etc/nautilus/env`; the supply switched off and on at
+the bench. All times are on the deploying machine's clock (NTP):
+
+- **Power** is the carrier's debug USB (the FT4232H on the Dahlia's supply
+  rail): it disconnected when the rail went and enumerated again when it
+  came back. It never disconnected through the warm reboots.
+- **The box's own times** are `nautilus.service`'s
+  `ExecMainStartTimestampMonotonic` and `ActiveEnterTimestampMonotonic`,
+  from kernel start. Kernel start on the same clock comes from the box's
+  uptime against its NTP clock, offset measured over SSH (±0.3 s).
+- **Seen from outside** is the watcher polling SSH and the probe's tag API
+  every 50 ms.
+
+| event | clock | from power returned |
+|---|---|---:|
+| the box stops answering (module off) | 15:55:48.3 | −18.3 s |
+| supply rail off (debug USB disconnects) | 15:56:02.727 | −3.9 s |
+| supply rail on (debug USB enumerates) | 15:56:06.648 | 0 |
+| kernel start | 15:56:18.97 | 12.3 s |
+| SSH answers | 15:56:36.3 | 29.6 s |
+| `nautilus.service` started (kernel + 19.36 s) | | 31.7 s |
+| first scan, `ActiveEnter` (kernel + 20.14 s) | | 32.5 s |
+| tag API answers, `Scans > 0` | 15:56:39.4 | 32.8 s |
+
+`systemd-analyze`: 4.5 s kernel + 20.9 s userspace; `network-online.target`
+at 14.8 s (`NetworkManager-wait-online` +5.9 s). The module went quiet
+14 s before the rail dropped, so the module was switched off first (SW3)
+and the supply after. The rail collapsed (the chip on it browned out), so
+the SoC came up from a power-on reset. One sample; a second, with the
+supply alone off for 10 s, would firm it up.
+
 ## The container path
 
 `distroless/static-debian12:nonroot` image of the probe, `docker run
@@ -163,6 +197,6 @@ reached through `NetworkManager-wait-online.service` (+6.7 s).
 
 ## Not measured
 
-A cold power-on (needs a power cycle), a `PREEMPT_RT` kernel, `isolcpus`,
+A second cold power-on, a `PREEMPT_RT` kernel, `isolcpus`,
 every task at a priority, `GOMAXPROCS` in the container, an OS update with
 nautilus installed.
