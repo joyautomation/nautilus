@@ -545,6 +545,21 @@ type ServerConfig struct {
 	// base URL) — server.hmi and the API are one process on one address,
 	// so there is no cross-origin URL to configure.
 	HMI string `yaml:"hmi"`
+	// TLS is the certificate the tag API serves (#708): PEM files the
+	// operator puts on the box, at absolute paths outside the project (a
+	// private key never belongs in git). NAUTILUS_TLS_CERT and
+	// NAUTILUS_TLS_KEY override them at start.
+	TLS *TLSConfig `yaml:"tls"`
+	// TrustedProxies are the addresses (or prefixes) of a TLS-terminating
+	// proxy in front of the controller (tailscale serve, nginx) whose
+	// X-Forwarded-Proto and X-Forwarded-For are believed. Empty: none.
+	TrustedProxies []string `yaml:"trusted-proxies"`
+}
+
+// TLSConfig is server.tls: the certificate and key files.
+type TLSConfig struct {
+	Cert string `yaml:"cert"`
+	Key  string `yaml:"key"`
 }
 
 // TaskConfig is one program on its own scan. The FIRST task is the main
@@ -876,6 +891,7 @@ type Project struct {
 	// AuthStateDir is the auth: block's state-dir (where the users file
 	// lives), "" when it names none.
 	AuthStateDir string
+	tls          *TLSConfig // server.tls (TLSFiles)
 
 	// Alarms is the composed `alarms:` section (alarm-files folded in),
 	// or nil when the manifest declares none. Load composes and validates
@@ -1289,6 +1305,17 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 	}
 
 	addr := m.Server.Addr
+	proxies, err := server.ParseTrustedProxies(m.Server.TrustedProxies)
+	if err != nil {
+		return nil, fmt.Errorf("server: %w", err)
+	}
+	if t := m.Server.TLS; t != nil {
+		for _, f := range []struct{ what, path string }{{"cert", t.Cert}, {"key", t.Key}} {
+			if f.path == "" || !filepath.IsAbs(f.path) {
+				return nil, fmt.Errorf("server: tls: %s %q: give an absolute path on the box, outside the project (a private key never belongs in git)", f.what, f.path)
+			}
+		}
+	}
 	if addr == "" {
 		addr = "localhost:8080"
 	}
@@ -1354,6 +1381,8 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 			HistorianURL: m.Server.Historian,
 			HMI:          hmiFS,
 			Substitutes:  serverSubstitutes(substitutes),
+
+			TrustedProxies: proxies,
 		},
 		sparkplug:   m.Sparkplug,
 		substitutes: substitutes,
@@ -1371,6 +1400,7 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 		HMIScreens:  screens,
 
 		AuthStateDir: m.authStateDir(),
+		tls:          m.Server.TLS,
 	}, nil
 }
 
@@ -1385,6 +1415,14 @@ func (m *Manifest) authStateDir() string {
 // AuthStateDir is the auth: block's state-dir, "" without one: where the
 // users file lives (naut users reads the manifest, not a Project).
 func (m *Manifest) AuthStateDir() string { return m.authStateDir() }
+
+// TLSFiles are server.tls's certificate and key paths, "" without it.
+func (p *Project) TLSFiles() (cert, key string) {
+	if p.tls == nil {
+		return "", ""
+	}
+	return p.tls.Cert, p.tls.Key
+}
 
 // BuiltHMIDir is where `naut build` puts the HMI it built into a
 // controller's embedded project: served as it is, never rebuilt.

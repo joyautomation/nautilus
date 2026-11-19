@@ -12,6 +12,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -76,6 +77,13 @@ func stopServers(t *testing.T) {
 // a free loopback port) and returns the API's base URL once it answers.
 func serveLogix(t *testing.T, args ...string) string {
 	t.Helper()
+	return serveLogixOver(t, "http", http.DefaultClient, args...)
+}
+
+// serveLogixOver is serveLogix with the API's scheme and the client that
+// reaches it (https, trusting a test certificate).
+func serveLogixOver(t *testing.T, scheme string, client *http.Client, args ...string) string {
+	t.Helper()
 	catchInterrupts.Do(func() {
 		c := make(chan os.Signal, 1)
 		signal.Notify(c, syscall.SIGINT)
@@ -97,10 +105,10 @@ func serveLogix(t *testing.T, args ...string) string {
 	running = append(running, exited)
 	runningMu.Unlock()
 	go func() { done <- runLogixServe(append(args, "--listen", addr)); close(exited) }()
-	base := "http://" + addr
+	base := scheme + "://" + addr
 	deadline := time.Now().Add(20 * time.Second)
 	for {
-		res, err := http.Get(base + "/api/meta")
+		res, err := client.Get(base + "/api/meta")
 		if err == nil {
 			res.Body.Close()
 			break
@@ -354,5 +362,28 @@ func TestLogixServeProjectEnforcesAuth(t *testing.T) {
 	}
 	if code := send("POST", "/api/tags", `{"name": "Speed", "value": 8}`, "script-secret"); code != http.StatusNoContent || held() != "8" {
 		t.Errorf("a write by the operator service token = %d, controller holds %s", code, held())
+	}
+}
+
+// #708: naut logix serve serves HTTPS with a certificate (here from
+// NAUTILUS_TLS_CERT and NAUTILUS_TLS_KEY), and a write over it reaches
+// the controller.
+func TestLogixServeOverTLS(t *testing.T) {
+	host, port, em := emulateSpec(t, moduleIOController())
+	cert, key, pool := selfSigned(t, t.TempDir())
+	t.Setenv("NAUTILUS_TOKEN", "")
+	t.Setenv("NAUTILUS_TLS_CERT", cert)
+	t.Setenv("NAUTILUS_TLS_KEY", key)
+	client := &http.Client{Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool}}, Timeout: 10 * time.Second}
+	base := serveLogixOver(t, "https", client, "--host", host, "--port", port, "--poll", "30ms")
+	req, _ := http.NewRequest("POST", base+"/api/tags", strings.NewReader(`{"name": "Speed", "value": 44}`))
+	req.Header.Set("Content-Type", "application/json")
+	res, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if _, v, _ := em.Store.Resolve("Speed"); res.StatusCode != http.StatusNoContent || fmt.Sprint(v) != "44" {
+		t.Errorf("a write over TLS: %d, controller holds %v", res.StatusCode, v)
 	}
 }

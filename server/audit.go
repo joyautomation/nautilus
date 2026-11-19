@@ -533,7 +533,7 @@ func (a *auditedRoute) answer(w http.ResponseWriter, r *http.Request, t auditTar
 		Before: t.before,
 		After:  t.after,
 		Detail: t.detail,
-		From:   hostOf(r.RemoteAddr),
+		From:   a.s.clientAddr(r),
 		Result: resultOf(status),
 	}
 	if buf.header.Get(outcomeHeader) == "unknown" {

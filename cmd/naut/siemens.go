@@ -142,6 +142,9 @@ type siemensServeConfig struct {
 	// tokens' secrets (#708), enforced as under naut run; nil without one.
 	auth     *auth.Policy
 	services map[string]string
+	// tls is the project's server.tls (or NAUTILUS_TLS_CERT/_KEY), nil
+	// without one.
+	tls *server.CertSource
 }
 
 // resolveSiemensServe merges flags over the project's target.siemens and
@@ -164,6 +167,15 @@ func resolveSiemensServe(host, user, pin, projectDir string, roots []facade.Root
 			}
 			c.auth, c.services = sopts.Auth, sopts.ServiceTokens
 		}
+		var cert, key string
+		if err == nil && m.Server.TLS != nil {
+			cert, key = m.Server.TLS.Cert, m.Server.TLS.Key
+		}
+		src, terr := tlsSource(cert, key, projectDir, getenv)
+		if terr != nil {
+			return c, terr
+		}
+		c.tls = src
 		if err == nil && m.Target != nil && m.Target.Siemens != nil {
 			t := m.Target.Siemens
 			if c.host == "" {
@@ -251,7 +263,7 @@ func siemensFacadeOptions(cfg siemensServeConfig, client *webapi.Client) facade.
 		Host:   cfg.host,
 		Roots:  cfg.roots,
 		Poll:   cfg.poll,
-		Server: server.Options{AuthToken: cfg.token, Auth: cfg.auth, ServiceTokens: cfg.services},
+		Server: server.Options{AuthToken: cfg.token, Auth: cfg.auth, ServiceTokens: cfg.services, TLS: cfg.tls},
 	}
 }
 
@@ -283,6 +295,7 @@ func serveSiemens(ctx context.Context, cfg siemensServeConfig, client *webapi.Cl
 		fmt.Fprintln(stderr, "naut siemens serve:", err)
 		return 1
 	}
+	ln, scheme := facadeListener(ln, cfg.tls, cfg.listen, "naut siemens serve", stderr)
 	runCtx, stopRun := context.WithCancel(ctx)
 	defer stopRun()
 	go f.Run(runCtx)
@@ -292,8 +305,8 @@ func serveSiemens(ctx context.Context, cfg siemensServeConfig, client *webapi.Cl
 	srv := &http.Server{Handler: f.Handler(), BaseContext: func(net.Listener) context.Context { return runCtx }}
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve(ln) }()
-	fmt.Fprintf(stdout, "nautilus · Siemens %s — %d tags on http://%s — Ctrl+C to stop\n",
-		cfg.host, len(f.Bindings()), displayAddr(ln.Addr()))
+	fmt.Fprintf(stdout, "nautilus · Siemens %s — %d tags on %s://%s — Ctrl+C to stop\n",
+		cfg.host, len(f.Bindings()), scheme, displayAddr(ln.Addr()))
 	if ready != nil {
 		ready <- ln.Addr().String()
 	}

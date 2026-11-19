@@ -97,6 +97,7 @@ func runLogixServe(args []string) int {
 	var plane *facade.ProgramPlane
 	release := func() {}
 	sopts := server.Options{AuthToken: os.Getenv("NAUTILUS_TOKEN")}
+	var tlsCert, tlsKey string
 	if *projectDir != "" {
 		p, err := loadLogixProject(*projectDir)
 		if err != nil {
@@ -122,6 +123,9 @@ func runLogixServe(args []string) int {
 		}
 		// The project's auth: block decides its writes, deploys included,
 		// as under naut run (#708): a viewer token may not download.
+		if p.tls != nil {
+			tlsCert, tlsKey = p.tls.Cert, p.tls.Key
+		}
 		if err := withAuth(&sopts, p.auth, os.Getenv); err != nil {
 			fmt.Fprintln(os.Stderr, "naut logix serve: auth:", err)
 			return 2
@@ -136,6 +140,13 @@ func runLogixServe(args []string) int {
 	// keep warm; left open, logixd holds the project online until its idle
 	// reaper (30 minutes by default) gets to it.
 	defer release()
+	// HTTPS when the project has server.tls (or NAUTILUS_TLS_CERT/_KEY).
+	tlsSrc, terr := tlsSource(tlsCert, tlsKey, *projectDir, os.Getenv)
+	if terr != nil {
+		fmt.Fprintln(os.Stderr, "naut logix serve:", terr)
+		return 2
+	}
+	sopts.TLS = tlsSrc
 	if *host == "" {
 		fmt.Fprint(os.Stderr, "naut logix serve: --host is required\n\n", logixServeUsage)
 		return 2
@@ -179,14 +190,15 @@ func runLogixServe(args []string) int {
 		fmt.Fprintln(os.Stderr, "naut logix serve:", err)
 		return 1
 	}
+	ln, scheme := facadeListener(ln, tlsSrc, *listen, "naut logix serve", os.Stderr)
 	go f.Run(ctx)
 	srv := &http.Server{Handler: f.Handler()}
 	go func() {
 		<-ctx.Done()
 		_ = srv.Close()
 	}()
-	fmt.Printf("nautilus · Logix %s — %d tags on http://%s — Ctrl+C to stop\n",
-		*host, f.Tags(), displayAddr(ln.Addr()))
+	fmt.Printf("nautilus · Logix %s — %d tags on %s://%s — Ctrl+C to stop\n",
+		*host, f.Tags(), scheme, displayAddr(ln.Addr()))
 	if err := srv.Serve(ln); err != nil && ctx.Err() == nil {
 		fmt.Fprintln(os.Stderr, "naut logix serve:", err)
 		return 1
