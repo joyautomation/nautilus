@@ -32,11 +32,15 @@ type memStore struct {
 	mu       sync.Mutex
 	enc      []byte
 	failSave error
+	failLoad error
 }
 
 func (s *memStore) Load() (retain.State, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.failLoad != nil {
+		return retain.State{}, s.failLoad
+	}
 	var st retain.State
 	if s.enc == nil {
 		return st, nil
@@ -1042,5 +1046,125 @@ func TestIOFollowRechecksUnderTheLock(t *testing.T) {
 	}
 	if d := r.io.Differs(); len(d) != 1 {
 		t.Fatalf("differs = %+v: the follow acted on the leader", d)
+	}
+}
+
+// A store that cannot be read at the edge does not block applies for the
+// life of the process: standalone, an apply is allowed and answered not
+// kept; on a redundant project it is refused (#1010 re-review, 1).
+func TestIOKeptStoreUnreadableAtTheEdge(t *testing.T) {
+	t.Run("standalone", func(t *testing.T) {
+		s1, s2, s3 := newSlave(t, 4), newSlave(t, 7), newSlave(t, 9)
+		files := ioFiles(slavePort(s1), slavePort(s2), "")
+		store := &memStore{failLoad: errors.New("store down")}
+		r := startKeepRig(t, files, keepOpts{store: store})
+		eventually(t, "the first scan", func() bool { return r.scans.Load() > 0 })
+		res := r.applyMove(t, files, slavePort(s3), slavePort(s2), ApplyOptions{})
+		if res.Kept || !strings.Contains(res.KeptWhy, "could not be read") {
+			t.Fatalf("kept %v (%s), want applied and not kept, the unreadable store named", res.Kept, res.KeptWhy)
+		}
+		if nk := r.io.NotKept(); !strings.Contains(nk, "could not be read") {
+			t.Fatalf("NotKept = %q", nk)
+		}
+	})
+	t.Run("redundant", func(t *testing.T) {
+		s1, s2, s3 := newSlave(t, 4), newSlave(t, 7), newSlave(t, 9)
+		files := ioFiles(slavePort(s1), slavePort(s2), "")
+		store := &memStore{failLoad: errors.New("store down")}
+		coord := &keepCoord{}
+		coord.lead.Store(true)
+		coord.term.Store(1)
+		r := startKeepRig(t, files, keepOpts{store: store, coord: coord, noFollow: true})
+		eventually(t, "the first scan", func() bool { return r.scans.Load() > 0 })
+		c := r.io.Stage(withFile(files, "modbus.yaml", modbusYAML(slavePort(s3), slavePort(s2), "", "")), "upload", "tester")
+		v := r.io.Validate(c)
+		if v.Valid || fmt.Sprint(failed(v)) != "[kept]" || !strings.Contains(fmt.Sprint(v.Checks), "could not be read") {
+			t.Fatalf("failed %v, want kept: the store could not be read", failed(v))
+		}
+	})
+}
+
+// Two replicas never take one sequence number for two states: a leader
+// whose apply was never saved (the store down, so put back) does not move
+// its number on, so it still follows the next leader's first save, and
+// its own takeover after holds nothing (#1010 re-review, 2).
+func TestIOFollowAfterAnUnsavedApply(t *testing.T) {
+	shortFollow(t)
+	s1, s2, s3 := newSlave(t, 4), newSlave(t, 7), newSlave(t, 9)
+	files := ioFiles(slavePort(s1), slavePort(s2), "")
+	store := &memStore{}
+	ca, cb := &keepCoord{}, &keepCoord{}
+	ca.lead.Store(true)
+	ca.term.Store(1)
+	a := startKeepRig(t, files, keepOpts{store: store, coord: ca})
+	b := startKeepRig(t, files, keepOpts{store: store, coord: cb})
+	a.leading(t)
+	// A applies with the store down: its save and its put-back both fail.
+	store.mu.Lock()
+	store.failSave = errors.New("store down")
+	store.mu.Unlock()
+	c := a.io.Stage(withFile(files, "modbus.yaml", modbusYAML(slavePort(s3), slavePort(s2), "", "")), "upload", "tester")
+	if v := a.io.Validate(c); !v.Valid {
+		t.Fatalf("validate: %v", failed(v))
+	}
+	if _, err := a.io.Apply(a.ctx, c, "tester"); !errors.Is(err, ErrNotKept) {
+		t.Fatalf("apply on a down store: %v, want put back", err)
+	}
+	store.mu.Lock()
+	store.failSave = nil
+	store.mu.Unlock()
+	// A steps down; B takes over and applies the move, kept.
+	ca.lead.Store(false)
+	cb.term.Store(2)
+	cb.lead.Store(true)
+	b.leading(t)
+	if res := b.applyMove(t, files, slavePort(s3), slavePort(s2), ApplyOptions{}); !res.Kept {
+		t.Fatalf("B's apply not kept: %s", res.KeptWhy)
+	}
+	if st := store.io(t); st == nil || st.Seq != 1 || b.io.seqNow() != 1 || !b.io.IOCurrent(st) {
+		t.Fatalf("store seq %v, B's %d, B current %v: want B's save to be the store's sequence 1, and B current with it",
+			st, b.io.seqNow(), st != nil && b.io.IOCurrent(st))
+	}
+	eventually(t, "A to follow B's apply", func() bool { return len(a.io.Differs()) == 1 })
+	// A takes over again: nothing to re-apply, so no hold.
+	cb.lead.Store(false)
+	ca.term.Store(3)
+	ca.lead.Store(true)
+	before := a.keeper.leading.Load()
+	time.Sleep(4 * followInterval)
+	if n := a.keeper.leading.Load() - before; n != 0 {
+		t.Fatalf("A's takeover re-applied %d time(s), want none", n)
+	}
+	// And B, whose own save is what the store holds, takes over again with
+	// nothing to re-apply either.
+	ca.lead.Store(false)
+	cb.term.Store(4)
+	cb.lead.Store(true)
+	before = b.keeper.leading.Load()
+	time.Sleep(4 * followInterval)
+	if n := b.keeper.leading.Load() - before; n != 0 {
+		t.Fatalf("B's takeover re-applied %d time(s), want none: it saved what the store holds", n)
+	}
+}
+
+// A follower acts on a store with its own sequence number but a different
+// state: the number was taken twice, and the store's state is the one.
+func TestIOFollowActsOnAnEqualSeqWithADifferentState(t *testing.T) {
+	s1, s2, s3 := newSlave(t, 4), newSlave(t, 7), newSlave(t, 9)
+	files := ioFiles(slavePort(s1), slavePort(s2), "")
+	store := &memStore{}
+	coord := &keepCoord{}
+	coord.lead.Store(true)
+	coord.term.Store(1)
+	r := startKeepRig(t, files, keepOpts{store: store, coord: coord, noFollow: true})
+	r.leading(t)
+	r.applyMove(t, files, slavePort(s3), slavePort(s2), ApplyOptions{})
+	coord.lead.Store(false)
+	other := &retain.IOState{Seq: r.io.seqNow()} // same number, nothing kept
+	if err := r.io.restoreFrom(context.Background(), other, true); err != nil {
+		t.Fatal(err)
+	}
+	if d := r.io.Differs(); len(d) != 0 {
+		t.Fatalf("differs = %+v, want the store's state followed", d)
 	}
 }

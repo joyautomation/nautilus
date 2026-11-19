@@ -20,7 +20,8 @@ type fakeKeeper struct {
 	restores atomic.Int32
 	got      *retain.IOState
 	// deaf ignores ctx: a restore that does not end when told to.
-	deaf bool
+	deaf       bool
+	unreadable error
 }
 
 func (k *fakeKeeper) RetainedIO() *retain.IOState {
@@ -60,6 +61,14 @@ type keepTerm struct {
 
 func (f *keepTerm) IsLeader() bool { return f.lead.Load() }
 func (f *keepTerm) Term() uint64   { return f.term.Load() }
+
+func (k *fakeKeeper) IOUnreadable(err error) {
+	k.mu.Lock()
+	k.unreadable = err
+	k.mu.Unlock()
+}
+
+func (k *fakeKeeper) IOSaved(*retain.IOState) {}
 
 func keptIO() *retain.IOState {
 	return &retain.IOState{Units: map[string]retain.IOUnit{"modbus/DEV_A": {Base: "b", Hash: "h"}}}
@@ -337,6 +346,59 @@ func TestSaveRetainedConflictAndDefinite(t *testing.T) {
 		// the store's, after the store's 200 ms, not ctx's 50 ms.
 		if err != nil || got == nil {
 			t.Fatalf("err %v, stored %v: want nil once the store holds it", err, got != nil)
+		}
+	})
+}
+
+// failingLoads fails its first n loads.
+type failingLoads struct {
+	*fakeStore
+	n atomic.Int32
+}
+
+func (f *failingLoads) Load() (retain.State, error) {
+	if f.n.Add(-1) >= 0 {
+		return retain.State{}, errors.New("store down")
+	}
+	return f.fakeStore.Load()
+}
+
+// A store read that fails at the edge is retried; one that keeps failing
+// is reported to the keeper, and the scan goes on (#1010 re-review).
+func TestTakeoverRetriesAStoreRead(t *testing.T) {
+	saved, retry := ioLoadTries, ioLoadRetry
+	ioLoadTries, ioLoadRetry = 3, 10*time.Millisecond
+	t.Cleanup(func() { ioLoadTries, ioLoadRetry = saved, retry })
+	scanUntil := func(rt *Runtime, cond func() bool) {
+		for i := 0; i < 200 && !cond(); i++ {
+			rt.Scan()
+			time.Sleep(time.Millisecond)
+		}
+	}
+	t.Run("a read that fails once", func(t *testing.T) {
+		store := &failingLoads{fakeStore: &fakeStore{state: retain.State{IO: keptIO()}}}
+		store.n.Store(1)
+		rt := newRetained(t, store, nil)
+		k := &fakeKeeper{release: make(chan struct{})}
+		close(k.release)
+		rt.SetIO(k)
+		scanUntil(rt, func() bool { return scanned(rt) > 0 })
+		if k.restores.Load() != 1 || k.unreadable != nil {
+			t.Fatalf("restores %d, unreadable %v: want the retry to read the store and restore", k.restores.Load(), k.unreadable)
+		}
+	})
+	t.Run("a store that cannot be read", func(t *testing.T) {
+		store := &failingLoads{fakeStore: &fakeStore{state: retain.State{IO: keptIO()}}}
+		store.n.Store(100)
+		rt := newRetained(t, store, nil)
+		k := &fakeKeeper{}
+		rt.SetIO(k)
+		scanUntil(rt, func() bool { return scanned(rt) > 0 })
+		k.mu.Lock()
+		unreadable := k.unreadable
+		k.mu.Unlock()
+		if scanned(rt) == 0 || unreadable == nil || k.restores.Load() != 0 {
+			t.Fatalf("scans %d, unreadable %v, restores %d: want the keeper told and the scan going on", scanned(rt), unreadable, k.restores.Load())
 		}
 	})
 }

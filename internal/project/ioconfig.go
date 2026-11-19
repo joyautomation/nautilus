@@ -114,9 +114,23 @@ type IOConfig struct {
 	dropped        []IODiscard
 	// held are the units a restore holds (holdUnits), until replaced.
 	held map[string]bool
-	// seq orders what the store keeps: every change to it moves it on, and
-	// a standby follows only a store newer than what it runs (Follow).
-	seq uint64
+	// seq is the sequence of the store state this replica last saved or
+	// followed: it moves only on a durable save (IOSaved) or a follow, so
+	// two replicas never claim one number for two states. storeSeq is the
+	// highest the store is known to hold; changed counts changes to what
+	// is kept, savedChanged those a save has made durable. A save with
+	// changes pending takes max(seq, storeSeq)+1 (RetainedIO).
+	seq, storeSeq         uint64
+	changed, savedChanged uint64
+	// offered is what RetainedIO last returned, which IOSaved commits.
+	offered struct {
+		seq, changed uint64
+		hash         string
+		gen          int
+	}
+	// unreadable says why the store could not be read at the last edge:
+	// nothing is kept from it or promised to it until an edge reads it.
+	unreadable string
 	// restoring: a restore runs; edgeSeen: a leadership edge has re-applied
 	// (or found current) what the store keeps. An apply waits for both.
 	restoring, edgeSeen bool
@@ -1219,10 +1233,10 @@ func (io *IOConfig) apply(ctx context.Context, c *IOCandidate, by string, opts A
 	case opts.RevertIfSilent > 0:
 		io.provisional = &retain.IOProvisional{Gen: gen, From: c.From, By: by, At: at,
 			Deadline: at.Add(opts.RevertIfSilent)}
-		io.seq++
+		io.changed++
 	default:
 		io.kept, io.provisional = copyUnits(io.running), nil
-		io.seq++
+		io.changed++
 	}
 	if !c.restore {
 		io.held = nil // a full candidate replaced every unit that was held
@@ -1255,7 +1269,7 @@ func (io *IOConfig) apply(ctx context.Context, c *IOCandidate, by string, opts A
 		}
 		io.kept, io.provisional = prevKept, prevProv
 		io.gen++
-		io.seq++ // newer than anything the failed save may yet leave
+		io.changed++ // the put-back's save is newer than anything the failed one may leave
 		io.mu.Unlock()
 		msg := "the apply was not kept in the retain store (" + keptWhy + "), so a takeover would bring back the old configuration"
 		// The put-back is saved too: behind the failed save in the store's

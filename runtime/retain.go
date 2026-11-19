@@ -547,6 +547,9 @@ func (r *Runtime) saveRetainedErr(lastSaved []byte) ([]byte, error) {
 		r.noteRetainError(err)
 		return lastSaved, err
 	}
+	if k := r.ioKeeper(); k != nil {
+		k.IOSaved(st.IO) // durable now: its sequence is the store's
+	}
 	return enc, nil
 }
 

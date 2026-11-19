@@ -86,6 +86,9 @@ func (io *IOConfig) NotKept() string {
 	}
 	io.mu.Lock()
 	defer io.mu.Unlock()
+	if io.unreadable != "" {
+		return io.unreadable
+	}
 	if io.unsaved != "" {
 		return io.unsaved
 	}
@@ -151,6 +154,8 @@ func (io *IOConfig) keptProblems(c *IOCandidate) []string {
 	switch {
 	case io.p.Redundancy != nil && io.Keep == nil:
 		out = append(out, "this redundant project has no retain: block, so nothing keeps an applied configuration across a takeover and a standby would come up on the old addresses: add a retain: block, or deploy the change instead")
+	case io.p.Redundancy != nil && io.unreadableNow() != "":
+		out = append(out, io.unreadableNow()+"; a standby would come up on the old addresses: deploy the change instead")
 	case io.p.Redundancy != nil && io.KeepStore == "file":
 		out = append(out, "this redundant project's retain store is a file, which only this replica reads: a standby would come up on the old addresses; deploy the change instead")
 	}
@@ -168,6 +173,12 @@ func (io *IOConfig) keptProblems(c *IOCandidate) []string {
 func (io *IOConfig) keepNow(provisional bool) (bool, string) {
 	if io.Keep == nil {
 		return false, notKeptNoRetain
+	}
+	io.mu.Lock()
+	unreadable := io.unreadable
+	io.mu.Unlock()
+	if unreadable != "" {
+		return false, unreadable
 	}
 	// Not the request's context: a client that goes away must not make an
 	// apply unkept (and, on a redundant project, put back).
@@ -242,7 +253,7 @@ func (io *IOConfig) watchEnded(w IOWatch) {
 		io.provisional, changed = nil, true
 	}
 	if changed {
-		io.seq++
+		io.changed++
 	}
 	io.mu.Unlock()
 	if !changed || io.Keep == nil {
@@ -292,11 +303,50 @@ func (io *IOConfig) RetainedIO() *retain.IOState {
 		p := *io.provisional
 		st.Provisional = &p
 	}
-	st.Seq = io.seq
-	if st.Units == nil && st.Discarded == nil && st.Provisional == nil && st.Seq == 0 {
+	if io.unreadable != "" {
+		// The store could not be read at the edge: nothing of it is known,
+		// and nothing applied since is promised kept (NotKept).
+		io.offered.seq, io.offered.changed, io.offered.hash, io.offered.gen = io.seq, io.changed, hashOf((*retain.IOState)(nil)), io.gen
 		return nil
 	}
+	st.Seq = io.seq
+	if io.changed != io.savedChanged {
+		// A change not saved yet: one past anything the store may hold, so
+		// no two states ever share a number.
+		st.Seq = max(io.seq, io.storeSeq) + 1
+	}
+	if st.Units == nil && st.Discarded == nil && st.Provisional == nil && st.Seq == 0 {
+		st = nil
+	}
+	io.offered.seq, io.offered.changed, io.offered.hash, io.offered.gen = seqOf(st), io.changed, hashOf(st), io.gen
 	return st
+}
+
+// IOSaved commits what RetainedIO last offered: the store holds it now
+// (runtime.IOKeeper). Its sequence is this replica's, and what runs is
+// current with it (IOCurrent) unless an apply has landed since.
+func (io *IOConfig) IOSaved(st *retain.IOState) {
+	io.mu.Lock()
+	defer io.mu.Unlock()
+	if io.unreadable != "" || hashOf(st) != io.offered.hash {
+		return
+	}
+	io.seq = io.offered.seq
+	io.storeSeq = max(io.storeSeq, io.offered.seq)
+	io.savedChanged = io.offered.changed
+	io.memo.st, io.memo.gen = io.offered.hash, io.offered.gen
+}
+
+// IOUnreadable records that the store could not be read at this edge
+// (runtime.IOKeeper): what it keeps cannot be re-applied, so an apply is
+// not kept either. Refused on a redundant project (a standby would come
+// up on the old addresses); allowed standalone, answered kept: false.
+func (io *IOConfig) IOUnreadable(err error) {
+	io.mu.Lock()
+	defer io.mu.Unlock()
+	io.unreadable = "the retain store could not be read when this controller took the lead (" + err.Error() + "): what it kept was not re-applied, and an apply is not kept until a restart or takeover reads it"
+	io.edgeSeen = true
+	slog.Error("config.io: " + io.unreadable)
 }
 
 // IOCurrent reports whether what runs is what st keeps: the last restore
@@ -310,9 +360,11 @@ func (io *IOConfig) IOCurrent(st *retain.IOState) bool {
 	h := hashOf(st)
 	io.mu.Lock()
 	defer io.mu.Unlock()
+	io.storeSeq = max(io.storeSeq, seqOf(st)) // the store, as this edge read it
 	current := h == io.memo.st && io.gen == io.memo.gen
 	if current {
 		io.edgeSeen = true // the runtime asks only at an edge
+		io.unreadable = ""
 	}
 	return current
 }
@@ -455,7 +507,18 @@ func (io *IOConfig) restoreFrom(ctx context.Context, st *retain.IOState, follow 
 // and a leader's applies are newer than any store it could read), nor for a
 // store no newer than what it runs (a slow read from before an apply).
 func (io *IOConfig) followSkip(st *retain.IOState) bool {
-	return io.leads() || seqOf(st) <= io.seqNow()
+	io.mu.Lock()
+	seq, memo := io.seq, io.memo.st
+	io.mu.Unlock()
+	switch s := seqOf(st); {
+	case io.leads(), s < seq:
+		return true
+	case s == seq:
+		// The same number for a different state: two replicas each took it
+		// (one never saved). The store's is the one that holds.
+		return hashOf(st) == memo
+	}
+	return false
 }
 
 func seqOf(st *retain.IOState) uint64 {
@@ -463,6 +526,12 @@ func seqOf(st *retain.IOState) uint64 {
 		return 0
 	}
 	return st.Seq
+}
+
+func (io *IOConfig) unreadableNow() string {
+	io.mu.Lock()
+	defer io.mu.Unlock()
+	return io.unreadable
 }
 
 func (io *IOConfig) seqNow() uint64 {
@@ -614,10 +683,13 @@ func (io *IOConfig) settle(r *restore, target map[string]ioUnit, follow bool) {
 		io.discarded, io.discardedFiles = nil, nil
 	}
 	io.memo.st, io.memo.gen = hashOf(r.st), io.gen
+	io.seq = seqOf(r.st)
+	io.storeSeq = max(io.storeSeq, io.seq)
 	if follow {
-		io.seq = seqOf(r.st)
+		io.savedChanged = io.changed // what it runs is what the store holds
 	} else {
-		io.seq = max(io.seq, seqOf(r.st)) + 1
+		io.changed++ // the leader saves what it settled, past the store's number
+		io.unreadable = ""
 	}
 }
 
@@ -765,7 +837,7 @@ func (io *IOConfig) Follow(ctx context.Context, load func() (retain.State, error
 			continue
 		}
 		st, err := load()
-		if err != nil || seqOf(st.IO) <= io.seqNow() {
+		if err != nil || io.followSkip(st.IO) {
 			continue
 		}
 		rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
