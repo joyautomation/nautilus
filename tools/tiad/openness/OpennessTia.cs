@@ -78,27 +78,47 @@ namespace Tiad.Openness
             cc.OnlineLegitimation -= Handle;
         }
 
+        // Handle answers one question, as OnlineChecks decides: a
+        // certificate is set NonTrusted before anything else is read, and
+        // anything else cancels. Every question is recorded, so the
+        // operation fails even if TIA goes on.
         void Handle(OnlineConfiguration c)
         {
+            string type = c.GetType().Name;
             var tls = c as TlsVerificationConfiguration;
-            if (tls != null)
+            if (OnlineChecks.Answer(type) == OnlineChecks.NotTrusted && tls != null)
             {
-                var fps = new List<string>();
-                int n = 0;
-                foreach (VerificationCertificate v in tls.Certificates)
-                {
-                    n++;
-                    if (v.Certificate == null) continue;
-                    fps.Add(TiaNames.Fingerprint(v.Certificate.RawData));
-                    Log.Line("online: TLS certificate {0}: subject {1}, issuer {2}, valid {3:o} to {4:o}", n, v.Certificate.Subject, v.Certificate.Issuer,
-                        v.Certificate.NotBefore.ToUniversalTime(), v.Certificate.NotAfter.ToUniversalTime());
-                }
-                Log.Line("online: {0} asks TLS trust, {1} certificate(s), {2}", tls.PlcName ?? "", n, Describe(tls));
-                Asked.Add(TiaNames.OnlineAsk("TlsVerificationConfiguration", tls.PlcName ?? "", tls.VerificationInfo ?? "", fps));
                 tls.CurrentSelection = TlsVerificationConfigurationSelection.NonTrusted;
+                string plc = "", info = "";
+                var fps = new List<string>();
+                try
+                {
+                    plc = tls.PlcName ?? "";
+                    info = tls.VerificationInfo ?? "";
+                    int n = 0;
+                    foreach (VerificationCertificate v in tls.Certificates)
+                    {
+                        n++;
+                        if (v.Certificate == null) continue;
+                        string fp = TiaNames.Fingerprint(v.Certificate.RawData);
+                        fps.Add(fp);
+                        Log.Line("online: TLS certificate {0}: SHA-256 {1}, subject {2}, issuer {3}, valid {4:o} to {5:o}", n, fp,
+                            TiaNames.LogSafe(v.Certificate.Subject), TiaNames.LogSafe(v.Certificate.Issuer),
+                            v.Certificate.NotBefore.ToUniversalTime(), v.Certificate.NotAfter.ToUniversalTime());
+                    }
+                    Log.Line("online: {0} asks TLS trust ({1} certificate(s)); answered not trusted; {2}", TiaNames.LogSafe(plc), n, TiaNames.LogSafe(Describe(tls)));
+                }
+                catch (Exception e)
+                {
+                    Log.Line("online: reading a TLS question failed ({0}); answered not trusted", e.GetType().Name);
+                }
+                Asked.Add(OnlineChecks.Ask(type, plc, info, fps));
                 return;
             }
-            Asked.Add(TiaNames.OnlineAsk(c.GetType().Name, "", "", new List<string>()));
+            string ask = OnlineChecks.Ask(type, "", "", new List<string>());
+            Asked.Add(ask);
+            Log.Line("online: TIA asks {0}; tiad cancels", TiaNames.LogSafe(ask));
+            throw new TiaException("tiad cancels going online: TIA asked " + ask);
         }
 
         // Describe lists an online question's attributes and their values,
@@ -129,6 +149,13 @@ namespace Tiad.Openness
         {
             if (Asked.Count == 0) return null;
             return new TiaException(TiaNames.OnlineRefused(address, Asked, TiaNames.Message(e)), e);
+        }
+
+        // Check fails an operation TIA carried on with after a question:
+        // a question answered no is a refusal, even when TIA went on.
+        public void Check(string address, string what)
+        {
+            if (Asked.Count > 0) throw new TiaException(TiaNames.OnlineRefused(address, Asked, "TIA went on with the " + what));
         }
     }
 
@@ -615,12 +642,13 @@ namespace Tiad.Openness
             }
             // How it ended is decided in core (DownloadDecider.Finish).
             DownloadEnd end = decider.Finish(entered, state, messages, error);
-            if (end.Failure != null)
+            // A question going online fails the download, even one TIA went
+            // on with: once TIA's download call was entered, in doubt.
+            if (online != null && online.Asked.Count > 0)
             {
-                string why = end.Failure;
-                if (online != null && online.Asked.Count > 0) why = TiaNames.OnlineRefused(address, online.Asked, end.Failure);
-                throw new TiaException(why, error, end.InDoubt);
+                throw new TiaException(TiaNames.OnlineRefused(address, online.Asked, end.Failure ?? "TIA went on with the download"), error, entered);
             }
+            if (end.Failure != null) throw new TiaException(end.Failure, error, end.InDoubt);
             return new DownloadOutcome { Questions = decider.Asked, Loaded = end.Loaded };
         }
 
@@ -707,11 +735,30 @@ namespace Tiad.Openness
                 OnlineProvider op = cpu.GetService<OnlineProvider>();
                 ConfigurationPcInterface pc = PcInterface(op.Configuration);
                 ConfigurationAddress at = TargetInterface(pc).Addresses.Create(address);
+                // The handler stays attached until offline: TIA may ask while
+                // it compares, too.
                 var online = new OnlineAsks(op.Configuration);
-                OnlineState st;
                 try
                 {
-                    st = op.GoOnline(at);
+                    OnlineState st = op.GoOnline(at);
+                    try
+                    {
+                        if (st != OnlineState.Online)
+                        {
+                            if (online.Asked.Count > 0) throw new TiaException(TiaNames.OnlineRefused(address, online.Asked, "online state " + st));
+                            throw new TiaException("TIA could not go online to " + address + ": " + st);
+                        }
+                        CompareResult cr = ((PlcSoftware)cpu.GetService<SoftwareContainer>().Software).CompareToOnline();
+                        Walk(cr.RootElement, differences);
+                    }
+                    finally
+                    {
+                        op.GoOffline();
+                    }
+                }
+                catch (TiaException)
+                {
+                    throw;
                 }
                 catch (Exception e)
                 {
@@ -723,20 +770,7 @@ namespace Tiad.Openness
                 {
                     online.Stop();
                 }
-                try
-                {
-                    if (st != OnlineState.Online)
-                    {
-                        if (online.Asked.Count > 0) throw new TiaException(TiaNames.OnlineRefused(address, online.Asked, "online state " + st));
-                        throw new TiaException("TIA could not go online to " + address + ": " + st);
-                    }
-                    CompareResult cr = ((PlcSoftware)cpu.GetService<SoftwareContainer>().Software).CompareToOnline();
-                    Walk(cr.RootElement, differences);
-                }
-                finally
-                {
-                    op.GoOffline();
-                }
+                online.Check(address, "compare");
                 return differences.Count == 0;
             });
         }
@@ -879,6 +913,7 @@ namespace Tiad.Openness
                 }
                 // A refusal TIA swallowed is still a refusal.
                 if (asked != null) throw new TiaException("upload asked " + asked + ", which tiad does not answer; TIA went on anyway");
+                online.Check(address, "upload");
                 string state = r.State.ToString();
                 if (!TiaNames.DownloadLoaded(state)) throw new TiaException("TIA's upload ended " + state);
                 if (StationOf(p) == null) throw new TiaException("the upload brought no CPU into the project");
