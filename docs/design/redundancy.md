@@ -138,9 +138,25 @@ redundancy:
   restart wait, or promised to itself) campaigns under a live leader at every look, and its
   voter keeps promising itself. That only delays a campaign: a leader that can send but not
   hear stops sending when it backs off (below), so the standby's wait ends one lease after its
-  last renewal. One campaign is in flight at
-  a time. A campaign refused by a majority is retried after a seeded per-node jitter in
-  `[0, lease/4)`, so two controllers refused in the same round don't retry in lockstep.
+  last renewal. One campaign is in flight at a time. A refused campaign is retried half a
+  look plus a seeded per-node jitter in `[0, lease/4)` later, and the retry moves the look
+  itself: on the `lease/4` grid a jitter below `lease/4` would change nothing, and two
+  controllers started together would retry in lockstep. A campaign asks for one more than the
+  highest term this controller has heard of, **including the terms its own voter was asked
+  for by the other controller**, so two campaigners don't keep landing on equal terms.
+- **Yield to a higher term.** A failed campaign leaves the candidate's own voter promised to
+  it for a lease, and that refuses the other controller. With only the two controllers
+  counted (the witness down, or at an incarnation not yet adopted, or a controller that lost
+  the incarnation it accepts), each controller's campaigns would keep its own voter promised
+  to itself, and the two would refuse each other forever (found by the simulator). So a voter
+  whose running promise is to its **own** candidate yields it to the other controller's
+  request for a **strictly higher** term, but only if that candidate isn't leading, and only
+  after the candidate has given up every open round. Both happen in one call (`YieldTo`), so
+  nothing can open a round in between. The yielded promise can then never back
+  a lease, and the voter grants the request as usual. Equal terms never yield, so one term
+  still has one grantee. A controller that can send but not hear can make a campaigning
+  standby yield once per back-off. That delays the standby by about a lease at most; it never
+  blocks it, because a leading candidate never yields.
 - **The leader's own clock.** The leader times its lease from when it **sent** the request,
   shortened by a clock-rate margin ρ (1%). Its lease therefore ends before any voter's promise
   does.
