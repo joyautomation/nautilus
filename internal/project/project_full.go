@@ -626,7 +626,7 @@ func buildDriver(fsys fs.FS, d DriverConfig) (nio.Driver, error) {
 		if err != nil || d.opcuaDevice == "" {
 			return od, err
 		}
-		return d.devices.WrapOPCUA(d.opcuaDevice, od, d.Security)
+		return d.devices.WrapOPCUA(d.opcuaDevice, od, d.Security, d.SecurityMode)
 	case "profinet-device":
 		// nautilus as a PROFINET IO device to a PLC (brief
 		// docs/design/profinet.md). New never opens a socket, so check and

@@ -144,3 +144,91 @@ func TestDevicesOPCUARowThroughASecuredSection(t *testing.T) {
 		return ok && ((isIR && iv.I == 777) || v == int64(777))
 	})
 }
+
+// A secured row refuses what a secured session must: a device that does
+// not trust the project's client certificate opens no session (it parks
+// the certificate for an operator to approve), and a server whose
+// certificate is not the one pinned on first use is refused by the client.
+func TestDevicesOPCUASecuredSectionRefusals(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		trust, pin  bool
+		lastError   string
+		parkedOnDev bool
+	}{
+		{name: "an untrusted client certificate", parkedOnDev: true},
+		{name: "a server other than the pinned one", trust: true, pin: true, lastError: "server certificate changed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			client := filepath.Join(dir, "client-pki")
+			securedProject(t, dir, "10.0.0.21")
+			if code := runDevicesAdd([]string{"pepperl-fuchs-ice3", dir}, io.Discard); code != 0 {
+				t.Fatalf("naut devices add exited %d", code)
+			}
+			if err := os.WriteFile(filepath.Join(dir, virtdev.FileName), []byte("devices:\n  - { name: PF1, opcua: { pki: server-pki } }\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if tc.trust {
+				cert, _, err := opcua.EnsureCertificate(client, opcua.DefaultApplicationURI)
+				if err != nil {
+					t.Fatal(err)
+				}
+				raw, _ := os.ReadFile(cert)
+				trusted := filepath.Join(dir, "server-pki", "trusted", "certs")
+				if err := os.MkdirAll(trusted, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(trusted, "naut.pem"), raw, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			set, err := loadVirtualDevices(dir, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			run, err := virtdev.Start(ctx, set, virtdev.StartOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer run.Stop()
+			listen := run.Endpoints[0].Listen
+			securedProject(t, dir, listen)
+			if tc.pin {
+				pin := opcua.PinFile(client, listen)
+				if err := os.MkdirAll(filepath.Dir(pin), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(pin, []byte(strings.Repeat("0", 64)+"\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			proj, err := project.Load(os.DirFS(dir), "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			drv := proj.Runtime.Driver
+			drv.(interface{ Start(context.Context) }).Start(ctx)
+			defer drv.(interface{ Stop() }).Stop()
+			od := drv.(interface{ Unwrap() nio.Driver }).Unwrap().(*opcua.Driver)
+			waitFor(t, "the session is refused", func() bool {
+				h := od.Health()
+				return h.LastError != "" && strings.Contains(h.LastError, tc.lastError)
+			})
+			if tc.parkedOnDev {
+				waitFor(t, "the device parks the certificate for approval", func() bool {
+					ents, _ := os.ReadDir(filepath.Join(dir, "server-pki", "rejected", "certs"))
+					return len(ents) > 0
+				})
+			}
+			if od.Online() || od.Health().State == "connected" {
+				t.Errorf("a refused session is up: %+v", od.Health())
+			}
+			if vals, err := drv.ReadInputs(); err == nil && vals["PF1__Online"] == true {
+				t.Error("PF1__Online is true over a refused session")
+			}
+		})
+	}
+}

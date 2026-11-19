@@ -481,6 +481,8 @@ func TestOPCUADeviceSecurityWarnings(t *testing.T) {
 		"no section":     {"", "", "connects with security None, anonymous", ""},
 		"section None":   {"{ name: sec, type: opcua-client, security: None, security-mode: None }", ", driver: sec", "device PF1 connects with security None, as its driver: section sec sets", "anonymous"},
 		"strongest":      {"{ name: sec, type: opcua-client }", ", driver: sec", "no pki-dir", "security None"},
+		"policy None":    {"{ name: sec, type: opcua-client, security: None }", ", driver: sec", "device PF1 connects with security None, as its driver: section sec sets", "anonymous"},
+		"mode None":      {"{ name: sec, type: opcua-client, security-mode: None }", ", driver: sec", "device PF1 connects with security None, as its driver: section sec sets", "anonymous"},
 		"secured, a pki": {"{ name: sec, type: opcua-client, security: Basic256Sha256, pki-dir: pki }", ", driver: sec", "binds by namespace index", "security"},
 	} {
 		manifest := "devices: [{ name: PF1, profile: pepperl-fuchs-ice3, endpoint: 10.0.0.21" + tc.row + " }]\n"

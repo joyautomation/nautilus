@@ -127,10 +127,20 @@ devices:
   selects what is polled). The password is the opcua-client driver's,
   `NAUTILUS_OPCUA_PASSWORD`, never in a file.
 - Any number of rows may share a section; each is its own session, and
-  they share the client certificate in its `pki-dir`.
+  they share the client certificate in its `pki-dir` (generated once, on
+  first use, under a lock, so drivers starting together never write a key
+  and a certificate that do not match).
+- **Trust runs both ways.** The device must trust the project's client
+  certificate (`<pki-dir>/cert.pem`): until an operator approves it on the
+  device, a secured session is refused, and the driver's error says which
+  file to trust. The client trusts a device's server certificate **on first
+  use** and pins it (`<pki-dir>/trusted-servers/<host>_<port>.sha256`,
+  `opcua/trust.go`): a later certificate that differs is refused ("server
+  certificate changed") until that file is deleted, and a server once
+  pinned on a secured endpoint never gets an unsecured session.
 - No None warning for such a row: the security is the author's. A section
-  that sets None is still said once ("device X connects with security
-  None, as its driver: section S sets"), and the driver's own findings
+  that sets None (as `security:` or `security-mode:`) is still said once
+  ("device X connects with security None, as its driver: section S sets"), and the driver's own findings
   (no `pki-dir` for the default strongest endpoint, a username without
   Sign) appear under the device's name.
 - `driver:` on a Modbus row is an error for now; it is kept for naming

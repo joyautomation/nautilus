@@ -119,7 +119,7 @@ func TestOPCUANamespaces(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w, err := s.WrapOPCUA("PF1", drv, "None")
+	w, err := s.WrapOPCUA("PF1", drv, "None", "None")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +147,7 @@ func TestOPCUANamespaces(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if w, err = s.WrapOPCUA("PF1", drv, "None"); err != nil {
+	if w, err = s.WrapOPCUA("PF1", drv, "None", "None"); err != nil {
 		t.Fatal(err)
 	}
 	if ws := strings.Join(w.Warnings(), "\n"); strings.Contains(ws, "namespace index") {
@@ -168,7 +168,7 @@ func TestOPCUADriver(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w, err := s.WrapOPCUA("MASTER1", drv, "None")
+	w, err := s.WrapOPCUA("MASTER1", drv, "None", "None")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +201,7 @@ func TestOPCUADriver(t *testing.T) {
 	if _, ok := vals["MASTER1.Port3_Pdin"]; ok {
 		t.Error("a member stayed in the delivery")
 	}
-	if _, err := s.WrapOPCUA("OTHER", drv, "None"); err == nil {
+	if _, err := s.WrapOPCUA("OTHER", drv, "None", "None"); err == nil {
 		t.Error("wrapped a device the set does not have")
 	}
 }

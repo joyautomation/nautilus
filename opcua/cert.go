@@ -21,6 +21,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 )
 
@@ -31,7 +32,15 @@ const DefaultApplicationURI = "urn:joyautomation:nautilus:opcua"
 // EnsureCertificate loads the client certificate and key from pkiDir
 // (cert.pem, key.pem), generating a self-signed pair on first use. appURI
 // becomes the certificate's URI SAN; the local hostname its DNS SAN.
+//
+// Several drivers may share one pki-dir (devices: rows naming one driver:
+// section) and start at once: generation is serialised per directory in
+// the process, and each file is written beside its place and renamed in,
+// so no driver reads a key from one generation and a certificate from
+// another, or half a file.
 func EnsureCertificate(pkiDir, appURI string) (certFile, keyFile string, err error) {
+	unlock := lockCertDir(pkiDir)
+	defer unlock()
 	certFile = filepath.Join(pkiDir, "cert.pem")
 	keyFile = filepath.Join(pkiDir, "key.pem")
 	if _, err := os.Stat(certFile); err == nil {
@@ -98,11 +107,55 @@ func EnsureCertificate(pkiDir, appURI string) (certFile, keyFile string, err err
 	}
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)})
-	if err := os.WriteFile(keyFile, keyPEM, 0o600); err != nil {
+	if err := writeRenamed(keyFile, keyPEM, 0o600); err != nil {
 		return "", "", fmt.Errorf("opcua-client: write key: %w", err)
 	}
-	if err := os.WriteFile(certFile, certPEM, 0o644); err != nil {
+	if testHookKeyWritten != nil {
+		testHookKeyWritten()
+	}
+	if err := writeRenamed(certFile, certPEM, 0o644); err != nil {
 		return "", "", fmt.Errorf("opcua-client: write certificate: %w", err)
 	}
 	return certFile, keyFile, nil
+}
+
+// testHookKeyWritten runs between the key's write and the certificate's;
+// a test widens that window to show it is not raced. nil otherwise.
+var testHookKeyWritten func()
+
+// certDirs holds one mutex per pki-dir (absolute path).
+var certDirs sync.Map
+
+// lockCertDir serialises certificate generation in dir within the process.
+func lockCertDir(dir string) (unlock func()) {
+	if abs, err := filepath.Abs(dir); err == nil {
+		dir = abs
+	}
+	m, _ := certDirs.LoadOrStore(filepath.Clean(dir), &sync.Mutex{})
+	mu := m.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
+
+// writeRenamed writes data to a temporary file beside name, then renames
+// it into place: a reader sees the old file or the whole new one.
+func writeRenamed(name string, data []byte, perm os.FileMode) error {
+	f, err := os.CreateTemp(filepath.Dir(name), "."+filepath.Base(name)+".*")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	defer os.Remove(tmp) // a no-op once renamed
+	if err := f.Chmod(perm); err != nil {
+		f.Close()
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp, name)
 }
