@@ -2,10 +2,12 @@ package retain
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -93,6 +95,7 @@ func TestFileStoreSaveLeavesNoTmpFile(t *testing.T) {
 type fakeAPIServer struct {
 	mu               sync.Mutex
 	cms              map[string]configMap
+	rv               int // the last resourceVersion handed out
 	lastAuthHeader   string
 	sawAuthorization bool
 }
@@ -122,8 +125,15 @@ func (f *fakeAPIServer) handler() http.HandlerFunc {
 				return
 			}
 			key := cm.Metadata.Namespace + "/" + cm.Metadata.Name
+			if _, exists := f.cms[key]; exists {
+				w.WriteHeader(http.StatusConflict) // AlreadyExists
+				return
+			}
+			f.rv++
+			cm.Metadata.ResourceVersion = strconv.Itoa(f.rv)
 			f.cms[key] = cm
 			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(cm)
 			return
 		}
 
@@ -144,7 +154,8 @@ func (f *fakeAPIServer) handler() http.HandlerFunc {
 			}
 			json.NewEncoder(w).Encode(cm)
 		case http.MethodPut:
-			if _, ok := f.cms[key]; !ok {
+			cur, ok := f.cms[key]
+			if !ok {
 				w.WriteHeader(http.StatusNotFound)
 				return
 			}
@@ -153,8 +164,17 @@ func (f *fakeAPIServer) handler() http.HandlerFunc {
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
+			// As the API server: a PUT carrying a resourceVersion is
+			// conditional on it.
+			if v := cm.Metadata.ResourceVersion; v != "" && v != cur.Metadata.ResourceVersion {
+				w.WriteHeader(http.StatusConflict)
+				return
+			}
+			f.rv++
+			cm.Metadata.ResourceVersion = strconv.Itoa(f.rv)
 			f.cms[key] = cm
 			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(cm)
 		default:
 			w.WriteHeader(http.StatusMethodNotAllowed)
 		}
@@ -275,4 +295,66 @@ func TestConfigMapStoreNoAuthHeaderWhenTokenPathEmpty(t *testing.T) {
 	if sawAuth {
 		t.Error("request carried an Authorization header despite an empty tokenPath")
 	}
+}
+
+// A deposed leader's late write loses: the store is compare-and-swap on the
+// ConfigMap's resourceVersion, so a write from a view older than the new
+// leader's is refused, and one that landed before the new leader's first
+// save is written over by it.
+func TestConfigMapStoreDeposedWriterLoses(t *testing.T) {
+	fake := newFakeAPIServer()
+	srv := httptest.NewServer(fake.handler())
+	defer srv.Close()
+	read := func() State {
+		t.Helper()
+		got, err := NewConfigMap(newTestClient(t, srv), "retain").Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	old := NewConfigMap(newTestClient(t, srv), "retain") // the deposed leader
+	if _, err := old.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if err := old.Save(State{Tags: map[string]any{"SP": 1.0}}); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("after the new leader wrote", func(t *testing.T) {
+		nu := NewConfigMap(newTestClient(t, srv), "retain")
+		if _, err := nu.Load(); err != nil {
+			t.Fatal(err)
+		}
+		if err := nu.Save(State{Tags: map[string]any{"SP": 2.0}}); err != nil {
+			t.Fatal(err)
+		}
+		if err := old.Save(State{Tags: map[string]any{"SP": 9.0}}); !errors.Is(err, ErrConflict) {
+			t.Fatalf("the deposed write: %v, want ErrConflict", err)
+		}
+		if got := read().Tags["SP"]; got != 2.0 {
+			t.Fatalf("SP = %v, want the new leader's 2", got)
+		}
+	})
+	t.Run("before the new leader's first write", func(t *testing.T) {
+		nu := NewConfigMap(newTestClient(t, srv), "retain")
+		if _, err := nu.Load(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := old.Load(); err != nil { // old catches up, then writes late
+			t.Fatal(err)
+		}
+		if err := old.Save(State{Tags: map[string]any{"SP": 9.0}}); err != nil {
+			t.Fatal(err)
+		}
+		if err := nu.Save(State{Tags: map[string]any{"SP": 3.0}}); !errors.Is(err, ErrConflict) {
+			t.Fatalf("the new leader over the late write: %v, want ErrConflict once", err)
+		}
+		if err := nu.Save(State{Tags: map[string]any{"SP": 3.0}}); err != nil {
+			t.Fatalf("the new leader's next save: %v", err)
+		}
+		if got := read().Tags["SP"]; got != 3.0 {
+			t.Fatalf("SP = %v, want the new leader's 3", got)
+		}
+	})
 }

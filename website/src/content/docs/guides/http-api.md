@@ -262,7 +262,7 @@ curl -s 'localhost:8080/api/state?tags=P101,Level'
 | `quality` | when any tag is not good | Tag name → `stale`, `bad`, `notConnected` or `substituted`. Absent means every tag is good. See [quality](/guides/tag-model/#what-a-value-is-worth-quality) |
 | `alarms` | when the project has `alarms:` | Counts only. See [Alarms](/guides/alarms/#the-api) |
 | `forces` | while anything is forced | Forced address → forced value |
-| `config` | on `naut run` and built controllers | What I/O configuration runs: `source` is `manifest`, or `applied` with the drivers and devices that differ listed under `differs`. See [Live I/O configuration](#live-io-configuration) |
+| `config` | on `naut run` and built controllers | What I/O configuration runs: `source` is `manifest`, or `applied` with the drivers and devices that differ listed under `differs`; `notKept` when it would not survive a restart; `discarded` for a kept change the last restart or takeover did not bring back. See [Live I/O configuration](#live-io-configuration) |
 
 | Status | When |
 | --- | --- |
@@ -1014,14 +1014,48 @@ curl -s -X POST localhost:8080/api/io/staged/1/apply
   then (`reverted`, with `watch.reason` naming it), unless a newer apply
   has landed meanwhile (`superseded`) or the revert was cancelled:
   `POST /api/io/revert/cancel` (`cancelled`). A client that goes away
-  changes nothing: the watch is the controller's. It is held in memory, so
-  a restart drops a pending revert. Off by default: a reversion on a
-  running plant can be its own surprise.
-- **Not kept yet:** an applied configuration lasts until the controller
-  restarts, which runs the manifest again. Until it is kept, an apply is
-  refused on a project with `redundancy:`. While what runs differs from
-  the manifest, `config` on every frame says so and the built-in
-  dashboard shows it; commit the change to make it permanent.
+  changes nothing: the watch is the controller's. Off by default: a
+  reversion on a running plant can be its own surprise.
+- **Kept across a restart and a takeover.** With a `retain:` block, an
+  applied configuration is saved in the retain store before the apply
+  answers (`kept: true`). A restart, or a standby taking over, re-applies
+  it before the first scan, so no logic runs and no output goes out
+  on the old addresses. The outputs then go out as they would without
+  the apply: a restart's first scan is the start-up baseline, and a
+  takeover sends the full set. A standby follows what the leader applied
+  while it stands by, so its takeover re-applies nothing and takes no
+  longer than before. The rules:
+  - **A deploy wins.** A kept change comes back only while the deployed
+    manifest still says what it was applied over. A deploy that changed
+    that driver or device replaces it. The dropped change is listed under
+    `config.discarded` (and kept in the store for recovery by hand). A
+    deploy that contains the change clears it.
+  - **A pending revert is not carried.** An apply with `revertIfSilent`
+    is kept only once its devices answer, or its revert is cancelled. A
+    restart or takeover before that comes back on the configuration
+    before it, and `config.discarded` says so.
+  - **A change that cannot be re-applied is held.** The device (or
+    driver) is not polled, its tags read Bad, and it is sent nothing,
+    until an apply re-establishes what runs. `config.fault` says why. An
+    apply is refused while a restart or takeover is still re-applying.
+  - **A save that fails.** On a project with `redundancy:` the apply is
+    put back (`503`); a takeover would otherwise undo it. Standalone, it
+    stays applied with `kept: false` and `keptWhy`, and the save is
+    retried.
+  - **No `retain:` block.** Nothing is kept, and a restart runs the
+    manifest again. The apply answers `kept: false`. An apply on a
+    project with `redundancy:` and no `retain:` block is refused (check
+    `kept`).
+  - **Not while a pair runs mixed versions.** A controller built before
+    this ignores what is kept: if it takes over, it runs the manifest's
+    addresses and its next save clears what was kept. During a rolling
+    upgrade of a redundant pair, make no live I/O apply until both
+    replicas run the new build.
+
+  While what runs differs from the manifest, `config` on every frame
+  says so (and `config.notKept` says if it would not survive a restart),
+  and the built-in dashboard shows it. Commit the change to make it
+  permanent.
 
 | Status | When |
 | --- | --- |
@@ -1033,7 +1067,7 @@ curl -s -X POST localhost:8080/api/io/staged/1/apply
 | `409` | No snapshot of the commit; applying a candidate that is not valid; another apply is in progress, or what runs changed since it was validated (validate again) |
 | `422` | The candidate does not load, or an apply failed and was put back: nothing changed |
 | `500` | An apply failed and putting it back failed too; `config.fault` names what is left |
-| `503` | No live I/O configuration on this server (an embedded Go server) |
+| `503` | No live I/O configuration on this server (an embedded Go server); or, on a project with `redundancy:`, the retain store could not keep the apply, so it was put back |
 | `401`, `403` | Authorization |
 
 ## Audit journal

@@ -266,6 +266,23 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		defer alarms.Close()
 	}
 
+	// Live I/O configuration (#706): registered before the first scan, so
+	// a leadership edge (the process's first scan, or a takeover) re-applies
+	// what the retain store keeps before any logic runs or any output goes
+	// out. The /api/io routes are wired below.
+	ioc, err := project.NewIOConfig(proj, rt, fsys, manifest)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "naut run: live I/O configuration is off:", err)
+		ioc = nil
+	} else {
+		ioc.Gate = gate.IsLeader
+		if proj.Runtime.Retain != nil {
+			ioc.Keep = rt.SaveRetained
+			ioc.KeepStore = proj.Runtime.Retain.Kind()
+		}
+		rt.SetIO(ioc)
+	}
+
 	// Retained values go in before anything can read or write a tag: the
 	// tag API, OPC UA and the HMI all start below (nautilus#531's startup
 	// half). Standalone only; a replica loads the store on takeover.
@@ -273,6 +290,11 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	// A standby follows what the leader applied while it stands by, so its
+	// takeover re-applies nothing (#706).
+	if ioc != nil && el != nil && proj.Runtime.Retain != nil {
+		go ioc.Follow(ctx, proj.Runtime.Retain.Load, el.IsLeader)
+	}
 	var dec decider
 	if el != nil {
 		dec = el
@@ -376,11 +398,10 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	// Live I/O configuration (#706): a changed device or driver staged,
 	// validated and applied over /api/io while the scan runs, and what runs
 	// against the manifest on every frame.
-	if ioc, err := project.NewIOConfig(proj, rt, fsys, manifest); err != nil {
-		fmt.Fprintln(os.Stderr, "naut run: live I/O configuration is off:", err)
-	} else {
-		defer ioc.Close() // its watch, and a revert it would make, end with the controller
-		ioc.Gate = gate.IsLeader
+	if ioc != nil {
+		// Closed before the drivers stop and the lease is given up (defers
+		// run last first): a revert under way still reaches its devices.
+		defer ioc.Close()
 		sopts.IO = ioc.Hook(func(sha string) (fs.FS, bool) {
 			snap, ok := vcs.SnapshotFS(hist(), sha)
 			return snap, ok

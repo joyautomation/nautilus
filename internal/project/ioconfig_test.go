@@ -340,7 +340,7 @@ func TestIOValidateRefuses(t *testing.T) {
 			"  - {name: A_C1, source: DEV_A, table: coil, address: 2, writable: true}\n"+
 				"  - {name: A_C2, source: DEV_A, table: coil, address: 2, writable: true}\n")), false},
 		{"nothing changed", "changes", files, false},
-		{"a redundant project", "redundancy", withFile(files, "modbus.yaml", modbusYAML(pb, pa, "", "")), true},
+		{"a redundant project with no retain: block", "kept", withFile(files, "modbus.yaml", modbusYAML(pb, pa, "", "")), true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

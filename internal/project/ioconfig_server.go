@@ -52,6 +52,8 @@ func (io *IOConfig) Hook(snapshot func(sha string) (fs.FS, bool), base fs.FS) *s
 				return nil, fmt.Errorf("%w: %w", server.ErrIOConflict, err)
 			case errors.Is(err, ErrRollbackFailed):
 				return nil, fmt.Errorf("%w: %w", server.ErrIORollbackFailed, err)
+			case errors.Is(err, ErrNotKept):
+				return nil, fmt.Errorf("%w: %w", server.ErrIONotKept, err)
 			}
 			return nil, err
 		},
@@ -64,6 +66,14 @@ func (io *IOConfig) Hook(snapshot func(sha string) (fs.FS, bool), base fs.FS) *s
 			return out
 		},
 		Fault: io.Fault,
+		Discarded: func() []server.IODiscard {
+			var out []server.IODiscard
+			for _, d := range io.Discarded() {
+				out = append(out, server.IODiscard(d))
+			}
+			return out
+		},
+		NotKept: io.NotKept,
 		Watch: func() *server.IOWatch {
 			if w := io.Watch(); w != nil {
 				sw := server.IOWatch(*w)

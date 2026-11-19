@@ -372,6 +372,10 @@ type Runtime struct {
 	// first takeover skips its own load. Guarded by leadMu.
 	retainPreloaded bool
 
+	// iok is the live I/O configuration kept in the retain store (#706):
+	// SetIO, SaveRetained, and the leadership edge's re-apply (iokeep.go).
+	iok ioKeep
+
 	// live is what Liveness reads: Run's loops' scan edges and lifecycle.
 	live liveness
 }

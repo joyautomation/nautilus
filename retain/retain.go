@@ -44,6 +44,9 @@ type State struct {
 	// written before locals were retained has none, and every local starts
 	// at its initial value, as it always did.
 	Locals map[string]map[string]any `json:"locals,omitempty"`
+	// IO is the live I/O configuration applied over /api/io and not yet in
+	// the deployed manifest (#706); see IOState.
+	IO *IOState `json:"io,omitempty"`
 }
 
 // AlarmRetain is one alarm's retained operator state. Every field is

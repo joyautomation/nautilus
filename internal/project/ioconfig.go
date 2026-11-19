@@ -16,8 +16,7 @@ package project
 // The HTTP API over this (pending → validate → apply → result) and the
 // running-versus-manifest report it feeds are server/ioconfig.go's (#706
 // PR 3b); live probes of a changed device are PR 4; keeping an applied
-// configuration across a restart or a takeover is PR 5, and until then an
-// apply is refused on a redundant project.
+// configuration across a restart or a takeover is iokeep.go's (PR 5).
 
 import (
 	"context"
@@ -43,12 +42,15 @@ import (
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/modbus"
 	"github.com/joyautomation/nautilus/opcua"
+	"github.com/joyautomation/nautilus/retain"
 	"github.com/joyautomation/nautilus/runtime"
 )
 
 // IORuntime is what an apply needs of the running runtime.
 type IORuntime interface {
 	ReplaceDriverObserved(ctx context.Context, name string, d nio.Driver) (nio.Driver, <-chan nio.Values, error)
+	ReplaceDriverAtStart(ctx context.Context, name string, d nio.Driver) (nio.Driver, error)
+	ReplaceDriver(ctx context.Context, name string, d nio.Driver) (nio.Driver, error)
 	Tags() *runtime.Tags
 }
 
@@ -86,6 +88,64 @@ type IOConfig struct {
 	// watch reverts only over its own apply's generation.
 	gen   int
 	watch *ioWatch // the last apply's (IOWatch)
+
+	// Keeping what an apply changed across a restart and a takeover
+	// (iokeep.go). bootFS is the project the runtime booted from.
+	bootFS fs.FS
+	// Keep, when set, saves the retain store now and returns once it holds
+	// what RetainedIO says (runtime.SaveRetained); nil when the project has
+	// no retain: block, and nothing is kept.
+	Keep func(ctx context.Context) error
+	// KeepStore is the retain store's kind ("file", "configmap"): a file
+	// is one replica's own, so a redundant project cannot keep in it.
+	KeepStore string
+	// atStart: the restore under way is a standalone controller's, before
+	// its first scan, so a driver swapped whole keeps its start-up
+	// baseline (as at any start) instead of starting from the commands.
+	atStart bool
+	// kept is what the store is to hold: what runs, except an apply whose
+	// revert-if-silent watch has not settled (provisional).
+	kept        map[string]ioUnit
+	provisional *retain.IOProvisional
+	// discarded are the kept changes a restore dropped, for the store
+	// (recovery by hand) and the report (Discarded).
+	discarded      map[string]retain.IOUnit
+	discardedFiles map[string]string
+	dropped        []IODiscard
+	// held are the units a restore holds (holdUnits), until replaced.
+	held map[string]bool
+	// seq is the sequence of the store state this replica last saved or
+	// followed: it moves only on a durable save (IOSaved) or a follow, so
+	// two replicas never claim one number for two states. storeSeq is the
+	// highest the store is known to hold; changed counts changes to what
+	// is kept, savedChanged those a save has made durable. A save with
+	// changes pending takes max(seq, storeSeq)+1 (RetainedIO).
+	seq, storeSeq         uint64
+	changed, savedChanged uint64
+	// offered is what RetainedIO last returned, which IOSaved commits.
+	offered struct {
+		seq, changed uint64
+		hash         string
+		gen          int
+	}
+	// unreadable says why the store could not be read at the last edge:
+	// nothing is kept from it or promised to it until an edge reads it.
+	unreadable string
+	// restoring: a restore runs; edgeSeen: a leadership edge has re-applied
+	// (or found current) what the store keeps. An apply waits for both.
+	restoring, edgeSeen bool
+	// unsaved says why the store does not hold what an apply kept (its
+	// save failed); a retry clears it once a save lands. closed ends that
+	// retry (Close).
+	unsaved   string
+	retrying  bool
+	closed    chan struct{}
+	closeOnce sync.Once
+	// memo is the store state the last restore made run, at gen.
+	memo struct {
+		st  string
+		gen int
+	}
 }
 
 // swapped is a driver swapped in whole, and how to hear what the first scan
@@ -158,6 +218,10 @@ func NewIOConfig(p *Project, rt IORuntime, fsys fs.FS, manifest string) (*IOConf
 		},
 	}
 	io.swapDriver = io.swap
+	io.bootFS = fsys
+	io.kept = copyUnits(running) // its own map: an apply changes running, not this
+	io.memo.st = hashOf((*retain.IOState)(nil))
+	io.closed = make(chan struct{})
 	return io, nil
 }
 
@@ -179,6 +243,10 @@ type ioUnit struct {
 	from string // "" (the manifest), "upload", or the commit
 	at   time.Time
 	by   string
+
+	// files are the project files the unit's candidate was read from that
+	// differ from the boot files (what retain keeps and naut pull writes).
+	files map[string]string
 }
 
 func unitKey(driver, device string) string {
@@ -362,6 +430,10 @@ type IOResult struct {
 	// rule (its write gate, a parked source, a held baseline).
 	Commanded []IOCommand `json:"commanded"`
 	Notes     []string    `json:"notes,omitempty"`
+	// Kept says whether the retain store holds the change, so a restart
+	// or a takeover comes back on it; KeptWhy says why not.
+	Kept    bool   `json:"kept"`
+	KeptWhy string `json:"keptWhy,omitempty"`
 }
 
 // IOCandidate is a staged I/O configuration.
@@ -378,6 +450,9 @@ type IOCandidate struct {
 	mu      sync.Mutex            // guards val and base: Validate and Apply may race
 	val     *IOValidation         // the last Validate's
 	base    map[string]string     // the running hashes it was validated against
+
+	files   map[string]string // what it reads that differs from the boot files
+	restore bool              // a kept configuration re-applied (RestoreIO)
 }
 
 // Validation is the last Validate's result, nil before one.
@@ -392,7 +467,18 @@ func (c *IOCandidate) Validation() *IOValidation {
 // (OverlayFS). from is the commit, or "upload"; by is who staged it. A
 // candidate that does not load is staged anyway and fails validation.
 func (io *IOConfig) Stage(fsys fs.FS, from, by string) *IOCandidate {
+	// What the candidate reads is recorded, so an apply can keep the files
+	// that differ from the boot ones (iokeep.go).
+	rec := &recordFS{base: fsys, seen: map[string]bool{}}
+	fsys = rec
 	c := &IOCandidate{From: from, By: by, fsys: fsys}
+	defer func() {
+		c.files = io.differingFiles(rec)
+		for k, u := range c.units {
+			u.files = c.files
+			c.units[k] = u
+		}
+	}()
 	m, err := ReadManifest(fsys, io.manifest)
 	if err != nil {
 		c.err = err
@@ -424,6 +510,12 @@ func (io *IOConfig) Stage(fsys fs.FS, from, by string) *IOCandidate {
 // Validate checks c against what runs now and records what it was checked
 // against: Apply refuses it once that changes.
 func (io *IOConfig) Validate(c *IOCandidate) *IOValidation {
+	return io.validate(c, true)
+}
+
+// validate is Validate; probes false skips the live probes (a restore of a
+// configuration that already ran, iokeep.go).
+func (io *IOConfig) validate(c *IOCandidate, probes bool) *IOValidation {
 	io.mu.Lock()
 	running := make(map[string]ioUnit, len(io.running))
 	for k, u := range io.running {
@@ -505,10 +597,10 @@ func (io *IOConfig) Validate(c *IOCandidate) *IOValidation {
 		check("changes", nil)
 	}
 
-	// Redundancy: nothing keeps an applied configuration yet, so a standby
-	// that takes over would run the manifest's.
-	if io.p.Redundancy != nil {
-		check("redundancy", []string{"a live I/O apply is not yet kept across a takeover (#706 PR 5), so a standby would come up on the old addresses; deploy the change instead"})
+	// Kept: a redundant project keeps an apply in its retain store, or a
+	// standby that takes over would come up on the old addresses.
+	if !c.restore {
+		check("kept", io.keptProblems(c))
 	}
 
 	// A whole driver swaps only inside the composite (two or more drivers).
@@ -573,7 +665,7 @@ func (io *IOConfig) Validate(c *IOCandidate) *IOValidation {
 	for _, ck := range v.Checks {
 		statically = statically && ck.OK
 	}
-	if statically {
+	if statically && probes {
 		v.Probes = probe(probeTargets(c, v.Changes, running))
 		live = liveCheck(v.Probes)
 	}
@@ -976,10 +1068,26 @@ var answerWait = 5 * time.Second
 
 // ApplyWith is Apply with options.
 func (io *IOConfig) ApplyWith(ctx context.Context, c *IOCandidate, by string, opts ApplyOptions) (*IOResult, error) {
+	io.mu.Lock()
+	restoring, starting := io.restoring, io.Keep != nil && !io.edgeSeen
+	io.mu.Unlock()
+	switch {
+	case restoring:
+		return nil, fmt.Errorf("%w: the kept I/O configuration is being re-applied", ErrApplyBusy)
+	case starting:
+		return nil, fmt.Errorf("%w: the controller has not yet re-applied its kept I/O configuration (it is starting, or stands by)", ErrApplyBusy)
+	}
 	if !io.applying.TryLock() {
 		return nil, ErrApplyBusy
 	}
 	defer io.applying.Unlock()
+	return io.apply(ctx, c, by, opts)
+}
+
+// apply is ApplyWith under the apply lock. A restore candidate (RestoreIO)
+// keeps each unit's recorded origin and neither waits for a scan nor
+// starts a watch: the scan is held until it returns.
+func (io *IOConfig) apply(ctx context.Context, c *IOCandidate, by string, opts ApplyOptions) (*IOResult, error) {
 	c.mu.Lock()
 	val, base := c.val, c.base
 	c.mu.Unlock()
@@ -1055,6 +1163,12 @@ func (io *IOConfig) ApplyWith(ctx context.Context, c *IOCandidate, by string, op
 		next, prev := c.units[k], running[k]
 		got := make(chan modbus.FirstShare, 1)
 		opts := modbus.ReplaceOptions{HoldOutputs: io.hold, Observe: func(s modbus.FirstShare) { got <- s }}
+		if c.restore {
+			// A restore's first share follows the driver's own rule, as a
+			// boot's does: its start-up baseline at a standalone start, the
+			// full set at a takeover (a standby has no baseline, #606).
+			opts.HoldOutputs = false
+		}
 		if err := io.replaceSource(mb, next.src, next.tags, opts); err != nil {
 			return fail(ch, what, err)
 		}
@@ -1069,8 +1183,8 @@ func (io *IOConfig) ApplyWith(ctx context.Context, c *IOCandidate, by string, op
 		}
 		ch := ch
 		what := "driver " + ch.Driver
-		prev := running[ch.Driver]
-		sw, err := io.swapDriver(ctx, ch.Driver, c.fsys, c.configs[ch.Driver])
+		prev, next := running[ch.Driver], c.units[ch.Driver]
+		sw, err := io.swapDriver(ctx, ch.Driver, next.fsys, next.cfg)
 		if err != nil {
 			return fail(ch, what, err)
 		}
@@ -1095,22 +1209,89 @@ func (io *IOConfig) ApplyWith(ctx context.Context, c *IOCandidate, by string, op
 	// unit takes this apply's origin.
 	at := time.Now()
 	io.mu.Lock()
+	prevKept, prevProv := io.kept, io.provisional
 	for k, u := range c.units {
-		if prev := io.running[k]; u.hash == prev.hash {
+		switch prev := io.running[k]; {
+		case c.restore:
+			// A restore's units carry the origin they were kept with.
+		case u.hash == prev.hash:
 			u.from, u.at, u.by = prev.from, prev.at, prev.by
-		} else {
+		default:
 			u.from, u.at, u.by = c.From, at, by
 		}
 		io.running[k] = u
 		delete(io.faults, k) // what runs there is known again
 	}
 	io.gen++
+	gen := io.gen
+	// What the store keeps: what runs now, unless the apply may still be
+	// reverted (decision recorded on #706: a pending revert is not carried
+	// across a restart or takeover, which come back on what ran before it).
+	switch {
+	case c.restore:
+		io.kept = copyUnits(io.running)
+	case opts.RevertIfSilent > 0:
+		io.provisional = &retain.IOProvisional{Gen: gen, From: c.From, By: by, At: at,
+			Deadline: at.Add(opts.RevertIfSilent)}
+		io.changed++
+	default:
+		io.kept, io.provisional = copyUnits(io.running), nil
+		io.changed++
+	}
+	if !c.restore {
+		io.held = nil // a full candidate replaced every unit that was held
+	}
 	io.mu.Unlock()
 	for _, ch := range val.Changes {
 		io.log(ch, c, by, nil)
 	}
+	if c.restore {
+		return &IOResult{Changes: val.Changes, Commanded: []IOCommand{}}, nil
+	}
 
-	res := &IOResult{Changes: val.Changes, Commanded: []IOCommand{},
+	// Durable before it is answered: a takeover right after must find it.
+	kept, keptWhy := io.keepNow(opts.RevertIfSilent > 0)
+	if !kept && opts.RevertIfSilent == 0 && io.p.Redundancy != nil && io.Keep != nil {
+		// On a redundant project a change the store does not hold would be
+		// undone by the next takeover: put it back now, and say so.
+		var left, lost []string
+		for i := len(undo) - 1; i >= 0; i-- {
+			if uerr := undo[i].run(); uerr != nil {
+				left = append(left, fmt.Sprintf("%s (%v)", undo[i].what, uerr))
+				lost = append(lost, undo[i].keys...)
+			}
+		}
+		io.mu.Lock()
+		for k := range c.units {
+			if u, ok := running[k]; ok {
+				io.running[k] = u
+			}
+		}
+		io.kept, io.provisional = prevKept, prevProv
+		io.gen++
+		io.changed++ // the put-back's save is newer than anything the failed one may leave
+		io.mu.Unlock()
+		msg := "the apply was not kept in the retain store (" + keptWhy + "), so a takeover would bring back the old configuration"
+		// The put-back is saved too: behind the failed save in the store's
+		// one writer, and by compare-and-swap, so it is what the store holds
+		// last, whatever the failed one did.
+		pctx, pcancel := context.WithTimeout(context.Background(), putBackWait)
+		perr := io.Keep(pctx)
+		pcancel()
+		if perr != nil {
+			msg += "; saving the put-back failed too (" + perr.Error() + "): the store may still hold the apply until the next save"
+		}
+		if len(left) > 0 {
+			msg = fmt.Sprintf("%s; putting it back failed for %s: what runs there is not known; apply a candidate for it, or restart", msg, strings.Join(left, ", "))
+			io.markUnknown(lost, by, msg)
+			slog.Error("config.apply: not kept, and putting it back failed", "err", msg)
+			return nil, fmt.Errorf("%w: %s", ErrRollbackFailed, msg)
+		}
+		slog.Warn("config.apply", "result", "put back", "reason", msg, "by", by)
+		return nil, fmt.Errorf("%w: %s; it was put back", ErrNotKept, msg)
+	}
+
+	res := &IOResult{Changes: val.Changes, Commanded: []IOCommand{}, Kept: kept, KeptWhy: keptWhy,
 		Notes: []string{"applied; each changed device was probed before the apply where its check is live (validation.probes)"}}
 	wait, cancel := context.WithTimeout(ctx, firstPushWait)
 	defer cancel()
@@ -1175,9 +1356,6 @@ func (io *IOConfig) ApplyWith(ctx context.Context, c *IOCandidate, by string, op
 	if opts.RevertIfSilent > 0 {
 		deadline = opts.RevertIfSilent
 	}
-	io.mu.Lock()
-	gen := io.gen
-	io.mu.Unlock()
 	w := &ioWatch{
 		IOWatch: IOWatch{Gen: gen, From: c.From, By: by, Deadline: time.Now().Add(deadline),
 			Revert: opts.RevertIfSilent > 0, State: WatchWatching},
@@ -1198,6 +1376,7 @@ func (io *IOConfig) ApplyWith(ctx context.Context, c *IOCandidate, by string, op
 				}
 			}
 		},
+		onEnd: io.watchEnded,
 	}
 	w.answer()
 	res.Answered, res.Pending = w.Answered, w.Pending
@@ -1222,10 +1401,11 @@ const (
 // IOWatch is the last apply's watch over its changed devices: which have
 // read, which are pending, by when, and whether it will revert.
 //
-// It is held in this process's memory only: a restart or a takeover drops
-// it, pending revert included (#706 PR 5, which keeps applied
-// configurations across both, must carry it or refuse it; today a
-// redundant project's apply is refused).
+// It is held in this process's memory only, and a pending revert is not
+// carried across a restart or a takeover: the apply it would revert is not
+// kept in the retain store until the watch settles (answered or
+// cancelled), so either comes back on the configuration before it
+// (iokeep.go; decision recorded on #706).
 type IOWatch struct {
 	Gen      int       `json:"gen"` // the apply generation it watches
 	From     string    `json:"from"`
@@ -1254,6 +1434,8 @@ type ioWatch struct {
 	revert  func() (left, lost []string) // under the apply lock
 	restore func()                       // under io.mu
 	stop    context.CancelFunc
+	done    chan struct{}   // closed when runWatch returns
+	onEnd   func(w IOWatch) // once, when it leaves watching for good
 }
 
 func (w *ioWatch) snapshot() IOWatch {
@@ -1354,6 +1536,7 @@ func (io *IOConfig) answerTargets(c *IOCandidate, changes []IOChange, running ma
 func (io *IOConfig) startWatch(w *ioWatch) {
 	ctx, cancel := context.WithCancel(context.Background())
 	w.stop = cancel
+	w.done = make(chan struct{})
 	io.mu.Lock()
 	prev := io.watch
 	io.watch = w
@@ -1368,16 +1551,21 @@ func (io *IOConfig) startWatch(w *ioWatch) {
 // stops it.
 func (w *ioWatch) finish(state, reason string) {
 	w.mu.Lock()
-	if w.State == WatchWatching || w.State == WatchReverting {
+	ended := w.State == WatchWatching || w.State == WatchReverting
+	if ended {
 		w.State, w.Reason, w.Ended = state, reason, time.Now()
 	}
 	w.mu.Unlock()
 	if w.stop != nil {
 		w.stop()
 	}
+	if ended && w.onEnd != nil {
+		w.onEnd(w.snapshot())
+	}
 }
 
 func (io *IOConfig) runWatch(ctx context.Context, w *ioWatch) {
+	defer close(w.done)
 	defer w.stop()
 	for {
 		w.answer()
@@ -1426,11 +1614,20 @@ func (io *IOConfig) runWatch(ctx context.Context, w *ioWatch) {
 		w.finish(WatchSuperseded, "a newer apply landed; not reverted")
 		return
 	}
+	// Only the leader reverts: a replica that stepped down runs what the
+	// store keeps once it follows it, and the pending apply was never kept.
+	if io.Gate != nil && !io.Gate() {
+		w.finish(WatchSuperseded, "this controller no longer leads: not reverted here (the apply was not kept, so the leader runs the configuration before it)")
+		return
+	}
 	// Silence once more, now that nothing else can change what runs: a
 	// device that answered while this waited for the lock is not silent.
 	w.answer()
 	snap = w.snapshot()
 	if len(snap.Pending) == 0 {
+		w.mu.Lock()
+		w.Silent = nil // it is not silent after all
+		w.mu.Unlock()
 		w.finish(WatchAnswered, "")
 		return
 	}
@@ -1494,6 +1691,9 @@ func (io *IOConfig) CancelRevert(by string) (*IOWatch, error) {
 		w.mu.Unlock()
 		w.stop()
 		s := w.snapshot()
+		if w.onEnd != nil {
+			w.onEnd(s)
+		}
 		return &s, nil
 	case w.State == WatchReverting:
 		w.mu.Unlock()
@@ -1511,13 +1711,30 @@ func (io *IOConfig) CancelRevert(by string) (*IOWatch, error) {
 	return nil, fmt.Errorf("%w: the last apply's watch is %s", ErrNoRevert, state)
 }
 
-// Close stops the watch (a test, or a controller shutting down).
+// Close stops the watch (a test, or a controller shutting down). A revert
+// already under way is not cut short: Close waits for it, up to
+// undoTimeout. Were it cut short anyway, nothing is lost: the store never
+// held the apply it reverts, so a restart comes back on what ran before.
 func (io *IOConfig) Close() {
+	io.closeOnce.Do(func() {
+		if io.closed != nil {
+			close(io.closed)
+		}
+	})
 	io.mu.Lock()
 	w := io.watch
 	io.mu.Unlock()
-	if w != nil && w.stop != nil {
-		w.stop()
+	if w == nil || w.stop == nil {
+		return
+	}
+	w.stop()
+	if w.done == nil {
+		return
+	}
+	select {
+	case <-w.done:
+	case <-time.After(undoTimeout):
+		slog.Warn("config.apply: closing while a revert is still under way")
 	}
 }
 
@@ -1586,7 +1803,13 @@ func (io *IOConfig) swap(ctx context.Context, name string, fsys fs.FS, cfg Drive
 	if s, ok := d.(interface{ Start(context.Context) }); ok {
 		s.Start(context.Background()) // runs until Stop, as naut run starts drivers
 	}
-	prev, pushed, err := io.rt.ReplaceDriverObserved(ctx, name, d)
+	var prev nio.Driver
+	var pushed <-chan nio.Values
+	if io.atStart {
+		prev, err = io.rt.ReplaceDriverAtStart(ctx, name, d)
+	} else {
+		prev, pushed, err = io.rt.ReplaceDriverObserved(ctx, name, d)
+	}
 	if err != nil {
 		stopDriver(d)
 		return nil, err

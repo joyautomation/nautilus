@@ -1209,13 +1209,19 @@
       function renderConfig(c) {
         const el = $("io-config");
         const differs = c?.differs ?? [];
-        if (!c || (!differs.length && !c.fault)) {
+        const discarded = c?.discarded ?? [];
+        if (!c || (!differs.length && !c.fault && !discarded.length)) {
           el.style.display = "none";
           return;
         }
         const names = [...new Set(differs.map((d) => d.device ? d.driver + "/" + d.device : d.driver))];
         let text = differs.length ? "I/O CONFIG DIFFERS FROM THE MANIFEST for " + names.join(", ") : "";
+        if (differs.length && c.notKept) text += " (NOT KEPT ACROSS A RESTART — " + c.notKept + ")";
         if (c.fault) text += (text ? " · " : "") + "I/O APPLY FAULT — " + c.fault;
+        if (discarded.length) {
+          const what = discarded.map((d) => d.driver ? (d.device ? d.driver + "/" + d.device : d.driver) : "a pending apply");
+          text += (text ? " · " : "") + "KEPT I/O CHANGE NOT BROUGHT BACK for " + what.join(", ") + " — " + discarded[0].why;
+        }
         el.textContent = text;
         el.style.display = "";
       }
