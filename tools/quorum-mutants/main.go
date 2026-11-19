@@ -159,15 +159,20 @@ var table = []mutation{
 	{"alarm_view_ignored", []string{"TestPairAckCarriesAcrossASyncedTakeover"}},
 	// #1033 review: a re-leading replica's frozen engine.
 	{"engine_not_reset", []string{"TestReviewFrozenEngineIsReset", "TestReviewFrozenShelfIsReset"}},
+	// #1033 CI: the alarm log judged the engine before the takeover
+	// restored it. cmd/naut's TestPairAckCarriesWhileTheTakeoverWaits
+	// loses the ack under it too.
+	{"reconcile_before_restore", []string{"TestAlarmLogWaitsForTheRestore"}},
 }
 
 // rowPkgs are the packages a row runs instead of ./quorum/..., filtered
 // to its tests: a switch outside the quorum tree.
 var rowPkgs = map[string][]string{
-	"lapse_ignored":      {"./oplog"},
-	"ack_clear_off":      {"./cmd/naut"},
-	"alarm_view_ignored": {"./cmd/naut"},
-	"engine_not_reset":   {"./server"},
+	"lapse_ignored":            {"./oplog"},
+	"ack_clear_off":            {"./cmd/naut"},
+	"alarm_view_ignored":       {"./cmd/naut"},
+	"engine_not_reset":         {"./server"},
+	"reconcile_before_restore": {"./server"},
 }
 
 // args are the go test arguments for m.

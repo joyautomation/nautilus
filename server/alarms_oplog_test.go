@@ -24,7 +24,7 @@ import (
 func loggedAlarms(t *testing.T, cond map[string]any, leading *atomic.Bool) (*Server, *alarm.Engine, *AlarmLog, *[]oplog.Entry) {
 	t.Helper()
 	eng := newTestAlarms(t, cond)
-	al := NewAlarmLog(eng, leading.Load)
+	al := NewAlarmLog(eng, leading.Load, noTerm)
 	var got []oplog.Entry
 	n, err := oplog.New(oplog.Options{Self: "a", Apply: func(e oplog.Entry) error {
 		got = append(got, e)
@@ -144,7 +144,7 @@ func TestAlarmWriteRefusedWithoutMajority(t *testing.T) {
 	lead.Store(true)
 	eng := newTestAlarms(t, map[string]any{"HiTempAlm": true, "LoFlowAlm": false})
 	eng.Evaluate()
-	al := NewAlarmLog(eng, lead.Load)
+	al := NewAlarmLog(eng, lead.Load, noTerm)
 	n, err := oplog.New(oplog.Options{Self: "http://127.0.0.1:1", Peers: []string{"http://127.0.0.1:1", "http://127.0.0.1:2"},
 		Leadership: oplog.Static{Self: "http://127.0.0.1:1", Leader: "http://127.0.0.1:1"}, Token: "t", Ephemeral: true, Apply: func(e oplog.Entry) error { _, err := al.Apply(e); return err }})
 	if err != nil {

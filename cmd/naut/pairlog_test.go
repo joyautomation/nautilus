@@ -13,6 +13,7 @@ import (
 	"testing/fstest"
 	"time"
 
+	"github.com/joyautomation/nautilus/internal/project"
 	"github.com/joyautomation/nautilus/quorum/node"
 	"github.com/joyautomation/nautilus/runtime"
 )
@@ -28,9 +29,17 @@ type pairRig struct {
 	host    map[string]string
 	apiPort string
 	nodes   map[string]*pairNode
+	pmod    func(n string, p *project.Project) // nil: the project as loaded
 }
 
 func newPairRig(t *testing.T) *pairRig {
+	t.Helper()
+	return newPairRigWith(t, nil)
+}
+
+// newPairRigWith is newPairRig with pmod applied to each member's project
+// (at every start, restarts included).
+func newPairRigWith(t *testing.T, pmod func(n string, p *project.Project)) *pairRig {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("runs a pair and a witness on loopback for several leases")
@@ -39,7 +48,7 @@ func newPairRig(t *testing.T) *pairRig {
 		t.Skip("a pair member needs CLOCK_BOOTTIME (Linux)")
 	}
 	r := &pairRig{t: t, host: map[string]string{"a": "127.0.0.1", "b": "127.0.0.2"}, peer: map[string]string{},
-		env: map[string]map[string]string{}, nodes: map[string]*pairNode{}}
+		env: map[string]map[string]string{}, nodes: map[string]*pairNode{}, pmod: pmod}
 	lnA, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -73,8 +82,8 @@ func newPairRig(t *testing.T) *pairRig {
 	for _, n := range []string{"a", "b"} {
 		r.env[n] = map[string]string{"NAUTILUS_NODE": n, "NAUTILUS_PEER_TOKEN": token, "NAUTILUS_CLUSTER": cluster, "STATE_DIRECTORY": t.TempDir()}
 	}
-	r.nodes["a"] = startPairNodeAPI(t, r.files, r.env["a"], lnA, apiA)
-	r.nodes["b"] = startPairNodeAPI(t, r.files, r.env["b"], lnB, apiB)
+	r.nodes["a"] = r.start("a", lnA, apiA)
+	r.nodes["b"] = r.start("b", lnB, apiB)
 	a, b := r.elector("a"), r.elector("b")
 	pairWait(t, "both members to hear the witness", 10*time.Second, func() bool {
 		return a.Status().WitnessIncarnation != 0 && b.Status().WitnessIncarnation != 0
@@ -126,7 +135,16 @@ func (r *pairRig) restart(n string) {
 	if err != nil {
 		r.t.Fatal(err)
 	}
-	r.nodes[n] = startPairNodeAPI(r.t, r.files, r.env[n], ln, api)
+	r.nodes[n] = r.start(n, ln, api)
+}
+
+// start starts member n on its listeners, with the rig's project change.
+func (r *pairRig) start(n string, ln, api net.Listener) *pairNode {
+	var pm func(*project.Project)
+	if r.pmod != nil {
+		pm = func(p *project.Project) { r.pmod(n, p) }
+	}
+	return startPairNodeFull(r.t, r.files, r.env[n], ln, api, nil, pm)
 }
 
 // call sends a request to member n's tag API.

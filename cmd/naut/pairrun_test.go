@@ -210,7 +210,17 @@ func startPairNodeAPI(t *testing.T, files fstest.MapFS, env map[string]string, l
 // pairDeps first (a box fingerprint, a dialer that cuts links).
 func startPairNodeWith(t *testing.T, files fstest.MapFS, env map[string]string, ln, api net.Listener, mod func(*pairDeps)) *pairNode {
 	t.Helper()
+	return startPairNodeFull(t, files, env, ln, api, mod, nil)
+}
+
+// startPairNodeFull is startPairNodeWith with pmod applied to the loaded
+// project first (a driver, a takeover wait).
+func startPairNodeFull(t *testing.T, files fstest.MapFS, env map[string]string, ln, api net.Listener, mod func(*pairDeps), pmod func(*project.Project)) *pairNode {
+	t.Helper()
 	proj := loadPair(t, files)
+	if pmod != nil {
+		pmod(proj)
+	}
 	apiAddr := "127.0.0.1:18080"
 	if api != nil {
 		apiAddr = api.Addr().String()

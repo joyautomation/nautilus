@@ -359,7 +359,11 @@ a few tens of milliseconds; while the other controller is down the clear
 waits for it, so the window lasts as long as the outage plus about 2 s.
 An acknowledgement or a shelve made just before a controller died and
 committed more than 60 s later is dropped, not applied to whatever
-occurrence is live by then.
+occurrence is live by then. While a new leader's takeover is still
+waiting (for its inputs to come live, or for the log to catch up), an
+acknowledgement or a shelve sent to it is refused with "this controller
+is taking over: its alarm state is not restored yet" (503); retry it a
+moment later.
 
 **When the takeover could not catch the log up** (with the log on the two
 controllers only, that is every takeover after the leader died), no

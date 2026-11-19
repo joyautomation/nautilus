@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/joyautomation/nautilus/alarm"
@@ -56,6 +57,21 @@ import (
 // occurrence that ended, or a shelf undone, while it stood by never
 // survives in it (#1033 review).
 //
+// # Live only once restored
+//
+// A replica wins the lease before its runtime takes over: the takeover
+// waits for live inputs and the log's catch-up (#626), and only then
+// restores the view into the engine. Until it has, in this term, the
+// engine still holds a standby's (or an earlier leadership's) state, and
+// nothing may be judged from it (#1033 CI): Reconcile would clear every
+// carried ack, an ack-clear would be proposed from the restore's own
+// transitions, and an HTTP ack or shelve would be checked against stale
+// occurrences. So the log is live (live) only while this replica leads
+// AND its takeover restored the view under the current term; alarm writes
+// arriving in between are refused (503, retry), and committed entries
+// only update the view, which the restore then applies. A same-term
+// resume (no takeover) stays live.
+//
 // # Late entries lapse
 //
 // An ack or a shelve proposed while the log had no majority, and committed
@@ -75,8 +91,16 @@ const PairNoMajorityAlarms = "operator-intent log has no majority: the peer is d
 type AlarmLog struct {
 	eng     *alarm.Engine
 	leading func() bool
+	term    func() uint64
 	node    *oplog.Node
 	refusal string
+
+	// restored is the term whose takeover restored the view into the
+	// engine (live). liveMu orders a committed entry's apply against the
+	// restore: an entry lands either in the view the restore reads, or
+	// on the engine after it, never in neither.
+	restored atomic.Uint64
+	liveMu   sync.Mutex
 
 	mu   sync.Mutex
 	view map[string]alarmIntent
@@ -100,13 +124,34 @@ type alarmIntent struct {
 }
 
 // NewAlarmLog is an AlarmLog for eng; leading reports whether this replica
-// leads now (its engine is the live one). It registers the engine hook
-// that proposes ack-clears. Attach the node once it exists (its Apply must
-// already reach Apply).
-func NewAlarmLog(eng *alarm.Engine, leading func() bool) *AlarmLog {
-	l := &AlarmLog{eng: eng, leading: leading, view: map[string]alarmIntent{}, refusal: PairNoMajorityAlarms, clrRetry: 2 * time.Second}
+// holds the lease now, and term the term it holds it under (the elector's
+// fencing token). The engine is live once a takeover restored the view in
+// that term (see live). It registers the engine hook that proposes
+// ack-clears. Attach the node once it exists (its Apply must already
+// reach Apply).
+func NewAlarmLog(eng *alarm.Engine, leading func() bool, term func() uint64) *AlarmLog {
+	l := &AlarmLog{eng: eng, leading: leading, term: term, view: map[string]alarmIntent{}, refusal: PairNoMajorityAlarms, clrRetry: 2 * time.Second}
 	eng.OnEvent(l.engineEvent)
 	return l
+}
+
+// live reports whether this replica's engine is the live one: it leads,
+// and its takeover restored the view under the term it leads in.
+func (l *AlarmLog) live() bool {
+	if mutServer("reconcile_before_restore") {
+		return l.leading()
+	}
+	return l.leading() && l.restored.Load() == l.term()
+}
+
+// restoring runs a takeover's restore under liveMu and marks the log live
+// for the term held when it began.
+func (l *AlarmLog) restoring(restore func()) {
+	term := l.term()
+	l.liveMu.Lock()
+	defer l.liveMu.Unlock()
+	restore()
+	l.restored.Store(term)
 }
 
 // Attach sets the oplog node proposals go to.
@@ -115,7 +160,9 @@ func (l *AlarmLog) Attach(n *oplog.Node) { l.node = n }
 // Apply applies a committed entry if it is an alarm kind, and reports
 // whether it was one.
 func (l *AlarmLog) Apply(e oplog.Entry) (bool, error) {
-	live := l.leading()
+	l.liveMu.Lock()
+	defer l.liveMu.Unlock()
+	live := l.live()
 	if e.Lapsed && (e.Kind == oplog.KindAck || e.Kind == oplog.KindShelve) {
 		slog.Warn("alarm: an operator's ack or shelve lapsed: it was committed too late to apply to the occurrence it was for", "kind", e.Kind, "ids", e.IDs, "id", e.ID, "by", e.By)
 		return true, nil
@@ -196,7 +243,7 @@ func (l *AlarmLog) engineEvent(ev alarm.Event) {
 	if ev.State == "ack-active" || ev.Kind == alarm.KindShelve || ev.State == "shelved" || mutServer("ack_clear_off") {
 		return
 	}
-	if !l.leading() {
+	if !l.live() {
 		return
 	}
 	l.mu.Lock()
@@ -210,8 +257,10 @@ func (l *AlarmLog) engineEvent(ev alarm.Event) {
 // Reconcile clears from the log any ack the leader's engine doesn't hold
 // (an occurrence that ended by a path no event caught, or a view left
 // stale by an unsynced takeover). naut run calls it at every log tick.
+// Before this term's takeover restored the view, the engine is not the
+// leader's yet, and nothing is judged (see live).
 func (l *AlarmLog) Reconcile() {
-	if !l.leading() || mutServer("ack_clear_off") {
+	if !l.live() || mutServer("ack_clear_off") {
 		return
 	}
 	held := l.eng.AckHeldIDs()
@@ -352,6 +401,10 @@ func (p PairAlarms) RestoreAlarms(m map[string]retain.AlarmRetain) { p.RestoreAl
 
 // RestoreAlarmsSynced restores the view (Held) into the engine.
 func (p PairAlarms) RestoreAlarmsSynced(m map[string]retain.AlarmRetain, synced bool) {
+	p.Log.restoring(func() { p.restore(m, synced) })
+}
+
+func (p PairAlarms) restore(m map[string]retain.AlarmRetain, synced bool) {
 	if !synced {
 		if p.Log.hasAcks(m) {
 			p.Engine.Note("system", "acks not carried: takeover unsynced (the operator-intent log could not be caught up, so acknowledged alarms re-annunciate)")
@@ -365,6 +418,21 @@ func (p PairAlarms) RestoreAlarmsSynced(m map[string]retain.AlarmRetain, synced 
 		p.Engine.ResetOperatorState()
 	}
 	p.Engine.RestoreAlarms(p.Log.Held(synced, m))
+}
+
+// PairAlarmsTakingOver refuses an alarm write that reaches a leader whose
+// takeover has not restored the alarm state yet (see AlarmLog.live).
+const PairAlarmsTakingOver = "this controller is taking over: its alarm state is not restored yet, so an acknowledgement or a shelve can't be checked; retry in a moment"
+
+// refuseAlarmBeforeRestore answers PairAlarmsTakingOver before anything
+// is read from the engine: in that window it holds a standby's state.
+func (s *Server) refuseAlarmBeforeRestore(w http.ResponseWriter) bool {
+	if s.alarmLog.live() {
+		return false
+	}
+	w.Header().Set("Retry-After", "1")
+	refuse(w, PairAlarmsTakingOver, http.StatusServiceUnavailable)
+	return true
 }
 
 // refuseAlarmWithoutMajority answers the no-majority refusal before an
@@ -385,6 +453,9 @@ func (s *Server) refuseAlarmWithoutMajority(w http.ResponseWriter) bool {
 // alarmAckThroughLog proposes an acknowledgement: "all" becomes the leader's
 // unacknowledged alarms by id, since a standby can't know them.
 func (s *Server) alarmAckThroughLog(w http.ResponseWriter, r *http.Request, ids []string, by string) {
+	if s.refuseAlarmBeforeRestore(w) {
+		return
+	}
 	if ids == nil {
 		ids = s.alarms.UnackedIDs()
 		if len(ids) == 0 {
@@ -418,6 +489,9 @@ func (s *Server) alarmAckThroughLog(w http.ResponseWriter, r *http.Request, ids 
 
 // shelveThroughLog proposes a shelve, or an unshelve when until is zero.
 func (s *Server) shelveThroughLog(w http.ResponseWriter, r *http.Request, id string, until time.Time, by string) {
+	if s.refuseAlarmBeforeRestore(w) {
+		return
+	}
 	e := oplog.Entry{Kind: oplog.KindUnshelve, ID: id, By: by}
 	err := error(nil)
 	if until.IsZero() {

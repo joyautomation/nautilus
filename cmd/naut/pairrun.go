@@ -411,7 +411,7 @@ func (m *pairMember) startLog(rt *runtime.Runtime, wait time.Duration, eng *alar
 		// start: an entry applied before the takeover's restore is reset
 		// and restored with the view; one after it reaches the engine
 		// (#1033 review).
-		al = server.NewAlarmLog(eng, m.q.IsLeader)
+		al = server.NewAlarmLog(eng, m.q.IsLeader, m.q.Term)
 		rt.SetAlarms(server.PairAlarms{Engine: eng, Log: al})
 	}
 	m.al = al

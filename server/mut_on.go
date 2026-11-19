@@ -12,7 +12,10 @@ import "os"
 //   - alarm_view_ignored: a synced takeover restores the replica's own
 //     retain instead of the log's alarm view;
 //   - engine_not_reset: a takeover restores the view over the engine's
-//     frozen operator state instead of resetting it first.
+//     frozen operator state instead of resetting it first;
+//   - reconcile_before_restore: the log counts as live from the lease on,
+//     before the takeover restored the view, so Reconcile clears every
+//     carried ack against the unrestored engine (#1033 CI).
 var mutOn = os.Getenv("QUORUM_MUT")
 
 func mutServer(name string) bool { return name == mutOn }

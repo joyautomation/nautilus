@@ -80,10 +80,11 @@ var Mutations = []string{
 	"box_wait_skipped",           // a controller whose box can't be read yet votes on the stored identity (#1034 review)
 	// Outside the quorum tree, listed so this init accepts them when a
 	// package that imports quorum runs under one (the runner's pkgs rows).
-	"lapse_ignored",      // oplog: a committed KindLapse is not looked at; a late start runs (#1030 review)
-	"ack_clear_off",      // server: an acked alarm back to normal proposes no ack-clear (#710 PR 3b-2c)
-	"alarm_view_ignored", // server: a synced takeover restores its own retain, not the log's alarm view
-	"engine_not_reset",   // server: a takeover restores the view over the engine's frozen operator state
+	"lapse_ignored",            // oplog: a committed KindLapse is not looked at; a late start runs (#1030 review)
+	"ack_clear_off",            // server: an acked alarm back to normal proposes no ack-clear (#710 PR 3b-2c)
+	"alarm_view_ignored",       // server: a synced takeover restores its own retain, not the log's alarm view
+	"engine_not_reset",         // server: a takeover restores the view over the engine's frozen operator state
+	"reconcile_before_restore", // server: the alarm log is live from the lease on, before the takeover restored it (#1033 CI)
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")

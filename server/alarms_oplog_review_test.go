@@ -103,7 +103,7 @@ func TestReviewLatchedReactivation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer eng.Close()
-	al := NewAlarmLog(eng, lead.Load)
+	al := NewAlarmLog(eng, lead.Load, noTerm)
 	n, err := oplog.New(oplog.Options{Self: "a", Apply: func(e oplog.Entry) error { _, err := al.Apply(e); return err }})
 	if err != nil {
 		t.Fatal(err)
