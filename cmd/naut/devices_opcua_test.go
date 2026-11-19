@@ -12,22 +12,32 @@ import (
 	"github.com/joyautomation/nautilus/internal/project"
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/lang/ir"
+	"github.com/joyautomation/nautilus/runtime"
 	"github.com/joyautomation/nautilus/virtdev"
 )
 
 // opcuaProject writes a project with an OPC UA IO-Link master declared by
-// profile, vendored as naut devices add leaves it, the row's endpoint
-// being endpoint.
+// profile, the row's endpoint being endpoint, and a program that reads the
+// device's struct and its driver's companion and writes a command tag.
 func opcuaProject(t *testing.T, dir, endpoint string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, project.ManifestName), []byte(`name: iolm
 tasks: [{ program: main.st, scan: 20ms }]
 devices:
   - { name: PF1, profile: pepperl-fuchs-ice3, endpoint: "`+endpoint+`", points: [Port1_PdiU32, Port1_PdoU32] }
+tags:
+  - { name: Seen, role: state, type: UDINT }
+  - { name: Up,   role: state, type: BOOL }
+  - { name: Cmd,  role: setpoint, type: UDINT, init: 0 }
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "main.st"), []byte("PROGRAM Main\nEND_PROGRAM\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "main.st"), []byte(`PROGRAM Main
+Seen := PF1.Port1_PdiU32;
+Up := PF1__Online;
+PF1_Port1_PdoU32 := Cmd;
+END_PROGRAM
+`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -93,23 +103,38 @@ func TestDevicesOPCUARowOnTheWire(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	rt, err := runtime.New(proj.Runtime)
+	if err != nil {
+		t.Fatalf("the program does not compile against the device: %v", err)
+	}
 	drv := proj.Runtime.Driver
 	drv.(interface{ Start(context.Context) }).Start(ctx)
-	defer drv.(interface{ Stop() }).Stop()
-	waitFor(t, "PF1.Port1_PdiU32 reads the device", func() bool {
-		vals, err := drv.ReadInputs()
-		if err != nil {
-			return false
-		}
-		v, ok := vals["PF1"].(ir.Value)
-		return ok && v.Fld[v.Struct.FieldIndex["Port1_PdiU32"]].I == 4242 && vals["PF1__Online"] == true
+	done := make(chan struct{})
+	rctx, stop := context.WithCancel(ctx)
+	go func() { rt.Run(rctx); close(done) }()
+	defer func() {
+		stop()
+		<-done
+		drv.(interface{ Stop() }).Stop()
+	}()
+	waitFor(t, "the program reads the device's struct and its driver's companion", func() bool {
+		v, _ := rt.Tags().ReadPath("Seen")
+		iv, isIR := v.(ir.Value)
+		return rt.Tags().Bool("Up") && ((isIR && iv.I == 4242) || v == int64(4242))
 	})
+	q := drv.(interface{ Quality() map[string]nio.Quality }).Quality()
+	if q["PF1"] != nio.Good && q["PF1"] != 0 {
+		t.Errorf("PF1's quality %v, want Good: %v", q["PF1"], q)
+	}
+	for name, qv := range q {
+		if strings.HasPrefix(name, "PF1.") || (name == "PF1_Port1_PdoU32" && qv != nio.Good) {
+			t.Errorf("quality reports %s (%v): a member, or a command as not Good", name, qv)
+		}
+	}
 	// The first push is the driver's start-up baseline, recorded and not
 	// sent, so the command is a change made after it.
-	for _, n := range []int64{0, 777} {
-		if err := drv.WriteOutputs(nio.Values{"PF1_Port1_PdoU32": n}); err != nil {
-			t.Fatal(err)
-		}
+	if err := rt.Tags().SetPath("Cmd", int64(777)); err != nil {
+		t.Fatal(err)
 	}
 	waitFor(t, "the command tag's write reaches the device", func() bool {
 		v, ok := run.Runtime.Tags().ReadPath("PF1_Port1_PdoU32")

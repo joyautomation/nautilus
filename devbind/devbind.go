@@ -231,11 +231,25 @@ func (d *device) checkPorts(fsys fs.FS, where string, names map[string]string) e
 			return fmt.Errorf("%s: iodd %s is not in %s/", at, pt.IODD, IODDDir)
 		}
 	}
-	// The numbers are checked against the profile's IO-Link ports, 1 to
-	// IOLinkPorts, once profiles declare any (#705); until then a row's
-	// ports: is refused, not ignored.
-	if d.prof.IOLinkPorts() == 0 {
+	// Until profiles declare IO-Link ports (#705), a row's ports: is
+	// refused, not ignored.
+	n := d.prof.IOLinkPorts()
+	if n == 0 {
 		return fmt.Errorf("%s: ports: profile %s declares no IO-Link ports", where, d.prof.ID)
+	}
+	if err := portRange(nums, n); err != nil {
+		return fmt.Errorf("%s: ports: profile %s %w", where, d.prof.ID, err)
+	}
+	return nil
+}
+
+// portRange checks a row's port numbers (sorted) against a master's n
+// ports, numbered 1 to n.
+func portRange(nums []int, n int) error {
+	for _, k := range nums {
+		if k < 1 || k > n {
+			return fmt.Errorf("has ports 1-%d, not %d", n, k)
+		}
 	}
 	return nil
 }

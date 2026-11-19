@@ -158,7 +158,9 @@ members is an error. A `udt:` may not be a standard type or block name
   and reads back the device.
 - `CONV_ControlWord`, role output, of the point's type, for every writable
   point.
-- The drivers' `__Online` and `__Outages` companions stay as they are.
+- `CONV__Online` (BOOL), and for a Modbus device `CONV__Outages` (DINT),
+  role input: the driver's companions for the device, declared by the row
+  so a program can gate on them.
 
 The types are composed by `internal/stproject` beside the dialect's
 block library (`nautilus.yaml#devices`), so every tool that compiles the

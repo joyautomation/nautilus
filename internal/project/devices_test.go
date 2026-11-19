@@ -355,3 +355,28 @@ func TestOPCUADevicesAreDriversOfTheirOwn(t *testing.T) {
 		t.Errorf("a device named as a driver: %v", err)
 	}
 }
+
+// ports: decodes from nautilus.yaml in #705's shape (a map by port number,
+// a typo an error), and is refused while no profile declares IO-Link
+// ports, rather than ignored.
+func TestDevicePortsInTheManifest(t *testing.T) {
+	ifm, err := os.ReadFile("../../devprofile/profiles/ifm-al1590.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, tc := range map[string]struct{ ports, want string }{
+		"refused": {"{ 2: { name: LEVEL1, iodd: sensor.xml } }", "device MASTER1: ports: profile ifm-al1590 declares no IO-Link ports"},
+		"typo":    {"{ 2: { nme: LEVEL1 } }", "field nme not found"},
+		"by name": {"{ two: { name: LEVEL1 } }", "cannot unmarshal"},
+	} {
+		fsys := fstest.MapFS{
+			"nautilus.yaml":            {Data: []byte("name: d\ntasks: [{ program: main.st }]\ndevices:\n  - { name: MASTER1, profile: ifm-al1590, endpoint: 10.0.0.20, ports: " + tc.ports + " }\n")},
+			"main.st":                  {Data: []byte("PROGRAM Main\nEND_PROGRAM\n")},
+			"profiles/ifm-al1590.yaml": {Data: ifm},
+			"iodd/sensor.xml":          {Data: []byte("<IODevice/>")},
+		}
+		if _, err := ReadManifest(fsys, ""); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: %v, want %q", name, err, tc.want)
+		}
+	}
+}

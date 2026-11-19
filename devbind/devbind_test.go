@@ -104,7 +104,7 @@ func TestTypesAndTags(t *testing.T) {
 	for _, tg := range s.Tags() {
 		tags = append(tags, tg.Name+":"+tg.Role+":"+tg.Type)
 	}
-	if want := "CONV:input:ABB_ACS355_FMBT21 CONV_ControlWord:output:WORD"; strings.Join(tags, " ") != want {
+	if want := "CONV:input:ABB_ACS355_FMBT21 CONV__Online:input:BOOL CONV__Outages:input:DINT CONV_ControlWord:output:WORD"; strings.Join(tags, " ") != want {
 		t.Errorf("tags %v, want %s", tags, want)
 	}
 }

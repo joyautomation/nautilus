@@ -3,6 +3,7 @@
 package devbind
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -10,6 +11,7 @@ import (
 
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/lang/ir"
+	"github.com/joyautomation/nautilus/lang/st"
 	"github.com/joyautomation/nautilus/opcua"
 )
 
@@ -150,6 +152,14 @@ func TestOPCUADriver(t *testing.T) {
 	if got := w.InputNames(); !reflect.DeepEqual(got, []string{"MASTER1", "MASTER1__Online"}) {
 		t.Errorf("inputs %v", got)
 	}
+	var tags []string
+	for _, tg := range s.Tags() {
+		tags = append(tags, tg.Name+":"+tg.Role+":"+tg.Type)
+	}
+	// The driver's one companion, as an input; no Modbus __Outages.
+	if want := "MASTER1:input:IFM_AL1590 MASTER1__Online:input:BOOL"; strings.Join(tags, " ") != want {
+		t.Errorf("tags %v, want %s", tags, want)
+	}
 	if got := w.InputType("MASTER1"); got != "IFM_AL1590" {
 		t.Errorf("type %q", got)
 	}
@@ -194,4 +204,50 @@ func TestResolvePorts(t *testing.T) {
 			t.Errorf("%s: %v, want %q", name, err, tc.want)
 		}
 	}
+}
+
+// A row's port numbers are a master's 1 to n.
+func TestPortRange(t *testing.T) {
+	for _, tc := range []struct {
+		nums []int
+		ok   bool
+	}{
+		{[]int{1, 8}, true}, {[]int{3}, true}, {[]int{0, 2}, false}, {[]int{-1}, false}, {[]int{2, 9}, false},
+	} {
+		if err := portRange(tc.nums, 8); (err == nil) != tc.ok {
+			t.Errorf("%v of 8: %v", tc.nums, err)
+		}
+	}
+	if err := portRange([]int{9}, 8); err == nil || err.Error() != "has ports 1-8, not 9" {
+		t.Errorf("message %v", err)
+	}
+}
+
+// Every type an OPC UA point may be is a struct member and an OPC UA
+// built-in type, and the device type compiles: the shipped profiles use
+// only some of them.
+func TestOPCUAPointTypes(t *testing.T) {
+	var rows strings.Builder
+	types := []string{"BOOL", "BYTE", "INT", "UINT", "WORD", "DINT", "UDINT", "DWORD", "LINT", "ULINT", "REAL", "LREAL", "STRING"}
+	for _, ty := range types {
+		fmt.Fprintf(&rows, "  - { name: P_%s, type: %s, node-id: \"ns=1;s=%s\", path: \"Dev/%s\", unverified: true }\n", ty, ty, ty, ty)
+	}
+	prof := "profile: every-type\ntitle: t\nprotocol: opcua\nopcua: { namespaces: [urn:example:t] }\npoints:\n" + rows.String()
+	s, err := Resolve(fstest.MapFS{"profiles/every-type.yaml": {Data: []byte(prof)}}, []Device{{Name: "D", Profile: "every-type", Endpoint: "h"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range s.OPCUADevices()[0].Manifest.Tags {
+		if b.Type == "" {
+			t.Errorf("%s has no OPC UA type", b.Name)
+		}
+	}
+	src, err := s.TypesST()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.Parse(src); err != nil {
+		t.Errorf("the type does not parse: %v\n%s", err, src)
+	}
+	newAssembler(s.devices[0]) // panics on a type it cannot hold
 }
