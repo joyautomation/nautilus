@@ -62,6 +62,11 @@ func electorFor(proj *project.Project, addr, dir string) (leader.Election, *pair
 // electorWith is electorFor with a pair member's environment and listen
 // call given (tests).
 func electorWith(proj *project.Project, addr, dir string, deps pairDeps) (leader.Election, *pairMember, error) {
+	if node := deps.getenv("NAUTILUS_NODE"); node != "" && !proj.Redundancy.Pair() {
+		// Set for a pair, but the manifest names none: each box would run
+		// as its own leader, and both would drive the I/O.
+		return nil, nil, fmt.Errorf("NAUTILUS_NODE=%s is set, but this manifest's redundancy: names no pair (peers: and witness:), so every box would run as its own leader against the same I/O: add the pair's section, or unset NAUTILUS_NODE", node)
+	}
 	if proj.Redundancy == nil {
 		return nil, nil, nil
 	}

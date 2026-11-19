@@ -134,6 +134,11 @@ var table = []mutation{
 	// The #1021 re-review.
 	{"lease_raise_volatile", []string{"TestVoterLongerLeaseDurableBeforeAnyGrant", "TestReviewLengthenThenShorten"}},
 	{"term_cap_narrow", []string{"TestReviewIsolatedControllerRejoins"}},
+	// The #1028 review: two processes under one member's name.
+	// cmd/naut's TestPairClonedMemberNeverLeadsTwice and
+	// TestPairCopiedEnvWithKeptStateRefused catch them end to end too.
+	{"duplicate_member_granted", []string{"TestVoterRefusesANameUnderAnotherBootNonce"}},
+	{"state_owner_unchecked", []string{"TestStateFileBoundToItsOwner"}},
 }
 
 // event is one line of `go test -json`.

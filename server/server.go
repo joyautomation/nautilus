@@ -800,6 +800,23 @@ func (s *Server) proxyStandby(routes *http.ServeMux, mux http.Handler) http.Hand
 			return
 		}
 		st := s.cluster.Status()
+		if noLeaderKnown(st) {
+			// A redundant pair's standby that knows no leader (an election
+			// under way, the leader gone, a pair not yet commissioned): a
+			// write here would land in a store that does not scan, so it
+			// is refused, as a lease holder with its gate closed refuses
+			// one (#621). Reads are answered from this store.
+			if r.Method == http.MethodGet || r.Method == http.MethodHead {
+				mux.ServeHTTP(w, r)
+				return
+			}
+			auditedAnswer(routes, w, r, func(w http.ResponseWriter, _ *http.Request) {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+					"error": "no leader: this controller is standing by and no leader is known (an election is under way, or the pair cannot elect); try again shortly",
+				})
+			})
+			return
+		}
 		if st.IsLeader || st.LeaderAddr == "" {
 			// We're the leader, or nobody's address is known yet (a fresh
 			// cluster still electing, or a standalone-mode elector that never
@@ -852,6 +869,13 @@ func (s *Server) proxyStandby(routes *http.ServeMux, mux http.Handler) http.Hand
 // its gate is closed while it still holds the lease (a hung scan, #621, or
 // a renew older than the lease), so LeaderAddr is its own address. Never a
 // proxy target: that is a request forwarding to itself without end.
+// noLeaderKnown: a redundant pair member (quorum mode) that does not lead
+// and knows no leader. The Kubernetes mode keeps serving locally then: its
+// standalone elector never names a leader address.
+func noLeaderKnown(st leader.Status) bool {
+	return st.Mode == "quorum" && !st.IsLeader && st.LeaderAddr == ""
+}
+
 func heldHere(st leader.Status) bool {
 	return !st.IsLeader && st.Leader != "" && st.Leader == st.Pod
 }

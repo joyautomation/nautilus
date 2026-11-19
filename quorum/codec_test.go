@@ -62,7 +62,7 @@ func TestMessageCorruptionRefused(t *testing.T) {
 // target untouched (F26, the T1 half).
 func TestStateFileTornAtEveryOffset(t *testing.T) {
 	s := VoterState{Promised: 12, GrantedTo: "B", Incarnation: 42,
-		InSync: Mark{Known: true, Current: true, Term: 12, Scan: 3400}}
+		InSync: Mark{Known: true, Current: true, Term: 12, Scan: 3400}, Owner: "a", Cluster: "0123456789abcdef0123456789abcdef"}
 	b, _ := s.MarshalBinary()
 	var got VoterState
 	if err := got.UnmarshalBinary(b); err != nil || got != s {
@@ -87,17 +87,19 @@ func TestStateFileTornAtEveryOffset(t *testing.T) {
 	}
 }
 
-// A state file of another format version (1: before VoterState.Lease)
-// reads as ErrVersion, not as corrupt.
+// A state file of another format version (1: before VoterState.Lease; 2:
+// before Owner and Cluster) reads as ErrVersion, not as corrupt.
 func TestStateFileVersion(t *testing.T) {
-	b, _ := VoterState{Promised: 3, Incarnation: 9, Lease: lease}.MarshalBinary()
-	if b[len(stateMagic)] != 2 {
-		t.Fatalf("state version %d, want 2", b[len(stateMagic)])
+	b, _ := VoterState{Promised: 3, Incarnation: 9, Lease: lease, Owner: "w", Cluster: "c"}.MarshalBinary()
+	if b[len(stateMagic)] != 3 {
+		t.Fatalf("state version %d, want 3", b[len(stateMagic)])
 	}
-	old := append([]byte(nil), b[:len(b)-4]...)
-	old[len(stateMagic)] = 1
-	var st VoterState
-	if err := st.UnmarshalBinary(sealCRC(old)); !errors.Is(err, ErrVersion) {
-		t.Fatalf("a version-1 file: %v, want ErrVersion", err)
+	for _, v := range []byte{1, 2} {
+		old := append([]byte(nil), b[:len(b)-4]...)
+		old[len(stateMagic)] = v
+		var st VoterState
+		if err := st.UnmarshalBinary(sealCRC(old)); !errors.Is(err, ErrVersion) {
+			t.Fatalf("a version-%d file: %v, want ErrVersion", v, err)
+		}
 	}
 }

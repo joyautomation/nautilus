@@ -136,6 +136,9 @@ func pairOptions(r *project.RedundancyConfig, apiAddr, dir string, getenv func(s
 	if err != nil {
 		return o, "", err
 	}
+	if err := checkAPIReachable(apiAddr, r.Peers[self]); err != nil {
+		return o, "", err
+	}
 	_, peerPort, _ := net.SplitHostPort(r.Peers[self]) // Load checked the form
 	o = node.Options{
 		Cluster: cluster, Self: quorum.NodeID(self), Peer: quorum.NodeID(peer),
@@ -145,6 +148,27 @@ func pairOptions(r *project.RedundancyConfig, apiAddr, dir string, getenv func(s
 		SelfAPI:     apiOn(r.Peers[self], apiAddr), PeerAPI: apiOn(r.Peers[peer], apiAddr),
 	}
 	return o, net.JoinHostPort("", peerPort), nil
+}
+
+// checkAPIReachable refuses a tag API bound to loopback only while this
+// member's peers: address is on the network: the peer could not reach it
+// (a standby forwards writes to the leader's tag API, and /api/cluster
+// advertises it). The manifest's default server.addr is localhost:8080,
+// and naut deploy sets no address of its own.
+func checkAPIReachable(apiAddr, selfPeer string) error {
+	loop := func(host string) bool {
+		ip := net.ParseIP(host)
+		return strings.EqualFold(host, "localhost") || (ip != nil && ip.IsLoopback())
+	}
+	apiHost, _, err := net.SplitHostPort(apiAddr)
+	if err != nil {
+		return nil
+	}
+	peerHost, _, _ := net.SplitHostPort(selfPeer)
+	if loop(apiHost) && !loop(peerHost) {
+		return fmt.Errorf("the tag API listens on %s, loopback only, so the peer can't reach it (a standby forwards writes to the leader's tag API): set server.addr in the manifest, or NAUTILUS_ADDR in /etc/nautilus/env, to an address the peer reaches, such as :8080", apiAddr)
+	}
+	return nil
 }
 
 // pairStateDir is where a member keeps its voter state: redundancy:

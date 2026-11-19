@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -448,28 +450,33 @@ func TestPairWarnsAboutUntrustedAdvertisedNames(t *testing.T) {
 	}
 }
 
-// Two processes that both claim to be a (design §2, test plan F30): a
-// commissioned pair runs, and a third box, mis-set to NAUTILUS_NODE=a,
-// starts with the same manifest and environment. Whatever it does, the
-// voters must never let two processes lead at once: each has its own
-// boot nonce, so a grant to one never counts as the other's renewal.
-func TestPairTwoProcessesClaimingANeverBothLead(t *testing.T) {
+// dupRig is a commissioned pair a and b with a witness on loopback, and a
+// third loopback address for a process that should not be there.
+type dupRig struct {
+	files fstest.MapFS
+	env   map[string]map[string]string
+	nodes map[string]*pairNode
+	lns   [3]net.Listener
+}
+
+func newDupRig(t *testing.T) *dupRig {
+	t.Helper()
 	if testing.Short() {
-		t.Skip("runs three members and a witness on loopback for several leases")
+		t.Skip("runs members and a witness on loopback for several leases")
 	}
 	if goruntime.GOOS != "linux" {
 		t.Skip("a pair member needs CLOCK_BOOTTIME (Linux)")
 	}
-	var lns [3]net.Listener
-	for i := range lns {
+	r := &dupRig{env: map[string]map[string]string{}, nodes: map[string]*pairNode{}}
+	for i := range r.lns {
 		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.%d:0", i+1))
 		if err != nil {
-			for _, l := range lns[:i] {
+			for _, l := range r.lns[:i] {
 				l.Close()
 			}
 			t.Skip("no loopback address 127.0.0.", i+1, ":", err)
 		}
-		lns[i] = ln
+		r.lns[i] = ln
 	}
 	cluster, token := node.NewClusterID(), "peer-secret"
 	wctx, wstop := context.WithCancel(context.Background())
@@ -479,13 +486,13 @@ func TestPairTwoProcessesClaimingANeverBothLead(t *testing.T) {
 			pairEnv(map[string]string{"NAUTILUS_PEER_TOKEN": token}), io.Discard, io.Discard, wready)
 	}()
 	t.Cleanup(func() { wstop(); <-wdone })
-	wit := <-wready
-	files := pairProject(lns[0].Addr().String(), lns[1].Addr().String(), wit)
-	env := func(self string) map[string]string {
-		return map[string]string{"NAUTILUS_NODE": self, "NAUTILUS_PEER_TOKEN": token, "NAUTILUS_CLUSTER": cluster, "STATE_DIRECTORY": t.TempDir()}
+	r.files = pairProject(r.lns[0].Addr().String(), r.lns[1].Addr().String(), <-wready)
+	for _, n := range []string{"a", "b"} {
+		r.env[n] = map[string]string{"NAUTILUS_NODE": n, "NAUTILUS_PEER_TOKEN": token, "NAUTILUS_CLUSTER": cluster, "STATE_DIRECTORY": t.TempDir()}
 	}
-	a, b := startPairNode(t, files, env("a"), lns[0]), startPairNode(t, files, env("b"), lns[1])
-	ea, eb := a.m.q.Node(), b.m.q.Node()
+	r.nodes["a"] = startPairNode(t, r.files, r.env["a"], r.lns[0])
+	r.nodes["b"] = startPairNode(t, r.files, r.env["b"], r.lns[1])
+	ea, eb := r.nodes["a"].m.q.Node(), r.nodes["b"].m.q.Node()
 	pairWait(t, "both to hear the witness", 10*time.Second, func() bool {
 		return ea.Status().WitnessIncarnation != 0 && eb.Status().WitnessIncarnation != 0
 	})
@@ -495,30 +502,149 @@ func TestPairTwoProcessesClaimingANeverBothLead(t *testing.T) {
 		t.Fatal(err)
 	}
 	pairWait(t, "a leader", 15*time.Second, func() bool { return ea.IsLeader() || eb.IsLeader() })
-	// The case that matters is the real a leading, so the impostor's
-	// requests are under a's name while a's lease runs: b hands over.
+	// The cases below are about the real a leading.
 	if eb.IsLeader() {
-		b.m.q.Release()
+		r.nodes["b"].m.q.Release()
 	}
 	pairWait(t, "a to lead", 15*time.Second, func() bool { return ea.IsLeader() })
+	return r
+}
 
-	// The impostor: a third box, also a, with its own empty state.
-	imp := startPairNode(t, files, env("a"), lns[2])
-	ei := imp.m.q.Node()
-	els := []*node.Elector{ea, eb, ei}
-	led := make([]bool, 3)
-	for end := time.Now().Add(10 * time.Second); time.Now().Before(end); time.Sleep(5 * time.Millisecond) {
-		n := 0
-		for i, e := range els {
+// watch samples the electors for d and fails at the first instant two of
+// them lead; it returns which led.
+func watchOneLeader(t *testing.T, d time.Duration, els map[string]*node.Elector) map[string]bool {
+	t.Helper()
+	led := map[string]bool{}
+	for end := time.Now().Add(d); time.Now().Before(end); time.Sleep(5 * time.Millisecond) {
+		var now []string
+		for n, e := range els {
 			if e.IsLeader() {
-				n++
-				led[i] = true
+				now = append(now, n)
+				led[n] = true
 			}
 		}
-		if n > 1 {
-			t.Fatalf("two processes lead at once (a %v t%d, b %v t%d, impostor a %v t%d)",
-				ea.IsLeader(), ea.Term(), eb.IsLeader(), eb.Term(), ei.IsLeader(), ei.Term())
+		if len(now) > 1 {
+			t.Fatalf("two processes lead at once: %v", now)
 		}
 	}
-	t.Logf("led during the impostor's 10 s: a %v, b %v, impostor %v", led[0], led[1], led[2])
+	return led
+}
+
+// The #1028 review's sequence: the pair runs with a leading; B is stopped
+// and started again with A's env file copied over its own (NAUTILUS_NODE=a)
+// and its own state directory kept. B refuses to start: its state file
+// was written by b (state_owner_unchecked turns this red).
+func TestPairCopiedEnvWithKeptStateRefused(t *testing.T) {
+	r := newDupRig(t)
+	r.nodes["b"].crash()
+	env := maps.Clone(r.env["a"])
+	env["STATE_DIRECTORY"] = r.env["b"]["STATE_DIRECTORY"]
+	ln, err := net.Listen("tcp", r.lns[1].Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	proj := loadPair(t, r.files)
+	m, err := newPairMember(proj.Redundancy, "127.0.0.1:18080", "", pairDeps{getenv: pairEnv(env), listen: func(string) (net.Listener, error) { return ln, nil }})
+	if err == nil {
+		m.Close()
+		t.Fatal("b started as a over its own state file")
+	}
+	ln.Close()
+	if !errors.Is(err, node.ErrNotOwner) || !strings.Contains(err.Error(), `written by "b"`) {
+		t.Fatalf("refusal %v; want it to name the file's owner, b", err)
+	}
+}
+
+// A cloned box: a third process runs with a copy of A's state file and
+// A's env (a VM or disk cloned while A ran), so its file's owner matches.
+// The voters bind a name to the boot nonce its running promise was
+// granted under: B and the witness refuse the clone while A renews, so
+// the two never lead at once, and B reports two processes named a
+// (duplicate_member_granted turns this red).
+func TestPairClonedMemberNeverLeadsTwice(t *testing.T) {
+	r := newDupRig(t)
+	cloneDir := t.TempDir()
+	b, err := os.ReadFile(filepath.Join(r.env["a"]["STATE_DIRECTORY"], pairStateFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cloneDir, pairStateFile), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := maps.Clone(r.env["a"])
+	env["STATE_DIRECTORY"] = cloneDir
+	clone := startPairNode(t, r.files, env, r.lns[2])
+	els := map[string]*node.Elector{"a": r.nodes["a"].m.q.Node(), "b": r.nodes["b"].m.q.Node(), "clone": clone.m.q.Node()}
+	led := watchOneLeader(t, 10*time.Second, els)
+	if !led["a"] || led["clone"] {
+		t.Errorf("led: %v; want a throughout and never the clone", led)
+	}
+	if els["b"].Status().Duplicates == 0 {
+		t.Error("b's voter never reported two processes named a")
+	}
+}
+
+// A pair member that can't start stops naut run: it never falls back to
+// another elector (the Kubernetes Lease would be standalone, always
+// leader, off-cluster).
+func TestPairStartErrorNeverFallsBackToTheLease(t *testing.T) {
+	proj := loadPair(t, pairProject("127.0.0.1:9450", "127.0.0.2:9450", "127.0.0.3:9460"))
+	for _, unset := range []string{"NAUTILUS_PEER_TOKEN", "NAUTILUS_CLUSTER", "STATE_DIRECTORY"} {
+		env := pairGoodEnv(t)
+		delete(env, unset)
+		el, pair, err := electorWith(proj, "127.0.0.1:8080", "", pairDeps{getenv: pairEnv(env), listen: func(string) (net.Listener, error) {
+			t.Fatal("a member that can't start bound its peer port")
+			return nil, nil
+		}})
+		if err == nil || el != nil || pair != nil {
+			t.Errorf("without %s: elector %T, pair %v, err %v; want an error and nothing else", unset, el, pair, err)
+		}
+	}
+}
+
+// NAUTILUS_NODE says a box is a pair member. Set where the manifest names
+// no pair, naut run refuses to start: each box would be its own leader.
+func TestNodeSetWithoutAPairRefused(t *testing.T) {
+	for _, red := range []string{"", "redundancy: {}\n", "redundancy:\n  lease: plant-a\n"} {
+		files := pairProject("x:1", "y:1", "z:1")
+		files["nautilus.yaml"] = &fstest.MapFile{Data: []byte("name: pair\ntasks:\n  - program: main.st\n    scan: 50ms\ntags:\n  - { name: SP, role: setpoint, init: 0.0 }\n" + red)}
+		proj := loadPair(t, files)
+		_, _, err := electorWith(proj, "127.0.0.1:0", "", pairDeps{getenv: pairEnv(map[string]string{"NAUTILUS_NODE": "a"}), listen: nil})
+		if err == nil || !strings.Contains(err.Error(), "names no pair") {
+			t.Errorf("%q with NAUTILUS_NODE=a: %v; want refused", red, err)
+		}
+		if _, _, err := electorWith(proj, "127.0.0.1:0", "", pairDeps{getenv: pairEnv(nil)}); err != nil {
+			t.Errorf("%q without NAUTILUS_NODE: %v", red, err)
+		}
+	}
+}
+
+// A pair member's tag API must be reachable by its peer: one bound to
+// loopback while the member's peers: address is on the network is
+// refused at start, saying what to set.
+func TestPairAPIOnLoopbackRefused(t *testing.T) {
+	for _, c := range []struct {
+		api, peer string
+		ok        bool
+	}{
+		{"localhost:8080", "ctl-a:9450", false},
+		{"127.0.0.1:8080", "10.0.0.5:9450", false},
+		{"[::1]:8080", "ctl-a:9450", false},
+		{":8080", "ctl-a:9450", true},
+		{"0.0.0.0:8080", "ctl-a:9450", true},
+		{"10.0.0.5:8080", "ctl-a:9450", true},
+		{"127.0.0.1:8080", "127.0.0.1:9450", true}, // the whole pair on one host
+	} {
+		err := checkAPIReachable(c.api, c.peer)
+		if (err == nil) != c.ok {
+			t.Errorf("API %s, peer address %s: %v; want ok=%v", c.api, c.peer, err, c.ok)
+		}
+		if err != nil && !strings.Contains(err.Error(), "NAUTILUS_ADDR") {
+			t.Errorf("the refusal does not say what to set: %v", err)
+		}
+	}
+	r := loadPair(t, pairProject("ctl-a:9450", "ctl-b:9450", "wit:9460")).Redundancy
+	if _, _, err := pairOptions(r, "localhost:8080", "", pairEnv(pairGoodEnv(t))); err == nil {
+		t.Error("pairOptions took a loopback tag API with peers on the network")
+	}
 }

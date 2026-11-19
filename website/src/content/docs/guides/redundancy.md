@@ -300,7 +300,8 @@ dashboard. Live I/O applies are refused on a pair.
 Each controller also needs, in its environment (`/etc/nautilus/env`
 under `naut deploy`):
 
-- `NAUTILUS_NODE`: `a` or `b`, which of the two it is;
+- `NAUTILUS_NODE`: `a` or `b`, which of the two it is. **It differs per
+  box**: never copy one controller's env file to the other unchanged;
 - `NAUTILUS_PEER_TOKEN`: the secret every peer and witness request
   carries, the same on all three boxes;
 - `NAUTILUS_CLUSTER`: the pair's cluster ID, drawn when the pair is
@@ -308,7 +309,18 @@ under `naut deploy`):
 
 The voter state, `quorum.state`, lives in the systemd state directory
 (`/var/lib/nautilus` under `naut deploy`) or in `redundancy: state-dir:`.
-Every `naut deploy` step keeps it, and a backup never contains it.
+Every `naut deploy` step keeps it, and a backup never contains it. It
+records which controller wrote it: a controller refuses to start over
+the other one's file, and two processes running as the same member (a
+copied env file, a cloned disk or VM) are refused by the voters and
+reported as `redundancy.duplicate-member`. Don't clone a running
+controller to make the other one.
+
+Each controller's tag API must be reachable by the other (a standby
+forwards writes to the leader). The manifest's default address is
+`localhost:8080`, so set `server.addr` (for example `:8080`) or
+`NAUTILUS_ADDR` in `/etc/nautilus/env`; a pair member bound to localhost
+only is refused at start.
 
 ## RBAC
 

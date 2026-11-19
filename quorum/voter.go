@@ -40,6 +40,15 @@ type Voter struct {
 	// a restarted voter's candidate learns it again from the next renewal.
 	renewalFrom  NodeID
 	renewalUntil Instant
+
+	// grantNonce is the boot nonce the running promise was granted under:
+	// while it runs, the same name under another nonce is a second process
+	// claiming that name (design §2), refused and counted in duplicates.
+	// In memory only, like promiseUntil: a restarted voter grants nothing
+	// until every promise it made has run out anyway.
+	grantNonce uint64
+	duplicates uint64
+	dupFrom    NodeID
 }
 
 type heldGrant struct {
@@ -114,6 +123,12 @@ func NewWitness(self NodeID, lease time.Duration, st VoterState, now Instant, dr
 	v.dirty++
 	return v, &Persist{Seq: v.dirty, State: v.st}
 }
+
+// Duplicates is how many requests this voter refused because their name
+// held a running promise under another boot nonce, and the last such name:
+// two processes claim one member (design §2). The driver raises
+// redundancy.duplicate-member when it rises.
+func (v *Voter) Duplicates() (uint64, NodeID) { return v.duplicates, v.dupFrom }
 
 // State returns the voter's in-memory state.
 func (v *Voter) State() VoterState { return v.st }
@@ -206,6 +221,15 @@ func (v *Voter) Handle(now Instant, r Request) (*Persist, []Reply) {
 	}
 	active := now < v.promiseUntil
 	switch {
+	case active && v.st.GrantedTo == r.From && r.Nonce != v.grantNonce && !mut("duplicate_member_granted"):
+		// The name holds a running promise under another boot nonce: two
+		// processes claim it (an env file copied to the other box, a cloned
+		// disk). A real restart of that name waits out its restart wait
+		// first, by when this promise has run out, so this costs a restart
+		// nothing (#1028 review).
+		v.duplicates++
+		v.dupFrom = r.From
+		return nil, refuse
 	case r.Term == v.st.Promised && v.st.GrantedTo != r.From:
 		return nil, refuse // this term is someone else's
 	case r.Term > v.st.Promised && active && v.st.GrantedTo != r.From:
@@ -213,6 +237,7 @@ func (v *Voter) Handle(now Instant, r Request) (*Persist, []Reply) {
 	}
 	// Grant. The promise runs from when the request was RECEIVED.
 	v.promiseUntil = now.Add(v.lease)
+	v.grantNonce = r.Nonce
 	if r.Term != v.st.Promised || r.From != v.st.GrantedTo || v.st.Lease != v.lease {
 		// Past the restart wait every promise made under a longer lease
 		// has run out, so the state now records this voter's own.

@@ -266,3 +266,28 @@ func TestClusterEndpointCarriesWarnings(t *testing.T) {
 		}
 	}
 }
+
+// A redundant pair's standby that knows no leader refuses a write (503 no
+// leader) rather than taking it into a store that does not scan (#1028
+// review), and still answers reads; the Kubernetes mode is unchanged.
+func TestPairStandbyWithNoLeaderRefusesWrites(t *testing.T) {
+	for _, c := range []struct {
+		mode string
+		want int
+	}{{"quorum", http.StatusServiceUnavailable}, {"cluster", http.StatusNoContent}} {
+		srv := New(newTestRuntime(t), Options{Cluster: fakeCluster{status: leader.Status{Mode: c.mode, Pod: "a"}}})
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "http://localhost/api/tags", strings.NewReader(`{"name":"x","value":1}`)))
+		if c.mode == "quorum" && (rec.Code != c.want || !strings.Contains(rec.Body.String(), "no leader")) {
+			t.Errorf("%s: a write with no leader known = %d %s, want %d no leader", c.mode, rec.Code, rec.Body, c.want)
+		}
+		if c.mode == "cluster" && rec.Code == http.StatusServiceUnavailable {
+			t.Errorf("cluster mode refused a write with no leader known: %s", rec.Body)
+		}
+		rec = httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/api/meta", nil))
+		if rec.Code != http.StatusOK {
+			t.Errorf("%s: a read with no leader known = %d", c.mode, rec.Code)
+		}
+	}
+}

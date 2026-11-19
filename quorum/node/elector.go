@@ -109,7 +109,21 @@ const (
 	// than MaxTermJump above what it promised (Detail: which voter, the
 	// terms). Raised on each side once per change.
 	EventTermJumpRefused EventKind = "redundancy.term-jump-refused"
+	// EventDuplicateMember: this controller's voter refused a vote from a
+	// name whose running promise was granted under another boot nonce:
+	// two processes claim one member of the pair (an env file copied to
+	// the wrong box, a cloned disk; design §2). Detail names it. Raised at
+	// most once every dupEvery while it goes on.
+	EventDuplicateMember EventKind = "redundancy.duplicate-member"
 )
+
+// dupEvery paces the duplicate-member report while it goes on.
+const dupEvery = 10 * time.Second
+
+// duplicateMsg is the duplicate-member report.
+func duplicateMsg(who quorum.NodeID) string {
+	return fmt.Sprintf("two processes claim to be %s: a vote came from %s under a boot nonce other than the one this voter's running promise to %s was granted under. Check NAUTILUS_NODE on every box (it differs per box) and that no box runs a clone of another's disk", who, who, who)
+}
 
 // Event is something the operator should see.
 type Event struct {
@@ -152,6 +166,9 @@ type Status struct {
 	StateWriteError string
 	// Acquisitions counts the leaderships this boot has won.
 	Acquisitions int
+	// Duplicates counts votes this controller's voter refused because two
+	// processes claim one member (EventDuplicateMember).
+	Duplicates uint64
 }
 
 // Elector is a controller's side of the vote: its voter, its candidate and
@@ -184,6 +201,8 @@ type Elector struct {
 	peerAt    quorum.Instant
 	peerHeard bool
 	needOp    bool
+	dupSeen   uint64    // the voter's Duplicates count last reported
+	dupAt     time.Time // when it was last reported
 	token     ClientToken
 	writeErr  string
 	mismatch  map[string]string // the last lease-mismatch report per voter, to report each change once
@@ -250,7 +269,7 @@ func New(o Options) (*Elector, error) {
 	}
 	e := &Elector{
 		o: o, log: o.Log.With("cluster", o.Cluster, "node", string(o.Self)), now: now,
-		file: &State{Path: o.StatePath, write: o.write},
+		file: &State{Path: o.StatePath, Owner: o.Self, Cluster: o.Cluster, write: o.write},
 		call: caller{client: client, token: o.Token, lease: o.Lease, members: members(o.Self, o.Peer)},
 		peer: baseURL(o.PeerAddr), wit: baseURL(o.WitnessAddr), nonce: drawNonce(),
 		waiters: map[waitKey]chan quorum.Reply{}, written: make(chan struct{}), mismatch: map[string]string{},
@@ -265,6 +284,12 @@ func New(o Options) (*Elector, error) {
 		free = f
 	}
 	st, err := e.file.Load()
+	if err == nil {
+		if err := e.file.CheckOwner(st); err != nil {
+			free()
+			return nil, err
+		}
+	}
 	switch {
 	case errors.Is(err, ErrNoState):
 		e.log.Info("redundancy: no voter state: this controller is uncommissioned (a new pair, or a wiped disk) and grants nothing until it adopts the pair's witness incarnation", "file", o.StatePath)
@@ -702,6 +727,15 @@ func (e *Elector) serveVote(w http.ResponseWriter, r *http.Request) {
 	e.c.Observe(req.Term)
 	quorum.YieldTo(now, e.v, e.c, req)
 	p, replies := e.v.Handle(now, req)
+	if n, who := e.v.Duplicates(); n != e.dupSeen {
+		e.dupSeen = n
+		if t := time.Now(); t.Sub(e.dupAt) >= dupEvery {
+			e.dupAt = t
+			msg := duplicateMsg(who)
+			e.event(Event{Kind: EventDuplicateMember, Detail: msg})
+			e.log.Error("redundancy: " + msg)
+		}
+	}
 	var ch chan quorum.Reply
 	if len(replies) == 0 && p != nil {
 		ch = make(chan quorum.Reply, 1)
@@ -910,7 +944,7 @@ func (e *Elector) Status() Status {
 		PendingGen: st.PendingGen, PendingInc: st.PendingInc, Floor: st.Floor, KnownFloor: e.a.KnownFloor(),
 		WitnessIncarnation: e.witInc, WitnessAge: -1, PeerAge: -1,
 		RecommissionNeeded: e.needOp && st.Incarnation == 0, ClientToken: e.token,
-		StateWriteError: e.writeErr, Acquisitions: e.acquired,
+		StateWriteError: e.writeErr, Acquisitions: e.acquired, Duplicates: e.dupSeen,
 	}
 	g := e.gate.Load()
 	s.Leading = g.open && now < g.end

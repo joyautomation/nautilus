@@ -216,3 +216,31 @@ func TestVoterReplyAddressesTheRequester(t *testing.T) {
 		t.Fatalf("replies %+v: want one addressing B's request (nonce 77, id 3)", out)
 	}
 }
+
+// Two processes under one name (design §2, #1028 review): a voter whose
+// running promise to A was granted under boot nonce N refuses A under any
+// other nonce until that promise runs out, and counts it. The process it
+// promised keeps renewing; a real restart of A, which waits out its
+// restart wait first, finds the promise over and is granted.
+func TestVoterRefusesANameUnderAnotherBootNonce(t *testing.T) {
+	v := NewVoter("W", lease, VoterState{}, 0)
+	if !grant(t, v, at(lease), Request{From: "A", Term: 5, Nonce: 0xA, ID: 1}) {
+		t.Fatal("first grant refused")
+	}
+	if grant(t, v, at(lease+lease/2), Request{From: "A", Term: 6, Nonce: 0xB, ID: 2}) {
+		t.Fatal("granted A under another boot nonce while the promise made under the first ran: two processes named A lead")
+	}
+	if grant(t, v, at(lease+lease/2), Request{From: "A", Term: 5, Nonce: 0xB, ID: 3, Renewal: true}) {
+		t.Fatal("granted the other process a renewal of the first one's term")
+	}
+	if n, who := v.Duplicates(); n != 2 || who != "A" {
+		t.Fatalf("duplicates %d (%s), want 2 (A)", n, who)
+	}
+	if !grant(t, v, at(lease+lease/2), Request{From: "A", Term: 5, Nonce: 0xA, ID: 4, Renewal: true}) {
+		t.Fatal("the process the promise was made to could not renew")
+	}
+	// Past that renewal's promise, A under a new nonce is a restart.
+	if !grant(t, v, at(3*lease), Request{From: "A", Term: 6, Nonce: 0xB, ID: 5}) {
+		t.Fatal("a restarted A (new nonce) refused after the old promise ran out")
+	}
+}

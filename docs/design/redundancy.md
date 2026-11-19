@@ -106,8 +106,25 @@ redundancy:
 - **The tag API addresses** that `/api/cluster` and the standby's proxy use are each
   controller's `peers:` host with this controller's API port: both run one manifest.
 - **Misconfiguration is refused at start, never resolved quietly.** A peer list that differs
-  between A and B is refused. So are two processes that both claim to be `a`: each process
-  carries a random instance id, and the voters see two different ids under one name.
+  between A and B is refused (the peer handshake, #710 PR 3b-2). So are two processes that
+  both claim to be `a`, in two layers (#1028 review):
+  - **The state file names its owner.** `quorum.state` records the member and the cluster ID
+    that wrote it, and a controller refuses to start over a file another member or another
+    pair wrote. That catches an env file copied to the wrong box with its own state kept.
+  - **The voters bind a name to a boot nonce.** A cloned disk carries a matching state file
+    and env. So a voter whose running promise to `a` was granted under one boot nonce refuses
+    `a` under any other until that promise has run out, and raises
+    `redundancy.duplicate-member`. A real restart of `a` waits out its restart wait first, by
+    when the promise is over, so it costs a restart nothing.
+- **`NAUTILUS_NODE` set with no pair in the manifest** is refused: each box would run as its
+  own leader against the same I/O.
+- **A pair member's tag API must be reachable by its peer.** The manifest's default
+  `server.addr` is `localhost:8080`, and `naut deploy` sets no address. A member whose tag API
+  listens on loopback only, while its `peers:` address is on the network, is refused at start
+  with what to set (`server.addr` or `NAUTILUS_ADDR`).
+- **With no leader known, a standby refuses writes** (503 "no leader") rather than taking them
+  into a store that doesn't scan, and still answers reads (#621's rule for a gate-closed
+  lease holder).
 - **Peer calls carry a peer token** (`NAUTILUS_PEER_TOKEN`), compared in constant time as
   `oplog` does. It is a separate secret from the client token `NAUTILUS_TOKEN`, so a client
   that can write tags can't cast a vote. `naut run` refuses to start a pair member or a witness
@@ -766,6 +783,10 @@ same driver contract as the simulator.
     keeps the file aside. The witness refuses to start over an unreadable file unless
     `--rebuild` is given: the file is then kept aside and the pair gets a new incarnation.
 - **The boot nonce** is drawn from `crypto/rand` at every start and written nowhere.
+- **The state file's format is version 3** since `Owner` and `Cluster` (§2). The driver stamps
+  them on every write: the member and the cluster ID on a controller, `w` and the pair's
+  cluster ID on the witness. A file another member or pair wrote stops the start
+  (`ErrNotOwner`) and is left where it is.
 - **Controllers** refuse to start without `CLOCK_BOOTTIME` (Linux). The witness runs anywhere.
 - **In `naut run`** (#710 PR 3b-1), a member's peer listener binds its own `peers:` port on
   every address, behind the peer token, with the witness's timeouts and at most 64

@@ -172,6 +172,8 @@ case caught it. A mutation joins the nightly run in the PR that builds the rule 
 | the term-jump cap is 2^20, so an isolated controller is refused for good | design §6.2 | 3a (re-review) |
 | the client-token answer binds no names or direction | design §6.1 | 3a (review) |
 | a controller campaigns while its own voter is in its restart wait | design §3.1, the restart wait | restart hold |
+| a voter grants a name under another boot nonce while that name's promise runs (two processes as one member) | design §2, §6.2 | 3b-1 (review, `duplicate_member_granted`) |
+| a controller starts over a state file another member, or another pair, wrote | design §2, §6.2 | 3b-1 (review, `state_owner_unchecked`) |
 | no switch hold-off: a stray copy answering on and off switches the pair every lease | design §3.1, when a switch is proposed | 2 (handshake) |
 | a restarted controller counts its adopted incarnation at once (no quiet period owed) | design §3.1, the quiet period | 2 (handshake) |
 | a lost controller takes an `Adopt` sent before its restart (a stale floor) | design §3.1, boots | 2 (handshake) |
