@@ -258,3 +258,34 @@ func TestSubstituteStartRefusal(t *testing.T) {
 		t.Errorf("superseded: %d %q", code, msg)
 	}
 }
+
+// Without a log, a start retried with the same request ID (its first
+// answer was lost) is answered with the entry it started, never a second.
+func TestARetriedStartIsIdempotentOnOneController(t *testing.T) {
+	s := subServer(t, Options{})
+	first := call(t, s, "POST", "/api/substitutes", `{"name":"Flow","value":7,"requestId":"r-9"}`)
+	if first.Code != 200 {
+		t.Fatalf("start = %d %s", first.Code, first.Body)
+	}
+	id := decodeSubs(t, first.Body.Bytes()).Started.ID
+	again := call(t, s, "POST", "/api/substitutes", `{"name":"Flow","value":7,"requestId":"r-9"}`)
+	if again.Code != 200 || decodeSubs(t, again.Body.Bytes()).Started.ID != id || len(s.rt.Substitutes()) != 1 {
+		t.Fatalf("retry = %d %s; want entry %d again, and one entry", again.Code, again.Body, id)
+	}
+}
+
+// A request ID used again for a different start is refused (409), never
+// answered "started" with the first entry.
+func TestARequestIDReusedForADifferentStartIsRefused(t *testing.T) {
+	s := subServer(t, Options{})
+	if r := call(t, s, "POST", "/api/substitutes", `{"name":"Flow","value":7,"requestId":"r-5"}`); r.Code != 200 {
+		t.Fatalf("start = %d %s", r.Code, r.Body)
+	}
+	r := call(t, s, "POST", "/api/substitutes", `{"name":"Flow","value":8,"requestId":"r-5"}`)
+	if r.Code != 409 || !strings.Contains(r.Body.String(), "requestId reused") {
+		t.Fatalf("r-5 for 8 = %d %s; want 409 requestId reused", r.Code, r.Body)
+	}
+	if l := s.rt.Substitutes(); len(l) != 1 || l[0].Value != 7.0 {
+		t.Fatalf("%+v; want the first start alone", l)
+	}
+}

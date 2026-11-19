@@ -114,13 +114,18 @@ func (r *Runtime) gateEdge() (bool, uint64) {
 	if !lead {
 		r.readySince = time.Time{}
 		r.ioReset()
+		r.resetIntentSync()
 	} else if !r.leading || termed != nil && termed.Term() != r.ledTerm {
 		// A takeover (not the same leadership resumed) first re-applies
 		// the kept I/O configuration (#706), so the inputs it then waits
 		// for come from the applied addresses and the first output goes
-		// to them (ioReady).
+		// to them (ioReady). The operator-intent log's catch-up
+		// (substitute_intent.go) runs alongside both, asked every tick, so
+		// the edge waits for the longer, not the sum.
 		resume := !r.leading && termed != nil && r.ledTerm != 0 && termed.Term() == r.ledTerm
-		if !resume && !r.ioReady() || !r.inputsReady() {
+		ready := (resume || r.ioReady()) && r.inputsReady()
+		synced := resume || r.intentReady()
+		if !ready || !synced {
 			r.unfresh() // nothing scans: the tags are frozen
 			return false, r.edges
 		}
@@ -256,6 +261,7 @@ func (r *Runtime) takeover() {
 	// until: the leadership that timed it may have been another replica's,
 	// or this one's before a spell as standby (substitute_expiry.go).
 	r.retimeSubstitutes()
+	r.intentAfterTakeover() // a failed log catch-up: the fault, and a retry
 	r.prog.ResetFrame()
 	for _, tr := range r.tasks {
 		tr.prog.ResetFrame()

@@ -220,7 +220,7 @@ func benchDrivers(round *int, flip *bool) func() []DriverStatus {
 			nodeList = append(nodeList, map[string]any{
 				"id": id, "group": "WTP", "edgeNode": id, "online": online,
 				"state": map[bool]string{true: "online", false: "offline"}[online],
-				"tags": float64(120 + i), "msgs": float64(*round*3 + i),
+				"tags":  float64(120 + i), "msgs": float64(*round*3 + i),
 				"lastMs": float64(1_700_000_000_000 + *round*250), "births": float64(i%3 + 1),
 				"lastBirthMs": float64(1_700_000_000_000), "bdSeq": float64(i % 7),
 			})
@@ -234,8 +234,8 @@ func benchDrivers(round *int, flip *bool) func() []DriverStatus {
 				{Label: "seq", Value: float64(*round % 256), Volatile: true},
 				{Label: "last publish", AtMs: 1_700_000_000_000 + int64(*round)*250, Text: "0.2s"},
 			},
-			Devices:       devs,
-			Extra: map[string]any{"born": true, "primaryHost": "SCADA", "nodes": nodeList},
+			Devices: devs,
+			Extra:   map[string]any{"born": true, "primaryHost": "SCADA", "nodes": nodeList},
 			// The per-node roster stays watched — a site going offline is
 			// the change this block exists to carry — and only the two
 			// fields that step on every message are excluded. That is the

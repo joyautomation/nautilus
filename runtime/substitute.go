@@ -72,6 +72,10 @@ type Substitution struct {
 	// runs on (SubstituteReasonClockCapped); __Substitute_Fault is true
 	// while any entry has one. It clears when the entry ends.
 	Fault string `json:"fault,omitempty"`
+	// RequestID is the client's ID for the request that started it, if it
+	// gave one: a start retried with the same ID is answered with this
+	// entry instead of starting another.
+	RequestID string `json:"requestId,omitempty"`
 	// RemainingMs is the time left, on the clock the runtime times it on
 	// (not the wall clock: see substitute_expiry.go). Filled in by
 	// Runtime.Substitutes.
@@ -89,6 +93,8 @@ type SubstituteRequest struct {
 	By string
 	// AckOnStart: see Substitution.AckOnStart.
 	AckOnStart bool
+	// RequestID: see Substitution.RequestID.
+	RequestID string
 	// ID names the entry. Zero lets the runtime assign the next one (and
 	// only a leader may start one); a replicated entry brings its own
 	// (#707's oplog seq) and is accepted on a standby too.
@@ -396,7 +402,7 @@ func (r *Runtime) substitute(addr string, req SubstituteRequest) (Substitution, 
 	wall := r.wallNow()
 	e := subEntry{
 		Substitution: Substitution{
-			ID: id, By: req.By, AckOnStart: req.AckOnStart,
+			ID: id, By: req.By, AckOnStart: req.AckOnStart, RequestID: req.RequestID,
 			StartMs: wall.UnixMilli(), UntilMs: wall.Add(req.For).UnixMilli(),
 			GrantedMs: req.For.Milliseconds(),
 		},
@@ -495,6 +501,11 @@ func (r *Runtime) isInput(name string) bool {
 	}
 	return false
 }
+
+// WallNow is the wall clock substitutes are stamped with (the injected
+// clock under naut test, else the real one): a server proposing a start
+// to the operator-intent log stamps its until with it.
+func (r *Runtime) WallNow() time.Time { return r.wallNow() }
 
 // wallNow is the wall clock substitutes are stamped with: the injected
 // clock under test, else the real one.

@@ -91,9 +91,10 @@ type SubstituteRetain struct {
 	// down to a second). A load takes the earlier of it and UntilMs, so a
 	// wall clock stepped back while the entry ran does not stretch it
 	// after a restart. Zero when the saving controller was not timing it.
-	DeadlineMs int64 `json:"deadlineMs,omitempty"`
-	AckOnStart bool  `json:"ackOnStart,omitempty"`
-	Acked      bool  `json:"acked,omitempty"`
+	DeadlineMs int64  `json:"deadlineMs,omitempty"`
+	AckOnStart bool   `json:"ackOnStart,omitempty"`
+	Acked      bool   `json:"acked,omitempty"`
+	RequestID  string `json:"requestId,omitempty"`
 }
 
 // AlarmRetain is one alarm's retained operator state. Every field is
