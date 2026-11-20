@@ -236,6 +236,10 @@ type Driver struct {
 
 	wmu      sync.Mutex
 	baseline bool
+	// undecided holds the start-up baseline's outputs whose node the server
+	// has not answered yet: the program's first value, decided against the
+	// server's value at the first read of that node (#1121). Guarded by mu.
+	undecided map[string]any
 
 	started atomic.Bool
 	// connected counts sessions established (onConnect).
@@ -338,6 +342,7 @@ func New(endpoint string, m Manifest, opts ...Option) (*Driver, error) {
 		state:        "connecting",
 		pending:      map[string]any{},
 		written:      map[string]any{},
+		undecided:    map[string]any{},
 		baseline:     true,
 		kick:         make(chan struct{}, 1),
 	}
@@ -675,6 +680,7 @@ func (d *Driver) forgetWritten() {
 	d.mu.Lock()
 	clear(d.written)
 	clear(d.pending)
+	clear(d.undecided)
 	d.mu.Unlock()
 }
 
@@ -803,10 +809,16 @@ func (d *Driver) snapshotInto(dst nio.Values) int {
 //
 //  1. GATE. While the write gate is closed (not leader, logic faulted) no
 //     command is queued or recorded.
-//  2. BASELINE. The first snapshot after Start is recorded, not written —
-//     it is the state of the world at t=0, not a set of commands. A
-//     driver that has seen the write gate closed (a standby) has none: its
-//     first push commands everything (#606).
+//  2. BASELINE. The first snapshot after Start is not a set of commands
+//     for an output the server already holds: each output is decided at
+//     the first read of its node (#1121). Equal to the program's value:
+//     recorded, nothing sent. Different: one command, so a controller that
+//     computes true while the server holds false drives it. A node not read
+//     yet waits for its first read (never taken as sent); one the server
+//     answers without a good value (no read access) or that is never
+//     polled is commanded once. A driver that has seen the write gate
+//     closed (a standby) has no baseline: its first push commands
+//     everything (#606).
 //  3. CHANGE. Thereafter a value equal to the last handed-over value is not
 //     a command. A changed value is queued, last value per tag, and held
 //     across a disconnect — flushed when the session reconnects.
@@ -825,9 +837,28 @@ func (d *Driver) WriteOutputs(vals nio.Values) error {
 		if !ok || !b.Writable {
 			continue
 		}
+		if _, waiting := d.undecided[name]; waiting {
+			if !baseline {
+				delete(d.undecided, name) // a push after the baseline commands
+			} else {
+				d.undecided[name] = v
+				continue
+			}
+		}
 		if baseline {
-			if _, queued := d.pending[name]; !queued {
+			if _, queued := d.pending[name]; queued {
+				continue
+			}
+			if b.ScanClass == NoPoll {
+				// never read: there is nothing to compare with
 				d.written[name] = v
+				d.pending[name] = v
+				kicked = true
+				continue
+			}
+			d.undecided[name] = v
+			if b.answered { // already read on this session: decide now
+				kicked = d.decideLocked(b) || kicked
 			}
 		} else if prev, ok := d.written[name]; ok && sameScalar(prev, v) {
 			// unchanged since the last value we accounted for
@@ -842,6 +873,64 @@ func (d *Driver) WriteOutputs(vals nio.Values) error {
 		nudge(d.kick)
 	}
 	return nil
+}
+
+// decideLocked settles one undecided output against what the server
+// holds: recorded when equal, queued as one command when not (or when the
+// server's value is unusable). Reports whether it queued. Caller holds
+// d.mu.
+func (d *Driver) decideLocked(b *binding) bool {
+	v, ok := d.undecided[b.Name]
+	if !ok {
+		return false
+	}
+	delete(d.undecided, b.Name)
+	d.written[b.Name] = v
+	if sv, have := d.snapshot[b.Name]; have && !b.bad && sameServerValue(sv, v) {
+		return false
+	}
+	d.pending[b.Name] = v
+	return true
+}
+
+// sameServerValue compares the value read from the server with the
+// program's: like sameScalar, but a program INT and a server Double that
+// hold the same number are equal.
+func sameServerValue(server, program any) bool {
+	if sameScalar(server, program) {
+		return true
+	}
+	a, aok := asFloat(server)
+	b, bok := asFloat(program)
+	return aok && bok && a == b
+}
+
+func asFloat(v any) (float64, bool) {
+	switch x := v.(type) {
+	case float64:
+		return x, true
+	case float32:
+		return float64(x), true
+	case int:
+		return float64(x), true
+	case int8:
+		return float64(x), true
+	case int16:
+		return float64(x), true
+	case int32:
+		return float64(x), true
+	case int64:
+		return float64(x), true
+	case uint8:
+		return float64(x), true
+	case uint16:
+		return float64(x), true
+	case uint32:
+		return float64(x), true
+	case uint64:
+		return float64(x), true
+	}
+	return 0, false
 }
 
 func nudge(ch chan struct{}) {
@@ -1226,6 +1315,14 @@ func (d *Driver) pollClass(ctx context.Context, sess *Session, c *scanClass) boo
 // Caller holds d.mu.
 func (d *Driver) apply(b *binding, dv *ua.DataValue) {
 	b.answered = true
+	// The server has answered this node: a start-up baseline output waiting
+	// on it is decided now, with the value just taken or, when none came
+	// (no read access), commanded once (#1121).
+	defer func() {
+		if _, waiting := d.undecided[b.Name]; waiting && d.decideLocked(b) {
+			nudge(d.kick)
+		}
+	}()
 	if b.notMonitored {
 		b.bad = true
 		return

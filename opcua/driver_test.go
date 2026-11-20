@@ -314,8 +314,9 @@ func TestWrites(t *testing.T) {
 	d := startDriver(t, ts.url, manifest(2))
 	waitFor(t, "first poll", func() bool { _, ok := read(t, d)["Setpoint"]; return ok })
 
-	// Baseline: recorded, never sent.
-	if err := d.WriteOutputs(nio.Values{"Setpoint": 5.0}); err != nil {
+	// Baseline: the server holds 0.0 and so does the program, so nothing is
+	// sent (a differing first value is a command: TestFirstOutput*).
+	if err := d.WriteOutputs(nio.Values{"Setpoint": 0.0}); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(150 * time.Millisecond)

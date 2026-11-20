@@ -164,10 +164,22 @@ says is read-only. A writable binding becomes an `output` in the tag file.
 
 Writes are typed by the binding. A value that does not fit an `Int16` is
 refused and logged, never wrapped. They follow the rules every nautilus
-driver keeps: the first snapshot after start is a baseline, not a command;
-an unchanged value is not a command; a command made while the session is
+driver keeps: an unchanged value is not a command; a command made while the session is
 down goes out on reconnect (the last value per tag); a write the server
 refuses on a healthy session is dropped and reported, not retried forever.
+"Unchanged" at start means unchanged against what the server holds. The
+first time the driver reads an output's node it compares the program's
+first value with the server's: equal, nothing is sent; different, the
+program's value is written once. A controller that computes `true` at
+start therefore drives a server that holds `false`, and a program that
+starts at its default overwrites a value left on the server. The output
+is the controller's to own: a value an operator sets on the server belongs
+in an input (a setpoint the program reads), not in an output. An output
+whose node has not been read yet waits for the first read; one the server
+will not let it read, or that has no scan class, is written once.
+Earlier versions took the first value as already sent and never wrote it
+(#1121).
+
 Under `redundancy:` only the leader writes, and leadership is checked
 again when queued commands go out, and before each chunk of a large batch:
 a replica that lost it during an outage drops what it queued, and one
