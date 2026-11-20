@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/joyautomation/nautilus/audit"
+	"github.com/joyautomation/nautilus/auth"
 	"github.com/joyautomation/nautilus/internal/oidcseam"
 )
 
@@ -136,13 +137,16 @@ func navigationRefusal(r *http.Request) (msg, reason string) {
 	return "", ""
 }
 
-// sameSiteRequest reports a request this controller's own pages made (or
-// the person typed): Sec-Fetch-Site same-origin or none, when the browser
-// says. A client that does not say is let through: the session cookie is
-// SameSite=Strict, so a cross-site navigation carries none anyway.
+// sameSiteRequest reports a request this controller's own pages made:
+// Sec-Fetch-Site same-origin, when the browser says. Not "none" either (a
+// link opened from mail or chat, or a typed URL): the HMI always starts a
+// confirmation from its own page, so nothing else may send a signed-in
+// person to the provider. A client that does not say is let through: the
+// session cookie is SameSite=Strict, so a cross-site navigation carries
+// none anyway.
 func sameSiteRequest(r *http.Request) bool {
 	switch r.Header.Get("Sec-Fetch-Site") {
-	case "", "same-origin", "none":
+	case "", "same-origin":
 		return true
 	}
 	return false
@@ -195,7 +199,7 @@ func (s *Server) oidcElevateStart(w http.ResponseWriter, r *http.Request, next s
 	// Only this controller's pages start a confirmation: another site's
 	// link must not send a signed-in person to the provider's login.
 	if !sameSiteRequest(r) {
-		refuse(http.StatusForbidden, "a confirmation at the provider starts only from this controller's own pages", "cross-site")
+		refuse(http.StatusForbidden, "a confirmation at the provider starts only from this controller's own pages (the HMI sends you when an action needs it), not from a link opened elsewhere", "not from this controller's page")
 		return
 	}
 	if !s.signInTransport(r) {
@@ -339,10 +343,13 @@ func (s *Server) oidcElevateCallback(w http.ResponseWriter, r *http.Request, sta
 		return
 	}
 	if id.AuthTime.Before(fl.at.Add(-oidcClockSkew)) {
-		refuse(http.StatusUnauthorized, s.oidc.Provider()+" did not ask for your credentials again (its auth_time is from before this confirmation began): it ignored prompt=login and max_age=0. Check the client's settings at the provider", "auth_time before start")
+		detail["started"] = fl.at.UTC().Format(time.RFC3339)
+		refuse(http.StatusUnauthorized, s.oidc.Provider()+"'s auth_time is from before this confirmation began: either it did not ask for your credentials again (it ignored prompt=login and max_age=0: check the client's settings at the provider), or its clock is behind this controller's by more than "+shortDuration(oidcClockSkew)+" (check both clocks, NTP)", "auth_time before start")
 		return
 	}
-	if !sameGroups(id.Groups, fl.groups) {
+	// The session's groups are auth.OIDC's (sorted, without repeats):
+	// the token's are compared in the same form.
+	if !sameGroups(auth.OIDC("", id.Groups).Groups(), fl.groups) {
 		detail["groups"] = len(id.Groups)
 		refuse(http.StatusForbidden, "your groups at "+s.oidc.Provider()+" have changed since you signed in: sign in again (/signin)", "groups changed")
 		return
@@ -381,7 +388,11 @@ func (s *Server) handleOIDCElevated(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	refuse := func(status int, msg, reason string) {
-		e.Detail = map[string]any{"status": status, "reason": reason, "method": "oidc"}
+		d := map[string]any{"status": status, "reason": reason, "method": "oidc"}
+		for k, v := range e.Detail {
+			d[k] = v
+		}
+		e.Detail = d
 		s.audit.record(e)
 		if ok {
 			s.clearOIDCCookie(w, r, t.state)
@@ -410,6 +421,12 @@ func (s *Server) handleOIDCElevated(w http.ResponseWriter, r *http.Request) {
 	}
 	a := s.resolveActor(r)
 	if a.session == nil || a.session.hash != t.session {
+		// Who presented it, beside whose it was.
+		presented := map[string]any{"by": a.pr.String(), "bySession": "none"}
+		if a.session != nil {
+			presented["bySession"] = a.session.hash
+		}
+		e.Detail = presented
 		refuse(http.StatusForbidden, "this confirmation was for another sign-in than this browser's: do the action again", "another session")
 		return
 	}

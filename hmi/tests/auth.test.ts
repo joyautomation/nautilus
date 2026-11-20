@@ -78,6 +78,7 @@ function world(
 	passwords: (string | null)[] = [],
 	opts: { href?: string; storage?: Map<string, string>; prompt?: () => Promise<string | null>; leave?: (() => Promise<boolean>) | null } = {}
 ) {
+	const timers: (() => void)[] = [];
 	const sent: Sent[] = [];
 	const nav: string[] = [];
 	const prompts: PasswordAsk[] = [];
@@ -115,7 +116,8 @@ function world(
 		navigate: (h) => nav.push(h),
 		location: () => ({ href, pathname: loc.pathname, search: loc.search }),
 		storage: { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => void store.set(k, v) },
-		now: () => now
+		now: () => now,
+		later: (fn) => void timers.push(fn)
 	});
 	return {
 		s,
@@ -124,6 +126,8 @@ function world(
 		prompts,
 		leaves,
 		store,
+		/** Fire the pending timers (the page did not leave after all). */
+		stayed: () => timers.splice(0).forEach((f) => f()),
 		to: (path: string) => sent.filter((x) => x.url === path),
 		tick: (ms: number) => (now += ms)
 	};
@@ -819,6 +823,19 @@ describe('elevation at the OIDC provider (6b)', () => {
 		const w = world({ '/api/me': () => json(oidcMe(true)) }, [], { storage: store });
 		await w.s.refresh();
 		expect(w.s.notice).toBe(null);
+	});
+	it('a navigation the page stayed through (an unsaved-work guard): the kit asks again next time, and the note is dropped', async () => {
+		const w = world({ '/api/forces': OIDC_401, '/api/me': () => json(oidcMe()) });
+		await w.s.refresh();
+		await w.s.fetch('/api/forces', WRITE);
+		expect(w.nav.length).toBe(1);
+		await w.s.fetch('/api/forces', WRITE); // still leaving: not asked twice
+		expect(w.leaves.length).toBe(1);
+		w.stayed();
+		expect(w.store.get(CONFIRM_KEY)).toBe('');
+		await w.s.fetch('/api/forces', WRITE);
+		expect(w.leaves.length).toBe(2);
+		expect(w.nav.length).toBe(2);
 	});
 	it('elevate() on an OIDC sign-in goes to the provider, never to a password', async () => {
 		const w = world({ '/api/me': () => json(oidcMe()) }, ['pw']);

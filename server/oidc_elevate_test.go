@@ -2,9 +2,13 @@ package server
 
 import (
 	"encoding/json"
+	"path/filepath"
+
+	"github.com/joyautomation/nautilus/auth/users"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
@@ -218,8 +222,9 @@ func TestOIDCElevateStartRefusals(t *testing.T) {
 		reason string
 	}{
 		{"no session (a link from another site)", none, func(*http.Request) {}, http.StatusUnauthorized, "no session"},
-		{"Sec-Fetch-Site cross-site", stale, header("Sec-Fetch-Site", "cross-site"), http.StatusForbidden, "cross-site"},
-		{"Sec-Fetch-Site same-site (a sibling host)", stale, header("Sec-Fetch-Site", "same-site"), http.StatusForbidden, "cross-site"},
+		{"Sec-Fetch-Site cross-site", stale, header("Sec-Fetch-Site", "cross-site"), http.StatusForbidden, "not from this controller's page"},
+		{"Sec-Fetch-Site same-site (a sibling host)", stale, header("Sec-Fetch-Site", "same-site"), http.StatusForbidden, "not from this controller's page"},
+		{"Sec-Fetch-Site none (a link opened from mail or chat)", stale, header("Sec-Fetch-Site", "none"), http.StatusForbidden, "not from this controller's page"},
 		{"Sec-Fetch-Dest iframe", stale, header("Sec-Fetch-Dest", "iframe"), http.StatusForbidden, "not a document"},
 		{"Sec-Fetch-Mode no-cors", stale, header("Sec-Fetch-Mode", "no-cors"), http.StatusForbidden, "not a navigation"},
 		{"a bearer token", stale, bearer("whatever"), http.StatusBadRequest, "bearer credential"},
@@ -433,6 +438,22 @@ func TestOIDCElevateFinishRefusals(t *testing.T) {
 			}
 		}
 	})
+	t.Run("another person's session", func(t *testing.T) {
+		s := ready(t)
+		other := signIn(t, s.srv, "akhan")
+		if rec := elevateFinish(t, s.srv, s.tk, other, s.b); rec.Code != http.StatusForbidden {
+			t.Errorf("%d %s", rec.Code, rec.Body)
+		}
+		var found bool
+		for _, e := range s.srv.audit.ring.Recent() {
+			if e.Action == "auth.elevate" && e.Detail["by"] == "user:akhan" && e.Detail["bySession"] == sessionHash(other.Value) && e.User == "oidc:eng@corp.example" && e.Session == sessionHash(s.c.Value) {
+				found = true
+			}
+		}
+		if !found {
+			t.Error("the refusal does not name who presented the ticket beside whose it was")
+		}
+	})
 	t.Run("signed out between the steps", func(t *testing.T) {
 		s := ready(t)
 		call(t, s.srv, "POST", "/api/signout", "", withCookie(s.c.Value), fromLoopback, ownOrigin)
@@ -559,5 +580,146 @@ func TestSessionsElevatedOIDC(t *testing.T) {
 		if _, ok := ss.elevatedOIDC(c.hash, c.iss, c.sub, time.Now()); ok {
 			t.Errorf("applied to %v", c)
 		}
+	}
+}
+
+// A token that repeats a group id signs in (its groups are kept sorted
+// and without repeats) and confirms too: the confirmation's groups are
+// compared in the same form.
+func TestOIDCElevateRepeatedGroup(t *testing.T) {
+	srv, fake, _ := oidcServer(t, Options{})
+	fake.as("eng@corp.example", "sub-e", "g-eng", "g-eng")
+	fake.id.AuthTime = time.Now().Add(-time.Hour)
+	_, c := oidcSignIn(t, srv, fake, "/")
+	if c == nil {
+		t.Fatal("no session")
+	}
+	fake.mu.Lock()
+	fake.id.AuthTime = time.Now()
+	fake.mu.Unlock()
+	_, b := elevateStart(t, srv, c, "/")
+	rec, tk := elevateCallback(t, srv, fake, b)
+	if tk == "" {
+		t.Fatalf("refused: %d %s", rec.Code, rec.Body)
+	}
+	if rec := elevateFinish(t, srv, tk, c, b); rec.Code != http.StatusSeeOther {
+		t.Errorf("finish: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// The session's authAt is the provider's auth_time, not the moment the
+// browser came back: elevatedUntil is auth_time + auth.elevation. And the
+// 2 min skew is the bound: an auth_time 1 min before the start counts, 3
+// min does not.
+func TestOIDCElevateAuthAtIsAuthTime(t *testing.T) {
+	for _, tc := range []struct {
+		ago time.Duration
+		ok  bool
+	}{{90 * time.Second, true}, {3 * time.Minute, false}} {
+		srv, fake, _ := oidcServer(t, Options{})
+		c := staleOIDC(t, srv, fake)
+		_, b := elevateStart(t, srv, c, "/")
+		at := time.Now().Add(-tc.ago).Truncate(time.Second)
+		fake.mu.Lock()
+		fake.id.AuthTime = at
+		fake.mu.Unlock()
+		_, tk := elevateCallback(t, srv, fake, b)
+		if (tk != "") != tc.ok {
+			t.Errorf("auth_time %v before the start: ticket %v, want %v", tc.ago, tk != "", tc.ok)
+			continue
+		}
+		if !tc.ok {
+			continue
+		}
+		elevateFinish(t, srv, tk, c, b)
+		var me struct {
+			Session struct {
+				ElevatedUntil time.Time `json:"elevatedUntil"`
+			} `json:"session"`
+		}
+		json.Unmarshal(call(t, srv, "GET", "/api/me", "", withCookie(c.Value)).Body.Bytes(), &me)
+		if want := at.Add(srv.policy.Elevation()); !me.Session.ElevatedUntil.Equal(want) {
+			t.Errorf("elevatedUntil %v, want auth_time + elevation = %v", me.Session.ElevatedUntil, want)
+		}
+	}
+}
+
+// naut users signout (or unpin) on the controller refuses a confirmation
+// under way, at either step.
+func TestOIDCElevateRevokedMidFlow(t *testing.T) {
+	revoke := map[string]func(t *testing.T, srv *Server, path string){
+		"signout": func(t *testing.T, srv *Server, path string) {
+			if err := users.SignOut(users.SignoutsPath(path), "opsadmin", "oidc:eng@corp.example", time.Now().Add(time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			srv.users.Reload()
+		},
+		"unpin": func(t *testing.T, srv *Server, path string) {
+			if err := os.Remove(filepath.Join(filepath.Dir(path), users.PinsName)); err != nil {
+				t.Fatal(err)
+			}
+			srv.users.Reload()
+		},
+	}
+	for name, rv := range revoke {
+		for _, step := range []int{1, 2} {
+			srv, fake, path := oidcServer(t, Options{})
+			c := staleOIDC(t, srv, fake)
+			_, b := elevateStart(t, srv, c, "/")
+			if step == 1 {
+				rv(t, srv, path)
+			}
+			rec, tk := elevateCallback(t, srv, fake, b)
+			if step == 1 {
+				if tk != "" || rec.Code != http.StatusUnauthorized {
+					t.Errorf("%s before step 1: %d %s", name, rec.Code, rec.Body)
+				}
+				continue
+			}
+			rv(t, srv, path)
+			if rec := elevateFinish(t, srv, tk, c, b); rec.Code != http.StatusUnauthorized {
+				t.Errorf("%s before step 2: %d %s", name, rec.Code, rec.Body)
+			}
+			if _, _, _, reason := lastElevate(t, srv); reason != "session ended" {
+				t.Errorf("%s before step 2: journalled %q", name, reason)
+			}
+		}
+	}
+}
+
+// The limits: starts are throttled per session; a full ticket table
+// refuses (busy), never grows.
+func TestOIDCElevateLimits(t *testing.T) {
+	srv, fake, _ := oidcServer(t, Options{})
+	c := staleOIDC(t, srv, fake)
+	srv.signin.sessions = newLimiter(1, time.Hour)
+	if rec, b := elevateStart(t, srv, c, "/"); b == nil {
+		t.Fatalf("first start: %d %s", rec.Code, rec.Body)
+	}
+	if rec, _ := elevateStart(t, srv, c, "/"); rec.Code != http.StatusTooManyRequests {
+		t.Errorf("second start: %d %s", rec.Code, rec.Body)
+	}
+	srv.signin.sessions = newLimiter(1000, time.Second)
+	_, b := elevateStart(t, srv, c, "/")
+	for i := 0; i < maxOIDCFlows; i++ {
+		srv.oidcTickets.put(oidcTicket{})
+	}
+	if rec, tk := elevateCallback(t, srv, fake, b); tk != "" || rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("full ticket table: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// The callback rechecks the session as every request does
+// (sessionStands), not only that it is in memory: one whose pin no longer
+// names its account is refused, though nothing ended it yet.
+func TestOIDCElevateCallbackRechecksTheSession(t *testing.T) {
+	srv, fake, _ := oidcServer(t, Options{})
+	c := staleOIDC(t, srv, fake)
+	_, b := elevateStart(t, srv, c, "/")
+	srv.sessions.mu.Lock()
+	srv.sessions.byHash[sessionHash(c.Value)].sub = "sub-elsewhere"
+	srv.sessions.mu.Unlock()
+	if rec, tk := elevateCallback(t, srv, fake, b); tk != "" || rec.Code != http.StatusUnauthorized {
+		t.Errorf("callback for a session that no longer stands: %d %s", rec.Code, rec.Body)
 	}
 }

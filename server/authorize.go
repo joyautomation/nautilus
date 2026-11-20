@@ -314,7 +314,7 @@ func (s *Server) elevationRefused(a actor, perm string) (int, string) {
 	if a.session.oidc {
 		// Not ElevationNeeded: the HMI must not ask for a password that
 		// does not exist. It sends the page to the provider instead.
-		return http.StatusUnauthorized, fmt.Sprintf("%s: %s needs credentials entered at the provider within the last %s (auth.elevation). The HMI sends you there (GET %s); or sign in again (/signin)", ElevationAtProvider, perm, shortDuration(s.policy.Elevation()), OIDCElevateURL)
+		return http.StatusUnauthorized, fmt.Sprintf("%s: %s needs credentials entered at the provider within the last %s (auth.elevation). The HMI sends you there (GET %s). Signing in again here does not help while the provider still holds your sign-in there: sign out at the provider first", ElevationAtProvider, perm, shortDuration(s.policy.Elevation()), OIDCElevateURL)
 	}
 	return http.StatusUnauthorized, fmt.Sprintf("%s: sign in again (/signin), or enter your password where the HMI asks for it (POST /api/elevate). %s needs a password entered within the last %s (auth.elevation)", ElevationNeeded, perm, shortDuration(s.policy.Elevation()))
 }

@@ -340,9 +340,18 @@ export interface AuthDeps {
 	/** sessionStorage, for the referral loop guard. */
 	storage?: GuardStorage | null;
 	now?: () => number;
+	/** Run fn after ms (setTimeout); for tests. */
+	later?: (fn: () => void, ms: number) => void;
 	/** Called whenever me, referral or supported changes. */
 	onchange?: () => void;
 }
+
+/**
+ * How long after a navigation the page is taken to have stayed after all
+ * (the operator chose "Stay" at an unsaved-work guard): the kit listens
+ * again, and a note left for the provider is dropped.
+ */
+export const LEAVE_RESET_MS = 5_000;
 
 /** The first probe's wait after a stream error, and the longest. */
 export const PROBE_MIN_MS = 2_000;
@@ -506,6 +515,17 @@ export class AuthSession {
 		if (this.#leaving) return;
 		this.#leaving = true;
 		this.#d.navigate(href);
+		// A page that is still here a while later did not leave (a guard
+		// kept it): listen again, and forget the note of a trip not made.
+		const later = this.#d.later ?? ((fn, ms) => void globalThis.setTimeout(fn, ms));
+		later(() => {
+			this.#leaving = false;
+			try {
+				this.#d.storage?.setItem(CONFIRM_KEY, '');
+			} catch {
+				// nothing to forget
+			}
+		}, LEAVE_RESET_MS);
 	}
 
 	/** A standby referred us: follow it, once, or keep it for a banner. */
