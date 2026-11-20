@@ -542,3 +542,34 @@ func TestElevateEndTellsTheHooks(t *testing.T) {
 		t.Errorf("hooks told %v, want the session", ended)
 	}
 }
+
+// A session whose user holds no elevated permission (jsmith, an operator)
+// has nothing to confirm: /api/elevate refuses it with a 403 before any
+// password hashing, even with the hash slots free and the right password,
+// so a viewer's sessions cannot keep the slots busy (#1088 review). It is
+// journalled.
+func TestElevateRefusesAUserWithNothingToElevate(t *testing.T) {
+	srv, _, _ := patServer(t)
+	clock(srv)
+	c := signIn(t, srv, "jsmith")
+	// Both slots held: a request that tried to hash would wait, then 503.
+	old := signInQueue
+	signInQueue = 10 * time.Millisecond
+	t.Cleanup(func() { signInQueue = old })
+	for range signInHashing {
+		srv.signin.hashing <- struct{}{}
+	}
+	rec := elevate(t, srv, c.Value, "password-jsmith")
+	e := srv.audit.ring.Recent()[0]
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "nothing to confirm") ||
+		e.Action != "auth.elevate" || e.Result != "refused" || e.Detail["reason"] != "no elevated permission" {
+		t.Errorf("an operator's elevate: %d %s, journalled %+v", rec.Code, rec.Body, e)
+	}
+	// Nor does it spend the session's throttle.
+	srv.signin.sessions.mu.Lock()
+	_, spent := srv.signin.sessions.b[sessionHash(c.Value)]
+	srv.signin.sessions.mu.Unlock()
+	if spent {
+		t.Error("the refusal spent the session's bucket")
+	}
+}

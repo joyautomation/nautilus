@@ -7,9 +7,11 @@ import (
 	"math"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/joyautomation/nautilus/audit"
+	"github.com/joyautomation/nautilus/auth"
 )
 
 // Elevation (#708 PR 5c, docs/design/identity-audit.md §2): a browser
@@ -68,6 +70,13 @@ func (s *Server) handleElevate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	se := *a.session
+	// A user who holds no elevated permission has nothing to confirm:
+	// refused before any hashing, so a viewer's sessions cannot keep the
+	// password-hash slots busy (#1088 review).
+	if !s.holdsElevated(a) {
+		refuse(http.StatusForbidden, "nothing to confirm: "+se.user+" holds none of the elevated permissions ("+strings.Join(auth.ElevatedPermissions, ", ")+")", "no elevated permission", nil)
+		return
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxSignInBody)
 	var req struct {
 		Password string `json:"password"`
@@ -127,4 +136,15 @@ func (s *Server) handleElevate(w http.ResponseWriter, r *http.Request) {
 	e.Detail = map[string]any{"elevatedUntil": until.Format(time.RFC3339)}
 	s.audit.record(e)
 	writeJSON(w, http.StatusOK, map[string]any{"user": se.user, "elevatedUntil": until})
+}
+
+// holdsElevated reports whether a's principal holds any elevated
+// permission, anywhere.
+func (s *Server) holdsElevated(a actor) bool {
+	for _, p := range auth.ElevatedPermissions {
+		if s.policy.Holds(a.pr, p) {
+			return true
+		}
+	}
+	return false
 }
