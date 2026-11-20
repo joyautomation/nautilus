@@ -44,6 +44,11 @@ type LogState struct {
 	// Stuck: this controller leads and its catch-up for the current term
 	// has failed (the log is read-only under it).
 	Stuck bool
+	// CanSync: synced, and it could catch up as leader: a vouch's one-shot
+	// catch-up is pending, or another copy that counts was heard. A
+	// controller yields only to one that can (naut-lead, #1053): a synced
+	// one whose other copies are all lost would lead read-only too.
+	CanSync bool
 }
 
 // yieldEvery is how seldom one controller yields (naut-lead, #710): at
@@ -61,8 +66,8 @@ const EventVouched EventKind = "redundancy.oplog.vouched"
 // peerLog is what the other controller's last verified hello answer said
 // of its log.
 type peerLog struct {
-	synced, may bool
-	at          time.Time
+	synced, canSync, may bool
+	at                   time.Time
 }
 
 // SetLog sets the log's report (see the top of this file). Call it before
@@ -144,7 +149,7 @@ func (e *Elector) maybeYield(now quorum.Instant, ls LogState, has bool) {
 	if !has || !e.c.Leading(now) || ls.Synced || !ls.Stuck || mut("unsynced_leader_keeps_lead") {
 		return
 	}
-	if !e.peerLogFresh() || !e.peerLog.synced || !e.peerLog.may && !mut("yield_ignores_may") {
+	if !e.peerLogFresh() || !e.peerLog.synced || !e.peerLog.canSync && !mut("yield_ignores_can_sync") || !e.peerLog.may && !mut("yield_ignores_may") {
 		return
 	}
 	if !e.yieldedAt.IsZero() && time.Since(e.yieldedAt) < yieldEvery && !mut("yield_undamped") {
@@ -152,7 +157,7 @@ func (e *Elector) maybeYield(now quorum.Instant, ls LogState, has bool) {
 	}
 	e.yieldedAt = time.Now()
 	e.yieldHold, e.yieldDue = true, e.c.LeaseEnd()
-	msg := fmt.Sprintf("yielded to %s: own operator log unsynced, %s synced", e.o.Peer, e.o.Peer)
+	msg := fmt.Sprintf("yielded to %s: own operator log unsynced, %s synced and able to sync the others", e.o.Peer, e.o.Peer)
 	e.log.Warn("redundancy: " + msg + "; this controller stops renewing so " + string(e.o.Peer) + " takes over and syncs it")
 	e.event(Event{Kind: EventYielded, Detail: msg})
 }
@@ -196,18 +201,21 @@ func (e *Elector) selfLog() string {
 		(e.holdSince.IsZero() || time.Since(e.holdSince) < 2*e.o.Lease)
 	may := healthy && !e.released && !e.boxPending && e.v.State().Incarnation != 0 &&
 		e.mayCampaign(now) && !hold
-	return logReport(ls.Synced, may)
+	return logReport(ls.Synced, ls.Synced && ls.CanSync, may)
 }
 
-// logReport encodes a log report: "s" or "u" (synced or not), then "m" or
-// "n" (may campaign or not).
-func logReport(synced, may bool) string {
-	r := []byte("un")
+// logReport encodes a log report: "s" or "u" (synced or not), "c" or "x"
+// (can sync the others or not), then "m" or "n" (may campaign or not).
+func logReport(synced, canSync, may bool) string {
+	r := []byte("uxn")
 	if synced {
 		r[0] = 's'
 	}
+	if canSync {
+		r[1] = 'c'
+	}
 	if may {
-		r[1] = 'm'
+		r[2] = 'm'
 	}
 	return string(r)
 }
@@ -250,10 +258,10 @@ func (e *Elector) askLog(ctx context.Context) {
 
 // heardLog records the peer's verified log report. Under mu.
 func (e *Elector) heardLog(r string) {
-	if len(r) != 2 {
+	if len(r) != 3 {
 		return
 	}
-	e.peerLog = peerLog{synced: r[0] == 's', may: r[1] == 'm', at: time.Now()}
+	e.peerLog = peerLog{synced: r[0] == 's', canSync: r[1] == 'c', may: r[2] == 'm', at: time.Now()}
 }
 
 // vouch runs the log's vouch, outside mu.

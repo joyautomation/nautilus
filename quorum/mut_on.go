@@ -112,6 +112,7 @@ var Mutations = []string{
 	"unsynced_leader_keeps_lead",  // node: an unsynced, stuck leader never yields to a synced peer
 	"yield_undamped",              // node: a leader yields again within yieldEvery
 	"yield_ignores_may",           // node: a leader yields to a peer that may not campaign
+	"yield_ignores_can_sync",      // node: a leader yields to a synced peer that can't sync the others
 	"yield_until_due",             // node: a yield ends at the lease's due end, though a late grant moved it
 	"term_not_persisted",          // oplog: the term lives only in memory, so a lost log takes a deposed leader's word
 	"unnamed_leader_admitted",     // oplog: a marked replica takes replication when its election names no leader

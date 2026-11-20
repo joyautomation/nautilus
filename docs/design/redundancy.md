@@ -106,8 +106,15 @@ bumpless, and the measured takeover time is published instead.
     - **An unsynced controller leads for control, read-only for operator intent.** It
       doesn't campaign while the other controller is reachable, synced and may campaign (for
       two leases with no leader at most); a leader whose catch-up failed hands over to such a
-      controller (it stops renewing; at most once per 10 minutes). The hello carries each
-      controller's log report for this, bound in its MAC (`node/logpref.go`).
+      controller only if it can also sync the others (a pending vouch, or another counting
+      copy heard), so the lead isn't handed over for nothing (it stops renewing until the
+      lease is seen over; at most once per 10 minutes). The hello carries each controller's
+      log report for this (synced, can sync, may campaign), bound in its MAC
+      (`node/logpref.go`).
+    - **A synced leader alone among the copies is read-only too** (`oplog-read-only`:
+      "operator log read-only: no second counting copy — recommission (3c)"): entries
+      committed while it lagged may be on the lost copies, so only a person can decide (3c's
+      vouch or `--accept-loss` for a synced controller).
     - **The leader retries its catch-up** every half lease while its term is unsynced, once
       the runtime's takeover is done: the witness never pulls, and nothing leaves an unsynced
       leader.

@@ -415,9 +415,18 @@ and its takeover carries nothing from the log (as below). It syncs as
 soon as both other copies count (answer, synced), or, if it was not
 leading, at the leader's next heartbeat. While the other controller is reachable and
 synced, an unsynced one doesn't campaign; if it leads and can't catch up
-while the other is synced and able to lead, it hands the lead over
-(`yielded to a: own operator log unsynced, a synced` in
-`GET /api/cluster`), at most once every 10 minutes.
+while the other is synced, able to lead and able to sync the others (a
+vouch of its own pending, or another copy that counts), it hands the
+lead over (`yielded to a: own operator log unsynced, a synced and able to
+sync the others` in `GET /api/cluster`), at most once every 10 minutes.
+
+**A synced controller alone among the copies can't decide either.** If
+both other copies were lost (the other controller's and the witness's),
+changes committed while it lagged may have been on them, so it leads
+read-only and says "operator log read-only: no second counting copy —
+recommission (3c)". Bringing back a copy that still holds its log ends
+it; otherwise the way past is a person's decision (a re-commission that
+accepts the loss, coming with the commissioning commands).
 
 **A new pair's logs are vouched for at commissioning.** All three copies
 start empty, so none is synced yet: the re-commission that commissions

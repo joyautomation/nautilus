@@ -157,6 +157,9 @@ case caught it. A mutation joins the nightly run in the PR that builds the rule 
 | an unsynced leader whose catch-up failed never hands over to a synced, able peer (`unsynced_leader_keeps_lead`) | design §1, an unsynced controller leads for control | 3b-4b |
 | a leader yields again within 10 minutes (`yield_undamped`) | design §1, the yield is damped | 3b-4b |
 | a leader yields to a peer that may not campaign (unhealthy scans) (`yield_ignores_may`) | design §1, the yield needs an able peer | 3b-4b |
+| a leader yields to a synced peer that can't sync the others (`yield_ignores_can_sync`) | design §1, the yield needs a peer that can sync | 3b-4b (#1053) |
+| a yield ends at the lease's due end though a late grant moved it (`yield_until_due`) | design §1, the yield holds until the lease is over | 3b-4b |
+| a new replica's mark is written after its log file (`mark_after_log`) | design §1, logs from before marks | 3b-4b |
 | the term lives in memory only, so a lost log takes a deposed leader's replication and its word that the log is synced (`term_not_persisted`) | design §1, the mark keeps the term | 3b-4b (#1050 review carry) |
 | a marked replica takes replication while its own election names no leader (`unnamed_leader_admitted`) | design §1, only a synced replica counts | 3b-4b |
 | a vouch is taken over a lost log, a silent peer or a later log (`vouch_unchecked`) | design §1, a vouch starts a pair | 3b-4b |

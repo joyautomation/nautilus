@@ -76,7 +76,7 @@ type member struct {
 	// A stand-in for the operator-intent log's report (SetLog), when
 	// logOn: whether its log is synced, and stuck (leading, catch-up
 	// failed).
-	logOn, logUnsynced, logStuck atomic.Bool
+	logOn, logUnsynced, logStuck, logCannotSync atomic.Bool
 }
 
 type witnessMember struct {
@@ -178,7 +178,8 @@ func (c *cluster) start(id quorum.NodeID) *Elector {
 	e.SetHealth(func() bool { return !m.sick.Load() })
 	if m.logOn.Load() {
 		e.SetLog(func() LogState {
-			return LogState{Synced: !m.logUnsynced.Load(), Stuck: m.logStuck.Load() && e.IsLeader()}
+			synced := !m.logUnsynced.Load()
+			return LogState{Synced: synced, Stuck: m.logStuck.Load() && e.IsLeader(), CanSync: synced && !m.logCannotSync.Load()}
 		})
 	}
 	h, _ := Guard(c.tok[id], e.Handler())

@@ -447,6 +447,10 @@ const (
 // three copies, A, B and the witness, and a write needs two.
 const PairNoMajority = "operator-intent log has no majority: neither the other controller nor the witness answers; substitutes cannot be started, stopped or acknowledged, nor alarms acknowledged or shelved, until one of them returns"
 
+// OplogReadOnly is the condition of a synced leader that can't sync: no
+// other copy counts (both lost or rebuilt), and no vouch is pending.
+const OplogReadOnly = "operator log read-only: no second counting copy — recommission (3c)"
+
 // startLog builds the pair's replicated log of operator intent (oplog,
 // design §1) over rt and mounts it on the peer listener: A, B and the
 // witness are its replicas (#710 PR 3b-4b), so a write needs two of them.
@@ -522,7 +526,7 @@ func (m *pairMember) startLog(rt *runtime.Runtime, wait time.Duration, eng *alar
 	m.rt = rt
 	el := m.q.Node()
 	el.SetLog(func() node.LogState {
-		return node.LogState{Synced: n.Synced(), Stuck: m.stuck()}
+		return node.LogState{Synced: n.Synced(), Stuck: m.stuck(), CanSync: n.CanSync()}
 	})
 	el.SetVouch(func(ctx context.Context, by string) error {
 		v, err := n.Vouch(ctx, by)
@@ -623,6 +627,14 @@ func (m *pairMember) logConditions() {
 	}
 	m.q.SetCondition("oplog-lost", lost)
 	m.q.SetCondition("oplog-unsynced", unsynced)
+	readOnly := ""
+	if !st.Unsynced && m.stuck() && !m.log.CanSync() {
+		// Synced, leading, but alone among the copies that count: entries
+		// committed while it lagged may be on the others, so only a person
+		// can decide (#1053).
+		readOnly = OplogReadOnly
+	}
+	m.q.SetCondition("oplog-read-only", readOnly)
 	if !st.Unsynced {
 		m.q.SetCondition("oplog-yield", "")
 	}

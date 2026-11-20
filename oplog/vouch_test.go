@@ -382,3 +382,35 @@ func TestRebindAPendingReplica(t *testing.T) {
 		}
 	})
 }
+
+// CanSync: synced, and either a vouch's catch-up is pending or another
+// counting copy was heard; never for a synced copy whose others are all
+// lost (#1053).
+func TestCanSync(t *testing.T) {
+	tr := newTrio(t, nil)
+	mustSync(t, tr, 0)
+	if _, err := tr.propose(0, "X"); err != nil {
+		t.Fatal(err)
+	}
+	tr.nodes[0].Ping(tr.ctx())
+	if !tr.nodes[0].CanSync() {
+		t.Fatal("a synced copy with counting peers can't sync")
+	}
+	tr.wipe(1)
+	tr.wipe(2)
+	tr.nodes[0].Ping(tr.ctx())
+	if tr.nodes[0].CanSync() {
+		t.Fatal("a synced copy whose others are all lost can sync")
+	}
+	if tr.nodes[1].CanSync() {
+		t.Fatal("an unsynced copy can sync")
+	}
+
+	v := unsyncedTrio(t)
+	if _, err := v.nodes[0].Vouch(v.ctx(), "op"); err != nil {
+		t.Fatal(err)
+	}
+	if !v.nodes[0].CanSync() {
+		t.Fatal("a vouched copy, its catch-up pending, can't sync")
+	}
+}

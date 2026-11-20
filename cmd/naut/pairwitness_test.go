@@ -374,3 +374,61 @@ func TestWitnessAdmitsAtOrBelowItsPromise(t *testing.T) {
 		t.Error("admitted with no vote since the start")
 	}
 }
+
+// The real path of a vouch, end to end (naut-lead's (4), #1053): the
+// rig's commissioning re-commissions a, which vouches for a's empty log;
+// a leads (first, or once b yields to it), catches up alone once, and
+// syncs b's copy and the witness's.
+func TestPairCommissioningVouchSyncsTheOtherCopies(t *testing.T) {
+	r := newPairRig(t)
+	pairWait(t, "every copy to sync", 15*time.Second, func() bool {
+		return r.nodes["a"].m.log.Synced() && r.nodes["b"].m.log.Synced() && r.witnessHolds(r.leader())
+	})
+	if r.elector("a").Status().Acquisitions == 0 {
+		t.Fatal("a never led, yet its vouch's catch-up was used")
+	}
+	var m oplog.Mark
+	b, err := os.ReadFile(filepath.Join(r.env["a"]["STATE_DIRECTORY"], pairLogMark))
+	if err != nil || json.Unmarshal(b, &m) != nil {
+		t.Fatalf("a's mark: %s %v", b, err)
+	}
+	if m.Vouch == nil || m.Vouch.By == "" || m.Alone {
+		t.Fatalf("a's mark after commissioning: %+v; want a vouch, its catch-up used", m)
+	}
+	if st := r.nodes["a"].m.q.Status(); st.Log == nil || st.Log.Vouch == nil {
+		t.Fatalf("/api/cluster doesn't show the vouch: %+v", st.Log)
+	}
+}
+
+// A synced leader whose other two copies are lost can't decide alone:
+// entries committed while it lagged may be on them. It leads read-only,
+// says so with the fix (#1053), and refuses writes as "other copies not
+// synced".
+func TestPairSyncedLeaderAloneIsReadOnly(t *testing.T) {
+	r := newPairRig(t)
+	lead := r.leader()
+	stand := other(lead)
+	r.nodes[lead].crash()
+	r.nodes[stand].crash()
+	r.stopWitness()
+	for _, f := range []string{
+		filepath.Join(r.env[stand]["STATE_DIRECTORY"], pairLogFile), filepath.Join(r.env[stand]["STATE_DIRECTORY"], pairLogMark),
+		filepath.Join(r.witDir, r.cluster()+".oplog.jsonl"), filepath.Join(r.witDir, r.cluster()+".oplog.mark"),
+	} {
+		if err := os.Remove(f); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r.startWitness(r.wit)
+	r.restart(lead)
+	if r.leader() != lead {
+		t.Fatal("the synced controller did not lead")
+	}
+	pairWait(t, "the read-only condition", 15*time.Second, func() bool {
+		return slices.Contains(r.nodes[lead].m.q.Status().Warnings, OplogReadOnly)
+	})
+	code, body, h := r.call(lead, "POST", "/api/substitutes", `{"name":"Level","seconds":60}`)
+	if code != http.StatusServiceUnavailable || h.Get("X-Nautilus-Outcome") != "refused" || !strings.Contains(body, server.LogCopiesNotSynced) {
+		t.Fatalf("a write on the lone synced leader: %d %q %s", code, h.Get("X-Nautilus-Outcome"), body)
+	}
+}

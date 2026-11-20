@@ -205,12 +205,13 @@ var table = []mutation{
 	{"unsynced_leader_keeps_lead", []string{"TestLoopbackUnsyncedLeaderYieldsToASyncedPeer"}},
 	{"yield_undamped", []string{"TestLoopbackYieldIsDamped"}},
 	{"yield_ignores_may", []string{"TestLoopbackNoYieldToAnUnhealthyPeer"}},
+	{"yield_ignores_can_sync", []string{"TestLoopbackNoYieldToAPeerThatCannotSync"}},
 	{"yield_until_due", []string{"TestYieldHoldsUntilTheLeaseIsSeenOver"}},
 	// In the log (oplog).
 	{"term_not_persisted", []string{"TestLostLogKeepsItsTerm"}},
 	{"unnamed_leader_admitted", []string{"TestMarkedReplicaRefusesAnUnnamedLeader"}},
 	{"vouch_unchecked", []string{"TestVouchRefuses"}},
-	{"vouch_alone_kept", []string{"TestVouchedCatchUpAloneIsOnce"}},
+	{"vouch_alone_kept", []string{"TestVouchedCatchUpAloneIsOnce", "TestPairCommissioningVouchSyncsTheOtherCopies"}},
 	{"mark_after_log", []string{"TestMarkIsWrittenBeforeTheLog"}},
 	{"unsynced_log_writes", []string{"TestFollowerOfAnUnsyncedLeaderIsNotWritable", "TestPairUnsyncedTakeoverCarriesNoAcks"}},
 	// In the pair's wiring (cmd/naut), end to end.
@@ -241,7 +242,7 @@ var rowPkgs = map[string][]string{
 	"term_not_persisted":          {"./oplog"},
 	"unnamed_leader_admitted":     {"./oplog"},
 	"vouch_unchecked":             {"./oplog"},
-	"vouch_alone_kept":            {"./oplog"},
+	"vouch_alone_kept":            {"./oplog", "./cmd/naut"},
 	"mark_after_log":              {"./oplog"},
 	"unsynced_log_writes":         {"./oplog", "./cmd/naut"},
 	"witness_log_unbound":         {"./cmd/naut"},

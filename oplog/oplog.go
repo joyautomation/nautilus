@@ -648,6 +648,32 @@ func (n *Node) Synced() bool {
 	return n.syncedLocked()
 }
 
+// CanSync reports whether this replica, synced, could catch up as leader:
+// a vouch's one-shot catch-up is pending (Mark.Alone), or another copy
+// that counts was heard within the last 10 s (Status's reach). A synced
+// replica whose other copies are all lost can't: entries committed while
+// it lagged may exist on them, so only a person can decide (#1053).
+func (n *Node) CanSync() bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if !n.syncedLocked() {
+		return false
+	}
+	if n.o.Mark != "" && n.mark.Alone {
+		return true
+	}
+	now := n.o.Now()
+	for _, p := range n.o.Peers {
+		if p == n.o.Self || now.Sub(n.lastContact[p]) >= 10*time.Second {
+			continue
+		}
+		if pi, ok := n.peers[p]; ok && n.counts(p, pi.unsynced, pi.identity) {
+			return true
+		}
+	}
+	return false
+}
+
 // Lost is where a log lost under the held mark was kept ("(missing)" when
 // there was no file), from the loss until this replica is synced again,
 // across restarts; "" otherwise.

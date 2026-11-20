@@ -49,7 +49,7 @@ func TestLoopbackUnsyncedLeaderYieldsToASyncedPeer(t *testing.T) {
 	c.ctl[l].logStuck.Store(true)
 	c.waitFor("the synced peer to lead", leases(20), func() bool { return c.leader() == o })
 	n, msg := c.countEvents(EventYielded)
-	if n != 1 || !strings.Contains(msg, "yielded to "+string(o)) || !strings.Contains(msg, "own operator log unsynced") {
+	if n != 1 || !strings.Contains(msg, "yielded to "+string(o)) || !strings.Contains(msg, "own operator log unsynced") || !strings.Contains(msg, "able to sync") {
 		t.Fatalf("yield events: %d, %q", n, msg)
 	}
 	c.steady(o, 8)
@@ -111,6 +111,27 @@ func TestLoopbackNoYieldToAnUnhealthyPeer(t *testing.T) {
 	c.steady(l, 8)
 	if n, _ := c.countEvents(EventYielded); n != 0 {
 		t.Fatalf("yielded to an unhealthy peer (%d)", n)
+	}
+}
+
+// No yield to a peer that is synced but can't sync the others (its other
+// copies all lost, no vouch pending): it would lead read-only too, so the
+// lead isn't handed over for nothing (naut-lead, #1053).
+func TestLoopbackNoYieldToAPeerThatCannotSync(t *testing.T) {
+	c, l := logCluster(t)
+	o := c.other(l)
+	c.ctl[o].logCannotSync.Store(true)
+	c.ctl[l].logUnsynced.Store(true)
+	c.ctl[l].logStuck.Store(true)
+	c.waitFor("the leader to hear the peer's report", leases(20), func() bool {
+		e := c.elector(l)
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		return e.peerLogFresh() && e.peerLog.synced && !e.peerLog.canSync && e.peerLog.may
+	})
+	c.steady(l, 8)
+	if n, _ := c.countEvents(EventYielded); n != 0 {
+		t.Fatalf("yielded to a peer that can't sync (%d)", n)
 	}
 }
 
