@@ -1,0 +1,29 @@
+# Check for "First program: blink an output". The solution is a half-second
+# timer that flips the lamp, which takes a scan or two more than 500 ms to
+# notice it finished, so a half-period lands between 0.5 s and 0.7 s. These
+# points are ones every sensible blink agrees on.
+tests:
+  - name: the lamp is still off before the first half second is up
+    steps:
+      - advance: 0.4s
+        expect: { Lamp: false }
+
+  - name: the lamp has come on by 0.9 s
+    steps:
+      - advance: 0.9s
+        expect: { Lamp: true }
+
+  - name: the lamp has gone off again by 1.5 s
+    steps:
+      - advance: 1.5s
+        expect: { Lamp: false }
+
+  - name: the lamp is on again by 2.2 s (it keeps blinking, it does not stop after one cycle)
+    steps:
+      - advance: 2.2s
+        expect: { Lamp: true }
+
+  - name: the lamp is off again by 2.8 s
+    steps:
+      - advance: 2.8s
+        expect: { Lamp: false }
