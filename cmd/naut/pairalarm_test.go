@@ -45,7 +45,18 @@ func (r *pairRig) setTrip(t *testing.T, n string, v bool) {
 
 func (r *pairRig) ackTrip(t *testing.T, n string) {
 	t.Helper()
-	if code, b, _ := r.call(n, "POST", "/api/alarms/ack", `{"ids":["Trip"],"by":"op"}`); code != http.StatusOK {
+	// A certain refusal (nothing proposed) is retried for a few seconds,
+	// as startedID does: a new leader's view of the copies lags a ping.
+	var code int
+	var b string
+	for end := time.Now().Add(10 * time.Second); ; time.Sleep(100 * time.Millisecond) {
+		var h http.Header
+		code, b, h = r.call(n, "POST", "/api/alarms/ack", `{"ids":["Trip"],"by":"op"}`)
+		if code == http.StatusOK || h.Get("X-Nautilus-Outcome") != "refused" && !strings.Contains(b, "no leader") || time.Now().After(end) {
+			break
+		}
+	}
+	if code != http.StatusOK {
 		t.Fatalf("ack on %s: %d %s", n, code, b)
 	}
 }

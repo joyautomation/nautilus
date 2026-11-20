@@ -101,8 +101,32 @@ func newPairRigFull(t *testing.T, pmod func(n string, p *project.Project), dmod 
 	if err := a.Recommission(ctx, a.Status().WitnessIncarnation, max(a.KnownFloor(), b.KnownFloor())+1000); err != nil {
 		t.Fatal(err)
 	}
-	r.logReady(r.leader())
+	r.settled()
 	return r
+}
+
+// settled waits for the new pair to settle: one leader, its log writable,
+// for a full second (two leases) without a change. Right after
+// commissioning the lead can move once (a's lease rests on b's grant
+// while the witness is in its quiet period), and a new leader's view of
+// the other copies lags by a ping, so a write then is refused (#1053 CI).
+func (r *pairRig) settled() {
+	r.t.Helper()
+	var who string
+	var since time.Time
+	pairWait(r.t, "the pair to settle (one leader, its log writable, for a second)", 20*time.Second, func() bool {
+		cur := ""
+		for _, n := range []string{"a", "b"} {
+			if r.nodes[n].m.q.IsLeader() && r.nodes[n].rt.Leading() && r.nodes[n].m.log.Status().Writable {
+				cur = n
+			}
+		}
+		if cur == "" || cur != who {
+			who, since = cur, time.Now()
+			return false
+		}
+		return time.Since(since) >= time.Second
+	})
 }
 
 // logReady waits until member n's operator-intent log can commit a write:
