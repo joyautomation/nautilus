@@ -109,6 +109,18 @@ func TestPairWitnessLogAdmitsOnlyItsGrantedLeader(t *testing.T) {
 	if code, body := send(lead, term); code == http.StatusForbidden {
 		t.Errorf("replication from the leader at its term refused: %s", body)
 	}
+	// It never sequences: a write sent to it is refused, not committed.
+	if code, body := r.witnessLog("POST", "/api/oplog/propose", `{"kind":"ack","ids":["x"],"by":"op"}`); code != http.StatusConflict {
+		t.Errorf("a propose to the witness's copy: %d %s, want 409", code, body)
+	}
+	// A cluster the witness has never voted for has no log there.
+	req, _ := http.NewRequest("GET", "http://"+r.wit+node.Prefix+node.NewClusterID()+"/log/api/quorum", nil)
+	req.Header.Set(node.TokenHeader, r.token)
+	if resp, err := http.DefaultClient.Do(req); err != nil || resp.StatusCode != http.StatusNotFound {
+		t.Errorf("an unbound cluster's log: %v %v, want 404", resp, err)
+	} else {
+		resp.Body.Close()
+	}
 }
 
 // §8.1 case 3 and F15's log clause: the witness rebuilt (its state wiped)
@@ -238,5 +250,31 @@ func TestWitnessCountsOnlyAtTheCountedIncarnation(t *testing.T) {
 	counted = 7
 	if !c("W", "7") || c("W", "8") {
 		t.Fatalf("at 7: counts 7 %v, 8 %v", c("W", "7"), c("W", "8"))
+	}
+}
+
+// The upgrade from 3b-3: the controllers' logs were written before marks
+// (the 2-of-2 interim kept every entry on both), so a log with no mark
+// counts as synced at once, and writes go on without a vouch.
+func TestPairLogsFromBeforeMarksCountAsSynced(t *testing.T) {
+	r := newPairRig(t)
+	lead := r.leader()
+	id := r.startedID(lead)
+	for _, n := range []string{"a", "b"} {
+		r.nodes[n].crash()
+	}
+	for _, n := range []string{"a", "b"} {
+		if err := os.Remove(filepath.Join(r.env[n]["STATE_DIRECTORY"], pairLogMark)); err != nil {
+			t.Fatal(err)
+		}
+		r.restart(n)
+		if !r.nodes[n].m.log.Synced() {
+			t.Fatalf("%s's log from before marks starts unsynced", n)
+		}
+	}
+	lead = r.leader()
+	r.logReady(lead)
+	if code, body, _ := r.call(lead, "DELETE", "/api/substitutes/"+itoa(id), ""); code != http.StatusOK {
+		t.Fatalf("stop after the upgrade: %d %s", code, body)
 	}
 }

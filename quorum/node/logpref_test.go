@@ -122,3 +122,31 @@ func TestLoopbackUnsyncedStandbyDefersTwoLeasesAtMost(t *testing.T) {
 		t.Fatalf("the unsynced standby led %v after the synced leader's lease lapsed, want two leases of deferring at least", d)
 	}
 }
+
+// The witness's seams for the log (Bound, Grant, SetLogInfo): a cluster is
+// bound by a vote only, Grant names whom the voter granted, and Pairs
+// reports the log the composer says it holds.
+func TestWitnessLogSeams(t *testing.T) {
+	c, l := logCluster(t)
+	w := c.wit.w
+	if m, ok := w.Bound(c.pair); !ok || m != "a,b" {
+		t.Fatalf("Bound(pair) = %q, %v", m, ok)
+	}
+	if _, ok := w.Bound(NewClusterID()); ok {
+		t.Fatal("a cluster with no vote is bound")
+	}
+	if _, ok := w.Bound("../x"); ok {
+		t.Fatal("an invalid cluster name is bound")
+	}
+	g, promised, inc, ok := w.Grant(c.pair)
+	if !ok || g != l || promised == 0 || inc != c.status("a").Incarnation {
+		t.Fatalf("Grant = %q, %d, %d, %v; leader %s", g, promised, inc, ok, l)
+	}
+	if _, _, _, ok := w.Grant(NewClusterID()); ok {
+		t.Fatal("Grant for a cluster with no voter")
+	}
+	w.SetLogInfo(func(cluster string) (uint64, uint64, bool) { return 7, 5, cluster == c.pair })
+	if ps := w.Pairs(); len(ps) != 1 || !ps[0].HasLog || ps[0].LogLast != 7 || ps[0].LogCommit != 5 {
+		t.Fatalf("Pairs = %+v", ps)
+	}
+}
