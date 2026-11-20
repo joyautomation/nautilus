@@ -750,3 +750,18 @@ claims:
       - go ./opcua/internal/uaserver TestMayTransfer
       - go ./opcua/internal/uaserver TestChangesAfterTheTaskReturnedChangeNothing
       - go ./tools/blackbox TestBlackbox/001-F31-services-unsupported
+  - id: OPC-028
+    claim: >-
+      On a box installed by naut deploy, where there is no naut, the built
+      controller runs the certificate commands as the command line when
+      NAUTILUS_CLI=1 is set (controller opcua certs and trust, with --pki
+      naming the service's store); without the variable it does not run them.
+    source: "#approving-a-client"
+    tests:
+      - go ./cmd/naut TestBuiltControllerWithNautilusCLIRunsOpcuaCerts
+    partial: true
+    note: >-
+      certs is tested through a built controller; trust takes the same path
+      and was run by hand against a throwaway store. The store path
+      /var/lib/nautilus/pki and the need for sudo on a deployed box were
+      observed by the independent tester (run 2026-11-19-021, F-08).
