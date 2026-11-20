@@ -19,7 +19,8 @@ import (
 //     tell it must sign in;
 //   - the sign-in page and routes (POST is not a read);
 //   - /healthz and /readyz (answered before the Host rule, below);
-//   - static files fetched by a page (its scripts, styles, fonts). A page
+//   - static files fetched by a page (its scripts, styles, fonts: no tag
+//     values, though an HMI build names its tags). A page
 //     itself, opened by a browser, is redirected to /signin instead.
 //
 // It runs inside GuardHost, so naut run and both facades (naut logix serve,

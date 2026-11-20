@@ -108,23 +108,30 @@ func TestEveryReadRouteIsGated(t *testing.T) {
 		readPolicy(t, srv, anon)
 		for _, p := range routes {
 			path := concrete(p)
-			if p == "/api/stream" {
-				continue // never ends; TestStreamIsGated
-			}
+			// An allowed /api/stream never ends: only its refusals are
+			// run here (TestSignOutClosesItsStreams opens one).
+			stream := p == "/api/stream"
 			for _, method := range []string{"GET", "HEAD"} {
-				rec := call(t, srv, method, path, "", strip)
-				if p == "/api/me" {
-					if gated(rec) {
+				// No credential: /api/me answers; under anonymous: viewer a
+				// read is allowed (the stream is then not opened here).
+				switch {
+				case p == "/api/me":
+					if rec := call(t, srv, method, path, "", strip); gated(rec) {
 						t.Errorf("anonymous %q: %s %s: %d, want /api/me to answer anyone", anon, method, path, rec.Code)
 					}
 					continue
-				}
-				if anon == "viewer" {
-					if gated(rec) && p != "/api/audit" { // it needs audit too
+				case anon == "viewer":
+					if stream || p == "/api/audit" { // audit needs audit too
+						break
+					}
+					if rec := call(t, srv, method, path, "", strip); gated(rec) {
 						t.Errorf("anonymous: viewer: %s %s: %d %s", method, path, rec.Code, rec.Body)
 					}
-				} else if rec.Code != http.StatusUnauthorized || (method == "GET" && !strings.Contains(rec.Body.String(), "sign in")) {
-					t.Errorf("anonymous %q: %s %s: %d %s, want 401", anon, method, path, rec.Code, rec.Body)
+				default:
+					rec := call(t, srv, method, path, "", strip)
+					if rec.Code != http.StatusUnauthorized || (method == "GET" && !strings.Contains(rec.Body.String(), "sign in")) || rec.Header().Get("Cache-Control") != "no-store" {
+						t.Errorf("anonymous %q: %s %s: %d %s (Cache-Control %q), want a no-store 401", anon, method, path, rec.Code, rec.Body, rec.Header().Get("Cache-Control"))
+					}
 				}
 				if rec := call(t, srv, method, path, "", strip, bearer("guess")); rec.Code != http.StatusUnauthorized {
 					t.Errorf("anonymous %q: an unknown token: %s %s: %d, want 401", anon, method, path, rec.Code)
@@ -134,8 +141,8 @@ func TestEveryReadRouteIsGated(t *testing.T) {
 				} else if method == "GET" && rec.Body.String() != `{"error":"`+srv.policy.Can(auth.Service("blind"), auth.Read, auth.All).Reason+`"}`+"\n" {
 					t.Errorf("a refusal carries more than its error: %s", rec.Body)
 				}
-				if p == "/api/audit" {
-					continue // needs audit as well
+				if p == "/api/audit" || stream {
+					continue // audit needs audit as well; an allowed stream never ends
 				}
 				if rec := call(t, srv, method, path, "", strip, bearer("v-secret")); gated(rec) {
 					t.Errorf("a viewer: %s %s: %d %s", method, path, rec.Code, rec.Body)
@@ -230,6 +237,14 @@ func TestClusterReadsAndTheStandby(t *testing.T) {
 	if rec := call(t, srv, "GET", "/api/cluster", "", bearer(toks["akhan"])); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"isLeader":false`) {
 		t.Errorf("the standby, a PAT: %d %s", rec.Code, rec.Body)
 	}
+	// A bad token beside the cookie is the bad token's 401, not a referral.
+	if rec := call(t, srv, "GET", "/api/cluster", "", withCookie("a-session-of-the-leader"), bearer("guess")); rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), "invalid credential") {
+		t.Errorf("the standby, a cookie and a bad token: %d %s, want 401", rec.Code, rec.Body)
+	}
+	// A page opened there goes to the sign-in page, which names the leader.
+	if rec := call(t, srv, "GET", "/", "", withCookie("a-session-of-the-leader"), navigate); rec.Code != http.StatusSeeOther || rec.Header().Get("Location") != "/signin?next=%2F" {
+		t.Errorf("the standby, a page with a cookie: %d %q, want the sign-in page", rec.Code, rec.Header().Get("Location"))
+	}
 	// Not a forwarding standby (no leader known): there is nobody to refer
 	// to, so the cookie it does not know is anonymous.
 	fc.set(electing)
@@ -273,7 +288,8 @@ func TestProbes(t *testing.T) {
 			if rec.Code != code || rec.Body.String() != body {
 				t.Errorf("%s: %s: %d %q, want %d %q", c.name, p, rec.Code, rec.Body, code, body)
 			}
-			if rec.Header().Get("Location") != "" || len(rec.Result().Cookies()) != 0 {
+			if rec.Header().Get("Location") != "" || len(rec.Result().Cookies()) != 0 ||
+				rec.Header().Get("Content-Type") != "text/plain; charset=utf-8" || rec.Header().Get("Cache-Control") != "no-store" {
 				t.Errorf("%s: %s says more: %v", c.name, p, rec.Header())
 			}
 			if rec := serve(srv, httptest.NewRequest("HEAD", "http://localhost"+p, nil)); rec.Code != code {
@@ -320,6 +336,9 @@ func TestPagesNeedASession(t *testing.T) {
 		}
 		if rec.Code != c.code || rec.Header().Get("Location") != c.location {
 			t.Errorf("%s: %d %q, want %d %q", c.name, rec.Code, rec.Header().Get("Location"), c.code, c.location)
+		}
+		if c.code == http.StatusSeeOther && rec.Header().Get("Cache-Control") != "no-store" {
+			t.Errorf("%s: a redirect a cache may keep: %q", c.name, rec.Header().Get("Cache-Control"))
 		}
 	}
 	c := signIn(t, srv, "akhan")

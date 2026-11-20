@@ -66,10 +66,10 @@ A token is sent as `Authorization: Bearer <token>`. With no credential, a reques
 With an `auth:` block, reading needs the `read` permission (every built-in role has it):
 
 - **Every `GET` under `/api/`**: tags, the live stream, alarms, forces, the program, I/O, `/api/cluster`, `/api/history` and the rest. No credential is a `401`, a role without `read` a `403`, an unknown token a `401` (never taken as anonymous).
-- **A page.** A browser that opens the dashboard or an HMI screen without a session is sent to `/signin`, and comes back to the page afterwards. The page's own files (scripts, styles, fonts, images) are served to anyone: they hold no tag data.
+- **A page.** A browser that opens the dashboard or an HMI screen without a session is sent to `/signin`, and comes back to the page afterwards. The page's own files (scripts, styles, fonts, images) are served to anyone: they hold no tag values, though an HMI build does name its tags.
 - **Without a credential**, only `GET /api/me`, the sign-in page and routes, `/healthz` and `/readyz` answer.
 - **`anonymous: viewer`** lets a request with no credential read, as before `auth:` existed (a wall screen nobody signs in to). `anonymous: none` is the default.
-- **An open live stream ends** when its session does: at sign-out, when the user is disabled, removed or given a new password, and when the session expires. A stream opened with a personal access token ends within a second of the token being revoked or its user disabled. The page shows the stream as lost; reloading it goes to the sign-in page.
+- **An open live stream ends** when its session does: at sign-out, when the user is disabled, removed or given a new password, and when the session expires. A stream opened with a personal access token ends within about two seconds of the token being revoked or its user disabled. The page shows the stream as lost; reloading it goes to the sign-in page.
 
 **Monitoring, scripts and other services send a token.** A probe or monitor that reads `/api/cluster` or `/api/history`, the historian, or a script reading tags needs a credential that holds `read`: a service token with the `viewer` role (`service-tokens: {monitor: viewer}`), or a personal access token of a user with that role. To find the leader without a credential, use `/readyz`.
 
@@ -152,5 +152,6 @@ The endpoints, for an HMI of your own:
 ## Limits
 
 - **The OPC UA server and Sparkplug writes are not covered yet** (#708). A client that reaches them is not asked for a role, and `naut run` prints a warning saying so whenever `auth:` is set.
+- **`naut historian`'s own port is not covered.** It answers its archive by `localhost`, an IP address or an allowed name, or with `NAUTILUS_TOKEN`, as before, with no roles. Reads through the controller's `/api/history` need `read`; keep the historian's port off networks that shouldn't read the archive.
 - **Sessions live on the leader.** On a redundant pair a failover signs browser users out (see [A redundant pair](#a-redundant-pair)).
 - **Not behind a load balancer that spreads requests over replicas.** A replica that isn't leading refers a signed-in browser to the leader. Point browsers at the leader (`/readyz`), or wait for the pair's floating address (#716).
