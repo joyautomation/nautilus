@@ -26,7 +26,7 @@ naut new tank --template minimal
 cd tank
 ```
 
-Create `devices.yaml`. This says: a *type* of device (what the datasheet
+Create `devices.yaml` in the project folder. This says: a *type* of device (what the datasheet
 tells you), and an *instance* of it (where this one is):
 
 ```yaml
@@ -58,7 +58,7 @@ wrote modbus_manifest.yaml (1 sources, 2 tag bindings)
 wrote tags/modbus.yaml — compose it with `tag-files: [tags/modbus.yaml]`
 ```
 
-Two files appeared, and both say "do not edit" in their first line:
+Two files appeared, and both start with a comment saying not to edit them:
 `modbus_manifest.yaml` is how to poll the device, and `tags/modbus.yaml`
 declares the tags. The tags are named with the instance id in front,
 `LT1_Level` and `LT1_Flow`, so two devices of one type do not clash. Use
@@ -90,7 +90,7 @@ driver:
 ```
 
 `driver: modbus` replaces the `memory` loopback, and `tag-files` brings in
-the generated tags. Replace `program.st` with one line of logic that uses a
+the generated tags. `HighLevel` is an `output`: a tag the program writes. Replace `program.st` with one line of logic that uses a
 device tag, and delete the scaffold's `tank_test.yaml` (it tests the old
 program):
 
@@ -110,7 +110,7 @@ running, and should say `0 with errors`.
 ## 4. Start the simulated device
 
 A bench device ships inside `naut`. It answers for the manifest you
-generated, with the values you give it. In `seed.json`, give it values in
+generated, with the values you give it. In `seed.json`, in the project folder, give it values in
 real units (the scaling is undone for you):
 
 ```json
@@ -127,17 +127,20 @@ Check what is on the wire with the commissioning tool, which reads a range
 of registers and shows each one in every format at once:
 
 ```sh
-naut modbus browse --host 127.0.0.1 --port 15020 --unit 1 --from 0 --count 2
+naut modbus browse --host 127.0.0.1 --port 15020 --unit 1 --from 0 --count 3
 ```
 
 ```text
 addr  raw     uint16  int16  int32       uint32      float32      float64
 0     0x01A9  425     425    27869264    27869264    6.21731e-38
 1     0x4050  16464   16464  1078984704  1078984704  3.25
+2     0x0000  0       0
 ```
 
 Register 0 is `425` as an `int16` and register 1 is `3.25` as a `float32`:
-the formats in the device map. On a real device this table is how you find
+the formats in the device map. A 32-bit value spans two registers, so the
+`float32` in row 1 is only shown once register 2 is read too: that is why the
+command asks for three. On a real device this table is how you find
 out which format a register really is.
 
 ## 5. Run the controller against it
@@ -147,20 +150,25 @@ naut run
 ```
 
 You should see `modbus: connected` and the dashboard on
-<http://localhost:8080>. The tags now come from the device:
+<http://localhost:8080> (if that port is already in use, `naut run` says so and
+prints the address it moved to; use that one). The tags now come from the
+device:
 
 ```sh
 curl -s localhost:8080/api/state | jq -c .tags
 ```
+
+(`jq` only tidies the output; without it, plain `curl` prints the whole state.)
 
 ```text
 {"HighLevel":false,"LT1_Flow":3.25,"LT1_Level":42.5}
 ```
 
 `HighLevel` is false because 42.5 is below 80. Stop the simulator and the
-dashboard's driver card shows an error, and `/api/state` reports each tag's
-`quality` as `notConnected`; start it again and the controller reconnects
-by itself.
+dashboard's driver card shows an error, the tags keep their last values, and
+`/api/state` gains a `quality` entry for each as `stale`; start it again and
+the controller reconnects by itself (the `quality` entries go away: a good tag
+carries none). A device that never answers reports `notConnected`.
 
 ## Next
 
