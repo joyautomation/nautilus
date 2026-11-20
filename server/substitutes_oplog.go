@@ -60,6 +60,12 @@ type SubstituteLog struct {
 // names its replicas (SetNoMajority).
 const DefaultNoMajority = "operator-intent log has no majority: substitutes cannot be started, stopped or acknowledged until a majority of its replicas is reachable again"
 
+// LogNotSynced is the refusal while the copy of the log that would
+// sequence a write (this controller's, leading, or the leader's) is not
+// known to hold every committed entry (#710 3b-4b): it can commit nothing
+// until it has synced, so the write is refused before it is proposed.
+const LogNotSynced = "operator log not synced: the leading controller's copy of the operator-intent log is not known to hold every committed entry, so substitutes cannot be started, stopped or acknowledged, nor alarms acknowledged or shelved, until it has synced from the other controller and the witness, or a person vouches for it"
+
 // SetNoMajority sets the no-majority refusal's text: a redundant pair
 // names its peer. Call it before the server serves.
 func (l *SubstituteLog) SetNoMajority(msg string) { l.noMajority = msg }
@@ -74,6 +80,9 @@ func (s *Server) refuseWithoutMajority(w http.ResponseWriter) bool {
 	msg := s.subLog.noMajority
 	if msg == "" {
 		msg = DefaultNoMajority
+	}
+	if st.NotSynced {
+		msg = LogNotSynced
 	}
 	if st.Reason != "" {
 		msg += " (" + st.Reason + ")"

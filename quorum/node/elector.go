@@ -302,6 +302,7 @@ type Elector struct {
 	yieldUntil quorum.Instant // no renewal until here: a yield's lease runs out
 
 	gate    atomic.Pointer[gateState]
+	counted atomic.Uint64 // the witness incarnation the candidate counts (CountedIncarnation)
 	wake    chan struct{}
 	w       *writer
 	running atomic.Bool
@@ -749,8 +750,16 @@ func (e *Elector) after(now quorum.Instant) {
 	}
 }
 
+// CountedIncarnation is the witness incarnation this controller's
+// candidate counts a witness grant at (quorum.Candidate.Counting), 0 when
+// none: the pair's log counts the witness's copy only at it (#710 3b-4b).
+// Read without the lock, so the log may ask under its own.
+func (e *Elector) CountedIncarnation() uint64 { return e.counted.Load() }
+
 // publish stores the gate. Under mu.
 func (e *Elector) publish(now quorum.Instant) {
+	inc, _ := e.c.Counting()
+	e.counted.Store(inc)
 	g := &gateState{}
 	if old := e.gate.Load(); old != nil {
 		g.epoch = old.epoch
@@ -1240,6 +1249,14 @@ func (e *Elector) Recommission(ctx context.Context, inc, floor uint64) error {
 // (SetVouch): it runs first, and its refusal is Recommission's, before
 // anything is written.
 func (e *Elector) RecommissionBy(ctx context.Context, by string, inc, floor uint64) error {
+	// Its own refusals first, so a refused re-commission vouches for
+	// nothing.
+	e.mu.Lock()
+	commissioned := e.v.State().Incarnation != 0
+	e.mu.Unlock()
+	if commissioned {
+		return quorum.ErrCommissioned
+	}
 	if err := e.vouch(ctx, by); err != nil {
 		return fmt.Errorf("quorum: re-commission refused by the operator-intent log: %w", err)
 	}

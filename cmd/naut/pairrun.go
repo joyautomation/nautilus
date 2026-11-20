@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -67,8 +68,13 @@ type pairMember struct {
 	logH    swapHandler
 	log     *oplog.Node
 	al      *server.AlarmLog // nil without alarms
+	rt      *runtime.Runtime
 	logStop context.CancelFunc
 	logDone chan struct{}
+	// stuckTerm is the term whose catch-up last failed (driveLog), 0 once
+	// it succeeds: the log is read-only under this leader (node.LogState).
+	stuckTerm atomic.Uint64
+	box       func() string // this box's fingerprint (BoxFunc), nil without
 }
 
 // swapHandler serves the handler it is given later, 503 before.
@@ -180,12 +186,13 @@ func newPairMember(r *project.RedundancyConfig, apiAddr, dir string, d pairDeps)
 		}
 		o.BoxFunc = func() string { b, _ := d.box(links); return b }
 	}
+	boxFn := o.BoxFunc
 	o.Dial = d.dial
 	o.Credentials = d.creds
 	if err := os.MkdirAll(filepath.Dir(o.StatePath), 0o750); err != nil {
 		return nil, fmt.Errorf("state directory: %w", err)
 	}
-	m := &pairMember{peers: r.Peers}
+	m := &pairMember{peers: r.Peers, box: boxFn}
 	o.OnEvent = m.onEvent // events start with the election's Run, after m.q is set
 	// The election first: it locks the state file, so a second process of
 	// this controller stops here, before it binds anything.
@@ -344,6 +351,8 @@ func (m *pairMember) onEvent(ev node.Event) {
 		m.q.SetCondition("credentials-users", ev.Detail) // "" clears it
 	case node.EventTLSDiffers:
 		m.q.SetCondition("credentials-tls", ev.Detail)
+	case node.EventYielded:
+		m.q.SetCondition("oplog-yield", ev.Detail+" (at "+time.Now().UTC().Format(time.RFC3339)+")")
 	}
 }
 
@@ -425,16 +434,22 @@ func (m *pairMember) Close() {
 }
 
 // pairLogFile is a member's copy of the operator-intent log, in its state
-// directory beside quorum.state.
-const pairLogFile = "oplog.jsonl"
+// directory beside quorum.state, and pairLogMark its mark (oplog.Mark:
+// held, synced, the identity it belongs to, the highest term, a vouch).
+const (
+	pairLogFile = "oplog.jsonl"
+	pairLogMark = "oplog.mark"
+)
 
-// PairNoMajority is a pair's no-majority refusal (naut-lead, #710): with
-// the log on A and B only, its majority is both of them.
-const PairNoMajority = "operator-intent log has no majority: the peer is down; substitutes cannot be started, stopped or acknowledged until it returns"
+// PairNoMajority is a pair's no-majority refusal (#710 3b-4b): the log has
+// three copies, A, B and the witness, and a write needs two.
+const PairNoMajority = "operator-intent log has no majority: neither the other controller nor the witness answers; substitutes cannot be started, stopped or acknowledged, nor alarms acknowledged or shelved, until one of them returns"
 
 // startLog builds the pair's replicated log of operator intent (oplog,
-// design §1) over rt and mounts it on the peer listener: A and B are its
-// replicas (the witness is not, until #710 Q4), so its majority is both.
+// design §1) over rt and mounts it on the peer listener: A, B and the
+// witness are its replicas (#710 PR 3b-4b), so a write needs two of them.
+// Only a synced replica counts (oplog.Mark), the witness's only at the
+// incarnation the election counts.
 // Order as #1017's wiring: the SubstituteLog, the node (which replays its
 // file into Apply), Attach, then the runtime's SetIntentLog (a takeover
 // catches the log up before its first scan, waiting up to wait). The
@@ -470,11 +485,34 @@ func (m *pairMember) startLog(rt *runtime.Runtime, wait time.Duration, eng *alar
 		return nil
 	}
 	self := peerURL(m.peers[string(m.o.Self)])
+	a, b, wit := peerURL(m.peers["a"]), peerURL(m.peers["b"]), witnessLogURL(m.o.WitnessAddr, m.o.Cluster)
+	peers := []string{a, b, wit}
+	if mutNaut("witness_not_a_replica") {
+		peers = peers[:2]
+	}
+	dir := filepath.Dir(m.o.StatePath)
+	file := filepath.Join(dir, pairLogFile)
+	// A log kept from before marks (the 2-of-2 interim held every entry on
+	// both controllers) counts as synced; no log at all (a new pair, a
+	// wiped disk) does not, until the leader syncs it or a person vouches.
+	_, statErr := os.Stat(file)
+	_, markErr := os.Stat(filepath.Join(dir, pairLogMark))
+	preMark := statErr == nil && errors.Is(markErr, os.ErrNotExist)
 	n, err := oplog.New(oplog.Options{
-		Self: self, Peers: []string{peerURL(m.peers["a"]), peerURL(m.peers["b"])},
+		Self: self, Peers: peers,
 		Leadership: pairLeadership{q: m.q, peers: m.peers},
-		File:       filepath.Join(filepath.Dir(m.o.StatePath), pairLogFile),
-		Apply:      apply,
+		File:       file, Mark: filepath.Join(dir, pairLogMark),
+		Identity: m.logIdentity(), UnmarkedSynced: preMark,
+		Node:  string(m.o.Self),
+		Names: map[string]string{a: "controller a", b: "controller b", wit: "the witness"},
+		Counts: func(peer, identity string) bool {
+			if peer != wit || mutNaut("witness_log_any_incarnation") {
+				return true
+			}
+			inc := m.q.Node().CountedIncarnation()
+			return inc != 0 && identity == strconv.FormatUint(inc, 10)
+		},
+		Apply: apply,
 		Lapse: func(e oplog.Entry, now time.Time) bool {
 			return sl.Lapse(e, now) || (al != nil && al.Lapse(e, now))
 		},
@@ -483,6 +521,19 @@ func (m *pairMember) startLog(rt *runtime.Runtime, wait time.Duration, eng *alar
 	if err != nil {
 		return nil, nil, fmt.Errorf("operator-intent log: %w", err)
 	}
+	m.rt = rt
+	el := m.q.Node()
+	el.SetLog(func() node.LogState {
+		return node.LogState{Synced: n.Synced(), Stuck: m.stuck()}
+	})
+	el.SetVouch(func(ctx context.Context, by string) error {
+		v, err := n.Vouch(ctx, by)
+		if err == nil && v.By != "" {
+			slog.Warn("redundancy: a person vouched for this controller's operator-intent log", "by", v.By, "lastTerm", v.LastTerm, "lastSeq", v.LastSeq)
+		}
+		return err
+	})
+	m.q.SetLogStatus(func() *leader.LogStatus { return m.logStatus() })
 	sl.Attach(n)
 	if al != nil {
 		al.Attach(n)
@@ -517,6 +568,7 @@ func (m *pairMember) driveLog(ctx context.Context) {
 		case <-t.C:
 		}
 		cctx, cancel := context.WithTimeout(ctx, max(m.o.Lease, time.Second))
+		m.retrySync(cctx)
 		m.log.Heartbeat(cctx)
 		_ = m.log.CatchUp(cctx)
 		m.log.Ping(cctx)
@@ -524,7 +576,110 @@ func (m *pairMember) driveLog(ctx context.Context) {
 		if m.al != nil {
 			m.al.Reconcile() // the leader's view holds only acks its engine holds
 		}
+		m.logConditions()
 	}
+}
+
+// retrySync catches the leader's log up when its term is not synced (a
+// takeover's catch-up failed, or a write missed its majority): nothing
+// else would, since the witness never pulls, and the heartbeat sends
+// nothing until then. Only once the runtime's takeover is done, so no
+// entry is applied ahead of the takeover's restore (#1033). A failure
+// marks the term stuck (node.LogState), which an unsynced leader yields
+// on.
+func (m *pairMember) retrySync(ctx context.Context) {
+	if !m.q.IsLeader() || m.rt == nil || !m.rt.Leading() || m.log.TermSynced() || mutNaut("log_sync_not_retried") {
+		if !m.q.IsLeader() {
+			m.stuckTerm.Store(0)
+		}
+		return
+	}
+	term := m.q.Term()
+	if err := m.log.SyncLeader(ctx); err != nil {
+		if m.stuckTerm.Swap(term) != term {
+			slog.Warn("redundancy: the operator-intent log can't catch up under this leader; it is read-only until it can", "term", term, "error", err)
+		}
+		return
+	}
+	m.stuckTerm.Store(0)
+}
+
+// stuck: this controller leads and its catch-up for the current term has
+// failed.
+func (m *pairMember) stuck() bool {
+	t := m.stuckTerm.Load()
+	return t != 0 && m.q.IsLeader() && t == m.q.Term() && !m.log.TermSynced()
+}
+
+// logConditions raises or clears the log's conditions on /api/cluster and
+// the banner: a lost log, an unsynced one.
+func (m *pairMember) logConditions() {
+	st := m.log.Status()
+	lost, unsynced := "", ""
+	switch {
+	case st.Lost != "":
+		lost = "this controller's operator-intent log was lost (kept at " + st.Lost + "): it counts for nothing, and while this controller leads substitutes, alarm acknowledgements and shelves are refused, until it has synced from the other controller and the witness"
+	case st.Unsynced:
+		unsynced = "this controller's operator-intent log is not synced: it counts for nothing, and while this controller leads substitutes, alarm acknowledgements and shelves are refused, until it has synced from the other controller and the witness, or a person vouches for it (re-commission)"
+	}
+	m.q.SetCondition("oplog-lost", lost)
+	m.q.SetCondition("oplog-unsynced", unsynced)
+	if !st.Unsynced {
+		m.q.SetCondition("oplog-yield", "")
+	}
+}
+
+// logIdentity is this controller's log identity: cluster, node and box,
+// so a log from a cloned or migrated disk is moved aside and synced
+// again, never counted. It waits for the box while it can't be read yet
+// (the elector waits for it too, so nothing is lost by it).
+func (m *pairMember) logIdentity() string {
+	box := m.o.Box
+	if m.box != nil {
+		for i := 0; ; i++ {
+			if box = m.box(); box != "" {
+				break
+			}
+			if i == 0 {
+				slog.Warn("redundancy: this box's fingerprint can't be read yet (a peer or witness address doesn't resolve); the operator-intent log waits for it")
+			}
+			time.Sleep(time.Second)
+		}
+	}
+	return m.o.Cluster + "/" + string(m.o.Self) + "/" + box
+}
+
+// logStatus is the log's block of /api/cluster.
+func (m *pairMember) logStatus() *leader.LogStatus {
+	if m.log == nil {
+		return nil
+	}
+	st := m.log.Status()
+	names := map[string]string{peerURL(m.peers["a"]): "a", peerURL(m.peers["b"]): "b", witnessLogURL(m.o.WitnessAddr, m.o.Cluster): "witness"}
+	ls := &leader.LogStatus{Synced: !st.Unsynced, Lost: st.Lost, Writable: st.Writable, Reason: st.Reason, LastSeq: st.LastSeq, Commit: st.Commit}
+	for _, p := range st.Peers {
+		r := leader.LogReplica{Name: names[p], Reached: slices.Contains(st.Reached, p)}
+		if p == st.Self {
+			r.Synced, r.Self = !st.Unsynced, true
+		} else {
+			r.Synced = slices.Contains(st.Synced, p)
+		}
+		ls.Replicas = append(ls.Replicas, r)
+	}
+	if v := st.Vouch; v != nil {
+		ls.Vouch = &leader.LogVouch{By: v.By, At: time.UnixMilli(v.At).UTC(), LastTerm: v.LastTerm, LastSeq: v.LastSeq}
+	}
+	return ls
+}
+
+// witnessLogURL is the witness's copy of the cluster's log, as the pair's
+// log names it: on the witness's peer listener, under the cluster.
+func witnessLogURL(witness, cluster string) string {
+	base := witness
+	if !strings.Contains(base, "://") {
+		base = "http://" + base
+	}
+	return strings.TrimRight(base, "/") + node.Prefix + cluster + "/log"
 }
 
 // pairLeadership is the log's view of the pair's election: the sequencer
@@ -538,7 +693,9 @@ type pairLeadership struct {
 func (l pairLeadership) IsLeader() bool { return l.q.IsLeader() }
 func (l pairLeadership) Term() uint64   { return l.q.Term() }
 func (l pairLeadership) LeaderAddr() string {
-	if a, ok := l.peers[l.q.Status().Leader]; ok {
+	// The elector's own status, never the Quorum's: that one reads the
+	// log's status block, which asks this.
+	if a, ok := l.peers[l.q.Node().Status().Leader]; ok {
 		return peerURL(a)
 	}
 	return ""

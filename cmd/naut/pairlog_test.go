@@ -31,6 +31,10 @@ type pairRig struct {
 	nodes   map[string]*pairNode
 	pmod    func(n string, p *project.Project) // nil: the project as loaded
 	dmod    func(n string, d *pairDeps)        // nil: the member's deps as built
+	// The witness: its address, state directory and token, and its stop
+	// (stopWitness, startWitness).
+	wit, witDir, token string
+	wstop              func()
 }
 
 func newPairRig(t *testing.T) *pairRig {
@@ -77,14 +81,10 @@ func newPairRigFull(t *testing.T, pmod func(n string, p *project.Project), dmod 
 		t.Skip("127.0.0.2 does not take the same API port:", err)
 	}
 	cluster, token := node.NewClusterID(), "peer-secret"
-	wctx, wstop := context.WithCancel(context.Background())
-	wready, wdone := make(chan string, 1), make(chan int, 1)
-	go func() {
-		wdone <- witnessMain(wctx, []string{"--listen", "127.0.0.1:0", "--state", t.TempDir(), "--lease", "500ms"},
-			pairEnv(map[string]string{"NAUTILUS_PEER_TOKEN": token}), io.Discard, io.Discard, wready)
-	}()
-	t.Cleanup(func() { wstop(); <-wdone })
-	wit := <-wready
+	r.token, r.witDir = token, t.TempDir()
+	r.startWitness("127.0.0.1:0")
+	t.Cleanup(r.stopWitness)
+	wit := r.wit
 	r.peer["a"], r.peer["b"] = lnA.Addr().String(), lnB.Addr().String()
 	r.files = pairProject(r.peer["a"], r.peer["b"], wit)
 	for _, n := range []string{"a", "b"} {
@@ -101,11 +101,47 @@ func newPairRigFull(t *testing.T, pmod func(n string, p *project.Project), dmod 
 	if err := a.Recommission(ctx, a.Status().WitnessIncarnation, max(a.KnownFloor(), b.KnownFloor())+1000); err != nil {
 		t.Fatal(err)
 	}
-	r.leader()
+	r.logReady(r.leader())
 	return r
 }
 
+// logReady waits until member n's operator-intent log can commit a write:
+// at a new pair's start, until the vouched leader's first heartbeat has
+// synced the other two copies (#710 3b-4b).
+func (r *pairRig) logReady(n string) {
+	r.t.Helper()
+	pairWait(r.t, n+"'s operator-intent log to be writable", 15*time.Second, func() bool {
+		return r.nodes[n].m.log.Status().Writable
+	})
+}
+
 func (r *pairRig) elector(n string) *node.Elector { return r.nodes[n].m.q.Node() }
+
+// startWitness runs naut witness on addr with the rig's state directory.
+func (r *pairRig) startWitness(addr string) {
+	r.t.Helper()
+	wctx, stop := context.WithCancel(context.Background())
+	wready, wdone := make(chan string, 1), make(chan int, 1)
+	go func() {
+		wdone <- witnessMain(wctx, []string{"--listen", addr, "--state", r.witDir, "--lease", "500ms"},
+			pairEnv(map[string]string{"NAUTILUS_PEER_TOKEN": r.token}), io.Discard, io.Discard, wready)
+	}()
+	select {
+	case r.wit = <-wready:
+	case code := <-wdone:
+		stop()
+		r.t.Fatalf("naut witness exited %d", code)
+	}
+	r.wstop = func() { stop(); <-wdone }
+}
+
+// stopWitness stops the witness (again: a no-op).
+func (r *pairRig) stopWitness() {
+	if r.wstop != nil {
+		r.wstop()
+		r.wstop = nil
+	}
+}
 
 // leader waits for a leader whose runtime has taken over (its takeover,
 // the log's catch-up included, is done) and names it; other is the other
@@ -237,13 +273,33 @@ func TestPairSubstitutesGoThroughTheLog(t *testing.T) {
 	})
 }
 
-// With the log on A and B only (the witness is not a replica, #710 Q4),
-// its majority is both. With the standby down, the leader keeps leading
-// (it and the witness are a majority of voters), keeps what it applied,
-// and refuses every operator-intent write with naut-lead's text and a
-// certain "refused": nothing was proposed. When the peer returns, writes
-// go through again.
-func TestPairLogRefusesWithoutItsPeer(t *testing.T) {
+// §8.1 case 1 (#710 3b-4b): with the standby down, the leader and the
+// witness are the log's majority, so substitutes start, are acknowledged
+// and stop; the standby applies them when it returns.
+func TestPairLogWritesWithItsPeerDown(t *testing.T) {
+	r := newPairRig(t)
+	lead := r.leader()
+	stand := other(lead)
+	r.nodes[stand].crash()
+	id := r.startedID(lead)
+	if code, body, _ := r.call(lead, "POST", "/api/substitutes/ack", `{"ids":[`+itoa(id)+`]}`); code != http.StatusOK {
+		t.Fatalf("ack with the standby down: %d %s", code, body)
+	}
+	r.restart(stand)
+	pairWait(t, "the returning standby to apply the start", 10*time.Second, func() bool { return hasSubstitute(r.substitutes(stand), id) })
+	if code, body, _ := r.call(lead, "DELETE", "/api/substitutes/"+itoa(id), ""); code != http.StatusOK {
+		t.Fatalf("stop: %d %s", code, body)
+	}
+	pairWait(t, "both to apply the stop", 10*time.Second, func() bool {
+		return !hasSubstitute(r.substitutes(stand), id) && !hasSubstitute(r.substitutes(lead), id)
+	})
+}
+
+// §8.1 case 5: a lone survivor (the other controller and the witness both
+// down) keeps what it applied and refuses every operator-intent write
+// with the no-majority text and a certain "refused": nothing was
+// proposed. When they return, writes go through again.
+func TestPairLogRefusesWithoutAMajority(t *testing.T) {
 	r := newPairRig(t)
 	lead := r.leader()
 	stand := other(lead)
@@ -251,10 +307,8 @@ func TestPairLogRefusesWithoutItsPeer(t *testing.T) {
 	pairWait(t, "the standby to apply the start", 5*time.Second, func() bool { return hasSubstitute(r.substitutes(stand), id) })
 
 	r.nodes[stand].crash()
-	pairWait(t, "the log to notice its peer gone (its next ping)", 5*time.Second, func() bool { return !r.nodes[lead].m.log.Status().Writable })
-	if !r.nodes[lead].m.q.IsLeader() {
-		t.Fatal("the leader stopped leading when its standby went down")
-	}
+	r.stopWitness()
+	pairWait(t, "the log to notice both gone (its next ping)", 10*time.Second, func() bool { return !r.nodes[lead].m.log.Status().Writable })
 	for _, c := range []struct{ verb, method, path, body string }{
 		{"start", "POST", "/api/substitutes", `{"name":"Level","seconds":60}`},
 		{"stop", "DELETE", "/api/substitutes/" + itoa(id), ""},
@@ -262,55 +316,60 @@ func TestPairLogRefusesWithoutItsPeer(t *testing.T) {
 	} {
 		code, body, h := r.call(lead, c.method, c.path, c.body)
 		if code != http.StatusServiceUnavailable || h.Get("X-Nautilus-Outcome") != "refused" || !strings.Contains(body, PairNoMajority) {
-			t.Errorf("%s with the peer down: %d %q %s; want 503, refused, %q", c.verb, code, h.Get("X-Nautilus-Outcome"), body, PairNoMajority)
+			t.Errorf("%s alone: %d %q %s; want 503, refused, %q", c.verb, code, h.Get("X-Nautilus-Outcome"), body, PairNoMajority)
 		}
 	}
 	if !hasSubstitute(r.substitutes(lead), id) {
-		t.Error("the leader dropped the substitute it had applied when its peer went down")
+		t.Error("the survivor dropped the substitute it had applied")
 	}
 
+	r.startWitness(r.wit)
 	r.restart(stand)
-	pairWait(t, "the log to reach its peer again", 10*time.Second, func() bool { return r.nodes[lead].m.log.Status().Writable })
-	if code, body, _ := r.call(lead, "DELETE", "/api/substitutes/"+itoa(id), ""); code != http.StatusOK {
-		t.Fatalf("stop once the peer is back: %d %s", code, body)
-	}
+	pairWait(t, "a stop to go through once they are back", 20*time.Second, func() bool {
+		who := ""
+		for _, n := range []string{"a", "b"} {
+			if r.nodes[n].m.q.IsLeader() && r.nodes[n].rt.Leading() {
+				who = n
+			}
+		}
+		if who == "" {
+			return false
+		}
+		code, body, _ := r.call(who, "DELETE", "/api/substitutes/"+itoa(id), "")
+
+		return code == http.StatusOK
+	})
 }
 
-// The leader crashes: the standby takes over without a majority for the
-// log (its peer is the one that died), so it keeps what it applied (the
-// runtime's not-synced takeover) rather than dropping it, and raises
-// __Substitute_Fault: the operator sees the log could not confirm the set.
-// When the old leader comes back, the log catches up in the background,
-// the fault clears, both hold the same set, and a stop goes through.
+// §8.1 case 7: a substitute the leader and the witness committed while the
+// standby was down is applied before the first scan of the takeover after
+// the leader died: the standby's catch-up finds it on the witness. No
+// __Substitute_Fault (the takeover is synced), and the new leader takes a
+// stop at once, without the old one.
 func TestPairLogSurvivesALeaderCrash(t *testing.T) {
 	r := newPairRig(t)
 	lead := r.leader()
 	stand := other(lead)
-	id := r.startedID(lead)
-	pairWait(t, "the standby to apply the start", 5*time.Second, func() bool { return hasSubstitute(r.substitutes(stand), id) })
+	r.nodes[stand].crash()
+	id := r.startedID(lead) // on the leader and the witness only
 	r.nodes[lead].crash()
+	r.restart(stand)
 	if r.leader() != stand {
 		t.Fatal("the standby did not take over")
 	}
-	pairWait(t, "the new leader to scan", 10*time.Second, func() bool { return r.nodes[stand].rt.Stats().Count > 0 })
 	if !hasSubstitute(r.substitutes(stand), id) {
-		t.Fatalf("the new leader dropped substitute %d after the leader crashed: %+v", id, r.substitutes(stand))
+		t.Fatalf("the takeover after the leader died lost substitute %d, which the witness held: %+v", id, r.substitutes(stand))
 	}
 	fault := func(n string) bool { return r.nodes[n].rt.Tags().Bool(runtime.SubstituteFaultTag) }
-	if !fault(stand) {
-		t.Error("an unsynced takeover raised no __Substitute_Fault")
+	if fault(stand) {
+		t.Error("a takeover synced from the witness raised __Substitute_Fault")
 	}
-
-	r.restart(lead)
-	pairWait(t, "the fault to clear once the log answers", 15*time.Second, func() bool { return !fault(stand) })
-	pairWait(t, "the restarted member to hold the same set", 10*time.Second, func() bool { return hasSubstitute(r.substitutes(lead), id) })
-	pairWait(t, "the log to reach its peer", 10*time.Second, func() bool { return r.nodes[stand].m.log.Status().Writable })
+	r.logReady(stand)
 	if code, body, _ := r.call(stand, "DELETE", "/api/substitutes/"+itoa(id), ""); code != http.StatusOK {
-		t.Fatalf("stop after the heal: %d %s", code, body)
+		t.Fatalf("stop with the old leader still down: %d %s", code, body)
 	}
-	pairWait(t, "both to apply the stop", 5*time.Second, func() bool {
-		return !hasSubstitute(r.substitutes(stand), id) && !hasSubstitute(r.substitutes(lead), id)
-	})
+	r.restart(lead)
+	pairWait(t, "the old leader to apply the stop", 10*time.Second, func() bool { return !hasSubstitute(r.substitutes(lead), id) })
 }
 
 // The log's routes live on the peer listener only: the tag API answers

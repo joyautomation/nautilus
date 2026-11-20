@@ -85,7 +85,7 @@ import (
 const AlarmIntentCommitBound = runtime.SubstituteStartCommitBound
 
 // PairNoMajorityAlarms is a pair's no-majority refusal for alarm writes.
-const PairNoMajorityAlarms = "operator-intent log has no majority: the peer is down; alarm acknowledgements and shelves cannot be made until it returns"
+const PairNoMajorityAlarms = "operator-intent log has no majority: neither the other controller nor the witness answers; alarm acknowledgements and shelves cannot be made until one of them returns"
 
 // AlarmLog adapts an oplog node for an alarm engine.
 type AlarmLog struct {
@@ -443,6 +443,9 @@ func (s *Server) refuseAlarmWithoutMajority(w http.ResponseWriter) bool {
 		return false
 	}
 	msg := s.alarmLog.refusal
+	if st.NotSynced {
+		msg = LogNotSynced
+	}
 	if st.Reason != "" {
 		msg += " (" + st.Reason + ")"
 	}
