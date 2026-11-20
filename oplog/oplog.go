@@ -72,6 +72,14 @@ type Entry struct {
 	Until  int64    `json:"until,omitempty"` // shelve, substitute: epoch ms
 	By     string   `json:"by"`
 	Origin string   `json:"origin,omitempty"` // the instance that took the write
+	// Principal is who proposed the entry, in the audit journal's form
+	// ("user:alice", "token:historian"), when a person or a token did; ""
+	// for the system's own entries. By stays the name an operator sees.
+	// It is a label for the journal, carried as By is: never a credential,
+	// never an authorization decision at apply. A replica on an older
+	// binary drops it when it re-marshals the entry; readers fall back to
+	// By (#708 PR 8c).
+	Principal string `json:"principal,omitempty"`
 
 	// Substitute values (#707). A substitute entry's Seq is the
 	// substitute's ID; unsubstitute and suback name entries by that Seq

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/joyautomation/nautilus/oplog"
@@ -54,6 +55,20 @@ type SubstituteLog struct {
 	node *oplog.Node
 	// noMajority is the no-majority refusal's text (SetNoMajority).
 	noMajority string
+	// seen hears every committed substitute entry this replica proposed,
+	// once applied (observe: the server's unknown-outcome resolutions).
+	seen atomic.Pointer[func(oplog.Entry)]
+}
+
+// observe hands the log the server's hook for the entries it proposed.
+func (l *SubstituteLog) observe(seen func(oplog.Entry)) { l.seen.Store(&seen) }
+
+// tell passes e to seen when this replica proposed it, and not while the
+// node replays its file (Attach comes after).
+func (l *SubstituteLog) tell(e oplog.Entry) {
+	if f := l.seen.Load(); f != nil && l.node != nil && e.Origin == l.node.Self() {
+		(*f)(e)
+	}
 }
 
 // DefaultNoMajority is the no-majority refusal's text unless the wiring
@@ -109,6 +124,10 @@ func (l *SubstituteLog) Attach(n *oplog.Node) { l.node = n }
 // Apply applies a committed entry if it is a substitute kind, and reports
 // whether it was one (an Applier composed of several hands the others on).
 func (l *SubstituteLog) Apply(e oplog.Entry) (bool, error) {
+	switch e.Kind {
+	case oplog.KindSubstitute, oplog.KindUnsubstitute, oplog.KindSuback:
+		defer l.tell(e)
+	}
 	switch e.Kind {
 	case oplog.KindSubstitute:
 		var v any
@@ -199,10 +218,13 @@ func (s *Server) startThroughLog(w http.ResponseWriter, r *http.Request, tag str
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), substituteProposeWait)
 	defer cancel()
-	e, err := s.subLog.propose(ctx, oplog.Entry{
+	// A start keeps the client's request id (or none): the runtime
+	// starts only the first entry naming one, so the server must not make
+	// one up.
+	e, err := s.proposeFor(ctx, r, oplog.Entry{
 		Kind: oplog.KindSubstitute, Tag: tag, Value: raw, GrantedMs: d.Milliseconds(),
 		Until: s.rt.WallNow().Add(d).UnixMilli(), AckOnStart: ackOnStart, By: s.principal(r), Req: reqID,
-	})
+	}, false, s.subLog.propose)
 	if err != nil {
 		unknownOutcome(w, err)
 		return
@@ -246,7 +268,7 @@ func (s *Server) stopThroughLog(w http.ResponseWriter, r *http.Request, id uint6
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), substituteProposeWait)
 	defer cancel()
-	if _, err := s.subLog.propose(ctx, oplog.Entry{Kind: oplog.KindUnsubstitute, Ref: id, By: s.principal(r)}); err != nil {
+	if _, err := s.proposeFor(ctx, r, oplog.Entry{Kind: oplog.KindUnsubstitute, Ref: id, By: s.principal(r)}, true, s.subLog.propose); err != nil {
 		unknownOutcome(w, err)
 		return
 	}
@@ -278,7 +300,7 @@ func (s *Server) ackThroughLog(w http.ResponseWriter, r *http.Request, ids []uin
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), substituteProposeWait)
 	defer cancel()
-	if _, err := s.subLog.propose(ctx, oplog.Entry{Kind: oplog.KindSuback, Refs: refs, By: s.principal(r)}); err != nil {
+	if _, err := s.proposeFor(ctx, r, oplog.Entry{Kind: oplog.KindSuback, Refs: refs, By: s.principal(r)}, true, s.subLog.propose); err != nil {
 		unknownOutcome(w, err)
 		return
 	}

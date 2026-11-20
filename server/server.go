@@ -550,6 +550,7 @@ type Server struct {
 	subRules    []SubstituteRule // Options.Substitutes
 	subLog      *SubstituteLog   // Options.SubstituteLog
 	alarmLog    *AlarmLog        // Options.AlarmLog
+	unknowns    *unknowns        // proposals answered "outcome unknown", for their resolution (oplog_unknown.go)
 	audit       *auditor
 
 	resync time.Duration
@@ -663,6 +664,16 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 		rec, unavailable = opts[0].Audit, opts[0].AuditUnavailable
 	}
 	s.audit = newAuditor(rec)
+	s.unknowns = newUnknowns(s.audit.record)
+	// The logs tell this server what they apply that it proposed, so an
+	// "outcome unknown" is resolved on evidence, and an alarm lapse is
+	// journalled (oplog_unknown.go, alarms_oplog.go).
+	if s.subLog != nil {
+		s.subLog.observe(s.unknowns.applied)
+	}
+	if s.alarmLog != nil {
+		s.alarmLog.observe(s.unknowns.applied, s.audit.recordBatch)
+	}
 	if len(opts) > 0 {
 		s.policy = opts[0].Auth
 		s.proxies = opts[0].TrustedProxies

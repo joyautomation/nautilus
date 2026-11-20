@@ -462,7 +462,25 @@ controller and the witness down,** these are refused with
 the witness answers" until one of them returns; a substitute's expiry
 still happens on time. A change sent just as a copy went away can be
 answered "outcome unknown": it may still take effect, so re-read before
-sending it again.
+sending it again. The journal records it with result `unknown`. If the
+controller that answered later sees that change commit, it adds an entry
+for the same action with `detail.resolves` naming the unknown one:
+
+- `ok` if the change was carried out;
+- `refused` if it lapsed (committed too late, never carried out);
+- `unknown` with `detail.outcome` "stays unknown (evicted)" if it stopped tracking it.
+
+It does that only on evidence. A change that never commits, one whose
+controller restarts first, and a substitute start sent without a
+`requestId` stay `unknown`. An operator's alarm acknowledgement or shelve
+that lapses is journalled as `alarm.lapse`, one entry per alarm, under
+the operator's name.
+
+Each change in the log carries who made it (`user:alice`,
+`token:historian`), so the journal names the same principal whichever
+controller carries it out. During a rolling upgrade a controller on an
+older version drops that field. Changes it passes on are then journalled
+under the operator's display name.
 
 A copy counts only once it is known to hold everything committed
 ("synced"). A controller whose copy was lost (its file deleted or

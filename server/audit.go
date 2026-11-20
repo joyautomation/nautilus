@@ -596,12 +596,17 @@ func auditedAnswer(routes *http.ServeMux, w http.ResponseWriter, r *http.Request
 // answer runs h into a buffer, records the entry, then answers.
 func (a *auditedRoute) answer(w http.ResponseWriter, r *http.Request, t auditTarget, h http.HandlerFunc) {
 	buf := &bufferedResponse{header: w.Header()}
+	// The entry's id, decided now: a route that answers "outcome unknown"
+	// links its later resolution to it (oplog_unknown.go).
+	ref := seamRef{id: audit.NewID(a.s.audit.now()), action: a.action, target: capText(t.target, targetMax)}
+	r = withSeamRef(r, ref)
 	h(buf, r)
 	status := buf.status
 	if status == 0 {
 		status = http.StatusOK
 	}
 	e := audit.Entry{
+		ID:      ref.id,
 		User:    a.s.principal(r),
 		Source:  clientSource(r),
 		Action:  a.action,
