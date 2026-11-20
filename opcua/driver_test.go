@@ -363,6 +363,7 @@ func TestReconnectAndStale(t *testing.T) {
 	ts := startServer(t, port)
 	d := startDriver(t, ts.url, manifest(2))
 	waitFor(t, "first poll", func() bool { _, ok := read(t, d)["Speed"]; return ok })
+	_ = d.WriteOutputs(nio.Values{"Setpoint": 0.0}) // baseline, equal to the server's value
 
 	_ = ts.srv.Close()
 	waitFor(t, "offline", func() bool { return read(t, d)["plant__Online"] == false })
@@ -373,7 +374,6 @@ func TestReconnectAndStale(t *testing.T) {
 		t.Errorf("Speed quality during outage = %v, want stale", q["Speed"])
 	}
 	// A write queued while down waits for the reconnect.
-	_ = d.WriteOutputs(nio.Values{"Setpoint": 0.0}) // baseline
 	_ = d.WriteOutputs(nio.Values{"Setpoint": 3.0})
 	if h := d.Health(); h.QueuedWrites != 1 || h.State == "connected" {
 		t.Errorf("health during outage = %+v", h)
