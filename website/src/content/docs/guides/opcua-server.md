@@ -417,6 +417,23 @@ and one command:
    on every connection, so the client's next attempt connects, with no
    restart. `rejected/` keeps the 100 most recent refusals.
 
+**On a box installed by `naut deploy`** there is no `naut`: the controller is
+the one file `/opt/nautilus/current/controller`. Run the same two commands
+through it, with `NAUTILUS_CLI=1` (which makes a built controller act as the
+command line instead of starting) and the store the service uses,
+`/var/lib/nautilus/pki`. That directory belongs to the service's own user,
+so use `sudo`:
+
+```
+$ sudo NAUTILUS_CLI=1 /opt/nautilus/current/controller opcua certs --pki /var/lib/nautilus/pki
+$ sudo NAUTILUS_CLI=1 /opt/nautilus/current/controller opcua trust 5c1f0e7a9b3d2c41 --pki /var/lib/nautilus/pki
+```
+
+`trust` moves the certificate within the store, so the file keeps the
+service's ownership even though you ran it as root. Without
+`NAUTILUS_CLI=1` a built controller does not run the command: it refuses
+the arguments.
+
 Copying a certificate into `trusted/certs/` (DER or PEM, any file name)
 does the same. To withdraw trust, delete its file there. The client can
 write nothing from its next Write on, even on the channel it already has:
