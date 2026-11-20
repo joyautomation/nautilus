@@ -164,6 +164,11 @@ func TestLateUnknownStartLapses(t *testing.T) {
 	if how, _ := b.start(1, "Level"); how != "lapsed" {
 		t.Errorf("B's replay applied it as %q", how)
 	}
+	// A restarted leader is a new takeover: it catches up before A may
+	// take anything from it (#1050 review).
+	if err := b.node(1).SyncLeader(ctx); err != nil {
+		t.Fatal(err)
+	}
 	b.node(0).Close()
 	os.Remove(filepath.Join(b.dir, "a"))
 	b.open(0)

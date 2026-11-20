@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -152,8 +153,14 @@ const outcomeHeader = "X-Nautilus-Outcome"
 // substituteProposeWait bounds a proposal's wait for its commit.
 const substituteProposeWait = 10 * time.Second
 
-// unknownOutcome answers a proposal the log did not confirm.
+// unknownOutcome answers a proposal the log did not confirm, or one it
+// refused before proposing it: an entry over the log's size cap (oplog.
+// ErrTooLarge) was never proposed, so its outcome is known (413).
 func unknownOutcome(w http.ResponseWriter, err error) {
+	if errors.Is(err, oplog.ErrTooLarge) {
+		refuse(w, "too large for the operator-intent log: "+err.Error(), http.StatusRequestEntityTooLarge)
+		return
+	}
 	w.Header().Set(outcomeHeader, "unknown")
 	http.Error(w, "outcome unknown: the change was passed to the replicated log but not confirmed, so it may still take effect; re-read GET /api/substitutes ("+err.Error()+")", http.StatusServiceUnavailable)
 }

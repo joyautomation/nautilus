@@ -37,16 +37,22 @@ jobs:
           set -o pipefail
           go run ./tools/quorum-mutants 2>&1 | tee "$RUNNER_TEMP/mutants.log"
       # Runs even when the mutants step is red (about 130 s). Each failing
-      # seed prints a QUORUM_SEED=k repro line.
-      - name: QUORUM_SEEDS=200000 go test ./quorum/sim -run '^TestSeeds$'
+      # seed prints a QUORUM_SEED=k repro line. Then the operator-intent
+      # log's three-replica schedules (#710 3b-4a, about 6 min); a failing
+      # one names its seed (OPLOG_SIM_ONE=k reruns it with a trace).
+      - name: QUORUM_SEEDS=200000 go test ./quorum/sim, OPLOG_SIM_SEEDS=3000 go test ./oplog
         id: seeds
         if: ${{ !cancelled() }}
         shell: bash
         env:
           QUORUM_SEEDS: '200000'
+          OPLOG_SIM_SEEDS: '3000'
         run: |
           set -o pipefail
-          go test -count=1 -timeout 20m ./quorum/sim -run '^TestSeeds$' 2>&1 | tee "$RUNNER_TEMP/seeds.log"
+          rc=0
+          go test -count=1 -timeout 20m ./quorum/sim -run '^TestSeeds$' 2>&1 | tee "$RUNNER_TEMP/seeds.log" || rc=1
+          go test -count=1 -timeout 20m ./oplog -run '^TestThreeReplicaSimulation$' 2>&1 | tee -a "$RUNNER_TEMP/seeds.log" || rc=1
+          exit $rc
       - name: Rolling issue
         if: always() && github.ref == 'refs/heads/main'
         env:
