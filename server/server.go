@@ -87,6 +87,7 @@ import (
 	"github.com/joyautomation/nautilus/audit"
 	"github.com/joyautomation/nautilus/auth"
 	"github.com/joyautomation/nautilus/auth/users"
+	"github.com/joyautomation/nautilus/internal/oidcseam"
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/leader"
 	"github.com/joyautomation/nautilus/runtime"
@@ -327,7 +328,9 @@ type Options struct {
 	// users file); without them it is ignored. OIDCRedirectURL is
 	// auth.oidc.redirect-url: "" derives the redirect URI from a trusted
 	// Host.
-	OIDC            OIDC
+	// The seam's type is internal (internal/oidcseam): not stable Go API
+	// while #708 is open.
+	OIDC            oidcseam.Provider
 	OIDCRedirectURL string
 
 	// Users is the controller's users file (#708): a personal access token
@@ -603,7 +606,7 @@ type Server struct {
 	signin     *signInGate
 	// oidc is the OIDC provider's seam, nil without OIDC sign-in; the
 	// flows under way and the configured redirect URI go with it.
-	oidc         OIDC
+	oidc         oidcseam.Provider
 	oidcFlows    *oidcFlows
 	oidcRedirect string
 

@@ -16,6 +16,7 @@ import (
 
 	"github.com/joyautomation/nautilus/audit"
 	"github.com/joyautomation/nautilus/auth"
+	"github.com/joyautomation/nautilus/internal/oidcseam"
 )
 
 // OIDC sign-in (#708 PR 6a, docs/design/identity-audit.md §3): a browser
@@ -37,59 +38,9 @@ import (
 // chain with the request it redirects to. A page of this origin that
 // navigates is a same-site navigation, so the session cookie goes with it.
 
-// OIDC is the seam to an OpenID Connect provider: naut run hands the
-// server auth/oidc's client, so the server links no OIDC module. The
-// server keeps the flow's state (state, nonce, PKCE verifier), the
-// sessions and every decision; an OIDC only talks to the provider.
-type OIDC interface {
-	// Provider is the provider's name for the sign-in page's button
-	// ("Sign in with <Provider>").
-	Provider() string
-	// AuthCodeURL is the provider's authorization endpoint for one
-	// sign-in: client id, redirect URI, scopes, state, nonce, and the
-	// S256 challenge of the verifier. It may need the provider's
-	// discovery document, so it can fail (ErrOIDCUnreachable).
-	AuthCodeURL(ctx context.Context, req OIDCAuthRequest) (string, error)
-	// Exchange redeems code at the token endpoint, with the verifier and
-	// the redirect URI the sign-in started with, and verifies the ID
-	// token: its signature against the provider's keys, its issuer, its
-	// audience (the client id) and its expiry. It does not check the
-	// nonce; the server does, against the one it sent.
-	Exchange(ctx context.Context, redirectURI, code, verifier string) (OIDCIdentity, error)
-}
-
-// OIDCAuthRequest is one sign-in's parameters for OIDC.AuthCodeURL.
-type OIDCAuthRequest struct {
-	RedirectURI string
-	State       string
-	Nonce       string
-	Verifier    string // the PKCE verifier; the URL carries its S256 challenge
-}
-
-// OIDCIdentity is what a verified ID token says.
-type OIDCIdentity struct {
-	Issuer  string
-	Subject string // sub: the account, stable at its issuer
-	// Name is the username claim's value as given, and NameClaim the
-	// claim it was read from (for a refusal that names it).
-	Name      string
-	NameClaim string
-	Nonce     string
-	// Groups are the groups claim's ids. GroupsOverage says the provider
-	// left them out for having too many (Entra's "overage": a pointer to
-	// the Graph API instead of the list).
-	Groups        []string
-	GroupsOverage bool
-	// AuthTime is auth_time, when the person last entered credentials at
-	// the provider; zero when the token has none. An OIDC session holds the
-	// elevated permissions only within auth.elevation of it.
-	AuthTime time.Time
-}
-
-// ErrOIDCUnreachable marks an OIDC error that is the provider being out
-// of reach (discovery, keys or the token endpoint), not a refusal: the
-// sign-in page says to try again, and that local users still can.
-var ErrOIDCUnreachable = errors.New("the OIDC provider cannot be reached")
+// The seam's types are internal/oidcseam's (not stable Go API while
+// #708 is open): naut run hands the server auth/oidc's client through it,
+// so the server links no OIDC module.
 
 // The OIDC routes.
 const (
@@ -306,7 +257,7 @@ func (s *Server) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), oidcStartTimeout)
 	defer cancel()
-	to, err := s.oidc.AuthCodeURL(ctx, OIDCAuthRequest{RedirectURI: redirect, State: state, Nonce: fl.nonce, Verifier: fl.verifier})
+	to, err := s.oidc.AuthCodeURL(ctx, oidcseam.AuthRequest{RedirectURI: redirect, State: state, Nonce: fl.nonce, Verifier: fl.verifier})
 	if err != nil {
 		s.oidcFlows.take(state)
 		refuse(http.StatusServiceUnavailable, s.oidcUnreachable(), err.Error())
@@ -384,7 +335,7 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	id, err := s.oidc.Exchange(ctx, fl.redirect, q.Get("code"), fl.verifier)
 	if err != nil {
-		if errors.Is(err, ErrOIDCUnreachable) {
+		if errors.Is(err, oidcseam.ErrUnreachable) {
 			refuse(http.StatusServiceUnavailable, s.oidcUnreachable(), err.Error())
 			return
 		}

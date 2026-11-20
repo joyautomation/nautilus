@@ -5,7 +5,7 @@
 //
 // It is the only package that imports go-oidc and x/oauth2
 // (docs/design/context-map.md §2), and it imports no other nautilus
-// package: naut run adapts a Client to server.OIDC. The server keeps the
+// package: naut run adapts a Client to internal/oidcseam. The server keeps the
 // flow's state, checks the nonce, and decides; this package only talks to
 // the provider and reads the token's claims.
 package oidc

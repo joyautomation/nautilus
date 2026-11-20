@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/joyautomation/nautilus/auth/oidc"
+	"github.com/joyautomation/nautilus/internal/oidcseam"
 	"github.com/joyautomation/nautilus/internal/project"
 	"github.com/joyautomation/nautilus/server"
 )
@@ -17,23 +18,23 @@ import (
 // oidcSecretEnv names the variable auth.oidc's client secret comes from.
 const oidcSecretEnv = "NAUTILUS_OIDC_SECRET"
 
-// oidcSeam adapts auth/oidc's client to the server's seam (server.OIDC):
+// oidcSeam adapts auth/oidc's client to the server's seam (oidcseam.Provider):
 // the server links no OIDC module (docs/design/context-map.md §2).
 type oidcSeam struct{ c *oidc.Client }
 
 func (s oidcSeam) Provider() string { return s.c.Provider() }
 
-func (s oidcSeam) AuthCodeURL(ctx context.Context, req server.OIDCAuthRequest) (string, error) {
+func (s oidcSeam) AuthCodeURL(ctx context.Context, req oidcseam.AuthRequest) (string, error) {
 	u, err := s.c.AuthCodeURL(ctx, req.RedirectURI, req.State, req.Nonce, req.Verifier)
 	return u, seamErr(err)
 }
 
-func (s oidcSeam) Exchange(ctx context.Context, redirect, code, verifier string) (server.OIDCIdentity, error) {
+func (s oidcSeam) Exchange(ctx context.Context, redirect, code, verifier string) (oidcseam.Identity, error) {
 	id, err := s.c.Exchange(ctx, redirect, code, verifier)
 	if err != nil {
-		return server.OIDCIdentity{}, seamErr(err)
+		return oidcseam.Identity{}, seamErr(err)
 	}
-	return server.OIDCIdentity{
+	return oidcseam.Identity{
 		Issuer: id.Issuer, Subject: id.Subject, Name: id.Name, NameClaim: id.NameClaim, Nonce: id.Nonce,
 		Groups: id.Groups, GroupsOverage: id.GroupsOverage, AuthTime: id.AuthTime,
 	}, nil
@@ -42,7 +43,7 @@ func (s oidcSeam) Exchange(ctx context.Context, redirect, code, verifier string)
 // seamErr carries "the provider is out of reach" across the seam.
 func seamErr(err error) error {
 	if errors.Is(err, oidc.ErrUnreachable) {
-		return fmt.Errorf("%w: %v", server.ErrOIDCUnreachable, err)
+		return fmt.Errorf("%w: %v", oidcseam.ErrUnreachable, err)
 	}
 	return err
 }

@@ -17,6 +17,7 @@ import (
 
 	"github.com/joyautomation/nautilus/auth"
 	"github.com/joyautomation/nautilus/auth/users"
+	"github.com/joyautomation/nautilus/internal/oidcseam"
 )
 
 // fakeOIDC is the provider side of the seam: it hands out an
@@ -25,8 +26,8 @@ import (
 // sign-in started with.
 type fakeOIDC struct {
 	mu       sync.Mutex
-	last     OIDCAuthRequest
-	id       OIDCIdentity
+	last     oidcseam.AuthRequest
+	id       oidcseam.Identity
 	err      error // Exchange's
 	startErr error // AuthCodeURL's
 	badNonce bool
@@ -34,7 +35,7 @@ type fakeOIDC struct {
 
 func (f *fakeOIDC) Provider() string { return "Plant SSO" }
 
-func (f *fakeOIDC) AuthCodeURL(_ context.Context, req OIDCAuthRequest) (string, error) {
+func (f *fakeOIDC) AuthCodeURL(_ context.Context, req oidcseam.AuthRequest) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.startErr != nil {
@@ -44,14 +45,14 @@ func (f *fakeOIDC) AuthCodeURL(_ context.Context, req OIDCAuthRequest) (string, 
 	return "https://idp.example/authorize?state=" + url.QueryEscape(req.State), nil
 }
 
-func (f *fakeOIDC) Exchange(_ context.Context, redirect, code, verifier string) (OIDCIdentity, error) {
+func (f *fakeOIDC) Exchange(_ context.Context, redirect, code, verifier string) (oidcseam.Identity, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
-		return OIDCIdentity{}, f.err
+		return oidcseam.Identity{}, f.err
 	}
 	if redirect != f.last.RedirectURI || verifier != f.last.Verifier || code != "code-1" {
-		return OIDCIdentity{}, errors.New("fake: redirect, verifier or code mismatch")
+		return oidcseam.Identity{}, errors.New("fake: redirect, verifier or code mismatch")
 	}
 	id := f.id
 	id.Nonce = f.last.Nonce
@@ -63,7 +64,7 @@ func (f *fakeOIDC) Exchange(_ context.Context, redirect, code, verifier string) 
 
 func (f *fakeOIDC) as(name, sub string, groups ...string) {
 	f.mu.Lock()
-	f.id = OIDCIdentity{Issuer: "https://idp.example", Subject: sub, Name: name, NameClaim: "preferred_username", Groups: groups}
+	f.id = oidcseam.Identity{Issuer: "https://idp.example", Subject: sub, Name: name, NameClaim: "preferred_username", Groups: groups}
 	f.mu.Unlock()
 }
 
@@ -422,7 +423,7 @@ func TestOIDCGrantsAreItsOwn(t *testing.T) {
 		t.Errorf("no groups: %d %s", cb.Code, cb.Body)
 	}
 	fake.mu.Lock()
-	fake.id = OIDCIdentity{Issuer: "https://idp.example", Subject: "sub-o", Name: "many@corp.example", GroupsOverage: true}
+	fake.id = oidcseam.Identity{Issuer: "https://idp.example", Subject: "sub-o", Name: "many@corp.example", GroupsOverage: true}
 	fake.mu.Unlock()
 	if cb, _ := oidcSignIn(t, srv, fake, "/"); cb.Code != http.StatusForbidden || !strings.Contains(cb.Body.String(), "overage") {
 		t.Errorf("overage: %d %s", cb.Code, cb.Body)
@@ -658,7 +659,7 @@ func TestOIDCCallbackMore(t *testing.T) {
 	if cb, c := oidcSignIn(t, srv, fake, "/"); c != nil || cb.Code != http.StatusForbidden {
 		t.Errorf("too many groups: %d %s", cb.Code, cb.Body)
 	}
-	fake.err = errors.Join(ErrOIDCUnreachable, errors.New("token endpoint: dial tcp: refused"))
+	fake.err = errors.Join(oidcseam.ErrUnreachable, errors.New("token endpoint: dial tcp: refused"))
 	if cb, c := oidcSignIn(t, srv, fake, "/"); c != nil || cb.Code != http.StatusServiceUnavailable || !strings.Contains(cb.Body.String(), "cannot be reached") {
 		t.Errorf("unreachable at the exchange: %d %s", cb.Code, cb.Body)
 	}
