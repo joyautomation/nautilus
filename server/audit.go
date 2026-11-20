@@ -222,11 +222,22 @@ func (a *auditor) record(e audit.Entry) {
 		e.ID = audit.NewID(e.TS)
 	}
 	a.sweepLocked(now, false)
-	if e.Result != audit.ResultOK && !a.admitLocked(e, now) {
+	if e.Result != audit.ResultOK && !resolves(e) && !a.admitLocked(e, now) {
 		return
 	}
 	a.writeLocked(e)
 }
+
+// resolves reports an entry that resolves another (detail.resolves,
+// oplog_unknown.go): never coalesced, since a summary would lose which
+// entry it resolves. Only this server writes them, bounded by the
+// unknowns it answered.
+//
+// detail.resolves must only ever be set server-side (oplog_unknown.go):
+// it exempts an entry from the refusal rate limit, so a value a client
+// or a peer could put there would let it force an fsynced entry per
+// request.
+func resolves(e audit.Entry) bool { return e.Detail["resolves"] != nil }
 
 // recordBatch journals es as one durable batch: each refusal is counted in
 // its window as record would (and those past their allowance are left
@@ -247,7 +258,7 @@ func (a *auditor) recordBatch(es []audit.Entry) {
 		if e.ID == "" {
 			e.ID = audit.NewID(e.TS)
 		}
-		if e.Result != audit.ResultOK && !a.admitLocked(e, now) {
+		if e.Result != audit.ResultOK && !resolves(e) && !a.admitLocked(e, now) {
 			continue
 		}
 		keep = append(keep, e)
@@ -596,12 +607,17 @@ func auditedAnswer(routes *http.ServeMux, w http.ResponseWriter, r *http.Request
 // answer runs h into a buffer, records the entry, then answers.
 func (a *auditedRoute) answer(w http.ResponseWriter, r *http.Request, t auditTarget, h http.HandlerFunc) {
 	buf := &bufferedResponse{header: w.Header()}
+	// The entry's id, decided now: a route that answers "outcome unknown"
+	// links its later resolution to it (oplog_unknown.go).
+	ref := seamRef{id: audit.NewID(a.s.audit.now()), action: a.action, target: capText(t.target, targetMax)}
+	r = withSeamRef(r, ref)
 	h(buf, r)
 	status := buf.status
 	if status == 0 {
 		status = http.StatusOK
 	}
 	e := audit.Entry{
+		ID:      ref.id,
 		User:    a.s.principal(r),
 		Source:  clientSource(r),
 		Action:  a.action,

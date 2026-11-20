@@ -252,6 +252,7 @@ Every command write is journalled, written or refused: action `tag.write`, sourc
 
 ## Limits
 
+- **A pair's controllers trust each other's journal names.** A change passed between them through the operator-intent log carries who made it. A peer that holds the cluster token is trusted to say so truthfully, just as it is trusted with the change itself.
 - **A Sparkplug command is not authenticated.** Its principal, `sparkplug:<host>`, is a label: anyone who can publish to the broker has `sparkplug:`'s grants (see [Sparkplug](#sparkplug)). The broker's own access control decides who may publish.
 - **OPC UA reads are not gated by `auth:` yet.** Reading, browsing and subscribing stay open to every session, anonymous ones included. OPC UA writes are covered (see [OPC UA](#opc-ua)). `naut run` prints a warning saying so whenever `auth:` is set.
 - **`naut historian`'s own port is not covered.** It answers its archive by `localhost`, an IP address or an allowed name, or with `NAUTILUS_TOKEN`, as before, with no roles. Reads through the controller's `/api/history` need `read`; keep the historian's port off networks that shouldn't read the archive.

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/joyautomation/nautilus/alarm"
+	"github.com/joyautomation/nautilus/audit"
 	"github.com/joyautomation/nautilus/oplog"
 	"github.com/joyautomation/nautilus/retain"
 	"github.com/joyautomation/nautilus/runtime"
@@ -107,8 +108,36 @@ type AlarmLog struct {
 
 	clrMu      sync.Mutex
 	clr        []string
-	clrRunning bool
 	clrRetry   time.Duration
+	clrRunning bool
+
+	// seen hears every committed alarm entry this replica proposed, once
+	// applied (observe: the server's unknown-outcome resolutions).
+	seen atomic.Pointer[func(oplog.Entry)]
+	// journal records alarm lapses (observe: the server's journal).
+	journal atomic.Pointer[func([]audit.Entry)]
+	// lapsed holds the lapsed acks and shelves by seq until the KindLapse
+	// naming them is applied (under mu, bounded by maxLapsedAlarms).
+	lapsed map[uint64]oplog.Entry
+}
+
+// maxLapsedAlarms bounds the lapsed entries waiting for their KindLapse.
+const maxLapsedAlarms = 1024
+
+// observe hands the log the server's hooks: seen for each committed entry
+// this replica proposed, journal for an operator's lapsed ack or shelve.
+func (l *AlarmLog) observe(seen func(oplog.Entry), journal func([]audit.Entry)) {
+	l.seen.Store(&seen)
+	l.journal.Store(&journal)
+}
+
+// tell passes e to seen when this replica proposed it. Not while the node
+// replays its file at startup (Attach comes after): what this process did
+// not propose is never resolved by it.
+func (l *AlarmLog) tell(e oplog.Entry) {
+	if f := l.seen.Load(); f != nil && l.node != nil && e.Origin == l.node.Self() {
+		(*f)(e)
+	}
 }
 
 // alarmIntent is the view's state for one alarm.
@@ -165,8 +194,23 @@ func (l *AlarmLog) Apply(e oplog.Entry) (bool, error) {
 	live := l.live()
 	if e.Lapsed && (e.Kind == oplog.KindAck || e.Kind == oplog.KindShelve) {
 		slog.Warn("alarm: an operator's ack or shelve lapsed: it was committed too late to apply to the occurrence it was for", "kind", e.Kind, "ids", e.IDs, "id", e.ID, "by", e.By)
+		l.mu.Lock()
+		if l.lapsed == nil {
+			l.lapsed = map[uint64]oplog.Entry{}
+		}
+		l.lapsed[e.Seq] = e
+		if len(l.lapsed) > maxLapsedAlarms {
+			delete(l.lapsed, slices.Min(slices.Collect(maps.Keys(l.lapsed))))
+		}
+		l.mu.Unlock()
+		l.tell(e)
 		return true, nil
 	}
+	defer func() {
+		if e.Kind == oplog.KindAck || e.Kind == oplog.KindShelve || e.Kind == oplog.KindUnshelve {
+			l.tell(e)
+		}
+	}()
 	switch e.Kind {
 	case oplog.KindAck:
 		l.mu.Lock()
@@ -216,6 +260,7 @@ func (l *AlarmLog) Apply(e oplog.Entry) (bool, error) {
 		// A replica that applied a named ack or shelve before the lapse
 		// reached it (a 3-replica case) drops it from its view; the leader
 		// that wrote the lapse never applied it.
+		l.journalLapse(e)
 		l.mu.Lock()
 		for id, v := range l.view {
 			if v.acked && slices.Contains(e.Refs, v.ackSeq) {
@@ -232,6 +277,49 @@ func (l *AlarmLog) Apply(e oplog.Entry) (bool, error) {
 		return false, nil
 	}
 	return true, nil
+}
+
+// journalLapse records, once, the operators' acks and shelves the lapse e
+// names: alarm.lapse, one entry per alarm, as the operator who made it
+// (Principal, else By), so the journal says the action never took
+// effect. Only the leader that wrote the lapse journals it, and not while
+// the node replays its file (Attach comes after): a standby and a restart
+// stay quiet. Recorded off the apply path (the journal fsyncs).
+func (l *AlarmLog) journalLapse(e oplog.Entry) {
+	l.mu.Lock()
+	var named []oplog.Entry
+	for _, seq := range e.Refs {
+		if le, ok := l.lapsed[seq]; ok {
+			named = append(named, le)
+			delete(l.lapsed, seq)
+		}
+	}
+	l.mu.Unlock()
+	f := l.journal.Load()
+	if f == nil || l.node == nil || e.Origin != l.node.Self() || len(named) == 0 {
+		return
+	}
+	var out []audit.Entry
+	for _, le := range named {
+		ids := le.IDs
+		if le.Kind == oplog.KindShelve {
+			ids = []string{le.ID}
+		}
+		action := "alarm.ack"
+		if le.Kind == oplog.KindShelve {
+			action = "alarm.shelve"
+		}
+		for _, id := range ids {
+			d := map[string]any{"action": action, "seq": le.Seq, "by": le.By, "ts": le.TS,
+				"note": "committed too late to apply to the occurrence it was for: it never took effect"}
+			if le.Kind == oplog.KindShelve {
+				d["untilMs"] = le.Until
+			}
+			out = append(out, audit.Entry{User: principalOfEntryIn(le, d), Source: audit.SourceSystem, Action: "alarm.lapse",
+				Target: id, Result: audit.ResultOK, Detail: d})
+		}
+	}
+	go (*f)(out)
 }
 
 // engineEvent hears the leader's engine (under its lock: no blocking, no
@@ -486,7 +574,7 @@ func (s *Server) alarmAckThroughLog(w http.ResponseWriter, r *http.Request, ids 
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), substituteProposeWait)
 	defer cancel()
-	if _, err := s.alarmLog.node.Propose(ctx, oplog.Entry{Kind: oplog.KindAck, IDs: ids, By: by}); err != nil {
+	if _, err := s.proposeFor(ctx, r, oplog.Entry{Kind: oplog.KindAck, IDs: ids, By: by}, true, s.alarmLog.node.Propose); err != nil {
 		unknownOutcome(w, err)
 		return
 	}
@@ -515,7 +603,7 @@ func (s *Server) shelveThroughLog(w http.ResponseWriter, r *http.Request, id str
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), substituteProposeWait)
 	defer cancel()
-	if _, err := s.alarmLog.node.Propose(ctx, e); err != nil {
+	if _, err := s.proposeFor(ctx, r, e, true, s.alarmLog.node.Propose); err != nil {
 		unknownOutcome(w, err)
 		return
 	}

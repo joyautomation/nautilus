@@ -1228,6 +1228,13 @@ Known limits:
 - A write a standby forwarded, which the leader applied before the
   connection failed, has two entries: `ok` on the leader and a `502` on the
   standby.
+- A pair's substitute or alarm change answered "outcome unknown" is
+  journalled `unknown`. If the controller that answered later sees it in
+  the log, it adds an `oplog.resolved` entry with `detail.resolves` set
+  to the unknown entry's `id` and `detail.outcome` `committed` or
+  `lapsed`. `committed` doesn't prove the change took effect. These
+  entries are added only on evidence and never coalesced (see
+  [redundancy](/guides/redundancy/)).
 - `GET /api/audit` is open when no auth token is set, as every read is
   without an `auth:` block. With one it needs a principal (a signed-in
   user, or a token) with the `audit` permission.
