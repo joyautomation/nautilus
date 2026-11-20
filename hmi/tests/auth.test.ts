@@ -196,8 +196,7 @@ describe('the leader a referral may open', () => {
 		expect(mayFollow(st, 1000 + FOLLOW_GUARD_MS - 1)).toBe(false);
 		expect(mayFollow(st, 1000 + FOLLOW_GUARD_MS)).toBe(true);
 		expect(mayFollow(st, 999)).toBe(true); // a clock set back is not a reason to stick
-		const blocked = { getItem: () => { throw new Error('blocked'); }, setItem: () => {} };
-		expect(mayFollow(blocked, 5)).toBe(true);
+		expect(mayFollow(st, 1000 + FOLLOW_GUARD_MS * 3)).toBe(true);
 	});
 	it('the sign-in page comes back here', () => {
 		expect(signInHref({ pathname: '/screens/pump', search: '?x=1' })).toBe(SIGNIN);
@@ -622,7 +621,7 @@ describe('a late elevation refusal (L3, #1090 review)', () => {
 	});
 });
 
-describe('the loop guard without sessionStorage (L5, #1090 review)', () => {
+describe('without sessionStorage, no follow at all (L5, #1090 review: fail-safe)', () => {
 	const blocked = {
 		getItem: (): string | null => {
 			throw new Error('blocked');
@@ -631,24 +630,28 @@ describe('the loop guard without sessionStorage (L5, #1090 review)', () => {
 			throw new Error('blocked');
 		}
 	};
-	it('falls back to memory: one follow, then none within the guard', () => {
-		const mem = { at: NaN };
-		expect(mayFollow(blocked, 1000, mem)).toBe(true);
-		markFollowed(blocked, 1000, mem);
-		expect(mem.at).toBe(1000);
-		expect(mayFollow(blocked, 1000 + FOLLOW_GUARD_MS - 1, mem)).toBe(false);
-		expect(mayFollow(blocked, 1000 + FOLLOW_GUARD_MS, mem)).toBe(true);
-		const none = { at: NaN };
-		markFollowed(null, 50, none);
-		expect(mayFollow(null, 60, none)).toBe(false);
+	const writeBlocked = { getItem: (): string | null => null, setItem: () => { throw new Error('quota'); } };
+	it('the guard refuses when storage is absent or blocked', () => {
+		expect(mayFollow(null, 1000)).toBe(false);
+		expect(mayFollow(undefined, 1000)).toBe(false);
+		expect(mayFollow(blocked, 1000)).toBe(false);
+		expect(markFollowed(null, 1000)).toBe(false);
+		expect(markFollowed(writeBlocked, 1000)).toBe(false);
 	});
-	it('storage that works is the guard; memory is not consulted', () => {
-		const m = new Map<string, string>();
-		const st = { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => void m.set(k, v) };
-		const mem = { at: 1000 };
-		expect(mayFollow(st, 1001, mem)).toBe(true);
-		markFollowed(st, 2000, mem);
-		expect(m.get(FOLLOW_KEY)).toBe('2000');
-		expect(mem.at).toBe(1000);
-	});
+	for (const [name, storage] of [['absent', null], ['blocked', blocked], ['unwritable', writeBlocked]] as const) {
+		it(`storage ${name}: the page stays, and the referral keeps the leader's link for the person`, async () => {
+			const routes = { '/api/tags': () => json({ error: 'this controller is the standby; open the leader', standby: true, leader: 'https://plc-b.example' }, 503) };
+			const nav: string[] = [];
+			const s = new AuthSession({
+				fetch: async () => routes['/api/tags'](),
+				prompt: async () => null,
+				navigate: (h) => nav.push(h),
+				location: () => ({ href: PAGE, pathname: '/screens/pump', search: '?x=1' }),
+				storage
+			});
+			await s.fetch('/api/tags', WRITE);
+			expect(nav).toEqual([]);
+			expect(s.referral).toEqual({ leader: 'https://plc-b.example/', message: 'this controller is the standby; open the leader' });
+		});
+	}
 });

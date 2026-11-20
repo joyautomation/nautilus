@@ -294,8 +294,9 @@ its own, and listens to the live stream's errors. Then:
 - any other `401`, or a stream that drops, is judged by a fresh `GET /api/me`: a browser that had
   a session and now has none goes to `/signin?next=<this page>`;
 - a standby's `503` (`standby: true`) sends the page to the `leader` URL in its body, only when it
-  is `http(s)`, never `http` from an `https` page, and not again within 30 s (`auth.referral`
-  holds a referral it did not follow, for a banner). The `Location` header is never used;
+  is `http(s)`, never `http` from an `https` page, not again within 30 s, and never without
+  `sessionStorage` to keep that guard in (`auth.referral` holds a referral it did not follow,
+  with the leader's link, for a banner). The `Location` header is never used;
 - `auth.me` is `GET /api/me` as a rune; `auth.holds(perm)` and `auth.needsPassword(perm)` (judged
   by the controller's clock, `me.now`) let a control say ahead of time what will happen.
 

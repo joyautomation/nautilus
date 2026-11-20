@@ -19,8 +19,9 @@
 //     controller names (its configured public URL), never re-sending the
 //     request there, and only to an http(s) URL that does not downgrade an
 //     https page. A second follow within FOLLOW_GUARD_MS is not made (two
-//     controllers each naming the other would bounce the page forever): the
-//     referral is shown instead.
+//     controllers each naming the other would bounce the page forever), and
+//     none is made at all without sessionStorage to keep that guard in: the
+//     referral is shown instead, for the person to click.
 //
 // A controller without an auth: block, or one too old to have /api/me,
 // leaves everything exactly as it was.
@@ -134,41 +135,32 @@ export const FOLLOW_KEY = 'nautilus.followedLeaderAt';
 export type GuardStorage = Pick<Storage, 'getItem' | 'setItem'>;
 
 /**
- * Where the guard is kept when sessionStorage cannot be used (blocked, or
- * absent): in memory, for as long as this page lives.
+ * Whether a referral may be followed now: no follow from here within the
+ * guard. Storage that cannot be used (absent, blocked) means never: with no
+ * guard that outlives the page, two controllers naming each other would
+ * bounce it forever, so the referral is shown for the person to click.
  */
-export interface FollowMemory {
-	at: number;
-}
-
-/**
- * Whether a referral may be followed now (none followed from here within the
- * guard). With storage blocked or absent, `memory` is the guard.
- */
-export function mayFollow(storage: GuardStorage | null | undefined, now: number, memory?: FollowMemory): boolean {
+export function mayFollow(storage: GuardStorage | null | undefined, now: number): boolean {
+	if (!storage) return false;
 	let last = NaN;
-	let usable = !!storage;
 	try {
-		const kept = storage?.getItem(FOLLOW_KEY);
+		const kept = storage.getItem(FOLLOW_KEY);
 		if (kept) last = Number(kept); // none kept is no guard (Number(null) is 0)
 	} catch {
-		usable = false;
+		return false;
 	}
-	if (!usable && memory) last = memory.at;
 	return !(Number.isFinite(last) && now >= last && now - last < FOLLOW_GUARD_MS);
 }
 
-/** Record a follow: in storage, or in memory when storage cannot be written. */
-export function markFollowed(storage: GuardStorage | null | undefined, now: number, memory?: FollowMemory): void {
+/** Record a follow. False when storage cannot be written: then do not follow. */
+export function markFollowed(storage: GuardStorage | null | undefined, now: number): boolean {
+	if (!storage) return false;
 	try {
-		if (storage) {
-			storage.setItem(FOLLOW_KEY, String(now));
-			return;
-		}
+		storage.setItem(FOLLOW_KEY, String(now));
+		return true;
 	} catch {
-		/* blocked: fall back below */
+		return false;
 	}
-	if (memory) memory.at = now;
 }
 
 /**
@@ -257,7 +249,6 @@ export class AuthSession {
 
 	readonly #d: AuthDeps;
 	#hadSession = false;
-	#followed: FollowMemory = { at: NaN };
 	#elevating: Promise<boolean> | null = null;
 	#leaving = false;
 	#probeWait = PROBE_MIN_MS;
@@ -340,8 +331,9 @@ export class AuthSession {
 	#refer(leader: string, message: string) {
 		const target = leaderTarget(leader, this.#d.location().href);
 		const now = this.#now();
-		if (target && mayFollow(this.#d.storage, now, this.#followed)) {
-			markFollowed(this.#d.storage, now, this.#followed);
+		// Followed only with a guard that outlives this page; otherwise the
+		// referral (with the leader's link) is kept for the person to click.
+		if (target && mayFollow(this.#d.storage, now) && markFollowed(this.#d.storage, now)) {
 			this.#leave(target);
 			return;
 		}

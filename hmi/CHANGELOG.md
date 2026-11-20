@@ -10,7 +10,8 @@
   once, byte for byte (one prompt for concurrent refusals; cancel returns the refusal); any other
   `401`, or a dropped stream, is judged by a fresh `/api/me`, and a sign-in that has ended goes
   to `/signin?next=`; a standby's `503` sends the page to the `leader` it names (http(s) only, no
-  https→http, a 30 s loop guard, never the `Location` header). Does nothing without `auth:`. The
+  https→http, a 30 s loop guard kept in `sessionStorage` and no follow without it, never the
+  `Location` header). Does nothing without `auth:`. The
   pure rules (`leaderTarget`, `needsPassword`, `refusalMessage`, …) are exported and tested.
 - **`askPassword`, and a password mode in `<ConfirmDialog/>`** (#708): the elevation prompt.
   Resolves to what was typed, or null; with no dialog mounted it resolves null at once (never a
