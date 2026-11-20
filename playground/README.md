@@ -68,6 +68,18 @@ database), with a size cap, a rate limit, and a way to take one down
 
     go run ./playground/share -data /tmp/shares -site website/dist -addr 127.0.0.1:5181
 
+## The interactive tutorial
+
+`/learn/interactive/<lesson>/` on the docs site (website/src/pages/learn/interactive/[id].astro)
+frames this app with `?tutorial=1` beside a lesson's text, with Check, Solve, Next and
+Start over. Lessons are folders in `website/lessons/<id>/` (`lesson.md`, `start/`,
+`solution/`, hidden `check/`), bundled by `website/scripts/sync-lessons.mjs`. In tutorial
+mode nothing is kept by keep.js (the page keeps the learner's files in localStorage) and
+`window.nautilusPlayground.lesson` (`lessonApi` in main.js) swaps the project in place:
+`load({files, open})`, `files()`, `check(tests)`. Check writes the hidden test files,
+runs the wasm test runner, and removes them. `node --test playground/app/tutorial.browser.test.mjs`
+drives it (the shell part needs `npm run build` in website/).
+
 ## Custom components
 
 A project's own `{Name}.svelte` components render in the mimic editor as

@@ -49,6 +49,21 @@ export class EngineFileSystem {
 		});
 	}
 
+	/**
+	 * The whole project was replaced behind the workbench's back (the
+	 * tutorial's Solve and Next): tell it what went and what came, so the
+	 * explorer, the editors' models and the extension's file watchers follow.
+	 * before and after are the relative paths.
+	 */
+	replaced(before, after) {
+		const at = (rel) => ({ scheme: 'file', path: this.root + '/' + rel });
+		const kept = new Set(after);
+		this._onDidChangeFile.fire([
+			...before.filter((p) => !kept.has(p)).map((p) => ({ type: FileChangeType.DELETED, resource: at(p) })),
+			...after.map((p) => ({ type: before.includes(p) ? FileChangeType.UPDATED : FileChangeType.ADDED, resource: at(p) }))
+		]);
+	}
+
 	/** Only paths under root belong to the engine; anything else is not ours. */
 	owns(resource) {
 		return resource.path === this.root || resource.path.startsWith(this.root + '/');

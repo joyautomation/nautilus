@@ -14,3 +14,5 @@ src/data/verified.json
 src/data/runtime.json
 # copied from ../playground/dist by scripts/sync-playground.mjs
 public/playground/
+# bundled from ../lessons by scripts/sync-lessons.mjs
+public/learn/lessons/

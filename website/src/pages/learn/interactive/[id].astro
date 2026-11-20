@@ -1,0 +1,433 @@
+---
+// /learn/interactive/<lesson>/ — an interactive lesson: the text on the left,
+// the playground on the right, loaded with the step's start project.
+// Check runs the step's hidden tests in the browser (the wasm test runner),
+// Solve loads the solution, Next moves to the next lesson carrying the
+// files its carry: names from the learner's work. The projects are swapped in the one running playground
+// (window.nautilusPlayground.lesson, playground/app/main.js), which is never
+// reloaded. The lesson folders and the bundling: website/lessons/,
+// scripts/sync-lessons.mjs. A phone gets the text and a way to open it on a
+// desktop; the playground is not started there.
+import { getCollection, render } from 'astro:content';
+import '../../../styles/fonts.css';
+import logo from '../../../assets/logo.svg';
+
+export async function getStaticPaths() {
+  return (await getCollection('lessons')).map((entry) => ({ params: { id: entry.id }, props: { entry } }));
+}
+const { entry } = Astro.props;
+const { Content } = await render(entry);
+const id = entry.id;
+const title = `${entry.data.title} | nautilus tutorial`;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="color-scheme" content="dark" />
+    <meta name="robots" content="noindex" />
+    <link rel="icon" href="/favicon.png" />
+  </head>
+  <body data-lesson={id}>
+    <header class="bar">
+      <a class="brand" href="/" title="nautilus documentation">
+        <img src={logo.src} alt="" width="22" height="22" />
+        <span>nautilus</span>
+      </a>
+      <span class="what">Interactive tutorial · runs in your browser, nothing to install</span>
+    </header>
+    <div class="split">
+      <section class="lesson" aria-label="Lesson">
+        <article class="text">
+          <h1>{entry.data.title}</h1>
+          <Content />
+        </article>
+        <div class="phone-note" id="phone-note">
+          <p><strong>This lesson needs a desktop.</strong> The editor on the right is VS Code running in the browser, and it is too cramped on a phone. Open this page on a laptop or desktop to try it. You can read the lesson here.</p>
+          <p><button type="button" id="send-link">Send this link to myself</button></p>
+        </div>
+        <div class="controls" role="group" aria-label="Lesson controls">
+          <button type="button" id="check" class="primary" disabled>Check</button>
+          <button type="button" id="solve" disabled>Solve</button>
+          <button type="button" id="next" disabled>Next</button>
+          <button type="button" id="reset" disabled title="Back to this step's starting project">Start over</button>
+        </div>
+        <div class="result" id="result" role="status" aria-live="polite" hidden></div>
+      </section>
+      <section class="stage" id="stage" aria-label="Playground">
+        <p class="note" id="note">Loading the playground…</p>
+      </section>
+    </div>
+  </body>
+</html>
+
+<script>
+  type Files = Record<string, string>;
+  type Lesson = { id: string; title: string; next: string | null; carry: string[]; open: string[]; start: Files; solution: Files; check: Files };
+  type Rec = { name?: string; passed?: boolean; error?: string; failure?: { atMs: number; reason: string; detail?: string } };
+  type Api = { load(p: { files: Files; open: string[] }): Promise<void>; files(): Promise<Files>; check(t: Files): Promise<Rec[]> };
+
+  const id = document.body.dataset.lesson!;
+  const $ = <T extends HTMLElement>(s: string) => document.getElementById(s) as T;
+  const buttons = { check: $<HTMLButtonElement>('check'), solve: $<HTMLButtonElement>('solve'), next: $<HTMLButtonElement>('next'), reset: $<HTMLButtonElement>('reset') };
+  const result = $('result');
+  const note = $('note');
+
+  const phone = matchMedia('(max-width: 800px)').matches || new URLSearchParams(location.search).get('phone') === '1';
+  const key = (lesson: string) => `nautilus-lesson:${lesson}`;
+  const store = {
+    get(lesson: string): Files | null {
+      try {
+        return JSON.parse(localStorage.getItem(key(lesson)) ?? 'null');
+      } catch {
+        return null;
+      }
+    },
+    set(lesson: string, files: Files | null) {
+      try {
+        if (files) localStorage.setItem(key(lesson), JSON.stringify(files));
+        else localStorage.removeItem(key(lesson));
+      } catch {
+        // No storage: the work lasts until the page closes.
+      }
+    }
+  };
+  const getLesson = async (lesson: string): Promise<Lesson> => {
+    const r = await fetch(`/learn/lessons/${encodeURIComponent(lesson)}.json`);
+    if (!r.ok) throw new Error(`no lesson ${lesson}`);
+    return r.json();
+  };
+
+  function show(kind: 'ok' | 'bad' | 'info', ...parts: (string | HTMLElement)[]) {
+    result.hidden = false;
+    result.className = `result ${kind}`;
+    result.replaceChildren(...parts.map((p) => (typeof p === 'string' ? Object.assign(document.createElement('p'), { textContent: p }) : p)));
+  }
+
+  /** The tests' answer, in the words the lesson's author gave each one. */
+  function report(records: Rec[]) {
+    const bad = records.find((r) => r.error);
+    if (bad) return show('bad', 'The project could not be checked yet:', Object.assign(document.createElement('pre'), { textContent: bad.error }));
+    const failed = records.filter((r) => r.passed === false);
+    if (!records.length) return show('bad', 'There was nothing to check.');
+    if (!failed.length) return show('ok', `All ${records.length} checks pass.`, ...(lesson.next ? ['Press Next to carry on.'] : ['That is the last lesson for now.']));
+    const ul = document.createElement('ul');
+    for (const f of failed) {
+      const li = document.createElement('li');
+      li.textContent = f.name ?? 'a check';
+      if (f.failure) {
+        const why = document.createElement('small');
+        why.textContent = `At ${(f.failure.atMs / 1000).toFixed(1)} s: ${f.failure.reason}`;
+        li.append(document.createElement('br'), why);
+      }
+      ul.append(li);
+    }
+    show('bad', `${failed.length} of ${records.length} checks still fail:`, ul);
+  }
+
+  let lesson: Lesson;
+  let api: Api;
+  let frame: HTMLIFrameElement;
+  let busy = false;
+  const guard = (fn: () => Promise<void>) => async () => {
+    if (busy) return;
+    busy = true;
+    Object.values(buttons).forEach((b) => (b.disabled = true));
+    try {
+      await fn();
+    } catch (e) {
+      show('bad', e instanceof Error ? e.message : String(e));
+    } finally {
+      busy = false;
+      buttons.check.disabled = buttons.solve.disabled = buttons.reset.disabled = false;
+      buttons.next.disabled = !lesson.next;
+    }
+  };
+
+  /** Loads a project into the running playground and keeps the learner's work. */
+  const load = async (files: Files) => {
+    await api.load({ files, open: lesson.open });
+  };
+  const save = async () => store.set(id, await api.files());
+
+  $('send-link').addEventListener('click', async () => {
+    try {
+      if (navigator.share) return void (await navigator.share({ title: document.title, url: location.href }));
+      await navigator.clipboard.writeText(location.href);
+      $('send-link').textContent = 'Link copied';
+    } catch {
+      // Cancelled or unavailable.
+    }
+  });
+
+  async function main() {
+    lesson = await getLesson(id);
+    $('phone-note').hidden = !phone;
+    document.querySelector('.controls')!.toggleAttribute('hidden', phone);
+    if (phone) {
+      $('stage').hidden = true;
+      return;
+    }
+    if (!isSecureContext) {
+      note.textContent = 'The playground needs a secure page: open this over https or on localhost.';
+      return;
+    }
+    // The learner's own work from an earlier visit opens instead of the start.
+    const mine = store.get(id);
+    frame = document.createElement('iframe');
+    frame.title = 'Playground';
+    frame.src = `/playground/engine/app/?tutorial=1&project=${encodeURIComponent(`/learn/lessons/${id}.start.json`)}`;
+    $('stage').append(frame);
+    await new Promise<void>((ok, no) => {
+      const timer = setTimeout(() => no(new Error('The playground did not start.')), 180_000);
+      const poll = setInterval(() => {
+        try {
+          const lessonApi = (frame.contentWindow as unknown as { nautilusPlayground?: { lesson?: Api } }).nautilusPlayground?.lesson;
+          if (lessonApi) {
+            api = lessonApi;
+            clearInterval(poll);
+            clearTimeout(timer);
+            ok();
+          }
+        } catch {
+          // Not loaded yet.
+        }
+      }, 300);
+    });
+    note.remove();
+    if (mine) await load(mine);
+    buttons.check.disabled = buttons.solve.disabled = buttons.reset.disabled = false;
+    buttons.next.disabled = !lesson.next;
+  }
+
+  buttons.check.addEventListener(
+    'click',
+    guard(async () => {
+      show('info', 'Checking…');
+      report(await api.check(lesson.check));
+      await save();
+    })
+  );
+  buttons.solve.addEventListener(
+    'click',
+    guard(async () => {
+      await load(lesson.solution);
+      await save();
+      show('info', 'The solution is loaded. Read it, then press Check, or Start over to try it yourself.');
+    })
+  );
+  buttons.reset.addEventListener(
+    'click',
+    guard(async () => {
+      store.set(id, null);
+      await load(lesson.start);
+      show('info', 'Back to the starting project.');
+    })
+  );
+  buttons.next.addEventListener(
+    'click',
+    guard(async () => {
+      if (!lesson.next) return;
+      const mine = await api.files();
+      store.set(id, mine);
+      const next = await getLesson(lesson.next);
+      // Only the files the next lesson lists in carry: come from their work; the
+      // rest (the manifest, say, which a step may change) is the next step's own.
+      const carried = { ...next.start, ...Object.fromEntries(Object.entries(mine).filter(([n]) => next.carry.includes(n))) };
+      store.set(next.id, carried);
+      location.assign(`/learn/interactive/${next.id}/`);
+    })
+  );
+
+  main().catch((e) => {
+    note.textContent = e instanceof Error ? e.message : String(e);
+  });
+</script>
+
+<style>
+  :global(html),
+  :global(body) {
+    height: 100%;
+  }
+  :global(body) {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    background: #1f1f1f;
+    color: #ccc;
+    font: 15px/1.55 'Space Grotesk Variable', ui-sans-serif, system-ui, sans-serif;
+  }
+  .bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 6px 16px;
+    background: #181818;
+    border-bottom: 1px solid #2b2b2b;
+    font-size: 13px;
+  }
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #64d88a;
+    text-decoration: none;
+    font: 17px/1 'Righteous', 'Space Grotesk Variable', sans-serif;
+  }
+  .what {
+    color: #9d9d9d;
+  }
+  .split {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(320px, 36%) 1fr;
+  }
+  .lesson {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    border-right: 1px solid #2b2b2b;
+  }
+  .text {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 20px 16px;
+  }
+  .text h1 {
+    font: 24px/1.25 'Righteous', 'Space Grotesk Variable', sans-serif;
+    color: #eee;
+  }
+  .text :global(h2) {
+    color: #eee;
+    font-size: 18px;
+    margin-top: 1.6em;
+  }
+  .text :global(a) {
+    color: #3794ff;
+  }
+  .text :global(code) {
+    background: #2b2b2b;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font: 13px 'IBM Plex Mono', ui-monospace, monospace;
+  }
+  .text :global(pre) {
+    background: #181818;
+    padding: 10px 12px;
+    border-radius: 4px;
+    overflow-x: auto;
+  }
+  .text :global(pre code) {
+    background: none;
+    padding: 0;
+  }
+  .controls {
+    display: flex;
+    gap: 8px;
+    padding: 10px 20px;
+    border-top: 1px solid #2b2b2b;
+    background: #181818;
+  }
+  .controls[hidden] {
+    display: none;
+  }
+  button {
+    font: inherit;
+    font-size: 13px;
+    padding: 5px 14px;
+    border-radius: 3px;
+    border: 1px solid #3c3c3c;
+    background: #2b2b2b;
+    color: #ddd;
+    cursor: pointer;
+  }
+  button:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  button.primary {
+    background: #1a7f45;
+    border-color: #1a7f45;
+    color: #fff;
+  }
+  button:focus-visible {
+    outline: 2px solid #3794ff;
+    outline-offset: 1px;
+  }
+  .controls #next {
+    margin-left: auto;
+  }
+  .result {
+    padding: 10px 20px;
+    font-size: 14px;
+    max-height: 35%;
+    overflow-y: auto;
+    border-top: 1px solid #2b2b2b;
+  }
+  .result[hidden] {
+    display: none;
+  }
+  .result p,
+  .result ul {
+    margin: 0 0 6px;
+  }
+  .result.ok {
+    background: #12301f;
+    color: #9be3b4;
+  }
+  .result.bad {
+    background: #3a1f1f;
+    color: #f0b4b4;
+  }
+  .result small {
+    color: #d49a9a;
+  }
+  .result pre {
+    white-space: pre-wrap;
+    margin: 0;
+  }
+  .stage {
+    display: flex;
+    min-width: 0;
+    min-height: 0;
+  }
+  .stage :global(iframe) {
+    flex: 1;
+    width: 100%;
+    border: 0;
+  }
+  .note {
+    margin: auto;
+    padding: 16px;
+    text-align: center;
+  }
+  .phone-note {
+    display: none;
+    margin: 0 16px 16px;
+    padding: 4px 14px;
+    background: #2a2a2a;
+    border-radius: 4px;
+  }
+  @media (max-width: 800px) {
+    .split {
+      display: block;
+      overflow-y: auto;
+    }
+    .lesson {
+      border: 0;
+    }
+    .stage {
+      display: none;
+    }
+    .phone-note {
+      display: block;
+    }
+    .phone-note[hidden] {
+      display: none;
+    }
+  }
+</style>
