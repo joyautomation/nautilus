@@ -51,6 +51,11 @@ for (const page of pages) {
     let u = m[1];
     if (!u.startsWith('/') && !u.startsWith('#')) continue; // external, mailto, relative asset
     if (u.startsWith('//')) continue;
+    // The playground's HMI pages link to /playground/engine/view/<name>/_app/…,
+    // which no file in dist/ holds: its service worker serves that prefix from
+    // hmi-packs.tgz at runtime, so the links work in a browser and can't be
+    // checked here.
+    if (u.startsWith('/playground/engine/view/')) continue;
     const [path, frag] = u.split('#');
     const target = path === '' ? here : path.split('?')[0];
     if (!exists(target)) { bad.push(`${here}: ${u} (no such page or file)`); continue; }
