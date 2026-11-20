@@ -526,15 +526,16 @@ func (a *auditedRoute) answer(w http.ResponseWriter, r *http.Request, t auditTar
 		status = http.StatusOK
 	}
 	e := audit.Entry{
-		User:   a.s.principal(r),
-		Source: clientSource(r),
-		Action: a.action,
-		Target: capText(t.target, targetMax),
-		Before: t.before,
-		After:  t.after,
-		Detail: t.detail,
-		From:   a.s.clientAddr(r),
-		Result: resultOf(status),
+		User:    a.s.principal(r),
+		Source:  clientSource(r),
+		Action:  a.action,
+		Target:  capText(t.target, targetMax),
+		Before:  t.before,
+		After:   t.after,
+		Detail:  t.detail,
+		From:    a.s.clientAddr(r),
+		Session: a.s.sessionOfEntry(r),
+		Result:  resultOf(status),
 	}
 	if buf.header.Get(outcomeHeader) == "unknown" {
 		// Passed to the replicated log, not confirmed: it may still take

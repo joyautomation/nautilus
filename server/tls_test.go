@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/joyautomation/nautilus/audit"
 	"github.com/joyautomation/nautilus/leader"
 )
 
@@ -459,39 +460,71 @@ func TestRenewalWithAWorldReadableKeyIsRefused(t *testing.T) {
 	}
 }
 
-// What the leader judges "secure" for a request a standby forwarded is
-// the standby-to-leader hop (TLS here), not the client's request to the
-// standby (plain here): /api/me through the standby says secure. 5b must
-// decide password sign-in and Secure cookies at the hop the client
-// reached, not after a forward (#708 5b plan).
-func TestSecureThroughAStandbyIsTheForwardHop(t *testing.T) {
+// Sign-in, sign-out and /api/me are decided at the box the client
+// reached, never forwarded (the #1043 review's must-do): at the leader,
+// secure() would judge the standby's TLS hop, not the client's plain one.
+// A forwarding standby answers /api/me itself, and refers sign-in,
+// sign-out and any request with the sign-in cookie (and no bearer) to the
+// leader: 503, its address in Location and "leader", the cookie left as it
+// is. The leader sees none of them; a bearer request is still forwarded.
+func TestStandbyDecidesSignInAndMeItself(t *testing.T) {
 	dir := t.TempDir()
 	cp, kp, _ := writeCert(t, dir, "plc", "plc.example")
-	lsrc, err := NewCertSource(cp, kp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	leaderSrv := New(newTestRuntime(t), Options{TLS: lsrc})
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	hs := &http.Server{Handler: leaderSrv.Handler()}
-	go hs.Serve(tls.NewListener(ln, lsrc.Config()))
-	t.Cleanup(func() { hs.Close() })
+	addr, hits := tlsLeader(t, cp, kp)
 	mine, err := NewCertSource(cp, kp)
 	if err != nil {
 		t.Fatal(err)
 	}
-	standby := New(newTestRuntime(t), Options{TLS: mine, Cluster: fakeCluster{status: leader.Status{
-		Mode: "cluster", Pod: "plc-1", Leader: "plc-0", LeaderAddr: ln.Addr().String(),
+	standby := New(newTestRuntime(t), Options{TLS: mine, AuthToken: "tok", Cluster: fakeCluster{status: leader.Status{
+		Mode: "cluster", Pod: "plc-1", Leader: "plc-0", LeaderAddr: addr,
 	}}})
-	r := httptest.NewRequest("GET", "http://localhost/api/me", nil) // no TLS
-	if standby.secure(r) {
-		t.Fatal("the plain request is secure at the standby")
+	req := func(method, path string, mod ...func(*http.Request)) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, "http://10.0.0.7/api/"+path, strings.NewReader(`{"name":"akhan","password":"pw"}`))
+		r.RemoteAddr = "192.0.2.9:5555" // plain HTTP, not loopback
+		r.Header.Set("Origin", "http://10.0.0.7")
+		for _, m := range mod {
+			m(r)
+		}
+		return serve(standby, r)
 	}
-	rec := serve(standby, r)
-	if !strings.Contains(rec.Body.String(), `"secure":true`) {
-		t.Errorf("/api/me forwarded over TLS: %s", rec.Body)
+	cookie := func(r *http.Request) { r.AddCookie(&http.Cookie{Name: sessionCookie, Value: "some-session"}) }
+
+	rec := req("GET", "me")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"secure":false`) {
+		t.Errorf("/api/me without a cookie: %d %s, want the standby's own answer (secure false)", rec.Code, rec.Body)
+	}
+	for _, c := range []struct {
+		method, path string
+		mod          []func(*http.Request)
+	}{
+		{"POST", "signin", nil},
+		{"POST", "signout", []func(*http.Request){cookie}},
+		// Never forwarded, whatever else it carries.
+		{"POST", "signout", nil},
+		{"GET", "me", []func(*http.Request){cookie}},
+		{"GET", "state", []func(*http.Request){cookie}},
+		{"POST", "tags", []func(*http.Request){cookie}},
+	} {
+		rec := req(c.method, c.path, c.mod...)
+		want := "https://" + addr
+		if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Location") != want+"/" || !strings.Contains(rec.Body.String(), `"leader":"`+want+`"`) {
+			t.Errorf("%s /api/%s on the standby: %d Location %q %s; want 503 naming %s", c.method, c.path, rec.Code, rec.Header().Get("Location"), rec.Body, want)
+		}
+		if sc := rec.Header().Values("Set-Cookie"); len(sc) > 0 {
+			t.Errorf("%s /api/%s on the standby set a cookie: %v", c.method, c.path, sc)
+		}
+	}
+	if n := hits(); n != 0 {
+		t.Fatalf("the leader received %d requests, want none", n)
+	}
+	// A cookie-carrying write the standby refers is journalled through the
+	// route's seam, as its other own answers are.
+	if es := standby.audit.ring.Recent(); len(es) == 0 || es[0].Action != "tag.write" || es[0].Result != audit.ResultError {
+		t.Errorf("the referred write is not journalled: %+v", es)
+	}
+	// A bearer credential is forwarded as before, cookie or not.
+	req("GET", "state", cookie, func(r *http.Request) { r.Header.Set("Authorization", "Bearer tok") })
+	if n := hits(); n != 1 {
+		t.Errorf("a bearer request with a cookie: the leader received %d, want 1", n)
 	}
 }

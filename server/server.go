@@ -301,7 +301,8 @@ type Options struct {
 	// else a same-origin request). With it, every write route asks the
 	// policy (authorize), NAUTILUS_TOKEN is the principal "token" with the
 	// block's token-role, and GET /api/audit needs the audit permission.
-	// Reads are not gated yet: that comes with sign-in (#708 PR 5).
+	// Reads are not gated yet: that comes with the read gate (#708 PR
+	// 5b-2). Users with a users file sign in by browser (signin.go).
 	Auth *auth.Policy
 
 	// ServiceTokens are the service tokens' secrets, by name (naut run
@@ -575,7 +576,9 @@ type Server struct {
 	tagGen  uint64
 	tagSnap map[string]any
 
-	users *users.Store
+	users    *users.Store
+	sessions *sessions // browser sign-ins; nil without users to sign in
+	signin   *signInGate
 
 	// unforceAllChecked, when set (tests only), runs between clear-all's
 	// check of the forced tags and its clearing of them.
@@ -669,6 +672,10 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 		}
 		if u := opts[0].Users; u != nil {
 			s.users = u
+			if s.policy != nil {
+				s.sessions = newSessions(s.policy.Session())
+				s.signin = newSignInGate()
+			}
 			u.OnChange(s.journalUsersChange)
 			u.OnHealth(s.journalUsersHealth)
 			// What changed while the controller was stopped.
@@ -823,6 +830,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/cluster", s.handleCluster)
 	mux.HandleFunc("GET /api/audit", s.handleAudit)
 	mux.HandleFunc("GET /api/me", s.handleMe)
+	// Sign-in and sign-out journal themselves (auth.signin, auth.signout),
+	// outside the audited seam: TestEveryWriteRouteIsAudited names them.
+	mux.HandleFunc("GET /signin", s.handleSignInPage)
+	mux.HandleFunc("POST /api/signin", s.handleSignIn)
+	mux.HandleFunc("POST /api/signout", s.handleSignOut)
 	mux.HandleFunc("GET /api/history", s.handleHistory)
 	mux.HandleFunc("GET /api/history/", s.handleHistory)
 	if s.hmi != nil {
@@ -936,6 +948,22 @@ func (s *Server) proxyStandby(routes *http.ServeMux, mux http.Handler) http.Hand
 			})
 			return
 		}
+		// Sign-in, sign-out and /api/me are decided at the box the client
+		// reached, never forwarded: secure() at the leader would judge the
+		// standby's hop, not the client's (#1043 review). Sessions live on
+		// the leader (#708 decision (c)), so a sign-in here, a sign-out
+		// (only the leader can revoke the session) and any request with
+		// the sign-in cookie and no bearer credential are referred to it.
+		if standbyRefers(r) {
+			auditedAnswer(routes, w, r, func(w http.ResponseWriter, _ *http.Request) {
+				s.referToLeader(w, st.LeaderAddr)
+			})
+			return
+		}
+		if r.URL.Path == "/api/me" {
+			mux.ServeHTTP(w, r)
+			return
+		}
 		// The body is kept so a request the leader never received can be
 		// replayed to its successor (forwardTo). API bodies are small; one
 		// past the cap is forwarded once, without the replay.
@@ -957,6 +985,55 @@ func (s *Server) proxyStandby(routes *http.ServeMux, mux http.Handler) http.Hand
 		}
 		s.forwardTo(w, r, st.LeaderAddr, routes, mux, body, true)
 	})
+}
+
+// standbyRefers reports a request a forwarding standby answers with the
+// leader's address: sign-in, sign-out, and anything sent with the sign-in
+// cookie and no bearer credential. The standby holds no sessions, so it
+// goes by the cookie being there, valid or not.
+func standbyRefers(r *http.Request) bool {
+	switch r.URL.Path {
+	case "/api/signin", "/api/signout":
+		return true
+	}
+	return hasSessionCookie(r) && presentedToken(r) == ""
+}
+
+// leaderOrigin is the leader's tag API as a browser would address it,
+// from the peer address it advertises (which a browser may not reach
+// until #716's floating address).
+func (s *Server) leaderOrigin(addr string) string {
+	if s.leaderTLS != nil {
+		return "https://" + addr
+	}
+	return "http://" + addr
+}
+
+// referToLeader is a forwarding standby's answer to a browser session's
+// request: 503, the leader's address in Location and in "leader", for the
+// HMI kit to follow. The cookie is left as it is: only the leader can end
+// the session it names.
+func (s *Server) referToLeader(w http.ResponseWriter, addr string) {
+	leader := s.leaderOrigin(addr)
+	w.Header().Set("Location", leader+"/")
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+		"error":  "this controller is the standby; use the leader (browser sign-ins live on the leader)",
+		"leader": leader,
+	})
+}
+
+// standbyLeader is the leader's origin when this controller is a standby
+// that forwards to it.
+func (s *Server) standbyLeader() (string, bool) {
+	if s.cluster == nil {
+		return "", false
+	}
+	st := s.cluster.Status()
+	if st.IsLeader || st.LeaderAddr == "" || noLeaderKnown(st) || heldHere(st) {
+		return "", false
+	}
+	return s.leaderOrigin(st.LeaderAddr), true
 }
 
 // heldHere reports a replica that the lease names but that is not leading:

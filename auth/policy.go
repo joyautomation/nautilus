@@ -5,6 +5,7 @@ import (
 	"path"
 	"sort"
 	"strings"
+	"time"
 )
 
 // Settings is a manifest's auth: block, already parsed (internal/project
@@ -28,7 +29,20 @@ type Settings struct {
 	// ServiceTokens are named tokens for scripts and services, each with
 	// its grants, like a user's. Their secrets are not here either.
 	ServiceTokens map[string][]Grant
+	// Session is how long a browser sign-in lasts, from the moment of
+	// sign-in (absolute, not renewed by use): 0 is DefaultSession.
+	Session time.Duration
 }
+
+// DefaultSession is a sign-in's lifetime when auth.session is not set:
+// one shift plus handover.
+const DefaultSession = 12 * time.Hour
+
+// MinSession and MaxSession bound auth.session.
+const (
+	MinSession = time.Minute
+	MaxSession = 7 * 24 * time.Hour
+)
 
 // RoleDef is a custom role.
 type RoleDef struct {
@@ -50,6 +64,7 @@ type Policy struct {
 	token     []Grant
 	services  map[string][]Grant
 	users     map[string][]Grant
+	session   time.Duration
 }
 
 // Compile checks c and builds its Policy. Every name it refers to must
@@ -60,6 +75,13 @@ func Compile(c Settings) (*Policy, error) {
 		services: map[string][]Grant{}, users: map[string][]Grant{}}
 	for name, set := range builtinRoles {
 		p.roles[name] = set
+	}
+	p.session = c.Session
+	if p.session == 0 {
+		p.session = DefaultSession
+	}
+	if p.session < MinSession || p.session > MaxSession {
+		return nil, fmt.Errorf("auth: session %s is out of range: give 1m to 168h (default 12h)", c.Session)
 	}
 
 	for name, pats := range c.Areas {
@@ -263,6 +285,14 @@ func (p *Policy) ServiceTokens() []string {
 	sort.Strings(out)
 	return out
 }
+
+// Session is how long a browser sign-in lasts (auth.session), from the
+// sign-in.
+func (p *Policy) Session() time.Duration { return p.session }
+
+// HasUser reports whether the block grants the user name anything: a box
+// user it does not name may not sign in.
+func (p *Policy) HasUser(name string) bool { return len(p.users[lower(name)]) > 0 }
 
 // HasUsers reports whether the block grants any user a role: without
 // one, no local user could do anything, and a controller needs no users
