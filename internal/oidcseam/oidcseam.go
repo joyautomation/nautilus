@@ -5,7 +5,7 @@
 //
 // It is internal on purpose: Options.OIDC's type cannot be named, nor
 // implemented, from outside the module, so the seam is not stable Go API
-// while #708 may still change its shape (elevation at the provider, 6b).
+// while #708 may still change its shape (elevation at the provider came in 6b).
 // Revisit when #708 closes. It imports only the standard library.
 package oidcseam
 
@@ -39,6 +39,11 @@ type AuthRequest struct {
 	State       string
 	Nonce       string
 	Verifier    string // the PKCE verifier; the URL carries its S256 challenge
+	// Login asks the provider for the person's credentials again, whatever
+	// session it holds for them (prompt=login, max_age=0): a re-
+	// authentication for the elevated permissions (#708 PR 6b). OIDC Core
+	// then requires auth_time in the ID token.
+	Login bool
 }
 
 // Identity is what a verified ID token says.

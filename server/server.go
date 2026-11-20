@@ -608,6 +608,7 @@ type Server struct {
 	// flows under way and the configured redirect URI go with it.
 	oidc         oidcseam.Provider
 	oidcFlows    *oidcFlows
+	oidcTickets  *oidcTickets
 	oidcRedirect string
 
 	// unforceAllChecked, when set (tests only), runs between clear-all's
@@ -729,7 +730,7 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 				s.sessions.OnEnd(s.endSessionStreams)
 				s.signin = newSignInGate()
 				if opts[0].OIDC != nil && s.policy.OIDC() {
-					s.oidc, s.oidcFlows, s.oidcRedirect = opts[0].OIDC, newOIDCFlows(), opts[0].OIDCRedirectURL
+					s.oidc, s.oidcFlows, s.oidcTickets, s.oidcRedirect = opts[0].OIDC, newOIDCFlows(), newOIDCTickets(), opts[0].OIDCRedirectURL
 				}
 			}
 			u.OnChange(s.journalUsersChange)
@@ -897,6 +898,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/elevate", s.handleElevate)
 	mux.HandleFunc("GET /auth/oidc/start", s.handleOIDCStart)
 	mux.HandleFunc("GET /auth/oidc/callback", s.handleOIDCCallback)
+	mux.HandleFunc("GET /auth/oidc/elevated", s.handleOIDCElevated)
 	mux.HandleFunc("GET /api/history", s.handleHistory)
 	mux.HandleFunc("GET /api/history/", s.handleHistory)
 	if s.hmi != nil {
@@ -1058,7 +1060,7 @@ func (s *Server) proxyStandby(routes *http.ServeMux, mux http.Handler) http.Hand
 // goes by the cookie being there, valid or not.
 func standbyRefers(r *http.Request) bool {
 	switch r.URL.Path {
-	case "/api/signin", "/api/signout", "/api/elevate", oidcStartPath, oidcCallbackPath:
+	case "/api/signin", "/api/signout", "/api/elevate", oidcStartPath, oidcCallbackPath, oidcElevatedPath:
 		return true
 	}
 	return hasSessionCookie(r) && presentedToken(r) == ""

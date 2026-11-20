@@ -313,15 +313,11 @@ func (s *Server) elevationRefused(a actor, perm string) (int, string) {
 	}
 	if a.session.oidc {
 		// Not ElevationNeeded: the HMI must not ask for a password that
-		// does not exist (6b adds re-authentication at the provider).
-		return http.StatusUnauthorized, fmt.Sprintf("%s needs credentials entered at the provider within the last %s (auth.elevation): %s", perm, shortDuration(s.policy.Elevation()), oidcElevateFix)
+		// does not exist. It sends the page to the provider instead.
+		return http.StatusUnauthorized, fmt.Sprintf("%s: %s needs credentials entered at the provider within the last %s (auth.elevation). The HMI sends you there (GET %s). Signing in again here does not help while the provider still holds your sign-in there: sign out at the provider first", ElevationAtProvider, perm, shortDuration(s.policy.Elevation()), OIDCElevateURL)
 	}
 	return http.StatusUnauthorized, fmt.Sprintf("%s: sign in again (/signin), or enter your password where the HMI asks for it (POST /api/elevate). %s needs a password entered within the last %s (auth.elevation)", ElevationNeeded, perm, shortDuration(s.policy.Elevation()))
 }
-
-// oidcElevateFix is what an OIDC session is told when its sign-in is too
-// old for an elevated permission: there is no password to confirm.
-const oidcElevateFix = "this sign-in is from the OIDC provider, so there is no password to confirm here, and it counts only from when you last entered your credentials at the provider (its auth_time). Sign out there and here, then sign in again (/signin), or use a local user or a token"
 
 // shortDuration is d as a person reads it: "15m", "1h", "1h30m", not
 // "15m0s".
@@ -349,14 +345,28 @@ func (s *Server) elevatedUntil(se session) time.Time {
 
 // WriteRefusal answers a refusal from Authorize as the server's own
 // routes do: {"error": msg}, plus "elevate": true when it is for want of a
-// fresh password, so the HMI kit knows to ask for it. A facade that adds
-// an endpoint answers its refusals with it.
+// fresh password, so the HMI kit knows to ask for it, or "elevate": "oidc"
+// and "url" when it is for want of a fresh sign-in at the OIDC provider,
+// so the kit sends the page there. A facade that adds an endpoint answers
+// its refusals with it.
 func WriteRefusal(w http.ResponseWriter, code int, msg string) {
+	if code == http.StatusUnauthorized && strings.HasPrefix(msg, ElevationAtProvider) {
+		writeOIDCElevate(w, msg)
+		return
+	}
 	body := map[string]any{"error": msg}
 	if code == http.StatusUnauthorized && strings.HasPrefix(msg, ElevationNeeded) {
 		body["elevate"] = true
 	}
 	writeJSON(w, code, body)
+}
+
+// writeOIDCElevate is the 401 that sends an OIDC session to the provider
+// to confirm its sign-in: "elevate": "oidc" and the URL to open (the kit
+// adds next=). A kit too old to know it reads only the message, which
+// says the same in words.
+func writeOIDCElevate(w http.ResponseWriter, msg string) {
+	writeJSON(w, http.StatusUnauthorized, map[string]any{"error": msg, "elevate": "oidc", "url": OIDCElevateURL})
 }
 
 // credentialKind is how a request's principal proved itself, for the
@@ -570,6 +580,12 @@ type meResponse struct {
 	// Now is the controller's clock, so a page judges elevatedUntil and
 	// expires against it rather than the browser's.
 	Now time.Time `json:"now"`
+	// SignInMethods are the ways /signin offers: "password" (local users)
+	// and "oidc" (Provider). Empty where sign-in is not offered.
+	SignInMethods []string `json:"signInMethods,omitempty"`
+	// Provider is the OIDC provider's name ("Sign in with <Provider>"),
+	// when the controller has one.
+	Provider string `json:"provider,omitempty"`
 }
 
 // meSession is /api/me's account of a browser sign-in. The id never
@@ -580,6 +596,10 @@ type meSession struct {
 	// permissions (auth.elevation): past it the HMI asks for the password
 	// before an elevated action.
 	ElevatedUntil time.Time `json:"elevatedUntil"`
+	// Method is how it was proved, and so how it is confirmed again:
+	// "password" (POST /api/elevate) or "oidc" (at the provider, by
+	// opening OIDCElevateURL).
+	Method string `json:"method"`
 }
 
 // handleMe is GET /api/me, for the HMI kit's role-aware controls (#708 PR
@@ -596,8 +616,22 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	me := meResponse{Auth: true, Secure: s.secure(r), Me: s.policy.Describe(a.pr), Elevated: auth.ElevatedPermissions, SignIn: s.sessions != nil, Now: now}
+	if s.sessions != nil {
+		if s.policy.HasUsers() {
+			me.SignInMethods = append(me.SignInMethods, "password")
+		}
+		if s.oidc != nil {
+			me.SignInMethods = append(me.SignInMethods, "oidc")
+		}
+	}
+	if s.oidc != nil {
+		me.Provider = s.oidc.Provider()
+	}
 	if a.session != nil {
-		me.Session = &meSession{Expires: a.session.expires.UTC(), ElevatedUntil: s.elevatedUntil(*a.session).UTC()}
+		me.Session = &meSession{Expires: a.session.expires.UTC(), ElevatedUntil: s.elevatedUntil(*a.session).UTC(), Method: "password"}
+		if a.session.oidc {
+			me.Session.Method = "oidc"
+		}
 	}
 	writeJSON(w, http.StatusOK, me)
 }

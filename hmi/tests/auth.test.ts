@@ -20,8 +20,15 @@ import {
 	signInHref,
 	standbyLeader,
 	wantsElevation,
+	providerElevation,
+	providerTarget,
+	signedInName,
+	signInLink,
+	CONFIRM_KEY,
+	CONFIRM_NOTE_MS,
 	type Me,
-	type PasswordAsk
+	type PasswordAsk,
+	type ProviderAsk
 } from '../src/lib/auth.js';
 import { kitFetch, setKitFetch } from '../src/lib/kitfetch.js';
 import { classify, SubstituteClient } from '../src/lib/substitutes.js';
@@ -66,10 +73,16 @@ type Route = (url: string, init: RequestInit | undefined, n: number) => Response
  * many times it was called before), `passwords` are typed in order (null
  * cancels; running out cancels).
  */
-function world(routes: Record<string, Route>, passwords: (string | null)[] = [], opts: { href?: string; storage?: Map<string, string>; prompt?: () => Promise<string | null> } = {}) {
+function world(
+	routes: Record<string, Route>,
+	passwords: (string | null)[] = [],
+	opts: { href?: string; storage?: Map<string, string>; prompt?: () => Promise<string | null>; leave?: (() => Promise<boolean>) | null } = {}
+) {
+	const timers: (() => void)[] = [];
 	const sent: Sent[] = [];
 	const nav: string[] = [];
 	const prompts: PasswordAsk[] = [];
+	const leaves: ProviderAsk[] = [];
 	const store = opts.storage ?? new Map<string, string>();
 	const calls = new Map<string, number>();
 	let now = 1_000_000;
@@ -93,17 +106,28 @@ function world(routes: Record<string, Route>, passwords: (string | null)[] = [],
 			if (opts.prompt) return opts.prompt();
 			return passwords.length ? (passwords.shift() as string | null) : null;
 		},
+		confirmLeave:
+			opts.leave === null
+				? undefined
+				: async (ask) => {
+						leaves.push(ask);
+						return opts.leave ? opts.leave() : true;
+					},
 		navigate: (h) => nav.push(h),
 		location: () => ({ href, pathname: loc.pathname, search: loc.search }),
 		storage: { getItem: (k) => store.get(k) ?? null, setItem: (k, v) => void store.set(k, v) },
-		now: () => now
+		now: () => now,
+		later: (fn) => void timers.push(fn)
 	});
 	return {
 		s,
 		sent,
 		nav,
 		prompts,
+		leaves,
 		store,
+		/** Fire the pending timers (the page did not leave after all). */
+		stayed: () => timers.splice(0).forEach((f) => f()),
 		to: (path: string) => sent.filter((x) => x.url === path),
 		tick: (ms: number) => (now += ms)
 	};
@@ -715,5 +739,127 @@ describe('every role-aware control asks the permission the controller checks (7b
 		has('PortParameters.svelte', "deniedFor('config')", "asksPassword('config')", '!!writeDenied');
 		has('AuditTable.svelte', "deniedFor('audit')");
 		has('NumberField.svelte', "tag ? deniedFor('write', tag) : ''", 'readonly={!!denied}', '!pending || !!denied');
+	});
+});
+
+describe('elevation at the OIDC provider (6b)', () => {
+	const OIDC_401 = () =>
+		json({ error: 'confirm your sign-in at the provider to do this: force needs …', elevate: 'oidc', url: '/auth/oidc/start?elevate=1' }, 401);
+	const oidcMe = (fresh = false) =>
+		signedIn({
+			principal: 'oidc:eng@corp.example',
+			provider: 'Keycloak',
+			signInMethods: ['oidc'],
+			session: { expires: '2026-11-20T20:00:00Z', elevatedUntil: fresh ? '2026-11-20T09:10:00Z' : '2026-11-20T08:00:00Z', method: 'oidc' }
+		});
+	const BACK = '/auth/oidc/start?elevate=1&next=%2Fscreens%2Fpump%3Fx%3D1';
+
+	it('asks, then sends the whole page to the controller URL, coming back here; the action is not repeated', async () => {
+		const w = world({ '/api/forces': OIDC_401, '/api/me': () => json(oidcMe()) });
+		await w.s.refresh();
+		const res = await w.s.fetch('/api/forces', WRITE);
+		expect(res.status).toBe(401);
+		expect(w.to('/api/forces').length).toBe(1);
+		expect(w.prompts.length).toBe(0); // no password: there is none here
+		expect(w.to('/api/elevate').length).toBe(0);
+		expect(w.leaves).toEqual([{ provider: 'Keycloak', user: 'eng@corp.example' }]);
+		expect(w.nav).toEqual([BACK]);
+		expect(JSON.parse(w.store.get(CONFIRM_KEY) ?? '{}').provider).toBe('Keycloak');
+	});
+	it('the operator says no: the page stays, the caller gets the refusal, no note', async () => {
+		const w = world({ '/api/forces': OIDC_401, '/api/me': () => json(oidcMe()) }, [], { leave: async () => false });
+		await w.s.refresh();
+		expect((await w.s.fetch('/api/forces', WRITE)).status).toBe(401);
+		expect(w.nav.length).toBe(0);
+		expect(w.store.has(CONFIRM_KEY)).toBe(false);
+	});
+	it('nobody to ask (no confirmLeave): the page stays', async () => {
+		const w = world({ '/api/forces': OIDC_401, '/api/me': () => json(oidcMe()) }, [], { leave: null });
+		await w.s.refresh();
+		await w.s.fetch('/api/forces', WRITE);
+		expect(w.nav.length).toBe(0);
+	});
+	it('concurrent refusals share one question and one navigation', async () => {
+		let answer: (v: boolean) => void = () => {};
+		const w = world({ '/api/forces': OIDC_401, '/api/me': () => json(oidcMe()) }, [], { leave: () => new Promise((r) => (answer = r)) });
+		await w.s.refresh();
+		const a = w.s.fetch('/api/forces', WRITE);
+		const b = w.s.fetch('/api/forces', WRITE);
+		await new Promise((r) => setTimeout(r, 0));
+		answer(true);
+		await Promise.all([a, b]);
+		expect(w.leaves.length).toBe(1);
+		expect(w.nav).toEqual([BACK]);
+	});
+	it('only ever this origin\'s /auth/oidc/start: a hostile url is not followed', async () => {
+		const here = { href: PAGE, pathname: '/screens/pump', search: '?x=1' };
+		for (const bad of ['https://evil.example/auth/oidc/start?elevate=1', '//evil.example/auth/oidc/start', '/signin', 'javascript:alert(1)', '/auth/oidc/startx']) {
+			expect(providerTarget(bad, here)).toBe(null);
+			const w = world({ '/api/forces': () => json({ error: 'x', elevate: 'oidc', url: bad }, 401), '/api/me': () => json(oidcMe()) });
+			await w.s.refresh();
+			await w.s.fetch('/api/forces', WRITE);
+			expect(w.nav.length).toBe(0);
+		}
+		// Its own next is replaced by this page; elevate=1 is always set.
+		expect(providerTarget('/auth/oidc/start?next=https://evil.example/', here)).toBe('/auth/oidc/start?next=%2Fscreens%2Fpump%3Fx%3D1&elevate=1');
+		expect(providerTarget('', here)).toBe(BACK);
+	});
+	it('back from the provider: says so once, by /api/me (confirmed, or not)', async () => {
+		for (const [fresh, want] of [
+			[true, 'Confirmed at Keycloak. Do the action again.'],
+			[false, 'Not confirmed at Keycloak: the action was not done.']
+		] as const) {
+			const store = new Map<string, string>();
+			const w = world({ '/api/me': () => json(oidcMe(fresh)) }, [], { storage: store });
+			store.set(CONFIRM_KEY, JSON.stringify({ at: 1_000_000 - 60_000, provider: 'Keycloak' }));
+			await w.s.refresh();
+			expect(w.s.notice).toBe(want);
+			w.s.dismissNotice();
+			await w.s.refresh();
+			expect(w.s.notice).toBe(null); // the note was read once
+		}
+		// A note older than the stay at a provider says nothing.
+		const store = new Map<string, string>([[CONFIRM_KEY, JSON.stringify({ at: 1_000_000 - CONFIRM_NOTE_MS - 1, provider: 'Keycloak' })]]);
+		const w = world({ '/api/me': () => json(oidcMe(true)) }, [], { storage: store });
+		await w.s.refresh();
+		expect(w.s.notice).toBe(null);
+	});
+	it('a navigation the page stayed through (an unsaved-work guard): the kit asks again next time, and the note is dropped', async () => {
+		const w = world({ '/api/forces': OIDC_401, '/api/me': () => json(oidcMe()) });
+		await w.s.refresh();
+		await w.s.fetch('/api/forces', WRITE);
+		expect(w.nav.length).toBe(1);
+		await w.s.fetch('/api/forces', WRITE); // still leaving: not asked twice
+		expect(w.leaves.length).toBe(1);
+		w.stayed();
+		expect(w.store.get(CONFIRM_KEY)).toBe('');
+		await w.s.fetch('/api/forces', WRITE);
+		expect(w.leaves.length).toBe(2);
+		expect(w.nav.length).toBe(2);
+	});
+	it('elevate() on an OIDC sign-in goes to the provider, never to a password', async () => {
+		const w = world({ '/api/me': () => json(oidcMe()) }, ['pw']);
+		await w.s.refresh();
+		expect(await w.s.elevate()).toBe(false);
+		expect(w.prompts.length).toBe(0);
+		expect(w.nav).toEqual([BACK]);
+	});
+	it('an older kit reads "oidc" as no password prompt, and the field is told apart', () => {
+		expect(wantsElevation(401, JSON.stringify({ elevate: 'oidc', url: '/auth/oidc/start?elevate=1' }))).toBe(false);
+		expect(providerElevation(401, JSON.stringify({ elevate: 'oidc', url: '/x' }))).toBe('/x');
+		expect(providerElevation(401, JSON.stringify({ elevate: true }))).toBe(null);
+		expect(providerElevation(403, JSON.stringify({ elevate: 'oidc' }))).toBe(null);
+	});
+	it('names and the sign-in link', () => {
+		expect(signedInName(oidcMe())).toBe('eng@corp.example');
+		expect(signedInName(signedIn())).toBe('akhan');
+		expect(signedInName(anonymous())).toBe(null);
+		const here = { pathname: '/screens/pump', search: '?x=1' };
+		expect(signInLink(anonymous({ signInMethods: ['oidc'], provider: 'Keycloak' }), here)).toEqual({
+			href: '/auth/oidc/start?next=%2Fscreens%2Fpump%3Fx%3D1',
+			label: 'Sign in with Keycloak'
+		});
+		expect(signInLink(anonymous({ signInMethods: ['password', 'oidc'], provider: 'Keycloak' }), here).label).toBe('Sign in');
+		expect(signInLink(anonymous(), here).href).toBe(SIGNIN);
 	});
 });

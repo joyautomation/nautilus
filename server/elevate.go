@@ -70,18 +70,19 @@ func (s *Server) handleElevate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	se := *a.session
-	if se.oidc {
-		// Re-authentication at the provider (prompt=login, max_age=0) is
-		// not in this release: a password POSTed here proves nothing about
-		// an OIDC account.
-		refuse(http.StatusBadRequest, oidcElevateFix, "oidc session", nil)
-		return
-	}
 	// A user who holds no elevated permission has nothing to confirm:
 	// refused before any hashing, so a viewer's sessions cannot keep the
 	// password-hash slots busy (#1088 review).
 	if !s.holdsElevated(a) {
 		refuse(http.StatusForbidden, "nothing to confirm: "+se.user+" holds none of the elevated permissions ("+strings.Join(auth.ElevatedPermissions, ", ")+")", "no elevated permission", nil)
+		return
+	}
+	if se.oidc {
+		// A password POSTed here proves nothing about an OIDC account: the
+		// confirmation is at the provider (6b, oidc_elevate.go). The answer
+		// says where, as a stale elevation's refusal does; nothing was
+		// attempted, so nothing is journalled.
+		writeOIDCElevate(w, ElevationAtProvider+": your sign-in is from "+s.oidc.Provider()+", so you confirm it there, not with a password here (GET "+OIDCElevateURL+")")
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxSignInBody)

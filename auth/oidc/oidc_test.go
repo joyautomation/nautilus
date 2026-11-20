@@ -28,7 +28,7 @@ func signIn(t *testing.T, c *Client, idp *oidctest.IdP, claims map[string]any) (
 	t.Helper()
 	ctx := context.Background()
 	verifier := strings.Repeat("v", 43)
-	to, err := c.AuthCodeURL(ctx, redirect, "state-1", "nonce-1", verifier)
+	to, err := c.AuthCodeURL(ctx, redirect, "state-1", "nonce-1", verifier, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestExchangeRefusesAWrongVerifierOrSecret(t *testing.T) {
 	idp := oidctest.New(t, "naut", "s3cret")
 	c := client(t, idp)
 	ctx := context.Background()
-	to, err := c.AuthCodeURL(ctx, redirect, "s", "n", strings.Repeat("v", 43))
+	to, err := c.AuthCodeURL(ctx, redirect, "s", "n", strings.Repeat("v", 43), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func TestExchangeRefusesAWrongVerifierOrSecret(t *testing.T) {
 	}
 
 	wrong, _ := New(Config{Issuer: idp.URL, ClientID: "naut", ClientSecret: "nope"})
-	to, _ = wrong.AuthCodeURL(ctx, redirect, "s", "n", strings.Repeat("v", 43))
+	to, _ = wrong.AuthCodeURL(ctx, redirect, "s", "n", strings.Repeat("v", 43), false)
 	back, _ = url.Parse(idp.Authorize(t, to, nil))
 	if _, err := wrong.Exchange(ctx, redirect, back.Query().Get("code"), strings.Repeat("v", 43)); err == nil || !strings.Contains(err.Error(), "invalid_client") {
 		t.Fatalf("wrong secret: %v", err)
@@ -110,7 +110,7 @@ func TestExchangeRefusesAWrongVerifierOrSecret(t *testing.T) {
 
 func TestAuthCodeURLCarriesPKCEAndNonce(t *testing.T) {
 	idp := oidctest.New(t, "naut", "s3cret")
-	to, err := client(t, idp).AuthCodeURL(context.Background(), redirect, "st", "no", strings.Repeat("v", 43))
+	to, err := client(t, idp).AuthCodeURL(context.Background(), redirect, "st", "no", strings.Repeat("v", 43), false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +155,7 @@ func TestDiscoveryDownIsUnreachableAndRetried(t *testing.T) {
 	idp := oidctest.New(t, "naut", "s3cret")
 	c := client(t, idp)
 	idp.Close()
-	_, err := c.AuthCodeURL(context.Background(), redirect, "s", "n", strings.Repeat("v", 43))
+	_, err := c.AuthCodeURL(context.Background(), redirect, "s", "n", strings.Repeat("v", 43), false)
 	if !errors.Is(err, ErrUnreachable) {
 		t.Fatalf("err = %v, want ErrUnreachable", err)
 	}
@@ -207,5 +207,26 @@ func TestProviderName(t *testing.T) {
 	c, _ := New(Config{Issuer: "https://x.example", ClientID: "a", ClientSecret: "b", Name: "Plant SSO"})
 	if c.Provider() != "Plant SSO" {
 		t.Error(c.Provider())
+	}
+}
+
+// A re-authentication asks the provider for the credentials again
+// (prompt=login, max_age=0); a sign-in leaves the provider's session be.
+func TestAuthCodeURLAsksForLoginOnlyWhenTold(t *testing.T) {
+	idp := oidctest.New(t, "naut", "s3cret")
+	c := client(t, idp)
+	for _, login := range []bool{false, true} {
+		to, err := c.AuthCodeURL(context.Background(), redirect, "s", "n", strings.Repeat("v", 43), login)
+		if err != nil {
+			t.Fatal(err)
+		}
+		u, _ := url.Parse(to)
+		q := u.Query()
+		if login && (q.Get("prompt") != "login" || q.Get("max_age") != "0") {
+			t.Errorf("login: %s lacks prompt=login&max_age=0", to)
+		}
+		if !login && (q.Has("prompt") || q.Has("max_age")) {
+			t.Errorf("sign-in: %s asks for a login", to)
+		}
 	}
 }

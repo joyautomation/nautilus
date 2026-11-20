@@ -7,7 +7,7 @@
 	// the elevated permissions right now and until when, and Sign out.
 	// Not signed in, on a controller that offers it: Sign in.
 	import { currentAuth } from '../auth.svelte.js';
-	import { passwordState, signInHref } from '../auth.js';
+	import { passwordState, signInLink } from '../auth.js';
 	import { whoIs } from '../areas.js';
 	import Button from './Button.svelte';
 	import Icon from './Icon.svelte';
@@ -15,6 +15,9 @@
 	const auth = $derived(currentAuth());
 	const me = $derived(auth?.me);
 	const pw = $derived(auth ? passwordState(me, auth.clock, auth.skew) : null);
+	const atProvider = $derived(auth?.atProvider ?? false);
+	const provider = $derived(me?.provider || 'the provider');
+	const signin = $derived(signInLink(me, globalThis.location));
 	let error = $state('');
 
 	function hhmm(ms: number): string {
@@ -36,17 +39,27 @@
 				<span
 					class="pw"
 					class:fresh={pw.fresh}
-					title={pw.fresh
-						? 'Your password counts for the elevated actions until then'
-						: 'An elevated action will ask for your password first'}
+					title={atProvider
+						? pw.fresh
+							? `Your sign-in at ${provider} counts for the elevated actions until then`
+							: `An elevated action will send you to ${provider} to sign in again first`
+						: pw.fresh
+							? 'Your password counts for the elevated actions until then'
+							: 'An elevated action will ask for your password first'}
 				>
 					<Icon name={pw.fresh ? 'lock-open' : 'lock-closed'} size={12} />
-					{pw.fresh ? `until ${hhmm(pw.untilLocal)}` : 'asks for password'}
+					{pw.fresh ? `until ${hhmm(pw.untilLocal)}` : atProvider ? `asks ${provider}` : 'asks for password'}
+				</span>
+			{/if}
+			{#if auth.notice}
+				<span class="note" role="status">
+					{auth.notice}
+					<Button size="sm" variant="ghost" onclick={() => auth.dismissNotice()}>OK</Button>
 				</span>
 			{/if}
 			<Button size="sm" variant="ghost" onclick={signOut}>Sign out</Button>
 		{:else if me.signIn}
-			<a class="signin" href={signInHref(globalThis.location)}>Sign in</a>
+			<a class="signin" href={signin.href}>{signin.label}</a>
 		{:else}
 			<span class="who">{whoIs(me)}</span>
 		{/if}
@@ -88,6 +101,13 @@
 	}
 	.signin:hover {
 		text-decoration: underline;
+	}
+	.note {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		font-size: var(--font-2xs);
+		color: var(--ink-2);
 	}
 	.err {
 		color: var(--crit);

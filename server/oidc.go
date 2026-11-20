@@ -98,6 +98,16 @@ type oidcFlow struct {
 	binding  string // hex SHA-256 of the binding cookie's value
 	addr     string // the client's address key (addrKey), for the per-address cap
 	at       time.Time
+	// elevate marks a confirmation of an OIDC session at the provider
+	// (6b, oidc_elevate.go), not a sign-in: session is that session's
+	// hash, and principal, issuer, sub and groups what it was proved as.
+	// Its addr is "session:" and the hash.
+	elevate   bool
+	session   string
+	principal string
+	issuer    string
+	sub       string
+	groups    []string
 }
 
 type oidcFlows struct {
@@ -244,12 +254,12 @@ func (s *Server) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
 		s.signInPage(w, r, http.StatusServiceUnavailable, "", next)
 		return
 	}
-	// Only a browser's navigation starts a sign-in: an image or a fetch
-	// another page makes (Sec-Fetch-Mode no-cors, cors) would spend the
-	// address's sign-ins under way. A client that sends no such header
-	// (an older browser, a script) is let through.
-	if m := r.Header.Get("Sec-Fetch-Mode"); m != "" && m != "navigate" {
-		refuse(http.StatusForbidden, "a sign-in starts only from a link the browser opens (Sec-Fetch-Mode: navigate)", "not a navigation")
+	if r.URL.Query().Has("elevate") {
+		s.oidcElevateStart(w, r, next)
+		return
+	}
+	if msg, reason := navigationRefusal(r); msg != "" {
+		refuse(http.StatusForbidden, msg, reason)
 		return
 	}
 	if !s.signInTransport(r) {
@@ -350,14 +360,12 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		refuse(http.StatusBadRequest, "this sign-in has expired or was already used: start it again", "unknown or expired state")
 		return
 	}
-	next = fl.next
-	bound := false
-	for _, c := range r.CookiesNamed(s.oidcCookieName(r, state)) {
-		if subtle.ConstantTimeCompare([]byte(hashHex(c.Value)), []byte(fl.binding)) == 1 {
-			bound = true
-		}
+	if fl.elevate {
+		s.oidcElevateCallback(w, r, state, fl)
+		return
 	}
-	if !bound {
+	next = fl.next
+	if !s.oidcBound(r, state, fl.binding) {
 		refuse(http.StatusBadRequest, "this sign-in was started in another browser, or its cookie was blocked: start it again here", "binding cookie missing or wrong")
 		return
 	}
@@ -469,12 +477,19 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	detail["expires"] = se.expires.UTC().Format(time.RFC3339)
 	e.User, e.Target, e.Session, e.Result, e.Detail = "oidc:"+name, "", se.hash, audit.ResultOK, detail
 	s.audit.record(e)
+	oidcHop(w, "Signed in as "+name+".", fl.next)
+}
+
+// oidcHop answers a callback with a page of this origin that moves the
+// browser on to next: a same-site navigation, which carries the
+// SameSite=Strict session cookie a redirect would not.
+func oidcHop(w http.ResponseWriter, msg, next string) {
 	h := w.Header()
 	h.Set("Content-Type", "text/html; charset=utf-8")
 	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'")
 	h.Set("X-Frame-Options", "DENY")
 	w.WriteHeader(http.StatusOK)
-	oidcHopTemplate.Execute(w, struct{ Name, Next string }{name, fl.next})
+	oidcHopTemplate.Execute(w, struct{ Msg, Next string }{msg, next})
 }
 
 // pinnable reports an issuer or subject the pins file can hold (and naut
@@ -528,7 +543,7 @@ func cleanCode(code string) string {
 var oidcHopTemplate = template.Must(template.New("hop").Parse(`<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="refresh" content="0;url={{.Next}}">
-<title>Signed in · nautilus</title>
+<title>Continuing · nautilus</title>
 <style>:root{color-scheme:light dark;font-family:system-ui,sans-serif}body{margin:0;min-height:100vh;display:grid;place-items:center;background:Canvas;color:CanvasText}</style>
-</head><body><main><p>Signed in as {{.Name}}. <a href="{{.Next}}">Continue</a></p></main></body></html>
+</head><body><main><p>{{.Msg}} <a href="{{.Next}}">Continue</a></p></main></body></html>
 `))
