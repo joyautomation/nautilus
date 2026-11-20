@@ -71,6 +71,7 @@ export default defineConfig({
             { label: 'I/O and protocols', autogenerate: { directory: 'learn/io-and-protocols' } },
             { label: 'Operator screens', autogenerate: { directory: 'learn/operator-screens' } },
             { label: 'Deploy and operate', autogenerate: { directory: 'learn/deploy-and-operate' } },
+            { label: 'Coming from Logix', autogenerate: { directory: 'learn/logix' } },
             { label: 'Tutorial: your first controller', slug: 'tutorial' },
             { label: 'Getting started (the short version)', slug: 'getting-started' },
             { label: 'Playground (in your browser)', link: '/playground/' },

@@ -48,6 +48,11 @@ on the right, and a **Check** button that tests your answer.
 2. [Update, roll back, and back up](/learn/deploy-and-operate/update-roll-back-back-up/)
 3. [Who may operate it](/learn/deploy-and-operate/who-may-operate-it/)
 
+## Coming from Logix
+
+1. [Read a Logix project as text, with no Rockwell software](/learn/logix/read-a-logix-project/)
+2. [Where things live](/learn/logix/where-things-live/)
+
 More tracks follow: working with an AI
 agent. Until they are here, these guides cover them:
 
