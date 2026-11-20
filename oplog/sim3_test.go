@@ -86,12 +86,12 @@ func simulate(t *testing.T, seed uint64, steps int) (int, int) {
 	r := rand.New(rand.NewPCG(seed, 0x3b4a))
 	// Half the seeds replicate a few entries per chunk, so resends take
 	// several chunks and run out of rounds (#1050 review).
-	defer func(a, b int) { maxChunkEntries, resendRounds = a, b }(maxChunkEntries, resendRounds)
+	var lim limits
 	if r.IntN(2) == 0 {
-		maxChunkEntries = 1 + r.IntN(3)
-		resendRounds = 1 + r.IntN(2) // so a peer a few entries behind runs out of rounds
+		lim.chunkEntries = 1 + r.IntN(3)
+		lim.rounds = 1 + r.IntN(2) // so a peer a few entries behind runs out of rounds
 	}
-	tr := newTrio(t, nil)
+	tr := newTrio(t, withLimits(lim))
 	tr.timeout = 300 * time.Millisecond
 	for i := range 3 {
 		tr.restart(i) // with the short timeout

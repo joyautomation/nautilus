@@ -248,9 +248,7 @@ func TestAdmitDecidesWhoMayReplicate(t *testing.T) {
 // heartbeats and by its own catch-up read, page by page: neither ever
 // sends the whole log in one body.
 func TestResendAndCatchUpGoInChunks(t *testing.T) {
-	defer func(a, b int, c, d int64) { maxChunkEntries, maxChunkBytes, maxBody, maxResp = a, b, c, d }(maxChunkEntries, maxChunkBytes, maxBody, maxResp)
-	maxChunkEntries, maxChunkBytes, maxBody, maxResp = 8, 4096, 16<<10, 16<<10
-	tr := newTrio(t, nil)
+	tr := newTrio(t, withLimits(limits{chunkEntries: 8, chunkBytes: 4096, body: 16 << 10, resp: 16 << 10}))
 	mustSync(t, tr, 0)
 	val, _ := json.Marshal(strings.Repeat("v", 400))
 	const total = 120
@@ -281,9 +279,7 @@ func TestResendAndCatchUpGoInChunks(t *testing.T) {
 // A reader from before pages (no page=1) still gets the whole tail in one
 // answer: it would take a first page for all of it.
 func TestUnpagedReaderGetsTheWholeTail(t *testing.T) {
-	defer func(a, b int) { maxChunkEntries, maxChunkBytes = a, b }(maxChunkEntries, maxChunkBytes)
-	maxChunkEntries, maxChunkBytes = 4, 4096
-	tr := newTrio(t, nil)
+	tr := newTrio(t, withLimits(limits{chunkEntries: 4, chunkBytes: 4096}))
 	mustSync(t, tr, 0)
 	for k := range 10 {
 		if _, err := tr.propose(0, fmt.Sprint("a", k)); err != nil {

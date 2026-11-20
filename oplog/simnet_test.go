@@ -142,6 +142,11 @@ func (h hop) RoundTrip(r *http.Request) (*http.Response, error) {
 	return resp, nil
 }
 
+// withLimits sets every replica's chunking and size bounds.
+func withLimits(l limits) func(int, *Options) {
+	return func(_ int, o *Options) { o.lim = l }
+}
+
 // trio is three marked replicas on a simnet, with a leadership the test
 // moves: n0 is A, n1 is B, n2 is W (by name only; they are alike unless a
 // test sets Admit).

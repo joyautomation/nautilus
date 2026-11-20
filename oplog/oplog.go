@@ -243,6 +243,7 @@ type Options struct {
 	Counts func(peer, identity string) bool
 
 	transport http.RoundTripper // tests: an in-process network
+	lim       limits            // tests: smaller chunks and bounds
 }
 
 // Mark is a replica's log mark, kept in Options.Mark.
@@ -256,22 +257,30 @@ type Mark struct {
 	Lost string `json:"lost,omitempty"`
 }
 
-// Chunking: a resend or a catch-up read carries at most this many
-// entries, or about this many bytes; a replica refuses a request body over
-// maxBody, and a reply over maxResp is not read. Variables for tests.
-var (
+// Chunking: a resend or a catch-up read carries at most maxChunkEntries
+// entries, or about maxChunkBytes; a replica refuses a request body over
+// maxBody, and a reply over maxResp is not read. resendRounds bounds one
+// replicateTo's resends; the next heartbeat goes on from where the peer
+// is. A Node holds its own copy (limits), which tests set per node at New:
+// never a package variable changed under goroutines still running.
+const (
 	maxChunkEntries = 512
 	maxChunkBytes   = 1 << 20
 	maxBody         = int64(8 << 20)
 	maxResp         = int64(8 << 20) // at least maxBody: what one replica took, another can read
+	resendRounds    = 32
 	// maxEntryBytes caps one entry, as JSON, at its proposal: well under
 	// the file's line limit (1 MiB, open), a chunk and a body, so an entry
 	// once stored can always be read back, sent and fetched.
 	maxEntryBytes = 512 << 10
-	// resendRounds bounds one replicateTo's resends; the next heartbeat
-	// goes on from where the peer is.
-	resendRounds = 32
 )
+
+// limits are a Node's chunking and size bounds (Options.lim; zero fields
+// take the defaults above).
+type limits struct {
+	chunkEntries, chunkBytes, rounds int
+	body, resp                       int64
+}
 
 // ErrTooLarge refuses a proposal whose entry is over maxEntryBytes. It was
 // never proposed: its outcome is known.
@@ -363,6 +372,20 @@ func New(o Options) (*Node, error) {
 	}
 	if o.Mark != "" && o.File == "" {
 		return nil, errors.New("oplog: a Mark needs a File")
+	}
+	for _, d := range []struct {
+		v   *int
+		def int
+	}{{&o.lim.chunkEntries, maxChunkEntries}, {&o.lim.chunkBytes, maxChunkBytes}, {&o.lim.rounds, resendRounds}} {
+		if *d.v <= 0 {
+			*d.v = d.def
+		}
+	}
+	if o.lim.body <= 0 {
+		o.lim.body = maxBody
+	}
+	if o.lim.resp <= 0 {
+		o.lim.resp = maxResp
 	}
 	n := &Node{o: o, client: &http.Client{Timeout: o.Timeout, Transport: o.transport}, log: o.Log,
 		lastContact: map[string]time.Time{}, peers: map[string]peerInfo{}}
@@ -1354,7 +1377,7 @@ func (n *Node) replicateTo(ctx context.Context, peer string, es []Entry, term ui
 	// Each step moves Have, to the peer's commit index at worst, where the
 	// logs agree; the bound only guards a peer that answers nonsense, and
 	// the next heartbeat goes on (a rebuilt replica is filled over several).
-	for range resendRounds {
+	for range n.o.lim.rounds {
 		var he *httpError
 		var from uint64
 		switch {
@@ -1378,7 +1401,7 @@ func (n *Node) replicateTo(ctx context.Context, peer string, es []Entry, term ui
 			return resp, err
 		}
 		if !mutOplog("resend_unchunked") {
-			missing, _ = chunk(missing)
+			missing, _ = n.chunk(missing)
 		}
 		resp, err = send(missing)
 	}
@@ -1413,14 +1436,15 @@ func (n *Node) replicateToErr(ctx context.Context, peer string, es []Entry, term
 	return err
 }
 
-// chunk is the head of es one request carries: at most maxChunkEntries,
-// and about maxChunkBytes (always at least one entry). more: es goes on.
-func chunk(es []Entry) (head []Entry, more bool) {
+// chunk is the head of es one request carries: at most the limits' chunk
+// entries, and about their chunk bytes (always at least one entry). more:
+// es goes on.
+func (n *Node) chunk(es []Entry) (head []Entry, more bool) {
 	size := 0
 	for i, e := range es {
 		b, _ := json.Marshal(e)
 		size += len(b) + 1
-		if i > 0 && (i >= maxChunkEntries || size > maxChunkBytes) {
+		if i > 0 && (i >= n.o.lim.chunkEntries || size > n.o.lim.chunkBytes) {
 			return es[:i], true
 		}
 	}
@@ -1682,7 +1706,7 @@ func (n *Node) call(ctx context.Context, base, path string, body any, out any) e
 		return err
 	}
 	defer resp.Body.Close()
-	data, _ := io.ReadAll(io.LimitReader(resp.Body, maxResp))
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, n.o.lim.resp))
 	if resp.StatusCode/100 != 2 {
 		if resp.StatusCode >= 500 {
 			n.lost(base)
@@ -1737,7 +1761,7 @@ func (n *Node) Handler() http.Handler {
 		// Pages only for a reader that asks (page=1): one from before
 		// pages would take the first page for the whole tail.
 		if r.URL.Query().Get("page") == "1" && !mutOplog("resend_unchunked") {
-			resp.Entries, resp.More = chunk(resp.Entries)
+			resp.Entries, resp.More = n.chunk(resp.Entries)
 		}
 		writeJSON(w, http.StatusOK, resp)
 	}))
@@ -1747,7 +1771,7 @@ func (n *Node) Handler() http.Handler {
 			return
 		}
 		var e Entry
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBody)).Decode(&e); err != nil {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, n.o.lim.body)).Decode(&e); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -1760,7 +1784,7 @@ func (n *Node) Handler() http.Handler {
 	}))
 	mux.HandleFunc("POST /api/oplog/replicate", auth(func(w http.ResponseWriter, r *http.Request) {
 		var req replicateReq
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBody)).Decode(&req); err != nil {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, n.o.lim.body)).Decode(&req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}

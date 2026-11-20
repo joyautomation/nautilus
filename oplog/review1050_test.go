@@ -98,9 +98,7 @@ func TestFollowerTakesNothingFromAnUnsyncedLeader(t *testing.T) {
 // short of the leader's log does not hold the new entry, so it must not
 // count: here the write is stored on A alone.
 func TestAPeerStillBehindDoesNotCount(t *testing.T) {
-	defer func(a int) { maxChunkEntries = a }(maxChunkEntries)
-	maxChunkEntries = 1
-	tr := newTrio(t, nil)
+	tr := newTrio(t, withLimits(limits{chunkEntries: 1}))
 	mustSync(t, tr, 0)
 	tr.setDown(1, true)
 	for k := range 100 {
@@ -123,9 +121,7 @@ func TestAPeerStillBehindDoesNotCount(t *testing.T) {
 // leader's commit index) is not synced: its log would still miss committed
 // entries.
 func TestFirstChunkDoesNotSyncARebuiltReplica(t *testing.T) {
-	defer func(a int) { maxChunkEntries = a }(maxChunkEntries)
-	maxChunkEntries = 2
-	tr := newTrio(t, nil)
+	tr := newTrio(t, withLimits(limits{chunkEntries: 2}))
 	mustSync(t, tr, 0)
 	for _, id := range []string{"a", "b", "c", "d", "e", "f"} {
 		if _, err := tr.propose(0, id); err != nil {
