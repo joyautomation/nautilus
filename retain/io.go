@@ -54,6 +54,7 @@ type IOUnit struct {
 // IOProvisional is an apply whose revert-if-silent watch had not settled.
 type IOProvisional struct {
 	Gen      int       `json:"gen"`
+	ID       string    `json:"id,omitempty"` // the apply's id (the server's staged id)
 	From     string    `json:"from,omitempty"`
 	By       string    `json:"by,omitempty"`
 	At       time.Time `json:"at,omitzero"`

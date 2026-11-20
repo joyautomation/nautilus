@@ -570,7 +570,7 @@ func TestIOKeptPendingRevert(t *testing.T) {
 		store := &memStore{}
 		r := startKeepRig(t, files, keepOpts{store: store})
 		r.leading(t)
-		res := r.applyMove(t, files, deadPort(t), slavePort(s2), ApplyOptions{RevertIfSilent: time.Minute})
+		res := r.applyMove(t, files, deadPort(t), slavePort(s2), ApplyOptions{RevertIfSilent: time.Minute, ID: "io-9"})
 		if res.Kept || !strings.Contains(res.KeptWhy, "revertIfSilent") {
 			t.Fatalf("kept %v (%s), want not yet", res.Kept, res.KeptWhy)
 		}
@@ -588,6 +588,19 @@ func TestIOKeptPendingRevert(t *testing.T) {
 			t.Fatalf("discarded = %+v, want the pending apply reported", d)
 		}
 		eventually(t, "A_In from the manifest's address", func() bool { return r2.value("A_In") == "4" })
+		// The journal must not say ok while the old configuration runs: the
+		// restore reports the dropped apply (registered after the restore, as
+		// the server is at start-up), once.
+		var mu sync.Mutex
+		var got []IOWatch
+		r2.io.OnReverted(func(w IOWatch) { mu.Lock(); got = append(got, w); mu.Unlock() })
+		eventually(t, "the dropped apply reported", func() bool { mu.Lock(); defer mu.Unlock(); return len(got) > 0 })
+		time.Sleep(200 * time.Millisecond)
+		mu.Lock()
+		defer mu.Unlock()
+		if len(got) != 1 || got[0].State != WatchDropped || got[0].ID != "io-9" || got[0].By != "tester" || got[0].From != "upload" {
+			t.Fatalf("reports %+v, want one dropped apply io-9 by tester", got)
+		}
 	})
 	t.Run("answered, then kept", func(t *testing.T) {
 		s1, s2, s3 := newSlave(t, 4), newSlave(t, 7), newSlave(t, 9)

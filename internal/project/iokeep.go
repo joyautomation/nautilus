@@ -252,12 +252,7 @@ func (io *IOConfig) watchEnded(w IOWatch) {
 		return
 	}
 	if w.State == WatchReverted || w.State == WatchRevertFail {
-		io.mu.Lock()
-		f := io.reverted
-		io.mu.Unlock()
-		if f != nil {
-			go f(w) // the one change no request made: the server journals it, off the apply lock
-		}
+		io.emitReverted(w) // the one change no request made: the server journals it
 	}
 	io.mu.Lock()
 	changed := false
@@ -437,8 +432,12 @@ func (io *IOConfig) restoreFrom(ctx context.Context, st *retain.IOState, follow 
 		}
 		r.discardedFiles = st.DiscardedFiles
 		if p := st.Provisional; p != nil && !follow {
-			r.dropped = append(r.dropped, IODiscard{From: p.From, At: p.At, By: p.By,
-				Why: fmt.Sprintf("an apply was waiting for its changed devices to answer (revertIfSilent, until %s) when the controller restarted or another took over; it was not carried, and the configuration before it runs", p.Deadline.Format(time.RFC3339))})
+			why := fmt.Sprintf("an apply was waiting for its changed devices to answer (revertIfSilent, until %s) when the controller restarted or another took over; it was not carried, and the configuration before it runs", p.Deadline.Format(time.RFC3339))
+			r.dropped = append(r.dropped, IODiscard{From: p.From, At: p.At, By: p.By, Why: why})
+			// Journalled once the restore has made the old configuration
+			// run (settle): the apply's entry said ok, this says it is gone.
+			r.provDropped = &IOWatch{Gen: p.Gen, ID: p.ID, From: p.From, By: p.By, Revert: true,
+				Deadline: p.Deadline, State: WatchDropped, Reason: why}
 		}
 	}
 	keep, cand := io.restoreUnits(&r, boot)
@@ -570,6 +569,7 @@ func changedKeys(a, b map[string]ioUnit) []string {
 type restore struct {
 	st             *retain.IOState
 	dropped        []IODiscard
+	provDropped    *IOWatch // the provisional apply this restore did not carry
 	discarded      map[string]retain.IOUnit
 	discardedFiles map[string]string
 }
@@ -698,6 +698,10 @@ func (io *IOConfig) settle(r *restore, target map[string]ioUnit, follow bool) {
 		io.discarded, io.discardedFiles = nil, nil
 	}
 	io.memo.st, io.memo.gen = hashOf(r.st), io.gen
+	if w := r.provDropped; w != nil {
+		w.Ended = time.Now()
+		go io.emitReverted(*w) // not under io.mu
+	}
 	io.seq = seqOf(r.st)
 	io.storeSeq = max(io.storeSeq, io.seq)
 	if follow {

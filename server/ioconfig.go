@@ -544,14 +544,20 @@ func (s *Server) handleIOApply(w http.ResponseWriter, r *http.Request) {
 // undid and its principal are in the detail.
 func (s *Server) recordIORevert(w IOWatch) {
 	result := audit.ResultOK
-	if w.State != "reverted" {
+	if w.State != "reverted" && w.State != "dropped" {
 		result = audit.ResultError
+	}
+	note := "revert of " + w.ID + " applied by " + w.By
+	if w.State == "dropped" {
+		// A restart or takeover did not carry the apply: the apply's own
+		// entry said ok; the configuration before it runs now.
+		note += " (dropped at a restart or takeover; the configuration before it runs)"
 	}
 	s.audit.record(audit.Entry{
 		User: "system", Source: audit.SourceSystem, Action: "config.revert",
 		Target: w.ID, Result: result,
 		Detail: map[string]any{
-			"note":    "revert of " + w.ID + " applied by " + w.By,
+			"note":    note,
 			"applied": w.ID, "by": w.By, "from": w.From,
 			"reason": capText(w.Reason, reasonMax), "state": w.State, "gen": w.Gen,
 		},
