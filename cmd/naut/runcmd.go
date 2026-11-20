@@ -579,7 +579,7 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		}()
 	}
 	go srv.Run(ctx)
-	sayOIDC(ctx, oidcClient, srv, tlsSrc != nil, os.Stderr)
+	sayOIDC(ctx, oidcClient, srv, tlsSrc != nil, apiLn.Addr().String(), os.Stderr)
 	// naut run alone renews a self-signed certificate, daily while it runs.
 	go keepSelfSignedFresh(ctx, tlsRun, dir, os.Getenv, time.Now, tlsRun.say)
 

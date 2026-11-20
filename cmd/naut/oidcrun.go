@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"sort"
 	"time"
 
@@ -69,11 +70,12 @@ func withOIDC(sopts *server.Options, proj *project.Project, getenv func(string) 
 // provider and whether the provider answers. The check runs in the
 // background: a provider out of reach never holds the controller up, and
 // local users still sign in.
-func sayOIDC(ctx context.Context, c *oidc.Client, srv *server.Server, tls bool, w io.Writer) {
+func sayOIDC(ctx context.Context, c *oidc.Client, srv *server.Server, tls bool, listen string, w io.Writer) {
 	if c == nil {
 		return
 	}
-	uris := srv.OIDCRedirectURIs(tls)
+	_, port, _ := net.SplitHostPort(listen)
+	uris := srv.OIDCRedirectURIs(tls, port)
 	sort.Strings(uris)
 	switch {
 	case len(uris) == 0:

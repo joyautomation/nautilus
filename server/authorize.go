@@ -312,14 +312,16 @@ func (s *Server) elevationRefused(a actor, perm string) (int, string) {
 		return 0, ""
 	}
 	if a.session.oidc {
-		return http.StatusUnauthorized, fmt.Sprintf("%s: %s. %s needs a sign-in within the last %s (auth.elevation)", ElevationNeeded, oidcElevateFix, perm, shortDuration(s.policy.Elevation()))
+		// Not ElevationNeeded: the HMI must not ask for a password that
+		// does not exist (6b adds re-authentication at the provider).
+		return http.StatusUnauthorized, fmt.Sprintf("%s needs credentials entered at the provider within the last %s (auth.elevation): %s", perm, shortDuration(s.policy.Elevation()), oidcElevateFix)
 	}
 	return http.StatusUnauthorized, fmt.Sprintf("%s: sign in again (/signin), or enter your password where the HMI asks for it (POST /api/elevate). %s needs a password entered within the last %s (auth.elevation)", ElevationNeeded, perm, shortDuration(s.policy.Elevation()))
 }
 
 // oidcElevateFix is what an OIDC session is told when its sign-in is too
 // old for an elevated permission: there is no password to confirm.
-const oidcElevateFix = "this sign-in is from the OIDC provider, so there is no password to confirm here: sign out and sign in again (/signin) to renew it"
+const oidcElevateFix = "this sign-in is from the OIDC provider, so there is no password to confirm here, and it counts only from when you last entered your credentials at the provider (its auth_time). Sign out there and here, then sign in again (/signin), or use a local user or a token"
 
 // shortDuration is d as a person reads it: "15m", "1h", "1h30m", not
 // "15m0s".

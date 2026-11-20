@@ -80,7 +80,10 @@ type OIDCIdentity struct {
 	// the Graph API instead of the list).
 	Groups        []string
 	GroupsOverage bool
-	AuthTime      time.Time // auth_time, zero when the token has none
+	// AuthTime is auth_time, when the person last entered credentials at
+	// the provider; zero when the token has none. An OIDC session holds the
+	// elevated permissions only within auth.elevation of it.
+	AuthTime time.Time
 }
 
 // ErrOIDCUnreachable marks an OIDC error that is the provider being out
@@ -93,6 +96,11 @@ const (
 	oidcStartPath    = "/auth/oidc/start"
 	oidcCallbackPath = "/auth/oidc/callback"
 )
+
+// oidcClockSkew is how far ahead of this controller's clock an ID token's
+// auth_time may be and still count (as now): the provider's clock and
+// ours differ a little. Further ahead, it does not count at all.
+const oidcClockSkew = 2 * time.Minute
 
 // oidcFlowLife is how long a started sign-in may take at the provider.
 const oidcFlowLife = 10 * time.Minute
@@ -219,9 +227,11 @@ func (s *Server) oidcRedirectURI(r *http.Request) (string, bool) {
 
 // OIDCRedirectURIs are the redirect URIs to register at the provider, for
 // naut run to say at the start: auth.oidc.redirect-url when set, else one
-// per name in the allowed hosts (scheme by whether the controller serves
-// TLS). Empty when the controller has no OIDC sign-in.
-func (s *Server) OIDCRedirectURIs(tls bool) []string {
+// per name in the allowed hosts, with the scheme (by whether the
+// controller serves TLS) and the port it listens on, unless that is the
+// scheme's default: the URI a browser's sign-in then sends, exactly.
+// Empty when the controller has no OIDC sign-in.
+func (s *Server) OIDCRedirectURIs(tls bool, port string) []string {
 	if s.oidc == nil {
 		return nil
 	}
@@ -232,9 +242,14 @@ func (s *Server) OIDCRedirectURIs(tls bool) []string {
 	if tls {
 		scheme = "https"
 	}
+	if port == "" || scheme == "https" && port == "443" || scheme == "http" && port == "80" {
+		port = ""
+	} else {
+		port = ":" + port
+	}
 	var out []string
 	for h := range s.allowHosts {
-		out = append(out, scheme+"://"+h+"/auth/oidc/callback")
+		out = append(out, scheme+"://"+h+port+oidcCallbackPath)
 	}
 	return out
 }
@@ -431,7 +446,16 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	for _, c := range r.CookiesNamed(cookie) {
 		s.sessions.end(c.Value)
 	}
-	sid, se := s.sessions.start(session{user: name, oidc: true, issuer: id.Issuer, sub: id.Subject, groups: pr.Groups()})
+	// Fresh from auth_time (read from the verified token): when the person
+	// last entered credentials at the provider. Within oidcClockSkew ahead
+	// it counts as now (start clamps it); further ahead, or absent, the
+	// session holds no elevated permission.
+	authAt := id.AuthTime
+	if authAt.After(s.sessions.clock().Add(oidcClockSkew)) {
+		detail["authTimeAhead"] = true
+		authAt = time.Time{}
+	}
+	sid, se := s.sessions.start(session{user: name, oidc: true, issuer: id.Issuer, sub: id.Subject, groups: pr.Groups(), authAt: authAt})
 	s.clearOIDCCookie(w, r)
 	http.SetCookie(w, &http.Cookie{
 		Name:     cookie,
@@ -445,6 +469,9 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	})
 	delete(detail, "status")
 	detail["pinned"] = fresh
+	if !id.AuthTime.IsZero() {
+		detail["authTime"] = id.AuthTime.UTC().Format(time.RFC3339)
+	}
 	detail["expires"] = se.expires.UTC().Format(time.RFC3339)
 	e.User, e.Target, e.Session, e.Result, e.Detail = "oidc:"+name, "", se.hash, audit.ResultOK, detail
 	s.audit.record(e)

@@ -344,8 +344,11 @@ func signOutMain(path, name string, m *project.Manifest, getenv func(string) str
 			return 2
 		case oidc:
 			pr = "oidc:" + name
-		default:
+		case local:
 			pr = "user:" + name
+		default:
+			fmt.Fprintf(stderr, "naut users: %s is neither a local user nor an OIDC name here (naut users list shows them); for a name signed in at the provider but not in the manifest, give oidc:%s\n", name, name)
+			return 1
 		}
 	}
 	if err := users.SignOut(users.SignoutsPath(path), osUser(getenv, os.Geteuid()), pr, timeNow()); err != nil {

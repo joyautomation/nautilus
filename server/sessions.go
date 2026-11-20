@@ -160,7 +160,15 @@ func (ss *sessions) open(user, cred string) (string, session) {
 func (ss *sessions) start(se session) (string, session) {
 	id := randomID()
 	now := ss.now()
-	se.hash, se.created, se.expires, se.authAt = sessionHash(id), now, now.Add(ss.life), now
+	se.hash, se.created, se.expires = sessionHash(id), now, now.Add(ss.life)
+	// A password was proved just now. An OIDC sign-in proves only what
+	// the provider says: when the person last entered credentials there
+	// (auth_time, given in se.authAt; zero when it did not say), never
+	// later than now. A sign-in that rode on an old session at the
+	// provider is not fresh.
+	if !se.oidc || se.authAt.After(now) {
+		se.authAt = now
+	}
 	key := se.key()
 
 	ss.mu.Lock()

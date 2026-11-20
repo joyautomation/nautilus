@@ -321,4 +321,4 @@ func compileAuth(c *AuthConfig) (*auth.Policy, error) {
 // directory, which the leader writes and the other box does not see, so
 // after a failover the name could be pinned afresh to another account.
 // Replicating the pins (and naut users signout's file) is #710's.
-var errOIDCPair = fmt.Errorf("auth: oidc cannot be used with redundancy: yet: each OIDC name is pinned to its account on the box that signs it in, and a pair does not share the pins yet. Use local users on a pair (naut users add), or run one controller")
+var errOIDCPair = fmt.Errorf("auth: oidc cannot be used on a redundant pair yet: each OIDC name is pinned to its account on the box that signs it in, and a pair does not share the pins yet. Use local users on a pair (naut users add), or run one controller")

@@ -214,7 +214,9 @@ func (c *Client) Exchange(ctx context.Context, redirect, code, verifier string) 
 	if raw == "" {
 		return Identity{}, errors.New("the token endpoint's answer has no id_token (is the openid scope allowed for this client?)")
 	}
-	v := p.VerifierContext(c.ctx(ctx), &gooidc.Config{ClientID: c.cfg.ClientID, Now: c.cfg.Now})
+	// p.Verifier keeps one key set for the provider (fetched once, again
+	// on an unknown key id), with the HTTP client discovery used.
+	v := p.Verifier(&gooidc.Config{ClientID: c.cfg.ClientID, Now: c.cfg.Now})
 	idt, err := v.Verify(c.ctx(ctx), raw)
 	if err != nil {
 		return Identity{}, fmt.Errorf("the ID token does not verify: %v", err)

@@ -17,7 +17,7 @@ func oidcUsersProject(t *testing.T) (dir, state string) {
 	dir, state = t.TempDir(), t.TempDir()
 	os.Chmod(state, 0o700)
 	m := "name: line1\ntasks:\n  - program: main.st\n    scan: 100ms\n" +
-		"auth:\n  state-dir: " + state + "\n  users:\n    akhan: [engineer]\n" +
+		"auth:\n  state-dir: " + state + "\n  users:\n    akhan: [engineer]\n    bob: [operator]\n" +
 		"  oidc:\n    issuer: https://login.example\n    client-id: naut\n    users:\n      jsmith@corp.example: engineer\n      akhan: viewer\n"
 	os.WriteFile(filepath.Join(dir, "nautilus.yaml"), []byte(m), 0o644)
 	os.WriteFile(filepath.Join(dir, "main.st"), []byte("PROGRAM Main\nEND_PROGRAM\n"), 0o644)
@@ -67,6 +67,7 @@ func TestNautUsersSignout(t *testing.T) {
 	for _, c := range []struct{ arg, want string }{
 		{"jsmith@corp.example", "oidc:jsmith@corp.example"},
 		{"user:akhan", "user:akhan"},
+		{"bob", "user:bob"},
 		{"oidc:akhan", "oidc:akhan"},
 	} {
 		code, _, errs := nautUsers(t, dir, "", "signout", c.arg)
@@ -80,6 +81,9 @@ func TestNautUsersSignout(t *testing.T) {
 	}
 	if code, _, errs := nautUsers(t, dir, "", "signout", "akhan"); code != 2 || !strings.Contains(errs, "user:akhan or oidc:akhan") {
 		t.Errorf("an ambiguous name: %d %s", code, errs)
+	}
+	if code, _, errs := nautUsers(t, dir, "", "signout", "akahn"); code != 1 || !strings.Contains(errs, "neither a local user nor an OIDC name") {
+		t.Errorf("a typo: %d %s", code, errs)
 	}
 }
 

@@ -341,7 +341,7 @@ func TestLoadAuthOIDC(t *testing.T) {
 // shared yet (#710).
 func TestLoadAuthOIDCRefusedOnAPair(t *testing.T) {
 	fs := authProject("auth:\n  oidc:\n    issuer: https://login.example\n    client-id: n\n" + pairOK)
-	if _, err := Load(fs, ""); err == nil || !strings.Contains(err.Error(), "cannot be used with redundancy") {
+	if _, err := Load(fs, ""); err == nil || !strings.Contains(err.Error(), "cannot be used on a redundant pair") {
 		t.Errorf("err = %v", err)
 	}
 }

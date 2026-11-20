@@ -457,7 +457,7 @@ func csv(s string) []string {
 // operator that way. The audit journal names the principal either way, with
 // the typed name in detail.by.
 func (s *Server) recordBy(r *http.Request, typed string) string {
-	if a := s.actorOf(r); a.pr.Kind == auth.KindUser && a.pr.Name != "" {
+	if a := s.actorOf(r); (a.pr.Kind == auth.KindUser || a.pr.Kind == auth.KindOIDC) && a.pr.Name != "" {
 		return a.pr.Name
 	}
 	return typed

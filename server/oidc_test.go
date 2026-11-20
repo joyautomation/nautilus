@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -479,12 +480,39 @@ func TestSignoutEndsSessions(t *testing.T) {
 	}
 }
 
-// An OIDC session has no password to confirm: past auth.elevation an
-// elevated action is refused with the fix (sign out and in again), and
-// POST /api/elevate never tries a password against an OIDC name.
+// An OIDC session is fresh from when the person last entered
+// credentials at the provider (auth_time), not from the callback: a token
+// without auth_time, or one riding an hour-old session at the provider,
+// holds no elevated permission. Past auth.elevation an elevated action is
+// refused with the fix, and POST /api/elevate never tries a password
+// against an OIDC name.
 func TestOIDCElevationSaysSignInAgain(t *testing.T) {
 	srv, fake, _ := oidcServer(t, Options{})
+	for _, c := range []struct {
+		what     string
+		authTime time.Time
+		want     int
+	}{
+		{"no auth_time", time.Time{}, http.StatusUnauthorized},
+		{"auth_time an hour ago", time.Now().Add(-time.Hour), http.StatusUnauthorized},
+		{"auth_time now", time.Now(), http.StatusOK},
+		{"auth_time a minute ahead (within the 2 min skew)", time.Now().Add(time.Minute), http.StatusOK},
+		{"auth_time an hour ahead (past the skew)", time.Now().Add(time.Hour), http.StatusUnauthorized},
+	} {
+		fake.as("eng@corp.example", "sub-e", "g-eng")
+		fake.id.AuthTime = c.authTime
+		_, ck := oidcSignIn(t, srv, fake, "/")
+		if ck == nil {
+			t.Fatalf("%s: no session", c.what)
+		}
+		rec := call(t, srv, "POST", "/api/forces", `{"name":"SP","value":1}`, withCookie(ck.Value), ownOrigin)
+		if rec.Code != c.want {
+			t.Errorf("%s: force %d %s, want %d", c.what, rec.Code, rec.Body, c.want)
+		}
+		call(t, srv, "DELETE", "/api/forces/SP", "", withCookie(ck.Value), ownOrigin)
+	}
 	fake.as("eng@corp.example", "sub-e", "g-eng")
+	fake.id.AuthTime = time.Now()
 	_, c := oidcSignIn(t, srv, fake, "/")
 	if c == nil {
 		t.Fatal("no session")
@@ -494,11 +522,11 @@ func TestOIDCElevationSaysSignInAgain(t *testing.T) {
 	srv.sessions.now = func() time.Time { return later }
 	srv.sessions.mu.Unlock()
 	rec := call(t, srv, "POST", "/api/forces", `{"name":"SP","value":1}`, withCookie(c.Value), ownOrigin)
-	if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), "sign out and sign in again") {
-		t.Errorf("stale OIDC force: %d %s", rec.Code, rec.Body)
+	if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), "then sign in again") || strings.Contains(rec.Body.String(), `"elevate"`) {
+		t.Errorf("stale OIDC force: %d %s (want the fix, and no password prompt)", rec.Code, rec.Body)
 	}
 	rec = call(t, srv, "POST", "/api/elevate", `{"password":"anything"}`, withCookie(c.Value), fromLoopback, ownOrigin)
-	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "sign out and sign in again") {
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "then sign in again") {
 		t.Errorf("elevate on an OIDC session: %d %s", rec.Code, rec.Body)
 	}
 }
@@ -549,8 +577,26 @@ func TestOIDCRedirectURIFromTrustedHostOnly(t *testing.T) {
 			t.Errorf("Host %s: %q %v, want %q", host, got, ok, want)
 		}
 	}
-	if uris := srv.OIDCRedirectURIs(true); len(uris) != 1 || uris[0] != "https://plc.plant.example/auth/oidc/callback" {
-		t.Errorf("OIDCRedirectURIs %v", uris)
+	// What naut run prints is what a sign-in sends, port included.
+	for _, c := range []struct {
+		tls  bool
+		port string
+	}{{true, "8443"}, {false, "8086"}, {true, "443"}, {false, "80"}} {
+		scheme := "http"
+		if c.tls {
+			scheme = "https"
+		}
+		r := httptest.NewRequest("GET", scheme+"://plc.plant.example:"+c.port+"/auth/oidc/start", nil)
+		if c.port == "443" || c.port == "80" {
+			r.Host = "plc.plant.example"
+		}
+		if c.tls {
+			r.TLS = &tls.ConnectionState{}
+		}
+		used, _ := srv.oidcRedirectURI(r)
+		if uris := srv.OIDCRedirectURIs(c.tls, c.port); len(uris) != 1 || uris[0] != used {
+			t.Errorf("%s port %s: printed %v, a sign-in sends %s", scheme, c.port, uris, used)
+		}
 	}
 }
 
@@ -592,5 +638,76 @@ func TestOIDCPinsUnreadableFailClosed(t *testing.T) {
 	fake.as("other@corp.example", "sub-2", "g-ops")
 	if cb, c := oidcSignIn(t, srv, fake, "/"); c != nil || cb.Code != http.StatusServiceUnavailable {
 		t.Errorf("sign-in with an unreadable pins file: %d %s", cb.Code, cb.Body)
+	}
+}
+
+// What the callback refuses on the provider's side: a groups claim no
+// grant can be read from, a provider out of reach at the exchange (503,
+// the local-user hint); and a sign-in ends the session the browser held.
+func TestOIDCCallbackMore(t *testing.T) {
+	srv, fake, _ := oidcServer(t, Options{})
+	fake.as("x@corp.example", "sub-1", "g-ops", "bad\nid")
+	if cb, c := oidcSignIn(t, srv, fake, "/"); c != nil || cb.Code != http.StatusForbidden || !strings.Contains(cb.Body.String(), "groups claim") {
+		t.Errorf("a control character in a group id: %d %s", cb.Code, cb.Body)
+	}
+	many := make([]string, maxOIDCGroups+1)
+	for i := range many {
+		many[i] = "g-" + strconv.Itoa(i)
+	}
+	fake.as("x@corp.example", "sub-1", many...)
+	if cb, c := oidcSignIn(t, srv, fake, "/"); c != nil || cb.Code != http.StatusForbidden {
+		t.Errorf("too many groups: %d %s", cb.Code, cb.Body)
+	}
+	fake.err = errors.Join(ErrOIDCUnreachable, errors.New("token endpoint: dial tcp: refused"))
+	if cb, c := oidcSignIn(t, srv, fake, "/"); c != nil || cb.Code != http.StatusServiceUnavailable || !strings.Contains(cb.Body.String(), "cannot be reached") {
+		t.Errorf("unreachable at the exchange: %d %s", cb.Code, cb.Body)
+	}
+	fake.err = nil
+
+	// Fixation: the session the browser held before is ended.
+	old := signIn(t, srv, "jsmith")
+	fake.as("x@corp.example", "sub-1", "g-ops")
+	rec, binding := oidcStart(t, srv, "/")
+	if rec.Code != http.StatusSeeOther {
+		t.Fatal(rec.Code)
+	}
+	cb := oidcCallback(t, srv, fake.last.State, binding, func(r *http.Request) { r.AddCookie(old) })
+	if cb.Code != http.StatusOK {
+		t.Fatalf("callback: %d %s", cb.Code, cb.Body)
+	}
+	if _, ok := srv.sessions.lookup(old.Value); ok {
+		t.Error("the session the browser held before the sign-in still lives")
+	}
+
+	// An acknowledgement by an OIDC session is recorded under its name,
+	// not whatever the client typed.
+	var sc *http.Cookie
+	for _, c := range cb.Result().Cookies() {
+		if c.Name == plainCookie && c.Value != "" {
+			sc = c
+		}
+	}
+	req := httptest.NewRequest("POST", "http://localhost/", nil)
+	req.AddCookie(sc)
+	if got := srv.recordBy(req, "someone-else"); got != "x@corp.example" {
+		t.Errorf("recordBy = %q", got)
+	}
+}
+
+// The table of sign-ins under way is bounded: past maxOIDCFlows a start is
+// refused, once the expired ones are swept.
+func TestOIDCFlowsBounded(t *testing.T) {
+	f := newOIDCFlows()
+	for i := 0; i < maxOIDCFlows; i++ {
+		if !f.put(strconv.Itoa(i), oidcFlow{}) {
+			t.Fatalf("refused at %d", i)
+		}
+	}
+	if f.put("one-more", oidcFlow{}) {
+		t.Error("took one past the cap")
+	}
+	f.now = func() time.Time { return time.Now().Add(oidcFlowLife) }
+	if !f.put("after-expiry", oidcFlow{}) || len(f.m) != 1 {
+		t.Errorf("expired flows not swept: %d", len(f.m))
 	}
 }

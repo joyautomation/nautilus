@@ -267,9 +267,21 @@ func (s *Store) PinFirst(name, issuer, subject string, now time.Time) (pin Pin, 
 	}
 	s.mu.RLock()
 	failed := s.err != nil
+	var cached Pin
+	known := false
+	if !failed {
+		cached, known = s.pins.Pins[name]
+	}
 	s.mu.RUnlock()
 	if failed {
 		return Pin{}, false, ErrUnavailable
+	}
+	// A name pinned already needs no lock: the pin is only ever removed by
+	// naut users unpin, which the next reload (within a second) brings in.
+	// Only a new pin is written, and it is decided under the lock on the
+	// file as it is then.
+	if known {
+		return cached, false, nil
 	}
 	path := PinsPath(s.path)
 	var before, after *Pins
@@ -296,7 +308,7 @@ func (s *Store) PinFirst(name, issuer, subject string, now time.Time) (pin Pin, 
 		return nil
 	})
 	if err != nil {
-		return Pin{}, false, err
+		return Pin{}, false, fmt.Errorf("%w (the state directory's %s, %s and %s must be the controller's own: chown them to the user it runs as)", err, LockName, PinsName, FileName)
 	}
 	st, serr := stat(path)
 	s.mu.Lock()

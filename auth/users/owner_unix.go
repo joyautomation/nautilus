@@ -5,6 +5,7 @@ package users
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"syscall"
 	"time"
 )
@@ -62,6 +63,17 @@ func lockFile(path string) (func(), error) {
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		return nil, err
+	}
+	// Run as root (sudo naut users), the lock gets its directory's owner,
+	// like the files it guards (keepOwner): the controller takes it too, at
+	// an OIDC name's first sign-in, and must be able to open it. A lock an
+	// earlier release left owned by root is given back the same way.
+	if geteuid() == 0 {
+		if st, err := os.Stat(filepath.Dir(path)); err == nil {
+			if sys, ok := st.Sys().(*syscall.Stat_t); ok {
+				f.Chown(int(sys.Uid), int(sys.Gid))
+			}
+		}
 	}
 	deadline := time.Now().Add(lockWait)
 	for {

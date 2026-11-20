@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -82,25 +83,42 @@ func TestPinFirstIsTrustOnFirstUse(t *testing.T) {
 	}
 }
 
-// PinFirst reads the file under the lock: an unpin a moment ago, not yet
-// reloaded, counts, and is told (as someone else's change) before the new
-// pin is made.
+// PinFirst decides a new pin on the file as it is under the lock: a pin
+// written since the last reload (by hand, by another process) wins over
+// the cache's "not pinned", and a change made meanwhile is told (as
+// someone else's) before the new pin is made.
 func TestPinFirstRereadsUnderTheLock(t *testing.T) {
 	s, path, told := pinStore(t)
 	now := time.Now()
-	if _, _, err := s.PinFirst("jsmith", "https://idp", "sub-1", now); err != nil {
+	if _, _, err := s.PinFirst("other", "https://idp", "sub-o", now); err != nil {
 		t.Fatal(err)
 	}
-	if err := UpdatePins(PinsPath(path), "opsadmin", func(p *Pins) error { return p.Unpin("jsmith") }); err != nil {
+	if err := UpdatePins(PinsPath(path), "opsadmin", func(p *Pins) error {
+		delete(p.Pins, "other")
+		p.Pins["jsmith"] = Pin{Issuer: "https://idp", Subject: "sub-1", Pinned: now}
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 	p, fresh, err := s.PinFirst("jsmith", "https://idp", "sub-2", now)
-	if err != nil || !fresh || !p.Same("https://idp", "sub-2") {
-		t.Fatalf("after an unpin not yet reloaded: %+v %v %v", p, fresh, err)
+	if err != nil || fresh || !p.Same("https://idp", "sub-1") {
+		t.Fatalf("a pin on disk, not yet reloaded: %+v %v %v, want sub-1's", p, fresh, err)
 	}
 	cs := told()
-	if len(cs) != 1 || cs[0].What != "unpinned" || cs[0].Principal != "oidc:jsmith" || cs[0].Detail != "opsadmin" {
-		t.Errorf("told %+v, want one unpinned by opsadmin", cs)
+	got := map[string]string{}
+	for _, c := range cs {
+		got[c.Principal] = c.What + " by " + c.Detail
+	}
+	if len(cs) != 2 || got["oidc:other"] != "unpinned by opsadmin" || got["oidc:jsmith"] != "pinned by opsadmin" {
+		t.Errorf("told %+v", cs)
+	}
+	// An unpin reaches PinFirst through the reload.
+	if err := UpdatePins(PinsPath(path), "opsadmin", func(p *Pins) error { return p.Unpin("jsmith") }); err != nil {
+		t.Fatal(err)
+	}
+	s.Reload()
+	if p, fresh, err := s.PinFirst("jsmith", "https://idp", "sub-2", now); err != nil || !fresh || !p.Same("https://idp", "sub-2") {
+		t.Errorf("after an unpin and a reload: %+v %v %v", p, fresh, err)
 	}
 	if err := UpdatePins(PinsPath(path), "opsadmin", func(p *Pins) error { return p.Unpin("nobody") }); !errors.Is(err, ErrNotPinned) {
 		t.Errorf("unpin of an unpinned name: %v", err)
@@ -248,5 +266,28 @@ func TestSignOutPrunes(t *testing.T) {
 	}
 	if err := SignOut(path, "x", "user:Upper", now); err == nil {
 		t.Error("a principal not lowercase was taken")
+	}
+}
+
+// A lock the controller cannot open (left by root by an earlier release)
+// refuses a new pin with the fix; a name pinned already needs no lock.
+func TestPinFirstLockUnopenable(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("file modes")
+	}
+	s, path, _ := pinStore(t)
+	now := time.Now()
+	if _, _, err := s.PinFirst("known", "https://idp", "sub-k", now); err != nil {
+		t.Fatal(err)
+	}
+	lock := filepath.Join(filepath.Dir(path), LockName)
+	if err := os.Chmod(lock, 0); err != nil {
+		t.Fatal(err)
+	}
+	if p, _, err := s.PinFirst("known", "https://idp", "sub-k", now); err != nil || !p.Same("https://idp", "sub-k") {
+		t.Errorf("a pinned name needed the lock: %v", err)
+	}
+	if _, _, err := s.PinFirst("new", "https://idp", "sub-n", now); err == nil || !strings.Contains(err.Error(), "chown") {
+		t.Errorf("err = %v, want the fix", err)
 	}
 }
