@@ -91,7 +91,7 @@ The same document renders in a SvelteKit HMI through the
 | `Heater` | `powerPct` | |
 | `Gauge` | `value`, `setpoint` | |
 | `Sparkline` | `values` | |
-| `CommandButton` | `held`, `disabled`, `disabledReason`; the tag it writes is the `tag` prop | |
+| `CommandButton` | `held`, `disabled`, `disabledReason`; set in `props`: `tag` (the tag it writes), `label`, `kind` (`start`, `stop` or `neutral`: green, red, plain) and `pulseMs` | |
 | `WriteToggle` | `value`; the tag it writes is the `tag` prop | |
 | `SetpointGroup` | `title`, `items` (`[{"tag": "Kp", "label": "Gain", "unit": "", "decimals": 2}]`), `columns`: it reads and writes the items' tags itself; give it a width, never a height | |
 | `OffPage` | `label` (where the line goes on another screen: `TO FILTER GALLERY`), `dir` (the way it points: `right`, `left`, `up`, `down`) | `top`, `left`, `right`, `bottom` |

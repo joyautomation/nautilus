@@ -29,7 +29,25 @@ claims:
     claim: >-
       With server.hmi set to a built screen, the controller serves that
       screen at the root, and naut build embeds it in the built binary.
-    source: "#84-tell-the-controller-to-serve-it"
+    source: "#87-tell-the-controller-to-serve-it"
     tests:
       - go ./server TestHMISPAFallback
       - go ./cmd/naut TestBuildEmbedsHMIAndBuiltBinaryServesIt
+  - id: TU-005
+    claim: >-
+      A project with a *.mimic.json and no server.hmi is served by naut run as
+      a screen (one page per file, with Diagnostics and Alarms added), its
+      CommandButtons write the tags they name, naut build carries it, and
+      naut check names a tag the screen binds that the project does not
+      declare.
+    source: "#81-draw-the-screen"
+    tests:
+      - go ./internal/project TestCheckMimics
+      - go ./cmd/naut TestBuildEmbedsHMIAndBuiltBinaryServesIt
+    partial: true
+    note: >-
+      The undeclared-tag check and the embedding are tested. That the pages
+      come up at the root with no manifest line, and that a button press
+      drives the program, were observed by the independent tester (run
+      2026-11-19-020, headless Chrome and the device side) and by hand on
+      the tutorial's motor project; there is no gate yet.
