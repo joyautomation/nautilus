@@ -13,8 +13,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -188,28 +190,28 @@ func opcuaTrustMain(args []string, stdout, stderr io.Writer) int {
 	if err := mapOPCUACert(e, g, c.Thumbprint); err != nil {
 		return fail(err)
 	}
-	took := func(m *project.Manifest) bool {
-		if m.AuthPolicy() == nil {
-			return false
-		}
-		n, ok := m.AuthPolicy().OPCUACertFor(c.Thumbprint, "")
-		return ok && n == strings.ToLower(g.name)
+	// Exact: the result is the manifest as it was plus this one entry,
+	// mapped to this certificate.
+	want := project.AuthCert{Thumbprint: c.Thumbprint, Grants: project.AuthGrants{{Role: g.role, Areas: g.areas}}}
+	took := func(m *project.Manifest) bool { return exactCertEdit(e.m, m, g.name, want) }
+	// The manifest first (save checks the edit loads and is exactly this
+	// mapping): a mapping for a certificate not yet trusted is inert, a
+	// trusted certificate not yet mapped is not.
+	if _, err := e.save(took); err != nil {
+		return fail(fmt.Errorf("--as %s: nothing changed: %w", *as, err))
 	}
-	if m, err := e.check(); err != nil {
-		return fail(fmt.Errorf("--as %s would not load, so nothing changed: %w", *as, err))
-	} else if !took(m) {
-		return fail(fmt.Errorf("--as %s loads but does not map the certificate to %s (a name YAML reads otherwise?), so nothing changed", *as, g.name))
+	// A certificate the block maps by its subject: the thumbprint mapping
+	// wins from the restart on.
+	if old, ok := e.m.AuthPolicy().OPCUACertFor("", c.Subject); ok {
+		fmt.Fprintf(stdout, "note: auth.opcua-certificates.%s maps this certificate by its subject; %s, by its thumbprint, supersedes it for this certificate (a thumbprint wins over a subject)\n", old, g.name)
 	}
 	if rejected {
 		if c, err = pki.Trust(c.Thumbprint); err != nil {
-			return fail(err)
+			return fail(fmt.Errorf("the mapping is written, but the certificate is not trusted (the mapping does nothing until it is): %w; run naut opcua trust %s", err, c.Thumbprint))
 		}
 		fmt.Fprintf(stdout, "trusted %s\n  %s\n  %s\n", c.Thumbprint, printable(c.ApplicationURI), printable(c.Subject))
 	} else {
 		fmt.Fprintf(stdout, "%s is trusted already\n", c.Thumbprint)
-	}
-	if _, err := e.save(took); err != nil {
-		return fail(fmt.Errorf("the certificate is trusted, but the mapping was not written: %w\nAdd it under auth.opcua-certificates by hand:\n    %s: {thumbprint: %s, grants: %s}", err, g.name, c.Thumbprint, g.yaml()))
 	}
 	fmt.Fprintf(stdout, "%s: auth.opcua-certificates.%s = %s (thumbprint %s)\n", e.path, g.name, g.yaml(), c.Thumbprint)
 	fmt.Fprintln(stdout, "The client can connect now, read-only. Its writes, as opcua-cert:"+g.name+", need the grant loaded:")
@@ -217,9 +219,9 @@ func opcuaTrustMain(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// findClientCert is the client certificate prefix names: a rejected one
-// (rejected true), else a trusted one, refusing a prefix that names
-// several or that is shorter than Trust takes.
+// findClientCert is the one client certificate, rejected (rejected true)
+// or trusted, whose thumbprint starts with prefix, refusing a prefix that
+// names several or that is shorter than Trust takes.
 func findClientCert(pki opcuaserver.PKI, prefix string) (opcuaserver.CertInfo, bool, error) {
 	p := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(prefix), ":", ""))
 	if len(p) < 16 {
@@ -229,26 +231,41 @@ func findClientCert(pki opcuaserver.PKI, prefix string) (opcuaserver.CertInfo, b
 	if err != nil {
 		return opcuaserver.CertInfo{}, false, err
 	}
-	for _, set := range []struct {
-		certs    []opcuaserver.CertInfo
-		rejected bool
-	}{{rejected, true}, {trusted, false}} {
-		var hits []opcuaserver.CertInfo
-		for _, c := range set.certs {
-			if strings.HasPrefix(c.Thumbprint, p) {
-				hits = append(hits, c)
-			}
-		}
-		switch len(hits) {
-		case 0:
-			continue
-		case 1:
-			return hits[0], set.rejected, nil
-		default:
-			return opcuaserver.CertInfo{}, false, fmt.Errorf("%d certificates have a thumbprint starting %s; give more digits", len(hits), p)
+	c, inRejected, err := pickClientCert(p, trusted, rejected)
+	if err != nil {
+		return c, false, fmt.Errorf("%s: %w", pki.Dir, err)
+	}
+	return c, inRejected, nil
+}
+
+// pickClientCert is the one certificate of trusted and rejected whose
+// thumbprint starts with p.
+func pickClientCert(p string, trusted, rejected []opcuaserver.CertInfo) (opcuaserver.CertInfo, bool, error) {
+	// Across both sets: a prefix that names one rejected and one trusted
+	// certificate is ambiguous, not a pick of the rejected one. The same
+	// certificate in both is the trusted one.
+	hits := map[string]opcuaserver.CertInfo{}
+	inRejected := map[string]bool{}
+	for _, c := range trusted {
+		if strings.HasPrefix(c.Thumbprint, p) {
+			hits[c.Thumbprint] = c
 		}
 	}
-	return opcuaserver.CertInfo{}, false, fmt.Errorf("no rejected or trusted certificate in %s has a thumbprint starting %s: a client's certificate lands in rejected/ when it is refused", pki.Dir, p)
+	for _, c := range rejected {
+		if _, ok := hits[c.Thumbprint]; !ok && strings.HasPrefix(c.Thumbprint, p) {
+			hits[c.Thumbprint], inRejected[c.Thumbprint] = c, true
+		}
+	}
+	switch len(hits) {
+	case 0:
+	case 1:
+		for tp, c := range hits {
+			return c, inRejected[tp], nil
+		}
+	default:
+		return opcuaserver.CertInfo{}, false, fmt.Errorf("%d certificates (rejected and trusted) have a thumbprint starting %s; give more digits", len(hits), p)
+	}
+	return opcuaserver.CertInfo{}, false, fmt.Errorf("no rejected or trusted certificate has a thumbprint starting %s (a client's certificate lands in rejected/ when it is refused)", p)
 }
 
 // mapOPCUACert adds name: {thumbprint, grants} to the manifest's
@@ -279,4 +296,26 @@ func mapOPCUACert(e *manifestEdit, g grantSpec, thumbprint string) error {
 		return fmt.Errorf("auth.opcua-certificates (line %d) is not a block a command can add to; add this under it by hand:\n    %s", ck.Line, entry)
 	}
 	return e.insertUnder(ck, cv, []string{entry})
+}
+
+// exactCertEdit reports whether post is pre with exactly one entry added
+// to auth.opcua-certificates: name, as want, which the compiled policy
+// maps want's thumbprint to; every other part of the manifest the same.
+func exactCertEdit(pre, post *project.Manifest, name string, want project.AuthCert) bool {
+	if pre.Auth == nil || post.Auth == nil || post.AuthPolicy() == nil {
+		return false
+	}
+	if n, ok := post.AuthPolicy().OPCUACertFor(want.Thumbprint, ""); !ok || n != name {
+		return false
+	}
+	if got, ok := post.Auth.OPCUACerts[name]; !ok || !reflect.DeepEqual(got, want) {
+		return false
+	}
+	rest := *post.Auth
+	rest.OPCUACerts = maps.Clone(post.Auth.OPCUACerts)
+	delete(rest.OPCUACerts, name)
+	if len(rest.OPCUACerts) == 0 && len(pre.Auth.OPCUACerts) == 0 {
+		rest.OPCUACerts = pre.Auth.OPCUACerts
+	}
+	return reflect.DeepEqual(&rest, pre.Auth) && sameBut(pre, post, func(m *project.Manifest) { m.Auth = nil })
 }

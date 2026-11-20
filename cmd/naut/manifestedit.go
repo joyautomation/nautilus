@@ -30,8 +30,51 @@ type manifestEdit struct {
 	name string // the manifest, relative to dir (nautilus.yaml, or -m's)
 	path string
 	raw  []byte
-	nl   string     // the file's line ending: "\n" or "\r\n"
-	root *yaml.Node // the top-level mapping
+	nl   string            // the file's line ending: "\n" or "\r\n"
+	root *yaml.Node        // the top-level mapping
+	m    *project.Manifest // the manifest before the edit
+	orig []byte            // the file as read, to see a change made meanwhile
+}
+
+// refuseOddBreaks is oddBreaks; a test turns it off to show the exact
+// check after the edit refuses a misplaced one by itself.
+var refuseOddBreaks = oddBreaks
+
+// oddBreaks refuses a line break other than \n and \r\n. YAML counts a
+// lone \r, U+0085, U+2028 and U+2029 as line breaks too, so its line
+// numbers and the file's \n lines disagree after one, and an edit placed
+// by line would land in the wrong place.
+func oddBreaks(raw []byte) error {
+	for i := 0; i < len(raw); i++ {
+		var what string
+		switch {
+		case raw[i] == '\r' && (i+1 == len(raw) || raw[i+1] != '\n'):
+			what = "a carriage return not followed by a newline"
+		case bytes.HasPrefix(raw[i:], []byte("\u0085")):
+			what = "U+0085 (next line)"
+		case bytes.HasPrefix(raw[i:], []byte("\u2028")):
+			what = "U+2028 (line separator)"
+		case bytes.HasPrefix(raw[i:], []byte("\u2029")):
+			what = "U+2029 (paragraph separator)"
+		default:
+			continue
+		}
+		line := bytes.Count(raw[:i], []byte("\n")) + 1
+		return fmt.Errorf("line %d holds %s, which YAML reads as a line break: a command cannot place an edit around it; replace it with a plain newline (or remove it)", line, what)
+	}
+	return nil
+}
+
+// sameBut reports whether post is pre except for what clear blanks in
+// both: every other key of the manifest decodes the same. A command's
+// edit is exact when this holds and the cleared part is what it meant.
+func sameBut(pre, post *project.Manifest, clear func(*project.Manifest)) bool {
+	a, b := *pre, *post
+	clear(&a)
+	clear(&b)
+	ya, err1 := yaml.Marshal(&a)
+	yb, err2 := yaml.Marshal(&b)
+	return err1 == nil && err2 == nil && bytes.Equal(ya, yb)
 }
 
 // openManifestEdit reads dir's manifest (name "" = nautilus.yaml) for an
@@ -46,16 +89,25 @@ func openManifestEdit(dir, name string) (*manifestEdit, error) {
 	// the file on disk.
 	name = path.Clean(filepath.ToSlash(name))
 	e := &manifestEdit{dir: dir, name: name, path: filepath.Join(dir, filepath.FromSlash(name)), nl: "\n"}
+	// A symlinked manifest is edited where it points: the link stays a
+	// link.
 	var err error
+	if e.path, err = filepath.EvalSymlinks(e.path); err != nil {
+		return nil, err
+	}
 	if e.raw, err = os.ReadFile(e.path); err != nil {
 		return nil, err
+	}
+	if err := refuseOddBreaks(e.raw); err != nil {
+		return nil, fmt.Errorf("%s: %w", e.path, err)
 	}
 	if bytes.Contains(e.raw, []byte("\r\n")) {
 		e.nl = "\r\n"
 	}
-	if _, err := project.ReadManifest(os.DirFS(dir), name); err != nil {
+	if e.m, err = project.ReadManifest(os.DirFS(dir), name); err != nil {
 		return nil, fmt.Errorf("%w\n(fix that first: a command edits only a manifest that loads)", err)
 	}
+	e.orig = e.raw
 	var doc yaml.Node
 	if err := yaml.Unmarshal(e.raw, &doc); err != nil {
 		return nil, err
@@ -159,11 +211,11 @@ func (e *manifestEdit) save(took func(*project.Manifest) bool) (*project.Manifes
 		return nil, fmt.Errorf("the edit would not load, so %s is unchanged: %w", e.path, err)
 	}
 	if !took(m) {
-		return nil, fmt.Errorf("the edit loads but does not say what was meant (a name YAML reads otherwise, or text the file ends before?), so %s is unchanged", e.path)
+		return nil, fmt.Errorf("the edit loads but does not say exactly what was meant (a name YAML reads otherwise, or text the file ends before?), so %s is unchanged", e.path)
 	}
-	mode := iofs.FileMode(0o644)
-	if st, err := os.Stat(e.path); err == nil {
-		mode = st.Mode().Perm()
+	st, err := os.Stat(e.path)
+	if err != nil {
+		return nil, err
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(e.path), ".nautilus-edit-*")
 	if err != nil {
@@ -172,13 +224,23 @@ func (e *manifestEdit) save(took func(*project.Manifest) bool) (*project.Manifes
 	defer os.Remove(tmp.Name()) // gone after the rename; cleans up a failure
 	_, err = tmp.Write(e.raw)
 	if err == nil {
-		err = tmp.Chmod(mode)
+		err = tmp.Chmod(st.Mode().Perm())
+	}
+	if err == nil {
+		err = keepOwner(tmp, st) // run under sudo, the file stays its owner's
 	}
 	if err == nil {
 		err = tmp.Sync()
 	}
 	if cerr := tmp.Close(); err == nil {
 		err = cerr
+	}
+	// No lock: a change made since the read (an editor's save) is not
+	// overwritten; the command is run again.
+	if err == nil {
+		if now, rerr := os.ReadFile(e.path); rerr != nil || !bytes.Equal(now, e.orig) {
+			err = fmt.Errorf("%s changed while the command ran, so it is left as it is now: run the command again", e.path)
+		}
 	}
 	if err == nil {
 		err = os.Rename(tmp.Name(), e.path)

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"reflect"
 	"strings"
 
 	"github.com/joyautomation/nautilus/auth/users"
@@ -94,18 +95,13 @@ func authMain(args []string, stdout, stderr io.Writer) int {
 		return fail(fmt.Errorf("%s has an auth: block already (line %d): edit it there", e.path, k.Line))
 	}
 	e.appendBlock(starterAuth(grants))
-	if _, err := e.save(func(m *project.Manifest) bool {
-		p := m.AuthPolicy()
-		if p == nil {
-			return false
-		}
-		for _, g := range grants {
-			if !p.HasUser(g.name) {
-				return false
-			}
-		}
-		return true
-	}); err != nil {
+	// Exact: the result is the manifest as it was plus an auth: block
+	// that names these users with these grants and nothing else.
+	want := &project.AuthConfig{Users: map[string][]project.AuthGrant{}}
+	for _, g := range grants {
+		want.Users[g.name] = []project.AuthGrant{{Role: g.role, Areas: g.areas}}
+	}
+	if _, err := e.save(func(m *project.Manifest) bool { return exactInit(e.m, m, want) }); err != nil {
 		return fail(err)
 	}
 	fmt.Fprintf(stderr, "%s: wrote a starter auth: block", e.path)
@@ -203,4 +199,20 @@ auth:
   # sparkplug: operator        # what a Sparkplug command may write; without it none writes
 `)
 	return b.String()
+}
+
+// exactInit reports whether post is pre (which has no auth: block) with
+// the auth: block want, its users granted in the compiled policy, and
+// every other part of the manifest the same.
+func exactInit(pre, post *project.Manifest, want *project.AuthConfig) bool {
+	p := post.AuthPolicy()
+	if pre.Auth != nil || p == nil || !reflect.DeepEqual(post.Auth, want) {
+		return false
+	}
+	for name := range want.Users {
+		if !p.HasUser(name) {
+			return false
+		}
+	}
+	return sameBut(pre, post, func(m *project.Manifest) { m.Auth = nil })
 }

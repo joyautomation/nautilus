@@ -2,10 +2,13 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/joyautomation/nautilus/auth"
 	"github.com/joyautomation/nautilus/internal/project"
@@ -112,7 +115,7 @@ func TestAuthInitRefuses(t *testing.T) {
 		// Text that loads but says something else: a key YAML reads as
 		// null, a block after the document's end.
 		{"a name YAML reads as null", plainManifest, []string{"--user", "null:operator"}, "is unchanged"},
-		{"after the document end", plainManifest + "...\n", []string{"--user", "alice:operator"}, "does not say what was meant"},
+		{"after the document end", plainManifest + "...\n", []string{"--user", "alice:operator"}, "exactly what was meant"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := authProject(t, tc.manifest)
@@ -388,4 +391,179 @@ func TestOPCUATrustAsWithAnotherManifest(t *testing.T) {
 	if n, ok := m.AuthPolicy().OPCUACertFor(tps[0], ""); !ok || n != "scada" {
 		t.Error("sites/a.yaml does not map it")
 	}
+}
+
+// YAML reads a lone CR, U+0085, U+2028 and U+2029 as line breaks, so its
+// line numbers and the file's disagree after one: both commands refuse a
+// manifest holding one, naming it and its line, and change nothing (Fable
+// on #1112). With that refusal off, the exact check after the edit
+// refuses the misplaced edit by itself.
+func TestManifestEditRefusesOddLineBreaks(t *testing.T) {
+	block := "auth:\n  users:\n    akhan: [engineer]\n"
+	for _, odd := range []struct{ text, name string }{
+		{"\r", "carriage return"}, {"\u0085", "U+0085"}, {" ", "U+2028"}, {" ", "U+2029"},
+	} {
+		for _, guard := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%q guard %v", odd.text, guard), func(t *testing.T) {
+				if !guard {
+					old := refuseOddBreaks
+					refuseOddBreaks = func([]byte) error { return nil }
+					t.Cleanup(func() { refuseOddBreaks = old })
+				}
+				dir, tps := opcuaTrustProject(t, "# one"+odd.text+"two\n"+block)
+				path := filepath.Join(dir, "nautilus.yaml")
+				orig, _ := os.ReadFile(path)
+				code, out, errs := nautTrust(tps[0], "--as", "scada:operator")
+				if code == 0 {
+					t.Fatalf("trust --as was accepted:\n%s%s", out, errs)
+				}
+				if guard && (!strings.Contains(errs, odd.name) || !strings.Contains(errs, "line 7")) {
+					t.Errorf("the refusal does not name %s on line 7:\n%s%s", odd.name, out, errs)
+				}
+				if trustedHas(t, dir, tps[0]) {
+					t.Error("the certificate moved")
+				}
+				if got, _ := os.ReadFile(path); !bytes.Equal(got, orig) {
+					t.Errorf("the manifest changed:\n%q", got)
+				}
+				// auth init, on a manifest with no auth: yet.
+				dir2 := authProject(t, plainManifest+"# one"+odd.text+"two\n")
+				if code, _, errs := nautAuth("init", "--project", dir2, "--user", "alice:operator"); guard && (code == 0 || !strings.Contains(errs, odd.name)) {
+					t.Errorf("auth init: %d %s", code, errs)
+				}
+			})
+		}
+	}
+}
+
+// A symlinked nautilus.yaml stays a symlink: the file it points to is
+// edited (Fable on #1112).
+func TestManifestEditFollowsASymlink(t *testing.T) {
+	dir := authProject(t, plainManifest)
+	real := filepath.Join(t.TempDir(), "plant.yaml")
+	os.Rename(filepath.Join(dir, "nautilus.yaml"), real)
+	if err := os.Symlink(real, filepath.Join(dir, "nautilus.yaml")); err != nil {
+		t.Skip(err)
+	}
+	if code, _, errs := nautAuth("init", "--project", dir, "--user", "alice:operator"); code != 0 {
+		t.Fatal(errs)
+	}
+	if st, err := os.Lstat(filepath.Join(dir, "nautilus.yaml")); err != nil || st.Mode()&os.ModeSymlink == 0 {
+		t.Error("nautilus.yaml is no longer a symlink")
+	}
+	if got, _ := os.ReadFile(real); !strings.Contains(string(got), "alice: [operator]") {
+		t.Errorf("the target was not edited:\n%s", got)
+	}
+}
+
+// A prefix is looked up across rejected/ and trusted/ together: one that
+// names a certificate in each is ambiguous (not a pick of the rejected
+// one); the same certificate in both is the trusted one (Fable on #1112).
+func TestPickClientCert(t *testing.T) {
+	ci := func(tp string) opcuaserver.CertInfo { return opcuaserver.CertInfo{Thumbprint: tp} }
+	a := "0123456789abcdef" + strings.Repeat("a", 24)
+	b := "0123456789abcdef" + strings.Repeat("b", 24)
+	if _, _, err := pickClientCert("0123456789abcdef", []opcuaserver.CertInfo{ci(a)}, []opcuaserver.CertInfo{ci(b)}); err == nil || !strings.Contains(err.Error(), "2 certificates") {
+		t.Errorf("one trusted, one rejected under one prefix: %v", err)
+	}
+	if c, rej, err := pickClientCert(a[:20], []opcuaserver.CertInfo{ci(a)}, []opcuaserver.CertInfo{ci(b)}); err != nil || rej || c.Thumbprint != a {
+		t.Errorf("the trusted one: %v %v %v", c, rej, err)
+	}
+	if c, rej, err := pickClientCert(b[:20], []opcuaserver.CertInfo{ci(a)}, []opcuaserver.CertInfo{ci(b)}); err != nil || !rej || c.Thumbprint != b {
+		t.Errorf("the rejected one: %v %v %v", c, rej, err)
+	}
+	if _, rej, err := pickClientCert(a, []opcuaserver.CertInfo{ci(a)}, []opcuaserver.CertInfo{ci(a)}); err != nil || rej {
+		t.Errorf("the same certificate in both: %v %v", rej, err)
+	}
+	if _, _, err := pickClientCert("ffff", nil, []opcuaserver.CertInfo{ci(a)}); err == nil {
+		t.Error("no match")
+	}
+}
+
+// A certificate the block maps by its subject, mapped again by its
+// thumbprint: the command says the new name supersedes the old.
+func TestOPCUATrustAsSupersedesASubjectMapping(t *testing.T) {
+	dir, tps := opcuaTrustProject(t, "")
+	_, _, rejected, err := opcuaserver.PKI{Dir: filepath.Join(dir, "pki")}.Certs()
+	if err != nil || len(rejected) == 0 {
+		t.Fatal(err)
+	}
+	subj := rejected[0].Subject
+	f, _ := os.OpenFile(filepath.Join(dir, "nautilus.yaml"), os.O_APPEND|os.O_WRONLY, 0)
+	f.WriteString("auth:\n  users: {}\n  opcua-certificates:\n    bysubject: {subject: \"" + subj + "\", grants: viewer}\n")
+	f.Close()
+	code, out, errs := nautTrust(rejected[0].Thumbprint, "--as", "scada:operator")
+	if code != 0 || !strings.Contains(out, "bysubject maps this certificate by its subject") || !strings.Contains(out, "supersedes") {
+		t.Errorf("%d\n%s%s", code, out, errs)
+	}
+	_ = tps
+}
+
+// The manifest is written before the certificate moves: a mapping for a
+// certificate not trusted yet does nothing, a trusted certificate the
+// manifest does not map yet is open. When the write fails (here, a
+// project directory nobody may write to), the certificate stays refused.
+func TestOPCUATrustAsWritesTheManifestFirst(t *testing.T) {
+	if os.Geteuid() == 0 || runtime.GOOS == "windows" {
+		t.Skip("needs a directory the test cannot write to")
+	}
+	dir, tps := opcuaTrustProject(t, "auth:\n  users: {}\n")
+	os.Chmod(dir, 0o555)
+	t.Cleanup(func() { os.Chmod(dir, 0o755) })
+	code, out, errs := nautTrust(tps[0], "--as", "scada:operator")
+	if code == 0 || !strings.Contains(errs, "nothing changed") {
+		t.Errorf("%d %s%s", code, out, errs)
+	}
+	if trustedHas(t, dir, tps[0]) {
+		t.Error("the certificate was trusted although its mapping was not written")
+	}
+}
+
+// The exact checks after an edit: a result with anything else changed is
+// refused, though it holds what was meant.
+func TestExactEditChecks(t *testing.T) {
+	read := func(text string) *project.Manifest {
+		t.Helper()
+		m, err := project.ReadManifest(fstestMap(text), "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+	tp := strings.Repeat("ab", 20)
+	want := project.AuthCert{Thumbprint: tp, Grants: project.AuthGrants{{Role: "operator"}}}
+	entry := "  opcua-certificates:\n    scada: {thumbprint: " + tp + ", grants: [operator]}\n"
+	pre := read(plainManifest + "auth:\n  users:\n    akhan: [engineer]\n")
+	if !exactCertEdit(pre, read(plainManifest+"auth:\n"+entry+"  users:\n    akhan: [engineer]\n"), "scada", want) {
+		t.Error("the exact edit is refused")
+	}
+	for name, post := range map[string]string{
+		"another auth key":   plainManifest + "auth:\n" + entry + "  anonymous: viewer\n  users:\n    akhan: [engineer]\n",
+		"a user changed":     plainManifest + "auth:\n" + entry + "  users:\n    akhan: [viewer]\n",
+		"outside auth:":      strings.Replace(plainManifest, "100ms", "200ms", 1) + "auth:\n" + entry + "  users:\n    akhan: [engineer]\n",
+		"other grants":       plainManifest + "auth:\n  opcua-certificates:\n    scada: {thumbprint: " + tp + ", grants: [administrator]}\n  users:\n    akhan: [engineer]\n",
+		"a second new entry": plainManifest + "auth:\n" + entry + "    more: {subject: CN=x, grants: viewer}\n  users:\n    akhan: [engineer]\n",
+	} {
+		if exactCertEdit(pre, read(post), "scada", want) {
+			t.Errorf("trust --as: %s is taken as exact", name)
+		}
+	}
+	initWant := &project.AuthConfig{Users: map[string][]project.AuthGrant{"alice": {{Role: "operator"}}}}
+	plain := read(plainManifest)
+	if !exactInit(plain, read(plainManifest+"auth:\n  users:\n    alice: [operator]\n"), initWant) {
+		t.Error("the exact init is refused")
+	}
+	for name, post := range map[string]string{
+		"another auth key": plainManifest + "auth:\n  anonymous: viewer\n  users:\n    alice: [operator]\n",
+		"outside auth:":    strings.Replace(plainManifest, "100ms", "200ms", 1) + "auth:\n  users:\n    alice: [operator]\n",
+		"another user":     plainManifest + "auth:\n  users:\n    alice: [operator]\n    bob: [viewer]\n",
+	} {
+		if exactInit(plain, read(post), initWant) {
+			t.Errorf("init: %s is taken as exact", name)
+		}
+	}
+}
+
+func fstestMap(manifest string) fstest.MapFS {
+	return fstest.MapFS{"nautilus.yaml": {Data: []byte(manifest)}, "main.st": {Data: []byte("PROGRAM Main\nEND_PROGRAM\n")}}
 }
