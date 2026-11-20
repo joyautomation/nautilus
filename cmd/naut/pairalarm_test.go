@@ -2,11 +2,14 @@ package main
 
 import (
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/joyautomation/nautilus/alarm"
+	"github.com/joyautomation/nautilus/server"
 )
 
 // Alarm acknowledgements through the pair's operator-intent log (#710 PR
@@ -42,7 +45,18 @@ func (r *pairRig) setTrip(t *testing.T, n string, v bool) {
 
 func (r *pairRig) ackTrip(t *testing.T, n string) {
 	t.Helper()
-	if code, b, _ := r.call(n, "POST", "/api/alarms/ack", `{"ids":["Trip"],"by":"op"}`); code != http.StatusOK {
+	// A certain refusal (nothing proposed) is retried for a few seconds,
+	// as startedID does: a new leader's view of the copies lags a ping.
+	var code int
+	var b string
+	for end := time.Now().Add(10 * time.Second); ; time.Sleep(100 * time.Millisecond) {
+		var h http.Header
+		code, b, h = r.call(n, "POST", "/api/alarms/ack", `{"ids":["Trip"],"by":"op"}`)
+		if code == http.StatusOK || h.Get("X-Nautilus-Outcome") != "refused" && !strings.Contains(b, "no leader") || time.Now().After(end) {
+			break
+		}
+	}
+	if code != http.StatusOK {
 		t.Fatalf("ack on %s: %d %s", n, code, b)
 	}
 }
@@ -82,10 +96,38 @@ func TestPairAckCarriesAcrossASyncedTakeover(t *testing.T) {
 	}
 }
 
+// An acknowledgement the leader and the witness committed while the
+// standby was down carries across the takeover after the leader died
+// (#710 3b-4b): the standby's catch-up finds it on the witness, so Trip
+// comes up acknowledged on the new leader.
+func TestPairAckCarriesAcrossATakeoverAfterTheLeaderDied(t *testing.T) {
+	r := newPairRig(t)
+	lead := r.leader()
+	stand := other(lead)
+	r.setTrip(t, lead, true)
+	pairWait(t, "Trip to annunciate", 5*time.Second, func() bool { return r.alarmState(lead) == alarm.UnackActive })
+	r.nodes[stand].crash()
+	r.ackTrip(t, lead) // on the leader and the witness only
+	r.nodes[lead].crash()
+	r.restart(stand)
+	if r.leader() != stand {
+		t.Fatal("the standby did not take over")
+	}
+	r.setTrip(t, stand, true)
+	pairWait(t, "Trip active on the new leader", 5*time.Second, func() bool { return r.alarmState(stand) != alarm.Normal })
+	if s := r.alarmState(stand); s != alarm.AckActive {
+		t.Fatalf("Trip on the new leader is %s; want ack-active (the ack carried from the witness)", s)
+	}
+}
+
 // A takeover whose log catch-up fails carries no acknowledgement at all
-// (naut-lead's rule): in the 2-of-2 interim, that is every takeover after
-// the leader died. The alarm re-annunciates (the safe direction), and the
-// alarm journal says "acks not carried: takeover unsynced".
+// (naut-lead's rule): the alarm re-annunciates (the safe direction). With
+// the witness a replica, that takes a survivor whose own log is lost while
+// the other controller is down: it leads (control comes first), drives
+// its outputs, says its log was lost, and refuses every operator-intent
+// write as not synced, for certain. Once the other controller is back,
+// both other copies count, its log syncs, the committed ack applies, and
+// writes go through.
 func TestPairUnsyncedTakeoverCarriesNoAcks(t *testing.T) {
 	r := newPairRig(t)
 	lead := r.leader()
@@ -94,28 +136,54 @@ func TestPairUnsyncedTakeoverCarriesNoAcks(t *testing.T) {
 	pairWait(t, "Trip to annunciate", 5*time.Second, func() bool { return r.alarmState(lead) == alarm.UnackActive })
 	r.ackTrip(t, lead)
 	pairWait(t, "the standby to hold the ack", 5*time.Second, func() bool { return r.heldAck(stand) })
-	r.nodes[lead].crash()
-	if r.leader() != stand {
-		t.Fatal("the standby did not take over")
+	r.nodes[stand].crash()
+	if err := os.Remove(filepath.Join(r.env[stand]["STATE_DIRECTORY"], pairLogFile)); err != nil {
+		t.Fatal(err)
 	}
+	r.nodes[lead].crash()
+	r.restart(stand)
+	if r.leader() != stand {
+		t.Fatal("the survivor with a lost log did not take over")
+	}
+	pairWait(t, "the survivor to scan", 10*time.Second, func() bool { return r.nodes[stand].rt.Stats().Count > 0 })
 	r.setTrip(t, stand, true)
 	pairWait(t, "Trip active on the new leader", 5*time.Second, func() bool { return r.alarmState(stand) != alarm.Normal })
 	if s := r.alarmState(stand); s != alarm.UnackActive {
 		t.Fatalf("after an unsynced takeover Trip is %s; want unack-active (no ack carried)", s)
 	}
-	evs, err := r.nodes[stand].eng.Journal(time.Now().Add(-time.Hour), time.Now().Add(time.Hour), alarm.Filter{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	noted := false
-	for _, e := range evs {
-		if e.ID == "__nautilus.redundancy" && strings.Contains(e.Name, "acks not carried: takeover unsynced") {
-			noted = true
+	// No "acks not carried" journal note here: the lost log left no view
+	// holding an ack to drop. The lost-log condition says it instead.
+	for _, c := range []struct{ verb, path, body string }{
+		{"substitute", "/api/substitutes", `{"name":"Level","seconds":60}`},
+		{"alarm ack", "/api/alarms/ack", `{"ids":["Trip"],"by":"op"}`},
+	} {
+		code, body, h := r.call(stand, "POST", c.path, c.body)
+		if code != http.StatusServiceUnavailable || h.Get("X-Nautilus-Outcome") != "refused" || !strings.Contains(body, server.LogNotSynced) {
+			t.Errorf("%s on the unsynced leader: %d %q %s; want 503, refused, %q", c.verb, code, h.Get("X-Nautilus-Outcome"), body, server.LogNotSynced)
 		}
 	}
-	if !noted {
-		t.Error("the alarm journal does not say the acks were not carried")
-	}
+	pairWait(t, "the lost-log condition on /api/cluster", 5*time.Second, func() bool {
+		for _, w := range r.nodes[stand].m.q.Status().Warnings {
+			if strings.Contains(w, "operator-intent log was lost") {
+				return true
+			}
+		}
+		return false
+	})
+
+	r.restart(lead)
+	pairWait(t, "the survivor's log to sync once both others count", 15*time.Second, func() bool { return r.nodes[stand].m.log.Synced() })
+	r.logReady(stand)
+	pairWait(t, "the committed ack to apply once synced", 5*time.Second, func() bool { return r.alarmState(stand) == alarm.AckActive })
+	r.startedID(stand)
+	pairWait(t, "the log conditions to clear after the sync", 5*time.Second, func() bool {
+		for _, w := range r.nodes[stand].m.q.Status().Warnings {
+			if strings.Contains(w, "operator-intent log") {
+				return false
+			}
+		}
+		return true
+	})
 }
 
 // An ack is of an occurrence: acked, back to normal, active again, then a

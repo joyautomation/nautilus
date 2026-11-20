@@ -107,6 +107,30 @@ var Mutations = []string{
 	"send_no_deadline",          // fence: a send gets no deadline, and one past its budget still starts (design §3.4)
 	"fence_fin",                 // fence: a fenced socket is closed with a FIN, not reset (design §3.4)
 	"fragments_unchecked",       // fence: a send split into requests reads the gate once, not before each (3b-3b-2)
+	// #710 PR 3b-4b: the witness as the log's third replica, wired.
+	"campaign_ignores_sync",        // node: an unsynced standby campaigns over a synced peer that may (the preference)
+	"unsynced_leader_keeps_lead",   // node: an unsynced, stuck leader never yields to a synced peer
+	"yield_undamped",               // node: a leader yields again within yieldEvery
+	"yield_ignores_may",            // node: a leader yields to a peer that may not campaign
+	"yield_ignores_can_sync",       // node: a leader yields to a synced peer that can't sync the others
+	"vouch_refusal_blocks",         // node: a vouch the log refuses refuses the re-commission
+	"vouch_alone_partial",          // oplog: a vouched catch-up goes ahead alone with a peer silent
+	"vouch_alone_ignores_ahead",    // oplog: a vouched catch-up goes ahead alone over a longer copy that does not count yet
+	"vouch_refuses_counting_ahead", // oplog: a vouch is refused for a later log on a peer that counts
+	"can_sync_stale",               // oplog: can-sync counts a copy last heard 10 s ago, not within a lease
+	"placeholder_keeps_synced",     // oplog: a mark under the placeholder identity is adopted synced
+	"yield_until_due",              // node: a yield ends at the lease's due end, though a late grant moved it
+	"term_not_persisted",           // oplog: the term lives only in memory, so a lost log takes a deposed leader's word
+	"unnamed_leader_admitted",      // oplog: a marked replica takes replication when its election names no leader
+	"vouch_unchecked",              // oplog: a vouch is taken over a lost log, a silent peer or a later log
+	"vouch_alone_kept",             // oplog: a vouched log catches up alone at every leadership, not once
+	"unsynced_log_writes",          // oplog: an unsynced log reads writable, so a write ends "outcome unknown"
+	"mark_after_log",               // oplog: a new replica's mark is written after its log file exists
+	"witness_log_unbound",          // naut: the witness's log admits replication from any member
+	"witness_log_term_unbound",     // naut: the witness's log admits its granted member at any term
+	"witness_log_any_incarnation",  // naut: the leader counts the witness's log at any incarnation
+	"witness_not_a_replica",        // naut: the pair's log leaves the witness out (2 of 2, as before 3b-4)
+	"log_sync_not_retried",         // naut: a leader whose term is unsynced is caught up only by a write
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")

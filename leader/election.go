@@ -49,6 +49,15 @@ type Quorum struct {
 	unhealthy string
 	warnings  []string
 	conds     map[string]string // SetCondition, by key
+	logStatus func() *LogStatus // SetLogStatus
+}
+
+// SetLogStatus adds the pair's operator-intent log to Status (its Log
+// block). f is called outside the Quorum's lock.
+func (q *Quorum) SetLogStatus(f func() *LogStatus) {
+	q.mu.Lock()
+	q.logStatus = f
+	q.mu.Unlock()
 }
 
 // SetCondition shows msg in Status's warnings under key until it is set
@@ -102,6 +111,12 @@ func (q *Quorum) Run(ctx context.Context)  { q.n.Run(ctx) }
 func (q *Quorum) Release()                 { q.n.Release() }
 func (q *Quorum) Status() Status {
 	st := quorumStatus(q.n.Status())
+	q.mu.Lock()
+	ls := q.logStatus
+	q.mu.Unlock()
+	if ls != nil {
+		st.Log = ls()
+	}
 	q.mu.Lock()
 	st.Warnings = append([]string(nil), q.warnings...)
 	for _, k := range slices.Sorted(maps.Keys(q.conds)) {

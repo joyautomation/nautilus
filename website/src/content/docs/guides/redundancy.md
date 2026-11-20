@@ -389,20 +389,90 @@ blocks lifting `experimental`). Build the second controller from a fresh
 install, never from a copy of the first.
 :::
 
-Operator intent (substitute starts, stops and acknowledgements) goes
-through a log replicated on both controllers, so a takeover keeps it.
-**For now that log lives on A and B only, so it needs both:** while one
-controller is down, the other keeps controlling the plant and keeps the
-substitutes it already has, but starting, stopping or acknowledging a
-substitute is refused with "operator-intent log has no majority: the
-peer is down" until the other controller returns. A substitute's expiry
-still happens on time. (Making the witness the log's third copy, so one
-controller down is not enough to stop these writes, is under
-discussion.)
+Operator intent (substitute starts, stops and acknowledgements, alarm
+acknowledgements and shelves) goes through a log with **three copies**:
+one on each controller and one on the witness. A change is made once two
+of the three hold it, so a takeover keeps it, even after the leader
+died: the new leader catches the log up from the witness before its
+first scan. **With one controller down,** the other keeps controlling
+the plant and operators can still start, stop and acknowledge
+substitutes and acknowledge and shelve alarms. **With both the other
+controller and the witness down,** these are refused with
+"operator-intent log has no majority: neither the other controller nor
+the witness answers" until one of them returns; a substitute's expiry
+still happens on time. A change sent just as a copy went away can be
+answered "outcome unknown": it may still take effect, so re-read before
+sending it again.
+
+A copy counts only once it is known to hold everything committed
+("synced"). A controller whose copy was lost (its file deleted or
+damaged, a disk replaced, a cloned disk, which is moved aside) starts
+**unsynced** and says so in `GET /api/cluster` (its `log` block) and on
+the dashboard's banner. An unsynced controller still takes over when it
+must, so control never waits for operator data, but while it leads,
+substitute and alarm changes are refused with "operator log not synced",
+and its takeover carries nothing from the log (as below). It syncs as
+soon as both other copies count (answer, synced), or, if it was not
+leading, at the leader's next heartbeat. While the other controller is reachable and
+synced, an unsynced one doesn't campaign; if it leads and can't catch up
+while the other is synced, able to lead and able to sync the others (a
+vouch of its own pending, or another copy that counts), it hands the
+lead over (`yielded to a: own operator log unsynced, a synced and able to
+sync the others` in `GET /api/cluster`), at most once every 10 minutes.
+
+**A synced controller alone among the copies can't decide either.** If
+both other copies were lost (the other controller's and the witness's),
+changes committed while it lagged may have been on them, so it leads
+read-only and says "operator log read-only: no second counting copy —
+recommission (3c)". Bringing back a copy that still holds its log ends
+it; otherwise the way past is a person's decision (a re-commission that
+accepts the loss, coming with the commissioning commands).
+
+**A new pair's logs are vouched for at commissioning.** All three copies
+start empty, so none is synced yet: the re-commission that commissions
+the pair vouches for that controller's copy, and its first takeover
+syncs the other two (it waits until every copy answers). A vouch is
+refused while any other copy doesn't answer (it may hold entries the
+vouched one lacks: bring it back, or rebuild it), when a copy that
+doesn't count holds a later log (its entries would be lost; named in the
+refusal), and for a copy that was lost (re-commission the other
+controller instead). **A refused vouch never stops the re-commission:**
+the pair is commissioned and controls the plant, its log stays read-only,
+and `GET /api/cluster` says why. A later log on a copy that counts is no
+refusal: it is taken. So if both controllers lose their disks while the
+witness's copy is whole, re-commissioning one brings the witness's
+entries back. Logs from before this release need no vouch.
+
+:::caution[The witness holds plant operator data]
+The witness's state directory keeps a copy of the operator-intent log:
+who started or stopped a substitute (and the tag and the value), who
+acknowledged or shelved which alarm, and when. Guard the witness host
+like a controller; its files are readable by the service user only.
+
+The peer token authenticates every peer and witness request, but it
+travels as an HTTP header, and peer traffic is **not encrypted**: on an
+open network it can be read, and the token replayed. Run the pair's and
+the witness's peer ports only over a **trusted link**: a dedicated
+network or VLAN, or a VPN such as WireGuard or a tailnet.
+:::
+
+**Rebuilding the witness loses nothing while both controllers are up**:
+`naut witness --rebuild`, or a fresh state directory, is a new
+incarnation that both controllers adopt after a quiet period, and the
+leader then copies the log to it again. **Never restore the witness's
+state directory from a backup**: an older copy of the log under the same
+incarnation can't be told from a current one, and could cost an
+acknowledgement. Rebuild it instead. **Upgrade the witness first**: a
+controller sees a witness from before this release as an unreachable
+copy, which is safe, but leaves the log on the two controllers until the
+witness is upgraded.
+
+**Sign-in is not on the log.** Sessions are kept by the leader, so a
+takeover signs everyone out, as before.
 
 Alarm acknowledgements and shelves go through the same log. When the
-other controller takes over and could catch the log up (a handover, or
-a fault while the old leader's box still answers), an alarm acknowledged
+other controller takes over and catches the log up (from the old leader,
+the witness, or both), an alarm acknowledged
 before the takeover stays acknowledged, and a shelf stays until its own
 end. An acknowledgement is of an occurrence: once an acknowledged alarm
 leaves that occurrence (it returns to normal, a latched alarm returns
@@ -410,9 +480,10 @@ unacknowledged, its tag goes dark, or it activates anew), the leader
 clears the acknowledgement in the log, so a new occurrence annunciates
 after a takeover. **The window:** if the leader dies after that and
 before the clear is committed, the next leader can still carry the old
-acknowledgement to the new occurrence. With both controllers up that is
-a few tens of milliseconds; while the other controller is down the clear
-waits for it, so the window lasts as long as the outage plus about 2 s.
+acknowledgement to the new occurrence. With two copies of the log
+answering that is a few tens of milliseconds; while only the leader's
+answers, the clear waits for another, so the window lasts as long as
+that outage plus about 2 s.
 An acknowledgement or a shelve made just before a controller died and
 committed more than 60 s later is dropped, not applied to whatever
 occurrence is live by then. While a new leader's takeover is still
@@ -421,12 +492,13 @@ acknowledgement or a shelve sent to it is refused with "this controller
 is taking over: its alarm state is not restored yet" (503); retry it a
 moment later.
 
-**When the takeover could not catch the log up** (with the log on the two
-controllers only, that is every takeover after the leader died), no
+**When the takeover could not catch the log up** (the new leader's own
+copy is unsynced and only one other copy answers, or neither does), no
 acknowledgement is carried at all: acknowledged alarms annunciate again
 on the new leader (the safe direction), and the alarm journal says
-"acks not carried: takeover unsynced". Shelves still carry. Starting,
-stopping or acknowledging is refused while the other controller is down.
+"acks not carried: takeover unsynced" when it held any. Shelves still
+carry. Substitutes it held stay, marked "catch-up failed" until the log
+confirms them.
 
 **One set of credentials on both.** The pair is one controller to its
 clients, so both need the same `NAUTILUS_TOKEN`, the same users file and

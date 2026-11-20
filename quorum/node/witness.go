@@ -56,10 +56,11 @@ type Witness struct {
 	free    func()
 	running atomic.Bool
 
-	mu    sync.Mutex
-	ctx   context.Context
-	pairs map[string]*witnessPair
-	wg    sync.WaitGroup // the pairs' writers
+	mu      sync.Mutex
+	ctx     context.Context
+	pairs   map[string]*witnessPair
+	wg      sync.WaitGroup // the pairs' writers
+	logInfo func(cluster string) (last, commit uint64, ok bool)
 }
 
 type witnessPair struct {
@@ -198,6 +199,57 @@ type PairStatus struct {
 	Incarnation uint64
 	Promised    uint64
 	GrantedTo   string
+	// The pair's operator-intent log on this witness (SetLogInfo): its
+	// last entry and its commit index; HasLog false when it has none open.
+	HasLog             bool
+	LogLast, LogCommit uint64
+}
+
+// SetLogInfo lets Pairs report each pair's operator-intent log (#710
+// 3b-4b): the log is composed outside this package (cmd/naut), which
+// knows it. Call it before Run.
+func (w *Witness) SetLogInfo(f func(cluster string) (last, commit uint64, ok bool)) {
+	w.mu.Lock()
+	w.logInfo = f
+	w.mu.Unlock()
+}
+
+// Bound reports the two controllers ("a,b") the cluster is bound to, and
+// whether it is bound: it has had a vote, now or before a restart (its
+// members file). Nothing here binds a cluster: only a vote does.
+func (w *Witness) Bound(cluster string) (string, bool) {
+	if !ValidCluster(cluster) {
+		return "", false
+	}
+	w.mu.Lock()
+	p, ok := w.pairs[cluster]
+	w.mu.Unlock()
+	if ok {
+		return p.members, true
+	}
+	b, err := os.ReadFile(filepath.Join(w.o.Dir, cluster+membersSuffix))
+	if err != nil {
+		return "", false
+	}
+	m := strings.TrimSpace(string(b))
+	return m, validMembers(m)
+}
+
+// Grant is the cluster's voter's state: whom it last granted, at which
+// vote term, and its incarnation. ok is false when the cluster has had no
+// vote since this witness started (its voter is not running): the pair's
+// next renewal starts it. The log path never starts a voter.
+func (w *Witness) Grant(cluster string) (grantedTo quorum.NodeID, promised, incarnation uint64, ok bool) {
+	w.mu.Lock()
+	p, found := w.pairs[cluster]
+	w.mu.Unlock()
+	if !found {
+		return "", 0, 0, false
+	}
+	p.mu.Lock()
+	st := p.v.State()
+	p.mu.Unlock()
+	return st.GrantedTo, st.Promised, st.Incarnation, st.Incarnation != 0
 }
 
 // Pairs lists the pairs this witness has answered since it started.
@@ -207,13 +259,18 @@ func (w *Witness) Pairs() []PairStatus {
 	for _, p := range w.pairs {
 		ps = append(ps, p)
 	}
+	info := w.logInfo
 	w.mu.Unlock()
 	out := make([]PairStatus, 0, len(ps))
 	for _, p := range ps {
 		p.mu.Lock()
 		st := p.v.State()
 		p.mu.Unlock()
-		out = append(out, PairStatus{Cluster: p.name, Members: p.members, Incarnation: st.Incarnation, Promised: st.Promised, GrantedTo: string(st.GrantedTo)})
+		ps := PairStatus{Cluster: p.name, Members: p.members, Incarnation: st.Incarnation, Promised: st.Promised, GrantedTo: string(st.GrantedTo)}
+		if info != nil {
+			ps.LogLast, ps.LogCommit, ps.HasLog = info(p.name)
+		}
+		out = append(out, ps)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Cluster < out[j].Cluster })
 	return out

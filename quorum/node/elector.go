@@ -293,7 +293,17 @@ type Elector struct {
 	durable    uint64            // the highest Seq known on disk
 	written    chan struct{}     // closed and replaced at every write report
 
+	// The operator-intent log's seams and what they decided (logpref.go).
+	logFn     func() LogState
+	vouchFn   func(ctx context.Context, by string, inc uint64) error
+	peerLog   peerLog
+	holdSince time.Time      // since when the log has held a campaign
+	yieldedAt time.Time      // the last yield (at most one per yieldEvery)
+	yieldHold bool           // no renewal until the lease is seen over (a yield)
+	yieldDue  quorum.Instant // when it was due to end (the yield_until_due mutation)
+
 	gate    atomic.Pointer[gateState]
+	counted atomic.Uint64 // the witness incarnation the candidate counts (CountedIncarnation)
 	wake    chan struct{}
 	w       *writer
 	running atomic.Bool
@@ -613,7 +623,7 @@ func (e *Elector) Run(ctx context.Context) {
 	// Run returns only once its writer is done: nothing touches the state
 	// file after it.
 	var wg sync.WaitGroup
-	for _, f := range []func(context.Context){e.w.run, e.emit, e.hello} {
+	for _, f := range []func(context.Context){e.w.run, e.emit, e.hello, e.probeLog} {
 		wg.Add(1)
 		go func() { defer wg.Done(); f(ctx) }()
 	}
@@ -657,12 +667,15 @@ func (e *Elector) look() time.Duration {
 	h := e.health
 	e.mu.Unlock()
 	healthy := h == nil || h()
+	ls, hasLog := e.logState() // outside mu: the log calls into the election
 
 	e.mu.Lock()
 	now := e.now()
 	from, until := e.v.LeaderSeen()
 	e.unhealthy = !healthy
-	req := e.c.Tick(now, from, until, healthy && !e.released && e.mayCampaign(now))
+	e.maybeYield(now, ls, hasLog)
+	may := e.mayCampaign(now) && (e.c.Leading(now) || !e.logHold(now, ls, hasLog))
+	req := e.c.Tick(now, from, until, healthy && !e.released && !e.yielding(now) && may)
 	p, msgs, probe := e.a.Tick(now)
 	var selfP *quorum.Persist
 	if req != nil {
@@ -738,8 +751,19 @@ func (e *Elector) after(now quorum.Instant) {
 	}
 }
 
+// CountedIncarnation is the witness incarnation this controller's
+// candidate counts a witness grant at (quorum.Candidate.Counting), 0 when
+// none: the pair's log counts the witness's copy only at it (#710 3b-4b).
+// Read without the lock, so the log may ask under its own.
+func (e *Elector) CountedIncarnation() uint64 { return e.counted.Load() }
+
 // publish stores the gate. Under mu.
 func (e *Elector) publish(now quorum.Instant) {
+	inc, from := e.c.Counting()
+	if now < from {
+		inc = 0 // its quiet period: its grants don't count yet, nor its log
+	}
+	e.counted.Store(inc)
 	g := &gateState{}
 	if old := e.gate.Load(); old != nil {
 		g.epoch = old.epoch
@@ -1025,6 +1049,9 @@ func (e *Elector) serveHello(w http.ResponseWriter, r *http.Request) {
 		e.heard(pi)
 	}
 	self := e.selfInfo()
+	if r.URL.Query().Get("log") == "1" {
+		self.Log = e.selfLog() // outside mu
+	}
 	w.Header().Set("Content-Type", "application/json")
 	cr := e.credentials()
 	us := credOK
@@ -1032,7 +1059,7 @@ func (e *Elector) serveHello(w http.ResponseWriter, r *http.Request) {
 		us = credUnreadable
 	}
 	_ = json.NewEncoder(w).Encode(helloAnswer{Node: string(e.o.Self), MAC: tokenMAC(e.o.Token, c, e.o.Peer, e.o.Self, e.o.ClientToken),
-		Config: self.Config, Nonce: strconv.FormatUint(self.Nonce, 16), Caps: self.Caps,
+		Config: self.Config, Nonce: strconv.FormatUint(self.Nonce, 16), Caps: self.Caps, Log: self.Log,
 		InfoMAC: infoMAC(e.o.Token, c, e.o.Peer, e.o.Self, self),
 		Users:   us, UsersMAC: credMAC(e.o.Token, c, e.o.Peer, e.o.Self, "users", us, cr.Users),
 		TLS: credOK, TLSMAC: credMAC(e.o.Token, c, e.o.Peer, e.o.Self, "tls", credOK, cr.TLS)})
@@ -1134,7 +1161,7 @@ func (e *Elector) answerVerified(c string, h helloAnswer) (peerInfo, bool) {
 	if err != nil || n == 0 {
 		return peerInfo{}, false
 	}
-	pi := peerInfo{Config: h.Config, Nonce: n, Caps: h.Caps}
+	pi := peerInfo{Config: h.Config, Nonce: n, Caps: h.Caps, Log: h.Log}
 	return pi, sameMAC(h.InfoMAC, infoMAC(e.o.Token, c, e.o.Self, e.o.Peer, pi))
 }
 
@@ -1219,31 +1246,67 @@ func (e *Elector) tlsMessage(st CredState) string {
 // the peer. The permission lasts this boot: after a restart, issue it
 // again, above KnownFloor.
 func (e *Elector) Recommission(ctx context.Context, inc, floor uint64) error {
+	_, err := e.RecommissionBy(ctx, "operator", inc, floor)
+	return err
+}
+
+// RecommissionBy is Recommission naming the person, for the log's vouch
+// (SetVouch), which runs first. A vouch the log refuses never refuses the
+// re-commission (#1053 review: control never waits on operator data): it
+// goes ahead, the log stays unsynced and read-only, and the refusal is
+// returned as vouchRefused, raised as EventVouchRefused and logged.
+func (e *Elector) RecommissionBy(ctx context.Context, by string, inc, floor uint64) (vouchRefused, err error) {
+	// Its own refusals first, so a refused re-commission vouches for
+	// nothing.
+	e.mu.Lock()
+	commissioned, known := e.v.State().Incarnation != 0, e.a.KnownFloor()
+	e.mu.Unlock()
+	switch {
+	case commissioned:
+		return nil, quorum.ErrCommissioned
+	case inc == 0 || floor == 0:
+		return nil, quorum.ErrNoFloor
+	case floor <= known && !mut("recommission_any_floor"):
+		return nil, fmt.Errorf("%w: it knows terms up to %d", quorum.ErrFloorTooLow, known)
+	case floor-known > MaxTermJump/2:
+		return nil, fmt.Errorf("quorum: re-commission floor %d is more than %d above the terms this controller knows (%d): the voters would refuse the pair's next campaign as a term jump", floor, MaxTermJump/2, known)
+	}
+	if verr := e.vouch(ctx, by, inc); verr != nil {
+		if mut("vouch_refusal_blocks") {
+			return nil, fmt.Errorf("quorum: re-commission refused by the operator-intent log: %w", verr)
+		}
+		vouchRefused = verr
+		msg := "the operator-intent log was not vouched for, so it stays unsynced and read-only: " + verr.Error()
+		e.log.Error("redundancy: re-commissioning goes ahead, but " + msg)
+		e.mu.Lock()
+		e.event(Event{Kind: EventVouchRefused, Detail: msg})
+		e.mu.Unlock()
+	}
 	e.mu.Lock()
 	if known := e.a.KnownFloor(); floor > known && floor-known > MaxTermJump/2 {
 		e.mu.Unlock()
-		return fmt.Errorf("quorum: re-commission floor %d is more than %d above the terms this controller knows (%d): the voters would refuse the pair's next campaign as a term jump", floor, MaxTermJump/2, known)
+		return vouchRefused, fmt.Errorf("quorum: re-commission floor %d is more than %d above the terms this controller knows (%d): the voters would refuse the pair's next campaign as a term jump", floor, MaxTermJump/2, known)
 	}
 	p, err := e.a.Recommission(inc, floor)
 	if err != nil {
 		known := e.a.KnownFloor()
 		e.mu.Unlock()
 		if errors.Is(err, quorum.ErrFloorTooLow) {
-			return fmt.Errorf("%w: it knows terms up to %d", err, known)
+			return vouchRefused, fmt.Errorf("%w: it knows terms up to %d", err, known)
 		}
-		return err
+		return vouchRefused, err
 	}
 	e.mu.Unlock()
 	e.w.ask(p)
 	if err := e.waitDurable(ctx, p.Seq); err != nil {
-		return err
+		return vouchRefused, err
 	}
 	e.mu.Lock()
 	e.event(Event{Kind: EventRecommissioned, Incarnation: inc, Detail: fmt.Sprintf("floor %d", floor)})
 	e.mu.Unlock()
 	e.log.Warn("redundancy: re-commissioned by an operator", "incarnation", inc, "floor", floor)
 	e.poke()
-	return nil
+	return vouchRefused, nil
 }
 
 // waitDurable waits until a write covering seq is on disk.

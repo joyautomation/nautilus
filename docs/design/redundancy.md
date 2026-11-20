@@ -52,8 +52,9 @@ bumpless, and the measured takeover time is published instead.
     - **At a takeover,** after the catch-up and before the first scan, the new leader restores
       the view: acks held for each alarm's first activation, and shelves until their own ends.
     - **Unsynced takeovers carry no ack** (naut-lead): those alarms re-annunciate and the alarm
-      journal says "acks not carried: takeover unsynced". Shelves carry. In the 2-of-2 interim
-      that is every takeover after the leader died.
+      journal says "acks not carried: takeover unsynced". Shelves carry. With the witness a
+      replica (3b-4b) that takes a new leader whose own copy is unsynced and only one other
+      copy answering, or none.
     - **Occurrences: the invariant** (#1033 review). The view holds an ack for an alarm only
       while the leader's engine has that alarm's current occurrence acknowledged. Four rules
       keep it:
@@ -80,15 +81,50 @@ bumpless, and the measured takeover time is published instead.
     `leaderCatchUp`) before it applies alarm state or accepts operator writes.
   - **No quorum, no operator writes.** A lone survivor has no majority, so its operator writes
     are refused. This matches the read-only HMI in §7.
-  - **The interim, until #710 Q4 (3b-4).** The log runs on A and B only, so its majority is
-    both: with either controller down, substitute starts, stops and acknowledgements are
-    refused ("operator-intent log has no majority: the peer is down"), before anything is
-    proposed once the leader knows (its pings, every half lease). A write sent before it
-    knew is stored and answered "outcome unknown"; it commits when the peer returns. The
-    leader pushes each write's commit to the follower before answering, so a follower that
-    takes over after the leader died still applies a write the operator was told was done.
-    The residual window: the leader dies between its commit and the push, or the push to a
-    replica fails (its error is only logged), until that replica's next heartbeat (≤ lease/2).
+  - **Three copies, wired (#710 PR 3b-4a, 3b-4b).** A, B and the witness each keep a copy;
+    a write needs two that count.
+    - **Only a synced copy counts.** A copy is synced once a synced leader's replication has
+      proved it equal up to the commit index, or once it caught up as leader from a majority
+      that counts. Each copy's mark (`oplog.mark`, `<cluster>.oplog.mark` on the witness)
+      holds held/synced, its identity (a controller: cluster/node/box; the witness: its
+      incarnation for the cluster), the highest term it has seen (so a lost copy still
+      refuses a deposed leader) and the last vouch. A copy from another identity, or lost
+      under the held mark, is moved aside and starts unsynced (`oplog-lost`,
+      `oplog-unsynced` on `/api/cluster` and the banner). The leader counts the witness's
+      copy only at the incarnation its election counts (`Elector.CountedIncarnation`).
+    - **The witness's copy** is a passive `oplog.Node` per bound cluster at
+      `node.Prefix + cluster + "/log"`, behind the peer token (`cmd/naut/witnesslog.go`). It
+      never leads or dials; it takes replication only from the controller its vote names, at
+      a term no higher than it promised (a renewal can re-term the vote above the leader's
+      epoch, the log's term).
+    - **A vouch starts a pair.** Three empty copies are all unsynced, so the commissioning
+      re-commission vouches for that controller's copy (`Elector.SetVouch`, `oplog.Node.
+      Vouch`): one synced copy, whose first catch-up as leader may succeed with no other
+      counting copy, once, and only when EVERY peer answered (a silent one may hold a write
+      committed without it: #1053 review); it takes the most up-to-date counting log, and the
+      one-shot is spent in the mark before it is used. It is refused for a lost copy, when any
+      peer doesn't answer, or when a peer that does NOT count holds a later log (a counting
+      one's log is taken: A and B lost, the witness synced, re-commission A and the witness's
+      entries come back). A refusal never refuses the re-commission: control never waits on
+      operator data; the log stays read-only (`oplog-vouch-refused`). A copy already synced
+      needs none. Copies from before marks count as synced.
+    - **An unsynced controller leads for control, read-only for operator intent.** It
+      doesn't campaign while the other controller is reachable, synced and may campaign (for
+      two leases with no leader at most); a leader whose catch-up failed hands over to such a
+      controller only if it can also sync the others (a pending vouch, or another counting
+      copy heard), so the lead isn't handed over for nothing (it stops renewing until the
+      lease is seen over; at most once per 10 minutes). The hello carries each controller's
+      log report for this (synced, can sync, may campaign), bound in its MAC
+      (`node/logpref.go`).
+    - **A synced leader alone among the copies is read-only too** (`oplog-read-only`:
+      "operator log read-only: no second counting copy — recommission (3c)"): entries
+      committed while it lagged may be on the lost copies, so only a person can decide (3c's
+      vouch or `--accept-loss` for a synced controller).
+    - **The leader retries its catch-up** every half lease while its term is unsynced, once
+      the runtime's takeover is done: the witness never pulls, and nothing leaves an unsynced
+      leader.
+  - **The 2-of-2 interim (3b-1 to 3b-4a)** ran the log on A and B only: either controller
+    down refused every operator write, and every takeover after the leader died ran unsynced.
   - **A late start lapses (#1030 review).** A start answered "outcome unknown" sits on its
     proposer alone. If that proposer dies and returns much later, the new leader's catch-up
     adopts the start, and committing it would start the substitute then.
@@ -781,7 +817,7 @@ Takeover time is published as a formula and measured, never promised as a single
 | `RTT + f` | one vote round, including each voter's fsync |
 | `W_r` | up to one lease more, if a voter has just restarted and is waiting out its timer (§3.1) |
 | `I` | the inputs wait, up to #786's cap: about 0 when the standby polls, a session connect and first read when it does not. When a frozen old leader still holds a device's **only** session, it lasts until that device's own session timeout, and may hit the cap. |
-| `L_op` | a pair's operator-intent log catch-up before the first scan (`SyncLeader`, §1): about 0 when the old leader's box refuses the connection or answers, and up to the log's call timeout (`lease/2`, at least 500 ms) when it is silent; the runtime gives up at 2 s and runs not synced. Until the witness is the log's third replica (#710 3b-4), a takeover after the old leader died never has the majority to sync, so it always runs not synced (it keeps what it applied, `catch-up-failed` on what came from retain) |
+| `L_op` | a pair's operator-intent log catch-up before the first scan (`SyncLeader`, §1): one round trip to the copies that answer (the old leader's and the witness's, asked at once), plus up to 50 ms waiting for a straggler once a majority answered; up to the log's call timeout (`lease/2`, at least 500 ms) when only a silent copy could make the majority. The runtime gives up at 2 s and runs not synced (it keeps what it applied, `catch-up-failed` on what came from retain). Since the witness is a copy (#710 3b-4b), a takeover after the old leader died syncs from the witness |
 | `S` | one scan |
 | `O` | the full output set going out |
 

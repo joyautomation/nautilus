@@ -6,7 +6,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -20,7 +22,9 @@ const witnessUsage = `naut witness: the third voter of a redundant controller pa
 (docs/design/redundancy.md). It runs only the peer listener and answers
 votes; it never runs a project. One witness can serve several pairs, each
 keyed by its cluster ID (drawn when the pair is commissioned) and bound to
-its two controllers, with one state file per pair.
+its two controllers, with one state file per pair. It also keeps the third
+copy of each pair's operator-intent log (who substituted or acknowledged
+what, and when): plant operator data, kept in --state beside the votes.
 
 Usage: naut witness [flags]
 
@@ -33,8 +37,10 @@ Usage: naut witness [flags]
   --lease d       this witness's promise (default 2s). At least every
                   pair's lease: a vote with a longer lease is refused.
   --rebuild       start over a state file that can't be read: it is moved
-                  aside and its pair gets a new incarnation. Without it,
-                  such a file stops the start.
+                  aside and its pair gets a new incarnation (its log copy
+                  is moved aside with it, and the pair's leader fills it
+                  again). Without it, such a file stops the start. Never
+                  restore --state from a backup: rebuild instead.
 
 NAUTILUS_PEER_TOKEN is required: every peer request must carry it, and
 the witness answers nothing without it.
@@ -91,7 +97,13 @@ func witnessMain(ctx context.Context, args []string, getenv func(string) string,
 		return 1
 	}
 	defer w.Close()
-	h, err := node.Guard(token, w.Handler())
+	// Each pair's operator-intent log beside its votes (#710 PR 3b-4b).
+	logs := newWitnessLogs(w, *state, token, *lease, slog.Default())
+	defer logs.Close()
+	mux := http.NewServeMux()
+	mux.Handle(node.Prefix, w.Handler())
+	mux.Handle(node.Prefix+"{cluster}/log/", logs.Handler())
+	h, err := node.Guard(token, mux)
 	if err != nil {
 		fmt.Fprintln(stderr, "naut witness:", err)
 		return 1

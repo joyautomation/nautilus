@@ -55,6 +55,43 @@ type Status struct {
 	// by /api/cluster and the dashboard: a redundant pair's retained
 	// values not being replicated yet (#710), for one.
 	Warnings []string `json:"warnings,omitempty"`
+	// Log is a redundant pair's operator-intent log (#710 3b-4b): its
+	// copies, reached or not, synced or not, and this one's. Nil
+	// elsewhere.
+	Log *LogStatus `json:"log,omitempty"`
+}
+
+// LogStatus is a pair's operator-intent log as one controller sees it.
+type LogStatus struct {
+	// Synced: this controller's copy is known to hold every committed
+	// entry. Lost names where a lost copy was kept.
+	Synced bool   `json:"synced"`
+	Lost   string `json:"lost,omitempty"`
+	// Writable: a substitute, an acknowledgement or a shelve can be
+	// committed now; Reason says why not.
+	Writable bool         `json:"writable"`
+	Reason   string       `json:"reason,omitempty"`
+	LastSeq  uint64       `json:"lastSeq"`
+	Commit   uint64       `json:"commit"`
+	Replicas []LogReplica `json:"replicas"`
+	// Vouch is the last time a person vouched for this copy.
+	Vouch *LogVouch `json:"vouch,omitempty"`
+}
+
+// LogReplica is one copy of the log: a, b or the witness.
+type LogReplica struct {
+	Name    string `json:"name"`
+	Self    bool   `json:"self,omitempty"`
+	Reached bool   `json:"reached"`
+	Synced  bool   `json:"synced"`
+}
+
+// LogVouch is a person's word for a copy: who, when, and its last entry.
+type LogVouch struct {
+	By       string    `json:"by"`
+	At       time.Time `json:"at"`
+	LastTerm uint64    `json:"lastTerm"`
+	LastSeq  uint64    `json:"lastSeq"`
 }
 
 type Elector struct {

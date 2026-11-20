@@ -35,6 +35,36 @@ import "os"
 //   - unsynced_self_counted: an unsynced leader counts its own log in its
 //     catch-up;
 //   - entry_unbounded: an entry of any size is proposed.
+//
+// #710 PR 3b-4b:
+//
+//   - term_not_persisted: the term lives only in memory, so a log lost
+//     under the mark takes a deposed leader's replication (and its word
+//     that the log is synced);
+//   - unnamed_leader_admitted: a marked replica takes replication while
+//     its own election names no leader;
+//   - vouch_unchecked: a vouch is taken over a lost log, a peer that does
+//     not answer, or a peer holding a later log;
+//   - vouch_alone_kept: a vouched log catches up alone at every
+//     leadership, not once;
+//   - mark_after_log: a new replica's mark is written after its log file
+//     is created, so a start that dies in between leaves a log that reads
+//     as one from before marks;
+//   - vouch_alone_partial: a vouched catch-up goes ahead alone while a
+//     peer is silent, so a write a majority committed without this log is
+//     numbered over (#1053 review);
+//   - vouch_alone_ignores_ahead: a vouched catch-up goes ahead alone over a
+//     longer copy that answers but doesn't count yet (a witness in its
+//     quiet period), losing its entries (#1053 load run);
+//   - vouch_refuses_counting_ahead: a vouch is refused for a later log on a
+//     peer that counts, whose entries the catch-up would have taken;
+//   - can_sync_stale: can-sync counts a copy last heard 10 s ago, not
+//     within the caller's bound (a lease);
+//   - placeholder_keeps_synced: a mark under the placeholder identity is
+//     adopted as synced;
+//   - unsynced_log_writes: a log that would sequence while unsynced reads
+//     writable, so a write is proposed and ends "outcome unknown" instead
+//     of being refused for certain.
 var mutOn = os.Getenv("QUORUM_MUT")
 
 func mutOplog(name string) bool { return name == mutOn }
