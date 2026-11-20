@@ -56,37 +56,103 @@ export default defineConfig({
       editLink: {
         baseUrl: 'https://github.com/joyautomation/nautilus/edit/main/website/',
       },
+      // Practical first: the Learn course, then the tasks you do with a
+      // controller grouped by what you are doing, then reference. Every page
+      // is listed once, by slug, so a new page must be added here:
+      // `node scripts/check-links.mjs --sidebar` fails on a page that is
+      // missing from it. Page URLs do not depend on the sidebar.
       sidebar: [
         {
           label: 'Learn',
           items: [
             { label: 'Overview', slug: 'learn' },
             { label: 'Getting started', autogenerate: { directory: 'learn/getting-started' } },
-          ],
-        },
-        {
-          label: 'Start here',
-          items: [
             { label: 'Tutorial: your first controller', slug: 'tutorial' },
-            { label: 'Getting started', slug: 'getting-started' },
+            { label: 'Getting started (the short version)', slug: 'getting-started' },
             { label: 'Playground (in your browser)', link: '/playground/' },
           ],
         },
         {
-          label: 'Languages',
-          autogenerate: { directory: 'languages' },
+          label: 'Programming',
+          items: [
+            { slug: 'guides/first-program' },
+            { slug: 'languages' },
+            { slug: 'languages/structured-text' },
+            { slug: 'languages/ladder' },
+            { slug: 'languages/function-block' },
+            { slug: 'languages/sfc' },
+            { slug: 'languages/not-supported' },
+            { slug: 'guides/blocks-and-tasks' },
+            { slug: 'guides/tag-model' },
+            { slug: 'guides/forcing' },
+            { slug: 'guides/online-edits' },
+            { slug: 'guides/program-history' },
+          ],
+        },
+        {
+          label: 'I/O and protocols',
+          items: [
+            { slug: 'guides/modbus' },
+            { slug: 'guides/opcua-server' },
+            { slug: 'guides/opcua-client' },
+            { slug: 'guides/ethernet-ip' },
+            { slug: 'guides/sparkplug' },
+            { slug: 'guides/sparkplug-host' },
+            { slug: 'guides/profinet' },
+            { slug: 'guides/io-link' },
+            { slug: 'guides/it-hardware' },
+            { slug: 'guides/substitutes' },
+          ],
+        },
+        {
+          label: 'Operator screens and alarms',
+          items: [
+            { slug: 'guides/operator-screens' },
+            { slug: 'guides/streaming' },
+            { slug: 'guides/alarms' },
+            { slug: 'guides/historian' },
+          ],
+        },
+        {
+          label: 'Deploy and operate',
+          items: [
+            { slug: 'guides/deployment' },
+            { slug: 'guides/auth' },
+            { slug: 'guides/real-time' },
+            { slug: 'guides/redundancy' },
+          ],
+        },
+        {
+          label: 'Working with an AI agent',
+          items: [{ slug: 'guides/ai-assistants' }],
         },
         {
           label: 'Coming from…',
-          autogenerate: { directory: 'coming-from' },
+          items: [
+            { slug: 'coming-from/studio-5000' },
+            { slug: 'coming-from/tia-portal' },
+            { slug: 'coming-from/codesys' },
+            { slug: 'guides/logix' },
+            { slug: 'guides/logix-authoring' },
+          ],
         },
         {
-          label: 'Guides',
-          autogenerate: { directory: 'guides' },
+          label: 'Hardware targets',
+          items: [
+            { slug: 'guides/plcnext' },
+            { slug: 'guides/groov-epic' },
+            { slug: 'guides/verdin' },
+          ],
         },
         {
           label: 'Reference',
-          autogenerate: { directory: 'reference' },
+          items: [
+            { slug: 'guides/http-api' },
+            { slug: 'reference/functions' },
+            { slug: 'reference/testing' },
+            { slug: 'reference/hmi' },
+            { slug: 'reference/structure-warnings' },
+          ],
         },
         {
           // src/pages/verified/ — built from the latest green rig and CI runs

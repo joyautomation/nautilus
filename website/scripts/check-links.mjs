@@ -6,6 +6,8 @@
 //   node scripts/check-links.mjs --urls old.txt  # also: every URL listed in
 //                                                # old.txt (one per line, as
 //                                                # `foo/bar/`) must still exist
+//   node scripts/check-links.mjs --sidebar       # also: every docs page must
+//                                                # be listed in the sidebar
 //
 // External links are not followed. Exit 1 on any problem.
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
@@ -58,6 +60,21 @@ for (const page of pages) {
 if (urlsFile) {
   for (const line of readFileSync(urlsFile, 'utf8').split('\n').filter(Boolean)) {
     if (!exists('/' + line)) bad.push(`old URL /${line} no longer exists (add a redirect)`);
+  }
+}
+if (args.includes('--sidebar')) {
+  // The sidebar is the same on every page: read it off the Learn overview.
+  const html = readFileSync(join(dist, 'learn', 'index.html'), 'utf8');
+  const start = html.indexOf('<ul class="top-level');
+  const side = new Set();
+  for (const m of html.slice(start, html.indexOf('</nav>', start)).matchAll(/href="(\/[^"#]*)"/g)) side.add(m[1]);
+  for (const page of pages) {
+    const url = '/' + page.slice(dist.length + 1).replace(/index\.html$/, '');
+    // not documentation: the 404, the playground frame, the generated
+    // /verified/ evidence pages (their own sidebar group), assets
+    if (url === '/404.html' || url.startsWith('/playground/') || url.startsWith('/verified/') || url.startsWith('/_astro/')) continue;
+    if (url === '/') continue; // the splash page
+    if (!side.has(url)) bad.push(`${url} is not in the sidebar (add it to astro.config.mjs)`);
   }
 }
 const uniq = [...new Set(bad)];
