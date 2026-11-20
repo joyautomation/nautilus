@@ -34,6 +34,10 @@ var mutations = []string{
 	"hello_duplicate_unseen",     // two processes behind the peer's name (nonces N1, N2, N1 at the hello) raise nothing
 	"box_unchecked",              // a controller votes from a state file written on another box (a cloned disk, #1029)
 	"box_wait_skipped",           // a controller whose box can't be read yet votes on the stored identity (#1034 review)
+	"campaign_ignores_sync",      // an unsynced standby campaigns over a synced peer that may (#710 3b-4b)
+	"unsynced_leader_keeps_lead", // an unsynced, stuck leader never yields to a synced peer (#710 3b-4b)
+	"yield_undamped",             // a leader yields again within yieldEvery (#710 3b-4b)
+	"yield_ignores_may",          // a leader yields to a peer that may not campaign (#710 3b-4b)
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")

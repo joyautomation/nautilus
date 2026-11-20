@@ -107,6 +107,21 @@ var Mutations = []string{
 	"send_no_deadline",          // fence: a send gets no deadline, and one past its budget still starts (design §3.4)
 	"fence_fin",                 // fence: a fenced socket is closed with a FIN, not reset (design §3.4)
 	"fragments_unchecked",       // fence: a send split into requests reads the gate once, not before each (3b-3b-2)
+	// #710 PR 3b-4b: the witness as the log's third replica, wired.
+	"campaign_ignores_sync",       // node: an unsynced standby campaigns over a synced peer that may (the preference)
+	"unsynced_leader_keeps_lead",  // node: an unsynced, stuck leader never yields to a synced peer
+	"yield_undamped",              // node: a leader yields again within yieldEvery
+	"yield_ignores_may",           // node: a leader yields to a peer that may not campaign
+	"term_not_persisted",          // oplog: the term lives only in memory, so a lost log takes a deposed leader's word
+	"unnamed_leader_admitted",     // oplog: a marked replica takes replication when its election names no leader
+	"vouch_unchecked",             // oplog: a vouch is taken over a lost log, a silent peer or a later log
+	"vouch_alone_kept",            // oplog: a vouched log catches up alone at every leadership, not once
+	"unsynced_log_writes",         // oplog: an unsynced log reads writable, so a write ends "outcome unknown"
+	"witness_log_unbound",         // naut: the witness's log admits replication from any member
+	"witness_log_term_unbound",    // naut: the witness's log admits its granted member at any term
+	"witness_log_any_incarnation", // naut: the leader counts the witness's log at any incarnation
+	"witness_not_a_replica",       // naut: the pair's log leaves the witness out (2 of 2, as before 3b-4)
+	"log_sync_not_retried",        // naut: a leader whose term is unsynced is caught up only by a write
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")

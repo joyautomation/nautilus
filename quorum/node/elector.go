@@ -293,6 +293,14 @@ type Elector struct {
 	durable    uint64            // the highest Seq known on disk
 	written    chan struct{}     // closed and replaced at every write report
 
+	// The operator-intent log's seams and what they decided (logpref.go).
+	logFn      func() LogState
+	vouchFn    func(ctx context.Context, by string) error
+	peerLog    peerLog
+	holdSince  time.Time      // since when the log has held a campaign
+	yieldedAt  time.Time      // the last yield (at most one per yieldEvery)
+	yieldUntil quorum.Instant // no renewal until here: a yield's lease runs out
+
 	gate    atomic.Pointer[gateState]
 	wake    chan struct{}
 	w       *writer
@@ -613,7 +621,7 @@ func (e *Elector) Run(ctx context.Context) {
 	// Run returns only once its writer is done: nothing touches the state
 	// file after it.
 	var wg sync.WaitGroup
-	for _, f := range []func(context.Context){e.w.run, e.emit, e.hello} {
+	for _, f := range []func(context.Context){e.w.run, e.emit, e.hello, e.probeLog} {
 		wg.Add(1)
 		go func() { defer wg.Done(); f(ctx) }()
 	}
@@ -657,12 +665,15 @@ func (e *Elector) look() time.Duration {
 	h := e.health
 	e.mu.Unlock()
 	healthy := h == nil || h()
+	ls, hasLog := e.logState() // outside mu: the log calls into the election
 
 	e.mu.Lock()
 	now := e.now()
 	from, until := e.v.LeaderSeen()
 	e.unhealthy = !healthy
-	req := e.c.Tick(now, from, until, healthy && !e.released && e.mayCampaign(now))
+	e.maybeYield(now, ls, hasLog)
+	may := e.mayCampaign(now) && (e.c.Leading(now) || !e.logHold(now, ls, hasLog))
+	req := e.c.Tick(now, from, until, healthy && !e.released && !e.yielding(now) && may)
 	p, msgs, probe := e.a.Tick(now)
 	var selfP *quorum.Persist
 	if req != nil {
@@ -1025,6 +1036,9 @@ func (e *Elector) serveHello(w http.ResponseWriter, r *http.Request) {
 		e.heard(pi)
 	}
 	self := e.selfInfo()
+	if r.URL.Query().Get("log") == "1" {
+		self.Log = e.selfLog() // outside mu
+	}
 	w.Header().Set("Content-Type", "application/json")
 	cr := e.credentials()
 	us := credOK
@@ -1032,7 +1046,7 @@ func (e *Elector) serveHello(w http.ResponseWriter, r *http.Request) {
 		us = credUnreadable
 	}
 	_ = json.NewEncoder(w).Encode(helloAnswer{Node: string(e.o.Self), MAC: tokenMAC(e.o.Token, c, e.o.Peer, e.o.Self, e.o.ClientToken),
-		Config: self.Config, Nonce: strconv.FormatUint(self.Nonce, 16), Caps: self.Caps,
+		Config: self.Config, Nonce: strconv.FormatUint(self.Nonce, 16), Caps: self.Caps, Log: self.Log,
 		InfoMAC: infoMAC(e.o.Token, c, e.o.Peer, e.o.Self, self),
 		Users:   us, UsersMAC: credMAC(e.o.Token, c, e.o.Peer, e.o.Self, "users", us, cr.Users),
 		TLS: credOK, TLSMAC: credMAC(e.o.Token, c, e.o.Peer, e.o.Self, "tls", credOK, cr.TLS)})
@@ -1134,7 +1148,7 @@ func (e *Elector) answerVerified(c string, h helloAnswer) (peerInfo, bool) {
 	if err != nil || n == 0 {
 		return peerInfo{}, false
 	}
-	pi := peerInfo{Config: h.Config, Nonce: n, Caps: h.Caps}
+	pi := peerInfo{Config: h.Config, Nonce: n, Caps: h.Caps, Log: h.Log}
 	return pi, sameMAC(h.InfoMAC, infoMAC(e.o.Token, c, e.o.Self, e.o.Peer, pi))
 }
 
@@ -1219,6 +1233,16 @@ func (e *Elector) tlsMessage(st CredState) string {
 // the peer. The permission lasts this boot: after a restart, issue it
 // again, above KnownFloor.
 func (e *Elector) Recommission(ctx context.Context, inc, floor uint64) error {
+	return e.RecommissionBy(ctx, "operator", inc, floor)
+}
+
+// RecommissionBy is Recommission naming the person, for the log's vouch
+// (SetVouch): it runs first, and its refusal is Recommission's, before
+// anything is written.
+func (e *Elector) RecommissionBy(ctx context.Context, by string, inc, floor uint64) error {
+	if err := e.vouch(ctx, by); err != nil {
+		return fmt.Errorf("quorum: re-commission refused by the operator-intent log: %w", err)
+	}
 	e.mu.Lock()
 	if known := e.a.KnownFloor(); floor > known && floor-known > MaxTermJump/2 {
 		e.mu.Unlock()

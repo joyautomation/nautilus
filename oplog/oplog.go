@@ -241,6 +241,9 @@ type Options struct {
 	// counts, by the identity it reports: a witness counts only at the
 	// incarnation the election counts.
 	Counts func(peer, identity string) bool
+	// Names, when set, names each peer URL to a person (Vouch's
+	// refusals): "controller a", "the witness".
+	Names map[string]string
 
 	transport http.RoundTripper // tests: an in-process network
 	lim       limits            // tests: smaller chunks and bounds
@@ -255,6 +258,25 @@ type Mark struct {
 	// when there was no file): kept until the replica is synced again,
 	// across restarts, so the alarm it raises lasts as long as the loss.
 	Lost string `json:"lost,omitempty"`
+	// Term is the highest term this replica has seen, written when it
+	// rises, before the request that raised it is answered: a log lost
+	// under the mark (which starts empty) still refuses a deposed
+	// leader's replication by its term (#1050 review). A new identity
+	// starts from 0.
+	Term uint64 `json:"term,omitempty"`
+	// Vouch is the last time a person vouched for this log (Node.Vouch),
+	// and Alone says that vouch's one-shot catch-up is still unused.
+	Vouch *Vouch `json:"vouch,omitempty"`
+	Alone bool   `json:"alone,omitempty"`
+}
+
+// Vouch is a person's word that a replica's log holds every committed
+// entry (Node.Vouch): who, when, and the log's last entry then.
+type Vouch struct {
+	By       string `json:"by"`
+	At       int64  `json:"at"` // epoch ms
+	LastTerm uint64 `json:"lastTerm"`
+	LastSeq  uint64 `json:"lastSeq"`
 }
 
 // Chunking: a resend or a catch-up read carries at most maxChunkEntries
@@ -331,6 +353,14 @@ type Status struct {
 	Unsynced bool   `json:"unsynced,omitempty"`
 	Identity string `json:"identity,omitempty"`
 	Lost     string `json:"lost,omitempty"`
+	// NotSynced: not writable because the log that would sequence a write
+	// (this one, leading, or the leader's, by its last answer) is not
+	// synced, rather than for want of replicas.
+	NotSynced bool `json:"notSynced,omitempty"`
+	// Synced lists the peers whose last answer said their log is synced
+	// (and counts); Vouch is this replica's last vouch.
+	Synced []string `json:"synced,omitempty"`
+	Vouch  *Vouch   `json:"vouch,omitempty"`
 }
 
 // ErrReadOnly says this instance cannot commit a write right now.
@@ -449,11 +479,14 @@ func (n *Node) openMarked() error {
 		if _, err := n.open(); err != nil {
 			return err
 		}
-		m, write = Mark{Identity: n.o.Identity, Lost: kept}, true
+		m, write = Mark{Identity: n.o.Identity, Lost: kept, Term: m.Term}, true
 		n.log.Error("oplog: this replica's operator-intent log was LOST: it counts for nothing (writes, the majority, a takeover's catch-up) until it has synced from the leader", "file", n.o.File, "kept", kept)
 	}
 	if len(n.entries) > 0 && !m.Held {
 		m.Held, write = true, true // a log from before marks
+	}
+	if !mutOplog("term_not_persisted") {
+		n.term = max(n.term, m.Term)
 	}
 	n.mark = m
 	if write {
@@ -572,6 +605,38 @@ func (n *Node) becomeSyncedLocked(why string) {
 		return
 	}
 	n.log.Info("oplog: this replica's log is synced: it counts again", "how", why, "commit", n.commit)
+}
+
+// raiseTermLocked records that this replica has seen term t: with a mark,
+// durably before it is held (Mark.Term). An error leaves the term as it
+// was, and the request that carried t fails. Caller holds mu.
+func (n *Node) raiseTermLocked(t uint64) error {
+	if t <= n.term {
+		return nil
+	}
+	if n.o.Mark != "" && t > n.mark.Term && !mutOplog("term_not_persisted") {
+		m := n.mark
+		m.Term = t
+		if err := n.setMarkLocked(m); err != nil {
+			return fmt.Errorf("oplog: recording term %d in the log's mark: %w", t, err)
+		}
+	}
+	n.term = t
+	return nil
+}
+
+// usedVouchLocked ends a vouch's one-shot catch-up (Mark.Alone): this log
+// has since been caught up with a majority or by a synced leader. Caller
+// holds mu.
+func (n *Node) usedVouchLocked() {
+	if !n.mark.Alone || mutOplog("vouch_alone_kept") {
+		return
+	}
+	m := n.mark
+	m.Alone = false
+	if err := n.setMarkLocked(m); err != nil {
+		n.log.Warn("oplog: can't record that the vouch's catch-up is used", "error", err)
+	}
 }
 
 // counts reports whether a peer's answer counts toward a commit or a
@@ -888,8 +953,8 @@ func (n *Node) acceptLocked(es []Entry) (int, error) {
 			}
 			fresh++
 		}
-		if e.Term > n.term {
-			n.term = e.Term
+		if err := n.raiseTermLocked(e.Term); err != nil {
+			return fresh, err
 		}
 	}
 	return fresh, nil
@@ -1058,6 +1123,10 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 	last := n.lastLocked()
 	own := afterResp{Entries: n.afterLocked(from), Commit: n.commit, LastSeq: last, LastTerm: n.termAtLocked(last)}
 	selfCounts := n.syncedLocked() || mutOplog("unsynced_self_counted")
+	// A vouched log's first catch-up as leader (Vouch): it waits for every
+	// peer, then takes what those that count say, itself included, even
+	// when that is itself alone. Once.
+	alone := selfCounts && n.mark.Alone
 	n.mu.Unlock()
 	// The most advanced log is Raft's "up to date", compared on each WHOLE
 	// log's last entry: the higher term wins, then the higher seq, so an
@@ -1107,12 +1176,16 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 				best, bestSelf = a.got, false
 			}
 		}
-		return answered >= n.majority()
+		return !alone && answered >= n.majority()
 	})
 	if newer != nil {
 		return newer
 	}
-	if answered < n.majority() {
+	need := n.majority()
+	if alone {
+		need = 1
+	}
+	if answered < need {
 		why := ""
 		if !selfCounts {
 			why = "; this replica's own log is not synced"
@@ -1132,6 +1205,10 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 	n.commitTo(commit)
 	n.syncedTerm = term
 	n.becomeSyncedLocked("caught up from a majority as leader")
+	if alone && answered < n.majority() {
+		n.log.Warn("oplog: caught up on a vouched log, without a majority that counts", "answered", answered, "commit", n.commit)
+	}
+	n.usedVouchLocked()
 	return nil
 }
 
@@ -1210,6 +1287,109 @@ func (n *Node) SyncLeader(ctx context.Context) error {
 	n.mu.Unlock()
 	_, err := n.sequenceLocked(ctx, c)
 	return err
+}
+
+// TermSynced reports whether this replica leads and has caught up for its
+// current term (SyncLeader, or a write's catch-up). Always true
+// standalone. A leader that is not writes nothing and replicates nothing
+// until it is: run SyncLeader again.
+func (n *Node) TermSynced() bool {
+	if n.standalone() {
+		return true
+	}
+	if !n.isLeader() {
+		return false
+	}
+	t := n.currentTerm()
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.syncedTerm != 0 && n.syncedTerm == t
+}
+
+// ErrVouchRefused: a person may not vouch for this log now (Vouch says
+// why, naming the replica).
+var ErrVouchRefused = errors.New("oplog: vouch refused")
+
+// Vouch is a person's word that this replica's log holds every committed
+// entry, given when a controller is commissioned or recommissioned (#710
+// 3b-4b): with only synced replicas counting, a new pair (three empty,
+// unsynced logs) could never sync, and nor could a pair whose logs were
+// all lost or rebuilt. The log counts as one synced replica from then on,
+// and its first catch-up as leader may succeed with no other replica that
+// counts (Mark.Alone, leaderCatchUp): it still asks every peer, and takes
+// a longer log a counting one holds.
+//
+// A log that is already synced needs no word: Vouch does nothing and
+// returns a zero Vouch. Otherwise it refuses (ErrVouchRefused):
+//   - a log that was lost (Lost): recommission the other controller;
+//   - when any peer does not answer: it may hold entries this log lacks
+//     (a synced witness rebooting). Bring it back, or rebuild it;
+//   - when any peer, counted or not, holds a later log (its last term,
+//     then its last seq), naming it.
+//
+// Without a mark (no synced state) it does nothing.
+func (n *Node) Vouch(ctx context.Context, by string) (Vouch, error) {
+	if n.o.Mark == "" || n.standalone() {
+		return Vouch{}, nil
+	}
+	n.seqMu.Lock()
+	defer n.seqMu.Unlock()
+	n.mu.Lock()
+	if n.syncedLocked() {
+		n.mu.Unlock()
+		return Vouch{}, nil
+	}
+	lost, last := n.mark.Lost, n.lastLocked()
+	lastTerm := n.termAtLocked(last)
+	n.mu.Unlock()
+	check := !mutOplog("vouch_unchecked")
+	if lost != "" && check {
+		return Vouch{}, fmt.Errorf("%w: this controller's operator-intent log was lost (kept at %s): recommission the other controller instead", ErrVouchRefused, lost)
+	}
+	type answer struct {
+		got afterResp
+		err error
+	}
+	var problems []string
+	// Every peer, each to its own call timeout: none is skipped.
+	fanOut(ctx, n, n.others(), func(ctx context.Context, p string) answer {
+		var got afterResp
+		err := n.call(ctx, p, fmt.Sprintf("/api/oplog?after=%d&page=1", last), nil, &got)
+		return answer{got, err}
+	}, func(p string, a answer) bool {
+		switch {
+		case a.err != nil:
+			problems = append(problems, fmt.Sprintf("%s does not answer (%v): it may hold entries this log lacks; bring it back, or rebuild it, then vouch again", n.name(p), a.err))
+		case a.got.LastTerm > lastTerm || a.got.LastTerm == lastTerm && a.got.LastSeq > last:
+			problems = append(problems, fmt.Sprintf("%s holds a later log (term %d, seq %d; this one ends at term %d, seq %d)", n.name(p), a.got.LastTerm, a.got.LastSeq, lastTerm, last))
+		}
+		return false
+	})
+	if len(problems) > 0 && check {
+		sort.Strings(problems)
+		return Vouch{}, fmt.Errorf("%w: %s", ErrVouchRefused, strings.Join(problems, "; "))
+	}
+	v := Vouch{By: by, At: n.o.Now().UnixMilli(), LastTerm: lastTerm, LastSeq: last}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.syncedLocked() {
+		return Vouch{}, nil // synced meanwhile, by a synced leader
+	}
+	m := n.mark
+	m.Synced, m.Lost, m.Vouch, m.Alone = true, "", &v, true
+	if err := n.setMarkLocked(m); err != nil {
+		return Vouch{}, fmt.Errorf("oplog: recording the vouch: %w", err)
+	}
+	n.log.Warn("oplog: a person vouched for this replica's log: it counts as synced", "by", by, "lastTerm", lastTerm, "lastSeq", last)
+	return v, nil
+}
+
+// name is how a peer is named to a person (Options.Names), else its URL.
+func (n *Node) name(peer string) string {
+	if nm, ok := n.o.Names[peer]; ok {
+		return nm
+	}
+	return peer
 }
 
 // sequence is the leader's path, one proposal at a time: number, store,
@@ -1614,7 +1794,13 @@ func (n *Node) Status() Status {
 	now := n.o.Now()
 	var reached []string
 	counted := 0
+	var synced []string
 	for _, p := range n.o.Peers {
+		if p != n.o.Self {
+			if pi, ok := n.peers[p]; ok && n.counts(p, pi.unsynced, pi.identity) {
+				synced = append(synced, p)
+			}
+		}
 		if p == n.o.Self || now.Sub(n.lastContact[p]) < 10*time.Second {
 			reached = append(reached, p)
 			pi := n.peers[p]
@@ -1626,24 +1812,34 @@ func (n *Node) Status() Status {
 			}
 		}
 	}
-	s := Status{Self: n.o.Self, Leader: n.leaderAddr(), IsLeader: n.isLeader(), Term: n.term, Peers: n.o.Peers, Reached: reached, LastSeq: n.lastLocked(), Commit: n.commit,
-		Unsynced: !n.syncedLocked(), Identity: n.mark.Identity, Lost: n.mark.Lost}
+	leader := n.leaderAddr()
+	leaderUnsynced := n.peers[leader].unsynced
+	s := Status{Self: n.o.Self, Leader: leader, IsLeader: n.isLeader(), Term: n.term, Peers: n.o.Peers, Reached: reached, LastSeq: n.lastLocked(), Commit: n.commit,
+		Unsynced: !n.syncedLocked(), Identity: n.mark.Identity, Lost: n.mark.Lost, Synced: synced, Vouch: n.mark.Vouch}
 	n.mu.Unlock()
 	switch {
 	case n.standalone():
 		s.Writable = true
 	case s.IsLeader:
-		s.Writable = counted >= n.majority()
+		s.Writable = counted >= n.majority() || s.Unsynced && mutOplog("unsynced_log_writes")
 		switch {
 		case s.Unsynced && !s.Writable:
+			s.NotSynced = true
 			s.Reason = "leader, but this replica's log is not synced, and too few that count are reachable"
 		case !s.Writable:
 			s.Reason = fmt.Sprintf("leader, but only %d of %d instances that count reachable", counted, len(n.o.Peers))
 		}
 	default:
 		s.Writable = s.Leader != "" && contains(reached, s.Leader)
-		if !s.Writable {
+		switch {
+		case !s.Writable:
 			s.Reason = "not the leader, and the leader is unreachable"
+		case leaderUnsynced && !mutOplog("unsynced_log_writes"):
+			// The leader's log is not synced (its last answer): it can
+			// commit nothing until it is, so a write is refused here,
+			// for certain, rather than forwarded to an unknown outcome.
+			s.Writable, s.NotSynced = false, true
+			s.Reason = "the leader's log is not synced"
 		}
 	}
 	return s
@@ -1801,8 +1997,17 @@ func (n *Node) Handler() http.Handler {
 				return
 			}
 		default:
-			if l := n.leaderAddr(); !n.standalone() && l != "" && req.From != l {
+			l := n.leaderAddr()
+			if !n.standalone() && l != "" && req.From != l {
 				http.Error(w, fmt.Sprintf("replication from %s; the leader is %s", req.From, l), http.StatusForbidden)
+				return
+			}
+			// With a mark, only from a leader this replica's own election
+			// names: a replica that has not seen the current term (a new
+			// identity starts at term 0) would otherwise take a deposed
+			// leader's word that its log is synced.
+			if !n.standalone() && l == "" && n.o.Mark != "" && !mutOplog("unnamed_leader_admitted") {
+				http.Error(w, fmt.Sprintf("replication from %s, but this replica's election names no leader", req.From), http.StatusForbidden)
 				return
 			}
 		}
@@ -1813,8 +2018,10 @@ func (n *Node) Handler() http.Handler {
 			writeJSON(w, http.StatusConflict, map[string]any{"error": "stale term", "have": have})
 			return
 		}
-		if req.Term > n.term {
-			n.term = req.Term
+		if err := n.raiseTermLocked(req.Term); err != nil {
+			n.mu.Unlock()
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
 		// Raft's consistency check: take these entries, and the commit
 		// index, only on top of the leader's own previous entry. Without
@@ -1839,6 +2046,7 @@ func (n *Node) Handler() http.Handler {
 			// ours holds them too.
 			if (req.Synced || mutOplog("synced_by_unsynced_leader")) && (proved >= req.Commit || mutOplog("synced_before_commit")) {
 				n.becomeSyncedLocked("replicated from a synced leader")
+				n.usedVouchLocked()
 			}
 		}
 		have := n.lastLocked()

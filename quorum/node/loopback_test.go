@@ -37,6 +37,7 @@ type cluster struct {
 	pair  string
 	mu    sync.Mutex
 	cut   map[[2]quorum.NodeID]bool // [from, to]
+	mute  map[quorum.NodeID]bool     // its vote requests are lost (the rest goes through)
 	addr  map[quorum.NodeID]string  // the name peers use: a DNS name nothing allows
 	byHP  map[string]quorum.NodeID
 	real  map[string]string // name -> the address it listens on now
@@ -72,6 +73,10 @@ type member struct {
 	ran    chan struct{}
 	sick   atomic.Bool // its scans are not live (SetHealth)
 	born   time.Time   // when its current Elector was built
+	// A stand-in for the operator-intent log's report (SetLog), when
+	// logOn: whether its log is synced, and stuck (leading, catch-up
+	// failed).
+	logOn, logUnsynced, logStuck atomic.Bool
 }
 
 type witnessMember struct {
@@ -171,6 +176,11 @@ func (c *cluster) start(id quorum.NodeID) *Elector {
 		c.t.Fatal(err)
 	}
 	e.SetHealth(func() bool { return !m.sick.Load() })
+	if m.logOn.Load() {
+		e.SetLog(func() LogState {
+			return LogState{Synced: !m.logUnsynced.Load(), Stuck: m.logStuck.Load() && e.IsLeader()}
+		})
+	}
 	h, _ := Guard(c.tok[id], e.Handler())
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel, m.ran = cancel, make(chan struct{})
@@ -260,6 +270,12 @@ func (f *faultRT) RoundTrip(r *http.Request) (*http.Response, error) {
 		}
 	}
 	if f.c.isCut(f.from, to) {
+		return nil, errCut
+	}
+	f.c.mu.Lock()
+	mute := f.c.mute[f.from] && strings.HasSuffix(r.URL.Path, "/vote")
+	f.c.mu.Unlock()
+	if mute {
 		return nil, errCut
 	}
 	resp, err := f.base.RoundTrip(r)

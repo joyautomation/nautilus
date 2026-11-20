@@ -158,6 +158,10 @@ type helloAnswer struct {
 	Nonce   string   `json:"nonce,omitempty"`
 	Caps    []string `json:"caps,omitempty"`
 	InfoMAC string   `json:"infoMac,omitempty"`
+	// Log is the answerer's operator-intent log report (logReport), sent
+	// only to an asker that asks for it (log=1), so a build before it
+	// still verifies the answer. Bound by InfoMAC.
+	Log string `json:"log,omitempty"`
 	// The answerer's credentials (Credentials), each part as its state
 	// and its MAC (credMAC). A build before #708's check sends none.
 	Users    string `json:"users,omitempty"`

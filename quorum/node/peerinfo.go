@@ -42,6 +42,9 @@ type peerInfo struct {
 	Config string
 	Nonce  uint64
 	Caps   []string
+	// Log is the operator-intent log report (logReport), "" when not
+	// asked or not known (#710 3b-4b): answers only.
+	Log string
 }
 
 func (e *Elector) selfInfo() peerInfo {
@@ -72,8 +75,13 @@ func infoFromQuery(q url.Values) (peerInfo, bool) {
 // names, keyed with the peer token, as tokenMAC does for the client token.
 func infoMAC(peerToken, challenge string, asker, answerer quorum.NodeID, pi peerInfo) string {
 	m := hmac.New(sha256.New, []byte(peerToken))
-	for _, part := range []string{"nautilus peer info answer", string(asker), string(answerer), challenge,
-		pi.Config, strconv.FormatUint(pi.Nonce, 16), strings.Join(pi.Caps, ",")} {
+	parts := []string{"nautilus peer info answer", string(asker), string(answerer), challenge,
+		pi.Config, strconv.FormatUint(pi.Nonce, 16), strings.Join(pi.Caps, ",")}
+	if pi.Log != "" {
+		// Only when sent, so an answer without it verifies as before.
+		parts = append(parts, "log", pi.Log)
+	}
+	for _, part := range parts {
 		m.Write([]byte(part))
 		m.Write([]byte{0})
 	}
@@ -98,6 +106,7 @@ func (e *Elector) heard(pi peerInfo) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.peerCaps, e.peerKnown = slices.Clone(pi.Caps), true
+	e.heardLog(pi.Log)
 
 	differs := e.o.Config != "" && pi.Config != "" && pi.Config != e.o.Config
 	if differs {
