@@ -264,6 +264,46 @@ For a network view you lay out yourself, the four glyph primitives — `TankGlyp
 `FlowLink` draws its marching dashes **only** when `flowing` is true, so a still line means still
 water; drive it from a meter with a deadband, never from "the pump is commanded on".
 
+## Sign-in and elevation
+
+Against a controller with an `auth:` block (see the nautilus guide, "Users, roles & sign-in"),
+mount `createAuth()` once in the root layout, beside `<ConfirmDialog/>`:
+
+```svelte
+<script lang="ts">
+	import { onMount } from 'svelte';
+	import { createAuth, ConfirmDialog } from '@joyautomation/nautilus-hmi';
+	const auth = createAuth();
+	onMount(() => {
+		void auth.start();
+		return () => auth.stop();
+	});
+</script>
+
+<ConfirmDialog />
+```
+
+`start()` installs its fetch as the one every kit client uses (`writeTag`, `AlarmClient`,
+`SubstituteClient`, `PortParamClient`, `fetchHistory`), unless a client was handed a `fetch` of
+its own, and listens to the live stream's errors. Then:
+
+- a `401` with `elevate: true` asks for the password in `<ConfirmDialog/>` (`askPassword`), proves
+  it (`POST /api/elevate`), and repeats the request once, byte for byte, so a substitute's
+  `requestId` is the same one. Concurrent refusals share one prompt; cancel returns the original
+  refusal. Only requests to the page's own origin are prompted for;
+- any other `401`, or a stream that drops, is judged by a fresh `GET /api/me`: a browser that had
+  a session and now has none goes to `/signin?next=<this page>`;
+- a standby's `503` (`standby: true`) sends the page to the `leader` URL in its body, only when it
+  is `http(s)`, never `http` from an `https` page, not again within 30 s, and never without
+  `sessionStorage` to keep that guard in (`auth.referral` holds a referral it did not follow,
+  with the leader's link, for a banner). The `Location` header is never used;
+- `auth.me` is `GET /api/me` as a rune; `auth.holds(perm)` and `auth.needsPassword(perm)` (judged
+  by the controller's clock, `me.now`) let a control say ahead of time what will happen.
+
+Without `auth:`, or against a controller without `/api/me`, nothing changes. **Nothing in the kit
+grants anything:** a control it greys out for a role is a convenience, and the controller checks
+every request regardless.
+
 ## Writing back
 
 `RealtimeClient.writeTag(name, value)` resolves to `null` on success or the controller's refusal

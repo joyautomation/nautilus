@@ -1028,7 +1028,9 @@ func standbyRefers(r *http.Request) bool {
 // left as it is: only the leader can end the session it names.
 func (s *Server) referToLeader(w http.ResponseWriter, leader string) {
 	w.Header().Set("Cache-Control", "no-store")
-	body := map[string]string{"error": "this controller is the standby; open the leader (browser sign-ins live on the leader)"}
+	// standby is the field a page keys on (the HMI kit follows it to
+	// leader); the error text is for a person.
+	body := map[string]any{"error": "this controller is the standby; open the leader (browser sign-ins live on the leader)", "standby": true}
 	if leader != "" {
 		w.Header().Set("Location", leader+"/")
 		body["leader"] = leader
@@ -1199,7 +1201,6 @@ func (s *Server) awaitLeaderChange(ctx context.Context, old string) (addr string
 // its token header, and the real request is then judged as above.
 func (s *Server) withCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		origin := r.Header.Get("Origin")
 		// Always: a cache must not hand one origin's answer (with or
 		// without the CORS header) to another.
 		w.Header().Add("Vary", "Origin")
@@ -1207,13 +1208,24 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 			s.answerPreflight(w, r)
 			return
 		}
-		if origin != "" && (s.corsOrigin(r, origin) || s.validCredential(r)) {
-			w.Header().Set("Access-Control-Allow-Origin", origin)
-			// A page may read whether its action was journalled to disk.
-			w.Header().Set("Access-Control-Expose-Headers", auditJournalHeader)
-		}
+		s.allowOrigin(w, r)
 		next.ServeHTTP(w, r)
 	})
+}
+
+// allowOrigin sends the CORS answer for r's Origin when a page there may
+// read the API (corsOrigin, or a request carrying a valid credential), and
+// nothing for any other. withCORS sends it for every route; the read gate,
+// which answers before withCORS is reached, sends it on its refusals, so
+// an allowed dev page can read why it was refused instead of a bare
+// network error. The caller has already added Vary: Origin.
+func (s *Server) allowOrigin(w http.ResponseWriter, r *http.Request) {
+	origin := r.Header.Get("Origin")
+	if origin != "" && (s.corsOrigin(r, origin) || s.validCredential(r)) {
+		w.Header().Set("Access-Control-Allow-Origin", origin)
+		// A page may read whether its action was journalled to disk.
+		w.Header().Set("Access-Control-Expose-Headers", auditJournalHeader)
+	}
 }
 
 // answerPreflight answers an OPTIONS request: 204, no body, and for a

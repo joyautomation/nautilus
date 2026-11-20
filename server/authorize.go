@@ -527,6 +527,13 @@ type meResponse struct {
 	// Elevated lists the permissions a browser sign-in holds only while
 	// its password is fresh (session.elevatedUntil); a token's always are.
 	Elevated []string `json:"elevated,omitempty"`
+	// SignIn says this controller offers browser sign-in (/signin): an
+	// auth: block that grants users roles, and a users file. A facade, or a
+	// project without users, has no sign-in page to send anyone to.
+	SignIn bool `json:"signIn"`
+	// Now is the controller's clock, so a page judges elevatedUntil and
+	// expires against it rather than the browser's.
+	Now time.Time `json:"now"`
 }
 
 // meSession is /api/me's account of a browser sign-in. The id never
@@ -547,11 +554,12 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	a := s.actorOf(r)
 	// It answers by the request's cookie: no cache may hand it to another.
 	w.Header().Set("Cache-Control", "no-store")
+	now := time.Now().UTC()
 	if s.policy == nil {
-		writeJSON(w, http.StatusOK, meResponse{Secure: s.secure(r), Me: auth.Me{Principal: a.pr.String(), Roles: []string{}, Permissions: map[string][]string{}}})
+		writeJSON(w, http.StatusOK, meResponse{Secure: s.secure(r), Now: now, Me: auth.Me{Principal: a.pr.String(), Roles: []string{}, Permissions: map[string][]string{}}})
 		return
 	}
-	me := meResponse{Auth: true, Secure: s.secure(r), Me: s.policy.Describe(a.pr), Elevated: auth.ElevatedPermissions}
+	me := meResponse{Auth: true, Secure: s.secure(r), Me: s.policy.Describe(a.pr), Elevated: auth.ElevatedPermissions, SignIn: s.sessions != nil, Now: now}
 	if a.session != nil {
 		me.Session = &meSession{Expires: a.session.expires.UTC(), ElevatedUntil: s.elevatedUntil(*a.session).UTC()}
 	}

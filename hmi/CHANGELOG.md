@@ -4,6 +4,21 @@
 
 ### Added
 
+- **`createAuth`, `AuthClient`, `AuthSession`** (#708): the kit's side of sign-in. Mounted once
+  beside `<ConfirmDialog/>`, it installs its fetch for every kit client: a `401` with
+  `elevate: true` asks for the password, proves it (`POST /api/elevate`) and repeats the request
+  once, byte for byte (one prompt for concurrent refusals; cancel returns the refusal); any other
+  `401`, or a dropped stream, is judged by a fresh `/api/me`, and a sign-in that has ended goes
+  to `/signin?next=`; a standby's `503` sends the page to the `leader` it names (http(s) only, no
+  https→http, a 30 s loop guard kept in `sessionStorage` and no follow without it, never the
+  `Location` header). Does nothing without `auth:`. The
+  pure rules (`leaderTarget`, `needsPassword`, `refusalMessage`, …) are exported and tested.
+- **`askPassword`, and a password mode in `<ConfirmDialog/>`** (#708): the elevation prompt.
+  Resolves to what was typed, or null; with no dialog mounted it resolves null at once (never a
+  plain-text browser prompt).
+- **`kitFetch`, `setKitFetch`**: the fetch every kit client uses unless handed one; `createAuth`
+  installs itself there.
+
 - **`PortParameters`, `PortParamClient`** (#705): the parameters of the device
   on an IO-Link port, over `/api/iolink/{port}/params`: what the device's
   IODD says each is (access, allowed range, named values), what it holds,
@@ -27,6 +42,14 @@
 
 ### Changed
 
+- **Refusals read as the controller's reason** (#708): `writeTag`, `AlarmClient` and
+  `SubstituteClient` show a refusal's JSON `error`, not the JSON, and `writeTag` no longer says
+  "this controller requires an auth token" for every 401/403 (under `auth:` it is "sign in",
+  "confirm your password" or the role). `SubstituteClient` classes a 401/403 as `forbidden`
+  even when no outcome header came with it (it is a refusal, never "outcome unknown"). A 401/403
+  on a RETRY of an unknown start refuses that retry only: `SubstituteSession` keeps the pending
+  "may still take effect" entry and returns the refusal's reason.
+
 - **`Quality` gains `'substituted'`** (#707): a value an operator put in
   place of a bad sensor's, which the logic runs on. A new `ValueStatus`
   `substituted` draws it in `--q-substituted` with the badge `SUBST`,
@@ -38,9 +61,23 @@
 
 ### Fixed
 
+- **`Modal` (so `<ConfirmDialog/>`) no longer cancels a question that opens right after another** (#708):
+  a native `close` event from the first close arrived while the second was on screen and was
+  taken as the user closing it. Seen as a password re-prompt (after a wrong password) cancelling
+  itself; a confirm asked straight after another could do the same. A close event that finds the
+  dialog open again is now ignored (`dialog.ts`).
+
 - **An unknown quality token is drawn as bad, never good.** `valueStatus`
   used to fall through to `good` for a token it did not know, so a newer
   controller's quality reached the screen as trustworthy and commandable.
+
+### Upgrading
+
+- **Sign-in (#708) needs one line in the root layout**, beside `<ConfirmDialog/>`:
+  `const auth = createAuth();` then `auth.start()` in `onMount` (and `auth.stop()` on destroy).
+  Without it the kit behaves exactly as before: an elevated action is refused with the
+  controller's "sign in again" message, a sign-out mid-shift is not noticed until a reload, and a
+  standby's referral is not followed. `<ConfirmDialog/>` must be mounted for the password prompt.
 
 ## 0.10.0 — 2026-11-18 (minor: no breaking API changes; visual defaults change: grey liquid, single-line ISA-101 pipes, a darker light-theme `--s1`)
 

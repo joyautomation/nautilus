@@ -139,6 +139,12 @@ func TestEachActionNeedsExactlyItsPermission(t *testing.T) {
 			if ok := rec.Code < 300; ok != c.ok {
 				t.Errorf("%s with %s: %d %s", row.name, c.tok, rec.Code, rec.Body)
 			}
+			// A refusal by role ran nothing, and says so: a client reading
+			// the outcome (the kit's substitutes, IO-Link parameters) must
+			// not take it as "may still take effect".
+			if !c.ok && rec.Header().Get(outcomeHeader) != "refused" {
+				t.Errorf("%s with %s: %d, %s %q, want refused", row.name, c.tok, rec.Code, outcomeHeader, rec.Header().Get(outcomeHeader))
+			}
 		}
 	}
 }

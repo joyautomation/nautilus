@@ -171,6 +171,36 @@ describe('SubstituteSession — the start state machine', () => {
 		s.reconcile([{ id: 9, name: 'T1', value: 5, startMs: 0, untilMs: 0, remainingMs: 0, requestId: id }]);
 		expect(s.pending().length).toBe(0);
 	});
+	it('a 401/403 on a RETRY refuses that retry only: the unknown first attempt stays pending, and the reason is shown (#708)', async () => {
+		const { sent, client } = fake([
+			text('x', 503, U),
+			json({ error: 'sign in, or send a token' }, 401),
+			json({ error: 'operator may not substitute Level' }, 403),
+			json({ started: true })
+		]);
+		const s = new SubstituteSession(client);
+		await s.start('T1', 5, 60);
+		const id = s.pending()[0].requestId;
+		const r401 = await s.retry('T1');
+		expect(r401?.ok).toBe(false);
+		if (r401 && !r401.ok) expect(r401.message).toBe('sign in, or send a token');
+		expect(s.pending().length).toBe(1);
+		expect(s.pending()[0].requestId).toBe(id);
+		const r403 = await s.retry('T1');
+		if (r403 && !r403.ok) expect(r403.kind).toBe('forbidden');
+		expect(s.pending().length).toBe(1);
+		const ok = await s.retry('T1'); // certain for the original: it applied once
+		expect(ok?.ok).toBe(true);
+		expect(s.pending().length).toBe(0);
+		expect(sent.map((x) => x.body?.requestId)).toEqual([id, id, id, id]);
+	});
+	it('a 401/403 on a FRESH start leaves nothing pending', async () => {
+		const { client } = fake([json({ error: 'sign in' }, 401)]);
+		const s = new SubstituteSession(client);
+		const r = await s.start('T1', 5, 60);
+		expect(r.ok).toBe(false);
+		expect(s.pending().length).toBe(0);
+	});
 	it('a re-read that shows the pending start LAPSED clears the block and reports it (#710)', async () => {
 		const { client } = fake([text('x', 503, U), text('x', 503, U)]);
 		const s = new SubstituteSession(client);

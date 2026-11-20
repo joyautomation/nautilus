@@ -37,6 +37,14 @@ export interface ConfirmOptions {
 	operator?: boolean;
 	/** A standing caveat under the body, e.g. "Recorded as operator1 — unauthenticated". */
 	note?: string;
+	/**
+	 * Ask for a password (the elevation prompt): the dialog shows a password
+	 * field, and the request is made with `requestSecret`, which resolves to
+	 * what was typed, or null. Set by `askPassword`; not for plain confirms.
+	 */
+	password?: boolean;
+	/** Why the last answer was not accepted, shown above the field. */
+	error?: string;
 }
 
 /** One queued question, as the host component sees it. */
@@ -48,10 +56,17 @@ export interface ConfirmRequest {
 export interface ConfirmQueue {
 	/** Ask. Resolves `true` on confirm, `false` on cancel/Escape/backdrop. */
 	request(options: ConfirmOptions): Promise<boolean>;
+	/**
+	 * Ask for a secret (a password): resolves to what was typed on confirm,
+	 * null on cancel. With no host mounted it resolves null at once: there is
+	 * no browser dialog that hides what is typed, and the caller's refusal
+	 * then says what to do instead (sign in again).
+	 */
+	requestSecret(options: ConfirmOptions): Promise<string | null>;
 	/** Settle the CURRENT request and promote the next one. No-op if empty. */
-	settle(value: boolean): void;
+	settle(value: boolean, secret?: string): void;
 	/** Settle a request by id — ignored if it is not the current one. */
-	settleById(id: number, value: boolean): void;
+	settleById(id: number, value: boolean, secret?: string): void;
 	/** The question on screen, or `null`. */
 	readonly current: ConfirmRequest | null;
 	/** How many are waiting behind `current`. */
@@ -78,12 +93,14 @@ export interface QueueOptions {
 	 * settles is a command that vanishes without a trace.
 	 */
 	fallback?: (options: ConfirmOptions) => boolean | null;
+	/** Told when `requestSecret` is called with no host mounted (it resolves null). */
+	secretFallback?: (options: ConfirmOptions) => void;
 }
 
 let nextId = 1;
 
 export function createConfirmQueue(opts: QueueOptions = {}): ConfirmQueue {
-	type Entry = { id: number; options: ConfirmOptions; resolve: (v: boolean) => void };
+	type Entry = { id: number; options: ConfirmOptions; resolve: (v: boolean, secret?: string) => void };
 	const pending: Entry[] = [];
 	let hosts = 0;
 
@@ -94,14 +111,21 @@ export function createConfirmQueue(opts: QueueOptions = {}): ConfirmQueue {
 		opts.onchange?.(e ? { id: e.id, options: e.options } : null);
 	}
 
-	function settleById(id: number, value: boolean) {
+	function settleById(id: number, value: boolean, secret?: string) {
 		const i = pending.findIndex((e) => e.id === id);
 		// Only the head is answerable — a stale click on a dialog that has
 		// already been superseded must not settle somebody else's question.
 		if (i !== 0) return;
 		const [e] = pending.splice(0, 1);
-		e.resolve(value);
+		e.resolve(value, secret);
 		announce();
+	}
+
+	function enqueue(options: ConfirmOptions, resolve: Entry['resolve']) {
+		pending.push({ id: nextId++, options, resolve });
+		// Only the first entry changes what is on screen; anything behind it
+		// is invisible until its turn.
+		if (pending.length === 1) announce();
 	}
 
 	return {
@@ -110,17 +134,20 @@ export function createConfirmQueue(opts: QueueOptions = {}): ConfirmQueue {
 				const answer = opts.fallback?.(options) ?? null;
 				if (answer !== null) return Promise.resolve(answer);
 			}
-			const id = nextId++;
-			return new Promise<boolean>((resolve) => {
-				pending.push({ id, options, resolve });
-				// Only the first entry changes what is on screen; anything
-				// behind it is invisible until its turn.
-				if (pending.length === 1) announce();
-			});
+			return new Promise<boolean>((resolve) => enqueue({ ...options, password: false }, (v) => resolve(v)));
 		},
-		settle(value: boolean) {
+		requestSecret(options: ConfirmOptions): Promise<string | null> {
+			if (hosts === 0) {
+				opts.secretFallback?.(options);
+				return Promise.resolve(null);
+			}
+			return new Promise<string | null>((resolve) =>
+				enqueue({ ...options, password: true }, (v, secret) => resolve(v ? (secret ?? '') : null))
+			);
+		},
+		settle(value: boolean, secret?: string) {
 			const e = head();
-			if (e) settleById(e.id, value);
+			if (e) settleById(e.id, value, secret);
 		},
 		settleById,
 		get current() {

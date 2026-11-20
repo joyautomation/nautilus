@@ -511,7 +511,8 @@ func TestStandbyDecidesSignInAndMeItself(t *testing.T) {
 	} {
 		rec := req(c.method, c.path, c.mod...)
 		want := "https://plc-0.plant.example"
-		if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Location") != want+"/" || !strings.Contains(rec.Body.String(), `"leader":"`+want+`"`) {
+		if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Location") != want+"/" || !strings.Contains(rec.Body.String(), `"leader":"`+want+`"`) ||
+			!strings.Contains(rec.Body.String(), `"standby":true`) {
 			t.Errorf("%s /api/%s on the standby: %d Location %q %s; want 503 naming %s", c.method, c.path, rec.Code, rec.Header().Get("Location"), rec.Body, want)
 		}
 		if sc := rec.Header().Values("Set-Cookie"); len(sc) > 0 {
@@ -546,7 +547,7 @@ func TestStandbyReferralWithoutAPublicURL(t *testing.T) {
 	r.Header.Set("Origin", "http://10.0.0.7")
 	rec := serve(standby, r)
 	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Location") != "" || strings.Contains(rec.Body.String(), "10.9.8.7") ||
-		strings.Contains(rec.Body.String(), `"leader"`) || !strings.Contains(rec.Body.String(), "open the leader") {
+		strings.Contains(rec.Body.String(), `"leader"`) || !strings.Contains(rec.Body.String(), "open the leader") || !strings.Contains(rec.Body.String(), `"standby":true`) {
 		t.Errorf("sign-in on a standby with no public URL: %d Location %q %s", rec.Code, rec.Header().Get("Location"), rec.Body)
 	}
 	page := func() string {

@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http/httptest"
 	"os/exec"
 	"strings"
@@ -92,7 +93,8 @@ setImmediate(() => setImmediate(() => {
     for (const fn of listeners["tags:click"] || []) fn({ target });
     clicks.push({ key, posts: posts.slice(), editing: vm.runInContext("editing", ctx) });
   }
-  process.stdout.write(JSON.stringify({ rows: out, clicks }));
+  const evals = (input.evals || []).map((e) => vm.runInContext(e, ctx));
+  process.stdout.write(JSON.stringify({ rows: out, clicks, evals }));
 }));
 `
 
@@ -126,6 +128,15 @@ func dashboardRows(t *testing.T, rt *runtime.Runtime, tags map[string]any, expan
 // inline editor.
 func dashboardRun(t *testing.T, rt *runtime.Runtime, tags map[string]any, expand, clicks []string) (map[string]dashRow, map[string]dashClick) {
 	t.Helper()
+	rows, clicked, _ := dashboardEval(t, rt, tags, expand, clicks, nil)
+	return rows, clicked
+}
+
+// dashboardEval is dashboardRun that also evaluates each expression in
+// evals in the page's script context, after it has loaded, and returns
+// their values.
+func dashboardEval(t *testing.T, rt *runtime.Runtime, tags map[string]any, expand, clicks, evals []string) (map[string]dashRow, map[string]dashClick, []any) {
+	t.Helper()
 	node, err := exec.LookPath("node")
 	if err != nil {
 		t.Skip("node not installed — cannot run the dashboard script")
@@ -141,7 +152,7 @@ func dashboardRun(t *testing.T, rt *runtime.Runtime, tags map[string]any, expand
 		js.Write(m[1])
 		js.WriteByte('\n')
 	}
-	in, _ := json.Marshal(map[string]any{"script": js.String(), "meta": meta, "tags": tags, "expand": expand, "clicks": clicks})
+	in, _ := json.Marshal(map[string]any{"script": js.String(), "meta": meta, "tags": tags, "expand": expand, "clicks": clicks, "evals": evals})
 	cmd := exec.Command(node, "-e", dashboardHarness)
 	cmd.Stdin = strings.NewReader(string(in))
 	out, err := cmd.CombinedOutput()
@@ -151,6 +162,7 @@ func dashboardRun(t *testing.T, rt *runtime.Runtime, tags map[string]any, expand
 	var res struct {
 		Rows   []dashRow   `json:"rows"`
 		Clicks []dashClick `json:"clicks"`
+		Evals  []any       `json:"evals"`
 	}
 	if err := json.Unmarshal(out, &res); err != nil {
 		t.Fatalf("harness output: %v\n%s", err, out)
@@ -163,7 +175,7 @@ func dashboardRun(t *testing.T, rt *runtime.Runtime, tags map[string]any, expand
 	for _, c := range res.Clicks {
 		clicked[c.Key] = c
 	}
-	return byKey, clicked
+	return byKey, clicked, res.Evals
 }
 
 // Getting started: in the dashboard setpoints are click-to-set (BOOLs by
@@ -279,6 +291,46 @@ func TestDashboardWritableStructLeavesAreEditableByDottedPath(t *testing.T) {
 		}
 		if r.Kind != "plain" || r.Write != nil {
 			t.Errorf("%s = %+v, want a read-only leaf (its root is driver/logic-owned)", path, r)
+		}
+	}
+}
+
+// A refused write says the controller's own reason on its cell: under
+// auth: that is "sign in", "confirm your password" or "not your role",
+// never the old guess "this controller requires an auth token". The
+// reason arrives as JSON {"error": …}; the cell shows the text, not the
+// JSON.
+func TestDashboardRefusalSaysTheControllersReason(t *testing.T) {
+	cases := []struct {
+		status int
+		body   string
+		want   string
+	}{
+		{401, `{"error":"tag.write needs write: sign in, or send a token (Authorization: Bearer …)"}`, "write refused — tag.write needs write: sign in, or send a token (Authorization: Bearer …)"},
+		{401, `{"error":"confirm your password to do this: sign in again (/signin)","elevate":true}`, "write refused — confirm your password to do this: sign in again (/signin)"},
+		{403, `{"error":"operator may not write TankSP"}`, "write refused — operator may not write TankSP"},
+		{401, "", "write refused — sign in (/signin), or send a token"},
+		{403, "", "write refused — not permitted"},
+		{400, "unknown tag Nope\n", "write refused — unknown tag Nope"},
+		{503, `{"error":"no leader"}`, "write failed — no leader"},
+		{502, "", "write failed (502)"},
+	}
+	var evals []string
+	for _, c := range cases {
+		b, _ := json.Marshal(c.body)
+		evals = append(evals, fmt.Sprintf("refusalText(%d, %s)", c.status, b))
+	}
+	_, _, got := dashboardEval(t, newTestRuntime(t), map[string]any{}, nil, nil, evals)
+	for i, c := range cases {
+		if i >= len(got) || got[i] != c.want {
+			var g any
+			if i < len(got) {
+				g = got[i]
+			}
+			t.Errorf("%d %q: %v, want %q", c.status, c.body, g, c.want)
+		}
+		if s, _ := got[i].(string); strings.Contains(s, "auth token") || strings.Contains(s, "{") {
+			t.Errorf("%d %q: %q", c.status, c.body, s)
 		}
 	}
 }

@@ -797,6 +797,21 @@
         renderTable();
       }
 
+      // refusalText is what a refused write says on its cell: the
+      // controller's own reason (its JSON "error": sign in, confirm your
+      // password, not your role, a token), never a guess at the cause.
+      function refusalText(status, body) {
+        let detail = String(body || "").trim();
+        try {
+          const j = JSON.parse(detail);
+          if (j && typeof j.error === "string") detail = j.error.trim();
+        } catch {}
+        if (detail) return (status >= 500 ? "write failed — " : "write refused — ") + detail;
+        if (status === 401) return "write refused — sign in (/signin), or send a token";
+        if (status === 403) return "write refused — not permitted";
+        return `write failed (${status})`;
+      }
+
       async function writeTag(name, value) {
         writeErrors.delete(name);
         try {
@@ -805,15 +820,7 @@
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ name, value }),
           });
-          if (!res.ok) {
-            const detail = (await res.text()).trim();
-            failWrite(
-              name,
-              res.status === 401 || res.status === 403
-                ? "write refused — this controller requires an auth token"
-                : detail || `write failed (${res.status})`,
-            );
-          }
+          if (!res.ok) failWrite(name, refusalText(res.status, await res.text()));
         } catch {
           failWrite(name, "write failed — controller unreachable");
         }

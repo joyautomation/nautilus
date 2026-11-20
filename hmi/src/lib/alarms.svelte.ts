@@ -7,6 +7,8 @@
 // stay props-in/callbacks-out), and the client degrades gracefully when the
 // controller was built with no alarm definitions at all (`GET /api/alarms`
 // 404s → `supported` flips to `false` rather than throwing).
+import { kitFetch } from './kitfetch.js';
+import { refusalMessage } from './auth.js';
 import type { FrameSource } from './realtime.svelte.js';
 
 /** ISA-18.2 priority, JSON lowercase. Ordered low → high for sorting. */
@@ -308,14 +310,14 @@ export class AlarmClient {
 	async refresh(): Promise<void> {
 		this.loading = true;
 		try {
-			const res = await fetch(this.#url, { headers: authHeaders(this.#token, false) });
+			const res = await kitFetch(this.#url, { headers: authHeaders(this.#token, false) });
 			if (res.status === 404) {
 				this.supported = false;
 				this.error = null;
 				return;
 			}
 			if (!res.ok) {
-				this.error = (await res.text()).trim() || `fetch failed (${res.status})`;
+				this.error = refusalMessage(res.status, await res.text(), `fetch failed`);
 				return;
 			}
 			const body = (await res.json()) as AlarmsGetResponse;
@@ -347,13 +349,13 @@ export class AlarmClient {
 	async ack(ids: string[] | 'all', by: string): Promise<number> {
 		const body = ids === 'all' ? { all: true, by } : { ids, by };
 		try {
-			const res = await fetch(`${this.#url}/ack`, {
+			const res = await kitFetch(`${this.#url}/ack`, {
 				method: 'POST',
 				headers: authHeaders(this.#token, true),
 				body: JSON.stringify(body)
 			});
 			if (!res.ok) {
-				this.error = (await res.text()).trim() || `ack failed (${res.status})`;
+				this.error = refusalMessage(res.status, await res.text(), `ack failed`);
 				return 0;
 			}
 			this.error = null;
@@ -381,13 +383,13 @@ export class AlarmClient {
 
 	async #writeOne(action: 'shelve' | 'unshelve', body: Record<string, unknown>): Promise<AlarmInstance | null> {
 		try {
-			const res = await fetch(`${this.#url}/${action}`, {
+			const res = await kitFetch(`${this.#url}/${action}`, {
 				method: 'POST',
 				headers: authHeaders(this.#token, true),
 				body: JSON.stringify(body)
 			});
 			if (!res.ok) {
-				this.error = (await res.text()).trim() || `${action} failed (${res.status})`;
+				this.error = refusalMessage(res.status, await res.text(), `${action} failed`);
 				return null;
 			}
 			this.error = null;
@@ -413,9 +415,9 @@ export class AlarmClient {
 		if (filters.kinds?.length) q.set('kind', filters.kinds.join(','));
 		if (filters.limit) q.set('limit', String(filters.limit));
 		try {
-			const res = await fetch(`${this.#url}/journal?${q}`, { headers: authHeaders(this.#token, false) });
+			const res = await kitFetch(`${this.#url}/journal?${q}`, { headers: authHeaders(this.#token, false) });
 			if (!res.ok) {
-				this.error = (await res.text()).trim() || `journal fetch failed (${res.status})`;
+				this.error = refusalMessage(res.status, await res.text(), `journal fetch failed`);
 				return { events: [], truncated: false };
 			}
 			this.error = null;

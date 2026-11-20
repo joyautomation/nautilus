@@ -12,11 +12,22 @@ import { createConfirmQueue, type ConfirmOptions, type ConfirmRequest } from './
 let current = $state<ConfirmRequest | null>(null);
 let waiting = $state(0);
 let warned = false;
+let warnedSecret = false;
 
 const queue = createConfirmQueue({
 	onchange: (c) => {
 		current = c;
 		waiting = queue.waiting;
+	},
+	secretFallback: () => {
+		if (!warnedSecret) {
+			warnedSecret = true;
+			console.warn(
+				'[nautilus-hmi] a password was asked for (elevation) with no <ConfirmDialog/> mounted. ' +
+					'Mount it once in your root layout. Until then an elevated action is refused with the ' +
+					"controller's reason (sign in again)."
+			);
+		}
 	},
 	fallback: (options) => {
 		// No <ConfirmDialog/> is mounted. A promise that never settles is a
@@ -50,6 +61,17 @@ export function confirm(options: ConfirmOptions): Promise<boolean> {
 	return p;
 }
 
+/**
+ * Ask for the operator's password in the same dialog (the elevation prompt
+ * `createAuth()` uses). Resolves to what was typed, or null on cancel, or at
+ * once with no `<ConfirmDialog/>` mounted.
+ */
+export function askPassword(options: ConfirmOptions): Promise<string | null> {
+	const p = queue.requestSecret(options);
+	waiting = queue.waiting;
+	return p;
+}
+
 /** The queue as `<ConfirmDialog/>` drives it. Not usually needed directly. */
 export const confirmState = {
 	/** The question on screen, or `null`. Reactive. */
@@ -60,13 +82,13 @@ export const confirmState = {
 	get waiting(): number {
 		return waiting;
 	},
-	/** Settle the current question. */
-	settle(value: boolean): void {
-		queue.settle(value);
+	/** Settle the current question (with what was typed, for a password). */
+	settle(value: boolean, secret?: string): void {
+		queue.settle(value, secret);
 	},
 	/** Settle by id — a click on a dialog that has been superseded is ignored. */
-	settleById(id: number, value: boolean): void {
-		queue.settleById(id, value);
+	settleById(id: number, value: boolean, secret?: string): void {
+		queue.settleById(id, value, secret);
 	},
 	/** Registers a mounted host; returns the de-registration function. */
 	attach(): () => void {

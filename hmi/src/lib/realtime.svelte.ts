@@ -11,6 +11,8 @@
 // arrived within `freshnessMs`. The stream self-heals — on error it tears the
 // EventSource down and reconnects on a fixed interval.
 import { emptyDelta, mergeDelta, type DeltaState } from './delta.js';
+import { kitFetch, reportStreamFine, reportStreamTrouble } from './kitfetch.js';
+import { refusalMessage } from './auth.js';
 import type { Quality, TrendPoint } from './types.js';
 
 export type { Quality, TrendPoint };
@@ -359,6 +361,7 @@ export class RealtimeClient<T = unknown> {
 			// begins with a full frame; anything merged before belongs to
 			// the connection that just died.
 			this.#resetDelta();
+			reportStreamFine();
 			for (const cb of this.#opens) cb();
 		};
 		es.onerror = () => {
@@ -366,6 +369,10 @@ export class RealtimeClient<T = unknown> {
 			// stream down and reconnect ourselves on a fixed interval.
 			es.close();
 			this.#es = null;
+			// The status that closed it cannot be read here: a sign-in
+			// ended, or a standby referring us, looks like any other drop.
+			// createAuth() asks the controller (GET /api/me), backing off.
+			reportStreamTrouble();
 			this.#reconnectTimer ??= setTimeout(() => {
 				this.#reconnectTimer = null;
 				this.#connect();
@@ -394,7 +401,7 @@ export class RealtimeClient<T = unknown> {
 	 * body `{ cmd, ...fields }`.
 	 */
 	async send(cmd: string, fields: Record<string, unknown> = {}, url = '/api/command') {
-		await fetch(url, {
+		await kitFetch(url, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify({ cmd, ...fields })
@@ -431,17 +438,15 @@ export class RealtimeClient<T = unknown> {
 		const headers: Record<string, string> = { 'Content-Type': 'application/json' };
 		if (opts.token) headers['X-Nautilus-Token'] = opts.token;
 		try {
-			const res = await fetch(opts.url ?? '/api/tags', {
+			const res = await kitFetch(opts.url ?? '/api/tags', {
 				method: 'POST',
 				headers,
 				body: JSON.stringify({ name, value })
 			});
 			if (res.ok) return null;
-			const detail = (await res.text()).trim();
-			if (res.status === 401 || res.status === 403) {
-				return detail || 'write refused — this controller requires an auth token';
-			}
-			return detail || `write failed (${res.status})`;
+			// The controller's own reason (its JSON "error"): sign in,
+			// confirm your password, not your role, a token.
+			return refusalMessage(res.status, await res.text(), 'write failed');
 		} catch {
 			return 'write failed — controller unreachable';
 		}

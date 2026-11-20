@@ -14,6 +14,11 @@
 	// then [Cancel] [Confirm]. Escape and the backdrop cancel. THE CONFIRM
 	// BUTTON IS NEVER THE FOCUSED DEFAULT — Cancel takes focus on open, so a
 	// stray Enter cannot command the plant.
+	//
+	// It also asks for the password when an elevated action needs it again
+	// (`askPassword`, used by `createAuth()`): the field takes focus and
+	// Enter in it confirms, because typing the password IS the answer. What
+	// was typed is cleared the moment the dialog settles.
 	import { onMount, tick } from 'svelte';
 	import { confirmState } from '../confirm.svelte.js';
 	import { getOperator, setOperator, splitItems } from '../confirm.js';
@@ -40,6 +45,8 @@
 	const items = $derived(splitItems(opts?.items, opts?.maxItems));
 
 	let cancelBtn = $state<HTMLElement | null>(null);
+	let passwordField = $state<HTMLInputElement | null>(null);
+	let password = $state('');
 	let seededFor = $state(-1);
 
 	// `open` mirrors "is there a question", but has to be BOUND rather than
@@ -60,14 +67,19 @@
 		seededFor = id;
 		if (id < 0) return;
 		if (!operator) operator = getOperator();
-		tick().then(() => cancelBtn?.querySelector('button')?.focus());
+		password = '';
+		tick().then(() =>
+			req?.options.password ? passwordField?.focus() : cancelBtn?.querySelector('button')?.focus()
+		);
 	});
 
 	function settle(value: boolean) {
 		const id = req?.id;
 		if (id === undefined) return;
 		if (value && opts?.operator) setOperator(operator.trim());
-		confirmState.settleById(id, value);
+		const secret = opts?.password && value ? password : undefined;
+		password = '';
+		confirmState.settleById(id, value, secret);
 	}
 </script>
 
@@ -107,6 +119,28 @@
 				</label>
 			{/if}
 
+			{#if opts.password}
+				<form
+					class="field"
+					onsubmit={(e) => {
+						e.preventDefault();
+						if (password) settle(true);
+					}}
+				>
+					{#if opts.error}<p class="error" role="alert">{opts.error}</p>{/if}
+					<label class="field">
+						<span class="eyebrow">Password</span>
+						<input
+							type="password"
+							bind:this={passwordField}
+							bind:value={password}
+							autocomplete="current-password"
+							spellcheck="false"
+						/>
+					</label>
+				</form>
+			{/if}
+
 			{#if opts.note}<p class="note">{opts.note}</p>{/if}
 
 			{#if confirmState.waiting > 0}
@@ -122,7 +156,11 @@
 				{opts?.cancelLabel ?? 'Cancel'}
 			</Button>
 		</span>
-		<Button variant={opts?.danger ? 'danger' : 'primary'} onclick={() => settle(true)}>
+		<Button
+			variant={opts?.danger ? 'danger' : 'primary'}
+			disabled={!!opts?.password && !password}
+			onclick={() => settle(true)}
+		>
 			{opts?.confirmLabel ?? 'Confirm'}
 		</Button>
 	{/snippet}
@@ -173,6 +211,11 @@
 		margin: 0;
 		font-size: var(--font-2xs);
 		color: var(--muted);
+	}
+	.error {
+		margin: 0;
+		font-size: var(--font-xs);
+		color: var(--crit);
 	}
 	.note.queued {
 		color: var(--warn);

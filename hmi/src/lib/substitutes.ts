@@ -13,6 +13,8 @@
 //   - a 409 means the request lost to another change: re-read and decide
 //     again, never retry blind.
 
+import { kitFetch } from './kitfetch.js';
+import { refusalMessage } from './auth.js';
 export interface SubstituteEntry {
 	/** A number on the wire; send it back unchanged. */
 	id: number;
@@ -136,7 +138,10 @@ function newUuid(): string {
  * it can come after the leader applied the change. Exported for tests.
  */
 export function classify(status: number, text: string, outcomeHeader: string | null): { kind: SubstituteFailure; message: string } {
-	const message = text.trim() || `request failed (${status})`;
+	const message = refusalMessage(status, text);
+	// A 401 or 403 is the controller refusing who asked, before anything
+	// ran, whatever an older controller's header says (it sent none).
+	if (status === 401 || status === 403) return { kind: 'forbidden', message };
 	if ((outcomeHeader ?? '').toLowerCase() !== 'refused') return { kind: 'unknown', message };
 	const lower = message.toLowerCase();
 	if (status === 503) {
@@ -158,7 +163,7 @@ export class SubstituteClient {
 	constructor(opts: SubstituteClientOptions = {}) {
 		this.#url = opts.url ?? '/api/substitutes';
 		this.#token = opts.token;
-		this.#fetch = opts.fetch ?? ((...a) => fetch(...a));
+		this.#fetch = opts.fetch ?? kitFetch;
 		this.#uuid = opts.uuid ?? newUuid;
 	}
 
@@ -177,7 +182,7 @@ export class SubstituteClient {
 	async list(): Promise<SubstituteList | { error: string }> {
 		try {
 			const res = await this.#fetch(this.#url, { headers: this.#headers(false) });
-			if (!res.ok) return { error: (await res.text()).trim() || `read failed (${res.status})` };
+			if (!res.ok) return { error: refusalMessage(res.status, await res.text(), 'read failed') };
 			const j = (await res.json()) as Partial<SubstituteList>;
 			return { substitutes: j.substitutes ?? [], rules: j.rules ?? [] };
 		} catch {
@@ -386,7 +391,12 @@ export class SubstituteSession {
 	async #send(p: PendingStart): Promise<SubstituteResult> {
 		const r = await this.#client.start(p.name, p.value, p.seconds, p.requestId);
 		const key = p.name.toLowerCase();
-		if (!r.ok && r.retrySameId) this.#pending.set(key, p);
+		// A 401/403 on a RETRY of an unknown start refuses that retry only
+		// (who asked, this time: a sign-in ended, a role changed). It says
+		// nothing of the first attempt, which may still take effect, so the
+		// pending entry stays; its reason is the answer shown (#708).
+		const retryRefusedByAuth = !r.ok && r.kind === 'forbidden' && this.#pending.get(key)?.requestId === p.requestId;
+		if (!r.ok && (r.retrySameId || retryRefusedByAuth)) this.#pending.set(key, p);
 		else this.#pending.delete(key);
 		return r;
 	}

@@ -471,6 +471,10 @@ func (a *auditedRoute) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.answer(w, r, auditTarget{}, func(w http.ResponseWriter, _ *http.Request) {
+			// Nothing ran: a client that reads the outcome (the HMI kit's
+			// substitutes and IO-Link parameters) must not take a refusal
+			// by role as an action that may still take effect.
+			w.Header().Set(outcomeHeader, "refused")
 			WriteRefusal(w, code, msg)
 		})
 		return
