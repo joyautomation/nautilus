@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -149,9 +150,10 @@ func TestPairRebuiltWitnessIsRecopiedAndCarriesATakeover(t *testing.T) {
 	})
 	lead = r.leader()
 	stand = other(lead)
-	pairWait(t, "the leader to re-copy the log to the witness", 15*time.Second, func() bool {
+	pairWait(t, "the leader to re-copy the log to the witness, and count it (after its quiet period)", 15*time.Second, func() bool {
 		st := r.witnessStatus()
-		return r.witnessHolds(lead) && st.Identity == strconv.FormatUint(r.elector(lead).Status().Incarnation, 10)
+		return r.witnessHolds(lead) && st.Identity == strconv.FormatUint(r.elector(lead).Status().Incarnation, 10) &&
+			slices.Contains(r.nodes[lead].m.log.Status().Synced, witnessLogURL(r.wit, r.cluster()))
 	})
 	r.nodes[stand].crash()
 	pairWait(t, "the leader to lead on the witness's vote", 15*time.Second, func() bool { return r.nodes[lead].m.q.IsLeader() })
