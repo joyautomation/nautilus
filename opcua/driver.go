@@ -117,6 +117,17 @@ func WithMaxNodes(n int) Option {
 // WithScanRate sets the default scan class's poll interval (default 1s).
 func WithScanRate(r time.Duration) Option { return func(d *Driver) { d.scanRate = r } }
 
+// WithReassertOnReconnect sets whether a re-established session commands
+// every output again, changed or not (default true, #1061). A server that
+// restarted with its state reset holds its start-up values, and an
+// unchanged commanded value is otherwise never a command, so the program
+// and the server would disagree until the value next moved. The re-send
+// goes through the write gate like any push, so on a pair only the leader
+// sends it.
+func WithReassertOnReconnect(on bool) Option {
+	return func(d *Driver) { d.reassert = on }
+}
+
 // WithScanClass defines (or redefines) a scan class and its poll interval.
 // The default class exists implicitly; NoPoll cannot be given a rate.
 func WithScanClass(name string, rate time.Duration) Option {
@@ -167,6 +178,8 @@ type Driver struct {
 	retryMax  time.Duration
 	maxNodes  int
 	readMode  string
+	// reassert: a session after the first re-sends every output (#1061).
+	reassert bool
 	// refreshFloor is refreshEvery's floor (defaultRefreshFloor; tests
 	// lower it).
 	refreshFloor time.Duration
@@ -225,9 +238,11 @@ type Driver struct {
 	baseline bool
 
 	started atomic.Bool
-	reads   atomic.Uint64
-	writes  atomic.Uint64
-	errs    atomic.Uint64
+	// connected counts sessions established (onConnect).
+	connected atomic.Uint64
+	reads     atomic.Uint64
+	writes    atomic.Uint64
+	errs      atomic.Uint64
 	// notifications counts data change notifications (read-mode: subscribe).
 	notifications atomic.Uint64
 	// probeByRead: the server refused SetPublishingMode once, so every
@@ -314,6 +329,7 @@ func New(endpoint string, m Manifest, opts ...Option) (*Driver, error) {
 		retryMax:     defaultRetryMax,
 		maxNodes:     defaultMaxNodes,
 		readMode:     ReadModePoll,
+		reassert:     true,
 		refreshFloor: defaultRefreshFloor,
 		log:          slog.Default(),
 		classRates:   map[string]time.Duration{},
@@ -1001,6 +1017,18 @@ func (d *Driver) onConnect(ctx context.Context, sess *Session) {
 	d.online, d.answered, d.primed = true, false, false
 	d.mu.Unlock()
 	d.setState("connected", nil)
+	if d.connected.Add(1) > 1 && d.reassert {
+		// The server may have restarted with its state reset: forget what
+		// was written so the next push commands every output (#1061). A
+		// gate that is closed drops that push (WriteOutputs), as ever.
+		// Commands queued during the outage stay queued: they flush now,
+		// and the push replaces them with the program's current value.
+		d.mu.Lock()
+		clear(d.written)
+		d.mu.Unlock()
+		d.wanted.Store(true)
+		d.log.Info("opcua-client: session re-established; every output goes out with the next push", "driver", d.name)
+	}
 	d.log.Info("opcua-client: connected", "driver", d.name, "endpoint", d.endpoint,
 		"policy", info.policy, "mode", info.mode, "readMode", d.readMode, "tags", len(d.bindings), "remapped", remapped, "missing", missing, "maxNodes", info.maxNodes)
 }

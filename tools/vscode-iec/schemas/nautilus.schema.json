@@ -1141,6 +1141,10 @@
           ],
           "description": "opcua-client: how values arrive. poll (default): one batched Read per scan class per tick. subscribe: one OPC UA subscription per scan class (publishing interval = the class rate), the server sending values when they change. Quality, __Online and reconnect behave the same in both."
         },
+        "reassert-on-reconnect": {
+          "type": "boolean",
+          "description": "opcua-client: when a lost session is re-established, command every output once more with the program's value, changed or not (default true). A server that restarted with its state reset holds its start-up values; without this an unchanged commanded value is never written again. Goes through the write gate: on a redundant pair only the leader sends it."
+        },
         "tags": {
           "type": "array",
           "minItems": 1,

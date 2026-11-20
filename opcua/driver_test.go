@@ -844,3 +844,40 @@ func TestSubstituteValueStatus(t *testing.T) {
 		t.Errorf("good again: %v %v", d.Quality(), d.snapshot["Speed"])
 	}
 }
+
+// A server that restarts with its state reset must be commanded again
+// with the program's unchanged value (#1061): an unchanged value is not a
+// command, but a new session is a new start for the server.
+func TestReassertAfterServerRestart(t *testing.T) {
+	for _, on := range []bool{true, false} {
+		on := on
+		t.Run(fmt.Sprintf("on=%v", on), func(t *testing.T) {
+			t.Parallel()
+			port := freePort(t)
+			ts := startServer(t, port)
+			d := startDriver(t, ts.url, manifest(2), WithReassertOnReconnect(on))
+			waitFor(t, "online", func() bool { return read(t, d)["plant__Online"] == true })
+			_ = d.WriteOutputs(nio.Values{"Setpoint": 0.0}) // baseline
+			_ = d.WriteOutputs(nio.Values{"Setpoint": 9.0})
+			waitFor(t, "the write", func() bool { return ts.get(t, "Setpoint") == 9.0 })
+
+			_ = ts.srv.Close()
+			waitFor(t, "offline", func() bool { return read(t, d)["plant__Online"] == false })
+			ts2 := startServer(t, port) // fresh state: Setpoint back at its start value
+			start := ts2.get(t, "Setpoint")
+			waitFor(t, "reconnect", func() bool { return read(t, d)["plant__Online"] == true })
+			// The runtime's scan: the driver asks for every output, and
+			// the program's value has not changed.
+			deadline := time.Now().Add(3 * time.Second)
+			for time.Now().Before(deadline) && ts2.get(t, "Setpoint") != 9.0 {
+				if d.OutputsWanted() {
+					_ = d.WriteOutputs(nio.Values{"Setpoint": 9.0})
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+			if got := ts2.get(t, "Setpoint") == 9.0; got != on {
+				t.Errorf("reassert=%v: Setpoint %v after the restart (start value %v)", on, ts2.get(t, "Setpoint"), start)
+			}
+		})
+	}
+}

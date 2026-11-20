@@ -180,6 +180,13 @@ commands. The driver sees the gate by looking at it, at least once a
 second while connected and on every connect attempt: a flip between two
 looks is not seen.
 
+The same happens when a lost session is re-established: every output is
+commanded once more, changed or not, because a server that restarted with
+its state reset holds its start-up values, and an unchanged value would
+otherwise never be written again. It goes through the write gate, so on a
+pair only the leader sends it. `reassert-on-reconnect: false` turns it
+off, for a server where a repeated write has a side effect.
+
 ## Security
 
 `security:` names the policy, `security-mode:` the mode. Leave both out and
