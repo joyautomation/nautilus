@@ -57,3 +57,13 @@ func TestServiceTokenSecrets(t *testing.T) {
 		t.Errorf("two tokens, one secret: %v", err)
 	}
 }
+
+// naut logix serve and naut siemens serve have no browser sign-in: under
+// an auth: block they say that every request, reads included, needs a
+// token, and no longer that reads are open.
+func TestAuthFacadeNotice(t *testing.T) {
+	if strings.Contains(authFacadeNotice, "NOT GATED") || !strings.Contains(authFacadeNotice, "every request needs a token") ||
+		!strings.Contains(authFacadeNotice, "reads included") || !strings.Contains(authFacadeNotice, "anonymous: viewer") {
+		t.Errorf("authFacadeNotice = %q", authFacadeNotice)
+	}
+}
