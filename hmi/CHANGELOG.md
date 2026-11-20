@@ -68,6 +68,14 @@
   used to fall through to `good` for a token it did not know, so a newer
   controller's quality reached the screen as trustworthy and commandable.
 
+### Upgrading
+
+- **Sign-in (#708) needs one line in the root layout**, beside `<ConfirmDialog/>`:
+  `const auth = createAuth();` then `auth.start()` in `onMount` (and `auth.stop()` on destroy).
+  Without it the kit behaves exactly as before: an elevated action is refused with the
+  controller's "sign in again" message, a sign-out mid-shift is not noticed until a reload, and a
+  standby's referral is not followed. `<ConfirmDialog/>` must be mounted for the password prompt.
+
 ## 0.10.0 — 2026-11-18 (minor: no breaking API changes; visual defaults change: grey liquid, single-line ISA-101 pipes, a darker light-theme `--s1`)
 
 ### Added
