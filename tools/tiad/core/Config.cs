@@ -44,6 +44,9 @@ namespace Tiad
         public bool Loopback;
         public string Token = "";
         public string WorkDir;
+        // PinsDir holds the device pins (TIAD_PINS_DIR; on Windows
+        // %ProgramData%\tiad\pins by default). Never inside the work dir.
+        public string PinsDir;
         public List<string> Targets = new List<string>();
 
         // MaxFileBytes caps one uploaded file (TIAD_MAX_FILE_BYTES).
@@ -79,8 +82,18 @@ namespace Tiad
             return Environment.GetEnvironmentVariable(name) ?? "";
         }
 
+        // Inside reports whether path is dir or below it, compared as full
+        // paths, case-insensitively on Windows.
+        static bool Inside(string path, string dir)
+        {
+            string p = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar);
+            string d = Path.GetFullPath(dir).TrimEnd(Path.DirectorySeparatorChar);
+            StringComparison cmp = Path.DirectorySeparatorChar == '\\' ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+            return string.Equals(p, d, cmp) || p.StartsWith(d + Path.DirectorySeparatorChar, cmp);
+        }
+
         // FromEnv reads TIAD_ADDR, TIAD_TOKEN or TIAD_TOKEN_FILE,
-        // TIAD_WORKDIR and TIAD_TARGETS, and refuses a configuration that
+        // TIAD_WORKDIR, TIAD_PINS_DIR and TIAD_TARGETS, and refuses a configuration that
         // would be unsafe: no token, or a target that is not an IPv4
         // address.
         public static Config FromEnv()
@@ -133,6 +146,19 @@ namespace Tiad
             {
                 if (Path.DirectorySeparatorChar != '\\') throw new ConfigException("TIAD_WORKDIR is required off Windows");
                 c.WorkDir = @"C:\tiad-work";
+            }
+
+            c.PinsDir = Env("TIAD_PINS_DIR");
+            if (c.PinsDir == "")
+            {
+                if (Path.DirectorySeparatorChar != '\\') throw new ConfigException("TIAD_PINS_DIR is required off Windows");
+                c.PinsDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "tiad", "pins");
+            }
+            // The files API writes anywhere in the work dir: a pin there
+            // could be replaced by any caller, unaudited.
+            if (Inside(c.PinsDir, c.WorkDir) || Inside(c.WorkDir, c.PinsDir))
+            {
+                throw new ConfigException("TIAD_PINS_DIR must be outside TIAD_WORKDIR (and not contain it): the files API must never reach a pin");
             }
 
             string max = Env("TIAD_MAX_FILE_BYTES");

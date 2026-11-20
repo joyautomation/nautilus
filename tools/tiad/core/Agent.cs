@@ -96,6 +96,7 @@ namespace Tiad
             this.makeTia = makeTia;
             Directory.CreateDirectory(cfg.WorkDir);
             work = new WorkDir(cfg.WorkDir);
+            pins = new PinStore(cfg.PinsDir);
             version = Version + versionSuffix;
             StartReaper(cfg.SessionIdle);
         }
@@ -115,6 +116,7 @@ namespace Tiad
             r.Add("DELETE", "/v1/files/{path...}", DeleteFile);
             RegisterTia(r);
             RegisterDownload(r);
+            RegisterPins(r);
         }
 
         object Health(Call c)

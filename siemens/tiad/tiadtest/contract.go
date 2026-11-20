@@ -32,6 +32,10 @@ type Target interface {
 	SetQuestions(t testing.TB, qs []tiad.Question)
 	// Loaded lists every download that loaded the CPU.
 	Loaded(t testing.TB) []Loaded
+	// SetDevice scripts the CPU's identity, as an upload and an online
+	// read report it, and with noIdentify a TIA side that cannot read it
+	// online (tiad.Openness today).
+	SetDevice(t testing.TB, d tiad.DeviceIdentity, noIdentify bool)
 }
 
 // Loaded is one download that loaded a CPU.
@@ -74,6 +78,9 @@ func (g goFake) SetCompileResult(_ testing.TB, r tiad.CompileResult) {
 	g.f.SetCompileResult(r)
 }
 func (g goFake) SetQuestions(_ testing.TB, qs []tiad.Question) { g.f.SetQuestions(qs) }
+func (g goFake) SetDevice(_ testing.TB, d tiad.DeviceIdentity, noIdentify bool) {
+	g.f.SetDevice(d, noIdentify)
+}
 func (g goFake) Loaded(testing.TB) []Loaded {
 	var out []Loaded
 	for _, d := range g.f.Downloads() {
@@ -90,6 +97,7 @@ func Contract(t *testing.T, start Starter) {
 	t.Run("GateStates", func(t *testing.T) { contractGateStates(t, start) })
 	contractTIA(t, start)
 	contractDownload(t, start)
+	t.Run("Pins", func(t *testing.T) { contractPins(t, start) })
 }
 
 // ContractNoTIA is the part of the contract that never needs TIA and

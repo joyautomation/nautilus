@@ -26,10 +26,12 @@ import (
 	"reflect"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/joyautomation/nautilus/siemens/station"
 	"github.com/joyautomation/nautilus/siemens/tiad"
 )
 
@@ -56,8 +58,16 @@ type Fake struct {
 	// project equals the CPU exactly when this session's project is the
 	// last one downloaded to the station's CPU and has not changed since.
 	CompareResult *tiad.CompareResult
+	// Device is the CPU's identity, as an upload and an online read
+	// report it. Zero means BenchDevice.
+	Device tiad.DeviceIdentity
+	// NoIdentify makes the fake's TIA side one that cannot read a CPU's
+	// identity online, as tiad.Openness cannot yet: online calls to a
+	// pinned CPU then fail with device_unverified.
+	NoIdentify bool
 
 	mu        sync.Mutex
+	pins      map[string]tiad.DeviceIdentity // CPU address → device pin
 	files     map[string][]byte
 	gsd       map[string]bool
 	sessions  map[string]*session
@@ -198,6 +208,7 @@ func (f *Fake) init() {
 		f.sessions = map[string]*session{}
 		f.loaded = map[string]string{}
 		f.claims = map[string]string{}
+		f.pins = map[string]tiad.DeviceIdentity{}
 		m := http.NewServeMux()
 		m.HandleFunc("GET /v1/health", f.wrap(f.health, false))
 		m.HandleFunc("GET /v1/probe", f.wrap(f.probe, false))
@@ -218,6 +229,8 @@ func (f *Fake) init() {
 		m.HandleFunc("POST /v1/sessions/{id}/export", f.wrap(f.export, true))
 		m.HandleFunc("POST /v1/sessions/{id}/upload", f.wrap(f.upload, true))
 		m.HandleFunc("POST /v1/sessions/{id}/save", f.wrap(f.save, true))
+		m.HandleFunc("GET /v1/pins", f.wrap(f.listPins, false))
+		m.HandleFunc("POST /v1/pins/{address}", f.wrap(f.setPin, false))
 		f.mux = m
 	})
 }
@@ -860,6 +873,13 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 	if !s.compiled {
 		return nil, fail(http.StatusConflict, tiad.KindNotCompiled, "the project changed since the last full compile; compile hardware and software first")
 	}
+	call := "download"
+	if req.DryRun {
+		call = "dry run"
+	}
+	if fl := f.checkDevicePin(req.Address, call); fl != nil {
+		return nil, fl
+	}
 	// One project per CPU: the first download claims the CPU for its
 	// session, dry runs included, until that session is closed.
 	if holder, ok := f.claims[req.Address]; ok && holder != s.id {
@@ -935,6 +955,9 @@ func (f *Fake) compare(r *http.Request) (any, *failure) {
 	if !contains(f.Targets, s.station.CPU.Address) {
 		return nil, fail(http.StatusForbidden, tiad.KindTargetRefused, "%s is not in TIAD_TARGETS", s.station.CPU.Address)
 	}
+	if fl := f.checkDevicePin(s.station.CPU.Address, "compare"); fl != nil {
+		return nil, fl
+	}
 	if f.loaded[s.station.CPU.Address] == s.id && !s.changed {
 		return tiad.CompareResult{Equal: true, Differences: []tiad.Difference{}}, nil
 	}
@@ -1009,8 +1032,123 @@ func (f *Fake) upload(r *http.Request) (any, *failure) {
 	s.compiled = false
 	s.changed = true
 	s.uploaded = true
+	// Trust on first use: the first upload pins the CPU's identity; every
+	// later one must match it.
+	read := f.device()
+	address := s.station.CPU.Address
+	pin := tiad.PinFirstTrust
+	if pinned, ok := f.pins[address]; !ok {
+		f.pins[address] = read
+	} else if diff := tiad.DeviceMismatch(pinned, read); diff != "" {
+		return nil, deviceChanged(address, pinned, read, diff,
+			"The pin stands; the session's project now holds that CPU's program: do not download from it.")
+	} else {
+		pin = tiad.PinMatched
+	}
 	// The fake's CPU asks no TLS question, so nothing is trusted.
-	return tiad.UploadResult{TrustedBlindly: []string{}}, nil
+	return tiad.UploadResult{TrustedBlindly: []string{}, Device: read, Pin: pin}, nil
+}
+
+// BenchDevice is the fake CPU's identity unless a test says otherwise.
+func BenchDevice() tiad.DeviceIdentity {
+	return tiad.DeviceIdentity{Order: "6ES7 510-1DK03-0AB0", Firmware: "V3.1"}
+}
+
+func (f *Fake) device() tiad.DeviceIdentity {
+	if f.Device.Order == "" && f.Device.Firmware == "" && f.Device.Serial == nil && f.Device.MAC == nil {
+		return BenchDevice()
+	}
+	return f.Device
+}
+
+// SetDevice scripts the CPU's identity and whether it can be read online.
+func (f *Fake) SetDevice(d tiad.DeviceIdentity, noIdentify bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Device = d
+	f.NoIdentify = noIdentify
+}
+
+func describe(d tiad.DeviceIdentity) string {
+	show := func(v *string) string {
+		if v == nil {
+			return "not read"
+		}
+		return strconv.Quote(*v)
+	}
+	return "order " + show(&d.Order) + ", firmware " + show(&d.Firmware) + ", serial " + show(d.Serial) + ", mac " + show(d.MAC)
+}
+
+func deviceChanged(address string, pinned, now tiad.DeviceIdentity, diff, what string) *failure {
+	return fail(http.StatusConflict, tiad.KindDeviceChanged,
+		"device changed at %s: %s (pinned: %s; now: %s). %s If the CPU was replaced or updated on purpose, re-pin it: POST /v1/pins/%s with replace: true (audited)",
+		address, diff, describe(pinned), describe(now), what, address)
+}
+
+// checkDevicePin is the agent's CheckDevicePin: with a device pin, the
+// CPU's identity read online must match it.
+func (f *Fake) checkDevicePin(address, call string) *failure {
+	pinned, ok := f.pins[address]
+	if !ok {
+		return nil
+	}
+	if f.NoIdentify {
+		return fail(http.StatusConflict, tiad.KindDeviceUnverified,
+			"%s has a device pin, but its identity could not be read (this agent's TIA side cannot read a CPU's identity online yet), so the pin cannot be checked; the %s was refused before it began", address, call)
+	}
+	now := f.device()
+	if diff := tiad.DeviceMismatch(pinned, now); diff != "" {
+		return deviceChanged(address, pinned, now, diff, "The "+call+" was refused before it began.")
+	}
+	return nil
+}
+
+func (f *Fake) listPins(*http.Request) (any, *failure) {
+	out := []tiad.Pin{}
+	for _, a := range sortedAddrs(f.pins) {
+		d := f.pins[a]
+		out = append(out, tiad.Pin{Address: a, Device: d, Holds: d.Holds()})
+	}
+	return map[string]any{"pins": out}, nil
+}
+
+func sortedAddrs(m map[string]tiad.DeviceIdentity) []string {
+	var out []string
+	for a := range m {
+		out = append(out, a)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func (f *Fake) setPin(r *http.Request) (any, *failure) {
+	address := r.PathValue("address")
+	if !station.IsIPv4(address) {
+		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "pin: address %s is not an IPv4 address", strconv.Quote(address))
+	}
+	if !contains(f.Targets, address) {
+		return nil, fail(http.StatusForbidden, tiad.KindTargetRefused, "%s is not in TIAD_TARGETS", address)
+	}
+	var req tiad.PinRequest
+	if fl := decode(r, &req); fl != nil {
+		return nil, fl
+	}
+	if err := req.Validate(); err != nil {
+		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "%v", err)
+	}
+	prev, ok := f.pins[address]
+	if ok && !req.Replace {
+		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "pin: %s is pinned already (%s); replace it with replace: true", address, describe(prev))
+	}
+	if !ok && req.Replace {
+		return nil, fail(http.StatusNotFound, tiad.KindNotFound, "pin: %s has no device pin to replace", address)
+	}
+	f.pins[address] = *req.Device
+	p := tiad.Pin{Address: address, Device: *req.Device, Holds: req.Device.Holds()}
+	if ok {
+		p.Previous = &prev
+	}
+	return p, nil
 }
 
 func (f *Fake) save(r *http.Request) (any, *failure) {

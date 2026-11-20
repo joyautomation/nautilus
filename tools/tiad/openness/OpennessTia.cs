@@ -910,6 +910,39 @@ namespace Tiad.Openness
             foreach (PlcTagTableUserGroup u in g.Groups) ExportTags(u, Path.Combine(dir, TiaNames.FileName(u.Name, "")), written);
         }
 
+        // ---- identity (siemens-ide.md section 3.8) ----
+
+        // ProjectCpu reads the CPU's order number and firmware from the
+        // project's CPU device item: after an upload, what the CPU reported.
+        // The project holds no serial number or MAC (S2a's upload and its
+        // AML export have none), so those are not read.
+        public DeviceIdentity ProjectCpu(object project)
+        {
+            return Tia(delegate
+            {
+                Project p = Of(project).Project;
+                HwDevice d = StationOf(p);
+                if (d == null) throw new TiaException("the project has no CPU");
+                DeviceItem cpu = CpuOf(d);
+                List<string> names = Attributes("DeviceItem", cpu);
+                TiaNames.CheckAttribute("the CPU " + cpu.Name, names, "OrderNumber");
+                TiaNames.CheckAttribute("the CPU " + cpu.Name, names, "FirmwareVersion");
+                return new DeviceIdentity
+                {
+                    Order = Convert.ToString(cpu.GetAttribute("OrderNumber"), System.Globalization.CultureInfo.InvariantCulture) ?? "",
+                    Firmware = Convert.ToString(cpu.GetAttribute("FirmwareVersion"), System.Globalization.CultureInfo.InvariantCulture) ?? "",
+                };
+            });
+        }
+
+        // Identify cannot read a CPU's identity online yet: no Openness
+        // read of it is proven (a read-only probe is planned on #789). The
+        // agent refuses online calls to a pinned CPU until one is.
+        public DeviceIdentity Identify(object project, string address)
+        {
+            return null;
+        }
+
         // ---- upload ----
 
         // Upload replaces the project's station with the one the CPU at

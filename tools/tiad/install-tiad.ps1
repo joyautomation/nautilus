@@ -71,6 +71,7 @@ $AllowListKey = 'SOFTWARE\Siemens\Automation\Openness\AllowList'
 $ExeName      = 'tiad.exe'
 $CfgDir       = Join-Path $env:ProgramData 'tiad'
 $TokenFile    = Join-Path $CfgDir "$TaskName.token"
+$PinsDir      = Join-Path $CfgDir 'pins'
 $FwGroup      = "tiad $TaskName"
 
 # The agent runs elevated, so everything it runs, reads or works in is
@@ -249,7 +250,7 @@ if ($Uninstall) {
     if (Test-Path $InstallDir) { Remove-Item $InstallDir -Recurse -Force; Ok "$InstallDir removed" }
     # The token grants downloads to a CPU: never leave it behind.
     if (Test-Path $TokenFile) { Remove-Item $TokenFile -Force; Ok "token removed" }
-    Say "left alone: $WorkDir, the logs in $CfgDir, and the Openness group membership"
+    Say "left alone: $WorkDir, the logs and the device pins ($PinsDir) in $CfgDir, and the Openness group membership"
     exit 0
 }
 
@@ -383,6 +384,11 @@ Write-Host "`n5. Scheduled task"
 # The elevated agent writes projects here: nobody else may plant a file or
 # a junction in it.
 Secure-Dir $WorkDir
+# The device pins decide which CPU the agent trusts: locked like the token,
+# outside the work dir, and never wiped, so a reinstall (which is also how
+# the agent restarts) keeps every pin.
+Secure-Dir $PinsDir
+Ok "device pins in $PinsDir (kept across reinstalls)"
 $bat = Join-Path $InstallDir 'run-tiad.bat'
 $noTiaLine = if ($NoTia) { 'set TIAD_NO_TIA=1' } else { 'set TIAD_NO_TIA=' }
 @"
@@ -392,6 +398,7 @@ set TIAD_ADDR=http://${Listen}:${Port}
 set TIAD_TOKEN=
 set TIAD_TOKEN_FILE=$TokenFile
 set TIAD_WORKDIR=$WorkDir
+set TIAD_PINS_DIR=$PinsDir
 set TIAD_TARGETS=$Targets
 $noTiaLine
 set "TIAD_PC_INTERFACE=$PcInterface"

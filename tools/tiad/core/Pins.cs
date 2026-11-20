@@ -1,0 +1,253 @@
+// Pins.cs: trust on first use, then pin (siemens-ide.md section 3.8).
+//
+// A device pin is the identity of the CPU at one address, as tiad first
+// saw it: its order number and firmware, read from the station an upload
+// brought into the project. Every later online call to that address
+// (upload, compare, download) refuses when the CPU's identity differs.
+// The serial number and the MAC address are fields of the pin too, held
+// as "not read" (null, never an empty string, which could match) until an
+// online read of them is proven; a value is added only through an
+// audited re-pin, never silently.
+//
+// What it catches: a different model or firmware at the address. What it
+// does not: an identical CPU swapped in, or a machine in the middle on the
+// first contact. The certificate pin after nautilus's first download is
+// the plan for those (S2b).
+//
+// A second copy of tiad.DeviceIdentity's rules (siemens/tiad/pins.go),
+// checked against the Go copy over the wire. Change both or neither.
+
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Text;
+
+namespace Tiad
+{
+    public sealed class DeviceIdentity
+    {
+        public const int MaxField = 128;
+
+        public string Order = "", Firmware = "";
+        // Serial and Mac are null when not read.
+        public string Serial, Mac;
+
+        public static DeviceIdentity Read(Reader r)
+        {
+            var d = new DeviceIdentity();
+            if (r == null) return d;
+            d.Order = r.Str("order");
+            d.Firmware = r.Str("firmware");
+            d.Serial = r.OptStr("serial");
+            d.Mac = r.OptStr("mac");
+            return d;
+        }
+
+        public Obj ToJson()
+        {
+            var o = new Obj();
+            o["order"] = Order;
+            o["firmware"] = Firmware;
+            o["serial"] = Serial;
+            o["mac"] = Mac;
+            return o;
+        }
+
+        // Holds names the fields the identity holds, in order: order and
+        // firmware always, serial and mac when read.
+        public List<string> Holds()
+        {
+            var h = new List<string> { "order", "firmware" };
+            if (Serial != null) h.Add("serial");
+            if (Mac != null) h.Add("mac");
+            return h;
+        }
+
+        // Validate is tiad.DeviceIdentity.Validate: why the identity is not
+        // one tiad can pin, or null.
+        public string Validate()
+        {
+            var errs = new List<string>();
+            Check(errs, "order", Order, true);
+            Check(errs, "firmware", Firmware, true);
+            Check(errs, "serial", Serial, false);
+            Check(errs, "mac", Mac, false);
+            return errs.Count == 0 ? null : "device: " + string.Join("; ", errs.ToArray());
+        }
+
+        static void Check(List<string> errs, string name, string v, bool required)
+        {
+            if (v == null)
+            {
+                if (required) errs.Add("device." + name + " is empty");
+                return;
+            }
+            if (v == "")
+            {
+                errs.Add(required ? "device." + name + " is empty" : "device." + name + " is empty (leave it out when it was not read)");
+                return;
+            }
+            if (v.Length > MaxField) errs.Add("device." + name + " is longer than " + MaxField + " characters");
+            foreach (char c in v)
+            {
+                if (c < 0x20 || c == 0x7f)
+                {
+                    errs.Add("device." + name + " has a control character");
+                    break;
+                }
+            }
+        }
+
+        static string Show(string v)
+        {
+            return v == null ? "not read" : Json.Quote(v);
+        }
+
+        // Describe is the identity in words, for messages and the audit.
+        public string Describe()
+        {
+            return "order " + Show(Order) + ", firmware " + Show(Firmware) + ", serial " + Show(Serial) + ", mac " + Show(Mac);
+        }
+
+        // Mismatch is tiad.DeviceMismatch: how now differs from the pin, or
+        // null when it matches. Every field the pin holds must be read now
+        // and equal; a field the pin does not hold is not compared.
+        public static string Mismatch(DeviceIdentity pinned, DeviceIdentity now)
+        {
+            var diffs = new List<string>();
+            Compare(diffs, "order", pinned.Order, now.Order);
+            Compare(diffs, "firmware", pinned.Firmware, now.Firmware);
+            Compare(diffs, "serial", pinned.Serial, now.Serial);
+            Compare(diffs, "mac", pinned.Mac, now.Mac);
+            return diffs.Count == 0 ? null : string.Join("; ", diffs.ToArray());
+        }
+
+        static void Compare(List<string> diffs, string name, string pinned, string now)
+        {
+            if (pinned == null) return;
+            if (now == null) diffs.Add(name + " is pinned but was not read now");
+            else if (!string.Equals(pinned, now, StringComparison.Ordinal)) diffs.Add(name + " " + Json.Quote(pinned) + " is now " + Json.Quote(now));
+        }
+
+        // Unpinned names the fields now holds that the pin does not: a
+        // re-pin adds them, nothing else does.
+        public static List<string> Unpinned(DeviceIdentity pinned, DeviceIdentity now)
+        {
+            var l = new List<string>();
+            if (pinned.Serial == null && now.Serial != null) l.Add("serial");
+            if (pinned.Mac == null && now.Mac != null) l.Add("mac");
+            return l;
+        }
+    }
+
+    // PinStore keeps one file per pinned CPU address in the pins directory
+    // (TIAD_PINS_DIR): <address>.device, whose first line is the identity
+    // as JSON, then comment lines saying what it is and how to re-pin. The
+    // directory is outside the work dir, so the files API never reaches it.
+    public sealed class PinStore
+    {
+        readonly string dir;
+        readonly object mu = new object();
+
+        public PinStore(string dir)
+        {
+            this.dir = dir;
+        }
+
+        public string Dir
+        {
+            get { return dir; }
+        }
+
+        string DeviceFile(string address)
+        {
+            // The address names a file: only a strict dotted quad may.
+            if (!Ip.IsIPv4(address)) throw new ArgumentException("not an IPv4 address: " + address);
+            return Path.Combine(dir, address + ".device");
+        }
+
+        static TiadException Unreadable(string address, string why)
+        {
+            return new TiadException(500, Kinds.OperationFailed,
+                "the device pin for " + address + " is unreadable (" + why + "); tiad refuses online calls to " + address +
+                " until it is fixed or removed by hand in the pins directory");
+        }
+
+        // Device is the device pin for address, or null when there is none.
+        // A pin file tiad cannot read fails closed.
+        public DeviceIdentity Device(string address)
+        {
+            lock (mu)
+            {
+                string f = DeviceFile(address);
+                if (!File.Exists(f)) return null;
+                string first;
+                try
+                {
+                    using (var r = new StreamReader(f, new UTF8Encoding(false)))
+                    {
+                        first = r.ReadLine() ?? "";
+                    }
+                }
+                catch (Exception e)
+                {
+                    throw Unreadable(address, e.GetType().Name);
+                }
+                DeviceIdentity d;
+                try
+                {
+                    var root = Reader.Root(Json.Parse(first));
+                    d = DeviceIdentity.Read(root);
+                    root.Done();
+                }
+                catch (TiadException e)
+                {
+                    throw Unreadable(address, e.Message);
+                }
+                string bad = d.Validate();
+                if (bad != null) throw Unreadable(address, bad);
+                return d;
+            }
+        }
+
+        // SetDevice writes the device pin for address, replacing any, in
+        // one step: a new file renamed over the old.
+        public void SetDevice(string address, DeviceIdentity d, string how)
+        {
+            lock (mu)
+            {
+                string f = DeviceFile(address);
+                Directory.CreateDirectory(dir);
+                var b = new StringBuilder();
+                b.Append(Json.Write(d.ToJson())).Append('\n');
+                b.Append("# tiad device pin for the CPU at ").Append(address).Append(": ").Append(how).Append(", ")
+                    .Append(DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ")).Append('\n');
+                b.Append("# holds: ").Append(string.Join(", ", d.Holds().ToArray())).Append("; null is not read\n");
+                b.Append("# re-pin with POST /v1/pins/").Append(address).Append(" {\"device\": ..., \"replace\": true, \"announced\": true} (audited); never edit by hand\n");
+                string tmp = f + ".new";
+                File.WriteAllText(tmp, b.ToString(), new UTF8Encoding(false));
+                if (File.Exists(f)) File.Replace(tmp, f, null);
+                else File.Move(tmp, f);
+            }
+        }
+
+        // Addresses are the pinned addresses, sorted.
+        public List<string> Addresses()
+        {
+            lock (mu)
+            {
+                var l = new List<string>();
+                if (!Directory.Exists(dir)) return l;
+                foreach (string f in Directory.GetFiles(dir, "*.device"))
+                {
+                    // Windows' pattern also matches a longer extension.
+                    if (!string.Equals(Path.GetExtension(f), ".device", StringComparison.Ordinal)) continue;
+                    string a = Path.GetFileNameWithoutExtension(f);
+                    if (Ip.IsIPv4(a)) l.Add(a);
+                }
+                l.Sort(StringComparer.Ordinal);
+                return l;
+            }
+        }
+    }
+}
