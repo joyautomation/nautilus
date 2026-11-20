@@ -850,6 +850,10 @@ type DriverConfig struct {
 	// scan class per tick) or subscribe (one subscription per scan class,
 	// notified on change). Both keep the same quality and reconnect rules.
 	ReadMode string `yaml:"read-mode"`
+	// ReassertOnReconnect: after the session is re-established every
+	// output is commanded once more, changed or not, since a server that
+	// restarted holds its reset values (default true).
+	ReassertOnReconnect *bool `yaml:"reassert-on-reconnect"`
 
 	// devices are the project's devices this driver carries (Load sets
 	// it on the Modbus driver, and on each OPC UA device's own driver);

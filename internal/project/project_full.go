@@ -625,6 +625,9 @@ func buildDriver(fsys fs.FS, d DriverConfig) (nio.Driver, error) {
 			opcua.WithPKIDir(d.PKIDir),
 			opcua.WithReadMode(d.ReadMode),
 		}
+		if d.ReassertOnReconnect != nil {
+			opts = append(opts, opcua.WithReassertOnReconnect(*d.ReassertOnReconnect))
+		}
 		if d.Username != "" {
 			opts = append(opts, opcua.WithAuth(d.Username, os.Getenv("NAUTILUS_OPCUA_PASSWORD")))
 		}

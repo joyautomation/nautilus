@@ -426,3 +426,14 @@ claims:
       - go ./opcua TestForeignServerMatrix/iolink-pf
       - go ./opcua TestForeignServerMatrix/iolink-sick
       - go ./opcua TestForeignServerMatrix/iolink-ifm
+
+  - id: UAC-035
+    claim: >-
+      When a lost session is re-established the driver commands every output
+      once more with the program's value, changed or not, so a server that
+      restarted with its state reset ends up agreeing with the program;
+      reassert-on-reconnect: false turns it off. The re-send goes through
+      the write gate.
+    source: "#writes-are-opt-in-per-tag"
+    tests:
+      - go ./opcua TestReassertAfterServerRestart
