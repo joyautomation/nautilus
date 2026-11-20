@@ -24,6 +24,9 @@ namespace Tiad
         // configuration password, never by the protection password.
         public const string ConfigurationPassword = "configuration-password";
         public const string Certificate = "certificate";
+        // KeptDevices is the agent's own question, never TIA's: a download
+        // also loads the devices an apply kept as found (KeptRule).
+        public const string KeptDevices = "kept-devices";
         public const string Other = "other";
     }
 
@@ -63,6 +66,9 @@ namespace Tiad
         public bool? StopCpu, Overwrite, StartAfter;
         public List<string> Reinitialize = new List<string>();
         public string TrustCertificate = "";
+        // KeptDevices names every device the caller agrees to load as the
+        // project keeps it; it must be exactly the kept set (KeptRule).
+        public List<string> KeptDevices = new List<string>();
 
         public static Decisions Read(Reader r)
         {
@@ -73,6 +79,7 @@ namespace Tiad
             d.StartAfter = r.OptBool("startAfter");
             d.Reinitialize = r.Strs("reinitialize");
             d.TrustCertificate = r.Str("trustCertificate");
+            d.KeptDevices = r.Strs("keptDevices");
             return d;
         }
     }

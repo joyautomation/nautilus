@@ -73,6 +73,15 @@ const (
 	// KindDeviceUnverified refuses an online call to a pinned CPU whose
 	// identity could not be read, so the pin could not be checked.
 	KindDeviceUnverified = "device_unverified"
+	// KindCPUMismatch refuses an apply whose spec does not fit the
+	// project's CPU (name, order or firmware), or whose devices collide
+	// with ones the project keeps; ProjectCPUOf reads the project's CPU
+	// from it. tiad never replaces a project's CPU on an apply: create the
+	// project again for a new one.
+	KindCPUMismatch = "cpu_mismatch"
+	// KindUncleanSession refuses an apply or a save after an apply or an
+	// upload failed part-way on the session: close it without saving.
+	KindUncleanSession = "unclean_session"
 
 	KindUnreachable = "unreachable"
 	KindBadReply    = "bad_reply"
@@ -197,6 +206,22 @@ func Questions(err error) []Question {
 		return nil
 	}
 	return d.Questions
+}
+
+// ProjectCPUOf returns the project's CPU carried by a cpu_mismatch
+// error: the name, order and firmware a spec must name to reuse it.
+func ProjectCPUOf(err error) (ProjectCPU, bool) {
+	var e *Error
+	if !errors.As(err, &e) || e.Kind != KindCPUMismatch || len(e.Data) == 0 {
+		return ProjectCPU{}, false
+	}
+	var d struct {
+		CPU *ProjectCPU `json:"cpu"`
+	}
+	if json.Unmarshal(e.Data, &d) != nil || d.CPU == nil {
+		return ProjectCPU{}, false
+	}
+	return *d.CPU, true
 }
 
 // CompileErrors returns the compile result carried by a compile_failed
@@ -622,12 +647,38 @@ func (s *Session) Close(ctx context.Context) error {
 type StationResult struct {
 	Changes []string `json:"changes"`
 	// Notes are what the caller should know besides the changes: that a
-	// CPU already protected kept its password, for one.
+	// CPU already protected kept its password, or that devices were kept
+	// as found, for two.
 	Notes []string `json:"notes,omitempty"`
+	// KeptDevices are the project's devices besides the CPU's station
+	// that an apply reusing the CPU kept as found. A download loads them
+	// too, and lists them again.
+	KeptDevices []KeptDevice `json:"keptDevices,omitempty"`
 }
 
-// ApplyStation makes the project's hardware config match st: anything not
-// in st is removed.
+// ProjectCPU is a project's CPU as the project holds it: what a spec must
+// name in cpu.name, cpu.order and cpu.firmware to reuse it.
+type ProjectCPU struct {
+	Name     string `json:"name"`
+	Order    string `json:"order"`
+	Firmware string `json:"firmware"`
+}
+
+// KeptDevice is a device in the project besides the CPU's station, kept
+// as found by an apply that reused the CPU (tiad does not configure
+// PROFINET IO devices yet). ProfinetName and Address are "" when it has
+// none. A list holds one entry per network node, so a device with two
+// interfaces appears twice under one Name: count names, not entries.
+type KeptDevice struct {
+	Name         string `json:"name"`
+	ProfinetName string `json:"profinetName"`
+	Address      string `json:"address"`
+}
+
+// ApplyStation makes the project's CPU match st. A project without a CPU
+// gets one; a project whose CPU has st's name, order and firmware keeps
+// it, with the devices besides it (KeptDevices); any other CPU refuses
+// with KindCPUMismatch. tiad never replaces a project's CPU on an apply.
 func (s *Session) ApplyStation(ctx context.Context, st Station, sec Secrets) (StationResult, error) {
 	if err := st.Validate(); err != nil {
 		return StationResult{}, &Error{Kind: KindBadRequest, Message: err.Error()}
@@ -792,6 +843,12 @@ type UploadResult struct {
 	// existed), or PinMatched. A different identity fails the upload
 	// with KindDeviceChanged and leaves the pin as it was.
 	Pin string `json:"pin"`
+	// CPU is the uploaded CPU as the project now holds it: a spec that
+	// names its name, order and firmware reuses it on the next apply. It
+	// is zero when the project's CPU could not be read, and CPUError says
+	// why (a project with two CPUs, for one); the next apply refuses too.
+	CPU      ProjectCPU `json:"cpu"`
+	CPUError string     `json:"cpuError,omitempty"`
 }
 
 // UploadWith is Upload with options.

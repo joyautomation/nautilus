@@ -53,13 +53,30 @@ namespace Tiad
 
         // AuditDecisions is the decisions for the audit line. Names the
         // request supplies are quoted, so none can forge a line.
+        static List<string> Quoted(List<string> names)
+        {
+            var q = new List<string>();
+            foreach (var n in names) q.Add(Json.Quote(n));
+            return q;
+        }
+
         static string AuditDecisions(Decisions d)
         {
             var reinit = new List<string>();
             foreach (var n in d.Reinitialize) reinit.Add(Json.Quote(n));
             return "stopCpu=" + YesNo(d.StopCpu) + " overwrite=" + YesNo(d.Overwrite) +
                 " startAfter=" + YesNo(d.StartAfter) + " reinitialize=[" + string.Join(",", reinit) + "]" +
+                " keptDevices=[" + string.Join(",", Quoted(d.KeptDevices)) + "]" +
                 " trustCertificate=" + (d.TrustCertificate == "" ? "unset" : Json.Quote(d.TrustCertificate));
+        }
+
+        // AuditKept is the devices an apply kept as found, for the audit
+        // line, each quoted.
+        static string AuditKept(List<KeptDevice> kept)
+        {
+            var l = new List<string>();
+            foreach (var k in kept) l.Add(k.Describe());
+            return string.Join(",", l.ToArray());
         }
 
         object Download(Call c)
@@ -93,10 +110,10 @@ namespace Tiad
                 }
                 finally
                 {
-                    Log.Line("audit download session={0} project={1} address={2} hardware={3} software={4} dryRun={5} announced={6} {7} protection={8} configurationPassword={9} asked=[{10}] outcome={11}",
+                    Log.Line("audit download session={0} project={1} address={2} hardware={3} software={4} dryRun={5} announced={6} {7} protection={8} configurationPassword={9} kept=[{10}] asked=[{11}] outcome={12}",
                         s.Id, Json.Quote(s.Project), Json.Quote(req.Address), req.Hardware, req.Software, req.DryRun, req.Announced,
                         AuditDecisions(req.Decisions), req.Secrets.Protection == "" ? "unset" : "set",
-                        req.Secrets.ConfigurationPassword == "" ? "unset" : "set", asked, outcome);
+                        req.Secrets.ConfigurationPassword == "" ? "unset" : "set", AuditKept(s.Kept), asked, outcome);
                 }
             });
         }
@@ -124,6 +141,19 @@ namespace Tiad
             if (!s.Compiled)
             {
                 throw new TiadException(409, Kinds.NotCompiled, "the project changed since the last full compile; compile hardware and software first");
+            }
+            // The devices an apply kept load too: a real download needs a
+            // yes naming exactly them, checked before anything reaches the
+            // CPU. A dry run lists the question instead.
+            string keptWhy = KeptRule.Check(s.Kept, req.Decisions.KeptDevices);
+            if (keptWhy != null && !req.DryRun)
+            {
+                asked = Json.Quote(QuestionIds.KeptDevices);
+                outcome = Kinds.DecisionRequired + ":[" + asked + "]";
+                var kd = new Obj();
+                kd["questions"] = Question.ToJson(new List<Question> { KeptRule.Question(s.Kept) });
+                kd["keptDevices"] = KeptDevice.ToJson(s.Kept);
+                throw new TiadException(409, Kinds.DecisionRequired, keptWhy + "; nothing was sent to the CPU", kd, false);
             }
             // The CPU must still be the one tiad pinned (section 3.8),
             // before a dry run too: it reaches the CPU.
@@ -199,7 +229,10 @@ namespace Tiad
                 // Provisional until S2 proves a cancelled download loads
                 // nothing (section 3.5).
                 o["provisional"] = true;
-                o["questions"] = Question.ToJson(askedQs);
+                var dq = new List<Question>(askedQs);
+                if (s.Kept.Count > 0) dq.Add(KeptRule.Question(s.Kept));
+                o["questions"] = Question.ToJson(dq);
+                o["keptDevices"] = KeptDevice.ToJson(s.Kept);
                 return o;
             }
             if (unanswered.Count > 0)
@@ -207,6 +240,7 @@ namespace Tiad
                 outcome = Kinds.DecisionRequired + ":[" + Ids(unanswered) + "]";
                 var d = new Obj();
                 d["questions"] = Question.ToJson(unanswered);
+                d["keptDevices"] = KeptDevice.ToJson(s.Kept);
                 throw new TiadException(409, Kinds.DecisionRequired, unanswered.Count + " question(s) have no answer; nothing was loaded", d, false);
             }
             if (declined.Count > 0)
@@ -214,6 +248,7 @@ namespace Tiad
                 outcome = Kinds.Declined + ":[" + Ids(declined) + "]";
                 var d = new Obj();
                 d["questions"] = Question.ToJson(declined);
+                d["keptDevices"] = KeptDevice.ToJson(s.Kept);
                 throw new TiadException(409, Kinds.Declined, declined.Count + " question(s) were answered no; nothing was loaded", d, false);
             }
             if (!result.Loaded)
@@ -225,6 +260,7 @@ namespace Tiad
             o["dryRun"] = false;
             o["downloaded"] = true;
             o["questions"] = Question.ToJson(askedQs);
+            o["keptDevices"] = KeptDevice.ToJson(s.Kept);
             if (result.State != "") o["state"] = result.State;
             return o;
         }
@@ -317,13 +353,18 @@ namespace Tiad
                     throw new TiadException(403, Kinds.TargetRefused, "the project's CPU is not in TIAD_TARGETS");
                 }
                 DeviceIdentity read = null;
+                ProjectCpu cpu = null;
+                string cpuWhy = null;
                 List<string> trusted = OnSession(s, delegate(ITia t)
                 {
                     // The CPU's program replaces the project's: it no
                     // longer matches its spec, and it must take a spec and
-                    // compile again before anything is downloaded.
+                    // compile again before anything is downloaded. Until
+                    // the upload is through, the project is unclean.
                     s.Compiled = false;
                     s.Station = null;
+                    s.Kept = new List<KeptDevice>();
+                    s.Unclean = true;
                     List<string> tr = t.Upload(s.Handle, address, trust);
                     // The project is replaced now: a failed identity read
                     // must not skip the audit lines below.
@@ -336,6 +377,18 @@ namespace Tiad
                         Log.Line("upload: reading the CPU's identity failed: {0}", Json.Quote(e.Message));
                         read = null;
                     }
+                    // What a spec must name to keep the CPU: reported, but
+                    // never in the way of the pin check.
+                    try
+                    {
+                        cpu = t.ReadCpu(s.Handle);
+                    }
+                    catch (Exception e)
+                    {
+                        Log.Line("upload: reading the project's CPU failed: {0}", Json.Quote(e.Message));
+                        cpu = null;
+                        cpuWhy = e.Message;
+                    }
                     return tr;
                 });
                 if (trust || trusted.Count > 0)
@@ -347,11 +400,22 @@ namespace Tiad
                 }
                 // Trust on first use: the first upload pins the CPU's
                 // identity; every later one must match it (section 3.8).
+                // The session stays unclean until the CPU is known to be the
+                // pinned one: a refused identity leaves a project nobody
+                // may take over, save or reuse.
                 string pin = PinUpload(s, address, read, trust);
+                OnSession(s, delegate(ITia t)
+                {
+                    s.Unclean = false;
+                    return true;
+                });
                 var o = new Obj();
                 o["trustedBlindly"] = trusted.ToArray();
                 o["device"] = read.ToJson();
                 o["pin"] = pin;
+                // What a spec that reuses this CPU must name (section 3.3).
+                o["cpu"] = cpu == null ? null : cpu.ToJson();
+                if (cpuWhy != null) o["cpuError"] = cpuWhy;
                 return o;
             });
         }
@@ -364,7 +428,14 @@ namespace Tiad
                 var r = c.Json();
                 bool archive = r.Bool("archive");
                 r.Done();
-                string full = OnSession(s, delegate(ITia t) { return t.Save(s.Handle, archive); });
+                // A project left part-way must not be saved, reopened and
+                // its CPU reused. Checked on the TIA thread, where the
+                // flag is written.
+                string full = OnSession(s, delegate(ITia t)
+                {
+                    if (s.Unclean) throw CpuReuse.Unclean("saving it");
+                    return t.Save(s.Handle, archive);
+                });
                 var o = new Obj();
                 o["path"] = work.RelInside(full);
                 return o;

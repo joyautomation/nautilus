@@ -248,6 +248,7 @@ namespace Tiad.Fake
         string failInDoubt = "";
         bool noDryRun;
         bool uploadAsksTls;
+        string cannotApply = "";
         DeviceIdentity device = BenchDevice();
         bool noIdentify;
 
@@ -280,6 +281,19 @@ namespace Tiad.Fake
                 lock (mu)
                 {
                     return noIdentify;
+                }
+            }
+        }
+
+        // CannotApply is what the fake's TIA side says it cannot apply yet,
+        // as tiad.Openness says of modules today, or "".
+        public string CannotApply
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return cannotApply;
                 }
             }
         }
@@ -451,6 +465,7 @@ namespace Tiad.Fake
             string inDoubt = r.Str("failInDoubt");
             bool noDry = r.Bool("noDryRun");
             bool asksTls = r.Bool("uploadAsksTls");
+            string cannot = r.Str("cannotApply");
             var dr = r.Child("device");
             DeviceIdentity dev = dr == null ? BenchDevice() : DeviceIdentity.Read(dr);
             bool noId = r.Bool("noIdentify");
@@ -472,6 +487,7 @@ namespace Tiad.Fake
                 failInDoubt = inDoubt;
                 noDryRun = noDry;
                 uploadAsksTls = asksTls;
+                cannotApply = cannot;
                 device = dev;
                 noIdentify = noId;
             }
@@ -502,12 +518,55 @@ namespace Tiad.Fake
         // TIA makes one; an upload brings the bench CPU's None.
         public string Protection = ConfigProtection.Absent;
         public string ProtectedWith = "";
+        // Cpu is the project's CPU (name, order, firmware), or null, and
+        // Others the devices besides its station.
+        public ProjectCpu Cpu;
+        public List<KeptDevice> Others = new List<KeptDevice>();
 
         // CompileError is what a hardware compile of this project fails
         // with, as TIA words it, or null.
         public string CompileError()
         {
             return Protection == ConfigProtection.WithoutPassword ? FakeTia.NotConfigured : null;
+        }
+    }
+
+    // FakeMasterSecret behaves like TIA's PlcMasterSecretConfigurator as
+    // the TIA machine showed it: a second Protect throws, Unprotect needs
+    // the password the CPU was protected with.
+    sealed class FakeMasterSecret : IProtectionConfigurator
+    {
+        readonly FakeProject p;
+
+        public FakeMasterSecret(FakeProject p)
+        {
+            this.p = p;
+        }
+
+        public string State()
+        {
+            return p.Protection;
+        }
+
+        public void Protect(string password)
+        {
+            if (p.Protection == ConfigProtection.WithPassword) throw new TiaException("The PLC Master Secret is already configured.");
+            p.Protection = ConfigProtection.WithPassword;
+            p.ProtectedWith = password;
+        }
+
+        public void Unprotect(string password)
+        {
+            if (p.Protection != ConfigProtection.WithPassword || password != p.ProtectedWith) throw new TiaException("The password is not correct.");
+            p.Protection = ConfigProtection.None;
+            p.ProtectedWith = "";
+        }
+
+        public void RemoveCpu()
+        {
+            p.Cpu = null;
+            p.Protection = ConfigProtection.Absent;
+            p.ProtectedWith = "";
         }
     }
 
@@ -519,6 +578,9 @@ namespace Tiad.Fake
         readonly HashSet<string> gsd = new HashSet<string>(StringComparer.Ordinal);
         // loaded is what each CPU holds: the project last downloaded to it.
         readonly Dictionary<string, FakeProject> loaded = new Dictionary<string, FakeProject>(StringComparer.Ordinal);
+        // saved is the hardware each saved project file holds, restored
+        // when it is opened: its CPU, the devices besides it, protection.
+        readonly Dictionary<string, FakeProject> saved = new Dictionary<string, FakeProject>(StringComparer.OrdinalIgnoreCase);
 
         public FakeTia(Script script)
         {
@@ -552,13 +614,24 @@ namespace Tiad.Fake
                 throw new TiaException("The project directory " + Path.GetDirectoryName(fullPath) + " is not empty");
             }
             File.WriteAllText(fullPath, "fake TIA project");
+            saved.Remove(fullPath);
+            saved.Remove(Path.ChangeExtension(fullPath, ".zap21"));
             return new FakeProject { Full = fullPath };
         }
 
         public object OpenProject(string fullPath)
         {
             script.Enter("OpenProject");
-            return new FakeProject { Full = fullPath };
+            var p = new FakeProject { Full = fullPath };
+            FakeProject sp;
+            if (saved.TryGetValue(fullPath, out sp))
+            {
+                p.Cpu = sp.Cpu;
+                p.Others = new List<KeptDevice>(sp.Others);
+                p.Protection = sp.Protection;
+                p.ProtectedWith = sp.ProtectedWith;
+            }
+            return p;
         }
 
         public void CloseProject(object project)
@@ -569,50 +642,38 @@ namespace Tiad.Fake
         public const string NotConfigured = "Password for confidential PLC configuration data is not configured in the PLC.";
 
         // ApplyStation does what tiad.Openness does: it makes the CPU anew,
-        // as TIA makes one, unless the session last applied a spec with
-        // the same CPU; then it applies cpu.configurationProtection from
-        // the project's state, the way TIA's configurator behaves.
-        public List<string> ApplyStation(object project, Station previous, Station next, Secrets secrets, List<string> notes)
+        // as TIA makes one, or keeps the project's, as the agent decided;
+        // then it applies cpu.configurationProtection through the agent's
+        // ProtectionSteps over a configurator that behaves like TIA's.
+        public void ApplyStation(object project, Station next, string decision, Secrets secrets, List<string> notes)
         {
             script.Enter("ApplyStation");
             var p = (FakeProject)project;
-            bool same = previous != null && previous.Cpu.Order == next.Cpu.Order &&
-                previous.Cpu.Firmware == next.Cpu.Firmware && previous.Cpu.Name == next.Cpu.Name;
-            if (!same)
+            Station prev = p.Station;
+            if (decision == CpuReuse.Create)
             {
+                p.Cpu = new ProjectCpu { Name = next.Cpu.Name, Order = next.Cpu.Order, Firmware = next.Cpu.Firmware };
+                p.Others = new List<KeptDevice>();
                 p.Protection = ConfigProtection.WithoutPassword;
                 p.ProtectedWith = "";
+            }
+            else if (p.Cpu == null)
+            {
+                throw new TiaException("the project's CPU went missing between the agent's read and the apply");
             }
             // A failure part-way counts as a change.
             bool was = p.Changed;
             p.Changed = true;
             p.Station = null;
-            string action = ConfigProtection.Plan(p.Protection, next.Cpu.ConfigurationProtection, secrets.ConfigurationPassword != "");
-            string note = ConfigProtection.Note(p.Protection, next.Cpu.ConfigurationProtection);
-            if (note != null) notes.Add(note);
-            if (action == ConfigProtection.Protect)
-            {
-                if (p.Protection == ConfigProtection.WithPassword) throw new TiaException("The PLC Master Secret is already configured.");
-                p.Protection = ConfigProtection.WithPassword;
-                p.ProtectedWith = secrets.ConfigurationPassword;
-            }
-            else if (action == ConfigProtection.UnprotectWithPassword)
-            {
-                if (secrets.ConfigurationPassword != p.ProtectedWith) throw new TiaException("The password is not correct.");
-                p.Protection = ConfigProtection.None;
-                p.ProtectedWith = "";
-            }
-            else if (action == ConfigProtection.ProtectThenUnprotect)
-            {
-                if (p.Protection == ConfigProtection.WithPassword) throw new TiaException("The PLC Master Secret is already configured.");
-                p.Protection = ConfigProtection.None;
-            }
-            string bad = ConfigProtection.Check(action, p.Protection);
-            if (bad != null) throw new TiaException(bad);
-            List<string> changes = Station.Changes(same ? previous : null, next);
+            ProtectionSteps.Run(new FakeMasterSecret(p), next.Cpu.ConfigurationProtection, secrets.ConfigurationPassword, notes);
             p.Station = next;
-            p.Changed = was || changes.Count > 0;
-            return changes;
+            p.Changed = was || CpuReuse.Changes(decision, prev, next).Count > 0;
+        }
+
+        public string CannotApply(Station next)
+        {
+            string c = script.CannotApply;
+            return c == "" ? null : c;
         }
 
         public SoftwareResult ImportSoftware(object project, string group, List<SourceFile> sources, List<SourceFile> tagTables, bool prune)
@@ -762,9 +823,13 @@ namespace Tiad.Fake
             }
             var up = (FakeProject)project;
             up.Changed = true;
-            // The bench CPU's setting, as the S2a upload found it.
+            // The bench CPU's setting, as the S2a upload found it, and its
+            // IO device, which the CPU's station does not hold.
             up.Protection = ConfigProtection.None;
             up.ProtectedWith = "";
+            DeviceIdentity d = script.Device;
+            up.Cpu = new ProjectCpu { Name = UploadedCpuName, Order = d.Order, Firmware = d.Firmware };
+            up.Others = new List<KeptDevice> { UploadedIoDevice() };
             return trusted;
         }
 
@@ -772,6 +837,28 @@ namespace Tiad.Fake
         {
             script.Enter("ProjectCpu");
             return script.Device;
+        }
+
+        // UploadedCpuName and UploadedIoDevice are what an upload brings
+        // besides the CPU's identity: the Go fake's UploadedCPUName and
+        // UploadedIODevice.
+        public const string UploadedCpuName = "PLC_1";
+
+        public static KeptDevice UploadedIoDevice()
+        {
+            return new KeptDevice { Name = "io-device-up", ProfinetName = "io-device-up", Address = "192.0.2.30" };
+        }
+
+        public ProjectCpu ReadCpu(object project)
+        {
+            script.Enter("ReadCpu");
+            var p = (FakeProject)project;
+            if (p.Cpu == null) return null;
+            return new ProjectCpu
+            {
+                Name = p.Cpu.Name, Order = p.Cpu.Order, Firmware = p.Cpu.Firmware,
+                Protection = p.Protection, Others = new List<KeptDevice>(p.Others),
+            };
         }
 
         public DeviceIdentity Identify(object project, string address)
@@ -786,6 +873,13 @@ namespace Tiad.Fake
             var p = (FakeProject)project;
             string f = archive ? Path.ChangeExtension(p.Full, ".zap21") : p.Full;
             File.WriteAllText(f, "fake TIA project");
+            saved[f] = new FakeProject
+            {
+                Cpu = p.Cpu == null ? null : new ProjectCpu { Name = p.Cpu.Name, Order = p.Cpu.Order, Firmware = p.Cpu.Firmware },
+                Others = new List<KeptDevice>(p.Others),
+                Protection = p.Protection,
+                ProtectedWith = p.ProtectedWith,
+            };
             return f;
         }
 

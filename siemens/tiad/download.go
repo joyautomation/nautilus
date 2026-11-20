@@ -1,7 +1,10 @@
 package tiad
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -20,7 +23,11 @@ const (
 	// Secrets.ConfigurationPassword, never by the protection password.
 	QuestionConfigurationPassword = "configuration-password"
 	QuestionCertificate           = "certificate"
-	QuestionOther                 = "other"
+	// QuestionKeptDevices is the agent's own question, never TIA's: a
+	// download also loads the devices an apply kept as found. Its Objects
+	// name them; Decisions.KeptDevices must name exactly those.
+	QuestionKeptDevices = "kept-devices"
+	QuestionOther       = "other"
 )
 
 // Question is one pre-download check that needs an answer.
@@ -45,6 +52,68 @@ type Decisions struct {
 	// TrustCertificate is the fingerprint of the CPU certificate the
 	// caller trusts; it must equal the question's.
 	TrustCertificate string `json:"trustCertificate,omitempty"`
+	// KeptDevices names every device the caller agrees to load as the
+	// project keeps it (QuestionKeptDevices). It must be exactly the kept
+	// set: a yes for another set is refused, so an old answer does not
+	// carry over. Leave it empty when nothing is kept.
+	KeptDevices []string `json:"keptDevices,omitempty"`
+}
+
+// KeptQuestion is the question a download asks when the project keeps
+// devices: the agent's KeptRule.Question.
+func KeptQuestion(kept []KeptDevice) Question {
+	return Question{ID: QuestionKeptDevices,
+		Message: "load the devices the project keeps as found besides the CPU (name each in decisions.keptDevices)",
+		Objects: keptNames(kept)}
+}
+
+// CheckKept is the agent's KeptRule.Check: "" when answer names exactly
+// the kept devices, or why not.
+func CheckKept(kept []KeptDevice, answer []string) string {
+	want := keptNames(kept)
+	got := sortedSet(answer)
+	if slices.Equal(want, got) {
+		return ""
+	}
+	if len(got) == 0 {
+		return "the project keeps device(s) " + quotedList(want) + " that a download loads too: name them in decisions.keptDevices to load them"
+	}
+	now := "none"
+	if len(want) > 0 {
+		now = quotedList(want)
+	}
+	return "decisions.keptDevices names " + quotedList(got) + ", but the project keeps " + now +
+		" now: the answer must name exactly the devices kept, so a yes for another set does not carry over"
+}
+
+func keptNames(kept []KeptDevice) []string {
+	var ns []string
+	for _, k := range kept {
+		ns = append(ns, k.Name)
+	}
+	return sortedSet(ns)
+}
+
+func sortedSet(ss []string) []string {
+	out := []string{}
+	seen := map[string]bool{}
+	for _, s := range ss {
+		if !seen[s] {
+			seen[s] = true
+			out = append(out, s)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// quotedList is the agent's "[\"a\", \"b\"]" for names.
+func quotedList(ns []string) string {
+	q := make([]string, len(ns))
+	for i, n := range ns {
+		q[i] = quote(n)
+	}
+	return "[" + strings.Join(q, ", ") + "]"
 }
 
 // DownloadRequest loads a session's project into one CPU.
@@ -72,6 +141,26 @@ type DownloadResult struct {
 	Provisional bool       `json:"provisional,omitempty"`
 	Questions   []Question `json:"questions"`
 	State       string     `json:"state,omitempty"` // "RUN" | "STOP" | "" (unknown)
+	// KeptDevices are the devices the last apply kept as found: the
+	// download loads them too. A decision_required or declined error
+	// lists them as well (KeptDevicesOf), before anything is loaded.
+	KeptDevices []KeptDevice `json:"keptDevices"`
+}
+
+// KeptDevicesOf returns the kept devices a decision_required or declined
+// download error lists.
+func KeptDevicesOf(err error) []KeptDevice {
+	var e *Error
+	if !errors.As(err, &e) || len(e.Data) == 0 {
+		return nil
+	}
+	var d struct {
+		KeptDevices []KeptDevice `json:"keptDevices"`
+	}
+	if json.Unmarshal(e.Data, &d) != nil {
+		return nil
+	}
+	return d.KeptDevices
 }
 
 // Validate checks the request's own shape.

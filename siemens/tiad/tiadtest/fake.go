@@ -74,9 +74,12 @@ type Fake struct {
 	next      int
 	downloads []Download
 	loaded    map[string]string // CPU address → session that last downloaded
-	claims    map[string]string // CPU address → the session that claimed it (one project per CPU)
-	mux       *http.ServeMux
-	once      sync.Once
+	// saved is what a saved project holds besides its file: its CPU, the
+	// devices besides it and its protection, restored when it is opened.
+	saved  map[string]savedProject
+	claims map[string]string // CPU address → the session that claimed it (one project per CPU)
+	mux    *http.ServeMux
+	once   sync.Once
 }
 
 type session struct {
@@ -95,6 +98,124 @@ type session struct {
 	// holds it (one of the Protection* states), protectedWith the
 	// password it was protected with.
 	protection, protectedWith string
+	// cpu is the project's CPU (nil: none), others the devices besides
+	// its station, kept the ones the last apply kept as found.
+	cpu    *tiad.ProjectCPU
+	others []tiad.KeptDevice
+	kept   []tiad.KeptDevice
+	// unclean is set while an apply or upload runs and stays set when it
+	// fails part-way: a later apply or save refuses.
+	unclean bool
+}
+
+// savedProject is the hardware a saved project holds, as TIA keeps it.
+type savedProject struct {
+	cpu                       *tiad.ProjectCPU
+	others                    []tiad.KeptDevice
+	protection, protectedWith string
+}
+
+// UploadedCPUName and UploadedIODevice are what the fake's upload brings
+// besides the CPU's identity: tiad-fake's UploadedCpuName and
+// UploadedIoDevice.
+const UploadedCPUName = "PLC_1"
+
+// UploadedIODevice is the IO device an upload brings beside the CPU's
+// station, as the S2a upload brought one.
+func UploadedIODevice() tiad.KeptDevice {
+	return tiad.KeptDevice{Name: "io-device-up", ProfinetName: "io-device-up", Address: "192.0.2.30"}
+}
+
+// sameFirmware is CpuReuse.SameFirmware: exact, a leading "V" aside.
+func sameFirmware(a, b string) bool {
+	return strings.TrimPrefix(a, "V") == strings.TrimPrefix(b, "V")
+}
+
+func uncleanFailure(what string) *failure {
+	return fail(http.StatusConflict, tiad.KindUncleanSession,
+		"an apply or upload on this session failed part-way, so its project matches no spec and tiad trusts nothing in it; %s is refused: close this session without saving, then open the saved project again or create it anew", what)
+}
+
+// decideCPU is CpuReuse.Decide and CpuReuse.Collides: create, reuse, or
+// a refusal naming the fix.
+func (s *session) decideCPU(st tiad.Station) (reuse bool, fl *failure) {
+	if s.unclean {
+		return false, uncleanFailure("an apply")
+	}
+	if s.cpu == nil {
+		return false, nil
+	}
+	pc := *s.cpu
+	var diff []string
+	if pc.Name != st.CPU.Name {
+		diff = append(diff, fmt.Sprintf("name %q, not %q", pc.Name, st.CPU.Name))
+	}
+	if pc.Order != st.CPU.Order {
+		diff = append(diff, fmt.Sprintf("order %q, not %q", pc.Order, st.CPU.Order))
+	}
+	if !sameFirmware(pc.Firmware, st.CPU.Firmware) {
+		diff = append(diff, fmt.Sprintf("firmware %q, not %q", pc.Firmware, st.CPU.Firmware))
+	}
+	if len(diff) > 0 {
+		return false, &failure{status: http.StatusConflict, kind: tiad.KindCPUMismatch,
+			msg:  "the project's CPU has " + strings.Join(diff, ", ") + "; tiad never replaces a project's CPU on an apply: to keep it, apply a spec whose cpu name, order and firmware are the project's (in this error's data); to make a new CPU, create the project again (POST /v1/projects)",
+			data: map[string]any{"cpu": pc}}
+	}
+	names := map[string]bool{strings.ToLower(st.CPU.Name): true, strings.ToLower(st.CPU.ProfinetName): true}
+	addresses := map[string]bool{st.CPU.Address: true}
+	if st.Profinet != nil {
+		for _, d := range st.Profinet.Devices {
+			names[strings.ToLower(d.Name)] = true
+			if d.Address != "" {
+				addresses[d.Address] = true
+			}
+		}
+	}
+	delete(names, "")
+	var bad []string
+	for _, k := range s.others {
+		if names[strings.ToLower(k.Name)] || (k.ProfinetName != "" && names[strings.ToLower(k.ProfinetName)]) || (k.Address != "" && addresses[k.Address]) {
+			bad = append(bad, describeKept(k))
+		}
+	}
+	if len(bad) > 0 {
+		return false, &failure{status: http.StatusConflict, kind: tiad.KindCPUMismatch,
+			msg:  "the project keeps device(s) " + strings.Join(bad, "; ") + " that share a name or an address with the spec; tiad does not configure PROFINET IO devices yet and will not let two coexist: change the spec, or remove the device in the project",
+			data: map[string]any{"cpu": pc, "keptDevices": s.others}}
+	}
+	return true, nil
+}
+
+// keptList is kept as the agent lists it: never null.
+func keptList(kept []tiad.KeptDevice) []tiad.KeptDevice {
+	if kept == nil {
+		return []tiad.KeptDevice{}
+	}
+	return kept
+}
+
+// describeKept is KeptDevice.Describe.
+func describeKept(k tiad.KeptDevice) string {
+	d := strconv.Quote(k.Name)
+	if k.ProfinetName != "" {
+		d += " profinetName=" + strconv.Quote(k.ProfinetName)
+	}
+	if k.Address != "" {
+		d += " address=" + strconv.Quote(k.Address)
+	}
+	return d
+}
+
+// keptNote is CpuReuse.KeptNote.
+func keptNote(kept []tiad.KeptDevice) string {
+	if len(kept) == 0 {
+		return ""
+	}
+	var ds []string
+	for _, k := range kept {
+		ds = append(ds, describeKept(k))
+	}
+	return "the project's other devices are kept as found (tiad does not configure PROFINET IO devices yet), and a download loads them too: " + strings.Join(ds, "; ")
 }
 
 // The CPU's configuration protection as a project holds it: TIA's
@@ -752,6 +873,12 @@ func (f *Fake) createProject(r *http.Request) (any, *failure) {
 	}
 	s := f.newSession(project)
 	s.guard = guard
+	// The directory is replaced: nothing saved in it survives.
+	for p := range f.saved {
+		if strings.HasPrefix(strings.ToLower(p), strings.ToLower(guard)) {
+			delete(f.saved, p)
+		}
+	}
 	// TIA makes a new CPU with its protection not set up.
 	s.protection = ProtectionWithoutPassword
 	if fl := s.protect(req.Station.CPU.ConfigurationProtection, req.Secrets.ConfigurationPassword); fl != nil {
@@ -760,6 +887,7 @@ func (f *Fake) createProject(r *http.Request) (any, *failure) {
 	}
 	st := req.Station
 	s.station = &st
+	s.cpu = &tiad.ProjectCPU{Name: st.CPU.Name, Order: st.CPU.Order, Firmware: st.CPU.Firmware}
 	f.files[project] = []byte("fake TIA project")
 	return tiad.Session{ID: s.id, Project: project}, nil
 }
@@ -782,6 +910,10 @@ func (f *Fake) openSession(r *http.Request) (any, *failure) {
 		return nil, fail(http.StatusConflict, tiad.KindBusy, "project %s is already open", p)
 	}
 	s := f.newSession(p)
+	// The project as it was saved: its CPU and its devices.
+	if sp, ok := f.saved[p]; ok {
+		s.cpu, s.others, s.protection, s.protectedWith = sp.cpu, sp.others, sp.protection, sp.protectedWith
+	}
 	return tiad.Session{ID: s.id, Project: p}, nil
 }
 
@@ -831,33 +963,61 @@ func (f *Fake) applyStation(r *http.Request) (any, *failure) {
 	if fl := f.checkStation(req.Station, req.Secrets); fl != nil {
 		return nil, fl
 	}
-	// As tiad.Openness does, the CPU is made anew unless the spec this
-	// session last applied, still standing, has the same CPU: after an
-	// upload or an open, it is made anew (#789: fixed next, a known gap).
+	// As the agent does: decided from the project's CPU before any write,
+	// so a refusal leaves the session as it was.
+	reuse, fl := s.decideCPU(req.Station)
+	if fl != nil {
+		return nil, fl
+	}
 	var notes []string
+	var kept []tiad.KeptDevice
+	if reuse {
+		if _, fl := planProtection(s.protection, req.Station.CPU.ConfigurationProtection, req.Secrets.ConfigurationPassword != ""); fl != nil {
+			return nil, fl
+		}
+		kept = s.others
+	}
 	prev := s.station
-	if prev == nil || s.uploaded || prev.CPU.Order != req.Station.CPU.Order ||
-		prev.CPU.Firmware != req.Station.CPU.Firmware || prev.CPU.Name != req.Station.CPU.Name {
+	if s.uploaded {
 		prev = nil
+	}
+	if !reuse {
+		// TIA makes a new CPU with its protection not set up.
+		s.cpu = &tiad.ProjectCPU{Name: req.Station.CPU.Name, Order: req.Station.CPU.Order, Firmware: req.Station.CPU.Firmware}
+		s.others = nil
 		s.protection, s.protectedWith = ProtectionWithoutPassword, ""
 	}
 	// Until the spec is applied the project matches no spec: a failure
-	// part-way leaves nothing downloadable.
+	// part-way leaves nothing downloadable, and the session unclean.
 	was, wasChanged := s.compiled, s.changed
 	s.station, s.uploaded, s.compiled, s.changed = nil, false, false, true
+	s.unclean = true
 	if n := protectionNote(s.protection, req.Station.CPU.ConfigurationProtection); n != "" {
 		notes = append(notes, n)
 	}
 	if fl := s.protect(req.Station.CPU.ConfigurationProtection, req.Secrets.ConfigurationPassword); fl != nil {
 		return nil, fl
 	}
-	changes := StationChanges(prev, req.Station)
+	s.unclean = false
+	if n := keptNote(kept); n != "" {
+		notes = append(notes, n)
+	}
+	var changes []string
+	switch {
+	case !reuse:
+		changes = StationChanges(nil, req.Station)
+	case prev != nil:
+		changes = StationChanges(prev, req.Station)
+	default:
+		changes = []string{"cpu " + req.Station.CPU.Name + " taken over from the project"}
+	}
 	st := req.Station
 	s.station = &st
+	s.kept = kept
 	if len(changes) == 0 {
 		s.compiled, s.changed = was, wasChanged
 	}
-	return tiad.StationResult{Changes: changes, Notes: notes}, nil
+	return tiad.StationResult{Changes: changes, Notes: notes, KeptDevices: kept}, nil
 }
 
 // blockHead matches the first line of an SCL block in a source file.
@@ -1004,6 +1164,13 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 	if req.DryRun {
 		call = "dry run"
 	}
+	// The kept devices load too: a yes naming exactly them, before
+	// anything reaches the CPU; a dry run lists the question instead.
+	if why := tiad.CheckKept(s.kept, req.Decisions.KeptDevices); why != "" && !req.DryRun {
+		return nil, &failure{status: http.StatusConflict, kind: tiad.KindDecisionRequired,
+			msg:  why + "; nothing was sent to the CPU",
+			data: map[string]any{"questions": []tiad.Question{tiad.KeptQuestion(s.kept)}, "keptDevices": keptList(s.kept)}}
+	}
 	if fl := f.checkDevicePin(req.Address, call); fl != nil {
 		return nil, fl
 	}
@@ -1039,7 +1206,10 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 	// Openness can list the checks and cancel with nothing loaded is
 	// provisional until S2 (siemens-ide.md §3.5); the fake models the aim.
 	if req.DryRun {
-		return tiad.DownloadResult{DryRun: true, Provisional: true, Questions: qs}, nil
+		if len(s.kept) > 0 {
+			qs = append(append([]tiad.Question{}, qs...), tiad.KeptQuestion(s.kept))
+		}
+		return tiad.DownloadResult{DryRun: true, Provisional: true, Questions: qs, KeptDevices: keptList(s.kept)}, nil
 	}
 	haveProtection := req.Secrets != nil && req.Secrets.Protection != ""
 	haveConfigurationPassword := req.Secrets != nil && req.Secrets.ConfigurationPassword != ""
@@ -1047,12 +1217,12 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 	if len(unanswered) > 0 {
 		return nil, &failure{status: http.StatusConflict, kind: tiad.KindDecisionRequired,
 			msg:  fmt.Sprintf("%d question(s) have no answer; nothing was loaded", len(unanswered)),
-			data: map[string]any{"questions": unanswered}}
+			data: map[string]any{"questions": unanswered, "keptDevices": keptList(s.kept)}}
 	}
 	if len(declined) > 0 {
 		return nil, &failure{status: http.StatusConflict, kind: tiad.KindDeclined,
 			msg:  fmt.Sprintf("%d question(s) were answered no; nothing was loaded", len(declined)),
-			data: map[string]any{"questions": declined}}
+			data: map[string]any{"questions": declined, "keptDevices": keptList(s.kept)}}
 	}
 	state := "RUN"
 	stopped := false
@@ -1069,7 +1239,7 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 	f.downloads = append(f.downloads, Download{Session: s.id, Request: rec, State: state})
 	f.loaded[req.Address] = s.id
 	s.changed = false
-	return tiad.DownloadResult{Downloaded: true, Questions: qs, State: state}, nil
+	return tiad.DownloadResult{Downloaded: true, Questions: qs, State: state, KeptDevices: keptList(s.kept)}, nil
 }
 
 func (f *Fake) compare(r *http.Request) (any, *failure) {
@@ -1166,8 +1336,15 @@ func (f *Fake) upload(r *http.Request) (any, *failure) {
 	s.compiled = false
 	s.changed = true
 	s.uploaded = true
-	// The bench CPU's setting, as the S2a upload found it.
+	s.kept = nil
+	// The bench CPU's setting, as the S2a upload found it, its name, and
+	// its IO device, which the CPU's station does not hold.
 	s.protection, s.protectedWith = ProtectionNone, ""
+	// Unclean until the CPU is known to be the pinned one.
+	s.unclean = true
+	up := f.device()
+	s.cpu = &tiad.ProjectCPU{Name: UploadedCPUName, Order: up.Order, Firmware: up.Firmware}
+	s.others = []tiad.KeptDevice{UploadedIODevice()}
 	// Trust on first use: the first upload pins the CPU's identity; every
 	// later one must match it.
 	read := f.device()
@@ -1190,8 +1367,9 @@ func (f *Fake) upload(r *http.Request) (any, *failure) {
 	} else {
 		pin = tiad.PinMatched
 	}
+	s.unclean = false
 	// The fake's CPU asks no TLS question, so nothing is trusted.
-	return tiad.UploadResult{TrustedBlindly: []string{}, Device: read, Pin: pin}, nil
+	return tiad.UploadResult{TrustedBlindly: []string{}, Device: read, Pin: pin, CPU: *s.cpu}, nil
 }
 
 // BenchDevice is the fake CPU's identity unless a test says otherwise.
@@ -1307,11 +1485,23 @@ func (f *Fake) save(r *http.Request) (any, *failure) {
 	if fl := decode(r, &req); fl != nil {
 		return nil, fl
 	}
+	if s.unclean {
+		return nil, uncleanFailure("saving it")
+	}
 	p := s.project
 	if req.Archive {
 		p = strings.TrimSuffix(p, ".ap21") + ".zap21"
 	}
 	f.files[p] = []byte("fake TIA project")
+	if f.saved == nil {
+		f.saved = map[string]savedProject{}
+	}
+	var cpu *tiad.ProjectCPU
+	if s.cpu != nil {
+		c := *s.cpu
+		cpu = &c
+	}
+	f.saved[p] = savedProject{cpu: cpu, others: append([]tiad.KeptDevice(nil), s.others...), protection: s.protection, protectedWith: s.protectedWith}
 	return map[string]string{"path": p}, nil
 }
 

@@ -22,6 +22,13 @@ namespace Tiad
         // CPU.
         public string Address = "";
         public bool Compiled;           // fully compiled since the last change
+        // Unclean is set while an apply or an upload runs and stays set
+        // when it fails part-way: the project then matches no spec, and
+        // a later apply or save refuses (CpuReuse.Unclean).
+        public bool Unclean;
+        // Kept are the devices the last apply kept as found besides the
+        // CPU's station: a download lists them and journals them.
+        public List<KeptDevice> Kept = new List<KeptDevice>();
         public bool Closed;
         // Broken is set when closing the project failed: TIA may still
         // hold it. Every call but another close refuses.

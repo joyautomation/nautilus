@@ -34,6 +34,13 @@ namespace Tiad
         // DeviceUnverified refuses an online call to a pinned CPU whose
         // identity tiad cannot read, so the pin cannot be checked.
         public const string DeviceUnverified = "device_unverified";
+        // CpuMismatch refuses an apply whose spec does not fit the
+        // project's CPU (name, order, firmware) or whose kept devices
+        // collide with the spec. Its data holds the project's cpu.
+        public const string CpuMismatch = "cpu_mismatch";
+        // UncleanSession refuses an apply or a save after an apply or an
+        // upload failed part-way on the session: close it without saving.
+        public const string UncleanSession = "unclean_session";
     }
 
     // TiadException is a failure that becomes an error envelope: its HTTP

@@ -537,6 +537,11 @@ func contractS2aSequence(t *testing.T, start Starter) {
 	if _, err := s.Compile(ctx, true, true); err != nil {
 		t.Fatal(err)
 	}
+	// The upload's IO device was kept: its download needs a yes naming it.
+	if _, err := s.Download(ctx, dl); tiad.Kind(err) != tiad.KindDecisionRequired || !strings.Contains(err.Error(), "name them in decisions.keptDevices") {
+		t.Fatalf("download without a yes for the kept device: %v", err)
+	}
+	dl.Decisions.KeptDevices = []string{UploadedIODevice().Name}
 	if _, err := s.Download(ctx, dl); err != nil {
 		t.Fatalf("download after spec and compile: %v", err)
 	}
