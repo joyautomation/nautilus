@@ -28,6 +28,8 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/joyautomation/nautilus/audit"
 )
 
 // IOHook is a running project's live I/O configuration, as the server
@@ -44,7 +46,13 @@ type IOHook struct {
 	// revertIfSilent, when set, puts the apply back if a changed device has
 	// not read within it. Errors wrapping ErrIOConflict answer 409 (busy,
 	// stale); ErrIORollbackFailed 500; any other, 422.
-	Apply func(ctx context.Context, cand any, by string, revertIfSilent time.Duration) (body any, err error)
+	// by is the request's principal (who the journal names), id the
+	// staged candidate's id.
+	Apply func(ctx context.Context, cand any, by, id string, revertIfSilent time.Duration) (body any, err error)
+	// OnRevert registers f to be called when an apply's automatic
+	// revert-if-silent has run (or failed): no request made it, so the
+	// server journals it as the system's.
+	OnRevert func(f func(IOWatch))
 	// Running is every unit's state, as JSON.
 	Running func() any
 	// Differs is the units whose running configuration is not the
@@ -91,6 +99,7 @@ type IOFiles struct {
 // revert-failed | cancelled | superseded.
 type IOWatch struct {
 	Gen      int       `json:"gen"`
+	ID       string    `json:"id,omitempty"`
 	From     string    `json:"from"`
 	By       string    `json:"by"`
 	Deadline time.Time `json:"deadline"`
@@ -215,15 +224,10 @@ func (s *Server) ioConfigState() *IOConfigState {
 	return st
 }
 
-// requester is who a write is from, for the record: until users exist
-// (#708, #894's caller identity), "token" on a server with a token (a write
-// got here only by presenting it), else "anonymous".
-func (s *Server) requester() string {
-	if s.authToken != "" {
-		return "token"
-	}
-	return "anonymous"
-}
+// requester is who a write is from, for the record: the request's
+// principal, as the audit journal names it ("anonymous", "token",
+// "token:<name>", "user:<name>"). Nothing the client sends is taken as it.
+func (s *Server) requester(r *http.Request) string { return s.principalOf(r) }
 
 func (s *Server) ioUnavailable(w http.ResponseWriter) bool {
 	if s.io == nil {
@@ -283,12 +287,12 @@ func (s *Server) handleIOCancelRevert(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "no revert is pending"})
 		return
 	}
-	watch, err := s.io.CancelRevert(s.requester())
+	watch, err := s.io.CancelRevert(s.requester(r))
 	if err != nil {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 		return
 	}
-	slog.Info("config.revert.cancel", "gen", watch.Gen, "by", s.requester())
+	slog.Info("config.revert.cancel", "gen", watch.Gen, "by", s.requester(r))
 	writeJSON(w, http.StatusOK, watch)
 }
 
@@ -312,7 +316,7 @@ func (s *Server) handleIOStage(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": `body must be {"sha": "<commit>"} or {"files": {"<path>": "<content>"}, "driver": "<name>"}`})
 		return
 	}
-	by := s.requester()
+	by := s.requester(r)
 	var files map[string][]byte
 	from := req.Sha
 	if req.Sha != "" {
@@ -448,7 +452,7 @@ func (s *Server) handleIOValidate(w http.ResponseWriter, r *http.Request) {
 	st.gen++
 	out := *st
 	s.staging.mu.Unlock()
-	slog.Info("config.validate", "id", st.ID, "result", out.State, "by", s.requester())
+	slog.Info("config.validate", "id", st.ID, "result", out.State, "by", s.requester(r))
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -497,8 +501,8 @@ func (s *Server) handleIOApply(w http.ResponseWriter, r *http.Request) {
 	st.gen++
 	s.staging.mu.Unlock()
 
-	by := s.requester()
-	body, err := s.io.Apply(r.Context(), st.cand, by, revert)
+	by := s.requester(r)
+	body, err := s.io.Apply(r.Context(), st.cand, by, st.ID, revert)
 	s.staging.mu.Lock()
 	code := http.StatusOK
 	switch {
@@ -523,4 +527,23 @@ func (s *Server) handleIOApply(w http.ResponseWriter, r *http.Request) {
 	out := *st
 	s.staging.mu.Unlock()
 	writeJSON(w, code, out)
+}
+
+// recordIORevert journals an apply's automatic revert-if-silent. No request
+// made it, so it is the system's, never the applier's name; the apply it
+// undid and its principal are in the detail.
+func (s *Server) recordIORevert(w IOWatch) {
+	result := audit.ResultOK
+	if w.State != "reverted" {
+		result = audit.ResultError
+	}
+	s.audit.record(audit.Entry{
+		User: "system", Source: audit.SourceSystem, Action: "config.revert",
+		Target: w.ID, Result: result,
+		Detail: map[string]any{
+			"note":    "revert of " + w.ID + " applied by " + w.By,
+			"applied": w.ID, "by": w.By, "from": w.From,
+			"reason": capText(w.Reason, reasonMax), "state": w.State, "gen": w.Gen,
+		},
+	})
 }

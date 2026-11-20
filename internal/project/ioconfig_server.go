@@ -43,8 +43,8 @@ func (io *IOConfig) Hook(snapshot func(sha string) (fs.FS, bool), base fs.FS) *s
 			}
 			return v.Valid, drivers, v
 		},
-		Apply: func(ctx context.Context, cand any, by string, revertIfSilent time.Duration) (any, error) {
-			res, err := io.ApplyWith(ctx, cand.(*IOCandidate), by, ApplyOptions{RevertIfSilent: revertIfSilent})
+		Apply: func(ctx context.Context, cand any, by, id string, revertIfSilent time.Duration) (any, error) {
+			res, err := io.ApplyWith(ctx, cand.(*IOCandidate), by, ApplyOptions{RevertIfSilent: revertIfSilent, ID: id})
 			switch {
 			case err == nil:
 				return res, nil
@@ -56,6 +56,9 @@ func (io *IOConfig) Hook(snapshot func(sha string) (fs.FS, bool), base fs.FS) *s
 				return nil, fmt.Errorf("%w: %w", server.ErrIONotKept, err)
 			}
 			return nil, err
+		},
+		OnRevert: func(f func(server.IOWatch)) {
+			io.OnReverted(func(w IOWatch) { f(server.IOWatch(w)) })
 		},
 		Running: func() any { return io.Running() },
 		Differs: func() []server.IODiffer {

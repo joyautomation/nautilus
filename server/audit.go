@@ -976,6 +976,54 @@ func ioStagedTarget(r *http.Request, _ []byte) auditTarget {
 	return auditTarget{target: r.PathValue("id"), answered: stagedState}
 }
 
+// ioApplyTarget is an apply: after is the state it reached plus what it
+// changed (each unit's before and after hash, what docs/guide/live-io.md
+// says they hash), where the candidate came from, and whether the change
+// is kept across a restart.
+func ioApplyTarget(r *http.Request, _ []byte) auditTarget {
+	return auditTarget{target: r.PathValue("id"), answered: appliedState}
+}
+
+func appliedState(body []byte) any {
+	var st struct {
+		ID     string `json:"id"`
+		State  string `json:"state"`
+		From   string `json:"from"`
+		Result *struct {
+			Changes []struct {
+				Driver string `json:"driver"`
+				Device string `json:"device"`
+				Before string `json:"before"`
+				After  string `json:"after"`
+			} `json:"changes"`
+			Kept  bool `json:"kept"`
+			Watch *struct {
+				Revert bool   `json:"revert"`
+				State  string `json:"state"`
+			} `json:"watch"`
+		} `json:"result"`
+	}
+	if json.Unmarshal(body, &st) != nil || st.State == "" {
+		return nil
+	}
+	out := map[string]any{"id": st.ID, "state": st.State, "from": capText(st.From, byMax)}
+	if r := st.Result; r != nil {
+		ch := make([]map[string]string, 0, len(r.Changes))
+		for _, c := range r.Changes {
+			m := map[string]string{"driver": c.Driver, "before": c.Before, "after": c.After}
+			if c.Device != "" {
+				m["device"] = c.Device
+			}
+			ch = append(ch, m)
+		}
+		out["changes"], out["kept"] = ch, r.Kept
+		if r.Watch != nil {
+			out["revertIfSilent"] = r.Watch.Revert
+		}
+	}
+	return out
+}
+
 // stagedState reads a staged candidate's id and state from an answer.
 func stagedState(body []byte) any {
 	var st struct {

@@ -29,6 +29,10 @@ type fakeIO struct {
 	revert   time.Duration // what the last apply was asked to revert after
 	watch    *IOWatch
 	cancels  int
+	// who the engine was told acted, and the apply id
+	stageBy, applyBy, applyID, cancelBy string
+	applyBody                           any
+	onRevert                            func(IOWatch)
 }
 
 func (f *fakeIO) hook() *IOHook {
@@ -37,6 +41,7 @@ func (f *fakeIO) hook() *IOHook {
 			if strings.HasPrefix(sha, "deadbeef") {
 				return nil, fmt.Errorf("%w: nosnap", ErrIONoSnapshot)
 			}
+			f.stageBy = by
 			what := sha
 			if sha == "" {
 				what = "files:" + string(files["modbus.yaml"])
@@ -50,22 +55,28 @@ func (f *fakeIO) hook() *IOHook {
 			}
 			return f.valid, f.drivers, map[string]any{"valid": f.valid, "cand": cand}
 		},
-		Apply: func(ctx context.Context, cand any, by string, revertIfSilent time.Duration) (any, error) {
+		Apply: func(ctx context.Context, cand any, by, id string, revertIfSilent time.Duration) (any, error) {
 			f.revert = revertIfSilent
+			f.applyBy, f.applyID = by, id
 			if f.applyErr != nil {
 				return nil, f.applyErr
 			}
 			f.applied++
 			f.differs = []IODiffer{{Driver: "modbus", Device: "DEV_A", ManifestHash: "a", RunningHash: "b", AppliedFrom: "upload", By: by}}
+			if f.applyBody != nil {
+				return f.applyBody, nil
+			}
 			return map[string]any{"commanded": []any{}}, nil
 		},
-		Running: func() any { return []string{"modbus"} },
-		Watch:   func() *IOWatch { return f.watch },
+		OnRevert: func(fn func(IOWatch)) { f.onRevert = fn },
+		Running:  func() any { return []string{"modbus"} },
+		Watch:    func() *IOWatch { return f.watch },
 		CancelRevert: func(by string) (*IOWatch, error) {
 			if f.watch == nil || f.watch.State != "watching" || !f.watch.Revert {
 				return nil, errors.New("no revert is pending")
 			}
 			f.cancels++
+			f.cancelBy = by
 			w := *f.watch
 			w.State, w.Reason = "cancelled", "the revert was cancelled by "+by
 			f.watch = &w

@@ -1145,6 +1145,43 @@ manifest has an `auth:` block, which makes it need `read`: without one,
 anyone who can reach the port can read the project's I/O files.** Keep the
 port off untrusted networks.
 
+**Who is recorded.** Every stage, validate, apply and revert cancel is
+journalled (`config.stage`, `config.validate`, `config.apply`,
+`config.revert.cancel`) under the request's principal: `user:<name>` for a
+signed-in user or a personal access token, `token:<name>` for a named
+service token, `token` for the bare `NAUTILUS_TOKEN`, `anonymous` with no
+credentials. The same name is kept as the candidate's `by` and in the
+retained record of what runs, and a name the client types in a body is never
+taken for it. The apply's entry says what changed: `from` (a commit, or
+`upload`), each changed unit's `before` and `after` hash, whether it is kept
+across a restart and whether it asked to revert if silent.
+
+A `revertIfSilent` that fires is not a request, so it is journalled as
+`config.revert` by `system` (source `system`), never under the name of whoever
+applied. Its target is the apply's id and its detail says `revert of <id>
+applied by <principal>`, with the reason and whether putting it back worked
+(`result: error` when it did not).
+
+**What the hashes cover.** A hash is the first 8 bytes (16 hex characters) of
+the SHA-256 of the unit's configuration marshalled as compact JSON, keyed by
+the Go field names in declaration order (`{"Source":{"ID":…,"Host":…},"Tags":[…]}`).
+It is a fingerprint to compare and match to a journal entry, not a format to
+rebuild by hand; `GET /api/io` and the `config.differs` rows show the same
+hashes (`manifestHash`, `runningHash`). What each covers:
+
+- a Modbus device (`devices:` row): its source (id, host, port, unit id, word and byte order, timeouts,
+  retry bounds) and its tag bindings (name, table, address, format, scale), as the device library
+  and `modbus.yaml` resolve them;
+- a Modbus driver on its own (the `<driver>` unit): its scan rate, scan
+  classes and tag classes;
+- an OPC UA client: its `drivers:` entry (without `validate`), its device row
+  and the manifest it derives, a profile node id included;
+- any other driver: its `drivers:` entry and the text of the manifest file it
+  names.
+
+Hashes identify a configuration; they are not a secret, and two controllers
+with the same files report the same hashes.
+
 | Status | When |
 | --- | --- |
 | `201` | Staged |

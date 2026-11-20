@@ -96,6 +96,9 @@ type IOConfig struct {
 	// what RetainedIO says (runtime.SaveRetained); nil when the project has
 	// no retain: block, and nothing is kept.
 	Keep func(ctx context.Context) error
+	// reverted, when set (OnReverted), is called once for an automatic
+	// revert-if-silent that ran (or failed): the change no request made.
+	reverted func(IOWatch)
 	// KeepStore is the retain store's kind ("file", "configmap"): a file
 	// is one replica's own, so a redundant project cannot keep in it.
 	KeepStore string
@@ -1066,6 +1069,10 @@ type ApplyOptions struct {
 	// has landed meanwhile, or the revert was cancelled (CancelRevert). Off
 	// by default: a reversion on a running plant can be its own surprise.
 	RevertIfSilent time.Duration
+	// ID names the apply for the record (the server's staged id); the
+	// watch carries it, so an automatic revert can say which apply it
+	// undid.
+	ID string
 }
 
 // answerWait is how long an apply's watch waits for its changed devices
@@ -1363,7 +1370,7 @@ func (io *IOConfig) apply(ctx context.Context, c *IOCandidate, by string, opts A
 		deadline = opts.RevertIfSilent
 	}
 	w := &ioWatch{
-		IOWatch: IOWatch{Gen: gen, From: c.From, By: by, Deadline: time.Now().Add(deadline),
+		IOWatch: IOWatch{Gen: gen, ID: opts.ID, From: c.From, By: by, Deadline: time.Now().Add(deadline),
 			Revert: opts.RevertIfSilent > 0, State: WatchWatching},
 		targets: io.answerTargets(c, val.Changes, running),
 		revert: func() (left, lost []string) {
@@ -1413,7 +1420,8 @@ const (
 // cancelled), so either comes back on the configuration before it
 // (iokeep.go; decision recorded on #706).
 type IOWatch struct {
-	Gen      int       `json:"gen"` // the apply generation it watches
+	Gen      int       `json:"gen"`          // the apply generation it watches
+	ID       string    `json:"id,omitempty"` // the apply's id (ApplyOptions.ID)
 	From     string    `json:"from"`
 	By       string    `json:"by"`
 	Deadline time.Time `json:"deadline"`
@@ -1947,4 +1955,13 @@ func (o overlay) Open(name string) (fs.File, error) {
 		return fstest.MapFS{name: &fstest.MapFile{Data: b}}.Open(name)
 	}
 	return o.base.Open(name)
+}
+
+// OnReverted registers f to be told of every automatic revert-if-silent,
+// done or failed, so the audit journal can record the one change no
+// request made.
+func (io *IOConfig) OnReverted(f func(IOWatch)) {
+	io.mu.Lock()
+	io.reverted = f
+	io.mu.Unlock()
 }

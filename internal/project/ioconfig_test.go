@@ -1034,10 +1034,10 @@ func TestIOHookMapsOutcomes(t *testing.T) {
 		return c
 	}
 	c1, c2 := stage(modbusYAML(slavePort(s3), slavePort(s2), "", "")), stage(modbusYAML(slavePort(s1), slavePort(s4), "", ""))
-	if _, err := h.Apply(r.ctx, c1, "tester", 0); err != nil {
+	if _, err := h.Apply(r.ctx, c1, "tester", "", 0); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.Apply(r.ctx, c2, "tester", 0); !errors.Is(err, server.ErrIOConflict) || !errors.Is(err, ErrIOStale) {
+	if _, err := h.Apply(r.ctx, c2, "tester", "", 0); !errors.Is(err, server.ErrIOConflict) || !errors.Is(err, ErrIOStale) {
 		t.Fatalf("stale: %v, want a conflict", err)
 	}
 	c3 := stage(modbusYAML(slavePort(s1), slavePort(s4), "", ""))
@@ -1047,7 +1047,7 @@ func TestIOHookMapsOutcomes(t *testing.T) {
 		}
 		return errors.New("injected") // DEV_B fails, and so does putting DEV_A back
 	}
-	if _, err := h.Apply(r.ctx, c3, "tester", 0); !errors.Is(err, server.ErrIORollbackFailed) {
+	if _, err := h.Apply(r.ctx, c3, "tester", "", 0); !errors.Is(err, server.ErrIORollbackFailed) {
 		t.Fatalf("a failed rollback: %v", err)
 	}
 	if len(h.Differs()) == 0 || h.Fault() == "" {
