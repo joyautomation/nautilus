@@ -35,7 +35,12 @@ on the right, and a **Check** button that tests your answer.
 2. [From a datasheet to a device map](/learn/io-and-protocols/datasheet-to-device-map/)
 3. [Serve your tags over OPC UA](/learn/io-and-protocols/opcua-first-browse/)
 
-More tracks follow: operator screens, deploying, and working with an AI
+## Operator screens
+
+1. [A screen in five minutes](/learn/operator-screens/screen-in-five-minutes/)
+2. [A button and a setpoint that write](/learn/operator-screens/a-button-that-writes/)
+
+More tracks follow: deploying, and working with an AI
 agent. Until they are here, these guides cover them:
 
 - Programming: [Your first program](/guides/first-program/), the
