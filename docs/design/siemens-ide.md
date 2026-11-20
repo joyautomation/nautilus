@@ -335,6 +335,9 @@ The rules for applying a spec:
     `None`, to `WithPassword`; `Unprotect` with the password moves it to
     `None`; `none` on a new CPU ends at `None`. The read-back still
     refuses any state TIA did not promise.
+    `Unprotect` with a wrong password is refused by TIA ("the provided
+    PLC Master secret is not matching", proven 2026-11-20), and the
+    protection stays on.
 - **Which CPU an apply uses** (#789). The agent reads the project's CPU
   before it writes anything, and decides:
   - The project holds no CPU: the apply removes every device and makes
@@ -367,6 +370,12 @@ The rules for applying a spec:
     A CPU left half-applied is never reused, even by saving and reopening
     the project. A successful upload replaces the project and cleans the
     session.
+  - Proven offline on the TIA machine (2026-11-20, a copy of the S2a
+    upload, through the agent): a wrong name and a `V3.1.3` firmware
+    refuse with the project's CPU in `data.cpu`; the CPU named as the
+    project holds it is taken over, its IO device kept and listed, and
+    the hardware compiles with 0 errors; a created project's second apply
+    of the same spec changes nothing.
 - **A password that may be set meets TIA's rules before any TIA call**
   (`password`): 10 to 120 characters (UTF-16 code units), at least one
   digit, one upper-case and one lower-case letter (ASCII classes, which
