@@ -750,7 +750,7 @@ claims:
       - go ./opcua/internal/uaserver TestMayTransfer
       - go ./opcua/internal/uaserver TestChangesAfterTheTaskReturnedChangeNothing
       - go ./tools/blackbox TestBlackbox/001-F31-services-unsupported
-  - id: OPC-028
+  - id: OPC-031
     claim: >-
       On a box installed by naut deploy, where there is no naut, the built
       controller runs the certificate commands as the command line when
