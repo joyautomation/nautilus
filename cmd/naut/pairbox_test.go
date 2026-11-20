@@ -175,6 +175,23 @@ func (r *boxRig) clone(box string) *node.Elector {
 	return r.el("clone")
 }
 
+// cloneDisk starts a third box running as member, with a copy of its
+// whole state directory (the voter state, the operator log and its mark)
+// and its env, as a cloned disk or VM would. On the member's own box it is
+// a MAC-spoofed clone: the box fingerprint matches, so the copied voter
+// state loads as its own (#1029 layer 2).
+func (r *boxRig) cloneDisk(member, box string) *node.Elector {
+	r.t.Helper()
+	dir := r.t.TempDir()
+	if err := os.CopyFS(dir, os.DirFS(r.env[member]["STATE_DIRECTORY"])); err != nil {
+		r.t.Fatal(err)
+	}
+	env := maps.Clone(r.env[member])
+	env["STATE_DIRECTORY"] = dir
+	r.start("clone", box, env, r.lns[2])
+	return r.el("clone")
+}
+
 // cloneCase runs the #1029 sequence after cut: A leads, its link to one
 // voter is cut, that voter's promise to A lapses, and a clone of A starts
 // that reaches every voter. Never two leaders, and the clone reports the
@@ -297,4 +314,53 @@ func TestCloneWithAnUnresolvableLinkNeverVotes(t *testing.T) {
 	if s := c.Status(); s.Commissioned || !strings.Contains(s.BoxChanged, "COPY") {
 		t.Fatalf("the clone: commissioned %v, box changed %q", s.Commissioned, s.BoxChanged)
 	}
+}
+
+// spoofedCloneCase is cloneCase for a MAC-spoofed clone of member (its box
+// fingerprint matches, so layer 1 can't see it): the voters relay their
+// running promises (#1029 layer 2), and the clone never leads while the
+// voter it needs and the one that knows better reach each other. A keeps
+// leading throughout: the clone's frames don't cost the original its
+// lease.
+func spoofedCloneCase(t *testing.T, member string, cut func(r *boxRig)) {
+	r := newBoxRig(t)
+	cut(r)
+	time.Sleep(2 * time.Second) // four leases: the cut voter's promise to A has run out
+	if !r.el("a").IsLeader() {
+		t.Fatal("A stopped leading after a single cut")
+	}
+	box := map[string]string{"a": "box-a", "b": "box-b"}[member]
+	c := r.cloneDisk(member, box)
+	els := map[string]*node.Elector{"a": r.el("a"), "b": r.el("b"), "clone": c}
+	led := watchOneLeader(t, 10*time.Second, els)
+	if led["clone"] {
+		t.Fatal("the clone led")
+	}
+	if !r.el("a").IsLeader() {
+		t.Fatal("A lost its lease with a clone running")
+	}
+}
+
+// Shape 1, MAC-spoofed: the A–B link down; A leads on {A, W}; a clone of A
+// reaches B. W relays its promise to A in its replies to B's probes.
+func TestSpoofedCloneOfTheLeaderWithTheABLinkDown(t *testing.T) {
+	spoofedCloneCase(t, "a", func(r *boxRig) {
+		r.links.cutLink("a", r.lns[1].Addr().String())
+		r.links.cutLink("b", r.lns[0].Addr().String())
+	})
+}
+
+// Shape 2, MAC-spoofed: A cut from W; A leads on {A, B}; a clone of A
+// reaches W. B relays its promise to A on its probes of W.
+func TestSpoofedCloneOfTheLeaderCutFromTheWitness(t *testing.T) {
+	spoofedCloneCase(t, "a", func(r *boxRig) { r.links.cutLink("a", r.wit) })
+}
+
+// Shape 3, MAC-spoofed: A cut from W; A leads on {A, B}; a clone of the
+// STANDBY B reaches W as b. Its copied voter grants it, and W's promise to
+// A has lapsed, so W alone would grant it too. B's probes of W relay that
+// b's own voter is promised to a: a real b never campaigns then, so W
+// refuses it (rule (b) of the layer 2 plan).
+func TestSpoofedCloneOfTheStandbyWithTheLeaderCutFromTheWitness(t *testing.T) {
+	spoofedCloneCase(t, "b", func(r *boxRig) { r.links.cutLink("a", r.wit) })
 }
