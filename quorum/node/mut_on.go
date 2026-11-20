@@ -20,6 +20,7 @@ var mutations = []string{
 	"lease_unchecked",            // a voter grants a request whose lease outlives its own promise
 	"witness_rebuilds_silently",  // the witness draws a new incarnation over a state file it can't read
 	"controller_lease_unchecked", // a controller's voter grants a request whose lease outlives its own promise
+	"reply_relay_dropped",        // a controller's voter never hears the promise a reply relays (#1029 layer 2)
 	"controller_write_ignored",   // a controller's failed state write is reported durable
 	"witness_write_ignored",      // the witness's failed state write is reported durable
 	"gate_ignores_health",        // the gate stays open for unhealthy scans or after Release

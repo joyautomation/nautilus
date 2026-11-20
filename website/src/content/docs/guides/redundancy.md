@@ -380,13 +380,23 @@ while the other controller is up, it is a copy of a controller: stop it.
 **Never change both controllers at once**: both would start
 uncommissioned, and only an operator can re-commission the pair.
 
-:::danger[Never clone a controller's disk]
 A clone that keeps both the original's machine-id and its network
-card's MAC address is not caught by the box check, and the voters' own
-check is not complete yet (tracked in
-[#1029](https://github.com/joyautomation/nautilus/issues/1029), which
-blocks lifting `experimental`). Build the second controller from a fresh
-install, never from a copy of the first.
+card's MAC address passes the box check. The voters catch it instead:
+each vote message carries the promise its sender's voter has made to the
+other controller, so the voter a clone needs knows the name is taken,
+refuses it, and raises `redundancy.duplicate-member` (#1029). This costs
+a takeover after the leader dies up to one more vote round: at most
+0.95 s at the default 2 s lease (`MaxRho × lease + 3/8 × lease`), and
+0.3 s at worst in our measurements.
+
+:::danger[Never clone a controller's disk]
+The voters' check holds while the two voters other than a broken link
+still reach each other. It does not cover a MAC-spoofed clone booted at
+the same moment as its original (a clone made before commissioning, or
+a power cycle of the whole site with a clone present), nor a clone plus
+a second network fault: either can lead beside the original. Build the second controller from a
+fresh install, never from a copy of the first. If
+`redundancy.duplicate-member` is raised, find the copy and stop it.
 :::
 
 Operator intent (substitute starts, stops and acknowledgements, alarm

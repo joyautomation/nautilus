@@ -177,7 +177,10 @@ func boxChangedMsg(changed []string) string {
 const dupEvery = 10 * time.Second
 
 // duplicateMsg is the duplicate-member report.
-func duplicateMsg(who quorum.NodeID) string {
+func duplicateMsg(who quorum.NodeID, cause quorum.DupCause) string {
+	if cause == quorum.DupVoterPromised {
+		return fmt.Sprintf("two processes claim to be %s: %s campaigned while its own voter was heard promised to another controller, which %s never does. A copy of %s is running: check NAUTILUS_NODE on every box (it differs per box) and that no box runs a clone of another's disk", who, who, who, who)
+	}
 	return fmt.Sprintf("two processes claim to be %s: a vote came from %s under a boot nonce other than the one this voter's running promise to %s was granted under. Check NAUTILUS_NODE on every box (it differs per box) and that no box runs a clone of another's disk", who, who, who)
 }
 
@@ -677,12 +680,21 @@ func (e *Elector) look() time.Duration {
 	may := e.mayCampaign(now) && (e.c.Leading(now) || !e.logHold(now, ls, hasLog))
 	req := e.c.Tick(now, from, until, healthy && !e.released && !e.yielding(now) && may)
 	p, msgs, probe := e.a.Tick(now)
+	if probe == nil {
+		probe = e.c.Probe(now) // the handshake's own probe serves for both
+	} else {
+		e.c.Probe(now)
+	}
 	var selfP *quorum.Persist
 	if req != nil {
 		// Its own voter first, in process.
 		var rs []quorum.Reply
 		selfP, rs = e.v.Handle(now, *req)
 		e.route(now, rs)
+		req.Promise = e.v.Relay(now)
+	}
+	if probe != nil {
+		probe.Promise = e.v.Relay(now)
 	}
 	e.after(now)
 	next := e.c.NextLook().Sub(now)
@@ -856,6 +868,13 @@ func (e *Elector) vote(to quorum.NodeID, base string, r quorum.Request) {
 func (e *Elector) reply(from quorum.NodeID, r quorum.Reply) {
 	e.mu.Lock()
 	now := e.now()
+	if !mut("reply_relay_dropped") {
+		e.v.Hear(now, from, r.Promise)
+	}
+	if quorum.IsRelayProbe(r) {
+		e.mu.Unlock()
+		return // the relay probe's reply is for the voter only
+	}
 	e.c.OnReply(now, r)
 	switch from {
 	case e.o.Peer:
@@ -952,14 +971,22 @@ func (e *Elector) serveVote(w http.ResponseWriter, r *http.Request) {
 	}
 	e.a.OnPeer(now)
 	e.peerAt, e.peerHeard = now, true
+	e.v.Hear(now, req.From, req.Promise)
 	e.c.Observe(req.Term)
 	quorum.YieldTo(now, e.v, e.c, req)
 	p, replies := e.v.Handle(now, req)
+	var push *quorum.Request
+	if e.v.RelayChanged(now) {
+		push = e.c.PushProbe(now) // the witness hears this new promise now, not at the next look
+		if push != nil {
+			push.Promise = e.v.Relay(now)
+		}
+	}
 	if n, who := e.v.Duplicates(); n != e.dupSeen {
 		e.dupSeen = n
 		if t := time.Now(); t.Sub(e.dupAt) >= dupEvery {
 			e.dupAt = t
-			msg := duplicateMsg(who)
+			msg := duplicateMsg(who, e.v.DuplicateCause())
 			e.event(Event{Kind: EventDuplicateMember, Detail: msg})
 			e.log.Error("redundancy: " + msg)
 		}
@@ -972,8 +999,11 @@ func (e *Elector) serveVote(w http.ResponseWriter, r *http.Request) {
 	e.after(now)
 	e.mu.Unlock()
 	e.w.ask(p)
+	if push != nil {
+		e.vote(e.o.Witness, e.wit, *push)
+	}
 	e.poke()
-	answer(w, r, replies, ch, e.o.Lease, func() {
+	answer(w, r, replies, ch, e.o.Lease, e.stamp, func() {
 		e.mu.Lock()
 		if e.waiters[keyOf(req)] == ch {
 			delete(e.waiters, keyOf(req))
@@ -982,11 +1012,22 @@ func (e *Elector) serveVote(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// stamp sets the voter's running promise on a reply as it leaves
+// (quorum.Voter.Relay): a grant held for its write leaves later than
+// Handle made it.
+func (e *Elector) stamp(rep quorum.Reply) quorum.Reply {
+	e.mu.Lock()
+	rep.Promise = e.v.Relay(e.now())
+	e.mu.Unlock()
+	return rep
+}
+
 // answer writes a voter's reply: the one Handle gave at once, or the grant
 // its write releases, waited for at most a lease; 204 when there is none.
-func answer(w http.ResponseWriter, r *http.Request, replies []quorum.Reply, ch chan quorum.Reply, lease time.Duration, drop func()) {
+// stamp sets the voter's relayed promise as the reply leaves.
+func answer(w http.ResponseWriter, r *http.Request, replies []quorum.Reply, ch chan quorum.Reply, lease time.Duration, stamp func(quorum.Reply) quorum.Reply, drop func()) {
 	if len(replies) > 0 {
-		b, _ := replies[0].MarshalBinary()
+		b, _ := stamp(replies[0]).MarshalBinary()
 		writeFrame(w, b)
 		return
 	}
@@ -998,7 +1039,7 @@ func answer(w http.ResponseWriter, r *http.Request, replies []quorum.Reply, ch c
 	defer t.Stop()
 	select {
 	case rep := <-ch:
-		b, _ := rep.MarshalBinary()
+		b, _ := stamp(rep).MarshalBinary()
 		writeFrame(w, b)
 		return
 	case <-r.Context().Done():

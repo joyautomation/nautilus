@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/crc32"
+	"time"
 )
 
 // NodeID names a voter: a controller or the witness.
@@ -19,12 +20,26 @@ type NodeID string
 // Renewal marks a request sent by a leading candidate to renew its lease:
 // a standby's voter notes it even when it refuses it, so the standby
 // doesn't campaign under a live leader (Voter.LeaderSeen).
+// Promise is the sender's own voter's running promise (Relay), relayed
+// so the other voters hear it (#1029 layer 2).
 type Request struct {
 	From    NodeID
 	Term    uint64
 	Nonce   uint64
 	ID      uint64
 	Renewal bool
+	Promise Relay
+}
+
+// Relay is a voter's running promise to ANOTHER node, as it relays it on
+// every vote frame it sends (#1029 layer 2): the grantee, the boot nonce
+// the promise was granted under, and how long it still runs on the
+// sender's clock when the frame leaves. The zero Relay: no such promise.
+// A voter relays only its own promise, never one it heard.
+type Relay struct {
+	To    NodeID
+	Nonce uint64
+	Left  time.Duration
 }
 
 // Reply answers one Request. Promised is the highest term the voter has
@@ -40,6 +55,7 @@ type Reply struct {
 	Granted     bool
 	Promised    uint64
 	Incarnation uint64
+	Promise     Relay // the voter's running promise to another node (Relay)
 }
 
 // AdoptKind is what an Adopt message says.
@@ -137,7 +153,25 @@ func (r Request) MarshalBinary() ([]byte, error) {
 	b = binary.BigEndian.AppendUint64(b, r.Nonce)
 	b = binary.BigEndian.AppendUint64(b, r.ID)
 	b = append(b, boolByte(r.Renewal))
+	b = r.Promise.put(b)
 	return sealCRC(b), nil
+}
+
+func (p Relay) put(b []byte) []byte {
+	b = putString(b, string(p.To))
+	b = binary.BigEndian.AppendUint64(b, p.Nonce)
+	return binary.BigEndian.AppendUint64(b, uint64(max(p.Left, 0)))
+}
+
+// relay reads a Relay; a Left beyond int64 is corrupt.
+func (r *reader) relay() Relay {
+	p := Relay{To: NodeID(r.str()), Nonce: r.u64()}
+	left := r.u64()
+	if left > 1<<62 {
+		r.bad = true
+	}
+	p.Left = time.Duration(left)
+	return p
 }
 
 func boolByte(v bool) byte {
@@ -158,6 +192,7 @@ func (r Reply) MarshalBinary() ([]byte, error) {
 	b = append(b, boolByte(r.Granted))
 	b = binary.BigEndian.AppendUint64(b, r.Promised)
 	b = binary.BigEndian.AppendUint64(b, r.Incarnation)
+	b = r.Promise.put(b)
 	return sealCRC(b), nil
 }
 
@@ -250,6 +285,7 @@ func (r *Request) UnmarshalBinary(b []byte) error {
 	}
 	v := Request{From: NodeID(rd.str()), Term: rd.u64(), Nonce: rd.u64(), ID: rd.u64()}
 	v.Renewal = rd.boolean()
+	v.Promise = rd.relay()
 	if rd.bad || len(rd.b) != 0 {
 		return ErrCorrupt
 	}
@@ -269,6 +305,7 @@ func (r *Reply) UnmarshalBinary(b []byte) error {
 	v := Reply{From: NodeID(rd.str()), To: NodeID(rd.str()), Term: rd.u64(), Nonce: rd.u64(), ID: rd.u64()}
 	v.Granted = rd.boolean()
 	v.Promised, v.Incarnation = rd.u64(), rd.u64()
+	v.Promise = rd.relay()
 	if rd.bad || len(rd.b) != 0 {
 		return ErrCorrupt
 	}

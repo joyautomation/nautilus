@@ -49,7 +49,41 @@ type Voter struct {
 	grantNonce uint64
 	duplicates uint64
 	dupFrom    NodeID
+	dupCause   DupCause
+
+	// heard are the running promises other voters relayed (Hear), in
+	// memory only: a restarted voter grants nothing for a lease, by when
+	// every promise it had heard of has run out (#1029 layer 2).
+	heard        []heardPromise
+	relayRefused uint64
+	// pushedTo, pushedNonce: the promise RelayChanged last reported.
+	pushedTo    NodeID
+	pushedNonce uint64
 }
+
+// heardPromise is a promise voter by relayed: to grantee to under nonce,
+// counted a duplicate's sign until strict (receipt + left), and refusing
+// until until (left stretched by the clock-rate margin).
+type heardPromise struct {
+	by, to        NodeID
+	nonce         uint64
+	strict, until Instant
+}
+
+// DupCause says why the voter's last duplicate was refused (Duplicates).
+type DupCause uint8
+
+const (
+	// DupNonce: the name came under a boot nonce other than the one a
+	// running promise to it was granted under, this voter's own or one it
+	// heard relayed (design §2, #1028).
+	DupNonce DupCause = iota
+	// DupVoterPromised: the name campaigned while its own voter was heard
+	// promised to another node. A real controller never campaigns then
+	// (Candidate.Tick waits out its voter's promise), so another process
+	// runs under its name (#1029 layer 2, rule (b)).
+	DupVoterPromised
+)
 
 type heldGrant struct {
 	need  uint64
@@ -129,6 +163,127 @@ func NewWitness(self NodeID, lease time.Duration, st VoterState, now Instant, dr
 // two processes claim one member (design §2). The driver raises
 // redundancy.duplicate-member when it rises.
 func (v *Voter) Duplicates() (uint64, NodeID) { return v.duplicates, v.dupFrom }
+
+// DuplicateCause is why the last duplicate Duplicates counts was refused.
+func (v *Voter) DuplicateCause() DupCause { return v.dupCause }
+
+// Relay returns this voter's running promise to ANOTHER node at now, for
+// the driver to stamp on every vote frame this node sends as the frame
+// leaves (#1029 layer 2): the zero Relay when the promise is to its own
+// candidate, has run out, or is not known (the restart wait). A promise to
+// its own candidate stays off the wire: the other voters hear that from
+// the candidate's own requests, and a clone's self-grant must never reach
+// them as a promise.
+func (v *Voter) Relay(now Instant) Relay {
+	if now >= v.promiseUntil || v.st.GrantedTo == "" || (v.st.GrantedTo == v.self && !mut("relay_self_promise")) {
+		return Relay{}
+	}
+	return Relay{To: v.st.GrantedTo, Nonce: v.grantNonce, Left: v.promiseUntil.Sub(now)}
+}
+
+// RelayChanged reports, once, that this voter's relayed promise names
+// another grantee or boot than when it last reported: it has just promised
+// another node (a new leader, or the same name's new boot). The driver then
+// pushes a probe to the witness (Candidate.PushProbe).
+func (v *Voter) RelayChanged(now Instant) bool {
+	r := v.Relay(now)
+	if r.To == "" || (r.To == v.pushedTo && r.Nonce == v.pushedNonce) {
+		return false
+	}
+	v.pushedTo, v.pushedNonce = r.To, r.Nonce
+	return true
+}
+
+// Hear takes the running promise voter by relayed on a frame received at
+// now (#1029 layer 2). The driver calls it for every vote frame from
+// another voter, a request or a reply, before Handle: a probe or a frame
+// in the restart wait still tells this voter what by has promised.
+//
+// The promise is held until receipt + left·(1 + MaxRho): a refusal must
+// outlast the original promise in real time, whatever the two clocks'
+// rates. It never replaces what this voter already holds: its own running
+// promise to the same name under another nonce, or one another voter
+// relayed earlier, wins, and the conflict is counted as a duplicate. A
+// newer relay from the same voter about the same name replaces its own
+// earlier one: a voter holds one promise at a time.
+func (v *Voter) Hear(now Instant, by NodeID, p Relay) {
+	v.prune(now)
+	if mut("relay_ignored") || by == v.self || p.To == "" || p.Nonce == 0 || p.Left <= 0 {
+		return
+	}
+	left := min(p.Left, max(v.lease, v.st.Lease)) // no promise runs longer than a lease
+	h := heardPromise{by: by, to: p.To, nonce: p.Nonce, strict: now.Add(left),
+		until: now.Add(time.Duration(float64(left) * (1 + MaxRho)))}
+	if mut("relay_no_margin") {
+		h.until = h.strict
+	}
+	if now < v.promiseUntil && v.st.GrantedTo == p.To && v.grantNonce != p.Nonce && !mut("relay_last_wins") {
+		v.duplicate(now < h.strict, p.To, DupNonce)
+		return
+	}
+	for _, x := range v.heard {
+		if x.by != by && x.to == p.To && x.nonce != p.Nonce && !mut("relay_last_wins") {
+			v.duplicate(now < x.strict, p.To, DupNonce)
+			return // the first heard wins while it runs
+		}
+	}
+	keep := v.heard[:0]
+	for _, x := range v.heard {
+		if x.by == by && x.to == p.To {
+			// The same voter's promise to the same name: the newer stands.
+			if x.nonce == p.Nonce {
+				h.strict, h.until = max(h.strict, x.strict), max(h.until, x.until)
+			}
+			continue
+		}
+		keep = append(keep, x)
+	}
+	v.heard = append(keep, h)
+}
+
+// prune drops the heard promises that have run out at now.
+func (v *Voter) prune(now Instant) {
+	keep := v.heard[:0]
+	for _, x := range v.heard {
+		if now < x.until {
+			keep = append(keep, x)
+		}
+	}
+	v.heard = keep
+}
+
+// heardRefuses reports whether a heard promise refuses r at now, and
+// whether that counts as a duplicate (inside the promise itself, not only
+// the clock-rate margin after it, so a fast real restart raises nothing).
+// (a) A promise to r.From under another nonce: another process holds that
+// name. (b) A promise BY r.From's own voter to another node: a real
+// controller doesn't campaign while its own voter is promised elsewhere,
+// so this is another process under its name (#1029 layer 2).
+func (v *Voter) heardRefuses(now Instant, r Request) (refuse, counts bool, cause DupCause) {
+	v.prune(now)
+	for _, x := range v.heard {
+		switch {
+		case x.to == r.From && x.nonce != r.Nonce:
+			cause = DupNonce
+		case x.by == r.From && x.to != r.From && !mut("relay_voter_rule_off"):
+			cause = DupVoterPromised
+		default:
+			continue
+		}
+		refuse = true
+		if now < x.strict || mut("relay_tail_counted") {
+			return true, true, cause
+		}
+	}
+	return refuse, false, cause
+}
+
+func (v *Voter) duplicate(counts bool, who NodeID, cause DupCause) {
+	if counts {
+		v.duplicates++
+		v.dupFrom, v.dupCause = who, cause
+	}
+}
 
 // State returns the voter's in-memory state.
 func (v *Voter) State() VoterState { return v.st }
@@ -227,8 +382,11 @@ func (v *Voter) Handle(now Instant, r Request) (*Persist, []Reply) {
 		// disk). A real restart of that name waits out its restart wait
 		// first, by when this promise has run out, so this costs a restart
 		// nothing (#1028 review).
-		v.duplicates++
-		v.dupFrom = r.From
+		v.duplicate(true, r.From, DupNonce)
+		return nil, refuse
+	case !(active && v.st.GrantedTo == r.From && r.Nonce == v.grantNonce) && v.refusedByHeard(now, r):
+		// A promise another voter relayed refuses it (#1029 layer 2). This
+		// voter's own running promise to this very boot wins: it renews.
 		return nil, refuse
 	case r.Term == v.st.Promised && v.st.GrantedTo != r.From:
 		return nil, refuse // this term is someone else's
@@ -278,6 +436,21 @@ func (v *Voter) Persisted(seq uint64, ok bool) []Reply {
 	}
 	return out
 }
+
+// refusedByHeard is heardRefuses, counting the refusal and the duplicate
+// it finds.
+func (v *Voter) refusedByHeard(now Instant, r Request) bool {
+	refuse, counts, cause := v.heardRefuses(now, r)
+	if refuse {
+		v.relayRefused++
+		v.duplicate(counts, r.From, cause)
+	}
+	return refuse
+}
+
+// RelayRefused counts the requests a heard promise refused (#1029 layer
+// 2), duplicates and refusals in a heard promise's clock-rate margin both.
+func (v *Voter) RelayRefused() uint64 { return v.relayRefused }
 
 func (v *Voter) reply(r Request, granted bool) Reply {
 	return Reply{From: v.self, To: r.From, Term: r.Term, Nonce: r.Nonce, ID: r.ID, Granted: granted,

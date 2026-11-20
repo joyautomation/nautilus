@@ -16,10 +16,13 @@ type Record struct {
 	until      time.Duration
 	clocks     [nNodes]*Clock
 
-	gates  [2][]gateSnap // A and B, after every call into the candidate
-	Grants []Grant       // the ledger: every grant a real Voter emitted
-	starts []voterStart
-	faults []faultEdge
+	gates  [nNodes][]gateSnap // each controller (a clone too), after every call into the candidate
+	Grants []Grant            // the ledger: every grant a real Voter emitted
+	// relayRefused counts the requests the voters refused on a promise
+	// another voter relayed (#1029 layer 2).
+	relayRefused uint64
+	starts       []voterStart
+	faults       []faultEdge
 
 	// Writes are what the simulated device received (I2): a controller
 	// writes it on each scan while its gate is open.
@@ -55,7 +58,7 @@ type Record struct {
 
 	// counts is, per controller, what the protocol says it counts
 	// (countTruth in sim.go), after each change.
-	counts [2][]countSnap
+	counts [nNodes][]countSnap
 	// stops are when each node's process stopped (crashed, or a Start
 	// fault ended).
 	stops [nNodes][]time.Duration
@@ -92,7 +95,7 @@ func (r *Record) count(a Addr, at time.Duration, c countState) {
 // countsAt reports whether controller a counted witness incarnation inc at
 // global time t, by the protocol's rules (the quiet period included).
 func (r *Record) countsAt(a Addr, inc uint64, t time.Duration) bool {
-	if a != A && a != B || inc == 0 {
+	if !isController(a) || inc == 0 {
 		return false
 	}
 	snaps := r.counts[a]
@@ -388,7 +391,7 @@ func (iv Interval) String() string {
 // snapshot's lease end mapped through the node's whole clock history.
 func (r *Record) Gates() []Interval {
 	var out []Interval
-	for a := A; a <= B; a++ {
+	for _, a := range []Addr{A, B, CA, CB} {
 		snaps := r.gates[a]
 		var cur *Interval
 		for i, s := range snaps {
@@ -437,7 +440,7 @@ func (r *Record) promiseEnd(i int) time.Duration {
 // then, past its quiet period (design §3.1). Z never counts.
 func (r *Record) counted(g Grant) bool {
 	switch g.Voter {
-	case A, B:
+	case A, B, CA, CB: // a clone's voter is the original's copy: its name counts
 		return true
 	case W, W2:
 		return g.Recv > 0 && r.countsAt(g.To, g.Inc, g.Recv)
@@ -450,7 +453,7 @@ func slot(a Addr) Addr {
 	if a == W2 {
 		return W
 	}
-	return a
+	return original(a)
 }
 
 // Violation is one oracle failing.

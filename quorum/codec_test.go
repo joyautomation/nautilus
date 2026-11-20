@@ -3,16 +3,17 @@ package quorum
 import (
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestMessageRoundTrip(t *testing.T) {
-	rq := Request{From: "A", Term: 7, Nonce: 0xA1, ID: 99, Renewal: true}
+	rq := Request{From: "A", Term: 7, Nonce: 0xA1, ID: 99, Renewal: true, Promise: Relay{To: "B", Nonce: 0xB2, Left: 1500 * time.Millisecond}}
 	b, _ := rq.MarshalBinary()
 	var got Request
 	if err := got.UnmarshalBinary(b); err != nil || got != rq {
 		t.Fatalf("request: %+v %v", got, err)
 	}
-	rp := Reply{From: "W", To: "A", Term: 7, Nonce: 0xA1, ID: 99, Granted: true, Promised: 7, Incarnation: 42}
+	rp := Reply{From: "W", To: "A", Term: 7, Nonce: 0xA1, ID: 99, Granted: true, Promised: 7, Incarnation: 42, Promise: Relay{To: "A", Nonce: 0xA0, Left: time.Second}}
 	b, _ = rp.MarshalBinary()
 	var gr Reply
 	if err := gr.UnmarshalBinary(b); err != nil || gr != rp {
@@ -27,7 +28,7 @@ func TestMessageRoundTrip(t *testing.T) {
 // Every truncation and every single-bit flip of a frame is refused whole
 // (F31, the vote half).
 func TestMessageCorruptionRefused(t *testing.T) {
-	b, _ := Reply{From: "W", To: "A", Term: 7, Nonce: 0xA1, ID: 99, Granted: true, Promised: 7, Incarnation: 42}.MarshalBinary()
+	b, _ := Reply{From: "W", To: "A", Term: 7, Nonce: 0xA1, ID: 99, Granted: true, Promised: 7, Incarnation: 42, Promise: Relay{To: "B", Nonce: 3, Left: 9}}.MarshalBinary()
 	for n := 0; n < len(b); n++ {
 		var r Reply
 		if err := r.UnmarshalBinary(b[:n]); err == nil {

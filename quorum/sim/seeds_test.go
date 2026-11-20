@@ -19,6 +19,10 @@ const (
 	profDefault profile = iota
 	// profFreeze adds a frozen controller clock (F22b), an expected breach.
 	profFreeze
+	// profClone: a MAC-spoofed clone of A or B (the box check can't see
+	// it) while one vote link is cut, the relay's stated condition: the
+	// other two links stay up (#1029 layer 2, cloneFaults).
+	profClone
 )
 
 // bound is how soon after the last heal a leader must exist (I6), at a
@@ -59,6 +63,11 @@ func randomRun(seed uint64, p profile) Options {
 		case 1:
 			f.From, f.To = l.y, l.x
 		}
+	}
+	if p == profClone {
+		o.Faults = cloneFaults(seed, o)
+		o.Until = healAt(o) + bound + 6*lease
+		return o
 	}
 	n := 1 + r.IntN(3)
 	for range n {

@@ -54,6 +54,15 @@ var Mutations = []string{
 	"lease_raise_volatile",        // a longer lease after a restart isn't written before an unchanged grant (#1021 re-review)
 	"campaign_in_restart_wait",    // a controller campaigns while its own voter is in its restart wait (#1021 review)
 	"duplicate_member_granted",    // a voter grants a name under another boot nonce while that name's promise runs (#1028 review)
+	"relay_ignored",               // a voter ignores the promises other voters relay (#1029 layer 2)
+	"relay_voter_rule_off",        // a name is granted while its own voter is heard promised elsewhere (#1029 layer 2, rule (b))
+	"relay_self_promise",          // a voter relays its promise to its own candidate (a clone's self-grant reaches the voters)
+	"relay_last_wins",             // a relayed promise overrides the voter's own or one heard earlier
+	"relay_no_margin",             // a heard promise is held only for its time left, without the clock-rate margin
+	"relay_tail_counted",          // a refusal in the clock-rate margin after a heard promise counts as a duplicate
+	"standby_no_probe",            // a standby doesn't probe the witness every look
+	"relay_not_pushed",            // a voter's new promise to another node reaches the witness only at the next look
+	"retry_after_refusal_only",    // a refused campaign whose own grant came back last waits out a lease (#1029 layer 2)
 	// The driver's (quorum/node, #710 PR 3a): switched on there, listed
 	// here so this init accepts them.
 	"gate_on_tick",               // the gate is judged on the elector's look, not when it is read
@@ -81,6 +90,7 @@ var Mutations = []string{
 	"config_differs_campaigns",   // a controller campaigns while its peer's hello names another configuration of the pair
 	"hello_duplicate_unseen",     // two processes behind the peer's name (nonces N1, N2, N1 at the hello) raise nothing
 	"box_unchecked",              // a controller votes from a state file written on another box (a cloned disk, #1029)
+	"reply_relay_dropped",        // a controller's voter never hears the promise a reply relays (#1029 layer 2)
 	"box_wait_skipped",           // a controller whose box can't be read yet votes on the stored identity (#1034 review)
 	// Outside the quorum tree, listed so this init accepts them when a
 	// package that imports quorum runs under one (the runner's pkgs rows).

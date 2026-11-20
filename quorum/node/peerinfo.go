@@ -133,7 +133,7 @@ func (e *Elector) heard(pi peerInfo) {
 		e.helloDups++
 		if t := time.Now(); t.Sub(e.helloDupAt) >= dupEvery {
 			e.helloDupAt = t
-			msg := duplicateMsg(e.o.Peer)
+			msg := duplicateMsg(e.o.Peer, quorum.DupNonce)
 			e.event(Event{Kind: EventDuplicateMember, Detail: msg})
 			e.log.Error("redundancy: " + msg + " (seen at the hello)")
 		}
