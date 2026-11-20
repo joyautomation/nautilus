@@ -53,7 +53,6 @@ var Mutations = []string{
 	"restart_wait_current_lease",  // a voter restarted with a shorter lease waits only that one (#1021 review)
 	"lease_raise_volatile",        // a longer lease after a restart isn't written before an unchanged grant (#1021 re-review)
 	"campaign_in_restart_wait",    // a controller campaigns while its own voter is in its restart wait (#1021 review)
-	"duplicate_member_granted",    // a voter grants a name under another boot nonce while that name's promise runs (#1028 review)
 	"relay_ignored",               // a voter ignores the promises other voters relay (#1029 layer 2)
 	"relay_voter_rule_off",        // a name is granted while its own voter is heard promised elsewhere (#1029 layer 2, rule (b))
 	"relay_self_promise",          // a voter relays its promise to its own candidate (a clone's self-grant reaches the voters)
@@ -69,6 +68,7 @@ var Mutations = []string{
 	"yield_before_refusal",        // a voter yields its own round to a request it then refuses (#1079 review)
 	"dup_strict_ignores_delay",    // a relayed promise counts a conflict as a duplicate up to receipt+left, so a fast restart on a slow link raises a false alarm
 	"rule_b_counts_own_boot",      // rule (b) counts a duplicate for a relay from the very boot it refuses (a reordered frame: a false alarm)
+	"same_term_other_boot",        // a voter grants a term it granted to one boot of a name to another boot of it (#1029 step 1)
 	"retry_after_refusal_only",    // a refused campaign whose own grant came back last waits out a lease (#1029 layer 2)
 	// The driver's (quorum/node, #710 PR 3a): switched on there, listed
 	// here so this init accepts them.

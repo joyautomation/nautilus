@@ -608,7 +608,7 @@ func TestPairCopiedEnvWithKeptStateRefused(t *testing.T) {
 // The voters bind a name to the boot nonce its running promise was
 // granted under: B and the witness refuse the clone while A renews, so
 // the two never lead at once, and B reports two processes named a
-// (duplicate_member_granted turns this red).
+// (dup_name_ignored turns this red, since #1029 step 1).
 func TestPairClonedMemberNeverLeadsTwice(t *testing.T) {
 	r := newDupRig(t)
 	cloneDir := t.TempDir()

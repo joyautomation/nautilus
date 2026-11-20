@@ -154,7 +154,8 @@ func TestCloneRaceSeeds(t *testing.T) {
 // richCloneRun draws a clone schedule with extra faults: a clone of A or
 // B booted with its original or later, and one to three of: a cut (one
 // way or both), a restart of any member, an unhealthy controller, a delay
-// within the rule, or loss.
+// within the rule, or loss. It never isolates the original while its
+// clone runs: that split is outside the claim, and measured on its own.
 func richCloneRun(seed uint64) Options {
 	o := randomRun(seed, profClone)
 	r := rand.New(rand.NewPCG(seed, 0x7a7a7a))
@@ -181,8 +182,49 @@ func richCloneRun(seed uint64) Options {
 		}
 		o.Faults = append(o.Faults, f)
 	}
+	// Within the claim: no split separates the clone from its original. A
+	// cut or restart that would leave the original unable to reach both
+	// other voters while the clone runs becomes a delay instead
+	// (TestMeasureCloneSplit is that case).
+	for i := 1; i < len(o.Faults); i++ {
+		if isolatesWithClone(o, i) {
+			orig := original(c)
+			o.Faults[i] = Fault{Kind: Delay, At: o.Faults[i].At, For: o.Faults[i].For, From: orig, To: W, Both: true, Value: int64(dur(ms, lease/8))}
+		}
+	}
 	o.Until = healAt(o) + bound + 6*lease
 	return o
+}
+
+// isolatesWithClone reports whether fault i, with the others, leaves the
+// clone's original unable to reach both its peer and the witness (a cut
+// of the link, or the other end down) at some instant while the clone
+// runs.
+func isolatesWithClone(o Options, i int) bool {
+	c := o.Faults[0]
+	orig := original(c.Node)
+	cuts := func(f Fault, x, y Addr) bool {
+		return (f.Kind == Cut && ((f.From == x && f.To == y) || (f.From == y && f.To == x))) ||
+			(f.Kind == Crash && f.Node == y)
+	}
+	f := o.Faults[i]
+	for j, g := range o.Faults[1:] {
+		if j+1 == i {
+			continue
+		}
+		for _, pair := range [][2]Fault{{f, g}, {g, f}} {
+			a, b := pair[0], pair[1]
+			if !(cuts(a, orig, peerOf(orig)) && cuts(b, orig, W)) {
+				continue
+			}
+			from := max(a.At, b.At, c.At)
+			to := min(a.At+a.For, b.At+b.For, c.At+c.For)
+			if from < to {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // cloneRace is seed's network, disk and clocks with a clone of A or B

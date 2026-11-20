@@ -521,14 +521,6 @@ func (v *Voter) Handle(now Instant, r Request) (*Persist, []Reply) {
 	}
 	active := now < v.promiseUntil
 	switch {
-	case active && v.st.GrantedTo == r.From && r.Nonce != v.grantNonce && !mut("duplicate_member_granted"):
-		// The name holds a running promise under another boot nonce: two
-		// processes claim it (an env file copied to the other box, a cloned
-		// disk). A real restart of that name waits out its restart wait
-		// first, by when this promise has run out, so this costs a restart
-		// nothing (#1028 review).
-		v.duplicate(true, r.From, DupNonce)
-		return nil, refuse
 	case !(active && v.st.GrantedTo == r.From && r.Nonce == v.grantNonce) && v.refusedByHeard(now, r):
 		// A promise another voter relayed refuses it (#1029 layer 2). This
 		// voter's own running promise to this very boot wins: it renews.
@@ -536,6 +528,12 @@ func (v *Voter) Handle(now Instant, r Request) (*Persist, []Reply) {
 	case v.dupRefusedCount(now, r, active):
 		// Two boots of this name are live: no new grant to it, to either
 		// boot (#1029 step 1).
+		return nil, refuse
+	case r.Term == v.st.Promised && v.st.GrantedTo == r.From && v.grantNonce != 0 && r.Nonce != v.grantNonce && !mut("same_term_other_boot"):
+		// This term went to another boot of this name: a term is one
+		// process's, so the other asks a higher one (#1029 step 1: a clone
+		// and its original, one after the other). A plain restart asks
+		// above it anyway, from the Promised in this refusal.
 		return nil, refuse
 	case r.Term == v.st.Promised && v.st.GrantedTo != r.From:
 		return nil, refuse // this term is someone else's

@@ -208,7 +208,7 @@ case caught it. A mutation joins the nightly run in the PR that builds the rule 
 | the term-jump cap is 2^20, so an isolated controller is refused for good | design §6.2 | 3a (re-review) |
 | the client-token answer binds no names or direction | design §6.1 | 3a (review) |
 | a controller campaigns while its own voter is in its restart wait | design §3.1, the restart wait | restart hold |
-| a voter grants a name under another boot nonce while that name's promise runs (two processes as one member) | design §2, §6.2 | 3b-1 (review, `duplicate_member_granted`) |
+| a voter grants a name under another boot nonce while that name's promise runs (two processes as one member) | design §2, §6.2 | 3b-1 (review); since #1029 step 1 the name refusal (`dup_name_ignored`), which covers it whole |
 | a controller starts over a state file another member, or another pair, wrote | design §2, §6.2 | 3b-1 (review, `state_owner_unchecked`) |
 | a controller campaigns while its peer's hello names another configuration of the pair | design §2 (F30) | 3b-2b (`config_differs_campaigns`) |
 | two processes behind the peer's name (nonces N1, N2, N1 at the hello) raise nothing | design §2 (F30) | 3b-2b (`hello_duplicate_unseen`) |
@@ -230,6 +230,7 @@ case caught it. A mutation joins the nightly run in the PR that builds the rule 
 | a voter yields its own round to a request it then refuses (`TestNoYieldToARequestTheVoterRefuses`) | design §2, #1029 step 1 | #1029 step 1 (`yield_before_refusal`) |
 | a relayed promise counts a conflict as a duplicate up to receipt + left, so a restart on a slow link raises a false alarm (`TestASingleRestartRaisesNoDuplicate`) | design §2, #1029 step 1 | #1029 step 1 (`dup_strict_ignores_delay`) |
 | rule (b) counts a duplicate for a relay from the very boot it refuses, a reordered frame (`TestRuleBCountsOnlyAnotherBoot`, `TestASingleRestartRaisesNoDuplicate`) | design §2, #1029 step 1 | #1029 step 1 (`rule_b_counts_own_boot`) |
+| a voter grants a term it granted to one boot of a name to another boot of it, so one term goes to two processes (`TestATermIsNotGrantedToAnotherBoot`, `TestATermGoesToOneBootOfAName`) | design §2, #1029 step 1 | #1029 step 1 (`same_term_other_boot`) |
 | a refused campaign whose own voter's grant came back after the refusal waits out a whole lease (a stale relay then costs a takeover a lease; red in `TestStaleRelayEndsAndTheStandbyLeads`) | design §4.5, R | #1029 layer 2 (`retry_after_refusal_only`) |
 | no switch hold-off: a stray copy answering on and off switches the pair every lease | design §3.1, when a switch is proposed | 2 (handshake) |
 | a restarted controller counts its adopted incarnation at once (no quiet period owed) | design §3.1, the quiet period | 2 (handshake) |

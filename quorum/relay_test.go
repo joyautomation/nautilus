@@ -380,3 +380,22 @@ func TestRuleBCountsOnlyAnotherBoot(t *testing.T) {
 		t.Fatalf("another boot of B counted %d duplicates, want 1", n)
 	}
 }
+
+// A term granted to one boot of a name goes to no other boot of it, even
+// once that promise has run out: a term is one process's (#1029 step 1).
+// The other boot is told the term, and asks above it.
+func TestATermIsNotGrantedToAnotherBoot(t *testing.T) {
+	v := ready("A")
+	now := at(lease)
+	if !grant(t, v, now, Request{From: "B", Term: 30, Nonce: 0xC, ID: 1}) {
+		t.Fatal("grant refused")
+	}
+	later := now.Add(2 * lease) // the promise has run out
+	p, out := v.Handle(later, Request{From: "B", Term: 30, Nonce: 0xB, ID: 2})
+	if p != nil || len(out) != 1 || out[0].Granted || out[0].Promised != 30 {
+		t.Fatalf("term 30 again, to another boot of B: %+v %+v", p, out)
+	}
+	if !grant(t, v, later, Request{From: "B", Term: 31, Nonce: 0xB, ID: 3}) {
+		t.Fatal("refused the other boot the next term")
+	}
+}

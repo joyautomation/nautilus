@@ -220,3 +220,18 @@ func TestStoppingTheCloneBringsALeaderBack(t *testing.T) {
 	}
 	t.Logf("a real controller leads within %v of the clone stopping (bound %v = %.1f leases)", worst, cloneStopBound, float64(cloneStopBound)/float64(lease))
 }
+
+// A clone of B reaches A during an A–B cut and wins term 30 there; its
+// promise runs out, the cut heals, and the real B asks A for term 30.
+// Granting it would give one term to two processes (I4): a term once
+// granted to one boot of a name goes to no other (same_term_other_boot).
+func TestATermGoesToOneBootOfAName(t *testing.T) {
+	pinned(t, Options{Seed: 8657, Delay: 203896, Jitter: 138993, Fsync: 628442, InPlace: false,
+		Rates: [nNodes]PPM{995580, 1002135, 1000392}, Start: [3]time.Duration{1801308744, 1698880241, 664275251}, Until: 37700850472,
+		Faults: []Fault{
+			{Kind: Clone, At: 1698880241, For: 14825025687, Node: CB},
+			{Kind: Cut, At: 10409914751, For: 3257641725, From: A, To: W, Both: true},
+			{Kind: Delay, At: 9267688312, For: 702532041, From: B, To: W, Both: true, Value: 68955457},
+			{Kind: Cut, At: 9467916718, For: 9232933754, From: A, To: B, Both: true},
+		}})
+}

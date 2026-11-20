@@ -137,7 +137,6 @@ var table = []mutation{
 	// The #1028 review: two processes under one member's name.
 	// cmd/naut's TestPairClonedMemberNeverLeadsTwice and
 	// TestPairCopiedEnvWithKeptStateRefused catch them end to end too.
-	{"duplicate_member_granted", []string{"TestVoterRefusesANameUnderAnotherBootNonce"}},
 	{"state_owner_unchecked", []string{"TestStateFileBoundToItsOwner"}},
 	// #710 PR 3b-2b: the hello's peer info (F30). cmd/naut's
 	// TestPairConfigDiffersHoldsCampaigns catches the first end to end.
@@ -160,8 +159,11 @@ var table = []mutation{
 	// needs refusing it. cmd/naut's TestSpoofedClone* lead twice under
 	// relay_ignored (all three shapes), relay_voter_rule_off (the clone of
 	// the standby) and standby_no_probe (both shapes cut from the witness).
-	{"relay_ignored", []string{"TestVoterRefusesANameAHeardPromiseHoldsUnderAnotherNonce", "TestVoterRefusesANameWhoseOwnVoterIsHeardPromisedElsewhere", "TestCloneSeeds"}},
-	{"relay_voter_rule_off", []string{"TestVoterRefusesANameWhoseOwnVoterIsHeardPromisedElsewhere", "TestCloneSeeds"}},
+	// Since #1029 step 1 the name refusal also stops every clone schedule
+	// the relay rules did (TestCloneSeeds stays green under these): they
+	// are pinned at the voter, where each still refuses a bad grant alone.
+	{"relay_ignored", []string{"TestVoterRefusesANameAHeardPromiseHoldsUnderAnotherNonce", "TestVoterRefusesANameWhoseOwnVoterIsHeardPromisedElsewhere"}},
+	{"relay_voter_rule_off", []string{"TestVoterRefusesANameWhoseOwnVoterIsHeardPromisedElsewhere"}},
 	{"relay_self_promise", []string{"TestVoterRelaysOnlyAPromiseToAnotherNode"}},
 	{"relay_no_margin", []string{"TestAHeardPromiseHoldsForItsMarginThenEnds"}},
 	{"relay_tail_counted", []string{"TestAHeardPromiseHoldsForItsMarginThenEnds"}},
@@ -170,7 +172,8 @@ var table = []mutation{
 	// #1029 step 1: a duplicated name gets no new grant. Each is pinned by
 	// a schedule where it alone stands between the pair and two leaders
 	// (quorum/sim/dupname_test.go), and the clone races catch most.
-	{"dup_name_ignored", []string{"TestADuplicatedNameGetsNoNewGrant", "TestStandbyProbesItsPeerSoTheCloneIsSeen", "TestCloneRaceSeeds"}},
+	{"dup_name_ignored", []string{"TestADuplicatedNameGetsNoNewGrant", "TestVoterRefusesANameUnderAnotherBootNonce", "TestStandbyProbesItsPeerSoTheCloneIsSeen", "TestCloneRaceSeeds"}},
+	{"same_term_other_boot", []string{"TestATermIsNotGrantedToAnotherBoot", "TestATermGoesToOneBootOfAName"}},
 	{"dup_refuses_incumbent", []string{"TestADuplicatedNameGetsNoNewGrant", "TestCloneOfTheLeaderCostsNoTakeover"}},
 	{"dup_voter_counts", []string{"TestCandidateDiscountsADuplicatedVoter", "TestDuplicatedVoterBacksNoLease"}},
 	{"dup_not_relayed", []string{"TestADuplicatedNameIsRelayed", "TestDupRelayStopsTheWitnessGrantingAClone"}},
