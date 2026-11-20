@@ -274,7 +274,7 @@ func (s *Server) cookieRefused(r *http.Request, a actor) (int, string) {
 // auth.elevation. Its 401 carries "elevate": true (WriteRefusal), and the
 // HMI asks for the password (POST /api/elevate) and sends the request
 // again.
-const ElevationNeeded = "a fresh password is needed"
+const ElevationNeeded = "confirm your password to do this"
 
 // elevationRefused is the refusal of an actor that holds perm but may not
 // use it yet: a browser session whose password is older than
@@ -288,7 +288,20 @@ func (s *Server) elevationRefused(a actor, perm string) (int, string) {
 	if a.at.Before(s.elevatedUntil(*a.session)) {
 		return 0, ""
 	}
-	return http.StatusUnauthorized, fmt.Sprintf("%s: %s is an elevated permission, and a signed-in browser's password counts for it for %s (auth.elevation); enter it again (POST /api/elevate)", ElevationNeeded, perm, s.policy.Elevation())
+	return http.StatusUnauthorized, fmt.Sprintf("%s: sign in again (/signin), or enter your password where the HMI asks for it (POST /api/elevate). %s needs a password entered within the last %s (auth.elevation)", ElevationNeeded, perm, shortDuration(s.policy.Elevation()))
+}
+
+// shortDuration is d as a person reads it: "15m", "1h", "1h30m", not
+// "15m0s".
+func shortDuration(d time.Duration) string {
+	s := d.String()
+	if d%time.Minute == 0 {
+		s = strings.TrimSuffix(s, "0s")
+		if d%time.Hour == 0 {
+			s = strings.TrimSuffix(s, "0m")
+		}
+	}
+	return s
 }
 
 // elevatedUntil is when se's password stops counting for an elevated

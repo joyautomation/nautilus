@@ -156,6 +156,32 @@ func TestElevationIsDecidedOnce(t *testing.T) {
 	}
 }
 
+// The 401 tells a person what to do, not only an HMI: confirm the
+// password, by signing in again (the way until the HMI kit prompts) or
+// where the HMI asks; and for how long a password counts (naut-lead,
+// #1088).
+func TestElevationRefusalTellsAPerson(t *testing.T) {
+	srv := auditServer(t, Options{})
+	id, _, at := elevateAs(t, srv)
+	at(time.Hour)
+	rec := call(t, srv, "POST", "/api/forces", `{"name":"SP","value":1}`, withCookie(id), ownOrigin)
+	var body struct {
+		Error   string `json:"error"`
+		Elevate bool   `json:"elevate"`
+	}
+	json.Unmarshal(rec.Body.Bytes(), &body)
+	for _, want := range []string{"confirm your password", "sign in again (/signin)", "within the last 15m (auth.elevation)"} {
+		if !body.Elevate || !strings.Contains(body.Error, want) {
+			t.Errorf("the refusal %q does not say %q", body.Error, want)
+		}
+	}
+	for d, want := range map[time.Duration]string{15 * time.Minute: "15m", time.Hour: "1h", 90 * time.Minute: "1h30m", 12 * time.Hour: "12h", time.Minute: "1m", 90 * time.Second: "1m30s"} {
+		if got := shortDuration(d); got != want {
+			t.Errorf("shortDuration(%s) = %q, want %q", d, got, want)
+		}
+	}
+}
+
 // Deploy, users and override have no route of the server's own: a facade
 // asks Authorize, which asks for a fresh password the same way, and
 // WriteRefusal marks its 401. A lapsed session holding none of them is
