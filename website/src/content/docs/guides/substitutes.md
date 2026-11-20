@@ -275,5 +275,5 @@ tests:
 Each change leaves one journal entry through the audit seam:
 `substitute.start`, `substitute.stop`, `substitute.ack` (by whoever did it),
 `substitute.expire` (by `system`) and `substitute.fault`. A start and an
-acknowledgement are elevated actions, refused while the journal cannot be
+acknowledgement are refused while the journal cannot be
 written; a stop is the way back to normal and is always allowed.

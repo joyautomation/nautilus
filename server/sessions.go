@@ -27,6 +27,10 @@ const (
 // ends that user's oldest.
 const maxUserSessions = 32
 
+// maxElevateFails is how many re-authentications in a row a session may
+// fail before it is ended.
+const maxElevateFails = 5
+
 // session is one browser sign-in. The id itself is never kept: the store
 // is keyed by its SHA-256, which is also what the journal records.
 type session struct {
@@ -34,9 +38,14 @@ type session struct {
 	user    string // lowercased user name
 	created time.Time
 	expires time.Time // absolute: created + auth.session, never renewed
-	// authAt is when the user last proved their password in this session
-	// (sign-in today; a re-authentication with 5c's elevation).
+	// authAt is when the user last proved their password in this session:
+	// the sign-in, or the last re-authentication (POST /api/elevate). The
+	// elevated permissions need it within auth.elevation.
 	authAt time.Time
+	// fails counts the re-authentications refused since the last that
+	// passed: at maxElevateFails the session ends (a stolen cookie
+	// guessing at the password).
+	fails int
 	// cred is the SHA-256 of the user's password hash it was proved
 	// against: a session whose user's password changed (even in a change
 	// that raced the sign-in, before its revocation could see the
@@ -65,6 +74,15 @@ type sessions struct {
 
 func newSessions(life time.Duration) *sessions {
 	return &sessions{now: time.Now, life: life, byHash: map[string]*session{}}
+}
+
+// clock is the store's time now, its clock read under the lock (a test
+// swaps it while streams re-check).
+func (ss *sessions) clock() time.Time {
+	ss.mu.Lock()
+	now := ss.now
+	ss.mu.Unlock()
+	return now()
 }
 
 // sessionHash is the SHA-256 of a session id, hex: the store's key and the
@@ -196,4 +214,43 @@ func (ss *sessions) endUser(user string) int {
 	ss.mu.Unlock()
 	ss.told(ended)
 	return len(ended)
+}
+
+// elevated records a re-authentication of the session hash names, against
+// the password whose fingerprint is cred: its authAt is now and its
+// failures are forgotten. False when the session is gone, expired, or was
+// proved against another password.
+func (ss *sessions) elevated(hash, cred string) (session, bool) {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	se, ok := ss.byHash[hash]
+	now := ss.now()
+	if !ok || !now.Before(se.expires) || se.cred != cred {
+		return session{}, false
+	}
+	se.authAt, se.fails = now, 0
+	return *se, true
+}
+
+// elevateFailed counts a refused re-authentication of the session hash
+// names. At maxElevateFails the session is ended, and ended says so.
+func (ss *sessions) elevateFailed(hash string) (fails int, ended bool) {
+	ss.mu.Lock()
+	se, ok := ss.byHash[hash]
+	if !ok {
+		ss.mu.Unlock()
+		return 0, false
+	}
+	se.fails++
+	fails = se.fails
+	if fails >= maxElevateFails {
+		delete(ss.byHash, hash)
+	}
+	cp := *se
+	ss.mu.Unlock()
+	if fails >= maxElevateFails {
+		ss.told([]session{cp})
+		return fails, true
+	}
+	return fails, false
 }

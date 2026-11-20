@@ -296,7 +296,7 @@ type Options struct {
 	// be opened (naut run sets it when audit.OpenFile fails, with Audit
 	// nil). The server then runs with the entries in memory only, and says
 	// so on the drivers block (/api/drivers, /api/state, the live frames)
-	// until it restarts; elevated actions (forces, program changes) are
+	// until it restarts; strict actions (forces, program changes) are
 	// refused meanwhile (#709, design §6 question 5).
 	AuditUnavailable error
 
@@ -852,6 +852,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /signin", s.handleSignInPage)
 	mux.HandleFunc("POST /api/signin", s.handleSignIn)
 	mux.HandleFunc("POST /api/signout", s.handleSignOut)
+	mux.HandleFunc("POST /api/elevate", s.handleElevate)
 	mux.HandleFunc("GET /api/history", s.handleHistory)
 	mux.HandleFunc("GET /api/history/", s.handleHistory)
 	if s.hmi != nil {
@@ -1013,7 +1014,7 @@ func (s *Server) proxyStandby(routes *http.ServeMux, mux http.Handler) http.Hand
 // goes by the cookie being there, valid or not.
 func standbyRefers(r *http.Request) bool {
 	switch r.URL.Path {
-	case "/api/signin", "/api/signout":
+	case "/api/signin", "/api/signout", "/api/elevate":
 		return true
 	}
 	return hasSessionCookie(r) && presentedToken(r) == ""

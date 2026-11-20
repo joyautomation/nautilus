@@ -114,7 +114,7 @@ func routes(s *Server, mux, other *http.ServeMux) {
 // sign-in and sign-out, which must work for an anonymous request and while
 // the journal is down, and journal themselves (auth.signin, auth.signout;
 // TestSignInAndOutJournalThemselves).
-var selfJournalled = map[string]bool{"POST /api/signin": true, "POST /api/signout": true}
+var selfJournalled = map[string]bool{"POST /api/signin": true, "POST /api/signout": true, "POST /api/elevate": true}
 
 // Every route that changes something records its entry through the
 // seam. A new write route registered without s.audited fails here.
@@ -1231,8 +1231,8 @@ func TestEveryActionIsClassed(t *testing.T) {
 			}
 			action, _ := strconv.Unquote(lit.Value)
 			n++
-			if c := actionClass[action]; c != operator && c != recovery && c != elevated {
-				t.Errorf("%s: action %q is not classed: add it to actionClass as operator, recovery or elevated (until then it is refused while the journal is down)", fset.Position(call.Pos()), action)
+			if c := actionClass[action]; c != operator && c != recovery && c != strict {
+				t.Errorf("%s: action %q is not classed: add it to actionClass as operator, recovery or strict (until then it is refused while the journal is down)", fset.Position(call.Pos()), action)
 			}
 			return true
 		})
@@ -1240,13 +1240,13 @@ func TestEveryActionIsClassed(t *testing.T) {
 	if n < 12 {
 		t.Fatalf("found %d audited actions, want at least 12", n)
 	}
-	// Fail closed: an action nobody classed is elevated.
+	// Fail closed: an action nobody classed is strict.
 	for _, a := range []string{"config.apply", "substitute.start", ""} {
-		if !isElevated(a) {
-			t.Errorf("unclassed %q is not elevated", a)
+		if !journalStrict(a) {
+			t.Errorf("unclassed %q is not strict", a)
 		}
 	}
-	if isElevated("tag.write") || isElevated("force.clear") || !isElevated("force.set") {
+	if journalStrict("tag.write") || journalStrict("force.clear") || !journalStrict("force.set") {
 		t.Error("the classes are swapped")
 	}
 }

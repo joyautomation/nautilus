@@ -20,6 +20,13 @@ import (
 // It returns each user's personal access token and the file's path.
 func patServer(t *testing.T) (*Server, map[string]string, string) {
 	t.Helper()
+	return patServerWith(t, Options{})
+}
+
+// patServerWith is patServer with more options (its Auth and Users are
+// patServer's).
+func patServerWith(t *testing.T, o Options) (*Server, map[string]string, string) {
+	t.Helper()
 	old := users.Default
 	users.Default = users.Params{Memory: 64, Time: 1, Threads: 1}
 	t.Cleanup(func() { users.Default = old })
@@ -51,7 +58,8 @@ func patServer(t *testing.T) (*Server, map[string]string, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return auditServer(t, Options{Auth: p, Users: store}), toks, path
+	o.Auth, o.Users = p, store
+	return auditServer(t, o), toks, path
 }
 
 func bearer(tok string) func(*http.Request) {

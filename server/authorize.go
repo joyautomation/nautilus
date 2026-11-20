@@ -137,6 +137,9 @@ type actor struct {
 	invalid bool
 	// session is set when the principal comes from the sign-in cookie.
 	session *session
+	// at is when it was resolved: a session's elevation is judged at that
+	// instant, so the seam's decision and the handler's agree.
+	at time.Time
 }
 
 // actorOf resolves r's principal for authorization, the journal and
@@ -164,7 +167,7 @@ func (s *Server) resolveActor(r *http.Request) actor {
 		return actor{pr: pr}
 	}
 	if se, ok := s.sessionOf(r); ok {
-		return actor{pr: auth.User(se.user), session: &se}
+		return actor{pr: auth.User(se.user), session: &se, at: s.sessions.clock()}
 	}
 	return actor{pr: auth.Anonymous}
 }
@@ -265,6 +268,79 @@ func (s *Server) cookieRefused(r *http.Request, a actor) (int, string) {
 	return http.StatusForbidden, "a signed-in browser may change something only from this controller's own page (the request's Origin must be this controller's scheme and host)"
 }
 
+// ElevationNeeded begins the message of a refusal for want of a fresh
+// password (#708 PR 5c): a browser sign-in holds the permission, but it is
+// an elevated one and the password was last proved longer ago than
+// auth.elevation. Its 401 carries "elevate": true (WriteRefusal), and the
+// HMI asks for the password (POST /api/elevate) and sends the request
+// again.
+const ElevationNeeded = "confirm your password to do this"
+
+// elevationRefused is the refusal of an actor that holds perm but may not
+// use it yet: a browser session whose password is older than
+// auth.elevation, for an elevated permission. A bearer credential
+// (NAUTILUS_TOKEN, a service token, a personal access token) is presented
+// with every request, and always counts as fresh. 0 when allowed.
+func (s *Server) elevationRefused(a actor, perm string) (int, string) {
+	if a.session == nil || !auth.Elevated(perm) {
+		return 0, ""
+	}
+	if a.at.Before(s.elevatedUntil(*a.session)) {
+		return 0, ""
+	}
+	return http.StatusUnauthorized, fmt.Sprintf("%s: sign in again (/signin), or enter your password where the HMI asks for it (POST /api/elevate). %s needs a password entered within the last %s (auth.elevation)", ElevationNeeded, perm, shortDuration(s.policy.Elevation()))
+}
+
+// shortDuration is d as a person reads it: "15m", "1h", "1h30m", not
+// "15m0s".
+func shortDuration(d time.Duration) string {
+	s := d.String()
+	if d%time.Minute == 0 {
+		s = strings.TrimSuffix(s, "0s")
+		if d%time.Hour == 0 {
+			s = strings.TrimSuffix(s, "0m")
+		}
+	}
+	return s
+}
+
+// elevatedUntil is when se's password stops counting for an elevated
+// permission: auth.elevation after it was last proved, and never past the
+// session's end.
+func (s *Server) elevatedUntil(se session) time.Time {
+	until := se.authAt.Add(s.policy.Elevation())
+	if se.expires.Before(until) {
+		return se.expires
+	}
+	return until
+}
+
+// WriteRefusal answers a refusal from Authorize as the server's own
+// routes do: {"error": msg}, plus "elevate": true when it is for want of a
+// fresh password, so the HMI kit knows to ask for it. A facade that adds
+// an endpoint answers its refusals with it.
+func WriteRefusal(w http.ResponseWriter, code int, msg string) {
+	body := map[string]any{"error": msg}
+	if code == http.StatusUnauthorized && strings.HasPrefix(msg, ElevationNeeded) {
+		body["elevate"] = true
+	}
+	writeJSON(w, code, body)
+}
+
+// credentialKind is how a request's principal proved itself, for the
+// journal's entry of an elevated action: "session" (a browser sign-in's
+// fresh password), "pat" (a personal access token), "token"
+// (NAUTILUS_TOKEN), "service" (a service token) or "anonymous".
+func credentialKind(a actor) string {
+	switch {
+	case a.session != nil:
+		return "session"
+	case a.pr.Kind == auth.KindUser:
+		return "pat"
+	}
+	return a.pr.Kind
+}
+
 // signInHint ends a 401 for a request with no credential.
 const signInHint = ": sign in, or send a token (Authorization: Bearer …)"
 
@@ -341,7 +417,7 @@ func (s *Server) authorize(r *http.Request, perm, target string) (int, string) {
 	}
 	d := s.policy.Can(a.pr, perm, target)
 	if d.Allowed {
-		return 0, ""
+		return s.elevationRefused(a, perm)
 	}
 	if a.pr.Kind == auth.KindAnonymous {
 		return http.StatusUnauthorized, d.Reason + signInHint
@@ -397,7 +473,7 @@ func (s *Server) preAuthorize(r *http.Request, action string) (int, string) {
 		return code, msg
 	}
 	if s.policy.Holds(a.pr, perm) {
-		return 0, ""
+		return s.elevationRefused(a, perm)
 	}
 	reason := s.policy.Can(a.pr, perm, auth.All).Reason
 	if a.pr.Kind == auth.KindAnonymous {
@@ -448,12 +524,19 @@ type meResponse struct {
 	auth.Me
 	// Session is the browser sign-in the request acts by, when it does.
 	Session *meSession `json:"session,omitempty"`
+	// Elevated lists the permissions a browser sign-in holds only while
+	// its password is fresh (session.elevatedUntil); a token's always are.
+	Elevated []string `json:"elevated,omitempty"`
 }
 
 // meSession is /api/me's account of a browser sign-in. The id never
 // appears: the cookie is HttpOnly.
 type meSession struct {
 	Expires time.Time `json:"expires"`
+	// ElevatedUntil is when its password stops counting for the elevated
+	// permissions (auth.elevation): past it the HMI asks for the password
+	// before an elevated action.
+	ElevatedUntil time.Time `json:"elevatedUntil"`
 }
 
 // handleMe is GET /api/me, for the HMI kit's role-aware controls (#708 PR
@@ -468,9 +551,9 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, meResponse{Secure: s.secure(r), Me: auth.Me{Principal: a.pr.String(), Roles: []string{}, Permissions: map[string][]string{}}})
 		return
 	}
-	me := meResponse{Auth: true, Secure: s.secure(r), Me: s.policy.Describe(a.pr)}
+	me := meResponse{Auth: true, Secure: s.secure(r), Me: s.policy.Describe(a.pr), Elevated: auth.ElevatedPermissions}
 	if a.session != nil {
-		me.Session = &meSession{Expires: a.session.expires.UTC()}
+		me.Session = &meSession{Expires: a.session.expires.UTC(), ElevatedUntil: s.elevatedUntil(*a.session).UTC()}
 	}
 	writeJSON(w, http.StatusOK, me)
 }

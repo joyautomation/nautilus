@@ -180,7 +180,11 @@ served from another host writes.
 **With an `auth:` block** in the manifest, roles decide instead, reads
 included: every `GET` under `/api/` (the live stream too) needs the `read`
 permission, and each write its own. No credential is a `401`, a principal
-without the permission a `403`. Only `GET /api/me`, the sign-in routes,
+without the permission a `403`. A signed-in browser whose password is older
+than `auth.elevation` gets a `401` with `"elevate": true` for a force, an
+edit, an activation, a download or a configuration change: it enters the
+password again ([Elevation](/guides/auth/#elevation)) and sends the request
+again. Only `GET /api/me`, the sign-in routes,
 `/healthz` and `/readyz` answer without one, unless the block sets
 `anonymous: viewer`. A browser signs in instead of sending a token. See
 [Users, roles & sign-in](/guides/auth/).
@@ -231,6 +235,7 @@ check comes before the token check. See [Online edits](/guides/online-edits/).
 | `GET` | [`/api/history`, `/api/history/…`](#historian-proxy) | Forwarded to the historian |
 | `GET` | [`/api/audit`](#audit-journal) | Who changed what: the audit journal's recent entries |
 | `GET` | [`/api/me`](/guides/auth/#browser-sign-in) | Who the request acts as, and what it may do |
+| `POST` | [`/api/elevate`](/guides/auth/#elevation) | A signed-in browser enters its password again, for the elevated permissions |
 | `GET` | [`/healthz`](#healthz-and-readyz) | Liveness: `200 ok` |
 | `GET` | [`/readyz`](#healthz-and-readyz) | Readiness: `200 ok` on the controller that runs the process, `503` on a standby |
 
@@ -719,7 +724,7 @@ connection, is **unknown**: the change may have been applied.
 | `400`, `403`, `404`, `409`, `501`, `503` with `refused` | nothing happened. `409`: the `requestId` was used for a different request, a newer change won, or nothing was waiting for an acknowledgement; re-read and decide, do not retry blind. `503`: `no leader` (a standby) or not saved (the retain store refused a start) |
 | anything else | unknown. Re-read `GET /api/substitutes`. Retry a **start** only with the same `requestId`. A stop or an acknowledgement has no `requestId`: re-read and decide |
 
-Starting and acknowledging are elevated actions, refused while the audit
+Starting and acknowledging are refused while the audit
 journal cannot be written; ending one is a way back to normal and is
 allowed. Each is journalled (`substitute.start`, `.stop`, `.ack`); an
 expiry has no request and is journalled as `substitute.expire` by `system`.
@@ -1188,11 +1193,13 @@ Setting a force or changing the program must never happen unrecorded, so
 while the journal cannot be written, or `naut run` could not open it (an
 unwritable `audit.path`, or another `naut run` already using it):
 
-- **Elevated actions are refused** with `503`: setting a force, a program
+- **Actions that need the journal are refused** with `503`: setting a force, a program
   edit or activation, staging, validating or applying a live I/O
   configuration, starting or acknowledging a substitute value, and any
   action not listed below. The refusal is
-  journalled, in memory.
+  journalled, in memory. (This set is the journal's. It is not the same as
+  the [elevated permissions](/guides/auth/#elevation), which need a fresh
+  password: clearing a force needs one, but not the journal.)
 - **Operator actions are allowed**: tag writes, alarm acknowledgement and
   shelving, SFC commands.
 - **The ways back to normal are allowed**: clearing a force or all of
@@ -1210,7 +1217,7 @@ unwritable `audit.path`, or another `naut run` already using it):
   restart.
 
 The action that first finds the journal broken has already been carried
-out (see the limits below); elevated actions are refused from the next one.
+out (see the limits below); the actions that need the journal are refused from the next one.
 
 
 Known limits:

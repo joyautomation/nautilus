@@ -40,6 +40,11 @@ type AuthConfig struct {
 	// (absolute): 1m to 168h, default 12h. Sessions live in the leader's
 	// memory, so a restart or a failover also ends them.
 	Session Duration `yaml:"session"`
+	// Elevation is how long a browser sign-in's password counts for the
+	// elevated permissions (force, edit, activate, deploy, config, users,
+	// override), from the sign-in or the last re-authentication
+	// (POST /api/elevate): 1m to 12h, default 15m. A token always counts.
+	Elevation Duration `yaml:"elevation"`
 }
 
 // AuthArea is an area: the tags it covers, as patterns ("RCV_*").
@@ -133,6 +138,7 @@ func (c *AuthConfig) settings() auth.Settings {
 		Users:         map[string][]auth.Grant{},
 		ServiceTokens: map[string][]auth.Grant{},
 		Session:       time.Duration(c.Session),
+		Elevation:     time.Duration(c.Elevation),
 	}
 	for name, a := range c.Areas {
 		s.Areas[name] = a.Tags

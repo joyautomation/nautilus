@@ -119,15 +119,58 @@ func TestNautRunRefusesARebindableHostAndWarnsWhenOpen(t *testing.T) {
 	if !strings.Contains(stderr.String(), "WARNING: the tag API listens on 0.0.0.0:"+port2+" with no NAUTILUS_TOKEN") {
 		t.Errorf("an open listen without a token did not warn:\n%s", stderr.String())
 	}
+
+	// With an auth: block the policy guards reads and writes, not a bare
+	// token: no token warning, but a note that plain HTTP carries
+	// credentials in clear (found on a real VM by naut-docs).
+	stderr, stop, port4 := startNautRunManifest(t, bin, "0.0.0.0:0", "auth:\n  anonymous: viewer\n")
+	stop()
+	if out := stderr.String(); strings.Contains(out, "NAUTILUS_TOKEN") || !strings.Contains(out, "auth: the tag API listens on 0.0.0.0:"+port4+" over plain HTTP") {
+		t.Errorf("an auth: block's open listen:\n%s", out)
+	}
+}
+
+// listenNotice: the token warning only without an auth: block; with one,
+// a note only when nothing encrypts the API; nothing on loopback.
+func TestListenNotice(t *testing.T) {
+	for _, c := range []struct {
+		addr                        string
+		token, policy, tls, proxied bool
+		want                        string
+	}{
+		{"0.0.0.0:8080", false, false, false, false, "with no NAUTILUS_TOKEN"},
+		{"0.0.0.0:8080", true, false, false, false, ""},
+		{"0.0.0.0:8080", false, true, false, false, "over plain HTTP"},
+		{"0.0.0.0:8080", true, true, false, false, "over plain HTTP"},
+		{"0.0.0.0:8080", false, true, true, false, ""},
+		{"0.0.0.0:8080", false, true, false, true, ""},
+		{"127.0.0.1:8080", false, false, false, false, ""},
+		{"localhost:8080", false, true, false, false, ""},
+	} {
+		got := listenNotice(c.addr, c.token, c.policy, c.tls, c.proxied)
+		if (c.want == "") != (got == "") || !strings.Contains(got, c.want) {
+			t.Errorf("listenNotice(%q, token %v, auth %v, tls %v, proxied %v) = %q, want %q", c.addr, c.token, c.policy, c.tls, c.proxied, got, c.want)
+		}
+		if c.policy && strings.Contains(got, "NAUTILUS_TOKEN") {
+			t.Errorf("with an auth: block it still speaks of NAUTILUS_TOKEN: %q", got)
+		}
+	}
 }
 
 // startNautRunPort runs naut on addr (port 0: the banner names the port it
 // bound) and returns its stderr, a stop, and that port.
 func startNautRunPort(t *testing.T, bin, addr string, env ...string) (*lockedBuffer, func(), string) {
 	t.Helper()
+	return startNautRunManifest(t, bin, addr, "", env...)
+}
+
+// startNautRunManifest is startNautRunPort with more of the manifest
+// (extra is appended to it).
+func startNautRunManifest(t *testing.T, bin, addr, extra string, env ...string) (*lockedBuffer, func(), string) {
+	t.Helper()
 	dir := t.TempDir()
 	files := map[string]string{
-		"nautilus.yaml": "name: rebind\ntasks:\n  - program: main.st\n    scan: 20ms\ntags:\n  - { name: SP, role: setpoint, init: 0 }\nserver:\n  addr: \"" + addr + "\"\n",
+		"nautilus.yaml": "name: rebind\ntasks:\n  - program: main.st\n    scan: 20ms\ntags:\n  - { name: SP, role: setpoint, init: 0 }\nserver:\n  addr: \"" + addr + "\"\n" + extra,
 		"main.st":       "PROGRAM Main\nVAR_EXTERNAL\n SP : DINT;\nEND_VAR\nEND_PROGRAM\n",
 	}
 	for n, body := range files {
