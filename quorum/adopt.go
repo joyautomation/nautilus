@@ -179,6 +179,7 @@ func NewAdoption(v *Voter, c *Candidate, now Instant) *Adoption {
 	if !mut("campaign_in_restart_wait") {
 		c.holdUntil = v.waitUntil
 	}
+	c.duplicated = v.Duplicated // #1029 step 1
 	return a
 }
 

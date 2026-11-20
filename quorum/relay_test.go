@@ -15,19 +15,29 @@ func ready(self NodeID) *Voter { return NewVoter(self, lease, VoterState{}, 0) }
 
 // Rule (a), shape 1: B's voter heard W relay its promise to A under Na.
 // A clone of A (another nonce) is refused while that promise runs, plus
-// the clock-rate margin, and counted a duplicate; the real A isn't.
+// the clock-rate margin, and counted a duplicate. Its request also makes
+// A's second boot live here, so the real A gets no NEW grant from B either
+// until the clone has been silent a lease (#1029 step 1), and then does.
 func TestVoterRefusesANameAHeardPromiseHoldsUnderAnotherNonce(t *testing.T) {
 	v := ready("B")
 	now := at(lease)
 	v.Hear(now, "W", Relay{To: "A", Nonce: 0xA, Left: lease})
-	if grant(t, v, now.Add(lease/2), Request{From: "A", Term: 9, Nonce: 0xC, ID: 1}) {
+	if !grant(t, v, now.Add(lease/4), Request{From: "A", Term: 9, Nonce: 0xA, ID: 1}) {
+		t.Fatal("refused the real A, whose nonce the relayed promise names, with no clone heard")
+	}
+	v2 := ready("B")
+	v2.Hear(now, "W", Relay{To: "A", Nonce: 0xA, Left: lease})
+	if grant(t, v2, now.Add(lease/2), Request{From: "A", Term: 9, Nonce: 0xC, ID: 1}) {
 		t.Fatal("granted a clone of A while W's relayed promise to A under another nonce ran: two leaders")
 	}
-	if n, who := v.Duplicates(); n != 1 || who != "A" || v.DuplicateCause() != DupNonce {
-		t.Fatalf("duplicates %d (%s, cause %d), want 1 (A, DupNonce)", n, who, v.DuplicateCause())
+	if n, who := v2.Duplicates(); n != 1 || who != "A" || v2.DuplicateCause() != DupNonce {
+		t.Fatalf("duplicates %d (%s, cause %d), want 1 (A, DupNonce)", n, who, v2.DuplicateCause())
 	}
-	if !grant(t, v, now.Add(lease/2), Request{From: "A", Term: 9, Nonce: 0xA, ID: 2}) {
-		t.Fatal("refused the real A, whose nonce the relayed promise names")
+	if grant(t, v2, now.Add(lease/2), Request{From: "A", Term: 9, Nonce: 0xA, ID: 2}) {
+		t.Fatal("a new grant to A while two of its boots are live")
+	}
+	if !grant(t, v2, now.Add(lease/2+lease+ms), Request{From: "A", Term: 10, Nonce: 0xA, ID: 3}) {
+		t.Fatal("still refused the real A a lease after the clone fell silent")
 	}
 }
 
@@ -106,11 +116,11 @@ func TestVoterRelaysOnlyAPromiseToAnotherNode(t *testing.T) {
 	}
 }
 
-// The voter's own running promise wins over a relay, and the first relay
-// heard wins over a later one about the same name: a conflict is counted
-// and never replaces what is held, so a clone that won one voter can't
-// turn the original's other voters against it.
-func TestARelayNeverReplacesTheVotersOwnOrAnEarlierPromise(t *testing.T) {
+// A relay naming a name under another boot than the voter's own running
+// promise, or than another voter's relay, is a duplicate's sign, counted.
+// The voter's own running promise still renews; a new grant goes to
+// neither boot while both are live (#1029 step 1).
+func TestARelayConflictIsADuplicate(t *testing.T) {
 	now := at(lease)
 	own := ready("W")
 	if !grant(t, own, now, Request{From: "A", Term: 3, Nonce: 0xA, ID: 1}) {
@@ -124,14 +134,16 @@ func TestARelayNeverReplacesTheVotersOwnOrAnEarlierPromise(t *testing.T) {
 		t.Fatal("the conflicting relay counted no duplicate")
 	}
 
-	first := ready("B")
-	first.Hear(now, "W", Relay{To: "A", Nonce: 0xA, Left: lease})
-	first.Hear(now.Add(lease/8), "Z", Relay{To: "A", Nonce: 0xC, Left: lease})
-	if !grant(t, first, now.Add(lease/4), Request{From: "A", Term: 3, Nonce: 0xA, ID: 1}) {
-		t.Fatal("a later relay of A under another nonce refused the A the first relay named")
+	two := ready("B")
+	two.Hear(now, "W", Relay{To: "A", Nonce: 0xA, Left: lease})
+	two.Hear(now.Add(lease/8), "Z", Relay{To: "A", Nonce: 0xC, Left: lease})
+	if n, _ := two.Duplicates(); n == 0 {
+		t.Fatal("two relays of A under two boots counted no duplicate")
 	}
-	if grant(t, first, now.Add(lease/4), Request{From: "A", Term: 4, Nonce: 0xC, ID: 2}) {
-		t.Fatal("the later relay replaced the first")
+	for _, nonce := range []uint64{0xA, 0xC} {
+		if grant(t, two, now.Add(lease/4), Request{From: "A", Term: 3, Nonce: nonce, ID: nonce}) {
+			t.Fatalf("a new grant to A under %#x while two of its boots are live", nonce)
+		}
 	}
 }
 

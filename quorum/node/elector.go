@@ -697,8 +697,10 @@ func (e *Elector) look() time.Duration {
 	may := e.mayCampaign(now) && (e.c.Leading(now) || !e.logHold(now, ls, hasLog))
 	req := e.c.Tick(now, from, until, healthy && !e.released && !e.yielding(now) && may)
 	p, msgs, probe := e.a.Tick(now)
+	standby := false
 	if probe == nil {
 		probe = e.c.Probe(now) // the handshake's own probe serves for both
+		standby = probe != nil
 	} else {
 		e.c.Probe(now)
 	}
@@ -726,6 +728,9 @@ func (e *Elector) look() time.Duration {
 	e.adopts(msgs)
 	if probe != nil {
 		e.vote(e.o.Witness, e.wit, *probe)
+		if standby && quorum.ProbesPeer() {
+			e.vote(e.o.Peer, e.peer, *probe) // the peer's voter hears this boot too (#1029 step 1)
+		}
 	}
 	return min(max(next, 0), e.o.Lease/8)
 }
@@ -1005,8 +1010,12 @@ func (e *Elector) serveVote(w http.ResponseWriter, r *http.Request) {
 		refuse(w, "term-jump", msg)
 		return
 	}
-	e.a.OnPeer(now)
-	e.peerAt, e.peerHeard = now, true
+	if !(req.Term == 0 && req.ID == quorum.ProbeID) {
+		// A relay probe is for the voter only (#1029 step 1): the
+		// handshake keeps its own idea of hearing the peer.
+		e.a.OnPeer(now)
+		e.peerAt, e.peerHeard = now, true
+	}
 	e.v.Hear(now, req.From, req.Promise)
 	e.c.Observe(req.Term)
 	quorum.YieldTo(now, e.v, e.c, req)

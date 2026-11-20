@@ -217,7 +217,6 @@ case caught it. A mutation joins the nightly run in the PR that builds the rule 
 | a voter ignores the promises other voters relay, so a MAC-spoofed clone of the leader wins the voter its original is cut from (red in all three shapes end to end and in `TestCloneSeeds`) | design §2, #1029 | #1029 layer 2 (`relay_ignored`) |
 | a voter grants a name while that name's own voter is heard promised to another controller: a MAC-spoofed clone of the standby, the leader cut from the witness (shape 3) | design §2, #1029 | #1029 layer 2 (`relay_voter_rule_off`) |
 | a voter relays its promise to its own candidate, so a clone's self-grant reaches the other voters | design §2, #1029 | #1029 layer 2 (`relay_self_promise`) |
-| a relayed promise replaces the voter's own running promise or one heard earlier, so a clone that won one voter turns the original's other voters against it | design §2, #1029 | #1029 layer 2 (`relay_last_wins`) |
 | a heard promise is held only for its time left, without the clock-rate margin | design §2, #1029 | #1029 layer 2 (`relay_no_margin`) |
 | a refusal in the clock-rate margin after a heard promise counts as a duplicate (a fast real restart raises a false alarm) | design §2, #1029 | #1029 layer 2 (`relay_tail_counted`) |
 | a standby doesn't probe the witness every look, so neither hears the other's promise while no campaign runs (red in shapes 2 and 3 and in `TestCloneSeeds`) | design §2, #1029 | #1029 layer 2 (`standby_no_probe`) |

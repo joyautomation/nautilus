@@ -3,6 +3,7 @@ package node
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"hash/crc32"
 	"net/http"
 	"net/http/httptest"
@@ -38,7 +39,7 @@ func TestWitnessRefusesAnotherVersionAsSuch(t *testing.T) {
 	rec := httptest.NewRecorder()
 	w.Handler().ServeHTTP(rec, r)
 	if rec.Code != http.StatusConflict || rec.Header().Get(RefusedHeader) != "version" ||
-		!bytes.Contains(rec.Body.Bytes(), []byte("version 1 and this witness 2")) {
+		!bytes.Contains(rec.Body.Bytes(), []byte(fmt.Sprintf("version 1 and this witness %d", quorum.WireVersion))) {
 		t.Fatalf("an old frame: %d %q %q; want 409 \"version\" naming both", rec.Code, rec.Header().Get(RefusedHeader), rec.Body.String())
 	}
 }

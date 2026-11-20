@@ -565,6 +565,9 @@ func (w *World) tick(n *node) {
 		b, _ := probe.MarshalBinary()
 		w.viaProbe = standby
 		w.send(n.addr, W, b)
+		if standby && quorum.ProbesPeer() {
+			w.send(n.addr, peerOf(n.addr), b) // the peer hears this boot too (#1029 step 1)
+		}
 		w.viaProbe = false
 	}
 	w.observe(n)
@@ -665,8 +668,8 @@ func (w *World) deliver(n *node, from Addr, b []byte) {
 	now := w.local(n)
 	var req quorum.Request
 	if err := req.UnmarshalBinary(b); err == nil {
-		if n.adopt != nil && from == peerOf(n.addr) {
-			n.adopt.OnPeer(now)
+		if n.adopt != nil && from == peerOf(n.addr) && !(req.Term == 0 && req.ID == quorum.ProbeID) {
+			n.adopt.OnPeer(now) // a relay probe is for the voter only (#1029 step 1)
 		}
 		if from != n.addr {
 			n.voter.Hear(now, req.From, req.Promise)

@@ -116,6 +116,15 @@ type Candidate struct {
 
 	// probeAt: the next probe of the witness while not leading (Probe).
 	probeAt Instant
+
+	// ownDupUntil: a voter relayed a promise to this controller's name
+	// under another boot; no lease is taken before it, and a held one
+	// ended at once (#1029 step 1).
+	ownDupUntil Instant
+	// duplicated reports a voter name its own voter knows runs as two
+	// boots: a grant from it counts for nothing (NewAdoption sets it to
+	// Voter.Duplicated). nil counts every grant.
+	duplicated func(now Instant, name NodeID) bool
 }
 
 // NewCandidate starts a candidate at now that knows of terms up to known
@@ -285,6 +294,13 @@ func (c *Candidate) PushProbe(now Instant) *Request {
 	return &Request{From: c.cfg.Self, Nonce: c.cfg.Nonce, ID: ProbeID}
 }
 
+// ProbesPeer reports whether a driver sends the standby's probe (Probe,
+// not PushProbe) to its peer as well as to the witness. It does (#1029
+// step 1): a standby that probed only the witness would be heard by
+// nobody else while cut from it, and a clone of it would then be the only
+// boot of its name any voter sees.
+func ProbesPeer() bool { return !mut("standby_probes_witness_only") }
+
 // ProbeID is the id of a standby's relay probe (Candidate.Probe), which
 // its reply echoes. A driver hands that reply to its voter's Hear only:
 // the probe is there for the relay, and its reply tells neither the
@@ -333,8 +349,23 @@ func (c *Candidate) OnReply(now Instant, r Reply) {
 	default:
 		return // not one of our voters, or a witness incarnation we don't count
 	}
+	if p := r.Promise; p.To == c.cfg.Self && p.Nonce != 0 && p.Nonce != c.cfg.Nonce && !mut("own_dup_ignored") {
+		// A voter holds a promise to this name under another boot: another
+		// process runs as this controller (#1029 step 1). Take no lease
+		// while it runs, and end one held now: closing a gate early is
+		// always safe.
+		c.ownDupUntil = max(c.ownDupUntil, now.Add(min(p.Left, c.cfg.Lease)))
+		if c.leading && c.leaseEnd > now {
+			c.leaseEnd = now
+		}
+	}
 	if (r.To != c.cfg.Self && !mut("no_grantee_check")) || (r.Nonce != c.cfg.Nonce && !mut("no_nonce_check")) {
 		return // meant for the other controller, or for an earlier boot
+	}
+	if r.Granted && c.duplicated != nil && c.duplicated(now, r.From) && !mut("dup_voter_counts") {
+		// Two processes cast this voter's vote: it backs no lease, this
+		// controller's own included (#1029 step 1).
+		r.Granted = false
 	}
 	if r.Promised > c.maxSeen {
 		c.maxSeen = r.Promised
@@ -390,6 +421,9 @@ func (c *Candidate) OnReply(now Instant, r Reply) {
 	}
 	if !c.leading && now < c.backoffUntil {
 		return // a lapse is final: no lease from a late majority in the back-off
+	}
+	if !c.leading && now < c.ownDupUntil {
+		return // another boot of this name holds a promise
 	}
 	end := rd.sent.Add(c.cfg.leaseFor())
 	if mut("lease_from_reply") {

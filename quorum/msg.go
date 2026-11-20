@@ -40,6 +40,11 @@ type Relay struct {
 	To    NodeID
 	Nonce uint64
 	Left  time.Duration
+	// Dup is a name this voter itself sees under two live boot nonces,
+	// for DupLeft more (#1029 step 1): its hearers refuse new grants to it
+	// too. "" when none.
+	Dup     NodeID
+	DupLeft time.Duration
 }
 
 // Reply answers one Request. Promised is the highest term the voter has
@@ -118,10 +123,10 @@ type Adopt struct {
 
 // WireVersion is the vote protocol's frame version. A frame of another
 // version is refused whole (ErrVersion). Version 2 added the relayed
-// promise (#1029 layer 2): a pair that mixes releases across it can't
-// vote, and says so (redundancy.version-mismatch) rather than failing in
-// silence.
-const WireVersion = 2
+// promise (#1029 layer 2), version 3 the duplicated name it carries
+// (#1029 step 1): a pair that mixes releases across one can't vote, and
+// says so (redundancy.version-mismatch) rather than failing in silence.
+const WireVersion = 3
 
 // FrameVersion returns the version byte a frame carries (0 when empty).
 func FrameVersion(b []byte) byte {
@@ -175,7 +180,9 @@ func (r Request) MarshalBinary() ([]byte, error) {
 func (p Relay) put(b []byte) []byte {
 	b = putString(b, string(p.To))
 	b = binary.BigEndian.AppendUint64(b, p.Nonce)
-	return binary.BigEndian.AppendUint64(b, uint64(max(p.Left, 0)))
+	b = binary.BigEndian.AppendUint64(b, uint64(max(p.Left, 0)))
+	b = putString(b, string(p.Dup))
+	return binary.BigEndian.AppendUint64(b, uint64(max(p.DupLeft, 0)))
 }
 
 // relay reads a Relay; a Left beyond int64 is corrupt.
@@ -186,6 +193,12 @@ func (r *reader) relay() Relay {
 		r.bad = true
 	}
 	p.Left = time.Duration(left)
+	p.Dup = NodeID(r.str())
+	if dl := r.u64(); dl > 1<<62 {
+		r.bad = true
+	} else {
+		p.DupLeft = time.Duration(dl)
+	}
 	return p
 }
 

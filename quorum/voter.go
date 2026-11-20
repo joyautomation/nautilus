@@ -56,9 +56,103 @@ type Voter struct {
 	// every promise it had heard of has run out (#1029 layer 2).
 	heard        []heardPromise
 	relayRefused uint64
+	// seen are the boot nonces this voter heard per name, each live until
+	// its time: a request's for a lease after it arrived, a relayed
+	// promise's until its hold ends. Two live nonces for one name mean two
+	// processes run under it (#1029 step 1). direct marks a nonce heard in
+	// a request: only those count as a duplicate's sign, so a fast real
+	// restart, whose old boot lives on only in a relayed promise, raises
+	// no false alarm. dupHeard are the names other voters relayed as
+	// duplicated, refused until their time. In memory only, as heard.
+	seen     map[NodeID][]seenNonce
+	dupHeard map[NodeID]Instant
 	// pushedTo, pushedNonce: the promise RelayChanged last reported.
 	pushedTo    NodeID
 	pushedNonce uint64
+}
+
+// seenNonce is one boot nonce heard under a name, live until until.
+type seenNonce struct {
+	nonce  uint64
+	until  Instant
+	direct bool // heard in a request, not only in a relayed promise
+}
+
+// noteNonce records that name ran under nonce, live until until.
+func (v *Voter) noteNonce(name NodeID, nonce uint64, until Instant, direct bool) {
+	if nonce == 0 || name == "" || mut("dup_name_ignored") {
+		return
+	}
+	if v.seen == nil {
+		v.seen = map[NodeID][]seenNonce{}
+	}
+	xs := v.seen[name][:0]
+	for _, x := range v.seen[name] {
+		if x.until > until.Add(-2*max(v.lease, v.st.Lease)) || x.nonce == nonce {
+			xs = append(xs, x) // drop the long dead
+		}
+	}
+	for i := range xs {
+		if xs[i].nonce == nonce {
+			xs[i].until = max(xs[i].until, until)
+			xs[i].direct = xs[i].direct || direct
+			v.seen[name] = xs
+			return
+		}
+	}
+	v.seen[name] = append(xs, seenNonce{nonce: nonce, until: until, direct: direct})
+}
+
+// dupLeft is how long name stays seen under two live nonces at now: until
+// the second-latest of them runs out; 0 when it isn't. direct says
+// whether both of those were heard in requests.
+func (v *Voter) dupLeft(now Instant, name NodeID) (left time.Duration, direct bool) {
+	var a, b seenNonce // the two latest
+	for _, x := range v.seen[name] {
+		switch {
+		case x.until > a.until:
+			a, b = x, a
+		case x.until > b.until:
+			b = x
+		}
+	}
+	if b.until <= now {
+		return 0, false
+	}
+	return b.until.Sub(now), a.direct && b.direct
+}
+
+// Duplicated reports whether this voter knows name to run as two boots at
+// now: it heard two live nonces for it, or another voter relayed so. A
+// candidate counts no grant from a duplicated voter (NewAdoption wires
+// it): two processes cast that vote (#1029 step 1).
+func (v *Voter) Duplicated(now Instant, name NodeID) bool {
+	left, _ := v.dupLeft(now, name)
+	return left > 0 || now < v.dupHeard[name]
+}
+
+// dupRefuses reports whether r asks a NEW grant for a duplicated name, and
+// whether that counts as a duplicate's sign. A running promise to that
+// very boot still renews: the incumbent keeps the promises that protect
+// it; only a grant it doesn't hold yet is refused, to every boot (#1029
+// step 1; refusing the incumbent too lets a clone in, see the design).
+func (v *Voter) dupRefuses(now Instant, r Request, active bool) (refuse, counts bool) {
+	if mut("dup_name_ignored") {
+		return false, false
+	}
+	if active && v.st.GrantedTo == r.From && r.Nonce == v.grantNonce && !mut("dup_refuses_incumbent") {
+		return false, false
+	}
+	for _, x := range v.seen[r.From] {
+		if x.nonce != r.Nonce && now < x.until {
+			refuse = true
+			counts = counts || x.direct
+		}
+	}
+	if now < v.dupHeard[r.From] {
+		refuse = true
+	}
+	return refuse, counts
 }
 
 // heardPromise is a promise voter by relayed: to grantee to under nonce,
@@ -175,10 +269,21 @@ func (v *Voter) DuplicateCause() DupCause { return v.dupCause }
 // the candidate's own requests, and a clone's self-grant must never reach
 // them as a promise.
 func (v *Voter) Relay(now Instant) Relay {
-	if now >= v.promiseUntil || v.st.GrantedTo == "" || (v.st.GrantedTo == v.self && !mut("relay_self_promise")) {
-		return Relay{}
+	var r Relay
+	if !(now >= v.promiseUntil || v.st.GrantedTo == "" || (v.st.GrantedTo == v.self && !mut("relay_self_promise"))) {
+		r = Relay{To: v.st.GrantedTo, Nonce: v.grantNonce, Left: v.promiseUntil.Sub(now)}
 	}
-	return Relay{To: v.st.GrantedTo, Nonce: v.grantNonce, Left: v.promiseUntil.Sub(now)}
+	if !mut("dup_not_relayed") {
+		// A name this voter itself sees duplicated, never one only relayed
+		// to it (no echo). With both controllers duplicated, the one seen
+		// longer goes.
+		for name := range v.seen {
+			if d, _ := v.dupLeft(now, name); d > r.DupLeft {
+				r.Dup, r.DupLeft = name, d
+			}
+		}
+	}
+	return r
 }
 
 // RelayChanged reports, once, that this voter's relayed promise names
@@ -201,30 +306,38 @@ func (v *Voter) RelayChanged(now Instant) bool {
 //
 // The promise is held until receipt + left·(1 + MaxRho): a refusal must
 // outlast the original promise in real time, whatever the two clocks'
-// rates. It never replaces what this voter already holds: its own running
-// promise to the same name under another nonce, or one another voter
-// relayed earlier, wins, and the conflict is counted as a duplicate. A
-// newer relay from the same voter about the same name replaces its own
-// earlier one: a voter holds one promise at a time.
+// rates. A relay naming a name under another boot than this voter's own
+// running promise, or than one another voter relayed, is a duplicate's
+// sign and counted. Both boots are then live (noteNonce), so neither gets
+// a new grant here, while a running promise to either renews (#1029 step
+// 1). A newer relay from the same voter about the same name replaces its
+// own earlier one: a voter holds one promise at a time.
 func (v *Voter) Hear(now Instant, by NodeID, p Relay) {
 	v.prune(now)
+	if by != v.self && p.Dup != "" && p.DupLeft > 0 && !mut("dup_not_relayed") {
+		if v.dupHeard == nil {
+			v.dupHeard = map[NodeID]Instant{}
+		}
+		dl := min(p.DupLeft, max(v.lease, v.st.Lease))
+		v.dupHeard[p.Dup] = max(v.dupHeard[p.Dup], now.Add(time.Duration(float64(dl)*(1+MaxRho))))
+	}
 	if mut("relay_ignored") || by == v.self || p.To == "" || p.Nonce == 0 || p.Left <= 0 {
 		return
 	}
 	left := min(p.Left, max(v.lease, v.st.Lease)) // no promise runs longer than a lease
+	v.noteNonce(p.To, p.Nonce, now.Add(time.Duration(float64(left)*(1+MaxRho))), false)
 	h := heardPromise{by: by, to: p.To, nonce: p.Nonce, strict: now.Add(left),
 		until: now.Add(time.Duration(float64(left) * (1 + MaxRho)))}
 	if mut("relay_no_margin") {
 		h.until = h.strict
 	}
-	if now < v.promiseUntil && v.st.GrantedTo == p.To && v.grantNonce != p.Nonce && !mut("relay_last_wins") {
+	if now < v.promiseUntil && v.st.GrantedTo == p.To && v.grantNonce != p.Nonce {
 		v.duplicate(now < h.strict, p.To, DupNonce)
-		return
 	}
 	for _, x := range v.heard {
-		if x.by != by && x.to == p.To && x.nonce != p.Nonce && !mut("relay_last_wins") {
+		if x.by != by && x.to == p.To && x.nonce != p.Nonce {
 			v.duplicate(now < x.strict, p.To, DupNonce)
-			return // the first heard wins while it runs
+			break
 		}
 	}
 	keep := v.heard[:0]
@@ -323,6 +436,18 @@ func (v *Voter) wouldYield(now Instant, r Request) bool {
 		now < v.promiseUntil && r.Term > v.st.Promised
 }
 
+// wouldRefuseName reports whether Handle would refuse r for its name alone
+// (a duplicated name, or a promise relayed to it under another boot),
+// counting nothing: YieldTo asks it first, so a voter never gives up its
+// own candidate's round to a request it then refuses (#1079 review).
+func (v *Voter) wouldRefuseName(now Instant, r Request) bool {
+	if refuse, _ := v.dupRefuses(now, r, false); refuse {
+		return true
+	}
+	refuse, _, _ := v.heardRefuses(now, r)
+	return refuse
+}
+
 // releaseSelf ends this voter's running promise to its own candidate for
 // r, re-checking wouldYield itself rather than trusting the caller: had
 // the candidate campaigned again since it yielded, its voter's promise
@@ -353,6 +478,9 @@ func YieldTo(now Instant, v *Voter, c *Candidate, r Request) bool {
 	if mut("no_yield") || v == nil || c == nil || r.From != c.cfg.Peer || c.cfg.Self != v.self || !v.wouldYield(now, r) {
 		return false
 	}
+	if v.wouldRefuseName(now, r) && !mut("yield_before_refusal") {
+		return false // it would refuse r anyway: no reason to give up its own round
+	}
 	if !c.yield(now) {
 		return false
 	}
@@ -365,6 +493,9 @@ func YieldTo(now Instant, v *Voter, c *Candidate, r Request) bool {
 // answered at once, unless an earlier change is still unconfirmed.
 func (v *Voter) Handle(now Instant, r Request) (*Persist, []Reply) {
 	refuse := []Reply{v.reply(r, false)}
+	// Every request says its sender runs under that boot now: a probe, a
+	// campaign or a renewal, its own candidate's too (#1029 step 1).
+	v.noteNonce(r.From, r.Nonce, now.Add(v.lease), true)
 	if r.Renewal && r.From != v.self && now.Add(v.lease) > v.renewalUntil {
 		v.renewalFrom, v.renewalUntil = r.From, now.Add(v.lease)
 	}
@@ -387,6 +518,10 @@ func (v *Voter) Handle(now Instant, r Request) (*Persist, []Reply) {
 	case !(active && v.st.GrantedTo == r.From && r.Nonce == v.grantNonce) && v.refusedByHeard(now, r):
 		// A promise another voter relayed refuses it (#1029 layer 2). This
 		// voter's own running promise to this very boot wins: it renews.
+		return nil, refuse
+	case v.dupRefusedCount(now, r, active):
+		// Two boots of this name are live: no new grant to it, to either
+		// boot (#1029 step 1).
 		return nil, refuse
 	case r.Term == v.st.Promised && v.st.GrantedTo != r.From:
 		return nil, refuse // this term is someone else's
@@ -435,6 +570,16 @@ func (v *Voter) Persisted(seq uint64, ok bool) []Reply {
 		v.durable = seq
 	}
 	return out
+}
+
+// dupRefusedCount is dupRefuses, counting the refusal and the duplicate.
+func (v *Voter) dupRefusedCount(now Instant, r Request, active bool) bool {
+	refuse, counts := v.dupRefuses(now, r, active)
+	if refuse {
+		v.relayRefused++
+		v.duplicate(counts, r.From, DupNonce)
+	}
+	return refuse
 }
 
 // refusedByHeard is heardRefuses, counting the refusal and the duplicate

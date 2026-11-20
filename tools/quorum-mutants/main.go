@@ -163,7 +163,6 @@ var table = []mutation{
 	{"relay_ignored", []string{"TestVoterRefusesANameAHeardPromiseHoldsUnderAnotherNonce", "TestVoterRefusesANameWhoseOwnVoterIsHeardPromisedElsewhere", "TestCloneSeeds"}},
 	{"relay_voter_rule_off", []string{"TestVoterRefusesANameWhoseOwnVoterIsHeardPromisedElsewhere", "TestCloneSeeds"}},
 	{"relay_self_promise", []string{"TestVoterRelaysOnlyAPromiseToAnotherNode"}},
-	{"relay_last_wins", []string{"TestARelayNeverReplacesTheVotersOwnOrAnEarlierPromise"}},
 	{"relay_no_margin", []string{"TestAHeardPromiseHoldsForItsMarginThenEnds"}},
 	{"relay_tail_counted", []string{"TestAHeardPromiseHoldsForItsMarginThenEnds"}},
 	{"standby_no_probe", []string{"TestStandbyProbesTheWitnessEveryLook", "TestCloneSeeds"}},

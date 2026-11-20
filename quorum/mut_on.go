@@ -57,11 +57,17 @@ var Mutations = []string{
 	"relay_ignored",               // a voter ignores the promises other voters relay (#1029 layer 2)
 	"relay_voter_rule_off",        // a name is granted while its own voter is heard promised elsewhere (#1029 layer 2, rule (b))
 	"relay_self_promise",          // a voter relays its promise to its own candidate (a clone's self-grant reaches the voters)
-	"relay_last_wins",             // a relayed promise overrides the voter's own or one heard earlier
 	"relay_no_margin",             // a heard promise is held only for its time left, without the clock-rate margin
 	"relay_tail_counted",          // a refusal in the clock-rate margin after a heard promise counts as a duplicate
 	"standby_no_probe",            // a standby doesn't probe the witness every look
 	"relay_not_pushed",            // a voter's new promise to another node reaches the witness only at the next look
+	"dup_name_ignored",            // a voter grants a name it hears under two live boots (#1029 step 1)
+	"dup_refuses_incumbent",       // a duplicated name's running promise is refused too, so the incumbent's protecting promises lapse (#1029 step 1)
+	"dup_voter_counts",            // a candidate counts a grant from a voter its own voter knows is duplicated (#1029 step 1)
+	"dup_not_relayed",             // a voter doesn't relay a name it sees duplicated (#1029 step 1)
+	"own_dup_ignored",             // a candidate takes a lease while a voter holds its name under another boot (#1029 step 1)
+	"standby_probes_witness_only", // a standby probes the witness only, not its peer (#1029 step 1)
+	"yield_before_refusal",        // a voter yields its own round to a request it then refuses (#1079 review)
 	"retry_after_refusal_only",    // a refused campaign whose own grant came back last waits out a lease (#1029 layer 2)
 	// The driver's (quorum/node, #710 PR 3a): switched on there, listed
 	// here so this init accepts them.
