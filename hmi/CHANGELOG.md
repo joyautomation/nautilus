@@ -45,7 +45,9 @@
   `SubstituteClient` show a refusal's JSON `error`, not the JSON, and `writeTag` no longer says
   "this controller requires an auth token" for every 401/403 (under `auth:` it is "sign in",
   "confirm your password" or the role). `SubstituteClient` classes a 401/403 as `forbidden`
-  even when no outcome header came with it (it is a refusal, never "outcome unknown").
+  even when no outcome header came with it (it is a refusal, never "outcome unknown"). A 401/403
+  on a RETRY of an unknown start refuses that retry only: `SubstituteSession` keeps the pending
+  "may still take effect" entry and returns the refusal's reason.
 
 - **`Quality` gains `'substituted'`** (#707): a value an operator put in
   place of a bad sensor's, which the logic runs on. A new `ValueStatus`

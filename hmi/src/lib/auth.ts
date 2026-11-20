@@ -133,16 +133,60 @@ export const FOLLOW_KEY = 'nautilus.followedLeaderAt';
 /** The subset of Storage the loop guard uses. */
 export type GuardStorage = Pick<Storage, 'getItem' | 'setItem'>;
 
-/** Whether a referral may be followed now (none followed from here within the guard). */
-export function mayFollow(storage: GuardStorage | null | undefined, now: number): boolean {
+/**
+ * Where the guard is kept when sessionStorage cannot be used (blocked, or
+ * absent): in memory, for as long as this page lives.
+ */
+export interface FollowMemory {
+	at: number;
+}
+
+/**
+ * Whether a referral may be followed now (none followed from here within the
+ * guard). With storage blocked or absent, `memory` is the guard.
+ */
+export function mayFollow(storage: GuardStorage | null | undefined, now: number, memory?: FollowMemory): boolean {
 	let last = NaN;
+	let usable = !!storage;
 	try {
 		const kept = storage?.getItem(FOLLOW_KEY);
 		if (kept) last = Number(kept); // none kept is no guard (Number(null) is 0)
 	} catch {
-		/* storage blocked: no guard to read; follow */
+		usable = false;
 	}
+	if (!usable && memory) last = memory.at;
 	return !(Number.isFinite(last) && now >= last && now - last < FOLLOW_GUARD_MS);
+}
+
+/** Record a follow: in storage, or in memory when storage cannot be written. */
+export function markFollowed(storage: GuardStorage | null | undefined, now: number, memory?: FollowMemory): void {
+	try {
+		if (storage) {
+			storage.setItem(FOLLOW_KEY, String(now));
+			return;
+		}
+	} catch {
+		/* blocked: fall back below */
+	}
+	if (memory) memory.at = now;
+}
+
+/**
+ * Whether a response came from this page's origin. fetch follows redirects,
+ * so a same-origin request can be answered by another origin that allows
+ * CORS: its answer must not steer the page (a referral) or ask for the
+ * password (an elevation refusal). A response with no url (one a test or a
+ * service worker built) is judged by its type.
+ */
+export function sameOriginResponse(res: Response, current: string): boolean {
+	if (res.type === 'basic') return true;
+	if (res.type === 'cors' || res.type === 'opaque' || res.type === 'opaqueredirect') return false;
+	if (!res.url) return true;
+	try {
+		return new URL(res.url).origin === new URL(current).origin;
+	} catch {
+		return false;
+	}
 }
 
 /** The sign-in page, coming back to here afterwards (the server checks `next`). */
@@ -213,6 +257,7 @@ export class AuthSession {
 
 	readonly #d: AuthDeps;
 	#hadSession = false;
+	#followed: FollowMemory = { at: NaN };
 	#elevating: Promise<boolean> | null = null;
 	#leaving = false;
 	#probeWait = PROBE_MIN_MS;
@@ -258,7 +303,7 @@ export class AuthSession {
 		const text = await res.text();
 		if (!res.ok) {
 			const leader = standbyLeader(res.status, text);
-			if (leader !== null) this.#refer(leader, refusalMessage(res.status, text));
+			if (leader !== null && sameOriginResponse(res, this.#d.location().href)) this.#refer(leader, refusalMessage(res.status, text));
 			return null;
 		}
 		try {
@@ -295,17 +340,27 @@ export class AuthSession {
 	#refer(leader: string, message: string) {
 		const target = leaderTarget(leader, this.#d.location().href);
 		const now = this.#now();
-		if (target && mayFollow(this.#d.storage, now)) {
-			try {
-				this.#d.storage?.setItem(FOLLOW_KEY, String(now));
-			} catch {
-				/* no guard can be kept; follow anyway */
-			}
+		if (target && mayFollow(this.#d.storage, now, this.#followed)) {
+			markFollowed(this.#d.storage, now, this.#followed);
 			this.#leave(target);
 			return;
 		}
 		this.referral = { leader: target, message };
 		this.#changed();
+	}
+
+	/**
+	 * Whether the password is fresh already, so a refusal that asked for it
+	 * is a late one (sent before another request's elevation finished): a
+	 * fresh /api/me says,
+	 * by the controller's own clock (its `now` against `elevatedUntil`, both
+	 * from the one answer). Then the request is retried without asking.
+	 */
+	async #elevatedNow(): Promise<boolean> {
+		const me = await this.refresh();
+		const until = me?.session ? Date.parse(me.session.elevatedUntil) : NaN;
+		const now = me?.now ? Date.parse(me.now) : NaN;
+		return Number.isFinite(until) && Number.isFinite(now) && until > now;
 	}
 
 	/**
@@ -368,7 +423,9 @@ export class AuthSession {
 		const again = input instanceof Request ? input.clone() : input;
 		const res = await this.#d.fetch(input, init);
 		if (res.status !== 401 && res.status !== 503) return res;
-		if (!this.supported || !this.#sameOrigin(input)) return res;
+		// Both the request and the response must be this page's origin: a
+		// redirect could otherwise hand the answer to another origin.
+		if (!this.supported || !this.#sameOrigin(input) || !sameOriginResponse(res, this.#d.location().href)) return res;
 		const text = await res.clone().text();
 		if (res.status === 503) {
 			const leader = standbyLeader(res.status, text);
@@ -376,7 +433,11 @@ export class AuthSession {
 			return res;
 		}
 		if (wantsElevation(res.status, text)) {
-			if (!(await this.elevate())) return res;
+			if (this.#elevating) {
+				// Another request's prompt is open: its answer is this one's
+				// (a cancel there is a cancel here, never a second prompt).
+				if (!(await this.#elevating)) return res;
+			} else if (!(await this.#elevatedNow()) && !(await this.elevate())) return res;
 			return this.#d.fetch(again, init); // once; its answer is the answer
 		}
 		void this.checkSignedOut();

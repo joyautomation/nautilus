@@ -11,7 +11,9 @@ import {
 	PROBE_MIN_MS,
 	clockSkew,
 	leaderTarget,
+	markFollowed,
 	mayFollow,
+	sameOriginResponse,
 	needsPassword,
 	refusalMessage,
 	signInHref,
@@ -536,5 +538,117 @@ describe('every kit client goes through the kit fetch', () => {
 		expect(write.includes('kitFetch(')).toBe(true);
 		expect(write.includes('refusalMessage(res.status')).toBe(true);
 		expect(write.includes('auth token')).toBe(false);
+	});
+});
+
+/** A response as the browser hands it after following a redirect: its type and final url. */
+function redirected(res: Response, url: string, type: ResponseType = 'cors'): Response {
+	Object.defineProperty(res, 'url', { value: url });
+	Object.defineProperty(res, 'type', { value: type });
+	return res;
+}
+
+describe('a redirected answer (L1, #1090 review)', () => {
+	it('knows a response from another origin', () => {
+		expect(sameOriginResponse(redirected(json({}), 'https://evil.example/x'), PAGE)).toBe(false);
+		expect(sameOriginResponse(redirected(json({}), 'https://plc-a.example/api/tags', 'basic'), PAGE)).toBe(true);
+		expect(sameOriginResponse(redirected(json({}), 'https://plc-a.example/x', 'default'), PAGE)).toBe(true);
+		expect(sameOriginResponse(redirected(json({}), 'https://evil.example/x', 'default'), PAGE)).toBe(false);
+		expect(sameOriginResponse(redirected(json({}), '', 'opaque'), PAGE)).toBe(false);
+		expect(sameOriginResponse(json({}), PAGE)).toBe(true); // built, no url: judged by its type
+	});
+	it("a same-origin request redirected to another origin's referral is not followed", async () => {
+		const w = world({
+			'/api/tags': () => redirected(json({ error: 'standby', standby: true, leader: 'https://evil.example' }, 503), 'https://evil.example/api/tags')
+		});
+		await w.s.fetch('/api/tags', WRITE);
+		expect(w.nav).toEqual([]);
+		expect(w.s.referral).toBeNull();
+	});
+	it("nor is another origin's elevation refusal prompted for", async () => {
+		const w = world({ '/api/tags': () => redirected(elevate401(), 'https://evil.example/api/tags') }, ['pw']);
+		const res = await w.s.fetch('/api/tags', WRITE);
+		expect(res.status).toBe(401);
+		expect(w.prompts.length).toBe(0);
+		expect(w.sent.length).toBe(1);
+	});
+	it('nor a redirected /api/me referral', async () => {
+		const w = world({ '/api/me': () => redirected(json({ error: 'standby', standby: true, leader: 'https://evil.example' }, 503), 'https://evil.example/api/me') });
+		await w.s.refresh();
+		expect(w.nav).toEqual([]);
+	});
+});
+
+describe('a late elevation refusal (L3, #1090 review)', () => {
+	it('is retried without asking when /api/me says the password is fresh by the controller clock', async () => {
+		const fresh = signedIn({ session: { expires: '2026-11-20T20:00:00Z', elevatedUntil: '2026-11-20T09:14:00Z' }, now: '2026-11-20T09:00:00Z' });
+		const w = world({
+			'/api/forces': (_u, _i, n) => (n === 0 ? elevate401() : json({})),
+			'/api/me': () => json(fresh)
+		}, ['pw']);
+		const res = await w.s.fetch('/api/forces', WRITE);
+		expect(res.status).toBe(200);
+		expect(w.prompts.length).toBe(0);
+		expect(w.to('/api/elevate').length).toBe(0);
+		expect(w.to('/api/forces').length).toBe(2);
+	});
+	it('a refusal while another prompt is open shares it; a cancel there asks nothing more', async () => {
+		let release!: (pw: string | null) => void;
+		const typed = new Promise<string | null>((r) => (release = r));
+		// A second /api/me would be slow: answered only after the cancel, so a
+		// request that asked it (instead of waiting on the open prompt) would
+		// find no prompt open any more and ask again.
+		let late!: () => void;
+		const after = new Promise<void>((r) => (late = r));
+		const w = world({
+			'/api/forces': () => elevate401(),
+			'/api/me': async (_u, _i, n) => {
+				if (n > 0) await after;
+				return json(signedIn());
+			}
+		}, [], { prompt: () => typed });
+		const a = w.s.fetch('/api/forces', WRITE);
+		await new Promise((r) => setTimeout(r, 0));
+		const b = w.s.fetch('/api/forces', WRITE);
+		await new Promise((r) => setTimeout(r, 0));
+		release(null);
+		await new Promise((r) => setTimeout(r, 0));
+		late();
+		const [ra, rb] = await Promise.all([a, b]);
+		expect(ra.status).toBe(401);
+		expect(rb.status).toBe(401);
+		expect(w.prompts.length).toBe(1);
+		expect(w.to('/api/forces').length).toBe(2);
+	});
+});
+
+describe('the loop guard without sessionStorage (L5, #1090 review)', () => {
+	const blocked = {
+		getItem: (): string | null => {
+			throw new Error('blocked');
+		},
+		setItem: () => {
+			throw new Error('blocked');
+		}
+	};
+	it('falls back to memory: one follow, then none within the guard', () => {
+		const mem = { at: NaN };
+		expect(mayFollow(blocked, 1000, mem)).toBe(true);
+		markFollowed(blocked, 1000, mem);
+		expect(mem.at).toBe(1000);
+		expect(mayFollow(blocked, 1000 + FOLLOW_GUARD_MS - 1, mem)).toBe(false);
+		expect(mayFollow(blocked, 1000 + FOLLOW_GUARD_MS, mem)).toBe(true);
+		const none = { at: NaN };
+		markFollowed(null, 50, none);
+		expect(mayFollow(null, 60, none)).toBe(false);
+	});
+	it('storage that works is the guard; memory is not consulted', () => {
+		const m = new Map<string, string>();
+		const st = { getItem: (k: string) => m.get(k) ?? null, setItem: (k: string, v: string) => void m.set(k, v) };
+		const mem = { at: 1000 };
+		expect(mayFollow(st, 1001, mem)).toBe(true);
+		markFollowed(st, 2000, mem);
+		expect(m.get(FOLLOW_KEY)).toBe('2000');
+		expect(mem.at).toBe(1000);
 	});
 });

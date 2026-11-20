@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	nio "github.com/joyautomation/nautilus/io"
+	"github.com/joyautomation/nautilus/oplog"
 	"github.com/joyautomation/nautilus/runtime"
 )
 
@@ -242,6 +243,31 @@ func TestParamWriteOutcomeUncertain(t *testing.T) {
 	es := s.audit.ring.Recent()
 	if len(es) != 1 || es[0].Result != "unknown" || es[0].Action != "param.write" {
 		t.Errorf("the journal: %+v, want one param.write with result unknown", es)
+	}
+}
+
+// An answer whose outcome is unknown never says refused (#708 PR 7a: the
+// seam marks only its own pre-apply refusals): exactly one outcome header,
+// "unknown", with or without an auth: block in front.
+func TestUnknownOutcomeIsNeverRefused(t *testing.T) {
+	for _, withAuth := range []bool{false, true} {
+		f := newFakeParams()
+		f.values["swap"] = int64(0)
+		s := paramServer(t, f, Options{})
+		var mod []func(*http.Request)
+		if withAuth {
+			enforce(t, s)
+			mod = append(mod, func(r *http.Request) { r.Header.Set("Authorization", "Bearer admin-secret") })
+		}
+		rec := call(t, s, "PUT", "/api/iolink/LEVEL1/params/swap", `{"value": 1}`, mod...)
+		if got := rec.Header().Values(outcomeHeader); rec.Code != http.StatusBadGateway || len(got) != 1 || got[0] != "unknown" {
+			t.Errorf("auth %v: an uncertain write: %d, %s %q", withAuth, rec.Code, outcomeHeader, got)
+		}
+	}
+	rec := httptest.NewRecorder()
+	unknownOutcome(rec, fmt.Errorf("%w: %w", oplog.ErrReadOnly, oplog.ErrUnconfirmed))
+	if got := rec.Header().Values(outcomeHeader); len(got) != 1 || got[0] != "unknown" {
+		t.Errorf("an unconfirmed substitute: %s %q", outcomeHeader, got)
 	}
 }
 

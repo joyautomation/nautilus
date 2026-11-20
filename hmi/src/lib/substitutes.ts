@@ -391,7 +391,12 @@ export class SubstituteSession {
 	async #send(p: PendingStart): Promise<SubstituteResult> {
 		const r = await this.#client.start(p.name, p.value, p.seconds, p.requestId);
 		const key = p.name.toLowerCase();
-		if (!r.ok && r.retrySameId) this.#pending.set(key, p);
+		// A 401/403 on a RETRY of an unknown start refuses that retry only
+		// (who asked, this time: a sign-in ended, a role changed). It says
+		// nothing of the first attempt, which may still take effect, so the
+		// pending entry stays; its reason is the answer shown (#708).
+		const retryRefusedByAuth = !r.ok && r.kind === 'forbidden' && this.#pending.get(key)?.requestId === p.requestId;
+		if (!r.ok && (r.retrySameId || retryRefusedByAuth)) this.#pending.set(key, p);
 		else this.#pending.delete(key);
 		return r;
 	}
