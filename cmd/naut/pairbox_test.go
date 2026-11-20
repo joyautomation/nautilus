@@ -125,11 +125,29 @@ func newBoxRig(t *testing.T) *boxRig {
 		t.Fatal(err)
 	}
 	pairWait(t, "a leader", 15*time.Second, func() bool { return ea.IsLeader() || eb.IsLeader() })
-	if eb.IsLeader() {
-		r.nodes["b"].m.q.Release()
-	}
-	pairWait(t, "a to lead", 15*time.Second, func() bool { return ea.IsLeader() })
+	r.handLeadTo("a")
 	return r
+}
+
+// handLeadTo makes member lead: if the other controller leads, its
+// health is turned off until member leads (it stops renewing, and its
+// operator log keeps serving, so member takes over synced), then on again
+// (it stays the standby; its runtime's own liveness is not watched after).
+// Never by Release: a released controller never campaigns again (it is
+// shutting down), so a test that later needs it to take over would hang
+// (#1094's CI failure: B had won the first election and was released, and
+// once A was duplicated nobody could lead). Nor by a restart: the new
+// leader can't sync its log with the old one down, and yields to it once
+// it is back (#710 3b-4b), so who leads after is not the test's to say.
+func (r *boxRig) handLeadTo(member string) {
+	r.t.Helper()
+	other := map[string]string{"a": "b", "b": "a"}[member]
+	if r.el(other).IsLeader() {
+		r.el(other).SetHealth(func() bool { return false })
+		pairWait(r.t, member+" to lead", 15*time.Second, func() bool { return r.el(member).IsLeader() })
+		r.el(other).SetHealth(func() bool { return true })
+	}
+	pairWait(r.t, member+" to lead", 15*time.Second, func() bool { return r.el(member).IsLeader() })
 }
 
 // start runs member id (a, b, or clone) on box with env, listening on ln.
@@ -470,4 +488,15 @@ func TestSpoofedCloneOfAHealthyLeaderCostsNoTakeover(t *testing.T) {
 	if led := watchOneLeader(t, 2*time.Second, els); led["clone"] || led["b"] {
 		t.Fatalf("the lease moved: %v", led)
 	}
+}
+
+// The rig's hand-over leaves both controllers able to lead: the lead goes
+// to B and back to A, then A stops, and B takes over (a Release-based
+// hand-over left B released for good, and it never would).
+func TestBoxRigHandOverLeavesBothAbleToLead(t *testing.T) {
+	r := newBoxRig(t)
+	r.handLeadTo("b")
+	r.handLeadTo("a")
+	r.nodes["a"].crash()
+	pairWait(t, "b to take over", 10*time.Second, func() bool { return r.el("b").IsLeader() })
 }
