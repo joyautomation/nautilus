@@ -13,6 +13,7 @@
 //     NOT a success: the parameter may or may not have been written, to the
 //     right device or the wrong one. The caller must read it back and say so.
 
+import { kitFetch } from './kitfetch.js';
 /** A named value of an enumerated parameter: "1" is "Auto". */
 export interface ParamValueName {
 	value: string;
@@ -123,7 +124,7 @@ export class PortParamClient {
 	constructor(opts: PortParamClientOptions = {}) {
 		this.#url = opts.url ?? '/api/iolink';
 		this.#token = opts.token;
-		this.#fetch = opts.fetch ?? ((...a) => fetch(...a));
+		this.#fetch = opts.fetch ?? kitFetch;
 	}
 
 	#headers(json: boolean): Record<string, string> {

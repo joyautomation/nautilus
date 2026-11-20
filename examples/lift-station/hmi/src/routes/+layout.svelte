@@ -15,18 +15,24 @@
 	import { onMount } from 'svelte';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
-	import { theme, ConfirmDialog, AlarmBanner, AckButton, StatusPill, ThemeSwitch } from '@joyautomation/nautilus-hmi';
+	import { theme, createAuth, ConfirmDialog, AlarmBanner, AckButton, StatusPill, ThemeSwitch } from '@joyautomation/nautilus-hmi';
 	import AlarmsPanel from '$lib/AlarmsPanel.svelte';
 	import { rt, alarms } from '$lib/client.svelte';
 
 	let { children } = $props();
 	// The alarm banner opens the alarms panel, over whichever view is up.
 	let alarmsOpen = $state(false);
+	// Sign-in (an auth: block): asks for the password in the confirm dialog
+	// when an elevated action needs it, follows a sign-out and a standby's
+	// referral. Without auth: it does nothing.
+	const auth = createAuth();
 	onMount(() => {
 		theme.init();
+		void auth.start();
 		rt.start();
 		void alarms.start();
 		return () => {
+			auth.stop();
 			rt.stop();
 			alarms.stop();
 		};

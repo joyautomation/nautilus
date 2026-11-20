@@ -128,7 +128,7 @@ The endpoints, for an HMI of your own:
 | `POST /api/signin` | `{"name", "password"}` as JSON (`200` with `user` and `expires`) or a form (`303` to `next`) |
 | `POST /api/signout` | ends the session and clears the cookie |
 | `POST /api/elevate` | `{"password"}`: the session's password again, for the [elevated permissions](#elevation) (`200` with `elevatedUntil`) |
-| `GET /api/me` | who the request acts as, its roles and permissions, `secure`, the session's `expires` and `elevatedUntil`, and the `elevated` permissions |
+| `GET /api/me` | who the request acts as, its roles and permissions, `secure`, the session's `expires` and `elevatedUntil`, the `elevated` permissions, `signIn` (this controller offers `/signin`) and `now` (the controller's clock, to judge `elevatedUntil` by) |
 
 ## Elevation
 
@@ -136,8 +136,8 @@ Some permissions change what the plant runs, so a signed-in browser holds them o
 
 - **The window.** The password counts for `auth.elevation` (15 minutes by default, 1m to 12h) after the user last entered it, at sign-in or at re-authentication. Use doesn't extend it. It never outlasts the session; an `elevation` as long as `session` means the sign-in counts for the whole session.
 - **Past it**, an elevated action is refused with `401` and `{"error": …, "elevate": true}`, and nothing is done. The error tells the user to confirm their password. An HMI asks for it (`POST /api/elevate`) and sends the action again.
-- **Sign in again** (`/signin`) is the way to confirm it until the HMI kit's prompt arrives: a fresh sign-in counts as elevated. A user who doesn't hold the permission at all gets a `403` and is never asked for a password.
-- **Which pages ask.** The built-in dashboard writes only tags, which are never elevated. The VS Code extension uses a token. The HMI kit's prompt comes with its sign-in support (#708). An HMI of your own handles the `401` as above.
+- **Signing in again** (`/signin`) confirms it too: a fresh sign-in counts as elevated. A user who doesn't hold the permission at all gets a `403` and is never asked for a password.
+- **Which pages ask.** An HMI built with the kit asks for the password itself (see [In the HMI](#in-the-hmi)). The built-in dashboard writes only tags, which are never elevated. The VS Code extension uses a token. An HMI of your own handles the `401` as above.
 - **One browser.** Re-authenticating elevates that session only. The same user's other sign-ins (another screen) are not elevated.
 - **Tokens are always elevated.** `NAUTILUS_TOKEN`, service tokens and personal access tokens are sent with every request, and their role already bounds them. The journal says which kind of credential each elevated action came with (`detail.credential`: `session`, `pat`, `token` or `service`).
 - **Re-authentication** (`POST /api/elevate`) is checked like a sign-in: from the controller's own page, over HTTPS or from loopback, with one message for every wrong password. A user who holds none of the elevated permissions has nothing to confirm and is refused (`403`) before any password check. It's throttled per session, whatever address the attempts come from. Each wrong password also counts against the user's sign-in throttle. **After five wrong passwords in a row the session ends** (a stolen cookie guessing): the browser signs in again, and the journal records `auth.session-ended`. Every attempt is journalled as `auth.elevate`.
@@ -145,11 +145,39 @@ Some permissions change what the plant runs, so a signed-in browser holds them o
 - **On a redundant pair** elevation lives with the session, on the leader. A standby refers `POST /api/elevate` there, like sign-in.
 - **OIDC** sign-in (to come) will elevate by signing in at the identity provider again.
 
+## In the HMI
+
+An HMI built with the HMI kit (`@joyautomation/nautilus-hmi`) handles sign-in with one call in its root layout, beside the `<ConfirmDialog/>` it already mounts:
+
+```svelte
+<script lang="ts">
+  import { onMount } from 'svelte';
+  import { createAuth, ConfirmDialog } from '@joyautomation/nautilus-hmi';
+  const auth = createAuth();
+  onMount(() => {
+    void auth.start();
+    return () => auth.stop();
+  });
+</script>
+
+<ConfirmDialog />
+```
+
+From then on every kit client (tag writes, alarms, substitutes, IO-Link parameters, history) works like this:
+
+- **Signing in** is the controller's own `/signin` page: opening the HMI without a session goes there and comes back. The kit has no password form of its own for signing in.
+- **An elevated action past its window** asks for the password in the confirm dialog, sends it to `POST /api/elevate`, and repeats the action once, exactly as it was sent. Several actions refused at once share one prompt. Cancel, and the action reports the controller's refusal. A wrong password asks again and says so. Without a `<ConfirmDialog/>` mounted, nothing is asked: the action reports the refusal, which says to sign in again.
+- **A sign-in that ends mid-shift** (signed out elsewhere, revoked, expired, five wrong passwords) is noticed at the next refused request or dropped live stream. The kit checks `/api/me`, and if the session is gone it goes to the sign-in page, which comes back to the same screen.
+- **On a standby**, the page goes to the leader the controller names (`redundancy.public-urls`). Only that URL is opened, only if it is `http(s)`, and never `http` from an `https` page. The refused action is not sent again there. A second referral within 30 seconds is not followed, so two controllers naming each other don't bounce the page; the HMI shows it instead (`auth.referral`).
+- **Without `auth:`**, or against a controller without `/api/me`, nothing changes.
+
+**The controller decides.** What the HMI shows or greys out for a role is a convenience; every request is still checked by the controller, and its refusal is the answer.
+
 ## A redundant pair
 
 - **Copy the users file.** Both controllers need the same `users.json`. Copy it from one box to the other after a change, rather than adding users on each box (each box would salt the passwords differently). The pair's [hello check](/guides/redundancy/) reports a difference.
 - **Sessions live on the leader.** A standby refers a browser to the leader. It answers sign-in, sign-out and any request carrying the session cookie with `503` ("open the leader"). Requests with a bearer token are forwarded as before.
-- **Where to send the browser.** Give each controller's address as a browser opens it, and the standby's `503` carries the leader's in `Location` and in the JSON field `leader` (its sign-in page links there too):
+- **Where to send the browser.** Give each controller's address as a browser opens it, and the standby's `503` (JSON `"standby": true`) carries the leader's in `Location` and in the JSON field `leader` (its sign-in page links there too):
 
   ```yaml
   redundancy:

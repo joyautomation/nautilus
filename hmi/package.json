@@ -36,7 +36,7 @@
     "package": "svelte-kit sync && svelte-package && publint",
     "prepublishOnly": "npm run package",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
-    "test": "esbuild tests/*.test.ts --bundle --format=esm --platform=node --outdir=.svelte-kit/tests --log-level=warning && node .svelte-kit/tests/delta.test.js && node .svelte-kit/tests/quality.test.js && node .svelte-kit/tests/confirm.test.js && node .svelte-kit/tests/tags.test.js && node .svelte-kit/tests/sparkline.test.js && node .svelte-kit/tests/trendchart.test.js && node .svelte-kit/tests/catalog.test.js && node .svelte-kit/tests/mimic.test.js && node .svelte-kit/tests/layout.test.js && node .svelte-kit/tests/palette.test.js && node .svelte-kit/tests/route.test.js && node .svelte-kit/tests/sched.test.js && node .svelte-kit/tests/substitutes.test.js && node .svelte-kit/tests/iolink.test.js"
+    "test": "esbuild tests/*.test.ts --bundle --format=esm --platform=node --outdir=.svelte-kit/tests --log-level=warning && node .svelte-kit/tests/delta.test.js && node .svelte-kit/tests/quality.test.js && node .svelte-kit/tests/confirm.test.js && node .svelte-kit/tests/tags.test.js && node .svelte-kit/tests/sparkline.test.js && node .svelte-kit/tests/trendchart.test.js && node .svelte-kit/tests/catalog.test.js && node .svelte-kit/tests/mimic.test.js && node .svelte-kit/tests/layout.test.js && node .svelte-kit/tests/palette.test.js && node .svelte-kit/tests/route.test.js && node .svelte-kit/tests/sched.test.js && node .svelte-kit/tests/substitutes.test.js && node .svelte-kit/tests/iolink.test.js && node .svelte-kit/tests/auth.test.js"
   },
   "peerDependencies": {
     "svelte": "^5.0.0"

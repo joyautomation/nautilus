@@ -165,7 +165,7 @@ export type { ToastEntry } from './toast.svelte.js';
 // plant-affecting action. `confirm()` is promise-based, so a call site reads
 // `if (await confirm({…})) …` and cannot forget to ask.
 export { default as ConfirmDialog } from './components/ConfirmDialog.svelte';
-export { confirm, confirmState } from './confirm.svelte.js';
+export { confirm, confirmState, askPassword } from './confirm.svelte.js';
 export { createConfirmQueue, splitItems, getOperator, setOperator, DEFAULT_MAX_ITEMS } from './confirm.js';
 export type { ConfirmOptions, ConfirmRequest, ConfirmQueue, QueueOptions } from './confirm.js';
 export { default as Tooltip } from './components/Tooltip.svelte';
@@ -189,6 +189,30 @@ export {
 	storyCount
 } from './catalog.js';
 export type { Story, Variant, StoryGroup, FormatPropsOptions } from './catalog.js';
+
+// Sign-in, elevation and a standby's referral (#708). `createAuth()` once in
+// the root layout (beside <ConfirmDialog/>, which asks for the password)
+// installs its fetch for every kit client. The controller decides every
+// request: what the kit greys out for a role is a convenience, never the
+// control.
+export { AuthClient, createAuth } from './auth.svelte.js';
+export type { AuthOptions } from './auth.svelte.js';
+export {
+	AuthSession,
+	refusalMessage,
+	wantsElevation,
+	standbyLeader,
+	leaderTarget,
+	mayFollow,
+	signInHref,
+	holdsAnywhere,
+	needsPassword,
+	clockSkew,
+	FOLLOW_GUARD_MS
+} from './auth.js';
+export type { Me, MeSession, Referral, PasswordAsk, AuthDeps } from './auth.js';
+export { kitFetch, setKitFetch } from './kitfetch.js';
+export type { Fetch } from './kitfetch.js';
 
 // Realtime client (generic over the frame shape)
 export { RealtimeClient, createRealtimeClient, TrendBuffer } from './realtime.svelte.js';

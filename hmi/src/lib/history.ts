@@ -7,6 +7,7 @@
 // therefore reports availability as data (`ok: false`) so the caller can say
 // "live only, from when this page opened" instead of showing a spinner
 // forever.
+import { kitFetch } from './kitfetch.js';
 import type { TrendPoint } from './types.js';
 
 /** Where the history routes live, and how to reach them. */
@@ -59,7 +60,7 @@ export async function fetchHistory(
 		maxPoints: String(opts.maxPoints ?? 600)
 	});
 	try {
-		const res = await fetch(`${opts.base ?? ''}${opts.path ?? '/api/history'}?${qs}`, {
+		const res = await kitFetch(`${opts.base ?? ''}${opts.path ?? '/api/history'}?${qs}`, {
 			headers: headers(opts.token)
 		});
 		if (!res.ok) return { ok: false, series: {}, status: res.status };
@@ -81,7 +82,7 @@ export async function fetchHistory(
  */
 export async function historyAvailable(opts: HistoryOptions = {}): Promise<boolean> {
 	try {
-		const res = await fetch(`${opts.base ?? ''}/api/history/span`, { headers: headers(opts.token) });
+		const res = await kitFetch(`${opts.base ?? ''}/api/history/span`, { headers: headers(opts.token) });
 		return res.ok;
 	} catch {
 		return false;

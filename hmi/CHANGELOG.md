@@ -4,6 +4,20 @@
 
 ### Added
 
+- **`createAuth`, `AuthClient`, `AuthSession`** (#708): the kit's side of sign-in. Mounted once
+  beside `<ConfirmDialog/>`, it installs its fetch for every kit client: a `401` with
+  `elevate: true` asks for the password, proves it (`POST /api/elevate`) and repeats the request
+  once, byte for byte (one prompt for concurrent refusals; cancel returns the refusal); any other
+  `401`, or a dropped stream, is judged by a fresh `/api/me`, and a sign-in that has ended goes
+  to `/signin?next=`; a standby's `503` sends the page to the `leader` it names (http(s) only, no
+  https→http, a 30 s loop guard, never the `Location` header). Does nothing without `auth:`. The
+  pure rules (`leaderTarget`, `needsPassword`, `refusalMessage`, …) are exported and tested.
+- **`askPassword`, and a password mode in `<ConfirmDialog/>`** (#708): the elevation prompt.
+  Resolves to what was typed, or null; with no dialog mounted it resolves null at once (never a
+  plain-text browser prompt).
+- **`kitFetch`, `setKitFetch`**: the fetch every kit client uses unless handed one; `createAuth`
+  installs itself there.
+
 - **`PortParameters`, `PortParamClient`** (#705): the parameters of the device
   on an IO-Link port, over `/api/iolink/{port}/params`: what the device's
   IODD says each is (access, allowed range, named values), what it holds,
@@ -26,6 +40,12 @@
   badges it.
 
 ### Changed
+
+- **Refusals read as the controller's reason** (#708): `writeTag`, `AlarmClient` and
+  `SubstituteClient` show a refusal's JSON `error`, not the JSON, and `writeTag` no longer says
+  "this controller requires an auth token" for every 401/403 (under `auth:` it is "sign in",
+  "confirm your password" or the role). `SubstituteClient` classes a 401/403 as `forbidden`
+  even when no outcome header came with it (it is a refusal, never "outcome unknown").
 
 - **`Quality` gains `'substituted'`** (#707): a value an operator put in
   place of a bad sensor's, which the logic runs on. A new `ValueStatus`
