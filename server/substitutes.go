@@ -35,7 +35,7 @@ import (
 // policy of POST /api/tags), and leaves one audit entry through the seam
 // (substitute.start / .stop / .ack, the target the tag). An expiry has no
 // request: the server journals it directly (substitute.expire, by
-// "system"). A start and an acknowledgement are elevated actions, refused
+// "system"). A start and an acknowledgement are strict actions, refused
 // while the journal cannot be written; a stop is a way back to normal, and
 // is allowed (recovery, as clearing a force is).
 

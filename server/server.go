@@ -296,7 +296,7 @@ type Options struct {
 	// be opened (naut run sets it when audit.OpenFile fails, with Audit
 	// nil). The server then runs with the entries in memory only, and says
 	// so on the drivers block (/api/drivers, /api/state, the live frames)
-	// until it restarts; elevated actions (forces, program changes) are
+	// until it restarts; strict actions (forces, program changes) are
 	// refused meanwhile (#709, design §6 question 5).
 	AuditUnavailable error
 

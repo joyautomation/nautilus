@@ -420,3 +420,99 @@ func TestStandbyRefersElevate(t *testing.T) {
 		t.Error("a standby does not refer /api/elevate")
 	}
 }
+
+// Elevation does not depend on the journal (naut-lead's condition on
+// prompting for recovery actions): with the journal down and the window
+// lapsed, setting a force is asked for the password (401, not the
+// journal's 503), re-authentication works, and then clearing a force and
+// rolling back are carried out; setting a force is still refused by the
+// journal. Signing in again elevates too.
+func TestElevationWithTheJournalDown(t *testing.T) {
+	captureLog(t)
+	j := &flaky{}
+	srv, _, _ := patServerWith(t, Options{Audit: j})
+	at := clock(srv)
+	c := signIn(t, srv, "akhan")
+	cookie := func(r *http.Request) { withCookie(c.Value)(r); ownOrigin(r) }
+	if rec := call(t, srv, "POST", "/api/forces", `{"name":"SP","value":5}`, cookie); rec.Code >= 300 {
+		t.Fatalf("force while fresh: %d %s", rec.Code, rec.Body)
+	}
+	edit(editedProgram)(t, srv)
+	j.mu.Lock()
+	j.down = true
+	j.mu.Unlock()
+	call(t, srv, "POST", "/api/tags", `{"name":"SP","value":1}`, cookie) // finds it broken
+	if !srv.AuditJournalDown() {
+		t.Fatal("the journal is not down")
+	}
+	at(time.Hour)
+	if rec := call(t, srv, "POST", "/api/forces", `{"name":"SP","value":6}`, cookie); rec.Code != http.StatusUnauthorized || !elevateMarked(rec.Body.String()) {
+		t.Fatalf("lapsed force with the journal down: %d %s, want the 401 asking for the password", rec.Code, rec.Body)
+	}
+	if rec := call(t, srv, "DELETE", "/api/forces/SP", "", cookie); rec.Code != http.StatusUnauthorized || !elevateMarked(rec.Body.String()) {
+		t.Errorf("lapsed force clear: %d %s, want it asked for the password", rec.Code, rec.Body)
+	}
+	if rec := elevate(t, srv, c.Value, "password-akhan"); rec.Code != http.StatusOK {
+		t.Fatalf("elevate with the journal down: %d %s", rec.Code, rec.Body)
+	}
+	for _, x := range []struct{ method, path string }{{"DELETE", "/api/forces/SP"}, {"POST", "/api/program/rollback"}} {
+		rec := call(t, srv, x.method, x.path, "", cookie)
+		if rec.Code >= 300 || rec.Header().Get(auditJournalHeader) != "down" {
+			t.Errorf("%s %s once elevated, journal down: %d %s", x.method, x.path, rec.Code, rec.Body)
+		}
+	}
+	if rec := call(t, srv, "POST", "/api/forces", `{"name":"SP","value":7}`, cookie); rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("setting a force once elevated, journal down: %d %s, want the journal's 503", rec.Code, rec.Body)
+	}
+
+	// A fresh sign-in counts as elevated.
+	at(2 * time.Hour)
+	d := signIn(t, srv, "akhan")
+	if rec := call(t, srv, "POST", "/api/program/rollback", "", withCookie(d.Value), ownOrigin); rec.Code == http.StatusUnauthorized {
+		t.Errorf("a fresh sign-in is asked for the password: %s", rec.Body)
+	}
+}
+
+// Re-authentication waits for one of the two password-hash slots, as
+// sign-in does; an attempt that got none (or was throttled) is not a
+// wrong password and does not count toward ending the session.
+func TestElevateWaitsForTheHash(t *testing.T) {
+	srv, _, _ := patServer(t)
+	clock(srv)
+	c := signIn(t, srv, "akhan")
+	old := signInQueue
+	signInQueue = 10 * time.Millisecond
+	t.Cleanup(func() { signInQueue = old })
+	for range signInHashing {
+		srv.signin.hashing <- struct{}{}
+	}
+	for i := 0; i < maxElevateFails; i++ {
+		if rec := elevate(t, srv, c.Value, "nope"); rec.Code != http.StatusServiceUnavailable {
+			t.Errorf("hash busy: %d %s, want 503", rec.Code, rec.Body)
+		}
+	}
+	// Throttled now (the bucket is spent): still not counted.
+	if rec := elevate(t, srv, c.Value, "nope"); rec.Code != http.StatusTooManyRequests {
+		t.Errorf("past the bucket: %d %s", rec.Code, rec.Body)
+	}
+	if se := srv.sessions.byHash[sessionHash(c.Value)]; se == nil || se.fails != 0 {
+		t.Errorf("busy or throttled attempts counted as wrong passwords: %+v", se)
+	}
+}
+
+// The session the fifth wrong password ends is ended like a sign-out:
+// the OnEnd hooks hear of it, so its open live streams close.
+func TestElevateEndTellsTheHooks(t *testing.T) {
+	srv, _, _ := patServer(t)
+	clock(srv)
+	c := signIn(t, srv, "akhan")
+	srv.signin.sessions = newLimiter(100, time.Second)
+	var ended []string
+	srv.sessions.OnEnd(func(se session) { ended = append(ended, se.hash) })
+	for i := 0; i < maxElevateFails; i++ {
+		elevate(t, srv, c.Value, "nope")
+	}
+	if len(ended) != 1 || ended[0] != sessionHash(c.Value) {
+		t.Errorf("hooks told %v, want the session", ended)
+	}
+}

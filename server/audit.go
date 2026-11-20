@@ -64,7 +64,7 @@ const (
 
 // actionClass classes every action the seam journals, for when the journal
 // cannot be written (#709, design §6 question 5, decided 2026-11-18):
-//   - elevated actions (setting a force, a program edit or activation)
+//   - strict actions (setting a force, a program edit or activation)
 //     must never happen unrecorded, and are refused;
 //   - operator actions (tag writes, alarm acknowledgement and shelving,
 //     SFC commands) are allowed;
@@ -74,9 +74,14 @@ const (
 // An allowed action's entry is kept in memory and written once the journal
 // recovers, and its response carries X-Nautilus-Audit-Journal: down.
 //
-// Classification fails closed: an action missing here is elevated, and
+// Classification fails closed: an action missing here is strict, and
 // TestEveryActionIsClassed fails on it, so a new route is classed on
 // purpose.
+//
+// The strict class is the journal's, not auth's elevated permissions
+// (auth.ElevatedPermissions, which need a fresh password): the two sets
+// differ (a substitute's start is strict and not elevated; clearing a
+// force is elevated and not strict).
 var actionClass = map[string]string{
 	"tag.write":      operator,
 	"alarm.ack":      operator,
@@ -90,26 +95,26 @@ var actionClass = map[string]string{
 	"force.clear-all":  recovery,
 	"program.rollback": recovery,
 
-	"force.set":        elevated,
-	"substitute.start": elevated,
-	"substitute.ack":   elevated,
-	"program.edit":     elevated,
-	"program.activate": elevated,
-	"config.stage":     elevated,
-	"config.validate":  elevated,
-	"config.apply":     elevated,
+	"force.set":        strict,
+	"substitute.start": strict,
+	"substitute.ack":   strict,
+	"program.edit":     strict,
+	"program.activate": strict,
+	"config.stage":     strict,
+	"config.validate":  strict,
+	"config.apply":     strict,
 	// A parameter is written to the device on an IO-Link port, through its
 	// master: a change to a device, like a configuration apply.
-	"param.write": elevated,
+	"param.write": strict,
 	// Cancelling a pending revert keeps a change its device has not
 	// answered: it overrides a safeguard the apply asked for.
-	"config.revert.cancel": elevated,
+	"config.revert.cancel": strict,
 }
 
 const (
 	operator = "operator"
 	recovery = "recovery"
-	elevated = "elevated"
+	strict   = "strict"
 
 	// auditJournalHeader is set to "down" on the response to an action
 	// carried out while the journal cannot be written: its entry is kept
@@ -117,9 +122,9 @@ const (
 	auditJournalHeader = "X-Nautilus-Audit-Journal"
 )
 
-// isElevated reports whether action is refused while the journal is down:
+// journalStrict reports whether action is refused while the journal is down:
 // every action not classed as an operator's or a recovery.
-func isElevated(action string) bool {
+func journalStrict(action string) bool {
 	c := actionClass[action]
 	return c != operator && c != recovery
 }
@@ -243,19 +248,19 @@ func (a *auditor) upkeep(ctx context.Context) {
 }
 
 // down reports a journal that could not be opened or cannot be written:
-// elevated actions are refused, and the system alarm is up.
+// strict actions are refused, and the system alarm is up.
 func (a *auditor) down() bool {
 	return a.unavailable != "" || a.health.Load() != nil
 }
 
 // AuditJournalDown reports whether the audit journal could not be opened
-// or cannot be written. While it is, elevated actions (forces, program
+// or cannot be written. While it is, strict actions (forces, program
 // edits) are refused; naut run raises the system alarm from it.
 func (s *Server) AuditJournalDown() bool { return s.audit.down() }
 
 // status is the journal's card on the drivers block, shown only while
 // something is wrong with it: it could not be opened, or it cannot be
-// written. Either way elevated actions are refused and operator actions
+// written. Either way strict actions are refused and operator actions
 // are allowed, journalled in memory only: this card (and naut run's
 // system alarm) is how an operator learns why.
 func (a *auditor) status() *DriverStatus {
@@ -293,8 +298,8 @@ func (a *auditor) flush() {
 // writeLocked puts e in the journal, after any entries still owed to it,
 // and in the ring. When the journal fails, the action this entry records
 // has already happened: the failure is logged and e is kept, to be
-// written with the same id later; from then on elevated actions are
-// refused (isElevated) until the journal catches up.
+// written with the same id later; from then on strict actions are
+// refused (journalStrict) until the journal catches up.
 func (a *auditor) writeLocked(e audit.Entry) {
 	got := e
 	if a.retryLocked() {
@@ -488,7 +493,7 @@ func (a *auditedRoute) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		t = a.tf(r, body)
 	}
 	if a.s.audit.down() {
-		if isElevated(a.action) {
+		if journalStrict(a.action) {
 			a.answer(w, r, t, func(w http.ResponseWriter, _ *http.Request) {
 				writeJSON(w, http.StatusServiceUnavailable, map[string]string{
 					"error": "the audit journal cannot be written, so " + a.action + " is refused until it can be (operator actions, clearing forces and rolling back are still allowed)",
