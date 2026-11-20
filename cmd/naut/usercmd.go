@@ -221,11 +221,14 @@ func usersMain(args []string, load func(dir string) (*project.Manifest, string, 
 	if cmd == "token" {
 		fmt.Fprintf(stderr, "token %s for %s (shown once; naut users revoke %s %s ends it):\n", id, name, name, id)
 		fmt.Fprintln(stdout, tok)
+		fmt.Fprintf(stderr, "Next: send it as Authorization: Bearer <token>, e.g. curl -H \"Authorization: Bearer $TOKEN\" https://<controller>/api/me (VS Code: the nautilus.token setting). It acts as %s, with %s's roles, at once.\n", name, name)
 		return 0
 	}
 	fmt.Fprintf(stderr, "%s: %s %s\n", path, cmd, name)
 	if m != nil && cmd == "add" && !manifestNames(m)[name] {
 		fmt.Fprintf(stderr, "naut users: warning: %s is not in nautilus.yaml's auth.users, so it holds no role and cannot sign in until it is\n", name)
+	} else if cmd == "add" {
+		fmt.Fprintf(stderr, "Next: %s signs in at /signin on the controller (over HTTPS, or from its own loopback); for a script or VS Code, naut users token %s. A running controller has the password within a second: no restart.\n", name, name)
 	}
 	return 0
 }

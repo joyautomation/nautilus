@@ -46,9 +46,12 @@ This project's own OPC UA server (the opcua: section):
   naut opcua certs [--pki DIR]
         List the server's certificate and the client certificates it trusts
         and has refused, with thumbprints and expiry.
-  naut opcua trust [--pki DIR] <thumbprint>
+  naut opcua trust [--pki DIR] <thumbprint> [--as <name>:<role>[@<area>,...]]
         Approve a refused client: move its certificate from rejected/ to
-        trusted/. At least 16 hex digits; no restart needed.
+        trusted/. At least 16 hex digits; no restart needed. Under auth:
+        a trusted certificate reads only; --as also maps it to a role in
+        auth.opcua-certificates (by its full thumbprint), so it writes as
+        opcua-cert:<name> once naut run restarts.
   --pki defaults to opcua.pki in ./nautilus.yaml, else ./pki.
 
 Connection flags (import and browse):

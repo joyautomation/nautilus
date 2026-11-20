@@ -9,6 +9,24 @@ An `auth:` block in `nautilus.yaml` says who may do what on a controller.
 - **The box** holds the credentials: passwords and personal access tokens, in a users file that never enters the project.
 - **The [audit journal](/guides/http-api/)** records every change, with the user who made it.
 
+## Turn it on
+
+From a project with no `auth:` block to an operator who signs in:
+
+```sh
+naut auth init --user alice:operator   # writes a starter auth: block into nautilus.yaml
+naut users add alice                   # alice's password, kept on the controller (sudo on a box)
+naut run                               # restart it if it was running: auth: is read at start
+```
+
+`naut auth init` adds the block at the end of `nautilus.yaml` and changes nothing else in the file. The block names the users you give (`--user <name>:<role>`, repeatable) and lists the other keys as commented examples. It refuses a manifest that already has an `auth:` block, and it checks the result loads before writing it. Each command prints the next step.
+
+- **A token for a script or VS Code:** `naut users token alice`.
+- **An OPC UA client that writes as itself:** `naut opcua trust <thumbprint> --as scada:operator` (see [OPC UA](#opc-ua)).
+- **Restart `naut run` after a change to `nautilus.yaml`.** The `auth:` block is read at start. Changes to users and tokens (`naut users`) take effect at once.
+
+With `auth:`, every request needs a credential, reads included, unless you set `anonymous: viewer`.
+
 ## The `auth:` block
 
 ```yaml
@@ -205,6 +223,15 @@ With `auth:`, an OPC UA client writes only as someone the block names. Both ways
   **Prefer the thumbprint.** A thumbprint names one certificate. A subject is whatever the certificate says about itself, so a subject mapping also grants its roles to any other certificate with the same subject that is trusted later, a lookalike approved from `rejected/` for instance. If one certificate matches both a thumbprint mapping and a subject mapping, the thumbprint wins.
 
   The session then writes as `opcua-cert:<name>`, within those grants, and the journal names it so.
+
+  **One command does both steps** for a client the server has refused: it approves the certificate and maps it by its full thumbprint.
+
+  ```sh
+  naut opcua certs                                         # the refused client's thumbprint
+  naut opcua trust 9f86d081884c7d65 --as scada:operator@receiving
+  ```
+
+  `--as <name>:<role>[@<area>,...]` writes the `opcua-certificates` entry into `nautilus.yaml` and changes nothing else in the file. Before it moves the certificate, it checks the name, role and area. It refuses a project with no `auth:` block (run `naut auth init` first) and a name or certificate already mapped. The client can connect at once, read-only; restart `naut run` for the grant. On a box `naut deploy` set up there is no `nautilus.yaml` beside the store: `--as` prints the lines to add in the project's checkout, then deploy it.
 
 A trusted certificate the block does not map is **read-only**: its client signs in with a user name to write. `opcua.anonymous-writes` can't be used with `auth:` (the load refuses it). Either way, the tag must also be open in `opcua.writable`. Without `auth:`, a trusted certificate writes what `opcua.writable` opens, as before.
 

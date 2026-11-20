@@ -9,8 +9,10 @@ package main
 // client's next attempt connects, with no restart.
 
 import (
+	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,6 +22,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/joyautomation/nautilus/internal/project"
 	opcuaserver "github.com/joyautomation/nautilus/opcua/server"
 )
 
@@ -124,20 +127,144 @@ func expiry(t, now time.Time) string {
 }
 
 func runOPCUATrust(args []string) int {
+	return opcuaTrustMain(args, os.Stdout, os.Stderr)
+}
+
+const opcuaTrustUsage = "usage: naut opcua trust [--pki DIR] <thumbprint> [--as <name>:<role>[@<area>,...]] [-m <manifest>]   (naut opcua certs lists the rejected ones)"
+
+// opcuaTrustMain is naut opcua trust: it approves a refused client's
+// certificate and, with --as, maps it in the manifest's auth: block
+// (auth.opcua-certificates, by its full thumbprint) in the same step
+// (#708). Everything --as writes is checked before the certificate moves,
+// so a refused mapping leaves both the store and the manifest as they were.
+func opcuaTrustMain(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("opcua trust", flag.ContinueOnError)
+	fs.SetOutput(stderr)
 	pkiDir := pkiFlag(fs)
-	if err := fs.Parse(args); err != nil {
-		return 2
-	}
-	if fs.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "usage: naut opcua trust [--pki DIR] <thumbprint>   (naut opcua certs lists the rejected ones)")
-		return 2
-	}
-	c, err := opcuaserver.PKI{Dir: resolvePKI(*pkiDir)}.Trust(fs.Arg(0))
+	as := fs.String("as", "", "also map the certificate in auth.opcua-certificates: <name>:<role>[@<area>,...]")
+	manifest := fs.String("m", "", manifestFlagUsage)
+	pos, err := parseInterspersed(fs, args)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "naut opcua trust: %v\n", err)
+		return 2
+	}
+	if len(pos) != 1 {
+		fmt.Fprintln(stderr, opcuaTrustUsage)
+		return 2
+	}
+	fail := func(err error) int {
+		fmt.Fprintf(stderr, "naut opcua trust: %v\n", err)
 		return 1
 	}
-	fmt.Printf("trusted %s\n  %s\n  %s\nThe client can connect now; the server reads the trust list on every connection.\n", c.Thumbprint, printable(c.ApplicationURI), printable(c.Subject))
+	pki := opcuaserver.PKI{Dir: resolvePKI(*pkiDir)}
+	if *as == "" {
+		c, err := pki.Trust(pos[0])
+		if err != nil {
+			return fail(err)
+		}
+		fmt.Fprintf(stdout, "trusted %s\n  %s\n  %s\nThe client can connect now; the server reads the trust list on every connection.\n", c.Thumbprint, printable(c.ApplicationURI), printable(c.Subject))
+		if m, err := project.ReadManifest(os.DirFS("."), *manifest); err == nil && m.Auth != nil {
+			fmt.Fprintf(stdout, "Under auth: it is read-only until mapped: naut opcua trust %s --as <name>:<role> lets it write (or its client signs in with a user name).\n", c.Thumbprint)
+		}
+		return 0
+	}
+	g, err := parseGrantSpec(*as)
+	if err != nil {
+		return fail(fmt.Errorf("--as %w", err))
+	}
+	c, rejected, err := findClientCert(pki, pos[0])
+	if err != nil {
+		return fail(err)
+	}
+	e, err := openManifestEdit(".", *manifest)
+	if errors.Is(err, os.ErrNotExist) {
+		return fail(fmt.Errorf("--as edits the project's nautilus.yaml, and there is none here, so nothing changed. On a box naut deploy set up: trust it here without --as, then in the project's checkout add\n  auth:\n    opcua-certificates:\n      %s: {thumbprint: %s, grants: %s}\nand deploy it", g.name, c.Thumbprint, g.yaml()))
+	}
+	if err != nil {
+		return fail(err)
+	}
+	if err := mapOPCUACert(e, g, c.Thumbprint); err != nil {
+		return fail(err)
+	}
+	if _, err := e.check(); err != nil {
+		return fail(fmt.Errorf("--as %s would not load, so nothing changed: %w", *as, err))
+	}
+	if rejected {
+		if c, err = pki.Trust(c.Thumbprint); err != nil {
+			return fail(err)
+		}
+		fmt.Fprintf(stdout, "trusted %s\n  %s\n  %s\n", c.Thumbprint, printable(c.ApplicationURI), printable(c.Subject))
+	} else {
+		fmt.Fprintf(stdout, "%s is trusted already\n", c.Thumbprint)
+	}
+	if _, err := e.save(); err != nil {
+		return fail(fmt.Errorf("the certificate is trusted, but the mapping was not written: %w\nAdd it under auth.opcua-certificates by hand:\n    %s: {thumbprint: %s, grants: %s}", err, g.name, c.Thumbprint, g.yaml()))
+	}
+	fmt.Fprintf(stdout, "%s: auth.opcua-certificates.%s = %s (thumbprint %s)\n", e.path, g.name, g.yaml(), c.Thumbprint)
+	fmt.Fprintln(stdout, "The client can connect now, read-only. Its writes, as opcua-cert:"+g.name+", need the grant loaded:")
+	fmt.Fprintln(stdout, restartNote)
 	return 0
+}
+
+// findClientCert is the client certificate prefix names: a rejected one
+// (rejected true), else a trusted one, refusing a prefix that names
+// several or that is shorter than Trust takes.
+func findClientCert(pki opcuaserver.PKI, prefix string) (opcuaserver.CertInfo, bool, error) {
+	p := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(prefix), ":", ""))
+	if len(p) < 16 {
+		return opcuaserver.CertInfo{}, false, fmt.Errorf("give at least 16 hex digits of the thumbprint, ideally all 40 (naut opcua certs lists them)")
+	}
+	_, trusted, rejected, err := pki.Certs()
+	if err != nil {
+		return opcuaserver.CertInfo{}, false, err
+	}
+	for _, set := range []struct {
+		certs    []opcuaserver.CertInfo
+		rejected bool
+	}{{rejected, true}, {trusted, false}} {
+		var hits []opcuaserver.CertInfo
+		for _, c := range set.certs {
+			if strings.HasPrefix(c.Thumbprint, p) {
+				hits = append(hits, c)
+			}
+		}
+		switch len(hits) {
+		case 0:
+			continue
+		case 1:
+			return hits[0], set.rejected, nil
+		default:
+			return opcuaserver.CertInfo{}, false, fmt.Errorf("%d certificates have a thumbprint starting %s; give more digits", len(hits), p)
+		}
+	}
+	return opcuaserver.CertInfo{}, false, fmt.Errorf("no rejected or trusted certificate in %s has a thumbprint starting %s: a client's certificate lands in rejected/ when it is refused", pki.Dir, p)
+}
+
+// mapOPCUACert adds name: {thumbprint, grants} to the manifest's
+// auth.opcua-certificates, making the key when there is none. It never
+// makes the auth: block itself (errNoAuth).
+func mapOPCUACert(e *manifestEdit, g grantSpec, thumbprint string) error {
+	ak, av := child(e.root, "auth")
+	if ak == nil {
+		return errNoAuth
+	}
+	entry := fmt.Sprintf("%s: {thumbprint: %s, grants: %s}", g.name, thumbprint, g.yaml())
+	ck, cv := child(av, "opcua-certificates")
+	if ck == nil {
+		if !blockMapping(av) {
+			return fmt.Errorf("auth: (line %d) is not a block a command can add to; add this under it by hand:\n  opcua-certificates:\n    %s", ak.Line, entry)
+		}
+		return e.insertUnder(ak, av, []string{"opcua-certificates:", "  " + entry})
+	}
+	for i := 0; i+1 < len(cv.Content); i += 2 {
+		if strings.EqualFold(cv.Content[i].Value, g.name) {
+			return fmt.Errorf("auth.opcua-certificates already maps %s (line %d): choose another name, or edit that one", g.name, cv.Content[i].Line)
+		}
+		if _, tv := child(cv.Content[i+1], "thumbprint"); tv != nil && strings.EqualFold(tv.Value, thumbprint) {
+			return fmt.Errorf("auth.opcua-certificates.%s (line %d) maps this certificate already", cv.Content[i].Value, cv.Content[i].Line)
+		}
+	}
+	if !blockMapping(cv) {
+		return fmt.Errorf("auth.opcua-certificates (line %d) is not a block a command can add to; add this under it by hand:\n    %s", ck.Line, entry)
+	}
+	return e.insertUnder(ck, cv, []string{entry})
 }
