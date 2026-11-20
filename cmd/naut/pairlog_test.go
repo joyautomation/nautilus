@@ -296,9 +296,10 @@ func TestPairLogWritesWithItsPeerDown(t *testing.T) {
 }
 
 // §8.1 case 5: a lone survivor (the other controller and the witness both
-// down) keeps what it applied and refuses every operator-intent write
-// with the no-majority text and a certain "refused": nothing was
-// proposed. When they return, writes go through again.
+// down) keeps what it applied and refuses every operator-intent write for
+// certain (nothing was proposed): the no-majority text while it still
+// holds its lease, "no leader" once that has run out. When they return,
+// writes go through again.
 func TestPairLogRefusesWithoutAMajority(t *testing.T) {
 	r := newPairRig(t)
 	lead := r.leader()
@@ -314,9 +315,15 @@ func TestPairLogRefusesWithoutAMajority(t *testing.T) {
 		{"stop", "DELETE", "/api/substitutes/" + itoa(id), ""},
 		{"ack", "POST", "/api/substitutes/ack", `{"ids":[` + itoa(id) + `]}`},
 	} {
+		// With both others down the survivor also loses its lease, so the
+		// write may meet the log's no-majority refusal or, a moment later,
+		// the standby's "no leader": either is a certain refusal, never
+		// "outcome unknown".
 		code, body, h := r.call(lead, c.method, c.path, c.body)
-		if code != http.StatusServiceUnavailable || h.Get("X-Nautilus-Outcome") != "refused" || !strings.Contains(body, PairNoMajority) {
-			t.Errorf("%s alone: %d %q %s; want 503, refused, %q", c.verb, code, h.Get("X-Nautilus-Outcome"), body, PairNoMajority)
+		logRefusal := h.Get("X-Nautilus-Outcome") == "refused" && strings.Contains(body, PairNoMajority)
+		noLeader := h.Get("X-Nautilus-Outcome") == "" && strings.Contains(body, "no leader")
+		if code != http.StatusServiceUnavailable || !logRefusal && !noLeader {
+			t.Errorf("%s alone: %d %q %s; want 503 refused with %q, or no leader", c.verb, code, h.Get("X-Nautilus-Outcome"), body, PairNoMajority)
 		}
 	}
 	if !hasSubstitute(r.substitutes(lead), id) {
