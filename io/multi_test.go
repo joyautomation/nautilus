@@ -345,3 +345,24 @@ func TestSetPlainGateReachesOnlyPlainGatedChildren(t *testing.T) {
 		t.Fatal("a lone driver that is not PlainGated took the gate")
 	}
 }
+
+type scanCounter struct {
+	plain
+	begun int
+}
+
+func (s *scanCounter) BeginScan() { s.begun++ }
+
+// A composite tells every child that wants to know a scan is starting.
+func TestMultiForwardsBeginScan(t *testing.T) {
+	a := &scanCounter{plain: plain{mem: NewMemory(), ins: []string{"A"}}}
+	b := &scanCounter{plain: plain{mem: NewMemory(), ins: []string{"B"}}}
+	m, err := NewMulti(NamedDriver{Name: "a", Driver: a}, NamedDriver{Name: "b", Driver: b})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.BeginScan()
+	if a.begun != 1 || b.begun != 1 {
+		t.Fatalf("BeginScan reached %d and %d children, want 1 each", a.begun, b.begun)
+	}
+}

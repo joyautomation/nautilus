@@ -290,6 +290,9 @@ type Runtime struct {
 	// asker is the driver as an io.OutputsRequester, nil when it is not
 	// one: asked every scan whether it wants the whole output set.
 	asker nio.OutputsRequester
+	// beginner is the driver as an io.ScanBeginner, told each scan is
+	// starting before the inputs are read.
+	beginner nio.ScanBeginner
 
 	// inBuf is the delivery map an io.BatchReader driver refills each scan
 	// instead of allocating one, and outBuf the map the output push is
@@ -667,6 +670,9 @@ func New(o Options) (*Runtime, error) {
 	r.mono = monoFor(o.Clock)
 	if a, ok := o.Driver.(nio.OutputsRequester); ok {
 		r.asker = a
+	}
+	if b, ok := o.Driver.(nio.ScanBeginner); ok {
+		r.beginner = b
 	}
 	if rd, ok := o.Driver.(nio.InputsReadier); ok {
 		r.ready = rd
@@ -1453,6 +1459,9 @@ func (r *Runtime) scanAt(due time.Time) {
 
 	// 1. inputs — on a read failure the scan runs on last-known values.
 	var ioErr error
+	if r.beginner != nil {
+		r.beginner.BeginScan() // before the read: what is live now reaches this scan
+	}
 	if r.driver != nil {
 		var in nio.Values
 		var err error

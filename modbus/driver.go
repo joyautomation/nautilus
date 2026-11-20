@@ -231,6 +231,13 @@ type Driver struct {
 	// io.BaselineHolder) instead of deciding against the device.
 	holdBaseline bool
 
+	// scanAware: BeginScan has been called, so a runtime drives this
+	// driver and a push is computed from the inputs its scan read. Without
+	// one (a harness or tool writing outputs directly) nothing says which
+	// reads a push was computed from, and the baseline decides at the read
+	// itself, as before BeginScan (#1123).
+	scanAware atomic.Bool
+
 	started atomic.Bool
 	reads   atomic.Uint64 // successful block reads
 	writes  atomic.Uint64 // successful device writes
@@ -294,8 +301,16 @@ type source struct {
 	// devRead is what the device last answered for each readable output on
 	// the current connection (cleared when it drops): a value is only ever
 	// decided against a live read.
-	devRead  map[string]devValue
-	rewrites []*rewriteRun
+	devRead map[string]devValue
+	// scanRead is what BeginScan froze for the scan in progress: the
+	// outputs whose live read (or, for one that cannot be read, a live
+	// source) reached this scan's input read. The baseline decides only
+	// against it, and only on a push from that scan (#1123).
+	scanRead map[string]devValue
+	// recording: devRead is being filled (until the start-up baseline has
+	// nothing left to decide). Under mu.
+	recording bool
+	rewrites  []*rewriteRun
 	// stuck is, per tag, a command whose write did not run (0x0A, 0x0B,
 	// 0x06) and has not landed since: its retry backoff and how many
 	// times it was tried (see wroteOK). Touched only by the source loop,
@@ -351,6 +366,7 @@ type blockRun struct {
 	parkedUntil time.Time // exception parking (excCount ≥ exceptionsToPark)
 	bad         bool      // tags Bad while true (guarded by source.mu)
 	gwFail      bool      // latest read got a gateway no-answer (guarded by source.mu)
+	live        bool      // the device answered a read of it on this connection (guarded by source.mu)
 }
 
 // rewriteRun schedules one Rewrite binding's re-assert (brief §4.1).
@@ -521,6 +537,8 @@ func newSource(cfg Source) *source {
 		written:         map[string]any{},
 		undecided:       map[string]any{},
 		devRead:         map[string]devValue{},
+		scanRead:        map[string]devValue{},
+		recording:       true,
 		stuck:           map[string]*stuckWrite{},
 		byName:          map[string]outBinding{},
 		kick:            make(chan struct{}, 1),
@@ -842,6 +860,11 @@ func (d *Driver) Start(ctx context.Context) {
 	d.wmu.Lock()
 	d.baseline = !d.sawShut.Load() // a standby has none (#606)
 	d.holdBaseline = false
+	for _, s := range d.sources {
+		s.mu.Lock()
+		s.recording = true // the baseline is armed again: reads count
+		s.mu.Unlock()
+	}
 	d.wmu.Unlock()
 	d.started.Store(true)
 	for _, s := range d.sources {
@@ -1044,6 +1067,7 @@ func (d *Driver) WriteOutputs(vals nio.Values) error {
 	d.baseline = false
 	d.wmu.Unlock()
 
+	aware := d.scanAware.Load()
 	var told []func()
 	for _, s := range d.sources {
 		s.mu.Lock()
@@ -1065,9 +1089,15 @@ func (d *Driver) WriteOutputs(vals nio.Values) error {
 				continue
 			}
 			if _, waiting := s.undecided[name]; waiting {
-				// still waiting for its first read: the latest value is the
-				// one to decide with, baseline push or not
+				// still waiting for a push computed from its live read: the
+				// latest value is the one to decide with, baseline push or not
 				s.undecided[name] = v
+				if dv, live := s.liveReadLocked(name, aware); live && s.decideLocked(name, dv) {
+					kicked[s] = true
+					if share != nil {
+						share.Queued[name] = v
+					}
+				}
 			} else if (held || recordOnly) && HeldAtBaseline(s.byName[name].b) {
 				// Record, never send. A tag with a command already
 				// queued keeps it: that one WAS asked for.
@@ -1075,29 +1105,16 @@ func (d *Driver) WriteOutputs(vals nio.Values) error {
 					s.written[name] = v
 				}
 			} else if baseline && HeldAtBaseline(s.byName[name].b) {
-				// Decided against what the device holds (#1123).
+				// Decided against what the device holds, on a push computed
+				// from its live read (#1123).
 				if _, queued := s.pending[name]; queued {
 					continue
 				}
-				ob := s.byName[name]
-				if !ob.readable {
-					// never read back: nothing to compare with
-					s.written[name] = v
-					s.pending[name] = v
+				s.undecided[name] = v
+				if dv, live := s.liveReadLocked(name, aware); live && s.decideLocked(name, dv) {
 					kicked[s] = true
 					if share != nil {
 						share.Queued[name] = v
-					}
-					continue
-				}
-				s.undecided[name] = v
-				if dv, read := s.devRead[name]; read {
-					// read on the live connection: decide now
-					if s.decideLocked(name, dv) {
-						kicked[s] = true
-						if share != nil {
-							share.Queued[name] = v
-						}
 					}
 				}
 			} else if prev, ok := s.written[name]; ok && sameScalar(prev, v) {
@@ -1172,16 +1189,63 @@ func (s *source) holds(name string, v any, dv devValue) bool {
 	return true
 }
 
-// heardOutputLocked records what a poll read for one output and decides it
-// if the start-up baseline was waiting on it. Reports whether it queued.
-func (s *source) heardOutputLocked(name string, dv devValue) bool {
+// recordOutputLocked records what a poll read for one output, while the
+// start-up baseline still needs it. It decides nothing: the decision is made
+// on a push computed from the read (BeginScan). Only with no runtime driving
+// the driver (decide) is it decided here, as before BeginScan existed.
+func (s *source) recordOutputLocked(name string, dv devValue, decide bool) bool {
+	if !s.recording {
+		return false
+	}
 	if _, out := s.byName[name]; !out {
 		return false
 	}
-	if !dv.unreadable {
-		s.devRead[name] = dv
+	s.devRead[name] = dv
+	return decide && s.decideLocked(name, dv)
+}
+
+// BeginScan is the driver's io.ScanBeginner: the runtime calls it before it
+// reads this scan's inputs. What the device has answered by now is delivered
+// to that read, so the start-up baseline's outputs are decided only on the
+// push that scan makes, never on one computed from init values before the
+// first read (#1123). It freezes, per source whose reads are all live, the
+// outputs with a read (and those that cannot be read, which are commanded
+// once), and asks the runtime for the whole output set when one is waiting.
+func (d *Driver) BeginScan() {
+	d.scanAware.Store(true)
+	d.wmu.Lock()
+	armed := d.baseline
+	d.wmu.Unlock()
+	d.srcMu.RLock()
+	defer d.srcMu.RUnlock()
+	for _, s := range d.sources {
+		s.mu.Lock()
+		if !armed && len(s.undecided) == 0 {
+			s.recording = false // nothing left to decide: stop recording reads
+			clear(s.devRead)
+			clear(s.scanRead)
+			s.mu.Unlock()
+			continue
+		}
+		clear(s.scanRead)
+		if s.liveLocked() {
+			for name, dv := range s.devRead {
+				s.scanRead[name] = dv
+			}
+			for name, ob := range s.byName {
+				if !ob.readable {
+					s.scanRead[name] = devValue{unreadable: true}
+				}
+			}
+			for name := range s.undecided {
+				if _, live := s.scanRead[name]; live {
+					d.wanted.Store(true) // a waiting output is decidable: push it
+					break
+				}
+			}
+		}
+		s.mu.Unlock()
 	}
-	return s.decideLocked(name, dv)
 }
 
 // nudge wakes a source loop without blocking.
@@ -1261,7 +1325,7 @@ func (d *Driver) run(ctx context.Context, s *source) {
 		}
 		s.mu.Lock()
 		s.answered = false
-		clear(s.devRead)
+		s.resetLiveLocked()
 		s.gwFailed, s.gwMisses = 0, 0
 		for _, br := range s.blocks {
 			br.gwFail = false
@@ -1623,13 +1687,14 @@ func (d *Driver) pollBlock(ctx context.Context, s *source, c conn, br *blockRun)
 			s.excs++
 			s.lastErr = fmt.Errorf("%s %d..%d: %w", br.Table, br.Start, int(br.Start)+int(br.Count)-1, err)
 			br.bad = true
-			queued := false
+			queued, aware := false, d.scanAware.Load()
 			if gatewayNoAnswer(err) {
 				s.blockNoAnswerLocked(br, ctx.Err() == nil)
 			} else {
-				s.blockAnsweredLocked(br)       // the device is there; this span is refused
-				for _, t := range br.Bindings { // unreadable: a waiting baseline output is commanded once (#1123)
-					queued = s.heardOutputLocked(t.Name, devValue{unreadable: true}) || queued
+				s.blockAnsweredLocked(br) // the device is there; this span is refused
+				br.live = true
+				for _, t := range br.Bindings { // unreadable: commanded once, not compared (#1123)
+					queued = s.recordOutputLocked(t.Name, devValue{unreadable: true}, !aware) || queued
 				}
 			}
 			s.mu.Unlock()
@@ -1670,7 +1735,8 @@ func (d *Driver) pollBlock(ctx context.Context, s *source, c conn, br *blockRun)
 	br.excCount = 0
 	br.bad = false
 	s.blockAnsweredLocked(br)
-	queued := false
+	br.live = true
+	queued, aware := false, d.scanAware.Load()
 	for _, t := range br.Bindings {
 		off := int(t.Address) - int(br.Start)
 		if regs != nil {
@@ -1679,14 +1745,14 @@ func (d *Driver) pollBlock(ctx context.Context, s *source, c conn, br *blockRun)
 			v, derr := decodeRegisters(f, words, s.cfg.WordOrder, s.cfg.ByteOrder, t.Scale, t.Offset)
 			if derr != nil {
 				s.lastErr = fmt.Errorf("tag %s: %w", t.Name, derr)
-				queued = s.heardOutputLocked(t.Name, devValue{unreadable: true}) || queued
+				queued = s.recordOutputLocked(t.Name, devValue{unreadable: true}, !aware) || queued
 				continue
 			}
 			s.snapshot[t.Name] = v
-			queued = s.heardOutputLocked(t.Name, devValue{words: append([]uint16(nil), words...), decoded: v}) || queued
+			queued = s.recordOutputLocked(t.Name, devValue{words: append([]uint16(nil), words...), decoded: v}, !aware) || queued
 		} else {
 			s.snapshot[t.Name] = bits[off]
-			queued = s.heardOutputLocked(t.Name, devValue{decoded: bits[off]}) || queued
+			queued = s.recordOutputLocked(t.Name, devValue{decoded: bits[off]}, !aware) || queued
 		}
 	}
 	s.mu.Unlock()
@@ -2243,7 +2309,46 @@ func (s *source) goOfflineLocked(outage bool) {
 		s.outages++
 	}
 	s.online = false
-	clear(s.devRead) // no read of the device is live any more (#1123)
+	s.resetLiveLocked() // no read of the device is live any more (#1123)
+}
+
+// liveReadLocked is what the baseline may decide name against: with a
+// runtime driving the driver, what BeginScan froze for this scan; without
+// one, the latest read, and an output that cannot be read at once.
+func (s *source) liveReadLocked(name string, aware bool) (devValue, bool) {
+	if aware {
+		dv, ok := s.scanRead[name]
+		return dv, ok
+	}
+	if !s.byName[name].readable {
+		return devValue{unreadable: true}, true
+	}
+	dv, ok := s.devRead[name]
+	return dv, ok
+}
+
+// resetLiveLocked forgets every read of the device: a new connection starts
+// with none, and a dropped one has none that is live.
+func (s *source) resetLiveLocked() {
+	clear(s.devRead)
+	clear(s.scanRead)
+	for _, br := range s.blocks {
+		br.live = false
+	}
+}
+
+// liveLocked: the source is online and every block has been answered on this
+// connection, so a scan reading it now reads all of it live. Caller holds mu.
+func (s *source) liveLocked() bool {
+	if !s.online {
+		return false
+	}
+	for _, br := range s.blocks {
+		if !br.live {
+			return false
+		}
+	}
+	return true
 }
 
 // Interface conformance: the optional io refinements the driver implements.

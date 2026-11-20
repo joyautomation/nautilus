@@ -419,6 +419,18 @@ func (m *Multi) OutputsWanted() bool {
 	return wanted
 }
 
+// BeginScan tells every child that wants to know a scan is starting
+// (ScanBeginner).
+func (m *Multi) BeginScan() {
+	m.set.RLock()
+	defer m.set.RUnlock()
+	for _, c := range m.children {
+		if b, ok := c.Driver.(ScanBeginner); ok {
+			b.BeginScan()
+		}
+	}
+}
+
 // InputsReady is true when every child that can say so is ready: a
 // takeover runs on the whole delivery, so it waits for the slowest child.
 // Every such child is asked (each may look at its write gate). A set with
