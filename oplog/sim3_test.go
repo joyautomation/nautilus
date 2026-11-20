@@ -12,7 +12,9 @@ import (
 // The T2 run for the log on three replicas (#710 PR 3b-4a, test plan
 // §8.1): seeded schedules of writes, leader changes, replicas down, lost
 // answers, late ones (handled after the sender stopped waiting, often
-// after a new leader took over), cut links, restarts, lost logs and
+// after a new leader took over), lost commit pushes, new leaders that
+// heartbeat before they catch up, chunks of one to three entries and one or
+// two resend rounds, cut links, restarts, lost logs and
 // rebuilt replicas, on the in-process network, with two oracles checked
 // after every step:
 //
@@ -20,7 +22,10 @@ import (
 //     have committed;
 //   - no loss: every write that was answered as committed is at its seq
 //     in every replica's committed log that reaches that seq, and a leader
-//     that synced holds all of them, committed.
+//     that synced holds all of them, committed;
+//   - kept on a majority: each such write is held at its seq by synced
+//     replicas plus unsynced ones (standing in for a copy they may have
+//     lost), at least two of three, after every step.
 //
 // A log is lost or a replica rebuilt only while all three are synced, so a
 // schedule can go on (two unsynced replicas wait for a person, by design);
@@ -79,6 +84,13 @@ type ackRec struct {
 func simulate(t *testing.T, seed uint64, steps int) (int, int) {
 	t.Helper()
 	r := rand.New(rand.NewPCG(seed, 0x3b4a))
+	// Half the seeds replicate a few entries per chunk, so resends take
+	// several chunks and run out of rounds (#1050 review).
+	defer func(a, b int) { maxChunkEntries, resendRounds = a, b }(maxChunkEntries, resendRounds)
+	if r.IntN(2) == 0 {
+		maxChunkEntries = 1 + r.IntN(3)
+		resendRounds = 1 + r.IntN(2) // so a peer a few entries behind runs out of rounds
+	}
 	tr := newTrio(t, nil)
 	tr.timeout = 300 * time.Millisecond
 	for i := range 3 {
@@ -120,6 +132,36 @@ func simulate(t *testing.T, seed uint64, steps int) (int, int) {
 			}
 			if len(e.IDs) != 1 || e.IDs[0] != a.id {
 				t.Fatalf("seed %d step %d (%s): write %s answered at seq %d, committed there: %+v", seed, step, what, a.id, a.seq, e)
+			}
+		}
+		// Kept on a majority: every write answered as committed is held
+		// at its seq by synced replicas, plus unsynced ones standing in for
+		// a copy they may have lost, at least two of three. A lost log
+		// moves one from the first count to the second; a committed copy
+		// overwritten, a peer counted that never stored it, or a replica
+		// marked synced without it drops the sum at once (#1050 review).
+		var holds [3]map[uint64]string
+		unsynced := 0
+		for i := range 3 {
+			holds[i] = map[uint64]string{}
+			for _, e := range tr.nodes[i].After(0) {
+				if len(e.IDs) == 1 {
+					holds[i][e.Seq] = e.IDs[0]
+				}
+			}
+			if !tr.nodes[i].Synced() {
+				unsynced++
+			}
+		}
+		for _, a := range acks {
+			kept := unsynced
+			for i := range 3 {
+				if tr.nodes[i].Synced() && holds[i][a.seq] == a.id {
+					kept++
+				}
+			}
+			if kept < 2 {
+				t.Fatalf("seed %d step %d (%s): write %s answered at seq %d is held by %d synced replicas, with %d unsynced: no longer on a majority", seed, step, what, a.id, a.seq, kept-unsynced, unsynced)
 			}
 		}
 	}
@@ -170,6 +212,15 @@ func simulate(t *testing.T, seed uint64, steps int) (int, int) {
 			tr.net.mu.Unlock()
 			lateUntil = step + 1
 			what = fmt.Sprintf("n%d answers late for a step", i)
+		case k < 57:
+			// Lost commit pushes and heartbeats: a follower holds entries
+			// it never learns were committed (#1050 review).
+			i := r.IntN(3)
+			v := r.IntN(2) == 0
+			tr.net.mu.Lock()
+			tr.net.dropPush[i] = v
+			tr.net.mu.Unlock()
+			what = fmt.Sprintf("n%d loses pushes=%v", i, v)
 		case k < 60:
 			i, j := r.IntN(3), r.IntN(3)
 			v := r.IntN(2) == 0
@@ -194,8 +245,27 @@ func simulate(t *testing.T, seed uint64, steps int) (int, int) {
 				what = fmt.Sprintf("n%d rebuilt", i)
 			}
 		case k < 82:
+			// A new leader catches up at once only half the time: its
+			// heartbeats, and its followers' pulls, may come first (#1050
+			// review), as driveLog's ticker can.
 			leader = r.IntN(3)
+			late := r.IntN(2) == 0
+			if late {
+				// Most often one holding entries past its commit index:
+				// an earlier term's leftovers, which only its catch-up may
+				// sort out.
+				for _, i := range r.Perm(3) {
+					if tr.nodes[i].LastSeq() > tr.nodes[i].Commit() && r.IntN(4) != 0 {
+						leader = i
+						break
+					}
+				}
+			}
 			term := tr.lead(leader)
+			if late {
+				what = fmt.Sprintf("n%d leads term %d, not caught up yet", leader, term)
+				break
+			}
 			err := tr.nodes[leader].SyncLeader(tr.ctx())
 			what = fmt.Sprintf("n%d leads term %d: sync %v", leader, term, err)
 			if err == nil {

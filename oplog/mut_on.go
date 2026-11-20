@@ -23,6 +23,18 @@ import "os"
 //     leader's replication, synced or not;
 //   - resend_unchunked: a resend and a catch-up read carry the whole log
 //     in one body.
+//
+// #1050's review:
+//
+//   - unsynced_leader_writes: a leader not caught up for its term sends
+//     heartbeats and resends, and a follower takes its entries by pulling;
+//   - behind_counted: a peer still short of the leader's log after the
+//     resend rounds counts as having stored the entry;
+//   - synced_before_commit: a follower marks itself synced from a request
+//     that proves its log only below the leader's commit index;
+//   - unsynced_self_counted: an unsynced leader counts its own log in its
+//     catch-up;
+//   - entry_unbounded: an entry of any size is proposed.
 var mutOn = os.Getenv("QUORUM_MUT")
 
 func mutOplog(name string) bool { return name == mutOn }

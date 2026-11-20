@@ -190,8 +190,14 @@ var table = []mutation{
 	{"admit_skipped", []string{"TestAdmitDecidesWhoMayReplicate"}},
 	{"unsynced_counted", []string{"TestEntryAckedByAAndWSurvivesWLosingItsLog", "TestLostLogUnderTheHeldMarkComesBackNonCounting", "TestRebuiltWitnessDoesNotCountUntilSynced", "TestOnlyASyncedLeaderSyncsAFollower"}},
 	{"log_loss_silent", []string{"TestEntryAckedByAAndWSurvivesWLosingItsLog", "TestLostLogUnderTheHeldMarkComesBackNonCounting", "TestOnlyASyncedLeaderSyncsAFollower"}},
-	{"synced_by_unsynced_leader", []string{"TestOnlyASyncedLeaderSyncsAFollower"}},
+	{"synced_by_unsynced_leader", []string{"TestFollowerSyncsOnlyFromASyncedLeadersRequest"}},
 	{"resend_unchunked", []string{"TestResendAndCatchUpGoInChunks"}},
+	// #1050 review.
+	{"unsynced_leader_writes", []string{"TestUnsyncedLeaderHeartbeatDoesNotOverwriteACommittedEntry", "TestFollowerTakesNothingFromAnUnsyncedLeader"}},
+	{"behind_counted", []string{"TestAPeerStillBehindDoesNotCount"}},
+	{"synced_before_commit", []string{"TestFirstChunkDoesNotSyncARebuiltReplica"}},
+	{"unsynced_self_counted", []string{"TestOnlyASyncedLeaderSyncsAFollower"}},
+	{"entry_unbounded", []string{"TestTooLargeEntryIsRefusedAtProposal"}},
 }
 
 // rowPkgs are the packages a row runs instead of ./quorum/..., filtered
@@ -204,6 +210,11 @@ var rowPkgs = map[string][]string{
 	"log_loss_silent":           {"./oplog"},
 	"synced_by_unsynced_leader": {"./oplog"},
 	"resend_unchunked":          {"./oplog"},
+	"unsynced_leader_writes":    {"./oplog"},
+	"behind_counted":            {"./oplog"},
+	"synced_before_commit":      {"./oplog"},
+	"unsynced_self_counted":     {"./oplog"},
+	"entry_unbounded":           {"./oplog"},
 	"ack_clear_off":             {"./cmd/naut"},
 	"alarm_view_ignored":        {"./cmd/naut"},
 	"engine_not_reset":          {"./server"},

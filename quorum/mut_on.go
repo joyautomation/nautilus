@@ -91,6 +91,11 @@ var Mutations = []string{
 	"log_loss_silent",           // oplog: a log lost under the held mark comes back empty and counting (3b-4a)
 	"synced_by_unsynced_leader", // oplog: a follower marks itself synced from an unsynced leader (3b-4a)
 	"resend_unchunked",          // oplog: a resend or catch-up read carries the whole log in one body (3b-4a)
+	"unsynced_leader_writes",    // oplog: a leader not caught up for its term sends, and is pulled from (#1050 review)
+	"behind_counted",            // oplog: a peer still behind after the resend rounds counts as stored (#1050 review)
+	"synced_before_commit",      // oplog: a follower syncs from a request proving its log below the commit index (#1050 review)
+	"unsynced_self_counted",     // oplog: an unsynced leader counts itself in its catch-up (#1050 review)
+	"entry_unbounded",           // oplog: an entry of any size is proposed (#1050 review)
 	"ack_clear_off",             // server: an acked alarm back to normal proposes no ack-clear (#710 PR 3b-2c)
 	"alarm_view_ignored",        // server: a synced takeover restores its own retain, not the log's alarm view
 	"engine_not_reset",          // server: a takeover restores the view over the engine's frozen operator state

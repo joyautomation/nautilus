@@ -167,10 +167,16 @@ func TestOnlyASyncedLeaderSyncsAFollower(t *testing.T) {
 	}
 	tr.wipe(2)
 	tr.loseLog(0)
-	tr.lead(0) // its election doesn't know (in a pair, 3b-4b keeps it from leading)
+	tr.lead(0) // an unsynced controller may lead control (3b-4b); its log may not
 	tr.nodes[0].Heartbeat(tr.ctx())
 	if tr.nodes[2].Synced() {
 		t.Fatal("W synced by a leader whose own log was lost")
+	}
+	// One counting peer (B) is not enough for an unsynced leader: the
+	// entry B lacks may be on the replica that doesn't count (naut-lead,
+	// 3b-4a).
+	if err := tr.nodes[0].SyncLeader(tr.ctx()); !errors.Is(err, ErrReadOnly) {
+		t.Fatalf("A, unsynced, synced from one counting peer: %v", err)
 	}
 	// B is the only replica that counts: nobody can prove B whole, so the
 	// log waits for a person (two faults), and nothing is lost: B has X.

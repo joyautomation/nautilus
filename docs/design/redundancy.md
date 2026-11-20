@@ -124,6 +124,13 @@ bumpless, and the measured takeover time is published instead.
   - **The witness follows its vote.** It takes replication only from the member its vote
     names, at that term (`Options.Admit`), never by address. It never dials a controller: the
     leader's heartbeat fills it, a chunk at a time.
+  - **Nothing leaves an unsynced leader** (#1050 review). Until a leader has caught up for its
+    term, it sends no heartbeat or resend, and a follower takes nothing from it by pulling: what
+    it holds past its commit index may be an earlier term's leftover, and a follower would
+    replace with it an entry a later term committed whose commit push it missed. A peer still
+    short of the leader's log after a resend doesn't count as holding the entry. One entry is at
+    most 512 KiB (larger is refused at its proposal, 413), so a stored entry can always be read
+    back, sent and fetched.
   - **Every peer at once.** The leader replicates to both peers at once and commits on the
     first majority that counts, after a short wait for the other, so a silent peer never holds
     up a write by its call timeout. A takeover's catch-up asks both peers at once too.

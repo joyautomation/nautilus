@@ -263,8 +263,19 @@ var (
 	maxChunkEntries = 512
 	maxChunkBytes   = 1 << 20
 	maxBody         = int64(8 << 20)
-	maxResp         = int64(4 << 20)
+	maxResp         = int64(8 << 20) // at least maxBody: what one replica took, another can read
+	// maxEntryBytes caps one entry, as JSON, at its proposal: well under
+	// the file's line limit (1 MiB, open), a chunk and a body, so an entry
+	// once stored can always be read back, sent and fetched.
+	maxEntryBytes = 512 << 10
+	// resendRounds bounds one replicateTo's resends; the next heartbeat
+	// goes on from where the peer is.
+	resendRounds = 32
 )
+
+// ErrTooLarge refuses a proposal whose entry is over maxEntryBytes. It was
+// never proposed: its outcome is known.
+var ErrTooLarge = errors.New("oplog: entry too large")
 
 // Node is one instance's view of the log.
 type Node struct {
@@ -790,6 +801,15 @@ func truncateStr(s string, n int) string {
 }
 
 var errGap = errors.New("gap")
+
+// errTermNotSynced: this leader has not caught up for its term, so it
+// sends nothing (replicateTo) and a follower takes nothing from it
+// (CatchUp).
+var errTermNotSynced = errors.New("oplog: the leader has not caught up for its term")
+
+// errBehind: a peer took what it was sent but still ends short of this
+// leader's log, so it does not hold the entry that was being replicated.
+var errBehind = errors.New("oplog: the peer is still behind")
 var errConflict = errors.New("conflict")
 var errMismatch = errors.New("mismatch")
 
@@ -946,6 +966,9 @@ type afterResp struct {
 	// the entries after the commit index, which may be none.
 	LastSeq  uint64 `json:"lastSeq"`
 	LastTerm uint64 `json:"lastTerm"`
+	// LeaderSynced: the answering replica leads and has caught up for its
+	// term, so a follower may take its entries (CatchUp).
+	LeaderSynced bool `json:"leaderSynced,omitempty"`
 	// More: Entries stops short of LastSeq (a page); ask again after its
 	// last entry.
 	More     bool   `json:"more,omitempty"`
@@ -958,6 +981,9 @@ type afterResp struct {
 // entry is committed and applied locally, or ErrReadOnly.
 func (n *Node) Propose(ctx context.Context, e Entry) (Entry, error) {
 	e.Origin = n.o.Self
+	if err := checkSize(e); err != nil {
+		return Entry{}, err
+	}
 	if n.isLeader() {
 		return n.sequence(ctx, e)
 	}
@@ -1008,7 +1034,7 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 	from := n.commit
 	last := n.lastLocked()
 	own := afterResp{Entries: n.afterLocked(from), Commit: n.commit, LastSeq: last, LastTerm: n.termAtLocked(last)}
-	selfCounts := n.syncedLocked()
+	selfCounts := n.syncedLocked() || mutOplog("unsynced_self_counted")
 	n.mu.Unlock()
 	// The most advanced log is Raft's "up to date", compared on each WHOLE
 	// log's last entry: the higher term wins, then the higher seq, so an
@@ -1167,6 +1193,9 @@ func (n *Node) SyncLeader(ctx context.Context) error {
 // replicate to a majority, commit, apply. A proposal that misses the
 // majority stays in the log, unconfirmed (see ErrUnconfirmed).
 func (n *Node) sequence(ctx context.Context, e Entry) (Entry, error) {
+	if err := checkSize(e); err != nil {
+		return Entry{}, err
+	}
 	n.seqMu.Lock()
 	defer n.seqMu.Unlock()
 	if !n.isLeader() {
@@ -1233,6 +1262,8 @@ func (n *Node) sequenceLocked(ctx context.Context, e Entry) (Entry, error) {
 		switch {
 		case a.err != nil:
 			errs = append(errs, p+": "+a.err.Error())
+		case a.resp.Have < e.Seq && !mutOplog("behind_counted"):
+			errs = append(errs, fmt.Sprintf("%s: answered, but holds only up to %d", p, a.resp.Have))
 		case !n.counts(p, a.resp.Unsynced, a.resp.Identity):
 			holders = append(holders, p)
 			errs = append(errs, p+": stored, but its log is not synced")
@@ -1295,7 +1326,15 @@ func (n *Node) replicateTo(ctx context.Context, peer string, es []Entry, term ui
 		pt := n.termAtLocked(prev)
 		commit := n.commit
 		synced := n.syncedLocked() && n.syncedTerm == term
+		termSynced := n.syncedTerm == term
 		n.mu.Unlock()
+		// Nothing leaves a leader that has not caught up for this term
+		// (#1050 review): what it holds past its commit index may be an
+		// earlier term's leftover, and a follower would replace with it an
+		// entry a later term committed (one whose commit push it missed).
+		if !termSynced && !mutOplog("unsynced_leader_writes") {
+			return replicateResp{}, errTermNotSynced
+		}
 		var resp replicateResp
 		err := n.call(ctx, peer, "/api/oplog/replicate",
 			replicateReq{From: n.o.Self, Node: n.o.Node, Synced: synced, Term: term, Commit: commit, PrevSeq: prev, PrevTerm: pt, Entries: es}, &resp)
@@ -1315,7 +1354,7 @@ func (n *Node) replicateTo(ctx context.Context, peer string, es []Entry, term ui
 	// Each step moves Have, to the peer's commit index at worst, where the
 	// logs agree; the bound only guards a peer that answers nonsense, and
 	// the next heartbeat goes on (a rebuilt replica is filled over several).
-	for range 32 {
+	for range resendRounds {
 		var he *httpError
 		var from uint64
 		switch {
@@ -1343,7 +1382,29 @@ func (n *Node) replicateTo(ctx context.Context, peer string, es []Entry, term ui
 		}
 		resp, err = send(missing)
 	}
+	if err == nil && !mutOplog("behind_counted") {
+		// Out of rounds with the peer still short of our last entry
+		// (#1050 review): it does not hold what we meant to replicate, so
+		// it must not count as having stored it. The next heartbeat goes on.
+		n.mu.Lock()
+		last := n.lastLocked()
+		n.mu.Unlock()
+		if resp.Have < last {
+			return resp, fmt.Errorf("%w: it has %d of %d", errBehind, resp.Have, last)
+		}
+	}
 	return resp, err
+}
+
+// checkSize refuses an entry over maxEntryBytes (ErrTooLarge).
+func checkSize(e Entry) error {
+	if mutOplog("entry_unbounded") {
+		return nil
+	}
+	if b, _ := json.Marshal(e); len(b) > maxEntryBytes {
+		return fmt.Errorf("%w: %d bytes, at most %d", ErrTooLarge, len(b), maxEntryBytes)
+	}
+	return nil
 }
 
 // replicateToErr is replicateTo for a caller that needs only its error.
@@ -1435,6 +1496,7 @@ func (n *Node) fetchAfter(ctx context.Context, peer string, after uint64) (after
 			all.Entries = append(all.Entries, got.Entries...)
 			all.Commit, all.LastSeq, all.LastTerm = got.Commit, got.LastSeq, got.LastTerm
 			all.Unsynced, all.Identity = got.Unsynced, got.Identity
+			all.LeaderSynced = all.LeaderSynced && got.LeaderSynced
 		}
 		if !got.More || len(got.Entries) == 0 {
 			all.More = false
@@ -1468,6 +1530,14 @@ func (n *Node) Heartbeat(ctx context.Context) {
 		return
 	}
 	term := n.currentTerm()
+	n.mu.Lock()
+	termSynced := n.syncedTerm == term
+	n.mu.Unlock()
+	if !termSynced && !mutOplog("unsynced_leader_writes") {
+		// Until SyncLeader (or a write) has caught it up for this term,
+		// it sends nothing: see replicateTo. Followers keep pulling.
+		return
+	}
 	fanOut(ctx, n, n.others(), func(ctx context.Context, p string) error {
 		return n.replicateToErr(ctx, p, nil, term)
 	}, func(p string, err error) bool {
@@ -1494,6 +1564,13 @@ func (n *Node) CatchUp(ctx context.Context) error {
 	got, err := n.fetchAfter(ctx, leader, n.Commit())
 	if err != nil {
 		return err
+	}
+	if !got.LeaderSynced && !mutOplog("unsynced_leader_writes") {
+		// Its entries past our commit index may be an earlier term's
+		// leftovers that would replace one a later term committed (#1050
+		// review). Its heartbeat or a later pull brings them once it has
+		// caught up.
+		return errTermNotSynced
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -1655,6 +1732,7 @@ func (n *Node) Handler() http.Handler {
 		last := n.lastLocked()
 		resp := afterResp{Entries: n.afterLocked(after), Commit: n.commit, Term: n.term, LastSeq: last, LastTerm: n.termAtLocked(last),
 			Unsynced: !n.syncedLocked(), Identity: n.mark.Identity}
+		resp.LeaderSynced = n.isLeader() && n.syncedTerm != 0 && n.syncedTerm == n.currentTerm()
 		n.mu.Unlock()
 		// Pages only for a reader that asks (page=1): one from before
 		// pages would take the first page for the whole tail.
@@ -1735,7 +1813,7 @@ func (n *Node) Handler() http.Handler {
 			// A synced leader's log holds every committed entry, and this
 			// request proved ours equal to it up to its commit index:
 			// ours holds them too.
-			if (req.Synced || mutOplog("synced_by_unsynced_leader")) && proved >= req.Commit {
+			if (req.Synced || mutOplog("synced_by_unsynced_leader")) && (proved >= req.Commit || mutOplog("synced_before_commit")) {
 				n.becomeSyncedLocked("replicated from a synced leader")
 			}
 		}

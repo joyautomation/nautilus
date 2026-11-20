@@ -3,6 +3,7 @@ package oplog
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -27,6 +29,8 @@ type simnet struct {
 	silent    [3]bool    // a request to it blocks until its context ends
 	dropReply [3]bool    // it handles the request, its answer is lost
 	delay     [3]bool    // a request to it is handled simDelay late, even after its sender gave up
+	dropPush  [3]bool    // a replication to it that carries no entries (a heartbeat, a commit push) is lost
+	cutAfter  [3]int     // when > 0: it takes this many more requests, then goes down
 	cut       [3][3]bool // the link from i to j fails
 	late      sync.WaitGroup
 }
@@ -65,7 +69,13 @@ func (h hop) RoundTrip(r *http.Request) (*http.Response, error) {
 	}
 	h.s.mu.Lock()
 	down := h.s.down[h.from] || h.s.down[to] || h.s.cut[h.from][to]
-	silent, drop, delay := h.s.silent[to], h.s.dropReply[to], h.s.delay[to]
+	silent, drop, delay, dropPush := h.s.silent[to], h.s.dropReply[to], h.s.delay[to], h.s.dropPush[to]
+	if !down && h.s.cutAfter[to] > 0 {
+		h.s.cutAfter[to]--
+		if h.s.cutAfter[to] == 0 {
+			h.s.down[to] = true
+		}
+	}
 	hd := h.s.handlers[to]
 	h.s.mu.Unlock()
 	if r.Body != nil {
@@ -84,6 +94,12 @@ func (h hop) RoundTrip(r *http.Request) (*http.Response, error) {
 	var body []byte
 	if r.Body != nil {
 		body, _ = io.ReadAll(r.Body)
+	}
+	if dropPush && strings.HasSuffix(r.URL.Path, "/api/oplog/replicate") {
+		var q replicateReq
+		if json.Unmarshal(body, &q) == nil && len(q.Entries) == 0 {
+			return nil, errors.New("simnet: the push was lost")
+		}
 	}
 	serve := func(ctx context.Context, hd http.Handler) *http.Response {
 		in := httptest.NewRequest(r.Method, r.URL.String(), bytes.NewReader(body)).WithContext(ctx)

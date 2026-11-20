@@ -149,6 +149,11 @@ case caught it. A mutation joins the nightly run in the PR that builds the rule 
 | a log lost under the held mark comes back empty and counting (`log_loss_silent`) | design §1, a lost log is seen | 3b-4a |
 | a follower marks itself synced from a leader that is not synced (`synced_by_unsynced_leader`) | design §1, only a synced replica counts | 3b-4a |
 | a resend or a catch-up read carries the whole log in one body, so a rebuilt replica is never filled (`resend_unchunked`) | design §1, the witness re-copies the log | 3b-4a |
+| a leader not caught up for its term heartbeats or resends, or a follower pulls from it, so an earlier term's leftover replaces an entry a later term committed (`unsynced_leader_writes`) | design §1, nothing leaves an unsynced leader | 3b-4a (#1050 review) |
+| a peer still short of the leader's log after the resend rounds counts as having stored the entry (`behind_counted`) | design §1, only a synced replica counts | 3b-4a (#1050 review) |
+| a follower marks itself synced from a request that proves its log only below the commit index (`synced_before_commit`) | design §1, only a synced replica counts | 3b-4a (#1050 review) |
+| an unsynced leader counts its own log in its catch-up (`unsynced_self_counted`) | design §1, only a synced replica counts | 3b-4a (#1050 review) |
+| an entry of any size is proposed, so one stored can't be read back or fetched (`entry_unbounded`) | design §1 | 3b-4a (#1050 review) |
 | `Liveness` ignores a loop between scans (the behaviour before #858) | design §3.2, starvation | 3 |
 | a standby's gated ticks don't count as on schedule | design §3.2, starvation | 3 |
 | the in-sync mark is not persisted | design §3.3 | 4 |
