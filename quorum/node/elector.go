@@ -294,12 +294,13 @@ type Elector struct {
 	written    chan struct{}     // closed and replaced at every write report
 
 	// The operator-intent log's seams and what they decided (logpref.go).
-	logFn      func() LogState
-	vouchFn    func(ctx context.Context, by string) error
-	peerLog    peerLog
-	holdSince  time.Time      // since when the log has held a campaign
-	yieldedAt  time.Time      // the last yield (at most one per yieldEvery)
-	yieldUntil quorum.Instant // no renewal until here: a yield's lease runs out
+	logFn     func() LogState
+	vouchFn   func(ctx context.Context, by string) error
+	peerLog   peerLog
+	holdSince time.Time      // since when the log has held a campaign
+	yieldedAt time.Time      // the last yield (at most one per yieldEvery)
+	yieldHold bool           // no renewal until the lease is seen over (a yield)
+	yieldDue  quorum.Instant // when it was due to end (the yield_until_due mutation)
 
 	gate    atomic.Pointer[gateState]
 	counted atomic.Uint64 // the witness incarnation the candidate counts (CountedIncarnation)
@@ -758,7 +759,10 @@ func (e *Elector) CountedIncarnation() uint64 { return e.counted.Load() }
 
 // publish stores the gate. Under mu.
 func (e *Elector) publish(now quorum.Instant) {
-	inc, _ := e.c.Counting()
+	inc, from := e.c.Counting()
+	if now < from {
+		inc = 0 // its quiet period: its grants don't count yet, nor its log
+	}
 	e.counted.Store(inc)
 	g := &gateState{}
 	if old := e.gate.Load(); old != nil {
@@ -1252,10 +1256,17 @@ func (e *Elector) RecommissionBy(ctx context.Context, by string, inc, floor uint
 	// Its own refusals first, so a refused re-commission vouches for
 	// nothing.
 	e.mu.Lock()
-	commissioned := e.v.State().Incarnation != 0
+	commissioned, known := e.v.State().Incarnation != 0, e.a.KnownFloor()
 	e.mu.Unlock()
-	if commissioned {
+	switch {
+	case commissioned:
 		return quorum.ErrCommissioned
+	case inc == 0 || floor == 0:
+		return quorum.ErrNoFloor
+	case floor <= known && !mut("recommission_any_floor"):
+		return fmt.Errorf("%w: it knows terms up to %d", quorum.ErrFloorTooLow, known)
+	case floor-known > MaxTermJump/2:
+		return fmt.Errorf("quorum: re-commission floor %d is more than %d above the terms this controller knows (%d): the voters would refuse the pair's next campaign as a term jump", floor, MaxTermJump/2, known)
 	}
 	if err := e.vouch(ctx, by); err != nil {
 		return fmt.Errorf("quorum: re-commission refused by the operator-intent log: %w", err)

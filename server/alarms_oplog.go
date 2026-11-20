@@ -443,8 +443,11 @@ func (s *Server) refuseAlarmWithoutMajority(w http.ResponseWriter) bool {
 		return false
 	}
 	msg := s.alarmLog.refusal
-	if st.NotSynced {
+	switch {
+	case st.NotSynced:
 		msg = LogNotSynced
+	case st.Uncounted:
+		msg = LogCopiesNotSynced
 	}
 	if st.Reason != "" {
 		msg += " (" + st.Reason + ")"

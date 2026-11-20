@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 // #710 PR 3b-4b on the log: a person vouches for one log (a new pair, or
@@ -239,5 +240,84 @@ func TestFollowerOfAnUnsyncedLeaderIsNotWritable(t *testing.T) {
 	}
 	if st := tr.nodes[0].Status(); st.Writable || !st.NotSynced {
 		t.Fatalf("the unsynced leader itself: %+v", st)
+	}
+}
+
+// A new replica's mark is written before its log file exists: a start
+// that can't write the mark leaves no log file, which a later start
+// would take for a log from before marks (and count as synced).
+func TestMarkIsWrittenBeforeTheLog(t *testing.T) {
+	dir := t.TempDir()
+	file := dir + "/log.jsonl"
+	_, err := New(Options{Self: "s", File: file, Mark: dir + "/missing/log.mark", Identity: "x"})
+	if err == nil {
+		t.Fatal("New with a mark it can't write")
+	}
+	if _, err := os.Stat(file); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a log file was left without a mark: %v", err)
+	}
+}
+
+// An unconfirmed write the witness alone stored (the leader's answer from
+// it lost, the standby down), then the leader dies: the standby's takeover
+// adopts it from the witness and commits it once, by its carrier; or, when
+// it is older than the bound (Options.Lapse), names it lapsed. A copy on
+// the witness proves nothing about a commit (Raft §5.4.2), so age alone
+// decides (#710 3b-4b, KindLapse with the witness a replica).
+func TestUnconfirmedWriteOnlyTheWitnessStored(t *testing.T) {
+	for _, late := range []bool{false, true} {
+		t.Run(map[bool]string{false: "within the bound", true: "too late"}[late], func(t *testing.T) {
+			tr := newTrio(t, func(_ int, o *Options) {
+				o.Lapse = func(Entry, time.Time) bool { return late }
+			})
+			mustSync(t, tr, 0)
+			tr.setDown(1, true)
+			tr.net.mu.Lock()
+			tr.net.dropReply[2] = true
+			tr.net.mu.Unlock()
+			if _, err := tr.propose(0, "X"); !errors.Is(err, ErrUnconfirmed) {
+				t.Fatalf("X with the standby down and the witness's answer lost: %v", err)
+			}
+			tr.net.mu.Lock()
+			tr.net.dropReply[2] = false
+			tr.net.mu.Unlock()
+			if seq, _ := tr.holds(2, "X"); seq == 0 {
+				t.Fatal("setup: the witness doesn't hold X")
+			}
+			tr.setDown(0, true) // the leader dies
+			tr.setDown(1, false)
+			tr.lead(1)
+			mustSync(t, tr, 1)
+			tr.mu.Lock()
+			var applied []Entry
+			for _, e := range tr.applied[1] {
+				if len(e.IDs) == 1 && e.IDs[0] == "X" {
+					applied = append(applied, e)
+				}
+			}
+			tr.mu.Unlock()
+			if len(applied) != 1 || applied[0].Lapsed != late {
+				t.Fatalf("B applied X %d times (%+v); want once, lapsed %v", len(applied), applied, late)
+			}
+		})
+	}
+}
+
+// A synced leader whose other copies answer but are unsynced says so
+// (Uncounted), rather than that none answers.
+func TestLeaderWithUnsyncedCopiesSaysUncounted(t *testing.T) {
+	tr := newTrio(t, nil)
+	mustSync(t, tr, 0)
+	tr.wipe(1)
+	tr.wipe(2)
+	tr.nodes[0].Ping(tr.ctx())
+	if st := tr.nodes[0].Status(); st.Writable || !st.Uncounted || st.NotSynced {
+		t.Fatalf("status: %+v", st)
+	}
+	tr.setDown(1, true)
+	tr.setDown(2, true)
+	tr.nodes[0].Ping(tr.ctx())
+	if st := tr.nodes[0].Status(); st.Uncounted {
+		t.Fatalf("none answers, yet uncounted: %+v", st)
 	}
 }

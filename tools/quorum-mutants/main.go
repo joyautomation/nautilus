@@ -158,8 +158,8 @@ var table = []mutation{
 	// Outside the quorum tree (rowPkgs): the operator-intent log's late-
 	// start lapse (#1030, #1032 reviews) and the pair's alarm acks (#710
 	// PR 3b-2c).
-	{"lapse_ignored", []string{"TestLateUnknownStartLapses", "TestAdoptedCopyStillLapses"}},
-	{"ack_clear_off", []string{"TestPairAckDoesNotCarryToANewOccurrence"}},
+	{"lapse_ignored", []string{"TestLateUnknownStartLapses", "TestAdoptedCopyStillLapses", "TestUnconfirmedWriteOnlyTheWitnessStored"}},
+	{"ack_clear_off", []string{"TestPairAckDoesNotCarryToANewOccurrence", "TestPairEndedAckDoesNotCarryAcrossATakeoverFromTheWitness"}},
 	{"alarm_view_ignored", []string{"TestPairAckCarriesAcrossASyncedTakeover"}},
 	// #1033 review: a re-leading replica's frozen engine.
 	{"engine_not_reset", []string{"TestReviewFrozenEngineIsReset", "TestReviewFrozenShelfIsReset"}},
@@ -205,15 +205,17 @@ var table = []mutation{
 	{"unsynced_leader_keeps_lead", []string{"TestLoopbackUnsyncedLeaderYieldsToASyncedPeer"}},
 	{"yield_undamped", []string{"TestLoopbackYieldIsDamped"}},
 	{"yield_ignores_may", []string{"TestLoopbackNoYieldToAnUnhealthyPeer"}},
+	{"yield_until_due", []string{"TestYieldHoldsUntilTheLeaseIsSeenOver"}},
 	// In the log (oplog).
 	{"term_not_persisted", []string{"TestLostLogKeepsItsTerm"}},
 	{"unnamed_leader_admitted", []string{"TestMarkedReplicaRefusesAnUnnamedLeader"}},
 	{"vouch_unchecked", []string{"TestVouchRefuses"}},
 	{"vouch_alone_kept", []string{"TestVouchedCatchUpAloneIsOnce"}},
+	{"mark_after_log", []string{"TestMarkIsWrittenBeforeTheLog"}},
 	{"unsynced_log_writes", []string{"TestFollowerOfAnUnsyncedLeaderIsNotWritable", "TestPairUnsyncedTakeoverCarriesNoAcks"}},
 	// In the pair's wiring (cmd/naut), end to end.
 	{"witness_log_unbound", []string{"TestPairWitnessLogAdmitsOnlyItsGrantedLeader"}},
-	{"witness_log_term_unbound", []string{"TestPairWitnessLogAdmitsOnlyItsGrantedLeader"}},
+	{"witness_log_term_unbound", []string{"TestPairWitnessLogAdmitsOnlyItsGrantedLeader", "TestWitnessAdmitsAtOrBelowItsPromise"}},
 	{"witness_log_any_incarnation", []string{"TestWitnessCountsOnlyAtTheCountedIncarnation"}},
 	{"witness_not_a_replica", []string{"TestPairLogWritesWithItsPeerDown", "TestPairLogSurvivesALeaderCrash", "TestPairAckCarriesAcrossATakeoverAfterTheLeaderDied"}},
 	// The retry is also what finds a leader's term stuck, which the yield
@@ -240,6 +242,7 @@ var rowPkgs = map[string][]string{
 	"unnamed_leader_admitted":     {"./oplog"},
 	"vouch_unchecked":             {"./oplog"},
 	"vouch_alone_kept":            {"./oplog"},
+	"mark_after_log":              {"./oplog"},
 	"unsynced_log_writes":         {"./oplog", "./cmd/naut"},
 	"witness_log_unbound":         {"./cmd/naut"},
 	"witness_log_term_unbound":    {"./cmd/naut"},

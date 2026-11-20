@@ -118,6 +118,11 @@ func (wl *witnessLogs) open(cluster string) (*witnessLog, int, error) {
 // log's term; a lower, stale one the log refuses by its own term).
 func (wl *witnessLogs) admit(cluster, members, from string, term uint64) error {
 	granted, promised, _, ok := wl.w.Grant(cluster)
+	return admitRule(granted, promised, ok, members, from, term)
+}
+
+// admitRule is admit's decision on the vote's state.
+func admitRule(granted quorum.NodeID, promised uint64, ok bool, members, from string, term uint64) error {
 	switch {
 	case !ok:
 		return errors.New("no vote for this cluster since the witness started")

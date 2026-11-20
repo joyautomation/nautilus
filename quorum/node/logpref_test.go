@@ -55,6 +55,22 @@ func TestLoopbackUnsyncedLeaderYieldsToASyncedPeer(t *testing.T) {
 	c.steady(o, 8)
 }
 
+// A renewal round sent before the yield and granted after it moves the
+// lease's end: the yield holds until the lease is seen over, not until the
+// instant it was due to end.
+func TestYieldHoldsUntilTheLeaseIsSeenOver(t *testing.T) {
+	due := quorum.Instant(time.Hour)
+	if !yieldHolds(true, true, due.Add(time.Millisecond), due) {
+		t.Fatal("the yield let renewals resume while a late grant keeps the lease")
+	}
+	if yieldHolds(true, false, due.Add(-time.Millisecond), due) {
+		t.Fatal("the yield held after the lease was over")
+	}
+	if yieldHolds(false, true, due, due) {
+		t.Fatal("held with no yield")
+	}
+}
+
 // At most one yield per yieldEvery: a flapping peer (it takes over, dies,
 // comes back synced) doesn't bounce the lead a second time.
 func TestLoopbackYieldIsDamped(t *testing.T) {

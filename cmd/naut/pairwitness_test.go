@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/joyautomation/nautilus/alarm"
 	"github.com/joyautomation/nautilus/oplog"
 	"github.com/joyautomation/nautilus/quorum/node"
 	"github.com/joyautomation/nautilus/server"
@@ -276,5 +277,98 @@ func TestPairLogsFromBeforeMarksCountAsSynced(t *testing.T) {
 	r.logReady(lead)
 	if code, body, _ := r.call(lead, "DELETE", "/api/substitutes/"+itoa(id), ""); code != http.StatusOK {
 		t.Fatalf("stop after the upgrade: %d %s", code, body)
+	}
+}
+
+// An acknowledgement whose occurrence ended before the leader died does
+// not carry across the takeover from the witness: the ack-clear the
+// leader proposed when Trip returned to normal is on the witness too, so
+// Trip's next activation on the new leader annunciates (#1033's invariant
+// across a synced takeover after the leader died).
+func TestPairEndedAckDoesNotCarryAcrossATakeoverFromTheWitness(t *testing.T) {
+	r := newPairRig(t)
+	lead := r.leader()
+	stand := other(lead)
+	r.nodes[stand].crash()
+	r.setTrip(t, lead, true)
+	pairWait(t, "Trip to annunciate", 5*time.Second, func() bool { return r.alarmState(lead) == alarm.UnackActive })
+	r.ackTrip(t, lead)
+	before := r.nodes[lead].m.log.Commit()
+	r.setTrip(t, lead, false)
+	pairWait(t, "the ack-clear to commit on the leader and the witness", 10*time.Second, func() bool {
+		return r.nodes[lead].m.log.Commit() > before && r.witnessHolds(lead)
+	})
+	r.nodes[lead].crash()
+	r.restart(stand)
+	if r.leader() != stand {
+		t.Fatal("the standby did not take over")
+	}
+	r.setTrip(t, stand, true)
+	pairWait(t, "Trip active on the new leader", 5*time.Second, func() bool { return r.alarmState(stand) != alarm.Normal })
+	if s := r.alarmState(stand); s != alarm.UnackActive {
+		t.Fatalf("Trip's new occurrence on the new leader is %s; want unack-active (the ended ack not carried)", s)
+	}
+}
+
+// §8.1 case 4, up to "A returns" (the override waits for PR 5's heal
+// rule): B down while A and the witness commit; the witness then loses its
+// disk. The rebuilt witness can't be adopted without B, so A loses its
+// majority; A dies; B and the rebuilt witness can't adopt it without A, so
+// nothing leads. A returns: the pair adopts the rebuilt witness, and the
+// entry is still there, on both controllers.
+func TestPairTwoFaultsStopThePairAndLoseNothing(t *testing.T) {
+	r := newPairRig(t)
+	lead := r.leader()
+	stand := other(lead)
+	r.nodes[stand].crash()
+	id := r.startedID(lead) // on A and the witness
+	inc := r.elector(lead).Status().Incarnation
+	r.stopWitness()
+	files, _ := filepath.Glob(filepath.Join(r.witDir, "*"))
+	for _, f := range files {
+		if err := os.RemoveAll(f); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r.startWitness(r.wit)
+	pairWait(t, "A to lose its majority", 15*time.Second, func() bool { return !r.nodes[lead].m.q.IsLeader() })
+	r.nodes[lead].crash()
+	r.restart(stand)
+	time.Sleep(3 * time.Second) // several leases: B and the rebuilt witness alone
+	if r.nodes[stand].m.q.IsLeader() {
+		t.Fatal("B led with a witness incarnation A never adopted")
+	}
+	r.restart(lead)
+	pairWait(t, "the pair to adopt the rebuilt witness", 60*time.Second, func() bool {
+		a, b := r.elector("a").Status(), r.elector("b").Status()
+		return a.Incarnation != inc && a.Incarnation == b.Incarnation && a.Commissioned && b.Commissioned
+	})
+	who := r.leader()
+	pairWait(t, "both controllers to hold the start", 15*time.Second, func() bool {
+		return hasSubstitute(r.substitutes(lead), id) && hasSubstitute(r.substitutes(stand), id)
+	})
+	r.logReady(who)
+	if code, body, _ := r.call(who, "DELETE", "/api/substitutes/"+itoa(id), ""); code != http.StatusOK {
+		t.Fatalf("stop after the pair healed: %d %s", code, body)
+	}
+}
+
+// The witness's Admit takes its granted controller at a term at or below
+// the vote's: a renewal that re-terms the vote (quorum.Candidate's
+// reterm) leaves it above the leader's epoch, which is the log's term, so
+// "equal" would refuse the real leader after any re-term.
+func TestWitnessAdmitsAtOrBelowItsPromise(t *testing.T) {
+	for _, c := range []struct {
+		from string
+		term uint64
+		ok   bool
+	}{{"a", 9, true}, {"a", 7, true}, {"a", 10, false}, {"a", 0, false}, {"b", 9, false}, {"z", 9, false}} {
+		err := admitRule("a", 9, true, "a,b", c.from, c.term)
+		if (err == nil) != c.ok {
+			t.Errorf("from %s at %d (granted a at 9): %v, want ok %v", c.from, c.term, err, c.ok)
+		}
+	}
+	if admitRule("a", 9, false, "a,b", "a", 9) == nil {
+		t.Error("admitted with no vote since the start")
 	}
 }

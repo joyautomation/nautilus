@@ -37,7 +37,7 @@ type cluster struct {
 	pair  string
 	mu    sync.Mutex
 	cut   map[[2]quorum.NodeID]bool // [from, to]
-	mute  map[quorum.NodeID]bool     // its vote requests are lost (the rest goes through)
+	mute  map[quorum.NodeID]bool    // its vote requests are lost (the rest goes through)
 	addr  map[quorum.NodeID]string  // the name peers use: a DNS name nothing allows
 	byHP  map[string]quorum.NodeID
 	real  map[string]string // name -> the address it listens on now

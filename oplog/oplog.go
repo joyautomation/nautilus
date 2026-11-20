@@ -357,6 +357,10 @@ type Status struct {
 	// (this one, leading, or the leader's, by its last answer) is not
 	// synced, rather than for want of replicas.
 	NotSynced bool `json:"notSynced,omitempty"`
+	// Uncounted: not writable because too few copies count, though enough
+	// answer: the others are reached but not synced (lost, rebuilt), so
+	// the no-majority text ("none answers") would be wrong.
+	Uncounted bool `json:"uncounted,omitempty"`
 	// Synced lists the peers whose last answer said their log is synced
 	// (and counts); Vouch is this replica's last vouch.
 	Synced []string `json:"synced,omitempty"`
@@ -440,7 +444,18 @@ func (n *Node) openMarked() error {
 	write := false
 	switch {
 	case errors.Is(err, os.ErrNotExist):
-		m, write = Mark{Identity: n.o.Identity, Synced: n.o.UnmarkedSynced}, true
+		m = Mark{Identity: n.o.Identity, Synced: n.o.UnmarkedSynced}
+		// Before the log file can be created (open): a log file with no
+		// mark beside it reads as one from before marks, which a caller
+		// may count as synced (UnmarkedSynced), so it must never be left
+		// by a start that dies, or fails to write the mark, in between.
+		if !mutOplog("mark_after_log") {
+			if err := writeMark(n.o.Mark, m); err != nil {
+				return fmt.Errorf("oplog: the log's mark: %w", err)
+			}
+		} else {
+			write = true
+		}
 	case err != nil:
 		// Unreadable: trust nothing it would say. The log stays (it may
 		// well be whole) but counts for nothing until synced.
@@ -1827,6 +1842,7 @@ func (n *Node) Status() Status {
 			s.NotSynced = true
 			s.Reason = "leader, but this replica's log is not synced, and too few that count are reachable"
 		case !s.Writable:
+			s.Uncounted = len(reached) >= n.majority()
 			s.Reason = fmt.Sprintf("leader, but only %d of %d instances that count reachable", counted, len(n.o.Peers))
 		}
 	default:

@@ -112,11 +112,13 @@ var Mutations = []string{
 	"unsynced_leader_keeps_lead",  // node: an unsynced, stuck leader never yields to a synced peer
 	"yield_undamped",              // node: a leader yields again within yieldEvery
 	"yield_ignores_may",           // node: a leader yields to a peer that may not campaign
+	"yield_until_due",             // node: a yield ends at the lease's due end, though a late grant moved it
 	"term_not_persisted",          // oplog: the term lives only in memory, so a lost log takes a deposed leader's word
 	"unnamed_leader_admitted",     // oplog: a marked replica takes replication when its election names no leader
 	"vouch_unchecked",             // oplog: a vouch is taken over a lost log, a silent peer or a later log
 	"vouch_alone_kept",            // oplog: a vouched log catches up alone at every leadership, not once
 	"unsynced_log_writes",         // oplog: an unsynced log reads writable, so a write ends "outcome unknown"
+	"mark_after_log",              // oplog: a new replica's mark is written after its log file exists
 	"witness_log_unbound",         // naut: the witness's log admits replication from any member
 	"witness_log_term_unbound",    // naut: the witness's log admits its granted member at any term
 	"witness_log_any_incarnation", // naut: the leader counts the witness's log at any incarnation

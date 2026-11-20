@@ -412,8 +412,8 @@ the dashboard's banner. An unsynced controller still takes over when it
 must, so control never waits for operator data, but while it leads,
 substitute and alarm changes are refused with "operator log not synced",
 and its takeover carries nothing from the log (as below). It syncs as
-soon as both other copies answer, or, if it was not leading, at the
-leader's next heartbeat. While the other controller is reachable and
+soon as both other copies count (answer, synced), or, if it was not
+leading, at the leader's next heartbeat. While the other controller is reachable and
 synced, an unsynced one doesn't campaign; if it leads and can't catch up
 while the other is synced and able to lead, it hands the lead over
 (`yielded to a: own operator log unsynced, a synced` in

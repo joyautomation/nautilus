@@ -38,6 +38,7 @@ var mutations = []string{
 	"unsynced_leader_keeps_lead", // an unsynced, stuck leader never yields to a synced peer (#710 3b-4b)
 	"yield_undamped",             // a leader yields again within yieldEvery (#710 3b-4b)
 	"yield_ignores_may",          // a leader yields to a peer that may not campaign (#710 3b-4b)
+	"yield_until_due",            // a yield ends at the lease's due end, though a late grant moved it (#710 3b-4b)
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")

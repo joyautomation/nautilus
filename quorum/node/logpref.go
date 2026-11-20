@@ -151,14 +151,31 @@ func (e *Elector) maybeYield(now quorum.Instant, ls LogState, has bool) {
 		return
 	}
 	e.yieldedAt = time.Now()
-	e.yieldUntil = e.c.LeaseEnd()
+	e.yieldHold, e.yieldDue = true, e.c.LeaseEnd()
 	msg := fmt.Sprintf("yielded to %s: own operator log unsynced, %s synced", e.o.Peer, e.o.Peer)
 	e.log.Warn("redundancy: " + msg + "; this controller stops renewing so " + string(e.o.Peer) + " takes over and syncs it")
 	e.event(Event{Kind: EventYielded, Detail: msg})
 }
 
 // yielding: a yield's lease has not run out yet. Under mu.
-func (e *Elector) yielding(now quorum.Instant) bool { return now < e.yieldUntil }
+func (e *Elector) yielding(now quorum.Instant) bool {
+	e.yieldHold = yieldHolds(e.yieldHold, e.c.Leading(now), now, e.yieldDue)
+	return e.yieldHold
+}
+
+// yieldHolds is whether a yield still holds renewals back: until the lease
+// is seen over, not until the instant it was due to end (due), since a
+// renewal round sent before the yield and granted after it moves the
+// lease's end (#710 3b-4b self-review).
+func yieldHolds(hold, leading bool, now, due quorum.Instant) bool {
+	if !hold {
+		return false
+	}
+	if mut("yield_until_due") {
+		return now < due
+	}
+	return leading
+}
 
 // selfLog is this controller's log report for the hello: synced, and
 // whether it may campaign now (healthy, not released, nothing holding

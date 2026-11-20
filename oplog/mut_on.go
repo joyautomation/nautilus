@@ -47,6 +47,9 @@ import "os"
 //     not answer, or a peer holding a later log;
 //   - vouch_alone_kept: a vouched log catches up alone at every
 //     leadership, not once;
+//   - mark_after_log: a new replica's mark is written after its log file
+//     is created, so a start that dies in between leaves a log that reads
+//     as one from before marks;
 //   - unsynced_log_writes: a log that would sequence while unsynced reads
 //     writable, so a write is proposed and ends "outcome unknown" instead
 //     of being refused for certain.
