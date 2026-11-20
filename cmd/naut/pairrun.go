@@ -505,13 +505,7 @@ func (m *pairMember) startLog(rt *runtime.Runtime, wait time.Duration, eng *alar
 		Identity: m.logIdentity(), UnmarkedSynced: preMark,
 		Node:  string(m.o.Self),
 		Names: map[string]string{a: "controller a", b: "controller b", wit: "the witness"},
-		Counts: func(peer, identity string) bool {
-			if peer != wit || mutNaut("witness_log_any_incarnation") {
-				return true
-			}
-			inc := m.q.Node().CountedIncarnation()
-			return inc != 0 && identity == strconv.FormatUint(inc, 10)
-		},
+		Counts: witnessCounts(wit, m.q.Node().CountedIncarnation),
 		Apply: apply,
 		Lapse: func(e oplog.Entry, now time.Time) bool {
 			return sl.Lapse(e, now) || (al != nil && al.Lapse(e, now))
@@ -670,6 +664,20 @@ func (m *pairMember) logStatus() *leader.LogStatus {
 		ls.Vouch = &leader.LogVouch{By: v.By, At: time.UnixMilli(v.At).UTC(), LastTerm: v.LastTerm, LastSeq: v.LastSeq}
 	}
 	return ls
+}
+
+// witnessCounts is the pair's log's Counts: the witness's copy counts only
+// at the incarnation the election counts (its identity is that
+// incarnation), so a rebuilt witness's log, synced or not, counts only
+// once the pair has adopted it (F15). A controller's always may.
+func witnessCounts(wit string, counted func() uint64) func(peer, identity string) bool {
+	return func(peer, identity string) bool {
+		if peer != wit || mutNaut("witness_log_any_incarnation") {
+			return true
+		}
+		inc := counted()
+		return inc != 0 && identity == strconv.FormatUint(inc, 10)
+	}
 }
 
 // witnessLogURL is the witness's copy of the cluster's log, as the pair's

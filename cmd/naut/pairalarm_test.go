@@ -165,11 +165,14 @@ func TestPairUnsyncedTakeoverCarriesNoAcks(t *testing.T) {
 	r.logReady(stand)
 	pairWait(t, "the committed ack to apply once synced", 5*time.Second, func() bool { return r.alarmState(stand) == alarm.AckActive })
 	r.startedID(stand)
-	for _, w := range r.nodes[stand].m.q.Status().Warnings {
-		if strings.Contains(w, "operator-intent log") {
-			t.Errorf("a log condition stayed after the sync: %s", w)
+	pairWait(t, "the log conditions to clear after the sync", 5*time.Second, func() bool {
+		for _, w := range r.nodes[stand].m.q.Status().Warnings {
+			if strings.Contains(w, "operator-intent log") {
+				return false
+			}
 		}
-	}
+		return true
+	})
 }
 
 // An ack is of an occurrence: acked, back to normal, active again, then a
