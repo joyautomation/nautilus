@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/joyautomation/nautilus/eip/logixserver"
+	"github.com/joyautomation/nautilus/internal/project"
 )
 
 var catchInterrupts sync.Once
@@ -385,5 +386,44 @@ func TestLogixServeOverTLS(t *testing.T) {
 	res.Body.Close()
 	if _, v, _ := em.Store.Resolve("Speed"); res.StatusCode != http.StatusNoContent || fmt.Sprint(v) != "44" {
 		t.Errorf("a write over TLS: %d, controller holds %v", res.StatusCode, v)
+	}
+}
+
+// #708 DX-B: naut logix serve --project takes server.tls: self-signed: it
+// serves HTTPS with the certificate it makes in the state directory (the
+// one the client sees is the file's).
+func TestLogixServeProjectSelfSigned(t *testing.T) {
+	host, port, _ := emulateSpec(t, moduleIOController())
+	state := isolateState(t)
+	t.Setenv("NAUTILUS_TOKEN", "")
+	t.Setenv("NAUTILUS_TLS_CERT", "")
+	t.Setenv("NAUTILUS_TLS_KEY", "")
+	dir := t.TempDir()
+	for _, name := range []string{"nautilus.yaml", "MainProgram.ld"} {
+		b, err := os.ReadFile(filepath.Join(demoProject, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if name == "nautilus.yaml" {
+			b = append(b, "server:\n  tls: self-signed\n"...)
+		}
+		os.WriteFile(filepath.Join(dir, name), b, 0o644)
+	}
+	var seen []byte
+	client := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{
+		InsecureSkipVerify: true, // checked below against the file
+		VerifyConnection: func(cs tls.ConnectionState) error {
+			seen = cs.PeerCertificates[0].Raw
+			return nil
+		},
+	}}}
+	serveLogixOver(t, "https", client, "--host", host, "--port", port, "--poll", "30ms", "--project", dir)
+	m, err := project.ReadManifest(os.DirFS(dir), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf := leafOf(t, filepath.Join(state, "nautilus", m.Name, "tls", "self-signed.pem"))
+	if !bytes.Equal(seen, leaf.Raw) {
+		t.Error("the serve does not serve the self-signed certificate in the state directory")
 	}
 }

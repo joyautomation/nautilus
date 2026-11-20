@@ -811,23 +811,31 @@
           "description": "A built HMI's directory, relative to the project (e.g. the SvelteKit `adapter-static` output, \"./hmi/build\") \u2014 must resolve inside the project, like every other manifest-referenced path. When set, the controller serves it at \"/\" (falling back to its index.html for a client-side route), and the built-in dashboard moves to \"/_nautilus/\". The HMI must call the tag API same-origin (a relative \"/api/...\" base URL)."
         },
         "tls": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "cert",
-            "key"
-          ],
-          "description": "The certificate the tag API serves (HTTPS): PEM files on the box, at absolute paths outside the project (a private key never belongs in git). Re-read when they change, so a renewal needs no restart. NAUTILUS_TLS_CERT and NAUTILUS_TLS_KEY override them.",
-          "properties": {
-            "cert": {
-              "type": "string",
-              "description": "The certificate (chain) file, PEM, absolute path."
+          "description": "The certificate the tag API serves (HTTPS): self-signed (the controller makes one in its state directory; browsers warn until accepted; not on a redundant pair), or PEM files on the box at absolute paths outside the project (a private key never belongs in git), re-read when they change. NAUTILUS_TLS_CERT and NAUTILUS_TLS_KEY override either.",
+          "oneOf": [
+            {
+              "const": "self-signed",
+              "description": "A certificate the controller makes on its first start, in its state directory, and renews within 30 days of its expiry. naut run prints its SHA-256 fingerprint."
             },
-            "key": {
-              "type": "string",
-              "description": "The private key file, PEM, absolute path; not readable by every user on the box."
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "cert",
+                "key"
+              ],
+              "properties": {
+                "cert": {
+                  "type": "string",
+                  "description": "The certificate (chain) file, PEM, absolute path."
+                },
+                "key": {
+                  "type": "string",
+                  "description": "The private key file, PEM, absolute path; not readable by every user on the box."
+                }
+              }
             }
-          }
+          ]
         },
         "trusted-proxies": {
           "type": "array",

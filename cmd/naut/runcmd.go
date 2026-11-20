@@ -255,16 +255,17 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	}
 	// HTTPS (#708, server.tls): the certificate, re-read on renewal. Loaded
 	// first, so a bad one refuses the start before the pair or the I/O.
-	certFile, keyFile := proj.TLSFiles()
-	tlsSrc, err := tlsSource(certFile, keyFile, dir, os.Getenv)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "naut run:", err)
-		return 1
-	}
-
 	addr := proj.Addr
 	if env := os.Getenv("NAUTILUS_ADDR"); env != "" {
 		addr = env
+	}
+	certFile, keyFile := proj.TLSFiles()
+	tlsSrc, err := tlsSource(tlsSpec{cert: certFile, key: keyFile, selfSigned: proj.TLSSelfSigned(),
+		stateDir: proj.AuthStateDir, name: proj.Name, devFallback: dir != "", listen: addr,
+		say: func(s string) { fmt.Fprint(os.Stderr, "naut run: "+s) }}, dir, os.Getenv)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "naut run:", err)
+		return 1
 	}
 
 	// The tag API's port is bound first, before the elector, the retained

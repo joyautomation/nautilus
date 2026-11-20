@@ -347,7 +347,21 @@ step which release answers and that a retained setpoint survived.
 
 ## HTTPS
 
-The tag API serves HTTPS with a certificate you put on the box:
+The quickest way to get HTTPS is a certificate the controller makes for itself:
+
+```yaml
+server:
+  tls: self-signed      # naut auth init writes this
+```
+
+- **What it makes.** On its first start, the controller makes an ECDSA P-256 key and a certificate for `localhost`, its loopback addresses, its host name and its network addresses. Both go into one file, `tls/self-signed.pem` in its state directory, mode 0600: `auth.state-dir`, else systemd's `$STATE_DIRECTORY` (`/var/lib/nautilus` under `naut deploy`, so nothing more is needed there), else, in a checkout, `$XDG_STATE_HOME/nautilus/<project>`. It never goes in the project.
+- **Its fingerprint.** `naut run` prints the certificate's SHA-256 fingerprint at every start (`naut auth init` prints it too).
+- **Browsers warn.** No authority signed the certificate, so a browser shows a warning until you accept it. Before you accept, open the certificate's details from the warning page and compare its SHA-256 fingerprint with the one `naut run` printed. If they match, it's your controller. A script or the historian needs the certificate in its trust store: copy the file's `CERTIFICATE` block.
+- **It stays.** Later starts serve the same certificate, so a browser that accepted it keeps accepting it. A start within 30 days of its expiry (it lasts 397 days) makes a new one, with a new fingerprint, and says so.
+- **Not on a redundant pair.** Each controller would make its own certificate, and a standby forwards to the leader only when both serve the same one. The load refuses `self-signed` with `redundancy:`. Make one certificate, copy it to both, and name it as below.
+- **Moving to a real certificate.** Replace `tls: self-signed` with `cert` and `key` (below), or set `NAUTILUS_TLS_CERT` and `NAUTILUS_TLS_KEY`, which win over `self-signed` too.
+
+With a certificate you put on the box:
 
 ```yaml
 server:

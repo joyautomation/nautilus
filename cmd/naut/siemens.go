@@ -152,7 +152,8 @@ func resolveSiemensServe(host, user, pin, projectDir string, roots []facade.Root
 	getenv func(string) string) (siemensServeConfig, error) {
 	c := siemensServeConfig{host: host, user: user, pin: pin, roots: roots, poll: poll, listen: listen,
 		password: getenv("NAUTILUS_SIEMENS_PASSWORD"), token: getenv("NAUTILUS_TOKEN")}
-	var cert, key string // server.tls, when the project has one
+	var tlsCfg *project.TLSConfig // server.tls, when the project has one
+	var tlsState, tlsName string
 	if projectDir != "" {
 		m, err := project.ReadManifest(os.DirFS(projectDir), "")
 		if err != nil && !errors.Is(err, os.ErrNotExist) && !strings.Contains(err.Error(), "no nautilus.yaml") {
@@ -167,8 +168,8 @@ func resolveSiemensServe(host, user, pin, projectDir string, roots []facade.Root
 			}
 			c.auth, c.services = sopts.Auth, sopts.ServiceTokens
 		}
-		if err == nil && m.Server.TLS != nil {
-			cert, key = m.Server.TLS.Cert, m.Server.TLS.Key
+		if err == nil {
+			tlsCfg, tlsState, tlsName = m.Server.TLS, m.AuthStateDir(), m.Name
 		}
 		if err == nil && m.Target != nil && m.Target.Siemens != nil {
 			t := m.Target.Siemens
@@ -187,7 +188,8 @@ func resolveSiemensServe(host, user, pin, projectDir string, roots []facade.Root
 	}
 	// HTTPS: the project's server.tls, or NAUTILUS_TLS_CERT and _KEY with
 	// or without a project.
-	src, err := tlsSource(cert, key, projectDir, getenv)
+	src, err := tlsSource(tlsSpecOf(tlsCfg, tlsState, tlsName, listen, true,
+		func(s string) { fmt.Fprint(os.Stderr, "naut siemens serve: "+s) }), projectDir, getenv)
 	if err != nil {
 		return c, err
 	}

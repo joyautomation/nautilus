@@ -14,12 +14,16 @@ An `auth:` block in `nautilus.yaml` says who may do what on a controller.
 From a project with no `auth:` block to an operator who signs in:
 
 ```sh
-naut auth init --user alice:operator   # writes a starter auth: block into nautilus.yaml
+naut auth init --user alice:operator   # a starter auth: block, and HTTPS (server.tls: self-signed)
 naut users add alice                   # alice's password, kept on the controller (sudo on a box)
 naut run                               # restart it if it was running: auth: is read at start
 ```
 
-`naut auth init` adds the block at the end of `nautilus.yaml` and changes nothing else in the file. The block names the users you give (`--user <name>:<role>`, repeatable) and lists the other keys as commented examples. It refuses a manifest that already has an `auth:` block, and it checks the result loads before writing it. Each command prints the next step.
+- **What `naut auth init` writes.** It adds the block at the end of `nautilus.yaml`. The block names the users you give (`--user <name>:<role>`, repeatable) and lists the other keys as commented examples.
+- **HTTPS.** It also adds `tls: self-signed` under `server:`, so passwords never cross the network in the clear, and prints the certificate's fingerprint to compare with the browser's (see [HTTPS](/guides/deployment/#https)).
+- **When it skips `server.tls`.** With `--no-tls` (a TLS proxy in front, or a certificate of your own), when `server.tls` is set already, when `server.trusted-proxies` names a proxy, and on a redundant pair, where self-signed can't be used. Each time it says why.
+- **What it leaves alone.** Nothing else in the file changes. It refuses a manifest that already has an `auth:` block, and it checks that the result loads before writing it.
+- **Next steps.** Each command prints the next step.
 
 - **A token for a script or VS Code:** `naut users token alice`.
 - **An OPC UA client that writes as itself:** `naut opcua trust <thumbprint> --as scada:operator` (see [OPC UA](#opc-ua)).

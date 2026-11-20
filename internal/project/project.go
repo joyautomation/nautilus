@@ -652,11 +652,60 @@ type ServerConfig struct {
 	TrustedProxies []string `yaml:"trusted-proxies"`
 }
 
-// TLSConfig is server.tls: the certificate and key files.
+// TLSConfig is server.tls: the certificate and key files, or the scalar
+// self-signed: a certificate the controller makes itself, in its state
+// directory, on its first start (#708).
 type TLSConfig struct {
 	Cert string `yaml:"cert"`
 	Key  string `yaml:"key"`
+	// SelfSigned is server.tls: self-signed.
+	SelfSigned bool `yaml:"-"`
 }
+
+// TLSSelfSigned is server.tls's one scalar value.
+const TLSSelfSigned = "self-signed"
+
+// UnmarshalYAML takes self-signed or {cert, key}. It walks the mapping
+// itself, so a misspelt key is refused here as the strict decoder would.
+func (t *TLSConfig) UnmarshalYAML(n *yaml.Node) error {
+	switch n.Kind {
+	case yaml.ScalarNode:
+		if n.Value != TLSSelfSigned {
+			return fmt.Errorf("line %d: server.tls is %s, or {cert: <file>, key: <file>}, not %q", n.Line, TLSSelfSigned, n.Value)
+		}
+		t.SelfSigned = true
+		return nil
+	case yaml.MappingNode:
+		seen := map[string]bool{}
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			k, v := n.Content[i], n.Content[i+1]
+			if seen[k.Value] {
+				return fmt.Errorf("line %d: %s is given twice in server.tls", k.Line, k.Value)
+			}
+			seen[k.Value] = true
+			switch k.Value {
+			case "cert":
+				if err := v.Decode(&t.Cert); err != nil {
+					return err
+				}
+			case "key":
+				if err := v.Decode(&t.Key); err != nil {
+					return err
+				}
+			default:
+				return fmt.Errorf("line %d: field %s not found in server.tls (cert, key; or server.tls: %s)", k.Line, k.Value, TLSSelfSigned)
+			}
+		}
+		return nil
+	}
+	return fmt.Errorf("line %d: server.tls is %s, or {cert: <file>, key: <file>}", n.Line, TLSSelfSigned)
+}
+
+// errSelfSignedPair is the load's refusal of server.tls: self-signed on a
+// redundant pair: each controller would make its own certificate, and a
+// standby forwards to the leader only when the leader serves the
+// certificate it does (server.CertSource.Pinned).
+var errSelfSignedPair = errors.New("server.tls: self-signed cannot be used with redundancy: a pair serves ONE certificate (a standby forwards to the leader only when it serves the same one), and each controller would make its own. Make one certificate and key, copy both files to both controllers, and name them: server.tls: {cert: /abs/cert.pem, key: /abs/key.pem}")
 
 // TaskConfig is one program on its own scan. The FIRST task is the main
 // task: it owns field I/O and is the default online-edit target.
@@ -1147,6 +1196,9 @@ func ReadManifest(fsys fs.FS, name string) (*Manifest, error) {
 	if m.authPolicy, err = compileAuth(m.Auth); err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
+	if m.Server.TLS != nil && m.Server.TLS.SelfSigned && m.Redundancy != nil {
+		return nil, fmt.Errorf("%s: %w", name, errSelfSignedPair)
+	}
 	if m.Auth != nil && m.OPCUA != nil && m.OPCUA.AnonymousWrites {
 		// Under auth: an OPC UA session writes as a user or as a mapped
 		// certificate; an anonymous session on None is neither, so the
@@ -1422,7 +1474,7 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 	if err != nil {
 		return nil, fmt.Errorf("server: %w", err)
 	}
-	if t := m.Server.TLS; t != nil {
+	if t := m.Server.TLS; t != nil && !t.SelfSigned {
 		for _, f := range []struct{ what, path string }{{"cert", t.Cert}, {"key", t.Key}} {
 			if f.path == "" || !filepath.IsAbs(f.path) {
 				return nil, fmt.Errorf("server: tls: %s %q: give an absolute path on the box, outside the project (a private key never belongs in git)", f.what, f.path)
@@ -1529,7 +1581,12 @@ func (m *Manifest) authStateDir() string {
 // users file lives (naut users reads the manifest, not a Project).
 func (m *Manifest) AuthStateDir() string { return m.authStateDir() }
 
-// TLSFiles are server.tls's certificate and key paths, "" without it.
+// TLSSelfSigned reports server.tls: self-signed: the controller makes its
+// own certificate in its state directory (cmd/naut selfSignedTLS).
+func (p *Project) TLSSelfSigned() bool { return p.tls != nil && p.tls.SelfSigned }
+
+// TLSFiles are server.tls's certificate and key paths, "" without it (and
+// for self-signed).
 func (p *Project) TLSFiles() (cert, key string) {
 	if p.tls == nil {
 		return "", ""

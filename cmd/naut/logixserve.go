@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/joyautomation/nautilus/internal/project"
 	"github.com/joyautomation/nautilus/lang/l5x"
 	"github.com/joyautomation/nautilus/logix/deploy"
 	"github.com/joyautomation/nautilus/logix/facade"
@@ -96,7 +97,8 @@ func runLogixServe(args []string) int {
 	var plane *facade.ProgramPlane
 	release := func() {}
 	sopts := server.Options{AuthToken: os.Getenv("NAUTILUS_TOKEN")}
-	var tlsCert, tlsKey string
+	var tlsCfg *project.TLSConfig // the project's server.tls
+	var tlsState, tlsName string
 	if *projectDir != "" {
 		p, err := loadLogixProject(*projectDir)
 		if err != nil {
@@ -122,9 +124,8 @@ func runLogixServe(args []string) int {
 		}
 		// The project's auth: block decides its writes, deploys included,
 		// as under naut run (#708): a viewer token may not download.
-		if p.tls != nil {
-			tlsCert, tlsKey = p.tls.Cert, p.tls.Key
-		}
+		tlsCfg = p.tls
+		tlsState, tlsName = p.stateDir, p.name
 		if err := withAuth(&sopts, p.auth, os.Getenv); err != nil {
 			fmt.Fprintln(os.Stderr, "naut logix serve: auth:", err)
 			return 2
@@ -140,7 +141,8 @@ func runLogixServe(args []string) int {
 	// reaper (30 minutes by default) gets to it.
 	defer release()
 	// HTTPS when the project has server.tls (or NAUTILUS_TLS_CERT/_KEY).
-	tlsSrc, terr := tlsSource(tlsCert, tlsKey, *projectDir, os.Getenv)
+	tlsSrc, terr := tlsSource(tlsSpecOf(tlsCfg, tlsState, tlsName, *listen, true,
+		func(s string) { fmt.Fprint(os.Stderr, "naut logix serve: "+s) }), *projectDir, os.Getenv)
 	if terr != nil {
 		fmt.Fprintln(os.Stderr, "naut logix serve:", terr)
 		return 2

@@ -11,19 +11,67 @@ import (
 	"strings"
 	"time"
 
+	"github.com/joyautomation/nautilus/internal/project"
 	"github.com/joyautomation/nautilus/server"
 )
 
+// tlsSpec is a project's server.tls, as tlsSource takes it.
+type tlsSpec struct {
+	cert, key string
+	// selfSigned is server.tls: self-signed, made in the state directory
+	// stateDir (auth.state-dir), else $STATE_DIRECTORY, else (devFallback,
+	// a checkout) $XDG_STATE_HOME/nautilus/<name>.
+	selfSigned bool
+	stateDir   string
+	name       string
+	// devFallback allows the $XDG_STATE_HOME state directory; listen is
+	// the address served, a name the certificate is made for.
+	devFallback bool
+	listen      string
+	// say gets what is to be told about a self-signed certificate.
+	say func(string)
+}
+
+// tlsSpecOf is a manifest's server.tls (nil: none) as a tlsSpec.
+func tlsSpecOf(t *project.TLSConfig, stateDir, name, listen string, devFallback bool, say func(string)) tlsSpec {
+	s := tlsSpec{stateDir: stateDir, name: name, listen: listen, devFallback: devFallback, say: say}
+	if t != nil {
+		s.cert, s.key, s.selfSigned = t.Cert, t.Key, t.SelfSigned
+	}
+	return s
+}
+
 // tlsSource loads the tag API's certificate (#708, server.tls): the
 // manifest's cert and key, or NAUTILUS_TLS_CERT and NAUTILUS_TLS_KEY when
-// set. Nil when neither names one. A path inside the project is refused:
-// a private key never belongs in a checkout, a build or git.
-func tlsSource(cert, key, projectDir string, getenv func(string) string) (*server.CertSource, error) {
-	if c := getenv("NAUTILUS_TLS_CERT"); c != "" {
-		cert = c
+// set (they win over self-signed too), or the self-signed one in the
+// state directory. Nil when none is named. A path inside the project is
+// refused: a private key never belongs in a checkout, a build or git.
+func tlsSource(spec tlsSpec, projectDir string, getenv func(string) string) (*server.CertSource, error) {
+	cert, key := spec.cert, spec.key
+	envCert, envKey := getenv("NAUTILUS_TLS_CERT"), getenv("NAUTILUS_TLS_KEY")
+	if envCert != "" {
+		cert = envCert
 	}
-	if k := getenv("NAUTILUS_TLS_KEY"); k != "" {
-		key = k
+	if envKey != "" {
+		key = envKey
+	}
+	if spec.selfSigned && envCert == "" && envKey == "" {
+		name := spec.name
+		if name == "" {
+			name = "nautilus"
+		}
+		sd, err := controllerStateDir("the self-signed certificate (server.tls: self-signed)", spec.stateDir, name, projectDir, spec.devFallback, getenv)
+		if err != nil {
+			return nil, fmt.Errorf("tls: %w", err)
+		}
+		c, err := ensureSelfSigned(sd, name, selfSignedHosts(spec.listen), time.Now())
+		if err != nil {
+			return nil, err
+		}
+		if spec.say != nil {
+			spec.say(selfSignedNotice(c))
+		}
+		return server.NewCertSource(c.Path, c.Path)
 	}
 	if cert == "" && key == "" {
 		return nil, nil

@@ -17,7 +17,7 @@ import (
 
 func nautAuth(args ...string) (int, string, string) {
 	var out, errb bytes.Buffer
-	code := authMain(args, &out, &errb)
+	code := authMain(args, &out, &errb, os.Getenv)
 	return code, out.String(), errb.String()
 }
 
@@ -28,6 +28,7 @@ func nautAuth(args ...string) (int, string, string) {
 func TestAuthInitOnEveryTemplate(t *testing.T) {
 	for _, tmpl := range []string{tmplMinimal, tmplDemo} { // the manifest templates (the Go ones have none)
 		t.Run(tmpl, func(t *testing.T) {
+			state := isolateState(t)
 			dir := scaffoldInto(t, scaffold{Name: "plant", Program: "Plant", Template: tmpl})
 			path := filepath.Join(dir, "nautilus.yaml")
 			before, err := os.ReadFile(path)
@@ -39,11 +40,23 @@ func TestAuthInitOnEveryTemplate(t *testing.T) {
 				t.Fatalf("auth init: %d %s", code, errs)
 			}
 			after, _ := os.ReadFile(path)
-			if !bytes.HasPrefix(after, before) {
-				t.Errorf("the original manifest is not kept byte for byte:\n%s", after)
+			if got := removeLines(string(after), string(before)); got != "" {
+				t.Errorf("the original manifest is not kept line for line (left: %q):\n%s", got, after)
 			}
-			if _, err := project.Load(os.DirFS(dir), ""); err != nil {
+			// server.tls: self-signed, under the template's server: block,
+			// and the certificate naut run here will serve, its fingerprint
+			// told.
+			if !strings.Contains(string(after), "server:\n  tls: self-signed") {
+				t.Errorf("no server.tls: self-signed under server:\n%s", after)
+			}
+			leaf := leafOf(t, filepath.Join(state, "nautilus", "plant", "tls", "self-signed.pem"))
+			if !strings.Contains(errs, certFingerprint(leaf.Raw)) || !strings.Contains(errs, "compare that fingerprint") {
+				t.Errorf("auth init does not tell the certificate's fingerprint:\n%s", errs)
+			}
+			if p, err := project.Load(os.DirFS(dir), ""); err != nil {
 				t.Fatalf("the project no longer loads: %v\n%s", err, after)
+			} else if !p.TLSSelfSigned() {
+				t.Error("the project does not serve self-signed")
 			}
 			m, err := project.ReadManifest(os.DirFS(dir), "")
 			if err != nil {
@@ -118,6 +131,7 @@ func TestAuthInitRefuses(t *testing.T) {
 		{"after the document end", plainManifest + "...\n", []string{"--user", "alice:operator"}, "exactly what was meant"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			isolateState(t)
 			dir := authProject(t, tc.manifest)
 			code, _, errs := nautAuth(append([]string{"init", "--project", dir}, tc.args...)...)
 			if code == 0 || !strings.Contains(errs, tc.want) {
@@ -135,10 +149,11 @@ func TestAuthInitRefuses(t *testing.T) {
 // The file's own line ending (CRLF) is kept, and a last line with no line
 // ending gets one before the block.
 func TestAuthInitWithNoUsersAndCRLF(t *testing.T) {
+	isolateState(t)
 	orig := strings.ReplaceAll(strings.TrimSuffix(plainManifest, "\n"), "\n", "\r\n")
 	dir := authProject(t, orig)
 	os.Chmod(filepath.Join(dir, "nautilus.yaml"), 0o640)
-	code, _, errs := nautAuth("init", "--project", dir)
+	code, _, errs := nautAuth("init", "--project", dir, "--no-tls")
 	if code != 0 || !strings.Contains(errs, "only NAUTILUS_TOKEN") {
 		t.Fatalf("%d %s", code, errs)
 	}
@@ -405,6 +420,7 @@ func TestManifestEditRefusesOddLineBreaks(t *testing.T) {
 	} {
 		for _, guard := range []bool{true, false} {
 			t.Run(fmt.Sprintf("%q guard %v", odd.text, guard), func(t *testing.T) {
+				isolateState(t)
 				if !guard {
 					old := refuseOddBreaks
 					refuseOddBreaks = func([]byte) error { return nil }
@@ -439,6 +455,7 @@ func TestManifestEditRefusesOddLineBreaks(t *testing.T) {
 // A symlinked nautilus.yaml stays a symlink: the file it points to is
 // edited (Fable on #1112).
 func TestManifestEditFollowsASymlink(t *testing.T) {
+	isolateState(t)
 	dir := authProject(t, plainManifest)
 	real := filepath.Join(t.TempDir(), "plant.yaml")
 	os.Rename(filepath.Join(dir, "nautilus.yaml"), real)
@@ -550,7 +567,7 @@ func TestExactEditChecks(t *testing.T) {
 	}
 	initWant := &project.AuthConfig{Users: map[string][]project.AuthGrant{"alice": {{Role: "operator"}}}}
 	plain := read(plainManifest)
-	if !exactInit(plain, read(plainManifest+"auth:\n  users:\n    alice: [operator]\n"), initWant) {
+	if !exactInit(plain, read(plainManifest+"auth:\n  users:\n    alice: [operator]\n"), initWant, false) {
 		t.Error("the exact init is refused")
 	}
 	for name, post := range map[string]string{
@@ -558,9 +575,24 @@ func TestExactEditChecks(t *testing.T) {
 		"outside auth:":    strings.Replace(plainManifest, "100ms", "200ms", 1) + "auth:\n  users:\n    alice: [operator]\n",
 		"another user":     plainManifest + "auth:\n  users:\n    alice: [operator]\n    bob: [viewer]\n",
 	} {
-		if exactInit(plain, read(post), initWant) {
+		if exactInit(plain, read(post), initWant, false) {
 			t.Errorf("init: %s is taken as exact", name)
 		}
+	}
+	// With server.tls: self-signed written (DX-B): exact only with it, and
+	// only it, in server:.
+	withTLS := plainManifest + "server:\n  tls: self-signed\nauth:\n  users:\n    alice: [operator]\n"
+	if !exactInit(plain, read(withTLS), initWant, true) {
+		t.Error("the exact init with server.tls is refused")
+	}
+	if exactInit(plain, read(withTLS), initWant, false) {
+		t.Error("a server.tls not meant is taken as exact")
+	}
+	if exactInit(plain, read(plainManifest+"auth:\n  users:\n    alice: [operator]\n"), initWant, true) {
+		t.Error("init meant to write server.tls, and the result has none: taken as exact")
+	}
+	if exactInit(plain, read(plainManifest+"server:\n  tls: self-signed\n  addr: x:1\nauth:\n  users:\n    alice: [operator]\n"), initWant, true) {
+		t.Error("server: changed beside tls: taken as exact")
 	}
 }
 
@@ -587,5 +619,45 @@ func TestOPCUATrustAsMixedCaseName(t *testing.T) {
 	}
 	if !trustedHas(t, dir, tps[0]) {
 		t.Error("not trusted")
+	}
+}
+
+// auth init and server.tls (naut-lead: passwords must not cross plain
+// HTTP, and auth init must never write a config that then refuses): a
+// manifest with no server: gets one; --no-tls, a server.tls of its own, a
+// TLS proxy in front and a redundant pair get none, each saying why, and
+// the pair's names what to do instead. Every result loads.
+func TestAuthInitServerTLS(t *testing.T) {
+	for _, tc := range []struct {
+		name, extra string
+		args        []string
+		self        bool
+		want        string
+	}{
+		{"no server:", "", nil, true, "server.tls: self-signed: the controller serves HTTPS"},
+		{"--no-tls", "server:\n  addr: localhost:8080\n", []string{"--no-tls"}, false, "No server.tls written: --no-tls"},
+		{"its own", "server:\n  tls: {cert: /etc/c.pem, key: /etc/k.pem}\n", nil, false, "set already, and kept"},
+		{"a TLS proxy", "server:\n  trusted-proxies: [127.0.0.1]\n", nil, false, "names a TLS proxy"},
+		{"a pair", "redundancy: {}\n", nil, false, "copy both to both controllers"},
+		{"flow server:", "server: {addr: \"localhost:8080\"}\n", nil, false, "Add tls: self-signed under it by hand"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateState(t)
+			dir := authProject(t, plainManifest+tc.extra)
+			code, _, errs := nautAuth(append([]string{"init", "--project", dir, "--user", "alice:operator"}, tc.args...)...)
+			if code != 0 || !strings.Contains(errs, tc.want) {
+				t.Fatalf("%d, want %q:\n%s", code, tc.want, errs)
+			}
+			m, err := project.ReadManifest(os.DirFS(dir), "")
+			if err != nil {
+				t.Fatalf("the result does not load: %v", err)
+			}
+			if got := m.Server.TLS != nil && m.Server.TLS.SelfSigned; got != tc.self {
+				t.Errorf("self-signed %v, want %v", got, tc.self)
+			}
+			if !m.AuthPolicy().HasUser("alice") {
+				t.Error("no alice")
+			}
+		})
 	}
 }

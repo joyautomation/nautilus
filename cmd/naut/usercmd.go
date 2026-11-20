@@ -59,19 +59,31 @@ Code extension's nautilus.token setting takes one).
 // $XDG_STATE_HOME/nautilus/<name>. Never inside projectDir: a deploy
 // replaces the project, and hashes must not reach git.
 func usersFile(stateDir, name, projectDir string, devFallback bool, getenv func(string) string) (string, error) {
+	sd, err := controllerStateDir("the users file", stateDir, name, projectDir, devFallback, getenv)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(sd, users.FileName), nil
+}
+
+// controllerStateDir is the controller's state directory, for what (the
+// users file, a self-signed certificate): stateDir (auth.state-dir), else
+// $STATE_DIRECTORY, else, outside systemd and when devFallback allows it,
+// $XDG_STATE_HOME/nautilus/<name>. Never inside projectDir.
+func controllerStateDir(what, stateDir, name, projectDir string, devFallback bool, getenv func(string) string) (string, error) {
 	sd := stateDir
 	if sd == "" {
 		sd, _, _ = strings.Cut(getenv("STATE_DIRECTORY"), ":")
 	}
 	if sd == "" {
 		if getenv("INVOCATION_ID") != "" || !devFallback {
-			return "", errors.New("no state directory for the users file: set auth.state-dir in nautilus.yaml, or run under systemd with StateDirectory= (naut deploy does: /var/lib/nautilus)")
+			return "", fmt.Errorf("no state directory for %s: set auth.state-dir in nautilus.yaml, or run under systemd with StateDirectory= (naut deploy does: /var/lib/nautilus)", what)
 		}
 		base := getenv("XDG_STATE_HOME")
 		if base == "" {
 			home, err := os.UserHomeDir()
 			if err != nil {
-				return "", fmt.Errorf("no state directory for the users file: %w; set auth.state-dir", err)
+				return "", fmt.Errorf("no state directory for %s: %w; set auth.state-dir", what, err)
 			}
 			base = filepath.Join(home, ".local", "state")
 		}
@@ -87,7 +99,7 @@ func usersFile(stateDir, name, projectDir string, devFallback bool, getenv func(
 	if err := outsideProject(sd, projectDir); err != nil {
 		return "", err
 	}
-	return filepath.Join(sd, users.FileName), nil
+	return sd, nil
 }
 
 // outsideProject refuses a state directory inside projectDir: a deploy
@@ -105,7 +117,7 @@ func outsideProject(sd, projectDir string) error {
 		return err
 	}
 	if rel, err := filepath.Rel(proj, sd); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return fmt.Errorf("state directory %s is inside the project %s: the users file's hashes must never reach git; set auth.state-dir outside it", sd, proj)
+		return fmt.Errorf("state directory %s is inside the project %s: what it keeps (password hashes, a private key) must never reach git; set auth.state-dir outside it", sd, proj)
 	}
 	return nil
 }
