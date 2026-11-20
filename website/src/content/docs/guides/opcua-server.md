@@ -429,7 +429,10 @@ $ sudo NAUTILUS_CLI=1 /opt/nautilus/current/controller opcua certs --pki /var/li
 $ sudo NAUTILUS_CLI=1 /opt/nautilus/current/controller opcua trust 5c1f0e7a9b3d2c41 --pki /var/lib/nautilus/pki
 ```
 
-Without `NAUTILUS_CLI=1` a built controller does not run the command.
+`trust` moves the certificate within the store, so the file keeps the
+service's ownership even though you ran it as root. Without
+`NAUTILUS_CLI=1` a built controller does not run the command: it refuses
+the arguments.
 
 Copying a certificate into `trusted/certs/` (DER or PEM, any file name)
 does the same. To withdraw trust, delete its file there. The client can

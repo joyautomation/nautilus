@@ -6,11 +6,13 @@ package main
 // variable turns the controller into the command line instead of starting it.
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestBuiltControllerWithNautilusCLIRunsOpcuaCerts(t *testing.T) {
@@ -52,5 +54,21 @@ func TestBuiltControllerWithNautilusCLIRunsOpcuaCerts(t *testing.T) {
 	out, err := cmd.CombinedOutput()
 	if err != nil || !strings.Contains(string(out), "Trusted clients ("+pki) {
 		t.Fatalf("NAUTILUS_CLI=1 controller opcua certs --pki %s: %v\n%s", pki, err, out)
+	}
+
+	// Without the variable the same words are not the command: the controller
+	// refuses an argument it does not know (it must not start, nor list the
+	// store). A short timeout turns "it started instead" into a failure.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	bare := exec.CommandContext(ctx, ctl, "opcua", "certs", "--pki", pki)
+	bare.Dir = dir
+	bare.Env = []string{"PATH=", "HOME=" + dir, "NAUTILUS_ADDR=127.0.0.1:0"}
+	out, err = bare.CombinedOutput()
+	if ctx.Err() != nil {
+		t.Fatalf("controller opcua certs without NAUTILUS_CLI started the controller:\n%s", out)
+	}
+	if err == nil || strings.Contains(string(out), "Trusted clients") {
+		t.Fatalf("controller opcua certs without NAUTILUS_CLI must refuse, not run the command (err %v):\n%s", err, out)
 	}
 }
