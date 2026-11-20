@@ -145,6 +145,11 @@ func TestLoadAuthOPCUACertificates(t *testing.T) {
 	if n, ok := p.Auth.OPCUACertFor("0000000000000000000000000000000000000000", "CN=Historian,O=Plant"); !ok || n != "historian" {
 		t.Errorf("by subject: %q %v", n, ok)
 	}
+	// A certificate matching both a thumbprint mapping and a subject
+	// mapping is the thumbprint's.
+	if n, ok := p.Auth.OPCUACertFor("9f86d081884c7d659a2feaa0c55ad015a3bf4f1b", "CN=Historian,O=Plant"); !ok || n != "scada" {
+		t.Errorf("thumbprint and subject both mapped: %q %v, want scada", n, ok)
+	}
 	for _, c := range [][2]string{{"", ""}, {"9f86d081884c7d65", ""}, {"", "CN=historian,O=Plant"}, {"", "CN=Historian"}} {
 		if n, ok := p.Auth.OPCUACertFor(c[0], c[1]); ok {
 			t.Errorf("%q %q maps to %q", c[0], c[1], n)

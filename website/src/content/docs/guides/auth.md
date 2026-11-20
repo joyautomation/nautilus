@@ -200,6 +200,8 @@ With `auth:`, an OPC UA client writes only as someone the block names. Both ways
   - `thumbprint`: the 40-digit SHA-1 that `naut opcua certs` prints;
   - `subject`: its subject, exactly as `naut opcua certs` prints it.
 
+  **Prefer the thumbprint.** A thumbprint names one certificate. A subject is whatever the certificate says about itself, so a subject mapping also grants its roles to any other certificate with the same subject that is trusted later, a lookalike approved from `rejected/` for instance. If one certificate matches both a thumbprint mapping and a subject mapping, the thumbprint wins.
+
   The session then writes as `opcua-cert:<name>`, within those grants, and the journal names it so.
 
 A trusted certificate the block does not map is **read-only**: its client signs in with a user name to write. `opcua.anonymous-writes` can't be used with `auth:` (the load refuses it). Either way, the tag must also be open in `opcua.writable`. Without `auth:`, a trusted certificate writes what `opcua.writable` opens, as before.

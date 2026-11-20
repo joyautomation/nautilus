@@ -118,6 +118,25 @@ func (u *Surface) Record(e audit.Entry) {
 	if u == nil {
 		return
 	}
+	u.s.audit.record(u.prepare(e))
+}
+
+// RecordBatch journals es as Record would, but durable together with one
+// fsync, not one per entry: for one request that changed many things (an
+// OPC UA Write of many nodes), answered once they are on disk.
+func (u *Surface) RecordBatch(es []audit.Entry) {
+	if u == nil || len(es) == 0 {
+		return
+	}
+	out := make([]audit.Entry, len(es))
+	for i, e := range es {
+		out[i] = u.prepare(e)
+	}
+	u.s.audit.recordBatch(out)
+}
+
+// prepare is an entry as the surface records it.
+func (u *Surface) prepare(e audit.Entry) audit.Entry {
 	e.Source = u.source
 	e.Target = capText(e.Target, targetMax)
 	limit := valueMax
@@ -125,5 +144,5 @@ func (u *Surface) Record(e audit.Entry) {
 		limit = refusedValueMax
 	}
 	e.Before, e.After = audit.Cap(e.Before, limit), audit.Cap(e.After, limit)
-	u.s.audit.record(e)
+	return e
 }

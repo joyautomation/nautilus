@@ -3,8 +3,10 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -199,4 +201,81 @@ func TestSurfaceRecordGoesThroughTheRecorder(t *testing.T) {
 	if got := len(srv.audit.ring.Recent()) - before; got != refuseFull {
 		t.Errorf("%d refusals from one client journalled in full, want %d (the rest coalesced)", got, refuseFull)
 	}
+}
+
+// batchRecorder is a journal that takes batches, counting how it is
+// called, and fails while fail is set.
+type batchRecorder struct {
+	mu      sync.Mutex
+	records int
+	batches []int // each batch's size
+	fail    bool
+	entries []audit.Entry
+}
+
+func (b *batchRecorder) Record(e audit.Entry) (audit.Entry, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.fail {
+		return e, errors.New("EIO")
+	}
+	b.records++
+	b.entries = append(b.entries, e)
+	return e, nil
+}
+
+func (b *batchRecorder) RecordBatch(es []audit.Entry) ([]audit.Entry, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.fail {
+		return es, errors.New("EIO")
+	}
+	b.batches = append(b.batches, len(es))
+	b.entries = append(b.entries, es...)
+	return es, nil
+}
+
+// A surface's batch reaches the journal as ONE batch (one fsync for the
+// file journal), with the surface's source on every entry; refusals past
+// their window's allowance are coalesced out of it first; and a batch the
+// journal cannot take is kept whole and written once it can.
+func TestSurfaceRecordBatchIsOneJournalWrite(t *testing.T) {
+	rec := &batchRecorder{}
+	srv := auditServer(t, Options{Audit: rec})
+	u := srv.Surface(audit.SourceOPCUA)
+	var es []audit.Entry
+	for i := range 1000 {
+		es = append(es, audit.Entry{User: "user:op", Action: "tag.write", Target: fmt.Sprintf("T%d", i), From: "abcd", Result: audit.ResultOK})
+	}
+	for range 20 {
+		es = append(es, audit.Entry{User: "user:op", Action: "tag.write", Target: "X", From: "abcd", Result: audit.ResultRefused})
+	}
+	u.RecordBatch(es)
+	if len(rec.batches) != 1 || rec.batches[0] != 1000+refuseFull || rec.records != 0 {
+		t.Fatalf("batches %v, single records %d; want one batch of %d", rec.batches, rec.records, 1000+refuseFull)
+	}
+	for _, e := range rec.entries {
+		if e.Source != audit.SourceOPCUA || e.ID == "" {
+			t.Fatalf("an entry of the batch: %+v", e)
+		}
+	}
+	// The journal fails: the batch is kept, then written when it recovers.
+	rec.fail = true
+	u.RecordBatch([]audit.Entry{{Action: "tag.write", Target: "K1", Result: audit.ResultOK}, {Action: "tag.write", Target: "K2", Result: audit.ResultOK}})
+	if !srv.AuditJournalDown() {
+		t.Error("a failed batch did not mark the journal down")
+	}
+	rec.fail = false
+	srv.audit.tick()
+	found := 0
+	for _, e := range rec.entries {
+		if e.Target == "K1" || e.Target == "K2" {
+			found++
+		}
+	}
+	if found != 2 {
+		t.Errorf("the kept batch: %d of 2 entries written after recovery", found)
+	}
+	var none *Surface
+	none.RecordBatch(es)
 }

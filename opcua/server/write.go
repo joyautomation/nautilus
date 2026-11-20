@@ -495,7 +495,11 @@ func writeAttributes(srv *opcserver.Server, ns *namespace, sc *uasc.SecureChanne
 // written (the node id as sent when it names none), so the journal's
 // target filter finds it. A landed item carries its value before and
 // after; a refused one its status and reason, and the recorder coalesces a
-// flood of refusals by client. Nothing is recorded without an Identity.
+// flood of refusals by client. The entries go as ONE batch, durable with
+// one fsync before the WriteResponse: this runs on the server's single
+// message loop, and an fsync per item (10-50 ms each on a controller's
+// eMMC) would hold every other client for seconds on a large Write.
+// Nothing is recorded without an Identity.
 func (w *writeAccess) journal(cl client, nodes []*ua.WriteValue, results []ua.StatusCode, details, paths, addrs []string, at []int, olds []member, ns *namespace) {
 	id := w.id
 	if id == nil {
@@ -517,6 +521,7 @@ func (w *writeAccess) journal(cl client, nodes []*ua.WriteValue, results []ua.St
 			landed[i] = olds[k]
 		}
 	}
+	batch := make([]audit.Entry, 0, len(results))
 	for i, code := range results {
 		target := addrs[i]
 		if target == "" {
@@ -528,13 +533,14 @@ func (w *writeAccess) journal(cl client, nodes []*ua.WriteValue, results []ua.St
 			if m, ok := ns.resolve(nodes[i].NodeID); ok {
 				e.After = journalMember(m)
 			}
-			id.Record(e)
+			batch = append(batch, e)
 			continue
 		}
 		e := entry(audit.ResultRefused, target)
 		e.Detail["status"], e.Detail["reason"] = statusName(code), details[i]
-		id.Record(e)
+		batch = append(batch, e)
 	}
+	id.RecordBatch(batch)
 }
 
 // journalMember is a member's value as the journal holds it: the plain

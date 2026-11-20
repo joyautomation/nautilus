@@ -56,6 +56,9 @@ type Identity interface {
 	OPCUACert(thumbprint, subject string) (string, bool)
 	// Record journals an entry.
 	Record(audit.Entry)
+	// RecordBatch journals entries durable together (one fsync): a
+	// Write's items, answered once they are on disk.
+	RecordBatch([]audit.Entry)
 }
 
 // SetIdentity gives the server its users and its journal. Call it before

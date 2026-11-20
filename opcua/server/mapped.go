@@ -243,6 +243,14 @@ func (ns *namespace) callMapped(objectID, methodID *ua.NodeID, args []*ua.Varian
 	if n.writes && !writer() {
 		return callResult(ua.StatusBadUserAccessDenied), true
 	}
+	// Under an auth: block a method that changes a device has no permission
+	// or journal entry yet (it writes no tag an area could scope, and which
+	// permission it needs, config or write, is not decided), so it is
+	// refused, whoever calls it, rather than run unjournalled. Only virtual
+	// devices register one today, with no Identity (#708 PR 8a review).
+	if n.writes && ns.w.id != nil {
+		return callResult(ua.StatusBadUserAccessDenied), true
+	}
 	out, st := n.method(args)
 	r := callResult(st)
 	if out != nil {

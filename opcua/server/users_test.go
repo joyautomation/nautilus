@@ -39,6 +39,7 @@ type fakeIdentity struct {
 	mu      sync.Mutex
 	signIns []string // "name from"
 	entries []audit.Entry
+	batches []int // each RecordBatch's size
 }
 
 func newFakeIdentity() *fakeIdentity {
@@ -102,6 +103,13 @@ func (f *fakeIdentity) Record(e audit.Entry) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.entries = append(f.entries, e)
+}
+
+func (f *fakeIdentity) RecordBatch(es []audit.Entry) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.batches = append(f.batches, len(es))
+	f.entries = append(f.entries, es...)
 }
 
 func (f *fakeIdentity) recorded(action string) []audit.Entry {
@@ -306,6 +314,73 @@ func TestUserSessionWritesWhereItsRolesAllow(t *testing.T) {
 	}
 	if got := write(t, ce, wv("Hi", 5.0)); got[0] != ua.StatusGood {
 		t.Errorf("eng writes Hi: %v", got[0])
+	}
+}
+
+// A Write's journal entries go as one batch, one fsync on the file
+// journal, however many items it names: a 1000-item Write is one
+// RecordBatch of 1000 entries, not 1000 records on the message loop.
+func TestWriteJournalsOneBatchPerRequest(t *testing.T) {
+	id := newFakeIdentity()
+	f := startUsers(t, id, Options{})
+	c, err := f.connectUser(t, "op", "op-pass")
+	if err != nil {
+		t.Fatal(err)
+	}
+	items := make([]*ua.WriteValue, 1000)
+	for i := range items {
+		target := "Speed"
+		if i%2 == 1 {
+			target = "Hi" // refused: not op's area
+		}
+		items[i] = wv(target, float64(i))
+	}
+	write(t, c, items...)
+	id.mu.Lock()
+	batches := append([]int(nil), id.batches...)
+	id.mu.Unlock()
+	if len(batches) != 1 || batches[0] != 1000 {
+		t.Errorf("a 1000-item Write journalled as batches %v, want one of 1000", batches)
+	}
+	if n := len(id.recorded("tag.write")); n != 1000 {
+		t.Errorf("%d tag.write entries, want 1000", n)
+	}
+}
+
+// Under an auth: block (an Identity), a mapped method that changes a
+// device is refused even to a writer session, and never runs: it has no
+// permission or journal entry yet. A method that only reads still runs.
+// (Without an Identity, TestMappedWritingMethodNeedsAWriterSession.)
+func TestWritingMethodRefusedUnderAuth(t *testing.T) {
+	ran := 0
+	handler := func([]*ua.Variant) ([]*ua.Variant, ua.StatusCode) { ran++; return nil, ua.StatusOK }
+	id := newFakeIdentity()
+	id.writes["opcua-cert:scada"] = []string{"*"}
+	f := startUsers(t, id, Options{Mapped: &Mapped{Namespaces: []string{"urn:test:m"}, Nodes: []MappedNode{
+		{NodeID: "ns=1;s=Dev", Name: "Dev"},
+		{NodeID: "ns=1;s=Dev/Read", Parent: "ns=1;s=Dev", Name: "Read", Method: handler},
+		{NodeID: "ns=1;s=Dev/Write", Parent: "ns=1;s=Dev", Name: "Write", Method: handler, Writes: true},
+	}}})
+	id.certs[Thumbprint(f.der)] = "scada"
+	c, err := f.connectUser(t, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := func(meth string) ua.StatusCode {
+		resp, err := c.Call(context.Background(), &ua.CallMethodRequest{ObjectID: ua.MustParseNodeID("ns=1;s=Dev"), MethodID: ua.MustParseNodeID(meth)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.StatusCode
+	}
+	if st := call("ns=1;s=Dev/Write"); st != ua.StatusBadUserAccessDenied {
+		t.Errorf("a writing method under auth:, from a mapped certificate: %v, want BadUserAccessDenied", st)
+	}
+	if st := call("ns=1;s=Dev/Read"); st != ua.StatusOK {
+		t.Errorf("a read-only method: %v", st)
+	}
+	if ran != 1 {
+		t.Errorf("handlers ran %d times, want 1 (the refused one must not run)", ran)
 	}
 }
 
