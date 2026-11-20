@@ -230,3 +230,58 @@ func cloneRace(seed uint64, mode string) Options {
 	o.Until = at + 10*lease + bound + 6*lease
 	return o
 }
+
+// TestMeasureCloneSplit measures what #1029 step 1 does not close: a
+// network split that separates a running clone from its original, the
+// original with the witness and the clone with the peer ({A, W} | {B,
+// clone}), or the mirror ({A, B} | {clone, W}). Once the other boot ages
+// out (a lease), no voter on either side sees two, and each side holds two
+// of the three names, the duplicated voter counting on both. Today two
+// leaders in every run of either shape; the sticky confirmed-duplicate
+// mark (3c) is to bring a split after the clone was seen to no leader on
+// either side. It logs the rate; skipped unless
+// QUORUM_MEASURE_CLONE_SPLIT=<n>.
+//
+//	QUORUM_MEASURE_CLONE_SPLIT=2000 go test ./quorum/sim -run '^TestMeasureCloneSplit$' -v
+func TestMeasureCloneSplit(t *testing.T) {
+	n, _ := strconv.Atoi(os.Getenv("QUORUM_MEASURE_CLONE_SPLIT"))
+	if n <= 0 {
+		t.Skip("set QUORUM_MEASURE_CLONE_SPLIT=<runs>")
+	}
+	for _, shape := range []string{"original with the witness", "original with its peer"} {
+		both := 0
+		for seed := uint64(1); seed <= uint64(n); seed++ {
+			o := cloneSplit(seed, shape == "original with its peer")
+			if overlap(Check(Run(o), cloneChecks(o))) {
+				both++
+			}
+		}
+		t.Logf("a split separating a running clone from its original (%s): two leaders in %d of %d runs", shape, both, n)
+	}
+}
+
+// cloneSplit is seed's network, disk and clocks with a clone of A or B
+// running from 8 s, then a split two to five leases later that puts the
+// original with the witness and the clone with the peer (or, mirror, the
+// original with its peer and the clone with the witness), for eight
+// leases.
+func cloneSplit(seed uint64, mirror bool) Options {
+	o := randomRun(seed, profClone)
+	r := rand.New(rand.NewPCG(seed, 0x73706c6974))
+	at := 8 * sec
+	c := []Addr{CA, CB}[r.IntN(2)]
+	orig, peer := original(c), peerOf(original(c))
+	cut := at + 2*lease + time.Duration(r.Int64N(int64(3*lease)))
+	o.Faults = []Fault{
+		{Kind: Clone, At: at, For: 12 * lease, Node: c},
+		{Kind: Cut, At: cut, For: 8 * lease, From: orig, To: peer, Both: true},
+		{Kind: Cut, At: cut, For: 8 * lease, From: peer, To: W, Both: true},
+		{Kind: Cut, At: cut, For: 8 * lease, From: c, To: W, Both: true},
+	}
+	if mirror {
+		o.Faults[1] = Fault{Kind: Cut, At: cut, For: 8 * lease, From: orig, To: W, Both: true}
+		o.Faults[3] = Fault{Kind: Cut, At: cut, For: 8 * lease, From: c, To: peer, Both: true}
+	}
+	o.Until = at + 12*lease + bound + 6*lease
+	return o
+}

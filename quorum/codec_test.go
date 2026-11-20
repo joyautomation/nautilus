@@ -7,7 +7,7 @@ import (
 )
 
 func TestMessageRoundTrip(t *testing.T) {
-	rq := Request{From: "A", Term: 7, Nonce: 0xA1, ID: 99, Renewal: true, Promise: Relay{To: "B", Nonce: 0xB2, Left: 1500 * time.Millisecond}}
+	rq := Request{From: "A", Term: 7, Nonce: 0xA1, ID: 99, Renewal: true, Promise: Relay{To: "B", Nonce: 0xB2, Left: 1500 * time.Millisecond, Dup: "A", DupLeft: 900 * time.Millisecond}}
 	b, _ := rq.MarshalBinary()
 	var got Request
 	if err := got.UnmarshalBinary(b); err != nil || got != rq {

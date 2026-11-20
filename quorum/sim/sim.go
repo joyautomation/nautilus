@@ -673,9 +673,12 @@ func (w *World) deliver(n *node, from Addr, b []byte) {
 		}
 		if from != n.addr {
 			dups, _ := n.voter.Duplicates()
-			n.voter.Hear(now, req.From, req.Promise)
-			after, _ := n.voter.Duplicates()
+			n.voter.Hear(now, req.From, req.Nonce, req.Promise)
+			after, who := n.voter.Duplicates()
 			w.rec.duplicates[n.addr] += after - dups
+			if after != dups {
+				w.tracef("%v counts a duplicate of %s (relay on a request from %v: %+v)", n.addr, who, from, req.Promise)
+			}
 		}
 		w.handle(n, from, now, req)
 		return
@@ -714,9 +717,12 @@ func (w *World) deliver(n *node, from Addr, b []byte) {
 	}
 	if from != n.addr {
 		dups, _ := n.voter.Duplicates()
-		n.voter.Hear(now, rep.From, rep.Promise)
-		after, _ := n.voter.Duplicates()
+		n.voter.Hear(now, rep.From, 0, rep.Promise)
+		after, who := n.voter.Duplicates()
 		w.rec.duplicates[n.addr] += after - dups
+		if after != dups {
+			w.tracef("%v counts a duplicate of %s (relay on a reply from %v: %+v)", n.addr, who, from, rep.Promise)
+		}
 	}
 	if quorum.IsRelayProbe(rep) {
 		return // the relay probe's reply is for the voter only
@@ -863,8 +869,11 @@ func (w *World) handle(n *node, from Addr, now quorum.Instant, r quorum.Request)
 	dups, _ := n.voter.Duplicates()
 	p, replies := n.voter.Handle(now, r)
 	w.rec.relayRefused += n.voter.RelayRefused() - before
-	after, _ := n.voter.Duplicates()
+	after, who := n.voter.Duplicates()
 	w.rec.duplicates[n.addr] += after - dups
+	if after != dups {
+		w.tracef("%v counts a duplicate of %s (request from %v: %s term=%d nonce=%#x)", n.addr, who, from, r.From, r.Term, r.Nonce)
+	}
 	if n.cand != nil && n.voter.RelayChanged(now) {
 		if probe := n.cand.PushProbe(now); probe != nil {
 			probe.Promise = n.voter.Relay(now)

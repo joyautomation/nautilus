@@ -426,7 +426,7 @@ func (w *Witness) serveVote(rw http.ResponseWriter, r *http.Request) {
 		refuse(rw, "term-jump", fmt.Sprintf("term %d is more than %d above the %d this witness promised", req.Term, uint64(MaxTermJump), max(st.Promised, st.Floor)))
 		return
 	}
-	p.v.Hear(now, req.From, req.Promise)
+	p.v.Hear(now, req.From, req.Nonce, req.Promise)
 	persist, replies := p.v.Handle(now, req)
 	if n, who := p.v.Duplicates(); n != p.dupSeen {
 		p.dupSeen = n

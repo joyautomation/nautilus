@@ -320,7 +320,7 @@ redundancy:
       handshake. A controller's voter that has just promised the other controller pushes a
       probe at once (`Voter.RelayChanged`), so the witness hears a new promise within a one-way
       delay rather than a look.
-    - **Wire:** vote protocol version 2 (`quorum.WireVersion`). A frame of another version
+    - **Wire:** vote protocol version 2 (`quorum.WireVersion`; 3 since step 1 below). A frame of another version
       is refused whole. A pair or witness that mixes releases across it can't vote, and says
       so (`redundancy.version-mismatch`, either side, and on the witness's log) rather than
       failing to elect in silence. A release before version 2 answers a new frame with 400
@@ -361,8 +361,27 @@ redundancy:
         to both.
     - **The measure.** `TestCloneRaceSeeds` covers the four cases, plus rich schedules (a
       clone with one to three of a cut, restart, unhealthy controller, delay or loss). Every
-      oracle but I7 is on. 0 two-leader runs in 20,000 per case, and 0 in 30,000 settled
-      clone schedules.
+      oracle but I7 is on. 0 two-leader runs in 20,000 per case, and in 200,000 clone
+      schedules (`TestCloneSeeds`).
+    - **The claim, exactly:** never two leaders while the clone and its original can both
+      reach the voters.
+    - **What it doesn't close:**
+      - **A network split that separates a running clone from its original**, with the
+        original beside the witness and the clone beside the peer, or the mirror. Once the
+        other boot ages out (a lease), no voter on either side sees two, and each side holds
+        two of the three names, since the duplicated voter counts on both sides.
+        `TestMeasureCloneSplit` gives two leaders in 2,000 of 2,000 runs of each shape.
+      - **The 3c fix: a sticky confirmed-duplicate mark.** A voter that has seen two boots
+        of a name interleaved keeps refusing that name and discounting its vote until an
+        operator clears it, so a split after the clone was seen leaves no leader on either
+        side. It needs a guard against a false mark from reordered frames (two alternations,
+        or N1 after N2 by more than the maximum delay) and a reorder test. It comes first in
+        3c, with the operator clear and the spare flow, and lifting `experimental` needs it.
+      - **Irreducible: a clone booted on the far side of a split that already exists** is
+        never seen beside the original. Only the box check (layer 1) stops it.
+      - **One more 3c item:** a restart faster than the vote link's one-way delay can be
+        counted as a duplicate once, for a promise granted to its old boot after it died.
+        It needs the same evidence rule as the sticky mark.
     - **What it costs:**
       - **No other fault:** a running clone costs redundancy, not the leader. A clone of a
         healthy settled leader costs no takeover: the renewals of its running promises
@@ -372,8 +391,14 @@ redundancy:
         clone is stopped or the fault heals: the duplicated controller's vote counts for
         nobody. This happened in 61 of 5,000 clone-and-cut schedules while both lasted.
         Never two leaders.
-      - **A plain restart or power cycle** raises no false `duplicate-member` (the relay's
-        margin tail counts nothing) and elects within the bound.
+      - **A plain restart or power cycle** raises no false `duplicate-member` and elects
+        within the bound. Two rules keep it quiet:
+        - a relayed promise counts a conflict only while it certainly runs
+          (`receipt + left − lease/4`);
+        - rule (b) counts only a relay from another boot than the request it refuses, since
+          one boot's own frames can arrive out of order.
+      - **Stopping the clone** brings a real controller back within `cloneStopBound`
+        (5.6 leases; worst 2.4 s at a 2 s lease in the simulator).
     - **Step 2 (3c): the clone as a spare.** The incumbent keeps the name, and the newcomer
       demotes itself, durably and silently, on a positive "held by" reply; `recommission`
       turns a spare into a replacement.

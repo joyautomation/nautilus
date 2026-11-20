@@ -21,12 +21,12 @@ func ready(self NodeID) *Voter { return NewVoter(self, lease, VoterState{}, 0) }
 func TestVoterRefusesANameAHeardPromiseHoldsUnderAnotherNonce(t *testing.T) {
 	v := ready("B")
 	now := at(lease)
-	v.Hear(now, "W", Relay{To: "A", Nonce: 0xA, Left: lease})
+	v.Hear(now, "W", 0xF00, Relay{To: "A", Nonce: 0xA, Left: lease})
 	if !grant(t, v, now.Add(lease/4), Request{From: "A", Term: 9, Nonce: 0xA, ID: 1}) {
 		t.Fatal("refused the real A, whose nonce the relayed promise names, with no clone heard")
 	}
 	v2 := ready("B")
-	v2.Hear(now, "W", Relay{To: "A", Nonce: 0xA, Left: lease})
+	v2.Hear(now, "W", 0xF00, Relay{To: "A", Nonce: 0xA, Left: lease})
 	if grant(t, v2, now.Add(lease/2), Request{From: "A", Term: 9, Nonce: 0xC, ID: 1}) {
 		t.Fatal("granted a clone of A while W's relayed promise to A under another nonce ran: two leaders")
 	}
@@ -48,7 +48,7 @@ func TestVoterRefusesANameAHeardPromiseHoldsUnderAnotherNonce(t *testing.T) {
 func TestVoterRefusesANameWhoseOwnVoterIsHeardPromisedElsewhere(t *testing.T) {
 	v := ready("W")
 	now := at(lease)
-	v.Hear(now, "B", Relay{To: "A", Nonce: 0xA, Left: lease})
+	v.Hear(now, "B", 0xF00, Relay{To: "A", Nonce: 0xA, Left: lease})
 	if grant(t, v, now.Add(lease/2), Request{From: "B", Term: 9, Nonce: 0xB, ID: 1}) {
 		t.Fatal("granted B while B's own voter was heard promised to A: a clone of the standby leads")
 	}
@@ -68,7 +68,7 @@ func TestVoterRefusesANameWhoseOwnVoterIsHeardPromisedElsewhere(t *testing.T) {
 func TestAHeardPromiseHoldsForItsMarginThenEnds(t *testing.T) {
 	v := ready("W")
 	now := at(lease)
-	v.Hear(now, "B", Relay{To: "A", Nonce: 0xA, Left: lease})
+	v.Hear(now, "B", 0xF00, Relay{To: "A", Nonce: 0xA, Left: lease})
 	tail := now.Add(lease + time.Duration(float64(lease)*MaxRho)/2)
 	if grant(t, v, tail, Request{From: "B", Term: 9, Nonce: 0xB, ID: 1}) {
 		t.Fatal("granted B inside the clock-rate margin after the relayed promise: a clock running fast lets a clone in")
@@ -86,7 +86,7 @@ func TestAHeardPromiseHoldsForItsMarginThenEnds(t *testing.T) {
 func TestAHeardPromiseNeverRunsPastALease(t *testing.T) {
 	v := ready("W")
 	now := at(lease)
-	v.Hear(now, "B", Relay{To: "A", Nonce: 0xA, Left: time.Hour})
+	v.Hear(now, "B", 0xF00, Relay{To: "A", Nonce: 0xA, Left: time.Hour})
 	if !grant(t, v, now.Add(time.Duration(float64(lease)*(1+MaxRho))), Request{From: "B", Term: 9, Nonce: 0xB, ID: 1}) {
 		t.Fatal("a relayed hour held the name past a lease")
 	}
@@ -126,7 +126,7 @@ func TestARelayConflictIsADuplicate(t *testing.T) {
 	if !grant(t, own, now, Request{From: "A", Term: 3, Nonce: 0xA, ID: 1}) {
 		t.Fatal("grant refused")
 	}
-	own.Hear(now, "B", Relay{To: "A", Nonce: 0xC, Left: lease})
+	own.Hear(now, "B", 0xF00, Relay{To: "A", Nonce: 0xC, Left: lease})
 	if !grant(t, own, now.Add(lease/4), Request{From: "A", Term: 3, Nonce: 0xA, ID: 2, Renewal: true}) {
 		t.Fatal("a relay of A under another nonce refused the renewal of this voter's own promise to A")
 	}
@@ -135,8 +135,8 @@ func TestARelayConflictIsADuplicate(t *testing.T) {
 	}
 
 	two := ready("B")
-	two.Hear(now, "W", Relay{To: "A", Nonce: 0xA, Left: lease})
-	two.Hear(now.Add(lease/8), "Z", Relay{To: "A", Nonce: 0xC, Left: lease})
+	two.Hear(now, "W", 0xF00, Relay{To: "A", Nonce: 0xA, Left: lease})
+	two.Hear(now.Add(lease/8), "Z", 0xF00, Relay{To: "A", Nonce: 0xC, Left: lease})
 	if n, _ := two.Duplicates(); n == 0 {
 		t.Fatal("two relays of A under two boots counted no duplicate")
 	}
@@ -153,13 +153,13 @@ func TestARelayConflictIsADuplicate(t *testing.T) {
 func TestARelayFromTheSameVoterReplacesItsOwn(t *testing.T) {
 	v := ready("B")
 	now := at(lease)
-	v.Hear(now, "W", Relay{To: "A", Nonce: 0xA, Left: lease / 4})
-	v.Hear(now.Add(lease/2), "W", Relay{To: "A", Nonce: 0xD, Left: lease}) // A restarted; W granted it
+	v.Hear(now, "W", 0xF00, Relay{To: "A", Nonce: 0xA, Left: lease / 4})
+	v.Hear(now.Add(lease/2), "W", 0xF00, Relay{To: "A", Nonce: 0xD, Left: lease}) // A restarted; W granted it
 	if !grant(t, v, now.Add(lease/2), Request{From: "A", Term: 4, Nonce: 0xD, ID: 1}) {
 		t.Fatal("refused A's new boot, which W's newer relay names")
 	}
-	v.Hear(now, "B", Relay{To: "A", Nonce: 0xE, Left: lease})
-	v.Hear(now, "W", Relay{})
+	v.Hear(now, "B", 0xF00, Relay{To: "A", Nonce: 0xE, Left: lease})
+	v.Hear(now, "W", 0xF00, Relay{})
 	if !grant(t, v, now.Add(lease/2), Request{From: "A", Term: 4, Nonce: 0xD, ID: 2}) {
 		t.Fatal("its own relay or an empty one changed what it holds")
 	}
@@ -274,7 +274,7 @@ func TestADuplicatedNameIsRelayed(t *testing.T) {
 		t.Fatalf("relay %+v, want A duplicated", r)
 	}
 	w := ready("W")
-	w.Hear(now.Add(ms), "B", r)
+	w.Hear(now.Add(ms), "B", 0xF00, r)
 	if grant(t, w, now.Add(lease/4), Request{From: "A", Term: 2, Nonce: 0xC, ID: 1}) {
 		t.Fatal("a new grant to a name another voter relayed duplicated")
 	}
@@ -294,7 +294,7 @@ func TestADuplicatedNameIsRelayed(t *testing.T) {
 func TestAnOldBootSeenOnlyInARelayCountsNoDuplicate(t *testing.T) {
 	v := ready("W")
 	now := at(lease)
-	v.Hear(now, "B", Relay{To: "A", Nonce: 0xA, Left: lease})
+	v.Hear(now, "B", 0xF00, Relay{To: "A", Nonce: 0xA, Left: lease})
 	// A restarted as 0xD and campaigns as its hold ends, just past B's
 	// promise to its old boot.
 	if grant(t, v, now.Add(lease+lease/20), Request{From: "A", Term: 4, Nonce: 0xD, ID: 1}) {
@@ -353,5 +353,30 @@ func TestNoYieldToARequestTheVoterRefuses(t *testing.T) {
 	v.Handle(now, Request{From: "A", Nonce: 0xC, ID: ProbeID})
 	if YieldTo(now.Add(ms), v, c, Request{From: "A", Term: r.Term + 1, Nonce: 0xC, ID: 1}) {
 		t.Fatal("yielded its own round to a request it refuses")
+	}
+}
+
+// Rule (b) refuses a request from X while X's own voter is heard promised
+// elsewhere, but counts a duplicate only when that relay came from another
+// boot of X: one boot's own frames can arrive out of order (its campaign
+// overtaken by the push probe of the promise its voter made just after),
+// which is no second process (#1079 review).
+func TestRuleBCountsOnlyAnotherBoot(t *testing.T) {
+	now := at(lease)
+	same := ready("W")
+	same.Hear(now, "B", 0xB, Relay{To: "A", Nonce: 0xA, Left: lease})
+	if grant(t, same, now.Add(lease/4), Request{From: "B", Term: 9, Nonce: 0xB, ID: 1}) {
+		t.Fatal("granted B while its own voter was heard promised to A")
+	}
+	if n, _ := same.Duplicates(); n != 0 {
+		t.Fatalf("a reordered frame of B's own boot counted %d duplicates", n)
+	}
+	other := ready("W")
+	other.Hear(now, "B", 0xB, Relay{To: "A", Nonce: 0xA, Left: lease})
+	if grant(t, other, now.Add(lease/4), Request{From: "B", Term: 9, Nonce: 0xC, ID: 1}) {
+		t.Fatal("granted another boot of B while B's voter was heard promised to A")
+	}
+	if n, _ := other.Duplicates(); n != 1 {
+		t.Fatalf("another boot of B counted %d duplicates, want 1", n)
 	}
 }

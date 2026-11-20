@@ -156,3 +156,67 @@ func gaps(gates []Interval, from, to time.Duration) []Interval {
 	}
 	return out
 }
+
+// A single controller restarting, with no clone, on links as slow as the
+// rule allows: no voter counts a duplicate (its old boot, alive only in a
+// relayed promise, refuses the new boot's first campaign at most in that
+// promise's margin, where nothing is counted: a relayed promise counts a
+// conflict only while it certainly runs, receipt + left - lease/4), and a
+// leader is back within the bound. The restart takes at least a one-way
+// delay, as a process restart does; one faster than the vote link's
+// delay can still be counted once, for a promise granted to its old boot
+// after it died (a 3c item, with the sticky duplicate's evidence rule).
+func TestASingleRestartRaisesNoDuplicate(t *testing.T) {
+	for seed := uint64(1); seed <= 200; seed++ {
+		o := randomRun(seed, profClone)
+		o.Delay, o.Jitter = lease/5, lease/40 // one way, just under the lease/4 rule
+		at := 8*sec + time.Duration(seed)*lease/29
+		who := []Addr{A, B}[seed%2]
+		o.Faults = []Fault{{Kind: Crash, At: at, For: o.Delay + o.Jitter + time.Duration(seed)*ms, Node: who}}
+		o.Until = at + bound + 6*lease
+		rec := Run(o)
+		for _, a := range []Addr{A, B, W} {
+			if n := rec.duplicates[a]; n != 0 {
+				t.Fatalf("seed %d: %v counted %d duplicates after %v restarted, with no clone", seed, a, n, who)
+			}
+		}
+		for _, g := range gaps(rec.Gates(), at+bound, o.Until) {
+			t.Fatalf("seed %d: no leader over %v after %v restarted", seed, g, who)
+		}
+	}
+}
+
+// cloneStopBound is how soon a real controller leads once the clone is
+// stopped, the operator's fix: the clone's boot stays live a lease after
+// its last frame, a heard "duplicated" up to a lease and the margin, then
+// a takeover (bound).
+const cloneStopBound = 2*lease + lease/10 + bound
+
+// Stopping the clone brings a leader back within cloneStopBound, whatever
+// the clone race left: the operator's action the alarm asks for.
+func TestStoppingTheCloneBringsALeaderBack(t *testing.T) {
+	var worst time.Duration
+	for _, mode := range []string{"start", "original", "peer", "unhealthy", "rich"} {
+		for seed := uint64(1); seed <= 200; seed++ {
+			o := cloneRace(seed, mode)
+			stop := o.Faults[0].At + o.Faults[0].For
+			if heal := healAt(o); heal > stop {
+				continue // another fault outlasts the clone: the bound is I6's then
+			}
+			o.Until = stop + cloneStopBound + 2*lease
+			gates := Run(o).Gates()
+			back := time.Duration(-1)
+			for _, g := range gates {
+				if g.To > stop && g.Node != CA && g.Node != CB {
+					back = max(g.From, stop) - stop
+					break
+				}
+			}
+			if back < 0 || back > cloneStopBound {
+				t.Fatalf("%s seed %d: a real controller led %v after the clone stopped (bound %v)", mode, seed, back, cloneStopBound)
+			}
+			worst = max(worst, back)
+		}
+	}
+	t.Logf("a real controller leads within %v of the clone stopping (bound %v = %.1f leases)", worst, cloneStopBound, float64(cloneStopBound)/float64(lease))
+}

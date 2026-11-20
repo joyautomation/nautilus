@@ -155,6 +155,7 @@ func (v *Voter) dupRefuses(now Instant, r Request, active bool) (refuse, counts 
 // until until (left stretched by the clock-rate margin).
 type heardPromise struct {
 	by, to        NodeID
+	byBoot        uint64 // the boot nonce of the frame that carried it (0: a reply, unknown)
 	nonce         uint64
 	strict, until Instant
 }
@@ -273,8 +274,8 @@ func (v *Voter) Relay(now Instant) Relay {
 		// to it (no echo). With both controllers duplicated, the one seen
 		// longer goes.
 		for name := range v.seen {
-			if d := v.dupLeft(now, name); d > r.DupLeft {
-				r.Dup, r.DupLeft = name, d
+			if d := v.dupLeft(now, name); d > r.DupLeft || (d > 0 && d == r.DupLeft && name < r.Dup) {
+				r.Dup, r.DupLeft = name, d // ties by name: map order isn't
 			}
 		}
 	}
@@ -307,7 +308,13 @@ func (v *Voter) RelayChanged(now Instant) bool {
 // a new grant here, while a running promise to either renews (#1029 step
 // 1). A newer relay from the same voter about the same name replaces its
 // own earlier one: a voter holds one promise at a time.
-func (v *Voter) Hear(now Instant, by NodeID, p Relay) {
+//
+// boot is the nonce of the frame's sender when the frame says it (a
+// request), 0 for a reply: rule (b) counts a duplicate only for a relay
+// from another boot than the request it refuses, since one boot's own
+// frames can arrive out of order (a campaign overtaken by the push probe
+// of the promise its voter made just after it; #1079 review).
+func (v *Voter) Hear(now Instant, by NodeID, boot uint64, p Relay) {
 	v.prune(now)
 	if by != v.self && p.Dup != "" && p.DupLeft > 0 && !mut("dup_not_relayed") {
 		if v.dupHeard == nil {
@@ -321,10 +328,19 @@ func (v *Voter) Hear(now Instant, by NodeID, p Relay) {
 	}
 	left := min(p.Left, max(v.lease, v.st.Lease)) // no promise runs longer than a lease
 	v.noteNonce(p.To, p.Nonce, now.Add(time.Duration(float64(left)*(1+MaxRho))))
-	h := heardPromise{by: by, to: p.To, nonce: p.Nonce, strict: now.Add(left),
+	// strict: until when the promise certainly still runs, and a conflict
+	// with it is a duplicate's sign. The relay left its sender up to a
+	// one-way delay ago (at most lease/4, the documented rule), so a fast
+	// real restart on a slow link raises no false alarm. The refusal holds
+	// to until, past the promise's end whatever the delay.
+	strict := now.Add(left)
+	if !mut("dup_strict_ignores_delay") {
+		strict = strict.Add(-max(v.lease, v.st.Lease) / 4)
+	}
+	h := heardPromise{by: by, byBoot: boot, to: p.To, nonce: p.Nonce, strict: strict,
 		until: now.Add(time.Duration(float64(left) * (1 + MaxRho)))}
 	if mut("relay_no_margin") {
-		h.until = h.strict
+		h.until = now.Add(left)
 	}
 	if now < v.promiseUntil && v.st.GrantedTo == p.To && v.grantNonce != p.Nonce {
 		v.duplicate(now < h.strict, p.To, DupNonce)
@@ -379,6 +395,9 @@ func (v *Voter) heardRefuses(now Instant, r Request) (refuse, counts bool, cause
 			continue
 		}
 		refuse = true
+		if cause == DupVoterPromised && (x.byBoot == 0 || x.byBoot == r.Nonce) && !mut("rule_b_counts_own_boot") {
+			continue // the same boot's frames out of order, or a boot unknown: refuse, count nothing
+		}
 		if now < x.strict || mut("relay_tail_counted") {
 			return true, true, cause
 		}

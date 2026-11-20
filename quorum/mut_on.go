@@ -67,6 +67,8 @@ var Mutations = []string{
 	"dup_not_relayed",             // a voter doesn't relay a name it sees duplicated (#1029 step 1)
 	"standby_probes_witness_only", // a standby probes the witness only, not its peer (#1029 step 1)
 	"yield_before_refusal",        // a voter yields its own round to a request it then refuses (#1079 review)
+	"dup_strict_ignores_delay",    // a relayed promise counts a conflict as a duplicate up to receipt+left, so a fast restart on a slow link raises a false alarm
+	"rule_b_counts_own_boot",      // rule (b) counts a duplicate for a relay from the very boot it refuses (a reordered frame: a false alarm)
 	"retry_after_refusal_only",    // a refused campaign whose own grant came back last waits out a lease (#1029 layer 2)
 	// The driver's (quorum/node, #710 PR 3a): switched on there, listed
 	// here so this init accepts them.

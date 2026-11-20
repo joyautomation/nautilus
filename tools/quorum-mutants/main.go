@@ -176,6 +176,8 @@ var table = []mutation{
 	{"dup_not_relayed", []string{"TestADuplicatedNameIsRelayed", "TestDupRelayStopsTheWitnessGrantingAClone"}},
 	{"standby_probes_witness_only", []string{"TestStandbyProbesItsPeerSoTheCloneIsSeen", "TestCloneRaceSeeds"}},
 	{"yield_before_refusal", []string{"TestNoYieldToARequestTheVoterRefuses"}},
+	{"dup_strict_ignores_delay", []string{"TestASingleRestartRaisesNoDuplicate"}},
+	{"rule_b_counts_own_boot", []string{"TestRuleBCountsOnlyAnotherBoot", "TestASingleRestartRaisesNoDuplicate"}},
 	// The relay refuses a takeover's first campaign at the witness at
 	// times, before its own voter's grant is back: the retry must come
 	// half a look on, not a lease.

@@ -367,7 +367,7 @@ func TestSpoofedCloneOfTheLeaderWithTheABLinkDown(t *testing.T) {
 // the clone (rule (a)).
 func TestSpoofedCloneOfTheLeaderCutFromTheWitness(t *testing.T) {
 	spoofedCloneCase(t, "a", func(r *boxRig) { r.links.cutLink("a", r.wit) }, func(_ *boxRig, logs string) bool {
-		return strings.Contains(logs, "witness: two processes claim to be a: a vote came from a under a boot nonce")
+		return strings.Contains(logs, "witness: two processes claim to be a: this voter hears a under two boot nonces")
 	})
 }
 
