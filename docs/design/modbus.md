@@ -171,9 +171,13 @@ Two behaviours need explicit forms because devices depend on them:
    refreshed every 2.5 s, setpoints behind a gateway that forgets on a power
    blip. `Rewrite: 2.5s` re-sends the last commanded value on that period even
    when unchanged. **Default 0 (change-only)** — with the baseline rule from
-   `sparkplug-host`: the first snapshot after `Start` is a baseline and is
-   never written unless the binding has `Rewrite` (a safety word *must* be
-   written on connect).
+   `sparkplug-host`: the first snapshot after `Start` is a baseline, decided per
+   output against what the device holds at the first live read of its
+   coil/register (#1123): equal, recorded; different, one write; unread,
+   waits; unreadable (refused, `none`, write-only), one write. A `Rewrite`
+   binding is always written on connect (a safety word *must* be). A driver
+   swapped in under `HoldOutputsOnSwap` keeps the older rule: record, never
+   send (`io.BaselineHolder`).
 2. **Write-only vs read-back.** Frameworks that make a variable
    one-directional force an `X_Tsp` (write) / `X_Tsp_read` (read) pair at one
    register. Here a binding can be `Writable: true` **and** polled — the

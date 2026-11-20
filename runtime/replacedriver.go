@@ -100,6 +100,9 @@ func (r *Runtime) replaceDriver(ctx context.Context, name string, d nio.Driver, 
 	if bd, ok := d.(nio.BaselineDisarmer); ok && !r.holdOnSwap && !atStart {
 		bd.DisarmBaseline()
 	}
+	if bh, ok := d.(nio.BaselineHolder); ok && r.holdOnSwap && !atStart {
+		bh.HoldBaseline() // a held swap commands nothing the device already holds, equal or not
+	}
 	prev, err := rp.Replace(name, d)
 	if err != nil {
 		return nil, nil, err

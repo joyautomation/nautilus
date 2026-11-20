@@ -255,6 +255,9 @@ func TestNewNeverDialsAndReadsFaultBeforeStart(t *testing.T) {
 func TestWriteCoalescingAndBaseline(t *testing.T) {
 	srv := newSlave(t)
 	u := srv.Unit(1)
+	u.SetHolding(200, 1)
+	u.SetHolding(201, 2)
+	u.SetHolding(300, 3)
 	rec := &recorder{}
 
 	m := Manifest{
@@ -279,7 +282,9 @@ func TestWriteCoalescingAndBaseline(t *testing.T) {
 	startDriver(t, d)
 	waitFor(t, "connect", func() bool { return d.Health().Sources[0].State == "connected" })
 
-	// Baseline: the state of the world at t=0, not a set of commands.
+	// The device holds what the program starts at (#1123): the baseline
+	// decides each output against the device, and an equal one sends nothing.
+	waitFor(t, "first read", func() bool { v, _ := d.ReadInputs(); _, ok := v["W_C"]; return ok })
 	base := nio.Values{"W_A": float64(1), "W_B": float64(2), "W_C": float64(3),
 		"W_D": false, "W_E": false, "W_F": false}
 	if err := d.WriteOutputs(base); err != nil {
@@ -400,11 +405,13 @@ func TestRewriteFiresOnPeriodAndStopsOnGate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	u.SetHolding(500, 9) // the device already holds the program's setpoint
 	startDriver(t, d)
 	waitFor(t, "connect", func() bool { return d.Health().Sources[0].State == "connected" })
+	waitFor(t, "first read", func() bool { v, _ := d.ReadInputs(); _, ok := v["SP"]; return ok })
 
 	// Baseline: the keep-alive binding IS written on connect (an SC10 word
-	// must be asserted); the plain binding is not.
+	// must be asserted); the plain binding is not, as it equals the device.
 	if err := d.WriteOutputs(nio.Values{"KA": float64(7), "SP": float64(9)}); err != nil {
 		t.Fatal(err)
 	}
@@ -415,8 +422,8 @@ func TestRewriteFiresOnPeriodAndStopsOnGate(t *testing.T) {
 	if got := rec.writes(FCWriteSingleRegister, 500); len(got) != 0 {
 		t.Fatalf("non-rewrite binding must not be written at baseline, got %v", got)
 	}
-	if u.Holding(500) != 0 {
-		t.Fatal("baseline leaked a write to the plain binding")
+	if u.Holding(500) != 9 {
+		t.Fatal("baseline disturbed the plain binding")
 	}
 
 	// The plain binding writes once per change, never again.

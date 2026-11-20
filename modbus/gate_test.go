@@ -29,7 +29,7 @@ func TestQueuedWriteRechecksTheGate(t *testing.T) {
 		Tags: []TagBinding{
 			{Name: "PV", Source: "DEV", Table: TableHolding, Address: 0, Format: "uint16"},
 			{Name: "KA", Source: "DEV", Table: TableHolding, Address: 400, Format: "uint16", Writable: true, Rewrite: 30 * time.Millisecond},
-			{Name: "SP", Source: "DEV", Table: TableHolding, Address: 500, Format: "uint16", Writable: true},
+			{Name: "SP", Source: "DEV", Table: TableHolding, Address: 500, Format: "uint16", Writable: true, ScanClass: NoPoll}, // not read back: commanded at baseline (#1123)
 		},
 	}
 

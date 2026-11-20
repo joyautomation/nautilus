@@ -227,6 +227,9 @@ type Driver struct {
 	// that finds the write gate closed disarms it (see SetWriteGate).
 	wmu      sync.Mutex
 	baseline bool
+	// holdBaseline (under wmu): the baseline only records (a held swap,
+	// io.BaselineHolder) instead of deciding against the device.
+	holdBaseline bool
 
 	started atomic.Bool
 	reads   atomic.Uint64 // successful block reads
@@ -247,6 +250,10 @@ type outBinding struct {
 	src *source
 	b   TagBinding
 	f   Format
+	// readable: a poll block reads the binding back, so the start-up
+	// baseline can compare with what the device holds (#1123). NoPoll and
+	// WriteOnly bindings are not.
+	readable bool
 }
 
 // source is one Modbus TCP endpoint's runtime state. Its loop goroutine is
@@ -278,8 +285,16 @@ type source struct {
 	// held across disconnects and flushed on reconnect. written is the last
 	// value handed over per output tag — the on-change reference and what
 	// the rewrite loop re-asserts.
-	pending  map[string]any
-	written  map[string]any
+	pending map[string]any
+	written map[string]any
+	// undecided holds the start-up baseline's outputs whose coil or register
+	// the device has not answered yet: the program's first value, decided
+	// against what the device holds at the first live read (#1123).
+	undecided map[string]any
+	// devRead is what the device last answered for each readable output on
+	// the current connection (cleared when it drops): a value is only ever
+	// decided against a live read.
+	devRead  map[string]devValue
 	rewrites []*rewriteRun
 	// stuck is, per tag, a command whose write did not run (0x0A, 0x0B,
 	// 0x06) and has not landed since: its retry backoff and how many
@@ -504,10 +519,25 @@ func newSource(cfg Source) *source {
 		enabled:         true,
 		pending:         map[string]any{},
 		written:         map[string]any{},
+		undecided:       map[string]any{},
+		devRead:         map[string]devValue{},
 		stuck:           map[string]*stuckWrite{},
 		byName:          map[string]outBinding{},
 		kick:            make(chan struct{}, 1),
 	}
+}
+
+// polls reports whether one of the source's blocks reads the tag. Blocks are
+// added before outputs.
+func (s *source) polls(name string) bool {
+	for _, br := range s.blocks {
+		for _, t := range br.Bindings {
+			if t.Name == name {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (s *source) addBlock(blk Block, rate time.Duration) {
@@ -517,7 +547,7 @@ func (s *source) addBlock(blk Block, rate time.Duration) {
 // addOutput adds a writable binding (Validate has vetted its format).
 func (s *source) addOutput(t TagBinding) {
 	f, _ := t.format()
-	s.byName[t.Name] = outBinding{src: s, b: t, f: f}
+	s.byName[t.Name] = outBinding{src: s, b: t, f: f, readable: s.polls(t.Name)}
 	s.outputs = append(s.outputs, t.Name)
 	if t.Rewrite > 0 {
 		s.rewrites = append(s.rewrites, &rewriteRun{name: t.Name, period: t.Rewrite})
@@ -700,6 +730,7 @@ func (d *Driver) forgetWritten() {
 		s.mu.Lock()
 		clear(s.written)
 		clear(s.pending) // a requeued write is the previous leadership's too (#1040)
+		clear(s.undecided)
 		s.mu.Unlock()
 	}
 }
@@ -810,6 +841,7 @@ func (d *Driver) Start(ctx context.Context) {
 	d.runCtx, d.cancel = context.WithCancel(ctx)
 	d.wmu.Lock()
 	d.baseline = !d.sawShut.Load() // a standby has none (#606)
+	d.holdBaseline = false
 	d.wmu.Unlock()
 	d.started.Store(true)
 	for _, s := range d.sources {
@@ -824,6 +856,15 @@ func (d *Driver) Start(ctx context.Context) {
 func (d *Driver) DisarmBaseline() {
 	d.wmu.Lock()
 	d.baseline = false
+	d.wmu.Unlock()
+}
+
+// HoldBaseline makes the start-up baseline record and never send, whatever
+// the device holds (io.BaselineHolder): a driver swapped in under
+// HoldOutputsOnSwap. Call it after Start.
+func (d *Driver) HoldBaseline() {
+	d.wmu.Lock()
+	d.holdBaseline = true
 	d.wmu.Unlock()
 }
 
@@ -947,12 +988,19 @@ func (d *Driver) snapshotInto(dst nio.Values) int {
 //  2. GATE. While the write gate is closed (not leader, logic faulted) no
 //     device command is queued or recorded — see SetWriteGate: the silence
 //     is what trips a device-side watchdog, by design.
-//  3. BASELINE. The first snapshot after Start is recorded, not written —
-//     it is the state of the world at t=0, not a set of commands. EXCEPT
+//  3. BASELINE. The first snapshot after Start is not a set of commands for
+//     an output the device already holds: each output is decided at the
+//     first live read of its coil/register (#1123). Equal to the program's
+//     value: recorded, nothing sent. Different: one command, so a controller
+//     that computes true while the coil holds false drives it. Not read yet:
+//     it waits for its first read (never taken as sent). Unreadable (the
+//     device refuses the read, NoPoll, WriteOnly): commanded once. EXCEPT
 //     bindings with Rewrite > 0: a keep-alive word must be asserted on
 //     connect (an SC10 drops its enable otherwise), so their baseline value
 //     is queued. A driver that has seen the write gate closed (a standby)
-//     has no baseline: its first push commands everything (#606).
+//     has no baseline: its first push commands everything (#606). Under
+//     HoldBaseline (a driver swapped in with HoldOutputsOnSwap) the
+//     baseline only records.
 //  4. CHANGE. Thereafter a value equal to the last handed-over value is not
 //     a command. A changed value is queued per source, last value per tag,
 //     and held across a disconnect — flushed when the source reconnects,
@@ -992,6 +1040,7 @@ func (d *Driver) WriteOutputs(vals nio.Values) error {
 
 	d.wmu.Lock()
 	baseline := d.baseline
+	recordOnly := baseline && d.holdBaseline
 	d.baseline = false
 	d.wmu.Unlock()
 
@@ -1015,11 +1064,41 @@ func (d *Driver) WriteOutputs(vals nio.Values) error {
 			if !ok {
 				continue
 			}
-			if (baseline || held) && HeldAtBaseline(s.byName[name].b) {
+			if _, waiting := s.undecided[name]; waiting {
+				// still waiting for its first read: the latest value is the
+				// one to decide with, baseline push or not
+				s.undecided[name] = v
+			} else if (held || recordOnly) && HeldAtBaseline(s.byName[name].b) {
 				// Record, never send. A tag with a command already
 				// queued keeps it: that one WAS asked for.
 				if _, queued := s.pending[name]; !queued {
 					s.written[name] = v
+				}
+			} else if baseline && HeldAtBaseline(s.byName[name].b) {
+				// Decided against what the device holds (#1123).
+				if _, queued := s.pending[name]; queued {
+					continue
+				}
+				ob := s.byName[name]
+				if !ob.readable {
+					// never read back: nothing to compare with
+					s.written[name] = v
+					s.pending[name] = v
+					kicked[s] = true
+					if share != nil {
+						share.Queued[name] = v
+					}
+					continue
+				}
+				s.undecided[name] = v
+				if dv, read := s.devRead[name]; read {
+					// read on the live connection: decide now
+					if s.decideLocked(name, dv) {
+						kicked[s] = true
+						if share != nil {
+							share.Queued[name] = v
+						}
+					}
 				}
 			} else if prev, ok := s.written[name]; ok && sameScalar(prev, v) {
 				// unchanged since the last value we accounted for
@@ -1041,6 +1120,68 @@ func (d *Driver) WriteOutputs(vals nio.Values) error {
 		f()
 	}
 	return nil
+}
+
+// devValue is what a poll read of one output's coil or register(s): the raw
+// words (or the bit) and the decoded value.
+type devValue struct {
+	words   []uint16
+	decoded any
+	// unreadable: the device answered the read without a usable value (a
+	// refused span, a value that does not decode): the output is commanded
+	// once, as one that cannot be read back.
+	unreadable bool
+}
+
+// decideLocked settles one undecided output against what the device holds:
+// recorded when equal, queued as one command when not (or when the device's
+// answer is unusable). Reports whether it queued. Caller holds s.mu.
+func (s *source) decideLocked(name string, dv devValue) bool {
+	v, ok := s.undecided[name]
+	if !ok {
+		return false
+	}
+	delete(s.undecided, name)
+	s.written[name] = v
+	if !dv.unreadable && s.holds(name, v, dv) {
+		return false
+	}
+	s.pending[name] = v
+	return true
+}
+
+// holds reports whether the device's read of name is the program's value v.
+// Registers are compared as the words the program's value would be written
+// as, so scale and rounding cannot make an equal value look different.
+func (s *source) holds(name string, v any, dv devValue) bool {
+	ob := s.byName[name]
+	if ob.b.Table == TableCoil || ob.f.Kind == "bit" {
+		on, err := toBool(v)
+		got, ok := dv.decoded.(bool)
+		return err == nil && ok && on == got
+	}
+	words, err := encodeRegisters(ob.f, v, s.cfg.WordOrder, s.cfg.ByteOrder, ob.b.Scale, ob.b.Offset)
+	if err != nil || len(words) != len(dv.words) {
+		return false
+	}
+	for i := range words {
+		if words[i] != dv.words[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// heardOutputLocked records what a poll read for one output and decides it
+// if the start-up baseline was waiting on it. Reports whether it queued.
+func (s *source) heardOutputLocked(name string, dv devValue) bool {
+	if _, out := s.byName[name]; !out {
+		return false
+	}
+	if !dv.unreadable {
+		s.devRead[name] = dv
+	}
+	return s.decideLocked(name, dv)
 }
 
 // nudge wakes a source loop without blocking.
@@ -1120,6 +1261,7 @@ func (d *Driver) run(ctx context.Context, s *source) {
 		}
 		s.mu.Lock()
 		s.answered = false
+		clear(s.devRead)
 		s.gwFailed, s.gwMisses = 0, 0
 		for _, br := range s.blocks {
 			br.gwFail = false
@@ -1481,12 +1623,19 @@ func (d *Driver) pollBlock(ctx context.Context, s *source, c conn, br *blockRun)
 			s.excs++
 			s.lastErr = fmt.Errorf("%s %d..%d: %w", br.Table, br.Start, int(br.Start)+int(br.Count)-1, err)
 			br.bad = true
+			queued := false
 			if gatewayNoAnswer(err) {
 				s.blockNoAnswerLocked(br, ctx.Err() == nil)
 			} else {
-				s.blockAnsweredLocked(br) // the device is there; this span is refused
+				s.blockAnsweredLocked(br)       // the device is there; this span is refused
+				for _, t := range br.Bindings { // unreadable: a waiting baseline output is commanded once (#1123)
+					queued = s.heardOutputLocked(t.Name, devValue{unreadable: true}) || queued
+				}
 			}
 			s.mu.Unlock()
+			if queued {
+				nudge(s.kick)
+			}
 			if br.excCount == exceptionsToPark {
 				br.parkedUntil = time.Now().Add(s.cfg.RetryMin)
 				d.log.Warn("modbus: block parked after consecutive exceptions",
@@ -1521,21 +1670,29 @@ func (d *Driver) pollBlock(ctx context.Context, s *source, c conn, br *blockRun)
 	br.excCount = 0
 	br.bad = false
 	s.blockAnsweredLocked(br)
+	queued := false
 	for _, t := range br.Bindings {
 		off := int(t.Address) - int(br.Start)
 		if regs != nil {
 			f, _ := t.format()
-			v, derr := decodeRegisters(f, regs[off:off+f.Words()], s.cfg.WordOrder, s.cfg.ByteOrder, t.Scale, t.Offset)
+			words := regs[off : off+f.Words()]
+			v, derr := decodeRegisters(f, words, s.cfg.WordOrder, s.cfg.ByteOrder, t.Scale, t.Offset)
 			if derr != nil {
 				s.lastErr = fmt.Errorf("tag %s: %w", t.Name, derr)
+				queued = s.heardOutputLocked(t.Name, devValue{unreadable: true}) || queued
 				continue
 			}
 			s.snapshot[t.Name] = v
+			queued = s.heardOutputLocked(t.Name, devValue{words: append([]uint16(nil), words...), decoded: v}) || queued
 		} else {
 			s.snapshot[t.Name] = bits[off]
+			queued = s.heardOutputLocked(t.Name, devValue{decoded: bits[off]}) || queued
 		}
 	}
 	s.mu.Unlock()
+	if queued {
+		nudge(s.kick)
+	}
 	return true
 }
 
@@ -2086,6 +2243,7 @@ func (s *source) goOfflineLocked(outage bool) {
 		s.outages++
 	}
 	s.online = false
+	clear(s.devRead) // no read of the device is live any more (#1123)
 }
 
 // Interface conformance: the optional io refinements the driver implements.
