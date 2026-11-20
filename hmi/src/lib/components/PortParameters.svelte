@@ -23,6 +23,8 @@
 		type ParamList
 	} from '../iolink.js';
 	import { confirm } from '../confirm.svelte.js';
+	import { asksPassword, deniedFor } from '../auth.svelte.js';
+	import Icon from './Icon.svelte';
 	import StatusPill from './StatusPill.svelte';
 	import Button from './Button.svelte';
 
@@ -76,6 +78,13 @@
 		latest = r.value;
 		notice = null;
 	}
+
+	// Writing a device parameter is the config permission, on the whole
+	// controller, and an elevated one: a role without it sees Write disabled,
+	// and a sign-in past its password window sees a lock (it will be asked
+	// for the password) (#708). A convenience: the controller decides.
+	const writeDenied = $derived(deniedFor('config'));
+	const writeAsks = $derived(asksPassword('config'));
 
 	async function write(p: ParamInfo) {
 		const parsed = parseInput(p, draft[p.ref] ?? '');
@@ -164,7 +173,15 @@
 									inputmode="decimal"
 									onkeydown={(e) => e.key === 'Enter' && write(p)}
 								/>
-								<Button size="sm" variant="danger" disabled={busy !== null || !(draft[p.ref] ?? '').trim()} onclick={() => write(p)}>Write…</Button>
+								<Button
+									size="sm"
+									variant="danger"
+									disabled={busy !== null || !(draft[p.ref] ?? '').trim() || !!writeDenied}
+									title={writeDenied || (writeAsks ? 'asks for your password first' : undefined)}
+									onclick={() => write(p)}
+								>
+									{#if writeAsks && !writeDenied}<Icon name="lock-closed" size={12} />{/if}Write…
+								</Button>
 							{/if}
 						</td>
 					</tr>

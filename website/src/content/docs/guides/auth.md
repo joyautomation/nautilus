@@ -128,7 +128,7 @@ The endpoints, for an HMI of your own:
 | `POST /api/signin` | `{"name", "password"}` as JSON (`200` with `user` and `expires`) or a form (`303` to `next`) |
 | `POST /api/signout` | ends the session and clears the cookie |
 | `POST /api/elevate` | `{"password"}`: the session's password again, for the [elevated permissions](#elevation) (`200` with `elevatedUntil`) |
-| `GET /api/me` | who the request acts as, its roles and permissions, `secure`, the session's `expires` and `elevatedUntil`, the `elevated` permissions, `signIn` (this controller offers `/signin`) and `now` (the controller's clock, to judge `elevatedUntil` by) |
+| `GET /api/me` | who the request acts as, its roles and permissions (and the tag patterns of its areas, `areas`), `secure`, the session's `expires` and `elevatedUntil`, the `elevated` permissions, `signIn` (this controller offers `/signin`) and `now` (the controller's clock, to judge `elevatedUntil` by) |
 
 ## Elevation
 
@@ -169,6 +169,9 @@ From then on every kit client (tag writes, alarms, substitutes, IO-Link paramete
 - **An elevated action past its window** asks for the password in the confirm dialog, sends it to `POST /api/elevate`, and repeats the action once, exactly as it was sent. Several actions refused at once share one prompt. Cancel, and the action reports the controller's refusal. A wrong password asks again and says so. Without a `<ConfirmDialog/>` mounted, nothing is asked: the action reports the refusal, which says to sign in again.
 - **A sign-in that ends mid-shift** (signed out elsewhere, revoked, expired, five wrong passwords) is noticed at the next refused request or dropped live stream. The kit checks `/api/me`, and if the session is gone it goes to the sign-in page, which comes back to the same screen.
 - **On a standby**, the page goes to the leader the controller names (`redundancy.public-urls`). Only that URL is opened, only if it is `http(s)`, and never `http` from an `https` page. The refused action is not sent again there. A second referral within 30 seconds is not followed, so two controllers naming each other don't bounce the page, and none is followed in a browser that blocks `sessionStorage` (where that guard lives); the HMI shows the leader's link instead (`auth.referral`).
+- **Controls follow the role.** A write, acknowledge, shelve, substitute or parameter control the user's role doesn't hold for that tag shows disabled, and its tooltip says who and what they don't hold. Areas count: `/api/me` lists the tag patterns of the user's own areas (`areas`), and the kit matches them exactly as the controller does. An elevated action past its password window shows a lock until the password is confirmed.
+- **Acknowledgements are recorded as the user.** Signed in, the acknowledge and shelve dialogs don't ask for an operator name; they say whose record it is.
+- **`<AccountChip/>`** shows who is signed in, whether the password currently counts for the elevated actions (and until when), and a sign-out button. **`<ReferralBanner/>`** shows a standby's referral the kit didn't follow, with the leader's link. **`<AuditTable/>`** reads the journal (`GET /api/audit`) for a user who holds `audit`.
 - **Without `auth:`**, or against a controller without `/api/me`, nothing changes.
 
 **The controller decides.** What the HMI shows or greys out for a role is a convenience; every request is still checked by the controller, and its refusal is the answer.

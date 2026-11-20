@@ -166,7 +166,7 @@ export type { ToastEntry } from './toast.svelte.js';
 // `if (await confirm({…})) …` and cannot forget to ask.
 export { default as ConfirmDialog } from './components/ConfirmDialog.svelte';
 export { confirm, confirmState, askPassword } from './confirm.svelte.js';
-export { createConfirmQueue, splitItems, getOperator, setOperator, DEFAULT_MAX_ITEMS } from './confirm.js';
+export { createConfirmQueue, splitItems, getOperator, setOperator, recordedAs, DEFAULT_MAX_ITEMS } from './confirm.js';
 export type { ConfirmOptions, ConfirmRequest, ConfirmQueue, QueueOptions } from './confirm.js';
 export { default as Tooltip } from './components/Tooltip.svelte';
 export { default as AppShell } from './components/AppShell.svelte';
@@ -195,7 +195,8 @@ export type { Story, Variant, StoryGroup, FormatPropsOptions } from './catalog.j
 // installs its fetch for every kit client. The controller decides every
 // request: what the kit greys out for a role is a convenience, never the
 // control.
-export { AuthClient, createAuth } from './auth.svelte.js';
+export { AuthClient, createAuth, currentAuth } from './auth.svelte.js';
+export { can, areaMatch, pathMatch, tagOf, deniedReason, whoIs } from './areas.js';
 export type { AuthOptions } from './auth.svelte.js';
 export {
 	AuthSession,
@@ -212,6 +213,14 @@ export {
 } from './auth.js';
 export type { Me, MeSession, Referral, PasswordAsk, AuthDeps } from './auth.js';
 export { kitFetch, setKitFetch } from './kitfetch.js';
+export { passwordState } from './auth.js';
+export { deniedFor, asksPassword } from './auth.svelte.js';
+export { default as AccountChip } from './components/AccountChip.svelte';
+export { default as ReferralBanner } from './components/ReferralBanner.svelte';
+// The audit journal (#709): GET /api/audit, read and shown.
+export { default as AuditTable } from './components/AuditTable.svelte';
+export { AuditClient, auditQuery, changeText, actorText } from './audit.js';
+export type { AuditEntry, AuditFilter, AuditAnswer, AuditClientOptions } from './audit.js';
 export type { Fetch } from './kitfetch.js';
 
 // Realtime client (generic over the frame shape)

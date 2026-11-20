@@ -260,8 +260,11 @@ func TestMe(t *testing.T) {
 	}
 	enforce(t, srv)
 	for tok, want := range map[string]string{
-		"f-secret": `"principal":"token:fenced","roles":["administrator"],"permissions":{"*":["read","sfc","edit","activate","deploy","config","audit","users","override"],"nowhere":["write","ack","shelve","substitute","force"]}`,
-		"v-secret": `"principal":"token:viewer","roles":["viewer"],"permissions":{"*":["read"]}`,
+		// The areas a caller's permissions name carry their tag patterns
+		// (the HMI kit greys out a control by them, #708 PR 7b); a caller
+		// holding none gets no areas field.
+		"f-secret": `"principal":"token:fenced","roles":["administrator"],"permissions":{"*":["read","sfc","edit","activate","deploy","config","audit","users","override"],"nowhere":["write","ack","shelve","substitute","force"]},"areas":{"nowhere":["zzz_*"]}`,
+		"v-secret": `"principal":"token:viewer","roles":["viewer"],"permissions":{"*":["read"]},"elevated"`,
 		"guess":    `"principal":"anonymous","roles":[],"permissions":{}`,
 	} {
 		body := call(t, srv, "GET", "/api/me", "", func(r *http.Request) { r.Header.Set("Authorization", "Bearer "+tok) }).Body.String()

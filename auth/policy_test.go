@@ -214,11 +214,11 @@ func TestCanNormalisesTheTarget(t *testing.T) {
 func TestDescribe(t *testing.T) {
 	p := mustCompile(t, plant)
 	got := fmt.Sprint(p.Describe(User("pat")))
-	want := "{user:pat [lead-operator viewer] map[*:[read sfc] roasting:[write ack shelve]]}"
+	want := "{user:pat [lead-operator viewer] map[*:[read sfc] roasting:[write ack shelve]] map[roasting:[rst_* burner_*]]}"
 	if got != want {
 		t.Errorf("Describe(pat) = %s, want %s", got, want)
 	}
-	if got := fmt.Sprint(p.Describe(Anonymous)); got != "{anonymous [] map[]}" {
+	if got := fmt.Sprint(p.Describe(Anonymous)); got != "{anonymous [] map[] map[]}" {
 		t.Errorf("Describe(anonymous) = %s", got)
 	}
 	if me := p.Describe(Token); len(me.Permissions[All]) != len(Permissions) {

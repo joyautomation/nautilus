@@ -13,6 +13,20 @@
   https→http, a 30 s loop guard kept in `sessionStorage` and no follow without it, never the
   `Location` header). Does nothing without `auth:`. The
   pure rules (`leaderTarget`, `needsPassword`, `refusalMessage`, …) are exported and tested.
+- **Role-aware controls** (#708 PR 7b): `WriteNumber`, `WriteToggle`, `CommandButton`, `AckButton`,
+  `AlarmTable`, `SubstitutesPanel` and `PortParameters` grey themselves out, with the reason, when
+  the signed-in role does not hold the permission for that tag (`deniedFor`, `can`). Area patterns
+  come from `/api/me`'s new `areas` and are matched as the controller matches them (`areaMatch`, a
+  port of Go's `path.Match`, tested against the controller's own table). `PortParameters` shows a
+  lock while a write would ask for the password. A convenience only: the controller decides.
+- **Acknowledgements recorded as the signed-in user** (#708 PR 7b): the ack and shelve dialogs drop
+  the operator-name field and say whose record it is (`recordedAs`).
+- **`AccountChip`, `ReferralBanner`** (#708 PR 7b): who is signed in, the password window, Sign out
+  (through the referral rules on a standby) or Sign in; a standby's unfollowed referral with the
+  leader's link. `AuthClient.can`, `.user`, `.signOut`, `currentAuth()`, `passwordState`.
+- **`AuditTable`, `AuditClient`** (#709, #708 PR 7b): the audit journal (`GET /api/audit`), filtered
+  by user, action, target, result and time; says when the list was cut, and tells a role without
+  `audit` so rather than showing an empty table.
 - **`askPassword`, and a password mode in `<ConfirmDialog/>`** (#708): the elevation prompt.
   Resolves to what was typed, or null; with no dialog mounted it resolves null at once (never a
   plain-text browser prompt).
