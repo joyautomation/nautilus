@@ -39,6 +39,7 @@ var mutations = []string{
 	"yield_undamped",             // a leader yields again within yieldEvery (#710 3b-4b)
 	"yield_ignores_may",          // a leader yields to a peer that may not campaign (#710 3b-4b)
 	"yield_ignores_can_sync",     // a leader yields to a synced peer that can't sync the others (#1053 review)
+	"vouch_refusal_blocks",       // a vouch the log refuses refuses the re-commission (#1053 review)
 	"yield_until_due",            // a yield ends at the lease's due end, though a late grant moved it (#710 3b-4b)
 }
 

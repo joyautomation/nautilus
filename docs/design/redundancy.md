@@ -99,10 +99,15 @@ bumpless, and the measured takeover time is published instead.
       epoch, the log's term).
     - **A vouch starts a pair.** Three empty copies are all unsynced, so the commissioning
       re-commission vouches for that controller's copy (`Elector.SetVouch`, `oplog.Node.
-      Vouch`): one synced copy, whose first catch-up as leader waits for every peer and may
-      succeed with itself alone, once. It is refused for a lost copy, when any peer doesn't
-      answer, or when one holds a later log; a copy already synced needs none. Copies from
-      before marks count as synced.
+      Vouch`): one synced copy, whose first catch-up as leader may succeed with no other
+      counting copy, once, and only when EVERY peer answered (a silent one may hold a write
+      committed without it: #1053 review); it takes the most up-to-date counting log, and the
+      one-shot is spent in the mark before it is used. It is refused for a lost copy, when any
+      peer doesn't answer, or when a peer that does NOT count holds a later log (a counting
+      one's log is taken: A and B lost, the witness synced, re-commission A and the witness's
+      entries come back). A refusal never refuses the re-commission: control never waits on
+      operator data; the log stays read-only (`oplog-vouch-refused`). A copy already synced
+      needs none. Copies from before marks count as synced.
     - **An unsynced controller leads for control, read-only for operator intent.** It
       doesn't campaign while the other controller is reachable, synced and may campaign (for
       two leases with no leader at most); a leader whose catch-up failed hands over to such a

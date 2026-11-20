@@ -59,9 +59,10 @@ var yieldEvery = 10 * time.Minute
 // renewing so the other, synced, takes over.
 const EventYielded EventKind = "redundancy.yielded"
 
-// EventVouched: a person vouched for this controller's log at a
-// recommission.
-const EventVouched EventKind = "redundancy.oplog.vouched"
+// EventVouchRefused: a re-commission went ahead, but the log refused the
+// vouch for this controller's copy (Detail says why), so it stays unsynced
+// and read-only.
+const EventVouchRefused EventKind = "redundancy.oplog.vouch-refused"
 
 // peerLog is what the other controller's last verified hello answer said
 // of its log.
@@ -79,8 +80,9 @@ func (e *Elector) SetLog(f func() LogState) {
 }
 
 // SetVouch sets what Recommission runs first: the log's vouch for this
-// controller's copy (by names the person). Call it before Run.
-func (e *Elector) SetVouch(f func(ctx context.Context, by string) error) {
+// controller's copy (by names the person; inc is the witness incarnation
+// being adopted, at which the witness's copy counts). Call it before Run.
+func (e *Elector) SetVouch(f func(ctx context.Context, by string, inc uint64) error) {
 	e.mu.Lock()
 	e.vouchFn = f
 	e.mu.Unlock()
@@ -265,12 +267,12 @@ func (e *Elector) heardLog(r string) {
 }
 
 // vouch runs the log's vouch, outside mu.
-func (e *Elector) vouch(ctx context.Context, by string) error {
+func (e *Elector) vouch(ctx context.Context, by string, inc uint64) error {
 	e.mu.Lock()
 	f := e.vouchFn
 	e.mu.Unlock()
 	if f == nil {
 		return nil
 	}
-	return f(ctx, by)
+	return f(ctx, by, inc)
 }

@@ -431,11 +431,17 @@ accepts the loss, coming with the commissioning commands).
 **A new pair's logs are vouched for at commissioning.** All three copies
 start empty, so none is synced yet: the re-commission that commissions
 the pair vouches for that controller's copy, and its first takeover
-syncs the other two. A vouch is refused while any other copy doesn't
-answer (it may hold entries the vouched one lacks: bring it back, or
-rebuild it), when another copy holds a later log (named in the refusal),
-and for a copy that was lost (re-commission the other controller
-instead). Logs from before this release need no vouch.
+syncs the other two (it waits until every copy answers). A vouch is
+refused while any other copy doesn't answer (it may hold entries the
+vouched one lacks: bring it back, or rebuild it), when a copy that
+doesn't count holds a later log (its entries would be lost; named in the
+refusal), and for a copy that was lost (re-commission the other
+controller instead). **A refused vouch never stops the re-commission:**
+the pair is commissioned and controls the plant, its log stays read-only,
+and `GET /api/cluster` says why. A later log on a copy that counts is no
+refusal: it is taken. So if both controllers lose their disks while the
+witness's copy is whole, re-commissioning one brings the witness's
+entries back. Logs from before this release need no vouch.
 
 :::caution[The witness holds plant operator data]
 The witness's state directory keeps a copy of the operator-intent log:

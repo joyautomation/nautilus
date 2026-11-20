@@ -50,6 +50,15 @@ import "os"
 //   - mark_after_log: a new replica's mark is written after its log file
 //     is created, so a start that dies in between leaves a log that reads
 //     as one from before marks;
+//   - vouch_alone_partial: a vouched catch-up goes ahead alone while a
+//     peer is silent, so a write a majority committed without this log is
+//     numbered over (#1053 review);
+//   - vouch_refuses_counting_ahead: a vouch is refused for a later log on a
+//     peer that counts, whose entries the catch-up would have taken;
+//   - can_sync_stale: can-sync counts a copy last heard 10 s ago, not
+//     within the caller's bound (a lease);
+//   - placeholder_keeps_synced: a mark under the placeholder identity is
+//     adopted as synced;
 //   - unsynced_log_writes: a log that would sequence while unsynced reads
 //     writable, so a write is proposed and ends "outcome unknown" instead
 //     of being refused for certain.

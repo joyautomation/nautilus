@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -430,5 +431,111 @@ func TestPairSyncedLeaderAloneIsReadOnly(t *testing.T) {
 	code, body, h := r.call(lead, "POST", "/api/substitutes", `{"name":"Level","seconds":60}`)
 	if code != http.StatusServiceUnavailable || h.Get("X-Nautilus-Outcome") != "refused" || !strings.Contains(body, server.LogCopiesNotSynced) {
 		t.Fatalf("a write on the lone synced leader: %d %q %s", code, h.Get("X-Nautilus-Outcome"), body)
+	}
+}
+
+// wipeState empties member n's state directory (its voter state, its log
+// and mark): a lost disk.
+func (r *pairRig) wipeState(n string) {
+	r.t.Helper()
+	files, _ := filepath.Glob(filepath.Join(r.env[n]["STATE_DIRECTORY"], "*"))
+	for _, f := range files {
+		if err := os.RemoveAll(f); err != nil {
+			r.t.Fatal(err)
+		}
+	}
+}
+
+// recommissionA re-commissions a at the witness's incarnation, once both
+// controllers hear it, and returns the vouch's refusal (nil: vouched).
+func (r *pairRig) recommissionA() error {
+	r.t.Helper()
+	a, b := r.elector("a"), r.elector("b")
+	pairWait(r.t, "both controllers to hear the witness", 10*time.Second, func() bool {
+		return a.Status().WitnessIncarnation != 0 && b.Status().WitnessIncarnation != 0
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	refused, err := a.RecommissionBy(ctx, "op", a.Status().WitnessIncarnation, max(a.KnownFloor(), b.KnownFloor())+1000)
+	if err != nil {
+		r.t.Fatalf("re-commission a: %v", err)
+	}
+	return refused
+}
+
+// A and B lose their disks; the witness's copy is synced and longer
+// (#1053 review, naut-lead's example). Re-commissioning A vouches for its
+// empty copy (the witness counts, so its later log is no refusal); A and
+// the witness then count, A leads, and the witness's entries come back.
+func TestPairBothControllersLostRecoverFromTheWitness(t *testing.T) {
+	r := newPairRig(t)
+	lead := r.leader()
+	id := r.startedID(lead)
+	pairWait(t, "the witness to hold the start", 10*time.Second, func() bool { return r.witnessHolds(lead) })
+	for _, n := range []string{"a", "b"} {
+		r.nodes[n].crash()
+	}
+	for _, n := range []string{"a", "b"} {
+		r.wipeState(n)
+		r.restart(n)
+	}
+	if err := r.recommissionA(); err != nil {
+		t.Fatalf("the vouch was refused: %v", err)
+	}
+	who := r.leader()
+	pairWait(t, "the leader to sync and hold the witness's start", 15*time.Second, func() bool {
+		return r.nodes[who].m.log.Synced() && hasSubstitute(r.substitutes(who), id)
+	})
+	r.logReady(who)
+	if code, body, _ := r.call(who, "DELETE", "/api/substitutes/"+itoa(id), ""); code != http.StatusOK {
+		t.Fatalf("stop after the recovery: %d %s", code, body)
+	}
+}
+
+// A vouch the log refuses never refuses the re-commission (#1053 review):
+// here B's copy is kept but unsynced (its mark unreadable) and holds
+// entries A's empty copy lacks, so vouching A would lose them. The pair is
+// commissioned and controls the plant anyway; its log stays read-only, and
+// /api/cluster says why.
+func TestPairRefusedVouchStillCommissions(t *testing.T) {
+	r := newPairRig(t)
+	lead := r.leader()
+	r.startedID(lead)
+	for _, n := range []string{"a", "b"} {
+		r.nodes[n].crash()
+	}
+	r.stopWitness()
+	r.wipeState("a")
+	bdir := r.env["b"]["STATE_DIRECTORY"]
+	if err := os.Remove(filepath.Join(bdir, pairStateFile)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bdir, pairLogMark), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{r.cluster() + ".oplog.jsonl", r.cluster() + ".oplog.mark"} {
+		if err := os.Remove(filepath.Join(r.witDir, f)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r.startWitness(r.wit)
+	r.restart("a")
+	r.restart("b")
+	refused := r.recommissionA()
+	if refused == nil || !strings.Contains(refused.Error(), "controller b") || !strings.Contains(refused.Error(), "does not count") {
+		t.Fatalf("the vouch's refusal: %v", refused)
+	}
+	who := r.leader() // control goes on
+	pairWait(t, "/api/cluster to say the vouch was refused", 5*time.Second, func() bool {
+		for _, w := range r.nodes["a"].m.q.Status().Warnings {
+			if strings.Contains(w, "not vouched for") {
+				return true
+			}
+		}
+		return false
+	})
+	code, body, h := r.call(who, "POST", "/api/substitutes", `{"name":"Level","seconds":60}`)
+	if code != http.StatusServiceUnavailable || h.Get("X-Nautilus-Outcome") != "refused" {
+		t.Fatalf("a write with no copy synced: %d %q %s", code, h.Get("X-Nautilus-Outcome"), body)
 	}
 }

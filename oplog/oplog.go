@@ -250,8 +250,9 @@ type Options struct {
 	// refusals): "controller a", "the witness".
 	Names map[string]string
 
-	transport http.RoundTripper // tests: an in-process network
-	lim       limits            // tests: smaller chunks and bounds
+	transport     http.RoundTripper // tests: an in-process network
+	afterVouchAsk func()            // tests: Vouch, between its asks and its mark
+	lim           limits            // tests: smaller chunks and bounds
 }
 
 // Mark is a replica's log mark, kept in Options.Mark.
@@ -536,8 +537,14 @@ func (n *Node) Rebind(identity, placeholder string) error {
 	switch n.mark.Identity {
 	case identity:
 	case placeholder:
+		// Adopted as this identity's, but not as synced: it was opened
+		// before the box could be told, so nothing vouches that it is
+		// this box's (#1053 review). It syncs again from the leader.
 		m := n.mark
 		m.Identity = identity
+		if !mutOplog("placeholder_keeps_synced") {
+			m.Synced, m.Alone = false, false
+		}
 		if err := n.setMarkLocked(m); err != nil {
 			return fmt.Errorf("oplog: the log's mark: %w", err)
 		}
@@ -650,10 +657,13 @@ func (n *Node) Synced() bool {
 
 // CanSync reports whether this replica, synced, could catch up as leader:
 // a vouch's one-shot catch-up is pending (Mark.Alone), or another copy
-// that counts was heard within the last 10 s (Status's reach). A synced
+// that counts was heard within the last `within` (a pair: its lease). A synced
 // replica whose other copies are all lost can't: entries committed while
 // it lagged may exist on them, so only a person can decide (#1053).
-func (n *Node) CanSync() bool {
+func (n *Node) CanSync(within time.Duration) bool {
+	if mutOplog("can_sync_stale") {
+		within = 10 * time.Second
+	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if !n.syncedLocked() {
@@ -664,7 +674,7 @@ func (n *Node) CanSync() bool {
 	}
 	now := n.o.Now()
 	for _, p := range n.o.Peers {
-		if p == n.o.Self || now.Sub(n.lastContact[p]) >= 10*time.Second {
+		if p == n.o.Self || now.Sub(n.lastContact[p]) >= within {
 			continue
 		}
 		if pi, ok := n.peers[p]; ok && n.counts(p, pi.unsynced, pi.identity) {
@@ -1214,8 +1224,11 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 	own := afterResp{Entries: n.afterLocked(from), Commit: n.commit, LastSeq: last, LastTerm: n.termAtLocked(last)}
 	selfCounts := n.syncedLocked() || mutOplog("unsynced_self_counted")
 	// A vouched log's first catch-up as leader (Vouch): it waits for every
-	// peer, then takes what those that count say, itself included, even
-	// when that is itself alone. Once.
+	// peer, and only when EVERY peer answered, takes the most up-to-date
+	// log among itself and those that count, even when that is itself
+	// alone. Once. A silent peer may hold a write a majority committed
+	// without this log (#1053 review: two vouched controllers, one silent
+	// witness): then it fails, and the vouch is kept for when it answers.
 	alone := selfCounts && n.mark.Alone
 	n.mu.Unlock()
 	// The most advanced log is Raft's "up to date", compared on each WHOLE
@@ -1237,6 +1250,7 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 	}
 	var errs []string
 	var newer error
+	silent := 0
 	type answer struct {
 		got afterResp
 		err error
@@ -1253,6 +1267,7 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 		switch {
 		case a.err != nil:
 			errs = append(errs, p+": "+a.err.Error())
+			silent++
 		case a.got.Term > term:
 			// A peer has seen a newer term: this leadership is over.
 			newer = fmt.Errorf("%w: a peer is at term %d, this leader at %d", ErrReadOnly, a.got.Term, term)
@@ -1271,19 +1286,28 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 	if newer != nil {
 		return newer
 	}
-	need := n.majority()
-	if alone {
-		need = 1
-	}
-	if answered < need {
+	useVouch := answered < n.majority() && alone && (silent == 0 || mutOplog("vouch_alone_partial"))
+	if answered < n.majority() && !useVouch {
 		why := ""
-		if !selfCounts {
+		switch {
+		case !selfCounts:
 			why = "; this replica's own log is not synced"
+		case alone:
+			why = "; a vouched catch-up needs every copy to answer"
 		}
 		return fmt.Errorf("%w: catch-up heard from %d of %d that count (%s)%s", ErrReadOnly, answered, len(n.o.Peers), strings.Join(errs, "; "), why)
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	if useVouch && !mutOplog("vouch_alone_kept") {
+		// Spent before it is used: a mark that can't record that never
+		// leaves a second use.
+		m := n.mark
+		m.Alone = false
+		if err := n.setMarkLocked(m); err != nil {
+			return fmt.Errorf("oplog: recording that the vouch's catch-up is used: %w", err)
+		}
+	}
 	if !bestSelf && len(best.Entries) > 0 {
 		if _, err := n.acceptLocked(best.Entries); err != nil {
 			n.log.Warn("oplog: leader catch-up", "error", err)
@@ -1295,8 +1319,8 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 	n.commitTo(commit)
 	n.syncedTerm = term
 	n.becomeSyncedLocked("caught up from a majority as leader")
-	if alone && answered < n.majority() {
-		n.log.Warn("oplog: caught up on a vouched log, without a majority that counts", "answered", answered, "commit", n.commit)
+	if useVouch {
+		n.log.Warn("oplog: caught up on a vouched log, every copy answering, without a majority that counts", "answered", answered, "commit", n.commit)
 	}
 	n.usedVouchLocked()
 	return nil
@@ -1406,19 +1430,23 @@ var ErrVouchRefused = errors.New("oplog: vouch refused")
 // unsynced logs) could never sync, and nor could a pair whose logs were
 // all lost or rebuilt. The log counts as one synced replica from then on,
 // and its first catch-up as leader may succeed with no other replica that
-// counts (Mark.Alone, leaderCatchUp): it still asks every peer, and takes
-// a longer log a counting one holds.
+// counts (Mark.Alone, leaderCatchUp): only when every peer answers, and it
+// takes the most up-to-date log among those that count.
 //
 // A log that is already synced needs no word: Vouch does nothing and
 // returns a zero Vouch. Otherwise it refuses (ErrVouchRefused):
 //   - a log that was lost (Lost): recommission the other controller;
 //   - when any peer does not answer: it may hold entries this log lacks
 //     (a synced witness rebooting). Bring it back, or rebuild it;
-//   - when any peer, counted or not, holds a later log (its last term,
-//     then its last seq), naming it.
+//   - when a peer that does NOT count holds a later log (its last term,
+//     then its last seq), naming it: its entries would be lost. A later
+//     log on a peer that counts is fine: the catch-up takes it (#1053
+//     review: A and B lost, the witness synced and longer).
 //
-// Without a mark (no synced state) it does nothing.
-func (n *Node) Vouch(ctx context.Context, by string) (Vouch, error) {
+// counts says whether a peer's copy counts, by the identity it reports,
+// for this vouch (a re-commission judges the witness at the incarnation
+// it adopts); nil: Options.Counts. Without a mark it does nothing.
+func (n *Node) Vouch(ctx context.Context, by string, counts func(peer, identity string) bool) (Vouch, error) {
 	if n.o.Mark == "" || n.standalone() {
 		return Vouch{}, nil
 	}
@@ -1450,8 +1478,9 @@ func (n *Node) Vouch(ctx context.Context, by string) (Vouch, error) {
 		switch {
 		case a.err != nil:
 			problems = append(problems, fmt.Sprintf("%s does not answer (%v): it may hold entries this log lacks; bring it back, or rebuild it, then vouch again", n.name(p), a.err))
-		case a.got.LastTerm > lastTerm || a.got.LastTerm == lastTerm && a.got.LastSeq > last:
-			problems = append(problems, fmt.Sprintf("%s holds a later log (term %d, seq %d; this one ends at term %d, seq %d)", n.name(p), a.got.LastTerm, a.got.LastSeq, lastTerm, last))
+		case (a.got.LastTerm > lastTerm || a.got.LastTerm == lastTerm && a.got.LastSeq > last) &&
+			(mutOplog("vouch_refuses_counting_ahead") || !n.vouchCounts(counts, p, a.got)):
+			problems = append(problems, fmt.Sprintf("%s holds a later log that does not count (term %d, seq %d; this one ends at term %d, seq %d): its entries would be lost", n.name(p), a.got.LastTerm, a.got.LastSeq, lastTerm, last))
 		}
 		return false
 	})
@@ -1460,6 +1489,9 @@ func (n *Node) Vouch(ctx context.Context, by string) (Vouch, error) {
 		return Vouch{}, fmt.Errorf("%w: %s", ErrVouchRefused, strings.Join(problems, "; "))
 	}
 	v := Vouch{By: by, At: n.o.Now().UnixMilli(), LastTerm: lastTerm, LastSeq: last}
+	if n.o.afterVouchAsk != nil {
+		n.o.afterVouchAsk()
+	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.syncedLocked() {
@@ -1472,6 +1504,17 @@ func (n *Node) Vouch(ctx context.Context, by string) (Vouch, error) {
 	}
 	n.log.Warn("oplog: a person vouched for this replica's log: it counts as synced", "by", by, "lastTerm", lastTerm, "lastSeq", last)
 	return v, nil
+}
+
+// vouchCounts: a peer's answer counts for a vouch (Vouch's counts).
+func (n *Node) vouchCounts(counts func(peer, identity string) bool, p string, a afterResp) bool {
+	if a.Unsynced {
+		return false
+	}
+	if counts != nil {
+		return counts(p, a.Identity)
+	}
+	return n.counts(p, false, a.Identity)
 }
 
 // name is how a peer is named to a person (Options.Names), else its URL.

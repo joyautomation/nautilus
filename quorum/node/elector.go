@@ -295,7 +295,7 @@ type Elector struct {
 
 	// The operator-intent log's seams and what they decided (logpref.go).
 	logFn     func() LogState
-	vouchFn   func(ctx context.Context, by string) error
+	vouchFn   func(ctx context.Context, by string, inc uint64) error
 	peerLog   peerLog
 	holdSince time.Time      // since when the log has held a campaign
 	yieldedAt time.Time      // the last yield (at most one per yieldEvery)
@@ -1246,13 +1246,16 @@ func (e *Elector) tlsMessage(st CredState) string {
 // the peer. The permission lasts this boot: after a restart, issue it
 // again, above KnownFloor.
 func (e *Elector) Recommission(ctx context.Context, inc, floor uint64) error {
-	return e.RecommissionBy(ctx, "operator", inc, floor)
+	_, err := e.RecommissionBy(ctx, "operator", inc, floor)
+	return err
 }
 
 // RecommissionBy is Recommission naming the person, for the log's vouch
-// (SetVouch): it runs first, and its refusal is Recommission's, before
-// anything is written.
-func (e *Elector) RecommissionBy(ctx context.Context, by string, inc, floor uint64) error {
+// (SetVouch), which runs first. A vouch the log refuses never refuses the
+// re-commission (#1053 review: control never waits on operator data): it
+// goes ahead, the log stays unsynced and read-only, and the refusal is
+// returned as vouchRefused, raised as EventVouchRefused and logged.
+func (e *Elector) RecommissionBy(ctx context.Context, by string, inc, floor uint64) (vouchRefused, err error) {
 	// Its own refusals first, so a refused re-commission vouches for
 	// nothing.
 	e.mu.Lock()
@@ -1260,42 +1263,50 @@ func (e *Elector) RecommissionBy(ctx context.Context, by string, inc, floor uint
 	e.mu.Unlock()
 	switch {
 	case commissioned:
-		return quorum.ErrCommissioned
+		return nil, quorum.ErrCommissioned
 	case inc == 0 || floor == 0:
-		return quorum.ErrNoFloor
+		return nil, quorum.ErrNoFloor
 	case floor <= known && !mut("recommission_any_floor"):
-		return fmt.Errorf("%w: it knows terms up to %d", quorum.ErrFloorTooLow, known)
+		return nil, fmt.Errorf("%w: it knows terms up to %d", quorum.ErrFloorTooLow, known)
 	case floor-known > MaxTermJump/2:
-		return fmt.Errorf("quorum: re-commission floor %d is more than %d above the terms this controller knows (%d): the voters would refuse the pair's next campaign as a term jump", floor, MaxTermJump/2, known)
+		return nil, fmt.Errorf("quorum: re-commission floor %d is more than %d above the terms this controller knows (%d): the voters would refuse the pair's next campaign as a term jump", floor, MaxTermJump/2, known)
 	}
-	if err := e.vouch(ctx, by); err != nil {
-		return fmt.Errorf("quorum: re-commission refused by the operator-intent log: %w", err)
+	if verr := e.vouch(ctx, by, inc); verr != nil {
+		if mut("vouch_refusal_blocks") {
+			return nil, fmt.Errorf("quorum: re-commission refused by the operator-intent log: %w", verr)
+		}
+		vouchRefused = verr
+		msg := "the operator-intent log was not vouched for, so it stays unsynced and read-only: " + verr.Error()
+		e.log.Error("redundancy: re-commissioning goes ahead, but " + msg)
+		e.mu.Lock()
+		e.event(Event{Kind: EventVouchRefused, Detail: msg})
+		e.mu.Unlock()
 	}
 	e.mu.Lock()
 	if known := e.a.KnownFloor(); floor > known && floor-known > MaxTermJump/2 {
 		e.mu.Unlock()
-		return fmt.Errorf("quorum: re-commission floor %d is more than %d above the terms this controller knows (%d): the voters would refuse the pair's next campaign as a term jump", floor, MaxTermJump/2, known)
+		return vouchRefused, fmt.Errorf("quorum: re-commission floor %d is more than %d above the terms this controller knows (%d): the voters would refuse the pair's next campaign as a term jump", floor, MaxTermJump/2, known)
 	}
 	p, err := e.a.Recommission(inc, floor)
 	if err != nil {
 		known := e.a.KnownFloor()
 		e.mu.Unlock()
 		if errors.Is(err, quorum.ErrFloorTooLow) {
-			return fmt.Errorf("%w: it knows terms up to %d", err, known)
+			return vouchRefused, fmt.Errorf("%w: it knows terms up to %d", err, known)
 		}
-		return err
+		return vouchRefused, err
 	}
 	e.mu.Unlock()
 	e.w.ask(p)
 	if err := e.waitDurable(ctx, p.Seq); err != nil {
-		return err
+		return vouchRefused, err
 	}
 	e.mu.Lock()
 	e.event(Event{Kind: EventRecommissioned, Incarnation: inc, Detail: fmt.Sprintf("floor %d", floor)})
 	e.mu.Unlock()
 	e.log.Warn("redundancy: re-commissioned by an operator", "incarnation", inc, "floor", floor)
 	e.poke()
-	return nil
+	return vouchRefused, nil
 }
 
 // waitDurable waits until a write covering seq is on disk.

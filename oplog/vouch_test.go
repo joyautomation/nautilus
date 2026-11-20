@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -41,7 +42,7 @@ func TestVouchStartsANewPair(t *testing.T) {
 	if err := tr.nodes[0].SyncLeader(tr.ctx()); !errors.Is(err, ErrReadOnly) {
 		t.Fatalf("three unsynced logs synced without a vouch: %v", err)
 	}
-	v, err := tr.nodes[0].Vouch(tr.ctx(), "op")
+	v, err := tr.nodes[0].Vouch(tr.ctx(), "op", nil)
 	if err != nil || v.By != "op" || v.At == 0 {
 		t.Fatalf("vouch: %+v, %v", v, err)
 	}
@@ -67,13 +68,11 @@ func TestVouchStartsANewPair(t *testing.T) {
 // One shot: a vouched log that has caught up alone once doesn't again.
 func TestVouchedCatchUpAloneIsOnce(t *testing.T) {
 	tr := unsyncedTrio(t)
-	if _, err := tr.nodes[0].Vouch(tr.ctx(), "op"); err != nil {
+	if _, err := tr.nodes[0].Vouch(tr.ctx(), "op", nil); err != nil {
 		t.Fatal(err)
 	}
-	tr.setDown(1, true)
-	tr.setDown(2, true)
-	mustSync(t, tr, 0) // alone: nothing else answers
-	tr.lead(0)         // a new term, the others still away
+	mustSync(t, tr, 0) // alone: the others answer, unsynced
+	tr.lead(0)         // a new term, the others still unsynced (nothing was replicated)
 	if err := tr.nodes[0].SyncLeader(tr.ctx()); !errors.Is(err, ErrReadOnly) {
 		t.Fatalf("a second catch-up alone succeeded: %v", err)
 	}
@@ -82,16 +81,24 @@ func TestVouchedCatchUpAloneIsOnce(t *testing.T) {
 // A vouch refuses when a peer holds a later log, naming it; when a peer
 // does not answer; and for a lost log. A log already synced needs none.
 func TestVouchRefuses(t *testing.T) {
-	t.Run("a peer ahead", func(t *testing.T) {
+	t.Run("a peer ahead that does not count", func(t *testing.T) {
 		tr := newTrio(t, nil)
 		mustSync(t, tr, 0)
 		if _, err := tr.propose(0, "X"); err != nil {
 			t.Fatal(err)
 		}
 		tr.wipe(1) // B: a new identity, empty, unsynced
-		_, err := tr.nodes[1].Vouch(tr.ctx(), "op")
-		if !errors.Is(err, ErrVouchRefused) || !strings.Contains(err.Error(), tr.urls[0]) || !strings.Contains(err.Error(), "later log") {
-			t.Fatalf("vouch over a later log: %v", err)
+		for _, i := range []int{0, 2} {
+			// Their marks unreadable: their logs kept, held, unsynced.
+			tr.stop(i)
+			if err := os.WriteFile(tr.markFile(i), []byte("{"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			tr.start(i)
+		}
+		_, err := tr.nodes[1].Vouch(tr.ctx(), "op", nil)
+		if !errors.Is(err, ErrVouchRefused) || !strings.Contains(err.Error(), tr.urls[0]) || !strings.Contains(err.Error(), "does not count") {
+			t.Fatalf("vouch over a later log that doesn't count: %v", err)
 		}
 		if tr.nodes[1].Synced() {
 			t.Fatal("refused, but synced")
@@ -100,7 +107,7 @@ func TestVouchRefuses(t *testing.T) {
 	t.Run("a peer silent", func(t *testing.T) {
 		tr := unsyncedTrio(t)
 		tr.setDown(2, true)
-		_, err := tr.nodes[0].Vouch(tr.ctx(), "op")
+		_, err := tr.nodes[0].Vouch(tr.ctx(), "op", nil)
 		if !errors.Is(err, ErrVouchRefused) || !strings.Contains(err.Error(), tr.urls[2]) || !strings.Contains(err.Error(), "does not answer") {
 			t.Fatalf("vouch with a peer away: %v", err)
 		}
@@ -112,7 +119,7 @@ func TestVouchRefuses(t *testing.T) {
 			t.Fatal(err)
 		}
 		tr.loseLog(1)
-		_, err := tr.nodes[1].Vouch(tr.ctx(), "op")
+		_, err := tr.nodes[1].Vouch(tr.ctx(), "op", nil)
 		if !errors.Is(err, ErrVouchRefused) || !strings.Contains(err.Error(), "lost") {
 			t.Fatalf("vouch for a lost log: %v", err)
 		}
@@ -124,7 +131,7 @@ func TestVouchRefuses(t *testing.T) {
 			t.Fatal(err)
 		}
 		tr.setDown(2, true) // would refuse, if it checked
-		v, err := tr.nodes[1].Vouch(tr.ctx(), "op")
+		v, err := tr.nodes[1].Vouch(tr.ctx(), "op", nil)
 		if err != nil || v != (Vouch{}) {
 			t.Fatalf("vouch for a synced log: %+v, %v", v, err)
 		}
@@ -164,7 +171,7 @@ func TestVouchWithASyncedWitnessTakesItsCommit(t *testing.T) {
 	if tr.nodes[0].Synced() {
 		t.Fatal("A synced with an unreadable mark")
 	}
-	if _, err := tr.nodes[0].Vouch(tr.ctx(), "op"); err != nil {
+	if _, err := tr.nodes[0].Vouch(tr.ctx(), "op", nil); err != nil {
 		t.Fatalf("vouch A, level with W: %v", err)
 	}
 	tr.lead(0)
@@ -374,7 +381,9 @@ func TestRebindAPendingReplica(t *testing.T) {
 	t.Run("placeholder", func(t *testing.T) {
 		dir := t.TempDir()
 		n := open(t, dir, "c/a/?", true, true)
-		if err := n.Rebind("c/a/box3", "c/a/?"); err != nil || !n.Synced() {
+		// Adopted, but not synced: nothing says the placeholder's log was
+		// this box's (#1053 review).
+		if err := n.Rebind("c/a/box3", "c/a/?"); err != nil || n.Synced() {
 			t.Fatalf("rebind from the placeholder: %v, synced %v", err, n.Synced())
 		}
 		if m, _ := readMark(dir + "/log.mark"); m.Identity != "c/a/box3" {
@@ -393,24 +402,130 @@ func TestCanSync(t *testing.T) {
 		t.Fatal(err)
 	}
 	tr.nodes[0].Ping(tr.ctx())
-	if !tr.nodes[0].CanSync() {
+	if !tr.nodes[0].CanSync(time.Second) {
 		t.Fatal("a synced copy with counting peers can't sync")
 	}
 	tr.wipe(1)
 	tr.wipe(2)
 	tr.nodes[0].Ping(tr.ctx())
-	if tr.nodes[0].CanSync() {
+	if tr.nodes[0].CanSync(time.Second) {
 		t.Fatal("a synced copy whose others are all lost can sync")
 	}
-	if tr.nodes[1].CanSync() {
+	if tr.nodes[1].CanSync(time.Second) {
 		t.Fatal("an unsynced copy can sync")
 	}
 
 	v := unsyncedTrio(t)
-	if _, err := v.nodes[0].Vouch(v.ctx(), "op"); err != nil {
+	if _, err := v.nodes[0].Vouch(v.ctx(), "op", nil); err != nil {
 		t.Fatal(err)
 	}
-	if !v.nodes[0].CanSync() {
+	if !v.nodes[0].CanSync(time.Second) {
 		t.Fatal("a vouched copy, its catch-up pending, can't sync")
+	}
+}
+
+// The reviewer's schedule (#1053): both controllers vouched at genesis
+// (the second passes: the first is level, not ahead). B leads, every copy
+// answering, and commits X on B and W. B dies, and W is silent during A's
+// catch-up: A's vouched catch-up must not go ahead alone and number Y over
+// X. It fails until W answers, and then A holds X.
+func TestDoubleVouchWithASilentWitnessKeepsTheWrite(t *testing.T) {
+	tr := unsyncedTrio(t)
+	for _, i := range []int{0, 1} {
+		if _, err := tr.nodes[i].Vouch(tr.ctx(), "op", nil); err != nil {
+			t.Fatalf("vouch n%d: %v", i, err)
+		}
+	}
+	tr.lead(1)
+	mustSync(t, tr, 1)
+	tr.setDown(0, true) // A partitioned: X goes to B and W only
+	if _, err := tr.propose(1, "X"); err != nil {
+		t.Fatalf("X on B and W: %v", err)
+	}
+	tr.setDown(0, false)
+	tr.setDown(1, true) // B dies
+	tr.net.mu.Lock()
+	tr.net.silent[2] = true
+	tr.net.mu.Unlock()
+	tr.lead(0)
+	if err := tr.nodes[0].SyncLeader(tr.ctx()); err == nil {
+		if _, err := tr.propose(0, "Y"); err == nil {
+			t.Logf("W after Y: %+v", tr.nodes[2].After(0))
+		}
+		t.Fatal("A caught up alone on its vouch with W silent")
+	}
+	tr.net.mu.Lock()
+	tr.net.silent[2] = false
+	tr.net.mu.Unlock()
+	mustSync(t, tr, 0)
+	if seq, n := tr.holds(0, "X"); seq == 0 || n != 1 {
+		t.Fatalf("A after W answered: X at %d, %d times", seq, n)
+	}
+}
+
+// A and B lost, the witness synced and longer (#1053 review, naut-lead's
+// example): a vouch for A is not refused for the witness's later log,
+// since the witness counts; A and the witness then count, and the
+// witness's entries come back.
+func TestVouchOverACountingLongerWitnessRecoversItsEntries(t *testing.T) {
+	tr := newTrio(t, nil)
+	mustSync(t, tr, 0)
+	if _, err := tr.propose(0, "X"); err != nil {
+		t.Fatal(err)
+	}
+	tr.wipe(0)
+	tr.wipe(1)
+	if _, err := tr.nodes[0].Vouch(tr.ctx(), "op", nil); err != nil {
+		t.Fatalf("vouch A with the witness counting and longer: %v", err)
+	}
+	tr.lead(0)
+	mustSync(t, tr, 0)
+	if seq, n := tr.holds(0, "X"); seq == 0 || n != 1 || tr.appliedTimes(0, "X") != 1 {
+		t.Fatalf("A after its catch-up: X at %d (%d copies, applied %d)", seq, n, tr.appliedTimes(0, "X"))
+	}
+}
+
+// "Heard recently" is within the caller's bound (a pair's lease), not the
+// 10 s Status uses: a copy last heard two leases ago doesn't make a synced
+// copy able to sync (#1053 review).
+func TestCanSyncNeedsACopyHeardWithinTheBound(t *testing.T) {
+	var mu sync.Mutex
+	now := time.Unix(1_000_000, 0)
+	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	tr := newTrio(t, func(_ int, o *Options) { o.Now = clock })
+	mustSync(t, tr, 0)
+	tr.nodes[0].Ping(tr.ctx())
+	if !tr.nodes[0].CanSync(time.Second) {
+		t.Fatal("a copy heard just now doesn't count")
+	}
+	mu.Lock()
+	now = now.Add(2 * time.Second)
+	mu.Unlock()
+	if tr.nodes[0].CanSync(time.Second) {
+		t.Fatal("a copy heard two leases ago still makes it able to sync")
+	}
+}
+
+// A vouch re-checks after its asks: a log a synced leader synced
+// meanwhile is not vouched for (no record, no one-shot catch-up).
+func TestVouchSyncedMeanwhileRecordsNothing(t *testing.T) {
+	var tr *trio
+	tr = newTrio(t, func(i int, o *Options) {
+		if i == 1 {
+			o.afterVouchAsk = func() {
+				n := tr.nodes[1]
+				n.mu.Lock()
+				n.becomeSyncedLocked("test: a synced leader's replication")
+				n.mu.Unlock()
+			}
+		}
+	})
+	tr.wipe(1)
+	v, err := tr.nodes[1].Vouch(tr.ctx(), "op", nil)
+	if err != nil || v != (Vouch{}) {
+		t.Fatalf("vouch for a log synced meanwhile: %+v, %v", v, err)
+	}
+	if m, _ := readMark(tr.markFile(1)); m.Vouch != nil || m.Alone || !m.Synced {
+		t.Fatalf("mark: %+v", m)
 	}
 }

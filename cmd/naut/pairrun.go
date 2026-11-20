@@ -353,6 +353,8 @@ func (m *pairMember) onEvent(ev node.Event) {
 		m.q.SetCondition("credentials-users", ev.Detail) // "" clears it
 	case node.EventTLSDiffers:
 		m.q.SetCondition("credentials-tls", ev.Detail)
+	case node.EventVouchRefused:
+		m.q.SetCondition("oplog-vouch-refused", ev.Detail)
 	case node.EventYielded:
 		m.q.SetCondition("oplog-yield", ev.Detail+" (at "+time.Now().UTC().Format(time.RFC3339)+")")
 	}
@@ -526,10 +528,11 @@ func (m *pairMember) startLog(rt *runtime.Runtime, wait time.Duration, eng *alar
 	m.rt = rt
 	el := m.q.Node()
 	el.SetLog(func() node.LogState {
-		return node.LogState{Synced: n.Synced(), Stuck: m.stuck(), CanSync: n.CanSync()}
+		return node.LogState{Synced: n.Synced(), Stuck: m.stuck(), CanSync: n.CanSync(m.o.Lease)}
 	})
-	el.SetVouch(func(ctx context.Context, by string) error {
-		v, err := n.Vouch(ctx, by)
+	el.SetVouch(func(ctx context.Context, by string, inc uint64) error {
+		// The witness's copy counts at the incarnation being adopted.
+		v, err := n.Vouch(ctx, by, witnessCounts(wit, func() uint64 { return inc }))
 		if err == nil && v.By != "" {
 			slog.Warn("redundancy: a person vouched for this controller's operator-intent log", "by", v.By, "lastTerm", v.LastTerm, "lastSeq", v.LastSeq)
 		}
@@ -628,7 +631,7 @@ func (m *pairMember) logConditions() {
 	m.q.SetCondition("oplog-lost", lost)
 	m.q.SetCondition("oplog-unsynced", unsynced)
 	readOnly := ""
-	if !st.Unsynced && m.stuck() && !m.log.CanSync() {
+	if !st.Unsynced && m.stuck() && !m.log.CanSync(m.o.Lease) {
 		// Synced, leading, but alone among the copies that count: entries
 		// committed while it lagged may be on the others, so only a person
 		// can decide (#1053).
@@ -637,6 +640,7 @@ func (m *pairMember) logConditions() {
 	m.q.SetCondition("oplog-read-only", readOnly)
 	if !st.Unsynced {
 		m.q.SetCondition("oplog-yield", "")
+		m.q.SetCondition("oplog-vouch-refused", "")
 	}
 }
 
