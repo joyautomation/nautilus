@@ -6,6 +6,7 @@
 	// `alarm` turns it into a read-only indication: red while set, flashing,
 	// with no switch affordance at all. An alarm lamp that can be clicked is a
 	// hazard, so the two modes are one prop rather than a convention.
+	import { deniedFor } from '../auth.svelte.js';
 	let {
 		tag,
 		label,
@@ -40,7 +41,9 @@
 	} = $props();
 
 	const on = $derived(invert ? !value : value);
-	const canWrite = $derived(!alarm && !readonly);
+	// A role that does not hold write on this tag sees it read-only (#708).
+	const denied = $derived(deniedFor('write', tag));
+	const canWrite = $derived(!alarm && !readonly && !denied);
 
 	let error = $state('');
 
@@ -62,7 +65,7 @@
 	class:absent={!present}
 	style:--c={color}
 	onclick={canWrite ? toggle : undefined}
-	title={canWrite ? `Write ${!value} to ${tag}` : alarm ? tag : readonlyReason}
+	title={canWrite ? `Write ${!value} to ${tag}` : alarm ? tag : readonlyReason || denied}
 >
 	<span class="lamp" class:blinking={alarm && on} aria-hidden="true"></span>
 	<span class="lab">{label}</span>

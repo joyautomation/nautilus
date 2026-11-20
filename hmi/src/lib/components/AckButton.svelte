@@ -38,7 +38,8 @@
 	// behind its `confirmAck` prop.
 	import type { AlarmInstance } from '../alarms.svelte.js';
 	import { confirm } from '../confirm.svelte.js';
-	import { getOperator } from '../confirm.js';
+	import { getOperator, recordedAs } from '../confirm.js';
+	import { currentAuth, deniedFor } from '../auth.svelte.js';
 	import Button from './Button.svelte';
 
 	let {
@@ -74,6 +75,13 @@
 	} = $props();
 
 	const target = $derived(ids ?? alarms.map((a) => a.id));
+	// Ack all needs ack on the whole controller; otherwise on each alarm's
+	// tag (#708). A convenience: the controller decides.
+	const denied = $derived(
+		target.length === 1 && target[0] === '*'
+			? deniedFor('ack')
+			: (alarms.map((a) => deniedFor('ack', a.tag)).find((r) => r) ?? '')
+	);
 	const all = $derived(target.length === 1 && target[0] === '*');
 	const count = $derived(all ? alarms.length : target.length);
 	const text = $derived(label ?? (all ? 'Ack All' : count === 1 ? 'Ack' : `Ack (${count})`));
@@ -82,25 +90,26 @@
 		if (!target.length) return;
 		if (confirmAck) {
 			const listed = worstFirst(alarms).map(ackLine);
+			const rec = recordedAs(currentAuth()?.user);
 			const ok = await confirm({
 				title: all
 					? `Acknowledge all ${count || ''} alarms?`.replace('  ', ' ')
 					: `Acknowledge ${count} alarm${count === 1 ? '' : 's'}?`,
 				items: listed,
 				confirmLabel: 'Acknowledge',
-				operator: true,
-				note: 'Acknowledgement is permanent and unauthenticated — the name above is the whole record.'
+				operator: rec.operator,
+				note: rec.note
 			});
 			if (!ok) return;
 			// Read the name AFTER the dialog: it is editable there, and the
 			// edited value is the one that goes on the record.
-			onack(target, getOperator() || operator);
+			onack(target, rec.by(getOperator() || operator));
 			return;
 		}
-		onack(target, operator || getOperator());
+		onack(target, recordedAs(currentAuth()?.user).by(operator || getOperator()));
 	}
 </script>
 
-<Button {size} {variant} {icon} disabled={disabled || !target.length} onclick={press}>
+<Button {size} {variant} {icon} disabled={disabled || !target.length || !!denied} title={denied || undefined} onclick={press}>
 	{text}
 </Button>

@@ -47,6 +47,8 @@ export interface Me {
 	roles: string[];
 	/** Permission names held, by scope: `*` (everywhere) or an area name. */
 	permissions: Record<string, string[]>;
+	/** Each area's tag patterns, for the areas `permissions` names. */
+	areas?: Record<string, string[]>;
 	/** Present when the request acts by a browser sign-in. */
 	session?: MeSession;
 	/** The permissions a browser sign-in holds only while its password is fresh. */
@@ -208,6 +210,20 @@ export function needsPassword(me: Me | null | undefined, perm: string, localNow:
 	if (!me?.session || !me.elevated?.includes(perm) || !holdsAnywhere(me, perm)) return false;
 	const until = Date.parse(me.session.elevatedUntil);
 	return !Number.isFinite(until) || until <= localNow + skew;
+}
+
+/**
+ * The account chip's password line: whether the sign-in holds any elevated
+ * permission (`held`), whether its password is fresh by the controller's
+ * clock (`fresh`), and until when, on the BROWSER's clock (`untilLocal`, ms),
+ * to print. Null without a browser sign-in.
+ */
+export function passwordState(me: Me | null | undefined, localNow: number, skew = 0): { held: boolean; fresh: boolean; untilLocal: number } | null {
+	if (!me?.session) return null;
+	const held = (me.elevated ?? []).some((p) => holdsAnywhere(me, p));
+	const until = Date.parse(me.session.elevatedUntil);
+	const fresh = Number.isFinite(until) && until > localNow + skew;
+	return { held, fresh, untilLocal: Number.isFinite(until) ? until - skew : NaN };
 }
 
 /** What the password prompt is told. */
@@ -435,6 +451,25 @@ export class AuthSession {
 		void this.checkSignedOut();
 		return res;
 	};
+
+	/**
+	 * Sign out: POST /api/signout, then the sign-in page. Through the rules,
+	 * so a standby's referral is followed (or shown) rather than raced by a
+	 * navigation to its own /signin. Resolves null once signed out, else the
+	 * controller's reason (the page stays).
+	 */
+	async signOut(): Promise<string | null> {
+		let res: Response;
+		try {
+			res = await this.fetch('/api/signout', { method: 'POST' });
+		} catch {
+			return 'controller unreachable';
+		}
+		if (!res.ok) return refusalMessage(res.status, await res.text());
+		this.#hadSession = false;
+		this.#leave('/signin');
+		return null;
+	}
 
 	/**
 	 * A live stream errored. Its status cannot be read, so ask /api/me, at

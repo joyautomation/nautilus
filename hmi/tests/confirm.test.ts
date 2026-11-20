@@ -2,7 +2,7 @@
 // a confirmation that silently never settles is a command an operator believes
 // they sent. Every case below is one of those.
 import { describe, it, expect } from './harness.js';
-import { createConfirmQueue, splitItems, type ConfirmRequest } from '../src/lib/confirm.js';
+import { createConfirmQueue, recordedAs, splitItems, type ConfirmRequest } from '../src/lib/confirm.js';
 
 /** A queue with a host attached, plus a log of what the host was told to show. */
 function mounted() {
@@ -193,5 +193,20 @@ describe('confirm queue — the password (elevation prompt)', () => {
 		expect(q.current?.options.password).toBe(true);
 		q.settle(true, 'pw');
 		expect(await pw).toBe('pw');
+	});
+});
+
+describe('who an acknowledgement is recorded as (#708)', () => {
+	it('signed in: the user, with no name to type', () => {
+		const r = recordedAs('akhan');
+		expect(r.operator).toBe(false);
+		expect(r.note).toBe('Recorded as akhan, the signed-in user.');
+		expect(r.by('typed name')).toBe('akhan');
+	});
+	it('not signed in: the name typed, and the dialog says it is unauthenticated', () => {
+		const r = recordedAs(null);
+		expect(r.operator).toBe(true);
+		expect(r.note.includes('unauthenticated')).toBe(true);
+		expect(r.by('op1')).toBe('op1');
 	});
 });

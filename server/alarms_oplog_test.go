@@ -187,3 +187,50 @@ func TestAlarmWritesThroughTheLogCheckTheArea(t *testing.T) {
 		t.Errorf("the administrator's ack: %d, %d proposed", rec.Code, len(*got))
 	}
 }
+
+// On a redundant pair the name an ack, shelve or unshelve carries in the
+// operator-intent log is recordBy's, not the client's (#708 PR 7b): a
+// request acting as a user (a personal access token here; a browser
+// sign-in is the same principal) writes the user into the replicated entry
+// whatever "by" it sent, so the standby's alarm history agrees with the
+// leader's.
+func TestAlarmLogCarriesTheSignedInUser(t *testing.T) {
+	srv, toks, _ := patServer(t)
+	eng := srv.alarms // auditServer's: HiTemp active
+	var lead atomic.Bool
+	lead.Store(true)
+	al := NewAlarmLog(eng, lead.Load, noTerm)
+	var got []oplog.Entry
+	n, err := oplog.New(oplog.Options{Self: "a", Apply: func(e oplog.Entry) error {
+		got = append(got, e)
+		_, err := al.Apply(e)
+		return err
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	al.Attach(n)
+	srv.alarmLog = al
+	for _, c := range []struct{ path, body string }{
+		{"/api/alarms/ack", `{"ids":["HiTemp"],"by":"someone-else"}`},
+		{"/api/alarms/shelve", `{"id":"HiTemp","seconds":300,"by":"someone-else"}`},
+		{"/api/alarms/unshelve", `{"id":"HiTemp","by":"someone-else"}`},
+	} {
+		before := len(got)
+		if rec := call(t, srv, "POST", c.path, c.body, bearer(toks["akhan"])); rec.Code != http.StatusOK {
+			t.Fatalf("%s through the log: %d %s", c.path, rec.Code, rec.Body)
+		}
+		if len(got) != before+1 {
+			t.Fatalf("%s: %d entries proposed, want 1", c.path, len(got)-before)
+		}
+		if e := got[len(got)-1]; e.By != "akhan" {
+			t.Errorf("%s: the log entry carries by %q, want akhan", c.path, e.By)
+		}
+	}
+	// And the engine the entries applied to records the user too.
+	for _, r := range eng.Records() {
+		if r.ID == "HiTemp" && r.AckBy != "akhan" {
+			t.Errorf("HiTemp acknowledged by %q through the log, want akhan", r.AckBy)
+		}
+	}
+}

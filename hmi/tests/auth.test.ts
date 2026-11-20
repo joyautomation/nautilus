@@ -15,6 +15,7 @@ import {
 	mayFollow,
 	sameOriginResponse,
 	needsPassword,
+	passwordState,
 	refusalMessage,
 	signInHref,
 	standbyLeader,
@@ -26,6 +27,7 @@ import { kitFetch, setKitFetch } from '../src/lib/kitfetch.js';
 import { classify, SubstituteClient } from '../src/lib/substitutes.js';
 import { PortParamClient } from '../src/lib/iolink.js';
 import { fetchHistory } from '../src/lib/history.js';
+import { AuditClient } from '../src/lib/audit.js';
 import { readFileSync } from 'node:fs';
 
 const json = (b: unknown, status = 200, headers: Record<string, string> = {}) =>
@@ -497,14 +499,15 @@ describe('every kit client goes through the kit fetch', () => {
 			await new SubstituteClient().list();
 			await new PortParamClient().list('X1');
 			await fetchHistory(['T1'], 0, 1000);
+			await new AuditClient().query({ result: 'refused' });
 			setKitFetch(null);
 			await kitFetch('/c');
 		} finally {
 			g.fetch = browser;
 			setKitFetch(null);
 		}
-		expect(seen.length).toBe(6);
-		expect([seen[0], seen[1], seen[5]]).toEqual(['browser:/a', '/b', 'browser:/c']);
+		expect(seen.length).toBe(7);
+		expect([seen[0], seen[1], seen[5], seen[6]]).toEqual(['browser:/a', '/b', '/api/audit?result=refused', 'browser:/c']);
 		seen.splice(0, 2);
 		expect(seen[0].startsWith('/api/substitutes')).toBe(true);
 		expect(seen[1].startsWith('/api/iolink/X1/params')).toBe(true);
@@ -654,4 +657,63 @@ describe('without sessionStorage, no follow at all (L5, #1090 review: fail-safe)
 			expect(s.referral).toEqual({ leader: 'https://plc-b.example/', message: 'this controller is the standby; open the leader' });
 		});
 	}
+});
+
+describe('signing out (7b)', () => {
+	it('POSTs /api/signout and goes to the sign-in page', async () => {
+		const w = world({ '/api/signout': () => json({}) });
+		expect(await w.s.signOut()).toBeNull();
+		expect(w.to('/api/signout')[0].method).toBe('POST');
+		expect(w.nav).toEqual(['/signin']);
+	});
+	it("on a standby it follows the referral, never racing it to the standby's /signin", async () => {
+		const w = world({ '/api/signout': () => json({ error: 'this controller is the standby; open the leader', standby: true, leader: 'https://plc-b.example' }, 503) });
+		const r = await w.s.signOut();
+		expect(r).toBe('this controller is the standby; open the leader');
+		expect(w.nav).toEqual(['https://plc-b.example/']);
+	});
+	it('a refusal leaves the page and says why', async () => {
+		const w = world({ '/api/signout': () => json({ error: 'sign-out is accepted only from this controller\'s own page' }, 403) });
+		expect(await w.s.signOut()).toBe("sign-out is accepted only from this controller's own page");
+		expect(w.nav).toEqual([]);
+	});
+});
+
+describe("the account chip's password line (7b)", () => {
+	const at = (iso: string) => Date.parse(iso);
+	it('fresh until a time, on the browser clock, judged by the controller clock', () => {
+		const me = signedIn({ session: { expires: '2026-11-20T20:00:00Z', elevatedUntil: '2026-11-20T09:15:00Z' }, now: '2026-11-20T09:00:00Z' });
+		const local = at('2026-11-20T10:00:00Z'); // the browser runs an hour fast
+		const skew = clockSkew(me, local);
+		const st = passwordState(me, local, skew);
+		expect(st?.held).toBe(true);
+		expect(st?.fresh).toBe(true);
+		expect(st?.untilLocal).toBe(at('2026-11-20T10:15:00Z'));
+		expect(passwordState(me, local + 16 * 60_000, skew)?.fresh).toBe(false);
+	});
+	it('no line for a user without elevated permissions, none without a sign-in', () => {
+		const viewer = signedIn({ permissions: { '*': ['read'] } });
+		expect(passwordState(viewer, 0)?.held).toBe(false);
+		expect(passwordState(signedIn({ session: undefined }), 0)).toBeNull();
+	});
+});
+
+describe('every role-aware control asks the permission the controller checks (7b)', () => {
+	// The controls are Svelte (no node run): read them. Each greys itself out
+	// with deniedFor(<the action's permission>, <its target>).
+	const has = (file: string, ...needles: string[]) => {
+		const src = readFileSync('src/lib/components/' + file, 'utf8');
+		for (const n of needles) if (!src.includes(n)) throw new Error(`${file} lacks ${n}`);
+	};
+	it('writes, acks, shelves, substitutes, parameters, the journal', () => {
+		has('WriteNumber.svelte', "deniedFor('write', tag)", 'canWrite = $derived(!readonly && !denied)');
+		has('WriteToggle.svelte', "deniedFor('write', tag)", '!readonly && !denied');
+		has('CommandButton.svelte', "deniedFor('write', tag)", 'disabled={off}');
+		has('AckButton.svelte', "deniedFor('ack')", "deniedFor('ack', a.tag)", '!!denied}', 'recordedAs(currentAuth()?.user)');
+		has('AlarmTable.svelte', "deniedFor('ack', a.tag)", "deniedFor('shelve', a.tag)", "deniedFor('ack')", 'disabled={!selected.size || !!ackDenied}', 'disabled={!!ackAllDenied}', 'disabled={!selected.size || !!shelveDenied} title={shelveDenied || undefined} onclick={openShelveModal}', 'disabled={!selected.size || !!shelveDenied} title={shelveDenied || undefined} onclick={unshelveSelected}', 'recordedAs(currentAuth()?.user)');
+		has('SubstitutesPanel.svelte', "deniedFor('substitute', tag)", "deniedFor('substitute', s.name)", '!!startDenied');
+		has('PortParameters.svelte', "deniedFor('config')", "asksPassword('config')", '!!writeDenied');
+		has('AuditTable.svelte', "deniedFor('audit')");
+		has('NumberField.svelte', "tag ? deniedFor('write', tag) : ''", 'readonly={!!denied}', '!pending || !!denied');
+	});
 });

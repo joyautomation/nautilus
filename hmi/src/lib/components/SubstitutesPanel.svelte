@@ -24,6 +24,7 @@
 		type SubstituteLapse
 	} from '../substitutes.js';
 	import { confirm } from '../confirm.svelte.js';
+	import { deniedFor } from '../auth.svelte.js';
 	import StatusPill from './StatusPill.svelte';
 	import Button from './Button.svelte';
 
@@ -122,6 +123,10 @@
 		await refresh();
 	}
 
+	// What the signed-in role may substitute, by tag (#708). A convenience:
+	// the controller decides.
+	const startDenied = $derived(tag ? deniedFor('substitute', tag) : '');
+
 	async function start() {
 		const value = rule?.operatorValue ? parseValue(valueText) : undefined;
 		if (startError) {
@@ -209,7 +214,7 @@
 						<td class="act">
 							{#if s.ackOnStart && !s.acked}<StatusPill kind="critical" label="Needs ack" />{/if}
 							{#if s.fault}<StatusPill kind="critical" label={s.fault} />{/if}
-							<Button size="sm" variant="danger" disabled={busy} onclick={() => stop(s)}>Stop</Button>
+							<Button size="sm" variant="danger" disabled={busy || !!deniedFor('substitute', s.name)} title={deniedFor('substitute', s.name) || undefined} onclick={() => stop(s)}>Stop</Button>
 						</td>
 					</tr>
 				{/each}
@@ -232,7 +237,7 @@
 	{#if waiting.length}
 		<div class="ackbar">
 			<span>{waiting.length} substitute{waiting.length === 1 ? '' : 's'} waiting for acknowledgement: {waiting.map((w) => w.name).join(', ')}</span>
-			<Button size="sm" disabled={busy} onclick={() => ack(waiting.map((w) => w.id))}>Acknowledge {waiting.length === 1 ? '' : 'all'}</Button>
+			<Button size="sm" disabled={busy || waiting.some((w) => deniedFor('substitute', w.name))} title={waiting.map((w) => deniedFor('substitute', w.name)).find((r) => r) || undefined} onclick={() => ack(waiting.map((w) => w.id))}>Acknowledge {waiting.length === 1 ? '' : 'all'}</Button>
 		</div>
 	{/if}
 
@@ -253,7 +258,7 @@
 			<label>Seconds{#if maxSeconds(rule)} <span class="q">(max {maxSeconds(rule)})</span>{/if}
 				<input type="number" min="1" max={maxSeconds(rule) || undefined} bind:value={seconds} />
 			</label>
-			<Button type="submit" variant="primary" disabled={busy || blocked || !!startError} title={blocked ? 'An earlier start of this tag is not confirmed' : (startError ?? '')}>Substitute…</Button>
+			<Button type="submit" variant="primary" disabled={busy || blocked || !!startError || !!startDenied} title={blocked ? 'An earlier start of this tag is not confirmed' : (startError ?? startDenied)}>Substitute…</Button>
 			{#if rule?.ackOnStart}<span class="q">Needs acknowledgement after it starts.</span>{/if}
 		</form>
 	{/if}

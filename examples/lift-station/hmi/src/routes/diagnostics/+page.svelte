@@ -2,8 +2,9 @@
 	// Diagnostics: how the station and the controller are doing over time.
 	// The level trend (kept by the app's client from the moment it
 	// connected, so it already has history when you arrive), the field
-	// drivers, and the scan timing of every task.
-	import { Trend, DriverStatusPanel, ScanDiagnostics } from '@joyautomation/nautilus-hmi';
+	// drivers, the scan timing of every task, and, on a controller with an
+	// auth: block, the audit journal (who did what, for a role with audit).
+	import { Trend, DriverStatusPanel, ScanDiagnostics, AuditTable, currentAuth } from '@joyautomation/nautilus-hmi';
 	import { rt, levelBuf } from '$lib/client.svelte';
 </script>
 
@@ -29,6 +30,13 @@
 			<h2>Field drivers</h2>
 			<DriverStatusPanel drivers={rt.frame?.drivers ?? []} />
 		</section>
+
+		{#if currentAuth()?.me?.auth}
+			<section class="card">
+				<h2>Audit journal</h2>
+				<AuditTable />
+			</section>
+		{/if}
 	</div>
 </div>
 

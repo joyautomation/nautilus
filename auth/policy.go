@@ -459,6 +459,11 @@ type Me struct {
 	Principal   string              `json:"principal"`
 	Roles       []string            `json:"roles"`
 	Permissions map[string][]string `json:"permissions"`
+	// Areas are the tag patterns of each area Permissions names, so a page
+	// can tell ahead of time whether a tag is in one (matched as Can
+	// matches: path.Match on the lowercased tag, member and index cut).
+	// Only the caller's own areas; omitted when it holds none.
+	Areas map[string][]string `json:"areas,omitempty"`
 }
 
 // Describe is pr's Me.
@@ -492,6 +497,15 @@ func (p *Policy) Describe(pr Principal) Me {
 				me.Permissions[scope] = append(me.Permissions[scope], perm)
 			}
 		}
+	}
+	for scope := range me.Permissions {
+		if scope == All {
+			continue
+		}
+		if me.Areas == nil {
+			me.Areas = map[string][]string{}
+		}
+		me.Areas[scope] = append([]string(nil), p.areas[scope]...)
 	}
 	return me
 }

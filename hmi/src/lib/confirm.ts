@@ -212,3 +212,17 @@ export function setOperator(name: string): void {
 		/* private mode — the name just does not persist */
 	}
 }
+
+/**
+ * How an acknowledgement (or shelve) is recorded. Signed in, the controller
+ * records the user, so there is no name to type and the dialog says whose it
+ * is (#708). Without a sign-in the record is the name typed in the dialog.
+ */
+export function recordedAs(user: string | null | undefined): { operator: boolean; note: string; by: (typed: string) => string } {
+	if (user) return { operator: false, note: `Recorded as ${user}, the signed-in user.`, by: () => user };
+	return {
+		operator: true,
+		note: 'Acknowledgement is permanent and unauthenticated — the name above is the whole record.',
+		by: (typed) => typed
+	};
+}

@@ -12,6 +12,7 @@
 	// live readback) drives the display, and the moment an edit is in flight
 	// the field is marked `pending` so the operator can see their number has
 	// not been confirmed by the controller yet.
+	import { deniedFor } from '../auth.svelte.js';
 	let {
 		tag,
 		label,
@@ -47,7 +48,10 @@
 	} = $props();
 
 	const live = $derived(typeof value === 'number' && Number.isFinite(value) ? value : NaN);
-	const canWrite = $derived(!readonly);
+	// A role that does not hold write on this tag sees it read-only, and why
+	// (#708). A convenience: the controller decides.
+	const denied = $derived(deniedFor('write', tag));
+	const canWrite = $derived(!readonly && !denied);
 
 	let editing = $state(false);
 	let text = $state('');
@@ -82,7 +86,7 @@
 		readonly={!canWrite}
 		disabled={!present}
 		placeholder={present ? '' : '—'}
-		title={canWrite ? '' : readonlyReason}
+		title={canWrite ? '' : readonlyReason || denied}
 		oninput={(e) => {
 			editing = true;
 			text = (e.currentTarget as HTMLInputElement).value;

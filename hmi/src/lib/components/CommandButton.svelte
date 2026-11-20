@@ -9,6 +9,7 @@
 	// Same injected-write contract as `WriteNumber` / `WriteToggle`:
 	// `write(name, value)` resolves to `null` on success or a refusal reason,
 	// which is rendered beside the button rather than swallowed.
+	import { deniedFor } from '../auth.svelte.js';
 	let {
 		tag,
 		label,
@@ -36,11 +37,14 @@
 		write: (name: string, value: boolean) => Promise<string | null>;
 	} = $props();
 
+	// A role that does not hold write on this tag sees the button disabled (#708).
+	const denied = $derived(deniedFor('write', tag));
+	const off = $derived(disabled || !!denied);
 	let error = $state('');
 	let busy = $state(false);
 
 	async function press() {
-		if (disabled || busy) return;
+		if (off || busy) return;
 		busy = true;
 		const reason = await write(tag, true);
 		if (reason) {
@@ -64,9 +68,9 @@
 	type="button"
 	class="cmd {kind}"
 	class:held
-	{disabled}
+	disabled={off}
 	onclick={press}
-	title={disabled ? disabledReason : `Pulse ${tag}`}
+	title={off ? disabledReason || denied : `Pulse ${tag}`}
 >
 	{label}
 </button>

@@ -17,7 +17,8 @@
 	import Button from './Button.svelte';
 	import Icon from './Icon.svelte';
 	import { confirm } from '../confirm.svelte.js';
-	import { getOperator } from '../confirm.js';
+	import { getOperator, recordedAs } from '../confirm.js';
+	import { currentAuth, deniedFor } from '../auth.svelte.js';
 	import { ackLine, worstFirst } from './AckButton.svelte';
 
 	type SortKey = 'priority' | 'activeTime' | 'state' | 'name' | 'ackTime';
@@ -183,20 +184,31 @@
 		selected = next;
 	}
 
+	// What the signed-in role may do with the selection (#708): ack and
+	// shelve by each alarm's tag, ack all on the whole controller. A
+	// convenience: the controller decides.
+	const chosen = $derived(alarms.filter((a) => selected.has(a.id)));
+	const ackDenied = $derived(chosen.map((a) => deniedFor('ack', a.tag)).find((r) => r) ?? '');
+	const shelveDenied = $derived(chosen.map((a) => deniedFor('shelve', a.tag)).find((r) => r) ?? '');
+	const ackAllDenied = $derived(deniedFor('ack'));
+	/** The name a record carries: the signed-in user's, else the typed one. */
+	const recordBy = (typed: string) => recordedAs(currentAuth()?.user).by(typed);
+
 	const unackedCount = $derived(alarms.filter((a) => a.state === 'unack-active' || a.state === 'unack-rtn').length);
 
 	/** Ask before acking, when `confirmAck` is on. Returns the name to record. */
 	async function askAck(subject: AlarmInstance[], title: string): Promise<string | null> {
-		if (!confirmAck) return byField || operator;
+		if (!confirmAck) return recordBy(byField || operator);
+		const rec = recordedAs(currentAuth()?.user);
 		const ok = await confirm({
 			title,
 			items: worstFirst(subject).map(ackLine),
 			confirmLabel: 'Acknowledge',
-			operator: true,
-			note: 'Acknowledgement is permanent and unauthenticated — the name above is the whole record.'
+			operator: rec.operator,
+			note: rec.note
 		});
 		if (!ok) return null;
-		return getOperator() || byField || operator;
+		return rec.by(getOperator() || byField || operator);
 	}
 
 	async function ackSelected() {
@@ -220,7 +232,7 @@
 	}
 	function unshelveSelected() {
 		if (!onunshelve) return;
-		for (const id of selected) onunshelve(id, byField || operator);
+		for (const id of selected) onunshelve(id, recordBy(byField || operator));
 		selected = new Set();
 	}
 
@@ -231,7 +243,7 @@
 	}
 	function confirmShelve() {
 		const until = now + shelveSeconds * 1000;
-		for (const id of selected) onshelve(id, until, byField || operator);
+		for (const id of selected) onshelve(id, until, recordBy(byField || operator));
 		selected = new Set();
 		shelveOpen = false;
 	}
@@ -312,13 +324,13 @@
 
 		<div class="actions">
 			<span class="count">{unackedCount} unack · {sorted.length} shown</span>
-			<Button size="sm" icon="check" disabled={!selected.size} onclick={ackSelected}>
+			<Button size="sm" icon="check" disabled={!selected.size || !!ackDenied} title={ackDenied || undefined} onclick={ackSelected}>
 				Ack ({selected.size})
 			</Button>
-			<Button size="sm" variant="secondary" icon="check-circle" onclick={ackAll}>Ack All</Button>
-			<Button size="sm" icon="clock" disabled={!selected.size} onclick={openShelveModal}>Shelve</Button>
+			<Button size="sm" variant="secondary" icon="check-circle" disabled={!!ackAllDenied} title={ackAllDenied || undefined} onclick={ackAll}>Ack All</Button>
+			<Button size="sm" icon="clock" disabled={!selected.size || !!shelveDenied} title={shelveDenied || undefined} onclick={openShelveModal}>Shelve</Button>
 			{#if onunshelve}
-				<Button size="sm" variant="ghost" icon="arrow-path" disabled={!selected.size} onclick={unshelveSelected}>
+				<Button size="sm" variant="ghost" icon="arrow-path" disabled={!selected.size || !!shelveDenied} title={shelveDenied || undefined} onclick={unshelveSelected}>
 					Unshelve
 				</Button>
 			{/if}
@@ -419,10 +431,14 @@
 				{/each}
 			</select>
 		</label>
-		<label class="field">
-			<span>Acknowledged by</span>
-			<input type="text" bind:value={byField} placeholder="operator name" />
-		</label>
+		{#if currentAuth()?.user}
+			<p class="field">Recorded as {currentAuth()?.user}, the signed-in user.</p>
+		{:else}
+			<label class="field">
+				<span>Acknowledged by</span>
+				<input type="text" bind:value={byField} placeholder="operator name" />
+			</label>
+		{/if}
 	{/snippet}
 	{#snippet footer()}
 		<Button variant="ghost" onclick={() => (shelveOpen = false)}>Cancel</Button>

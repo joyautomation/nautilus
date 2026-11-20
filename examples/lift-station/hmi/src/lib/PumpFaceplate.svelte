@@ -5,7 +5,7 @@
 	// reset. `pump` is the tag prefix, P101 or P102 (motor.ld's instances).
 	// In Auto the level loop (level.fbd, LIC-101) sets the speed; `onloop`
 	// opens the loop's settings.
-	import { StatusPill, Button } from '@joyautomation/nautilus-hmi';
+	import { StatusPill, Button, deniedFor } from '@joyautomation/nautilus-hmi';
 	import SetpointInput from '$lib/SetpointInput.svelte';
 	import { numAt } from '@joyautomation/nautilus-hmi';
 	import { rt, num, bool, has, writeTag, pulseReset } from '$lib/client.svelte';
@@ -31,7 +31,7 @@
 
 <div class="hoa" role="group" aria-label="Hand, off, auto">
 	{#each MODES as m (m.v)}
-		<button class:active={num(`${pump}_Mode`) === m.v} onclick={() => writeTag(`${pump}_Mode`, m.v)}>
+		<button class:active={num(`${pump}_Mode`) === m.v} disabled={!!deniedFor('write', `${pump}_Mode`)} title={deniedFor('write', `${pump}_Mode`) || undefined} onclick={() => writeTag(`${pump}_Mode`, m.v)}>
 			{m.label}
 		</button>
 	{/each}
@@ -55,6 +55,7 @@
 				value={num(`${pump}_HandSpeedHz`)}
 				min={0}
 				max={60}
+				tag={`${pump}_HandSpeedHz`}
 				onsubmit={(v) => writeTag(`${pump}_HandSpeedHz`, v)}
 			/>
 		</div>
@@ -80,7 +81,7 @@
 	<StatusPill kind={bool('DryRunHold') ? 'warning' : 'off'} label="dry-run hold" />
 </div>
 
-<Button size="sm" variant="secondary" onclick={pulseReset}>Reset faults</Button>
+<Button size="sm" variant="secondary" disabled={!!deniedFor('write', 'ResetFaults')} title={deniedFor('write', 'ResetFaults') || undefined} onclick={pulseReset}>Reset faults</Button>
 <p class="note">Reset clears both pumps' latched faults.</p>
 
 <style>
