@@ -217,6 +217,23 @@ is refused rather than changing the tag's type, and a forced tag refuses command
 removed. Every refusal is logged once per tag and counted as
 `commandsRefused` in the node's status.
 
+### Under `auth:`
+
+With an [`auth:` block](/guides/auth/#sparkplug), a command write also needs
+the block's `sparkplug:` grant: `write` on the tag's area. Without the grant,
+every command write is refused (Rebirth still works), and `naut check` and
+`naut run` say so:
+
+```yaml
+auth:
+  sparkplug: operator   # or [{role: operator, areas: [receiving]}]
+```
+
+Every command write, written or refused, then goes to the audit journal as
+`sparkplug:<host>` (the primary host, else the broker's host). That name is
+a label: anyone who can publish to the broker can send a command, so the
+broker's ACLs still decide who can.
+
 ## Primary host and store-and-forward
 
 Set `primary-host` to a SCADA host's id and the node coordinates with that

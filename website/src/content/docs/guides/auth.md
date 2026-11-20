@@ -59,6 +59,8 @@ An area is a set of tag patterns. A grant with `areas:` limits `write`, `ack`, `
 | `token` | `NAUTILUS_TOKEN`, with `token-role` |
 | `token:<name>` | a service token from `service-tokens:`, its secret in `NAUTILUS_TOKEN_<NAME>` |
 | `user:<name>` | a signed-in browser, or that user's personal access token |
+| `opcua-cert:<name>` | an OPC UA client certificate `opcua-certificates:` maps (see [OPC UA](#opc-ua)) |
+| `sparkplug:<host>` | a Sparkplug command, with `sparkplug:`'s grants (see [Sparkplug](#sparkplug)) |
 
 A token is sent as `Authorization: Bearer <token>`. With no credential, a request that needs a permission gets `401`. A principal without the permission gets `403`, and the message names its roles and the permission it lacks.
 
@@ -206,6 +208,26 @@ With `auth:`, an OPC UA client writes only as someone the block names. Both ways
 
 A trusted certificate the block does not map is **read-only**: its client signs in with a user name to write. `opcua.anonymous-writes` can't be used with `auth:` (the load refuses it). Either way, the tag must also be open in `opcua.writable`. Without `auth:`, a trusted certificate writes what `opcua.writable` opens, as before.
 
+## Sparkplug
+
+With `auth:`, a Sparkplug command (NCMD or DCMD) writes a tag only when both say yes:
+
+- `sparkplug.writable` opens the tag, as before;
+- the block's `sparkplug:` grants `write` on the tag's area.
+
+```yaml
+auth:
+  areas:
+    receiving: {tags: ["RCV_*"]}
+  sparkplug: [{role: operator, areas: [receiving]}]   # or simply: sparkplug: operator
+```
+
+**Without `sparkplug:`, or with only roles that can't write (`viewer`), every command write is refused.** `Node Control/Rebirth` is not a write: it always works. `naut check` and `naut run` warn when `sparkplug.writable` opens tags and `sparkplug:` grants no write. To allow writes, add the grant and restart `naut run`.
+
+**Who sent it is not known.** MQTT does not say who published a command: anyone who can publish to the broker can send one. So `sparkplug:` grants every command the same roles, and the journal names each one `sparkplug:<host>`, where `<host>` is `sparkplug.primary-host` when it is set, else the broker's host. That name is a label, not a proof, and each entry says so. Keep the broker's publish rights to the hosts you trust (its ACLs), and keep the grant to the areas a host should write.
+
+Every command write is journalled, written or refused: action `tag.write`, source `sparkplug`, one entry per metric (a template's members each by their path, `Motor1.Speed`), `from` the broker's host and port. A command's entries are written together, with one fsync. A flood of refused commands is coalesced like any other refusals (5 a minute in full, then a summary), with one difference: refusals by the `auth:` block are counted per tag, apart from the write gate's, so a host retrying one closed tag can't hide an `auth:` refusal of another in a summary. Without `auth:`, nothing changes: `sparkplug.writable` alone decides, and nothing is journalled.
+
 ## A redundant pair
 
 - **Copy the users file.** Both controllers need the same `users.json`. Copy it from one box to the other after a change, rather than adding users on each box (each box would salt the passwords differently). The pair's [hello check](/guides/redundancy/) reports a difference.
@@ -230,7 +252,7 @@ A trusted certificate the block does not map is **read-only**: its client signs 
 
 ## Limits
 
-- **Sparkplug writes are not covered yet** (#708). A host that can publish to the broker is not asked for a role.
+- **A Sparkplug command is not authenticated.** Its principal, `sparkplug:<host>`, is a label: anyone who can publish to the broker has `sparkplug:`'s grants (see [Sparkplug](#sparkplug)). The broker's own access control decides who may publish.
 - **OPC UA reads are not gated by `auth:` yet.** Reading, browsing and subscribing stay open to every session, anonymous ones included. OPC UA writes are covered (see [OPC UA](#opc-ua)). `naut run` prints a warning saying so whenever `auth:` is set.
 - **`naut historian`'s own port is not covered.** It answers its archive by `localhost`, an IP address or an allowed name, or with `NAUTILUS_TOKEN`, as before, with no roles. Reads through the controller's `/api/history` need `read`; keep the historian's port off networks that shouldn't read the archive.
 - **A standby answers some reads from its own users file.** `/api/cluster` and `/api/history` are answered by the standby itself, so a token revoked or a user disabled only on the leader can still read them there until the users file is copied to the standby.

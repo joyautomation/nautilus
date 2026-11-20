@@ -72,6 +72,8 @@ type Node struct {
 	devices  []Device
 	tagOwner map[string]string // ir.NameKey(tag) -> device id; use ownerOf
 	writable []string          // WithWritable patterns; empty = every write refused
+	id       Identity          // SetIdentity: the auth: block's policy and the journal (identity.go); under n.mu
+	needID   bool              // WithIdentityRequired: no command write without an Identity
 	flatten  bool              // WithFlattenUDTs: UDT members as plain metrics, no Templates
 
 	// publish classes

@@ -605,6 +605,14 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 		warns++
 		fmt.Printf("%s: warning: %s\n", loc.file, w)
 	}
+	// Under an auth: block a command writes only what auth.sparkplug
+	// allows (#708 PR 8b): sparkplug.writable with no grant opens nothing.
+	if sparkplugGrantMissing(proj) {
+		warns++
+		fmt.Printf("%s: warning: sparkplug.writable opens tags, but the auth: block's sparkplug: grants no write "+
+			"(no grant, or a role without write such as viewer), so every Sparkplug command write is refused; "+
+			"set `sparkplug: operator` (or a role with write, with areas) under auth:\n", loc.file)
+	}
 
 	// opcua.writable against the tags it is meant to open: a pattern that
 	// opens nothing, or only inputs (never writable), is a list that does

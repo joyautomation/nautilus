@@ -48,6 +48,7 @@ import (
 	"github.com/joyautomation/nautilus/retain"
 	"github.com/joyautomation/nautilus/runtime"
 	"github.com/joyautomation/nautilus/server"
+	"github.com/joyautomation/nautilus/sparkplug"
 	"github.com/joyautomation/nautilus/virtdev"
 )
 
@@ -455,15 +456,8 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		fmt.Fprintln(os.Stderr, "naut run:", msg)
 		return 1
 	}
-	sparkplugUp := false
-	if spNode != nil {
-		if err := spNode.Start(ctx); err != nil {
-			fmt.Fprintln(os.Stderr, "sparkplug:", err, "(continuing without it)")
-		} else {
-			defer spNode.Stop()
-			sparkplugUp = true
-		}
-	}
+	// Started once the tag API's server exists (below): under an auth:
+	// block it decides and journals the node's command writes.
 
 	sopts := proj.Server
 	if tok := os.Getenv("NAUTILUS_TOKEN"); tok != "" {
@@ -565,6 +559,23 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		}()
 	}
 	go srv.Run(ctx)
+
+	sparkplugUp := false
+	if spNode != nil {
+		// With an auth: block, a command writes only what auth.sparkplug
+		// allows, and every command write is journalled, source sparkplug
+		// (#708 PR 8b). Without one, nothing changes. Set before Start: the
+		// node refuses every write under auth: until it has it.
+		if id := sparkplugIdentity(proj, srv); id != nil {
+			spNode.SetIdentity(id)
+		}
+		if err := spNode.Start(ctx); err != nil {
+			fmt.Fprintln(os.Stderr, "sparkplug:", err, "(continuing without it)")
+		} else {
+			defer spNode.Stop()
+			sparkplugUp = true
+		}
+	}
 
 	if opc != nil {
 		// With an auth: block, the same users file, sign-in throttle, auth:
@@ -1133,14 +1144,41 @@ func embeddedManifest(fsys fs.FS) string {
 
 // authNotice is what naut run says about the manifest's auth: block, so
 // nobody runs a controller believing a block protects it before it does.
-// It decides every read and write through the HTTP API and every OPC UA
-// write (a user's, or a certificate's it maps, #708 PR 8a). Not covered
-// yet: Sparkplug writes (#708 PR 8b) and OPC UA reads.
+// It decides every read and write through the HTTP API, every OPC UA
+// write (a user's, or a certificate's it maps, #708 PR 8a) and every
+// Sparkplug command write (#708 PR 8b). Not covered yet: OPC UA reads.
+// A project whose sparkplug.writable opens tags while the block grants
+// Sparkplug nothing is told that every command write is now refused, and
+// how to allow them.
 func authNotice(proj *project.Project) string {
 	if proj.Auth == nil {
 		return ""
 	}
-	return authSurfacesNotice
+	msg := authSurfacesNotice
+	if sparkplugGrantMissing(proj) {
+		msg += authSparkplugNotice
+	}
+	return msg
+}
+
+// sparkplugGrantMissing reports a project whose sparkplug.writable opens
+// tags while its auth: block grants Sparkplug commands no write anywhere
+// (no auth.sparkplug, or only roles without write, such as viewer): every
+// command write is refused (#708 PR 8b), which a project that had writes
+// before its auth: block (or before 8b) should be told.
+func sparkplugGrantMissing(proj *project.Project) bool {
+	return proj.Auth != nil && len(proj.SparkplugWritable()) > 0 && !proj.Auth.Holds(auth.Sparkplug(""), auth.Write)
+}
+
+// sparkplugIdentity is what naut run hands its Sparkplug node (#708 PR
+// 8b): the tag API's auth: block and journal, when the manifest has an
+// auth: block; nil without one, so a project without auth: runs its node
+// exactly as before (the write gate alone, no journal entries).
+func sparkplugIdentity(proj *project.Project, srv *server.Server) sparkplug.Identity {
+	if proj.Auth == nil {
+		return nil
+	}
+	return srv.Surface(audit.SourceSparkplug)
 }
 
 // opcuaIdentity is what naut run hands its OPC UA server (#708 PR 8a):
@@ -1160,8 +1198,12 @@ func opcuaIdentity(proj *project.Project, srv *server.Server) opcuaserver.Identi
 const authFacadeNotice = "auth: this serve has no browser sign-in: every request needs a token (Authorization: Bearer …),\n" +
 	"      reads included, unless the auth: block sets anonymous: viewer.\n"
 
-const authSurfacesNotice = "auth: WARNING: Sparkplug writes are NOT covered by the auth: block yet (#708), and OPC UA reads are not gated by it:\n" +
-	"      a client that reaches them is not asked for a role.\n"
+const authSurfacesNotice = "auth: OPC UA reads are not gated by the auth: block yet (#708): a client that reaches the OPC UA server reads without a role.\n"
+
+// authSparkplugNotice is the line for a project whose sparkplug.writable
+// opens tags while its auth: block grants Sparkplug commands nothing.
+const authSparkplugNotice = "auth: sparkplug.writable opens tags, but the auth: block's sparkplug: grants no write (no grant, or a role without write such as viewer),\n" +
+	"      so every Sparkplug command write is refused. To allow them, set `sparkplug: operator` (or a role with write, with areas) under auth:, then restart naut run.\n"
 
 // openUsers opens the controller's users file when its auth: block grants
 // a user a role (nil, nil otherwise: no state directory is needed, so a

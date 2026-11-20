@@ -261,8 +261,12 @@ func commandDevice(topic string) string {
 }
 
 // refuseCommand counts a refused write and logs it once per tag and reason,
-// so a host retrying every scan does not flood the log.
-func (n *Node) refuseCommand(reason, tag string, args ...any) {
+// so a host retrying every scan does not flood the log; under an auth:
+// block it is journalled in j (the recorder coalesces a flood there).
+func (n *Node) refuseCommand(j *cmdJournal, reason, tag string, args ...any) {
+	if j != nil {
+		j.refused(n.canonicalPath(tag), reason)
+	}
 	n.mu.Lock()
 	n.cmdRefused++
 	n.mu.Unlock()
