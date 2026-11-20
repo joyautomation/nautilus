@@ -451,3 +451,23 @@ func TestSpoofedCloneBootsWithItsOriginal(t *testing.T) {
 	}
 	pairWait(t, "a real controller to lead", 10*time.Second, func() bool { return r.el("a").IsLeader() || r.el("b").IsLeader() })
 }
+
+// A MAC-spoofed clone of the healthy leader, every link up: the leader
+// keeps its lease the whole time (its running promises still renew), and
+// the clone never leads: a clone costs redundancy, never a takeover of a
+// healthy leader (#1029 step 1).
+func TestSpoofedCloneOfAHealthyLeaderCostsNoTakeover(t *testing.T) {
+	r := newBoxRig(t)
+	c := r.cloneDisk("a", "box-a")
+	els := map[string]*node.Elector{"a": r.el("a"), "b": r.el("b"), "clone": c}
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		if !r.el("a").IsLeader() {
+			t.Fatal("A lost its lease to a clone beside it, with every link up")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if led := watchOneLeader(t, 2*time.Second, els); led["clone"] || led["b"] {
+		t.Fatalf("the lease moved: %v", led)
+	}
+}
