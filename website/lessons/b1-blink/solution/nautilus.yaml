@@ -1,0 +1,11 @@
+name: blink
+
+tasks:
+  - program: program.st
+    scan: 100ms
+
+tags:
+  - { name: Lamp, role: output, type: BOOL, init: false, desc: The lamp the program blinks }
+
+driver:
+  type: memory

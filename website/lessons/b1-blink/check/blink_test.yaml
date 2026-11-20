@@ -1,0 +1,51 @@
+# Check for "First program: blink an output".
+#
+# What the lesson accepts: a lamp that is off for the first 0.4 s, then
+# alternates on and off, each state lasting at least 0.4 s and starting
+# within a second of the one before. That covers every correct way to write
+# it: a counter of 5 scans (exactly 0.5 s per half), a TON that restarts
+# itself (about 0.6 to 0.7 s: it takes a scan or two to notice it finished),
+# two TONs, 9 scans, and so on. It rejects a lamp that never changes, one
+# that changes every scan or every 0.25 s, and one that stops after a cycle.
+#
+# So no assertion here is "at time T the lamp is X": that would fail a
+# correct program whose half-period is a little different from ours. Each
+# step waits (until) for a state and requires it to hold (hold).
+tests:
+  - name: the lamp stays off for the first 0.4 s
+    steps:
+      - advance: 0.4s
+        expect: { Lamp: false }
+
+  - name: the lamp comes on within a second, and stays on for at least 0.4 s
+    steps:
+      - advance: 0.4s
+      - until: 1s
+        hold: 0.4s
+        expect: { Lamp: true }
+
+  - name: then it goes off again within a second, and stays off for at least 0.4 s
+    steps:
+      - advance: 0.4s
+      - until: 1s
+        hold: 0.4s
+        expect: { Lamp: true }
+      - until: 1s
+        hold: 0.4s
+        expect: { Lamp: false }
+
+  - name: it keeps blinking, on and off and on and off again, not just once
+    steps:
+      - advance: 0.4s
+      - until: 1s
+        hold: 0.4s
+        expect: { Lamp: true }
+      - until: 1s
+        hold: 0.4s
+        expect: { Lamp: false }
+      - until: 1s
+        hold: 0.4s
+        expect: { Lamp: true }
+      - until: 1s
+        hold: 0.4s
+        expect: { Lamp: false }

@@ -1,0 +1,3 @@
+PROGRAM Blink
+Lamp := NOT Lamp;
+END_PROGRAM
