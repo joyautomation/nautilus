@@ -331,7 +331,7 @@ namespace Tiad
                     }
                     catch (Exception e)
                     {
-                        Log.Line("upload: reading the CPU's identity failed: {0}", e.Message);
+                        Log.Line("upload: reading the CPU's identity failed: {0}", Json.Quote(e.Message));
                         read = null;
                     }
                     return tr;
