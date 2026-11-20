@@ -567,3 +567,25 @@ func TestExactEditChecks(t *testing.T) {
 func fstestMap(manifest string) fstest.MapFS {
 	return fstest.MapFS{"nautilus.yaml": {Data: []byte(manifest)}, "main.st": {Data: []byte("PROGRAM Main\nEND_PROGRAM\n")}}
 }
+
+// A mixed-case --as name is taken as its lower case, as user names are:
+// the mapping is written and checked under that name, so the exact check
+// (which compares the policy's lower-cased name) passes, and the
+// certificate writes as opcua-cert:scada (naut-lead on #1112).
+func TestOPCUATrustAsMixedCaseName(t *testing.T) {
+	dir, tps := opcuaTrustProject(t, "auth:\n  users: {}\n")
+	code, out, errs := nautTrust(tps[0], "--as", "SCADA-Main:operator")
+	if code != 0 || !strings.Contains(out, "auth.opcua-certificates.scada-main") {
+		t.Fatalf("%d\n%s%s", code, out, errs)
+	}
+	m, err := project.ReadManifest(os.DirFS(dir), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, ok := m.AuthPolicy().OPCUACertFor(tps[0], ""); !ok || n != "scada-main" {
+		t.Errorf("mapped as %q %v", n, ok)
+	}
+	if !trustedHas(t, dir, tps[0]) {
+		t.Error("not trusted")
+	}
+}
