@@ -699,10 +699,23 @@ func TestAgentForgetsACompileWhenAChangeFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	notDownloadable("after a failed apply, compiled", "no station spec")
-	if _, err := s.ApplyStation(ctx, tiadtest.BenchStation(), tiadtest.BenchSecrets); err != nil {
+	// tiad never reuses a CPU an apply left part-way, and never saves
+	// it: the session only closes, unsaved (#789).
+	if _, err := s.ApplyStation(ctx, tiadtest.BenchStation(), tiadtest.BenchSecrets); tiad.Kind(err) != tiad.KindUncleanSession ||
+		!strings.Contains(err.Error(), "close this session without saving") {
+		t.Fatalf("an apply after a failed one: %v", err)
+	}
+	if _, err := s.Save(ctx, false); tiad.Kind(err) != tiad.KindUncleanSession {
+		t.Fatalf("a save after a failed apply: %v", err)
+	}
+	if err := s.Close(ctx); err != nil {
 		t.Fatal(err)
 	}
-	notDownloadable("after a station change", "compile")
+	s, err := p.Client().CreateProject(ctx, "bench", tiadtest.BenchStation(), tiadtest.BenchSecrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	notDownloadable("a new project", "compile")
 	if _, err := s.Compile(ctx, true, true); err != nil {
 		t.Fatal(err)
 	}
@@ -782,6 +795,14 @@ func TestAgentTrustsACertificateOnlyOnTheUploadsOptIn(t *testing.T) {
 	if tiad.Kind(err) != tiad.KindOperationFailed || !strings.Contains(err.Error(), "trust the TLS certificate of PLC_1") || !strings.Contains(err.Error(), "tiad trusts no CPU certificate") {
 		t.Fatalf("an upload a CPU asks TLS trust for, no opt-in: %v, want operation_failed naming the question", err)
 	}
+	// A failed upload leaves the project part-way: no apply, no save,
+	// until an upload goes through (#789).
+	if _, err := s.ApplyStation(ctx, tiadtest.BenchStation(), tiadtest.BenchSecrets); tiad.Kind(err) != tiad.KindUncleanSession {
+		t.Fatalf("an apply after a failed upload: %v", err)
+	}
+	if _, err := s.Save(ctx, false); tiad.Kind(err) != tiad.KindUncleanSession {
+		t.Fatalf("a save after a failed upload: %v", err)
+	}
 	r, err := s.UploadWith(ctx, tiad.UploadRequest{TrustUnverifiedCertificate: true})
 	if err != nil || len(r.TrustedBlindly) != 1 || !strings.Contains(r.TrustedBlindly[0], "trust the TLS certificate of PLC_1") {
 		t.Fatalf("an upload with the opt-in: %+v %v, want the question trusted blindly", r, err)
@@ -791,5 +812,28 @@ func TestAgentTrustsACertificateOnlyOnTheUploadsOptIn(t *testing.T) {
 		if !strings.Contains(line, want) {
 			t.Errorf("the audit line lacks %s:\n%s", want, line)
 		}
+	}
+	// The upload that went through cleans the session.
+	if _, err := s.Save(ctx, false); err != nil {
+		t.Fatalf("a save after an upload went through: %v", err)
+	}
+	// Its CPU, named, is kept with its IO device, and the download's
+	// audit line journals the device.
+	st := tiadtest.BenchStation()
+	st.Profinet = nil
+	st.CPU.ConfigurationProtection = tiad.ProtectKeep
+	if _, err := s.ApplyStation(ctx, st, tiadtest.BenchSecrets); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Compile(ctx, true, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Download(ctx, tiad.DownloadRequest{Address: "192.0.2.10", Hardware: true, Software: true, Announced: true,
+		Decisions: tiad.Decisions{StartAfter: tiad.No()}}); err != nil {
+		t.Fatal(err)
+	}
+	line = waitLog(t, p, "audit download")
+	if want := `kept=["io-device-up" profinetName="io-device-up" address="192.0.2.30"]`; !strings.Contains(line, want) {
+		t.Errorf("the download's audit line lacks %s:\n%s", want, line)
 	}
 }

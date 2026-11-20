@@ -160,10 +160,9 @@ func contractProtected(t *testing.T, start Starter) {
 
 // contractProtectionModes: keep never sets up a new CPU, none turns
 // protection off only with its password, and an upload followed by an
-// apply makes the CPU anew, so keep refuses there too. So does any apply
-// after a failed one: the session no longer holds a spec, and the CPU is
-// made anew (#789: the CPU is kept in the next change). Each refusal
-// below therefore gets a session of its own.
+// apply keeps the uploaded CPU and its setting (#789), so keep keeps it.
+// A refusal before any write leaves the session as it was; a wrong
+// password fails part-way, and that session then only closes, unsaved.
 func contractProtectionModes(t *testing.T, start Starter) {
 	a := start(t, Config{Targets: []string{benchCPU}})
 	c := a.Client()
@@ -185,14 +184,30 @@ func contractProtectionModes(t *testing.T, start Starter) {
 		return s
 	}
 	none := protectedStation(tiad.ProtectNone)
-	if _, err := protected("nopw").ApplyStation(ctx, none, BenchSecrets); tiad.Kind(err) != tiad.KindBadRequest ||
+	nopw := protected("nopw")
+	if _, err := nopw.ApplyStation(ctx, none, BenchSecrets); tiad.Kind(err) != tiad.KindBadRequest ||
 		!strings.Contains(err.Error(), "turning that off needs it in secrets.configurationPassword") {
 		t.Fatalf("none on a protected CPU without its password: %v", err)
 	}
+	// Refused before any write: the session is as it was.
+	if _, err := nopw.Compile(ctx, true, true); err != nil {
+		t.Fatalf("compile after a refusal before any write: %v", err)
+	}
+	if _, err := nopw.Save(ctx, false); err != nil {
+		t.Fatalf("save after a refusal before any write: %v", err)
+	}
 	wrong := BenchSecrets
 	wrong.ConfigurationPassword = "Wrong-pass-2026"
-	if _, err := protected("wrong").ApplyStation(ctx, none, wrong); err == nil {
+	w := protected("wrong")
+	if _, err := w.ApplyStation(ctx, none, wrong); err == nil {
 		t.Fatal("none with the wrong password went through")
+	}
+	// Failed part-way: never reused, never saved.
+	if _, err := w.ApplyStation(ctx, none, sec); tiad.Kind(err) != tiad.KindUncleanSession {
+		t.Fatalf("an apply after a failed one: %v", err)
+	}
+	if _, err := w.Save(ctx, false); tiad.Kind(err) != tiad.KindUncleanSession {
+		t.Fatalf("a save after a failed apply: %v", err)
 	}
 	s := protected("modes")
 	if r, err := s.ApplyStation(ctx, none, sec); err != nil || len(r.Changes) == 0 {
@@ -209,22 +224,22 @@ func contractProtectionModes(t *testing.T, start Starter) {
 		t.Fatalf("compile after keep: %v", err)
 	}
 
+	// An upload brings the CPU's own setting (None, as the S2a upload
+	// found), and an apply naming that CPU keeps it.
 	if err := s.Upload(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.ApplyStation(ctx, protectedStation(tiad.ProtectKeep), BenchSecrets); tiad.Kind(err) != tiad.KindBadRequest ||
-		!strings.Contains(err.Error(), "keep has nothing to keep") {
-		t.Fatalf("keep after an upload (the CPU is made anew): %v", err)
+	if _, err := s.ApplyStation(ctx, protectedStation(tiad.ProtectKeep), BenchSecrets); err != nil {
+		t.Fatalf("keep after an upload: %v", err)
 	}
-	// That new CPU is TIA's unconfigured default, which never compiles.
-	if _, err := s.Compile(ctx, true, true); tiad.Kind(err) != tiad.KindCompileFailed || !strings.Contains(err.Error(), "1 errors") {
-		t.Fatalf("compile of an unconfigured CPU: %v", err)
+	if _, err := s.Compile(ctx, true, true); err != nil {
+		t.Fatalf("the uploaded CPU, kept, compiles: %v", err)
 	}
-	if _, err := s.Compile(ctx, false, true); err != nil {
-		t.Fatalf("a software-only compile does not touch the hardware: %v", err)
+	if _, err := s.ApplyStation(ctx, protectedStation(tiad.ProtectPassword), sec); err != nil {
+		t.Fatalf("password on the uploaded CPU: %v", err)
 	}
-	if _, err := s.ApplyStation(ctx, none, BenchSecrets); err != nil {
-		t.Fatalf("none after an upload: %v", err)
+	if _, err := s.ApplyStation(ctx, none, sec); err != nil {
+		t.Fatalf("none with its password on the uploaded CPU: %v", err)
 	}
 	if _, err := s.Compile(ctx, true, true); err != nil {
 		t.Fatalf("compile after none: %v", err)

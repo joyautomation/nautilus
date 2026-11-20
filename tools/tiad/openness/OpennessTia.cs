@@ -461,26 +461,31 @@ namespace Tiad.Openness
             for (int i = 0; i < nameValues.Length; i += 2) o.SetAttribute((string)nameValues[i], nameValues[i + 1]);
         }
 
-        // ApplyStation places the CPU and sets its PROFINET interface:
+        // ApplyStation places the CPU, or keeps the project's (the agent
+        // decided which, CpuReuse.Decide), and sets its PROFINET interface:
         // address, subnet mask, router, PROFINET name (generated names
         // off). Everything else in a spec waits for what S2a learns.
-        public List<string> ApplyStation(object project, Station previous, Station next, Secrets secrets, List<string> notes)
+        public void ApplyStation(object project, Station next, string decision, Secrets secrets, List<string> notes)
         {
             if (next.Modules.Count > 0) throw new TiaException("tiad cannot place rack modules yet: the first TIA start (S2a) learns the rack");
             if (next.Profinet != null) throw new TiaException("tiad cannot configure a PROFINET IO system yet: the IO-device attribute names are learned at the first TIA start (S2a)");
             if (next.WebServer != null && next.WebServer.Enabled) throw new TiaException("tiad cannot configure the web server yet: its attribute names are learned at the first TIA start (S2a)");
-            return Tia(delegate
+            Tia(delegate
             {
                 Project p = Of(project).Project;
-                HwDevice station = StationOf(p);
-                bool same = station != null && previous != null && previous.Cpu.Order == next.Cpu.Order &&
-                    previous.Cpu.Firmware == next.Cpu.Firmware && previous.Cpu.Name == next.Cpu.Name;
-                if (!same)
+                HwDevice station;
+                if (decision == CpuReuse.Reuse)
+                {
+                    station = StationOf(p);
+                    if (station == null) throw new TiaException("the project's CPU went missing between the agent's read and the apply");
+                }
+                else
                 {
                     foreach (HwDevice d in new List<HwDevice>(p.Devices)) d.Delete();
                     station = p.Devices.CreateWithItem(TiaNames.TypeIdentifier(next.Cpu.Order, next.Cpu.Firmware), next.Cpu.Name, next.Cpu.Name + " station");
                 }
-                Node node = CpuNode(CpuOf(station));
+                DeviceItem cpu = CpuOf(station);
+                Node node = CpuNode(cpu);
                 bool router = next.Cpu.Router != "";
                 Set("Node", node,
                     "Address", next.Cpu.Address,
@@ -490,65 +495,43 @@ namespace Tiad.Openness
                 Set("Node", node,
                     "PnDeviceNameAutoGeneration", false,
                     "PnDeviceName", next.Cpu.ProfinetName);
-                Protect(station, CpuOf(station), next.Cpu.ConfigurationProtection, secrets, notes);
-                return Station.Changes(same ? previous : null, next);
+                ProtectionSteps.Run(new MasterSecret(station, cpu), next.Cpu.ConfigurationProtection, secrets.ConfigurationPassword, notes);
+                return true;
             });
         }
 
-        // Protect applies cpu.configurationProtection from the CPU's state
-        // as the project holds it now (ConfigProtection decides), then
-        // reads it back: anything but the promised state refuses.
-        static void Protect(HwDevice station, DeviceItem cpu, string want, Secrets secrets, List<string> notes)
+        // MasterSecret is TIA's PlcMasterSecretConfigurator for
+        // ProtectionSteps, with the SecureStrings made here.
+        sealed class MasterSecret : IProtectionConfigurator
         {
-            PlcMasterSecretConfigurator c = cpu.GetService<PlcMasterSecretConfigurator>();
-            string current = c == null ? ConfigProtection.Absent : c.MasterSecretConfiguration.ToString();
-            string action = ConfigProtection.Plan(current, want, secrets.ConfigurationPassword != "");
-            string note = ConfigProtection.Note(current, want);
-            if (note != null) notes.Add(note);
-            if (action == ConfigProtection.Nothing) return;
-            if (action == ConfigProtection.ProtectThenUnprotect)
+            readonly HwDevice station;
+            readonly PlcMasterSecretConfigurator c;
+
+            public MasterSecret(HwDevice station, DeviceItem cpu)
             {
-                // Once the throwaway Protect is called, any failure could
-                // leave the CPU under a password nobody holds: remove it.
-                try
-                {
-                    using (var ss = Secure(ConfigProtection.Throwaway()))
-                    {
-                        c.Protect(ss);
-                        string mid = ConfigProtection.Check(ConfigProtection.Protect, c.MasterSecretConfiguration.ToString());
-                        if (mid != null) throw new TiaException(mid);
-                        c.Unprotect(ss);
-                    }
-                    string end = ConfigProtection.Check(action, c.MasterSecretConfiguration.ToString());
-                    if (end != null) throw new TiaException(end);
-                }
-                catch (Exception e)
-                {
-                    string removeFailed = null;
-                    try
-                    {
-                        station.Delete();
-                    }
-                    catch (Exception d)
-                    {
-                        removeFailed = Message(d);
-                    }
-                    throw new TiaException(ConfigProtection.Stranded(Message(e), removeFailed));
-                }
-                Log.Line("configuration protection: {0}, now {1}", action, c.MasterSecretConfiguration);
-                return;
+                this.station = station;
+                c = cpu.GetService<PlcMasterSecretConfigurator>();
             }
-            else
+
+            public string State()
             {
-                using (var ss = Secure(secrets.ConfigurationPassword))
-                {
-                    if (action == ConfigProtection.Protect) c.Protect(ss);
-                    else c.Unprotect(ss);
-                }
+                return c == null ? ConfigProtection.Absent : c.MasterSecretConfiguration.ToString();
             }
-            string bad = ConfigProtection.Check(action, c.MasterSecretConfiguration.ToString());
-            if (bad != null) throw new TiaException(bad);
-            Log.Line("configuration protection: {0}, now {1}", action, c.MasterSecretConfiguration);
+
+            public void Protect(string password)
+            {
+                using (var ss = Secure(password)) c.Protect(ss);
+            }
+
+            public void Unprotect(string password)
+            {
+                using (var ss = Secure(password)) c.Unprotect(ss);
+            }
+
+            public void RemoveCpu()
+            {
+                station.Delete();
+            }
         }
 
         static SecureString Secure(string s)
@@ -980,21 +963,63 @@ namespace Tiad.Openness
         // AML export have none), so those are not read.
         public DeviceIdentity ProjectCpu(object project)
         {
+            ProjectCpu pc = ReadCpu(project);
+            if (pc == null) throw new TiaException("the project has no CPU");
+            return new DeviceIdentity { Order = pc.Order, Firmware = pc.Firmware };
+        }
+
+        // ReadCpu reads the project's CPU: the CPU device item's name,
+        // order number and firmware (after an upload, what the CPU
+        // reported), its configuration protection, and the project's other
+        // devices. The project holds no serial number or MAC (S2a's upload
+        // and its AML export have none).
+        public ProjectCpu ReadCpu(object project)
+        {
             return Tia(delegate
             {
                 Project p = Of(project).Project;
                 HwDevice d = StationOf(p);
-                if (d == null) throw new TiaException("the project has no CPU");
+                if (d == null) return (ProjectCpu)null;
                 DeviceItem cpu = CpuOf(d);
                 List<string> names = Attributes("DeviceItem", cpu);
                 TiaNames.CheckAttribute("the CPU " + cpu.Name, names, "OrderNumber");
                 TiaNames.CheckAttribute("the CPU " + cpu.Name, names, "FirmwareVersion");
-                return new DeviceIdentity
+                var pc = new ProjectCpu
                 {
+                    Name = cpu.Name ?? "",
                     Order = Convert.ToString(cpu.GetAttribute("OrderNumber"), System.Globalization.CultureInfo.InvariantCulture) ?? "",
                     Firmware = Convert.ToString(cpu.GetAttribute("FirmwareVersion"), System.Globalization.CultureInfo.InvariantCulture) ?? "",
+                    Protection = new MasterSecret(d, cpu).State(),
                 };
+                // The project's devices and its ungrouped ones (where TIA
+                // puts IO devices), each once.
+                var seen = new HashSet<HwDevice> { d };
+                var all = new List<HwDevice>();
+                foreach (HwDevice o in p.Devices) all.Add(o);
+                foreach (HwDevice o in p.UngroupedDevicesGroup.Devices) all.Add(o);
+                foreach (HwDevice o in all)
+                {
+                    if (seen.Add(o)) pc.Others.Add(Kept(o));
+                }
+                return pc;
             });
+        }
+
+        // Kept describes a device besides the CPU's station by its name and
+        // its first node's address and PROFINET name.
+        static KeptDevice Kept(HwDevice d)
+        {
+            var k = new KeptDevice { Name = d.Name ?? "" };
+            foreach (DeviceItem i in Items(d.DeviceItems))
+            {
+                NetworkInterface ni = i.GetService<NetworkInterface>();
+                if (ni == null || ni.Nodes.Count == 0) continue;
+                Node n = ni.Nodes[0];
+                k.Address = Convert.ToString(n.GetAttribute("Address"), System.Globalization.CultureInfo.InvariantCulture) ?? "";
+                k.ProfinetName = Convert.ToString(n.GetAttribute("PnDeviceName"), System.Globalization.CultureInfo.InvariantCulture) ?? "";
+                break;
+            }
+            return k;
         }
 
         // Identify cannot read a CPU's identity online yet: no Openness

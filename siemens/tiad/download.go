@@ -1,6 +1,8 @@
 package tiad
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -72,6 +74,26 @@ type DownloadResult struct {
 	Provisional bool       `json:"provisional,omitempty"`
 	Questions   []Question `json:"questions"`
 	State       string     `json:"state,omitempty"` // "RUN" | "STOP" | "" (unknown)
+	// KeptDevices are the devices the last apply kept as found: the
+	// download loads them too. A decision_required or declined error
+	// lists them as well (KeptDevicesOf), before anything is loaded.
+	KeptDevices []KeptDevice `json:"keptDevices"`
+}
+
+// KeptDevicesOf returns the kept devices a decision_required or declined
+// download error lists.
+func KeptDevicesOf(err error) []KeptDevice {
+	var e *Error
+	if !errors.As(err, &e) || len(e.Data) == 0 {
+		return nil
+	}
+	var d struct {
+		KeptDevices []KeptDevice `json:"keptDevices"`
+	}
+	if json.Unmarshal(e.Data, &d) != nil {
+		return nil
+	}
+	return d.KeptDevices
 }
 
 // Validate checks the request's own shape.

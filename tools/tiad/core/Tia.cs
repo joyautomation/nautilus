@@ -149,11 +149,13 @@ namespace Tiad
 
         void CloseProject(object project);
 
-        // ApplyStation makes the project's hardware match next, removing
-        // what next lacks, and says what changed. previous is the station
-        // this session last applied, or null. notes gets what the caller
-        // should know besides the changes (ConfigProtection.Note).
-        List<string> ApplyStation(object project, Station previous, Station next, Secrets secrets, List<string> notes);
+        // ApplyStation makes the project's CPU match next, as the agent
+        // decided (CpuReuse.Decide): Create removes every device and makes
+        // the CPU anew; Reuse keeps the project's CPU and the devices
+        // besides it, as found. Either way it then applies next's CPU
+        // settings and cpu.configurationProtection (ProtectionSteps.Run).
+        // notes gets what the caller should know besides the changes.
+        void ApplyStation(object project, Station next, string decision, Secrets secrets, List<string> notes);
 
         // ImportSoftware generates blocks from sources into group; with
         // prune, it deletes blocks in group that no source produced.
@@ -190,6 +192,12 @@ namespace Tiad
         // holds it: after an upload, what the CPU reported. Serial and Mac
         // are null when the project does not hold them.
         DeviceIdentity ProjectCpu(object project);
+
+        // ReadCpu is the project's CPU as the project holds it (after an
+        // upload, what the CPU reported): its name, order, firmware and
+        // configuration protection, with the project's other devices; or
+        // null when the project holds no CPU.
+        ProjectCpu ReadCpu(object project);
 
         // Identify reads the identity of the CPU at address online, or
         // returns null when this TIA side cannot: tiad.Openness, until an

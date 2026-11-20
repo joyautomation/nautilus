@@ -154,7 +154,7 @@ namespace Tiad
         public static string Stranded(string why, string removeFailed)
         {
             string head = "turning the configuration protection off failed part-way (" + why + "), which could leave the CPU protected by a throwaway password nobody holds";
-            if (removeFailed == null) return head + ", so tiad removed the CPU from the project: apply the spec again to make it anew";
+            if (removeFailed == null) return head + ", so tiad removed the CPU from the project: close this session without saving";
             return head + ", and removing the CPU from the project failed too (" + removeFailed + "): close this session without saving";
         }
 

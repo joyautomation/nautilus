@@ -9,7 +9,7 @@ using System.Collections.Generic;
 
 namespace Tiad.Test
 {
-    static class Program
+    static partial class Program
     {
         static int failed, passed;
         static string current = "";
@@ -76,6 +76,15 @@ namespace Tiad.Test
                 T("PasswordsNeverCross", PasswordsNeverCross),
                 T("ProtectionPlan", ProtectionPlan),
                 T("ProtectionReadBack", ProtectionReadBack),
+                T("ReuseDecides", ReuseDecides),
+                T("ReuseRefusesAMismatch", ReuseRefusesAMismatch),
+                T("ReuseNeverAfterAFailure", ReuseNeverAfterAFailure),
+                T("ReuseFirmwareIsExact", ReuseFirmwareIsExact),
+                T("KeptDevicesCollide", KeptDevicesCollide),
+                T("KeptNoteAndChanges", KeptNoteAndChanges),
+                T("ProtectionStepsHappyPaths", ProtectionStepsHappyPaths),
+                T("ProtectionStepsStranded", ProtectionStepsStranded),
+                T("ProtectionStepsReadBack", ProtectionStepsReadBack),
                 T("DecideOnceAtTheFirstCallback", DecideOnceAtTheFirstCallback),
                 T("DecideAsksStartAfterBeforeLoading", DecideAsksStartAfterBeforeLoading),
                 T("NoSyntheticStartAfterWhenAsked", NoSyntheticStartAfterWhenAsked),
@@ -373,7 +382,7 @@ namespace Tiad.Test
             Eq(StationRules.CheckTiaPassword(a), null, "a throwaway meets TIA's rules");
             True(a != b, "each throwaway is new");
             Eq(a.Length, 35, "a throwaway carries 16 random bytes");
-            Contains(ConfigProtection.Stranded("TIA said no", null), "tiad removed the CPU from the project: apply the spec again to make it anew", "stranded, removed");
+            Contains(ConfigProtection.Stranded("TIA said no", null), "tiad removed the CPU from the project: close this session without saving", "stranded, removed");
             Contains(ConfigProtection.Stranded("TIA said no", "locked"), "removing the CPU from the project failed too (locked): close this session without saving", "stranded, not removed");
             Contains(ConfigProtection.Stranded("TIA said no", null), "a throwaway password nobody holds", "stranded names the risk");
             Contains(ConfigProtection.Note(ConfigProtection.WithPassword, StationRules.ProtectPassword), "apply none with the old password, then password with the new one", "a kept password names how to change it");

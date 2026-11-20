@@ -282,7 +282,7 @@ namespace Tiad
                     object h = t.CreateProject(full, name);
                     try
                     {
-                        t.ApplyStation(h, null, st, sec, new List<string>());
+                        t.ApplyStation(h, st, CpuReuse.Create, sec, new List<string>());
                     }
                     catch
                     {
@@ -376,14 +376,31 @@ namespace Tiad
                 // is neither compiled nor described by any spec, so a
                 // failure part-way leaves nothing downloadable.
                 var notes = new List<string>();
+                var kept = new List<KeptDevice>();
                 List<string> changes = OnSession(s, delegate(ITia t)
                 {
+                    // Decided from the CPU the project holds, before any
+                    // write: a refusal here leaves the session as it was.
+                    ProjectCpu pc = s.Unclean ? null : t.ReadCpu(s.Handle);
+                    string decision = CpuReuse.Decide(pc, st.Cpu, s.Unclean);
+                    if (decision == CpuReuse.Reuse)
+                    {
+                        CpuReuse.Collides(pc, st);
+                        ConfigProtection.Plan(pc.Protection, st.Cpu.ConfigurationProtection, sec.ConfigurationPassword != "");
+                        kept = pc.Others;
+                    }
                     bool was = s.Compiled;
                     Station prev = s.Station;
                     s.Compiled = false;
                     s.Station = null;
-                    List<string> ch = t.ApplyStation(s.Handle, prev, st, sec, notes);
+                    s.Unclean = true;
+                    t.ApplyStation(s.Handle, st, decision, sec, notes);
+                    s.Unclean = false;
+                    string kn = CpuReuse.KeptNote(kept);
+                    if (kn != null) notes.Add(kn);
+                    List<string> ch = CpuReuse.Changes(decision, prev, st);
                     s.Station = st;
+                    s.Kept = kept;
                     s.Address = st.Cpu.Address;
                     if (ch.Count == 0) s.Compiled = was;
                     return ch;
@@ -391,6 +408,7 @@ namespace Tiad
                 var o = new Obj();
                 o["changes"] = changes.ToArray();
                 if (notes.Count > 0) o["notes"] = notes.ToArray();
+                if (kept.Count > 0) o["keptDevices"] = KeptDevice.ToJson(kept);
                 return o;
             });
         }

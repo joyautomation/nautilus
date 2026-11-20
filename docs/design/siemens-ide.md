@@ -242,6 +242,8 @@ the session is gone.
 | `operation_failed` | 500 | Openness threw (the message carries its text), or a device pin file is unreadable (§3.8) |
 | `device_changed` | 409 | The CPU's identity differs from its device pin (§3.8). The message names both; nothing was loaded and the pin stands |
 | `device_unverified` | 409 | The CPU has a device pin, but its identity could not be read, so the pin could not be checked (§3.8) |
+| `cpu_mismatch` | 409 | An apply's spec does not name the project's CPU (name, order, firmware), or a device of the spec's shares a name or an address with one the project keeps (§3.3). `data.cpu` is the project's CPU; nothing was changed |
+| `unclean_session` | 409 | An apply or an upload failed part-way on this session, so its project matches no spec: a later apply or save refuses. Close the session without saving (§3.3) |
 | `outcome_unknown` | 500 | A download may have loaded the CPU, or not: TIA failed once the download was decided, or TIA's side broke the decide contract. Not fatal: compare on the same session before anything else. The client's `OutcomeUnknown` covers this and `unreachable` |
 
 ### 3.3 The station spec
@@ -314,8 +316,9 @@ The rules for applying a spec:
     throwaway password (16 random bytes, never logged or kept) and
     `Unprotect` with it, two proven steps. If anything fails after that
     `Protect`, tiad removes the CPU from the project, so no CPU is left
-    protected by a password nobody holds, and the error says to apply the
-    spec again.
+    protected by a password nobody holds, and the error says to close the
+    session without saving (the apply failed part-way, see "Which CPU an
+    apply uses").
   - `keep`: tiad changes nothing, for an adopted station. A CPU whose
     protection is not set up (TIA's default for a new CPU) refuses `keep`,
     because it would not compile.
@@ -323,11 +326,8 @@ The rules for applying a spec:
     station step, not from the spec applied before. After every write
     tiad reads the state back and refuses unless it is the promised one.
     A CPU without the setting (firmware before 3.1) takes only `keep`.
-  - **Known gap, fixed next:** applying a spec to a project that holds no
-    spec in the session (after an upload, an open or a failed apply)
-    makes the CPU anew, so an uploaded CPU's settings do not survive it,
-    and `keep` refuses there. The fix reuses the project's CPU when its
-    order, firmware and name match.
+  - After an upload, a spec that names the uploaded CPU keeps it and its
+    setting, so `keep` keeps what the CPU was found with.
   - In `nautilus.yaml` the field is `configuration-protection`. Left out,
     it is `password`: a new station is protected by default.
   - Proven offline on the TIA machine (2026-11-20, through the agent): a
@@ -335,6 +335,38 @@ The rules for applying a spec:
     `None`, to `WithPassword`; `Unprotect` with the password moves it to
     `None`; `none` on a new CPU ends at `None`. The read-back still
     refuses any state TIA did not promise.
+- **Which CPU an apply uses** (#789). The agent reads the project's CPU
+  before it writes anything, and decides:
+  - The project holds no CPU: the apply removes every device and makes
+    the CPU from the spec.
+  - The CPU device item's name, its order number and its firmware are the
+    spec's: the apply keeps that CPU, with its program and its
+    configuration protection, and sets the spec's CPU settings on it.
+    Firmware compares exactly, a leading `V` aside: TIA stores the version
+    the station was configured with, so `V3.1` is not `V3.1.3` (unlike the
+    device pin, §3.8, there is no major.minor widening).
+  - Anything else refuses with `cpu_mismatch`, naming what differs, with
+    the project's CPU in `data.cpu`. tiad never replaces a project's CPU
+    on an apply: to keep the CPU, apply a spec naming it (an upload
+    returns the same `cpu`); for a new CPU, create the project again. This
+    is a change from before #789's reuse, when an apply with another CPU
+    deleted the station and made it anew without saying so.
+  - The devices besides the CPU's station (an adopted station's PROFINET
+    IO device, say) are kept as found: tiad does not configure IO devices
+    yet. The apply lists them in `keptDevices` and in a note; a download
+    lists them again in its result, and in the data of a
+    `decision_required` or `declined` refusal, before anything is loaded,
+    and journals them on its audit line (`kept=[...]`). A kept device that
+    shares a name, a PROFINET name or an address with the spec refuses
+    (`cpu_mismatch`) rather than coexist.
+  - A refusal before any write (a mismatch, `keep` on a CPU that has
+    nothing to keep, a missing password) leaves the session as it was.
+  - An apply or an upload that fails part-way leaves the session unclean:
+    its project matches no spec, so a later apply or save refuses with
+    `unclean_session`, and the session can only be closed without saving.
+    A CPU left half-applied is never reused, even by saving and reopening
+    the project. A successful upload replaces the project and cleans the
+    session.
 - **A password that may be set meets TIA's rules before any TIA call**
   (`password`): 10 to 120 characters (UTF-16 code units), at least one
   digit, one upper-case and one lower-case letter (ASCII classes, which
@@ -390,14 +422,14 @@ The client checks each path and the agent checks again.
 | `POST /v1/sessions` | `{path}` (a project or archive in the work dir) → `{session, project}` |
 | `GET /v1/sessions` | → `{sessions: [{session, project, idleSeconds}]}` |
 | `DELETE /v1/sessions/{id}` | → `{}`. Closes without saving |
-| `PUT /v1/sessions/{id}/station` | `{station, secrets}` → `{changes: [string], notes?: [string]}` (P2, P5). `notes` is what the caller should know besides the changes (a protected CPU kept its password) |
+| `PUT /v1/sessions/{id}/station` | `{station, secrets}` → `{changes: [string], notes?: [string], keptDevices?: [{name, profinetName, address}]}` (P2, P5). Keeps the project's CPU or makes one (§3.3, "Which CPU an apply uses"). `notes` is what the caller should know besides the changes (a protected CPU kept its password, devices kept as found) |
 | `POST /v1/sessions/{id}/software` | `{group, sources, tagTables, prune}` → `{results: [{path, ok, messages}], blocks: [{name, kind}]}`. Generates blocks into the group named `group`. With `prune`, blocks in that group that no source produced are deleted |
 | `POST /v1/sessions/{id}/compile` | `{hardware, software}` → `{result: "success" or "warning" or "error", errors, warnings, messages: [{object, severity, text}]}` |
 | `POST /v1/sessions/{id}/download` | §3.5 (P3) |
 | `POST /v1/sessions/{id}/compare` | → `{equal, differences: [{object, state}]}`. An online compare |
 | `POST /v1/sessions/{id}/export` | `{dir, blocks: "scl" or "xml" or "", tagTables, hardware, gsdml}` → `{files: [path]}` (P6 for `gsdml`) |
-| `POST /v1/sessions/{id}/upload` | `{trustUnverifiedCertificate?}` → `{trustedBlindly, device, pin}`. CPU into the session's project, for bringing a legacy CPU's program into nautilus (S2a: works). Pins the CPU's identity on first use, or checks it (§3.8) |
-| `POST /v1/sessions/{id}/save` | `{archive?}` → `{path}` |
+| `POST /v1/sessions/{id}/upload` | `{trustUnverifiedCertificate?}` → `{trustedBlindly, device, pin, cpu: {name, order, firmware}}`. CPU into the session's project, for bringing a legacy CPU's program into nautilus (S2a: works). Pins the CPU's identity on first use, or checks it (§3.8). `cpu` is what a spec must name to keep the uploaded CPU |
+| `POST /v1/sessions/{id}/save` | `{archive?}` → `{path}`. Refused (`unclean_session`) after an apply or upload failed part-way |
 | `GET /v1/pins`, `POST /v1/pins/{address}` | The device pins (§3.8). An upload pins the CPU on first use and must match after; compare and download check the pin first |
 
 `secrets` is `{"webUsers": {"naut": "<password>"}, "protection": "<password>", "configurationPassword": "<password>"}`.
