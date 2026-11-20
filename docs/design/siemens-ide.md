@@ -239,7 +239,9 @@ the session is gone.
 | `declined` | 409 | A download question was answered no. `data.questions` lists them, and nothing is loaded |
 | `compile_failed` | 422 | Compile errors. `data` is the compile result |
 | `not_compiled` | 409 | A download of a project not fully compiled since its last change. Nothing reached TIA |
-| `operation_failed` | 500 | Openness threw (the message carries its text) |
+| `operation_failed` | 500 | Openness threw (the message carries its text), or a device pin file is unreadable (§3.8) |
+| `device_changed` | 409 | The CPU's identity differs from its device pin (§3.8). The message names both; nothing was loaded and the pin stands |
+| `device_unverified` | 409 | The CPU has a device pin, but its identity could not be read, so the pin could not be checked (§3.8) |
 | `outcome_unknown` | 500 | A download may have loaded the CPU, or not: TIA failed once the download was decided, or TIA's side broke the decide contract. Not fatal: compare on the same session before anything else. The client's `OutcomeUnknown` covers this and `unreachable` |
 
 ### 3.3 The station spec
@@ -536,8 +538,11 @@ and the audit line names the fields the pin holds. From then on:
   the new values. The pin stands;
 - an identity that cannot be read fails with `device_unverified`.
   `tiad.Openness` has no proven online read yet (a read-only probe is
-  planned on #789), so today a pinned CPU's compare and download are
-  refused. They were refused already, by the TLS question.
+  planned on #789). **So today, once a CPU is pinned, its compare and
+  download are refused** until an online read exists or the pin is
+  removed by hand. On the bench CPU nothing is lost, since its TLS
+  question refuses them already. A CPU that asks no TLS question could be
+  compared before its first upload and cannot after it.
 
 **What it catches, and what it does not.** The device pin catches a
 different model or a firmware change at the address. It does **not** catch

@@ -21,6 +21,22 @@ func contractPins(t *testing.T, start Starter) {
 	t.Run("Unverified", func(t *testing.T) { contractPinUnverified(t, start) })
 	t.Run("SetPin", func(t *testing.T) { contractSetPin(t, start) })
 	t.Run("NotReadFailsClosed", func(t *testing.T) { contractPinNotRead(t, start) })
+	t.Run("UnreadableUpload", func(t *testing.T) { contractPinUnreadableUpload(t, start) })
+}
+
+// contractPinUnreadableUpload: an upload that reads no usable identity
+// pins nothing, and says so.
+func contractPinUnreadableUpload(t *testing.T, start Starter) {
+	a, s := compiledBench(t, start)
+	c := a.Client()
+	a.SetDevice(t, tiad.DeviceIdentity{Firmware: "V3.1"}, false)
+	if _, err := s.UploadWith(ctx, tiad.UploadRequest{}); tiad.Kind(err) != tiad.KindDeviceUnverified ||
+		!strings.Contains(err.Error(), "device.order is empty") || !strings.Contains(err.Error(), "nothing was pinned") {
+		t.Fatalf("upload reading no order number: %v", err)
+	}
+	if ps := pinsOf(t, c); len(ps) != 0 {
+		t.Fatalf("an unreadable identity was pinned: %+v", ps)
+	}
 }
 
 func str(s string) *string { return &s }

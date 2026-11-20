@@ -1037,7 +1037,16 @@ func (f *Fake) upload(r *http.Request) (any, *failure) {
 	read := f.device()
 	address := s.station.CPU.Address
 	pin := tiad.PinFirstTrust
-	if pinned, ok := f.pins[address]; !ok {
+	pinned, ok := f.pins[address]
+	if err := read.Validate(); err != nil {
+		what := "nothing was pinned"
+		if ok {
+			what = "the device pin was not checked"
+		}
+		return nil, fail(http.StatusConflict, tiad.KindDeviceUnverified,
+			"the upload from %s went through, but the CPU's identity could not be read from it (%v), so %s; do not download from this session", address, err, what)
+	}
+	if !ok {
 		f.pins[address] = read
 	} else if diff := tiad.DeviceMismatch(pinned, read); diff != "" {
 		return nil, deviceChanged(address, pinned, read, diff,
@@ -1055,7 +1064,7 @@ func BenchDevice() tiad.DeviceIdentity {
 }
 
 func (f *Fake) device() tiad.DeviceIdentity {
-	if f.Device.Order == "" && f.Device.Firmware == "" && f.Device.Serial == nil && f.Device.MAC == nil {
+	if f.Device == (tiad.DeviceIdentity{}) {
 		return BenchDevice()
 	}
 	return f.Device
