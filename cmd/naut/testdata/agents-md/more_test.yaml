@@ -60,3 +60,15 @@ tests:
       - given: { Start: false, LT101_Level: 2.0 }
         advance: 5s
         expect: { DrainReq: false, BatchCount: 1 }
+
+  - name: raw 4-20 mA scales to percent and is held to 0-100
+    steps:
+      - given: { LT101_Raw: 12.0 }
+        scans: 2
+        expect: { LT101_Pct: 50.0 }
+      - given: { LT101_Raw: 2.0 }
+        scans: 2
+        expect: { LT101_Pct: 0.0 }
+      - given: { LT101_Raw: 22.0 }
+        scans: 2
+        expect: { LT101_Pct: 100.0 }

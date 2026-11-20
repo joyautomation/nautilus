@@ -13,11 +13,11 @@ import (
 // it current without ever losing what the project wrote itself (#645).
 
 func TestAgentsRenderWritesTheBlockWhenThereIsNone(t *testing.T) {
-	out, did, changed, err := agentsRender("", false, agentsRefuse)
+	out, did, changed, err := agentsRender(agentsAll, "", false, agentsRefuse)
 	if err != nil || !changed || did != "wrote" {
 		t.Fatalf("got %q changed=%v err=%v", did, changed, err)
 	}
-	if st, _ := agentsClassify(out); st != agentsCurrent {
+	if st, _ := agentsClassify(out, agentsAll); st != agentsCurrent {
 		t.Fatalf("a freshly written AGENTS.md classifies as %s", st)
 	}
 	if !strings.HasPrefix(out, agentsBeginMark) || !strings.HasSuffix(out, agentsEndMark+"\n") {
@@ -26,19 +26,19 @@ func TestAgentsRenderWritesTheBlockWhenThereIsNone(t *testing.T) {
 }
 
 func TestAgentsRenderLeavesACurrentFileAlone(t *testing.T) {
-	cur := agentsBlock()
-	_, did, changed, err := agentsRender(cur, true, agentsRefuse)
+	cur := agentsBlock(agentsAll)
+	_, did, changed, err := agentsRender(agentsAll, cur, true, agentsRefuse)
 	if err != nil || changed || did != "already current" {
 		t.Fatalf("got %q changed=%v err=%v", did, changed, err)
 	}
 }
 
 func TestAgentsRenderStampsAnUnmarkedCopyOfTodaysText(t *testing.T) {
-	out, did, changed, err := agentsRender(agentsText(), true, agentsRefuse)
+	out, did, changed, err := agentsRender(agentsAll, agentsText(agentsAll), true, agentsRefuse)
 	if err != nil || !changed || did != "stamped" {
 		t.Fatalf("got %q changed=%v err=%v", did, changed, err)
 	}
-	if out != agentsBlock() {
+	if out != agentsBlock(agentsAll) {
 		t.Fatal("a stamped copy is not exactly the block")
 	}
 }
@@ -49,11 +49,11 @@ func TestAgentsRenderUpdatesAnOlderNautsUnmarkedCopy(t *testing.T) {
 	old := "# AGENTS.md\n\nolder rules\n"
 	agentsPrevious[sha(old)] = "test"
 	defer delete(agentsPrevious, sha(old))
-	if st, _ := agentsClassify(old); st != agentsStale {
+	if st, _ := agentsClassify(old, agentsAll); st != agentsStale {
 		t.Fatalf("an older naut's copy classifies as %s, want stale", st)
 	}
-	out, did, _, err := agentsRender(old, true, agentsRefuse)
-	if err != nil || did != "updated" || out != agentsBlock() {
+	out, did, _, err := agentsRender(agentsAll, old, true, agentsRefuse)
+	if err != nil || did != "updated" || out != agentsBlock(agentsAll) {
 		t.Fatalf("got %q err=%v", did, err)
 	}
 }
@@ -61,31 +61,31 @@ func TestAgentsRenderUpdatesAnOlderNautsUnmarkedCopy(t *testing.T) {
 func TestAgentsRenderRefreshKeepsTheProjectsOwnNotes(t *testing.T) {
 	above := "# Plant notes\n\nPump P-101 trips on a cold start.\n\n"
 	below := "\n## Ours\n\nUse metric units.\n"
-	stale := strings.Replace(agentsBlock(), "# AGENTS.md", "# AGENTS.md (older)", 1)
+	stale := strings.Replace(agentsBlock(agentsAll), "# AGENTS.md", "# AGENTS.md (older)", 1)
 	doc := above + stale + below
-	if st, _ := agentsClassify(doc); st != agentsStale {
+	if st, _ := agentsClassify(doc, agentsAll); st != agentsStale {
 		t.Fatalf("an edited block classifies as %s, want stale", st)
 	}
-	out, did, _, err := agentsRender(doc, true, agentsRefuse)
+	out, did, _, err := agentsRender(agentsAll, doc, true, agentsRefuse)
 	if err != nil || did != "updated" {
 		t.Fatalf("got %q err=%v", did, err)
 	}
-	if out != above+agentsBlock()+below {
+	if out != above+agentsBlock(agentsAll)+below {
 		t.Fatalf("the notes around the block moved or changed:\n%s", out)
 	}
 }
 
 func TestAgentsRenderKeepsCRLF(t *testing.T) {
 	above := "# Ours\r\n\r\n"
-	stale := strings.ReplaceAll(strings.Replace(agentsBlock(), "# AGENTS.md", "# old", 1), "\n", "\r\n")
-	out, _, _, err := agentsRender(above+stale, true, agentsRefuse)
+	stale := strings.ReplaceAll(strings.Replace(agentsBlock(agentsAll), "# AGENTS.md", "# old", 1), "\n", "\r\n")
+	out, _, _, err := agentsRender(agentsAll, above+stale, true, agentsRefuse)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Count(out, "\n") != strings.Count(out, "\r\n") {
 		t.Fatal("a CRLF file came back with bare LFs")
 	}
-	if lf(out) != "# Ours\n\n"+agentsBlock() {
+	if lf(out) != "# Ours\n\n"+agentsBlock(agentsAll) {
 		t.Fatalf("wrong content:\n%s", out)
 	}
 }
@@ -93,22 +93,22 @@ func TestAgentsRenderKeepsCRLF(t *testing.T) {
 // Somebody's own AGENTS.md is never overwritten unless they say so.
 func TestAgentsRenderRefusesSomebodysOwnFileUnlessTold(t *testing.T) {
 	own := "# Our rules\n\nNo magic numbers.\n"
-	if st, _ := agentsClassify(own); st != agentsUnmanaged {
+	if st, _ := agentsClassify(own, agentsAll); st != agentsUnmanaged {
 		t.Fatalf("own file classifies as %s", st)
 	}
-	if _, _, _, err := agentsRender(own, true, agentsRefuse); err == nil || !strings.Contains(err.Error(), "-append") {
+	if _, _, _, err := agentsRender(agentsAll, own, true, agentsRefuse); err == nil || !strings.Contains(err.Error(), "-append") {
 		t.Fatalf("want a refusal that names -append, got %v", err)
 	}
-	out, _, _, err := agentsRender(own, true, agentsAppend)
-	if err != nil || out != own+"\n"+agentsBlock() {
+	out, _, _, err := agentsRender(agentsAll, own, true, agentsAppend)
+	if err != nil || out != own+"\n"+agentsBlock(agentsAll) {
 		t.Fatalf("append: err=%v\n%s", err, out)
 	}
-	out, _, _, err = agentsRender("no newline", true, agentsAppend)
-	if err != nil || out != "no newline\n\n"+agentsBlock() {
+	out, _, _, err = agentsRender(agentsAll, "no newline", true, agentsAppend)
+	if err != nil || out != "no newline\n\n"+agentsBlock(agentsAll) {
 		t.Fatalf("append to a file with no final newline: err=%v\n%q", err, out)
 	}
-	out, _, _, err = agentsRender(own, true, agentsForce)
-	if err != nil || out != agentsBlock() {
+	out, _, _, err = agentsRender(agentsAll, own, true, agentsForce)
+	if err != nil || out != agentsBlock(agentsAll) {
 		t.Fatalf("force: err=%v", err)
 	}
 }
@@ -123,49 +123,49 @@ func TestAgentsOlderCopyWithTheProjectsAdditions(t *testing.T) {
 	defer delete(agentsPrevious, sha(old))
 
 	grown := old + "\n## Site conventions\n\nTags are ISA-5.1.\n"
-	if st, _ := agentsClassify(grown); st != agentsStale {
+	if st, _ := agentsClassify(grown, agentsAll); st != agentsStale {
 		t.Fatalf("an older copy with notes after it classifies as %s, want stale", st)
 	}
-	out, did, _, err := agentsRender(grown, true, agentsRefuse)
-	if err != nil || did != "updated" || out != agentsBlock()+"\n## Site conventions\n\nTags are ISA-5.1.\n" {
+	out, did, _, err := agentsRender(agentsAll, grown, true, agentsRefuse)
+	if err != nil || did != "updated" || out != agentsBlock(agentsAll)+"\n## Site conventions\n\nTags are ISA-5.1.\n" {
 		t.Fatalf("got %q err=%v:\n%s", did, err, out)
 	}
 
-	todayGrown := agentsText() + "\n## Ours\n"
-	if st, _ := agentsClassify(todayGrown); st != agentsUnstamped {
+	todayGrown := agentsText(agentsAll) + "\n## Ours\n"
+	if st, _ := agentsClassify(todayGrown, agentsAll); st != agentsUnstamped {
 		t.Fatalf("today's text with notes after it classifies as %s, want unstamped", st)
 	}
-	if out, _, _, _ := agentsRender(todayGrown, true, agentsRefuse); out != agentsBlock()+"\n## Ours\n" {
+	if out, _, _, _ := agentsRender(agentsAll, todayGrown, true, agentsRefuse); out != agentsBlock(agentsAll)+"\n## Ours\n" {
 		t.Fatalf("stamping lost the notes:\n%s", out)
 	}
 
 	edited := strings.Replace(old, "older rules", "older rules, edited", 1)
-	st, why := agentsClassify(edited)
+	st, why := agentsClassify(edited, agentsAll)
 	if st != agentsConflict || why == nil {
 		t.Fatalf("an older copy edited inside classifies as %s (%v), want conflict", st, why)
 	}
-	if _, _, _, err := agentsRender(edited, true, agentsAppend); err == nil {
+	if _, _, _, err := agentsRender(agentsAll, edited, true, agentsAppend); err == nil {
 		t.Fatal("-append would leave two sets of rules in the file")
 	}
-	if out, _, _, err := agentsRender(edited, true, agentsForce); err != nil || out != agentsBlock() {
+	if out, _, _, err := agentsRender(agentsAll, edited, true, agentsForce); err != nil || out != agentsBlock(agentsAll) {
 		t.Fatalf("-force: %v", err)
 	}
 }
 
 func TestAgentsBrokenMarkersAreNeverGuessedAt(t *testing.T) {
-	b := agentsBlock()
+	b := agentsBlock(agentsAll)
 	for name, doc := range map[string]string{
 		"no end":         strings.Replace(b, agentsEndMark, "", 1),
 		"two begins":     b + b,
 		"end before one": agentsEndMark + "\n" + "notes\n",
 	} {
-		if st, err := agentsClassify(doc); st != agentsConflict || err == nil {
+		if st, err := agentsClassify(doc, agentsAll); st != agentsConflict || err == nil {
 			t.Errorf("%s: classified %s err=%v, want conflict with a reason", name, st, err)
 		}
-		if _, _, _, err := agentsRender(doc, true, agentsAppend); err == nil {
+		if _, _, _, err := agentsRender(agentsAll, doc, true, agentsAppend); err == nil {
 			t.Errorf("%s: -append went ahead on broken markers", name)
 		}
-		if out, _, _, err := agentsRender(doc, true, agentsForce); err != nil || out != b {
+		if out, _, _, err := agentsRender(agentsAll, doc, true, agentsForce); err != nil || out != b {
 			t.Errorf("%s: -force did not replace the file: %v", name, err)
 		}
 	}
@@ -197,10 +197,10 @@ func TestAgentsWarnings(t *testing.T) {
 	}{
 		{"none", "", "", nil},
 		{"own file", "# ours\n", "", nil},
-		{"current", agentsBlock(), claudeText(), nil},
-		{"current, claude has no import", agentsBlock(), "Be terse.\n", []string{"CLAUDE.md does not import"}},
+		{"current", agentsBlock(agentsAll), claudeText(), nil},
+		{"current, claude has no import", agentsBlock(agentsAll), "Be terse.\n", []string{"CLAUDE.md does not import"}},
 		{"own file, claude has no import", "# ours\n", "Be terse.\n", nil},
-		{"stale", strings.Replace(agentsBlock(), "# AGENTS.md", "# old", 1), claudeText(), []string{"older than this naut"}},
+		{"stale", strings.Replace(agentsBlock(agentsAll), "# AGENTS.md", "# old", 1), claudeText(), []string{"older than this naut"}},
 		{"broken", agentsBeginMark + " -->\nx\n", "", []string{"no nautilus:end"}},
 	}
 	for _, c := range cases {
@@ -300,18 +300,149 @@ func TestAgentsPreviousCoversHistory(t *testing.T) {
 	if err != nil || len(strings.Fields(string(revs))) < 2 {
 		t.Skip("the template's history is not in this checkout (shallow clone)")
 	}
-	current := agentsText()
+	current := agentsText(agentsAll)
 	for _, rev := range strings.Fields(string(revs)) {
 		body, err := exec.Command("git", "-C", top, "show", rev+":"+path).Output()
 		if err != nil {
 			t.Fatal(err)
 		}
 		text := strings.TrimRight(lf(string(body)), "\n") + "\n"
-		if text == current {
+		// The template file is the core of a text assembled from sections
+		// (agentsText), so the file itself was never written out whole:
+		// only revisions from before the split were.
+		if text == current || text == embeddedText("AGENTS.md.tmpl") {
 			continue
 		}
 		if _, ok := agentsPrevious[sha(text)]; !ok {
 			t.Errorf("%s at %.8s is not in agentsPrevious: add %q", path, rev, sha(text))
 		}
+	}
+}
+
+// A project's guidance carries the sections for what it uses (#1076): the
+// AI reads it on every turn, so a project with no screens does not pay for
+// the screens section, and one that adds its first screen is told, by the
+// check, that its copy is stale.
+func TestAgentsTextFollowsTheProject(t *testing.T) {
+	st := agentsFeatures{ST: true}
+	text := agentsText(st)
+	if !strings.Contains(text, "## Structured Text (`.st`)") || !strings.Contains(text, "PROGRAM Scaling") {
+		t.Error("an ST project's guidance has no worked ST example")
+	}
+	for _, gone := range []string{"## Ladder (`.ld`)\n", "## Function Block Diagram (`.fbd`)\n", "## Sequential Function Chart (`.sfc`)\n", "RUNG fillcmd", "CommandButton"} {
+		if strings.Contains(text, gone) {
+			t.Errorf("an ST-only project carries %q", gone)
+		}
+	}
+	for _, stub := range []string{"## Ladder (`.ld`) (not used in this project yet)", "## Operator screens (not used in this project yet)"} {
+		if !strings.Contains(text, stub) {
+			t.Errorf("no stub %q for a section left out", stub)
+		}
+	}
+	for _, how := range []string{"run `naut agents`", "https://nautilus.joyautomation.com/guides/operator-screens/", "https://nautilus.joyautomation.com/languages/ladder/"} {
+		if !strings.Contains(text, how) {
+			t.Errorf("the stubs never say %q", how)
+		}
+	}
+	if !strings.Contains(text, "never rewrite a program into another language") {
+		t.Error("the language table no longer says to leave working code in its language")
+	}
+	if len(agentsText(agentsAll)) < 2*len(text) {
+		t.Errorf("the ST text (%d bytes) is not much shorter than the full one (%d)", len(text), len(agentsText(agentsAll)))
+	}
+}
+
+func TestAgentsFeaturesFollowTheFiles(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name string) {
+		t.Helper()
+		full := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := agentsFeaturesFor(dir); got != agentsAll {
+		t.Errorf("a project with no program gets %+v, want every section", got)
+	}
+	write("main.st")
+	if got := agentsFeaturesFor(dir); got != (agentsFeatures{ST: true}) {
+		t.Errorf("one .st file: %+v", got)
+	}
+	write("a.ld")
+	write("b.mimic.json")
+	if got := agentsFeaturesFor(dir); got != (agentsFeatures{ST: true, LD: true, Screens: true}) {
+		t.Errorf("st + ld + screen: %+v", got)
+	}
+	write("c.fbd")
+	write("d.sfc")
+	if got := agentsFeaturesFor(dir); got != agentsAll {
+		t.Errorf("every kind of file: %+v", got)
+	}
+
+	// The loader lower-cases extensions, so Main.ST and Loop.FBD count.
+	up := t.TempDir()
+	dir = up
+	write("Main.ST")
+	write("Loop.FBD")
+	if got := agentsFeaturesFor(up); got != (agentsFeatures{ST: true, FBD: true}) {
+		t.Errorf("upper-case extensions: %+v", got)
+	}
+
+	// Nested projects, build output, node_modules and dot-directories are
+	// not this project's.
+	nest := t.TempDir()
+	dir = nest
+	write("main.st")
+	write("sub/nautilus.yaml")
+	write("sub/x.mimic.json")
+	write("build/y.ld")
+	write("node_modules/z/z.sfc")
+	write(".hidden/w.fbd")
+	if got := agentsFeaturesFor(nest); got != (agentsFeatures{ST: true}) {
+		t.Errorf("files outside the project counted: %+v", got)
+	}
+}
+
+// Adding the first screen or ladder file makes the check report the copy
+// stale for the new variant; a project that did not change stays current.
+func TestAgentsStaleWhenTheProjectGrowsASection(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "main.st"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, agentsFileName), []byte(agentsBlock(agentsFeaturesFor(dir))), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	state := func() agentsState {
+		t.Helper()
+		as, _, _, err := agentsInspect(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return as
+	}
+	if as := state(); as != agentsCurrent {
+		t.Fatalf("an unchanged project is %s, want current", as)
+	}
+	for _, first := range []string{"loop.ld", "plant.mimic.json"} {
+		if err := os.WriteFile(filepath.Join(dir, first), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if as := state(); as != agentsStale {
+			t.Errorf("after adding %s the guidance is %s, want stale", first, as)
+		}
+		if _, err := agentsWrite(dir, agentsRefuse); err != nil {
+			t.Fatal(err)
+		}
+		if as := state(); as != agentsCurrent {
+			t.Errorf("after naut agents with %s the guidance is %s, want current", first, as)
+		}
+	}
+	raw, _ := os.ReadFile(filepath.Join(dir, agentsFileName))
+	if !strings.Contains(string(raw), "RUNG fillcmd") || !strings.Contains(string(raw), "CommandButton") {
+		t.Error("the refreshed guidance does not carry the ladder and screens sections")
 	}
 }

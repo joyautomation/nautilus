@@ -62,7 +62,11 @@ writes Structured Text, which is valid and hard to read:
 
 ## What AGENTS.md covers
 
-The file is short, because an agent reads it on every turn:
+The file is short, because an agent reads it on every turn, so it carries
+only the sections for what the project uses: a Structured Text project gets
+the ST example and a short stub for ladder, FBD, SFC and screens, and
+`naut agents` brings in the full rules once the first file of that kind
+exists. The sections:
 
 - **Checking work:** `naut check` after every edit, warnings treated as
   bugs, and `naut test` for any change in behavior. Most of the diagram
