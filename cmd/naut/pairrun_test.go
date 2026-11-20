@@ -398,9 +398,23 @@ func TestPairElectsAndTakesOverThroughNautRun(t *testing.T) {
 	if v, _ := s.rt.Tags().ReadPath("SP"); fmt.Sprint(v) == "7.5" {
 		t.Error("the write landed on the standby's own store, not the leader's")
 	}
-	time.Sleep(time.Second) // two leases: the standby still does not scan
-	if n := s.rt.Stats().Count; n != 0 || s.m.q.IsLeader() {
-		t.Fatalf("the standby scanned %d times (leader %v) while %s led", n, s.m.q.IsLeader(), lead)
+	// Two leases: the standby does not scan while the leader leads. Under
+	// CI load (go test ./... runs packages side by side) the leader can
+	// miss its renewals for a lease and lapse; the standby then takes over,
+	// which is the pair working, not a fault (#1065, #1108, #1109). What
+	// must never happen is both leading at once: watchOneLeader fails on
+	// that. After a takeover the old leader stands by, and the rest of the
+	// test runs with the roles swapped.
+	before := s.rt.Stats().Count
+	led := watchOneLeader(t, time.Second, map[string]*node.Elector{lead: l.m.q.Node(), stand: s.m.q.Node()})
+	switch {
+	case led[stand] && !l.m.q.IsLeader():
+		t.Logf("%s's lease lapsed under load and %s took over, never both at once", lead, stand)
+		lead, stand, l, s = stand, lead, s, l
+	case led[stand]:
+		t.Logf("the lease went to %s under load and back to %s, never both at once", stand, lead)
+	case before != 0 || s.rt.Stats().Count != before:
+		t.Fatalf("the standby scanned %d times while %s led", s.rt.Stats().Count, lead)
 	}
 
 	l.crash()
