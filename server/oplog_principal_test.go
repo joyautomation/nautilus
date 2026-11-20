@@ -200,7 +200,7 @@ func TestUnknownOutcomeResolved(t *testing.T) {
 	}{
 		{"unknown then applied", false, false, audit.ResultOK, outcomeCommitted},
 		{"applied then unknown", true, false, audit.ResultOK, outcomeCommitted},
-		{"unknown then lapsed", false, true, audit.ResultOK, outcomeLapsed},
+		{"unknown then lapsed", false, true, audit.ResultRefused, outcomeLapsed},
 	} {
 		u, rec := newTracker()
 		p := proposal("r1")

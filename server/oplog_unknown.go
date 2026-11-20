@@ -224,7 +224,7 @@ func (u *unknowns) resolution(t *tracked, outcome string, seq uint64) audit.Entr
 		e.Detail["seq"] = seq
 		e.Detail["note"] = "committed to the operator-intent log and applied in order here; whether it took effect (an alarm engine or the runtime may still refuse it) is in the state"
 	case outcomeLapsed:
-		e.Result = audit.ResultOK
+		e.Result = audit.ResultRefused // it never took effect
 		e.Detail["seq"] = seq
 		e.Detail["note"] = "lapsed: committed too late to be carried out, so it never took effect"
 	default:

@@ -470,7 +470,7 @@ controller that answered later sees that change in the log, it adds an
 - `committed`: the log has it and this controller applied it in order.
   That doesn't prove it took effect: an alarm engine or the runtime can
   still refuse it when applying it. Read the state.
-- `lapsed`: committed too late, so it was never carried out.
+- `lapsed` (result `refused`): committed too late, so it was never carried out.
 - `stays unknown (evicted)`: the controller stopped tracking it.
 
 It does that only on evidence. These stay `unknown`:

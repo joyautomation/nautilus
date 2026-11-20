@@ -232,6 +232,11 @@ func (a *auditor) record(e audit.Entry) {
 // oplog_unknown.go): never coalesced, since a summary would lose which
 // entry it resolves. Only this server writes them, bounded by the
 // unknowns it answered.
+//
+// detail.resolves must only ever be set server-side (oplog_unknown.go):
+// it exempts an entry from the refusal rate limit, so a value a client
+// or a peer could put there would let it force an fsynced entry per
+// request.
 func resolves(e audit.Entry) bool { return e.Detail["resolves"] != nil }
 
 // recordBatch journals es as one durable batch: each refusal is counted in
