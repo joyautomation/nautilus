@@ -288,6 +288,7 @@ func TestOIDCElevateCallbackRefusals(t *testing.T) {
 		reason string
 		msg    string
 	}{
+		{what: "another nonce", set: func(f *fakeOIDC) { f.badNonce = true }, code: http.StatusUnauthorized, reason: "nonce mismatch"},
 		{what: "another account", set: func(f *fakeOIDC) { f.id.Subject = "sub-other" }, code: http.StatusForbidden, reason: "another account", msg: "another account"},
 		{what: "another issuer", set: func(f *fakeOIDC) { f.id.Issuer = "https://other.example" }, code: http.StatusForbidden, reason: "another account"},
 		{what: "no auth_time", set: func(f *fakeOIDC) { f.id.AuthTime = time.Time{} }, code: http.StatusBadGateway, reason: "no auth_time", msg: "optional claim auth_time"},

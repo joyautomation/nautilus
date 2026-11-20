@@ -154,8 +154,8 @@ The endpoints, for an HMI of your own:
 | `GET /signin` | the sign-in page (`?next=/path` returns there afterwards, on this controller only) |
 | `POST /api/signin` | `{"name", "password"}` as JSON (`200` with `user` and `expires`) or a form (`303` to `next`) |
 | `POST /api/signout` | ends the session and clears the cookie |
-| `POST /api/elevate` | `{"password"}`: the session's password again, for the [elevated permissions](#elevation) (`200` with `elevatedUntil`) |
-| `GET /api/me` | who the request acts as, its roles and permissions (and the tag patterns of its areas, `areas`), `secure`, the session's `expires` and `elevatedUntil`, the `elevated` permissions, `signIn` (this controller offers `/signin`) and `now` (the controller's clock, to judge `elevatedUntil` by) |
+| `POST /api/elevate` | `{"password"}`: the session's password again, for the [elevated permissions](#elevation) (`200` with `elevatedUntil`). An OIDC session has no password here: `401` with `"elevate": "oidc"` and the `url` that confirms it [at the provider](#elevation) |
+| `GET /api/me` | who the request acts as, its roles and permissions (and the tag patterns of its areas, `areas`), `secure`, the session's `expires` and `elevatedUntil`, the `elevated` permissions, `signIn` (this controller offers `/signin`), `signInMethods` (`password`, `oidc`), `provider` (the OIDC provider's name), the session's `method` (`password` or `oidc`: how it is confirmed again) and `now` (the controller's clock, to judge `elevatedUntil` by) |
 
 ## OIDC sign-in
 
@@ -195,13 +195,16 @@ auth:
 - **Offline sites.** The provider must be reachable to sign in, not afterwards. Keep a local user (or `NAUTILUS_TOKEN`) for when it isn't.
 - **Upgrading.** A controller now takes the users lock (`.users.lock` in the state directory) at a name's first sign-in. One left owned by root by an older `sudo naut users` makes those sign-ins fail, with a message naming the `chown`; the next `sudo naut users` gives it back.
 - **Not on a redundant pair yet.** The pins are written by the box that signs a person in, and a pair doesn't share them yet (#710), so `auth.oidc` is refused with `redundancy:`. Use local users on a pair.
+- **Tested against Keycloak** (`tools/keycloak/run.sh` runs the sign-in and the confirmation at the provider against a real Keycloak). Entra ID and Google are not tested yet.
 
-The two hops, for a proxy or firewall rule:
+The hops, for a proxy or firewall rule:
 
 | | |
 |---|---|
 | `GET /auth/oidc/start?next=/path` | sends the browser to the provider (state, nonce and PKCE kept on the controller for ten minutes, bound to the browser by a short `SameSite=Lax` cookie) |
 | `GET /auth/oidc/callback` | the provider's answer: a page that moves the browser on to `next` (a same-site step, so the `SameSite=Strict` session cookie is sent with it); journalled as `auth.signin` |
+| `GET /auth/oidc/start?elevate=1&next=/path` | a signed-in OIDC session's [confirmation at the provider](#elevation): only from the controller's own pages, with the session's cookie |
+| `GET /auth/oidc/elevated?t=…` | a confirmation's second, same-site step: the session's cookie must be the one that started it; journalled as `auth.elevate` |
 
 ## Elevation
 
@@ -216,7 +219,10 @@ Some permissions change what the plant runs, so a signed-in browser holds them o
 - **Re-authentication** (`POST /api/elevate`) is checked like a sign-in: from the controller's own page, over HTTPS or from loopback, with one message for every wrong password. A user who holds none of the elevated permissions has nothing to confirm and is refused (`403`) before any password check. It's throttled per session, whatever address the attempts come from. Each wrong password also counts against the user's sign-in throttle. **After five wrong passwords in a row the session ends** (a stolen cookie guessing): the browser signs in again, and the journal records `auth.session-ended`. Every attempt is journalled as `auth.elevate`.
 - **The journal.** Elevation doesn't depend on it. Re-authentication works while the journal is down, and so does clearing a force or rolling back once the password is fresh. Setting a force or editing the program needs the journal too, so it is still refused then (`503`), after the password check. See [When the journal cannot be written](/guides/http-api/#when-the-journal-cannot-be-written).
 - **On a redundant pair** elevation lives with the session, on the leader. A standby refers `POST /api/elevate` there, like sign-in.
-- **An OIDC sign-in** has no password to confirm here. It counts from when the person last entered their credentials at the provider, the ID token's `auth_time` (up to 2 minutes ahead of the controller's clock counts as now), not from the moment the browser came back: a sign-in that rode on an old session at the provider is not fresh. A token without `auth_time` is never fresh. **Some providers send no `auth_time` unless asked (Entra ID by default), so there an OIDC user cannot force, edit, activate, deploy or configure until re-authentication at the provider arrives**: use a local user or a token for those. Past `auth.elevation` the refusal says what to do (sign out at the provider and here, then sign in again); it does not ask for a password.
+- **An OIDC sign-in** has no password to confirm here. It counts from when the person last entered their credentials at the provider, the ID token's `auth_time` (up to 2 minutes ahead of the controller's clock counts as now), not from the moment the browser came back: a sign-in that rode on an old session at the provider is not fresh. Past `auth.elevation` (or from the start, when the sign-in rode on an old session there) an elevated action is refused with `401` and `{"error": …, "elevate": "oidc", "url": "/auth/oidc/start?elevate=1"}`. The person confirms at the provider: the page goes to that URL (with `&next=` the page to come back to), the controller asks the provider for the credentials again whatever session it holds (`prompt=login`, `max_age=0`), and the answer refreshes **that** session; no new one starts. Then they do the action again.
+  - The confirmation must come back as the same account (issuer and `sub`) with the same groups, and its `auth_time` must be from after it began. Another account's credentials, groups that changed since the sign-in ("sign in again"), and a provider that did not ask again are refused, journalled as `auth.elevate` with `method: oidc`.
+  - **A provider that sends no `auth_time`** breaks OpenID Connect here (it is required when `max_age` is asked for): the confirmation is refused and says to have the provider put `auth_time` in the ID token (on Entra ID, the optional claim `auth_time`).
+  - It starts only from the controller's own pages and only with the session's cookie: a link from another site to it is refused, never turned into a sign-in. The confirmation dies with the session: signing out, here or with `naut users signout`, mid-way refuses it. With `redirect-url` set, it works only on the HMI opened at that URL's address (where the provider sends the browser back).
 
 ## In the HMI
 
@@ -240,11 +246,12 @@ From then on every kit client (tag writes, alarms, substitutes, IO-Link paramete
 
 - **Signing in** is the controller's own `/signin` page: opening the HMI without a session goes there and comes back. The kit has no password form of its own for signing in.
 - **An elevated action past its window** asks for the password in the confirm dialog, sends it to `POST /api/elevate`, and repeats the action once, exactly as it was sent. Several actions refused at once share one prompt. Cancel, and the action reports the controller's refusal. A wrong password asks again and says so. Without a `<ConfirmDialog/>` mounted, nothing is asked: the action reports the refusal, which says to sign in again.
+- **For an OIDC sign-in** the dialog asks instead whether to go to the provider to sign in again (anything unsaved on the page is lost). Yes, and the whole page goes there and comes back to the same screen; `auth.notice` (and the account chip) then says whether it was confirmed, and the person does the action again: the kit never repeats it across the trip. Only the controller's own `/auth/oidc/start` is ever opened.
 - **A sign-in that ends mid-shift** (signed out elsewhere, revoked, expired, five wrong passwords) is noticed at the next refused request or dropped live stream. The kit checks `/api/me`, and if the session is gone it goes to the sign-in page, which comes back to the same screen.
 - **On a standby**, the page goes to the leader the controller names (`redundancy.public-urls`). Only that URL is opened, only if it is `http(s)`, and never `http` from an `https` page. The refused action is not sent again there. A second referral within 30 seconds is not followed, so two controllers naming each other don't bounce the page, and none is followed in a browser that blocks `sessionStorage` (where that guard lives); the HMI shows the leader's link instead (`auth.referral`).
 - **Controls follow the role.** A write, acknowledge, shelve, substitute or parameter control the user's role doesn't hold for that tag shows disabled, and its tooltip says who and what they don't hold. Areas count: `/api/me` lists the tag patterns of the user's own areas (`areas`), and the kit matches them exactly as the controller does. An elevated action past its password window shows a lock until the password is confirmed.
 - **Acknowledgements are recorded as the user.** The controller records a signed-in user's (or a personal access token's) acknowledge, shelve and unshelve in the alarm journal under that user, whatever name the page sends; the HMI's dialogs no longer ask for one. A token keeps the name its client sends, as before.
-- **`<AccountChip/>`** shows who is signed in, whether the password currently counts for the elevated actions (and until when), and a sign-out button. **`<ReferralBanner/>`** shows a standby's referral the kit didn't follow, with the leader's link. **`<AuditTable/>`** reads the journal (`GET /api/audit`) for a user who holds `audit`.
+- **`<AccountChip/>`** shows who is signed in (a local user or an OIDC name), whether the password (or the sign-in at the provider) currently counts for the elevated actions (and until when), and a sign-out button. Not signed in, it links to `/signin`, or straight to "Sign in with <provider>" when that is the only way in. **`<ReferralBanner/>`** shows a standby's referral the kit didn't follow, with the leader's link. **`<AuditTable/>`** reads the journal (`GET /api/audit`) for a user who holds `audit`.
 - **Without `auth:`**, or against a controller without `/api/me`, nothing changes.
 
 **The controller decides.** What the HMI shows or greys out for a role is a convenience; every request is still checked by the controller, and its refusal is the answer.

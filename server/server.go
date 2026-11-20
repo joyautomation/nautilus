@@ -898,7 +898,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/elevate", s.handleElevate)
 	mux.HandleFunc("GET /auth/oidc/start", s.handleOIDCStart)
 	mux.HandleFunc("GET /auth/oidc/callback", s.handleOIDCCallback)
-	mux.HandleFunc("GET "+oidcElevatedPath, s.handleOIDCElevated)
+	mux.HandleFunc("GET /auth/oidc/elevated", s.handleOIDCElevated)
 	mux.HandleFunc("GET /api/history", s.handleHistory)
 	mux.HandleFunc("GET /api/history/", s.handleHistory)
 	if s.hmi != nil {

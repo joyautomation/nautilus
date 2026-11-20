@@ -30,7 +30,7 @@ func TestNautRunSignsInAtTheOIDCProvider(t *testing.T) {
 	manifest := "name: sso\ntasks:\n  - program: main.st\n    scan: 20ms\n" +
 		"tags:\n  - { name: SP, role: setpoint, type: REAL, init: 1 }\n" +
 		"server:\n  addr: \"127.0.0.1:0\"\n" +
-		"auth:\n  oidc:\n    issuer: " + idp.URL + "\n    client-id: naut\n    groups:\n      g-ops: operator\n"
+		"auth:\n  oidc:\n    issuer: " + idp.URL + "\n    client-id: naut\n    groups:\n      g-ops: operator\n      g-eng: engineer\n"
 	launch := func(t *testing.T, env ...string) (state string, stdout, stderr *lockedBuffer, exited chan struct{}) {
 		dir := t.TempDir()
 		os.WriteFile(filepath.Join(dir, "nautilus.yaml"), []byte(manifest), 0o644)
@@ -98,7 +98,7 @@ func TestNautRunSignsInAtTheOIDCProvider(t *testing.T) {
 		if resp.StatusCode != http.StatusSeeOther || !strings.HasPrefix(to, idp.URL+"/authorize?") {
 			t.Fatalf("start: %d %s %s\nstderr:\n%s", resp.StatusCode, to, body, stderr.String())
 		}
-		back := idp.Authorize(t, to, map[string]any{"preferred_username": "Ops@Corp.Example", "groups": []string{"g-ops"}, "sub": "acct-7"})
+		back := idp.Authorize(t, to, map[string]any{"preferred_username": "Ops@Corp.Example", "groups": []string{"g-ops", "g-eng"}, "sub": "acct-7"})
 		if !strings.HasPrefix(back, "http://"+api+"/auth/oidc/callback?") {
 			t.Fatalf("redirect URI %s", back)
 		}
@@ -119,6 +119,26 @@ func TestNautRunSignsInAtTheOIDCProvider(t *testing.T) {
 		}
 		if strings.Contains(stderr.String()+stdout.String(), "oidc-secret") {
 			t.Error("the client secret reached the output")
+		}
+
+		// A confirmation at the provider (6b), through naut run's adapter:
+		// the provider is asked for the credentials again (prompt=login,
+		// max_age=0), and the answer, the same account with a fresh
+		// auth_time, completes in the second, same-site step.
+		resp, body = get("http://" + api + "/auth/oidc/start?elevate=1&next=/api/me")
+		to = resp.Header.Get("Location")
+		if resp.StatusCode != http.StatusSeeOther || !strings.Contains(to, "prompt=login") || !strings.Contains(to, "max_age=0") {
+			t.Fatalf("elevate start: %d %s %s", resp.StatusCode, to, body)
+		}
+		back = idp.Authorize(t, to, map[string]any{"preferred_username": "Ops@Corp.Example", "groups": []string{"g-ops", "g-eng"}, "sub": "acct-7", "auth_time": time.Now().Unix()})
+		resp, body = get(back)
+		i := strings.Index(body, "/auth/oidc/elevated?t=")
+		if resp.StatusCode != http.StatusOK || i < 0 {
+			t.Fatalf("elevate callback: %d %s", resp.StatusCode, body)
+		}
+		resp, body = get("http://" + api + body[i:i+strings.IndexByte(body[i:], '"')])
+		if resp.StatusCode != http.StatusSeeOther || resp.Header.Get("Location") != "/api/me" {
+			t.Errorf("elevate finish: %d %s", resp.StatusCode, body)
 		}
 	})
 }
