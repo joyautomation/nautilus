@@ -281,8 +281,21 @@ func TestOIDCSameNameAnotherAccountIsRefused(t *testing.T) {
 	if !unpinned {
 		t.Error("the unpin was not journalled as users.change by os:opsadmin")
 	}
-	if _, c := oidcSignIn(t, srv, fake, "/"); c == nil {
-		t.Error("after unpin, the new account could not sign in")
+	// A session of the old account that raced the unpin (opened after
+	// the reload ended the others) acts no more: each request checks the
+	// pin.
+	raced, _ := srv.sessions.start(session{user: "jsmith@corp.example", oidc: true, issuer: "https://idp.example", sub: "sub-1"})
+	if rec := call(t, srv, "GET", "/api/me", "", withCookie(raced)); !strings.Contains(rec.Body.String(), `"principal":"anonymous"`) {
+		t.Errorf("an unpinned account's raced session acts: %s", rec.Body)
+	}
+	_, c = oidcSignIn(t, srv, fake, "/")
+	if c == nil {
+		t.Fatal("after unpin, the new account could not sign in")
+	}
+	// The name is pinned to sub-2 now: a raced sub-1 session still acts
+	// no more.
+	if rec := call(t, srv, "GET", "/api/me", "", withCookie(raced)); !strings.Contains(rec.Body.String(), `"principal":"anonymous"`) {
+		t.Errorf("a session of the account the name is no longer pinned to acts: %s", rec.Body)
 	}
 }
 
@@ -451,14 +464,14 @@ func TestSignoutEndsSessions(t *testing.T) {
 	if !journalled {
 		t.Error("the sign-out was not journalled with the session it ended")
 	}
-	// The recheck alone (no reload's end): a session opened before the
-	// recorded sign-out does not act.
-	se := session{user: "jsmith", cred: credPrint(srv.users.Current().Users["jsmith"].Password)}
-	id, _ := srv.sessions.start(se)
-	if err := users.SignOut(users.SignoutsPath(path), "opsadmin", "user:jsmith", time.Now().Add(time.Second)); err != nil {
+	// The recheck alone: a session that raced the sign-out (opened after
+	// the reload ended the others, but before the sign-out's moment) does
+	// not act either.
+	if err := users.SignOut(users.SignoutsPath(path), "opsadmin", "user:jsmith", time.Now().Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
 	srv.users.Reload()
+	id, _ := srv.sessions.start(session{user: "jsmith", cred: credPrint(srv.users.Current().Users["jsmith"].Password)})
 	for _, c := range []string{id, lc.Value} {
 		if rec := call(t, srv, "GET", "/api/me", "", withCookie(c)); !strings.Contains(rec.Body.String(), `"principal":"anonymous"`) {
 			t.Errorf("a user:jsmith session still acts after its sign-out: %s", rec.Body)
