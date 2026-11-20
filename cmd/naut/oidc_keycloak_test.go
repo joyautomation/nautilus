@@ -234,4 +234,6 @@ func (j loopbackSecureJar) SetCookies(u *url.URL, cs []*http.Cookie) {
 	j.CookieJar.SetCookies(j.secure(u), cs)
 }
 
-func (j loopbackSecureJar) Cookies(u *url.URL) []*http.Cookie { return j.CookieJar.Cookies(j.secure(u)) }
+func (j loopbackSecureJar) Cookies(u *url.URL) []*http.Cookie {
+	return j.CookieJar.Cookies(j.secure(u))
+}
