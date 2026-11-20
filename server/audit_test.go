@@ -110,11 +110,17 @@ func routes(s *Server, mux, other *http.ServeMux) {
 	}
 }
 
+// selfJournalled are the only write routes outside the audited seam:
+// sign-in and sign-out, which must work for an anonymous request and while
+// the journal is down, and journal themselves (auth.signin, auth.signout;
+// TestSignInAndOutJournalThemselves).
+var selfJournalled = map[string]bool{"POST /api/signin": true, "POST /api/signout": true}
+
 // Every route that changes something records its entry through the
 // seam. A new write route registered without s.audited fails here.
 func TestEveryWriteRouteIsAudited(t *testing.T) {
 	for pattern, wrapped := range writeRoutes(t) {
-		if !wrapped {
+		if !wrapped && !selfJournalled[pattern] {
 			t.Errorf("%s is registered without s.audited: wrap it, and add its rows to auditRows", pattern)
 		}
 	}
@@ -501,6 +507,9 @@ func TestEveryWritePathJournalsExactlyOneEntry(t *testing.T) {
 	}
 	var missing []string
 	for pattern := range writeRoutes(t) {
+		if selfJournalled[pattern] {
+			continue
+		}
 		if !covered[pattern][audit.ResultOK] || !covered[pattern][audit.ResultRefused] {
 			missing = append(missing, pattern)
 		}

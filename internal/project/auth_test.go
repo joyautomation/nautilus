@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 
 	"github.com/joyautomation/nautilus/auth"
 )
@@ -90,12 +91,34 @@ func TestLoadAuthRefuses(t *testing.T) {
 		{"auth:\n  service-tokens:\n    s: [{role: viewer, role: administrator}]\n", "role is given twice"},
 		{"auth:\n  areas:\n    r: {tags: []}\n", `area "r" names no tags`},
 		{"auth:\n  anonymous: operator\n", `use none or viewer`},
-		{"auth:\n  session: 12h\n", "field session not found"},
+		// auth.session is taken (5b); elevation waits for 5c.
+		{"auth:\n  elevation: 15m\n", "field elevation not found"},
+		{"auth:\n  session: -1h\n", "session -1h0m0s is out of range"},
+		{"auth:\n  session: 30s\n", "session 30s is out of range"},
+		{"auth:\n  session: 169h\n", "session 169h0m0s is out of range"},
+		{"auth:\n  session: twelve\n", "bad duration"},
 		{"auth:\n  roles:\n    r: {inherits: viewer, alow: [write]}\n", "field alow not found"},
 	} {
 		_, err := Load(authProject(c.block), "")
 		if err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%q: %v, want %q", c.block, err, c.want)
+		}
+	}
+}
+
+// auth.session sets a sign-in's lifetime; left out (or 0) it is 12h.
+func TestLoadAuthSession(t *testing.T) {
+	for block, want := range map[string]time.Duration{
+		"auth:\n  session: 8h\n":                    8 * time.Hour,
+		"auth:\n  session: 0s\n":                    12 * time.Hour,
+		"auth:\n  users:\n    jsmith: [operator]\n": 12 * time.Hour,
+	} {
+		p, err := Load(authProject(block), "")
+		if err != nil {
+			t.Fatalf("%q: %v", block, err)
+		}
+		if got := p.Auth.Session(); got != want {
+			t.Errorf("%q: session %s, want %s", block, got, want)
 		}
 	}
 }

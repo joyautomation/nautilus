@@ -3,6 +3,7 @@ package project
 import (
 	"fmt"
 	"path/filepath"
+	"time"
 
 	"github.com/joyautomation/nautilus/auth"
 	"gopkg.in/yaml.v3"
@@ -35,6 +36,10 @@ type AuthConfig struct {
 	// password hashes and personal access tokens). Default: systemd's
 	// $STATE_DIRECTORY. Never inside the project, so no hash reaches git.
 	StateDir string `yaml:"state-dir"`
+	// Session is how long a browser sign-in lasts, from the sign-in
+	// (absolute): 1m to 168h, default 12h. Sessions live in the leader's
+	// memory, so a restart or a failover also ends them.
+	Session Duration `yaml:"session"`
 }
 
 // AuthArea is an area: the tags it covers, as patterns ("RCV_*").
@@ -127,6 +132,7 @@ func (c *AuthConfig) settings() auth.Settings {
 		Roles:         map[string]auth.RoleDef{},
 		Users:         map[string][]auth.Grant{},
 		ServiceTokens: map[string][]auth.Grant{},
+		Session:       time.Duration(c.Session),
 	}
 	for name, a := range c.Areas {
 		s.Areas[name] = a.Tags

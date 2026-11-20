@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/joyautomation/nautilus/audit"
 	"github.com/joyautomation/nautilus/leader"
 )
 
@@ -459,39 +460,107 @@ func TestRenewalWithAWorldReadableKeyIsRefused(t *testing.T) {
 	}
 }
 
-// What the leader judges "secure" for a request a standby forwarded is
-// the standby-to-leader hop (TLS here), not the client's request to the
-// standby (plain here): /api/me through the standby says secure. 5b must
-// decide password sign-in and Secure cookies at the hop the client
-// reached, not after a forward (#708 5b plan).
-func TestSecureThroughAStandbyIsTheForwardHop(t *testing.T) {
+// Sign-in, sign-out and /api/me are decided at the box the client
+// reached, never forwarded (the #1043 review's must-do): at the leader,
+// secure() would judge the standby's TLS hop, not the client's plain one.
+// A forwarding standby answers /api/me itself, and refers sign-in,
+// sign-out and any request with the sign-in cookie (and no bearer) to the
+// leader: 503, its address in Location and "leader", the cookie left as it
+// is. The leader sees none of them; a bearer request is still forwarded.
+// The address is the leader's configured public URL, never its peer
+// address (TestStandbyReferralWithoutAPublicURL).
+func TestStandbyDecidesSignInAndMeItself(t *testing.T) {
 	dir := t.TempDir()
 	cp, kp, _ := writeCert(t, dir, "plc", "plc.example")
-	lsrc, err := NewCertSource(cp, kp)
-	if err != nil {
-		t.Fatal(err)
-	}
-	leaderSrv := New(newTestRuntime(t), Options{TLS: lsrc})
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	hs := &http.Server{Handler: leaderSrv.Handler()}
-	go hs.Serve(tls.NewListener(ln, lsrc.Config()))
-	t.Cleanup(func() { hs.Close() })
+	addr, hits := tlsLeader(t, cp, kp)
 	mine, err := NewCertSource(cp, kp)
 	if err != nil {
 		t.Fatal(err)
 	}
-	standby := New(newTestRuntime(t), Options{TLS: mine, Cluster: fakeCluster{status: leader.Status{
-		Mode: "cluster", Pod: "plc-1", Leader: "plc-0", LeaderAddr: ln.Addr().String(),
-	}}})
-	r := httptest.NewRequest("GET", "http://localhost/api/me", nil) // no TLS
-	if standby.secure(r) {
-		t.Fatal("the plain request is secure at the standby")
+	status := leader.Status{Mode: "cluster", Pod: "plc-1", Leader: "plc-0", LeaderAddr: addr}
+	standby := New(newTestRuntime(t), Options{TLS: mine, AuthToken: "tok", Cluster: fakeCluster{status: status},
+		LeaderURLs: map[string]string{"plc-0": "https://plc-0.plant.example", "plc-1": "https://plc-1.plant.example"}})
+	req := func(method, path string, mod ...func(*http.Request)) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, "http://10.0.0.7/api/"+path, strings.NewReader(`{"name":"akhan","password":"pw"}`))
+		r.RemoteAddr = "192.0.2.9:5555" // plain HTTP, not loopback
+		r.Header.Set("Origin", "http://10.0.0.7")
+		for _, m := range mod {
+			m(r)
+		}
+		return serve(standby, r)
 	}
+	cookie := func(r *http.Request) { r.AddCookie(&http.Cookie{Name: plainCookie, Value: "some-session"}) }
+	secureOne := func(r *http.Request) { r.AddCookie(&http.Cookie{Name: secureCookie, Value: "some-session"}) }
+
+	rec := req("GET", "me")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"secure":false`) {
+		t.Errorf("/api/me without a cookie: %d %s, want the standby's own answer (secure false)", rec.Code, rec.Body)
+	}
+	for _, c := range []struct {
+		method, path string
+		mod          []func(*http.Request)
+	}{
+		{"POST", "signin", nil},
+		{"POST", "signout", []func(*http.Request){cookie}},
+		// Never forwarded, whatever else it carries.
+		{"POST", "signout", nil},
+		{"GET", "me", []func(*http.Request){cookie}},
+		{"GET", "state", []func(*http.Request){cookie}},
+		{"POST", "tags", []func(*http.Request){cookie}},
+		{"GET", "state", []func(*http.Request){secureOne}},
+	} {
+		rec := req(c.method, c.path, c.mod...)
+		want := "https://plc-0.plant.example"
+		if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Location") != want+"/" || !strings.Contains(rec.Body.String(), `"leader":"`+want+`"`) {
+			t.Errorf("%s /api/%s on the standby: %d Location %q %s; want 503 naming %s", c.method, c.path, rec.Code, rec.Header().Get("Location"), rec.Body, want)
+		}
+		if sc := rec.Header().Values("Set-Cookie"); len(sc) > 0 {
+			t.Errorf("%s /api/%s on the standby set a cookie: %v", c.method, c.path, sc)
+		}
+	}
+	if n := hits(); n != 0 {
+		t.Fatalf("the leader received %d requests, want none", n)
+	}
+	if strings.Contains(req("POST", "signin").Body.String(), addr) {
+		t.Error("the referral names the leader's peer address")
+	}
+	// A cookie-carrying write the standby refers is journalled through the
+	// route's seam, as its other own answers are.
+	if es := standby.audit.ring.Recent(); len(es) == 0 || es[0].Action != "tag.write" || es[0].Result != audit.ResultError {
+		t.Errorf("the referred write is not journalled: %+v", es)
+	}
+	// A bearer credential is forwarded as before, cookie or not.
+	req("GET", "state", cookie, func(r *http.Request) { r.Header.Set("Authorization", "Bearer tok") })
+	if n := hits(); n != 1 {
+		t.Errorf("a bearer request with a cookie: the leader received %d, want 1", n)
+	}
+}
+
+// Without redundancy.public-urls a standby's referral names no address:
+// the peer address is the pair's, and the answer goes to anyone. The
+// sign-in page says to open the leader, with no link and no form.
+func TestStandbyReferralWithoutAPublicURL(t *testing.T) {
+	standby, _, _ := patServer(t)
+	standby.cluster = fakeCluster{status: leader.Status{Mode: "quorum", Pod: "b", Leader: "a", LeaderAddr: "10.9.8.7:8086"}}
+	r := httptest.NewRequest("POST", "http://10.0.0.7/api/signin", strings.NewReader(`{}`))
+	r.Header.Set("Origin", "http://10.0.0.7")
 	rec := serve(standby, r)
-	if !strings.Contains(rec.Body.String(), `"secure":true`) {
-		t.Errorf("/api/me forwarded over TLS: %s", rec.Body)
+	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Location") != "" || strings.Contains(rec.Body.String(), "10.9.8.7") ||
+		strings.Contains(rec.Body.String(), `"leader"`) || !strings.Contains(rec.Body.String(), "open the leader") {
+		t.Errorf("sign-in on a standby with no public URL: %d Location %q %s", rec.Code, rec.Header().Get("Location"), rec.Body)
+	}
+	page := func() string {
+		r := httptest.NewRequest("GET", "http://10.0.0.7/signin", nil)
+		r.RemoteAddr = "127.0.0.1:1" // where the form would otherwise show
+		return serve(standby, r).Body.String()
+	}
+	body := page()
+	if !strings.Contains(body, "standby") || strings.Contains(body, "10.9.8.7") || strings.Contains(body, "<form") || strings.Contains(body, "<a ") {
+		t.Errorf("the sign-in page on a standby with no public URL: %s", body)
+	}
+	standby.leaderURLs = map[string]string{"a": "https://plc-a.plant.example"}
+	body = page()
+	if !strings.Contains(body, `href="https://plc-a.plant.example/signin"`) || strings.Contains(body, "<form") {
+		t.Errorf("the sign-in page on a standby with a public URL: %s", body)
 	}
 }

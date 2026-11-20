@@ -68,6 +68,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -301,13 +302,20 @@ type Options struct {
 	// else a same-origin request). With it, every write route asks the
 	// policy (authorize), NAUTILUS_TOKEN is the principal "token" with the
 	// block's token-role, and GET /api/audit needs the audit permission.
-	// Reads are not gated yet: that comes with sign-in (#708 PR 5).
+	// Reads are not gated yet: that comes with the read gate (#708 PR
+	// 5b-2). Users with a users file sign in by browser (signin.go).
 	Auth *auth.Policy
 
 	// ServiceTokens are the service tokens' secrets, by name (naut run
 	// reads each from NAUTILUS_TOKEN_<NAME>). A request presenting one acts
 	// as "token:<name>", with the grants the auth: block gives it.
 	ServiceTokens map[string]string
+
+	// LeaderURLs are a redundant pair's controllers as a browser reaches
+	// them, by node name (redundancy.public-urls: {a: https://…, b: …}). A
+	// standby refers a signed-in browser to the leader's; without one it
+	// names no address (a peer address must never reach a browser).
+	LeaderURLs map[string]string
 
 	// Users is the controller's users file (#708): a personal access token
 	// it holds is a credential acting as "user:<name>", with the grants
@@ -575,7 +583,10 @@ type Server struct {
 	tagGen  uint64
 	tagSnap map[string]any
 
-	users *users.Store
+	users      *users.Store
+	leaderURLs map[string]string // Options.LeaderURLs
+	sessions   *sessions         // browser sign-ins; nil without users to sign in
+	signin     *signInGate
 
 	// unforceAllChecked, when set (tests only), runs between clear-all's
 	// check of the forced tags and its clearing of them.
@@ -651,6 +662,7 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 	if len(opts) > 0 {
 		s.policy = opts[0].Auth
 		s.proxies = opts[0].TrustedProxies
+		s.leaderURLs = opts[0].LeaderURLs
 		if c := opts[0].TLS; c != nil {
 			s.tls, s.leaderTLS = c, c.leaderTransport()
 			c.OnReload(s.journalTLSReload)
@@ -669,6 +681,10 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 		}
 		if u := opts[0].Users; u != nil {
 			s.users = u
+			if s.policy != nil {
+				s.sessions = newSessions(s.policy.Session())
+				s.signin = newSignInGate()
+			}
 			u.OnChange(s.journalUsersChange)
 			u.OnHealth(s.journalUsersHealth)
 			// What changed while the controller was stopped.
@@ -712,6 +728,9 @@ func (s *Server) Run(ctx context.Context) {
 			return
 		case <-t.C:
 			s.broadcast()
+			if _, ok := s.standbyLeader(); ok {
+				s.endSessionsAsStandby()
+			}
 		}
 	}
 }
@@ -823,6 +842,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/cluster", s.handleCluster)
 	mux.HandleFunc("GET /api/audit", s.handleAudit)
 	mux.HandleFunc("GET /api/me", s.handleMe)
+	// Sign-in and sign-out journal themselves (auth.signin, auth.signout),
+	// outside the audited seam: TestEveryWriteRouteIsAudited names them.
+	mux.HandleFunc("GET /signin", s.handleSignInPage)
+	mux.HandleFunc("POST /api/signin", s.handleSignIn)
+	mux.HandleFunc("POST /api/signout", s.handleSignOut)
 	mux.HandleFunc("GET /api/history", s.handleHistory)
 	mux.HandleFunc("GET /api/history/", s.handleHistory)
 	if s.hmi != nil {
@@ -899,8 +923,9 @@ func (s *Server) proxyStandby(routes *http.ServeMux, mux http.Handler) http.Hand
 			// under way, the leader gone, a pair not yet commissioned): a
 			// write here would land in a store that does not scan, so it
 			// is refused, as a lease holder with its gate closed refuses
-			// one (#621). Reads are answered from this store.
-			if r.Method == http.MethodGet || r.Method == http.MethodHead {
+			// one (#621). Reads are answered from this store, and so is a
+			// sign-out (it only revokes; sign-in waits for the election).
+			if r.Method == http.MethodGet || r.Method == http.MethodHead || r.URL.Path == "/api/signout" {
 				mux.ServeHTTP(w, r)
 				return
 			}
@@ -924,8 +949,9 @@ func (s *Server) proxyStandby(routes *http.ServeMux, mux http.Handler) http.Hand
 			// scans are not completing, #621): the leader's address is our
 			// own, and forwarding would send the request back here, again
 			// and again. Reads are answered from this store; a write is
-			// refused, since nothing here scans it.
-			if r.Method == http.MethodGet || r.Method == http.MethodHead {
+			// refused, since nothing here scans it. A sign-out is
+			// answered: the sessions are this box's.
+			if r.Method == http.MethodGet || r.Method == http.MethodHead || r.URL.Path == "/api/signout" {
 				mux.ServeHTTP(w, r)
 				return
 			}
@@ -934,6 +960,23 @@ func (s *Server) proxyStandby(routes *http.ServeMux, mux http.Handler) http.Hand
 					"error": "this replica holds the lease but its write gate is closed (its scans are not completing); try again shortly",
 				})
 			})
+			return
+		}
+		// Sign-in, sign-out and /api/me are decided at the box the client
+		// reached, never forwarded: secure() at the leader would judge the
+		// standby's hop, not the client's (#1043 review). Sessions live on
+		// the leader (#708 decision (c)), so a sign-in here, a sign-out
+		// (only the leader can revoke the session) and any request with
+		// the sign-in cookie and no bearer credential are referred to it.
+		s.endSessionsAsStandby()
+		if standbyRefers(r) {
+			auditedAnswer(routes, w, r, func(w http.ResponseWriter, _ *http.Request) {
+				s.referToLeader(w, s.leaderURLs[st.Leader])
+			})
+			return
+		}
+		if r.URL.Path == "/api/me" {
+			mux.ServeHTTP(w, r)
 			return
 		}
 		// The body is kept so a request the leader never received can be
@@ -957,6 +1000,66 @@ func (s *Server) proxyStandby(routes *http.ServeMux, mux http.Handler) http.Hand
 		}
 		s.forwardTo(w, r, st.LeaderAddr, routes, mux, body, true)
 	})
+}
+
+// standbyRefers reports a request a forwarding standby answers with the
+// leader's address: sign-in, sign-out, and anything sent with the sign-in
+// cookie and no bearer credential. The standby holds no sessions, so it
+// goes by the cookie being there, valid or not.
+func standbyRefers(r *http.Request) bool {
+	switch r.URL.Path {
+	case "/api/signin", "/api/signout":
+		return true
+	}
+	return hasSessionCookie(r) && presentedToken(r) == ""
+}
+
+// referToLeader is a forwarding standby's answer to a browser session's
+// request: 503, and the leader's configured public URL (Location and
+// "leader") for the HMI kit to follow. Never the peer address: that is
+// for the pair (leader.Status keeps it out of JSON), and this answer goes
+// to anyone. Without a configured URL, the 503 names none. The cookie is
+// left as it is: only the leader can end the session it names.
+func (s *Server) referToLeader(w http.ResponseWriter, leader string) {
+	w.Header().Set("Cache-Control", "no-store")
+	body := map[string]string{"error": "this controller is the standby; open the leader (browser sign-ins live on the leader)"}
+	if leader != "" {
+		w.Header().Set("Location", leader+"/")
+		body["leader"] = leader
+	}
+	writeJSON(w, http.StatusServiceUnavailable, body)
+}
+
+// endSessionsAsStandby ends the browser sessions this controller issued
+// while it led, once it is a standby that forwards to another leader:
+// sessions live on the leader, and one kept here would act again if this
+// box led again (a failover signs browser users out), where a sign-out at
+// the leader in between could not have revoked it. Run checks at every
+// tick; a forwarded request checks too.
+func (s *Server) endSessionsAsStandby() {
+	if s.sessions == nil {
+		return
+	}
+	if n := s.sessions.endAll(); n > 0 {
+		slog.Info("auth: this controller is now a standby; its browser sessions are ended", "sessions", n)
+		s.audit.record(audit.Entry{User: "system", Source: audit.SourceSystem, Action: "auth.sessions-ended",
+			Detail: map[string]any{"reason": "this controller is now a standby: browser sessions live on the leader", "sessions": n},
+			Result: audit.ResultOK})
+	}
+}
+
+// standbyLeader reports whether this controller is a standby that
+// forwards to a leader, and that leader's configured public URL ("" when
+// none is).
+func (s *Server) standbyLeader() (string, bool) {
+	if s.cluster == nil {
+		return "", false
+	}
+	st := s.cluster.Status()
+	if st.IsLeader || st.LeaderAddr == "" || noLeaderKnown(st) || heldHere(st) {
+		return "", false
+	}
+	return s.leaderURLs[st.Leader], true
 }
 
 // heldHere reports a replica that the lease names but that is not leading:

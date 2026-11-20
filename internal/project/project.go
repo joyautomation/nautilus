@@ -14,6 +14,7 @@ import (
 	"io/fs"
 	"math"
 	"net"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -361,6 +362,39 @@ type RedundancyConfig struct {
 	// values, so a setpoint the old leader took is lost. A pair without it
 	// is refused. It goes away when step 4 lands.
 	Experimental bool `yaml:"experimental"`
+	// PublicURLs are the pair's controllers as a browser reaches them, by
+	// node name ({a: https://plc-a.plant.lan, b: …}): where a standby
+	// refers a signed-in browser (#708). Without them it names no
+	// address: the peer addresses are the pair's, never a browser's.
+	PublicURLs map[string]string `yaml:"public-urls"`
+}
+
+// LeaderURLs is public-urls with no trailing slash, for the server.
+func (r *RedundancyConfig) LeaderURLs() map[string]string {
+	if r == nil || len(r.PublicURLs) == 0 {
+		return nil
+	}
+	out := map[string]string{}
+	for n, u := range r.PublicURLs {
+		out[n] = strings.TrimSuffix(u, "/")
+	}
+	return out
+}
+
+// checkPublicURLs: each a or b, an absolute http(s) URL of a host, with
+// no path, query or credentials (it is an origin a browser is sent to).
+func checkPublicURLs(urls map[string]string) error {
+	for name, raw := range urls {
+		if name != "a" && name != "b" {
+			return fmt.Errorf("redundancy.public-urls: %q is not a controller of the pair: name them a and b", name)
+		}
+		u, err := url.Parse(raw)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil ||
+			(u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+			return fmt.Errorf("redundancy.public-urls.%s %q: want the controller's address as a browser opens it, e.g. https://plc-%s.plant.lan:8443 (no path)", name, raw, name)
+		}
+	}
+	return nil
 }
 
 // PairRetainNotReplicated is what a pair says about its retained values
@@ -413,6 +447,8 @@ func checkRedundancy(r *RedundancyConfig) error {
 			return errors.New("redundancy.experimental applies to a redundant pair (peers:); the Kubernetes Lease mode is not experimental")
 		case r.NetDelay != 0 || r.SendMargin != 0:
 			return errors.New("redundancy.net-delay and send-margin apply to a redundant pair (peers:): they set its write gate's fence margin")
+		case r.PublicURLs != nil:
+			return errors.New("redundancy.public-urls applies to a redundant pair (peers:): the pair's controllers as a browser reaches them")
 		}
 		return nil
 	}
@@ -448,6 +484,9 @@ func checkRedundancy(r *RedundancyConfig) error {
 		}
 	}
 	if err := checkFence(r); err != nil {
+		return err
+	}
+	if err := checkPublicURLs(r.PublicURLs); err != nil {
 		return err
 	}
 	// A controller's path, judged the same wherever Load runs (naut check

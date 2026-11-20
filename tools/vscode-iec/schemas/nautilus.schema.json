@@ -275,6 +275,10 @@
           "type": "string",
           "description": "Where the controller keeps its users file (users.json: password hashes and personal access tokens, managed with naut users). Default: systemd's $STATE_DIRECTORY. Never inside the project, so no hash reaches git."
         },
+        "session": {
+          "type": "string",
+          "description": "How long a browser sign-in lasts, from the sign-in (not renewed by use): 1m to 168h. Default 12h. Sessions live in the leader's memory: a restart or a failover signs browser users out."
+        },
         "service-tokens": {
           "type": "object",
           "propertyNames": {

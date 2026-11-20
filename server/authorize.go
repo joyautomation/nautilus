@@ -5,8 +5,11 @@ import (
 	"crypto/subtle"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
+	"time"
 
 	"github.com/joyautomation/nautilus/audit"
 	"github.com/joyautomation/nautilus/auth"
@@ -125,6 +128,140 @@ func (s *Server) validCredential(r *http.Request) bool {
 	return presented && valid
 }
 
+// actor is who a request acts as: its bearer credential when it presents
+// one, else the browser session its cookie names, else anonymous.
+type actor struct {
+	pr auth.Principal
+	// invalid: it presented a bearer credential nobody knows (a 401,
+	// never a fall back to the cookie).
+	invalid bool
+	// session is set when the principal comes from the sign-in cookie.
+	session *session
+}
+
+// actorOf resolves r's principal for authorization, the journal and
+// /api/me. The cookie is consulted only here, never by credential: it
+// does not pass the Host rule, CORS or the preflight (design §2, gate 1),
+// which ask validCredential.
+//
+// Behind the audit seam it is resolved once (withActor): the entry names
+// who was authorized even if the session ends while the handler runs.
+func (s *Server) actorOf(r *http.Request) actor {
+	if a, ok := r.Context().Value(actorKey{}).(actor); ok {
+		return a
+	}
+	pr, presented, valid := s.credential(r)
+	if presented {
+		if !valid {
+			return actor{pr: auth.Anonymous, invalid: true}
+		}
+		return actor{pr: pr}
+	}
+	if se, ok := s.sessionOf(r); ok {
+		return actor{pr: auth.User(se.user), session: &se}
+	}
+	return actor{pr: auth.Anonymous}
+}
+
+type actorKey struct{}
+
+// withActor fixes r's actor for the rest of the request.
+func (s *Server) withActor(r *http.Request) *http.Request {
+	if _, ok := r.Context().Value(actorKey{}).(actor); ok {
+		return r
+	}
+	return r.WithContext(context.WithValue(r.Context(), actorKey{}, s.actorOf(r)))
+}
+
+// sessionOf is the live session r's cookie names, its user still in the
+// users file, enabled, and granted something by the auth: block. An
+// unknown or expired cookie (a restart forgot it) is no session, not an
+// error: the request is anonymous.
+func (s *Server) sessionOf(r *http.Request) (session, bool) {
+	if s.sessions == nil {
+		return session{}, false
+	}
+	for _, c := range r.CookiesNamed(s.cookieName(r)) {
+		se, ok := s.sessions.lookup(c.Value)
+		if !ok {
+			continue
+		}
+		u, known := s.users.Current().Users[se.user]
+		if !known || u.Disabled || credPrint(u.Password) != se.cred || !s.policy.HasUser(se.user) {
+			return session{}, false
+		}
+		return se, true
+	}
+	return session{}, false
+}
+
+// cookieName is the sign-in cookie's name on r's transport: the __Host-
+// one over TLS. Only that one is read: a plain-HTTP page on the same host
+// cannot plant a cookie a secure request would take.
+func (s *Server) cookieName(r *http.Request) string {
+	if s.secure(r) {
+		return secureCookie
+	}
+	return plainCookie
+}
+
+// hasSessionCookie reports whether r carries a sign-in cookie at all, by
+// either name, valid or not: what a standby, which holds no sessions, can
+// see.
+func hasSessionCookie(r *http.Request) bool {
+	return len(r.CookiesNamed(secureCookie)) > 0 || len(r.CookiesNamed(plainCookie)) > 0
+}
+
+// ownOrigin reports a browser request from this controller's own page: an
+// Origin is present and is this controller's origin as the request
+// reached it: https when secure(r), else http, and the Host, ports
+// compared with the scheme's default filled in. It is stricter than
+// sameOrigin, which lets a request with no Origin through and ignores the
+// scheme: a cookie is sent by any page on the same host (SameSite ignores
+// the port, and a browser without schemeful same-site the scheme too), so
+// an http page an on-path attacker answers must not write over https.
+func (s *Server) ownOrigin(r *http.Request) bool {
+	o := r.Header.Get("Origin")
+	if o == "" {
+		return false
+	}
+	u, err := url.Parse(o)
+	if err != nil || u.Host == "" || u.User != nil || (u.Path != "" && u.Path != "/") {
+		return false
+	}
+	scheme := "http"
+	if s.secure(r) {
+		scheme = "https"
+	}
+	return u.Scheme == scheme && strings.EqualFold(withPort(u.Host, scheme), withPort(r.Host, scheme))
+}
+
+// withPort is host[:port] with the scheme's default port when it has
+// none, so "plc" and "plc:443" are the same https origin.
+func withPort(host, scheme string) string {
+	if _, _, err := net.SplitHostPort(host); err == nil {
+		return host
+	}
+	port := "80"
+	if scheme == "https" {
+		port = "443"
+	}
+	return net.JoinHostPort(strings.TrimSuffix(strings.TrimPrefix(host, "["), "]"), port)
+}
+
+// cookieRefused is the refusal for a cookie-authenticated request that
+// changes something from anywhere but this controller's own page (#812):
+// 0 when it is allowed.
+func (s *Server) cookieRefused(r *http.Request, a actor) (int, string) {
+	if a.session == nil || r.Method == http.MethodGet || r.Method == http.MethodHead || s.ownOrigin(r) {
+		return 0, ""
+	}
+	return http.StatusForbidden, "a signed-in browser may change something only from this controller's own page (the request's Origin must be this controller's scheme and host)"
+}
+
+// signInHint ends a 401 for a request with no credential.
+const signInHint = ": sign in, or send a token (Authorization: Bearer …)"
+
 // credentialsConfigured reports whether any credential exists: a request
 // may then come from any origin or Host with it.
 func (s *Server) credentialsConfigured() bool {
@@ -134,6 +271,11 @@ func (s *Server) credentialsConfigured() bool {
 // journalUsersChange records each change naut users made to the users
 // file, by the operating-system user who made it ("os:<name>"), never a
 // hash or a secret.
+//
+// A change that takes a user's password away (disabled, a new password,
+// removed) ends that user's browser sessions at once, and its entry says
+// how many. It is done here, in the one OnChange callback, so a change is
+// never journalled without its revocation.
 func (s *Server) journalUsersChange(by string, changes []users.Change) {
 	who := "os:unknown"
 	if by != "" {
@@ -141,6 +283,14 @@ func (s *Server) journalUsersChange(by string, changes []users.Change) {
 	}
 	for _, c := range changes {
 		detail := map[string]any{"change": c.What}
+		switch c.What {
+		case "disabled", "password", "removed":
+			if s.sessions != nil {
+				if n := s.sessions.endUser(c.User); n > 0 {
+					detail["sessions"] = n
+				}
+			}
+		}
 		if c.Token != "" {
 			detail["token"] = c.Token
 		}
@@ -176,16 +326,19 @@ func (s *Server) authorize(r *http.Request, perm, target string) (int, string) {
 	if s.policy == nil {
 		return s.authorizeWrite(r)
 	}
-	pr, presented, valid := s.credential(r)
-	if presented && !valid {
+	a := s.actorOf(r)
+	if a.invalid {
 		return http.StatusUnauthorized, "invalid credential"
 	}
-	d := s.policy.Can(pr, perm, target)
+	if code, msg := s.cookieRefused(r, a); code != 0 {
+		return code, msg
+	}
+	d := s.policy.Can(a.pr, perm, target)
 	if d.Allowed {
 		return 0, ""
 	}
-	if pr.Kind == auth.KindAnonymous {
-		return http.StatusUnauthorized, d.Reason + ": send a token (Authorization: Bearer …)"
+	if a.pr.Kind == auth.KindAnonymous {
+		return http.StatusUnauthorized, d.Reason + signInHint
 	}
 	return http.StatusForbidden, d.Reason
 }
@@ -230,16 +383,19 @@ func (s *Server) preAuthorize(r *http.Request, action string) (int, string) {
 	if !ok {
 		return http.StatusForbidden, fmt.Sprintf("%s needs a permission nobody has been given (the server does not map it)", action)
 	}
-	pr, presented, valid := s.credential(r)
-	if presented && !valid {
+	a := s.actorOf(r)
+	if a.invalid {
 		return http.StatusUnauthorized, "invalid credential"
 	}
-	if s.policy.Holds(pr, perm) {
+	if code, msg := s.cookieRefused(r, a); code != 0 {
+		return code, msg
+	}
+	if s.policy.Holds(a.pr, perm) {
 		return 0, ""
 	}
-	reason := s.policy.Can(pr, perm, auth.All).Reason
-	if pr.Kind == auth.KindAnonymous {
-		return http.StatusUnauthorized, reason + ": send a token (Authorization: Bearer …)"
+	reason := s.policy.Can(a.pr, perm, auth.All).Reason
+	if a.pr.Kind == auth.KindAnonymous {
+		return http.StatusUnauthorized, reason + signInHint
 	}
 	return http.StatusForbidden, reason
 }
@@ -259,14 +415,20 @@ func decidedBySeam(r *http.Request) bool {
 }
 
 // principalOf is the journal's name for who r acts as: "anonymous",
-// "token", or "token:<name>". An unknown credential is anonymous; nothing
-// the client names (an alarm's "by") is ever taken as the principal.
+// "token", "token:<name>" or "user:<name>" (a personal access token, or a
+// signed-in browser). An unknown credential is anonymous; nothing the
+// client names (an alarm's "by") is ever taken as the principal.
 func (s *Server) principalOf(r *http.Request) string {
-	pr, _, valid := s.credential(r)
-	if !valid {
-		return auth.Anonymous.String()
+	return s.actorOf(r).pr.String()
+}
+
+// sessionOfEntry is the journal's "session" for r: the hash of the
+// sign-in it acts by, or "" for a bearer credential or none.
+func (s *Server) sessionOfEntry(r *http.Request) string {
+	if a := s.actorOf(r); a.session != nil {
+		return a.session.hash
 	}
-	return pr.String()
+	return ""
 }
 
 // meResponse is GET /api/me: who the request acts as, and what it may do.
@@ -278,6 +440,14 @@ type meResponse struct {
 	// trusted proxy's): where password sign-in and Secure cookies work.
 	Secure bool `json:"secure"`
 	auth.Me
+	// Session is the browser sign-in the request acts by, when it does.
+	Session *meSession `json:"session,omitempty"`
+}
+
+// meSession is /api/me's account of a browser sign-in. The id never
+// appears: the cookie is HttpOnly.
+type meSession struct {
+	Expires time.Time `json:"expires"`
 }
 
 // handleMe is GET /api/me, for the HMI kit's role-aware controls (#708 PR
@@ -285,15 +455,18 @@ type meResponse struct {
 // controller ("*") and per area. It is a read: it never refuses, and an
 // unknown credential is answered as anonymous.
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
-	pr, _, valid := s.credential(r)
-	if !valid {
-		pr = auth.Anonymous
-	}
+	a := s.actorOf(r)
+	// It answers by the request's cookie: no cache may hand it to another.
+	w.Header().Set("Cache-Control", "no-store")
 	if s.policy == nil {
-		writeJSON(w, http.StatusOK, meResponse{Secure: s.secure(r), Me: auth.Me{Principal: pr.String(), Roles: []string{}, Permissions: map[string][]string{}}})
+		writeJSON(w, http.StatusOK, meResponse{Secure: s.secure(r), Me: auth.Me{Principal: a.pr.String(), Roles: []string{}, Permissions: map[string][]string{}}})
 		return
 	}
-	writeJSON(w, http.StatusOK, meResponse{Auth: true, Secure: s.secure(r), Me: s.policy.Describe(pr)})
+	me := meResponse{Auth: true, Secure: s.secure(r), Me: s.policy.Describe(a.pr)}
+	if a.session != nil {
+		me.Session = &meSession{Expires: a.session.expires.UTC()}
+	}
+	writeJSON(w, http.StatusOK, me)
 }
 
 // journalUsersHealth records the users file becoming unreadable (no
