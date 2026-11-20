@@ -25,12 +25,12 @@ and `bench.st`'s 1 Hz heartbeat blinks the DO16's output 16 LED (in the
 shim's own view of the output frame, `naut plcnext shm --watch`, byte 1
 toggles `00`/`80` every 500 ms). The image costs 0.03–0.05 ms a
 scan instead of an ~11 ms gRPC round trip, the inputs are 0.1–1.1 ms
-old when the program sees them, and naut uses 4 % of one core at the
-50 ms scan (9 % on gRPC) and 20 MB, beside the shim's 3 % and 17 MB, on
-a controller whose firmware already idles at load 4–5. A 5 ms scan
-works too but costs naut 21.5 % and disturbs the best-effort shim's
-timing (rt/plcnext-io/README.md has the numbers), so the project stays
-at 50 ms.
+old when the program sees them, and naut uses 8–9 % of one core at the
+20 ms scan (4 % at 50 ms, 9 % on gRPC at 50 ms) and 30 MB, beside the
+shim's 3 % and 17 MB, on a controller whose firmware already idles at
+load 4–5. A 5 ms scan works too but costs naut 21.5 % and disturbs the
+best-effort shim's timing (rt/plcnext-io/README.md has the numbers), so
+the project runs at 20 ms.
 
 Fail-safe, tried on the bench: kill naut and the shim drives the output
 frame to zero 1 s later (`output-watchdog`), and the output 16 LED goes
@@ -254,7 +254,7 @@ and the slider stay large.
 
 The firmware refreshes the Axioline frames every 500 µs. On `transport:
 shm` the shim copies them every 1 ms and naut's scan reads the latest
-copy; the program's own scan (50 ms here) is the rate that matters. On
+copy; the program's own scan (20 ms here) is the rate that matters. On
 `transport: grpc` each poll is one round trip of ~11 ms for this
 manifest's eight bytes, remote-I/O grade.
 
