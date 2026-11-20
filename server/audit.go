@@ -12,6 +12,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -355,6 +356,42 @@ func (a *auditor) status() *DriverStatus {
 			}}
 	}
 	return nil
+}
+
+// copyCard is the journal's copy in Postgres on the drivers block (#709
+// PR 9), shown whenever audit.sink is set: whether it holds every entry,
+// how far behind it is, and why it stopped if it did.
+func copyCard(st audit.CopyStatus) DriverStatus {
+	d := DriverStatus{Kind: "audit", Name: "audit copy", Detail: "postgres", LastError: st.LastError,
+		Metrics: []DriverMetric{
+			{Label: "copied seq", Value: float64(st.Copied), Volatile: true},
+			{Label: "journal seq", Value: float64(st.Head), Volatile: true},
+		}}
+	if !st.Since.IsZero() {
+		d.SinceMs = st.Since.UnixMilli()
+	}
+	if st.Gaps > 0 {
+		d.Metrics = append(d.Metrics, DriverMetric{Label: "gaps", Value: float64(st.Gaps)})
+	}
+	behind := uint64(0)
+	if st.Head > st.Copied {
+		behind = st.Head - st.Copied
+	}
+	switch st.State {
+	case audit.CopyCurrent:
+		d.State, d.Message = "connected", "the copy in Postgres holds every journal entry"
+	case audit.CopyStarting:
+		d.State, d.Message = "connecting", "reaching Postgres; the copy starts from the journal's files"
+	case audit.CopyBehind:
+		if st.LastError == "" {
+			d.State, d.Message = "connecting", fmt.Sprintf("catching up: %d entries to copy", behind)
+		} else {
+			d.State, d.Message = "degraded", fmt.Sprintf("Postgres is unreachable or refusing: the copy is %d entries behind, and catches up from the journal's files when it is back (nothing is lost while they are kept)", behind)
+		}
+	default: // stopped
+		d.State, d.Message = "error", "the copy stopped: the journal's files no longer match what the copy holds, so it is left as it is (it is the evidence). Run naut audit verify, and compare the journal with the copy before restarting"
+	}
+	return d
 }
 
 // flush writes everything owed now: the kept entries, and a summary for

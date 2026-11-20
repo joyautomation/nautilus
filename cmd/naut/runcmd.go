@@ -564,17 +564,31 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	// and the system alarm say so (#709, design §6 question 5).
 	j, err := openAudit(proj, os.Stderr)
 	sopts.AuditUnavailable = err
+	stopCopy := func() {}
 	if j != nil {
 		sopts.Audit = j
 		go pruneAudit(ctx, j, os.Stderr)
+		// The journal's copy in Postgres (audit.sink: postgres, #709 PR 9).
+		copier, stop, err := startAuditCopy(ctx, proj, j, os.Getenv, os.Stderr)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "audit:", err)
+			j.Close()
+			return 1
+		}
+		if copier != nil {
+			sopts.AuditCopy = copier.Status
+			stopCopy = stop
+		}
 	}
 	srv := server.New(rt, sopts)
 	srvRef.Store(srv)
 	if j != nil {
 		// What the seam still owes (open refusal windows, entries kept
-		// through a failure) is written before the journal closes.
+		// through a failure) is written before the journal closes, and
+		// then copied.
 		defer func() {
 			srv.FlushAudit()
+			stopCopy()
 			j.Close()
 		}()
 	}
