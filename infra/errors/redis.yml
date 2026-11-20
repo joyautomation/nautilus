@@ -1,0 +1,53 @@
+# GlitchTip's task queue and cache. Nothing in it is worth keeping: on
+# a restart GlitchTip refills it, so no volume. A password, so another pod in
+# the namespace cannot read the queue.
+apiVersion: v1
+kind: Service
+metadata:
+  name: glitchtip-redis
+  namespace: joy
+  labels: {app: glitchtip-redis}
+spec:
+  selector: {app: glitchtip-redis}
+  ports:
+    - {name: redis, port: 6379, targetPort: 6379}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: glitchtip-redis
+  namespace: joy
+  labels: {app: glitchtip-redis}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: glitchtip-redis}
+  template:
+    metadata:
+      labels: {app: glitchtip-redis}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999 # the redis user in the image
+        runAsGroup: 999
+      containers:
+        - name: redis
+          image: redis:7.4.12-alpine
+          # $(REDIS_PASSWORD) is Kubernetes' own substitution from env below,
+          # so the password is in neither the manifest nor a file.
+          command: [redis-server, --requirepass, $(REDIS_PASSWORD), --save, "", --maxmemory, 48mb, --maxmemory-policy, allkeys-lru]
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom: {secretKeyRef: {name: glitchtip, key: REDIS_PASSWORD}}
+          ports:
+            - {name: redis, containerPort: 6379}
+          readinessProbe:
+            tcpSocket: {port: 6379}
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: {port: 6379}
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          resources:
+            requests: {cpu: 10m, memory: 32Mi}
+            limits: {cpu: 100m, memory: 64Mi}

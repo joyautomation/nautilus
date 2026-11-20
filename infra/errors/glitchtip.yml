@@ -1,0 +1,103 @@
+# GlitchTip (Sentry-protocol error monitoring), web + worker. Since v7 that is
+# ONE process (granian serving HTTP, consuming the task queue and running the
+# scheduler; its start.sh refuses SERVER_ROLE=worker), so there is no second
+# Deployment to run. Scale by raising replicas (they share Postgres/Redis).
+#
+# Applied by hand, never by CI: README.md. Everything secret is in the Secret
+# `glitchtip`, created out of band (SECRET_KEY, POSTGRES_PASSWORD,
+# REDIS_PASSWORD).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: glitchtip
+  namespace: joy
+  labels: {app: glitchtip}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: glitchtip}
+  template:
+    metadata:
+      labels: {app: glitchtip}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 5000 # the image's app user
+        runAsGroup: 5000
+      containers:
+        - name: glitchtip
+          image: glitchtip/glitchtip:v7.0.0
+          ports:
+            - {name: http, containerPort: 8000}
+          env:
+            - name: SECRET_KEY
+              valueFrom: {secretKeyRef: {name: glitchtip, key: SECRET_KEY}}
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: glitchtip, key: POSTGRES_PASSWORD}}
+            - name: REDIS_PASSWORD
+              valueFrom: {secretKeyRef: {name: glitchtip, key: REDIS_PASSWORD}}
+            # $(NAME) is Kubernetes' substitution from the env entries above.
+            - name: DATABASE_URL
+              value: postgres://glitchtip:$(POSTGRES_PASSWORD)@glitchtip-postgres:5432/glitchtip
+            - name: VALKEY_URL
+              value: redis://:$(REDIS_PASSWORD)@glitchtip-redis:6379/0
+            - {name: GLITCHTIP_DOMAIN, value: "https://errors.joyautomation.com"}
+            - {name: DEFAULT_FROM_EMAIL, value: "errors@joyautomation.com"}
+            # No mail yet: messages go to the pod log. README.md, "Email".
+            - {name: EMAIL_URL, value: "consolemail://"}
+            # Nobody signs themselves up (README.md creates the first user by
+            # hand), and the uptime checker would call out from the cluster.
+            - {name: ENABLE_USER_REGISTRATION, value: "false"}
+            - {name: GLITCHTIP_ENABLE_UPTIME, value: "false"}
+            # Bound the volume: v7 deletes events, transactions and logs older
+            # than this (default 90). v6's name for it is
+            # GLITCHTIP_MAX_EVENT_LIFE_DAYS (README.md, "Fall back to 6.2.6").
+            - {name: GLITCHTIP_RETENTION_DAYS, value: "30"}
+          readinessProbe:
+            tcpSocket: {port: 8000}
+            initialDelaySeconds: 20 # init_database runs first
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: {port: 8000}
+            initialDelaySeconds: 90
+            periodSeconds: 30
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: glitchtip
+  namespace: joy
+  labels: {app: glitchtip}
+spec:
+  selector: {app: glitchtip}
+  ports:
+    - {name: http, port: 80, targetPort: 8000}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: glitchtip
+  namespace: joy
+  # The same issuer and class as the docs site (website/k8s/deploy.yml).
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    # Events (and source maps) can be large; nginx's default is 1m.
+    nginx.ingress.kubernetes.io/proxy-body-size: 40m
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [errors.joyautomation.com]
+      secretName: glitchtip-tls
+  rules:
+    - host: errors.joyautomation.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: glitchtip
+                port: {number: 80}
