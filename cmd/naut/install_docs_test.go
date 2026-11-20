@@ -16,7 +16,7 @@ import (
 // The commands download to a file with -f first, then extract.
 func TestInstallDocsDownloadBeforeExtracting(t *testing.T) {
 	archive := regexp.MustCompile(`releases/download/\$v/nautilus_\$\{v#v\}_(darwin|linux)_(amd64|arm64)\.tar\.gz"`)
-	for _, page := range []string{"README.md", "website/src/content/docs/getting-started.md"} {
+	for _, page := range []string{"README.md", "website/src/content/docs/learn/getting-started/install.md"} {
 		b, err := os.ReadFile(filepath.Join("..", "..", page))
 		if err != nil {
 			t.Fatal(err)

@@ -58,6 +58,13 @@ export default defineConfig({
       },
       sidebar: [
         {
+          label: 'Learn',
+          items: [
+            { label: 'Overview', slug: 'learn' },
+            { label: 'Getting started', autogenerate: { directory: 'learn/getting-started' } },
+          ],
+        },
+        {
           label: 'Start here',
           items: [
             { label: 'Tutorial: your first controller', slug: 'tutorial' },
