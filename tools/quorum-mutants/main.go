@@ -182,23 +182,39 @@ var table = []mutation{
 	{"old_term_kept", []string{"TestModbusRequeuedWriteDoesNotSurviveAReLead", "TestOptoMMPTermMoveDropsTheQueue", "TestHeldCommandFromAnEarlierTermIsNotPublished", "TestOPCUAQueuedWriteDoesNotSurviveATermMove", "TestTermMoveSeenByAnotherCallerStopsTheFlush", "TestFailedPublishAfterATermMoveIsNotRequeued", "TestOPCUAFlushRacingAReopenSendsNothing", "TestOPCUAFailedChunkNotRequeuedAfterAReopen"}},
 	// #1040 review: an SNMP SET retransmitted after a lost answer.
 	{"set_retried", []string{"TestSetIsSentOnce"}},
+	// #710 PR 3b-4a: the operator-intent log on three replicas. The
+	// three-replica simulation (TestThreeReplicaSimulation, 120 seeds)
+	// also catches the three safety rows; it is not listed, so a row
+	// doesn't hang on one seed's schedule.
+	{"replicate_sequential", []string{"TestASilentPeerDoesNotHoldUpWritesOrCatchUp"}},
+	{"admit_skipped", []string{"TestAdmitDecidesWhoMayReplicate"}},
+	{"unsynced_counted", []string{"TestEntryAckedByAAndWSurvivesWLosingItsLog", "TestLostLogUnderTheHeldMarkComesBackNonCounting", "TestRebuiltWitnessDoesNotCountUntilSynced", "TestOnlyASyncedLeaderSyncsAFollower"}},
+	{"log_loss_silent", []string{"TestEntryAckedByAAndWSurvivesWLosingItsLog", "TestLostLogUnderTheHeldMarkComesBackNonCounting", "TestOnlyASyncedLeaderSyncsAFollower"}},
+	{"synced_by_unsynced_leader", []string{"TestOnlyASyncedLeaderSyncsAFollower"}},
+	{"resend_unchunked", []string{"TestResendAndCatchUpGoInChunks"}},
 }
 
 // rowPkgs are the packages a row runs instead of ./quorum/..., filtered
 // to its tests: a switch outside the quorum tree.
 var rowPkgs = map[string][]string{
-	"lapse_ignored":            {"./oplog"},
-	"ack_clear_off":            {"./cmd/naut"},
-	"alarm_view_ignored":       {"./cmd/naut"},
-	"engine_not_reset":         {"./server"},
-	"reconcile_before_restore": {"./server"},
-	"gate_per_batch":           {"./hw"},
-	"old_term_sent":            {"./hw"},
-	"send_no_deadline":         {"./internal/fence", "./hw", "./modbus", "./eip", "./eip/cip", "./optommp"},
-	"fence_fin":                {"./internal/fence", "./modbus", "./eip/cip", "./redfish", "./optommp", "./opcua"},
-	"fragments_unchecked":      {"./runtime", "./eip/cip", "./eip"},
-	"old_term_kept":            {"./modbus", "./optommp", "./sparkplug/host", "./opcua"},
-	"set_retried":              {"./snmp"},
+	"lapse_ignored":             {"./oplog"},
+	"replicate_sequential":      {"./oplog"},
+	"admit_skipped":             {"./oplog"},
+	"unsynced_counted":          {"./oplog"},
+	"log_loss_silent":           {"./oplog"},
+	"synced_by_unsynced_leader": {"./oplog"},
+	"resend_unchunked":          {"./oplog"},
+	"ack_clear_off":             {"./cmd/naut"},
+	"alarm_view_ignored":        {"./cmd/naut"},
+	"engine_not_reset":          {"./server"},
+	"reconcile_before_restore":  {"./server"},
+	"gate_per_batch":            {"./hw"},
+	"old_term_sent":             {"./hw"},
+	"send_no_deadline":          {"./internal/fence", "./hw", "./modbus", "./eip", "./eip/cip", "./optommp"},
+	"fence_fin":                 {"./internal/fence", "./modbus", "./eip/cip", "./redfish", "./optommp", "./opcua"},
+	"fragments_unchecked":       {"./runtime", "./eip/cip", "./eip"},
+	"old_term_kept":             {"./modbus", "./optommp", "./sparkplug/host", "./opcua"},
+	"set_retried":               {"./snmp"},
 }
 
 // args are the go test arguments for m.

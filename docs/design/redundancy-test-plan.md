@@ -143,6 +143,12 @@ case caught it. A mutation joins the nightly run in the PR that builds the rule 
 | a takeover restores the view over a re-leading replica's frozen engine (`engine_not_reset`) | design §1, takeovers reset the engine | 3b-2c (#1033 review) |
 | the alarm log judges the engine from the lease on, before the takeover restored the view: Reconcile clears every carried ack while the takeover waits for inputs (`reconcile_before_restore`) | design §1, takeovers reset the engine | 3b-2c (#1033 CI) |
 | a late substitute start a lapse entry names is carried out (`lapse_ignored`; a runner row since 3b-2c) | design §1 | lapse |
+| the log's leader asks its peers one after another, so a silent peer holds up every write and a takeover's catch-up by its call timeout (`replicate_sequential`) | design §1, three replicas | 3b-4a |
+| a replica that admits by name (the witness) takes replication from any member (`admit_skipped`) | design §1, the witness follows its vote; §8.1 case 6 | 3b-4a |
+| an unsynced replica (lost log, rebuilt, another identity) counts toward a commit or a catch-up (`unsynced_counted`) | design §1, only a synced replica counts | 3b-4a |
+| a log lost under the held mark comes back empty and counting (`log_loss_silent`) | design §1, a lost log is seen | 3b-4a |
+| a follower marks itself synced from a leader that is not synced (`synced_by_unsynced_leader`) | design §1, only a synced replica counts | 3b-4a |
+| a resend or a catch-up read carries the whole log in one body, so a rebuilt replica is never filled (`resend_unchunked`) | design §1, the witness re-copies the log | 3b-4a |
 | `Liveness` ignores a loop between scans (the behaviour before #858) | design §3.2, starvation | 3 |
 | a standby's gated ticks don't count as on schedule | design §3.2, starvation | 3 |
 | the in-sync mark is not persisted | design §3.3 | 4 |
@@ -737,6 +743,14 @@ requirements agreed on #707. They join the run in #707's oplog PR, which builds 
 
 11. **Every case runs** in T2 (the simulated disk and network). Cases 1–5 and 7–10 also run
     in T3.
+
+**The log's own T2 run (3b-4a).** `TestThreeReplicaSimulation` (oplog) runs seeded schedules
+of writes, leader changes, replicas down, lost answers, cut links, restarts, lost logs and
+rebuilt replicas on an in-process network: 120 seeds per PR, 3,000 nightly. After every step it
+checks agreement (no two replicas commit different entries at one seq) and no loss (every
+write answered as committed is at its seq wherever a committed log reaches it, and a leader
+that synced holds all of them). It catches `unsynced_counted`, `log_loss_silent` and
+`synced_by_unsynced_leader` on its own.
 
 ### 8.2 Peer traffic and the Host rule (design §6.1)
 

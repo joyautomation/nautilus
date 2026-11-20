@@ -204,7 +204,63 @@ type Options struct {
 	// Lapse(entry, the leader's now) is true (by age: carrierLocked). Nil:
 	// nothing lapses.
 	Lapse func(e Entry, now time.Time) bool
+
+	// Node is this replica's member name (a, b, the witness), sent with
+	// its replication so a replica that admits by name (Admit) can check
+	// it. Optional.
+	Node string
+	// Admit, when set, decides whether replication may be taken from the
+	// member named node at term, in place of the check that it comes from
+	// LeaderAddr: a witness knows its pair's controllers by name, from its
+	// own votes, not by address (#710 3b-4). A refusal is answered 403.
+	Admit func(node string, term uint64) error
+
+	// Mark is the path of this replica's log mark (#710 3b-4): whether it
+	// has stored an entry (held) and whether its log is known to hold
+	// every committed entry (synced), for Identity. "" turns marking off,
+	// and every replica counts, as before (Kubernetes, a bench).
+	//
+	// With a mark, a replica counts toward a commit or a leader's
+	// catch-up only once synced, and a log lost under the held mark (the
+	// file missing, empty, or damaged before its last line) is moved
+	// aside as File+".lost-<unix>", started empty and unsynced: Lost says
+	// so. A replica becomes synced when a synced leader's replication
+	// proves its log equal up to that leader's commit index, or, as a
+	// leader, when it catches up from a majority that counts.
+	Mark string
+	// Identity names this replica's incarnation (the witness's, or a
+	// controller's state identity). A mark written for another identity
+	// is not this replica's: its log is moved aside as
+	// File+".previous-<unix>", and it starts unsynced.
+	Identity string
+	// UnmarkedSynced: a replica with no mark at all starts synced. Only
+	// for a caller that knows the log is complete: a new cluster's first
+	// start (nothing committed yet), or a log kept from before marks.
+	UnmarkedSynced bool
+	// Counts, when set, also decides whether a synced peer's answer
+	// counts, by the identity it reports: a witness counts only at the
+	// incarnation the election counts.
+	Counts func(peer, identity string) bool
+
+	transport http.RoundTripper // tests: an in-process network
 }
+
+// Mark is a replica's log mark, kept in Options.Mark.
+type Mark struct {
+	Identity string `json:"identity"`
+	Held     bool   `json:"held"`
+	Synced   bool   `json:"synced"`
+}
+
+// Chunking: a resend or a catch-up read carries at most this many
+// entries, or about this many bytes; a replica refuses a request body over
+// maxBody, and a reply over maxResp is not read. Variables for tests.
+var (
+	maxChunkEntries = 512
+	maxChunkBytes   = 1 << 20
+	maxBody         = int64(8 << 20)
+	maxResp         = int64(4 << 20)
+)
 
 // Node is one instance's view of the log.
 type Node struct {
@@ -224,6 +280,15 @@ type Node struct {
 	syncedTerm  uint64 // the term this leader last caught up for
 	file        *os.File
 	lastContact map[string]time.Time
+	mark        Mark                // with Options.Mark
+	lostAt      string              // where a log lost under the held mark was kept ("" none)
+	peers       map[string]peerInfo // what each peer last said of itself
+}
+
+// peerInfo is what a peer's last answer said of its log.
+type peerInfo struct {
+	unsynced bool
+	identity string
 }
 
 // Status is what /api/quorum reports.
@@ -238,6 +303,11 @@ type Status struct {
 	Commit   uint64   `json:"commit"`
 	Writable bool     `json:"writable"`
 	Reason   string   `json:"reason,omitempty"`
+	// Unsynced: this replica's log is not known complete (Options.Mark),
+	// so it counts for nothing. Lost names where a lost log was kept.
+	Unsynced bool   `json:"unsynced,omitempty"`
+	Identity string `json:"identity,omitempty"`
+	Lost     string `json:"lost,omitempty"`
 }
 
 // ErrReadOnly says this instance cannot commit a write right now.
@@ -277,13 +347,208 @@ func New(o Options) (*Node, error) {
 			return nil, errors.New("oplog: several peers need a File; an in-memory log restarted under the same term would reuse sequence numbers its peers hold for other entries")
 		}
 	}
-	n := &Node{o: o, client: &http.Client{Timeout: o.Timeout}, log: o.Log, lastContact: map[string]time.Time{}}
+	if o.Mark != "" && o.File == "" {
+		return nil, errors.New("oplog: a Mark needs a File")
+	}
+	n := &Node{o: o, client: &http.Client{Timeout: o.Timeout, Transport: o.transport}, log: o.Log,
+		lastContact: map[string]time.Time{}, peers: map[string]peerInfo{}}
+	if o.Mark != "" {
+		if err := n.openMarked(); err != nil {
+			return nil, err
+		}
+		return n, nil
+	}
 	if o.File != "" {
-		if err := n.open(); err != nil {
+		if _, err := n.open(); err != nil {
 			return nil, err
 		}
 	}
 	return n, nil
+}
+
+// openMarked reads the mark, then the log, and decides whether the log is
+// this replica's and whole (Options.Mark).
+func (n *Node) openMarked() error {
+	m, err := readMark(n.o.Mark)
+	write := false
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		m, write = Mark{Identity: n.o.Identity, Synced: n.o.UnmarkedSynced}, true
+	case err != nil:
+		// Unreadable: trust nothing it would say. The log stays (it may
+		// well be whole) but counts for nothing until synced.
+		n.log.Error("oplog: the log's mark can't be read: this replica counts for nothing until it has synced from the leader", "mark", n.o.Mark, "error", err)
+		m, write = Mark{Identity: n.o.Identity, Held: true}, true
+	case m.Identity != n.o.Identity:
+		// Another incarnation's log: kept aside, never counted as ours.
+		if kept, err := n.moveAside(".previous-"); err != nil {
+			return err
+		} else if kept != "" {
+			n.log.Warn("oplog: the log belongs to another identity of this replica; kept aside, starting empty and unsynced", "kept", kept, "was", m.Identity, "now", n.o.Identity)
+		}
+		m, write = Mark{Identity: n.o.Identity}, true
+	}
+	_, statErr := os.Stat(n.o.File)
+	missing := errors.Is(statErr, os.ErrNotExist)
+	damaged, err := n.open()
+	if err != nil {
+		return err
+	}
+	if damaged || m.Held && (missing || len(n.entries) == 0) && !mutOplog("log_loss_silent") {
+		// Lost under the held mark (or damaged, which loses its tail):
+		// this replica acknowledged entries it no longer has. Keep what
+		// is there, start empty, count for nothing until a synced leader
+		// has given it the log again.
+		if n.file != nil {
+			n.file.Close()
+		}
+		n.file, n.entries, n.commit, n.term = nil, nil, 0, 0
+		kept := "(missing)"
+		if !missing {
+			if kept, err = n.moveAside(".lost-"); err != nil {
+				return err
+			}
+		}
+		if _, err := n.open(); err != nil {
+			return err
+		}
+		n.lostAt = kept
+		m, write = Mark{Identity: n.o.Identity}, true
+		n.log.Error("oplog: this replica's operator-intent log was LOST: it counts for nothing (writes, the majority, a takeover's catch-up) until it has synced from the leader", "file", n.o.File, "kept", kept)
+	}
+	if len(n.entries) > 0 && !m.Held {
+		m.Held, write = true, true // a log from before marks
+	}
+	n.mark = m
+	if write {
+		if err := writeMark(n.o.Mark, m); err != nil {
+			n.file.Close()
+			return fmt.Errorf("oplog: the log's mark: %w", err)
+		}
+	}
+	return nil
+}
+
+// moveAside renames the log file to File+suffix+<unix> ("" when there is
+// none). Caller holds mu or is New.
+func (n *Node) moveAside(suffix string) (string, error) {
+	if _, err := os.Stat(n.o.File); errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	to := fmt.Sprintf("%s%s%d", n.o.File, suffix, n.o.Now().Unix())
+	if err := os.Rename(n.o.File, to); err != nil {
+		return "", fmt.Errorf("oplog: moving the log aside: %w", err)
+	}
+	syncDir(filepath.Dir(n.o.File))
+	return to, nil
+}
+
+func readMark(path string) (Mark, error) {
+	var m Mark
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return m, err
+	}
+	if err := json.Unmarshal(b, &m); err != nil {
+		return m, fmt.Errorf("%s: %w", path, err)
+	}
+	return m, nil
+}
+
+// writeMark replaces the mark atomically and durably: a temp file beside
+// it, synced, renamed over it, the directory synced.
+func writeMark(path string, m Mark) error {
+	b, _ := json.Marshal(m)
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	if _, err := tmp.Write(append(b, '\n')); err != nil {
+		tmp.Close()
+		os.Remove(name)
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		os.Remove(name)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(name)
+		return err
+	}
+	if err := os.Rename(name, path); err != nil {
+		os.Remove(name)
+		return err
+	}
+	syncDir(filepath.Dir(path))
+	return nil
+}
+
+func syncDir(dir string) {
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync() // not supported on Windows; NTFS journals the rename
+		d.Close()
+	}
+}
+
+// setMarkLocked records m durably, then holds it. Caller holds mu.
+func (n *Node) setMarkLocked(m Mark) error {
+	if err := writeMark(n.o.Mark, m); err != nil {
+		return err
+	}
+	n.mark = m
+	return nil
+}
+
+// syncedLocked: this replica's log is known to hold every committed entry
+// (always, without a mark). Caller holds mu.
+func (n *Node) syncedLocked() bool { return n.o.Mark == "" || n.mark.Synced }
+
+// Synced reports whether this replica's log is known to hold every
+// committed entry (Options.Mark). A replica that isn't counts for nothing,
+// and its controller must not lead (#710 3b-4).
+func (n *Node) Synced() bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.syncedLocked()
+}
+
+// Lost is where a log lost under the held mark was kept ("(missing)" when
+// there was no file; "" when nothing was lost).
+func (n *Node) Lost() string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.lostAt
+}
+
+// becomeSyncedLocked marks this replica synced, once. Caller holds mu.
+func (n *Node) becomeSyncedLocked(why string) {
+	if n.syncedLocked() {
+		return
+	}
+	m := n.mark
+	m.Synced = true
+	if err := n.setMarkLocked(m); err != nil {
+		n.log.Error("oplog: can't record that the log is synced; it keeps counting for nothing", "error", err)
+		return
+	}
+	n.log.Info("oplog: this replica's log is synced: it counts again", "how", why, "commit", n.commit)
+}
+
+// counts reports whether a peer's answer counts toward a commit or a
+// catch-up: only a synced one, at an identity Options.Counts accepts.
+func (n *Node) counts(peer string, unsynced bool, identity string) bool {
+	if unsynced && !mutOplog("unsynced_counted") {
+		return false
+	}
+	return n.o.Counts == nil || n.o.Counts(peer, identity)
+}
+
+// notePeer records what a peer said of its log. Caller holds mu.
+func (n *Node) notePeerLocked(peer string, unsynced bool, identity string) {
+	n.peers[peer] = peerInfo{unsynced: unsynced, identity: identity}
 }
 
 // fileLine is one line of the local copy: an entry, or a commit mark.
@@ -293,16 +558,18 @@ type fileLine struct {
 }
 
 // open reads the file, dropping a torn final line, and replays the
-// committed prefix.
-func (n *Node) open() error {
+// committed prefix. damaged: a line before the last could not be read
+// (not a torn write, which is only ever the last line); everything from it
+// on was dropped. With a mark that is a lost log (openMarked).
+func (n *Node) open() (damaged bool, err error) {
 	f, err := os.OpenFile(n.o.File, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
-		return err
+		return false, err
 	}
 	data, err := io.ReadAll(f)
 	if err != nil {
 		f.Close()
-		return err
+		return false, err
 	}
 	good := 0
 	sc := bufio.NewScanner(bytes.NewReader(data))
@@ -331,23 +598,38 @@ func (n *Node) open() error {
 				n.commit = e.Seq
 				continue
 			}
-			return fmt.Errorf("oplog: %s: unrecognised line %q", n.o.File, truncateStr(string(line), 80))
+			f.Close()
+			return false, fmt.Errorf("oplog: %s: unrecognised line %q", n.o.File, truncateStr(string(line), 80))
 		}
 	}
 	if good < len(data) {
-		n.log.Warn("oplog: dropping a torn final line", "file", n.o.File, "bytes", len(data)-good)
+		// A torn write is only ever the last line: each line goes out in
+		// one write, synced before it is acknowledged. A bad line with
+		// more after it is damage.
+		rest := data[good:]
+		if i := bytes.IndexByte(rest, '\n'); i >= 0 && len(bytes.TrimSpace(rest[i+1:])) > 0 {
+			damaged = true
+		}
+		if damaged && n.o.Mark != "" {
+			// Nothing applied, nothing truncated: openMarked keeps the
+			// file whole, aside, and starts empty.
+			f.Close()
+			n.entries, n.commit, n.term = nil, 0, 0
+			return true, nil
+		}
+		n.log.Warn("oplog: dropping a torn final line", "file", n.o.File, "bytes", len(data)-good, "damaged", damaged)
 		if err := f.Truncate(int64(good)); err != nil {
 			f.Close()
-			return err
+			return false, err
 		}
 	}
 	if _, err := f.Seek(0, io.SeekEnd); err != nil {
 		f.Close()
-		return err
+		return false, err
 	}
 	n.file = f
 	n.applyRange(n.entries, n.commit)
-	return nil
+	return damaged, nil
 }
 
 // Close releases the file.
@@ -524,6 +806,15 @@ var errMismatch = errors.New("mismatch")
 // refuse the very replacement that keeps the logs equal.
 func (n *Node) acceptLocked(es []Entry) (int, error) {
 	fresh := 0
+	if len(es) > 0 && n.o.Mark != "" && !n.mark.Held {
+		// Held before the first entry is stored, so it is durable before
+		// any entry is acknowledged: a log lost after that is seen.
+		m := n.mark
+		m.Held = true
+		if err := n.setMarkLocked(m); err != nil {
+			return 0, fmt.Errorf("oplog: the log's mark: %w", err)
+		}
+	}
 	for _, e := range es {
 		last := n.lastLocked()
 		switch {
@@ -620,11 +911,22 @@ type replicateReq struct {
 	PrevSeq  uint64  `json:"prevSeq"`
 	PrevTerm uint64  `json:"prevTerm"`
 	Entries  []Entry `json:"entries"`
+	// Node is the sender's member name (Options.Node), for Admit.
+	Node string `json:"node,omitempty"`
+	// Synced: the sender is synced and has caught up for this term, so
+	// its log holds every committed entry: a follower this request proves
+	// equal up to Commit is synced too.
+	Synced bool `json:"synced,omitempty"`
 }
 
 type replicateResp struct {
 	Have   uint64 `json:"have"` // the follower's last seq, so a gap can be filled
 	Commit uint64 `json:"commit"`
+	// Unsynced and Identity: what the follower says of its log
+	// (Options.Mark). Unsynced is omitted when false, so a replica from
+	// before marks counts, as it did.
+	Unsynced bool   `json:"unsynced,omitempty"`
+	Identity string `json:"identity,omitempty"`
 }
 
 type proposeResp struct {
@@ -641,6 +943,11 @@ type afterResp struct {
 	// the entries after the commit index, which may be none.
 	LastSeq  uint64 `json:"lastSeq"`
 	LastTerm uint64 `json:"lastTerm"`
+	// More: Entries stops short of LastSeq (a page); ask again after its
+	// last entry.
+	More     bool   `json:"more,omitempty"`
+	Unsynced bool   `json:"unsynced,omitempty"`
+	Identity string `json:"identity,omitempty"`
 }
 
 // Propose takes an operator event from this instance's client: sequenced
@@ -694,10 +1001,11 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 	// this leader's own may be stale (stored, never replicated, and since
 	// overtaken by a committed entry at the same seq), and only answers
 	// from its commit on carry the entries that replace it. Its own suffix
-	// is one of the candidates.
+	// is one of the candidates, when it counts.
 	from := n.commit
 	last := n.lastLocked()
 	own := afterResp{Entries: n.afterLocked(from), Commit: n.commit, LastSeq: last, LastTerm: n.termAtLocked(last)}
+	selfCounts := n.syncedLocked()
 	n.mu.Unlock()
 	// The most advanced log is Raft's "up to date", compared on each WHOLE
 	// log's last entry: the higher term wins, then the higher seq, so an
@@ -707,31 +1015,57 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 	better := func(a, b afterResp) bool {
 		return a.LastTerm > b.LastTerm || a.LastTerm == b.LastTerm && a.LastSeq > b.LastSeq
 	}
-	best, bestSelf := own, true
-	commit := own.Commit
-	answered := 1 // this instance
+	// Only a replica that counts is a candidate, or counts toward the
+	// majority: one whose log is not synced (lost, rebuilt, another
+	// identity) may lack committed entries, and a majority that counted
+	// it might hold them nowhere (#710 3b-4).
+	var best afterResp
+	bestSelf, answered, commit := false, 0, uint64(0)
+	if selfCounts {
+		best, bestSelf, answered, commit = own, true, 1, own.Commit
+	}
 	var errs []string
-	for _, p := range n.o.Peers {
-		if p == n.o.Self {
-			continue
-		}
-		var got afterResp
-		if err := n.call(ctx, p, fmt.Sprintf("/api/oplog?after=%d", from), nil, &got); err != nil {
-			errs = append(errs, p+": "+err.Error())
-			continue
-		}
-		if got.Term > term {
+	var newer error
+	type answer struct {
+		got afterResp
+		err error
+	}
+	// Every peer at once; decided once a majority that counts answered
+	// (any majority meets the commit majority, so its most advanced log
+	// holds every committed entry), after a short wait for the rest. A
+	// straggler that has seen a newer term is not waited for: this
+	// leader's own lease ends it, and its replication is refused by term.
+	fanOut(ctx, n, n.others(), func(ctx context.Context, p string) answer {
+		got, err := n.fetchAfter(ctx, p, from)
+		return answer{got, err}
+	}, func(p string, a answer) bool {
+		switch {
+		case a.err != nil:
+			errs = append(errs, p+": "+a.err.Error())
+		case a.got.Term > term:
 			// A peer has seen a newer term: this leadership is over.
-			return fmt.Errorf("%w: a peer is at term %d, this leader at %d", ErrReadOnly, got.Term, term)
+			newer = fmt.Errorf("%w: a peer is at term %d, this leader at %d", ErrReadOnly, a.got.Term, term)
+			return true
+		case !n.counts(p, a.got.Unsynced, a.got.Identity):
+			errs = append(errs, p+": its log is not synced")
+		default:
+			answered++
+			commit = max(commit, a.got.Commit)
+			if better(a.got, best) {
+				best, bestSelf = a.got, false
+			}
 		}
-		answered++
-		commit = max(commit, got.Commit)
-		if better(got, best) {
-			best, bestSelf = got, false
-		}
+		return answered >= n.majority()
+	})
+	if newer != nil {
+		return newer
 	}
 	if answered < n.majority() {
-		return fmt.Errorf("%w: catch-up heard from %d of %d (%s)", ErrReadOnly, answered, len(n.o.Peers), strings.Join(errs, "; "))
+		why := ""
+		if !selfCounts {
+			why = "; this replica's own log is not synced"
+		}
+		return fmt.Errorf("%w: catch-up heard from %d of %d that count (%s)%s", ErrReadOnly, answered, len(n.o.Peers), strings.Join(errs, "; "), why)
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -745,6 +1079,7 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 	// so any commit index one of them reported is safe here.
 	n.commitTo(commit)
 	n.syncedTerm = term
+	n.becomeSyncedLocked("caught up from a majority as leader")
 	return nil
 }
 
@@ -869,6 +1204,10 @@ func (n *Node) sequenceLocked(ctx context.Context, e Entry) (Entry, error) {
 	e.TS = n.o.Now().UnixMilli()
 	fresh, err := n.acceptLocked([]Entry{e})
 	commit := n.commit
+	stored := 0
+	if n.syncedLocked() {
+		stored = 1
+	}
 	n.mu.Unlock()
 	if err != nil {
 		return Entry{}, err
@@ -876,19 +1215,31 @@ func (n *Node) sequenceLocked(ctx context.Context, e Entry) (Entry, error) {
 	if fresh != 1 {
 		return Entry{}, fmt.Errorf("oplog: seq %d was not fresh", e.Seq)
 	}
-	stored := 1
-	var errs, holders []string
-	for _, p := range n.o.Peers {
-		if p == n.o.Self {
-			continue
-		}
-		if err := n.replicateTo(ctx, p, []Entry{e}, term, commit); err != nil {
-			errs = append(errs, p+": "+err.Error())
-			continue
-		}
-		stored++
-		holders = append(holders, p)
+	type answer struct {
+		resp replicateResp
+		err  error
 	}
+	var errs, holders []string
+	// Every peer at once: committed once a majority that counts stored it,
+	// after a short wait for the rest, so a silent peer doesn't hold up
+	// every write by its call timeout (#710 3b-4). A peer cut off then gets
+	// it at its next heartbeat.
+	fanOut(ctx, n, n.others(), func(ctx context.Context, p string) answer {
+		r, err := n.replicateTo(ctx, p, []Entry{e}, term, commit)
+		return answer{r, err}
+	}, func(p string, a answer) bool {
+		switch {
+		case a.err != nil:
+			errs = append(errs, p+": "+a.err.Error())
+		case !n.counts(p, a.resp.Unsynced, a.resp.Identity):
+			holders = append(holders, p)
+			errs = append(errs, p+": stored, but its log is not synced")
+		default:
+			holders = append(holders, p)
+			stored++
+		}
+		return stored >= n.majority()
+	})
 	if stored < n.majority() {
 		// Kept, not truncated: a follower whose reply was lost may hold
 		// it, and the number reused for another entry of this term would
@@ -907,23 +1258,26 @@ func (n *Node) sequenceLocked(ctx context.Context, e Entry) (Entry, error) {
 	// it: tell those that hold it that it is committed before the proposer
 	// hears so. A leader that dies after answering would otherwise leave
 	// them holding it uncommitted, and a follower that takes over without
-	// a majority to catch up with (a redundant pair, #710) would not apply
-	// a write the operator was told was done. Best effort, and only to the
-	// replicas that stored it (one that is down would cost every write a
-	// second timeout): one the push misses (the leader dies first, or the
-	// push to it fails, only logged) learns it at its next heartbeat
-	// (≤ lease/2 in a pair) or write. It runs under seqMu, so a holder that
-	// stalls delays every write by up to the call timeout.
-	for _, p := range holders {
-		if err := n.replicateTo(ctx, p, nil, term, e.Seq); err != nil {
+	// a majority to catch up with would not apply a write the operator
+	// was told was done. Best effort, and only to the replicas that stored
+	// it (one that is down would cost every write a second timeout), all
+	// at once: one the push misses (the leader dies first, or the push to
+	// it fails, only logged) learns it at its next heartbeat (≤ lease/2 in
+	// a pair) or write. It runs under seqMu, so a holder that stalls
+	// delays every write by up to the call timeout.
+	fanOut(ctx, n, holders, func(ctx context.Context, p string) error {
+		return n.replicateToErr(ctx, p, nil, term, e.Seq)
+	}, func(p string, err error) bool {
+		if err != nil {
 			n.log.Debug("oplog: commit push", "peer", p, "error", err)
 		}
-	}
+		return false
+	})
 	return e, nil
 }
 
 // replicateTo sends entries to one peer, filling a gap it reports.
-func (n *Node) replicateTo(ctx context.Context, peer string, es []Entry, term, commit uint64) error {
+func (n *Node) replicateTo(ctx context.Context, peer string, es []Entry, term, commit uint64) (replicateResp, error) {
 	send := func(es []Entry) (replicateResp, error) {
 		n.mu.Lock()
 		prev := n.lastLocked() // a heartbeat: the leader's last entry
@@ -931,35 +1285,160 @@ func (n *Node) replicateTo(ctx context.Context, peer string, es []Entry, term, c
 			prev = es[0].Seq - 1
 		}
 		pt := n.termAtLocked(prev)
+		synced := n.syncedLocked() && n.syncedTerm == term
 		n.mu.Unlock()
 		var resp replicateResp
 		err := n.call(ctx, peer, "/api/oplog/replicate",
-			replicateReq{From: n.o.Self, Term: term, Commit: commit, PrevSeq: prev, PrevTerm: pt, Entries: es}, &resp)
+			replicateReq{From: n.o.Self, Node: n.o.Node, Synced: synced, Term: term, Commit: commit, PrevSeq: prev, PrevTerm: pt, Entries: es}, &resp)
+		if err == nil {
+			n.mu.Lock()
+			n.notePeerLocked(peer, resp.Unsynced, resp.Identity)
+			n.mu.Unlock()
+		}
 		return resp, err
 	}
 	resp, err := send(es)
 	// The peer is behind (a gap: Have is its last entry) or its entry
-	// before these is not ours (a mismatch: Have is its commit index):
-	// send everything after Have, and again from what the peer answers
-	// then (a gap's resend can meet a mismatch below it), until it takes
-	// them. Each step moves Have down, to the peer's commit index at
-	// worst, where the logs agree, so a few steps settle it; the bound
-	// only guards a peer that answers nonsense, and the next heartbeat
-	// tries again.
-	for range 8 {
+	// before these is not ours (a mismatch: Have is its commit index), or
+	// it took a chunk that stops short of our last entry: send what is
+	// after Have, a chunk at a time, and again from what the peer answers
+	// (a gap's resend can meet a mismatch below it), until it has them.
+	// Each step moves Have, to the peer's commit index at worst, where the
+	// logs agree; the bound only guards a peer that answers nonsense, and
+	// the next heartbeat goes on (a rebuilt replica is filled over several).
+	for range 32 {
 		var he *httpError
-		if !errors.As(err, &he) || he.code != http.StatusConflict || !he.resend {
-			return err
+		var from uint64
+		switch {
+		case errors.As(err, &he) && he.code == http.StatusConflict && he.resend:
+			from = resp.Have
+		case err == nil:
+			n.mu.Lock()
+			last := n.lastLocked()
+			n.mu.Unlock()
+			if resp.Have >= last {
+				return resp, nil
+			}
+			from = resp.Have
+		default:
+			return resp, err
 		}
 		n.mu.Lock()
-		missing := n.afterLocked(resp.Have)
+		missing := n.afterLocked(from)
 		n.mu.Unlock()
 		if len(missing) == 0 {
-			return err
+			return resp, err
+		}
+		if !mutOplog("resend_unchunked") {
+			missing, _ = chunk(missing)
 		}
 		resp, err = send(missing)
 	}
+	return resp, err
+}
+
+// replicateToErr is replicateTo for a caller that needs only its error.
+func (n *Node) replicateToErr(ctx context.Context, peer string, es []Entry, term, commit uint64) error {
+	_, err := n.replicateTo(ctx, peer, es, term, commit)
 	return err
+}
+
+// chunk is the head of es one request carries: at most maxChunkEntries,
+// and about maxChunkBytes (always at least one entry). more: es goes on.
+func chunk(es []Entry) (head []Entry, more bool) {
+	size := 0
+	for i, e := range es {
+		b, _ := json.Marshal(e)
+		size += len(b) + 1
+		if i > 0 && (i >= maxChunkEntries || size > maxChunkBytes) {
+			return es[:i], true
+		}
+	}
+	return es, false
+}
+
+// others are the peers but this instance.
+func (n *Node) others() []string {
+	out := make([]string, 0, len(n.o.Peers))
+	for _, p := range n.o.Peers {
+		if p != n.o.Self {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// grace is how long a fan-out waits for the remaining peers once enough
+// have answered.
+func (n *Node) grace() time.Duration { return min(n.o.Timeout/8, 50*time.Millisecond) }
+
+// fanOut runs f against every peer of peers at once and hands each result
+// to take, one at a time, in the order they arrive. Once take has said
+// enough, it waits at most n.grace() for the rest, then cancels them and
+// returns; take may still be called for those that arrive in that time.
+func fanOut[T any](ctx context.Context, n *Node, peers []string, f func(context.Context, string) T, take func(string, T) bool) {
+	if mutOplog("replicate_sequential") {
+		for _, p := range peers {
+			take(p, f(ctx, p))
+		}
+		return
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	type result struct {
+		p string
+		v T
+	}
+	ch := make(chan result, len(peers))
+	for _, p := range peers {
+		go func() { ch <- result{p, f(ctx, p)} }()
+	}
+	var grace <-chan time.Time
+	for left := len(peers); left > 0; left-- {
+		select {
+		case r := <-ch:
+			if take(r.p, r.v) && grace == nil {
+				t := time.NewTimer(n.grace())
+				defer t.Stop()
+				grace = t.C
+			}
+		case <-grace:
+			return
+		}
+	}
+}
+
+// fetchAfter reads a peer's log after seq, page by page.
+func (n *Node) fetchAfter(ctx context.Context, peer string, after uint64) (afterResp, error) {
+	var all afterResp
+	for page := 0; ; page++ {
+		var got afterResp
+		if err := n.call(ctx, peer, fmt.Sprintf("/api/oplog?after=%d", after), nil, &got); err != nil {
+			return afterResp{}, err
+		}
+		if page == 0 {
+			all = got
+			all.Entries = append([]Entry(nil), got.Entries...)
+		} else {
+			if got.Term != all.Term || len(got.Entries) > 0 && got.Entries[0].Seq != after+1 {
+				return afterResp{}, fmt.Errorf("oplog: %s's log moved while it was read page by page", peer)
+			}
+			all.Entries = append(all.Entries, got.Entries...)
+			all.Commit, all.LastSeq, all.LastTerm = got.Commit, got.LastSeq, got.LastTerm
+			all.Unsynced, all.Identity = got.Unsynced, got.Identity
+		}
+		if !got.More || len(got.Entries) == 0 {
+			all.More = false
+			n.mu.Lock()
+			n.notePeerLocked(peer, all.Unsynced, all.Identity)
+			n.mu.Unlock()
+			return all, nil
+		}
+		if page >= 1<<14 {
+			return afterResp{}, fmt.Errorf("oplog: %s's log did not end after %d pages", peer, page)
+		}
+		after = got.Entries[len(got.Entries)-1].Seq
+	}
 }
 
 // termAtLocked is the term of the entry at seq (0 for seq 0, or none).
@@ -983,14 +1462,14 @@ func (n *Node) Heartbeat(ctx context.Context) {
 	commit := n.commit
 	n.mu.Unlock()
 	term := n.currentTerm()
-	for _, p := range n.o.Peers {
-		if p == n.o.Self {
-			continue
-		}
-		if err := n.replicateTo(ctx, p, nil, term, commit); err != nil {
+	fanOut(ctx, n, n.others(), func(ctx context.Context, p string) error {
+		return n.replicateToErr(ctx, p, nil, term, commit)
+	}, func(p string, err error) bool {
+		if err != nil {
 			n.log.Debug("oplog: heartbeat", "peer", p, "error", err)
 		}
-	}
+		return false
+	})
 }
 
 // CatchUp asks the leader for everything after our last entry and its
@@ -1006,8 +1485,8 @@ func (n *Node) CatchUp(ctx context.Context) error {
 	// From the commit index, not the last entry: an uncommitted entry this
 	// instance holds may be stale, and only the leader's entries from the
 	// commit on replace it (see acceptLocked).
-	var got afterResp
-	if err := n.call(ctx, leader, fmt.Sprintf("/api/oplog?after=%d", n.Commit()), nil, &got); err != nil {
+	got, err := n.fetchAfter(ctx, leader, n.Commit())
+	if err != nil {
 		return err
 	}
 	n.mu.Lock()
@@ -1027,20 +1506,32 @@ func (n *Node) Status() Status {
 	n.mu.Lock()
 	now := n.o.Now()
 	var reached []string
+	counted := 0
 	for _, p := range n.o.Peers {
 		if p == n.o.Self || now.Sub(n.lastContact[p]) < 10*time.Second {
 			reached = append(reached, p)
+			pi := n.peers[p]
+			switch {
+			case p == n.o.Self && n.syncedLocked():
+				counted++
+			case p != n.o.Self && n.counts(p, pi.unsynced, pi.identity):
+				counted++
+			}
 		}
 	}
-	s := Status{Self: n.o.Self, Leader: n.leaderAddr(), IsLeader: n.isLeader(), Term: n.term, Peers: n.o.Peers, Reached: reached, LastSeq: n.lastLocked(), Commit: n.commit}
+	s := Status{Self: n.o.Self, Leader: n.leaderAddr(), IsLeader: n.isLeader(), Term: n.term, Peers: n.o.Peers, Reached: reached, LastSeq: n.lastLocked(), Commit: n.commit,
+		Unsynced: !n.syncedLocked(), Identity: n.mark.Identity, Lost: n.lostAt}
 	n.mu.Unlock()
 	switch {
 	case n.standalone():
 		s.Writable = true
 	case s.IsLeader:
-		s.Writable = len(reached) >= n.majority()
-		if !s.Writable {
-			s.Reason = fmt.Sprintf("leader, but only %d of %d instances reachable", len(reached), len(n.o.Peers))
+		s.Writable = counted >= n.majority()
+		switch {
+		case s.Unsynced && !s.Writable:
+			s.Reason = "leader, but this replica's log is not synced, and too few that count are reachable"
+		case !s.Writable:
+			s.Reason = fmt.Sprintf("leader, but only %d of %d instances that count reachable", counted, len(n.o.Peers))
 		}
 	default:
 		s.Writable = s.Leader != "" && contains(reached, s.Leader)
@@ -1060,15 +1551,19 @@ func contains(xs []string, x string) bool {
 	return false
 }
 
-// Ping records whether each peer answers, for Status. Run it on a ticker.
+// Ping records whether each peer answers, and what it says of its log,
+// for Status. Run it on a ticker.
 func (n *Node) Ping(ctx context.Context) {
-	for _, p := range n.o.Peers {
-		if p == n.o.Self {
-			continue
-		}
+	fanOut(ctx, n, n.others(), func(ctx context.Context, p string) bool {
 		var st Status
-		_ = n.call(ctx, p, "/api/quorum", nil, &st)
-	}
+		if n.call(ctx, p, "/api/quorum", nil, &st) != nil {
+			return false
+		}
+		n.mu.Lock()
+		n.notePeerLocked(p, st.Unsynced, st.Identity)
+		n.mu.Unlock()
+		return true
+	}, func(string, bool) bool { return false })
 }
 
 type httpError struct {
@@ -1104,7 +1599,7 @@ func (n *Node) call(ctx context.Context, base, path string, body any, out any) e
 		return err
 	}
 	defer resp.Body.Close()
-	data, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, maxResp))
 	if resp.StatusCode/100 != 2 {
 		if resp.StatusCode >= 500 {
 			n.lost(base)
@@ -1152,8 +1647,12 @@ func (n *Node) Handler() http.Handler {
 		_, _ = fmt.Sscanf(r.URL.Query().Get("after"), "%d", &after)
 		n.mu.Lock()
 		last := n.lastLocked()
-		resp := afterResp{Entries: n.afterLocked(after), Commit: n.commit, Term: n.term, LastSeq: last, LastTerm: n.termAtLocked(last)}
+		resp := afterResp{Entries: n.afterLocked(after), Commit: n.commit, Term: n.term, LastSeq: last, LastTerm: n.termAtLocked(last),
+			Unsynced: !n.syncedLocked(), Identity: n.mark.Identity}
 		n.mu.Unlock()
+		if !mutOplog("resend_unchunked") {
+			resp.Entries, resp.More = chunk(resp.Entries)
+		}
 		writeJSON(w, http.StatusOK, resp)
 	}))
 	mux.HandleFunc("POST /api/oplog/propose", auth(func(w http.ResponseWriter, r *http.Request) {
@@ -1162,7 +1661,7 @@ func (n *Node) Handler() http.Handler {
 			return
 		}
 		var e Entry
-		if err := json.NewDecoder(r.Body).Decode(&e); err != nil {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBody)).Decode(&e); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -1175,15 +1674,27 @@ func (n *Node) Handler() http.Handler {
 	}))
 	mux.HandleFunc("POST /api/oplog/replicate", auth(func(w http.ResponseWriter, r *http.Request) {
 		var req replicateReq
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBody)).Decode(&req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		// Only the leader the Leadership names may replicate, and never
-		// from an older term than one already seen.
-		if l := n.leaderAddr(); !n.standalone() && l != "" && req.From != l {
-			http.Error(w, fmt.Sprintf("replication from %s; the leader is %s", req.From, l), http.StatusForbidden)
-			return
+		// Only the leader the Leadership names may replicate (or, with
+		// Admit, the member it admits by name), and never from an older
+		// term than one already seen.
+		switch {
+		case n.o.Admit != nil:
+			if mutOplog("admit_skipped") {
+				break
+			}
+			if err := n.o.Admit(req.Node, req.Term); err != nil {
+				http.Error(w, fmt.Sprintf("replication from %q at term %d refused: %v", req.Node, req.Term, err), http.StatusForbidden)
+				return
+			}
+		default:
+			if l := n.leaderAddr(); !n.standalone() && l != "" && req.From != l {
+				http.Error(w, fmt.Sprintf("replication from %s; the leader is %s", req.From, l), http.StatusForbidden)
+				return
+			}
 		}
 		n.mu.Lock()
 		if req.Term < n.term {
@@ -1211,7 +1722,14 @@ func (n *Node) Handler() http.Handler {
 		}
 		if err == nil {
 			// Only as far as this request proved the logs equal.
-			n.commitTo(min(req.Commit, req.PrevSeq+uint64(len(req.Entries))))
+			proved := req.PrevSeq + uint64(len(req.Entries))
+			n.commitTo(min(req.Commit, proved))
+			// A synced leader's log holds every committed entry, and this
+			// request proved ours equal to it up to its commit index:
+			// ours holds them too.
+			if (req.Synced || mutOplog("synced_by_unsynced_leader")) && proved >= req.Commit {
+				n.becomeSyncedLocked("replicated from a synced leader")
+			}
 		}
 		have := n.lastLocked()
 		if errors.Is(err, errMismatch) {
@@ -1233,7 +1751,10 @@ func (n *Node) Handler() http.Handler {
 			writeJSON(w, http.StatusConflict, map[string]any{"error": kind, "detail": err.Error(), "have": have, "commit": commit})
 			return
 		}
-		writeJSON(w, http.StatusOK, replicateResp{Have: have, Commit: commit})
+		n.mu.Lock()
+		unsynced, identity := !n.syncedLocked(), n.mark.Identity
+		n.mu.Unlock()
+		writeJSON(w, http.StatusOK, replicateResp{Have: have, Commit: commit, Unsynced: unsynced, Identity: identity})
 	}))
 	return mux
 }

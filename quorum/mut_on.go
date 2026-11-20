@@ -84,18 +84,24 @@ var Mutations = []string{
 	"box_wait_skipped",           // a controller whose box can't be read yet votes on the stored identity (#1034 review)
 	// Outside the quorum tree, listed so this init accepts them when a
 	// package that imports quorum runs under one (the runner's pkgs rows).
-	"lapse_ignored",            // oplog: a committed KindLapse is not looked at; a late start runs (#1030 review)
-	"ack_clear_off",            // server: an acked alarm back to normal proposes no ack-clear (#710 PR 3b-2c)
-	"alarm_view_ignored",       // server: a synced takeover restores its own retain, not the log's alarm view
-	"engine_not_reset",         // server: a takeover restores the view over the engine's frozen operator state
-	"reconcile_before_restore", // server: the alarm log is live from the lease on, before the takeover restored it (#1033 CI)
-	"gate_per_batch",           // hw: the gate is read once per batch, not before each command (design §3.4)
-	"old_term_sent",            // hw: a command queued under an earlier term is sent after a re-lead (#1040 review)
-	"old_term_kept",            // modbus: a write queued under an earlier term of the lease goes out after a re-lead (#1040 review)
-	"set_retried",              // snmp: a SET is retransmitted after each per-try timeout (#1040 review)
-	"send_no_deadline",         // fence: a send gets no deadline, and one past its budget still starts (design §3.4)
-	"fence_fin",                // fence: a fenced socket is closed with a FIN, not reset (design §3.4)
-	"fragments_unchecked",      // fence: a send split into requests reads the gate once, not before each (3b-3b-2)
+	"lapse_ignored",             // oplog: a committed KindLapse is not looked at; a late start runs (#1030 review)
+	"replicate_sequential",      // oplog: peers asked one after another; a silent one holds up every write (3b-4a)
+	"admit_skipped",             // oplog: a replica with Admit takes replication from anyone (3b-4a)
+	"unsynced_counted",          // oplog: an unsynced replica's answer counts (3b-4a)
+	"log_loss_silent",           // oplog: a log lost under the held mark comes back empty and counting (3b-4a)
+	"synced_by_unsynced_leader", // oplog: a follower marks itself synced from an unsynced leader (3b-4a)
+	"resend_unchunked",          // oplog: a resend or catch-up read carries the whole log in one body (3b-4a)
+	"ack_clear_off",             // server: an acked alarm back to normal proposes no ack-clear (#710 PR 3b-2c)
+	"alarm_view_ignored",        // server: a synced takeover restores its own retain, not the log's alarm view
+	"engine_not_reset",          // server: a takeover restores the view over the engine's frozen operator state
+	"reconcile_before_restore",  // server: the alarm log is live from the lease on, before the takeover restored it (#1033 CI)
+	"gate_per_batch",            // hw: the gate is read once per batch, not before each command (design §3.4)
+	"old_term_sent",             // hw: a command queued under an earlier term is sent after a re-lead (#1040 review)
+	"old_term_kept",             // modbus: a write queued under an earlier term of the lease goes out after a re-lead (#1040 review)
+	"set_retried",               // snmp: a SET is retransmitted after each per-try timeout (#1040 review)
+	"send_no_deadline",          // fence: a send gets no deadline, and one past its budget still starts (design §3.4)
+	"fence_fin",                 // fence: a fenced socket is closed with a FIN, not reset (design §3.4)
+	"fragments_unchecked",       // fence: a send split into requests reads the gate once, not before each (3b-3b-2)
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")

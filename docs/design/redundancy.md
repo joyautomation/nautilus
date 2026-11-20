@@ -103,6 +103,30 @@ bumpless, and the measured takeover time is published instead.
     - **The accepted cost.** A start that was committed and answered 200, but whose commit
       push was lost and which a new leader catches up more than 60 s later, lapses too. A
       replica that had started it ends it loudly: the safe direction.
+- **Three replicas, and only a synced one counts** (#710 PR 3b-4a, `oplog`).
+  - **Who counts.** A replica's store counts toward a commit, and its answer toward a new
+    leader's catch-up, only while it is **synced**: its log is known to hold every committed
+    entry. Without the rule, B and a rebuilt empty witness could make a majority that holds an
+    entry nowhere (A and the old witness committed it while B was down, and A then died).
+  - **How a replica becomes synced.** A synced leader's replication proves its log equal up
+    to that leader's commit index, or, as a leader, it catches up from a majority that counts.
+    A witness counts only at the incarnation the election counts (`Options.Counts`).
+  - **The mark.** Each replica keeps a small mark beside its log (`oplog.held`), written and
+    fsynced once per identity: `held` before its first entry is stored, `synced` as above.
+    No write pays a per-entry fsync for it.
+  - **A lost log is seen.** A log missing, emptied, or damaged before its last line under the
+    held mark is moved aside (`oplog.jsonl.lost-<time>`), never truncated. The replica starts
+    empty, counts for nothing, and its controller may not lead (3b-4b) until a synced leader
+    has given it the log again. A log written for another identity (a re-adopted controller, a
+    rebuilt witness) is moved aside as `.previous-<time>`. What the mark can't see is a log
+    rolled back to an older copy that still holds entries (a restored backup): never restore
+    one.
+  - **The witness follows its vote.** It takes replication only from the member its vote
+    names, at that term (`Options.Admit`), never by address. It never dials a controller: the
+    leader's heartbeat fills it, a chunk at a time.
+  - **Every peer at once.** The leader replicates to both peers at once and commits on the
+    first majority that counts, after a short wait for the other, so a silent peer never holds
+    up a write by its call timeout. A takeover's catch-up asks both peers at once too.
 - **The witness can be rebuilt from scratch.** A witness that comes back with an empty disk
   loses no committed entry while both controllers are up:
   - **Its votes:** it grants nothing for one lease (§3.1).
