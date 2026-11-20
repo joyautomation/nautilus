@@ -299,6 +299,10 @@ func TagsYAML(m modbus.Manifest, meta map[string]TagMeta, skip []string) ([]byte
 		"dropped).",
 		"",
 		"Compose it into a project with:  tag-files: [tags/modbus.yaml]",
+		"",
+		"<source>__Online and <source>__Outages are synthesized by the driver:",
+		"a source's values hold (Stale) when it stops answering, so interlock on",
+		"__Online.",
 	}
 	if len(skip) > 0 {
 		header = append(header, "",
@@ -328,6 +332,23 @@ func TagsYAML(m modbus.Manifest, meta map[string]TagMeta, skip []string) ([]byte
 			tag.Init = md.Init
 		}
 		out = append(out, tag)
+	}
+	// The driver's per-source companions: synthesized at runtime, but a
+	// program can only name a tag the project declares (`naut check`), so
+	// the tag file carries them like eip's and opcua's <name>__Online.
+	for _, src := range m.Sources {
+		for _, c := range []tagfile.Tag{
+			{Name: src.OnlineTagName(), Role: "input", Type: "BOOL",
+				Desc: "source " + src.ID + " answering — interlock on this"},
+			{Name: src.OutagesTagName(), Role: "input", Type: "DINT",
+				Desc: "times " + src.OnlineTagName() + " has fallen since the driver started"},
+		} {
+			if matchesAny(c.Name, skip) {
+				skipped++
+				continue
+			}
+			out = append(out, c)
+		}
 	}
 	if len(skip) > 0 && skipped == 0 {
 		return nil, fmt.Errorf("no binding matches any of the skip patterns (%s) — "+
