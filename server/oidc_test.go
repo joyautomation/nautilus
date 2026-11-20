@@ -540,12 +540,26 @@ func TestOIDCStartRefusals(t *testing.T) {
 	if rec := call(t, srv, "GET", "/auth/oidc/start", ""); rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "needs HTTPS") {
 		t.Errorf("plain HTTP from afar: %d %s", rec.Code, rec.Body)
 	}
+	// An image another page loads is no sign-in, and starts none.
+	img := func(r *http.Request) {
+		r.Header.Set("Sec-Fetch-Mode", "no-cors")
+		r.Header.Set("Sec-Fetch-Dest", "image")
+	}
+	before := len(srv.oidcFlows.m)
+	if rec, _ := oidcStart(t, srv, "/", img); rec.Code != http.StatusForbidden || len(srv.oidcFlows.m) != before {
+		t.Errorf("a start by an image: %d (flows %d -> %d)", rec.Code, before, len(srv.oidcFlows.m))
+	}
+	nav := func(r *http.Request) { r.Header.Set("Sec-Fetch-Mode", "navigate") }
+	if rec, _ := oidcStart(t, srv, "/", nav); rec.Code != http.StatusSeeOther {
+		t.Errorf("a navigation's start: %d %s", rec.Code, rec.Body)
+	}
 	fake.startErr = errors.New("the OIDC provider cannot be reached: discovery at https://idp.example: dial tcp: refused")
+	held := len(srv.oidcFlows.m)
 	if rec, _ := oidcStart(t, srv, "/"); rec.Code != http.StatusServiceUnavailable || !strings.Contains(rec.Body.String(), "local users can still sign in") {
 		t.Errorf("unreachable: %d %s", rec.Code, rec.Body)
 	}
-	if len(srv.oidcFlows.m) != 0 {
-		t.Errorf("a failed start left %d flows", len(srv.oidcFlows.m))
+	if len(srv.oidcFlows.m) != held {
+		t.Errorf("a failed start left a flow (%d -> %d)", held, len(srv.oidcFlows.m))
 	}
 	fake.startErr = nil
 
@@ -707,17 +721,28 @@ func TestOIDCFlowsBounded(t *testing.T) {
 	if f.put("one-more", oidcFlow{addr: "fresh"}) {
 		t.Error("took one past the cap")
 	}
+	// An address at its share gives way: its oldest sign-in ends, the new
+	// one is kept, the table stays full.
+	if !f.put("a0-again", oidcFlow{addr: "a0"}) || len(f.m) != maxOIDCFlows {
+		t.Errorf("an address at its share was refused (%d flows)", len(f.m))
+	}
 	f.now = func() time.Time { return time.Now().Add(oidcFlowLife) }
 	if !f.put("after-expiry", oidcFlow{addr: "fresh"}) || len(f.m) != 1 {
 		t.Errorf("expired flows not swept: %d", len(f.m))
 	}
-	// One address holds only its share; the others still start.
+	// One address holds only its share: the flood ends its own oldest,
+	// never refuses, and others still start.
 	g := newOIDCFlows()
-	for i := 0; i < maxOIDCFlowsPerAddr; i++ {
-		g.put("x"+strconv.Itoa(i), oidcFlow{addr: "flooder"})
+	base := time.Now()
+	for i := 0; i <= maxOIDCFlowsPerAddr; i++ {
+		at := base.Add(time.Duration(i) * time.Second)
+		g.now = func() time.Time { return at }
+		if !g.put("x"+strconv.Itoa(i), oidcFlow{addr: "flooder"}) {
+			t.Fatalf("an address's start %d was refused", i)
+		}
 	}
-	if g.put("x-more", oidcFlow{addr: "flooder"}) {
-		t.Error("one address took more than its share")
+	if _, ok := g.m["x0"]; ok || len(g.m) != maxOIDCFlowsPerAddr {
+		t.Errorf("the oldest did not give way: %d flows, x0 kept %v", len(g.m), ok)
 	}
 	if !g.put("y", oidcFlow{addr: "someone"}) {
 		t.Error("a flooding address kept another from starting")

@@ -70,8 +70,8 @@ func TestLockRefusesLinks(t *testing.T) {
 	if err := os.Symlink(target, lock); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := lockFile(lock); err == nil {
-		t.Error("a symlinked lock was followed")
+	if _, err := lockFile(lock); err == nil || !strings.Contains(err.Error(), "remove it") {
+		t.Errorf("a symlinked lock: %v, want a refusal naming the fix", err)
 	}
 	os.Remove(lock)
 	if err := os.Link(target, lock); err != nil {

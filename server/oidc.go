@@ -59,7 +59,9 @@ const oidcFlowLife = 10 * time.Minute
 // maxOIDCFlows bounds the sign-ins under way: start is anonymous, so a
 // client must not grow the table without end. maxOIDCFlowsPerAddr bounds
 // one address's share, so a few addresses cannot fill it and keep
-// everyone else from signing in.
+// everyone else from signing in; past it the address's oldest sign-in
+// gives way (never a refusal, which a page elsewhere could use to keep
+// everyone behind one address from signing in).
 const (
 	maxOIDCFlows        = 4096
 	maxOIDCFlowsPerAddr = 16
@@ -106,21 +108,28 @@ type oidcFlows struct {
 
 func newOIDCFlows() *oidcFlows { return &oidcFlows{now: time.Now, m: map[string]oidcFlow{}} }
 
-// put keeps a sign-in under way; false when too many are.
+// put keeps a sign-in under way, ending the address's oldest when it has
+// its share already; false when the whole table is full.
 func (f *oidcFlows) put(state string, fl oidcFlow) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	now := f.now()
-	mine := 0
+	mine, oldest := 0, ""
 	for k, o := range f.m {
 		switch {
 		case now.Sub(o.at) >= oidcFlowLife:
 			delete(f.m, k)
 		case o.addr == fl.addr:
 			mine++
+			if oldest == "" || o.at.Before(f.m[oldest].at) {
+				oldest = k
+			}
 		}
 	}
-	if len(f.m) >= maxOIDCFlows || mine >= maxOIDCFlowsPerAddr {
+	if mine >= maxOIDCFlowsPerAddr {
+		delete(f.m, oldest)
+	}
+	if len(f.m) >= maxOIDCFlows {
 		return false
 	}
 	fl.at = now
@@ -233,6 +242,14 @@ func (s *Server) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
 	}
 	if _, standby := s.standbyLeader(); standby {
 		s.signInPage(w, r, http.StatusServiceUnavailable, "", next)
+		return
+	}
+	// Only a browser's navigation starts a sign-in: an image or a fetch
+	// another page makes (Sec-Fetch-Mode no-cors, cors) would spend the
+	// address's sign-ins under way. A client that sends no such header
+	// (an older browser, a script) is let through.
+	if m := r.Header.Get("Sec-Fetch-Mode"); m != "" && m != "navigate" {
+		refuse(http.StatusForbidden, "a sign-in starts only from a link the browser opens (Sec-Fetch-Mode: navigate)", "not a navigation")
 		return
 	}
 	if !s.signInTransport(r) {

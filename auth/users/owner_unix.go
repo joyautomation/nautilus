@@ -3,6 +3,7 @@
 package users
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -83,6 +84,9 @@ func lockFile(path string) (func(), error) {
 	// O_NOFOLLOW: a lock planted as a symbolic link (by whoever owns the
 	// state directory) is refused, never followed.
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW, 0o600)
+	if errors.Is(err, syscall.ELOOP) {
+		return nil, fmt.Errorf("%s is a symbolic link: remove it (naut users makes a new one)", path)
+	}
 	if err != nil {
 		return nil, err
 	}
