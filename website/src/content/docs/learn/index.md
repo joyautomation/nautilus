@@ -30,6 +30,7 @@ on the right, and a **Check** button that tests your answer.
 5. [Test it, in virtual time](/learn/programming/test-it-in-virtual-time/)
 6. [Your own function block](/learn/programming/your-own-function-block/)
 7. [Two tasks, two scan rates](/learn/programming/two-tasks-two-scan-rates/)
+8. [Four languages, one controller](/learn/programming/four-languages/)
 
 ## I/O and protocols
 
