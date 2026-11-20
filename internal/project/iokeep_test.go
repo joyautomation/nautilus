@@ -601,6 +601,50 @@ func TestIOKeptPendingRevert(t *testing.T) {
 		if len(got) != 1 || got[0].State != WatchDropped || got[0].ID != "io-9" || got[0].By != "tester" || got[0].From != "upload" {
 			t.Fatalf("reports %+v, want one dropped apply io-9 by tester", got)
 		}
+		// Cleared from the store once the restore settles: restarting
+		// again with no apply in between journals nothing more.
+		eventually(t, "the store to forget the dropped apply", func() bool {
+			st := store.io(t)
+			return st != nil && st.Provisional == nil
+		})
+		r2.stop()
+		r3 := startKeepRig(t, files, keepOpts{store: store})
+		var got3 []IOWatch
+		var mu3 sync.Mutex
+		r3.io.OnReverted(func(w IOWatch) { mu3.Lock(); got3 = append(got3, w); mu3.Unlock() })
+		r3.leading(t)
+		time.Sleep(300 * time.Millisecond)
+		mu3.Lock()
+		defer mu3.Unlock()
+		if len(got3) != 0 || len(r3.io.Discarded()) != 0 && strings.Contains(r3.io.Discarded()[0].Why, "not carried") {
+			t.Fatalf("a second restart reported %+v (discarded %+v), want nothing", got3, r3.io.Discarded())
+		}
+	})
+	t.Run("a standby following the pending apply journals nothing", func(t *testing.T) {
+		shortFollow(t)
+		s1, s2 := newSlave(t, 4), newSlave(t, 7)
+		files := staticFiles(slavePort(s1), slavePort(s2))
+		store := &memStore{}
+		ca, cb := &keepCoord{}, &keepCoord{}
+		ca.lead.Store(true)
+		ca.term.Store(1)
+		a := startKeepRig(t, files, keepOpts{store: store, coord: ca})
+		b := startKeepRig(t, files, keepOpts{store: store, coord: cb})
+		var mu sync.Mutex
+		var got []IOWatch
+		b.io.OnReverted(func(w IOWatch) { mu.Lock(); got = append(got, w); mu.Unlock() })
+		a.leading(t)
+		a.applyMove(t, files, deadPort(t), slavePort(s2), ApplyOptions{RevertIfSilent: time.Minute, ID: "io-5"})
+		eventually(t, "the store to hold the provisional apply", func() bool {
+			st := store.io(t)
+			return st != nil && st.Provisional != nil
+		})
+		time.Sleep(500 * time.Millisecond) // the standby follows the store a few times
+		mu.Lock()
+		defer mu.Unlock()
+		if len(got) != 0 {
+			t.Fatalf("a following standby reported %+v, want nothing", got)
+		}
 	})
 	t.Run("answered, then kept", func(t *testing.T) {
 		s1, s2, s3 := newSlave(t, 4), newSlave(t, 7), newSlave(t, 9)
