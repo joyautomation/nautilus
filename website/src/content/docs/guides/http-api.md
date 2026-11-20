@@ -1162,25 +1162,32 @@ applied. Its target is the apply's id and its detail says `revert of <id>
 applied by <principal>`, with the reason and whether putting it back worked
 (`result: error` when it did not).
 
-**What the hashes cover.** A hash is the first 8 bytes (16 hex characters) of
-the SHA-256 of the unit's configuration marshalled as compact JSON, keyed by
-the Go field names in declaration order (`{"Source":{"ID":…,"Host":…},"Tags":[…]}`).
-It is a fingerprint to compare and match to a journal entry, not a format to
-rebuild by hand; `GET /api/io` and the `config.differs` rows show the same
-hashes (`manifestHash`, `runningHash`). What each covers:
+A `revertIfSilent` apply that a restart or a takeover interrupts is not
+reverted by the watch: the new leader brings back the configuration from
+before it and lists the dropped apply under `config.discarded`. The journal
+still shows the apply as `config.apply` (ok); read `config.discarded` for
+what did not survive.
 
-- a Modbus device (`devices:` row): its source (id, host, port, unit id, word and byte order, timeouts,
-  retry bounds) and its tag bindings (name, table, address, format, scale), as the device library
-  and `modbus.yaml` resolve them;
+**What the hashes cover.** A hash is the first 8 bytes (16 hex characters) of
+the SHA-256 of the unit's resolved configuration marshalled as compact JSON
+(Go field names in declaration order, durations as integer nanoseconds,
+nothing omitted). Those bytes are nautilus's resolved internal form, not the
+project files, and can change between releases. To check a hash, stage the
+same files on a controller of the same nautilus version and compare it with
+the one in `GET /api/io` or the `config.differs` rows (`manifestHash`,
+`runningHash`). What each covers:
+
+- a Modbus device (`devices:` row): every source and tag-binding setting, as
+  resolved (the device library's profile included);
 - a Modbus driver on its own (the `<driver>` unit): its scan rate, scan
   classes and tag classes;
-- an OPC UA client: its `drivers:` entry (without `validate`), its device row
-  and the manifest it derives, a profile node id included;
+- an OPC UA client: its `drivers:` entry (without `validate`), its device's
+  name and the manifest derived from it, a profile node id included;
 - any other driver: its `drivers:` entry and the text of the manifest file it
   names.
 
 Hashes identify a configuration; they are not a secret, and two controllers
-with the same files report the same hashes.
+on the same nautilus version with the same files report the same hashes.
 
 | Status | When |
 | --- | --- |

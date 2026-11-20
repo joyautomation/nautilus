@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -661,35 +662,41 @@ func TestIOWatchReCheck(t *testing.T) {
 	})
 }
 
-// An automatic revert tells the registered recorder, with the apply's id
-// and who applied it; an answered apply, whose watch ends without a revert,
-// does not (#706 PR 6: the journal records the revert as the system's).
+// An automatic revert reaches the server's OnRevert through the real Hook,
+// with the apply's id and who applied it; an answered apply, whose watch
+// ends without a revert, does not (#706 PR 6: the journal records the
+// revert as the system's).
 func TestIOAutoRevertIsReported(t *testing.T) {
 	s1, s2, s3 := newSlave(t, 4), newSlave(t, 7), newSlave(t, 4)
 	base := ioFiles(slavePort(s1), slavePort(s2), "")
 	base = withFile(base, "nautilus.yaml", strings.Replace(string(base["nautilus.yaml"].Data), "  scan-rate: 10ms\n", "  scan-rate: 10ms\n  validate: static\n", 1))
-	run := func(y string, opts ApplyOptions) []IOWatch {
+	run := func(y string, a server.IOApply) []server.IOWatch {
 		r := startIORig(t, base, false)
+		h := r.io.Hook(func(string) (fs.FS, bool) { return nil, false }, base)
 		var mu sync.Mutex
-		var got []IOWatch
-		r.io.OnReverted(func(w IOWatch) { mu.Lock(); got = append(got, w); mu.Unlock() })
-		c := r.io.Stage(withFile(base, "modbus.yaml", y), "upload", "user:akhan")
-		if v := r.io.Validate(c); !v.Valid {
-			t.Fatalf("validate: %+v", v.Checks)
+		var got []server.IOWatch
+		h.OnRevert(func(w server.IOWatch) { mu.Lock(); got = append(got, w); mu.Unlock() })
+		c, err := h.Stage("", map[string][]byte{"modbus.yaml": []byte(y)}, a.By)
+		if err != nil {
+			t.Fatal(err)
 		}
-		if _, err := r.io.ApplyWith(r.ctx, c, "user:akhan", opts); err != nil {
+		if ok, _, _ := h.Validate(c); !ok {
+			t.Fatal("candidate not valid")
+		}
+		if _, err := h.Apply(r.ctx, c, a); err != nil {
 			t.Fatal(err)
 		}
 		waitWatch(t, r)
+		time.Sleep(200 * time.Millisecond) // the report is made off the apply lock
 		mu.Lock()
 		defer mu.Unlock()
-		return append([]IOWatch(nil), got...)
+		return append([]server.IOWatch(nil), got...)
 	}
-	got := run(modbusYAML(deadPort(t), slavePort(s2), "", ""), ApplyOptions{RevertIfSilent: 300 * time.Millisecond, ID: "io-7"})
+	got := run(modbusYAML(deadPort(t), slavePort(s2), "", ""), server.IOApply{By: "user:akhan", ID: "io-7", RevertIfSilent: 300 * time.Millisecond})
 	if len(got) != 1 || got[0].State != WatchReverted || got[0].ID != "io-7" || got[0].By != "user:akhan" {
 		t.Fatalf("revert reports %+v, want one reverted watch of io-7 by user:akhan", got)
 	}
-	if got := run(modbusYAML(slavePort(s3), slavePort(s2), "", ""), ApplyOptions{RevertIfSilent: time.Second, ID: "io-8"}); len(got) != 0 {
+	if got := run(modbusYAML(slavePort(s3), slavePort(s2), "", ""), server.IOApply{By: "user:akhan", ID: "io-8", RevertIfSilent: time.Second}); len(got) != 0 {
 		t.Fatalf("an answered apply reported a revert: %+v", got)
 	}
 }

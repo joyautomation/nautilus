@@ -13,7 +13,7 @@ import (
 // mod on every request and returns the staged id.
 func stageValidateApply(t *testing.T, srv *Server, mod ...func(*http.Request)) string {
 	t.Helper()
-	rec := call(t, srv, "POST", "/api/io/staged", `{"files":{"modbus.yaml":"x"},"driver":"modbus"}`, mod...)
+	rec := call(t, srv, "POST", "/api/io/staged", `{"files":{"modbus.yaml":"x"},"driver":"modbus","by":"user:root","principal":"user:root"}`, mod...)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("stage: %d %s", rec.Code, rec.Body)
 	}
@@ -23,7 +23,7 @@ func stageValidateApply(t *testing.T, srv *Server, mod ...func(*http.Request)) s
 	}
 	id = strings.SplitN(id, `"`, 2)[0]
 	for _, step := range []string{"validate", "apply"} {
-		if rec := call(t, srv, "POST", "/api/io/staged/"+id+"/"+step, "", mod...); rec.Code != http.StatusOK {
+		if rec := call(t, srv, "POST", "/api/io/staged/"+id+"/"+step, `{"by":"user:root"}`, mod...); rec.Code != http.StatusOK {
 			t.Fatalf("%s: %d %s", step, rec.Code, rec.Body)
 		}
 	}
@@ -79,8 +79,17 @@ func TestIOWritesAnonymousAndServiceToken(t *testing.T) {
 	o.AuthToken = "s3cret"
 	srv2 := New(newTestRuntime(t), o)
 	stageValidateApply(t, srv2, bearer("s3cret"))
-	if !strings.HasPrefix(f2.applyBy, "token") {
-		t.Errorf("service token: apply by %q, want token…", f2.applyBy)
+	if f2.applyBy != "token" {
+		t.Errorf("bare service token: apply by %q, want token", f2.applyBy)
+	}
+	// A named service token is token:<name>.
+	f3 := &fakeIO{valid: true, drivers: []string{"modbus"}}
+	o3 := ioOptions(f3, true)
+	o3.ServiceTokens = map[string]string{"edge": "edge-secret"}
+	srv3 := New(newTestRuntime(t), o3)
+	stageValidateApply(t, srv3, bearer("edge-secret"))
+	if f3.applyBy != "token:edge" {
+		t.Errorf("named service token: apply by %q, want token:edge", f3.applyBy)
 	}
 	if es := auditByAction(srv2, "config.apply"); len(es) != 1 || es[0].User != f2.applyBy {
 		t.Errorf("journal %+v, want user %q", es, f2.applyBy)

@@ -256,7 +256,7 @@ func (io *IOConfig) watchEnded(w IOWatch) {
 		f := io.reverted
 		io.mu.Unlock()
 		if f != nil {
-			f(w) // the one change no request made: the server journals it
+			go f(w) // the one change no request made: the server journals it, off the apply lock
 		}
 	}
 	io.mu.Lock()

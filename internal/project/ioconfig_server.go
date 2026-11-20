@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"time"
 
 	"github.com/joyautomation/nautilus/server"
 )
@@ -43,8 +42,8 @@ func (io *IOConfig) Hook(snapshot func(sha string) (fs.FS, bool), base fs.FS) *s
 			}
 			return v.Valid, drivers, v
 		},
-		Apply: func(ctx context.Context, cand any, by, id string, revertIfSilent time.Duration) (any, error) {
-			res, err := io.ApplyWith(ctx, cand.(*IOCandidate), by, ApplyOptions{RevertIfSilent: revertIfSilent, ID: id})
+		Apply: func(ctx context.Context, cand any, a server.IOApply) (any, error) {
+			res, err := io.ApplyWith(ctx, cand.(*IOCandidate), a.By, ApplyOptions{RevertIfSilent: a.RevertIfSilent, ID: a.ID})
 			switch {
 			case err == nil:
 				return res, nil

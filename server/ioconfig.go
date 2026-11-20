@@ -32,6 +32,16 @@ import (
 	"github.com/joyautomation/nautilus/audit"
 )
 
+// IOApply is what an apply is asked: By is the request's principal, ID the
+// staged candidate's id, RevertIfSilent (when set) puts the apply back if a
+// changed device has not read within it. A struct, so the next field is
+// additive.
+type IOApply struct {
+	By             string
+	ID             string
+	RevertIfSilent time.Duration
+}
+
 // IOHook is a running project's live I/O configuration, as the server
 // drives it. Candidates are opaque to the server.
 type IOHook struct {
@@ -48,7 +58,7 @@ type IOHook struct {
 	// stale); ErrIORollbackFailed 500; any other, 422.
 	// by is the request's principal (who the journal names), id the
 	// staged candidate's id.
-	Apply func(ctx context.Context, cand any, by, id string, revertIfSilent time.Duration) (body any, err error)
+	Apply func(ctx context.Context, cand any, a IOApply) (body any, err error)
 	// OnRevert registers f to be called when an apply's automatic
 	// revert-if-silent has run (or failed): no request made it, so the
 	// server journals it as the system's.
@@ -502,7 +512,7 @@ func (s *Server) handleIOApply(w http.ResponseWriter, r *http.Request) {
 	s.staging.mu.Unlock()
 
 	by := s.requester(r)
-	body, err := s.io.Apply(r.Context(), st.cand, by, st.ID, revert)
+	body, err := s.io.Apply(r.Context(), st.cand, IOApply{By: by, ID: st.ID, RevertIfSilent: revert})
 	s.staging.mu.Lock()
 	code := http.StatusOK
 	switch {

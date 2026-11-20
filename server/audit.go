@@ -977,7 +977,7 @@ func ioStagedTarget(r *http.Request, _ []byte) auditTarget {
 }
 
 // ioApplyTarget is an apply: after is the state it reached plus what it
-// changed (each unit's before and after hash, what docs/guide/live-io.md
+// changed (each unit's before and after hash, what the HTTP guide
 // says they hash), where the candidate came from, and whether the change
 // is kept across a restart.
 func ioApplyTarget(r *http.Request, _ []byte) auditTarget {

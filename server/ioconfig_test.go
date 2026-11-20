@@ -55,7 +55,8 @@ func (f *fakeIO) hook() *IOHook {
 			}
 			return f.valid, f.drivers, map[string]any{"valid": f.valid, "cand": cand}
 		},
-		Apply: func(ctx context.Context, cand any, by, id string, revertIfSilent time.Duration) (any, error) {
+		Apply: func(ctx context.Context, cand any, a IOApply) (any, error) {
+			by, id, revertIfSilent := a.By, a.ID, a.RevertIfSilent
 			f.revert = revertIfSilent
 			f.applyBy, f.applyID = by, id
 			if f.applyErr != nil {
