@@ -1,0 +1,47 @@
+# The OIDC sign-in tests against a real Keycloak, nightly (#708 PR 6b,
+# tools/keycloak/run.sh): Keycloak in a container with a synthetic test
+# realm, then `go test -run Keycloak ./cmd/naut/`. Not a PR gate: the tests
+# skip without NAUTILUS_TEST_KEYCLOAK, so ci-ok stays hermetic. A red run
+# opens (or comments on) the rolling "keycloak: nightly OIDC" issue; a green
+# run closes it (.github/scripts/keycloak-nightly-issue.sh).
+# By hand: Actions → keycloak-nightly → Run workflow.
+name: keycloak-nightly
+on:
+  schedule:
+    - cron: '41 5 * * *' # daily, 05:41 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GOTOOLCHAIN: local
+
+jobs:
+  keycloak:
+    name: OIDC — tests against a real Keycloak
+    runs-on: ubuntu-latest
+    # About 3 min (a ~450 MB image pull, ~25 s boot, ~4 s of tests). A hung
+    # container must not hold the runner for GitHub's 6-hour default.
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write # the rolling issue
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.25'}
+      - name: tools/keycloak/run.sh
+        id: run
+        shell: bash
+        run: |
+          set -o pipefail
+          tools/keycloak/run.sh -v 2>&1 | tee "$RUNNER_TEMP/keycloak.log"
+      - name: Rolling issue
+        if: always() && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_OUTCOME: ${{ steps.run.outcome }}
+          RUN_LOG: ${{ runner.temp }}/keycloak.log
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: .github/scripts/keycloak-nightly-issue.sh

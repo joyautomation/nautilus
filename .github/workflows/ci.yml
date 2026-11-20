@@ -60,6 +60,8 @@ jobs:
         run: .github/scripts/ci-ok.test.sh
       - name: quorum-nightly's rolling-issue script passes its own table test
         run: .github/scripts/quorum-nightly-issue.test.sh
+      - name: keycloak-nightly's rolling-issue script passes its own table test
+        run: .github/scripts/keycloak-nightly-issue.test.sh
       - name: scope
         id: scope
         env:
