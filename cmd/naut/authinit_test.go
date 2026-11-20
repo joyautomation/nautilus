@@ -661,3 +661,26 @@ func TestAuthInitServerTLS(t *testing.T) {
 		})
 	}
 }
+
+// naut auth init never renews the certificate (only naut run does), and
+// when it cannot show a fingerprint it says why (#1114 review).
+func TestAuthInitCertificateCases(t *testing.T) {
+	state := isolateState(t)
+	sd := filepath.Join(state, "nautilus", "line1")
+	os.MkdirAll(sd, 0o700)
+	old := nearExpiry(t, sd, nil)
+	dir := authProject(t, plainManifest)
+	code, _, errs := nautAuth("init", "--project", dir, "--user", "alice:operator")
+	if code != 0 || !strings.Contains(errs, old.Fingerprint) {
+		t.Fatalf("%d:\n%s", code, errs)
+	}
+	if certFingerprint(leafOf(t, old.Path).Raw) != old.Fingerprint {
+		t.Error("auth init renewed the certificate")
+	}
+	os.WriteFile(old.Path, []byte("not a certificate"), 0o600)
+	dir = authProject(t, plainManifest)
+	code, _, errs = nautAuth("init", "--project", dir, "--user", "alice:operator")
+	if code != 0 || !strings.Contains(errs, "No certificate made here yet, so no fingerprint") || !strings.Contains(errs, "delete it") {
+		t.Errorf("%d:\n%s", code, errs)
+	}
+}

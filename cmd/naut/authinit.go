@@ -122,13 +122,19 @@ func authMain(args []string, stdout, stderr io.Writer, getenv func(string) strin
 		fmt.Fprintln(stderr, "server.tls: self-signed: the controller serves HTTPS with a certificate it makes in its state directory, so passwords never cross the network in the clear.")
 		// The certificate this checkout's naut run will serve, made now so
 		// its fingerprint can be checked against the browser's.
-		if sd, err := controllerStateDir("the self-signed certificate", e.m.AuthStateDir(), e.m.Name, e.dir, true, getenv); err == nil {
-			if c, err := ensureSelfSigned(sd, cmp.Or(e.m.Name, "nautilus"), selfSignedHosts(e.m.Server.Addr), time.Now()); err == nil {
-				fmt.Fprintf(stderr, "  naut run here serves %s, SHA-256 fingerprint:\n    %s\n", c.Path, c.Fingerprint)
-				fmt.Fprintln(stderr, "  A browser warns until you accept it: compare that fingerprint with the one it shows (the warning page, then the certificate's details).")
-				fmt.Fprintln(stderr, "  A box makes its own at its first start, and naut run there prints its fingerprint.")
-			}
+		// Never renewed here: only naut run renews.
+		sd, err := controllerStateDir("the self-signed certificate", e.m.AuthStateDir(), e.m.Name, e.dir, true, getenv)
+		var c selfSignedCert
+		if err == nil {
+			c, err = ensureSelfSigned(sd, cmp.Or(e.m.Name, "nautilus"), selfSignedHosts(e.m.Server.Addr), time.Now(), false)
 		}
+		if err == nil {
+			fmt.Fprintf(stderr, "  naut run here serves %s, SHA-256 fingerprint:\n    %s\n", c.Path, c.Fingerprint)
+			fmt.Fprintln(stderr, "  A browser warns until you accept it: compare that fingerprint with the one it shows (the warning page, then the certificate's details).")
+		} else {
+			fmt.Fprintf(stderr, "  No certificate made here yet, so no fingerprint to show (%v): naut run makes it at its start and prints its fingerprint.\n", err)
+		}
+		fmt.Fprintln(stderr, "  A box makes its own at its first start, and naut run there prints its fingerprint.")
 	} else if tlsWhy != "" {
 		fmt.Fprintln(stderr, "No server.tls written: "+tlsWhy)
 	}

@@ -4,8 +4,10 @@ package main
 // hand. The controller makes one (ECDSA P-256, its key and certificate in
 // one PEM file, mode 0600) in its state directory on its first start,
 // keeps it across restarts so a browser that accepted it once keeps
-// accepting it, and makes a new one at a start within 30 days of its
-// expiry. Browsers warn about a certificate no authority signed: the
+// accepting it. Only naut run renews it: at its start and once a day while
+// it runs, from 30 days before its expiry (naut logix serve, naut siemens
+// serve and naut auth init make one when there is none, never replace
+// one). Browsers warn about a certificate no authority signed: the
 // fingerprint it prints is what to compare the browser's with.
 
 import (
@@ -24,6 +26,9 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
+	"runtime/debug"
+	"slices"
 	"strings"
 	"time"
 )
@@ -43,19 +48,58 @@ type selfSignedCert struct {
 	Path        string
 	Fingerprint string // SHA-256 of the DER, AB:CD:... as browsers show it
 	NotAfter    time.Time
-	Made        bool // made now: there was none
-	Renewed     bool // made now: the old one was within selfSignedRenew of its expiry
+	// Names are the names and addresses it is valid for (its SANs), fixed
+	// when it was made; Missing are those of hosts it lacks (this machine
+	// was re-addressed since).
+	Names, Missing []string
+	Made           bool   // made now: there was none
+	Renewed        bool   // made now: the old one was within selfSignedRenew of its expiry
+	Replaced       string // when Renewed, the old one's fingerprint
+	// Due: within selfSignedRenew of its expiry (or past it) and not
+	// renewed, since this caller does not renew.
+	Due bool
+	// BuiltAfter is set when it was made now by a clock that reads earlier
+	// than this binary was built (a controller whose clock was never set):
+	// the certificate is not valid yet for any client whose clock is right.
+	BuiltAfter time.Time
+}
+
+// binaryBuilt is when this binary's source was committed (vcs.time, set by
+// go build in a git checkout and so in every release), zero when unknown.
+var binaryBuilt = func() time.Time {
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		for _, s := range bi.Settings {
+			if s.Key == "vcs.time" {
+				t, _ := time.Parse(time.RFC3339, s.Value)
+				return t
+			}
+		}
+	}
+	return time.Time{}
 }
 
 // ensureSelfSigned loads <stateDir>/tls/self-signed.pem, or makes it.
 // First made with a hard link from a temporary file, so two starts at
 // once both end up with the one that got there first, never half of
-// each; renewed with a rename over it. A file that does not hold a
-// certificate and its key is refused, never replaced: it is someone's.
-func ensureSelfSigned(stateDir, cn string, hosts []string, now time.Time) (selfSignedCert, error) {
-	dir := filepath.Join(stateDir, "tls")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+// each; with renew (naut run only), replaced by a rename over it within
+// selfSignedRenew of its expiry. A file that does not hold a certificate
+// and its key is refused, never replaced: it is someone's. The tls
+// directory and the file are given the state directory's owner, so one
+// made by a root run by hand is still the service's to read.
+func ensureSelfSigned(stateDir, cn string, hosts []string, now time.Time, renew bool) (selfSignedCert, error) {
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		return selfSignedCert{}, fmt.Errorf("tls: self-signed: %w", err)
+	}
+	owner, err := os.Stat(stateDir)
+	if err != nil {
+		return selfSignedCert{}, fmt.Errorf("tls: self-signed: %w", err)
+	}
+	dir := filepath.Join(stateDir, "tls")
+	if err := os.Mkdir(dir, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+		return selfSignedCert{}, fmt.Errorf("tls: self-signed: %w", err)
+	}
+	if err := ownLike(dir, owner); err != nil {
+		return selfSignedCert{}, err
 	}
 	path := filepath.Join(dir, selfSignedName)
 	raw, err := os.ReadFile(path)
@@ -65,44 +109,80 @@ func ensureSelfSigned(stateDir, cn string, hosts []string, now time.Time) (selfS
 		if err != nil {
 			return selfSignedCert{}, err
 		}
-		perr := placeFile(path, pemBytes, false)
+		perr := placeFile(path, pemBytes, false, owner)
 		if perr != nil && !errors.Is(perr, os.ErrExist) {
 			return selfSignedCert{}, perr
 		}
-		c, err := readSelfSigned(path) // ours, or the one another start linked in first
+		// Ours, or the one another start linked in first: that start made
+		// it, so this one says Made only when its own link won.
+		c, err := readSelfSigned(path, hosts)
 		c.Made = err == nil && perr == nil
+		if c.Made {
+			c.BuiltAfter = clockBehind(now)
+		}
 		return c, err
 	case err != nil:
 		return selfSignedCert{}, fmt.Errorf("tls: self-signed: %w", err)
 	}
-	c, err := parseSelfSigned(path, raw)
+	c, err := parseSelfSigned(path, raw, hosts)
 	if err != nil {
 		return c, err
 	}
 	if c.NotAfter.Sub(now) > selfSignedRenew {
 		return c, nil
 	}
+	if !renew {
+		c.Due = true
+		return c, nil
+	}
 	pemBytes, err := makeSelfSigned(cn, hosts, now)
 	if err != nil {
 		return selfSignedCert{}, err
 	}
-	if err := placeFile(path, pemBytes, true); err != nil {
+	if err := placeFile(path, pemBytes, true, owner); err != nil {
 		return selfSignedCert{}, err
 	}
-	c, err = readSelfSigned(path)
-	c.Renewed = err == nil
+	old := c.Fingerprint
+	c, err = readSelfSigned(path, hosts)
+	if err == nil {
+		c.Renewed, c.Replaced, c.BuiltAfter = true, old, clockBehind(now)
+	}
 	return c, err
 }
 
-func readSelfSigned(path string) (selfSignedCert, error) {
+// clockBehind is binaryBuilt when now is before it, else zero.
+func clockBehind(now time.Time) time.Time {
+	if b := binaryBuilt(); !b.IsZero() && now.Before(b) {
+		return b
+	}
+	return time.Time{}
+}
+
+// chownLike gives an open file ref's owner (keepOwner; a test swaps it).
+var chownLike = keepOwner
+
+// ownLike gives path ref's owner (unix), when it has another.
+func ownLike(path string, ref os.FileInfo) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("tls: self-signed: %w", err)
+	}
+	defer f.Close()
+	if err := chownLike(f, ref); err != nil {
+		return fmt.Errorf("tls: self-signed: %s cannot be given its state directory's owner (%w): run as the controller's user", path, err)
+	}
+	return nil
+}
+
+func readSelfSigned(path string, hosts []string) (selfSignedCert, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return selfSignedCert{}, fmt.Errorf("tls: self-signed: %w", err)
 	}
-	return parseSelfSigned(path, raw)
+	return parseSelfSigned(path, raw, hosts)
 }
 
-func parseSelfSigned(path string, raw []byte) (selfSignedCert, error) {
+func parseSelfSigned(path string, raw []byte, hosts []string) (selfSignedCert, error) {
 	pair, err := tls.X509KeyPair(raw, raw)
 	if err != nil || len(pair.Certificate) == 0 {
 		return selfSignedCert{}, fmt.Errorf("tls: %s does not hold a certificate and its key (%v): delete it, and the next start makes a new one", path, err)
@@ -111,14 +191,32 @@ func parseSelfSigned(path string, raw []byte) (selfSignedCert, error) {
 	if err != nil {
 		return selfSignedCert{}, fmt.Errorf("tls: %s: %w", path, err)
 	}
-	return selfSignedCert{Path: path, Fingerprint: certFingerprint(leaf.Raw), NotAfter: leaf.NotAfter}, nil
+	c := selfSignedCert{Path: path, Fingerprint: certFingerprint(leaf.Raw), NotAfter: leaf.NotAfter}
+	c.Names = append(c.Names, leaf.DNSNames...)
+	for _, ip := range leaf.IPAddresses {
+		c.Names = append(c.Names, ip.String())
+	}
+	for _, h := range hosts {
+		if h == "" {
+			continue
+		}
+		if ip := net.ParseIP(h); ip != nil {
+			h = ip.String()
+		}
+		if !slices.ContainsFunc(c.Names, func(n string) bool { return strings.EqualFold(n, h) }) {
+			c.Missing = append(c.Missing, h)
+		}
+	}
+	return c, nil
 }
 
-// placeFile writes data (mode 0600) to path through a temporary file
-// beside it: replace false links it in, failing with os.ErrExist when
-// path is there already; replace true renames it over.
-func placeFile(path string, data []byte, replace bool) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".self-signed-*")
+// placeFile writes data (mode 0600, owner's owner) to path through a
+// temporary file beside it: replace false links it in, failing with
+// os.ErrExist when path is there already; replace true renames it over.
+// The directory is synced after, so the new name survives a power cut.
+func placeFile(path string, data []byte, replace bool, owner os.FileInfo) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".self-signed-*")
 	if err != nil {
 		return fmt.Errorf("tls: self-signed: %w", err)
 	}
@@ -126,6 +224,9 @@ func placeFile(path string, data []byte, replace bool) error {
 	_, err = tmp.Write(data)
 	if err == nil {
 		err = tmp.Chmod(0o600)
+	}
+	if err == nil && owner != nil {
+		err = chownLike(tmp, owner)
 	}
 	if err == nil {
 		err = tmp.Sync()
@@ -137,9 +238,30 @@ func placeFile(path string, data []byte, replace bool) error {
 		return fmt.Errorf("tls: self-signed: %w", err)
 	}
 	if replace {
-		return os.Rename(tmp.Name(), path)
+		err = os.Rename(tmp.Name(), path)
+	} else {
+		err = os.Link(tmp.Name(), path)
 	}
-	return os.Link(tmp.Name(), path)
+	if err != nil {
+		return err
+	}
+	return syncDir(dir)
+}
+
+// syncDir fsyncs a directory (a no-op where directories cannot be).
+func syncDir(dir string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	d, err := os.Open(dir)
+	if err != nil {
+		return fmt.Errorf("tls: self-signed: %w", err)
+	}
+	defer d.Close()
+	if err := d.Sync(); err != nil {
+		return fmt.Errorf("tls: self-signed: %w", err)
+	}
+	return nil
 }
 
 // makeSelfSigned is a new key and a certificate for hosts, as one PEM.
@@ -233,9 +355,23 @@ func selfSignedNotice(c selfSignedCert) string {
 	case c.Renewed:
 		what = "a self-signed certificate it just renewed (a new fingerprint)"
 	}
-	return fmt.Sprintf("HTTPS with %s (%s, until %s).\n"+
-		"  SHA-256 fingerprint: %s\n"+
-		"  Browsers warn until you accept it: compare this fingerprint with the one the browser shows (the warning page, then the certificate's details).\n"+
-		"  To serve a real certificate instead: server.tls: {cert: /abs/cert.pem, key: /abs/key.pem}.\n",
-		what, c.Path, c.NotAfter.Format("2006-01-02"), c.Fingerprint)
+	var b strings.Builder
+	fmt.Fprintf(&b, "HTTPS with %s (%s, until %s).\n"+
+		"  SHA-256 fingerprint: %s\n", what, c.Path, c.NotAfter.Format("2006-01-02"), c.Fingerprint)
+	if c.Renewed {
+		fmt.Fprintf(&b, "  It replaces %s: browsers that accepted that one warn again.\n", c.Replaced)
+	}
+	fmt.Fprintf(&b, "  Valid for: %s.\n", strings.Join(c.Names, ", "))
+	if len(c.Missing) > 0 {
+		fmt.Fprintf(&b, "  Not valid for %s (this machine was re-addressed since it was made): delete %s and restart naut run to make one for every current address.\n", strings.Join(c.Missing, ", "), c.Path)
+	}
+	if c.Due {
+		fmt.Fprintf(&b, "  WARNING: it expires on %s: naut run renews it (at its start, and daily while it runs).\n", c.NotAfter.Format("2006-01-02"))
+	}
+	if !c.BuiltAfter.IsZero() {
+		fmt.Fprintf(&b, "  WARNING: this machine's clock reads earlier than this naut was built (%s): the certificate starts from that clock, so clients whose clock is right refuse it as not yet valid. Set the clock (NTP), delete %s and restart.\n", c.BuiltAfter.Format("2006-01-02"), c.Path)
+	}
+	b.WriteString("  Browsers warn until you accept it: compare this fingerprint with the one the browser shows (the warning page, then the certificate's details).\n" +
+		"  To serve a real certificate instead: server.tls: {cert: /abs/cert.pem, key: /abs/key.pem}.\n")
+	return b.String()
 }

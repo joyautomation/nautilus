@@ -164,6 +164,14 @@ func (c *CertSource) refresh(now bool) {
 	}
 }
 
+// current is the leaf served now and its SHA-256, without looking at the
+// files.
+func (c *CertSource) current() ([32]byte, *x509.Certificate) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.pin, c.cert.Leaf
+}
+
 // GetCertificate serves the current certificate (tls.Config).
 func (c *CertSource) GetCertificate(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 	c.refresh(false)
@@ -327,6 +335,38 @@ func (s *Server) journalTLSReload(err error) {
 		e.Action, e.Result, e.Detail = "tls.reload-failed", audit.ResultError, map[string]any{"reason": err.Error()}
 	}
 	s.audit.record(e)
+}
+
+// noteTLSChange says out loud, and journals (tls.changed), every time the
+// certificate served changes (a renewal, another one copied over the
+// files): a client that pinned or accepted the old one sees the new
+// fingerprint, and this is where it can be checked. Told by OnPinsChange,
+// which also fires when the replaced leaf is dropped: only a change of
+// the served leaf counts.
+func (s *Server) noteTLSChange() {
+	pin, leaf := s.tls.current()
+	s.tlsMu.Lock()
+	old := s.tlsPin
+	s.tlsPin = pin
+	s.tlsMu.Unlock()
+	if pin == old {
+		return
+	}
+	d := map[string]any{"fingerprint": fingerprint(pin), "replaced": fingerprint(old)}
+	if leaf != nil {
+		d["not_after"] = leaf.NotAfter.UTC().Format(time.RFC3339)
+	}
+	slog.Warn("tls: now serving another certificate: clients that accepted or pinned the old one must accept the new one", "fingerprint", d["fingerprint"], "replaced", d["replaced"], "not_after", d["not_after"])
+	s.audit.record(audit.Entry{User: "system", Source: audit.SourceSystem, Action: "tls.changed", Result: audit.ResultOK, Detail: d})
+}
+
+// fingerprint is a SHA-256 as browsers show it: AB:CD:...
+func fingerprint(sum [32]byte) string {
+	parts := make([]string, len(sum))
+	for i, b := range sum {
+		parts[i] = fmt.Sprintf("%02X", b)
+	}
+	return strings.Join(parts, ":")
 }
 
 // clientAddr is who sent r, for the journal: the connection's address,
