@@ -42,10 +42,10 @@ type session struct {
 	// an OIDC name (principal oidc:<user>), proved by the account
 	// (issuer, sub), which the name's pin must still name, with the group
 	// ids its ID token carried. cred is empty: there is no password.
-	oidc   bool
-	issuer string
-	sub    string
-	groups []string
+	oidc    bool
+	issuer  string
+	sub     string
+	groups  []string
 	created time.Time
 	expires time.Time // absolute: created + auth.session, never renewed
 	// authAt is when the user last proved their password in this session:

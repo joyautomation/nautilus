@@ -684,3 +684,57 @@ func TestAuthInitCertificateCases(t *testing.T) {
 		t.Errorf("%d:\n%s", code, errs)
 	}
 }
+
+// naut auth init --oidc writes the auth.oidc block (issuer and client id,
+// the grants as commented examples), which loads, and names the steps at
+// the provider; a value that could add a key is refused; and on a pair it
+// is refused, since the load would refuse the block.
+func TestAuthInitOIDC(t *testing.T) {
+	isolateState(t)
+	dir := authProject(t, plainManifest)
+	code, _, errs := nautAuth("init", "--project", dir, "--no-tls", "--oidc", "https://login.microsoftonline.com/tenant-1/v2.0", "--client-id", "0a1b-2c3d")
+	if code != 0 {
+		t.Fatalf("%d %s", code, errs)
+	}
+	for _, want := range []string{"redirect URI https://<the controller's host>/auth/oidc/callback", "NAUTILUS_OIDC_SECRET", "auth.oidc.groups"} {
+		if !strings.Contains(errs, want) {
+			t.Errorf("output lacks %q:\n%s", want, errs)
+		}
+	}
+	if strings.Contains(errs, "only NAUTILUS_TOKEN") {
+		t.Errorf("with OIDC it says only the token works:\n%s", errs)
+	}
+	m, err := project.ReadManifest(os.DirFS(dir), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := m.Auth.OIDC
+	if o == nil || o.Issuer != "https://login.microsoftonline.com/tenant-1/v2.0" || o.ClientID != "0a1b-2c3d" || o.Groups != nil || !m.AuthPolicy().OIDC() {
+		t.Errorf("auth.oidc %+v", o)
+	}
+	got, _ := os.ReadFile(filepath.Join(dir, "nautilus.yaml"))
+	if !strings.Contains(string(got), "#   \"<group id>\": operator") {
+		t.Errorf("no commented group example:\n%s", got)
+	}
+
+	for _, tc := range []struct {
+		manifest string
+		args     []string
+		want     string
+	}{
+		{plainManifest, []string{"--oidc", "https://x.example"}, "go together"},
+		{plainManifest, []string{"--oidc", "https://x.example\"\n  anonymous: viewer\n#", "--client-id", "a"}, "letters, digits"},
+		{plainManifest, []string{"--oidc", "https://x.example", "--client-id", "a b"}, "letters, digits"},
+		{plainManifest, []string{"--oidc", "http://x.example", "--client-id", "a"}, "would not load"},
+		{plainManifest + "redundancy: {}\n", []string{"--oidc", "https://x.example", "--client-id", "a"}, "redundant pair"},
+	} {
+		dir := authProject(t, tc.manifest)
+		code, _, errs := nautAuth(append([]string{"init", "--project", dir, "--no-tls"}, tc.args...)...)
+		if code == 0 || !strings.Contains(errs, tc.want) {
+			t.Errorf("%v: %d, want %q:\n%s", tc.args, code, tc.want, errs)
+		}
+		if got, _ := os.ReadFile(filepath.Join(dir, "nautilus.yaml")); string(got) != tc.manifest {
+			t.Errorf("%v: a refused init changed the file", tc.args)
+		}
+	}
+}

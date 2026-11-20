@@ -262,7 +262,7 @@ func (s *Server) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
 		refuse(http.StatusForbidden, "OIDC sign-in needs HTTPS: set server.tls (naut auth init writes server.tls: self-signed), or name the TLS proxy in server.trusted-proxies (plain HTTP is allowed only from this machine's loopback)", "not over TLS")
 		return
 	}
-	if ok, _ := s.signin.addrs.take(addrKey(s.clientAddr(r))); !ok {
+	if ok, _ := s.signin.oidc.take(addrKey(s.clientAddr(r))); !ok {
 		refuse(http.StatusTooManyRequests, "too many sign-in attempts from this address: try again in a minute", "throttled")
 		return
 	}

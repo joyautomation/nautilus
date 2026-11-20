@@ -283,3 +283,57 @@ func TestElevatedPermissions(t *testing.T) {
 		t.Error("only a permission's own name is elevated")
 	}
 }
+
+// An OIDC principal's grants are auth.oidc.users' for its name plus
+// auth.oidc.groups' for each group id it carries (exactly), never a local
+// user's; it reads oidc:<name>; it stays comparable.
+func TestOIDCPrincipal(t *testing.T) {
+	p, err := Compile(Settings{
+		Users:      map[string][]Grant{"akhan": {{Role: Engineer}}},
+		OIDC:       true,
+		OIDCGroups: map[string][]Grant{"g-ops": {{Role: Operator}}},
+		OIDCUsers:  map[string][]Grant{"Akhan": {{Role: Viewer}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := OIDC("akhan", nil)
+	if a.String() != "oidc:akhan" || !p.Holds(a, Read) || p.Holds(a, Write) || p.Holds(a, Force) {
+		t.Errorf("oidc:akhan: %s, read %v write %v force %v", a, p.Holds(a, Read), p.Holds(a, Write), p.Holds(a, Force))
+	}
+	if g := OIDC("x", []string{"g-ops", "other", "g-ops"}); !p.Holds(g, Write) || len(g.Groups()) != 2 {
+		t.Errorf("group grant: %v %v", p.Holds(g, Write), g.Groups())
+	}
+	for _, id := range []string{"G-OPS", " g-ops", "g-ops "} {
+		if p.HasGrants(OIDC("x", []string{id})) {
+			t.Errorf("group %q matched g-ops", id)
+		}
+	}
+	if OIDC("x", []string{"b", "a"}) != OIDC("x", []string{"a", "b"}) {
+		t.Error("the same groups in another order are another principal")
+	}
+	if p.HasGrants(User("x")) || len(User("x").Groups()) != 0 {
+		t.Error("a local user got OIDC grants")
+	}
+	none, _ := Compile(Settings{OIDCGroups: map[string][]Grant{"g": {{Role: Viewer}}}})
+	if none != nil {
+		t.Error("OIDC grants without OIDC compiled")
+	}
+	off, _ := Compile(Settings{})
+	if off.HasGrants(OIDC("akhan", []string{"g-ops"})) {
+		t.Error("an OIDC principal held something without auth.oidc")
+	}
+}
+
+func TestValidOIDCName(t *testing.T) {
+	for _, ok := range []string{"jsmith@corp.example", "o'brien@corp.example", "a+b@x", "a_b-c.d", "x"} {
+		if err := ValidOIDCName(ok); err != nil {
+			t.Errorf("%q: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"", "JSmith", "j smith", "a:b", ".x", "jösé", "a\nb", strings.Repeat("a", MaxOIDCName+1), "a/b"} {
+		if ValidOIDCName(bad) == nil {
+			t.Errorf("%q taken", bad)
+		}
+	}
+}

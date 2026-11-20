@@ -59,7 +59,11 @@ type signInGate struct {
 	// sessions is re-authentication's (POST /api/elevate) bucket per
 	// session: only the cookie's holder spends it.
 	sessions *limiter
-	hashing  chan struct{}
+	// oidc is the OIDC sign-in's start, per client address: it costs no
+	// hashing, so it is looser than a password's, but a client must not
+	// fill the table of sign-ins under way.
+	oidc    *limiter
+	hashing chan struct{}
 }
 
 func newSignInGate() *signInGate {
@@ -71,7 +75,9 @@ func newSignInGate() *signInGate {
 		// 5 at once (the wrong passwords that end a session), then one
 		// each 6 s.
 		sessions: newLimiter(maxElevateFails, 6*time.Second),
-		hashing:  make(chan struct{}, signInHashing),
+		// 30 at once, then one a second.
+		oidc:    newLimiter(30, time.Second),
+		hashing: make(chan struct{}, signInHashing),
 	}
 }
 
