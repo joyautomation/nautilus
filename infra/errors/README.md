@@ -10,7 +10,7 @@ below is a separate step, run by hand after James says go.
 
 | File | What |
 |---|---|
-| `glitchtip.yml` | GlitchTip `v7.0.0` (Deployment, Service, Ingress with TLS) |
+| `glitchtip.yml` | GlitchTip `7.0.0` (Deployment, Service, Ingress with TLS) |
 | `postgres.yml` | Postgres 17 StatefulSet, 10 Gi `do-block-storage-retain` volume |
 | `redis.yml` | Redis 7.4 (task queue and cache, password, no volume) |
 
@@ -146,12 +146,12 @@ a dump and restore.
 
 ## Fall back to 6.2.6
 
-v7.0.0 is new (2026-11-09). If it misbehaves on a fresh install, before there is
+GlitchTip 7.0.0 is new (2026-11-09). If it misbehaves on a fresh install, before there is
 data worth keeping: delete the Deployment, empty the database (a v7-migrated
 database cannot be opened by 6.x; restore a pre-v7 dump instead if you have
 one), and change `glitchtip.yml` to
 
-- `image: glitchtip/glitchtip:v6.2.6`
+- `image: glitchtip/glitchtip:6.2.6`
 - two more env entries on the container: `GLITCHTIP_EMBED_WORKER: "true"` (6.x
   then runs web and worker in one process, like v7) and
   `GLITCHTIP_MAX_EVENT_LIFE_DAYS: "30"` (6.x's name for the retention above;
