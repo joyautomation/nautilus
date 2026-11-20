@@ -299,9 +299,15 @@ func TestSelfSignedKeepsTheStateDirOwner(t *testing.T) {
 // A clock that reads earlier than the binary was built (never set) is
 // warned about when a certificate is made, not refused (#1114 review).
 func TestSelfSignedWarnsOfAClockBehind(t *testing.T) {
-	defer func(f func() time.Time) { binaryBuilt = f }(binaryBuilt)
+	f0 := binaryBuilt
+	defer func() { binaryBuilt = f0 }()
 	built := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
 	binaryBuilt = func() time.Time { return built }
+	// Unswapped, it is never unknown (a build with no vcs.time, as a
+	// worktree's, still has the floor), so the check is always on.
+	if b := f0(); b.Before(clockFloor) {
+		t.Errorf("binaryBuilt %v, before the floor %v", b, clockFloor)
+	}
 	sd := t.TempDir()
 	c, err := ensureSelfSigned(sd, "p", nil, built.Add(-24*time.Hour), true)
 	if err != nil || !c.Made || !c.BuiltAfter.Equal(built) || !strings.Contains(selfSignedNotice(c), "clock reads earlier") {

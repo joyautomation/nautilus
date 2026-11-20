@@ -815,7 +815,7 @@
           "oneOf": [
             {
               "const": "self-signed",
-              "description": "A certificate the controller makes on its first start, in its state directory, and renews within 30 days of its expiry. naut run prints its SHA-256 fingerprint."
+              "description": "A certificate the controller makes on its first start, in its state directory, and naut run renews from 30 days before its expiry (at its start, and daily while it runs). naut run prints its SHA-256 fingerprint."
             },
             {
               "type": "object",

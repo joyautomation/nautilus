@@ -64,18 +64,25 @@ type selfSignedCert struct {
 	BuiltAfter time.Time
 }
 
-// binaryBuilt is when this binary's source was committed (vcs.time, set by
-// go build in a git checkout and so in every release), zero when unknown.
+// clockFloor is a date this code was written after: a clock that reads
+// earlier is certainly wrong, even in a build that carries no vcs.time (a
+// worktree, a vendored or -buildvcs=false build).
+var clockFloor = time.Date(2026, 11, 20, 0, 0, 0, 0, time.UTC)
+
+// binaryBuilt is when this binary's source was committed (vcs.time, which
+// go build records in a plain git checkout), or clockFloor when that is
+// later or unknown.
 var binaryBuilt = func() time.Time {
 	if bi, ok := debug.ReadBuildInfo(); ok {
 		for _, s := range bi.Settings {
 			if s.Key == "vcs.time" {
-				t, _ := time.Parse(time.RFC3339, s.Value)
-				return t
+				if t, err := time.Parse(time.RFC3339, s.Value); err == nil && t.After(clockFloor) {
+					return t
+				}
 			}
 		}
 	}
-	return time.Time{}
+	return clockFloor
 }
 
 // ensureSelfSigned loads <stateDir>/tls/self-signed.pem, or makes it.
@@ -363,13 +370,13 @@ func selfSignedNotice(c selfSignedCert) string {
 	}
 	fmt.Fprintf(&b, "  Valid for: %s.\n", strings.Join(c.Names, ", "))
 	if len(c.Missing) > 0 {
-		fmt.Fprintf(&b, "  Not valid for %s (this machine was re-addressed since it was made): delete %s and restart naut run to make one for every current address.\n", strings.Join(c.Missing, ", "), c.Path)
+		fmt.Fprintf(&b, "  Not valid for %s, an address this machine has now. Only if clients reach it by that address: delete %s and restart naut run, which makes one for every current address (a new fingerprint).\n", strings.Join(c.Missing, ", "), c.Path)
 	}
 	if c.Due {
 		fmt.Fprintf(&b, "  WARNING: it expires on %s: naut run renews it (at its start, and daily while it runs).\n", c.NotAfter.Format("2006-01-02"))
 	}
 	if !c.BuiltAfter.IsZero() {
-		fmt.Fprintf(&b, "  WARNING: this machine's clock reads earlier than this naut was built (%s): the certificate starts from that clock, so clients whose clock is right refuse it as not yet valid. Set the clock (NTP), delete %s and restart.\n", c.BuiltAfter.Format("2006-01-02"), c.Path)
+		fmt.Fprintf(&b, "  WARNING: this machine's clock reads earlier than this naut's build (%s): the certificate starts from that clock, so clients whose clock is right refuse it as not yet valid. Set the clock (NTP), delete %s and restart.\n", c.BuiltAfter.Format("2006-01-02"), c.Path)
 	}
 	b.WriteString("  Browsers warn until you accept it: compare this fingerprint with the one the browser shows (the warning page, then the certificate's details).\n" +
 		"  To serve a real certificate instead: server.tls: {cert: /abs/cert.pem, key: /abs/key.pem}.\n")
