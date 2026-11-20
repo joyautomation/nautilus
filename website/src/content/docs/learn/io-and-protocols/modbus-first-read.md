@@ -62,7 +62,16 @@ Two files appeared, and both start with a comment saying not to edit them:
 `modbus_manifest.yaml` is how to poll the device, and `tags/modbus.yaml`
 declares the tags. The tags are named with the instance id in front,
 `LT1_Level` and `LT1_Flow`, so two devices of one type do not clash. Use
-those names in your program.
+those names in your program. Open `tags/modbus.yaml` and there are two more:
+
+```yaml
+- { name: LT1__Online, role: input, type: BOOL, desc: "source LT1 answering — interlock on this" }
+- { name: LT1__Outages, role: input, type: DINT, desc: "times LT1__Online has fallen since the driver started" }
+```
+
+You did not ask for these. For every device the controller adds an
+`__Online` tag, true while the device is answering, and an `__Outages`
+counter of how many times it has stopped. Step 3 uses the first.
 
 ## 3. Point the project at the device
 
@@ -82,6 +91,7 @@ tag-files: [tags/modbus.yaml]
 
 tags:
   - { name: HighLevel, role: output, type: BOOL, init: false, desc: Level above 80 % }
+  - { name: DeviceUp,  role: output, type: BOOL, init: false, desc: The transmitter is answering }
 
 driver:
   type: modbus
@@ -90,15 +100,20 @@ driver:
 ```
 
 `driver: modbus` replaces the `memory` loopback, and `tag-files` brings in
-the generated tags. `HighLevel` is an `output`: a tag the program writes. Replace `program.st` with one line of logic that uses a
-device tag, and delete the scaffold's `tank_test.yaml` (it tests the old
-program):
+the generated tags. `HighLevel` and `DeviceUp` are `output` tags: tags the program writes.
+Replace `program.st` with two lines of logic that use device tags, and delete
+the scaffold's `tank_test.yaml` (it tests the old program):
 
 ```st
 PROGRAM Tank
-HighLevel := LT1_Level > 80.0;
+HighLevel := LT1__Online AND LT1_Level > 80.0;
+DeviceUp  := LT1__Online;
 END_PROGRAM
 ```
+
+`HighLevel` only turns on while the device is answering: a level that is stale
+because the transmitter is down should not raise an alarm, and a program should
+say so.
 
 ```sh
 naut check
@@ -161,14 +176,38 @@ curl -s localhost:8080/api/state | jq -c .tags
 (`jq` only tidies the output; without it, plain `curl` prints the whole state.)
 
 ```text
-{"HighLevel":false,"LT1_Flow":3.25,"LT1_Level":42.5}
+{"DeviceUp":true,"HighLevel":false,"LT1_Flow":3.25,"LT1_Level":42.5,"LT1__Online":true,"LT1__Outages":0}
 ```
 
-`HighLevel` is false because 42.5 is below 80. Stop the simulator and the
-dashboard's driver card shows an error, the tags keep their last values, and
-`/api/state` gains a `quality` entry for each as `stale`; start it again and
-the controller reconnects by itself (the `quality` entries go away: a good tag
-carries none). A device that never answers reports `notConnected`.
+`HighLevel` is false because 42.5 is below 80, and `DeviceUp` is true because
+the device is answering.
+
+## Is the device there?
+
+Stop the simulator (Ctrl+C in its terminal) and read the tags again after a few
+seconds:
+
+```text
+{"DeviceUp":false,"HighLevel":false,"LT1_Flow":3.25,"LT1_Level":42.5,"LT1__Online":false,"LT1__Outages":1}
+```
+
+`LT1__Online` has gone false and `LT1__Outages` has counted the outage. The
+level and flow still show their last values, so the logic must not trust them
+on their own: that is why `HighLevel` asked for `LT1__Online` first. The
+dashboard's driver card shows an error, and `/api/state` gains a `quality`
+entry for each device tag as `stale`. A device that never answers at all
+reports `notConnected`.
+
+Start the simulator again and the controller reconnects by itself, with no
+restart:
+
+```text
+{"DeviceUp":true,"HighLevel":false,"LT1_Flow":3.25,"LT1_Level":42.5,"LT1__Online":true,"LT1__Outages":1}
+```
+
+`LT1__Online` is true again; `LT1__Outages` stays at 1, a count of the times it
+fell since the driver started. (The `quality` entries go away: a good tag
+carries none.)
 
 ## Next
 
