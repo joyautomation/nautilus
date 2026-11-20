@@ -195,11 +195,13 @@ seconds:
 level and flow still show their last values, so the logic must not trust them
 on their own: that is why `HighLevel` asked for `LT1__Online` first. The
 dashboard's driver card shows an error, and `/api/state` gains a `quality`
-entry for each device tag as `stale`. A device that never answers at all
+entry for the two readings, `LT1_Level` and `LT1_Flow`, as `stale`. A device that never answers at all
 reports `notConnected`.
 
-Start the simulator again and the controller reconnects by itself, with no
-restart:
+Start the simulator again. The controller reconnects by itself, with no
+restart, but not at once: after a failed attempt the driver waits 1 second, then
+2, 4 and 8 before trying again, so read the tags again after up to 20 seconds.
+The controller's log shows each try.
 
 ```text
 {"DeviceUp":true,"HighLevel":false,"LT1_Flow":3.25,"LT1_Level":42.5,"LT1__Online":true,"LT1__Outages":1}
