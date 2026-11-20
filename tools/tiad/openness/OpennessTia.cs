@@ -464,7 +464,7 @@ namespace Tiad.Openness
         // ApplyStation places the CPU and sets its PROFINET interface:
         // address, subnet mask, router, PROFINET name (generated names
         // off). Everything else in a spec waits for what S2a learns.
-        public List<string> ApplyStation(object project, Station previous, Station next, Secrets secrets)
+        public List<string> ApplyStation(object project, Station previous, Station next, Secrets secrets, List<string> notes)
         {
             if (next.Modules.Count > 0) throw new TiaException("tiad cannot place rack modules yet: the first TIA start (S2a) learns the rack");
             if (next.Profinet != null) throw new TiaException("tiad cannot configure a PROFINET IO system yet: the IO-device attribute names are learned at the first TIA start (S2a)");
@@ -490,8 +490,73 @@ namespace Tiad.Openness
                 Set("Node", node,
                     "PnDeviceNameAutoGeneration", false,
                     "PnDeviceName", next.Cpu.ProfinetName);
+                Protect(station, CpuOf(station), next.Cpu.ConfigurationProtection, secrets, notes);
                 return Station.Changes(same ? previous : null, next);
             });
+        }
+
+        // Protect applies cpu.configurationProtection from the CPU's state
+        // as the project holds it now (ConfigProtection decides), then
+        // reads it back: anything but the promised state refuses.
+        static void Protect(HwDevice station, DeviceItem cpu, string want, Secrets secrets, List<string> notes)
+        {
+            PlcMasterSecretConfigurator c = cpu.GetService<PlcMasterSecretConfigurator>();
+            string current = c == null ? ConfigProtection.Absent : c.MasterSecretConfiguration.ToString();
+            string action = ConfigProtection.Plan(current, want, secrets.ConfigurationPassword != "");
+            string note = ConfigProtection.Note(current, want);
+            if (note != null) notes.Add(note);
+            if (action == ConfigProtection.Nothing) return;
+            if (action == ConfigProtection.ProtectThenUnprotect)
+            {
+                // Once the throwaway Protect is called, any failure could
+                // leave the CPU under a password nobody holds: remove it.
+                try
+                {
+                    using (var ss = Secure(ConfigProtection.Throwaway()))
+                    {
+                        c.Protect(ss);
+                        string mid = ConfigProtection.Check(ConfigProtection.Protect, c.MasterSecretConfiguration.ToString());
+                        if (mid != null) throw new TiaException(mid);
+                        c.Unprotect(ss);
+                    }
+                    string end = ConfigProtection.Check(action, c.MasterSecretConfiguration.ToString());
+                    if (end != null) throw new TiaException(end);
+                }
+                catch (Exception e)
+                {
+                    string removeFailed = null;
+                    try
+                    {
+                        station.Delete();
+                    }
+                    catch (Exception d)
+                    {
+                        removeFailed = Message(d);
+                    }
+                    throw new TiaException(ConfigProtection.Stranded(Message(e), removeFailed));
+                }
+                Log.Line("configuration protection: {0}, now {1}", action, c.MasterSecretConfiguration);
+                return;
+            }
+            else
+            {
+                using (var ss = Secure(secrets.ConfigurationPassword))
+                {
+                    if (action == ConfigProtection.Protect) c.Protect(ss);
+                    else c.Unprotect(ss);
+                }
+            }
+            string bad = ConfigProtection.Check(action, c.MasterSecretConfiguration.ToString());
+            if (bad != null) throw new TiaException(bad);
+            Log.Line("configuration protection: {0}, now {1}", action, c.MasterSecretConfiguration);
+        }
+
+        static SecureString Secure(string s)
+        {
+            var ss = new SecureString();
+            foreach (char ch in s) ss.AppendChar(ch);
+            ss.MakeReadOnly();
+            return ss;
         }
 
         // ---- software ----
@@ -727,19 +792,16 @@ namespace Tiad.Openness
         }
 
         // Apply writes a setting into a configuration: a selection by its
-        // enum name, or the protection password.
+        // enum name, or a password: the protection password or the
+        // configuration password, each only where Setting.Secret puts it.
         static void Apply(DownloadConfiguration c, Setting s, Secrets secrets)
         {
-            if (s.Kind == Setting.Password)
+            string secret = Setting.Secret(s, secrets);
+            if (secret != null)
             {
                 var pw = c as DownloadPasswordConfiguration;
-                if (pw == null || secrets.Protection == "") throw new TiaException("no protection password for " + c.GetType().Name);
-                using (var ss = new SecureString())
-                {
-                    foreach (char ch in secrets.Protection) ss.AppendChar(ch);
-                    ss.MakeReadOnly();
-                    pw.SetPassword(ss);
-                }
+                if (pw == null || secret == "") throw new TiaException("no " + s.Kind + " secret for " + c.GetType().Name);
+                using (var ss = Secure(secret)) pw.SetPassword(ss);
                 return;
             }
             var prop = c.GetType().GetProperty("CurrentSelection");

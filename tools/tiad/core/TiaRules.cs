@@ -84,10 +84,11 @@ namespace Tiad
     }
 
     // Setting is what tiad.Openness writes into one TIA configuration:
-    // a selection by its enum name, or the protection password.
+    // a selection by its enum name, the protection password, or the
+    // configuration password.
     public sealed class Setting
     {
-        public const string Select = "select", Password = "password";
+        public const string Select = "select", Password = "password", ConfigurationPassword = "configuration-password";
 
         public string Kind = "";
         public string Value = ""; // the selection's enum name
@@ -100,6 +101,125 @@ namespace Tiad
         public override string ToString()
         {
             return Kind == Select ? Value : Kind;
+        }
+
+        // Secret is the one secret a password setting writes, or null for
+        // a selection: the protection password for Password, the
+        // configuration password for ConfigurationPassword, never the
+        // other. An empty secret is still returned: the glue refuses it.
+        public static string Secret(Setting s, Secrets secrets)
+        {
+            if (s.Kind == Password) return secrets.Protection;
+            if (s.Kind == ConfigurationPassword) return secrets.ConfigurationPassword;
+            return null;
+        }
+    }
+
+    // ConfigProtection decides what tiad.Openness does to a CPU's FW 3.1
+    // protection of confidential configuration data
+    // (cpu.configurationProtection, section 3.3). TIA's
+    // PlcMasterSecretConfigurator holds it; the decision comes from the
+    // state read from the project after the station step, never from the
+    // spec last applied. After any write the glue reads the state again,
+    // and Check refuses unless it is the state the action promises.
+    public static class ConfigProtection
+    {
+        // States are MasterSecretConfiguration's names. Absent is a CPU
+        // with no configurator (firmware before 3.1).
+        public const string None = "None", WithoutPassword = "WithoutPassword", WithPassword = "WithPassword", Absent = "";
+
+        // Actions. ProtectThenUnprotect turns off a CPU that was never set
+        // up by Protect with a throwaway password and Unprotect with it:
+        // both steps are proven on the TIA machine, where a bare
+        // Unprotect of a new CPU is not.
+        public const string Nothing = "", Protect = "protect", UnprotectWithPassword = "unprotect-with-password", ProtectThenUnprotect = "protect-then-unprotect";
+
+        // Throwaway is a one-use password for ProtectThenUnprotect that
+        // meets TIA's rules, from a cryptographic random source. It is
+        // never logged and never kept.
+        public static string Throwaway()
+        {
+            var b = new byte[16];
+            using (var rng = new System.Security.Cryptography.RNGCryptoServiceProvider()) rng.GetBytes(b);
+            var sb = new StringBuilder("Tz");
+            foreach (byte x in b) sb.Append(x.ToString("x2", CultureInfo.InvariantCulture));
+            return sb.Append('9').ToString();
+        }
+
+        // Stranded is the refusal when turning off a CPU never set up
+        // failed after Protect with a throwaway password: the CPU may be
+        // protected by a password nobody holds, so the glue removes it
+        // from the project. removeFailed is why removing it failed, or
+        // null when it was removed.
+        public static string Stranded(string why, string removeFailed)
+        {
+            string head = "turning the configuration protection off failed part-way (" + why + "), which could leave the CPU protected by a throwaway password nobody holds";
+            if (removeFailed == null) return head + ", so tiad removed the CPU from the project: apply the spec again to make it anew";
+            return head + ", and removing the CPU from the project failed too (" + removeFailed + "): close this session without saving";
+        }
+
+        // Note is what an apply says about the protection besides its
+        // changes, or null: password on a CPU already protected leaves it
+        // as it is, so a changed secret does not reach the project.
+        public static string Note(string current, string want)
+        {
+            if (current != WithPassword || want != StationRules.ProtectPassword) return null;
+            return "the CPU's configuration protection was already on and is left as it is: TIA cannot check its password offline, so a changed secrets.configurationPassword does not reach the project, and a download asks for the password the project holds; to change it, apply none with the old password, then password with the new one";
+        }
+
+        // Plan returns the action that takes current to what want asks,
+        // or throws a 400 that names the fix. keep never acts, and refuses
+        // only TIA's unconfigured default, which never compiles. password
+        // on an already protected CPU leaves it: TIA cannot check a
+        // password offline, and a second Protect throws.
+        public static string Plan(string current, string want, bool havePassword)
+        {
+            if (want == StationRules.ProtectKeep)
+            {
+                if (current == WithoutPassword)
+                {
+                    throw TiadException.BadRequest("{0}", "the project's CPU has its configuration protection not set up (TIA's default for a new CPU, which does not compile), so keep has nothing to keep: set cpu.configurationProtection to password or none");
+                }
+                return Nothing;
+            }
+            if (current == Absent)
+            {
+                throw TiadException.BadRequest("cpu.configurationProtection is {0}, and the project's CPU has no configuration protection (firmware 3.1 and later have it): set it to keep", want);
+            }
+            if (current != None && current != WithoutPassword && current != WithPassword)
+            {
+                throw TiadException.BadRequest("the project's CPU has its configuration protection in a state tiad does not know ({0}); nothing was changed", Json.Quote(current));
+            }
+            if (want == StationRules.ProtectPassword)
+            {
+                if (!havePassword) throw TiadException.BadRequest("{0}", "cpu.configurationProtection is password, and secrets.configurationPassword is empty (it comes from the secret store, never the spec)");
+                return current == WithPassword ? Nothing : Protect;
+            }
+            if (want == StationRules.ProtectNone)
+            {
+                if (current == None) return Nothing;
+                if (current == WithoutPassword) return ProtectThenUnprotect;
+                if (!havePassword)
+                {
+                    throw TiadException.BadRequest("{0}", "the project's CPU has its configuration protected by a password; turning that off needs it in secrets.configurationPassword");
+                }
+                return UnprotectWithPassword;
+            }
+            throw TiadException.BadRequest("cpu.configurationProtection: {0}", StationRules.CheckConfigurationProtection(want) ?? Json.Quote(want));
+        }
+
+        // Target is the state an action promises.
+        public static string Target(string action)
+        {
+            return action == Protect ? WithPassword : None;
+        }
+
+        // Check returns why the state read after action is not the one it
+        // promises, or null.
+        public static string Check(string action, string after)
+        {
+            if (action == Nothing || after == Target(action)) return null;
+            return "after " + action + " the CPU's configuration protection reads " + (after == Absent ? "absent" : after) + ", not " + Target(action);
         }
     }
 
@@ -125,6 +245,8 @@ namespace Tiad
                 case "ModuleReadAccessPassword":
                 case "ModuleWriteAccessPassword":
                     return QuestionIds.Password;
+                case "PlcMasterSecretPassword":
+                    return QuestionIds.ConfigurationPassword;
                 case "TlsVerificationConfiguration":
                     return QuestionIds.Certificate;
                 default:
@@ -152,6 +274,8 @@ namespace Tiad
                 case "ModuleReadAccessPassword":
                 case "ModuleWriteAccessPassword":
                     return yes ? new Setting { Kind = Setting.Password } : null;
+                case "PlcMasterSecretPassword":
+                    return yes ? new Setting { Kind = Setting.ConfigurationPassword } : null;
                 case "TlsVerificationConfiguration":
                     return yes ? Setting.Choose("Trusted") : null;
                 default:
@@ -164,7 +288,7 @@ namespace Tiad
         {
             "StopModules", "StartModules", "OverwriteSystemData", "DataBlockReinitialization",
             "DataBlockReinitializationOrKeepActualValues", "ModuleReadAccessPassword",
-            "ModuleWriteAccessPassword", "TlsVerificationConfiguration",
+            "ModuleWriteAccessPassword", "PlcMasterSecretPassword", "TlsVerificationConfiguration",
         };
 
         // Selections are every (configuration type, selection) tiad may

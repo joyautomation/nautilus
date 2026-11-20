@@ -93,9 +93,10 @@ namespace Tiad
                 }
                 finally
                 {
-                    Log.Line("audit download session={0} project={1} address={2} hardware={3} software={4} dryRun={5} announced={6} {7} protection={8} asked=[{9}] outcome={10}",
+                    Log.Line("audit download session={0} project={1} address={2} hardware={3} software={4} dryRun={5} announced={6} {7} protection={8} configurationPassword={9} asked=[{10}] outcome={11}",
                         s.Id, Json.Quote(s.Project), Json.Quote(req.Address), req.Hardware, req.Software, req.DryRun, req.Announced,
-                        AuditDecisions(req.Decisions), req.Secrets.Protection == "" ? "unset" : "set", asked, outcome);
+                        AuditDecisions(req.Decisions), req.Secrets.Protection == "" ? "unset" : "set",
+                        req.Secrets.ConfigurationPassword == "" ? "unset" : "set", asked, outcome);
                 }
             });
         }
@@ -132,6 +133,7 @@ namespace Tiad
             sessions.ClaimCpu(s, req.Address);
 
             bool haveProtection = req.Secrets.Protection != "";
+            bool haveConfigurationPassword = req.Secrets.ConfigurationPassword != "";
             var unanswered = new List<Question>();
             var declined = new List<Question>();
             List<Question> askedQs = null;
@@ -144,7 +146,7 @@ namespace Tiad
                 askedQs = new List<Question>();
                 foreach (var q in qs ?? new List<Question>()) askedQs.Add(q.Copy());
                 if (req.DryRun) return null;
-                DownloadRule.Resolve(askedQs, req.Decisions, haveProtection, unanswered, declined);
+                DownloadRule.Resolve(askedQs, req.Decisions, haveProtection, haveConfigurationPassword, unanswered, declined);
                 if (unanswered.Count > 0 || declined.Count > 0) return null;
                 approved = true;
                 return DownloadRule.Answers(askedQs, req.Decisions);

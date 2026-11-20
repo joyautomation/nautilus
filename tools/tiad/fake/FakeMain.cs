@@ -496,6 +496,19 @@ namespace Tiad.Fake
         public List<Block> Blocks = new List<Block>();
         // Changed is true until a download loads the project as it is.
         public bool Changed = true;
+        // Protection is the CPU's configuration protection as the project
+        // holds it (ConfigProtection's states), and ProtectedWith the
+        // password it was protected with. A new CPU is WithoutPassword, as
+        // TIA makes one; an upload brings the bench CPU's None.
+        public string Protection = ConfigProtection.Absent;
+        public string ProtectedWith = "";
+
+        // CompileError is what a hardware compile of this project fails
+        // with, as TIA words it, or null.
+        public string CompileError()
+        {
+            return Protection == ConfigProtection.WithoutPassword ? FakeTia.NotConfigured : null;
+        }
     }
 
     // FakeTia is ITia without TIA: it keeps projects in memory and answers
@@ -553,13 +566,52 @@ namespace Tiad.Fake
             script.Enter("CloseProject");
         }
 
-        public List<string> ApplyStation(object project, Station previous, Station next, Secrets secrets)
+        public const string NotConfigured = "Password for confidential PLC configuration data is not configured in the PLC.";
+
+        // ApplyStation does what tiad.Openness does: it makes the CPU anew,
+        // as TIA makes one, unless the session last applied a spec with
+        // the same CPU; then it applies cpu.configurationProtection from
+        // the project's state, the way TIA's configurator behaves.
+        public List<string> ApplyStation(object project, Station previous, Station next, Secrets secrets, List<string> notes)
         {
             script.Enter("ApplyStation");
             var p = (FakeProject)project;
-            List<string> changes = Station.Changes(previous, next);
+            bool same = previous != null && previous.Cpu.Order == next.Cpu.Order &&
+                previous.Cpu.Firmware == next.Cpu.Firmware && previous.Cpu.Name == next.Cpu.Name;
+            if (!same)
+            {
+                p.Protection = ConfigProtection.WithoutPassword;
+                p.ProtectedWith = "";
+            }
+            // A failure part-way counts as a change.
+            bool was = p.Changed;
+            p.Changed = true;
+            p.Station = null;
+            string action = ConfigProtection.Plan(p.Protection, next.Cpu.ConfigurationProtection, secrets.ConfigurationPassword != "");
+            string note = ConfigProtection.Note(p.Protection, next.Cpu.ConfigurationProtection);
+            if (note != null) notes.Add(note);
+            if (action == ConfigProtection.Protect)
+            {
+                if (p.Protection == ConfigProtection.WithPassword) throw new TiaException("The PLC Master Secret is already configured.");
+                p.Protection = ConfigProtection.WithPassword;
+                p.ProtectedWith = secrets.ConfigurationPassword;
+            }
+            else if (action == ConfigProtection.UnprotectWithPassword)
+            {
+                if (secrets.ConfigurationPassword != p.ProtectedWith) throw new TiaException("The password is not correct.");
+                p.Protection = ConfigProtection.None;
+                p.ProtectedWith = "";
+            }
+            else if (action == ConfigProtection.ProtectThenUnprotect)
+            {
+                if (p.Protection == ConfigProtection.WithPassword) throw new TiaException("The PLC Master Secret is already configured.");
+                p.Protection = ConfigProtection.None;
+            }
+            string bad = ConfigProtection.Check(action, p.Protection);
+            if (bad != null) throw new TiaException(bad);
+            List<string> changes = Station.Changes(same ? previous : null, next);
             p.Station = next;
-            if (changes.Count > 0) p.Changed = true;
+            p.Changed = was || changes.Count > 0;
             return changes;
         }
 
@@ -607,7 +659,12 @@ namespace Tiad.Fake
         public CompileResult Compile(object project, bool hardware, bool software)
         {
             script.Enter("Compile");
-            return script.Compile;
+            var p = (FakeProject)project;
+            string err = hardware ? p.CompileError() : null;
+            if (err == null) return script.Compile;
+            var res = new CompileResult { Result = "error", Errors = 1 };
+            res.Messages.Add(new CompileMessage { Object = "", Severity = "error", Text = err });
+            return res;
         }
 
         public DownloadOutcome Download(object project, string address, bool hardware, bool software,
@@ -617,6 +674,12 @@ namespace Tiad.Fake
             var p = (FakeProject)project;
             if (script.FailInDoubt != "") throw new TiaException(script.FailInDoubt, null, true);
             var outcome = new DownloadOutcome { Questions = script.Questions };
+            // A protected configuration asks for its password when the
+            // hardware loads (provisional until S2b).
+            if (hardware && p.Protection == ConfigProtection.WithPassword)
+            {
+                outcome.Questions.Add(new Question { Id = QuestionIds.ConfigurationPassword, Message = "password for the confidential PLC configuration data", Detail = "PlcMasterSecretPassword" });
+            }
             // As tiad.Openness does: whether the CPU starts after loading is
             // always decided before loading.
             bool startAsked = false;
@@ -697,7 +760,11 @@ namespace Tiad.Fake
                 }
                 trusted.Add(ask);
             }
-            ((FakeProject)project).Changed = true;
+            var up = (FakeProject)project;
+            up.Changed = true;
+            // The bench CPU's setting, as the S2a upload found it.
+            up.Protection = ConfigProtection.None;
+            up.ProtectedWith = "";
             return trusted;
         }
 

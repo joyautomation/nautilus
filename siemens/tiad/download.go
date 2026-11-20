@@ -15,8 +15,12 @@ const (
 	QuestionOverwrite    = "overwrite"
 	QuestionStartAfter   = "start-after"
 	QuestionPassword     = "password"
-	QuestionCertificate  = "certificate"
-	QuestionOther        = "other"
+	// QuestionConfigurationPassword asks for the password protecting the
+	// CPU's confidential configuration data. It is answered only by
+	// Secrets.ConfigurationPassword, never by the protection password.
+	QuestionConfigurationPassword = "configuration-password"
+	QuestionCertificate           = "certificate"
+	QuestionOther                 = "other"
 )
 
 // Question is one pre-download check that needs an answer.
@@ -88,8 +92,9 @@ func (r DownloadRequest) Validate() error {
 // d. It returns the questions with no answer and the ones answered "no".
 // A real download goes ahead only when both are empty; tiad never picks a
 // default. A password question is answered by the request's protection
-// secret, not by a decision.
-func Resolve(qs []Question, d Decisions, haveProtection bool) (unanswered, declined []Question) {
+// secret and a configuration-password question by its configuration
+// password, never by a decision and never by each other's secret.
+func Resolve(qs []Question, d Decisions, haveProtection, haveConfigurationPassword bool) (unanswered, declined []Question) {
 	for _, q := range qs {
 		switch q.ID {
 		case QuestionStopCPU:
@@ -119,6 +124,10 @@ func Resolve(qs []Question, d Decisions, haveProtection bool) (unanswered, decli
 			}
 		case QuestionPassword:
 			if !haveProtection {
+				unanswered = append(unanswered, q)
+			}
+		case QuestionConfigurationPassword:
+			if !haveConfigurationPassword {
 				unanswered = append(unanswered, q)
 			}
 		default:

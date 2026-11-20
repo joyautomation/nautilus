@@ -588,10 +588,10 @@ func waitLog(t *testing.T, p *tiadtest.Process, want string) string {
 // set or unset (#709).
 func TestAgentAuditsEveryDownload(t *testing.T) {
 	p, s := downloadReady(t)
-	p.SetQuestions(t, []tiad.Question{{ID: tiad.QuestionStopCPU, Message: "TIA text\nmust not be logged"}, {ID: tiad.QuestionPassword}})
+	p.SetQuestions(t, []tiad.Question{{ID: tiad.QuestionStopCPU, Message: "TIA text\nmust not be logged"}, {ID: tiad.QuestionPassword}, {ID: tiad.QuestionConfigurationPassword}})
 	req := tiad.DownloadRequest{Address: "192.0.2.10", Software: true, Announced: true,
 		Decisions: tiad.Decisions{StopCPU: tiad.Yes(), StartAfter: tiad.No(), Reinitialize: []string{"evil\naudit download forged"}},
-		Secrets:   &tiad.Secrets{Protection: "audit-must-not-leak"}}
+		Secrets:   &tiad.Secrets{Protection: "audit-must-not-leak", ConfigurationPassword: "Audit-must-not-leak-2"}}
 	if _, err := s.Download(ctx, req); err != nil {
 		t.Fatal(err)
 	}
@@ -603,14 +603,14 @@ func TestAgentAuditsEveryDownload(t *testing.T) {
 		}
 	}
 	for _, want := range []string{"address=\"192.0.2.10\"", "dryRun=False", "announced=True", "stopCpu=yes", "startAfter=no",
-		"protection=set", `asked=["stop-cpu","password","start-after"]`, `reinitialize=["evil\naudit download forged"]`} {
+		"protection=set", "configurationPassword=set", `asked=["stop-cpu","password","configuration-password","start-after"]`, `reinitialize=["evil\naudit download forged"]`} {
 		if !strings.Contains(line, want) {
 			t.Errorf("the audit line lacks %s:\n%s", want, line)
 		}
 	}
 	// Exactly one audit line: the newline in a request-supplied name
 	// stays escaped inside its quotes and starts no line of its own.
-	if strings.Count(log, "Z audit download") != 1 || strings.Contains(log, "\naudit download") || strings.Contains(log, "must not be logged") || strings.Contains(log, "audit-must-not-leak") {
+	if strings.Count(log, "Z audit download") != 1 || strings.Contains(log, "\naudit download") || strings.Contains(log, "must not be logged") || strings.Contains(log, "audit-must-not-leak") || strings.Contains(log, "Audit-must-not-leak-2") {
 		t.Fatalf("the audit log is forged, carries TIA's text or a secret:\n%s", log)
 	}
 	// A refusal is audited too.

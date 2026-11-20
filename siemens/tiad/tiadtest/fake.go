@@ -91,6 +91,103 @@ type session struct {
 	// uploaded is true after an upload: the project no longer matches
 	// its spec until one is applied again.
 	uploaded bool
+	// protection is the CPU's configuration protection as the project
+	// holds it (one of the Protection* states), protectedWith the
+	// password it was protected with.
+	protection, protectedWith string
+}
+
+// The CPU's configuration protection as a project holds it: TIA's
+// MasterSecretConfiguration names. ProtectionAbsent is a CPU without one.
+const (
+	ProtectionNone            = "None"
+	ProtectionWithoutPassword = "WithoutPassword"
+	ProtectionWithPassword    = "WithPassword"
+	ProtectionAbsent          = ""
+)
+
+// NotConfigured is how TIA fails a hardware compile of a FW 3.1 CPU whose
+// configuration protection is not set up.
+const NotConfigured = "Password for confidential PLC configuration data is not configured in the PLC."
+
+const (
+	actNothing               = ""
+	actProtect               = "protect"
+	actProtectThenUnprotect  = "protect-then-unprotect"
+	actUnprotectWithPassword = "unprotect-with-password"
+)
+
+// planProtection is tiad.Openness's rule (ConfigProtection.Plan in
+// tools/tiad/core/TiaRules.cs), with its messages: the action that takes
+// the project's state to what want asks, or a refusal naming the fix.
+func planProtection(current, want string, havePassword bool) (string, *failure) {
+	bad := func(f string, a ...any) (string, *failure) {
+		return "", fail(http.StatusBadRequest, tiad.KindBadRequest, f, a...)
+	}
+	if want == tiad.ProtectKeep {
+		if current == ProtectionWithoutPassword {
+			return bad("the project's CPU has its configuration protection not set up (TIA's default for a new CPU, which does not compile), so keep has nothing to keep: set cpu.configurationProtection to password or none")
+		}
+		return actNothing, nil
+	}
+	if current == ProtectionAbsent {
+		return bad("cpu.configurationProtection is %s, and the project's CPU has no configuration protection (firmware 3.1 and later have it): set it to keep", want)
+	}
+	if current != ProtectionNone && current != ProtectionWithoutPassword && current != ProtectionWithPassword {
+		return bad("the project's CPU has its configuration protection in a state tiad does not know (%q); nothing was changed", current)
+	}
+	if want == tiad.ProtectPassword {
+		if !havePassword {
+			return bad("cpu.configurationProtection is password, and secrets.configurationPassword is empty (it comes from the secret store, never the spec)")
+		}
+		if current == ProtectionWithPassword {
+			return actNothing, nil
+		}
+		return actProtect, nil
+	}
+	switch current {
+	case ProtectionNone:
+		return actNothing, nil
+	case ProtectionWithoutPassword:
+		return actProtectThenUnprotect, nil
+	}
+	if !havePassword {
+		return bad("the project's CPU has its configuration protected by a password; turning that off needs it in secrets.configurationPassword")
+	}
+	return actUnprotectWithPassword, nil
+}
+
+// protectionNote is ConfigProtection.Note: password on a CPU already
+// protected leaves it, and its password, as they are.
+func protectionNote(current, want string) string {
+	if current != ProtectionWithPassword || want != tiad.ProtectPassword {
+		return ""
+	}
+	return "the CPU's configuration protection was already on and is left as it is: TIA cannot check its password offline, so a changed secrets.configurationPassword does not reach the project, and a download asks for the password the project holds; to change it, apply none with the old password, then password with the new one"
+}
+
+// protect applies cpu.configurationProtection to s's project the way
+// TIA's configurator behaves, from the project's state.
+func (s *session) protect(want, password string) *failure {
+	act, fl := planProtection(s.protection, want, password != "")
+	if fl != nil {
+		return fl
+	}
+	tia := func(msg string) *failure {
+		return fail(http.StatusInternalServerError, tiad.KindOperationFailed, "TIA: %s", msg)
+	}
+	switch act {
+	case actProtect:
+		s.protection, s.protectedWith = ProtectionWithPassword, password
+	case actUnprotectWithPassword:
+		if password != s.protectedWith {
+			return tia("The password is not correct.")
+		}
+		s.protection, s.protectedWith = ProtectionNone, ""
+	case actProtectThenUnprotect:
+		s.protection = ProtectionNone
+	}
+	return nil
 }
 
 // Download records one real download. Secrets are never recorded.
@@ -588,6 +685,9 @@ func (f *Fake) checkStation(st tiad.Station, sec tiad.Secrets) *failure {
 	if err := st.Validate(); err != nil {
 		return fail(http.StatusBadRequest, tiad.KindBadRequest, "%v", err)
 	}
+	if err := sec.CheckFor(st); err != nil {
+		return fail(http.StatusBadRequest, tiad.KindBadRequest, "%v", err)
+	}
 	if p := st.Profinet; p != nil {
 		for _, d := range p.Devices {
 			if !f.gsd[d.GSDML] {
@@ -652,6 +752,12 @@ func (f *Fake) createProject(r *http.Request) (any, *failure) {
 	}
 	s := f.newSession(project)
 	s.guard = guard
+	// TIA makes a new CPU with its protection not set up.
+	s.protection = ProtectionWithoutPassword
+	if fl := s.protect(req.Station.CPU.ConfigurationProtection, req.Secrets.ConfigurationPassword); fl != nil {
+		delete(f.sessions, s.id)
+		return nil, fl
+	}
 	st := req.Station
 	s.station = &st
 	f.files[project] = []byte("fake TIA project")
@@ -725,15 +831,33 @@ func (f *Fake) applyStation(r *http.Request) (any, *failure) {
 	if fl := f.checkStation(req.Station, req.Secrets); fl != nil {
 		return nil, fl
 	}
-	changes := StationChanges(s.station, req.Station)
+	// As tiad.Openness does, the CPU is made anew unless the spec this
+	// session last applied, still standing, has the same CPU: after an
+	// upload or an open, it is made anew (#789: fixed next, a known gap).
+	var notes []string
+	prev := s.station
+	if prev == nil || s.uploaded || prev.CPU.Order != req.Station.CPU.Order ||
+		prev.CPU.Firmware != req.Station.CPU.Firmware || prev.CPU.Name != req.Station.CPU.Name {
+		prev = nil
+		s.protection, s.protectedWith = ProtectionWithoutPassword, ""
+	}
+	// Until the spec is applied the project matches no spec: a failure
+	// part-way leaves nothing downloadable.
+	was, wasChanged := s.compiled, s.changed
+	s.station, s.uploaded, s.compiled, s.changed = nil, false, false, true
+	if n := protectionNote(s.protection, req.Station.CPU.ConfigurationProtection); n != "" {
+		notes = append(notes, n)
+	}
+	if fl := s.protect(req.Station.CPU.ConfigurationProtection, req.Secrets.ConfigurationPassword); fl != nil {
+		return nil, fl
+	}
+	changes := StationChanges(prev, req.Station)
 	st := req.Station
 	s.station = &st
-	s.uploaded = false
-	if len(changes) > 0 {
-		s.compiled = false
-		s.changed = true
+	if len(changes) == 0 {
+		s.compiled, s.changed = was, wasChanged
 	}
-	return tiad.StationResult{Changes: changes}, nil
+	return tiad.StationResult{Changes: changes, Notes: notes}, nil
 }
 
 // blockHead matches the first line of an SCL block in a source file.
@@ -830,6 +954,9 @@ func (f *Fake) compile(r *http.Request) (any, *failure) {
 		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "neither hardware nor software selected")
 	}
 	res := f.CompileResult
+	if req.Hardware && s.protection == ProtectionWithoutPassword {
+		res = tiad.CompileResult{Result: "error", Errors: 1, Messages: []tiad.CompileMessage{{Severity: "error", Text: NotConfigured}}}
+	}
 	if res.Result == "" {
 		res.Result = "success"
 	}
@@ -893,6 +1020,12 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 	if qs == nil {
 		qs = []tiad.Question{}
 	}
+	// A protected configuration asks for its password when the hardware
+	// loads (provisional until S2b).
+	if req.Hardware && s.protection == ProtectionWithPassword {
+		qs = append(append([]tiad.Question{}, qs...), tiad.Question{ID: tiad.QuestionConfigurationPassword,
+			Message: "password for the confidential PLC configuration data", Detail: "PlcMasterSecretPassword"})
+	}
 	// As tiad.Openness does: whether the CPU starts after loading is
 	// always decided before loading.
 	startAsked := false
@@ -909,7 +1042,8 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 		return tiad.DownloadResult{DryRun: true, Provisional: true, Questions: qs}, nil
 	}
 	haveProtection := req.Secrets != nil && req.Secrets.Protection != ""
-	unanswered, declined := tiad.Resolve(qs, req.Decisions, haveProtection)
+	haveConfigurationPassword := req.Secrets != nil && req.Secrets.ConfigurationPassword != ""
+	unanswered, declined := tiad.Resolve(qs, req.Decisions, haveProtection, haveConfigurationPassword)
 	if len(unanswered) > 0 {
 		return nil, &failure{status: http.StatusConflict, kind: tiad.KindDecisionRequired,
 			msg:  fmt.Sprintf("%d question(s) have no answer; nothing was loaded", len(unanswered)),
@@ -1032,6 +1166,8 @@ func (f *Fake) upload(r *http.Request) (any, *failure) {
 	s.compiled = false
 	s.changed = true
 	s.uploaded = true
+	// The bench CPU's setting, as the S2a upload found it.
+	s.protection, s.protectedWith = ProtectionNone, ""
 	// Trust on first use: the first upload pins the CPU's identity; every
 	// later one must match it.
 	read := f.device()

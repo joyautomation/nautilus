@@ -20,6 +20,9 @@ namespace Tiad
         public const string Overwrite = "overwrite";
         public const string StartAfter = "start-after";
         public const string Password = "password";
+        // ConfigurationPassword is answered only by the request's
+        // configuration password, never by the protection password.
+        public const string ConfigurationPassword = "configuration-password";
         public const string Certificate = "certificate";
         public const string Other = "other";
     }
@@ -138,7 +141,7 @@ namespace Tiad
         // Resolve applies the download rule: every question is answered
         // only from d. It fills the questions with no answer and the ones
         // answered no; a download goes ahead only when both are empty.
-        public static void Resolve(List<Question> qs, Decisions d, bool haveProtection, List<Question> unanswered, List<Question> declined)
+        public static void Resolve(List<Question> qs, Decisions d, bool haveProtection, bool haveConfigurationPassword, List<Question> unanswered, List<Question> declined)
         {
             foreach (var q0 in qs)
             {
@@ -175,6 +178,9 @@ namespace Tiad
                         break;
                     case QuestionIds.Password:
                         if (!haveProtection) unanswered.Add(q);
+                        break;
+                    case QuestionIds.ConfigurationPassword:
+                        if (!haveConfigurationPassword) unanswered.Add(q);
                         break;
                     default:
                         // A check tiad has never seen cannot be answered

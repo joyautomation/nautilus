@@ -55,3 +55,35 @@ func TestStationNames(t *testing.T) {
 		}
 	}
 }
+
+// TestConfigurationProtectionProblems: empty is the default, the three
+// values pass, anything else is a problem at its YAML path.
+func TestConfigurationProtectionProblems(t *testing.T) {
+	cpu := CPU{Name: "PLC_1", Order: "6ES7 510-1DK03-0AB0", Firmware: "V3.1",
+		Address: "192.0.2.10", SubnetMask: "255.255.255.0", ProfinetName: "plc-1"}
+	for _, ok := range []string{"", "password", "none", "keep"} {
+		c := cpu
+		c.ConfigurationProtection = ok
+		if ps := (Station{CPU: c}).Problems(); len(ps) != 0 {
+			t.Errorf("%q: %v", ok, ps)
+		}
+	}
+	c := cpu
+	c.ConfigurationProtection = "off"
+	ps := (Station{CPU: c}).Problems()
+	if len(ps) != 1 || ps[0].String() != `cpu.configuration-protection: "off" is not one of password, none, keep` {
+		t.Errorf("off: %v", ps)
+	}
+}
+
+// TestCheckTiaPassword: the rules TIA words, every broken one named, and
+// never the password itself.
+func TestCheckTiaPassword(t *testing.T) {
+	if err := CheckTiaPassword("Bench-config-2026"); err != nil {
+		t.Error(err)
+	}
+	err := CheckTiaPassword("s3cretpass")
+	if err == nil || !strings.HasSuffix(err.Error(), ": no upper-case letter (A-Z)") || strings.Contains(err.Error(), "s3cretpass") {
+		t.Errorf("s3cretpass: %v", err)
+	}
+}
