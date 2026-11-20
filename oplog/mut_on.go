@@ -35,6 +35,21 @@ import "os"
 //   - unsynced_self_counted: an unsynced leader counts its own log in its
 //     catch-up;
 //   - entry_unbounded: an entry of any size is proposed.
+//
+// #710 PR 3b-4b:
+//
+//   - term_not_persisted: the term lives only in memory, so a log lost
+//     under the mark takes a deposed leader's replication (and its word
+//     that the log is synced);
+//   - unnamed_leader_admitted: a marked replica takes replication while
+//     its own election names no leader;
+//   - vouch_unchecked: a vouch is taken over a lost log, a peer that does
+//     not answer, or a peer holding a later log;
+//   - vouch_alone_kept: a vouched log catches up alone at every
+//     leadership, not once;
+//   - unsynced_log_writes: a log that would sequence while unsynced reads
+//     writable, so a write is proposed and ends "outcome unknown" instead
+//     of being refused for certain.
 var mutOn = os.Getenv("QUORUM_MUT")
 
 func mutOplog(name string) bool { return name == mutOn }
