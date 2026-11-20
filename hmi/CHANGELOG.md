@@ -58,6 +58,12 @@
 
 ### Fixed
 
+- **`Modal` (so `<ConfirmDialog/>`) no longer cancels a question that opens right after another** (#708):
+  a native `close` event from the first close arrived while the second was on screen and was
+  taken as the user closing it. Seen as a password re-prompt (after a wrong password) cancelling
+  itself; a confirm asked straight after another could do the same. A close event that finds the
+  dialog open again is now ignored (`dialog.ts`).
+
 - **An unknown quality token is drawn as bad, never good.** `valueStatus`
   used to fall through to `good` for a token it did not know, so a newer
   controller's quality reached the screen as trustworthy and commandable.

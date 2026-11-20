@@ -6,6 +6,7 @@
 	// it from there.
 	import type { Snippet } from 'svelte';
 	import Icon from './Icon.svelte';
+	import { closeIsReal } from '../dialog.js';
 
 	let {
 		open = $bindable(false),
@@ -64,7 +65,9 @@
 	{oncancel}
 	onclick={onBackdropClick}
 	onclose={() => {
-		if (open) requestClose();
+		// A late event from an earlier close finds the dialog open again
+		// (./dialog.ts): it must not close the question now on screen.
+		if (closeIsReal(open, !!dialogEl?.open)) requestClose();
 	}}
 >
 	<!-- svelte-ignore a11y_no_static_element_interactions, a11y_click_events_have_key_events -->

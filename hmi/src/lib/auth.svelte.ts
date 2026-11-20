@@ -103,15 +103,6 @@ export class AuthClient {
 	needsPassword(perm: string): boolean {
 		return needsPassword(this.me, perm, Date.now(), this.skew);
 	}
-
-	/** Sign out (POST /api/signout), then go to the sign-in page. */
-	async signOut(): Promise<void> {
-		try {
-			await this.session.fetch('/api/signout', { method: 'POST' });
-		} finally {
-			globalThis.location.assign('/signin');
-		}
-	}
 }
 
 /** Convenience factory mirroring `new AuthClient(opts)`. */

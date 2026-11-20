@@ -21,7 +21,10 @@ import {
 	type PasswordAsk
 } from '../src/lib/auth.js';
 import { kitFetch, setKitFetch } from '../src/lib/kitfetch.js';
-import { classify } from '../src/lib/substitutes.js';
+import { classify, SubstituteClient } from '../src/lib/substitutes.js';
+import { PortParamClient } from '../src/lib/iolink.js';
+import { fetchHistory } from '../src/lib/history.js';
+import { readFileSync } from 'node:fs';
 
 const json = (b: unknown, status = 200, headers: Record<string, string> = {}) =>
 	new Response(JSON.stringify(b), { status, headers: { 'Content-Type': 'application/json', ...headers } });
@@ -475,22 +478,63 @@ describe('badging an elevated control ahead of time', () => {
 	});
 });
 
-describe("the kit's fetch", () => {
-	it('is the browser fetch until one is installed, and the installed one after', async () => {
+describe('every kit client goes through the kit fetch', () => {
+	// One spec, not several: specs run concurrently, and these swap the one
+	// installed fetch (and the browser's).
+	it('the browser fetch until one is installed; then substitutes, IO-Link parameters and history use it', async () => {
 		const seen: string[] = [];
 		const g = globalThis as { fetch: typeof fetch };
 		const browser = g.fetch;
 		g.fetch = (async (i: RequestInfo | URL) => (seen.push('browser:' + String(i)), new Response('b'))) as typeof fetch;
 		try {
 			await kitFetch('/a');
-			setKitFetch(async (i) => (seen.push('auth:' + String(i)), new Response('a')));
+			setKitFetch(async (i) => {
+				seen.push(String(i));
+				return json({ substitutes: [], rules: [], params: [], series: {} });
+			});
 			await kitFetch('/b');
+			await new SubstituteClient().list();
+			await new PortParamClient().list('X1');
+			await fetchHistory(['T1'], 0, 1000);
 			setKitFetch(null);
 			await kitFetch('/c');
 		} finally {
 			g.fetch = browser;
 			setKitFetch(null);
 		}
-		expect(seen).toEqual(['browser:/a', 'auth:/b', 'browser:/c']);
+		expect(seen.length).toBe(6);
+		expect([seen[0], seen[1], seen[5]]).toEqual(['browser:/a', '/b', 'browser:/c']);
+		seen.splice(0, 2);
+		expect(seen[0].startsWith('/api/substitutes')).toBe(true);
+		expect(seen[1].startsWith('/api/iolink/X1/params')).toBe(true);
+		expect(seen[2].startsWith('/api/history')).toBe(true);
+	});
+	// The rune files cannot run on plain node; read them instead.
+	it('no kit source calls the browser fetch directly', () => {
+		const files = [
+			'alarms.svelte.ts',
+			'realtime.svelte.ts',
+			'history.ts',
+			'iolink.ts',
+			'substitutes.ts',
+			'taghistory.svelte.ts',
+			'trend.svelte.ts'
+		];
+		for (const f of files) {
+			const src = readFileSync('src/lib/' + f, 'utf8');
+			const bare = src.split('\n').filter((l) => /(^|[^A-Za-z#.])fetch\(/.test(l) && !l.trim().startsWith('//') && !l.trim().startsWith('*'));
+			if (bare.length) throw new Error(`${f} calls fetch( directly: ${bare.join(' | ')}`);
+		}
+	});
+	it("the realtime client reports its stream to the kit, and writeTag shows the controller's reason", () => {
+		const src = readFileSync('src/lib/realtime.svelte.ts', 'utf8');
+		const open = src.slice(src.indexOf('es.onopen'), src.indexOf('es.onerror'));
+		const error = src.slice(src.indexOf('es.onerror'), src.indexOf('es.onmessage'));
+		expect(open.includes('reportStreamFine()')).toBe(true);
+		expect(error.includes('reportStreamTrouble()')).toBe(true);
+		const write = src.slice(src.indexOf('async writeTag('));
+		expect(write.includes('kitFetch(')).toBe(true);
+		expect(write.includes('refusalMessage(res.status')).toBe(true);
+		expect(write.includes('auth token')).toBe(false);
 	});
 });
