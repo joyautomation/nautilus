@@ -118,6 +118,7 @@ to the matrix as a named regression case.
   - **Steady state:** once settled, one unbroken holder, every counted voter backing it, and no vote term moving. Every safety oracle passed while a stuck standby churned the terms, which is why this oracle exists.
 - **The matrix** runs 1,728 cases, with expectations from a connectivity rule that is independent of the protocol: with two of three vote links cut, the fully-up link decides the leader.
 - **The seeds.** `go test ./quorum/sim` runs seeds 1–2000. `QUORUM_SEEDS=N` runs 1–N, and `QUORUM_SEEDS=a-b` runs a range. `QUORUM_SEED=k ... -run '^TestSeeds$' -v` runs one seed with its trace. Every failure prints that line and a shrunk schedule as a Go literal.
+- **The clone seeds (#1029 layer 2).** `TestCloneSeeds` runs schedules from their own generator (`cloneFaults`): one vote link cut both ways, and a MAC-spoofed clone of A or B (slots `CA`, `CB`, under the original's name, booted from a copy of its disk) around then, once the pair has settled (from 6 s), sometimes with a delay or a skew within the rules. Every oracle but I7 is on (the lease may pass between the original and its clone while both run, never to both at once), the liveness ones from when the cut and the clone are gone. A clone running while the lease changes hands (booted with its original, or running while the original or its peer restarts or the leader goes unhealthy) is the measured residual (`QUORUM_MEASURE_CLONE_START=<n> ... -run '^TestMeasureCloneAtStart$'`); the follow-up on #1029 must bring all four cases to 0. `QUORUM_CLONE_SEEDS` sets the range as `QUORUM_SEEDS` does.
 - **The runtime:** about 7 s, or 46 s under `-race` (the handshake, the longer switch-fault runs and the named cases).
 - **Excluded by name:**
   - F22b, a frozen controller clock, which must breach I1;
@@ -213,6 +214,16 @@ case caught it. A mutation joins the nightly run in the PR that builds the rule 
 | two processes behind the peer's name (nonces N1, N2, N1 at the hello) raise nothing | design §2 (F30) | 3b-2b (`hello_duplicate_unseen`) |
 | the credential check's MAC leaves the digest out, so different users files read as the same | design §6.1, credential set (#708) | credential digest (`creds_unbound`) |
 | a controller votes from a state file written on another box (a cloned disk; red in both #1029 shapes end to end) | design §2, #1029 | #1029 layer 1 (`box_unchecked`) |
+| a voter ignores the promises other voters relay, so a MAC-spoofed clone of the leader wins the voter its original is cut from (red in all three shapes end to end and in `TestCloneSeeds`) | design §2, #1029 | #1029 layer 2 (`relay_ignored`) |
+| a voter grants a name while that name's own voter is heard promised to another controller: a MAC-spoofed clone of the standby, the leader cut from the witness (shape 3) | design §2, #1029 | #1029 layer 2 (`relay_voter_rule_off`) |
+| a voter relays its promise to its own candidate, so a clone's self-grant reaches the other voters | design §2, #1029 | #1029 layer 2 (`relay_self_promise`) |
+| a relayed promise replaces the voter's own running promise or one heard earlier, so a clone that won one voter turns the original's other voters against it | design §2, #1029 | #1029 layer 2 (`relay_last_wins`) |
+| a heard promise is held only for its time left, without the clock-rate margin | design §2, #1029 | #1029 layer 2 (`relay_no_margin`) |
+| a refusal in the clock-rate margin after a heard promise counts as a duplicate (a fast real restart raises a false alarm) | design §2, #1029 | #1029 layer 2 (`relay_tail_counted`) |
+| a standby doesn't probe the witness every look, so neither hears the other's promise while no campaign runs (red in shapes 2 and 3 and in `TestCloneSeeds`) | design §2, #1029 | #1029 layer 2 (`standby_no_probe`) |
+| a controller's voter never hears the promise a reply relays (red in shape 1) | design §2, #1029 | #1029 layer 2 (`reply_relay_dropped`) |
+| a voter's new promise to the other controller reaches the witness only at the next look, so a clone wins the witness in that window | design §2, #1029 | #1029 layer 2 (`relay_not_pushed`) |
+| a refused campaign whose own voter's grant came back after the refusal waits out a whole lease (a stale relay then costs a takeover a lease; red in `TestStaleRelayEndsAndTheStandbyLeads`) | design §4.5, R | #1029 layer 2 (`retry_after_refusal_only`) |
 | no switch hold-off: a stray copy answering on and off switches the pair every lease | design §3.1, when a switch is proposed | 2 (handshake) |
 | a restarted controller counts its adopted incarnation at once (no quiet period owed) | design §3.1, the quiet period | 2 (handshake) |
 | a lost controller takes an `Adopt` sent before its restart (a stale floor) | design §3.1, boots | 2 (handshake) |

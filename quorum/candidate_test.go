@@ -249,6 +249,25 @@ func TestCandidateRetryJitter(t *testing.T) {
 	}
 }
 
+// A campaign the witness refuses before its own voter's grant comes back
+// (that grant waits for its fsync) retries half a look plus the jitter
+// later, as when the refusal comes last, not a whole lease later (#1029
+// layer 2: a stale relayed promise refuses a takeover's first campaign).
+func TestCandidateRetriesWhenItsOwnGrantComesBackLast(t *testing.T) {
+	cfg := cfgA()
+	cfg.Jitter = func() time.Duration { return 300 * ms }
+	c := newC(t, cfg, 0, 0)
+	r := c.Tick(0, "", 0, true)
+	c.OnReply(at(10*ms), refused("W", r, 0, 42))
+	c.OnReply(at(15*ms), granted("A", r, 0))
+	if c.NextLook() != at(565*ms) {
+		t.Fatalf("next look %v, want 565 ms (15 ms + half a look + the jitter), not a lease on", time.Duration(c.NextLook()))
+	}
+	if r2 := c.Tick(at(565*ms), "", 0, true); r2 == nil || r2.Term <= r.Term {
+		t.Fatalf("retry at 565 ms: %+v", r2)
+	}
+}
+
 // Only the three voters count. A grant from a name that is none of them,
 // a second witness copy under another name for instance, is ignored, even
 // carrying the accepted incarnation (naut-lead's #961 review: A + "W2"

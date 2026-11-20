@@ -28,16 +28,22 @@ type Addr int
 // The nodes of every run. A, B and W are the pair and its witness. W2 is
 // a second witness copy under the same name (F15b), and Z a voter under a
 // name the pair does not know; both are down unless a fault starts them.
+// CA and CB are MAC-spoofed clones of A and of B (#1029 layer 2): a
+// controller under the original's name, booted from a copy of its disk by
+// a Clone fault, that reaches the original's peer and the witness at its
+// own address (the peer's messages still go to the original's).
 const (
 	A Addr = iota
 	B
 	W
 	W2
 	Z
+	CA
+	CB
 	nNodes
 )
 
-var addrNames = [nNodes]string{"A", "B", "W", "W2", "Z"}
+var addrNames = [nNodes]string{"A", "B", "W", "W2", "Z", "CA", "CB"}
 
 func (a Addr) String() string {
 	if a >= 0 && a < nNodes {
@@ -46,15 +52,28 @@ func (a Addr) String() string {
 	return fmt.Sprintf("Addr(%d)", int(a))
 }
 
-var nodeIDs = [nNodes]quorum.NodeID{"A", "B", "W", "W", "Z"}
+var nodeIDs = [nNodes]quorum.NodeID{"A", "B", "W", "W", "Z", "A", "B"}
 
-func isController(a Addr) bool { return a == A || a == B }
+func isController(a Addr) bool { return a == A || a == B || a == CA || a == CB }
 
+// peerOf is where a controller's votes and handshake go: a clone sends to
+// the original's peer, and the peer to the original, never to a clone.
 func peerOf(a Addr) Addr {
-	if a == A {
+	if a == A || a == CA {
 		return B
 	}
 	return A
+}
+
+// original is the controller a clone copies, or a itself.
+func original(a Addr) Addr {
+	switch a {
+	case CA:
+		return A
+	case CB:
+		return B
+	}
+	return a
 }
 
 // Options is one run: the configuration, the start times, and the faults.
@@ -147,6 +166,9 @@ type event struct {
 
 	from Addr
 	msg  []byte
+	// probe: a standby's probe of the witness or its reply (#1029 layer
+	// 2), whose delays come from World.probeNet.
+	probe bool
 
 	fault int // index into Options.Faults
 }
@@ -220,6 +242,7 @@ type node struct {
 	grantEnd []pendingGrant
 
 	downs, pauses, freezes int // active crash, pause and freeze faults
+	unhealthy              int // active Unhealthy faults: its scans hang
 	savedRate              PPM
 }
 
@@ -250,6 +273,12 @@ type World struct {
 	q     queue
 	nodes [nNodes]*node
 	net   *rand.Rand
+	// probeNet draws the network's chances for the standby's probes and
+	// their replies (#1029 layer 2), and viaProbe says a send is one: the
+	// probes leave every other frame's draws as they were, so a seed's
+	// schedule stays comparable with the runs from before them.
+	probeNet *rand.Rand
+	viaProbe bool
 
 	witnessInc uint64 // the incarnation A and B were commissioned with
 
@@ -267,7 +296,7 @@ type World struct {
 
 func newWorld(o Options) *World {
 	o.defaults()
-	w := &World{o: o, net: rand.New(rand.NewPCG(o.Seed, 0x6e6574))}
+	w := &World{o: o, net: rand.New(rand.NewPCG(o.Seed, 0x6e6574)), probeNet: rand.New(rand.NewPCG(o.Seed, 0x70726f6265))}
 	for a := Addr(0); a < nNodes; a++ {
 		w.nodes[a] = &node{
 			addr:  a,
@@ -389,7 +418,9 @@ func (w *World) step(e *event) {
 			w.scan(n)
 		}
 	case evDeliver:
+		w.viaProbe = e.probe
 		w.deliver(n, e.from, e.msg)
+		w.viaProbe = false
 	case evDiskDone:
 		w.diskDone(n)
 	}
@@ -505,24 +536,36 @@ func (w *World) soonerLook(n *node) {
 func (w *World) tick(n *node) {
 	now := w.local(n)
 	from, until := n.voter.LeaderSeen()
-	if r := n.cand.Tick(now, from, until, true); r != nil {
+	if r := n.cand.Tick(now, from, until, n.unhealthy == 0); r != nil {
 		n.sent = append(n.sent, sentReq{term: r.Term, id: r.ID, at: now})
 		w.rec.Requests = append(w.rec.Requests, SentRequest{At: w.now, From: n.addr, Term: r.Term, Renewal: r.Renewal})
 		w.tracef("%v sends term=%d id=%d", n.addr, r.Term, r.ID)
 		b, _ := r.MarshalBinary()
 		w.selfDeliver(n, b)
+		r.Promise = n.voter.Relay(w.local(n)) // stamped as it leaves (the self copy carries none)
+		b, _ = r.MarshalBinary()
 		w.send(n.addr, peerOf(n.addr), b)
 		w.send(n.addr, W, b)
 	}
 	p, msgs, probe := n.adopt.Tick(now)
+	standby := false
+	if probe == nil {
+		probe = n.cand.Probe(now) // the standby's probe of the witness (#1029 layer 2)
+		standby = probe != nil
+	} else {
+		n.cand.Probe(now)
+	}
 	if p != nil {
 		w.persist(n, p)
 	}
 	w.sendAdopts(n, msgs)
 	if probe != nil {
 		// Only to the witness, and not a request the candidate keeps.
+		probe.Promise = n.voter.Relay(w.local(n))
 		b, _ := probe.MarshalBinary()
+		w.viaProbe = standby
 		w.send(n.addr, W, b)
+		w.viaProbe = false
 	}
 	w.observe(n)
 	w.gate(n)
@@ -576,7 +619,11 @@ func (w *World) sendOne(from, to Addr, b []byte) {
 			return
 		}
 	}
-	if p := maxInt(w.loss[from][to]); p > 0 && w.net.IntN(100) < p {
+	net := w.net
+	if w.viaProbe {
+		net = w.probeNet
+	}
+	if p := maxInt(w.loss[from][to]); p > 0 && net.IntN(100) < p {
 		w.tracef("%v→%v lost", from, to)
 		return
 	}
@@ -586,15 +633,15 @@ func (w *World) sendOne(from, to Addr, b []byte) {
 	}
 	d += maxDur(w.delay[from][to])
 	if w.o.Jitter > 0 {
-		d += time.Duration(w.net.Int64N(int64(w.o.Jitter) + 1))
+		d += time.Duration(net.Int64N(int64(w.o.Jitter) + 1))
 	}
-	w.push(&event{at: w.now + d, kind: evDeliver, node: to, from: from, msg: b, boot: -1})
+	w.push(&event{at: w.now + d, kind: evDeliver, node: to, from: from, msg: b, boot: -1, probe: w.viaProbe})
 	for _, r := range w.replay[from][to] {
-		w.push(&event{at: w.now + d + r, kind: evDeliver, node: to, from: from, msg: b, boot: -1})
+		w.push(&event{at: w.now + d + r, kind: evDeliver, node: to, from: from, msg: b, boot: -1, probe: w.viaProbe})
 	}
 	if bound := maxDur(w.dup[from][to]); bound > 0 {
-		extra := time.Duration(w.net.Int64N(int64(bound) + 1))
-		w.push(&event{at: w.now + d + extra, kind: evDeliver, node: to, from: from, msg: b, boot: -1})
+		extra := time.Duration(net.Int64N(int64(bound) + 1))
+		w.push(&event{at: w.now + d + extra, kind: evDeliver, node: to, from: from, msg: b, boot: -1, probe: w.viaProbe})
 	}
 }
 
@@ -620,6 +667,9 @@ func (w *World) deliver(n *node, from Addr, b []byte) {
 	if err := req.UnmarshalBinary(b); err == nil {
 		if n.adopt != nil && from == peerOf(n.addr) {
 			n.adopt.OnPeer(now)
+		}
+		if from != n.addr {
+			n.voter.Hear(now, req.From, req.Promise)
 		}
 		w.handle(n, from, now, req)
 		return
@@ -655,6 +705,12 @@ func (w *World) deliver(n *node, from Addr, b []byte) {
 	}
 	if n.cand == nil {
 		return
+	}
+	if from != n.addr {
+		n.voter.Hear(now, rep.From, rep.Promise)
+	}
+	if quorum.IsRelayProbe(rep) {
+		return // the relay probe's reply is for the voter only
 	}
 	if rep.Granted {
 		w.rec.received(from, rep, n.addr, w.now)
@@ -794,7 +850,18 @@ func (w *World) handle(n *node, from Addr, now quorum.Instant, r quorum.Request)
 			w.gate(n)
 		}
 	}
+	before := n.voter.RelayRefused()
 	p, replies := n.voter.Handle(now, r)
+	w.rec.relayRefused += n.voter.RelayRefused() - before
+	if n.cand != nil && n.voter.RelayChanged(now) {
+		if probe := n.cand.PushProbe(now); probe != nil {
+			probe.Promise = n.voter.Relay(now)
+			b, _ := probe.MarshalBinary()
+			w.viaProbe = true
+			w.send(n.addr, W, b)
+			w.viaProbe = false
+		}
+	}
 	term, to, until := n.voter.PromiseUntil()
 	if p != nil || (len(replies) == 1 && replies[0].Granted) {
 		if term == r.Term && to == r.From {
@@ -814,6 +881,9 @@ func (w *World) reply(n *node, to Addr, replies []quorum.Reply) {
 		dst := to
 		if rep.Granted {
 			dst = w.ledger(n, rep)
+		}
+		if dst != n.addr {
+			rep.Promise = n.voter.Relay(w.local(n))
 		}
 		b, _ := rep.MarshalBinary()
 		if dst == n.addr {
@@ -884,6 +954,9 @@ func (w *World) diskDone(n *node) {
 func (w *World) replyHeld(n *node, replies []quorum.Reply) {
 	for _, rep := range replies {
 		dst := w.ledger(n, rep)
+		if dst != n.addr {
+			rep.Promise = n.voter.Relay(w.local(n))
+		}
 		b, _ := rep.MarshalBinary()
 		if dst == n.addr {
 			w.push(&event{at: w.now, kind: evDeliver, node: n.addr, boot: n.boot, from: n.addr, msg: b})

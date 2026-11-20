@@ -155,6 +155,24 @@ var table = []mutation{
 	// skip the check. cmd/naut's TestCloneWithAnUnresolvableLinkNeverVotes
 	// leads twice under it.
 	{"box_wait_skipped", []string{"TestUnreadableBoxHoldsTheVoter"}},
+	// #1029 layer 2: the voters relay their running promises, so a
+	// MAC-spoofed clone (the box check can't see it) finds the voter it
+	// needs refusing it. cmd/naut's TestSpoofedClone* lead twice under
+	// relay_ignored (all three shapes), relay_voter_rule_off (the clone of
+	// the standby) and standby_no_probe (both shapes cut from the witness).
+	{"relay_ignored", []string{"TestVoterRefusesANameAHeardPromiseHoldsUnderAnotherNonce", "TestVoterRefusesANameWhoseOwnVoterIsHeardPromisedElsewhere", "TestCloneSeeds"}},
+	{"relay_voter_rule_off", []string{"TestVoterRefusesANameWhoseOwnVoterIsHeardPromisedElsewhere", "TestCloneSeeds"}},
+	{"relay_self_promise", []string{"TestVoterRelaysOnlyAPromiseToAnotherNode"}},
+	{"relay_last_wins", []string{"TestARelayNeverReplacesTheVotersOwnOrAnEarlierPromise"}},
+	{"relay_no_margin", []string{"TestAHeardPromiseHoldsForItsMarginThenEnds"}},
+	{"relay_tail_counted", []string{"TestAHeardPromiseHoldsForItsMarginThenEnds"}},
+	{"standby_no_probe", []string{"TestStandbyProbesTheWitnessEveryLook", "TestCloneSeeds"}},
+	{"relay_not_pushed", []string{"TestAPromiseToTheOtherControllerIsPushedToTheWitness"}},
+	// The relay refuses a takeover's first campaign at the witness at
+	// times, before its own voter's grant is back: the retry must come
+	// half a look on, not a lease.
+	{"retry_after_refusal_only", []string{"TestCandidateRetriesWhenItsOwnGrantComesBackLast", "TestStaleRelayEndsAndTheStandbyLeads"}},
+	{"reply_relay_dropped", []string{"TestSpoofedCloneOfTheLeaderWithTheABLinkDown"}},
 	// Outside the quorum tree (rowPkgs): the operator-intent log's late-
 	// start lapse (#1030, #1032 reviews) and the pair's alarm acks (#710
 	// PR 3b-2c).
@@ -255,6 +273,7 @@ var rowPkgs = map[string][]string{
 	"vouch_alone_ignores_ahead":    {"./oplog"},
 	"vouch_refuses_counting_ahead": {"./oplog", "./cmd/naut"},
 	"vouch_refusal_blocks":         {"./cmd/naut"},
+	"reply_relay_dropped":          {"./cmd/naut"},
 	"can_sync_stale":               {"./oplog"},
 	"placeholder_keeps_synced":     {"./oplog"},
 	"unsynced_log_writes":          {"./oplog", "./cmd/naut"},

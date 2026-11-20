@@ -113,6 +113,9 @@ type Candidate struct {
 	// its own vote, and it can take the witness's first grant from a
 	// leader that rests on the two controllers (#1021 review).
 	holdUntil Instant
+
+	// probeAt: the next probe of the witness while not leading (Probe).
+	probeAt Instant
 }
 
 // NewCandidate starts a candidate at now that knows of terms up to known
@@ -252,6 +255,45 @@ func (c *Candidate) Tick(now Instant, seenFrom NodeID, seenUntil Instant, health
 	return c.send(now, above(c.maxSeen))
 }
 
+// Probe returns a probe for the witness, a term-0 request (id ProbeID) it
+// always refuses, once per look while this candidate doesn't lead: in its
+// restart hold and its back-off too, since a probe keeps no promise alive.
+// The probe and the witness's reply carry each voter's running promise
+// (Relay), so this controller's voter and the witness hear what the other
+// promised even when no campaign runs (#1029 layer 2): a clone of either
+// controller then finds the voter it needs refusing it. nil otherwise.
+// The driver sends it to the witness only, stamped with its own voter's
+// Relay, and calls Probe at every look.
+func (c *Candidate) Probe(now Instant) *Request {
+	if mut("standby_no_probe") || c.Leading(now) || now < c.probeAt {
+		return nil
+	}
+	c.probeAt = now.Add(c.cfg.look())
+	return &Request{From: c.cfg.Self, Nonce: c.cfg.Nonce, ID: ProbeID}
+}
+
+// PushProbe is Probe at once, whatever the look: the driver sends it when
+// its own voter has just promised another node (Voter.RelayChanged), so
+// the witness hears that promise within a one-way delay instead of up to a
+// look later. Until it does, the witness can still grant a clone the name
+// its peer's voter has just promised (#1029 layer 2). nil while leading.
+func (c *Candidate) PushProbe(now Instant) *Request {
+	if mut("standby_no_probe") || mut("relay_not_pushed") || c.Leading(now) {
+		return nil
+	}
+	c.probeAt = now.Add(c.cfg.look())
+	return &Request{From: c.cfg.Self, Nonce: c.cfg.Nonce, ID: ProbeID}
+}
+
+// ProbeID is the id of a standby's relay probe (Candidate.Probe), which
+// its reply echoes. A driver hands that reply to its voter's Hear only:
+// the probe is there for the relay, and its reply tells neither the
+// candidate nor the handshake anything (IsRelayProbe).
+const ProbeID = ^uint64(0)
+
+// IsRelayProbe reports whether r answers a standby's relay probe.
+func IsRelayProbe(r Reply) bool { return r.Term == 0 && r.ID == ProbeID }
+
 func (c *Candidate) send(now Instant, term uint64) *Request {
 	c.nextID++
 	if term > c.maxSeen {
@@ -320,9 +362,13 @@ func (c *Candidate) OnReply(now Instant, r Reply) {
 		// or stragglers would re-term us without end.
 		c.reterm = !mut("no_reterm")
 	}
-	if !r.Granted && !c.leading && len(rd.replies) >= 2 && len(rd.grants) < 2 {
+	if (!r.Granted || (len(rd.replies) == 2 && !mut("retry_after_refusal_only"))) && !c.leading && len(rd.replies) >= 2 && len(rd.grants) < 2 {
 		// Heard, and refused by a majority: retry on a later look, after
-		// the jitter.
+		// the jitter. Whichever reply completes the two: its own voter's
+		// grant can come back after the other voter's refusal (its fsync),
+		// and the round would otherwise wait out a whole lease (#1029
+		// layer 2: a stale relayed promise refuses a takeover's first
+		// campaign at the witness).
 		var j time.Duration
 		if c.cfg.Jitter != nil {
 			j = c.cfg.Jitter()

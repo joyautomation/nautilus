@@ -53,6 +53,14 @@ const (
 	// (Adoption.Recommission): adopt the witness's current incarnation,
 	// with floor Value. For is ignored. The generator never draws it.
 	Recommission
+	// Clone boots CA or CB (Node) at At from a copy of A's or B's disk as
+	// it is then, under the original's name, for For (0: for good): a
+	// MAC-spoofed cloned disk or VM (#1029 layer 2). The default
+	// generator never draws it; the clone schedules do.
+	Clone
+	// Unhealthy hangs Node's scans for For (#621): its candidate stops
+	// renewing and doesn't campaign, while its voter keeps answering.
+	Unhealthy
 	nKinds
 )
 
@@ -64,7 +72,7 @@ const (
 )
 
 var kindNames = [nKinds]string{"Cut", "Delay", "Loss", "Duplicate", "Mirror", "Crash", "Wipe",
-	"Pause", "Freeze", "SlowDisk", "DiskFail", "Skew", "Start", "Replay", "Recommission"}
+	"Pause", "Freeze", "SlowDisk", "DiskFail", "Skew", "Start", "Replay", "Recommission", "Clone", "Unhealthy"}
 
 func (k FaultKind) String() string {
 	if k >= 0 && k < nKinds {
@@ -169,6 +177,20 @@ func (w *World) applyFault(i int, on bool) {
 			w.start(w.nodes[f.Node])
 		} else {
 			w.crash(w.nodes[f.Node], false)
+		}
+	case Unhealthy:
+		if on {
+			w.nodes[f.Node].unhealthy++
+		} else {
+			w.nodes[f.Node].unhealthy--
+		}
+	case Clone:
+		n := w.nodes[f.Node]
+		if on {
+			n.disk.file = append([]byte(nil), w.nodes[original(f.Node)].disk.file...)
+			w.start(n)
+		} else {
+			w.crash(n, false)
 		}
 	case Pause:
 		n := w.nodes[f.Node]

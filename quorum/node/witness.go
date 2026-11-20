@@ -61,6 +61,8 @@ type Witness struct {
 	pairs   map[string]*witnessPair
 	wg      sync.WaitGroup // the pairs' writers
 	logInfo func(cluster string) (last, commit uint64, ok bool)
+	// versionSeen: the version-mismatch report last logged per cluster.
+	versionSeen map[string]string
 }
 
 type witnessPair struct {
@@ -203,6 +205,9 @@ type PairStatus struct {
 	// last entry and its commit index; HasLog false when it has none open.
 	HasLog             bool
 	LogLast, LogCommit uint64
+	// Duplicates counts votes this witness refused because two processes
+	// claim one member's name (redundancy.duplicate-member).
+	Duplicates uint64
 }
 
 // SetLogInfo lets Pairs report each pair's operator-intent log (#710
@@ -265,8 +270,9 @@ func (w *Witness) Pairs() []PairStatus {
 	for _, p := range ps {
 		p.mu.Lock()
 		st := p.v.State()
+		dups, _ := p.v.Duplicates()
 		p.mu.Unlock()
-		ps := PairStatus{Cluster: p.name, Members: p.members, Incarnation: st.Incarnation, Promised: st.Promised, GrantedTo: string(st.GrantedTo)}
+		ps := PairStatus{Cluster: p.name, Members: p.members, Incarnation: st.Incarnation, Promised: st.Promised, GrantedTo: string(st.GrantedTo), Duplicates: dups}
 		if info != nil {
 			ps.LogLast, ps.LogCommit, ps.HasLog = info(p.name)
 		}
@@ -366,6 +372,20 @@ func (w *Witness) serveVote(rw http.ResponseWriter, r *http.Request) {
 	}
 	b, err := readFrame(r)
 	var req quorum.Request
+	if err == nil && errors.Is(req.UnmarshalBinary(b), quorum.ErrVersion) {
+		msg := fmt.Sprintf("a controller of cluster %s speaks vote protocol version %d and this witness %d: run one release on both controllers and the witness", name, quorum.FrameVersion(b), quorum.WireVersion)
+		w.mu.Lock()
+		if w.versionSeen[name] != msg {
+			if w.versionSeen == nil {
+				w.versionSeen = map[string]string{}
+			}
+			w.versionSeen[name] = msg
+			w.log.Error("witness: " + msg)
+		}
+		w.mu.Unlock()
+		refuse(rw, "version", msg)
+		return
+	}
 	if err != nil || req.UnmarshalBinary(b) != nil {
 		http.Error(rw, "bad frame", http.StatusBadRequest)
 		return
@@ -406,12 +426,13 @@ func (w *Witness) serveVote(rw http.ResponseWriter, r *http.Request) {
 		refuse(rw, "term-jump", fmt.Sprintf("term %d is more than %d above the %d this witness promised", req.Term, uint64(MaxTermJump), max(st.Promised, st.Floor)))
 		return
 	}
+	p.v.Hear(now, req.From, req.Promise)
 	persist, replies := p.v.Handle(now, req)
 	if n, who := p.v.Duplicates(); n != p.dupSeen {
 		p.dupSeen = n
 		if t := time.Now(); t.Sub(p.dupAt) >= dupEvery {
 			p.dupAt = t
-			p.log.Error("witness: " + duplicateMsg(who))
+			p.log.Error("witness: " + duplicateMsg(who, p.v.DuplicateCause()))
 		}
 	}
 	var ch chan quorum.Reply
@@ -421,7 +442,13 @@ func (w *Witness) serveVote(rw http.ResponseWriter, r *http.Request) {
 	}
 	p.mu.Unlock()
 	p.w.ask(persist)
-	answer(rw, r, replies, ch, w.o.Lease, func() {
+	stamp := func(rep quorum.Reply) quorum.Reply {
+		p.mu.Lock()
+		rep.Promise = p.v.Relay(w.now())
+		p.mu.Unlock()
+		return rep
+	}
+	answer(rw, r, replies, ch, w.o.Lease, stamp, func() {
 		p.mu.Lock()
 		if p.waiters[keyOf(req)] == ch {
 			delete(p.waiters, keyOf(req))
