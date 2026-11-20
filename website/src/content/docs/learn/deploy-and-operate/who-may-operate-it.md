@@ -160,7 +160,11 @@ your own, with `POST /api/elevate`:
 {"elevatedUntil":"2026-11-20T09:06:05.890423355Z","user":"jsmith"}
 ```
 
-and the action then works. A user whose roles hold none of these permissions,
+and the action then works. A screen built with the HMI kit does this itself:
+when the controller refuses an elevated action, it asks for the password in a
+dialog, sends it, and repeats the action once (the [auth
+guide](/guides/auth/#in-the-hmi) shows the one call that turns it on). An HMI
+of your own handles the `401` as above. A user whose roles hold none of these permissions,
 a viewer or an operator, has nothing to confirm: they get a `403`, never a
 password prompt. Using an action does not extend the window.
 Tokens, for scripts and the VS Code extension, always count as elevated,
