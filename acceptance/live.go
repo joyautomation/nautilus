@@ -126,19 +126,27 @@ func runTestLive(s *Suite, t *Test, live Live) (Result, error) {
 	if err != nil {
 		return res, err
 	}
-	for i, st := range steps {
+	_, err = walkSteps(steps, func(sr stepRun) (bool, error) {
+		st := sr.Step
 		fail, err := r.runStepLive(st)
 		if err != nil {
-			return res, fmt.Errorf("%s:%d: test %q: %w", s.Path, st.Line, t.Name, err)
+			return true, fmt.Errorf("%s:%d: test %q: %w", s.Path, st.Line, t.Name, err)
 		}
 		if fail != nil {
-			fail.Step = i + 1
+			fail.Step, fail.StepPath, fail.Repeat = sr.Index, sr.Path, sr.Repeat
 			fail.Line = st.Line
 			fail.AtMs = float64(fail.At) / float64(time.Millisecond)
 			res.Failure = fail
 			res.Elapsed, res.Scans = r.elapsed(), r.scans
-			return res, nil
+			return true, nil
 		}
+		return false, nil
+	})
+	if err != nil {
+		return res, err
+	}
+	if res.Failure != nil {
+		return res, nil
 	}
 	res.Passed = true
 	res.Elapsed, res.Scans = r.elapsed(), r.scans

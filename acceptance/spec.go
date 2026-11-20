@@ -16,6 +16,7 @@ import (
 	"path"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -118,6 +119,13 @@ type Step struct {
 	// spent: how a sequence test makes the process do something the model
 	// would not on its own (a plug, a trip). Needs `devices: true`.
 	Plant map[string]any `yaml:"plant"`
+
+	// Repeat runs the step N times; Steps makes the step a group of steps
+	// (which Repeat then repeats as a whole). A group has no keys of its own
+	// beyond these two. Both are expanded as the test runs, so a failure
+	// still names the step as written (see walkSteps).
+	Repeat *int    `yaml:"repeat"`
+	Steps  []*Step `yaml:"steps"`
 
 	Line int `yaml:"-"`
 	// AlarmsLine is the line of the `alarms:` key, where a failed alarm
@@ -277,8 +285,133 @@ func (t *Test) steps() ([]*Step, error) {
 	}}, nil
 }
 
+// MaxExpandedSteps bounds how many steps a test may run once `repeat:` and
+// groups are expanded; nested repeats multiply, and a typo must not become
+// a test that never ends.
+const MaxExpandedSteps = 100000
+
+// hasBody reports whether the step has any key of its own besides the
+// repeat/group pair: something to do or check.
+func (s *Step) hasBody() bool {
+	return s.Given != nil || s.Scans != nil || s.Advance != nil || s.Until != nil ||
+		s.Hold != nil || s.Expect != nil || s.Always != nil || s.Ack != nil ||
+		s.Shelve != nil || s.Unshelve != nil || s.Alarms != nil || s.Force != nil ||
+		s.Unforce != nil || s.Substitute != nil || s.Restore != nil ||
+		s.AckSubstitutes != nil || s.Plant != nil
+}
+
+// count is how many steps this one runs once expanded, saturating above
+// MaxExpandedSteps so a nest of large repeats cannot overflow.
+func (s *Step) count() int {
+	n := 1
+	if len(s.Steps) > 0 {
+		n = countSteps(s.Steps)
+	}
+	r := 1
+	if s.Repeat != nil && *s.Repeat > 0 {
+		r = *s.Repeat
+	}
+	if n > MaxExpandedSteps || r > MaxExpandedSteps || n*r > MaxExpandedSteps {
+		return MaxExpandedSteps + 1
+	}
+	return n * r
+}
+
+func countSteps(steps []*Step) int {
+	total := 0
+	for _, st := range steps {
+		total += st.count()
+		if total > MaxExpandedSteps {
+			return MaxExpandedSteps + 1
+		}
+	}
+	return total
+}
+
+// validateSteps checks a list of steps, groups included.
+func validateSteps(testName string, steps []*Step) error {
+	for _, st := range steps {
+		if err := st.validate(testName); err != nil {
+			return fmt.Errorf("%d: %w", st.Line, err)
+		}
+	}
+	return nil
+}
+
+// stepRun is one executed step of a test: the step as written, and where
+// it sits. Index is the 1-based position of its top-level step (what
+// "step 3" has always meant; a group does not renumber what follows it),
+// Path the dotted position inside groups ("3.2", empty for a top-level
+// step), Repeat which iteration of each enclosing repeat it is ("7 of 24",
+// outermost first, empty when none).
+type stepRun struct {
+	Step   *Step
+	Index  int
+	Path   string
+	Repeat string
+}
+
+// walkSteps calls fn for every step a test runs, in order, groups entered
+// and repeats repeated, and stops at the first fn that returns stop or an
+// error. Expansion is lazy: nothing is built for iterations never reached.
+func walkSteps(steps []*Step, fn func(stepRun) (stop bool, err error)) (bool, error) {
+	return walkLevel(steps, nil, nil, fn)
+}
+
+func walkLevel(steps []*Step, path []int, reps []string, fn func(stepRun) (bool, error)) (bool, error) {
+	for i, st := range steps {
+		here := append(append([]int(nil), path...), i+1)
+		n := 1
+		if st.Repeat != nil {
+			n = *st.Repeat
+		}
+		for k := 1; k <= n; k++ {
+			rs := reps
+			if st.Repeat != nil {
+				rs = append(append([]string(nil), reps...), fmt.Sprintf("%d of %d", k, n))
+			}
+			if len(st.Steps) > 0 {
+				if stop, err := walkLevel(st.Steps, here, rs, fn); stop || err != nil {
+					return stop, err
+				}
+				continue
+			}
+			parts := make([]string, len(here))
+			for j, v := range here {
+				parts[j] = strconv.Itoa(v)
+			}
+			run := stepRun{Step: st, Index: here[0], Repeat: strings.Join(rs, ", ")}
+			if len(here) > 1 {
+				run.Path = strings.Join(parts, ".")
+			}
+			if stop, err := fn(run); stop || err != nil {
+				return stop, err
+			}
+		}
+	}
+	return false, nil
+}
+
 // validate rejects the mistakes worth catching before anything runs.
 func (s *Step) validate(testName string) error {
+	if s.Repeat != nil && (*s.Repeat < 1 || *s.Repeat > MaxExpandedSteps) {
+		return fmt.Errorf("test %q: repeat must be between 1 and %d, got %d", testName, MaxExpandedSteps, *s.Repeat)
+	}
+	if len(s.Steps) > 0 {
+		if s.hasBody() {
+			return fmt.Errorf("test %q: a step with `steps:` is a group and holds only `steps:` and `repeat:`; put the rest inside it", testName)
+		}
+		if err := validateSteps(testName, s.Steps); err != nil {
+			return err
+		}
+		return nil
+	}
+	if s.Steps != nil {
+		return fmt.Errorf("test %q: `steps:` is empty", testName)
+	}
+	if s.Repeat != nil && !s.hasBody() {
+		return fmt.Errorf("test %q: `repeat:` needs something to repeat: a step's own keys, or `steps:`", testName)
+	}
 	n := 0
 	for _, set := range []bool{s.Scans != nil, s.Advance != nil, s.Until != nil} {
 		if set {
@@ -341,6 +474,10 @@ func LoadSuite(fsys fs.FS, name string) (*Suite, error) {
 			if err := st.validate(t.Name); err != nil {
 				return nil, fmt.Errorf("%s:%d: %w", name, st.Line, err)
 			}
+		}
+		if n := countSteps(steps); n > MaxExpandedSteps {
+			return nil, fmt.Errorf("%s:%d: test %q runs more than %d steps once `repeat:` is expanded (counting stops there); lower a repeat",
+				name, t.Line, t.Name, MaxExpandedSteps)
 		}
 	}
 	return &s, nil

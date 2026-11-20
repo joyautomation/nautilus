@@ -67,3 +67,13 @@ test("a failure with no detail and no step (a faulted scan) leads with its reaso
 test("a result with no failure block still says it failed", () => {
   assert.deepEqual(failureText(failed(undefined)), { text: "failed" });
 });
+
+test("a failure inside a repeated group names the source step path, its line and the iteration", () => {
+  const r = failed({
+    step: 3, stepPath: "3.2", repeat: "7 of 24", line: 44, stepLine: 41, atMs: 700,
+    reason: "expectation failed", detail: "Out = false, want true",
+  });
+  const { text, line } = failureText(r);
+  assert.equal(text.split("\n")[1], "step 3.2 (line 41), repeat 7 of 24, t=0.700s of virtual time — expectation failed");
+  assert.equal(line, 44);
+});

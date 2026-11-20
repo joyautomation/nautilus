@@ -23,6 +23,8 @@ export interface Failure {
   line: number;
   /** The first line of the failing step; absent from older CLIs. */
   stepLine?: number;
+  stepPath?: string;
+  repeat?: string;
   atMs: number;
   reason: string;
   detail?: string;
@@ -67,7 +69,8 @@ export function failureText(r: RunResult): FailureText {
   const where: string[] = [];
   if (f.step > 0) {
     const stepLine = f.stepLine && f.stepLine !== f.line ? ` (line ${f.stepLine})` : "";
-    where.push(`step ${f.step}${stepLine}`);
+    const repeat = f.repeat ? `, repeat ${f.repeat}` : "";
+    where.push(`step ${f.stepPath || f.step}${stepLine}${repeat}`);
   }
   where.push(`${vtime(f.atMs)} of virtual time`);
   let second = where.join(", ");

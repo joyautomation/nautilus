@@ -31,8 +31,14 @@ func FormatFailure(r Result) string {
 	loc := fmt.Sprintf("%s:%d", r.Suite, f.Line)
 	if f.Step > 0 {
 		step := fmt.Sprintf("step %d", f.Step)
+		if f.StepPath != "" {
+			step = "step " + f.StepPath
+		}
 		if f.StepLine > 0 && f.StepLine != f.Line {
 			step += fmt.Sprintf(" (line %d)", f.StepLine)
+		}
+		if f.Repeat != "" {
+			step += ", repeat " + f.Repeat
 		}
 		fmt.Fprintf(&b, "%s — %s, t=%s\n", loc, step, vtime(f.At))
 	} else {
