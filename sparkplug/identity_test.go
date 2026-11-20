@@ -87,7 +87,8 @@ func TestSparkplugCommandUnderAuthNeedsAGrant(t *testing.T) {
 		e.From != "localhost:1883" || e.Detail["device"] != "node" {
 		t.Errorf("entry = %+v", e)
 	}
-	if r, _ := e.Detail["reason"].(string); !strings.Contains(r, "auth.sparkplug") || !strings.Contains(r, "restart naut run") {
+	if r, _ := e.Detail["reason"].(string); !strings.Contains(r, "auth.sparkplug") || !strings.Contains(r, "restart naut run") ||
+		!strings.Contains(r, "a role with write (operator, not viewer)") {
 		t.Errorf("reason %q does not name the fix", r)
 	}
 	if l, _ := e.Detail["label"].(string); !strings.Contains(l, "not a proof") || !strings.Contains(l, "anyone who can publish to the broker") {
@@ -275,5 +276,44 @@ func TestSparkplugPrincipalAndFrom(t *testing.T) {
 		if got := n.brokerFrom(); got != c.from || strings.Contains(got, "s3cret") {
 			t.Errorf("%+v: from %q, want %q", c.cfg, got, c.from)
 		}
+	}
+}
+
+// A wired identity whose grant's area leaves out the UDT tag refuses a
+// template command's member: the template path asks the auth: block too,
+// and journals the refusal as class auth (#1107 review).
+func TestSparkplugAreaRefusesATemplateMember(t *testing.T) {
+	var buf bytes.Buffer
+	n := newCommandNode(t, &buf, WithWritable("*"), WithIdentityRequired())
+	id := newFakeIdentity(t, auth.Settings{
+		Areas:     map[string][]string{"setpoints": {"SpeedSP"}},
+		Sparkplug: []auth.Grant{{Role: auth.Operator, Areas: []string{"setpoints"}}},
+	})
+	n.SetIdentity(id)
+
+	n.applyCommand("", Payload{Metrics: []Metric{
+		memberCmd("Motor1", "Motor", Metric{Name: "START", Datatype: spb.DataType_Boolean, Value: true}),
+	}})
+
+	if fld(t, motor1(t, n), "START").B {
+		t.Error("Motor1.START written: outside the grant's area")
+	}
+	es := id.onlyBatch(t)
+	if len(es) != 1 || es[0].Target != "Motor1.START" || es[0].Result != audit.ResultRefused ||
+		es[0].Detail["reason"] != authRefusal || es[0].Detail["class"] != audit.ClassAuth {
+		t.Errorf("entries = %+v", es)
+	}
+}
+
+// Only the auth: block's refusals are class auth: the write gate's are
+// coalesced as before.
+func TestSparkplugGateRefusalIsNotClassAuth(t *testing.T) {
+	var buf bytes.Buffer
+	n := newCommandNode(t, &buf, WithWritable("Motor1"), WithIdentityRequired())
+	id := newFakeIdentity(t, auth.Settings{Sparkplug: []auth.Grant{{Role: auth.Operator}}})
+	n.SetIdentity(id)
+	n.applyCommand("", setSpeedSP(99))
+	if es := id.onlyBatch(t); len(es) != 1 || es[0].Detail["class"] != nil {
+		t.Errorf("entries = %+v", es)
 	}
 }

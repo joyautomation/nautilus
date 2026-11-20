@@ -412,10 +412,6 @@ func (p *Policy) Session() time.Duration { return p.session }
 // re-authentication.
 func (p *Policy) Elevation() time.Duration { return p.elevation }
 
-// SparkplugGranted reports whether auth.sparkplug grants Sparkplug
-// commands anything: without it every command write is refused.
-func (p *Policy) SparkplugGranted() bool { return len(p.sparkplug) > 0 }
-
 // HasUser reports whether the block grants the user name anything: a box
 // user it does not name may not sign in.
 func (p *Policy) HasUser(name string) bool { return len(p.users[lower(name)]) > 0 }

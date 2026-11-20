@@ -87,13 +87,14 @@ VAR_EXTERNAL Pump1 : REAL; END_VAR
 END_PROGRAM`,
 		}
 	}
-	const warn = "the auth: block has no sparkplug: grant, so every Sparkplug command write is refused; add `sparkplug: operator`"
-	out, code := checkIn(t, files("auth:\n  token-role: operator\n"))
-	if code != 0 || !strings.Contains(out, warn) {
-		t.Errorf("no grant under auth: (%d):\n%s", code, out)
+	const warn = "sparkplug: grants no write (no grant, or a role without write such as viewer), so every Sparkplug command write is refused; set `sparkplug: operator`"
+	for _, block := range []string{"auth:\n  token-role: operator\n", "auth:\n  sparkplug: viewer\n"} {
+		if out, code := checkIn(t, files(block)); code != 0 || !strings.Contains(out, warn) {
+			t.Errorf("%q: no write under auth: (%d):\n%s", block, code, out)
+		}
 	}
 	for _, block := range []string{"", "auth:\n  sparkplug: operator\n"} {
-		if out, code := checkIn(t, files(block)); code != 0 || strings.Contains(out, "sparkplug: grant") {
+		if out, code := checkIn(t, files(block)); code != 0 || strings.Contains(out, "grants no write") {
 			t.Errorf("%q (%d):\n%s", block, code, out)
 		}
 	}

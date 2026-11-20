@@ -1303,3 +1303,57 @@ func TestTrailingBytesKeepTheTarget(t *testing.T) {
 		t.Fatalf("only %d accepted rows with a body", n)
 	}
 }
+
+// A surface's refusals by the auth: block (class audit.ClassAuth, the
+// Sparkplug node's) are coalesced per target and apart from its other
+// refusals, and a surface does not share HTTP's window from the same
+// address (#1107 review): a host retrying one closed tag every scan must
+// not fold an auth refusal of a sensitive tag into a summary without its
+// target.
+func TestAuthRefusalsKeepTheirOwnWindow(t *testing.T) {
+	srv := New(newTestRuntime(t))
+	now := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+	srv.audit.now = func() time.Time { return now }
+	sp := srv.Surface(audit.SourceSparkplug)
+	refused := func(target string, auth bool) audit.Entry {
+		e := audit.Entry{User: "sparkplug:broker", Action: "tag.write", Target: target, From: "127.0.0.1:1883",
+			Result: audit.ResultRefused, Detail: map[string]any{"reason": "not writable"}}
+		if auth {
+			e.Detail["class"] = audit.ClassAuth
+		}
+		return e
+	}
+	// HTTP's refusals from 127.0.0.1 use up their own window.
+	for i := 0; i < 2*refuseFull; i++ {
+		call(t, srv, "POST", "/api/tags", `{"name":"Level","value":1}`, func(r *http.Request) { r.RemoteAddr = "127.0.0.1:5000" })
+	}
+	// The broker floods one closed tag.
+	for i := 0; i < 2*refuseFull; i++ {
+		sp.RecordBatch([]audit.Entry{refused("Closed", false)})
+	}
+	// The auth refusals of two tags each get their own allowance.
+	sp.RecordBatch([]audit.Entry{refused("Valve_A", true), refused("Valve_B", true)})
+	full := map[string]int{}
+	for _, e := range srv.audit.ring.Recent() {
+		full[e.Source+" "+e.Target]++
+	}
+	if full["sparkplug Closed"] != refuseFull || full["sparkplug Valve_A"] != 1 || full["sparkplug Valve_B"] != 1 {
+		t.Fatalf("journalled in full: %v", full)
+	}
+	// A flood of auth refusals of one tag is summarised WITH its target.
+	for i := 0; i < 2*refuseFull; i++ {
+		sp.RecordBatch([]audit.Entry{refused("Valve_A", true)})
+	}
+	now = now.Add(refuseWindow)
+	srv.audit.tick()
+	var summary *audit.Entry
+	for _, e := range srv.audit.ring.Recent() {
+		if e.Detail["coalesced"] != nil && e.Source == audit.SourceSparkplug && e.Detail["class"] == audit.ClassAuth {
+			e := e
+			summary = &e
+		}
+	}
+	if summary == nil || summary.Target != "Valve_A" || summary.Detail["coalesced"] != 2*refuseFull+1-refuseFull {
+		t.Fatalf("auth summary = %+v", summary)
+	}
+}

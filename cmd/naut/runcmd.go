@@ -1162,11 +1162,12 @@ func authNotice(proj *project.Project) string {
 }
 
 // sparkplugGrantMissing reports a project whose sparkplug.writable opens
-// tags while its auth: block grants Sparkplug commands nothing: every
+// tags while its auth: block grants Sparkplug commands no write anywhere
+// (no auth.sparkplug, or only roles without write, such as viewer): every
 // command write is refused (#708 PR 8b), which a project that had writes
 // before its auth: block (or before 8b) should be told.
 func sparkplugGrantMissing(proj *project.Project) bool {
-	return proj.Auth != nil && len(proj.SparkplugWritable()) > 0 && !proj.Auth.SparkplugGranted()
+	return proj.Auth != nil && len(proj.SparkplugWritable()) > 0 && !proj.Auth.Holds(auth.Sparkplug(""), auth.Write)
 }
 
 // sparkplugIdentity is what naut run hands its Sparkplug node (#708 PR
@@ -1201,8 +1202,8 @@ const authSurfacesNotice = "auth: OPC UA reads are not gated by the auth: block 
 
 // authSparkplugNotice is the line for a project whose sparkplug.writable
 // opens tags while its auth: block grants Sparkplug commands nothing.
-const authSparkplugNotice = "auth: sparkplug.writable opens tags, but the auth: block has no sparkplug: grant, so every Sparkplug command write is refused.\n" +
-	"      To allow them, add `sparkplug: operator` (or a role with areas) under auth:, then restart naut run.\n"
+const authSparkplugNotice = "auth: sparkplug.writable opens tags, but the auth: block's sparkplug: grants no write (no grant, or a role without write such as viewer),\n" +
+	"      so every Sparkplug command write is refused. To allow them, set `sparkplug: operator` (or a role with write, with areas) under auth:, then restart naut run.\n"
 
 // openUsers opens the controller's users file when its auth: block grants
 // a user a role (nil, nil otherwise: no state directory is needed, so a

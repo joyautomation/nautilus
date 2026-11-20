@@ -91,7 +91,7 @@ const labelNote = "a label, not a proof: anyone who can publish to the broker ca
 
 // authRefusal is the reason a command write the auth: block does not
 // allow is refused. It names the fix.
-const authRefusal = "the auth: block grants Sparkplug commands no write on this tag: give auth.sparkplug a role whose areas cover it (sparkplug: operator), then restart naut run"
+const authRefusal = "the auth: block grants Sparkplug commands no write on this tag: give auth.sparkplug a role with write (operator, not viewer) whose areas cover it (sparkplug: operator), then restart naut run"
 
 // noIdentityRefusal is the reason every command write is refused by a node
 // that needs an Identity and was given none.
@@ -124,13 +124,19 @@ func (j *cmdJournal) entry(result, target string) audit.Entry {
 		Detail: map[string]any{"device": j.device, "label": labelNote}}
 }
 
-// refused records a refused write of target.
+// refused records a refused write of target. A refusal by the auth:
+// block is marked class "auth": the recorder coalesces those per target,
+// apart from the write gate's, so a host retrying one closed tag every
+// scan cannot hide an auth refusal on another in a coalesced summary.
 func (j *cmdJournal) refused(target, reason string) {
 	if j == nil {
 		return
 	}
 	e := j.entry(audit.ResultRefused, target)
 	e.Detail["reason"] = reason
+	if reason == authRefusal || reason == noIdentityRefusal {
+		e.Detail["class"] = audit.ClassAuth
+	}
 	j.entries = append(j.entries, e)
 }
 

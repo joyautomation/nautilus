@@ -39,6 +39,12 @@ func TestAuthNotice(t *testing.T) {
 		!strings.Contains(msg, "restart naut run") || !strings.Contains(msg, "OPC UA reads are not gated") {
 		t.Errorf("writable, no grant: %q", msg)
 	}
+	// A grant whose roles cannot write (viewer) allows no write either:
+	// the same warning, naming a role without write (#1107 review).
+	if msg := authNotice(load(sp + "auth:\n  sparkplug: viewer\n")); !strings.Contains(msg, "every Sparkplug command write is refused") ||
+		!strings.Contains(msg, "a role without write") {
+		t.Errorf("writable, viewer grant: %q", msg)
+	}
 	for _, block := range []string{
 		sp + "auth:\n  sparkplug: operator\n",                             // granted
 		"sparkplug:\n  group-id: g\n" + "auth:\n  token-role: operator\n", // nothing writable

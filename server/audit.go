@@ -186,7 +186,13 @@ type journalHealth struct {
 	pending, dropped int
 }
 
-type refusalKey struct{ from, action, result string }
+// refusalKey is a refusal window's key: the client's address, the action
+// and result, and the surface (so a broker on localhost does not share
+// HTTP's window from 127.0.0.1). A refusal of class audit.ClassAuth has
+// its own window per target: a flood of write-gate refusals of one tag
+// must not fold an auth refusal of another tag into a summary that
+// drops its target.
+type refusalKey struct{ from, action, result, source, class, target string }
 
 type refusals struct {
 	since time.Time
@@ -419,7 +425,10 @@ func (a *auditor) keepLocked(e audit.Entry, err error) {
 // admitLocked counts a refusal in its (address, action) window and
 // reports whether it is journalled in full.
 func (a *auditor) admitLocked(e audit.Entry, now time.Time) bool {
-	key := refusalKey{hostOf(e.From), e.Action, e.Result}
+	key := refusalKey{from: hostOf(e.From), action: e.Action, result: e.Result, source: e.Source}
+	if c, _ := e.Detail["class"].(string); c == audit.ClassAuth {
+		key.class, key.target = c, e.Target
+	}
 	w := a.windows[key]
 	if w != nil && now.Sub(w.since) >= refuseWindow {
 		a.closeLocked(key, w)
@@ -427,7 +436,7 @@ func (a *auditor) admitLocked(e audit.Entry, now time.Time) bool {
 	}
 	if w == nil {
 		if len(a.windows) >= coalesceKeys {
-			key.from = "*"
+			key.from, key.target = "*", ""
 			w = a.windows[key]
 		}
 		if w == nil {
@@ -474,11 +483,14 @@ func (a *auditor) closeLocked(k refusalKey, w *refusals) {
 	s := w.last
 	ts := a.now().UTC()
 	s.ID, s.TS = audit.NewID(ts), ts
-	s.Target, s.Before, s.After = "", nil, nil
+	s.Target, s.Before, s.After = k.target, nil, nil
 	s.Detail = map[string]any{
 		"coalesced": n,
 		"since":     w.since.UTC().Format(time.RFC3339Nano),
 		"reason":    w.last.Detail["reason"],
+	}
+	if k.class != "" {
+		s.Detail["class"] = k.class
 	}
 	a.writeLocked(s)
 }

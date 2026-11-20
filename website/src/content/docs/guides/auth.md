@@ -222,11 +222,11 @@ auth:
   sparkplug: [{role: operator, areas: [receiving]}]   # or simply: sparkplug: operator
 ```
 
-**Without `sparkplug:`, every command write is refused.** `Node Control/Rebirth` is not a write: it always works. `naut check` and `naut run` warn when `sparkplug.writable` opens tags and the block has no `sparkplug:` grant. To allow writes, add the grant and restart `naut run`.
+**Without `sparkplug:`, or with only roles that can't write (`viewer`), every command write is refused.** `Node Control/Rebirth` is not a write: it always works. `naut check` and `naut run` warn when `sparkplug.writable` opens tags and `sparkplug:` grants no write. To allow writes, add the grant and restart `naut run`.
 
 **Who sent it is not known.** MQTT does not say who published a command: anyone who can publish to the broker can send one. So `sparkplug:` grants every command the same roles, and the journal names each one `sparkplug:<host>`, where `<host>` is `sparkplug.primary-host` when it is set, else the broker's host. That name is a label, not a proof, and each entry says so. Keep the broker's publish rights to the hosts you trust (its ACLs), and keep the grant to the areas a host should write.
 
-Every command write is journalled, written or refused: action `tag.write`, source `sparkplug`, one entry per metric (a template's members each by their path, `Motor1.Speed`), `from` the broker's host and port. A command's entries are written together, with one fsync. A flood of refused commands is coalesced like any other refusals. Without `auth:`, nothing changes: `sparkplug.writable` alone decides, and nothing is journalled.
+Every command write is journalled, written or refused: action `tag.write`, source `sparkplug`, one entry per metric (a template's members each by their path, `Motor1.Speed`), `from` the broker's host and port. A command's entries are written together, with one fsync. A flood of refused commands is coalesced like any other refusals (5 a minute in full, then a summary), with one difference: refusals by the `auth:` block are counted per tag, apart from the write gate's, so a host retrying one closed tag can't hide an `auth:` refusal of another in a summary. Without `auth:`, nothing changes: `sparkplug.writable` alone decides, and nothing is journalled.
 
 ## A redundant pair
 

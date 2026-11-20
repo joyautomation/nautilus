@@ -69,6 +69,12 @@ const (
 	ResultUnknown = "unknown"
 )
 
+// ClassAuth marks a refusal by the auth: block (Detail["class"]) from a
+// surface that also refuses for other reasons (the Sparkplug write gate):
+// the recorder coalesces such refusals per target and apart from the
+// others, so a flood of one kind cannot hide the other in a summary.
+const ClassAuth = "auth"
+
 // Sources: the surface an action came through.
 const (
 	SourceHMI       = "hmi"
