@@ -395,7 +395,7 @@ func (s *Server) handleSignOut(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			ended = true
-			s.audit.record(audit.Entry{User: "user:" + se.user, Source: clientSource(r), Action: "auth.signout",
+			s.audit.record(audit.Entry{User: se.key(), Source: clientSource(r), Action: "auth.signout",
 				From: s.clientAddr(r), Session: se.hash, Result: audit.ResultOK})
 		}
 	}
@@ -420,8 +420,12 @@ type signInPageData struct {
 	Leader string // on a standby: the leader's sign-in page, when configured
 	// Form is whether the password form is shown: never where sign-in
 	// would refuse it (a password typed over plain HTTP is on the wire
-	// before any refusal).
+	// before any refusal), nor where no local user is granted anything.
 	Form bool
+	// Provider and OIDCStart are the OIDC sign-in's button, when the
+	// controller has one: "Sign in with <Provider>", a link to OIDCStart.
+	Provider  string
+	OIDCStart string
 }
 
 func (s *Server) signInPage(w http.ResponseWriter, r *http.Request, status int, msg, next string) {
@@ -430,14 +434,17 @@ func (s *Server) signInPage(w http.ResponseWriter, r *http.Request, status int, 
 	case s.sessions == nil:
 		d.Notice = "Sign-in is not set up on this controller: its auth: block grants no user a role, or it has no users file."
 	case !s.signInTransport(r):
-		d.Notice = "Password sign-in needs HTTPS. Reach this controller over https:// (server.tls, or a TLS proxy named in server.trusted-proxies)."
+		d.Notice = "Sign-in needs HTTPS. Reach this controller over https:// (server.tls, or a TLS proxy named in server.trusted-proxies)."
 	case standby:
 		d.Notice = "This controller is the standby. Open the leader to sign in."
 		if leader != "" {
 			d.Leader = leader + "/signin"
 		}
 	default:
-		d.Form = true
+		d.Form = s.policy.HasUsers()
+		if s.oidc != nil {
+			d.Provider, d.OIDCStart = s.oidc.Provider(), oidcStartPath+"?next="+url.QueryEscape(next)
+		}
 	}
 	h := w.Header()
 	h.Set("Content-Type", "text/html; charset=utf-8")
@@ -466,6 +473,8 @@ input{box-sizing:border-box;width:100%;padding:.5rem;font:inherit}
 button{margin-top:1rem;width:100%;padding:.6rem;font:inherit;cursor:pointer}
 p{margin:.75rem 0;font-size:.9rem}
 .err{color:#c62828}
+.or{text-align:center;opacity:.7}
+.btn{display:block;box-sizing:border-box;margin-top:1rem;width:100%;padding:.6rem;text-align:center;border:1px solid currentColor;border-radius:2px;color:inherit;text-decoration:none}
 </style></head>
 <body><main>
 <h1>Sign in</h1>
@@ -479,5 +488,6 @@ p{margin:.75rem 0;font-size:.9rem}
 <input id="password" name="password" type="password" autocomplete="current-password" required>
 <button type="submit">Sign in</button>
 </form>{{end}}
+{{if .OIDCStart}}{{if .Form}}<p class="or">or</p>{{end}}<a class="btn" href="{{.OIDCStart}}">Sign in with {{.Provider}}</a>{{end}}
 </main></body></html>
 `))

@@ -488,8 +488,8 @@ func TestSessionsPerUserAreBounded(t *testing.T) {
 	if _, ok := ss.lookup(other); !ok {
 		t.Error("another user's session ended")
 	}
-	if n := ss.endUser("akhan"); n != maxUserSessions || len(ended) != 1+maxUserSessions {
-		t.Errorf("endUser: %d ended, %d told", n, len(ended))
+	if n := ss.endPrincipal("user:akhan"); n != maxUserSessions || len(ended) != 1+maxUserSessions {
+		t.Errorf("endPrincipal: %d ended, %d told", n, len(ended))
 	}
 }
 
@@ -619,7 +619,7 @@ func TestDemotedLeaderEndsItsSessions(t *testing.T) {
 			done := make(chan struct{})
 			go func() { srv.Run(ctx); close(done) }()
 			deadline := time.Now().Add(5 * time.Second)
-			for srv.sessions.endUser("nobody"); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+			for srv.sessions.endPrincipal("user:nobody"); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
 				if _, ok := srv.sessions.lookup(c.Value); !ok {
 					break
 				}
@@ -647,7 +647,7 @@ func TestDemotedLeaderEndsItsSessions(t *testing.T) {
 func TestEntryKeepsTheAuthorizedUser(t *testing.T) {
 	srv, _, _ := patServer(t)
 	c := signIn(t, srv, "akhan")
-	srv.unforceAllChecked = func() { srv.sessions.endUser("akhan") }
+	srv.unforceAllChecked = func() { srv.sessions.endPrincipal("user:akhan") }
 	rec := call(t, srv, "POST", "/api/forces/clear", "", withCookie(c.Value), ownOrigin)
 	e := srv.audit.ring.Recent()[0]
 	if rec.Code >= 400 || e.Action != "force.clear-all" || e.User != "user:akhan" || e.Session != sessionHash(c.Value) {

@@ -15,6 +15,7 @@ package auth
 import (
 	"fmt"
 	"slices"
+	"sort"
 	"strings"
 )
 
@@ -108,12 +109,17 @@ const (
 	KindUser      = "user"       // a signed-in user or a personal access token (#708 PR 5)
 	KindOPCUACert = "opcua-cert" // an OPC UA client certificate the block maps to roles (#708 PR 8a)
 	KindSparkplug = "sparkplug"  // a Sparkplug command (NCMD/DCMD), named by its host: a label, not a proof (#708 PR 8b)
+	KindOIDC      = "oidc"       // a browser signed in at the auth: block's OpenID Connect provider (#708 PR 6)
 )
 
 // Principal is who a request acts as.
 type Principal struct {
 	Kind string
 	Name string // the service token's or the user's name
+	// groups are an OIDC principal's group ids, from its ID token, sorted
+	// and joined by NUL (a string keeps a Principal comparable). Only
+	// OIDC sets them, and only auth.oidc.groups reads them.
+	groups string
 }
 
 // Anonymous is the principal of a request with no credential.
@@ -139,14 +145,37 @@ func OPCUACert(name string) Principal { return Principal{Kind: KindOPCUACert, Na
 // Sparkplug command has the grants auth.sparkplug gives, whatever the name.
 func Sparkplug(name string) Principal { return Principal{Kind: KindSparkplug, Name: name} }
 
+// OIDC is the principal of a browser signed in at the OIDC provider:
+// name is its username claim (ValidOIDCName, lowercased), groups the
+// group ids its ID token carried. Its grants are auth.oidc.users' for the
+// name plus auth.oidc.groups' for each id, never auth.users': an OIDC
+// name and a local user of the same name are two people.
+func OIDC(name string, groups []string) Principal {
+	gs := slices.Clone(groups)
+	sort.Strings(gs)
+	gs = slices.Compact(gs)
+	return Principal{Kind: KindOIDC, Name: name, groups: strings.Join(gs, "\x00")}
+}
+
+// Groups are an OIDC principal's group ids, sorted; nil for any other.
+func (p Principal) Groups() []string {
+	if p.groups == "" {
+		return nil
+	}
+	return strings.Split(p.groups, "\x00")
+}
+
 // String is how the journal names the principal: "anonymous", "token",
-// "token:<name>", "user:<name>", "opcua-cert:<name>" or "sparkplug:<name>".
+// "token:<name>", "user:<name>", "oidc:<name>", "opcua-cert:<name>" or
+// "sparkplug:<name>".
 func (p Principal) String() string {
 	switch p.Kind {
 	case KindService:
 		return "token:" + p.Name
 	case KindUser:
 		return "user:" + p.Name
+	case KindOIDC:
+		return "oidc:" + p.Name
 	case KindOPCUACert:
 		return "opcua-cert:" + p.Name
 	case KindSparkplug:
@@ -184,6 +213,32 @@ func validTokenName(name string) error {
 	for _, r := range name {
 		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_') {
 			return fmt.Errorf("auth: service token %q: use letters, digits and '_' (it names NAUTILUS_TOKEN_<NAME>)", name)
+		}
+	}
+	return nil
+}
+
+// MaxOIDCName is the longest OIDC name (a username claim) taken.
+const MaxOIDCName = 128
+
+// ValidOIDCName checks an OIDC name, the username claim's value once
+// lowercased: 1 to MaxOIDCName ASCII letters, digits and '-', '_', '.',
+// '@', '+' and an apostrophe, starting with a letter or digit. That covers user
+// principal names and e-mail addresses, and keeps out what a journal
+// reader could be fooled by: spaces, control characters, look-alike
+// letters from other scripts, and ':'.
+func ValidOIDCName(name string) error {
+	if name == "" {
+		return fmt.Errorf("an empty OIDC name")
+	}
+	if len(name) > MaxOIDCName {
+		return fmt.Errorf("an OIDC name longer than %d characters", MaxOIDCName)
+	}
+	for i, r := range name {
+		ok := r >= 'a' && r <= 'z' || r >= '0' && r <= '9' ||
+			i > 0 && strings.ContainsRune("-_.@+'", r)
+		if !ok {
+			return fmt.Errorf("OIDC name %q: it may hold only lowercase letters, digits and - _ . @ + ' (and start with a letter or digit)", name)
 		}
 	}
 	return nil

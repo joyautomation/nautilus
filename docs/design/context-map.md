@@ -87,7 +87,13 @@ break one changes this section first and says why.
   module. `auth/users` (the users file on the box: argon2id password hashes
   and personal access tokens, #708) imports only the standard library and
   `golang.org/x/crypto` (with the `golang.org/x/sys/cpu` it needs), the one
-  module the maintainer approved for it. `retain` imports only `internal/k8sapi`. `quorum` and its subtree
+  module the maintainer approved for it. `auth/oidc` (sign-in at an OpenID
+  Connect provider, #708 PR 6) imports only the standard library,
+  `github.com/coreos/go-oidc/v3`, `golang.org/x/oauth2` and the
+  `github.com/go-jose/go-jose/v4` go-oidc needs, and only the CLI imports
+  it: `naut run` hands it to the server through a seam interface
+  (`server.OIDC`), so the server, the runtime, `acceptance`, the languages
+  and the wasm build never link those modules. `retain` imports only `internal/k8sapi`. `quorum` and its subtree
   import only each other, and only `leader`, the CLI and Verification import
   them: nothing else learns the vote protocol.
 - `internal/fence` (how a write leaves in time on a redundant pair,

@@ -3,6 +3,7 @@ package auth
 import (
 	"fmt"
 	"path"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -23,9 +24,18 @@ type Settings struct {
 	// Roles are custom roles, each inheriting a built-in or another
 	// custom role and adding or removing permissions.
 	Roles map[string]RoleDef
-	// Users are the local and OIDC users' grants (credentials are never
-	// here).
+	// Users are the local users' grants (credentials are never here).
 	Users map[string][]Grant
+	// OIDC says the block signs browsers in at an OpenID Connect provider
+	// (auth.oidc, #708 PR 6). OIDCGroups grant by group id (an Entra object
+	// id, a Keycloak group path: what the provider's groups claim carries,
+	// matched exactly, never a display name); OIDCUsers grant by name (the
+	// username claim, matched ignoring case, and pinned to one account at
+	// the provider on its first sign-in). An OIDC sign-in gets both, never
+	// a local user's grants.
+	OIDC       bool
+	OIDCGroups map[string][]Grant
+	OIDCUsers  map[string][]Grant
 	// ServiceTokens are named tokens for scripts and services, each with
 	// its grants, like a user's. Their secrets are not here either.
 	ServiceTokens map[string][]Grant
@@ -105,6 +115,10 @@ type Policy struct {
 	certThumb map[string]string  // lowercase thumbprint to a certificate's name
 	certSubj  map[string]string  // subject to a certificate's name
 	sparkplug []Grant            // auth.sparkplug's grants, for every Sparkplug command
+	oidc      bool
+	oidcGroup map[string][]Grant // auth.oidc.groups, by group id exactly as given
+	oidcUsers map[string][]Grant // auth.oidc.users, by lowercased name
+	warnings  []string
 	session   time.Duration
 	elevation time.Duration
 }
@@ -115,7 +129,8 @@ type Policy struct {
 func Compile(c Settings) (*Policy, error) {
 	p := &Policy{roles: map[string]map[string]bool{}, areas: map[string][]string{},
 		services: map[string][]Grant{}, users: map[string][]Grant{},
-		certs: map[string][]Grant{}, certThumb: map[string]string{}, certSubj: map[string]string{}}
+		certs: map[string][]Grant{}, certThumb: map[string]string{}, certSubj: map[string]string{},
+		oidcGroup: map[string][]Grant{}, oidcUsers: map[string][]Grant{}}
 	for name, set := range builtinRoles {
 		p.roles[name] = set
 	}
@@ -208,8 +223,69 @@ func Compile(c Settings) (*Policy, error) {
 		}
 		p.sparkplug = sp["sparkplug"]
 	}
+	if err := p.compileOIDC(c); err != nil {
+		return nil, err
+	}
 	return p, nil
 }
+
+// compileOIDC checks auth.oidc's grants: names as ValidOIDCName says,
+// group ids as given (one with a space is warned about: it looks like a
+// display name, which a groups claim never carries and which anyone who
+// may name a group could copy).
+func (p *Policy) compileOIDC(c Settings) error {
+	if !c.OIDC {
+		if len(c.OIDCGroups) > 0 || len(c.OIDCUsers) > 0 {
+			return fmt.Errorf("auth: OIDC grants without an OIDC provider")
+		}
+		return nil
+	}
+	p.oidc = true
+	oidcName := func(n string) error {
+		if err := ValidOIDCName(n); err != nil {
+			return fmt.Errorf("auth: oidc.users: %v", err)
+		}
+		return nil
+	}
+	if err := p.compileGrants("oidc user", oidcName, c.OIDCUsers, p.oidcUsers); err != nil {
+		return err
+	}
+	ids := make([]string, 0, len(c.OIDCGroups))
+	for id := range c.OIDCGroups {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		if strings.TrimSpace(id) == "" || strings.ContainsFunc(id, func(r rune) bool { return r < ' ' || r == 0x7f }) {
+			return fmt.Errorf("auth: oidc.groups: a group id that is empty or holds a control character")
+		}
+		// Checked as grants under a placeholder name, then kept under the
+		// id exactly: compileGrants lowercases its keys.
+		tmp := map[string][]Grant{}
+		if err := p.compileGrants("oidc group", func(string) error { return nil },
+			map[string][]Grant{"g": c.OIDCGroups[id]}, tmp); err != nil {
+			return fmt.Errorf("%s (group %q)", err, id)
+		}
+		p.oidcGroup[id] = tmp["g"]
+		if strings.ContainsRune(id, ' ') {
+			p.warnings = append(p.warnings, fmt.Sprintf("auth.oidc.groups %q holds a space: it looks like a group's display name, but a group is matched by its id (an Entra object id, a Keycloak group path), as the ID token's groups claim carries it", id))
+		}
+	}
+	return nil
+}
+
+// Warnings are what Compile found odd but not wrong, for naut check and
+// naut run to print.
+func (p *Policy) Warnings() []string { return slices.Clone(p.warnings) }
+
+// OIDC reports whether the block signs browsers in at an OpenID Connect
+// provider (auth.oidc).
+func (p *Policy) OIDC() bool { return p.oidc }
+
+// HasGrants reports whether the block grants pr anything at all: an OIDC
+// sign-in that none of auth.oidc.users and auth.oidc.groups grants a role
+// is refused.
+func (p *Policy) HasGrants(pr Principal) bool { return len(p.grants(pr)) > 0 }
 
 // compileCerts checks opcua-certificates: each a valid name, matched by
 // exactly one of a full thumbprint (40 hex digits) or a subject, no two
@@ -386,6 +462,15 @@ func (p *Policy) grants(pr Principal) []Grant {
 		return p.certs[lower(pr.Name)]
 	case KindSparkplug:
 		return p.sparkplug
+	case KindOIDC:
+		if !p.oidc {
+			return nil
+		}
+		gs := slices.Clone(p.oidcUsers[lower(pr.Name)])
+		for _, id := range pr.Groups() {
+			gs = append(gs, p.oidcGroup[id]...)
+		}
+		return gs
 	}
 	return nil
 }

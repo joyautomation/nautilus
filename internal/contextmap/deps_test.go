@@ -5,6 +5,7 @@
 package contextmap
 
 import (
+	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -102,6 +103,11 @@ func rules(u universe) []rule {
 			from: []string{"devbind"},
 			to:   []string{"runtime", "server", "alarm", "acceptance", "internal/project", "internal/lsp", "virtdev", "cmd"},
 			why:  "devbind derives a device row's type, tags and driver manifests; the manifest composes it, so it never reaches into the runtime side",
+		},
+		{
+			from: u.allBut("cmd", "auth/oidc"),
+			to:   []string{"auth/oidc"},
+			why:  "only the CLI wires OIDC sign-in (naut run hands auth/oidc to the server as server.OIDC), so nothing else links go-oidc and x/oauth2",
 		},
 		{
 			from: u.allBut("cmd", "virtdev"),
@@ -214,6 +220,44 @@ var stdlibOnly = []string{"audit"}
 // from golang.org/x/crypto (docs/design/identity-audit.md §2, question 4).
 var moduleAllowed = map[string][]string{
 	"auth/users": {"golang.org/x/crypto/", "golang.org/x/sys/cpu"},
+	// auth/oidc: sign-in at an OpenID Connect provider (#708 PR 6,
+	// identity-audit.md §3, question 4).
+	"auth/oidc": {"github.com/coreos/go-oidc/v3/", "golang.org/x/oauth2", "github.com/go-jose/go-jose/v4"},
+}
+
+// oidcModules are the modules only auth/oidc may link, and oidcFree the
+// packages whose builds must not (the operator surface, the runtime, the
+// languages, the SDK's acceptance package and the wasm playground): the
+// seam is server.OIDC, and naut run wires it.
+var (
+	oidcModules = []string{"github.com/coreos/go-oidc", "golang.org/x/oauth2", "github.com/go-jose/go-jose"}
+	oidcFree    = []string{"./server", "./runtime", "./acceptance", "./lang/...", "./cmd/naut-wasm"}
+)
+
+func TestOIDCModulesStayInAuthOIDC(t *testing.T) {
+	out, err := exec.Command("go", "env", "GOMOD").Output()
+	if err != nil {
+		t.Fatalf("go env GOMOD: %v", err)
+	}
+	root := filepath.Dir(strings.TrimSpace(string(out)))
+	for _, pkg := range oidcFree {
+		cmd := exec.Command("go", "list", "-deps", "-f", "{{.ImportPath}}", pkg)
+		cmd.Dir = root
+		if strings.HasPrefix(pkg, "./cmd/naut-wasm") {
+			cmd.Env = append(os.Environ(), "GOOS=js", "GOARCH=wasm")
+		}
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("go list -deps %s: %v", pkg, err)
+		}
+		for _, imp := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			for _, m := range oidcModules {
+				if strings.HasPrefix(imp, m) {
+					t.Errorf("%s depends on %s: only auth/oidc links the OIDC modules (docs/design/context-map.md §2)", pkg, imp)
+				}
+			}
+		}
+	}
 }
 
 func TestModuleAllowedPackages(t *testing.T) {

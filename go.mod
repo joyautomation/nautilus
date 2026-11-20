@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	github.com/charmbracelet/huh v1.0.0
+	github.com/coreos/go-oidc/v3 v3.17.0
 	github.com/dop251/goja v0.0.0-20261001165353-dc0ad5d0dc92
 	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/evanw/esbuild v0.28.2
@@ -14,6 +15,7 @@ require (
 	github.com/lib/pq v1.10.9
 	github.com/mochi-mqtt/server/v2 v2.7.9
 	golang.org/x/crypto v0.47.0
+	golang.org/x/oauth2 v0.34.0
 	golang.org/x/sys v0.40.0
 	golang.org/x/term v0.39.0
 	google.golang.org/grpc v1.80.0
@@ -36,6 +38,7 @@ require (
 	github.com/dlclark/regexp2/v2 v2.8.1 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f // indirect
+	github.com/go-jose/go-jose/v4 v4.1.3 // indirect
 	github.com/go-sourcemap/sourcemap v2.1.3+incompatible // indirect
 	github.com/google/pprof v0.0.0-20230207041349-798e818bf904 // indirect
 	github.com/lucasb-eyer/go-colorful v1.2.0 // indirect
