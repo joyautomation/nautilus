@@ -546,7 +546,7 @@ func (v *Voter) Handle(now Instant, r Request) (*Persist, []Reply) {
 	// Grant. The promise runs from when the request was RECEIVED.
 	v.promiseUntil = now.Add(v.lease)
 	v.grantNonce = r.Nonce
-	if r.Term != v.st.Promised || r.From != v.st.GrantedTo || v.st.Lease != v.lease || r.Nonce != v.st.GrantNonce {
+	if r.Term != v.st.Promised || r.From != v.st.GrantedTo || v.st.Lease != v.lease || (r.Nonce != v.st.GrantNonce && !mut("grant_nonce_unwritten")) {
 		// Past the restart wait every promise made under a longer lease
 		// has run out, so the state now records this voter's own. The
 		// grant's boot nonce goes with it (one term, one boot).

@@ -353,7 +353,10 @@ redundancy:
     - **A term goes to one boot of a name.** A voter never grants a term it granted to one
       boot of a name to another boot of it, even once that promise has run out and across
       its own restart: the other boot asks above it. The grant's boot nonce is in the state
-      file (`VoterState.GrantNonce`, format 5; a format-4 file reads with none). Otherwise a
+      file (`VoterState.GrantNonce`, format 5; a format-4 file reads with none, and the
+      first renewal under its standing promise writes the nonce). A downgrade below format 5
+      is loud: an older controller moves the state aside and starts uncommissioned, and an
+      older witness refuses to start without `--rebuild`. Otherwise a
       clone and its original could each hold the same term (I4, found in the rich clone
       schedules; the restart case by the #1094 review).
     - **A voter yields its own round** (`YieldTo`) only to a request it would grant.

@@ -403,8 +403,13 @@ copies** of the name.
   leader costs no takeover. If a controller restarts or the leader's scans
   hang while the clone runs, the other controller takes over within a
   takeover's time.
-- **A clone plus a network fault** (a cut link) can leave the pair with
-  no leader until the clone is stopped or the fault heals.
+- **A clone plus a cut on one of the pair's own links** (A–B, A–witness
+  or B–witness) can leave the pair with no leader until the clone is
+  stopped or the cut heals. A cut on the clone's own links can do worse.
+  The original cut from the witness and the clone cut from the other
+  controller gave two leaders in 3 of 400 simulated runs.
+  That case is measured and is fixed by the follow-up to #1029 (see the
+  danger box below).
 
 With no leader, no controller drives outputs. The drivers stop asserting
 them, so each device's communication watchdog sees the silence and puts

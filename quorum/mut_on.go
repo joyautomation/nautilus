@@ -70,6 +70,7 @@ var Mutations = []string{
 	"rule_b_counts_own_boot",      // rule (b) counts a duplicate for a relay from the very boot it refuses (a reordered frame: a false alarm)
 	"same_term_other_boot",        // a voter grants a term it granted to one boot of a name to another boot of it (#1029 step 1)
 	"grant_nonce_volatile",        // the grant's boot nonce is not reloaded at start, so a restarted voter gives a term to a second boot of a name (#1094 review)
+	"grant_nonce_unwritten",       // a renewal under a standing promise from a format-4 file never writes the nonce, so it is lost at the next restart (#1094 re-check)
 	"retry_after_refusal_only",    // a refused campaign whose own grant came back last waits out a lease (#1029 layer 2)
 	// The driver's (quorum/node, #710 PR 3a): switched on there, listed
 	// here so this init accepts them.

@@ -427,3 +427,22 @@ func TestATermStaysOneBootsAcrossARestart(t *testing.T) {
 		t.Fatal("after a restart, the boot term 30 was granted to was refused it")
 	}
 }
+
+// An upgrade from a format-4 state file: a standing promise with no
+// grant nonce. The first renewal under it writes the nonce (a Persist),
+// so after the next restart the term is still that boot's alone (the
+// #1094 re-check).
+func TestAnUpgradedVoterWritesTheNonceOnARenewal(t *testing.T) {
+	v4 := VoterState{Promised: 30, GrantedTo: "B", Incarnation: 9, Lease: lease} // GrantNonce 0
+	v := NewVoter("A", lease, v4, 0)
+	now := at(2 * lease) // past the restart wait
+	p, _ := v.Handle(now, Request{From: "B", Term: 30, Nonce: 0xC, ID: 1, Renewal: true})
+	if p == nil || p.State.GrantNonce != 0xC {
+		t.Fatalf("the first grant under a format-4 promise wrote %+v, want the nonce 0xC", p)
+	}
+	v.Persisted(p.Seq, true)
+	r := NewVoter("A", lease, p.State, now)
+	if grant(t, r, now.Add(3*lease), Request{From: "B", Term: 30, Nonce: 0xB, ID: 2}) {
+		t.Fatal("after the upgrade and a restart, term 30 went to a second boot of B")
+	}
+}
