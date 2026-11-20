@@ -214,6 +214,10 @@ func TestTagsYAMLRolesAndSkip(t *testing.T) {
 			t.Errorf("tag file missing:\n  %s\ngot:\n%s", want, body)
 		}
 	}
+	if !strings.Contains(body, "__Online, role: input, type: BOOL") ||
+		!strings.Contains(body, "__Outages, role: input, type: DINT") {
+		t.Errorf("per-source __Online/__Outages companions missing (#1074):\n%s", body)
+	}
 	if strings.Contains(body, "name: TC_B_") {
 		t.Errorf("skip glob ignored:\n%s", body)
 	}

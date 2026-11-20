@@ -185,7 +185,9 @@ format side by side.
 
 Each source gets a driver-synthesized `<source>__Online` BOOL input, true
 while the device answers. It is present from `Start` — before any poll
-has landed — so interlock logic can gate on it safely:
+has landed — so interlock logic can gate on it safely. `naut modbus import`
+writes `<source>__Online` and its `<source>__Outages` DINT counter into
+`tags/modbus.yaml`, so a program can name them without declaring them:
 
 ```
 GasAlarm := GAS__Online AND GAS_CH1 > 250.0;
