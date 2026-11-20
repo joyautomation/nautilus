@@ -242,8 +242,8 @@ func TestADuplicatedNameGetsNoNewGrant(t *testing.T) {
 	if grant(t, v, now.Add(lease/8), Request{From: "A", Term: 4, Nonce: 0xC, ID: 1}) {
 		t.Fatal("granted A's second boot while the first holds a running promise")
 	}
-	if n, _ := v.Duplicates(); n == 0 {
-		t.Fatal("no duplicate counted")
+	if n, _ := v.Duplicates(); n != 0 {
+		t.Fatal("a duplicate counted before the two boots were confirmed (#1029 3c: the alarm waits for the mark)")
 	}
 	if !grant(t, v, now.Add(lease/4), Request{From: "A", Term: 3, Nonce: 0xA, ID: 2, Renewal: true}) {
 		t.Fatal("the incumbent's running promise didn't renew")

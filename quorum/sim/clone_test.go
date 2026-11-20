@@ -185,7 +185,7 @@ func richCloneRun(seed uint64) Options {
 	// Within the claim: no split separates the clone from its original. A
 	// cut or restart that would leave the original unable to reach both
 	// other voters while the clone runs becomes a delay instead
-	// (TestMeasureCloneSplit is that case).
+	// (TestCloneSplitNoTwoLeaders is that case).
 	for i := 1; i < len(o.Faults); i++ {
 		if isolatesWithClone(o, i) {
 			orig := original(c)
@@ -273,9 +273,8 @@ func cloneRace(seed uint64, mode string) Options {
 	return o
 }
 
-// TestMeasureCloneSplit measures what #1029 step 1 does not close: cuts
-// that keep a voter from hearing both copies of a name while a clone runs.
-// Clone-link cuts are measured, not gated (no pass/fail test draws them).
+// splitShapes are the cuts that keep a voter from hearing both copies of
+// a name while a clone runs, the case #1029 step 1 left open:
 //   - The two splits: the original with the witness and the clone with
 //     the peer ({A, W} | {B, clone}), or the mirror ({A, B} | {clone, W}).
 //     Once the other boot ages out (a lease), no voter on either side
@@ -286,39 +285,107 @@ func cloneRace(seed uint64, mode string) Options {
 //     silence, so the overlap can also start when a split HEALS, the
 //     first copy back getting a grant: {A-B, clone-B, clone-W, B-W},
 //     {A-W, clone-B, clone-W, B-W}, {A-B, A-W, clone-B}, {A-W, clone-B}.
-//
-// The sticky confirmed-duplicate mark (3c) is to bring all of them to no
-// leader rather than two. It logs the rates; skipped unless
-// QUORUM_MEASURE_CLONE_SPLIT=<n>.
-//
-//	QUORUM_MEASURE_CLONE_SPLIT=2000 go test ./quorum/sim -run '^TestMeasureCloneSplit$' -v
-func TestMeasureCloneSplit(t *testing.T) {
-	n, _ := strconv.Atoi(os.Getenv("QUORUM_MEASURE_CLONE_SPLIT"))
-	if n <= 0 {
-		t.Skip("set QUORUM_MEASURE_CLONE_SPLIT=<runs>")
+func splitShapes() []struct {
+	name string
+	run  func(seed uint64) Options
+} {
+	out := []struct {
+		name string
+		run  func(seed uint64) Options
+	}{
+		{"original with the witness", func(seed uint64) Options { return cloneSplit(seed, false) }},
+		{"original with its peer", func(seed uint64) Options { return cloneSplit(seed, true) }},
 	}
-	for _, shape := range []string{"original with the witness", "original with its peer"} {
-		both := 0
-		for seed := uint64(1); seed <= uint64(n); seed++ {
-			o := cloneSplit(seed, shape == "original with its peer")
-			if overlap(Check(Run(o), cloneChecks(o))) {
-				both++
-			}
-		}
-		t.Logf("a split separating a running clone from its original (%s): two leaders in %d of %d runs", shape, both, n)
+	for _, sh := range reviewSplitShapes {
+		cuts := sh.cuts
+		out = append(out, struct {
+			name string
+			run  func(seed uint64) Options
+		}{"clone of A, cuts " + sh.name, func(seed uint64) Options { return reviewSplit(seed, cuts) }})
 	}
-	for _, shape := range reviewSplitShapes {
-		both, first := 0, uint64(0)
-		for seed := uint64(1); seed <= uint64(n); seed++ {
-			o := reviewSplit(seed, shape.cuts)
-			if overlap(Check(Run(o), cloneChecks(o))) {
-				both++
-				if first == 0 {
-					first = seed
+	return out
+}
+
+// splitSeeds is how many seeds each split test runs per shape: 200, or
+// QUORUM_CLONE_SPLIT_SEEDS (the nightly runs more).
+func splitSeeds() uint64 {
+	if v, err := strconv.Atoi(os.Getenv("QUORUM_CLONE_SPLIT_SEEDS")); err == nil && v > 0 {
+		return uint64(v)
+	}
+	return 200
+}
+
+// Every voter that heard both copies running marks the name for good
+// (#1029 3c), so a split that later separates them, or heals one copy
+// back first, leaves no voter granting the name anew on either side: no
+// two leaders in any shape, and every oracle but I7 holds (cloneChecks:
+// a leader is back once the cut has healed and the clone is gone).
+// Before the mark, two leaders in every run of both splits and in 126,
+// 306, 58 and 13 of 2000 of the heal shapes. The cost, stated in the
+// guide: during the split itself usually NOBODY leads (both splits and
+// the two shapes that cut B from W). dup_mark_off turns it red.
+func TestCloneSplitNoTwoLeaders(t *testing.T) {
+	n := splitSeeds()
+	for _, sh := range splitShapes() {
+		failing := 0
+		for seed := uint64(1); seed <= n; seed++ {
+			o := sh.run(seed)
+			if vs := Check(Run(o), cloneChecks(o)); len(vs) > 0 {
+				failing++
+				if failing <= 3 {
+					t.Errorf("%s, seed %d: %v", sh.name, seed, vs[0])
 				}
 			}
 		}
-		t.Logf("clone of A, cuts %s: two leaders in %d of %d runs (first seed %d)", shape.name, both, n, first)
+		if failing > 0 {
+			t.Errorf("%s: %d of %d failing", sh.name, failing, n)
+		}
+	}
+}
+
+// A voter that restarts inside such a split forgets its marks (they are
+// in memory). One restart can't give two leaders: each side of a split
+// holds one of the two voters other than the clone's original, and only
+// the side whose voter forgot can grant the name anew. Both restarting
+// can: then the clone's own candidate is what keeps it quiet, holding on
+// to the far voter's last "marked" (Candidate.NoteMark), which no reply
+// can clear across the cut. Without that hold, two leaders in all but one
+// of 1000 runs of each split. The case left open (both voters AND the
+// clone restart inside one split) is why durable marks stay on the list
+// before experimental is lifted. marked_still_campaigns turns it red.
+func TestCloneSplitVoterRestarts(t *testing.T) {
+	n := splitSeeds()
+	for _, mirror := range []bool{false, true} {
+		for _, who := range []string{"peer", "witness", "both"} {
+			failing := 0
+			for seed := uint64(1); seed <= n; seed++ {
+				o := cloneSplit(seed, mirror)
+				c := o.Faults[0].Node
+				cut := o.Faults[1].At
+				peer := peerOf(original(c))
+				r := rand.New(rand.NewPCG(seed, 0x72737472))
+				down := cut + lease + time.Duration(r.Int64N(int64(4*lease)))
+				switch who {
+				case "peer":
+					o.Faults = append(o.Faults, Fault{Kind: Crash, At: down, For: 100 * ms, Node: peer})
+				case "witness":
+					o.Faults = append(o.Faults, Fault{Kind: Crash, At: down, For: 100 * ms, Node: W})
+				default:
+					o.Faults = append(o.Faults,
+						Fault{Kind: Crash, At: down, For: 100 * ms, Node: W},
+						Fault{Kind: Crash, At: down + lease/3, For: 100 * ms, Node: peer})
+				}
+				if overlap(Check(Run(o), cloneChecks(o))) {
+					failing++
+					if failing <= 3 {
+						t.Errorf("mirror %v, %s restarts, seed %d: two leaders", mirror, who, seed)
+					}
+				}
+			}
+			if failing > 0 {
+				t.Errorf("mirror %v, %s restarts: two leaders in %d of %d", mirror, who, failing, n)
+			}
+		}
 	}
 }
 
@@ -373,4 +440,223 @@ func cloneSplit(seed uint64, mirror bool) Options {
 	}
 	o.Until = at + 12*lease + bound + 6*lease
 	return o
+}
+
+// swapAB mirrors a schedule's controllers: A and B, CA and CB.
+func swapAB(a Addr) Addr {
+	switch a {
+	case A:
+		return B
+	case B:
+		return A
+	case CA:
+		return CB
+	case CB:
+		return CA
+	}
+	return a
+}
+
+// restartShape is one split a running clone can meet, with the clone it
+// runs: the six of splitShapes, the four heal shapes mirrored to a clone
+// of B, and the #1113 review's two (a clone that reaches only the witness
+// while its original loses the witness, and the mirror through the peer).
+type restartShape struct {
+	name string
+	run  func(seed uint64) Options
+}
+
+func restartShapes() []restartShape {
+	var out []restartShape
+	for _, sh := range splitShapes() {
+		out = append(out, restartShape{sh.name, sh.run})
+	}
+	for _, sh := range reviewSplitShapes {
+		cuts := sh.cuts
+		out = append(out, restartShape{"clone of B, cuts " + sh.name + " mirrored", func(seed uint64) Options {
+			o := reviewSplit(seed, cuts)
+			for i := range o.Faults {
+				f := &o.Faults[i]
+				f.Node, f.From, f.To = swapAB(f.Node), swapAB(f.From), swapAB(f.To)
+			}
+			return o
+		}})
+	}
+	only := func(name string, viaPeer bool) restartShape {
+		return restartShape{name, func(seed uint64) Options {
+			o := cloneSplit(seed, !viaPeer)
+			c := o.Faults[0].Node
+			orig, peer := original(c), peerOf(original(c))
+			at, cut := o.Faults[0].At, o.Faults[1].At
+			never, lose := peer, W // the clone never reaches never; the original loses lose
+			if viaPeer {
+				never, lose = W, peer
+			}
+			o.Faults = []Fault{
+				o.Faults[0],
+				{Kind: Cut, At: at - lease, For: 14 * lease, From: c, To: never, Both: true},
+				{Kind: Cut, At: cut, For: 8 * lease, From: orig, To: lose, Both: true},
+			}
+			return o
+		}}
+	}
+	return append(out, only("clone reaches only the witness, the original loses it", false),
+		only("clone reaches only the peer, the original loses it", true))
+}
+
+// withRestarts adds a restart of each member named, one to five leases
+// into the split (the clone's original, the clone, the original's peer,
+// the witness), a third of a lease apart.
+func withRestarts(o Options, seed uint64, who ...string) Options {
+	c := o.Faults[0].Node
+	var cut time.Duration // the split: the latest cut to start
+	for _, f := range o.Faults {
+		if f.Kind == Cut {
+			cut = max(cut, f.At)
+		}
+	}
+	at := map[string]Addr{"original": original(c), "clone": c, "peer": peerOf(original(c)), "witness": W}
+	r := rand.New(rand.NewPCG(seed, 0x72657374))
+	down := cut + lease + time.Duration(r.Int64N(int64(4*lease)))
+	for i, w := range who {
+		o.Faults = append(o.Faults, Fault{Kind: Crash, At: down + time.Duration(i)*lease/3, For: 50*ms + time.Duration(r.Int64N(int64(lease/4))), Node: at[w]})
+	}
+	o.Until = max(o.Until, down+2*lease+bound+6*lease)
+	return o
+}
+
+// restartSeeds is how many seeds each (shape, restart) cell runs: 100, or
+// QUORUM_CLONE_RESTART_SEEDS.
+func restartSeeds() uint64 {
+	if v, err := strconv.Atoi(os.Getenv("QUORUM_CLONE_RESTART_SEEDS")); err == nil && v > 0 {
+		return uint64(v)
+	}
+	return 100
+}
+
+// No SINGLE restart inside a split with a clone gives two leaders: every
+// split shape (the six, the heal shapes mirrored to a clone of B, and the
+// #1113 review's clone that reaches only one voter), each member restarted
+// once inside the split, on the sim where the peer's requests reach the
+// clone too. A restarted voter forgets its marks; what holds then:
+//   - rule (i): a hold ends only on an unmarked word from the very voter
+//     boot that set it, so the clone stays quiet though the voter that
+//     marked it restarted and forgot (hold_released_by_any_boot);
+//   - rule (ii): a held controller's voter makes no new grant to the other
+//     controller, so the peer, restarted and forgetting its own mark,
+//     can't lead on the clone's copy of the original's voter. No single
+//     restart needs it alone (TestHeldVoterGrantsNothingInADoubleRestart
+//     pins it).
+func TestCloneSplitSingleRestarts(t *testing.T) {
+	n := restartSeeds()
+	for _, sh := range restartShapes() {
+		for _, who := range []string{"original", "clone", "peer", "witness"} {
+			failing := 0
+			for seed := uint64(1); seed <= n; seed++ {
+				o := withRestarts(sh.run(seed), seed, who)
+				if overlap(Check(Run(o), cloneChecks(o))) {
+					failing++
+					if failing <= 2 {
+						t.Errorf("%s, %s restarts, seed %d: two leaders", sh.name, who, seed)
+					}
+				}
+			}
+			if failing > 0 {
+				t.Errorf("%s, %s restarts: two leaders in %d of %d", sh.name, who, failing, n)
+			}
+		}
+	}
+}
+
+// TestMeasureCloneSplitDoubleRestarts measures what rules (i) and (ii)
+// leave open: two members restarting inside one split while the copy
+// runs, each forgetting what it knew. The clear procedure is such a pair
+// (the members that raised the alarm, then the marked controller), which
+// is why it starts with stopping the copy. Logs the two-leader rate per
+// pair over every shape; skipped unless QUORUM_MEASURE_DOUBLE_RESTART=<n>.
+func TestMeasureCloneSplitDoubleRestarts(t *testing.T) {
+	n, _ := strconv.Atoi(os.Getenv("QUORUM_MEASURE_DOUBLE_RESTART"))
+	if n <= 0 {
+		t.Skip("set QUORUM_MEASURE_DOUBLE_RESTART=<runs per shape>")
+	}
+	members := []string{"original", "clone", "peer", "witness"}
+	for i, a := range members {
+		for _, b := range members[i+1:] {
+			two, all := 0, 0
+			for _, sh := range restartShapes() {
+				for seed := uint64(1); seed <= uint64(n); seed++ {
+					o := withRestarts(sh.run(seed), seed, a, b)
+					all++
+					if overlap(Check(Run(o), cloneChecks(o))) {
+						two++
+					}
+				}
+			}
+			t.Logf("%s and %s restart inside the split: two leaders in %d of %d", a, b, two, all)
+		}
+	}
+}
+
+// Rule (ii) of the #1113 review where it alone matters: a clone that
+// reaches only the peer, the original losing the peer, and then both the
+// original and the peer restarting inside the split. Without the rule,
+// the held clone's copy of the original's voter grants the restarted peer
+// (which forgot its mark) a lease while the original leads with the
+// witness: two leaders in these six seeds of 300 (held_voter_grants). No
+// single-restart schedule needs the rule alone; this double restart does.
+func TestHeldVoterGrantsNothingInADoubleRestart(t *testing.T) {
+	var sh restartShape
+	for _, x := range restartShapes() {
+		if x.name == "clone reaches only the peer, the original loses it" {
+			sh = x
+		}
+	}
+	for _, seed := range []uint64{16, 41, 177, 199, 235, 289} {
+		o := withRestarts(sh.run(seed), seed, "original", "peer")
+		if vs := Check(Run(o), cloneChecks(o)); overlap(vs) {
+			t.Errorf("seed %d: two leaders: %v", seed, vs[0])
+		}
+	}
+}
+
+// TestMeasureCloneEarlyCut measures the residual the mark can't close: a
+// split that starts so soon after a clone does that no voter has yet heard
+// both copies send past the one-way delay. Every split shape, the cut moved
+// to a time after the clone's start drawn from each half-second bin, no
+// restart; two-leader runs per bin. With one new frame past D per boot
+// (#1113 re-check): 52, 21 and 1 of 3,600 in the first three bins, 0 from
+// 1.5 s on, at a 2 s lease (two frames per boot gave 633, 39, 14 in the
+// re-check's own sampling). Skipped unless
+// QUORUM_MEASURE_EARLY_CUT=<seeds per shape>.
+func TestMeasureCloneEarlyCut(t *testing.T) {
+	n, _ := strconv.Atoi(os.Getenv("QUORUM_MEASURE_EARLY_CUT"))
+	if n <= 0 {
+		t.Skip("set QUORUM_MEASURE_EARLY_CUT=<seeds per shape>")
+	}
+	for _, bin := range []time.Duration{0, sec / 2, sec, 3 * sec / 2, 2 * sec} {
+		two, all := 0, 0
+		for _, sh := range restartShapes() {
+			for seed := uint64(1); seed <= uint64(n); seed++ {
+				o := sh.run(seed)
+				r := rand.New(rand.NewPCG(seed, 0x6561726c))
+				var cut time.Duration
+				for _, f := range o.Faults {
+					if f.Kind == Cut {
+						cut = max(cut, f.At)
+					}
+				}
+				at := o.Faults[0].At + bin + time.Duration(r.Int64N(int64(sec/2)))
+				for i := range o.Faults {
+					if o.Faults[i].Kind == Cut && o.Faults[i].At == cut {
+						o.Faults[i].At = at
+					}
+				}
+				all++
+				if overlap(Check(Run(o), cloneChecks(o))) {
+					two++
+				}
+			}
+		}
+		t.Logf("split %v to %v after the clone starts: two leaders in %d of %d", bin, bin+sec/2, two, all)
+	}
 }

@@ -1,6 +1,7 @@
 package sim
 
 import (
+	"math/rand/v2"
 	"testing"
 	"time"
 )
@@ -36,7 +37,9 @@ func TestDupRelayStopsTheWitnessGrantingAClone(t *testing.T) {
 // A clone of A booted with A, then B–W and A→W cut: the clone wins W's
 // promise before W hears both boots, and the running-promise rule renews
 // it. Only B's candidate discounting A's (duplicated) voter keeps B from
-// leading on {B, A's voter} beside it (dup_voter_counts).
+// leading on {B, A's voter} beside it (dup_voter_counts, before 3c-1;
+// since then B's voter, having heard both boots of a, also marks it, so
+// the mark covers this schedule too; the splits pin the discount).
 func TestDuplicatedVoterBacksNoLease(t *testing.T) {
 	pinned(t, Options{Seed: 4285, Delay: 4546141, Jitter: 3794424, Fsync: 3219668, InPlace: true,
 		Rates: [nNodes]PPM{998221, 999120, 1003276}, Start: [3]time.Duration{1708162146, 2733108908, 3074328383}, Until: 43001814536,
@@ -51,7 +54,9 @@ func TestDuplicatedVoterBacksNoLease(t *testing.T) {
 // cut from W, is heard by A only through its probes of its peer; without
 // them no voter sees B's two boots (standby_probes_witness_only), and
 // without the refusal a voter that does still grants the clone
-// (dup_name_ignored).
+// (dup_name_ignored). Since 3c-1 the mark also covers this schedule:
+// TestTheStandbysPeerProbeLetsItsPeerSeeAClone (cmd/naut) and the clone
+// races pin those rules now.
 func TestStandbyProbesItsPeerSoTheCloneIsSeen(t *testing.T) {
 	pinned(t, Options{Seed: 3, Delay: 780446, Jitter: 108322, Fsync: 1114318, InPlace: false,
 		Rates: [nNodes]PPM{1002082, 1000701, 998520}, Start: [3]time.Duration{1112996176, 513604735, 3178196971}, Until: 38885497571,
@@ -224,7 +229,9 @@ func TestStoppingTheCloneBringsALeaderBack(t *testing.T) {
 // A clone of B reaches A during an A–B cut and wins term 30 there; its
 // promise runs out, the cut heals, and the real B asks A for term 30.
 // Granting it would give one term to two processes (I4): a term once
-// granted to one boot of a name goes to no other (same_term_other_boot).
+// granted to one boot of a name goes to no other (same_term_other_boot;
+// since 3c-1 the mark also covers this schedule, and the rule's unit
+// tests pin it).
 func TestATermGoesToOneBootOfAName(t *testing.T) {
 	pinned(t, Options{Seed: 8657, Delay: 203896, Jitter: 138993, Fsync: 628442, InPlace: false,
 		Rates: [nNodes]PPM{995580, 1002135, 1000392}, Start: [3]time.Duration{1801308744, 1698880241, 664275251}, Until: 37700850472,
@@ -234,4 +241,82 @@ func TestATermGoesToOneBootOfAName(t *testing.T) {
 			{Kind: Delay, At: 9267688312, For: 702532041, From: B, To: W, Both: true, Value: 68955457},
 			{Kind: Cut, At: 9467916718, For: 9232933754, From: A, To: B, Both: true},
 		}})
+}
+
+// A controller restarts while its links to both other voters re-deliver
+// each frame a second time, up to two leases late (F31): its old boot's
+// frames keep arriving long after the new boot's first. They are copies,
+// not new frames (Request.Seq), and mark nothing: no voter marks the name,
+// and a leader is back within the bound (#1029 3c). (A copy that late is
+// outside the delay rule, and the relay rules of layer 2 can still count
+// it once as a duplicate: an alarm, never a refusal past the copy's own
+// promise.) dup_mark_counts_replays turns it red.
+func TestLateCopiesAfterARestartMarkNothing(t *testing.T) {
+	marked := 0
+	for seed := uint64(1); seed <= 200; seed++ {
+		o := randomRun(seed, profClone)
+		r := rand.New(rand.NewPCG(seed, 0x6c617465))
+		who := []Addr{A, B}[seed%2]
+		at := 8*sec + time.Duration(r.Int64N(int64(4*lease)))
+		late := int64(lease + time.Duration(r.Int64N(int64(lease))))
+		o.Faults = []Fault{
+			{Kind: Duplicate, At: at - lease, For: 6 * lease, From: who, To: W, Value: late},
+			{Kind: Duplicate, At: at - lease, For: 6 * lease, From: who, To: peerOf(who), Value: late},
+			{Kind: Crash, At: at, For: 50*ms + time.Duration(r.Int64N(int64(lease/2))), Node: who},
+		}
+		o.Until = at + 6*lease + bound + 4*lease
+		rec := Run(o)
+		if len(rec.Marks) != 0 {
+			marked++
+			if marked <= 3 {
+				t.Errorf("seed %d: %+v after %v restarted under late copies, with no clone", seed, rec.Marks[0], who)
+			}
+		}
+		for _, g := range gaps(rec.Gates(), at+6*lease+bound, o.Until) {
+			t.Errorf("seed %d: no leader over %v after %v restarted", seed, g, who)
+		}
+	}
+	if marked > 0 {
+		t.Logf("%d of 200 runs marked a name", marked)
+	}
+}
+
+// A controller restarts while another voter restarts around it, on links
+// as slow as the rule allows (one way just under lease/4), the restart
+// sometimes faster than that delay: the restarted voter may hear the new
+// boot first and then the old boot's last frames still in flight. No
+// voter marks the name (#1029 3c: a mark needs EACH boot to send past the
+// other's first frame, which a dead boot never does), and a leader is
+// back within the bound. dup_mark_one_sided turns it red (one run of the
+// 300 marks; TestAVoterThatMissedTheOldBootMarksNoRestart pins it alone).
+func TestRestartsBesideAVoterRestartMarkNothing(t *testing.T) {
+	marked := 0
+	for seed := uint64(1); seed <= 300; seed++ {
+		o := randomRun(seed, profClone)
+		o.Delay, o.Jitter = lease/5, lease/40
+		r := rand.New(rand.NewPCG(seed, 0x76727374))
+		who := []Addr{A, B}[seed%2]
+		voter := []Addr{W, peerOf(who)}[(seed/2)%2]
+		at := 8*sec + time.Duration(r.Int64N(int64(4*lease)))
+		down := []time.Duration{10 * ms, o.Delay + time.Duration(r.Int64N(int64(lease)))}[(seed/4)%2]
+		vat := at - lease/2 + time.Duration(r.Int64N(int64(lease)))
+		o.Faults = []Fault{
+			{Kind: Crash, At: vat, For: 20*ms + time.Duration(r.Int64N(int64(lease/2))), Node: voter},
+			{Kind: Crash, At: at, For: down, Node: who},
+		}
+		o.Until = at + 2*lease + bound + 4*lease
+		rec := Run(o)
+		if len(rec.Marks) != 0 {
+			marked++
+			if marked <= 3 {
+				t.Errorf("seed %d: %+v after %v restarted beside %v's restart, with no clone", seed, rec.Marks[0], who, voter)
+			}
+		}
+		for _, g := range gaps(rec.Gates(), at+2*lease+bound, o.Until) {
+			t.Errorf("seed %d: no leader over %v after %v restarted", seed, g, who)
+		}
+	}
+	if marked > 0 {
+		t.Logf("%d of 300 runs marked a name", marked)
+	}
 }

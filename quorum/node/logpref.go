@@ -154,6 +154,9 @@ func (e *Elector) maybeYield(now quorum.Instant, ls LogState, has bool) {
 	if !e.peerLogFresh() || !e.peerLog.synced || !e.peerLog.canSync && !mut("yield_ignores_can_sync") || !e.peerLog.may && !mut("yield_ignores_may") {
 		return
 	}
+	if e.v.Duplicated(now, e.o.Peer) && !mut("yield_to_marked_peer") {
+		return // the peer's vote counts nowhere here: it may say it can campaign, but it can't win (#1029 3c)
+	}
 	if !e.yieldedAt.IsZero() && time.Since(e.yieldedAt) < yieldEvery && !mut("yield_undamped") {
 		return
 	}
@@ -202,7 +205,7 @@ func (e *Elector) selfLog() string {
 	hold := e.logDefers(now, ls, has) != deferNo &&
 		(e.holdSince.IsZero() || time.Since(e.holdSince) < 2*e.o.Lease)
 	may := healthy && !e.released && !e.boxPending && e.v.State().Incarnation != 0 &&
-		e.mayCampaign(now) && !hold
+		e.mayCampaign(now) && !hold && (!e.c.Marked() || mut("may_ignores_mark"))
 	return logReport(ls.Synced, ls.Synced && ls.CanSync, may)
 }
 

@@ -66,17 +66,18 @@ type Witness struct {
 }
 
 type witnessPair struct {
-	name    string
-	members string // "a,b": the two controllers bound to this cluster
-	mu      sync.Mutex
-	v       *quorum.Voter
-	w       *writer
-	waiters map[waitKey]chan quorum.Reply
-	failing string
-	refused map[string]string // the last lease refusal reported per sender
-	dupSeen uint64            // the voter's Duplicates count last reported
-	dupAt   time.Time         // when it was last reported
-	log     *slog.Logger
+	name     string
+	members  string // "a,b": the two controllers bound to this cluster
+	mu       sync.Mutex
+	v        *quorum.Voter
+	w        *writer
+	waiters  map[waitKey]chan quorum.Reply
+	failing  string
+	refused  map[string]string // the last lease refusal reported per sender
+	dupSeen  uint64            // the voter's Duplicates count last reported
+	markSeen uint64            // the voter's MarkCount last reported
+	dupAt    time.Time         // when it was last reported
+	log      *slog.Logger
 }
 
 // stateSuffix names a cluster's state file in the witness's directory;
@@ -257,6 +258,27 @@ func (w *Witness) Grant(cluster string) (grantedTo quorum.NodeID, promised, inca
 	return st.GrantedTo, st.Promised, st.Incarnation, st.Incarnation != 0
 }
 
+// ClearDuplicate clears the witness's mark on name in cluster's pair, the
+// operator's step once the copy is stopped (quorum.Voter.ClearDuplicate,
+// #1029 3c). It reports whether name was marked; false too for a pair
+// this witness hasn't answered since it started. Restarting the witness
+// clears every mark (they are in memory).
+func (w *Witness) ClearDuplicate(cluster, name string) bool {
+	w.mu.Lock()
+	p, found := w.pairs[cluster]
+	w.mu.Unlock()
+	if !found {
+		return false
+	}
+	p.mu.Lock()
+	was := p.v.ClearDuplicate(quorum.NodeID(name))
+	p.mu.Unlock()
+	if was {
+		p.log.Warn("witness: the operator cleared the duplicate mark on " + name)
+	}
+	return was
+}
+
 // Pairs lists the pairs this witness has answered since it started.
 func (w *Witness) Pairs() []PairStatus {
 	w.mu.Lock()
@@ -329,6 +351,7 @@ func (w *Witness) pair(name, members string) (*witnessPair, error) {
 	p := &witnessPair{name: name, members: members, waiters: map[waitKey]chan quorum.Reply{},
 		refused: map[string]string{}, log: w.log.With("cluster", name, "members", members)}
 	v, first := quorum.NewWitness(w.o.Self, w.o.Lease, st, w.now(), w.o.draw)
+	v.SetBoot(w.o.draw()) // #1113 review: a hold ends only on this boot's word
 	p.v = v
 	p.w = newWriter(file.Save, p.persisted)
 	w.wg.Add(1)
@@ -428,6 +451,10 @@ func (w *Witness) serveVote(rw http.ResponseWriter, r *http.Request) {
 	}
 	p.v.Hear(now, req.From, req.Nonce, req.Promise)
 	persist, replies := p.v.Handle(now, req)
+	if msg := confirmedAlarm(p.v, &p.markSeen); msg != "" {
+		p.dupSeen, _ = p.v.Duplicates() // the mark's own count, reported here
+		p.log.Error("witness: " + msg)
+	}
 	if n, who := p.v.Duplicates(); n != p.dupSeen {
 		p.dupSeen = n
 		if t := time.Now(); t.Sub(p.dupAt) >= dupEvery {

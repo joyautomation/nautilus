@@ -72,6 +72,19 @@ var Mutations = []string{
 	"grant_nonce_volatile",        // the grant's boot nonce is not reloaded at start, so a restarted voter gives a term to a second boot of a name (#1094 review)
 	"grant_nonce_unwritten",       // a renewal under a standing promise from a format-4 file never writes the nonce, so it is lost at the next restart (#1094 re-check)
 	"retry_after_refusal_only",    // a refused campaign whose own grant came back last waits out a lease (#1029 layer 2)
+	"dup_mark_off",                // a voter never marks a name it hears run as two boots at once (#1029 3c)
+	"dup_mark_counts_replays",     // a duplicated or replayed frame of an old boot counts as that boot still running (#1029 3c)
+	"dup_mark_no_delay",           // an old boot's frame within the one-way delay of the new boot's first marks the name (#1029 3c)
+	"dup_mark_one_sided",          // the boot heard first sending past the delay marks the name, though the other never did (a voter that missed the old boot marks a restart, #1029 3c)
+	"evicted_boot_banned",         // a boot evicted at the cap is ignored for good, so an original cut off while a copy restarted escapes the mark (#1113 review)
+	"hold_released_by_any_boot",   // an unmarked reply from a restarted voter (which forgot its mark) releases a hold (#1113 review, rule (i))
+	"held_voter_grants",           // a voter whose own candidate is held still makes new grants to the other node (#1113 review, rule (ii))
+	"dup_mark_from_relay",         // a promise relayed to an old boot counts as that boot still running (#1029 3c)
+	"marked_not_told",             // a voter's refusal doesn't tell a marked name it is marked (#1029 3c)
+	"marked_still_campaigns",      // a candidate told its name is marked keeps campaigning (#1029 3c)
+	"discount_reterms",            // a discounted grant re-terms the leader, every renewal while the mark stands (#1029 3c)
+	"clear_keeps_mark",            // ClearDuplicate leaves the mark standing (#1029 3c)
+	"dup_alarm_unconfirmed",       // two live boots count as a duplicate before they are confirmed (a fast restart's false alarm, #1029 3c)
 	// The driver's (quorum/node, #710 PR 3a): switched on there, listed
 	// here so this init accepts them.
 	"gate_on_tick",               // the gate is judged on the elector's look, not when it is read
@@ -132,6 +145,9 @@ var Mutations = []string{
 	"yield_undamped",               // node: a leader yields again within yieldEvery
 	"yield_ignores_may",            // node: a leader yields to a peer that may not campaign
 	"yield_ignores_can_sync",       // node: a leader yields to a synced peer that can't sync the others
+	"yield_to_marked_peer",         // node: a leader yields to a peer its own voter marked a confirmed duplicate
+	"may_ignores_mark",             // node: a controller a voter marks a duplicate still says it may campaign
+	"mark_alarm_from_cause",        // node: the confirmed alarm follows the last duplicate's cause, which a later count in one Handle overwrites, and is paced
 	"vouch_refusal_blocks",         // node: a vouch the log refuses refuses the re-commission
 	"vouch_alone_partial",          // oplog: a vouched catch-up goes ahead alone with a peer silent
 	"vouch_alone_ignores_ahead",    // oplog: a vouched catch-up goes ahead alone over a longer copy that does not count yet

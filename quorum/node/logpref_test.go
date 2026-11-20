@@ -1,6 +1,7 @@
 package node
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -185,5 +186,155 @@ func TestWitnessLogSeams(t *testing.T) {
 	w.SetLogInfo(func(cluster string) (uint64, uint64, bool) { return 7, 5, cluster == c.pair })
 	if ps := w.Pairs(); len(ps) != 1 || !ps[0].HasLog || ps[0].LogLast != 7 || ps[0].LogCommit != 5 {
 		t.Fatalf("Pairs = %+v", ps)
+	}
+}
+
+// A leader whose own voter marked its peer a confirmed duplicate doesn't
+// yield to it, whatever the peer's report says: that peer's vote counts
+// nowhere here, and the voter refuses it every new grant, so it can't
+// take the lead the yield hands it (#1029 3c, Fable on #1094). The
+// peer's report can still say "may campaign" when no voter told the peer
+// itself (its replies lost). yield_to_marked_peer turns it red.
+func TestLoopbackNoYieldToAPeerItsVoterMarked(t *testing.T) {
+	c, l := logCluster(t)
+	o := c.other(l)
+	e := c.elector(l)
+	e.mu.Lock()
+	// A second boot of o, heard three times (a mark needs two new frames
+	// past the delay from each boot); o's own probes, still arriving a
+	// quarter lease and more later, confirm it.
+	e.v.Handle(e.now(), quorum.Request{From: o, Nonce: 0xd0d0, ID: quorum.ProbeID, Seq: 1})
+	e.mu.Unlock()
+	time.Sleep(leases(1) / 2)
+	e.mu.Lock()
+	e.v.Handle(e.now(), quorum.Request{From: o, Nonce: 0xd0d0, ID: quorum.ProbeID, Seq: 2})
+	e.v.Handle(e.now(), quorum.Request{From: o, Nonce: 0xd0d0, ID: quorum.ProbeID, Seq: 3})
+	e.mu.Unlock()
+	c.waitFor("the leader's voter to mark its peer", leases(10), func() bool {
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		return slices.Contains(e.v.Marked(), o)
+	})
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	now := e.now()
+	if !e.c.Leading(now) {
+		t.Skip("the leader lapsed meanwhile")
+	}
+	e.peerLog = peerLog{synced: true, canSync: true, may: true, at: time.Now()}
+	e.yieldedAt = time.Time{}
+	e.maybeYield(now, LogState{Stuck: true}, true)
+	if e.yieldHold {
+		t.Fatal("yielded to a peer this controller's voter marked a confirmed duplicate")
+	}
+}
+
+// A controller a voter marks a confirmed duplicate reports "may not
+// campaign" in its hello: it campaigns no more (quorum.Candidate.NoteMark),
+// so an unsynced leader must not yield to it and wait for a takeover that
+// never comes (#1029 3c, Fable on #1094). may_ignores_mark turns it red.
+func TestLoopbackAMarkedControllerSaysItMayNotCampaign(t *testing.T) {
+	c, l := logCluster(t)
+	o := c.other(l)
+	e := c.elector(o)
+	if r := e.selfLog(); len(r) != 3 || r[2] != 'm' {
+		t.Fatalf("report %q before the mark, want one that may campaign", r)
+	}
+	e.mu.Lock()
+	e.noteMark(quorum.Reply{From: o, To: o, Nonce: e.nonce, ID: quorum.ProbeID, Marked: true})
+	e.mu.Unlock()
+	if r := e.selfLog(); len(r) != 3 || r[2] != 'n' {
+		t.Fatalf("report %q while marked, want one that may not campaign", r)
+	}
+	c.waitFor("the operator to be told", leases(4), func() bool {
+		n, last := c.countEvents(EventDuplicateMarked)
+		return n == 1 && strings.Contains(last, "campaigns no more")
+	})
+}
+
+// The confirmed duplicate alarm follows the voter's mark count, not the
+// cause of its last duplicate: a frame that completes a mark can also be
+// a campaign a relayed promise refuses, which counts again, as DupNonce,
+// in the same Handle (#1113 review). The alarm must still say the name is
+// marked, and how to clear it; and it is never paced away by the alarm
+// before it. mark_alarm_from_cause turns it red.
+func TestTheConfirmedAlarmSurvivesARelayCountInTheSameHandle(t *testing.T) {
+	c, l := logCluster(t)
+	e := c.elector(l)
+	e.mu.Lock()
+	now := e.now()
+	e.dupAt = time.Now() // an alarm a moment ago: the pacing would swallow the next
+	e.v.Handle(now, quorum.Request{From: "z", Nonce: 0xA, ID: quorum.ProbeID, Seq: 1})
+	e.v.Handle(now.Add(10*time.Millisecond), quorum.Request{From: "z", Nonce: 0xC, ID: quorum.ProbeID, Seq: 1})
+	d := time.Duration(float64(e.o.Lease/4)*(1+quorum.MaxRho)) + 50*time.Millisecond
+	e.v.Handle(now.Add(d), quorum.Request{From: "z", Nonce: 0xA, ID: quorum.ProbeID, Seq: 2})
+	e.v.Handle(now.Add(d+10*time.Millisecond), quorum.Request{From: "z", Nonce: 0xC, ID: quorum.ProbeID, Seq: 2})
+	e.v.Handle(now.Add(d+20*time.Millisecond), quorum.Request{From: "z", Nonce: 0xA, ID: quorum.ProbeID, Seq: 3})
+	// A relayed promise to z's first boot, then the second boot's campaign
+	// that completes the mark AND is refused by that relay.
+	e.v.Hear(now.Add(d+25*time.Millisecond), "w", 0x5, quorum.Relay{To: "z", Nonce: 0xA, Left: e.o.Lease})
+	e.v.Handle(now.Add(d+30*time.Millisecond), quorum.Request{From: "z", Term: 1 << 40, Nonce: 0xC, ID: 1, Seq: 3})
+	if !slices.Contains(e.v.Marked(), "z") {
+		e.mu.Unlock()
+		t.Fatalf("the sequence didn't mark z: %v", e.v.Marked())
+	}
+	e.noteDuplicates()
+	e.mu.Unlock()
+	c.waitFor("the confirmed alarm", leases(4), func() bool {
+		n, _ := c.countEventsWith(EventDuplicateMember, "two processes claim to be z: this voter heard both running at once")
+		return n == 1
+	})
+}
+
+// countEventsWith counts the events of kind whose detail contains s.
+func (c *cluster) countEventsWith(kind EventKind, s string) (n int, last string) {
+	c.evMu.Lock()
+	defer c.evMu.Unlock()
+	for _, ev := range c.evs {
+		if ev.Kind == kind && strings.Contains(ev.Detail, s) {
+			n++
+			last = ev.Detail
+		}
+	}
+	return n, last
+}
+
+// Witness.ClearDuplicate clears the witness's mark on a name in a pair it
+// serves, and reports whether there was one; an unknown pair or name
+// reports false (#1029 3c, the Go call 3c-3's command will make).
+func TestWitnessClearDuplicate(t *testing.T) {
+	c, _ := logCluster(t)
+	w := c.wit.w
+	if w.ClearDuplicate("no-such-pair", "z") {
+		t.Fatal("cleared a mark in a pair the witness doesn't serve")
+	}
+	w.mu.Lock()
+	p := w.pairs[c.pair]
+	w.mu.Unlock()
+	if p == nil {
+		t.Fatal("the witness serves no pair named for the cluster")
+	}
+	p.mu.Lock()
+	now := w.now()
+	d := time.Duration(float64(loopLease/4)*(1+quorum.MaxRho)) + 50*time.Millisecond
+	for i, at := range []time.Duration{0, 10 * time.Millisecond, d, d + 10*time.Millisecond, d + 20*time.Millisecond, d + 30*time.Millisecond} {
+		nonce := []uint64{0xA, 0xC}[i%2]
+		p.v.Handle(now.Add(at), quorum.Request{From: "z", Nonce: nonce, ID: quorum.ProbeID, Seq: uint64(1 + i/2)})
+	}
+	marked := slices.Contains(p.v.Marked(), "z")
+	p.mu.Unlock()
+	if !marked {
+		t.Fatal("the sequence didn't mark z at the witness")
+	}
+	if w.ClearDuplicate(c.pair, "y") {
+		t.Fatal("cleared a name that wasn't marked")
+	}
+	if !w.ClearDuplicate(c.pair, "z") {
+		t.Fatal("ClearDuplicate reported z unmarked")
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.v.Marked()) != 0 {
+		t.Fatalf("still marked after the clear: %v", p.v.Marked())
 	}
 }
