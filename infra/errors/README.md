@@ -127,8 +127,11 @@ argv). Then:
    A browser DSN is public by design: it can only send events, not read them. It
    still belongs in the build's configuration (a repository variable), not in a
    committed file, so it can be rotated.
-5. Optional: Project settings → set a rate limit, and a data-retention period
-   under the organisation, so a noisy page cannot fill the 10 Gi volume.
+5. Storage is bounded two ways: `GLITCHTIP_RETENTION_DAYS=30` in
+   `glitchtip.yml` deletes events, transactions and logs older than 30 days
+   (GlitchTip's default is 90), and the project's rate limit (Project settings)
+   caps a noisy page. Watch the volume anyway for the first weeks:
+   `kubectl -n joy exec glitchtip-postgres-0 -- df -h /var/lib/postgresql/data`.
 
 What the client sends and scrubs is #1073's: stack traces and the build id,
 never project files, code or tag values.
@@ -140,6 +143,23 @@ Change the image tag in `glitchtip.yml` (check the
 can drop old PostgreSQL versions) and apply it. Database migrations run on
 start. Postgres: change the minor tag in `postgres.yml`; a major version needs
 a dump and restore.
+
+## Fall back to 6.2.6
+
+v7.0.0 is new (2026-11-09). If it misbehaves on a fresh install, before there is
+data worth keeping: delete the Deployment, empty the database (a v7-migrated
+database cannot be opened by 6.x; restore a pre-v7 dump instead if you have
+one), and change `glitchtip.yml` to
+
+- `image: glitchtip/glitchtip:v6.2.6`
+- two more env entries on the container: `GLITCHTIP_EMBED_WORKER: "true"` (6.x
+  then runs web and worker in one process, like v7) and
+  `GLITCHTIP_MAX_EVENT_LIFE_DAYS: "30"` (6.x's name for the retention above;
+  `GLITCHTIP_RETENTION_DAYS` is ignored there).
+
+Emptying the database: `kubectl -n joy exec -it glitchtip-postgres-0 -- psql -U glitchtip -d postgres -c 'DROP DATABASE glitchtip' -c 'CREATE DATABASE glitchtip OWNER glitchtip'`
+(stop the Deployment first, or Postgres refuses to drop it). Then apply and redo
+"First user, organisation, DSN".
 
 ## Roll back
 

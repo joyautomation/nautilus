@@ -49,6 +49,10 @@ spec:
             # hand), and the uptime checker would call out from the cluster.
             - {name: ENABLE_USER_REGISTRATION, value: "false"}
             - {name: GLITCHTIP_ENABLE_UPTIME, value: "false"}
+            # Bound the volume: v7 deletes events, transactions and logs older
+            # than this (default 90). v6's name for it is
+            # GLITCHTIP_MAX_EVENT_LIFE_DAYS (README.md, "Fall back to 6.2.6").
+            - {name: GLITCHTIP_RETENTION_DAYS, value: "30"}
           readinessProbe:
             tcpSocket: {port: 8000}
             initialDelaySeconds: 20 # init_database runs first
