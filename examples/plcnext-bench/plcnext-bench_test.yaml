@@ -26,8 +26,8 @@ tests:
       AXC__Online: true
       AXC__Outages: 0
       AXC__WatchdogTrips: 0
-    # Half a period is ten 50 ms scans; REAL accumulation lands the toggle
-    # on the tenth or eleventh scan, so each step allows one scan of slack.
+    # Half a period is twenty-five 20 ms scans; REAL accumulation lands the
+    # toggle on the twenty-fifth or twenty-sixth scan, so each step allows one scan of slack.
     steps:
       - advance: 600ms
         expect: { DO_15: true }
@@ -35,6 +35,15 @@ tests:
         expect: { DO_15: false }
       - advance: 600ms
         expect: { DO_15: true }
+
+  # The bench task's period is what the video and the playground show: the
+  # program is handed its scan interval in BenchDtS, so a drift of the
+  # manifest's scan: from 20 ms shows here.
+  - name: the bench task scans every 20 ms
+    given: *inputs
+    steps:
+      - advance: 100ms
+        expect: { BenchDtS: 0.02 }
 
   - name: inputs mirror to outputs
     given: *inputs

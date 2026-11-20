@@ -32,7 +32,7 @@ driver:
 
 tasks:
   - program: bench.st
-    scan: 50ms
+    scan: 20ms
     dt-tag: BenchDtS
   - name: board
     program: board.st
