@@ -310,15 +310,20 @@ redundancy:
     - **What it costs:** only refusals. A promise to another node never ends early, and the
       restart wait covers a voter that forgot what it heard. A takeover can lose one refused
       campaign at the witness (§4.5, `R`).
-    - **The residual.**
-      - **A clone booted together with its original** (a clone made before commissioning, or
-        a site-wide power cycle with a clone present) is still a race. Neither copy holds a
-        promise yet, so there is nothing to relay, and each copy can win one of the other two
-        voters in the same election. `TestMeasureCloneAtStart` measures it: two leaders in 101
-        of 5,000 runs, against 1,562 without the relay.
-      - **A clone of a running pair** wins only with a second fault: the two voters other
-        than the cut link can't exchange a probe for about a lease, or a third partition (B
-        cut from both A and W, with a clone of A).
+    - **The residual: a clone booted with its original, or running while either controller
+      restarts.** Both copies then campaign while neither holds a promise yet, so there is
+      nothing to relay, and each copy can win one of the other two voters in the same
+      election. That covers a clone made before commissioning, a site-wide power cycle with a
+      clone present, and a deploy update or reboot of either controller while a clone runs.
+      `TestMeasureCloneAtStart` measures it over 10,000 runs per case, with no other fault:
+      two leaders in 172 when the clone boots with its original, in 184 when the original
+      restarts, and in 17 when its peer restarts (1,562 of 5,000 at boot without the relay).
+      A clone of a running pair with no restart wins only with a second network fault: the
+      two voters other than the cut link can't exchange a probe for about a lease, or a third
+      partition (B cut from both A and W, with a clone of A). **The follow-up on #1029** comes
+      before `experimental` is lifted and before 3c: a duplicate-name refusal at every voter
+      and a candidate-side check, aiming at 0 two-leader runs in at least 20,000 per case,
+      with a liveness bound for a real controller after a power cycle.
       - The guide keeps "never clone a controller".
 - **`NAUTILUS_NODE` set with no pair in the manifest** is refused: each box would run as its
   own leader against the same I/O.
@@ -853,7 +858,7 @@ Takeover time is published as a formula and measured, never promised as a single
 | `C` | the standby's campaign delay: up to `lease/4` (§3.1) |
 | `RTT + f` | one vote round, including each voter's fsync |
 | `W_r` | up to one lease more, if a voter has just restarted and is waiting out its timer (§3.1) |
-| `R` | up to one campaign refused by a stale relayed promise (§2, #1029 layer 2): the witness may hold the standby's own voter's promise to the dead leader for `MaxRho·lease` past its end, and the retry comes half a look plus the jitter later, so at most `MaxRho·lease + 3·lease/8` (0.95 s at a 2 s lease). Measured over 300 leader deaths in the simulator: worst takeover 2.80 s against 2.53 s without the relay (`TestStaleRelayEndsAndTheStandbyLeads`) |
+| `R` | up to one campaign refused by a stale relayed promise (§2, #1029 layer 2): the witness may hold the standby's own voter's promise to the dead leader for `MaxRho·lease` past its end, and the retry comes half a look plus the jitter later, after one more vote round trip: at most `MaxRho·lease + 3·lease/8 + RTT` (0.95 s plus a round trip at a 2 s lease). Measured over 300 leader deaths in the simulator, worst takeover with the relay against without: 2.80 s / 2.53 s on 1–5 ms links (`TestStaleRelayEndsAndTheStandbyLeads`), 3.32 s / 2.73 s at 100 ms one way, 5.14 s / 3.90 s at 450 ms (the lease/4 rule's edge) |
 | `I` | the inputs wait, up to #786's cap: about 0 when the standby polls, a session connect and first read when it does not. When a frozen old leader still holds a device's **only** session, it lasts until that device's own session timeout, and may hit the cap. |
 | `L_op` | a pair's operator-intent log catch-up before the first scan (`SyncLeader`, §1): one round trip to the copies that answer (the old leader's and the witness's, asked at once), plus up to 50 ms waiting for a straggler once a majority answered; up to the log's call timeout (`lease/2`, at least 500 ms) when only a silent copy could make the majority. The runtime gives up at 2 s and runs not synced (it keeps what it applied, `catch-up-failed` on what came from retain). Since the witness is a copy (#710 3b-4b), a takeover after the old leader died syncs from the witness |
 | `S` | one scan |

@@ -386,17 +386,22 @@ each vote message carries the promise its sender's voter has made to the
 other controller, so the voter a clone needs knows the name is taken,
 refuses it, and raises `redundancy.duplicate-member` (#1029). This costs
 a takeover after the leader dies up to one more vote round: at most
-0.95 s at the default 2 s lease (`MaxRho × lease + 3/8 × lease`), and
-0.3 s at worst in our measurements.
+0.95 s plus one round trip between the controller and the witness at the
+default 2 s lease (`MaxRho × lease + 3/8 × lease + RTT`). In our
+measurements that came to 0.3 s at worst on a LAN, 0.6 s with 100 ms
+links, and 1.2 s with links near the largest delay a 2 s lease allows.
 
-:::danger[Never clone a controller's disk]
-The voters' check holds while the two voters other than a broken link
-still reach each other. It does not cover a MAC-spoofed clone booted at
-the same moment as its original (a clone made before commissioning, or
-a power cycle of the whole site with a clone present), nor a clone plus
-a second network fault: either can lead beside the original. Build the second controller from a
-fresh install, never from a copy of the first. If
-`redundancy.duplicate-member` is raised, find the copy and stop it.
+:::danger[A cloned controller left running is unsafe]
+Until the follow-up to
+[#1029](https://github.com/joyautomation/nautilus/issues/1029) lands, a
+MAC-spoofed clone left running on the network is **unsafe**. When it
+boots together with its original (a clone made before commissioning, or
+a power cycle of the whole site), or when either controller restarts
+while it runs (a deploy update, a reboot), the clone and its original
+can both lead at once. A clone plus a second network fault can too.
+`redundancy.duplicate-member` is the signal: when it is raised, find
+the copy and shut it down before you restart anything. Build the second
+controller from a fresh install, never from a copy of the first.
 :::
 
 Operator intent (substitute starts, stops and acknowledgements, alarm

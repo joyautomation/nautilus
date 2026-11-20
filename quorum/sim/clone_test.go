@@ -67,7 +67,8 @@ func cloneChecks(o Options) Checks {
 // witness may still hold the standby's own voter's relayed promise to the
 // dead leader for up to MaxRho·lease past its end (rule (b)), refusing
 // that campaign once; the retry comes half a look plus the jitter later,
-// at most 3·lease/8. Plus lease/40 for the vote rounds.
+// at most 3·lease/8. Plus lease/40 for the vote rounds: these links are
+// 0.2–5 ms (randomRun); a slow link adds a round trip (design §4.5, R).
 const relayTakeoverBound = lease + lease/100 + lease/4 + lease/10 + 3*lease/8 + lease/40
 
 // The relayed promises cost a takeover at most the R term: a standby whose
@@ -113,12 +114,19 @@ func TestStaleRelayEndsAndTheStandbyLeads(t *testing.T) {
 }
 
 // TestMeasureCloneAtStart measures the residual the relay leaves (#1029
-// layer 2): a MAC-spoofed clone booted together with its original (a
-// clone built before commissioning, or a site-wide power cycle with a
-// clone present), with no other fault. Neither copy holds a promise yet,
-// so the voters have nothing to relay, and the two can each win one of
-// the other two voters in the same election. It logs how many of n runs
-// had two leaders at once; skipped unless QUORUM_MEASURE_CLONE_START=<n>.
+// layer 2): a MAC-spoofed clone that campaigns at the same time as its
+// original, with no promise held yet for the voters to relay, so the two
+// can each win one of the other two voters in one election. Three cases,
+// each with no other fault:
+//   - start: the clone booted together with its original (a clone made
+//     before commissioning, or a site-wide power cycle with a clone);
+//   - original: a settled pair with a clone running, and the original
+//     restarts (a deploy update, a reboot);
+//   - peer: the same, and the original's peer restarts.
+//
+// It logs how many of n runs each had two leaders at once; skipped unless
+// QUORUM_MEASURE_CLONE_START=<n>. The follow-up on #1029 must bring all
+// three to 0.
 //
 //	QUORUM_MEASURE_CLONE_START=10000 go test ./quorum/sim -run '^TestMeasureCloneAtStart$' -v
 func TestMeasureCloneAtStart(t *testing.T) {
@@ -126,15 +134,39 @@ func TestMeasureCloneAtStart(t *testing.T) {
 	if n <= 0 {
 		t.Skip("set QUORUM_MEASURE_CLONE_START=<runs>")
 	}
-	both := 0
-	for seed := uint64(1); seed <= uint64(n); seed++ {
-		o := randomRun(seed, profClone)
-		c := []Addr{CA, CB}[seed%2]
+	for _, mode := range []string{"start", "original", "peer"} {
+		both := 0
+		for seed := uint64(1); seed <= uint64(n); seed++ {
+			if overlap(Check(Run(cloneRace(seed, mode)), cloneChecks(cloneRace(seed, mode)))) {
+				both++
+			}
+		}
+		t.Logf("a clone racing its original (%s): two leaders at once in %d of %d runs", mode, both, n)
+	}
+}
+
+// cloneRace is seed's network, disk and clocks with a clone of A or B
+// campaigning beside its original: booted with it (start), or running
+// when the original (original) or its peer (peer) restarts.
+func cloneRace(seed uint64, mode string) Options {
+	o := randomRun(seed, profClone)
+	r := rand.New(rand.NewPCG(seed, 0x72616365))
+	c := []Addr{CA, CB}[r.IntN(2)]
+	if mode == "start" {
 		o.Faults = []Fault{{Kind: Clone, At: o.Start[original(c)], For: 10 * lease, Node: c}}
 		o.Until = o.Start[original(c)] + 12*lease
-		if overlap(Check(Run(o), cloneChecks(o))) {
-			both++
-		}
+		return o
 	}
-	t.Logf("a clone booted with its original: two leaders at once in %d of %d runs", both, n)
+	at := 6*sec + time.Duration(r.Int64N(int64(4*lease)))
+	down := original(c)
+	if mode == "peer" {
+		down = peerOf(down)
+	}
+	crash := at + 2*lease + time.Duration(r.Int64N(int64(6*lease)))
+	o.Faults = []Fault{
+		{Kind: Clone, At: at, For: 10 * lease, Node: c},
+		{Kind: Crash, At: crash, For: 50*ms + time.Duration(r.Int64N(int64(lease))), Node: down},
+	}
+	o.Until = at + 10*lease + bound + 6*lease
+	return o
 }

@@ -181,7 +181,7 @@ func duplicateMsg(who quorum.NodeID, cause quorum.DupCause) string {
 	if cause == quorum.DupVoterPromised {
 		return fmt.Sprintf("two processes claim to be %s: %s campaigned while its own voter was heard promised to another controller, which %s never does. A copy of %s is running: check NAUTILUS_NODE on every box (it differs per box) and that no box runs a clone of another's disk", who, who, who, who)
 	}
-	return fmt.Sprintf("two processes claim to be %s: a vote came from %s under a boot nonce other than the one this voter's running promise to %s was granted under. Check NAUTILUS_NODE on every box (it differs per box) and that no box runs a clone of another's disk", who, who, who)
+	return fmt.Sprintf("two processes claim to be %s: a vote came from %s under a boot nonce other than the one a running promise to %s was granted under (this voter's own, or one another voter relayed). Check NAUTILUS_NODE on every box (it differs per box) and that no box runs a clone of another's disk", who, who, who)
 }
 
 // Event is something the operator should see.
@@ -870,6 +870,7 @@ func (e *Elector) reply(from quorum.NodeID, r quorum.Reply) {
 	now := e.now()
 	if !mut("reply_relay_dropped") {
 		e.v.Hear(now, from, r.Promise)
+		e.noteDuplicates()
 	}
 	if quorum.IsRelayProbe(r) {
 		e.mu.Unlock()
@@ -982,15 +983,7 @@ func (e *Elector) serveVote(w http.ResponseWriter, r *http.Request) {
 			push.Promise = e.v.Relay(now)
 		}
 	}
-	if n, who := e.v.Duplicates(); n != e.dupSeen {
-		e.dupSeen = n
-		if t := time.Now(); t.Sub(e.dupAt) >= dupEvery {
-			e.dupAt = t
-			msg := duplicateMsg(who, e.v.DuplicateCause())
-			e.event(Event{Kind: EventDuplicateMember, Detail: msg})
-			e.log.Error("redundancy: " + msg)
-		}
-	}
+	e.noteDuplicates()
 	var ch chan quorum.Reply
 	if len(replies) == 0 && p != nil {
 		ch = make(chan quorum.Reply, 1)
@@ -1010,6 +1003,23 @@ func (e *Elector) serveVote(w http.ResponseWriter, r *http.Request) {
 		}
 		e.mu.Unlock()
 	})
+}
+
+// noteDuplicates raises redundancy.duplicate-member when the voter's
+// count of duplicates rose, at most once per dupEvery: from a request it
+// refused, or a relay it heard on a reply (#1029 layer 2). Under mu.
+func (e *Elector) noteDuplicates() {
+	n, who := e.v.Duplicates()
+	if n == e.dupSeen {
+		return
+	}
+	e.dupSeen = n
+	if t := time.Now(); t.Sub(e.dupAt) >= dupEvery {
+		e.dupAt = t
+		msg := duplicateMsg(who, e.v.DuplicateCause())
+		e.event(Event{Kind: EventDuplicateMember, Detail: msg})
+		e.log.Error("redundancy: " + msg)
+	}
 }
 
 // stamp sets the voter's running promise on a reply as it leaves
