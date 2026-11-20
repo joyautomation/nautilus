@@ -26,10 +26,12 @@ import (
 // Every refusal of a name and password (a wrong password, an unknown or
 // disabled user, a box user the auth: block does not name) gets the same
 // message and costs the same (one argon2id verification); the journal
-// records which it was. Attempts are throttled per client address and per
-// name before any hashing, and at most two verifications (64 MiB each)
-// run at once: a controller also scans. Throttling only slows: nobody is
-// ever locked out.
+// records which it was. Attempts are throttled per client address (an
+// IPv6 client by its /64) and per name before any hashing, and at most two
+// verifications (64 MiB each) run at once: a controller also scans. No
+// account is ever disabled by failures, but a flood of guesses at one
+// name from many addresses keeps that name's bucket empty, and so keeps
+// its owner from signing in, for as long as the flood lasts.
 //
 // Sign-in and sign-out sit outside the audited seam (they journal
 // themselves, auth.signin and auth.signout) and work while the journal is
@@ -84,9 +86,16 @@ type bucket struct {
 	at     time.Time
 }
 
-// limiterSweep is how many buckets a limiter keeps before it sweeps the
-// full ones.
-const limiterSweep = 4096
+// A limiter past limiterSweep buckets looks at sweepBatch of them (Go's
+// map order is random) at each new key and drops the full ones: a bounded
+// cost per attempt, never a sweep of the whole map. Past limiterMax it
+// drops one it looked at even if not full (an attacker with that many
+// addresses gains little from one reset), so memory stays bounded.
+const (
+	limiterSweep = 4096
+	limiterMax   = 4 * limiterSweep
+	sweepBatch   = 32
+)
 
 func newLimiter(burst int, every time.Duration) *limiter {
 	return &limiter{burst: float64(burst), every: every, now: time.Now, b: map[string]*bucket{}}
@@ -106,11 +115,7 @@ func (l *limiter) take(key string) (bool, time.Duration) {
 	b, ok := l.b[key]
 	if !ok {
 		if len(l.b) >= limiterSweep {
-			for k, o := range l.b {
-				if l.refill(o, now); o.tokens >= l.burst {
-					delete(l.b, k)
-				}
-			}
+			l.sweepSome(now)
 		}
 		b = &bucket{tokens: l.burst, at: now}
 		l.b[key] = b
@@ -123,11 +128,40 @@ func (l *limiter) take(key string) (bool, time.Duration) {
 	return true, 0
 }
 
+// sweepSome drops the full buckets among sweepBatch of them, and one of
+// those looked at whatever its state while the map is at limiterMax.
+func (l *limiter) sweepSome(now time.Time) {
+	n := 0
+	for k, o := range l.b {
+		if n++; n > sweepBatch {
+			break
+		}
+		if l.refill(o, now); o.tokens >= l.burst || len(l.b) >= limiterMax {
+			delete(l.b, k)
+		}
+	}
+}
+
+// addrKey is the throttle's key for a client address: an IPv4 address as
+// it is, an IPv6 one by its /64 (one host is handed a whole /64, and would
+// otherwise rotate through it).
+func addrKey(addr string) string {
+	a, err := netip.ParseAddr(addr)
+	if err != nil {
+		return addr
+	}
+	if a = a.Unmap(); a.Is6() {
+		p, _ := a.WithZone("").Prefix(64)
+		return p.String()
+	}
+	return a.String()
+}
+
 // allow is the throttle for an attempt from addr as name: the address is
 // charged first, so attempts the address is refused never reach the
 // name's bucket. A name not in a user name's form shares one bucket.
 func (g *signInGate) allow(addr, name string) (bool, time.Duration) {
-	if ok, wait := g.addrs.take(addr); !ok {
+	if ok, wait := g.addrs.take(addrKey(addr)); !ok {
 		return false, wait
 	}
 	key := strings.ToLower(name)
@@ -237,8 +271,8 @@ func (s *Server) handleSignIn(w http.ResponseWriter, r *http.Request) {
 	}
 	// A browser's sign-in comes from this controller's own page: a form
 	// on another site must not sign the operator in as someone else.
-	if !originIsHost(r) {
-		refuse(http.StatusForbidden, "sign-in is accepted only from this controller's own sign-in page (the request's Origin must be its Host)", "cross-origin", "/")
+	if !s.ownOrigin(r) {
+		refuse(http.StatusForbidden, "sign-in is accepted only from this controller's own sign-in page (the request's Origin must be this controller's scheme and host)", "cross-origin", "/")
 		return
 	}
 	if !s.signInTransport(r) {
@@ -268,7 +302,10 @@ func (s *Server) handleSignIn(w http.ResponseWriter, r *http.Request) {
 	}
 	// One argon2id verification for every outcome, the grant checked
 	// after it, so the time taken says nothing about the name.
-	err = s.users.Current().Authenticate(name, req.Password)
+	// The file the password is proved against is the one whose hash the
+	// session remembers (sessionOf rechecks it).
+	file := s.users.Current()
+	err = file.Authenticate(name, req.Password)
 	release()
 	if err == nil && !s.policy.HasUser(name) {
 		err = errNoGrant
@@ -283,12 +320,13 @@ func (s *Server) handleSignIn(w http.ResponseWriter, r *http.Request) {
 	}
 	// A fresh id at every sign-in; the session the browser held, if any,
 	// ends (no fixation, and none left behind).
-	for _, c := range r.CookiesNamed(sessionCookie) {
+	cookie := s.cookieName(r)
+	for _, c := range r.CookiesNamed(cookie) {
 		s.sessions.end(c.Value)
 	}
-	id, se := s.sessions.open(name)
+	id, se := s.sessions.open(name, credPrint(file.Users[name].Password))
 	http.SetCookie(w, &http.Cookie{
-		Name:     sessionCookie,
+		Name:     cookie,
 		Value:    id,
 		Path:     "/",
 		Expires:  se.expires,
@@ -312,13 +350,14 @@ func (s *Server) handleSignIn(w http.ResponseWriter, r *http.Request) {
 // cookie.
 func (s *Server) handleSignOut(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	if !originIsHost(r) {
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": "sign-out is accepted only from this controller's own page (the request's Origin must be its Host)"})
+	if !s.ownOrigin(r) {
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": "sign-out is accepted only from this controller's own page (the request's Origin must be this controller's scheme and host)"})
 		return
 	}
 	ended := false
+	cookie := s.cookieName(r)
 	if s.sessions != nil {
-		for _, c := range r.CookiesNamed(sessionCookie) {
+		for _, c := range r.CookiesNamed(cookie) {
 			se, ok := s.sessions.end(c.Value)
 			if !ok {
 				continue
@@ -328,7 +367,7 @@ func (s *Server) handleSignOut(w http.ResponseWriter, r *http.Request) {
 				From: s.clientAddr(r), Session: se.hash, Result: audit.ResultOK})
 		}
 	}
-	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: s.secure(r), SameSite: http.SameSiteStrictMode})
+	http.SetCookie(w, &http.Cookie{Name: cookie, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: s.secure(r), SameSite: http.SameSiteStrictMode})
 	if isForm(r) {
 		http.Redirect(w, r, "/signin", http.StatusSeeOther)
 		return
@@ -346,20 +385,27 @@ type signInPageData struct {
 	Error  string
 	Next   string
 	Notice string // why sign-in will not work here, when it will not
-	Leader string // on a standby: the leader's sign-in page
+	Leader string // on a standby: the leader's sign-in page, when configured
+	// Form is whether the password form is shown: never where sign-in
+	// would refuse it (a password typed over plain HTTP is on the wire
+	// before any refusal).
+	Form bool
 }
 
 func (s *Server) signInPage(w http.ResponseWriter, r *http.Request, status int, msg, next string) {
 	d := signInPageData{Error: msg, Next: next}
-	switch {
+	switch leader, standby := s.standbyLeader(); {
 	case s.sessions == nil:
 		d.Notice = "Sign-in is not set up on this controller: its auth: block grants no user a role, or it has no users file."
 	case !s.signInTransport(r):
 		d.Notice = "Password sign-in needs HTTPS. Reach this controller over https:// (server.tls, or a TLS proxy named in server.trusted-proxies)."
-	}
-	if leader, ok := s.standbyLeader(); ok {
-		d.Notice = "This controller is the standby. Sign in on the leader."
-		d.Leader = leader + "/signin"
+	case standby:
+		d.Notice = "This controller is the standby. Open the leader to sign in."
+		if leader != "" {
+			d.Leader = leader + "/signin"
+		}
+	default:
+		d.Form = true
 	}
 	h := w.Header()
 	h.Set("Content-Type", "text/html; charset=utf-8")
@@ -393,13 +439,13 @@ p{margin:.75rem 0;font-size:.9rem}
 <h1>Sign in</h1>
 {{if .Notice}}<p>{{.Notice}}{{if .Leader}} <a href="{{.Leader}}">Go to the leader</a>{{end}}</p>{{end}}
 {{if .Error}}<p class="err" role="alert">{{.Error}}</p>{{end}}
-<form method="post" action="/api/signin">
+{{if .Form}}<form method="post" action="/api/signin">
 <input type="hidden" name="next" value="{{.Next}}">
 <label for="name">User name</label>
 <input id="name" name="name" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus>
 <label for="password">Password</label>
 <input id="password" name="password" type="password" autocomplete="current-password" required>
 <button type="submit">Sign in</button>
-</form>
+</form>{{end}}
 </main></body></html>
 `))

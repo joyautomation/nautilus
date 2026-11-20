@@ -10,10 +10,17 @@ import (
 	"time"
 )
 
-// sessionCookie is the browser sign-in's cookie (#708 PR 5b): HttpOnly,
-// SameSite=Strict, Path=/, host-only, Secure when the request reached the
-// controller over TLS. It carries a random id and nothing else.
-const sessionCookie = "nautilus_session"
+// The browser sign-in's cookie (#708 PR 5b): HttpOnly, SameSite=Strict,
+// Path=/, host-only. It carries a random id and nothing else. Over TLS it
+// is secureCookie, Secure and with the __Host- prefix: a browser accepts
+// that name only from a secure page, with Path=/ and no Domain, so no
+// plain-HTTP service on the same host can set or overwrite it. Over plain
+// HTTP (loopback only) it is plainCookie, which any other web service on
+// the same host is sent too, as with every cookie without the prefix.
+const (
+	secureCookie = "__Host-nautilus_session"
+	plainCookie  = "nautilus_session"
+)
 
 // maxUserSessions is how many sessions one user may hold at once (a
 // browser per screen in a control room is a handful); a sign-in past it
@@ -30,6 +37,17 @@ type session struct {
 	// authAt is when the user last proved their password in this session
 	// (sign-in today; a re-authentication with 5c's elevation).
 	authAt time.Time
+	// cred is the SHA-256 of the user's password hash it was proved
+	// against: a session whose user's password changed (even in a change
+	// that raced the sign-in, before its revocation could see the
+	// session) acts no more.
+	cred string
+}
+
+// credPrint is a password hash's fingerprint, for session.cred.
+func credPrint(phc string) string {
+	sum := sha256.Sum256([]byte(phc))
+	return hex.EncodeToString(sum[:])
 }
 
 // sessions is the controller's sign-ins, in memory: a restart signs
@@ -81,14 +99,14 @@ func (ss *sessions) told(ended []session) {
 
 // open starts a session for user and returns its id (256 random bits,
 // base64url), fresh at every sign-in.
-func (ss *sessions) open(user string) (string, session) {
+func (ss *sessions) open(user, cred string) (string, session) {
 	var b [32]byte
 	if _, err := rand.Read(b[:]); err != nil {
 		panic(err) // crypto/rand never fails on a supported platform
 	}
 	id := base64.RawURLEncoding.EncodeToString(b[:])
 	now := ss.now()
-	se := session{hash: sessionHash(id), user: user, created: now, expires: now.Add(ss.life), authAt: now}
+	se := session{hash: sessionHash(id), user: user, created: now, expires: now.Add(ss.life), authAt: now, cred: cred}
 
 	ss.mu.Lock()
 	var mine []*session

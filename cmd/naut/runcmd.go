@@ -500,6 +500,7 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	}
 	if el != nil {
 		sopts.Cluster = el
+		sopts.LeaderURLs = proj.Redundancy.LeaderURLs()
 	}
 	if subLog != nil {
 		sopts.SubstituteLog = subLog

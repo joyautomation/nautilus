@@ -47,6 +47,13 @@ func TestPairSectionLoads(t *testing.T) {
 			t.Errorf("%q: want the Kubernetes Lease mode, got %+v", k8s, p.Redundancy)
 		}
 	}
+	p, err = Load(pairFS(pairOK+"  public-urls: {a: https://plc-a.lan:8443/, b: https://plc-b.lan}\n"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := p.Redundancy.LeaderURLs(); got["a"] != "https://plc-a.lan:8443" || got["b"] != "https://plc-b.lan" {
+		t.Errorf("public-urls: %v", got)
+	}
 	if p, _ := Load(pairFS(""), ""); p.Redundancy.Pair() {
 		t.Error("no redundancy: section is not a pair")
 	}
@@ -76,6 +83,11 @@ func TestPairSectionRefusals(t *testing.T) {
 		{"a net delay alone too long for a short lease", pairOK + "  lease: 200ms\n  net-delay: 40ms\n", "under a quarter of the lease"},
 		{"a negative send margin", pairOK + "  send-margin: -5ms\n", "zero or more"},
 		{"a fence margin without peers", "redundancy:\n  net-delay: 50ms\n", "apply to a redundant pair"},
+		{"public-urls without peers", "redundancy:\n  public-urls: {a: https://plc-a.lan}\n", "public-urls applies to a redundant pair"},
+		{"a public URL for a third node", pairOK + "  public-urls: {c: https://plc-c.lan}\n", `"c" is not a controller`},
+		{"a public URL with a path", pairOK + "  public-urls: {a: https://plc-a.lan/hmi}\n", "no path"},
+		{"a public URL with no scheme", pairOK + "  public-urls: {a: plc-a.lan:8443}\n", "no path"},
+		{"a public URL with credentials", pairOK + "  public-urls: {a: https://u:p@plc-a.lan}\n", "no path"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			_, err := Load(pairFS(c.red), "")

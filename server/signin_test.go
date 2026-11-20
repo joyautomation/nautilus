@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -26,11 +27,18 @@ import (
 func fromLoopback(r *http.Request) { r.RemoteAddr = "127.0.0.1:40000" }
 func ownOrigin(r *http.Request)    { r.Header.Set("Origin", "http://localhost") }
 func asJSON(r *http.Request)       { r.Header.Set("Content-Type", "application/json") }
+
+// overTLS is a request that reached the controller over TLS, from its own
+// https page.
+func overTLS(r *http.Request) {
+	r.TLS = &tls.ConnectionState{}
+	r.Header.Set("Origin", "https://localhost")
+}
 func asForm(r *http.Request) {
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 }
 func withCookie(id string) func(*http.Request) {
-	return func(r *http.Request) { r.AddCookie(&http.Cookie{Name: sessionCookie, Value: id}) }
+	return func(r *http.Request) { r.AddCookie(&http.Cookie{Name: plainCookie, Value: id}) }
 }
 
 // signIn signs name in from loopback, from the controller's own page, and
@@ -42,7 +50,7 @@ func signIn(t *testing.T, srv *Server, name string) *http.Cookie {
 		t.Fatalf("sign-in as %s: %d %s", name, rec.Code, rec.Body)
 	}
 	for _, c := range rec.Result().Cookies() {
-		if c.Name == sessionCookie {
+		if c.Name == plainCookie {
 			return c
 		}
 	}
@@ -84,10 +92,21 @@ func TestSessionCookieActsAsItsUser(t *testing.T) {
 	}
 
 	// Over TLS the cookie is Secure.
-	rec = call(t, srv, "POST", "/api/signin", `{"name":"akhan","password":"password-akhan"}`, ownOrigin, asJSON,
-		func(r *http.Request) { r.TLS = &tls.ConnectionState{}; r.Header.Set("Origin", "https://localhost") })
-	if cs := rec.Result().Cookies(); rec.Code != http.StatusOK || len(cs) != 1 || !cs[0].Secure {
-		t.Errorf("sign-in over TLS: %d %v, want a Secure cookie", rec.Code, cs)
+	rec = call(t, srv, "POST", "/api/signin", `{"name":"akhan","password":"password-akhan"}`, asJSON, overTLS)
+	cs := rec.Result().Cookies()
+	if rec.Code != http.StatusOK || len(cs) != 1 || cs[0].Name != secureCookie || !cs[0].Secure || cs[0].Path != "/" || cs[0].Domain != "" {
+		t.Fatalf("sign-in over TLS: %d %+v, want __Host-nautilus_session, Secure, Path=/, no Domain", rec.Code, cs)
+	}
+	// It acts over TLS, by that name only: a plain-HTTP cookie on the same
+	// host (any service there may set one) is not read by a secure request.
+	tlsMe := func(name string) string {
+		return call(t, srv, "GET", "/api/me", "", overTLS, func(r *http.Request) { r.AddCookie(&http.Cookie{Name: name, Value: cs[0].Value}) }).Body.String()
+	}
+	if !strings.Contains(tlsMe(secureCookie), "user:akhan") {
+		t.Errorf("the __Host- cookie over TLS: %s", tlsMe(secureCookie))
+	}
+	if body := tlsMe(plainCookie); !strings.Contains(body, `"principal":"anonymous"`) {
+		t.Errorf("the session id under the plain name over TLS acts: %s", body)
 	}
 }
 
@@ -246,8 +265,12 @@ func TestSignInNeedsTLSOrLoopback(t *testing.T) {
 		{"loopback with X-Forwarded-For", func(r *http.Request) { fromLoopback(r); r.Header.Set("X-Forwarded-For", "192.0.2.4") }, http.StatusForbidden},
 		{"loopback with X-Forwarded-Proto", func(r *http.Request) { fromLoopback(r); r.Header.Set("X-Forwarded-Proto", "https") }, http.StatusForbidden},
 		{"loopback with Forwarded", func(r *http.Request) { fromLoopback(r); r.Header.Set("Forwarded", "for=192.0.2.4") }, http.StatusForbidden},
-		{"TLS", func(r *http.Request) { r.TLS = &tls.ConnectionState{} }, http.StatusOK},
-		{"a trusted proxy's https", func(r *http.Request) { r.RemoteAddr = "10.0.0.5:1"; r.Header.Set("X-Forwarded-Proto", "https") }, http.StatusOK},
+		{"TLS", overTLS, http.StatusOK},
+		{"a trusted proxy's https", func(r *http.Request) {
+			r.RemoteAddr = "10.0.0.5:1"
+			r.Header.Set("X-Forwarded-Proto", "https")
+			r.Header.Set("Origin", "https://localhost")
+		}, http.StatusOK},
 		{"an untrusted proxy's https", func(r *http.Request) { r.RemoteAddr = "10.0.0.6:1"; r.Header.Set("X-Forwarded-Proto", "https") }, http.StatusForbidden},
 	} {
 		rec := call(t, srv, "POST", "/api/signin", ok, ownOrigin, asJSON, c.mod)
@@ -284,7 +307,7 @@ func TestSignInThrottles(t *testing.T) {
 	clock := func() time.Time { return now }
 	srv.signin.addrs.now, srv.signin.names.now = clock, clock
 	from := func(addr string) func(*http.Request) {
-		return func(r *http.Request) { r.RemoteAddr = addr + ":1"; r.TLS = &tls.ConnectionState{} }
+		return func(r *http.Request) { r.RemoteAddr = addr + ":1"; overTLS(r) }
 	}
 	attempt := func(addr, pw string) *httptest.ResponseRecorder {
 		return call(t, srv, "POST", "/api/signin", `{"name":"akhan","password":"`+pw+`"}`, ownOrigin, asJSON, from(addr))
@@ -340,7 +363,7 @@ func TestSafeNext(t *testing.T) {
 // to next (on this controller), a refusal the page again with the message.
 func TestSignInForm(t *testing.T) {
 	srv, _, _ := patServer(t)
-	rec := call(t, srv, "GET", "/signin?next=/hmi/pumps", "")
+	rec := call(t, srv, "GET", "/signin?next=/hmi/pumps", "", fromLoopback)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `value="/hmi/pumps"`) || !strings.Contains(rec.Header().Get("Content-Security-Policy"), "frame-ancestors 'none'") {
 		t.Errorf("GET /signin: %d %q %s", rec.Code, rec.Header().Get("Content-Security-Policy"), rec.Body)
 	}
@@ -373,7 +396,7 @@ func TestSignOutRevokes(t *testing.T) {
 	}
 	rec := call(t, srv, "POST", "/api/signout", "", withCookie(c.Value), ownOrigin)
 	cs := rec.Result().Cookies()
-	if rec.Code != http.StatusOK || len(cs) != 1 || cs[0].Name != sessionCookie || cs[0].MaxAge >= 0 {
+	if rec.Code != http.StatusOK || len(cs) != 1 || cs[0].Name != plainCookie || cs[0].MaxAge >= 0 {
 		t.Errorf("sign-out: %d %v, want the cookie cleared", rec.Code, cs)
 	}
 	e := srv.audit.ring.Recent()[0]
@@ -445,15 +468,15 @@ func TestSessionsPerUserAreBounded(t *testing.T) {
 	ss := newSessions(time.Hour)
 	var ended []string
 	ss.OnEnd(func(se session) { ended = append(ended, se.hash) })
-	first, _ := ss.open("akhan")
+	first, _ := ss.open("akhan", "")
 	for range maxUserSessions - 1 {
-		ss.open("akhan")
+		ss.open("akhan", "")
 	}
-	other, _ := ss.open("jsmith")
+	other, _ := ss.open("jsmith", "")
 	if _, ok := ss.lookup(first); !ok || len(ended) != 0 {
 		t.Fatalf("at the limit: first live %v, ended %d", ok, len(ended))
 	}
-	ss.open("akhan")
+	ss.open("akhan", "")
 	if _, ok := ss.lookup(first); ok {
 		t.Error("past the limit the oldest session lives on")
 	}
@@ -627,5 +650,166 @@ func TestEntryKeepsTheAuthorizedUser(t *testing.T) {
 	e := srv.audit.ring.Recent()[0]
 	if rec.Code >= 400 || e.Action != "force.clear-all" || e.User != "user:akhan" || e.Session != sessionHash(c.Value) {
 		t.Errorf("clear-all whose session ended meanwhile: %d %s, journalled %+v", rec.Code, rec.Body, e)
+	}
+}
+
+// The Origin must be this controller's origin as the request reached it,
+// scheme included: over TLS an http page (one an on-path attacker answers
+// on the LAN, and a browser without schemeful same-site sends the Strict
+// cookie from) is refused for a write, a sign-in and a sign-out. The
+// scheme's default port counts as given.
+func TestOwnOriginIncludesTheScheme(t *testing.T) {
+	srv, _, _ := patServer(t)
+	rec := call(t, srv, "POST", "/api/signin", signInRow, asJSON, overTLS)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("sign-in over TLS: %d %s", rec.Code, rec.Body)
+	}
+	id := rec.Result().Cookies()[0].Value
+	sc := func(r *http.Request) { r.AddCookie(&http.Cookie{Name: secureCookie, Value: id}) }
+	httpPage := func(r *http.Request) { r.Header.Set("Origin", "http://localhost") }
+	for _, c := range []struct {
+		name, method, path, body string
+		mod                      []func(*http.Request)
+	}{
+		{"write", "POST", "/api/tags", `{"name":"SP","value":5}`, []func(*http.Request){overTLS, httpPage, sc}},
+		{"sign-in", "POST", "/api/signin", signInRow, []func(*http.Request){asJSON, overTLS, httpPage}},
+		{"sign-out", "POST", "/api/signout", "", []func(*http.Request){overTLS, httpPage, sc}},
+	} {
+		if rec := call(t, srv, c.method, c.path, c.body, c.mod...); rec.Code != http.StatusForbidden {
+			t.Errorf("%s over TLS from an http page: %d %s, want 403", c.name, rec.Code, rec.Body)
+		}
+	}
+	if body := call(t, srv, "GET", "/api/me", "", overTLS, sc).Body.String(); !strings.Contains(body, "user:akhan") {
+		t.Fatalf("the refused sign-out ended the session: %s", body)
+	}
+	// From its own https page, Host with or without the default port.
+	for _, host := range []string{"localhost", "localhost:443"} {
+		rec := call(t, srv, "POST", "/api/tags", `{"name":"SP","value":6}`, overTLS, sc, func(r *http.Request) { r.Host = host })
+		if rec.Code != http.StatusNoContent {
+			t.Errorf("write over TLS from https://localhost, Host %s: %d %s", host, rec.Code, rec.Body)
+		}
+	}
+	// And over plain HTTP an https Origin is not this controller's either.
+	c := signIn(t, srv, "akhan")
+	if rec := call(t, srv, "POST", "/api/tags", `{"name":"SP","value":7}`, withCookie(c.Value), func(r *http.Request) { r.Header.Set("Origin", "https://localhost") }); rec.Code != http.StatusForbidden {
+		t.Errorf("a plain-HTTP write from an https Origin: %d", rec.Code)
+	}
+}
+
+// The page never shows the password form where sign-in would refuse the
+// password: a password typed over plain HTTP is on the wire before any
+// refusal. It says why instead.
+func TestSignInPageHasNoFormOverPlainHTTP(t *testing.T) {
+	srv, _, _ := patServer(t)
+	for _, c := range []struct {
+		name string
+		mod  func(*http.Request)
+		form bool
+	}{
+		{"plain HTTP from the network", func(*http.Request) {}, false},
+		{"plain HTTP through a proxy on loopback", func(r *http.Request) { fromLoopback(r); r.Header.Set("X-Forwarded-For", "192.0.2.4") }, false},
+		{"loopback", fromLoopback, true},
+		{"TLS", overTLS, true},
+	} {
+		body := call(t, srv, "GET", "/signin", "", c.mod).Body.String()
+		if got := strings.Contains(body, `type="password"`) || strings.Contains(body, "<form"); got != c.form {
+			t.Errorf("%s: form shown %v, want %v: %s", c.name, got, c.form, body)
+		}
+		if !c.form && !strings.Contains(body, "needs HTTPS") {
+			t.Errorf("%s: the page does not say why: %s", c.name, body)
+		}
+	}
+	// Nor after a refused form post over plain HTTP.
+	body := call(t, srv, "POST", "/api/signin", "name=akhan&password=x", asForm, ownOrigin).Body.String()
+	if strings.Contains(body, `type="password"`) {
+		t.Errorf("the refusal page over plain HTTP shows the form: %s", body)
+	}
+}
+
+// An IPv6 client is throttled by its /64 (a host is handed a whole /64
+// and could rotate through it); IPv4 by its address.
+func TestSignInThrottleKeys(t *testing.T) {
+	for in, want := range map[string]string{
+		"192.0.2.7":            "192.0.2.7",
+		"::ffff:192.0.2.7":     "192.0.2.7",
+		"2001:db8:1:2:3:4:5:6": "2001:db8:1:2::/64",
+		"2001:db8:1:2:ffff::1": "2001:db8:1:2::/64",
+		"2001:db8:1:3::1":      "2001:db8:1:3::/64",
+		"fe80::1%eth0":         "fe80::/64",
+		"not-an-address":       "not-an-address",
+	} {
+		if got := addrKey(in); got != want {
+			t.Errorf("addrKey(%q) = %q, want %q", in, got, want)
+		}
+	}
+	srv, _, _ := patServer(t)
+	from := func(addr string) func(*http.Request) {
+		return func(r *http.Request) { r.RemoteAddr = "[" + addr + "]:1"; overTLS(r) }
+	}
+	for i := range 10 {
+		addr := fmt.Sprintf("2001:db8:1:2::%x", i+1)
+		if rec := call(t, srv, "POST", "/api/signin", `{"name":"x`+fmt.Sprint(i)+`","password":"guess"}`, asJSON, from(addr)); rec.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: %d", i+1, rec.Code)
+		}
+	}
+	if rec := call(t, srv, "POST", "/api/signin", signInRow, asJSON, from("2001:db8:1:2::ff")); rec.Code != http.StatusTooManyRequests {
+		t.Errorf("an 11th address in the same /64: %d, want 429", rec.Code)
+	}
+	if rec := call(t, srv, "POST", "/api/signin", signInRow, asJSON, from("2001:db8:1:3::1")); rec.Code != http.StatusOK {
+		t.Errorf("another /64: %d", rec.Code)
+	}
+}
+
+// A limiter past limiterSweep buckets drops the full ones a few at a time
+// (sweepBatch per new key), never the whole map at once; past limiterMax
+// it drops some anyway, so made-up keys cannot grow it without bound.
+func TestLimiterSweepIsAmortised(t *testing.T) {
+	l := newLimiter(2, time.Second)
+	now := time.Now()
+	l.now = func() time.Time { return now }
+	for i := range limiterSweep {
+		l.take(fmt.Sprint("k", i))
+	}
+	now = now.Add(time.Hour) // every bucket full again
+	l.take("new")
+	if got, want := len(l.b), limiterSweep-sweepBatch+1; got != want {
+		t.Errorf("after one new key: %d buckets, want %d (a sweep of %d)", got, want, sweepBatch)
+	}
+	// Keys whose buckets never fill (each spent at once, the clock still).
+	l = newLimiter(1, time.Hour)
+	l.now = func() time.Time { return now }
+	for i := range limiterMax + 500 {
+		l.take(fmt.Sprint("k", i))
+	}
+	if len(l.b) > limiterMax {
+		t.Errorf("%d buckets, want at most %d", len(l.b), limiterMax)
+	}
+}
+
+// A session remembers the password hash its user proved: a sign-in that
+// raced a password change (the change's revocation ran before the
+// session existed) acts no more once the change is in the file.
+func TestSessionDiesWithItsPassword(t *testing.T) {
+	srv, _, path := patServer(t)
+	c := signIn(t, srv, "akhan")
+	// The race, made certain: the revocation never sees this session.
+	srv.users.OnChange(func(string, []users.Change) {})
+	if err := users.Update(path, "opsadmin", func(f *users.File) error { return f.SetPassword("akhan", "new-password") }); err != nil {
+		t.Fatal(err)
+	}
+	srv.users.Reload()
+	if body := call(t, srv, "GET", "/api/me", "", withCookie(c.Value)).Body.String(); !strings.Contains(body, `"principal":"anonymous"`) {
+		t.Errorf("a session proved against the old password acts: %s", body)
+	}
+	// A change that is not akhan's password (jsmith's) leaves akhan's
+	// new session alone.
+	rec := call(t, srv, "POST", "/api/signin", `{"name":"akhan","password":"new-password"}`, fromLoopback, ownOrigin, asJSON)
+	id := rec.Result().Cookies()[0].Value
+	if err := users.Update(path, "opsadmin", func(f *users.File) error { return f.SetPassword("jsmith", "other-password") }); err != nil {
+		t.Fatal(err)
+	}
+	srv.users.Reload()
+	if body := call(t, srv, "GET", "/api/me", "", withCookie(id)).Body.String(); !strings.Contains(body, "user:akhan") {
+		t.Errorf("another user's change ended akhan's session: %s", body)
 	}
 }

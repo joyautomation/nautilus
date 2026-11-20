@@ -311,6 +311,12 @@ type Options struct {
 	// as "token:<name>", with the grants the auth: block gives it.
 	ServiceTokens map[string]string
 
+	// LeaderURLs are a redundant pair's controllers as a browser reaches
+	// them, by node name (redundancy.public-urls: {a: https://…, b: …}). A
+	// standby refers a signed-in browser to the leader's; without one it
+	// names no address (a peer address must never reach a browser).
+	LeaderURLs map[string]string
+
 	// Users is the controller's users file (#708): a personal access token
 	// it holds is a credential acting as "user:<name>", with the grants
 	// the auth: block gives that user. Each change to the file is
@@ -577,9 +583,10 @@ type Server struct {
 	tagGen  uint64
 	tagSnap map[string]any
 
-	users    *users.Store
-	sessions *sessions // browser sign-ins; nil without users to sign in
-	signin   *signInGate
+	users      *users.Store
+	leaderURLs map[string]string // Options.LeaderURLs
+	sessions   *sessions         // browser sign-ins; nil without users to sign in
+	signin     *signInGate
 
 	// unforceAllChecked, when set (tests only), runs between clear-all's
 	// check of the forced tags and its clearing of them.
@@ -655,6 +662,7 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 	if len(opts) > 0 {
 		s.policy = opts[0].Auth
 		s.proxies = opts[0].TrustedProxies
+		s.leaderURLs = opts[0].LeaderURLs
 		if c := opts[0].TLS; c != nil {
 			s.tls, s.leaderTLS = c, c.leaderTransport()
 			c.OnReload(s.journalTLSReload)
@@ -963,7 +971,7 @@ func (s *Server) proxyStandby(routes *http.ServeMux, mux http.Handler) http.Hand
 		s.endSessionsAsStandby()
 		if standbyRefers(r) {
 			auditedAnswer(routes, w, r, func(w http.ResponseWriter, _ *http.Request) {
-				s.referToLeader(w, st.LeaderAddr)
+				s.referToLeader(w, s.leaderURLs[st.Leader])
 			})
 			return
 		}
@@ -1006,28 +1014,20 @@ func standbyRefers(r *http.Request) bool {
 	return hasSessionCookie(r) && presentedToken(r) == ""
 }
 
-// leaderOrigin is the leader's tag API as a browser would address it,
-// from the peer address it advertises (which a browser may not reach
-// until #716's floating address).
-func (s *Server) leaderOrigin(addr string) string {
-	if s.leaderTLS != nil {
-		return "https://" + addr
-	}
-	return "http://" + addr
-}
-
 // referToLeader is a forwarding standby's answer to a browser session's
-// request: 503, the leader's address in Location and in "leader", for the
-// HMI kit to follow. The cookie is left as it is: only the leader can end
-// the session it names.
-func (s *Server) referToLeader(w http.ResponseWriter, addr string) {
-	leader := s.leaderOrigin(addr)
-	w.Header().Set("Location", leader+"/")
+// request: 503, and the leader's configured public URL (Location and
+// "leader") for the HMI kit to follow. Never the peer address: that is
+// for the pair (leader.Status keeps it out of JSON), and this answer goes
+// to anyone. Without a configured URL, the 503 names none. The cookie is
+// left as it is: only the leader can end the session it names.
+func (s *Server) referToLeader(w http.ResponseWriter, leader string) {
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, http.StatusServiceUnavailable, map[string]string{
-		"error":  "this controller is the standby; use the leader (browser sign-ins live on the leader)",
-		"leader": leader,
-	})
+	body := map[string]string{"error": "this controller is the standby; open the leader (browser sign-ins live on the leader)"}
+	if leader != "" {
+		w.Header().Set("Location", leader+"/")
+		body["leader"] = leader
+	}
+	writeJSON(w, http.StatusServiceUnavailable, body)
 }
 
 // endSessionsAsStandby ends the browser sessions this controller issued
@@ -1048,8 +1048,9 @@ func (s *Server) endSessionsAsStandby() {
 	}
 }
 
-// standbyLeader is the leader's origin when this controller is a standby
-// that forwards to it.
+// standbyLeader reports whether this controller is a standby that
+// forwards to a leader, and that leader's configured public URL ("" when
+// none is).
 func (s *Server) standbyLeader() (string, bool) {
 	if s.cluster == nil {
 		return "", false
@@ -1058,7 +1059,7 @@ func (s *Server) standbyLeader() (string, bool) {
 	if st.IsLeader || st.LeaderAddr == "" || noLeaderKnown(st) || heldHere(st) {
 		return "", false
 	}
-	return s.leaderOrigin(st.LeaderAddr), true
+	return s.leaderURLs[st.Leader], true
 }
 
 // heldHere reports a replica that the lease names but that is not leading:

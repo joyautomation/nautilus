@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -180,13 +181,13 @@ func (s *Server) sessionOf(r *http.Request) (session, bool) {
 	if s.sessions == nil {
 		return session{}, false
 	}
-	for _, c := range r.CookiesNamed(sessionCookie) {
+	for _, c := range r.CookiesNamed(s.cookieName(r)) {
 		se, ok := s.sessions.lookup(c.Value)
 		if !ok {
 			continue
 		}
 		u, known := s.users.Current().Users[se.user]
-		if !known || u.Disabled || !s.policy.HasUser(se.user) {
+		if !known || u.Disabled || credPrint(u.Password) != se.cred || !s.policy.HasUser(se.user) {
 			return session{}, false
 		}
 		return se, true
@@ -194,34 +195,68 @@ func (s *Server) sessionOf(r *http.Request) (session, bool) {
 	return session{}, false
 }
 
-// hasSessionCookie reports whether r carries the sign-in cookie at all,
-// valid or not: what a standby, which holds no sessions, can see.
-func hasSessionCookie(r *http.Request) bool {
-	return len(r.CookiesNamed(sessionCookie)) > 0
+// cookieName is the sign-in cookie's name on r's transport: the __Host-
+// one over TLS. Only that one is read: a plain-HTTP page on the same host
+// cannot plant a cookie a secure request would take.
+func (s *Server) cookieName(r *http.Request) string {
+	if s.secure(r) {
+		return secureCookie
+	}
+	return plainCookie
 }
 
-// originIsHost reports a browser request from this controller's own page:
-// an Origin is present and names the Host the request was sent to. It is
-// stricter than sameOrigin, which lets a request with no Origin through:
-// a cookie is sent by any page on the same host (SameSite ignores the
-// port), so a cookie-authenticated write must show where it came from.
-func originIsHost(r *http.Request) bool {
+// hasSessionCookie reports whether r carries a sign-in cookie at all, by
+// either name, valid or not: what a standby, which holds no sessions, can
+// see.
+func hasSessionCookie(r *http.Request) bool {
+	return len(r.CookiesNamed(secureCookie)) > 0 || len(r.CookiesNamed(plainCookie)) > 0
+}
+
+// ownOrigin reports a browser request from this controller's own page: an
+// Origin is present and is this controller's origin as the request
+// reached it: https when secure(r), else http, and the Host, ports
+// compared with the scheme's default filled in. It is stricter than
+// sameOrigin, which lets a request with no Origin through and ignores the
+// scheme: a cookie is sent by any page on the same host (SameSite ignores
+// the port, and a browser without schemeful same-site the scheme too), so
+// an http page an on-path attacker answers must not write over https.
+func (s *Server) ownOrigin(r *http.Request) bool {
 	o := r.Header.Get("Origin")
 	if o == "" {
 		return false
 	}
 	u, err := url.Parse(o)
-	return err == nil && u.Host != "" && (u.Scheme == "http" || u.Scheme == "https") && strings.EqualFold(u.Host, r.Host)
+	if err != nil || u.Host == "" || u.User != nil || (u.Path != "" && u.Path != "/") {
+		return false
+	}
+	scheme := "http"
+	if s.secure(r) {
+		scheme = "https"
+	}
+	return u.Scheme == scheme && strings.EqualFold(withPort(u.Host, scheme), withPort(r.Host, scheme))
+}
+
+// withPort is host[:port] with the scheme's default port when it has
+// none, so "plc" and "plc:443" are the same https origin.
+func withPort(host, scheme string) string {
+	if _, _, err := net.SplitHostPort(host); err == nil {
+		return host
+	}
+	port := "80"
+	if scheme == "https" {
+		port = "443"
+	}
+	return net.JoinHostPort(strings.TrimSuffix(strings.TrimPrefix(host, "["), "]"), port)
 }
 
 // cookieRefused is the refusal for a cookie-authenticated request that
 // changes something from anywhere but this controller's own page (#812):
 // 0 when it is allowed.
-func cookieRefused(r *http.Request, a actor) (int, string) {
-	if a.session == nil || r.Method == http.MethodGet || r.Method == http.MethodHead || originIsHost(r) {
+func (s *Server) cookieRefused(r *http.Request, a actor) (int, string) {
+	if a.session == nil || r.Method == http.MethodGet || r.Method == http.MethodHead || s.ownOrigin(r) {
 		return 0, ""
 	}
-	return http.StatusForbidden, "a signed-in browser may change something only from this controller's own page (the request's Origin must be its Host)"
+	return http.StatusForbidden, "a signed-in browser may change something only from this controller's own page (the request's Origin must be this controller's scheme and host)"
 }
 
 // signInHint ends a 401 for a request with no credential.
@@ -295,7 +330,7 @@ func (s *Server) authorize(r *http.Request, perm, target string) (int, string) {
 	if a.invalid {
 		return http.StatusUnauthorized, "invalid credential"
 	}
-	if code, msg := cookieRefused(r, a); code != 0 {
+	if code, msg := s.cookieRefused(r, a); code != 0 {
 		return code, msg
 	}
 	d := s.policy.Can(a.pr, perm, target)
@@ -352,7 +387,7 @@ func (s *Server) preAuthorize(r *http.Request, action string) (int, string) {
 	if a.invalid {
 		return http.StatusUnauthorized, "invalid credential"
 	}
-	if code, msg := cookieRefused(r, a); code != 0 {
+	if code, msg := s.cookieRefused(r, a); code != 0 {
 		return code, msg
 	}
 	if s.policy.Holds(a.pr, perm) {
