@@ -668,6 +668,9 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 	}
 	s.audit = newAuditor(rec)
 	s.unknowns = newUnknowns(s.audit.record)
+	if s.io != nil && s.io.OnRevert != nil {
+		s.io.OnRevert(s.recordIORevert)
+	}
 	// The logs tell this server what they apply that it proposed, so an
 	// "outcome unknown" is resolved on evidence, and an alarm lapse is
 	// journalled (oplog_unknown.go, alarms_oplog.go).
@@ -850,7 +853,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/io/staged", s.audited("config.stage", ioStageTarget, s.handleIOStage))
 	mux.HandleFunc("GET /api/io/staged/{id}", s.handleIOStaged)
 	mux.Handle("POST /api/io/staged/{id}/validate", s.audited("config.validate", ioStagedTarget, s.handleIOValidate))
-	mux.Handle("POST /api/io/staged/{id}/apply", s.audited("config.apply", ioStagedTarget, s.handleIOApply))
+	mux.Handle("POST /api/io/staged/{id}/apply", s.audited("config.apply", ioApplyTarget, s.handleIOApply))
 	mux.Handle("POST /api/io/revert/cancel", s.audited("config.revert.cancel", nil, s.handleIOCancelRevert))
 	mux.HandleFunc("GET /api/forces", s.handleForces)
 	mux.HandleFunc("GET /api/substitutes", s.handleSubstitutes)

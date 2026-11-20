@@ -251,6 +251,14 @@ func (io *IOConfig) watchEnded(w IOWatch) {
 	if !w.Revert {
 		return
 	}
+	if w.State == WatchReverted || w.State == WatchRevertFail {
+		io.mu.Lock()
+		f := io.reverted
+		io.mu.Unlock()
+		if f != nil {
+			go f(w) // the one change no request made: the server journals it, off the apply lock
+		}
+	}
 	io.mu.Lock()
 	changed := false
 	if (w.State == WatchAnswered || w.State == WatchCancelled) && io.gen == w.Gen {

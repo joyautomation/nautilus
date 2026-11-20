@@ -144,6 +144,10 @@ type auditTarget struct {
 	// answered, when set, reads after from an accepted action's response
 	// body (the id a stage was given, the state an apply reached).
 	answered func(body []byte) any
+	// failed, when set, adds to the detail of a refused or failed action
+	// what its answer says (an apply that failed: where it came from and
+	// the changes validation had computed).
+	failed func(body []byte) map[string]any
 }
 
 // targetFunc reads a request's auditTarget. body is the request body,
@@ -658,6 +662,11 @@ func (a *auditedRoute) answer(w http.ResponseWriter, r *http.Request, t auditTar
 		}
 		e.Detail["status"] = status
 		e.Detail["reason"] = reasonOf(buf.body.Bytes())
+		if t.failed != nil {
+			for k, v := range t.failed(buf.body.Bytes()) {
+				e.Detail[k] = v
+			}
+		}
 	}
 	e.Before, e.After = audit.Cap(e.Before, valueCap), audit.Cap(e.After, valueCap)
 	a.s.audit.record(e)
@@ -974,6 +983,86 @@ func ioStageTarget(_ *http.Request, body []byte) auditTarget {
 // the path; after is the state it reached.
 func ioStagedTarget(r *http.Request, _ []byte) auditTarget {
 	return auditTarget{target: r.PathValue("id"), answered: stagedState}
+}
+
+// ioApplyTarget is an apply: after is the state it reached plus what it
+// changed (each unit's before and after hash, what the HTTP guide
+// says they hash), where the candidate came from, and whether the change
+// is kept across a restart.
+func ioApplyTarget(r *http.Request, _ []byte) auditTarget {
+	return auditTarget{target: r.PathValue("id"), answered: appliedState, failed: failedApply}
+}
+
+// failedApply reads a failed apply's answer: where the candidate came from
+// and the changes validation computed for it (omitted when there are none).
+func failedApply(body []byte) map[string]any {
+	var st struct {
+		From       string `json:"from"`
+		Validation *struct {
+			Changes []struct {
+				Driver string `json:"driver"`
+				Device string `json:"device"`
+				Before string `json:"before"`
+				After  string `json:"after"`
+			} `json:"changes"`
+		} `json:"validation"`
+	}
+	if json.Unmarshal(body, &st) != nil || st.From == "" {
+		return nil
+	}
+	out := map[string]any{"from": capText(st.From, byMax)}
+	if v := st.Validation; v != nil && len(v.Changes) > 0 {
+		ch := make([]map[string]string, 0, len(v.Changes))
+		for _, c := range v.Changes {
+			m := map[string]string{"driver": c.Driver, "before": c.Before, "after": c.After}
+			if c.Device != "" {
+				m["device"] = c.Device
+			}
+			ch = append(ch, m)
+		}
+		out["changes"] = ch
+	}
+	return out
+}
+
+func appliedState(body []byte) any {
+	var st struct {
+		ID     string `json:"id"`
+		State  string `json:"state"`
+		From   string `json:"from"`
+		Result *struct {
+			Changes []struct {
+				Driver string `json:"driver"`
+				Device string `json:"device"`
+				Before string `json:"before"`
+				After  string `json:"after"`
+			} `json:"changes"`
+			Kept  bool `json:"kept"`
+			Watch *struct {
+				Revert bool   `json:"revert"`
+				State  string `json:"state"`
+			} `json:"watch"`
+		} `json:"result"`
+	}
+	if json.Unmarshal(body, &st) != nil || st.State == "" {
+		return nil
+	}
+	out := map[string]any{"id": st.ID, "state": st.State, "from": capText(st.From, byMax)}
+	if r := st.Result; r != nil {
+		ch := make([]map[string]string, 0, len(r.Changes))
+		for _, c := range r.Changes {
+			m := map[string]string{"driver": c.Driver, "before": c.Before, "after": c.After}
+			if c.Device != "" {
+				m["device"] = c.Device
+			}
+			ch = append(ch, m)
+		}
+		out["changes"], out["kept"] = ch, r.Kept
+		if r.Watch != nil {
+			out["revertIfSilent"] = r.Watch.Revert
+		}
+	}
+	return out
 }
 
 // stagedState reads a staged candidate's id and state from an answer.

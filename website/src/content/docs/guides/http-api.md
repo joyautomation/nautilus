@@ -1145,6 +1145,50 @@ manifest has an `auth:` block, which makes it need `read`: without one,
 anyone who can reach the port can read the project's I/O files.** Keep the
 port off untrusted networks.
 
+**Who is recorded.** Every stage, validate, apply and revert cancel is
+journalled (`config.stage`, `config.validate`, `config.apply`,
+`config.revert.cancel`) under the request's principal: `user:<name>` for a
+signed-in user or a personal access token, `token:<name>` for a named
+service token, `token` for the bare `NAUTILUS_TOKEN`, `anonymous` with no
+credentials. The same name is kept as the candidate's `by` and in the
+retained record of what runs, and a name the client types in a body is never
+taken for it. The apply's entry says what changed: `from` (a commit, or
+`upload`), each changed unit's `before` and `after` hash, whether it is kept
+across a restart and whether it asked to revert if silent.
+
+A `revertIfSilent` that fires is not a request, so it is journalled as
+`config.revert` by `system` (source `system`), never under the name of whoever
+applied. Its target is the apply's id and its detail says `revert of <id>
+applied by <principal>`, with the reason and whether putting it back worked
+(`result: error` when it did not).
+
+A `revertIfSilent` apply that a restart or a takeover interrupts is not
+reverted by the watch: the new leader brings back the configuration from
+before it and lists the dropped apply under `config.discarded`. The journal
+still shows the apply as `config.apply` (ok); read `config.discarded` for
+what did not survive.
+
+**What the hashes cover.** A hash is the first 8 bytes (16 hex characters) of
+the SHA-256 of the unit's resolved configuration marshalled as compact JSON
+(Go field names in declaration order, durations as integer nanoseconds,
+nothing omitted). Those bytes are nautilus's resolved internal form, not the
+project files, and can change between releases. To check a hash, stage the
+same files on a controller of the same nautilus version and compare it with
+the one in `GET /api/io` or the `config.differs` rows (`manifestHash`,
+`runningHash`). What each covers:
+
+- a Modbus device (`devices:` row): every source and tag-binding setting, as
+  resolved (the device library's profile included);
+- a Modbus driver on its own (the `<driver>` unit): its scan rate, scan
+  classes and tag classes;
+- an OPC UA client: its `drivers:` entry (without `validate`), its device's
+  name and the manifest derived from it, a profile node id included;
+- any other driver: its `drivers:` entry and the text of the manifest file it
+  names.
+
+Hashes identify a configuration; they are not a secret, and two controllers
+on the same nautilus version with the same files report the same hashes.
+
 | Status | When |
 | --- | --- |
 | `201` | Staged |

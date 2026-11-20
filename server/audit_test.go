@@ -382,7 +382,7 @@ func auditRows() []auditRow {
 		{name: "io apply", pattern: "POST /api/io/staged/{id}/apply", server: ioSrv, prep: ioStaged(true),
 			method: "POST", path: "/api/io/staged/1/apply",
 			action: "config.apply", target: "1", user: "anonymous", source: "api", result: "ok",
-			after: map[string]any{"id": "1", "state": "applied"}},
+			after: map[string]any{"id": "1", "state": "applied", "from": shaA, "changes": []map[string]string{}, "kept": false}},
 		{name: "io apply nothing", pattern: "POST /api/io/staged/{id}/apply", server: ioSrv,
 			method: "POST", path: "/api/io/staged/9/apply",
 			action: "config.apply", target: "9", user: "anonymous", source: "api", result: "refused"},
