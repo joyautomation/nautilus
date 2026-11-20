@@ -64,7 +64,9 @@ func TestPinFirstIsTrustOnFirstUse(t *testing.T) {
 	if err != nil || !disk.Pins["jsmith@corp.example"].Same("https://idp", "sub-1") || disk.ChangedBy != "controller" {
 		t.Errorf("on disk: %+v %v", disk, err)
 	}
-	if st, _ := os.Stat(PinsPath(path)); st.Mode().Perm() != 0o600 {
+	// Windows keeps no mode bits (access is the ACL's): CheckMode skips
+	// them there too.
+	if st, _ := os.Stat(PinsPath(path)); runtime.GOOS != "windows" && st.Mode().Perm() != 0o600 {
 		t.Errorf("pins file mode %v", st.Mode().Perm())
 	}
 	// The controller's own pin is journalled by the sign-in, not told
@@ -190,6 +192,9 @@ func TestSideFilesFailClosed(t *testing.T) {
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			if runtime.GOOS == "windows" && strings.Contains(tc.name, "others may read") {
+				t.Skip("Windows keeps no mode bits; CheckMode skips them there")
+			}
 			s, path, _ := pinStore(t)
 			s.PinFirst("a@x", "https://idp", "sub-a", time.Now())
 			if err := tc.write(tc.file(path)); err != nil {
