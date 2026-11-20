@@ -505,8 +505,9 @@ Svelte, for when a drawing is not enough. You can stop after 8.4.
 
 ### 8.1 Draw the screen
 
-A screen is a file that ends in `.mimic.json`. It lists what is on the
-screen, where, and which tag each thing shows or writes. `naut` builds it
+A screen is a file that ends in `.mimic.json` (a *mimic* is a process
+diagram, the plant drawn as it is laid out). It lists what is on the screen,
+where, and which tag each thing shows or writes. `naut` builds it
 itself: there is nothing else to install.
 
 1. In `motor`, create a file named `motor.mimic.json` (right-click an
@@ -554,6 +555,11 @@ it: change `MotorRun` to `MotorRunn` in the file and run it again. You get
 a warning that names `MotorRunn` as a tag the project does not declare.
 Change it back. (If a warning about small text on the *Diagnostics* page
 also appears, that page is `naut`'s own, not yours: ignore it.)
+
+If you see `not rendered: no Chrome, Chromium or Edge on this machine`, the
+screen was still checked against your tags; it just was not drawn in a
+browser to look for layout problems. Install one of those browsers, or
+ignore the line.
 
 ### 8.3 Run it
 

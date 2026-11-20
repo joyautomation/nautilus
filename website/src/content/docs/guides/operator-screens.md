@@ -4,7 +4,8 @@ description: A *.mimic.json is an operator screen as data — equipment placed o
 ---
 
 An operator screen in nautilus is a file: `*.mimic.json`, anywhere in the
-project. It places equipment on a canvas, runs pipes between it, and binds
+project. (A *mimic* is a process diagram: the pump, tank and pipes drawn as
+the plant is laid out.) It places equipment on a canvas, runs pipes between it, and binds
 each piece to the tags it shows. The VS Code extension opens it in a
 graphical editor, and with a controller running (`naut run`, or the
 playground) the screen animates with the process and its controls write to
