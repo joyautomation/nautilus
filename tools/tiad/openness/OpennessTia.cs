@@ -464,7 +464,7 @@ namespace Tiad.Openness
         // ApplyStation places the CPU and sets its PROFINET interface:
         // address, subnet mask, router, PROFINET name (generated names
         // off). Everything else in a spec waits for what S2a learns.
-        public List<string> ApplyStation(object project, Station previous, Station next, Secrets secrets)
+        public List<string> ApplyStation(object project, Station previous, Station next, Secrets secrets, List<string> notes)
         {
             if (next.Modules.Count > 0) throw new TiaException("tiad cannot place rack modules yet: the first TIA start (S2a) learns the rack");
             if (next.Profinet != null) throw new TiaException("tiad cannot configure a PROFINET IO system yet: the IO-device attribute names are learned at the first TIA start (S2a)");
@@ -490,7 +490,7 @@ namespace Tiad.Openness
                 Set("Node", node,
                     "PnDeviceNameAutoGeneration", false,
                     "PnDeviceName", next.Cpu.ProfinetName);
-                Protect(CpuOf(station), next.Cpu.ConfigurationProtection, secrets);
+                Protect(station, CpuOf(station), next.Cpu.ConfigurationProtection, secrets, notes);
                 return Station.Changes(same ? previous : null, next);
             });
         }
@@ -498,28 +498,45 @@ namespace Tiad.Openness
         // Protect applies cpu.configurationProtection from the CPU's state
         // as the project holds it now (ConfigProtection decides), then
         // reads it back: anything but the promised state refuses.
-        static void Protect(DeviceItem cpu, string want, Secrets secrets)
+        static void Protect(HwDevice station, DeviceItem cpu, string want, Secrets secrets, List<string> notes)
         {
             PlcMasterSecretConfigurator c = cpu.GetService<PlcMasterSecretConfigurator>();
             string current = c == null ? ConfigProtection.Absent : c.MasterSecretConfiguration.ToString();
             string action = ConfigProtection.Plan(current, want, secrets.ConfigurationPassword != "");
-            if (action == ConfigProtection.Nothing)
-            {
-                if (current == ConfigProtection.WithPassword && want == StationRules.ProtectPassword)
-                {
-                    Log.Line("configuration protection: already protected; TIA cannot check its password offline, so a download asks for it");
-                }
-                return;
-            }
+            string note = ConfigProtection.Note(current, want);
+            if (note != null) notes.Add(note);
+            if (action == ConfigProtection.Nothing) return;
             if (action == ConfigProtection.ProtectThenUnprotect)
             {
-                using (var ss = Secure(ConfigProtection.Throwaway()))
+                // Once the throwaway Protect is called, any failure could
+                // leave the CPU under a password nobody holds: remove it.
+                try
                 {
-                    c.Protect(ss);
-                    string mid = ConfigProtection.Check(ConfigProtection.Protect, c.MasterSecretConfiguration.ToString());
-                    if (mid != null) throw new TiaException(mid);
-                    c.Unprotect(ss);
+                    using (var ss = Secure(ConfigProtection.Throwaway()))
+                    {
+                        c.Protect(ss);
+                        string mid = ConfigProtection.Check(ConfigProtection.Protect, c.MasterSecretConfiguration.ToString());
+                        if (mid != null) throw new TiaException(mid);
+                        c.Unprotect(ss);
+                    }
+                    string end = ConfigProtection.Check(action, c.MasterSecretConfiguration.ToString());
+                    if (end != null) throw new TiaException(end);
                 }
+                catch (Exception e)
+                {
+                    string removeFailed = null;
+                    try
+                    {
+                        station.Delete();
+                    }
+                    catch (Exception d)
+                    {
+                        removeFailed = Message(d);
+                    }
+                    throw new TiaException(ConfigProtection.Stranded(Message(e), removeFailed));
+                }
+                Log.Line("configuration protection: {0}, now {1}", action, c.MasterSecretConfiguration);
+                return;
             }
             else
             {

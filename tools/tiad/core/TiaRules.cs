@@ -135,10 +135,36 @@ namespace Tiad
         public const string Nothing = "", Protect = "protect", UnprotectWithPassword = "unprotect-with-password", ProtectThenUnprotect = "protect-then-unprotect";
 
         // Throwaway is a one-use password for ProtectThenUnprotect that
-        // meets TIA's rules. It is never logged and never kept.
+        // meets TIA's rules, from a cryptographic random source. It is
+        // never logged and never kept.
         public static string Throwaway()
         {
-            return "Tz" + Guid.NewGuid().ToString("N") + "9";
+            var b = new byte[16];
+            using (var rng = new System.Security.Cryptography.RNGCryptoServiceProvider()) rng.GetBytes(b);
+            var sb = new StringBuilder("Tz");
+            foreach (byte x in b) sb.Append(x.ToString("x2", CultureInfo.InvariantCulture));
+            return sb.Append('9').ToString();
+        }
+
+        // Stranded is the refusal when turning off a CPU never set up
+        // failed after Protect with a throwaway password: the CPU may be
+        // protected by a password nobody holds, so the glue removes it
+        // from the project. removeFailed is why removing it failed, or
+        // null when it was removed.
+        public static string Stranded(string why, string removeFailed)
+        {
+            string head = "turning the configuration protection off failed part-way (" + why + "), which could leave the CPU protected by a throwaway password nobody holds";
+            if (removeFailed == null) return head + ", so tiad removed the CPU from the project: apply the spec again to make it anew";
+            return head + ", and removing the CPU from the project failed too (" + removeFailed + "): close this session without saving";
+        }
+
+        // Note is what an apply says about the protection besides its
+        // changes, or null: password on a CPU already protected leaves it
+        // as it is, so a changed secret does not reach the project.
+        public static string Note(string current, string want)
+        {
+            if (current != WithPassword || want != StationRules.ProtectPassword) return null;
+            return "the CPU's configuration protection was already on and is left as it is: TIA cannot check its password offline, so a changed secrets.configurationPassword does not reach the project, and a download asks for the password the project holds; to change it, apply none with the old password, then password with the new one";
         }
 
         // Plan returns the action that takes current to what want asks,
@@ -193,7 +219,7 @@ namespace Tiad
         public static string Check(string action, string after)
         {
             if (action == Nothing || after == Target(action)) return null;
-            return "after " + action + " the CPU's configuration protection reads " + (after == Absent ? "absent" : after) + ", not " + Target(action) + "; the project is changed: apply a spec again before compiling";
+            return "after " + action + " the CPU's configuration protection reads " + (after == Absent ? "absent" : after) + ", not " + Target(action);
         }
     }
 

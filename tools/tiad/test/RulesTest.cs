@@ -322,6 +322,9 @@ namespace Tiad.Test
             {
                 // current, want, have password, action
                 new object[] { N, keep, false, ConfigProtection.Nothing },
+                // A password sent with keep changes nothing either.
+                new object[] { P, keep, true, ConfigProtection.Nothing },
+                new object[] { N, keep, true, ConfigProtection.Nothing },
                 new object[] { P, keep, false, ConfigProtection.Nothing },
                 new object[] { A, keep, false, ConfigProtection.Nothing },
                 new object[] { "Bogus", keep, false, ConfigProtection.Nothing },
@@ -369,6 +372,16 @@ namespace Tiad.Test
             string a = ConfigProtection.Throwaway(), b = ConfigProtection.Throwaway();
             Eq(StationRules.CheckTiaPassword(a), null, "a throwaway meets TIA's rules");
             True(a != b, "each throwaway is new");
+            Eq(a.Length, 35, "a throwaway carries 16 random bytes");
+            Contains(ConfigProtection.Stranded("TIA said no", null), "tiad removed the CPU from the project: apply the spec again to make it anew", "stranded, removed");
+            Contains(ConfigProtection.Stranded("TIA said no", "locked"), "removing the CPU from the project failed too (locked): close this session without saving", "stranded, not removed");
+            Contains(ConfigProtection.Stranded("TIA said no", null), "a throwaway password nobody holds", "stranded names the risk");
+            Contains(ConfigProtection.Note(ConfigProtection.WithPassword, StationRules.ProtectPassword), "apply none with the old password, then password with the new one", "a kept password names how to change it");
+            foreach (string cur in new[] { ConfigProtection.None, ConfigProtection.WithoutPassword, ConfigProtection.Absent })
+            {
+                Eq(ConfigProtection.Note(cur, StationRules.ProtectPassword), null, "no note on " + cur);
+            }
+            Eq(ConfigProtection.Note(ConfigProtection.WithPassword, StationRules.ProtectKeep), null, "no note on keep");
             Contains(ConfigProtection.Check(ConfigProtection.Protect, ConfigProtection.WithoutPassword), "not WithPassword", "a protect TIA ignored");
             Contains(ConfigProtection.Check(ConfigProtection.UnprotectWithPassword, ConfigProtection.WithPassword), "not None", "a wrong password TIA swallowed");
             Contains(ConfigProtection.Check(ConfigProtection.Protect, ConfigProtection.Absent), "reads absent", "a configurator gone");

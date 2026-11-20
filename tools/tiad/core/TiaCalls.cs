@@ -282,7 +282,7 @@ namespace Tiad
                     object h = t.CreateProject(full, name);
                     try
                     {
-                        t.ApplyStation(h, null, st, sec);
+                        t.ApplyStation(h, null, st, sec, new List<string>());
                     }
                     catch
                     {
@@ -375,13 +375,14 @@ namespace Tiad
                 // call order. Until TIA has applied the spec, the project
                 // is neither compiled nor described by any spec, so a
                 // failure part-way leaves nothing downloadable.
+                var notes = new List<string>();
                 List<string> changes = OnSession(s, delegate(ITia t)
                 {
                     bool was = s.Compiled;
                     Station prev = s.Station;
                     s.Compiled = false;
                     s.Station = null;
-                    List<string> ch = t.ApplyStation(s.Handle, prev, st, sec);
+                    List<string> ch = t.ApplyStation(s.Handle, prev, st, sec, notes);
                     s.Station = st;
                     s.Address = st.Cpu.Address;
                     if (ch.Count == 0) s.Compiled = was;
@@ -389,6 +390,7 @@ namespace Tiad
                 });
                 var o = new Obj();
                 o["changes"] = changes.ToArray();
+                if (notes.Count > 0) o["notes"] = notes.ToArray();
                 return o;
             });
         }

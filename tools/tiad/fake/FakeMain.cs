@@ -572,7 +572,7 @@ namespace Tiad.Fake
         // as TIA makes one, unless the session last applied a spec with
         // the same CPU; then it applies cpu.configurationProtection from
         // the project's state, the way TIA's configurator behaves.
-        public List<string> ApplyStation(object project, Station previous, Station next, Secrets secrets)
+        public List<string> ApplyStation(object project, Station previous, Station next, Secrets secrets, List<string> notes)
         {
             script.Enter("ApplyStation");
             var p = (FakeProject)project;
@@ -588,6 +588,8 @@ namespace Tiad.Fake
             p.Changed = true;
             p.Station = null;
             string action = ConfigProtection.Plan(p.Protection, next.Cpu.ConfigurationProtection, secrets.ConfigurationPassword != "");
+            string note = ConfigProtection.Note(p.Protection, next.Cpu.ConfigurationProtection);
+            if (note != null) notes.Add(note);
             if (action == ConfigProtection.Protect)
             {
                 if (p.Protection == ConfigProtection.WithPassword) throw new TiaException("The PLC Master Secret is already configured.");

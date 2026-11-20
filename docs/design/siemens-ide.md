@@ -306,10 +306,16 @@ The rules for applying a spec:
   it, are ahead of TIA.
   - `password`: protected, with `secrets.configurationPassword`. A CPU
     already protected is left as it is: TIA cannot check a password
-    offline, and a download asks for it.
+    offline, and a download asks for it. The apply's `notes` say so,
+    because a changed secret does not reach the project: to change the
+    password, apply `none` with the old one, then `password` with the new.
   - `none`: off, an explicit choice. Turning off a protected CPU needs its
     password. A CPU never set up is turned off by `Protect` with a
-    throwaway password and `Unprotect` with it, two proven steps.
+    throwaway password (16 random bytes, never logged or kept) and
+    `Unprotect` with it, two proven steps. If anything fails after that
+    `Protect`, tiad removes the CPU from the project, so no CPU is left
+    protected by a password nobody holds, and the error says to apply the
+    spec again.
   - `keep`: tiad changes nothing, for an adopted station. A CPU whose
     protection is not set up (TIA's default for a new CPU) refuses `keep`,
     because it would not compile.
@@ -384,7 +390,7 @@ The client checks each path and the agent checks again.
 | `POST /v1/sessions` | `{path}` (a project or archive in the work dir) → `{session, project}` |
 | `GET /v1/sessions` | → `{sessions: [{session, project, idleSeconds}]}` |
 | `DELETE /v1/sessions/{id}` | → `{}`. Closes without saving |
-| `PUT /v1/sessions/{id}/station` | `{station, secrets}` → `{changes: [string]}` (P2, P5) |
+| `PUT /v1/sessions/{id}/station` | `{station, secrets}` → `{changes: [string], notes?: [string]}` (P2, P5). `notes` is what the caller should know besides the changes (a protected CPU kept its password) |
 | `POST /v1/sessions/{id}/software` | `{group, sources, tagTables, prune}` → `{results: [{path, ok, messages}], blocks: [{name, kind}]}`. Generates blocks into the group named `group`. With `prune`, blocks in that group that no source produced are deleted |
 | `POST /v1/sessions/{id}/compile` | `{hardware, software}` → `{result: "success" or "warning" or "error", errors, warnings, messages: [{object, severity, text}]}` |
 | `POST /v1/sessions/{id}/download` | §3.5 (P3) |

@@ -621,6 +621,9 @@ func (s *Session) Close(ctx context.Context) error {
 // StationResult says what applying a station spec changed.
 type StationResult struct {
 	Changes []string `json:"changes"`
+	// Notes are what the caller should know besides the changes: that a
+	// CPU already protected kept its password, for one.
+	Notes []string `json:"notes,omitempty"`
 }
 
 // ApplyStation makes the project's hardware config match st: anything not

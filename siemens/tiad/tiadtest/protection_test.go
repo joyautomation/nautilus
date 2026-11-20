@@ -19,6 +19,9 @@ func TestPlanProtection(t *testing.T) {
 		act, refusal  string
 	}{
 		{N, keep, false, actNothing, ""},
+		{P, keep, true, actNothing, ""},
+		{N, keep, true, actNothing, ""},
+		{"Bogus", pw, true, "", "a state tiad does not know (\"Bogus\"); nothing was changed"},
 		{P, keep, false, actNothing, ""},
 		{A, keep, false, actNothing, ""},
 		{W, pw, true, actProtect, ""},

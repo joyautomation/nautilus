@@ -120,8 +120,22 @@ func contractProtected(t *testing.T, start Starter) {
 	if _, err := s.Compile(ctx, true, true); err != nil {
 		t.Fatalf("a protected station compiles: %v", err)
 	}
-	if r, err := s.ApplyStation(ctx, st, sec); err != nil || len(r.Changes) != 0 {
-		t.Fatalf("applying the protected spec again: %+v %v, want no change", r, err)
+	// A rotated secret does not reach a protected project: the apply
+	// says so, and how to change it.
+	rotated := sec
+	rotated.ConfigurationPassword = "Rotated-config-2027"
+	r, err := s.ApplyStation(ctx, st, rotated)
+	if err != nil || len(r.Changes) != 0 || len(r.Notes) != 1 ||
+		!strings.Contains(r.Notes[0], "apply none with the old password, then password with the new one") {
+		t.Fatalf("applying the protected spec again with another password: %+v %v, want no change and one note", r, err)
+	}
+	// keep with a password sent changes nothing: the CPU stays
+	// protected, and a download still asks for the password.
+	if r, err := s.ApplyStation(ctx, protectedStation(tiad.ProtectKeep), sec); err != nil || len(r.Notes) != 0 {
+		t.Fatalf("keep with a password: %+v %v", r, err)
+	}
+	if _, err := s.Compile(ctx, true, true); err != nil {
+		t.Fatal(err)
 	}
 
 	path := "/v1/sessions/" + s.ID + "/download"

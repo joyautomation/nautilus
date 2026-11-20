@@ -133,6 +133,9 @@ func planProtection(current, want string, havePassword bool) (string, *failure) 
 	if current == ProtectionAbsent {
 		return bad("cpu.configurationProtection is %s, and the project's CPU has no configuration protection (firmware 3.1 and later have it): set it to keep", want)
 	}
+	if current != ProtectionNone && current != ProtectionWithoutPassword && current != ProtectionWithPassword {
+		return bad("the project's CPU has its configuration protection in a state tiad does not know (%q); nothing was changed", current)
+	}
 	if want == tiad.ProtectPassword {
 		if !havePassword {
 			return bad("cpu.configurationProtection is password, and secrets.configurationPassword is empty (it comes from the secret store, never the spec)")
@@ -152,6 +155,15 @@ func planProtection(current, want string, havePassword bool) (string, *failure) 
 		return bad("the project's CPU has its configuration protected by a password; turning that off needs it in secrets.configurationPassword")
 	}
 	return actUnprotectWithPassword, nil
+}
+
+// protectionNote is ConfigProtection.Note: password on a CPU already
+// protected leaves it, and its password, as they are.
+func protectionNote(current, want string) string {
+	if current != ProtectionWithPassword || want != tiad.ProtectPassword {
+		return ""
+	}
+	return "the CPU's configuration protection was already on and is left as it is: TIA cannot check its password offline, so a changed secrets.configurationPassword does not reach the project, and a download asks for the password the project holds; to change it, apply none with the old password, then password with the new one"
 }
 
 // protect applies cpu.configurationProtection to s's project the way
@@ -822,6 +834,7 @@ func (f *Fake) applyStation(r *http.Request) (any, *failure) {
 	// As tiad.Openness does, the CPU is made anew unless the spec this
 	// session last applied, still standing, has the same CPU: after an
 	// upload or an open, it is made anew (#789: fixed next, a known gap).
+	var notes []string
 	prev := s.station
 	if prev == nil || s.uploaded || prev.CPU.Order != req.Station.CPU.Order ||
 		prev.CPU.Firmware != req.Station.CPU.Firmware || prev.CPU.Name != req.Station.CPU.Name {
@@ -832,6 +845,9 @@ func (f *Fake) applyStation(r *http.Request) (any, *failure) {
 	// part-way leaves nothing downloadable.
 	was, wasChanged := s.compiled, s.changed
 	s.station, s.uploaded, s.compiled, s.changed = nil, false, false, true
+	if n := protectionNote(s.protection, req.Station.CPU.ConfigurationProtection); n != "" {
+		notes = append(notes, n)
+	}
 	if fl := s.protect(req.Station.CPU.ConfigurationProtection, req.Secrets.ConfigurationPassword); fl != nil {
 		return nil, fl
 	}
@@ -841,7 +857,7 @@ func (f *Fake) applyStation(r *http.Request) (any, *failure) {
 	if len(changes) == 0 {
 		s.compiled, s.changed = was, wasChanged
 	}
-	return tiad.StationResult{Changes: changes}, nil
+	return tiad.StationResult{Changes: changes, Notes: notes}, nil
 }
 
 // blockHead matches the first line of an SCL block in a source file.
