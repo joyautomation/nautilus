@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 
 const dist = join(dirname(fileURLToPath(import.meta.url)), '..', 'dist');
 const args = process.argv.slice(2);
-const urlsFile = args[args.indexOf('--urls') + 1];
+const urlsFile = args.includes('--urls') ? args[args.indexOf('--urls') + 1] : undefined;
 
 const pages = [];
 (function walk(d) {
@@ -71,8 +71,10 @@ if (args.includes('--sidebar')) {
   for (const page of pages) {
     const url = '/' + page.slice(dist.length + 1).replace(/index\.html$/, '');
     // not documentation: the 404, the playground frame, the generated
-    // /verified/ evidence pages (their own sidebar group), assets
-    if (url === '/404.html' || url.startsWith('/playground/') || url.startsWith('/verified/') || url.startsWith('/_astro/')) continue;
+    // /verified/ evidence pages (their own sidebar group), the interactive
+    // lessons (generated from website/lessons/, linked from the Learn
+    // overview, so a dead link to one is still caught), assets
+    if (url === '/404.html' || url.startsWith('/playground/') || url.startsWith('/verified/') || url.startsWith('/learn/interactive/') || url.startsWith('/_astro/')) continue;
     if (url === '/') continue; // the splash page
     if (!side.has(url)) bad.push(`${url} is not in the sidebar (add it to astro.config.mjs)`);
   }
