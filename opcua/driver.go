@@ -236,6 +236,9 @@ type Driver struct {
 
 	wmu      sync.Mutex
 	baseline bool
+	// holdBaseline (under wmu): the baseline only records (a held swap,
+	// io.BaselineHolder) instead of deciding against the server.
+	holdBaseline bool
 	// undecided holds the start-up baseline's outputs whose node the server
 	// has not answered yet: the program's first value, decided against the
 	// server's value at the first read of that node (#1121). Guarded by mu.
@@ -723,6 +726,7 @@ func (d *Driver) Start(ctx context.Context) {
 	ctx, d.cancel = context.WithCancel(ctx)
 	d.wmu.Lock()
 	d.baseline = !d.sawShut.Load() // a standby has none (#606)
+	d.holdBaseline = false
 	d.wmu.Unlock()
 	d.started.Store(true)
 	d.wg.Add(1)
@@ -739,6 +743,16 @@ func (d *Driver) Start(ctx context.Context) {
 func (d *Driver) DisarmBaseline() {
 	d.wmu.Lock()
 	d.baseline = false
+	d.wmu.Unlock()
+}
+
+// HoldBaseline makes the start-up baseline record and never send, whatever
+// the server holds (io.BaselineHolder): a driver swapped in under
+// HoldOutputsOnSwap commands nothing until an output changes. Call it after
+// Start.
+func (d *Driver) HoldBaseline() {
+	d.wmu.Lock()
+	d.holdBaseline = true
 	d.wmu.Unlock()
 }
 
@@ -818,13 +832,15 @@ func (d *Driver) snapshotInto(dst nio.Values) int {
 //     answers without a good value (no read access) or that is never
 //     polled is commanded once. A driver that has seen the write gate
 //     closed (a standby) has no baseline: its first push commands
-//     everything (#606).
+//     everything (#606). Under HoldBaseline (a driver swapped in with
+//     HoldOutputsOnSwap) the baseline only records, whatever the server holds.
 //  3. CHANGE. Thereafter a value equal to the last handed-over value is not
 //     a command. A changed value is queued, last value per tag, and held
 //     across a disconnect — flushed when the session reconnects.
 func (d *Driver) WriteOutputs(vals nio.Values) error {
 	d.wmu.Lock()
 	baseline := d.baseline
+	recordOnly := baseline && d.holdBaseline
 	d.baseline = false
 	d.wmu.Unlock()
 	if !d.gateOpen() {
@@ -843,7 +859,13 @@ func (d *Driver) WriteOutputs(vals nio.Values) error {
 			d.undecided[name] = v
 			continue
 		}
-		if baseline {
+		if recordOnly {
+			// Record, never send. A tag with a command already queued
+			// keeps it: that one WAS asked for.
+			if _, queued := d.pending[name]; !queued {
+				d.written[name] = v
+			}
+		} else if baseline {
 			if _, queued := d.pending[name]; queued {
 				continue
 			}

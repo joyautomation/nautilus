@@ -203,4 +203,20 @@ func TestStartupWritesTheLiveValueOnce(t *testing.T) {
 	if w := d.Health().Writes; w != 1 || ts.get(t, "Setpoint") != 5.0 {
 		t.Fatalf("writes = %d, server holds %v, want one write of 5", w, ts.get(t, "Setpoint"))
 	}
+// A driver swapped in under HoldOutputsOnSwap commands nothing until an
+// output changes, whatever the server holds: the runtime holds its baseline
+// (io.BaselineHolder), which must not decide against the server (#1123).
+func TestHeldBaselineRecordsAndNeverSends(t *testing.T) {
+	ts := startServer(t, freePort(t))
+	d := startDriver(t, ts.url, manifest(2))
+	waitFor(t, "first poll", func() bool { _, ok := read(t, d)["Setpoint"]; return ok })
+	bh, ok := any(d).(nio.BaselineHolder)
+	if !ok {
+		t.Fatal("the opcua driver is not an io.BaselineHolder: a held swap would decide against the server and write")
+	}
+	bh.HoldBaseline()
+	_ = d.WriteOutputs(nio.Values{"Setpoint": 7.0}) // differs from the server's 0
+	quiet(t, d)
+	_ = d.WriteOutputs(nio.Values{"Setpoint": 8.0})
+	waitFor(t, "the change", func() bool { return ts.get(t, "Setpoint") == 8.0 })
 }
