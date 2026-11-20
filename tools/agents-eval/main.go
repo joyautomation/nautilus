@@ -136,6 +136,7 @@ func cmdRun(args []string) error {
 	if err != nil {
 		return fmt.Errorf("%w\n(before #556 merges: git show origin/agents-md:cmd/naut/templates/AGENTS.md.tmpl > /tmp/AGENTS.md and pass -agents-md /tmp/AGENTS.md)", err)
 	}
+	md = withSections(md, filepath.Join(filepath.Dir(*agentsMd), "agents"))
 	cm := []byte("@AGENTS.md\n")
 	if *claudeMd != "" {
 		if cm, err = os.ReadFile(*claudeMd); err != nil {
@@ -410,4 +411,25 @@ func gitCommit(root string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// withSections appends, to the core AGENTS.md template, every section of the
+// project-aware text (cmd/naut/templates/agents/), in the order naut writes
+// them, so the eval measures the full guidance a project that uses all of it
+// gets. An older template with no sections directory is returned as it is.
+func withSections(core []byte, dir string) []byte {
+	out := strings.TrimRight(string(core), "\n")
+	found := false
+	for _, f := range []string{"st.md", "ld.md", "fbd.md", "sfc.md", "screens.md", "tail.md"} {
+		raw, err := os.ReadFile(filepath.Join(dir, f))
+		if err != nil {
+			continue
+		}
+		found = true
+		out += "\n\n" + strings.TrimRight(string(raw), "\n")
+	}
+	if !found {
+		return core
+	}
+	return []byte(out + "\n")
 }

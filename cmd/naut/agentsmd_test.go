@@ -41,11 +41,7 @@ func fencedBlocks(md string) []string {
 // acceptance tests (agents_test.yaml is the one AGENTS.md shows;
 // more_test.yaml covers the rest of what the examples claim).
 func TestAgentsMdSnippetsRun(t *testing.T) {
-	raw, err := templates.ReadFile("templates/AGENTS.md.tmpl")
-	if err != nil {
-		t.Fatal(err)
-	}
-	md := string(raw)
+	md := agentsText(agentsAll) // every section: the examples live in all of them
 	// Rendered through text/template like every other file: it must not
 	// carry template actions, so what is in the repo is what users get.
 	if strings.Contains(md, "{{") {
@@ -62,7 +58,7 @@ func TestAgentsMdSnippetsRun(t *testing.T) {
 	}
 	manifest := read("nautilus.yaml")
 	programs := map[string]string{}
-	for _, f := range []string{"interlocks.ld", "control.fbd", "sequence.sfc"} {
+	for _, f := range []string{"interlocks.ld", "control.fbd", "sequence.sfc", "scaling.st"} {
 		programs[f] = read(f)
 	}
 
@@ -95,7 +91,7 @@ func TestAgentsMdSnippetsRun(t *testing.T) {
 			seen["tests"] = true
 		}
 	}
-	for _, want := range []string{"interlocks.ld", "control.fbd", "sequence.sfc", "tags", "tests"} {
+	for _, want := range []string{"interlocks.ld", "control.fbd", "sequence.sfc", "scaling.st", "tags", "tests"} {
 		if !seen[want] {
 			t.Errorf("AGENTS.md no longer shows %s; update this test with it", want)
 		}
@@ -120,8 +116,8 @@ func TestAgentsMdSnippetsRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("testdata/agents-md tests do not run: %v", err)
 	}
-	if len(results) < 9 {
-		t.Fatalf("testdata/agents-md ran %d tests; want the 9 of both test files", len(results))
+	if len(results) < 10 {
+		t.Fatalf("testdata/agents-md ran %d tests; want the 10 of both test files", len(results))
 	}
 	for _, r := range results {
 		if !r.Passed {
