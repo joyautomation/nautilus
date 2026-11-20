@@ -18,18 +18,25 @@ run in your browser and, later, a short video.
 4. [Read the dashboard and the tags](/learn/getting-started/dashboard-and-tags/)
 5. [When something goes wrong](/learn/getting-started/when-something-goes-wrong/)
 
-## Interactive lessons
+## Programming
 
-These run in your browser: the lesson on the left, a controller on the right,
-and a **Check** button that tests your answer.
+Interactive lessons run in your browser: the lesson on the left, a controller
+on the right, and a **Check** button that tests your answer.
 
 1. [First program: blink an output](/learn/interactive/b1-blink/)
 2. [A motor start/stop in ladder (the seal-in)](/learn/interactive/b2-seal-in/)
 3. [A timer: warn before the motor starts](/learn/interactive/b3-horn-delay/)
+4. [Count things: edges and counters](/learn/interactive/b4-counter/)
+5. [Test it, in virtual time](/learn/programming/test-it-in-virtual-time/)
 
-More tracks follow: programming, I/O and protocols, operator screens,
-deploying, and working with an AI agent. Until they are here, these guides
-cover them:
+## I/O and protocols
+
+1. [Read one Modbus register, with no hardware](/learn/io-and-protocols/modbus-first-read/)
+2. [From a datasheet to a device map](/learn/io-and-protocols/datasheet-to-device-map/)
+3. [Serve your tags over OPC UA](/learn/io-and-protocols/opcua-first-browse/)
+
+More tracks follow: operator screens, deploying, and working with an AI
+agent. Until they are here, these guides cover them:
 
 - Programming: [Your first program](/guides/first-program/), the
   [languages](/languages/), [function blocks and
