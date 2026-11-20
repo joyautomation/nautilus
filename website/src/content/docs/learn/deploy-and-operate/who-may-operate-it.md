@@ -127,6 +127,46 @@ same way, so the page does not say which names exist:
 The browser's session lasts 12 hours by default (`auth.session`), and a
 restart of the controller signs everyone out.
 
+## Some actions ask for your password again
+
+A person who can force a tag or edit the program can change what the plant
+does, so those actions need a **fresh password**: a signed-in browser holds
+`force`, `edit`, `activate`, `deploy`, `config`, `users` and `override` only
+for a while after its password was last typed (clearing a force counts: it
+can start a motor). The window is `auth.elevation`, 15 minutes by default:
+
+```yaml
+auth:
+  elevation: 15m
+```
+
+Right after signing in, an engineer can force a tag:
+
+```text
+{"forces":[{"name":"Sensor","value":20,"sinceMs":1795165440819}]}
+```
+
+Once the window has passed, the same kind of request is refused, and nothing
+is done. With a one-minute window, clearing the force a minute later gives:
+
+```text
+{"elevate":true,"error":"confirm your password to do this: sign in again (/signin), or enter your password where the HMI asks for it (POST /api/elevate). force needs a password entered within the last 1m (auth.elevation)"}
+```
+
+The person confirms their password, by signing in again or, for an HMI of
+your own, with `POST /api/elevate`:
+
+```text
+{"elevatedUntil":"2026-11-20T09:06:05.890423355Z","user":"jsmith"}
+```
+
+and the action then works. Using an action does not extend the window.
+Tokens, for scripts and the VS Code extension, always count as elevated,
+since they are sent with every request and their role already limits them.
+Five wrong passwords in a row end the session. The [auth
+guide](/guides/auth/#elevation) has the rest: how the journal records it, and
+what a redundant pair does.
+
 ## Next
 
 [Users, roles & sign-in](/guides/auth/) covers areas (limit a person to part
