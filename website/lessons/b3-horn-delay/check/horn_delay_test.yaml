@@ -1,0 +1,53 @@
+tests:
+  - name: the horn sounds as soon as Start is pressed
+    steps:
+      - given: { StartPB: true }
+        advance: 0.3s
+        expect: { Horn: true }
+
+  - name: the motor has not started 4.5 s after Start
+    steps:
+      - given: { StartPB: true }
+        advance: 0.2s
+      - given: { StartPB: false }
+        advance: 4.3s
+        expect: { MotorRun: false, Horn: true }
+
+  - name: the motor runs 5.5 s after Start, and the horn has stopped
+    steps:
+      - given: { StartPB: true }
+        advance: 0.2s
+      - given: { StartPB: false }
+        advance: 5.3s
+        expect: { MotorRun: true, Horn: false }
+
+  - name: the motor keeps running after the warning is over
+    steps:
+      - given: { StartPB: true }
+        advance: 0.2s
+      - given: { StartPB: false }
+        advance: 12s
+        expect: { MotorRun: true, Horn: false }
+
+  - name: Stop during the warning cancels it, and the motor never starts
+    steps:
+      - given: { StartPB: true }
+        advance: 0.2s
+      - given: { StartPB: false }
+        advance: 2s
+      - given: { StopPB: true }
+        advance: 0.3s
+        expect: { Horn: false, MotorRun: false }
+      - given: { StopPB: false }
+        advance: 8s
+        expect: { MotorRun: false, Horn: false }
+
+  - name: Stop turns a running motor off
+    steps:
+      - given: { StartPB: true }
+        advance: 0.2s
+      - given: { StartPB: false }
+        advance: 6s
+      - given: { StopPB: true }
+        advance: 0.3s
+        expect: { MotorRun: false }
