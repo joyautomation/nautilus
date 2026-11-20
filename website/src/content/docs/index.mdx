@@ -46,10 +46,11 @@ export const verifiedOn = Number.isNaN(when.getTime())
     or a PI loop's settling time is asserted exactly, deterministically, in
     milliseconds. No toolchain, and CI that gates on more than a compile.
   </Card>
-  <Card title="Talk to real hardware" icon="setting">
+  <Card title="Talk to real hardware and your plant systems" icon="setting">
     A pure-Go EtherNet/IP driver for Allen-Bradley Logix with tag browse and
     UDT import codegen, a Modbus TCP driver with block reads and per-tag
-    quality, Sparkplug B publishing, and an io.Driver seam for any bus.
+    quality, an OPC UA server and client, Sparkplug B publishing, and an
+    io.Driver seam for any bus. [Coming from SCADA?](/coming-from/scada/)
   </Card>
   <Card title="An HMI kit for SvelteKit" icon="laptop">
     Faceplates, trends, and a realtime SSE client — build operator screens the
