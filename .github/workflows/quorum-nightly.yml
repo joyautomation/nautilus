@@ -40,7 +40,8 @@ jobs:
       # seed prints a QUORUM_SEED=k repro line. Then the operator-intent
       # log's three-replica schedules (#710 3b-4a, about 6 min); a failing
       # one names its seed (OPLOG_SIM_ONE=k reruns it with a trace). The
-      # clone schedules (#1029 layer 2) run their own 200,000 too.
+      # clone schedules (#1029 layer 2) run their own 200,000 too, and the
+      # clone races (#1029 step 1) 20,000 per case.
       - name: QUORUM_SEEDS=200000 go test ./quorum/sim (default and clone schedules), OPLOG_SIM_SEEDS=3000 go test ./oplog
         id: seeds
         if: ${{ !cancelled() }}
@@ -48,12 +49,14 @@ jobs:
         env:
           QUORUM_SEEDS: '200000'
           QUORUM_CLONE_SEEDS: '200000'
+          QUORUM_CLONE_RACE_SEEDS: '20000'
           OPLOG_SIM_SEEDS: '3000'
         run: |
           set -o pipefail
           rc=0
           go test -count=1 -timeout 20m ./quorum/sim -run '^TestSeeds$' 2>&1 | tee "$RUNNER_TEMP/seeds.log" || rc=1
           go test -count=1 -timeout 20m ./quorum/sim -run '^TestCloneSeeds$' 2>&1 | tee -a "$RUNNER_TEMP/seeds.log" || rc=1
+          go test -count=1 -timeout 30m ./quorum/sim -run '^TestCloneRaceSeeds$' 2>&1 | tee -a "$RUNNER_TEMP/seeds.log" || rc=1
           go test -count=1 -timeout 20m ./oplog -run '^TestThreeReplicaSimulation$' 2>&1 | tee -a "$RUNNER_TEMP/seeds.log" || rc=1
           exit $rc
       - name: Rolling issue

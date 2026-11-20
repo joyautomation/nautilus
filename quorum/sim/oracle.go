@@ -21,8 +21,11 @@ type Record struct {
 	// relayRefused counts the requests the voters refused on a promise
 	// another voter relayed (#1029 layer 2).
 	relayRefused uint64
-	starts       []voterStart
-	faults       []faultEdge
+	// duplicates counts, per node, the duplicates its voter counted (a
+	// redundancy.duplicate-member alarm's cause), across its restarts.
+	duplicates [nNodes]uint64
+	starts     []voterStart
+	faults     []faultEdge
 
 	// Writes are what the simulated device received (I2): a controller
 	// writes it on each scan while its gate is open.

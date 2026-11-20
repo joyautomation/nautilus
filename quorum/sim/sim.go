@@ -565,6 +565,9 @@ func (w *World) tick(n *node) {
 		b, _ := probe.MarshalBinary()
 		w.viaProbe = standby
 		w.send(n.addr, W, b)
+		if standby && quorum.ProbesPeer() {
+			w.send(n.addr, peerOf(n.addr), b) // the peer hears this boot too (#1029 step 1)
+		}
 		w.viaProbe = false
 	}
 	w.observe(n)
@@ -665,11 +668,17 @@ func (w *World) deliver(n *node, from Addr, b []byte) {
 	now := w.local(n)
 	var req quorum.Request
 	if err := req.UnmarshalBinary(b); err == nil {
-		if n.adopt != nil && from == peerOf(n.addr) {
-			n.adopt.OnPeer(now)
+		if n.adopt != nil && from == peerOf(n.addr) && !(req.Term == 0 && req.ID == quorum.ProbeID) {
+			n.adopt.OnPeer(now) // a relay probe is for the voter only (#1029 step 1)
 		}
 		if from != n.addr {
-			n.voter.Hear(now, req.From, req.Promise)
+			dups, _ := n.voter.Duplicates()
+			n.voter.Hear(now, req.From, req.Nonce, req.Promise)
+			after, who := n.voter.Duplicates()
+			w.rec.duplicates[n.addr] += after - dups
+			if after != dups {
+				w.tracef("%v counts a duplicate of %s (relay on a request from %v: %+v)", n.addr, who, from, req.Promise)
+			}
 		}
 		w.handle(n, from, now, req)
 		return
@@ -707,7 +716,13 @@ func (w *World) deliver(n *node, from Addr, b []byte) {
 		return
 	}
 	if from != n.addr {
-		n.voter.Hear(now, rep.From, rep.Promise)
+		dups, _ := n.voter.Duplicates()
+		n.voter.Hear(now, rep.From, 0, rep.Promise)
+		after, who := n.voter.Duplicates()
+		w.rec.duplicates[n.addr] += after - dups
+		if after != dups {
+			w.tracef("%v counts a duplicate of %s (relay on a reply from %v: %+v)", n.addr, who, from, rep.Promise)
+		}
 	}
 	if quorum.IsRelayProbe(rep) {
 		return // the relay probe's reply is for the voter only
@@ -851,8 +866,14 @@ func (w *World) handle(n *node, from Addr, now quorum.Instant, r quorum.Request)
 		}
 	}
 	before := n.voter.RelayRefused()
+	dups, _ := n.voter.Duplicates()
 	p, replies := n.voter.Handle(now, r)
 	w.rec.relayRefused += n.voter.RelayRefused() - before
+	after, who := n.voter.Duplicates()
+	w.rec.duplicates[n.addr] += after - dups
+	if after != dups {
+		w.tracef("%v counts a duplicate of %s (request from %v: %s term=%d nonce=%#x)", n.addr, who, from, r.From, r.Term, r.Nonce)
+	}
 	if n.cand != nil && n.voter.RelayChanged(now) {
 		if probe := n.cand.PushProbe(now); probe != nil {
 			probe.Promise = n.voter.Relay(now)

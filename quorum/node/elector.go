@@ -198,7 +198,7 @@ func duplicateMsg(who quorum.NodeID, cause quorum.DupCause) string {
 	if cause == quorum.DupVoterPromised {
 		return fmt.Sprintf("two processes claim to be %s: %s campaigned while its own voter was heard promised to another controller, which %s never does. A copy of %s is running: check NAUTILUS_NODE on every box (it differs per box) and that no box runs a clone of another's disk", who, who, who, who)
 	}
-	return fmt.Sprintf("two processes claim to be %s: a vote came from %s under a boot nonce other than the one a running promise to %s was granted under (this voter's own, or one another voter relayed). Check NAUTILUS_NODE on every box (it differs per box) and that no box runs a clone of another's disk", who, who, who)
+	return fmt.Sprintf("two processes claim to be %s: this voter hears %s under two boot nonces at once (a vote, a probe, or a promise another voter relayed), so it gives %s no new vote. Check NAUTILUS_NODE on every box (it differs per box) and that no box runs a clone of another's disk", who, who, who)
 }
 
 // Event is something the operator should see.
@@ -697,8 +697,10 @@ func (e *Elector) look() time.Duration {
 	may := e.mayCampaign(now) && (e.c.Leading(now) || !e.logHold(now, ls, hasLog))
 	req := e.c.Tick(now, from, until, healthy && !e.released && !e.yielding(now) && may)
 	p, msgs, probe := e.a.Tick(now)
+	standby := false
 	if probe == nil {
 		probe = e.c.Probe(now) // the handshake's own probe serves for both
+		standby = probe != nil
 	} else {
 		e.c.Probe(now)
 	}
@@ -726,6 +728,9 @@ func (e *Elector) look() time.Duration {
 	e.adopts(msgs)
 	if probe != nil {
 		e.vote(e.o.Witness, e.wit, *probe)
+		if standby && quorum.ProbesPeer() {
+			e.vote(e.o.Peer, e.peer, *probe) // the peer's voter hears this boot too (#1029 step 1)
+		}
 	}
 	return min(max(next, 0), e.o.Lease/8)
 }
@@ -898,7 +903,7 @@ func (e *Elector) reply(from quorum.NodeID, r quorum.Reply) {
 	e.mu.Lock()
 	now := e.now()
 	if !mut("reply_relay_dropped") {
-		e.v.Hear(now, from, r.Promise)
+		e.v.Hear(now, from, 0, r.Promise)
 		e.noteDuplicates()
 	}
 	if quorum.IsRelayProbe(r) {
@@ -1005,9 +1010,13 @@ func (e *Elector) serveVote(w http.ResponseWriter, r *http.Request) {
 		refuse(w, "term-jump", msg)
 		return
 	}
-	e.a.OnPeer(now)
-	e.peerAt, e.peerHeard = now, true
-	e.v.Hear(now, req.From, req.Promise)
+	if !(req.Term == 0 && req.ID == quorum.ProbeID) {
+		// A relay probe is for the voter only (#1029 step 1): the
+		// handshake keeps its own idea of hearing the peer.
+		e.a.OnPeer(now)
+		e.peerAt, e.peerHeard = now, true
+	}
+	e.v.Hear(now, req.From, req.Nonce, req.Promise)
 	e.c.Observe(req.Term)
 	quorum.YieldTo(now, e.v, e.c, req)
 	p, replies := e.v.Handle(now, req)

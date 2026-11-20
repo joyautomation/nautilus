@@ -1,13 +1,14 @@
 package quorum
 
 import (
+	"encoding/binary"
 	"errors"
 	"testing"
 	"time"
 )
 
 func TestMessageRoundTrip(t *testing.T) {
-	rq := Request{From: "A", Term: 7, Nonce: 0xA1, ID: 99, Renewal: true, Promise: Relay{To: "B", Nonce: 0xB2, Left: 1500 * time.Millisecond}}
+	rq := Request{From: "A", Term: 7, Nonce: 0xA1, ID: 99, Renewal: true, Promise: Relay{To: "B", Nonce: 0xB2, Left: 1500 * time.Millisecond, Dup: "A", DupLeft: 900 * time.Millisecond}}
 	b, _ := rq.MarshalBinary()
 	var got Request
 	if err := got.UnmarshalBinary(b); err != nil || got != rq {
@@ -90,11 +91,27 @@ func TestStateFileTornAtEveryOffset(t *testing.T) {
 
 // A state file of another format version (1: before VoterState.Lease; 2:
 // before Owner and Cluster; 3: before Box) reads as ErrVersion, not as
-// corrupt.
+// corrupt. A version-4 file (before GrantNonce) still reads, with
+// GrantNonce 0, so an upgrade keeps the voter's promises.
 func TestStateFileVersion(t *testing.T) {
-	b, _ := VoterState{Promised: 3, Incarnation: 9, Lease: lease, Owner: "w", Cluster: "c"}.MarshalBinary()
-	if b[len(stateMagic)] != 4 {
-		t.Fatalf("state version %d, want 4", b[len(stateMagic)])
+	st5 := VoterState{Promised: 3, GrantedTo: "a", Incarnation: 9, Lease: lease, Owner: "w", Cluster: "c", GrantNonce: 0xAB}
+	b, _ := st5.MarshalBinary()
+	if b[len(stateMagic)] != 5 {
+		t.Fatalf("state version %d, want 5", b[len(stateMagic)])
+	}
+	var back VoterState
+	if err := back.UnmarshalBinary(b); err != nil || back != st5 {
+		t.Fatalf("round trip: %+v %v", back, err)
+	}
+	// Version 4: the same file without the trailing GrantNonce.
+	v4 := append([]byte(nil), b[:len(b)-4-8]...)
+	v4[len(stateMagic)] = 4
+	binary.BigEndian.PutUint32(v4[len(stateMagic)+1:], uint32(len(v4)-len(stateMagic)-1-4))
+	var old4 VoterState
+	want := st5
+	want.GrantNonce = 0
+	if err := old4.UnmarshalBinary(sealCRC(v4)); err != nil || old4 != want {
+		t.Fatalf("a version-4 file: %+v %v, want %+v", old4, err, want)
 	}
 	for _, v := range []byte{1, 2, 3} {
 		old := append([]byte(nil), b[:len(b)-4]...)

@@ -310,17 +310,17 @@ redundancy:
         third fault, beyond the clone and the voter's restart.
       - **What stretching would cost:** every takeover's `W_r` would grow by a tenth of a
         lease, for that case alone.
-    - **Precedence.** A voter's own running promise wins, then the first heard: a conflicting
-      relay is counted as a duplicate and never replaces what is held, so a clone that won
-      one voter can't turn the original's other voters against it. A voter's newer relay
-      about a name replaces its own earlier one.
+    - **Conflicts.** A relay naming a name under another boot than the voter's own running
+      promise, or than another voter's relay, is a duplicate's sign and counted. Both boots
+      are then live, so step 1 below refuses new grants to both. A voter's newer relay about
+      a name replaces its own earlier one.
     - **The standby probes the witness every look** (a term-0 request with id `ProbeID`,
       always refused), in its restart hold too, so the two hear each other's promises while
       no campaign runs. The probe's reply goes to the voter only, never to the candidate or the
       handshake. A controller's voter that has just promised the other controller pushes a
       probe at once (`Voter.RelayChanged`), so the witness hears a new promise within a one-way
       delay rather than a look.
-    - **Wire:** vote protocol version 2 (`quorum.WireVersion`). A frame of another version
+    - **Wire:** vote protocol version 2 (`quorum.WireVersion`; 3 since step 1 below). A frame of another version
       is refused whole. A pair or witness that mixes releases across it can't vote, and says
       so (`redundancy.version-mismatch`, either side, and on the witness's log) rather than
       failing to elect in silence. A release before version 2 answers a new frame with 400
@@ -328,36 +328,109 @@ redundancy:
     - **What it costs:** only refusals. A promise to another node never ends early, and the
       restart wait covers a voter that forgot what it heard. A takeover can lose one refused
       campaign at the witness (§4.5, `R`).
-    - **The residual: a clone booted with its original, or running while either controller
-      restarts or the leader goes unhealthy (a scan hang).**
-      - **Why:** in each case the lease changes hands while the clone runs. The duplicated
-        voter (a copy of the original's) can then back the clone while the original's own
-        voter backs the other controller, as {B, old A voter} against {clone, W}.
-      - **What it covers:** a clone made before commissioning, a site-wide power cycle with
-        a clone present, a deploy update or reboot of either controller while a clone runs,
-        and a leader whose scans hang (`SetHealth`: it stops renewing, its voter keeps
-        answering).
-      - **It persists:** the two leaders last while the clone runs, since a running promise
-        renews its own grantee.
-      - **The rate.** `TestMeasureCloneAtStart` measures it over 10,000 runs per case, with
-        no other fault. Two leaders in:
-        - 172 when the clone boots with its original;
-        - 184 when the original restarts;
-        - 17 when its peer restarts;
-        - 227 when the leader goes unhealthy.
+  - **Step 1: a duplicated name gets no new grant (#1029).** Layer 2 alone left a race. When
+    the lease changes hands while a clone runs (the clone booted with its original, either
+    controller restarting, the leader going unhealthy), both copies campaign while neither
+    holds a promise to relay. The duplicated voter (a copy of the original's) can then back
+    the clone while the original's own voter backs the other controller: {B, old A voter}
+    against {clone, W}. The #1079 measure: two leaders in 172, 184, 17 and 227 of 10,000
+    runs. Step 1 closes it:
+    - **Every voter tracks the boot nonces it hears per name:**
+      - from any request (probe, campaign, renewal): live for a lease;
+      - from a relayed promise: live until its hold ends.
+    - **Two live nonces for a name: no new grant to that name**, either boot, and
+      `redundancy.duplicate-member`. A running promise to one of those very boots still
+      renews: the incumbent keeps the promises that protect it. Refusing the incumbent too
+      was tried, and lets the clone in (87 two-leader runs in 2,000): it drops those
+      promises.
+    - **A candidate counts no grant from a voter its own voter knows is duplicated**, its
+      own included (`NewAdoption` wires `Voter.Duplicated`). Two processes cast that vote.
+    - **The relay carries a duplicated name** (`Dup`, `DupLeft`), first-hand only. Hearers
+      refuse new grants to it for `DupLeft·(1+MaxRho)`.
+    - **The standby probes its peer as well as the witness**, every look. A standby cut
+      from the witness would otherwise be heard by nobody, and its clone would be the only
+      boot of its name any voter sees.
+    - **A term goes to one boot of a name.** A voter never grants a term it granted to one
+      boot of a name to another boot of it, even once that promise has run out and across
+      its own restart: the other boot asks above it. The grant's boot nonce is in the state
+      file (`VoterState.GrantNonce`, format 5; a format-4 file reads with none, and the
+      first renewal under its standing promise writes the nonce). A downgrade below format 5
+      is loud: an older controller moves the state aside and starts uncommissioned, and an
+      older witness refuses to start without `--rebuild`. Otherwise a
+      clone and its original could each hold the same term (I4, found in the rich clone
+      schedules; the restart case by the #1094 review).
+    - **A voter yields its own round** (`YieldTo`) only to a request it would grant.
+    - **Wire: vote protocol version 3.**
+    - **Each piece is pinned** by a schedule where it alone stands between the pair and two
+      leaders (`quorum/sim/dupname_test.go`).
+    - **Dropped as unpinnable:**
+      - **A candidate check on its own name relayed under another boot.** The same reply
+        always reaches its own voter first, so the discount covers it.
+      - **First-heard precedence among relays.** A second boot already refuses new grants
+        to both.
+      - **#1028's rule** (refuse a name under another nonce while a running promise holds
+        it). A promise and the nonce that asked for it are live for the same window, so the
+        name refusal covers it whole. Its test now pins `dup_name_ignored`.
+      - **The relay rules (a) and (b) are kept,** pinned at the voter, where each still
+        refuses a bad grant alone. No clone schedule inside the claim needs them since step
+        1.
+    - **The measure.** `TestCloneRaceSeeds` covers the four cases, plus rich schedules (a
+      clone with one to three of a cut, restart, unhealthy controller, delay or loss). Every
+      oracle but I7 is on. 0 two-leader runs in 20,000 per case, and in 200,000 clone
+      schedules (`TestCloneSeeds`).
+    - **The claim, exactly:** never two leaders while every voter keeps hearing both copies
+      of the name. Clone-link cuts are measured, not gated: no pass/fail schedule cuts a
+      clone's own links (`richCloneRun` and `TestCloneSeeds` cut only A–B, A–W and B–W).
+    - **What it doesn't close:**
+      - **A network split that separates a running clone from its original**, with the
+        original beside the witness and the clone beside the peer, or the mirror. Once the
+        other boot ages out (a lease), no voter on either side sees two, and each side holds
+        two of the three names, since the duplicated voter counts on both sides.
+        `TestMeasureCloneSplit` gives two leaders in 2,000 of 2,000 runs of each shape.
+      - **The overlap can also start when a cut heals** (#1094 review). A voter forgets a
+        boot after a lease of silence (`noteNonce`/`dupLeft`), so the first copy back gets
+        a grant. `TestMeasureCloneSplit` measures the review's shapes, for a clone of A with
+        cuts from 8 s + 2–5 leases for 8 leases. Two leaders per 400 runs:
+        - {A–B, clone–B, clone–W, B–W}: 29;
+        - {A–W, clone–B, clone–W, B–W}: 63;
+        - {A–B, A–W, clone–B}: 14;
+        - {A–W, clone–B}: 3.
 
-        Without the relay: 1,562 of 5,000 at boot, and about the same rate for an unhealthy
-        leader. The relay neither causes nor closes that last case.
-      - **The alarm:** `redundancy.duplicate-member` was raised in every such run the #1079
-        review traced.
-      A clone of a running pair with no restart wins only with a second network fault: the
-      two voters other than the cut link can't exchange a probe for about a lease, or a third
-      partition (B cut from both A and W, with a clone of A). **The follow-up on #1029** comes
-      before `experimental` is lifted and before 3c: a duplicate-name refusal at every voter
-      and a candidate-side check, aiming at 0 two-leader runs in at least 20,000 per case
-      (boot, original restart, peer restart, unhealthy leader), with a liveness bound for a
-      real controller after a power cycle.
-      - The guide keeps "never clone a controller".
+        The sticky mark is the fix for these too. An
+        original cut from both other voters, with the clone leading meanwhile, can also
+        come back at a lower term than the clone's (I2): a device that fences by term
+        refuses it until its next re-term, a look or so later.
+      - **The 3c fix: a sticky confirmed-duplicate mark.** A voter that has seen two boots
+        of a name interleaved keeps refusing that name and discounting its vote until an
+        operator clears it, so a split after the clone was seen leaves no leader on either
+        side. It needs a guard against a false mark from reordered frames (two alternations,
+        or N1 after N2 by more than the maximum delay) and a reorder test. It comes first in
+        3c, with the operator clear and the spare flow, and lifting `experimental` needs it.
+      - **Irreducible: a clone booted on the far side of a split that already exists** is
+        never seen beside the original. Only the box check (layer 1) stops it.
+      - **One more 3c item:** a restart faster than the vote link's one-way delay can be
+        counted as a duplicate once, for a promise granted to its old boot after it died.
+        It needs the same evidence rule as the sticky mark.
+    - **What it costs:**
+      - **No other fault:** a running clone costs redundancy, not the leader. A clone of a
+        healthy settled leader costs no takeover: the renewals of its running promises
+        continue. Whatever restarts or hangs meanwhile, the pair has a leader within a
+        takeover's bound.
+      - **A clone plus a network fault** can leave the pair without a leader until the
+        clone is stopped or the fault heals: the duplicated controller's vote counts for
+        nobody. This happened in 61 of 5,000 clone-and-cut schedules while both lasted.
+        Never two leaders.
+      - **A plain restart or power cycle** raises no false `duplicate-member` and elects
+        within the bound. Two rules keep it quiet:
+        - a relayed promise counts a conflict only while it certainly runs
+          (`receipt + left − lease/4`);
+        - rule (b) counts only a relay from another boot than the request it refuses, since
+          one boot's own frames can arrive out of order.
+      - **Stopping the clone** brings a real controller back within `cloneStopBound`
+        (5.6 leases; worst 2.4 s at a 2 s lease in the simulator).
+    - **Step 2 (3c): the clone as a spare.** The incumbent keeps the name, and the newcomer
+      demotes itself, durably and silently, on a positive "held by" reply; `recommission`
+      turns a spare into a replacement.
 - **`NAUTILUS_NODE` set with no pair in the manifest** is refused: each box would run as its
   own leader against the same I/O.
 - **A pair member's tag API must be reachable by its peer.** The manifest's default

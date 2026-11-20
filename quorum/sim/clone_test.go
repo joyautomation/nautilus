@@ -113,45 +113,128 @@ func TestStaleRelayEndsAndTheStandbyLeads(t *testing.T) {
 	t.Logf("%d leader deaths: worst takeover %v (bound %v); a stale relay refused a campaign in %d", n, worst, relayTakeoverBound, refused)
 }
 
-// TestMeasureCloneAtStart measures the residual the relay leaves (#1029
-// layer 2): a MAC-spoofed clone that campaigns at the same time as its
-// original, with no promise held yet for the voters to relay, so the two
-// can each win one of the other two voters in one election. Three cases,
-// each with no other fault:
+// TestCloneRaceSeeds runs the clone races #1079 left open and #1029
+// step 1 closes: a MAC-spoofed clone running while the lease changes
+// hands, with no other fault, in four cases:
 //   - start: the clone booted together with its original (a clone made
 //     before commissioning, or a site-wide power cycle with a clone);
 //   - original: a settled pair with a clone running, and the original
 //     restarts (a deploy update, a reboot);
 //   - peer: the same, and the original's peer restarts;
 //   - unhealthy: the same, and the leader's scans hang for one to four
-//     leases (its candidate stops renewing; its voter keeps answering),
-//     so the lease is handed over while the clone runs (#1079 review).
+//     leases (its candidate stops renewing; its voter keeps answering).
 //
-// It logs how many of n runs each had two leaders at once; skipped unless
-// QUORUM_MEASURE_CLONE_START=<n>. The follow-up on #1029 must bring all
-// three to 0.
-//
-//	QUORUM_MEASURE_CLONE_START=10000 go test ./quorum/sim -run '^TestMeasureCloneAtStart$' -v
-func TestMeasureCloneAtStart(t *testing.T) {
-	n, _ := strconv.Atoi(os.Getenv("QUORUM_MEASURE_CLONE_START"))
-	if n <= 0 {
-		t.Skip("set QUORUM_MEASURE_CLONE_START=<runs>")
+// Then the rich clone schedules (richCloneRun): any of those, plus cuts,
+// restarts, unhealthy leaders, delays and loss. Every oracle but I7 on
+// (cloneChecks). Before step 1, two leaders in 172, 184, 17 and 227 of
+// 10,000 runs of the four cases. QUORUM_CLONE_RACE_SEEDS=<n> runs n per
+// case (default 300; the nightly runs 20,000).
+func TestCloneRaceSeeds(t *testing.T) {
+	n := 300
+	if v, err := strconv.Atoi(os.Getenv("QUORUM_CLONE_RACE_SEEDS")); err == nil && v > 0 {
+		n = v
 	}
-	for _, mode := range []string{"start", "original", "peer", "unhealthy"} {
-		both := 0
+	for _, mode := range []string{"start", "original", "peer", "unhealthy", "rich"} {
+		failing := 0
 		for seed := uint64(1); seed <= uint64(n); seed++ {
-			if overlap(Check(Run(cloneRace(seed, mode)), cloneChecks(cloneRace(seed, mode)))) {
-				both++
+			o := cloneRace(seed, mode)
+			vs := Check(Run(o), cloneChecks(o))
+			if len(vs) == 0 {
+				continue
+			}
+			failing++
+			if failing <= 3 {
+				t.Errorf("%s seed %d: %v\n  schedule: %#v", mode, seed, vs[0], o)
 			}
 		}
-		t.Logf("a clone racing its original (%s): two leaders at once in %d of %d runs", mode, both, n)
+		t.Logf("clone race %s: %d of %d failing", mode, failing, n)
 	}
+}
+
+// richCloneRun draws a clone schedule with extra faults: a clone of A or
+// B booted with its original or later, and one to three of: a cut (one
+// way or both), a restart of any member, an unhealthy controller, a delay
+// within the rule, or loss. It never isolates the original while its
+// clone runs: that split is outside the claim, and measured on its own.
+func richCloneRun(seed uint64) Options {
+	o := randomRun(seed, profClone)
+	r := rand.New(rand.NewPCG(seed, 0x7a7a7a))
+	dur := func(lo, hi time.Duration) time.Duration { return lo + time.Duration(r.Int64N(int64(hi-lo)+1)) }
+	c := []Addr{CA, CB}[r.IntN(2)]
+	at := []time.Duration{o.Start[original(c)], dur(4*sec, 12*sec)}[r.IntN(2)]
+	o.Faults = []Fault{{Kind: Clone, At: at, For: dur(2*lease, 15*lease), Node: c}}
+	for range 1 + r.IntN(3) {
+		f := Fault{At: dur(4*sec, 14*sec), For: dur(lease/4, 6*lease)}
+		switch r.IntN(6) {
+		case 0, 1:
+			l := voteLinks[r.IntN(3)]
+			f.Kind, f.From, f.To, f.Both = Cut, l.x, l.y, r.IntN(2) == 0
+		case 2:
+			f.Kind, f.Node, f.For = Crash, []Addr{A, B, W}[r.IntN(3)], dur(50*ms, 2*lease)
+		case 3:
+			f.Kind, f.Node = Unhealthy, []Addr{A, B}[r.IntN(2)]
+		case 4:
+			l := voteLinks[r.IntN(3)]
+			f.Kind, f.From, f.To, f.Both, f.Value = Delay, l.x, l.y, true, int64(dur(ms, lease/8))
+		case 5:
+			l := voteLinks[r.IntN(3)]
+			f.Kind, f.From, f.To, f.Both, f.Value = Loss, l.x, l.y, true, int64(1+r.IntN(20))
+		}
+		o.Faults = append(o.Faults, f)
+	}
+	// Within the claim: no split separates the clone from its original. A
+	// cut or restart that would leave the original unable to reach both
+	// other voters while the clone runs becomes a delay instead
+	// (TestMeasureCloneSplit is that case).
+	for i := 1; i < len(o.Faults); i++ {
+		if isolatesWithClone(o, i) {
+			orig := original(c)
+			o.Faults[i] = Fault{Kind: Delay, At: o.Faults[i].At, For: o.Faults[i].For, From: orig, To: W, Both: true, Value: int64(dur(ms, lease/8))}
+		}
+	}
+	o.Until = healAt(o) + bound + 6*lease
+	return o
+}
+
+// isolatesWithClone reports whether fault i, with the others, leaves the
+// clone's original unable to reach both its peer and the witness (a cut
+// of the link, or the other end down) at some instant while the clone
+// runs.
+func isolatesWithClone(o Options, i int) bool {
+	c := o.Faults[0]
+	orig := original(c.Node)
+	cuts := func(f Fault, x, y Addr) bool {
+		return (f.Kind == Cut && ((f.From == x && f.To == y) || (f.From == y && f.To == x))) ||
+			(f.Kind == Crash && f.Node == y)
+	}
+	f := o.Faults[i]
+	for j, g := range o.Faults[1:] {
+		if j+1 == i {
+			continue
+		}
+		for _, pair := range [][2]Fault{{f, g}, {g, f}} {
+			a, b := pair[0], pair[1]
+			if !(cuts(a, orig, peerOf(orig)) && cuts(b, orig, W)) {
+				continue
+			}
+			from := max(a.At, b.At, c.At)
+			to := min(a.At+a.For, b.At+b.For, c.At+c.For)
+			if from < to {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // cloneRace is seed's network, disk and clocks with a clone of A or B
 // campaigning beside its original: booted with it (start), or running
-// when the original (original) or its peer (peer) restarts.
+// when the original (original) or its peer (peer) restarts, or the leader
+// goes unhealthy (unhealthy); "rich" is richCloneRun.
 func cloneRace(seed uint64, mode string) Options {
+	if mode == "rich" {
+		return richCloneRun(seed)
+	}
 	o := randomRun(seed, profClone)
 	r := rand.New(rand.NewPCG(seed, 0x72616365))
 	c := []Addr{CA, CB}[r.IntN(2)]
@@ -187,5 +270,107 @@ func cloneRace(seed uint64, mode string) Options {
 		{Kind: Crash, At: crash, For: 50*ms + time.Duration(r.Int64N(int64(lease))), Node: down},
 	}
 	o.Until = at + 10*lease + bound + 6*lease
+	return o
+}
+
+// TestMeasureCloneSplit measures what #1029 step 1 does not close: cuts
+// that keep a voter from hearing both copies of a name while a clone runs.
+// Clone-link cuts are measured, not gated (no pass/fail test draws them).
+//   - The two splits: the original with the witness and the clone with
+//     the peer ({A, W} | {B, clone}), or the mirror ({A, B} | {clone, W}).
+//     Once the other boot ages out (a lease), no voter on either side
+//     sees two, and each side holds two of the three names, the
+//     duplicated voter counting on both.
+//   - The #1094 review's shapes (a clone of A, cuts from 8 s + 2-5
+//     leases for 8 leases): a voter forgets a boot after a lease of
+//     silence, so the overlap can also start when a split HEALS, the
+//     first copy back getting a grant: {A-B, clone-B, clone-W, B-W},
+//     {A-W, clone-B, clone-W, B-W}, {A-B, A-W, clone-B}, {A-W, clone-B}.
+//
+// The sticky confirmed-duplicate mark (3c) is to bring all of them to no
+// leader rather than two. It logs the rates; skipped unless
+// QUORUM_MEASURE_CLONE_SPLIT=<n>.
+//
+//	QUORUM_MEASURE_CLONE_SPLIT=2000 go test ./quorum/sim -run '^TestMeasureCloneSplit$' -v
+func TestMeasureCloneSplit(t *testing.T) {
+	n, _ := strconv.Atoi(os.Getenv("QUORUM_MEASURE_CLONE_SPLIT"))
+	if n <= 0 {
+		t.Skip("set QUORUM_MEASURE_CLONE_SPLIT=<runs>")
+	}
+	for _, shape := range []string{"original with the witness", "original with its peer"} {
+		both := 0
+		for seed := uint64(1); seed <= uint64(n); seed++ {
+			o := cloneSplit(seed, shape == "original with its peer")
+			if overlap(Check(Run(o), cloneChecks(o))) {
+				both++
+			}
+		}
+		t.Logf("a split separating a running clone from its original (%s): two leaders in %d of %d runs", shape, both, n)
+	}
+	for _, shape := range reviewSplitShapes {
+		both, first := 0, uint64(0)
+		for seed := uint64(1); seed <= uint64(n); seed++ {
+			o := reviewSplit(seed, shape.cuts)
+			if overlap(Check(Run(o), cloneChecks(o))) {
+				both++
+				if first == 0 {
+					first = seed
+				}
+			}
+		}
+		t.Logf("clone of A, cuts %s: two leaders in %d of %d runs (first seed %d)", shape.name, both, n, first)
+	}
+}
+
+// reviewSplitShapes are the #1094 review's cut sets, for a clone of A.
+var reviewSplitShapes = []struct {
+	name string
+	cuts [][2]Addr
+}{
+	{"{A-B, clone-B, clone-W, B-W}", [][2]Addr{{A, B}, {CA, B}, {CA, W}, {B, W}}},
+	{"{A-W, clone-B, clone-W, B-W}", [][2]Addr{{A, W}, {CA, B}, {CA, W}, {B, W}}},
+	{"{A-B, A-W, clone-B}", [][2]Addr{{A, B}, {A, W}, {CA, B}}},
+	{"{A-W, clone-B}", [][2]Addr{{A, W}, {CA, B}}},
+}
+
+// reviewSplit is the #1094 review's recipe: seed's network, disk and
+// clocks, a clone of A from 8 s for 12 leases, and cuts (both ways) from
+// 8 s + 2-5 leases for 8 leases.
+func reviewSplit(seed uint64, cuts [][2]Addr) Options {
+	o := randomRun(seed, profClone)
+	r := rand.New(rand.NewPCG(seed, 0x1234))
+	at := 8 * sec
+	cut := at + 2*lease + time.Duration(r.Int64N(int64(3*lease)))
+	o.Faults = []Fault{{Kind: Clone, At: at, For: 12 * lease, Node: CA}}
+	for _, l := range cuts {
+		o.Faults = append(o.Faults, Fault{Kind: Cut, At: cut, For: 8 * lease, From: l[0], To: l[1], Both: true})
+	}
+	o.Until = at + 12*lease + bound + 6*lease
+	return o
+}
+
+// cloneSplit is seed's network, disk and clocks with a clone of A or B
+// running from 8 s, then a split two to five leases later that puts the
+// original with the witness and the clone with the peer (or, mirror, the
+// original with its peer and the clone with the witness), for eight
+// leases.
+func cloneSplit(seed uint64, mirror bool) Options {
+	o := randomRun(seed, profClone)
+	r := rand.New(rand.NewPCG(seed, 0x73706c6974))
+	at := 8 * sec
+	c := []Addr{CA, CB}[r.IntN(2)]
+	orig, peer := original(c), peerOf(original(c))
+	cut := at + 2*lease + time.Duration(r.Int64N(int64(3*lease)))
+	o.Faults = []Fault{
+		{Kind: Clone, At: at, For: 12 * lease, Node: c},
+		{Kind: Cut, At: cut, For: 8 * lease, From: orig, To: peer, Both: true},
+		{Kind: Cut, At: cut, For: 8 * lease, From: peer, To: W, Both: true},
+		{Kind: Cut, At: cut, For: 8 * lease, From: c, To: W, Both: true},
+	}
+	if mirror {
+		o.Faults[1] = Fault{Kind: Cut, At: cut, For: 8 * lease, From: orig, To: W, Both: true}
+		o.Faults[3] = Fault{Kind: Cut, At: cut, For: 8 * lease, From: c, To: peer, Both: true}
+	}
+	o.Until = at + 12*lease + bound + 6*lease
 	return o
 }

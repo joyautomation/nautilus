@@ -67,14 +67,20 @@ type VoterState struct {
 	// file as lost: a cloned disk must not vote as the original (#1029).
 	// Empty on the witness, and in a file never written.
 	Box string
+	// GrantNonce is the boot nonce Promised was granted to GrantedTo under:
+	// a term goes to one boot of a name, also across this voter's restart
+	// (#1029 step 1, #1094 review). 0 in a file before format 5.
+	GrantNonce uint64
 }
 
 const stateMagic = "nqv"
 
 // stateVersion is the state file's format: 2 since VoterState.Lease, 3
-// since Owner and Cluster, 4 since Box. A file of another version reads
-// as ErrVersion, not as corrupt.
-const stateVersion = 4
+// since Owner and Cluster, 4 since Box, 5 since GrantNonce. A version-4
+// file still reads (GrantNonce 0, as before it was kept), so an upgrade
+// keeps the voter's promises; a file of any other version reads as
+// ErrVersion, not as corrupt.
+const stateVersion = 5
 
 // MarshalBinary encodes s for its state file: a magic, a version byte, a
 // length, the fields, and a CRC-32C, so a torn write is detected.
@@ -99,6 +105,7 @@ func (s VoterState) MarshalBinary() ([]byte, error) {
 	p = putString(p, string(s.Owner))
 	p = putString(p, s.Cluster)
 	p = putString(p, s.Box)
+	p = binary.BigEndian.AppendUint64(p, s.GrantNonce)
 	b := append([]byte(stateMagic), stateVersion)
 	b = binary.BigEndian.AppendUint32(b, uint32(len(p)))
 	b = append(b, p...)
@@ -121,7 +128,8 @@ func (s *VoterState) UnmarshalBinary(b []byte) error {
 	if crc32.Checksum(body, castagnoli) != binary.BigEndian.Uint32(b[head+n:]) {
 		return ErrCorrupt
 	}
-	if b[len(stateMagic)] != stateVersion {
+	version := b[len(stateMagic)]
+	if version != stateVersion && version != 4 {
 		return ErrVersion
 	}
 	rd := &reader{b: b[head : head+n]}
@@ -131,6 +139,9 @@ func (s *VoterState) UnmarshalBinary(b []byte) error {
 	v.Gen, v.PendingGen, v.PendingInc, v.Floor = rd.u64(), rd.u64(), rd.u64(), rd.u64()
 	v.Lease = time.Duration(rd.u64())
 	v.Owner, v.Cluster, v.Box = NodeID(rd.str()), rd.str(), rd.str()
+	if version >= 5 {
+		v.GrantNonce = rd.u64()
+	}
 	if rd.bad || len(rd.b) != 0 || flags&^3 != 0 || v.Lease < 0 {
 		return ErrCorrupt
 	}

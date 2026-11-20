@@ -125,11 +125,29 @@ func newBoxRig(t *testing.T) *boxRig {
 		t.Fatal(err)
 	}
 	pairWait(t, "a leader", 15*time.Second, func() bool { return ea.IsLeader() || eb.IsLeader() })
-	if eb.IsLeader() {
-		r.nodes["b"].m.q.Release()
-	}
-	pairWait(t, "a to lead", 15*time.Second, func() bool { return ea.IsLeader() })
+	r.handLeadTo("a")
 	return r
+}
+
+// handLeadTo makes member lead: if the other controller leads, its
+// health is turned off until member leads (it stops renewing, and its
+// operator log keeps serving, so member takes over synced), then on again
+// (it stays the standby; its runtime's own liveness is not watched after).
+// Never by Release: a released controller never campaigns again (it is
+// shutting down), so a test that later needs it to take over would hang
+// (#1094's CI failure: B had won the first election and was released, and
+// once A was duplicated nobody could lead). Nor by a restart: the new
+// leader can't sync its log with the old one down, and yields to it once
+// it is back (#710 3b-4b), so who leads after is not the test's to say.
+func (r *boxRig) handLeadTo(member string) {
+	r.t.Helper()
+	other := map[string]string{"a": "b", "b": "a"}[member]
+	if r.el(other).IsLeader() {
+		r.el(other).SetHealth(func() bool { return false })
+		pairWait(r.t, member+" to lead", 15*time.Second, func() bool { return r.el(member).IsLeader() })
+		r.el(other).SetHealth(func() bool { return true })
+	}
+	pairWait(r.t, member+" to lead", 15*time.Second, func() bool { return r.el(member).IsLeader() })
 }
 
 // start runs member id (a, b, or clone) on box with env, listening on ln.
@@ -320,10 +338,9 @@ func TestCloneWithAnUnresolvableLinkNeverVotes(t *testing.T) {
 // spoofedCloneCase is cloneCase for a MAC-spoofed clone of member (its box
 // fingerprint matches, so layer 1 can't see it): the voters relay their
 // running promises (#1029 layer 2), and the clone never leads while the
-// voter it needs and the one that knows better reach each other. A keeps
-// leading throughout: the clone's frames don't cost the original its
-// lease. raised says where redundancy.duplicate-member shows: logs is
-// everything logged meanwhile (the witness logs it).
+// voter it needs and the one that knows better reach each other; a real
+// controller leads. raised says where redundancy.duplicate-member shows:
+// logs is everything logged meanwhile (the witness logs it).
 func spoofedCloneCase(t *testing.T, member string, cut func(r *boxRig), raised func(r *boxRig, logs string) bool) {
 	logs := &lockedBuffer{}
 	old := slog.Default()
@@ -342,9 +359,12 @@ func spoofedCloneCase(t *testing.T, member string, cut func(r *boxRig), raised f
 	if led["clone"] {
 		t.Fatal("the clone led")
 	}
-	if !r.el("a").IsLeader() {
-		t.Fatal("A lost its lease with a clone running")
-	}
+	// A duplicated controller's vote backs no lease (#1029 step 1), so a
+	// clone plus a cut may leave the pair without a leader (fail-safe:
+	// none beats two). Stopping the clone, as the alarm says, brings one
+	// back.
+	r.nodes["clone"].crash()
+	pairWait(t, "a real controller to lead once the clone is stopped", 15*time.Second, func() bool { return r.el("a").IsLeader() || r.el("b").IsLeader() })
 	if !raised(r, logs.String()) {
 		t.Fatalf("redundancy.duplicate-member not raised where it should be; logs:\n%s", logs.String())
 	}
@@ -365,7 +385,7 @@ func TestSpoofedCloneOfTheLeaderWithTheABLinkDown(t *testing.T) {
 // the clone (rule (a)).
 func TestSpoofedCloneOfTheLeaderCutFromTheWitness(t *testing.T) {
 	spoofedCloneCase(t, "a", func(r *boxRig) { r.links.cutLink("a", r.wit) }, func(_ *boxRig, logs string) bool {
-		return strings.Contains(logs, "witness: two processes claim to be a: a vote came from a under a boot nonce")
+		return strings.Contains(logs, "witness: two processes claim to be a: this voter hears a under two boot nonces")
 	})
 }
 
@@ -378,4 +398,105 @@ func TestSpoofedCloneOfTheStandbyWithTheLeaderCutFromTheWitness(t *testing.T) {
 	spoofedCloneCase(t, "b", func(r *boxRig) { r.links.cutLink("a", r.wit) }, func(_ *boxRig, logs string) bool {
 		return strings.Contains(logs, "witness: two processes claim to be b: b campaigned while its own voter was heard promised")
 	})
+}
+
+// #1029 step 1, end to end: a MAC-spoofed clone running while the lease
+// changes hands. Before step 1 each of these could lead twice (the
+// residual #1079 stated). Now a name heard under two live boots gets no
+// new grant and a duplicated voter backs no lease: the clone never leads,
+// never beside another leader, and a real controller leads. A running
+// clone costs redundancy, not the leader.
+func cloneHandover(t *testing.T, member string, handover func(r *boxRig)) {
+	r := newBoxRig(t)
+	box := map[string]string{"a": "box-a", "b": "box-b"}[member]
+	r.cloneDisk(member, box)
+	time.Sleep(2 * time.Second) // the clone is past its restart hold, refused
+	handover(r)
+	els := map[string]*node.Elector{"a": r.el("a"), "b": r.el("b"), "clone": r.el("clone")}
+	if led := watchOneLeader(t, 10*time.Second, els); led["clone"] {
+		t.Fatal("the clone led")
+	}
+	pairWait(t, "a real controller to lead", 10*time.Second, func() bool { return r.el("a").IsLeader() || r.el("b").IsLeader() })
+}
+
+// restart stops member and starts it again on its own box and address.
+func (r *boxRig) restart(member string) {
+	r.t.Helper()
+	i := map[string]int{"a": 0, "b": 1}[member]
+	r.nodes[member].crash()
+	ln, err := net.Listen("tcp", r.lns[i].Addr().String())
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	r.start(member, "box-"+member, r.env[member], ln)
+}
+
+func TestSpoofedCloneWhileTheOriginalRestarts(t *testing.T) {
+	cloneHandover(t, "a", func(r *boxRig) { r.restart("a") })
+}
+
+func TestSpoofedCloneWhileItsPeerRestarts(t *testing.T) {
+	cloneHandover(t, "a", func(r *boxRig) { r.restart("b") })
+}
+
+func TestSpoofedCloneWhileTheLeaderGoesUnhealthy(t *testing.T) {
+	cloneHandover(t, "a", func(r *boxRig) { r.el("a").SetHealth(func() bool { return false }) })
+}
+
+// A power cycle of both controllers with a clone of A booting together
+// with them: no promise is held anywhere yet.
+func TestSpoofedCloneBootsWithItsOriginal(t *testing.T) {
+	r := newBoxRig(t)
+	r.nodes["a"].crash()
+	r.nodes["b"].crash()
+	dir := t.TempDir()
+	if err := os.CopyFS(dir, os.DirFS(r.env["a"]["STATE_DIRECTORY"])); err != nil {
+		t.Fatal(err)
+	}
+	env := maps.Clone(r.env["a"])
+	env["STATE_DIRECTORY"] = dir
+	for i, m := range []string{"a", "b"} {
+		ln, err := net.Listen("tcp", r.lns[i].Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		r.start(m, "box-"+m, r.env[m], ln)
+	}
+	r.start("clone", "box-a", env, r.lns[2])
+	els := map[string]*node.Elector{"a": r.el("a"), "b": r.el("b"), "clone": r.el("clone")}
+	if led := watchOneLeader(t, 10*time.Second, els); led["clone"] {
+		t.Fatal("the clone led")
+	}
+	pairWait(t, "a real controller to lead", 10*time.Second, func() bool { return r.el("a").IsLeader() || r.el("b").IsLeader() })
+}
+
+// A MAC-spoofed clone of the healthy leader, every link up: the leader
+// keeps its lease the whole time (its running promises still renew), and
+// the clone never leads: a clone costs redundancy, never a takeover of a
+// healthy leader (#1029 step 1).
+func TestSpoofedCloneOfAHealthyLeaderCostsNoTakeover(t *testing.T) {
+	r := newBoxRig(t)
+	c := r.cloneDisk("a", "box-a")
+	els := map[string]*node.Elector{"a": r.el("a"), "b": r.el("b"), "clone": c}
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		if !r.el("a").IsLeader() {
+			t.Fatal("A lost its lease to a clone beside it, with every link up")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if led := watchOneLeader(t, 2*time.Second, els); led["clone"] || led["b"] {
+		t.Fatalf("the lease moved: %v", led)
+	}
+}
+
+// The rig's hand-over leaves both controllers able to lead: the lead goes
+// to B and back to A, then A stops, and B takes over (a Release-based
+// hand-over left B released for good, and it never would).
+func TestBoxRigHandOverLeavesBothAbleToLead(t *testing.T) {
+	r := newBoxRig(t)
+	r.handLeadTo("b")
+	r.handLeadTo("a")
+	r.nodes["a"].crash()
+	pairWait(t, "b to take over", 10*time.Second, func() bool { return r.el("b").IsLeader() })
 }
