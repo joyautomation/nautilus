@@ -23,40 +23,49 @@ const otherCPU = "192.0.2.99"
 // password or not), and the agent must refuse with the IDs in Unanswered
 // (decision_required) or Declined (declined), or load.
 var ResolveCases = []struct {
-	Name                 string
-	Questions            []tiad.Question
-	Decisions            tiad.Decisions
-	Protection           bool
-	Unanswered, Declined string
+	Name       string
+	Questions  []tiad.Question
+	Decisions  tiad.Decisions
+	Protection bool
+	// ConfigurationPassword sends the configuration password.
+	ConfigurationPassword bool
+	Unanswered, Declined  string
 }{
-	{"nothing asked", nil, tiad.Decisions{}, false, "", ""},
-	{"stop unanswered", []tiad.Question{qStop}, tiad.Decisions{}, false, "stop-cpu", ""},
-	{"stop yes", []tiad.Question{qStop}, tiad.Decisions{StopCPU: tiad.Yes()}, false, "", ""},
-	{"stop no", []tiad.Question{qStop}, tiad.Decisions{StopCPU: tiad.No()}, false, "", "stop-cpu"},
-	{"overwrite unanswered", []tiad.Question{{ID: tiad.QuestionOverwrite}}, tiad.Decisions{StopCPU: tiad.Yes()}, false, "overwrite", ""},
-	{"overwrite no", []tiad.Question{{ID: tiad.QuestionOverwrite}}, tiad.Decisions{Overwrite: tiad.No()}, false, "", "overwrite"},
-	{"start-after no is stay in STOP", []tiad.Question{{ID: tiad.QuestionStartAfter}}, tiad.Decisions{StartAfter: tiad.No()}, false, "", ""},
-	{"start-after unanswered", []tiad.Question{{ID: tiad.QuestionStartAfter}}, tiad.Decisions{}, false, "start-after", ""},
-	{"reinit all agreed, any case", []tiad.Question{qReinit}, tiad.Decisions{Reinitialize: []string{"tags", "PROG_DB"}}, false, "", ""},
-	{"reinit partly agreed", []tiad.Question{qReinit}, tiad.Decisions{Reinitialize: []string{"Tags"}}, false, "reinitialize", ""},
-	{"reinit unanswered", []tiad.Question{qReinit}, tiad.Decisions{}, false, "reinitialize", ""},
-	{"reinit naming nothing is never answered", []tiad.Question{{ID: tiad.QuestionReinitialize}}, tiad.Decisions{Reinitialize: []string{"Tags"}}, false, "reinitialize", ""},
-	{"cert matches, any case", []tiad.Question{qCert}, tiad.Decisions{TrustCertificate: "ab12"}, false, "", ""},
-	{"cert differs", []tiad.Question{qCert}, tiad.Decisions{TrustCertificate: "FFFF"}, false, "", "certificate"},
-	{"cert unanswered", []tiad.Question{qCert}, tiad.Decisions{}, false, "certificate", ""},
-	{"password from secret", []tiad.Question{{ID: tiad.QuestionPassword}}, tiad.Decisions{}, true, "", ""},
-	{"password missing", []tiad.Question{{ID: tiad.QuestionPassword}}, tiad.Decisions{}, false, "password", ""},
-	{"other never answered", []tiad.Question{{ID: tiad.QuestionOther, Message: "Something new"}}, tiad.Decisions{StopCPU: tiad.Yes(), Overwrite: tiad.Yes(), StartAfter: tiad.Yes()}, true, "other", ""},
-	{"unknown id is other", []tiad.Question{{ID: "new-in-v22"}}, tiad.Decisions{StopCPU: tiad.Yes()}, true, "new-in-v22", ""},
-	{"unanswered wins over declined", []tiad.Question{qStop, {ID: tiad.QuestionOverwrite}}, tiad.Decisions{StopCPU: tiad.No()}, false, "overwrite", "stop-cpu"},
+	{"nothing asked", nil, tiad.Decisions{}, false, false, "", ""},
+	{"stop unanswered", []tiad.Question{qStop}, tiad.Decisions{}, false, false, "stop-cpu", ""},
+	{"stop yes", []tiad.Question{qStop}, tiad.Decisions{StopCPU: tiad.Yes()}, false, false, "", ""},
+	{"stop no", []tiad.Question{qStop}, tiad.Decisions{StopCPU: tiad.No()}, false, false, "", "stop-cpu"},
+	{"overwrite unanswered", []tiad.Question{{ID: tiad.QuestionOverwrite}}, tiad.Decisions{StopCPU: tiad.Yes()}, false, false, "overwrite", ""},
+	{"overwrite no", []tiad.Question{{ID: tiad.QuestionOverwrite}}, tiad.Decisions{Overwrite: tiad.No()}, false, false, "", "overwrite"},
+	{"start-after no is stay in STOP", []tiad.Question{{ID: tiad.QuestionStartAfter}}, tiad.Decisions{StartAfter: tiad.No()}, false, false, "", ""},
+	{"start-after unanswered", []tiad.Question{{ID: tiad.QuestionStartAfter}}, tiad.Decisions{}, false, false, "start-after", ""},
+	{"reinit all agreed, any case", []tiad.Question{qReinit}, tiad.Decisions{Reinitialize: []string{"tags", "PROG_DB"}}, false, false, "", ""},
+	{"reinit partly agreed", []tiad.Question{qReinit}, tiad.Decisions{Reinitialize: []string{"Tags"}}, false, false, "reinitialize", ""},
+	{"reinit unanswered", []tiad.Question{qReinit}, tiad.Decisions{}, false, false, "reinitialize", ""},
+	{"reinit naming nothing is never answered", []tiad.Question{{ID: tiad.QuestionReinitialize}}, tiad.Decisions{Reinitialize: []string{"Tags"}}, false, false, "reinitialize", ""},
+	{"cert matches, any case", []tiad.Question{qCert}, tiad.Decisions{TrustCertificate: "ab12"}, false, false, "", ""},
+	{"cert differs", []tiad.Question{qCert}, tiad.Decisions{TrustCertificate: "FFFF"}, false, false, "", "certificate"},
+	{"cert unanswered", []tiad.Question{qCert}, tiad.Decisions{}, false, false, "certificate", ""},
+	{"password from secret", []tiad.Question{{ID: tiad.QuestionPassword}}, tiad.Decisions{}, true, false, "", ""},
+	{"password missing", []tiad.Question{{ID: tiad.QuestionPassword}}, tiad.Decisions{}, false, false, "password", ""},
+	{"configuration password from its secret", []tiad.Question{qConfigPw}, tiad.Decisions{}, false, true, "", ""},
+	{"configuration password missing", []tiad.Question{qConfigPw}, tiad.Decisions{}, false, false, "configuration-password", ""},
+	// Each password answers its own question only, never the other's.
+	{"protection password never answers configuration-password", []tiad.Question{qConfigPw}, tiad.Decisions{}, true, false, "configuration-password", ""},
+	{"configuration password never answers password", []tiad.Question{{ID: tiad.QuestionPassword}}, tiad.Decisions{}, false, true, "password", ""},
+	{"other never answered", []tiad.Question{{ID: tiad.QuestionOther, Message: "Something new"}}, tiad.Decisions{StopCPU: tiad.Yes(), Overwrite: tiad.Yes(), StartAfter: tiad.Yes()}, true, false, "other", ""},
+	{"unknown id is other", []tiad.Question{{ID: "new-in-v22"}}, tiad.Decisions{StopCPU: tiad.Yes()}, true, false, "new-in-v22", ""},
+	{"unanswered wins over declined", []tiad.Question{qStop, {ID: tiad.QuestionOverwrite}}, tiad.Decisions{StopCPU: tiad.No()}, false, false, "overwrite", "stop-cpu"},
 	{"all answered", []tiad.Question{qStop, qReinit, {ID: tiad.QuestionOverwrite}, {ID: tiad.QuestionStartAfter}, qCert, {ID: tiad.QuestionPassword}},
-		tiad.Decisions{StopCPU: tiad.Yes(), Overwrite: tiad.Yes(), StartAfter: tiad.Yes(), Reinitialize: []string{"Tags", "Prog_DB"}, TrustCertificate: "AB12"}, true, "", ""},
+		tiad.Decisions{StopCPU: tiad.Yes(), Overwrite: tiad.Yes(), StartAfter: tiad.Yes(), Reinitialize: []string{"Tags", "Prog_DB"}, TrustCertificate: "AB12"}, true, false, "", ""},
 }
 
 var (
 	qStop   = tiad.Question{ID: tiad.QuestionStopCPU, Message: "The CPU must stop"}
 	qReinit = tiad.Question{ID: tiad.QuestionReinitialize, Message: "Reinitialise", Objects: []string{"Tags", "Prog_DB"}}
 	qCert   = tiad.Question{ID: tiad.QuestionCertificate, Detail: "AB12"}
+	// qConfigPw is TIA's PlcMasterSecretPassword check.
+	qConfigPw = tiad.Question{ID: tiad.QuestionConfigurationPassword, Message: "password for the confidential PLC configuration data", Detail: "PlcMasterSecretPassword"}
 )
 
 func contractDownload(t *testing.T, start Starter) {
@@ -247,8 +256,15 @@ func contractResolve(t *testing.T, start Starter) {
 			d.StartAfter = tiad.No()
 		}
 		body := map[string]any{"address": benchCPU, "software": true, "announced": true, "decisions": d}
+		sec := map[string]string{}
 		if rc.Protection {
-			body["secrets"] = map[string]string{"protection": "pw"}
+			sec["protection"] = "pw"
+		}
+		if rc.ConfigurationPassword {
+			sec["configurationPassword"] = BenchConfigurationPassword
+		}
+		if len(sec) > 0 {
+			body["secrets"] = sec
 		}
 		status, b := rawJSON(t, c, "POST", path, body)
 		var env struct {

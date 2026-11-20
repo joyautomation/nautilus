@@ -564,6 +564,9 @@ func (c *Client) CreateProject(ctx context.Context, name string, st Station, sec
 	if err := st.Validate(); err != nil {
 		return nil, &Error{Kind: KindBadRequest, Message: err.Error()}
 	}
+	if err := sec.CheckFor(st); err != nil {
+		return nil, &Error{Kind: KindBadRequest, Message: err.Error()}
+	}
 	var s Session
 	if _, err := c.doJSON(ctx, http.MethodPost, "/v1/projects",
 		map[string]any{"name": name, "station": st, "secrets": sec}, &s); err != nil {
@@ -618,12 +621,18 @@ func (s *Session) Close(ctx context.Context) error {
 // StationResult says what applying a station spec changed.
 type StationResult struct {
 	Changes []string `json:"changes"`
+	// Notes are what the caller should know besides the changes: that a
+	// CPU already protected kept its password, for one.
+	Notes []string `json:"notes,omitempty"`
 }
 
 // ApplyStation makes the project's hardware config match st: anything not
 // in st is removed.
 func (s *Session) ApplyStation(ctx context.Context, st Station, sec Secrets) (StationResult, error) {
 	if err := st.Validate(); err != nil {
+		return StationResult{}, &Error{Kind: KindBadRequest, Message: err.Error()}
+	}
+	if err := sec.CheckFor(st); err != nil {
 		return StationResult{}, &Error{Kind: KindBadRequest, Message: err.Error()}
 	}
 	var r StationResult

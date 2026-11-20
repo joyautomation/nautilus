@@ -26,7 +26,10 @@ func intp(i int) *int { return &i }
 func BenchStation(modules ...tiad.DeviceModule) tiad.Station {
 	return tiad.Station{
 		CPU: tiad.CPU{Name: "PLC_1", Order: "6ES7 510-1DK03-0AB0", Firmware: "V3.1",
-			Address: benchCPU, SubnetMask: "255.255.255.0", ProfinetName: "plc-1"},
+			Address: benchCPU, SubnetMask: "255.255.255.0", ProfinetName: "plc-1",
+			// The bench CPU's own setting (the S2a upload): a download of
+			// the bench station leaves its protection as it is.
+			ConfigurationProtection: tiad.ProtectNone},
 		WebServer: &tiad.WebServer{Enabled: true, Users: []tiad.WebUser{{Name: "naut", Rights: []string{"read", "write", "mode"}}}},
 		Modules:   []tiad.Module{{Slot: 2, Order: "6ES7 131-6BH01-0BA0", InputStart: intp(0)}},
 		Profinet: &tiad.Profinet{UpdateTime: "16ms", Devices: []tiad.Device{{
@@ -37,6 +40,10 @@ func BenchStation(modules ...tiad.DeviceModule) tiad.Station {
 
 // BenchSecrets carries the bench station's web user password.
 var BenchSecrets = tiad.Secrets{WebUsers: map[string]string{"naut": "pw"}}
+
+// BenchConfigurationPassword meets TIA's password rules. It is a test
+// value, never a real CPU's.
+const BenchConfigurationPassword = "Bench-config-2026"
 
 // StationCases break one station rule each. Want is part of the message
 // both copies of the rule (Go and C#) must give, word for word.
@@ -53,6 +60,8 @@ var StationCases = []struct {
 	{"cpu address leading zero", func(s *tiad.Station) { s.CPU.Address = "192.0.2.010" }, "cpu.address"},
 	{"cpu mask", func(s *tiad.Station) { s.CPU.SubnetMask = "255.255.255" }, `cpu.subnetMask "255.255.255" is not an IPv4 mask`},
 	{"cpu router", func(s *tiad.Station) { s.CPU.Router = "gw" }, `cpu.router "gw" is not an IPv4 address`},
+	{"cpu configuration protection empty", func(s *tiad.Station) { s.CPU.ConfigurationProtection = "" }, "cpu.configurationProtection is empty (one of password, none, keep)"},
+	{"cpu configuration protection unknown", func(s *tiad.Station) { s.CPU.ConfigurationProtection = "Password" }, `cpu.configurationProtection: "Password" is not one of password, none, keep`},
 	{"cpu station name upper", func(s *tiad.Station) { s.CPU.ProfinetName = "PLC_1" }, `cpu.profinetName: "PLC_1": only lowercase letters, digits, hyphens and dots are allowed`},
 	{"device name empty", func(s *tiad.Station) { s.Profinet.Devices[0].Name = "" }, "profinet.devices[0].name: empty (names are always explicit)"},
 	{"device name ip-shaped", func(s *tiad.Station) { s.Profinet.Devices[0].Name = "1.2.3.4" }, `"1.2.3.4" has the form n.n.n.n (n = 0-999), which PROFINET forbids`},

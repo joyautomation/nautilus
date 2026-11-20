@@ -1967,6 +1967,12 @@
         "profinet-name": {
           "type": "string",
           "description": "The CPU's PROFINET name of station: lowercase, explicit."
+        },
+        "configuration-protection": {
+          "type": "string",
+          "enum": ["password", "none", "keep"],
+          "default": "password",
+          "description": "FW 3.1 protection of the CPU's confidential configuration data. password (the default): protected, with the password from the secret store, never this file. none: off, an explicit choice. keep: leave the project's setting as found (an adopted station)."
         }
       }
     },

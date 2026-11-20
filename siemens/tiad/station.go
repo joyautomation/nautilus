@@ -27,7 +27,18 @@ type CPU struct {
 	SubnetMask   string `json:"subnetMask"`
 	Router       string `json:"router,omitempty"`
 	ProfinetName string `json:"profinetName"` // the CPU's own name of station
+	// ConfigurationProtection is required: "password", "none" or "keep"
+	// (siemens-ide.md §3.3). Its password travels in
+	// Secrets.ConfigurationPassword.
+	ConfigurationProtection string `json:"configurationProtection"`
 }
+
+// The configuration protection values.
+const (
+	ProtectPassword = station.ProtectPassword
+	ProtectNone     = station.ProtectNone
+	ProtectKeep     = station.ProtectKeep
+)
 
 // WebServer turns on the CPU's web server, which carries the Web API the
 // online plane uses. Passwords travel in Secrets, never here.
@@ -85,6 +96,28 @@ type DeviceModule struct {
 type Secrets struct {
 	WebUsers   map[string]string `json:"webUsers,omitempty"`
 	Protection string            `json:"protection,omitempty"`
+	// ConfigurationPassword protects the CPU's confidential configuration
+	// data (cpu.configurationProtection). It is its own secret: never the
+	// protection password, never a web user's.
+	ConfigurationPassword string `json:"configurationPassword,omitempty"`
+}
+
+// CheckFor applies what st needs from the secrets before TIA hears of
+// them: when st protects the configuration, a configuration password that
+// meets TIA's password rules, since it may be set. A password that only
+// unlocks (none, or a download) is never checked: it was set under
+// whatever rules TIA had then. The error never echoes a password.
+func (s Secrets) CheckFor(st Station) error {
+	if st.CPU.ConfigurationProtection != ProtectPassword {
+		return nil
+	}
+	if s.ConfigurationPassword == "" {
+		return fmt.Errorf("cpu.configurationProtection is password, and secrets.configurationPassword is empty (it comes from the secret store, never the spec)")
+	}
+	if err := checkTiaPassword(s.ConfigurationPassword); err != nil {
+		return fmt.Errorf("secrets.configurationPassword %v", err)
+	}
+	return nil
 }
 
 // Validate checks the rules tiad enforces before touching TIA, so a bad
@@ -115,6 +148,11 @@ func (s Station) Validate() error {
 	}
 	if err := checkStationName(c.ProfinetName); err != nil {
 		bad("cpu.profinetName: %v", err)
+	}
+	if c.ConfigurationProtection == "" {
+		bad("cpu.configurationProtection is empty (one of password, none, keep)")
+	} else if err := checkConfigurationProtection(c.ConfigurationProtection); err != nil {
+		bad("cpu.configurationProtection: %v", err)
 	}
 
 	if w := s.WebServer; w != nil {
@@ -226,6 +264,9 @@ var (
 	checkUpdateTime  = station.CheckUpdateTime
 	isIPv4           = station.IsIPv4
 	checkStationName = station.CheckStationName
+
+	checkConfigurationProtection = station.CheckConfigurationProtection
+	checkTiaPassword             = station.CheckTiaPassword
 )
 
 // MinUpdateTime is the shortest PROFINET update time a spec may ask for.

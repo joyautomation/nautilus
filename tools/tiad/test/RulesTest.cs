@@ -73,6 +73,9 @@ namespace Tiad.Test
                 T("LicenceFailsOnALaterCall", LicenceFailsOnALaterCall),
                 T("QuestionIds", QuestionIdsOfConfigurations),
                 T("Settings", SettingsForAnswers),
+                T("PasswordsNeverCross", PasswordsNeverCross),
+                T("ProtectionPlan", ProtectionPlan),
+                T("ProtectionReadBack", ProtectionReadBack),
                 T("DecideOnceAtTheFirstCallback", DecideOnceAtTheFirstCallback),
                 T("DecideAsksStartAfterBeforeLoading", DecideAsksStartAfterBeforeLoading),
                 T("NoSyntheticStartAfterWhenAsked", NoSyntheticStartAfterWhenAsked),
@@ -234,6 +237,7 @@ namespace Tiad.Test
                 { "DataBlockReinitializationOrKeepActualValues", QuestionIds.Reinitialize },
                 { "ModuleReadAccessPassword", QuestionIds.Password },
                 { "ModuleWriteAccessPassword", QuestionIds.Password },
+                { "PlcMasterSecretPassword", QuestionIds.ConfigurationPassword },
                 { "TlsVerificationConfiguration", QuestionIds.Certificate },
                 { "ResetModule", QuestionIds.Other },
                 { "UpgradeTargetDevice", QuestionIds.Other },
@@ -283,11 +287,104 @@ namespace Tiad.Test
             Eq(S(DownloadChecks.For("ModuleWriteAccessPassword", true)), Setting.Password, "password yes");
             Eq(S(DownloadChecks.For("ModuleReadAccessPassword", true)), Setting.Password, "read password yes");
             Eq(S(DownloadChecks.For("ModuleWriteAccessPassword", false)), null, "password no");
+            Eq(S(DownloadChecks.For("PlcMasterSecretPassword", true)), Setting.ConfigurationPassword, "configuration password yes");
+            Eq(S(DownloadChecks.For("PlcMasterSecretPassword", false)), null, "configuration password no");
             Eq(S(DownloadChecks.For("TlsVerificationConfiguration", true)), "Trusted", "certificate yes");
             Eq(S(DownloadChecks.For("TlsVerificationConfiguration", false)), null, "certificate no");
             Eq(S(DownloadChecks.For("ResetModule", true)), null, "an unknown configuration, yes");
             Eq(S(DownloadChecks.For("ResetModule", false)), null, "an unknown configuration, no");
             Eq(DownloadChecks.For("StopModules", true).Kind, Setting.Select, "a selection's kind");
+        }
+
+        // PasswordsNeverCross: each password setting writes its own secret,
+        // never the other's, even when only the other is set.
+        static void PasswordsNeverCross()
+        {
+            var both = new Secrets { Protection = "protection-pw", ConfigurationPassword = "configuration-pw" };
+            var onlyProtection = new Secrets { Protection = "protection-pw" };
+            var onlyConfiguration = new Secrets { ConfigurationPassword = "configuration-pw" };
+            Setting module = DownloadChecks.For("ModuleWriteAccessPassword", true);
+            Setting master = DownloadChecks.For("PlcMasterSecretPassword", true);
+            Eq(Setting.Secret(module, both), "protection-pw", "module password, both set");
+            Eq(Setting.Secret(master, both), "configuration-pw", "master secret, both set");
+            Eq(Setting.Secret(module, onlyConfiguration), "", "module password never takes the configuration password");
+            Eq(Setting.Secret(master, onlyProtection), "", "master secret never takes the protection password");
+            Eq(Setting.Secret(DownloadChecks.For("StopModules", true), both), null, "a selection has no secret");
+        }
+
+        // ProtectionPlan is ConfigProtection.Plan over every state and
+        // mode: an action, or a refusal naming the fix.
+        static void ProtectionPlan()
+        {
+            const string W = ConfigProtection.WithoutPassword, P = ConfigProtection.WithPassword, N = ConfigProtection.None, A = ConfigProtection.Absent;
+            const string pw = StationRules.ProtectPassword, none = StationRules.ProtectNone, keep = StationRules.ProtectKeep;
+            var acts = new[]
+            {
+                // current, want, have password, action
+                new object[] { N, keep, false, ConfigProtection.Nothing },
+                // A password sent with keep changes nothing either.
+                new object[] { P, keep, true, ConfigProtection.Nothing },
+                new object[] { N, keep, true, ConfigProtection.Nothing },
+                new object[] { P, keep, false, ConfigProtection.Nothing },
+                new object[] { A, keep, false, ConfigProtection.Nothing },
+                new object[] { "Bogus", keep, false, ConfigProtection.Nothing },
+                new object[] { W, pw, true, ConfigProtection.Protect },
+                new object[] { N, pw, true, ConfigProtection.Protect },
+                new object[] { P, pw, true, ConfigProtection.Nothing },
+                new object[] { N, none, false, ConfigProtection.Nothing },
+                new object[] { W, none, false, ConfigProtection.ProtectThenUnprotect },
+                new object[] { P, none, true, ConfigProtection.UnprotectWithPassword },
+            };
+            foreach (var c in acts)
+            {
+                string what = c[0] + "/" + c[1] + "/" + c[2];
+                Eq(ConfigProtection.Plan((string)c[0], (string)c[1], (bool)c[2]), (string)c[3], what);
+            }
+            var refusals = new[]
+            {
+                new object[] { W, keep, true, "keep has nothing to keep: set cpu.configurationProtection to password or none" },
+                new object[] { A, pw, true, "has no configuration protection (firmware 3.1 and later have it): set it to keep" },
+                new object[] { A, none, true, "set it to keep" },
+                new object[] { "Bogus", pw, true, "a state tiad does not know (\"Bogus\"); nothing was changed" },
+                new object[] { "Bogus", none, true, "a state tiad does not know" },
+                new object[] { W, pw, false, "secrets.configurationPassword is empty" },
+                new object[] { P, none, false, "turning that off needs it in secrets.configurationPassword" },
+                new object[] { N, "Password", true, "\"Password\" is not one of password, none, keep" },
+            };
+            foreach (var c in refusals)
+            {
+                string what = c[0] + "/" + c[1] + "/" + c[2];
+                var e = Throws<TiadException>(delegate { ConfigProtection.Plan((string)c[0], (string)c[1], (bool)c[2]); }, what);
+                if (e == null) continue;
+                Eq(e.Kind, Kinds.BadRequest, what + " kind");
+                Contains(e.Message, (string)c[3], what);
+            }
+        }
+
+        // ProtectionReadBack: after a write, only the promised state passes.
+        static void ProtectionReadBack()
+        {
+            Eq(ConfigProtection.Check(ConfigProtection.Nothing, ConfigProtection.WithoutPassword), null, "nothing written, nothing checked");
+            Eq(ConfigProtection.Check(ConfigProtection.Protect, ConfigProtection.WithPassword), null, "protect reached");
+            Eq(ConfigProtection.Check(ConfigProtection.ProtectThenUnprotect, ConfigProtection.None), null, "protect-then-unprotect reached");
+            Eq(ConfigProtection.Check(ConfigProtection.UnprotectWithPassword, ConfigProtection.None), null, "unprotect with password reached");
+            Contains(ConfigProtection.Check(ConfigProtection.ProtectThenUnprotect, ConfigProtection.WithPassword), "reads WithPassword, not None", "an unprotect TIA ignored");
+            string a = ConfigProtection.Throwaway(), b = ConfigProtection.Throwaway();
+            Eq(StationRules.CheckTiaPassword(a), null, "a throwaway meets TIA's rules");
+            True(a != b, "each throwaway is new");
+            Eq(a.Length, 35, "a throwaway carries 16 random bytes");
+            Contains(ConfigProtection.Stranded("TIA said no", null), "tiad removed the CPU from the project: apply the spec again to make it anew", "stranded, removed");
+            Contains(ConfigProtection.Stranded("TIA said no", "locked"), "removing the CPU from the project failed too (locked): close this session without saving", "stranded, not removed");
+            Contains(ConfigProtection.Stranded("TIA said no", null), "a throwaway password nobody holds", "stranded names the risk");
+            Contains(ConfigProtection.Note(ConfigProtection.WithPassword, StationRules.ProtectPassword), "apply none with the old password, then password with the new one", "a kept password names how to change it");
+            foreach (string cur in new[] { ConfigProtection.None, ConfigProtection.WithoutPassword, ConfigProtection.Absent })
+            {
+                Eq(ConfigProtection.Note(cur, StationRules.ProtectPassword), null, "no note on " + cur);
+            }
+            Eq(ConfigProtection.Note(ConfigProtection.WithPassword, StationRules.ProtectKeep), null, "no note on keep");
+            Contains(ConfigProtection.Check(ConfigProtection.Protect, ConfigProtection.WithoutPassword), "not WithPassword", "a protect TIA ignored");
+            Contains(ConfigProtection.Check(ConfigProtection.UnprotectWithPassword, ConfigProtection.WithPassword), "not None", "a wrong password TIA swallowed");
+            Contains(ConfigProtection.Check(ConfigProtection.Protect, ConfigProtection.Absent), "reads absent", "a configurator gone");
         }
 
         // A fake TIA side for the decider: configurations are plain objects.

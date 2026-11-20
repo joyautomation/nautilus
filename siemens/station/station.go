@@ -18,6 +18,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf16"
 )
 
 // Station is a CPU's whole hardware config.
@@ -37,6 +38,12 @@ type CPU struct {
 	SubnetMask   string `yaml:"subnet-mask"`
 	Router       string `yaml:"router"`
 	ProfinetName string `yaml:"profinet-name"`
+	// ConfigurationProtection is the FW 3.1 protection of the CPU's
+	// confidential configuration data: password (the default, its
+	// password from the secret store), none, or keep (leave the
+	// project's setting as found, for an adopted station). Empty means
+	// the default.
+	ConfigurationProtection string `yaml:"configuration-protection"`
 }
 
 // WebServer turns on the CPU's web server. Passwords are never here.
@@ -123,6 +130,11 @@ func (s Station) Problems() []Problem {
 	}
 	if err := CheckStationName(c.ProfinetName); err != nil {
 		bad("cpu.profinet-name", "%v", err)
+	}
+	if c.ConfigurationProtection != "" {
+		if err := CheckConfigurationProtection(c.ConfigurationProtection); err != nil {
+			bad("cpu.configuration-protection", "%v", err)
+		}
 	}
 
 	if w := s.WebServer; w != nil {
@@ -233,6 +245,70 @@ func starts(bad func(string, string, ...any), at string, in, out *int) {
 
 // KnownRights are the web server rights a user may hold.
 var KnownRights = map[string]bool{"read": true, "write": true, "mode": true, "diagnostics": true}
+
+// The FW 3.1 configuration protection a station asks for
+// (siemens-ide.md §3.3).
+const (
+	// ProtectPassword protects the CPU's confidential configuration data
+	// with a password from the secret store. A new station's default.
+	ProtectPassword = "password"
+	// ProtectNone turns the protection off: an explicit choice.
+	ProtectNone = "none"
+	// ProtectKeep leaves the project's setting as it was found.
+	ProtectKeep = "keep"
+)
+
+// DefaultConfigurationProtection is what a manifest that names none gets.
+const DefaultConfigurationProtection = ProtectPassword
+
+// CheckConfigurationProtection accepts password, none and keep.
+func CheckConfigurationProtection(v string) error {
+	switch v {
+	case ProtectPassword, ProtectNone, ProtectKeep:
+		return nil
+	}
+	return fmt.Errorf("%q is not one of password, none, keep", v)
+}
+
+// TIA's password rules (TIA Portal V21, as it words them when it refuses
+// one). Lengths count UTF-16 code units, as .NET does; the classes are
+// ASCII, which can only be stricter than TIA.
+const (
+	MinTiaPassword = 10
+	MaxTiaPassword = 120
+)
+
+// CheckTiaPassword applies TIA's password rules: 10 to 120 characters,
+// at least one digit and one upper-case and one lower-case letter. The
+// error names every rule broken and NEVER echoes the password.
+func CheckTiaPassword(pw string) error {
+	var broken []string
+	n := len(utf16.Encode([]rune(pw)))
+	if n < MinTiaPassword {
+		broken = append(broken, "shorter than 10 characters")
+	} else if n > MaxTiaPassword {
+		broken = append(broken, "longer than 120 characters")
+	}
+	var digit, upper, lower bool
+	for _, r := range pw {
+		digit = digit || r >= '0' && r <= '9'
+		upper = upper || r >= 'A' && r <= 'Z'
+		lower = lower || r >= 'a' && r <= 'z'
+	}
+	if !digit {
+		broken = append(broken, "no digit")
+	}
+	if !upper {
+		broken = append(broken, "no upper-case letter (A-Z)")
+	}
+	if !lower {
+		broken = append(broken, "no lower-case letter (a-z)")
+	}
+	if len(broken) == 0 {
+		return nil
+	}
+	return fmt.Errorf("breaks TIA's password rules (10 to 120 characters, at least one digit, one upper-case and one lower-case letter): %s", strings.Join(broken, ", "))
+}
 
 // MinUpdateTime is the shortest PROFINET update time a spec may ask for.
 const MinUpdateTime = 16 * time.Millisecond

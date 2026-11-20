@@ -151,8 +151,9 @@ namespace Tiad
 
         // ApplyStation makes the project's hardware match next, removing
         // what next lacks, and says what changed. previous is the station
-        // this session last applied, or null.
-        List<string> ApplyStation(object project, Station previous, Station next, Secrets secrets);
+        // this session last applied, or null. notes gets what the caller
+        // should know besides the changes (ConfigProtection.Note).
+        List<string> ApplyStation(object project, Station previous, Station next, Secrets secrets, List<string> notes);
 
         // ImportSoftware generates blocks from sources into group; with
         // prune, it deletes blocks in group that no source produced.
