@@ -126,6 +126,11 @@ func (s *Server) readRefused(w http.ResponseWriter, r *http.Request) bool {
 		return false
 	}
 	w.Header().Set("Cache-Control", "no-store")
+	// The refusal is answered here, before withCORS: it carries the same
+	// CORS answer withCORS would have given, so an allowed cross-origin
+	// page (a dev server) can read it.
+	w.Header().Add("Vary", "Origin")
+	s.allowOrigin(w, r)
 	// A forwarding standby holds no sessions, so a signed-in browser's
 	// cookie is unknown here: refer it to the leader (#708 decision (c)),
 	// as proxyStandby does every cookie request, rather than refusing it.

@@ -3,6 +3,7 @@ package server
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -507,5 +508,95 @@ func TestStreamChecksOnceRegistered(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Error("the stream of an ended session is still open")
+	}
+}
+
+// The read gate answers before withCORS, so its refusals carry the CORS
+// answer themselves: a page on an allowed origin (a dev server on
+// loopback) reads why it was refused, the 401, the 403 and a standby's
+// referral alike, while a page on any other origin is told nothing.
+func TestReadGateRefusalsCarryCORS(t *testing.T) {
+	srv, toks, _ := patServer(t)
+	fc := &flipCluster{st: leading}
+	srv.cluster = fc
+	srv.leaderURLs = map[string]string{"b": "https://plc-b.example:8443"}
+	from := func(origin string) func(*http.Request) {
+		return func(r *http.Request) { r.Header.Set("Origin", origin) }
+	}
+	const dev = "http://localhost:5173"
+	// withCORS's rule: an allowed origin, or any origin for a request that
+	// carries a valid credential (a PAT whose user holds no role here).
+	cases := []struct {
+		name     string
+		code     int
+		anywhere bool
+		mod      []func(*http.Request)
+	}{
+		{"anonymous", http.StatusUnauthorized, false, nil},
+		{"invalid credential", http.StatusUnauthorized, false, []func(*http.Request){bearer("guess")}},
+		{"ghost holds no role", http.StatusForbidden, true, []func(*http.Request){bearer(toks["ghost"])}},
+	}
+	for _, c := range cases {
+		for _, origin := range []string{dev, "https://elsewhere.example"} {
+			rec := call(t, srv, "GET", "/api/state", "", append(c.mod, from(origin))...)
+			if rec.Code != c.code {
+				t.Fatalf("%s from %s: %d %s, want %d", c.name, origin, rec.Code, rec.Body, c.code)
+			}
+			got := rec.Header().Get("Access-Control-Allow-Origin")
+			if (origin == dev || c.anywhere) && got != origin {
+				t.Errorf("%s from %s: Access-Control-Allow-Origin %q, want %q", c.name, origin, got, origin)
+			}
+			if origin != dev && !c.anywhere && got != "" {
+				t.Errorf("%s from another site: Access-Control-Allow-Origin %q, want none", c.name, got)
+			}
+			if !strings.Contains(strings.Join(rec.Header().Values("Vary"), ","), "Origin") {
+				t.Errorf("%s from %s: no Vary: Origin", c.name, origin)
+			}
+		}
+	}
+	fc.set(standing)
+	for _, origin := range []string{dev, "https://elsewhere.example"} {
+		rec := call(t, srv, "GET", "/api/state", "", withCookie("a-session-of-the-leader"), from(origin))
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("the standby's referral from %s: %d %s", origin, rec.Code, rec.Body)
+		}
+		got := rec.Header().Get("Access-Control-Allow-Origin")
+		if (origin == dev) != (got == dev) || (origin != dev && got != "") {
+			t.Errorf("the standby's referral from %s: Access-Control-Allow-Origin %q", origin, got)
+		}
+	}
+}
+
+// /api/me says whether this controller offers sign-in (a page must not
+// send anyone to a /signin that is not there) and what time it is here
+// (a page judges elevatedUntil by the controller's clock, not its own).
+func TestMeSaysSignInAndNow(t *testing.T) {
+	type me struct {
+		Auth   bool      `json:"auth"`
+		SignIn bool      `json:"signIn"`
+		Now    time.Time `json:"now"`
+	}
+	read := func(srv *Server) me {
+		t.Helper()
+		var m me
+		rec := call(t, srv, "GET", "/api/me", "")
+		if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
+			t.Fatalf("/api/me: %v %s", err, rec.Body)
+		}
+		return m
+	}
+	before := time.Now().Add(-time.Second)
+	withUsers, _, _ := patServer(t)
+	if m := read(withUsers); !m.Auth || !m.SignIn || m.Now.Before(before) || m.Now.After(time.Now().Add(time.Second)) {
+		t.Errorf("with users: %+v, want auth, signIn and the controller's time", m)
+	}
+	facade := New(newTestRuntime(t))
+	enforce(t, facade) // an auth: block, service tokens, no users file
+	if m := read(facade); !m.Auth || m.SignIn || m.Now.IsZero() {
+		t.Errorf("an auth: block without users: %+v, want signIn false", m)
+	}
+	open := New(newTestRuntime(t))
+	if m := read(open); m.Auth || m.SignIn || m.Now.IsZero() {
+		t.Errorf("no auth: block: %+v, want no auth, no signIn, the time", m)
 	}
 }
