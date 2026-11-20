@@ -8,6 +8,11 @@
 //   ?p=<id>           a saved project (/playground/p/<id> on the docs site;
 //                     playground/share keeps them)
 //   #project=<code>   a share link: the project itself (keep.js)
+//   tutorial=1        the docs site's interactive tutorial frames this page:
+//                     nothing is kept here (the tutorial keeps the learner's
+//                     files) and window.nautilusPlayground.lesson swaps the
+//                     project in place (load) and runs a step's hidden tests
+//                     (check), so the workbench is never reloaded.
 //
 // The visitor's edits are kept in their browser, apart from the project
 // they started from (keep.js): a reload or a later visit brings them back.
@@ -311,7 +316,8 @@ async function main() {
 		loadSource(params)
 	]);
 	source.project.version = await kept.fingerprint(source.project.files);
-	const copy = await kept.mine(source.key);
+	const tutorial = params.get('tutorial') === '1';
+	const copy = tutorial ? null : await kept.mine(source.key);
 	// What opens: their copy if they have one, else the source as published.
 	const project = copy ? { ...source.project, files: copy.files } : source.project;
 	const keep = keeper(pg, source, copy);
@@ -354,7 +360,8 @@ async function main() {
 	};
 	window.nautilusPlayground = { title: project.title, files: () => pg.files(), shareLink };
 	registerPlaygroundCommands(source, keep, shareLink);
-	registerFileSystemOverlay(1, new EngineFileSystem(pg, '/project', keep.edited));
+	const efs = new EngineFileSystem(pg, '/project', tutorial ? () => {} : keep.edited);
+	registerFileSystemOverlay(1, efs);
 
 	await initUserConfiguration(
 		JSON.stringify({
@@ -491,6 +498,7 @@ async function main() {
 	const commands = await getService(ICommandService);
 	relayWebviewKeys(commands, await getService(IKeybindingService));
 	const notifications = await getService(INotificationService);
+	if (tutorial) window.nautilusPlayground.lesson = lessonApi(pg, efs, commands);
 	Object.assign(window.nautilusPlayground, {
 		/** The framing page's Share button copied a link. */
 		shared: () => notifications.info(SHARED),
@@ -499,6 +507,43 @@ async function main() {
 		views: await views
 	});
 	window.dispatchEvent(new Event('nautilus-playground-ready'));
+}
+
+/**
+ * What the tutorial shell calls (same origin, through the iframe):
+ *   load({files, open})  replace the project in place and run it
+ *   files()              the learner's files as they stand (saved first)
+ *   check(tests)         write the step's hidden test files, run the
+ *                        engine's tests (naut test), remove them again;
+ *                        resolves to the acceptance records
+ */
+function lessonApi(pg, efs, commands) {
+	return {
+		async load({ files, open }) {
+			const before = Object.keys(await pg.files());
+			await commands.executeCommand('workbench.action.closeAllEditors');
+			await pg.setProject(files);
+			efs.replaced(before, Object.keys(files));
+			await openProject({ files, open });
+			await commands.executeCommand('nautilus.playground.run');
+		},
+		async files() {
+			await commands.executeCommand('workbench.action.files.saveAll');
+			return pg.files();
+		},
+		async check(tests) {
+			await commands.executeCommand('workbench.action.files.saveAll');
+			// What the learner is looking at runs again, so the live tags follow the program Check judged.
+			await commands.executeCommand('nautilus.playground.run');
+			const names = Object.keys(tests);
+			try {
+				for (const n of names) await pg.writeFile(n, tests[n]);
+				return await pg.test();
+			} finally {
+				for (const n of names) await pg.removeFile(n).catch(() => {});
+			}
+		}
+	};
 }
 
 /** Said whenever a share link is copied: a saved project is public to its link. */
