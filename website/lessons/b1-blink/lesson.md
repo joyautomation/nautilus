@@ -56,11 +56,13 @@ controller runs.
 
 Press **Check**. It runs the program in virtual time, so a 3-second test
 takes no real time, and tells you which of these failed: the lamp must stay
-off for the first half second, then be on, then off, then on again.
+off for the first 0.4 s, then come on within a second and stay on for at
+least 0.4 s, then go off the same way, and keep going.
 
-The blink is a little slower than 500 ms each way, about 600 to 700 ms. The
-timer needs a scan to finish and a scan to start over. That is normal, and
-the check allows for it.
+It does not demand exactly 500 ms. A timer needs a scan to notice it
+finished and another to start over, so the `TON` version blinks at about
+600 to 700 ms each way, and a counter of five scans at exactly 500 ms. Both
+are right.
 
 ## Stuck?
 

@@ -3,13 +3,16 @@ package main
 // Every interactive lesson (website/lessons/<id>/: start/, solution/, check/)
 // must be a real exercise: its Check passes on the solution, fails on the
 // start (an empty exercise that already passed would teach nothing), and
-// start and solution compile. The interactive shell runs the same test files
+// start and solution compile, every variants/ok-* (another correct answer)
+// passes it and every variants/bad-* fails it, so it cannot reject a student
+// whose program is right but not the solution's. The interactive shell runs the same test files
 // in the browser, so a lesson that passes here passes there.
 
 import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -65,6 +68,27 @@ func TestLessonsAreRealExercises(t *testing.T) {
 				captureStdout(t, func() int { code = runCheck([]string{dir}); return code })
 				if code != 0 {
 					t.Errorf("naut check fails on the %s project (exit %d)", stage, code)
+				}
+			}
+			// A Check must not reject a correct answer that differs from the
+			// solution (ok-*) and must reject a wrong one (bad-*): the
+			// variants are other programs, run on the solution's manifest.
+			variants, _ := filepath.Glob(filepath.Join(root, "variants", "*"))
+			for _, v := range variants {
+				name := filepath.Base(v)
+				dir := t.TempDir()
+				copyTree(t, filepath.Join(root, "solution"), dir)
+				copyTree(t, v, dir)
+				copyTree(t, checkDir, dir)
+				var code int
+				captureStdout(t, func() int { code = runTest([]string{dir}); return code })
+				switch {
+				case strings.HasPrefix(name, "ok-") && code != 0:
+					t.Errorf("variant %s is a correct answer but the Check rejects it (exit %d)", name, code)
+				case strings.HasPrefix(name, "bad-") && code == 0:
+					t.Errorf("variant %s is a wrong answer but the Check accepts it", name)
+				case !strings.HasPrefix(name, "ok-") && !strings.HasPrefix(name, "bad-"):
+					t.Errorf("variant %s must be named ok-* or bad-*", name)
 				}
 			}
 			if _, err := os.Stat(filepath.Join(root, "lesson.md")); err != nil {

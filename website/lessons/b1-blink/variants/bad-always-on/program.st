@@ -1,0 +1,3 @@
+PROGRAM Blink
+Lamp := TRUE;
+END_PROGRAM
