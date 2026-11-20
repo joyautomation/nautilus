@@ -417,6 +417,11 @@ and one command:
    on every connection, so the client's next attempt connects, with no
    restart. `rejected/` keeps the 100 most recent refusals.
 
+   Under an [`auth:` block](/guides/auth/#opc-ua) a trusted certificate
+   only reads. To let the client write as itself, approve and map it in
+   one step: `naut opcua trust 5c1f0e7a9b3d2c41 --as scada:operator`
+   (then restart `naut run`).
+
 **On a box installed by `naut deploy`** there is no `naut`: the controller is
 the one file `/opt/nautilus/current/controller`. Run the same two commands
 through it, with `NAUTILUS_CLI=1` (which makes a built controller act as the

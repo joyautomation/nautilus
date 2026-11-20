@@ -131,6 +131,8 @@ Usage:
                           --lease; needs NAUTILUS_PEER_TOKEN).
   naut audit verify   Check the runtime audit journal's hash chain
                           (default dir: audit).
+  naut auth init      Turn on users, roles and sign-in: write a starter
+                          auth: block (--user <name>:<role>).
   naut users          Local users and personal access tokens of a
                           controller with an auth: block (on the box).
   naut fbd graph <f>  Emit a .fbd file's diagram render model as JSON
@@ -233,6 +235,8 @@ func main() {
 		os.Exit(runAudit(os.Args[2:]))
 	case "users":
 		os.Exit(runUsers(os.Args[2:]))
+	case "auth":
+		os.Exit(runAuth(os.Args[2:]))
 	case "fbd":
 		os.Exit(runFBD(os.Args[2:]))
 	case "ld":

@@ -97,17 +97,25 @@ func TestNautUsers(t *testing.T) {
 	path := filepath.Join(state, users.FileName)
 	if code, _, errs := nautUsers(t, dir, "hunter22\n", "add", "akhan"); code != 0 || !strings.Contains(errs, "add akhan") {
 		t.Fatalf("add: %d %s", code, errs)
+	} else if !strings.Contains(errs, "Next: akhan signs in at /signin") || !strings.Contains(errs, "naut users token akhan") || !strings.Contains(errs, "no restart") {
+		t.Errorf("add names no next step (sign in, a token; live, no restart):\n%s", errs)
 	}
-	if code, _, errs := nautUsers(t, dir, "hunter22\n", "add", "ghost"); code != 0 || !strings.Contains(errs, "not in nautilus.yaml's auth.users") {
-		t.Errorf("add a user the manifest does not name: %d %s", code, errs)
+	if code, _, errs := nautUsers(t, dir, "hunter22\n", "add", "ghost"); code != 0 || !strings.Contains(errs, "not in nautilus.yaml's auth.users") || strings.Contains(errs, "Next:") {
+		t.Errorf("add a user the manifest does not name (a warning, no sign-in hint): %d %s", code, errs)
 	}
 	if code, _, errs := nautUsers(t, dir, "short\n", "add", "jsmith"); code != 1 || !strings.Contains(errs, "at least 8") {
 		t.Errorf("a short password: %d %s", code, errs)
 	}
 	code, tok, errs := nautUsers(t, dir, "", "token", "akhan")
+	if strings.Count(tok, "\n") != 1 {
+		t.Errorf("token's stdout is more than the token (a script reads it): %q", tok)
+	}
 	tok = strings.TrimSpace(tok)
 	if code != 0 || !users.IsToken(tok) || strings.Contains(errs, tok) {
 		t.Fatalf("token: %d %q %s", code, tok, errs)
+	}
+	if !strings.Contains(errs, "Authorization: Bearer") || !strings.Contains(errs, "/api/me") || strings.Contains(errs, "restart") {
+		t.Errorf("token names no next step (how to send it; live, so no restart):\n%s", errs)
 	}
 	f, err := users.Load(path)
 	if err != nil {
