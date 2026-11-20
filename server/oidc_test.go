@@ -485,9 +485,10 @@ func TestSignoutEndsSessions(t *testing.T) {
 // credentials at the provider (auth_time), not from the callback: a token
 // without auth_time, or one riding an hour-old session at the provider,
 // holds no elevated permission. Past auth.elevation an elevated action is
-// refused with the fix, and POST /api/elevate never tries a password
-// against an OIDC name.
-func TestOIDCElevationSaysSignInAgain(t *testing.T) {
+// refused with "elevate": "oidc" and the URL that confirms at the
+// provider, and POST /api/elevate never tries a password against an OIDC
+// name: it answers the same.
+func TestOIDCStaleElevationSendsToTheProvider(t *testing.T) {
 	srv, fake, _ := oidcServer(t, Options{})
 	for _, c := range []struct {
 		what     string
@@ -522,12 +523,14 @@ func TestOIDCElevationSaysSignInAgain(t *testing.T) {
 	srv.sessions.mu.Lock()
 	srv.sessions.now = func() time.Time { return later }
 	srv.sessions.mu.Unlock()
+	// Stale: the 401 sends the page to the provider (6b), never to a
+	// password prompt ("elevate": true).
 	rec := call(t, srv, "POST", "/api/forces", `{"name":"SP","value":1}`, withCookie(c.Value), ownOrigin)
-	if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), "then sign in again") || strings.Contains(rec.Body.String(), `"elevate"`) {
-		t.Errorf("stale OIDC force: %d %s (want the fix, and no password prompt)", rec.Code, rec.Body)
+	if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), `"elevate":"oidc"`) || !strings.Contains(rec.Body.String(), `"url":"/auth/oidc/start?elevate=1"`) {
+		t.Errorf("stale OIDC force: %d %s (want elevate oidc and its url)", rec.Code, rec.Body)
 	}
 	rec = call(t, srv, "POST", "/api/elevate", `{"password":"anything"}`, withCookie(c.Value), fromLoopback, ownOrigin)
-	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "then sign in again") {
+	if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), `"elevate":"oidc"`) || !strings.Contains(rec.Body.String(), "not with a password") {
 		t.Errorf("elevate on an OIDC session: %d %s", rec.Code, rec.Body)
 	}
 }

@@ -193,7 +193,8 @@ func (s *Server) endSessionStreams(se session) {
 }
 
 // signInPath reports a page a browser must reach before it is signed in:
-// the sign-in page and the OIDC sign-in's two hops.
+// the sign-in page and the OIDC sign-in's hops (and a confirmation's
+// second step, which judges its own session).
 func signInPath(p string) bool {
-	return p == "/signin" || p == oidcStartPath || p == oidcCallbackPath
+	return p == "/signin" || p == oidcStartPath || p == oidcCallbackPath || p == oidcElevatedPath
 }

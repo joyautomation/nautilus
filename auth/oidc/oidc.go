@@ -172,13 +172,20 @@ func (c *Client) oauth(p *gooidc.Provider, redirect string) *oauth2.Config {
 }
 
 // AuthCodeURL is the authorization endpoint for one sign-in: state, the
-// nonce the ID token must carry, and the S256 challenge of verifier.
-func (c *Client) AuthCodeURL(ctx context.Context, redirect, state, nonce, verifier string) (string, error) {
+// nonce the ID token must carry, and the S256 challenge of verifier. With
+// login, it asks the provider to take the person's credentials again
+// whatever session it holds for them: prompt=login and max_age=0 (OIDC
+// Core §3.1.2.1), under which the ID token must carry auth_time.
+func (c *Client) AuthCodeURL(ctx context.Context, redirect, state, nonce, verifier string, login bool) (string, error) {
 	p, err := c.discover(ctx)
 	if err != nil {
 		return "", err
 	}
-	return c.oauth(p, redirect).AuthCodeURL(state, gooidc.Nonce(nonce), oauth2.S256ChallengeOption(verifier)), nil
+	opts := []oauth2.AuthCodeOption{gooidc.Nonce(nonce), oauth2.S256ChallengeOption(verifier)}
+	if login {
+		opts = append(opts, oauth2.SetAuthURLParam("prompt", "login"), oauth2.SetAuthURLParam("max_age", "0"))
+	}
+	return c.oauth(p, redirect).AuthCodeURL(state, opts...), nil
 }
 
 // Identity is what a verified ID token says.

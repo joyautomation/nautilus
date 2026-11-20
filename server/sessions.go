@@ -278,6 +278,44 @@ func (ss *sessions) elevated(hash, cred string) (session, bool) {
 	return *se, true
 }
 
+// byHashLive is the live session hash names. An expired one is dropped.
+func (ss *sessions) byHashLive(hash string) (session, bool) {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	se, ok := ss.byHash[hash]
+	if !ok {
+		return session{}, false
+	}
+	if !ss.now().Before(se.expires) {
+		delete(ss.byHash, hash)
+		return session{}, false
+	}
+	return *se, true
+}
+
+// elevatedOIDC records a confirmation at the OIDC provider of the session
+// hash names (#708 PR 6b): its authAt is authAt (when the person entered
+// credentials there), never moved back, and its failures are forgotten.
+// False when the session is gone, expired, not an OIDC one, or proved by
+// another account than (issuer, sub).
+func (ss *sessions) elevatedOIDC(hash, issuer, sub string, authAt time.Time) (session, bool) {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	se, ok := ss.byHash[hash]
+	now := ss.now()
+	if !ok || !now.Before(se.expires) || !se.oidc || se.issuer != issuer || se.sub != sub {
+		return session{}, false
+	}
+	if authAt.After(now) {
+		authAt = now
+	}
+	if authAt.After(se.authAt) {
+		se.authAt = authAt
+	}
+	se.fails = 0
+	return *se, true
+}
+
 // elevateFailed counts a refused re-authentication of the session hash
 // names. At maxElevateFails the session is ended, and ended says so.
 func (ss *sessions) elevateFailed(hash string) (fails int, ended bool) {

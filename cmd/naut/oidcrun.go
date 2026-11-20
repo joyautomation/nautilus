@@ -25,7 +25,7 @@ type oidcSeam struct{ c *oidc.Client }
 func (s oidcSeam) Provider() string { return s.c.Provider() }
 
 func (s oidcSeam) AuthCodeURL(ctx context.Context, req oidcseam.AuthRequest) (string, error) {
-	u, err := s.c.AuthCodeURL(ctx, req.RedirectURI, req.State, req.Nonce, req.Verifier)
+	u, err := s.c.AuthCodeURL(ctx, req.RedirectURI, req.State, req.Nonce, req.Verifier, req.Login)
 	return u, seamErr(err)
 }
 
