@@ -65,7 +65,6 @@ var Mutations = []string{
 	"dup_refuses_incumbent",       // a duplicated name's running promise is refused too, so the incumbent's protecting promises lapse (#1029 step 1)
 	"dup_voter_counts",            // a candidate counts a grant from a voter its own voter knows is duplicated (#1029 step 1)
 	"dup_not_relayed",             // a voter doesn't relay a name it sees duplicated (#1029 step 1)
-	"own_dup_ignored",             // a candidate takes a lease while a voter holds its name under another boot (#1029 step 1)
 	"standby_probes_witness_only", // a standby probes the witness only, not its peer (#1029 step 1)
 	"yield_before_refusal",        // a voter yields its own round to a request it then refuses (#1079 review)
 	"retry_after_refusal_only",    // a refused campaign whose own grant came back last waits out a lease (#1029 layer 2)

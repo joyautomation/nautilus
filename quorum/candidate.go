@@ -117,10 +117,6 @@ type Candidate struct {
 	// probeAt: the next probe of the witness while not leading (Probe).
 	probeAt Instant
 
-	// ownDupUntil: a voter relayed a promise to this controller's name
-	// under another boot; no lease is taken before it, and a held one
-	// ended at once (#1029 step 1).
-	ownDupUntil Instant
 	// duplicated reports a voter name its own voter knows runs as two
 	// boots: a grant from it counts for nothing (NewAdoption sets it to
 	// Voter.Duplicated). nil counts every grant.
@@ -349,16 +345,6 @@ func (c *Candidate) OnReply(now Instant, r Reply) {
 	default:
 		return // not one of our voters, or a witness incarnation we don't count
 	}
-	if p := r.Promise; p.To == c.cfg.Self && p.Nonce != 0 && p.Nonce != c.cfg.Nonce && !mut("own_dup_ignored") {
-		// A voter holds a promise to this name under another boot: another
-		// process runs as this controller (#1029 step 1). Take no lease
-		// while it runs, and end one held now: closing a gate early is
-		// always safe.
-		c.ownDupUntil = max(c.ownDupUntil, now.Add(min(p.Left, c.cfg.Lease)))
-		if c.leading && c.leaseEnd > now {
-			c.leaseEnd = now
-		}
-	}
 	if (r.To != c.cfg.Self && !mut("no_grantee_check")) || (r.Nonce != c.cfg.Nonce && !mut("no_nonce_check")) {
 		return // meant for the other controller, or for an earlier boot
 	}
@@ -421,9 +407,6 @@ func (c *Candidate) OnReply(now Instant, r Reply) {
 	}
 	if !c.leading && now < c.backoffUntil {
 		return // a lapse is final: no lease from a late majority in the back-off
-	}
-	if !c.leading && now < c.ownDupUntil {
-		return // another boot of this name holds a promise
 	}
 	end := rd.sent.Add(c.cfg.leaseFor())
 	if mut("lease_from_reply") {

@@ -167,6 +167,15 @@ var table = []mutation{
 	{"relay_tail_counted", []string{"TestAHeardPromiseHoldsForItsMarginThenEnds"}},
 	{"standby_no_probe", []string{"TestStandbyProbesTheWitnessEveryLook", "TestCloneSeeds"}},
 	{"relay_not_pushed", []string{"TestAPromiseToTheOtherControllerIsPushedToTheWitness"}},
+	// #1029 step 1: a duplicated name gets no new grant. Each is pinned by
+	// a schedule where it alone stands between the pair and two leaders
+	// (quorum/sim/dupname_test.go), and the clone races catch most.
+	{"dup_name_ignored", []string{"TestADuplicatedNameGetsNoNewGrant", "TestStandbyProbesItsPeerSoTheCloneIsSeen", "TestCloneRaceSeeds"}},
+	{"dup_refuses_incumbent", []string{"TestADuplicatedNameGetsNoNewGrant", "TestCloneOfTheLeaderCostsNoTakeover"}},
+	{"dup_voter_counts", []string{"TestCandidateDiscountsADuplicatedVoter", "TestDuplicatedVoterBacksNoLease"}},
+	{"dup_not_relayed", []string{"TestADuplicatedNameIsRelayed", "TestDupRelayStopsTheWitnessGrantingAClone"}},
+	{"standby_probes_witness_only", []string{"TestStandbyProbesItsPeerSoTheCloneIsSeen", "TestCloneRaceSeeds"}},
+	{"yield_before_refusal", []string{"TestNoYieldToARequestTheVoterRefuses"}},
 	// The relay refuses a takeover's first campaign at the witness at
 	// times, before its own voter's grant is back: the retry must come
 	// half a look on, not a lease.

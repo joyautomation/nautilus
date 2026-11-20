@@ -672,7 +672,10 @@ func (w *World) deliver(n *node, from Addr, b []byte) {
 			n.adopt.OnPeer(now) // a relay probe is for the voter only (#1029 step 1)
 		}
 		if from != n.addr {
+			dups, _ := n.voter.Duplicates()
 			n.voter.Hear(now, req.From, req.Promise)
+			after, _ := n.voter.Duplicates()
+			w.rec.duplicates[n.addr] += after - dups
 		}
 		w.handle(n, from, now, req)
 		return
@@ -710,7 +713,10 @@ func (w *World) deliver(n *node, from Addr, b []byte) {
 		return
 	}
 	if from != n.addr {
+		dups, _ := n.voter.Duplicates()
 		n.voter.Hear(now, rep.From, rep.Promise)
+		after, _ := n.voter.Duplicates()
+		w.rec.duplicates[n.addr] += after - dups
 	}
 	if quorum.IsRelayProbe(rep) {
 		return // the relay probe's reply is for the voter only
@@ -854,8 +860,11 @@ func (w *World) handle(n *node, from Addr, now quorum.Instant, r quorum.Request)
 		}
 	}
 	before := n.voter.RelayRefused()
+	dups, _ := n.voter.Duplicates()
 	p, replies := n.voter.Handle(now, r)
 	w.rec.relayRefused += n.voter.RelayRefused() - before
+	after, _ := n.voter.Duplicates()
+	w.rec.duplicates[n.addr] += after - dups
 	if n.cand != nil && n.voter.RelayChanged(now) {
 		if probe := n.cand.PushProbe(now); probe != nil {
 			probe.Promise = n.voter.Relay(now)

@@ -226,3 +226,132 @@ func TestAPromiseToTheOtherControllerIsPushedToTheWitness(t *testing.T) {
 		t.Fatalf("push inside the look: %+v, want a probe now", p)
 	}
 }
+
+// #1029 step 1, at the voter.
+
+// A name heard under two live boots gets no NEW grant, to either boot,
+// and the voter counts a duplicate; a running promise to one of those
+// boots still renews (the incumbent keeps the promises that protect it).
+// A lease after the other boot fell silent, the name is granted again.
+func TestADuplicatedNameGetsNoNewGrant(t *testing.T) {
+	v := ready("W")
+	now := at(lease)
+	if !grant(t, v, now, Request{From: "A", Term: 3, Nonce: 0xA, ID: 1}) {
+		t.Fatal("grant refused")
+	}
+	if grant(t, v, now.Add(lease/8), Request{From: "A", Term: 4, Nonce: 0xC, ID: 1}) {
+		t.Fatal("granted A's second boot while the first holds a running promise")
+	}
+	if n, _ := v.Duplicates(); n == 0 {
+		t.Fatal("no duplicate counted")
+	}
+	if !grant(t, v, now.Add(lease/4), Request{From: "A", Term: 3, Nonce: 0xA, ID: 2, Renewal: true}) {
+		t.Fatal("the incumbent's running promise didn't renew")
+	}
+	fresh := ready("B")
+	fresh.Handle(now, Request{From: "A", Nonce: 0xA, ID: ProbeID}) // a probe: A runs as 0xA
+	if grant(t, fresh, now.Add(lease/8), Request{From: "A", Term: 4, Nonce: 0xC, ID: 1}) {
+		t.Fatal("a new grant to A's second boot while its first is live")
+	}
+	if grant(t, fresh, now.Add(lease/8), Request{From: "A", Term: 4, Nonce: 0xA, ID: 2}) {
+		t.Fatal("a new grant to A's first boot while its second is live")
+	}
+	if !grant(t, fresh, now.Add(lease/8+lease+ms), Request{From: "A", Term: 5, Nonce: 0xA, ID: 3}) {
+		t.Fatal("still refused A a lease after its other boot fell silent")
+	}
+}
+
+// A voter relays a name it sees duplicated first-hand; a hearer then
+// refuses new grants to that name though it heard only one boot itself.
+// A name only relayed to it is not relayed on (no echo).
+func TestADuplicatedNameIsRelayed(t *testing.T) {
+	now := at(lease)
+	b := ready("B")
+	b.Handle(now, Request{From: "A", Nonce: 0xA, ID: ProbeID})
+	b.Handle(now, Request{From: "A", Nonce: 0xC, ID: ProbeID})
+	r := b.Relay(now.Add(ms))
+	if r.Dup != "A" || r.DupLeft <= 0 {
+		t.Fatalf("relay %+v, want A duplicated", r)
+	}
+	w := ready("W")
+	w.Hear(now.Add(ms), "B", r)
+	if grant(t, w, now.Add(lease/4), Request{From: "A", Term: 2, Nonce: 0xC, ID: 1}) {
+		t.Fatal("a new grant to a name another voter relayed duplicated")
+	}
+	if !w.Duplicated(now.Add(lease/4), "A") {
+		t.Fatal("the hearer doesn't know A is duplicated")
+	}
+	if e := w.Relay(now.Add(lease / 4)); e.Dup != "" {
+		t.Fatalf("the hearer relays on what it only heard: %+v", e)
+	}
+}
+
+// A real restart's old boot, alive only in a promise another voter
+// relays, refuses the new boot's first campaign in the clock-rate margin
+// after that promise but counts no duplicate: a fast restart (its hold is
+// a lease, so it campaigns once the old promise is over) raises no false
+// redundancy.duplicate-member.
+func TestAnOldBootSeenOnlyInARelayCountsNoDuplicate(t *testing.T) {
+	v := ready("W")
+	now := at(lease)
+	v.Hear(now, "B", Relay{To: "A", Nonce: 0xA, Left: lease})
+	// A restarted as 0xD and campaigns as its hold ends, just past B's
+	// promise to its old boot.
+	if grant(t, v, now.Add(lease+lease/20), Request{From: "A", Term: 4, Nonce: 0xD, ID: 1}) {
+		t.Fatal("granted A's new boot inside the margin of B's relayed promise to its old one")
+	}
+	if n, _ := v.Duplicates(); n != 0 {
+		t.Fatalf("a real restart counted %d duplicates", n)
+	}
+}
+
+// A candidate counts no grant from a voter its own voter knows runs as two
+// boots, its own included (NewAdoption wires it): two processes cast that
+// vote.
+func TestCandidateDiscountsADuplicatedVoter(t *testing.T) {
+	cfg := Config{Self: "B", Peer: "A", Witness: "W", Lease: lease, Rho: 0.01, Incarnation: 42, Nonce: 0xB}
+	c, err := NewCandidate(cfg, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := NewVoter("B", lease, VoterState{Incarnation: 42}, 0)
+	NewAdoption(v, c, 0)
+	now := at(2 * lease) // past the restart hold and the quiet period
+	v.Handle(now, Request{From: "A", Nonce: 0xA, ID: ProbeID})
+	v.Handle(now, Request{From: "A", Nonce: 0xC, ID: ProbeID})
+	r := c.Tick(now, "", 0, true)
+	if r == nil {
+		t.Fatal("no campaign")
+	}
+	c.OnReply(now.Add(ms), granted("B", r, 0))
+	c.OnReply(now.Add(ms), granted("A", r, 0))
+	if c.Leading(now.Add(ms)) {
+		t.Fatal("led on its own vote and a duplicated voter's")
+	}
+	c.OnReply(now.Add(2*ms), granted("W", r, 42))
+	if !c.Leading(now.Add(2 * ms)) {
+		t.Fatal("no lease from its own vote and the witness's")
+	}
+}
+
+// A voter promised to its own candidate doesn't yield it to the other
+// controller's higher term when it would refuse that request anyway (a
+// duplicated name): yielding would only drop its own round (#1079 review).
+func TestNoYieldToARequestTheVoterRefuses(t *testing.T) {
+	cfg := Config{Self: "B", Peer: "A", Witness: "W", Lease: lease, Rho: 0.01, Nonce: 0xB}
+	c, err := NewCandidate(cfg, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := ready("B")
+	now := at(lease)
+	r := c.Tick(now, "", 0, true)
+	if !grant(t, v, now, *r) {
+		t.Fatal("self grant refused")
+	}
+	v.Handle(now, Request{From: "A", Nonce: 0xA, ID: ProbeID})
+	v.Handle(now, Request{From: "A", Nonce: 0xC, ID: ProbeID})
+	if YieldTo(now.Add(ms), v, c, Request{From: "A", Term: r.Term + 1, Nonce: 0xC, ID: 1}) {
+		t.Fatal("yielded its own round to a request it refuses")
+	}
+}

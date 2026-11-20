@@ -113,45 +113,86 @@ func TestStaleRelayEndsAndTheStandbyLeads(t *testing.T) {
 	t.Logf("%d leader deaths: worst takeover %v (bound %v); a stale relay refused a campaign in %d", n, worst, relayTakeoverBound, refused)
 }
 
-// TestMeasureCloneAtStart measures the residual the relay leaves (#1029
-// layer 2): a MAC-spoofed clone that campaigns at the same time as its
-// original, with no promise held yet for the voters to relay, so the two
-// can each win one of the other two voters in one election. Three cases,
-// each with no other fault:
+// TestCloneRaceSeeds runs the clone races #1079 left open and #1029
+// step 1 closes: a MAC-spoofed clone running while the lease changes
+// hands, with no other fault, in four cases:
 //   - start: the clone booted together with its original (a clone made
 //     before commissioning, or a site-wide power cycle with a clone);
 //   - original: a settled pair with a clone running, and the original
 //     restarts (a deploy update, a reboot);
 //   - peer: the same, and the original's peer restarts;
 //   - unhealthy: the same, and the leader's scans hang for one to four
-//     leases (its candidate stops renewing; its voter keeps answering),
-//     so the lease is handed over while the clone runs (#1079 review).
+//     leases (its candidate stops renewing; its voter keeps answering).
 //
-// It logs how many of n runs each had two leaders at once; skipped unless
-// QUORUM_MEASURE_CLONE_START=<n>. The follow-up on #1029 must bring all
-// three to 0.
-//
-//	QUORUM_MEASURE_CLONE_START=10000 go test ./quorum/sim -run '^TestMeasureCloneAtStart$' -v
-func TestMeasureCloneAtStart(t *testing.T) {
-	n, _ := strconv.Atoi(os.Getenv("QUORUM_MEASURE_CLONE_START"))
-	if n <= 0 {
-		t.Skip("set QUORUM_MEASURE_CLONE_START=<runs>")
+// Then the rich clone schedules (richCloneRun): any of those, plus cuts,
+// restarts, unhealthy leaders, delays and loss. Every oracle but I7 on
+// (cloneChecks). Before step 1, two leaders in 172, 184, 17 and 227 of
+// 10,000 runs of the four cases. QUORUM_CLONE_RACE_SEEDS=<n> runs n per
+// case (default 300; the nightly runs 20,000).
+func TestCloneRaceSeeds(t *testing.T) {
+	n := 300
+	if v, err := strconv.Atoi(os.Getenv("QUORUM_CLONE_RACE_SEEDS")); err == nil && v > 0 {
+		n = v
 	}
-	for _, mode := range []string{"start", "original", "peer", "unhealthy"} {
-		both := 0
+	for _, mode := range []string{"start", "original", "peer", "unhealthy", "rich"} {
+		failing := 0
 		for seed := uint64(1); seed <= uint64(n); seed++ {
-			if overlap(Check(Run(cloneRace(seed, mode)), cloneChecks(cloneRace(seed, mode)))) {
-				both++
+			o := cloneRace(seed, mode)
+			vs := Check(Run(o), cloneChecks(o))
+			if len(vs) == 0 {
+				continue
+			}
+			failing++
+			if failing <= 3 {
+				t.Errorf("%s seed %d: %v\n  schedule: %#v", mode, seed, vs[0], o)
 			}
 		}
-		t.Logf("a clone racing its original (%s): two leaders at once in %d of %d runs", mode, both, n)
+		t.Logf("clone race %s: %d of %d failing", mode, failing, n)
 	}
+}
+
+// richCloneRun draws a clone schedule with extra faults: a clone of A or
+// B booted with its original or later, and one to three of: a cut (one
+// way or both), a restart of any member, an unhealthy controller, a delay
+// within the rule, or loss.
+func richCloneRun(seed uint64) Options {
+	o := randomRun(seed, profClone)
+	r := rand.New(rand.NewPCG(seed, 0x7a7a7a))
+	dur := func(lo, hi time.Duration) time.Duration { return lo + time.Duration(r.Int64N(int64(hi-lo)+1)) }
+	c := []Addr{CA, CB}[r.IntN(2)]
+	at := []time.Duration{o.Start[original(c)], dur(4*sec, 12*sec)}[r.IntN(2)]
+	o.Faults = []Fault{{Kind: Clone, At: at, For: dur(2*lease, 15*lease), Node: c}}
+	for range 1 + r.IntN(3) {
+		f := Fault{At: dur(4*sec, 14*sec), For: dur(lease/4, 6*lease)}
+		switch r.IntN(6) {
+		case 0, 1:
+			l := voteLinks[r.IntN(3)]
+			f.Kind, f.From, f.To, f.Both = Cut, l.x, l.y, r.IntN(2) == 0
+		case 2:
+			f.Kind, f.Node, f.For = Crash, []Addr{A, B, W}[r.IntN(3)], dur(50*ms, 2*lease)
+		case 3:
+			f.Kind, f.Node = Unhealthy, []Addr{A, B}[r.IntN(2)]
+		case 4:
+			l := voteLinks[r.IntN(3)]
+			f.Kind, f.From, f.To, f.Both, f.Value = Delay, l.x, l.y, true, int64(dur(ms, lease/8))
+		case 5:
+			l := voteLinks[r.IntN(3)]
+			f.Kind, f.From, f.To, f.Both, f.Value = Loss, l.x, l.y, true, int64(1+r.IntN(20))
+		}
+		o.Faults = append(o.Faults, f)
+	}
+	o.Until = healAt(o) + bound + 6*lease
+	return o
 }
 
 // cloneRace is seed's network, disk and clocks with a clone of A or B
 // campaigning beside its original: booted with it (start), or running
-// when the original (original) or its peer (peer) restarts.
+// when the original (original) or its peer (peer) restarts, or the leader
+// goes unhealthy (unhealthy); "rich" is richCloneRun.
 func cloneRace(seed uint64, mode string) Options {
+	if mode == "rich" {
+		return richCloneRun(seed)
+	}
 	o := randomRun(seed, profClone)
 	r := rand.New(rand.NewPCG(seed, 0x72616365))
 	c := []Addr{CA, CB}[r.IntN(2)]

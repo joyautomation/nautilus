@@ -381,34 +381,49 @@ while the other controller is up, it is a copy of a controller: stop it.
 uncommissioned, and only an operator can re-commission the pair.
 
 A clone that keeps both the original's machine-id and its network
-card's MAC address passes the box check. While the pair runs, the voters
-catch it instead:
-each vote message carries the promise its sender's voter has made to the
-other controller, so the voter a clone needs knows the name is taken,
-refuses it, and raises `redundancy.duplicate-member` (#1029). This costs
-a takeover after the leader dies up to one more vote round: at most
-0.95 s plus one round trip between the controller and the witness at the
-default 2 s lease (`MaxRho × lease + 3/8 × lease + RTT`). In our
-measurements that came to 0.3 s at worst on a LAN, 0.6 s with 100 ms
-links, and 1.2 s with links near the largest delay a 2 s lease allows.
+card's MAC address passes the box check. The voters catch it instead
+(#1029):
 
-:::danger[A cloned controller left running is unsafe]
-Until the follow-up to
-[#1029](https://github.com/joyautomation/nautilus/issues/1029) lands, a
-MAC-spoofed clone left running on the network is **unsafe**. The clone
-and its original can both lead at once in any of these cases:
+- Each vote message carries the promise its sender's voter has made, and
+  every voter notes the boots it hears under each name.
+- A name heard under two live boots gets no new grant.
+- A duplicated controller's vote counts for nobody.
+- `redundancy.duplicate-member` is raised, naming the duplicated
+  controller.
 
-- the clone boots together with its original: a clone made before
-  commissioning, or a power cycle of the whole site;
-- either controller restarts while the clone runs: a deploy update or a
-  reboot;
-- the leader goes unhealthy while the clone runs: its scans hang.
+So **a clone can never make two leaders.**
 
-Once that happens, the two leaders last for as long as the clone runs. A
-clone plus a second network fault can also lead.
-`redundancy.duplicate-member` is the signal: when it is raised, find
-the copy and shut it down before you restart anything. Build the second
-controller from a fresh install, never from a copy of the first.
+**A running clone costs redundancy, not the leader:**
+
+- **With no other fault the pair keeps a leader.** A clone of the healthy
+  leader costs no takeover. If a controller restarts or the leader's scans
+  hang while the clone runs, the other controller takes over within a
+  takeover's time.
+- **A clone plus a network fault** (a cut link) can leave the pair with
+  no leader until the clone is stopped or the fault heals, never with two
+  leaders.
+
+With no leader, no controller drives outputs. The drivers stop asserting
+them, so each device's communication watchdog sees the silence and puts
+that device in its own safe state, as for a hung scan (above). An output
+on a device with no communication watchdog keeps its last value.
+
+**What to do:** the alarm names the duplicated controller ("two processes
+claim to be `a`"). Find the copy and stop it. A real controller then
+leads within 15 s, a bound tested end to end. Build a second or
+replacement controller from a fresh install.
+
+**What the check costs:** one more vote round, at most, on a takeover
+after the leader dies. That is at most 0.95 s plus one round trip
+between the controller and the witness at the default 2 s lease
+(`MaxRho × lease + 3/8 × lease + RTT`). In our measurements it came to
+0.3 s at worst on a LAN, 0.6 s with 100 ms links, and 1.2 s with links
+near the largest delay a 2 s lease allows.
+
+:::caution[Don't leave a clone running]
+A clone can't make two leaders, but while it runs the pair has lost the
+redundancy that controller gave it, and a network fault then leaves it
+with no leader. Stop the clone as soon as the alarm names it.
 :::
 
 Operator intent (substitute starts, stops and acknowledgements, alarm

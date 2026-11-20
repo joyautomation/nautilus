@@ -59,11 +59,11 @@ type Voter struct {
 	// seen are the boot nonces this voter heard per name, each live until
 	// its time: a request's for a lease after it arrived, a relayed
 	// promise's until its hold ends. Two live nonces for one name mean two
-	// processes run under it (#1029 step 1). direct marks a nonce heard in
-	// a request: only those count as a duplicate's sign, so a fast real
-	// restart, whose old boot lives on only in a relayed promise, raises
-	// no false alarm. dupHeard are the names other voters relayed as
-	// duplicated, refused until their time. In memory only, as heard.
+	// processes run under it (#1029 step 1). An old boot alive only in a
+	// relayed promise is refused by that relay first (heardRefuses), whose
+	// margin tail counts nothing, so a fast real restart raises no false
+	// alarm. dupHeard are the names other voters relayed as duplicated,
+	// refused until their time. In memory only, as heard.
 	seen     map[NodeID][]seenNonce
 	dupHeard map[NodeID]Instant
 	// pushedTo, pushedNonce: the promise RelayChanged last reported.
@@ -73,13 +73,12 @@ type Voter struct {
 
 // seenNonce is one boot nonce heard under a name, live until until.
 type seenNonce struct {
-	nonce  uint64
-	until  Instant
-	direct bool // heard in a request, not only in a relayed promise
+	nonce uint64
+	until Instant
 }
 
 // noteNonce records that name ran under nonce, live until until.
-func (v *Voter) noteNonce(name NodeID, nonce uint64, until Instant, direct bool) {
+func (v *Voter) noteNonce(name NodeID, nonce uint64, until Instant) {
 	if nonce == 0 || name == "" || mut("dup_name_ignored") {
 		return
 	}
@@ -95,31 +94,29 @@ func (v *Voter) noteNonce(name NodeID, nonce uint64, until Instant, direct bool)
 	for i := range xs {
 		if xs[i].nonce == nonce {
 			xs[i].until = max(xs[i].until, until)
-			xs[i].direct = xs[i].direct || direct
 			v.seen[name] = xs
 			return
 		}
 	}
-	v.seen[name] = append(xs, seenNonce{nonce: nonce, until: until, direct: direct})
+	v.seen[name] = append(xs, seenNonce{nonce: nonce, until: until})
 }
 
 // dupLeft is how long name stays seen under two live nonces at now: until
-// the second-latest of them runs out; 0 when it isn't. direct says
-// whether both of those were heard in requests.
-func (v *Voter) dupLeft(now Instant, name NodeID) (left time.Duration, direct bool) {
-	var a, b seenNonce // the two latest
+// the second-latest of them runs out; 0 when it isn't.
+func (v *Voter) dupLeft(now Instant, name NodeID) time.Duration {
+	var a, b Instant // the two latest untils
 	for _, x := range v.seen[name] {
 		switch {
-		case x.until > a.until:
-			a, b = x, a
-		case x.until > b.until:
-			b = x
+		case x.until > a:
+			a, b = x.until, a
+		case x.until > b:
+			b = x.until
 		}
 	}
-	if b.until <= now {
-		return 0, false
+	if b <= now {
+		return 0
 	}
-	return b.until.Sub(now), a.direct && b.direct
+	return b.Sub(now)
 }
 
 // Duplicated reports whether this voter knows name to run as two boots at
@@ -127,8 +124,7 @@ func (v *Voter) dupLeft(now Instant, name NodeID) (left time.Duration, direct bo
 // candidate counts no grant from a duplicated voter (NewAdoption wires
 // it): two processes cast that vote (#1029 step 1).
 func (v *Voter) Duplicated(now Instant, name NodeID) bool {
-	left, _ := v.dupLeft(now, name)
-	return left > 0 || now < v.dupHeard[name]
+	return v.dupLeft(now, name) > 0 || now < v.dupHeard[name]
 }
 
 // dupRefuses reports whether r asks a NEW grant for a duplicated name, and
@@ -145,8 +141,7 @@ func (v *Voter) dupRefuses(now Instant, r Request, active bool) (refuse, counts 
 	}
 	for _, x := range v.seen[r.From] {
 		if x.nonce != r.Nonce && now < x.until {
-			refuse = true
-			counts = counts || x.direct
+			refuse, counts = true, true
 		}
 	}
 	if now < v.dupHeard[r.From] {
@@ -278,7 +273,7 @@ func (v *Voter) Relay(now Instant) Relay {
 		// to it (no echo). With both controllers duplicated, the one seen
 		// longer goes.
 		for name := range v.seen {
-			if d, _ := v.dupLeft(now, name); d > r.DupLeft {
+			if d := v.dupLeft(now, name); d > r.DupLeft {
 				r.Dup, r.DupLeft = name, d
 			}
 		}
@@ -325,7 +320,7 @@ func (v *Voter) Hear(now Instant, by NodeID, p Relay) {
 		return
 	}
 	left := min(p.Left, max(v.lease, v.st.Lease)) // no promise runs longer than a lease
-	v.noteNonce(p.To, p.Nonce, now.Add(time.Duration(float64(left)*(1+MaxRho))), false)
+	v.noteNonce(p.To, p.Nonce, now.Add(time.Duration(float64(left)*(1+MaxRho))))
 	h := heardPromise{by: by, to: p.To, nonce: p.Nonce, strict: now.Add(left),
 		until: now.Add(time.Duration(float64(left) * (1 + MaxRho)))}
 	if mut("relay_no_margin") {
@@ -495,7 +490,7 @@ func (v *Voter) Handle(now Instant, r Request) (*Persist, []Reply) {
 	refuse := []Reply{v.reply(r, false)}
 	// Every request says its sender runs under that boot now: a probe, a
 	// campaign or a renewal, its own candidate's too (#1029 step 1).
-	v.noteNonce(r.From, r.Nonce, now.Add(v.lease), true)
+	v.noteNonce(r.From, r.Nonce, now.Add(v.lease))
 	if r.Renewal && r.From != v.self && now.Add(v.lease) > v.renewalUntil {
 		v.renewalFrom, v.renewalUntil = r.From, now.Add(v.lease)
 	}
