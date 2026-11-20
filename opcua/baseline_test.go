@@ -123,3 +123,46 @@ func TestFirstOutputOfAnUnpolledNodeIsCommanded(t *testing.T) {
 	_ = d.WriteOutputs(nio.Values{"Setpoint": 7.0})
 	waitFor(t, "the first value to land", func() bool { return ts.get(t, "Setpoint") == 7.0 })
 }
+
+// Later pushes before the first read keep the output undecided with the
+// latest value: a runtime pushes the whole set whenever any output moves.
+func TestSecondPushBeforeTheFirstReadStaysUndecided(t *testing.T) {
+	port := freePort(t)
+	d := startDriver(t, fmt.Sprintf("opc.tcp://127.0.0.1:%d", port), manifest(2))
+	_ = d.WriteOutputs(nio.Values{"Setpoint": 0.0})
+	_ = d.WriteOutputs(nio.Values{"Setpoint": 0.0})
+	time.Sleep(200 * time.Millisecond)
+	ts := startServer(t, port) // holds 0.0
+	waitFor(t, "online", func() bool { return read(t, d)["plant__Online"] == true })
+	quiet(t, d)
+	_ = ts
+}
+
+// A first push while the session is down is not decided against the dead
+// session's read: with no reassert, the new session's server is what counts.
+func TestFirstPushOfferedWhileDownIsDecidedOnTheNextSession(t *testing.T) {
+	port := freePort(t)
+	ts := startServer(t, port)
+	ts.set(t, "Setpoint", 5.0)
+	d := startDriver(t, ts.url, manifest(2), WithReassertOnReconnect(false))
+	waitFor(t, "first poll", func() bool { return read(t, d)["Setpoint"] == 5.0 })
+	_ = ts.srv.Close()
+	waitFor(t, "offline", func() bool { return read(t, d)["plant__Online"] == false })
+	_ = d.WriteOutputs(nio.Values{"Setpoint": 5.0}) // equal to the dead session's read
+	ts2 := startServer(t, port)                     // fresh state: 0.0
+	waitFor(t, "back", func() bool { return read(t, d)["plant__Online"] == true })
+	waitFor(t, "the program's value", func() bool { return ts2.get(t, "Setpoint") == 5.0 })
+}
+
+// A gate reopening forgets what was waiting on a first read.
+func TestForgetWrittenClearsWhatWaitsForTheFirstRead(t *testing.T) {
+	d, err := New("opc.tcp://127.0.0.1:1", manifest(2), fastOpts()...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.undecided["Setpoint"] = 1.0
+	d.forgetWritten()
+	if len(d.undecided) != 0 {
+		t.Fatalf("undecided = %v after forgetWritten", d.undecided)
+	}
+}

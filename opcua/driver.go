@@ -838,12 +838,10 @@ func (d *Driver) WriteOutputs(vals nio.Values) error {
 			continue
 		}
 		if _, waiting := d.undecided[name]; waiting {
-			if !baseline {
-				delete(d.undecided, name) // a push after the baseline commands
-			} else {
-				d.undecided[name] = v
-				continue
-			}
+			// still waiting for its first read: the latest value is the one
+			// to decide with, baseline push or not
+			d.undecided[name] = v
+			continue
 		}
 		if baseline {
 			if _, queued := d.pending[name]; queued {
@@ -857,7 +855,7 @@ func (d *Driver) WriteOutputs(vals nio.Values) error {
 				continue
 			}
 			d.undecided[name] = v
-			if b.answered { // already read on this session: decide now
+			if d.online && b.answered { // read on the live session: decide now
 				kicked = d.decideLocked(b) || kicked
 			}
 		} else if prev, ok := d.written[name]; ok && sameScalar(prev, v) {
