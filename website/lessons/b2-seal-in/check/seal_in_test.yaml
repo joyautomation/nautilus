@@ -1,0 +1,40 @@
+tests:
+  - name: pressing Start turns the motor on
+    steps:
+      - given: { StartPB: true }
+        scans: 2
+        expect: { MotorRun: true }
+
+  - name: the motor stays on after Start is released (the seal)
+    steps:
+      - given: { StartPB: true }
+        scans: 2
+      - given: { StartPB: false }
+        scans: 3
+        expect: { MotorRun: true }
+
+  - name: pressing Stop turns the motor off
+    steps:
+      - given: { StartPB: true }
+        scans: 2
+      - given: { StartPB: false }
+        scans: 2
+      - given: { StopPB: true }
+        scans: 2
+        expect: { MotorRun: false }
+
+  - name: after Stop the motor stays off until Start is pressed again
+    steps:
+      - given: { StartPB: true }
+        scans: 2
+      - given: { StartPB: false, StopPB: true }
+        scans: 2
+      - given: { StopPB: false }
+        scans: 5
+        expect: { MotorRun: false }
+
+  - name: with Start and Stop pressed together, Stop wins
+    steps:
+      - given: { StartPB: true, StopPB: true }
+        scans: 3
+        expect: { MotorRun: false }

@@ -1,0 +1,16 @@
+name: motor
+
+server:
+  online-edits: true
+
+tasks:
+  - program: program.ld
+    scan: 100ms
+
+tags:
+  - { name: StartPB,  role: setpoint, type: BOOL, init: false, desc: Start button (TRUE while pressed) }
+  - { name: StopPB,   role: setpoint, type: BOOL, init: false, desc: Stop button (TRUE while pressed) }
+  - { name: MotorRun, role: output,   type: BOOL, init: false, desc: Motor contactor }
+
+driver:
+  type: memory
