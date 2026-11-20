@@ -202,6 +202,9 @@ func NewVoter(self NodeID, lease time.Duration, st VoterState, now Instant) *Vot
 		wait = now
 	}
 	v := &Voter{self: self, lease: lease, st: st, waitUntil: wait}
+	if !mut("grant_nonce_volatile") {
+		v.grantNonce = st.GrantNonce // a term stays one boot's across a restart
+	}
 	if st.Lease != bound && !mut("lease_raise_volatile") {
 		// The longer lease isn't in the file yet: it must be before any
 		// grant, even an unchanged renewal (which writes nothing of its
@@ -543,10 +546,11 @@ func (v *Voter) Handle(now Instant, r Request) (*Persist, []Reply) {
 	// Grant. The promise runs from when the request was RECEIVED.
 	v.promiseUntil = now.Add(v.lease)
 	v.grantNonce = r.Nonce
-	if r.Term != v.st.Promised || r.From != v.st.GrantedTo || v.st.Lease != v.lease {
+	if r.Term != v.st.Promised || r.From != v.st.GrantedTo || v.st.Lease != v.lease || r.Nonce != v.st.GrantNonce {
 		// Past the restart wait every promise made under a longer lease
-		// has run out, so the state now records this voter's own.
-		v.st.Promised, v.st.GrantedTo, v.st.Lease = r.Term, r.From, v.lease
+		// has run out, so the state now records this voter's own. The
+		// grant's boot nonce goes with it (one term, one boot).
+		v.st.Promised, v.st.GrantedTo, v.st.Lease, v.st.GrantNonce = r.Term, r.From, v.lease, r.Nonce
 		v.dirty++
 	}
 	g := v.reply(r, true)

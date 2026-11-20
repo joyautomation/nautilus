@@ -174,6 +174,7 @@ var table = []mutation{
 	// (quorum/sim/dupname_test.go), and the clone races catch most.
 	{"dup_name_ignored", []string{"TestADuplicatedNameGetsNoNewGrant", "TestVoterRefusesANameUnderAnotherBootNonce", "TestStandbyProbesItsPeerSoTheCloneIsSeen", "TestCloneRaceSeeds"}},
 	{"same_term_other_boot", []string{"TestATermIsNotGrantedToAnotherBoot", "TestATermGoesToOneBootOfAName"}},
+	{"grant_nonce_volatile", []string{"TestATermStaysOneBootsAcrossARestart"}},
 	{"dup_refuses_incumbent", []string{"TestADuplicatedNameGetsNoNewGrant", "TestCloneOfTheLeaderCostsNoTakeover"}},
 	{"dup_voter_counts", []string{"TestCandidateDiscountsADuplicatedVoter", "TestDuplicatedVoterBacksNoLease"}},
 	{"dup_not_relayed", []string{"TestADuplicatedNameIsRelayed", "TestDupRelayStopsTheWitnessGrantingAClone"}},

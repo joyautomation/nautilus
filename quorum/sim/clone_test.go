@@ -273,15 +273,22 @@ func cloneRace(seed uint64, mode string) Options {
 	return o
 }
 
-// TestMeasureCloneSplit measures what #1029 step 1 does not close: a
-// network split that separates a running clone from its original, the
-// original with the witness and the clone with the peer ({A, W} | {B,
-// clone}), or the mirror ({A, B} | {clone, W}). Once the other boot ages
-// out (a lease), no voter on either side sees two, and each side holds two
-// of the three names, the duplicated voter counting on both. Today two
-// leaders in every run of either shape; the sticky confirmed-duplicate
-// mark (3c) is to bring a split after the clone was seen to no leader on
-// either side. It logs the rate; skipped unless
+// TestMeasureCloneSplit measures what #1029 step 1 does not close: cuts
+// that keep a voter from hearing both copies of a name while a clone runs.
+// Clone-link cuts are measured, not gated (no pass/fail test draws them).
+//   - The two splits: the original with the witness and the clone with
+//     the peer ({A, W} | {B, clone}), or the mirror ({A, B} | {clone, W}).
+//     Once the other boot ages out (a lease), no voter on either side
+//     sees two, and each side holds two of the three names, the
+//     duplicated voter counting on both.
+//   - The #1094 review's shapes (a clone of A, cuts from 8 s + 2-5
+//     leases for 8 leases): a voter forgets a boot after a lease of
+//     silence, so the overlap can also start when a split HEALS, the
+//     first copy back getting a grant: {A-B, clone-B, clone-W, B-W},
+//     {A-W, clone-B, clone-W, B-W}, {A-B, A-W, clone-B}, {A-W, clone-B}.
+//
+// The sticky confirmed-duplicate mark (3c) is to bring all of them to no
+// leader rather than two. It logs the rates; skipped unless
 // QUORUM_MEASURE_CLONE_SPLIT=<n>.
 //
 //	QUORUM_MEASURE_CLONE_SPLIT=2000 go test ./quorum/sim -run '^TestMeasureCloneSplit$' -v
@@ -300,6 +307,46 @@ func TestMeasureCloneSplit(t *testing.T) {
 		}
 		t.Logf("a split separating a running clone from its original (%s): two leaders in %d of %d runs", shape, both, n)
 	}
+	for _, shape := range reviewSplitShapes {
+		both, first := 0, uint64(0)
+		for seed := uint64(1); seed <= uint64(n); seed++ {
+			o := reviewSplit(seed, shape.cuts)
+			if overlap(Check(Run(o), cloneChecks(o))) {
+				both++
+				if first == 0 {
+					first = seed
+				}
+			}
+		}
+		t.Logf("clone of A, cuts %s: two leaders in %d of %d runs (first seed %d)", shape.name, both, n, first)
+	}
+}
+
+// reviewSplitShapes are the #1094 review's cut sets, for a clone of A.
+var reviewSplitShapes = []struct {
+	name string
+	cuts [][2]Addr
+}{
+	{"{A-B, clone-B, clone-W, B-W}", [][2]Addr{{A, B}, {CA, B}, {CA, W}, {B, W}}},
+	{"{A-W, clone-B, clone-W, B-W}", [][2]Addr{{A, W}, {CA, B}, {CA, W}, {B, W}}},
+	{"{A-B, A-W, clone-B}", [][2]Addr{{A, B}, {A, W}, {CA, B}}},
+	{"{A-W, clone-B}", [][2]Addr{{A, W}, {CA, B}}},
+}
+
+// reviewSplit is the #1094 review's recipe: seed's network, disk and
+// clocks, a clone of A from 8 s for 12 leases, and cuts (both ways) from
+// 8 s + 2-5 leases for 8 leases.
+func reviewSplit(seed uint64, cuts [][2]Addr) Options {
+	o := randomRun(seed, profClone)
+	r := rand.New(rand.NewPCG(seed, 0x1234))
+	at := 8 * sec
+	cut := at + 2*lease + time.Duration(r.Int64N(int64(3*lease)))
+	o.Faults = []Fault{{Kind: Clone, At: at, For: 12 * lease, Node: CA}}
+	for _, l := range cuts {
+		o.Faults = append(o.Faults, Fault{Kind: Cut, At: cut, For: 8 * lease, From: l[0], To: l[1], Both: true})
+	}
+	o.Until = at + 12*lease + bound + 6*lease
+	return o
 }
 
 // cloneSplit is seed's network, disk and clocks with a clone of A or B

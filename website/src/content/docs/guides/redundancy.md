@@ -394,8 +394,8 @@ MAC address passes the box check. The voters catch it instead (#1029):
 - `redundancy.duplicate-member` is raised, naming the duplicated
   controller.
 
-So **there are never two leaders while the clone and its original can
-both reach the voters.**
+So **there are never two leaders while every voter keeps hearing both
+copies** of the name.
 
 **A running clone costs redundancy, not the leader:**
 
@@ -424,12 +424,18 @@ between the controller and the witness at the default 2 s lease
 near the largest delay a 2 s lease allows.
 
 :::danger[What the voters can't catch]
-- **A network split that separates a running clone from its original**
-  (the original with the witness and the clone with the other
-  controller, or the other way round) can give two leaders until the
-  clone is stopped. Each side then sees only one copy of the name. (#1029
-  tracks closing this: a split after the voters have seen both copies is
-  to leave no leader on either side.)
+- **A network fault that keeps a voter from hearing both copies** can
+  give two leaders until the clone is stopped:
+  - The worst case is a split that separates a running clone from its
+    original, with the original beside the witness and the clone beside
+    the other controller, or the other way round. Each side then sees
+    only one copy of the name.
+  - The overlap can also start when such a fault **heals**. A voter
+    forgets a copy it hasn't heard for a lease, and the first copy back
+    gets its vote.
+
+  (#1029 tracks closing this: once the voters have seen both copies, a
+  split is to leave no leader on either side.)
 - **A clone booted on the far side of a split that already exists** is
   never seen by a voter that knows the original. Only the box check
   stops it, so it is caught only when the clone's machine-id or MAC

@@ -399,3 +399,31 @@ func TestATermIsNotGrantedToAnotherBoot(t *testing.T) {
 		t.Fatal("refused the other boot the next term")
 	}
 }
+
+// One term, one boot, across the voter's restart: the grant's boot nonce
+// is in the state file, so a voter restarted and past its wait still
+// refuses a term it gave one boot of a name to another boot of it (the
+// #1094 review's probe: grant term 30 to B under C, restart, wait three
+// leases, ask term 30 under B). The boot it was granted to still renews.
+func TestATermStaysOneBootsAcrossARestart(t *testing.T) {
+	v := ready("A")
+	now := at(lease)
+	p, out := v.Handle(now, Request{From: "B", Term: 30, Nonce: 0xC, ID: 1})
+	if p == nil || len(out) != 0 {
+		t.Fatalf("the grant changes the state: %+v %+v", p, out)
+	}
+	file, _ := p.State.MarshalBinary()
+	var st VoterState
+	if err := st.UnmarshalBinary(file); err != nil {
+		t.Fatal(err)
+	}
+	later := now.Add(lease)
+	r := NewVoter("A", lease, st, later)
+	if grant(t, r, later.Add(3*lease), Request{From: "B", Term: 30, Nonce: 0xB, ID: 2}) {
+		t.Fatal("after a restart, term 30 went to a second boot of B")
+	}
+	r2 := NewVoter("A", lease, st, later) // (r now hears B under two boots, and refuses both)
+	if !grant(t, r2, later.Add(3*lease), Request{From: "B", Term: 30, Nonce: 0xC, ID: 3}) {
+		t.Fatal("after a restart, the boot term 30 was granted to was refused it")
+	}
+}

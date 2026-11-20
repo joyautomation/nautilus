@@ -351,9 +351,11 @@ redundancy:
       from the witness would otherwise be heard by nobody, and its clone would be the only
       boot of its name any voter sees.
     - **A term goes to one boot of a name.** A voter never grants a term it granted to one
-      boot of a name to another boot of it, even once that promise has run out: the other
-      boot asks above it. Otherwise a clone and its original could each hold the same term
-      (I4, found in the rich clone schedules).
+      boot of a name to another boot of it, even once that promise has run out and across
+      its own restart: the other boot asks above it. The grant's boot nonce is in the state
+      file (`VoterState.GrantNonce`, format 5; a format-4 file reads with none). Otherwise a
+      clone and its original could each hold the same term (I4, found in the rich clone
+      schedules; the restart case by the #1094 review).
     - **A voter yields its own round** (`YieldTo`) only to a request it would grant.
     - **Wire: vote protocol version 3.**
     - **Each piece is pinned** by a schedule where it alone stands between the pair and two
@@ -373,14 +375,25 @@ redundancy:
       clone with one to three of a cut, restart, unhealthy controller, delay or loss). Every
       oracle but I7 is on. 0 two-leader runs in 20,000 per case, and in 200,000 clone
       schedules (`TestCloneSeeds`).
-    - **The claim, exactly:** never two leaders while the clone and its original can both
-      reach the voters.
+    - **The claim, exactly:** never two leaders while every voter keeps hearing both copies
+      of the name. Clone-link cuts are measured, not gated: no pass/fail schedule cuts a
+      clone's own links (`richCloneRun` and `TestCloneSeeds` cut only A–B, A–W and B–W).
     - **What it doesn't close:**
       - **A network split that separates a running clone from its original**, with the
         original beside the witness and the clone beside the peer, or the mirror. Once the
         other boot ages out (a lease), no voter on either side sees two, and each side holds
         two of the three names, since the duplicated voter counts on both sides.
-        `TestMeasureCloneSplit` gives two leaders in 2,000 of 2,000 runs of each shape. An
+        `TestMeasureCloneSplit` gives two leaders in 2,000 of 2,000 runs of each shape.
+      - **The overlap can also start when a cut heals** (#1094 review). A voter forgets a
+        boot after a lease of silence (`noteNonce`/`dupLeft`), so the first copy back gets
+        a grant. `TestMeasureCloneSplit` measures the review's shapes, for a clone of A with
+        cuts from 8 s + 2–5 leases for 8 leases. Two leaders per 400 runs:
+        - {A–B, clone–B, clone–W, B–W}: 29;
+        - {A–W, clone–B, clone–W, B–W}: 63;
+        - {A–B, A–W, clone–B}: 14;
+        - {A–W, clone–B}: 3.
+
+        The sticky mark is the fix for these too. An
         original cut from both other voters, with the clone leading meanwhile, can also
         come back at a lower term than the clone's (I2): a device that fences by term
         refuses it until its next re-term, a look or so later.
