@@ -271,6 +271,123 @@
             }
           }
         },
+        "oidc": {
+          "type": "object",
+          "description": "Browser sign-in at an OpenID Connect provider (Entra ID, Google, Keycloak, Okta). A person acts as oidc:<name> (the username claim), pinned to their account at the provider on first sign-in (naut users unpin undoes it). The client secret comes from NAUTILUS_OIDC_SECRET, never the manifest. Not on a redundant pair yet.",
+          "additionalProperties": false,
+          "required": [
+            "issuer",
+            "client-id"
+          ],
+          "properties": {
+            "issuer": {
+              "type": "string",
+              "description": "The provider's issuer URL: https://login.microsoftonline.com/<tenant>/v2.0, https://accounts.google.com, https://<keycloak>/realms/<realm>."
+            },
+            "client-id": {
+              "type": "string",
+              "description": "The client (application) id the provider registered for this controller."
+            },
+            "name": {
+              "type": "string",
+              "description": "The sign-in button's label (Sign in with <name>). Default from the issuer: Microsoft, Google, else its host."
+            },
+            "username-claim": {
+              "type": "string",
+              "description": "The ID token claim that names a person (the display and journal name). Default preferred_username."
+            },
+            "groups-claim": {
+              "type": "string",
+              "description": "The ID token claim that lists a person's group ids. Default groups."
+            },
+            "groups": {
+              "type": "object",
+              "description": "Grants by group id, as the groups claim carries it (an Entra object id, a Keycloak group path), never a display name: a role, or grants as a user's ({role, areas}).",
+              "additionalProperties": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "role"
+                          ],
+                          "properties": {
+                            "role": {
+                              "type": "string"
+                            },
+                            "areas": {
+                              "type": "array",
+                              "minItems": 1,
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            },
+            "users": {
+              "type": "object",
+              "description": "Grants by name (the username claim's value, matched ignoring case), for a provider that sends no groups: a role, or grants as a user's ({role, areas}).",
+              "additionalProperties": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "role"
+                          ],
+                          "properties": {
+                            "role": {
+                              "type": "string"
+                            },
+                            "areas": {
+                              "type": "array",
+                              "minItems": 1,
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            },
+            "redirect-url": {
+              "type": "string",
+              "description": "The callback URL registered at the provider: https://<this controller's host>/auth/oidc/callback. Without it the controller builds it from a trusted Host (NAUTILUS_ALLOWED_HOSTS); naut run prints it at the start."
+            }
+          }
+        },
         "state-dir": {
           "type": "string",
           "description": "Where the controller keeps its users file (users.json: password hashes and personal access tokens, managed with naut users). Default: systemd's $STATE_DIRECTORY. Never inside the project, so no hash reaches git."

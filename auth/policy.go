@@ -241,6 +241,9 @@ func (p *Policy) compileOIDC(c Settings) error {
 		return nil
 	}
 	p.oidc = true
+	if len(c.OIDCGroups) == 0 && len(c.OIDCUsers) == 0 {
+		p.warnings = append(p.warnings, "auth.oidc grants nobody anything yet, so every OIDC sign-in is refused: map a group id under auth.oidc.groups, or a name under auth.oidc.users")
+	}
 	oidcName := func(n string) error {
 		if err := ValidOIDCName(n); err != nil {
 			return fmt.Errorf("auth: oidc.users: %v", err)

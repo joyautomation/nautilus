@@ -1040,7 +1040,10 @@ type Project struct {
 	// AuthStateDir is the auth: block's state-dir (where the users file
 	// lives), "" when it names none.
 	AuthStateDir string
-	tls          *TLSConfig // server.tls (TLSFiles)
+	// AuthOIDC is the auth: block's oidc: (#708 PR 6), nil without one:
+	// naut run builds the provider's client from it.
+	AuthOIDC *AuthOIDC
+	tls      *TLSConfig // server.tls (TLSFiles)
 
 	// Alarms is the composed `alarms:` section (alarm-files folded in),
 	// or nil when the manifest declares none. Load composes and validates
@@ -1195,6 +1198,9 @@ func ReadManifest(fsys fs.FS, name string) (*Manifest, error) {
 	}
 	if m.authPolicy, err = compileAuth(m.Auth); err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
+	}
+	if m.Auth != nil && m.Auth.OIDC != nil && m.Redundancy != nil {
+		return nil, fmt.Errorf("%s: %w", name, errOIDCPair)
 	}
 	if m.Server.TLS != nil && m.Server.TLS.SelfSigned && m.Redundancy != nil {
 		return nil, fmt.Errorf("%s: %w", name, errSelfSignedPair)
@@ -1565,6 +1571,7 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 		HMIScreens:  screens,
 
 		AuthStateDir: m.authStateDir(),
+		AuthOIDC:     m.authOIDC(),
 		tls:          m.Server.TLS,
 	}, nil
 }
@@ -1575,6 +1582,14 @@ func (m *Manifest) authStateDir() string {
 		return ""
 	}
 	return m.Auth.StateDir
+}
+
+// authOIDC is the auth: block's oidc:, nil without one.
+func (m *Manifest) authOIDC() *AuthOIDC {
+	if m.Auth == nil {
+		return nil
+	}
+	return m.Auth.OIDC
 }
 
 // AuthStateDir is the auth: block's state-dir, "" without one: where the
