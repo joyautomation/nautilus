@@ -180,14 +180,15 @@ export function areaMatch(pattern: string, target: string): boolean {
  * Whether `me` may do `perm` — on `target` (a tag, member path or element)
  * when given, else on the whole controller. Without an auth: block (or no
  * /api/me) everything is allowed, as before. A target that names no tag
- * (".x", "[0]", a pattern) is refused, as the controller refuses it.
+ * (".x", "[0]", a pattern: any of * ? [ ] \) is refused, as the controller
+ * refuses it.
  */
 export function can(me: Me | null | undefined, perm: string, target?: string): boolean {
 	if (!me || !me.auth) return true;
 	const everywhere = me.permissions?.['*']?.includes(perm) ?? false;
 	if (target === undefined) return everywhere;
 	const tag = tagOf(target);
-	if (tag === '' || /[*?[]/.test(tag)) return false;
+	if (tag === '' || /[*?[\]\\]/.test(tag)) return false; // as Policy.Can: * ? [ ] \
 	if (everywhere) return true;
 	for (const [area, perms] of Object.entries(me.permissions ?? {})) {
 		if (area === '*' || !perms.includes(perm)) continue;

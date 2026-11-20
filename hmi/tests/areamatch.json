@@ -47,5 +47,22 @@
 		{ "pattern": "MOTOR_?1", "target": "Motor_Ü1", "want": true },
 		{ "pattern": "MOTOR_[Ü]1", "target": "motor_Ü1", "want": true },
 		{ "pattern": "MOTOR_[^Ü]1", "target": "motor_Ü1", "want": false }
+	],
+	"_targets": "What an action's target may be at all, whatever the area: one that names no tag, or a pattern (any of * ? [ ] \\ left after the member and index are cut), is refused by Policy.Can and by the kit's can(), under an area that takes in every tag.",
+	"targets": [
+		{ "target": "PUMP_1", "want": true },
+		{ "target": "Pump_1.Speed", "want": true },
+		{ "target": "ARR[3]", "want": true },
+		{ "target": "ARR[3].x", "want": true },
+		{ "target": "a]b", "want": false },
+		{ "target": "a\\b", "want": false },
+		{ "target": "a*", "want": false },
+		{ "target": "a?b", "want": false },
+		{ "target": "]", "want": false },
+		{ "target": "\\", "want": false },
+		{ "target": ".x", "want": false },
+		{ "target": "[0]", "want": false },
+		{ "target": " ", "want": false },
+		{ "target": "", "want": false }
 	]
 }

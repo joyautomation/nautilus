@@ -23,6 +23,10 @@ func TestAreaMatchFixtureIsTheControllers(t *testing.T) {
 			Pattern, Target string
 			Want            bool
 		}
+		Targets []struct {
+			Target string
+			Want   bool
+		}
 	}
 	if err := json.Unmarshal(raw, &f); err != nil {
 		t.Fatal(err)
@@ -44,11 +48,28 @@ func TestAreaMatchFixtureIsTheControllers(t *testing.T) {
 		})
 		// Can also refuses what no pattern decides: an empty tag (".x",
 		// "[0]") and a patterned one. The kit's can() refuses those too.
-		if err != nil || tagOf(c.Target) == "" || strings.ContainsAny(tagOf(c.Target), "*?[") {
+		if err != nil || tagOf(c.Target) == "" || strings.ContainsAny(tagOf(c.Target), "*?[]\\") {
 			continue
 		}
 		if got := p.Can(User("u"), Write, c.Target).Allowed; got != c.Want {
 			t.Errorf("Can(write %q) under area %q = %v, the table says %v", c.Target, c.Pattern, got, c.Want)
+		}
+	}
+	// The targets table: what an action may name at all, under an area
+	// that takes in every tag.
+	if len(f.Targets) < 10 {
+		t.Fatalf("%d targets: the table was cut", len(f.Targets))
+	}
+	every, err := Compile(Settings{
+		Areas: map[string][]string{"every": {"*"}},
+		Users: map[string][]Grant{"u": {{Role: Operator, Areas: []string{"every"}}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range f.Targets {
+		if got := every.Can(User("u"), Write, c.Target).Allowed; got != c.Want {
+			t.Errorf("Can(write %q) under area * = %v, the table says %v", c.Target, got, c.Want)
 		}
 	}
 }

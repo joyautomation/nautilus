@@ -14,10 +14,13 @@ package server
 // layer, same proxyStandby forwarding as a tag write, because an ack made
 // against a standby has to reach the replica that is actually scanning.
 //
-// `by` is an AUDIT STRING the server does not authenticate: nautilus has
-// one token, not user accounts. The HMI supplies the operator's name and
-// the journal records what it was told. Saying that plainly beats implying
-// an identity the system does not have.
+// `by` is the name the alarm journal records. A request that acts as a
+// user (a browser sign-in, a personal access token) is recorded as that
+// user, whatever `by` it sends (recordBy, #708): that name is authenticated.
+// Under a token (NAUTILUS_TOKEN, a service token) or no auth: block, `by` is
+// what the client typed (an HMI kiosk on a service token names its
+// operator), an AUDIT STRING the server does not authenticate; the audit
+// journal names the principal beside it either way.
 //
 // With no engine configured every route answers 404, which is the answer
 // the HMI kit's AlarmClient is written against: it flips `supported` to

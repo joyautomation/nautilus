@@ -215,6 +215,7 @@ export type { Me, MeSession, Referral, PasswordAsk, AuthDeps } from './auth.js';
 export { kitFetch, setKitFetch } from './kitfetch.js';
 export { passwordState } from './auth.js';
 export { deniedFor, asksPassword } from './auth.svelte.js';
+export type { AuthView } from './authview.js';
 export { default as AccountChip } from './components/AccountChip.svelte';
 export { default as ReferralBanner } from './components/ReferralBanner.svelte';
 // The audit journal (#709): GET /api/audit, read and shown.

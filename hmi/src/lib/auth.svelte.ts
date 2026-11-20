@@ -16,6 +16,7 @@ import { askPassword } from './confirm.svelte.js';
 import { setKitFetch, setStreamHooks, type Fetch } from './kitfetch.js';
 import { AuthSession, clockSkew, holdsAnywhere, needsPassword, type AuthDeps, type Me, type Referral } from './auth.js';
 import { can, deniedReason } from './areas.js';
+import { setAuthView } from './authview.js';
 
 let current = $state<AuthClient | null>(null);
 
@@ -27,21 +28,10 @@ export function currentAuth(): AuthClient | null {
 	return current;
 }
 
-/**
- * Why the signed-in caller may not do `perm` (on `target`), or '' when they
- * may, or when no `createAuth()` is started. What a control greys itself out
- * with. Reactive; a convenience: the controller decides.
- */
-export function deniedFor(perm: string, target?: string): string {
-	const a = current;
-	if (!a || a.can(perm, target)) return '';
-	return a.deniedReason(perm, target);
-}
+// The plain decisions (./authview.ts) read the started client through this.
+setAuthView(() => current);
 
-/** Whether an action needing `perm` will ask for the password first (false with no `createAuth()`). Reactive. */
-export function asksPassword(perm: string): boolean {
-	return current?.needsPassword(perm) ?? false;
-}
+export { deniedFor, asksPassword } from './authview.js';
 
 export interface AuthOptions {
 	/** Ask for the password some other way. Default: the `<ConfirmDialog/>`. */

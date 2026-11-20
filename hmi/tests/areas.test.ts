@@ -5,9 +5,11 @@ import { describe, it, expect } from './harness.js';
 import { readFileSync } from 'node:fs';
 import { areaMatch, can, deniedReason, pathMatch, tagOf, whoIs } from '../src/lib/areas.js';
 import type { Me } from '../src/lib/auth.js';
+import { asksPassword, deniedFor, setAuthView, type AuthView } from '../src/lib/authview.js';
 
 const table = JSON.parse(readFileSync('tests/areamatch.json', 'utf8')) as {
 	cases: { pattern: string; target: string; want: boolean }[];
+	targets: { target: string; want: boolean }[];
 };
 
 describe('area patterns, as the controller matches them', () => {
@@ -71,5 +73,61 @@ describe('can: what a control may do', () => {
 		expect(deniedReason({ ...operator, principal: 'anonymous', roles: [] }, 'ack')).toBe('sign in to ack');
 		expect(whoIs({ ...operator, principal: 'token:scada' })).toBe('token scada');
 		expect(whoIs({ ...operator, principal: 'token' })).toBe('the controller token');
+	});
+});
+
+describe("what a target may name at all (the table's targets, as Policy.Can)", () => {
+	it('every row, under an area that takes in every tag', () => {
+		const every: Me = { auth: true, secure: true, principal: 'user:u', roles: ['operator'], permissions: { every: ['write'] }, areas: { every: ['*'] } };
+		if (table.targets.length < 10) throw new Error('the targets table was cut');
+		const wrong = table.targets.filter((c) => can(every, 'write', c.target) !== c.want);
+		if (wrong.length) throw new Error('disagrees with the controller on ' + JSON.stringify(wrong));
+	});
+	it('and under an everywhere grant too (a pattern is never a tag)', () => {
+		const admin: Me = { auth: true, secure: true, principal: 'token', roles: ['administrator'], permissions: { '*': ['write'] } };
+		for (const c of table.targets) expect(can(admin, 'write', c.target)).toBe(c.want);
+	});
+});
+
+describe('deniedFor and asksPassword: what a control asks (behaviour, not source)', () => {
+	// One spec: the view is module state, and specs run concurrently.
+	it('follows the installed view', () => {
+		const view: { v: AuthView | null } = { v: null };
+		setAuthView(() => view.v);
+		try {
+			// No createAuth() started: allowed, never asks.
+			expect(deniedFor('write', 'TANK1_SP')).toBe('');
+			expect(asksPassword('config')).toBe(false);
+
+			view.v = { me: operator, supported: true, clock: 0, skew: 0 };
+			expect(deniedFor('write', 'RST_TEMP_SP')).toBe('');
+			expect(deniedFor('write', 'TANK1_SP')).toBe('jsmith (operator) does not hold write on TANK1_SP');
+			expect(deniedFor('ack')).toBe('jsmith (operator) does not hold ack');
+			expect(deniedFor('write', 'a]b')).toBe('jsmith (operator) does not hold write on a]b');
+
+			// A controller without /api/me: the kit does nothing.
+			view.v = { me: operator, supported: false, clock: 0, skew: 0 };
+			expect(deniedFor('write', 'TANK1_SP')).toBe('');
+
+			// The password badge, by the controller's clock.
+			const eng: Me = {
+				...operator,
+				principal: 'user:akhan',
+				permissions: { '*': ['read', 'config'] },
+				session: { expires: '2026-11-20T20:00:00Z', elevatedUntil: '2026-11-20T09:15:00Z' },
+				elevated: ['config']
+			};
+			const at = Date.parse('2026-11-20T09:00:00Z');
+			view.v = { me: eng, supported: true, clock: at, skew: 0 };
+			expect(asksPassword('config')).toBe(false);
+			view.v = { me: eng, supported: true, clock: at + 16 * 60_000, skew: 0 };
+			expect(asksPassword('config')).toBe(true);
+			view.v = { me: eng, supported: true, clock: at + 16 * 60_000, skew: -20 * 60_000 }; // the browser runs fast
+			expect(asksPassword('config')).toBe(false);
+			view.v = { me: eng, supported: false, clock: at + 16 * 60_000, skew: 0 };
+			expect(asksPassword('config')).toBe(false);
+		} finally {
+			setAuthView(() => null);
+		}
 	});
 });
