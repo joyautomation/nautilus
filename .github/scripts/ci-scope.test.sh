@@ -13,9 +13,10 @@ check() { # check <want output, \n-separated> <paths...>
     fail=1
   fi
 }
-light() { printf 'full=false\nexamples=%s\nhmibuild=%s\nextension=false\ne2e-all=false' "$1" "$2"; }
-# full <roots> <hmibuild> [extension] [e2e-all, default: as extension]
-full() { printf 'full=true\nexamples=%s\nhmibuild=%s\nextension=%s\ne2e-all=%s' "$1" "$2" "${3:-false}" "${4:-${3:-false}}"; }
+# light <roots> <hmibuild> [lessons]
+light() { printf 'full=false\nexamples=%s\nhmibuild=%s\nlessons=%s\nextension=false\ne2e-all=false' "$1" "$2" "${3:-false}"; }
+# full <roots> <hmibuild> [extension] [e2e-all, default: as extension] [lessons]
+full() { printf 'full=true\nexamples=%s\nhmibuild=%s\nlessons=%s\nextension=%s\ne2e-all=%s' "$1" "$2" "${5:-false}" "${3:-false}" "${4:-${3:-false}}"; }
 
 # The #747 shape: one Svelte line in an example HMI.
 check "$(light examples/plcnext-bench false)" examples/plcnext-bench/hmi/src/routes/+page.svelte
@@ -26,6 +27,11 @@ check "$(light 'examples/epic-bench examples/spatial-rig' false)" \
 check "$(light '' false)" examples/node-3d/hmi/src/App.svelte
 check "$(light '' false)" website/src/content/docs/guides/real-time.md website/astro.config.mjs
 check "$(light '' false)" playground/app/main.js
+# The interactive lessons: light, but their Go test runs as its own step.
+check "$(light '' false true)" website/lessons/b1-blink/solution/main.st
+check "$(light '' false true)" website/lessons/b1-blink/lesson.md website/src/content/docs/guides/real-time.md
+# ...and lessons beside anything not light: full (the Go job runs the test).
+check "$(full '' false false false true)" website/lessons/b1-blink/lesson.md runtime/scan.go
 check "$(light '' false)" docs/design/context-map.md
 # Light paths mixed with anything else: full.
 check "$(full examples/plcnext-bench false)" examples/plcnext-bench/hmi/src/routes/+page.svelte runtime/scan.go
@@ -52,12 +58,12 @@ check "$(full '' false)" cmd/naut/main.go internal/lsp/server.go
 # they leave its macOS and Windows legs out (#916)...
 check "$(full '' false true false)" examples/new-project/main.ld
 check "$(full '' false true false)" examples/batch-skid/dosing.fbd examples/batch-skid/phases.sfc
-printf -v want 'full=false\nexamples=examples/lift-station\nhmibuild=true\nextension=true\ne2e-all=false'
+printf -v want 'full=false\nexamples=examples/lift-station\nhmibuild=true\nlessons=false\nextension=true\ne2e-all=false'
 check "$want" examples/lift-station/hmi/src/lib/Rain.svelte
 # ...unless what the e2e does read changed alongside, in either order.
 check "$(full '' false true)" examples/new-project/main.ld tools/vscode-iec/src/e2e/suite.ts
 check "$(full '' false true)" hmi/src/lib/Tank.svelte examples/batch-skid/dosing.fbd
-printf -v want 'full=true\nexamples=examples/lift-station\nhmibuild=true\nextension=true\ne2e-all=true'
+printf -v want 'full=true\nexamples=examples/lift-station\nhmibuild=true\nlessons=false\nextension=true\ne2e-all=true'
 check "$want" examples/lift-station/hmi/src/lib/Rain.svelte hmi-3d/src/lib/Scene.svelte
 check "$(light examples/lift-station true)" examples/lift-station/hmi/src/routes/+page.svelte
 # Nothing changed (or the diff failed): full, extension included.

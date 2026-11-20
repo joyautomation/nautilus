@@ -44,6 +44,7 @@ jobs:
       full: ${{ steps.scope.outputs.full }}
       examples: ${{ steps.scope.outputs.examples }}
       hmibuild: ${{ steps.scope.outputs.hmibuild }}
+      lessons: ${{ steps.scope.outputs.lessons }}
       extension: ${{ steps.scope.outputs.extension }}
       # The CLI-discovery e2e's OS legs: all three when what it reads or its
       # own definition changed (e2e-all); Linux only otherwise (it
@@ -301,6 +302,12 @@ jobs:
       - name: TestBuildsTheLiftStationApp (light PR touching its HMI)
         if: env.FULL != 'true' && needs.changes.outputs.hmibuild == 'true'
         run: go test ./internal/hmibuild -run '^TestBuildsTheLiftStationApp$' -v
+      # Every interactive lesson's Check passes on its solution, fails on its
+      # start and on each bad-* variant, passes on each ok-* one. A light PR
+      # that only touches website/lessons/ skips go test, so it runs here.
+      - name: TestLessonsAreRealExercises (light PR touching the lessons)
+        if: env.FULL != 'true' && needs.changes.outputs.lessons == 'true'
+        run: go test ./cmd/naut -run '^TestLessonsAreRealExercises$' -v
       # A docs page that changed while its claims file didn't: a warning,
       # never a failure. runtime-evidence gives it on a full run.
       - name: Docs changed, claims didn't (light PR)
