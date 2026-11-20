@@ -53,12 +53,20 @@ namespace Tiad
 
         // AuditDecisions is the decisions for the audit line. Names the
         // request supplies are quoted, so none can forge a line.
+        static List<string> Quoted(List<string> names)
+        {
+            var q = new List<string>();
+            foreach (var n in names) q.Add(Json.Quote(n));
+            return q;
+        }
+
         static string AuditDecisions(Decisions d)
         {
             var reinit = new List<string>();
             foreach (var n in d.Reinitialize) reinit.Add(Json.Quote(n));
             return "stopCpu=" + YesNo(d.StopCpu) + " overwrite=" + YesNo(d.Overwrite) +
                 " startAfter=" + YesNo(d.StartAfter) + " reinitialize=[" + string.Join(",", reinit) + "]" +
+                " keptDevices=[" + string.Join(",", Quoted(d.KeptDevices)) + "]" +
                 " trustCertificate=" + (d.TrustCertificate == "" ? "unset" : Json.Quote(d.TrustCertificate));
         }
 
@@ -134,6 +142,19 @@ namespace Tiad
             {
                 throw new TiadException(409, Kinds.NotCompiled, "the project changed since the last full compile; compile hardware and software first");
             }
+            // The devices an apply kept load too: a real download needs a
+            // yes naming exactly them, checked before anything reaches the
+            // CPU. A dry run lists the question instead.
+            string keptWhy = KeptRule.Check(s.Kept, req.Decisions.KeptDevices);
+            if (keptWhy != null && !req.DryRun)
+            {
+                asked = Json.Quote(QuestionIds.KeptDevices);
+                outcome = Kinds.DecisionRequired + ":[" + asked + "]";
+                var kd = new Obj();
+                kd["questions"] = Question.ToJson(new List<Question> { KeptRule.Question(s.Kept) });
+                kd["keptDevices"] = KeptDevice.ToJson(s.Kept);
+                throw new TiadException(409, Kinds.DecisionRequired, keptWhy + "; nothing was sent to the CPU", kd, false);
+            }
             // The CPU must still be the one tiad pinned (section 3.8),
             // before a dry run too: it reaches the CPU.
             CheckDevicePin(s, req.Address, req.DryRun ? "dry run" : "download");
@@ -208,7 +229,9 @@ namespace Tiad
                 // Provisional until S2 proves a cancelled download loads
                 // nothing (section 3.5).
                 o["provisional"] = true;
-                o["questions"] = Question.ToJson(askedQs);
+                var dq = new List<Question>(askedQs);
+                if (s.Kept.Count > 0) dq.Add(KeptRule.Question(s.Kept));
+                o["questions"] = Question.ToJson(dq);
                 o["keptDevices"] = KeptDevice.ToJson(s.Kept);
                 return o;
             }

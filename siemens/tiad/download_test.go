@@ -92,3 +92,39 @@ func TestDownloadRequestValidate(t *testing.T) {
 		}
 	}
 }
+
+// TestCheckKept is the agent's KeptRule: a download's yes names exactly
+// the kept devices; no kept devices, no question.
+func TestCheckKept(t *testing.T) {
+	io := func(names ...string) []KeptDevice {
+		var ks []KeptDevice
+		for _, n := range names {
+			ks = append(ks, KeptDevice{Name: n})
+		}
+		return ks
+	}
+	for _, c := range []struct {
+		name   string
+		kept   []KeptDevice
+		answer []string
+		want   string
+	}{
+		{"nothing kept", nil, nil, ""},
+		{"named", io("IO1"), []string{"IO1"}, ""},
+		{"any order", io("IO2", "IO1"), []string{"IO1", "IO2"}, ""},
+		{"twice is once", io("IO2", "IO1"), []string{"IO2", "IO1", "IO1"}, ""},
+		{"unanswered", io("IO2", "IO1"), nil, `the project keeps device(s) ["IO1", "IO2"] that a download loads too: name them in decisions.keptDevices`},
+		{"a smaller set", io("IO1", "IO2"), []string{"IO1"}, `decisions.keptDevices names ["IO1"], but the project keeps ["IO1", "IO2"] now`},
+		{"a larger set", io("IO1"), []string{"IO1", "IO2"}, `but the project keeps ["IO1"] now`},
+		{"nothing kept, a yes", nil, []string{"IO1"}, "but the project keeps none now"},
+		{"exact names", io("IO1"), []string{"io1"}, "a yes for another set does not carry over"},
+	} {
+		got := CheckKept(c.kept, c.answer)
+		if (c.want == "") != (got == "") || !strings.Contains(got, c.want) {
+			t.Errorf("%s: %q, want %q", c.name, got, c.want)
+		}
+	}
+	if q := KeptQuestion(io("IO2", "IO1")); q.ID != QuestionKeptDevices || strings.Join(q.Objects, ",") != "IO1,IO2" {
+		t.Errorf("question: %+v", q)
+	}
+}

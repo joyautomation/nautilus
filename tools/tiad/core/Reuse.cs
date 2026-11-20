@@ -182,6 +182,53 @@ namespace Tiad
         }
     }
 
+    // KeptRule is the download's question about kept devices: a download
+    // loads the devices an apply kept as found, so it needs a yes that
+    // names exactly that set. A yes for another set (an older one carried
+    // by a script) is refused; no kept devices, no question.
+    public static class KeptRule
+    {
+        public static Question Question(List<KeptDevice> kept)
+        {
+            var q = new Question
+            {
+                Id = QuestionIds.KeptDevices,
+                Message = "load the devices the project keeps as found besides the CPU (name each in decisions.keptDevices)",
+            };
+            q.Objects = Names(kept);
+            return q;
+        }
+
+        // Check returns null when answer names exactly the kept devices,
+        // or why not.
+        public static string Check(List<KeptDevice> kept, List<string> answer)
+        {
+            List<string> want = Names(kept);
+            var got = new SortedSet<string>(answer, StringComparer.Ordinal);
+            if (got.SetEquals(want)) return null;
+            if (got.Count == 0)
+            {
+                return "the project keeps device(s) " + Quoted(want) + " that a download loads too: name them in decisions.keptDevices to load them";
+            }
+            return "decisions.keptDevices names " + Quoted(new List<string>(got)) + ", but the project keeps " + (want.Count == 0 ? "none" : Quoted(want)) +
+                " now: the answer must name exactly the devices kept, so a yes for another set does not carry over";
+        }
+
+        static List<string> Names(List<KeptDevice> kept)
+        {
+            var s = new SortedSet<string>(StringComparer.Ordinal);
+            foreach (var k in kept) s.Add(k.Name);
+            return new List<string>(s);
+        }
+
+        static string Quoted(List<string> names)
+        {
+            var q = new List<string>();
+            foreach (var n in names) q.Add(Json.Quote(n));
+            return "[" + string.Join(", ", q.ToArray()) + "]";
+        }
+    }
+
     // IProtectionConfigurator is the CPU's configuration protection as
     // TIA's PlcMasterSecretConfigurator offers it. tiad.Openness wraps
     // TIA's; the fakes model it. Passwords cross as strings: the glue

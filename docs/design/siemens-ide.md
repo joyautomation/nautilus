@@ -363,9 +363,10 @@ The rules for applying a spec:
     not configure IO devices yet. The apply lists them in `keptDevices`
     and in a note. A download lists them again in its result (a dry run's
     too) and in the data of a `decision_required` or `declined` refusal,
-    and journals them on its audit line (`kept=[...]`). A download whose
-    request already answers every question gets no refusal, so the apply
-    and a dry run are where they show before anything loads. A kept device that
+    and journals them on its audit line (`kept=[...]`). Loading them is a
+    download question of its own (`kept-devices`, §3.5): a real download
+    needs `decisions.keptDevices` naming exactly them, and the audit line
+    journals that answer too. A kept device that
     shares a name, a PROFINET name or an address with the spec refuses
     (`cpu_mismatch`) rather than coexist.
   - A refusal before any write (a mismatch, `keep` on a CPU that has
@@ -464,13 +465,14 @@ Request:
   "hardware": true, "software": true,
   "dryRun": false,
   "decisions": { "stopCpu": true, "reinitialize": ["Tags"], "overwrite": true,
-                 "startAfter": true, "trustCertificate": "<sha256 fingerprint>" },
+                 "startAfter": true, "trustCertificate": "<sha256 fingerprint>",
+                 "keptDevices": ["<device name>"] },
   "announced": true,
   "secrets": { "protection": "<password>", "configurationPassword": "<password>" }
 }
 ```
 
-Response: `{dryRun, downloaded, questions: [{id, message, detail, objects}], state}`.
+Response: `{dryRun, downloaded, questions: [{id, message, detail, objects}], state, keptDevices}`.
 
 **The dry run is provisional.** Openness is believed to answer TIA's
 pre-download checks through a callback inside the real download call,
@@ -538,11 +540,18 @@ behaviour. So, until then:
     password protecting the configuration data, answered only by
     `secrets.configurationPassword`; unproven until S2b)
   - `certificate` (detail is the fingerprint)
+  - `kept-devices`: the agent's own question, never TIA's, asked when the
+    last apply kept devices as found ("Which CPU an apply uses"). `objects`
+    names them.
   - `other` (the check's own text)
 - **A real download** answers each question only from `decisions`.
   - An unanswered question fails the call with `decision_required`, and
     nothing is loaded.
   - A `reinitialize` answer must name every DB the check named.
+  - `decisions.keptDevices` must name exactly the kept devices, checked
+    before anything reaches the CPU. Missing, or naming another set (an
+    older yes carried by a script), it fails with `decision_required`.
+    No kept devices, no question, and a `keptDevices` answer then refuses.
   - tiad never picks a default.
   - An `other` question always refuses, so a check tiad has never seen
     cannot be answered by accident.

@@ -1144,6 +1144,13 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 	if req.DryRun {
 		call = "dry run"
 	}
+	// The kept devices load too: a yes naming exactly them, before
+	// anything reaches the CPU; a dry run lists the question instead.
+	if why := tiad.CheckKept(s.kept, req.Decisions.KeptDevices); why != "" && !req.DryRun {
+		return nil, &failure{status: http.StatusConflict, kind: tiad.KindDecisionRequired,
+			msg:  why + "; nothing was sent to the CPU",
+			data: map[string]any{"questions": []tiad.Question{tiad.KeptQuestion(s.kept)}, "keptDevices": keptList(s.kept)}}
+	}
 	if fl := f.checkDevicePin(req.Address, call); fl != nil {
 		return nil, fl
 	}
@@ -1179,6 +1186,9 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 	// Openness can list the checks and cancel with nothing loaded is
 	// provisional until S2 (siemens-ide.md §3.5); the fake models the aim.
 	if req.DryRun {
+		if len(s.kept) > 0 {
+			qs = append(append([]tiad.Question{}, qs...), tiad.KeptQuestion(s.kept))
+		}
 		return tiad.DownloadResult{DryRun: true, Provisional: true, Questions: qs, KeptDevices: keptList(s.kept)}, nil
 	}
 	haveProtection := req.Secrets != nil && req.Secrets.Protection != ""

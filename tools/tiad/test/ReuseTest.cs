@@ -161,6 +161,28 @@ namespace Tiad.Test
             Eq(string.Join("|", CpuReuse.Changes(CpuReuse.Reuse, SpecStation(), moved).ToArray()), "cpu PLC_1 changed", "reuse with a changed address");
         }
 
+        // KeptDevicesNeedANamedYes: a download's yes must name exactly the
+        // kept set; no kept devices, no question.
+        static void KeptDevicesNeedANamedYes()
+        {
+            var one = new List<KeptDevice> { new KeptDevice { Name = "IO1" } };
+            var two = new List<KeptDevice> { new KeptDevice { Name = "IO2" }, new KeptDevice { Name = "IO1" } };
+            var none = new List<KeptDevice>();
+            Func<string[], List<string>> l = delegate(string[] a) { return new List<string>(a); };
+            Eq(KeptRule.Check(none, l(new string[0])), null, "nothing kept, nothing asked");
+            Eq(KeptRule.Check(one, l(new[] { "IO1" })), null, "the kept set named");
+            Eq(KeptRule.Check(two, l(new[] { "IO1", "IO2" })), null, "order does not matter");
+            Eq(KeptRule.Check(two, l(new[] { "IO2", "IO1", "IO1" })), null, "a name twice is one");
+            Contains(KeptRule.Check(two, l(new string[0])), "the project keeps device(s) [\"IO1\", \"IO2\"] that a download loads too: name them in decisions.keptDevices", "unanswered");
+            Contains(KeptRule.Check(two, l(new[] { "IO1" })), "decisions.keptDevices names [\"IO1\"], but the project keeps [\"IO1\", \"IO2\"] now", "a yes for a smaller set");
+            Contains(KeptRule.Check(one, l(new[] { "IO1", "IO2" })), "but the project keeps [\"IO1\"] now", "a yes for a larger set");
+            Contains(KeptRule.Check(none, l(new[] { "IO1" })), "but the project keeps none now", "a yes when nothing is kept");
+            True(KeptRule.Check(one, l(new[] { "io1" })) != null, "names compare exactly");
+            Question q = KeptRule.Question(two);
+            Eq(q.Id, QuestionIds.KeptDevices, "question id");
+            Eq(string.Join(",", q.Objects.ToArray()), "IO1,IO2", "the question names the kept set, sorted");
+        }
+
         // ScriptedSecret is a configurator that behaves like TIA's and
         // fails where a test says, recording every call.
         sealed class ScriptedSecret : IProtectionConfigurator

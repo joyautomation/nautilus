@@ -844,11 +844,13 @@ func TestAgentTrustsACertificateOnlyOnTheUploadsOptIn(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := s.Download(ctx, tiad.DownloadRequest{Address: "192.0.2.10", Hardware: true, Software: true, Announced: true,
-		Decisions: tiad.Decisions{StartAfter: tiad.No()}}); err != nil {
+		Decisions: tiad.Decisions{StartAfter: tiad.No(), KeptDevices: []string{"io-device-up"}}}); err != nil {
 		t.Fatal(err)
 	}
 	line = waitLog(t, p, "audit download")
-	if want := `kept=["io-device-up" profinetName="io-device-up" address="192.0.2.30"]`; !strings.Contains(line, want) {
-		t.Errorf("the download's audit line lacks %s:\n%s", want, line)
+	for _, want := range []string{`kept=["io-device-up" profinetName="io-device-up" address="192.0.2.30"]`, `keptDevices=["io-device-up"]`} {
+		if !strings.Contains(line, want) {
+			t.Errorf("the download's audit line lacks %s:\n%s", want, line)
+		}
 	}
 }

@@ -82,6 +82,7 @@ namespace Tiad.Test
                 T("ReuseFirmwareIsExact", ReuseFirmwareIsExact),
                 T("KeptDevicesCollide", KeptDevicesCollide),
                 T("KeptNoteAndChanges", KeptNoteAndChanges),
+                T("KeptDevicesNeedANamedYes", KeptDevicesNeedANamedYes),
                 T("ProtectionStepsHappyPaths", ProtectionStepsHappyPaths),
                 T("ProtectionStepsStranded", ProtectionStepsStranded),
                 T("ProtectionStepsReadBack", ProtectionStepsReadBack),

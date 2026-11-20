@@ -97,23 +97,48 @@ func contractReuse(t *testing.T, start Starter) {
 	// The download lists the kept devices before anything loads (a dry
 	// run, a refusal for decisions, a declined question), and again when
 	// it has loaded.
+	// Loading them needs a yes that names exactly them.
+	keptQ := func(qs []tiad.Question) bool {
+		for _, q := range qs {
+			if q.ID == tiad.QuestionKeptDevices && reflect.DeepEqual(q.Objects, []string{"io-device-up"}) {
+				return true
+			}
+		}
+		return false
+	}
 	dl := tiad.DownloadRequest{Address: benchCPU, Hardware: true, Software: true, Announced: true, DryRun: true}
-	if res, err := s.Download(ctx, dl); err != nil || !res.DryRun || !reflect.DeepEqual(res.KeptDevices, kept) {
+	if res, err := s.Download(ctx, dl); err != nil || !res.DryRun || !reflect.DeepEqual(res.KeptDevices, kept) || !keptQ(res.Questions) {
 		t.Fatalf("a dry run: %+v %v", res, err)
 	}
 	dl.DryRun = false
+	dl.Decisions = tiad.Decisions{StartAfter: tiad.No()}
+	_, err = s.Download(ctx, dl)
+	if tiad.Kind(err) != tiad.KindDecisionRequired || !keptQ(tiad.Questions(err)) || !reflect.DeepEqual(tiad.KeptDevicesOf(err), kept) ||
+		!strings.Contains(err.Error(), "name them in decisions.keptDevices") {
+		t.Fatalf("a download without a yes for the kept devices: %v", err)
+	}
+	for _, stale := range [][]string{{"io-device-up", "io-device-2"}, {"io-device-2"}} {
+		dl.Decisions.KeptDevices = stale
+		if _, err := s.Download(ctx, dl); tiad.Kind(err) != tiad.KindDecisionRequired || !strings.Contains(err.Error(), "a yes for another set does not carry over") {
+			t.Fatalf("a yes for %q: %v", stale, err)
+		}
+	}
+	if len(a.Loaded(t)) != 0 {
+		t.Fatalf("loaded without a matching yes: %+v", a.Loaded(t))
+	}
+	dl.Decisions = tiad.Decisions{KeptDevices: []string{"io-device-up"}}
 	_, err = s.Download(ctx, dl)
 	if tiad.Kind(err) != tiad.KindDecisionRequired || !reflect.DeepEqual(tiad.KeptDevicesOf(err), kept) {
 		t.Fatalf("a download needing decisions: %v, kept %+v", err, tiad.KeptDevicesOf(err))
 	}
 	a.SetQuestions(t, []tiad.Question{{ID: tiad.QuestionStopCPU, Message: "Stop the CPU"}})
-	dl.Decisions = tiad.Decisions{StopCPU: tiad.No(), StartAfter: tiad.No()}
+	dl.Decisions = tiad.Decisions{StopCPU: tiad.No(), StartAfter: tiad.No(), KeptDevices: []string{"io-device-up"}}
 	_, err = s.Download(ctx, dl)
 	if tiad.Kind(err) != tiad.KindDeclined || !reflect.DeepEqual(tiad.KeptDevicesOf(err), kept) {
 		t.Fatalf("a declined download: %v, kept %+v", err, tiad.KeptDevicesOf(err))
 	}
 	a.SetQuestions(t, nil)
-	dl.Decisions = tiad.Decisions{StartAfter: tiad.No()}
+	dl.Decisions = tiad.Decisions{StartAfter: tiad.No(), KeptDevices: []string{"io-device-up"}}
 	res, err := s.Download(ctx, dl)
 	if err != nil || !res.Downloaded || !reflect.DeepEqual(res.KeptDevices, kept) {
 		t.Fatalf("the download: %+v %v", res, err)
