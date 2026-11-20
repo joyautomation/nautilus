@@ -1,6 +1,9 @@
 <script lang="ts">
 	// Operator numeric entry: edits locally, writes only on Enter / Set.
 	// Shows a pending highlight while the entered value differs from live.
+	// Given the `tag` it writes, a role that does not hold write on it sees
+	// the field read-only, and why (#708; a convenience: the controller decides).
+	import { deniedFor } from '../auth.svelte.js';
 	let {
 		label,
 		unit = '',
@@ -8,6 +11,7 @@
 		min,
 		max,
 		step = 1,
+		tag,
 		onsubmit
 	}: {
 		label: string;
@@ -16,8 +20,12 @@
 		min?: number;
 		max?: number;
 		step?: number;
+		/** The tag `onsubmit` writes: makes the field follow the signed-in role. */
+		tag?: string;
 		onsubmit: (v: number) => void;
 	} = $props();
+
+	const denied = $derived(tag ? deniedFor('write', tag) : '');
 
 	let text = $state('');
 	let editing = $state(false);
@@ -45,6 +53,8 @@
 			{max}
 			{step}
 			value={display}
+			readonly={!!denied}
+			title={denied || undefined}
 			oninput={(e) => {
 				editing = true;
 				text = (e.currentTarget as HTMLInputElement).value;
@@ -54,7 +64,7 @@
 				if (!pending) editing = false;
 			}}
 		/>
-		<button onclick={commit} disabled={!pending}>Set</button>
+		<button onclick={commit} disabled={!pending || !!denied}>Set</button>
 	</span>
 </label>
 

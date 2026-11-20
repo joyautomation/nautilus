@@ -17,6 +17,8 @@
 		{ "pattern": "T*K*1", "target": "TANK12", "want": false },
 		{ "pattern": "a*b*c", "target": "abxbc", "want": true },
 		{ "pattern": "a*b*c", "target": "abxbcx", "want": false },
+		{ "pattern": "*A", "target": "xaa", "want": true },
+		{ "pattern": "*AB", "target": "abab", "want": true },
 		{ "pattern": "PUMP_?", "target": "PUMP_7", "want": true },
 		{ "pattern": "PUMP_?", "target": "PUMP_17", "want": false },
 		{ "pattern": "PUMP_?", "target": "PUMP_", "want": false },

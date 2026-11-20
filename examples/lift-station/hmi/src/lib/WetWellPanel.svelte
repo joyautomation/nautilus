@@ -4,7 +4,7 @@
 	// sequence, then its setpoints: where the sequence (sequence.sfc)
 	// starts and stops the lead and lag pumps, the level loop that sets
 	// their speed in Auto (level.fbd, LIC-101), and the high level alarm.
-	import { StatusPill, Trend } from '@joyautomation/nautilus-hmi';
+	import { StatusPill, Trend, deniedFor } from '@joyautomation/nautilus-hmi';
 	import SeqStepTag from '$lib/SeqStepTag.svelte';
 	import SetpointInput from '$lib/SetpointInput.svelte';
 	import { num, bool, str, writeTag, levelBuf } from '$lib/client.svelte';
@@ -52,7 +52,7 @@
 		<span>Lead</span>
 		<div class="seg" role="group" aria-label="Lead pump">
 			{#each LEAD as l (l.v)}
-				<button class:active={num('LeadSelect') === l.v} aria-pressed={num('LeadSelect') === l.v} onclick={() => writeTag('LeadSelect', l.v)}>
+				<button class:active={num('LeadSelect') === l.v} aria-pressed={num('LeadSelect') === l.v} disabled={!!deniedFor('write', 'LeadSelect')} title={deniedFor('write', 'LeadSelect') || undefined} onclick={() => writeTag('LeadSelect', l.v)}>
 					{l.label}
 				</button>
 			{/each}
@@ -70,11 +70,11 @@
 	<div class="grid" role="group" aria-label="Pump start and stop levels">
 		<span></span><span class="col">Lead</span><span class="col">Lag</span>
 		<span class="row">On at</span>
-		<SetpointInput label="Lead on" unit="%" max={100} value={num('LeadOnLevel')} onsubmit={set('LeadOnLevel')} />
-		<SetpointInput label="Lag on" unit="%" max={100} value={num('LagOnLevel')} onsubmit={set('LagOnLevel')} />
+		<SetpointInput label="Lead on" unit="%" max={100} value={num('LeadOnLevel')} tag="LeadOnLevel" onsubmit={set('LeadOnLevel')} />
+		<SetpointInput label="Lag on" unit="%" max={100} value={num('LagOnLevel')} tag="LagOnLevel" onsubmit={set('LagOnLevel')} />
 		<span class="row">Off at</span>
-		<SetpointInput label="Lead off" unit="%" max={100} value={num('LeadOffLevel')} onsubmit={set('LeadOffLevel')} />
-		<SetpointInput label="Lag off" unit="%" max={100} value={num('LagOffLevel')} onsubmit={set('LagOffLevel')} />
+		<SetpointInput label="Lead off" unit="%" max={100} value={num('LeadOffLevel')} tag="LeadOffLevel" onsubmit={set('LeadOffLevel')} />
+		<SetpointInput label="Lag off" unit="%" max={100} value={num('LagOffLevel')} tag="LagOffLevel" onsubmit={set('LagOffLevel')} />
 	</div>
 </section>
 
@@ -83,7 +83,7 @@
 	{#each LOOP as s (s.tag)}
 		<div class="line">
 			<span>{s.label}</span>
-			<SetpointInput label={s.label} unit={s.unit} min={0} max={s.max} step={s.step ?? 1} value={num(s.tag)} onsubmit={set(s.tag)} />
+			<SetpointInput label={s.label} unit={s.unit} min={0} max={s.max} step={s.step ?? 1} value={num(s.tag)} tag={s.tag} onsubmit={set(s.tag)} />
 		</div>
 	{/each}
 </section>
@@ -93,7 +93,7 @@
 	{#each ALARM as s (s.tag)}
 		<div class="line">
 			<span>{s.label}</span>
-			<SetpointInput label={s.label} unit={s.unit} min={0} max={s.max} value={num(s.tag)} onsubmit={set(s.tag)} />
+			<SetpointInput label={s.label} unit={s.unit} min={0} max={s.max} value={num(s.tag)} tag={s.tag} onsubmit={set(s.tag)} />
 		</div>
 	{/each}
 </section>

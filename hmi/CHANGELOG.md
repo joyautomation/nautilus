@@ -14,7 +14,8 @@
   `Location` header). Does nothing without `auth:`. The
   pure rules (`leaderTarget`, `needsPassword`, `refusalMessage`, …) are exported and tested.
 - **Role-aware controls** (#708 PR 7b): `WriteNumber`, `WriteToggle`, `CommandButton`, `AckButton`,
-  `AlarmTable`, `SubstitutesPanel` and `PortParameters` grey themselves out, with the reason, when
+  `AlarmTable`, `SubstitutesPanel`, `PortParameters` and `NumberField` (given its new `tag`) grey
+  themselves out, with the reason, when
   the signed-in role does not hold the permission for that tag (`deniedFor`, `can`). Area patterns
   come from `/api/me`'s new `areas` and are matched as the controller matches them (`areaMatch`, a
   port of Go's `path.Match`, tested against the controller's own table). `PortParameters` shows a

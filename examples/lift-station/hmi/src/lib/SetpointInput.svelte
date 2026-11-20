@@ -3,7 +3,10 @@
 	// unit. It shows the live value until you type; Enter (or the Set
 	// button that appears while the box differs from live) writes it, and
 	// Escape puts the live value back. The same rule as the kit's
-	// NumberField, in a size that fits several to a row.
+	// NumberField, in a size that fits several to a row. Given its `tag`, it
+	// follows the signed-in role: read-only, with the reason, where the role
+	// does not hold write (the controller still decides).
+	import { deniedFor } from '@joyautomation/nautilus-hmi';
 	let {
 		value,
 		unit = '',
@@ -11,6 +14,7 @@
 		min,
 		max,
 		step = 1,
+		tag,
 		onsubmit
 	}: {
 		value: number;
@@ -20,8 +24,12 @@
 		min?: number;
 		max?: number;
 		step?: number;
+		/** The tag `onsubmit` writes. */
+		tag?: string;
 		onsubmit: (v: number) => void;
 	} = $props();
+
+	const denied = $derived(tag ? deniedFor('write', tag) : '');
 
 	let editing = $state(false);
 	let text = $state('');
@@ -30,7 +38,7 @@
 
 	function commit() {
 		const v = Number(text);
-		if (!pending || !isFinite(v)) return;
+		if (!pending || !isFinite(v) || denied) return;
 		onsubmit(Math.min(max ?? v, Math.max(min ?? v, v)));
 		editing = false;
 	}
@@ -43,6 +51,8 @@
 	<input
 		type="number"
 		aria-label={label}
+		readonly={!!denied}
+		title={denied || undefined}
 		value={shown}
 		{min}
 		{max}

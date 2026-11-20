@@ -302,7 +302,7 @@ its own, and listens to the live stream's errors. Then:
 
 **Controls follow the role.** `WriteNumber`, `WriteToggle`, `CommandButton` (write), `AckButton`
 and `AlarmTable` (ack, shelve; Ack All needs ack on the whole controller), `SubstitutesPanel`
-(substitute) and `PortParameters` (config) grey themselves out, with the reason as their title,
+(substitute), `PortParameters` (config) and `NumberField` (given its `tag`) grey themselves out, with the reason as their title,
 when the signed-in role does not hold that permission for that tag. Areas are matched with
 `/api/me`'s `areas` exactly as the controller matches them (`can`, `areaMatch`; one shared test
 table). `PortParameters` shows a lock while a write would ask for the password first. Signed in,

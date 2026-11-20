@@ -27,6 +27,7 @@ import { kitFetch, setKitFetch } from '../src/lib/kitfetch.js';
 import { classify, SubstituteClient } from '../src/lib/substitutes.js';
 import { PortParamClient } from '../src/lib/iolink.js';
 import { fetchHistory } from '../src/lib/history.js';
+import { AuditClient } from '../src/lib/audit.js';
 import { readFileSync } from 'node:fs';
 
 const json = (b: unknown, status = 200, headers: Record<string, string> = {}) =>
@@ -498,14 +499,15 @@ describe('every kit client goes through the kit fetch', () => {
 			await new SubstituteClient().list();
 			await new PortParamClient().list('X1');
 			await fetchHistory(['T1'], 0, 1000);
+			await new AuditClient().query({ result: 'refused' });
 			setKitFetch(null);
 			await kitFetch('/c');
 		} finally {
 			g.fetch = browser;
 			setKitFetch(null);
 		}
-		expect(seen.length).toBe(6);
-		expect([seen[0], seen[1], seen[5]]).toEqual(['browser:/a', '/b', 'browser:/c']);
+		expect(seen.length).toBe(7);
+		expect([seen[0], seen[1], seen[5], seen[6]]).toEqual(['browser:/a', '/b', '/api/audit?result=refused', 'browser:/c']);
 		seen.splice(0, 2);
 		expect(seen[0].startsWith('/api/substitutes')).toBe(true);
 		expect(seen[1].startsWith('/api/iolink/X1/params')).toBe(true);
@@ -708,9 +710,10 @@ describe('every role-aware control asks the permission the controller checks (7b
 		has('WriteToggle.svelte', "deniedFor('write', tag)", '!readonly && !denied');
 		has('CommandButton.svelte', "deniedFor('write', tag)", 'disabled={off}');
 		has('AckButton.svelte', "deniedFor('ack')", "deniedFor('ack', a.tag)", '!!denied}', 'recordedAs(currentAuth()?.user)');
-		has('AlarmTable.svelte', "deniedFor('ack', a.tag)", "deniedFor('shelve', a.tag)", "deniedFor('ack')", '!!ackDenied', '!!shelveDenied', '!!ackAllDenied', 'recordedAs(currentAuth()?.user)');
+		has('AlarmTable.svelte', "deniedFor('ack', a.tag)", "deniedFor('shelve', a.tag)", "deniedFor('ack')", 'disabled={!selected.size || !!ackDenied}', 'disabled={!!ackAllDenied}', 'disabled={!selected.size || !!shelveDenied} title={shelveDenied || undefined} onclick={openShelveModal}', 'disabled={!selected.size || !!shelveDenied} title={shelveDenied || undefined} onclick={unshelveSelected}', 'recordedAs(currentAuth()?.user)');
 		has('SubstitutesPanel.svelte', "deniedFor('substitute', tag)", "deniedFor('substitute', s.name)", '!!startDenied');
 		has('PortParameters.svelte', "deniedFor('config')", "asksPassword('config')", '!!writeDenied');
 		has('AuditTable.svelte', "deniedFor('audit')");
+		has('NumberField.svelte', "tag ? deniedFor('write', tag) : ''", 'readonly={!!denied}', '!pending || !!denied');
 	});
 });
