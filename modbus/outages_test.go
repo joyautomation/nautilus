@@ -416,6 +416,11 @@ func watchOnline(t *testing.T, d *Driver, dur time.Duration) {
 // with nothing counted, however often it happens. Commands still go out.
 func TestOnlineIdleTimeoutIsNotAnOutage(t *testing.T) {
 	srv := newSlave(t)
+	// The slave answers a unit nobody created with 0x0B (a gateway's "target
+	// failed to respond"). Create it now: left to the final wait below, a slow
+	// runner sent the command first, got 0x0B, and the 3 s resend outlasted
+	// that wait.
+	srv.Unit(1)
 	ic := newIdleCloser(t, srv.Addr(), 200*time.Millisecond)
 	src := fastSource("DEV", ic.addr())
 	src.RetryMin, src.RetryMax = 3*time.Second, 3*time.Second // a backoff wait would show
