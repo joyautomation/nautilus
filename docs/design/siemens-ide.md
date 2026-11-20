@@ -324,10 +324,11 @@ The rules for applying a spec:
     order, firmware and name match.
   - In `nautilus.yaml` the field is `configuration-protection`. Left out,
     it is `password`: a new station is protected by default.
-  - Proven offline on the TIA machine: a new CPU reads
-    `WithoutPassword`, `Protect` moves it to `WithPassword`, and
-    `Unprotect` with the password to `None`. Not yet proven: `Protect`
-    from `None`. The read-back refuses it if TIA does otherwise.
+  - Proven offline on the TIA machine (2026-11-20, through the agent): a
+    new CPU reads `WithoutPassword`; `Protect` moves it, or a CPU at
+    `None`, to `WithPassword`; `Unprotect` with the password moves it to
+    `None`; `none` on a new CPU ends at `None`. The read-back still
+    refuses any state TIA did not promise.
 - **A password that may be set meets TIA's rules before any TIA call**
   (`password`): 10 to 120 characters (UTF-16 code units), at least one
   digit, one upper-case and one lower-case letter (ASCII classes, which
