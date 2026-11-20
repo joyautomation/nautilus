@@ -1,0 +1,72 @@
+# GlitchTip's database. One replica on one volume: StatefulSet, Postgres 17
+# (GlitchTip supports 14+). The password comes from the Secret `glitchtip`
+# (README.md), never from git.
+#
+# The data directory is a subdirectory of the mount: a fresh block volume has
+# a lost+found at its root, which initdb refuses to start in.
+apiVersion: v1
+kind: Service
+metadata:
+  name: glitchtip-postgres
+  namespace: joy
+  labels: {app: glitchtip-postgres}
+spec:
+  clusterIP: None
+  selector: {app: glitchtip-postgres}
+  ports:
+    - {name: postgres, port: 5432, targetPort: 5432}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: glitchtip-postgres
+  namespace: joy
+  labels: {app: glitchtip-postgres}
+spec:
+  serviceName: glitchtip-postgres
+  replicas: 1
+  selector:
+    matchLabels: {app: glitchtip-postgres}
+  template:
+    metadata:
+      labels: {app: glitchtip-postgres}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 70 # the postgres user in the alpine image
+        runAsGroup: 70
+        fsGroup: 70
+      containers:
+        - name: postgres
+          image: postgres:17.12-alpine
+          ports:
+            - {name: postgres, containerPort: 5432}
+          env:
+            - {name: POSTGRES_DB, value: glitchtip}
+            - {name: POSTGRES_USER, value: glitchtip}
+            - name: POSTGRES_PASSWORD
+              valueFrom: {secretKeyRef: {name: glitchtip, key: POSTGRES_PASSWORD}}
+            - {name: PGDATA, value: /var/lib/postgresql/data/pgdata}
+          volumeMounts:
+            - {name: data, mountPath: /var/lib/postgresql/data}
+          readinessProbe:
+            exec: {command: [pg_isready, -U, glitchtip, -d, glitchtip]}
+            periodSeconds: 10
+          livenessProbe:
+            exec: {command: [pg_isready, -U, glitchtip, -d, glitchtip]}
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 384Mi}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        # Retain: deleting the claim must not delete the events with it
+        # (README.md, "Delete").
+        storageClassName: do-block-storage-retain
+        resources:
+          requests:
+            storage: 10Gi
