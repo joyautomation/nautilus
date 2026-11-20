@@ -81,6 +81,11 @@ doctl compute domain records create joyautomation.com \
   --record-data "$(dig +short nautilus.joyautomation.com | head -1)"
 ```
 
+**Create the DNS record before applying the Ingress.** The cluster's resolver
+caches "no such host": an Ingress applied first made cert-manager's self-check
+fail for about 30 minutes after the record existed (the first apply took that
+long).
+
 cert-manager then issues the certificate (`letsencrypt-prod`, HTTP-01) once the
 name resolves: `kubectl -n joy get certificate glitchtip-tls` turns `READY`
 within a few minutes. The ingress and the issuer are the docs site's;
