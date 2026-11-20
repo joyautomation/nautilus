@@ -195,6 +195,42 @@ a box that does not answer gives up after 10 seconds.
 - Everything is `sync`ed before a link moves. If power is lost
   mid-update, the box boots the old release or the whole new one.
 
+### Letting operators open the screen
+
+Right after `install`, the controller is reachable only from its own box:
+it listens on `server.addr`, which the scaffolds set to `localhost:8080`,
+so the screen and the API answer on the box and nowhere else. Three
+settings decide what other machines get, and the unit reads the last two
+from a file that `naut deploy` never writes:
+
+1. **The address.** Set `server.addr: "0.0.0.0:8080"` in `nautilus.yaml`
+   and run `naut deploy update`, or put `NAUTILUS_ADDR=0.0.0.0:8080` in
+   `/etc/nautilus/env` (the environment variable wins over the manifest).
+2. **The name people type.** By IP address the screen opens. By a name
+   (`http://plc1:8080`) the controller answers `403` and says so, because
+   a page on another site could point a name it controls at the box. List
+   the names you use in `NAUTILUS_ALLOWED_HOSTS` (comma-separated), or set
+   a token (next).
+3. **A token, once the address leaves the box.** `NAUTILUS_TOKEN` makes
+   writes and online edits require it. The editor sends it from its
+   `nautilus.token` setting, and `naut pull` from its own
+   `NAUTILUS_TOKEN`.
+
+The unit's `EnvironmentFile` is `/etc/nautilus/env`, one `NAME=value` per
+line. The install does not create it, nor `/etc/nautilus`, and `update`
+and `rollback` leave it alone. Create it once on the box and restart:
+
+```sh
+sudo install -d /etc/nautilus
+printf 'NAUTILUS_ALLOWED_HOSTS=plc1\nNAUTILUS_TOKEN=%s\n' "$(openssl rand -hex 16)" | sudo tee /etc/nautilus/env >/dev/null
+sudo chmod 600 /etc/nautilus/env      # it holds the token
+sudo systemctl restart nautilus
+```
+
+Other settings that belong there are in the guides that introduce them:
+`NAUTILUS_TLS_CERT` and `NAUTILUS_TLS_KEY` ([HTTPS](#https)), the
+historian's address, and a redundant pair's node and peer token.
+
 ### With sudo for one command only: the release helper
 
 A box whose SSH user should not have unrestricted `sudo` can grant it
