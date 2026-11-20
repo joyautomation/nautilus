@@ -176,7 +176,7 @@ is the driver's own truth and always Good.
 ## 5. Writes
 
 `WriteOutputs` keeps the sparkplug-host/modbus rules: gate (redundancy
-leadership), baseline (decided per output at the first read of its node, #1121:
+leadership), baseline (decided per output on the first push computed from a scan that read its node, `io.ScanBeginner`, #1121/#1123:
 equal to the server's value, recorded; different, one command; unread,
 waits; unreadable or unpolled, one command), change (an unchanged value is not a command), last value per tag,
 queued across a disconnect and flushed on reconnect — with the gate checked

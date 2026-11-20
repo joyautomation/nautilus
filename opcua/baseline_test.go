@@ -171,13 +171,23 @@ func TestForgetWrittenClearsWhatWaitsForTheFirstRead(t *testing.T) {
 // The first scan computes from init values before anything was read; the
 // baseline must decide on a push computed from the live inputs (#1123 review).
 // Setpoint := Speed + 1; the server holds Speed = 4 and Setpoint = 5.
-func runIncRig(t *testing.T, held float64, scans int) (*Driver, *testServer) {
+const incProgram = "PROGRAM Main\nVAR_EXTERNAL Speed : REAL; Setpoint : REAL; END_VAR\nSetpoint := Speed + 1.0;\nEND_PROGRAM"
+
+func runIncRig(t *testing.T, held float64, scans int, prog string, noPoll bool) (*Driver, *testServer) {
 	t.Helper()
 	ts := startServerWith(t, freePort(t), "urn:nautilus:test", 4.0)
 	ts.set(t, "Setpoint", held)
-	d := startDriver(t, ts.url, manifest(2))
+	m := manifest(2)
+	if noPoll {
+		for i := range m.Tags {
+			if m.Tags[i].Name == "Setpoint" {
+				m.Tags[i].ScanClass = NoPoll
+			}
+		}
+	}
+	d := startDriver(t, ts.url, m)
 	rt, err := runtime.New(runtime.Options{
-		Program: "PROGRAM Main\nVAR_EXTERNAL Speed : REAL; Setpoint : REAL; END_VAR\nSetpoint := Speed + 1.0;\nEND_PROGRAM",
+		Program: prog,
 		Driver:  d,
 		Tags:    []runtime.TagDef{runtime.Input("Speed", runtime.Init(0.0)), runtime.Output("Setpoint", runtime.Init(0.0))},
 	})
@@ -192,14 +202,14 @@ func runIncRig(t *testing.T, held float64, scans int) (*Driver, *testServer) {
 }
 
 func TestStartupNeverDrivesTheInitDerivedValue(t *testing.T) {
-	d, ts := runIncRig(t, 5.0, 40)
+	d, ts := runIncRig(t, 5.0, 40, incProgram, false)
 	if w := d.Health().Writes; w != 0 {
 		t.Fatalf("writes = %d, want 0: the server held 5 and the live input makes 5 (the init-derived 1 must never go out); holds %v", w, ts.get(t, "Setpoint"))
 	}
 }
 
 func TestStartupWritesTheLiveValueOnce(t *testing.T) {
-	d, ts := runIncRig(t, 9.0, 40)
+	d, ts := runIncRig(t, 9.0, 40, incProgram, false)
 	if w := d.Health().Writes; w != 1 || ts.get(t, "Setpoint") != 5.0 {
 		t.Fatalf("writes = %d, server holds %v, want one write of 5", w, ts.get(t, "Setpoint"))
 	}
@@ -221,4 +231,23 @@ func TestHeldBaselineRecordsAndNeverSends(t *testing.T) {
 	quiet(t, d)
 	_ = d.WriteOutputs(nio.Values{"Setpoint": 8.0})
 	waitFor(t, "the change", func() bool { return ts.get(t, "Setpoint") == 8.0 })
+}
+
+// An output the server cannot be compared against (no scan class) is
+// commanded once, at the live push, not at the first scan's.
+func TestUnpolledOutputIsCommandedAtTheLivePush(t *testing.T) {
+	d, ts := runIncRig(t, 9.0, 40, incProgram, true)
+	if w := d.Health().Writes; w != 1 || ts.get(t, "Setpoint") != 5.0 {
+		t.Fatalf("writes = %d, server holds %v, want one write of 5", w, ts.get(t, "Setpoint"))
+	}
+}
+
+// An output the program never changes after its first scan is still decided
+// once its read has reached a scan: the driver asks for the whole output set.
+func TestAnUnchangingOutputIsStillDecidedAtTheLivePush(t *testing.T) {
+	d, ts := runIncRig(t, 3.0, 40,
+		"PROGRAM Main\nVAR_EXTERNAL Speed : REAL; Setpoint : REAL; END_VAR\nSetpoint := 7.0;\nEND_PROGRAM", false)
+	if w := d.Health().Writes; w != 1 || ts.get(t, "Setpoint") != 7.0 {
+		t.Fatalf("writes = %d, server holds %v, want one write of 7", w, ts.get(t, "Setpoint"))
+	}
 }

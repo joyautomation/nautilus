@@ -243,6 +243,14 @@ type Driver struct {
 	// has not answered yet: the program's first value, decided against the
 	// server's value at the first read of that node (#1121). Guarded by mu.
 	undecided map[string]any
+	// scanLive is what BeginScan froze for the scan in progress: the
+	// outputs whose node (or, for one never read, the whole session) is
+	// live, so a push from this scan was computed from what the server
+	// answered. The baseline decides only against it (#1123). Under mu.
+	scanLive map[string]bool
+	// scanAware: BeginScan has been called, so a runtime drives this driver.
+	// Without one the baseline decides at the read itself, as before.
+	scanAware atomic.Bool
 
 	started atomic.Bool
 	// connected counts sessions established (onConnect).
@@ -346,6 +354,7 @@ func New(endpoint string, m Manifest, opts ...Option) (*Driver, error) {
 		pending:      map[string]any{},
 		written:      map[string]any{},
 		undecided:    map[string]any{},
+		scanLive:     map[string]bool{},
 		baseline:     true,
 		kick:         make(chan struct{}, 1),
 	}
@@ -843,6 +852,7 @@ func (d *Driver) WriteOutputs(vals nio.Values) error {
 	recordOnly := baseline && d.holdBaseline
 	d.baseline = false
 	d.wmu.Unlock()
+	aware := d.scanAware.Load()
 	if !d.gateOpen() {
 		return nil
 	}
@@ -854,9 +864,10 @@ func (d *Driver) WriteOutputs(vals nio.Values) error {
 			continue
 		}
 		if _, waiting := d.undecided[name]; waiting {
-			// still waiting for its first read: the latest value is the one
-			// to decide with, baseline push or not
+			// still waiting for a push computed from its live read: the
+			// latest value is the one to decide with, baseline push or not
 			d.undecided[name] = v
+			kicked = d.decidableLocked(b, aware) && d.decideLocked(b) || kicked
 			continue
 		}
 		if recordOnly {
@@ -869,17 +880,8 @@ func (d *Driver) WriteOutputs(vals nio.Values) error {
 			if _, queued := d.pending[name]; queued {
 				continue
 			}
-			if b.ScanClass == NoPoll {
-				// never read: there is nothing to compare with
-				d.written[name] = v
-				d.pending[name] = v
-				kicked = true
-				continue
-			}
 			d.undecided[name] = v
-			if d.online && b.answered { // read on the live session: decide now
-				kicked = d.decideLocked(b) || kicked
-			}
+			kicked = d.decidableLocked(b, aware) && d.decideLocked(b) || kicked
 		} else if prev, ok := d.written[name]; ok && sameScalar(prev, v) {
 			// unchanged since the last value we accounted for
 		} else {
@@ -893,6 +895,56 @@ func (d *Driver) WriteOutputs(vals nio.Values) error {
 		nudge(d.kick)
 	}
 	return nil
+}
+
+// decidableLocked: b's undecided output may be decided now. With a runtime
+// driving the driver, only when BeginScan froze it live for this scan;
+// without one, at once for a node that was never read and otherwise once the
+// live session has read it.
+func (d *Driver) decidableLocked(b *binding, aware bool) bool {
+	if aware {
+		return d.scanLive[b.Name]
+	}
+	return b.ScanClass == NoPoll || (d.online && b.answered)
+}
+
+// BeginScan is the driver's io.ScanBeginner: the runtime calls it before it
+// reads this scan's inputs. What the server has answered by now is delivered
+// to that read, so the start-up baseline's outputs are decided only on the
+// push that scan makes, never on one computed from init values before the
+// first read (#1123). While the session is live and every polled node has
+// been answered, it freezes the outputs as decidable, and asks the runtime
+// for the whole output set when one is waiting.
+func (d *Driver) BeginScan() {
+	d.scanAware.Store(true)
+	d.wmu.Lock()
+	armed := d.baseline
+	d.wmu.Unlock()
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	clear(d.scanLive)
+	if !armed && len(d.undecided) == 0 {
+		return
+	}
+	if !d.online {
+		return
+	}
+	for _, b := range d.bindings {
+		if b.ScanClass != NoPoll && !b.missing && !b.answered {
+			return // part of the session is still unread: not live yet
+		}
+	}
+	for _, b := range d.bindings {
+		if b.Writable {
+			d.scanLive[b.Name] = true
+		}
+	}
+	for name := range d.undecided {
+		if d.scanLive[name] {
+			d.wanted.Store(true)
+			break
+		}
+	}
 }
 
 // decideLocked settles one undecided output against what the server
@@ -1339,6 +1391,9 @@ func (d *Driver) apply(b *binding, dv *ua.DataValue) {
 	// on it is decided now, with the value just taken or, when none came
 	// (no read access), commanded once (#1121).
 	defer func() {
+		if d.scanAware.Load() {
+			return // decided on a push computed from this read (BeginScan)
+		}
 		if _, waiting := d.undecided[b.Name]; waiting && d.decideLocked(b) {
 			nudge(d.kick)
 		}

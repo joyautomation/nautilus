@@ -172,8 +172,9 @@ Two behaviours need explicit forms because devices depend on them:
    blip. `Rewrite: 2.5s` re-sends the last commanded value on that period even
    when unchanged. **Default 0 (change-only)** — with the baseline rule from
    `sparkplug-host`: the first snapshot after `Start` is a baseline, decided per
-   output against what the device holds at the first live read of its
-   coil/register (#1123): equal, recorded; different, one write; unread,
+   output against what the device holds, on the first push computed from a
+   scan that read it live (`io.ScanBeginner`; never the first scan's, which
+   ran on init values) (#1123): equal, recorded; different, one write; unread,
    waits; unreadable (refused, `none`, write-only), one write. A `Rewrite`
    binding is always written on connect (a safety word *must* be). A driver
    swapped in under `HoldOutputsOnSwap` keeps the older rule: record, never
