@@ -279,6 +279,10 @@
           "type": "string",
           "description": "How long a browser sign-in lasts, from the sign-in (not renewed by use): 1m to 168h. Default 12h. Sessions live in the leader's memory: a restart or a failover signs browser users out."
         },
+        "elevation": {
+          "type": "string",
+          "description": "How long a browser sign-in's password counts for the elevated permissions (force, edit, activate, deploy, config, users, override), from the sign-in or the last re-authentication (POST /api/elevate), not renewed by use: 1m to 12h. Default 15m. A token always counts as elevated."
+        },
         "service-tokens": {
           "type": "object",
           "propertyNames": {

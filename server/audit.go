@@ -25,6 +25,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/joyautomation/nautilus/audit"
+	"github.com/joyautomation/nautilus/auth"
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/runtime"
 )
@@ -465,7 +466,7 @@ func (a *auditedRoute) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		a.answer(w, r, auditTarget{}, func(w http.ResponseWriter, _ *http.Request) {
-			writeJSON(w, code, map[string]string{"error": msg})
+			WriteRefusal(w, code, msg)
 		})
 		return
 	}
@@ -537,6 +538,15 @@ func (a *auditedRoute) answer(w http.ResponseWriter, r *http.Request, t auditTar
 		From:    a.s.clientAddr(r),
 		Session: a.s.sessionOfEntry(r),
 		Result:  resultOf(status),
+	}
+	if a.s.policy != nil && auth.Elevated(actionPerm[a.action]) {
+		// Which credential an elevated action was allowed by (or refused
+		// to): a browser's fresh password, or a token.
+		d := map[string]any{"credential": credentialKind(a.s.actorOf(r))}
+		for k, v := range e.Detail {
+			d[k] = v
+		}
+		e.Detail = d
 	}
 	if buf.header.Get(outcomeHeader) == "unknown" {
 		// Passed to the replicated log, not confirmed: it may still take

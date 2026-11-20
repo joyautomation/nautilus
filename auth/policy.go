@@ -32,6 +32,10 @@ type Settings struct {
 	// Session is how long a browser sign-in lasts, from the moment of
 	// sign-in (absolute, not renewed by use): 0 is DefaultSession.
 	Session time.Duration
+	// Elevation is how long a browser sign-in's password counts for the
+	// elevated permissions (Elevated), from the sign-in or the last
+	// re-authentication (fixed, not slid by use): 0 is DefaultElevation.
+	Elevation time.Duration
 }
 
 // DefaultSession is a sign-in's lifetime when auth.session is not set:
@@ -42,6 +46,18 @@ const DefaultSession = 12 * time.Hour
 const (
 	MinSession = time.Minute
 	MaxSession = 7 * 24 * time.Hour
+)
+
+// DefaultElevation is how long a password counts for an elevated
+// permission when auth.elevation is not set.
+const DefaultElevation = 15 * time.Minute
+
+// MinElevation and MaxElevation bound auth.elevation. One at or past the
+// session's lifetime is allowed: the sign-in then counts for the whole
+// session.
+const (
+	MinElevation = time.Minute
+	MaxElevation = 12 * time.Hour
 )
 
 // RoleDef is a custom role.
@@ -65,6 +81,7 @@ type Policy struct {
 	services  map[string][]Grant
 	users     map[string][]Grant
 	session   time.Duration
+	elevation time.Duration
 }
 
 // Compile checks c and builds its Policy. Every name it refers to must
@@ -82,6 +99,13 @@ func Compile(c Settings) (*Policy, error) {
 	}
 	if p.session < MinSession || p.session > MaxSession {
 		return nil, fmt.Errorf("auth: session %s is out of range: give 1m to 168h (default 12h)", c.Session)
+	}
+	p.elevation = c.Elevation
+	if p.elevation == 0 {
+		p.elevation = DefaultElevation
+	}
+	if p.elevation < MinElevation || p.elevation > MaxElevation {
+		return nil, fmt.Errorf("auth: elevation %s is out of range: give 1m to 12h (default 15m)", c.Elevation)
 	}
 
 	for name, pats := range c.Areas {
@@ -289,6 +313,11 @@ func (p *Policy) ServiceTokens() []string {
 // Session is how long a browser sign-in lasts (auth.session), from the
 // sign-in.
 func (p *Policy) Session() time.Duration { return p.session }
+
+// Elevation is how long a browser sign-in's password counts for an
+// elevated permission (auth.elevation), from the sign-in or the last
+// re-authentication.
+func (p *Policy) Elevation() time.Duration { return p.elevation }
 
 // HasUser reports whether the block grants the user name anything: a box
 // user it does not name may not sign in.

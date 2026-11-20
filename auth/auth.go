@@ -46,6 +46,15 @@ var areaScoped = map[string]bool{Write: true, Ack: true, Shelve: true, Substitut
 // AreaScoped reports whether perm is limited by areas.
 func AreaScoped(perm string) bool { return areaScoped[perm] }
 
+// ElevatedPermissions are the permissions a browser sign-in holds only
+// while its password is fresh (auth.elevation, #708 PR 5c): what changes
+// the program, the I/O, a forced value or who may do what. A token always
+// counts as fresh. In /api/me's order.
+var ElevatedPermissions = []string{Force, Edit, Activate, Deploy, Config, Users, Override}
+
+// Elevated reports whether perm is one of the ElevatedPermissions.
+func Elevated(perm string) bool { return slices.Contains(ElevatedPermissions, perm) }
+
 // IsPermission reports whether name is a permission.
 func IsPermission(name string) bool { return slices.Contains(Permissions, name) }
 

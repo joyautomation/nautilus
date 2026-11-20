@@ -852,6 +852,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /signin", s.handleSignInPage)
 	mux.HandleFunc("POST /api/signin", s.handleSignIn)
 	mux.HandleFunc("POST /api/signout", s.handleSignOut)
+	mux.HandleFunc("POST /api/elevate", s.handleElevate)
 	mux.HandleFunc("GET /api/history", s.handleHistory)
 	mux.HandleFunc("GET /api/history/", s.handleHistory)
 	if s.hmi != nil {
@@ -1013,7 +1014,7 @@ func (s *Server) proxyStandby(routes *http.ServeMux, mux http.Handler) http.Hand
 // goes by the cookie being there, valid or not.
 func standbyRefers(r *http.Request) bool {
 	switch r.URL.Path {
-	case "/api/signin", "/api/signout":
+	case "/api/signin", "/api/signout", "/api/elevate":
 		return true
 	}
 	return hasSessionCookie(r) && presentedToken(r) == ""

@@ -573,9 +573,7 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		if tlsSrc != nil {
 			ln = tls.NewListener(apiLn, tlsSrc.Config())
 		}
-		if sopts.AuthToken == "" && !loopbackListen(addr) {
-			fmt.Fprintf(os.Stderr, openListenWarning, addr)
-		}
+		fmt.Fprint(os.Stderr, listenNotice(addr, sopts.AuthToken != "", sopts.Auth != nil, tlsSrc != nil, len(sopts.TrustedProxies) > 0))
 		// The HTTP port is the first thing shutdown gives back: it is
 		// closed as soon as the stop arrives (below), before the wait for
 		// the last scan and the deferred stops above (OPC UA sessions, the

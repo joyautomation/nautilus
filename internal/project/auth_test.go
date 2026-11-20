@@ -91,8 +91,10 @@ func TestLoadAuthRefuses(t *testing.T) {
 		{"auth:\n  service-tokens:\n    s: [{role: viewer, role: administrator}]\n", "role is given twice"},
 		{"auth:\n  areas:\n    r: {tags: []}\n", `area "r" names no tags`},
 		{"auth:\n  anonymous: operator\n", `use none or viewer`},
-		// auth.session is taken (5b); elevation waits for 5c.
-		{"auth:\n  elevation: 15m\n", "field elevation not found"},
+		{"auth:\n  elevation: -1m\n", "elevation -1m0s is out of range"},
+		{"auth:\n  elevation: 30s\n", "elevation 30s is out of range"},
+		{"auth:\n  elevation: 12h1m\n", "elevation 12h1m0s is out of range"},
+		{"auth:\n  elevation: soon\n", "bad duration"},
 		{"auth:\n  session: -1h\n", "session -1h0m0s is out of range"},
 		{"auth:\n  session: 30s\n", "session 30s is out of range"},
 		{"auth:\n  session: 169h\n", "session 169h0m0s is out of range"},
@@ -140,6 +142,27 @@ func TestLoadAuthSession(t *testing.T) {
 		}
 		if got := p.Auth.Session(); got != want {
 			t.Errorf("%q: session %s, want %s", block, got, want)
+		}
+	}
+}
+
+// auth.elevation sets how long a password counts for an elevated
+// permission; left out (or 0) it is 15m. One past the session is allowed:
+// the sign-in then counts for the whole session.
+func TestLoadAuthElevation(t *testing.T) {
+	for block, want := range map[string]time.Duration{
+		"auth:\n  elevation: 5m\n":                  5 * time.Minute,
+		"auth:\n  elevation: 0s\n":                  15 * time.Minute,
+		"auth:\n  users:\n    jsmith: [operator]\n": 15 * time.Minute,
+		"auth:\n  elevation: 1m\n":                  time.Minute,
+		"auth:\n  elevation: 12h\n  session: 1h\n":  12 * time.Hour,
+	} {
+		p, err := Load(authProject(block), "")
+		if err != nil {
+			t.Fatalf("%q: %v", block, err)
+		}
+		if got := p.Auth.Elevation(); got != want {
+			t.Errorf("%q: elevation %s, want %s", block, got, want)
 		}
 	}
 }

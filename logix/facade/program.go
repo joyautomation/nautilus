@@ -143,7 +143,7 @@ func (p *programPlane) get(w http.ResponseWriter, _ *http.Request) {
 func (p *programPlane) put(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
 	if code, msg := p.auth(r, server.PermEdit); code != 0 {
-		writeJSON(w, code, msg)
+		server.WriteRefusal(w, code, msg)
 		return
 	}
 	var req struct {
@@ -290,7 +290,7 @@ func errorEvent(err error) map[string]any {
 func (p *programPlane) deployStream(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
 	if code, msg := p.auth(r, server.PermDeploy); code != 0 {
-		writeJSON(w, code, msg)
+		server.WriteRefusal(w, code, msg)
 		return
 	}
 	var req struct {

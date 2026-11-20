@@ -114,7 +114,7 @@ func routes(s *Server, mux, other *http.ServeMux) {
 // sign-in and sign-out, which must work for an anonymous request and while
 // the journal is down, and journal themselves (auth.signin, auth.signout;
 // TestSignInAndOutJournalThemselves).
-var selfJournalled = map[string]bool{"POST /api/signin": true, "POST /api/signout": true}
+var selfJournalled = map[string]bool{"POST /api/signin": true, "POST /api/signout": true, "POST /api/elevate": true}
 
 // Every route that changes something records its entry through the
 // seam. A new write route registered without s.audited fails here.

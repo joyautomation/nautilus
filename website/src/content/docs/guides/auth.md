@@ -16,6 +16,7 @@ auth:
   anonymous: none            # what a request with no credential may do: none or viewer
   token-role: administrator  # NAUTILUS_TOKEN's role (the default)
   session: 12h               # how long a browser sign-in lasts (1m to 168h)
+  elevation: 15m             # how long its password counts for the elevated permissions (1m to 12h)
   areas:
     receiving: { tags: [RCV_*] }
     pumps:     { tags: [P1*, P2*] }
@@ -126,7 +127,21 @@ The endpoints, for an HMI of your own:
 | `GET /signin` | the sign-in page (`?next=/path` returns there afterwards, on this controller only) |
 | `POST /api/signin` | `{"name", "password"}` as JSON (`200` with `user` and `expires`) or a form (`303` to `next`) |
 | `POST /api/signout` | ends the session and clears the cookie |
-| `GET /api/me` | who the request acts as, its roles and permissions, `secure`, and the session's `expires` |
+| `POST /api/elevate` | `{"password"}`: the session's password again, for the [elevated permissions](#elevation) (`200` with `elevatedUntil`) |
+| `GET /api/me` | who the request acts as, its roles and permissions, `secure`, the session's `expires` and `elevatedUntil`, and the `elevated` permissions |
+
+## Elevation
+
+Some permissions change what the plant runs, so a signed-in browser holds them only while its password is fresh: **`force`, `edit`, `activate`, `deploy`, `config`, `users` and `override`**. Those are the elevated permissions. That includes clearing a force and rolling an edit back: clearing a force can start a motor.
+
+- **The window.** The password counts for `auth.elevation` (15 minutes by default, 1m to 12h) after the user last entered it, at sign-in or at re-authentication. Use doesn't extend it. It never outlasts the session; an `elevation` as long as `session` means the sign-in counts for the whole session.
+- **Past it**, an elevated action is refused with `401` and `{"error": …, "elevate": true}`, and nothing is done. The HMI asks for the password (`POST /api/elevate`) and sends the action again. A user who doesn't hold the permission at all gets a `403` and is never asked for a password.
+- **One browser.** Re-authenticating elevates that session only. The same user's other sign-ins (another screen) are not elevated.
+- **Tokens are always elevated.** `NAUTILUS_TOKEN`, service tokens and personal access tokens are sent with every request, and their role already bounds them. The journal says which kind of credential each elevated action came with (`detail.credential`: `session`, `pat`, `token` or `service`).
+- **Re-authentication** (`POST /api/elevate`) is checked like a sign-in: from the controller's own page, over HTTPS or from loopback, with one message for every wrong password. It's throttled per session, whatever address the attempts come from. Each wrong password also counts against the user's sign-in throttle. **After five wrong passwords in a row the session ends** (a stolen cookie guessing): the browser signs in again, and the journal records `auth.session-ended`. Every attempt is journalled as `auth.elevate`.
+- **The journal.** Elevation doesn't depend on it: re-authentication works while the journal is down. An elevated action that needs the journal is still refused then (`503`), after the password check.
+- **On a redundant pair** elevation lives with the session, on the leader. A standby refers `POST /api/elevate` there, like sign-in.
+- **OIDC** sign-in (to come) will elevate by signing in at the identity provider again.
 
 ## A redundant pair
 

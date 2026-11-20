@@ -180,7 +180,11 @@ served from another host writes.
 **With an `auth:` block** in the manifest, roles decide instead, reads
 included: every `GET` under `/api/` (the live stream too) needs the `read`
 permission, and each write its own. No credential is a `401`, a principal
-without the permission a `403`. Only `GET /api/me`, the sign-in routes,
+without the permission a `403`. A signed-in browser whose password is older
+than `auth.elevation` gets a `401` with `"elevate": true` for a force, an
+edit, an activation, a download or a configuration change: it enters the
+password again ([Elevation](/guides/auth/#elevation)) and sends the request
+again. Only `GET /api/me`, the sign-in routes,
 `/healthz` and `/readyz` answer without one, unless the block sets
 `anonymous: viewer`. A browser signs in instead of sending a token. See
 [Users, roles & sign-in](/guides/auth/).
@@ -231,6 +235,7 @@ check comes before the token check. See [Online edits](/guides/online-edits/).
 | `GET` | [`/api/history`, `/api/history/…`](#historian-proxy) | Forwarded to the historian |
 | `GET` | [`/api/audit`](#audit-journal) | Who changed what: the audit journal's recent entries |
 | `GET` | [`/api/me`](/guides/auth/#browser-sign-in) | Who the request acts as, and what it may do |
+| `POST` | [`/api/elevate`](/guides/auth/#elevation) | A signed-in browser enters its password again, for the elevated permissions |
 | `GET` | [`/healthz`](#healthz-and-readyz) | Liveness: `200 ok` |
 | `GET` | [`/readyz`](#healthz-and-readyz) | Readiness: `200 ok` on the controller that runs the process, `503` on a standby |
 

@@ -56,7 +56,10 @@ var signInQueue = 10 * time.Second
 // the password hash.
 type signInGate struct {
 	addrs, names *limiter
-	hashing      chan struct{}
+	// sessions is re-authentication's (POST /api/elevate) bucket per
+	// session: only the cookie's holder spends it.
+	sessions *limiter
+	hashing  chan struct{}
 }
 
 func newSignInGate() *signInGate {
@@ -64,8 +67,11 @@ func newSignInGate() *signInGate {
 		// 10 attempts at once, then one each 6 s.
 		addrs: newLimiter(10, 6*time.Second),
 		// 20 at once, then one a second.
-		names:   newLimiter(20, time.Second),
-		hashing: make(chan struct{}, signInHashing),
+		names: newLimiter(20, time.Second),
+		// 5 at once (the wrong passwords that end a session), then one
+		// each 6 s.
+		sessions: newLimiter(maxElevateFails, 6*time.Second),
+		hashing:  make(chan struct{}, signInHashing),
 	}
 }
 
