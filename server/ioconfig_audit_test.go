@@ -141,3 +141,28 @@ func TestIOApplyEntryCarriesTheChange(t *testing.T) {
 		}
 	}
 }
+
+// A failed apply's entry says where the candidate came from and the changes
+// validation computed; with none, it has no changes key.
+func TestIOFailedApplyEntryCarriesFromAndChanges(t *testing.T) {
+	for _, withChanges := range []bool{true, false} {
+		f := &fakeIO{valid: true, drivers: []string{"modbus"}, applyErr: fmt.Errorf("boom")}
+		if withChanges {
+			f.changes = []any{map[string]any{"driver": "modbus", "device": "DEV_A", "before": "aaaa", "after": "bbbb"}}
+		}
+		srv := New(newTestRuntime(t), ioOptions(f, true))
+		call(t, srv, "POST", "/api/io/staged", `{"files":{"modbus.yaml":"x"},"driver":"modbus"}`)
+		call(t, srv, "POST", "/api/io/staged/1/validate", "")
+		if rec := call(t, srv, "POST", "/api/io/staged/1/apply", ""); rec.Code == http.StatusOK {
+			t.Fatalf("apply succeeded: %s", rec.Body)
+		}
+		es := auditByAction(srv, "config.apply")
+		if len(es) != 1 || es[0].Result == audit.ResultOK || es[0].Detail["from"] != "upload" {
+			t.Fatalf("entries %+v, want one failed entry from upload", es)
+		}
+		ch, has := es[0].Detail["changes"]
+		if withChanges != has || (has && !strings.Contains(fmt.Sprint(ch), "bbbb")) {
+			t.Errorf("withChanges=%v: detail changes %v (present %v)", withChanges, ch, has)
+		}
+	}
+}

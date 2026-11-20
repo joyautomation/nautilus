@@ -1659,7 +1659,10 @@ func (io *IOConfig) runWatch(ctx context.Context, w *ioWatch) {
 	left, lost := w.revert()
 	if len(left) > 0 {
 		msg := fmt.Sprintf("%s; putting it back failed for %s: what runs there is not known; apply a candidate for it, or restart", reason, strings.Join(left, ", "))
-		io.markUnknown(lost, snap.By, msg)
+		// The revert is the system's act, not the applier's: the unit's
+		// record says system, the applier is in the fault text.
+		msg += " (applied by " + snap.By + ")"
+		io.markUnknown(lost, "system", msg)
 		slog.Error("config.apply: revert failed", "err", msg)
 		w.finish(WatchRevertFail, msg)
 		return

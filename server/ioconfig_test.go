@@ -32,6 +32,7 @@ type fakeIO struct {
 	// who the engine was told acted, and the apply id
 	stageBy, applyBy, applyID, cancelBy string
 	applyBody                           any
+	changes                             []any // validation\'s changes
 	onRevert                            func(IOWatch)
 }
 
@@ -53,7 +54,7 @@ func (f *fakeIO) hook() *IOHook {
 			if f.gate != nil {
 				<-f.gate
 			}
-			return f.valid, f.drivers, map[string]any{"valid": f.valid, "cand": cand}
+			return f.valid, f.drivers, map[string]any{"valid": f.valid, "cand": cand, "changes": f.changes}
 		},
 		Apply: func(ctx context.Context, cand any, a IOApply) (any, error) {
 			by, id, revertIfSilent := a.By, a.ID, a.RevertIfSilent

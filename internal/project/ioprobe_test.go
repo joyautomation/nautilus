@@ -490,6 +490,11 @@ func TestIOApplyAnswersAndRevertIfSilent(t *testing.T) {
 		if w := waitWatch(t, r); w.State != WatchRevertFail || !strings.Contains(r.io.Fault(), "DEV_A") {
 			t.Fatalf("watch %+v fault %q", w, r.io.Fault())
 		}
+		// The failed revert is the system's act: the unit it left unknown
+		// says system, and the applier is named in the fault text.
+		if d := r.io.Differs(); len(d) != 1 || d[0].By != "system" || !strings.Contains(r.io.Fault(), "applied by tester") {
+			t.Fatalf("differs %+v fault %q, want by system and the applier in the fault", d, r.io.Fault())
+		}
 	})
 	t.Run("the apply answers at once and keeps no lock", func(t *testing.T) {
 		r := startIORig(t, base, false)
