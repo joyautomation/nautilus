@@ -23,6 +23,21 @@ import (
 	"github.com/joyautomation/nautilus/siemens/tiad"
 )
 
+// stationCPU is the CPU of a station spec as tiad takes it, with every
+// default the manifest leaves out made explicit: the wire form has none.
+// A CPU that names no configuration protection is protected
+// (station.DefaultConfigurationProtection, #789: new stations are
+// protected by default); an adopted station says keep.
+func stationCPU(c station.CPU) tiad.CPU {
+	protection := c.ConfigurationProtection
+	if protection == "" {
+		protection = station.DefaultConfigurationProtection
+	}
+	return tiad.CPU{Name: c.Name, Order: c.Order, Firmware: c.Firmware, Address: c.Address,
+		SubnetMask: c.SubnetMask, Router: c.Router, ProfinetName: c.ProfinetName,
+		ConfigurationProtection: protection}
+}
+
 // gsdFile is a GSDML file a deploy puts in tiad's work dir and installs
 // (gsd/install) before it applies the station.
 type gsdFile struct {

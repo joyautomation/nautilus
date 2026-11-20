@@ -15,6 +15,8 @@ namespace Tiad
     public sealed class Cpu
     {
         public string Name = "", Order = "", Firmware = "", Address = "", SubnetMask = "", Router = "", ProfinetName = "";
+        // ConfigurationProtection is required: password, none or keep.
+        public string ConfigurationProtection = "";
 
         public static Cpu Read(Reader r)
         {
@@ -27,6 +29,7 @@ namespace Tiad
             c.SubnetMask = r.Str("subnetMask");
             c.Router = r.Str("router");
             c.ProfinetName = r.Str("profinetName");
+            c.ConfigurationProtection = r.Str("configurationProtection");
             return c;
         }
 
@@ -40,6 +43,7 @@ namespace Tiad
             o["subnetMask"] = SubnetMask;
             if (Router != "") o["router"] = Router;
             o["profinetName"] = ProfinetName;
+            o["configurationProtection"] = ConfigurationProtection;
             return o;
         }
     }
@@ -159,6 +163,9 @@ namespace Tiad
     {
         public Dictionary<string, string> WebUsers = new Dictionary<string, string>(StringComparer.Ordinal);
         public string Protection = "";
+        // ConfigurationPassword protects the CPU's confidential
+        // configuration data: its own secret, never Protection.
+        public string ConfigurationPassword = "";
 
         public static Secrets Read(Reader r)
         {
@@ -166,7 +173,31 @@ namespace Tiad
             if (r == null) return s;
             s.WebUsers = r.StrMap("webUsers");
             s.Protection = r.Str("protection");
+            s.ConfigurationPassword = r.Str("configurationPassword");
             return s;
+        }
+
+        // Check is tiad.Secrets.Check: a configuration password meets
+        // TIA's password rules. It never echoes a password.
+        public string Check()
+        {
+            if (ConfigurationPassword != "")
+            {
+                string e = StationRules.CheckTiaPassword(ConfigurationPassword);
+                if (e != null) return "secrets.configurationPassword " + e;
+            }
+            return null;
+        }
+
+        // CheckFor is tiad.Secrets.CheckFor: Check, and a configuration
+        // password when the station protects the configuration.
+        public string CheckFor(Station st)
+        {
+            if (st.Cpu.ConfigurationProtection == StationRules.ProtectPassword && ConfigurationPassword == "")
+            {
+                return "cpu.configurationProtection is password, and secrets.configurationPassword is empty (it comes from the secret store, never the spec)";
+            }
+            return Check();
         }
     }
 
@@ -260,6 +291,12 @@ namespace Tiad
             if (c.Router != "" && !Ip.IsIPv4(c.Router)) errs.Add("cpu.router " + Json.Quote(c.Router) + " is not an IPv4 address");
             string e = StationRules.CheckStationName(c.ProfinetName);
             if (e != null) errs.Add("cpu.profinetName: " + e);
+            if (c.ConfigurationProtection == "") errs.Add("cpu.configurationProtection is empty (one of password, none, keep)");
+            else
+            {
+                e = StationRules.CheckConfigurationProtection(c.ConfigurationProtection);
+                if (e != null) errs.Add("cpu.configurationProtection: " + e);
+            }
 
             if (WebServer != null)
             {
@@ -422,6 +459,39 @@ namespace Tiad
         };
 
         public const long MinUpdateTime = 16000000L; // 16ms in nanoseconds
+
+        public const string ProtectPassword = "password", ProtectNone = "none", ProtectKeep = "keep";
+
+        // CheckConfigurationProtection accepts password, none and keep.
+        public static string CheckConfigurationProtection(string v)
+        {
+            if (v == ProtectPassword || v == ProtectNone || v == ProtectKeep) return null;
+            return Json.Quote(v) + " is not one of password, none, keep";
+        }
+
+        public const int MinTiaPassword = 10, MaxTiaPassword = 120;
+
+        // CheckTiaPassword is station.CheckTiaPassword: TIA's password
+        // rules, lengths in UTF-16 code units (a .NET string's), classes
+        // ASCII. It names every rule broken and never echoes the password.
+        public static string CheckTiaPassword(string pw)
+        {
+            var broken = new List<string>();
+            if (pw.Length < MinTiaPassword) broken.Add("shorter than 10 characters");
+            else if (pw.Length > MaxTiaPassword) broken.Add("longer than 120 characters");
+            bool digit = false, upper = false, lower = false;
+            foreach (char r in pw)
+            {
+                digit = digit || r >= '0' && r <= '9';
+                upper = upper || r >= 'A' && r <= 'Z';
+                lower = lower || r >= 'a' && r <= 'z';
+            }
+            if (!digit) broken.Add("no digit");
+            if (!upper) broken.Add("no upper-case letter (A-Z)");
+            if (!lower) broken.Add("no lower-case letter (a-z)");
+            if (broken.Count == 0) return null;
+            return "breaks TIA's password rules (10 to 120 characters, at least one digit, one upper-case and one lower-case letter): " + string.Join(", ", broken);
+        }
 
         // CheckUpdateTime returns why s is not a usable update time, or null.
         public static string CheckUpdateTime(string s)

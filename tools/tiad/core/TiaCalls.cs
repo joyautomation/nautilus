@@ -220,6 +220,8 @@ namespace Tiad
         {
             string err = st.Validate();
             if (err != null) throw TiadException.BadRequest("{0}", err);
+            err = sec.CheckFor(st);
+            if (err != null) throw TiadException.BadRequest("{0}", err);
             if (st.Profinet != null)
             {
                 foreach (var d in st.Profinet.Devices)

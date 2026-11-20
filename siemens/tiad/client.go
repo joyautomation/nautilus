@@ -564,6 +564,9 @@ func (c *Client) CreateProject(ctx context.Context, name string, st Station, sec
 	if err := st.Validate(); err != nil {
 		return nil, &Error{Kind: KindBadRequest, Message: err.Error()}
 	}
+	if err := sec.CheckFor(st); err != nil {
+		return nil, &Error{Kind: KindBadRequest, Message: err.Error()}
+	}
 	var s Session
 	if _, err := c.doJSON(ctx, http.MethodPost, "/v1/projects",
 		map[string]any{"name": name, "station": st, "secrets": sec}, &s); err != nil {
@@ -624,6 +627,9 @@ type StationResult struct {
 // in st is removed.
 func (s *Session) ApplyStation(ctx context.Context, st Station, sec Secrets) (StationResult, error) {
 	if err := st.Validate(); err != nil {
+		return StationResult{}, &Error{Kind: KindBadRequest, Message: err.Error()}
+	}
+	if err := sec.CheckFor(st); err != nil {
 		return StationResult{}, &Error{Kind: KindBadRequest, Message: err.Error()}
 	}
 	var r StationResult

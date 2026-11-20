@@ -55,10 +55,7 @@ func benchCPU() station.CPU {
 		Address: "192.0.2.10", SubnetMask: "255.255.255.0", ProfinetName: "plc-1"}
 }
 
-func tiadCPU(c station.CPU) tiad.CPU {
-	return tiad.CPU{Name: c.Name, Order: c.Order, Firmware: c.Firmware, Address: c.Address,
-		SubnetMask: c.SubnetMask, Router: c.Router, ProfinetName: c.ProfinetName}
-}
+func tiadCPU(c station.CPU) tiad.CPU { return stationCPU(c) }
 
 // TestExpandProfinetReference expands a reference into exactly the device
 // #814's mapping names, and the GSDML it installs is the one
@@ -137,7 +134,17 @@ func TestExpandedStationThroughTiad(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	s, err := c.CreateProject(ctx, "bench", st, tiad.Secrets{}) // P2
+	// The default protects the configuration: its password comes from
+	// the secret store, here a test value.
+	if st.CPU.ConfigurationProtection != tiad.ProtectPassword {
+		t.Fatalf("a CPU naming no configuration protection expands to %q, want password", st.CPU.ConfigurationProtection)
+	}
+	sec := tiad.Secrets{ConfigurationPassword: tiadtest.BenchConfigurationPassword}
+	if _, err := c.CreateProject(ctx, "bench", st, tiad.Secrets{}); tiad.Kind(err) != tiad.KindBadRequest ||
+		!strings.Contains(err.Error(), "secrets.configurationPassword is empty") {
+		t.Fatalf("a protected station without its password: %v", err)
+	}
+	s, err := c.CreateProject(ctx, "bench", st, sec) // P2
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,3 +293,15 @@ func TestExpandProfinetNone(t *testing.T) {
 }
 
 func intp(i int) *int { return &i }
+
+// TestStationCPUDefaults: the manifest's empty configuration protection
+// is the protected default, and any value it names goes through as is.
+func TestStationCPUDefaults(t *testing.T) {
+	for in, want := range map[string]string{"": "password", "password": "password", "none": "none", "keep": "keep"} {
+		c := benchCPU()
+		c.ConfigurationProtection = in
+		if got := stationCPU(c).ConfigurationProtection; got != want {
+			t.Errorf("configuration-protection %q expands to %q, want %q", in, got, want)
+		}
+	}
+}

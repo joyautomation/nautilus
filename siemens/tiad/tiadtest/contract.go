@@ -98,6 +98,7 @@ func Contract(t *testing.T, start Starter) {
 	contractTIA(t, start)
 	contractDownload(t, start)
 	t.Run("Pins", func(t *testing.T) { contractPins(t, start) })
+	t.Run("Protection", func(t *testing.T) { contractProtection(t, start) })
 }
 
 // ContractNoTIA is the part of the contract that never needs TIA and
@@ -313,6 +314,20 @@ func envelopeKind(b []byte) string {
 		return ""
 	}
 	return env.Error.Kind
+}
+
+// envelopeMessage returns the error message of a failed envelope, as
+// decoded JSON (the agent escapes some characters the fake does not).
+func envelopeMessage(b []byte) string {
+	var env struct {
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(b, &env) != nil || env.Error == nil {
+		return ""
+	}
+	return env.Error.Message
 }
 
 func files(t *testing.T, c *tiad.Client) []tiad.FileInfo {

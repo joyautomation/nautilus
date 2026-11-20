@@ -18,6 +18,7 @@ func TestResolve(t *testing.T) {
 	reinit := Question{ID: QuestionReinitialize, Message: "Reinitialise", Objects: []string{"Tags", "Prog_DB"}}
 	cert := Question{ID: QuestionCertificate, Detail: "AB12"}
 	pw := Question{ID: QuestionPassword}
+	cfg := Question{ID: QuestionConfigurationPassword}
 	other := Question{ID: QuestionOther, Message: "Something new"}
 
 	cases := []struct {
@@ -25,28 +26,33 @@ func TestResolve(t *testing.T) {
 		qs                   []Question
 		d                    Decisions
 		protection           bool
+		configPassword       bool
 		unanswered, declined string
 	}{
-		{"nothing asked", nil, Decisions{}, false, "", ""},
-		{"stop unanswered", []Question{stop}, Decisions{}, false, "stop-cpu", ""},
-		{"stop yes", []Question{stop}, Decisions{StopCPU: Yes()}, false, "", ""},
-		{"stop no", []Question{stop}, Decisions{StopCPU: No()}, false, "", "stop-cpu"},
-		{"start-after no is stay in STOP", []Question{{ID: QuestionStartAfter}}, Decisions{StartAfter: No()}, false, "", ""},
-		{"start-after unanswered", []Question{{ID: QuestionStartAfter}}, Decisions{}, false, "start-after", ""},
-		{"reinit all agreed, any case", []Question{reinit}, Decisions{Reinitialize: []string{"tags", "PROG_DB"}}, false, "", ""},
-		{"reinit partly agreed", []Question{reinit}, Decisions{Reinitialize: []string{"Tags"}}, false, "reinitialize", ""},
-		{"reinit unanswered", []Question{reinit}, Decisions{}, false, "reinitialize", ""},
-		{"reinit naming nothing is never answered", []Question{{ID: QuestionReinitialize}}, Decisions{Reinitialize: []string{"Tags"}}, false, "reinitialize", ""},
-		{"cert matches", []Question{cert}, Decisions{TrustCertificate: "ab12"}, false, "", ""},
-		{"cert differs", []Question{cert}, Decisions{TrustCertificate: "FFFF"}, false, "", "certificate"},
-		{"password from secret", []Question{pw}, Decisions{}, true, "", ""},
-		{"password missing", []Question{pw}, Decisions{}, false, "password", ""},
-		{"other never answered", []Question{other}, Decisions{StopCPU: Yes(), Overwrite: Yes(), StartAfter: Yes()}, true, "other", ""},
-		{"unknown id is other", []Question{{ID: "new-in-v22"}}, Decisions{StopCPU: Yes()}, true, "new-in-v22", ""},
+		{"nothing asked", nil, Decisions{}, false, false, "", ""},
+		{"stop unanswered", []Question{stop}, Decisions{}, false, false, "stop-cpu", ""},
+		{"stop yes", []Question{stop}, Decisions{StopCPU: Yes()}, false, false, "", ""},
+		{"stop no", []Question{stop}, Decisions{StopCPU: No()}, false, false, "", "stop-cpu"},
+		{"start-after no is stay in STOP", []Question{{ID: QuestionStartAfter}}, Decisions{StartAfter: No()}, false, false, "", ""},
+		{"start-after unanswered", []Question{{ID: QuestionStartAfter}}, Decisions{}, false, false, "start-after", ""},
+		{"reinit all agreed, any case", []Question{reinit}, Decisions{Reinitialize: []string{"tags", "PROG_DB"}}, false, false, "", ""},
+		{"reinit partly agreed", []Question{reinit}, Decisions{Reinitialize: []string{"Tags"}}, false, false, "reinitialize", ""},
+		{"reinit unanswered", []Question{reinit}, Decisions{}, false, false, "reinitialize", ""},
+		{"reinit naming nothing is never answered", []Question{{ID: QuestionReinitialize}}, Decisions{Reinitialize: []string{"Tags"}}, false, false, "reinitialize", ""},
+		{"cert matches", []Question{cert}, Decisions{TrustCertificate: "ab12"}, false, false, "", ""},
+		{"cert differs", []Question{cert}, Decisions{TrustCertificate: "FFFF"}, false, false, "", "certificate"},
+		{"password from secret", []Question{pw}, Decisions{}, true, false, "", ""},
+		{"password missing", []Question{pw}, Decisions{}, false, false, "password", ""},
+		{"configuration password from its secret", []Question{cfg}, Decisions{}, false, true, "", ""},
+		{"configuration password missing", []Question{cfg}, Decisions{}, false, false, "configuration-password", ""},
+		{"protection password never answers configuration-password", []Question{cfg}, Decisions{}, true, false, "configuration-password", ""},
+		{"configuration password never answers password", []Question{pw}, Decisions{}, false, true, "password", ""},
+		{"other never answered", []Question{other}, Decisions{StopCPU: Yes(), Overwrite: Yes(), StartAfter: Yes()}, true, false, "other", ""},
+		{"unknown id is other", []Question{{ID: "new-in-v22"}}, Decisions{StopCPU: Yes()}, true, false, "new-in-v22", ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			u, d := Resolve(c.qs, c.d, c.protection)
+			u, d := Resolve(c.qs, c.d, c.protection, c.configPassword)
 			if ids(u) != c.unanswered || ids(d) != c.declined {
 				t.Fatalf("Resolve = unanswered %q declined %q, want %q %q", ids(u), ids(d), c.unanswered, c.declined)
 			}
@@ -56,7 +62,7 @@ func TestResolve(t *testing.T) {
 
 func TestResolveNamesTheMissingDB(t *testing.T) {
 	q := Question{ID: QuestionReinitialize, Message: "Reinitialise", Objects: []string{"Tags", "Prog_DB"}}
-	u, _ := Resolve([]Question{q}, Decisions{Reinitialize: []string{"Tags"}}, false)
+	u, _ := Resolve([]Question{q}, Decisions{Reinitialize: []string{"Tags"}}, false, false)
 	if len(u) != 1 || !strings.Contains(u[0].Message, "not agreed: Prog_DB") {
 		t.Fatalf("got %+v", u)
 	}

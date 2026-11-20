@@ -255,7 +255,7 @@ own environment in `secrets` (§3.4).
   "cpu": {
     "name": "PLC_1", "order": "6ES7 510-1DK03-0AB0", "firmware": "V3.1",
     "address": "192.0.2.10", "subnetMask": "255.255.255.0", "router": "",
-    "profinetName": "plc_1"
+    "profinetName": "plc_1", "configurationProtection": "password"
   },
   "webServer": { "enabled": true, "users": [ { "name": "naut", "rights": ["read", "write", "mode"] } ] },
   "modules": [ { "slot": 2, "order": "6ES7 131-6BH01-0BA0", "firmware": "V2.0", "inputStart": 0 } ],
@@ -296,6 +296,37 @@ The rules for applying a spec:
 - **Every device's GSDML must already be installed** (`gsd/install`).
 - **Every web user needs a password** in `secrets.webUsers`. Its rights are
   any of `read`, `write`, `mode` (change RUN/STOP) and `diagnostics`.
+- **`cpu.configurationProtection` is required on the wire**: the FW 3.1
+  protection of the CPU's confidential configuration data (#789, decision
+  of 2026-11-19). A FW 3.1 CPU does not compile until it is set up.
+  - `password`: protected, with `secrets.configurationPassword`. A CPU
+    already protected is left as it is: TIA cannot check a password
+    offline, and a download asks for it.
+  - `none`: off, an explicit choice. Turning off a protected CPU needs its
+    password.
+  - `keep`: tiad changes nothing, for an adopted station. A CPU whose
+    protection is not set up (TIA's default for a new CPU) refuses `keep`,
+    because it would not compile.
+  - The decision comes from the state the project holds after the
+    station step, not from the spec applied before. After every write
+    tiad reads the state back and refuses unless it is the promised one.
+    A CPU without the setting (firmware before 3.1) takes only `keep`.
+  - **Known gap, fixed next:** applying a spec to a project that holds no
+    spec in the session (after an upload, an open or a failed apply)
+    makes the CPU anew, so an uploaded CPU's settings do not survive it,
+    and `keep` refuses there. The fix reuses the project's CPU when its
+    order, firmware and name match.
+  - In `nautilus.yaml` the field is `configuration-protection`. Left out,
+    it is `password`: a new station is protected by default.
+  - Proven offline on the TIA machine: a new CPU reads
+    `WithoutPassword`, `Protect` moves it to `WithPassword`, and
+    `Unprotect` with the password to `None`. Not yet proven: a bare
+    `Unprotect` of a new CPU (`none` on a new station) and `Protect` from
+    `None`. The read-back refuses either if TIA does otherwise.
+- **Passwords meet TIA's rules before any TIA call**: 10 to 120
+  characters (UTF-16 code units), at least one digit, one upper-case and
+  one lower-case letter (ASCII classes, which can only be stricter than
+  TIA). The refusal names every rule broken and never the password.
 - **I-device transfer areas come later**, as `iDevice:` (P6).
 
 **Where a PROFINET device's entry comes from.** In `nautilus.yaml`, a
@@ -355,7 +386,9 @@ The client checks each path and the agent checks again.
 | `POST /v1/sessions/{id}/save` | `{archive?}` → `{path}` |
 | `GET /v1/pins`, `POST /v1/pins/{address}` | The device pins (§3.8). An upload pins the CPU on first use and must match after; compare and download check the pin first |
 
-`secrets` is `{"webUsers": {"naut": "<password>"}, "protection": "<password>"}`.
+`secrets` is `{"webUsers": {"naut": "<password>"}, "protection": "<password>", "configurationPassword": "<password>"}`.
+Each password answers only its own question: the protection password
+never answers `configuration-password`, and the other way round.
 tiad never logs it and never writes it to the work dir. Run tiad on
 loopback or across the tailnet, because the requests are plain HTTP.
 
@@ -371,7 +404,7 @@ Request:
   "decisions": { "stopCpu": true, "reinitialize": ["Tags"], "overwrite": true,
                  "startAfter": true, "trustCertificate": "<sha256 fingerprint>" },
   "announced": true,
-  "secrets": { "protection": "<password>" }
+  "secrets": { "protection": "<password>", "configurationPassword": "<password>" }
 }
 ```
 
@@ -428,8 +461,9 @@ behaviour. So, until then:
   the CPU. Both fakes ask it the same way.
 - **Every download is audited**: one log line with the address, the
   question IDs asked (never TIA's text), the decisions (request-supplied
-  names quoted), whether a protection password was set (never its
-  value) and the outcome, refusals included.
+  names quoted), whether a protection password and a configuration
+  password were set (never their values) and the outcome, refusals
+  included.
 
 - **A dry run** (provisional, see above) runs TIA's pre-download checks
   and returns them as `questions`. The `id` is one of:
@@ -438,6 +472,9 @@ behaviour. So, until then:
   - `overwrite`
   - `start-after`
   - `password`
+  - `configuration-password` (TIA's `PlcMasterSecretPassword`: the
+    password protecting the configuration data, answered only by
+    `secrets.configurationPassword`; unproven until S2b)
   - `certificate` (detail is the fingerprint)
   - `other` (the check's own text)
 - **A real download** answers each question only from `decisions`.

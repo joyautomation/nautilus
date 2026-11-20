@@ -490,8 +490,50 @@ namespace Tiad.Openness
                 Set("Node", node,
                     "PnDeviceNameAutoGeneration", false,
                     "PnDeviceName", next.Cpu.ProfinetName);
+                Protect(CpuOf(station), next.Cpu.ConfigurationProtection, secrets);
                 return Station.Changes(same ? previous : null, next);
             });
+        }
+
+        // Protect applies cpu.configurationProtection from the CPU's state
+        // as the project holds it now (ConfigProtection decides), then
+        // reads it back: anything but the promised state refuses.
+        static void Protect(DeviceItem cpu, string want, Secrets secrets)
+        {
+            PlcMasterSecretConfigurator c = cpu.GetService<PlcMasterSecretConfigurator>();
+            string current = c == null ? ConfigProtection.Absent : c.MasterSecretConfiguration.ToString();
+            string action = ConfigProtection.Plan(current, want, secrets.ConfigurationPassword != "");
+            if (action == ConfigProtection.Nothing)
+            {
+                if (current == ConfigProtection.WithPassword && want == StationRules.ProtectPassword)
+                {
+                    Log.Line("configuration protection: already protected; TIA cannot check its password offline, so a download asks for it");
+                }
+                return;
+            }
+            if (action == ConfigProtection.Unprotect)
+            {
+                c.Unprotect();
+            }
+            else
+            {
+                using (var ss = Secure(secrets.ConfigurationPassword))
+                {
+                    if (action == ConfigProtection.Protect) c.Protect(ss);
+                    else c.Unprotect(ss);
+                }
+            }
+            string bad = ConfigProtection.Check(action, c.MasterSecretConfiguration.ToString());
+            if (bad != null) throw new TiaException(bad);
+            Log.Line("configuration protection: {0}, now {1}", action, c.MasterSecretConfiguration);
+        }
+
+        static SecureString Secure(string s)
+        {
+            var ss = new SecureString();
+            foreach (char ch in s) ss.AppendChar(ch);
+            ss.MakeReadOnly();
+            return ss;
         }
 
         // ---- software ----
@@ -727,19 +769,16 @@ namespace Tiad.Openness
         }
 
         // Apply writes a setting into a configuration: a selection by its
-        // enum name, or the protection password.
+        // enum name, or a password: the protection password or the
+        // configuration password, each only where Setting.Secret puts it.
         static void Apply(DownloadConfiguration c, Setting s, Secrets secrets)
         {
-            if (s.Kind == Setting.Password)
+            string secret = Setting.Secret(s, secrets);
+            if (secret != null)
             {
                 var pw = c as DownloadPasswordConfiguration;
-                if (pw == null || secrets.Protection == "") throw new TiaException("no protection password for " + c.GetType().Name);
-                using (var ss = new SecureString())
-                {
-                    foreach (char ch in secrets.Protection) ss.AppendChar(ch);
-                    ss.MakeReadOnly();
-                    pw.SetPassword(ss);
-                }
+                if (pw == null || secret == "") throw new TiaException("no " + s.Kind + " secret for " + c.GetType().Name);
+                using (var ss = Secure(secret)) pw.SetPassword(ss);
                 return;
             }
             var prop = c.GetType().GetProperty("CurrentSelection");
