@@ -36,6 +36,7 @@ on the right, and a **Check** button that tests your answer.
 1. [Read one Modbus register, with no hardware](/learn/io-and-protocols/modbus-first-read/)
 2. [From a datasheet to a device map](/learn/io-and-protocols/datasheet-to-device-map/)
 3. [Serve your tags over OPC UA](/learn/io-and-protocols/opcua-first-browse/)
+4. [Publish your tags over MQTT (Sparkplug B)](/learn/io-and-protocols/sparkplug-publish/)
 
 ## Operator screens
 
