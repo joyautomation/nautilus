@@ -489,10 +489,13 @@ func Digest(path string) ([32]byte, error) {
 // Change is one difference between two versions of the file, for the
 // journal: never a hash or a secret.
 type Change struct {
-	User   string // the user changed
-	What   string // added, removed, password, disabled, enabled, token issued, token revoked
-	Token  string // the token's id, for a token change
-	Detail string
+	User string // the user changed
+	// Principal is the journal's target when it is not user:<User>: an
+	// OIDC name's pin (oidc:<name>), or the principal a sign-out names.
+	Principal string
+	What      string // added, removed, password, disabled, enabled, token issued, token revoked; pinned, unpinned, pin changed; signed out
+	Token     string // the token's id, for a token change
+	Detail    string
 	// Stopped marks a change made while the controller was not running,
 	// found against its record of what it last saw (Store.CatchUp).
 	Stopped bool

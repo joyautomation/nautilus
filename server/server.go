@@ -87,6 +87,7 @@ import (
 	"github.com/joyautomation/nautilus/audit"
 	"github.com/joyautomation/nautilus/auth"
 	"github.com/joyautomation/nautilus/auth/users"
+	"github.com/joyautomation/nautilus/internal/oidcseam"
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/leader"
 	"github.com/joyautomation/nautilus/runtime"
@@ -320,6 +321,17 @@ type Options struct {
 	// standby refers a signed-in browser to the leader's; without one it
 	// names no address (a peer address must never reach a browser).
 	LeaderURLs map[string]string
+
+	// OIDC signs browsers in at the auth: block's OpenID Connect provider
+	// (#708 PR 6, oidc.go): naut run hands it auth/oidc's client. It needs
+	// Auth with auth.oidc and Users (the pins and sign-outs live beside the
+	// users file); without them it is ignored. OIDCRedirectURL is
+	// auth.oidc.redirect-url: "" derives the redirect URI from a trusted
+	// Host.
+	// The seam's type is internal (internal/oidcseam): not stable Go API
+	// while #708 is open.
+	OIDC            oidcseam.Provider
+	OIDCRedirectURL string
 
 	// Users is the controller's users file (#708): a personal access token
 	// it holds is a credential acting as "user:<name>", with the grants
@@ -592,6 +604,11 @@ type Server struct {
 	leaderURLs map[string]string // Options.LeaderURLs
 	sessions   *sessions         // browser sign-ins; nil without users to sign in
 	signin     *signInGate
+	// oidc is the OIDC provider's seam, nil without OIDC sign-in; the
+	// flows under way and the configured redirect URI go with it.
+	oidc         oidcseam.Provider
+	oidcFlows    *oidcFlows
+	oidcRedirect string
 
 	// unforceAllChecked, when set (tests only), runs between clear-all's
 	// check of the forced tags and its clearing of them.
@@ -711,6 +728,9 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 				s.sessions = newSessions(s.policy.Session())
 				s.sessions.OnEnd(s.endSessionStreams)
 				s.signin = newSignInGate()
+				if opts[0].OIDC != nil && s.policy.OIDC() {
+					s.oidc, s.oidcFlows, s.oidcRedirect = opts[0].OIDC, newOIDCFlows(), opts[0].OIDCRedirectURL
+				}
 			}
 			u.OnChange(s.journalUsersChange)
 			u.OnHealth(s.journalUsersHealth)
@@ -875,6 +895,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/signin", s.handleSignIn)
 	mux.HandleFunc("POST /api/signout", s.handleSignOut)
 	mux.HandleFunc("POST /api/elevate", s.handleElevate)
+	mux.HandleFunc("GET /auth/oidc/start", s.handleOIDCStart)
+	mux.HandleFunc("GET /auth/oidc/callback", s.handleOIDCCallback)
 	mux.HandleFunc("GET /api/history", s.handleHistory)
 	mux.HandleFunc("GET /api/history/", s.handleHistory)
 	if s.hmi != nil {
@@ -1036,7 +1058,7 @@ func (s *Server) proxyStandby(routes *http.ServeMux, mux http.Handler) http.Hand
 // goes by the cookie being there, valid or not.
 func standbyRefers(r *http.Request) bool {
 	switch r.URL.Path {
-	case "/api/signin", "/api/signout", "/api/elevate":
+	case "/api/signin", "/api/signout", "/api/elevate", oidcStartPath, oidcCallbackPath:
 		return true
 	}
 	return hasSessionCookie(r) && presentedToken(r) == ""

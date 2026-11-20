@@ -23,13 +23,18 @@ import (
 const authUsage = `naut auth — turn on users, roles and sign-in (#708)
 
 Usage:
-  naut auth init [--user <name>:<role>]... [--no-tls] [--project <dir>] [-m <manifest>]
+  naut auth init [--user <name>:<role>]... [--oidc <issuer> --client-id <id>]
+                 [--no-tls] [--project <dir>] [-m <manifest>]
         Write a starter auth: block into nautilus.yaml: the users given,
         and the other keys as commented examples. Refused when the
         manifest has an auth: block already. Unless --no-tls, it also
         writes server.tls: self-signed (HTTPS with a certificate the
         controller makes), and prints that certificate's fingerprint;
         not on a redundant pair, behind a TLS proxy, or with a server.tls.
+        --oidc adds sign-in at an OpenID Connect provider (auth.oidc: Entra
+        ID, Google, Keycloak, Okta) with the client id it registered; its
+        secret goes in NAUTILUS_OIDC_SECRET on the controller. Not on a
+        redundant pair yet.
 
 Roles: viewer, operator, supervisor, engineer, administrator (each adds to
 the one before), or a custom one of the block's roles:.
@@ -57,6 +62,8 @@ func authMain(args []string, stdout, stderr io.Writer, getenv func(string) strin
 	dir := fs.String("project", ".", "project directory")
 	manifest := fs.String("m", "", manifestFlagUsage)
 	noTLS := fs.Bool("no-tls", false, "write no server.tls: self-signed (a TLS proxy in front, or a certificate of your own)")
+	issuer := fs.String("oidc", "", "sign in at this OpenID Connect provider (its issuer URL)")
+	clientID := fs.String("client-id", "", "the client id the OIDC provider registered for this controller")
 	var specs []string
 	fs.Func("user", "a user and the role to grant, <name>:<role> (repeatable)", func(s string) error {
 		specs = append(specs, s)
@@ -93,6 +100,16 @@ func authMain(args []string, stdout, stderr io.Writer, getenv func(string) strin
 		seen[g.name] = true
 		grants = append(grants, g)
 	}
+	var oidc *project.AuthOIDC
+	if *issuer != "" || *clientID != "" {
+		if *issuer == "" || *clientID == "" {
+			return fail(errors.New("--oidc <issuer> and --client-id <id> go together"))
+		}
+		if !safeOIDCValue(*issuer) || !safeOIDCValue(*clientID) {
+			return fail(errors.New("--oidc and --client-id take a URL and an id: letters, digits and : / . _ - ~ % only"))
+		}
+		oidc = &project.AuthOIDC{Issuer: *issuer, ClientID: *clientID}
+	}
 	e, err := openManifestEdit(*dir, *manifest)
 	if err != nil {
 		return fail(err)
@@ -100,11 +117,14 @@ func authMain(args []string, stdout, stderr io.Writer, getenv func(string) strin
 	if k, _ := child(e.root, "auth"); k != nil {
 		return fail(fmt.Errorf("%s has an auth: block already (line %d): edit it there", e.path, k.Line))
 	}
+	if oidc != nil && e.m.Redundancy != nil {
+		return fail(errors.New("--oidc: OIDC sign-in is not available on a redundant pair yet (each box would pin names on its own); use local users there (--user)"))
+	}
 	tlsDone, tlsWhy := addSelfSignedTLS(e, *noTLS)
-	e.appendBlock(starterAuth(grants))
+	e.appendBlock(starterAuth(grants, oidc))
 	// Exact: the result is the manifest as it was plus an auth: block
 	// that names these users with these grants and nothing else.
-	want := &project.AuthConfig{Users: map[string][]project.AuthGrant{}}
+	want := &project.AuthConfig{Users: map[string][]project.AuthGrant{}, OIDC: oidc}
 	for _, g := range grants {
 		want.Users[g.name] = []project.AuthGrant{{Role: g.role, Areas: g.areas}}
 	}
@@ -112,7 +132,7 @@ func authMain(args []string, stdout, stderr io.Writer, getenv func(string) strin
 		return fail(err)
 	}
 	fmt.Fprintf(stderr, "%s: wrote a starter auth: block", e.path)
-	if len(grants) == 0 {
+	if len(grants) == 0 && oidc == nil {
 		fmt.Fprintln(stderr, " with no users: only NAUTILUS_TOKEN (and service tokens) work until auth.users names one")
 	} else {
 		fmt.Fprintln(stderr)
@@ -141,6 +161,11 @@ func authMain(args []string, stdout, stderr io.Writer, getenv func(string) strin
 	fmt.Fprintln(stderr, "Next:")
 	for _, g := range grants {
 		fmt.Fprintf(stderr, "  naut users add %s       # %s's password, kept on the controller (sudo on a box)\n", g.name, g.name)
+	}
+	if oidc != nil {
+		fmt.Fprintf(stderr, "  register the redirect URI https://<the controller's host>%s at the provider (naut run prints it)\n", project.OIDCCallbackPath)
+		fmt.Fprintf(stderr, "  set %s on the controller to the client secret the provider issued\n", oidcSecretEnv)
+		fmt.Fprintln(stderr, "  map a group id under auth.oidc.groups (the id, never the display name), or a name under auth.oidc.users")
 	}
 	fmt.Fprintln(stderr, "  "+restartNote)
 	return 0
@@ -197,8 +222,22 @@ func (g grantSpec) yaml() string {
 	return "[{role: " + g.role + ", areas: [" + strings.Join(g.areas, ", ") + "]}]"
 }
 
+// safeOIDCValue reports an issuer URL or client id naut auth init may
+// write: one plain quoted YAML scalar, nothing typed here can add a key.
+func safeOIDCValue(s string) bool {
+	if s == "" || len(s) > 512 {
+		return false
+	}
+	for _, r := range s {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune(":/._-~%", r)) {
+			return false
+		}
+	}
+	return true
+}
+
 // starterAuth is the block naut auth init writes.
-func starterAuth(grants []grantSpec) string {
+func starterAuth(grants []grantSpec, oidc *project.AuthOIDC) string {
 	var b strings.Builder
 	b.WriteString(`# Who may do what (#708; guide: Users, roles & sign-in). The roles are
 # here, reviewed in git; passwords and tokens never are: they live on the
@@ -212,6 +251,17 @@ auth:
 		for _, g := range grants {
 			fmt.Fprintf(&b, "    %s: %s\n", g.name, g.yaml())
 		}
+	}
+	if oidc != nil {
+		fmt.Fprintf(&b, `  oidc:                      # sign-in at an OpenID Connect provider; secret from NAUTILUS_OIDC_SECRET
+    issuer: "%s"
+    client-id: "%s"
+    # groups:                  # by group id (Entra object id, Keycloak group path), never display name
+    #   "<group id>": operator
+    # users:                   # by name (the username claim), for a provider without groups
+    #   jsmith@corp.example: engineer
+    # redirect-url: https://<host>/auth/oidc/callback   # default: built from a trusted Host
+`, oidc.Issuer, oidc.ClientID)
 	}
 	b.WriteString(`  # anonymous: viewer          # a request with no credential may read (a wall screen)
   # session: 12h               # a browser sign-in lasts this long (1m to 168h)

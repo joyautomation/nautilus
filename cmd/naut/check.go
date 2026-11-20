@@ -614,6 +614,15 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 			"set `sparkplug: operator` (or a role with write, with areas) under auth:\n", loc.file)
 	}
 
+	// What the auth: block's compiler found odd but not wrong: an
+	// auth.oidc.groups key that looks like a display name.
+	if proj.Auth != nil {
+		for _, w := range proj.Auth.Warnings() {
+			warns++
+			fmt.Printf("%s: warning: %s\n", loc.file, w)
+		}
+	}
+
 	// opcua.writable against the tags it is meant to open: a pattern that
 	// opens nothing, or only inputs (never writable), is a list that does
 	// not say what its author thinks; an output a program writes is open to

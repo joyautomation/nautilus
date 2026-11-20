@@ -259,6 +259,7 @@ func TestSchemaAuthKeys(t *testing.T) {
 		sub func(json.RawMessage) json.RawMessage
 	}{
 		{"areas", AuthArea{}, additional},
+		{"oidc", AuthOIDC{}, func(m json.RawMessage) json.RawMessage { return m }},
 		{"roles", AuthRole{}, additional},
 		{"users", AuthGrant{}, func(m json.RawMessage) json.RawMessage {
 			var n struct {
@@ -286,4 +287,61 @@ func additional(m json.RawMessage) json.RawMessage {
 	}
 	json.Unmarshal(m, &n)
 	return n.Additional
+}
+
+// auth.oidc loads into a policy that grants by group id and by name, and
+// a block that could never sign anyone in is refused with the fix.
+func TestLoadAuthOIDC(t *testing.T) {
+	block := "auth:\n  oidc:\n    issuer: https://login.example/realm\n    client-id: naut\n" +
+		"    groups:\n      \"8f1c-ops\": operator\n      \"Plant Engineers\": engineer\n" +
+		"    users:\n      JSmith@corp.example: [{role: viewer}]\n"
+	p, err := Load(authProject(block), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.AuthOIDC == nil || p.AuthOIDC.Issuer != "https://login.example/realm" || p.AuthOIDC.ClientID != "naut" {
+		t.Fatalf("AuthOIDC %+v", p.AuthOIDC)
+	}
+	pol := p.Auth
+	if !pol.OIDC() || !pol.Can(auth.OIDC("x", []string{"8f1c-ops"}), auth.Write, "RCV_FLOW").Allowed {
+		t.Error("group 8f1c-ops does not write")
+	}
+	if pol.Can(auth.OIDC("x", []string{"8F1C-OPS"}), auth.Write, "RCV_FLOW").Allowed {
+		t.Error("a group id matched in another case")
+	}
+	if !pol.Holds(auth.OIDC("jsmith@corp.example", nil), auth.Read) || pol.Holds(auth.User("jsmith@corp.example"), auth.Read) {
+		t.Error("auth.oidc.users granted the wrong principal")
+	}
+	if w := pol.Warnings(); len(w) != 1 || !strings.Contains(w[0], "Plant Engineers") || !strings.Contains(w[0], "display name") {
+		t.Errorf("warnings %v", w)
+	}
+
+	for _, c := range []struct{ block, want string }{
+		{"auth:\n  oidc:\n    client-id: naut\n", "oidc.issuer is empty"},
+		{"auth:\n  oidc:\n    issuer: http://login.example\n    client-id: naut\n", "give an https:// URL"},
+		{"auth:\n  oidc:\n    issuer: https://login.example\n", "oidc.client-id is empty"},
+		{"auth:\n  oidc:\n    issuer: https://login.example\n    client-id: n\n    redirect-url: https://plc.example/callback\n", "oidc.redirect-url"},
+		{"auth:\n  oidc:\n    issuer: https://login.example\n    client-id: n\n    users:\n      \"j smith\": viewer\n", "OIDC name"},
+		{"auth:\n  oidc:\n    issuer: https://login.example\n    client-id: n\n    groups:\n      g: boss\n", "not a role"},
+		{"auth:\n  oidc:\n    issuer: https://login.example\n    client-id: n\n    secret: x\n", "field secret not found"},
+	} {
+		if _, err := Load(authProject(c.block), ""); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%q: err = %v, want %q", c.block, err, c.want)
+		}
+	}
+	// No grant yet is a warning (naut auth init writes such a block), not
+	// an error.
+	p, err = Load(authProject("auth:\n  oidc:\n    issuer: https://login.example\n    client-id: n\n"), "")
+	if err != nil || len(p.Auth.Warnings()) != 1 || !strings.Contains(p.Auth.Warnings()[0], "grants nobody") {
+		t.Errorf("no grants: %v %v", err, p.Auth.Warnings())
+	}
+}
+
+// On a redundant pair auth.oidc is refused for now: the pins are not
+// shared yet (#710).
+func TestLoadAuthOIDCRefusedOnAPair(t *testing.T) {
+	fs := authProject("auth:\n  oidc:\n    issuer: https://login.example\n    client-id: n\n" + pairOK)
+	if _, err := Load(fs, ""); err == nil || !strings.Contains(err.Error(), "cannot be used on a redundant pair") {
+		t.Errorf("err = %v", err)
+	}
 }

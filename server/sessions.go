@@ -8,6 +8,8 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/joyautomation/nautilus/auth"
 )
 
 // The browser sign-in's cookie (#708 PR 5b): HttpOnly, SameSite=Strict,
@@ -34,8 +36,16 @@ const maxElevateFails = 5
 // session is one browser sign-in. The id itself is never kept: the store
 // is keyed by its SHA-256, which is also what the journal records.
 type session struct {
-	hash    string // hex SHA-256 of the id
-	user    string // lowercased user name
+	hash string // hex SHA-256 of the id
+	user string // lowercased user name: a local user's, or an OIDC name
+	// oidc marks a sign-in at the OIDC provider (#708 PR 6): its user is
+	// an OIDC name (principal oidc:<user>), proved by the account
+	// (issuer, sub), which the name's pin must still name, with the group
+	// ids its ID token carried. cred is empty: there is no password.
+	oidc    bool
+	issuer  string
+	sub     string
+	groups  []string
 	created time.Time
 	expires time.Time // absolute: created + auth.session, never renewed
 	// authAt is when the user last proved their password in this session:
@@ -52,6 +62,20 @@ type session struct {
 	// session) acts no more.
 	cred string
 }
+
+// principal is who the session acts as: user:<name>, or oidc:<name> with
+// the group ids its sign-in carried.
+func (se session) principal() auth.Principal {
+	if se.oidc {
+		return auth.OIDC(se.user, se.groups)
+	}
+	return auth.User(se.user)
+}
+
+// key is the session's principal as the journal names it: what a sign-out
+// and the per-principal cap go by, so a local user and an OIDC name that
+// read alike are never confused.
+func (se session) key() string { return se.principal().String() }
 
 // credPrint is a password hash's fingerprint, for session.cred.
 func credPrint(phc string) string {
@@ -85,6 +109,15 @@ func (ss *sessions) clock() time.Time {
 	return now()
 }
 
+// randomID is 256 random bits, base64url: a session id, an OIDC state.
+func randomID() string {
+	var b [32]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic(err) // crypto/rand never fails on a supported platform
+	}
+	return base64.RawURLEncoding.EncodeToString(b[:])
+}
+
 // sessionHash is the SHA-256 of a session id, hex: the store's key and the
 // journal's "session".
 func sessionHash(id string) string {
@@ -115,16 +148,28 @@ func (ss *sessions) told(ended []session) {
 	}
 }
 
-// open starts a session for user and returns its id (256 random bits,
-// base64url), fresh at every sign-in.
+// open starts a session for a local user, proved by the password whose
+// fingerprint is cred, and returns its id.
 func (ss *sessions) open(user, cred string) (string, session) {
-	var b [32]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		panic(err) // crypto/rand never fails on a supported platform
-	}
-	id := base64.RawURLEncoding.EncodeToString(b[:])
+	return ss.start(session{user: user, cred: cred})
+}
+
+// start starts the session se describes (its user, and its proof: cred,
+// or oidc with issuer, sub and groups) and returns its id (256 random
+// bits, base64url), fresh at every sign-in.
+func (ss *sessions) start(se session) (string, session) {
+	id := randomID()
 	now := ss.now()
-	se := session{hash: sessionHash(id), user: user, created: now, expires: now.Add(ss.life), authAt: now, cred: cred}
+	se.hash, se.created, se.expires = sessionHash(id), now, now.Add(ss.life)
+	// A password was proved just now. An OIDC sign-in proves only what
+	// the provider says: when the person last entered credentials there
+	// (auth_time, given in se.authAt; zero when it did not say), never
+	// later than now. A sign-in that rode on an old session at the
+	// provider is not fresh.
+	if !se.oidc || se.authAt.After(now) {
+		se.authAt = now
+	}
+	key := se.key()
 
 	ss.mu.Lock()
 	var mine []*session
@@ -133,7 +178,7 @@ func (ss *sessions) open(user, cred string) (string, session) {
 			delete(ss.byHash, h)
 			continue
 		}
-		if o.user == user {
+		if o.key() == key {
 			mine = append(mine, o)
 		}
 	}
@@ -200,13 +245,14 @@ func (ss *sessions) endAll() int {
 	return len(ended)
 }
 
-// endUser ends every session user holds (disabled, password changed,
-// removed) and says how many there were.
-func (ss *sessions) endUser(user string) int {
+// endPrincipal ends every session of the principal key names ("user:alice"
+// disabled, its password changed, removed, or signed out; "oidc:x" signed
+// out or unpinned) and says how many there were.
+func (ss *sessions) endPrincipal(key string) int {
 	ss.mu.Lock()
 	var ended []session
 	for h, se := range ss.byHash {
-		if se.user == user {
+		if se.key() == key {
 			delete(ss.byHash, h)
 			ended = append(ended, *se)
 		}

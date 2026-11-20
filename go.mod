@@ -4,9 +4,11 @@ go 1.25.0
 
 require (
 	github.com/charmbracelet/huh v1.0.0
+	github.com/coreos/go-oidc/v3 v3.17.0
 	github.com/dop251/goja v0.0.0-20261001165353-dc0ad5d0dc92
 	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/evanw/esbuild v0.28.2
+	github.com/go-jose/go-jose/v4 v4.1.3
 	github.com/google/uuid v1.6.0
 	github.com/gopcua/opcua v0.9.1
 	github.com/gorilla/websocket v1.5.3
@@ -14,6 +16,7 @@ require (
 	github.com/lib/pq v1.10.9
 	github.com/mochi-mqtt/server/v2 v2.7.9
 	golang.org/x/crypto v0.47.0
+	golang.org/x/oauth2 v0.34.0
 	golang.org/x/sys v0.40.0
 	golang.org/x/term v0.39.0
 	google.golang.org/grpc v1.80.0

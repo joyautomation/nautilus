@@ -81,6 +81,7 @@ An area is a set of tag patterns. A grant with `areas:` limits `write`, `ack`, `
 | `token` | `NAUTILUS_TOKEN`, with `token-role` |
 | `token:<name>` | a service token from `service-tokens:`, its secret in `NAUTILUS_TOKEN_<NAME>` |
 | `user:<name>` | a signed-in browser, or that user's personal access token |
+| `oidc:<name>` | a browser signed in at the [OIDC provider](#oidc-sign-in): the username claim, pinned to one account there |
 | `opcua-cert:<name>` | an OPC UA client certificate `opcua-certificates:` maps (see [OPC UA](#opc-ua)) |
 | `sparkplug:<host>` | a Sparkplug command, with `sparkplug:`'s grants (see [Sparkplug](#sparkplug)) |
 
@@ -119,7 +120,9 @@ sudo naut users passwd akhan
 sudo naut users disable akhan      # no sign-in, and none of akhan's tokens works
 sudo naut users token akhan        # a personal access token, shown once
 sudo naut users revoke akhan <id>
-sudo naut users list
+sudo naut users signout akhan      # end every browser session of akhan (oidc:<name> for an OIDC name)
+sudo naut users unpin jsmith@corp.example   # an OIDC name's account was re-created at the provider
+sudo naut users list               # also the OIDC pins
 ```
 
 - **Where the file lives.** The users file (`users.json`, argon2id password hashes and SHA-256 token hashes) is kept in the controller's state directory: `auth.state-dir`, else systemd's `$STATE_DIRECTORY` (`/var/lib/nautilus` on a box `naut deploy` set up). It is never inside the project. On the box, the built controller answers the same subcommands: `sudo /opt/nautilus/current/controller users --state-dir /var/lib/nautilus list`.
@@ -154,6 +157,52 @@ The endpoints, for an HMI of your own:
 | `POST /api/elevate` | `{"password"}`: the session's password again, for the [elevated permissions](#elevation) (`200` with `elevatedUntil`) |
 | `GET /api/me` | who the request acts as, its roles and permissions (and the tag patterns of its areas, `areas`), `secure`, the session's `expires` and `elevatedUntil`, the `elevated` permissions, `signIn` (this controller offers `/signin`) and `now` (the controller's clock, to judge `elevatedUntil` by) |
 
+## OIDC sign-in
+
+A controller can sign browsers in at your identity provider: Microsoft Entra ID, Google, Keycloak, Okta, any OpenID Connect provider. Register the controller there as a web application (a confidential client), then:
+
+```sh
+naut auth init --oidc https://login.microsoftonline.com/<tenant>/v2.0 --client-id <application id>
+```
+
+or write the block yourself:
+
+```yaml
+auth:
+  oidc:
+    issuer: https://login.microsoftonline.com/<tenant>/v2.0
+    client-id: 0a1b2c3d-...            # the secret goes in NAUTILUS_OIDC_SECRET on the controller
+    groups:                            # by group id, never by display name
+      "6f1e...-ops": operator
+      "93ab...-eng": [{role: engineer}]
+    users:                             # by name, for a provider without groups (a personal Google account)
+      jsmith@corp.example: engineer
+    # username-claim: preferred_username   # the name people are known by in the journal
+    # groups-claim: groups
+    # redirect-url: https://plc1.plant.lan:8443/auth/oidc/callback
+```
+
+- **The redirect URI.** Register `https://<the controller's host>/auth/oidc/callback` at the provider. `naut run` prints the one to register when it starts. Without `redirect-url` the controller builds it from the address the browser used, but only for a host it trusts (`localhost`, an IP address, or a name in `NAUTILUS_ALLOWED_HOSTS`); any other is refused.
+- **The sign-in page** shows "Sign in with <provider>" beside the password form (only the button when no local user is granted anything). Same transport rule as passwords: HTTPS, or the controller's own loopback.
+- **Who is signed in.** A person acts as `oidc:<name>`, the username claim lowercased (ASCII letters, digits and `- _ . @ + '`; any other character is refused, never folded into a look-alike). Their roles come from `auth.oidc.groups` (each group id the token carries) and `auth.oidc.users` (their name), never from `auth.users`: `oidc:akhan` and `user:akhan` are two people.
+- **Every name is pinned to one account.** A name is a label the provider lets people change, so on the first sign-in of a name the controller records which account it came from (the issuer and the account's `sub`) in `oidc-pins.json` beside the users file. A later sign-in under that name from another account is refused, and journalled. If the account was really re-created at the provider, `naut users unpin <name>` on the controller lets the next sign-in pin it again. `naut users list` shows the pins.
+- **A name in `auth.oidc.users` belongs to whoever signs in with it first.** Prefer groups. When you grant by name, use a username claim people cannot change themselves (`preferred_username` on Entra, Keycloak and Okta; never `email` on Entra, which a user can edit), and after the person's first sign-in check `naut users list` (or the journal's `auth.signin` with `pinned: true`) shows the account you expected.
+- **Groups by id.** Entra puts group object ids in the token, Keycloak group paths. A key with a space looks like a display name; `naut check` and `naut run` warn about it. With too many groups Entra leaves them out ("overage"): the sign-in is refused and says to emit only the groups assigned to the application.
+- **Every refusal says what to do:** no grant ("add one of your group ids under auth.oidc.groups", with the ids the token carried), a provider out of reach (try again; local users still sign in with a password), a pinned name, a username claim that is missing.
+- **Signing out here leaves the provider's session.** On a shared screen the next person who clicks "Sign in with …" may come back as the previous user without being asked, while the provider still remembers them. Sign out at the provider too, or set its session short for those screens.
+- **The session** is the same cookie as a password sign-in's, for `auth.session`. Each request checks it against the manifest and the pin as they are now: `naut users unpin` or `naut users signout` ends it within a second. A restart of the controller signs everyone out, as with passwords. Removing someone at the provider stops their next sign-in; a session they already have runs until it ends, or until `naut users signout`.
+- **No tokens for OIDC names.** `naut users token` refuses an OIDC name: a personal access token would outlive the account's removal at the provider. Scripts and VS Code use a local user's token or a service token.
+- **Offline sites.** The provider must be reachable to sign in, not afterwards. Keep a local user (or `NAUTILUS_TOKEN`) for when it isn't.
+- **Upgrading.** A controller now takes the users lock (`.users.lock` in the state directory) at a name's first sign-in. One left owned by root by an older `sudo naut users` makes those sign-ins fail, with a message naming the `chown`; the next `sudo naut users` gives it back.
+- **Not on a redundant pair yet.** The pins are written by the box that signs a person in, and a pair doesn't share them yet (#710), so `auth.oidc` is refused with `redundancy:`. Use local users on a pair.
+
+The two hops, for a proxy or firewall rule:
+
+| | |
+|---|---|
+| `GET /auth/oidc/start?next=/path` | sends the browser to the provider (state, nonce and PKCE kept on the controller for ten minutes, bound to the browser by a short `SameSite=Lax` cookie) |
+| `GET /auth/oidc/callback` | the provider's answer: a page that moves the browser on to `next` (a same-site step, so the `SameSite=Strict` session cookie is sent with it); journalled as `auth.signin` |
+
 ## Elevation
 
 Some permissions change what the plant runs, so a signed-in browser holds them only while its password is fresh: **`force`, `edit`, `activate`, `deploy`, `config`, `users` and `override`**. Those are the elevated permissions. That includes clearing a force and rolling an edit back: clearing a force can start a motor.
@@ -167,7 +216,7 @@ Some permissions change what the plant runs, so a signed-in browser holds them o
 - **Re-authentication** (`POST /api/elevate`) is checked like a sign-in: from the controller's own page, over HTTPS or from loopback, with one message for every wrong password. A user who holds none of the elevated permissions has nothing to confirm and is refused (`403`) before any password check. It's throttled per session, whatever address the attempts come from. Each wrong password also counts against the user's sign-in throttle. **After five wrong passwords in a row the session ends** (a stolen cookie guessing): the browser signs in again, and the journal records `auth.session-ended`. Every attempt is journalled as `auth.elevate`.
 - **The journal.** Elevation doesn't depend on it. Re-authentication works while the journal is down, and so does clearing a force or rolling back once the password is fresh. Setting a force or editing the program needs the journal too, so it is still refused then (`503`), after the password check. See [When the journal cannot be written](/guides/http-api/#when-the-journal-cannot-be-written).
 - **On a redundant pair** elevation lives with the session, on the leader. A standby refers `POST /api/elevate` there, like sign-in.
-- **OIDC** sign-in (to come) will elevate by signing in at the identity provider again.
+- **An OIDC sign-in** has no password to confirm here. It counts from when the person last entered their credentials at the provider, the ID token's `auth_time` (up to 2 minutes ahead of the controller's clock counts as now), not from the moment the browser came back: a sign-in that rode on an old session at the provider is not fresh. A token without `auth_time` is never fresh. **Some providers send no `auth_time` unless asked (Entra ID by default), so there an OIDC user cannot force, edit, activate, deploy or configure until re-authentication at the provider arrives**: use a local user or a token for those. Past `auth.elevation` the refusal says what to do (sign out at the provider and here, then sign in again); it does not ask for a password.
 
 ## In the HMI
 
@@ -276,6 +325,7 @@ Every command write is journalled, written or refused: action `tag.write`, sourc
 - **Behind a load balancer or a Kubernetes Service**, a browser lands on the standby on about half its connections and gets the `503`. Give the balancer a health check on [`/readyz`](#probes) so it sends browsers only to the leader. `public-urls` names the pair's controllers `a` and `b`. The two-replica Deployment `naut new --deploy` generates has no stable pod names for it, so there the `503` names no leader and the `/readyz` health check is the way in. Its Service still sends token clients to either pod: a standby forwards their requests to the leader.
 - **A failover signs browser users out.** The new leader doesn't know the old one's sessions, so its users sign in again there. The old leader ends its sessions as soon as it is a standby, so they don't come back if it leads again (journalled as `auth.sessions-ended`).
 - **During an election** a controller that knows no leader refuses a new sign-in (`503`, try again shortly). Sessions it issued still work there and can be signed out. If it then leads again without ever having seen another leader, those sessions carry on: no failover happened as far as it knows.
+- **`naut users signout` reaches one box.** Sessions live on the leader, so run it there.
 - **Sign-out needs the leader.** If no leader is reachable, signing out can't revoke the session. It ends at the next failover or when it expires.
 - **A standby never reads for a browser.** A browser's read reaching a standby gets the same `503` with the leader's address, even for `/api/cluster` and `/api/history`, which the standby otherwise answers itself.
 - **A view of both controllers** (each one's `/api/cluster`, read from one page) needs a token or `anonymous: viewer`: a browser's session cookie belongs to one controller and is never sent to the other.

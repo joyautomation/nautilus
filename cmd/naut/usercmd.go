@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"golang.org/x/term"
 
@@ -29,6 +30,10 @@ Usage:
                                               with no password here
   naut users [flags] token <name>             issue a personal access token (shown once)
   naut users [flags] revoke <name> <token-id> revoke one
+  naut users [flags] signout <name>           end every browser session of a local user
+                                              or an OIDC name (oidc:<name> when both exist)
+  naut users [flags] unpin <name>             forget which account at the OIDC provider
+                                              an OIDC name belongs to (auth.oidc)
 
 Flags:
   --project <dir>    the project whose nautilus.yaml says where the users
@@ -50,7 +55,15 @@ starting: sudo /opt/nautilus/current/controller users --state-dir /var/lib/nauti
 A password is read from the terminal without echo, twice. When stdin is
 not a terminal its first line is the password, for provisioning scripts.
 A personal access token is sent as Authorization: Bearer <token> (the VS
-Code extension's nautilus.token setting takes one).
+Code extension's nautilus.token setting takes one). An OIDC name (auth.oidc)
+gets none: a token would outlive the account's removal at the provider.
+
+An OIDC name is pinned, on its first sign-in, to the account it came from
+(oidc-pins.json beside the users file); a sign-in by another account under
+that name is refused. When the account was re-created at the provider,
+naut users unpin <name> lets the next sign-in pin it afresh. Sign-outs and
+pins take effect within a second on a running controller. On a redundant
+pair, sessions live on the leader: run signout on the leader.
 `
 
 // usersFile is where a controller keeps its users file: stateDir (the
@@ -175,7 +188,7 @@ func usersMain(args []string, load func(dir string) (*project.Manifest, string, 
 		return fail(err)
 	}
 	cmd, rest := fs.Arg(0), fs.Args()[1:]
-	want := map[string]int{"add": 1, "passwd": 1, "disable": 1, "enable": 1, "list": 0, "token": 1, "revoke": 2}
+	want := map[string]int{"add": 1, "passwd": 1, "disable": 1, "enable": 1, "list": 0, "token": 1, "revoke": 2, "signout": 1, "unpin": 1}
 	n, ok := want[cmd]
 	if !ok {
 		fmt.Fprintf(stderr, "naut users: unknown subcommand %q\n\n%s", cmd, usersUsage)
@@ -198,7 +211,34 @@ func usersMain(args []string, load func(dir string) (*project.Manifest, string, 
 			return fail(err)
 		}
 		listUsers(stdout, path, f, m)
+		if err := users.CheckMode(users.PinsPath(path)); err != nil {
+			return fail(err)
+		}
+		pins, err := users.LoadPins(users.PinsPath(path))
+		if err != nil {
+			return fail(err)
+		}
+		listPins(stdout, pins, m)
 		return 0
+	}
+	switch cmd {
+	case "signout":
+		return signOutMain(path, name, m, getenv, stderr)
+	case "unpin":
+		name = strings.TrimPrefix(name, "oidc:")
+		err := users.UpdatePins(users.PinsPath(path), osUser(getenv, os.Geteuid()), func(p *users.Pins) error { return p.Unpin(name) })
+		if errors.Is(err, users.ErrNotPinned) {
+			return fail(fmt.Errorf("oidc:%s is not pinned (naut users list shows the pins)", name))
+		}
+		if err != nil {
+			return fail(err)
+		}
+		fmt.Fprintf(stderr, "%s: unpinned oidc:%s. Its sessions end within a second on a running controller; its next sign-in pins it to whatever account at the provider it comes from.\n", users.PinsPath(path), name)
+		return 0
+	case "token":
+		if why := oidcTokenRefusal(path, name, m); why != "" {
+			return fail(errors.New(why))
+		}
 	}
 	// A password is asked for before the file is read: the change is made
 	// under the file's lock (users.Update), never on a copy read before a
@@ -243,6 +283,111 @@ func usersMain(args []string, load func(dir string) (*project.Manifest, string, 
 		fmt.Fprintf(stderr, "Next: %s signs in at /signin on the controller (over HTTPS, or from its own loopback); for a script or VS Code, naut users token %s. A running controller has the password within a second: no restart.\n", name, name)
 	}
 	return 0
+}
+
+// oidcTokenRefusal is why naut users token refuses name, "" when it does
+// not: an OIDC name never gets a personal access token, which would keep
+// working after the person's account is removed at the provider.
+func oidcTokenRefusal(path, name string, m *project.Manifest) string {
+	why := name + " is an OIDC name (auth.oidc): a personal access token would outlive the account's removal at the provider, so OIDC users get none; a script or VS Code uses a local user's token (naut users add) or a service token (auth.service-tokens)"
+	if strings.HasPrefix(name, "oidc:") {
+		return strings.TrimPrefix(why, "oidc:")
+	}
+	if f, err := users.Load(path); err == nil {
+		if _, local := f.Users[name]; local {
+			return ""
+		}
+	}
+	if oidcNames(m)[name] {
+		return why
+	}
+	if p, err := users.LoadPins(users.PinsPath(path)); err == nil {
+		if _, pinned := p.Pins[name]; pinned {
+			return why
+		}
+	}
+	return ""
+}
+
+// oidcNames are the names auth.oidc.users grants roles.
+func oidcNames(m *project.Manifest) map[string]bool {
+	out := map[string]bool{}
+	if m != nil && m.Auth != nil && m.Auth.OIDC != nil {
+		for n := range m.Auth.OIDC.Users {
+			out[strings.ToLower(n)] = true
+		}
+	}
+	return out
+}
+
+// signOutMain is naut users signout: it records the sign-out beside the
+// users file, which a running controller reads within a second and ends
+// the principal's sessions (journalled, users.change). A bare name is
+// the local user's, or the OIDC name's when there is no local user of it;
+// with both, the name must say which (user:<name> or oidc:<name>).
+func signOutMain(path, name string, m *project.Manifest, getenv func(string) string, stderr io.Writer) int {
+	pr := name
+	if !strings.HasPrefix(name, "user:") && !strings.HasPrefix(name, "oidc:") {
+		local := manifestNames(m)[name]
+		if f, err := users.Load(path); err == nil {
+			_, inFile := f.Users[name]
+			local = local || inFile
+		}
+		oidc := oidcNames(m)[name]
+		if p, err := users.LoadPins(users.PinsPath(path)); err == nil {
+			_, pinned := p.Pins[name]
+			oidc = oidc || pinned
+		}
+		switch {
+		case local && oidc:
+			fmt.Fprintf(stderr, "naut users: %s is both a local user and an OIDC name: say which, naut users signout user:%s or oidc:%s\n", name, name, name)
+			return 2
+		case oidc:
+			pr = "oidc:" + name
+		case local:
+			pr = "user:" + name
+		default:
+			fmt.Fprintf(stderr, "naut users: %s is neither a local user nor an OIDC name here (naut users list shows them); for a name signed in at the provider but not in the manifest, give oidc:%s\n", name, name)
+			return 1
+		}
+	}
+	if err := users.SignOut(users.SignoutsPath(path), osUser(getenv, os.Geteuid()), pr, timeNow()); err != nil {
+		fmt.Fprintln(stderr, "naut users:", err)
+		return 1
+	}
+	fmt.Fprintf(stderr, "%s: signed out %s. A running controller ends its browser sessions within a second (its tokens, if any, still work: naut users revoke). On a redundant pair this reaches only this box: sessions live on the leader, so run it there.\n", users.SignoutsPath(path), pr)
+	return 0
+}
+
+// timeNow is time.Now, a variable for tests.
+var timeNow = time.Now
+
+// listPins lists the OIDC pins, and the names auth.oidc.users grants that
+// no sign-in has pinned yet.
+func listPins(w io.Writer, p *users.Pins, m *project.Manifest) {
+	names := p.Names()
+	granted := oidcNames(m)
+	if len(names) == 0 && len(granted) == 0 {
+		return
+	}
+	fmt.Fprintln(w, "OIDC names pinned to an account (naut users unpin <name> forgets one):")
+	if len(names) == 0 {
+		fmt.Fprintln(w, "  (none yet: a name is pinned at its first sign-in)")
+	}
+	for _, n := range names {
+		pin := p.Pins[n]
+		fmt.Fprintf(w, "  oidc:%-30s sub %s at %s, since %s\n", n, pin.Subject, pin.Issuer, pin.Pinned.Format("2006-01-02 15:04Z"))
+	}
+	var waiting []string
+	for n := range granted {
+		if _, ok := p.Pins[n]; !ok {
+			waiting = append(waiting, n)
+		}
+	}
+	if len(waiting) > 0 {
+		sort.Strings(waiting)
+		fmt.Fprintf(w, "in auth.oidc.users, not signed in yet: %s\n", strings.Join(waiting, ", "))
+	}
 }
 
 // manifestNames are the users the manifest's auth: block grants roles.

@@ -342,7 +342,7 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	// after the alarms (it serves them): srvRef is set once it exists.
 	var srvRef atomic.Pointer[server.Server]
 	sysAlarms := []project.SystemAlarm{auditAlarm(&srvRef)}
-	if proj.Auth != nil && proj.Auth.HasUsers() {
+	if proj.Auth != nil && (proj.Auth.HasUsers() || proj.Auth.OIDC()) {
 		sysAlarms = append(sysAlarms, usersAlarm(&srvRef))
 	}
 	alarms, err := startAlarms(proj, rt, sysAlarms...)
@@ -489,6 +489,18 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	} else if store != nil {
 		sopts.Users = store
 	}
+	// Sign-in at the OIDC provider (#708 PR 6), its secret from
+	// NAUTILUS_OIDC_SECRET.
+	oidcClient, err := withOIDC(&sopts, proj, os.Getenv)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "naut run: auth:", err)
+		return 1
+	}
+	if proj.Auth != nil {
+		for _, w := range proj.Auth.Warnings() {
+			fmt.Fprintln(os.Stderr, "auth: WARNING:", w)
+		}
+	}
 	if h := os.Getenv("NAUTILUS_HISTORIAN_URL"); h != "" {
 		sopts.HistorianURL = h
 	}
@@ -567,6 +579,7 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		}()
 	}
 	go srv.Run(ctx)
+	sayOIDC(ctx, oidcClient, srv, tlsSrc != nil, apiLn.Addr().String(), os.Stderr)
 	// naut run alone renews a self-signed certificate, daily while it runs.
 	go keepSelfSignedFresh(ctx, tlsRun, dir, os.Getenv, time.Now, tlsRun.say)
 
@@ -1216,13 +1229,14 @@ const authSparkplugNotice = "auth: sparkplug.writable opens tags, but the auth: 
 	"      so every Sparkplug command write is refused. To allow them, set `sparkplug: operator` (or a role with write, with areas) under auth:, then restart naut run.\n"
 
 // openUsers opens the controller's users file when its auth: block grants
-// a user a role (nil, nil otherwise: no state directory is needed, so a
+// a user a role or signs browsers in at an OIDC provider (whose pins and
+// sign-outs live beside it) (nil, nil otherwise: no state directory is needed, so a
 // box not under systemd starts as before): auth.state-dir, else
 // $STATE_DIRECTORY, else (naut run in a checkout, outside systemd) the
 // developer's $XDG_STATE_HOME/nautilus/<name>. A built controller has no
 // checkout (dir is ""), so it never falls back to a home directory.
 func openUsers(proj *project.Project, dir string, getenv func(string) string) (*users.Store, error) {
-	if proj.Auth == nil || !proj.Auth.HasUsers() {
+	if proj.Auth == nil || !proj.Auth.HasUsers() && !proj.Auth.OIDC() {
 		return nil, nil
 	}
 	path, err := usersFile(proj.AuthStateDir, proj.Name, dir, dir != "", getenv)

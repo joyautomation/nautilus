@@ -2,6 +2,8 @@ package project
 
 import (
 	"fmt"
+	"net"
+	"net/url"
 	"path/filepath"
 	"time"
 
@@ -45,6 +47,10 @@ type AuthConfig struct {
 	// host>, a label: anyone who can publish to the broker can send one
 	// (#708 PR 8b).
 	Sparkplug AuthGrants `yaml:"sparkplug"`
+	// OIDC signs browsers in at an OpenID Connect provider (#708 PR 6):
+	// Entra ID, Google, Keycloak, Okta. Its client secret comes from
+	// NAUTILUS_OIDC_SECRET, never the manifest.
+	OIDC *AuthOIDC `yaml:"oidc"`
 	// StateDir is where the controller keeps its users file (users.json:
 	// password hashes and personal access tokens). Default: systemd's
 	// $STATE_DIRECTORY. Never inside the project, so no hash reaches git.
@@ -58,6 +64,62 @@ type AuthConfig struct {
 	// override), from the sign-in or the last re-authentication
 	// (POST /api/elevate): 1m to 12h, default 15m. A token always counts.
 	Elevation Duration `yaml:"elevation"`
+}
+
+// AuthOIDC is auth.oidc. A signed-in person acts as oidc:<name>, the
+// username claim's value, which is pinned on its first sign-in to the
+// account it came from (naut users unpin undoes a pin). Groups grant by
+// the ids the groups claim carries, never by display name; users grant
+// by name, for a provider that sends no groups (a personal Google
+// account).
+type AuthOIDC struct {
+	Issuer   string `yaml:"issuer"`
+	ClientID string `yaml:"client-id"`
+	// Name is the sign-in button's label ("Sign in with <name>"); default
+	// from the issuer (Microsoft, Google, else its host).
+	Name          string                `yaml:"name"`
+	UsernameClaim string                `yaml:"username-claim"`
+	GroupsClaim   string                `yaml:"groups-claim"`
+	Groups        map[string]AuthGrants `yaml:"groups"`
+	Users         map[string]AuthGrants `yaml:"users"`
+	// RedirectURL is the callback the provider sends the browser back to,
+	// as registered there: https://<host>/auth/oidc/callback. Without it
+	// the controller builds it from the request's Host, only for a host it
+	// trusts (NAUTILUS_ALLOWED_HOSTS), and naut run prints it at the start.
+	RedirectURL string `yaml:"redirect-url"`
+}
+
+// OIDCCallbackPath is the path every redirect URI ends in.
+const OIDCCallbackPath = "/auth/oidc/callback"
+
+// check refuses an auth.oidc block that could never sign anyone in.
+func (o *AuthOIDC) check() error {
+	if o.Issuer == "" {
+		return fmt.Errorf("auth: oidc.issuer is empty: give the provider's issuer URL (https://login.microsoftonline.com/<tenant>/v2.0, https://accounts.google.com, https://<keycloak>/realms/<realm>)")
+	}
+	u, err := url.Parse(o.Issuer)
+	if err != nil || u.Host == "" || (u.Scheme != "https" && !(u.Scheme == "http" && loopbackHost(u.Hostname()))) {
+		return fmt.Errorf("auth: oidc.issuer %q: give an https:// URL (plain http only for a provider on this machine's loopback)", o.Issuer)
+	}
+	if o.ClientID == "" {
+		return fmt.Errorf("auth: oidc.client-id is empty: give the client (application) id the provider registered for this controller")
+	}
+	if o.RedirectURL != "" {
+		r, err := url.Parse(o.RedirectURL)
+		if err != nil || r.Host == "" || r.Path != OIDCCallbackPath || r.RawQuery != "" || r.Fragment != "" || r.User != nil ||
+			(r.Scheme != "https" && !(r.Scheme == "http" && loopbackHost(r.Hostname()))) {
+			return fmt.Errorf("auth: oidc.redirect-url %q: give https://<this controller's host>%s, as registered at the provider", o.RedirectURL, OIDCCallbackPath)
+		}
+	}
+	return nil
+}
+
+func loopbackHost(h string) bool {
+	if h == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(h)
+	return ip != nil && ip.IsLoopback()
 }
 
 // AuthArea is an area: the tags it covers, as patterns ("RCV_*").
@@ -184,6 +246,17 @@ func (c *AuthConfig) settings() auth.Settings {
 	if c.Sparkplug != nil {
 		s.Sparkplug = append([]auth.Grant{}, grants(c.Sparkplug)...)
 	}
+	if c.OIDC != nil {
+		s.OIDC = true
+		s.OIDCGroups = map[string][]auth.Grant{}
+		s.OIDCUsers = map[string][]auth.Grant{}
+		for id, gs := range c.OIDC.Groups {
+			s.OIDCGroups[id] = grants(gs)
+		}
+		for name, gs := range c.OIDC.Users {
+			s.OIDCUsers[name] = grants(gs)
+		}
+	}
 	if len(c.OPCUACerts) > 0 {
 		s.OPCUACerts = map[string]auth.CertGrant{}
 		for name, cg := range c.OPCUACerts {
@@ -234,6 +307,18 @@ func compileAuth(c *AuthConfig) (*auth.Policy, error) {
 	if c.StateDir != "" && !filepath.IsAbs(c.StateDir) {
 		return nil, fmt.Errorf("auth: state-dir %q is relative: give an absolute path outside the project", c.StateDir)
 	}
+	if c.OIDC != nil {
+		if err := c.OIDC.check(); err != nil {
+			return nil, err
+		}
+	}
 	// The auth package's errors already begin "auth: ".
 	return auth.Compile(c.settings())
 }
+
+// errOIDCPair refuses auth.oidc on a redundant pair, for now: each OIDC
+// name is pinned on its first sign-in in the controller's state
+// directory, which the leader writes and the other box does not see, so
+// after a failover the name could be pinned afresh to another account.
+// Replicating the pins (and naut users signout's file) is #710's.
+var errOIDCPair = fmt.Errorf("auth: oidc cannot be used on a redundant pair yet: each OIDC name is pinned to its account on the box that signs it in, and a pair does not share the pins yet. Use local users on a pair (naut users add), or run one controller")

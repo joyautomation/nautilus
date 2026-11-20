@@ -167,7 +167,7 @@ func (s *Server) resolveActor(r *http.Request) actor {
 		return actor{pr: pr}
 	}
 	if se, ok := s.sessionOf(r); ok {
-		return actor{pr: auth.User(se.user), session: &se, at: s.sessions.clock()}
+		return actor{pr: se.principal(), session: &se, at: s.sessions.clock()}
 	}
 	return actor{pr: auth.Anonymous}
 }
@@ -182,10 +182,13 @@ func (s *Server) withActor(r *http.Request) *http.Request {
 	return r.WithContext(context.WithValue(r.Context(), actorKey{}, s.actorOf(r)))
 }
 
-// sessionOf is the live session r's cookie names, its user still in the
-// users file, enabled, and granted something by the auth: block. An
-// unknown or expired cookie (a restart forgot it) is no session, not an
-// error: the request is anonymous.
+// sessionOf is the live session r's cookie names, still standing: a
+// local user's still in the users file, enabled, on the password it was
+// proved with, an OIDC name's still pinned to the account it was proved
+// by; either granted something by the auth: block as it is now, and not
+// signed out (naut users signout) since it began. An unknown or expired
+// cookie (a restart forgot it) is no session, not an error: the request
+// is anonymous.
 func (s *Server) sessionOf(r *http.Request) (session, bool) {
 	if s.sessions == nil {
 		return session{}, false
@@ -195,13 +198,33 @@ func (s *Server) sessionOf(r *http.Request) (session, bool) {
 		if !ok {
 			continue
 		}
-		u, known := s.users.Current().Users[se.user]
-		if !known || u.Disabled || credPrint(u.Password) != se.cred || !s.policy.HasUser(se.user) {
+		if !s.sessionStands(se) {
 			return session{}, false
 		}
 		return se, true
 	}
 	return session{}, false
+}
+
+// sessionStands is sessionOf's recheck of a live session against the
+// users files and the policy as they are now. Every doubt is a no: a file
+// that cannot be read ends every session's acting.
+func (s *Server) sessionStands(se session) bool {
+	if at, out, err := s.users.SignedOut(se.key()); err != nil || out && !se.created.After(at) {
+		return false
+	}
+	if se.oidc {
+		if s.oidc == nil || !s.policy.OIDC() {
+			return false
+		}
+		pin, ok, err := s.users.Pin(se.user)
+		if err != nil || !ok || !pin.Same(se.issuer, se.sub) {
+			return false
+		}
+		return s.policy.HasGrants(se.principal())
+	}
+	u, known := s.users.Current().Users[se.user]
+	return known && !u.Disabled && credPrint(u.Password) == se.cred && s.policy.HasUser(se.user)
 }
 
 // cookieName is the sign-in cookie's name on r's transport: the __Host-
@@ -288,8 +311,17 @@ func (s *Server) elevationRefused(a actor, perm string) (int, string) {
 	if a.at.Before(s.elevatedUntil(*a.session)) {
 		return 0, ""
 	}
+	if a.session.oidc {
+		// Not ElevationNeeded: the HMI must not ask for a password that
+		// does not exist (6b adds re-authentication at the provider).
+		return http.StatusUnauthorized, fmt.Sprintf("%s needs credentials entered at the provider within the last %s (auth.elevation): %s", perm, shortDuration(s.policy.Elevation()), oidcElevateFix)
+	}
 	return http.StatusUnauthorized, fmt.Sprintf("%s: sign in again (/signin), or enter your password where the HMI asks for it (POST /api/elevate). %s needs a password entered within the last %s (auth.elevation)", ElevationNeeded, perm, shortDuration(s.policy.Elevation()))
 }
+
+// oidcElevateFix is what an OIDC session is told when its sign-in is too
+// old for an elevated permission: there is no password to confirm.
+const oidcElevateFix = "this sign-in is from the OIDC provider, so there is no password to confirm here, and it counts only from when you last entered your credentials at the provider (its auth_time). Sign out there and here, then sign in again (/signin), or use a local user or a token"
 
 // shortDuration is d as a person reads it: "15m", "1h", "1h30m", not
 // "15m0s".
@@ -365,10 +397,14 @@ func (s *Server) journalUsersChange(by string, changes []users.Change) {
 	}
 	for _, c := range changes {
 		detail := map[string]any{"change": c.What}
+		target := "user:" + c.User
+		if c.Principal != "" {
+			target = c.Principal
+		}
 		switch c.What {
-		case "disabled", "password", "removed":
+		case "disabled", "password", "removed", "signed out", "unpinned", "pin changed":
 			if s.sessions != nil {
-				if n := s.sessions.endUser(c.User); n > 0 {
+				if n := s.sessions.endPrincipal(target); n > 0 {
 					detail["sessions"] = n
 				}
 			}
@@ -384,7 +420,7 @@ func (s *Server) journalUsersChange(by string, changes []users.Change) {
 			User:   who,
 			Source: audit.SourceCLI,
 			Action: "users.change",
-			Target: "user:" + c.User,
+			Target: target,
 			Detail: detail,
 			Result: audit.ResultOK,
 		})

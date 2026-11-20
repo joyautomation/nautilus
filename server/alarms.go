@@ -459,6 +459,9 @@ func csv(s string) []string {
 func (s *Server) recordBy(r *http.Request, typed string) string {
 	if a := s.actorOf(r); a.pr.Kind == auth.KindUser && a.pr.Name != "" {
 		return a.pr.Name
+	} else if a.pr.Kind == auth.KindOIDC && a.pr.Name != "" {
+		// oidc:<name>: never read as the local user of the same name.
+		return a.pr.String()
 	}
 	return typed
 }

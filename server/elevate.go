@@ -70,6 +70,13 @@ func (s *Server) handleElevate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	se := *a.session
+	if se.oidc {
+		// Re-authentication at the provider (prompt=login, max_age=0) is
+		// not in this release: a password POSTed here proves nothing about
+		// an OIDC account.
+		refuse(http.StatusBadRequest, oidcElevateFix, "oidc session", nil)
+		return
+	}
 	// A user who holds no elevated permission has nothing to confirm:
 	// refused before any hashing, so a viewer's sessions cannot keep the
 	// password-hash slots busy (#1088 review).

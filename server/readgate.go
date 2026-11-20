@@ -116,7 +116,7 @@ func (s *Server) readRefused(w http.ResponseWriter, r *http.Request) bool {
 		return false
 	}
 	api := gatedRead(r)
-	page := !api && !strings.HasPrefix(r.URL.Path, "/api/") && r.URL.Path != "/signin" && navigation(r)
+	page := !api && !strings.HasPrefix(r.URL.Path, "/api/") && !signInPath(r.URL.Path) && navigation(r)
 	if !api && !page {
 		return false
 	}
@@ -190,4 +190,10 @@ func (s *Server) endSessionStreams(se session) {
 	for _, c := range ending {
 		c.end()
 	}
+}
+
+// signInPath reports a page a browser must reach before it is signed in:
+// the sign-in page and the OIDC sign-in's two hops.
+func signInPath(p string) bool {
+	return p == "/signin" || p == oidcStartPath || p == oidcCallbackPath
 }
