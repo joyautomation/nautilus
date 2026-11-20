@@ -68,6 +68,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -719,6 +720,9 @@ func (s *Server) Run(ctx context.Context) {
 			return
 		case <-t.C:
 			s.broadcast()
+			if _, ok := s.standbyLeader(); ok {
+				s.endSessionsAsStandby()
+			}
 		}
 	}
 }
@@ -911,8 +915,9 @@ func (s *Server) proxyStandby(routes *http.ServeMux, mux http.Handler) http.Hand
 			// under way, the leader gone, a pair not yet commissioned): a
 			// write here would land in a store that does not scan, so it
 			// is refused, as a lease holder with its gate closed refuses
-			// one (#621). Reads are answered from this store.
-			if r.Method == http.MethodGet || r.Method == http.MethodHead {
+			// one (#621). Reads are answered from this store, and so is a
+			// sign-out (it only revokes; sign-in waits for the election).
+			if r.Method == http.MethodGet || r.Method == http.MethodHead || r.URL.Path == "/api/signout" {
 				mux.ServeHTTP(w, r)
 				return
 			}
@@ -936,8 +941,9 @@ func (s *Server) proxyStandby(routes *http.ServeMux, mux http.Handler) http.Hand
 			// scans are not completing, #621): the leader's address is our
 			// own, and forwarding would send the request back here, again
 			// and again. Reads are answered from this store; a write is
-			// refused, since nothing here scans it.
-			if r.Method == http.MethodGet || r.Method == http.MethodHead {
+			// refused, since nothing here scans it. A sign-out is
+			// answered: the sessions are this box's.
+			if r.Method == http.MethodGet || r.Method == http.MethodHead || r.URL.Path == "/api/signout" {
 				mux.ServeHTTP(w, r)
 				return
 			}
@@ -954,6 +960,7 @@ func (s *Server) proxyStandby(routes *http.ServeMux, mux http.Handler) http.Hand
 		// the leader (#708 decision (c)), so a sign-in here, a sign-out
 		// (only the leader can revoke the session) and any request with
 		// the sign-in cookie and no bearer credential are referred to it.
+		s.endSessionsAsStandby()
 		if standbyRefers(r) {
 			auditedAnswer(routes, w, r, func(w http.ResponseWriter, _ *http.Request) {
 				s.referToLeader(w, st.LeaderAddr)
@@ -1021,6 +1028,24 @@ func (s *Server) referToLeader(w http.ResponseWriter, addr string) {
 		"error":  "this controller is the standby; use the leader (browser sign-ins live on the leader)",
 		"leader": leader,
 	})
+}
+
+// endSessionsAsStandby ends the browser sessions this controller issued
+// while it led, once it is a standby that forwards to another leader:
+// sessions live on the leader, and one kept here would act again if this
+// box led again (a failover signs browser users out), where a sign-out at
+// the leader in between could not have revoked it. Run checks at every
+// tick; a forwarded request checks too.
+func (s *Server) endSessionsAsStandby() {
+	if s.sessions == nil {
+		return
+	}
+	if n := s.sessions.endAll(); n > 0 {
+		slog.Info("auth: this controller is now a standby; its browser sessions are ended", "sessions", n)
+		s.audit.record(audit.Entry{User: "system", Source: audit.SourceSystem, Action: "auth.sessions-ended",
+			Detail: map[string]any{"reason": "this controller is now a standby: browser sessions live on the leader", "sessions": n},
+			Result: audit.ResultOK})
+	}
 }
 
 // standbyLeader is the leader's origin when this controller is a standby

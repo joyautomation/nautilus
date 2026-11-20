@@ -142,7 +142,13 @@ type actor struct {
 // /api/me. The cookie is consulted only here, never by credential: it
 // does not pass the Host rule, CORS or the preflight (design §2, gate 1),
 // which ask validCredential.
+//
+// Behind the audit seam it is resolved once (withActor): the entry names
+// who was authorized even if the session ends while the handler runs.
 func (s *Server) actorOf(r *http.Request) actor {
+	if a, ok := r.Context().Value(actorKey{}).(actor); ok {
+		return a
+	}
 	pr, presented, valid := s.credential(r)
 	if presented {
 		if !valid {
@@ -154,6 +160,16 @@ func (s *Server) actorOf(r *http.Request) actor {
 		return actor{pr: auth.User(se.user), session: &se}
 	}
 	return actor{pr: auth.Anonymous}
+}
+
+type actorKey struct{}
+
+// withActor fixes r's actor for the rest of the request.
+func (s *Server) withActor(r *http.Request) *http.Request {
+	if _, ok := r.Context().Value(actorKey{}).(actor); ok {
+		return r
+	}
+	return r.WithContext(context.WithValue(r.Context(), actorKey{}, s.actorOf(r)))
 }
 
 // sessionOf is the live session r's cookie names, its user still in the

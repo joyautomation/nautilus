@@ -151,6 +151,19 @@ func (ss *sessions) end(id string) (session, bool) {
 	return *se, true
 }
 
+// endAll ends every session and says how many there were.
+func (ss *sessions) endAll() int {
+	ss.mu.Lock()
+	var ended []session
+	for _, se := range ss.byHash {
+		ended = append(ended, *se)
+	}
+	ss.byHash = map[string]*session{}
+	ss.mu.Unlock()
+	ss.told(ended)
+	return len(ended)
+}
+
 // endUser ends every session user holds (disabled, password changed,
 // removed) and says how many there were.
 func (ss *sessions) endUser(user string) int {

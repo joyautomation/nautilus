@@ -9,11 +9,13 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/joyautomation/nautilus/audit"
 	"github.com/joyautomation/nautilus/auth/users"
+	"github.com/joyautomation/nautilus/leader"
 )
 
 // The sign-in fixture is patServer's: akhan (engineer) and jsmith
@@ -524,5 +526,106 @@ func TestSessionNeedsTheUsersFile(t *testing.T) {
 	srv.users.Reload()
 	if body := call(t, srv, "GET", "/api/me", "", withCookie(c.Value)).Body.String(); !strings.Contains(body, "user:akhan") {
 		t.Errorf("with the file fixed: %s", body)
+	}
+}
+
+// flipCluster is a cluster whose status a test changes.
+type flipCluster struct {
+	mu sync.Mutex
+	st leader.Status
+}
+
+func (f *flipCluster) Status() leader.Status { f.mu.Lock(); defer f.mu.Unlock(); return f.st }
+func (f *flipCluster) set(st leader.Status)  { f.mu.Lock(); f.st = st; f.mu.Unlock() }
+
+var (
+	leading   = leader.Status{Mode: "quorum", IsLeader: true, Pod: "a", Leader: "a", LeaderAddr: "10.0.0.7:8086"}
+	standing  = leader.Status{Mode: "quorum", Pod: "a", Leader: "b", LeaderAddr: "10.0.0.8:8086"}
+	electing  = leader.Status{Mode: "quorum", Pod: "a"}
+	signInRow = `{"name":"akhan","password":"password-akhan"}`
+)
+
+// A clustered controller that leads signs browsers in itself: only a
+// forwarding standby refers them. Its sessions keep acting while the pair
+// knows no leader (an election, or its own gate closed) and can be
+// signed out there; a new sign-in waits for the election.
+func TestClusteredLeaderSignsIn(t *testing.T) {
+	held := leader.Status{Mode: "quorum", Pod: "a", Leader: "a", LeaderAddr: "10.0.0.7:8086"}
+	for name, st := range map[string]leader.Status{"no leader known": electing, "lease held, gate closed": held} {
+		srv, _, _ := patServer(t)
+		fc := &flipCluster{st: leading}
+		srv.cluster = fc
+		c := signIn(t, srv, "akhan")
+		fc.set(st)
+		if body := call(t, srv, "GET", "/api/me", "", withCookie(c.Value)).Body.String(); !strings.Contains(body, "user:akhan") {
+			t.Errorf("%s: /api/me with the cookie: %s", name, body)
+		}
+		if rec := call(t, srv, "POST", "/api/signin", signInRow, fromLoopback, ownOrigin, asJSON); rec.Code != http.StatusServiceUnavailable {
+			t.Errorf("%s: sign-in: %d, want 503 until there is a leader", name, rec.Code)
+		}
+		if rec := call(t, srv, "POST", "/api/signout", "", withCookie(c.Value), ownOrigin); rec.Code != http.StatusOK {
+			t.Errorf("%s: sign-out: %d %s", name, rec.Code, rec.Body)
+		}
+		fc.set(leading)
+		if body := call(t, srv, "GET", "/api/me", "", withCookie(c.Value)).Body.String(); !strings.Contains(body, `"principal":"anonymous"`) {
+			t.Errorf("%s: the signed-out session acts: %s", name, body)
+		}
+	}
+}
+
+// A controller that stops leading ends the sessions it issued: when it
+// leads again they do not come back (a failover signs browser users out,
+// and a sign-out at the other leader meanwhile could not have revoked
+// them). Its Run tick sees the change with no request; a forwarded
+// request sees it too.
+func TestDemotedLeaderEndsItsSessions(t *testing.T) {
+	for _, how := range []string{"a request", "the tick"} {
+		srv, _, _ := patServer(t)
+		fc := &flipCluster{st: leading}
+		srv.cluster = fc
+		c := signIn(t, srv, "akhan")
+		fc.set(standing)
+		if how == "a request" {
+			if rec := call(t, srv, "GET", "/api/state", "", withCookie(c.Value)); rec.Code != http.StatusServiceUnavailable {
+				t.Fatalf("on the standby: %d", rec.Code)
+			}
+		} else {
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan struct{})
+			go func() { srv.Run(ctx); close(done) }()
+			deadline := time.Now().Add(5 * time.Second)
+			for srv.sessions.endUser("nobody"); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+				if _, ok := srv.sessions.lookup(c.Value); !ok {
+					break
+				}
+			}
+			cancel()
+			<-done
+		}
+		fc.set(leading)
+		if body := call(t, srv, "GET", "/api/me", "", withCookie(c.Value)).Body.String(); !strings.Contains(body, `"principal":"anonymous"`) {
+			t.Errorf("by %s: leading again, the old session acts: %s", how, body)
+		}
+		found := false
+		for _, e := range srv.audit.ring.Recent() {
+			found = found || (e.Action == "auth.sessions-ended" && e.Detail["sessions"] == 1)
+		}
+		if !found {
+			t.Errorf("by %s: the ended sessions are not journalled", how)
+		}
+	}
+}
+
+// The journal names who was authorized, resolved once at the seam: a
+// session that ends while the handler runs does not turn the entry
+// anonymous.
+func TestEntryKeepsTheAuthorizedUser(t *testing.T) {
+	srv, _, _ := patServer(t)
+	c := signIn(t, srv, "akhan")
+	srv.unforceAllChecked = func() { srv.sessions.endUser("akhan") }
+	rec := call(t, srv, "POST", "/api/forces/clear", "", withCookie(c.Value), ownOrigin)
+	e := srv.audit.ring.Recent()[0]
+	if rec.Code >= 400 || e.Action != "force.clear-all" || e.User != "user:akhan" || e.Session != sessionHash(c.Value) {
+		t.Errorf("clear-all whose session ended meanwhile: %d %s, journalled %+v", rec.Code, rec.Body, e)
 	}
 }
