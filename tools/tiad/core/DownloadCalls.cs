@@ -348,13 +348,21 @@ namespace Tiad
                     try
                     {
                         read = t.ProjectCpu(s.Handle);
-                        cpu = t.ReadCpu(s.Handle);
-                        if (cpu == null) throw new TiaException("the project has no CPU");
                     }
                     catch (Exception e)
                     {
                         Log.Line("upload: reading the CPU's identity failed: {0}", Json.Quote(e.Message));
                         read = null;
+                    }
+                    // What a spec must name to keep the CPU: reported, but
+                    // never in the way of the pin check.
+                    try
+                    {
+                        cpu = t.ReadCpu(s.Handle);
+                    }
+                    catch (Exception e)
+                    {
+                        Log.Line("upload: reading the project's CPU failed: {0}", Json.Quote(e.Message));
                         cpu = null;
                     }
                     return tr;

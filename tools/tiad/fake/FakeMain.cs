@@ -248,6 +248,7 @@ namespace Tiad.Fake
         string failInDoubt = "";
         bool noDryRun;
         bool uploadAsksTls;
+        string cannotApply = "";
         DeviceIdentity device = BenchDevice();
         bool noIdentify;
 
@@ -280,6 +281,19 @@ namespace Tiad.Fake
                 lock (mu)
                 {
                     return noIdentify;
+                }
+            }
+        }
+
+        // CannotApply is what the fake's TIA side says it cannot apply yet,
+        // as tiad.Openness says of modules today, or "".
+        public string CannotApply
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return cannotApply;
                 }
             }
         }
@@ -451,6 +465,7 @@ namespace Tiad.Fake
             string inDoubt = r.Str("failInDoubt");
             bool noDry = r.Bool("noDryRun");
             bool asksTls = r.Bool("uploadAsksTls");
+            string cannot = r.Str("cannotApply");
             var dr = r.Child("device");
             DeviceIdentity dev = dr == null ? BenchDevice() : DeviceIdentity.Read(dr);
             bool noId = r.Bool("noIdentify");
@@ -472,6 +487,7 @@ namespace Tiad.Fake
                 failInDoubt = inDoubt;
                 noDryRun = noDry;
                 uploadAsksTls = asksTls;
+                cannotApply = cannot;
                 device = dev;
                 noIdentify = noId;
             }
@@ -638,6 +654,12 @@ namespace Tiad.Fake
             ProtectionSteps.Run(new FakeMasterSecret(p), next.Cpu.ConfigurationProtection, secrets.ConfigurationPassword, notes);
             p.Station = next;
             p.Changed = was || CpuReuse.Changes(decision, prev, next).Count > 0;
+        }
+
+        public string CannotApply(Station next)
+        {
+            string c = script.CannotApply;
+            return c == "" ? null : c;
         }
 
         public SoftwareResult ImportSoftware(object project, string group, List<SourceFile> sources, List<SourceFile> tagTables, bool prune)

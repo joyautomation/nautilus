@@ -276,6 +276,8 @@ namespace Tiad
             {
                 s.Handle = OnTia(delegate(ITia t)
                 {
+                    string cannot = t.CannotApply(st);
+                    if (cannot != null) throw new TiaException(cannot);
                     string dir = Path.GetDirectoryName(full);
                     if (Directory.Exists(dir)) Directory.Delete(dir, true);
                     Directory.CreateDirectory(dir);
@@ -389,6 +391,8 @@ namespace Tiad
                         ConfigProtection.Plan(pc.Protection, st.Cpu.ConfigurationProtection, sec.ConfigurationPassword != "");
                         kept = pc.Others;
                     }
+                    string cannot = t.CannotApply(st);
+                    if (cannot != null) throw new TiaException(cannot);
                     bool was = s.Compiled;
                     Station prev = s.Station;
                     s.Compiled = false;

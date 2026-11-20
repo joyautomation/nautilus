@@ -687,6 +687,21 @@ func TestAgentForgetsACompileWhenAChangeFails(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// A spec part this side cannot configure yet refuses before any
+	// write: the session is as it was, and can still apply and save.
+	p.SetScript(t, tiadtest.Script{CannotApply: "tiad cannot place rack modules yet"})
+	if _, err := s.ApplyStation(ctx, tiadtest.BenchStation(), tiadtest.BenchSecrets); tiad.Kind(err) != tiad.KindOperationFailed ||
+		!strings.Contains(err.Error(), "cannot place rack modules yet") {
+		t.Fatalf("apply of what this side cannot configure: %v", err)
+	}
+	ok()
+	if _, err := s.Download(ctx, dl); err != nil {
+		t.Fatalf("still compiled and downloadable after a refusal before any write: %v", err)
+	}
+	if _, err := s.Save(ctx, false); err != nil {
+		t.Fatalf("save after a refusal before any write: %v", err)
+	}
+
 	// A station that fails to apply: not compiled, and not described by
 	// any spec until one applies.
 	fail("ApplyStation")

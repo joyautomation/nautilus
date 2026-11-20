@@ -94,13 +94,25 @@ func contractReuse(t *testing.T, start Starter) {
 		t.Fatalf("the kept CPU compiles: %v", err)
 	}
 
-	// The download lists the kept devices before anything loads, and
-	// again when it has loaded.
-	dl := tiad.DownloadRequest{Address: benchCPU, Hardware: true, Software: true, Announced: true}
+	// The download lists the kept devices before anything loads (a dry
+	// run, a refusal for decisions, a declined question), and again when
+	// it has loaded.
+	dl := tiad.DownloadRequest{Address: benchCPU, Hardware: true, Software: true, Announced: true, DryRun: true}
+	if res, err := s.Download(ctx, dl); err != nil || !res.DryRun || !reflect.DeepEqual(res.KeptDevices, kept) {
+		t.Fatalf("a dry run: %+v %v", res, err)
+	}
+	dl.DryRun = false
 	_, err = s.Download(ctx, dl)
 	if tiad.Kind(err) != tiad.KindDecisionRequired || !reflect.DeepEqual(tiad.KeptDevicesOf(err), kept) {
 		t.Fatalf("a download needing decisions: %v, kept %+v", err, tiad.KeptDevicesOf(err))
 	}
+	a.SetQuestions(t, []tiad.Question{{ID: tiad.QuestionStopCPU, Message: "Stop the CPU"}})
+	dl.Decisions = tiad.Decisions{StopCPU: tiad.No(), StartAfter: tiad.No()}
+	_, err = s.Download(ctx, dl)
+	if tiad.Kind(err) != tiad.KindDeclined || !reflect.DeepEqual(tiad.KeptDevicesOf(err), kept) {
+		t.Fatalf("a declined download: %v, kept %+v", err, tiad.KeptDevicesOf(err))
+	}
+	a.SetQuestions(t, nil)
 	dl.Decisions = tiad.Decisions{StartAfter: tiad.No()}
 	res, err := s.Download(ctx, dl)
 	if err != nil || !res.Downloaded || !reflect.DeepEqual(res.KeptDevices, kept) {

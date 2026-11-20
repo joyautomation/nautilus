@@ -389,11 +389,37 @@ namespace Tiad.Openness
         // Station is the project's station: the device holding the CPU.
         static HwDevice StationOf(Project p)
         {
-            foreach (HwDevice d in p.Devices)
+            foreach (HwDevice d in AllDevices(p))
             {
                 if (CpuOf(d) != null) return d;
             }
             return null;
+        }
+
+        // AllDevices is every device in the project, each once: its own,
+        // the ungrouped ones (where TIA puts IO devices) and those in
+        // user device groups, at any depth.
+        static List<HwDevice> AllDevices(Project p)
+        {
+            var all = new List<HwDevice>();
+            var seen = new HashSet<HwDevice>();
+            Action<IEnumerable<HwDevice>> add = delegate(IEnumerable<HwDevice> ds)
+            {
+                foreach (HwDevice d in ds)
+                {
+                    if (seen.Add(d)) all.Add(d);
+                }
+            };
+            add(p.Devices);
+            add(p.UngroupedDevicesGroup.Devices);
+            var groups = new List<DeviceUserGroup>();
+            foreach (DeviceUserGroup g in p.DeviceGroups) groups.Add(g);
+            for (int i = 0; i < groups.Count; i++)
+            {
+                add(groups[i].Devices);
+                foreach (DeviceUserGroup g in groups[i].Groups) groups.Add(g);
+            }
+            return all;
         }
 
         // Cpu is the device item that holds the PLC software, or null.
@@ -465,11 +491,19 @@ namespace Tiad.Openness
         // decided which, CpuReuse.Decide), and sets its PROFINET interface:
         // address, subnet mask, router, PROFINET name (generated names
         // off). Everything else in a spec waits for what S2a learns.
+        // CannotApply is why this side cannot apply next yet, or null.
+        public string CannotApply(Station next)
+        {
+            if (next.Modules.Count > 0) return "tiad cannot place rack modules yet: the first TIA start (S2a) learns the rack";
+            if (next.Profinet != null) return "tiad cannot configure a PROFINET IO system yet: the IO-device attribute names are learned at the first TIA start (S2a)";
+            if (next.WebServer != null && next.WebServer.Enabled) return "tiad cannot configure the web server yet: its attribute names are learned at the first TIA start (S2a)";
+            return null;
+        }
+
         public void ApplyStation(object project, Station next, string decision, Secrets secrets, List<string> notes)
         {
-            if (next.Modules.Count > 0) throw new TiaException("tiad cannot place rack modules yet: the first TIA start (S2a) learns the rack");
-            if (next.Profinet != null) throw new TiaException("tiad cannot configure a PROFINET IO system yet: the IO-device attribute names are learned at the first TIA start (S2a)");
-            if (next.WebServer != null && next.WebServer.Enabled) throw new TiaException("tiad cannot configure the web server yet: its attribute names are learned at the first TIA start (S2a)");
+            string cannot = CannotApply(next);
+            if (cannot != null) throw new TiaException(cannot);
             Tia(delegate
             {
                 Project p = Of(project).Project;
@@ -481,7 +515,7 @@ namespace Tiad.Openness
                 }
                 else
                 {
-                    foreach (HwDevice d in new List<HwDevice>(p.Devices)) d.Delete();
+                    foreach (HwDevice d in AllDevices(p)) d.Delete();
                     station = p.Devices.CreateWithItem(TiaNames.TypeIdentifier(next.Cpu.Order, next.Cpu.Firmware), next.Cpu.Name, next.Cpu.Name + " station");
                 }
                 DeviceItem cpu = CpuOf(station);
@@ -963,9 +997,22 @@ namespace Tiad.Openness
         // AML export have none), so those are not read.
         public DeviceIdentity ProjectCpu(object project)
         {
-            ProjectCpu pc = ReadCpu(project);
-            if (pc == null) throw new TiaException("the project has no CPU");
-            return new DeviceIdentity { Order = pc.Order, Firmware = pc.Firmware };
+            return Tia(delegate
+            {
+                Project p = Of(project).Project;
+                HwDevice d = StationOf(p);
+                if (d == null) throw new TiaException("the project has no CPU");
+                DeviceItem cpu = CpuOf(d);
+                return new DeviceIdentity { Order = CpuAttribute(cpu, "OrderNumber"), Firmware = CpuAttribute(cpu, "FirmwareVersion") };
+            });
+        }
+
+        // CpuAttribute is one of the CPU's attributes as text, checked
+        // against its attribute names first.
+        string CpuAttribute(DeviceItem cpu, string name)
+        {
+            TiaNames.CheckAttribute("the CPU " + cpu.Name, Attributes("DeviceItem", cpu), name);
+            return Convert.ToString(cpu.GetAttribute(name), System.Globalization.CultureInfo.InvariantCulture) ?? "";
         }
 
         // ReadCpu reads the project's CPU: the CPU device item's name,
@@ -981,28 +1028,30 @@ namespace Tiad.Openness
                 HwDevice d = StationOf(p);
                 if (d == null) return (ProjectCpu)null;
                 DeviceItem cpu = CpuOf(d);
-                List<string> names = Attributes("DeviceItem", cpu);
-                TiaNames.CheckAttribute("the CPU " + cpu.Name, names, "OrderNumber");
-                TiaNames.CheckAttribute("the CPU " + cpu.Name, names, "FirmwareVersion");
                 var pc = new ProjectCpu
                 {
                     Name = cpu.Name ?? "",
-                    Order = Convert.ToString(cpu.GetAttribute("OrderNumber"), System.Globalization.CultureInfo.InvariantCulture) ?? "",
-                    Firmware = Convert.ToString(cpu.GetAttribute("FirmwareVersion"), System.Globalization.CultureInfo.InvariantCulture) ?? "",
+                    Order = CpuAttribute(cpu, "OrderNumber"),
+                    Firmware = CpuAttribute(cpu, "FirmwareVersion"),
                     Protection = new MasterSecret(d, cpu).State(),
                 };
-                // The project's devices and its ungrouped ones (where TIA
-                // puts IO devices), each once.
-                var seen = new HashSet<HwDevice> { d };
-                var all = new List<HwDevice>();
-                foreach (HwDevice o in p.Devices) all.Add(o);
-                foreach (HwDevice o in p.UngroupedDevicesGroup.Devices) all.Add(o);
-                foreach (HwDevice o in all)
+                foreach (HwDevice o in AllDevices(p))
                 {
-                    if (seen.Add(o)) pc.Others.Add(Kept(o));
+                    if (!o.Equals(d)) pc.Others.Add(Kept(o));
                 }
                 return pc;
             });
+        }
+
+        // OptionalAttribute is a node attribute's text, or "" when the node
+        // has no attribute of that name (a node of another kind).
+        static string OptionalAttribute(Node n, string name)
+        {
+            foreach (EngineeringAttributeInfo a in n.GetAttributeInfos())
+            {
+                if (a.Name == name) return Convert.ToString(n.GetAttribute(name), System.Globalization.CultureInfo.InvariantCulture) ?? "";
+            }
+            return "";
         }
 
         // Kept describes a device besides the CPU's station by its name and
@@ -1015,8 +1064,8 @@ namespace Tiad.Openness
                 NetworkInterface ni = i.GetService<NetworkInterface>();
                 if (ni == null || ni.Nodes.Count == 0) continue;
                 Node n = ni.Nodes[0];
-                k.Address = Convert.ToString(n.GetAttribute("Address"), System.Globalization.CultureInfo.InvariantCulture) ?? "";
-                k.ProfinetName = Convert.ToString(n.GetAttribute("PnDeviceName"), System.Globalization.CultureInfo.InvariantCulture) ?? "";
+                k.Address = OptionalAttribute(n, "Address");
+                k.ProfinetName = OptionalAttribute(n, "PnDeviceName");
                 break;
             }
             return k;
@@ -1046,7 +1095,7 @@ namespace Tiad.Openness
                 // the Openness manual's station upload does (no station yet,
                 // so no target interface).
                 ConfigurationAddress at = pc.Addresses.Create(address);
-                foreach (HwDevice d in new List<HwDevice>(p.Devices)) d.Delete();
+                foreach (HwDevice d in AllDevices(p)) d.Delete();
                 string asked = null;
                 UploadResult r;
                 var online = new OnlineAsks(sup.Configuration, trustUnverifiedCertificate, address);

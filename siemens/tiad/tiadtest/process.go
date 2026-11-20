@@ -62,6 +62,10 @@ type Script struct {
 	// UploadAsksTLS makes going online for an upload ask TLS trust, as a
 	// CPU with secure PG/PC communication and no known certificate does.
 	UploadAsksTLS bool `json:"uploadAsksTls,omitempty"`
+	// CannotApply is what the TIA side says it cannot apply yet (as
+	// tiad.Openness says of rack modules), refusing every apply before
+	// any write.
+	CannotApply string `json:"cannotApply,omitempty"`
 	// Device is the CPU's identity (nil: BenchDevice), as an upload and
 	// an online read report it.
 	Device *tiad.DeviceIdentity `json:"device,omitempty"`

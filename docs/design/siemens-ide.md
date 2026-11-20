@@ -294,7 +294,10 @@ The rules for applying a spec:
   and TIA assigns any that are left out.
 - **Applying a spec makes the project match it.** A device or module that
   is not in the spec is removed. That is how naut-profinet's
-  module-difference test removes a module.
+  module-difference test removes a module. The exception, until tiad
+  configures IO devices: an apply that keeps the project's CPU keeps the
+  devices besides its station as found, and lists them ("Which CPU an
+  apply uses" below).
 - **Every device's GSDML must already be installed** (`gsd/install`).
 - **Every web user needs a password** in `secrets.webUsers`. Its rights are
   any of `read`, `write`, `mode` (change RUN/STOP) and `diagnostics`.
@@ -355,15 +358,19 @@ The rules for applying a spec:
     is a change from before #789's reuse, when an apply with another CPU
     deleted the station and made it anew without saying so.
   - The devices besides the CPU's station (an adopted station's PROFINET
-    IO device, say) are kept as found: tiad does not configure IO devices
-    yet. The apply lists them in `keptDevices` and in a note; a download
-    lists them again in its result, and in the data of a
-    `decision_required` or `declined` refusal, before anything is loaded,
-    and journals them on its audit line (`kept=[...]`). A kept device that
+    IO device, say), wherever the project holds them (its own, ungrouped,
+    or in a user device group at any depth), are kept as found: tiad does
+    not configure IO devices yet. The apply lists them in `keptDevices`
+    and in a note. A download lists them again in its result (a dry run's
+    too) and in the data of a `decision_required` or `declined` refusal,
+    and journals them on its audit line (`kept=[...]`). A download whose
+    request already answers every question gets no refusal, so the apply
+    and a dry run are where they show before anything loads. A kept device that
     shares a name, a PROFINET name or an address with the spec refuses
     (`cpu_mismatch`) rather than coexist.
   - A refusal before any write (a mismatch, `keep` on a CPU that has
-    nothing to keep, a missing password) leaves the session as it was.
+    nothing to keep, a missing password, a part of the spec this agent
+    cannot configure yet) leaves the session as it was.
   - An apply or an upload that fails part-way leaves the session unclean:
     its project matches no spec, so a later apply or save refuses with
     `unclean_session`, and the session can only be closed without saving.

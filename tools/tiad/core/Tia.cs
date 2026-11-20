@@ -157,6 +157,11 @@ namespace Tiad
         // notes gets what the caller should know besides the changes.
         void ApplyStation(object project, Station next, string decision, Secrets secrets, List<string> notes);
 
+        // CannotApply is why this side cannot apply next at all yet (a
+        // part of the spec it cannot configure), or null. The agent asks
+        // before any write, so such a refusal leaves the session as it was.
+        string CannotApply(Station next);
+
         // ImportSoftware generates blocks from sources into group; with
         // prune, it deletes blocks in group that no source produced.
         SoftwareResult ImportSoftware(object project, string group, List<SourceFile> sources, List<SourceFile> tagTables, bool prune);
