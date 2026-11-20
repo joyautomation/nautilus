@@ -689,6 +689,12 @@ jobs:
       # runner), well inside the job's 30 min.
       - name: Chrome for the browser tests
         run: .github/scripts/require-chrome.test.sh && .github/scripts/require-chrome.sh
+      # The tutorial's shell tests (playground/app/tutorial.browser.test.mjs)
+      # run against the built site and skip without website/dist. The prebuild
+      # fetch of verified clips is soft: no token yields empty data.
+      - name: Build the docs site (the tutorial's shell tests need it)
+        working-directory: website
+        run: npm ci && npm run build
       - name: playground browser tests
         run: GESTURE_NO_SANDBOX=1 node --test playground/app/*.browser.test.mjs
       - name: docs image
