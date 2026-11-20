@@ -695,6 +695,11 @@ jobs:
       - name: Build the docs site (the tutorial's shell tests need it)
         working-directory: website
         run: npm ci && npm run build
+      # Dead links, old URLs that disappeared and pages missing from the
+      # sidebar. Only this job has the playground built (the site links into
+      # /playground/engine/), so the check lives here, not in docs.yml.
+      - name: Docs links (dead links, sidebar completeness)
+        run: node website/scripts/check-links.mjs --sidebar
       - name: playground browser tests
         run: GESTURE_NO_SANDBOX=1 node --test playground/app/*.browser.test.mjs
       - name: docs image
