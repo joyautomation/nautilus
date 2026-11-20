@@ -498,12 +498,111 @@ is running. Each name shows its live value.
 ## Part 8. Build a simple operator screen
 
 The dashboard is for engineers. An operator screen (HMI) shows what the
-operator needs and nothing else. nautilus HMIs are small web apps, written
-in Svelte, and `naut` builds them itself: there is nothing else to install.
-You will make one with a motor symbol, a status line, and Start and Stop
-buttons.
+operator needs and nothing else. There are two ways to make one, and you
+need no code for the first. This part draws it: a motor symbol with Start
+and Stop buttons. Part 8.5 onward is the second way, a small web page in
+Svelte, for when a drawing is not enough. You can stop after 8.4.
 
-### 8.1 Create the page
+### 8.1 Draw the screen
+
+A screen is a file that ends in `.mimic.json`. It lists what is on the
+screen, where, and which tag each thing shows or writes. `naut` builds it
+itself: there is nothing else to install.
+
+1. In `motor`, create a file named `motor.mimic.json` (right-click an
+   empty space in the Explorer, *New File…*) with this content:
+
+```json
+{
+  "name": "Motor M-101",
+  "canvas": { "width": 480, "height": 300 },
+  "equipment": [
+    { "id": "M1", "component": "Pump", "x": 160, "y": 40, "width": 120, "label": "M-101",
+      "bind": { "running": "MotorRun" } },
+    { "id": "Start", "component": "CommandButton", "x": 100, "y": 200,
+      "props": { "tag": "StartPB", "label": "Start", "kind": "start" } },
+    { "id": "Stop", "component": "CommandButton", "x": 260, "y": 200,
+      "props": { "tag": "StopPB", "label": "Stop", "kind": "stop" } }
+  ]
+}
+```
+
+2. Save.
+
+What this says:
+
+- `canvas` is the size of the drawing. The screen scales it to fit the
+  window.
+- Each item in `equipment` is a built-in component placed at `x`, `y`.
+  `Pump` is the pump symbol. `bind` connects a part of it to a tag:
+  `"running": "MotorRun"` means the pump looks running while `MotorRun` is
+  TRUE.
+- `CommandButton` is a push button. It writes `true` to its `tag` for a
+  moment, like a real push button, then `false`. Here the buttons write
+  the `StartPB` and `StopPB` tags your ladder reads.
+
+### 8.2 Check it
+
+```sh
+naut check
+```
+
+You should see `screen motor.mimic.json: 3 equipment, 0 pipes` and a last
+line that ends `0 with errors`. `naut check` builds the screen the way
+`naut run` will and checks every tag it names against `nautilus.yaml`. Try
+it: change `MotorRun` to `MotorRunn` in the file and run it again. You get
+a warning that names `MotorRunn` as a tag the project does not declare.
+Change it back. (If a warning about small text on the *Diagnostics* page
+also appears, that page is `naut`'s own, not yours: ignore it.)
+
+### 8.3 Run it
+
+1. Type:
+
+```sh
+naut run
+```
+
+You should see `hmi (the project's mimics, 3 pages, …)` in the first line.
+The three pages are your screen, *Diagnostics* and *Alarms*, which `naut`
+adds.
+
+2. Open <http://localhost:8080>.
+
+You should see *Motor M-101* in the title bar, a green *Connected*, the
+pump with its name, and two buttons, *Start* and *Stop*.
+
+3. Click *Start*.
+
+You should see the ring around the pump turn from dark to light grey. The
+engineering dashboard (below) or `http://localhost:8080/api/state` shows
+`"MotorRun":true`.
+
+4. Click *Stop*.
+
+You should see the pump go dark again.
+
+The engineering dashboard has moved to <http://localhost:8080/_nautilus/>.
+
+### 8.4 Change the screen
+
+1. In `motor.mimic.json`, change `M-101` in the pump's `label` to another
+   name and save.
+2. Stop `naut run` (`Ctrl+C`) and start it again, then reload the page.
+
+You should see the new name. The [operator screens
+guide](https://nautilus.joyautomation.com/guides/operator-screens/) lists
+every component, how to draw pipes between them, and the editor in VS Code
+that lets you drag the pieces instead of typing numbers.
+
+### 8.5 The same screen as code (optional)
+
+A drawing covers a lot, but not everything. When you want your own layout,
+your own text, or logic in the page, a screen can be a small web app,
+written in Svelte, which `naut` also builds itself. The rest of this part
+makes the same screen that way. Skip to Part 9 if the drawing is enough.
+
+### 8.6 Create the page
 
 1. Make a folder named `hmi` inside `motor`. In VS Code, right-click an
    empty space in the Explorer, choose *New Folder…*, and type `hmi`.
@@ -567,7 +666,7 @@ The folder is laid out the way SvelteKit lays out an app: each page is a
 page at `/pumps`), shared components go in `src/lib`, and files in
 `static` are served as they are.
 
-### 8.2 Tell the controller to serve it
+### 8.7 Tell the controller to serve it
 
 1. Click `nautilus.yaml`.
 2. Under `server:`, add a line so it reads:
@@ -581,7 +680,7 @@ server:
 
 3. Save.
 
-### 8.3 Run it
+### 8.8 Run it
 
 1. Type:
 
@@ -590,7 +689,9 @@ naut run
 ```
 
 You should see `dashboard` replaced by `hmi (hmi/, 1 page, built in …)` in
-the first line: `naut` built the screen before it started.
+the first line: `naut` built the screen before it started. (`server.hmi`
+wins over any `*.mimic.json` drawing, so this page replaces the one you
+drew above.)
 
 2. Open <http://localhost:8080>.
 
@@ -608,7 +709,7 @@ You should see the pump stop and the text change to *Stopped*.
 
 The engineering dashboard has moved to <http://localhost:8080/_nautilus/>.
 
-### 8.4 Change the screen
+### 8.9 Change the screen
 
 1. In `hmi/src/routes/+page.svelte`, change `Motor M-101` in the `<h1>` to
    another name and save.
