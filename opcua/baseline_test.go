@@ -203,6 +203,8 @@ func TestStartupWritesTheLiveValueOnce(t *testing.T) {
 	if w := d.Health().Writes; w != 1 || ts.get(t, "Setpoint") != 5.0 {
 		t.Fatalf("writes = %d, server holds %v, want one write of 5", w, ts.get(t, "Setpoint"))
 	}
+}
+
 // A driver swapped in under HoldOutputsOnSwap commands nothing until an
 // output changes, whatever the server holds: the runtime holds its baseline
 // (io.BaselineHolder), which must not decide against the server (#1123).
