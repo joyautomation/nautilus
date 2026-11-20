@@ -12,21 +12,48 @@ change is recorded against them. About twenty minutes, on the box from the
 
 ## Say who may do what
 
-Add an `auth:` block to `nautilus.yaml`. The manifest says which user has
-which role, so it is reviewed in git; the passwords are not in it:
+One command adds an `auth:` block to `nautilus.yaml`, naming the people and
+their roles (run it in the project folder, on your own computer):
+
+```sh
+naut auth init --user akhan:operator --user jsmith:engineer
+```
+
+```text
+nautilus.yaml: wrote a starter auth: block
+With it, every request needs a credential: reads too, unless you set anonymous: viewer.
+server.tls: self-signed: the controller serves HTTPS with a certificate it makes in its state directory, so passwords never cross the network in the clear.
+…
+Next:
+  naut users add akhan       # akhan's password, kept on the controller (sudo on a box)
+  naut users add jsmith      # jsmith's password, kept on the controller (sudo on a box)
+  restart naut run to apply (a built controller: build and deploy it again)
+```
+
+It changed two things in the file. Under `server:` it added `tls: self-signed`
+(the HTTPS part, below), and at the end it added the block:
 
 ```yaml
 auth:
-  users:
+  users:                     # viewer < operator < supervisor < engineer < administrator
     akhan: [operator]
     jsmith: [engineer]
+  # anonymous: viewer          # a request with no credential may read (a wall screen)
+  # session: 12h               # a browser sign-in lasts this long (1m to 168h)
+  …
 ```
 
-The built-in roles each add to the one before: `viewer` reads; `operator`
-also writes tags, acknowledges alarms and commands sequences; `supervisor`
-shelves alarms and reads the audit journal; `engineer` also forces, edits
-online and downloads; `administrator` manages users. Run `naut check` (it
-refuses a misspelt role) and update the box.
+The manifest says which user has which role, so it is reviewed in git; the
+passwords are not in it. The other keys are left as commented examples to
+turn on when you need them. The built-in roles each add to the one before:
+`viewer` reads; `operator` also writes tags, acknowledges alarms and commands
+sequences; `supervisor` shelves alarms and reads the audit journal; `engineer`
+also forces, edits online and downloads; `administrator` manages users. Run
+`naut check` (it refuses a misspelt role), then update the box:
+
+```sh
+naut deploy update deploy@plc1
+```
 
 From now on every `GET` under `/api/` needs the `read` permission, too. With
 no credential, a request gets `401`, and a screen opened in a browser
@@ -81,44 +108,34 @@ role and the missing permission:
 {"error":"user:akhan (operator) may not force"}
 ```
 
-## Serve it over HTTPS
+## HTTPS, and the certificate's fingerprint
 
 A browser sign-in sends a password, so the controller accepts one only over
-HTTPS. Over plain HTTP from another machine the sign-in page says so, and
-has no password box:
+HTTPS. `naut auth init` already turned that on: `tls: self-signed` makes the
+controller create its own certificate the first time it starts, in its state
+directory on the box, and renew it. The start-up log says so, and prints the
+certificate's **fingerprint**:
+
+```sh
+ssh deploy@plc1 'sudo journalctl -u nautilus -n 20 --no-pager | grep -A1 self-signed'
+```
 
 ```text
-Password sign-in needs HTTPS. Reach this controller over https:// (server.tls, or a TLS proxy named in server.trusted-proxies).
+controller[1423]: naut run: HTTPS with a self-signed certificate it just made (/var/lib/nautilus/tls/self-signed.pem, until 2027-12-22).
+controller[1423]:   SHA-256 fingerprint: C1:2C:37:75:EE:0C:7B:9A:F8:82:76:08:83:99:B7:CE:76:70:E0:08:AB:BA:F9:FD:37:24:D9:07:60:20:90:EC
 ```
 
-You need a certificate on the box. For a lab, make one yourself:
+A self-signed certificate is not vouched for by anyone, so a browser warns the
+first time. The fingerprint is how you know it is *your* box you are talking
+to: open `https://plc1:8080`, look at the certificate in the warning page, and
+compare. (The same fingerprint from the outside, with
+`openssl s_client -connect plc1:8080 | openssl x509 -noout -fingerprint -sha256`.)
+The log also lists the names and addresses the certificate is valid for.
 
-```sh
-sudo install -d -m 755 /etc/nautilus/tls
-sudo openssl req -x509 -newkey rsa:2048 -nodes -days 365 -subj "/CN=plc1" \
-  -addext "subjectAltName=DNS:plc1,IP:10.0.0.5" \
-  -keyout /etc/nautilus/tls/plc.key -out /etc/nautilus/tls/plc.crt
-sudo chmod 600 /etc/nautilus/tls/plc.key
-```
-
-(For a plant, use a certificate from your own certificate authority; a
-browser will warn about a self-signed one.) The service runs as a throwaway
-user that cannot read a root-owned key, so hand the files over as systemd
-credentials, and point the controller at the copies:
-
-```sh
-sudo mkdir -p /etc/systemd/system/nautilus.service.d
-printf '[Service]\nLoadCredential=tls.crt:/etc/nautilus/tls/plc.crt\nLoadCredential=tls.key:/etc/nautilus/tls/plc.key\n' | sudo tee /etc/systemd/system/nautilus.service.d/tls.conf
-printf 'NAUTILUS_TLS_CERT=/run/credentials/nautilus.service/tls.crt\nNAUTILUS_TLS_KEY=/run/credentials/nautilus.service/tls.key\n' | sudo tee -a /etc/nautilus/env
-sudo systemctl daemon-reload && sudo systemctl restart nautilus
-```
-
-The start-up line now says `tag API on https://0.0.0.0:8080`. Systemd
-credentials need a real machine or virtual machine; some containers cannot
-provide them and the controller then fails to start with `permission denied`
-on that path. Open `https://plc1:8080` in a browser: it goes to the sign-in
-page, and after signing in the screen opens. A wrong password and an unknown user both answer the
-same way, so the page does not say which names exist:
+Plain `http://` to that port is refused (`400`: it speaks only HTTPS). After you
+accept the certificate, `https://plc1:8080` goes to the sign-in page, and after
+signing in the screen opens. A wrong password and an unknown user both answer
+the same way, so the page does not say which names exist:
 
 ```text
 {"error":"sign-in refused: the user name or password is wrong"}
@@ -126,6 +143,13 @@ same way, so the page does not say which names exist:
 
 The browser's session lasts 12 hours by default (`auth.session`), and a
 restart of the controller signs everyone out.
+
+**For a plant, use a certificate from your own certificate authority**, so no
+browser warns: set `server.tls: {cert: /abs/cert.pem, key: /abs/key.pem}`. On a
+box the service's user cannot read a root-owned key, so the files are handed
+over as systemd credentials: [HTTPS in Continuous
+deployment](/guides/deployment/#https) has the steps (and notes that they need a
+real machine or virtual machine, not every container).
 
 ## Some actions ask for your password again
 
