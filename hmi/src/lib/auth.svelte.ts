@@ -12,9 +12,9 @@
 // Nothing here grants anything: the controller decides every request. A
 // control the kit greys out for a role is a convenience; the server's
 // refusal is the answer.
-import { askPassword } from './confirm.svelte.js';
+import { askPassword, confirm } from './confirm.svelte.js';
 import { setKitFetch, setStreamHooks, type Fetch } from './kitfetch.js';
-import { AuthSession, clockSkew, holdsAnywhere, needsPassword, type AuthDeps, type Me, type Referral } from './auth.js';
+import { AuthSession, clockSkew, confirmsAtProvider, holdsAnywhere, needsPassword, signedInName, type AuthDeps, type Me, type Referral } from './auth.js';
 import { can, deniedReason } from './areas.js';
 import { setAuthView } from './authview.js';
 
@@ -36,6 +36,11 @@ export { deniedFor, asksPassword } from './authview.js';
 export interface AuthOptions {
 	/** Ask for the password some other way. Default: the `<ConfirmDialog/>`. */
 	prompt?: AuthDeps['prompt'];
+	/**
+	 * Ask before leaving the page to confirm an OIDC sign-in at the provider
+	 * some other way. Default: the `<ConfirmDialog/>`.
+	 */
+	confirmLeave?: AuthDeps['confirmLeave'];
 	/** The fetch it wraps. Default: the browser's. */
 	fetch?: Fetch;
 }
@@ -48,6 +53,8 @@ export class AuthClient {
 	supported = $state(true);
 	/** A standby's referral that was not followed (for a banner), or null. */
 	referral = $state<Referral | null>(null);
+	/** Back from confirming at the provider: what to tell the operator, or null. */
+	notice = $state<string | null>(null);
 	/** The controller's clock minus the browser's, ms. */
 	skew = $state(0);
 	/** The browser's clock, ticking while started, so a password badge appears when the window lapses. */
@@ -69,6 +76,14 @@ export class AuthClient {
 						confirmLabel: 'Confirm',
 						error: ask.error
 					})),
+			confirmLeave:
+				opts.confirmLeave ??
+				((ask) =>
+					confirm({
+						title: `Confirm at ${ask.provider || 'the sign-in provider'}`,
+						body: `This action needs you to enter your credentials again at ${ask.provider || 'the sign-in provider'}${ask.user ? ` (${ask.user})` : ''}. This page reloads afterwards: anything unsaved on it is lost, and you do the action again.`,
+						confirmLabel: 'Go to sign-in'
+					})),
 			navigate: (href) => globalThis.location.assign(href),
 			location: () => globalThis.location,
 			storage: (() => {
@@ -82,6 +97,7 @@ export class AuthClient {
 				this.me = this.session.me;
 				this.supported = this.session.supported;
 				this.referral = this.session.referral;
+				this.notice = this.session.notice;
 				this.skew = clockSkew(this.session.me, Date.now());
 			}
 		});
@@ -144,10 +160,19 @@ export class AuthClient {
 		return deniedReason(this.me, perm, target);
 	}
 
-	/** The signed-in user's name, or null (a token, anonymous, no auth:). */
+	/** The signed-in user's name, or null (a token, anonymous, no auth:). A local user's or an OIDC name. */
 	get user(): string | null {
-		const p = this.me?.principal ?? '';
-		return p.startsWith('user:') ? p.slice(5) : null;
+		return signedInName(this.me);
+	}
+
+	/** Whether this sign-in is confirmed at the OIDC provider, not by a password. */
+	get atProvider(): boolean {
+		return confirmsAtProvider(this.me);
+	}
+
+	/** Forget the notice. */
+	dismissNotice(): void {
+		this.session.dismissNotice();
 	}
 
 	/** Sign out, then the sign-in page. Resolves null, or the reason it could not. */

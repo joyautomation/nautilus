@@ -11,6 +11,12 @@
 //     and repeats the refused request ONCE, byte for byte (a substitute's
 //     requestId is the same one). Concurrent refusals share one prompt.
 //     Cancel and the caller gets the original refusal;
+//   - a 401 that says `elevate: "oidc"` (an OIDC sign-in, which has no
+//     password here, older than auth.elevation) asks the operator first,
+//     then sends the whole page to the controller's confirmation URL (its
+//     `url`, only when it is this origin's /auth/oidc/start), coming back
+//     here. The action is not repeated: the page leaves, and on its return
+//     `notice` says to do it again;
 //   - any other 401 is judged by a fresh GET /api/me, never by the 401
 //     itself: a browser that had a session and now has none (signed out
 //     elsewhere, expired, revoked, five wrong passwords) goes to the sign-in
@@ -34,6 +40,12 @@ export interface MeSession {
 	expires: string;
 	/** When its password stops counting for the elevated permissions. */
 	elevatedUntil: string;
+	/**
+	 * How it was proved, and so confirmed again: `password` (POST
+	 * /api/elevate) or `oidc` (at the provider). Absent from older
+	 * controllers: a password.
+	 */
+	method?: 'password' | 'oidc';
 }
 
 /** GET /api/me. */
@@ -57,6 +69,10 @@ export interface Me {
 	signIn?: boolean;
 	/** The controller's clock, RFC 3339. */
 	now?: string;
+	/** The ways /signin offers: `password`, `oidc`. */
+	signInMethods?: string[];
+	/** The OIDC provider's name ("Sign in with <provider>"), when there is one. */
+	provider?: string;
 }
 
 /** A standby's referral the page did not (or could not) follow. */
@@ -94,6 +110,70 @@ export function refusalMessage(status: number, body: string, failed = 'request f
 /** A 401 asking for the password again (elevation). */
 export function wantsElevation(status: number, body: string): boolean {
 	return status === 401 && refusalBody(body)?.elevate === true;
+}
+
+/** The controller's confirmation URL for an OIDC sign-in (it adds nothing else). */
+export const OIDC_ELEVATE_PATH = '/auth/oidc/start';
+
+/**
+ * A 401 asking for the OIDC sign-in to be confirmed at the provider: the
+ * URL it names (maybe ""), or null when it is not one.
+ */
+export function providerElevation(status: number, body: string): string | null {
+	if (status !== 401) return null;
+	const j = refusalBody(body);
+	if (j?.elevate !== 'oidc') return null;
+	return typeof j.url === 'string' ? j.url : '';
+}
+
+/**
+ * Where to send the page to confirm at the provider: the controller's URL
+ * when it is this page's origin and its /auth/oidc/start (anything else is
+ * refused: null), with elevate=1 and next= this page, path and query only.
+ */
+export function providerTarget(url: string | null | undefined, here: { href: string; pathname: string; search: string }): string | null {
+	let u: URL;
+	let cur: URL;
+	try {
+		cur = new URL(here.href);
+		u = new URL(url || OIDC_ELEVATE_PATH + '?elevate=1', cur);
+	} catch {
+		return null;
+	}
+	if (u.origin !== cur.origin || u.pathname !== OIDC_ELEVATE_PATH) return null;
+	u.searchParams.set('elevate', '1');
+	u.searchParams.set('next', here.pathname + here.search);
+	return u.pathname + u.search;
+}
+
+/** Where a page that left to confirm at the provider notes it (sessionStorage). */
+export const CONFIRM_KEY = 'nautilus.confirmingAt';
+/** How long such a note counts: the provider's page is not a long stay. */
+export const CONFIRM_NOTE_MS = 15 * 60_000;
+
+/** The signed-in name, without its kind: `user:akhan` and `oidc:eng@corp` both. */
+export function signedInName(me: Me | null | undefined): string | null {
+	const p = me?.principal ?? '';
+	if (p.startsWith('user:')) return p.slice(5);
+	if (p.startsWith('oidc:')) return p.slice(5);
+	return null;
+}
+
+/** Whether this sign-in is confirmed at the provider (not by a password). */
+export function confirmsAtProvider(me: Me | null | undefined): boolean {
+	return me?.session?.method === 'oidc';
+}
+
+/**
+ * The sign-in link for a page that is not signed in: straight to the
+ * provider when it is the only way in, else /signin. Both come back here.
+ */
+export function signInLink(me: Me | null | undefined, here: { pathname: string; search: string }): { href: string; label: string } {
+	const m = me?.signInMethods ?? [];
+	if (m.length === 1 && m[0] === 'oidc' && me?.provider) {
+		return { href: OIDC_ELEVATE_PATH + '?next=' + encodeURIComponent(here.pathname + here.search), label: `Sign in with ${me.provider}` };
+	}
+	return { href: signInHref(here), label: 'Sign in' };
 }
 
 /** A standby's 503 referral: the leader it names (maybe ""), or null when it is not one. */
@@ -226,6 +306,14 @@ export function passwordState(me: Me | null | undefined, localNow: number, skew 
 	return { held, fresh, untilLocal: Number.isFinite(until) ? until - skew : NaN };
 }
 
+/** What the operator is asked before the page leaves for the provider. */
+export interface ProviderAsk {
+	/** The provider's name, when the controller says. */
+	provider: string;
+	/** The signed-in name. */
+	user: string;
+}
+
 /** What the password prompt is told. */
 export interface PasswordAsk {
 	/** The signed-in user, from the principal. */
@@ -239,6 +327,12 @@ export interface AuthDeps {
 	fetch: Fetch;
 	/** Ask for the password; null when the operator cancels (or nobody can ask). */
 	prompt: (ask: PasswordAsk) => Promise<string | null>;
+	/**
+	 * Ask whether to leave the page to confirm the sign-in at the provider
+	 * (unsaved work on it is lost). False, or absent, and the page stays:
+	 * the caller gets the refusal.
+	 */
+	confirmLeave?: (ask: ProviderAsk) => Promise<boolean>;
 	/** Send the page somewhere (location.assign). */
 	navigate: (href: string) => void;
 	/** The page's location. */
@@ -262,10 +356,16 @@ export class AuthSession {
 	supported = true;
 	/** A referral that was not followed, for a banner; null otherwise. */
 	referral: Referral | null = null;
+	/**
+	 * Back from confirming at the provider: what to tell the operator (do
+	 * the action again), once; null otherwise.
+	 */
+	notice: string | null = null;
 
 	readonly #d: AuthDeps;
 	#hadSession = false;
 	#elevating: Promise<boolean> | null = null;
+	#leavingForProvider: Promise<boolean> | null = null;
 	#leaving = false;
 	#probeWait = PROBE_MIN_MS;
 	#nextProbe = 0;
@@ -320,8 +420,73 @@ export class AuthSession {
 		}
 		this.supported = true;
 		if (this.me.session) this.#hadSession = true;
+		this.#backFromProvider(this.me);
 		this.#changed();
 		return this.me;
+	}
+
+	/** A note left before going to the provider: read it once, and say how it went. */
+	#backFromProvider(me: Me) {
+		const st = this.#d.storage;
+		if (!st || this.#leaving) return;
+		let raw: string | null = null;
+		try {
+			raw = st.getItem(CONFIRM_KEY);
+			if (raw === null) return;
+			st.setItem(CONFIRM_KEY, '');
+		} catch {
+			return;
+		}
+		if (!raw) return;
+		let note: { at?: number; provider?: string };
+		try {
+			note = JSON.parse(raw);
+		} catch {
+			return;
+		}
+		const at = Number(note.at);
+		if (!Number.isFinite(at) || this.#now() - at > CONFIRM_NOTE_MS || this.#now() < at) return;
+		const until = me.session ? Date.parse(me.session.elevatedUntil) : NaN;
+		const now = me.now ? Date.parse(me.now) : NaN;
+		const where = note.provider || 'the provider';
+		this.notice =
+			Number.isFinite(until) && Number.isFinite(now) && until > now
+				? `Confirmed at ${where}. Do the action again.`
+				: `Not confirmed at ${where}: the action was not done.`;
+	}
+
+	/** Forget the notice (the operator read it). */
+	dismissNotice(): void {
+		this.notice = null;
+		this.#changed();
+	}
+
+	/**
+	 * Confirm this OIDC sign-in at the provider: ask the operator, then send
+	 * the page to `url` (the controller's, else the default), coming back
+	 * here. Concurrent callers share one question. Resolves true when the
+	 * page is leaving, false when it stays.
+	 */
+	confirmAtProvider(url?: string): Promise<boolean> {
+		this.#leavingForProvider ??= this.#runConfirmAtProvider(url).finally(() => {
+			this.#leavingForProvider = null;
+		});
+		return this.#leavingForProvider;
+	}
+
+	async #runConfirmAtProvider(url?: string): Promise<boolean> {
+		if (this.#leaving) return true;
+		const target = providerTarget(url, this.#d.location());
+		if (!target || !this.#d.confirmLeave) return false;
+		const provider = this.me?.provider ?? '';
+		if (!(await this.#d.confirmLeave({ provider, user: signedInName(this.me) ?? '' }))) return false;
+		try {
+			this.#d.storage?.setItem(CONFIRM_KEY, JSON.stringify({ at: this.#now(), provider }));
+		} catch {
+			// No note: the page comes back without saying so. It still works.
+		}
+		this.#leave(target);
+		return true;
 	}
 
 	/**
@@ -376,6 +541,9 @@ export class AuthSession {
 	 * callers share one prompt. Resolves true once proved.
 	 */
 	elevate(): Promise<boolean> {
+		// An OIDC sign-in has no password here: it is confirmed at the
+		// provider, and the page leaves (never a success to retry on).
+		if (confirmsAtProvider(this.me)) return this.confirmAtProvider().then(() => false);
 		this.#elevating ??= this.#runElevate().finally(() => {
 			this.#elevating = null;
 		});
@@ -383,7 +551,7 @@ export class AuthSession {
 	}
 
 	async #runElevate(): Promise<boolean> {
-		const user = (this.me?.principal ?? '').replace(/^user:/, '');
+		const user = signedInName(this.me) ?? '';
 		let error: string | undefined;
 		for (;;) {
 			const password = await this.#d.prompt({ user, error });
@@ -438,6 +606,13 @@ export class AuthSession {
 		if (res.status === 503) {
 			const leader = standbyLeader(res.status, text);
 			if (leader !== null) this.#refer(leader, refusalMessage(res.status, text));
+			return res;
+		}
+		const toProvider = providerElevation(res.status, text);
+		if (toProvider !== null) {
+			// The page leaves (or stays, if the operator says no): either way
+			// this request's answer is the refusal; it is never repeated.
+			await this.confirmAtProvider(toProvider);
 			return res;
 		}
 		if (wantsElevation(res.status, text)) {

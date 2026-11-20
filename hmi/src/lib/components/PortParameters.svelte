@@ -177,7 +177,7 @@
 									size="sm"
 									variant="danger"
 									disabled={busy !== null || !(draft[p.ref] ?? '').trim() || !!writeDenied}
-									title={writeDenied || (writeAsks ? 'asks for your password first' : undefined)}
+									title={writeDenied || (writeAsks ? 'asks you to confirm your sign-in first' : undefined)}
 									onclick={() => write(p)}
 								>
 									{#if writeAsks && !writeDenied}<Icon name="lock-closed" size={12} />{/if}Write…

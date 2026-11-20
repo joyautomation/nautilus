@@ -209,9 +209,14 @@ export {
 	holdsAnywhere,
 	needsPassword,
 	clockSkew,
-	FOLLOW_GUARD_MS
+	FOLLOW_GUARD_MS,
+	providerElevation,
+	providerTarget,
+	signedInName,
+	signInLink,
+	confirmsAtProvider
 } from './auth.js';
-export type { Me, MeSession, Referral, PasswordAsk, AuthDeps } from './auth.js';
+export type { Me, MeSession, Referral, PasswordAsk, ProviderAsk, AuthDeps } from './auth.js';
 export { kitFetch, setKitFetch } from './kitfetch.js';
 export { passwordState } from './auth.js';
 export { deniedFor, asksPassword } from './auth.svelte.js';
