@@ -124,7 +124,8 @@ lifetime (§5).
 | Anonymous on `None` | yes, as today | `Bad_UserAccessDenied` |
 | Anonymous on `None`, with `opcua.anonymous-writes: true` (lab only, §7 decision 9) | yes | **yes**: a writer, with no certificate |
 | Anonymous on `SignAndEncrypt` from a trusted certificate | yes | **yes**: the writer role |
-| UserName / X.509 user token | not advertised in v1 | see Q2 |
+| UserName token (#708 PR 8a), on `SignAndEncrypt` from a trusted certificate | yes | **yes**, where `opcua.writable` opens the tag AND the user's roles allow `write` on its area |
+| X.509 user token | not advertised | — |
 
 `AccessLevel` is a property of the node: `CurrentRead|CurrentWrite` for a matched
 non-input tag, otherwise `CurrentRead` (`namespace.go:390-393`). `UserAccessLevel` and
@@ -428,6 +429,17 @@ dispositions:
    the audit log and counters. Scalars and struct members only. Guide **Writes**,
    OPC-008 rewritten, OPC-018 to OPC-022. Run the black-box brief here.
 4. **Arrays and IndexRange writes.** Plus UserName tokens if Q2 says so.
+   **UserName tokens, built 2026-11-20 (#708 PR 8a,** identity-audit.md §5 item 8): offered on the
+   secure endpoints only when the `auth:` block grants users (never on None), accepted only on a
+   SignAndEncrypt channel from a trusted certificate, and checked against the controller's local
+   users through the HTTP server's sign-in (same throttle, hashing slots and journal), off the
+   message loop. A user writes where `opcua.writable` opens the tag AND their roles allow `write` on
+   its area. The user is rechecked at every request. Every OPC UA write is journalled, source
+   `opcua`. **Decision 2 under `auth:`, changed 2026-11-20 (James):** a trusted
+   certificate writes only if `auth.opcua-certificates` maps it (by thumbprint or subject) to
+   grants, as a service token, journalled `opcua-cert:<name>`. An unmapped one is read-only and
+   signs in with a user name to write. `opcua.anonymous-writes` is refused with `auth:`. Without
+   `auth:`, decision 2 stands. Reads are not gated by `auth:` (decision 4).
 
 ## 7. Decisions (James, 2026-10-31)
 

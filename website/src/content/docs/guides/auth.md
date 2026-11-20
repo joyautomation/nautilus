@@ -176,6 +176,36 @@ From then on every kit client (tag writes, alarms, substitutes, IO-Link paramete
 
 **The controller decides.** What the HMI shows or greys out for a role is a convenience; every request is still checked by the controller, and its refusal is the answer.
 
+## OPC UA
+
+With `auth:`, an OPC UA client writes only as someone the block names. Both ways need a SignAndEncrypt channel from a certificate the server trusts (`naut opcua trust`):
+
+- **As a user.** The client signs in with a user name and password (a UserName token), checked like a browser's sign-in, throttle included. It then writes where the user's roles allow.
+- **As its certificate.** For a SCADA or historian that connects as an application, not a person, map its certificate to grants, as a service token's:
+
+  ```yaml
+  auth:
+    areas:
+      receiving: {tags: ["RCV_*"]}
+    opcua-certificates:
+      scada:
+        thumbprint: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b
+        grants: [{role: operator, areas: [receiving]}]
+      historian:
+        subject: "CN=Historian,O=Plant"
+        grants: viewer
+  ```
+
+  Name each certificate by exactly one of:
+  - `thumbprint`: the 40-digit SHA-1 that `naut opcua certs` prints;
+  - `subject`: its subject, exactly as `naut opcua certs` prints it.
+
+  **Prefer the thumbprint.** A thumbprint names one certificate. A subject is whatever the certificate says about itself, so a subject mapping also grants its roles to any other certificate with the same subject that is trusted later, a lookalike approved from `rejected/` for instance. If one certificate matches both a thumbprint mapping and a subject mapping, the thumbprint wins.
+
+  The session then writes as `opcua-cert:<name>`, within those grants, and the journal names it so.
+
+A trusted certificate the block does not map is **read-only**: its client signs in with a user name to write. `opcua.anonymous-writes` can't be used with `auth:` (the load refuses it). Either way, the tag must also be open in `opcua.writable`. Without `auth:`, a trusted certificate writes what `opcua.writable` opens, as before.
+
 ## A redundant pair
 
 - **Copy the users file.** Both controllers need the same `users.json`. Copy it from one box to the other after a change, rather than adding users on each box (each box would salt the passwords differently). The pair's [hello check](/guides/redundancy/) reports a difference.
@@ -200,7 +230,8 @@ From then on every kit client (tag writes, alarms, substitutes, IO-Link paramete
 
 ## Limits
 
-- **The OPC UA server and Sparkplug writes are not covered yet** (#708). A client that reaches them is not asked for a role, and `naut run` prints a warning saying so whenever `auth:` is set.
+- **Sparkplug writes are not covered yet** (#708). A host that can publish to the broker is not asked for a role.
+- **OPC UA reads are not gated by `auth:` yet.** Reading, browsing and subscribing stay open to every session, anonymous ones included. OPC UA writes are covered (see [OPC UA](#opc-ua)). `naut run` prints a warning saying so whenever `auth:` is set.
 - **`naut historian`'s own port is not covered.** It answers its archive by `localhost`, an IP address or an allowed name, or with `NAUTILUS_TOKEN`, as before, with no roles. Reads through the controller's `/api/history` need `read`; keep the historian's port off networks that shouldn't read the archive.
 - **A standby answers some reads from its own users file.** `/api/cluster` and `/api/history` are answered by the standby itself, so a token revoked or a user disabled only on the leader can still read them there until the users file is copied to the standby.
 - **Sessions live on the leader.** On a redundant pair a failover signs browser users out (see [A redundant pair](#a-redundant-pair)).

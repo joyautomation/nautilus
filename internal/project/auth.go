@@ -32,6 +32,12 @@ type AuthConfig struct {
 	// user's ({role, areas}); its secret comes from the environment
 	// (NAUTILUS_TOKEN_<NAME>), never the manifest.
 	ServiceTokens map[string]AuthGrants `yaml:"service-tokens"`
+	// OPCUACerts maps an OPC UA client certificate (a trusted one, by its
+	// thumbprint or its subject) to grants, as a service token's: such a
+	// session writes as opcua-cert:<name> within those grants. Under an
+	// auth: block a trusted certificate it does not map writes nothing;
+	// its client signs in with a user name to write (#708 PR 8a).
+	OPCUACerts map[string]AuthCert `yaml:"opcua-certificates"`
 	// StateDir is where the controller keeps its users file (users.json:
 	// password hashes and personal access tokens). Default: systemd's
 	// $STATE_DIRECTORY. Never inside the project, so no hash reaches git.
@@ -64,6 +70,15 @@ type AuthRole struct {
 type AuthGrant struct {
 	Role  string   `yaml:"role"`
 	Areas []string `yaml:"areas"`
+}
+
+// AuthCert is one OPC UA client certificate's mapping: exactly one of a
+// thumbprint (the 40-digit SHA-1 naut opcua certs prints) or a subject (as
+// it prints it), and its grants, a role or a list as a user's.
+type AuthCert struct {
+	Thumbprint string     `yaml:"thumbprint"`
+	Subject    string     `yaml:"subject"`
+	Grants     AuthGrants `yaml:"grants"`
 }
 
 // AuthGrants are a service token's grants: a role's name, or a list of
@@ -158,6 +173,12 @@ func (c *AuthConfig) settings() auth.Settings {
 	}
 	for name, gs := range c.ServiceTokens {
 		s.ServiceTokens[name] = grants(gs)
+	}
+	if len(c.OPCUACerts) > 0 {
+		s.OPCUACerts = map[string]auth.CertGrant{}
+		for name, cg := range c.OPCUACerts {
+			s.OPCUACerts[name] = auth.CertGrant{Thumbprint: cg.Thumbprint, Subject: cg.Subject, Grants: grants(cg.Grants)}
+		}
 	}
 	return s
 }

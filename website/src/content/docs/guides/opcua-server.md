@@ -468,8 +468,39 @@ async with client:
 
 ### Sessions
 
-Sessions are anonymous on every endpoint; no user names are offered yet. A
-session belongs to the channel that created it. Its authentication token is
+Sessions are anonymous, unless the project has an [`auth:` block](/guides/auth/)
+that grants users roles: then the secure endpoints also offer a **user name
+and password** (a UserName token). They are the controller's local users,
+the ones a browser signs in with (`naut users add`). The None endpoint never
+offers one. A user session is accepted only on a SignAndEncrypt channel
+from a trusted client certificate: the certificate says which application is
+connecting, and the user says who is at it.
+
+- **The check is sign-in's.** The password is checked with the same throttle
+  (per client address and per user name) and the same hashing slots as a
+  browser's sign-in. Every attempt is journalled as `auth.signin`, source
+  `opcua`. A wrong name or password, a user the `auth:` block grants
+  nothing, and the throttle all answer `Bad_UserAccessDenied`. The journal
+  says which one it was; the client is not told.
+- **What a user may write.** A tag `opcua.writable` opens, on an area the
+  user's roles allow `write` on (`auth.users`, `auth.areas`). Writing
+  anywhere else is `Bad_UserAccessDenied`, and `UserAccessLevel` says so per
+  node.
+- **It is checked at every request.** Removing a user, disabling them or
+  changing their password (`naut users`) stops their session writing at
+  once, as it ends their browser sessions.
+- **A trusted certificate without a user** writes only when the `auth:`
+  block maps it to roles (`auth.opcua-certificates`, by thumbprint or
+  subject; see [OPC UA under auth:](/guides/auth/#opc-ua)). It then writes
+  as `opcua-cert:<name>` within those roles' areas. An unmapped one is
+  read-only, and its writes are refused with a reason that says to sign in
+  with a user name. `opcua.anonymous-writes` can't be used with `auth:`.
+  Without `auth:`, a trusted certificate writes what `opcua.writable`
+  opens, as before.
+- **Reads are not gated by `auth:` yet.** Every session, anonymous ones on
+  None included, reads, browses and subscribes as before.
+
+A session belongs to the channel that created it. Its authentication token is
 a random 32-byte value, and a request that presents it on any other
 connection is refused with `Bad_SecureChannelIdInvalid`. A client that loses
 its connection opens a new session.
@@ -629,7 +660,19 @@ standby again.
 
 ### Audit
 
-Every landed item is logged on the console as an `opcua: write` line naming
+With an [`auth:` block](/guides/auth/), every item of every Write is
+journalled in the controller's audit journal (#709) as `tag.write`, source
+`opcua`, one entry per item as the tag API writes one per tag:
+
+- **Who:** the user (`user:<name>`), the mapped certificate
+  (`opcua-cert:<name>`), or `anonymous`.
+- **From:** the client certificate's thumbprint, or the address when there
+  is none.
+- **A landed item** carries its value before and after.
+- **A refused one** carries its status and reason. Like the tag API's
+  refusals, a flood of them from one client is summed up as one entry.
+
+Every landed item is also logged on the console as an `opcua: write` line naming
 the node, the old and the new value, the session, the client's
 `ApplicationUri`, the first 16 digits of its certificate thumbprint and its
 address; an anonymous writer's line has no URI or thumbprint and says

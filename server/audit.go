@@ -222,6 +222,59 @@ func (a *auditor) record(e audit.Entry) {
 	a.writeLocked(e)
 }
 
+// recordBatch journals es as one durable batch: each refusal is counted in
+// its window as record would (and those past their allowance are left
+// out), then what is left is written with one fsync when the journal can
+// take a batch (audit.BatchRecorder), else one by one. A batch the journal
+// fails to take is kept whole, entry by entry, to be written later.
+func (a *auditor) recordBatch(es []audit.Entry) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	now := a.now()
+	a.sweepLocked(now, false)
+	keep := make([]audit.Entry, 0, len(es))
+	for _, e := range es {
+		if e.TS.IsZero() {
+			e.TS = now
+		}
+		e.TS = e.TS.UTC()
+		if e.ID == "" {
+			e.ID = audit.NewID(e.TS)
+		}
+		if e.Result != audit.ResultOK && !a.admitLocked(e, now) {
+			continue
+		}
+		keep = append(keep, e)
+	}
+	br, batches := a.rec.(audit.BatchRecorder)
+	if !batches || len(keep) < 2 {
+		for _, e := range keep {
+			a.writeLocked(e)
+		}
+		return
+	}
+	got := keep
+	if a.retryLocked() {
+		out, err := br.RecordBatch(keep)
+		if err != nil {
+			for _, e := range keep {
+				a.keepLocked(e, err)
+			}
+		} else {
+			got = out
+		}
+	} else {
+		for _, e := range keep {
+			a.keepLocked(e, nil)
+		}
+	}
+	if a.rec != audit.Recorder(a.ring) {
+		for _, e := range got {
+			a.ring.Record(e)
+		}
+	}
+}
+
 // tick writes what is owed: entries kept while the journal failed, and
 // the summaries of refusal windows that have closed. Server.Run calls it,
 // so a burst of refusals followed by silence still gets its summary.

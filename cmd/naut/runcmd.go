@@ -44,6 +44,7 @@ import (
 	"github.com/joyautomation/nautilus/internal/vcs"
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/leader"
+	opcuaserver "github.com/joyautomation/nautilus/opcua/server"
 	"github.com/joyautomation/nautilus/retain"
 	"github.com/joyautomation/nautilus/runtime"
 	"github.com/joyautomation/nautilus/server"
@@ -438,11 +439,8 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	if opc != nil {
 		// BuildInfo.SoftwareVersion is the version `naut version` prints.
 		opc.SetSoftwareVersion(lsp.Version)
-		if err := opc.Start(ctx); err != nil {
-			fmt.Fprintln(os.Stderr, "opcua:", err, "(continuing without it)")
-		} else {
-			defer opc.Stop()
-		}
+		// Started once the tag API's server exists (below): it signs OPC UA
+		// users in and journals their writes.
 	}
 
 	// Sparkplug B retransmission, when the manifest asks for it.
@@ -567,6 +565,21 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		}()
 	}
 	go srv.Run(ctx)
+
+	if opc != nil {
+		// With an auth: block, the same users file, sign-in throttle, auth:
+		// block and journal as the tag API's (#708 PR 8a): a UserName token
+		// is checked like a browser's sign-in, and every write is
+		// journalled, source opcua. Without one, nothing changes.
+		if id := opcuaIdentity(proj, srv); id != nil {
+			opc.SetIdentity(id)
+		}
+		if err := opc.Start(ctx); err != nil {
+			fmt.Fprintln(os.Stderr, "opcua:", err, "(continuing without it)")
+		} else {
+			defer opc.Stop()
+		}
+	}
 
 	if apiUp {
 		ln := apiLn
@@ -1120,13 +1133,25 @@ func embeddedManifest(fsys fs.FS) string {
 
 // authNotice is what naut run says about the manifest's auth: block, so
 // nobody runs a controller believing a block protects it before it does.
-// It decides every read and write through the HTTP API (#708); the OPC UA
-// server and Sparkplug writes (#708 step 8) are not covered yet.
+// It decides every read and write through the HTTP API and every OPC UA
+// write (a user's, or a certificate's it maps, #708 PR 8a). Not covered
+// yet: Sparkplug writes (#708 PR 8b) and OPC UA reads.
 func authNotice(proj *project.Project) string {
 	if proj.Auth == nil {
 		return ""
 	}
 	return authSurfacesNotice
+}
+
+// opcuaIdentity is what naut run hands its OPC UA server (#708 PR 8a):
+// the tag API's sign-in, auth: block and journal, when the manifest has an
+// auth: block; nil without one, so a project without auth: runs its OPC UA
+// server exactly as before (no UserName tokens, no journal entries).
+func opcuaIdentity(proj *project.Project, srv *server.Server) opcuaserver.Identity {
+	if proj.Auth == nil {
+		return nil
+	}
+	return srv.Surface(audit.SourceOPCUA)
 }
 
 // authFacadeNotice is what naut logix serve --project and naut siemens
@@ -1135,7 +1160,7 @@ func authNotice(proj *project.Project) string {
 const authFacadeNotice = "auth: this serve has no browser sign-in: every request needs a token (Authorization: Bearer …),\n" +
 	"      reads included, unless the auth: block sets anonymous: viewer.\n"
 
-const authSurfacesNotice = "auth: WARNING: the OPC UA server and Sparkplug writes are NOT covered by the auth: block yet (#708):\n" +
+const authSurfacesNotice = "auth: WARNING: Sparkplug writes are NOT covered by the auth: block yet (#708), and OPC UA reads are not gated by it:\n" +
 	"      a client that reaches them is not asked for a role.\n"
 
 // openUsers opens the controller's users file when its auth: block grants

@@ -2,12 +2,16 @@ package uaserver
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"crypto/x509"
+	"encoding/binary"
 	"log"
 	"time"
 
 	"github.com/gopcua/opcua/ua"
+	"github.com/gopcua/opcua/uapolicy"
 	"github.com/joyautomation/nautilus/opcua/internal/uasc"
 )
 
@@ -124,6 +128,19 @@ func (s *SessionService) ActivateSession(sc *uasc.SecureChannel, r ua.Request, r
 		return nil, ua.StatusBadSecureChannelIDInvalid
 	}
 
+	// One activation at a time: a UserName check under way off the message
+	// loop is bound to the server nonce it read.
+	sess.mu.Lock()
+	busy := sess.activating
+	sess.mu.Unlock()
+	if busy {
+		return nil, ua.StatusBadInvalidState
+	}
+
+	if tok, ok := userNameToken(req.UserIdentityToken); ok && s.srv.cfg.userName != nil {
+		return s.activateUser(sc, sess, req, reqID, tok)
+	}
+
 	identity, code := s.srv.checkIdentity(req.UserIdentityToken)
 	if code != ua.StatusOK {
 		return nil, code
@@ -142,8 +159,10 @@ func (s *SessionService) ActivateSession(sc *uasc.SecureChannel, r ua.Request, r
 		log.Printf("error creating session nonce")
 		return nil, ua.StatusBadInternalError
 	}
+	sess.mu.Lock()
 	sess.serverNonce = nonce
-	sess.identity = identity
+	sess.identity, sess.cred = identity, ""
+	sess.mu.Unlock()
 	sess.activate()
 
 	response := &ua.ActivateSessionResponse{
@@ -270,6 +289,140 @@ func (s *Server) checkIdentity(tok *ua.ExtensionObject) (string, ua.StatusCode) 
 		}
 	}
 	return "", ua.StatusBadIdentityTokenInvalid
+}
+
+// userNameCheckWait bounds a UserName check: past it the activation is
+// refused, so a client waiting on a busy password hash is answered.
+var userNameCheckWait = 15 * time.Second
+
+// userNameToken is ActivateSession's token when it is a UserName one.
+func userNameToken(tok *ua.ExtensionObject) (*ua.UserNameIdentityToken, bool) {
+	if nullExtensionObject(tok) {
+		return nil, false
+	}
+	t, ok := tok.Value.(*ua.UserNameIdentityToken)
+	return t, ok && t != nil
+}
+
+// activateUser activates sess with a UserName token. The session signature
+// is verified first, on the message loop, so a client must hold the
+// session's certificate before a password costs a hash; the token is
+// decrypted and its nonce checked there too. The check itself (a password
+// hash, perhaps a wait for a slot) runs off the loop, and its answer is
+// sent from there: the handler answers nothing now (nil, nil), as Publish
+// does.
+func (s *SessionService) activateUser(sc *uasc.SecureChannel, sess *session, req *ua.ActivateSessionRequest, reqID uint32, tok *ua.UserNameIdentityToken) (ua.Response, error) {
+	if err := sc.VerifySessionSignature(sess.remoteCertificate, sess.serverNonce, req.ClientSignature.Signature); err != nil {
+		return nil, ua.StatusBadSecurityChecksFailed
+	}
+	name, password, code := s.srv.userNamePassword(sc, tok, sess.serverNonce)
+	if code != ua.StatusOK {
+		return nil, code
+	}
+	sess.mu.Lock()
+	sess.activating = true
+	sess.mu.Unlock()
+	check := s.srv.cfg.userName
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), userNameCheckWait)
+		identity, cred, code := check(ctx, sc, name, password)
+		cancel()
+		clear(password)
+		var resp ua.Response
+		sess.mu.Lock()
+		sess.activating = false
+		// The session may have been closed, or its channel lost, meanwhile.
+		if code == ua.StatusOK && s.srv.sb.Session(req.RequestHeader.AuthenticationToken) != sess {
+			code = ua.StatusBadSessionIDInvalid
+		}
+		if code == ua.StatusOK {
+			nonce := make([]byte, sessionNonceLength)
+			if _, err := rand.Read(nonce); err != nil {
+				code = ua.StatusBadInternalError
+			} else {
+				sess.serverNonce = nonce
+				sess.identity, sess.cred = identity, cred
+				resp = &ua.ActivateSessionResponse{
+					ResponseHeader: responseHeader(req.RequestHeader.RequestHandle, ua.StatusOK),
+					ServerNonce:    nonce,
+				}
+			}
+		}
+		sess.mu.Unlock()
+		if code != ua.StatusOK {
+			resp = &ua.ServiceFault{ResponseHeader: responseHeader(req.RequestHeader.RequestHandle, code)}
+		} else {
+			sess.activate()
+		}
+		if err := sc.SendResponseWithContext(context.Background(), reqID, resp); err != nil && s.srv.cfg.logger != nil {
+			s.srv.cfg.logger.Warn("error sending an ActivateSession response: %s", err)
+		}
+	}()
+	return nil, nil
+}
+
+// userNamePassword decrypts a UserName token's password (Part 4 §7.41,
+// the legacy secret: a little-endian length, the password, the server
+// nonce). It is accepted only on a channel that signs, under one of the
+// UserName token policies the endpoints advertise, encrypted with that
+// policy's asymmetric algorithm, and ending in sess's current server nonce
+// (a token replayed from an earlier activation carries an older one).
+func (s *Server) userNamePassword(sc *uasc.SecureChannel, tok *ua.UserNameIdentityToken, nonce []byte) (string, []byte, ua.StatusCode) {
+	if !signs(sc) {
+		return "", nil, ua.StatusBadIdentityTokenRejected
+	}
+	policy, found := "", false
+	for _, ep := range s.Endpoints() {
+		for _, p := range ep.UserIdentityTokens {
+			if p.TokenType == ua.UserTokenTypeUserName && p.PolicyID == tok.PolicyID {
+				policy, found = p.SecurityPolicyURI, true
+			}
+		}
+	}
+	if !found {
+		return "", nil, ua.StatusBadIdentityTokenInvalid
+	}
+	if policy == "" {
+		policy = sc.SecurityPolicyURI()
+	}
+	if policy == "" || policy == ua.SecurityPolicyURINone || s.cfg.privateKey == nil {
+		return "", nil, ua.StatusBadIdentityTokenInvalid
+	}
+	enc, err := uapolicy.Asymmetric(policy, s.cfg.privateKey, nil)
+	if err != nil || tok.EncryptionAlgorithm != enc.EncryptionURI() {
+		return "", nil, ua.StatusBadIdentityTokenInvalid
+	}
+	plain, err := enc.Decrypt(tok.Password)
+	if err != nil {
+		return "", nil, ua.StatusBadIdentityTokenInvalid
+	}
+	pw, ok := passwordSecret(plain, nonce)
+	clear(plain)
+	if !ok {
+		return "", nil, ua.StatusBadIdentityTokenInvalid
+	}
+	return tok.UserName, pw, ua.StatusOK
+}
+
+// passwordSecret reads a decrypted UserName secret: a little-endian
+// length, then that many bytes, the password followed by nonce. It returns
+// a copy of the password, or false when the secret is malformed or does
+// not end in nonce (an empty nonce never matches).
+func passwordSecret(plain, nonce []byte) ([]byte, bool) {
+	if len(plain) < 4 || len(nonce) == 0 {
+		return nil, false
+	}
+	n := binary.LittleEndian.Uint32(plain)
+	body := plain[4:]
+	if uint64(n) > uint64(len(body)) || uint64(n) < uint64(len(nonce)) {
+		return nil, false
+	}
+	secret := body[:n]
+	cut := len(secret) - len(nonce)
+	if subtle.ConstantTimeCompare(secret[cut:], nonce) != 1 {
+		return nil, false
+	}
+	return bytes.Clone(secret[:cut]), true
 }
 
 // nullExtensionObject reports an extension object with the null type id:

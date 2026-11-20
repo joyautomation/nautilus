@@ -86,6 +86,16 @@ type Recorder interface {
 	Record(Entry) (Entry, error)
 }
 
+// BatchRecorder is a Recorder that can also take several entries at once,
+// durable together: the file journal writes their lines in one write and
+// syncs once, so a request that changes many things (an OPC UA Write of
+// many nodes) costs one fsync, not one per entry. Either every entry is
+// recorded or none is.
+type BatchRecorder interface {
+	Recorder
+	RecordBatch([]Entry) ([]Entry, error)
+}
+
 // fill sets an entry's ID and TS when the caller left them empty, and
 // makes its values JSON-safe (jsonSafe), so every recorder, the ring
 // included, holds an entry that encodes.

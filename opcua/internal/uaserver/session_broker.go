@@ -56,8 +56,16 @@ type session struct {
 	// channel creates a new session.
 	channel *uasc.SecureChannel
 	// identity is who ActivateSession's user identity token says the user is:
-	// "anonymous", the only kind advertised (Part 4 §5.6.3).
+	// "anonymous", or what a UserNameCheck named ("user:<name>"), with cred,
+	// the check's credential, to recheck later (Part 4 §5.6.3). Guarded by
+	// mu: a UserName activation sets them off the message loop.
 	identity string
+	cred     string
+	// activating is set while a UserName activation is being checked off
+	// the message loop: another ActivateSession meanwhile is refused, so
+	// the server nonce the check is bound to stays the one it read.
+	// Guarded by mu.
+	activating bool
 	// secured is set when the session was created on a channel that signs (Sign or
 	// SignAndEncrypt under a policy other than None), and applicationURI is then the client's
 	// ApplicationUri, which CreateSession has held to the URI in its certificate. Under None
@@ -85,15 +93,26 @@ func mayTransfer(from, to *session) ua.StatusCode {
 	if from == nil || to == nil {
 		return ua.StatusBadUserAccessDenied
 	}
-	if from.identity != to.identity {
+	fromID, _ := from.Identity()
+	toID, _ := to.Identity()
+	if fromID != toID {
 		return ua.StatusBadUserAccessDenied
 	}
-	if from.identity == "anonymous" || from.identity == "" {
+	if fromID == "anonymous" || fromID == "" {
 		if !from.secured || !to.secured || from.applicationURI == "" || from.applicationURI != to.applicationURI {
 			return ua.StatusBadUserAccessDenied
 		}
 	}
 	return ua.StatusOK
+}
+
+// Identity is who the session acts as ("anonymous", or "user:<name>" after
+// a UserName activation) and the credential its check returned ("" for
+// anonymous), for a service handler to recheck at each request.
+func (s *session) Identity() (identity, cred string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.identity, s.cred
 }
 
 // keepNotice keeps a notice that subscription id has moved, for the session's next Publish.

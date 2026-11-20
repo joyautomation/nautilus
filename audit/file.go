@@ -216,6 +216,60 @@ func (j *FileJournal) Record(e Entry) (Entry, error) {
 	return e, nil
 }
 
+// The server's recording seam finds batching by asserting BatchRecorder:
+// if the method drifted, a batch would silently cost an fsync per entry.
+var _ BatchRecorder = (*FileJournal)(nil)
+
+// RecordBatch appends es as Record would, one after another, numbered and
+// chained line by line, but in one write followed by one fsync: the batch
+// is on disk when it returns, at the cost of one sync. If the write or the
+// fsync fails, the file is cut back to the line before the batch, so
+// either every entry is recorded or none is. The batch goes in one file:
+// it is rotated for, by its first entry's time, before it is written.
+func (j *FileJournal) RecordBatch(es []Entry) ([]Entry, error) {
+	if len(es) == 0 {
+		return nil, nil
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.broken != nil {
+		return es, j.broken
+	}
+	out := make([]Entry, len(es))
+	now := j.opts.Now()
+	for i, e := range es {
+		out[i] = fill(e, now)
+	}
+	if err := j.rotate(out[0].TS); err != nil {
+		return es, err
+	}
+	seq, head := j.seq, j.head
+	var buf []byte
+	for i := range out {
+		seq++
+		out[i].Seq, out[i].Prev = seq, head
+		line, err := json.Marshal(out[i])
+		if err != nil {
+			return es, err
+		}
+		head = lineHash(line)
+		buf = append(append(buf, line...), '\n')
+	}
+	_, err := j.write(j.f, buf)
+	if err == nil {
+		err = j.sync(j.f)
+	}
+	if err != nil {
+		if uerr := j.undo(); uerr != nil {
+			j.broken = fmt.Errorf("audit: the journal is unusable until reopened: a batch failed (%v) and could not be cut back (%v)", err, uerr)
+		}
+		return es, err
+	}
+	j.size += int64(len(buf))
+	j.seq, j.head = seq, head
+	return out, nil
+}
+
 // undo cuts the current file back to its last complete line after a
 // failed write. Called with mu held.
 func (j *FileJournal) undo() error {

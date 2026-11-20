@@ -6,6 +6,8 @@ import (
 	"testing/fstest"
 
 	"github.com/joyautomation/nautilus/internal/project"
+	"github.com/joyautomation/nautilus/runtime"
+	"github.com/joyautomation/nautilus/server"
 )
 
 // A controller with an auth: block says, loudly, what the block does not
@@ -26,7 +28,7 @@ func TestAuthNotice(t *testing.T) {
 	}
 	msg := authNotice(load("auth:\n  token-role: operator\n"))
 	if !strings.Contains(msg, "WARNING") || strings.Contains(msg, "NOT GATED") ||
-		!strings.Contains(msg, "OPC UA server and Sparkplug writes are NOT covered") {
+		!strings.Contains(msg, "Sparkplug writes are NOT covered") || !strings.Contains(msg, "OPC UA reads are not gated") || strings.Contains(msg, "OPC UA server and") {
 		t.Errorf("auth: block: %q", msg)
 	}
 }
@@ -65,5 +67,36 @@ func TestAuthFacadeNotice(t *testing.T) {
 	if strings.Contains(authFacadeNotice, "NOT GATED") || !strings.Contains(authFacadeNotice, "every request needs a token") ||
 		!strings.Contains(authFacadeNotice, "reads included") || !strings.Contains(authFacadeNotice, "anonymous: viewer") {
 		t.Errorf("authFacadeNotice = %q", authFacadeNotice)
+	}
+}
+
+// naut run hands its OPC UA server the tag API's sign-in and journal only
+// under an auth: block (#708 PR 8a): without one the server runs as
+// before, offering no UserName token and journalling nothing.
+func TestOPCUAIdentityOnlyUnderAuth(t *testing.T) {
+	load := func(block string) *project.Project {
+		p, err := project.Load(fstest.MapFS{
+			"nautilus.yaml": &fstest.MapFile{Data: []byte("name: p\ntasks:\n  - program: main.st\n    scan: 100ms\n" + block)},
+			"main.st":       &fstest.MapFile{Data: []byte("PROGRAM Main\nEND_PROGRAM\n")},
+		}, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	newServer := func(p *project.Project) *server.Server {
+		rt, err := runtime.New(p.Runtime)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return server.New(rt, server.Options{})
+	}
+	plain := load("")
+	if id := opcuaIdentity(plain, newServer(plain)); id != nil {
+		t.Errorf("no auth: block, an identity: %v", id)
+	}
+	guarded := load("auth:\n  token-role: operator\n")
+	if id := opcuaIdentity(guarded, newServer(guarded)); id == nil {
+		t.Error("an auth: block, no identity")
 	}
 }

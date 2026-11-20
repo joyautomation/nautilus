@@ -102,10 +102,11 @@ var builtinRoles = func() map[string]map[string]bool {
 
 // Kinds of principal.
 const (
-	KindAnonymous = "anonymous" // no credential
-	KindToken     = "token"     // NAUTILUS_TOKEN
-	KindService   = "service"   // a named service token
-	KindUser      = "user"      // a signed-in user or a personal access token (#708 PR 5)
+	KindAnonymous = "anonymous"  // no credential
+	KindToken     = "token"      // NAUTILUS_TOKEN
+	KindService   = "service"    // a named service token
+	KindUser      = "user"       // a signed-in user or a personal access token (#708 PR 5)
+	KindOPCUACert = "opcua-cert" // an OPC UA client certificate the block maps to roles (#708 PR 8a)
 )
 
 // Principal is who a request acts as.
@@ -126,14 +127,20 @@ func Service(name string) Principal { return Principal{Kind: KindService, Name: 
 // User is a user's principal.
 func User(name string) Principal { return Principal{Kind: KindUser, Name: name} }
 
+// OPCUACert is the principal of an OPC UA client certificate the block
+// names in opcua-certificates.
+func OPCUACert(name string) Principal { return Principal{Kind: KindOPCUACert, Name: name} }
+
 // String is how the journal names the principal: "anonymous", "token",
-// "token:<name>" or "user:<name>".
+// "token:<name>", "user:<name>" or "opcua-cert:<name>".
 func (p Principal) String() string {
 	switch p.Kind {
 	case KindService:
 		return "token:" + p.Name
 	case KindUser:
 		return "user:" + p.Name
+	case KindOPCUACert:
+		return "opcua-cert:" + p.Name
 	case "":
 		return KindAnonymous
 	}

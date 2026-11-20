@@ -1143,6 +1143,12 @@ func ReadManifest(fsys fs.FS, name string) (*Manifest, error) {
 	if m.authPolicy, err = compileAuth(m.Auth); err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
+	if m.Auth != nil && m.OPCUA != nil && m.OPCUA.AnonymousWrites {
+		// Under auth: an OPC UA session writes as a user or as a mapped
+		// certificate; an anonymous session on None is neither, so the
+		// switch would open nothing. Refused rather than silently ignored.
+		return nil, fmt.Errorf("%s: opcua.anonymous-writes cannot be used with an auth: block: an OPC UA client writes as a user (a UserName token) or as a certificate mapped in auth.opcua-certificates", name)
+	}
 	return &m, nil
 }
 

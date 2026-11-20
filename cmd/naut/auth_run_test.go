@@ -156,7 +156,7 @@ func TestNautRunEnforcesAuth(t *testing.T) {
 			}
 			time.Sleep(100 * time.Millisecond)
 		}
-		if !strings.Contains(stderr.String(), "OPC UA server and Sparkplug writes are NOT covered") || strings.Contains(stderr.String(), "NOT GATED") {
+		if !strings.Contains(stderr.String(), "Sparkplug writes are NOT covered") || strings.Contains(stderr.String(), "NOT GATED") {
 			t.Errorf("stderr's auth: notice:\n%s", stderr.String())
 		}
 		ents, _ := os.ReadDir(filepath.Join(dir, "audit"))

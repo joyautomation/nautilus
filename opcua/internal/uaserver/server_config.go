@@ -5,6 +5,7 @@
 package uaserver
 
 import (
+	"context"
 	"crypto/rsa"
 	"fmt"
 	"log"
@@ -102,6 +103,27 @@ func EnableSecurity(secPolicy string, secMode ua.MessageSecurityMode) Option {
 // trusted, as in gopcua.
 func VerifyPeer(fn func(cert []byte) error) Option {
 	return func(s *serverConfig) { s.verifyPeer = fn }
+}
+
+// UserNameCheck decides an ActivateSession's UserName identity token, once
+// its password has been decrypted and its server nonce checked: the
+// identity the session then acts as ("user:<name>") and an opaque
+// credential the caller can later recheck, or the status that refuses the
+// activation. It is called OFF the message loop (it may take a password
+// hash's time, and wait for a slot), with a context that ends when the
+// check must give up.
+type UserNameCheck func(ctx context.Context, sc *uasc.SecureChannel, name string, password []byte) (identity, cred string, code ua.StatusCode)
+
+// UserNameAuth enables UserName identity tokens, decided by check. They
+// are advertised on the secure endpoints only: never on None, where the
+// session that follows would carry no signature (initEndpoints). A
+// UserName token presented on an unsigned channel is refused before check
+// is called.
+func UserNameAuth(check UserNameCheck) Option {
+	return func(s *serverConfig) {
+		s.userName = check
+		EnableAuthMode(ua.UserTokenTypeUserName)(s)
+	}
 }
 
 // EnableAuthMode registers a new user authentication mode to the server.
