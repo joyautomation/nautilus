@@ -321,3 +321,64 @@ func TestLeaderWithUnsyncedCopiesSaysUncounted(t *testing.T) {
 		t.Fatalf("none answers, yet uncounted: %+v", st)
 	}
 }
+
+// A replica opened before its identity could be known (Pending) counts
+// for nothing until Rebind: the same identity as its mark's and it counts
+// as the mark says; another, and its log is kept aside and it starts
+// empty and unsynced; the placeholder it was opened under, and the mark is
+// taken as the new identity's.
+func TestRebindAPendingReplica(t *testing.T) {
+	open := func(t *testing.T, dir, identity string, pending, unmarked bool) *Node {
+		t.Helper()
+		n, err := New(Options{Self: "s", Peers: []string{"s", "p"}, Leadership: Static{Self: "s", Leader: "s"}, Token: "t",
+			File: dir + "/log.jsonl", Mark: dir + "/log.mark", Identity: identity, Pending: pending, UnmarkedSynced: unmarked})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { n.Close() })
+		return n
+	}
+	seed := func(t *testing.T, dir string) {
+		t.Helper()
+		n := open(t, dir, "c/a/box1", false, true)
+		n.mu.Lock()
+		if _, err := n.acceptLocked([]Entry{{Seq: 1, Term: 1, Kind: KindAck, IDs: []string{"X"}}}); err != nil {
+			t.Fatal(err)
+		}
+		n.commitTo(1)
+		n.mu.Unlock()
+		n.Close()
+	}
+	t.Run("same box", func(t *testing.T) {
+		dir := t.TempDir()
+		seed(t, dir)
+		n := open(t, dir, "c/a/box1", true, false)
+		if n.Synced() {
+			t.Fatal("pending, yet synced")
+		}
+		if err := n.Rebind("c/a/box1", "c/a/?"); err != nil || !n.Synced() || n.LastSeq() != 1 {
+			t.Fatalf("rebind to its own box: %v, synced %v, last %d", err, n.Synced(), n.LastSeq())
+		}
+	})
+	t.Run("another box", func(t *testing.T) {
+		dir := t.TempDir()
+		seed(t, dir)
+		n := open(t, dir, "c/a/box1", true, false)
+		if err := n.Rebind("c/a/box2", "c/a/?"); err != nil || n.Synced() || n.LastSeq() != 0 {
+			t.Fatalf("rebind to another box: %v, synced %v, last %d", err, n.Synced(), n.LastSeq())
+		}
+		if m, _ := readMark(dir + "/log.mark"); m.Identity != "c/a/box2" {
+			t.Fatalf("mark %+v", m)
+		}
+	})
+	t.Run("placeholder", func(t *testing.T) {
+		dir := t.TempDir()
+		n := open(t, dir, "c/a/?", true, true)
+		if err := n.Rebind("c/a/box3", "c/a/?"); err != nil || !n.Synced() {
+			t.Fatalf("rebind from the placeholder: %v, synced %v", err, n.Synced())
+		}
+		if m, _ := readMark(dir + "/log.mark"); m.Identity != "c/a/box3" {
+			t.Fatalf("mark %+v", m)
+		}
+	})
+}

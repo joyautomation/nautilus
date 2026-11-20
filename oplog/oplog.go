@@ -233,6 +233,11 @@ type Options struct {
 	// is not this replica's: its log is moved aside as
 	// File+".previous-<unix>", and it starts unsynced.
 	Identity string
+	// Pending: the Identity can't be known yet (a controller whose box
+	// can't be read): the log opens as Identity says (the mark's, when the
+	// caller read it), but counts for nothing until Rebind names the real
+	// one.
+	Pending bool
 	// UnmarkedSynced: a replica with no mark at all starts synced. Only
 	// for a caller that knows the log is complete: a new cluster's first
 	// start (nothing committed yet), or a log kept from before marks.
@@ -327,6 +332,7 @@ type Node struct {
 	file        *os.File
 	lastContact map[string]time.Time
 	mark        Mark                // with Options.Mark
+	pending     bool                // Options.Pending, until Rebind
 	peers       map[string]peerInfo // what each peer last said of itself
 }
 
@@ -422,7 +428,7 @@ func New(o Options) (*Node, error) {
 		o.lim.resp = maxResp
 	}
 	n := &Node{o: o, client: &http.Client{Timeout: o.Timeout, Transport: o.transport}, log: o.Log,
-		lastContact: map[string]time.Time{}, peers: map[string]peerInfo{}}
+		lastContact: map[string]time.Time{}, peers: map[string]peerInfo{}, pending: o.Pending}
 	if o.Mark != "" {
 		if err := n.openMarked(); err != nil {
 			return nil, err
@@ -513,6 +519,49 @@ func (n *Node) openMarked() error {
 	return nil
 }
 
+// Rebind gives a Pending replica its identity, once it can be known: the
+// same as the mark's, and the log counts again as its mark says; another,
+// and the log is another identity's, kept aside as File+".previous-<unix>",
+// and this one starts empty and unsynced. placeholder is the identity the
+// caller opened with when it had none to go by: a mark under it is taken
+// as this identity's. A replica that is not Pending: nothing to do.
+func (n *Node) Rebind(identity, placeholder string) error {
+	n.seqMu.Lock()
+	defer n.seqMu.Unlock()
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if !n.pending {
+		return nil
+	}
+	switch n.mark.Identity {
+	case identity:
+	case placeholder:
+		m := n.mark
+		m.Identity = identity
+		if err := n.setMarkLocked(m); err != nil {
+			return fmt.Errorf("oplog: the log's mark: %w", err)
+		}
+	default:
+		if n.file != nil {
+			n.file.Close()
+		}
+		kept, err := n.moveAside(".previous-")
+		if err != nil {
+			return err
+		}
+		n.file, n.entries, n.commit, n.term, n.syncedTerm = nil, nil, 0, 0, 0
+		if _, err := n.open(); err != nil {
+			return err
+		}
+		if err := n.setMarkLocked(Mark{Identity: identity}); err != nil {
+			return fmt.Errorf("oplog: the log's mark: %w", err)
+		}
+		n.log.Warn("oplog: the log belongs to another identity of this replica; kept aside, starting empty and unsynced", "kept", kept, "was", n.mark.Identity, "now", identity)
+	}
+	n.pending = false
+	return nil
+}
+
 // moveAside renames the log file to File+suffix+<unix> ("" when there is
 // none). Caller holds mu or is New.
 func (n *Node) moveAside(suffix string) (string, error) {
@@ -588,7 +637,7 @@ func (n *Node) setMarkLocked(m Mark) error {
 
 // syncedLocked: this replica's log is known to hold every committed entry
 // (always, without a mark). Caller holds mu.
-func (n *Node) syncedLocked() bool { return n.o.Mark == "" || n.mark.Synced }
+func (n *Node) syncedLocked() bool { return n.o.Mark == "" || n.mark.Synced && !n.pending }
 
 // Synced reports whether this replica's log is known to hold every
 // committed entry (Options.Mark). A replica that isn't counts for nothing,

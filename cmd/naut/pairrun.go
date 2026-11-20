@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -65,12 +66,13 @@ type pairMember struct {
 
 	// The replicated log of operator intent, mounted on the peer listener
 	// once the runtime exists (startLog); 503 until then.
-	logH    swapHandler
-	log     *oplog.Node
-	al      *server.AlarmLog // nil without alarms
-	rt      *runtime.Runtime
-	logStop context.CancelFunc
-	logDone chan struct{}
+	logH       swapHandler
+	log        *oplog.Node
+	al         *server.AlarmLog // nil without alarms
+	rt         *runtime.Runtime
+	logStop    context.CancelFunc
+	logDone    chan struct{}
+	logPending atomic.Bool // the log opened before the box could be read (logIdentity)
 	// stuckTerm is the term whose catch-up last failed (driveLog), 0 once
 	// it succeeds: the log is read-only under this leader (node.LogState).
 	stuckTerm atomic.Uint64
@@ -498,15 +500,16 @@ func (m *pairMember) startLog(rt *runtime.Runtime, wait time.Duration, eng *alar
 	_, statErr := os.Stat(file)
 	_, markErr := os.Stat(filepath.Join(dir, pairLogMark))
 	preMark := statErr == nil && errors.Is(markErr, os.ErrNotExist)
+	identity, pending := m.logIdentity(filepath.Join(dir, pairLogMark))
 	n, err := oplog.New(oplog.Options{
 		Self: self, Peers: peers,
 		Leadership: pairLeadership{q: m.q, peers: m.peers},
 		File:       file, Mark: filepath.Join(dir, pairLogMark),
-		Identity: m.logIdentity(), UnmarkedSynced: preMark,
-		Node:  string(m.o.Self),
-		Names: map[string]string{a: "controller a", b: "controller b", wit: "the witness"},
+		Identity: identity, Pending: pending, UnmarkedSynced: preMark,
+		Node:   string(m.o.Self),
+		Names:  map[string]string{a: "controller a", b: "controller b", wit: "the witness"},
 		Counts: witnessCounts(wit, m.q.Node().CountedIncarnation),
-		Apply: apply,
+		Apply:  apply,
 		Lapse: func(e oplog.Entry, now time.Time) bool {
 			return sl.Lapse(e, now) || (al != nil && al.Lapse(e, now))
 		},
@@ -515,6 +518,7 @@ func (m *pairMember) startLog(rt *runtime.Runtime, wait time.Duration, eng *alar
 	if err != nil {
 		return nil, nil, fmt.Errorf("operator-intent log: %w", err)
 	}
+	m.logPending.Store(pending)
 	m.rt = rt
 	el := m.q.Node()
 	el.SetLog(func() node.LogState {
@@ -561,6 +565,7 @@ func (m *pairMember) driveLog(ctx context.Context) {
 			return
 		case <-t.C:
 		}
+		m.rebindLog()
 		cctx, cancel := context.WithTimeout(ctx, max(m.o.Lease, time.Second))
 		m.retrySync(cctx)
 		m.log.Heartbeat(cctx)
@@ -625,22 +630,43 @@ func (m *pairMember) logConditions() {
 
 // logIdentity is this controller's log identity: cluster, node and box,
 // so a log from a cloned or migrated disk is moved aside and synced
-// again, never counted. It waits for the box while it can't be read yet
-// (the elector waits for it too, so nothing is lost by it).
-func (m *pairMember) logIdentity() string {
+// again, never counted. While the box can't be read yet (the elector
+// holds then too), the log opens provisionally under the identity its mark
+// names (or logPlaceholder), counting for nothing, and driveLog re-binds
+// it once the box reads (rebindLog).
+func (m *pairMember) logIdentity(mark string) (identity string, pending bool) {
 	box := m.o.Box
 	if m.box != nil {
-		for i := 0; ; i++ {
-			if box = m.box(); box != "" {
-				break
-			}
-			if i == 0 {
-				slog.Warn("redundancy: this box's fingerprint can't be read yet (a peer or witness address doesn't resolve); the operator-intent log waits for it")
-			}
-			time.Sleep(time.Second)
-		}
+		box = m.box()
 	}
-	return m.o.Cluster + "/" + string(m.o.Self) + "/" + box
+	if box != "" || m.box == nil {
+		return m.logPrefix() + box, false
+	}
+	var mk oplog.Mark
+	if b, err := os.ReadFile(mark); err == nil && json.Unmarshal(b, &mk) == nil && strings.HasPrefix(mk.Identity, m.logPrefix()) {
+		return mk.Identity, true
+	}
+	return m.logPlaceholder(), true
+}
+
+func (m *pairMember) logPrefix() string      { return m.o.Cluster + "/" + string(m.o.Self) + "/" }
+func (m *pairMember) logPlaceholder() string { return m.logPrefix() + "(box not read yet)" }
+
+// rebindLog gives a provisionally opened log its identity once the box
+// reads (logIdentity).
+func (m *pairMember) rebindLog() {
+	if !m.logPending.Load() {
+		return
+	}
+	box := m.box()
+	if box == "" {
+		return
+	}
+	if err := m.log.Rebind(m.logPrefix()+box, m.logPlaceholder()); err != nil {
+		slog.Error("redundancy: the operator-intent log can't take this box's identity", "error", err)
+		return
+	}
+	m.logPending.Store(false)
 }
 
 // logStatus is the log's block of /api/cluster.
