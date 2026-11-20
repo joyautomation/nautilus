@@ -332,6 +332,11 @@ func (s *Server) startOn(ctx context.Context, port int) error {
 			return err
 		}
 		opts = append(opts, sec...)
+		// UserName tokens, on the secure endpoints only, when there are
+		// users to sign in (SetIdentity, identity.go).
+		if id := s.w.id; id != nil && id.SignsIn() {
+			opts = append(opts, opcserver.UserNameAuth(s.w.checkUser))
+		}
 	}
 	srv := opcserver.New(opts...)
 	tree, err := s.mappedTree()

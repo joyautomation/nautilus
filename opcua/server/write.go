@@ -50,6 +50,8 @@ import (
 
 	"github.com/gopcua/opcua/id"
 	"github.com/gopcua/opcua/ua"
+	"github.com/joyautomation/nautilus/audit"
+	"github.com/joyautomation/nautilus/auth"
 	"github.com/joyautomation/nautilus/internal/writable"
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/opcua/internal/uasc"
@@ -90,6 +92,11 @@ type writeAccess struct {
 	anonymous bool // opcua.anonymous-writes: a session on None is a writer too
 	log       *slog.Logger
 
+	// id is the auth: block's users, certificates and journal
+	// (SetIdentity, identity.go); nil (no auth: block): a trusted
+	// certificate writes, and the log lines are the only audit.
+	id Identity
+
 	gate atomic.Pointer[func() bool]
 
 	writes  atomic.Uint64
@@ -110,8 +117,33 @@ type client struct {
 	remote     string
 	writer     bool   // a SignAndEncrypt channel from a trusted, valid certificate, or anonymous below
 	anonymous  bool   // a writer on the None endpoint, by opcua.anonymous-writes
-	revoked    bool   // a writer's channel whose certificate no longer is
-	why        string // why revoked
+	revoked    bool   // a writer's channel whose certificate no longer is, or a user who no longer holds
+	why        string // why revoked, or why not a writer
+	user       string // the session's user, signed in with a UserName token; "" for anonymous
+	cred       string // the credential the user signed in with, rechecked at each request
+	cert       string // the name auth.opcua-certificates maps the certificate to, for a session with no user
+	fullThumb  string // the certificate's whole thumbprint, for that mapping
+	subject    string // the certificate's subject, for that mapping
+}
+
+// principal is the journal's name for who the client acts as.
+func (c client) principal() string {
+	if c.user != "" {
+		return userPrefix + c.user
+	}
+	if c.cert != "" {
+		return auth.OPCUACert(c.cert).String()
+	}
+	return "anonymous"
+}
+
+// from is the journal's "from": the certificate's thumbprint, else the
+// client's host.
+func (c client) from() string {
+	if c.thumbprint != "" {
+		return c.thumbprint
+	}
+	return hostOnly(c.remote)
 }
 
 // logArgs is a write's audit or refusal line's attributes: args, then
@@ -119,6 +151,9 @@ type client struct {
 // no certificate to name, only its address).
 func (c client) logArgs(args ...any) []any {
 	args = append(args, "session", c.session, "client", c.uri, "thumbprint", c.thumbprint, "remote", c.remote)
+	if c.user != "" {
+		args = append(args, "user", c.user)
+	}
 	if c.anonymous {
 		args = append(args, "anonymous", true)
 	}
@@ -165,12 +200,47 @@ func (w *writeAccess) anonymousChannel(sc *uasc.SecureChannel) bool {
 // and reads UserAccessLevel CurrentRead. One that cannot be parsed is no
 // writer's.
 func (w *writeAccess) who(srv *opcserver.Server, sc *uasc.SecureChannel, hdr *ua.RequestHeader) client {
-	c := client{writer: w.channelWriter(sc), anonymous: w.anonymousChannel(sc)}
+	c := w.channel(sc)
 	if hdr != nil && srv != nil {
-		if sess := srv.Session(hdr); sess != nil && sess.ID != nil {
-			c.session = sess.ID.String()
+		if sess := srv.Session(hdr); sess != nil {
+			if sess.ID != nil {
+				c.session = sess.ID.String()
+			}
+			if ident, cred := sess.Identity(); strings.HasPrefix(ident, userPrefix) {
+				c.user, c.cred = strings.TrimPrefix(ident, userPrefix), cred
+			}
 		}
 	}
+	switch {
+	case c.user != "":
+		// A user session writes only as a writer's channel allows, and only
+		// while the user still holds their sign-in. A user on the None
+		// endpoint cannot happen (activation refuses it); if it did, the
+		// session would write nothing.
+		if c.anonymous {
+			c.writer, c.why = false, "a user session on an unsecured channel"
+		} else if c.writer && (w.id == nil || !w.id.Holds(c.user, c.cred)) {
+			c.writer, c.revoked, c.why = false, true, "user "+c.user+" no longer holds this sign-in: removed, disabled, given a new password, or granted nothing by the auth: block"
+		}
+	case c.writer && w.id != nil:
+		// Under an auth: block a session with no user writes only as a
+		// certificate the block maps to roles. An anonymous writer's
+		// channel (anonymous-writes, refused at load under auth:) names no
+		// certificate, so it never maps.
+		if name, ok := w.id.OPCUACert(c.fullThumb, c.subject); ok && !c.anonymous {
+			c.cert = name
+		} else {
+			c.writer, c.why = false, "this client certificate is not mapped to a role (auth.opcua-certificates): sign in with a UserName token to write"
+		}
+	}
+	return c
+}
+
+// channel is what sc alone says about its client: who the certificate
+// names, and whether the channel is a writer's (with the certificate
+// checked again now). The session's user is who's to add.
+func (w *writeAccess) channel(sc *uasc.SecureChannel) client {
+	c := client{writer: w.channelWriter(sc), anonymous: w.anonymousChannel(sc)}
 	if sc == nil {
 		return c
 	}
@@ -182,7 +252,8 @@ func (w *writeAccess) who(srv *opcserver.Server, sc *uasc.SecureChannel, hdr *ua
 	// an unsecured channel proves nothing, so it names no one in the audit
 	// (and a client cannot spread its refusal budget over certificates).
 	if leaf != nil && !c.anonymous {
-		c.thumbprint = Thumbprint(leaf.Raw)[:16]
+		c.fullThumb = Thumbprint(leaf.Raw)
+		c.thumbprint, c.subject = c.fullThumb[:16], leaf.Subject.String()
 		if len(leaf.URIs) > 0 {
 			c.uri = leaf.URIs[0].String()
 		}
@@ -193,6 +264,21 @@ func (w *writeAccess) who(srv *opcserver.Server, sc *uasc.SecureChannel, hdr *ua
 		}
 	}
 	return c
+}
+
+// mayWrite reports whether c may write the tag or member at addr as far as
+// the auth: block goes: a user, or a mapped certificate, only where its
+// roles allow write on addr's area. Without an Identity (no auth: block) a
+// writer's session needs nothing more (opcua-server-writes.md §7
+// decision 2).
+func (w *writeAccess) mayWrite(c client, addr string) bool {
+	switch {
+	case c.user != "":
+		return w.id != nil && w.id.May(auth.User(c.user), auth.Write, addr)
+	case c.cert != "":
+		return w.id != nil && w.id.May(auth.OPCUACert(c.cert), auth.Write, addr)
+	}
+	return w.id == nil
 }
 
 // leafCert is the first certificate of a DER chain, nil when it does not
@@ -297,12 +383,12 @@ func (ns *namespace) accessLevel(m member) ua.AccessLevelType {
 // node's AccessLevel for a writer (an anonymous one on None included, with
 // opcua.anonymous-writes), CurrentRead for anyone else. ok is false
 // when nid is not one of this namespace's Variables.
-func (ns *namespace) userAccessLevel(nid *ua.NodeID, writer bool) (ua.AccessLevelType, bool) {
+func (ns *namespace) userAccessLevel(nid *ua.NodeID, cl client) (ua.AccessLevelType, bool) {
 	m, ok := ns.resolve(nid)
 	if !ok || isObject(m) {
 		return 0, false
 	}
-	if writer {
+	if cl.writer && ns.w.mayWrite(cl, m.addr) {
 		return ns.accessLevel(m), true
 	}
 	return ua.AccessLevelTypeCurrentRead, true
@@ -337,6 +423,11 @@ func writeAttributes(srv *opcserver.Server, ns *namespace, sc *uasc.SecureChanne
 		}
 		if cl.revoked {
 			results[i], details[i] = ua.StatusBadUserAccessDenied, cl.why
+			if n != nil && n.NodeID != nil && ns.owns(n.NodeID) {
+				if m, ok := ns.resolve(n.NodeID); ok {
+					addrs[i] = m.addr // the journal names the tag, not the node id
+				}
+			}
 			continue
 		}
 		code, m, val, detail := ns.checkWrite(srv, n, cl)
@@ -394,7 +485,65 @@ func writeAttributes(srv *opcserver.Server, ns *namespace, sc *uasc.SecureChanne
 		refused = append(refused, r)
 	}
 	w.refuse(cl, refused)
+	w.journal(cl, req.NodesToWrite, results, details, paths, addrs, at, olds, ns)
 	return &ua.WriteResponse{ResponseHeader: header(req.RequestHeader), Results: results, DiagnosticInfos: []*ua.DiagnosticInfo{}}, nil
+}
+
+// journal records a Write in the audit journal (#709), through the
+// Identity's recorder, one tag.write entry per item, as the tag API
+// journals one tag per request: an entry's target is the tag or member
+// written (the node id as sent when it names none), so the journal's
+// target filter finds it. A landed item carries its value before and
+// after; a refused one its status and reason, and the recorder coalesces a
+// flood of refusals by client. Nothing is recorded without an Identity.
+func (w *writeAccess) journal(cl client, nodes []*ua.WriteValue, results []ua.StatusCode, details, paths, addrs []string, at []int, olds []member, ns *namespace) {
+	id := w.id
+	if id == nil {
+		return
+	}
+	entry := func(result, target string) audit.Entry {
+		d := map[string]any{"remote": cl.remote}
+		if cl.thumbprint != "" {
+			d["thumbprint"], d["client"] = cl.thumbprint, cl.uri
+		}
+		if cl.session != "" {
+			d["session"] = cl.session
+		}
+		return audit.Entry{User: cl.principal(), Action: "tag.write", Target: target, From: cl.from(), Result: result, Detail: d}
+	}
+	landed := map[int]member{}
+	for k, i := range at {
+		if results[i] == ua.StatusGood {
+			landed[i] = olds[k]
+		}
+	}
+	for i, code := range results {
+		target := addrs[i]
+		if target == "" {
+			target = clip(paths[i])
+		}
+		if code == ua.StatusGood {
+			e := entry(audit.ResultOK, target)
+			e.Before = journalMember(landed[i])
+			if m, ok := ns.resolve(nodes[i].NodeID); ok {
+				e.After = journalMember(m)
+			}
+			id.Record(e)
+			continue
+		}
+		e := entry(audit.ResultRefused, target)
+		e.Detail["status"], e.Detail["reason"] = statusName(code), details[i]
+		id.Record(e)
+	}
+}
+
+// journalMember is a member's value as the journal holds it: the plain
+// JSON form the tag API serves, or nil when there was none.
+func journalMember(m member) any {
+	if m.absent {
+		return nil
+	}
+	return runtime.Plain(m.val)
 }
 
 // checkWrite runs one item's protocol checks, in the order §3.3 implies:
@@ -438,6 +587,9 @@ func (ns *namespace) checkWrite(srv *opcserver.Server, n *ua.WriteValue, cl clie
 	// tag: Bad_UserAccessDenied, as every Value write of a tag answered
 	// before writes existed. A writer learns whether the tag is open.
 	if !cl.writer {
+		if cl.why != "" {
+			return ua.StatusBadUserAccessDenied, m, nil, "not a writer session: " + cl.why
+		}
 		return ua.StatusBadUserAccessDenied, m, nil, "not a writer session: writes need a SignAndEncrypt channel from a trusted client certificate (or, in a lab, opcua.anonymous-writes)"
 	}
 	root, _ := ir.SplitAddress(m.addr)
@@ -446,6 +598,9 @@ func (ns *namespace) checkWrite(srv *opcserver.Server, n *ua.WriteValue, cl clie
 	}
 	if !ns.w.patterns.Allows(m.addr) {
 		return ua.StatusBadNotWritable, m, nil, "not matched by opcua.writable"
+	}
+	if !ns.w.mayWrite(cl, m.addr) {
+		return ua.StatusBadUserAccessDenied, m, nil, cl.principal() + "'s roles do not allow write on " + root + " (auth.areas)"
 	}
 	if n.IndexRange != "" || m.val.Kind == ir.TypeArray {
 		return ua.StatusBadWriteNotSupported, m, nil, "array writes are not supported"

@@ -295,33 +295,18 @@ func (s *Server) handleSignIn(w http.ResponseWriter, r *http.Request) {
 	if users.ValidName(name) == nil {
 		e.Target = "user:" + name
 	}
-	if ok, wait := s.signin.allow(s.clientAddr(r), name); !ok {
-		secs := int(math.Ceil(wait.Seconds()))
+	cred, refusal := s.checkPassword(r.Context(), s.clientAddr(r), name, req.Password)
+	switch {
+	case refusal.wait > 0:
+		secs := int(math.Ceil(refusal.wait.Seconds()))
 		w.Header().Set("Retry-After", strconv.Itoa(secs))
-		refuse(http.StatusTooManyRequests, "too many sign-in attempts: try again in "+strconv.Itoa(secs)+" s", "throttled", next)
+		refuse(http.StatusTooManyRequests, "too many sign-in attempts: try again in "+strconv.Itoa(secs)+" s", refusal.reason, next)
 		return
-	}
-	release, ok := s.signin.hash(r.Context())
-	if !ok {
-		refuse(http.StatusServiceUnavailable, "the controller is busy checking other sign-ins: try again", "busy", next)
+	case refusal.busy:
+		refuse(http.StatusServiceUnavailable, "the controller is busy checking other sign-ins: try again", refusal.reason, next)
 		return
-	}
-	// One argon2id verification for every outcome, the grant checked
-	// after it, so the time taken says nothing about the name.
-	// The file the password is proved against is the one whose hash the
-	// session remembers (sessionOf rechecks it).
-	file := s.users.Current()
-	err = file.Authenticate(name, req.Password)
-	release()
-	if err == nil && !s.policy.HasUser(name) {
-		err = errNoGrant
-	}
-	if err != nil {
-		reason := err.Error()
-		if errors.Is(err, users.ErrNoUser) && s.users.Err() != nil {
-			reason = "the users file cannot be read"
-		}
-		refuse(http.StatusUnauthorized, signInRefused, reason, next)
+	case refusal.reason != "":
+		refuse(http.StatusUnauthorized, signInRefused, refusal.reason, next)
 		return
 	}
 	// A fresh id at every sign-in; the session the browser held, if any,
@@ -330,7 +315,7 @@ func (s *Server) handleSignIn(w http.ResponseWriter, r *http.Request) {
 	for _, c := range r.CookiesNamed(cookie) {
 		s.sessions.end(c.Value)
 	}
-	id, se := s.sessions.open(name, credPrint(file.Users[name].Password))
+	id, se := s.sessions.open(name, cred)
 	http.SetCookie(w, &http.Cookie{
 		Name:     cookie,
 		Value:    id,
@@ -349,6 +334,47 @@ func (s *Server) handleSignIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"user": name, "expires": se.expires.UTC()})
+}
+
+// passwordRefusal is why checkPassword refused: reason for the journal,
+// and whether it was the throttle (wait, how long until another attempt
+// would be taken) or a full set of hashing slots (busy). The zero value
+// is no refusal.
+type passwordRefusal struct {
+	reason string
+	wait   time.Duration
+	busy   bool
+}
+
+// checkPassword is every password sign-in's check, whatever the surface
+// (POST /api/signin, an OPC UA UserName token): the throttle by address
+// and by name, one of the hashing slots, one argon2id verification for
+// every outcome and the grant checked after it, so the time taken says
+// nothing about the name. name is already lowercased. It returns the
+// credential a session remembers (the fingerprint of the hash the
+// password was proved against, which sessionOf and Surface.Holds recheck).
+func (s *Server) checkPassword(ctx context.Context, from, name, password string) (string, passwordRefusal) {
+	if ok, wait := s.signin.allow(from, name); !ok {
+		return "", passwordRefusal{reason: "throttled", wait: max(wait, time.Millisecond)}
+	}
+	release, ok := s.signin.hash(ctx)
+	if !ok {
+		return "", passwordRefusal{reason: "busy", busy: true}
+	}
+	file := s.users.Current()
+	err := file.Authenticate(name, password)
+	release()
+	if err == nil && !s.policy.HasUser(name) {
+		err = errNoGrant
+	}
+	if err != nil {
+		reason := err.Error()
+		if errors.Is(err, users.ErrNoUser) && s.users.Err() != nil {
+			reason = "the users file cannot be read"
+		}
+		return "", passwordRefusal{reason: reason}
+	}
+	return credPrint(file.Users[name].Password), passwordRefusal{}
 }
 
 // handleSignOut is POST /api/signout: it ends the session the cookie

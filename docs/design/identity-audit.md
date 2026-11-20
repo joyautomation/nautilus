@@ -272,7 +272,7 @@ Groups beyond the token's size limit (Entra's overage claim) are refused with a 
 6. **OIDC**, against Keycloak in CI.
 7. **HMI kit:** sign-in, role-aware controls, the elevation prompt, `AuditTable`.
 8. **Other surfaces**, each coordinated with the work already in that area:
-   - **OPC UA server:** UserName tokens checked against local users. This is `opcua-server-writes.md` slice 4; the maintainer decided on 2026-10-31 that UserName tokens come "when a site needs per-person audit". Proposed: this is that point. That is question 9 (§6).
+   - **OPC UA server:** UserName tokens checked against local users. This is `opcua-server-writes.md` slice 4; the maintainer decided on 2026-10-31 that UserName tokens come "when a site needs per-person audit". Proposed: this is that point. That is question 9 (§6). **Built in PR 8a** (2026-11-20). The server is handed `server.Surface("opcua")`: sign-in, a recheck at each request, areas, and the recorder. Reads stay ungated (naut-lead, 2026-11-20). A certificate alone writes under `auth:` only when `auth.opcua-certificates` maps it to grants, as `opcua-cert:<name>`; an unmapped one is read-only (James, 2026-11-20).
    - **Sparkplug commands:** run as principal `sparkplug:<host>`, with an allowed-actions list.
    - **#707 suppress:** journalled with whoever builds #707.
    - **`oplog` integration:** with #710's pair.

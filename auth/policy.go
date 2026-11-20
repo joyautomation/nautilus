@@ -29,6 +29,11 @@ type Settings struct {
 	// ServiceTokens are named tokens for scripts and services, each with
 	// its grants, like a user's. Their secrets are not here either.
 	ServiceTokens map[string][]Grant
+	// OPCUACerts are OPC UA client certificates mapped to grants, like a
+	// service token's, by name (#708 PR 8a). An OPC UA session from a
+	// trusted certificate the block does not map writes nothing; it signs
+	// in with a user name to write.
+	OPCUACerts map[string]CertGrant
 	// Session is how long a browser sign-in lasts, from the moment of
 	// sign-in (absolute, not renewed by use): 0 is DefaultSession.
 	Session time.Duration
@@ -66,6 +71,16 @@ type RoleDef struct {
 	Allow, Deny []string
 }
 
+// CertGrant maps one certificate to grants: by Thumbprint, the SHA-1 of
+// its DER in hex (40 digits, as naut opcua certs prints it), or by
+// Subject, its subject's distinguished name exactly as naut opcua certs
+// prints it ("CN=SCADA,O=Plant"). Exactly one of the two.
+type CertGrant struct {
+	Thumbprint string
+	Subject    string
+	Grants     []Grant
+}
+
 // Grant is a role, over the whole controller or over named areas.
 type Grant struct {
 	Role  string
@@ -80,6 +95,9 @@ type Policy struct {
 	token     []Grant
 	services  map[string][]Grant
 	users     map[string][]Grant
+	certs     map[string][]Grant // opcua-certificates' grants, by name
+	certThumb map[string]string  // lowercase thumbprint to a certificate's name
+	certSubj  map[string]string  // subject to a certificate's name
 	session   time.Duration
 	elevation time.Duration
 }
@@ -89,7 +107,8 @@ type Policy struct {
 // a grant that silently matches nothing or everything.
 func Compile(c Settings) (*Policy, error) {
 	p := &Policy{roles: map[string]map[string]bool{}, areas: map[string][]string{},
-		services: map[string][]Grant{}, users: map[string][]Grant{}}
+		services: map[string][]Grant{}, users: map[string][]Grant{},
+		certs: map[string][]Grant{}, certThumb: map[string]string{}, certSubj: map[string]string{}}
 	for name, set := range builtinRoles {
 		p.roles[name] = set
 	}
@@ -167,7 +186,58 @@ func Compile(c Settings) (*Policy, error) {
 	if err := p.compileGrants("user", userName, c.Users, p.users); err != nil {
 		return nil, err
 	}
+	if err := p.compileCerts(c.OPCUACerts); err != nil {
+		return nil, err
+	}
 	return p, nil
+}
+
+// compileCerts checks opcua-certificates: each a valid name, matched by
+// exactly one of a full thumbprint (40 hex digits) or a subject, no two
+// matching the same certificate, with grants checked as a service token's.
+func (p *Policy) compileCerts(in map[string]CertGrant) error {
+	grants := map[string][]Grant{}
+	for name, c := range in {
+		certName := func(n string) error { return validName("opcua certificate", n) }
+		if err := certName(lower(name)); err != nil {
+			return err
+		}
+		thumb, subj := lower(c.Thumbprint), strings.TrimSpace(c.Subject)
+		switch {
+		case thumb == "" && subj == "":
+			return fmt.Errorf("auth: opcua certificate %q names no thumbprint or subject", name)
+		case thumb != "" && subj != "":
+			return fmt.Errorf("auth: opcua certificate %q names both a thumbprint and a subject: give one", name)
+		case thumb != "":
+			if len(thumb) != 40 || strings.Trim(thumb, "0123456789abcdef") != "" {
+				return fmt.Errorf("auth: opcua certificate %q: thumbprint is not 40 hex digits (the SHA-1 naut opcua certs prints)", name)
+			}
+			if other, dup := p.certThumb[thumb]; dup {
+				return fmt.Errorf("auth: opcua certificates %q and %q name the same thumbprint", other, name)
+			}
+			p.certThumb[thumb] = lower(name)
+		default:
+			if other, dup := p.certSubj[subj]; dup {
+				return fmt.Errorf("auth: opcua certificates %q and %q name the same subject", other, name)
+			}
+			p.certSubj[subj] = lower(name)
+		}
+		grants[name] = c.Grants
+	}
+	return p.compileGrants("opcua certificate", func(string) error { return nil }, grants, p.certs)
+}
+
+// OPCUACertFor is the name the block maps a certificate to, by its
+// thumbprint (hex SHA-1, any case) first, then its subject: false when
+// the block names neither.
+func (p *Policy) OPCUACertFor(thumbprint, subject string) (string, bool) {
+	if n, ok := p.certThumb[lower(thumbprint)]; ok && thumbprint != "" {
+		return n, true
+	}
+	if n, ok := p.certSubj[strings.TrimSpace(subject)]; ok && subject != "" {
+		return n, true
+	}
+	return "", false
 }
 
 // compileGrants checks and stores each principal's grants: a valid name,
@@ -293,6 +363,8 @@ func (p *Policy) grants(pr Principal) []Grant {
 		return p.services[lower(pr.Name)]
 	case KindUser:
 		return p.users[lower(pr.Name)]
+	case KindOPCUACert:
+		return p.certs[lower(pr.Name)]
 	}
 	return nil
 }

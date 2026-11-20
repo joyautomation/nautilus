@@ -325,6 +325,78 @@
               }
             ]
           }
+        },
+        "opcua-certificates": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+          },
+          "description": "OPC UA client certificates mapped to roles: each names exactly one of a thumbprint (the 40-digit SHA-1 `naut opcua certs` prints) or a subject (as it prints it), and grants as a service token's. Such a session writes as opcua-cert:<name>, within those grants. Under auth: a trusted certificate not named here writes nothing: its client signs in with a user name to write.",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "grants"
+            ],
+            "oneOf": [
+              {
+                "required": [
+                  "thumbprint"
+                ]
+              },
+              {
+                "required": [
+                  "subject"
+                ]
+              }
+            ],
+            "properties": {
+              "thumbprint": {
+                "type": "string",
+                "pattern": "^[0-9A-Fa-f]{40}$"
+              },
+              "subject": {
+                "type": "string",
+                "minLength": 1
+              },
+              "grants": {
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "array",
+                      "items": {
+                        "oneOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": [
+                              "role"
+                            ],
+                            "properties": {
+                              "role": {
+                                "type": "string"
+                              },
+                              "areas": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": {
+                                  "type": "string"
+                                }
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+            }
+          }
         }
       }
     },

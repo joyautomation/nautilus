@@ -102,6 +102,17 @@ func TestLoadAuthRefuses(t *testing.T) {
 		{"auth:\n  roles:\n    r: {inherits: viewer, alow: [write]}\n", "field alow not found"},
 		// A present auth: key with no value is not "no block": it would
 		// load as an open controller, silently (#1071 review).
+		// opcua-certificates (#708 PR 8a): a mapping must name one
+		// certificate exactly, with real roles and areas.
+		{"auth:\n  opcua-certificates:\n    scada: {thumbprint: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b, grants: boss}\n", `opcua certificate "scada": a grant's role is not a role`},
+		{"auth:\n  opcua-certificates:\n    scada: {thumbprint: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b, grants: [{role: operator, areas: [nowhere]}]}\n", `no area "nowhere"`},
+		{"auth:\n  opcua-certificates:\n    scada: {grants: operator}\n", "names no thumbprint or subject"},
+		{"auth:\n  opcua-certificates:\n    scada: {thumbprint: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b, subject: CN=x, grants: operator}\n", "both a thumbprint and a subject"},
+		{"auth:\n  opcua-certificates:\n    scada: {thumbprint: 9f86d081884c7d65, grants: operator}\n", "not 40 hex digits"},
+		{"auth:\n  opcua-certificates:\n    scada: {thumbprint: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b}\n", `opcua certificate "scada" has no role`},
+		{"auth:\n  opcua-certificates:\n    a: {thumbprint: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b, grants: operator}\n    b: {thumbprint: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b, grants: viewer}\n", "name the same thumbprint"},
+		{"auth:\n  opcua-certificates:\n    scada: {thumprint: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b, grants: operator}\n", "field thumprint not found"},
+		{"opcua:\n  anonymous-writes: true\nauth: {}\n", "opcua.anonymous-writes cannot be used with an auth: block"},
 		{"auth:\n", "auth: is empty"},
 		{"auth: ~\n", "auth: is empty"},
 		{"auth: null\n", "auth: is empty"},
@@ -111,6 +122,54 @@ func TestLoadAuthRefuses(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%q: %v, want %q", c.block, err, c.want)
 		}
+	}
+}
+
+// opcua-certificates maps an OPC UA client certificate, by thumbprint
+// (any case) or subject, to a name whose grants answer as a service
+// token's would; a certificate it does not name maps to nothing.
+func TestLoadAuthOPCUACertificates(t *testing.T) {
+	p, err := Load(authProject(`auth:
+  areas:
+    receiving: {tags: ["RCV_*"]}
+  opcua-certificates:
+    scada: {thumbprint: 9F86D081884C7D659A2FEAA0C55AD015A3BF4F1B, grants: [{role: operator, areas: [receiving]}]}
+    historian: {subject: "CN=Historian,O=Plant", grants: viewer}
+`), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, ok := p.Auth.OPCUACertFor("9f86d081884c7d659a2feaa0c55ad015a3bf4f1b", "CN=whatever"); !ok || n != "scada" {
+		t.Errorf("by thumbprint: %q %v", n, ok)
+	}
+	if n, ok := p.Auth.OPCUACertFor("0000000000000000000000000000000000000000", "CN=Historian,O=Plant"); !ok || n != "historian" {
+		t.Errorf("by subject: %q %v", n, ok)
+	}
+	for _, c := range [][2]string{{"", ""}, {"9f86d081884c7d65", ""}, {"", "CN=historian,O=Plant"}, {"", "CN=Historian"}} {
+		if n, ok := p.Auth.OPCUACertFor(c[0], c[1]); ok {
+			t.Errorf("%q %q maps to %q", c[0], c[1], n)
+		}
+	}
+	for _, c := range []struct {
+		pr     auth.Principal
+		target string
+		ok     bool
+	}{
+		{auth.OPCUACert("scada"), "RCV_FLOW", true},
+		{auth.OPCUACert("scada"), "OTHER", false},
+		{auth.OPCUACert("historian"), "RCV_FLOW", false},
+		{auth.OPCUACert("nobody"), "RCV_FLOW", false},
+	} {
+		if got := p.Auth.Can(c.pr, auth.Write, c.target).Allowed; got != c.ok {
+			t.Errorf("%s write %s = %v, want %v", c.pr, c.target, got, c.ok)
+		}
+	}
+	if got := auth.OPCUACert("scada").String(); got != "opcua-cert:scada" {
+		t.Errorf("the journal's name: %q", got)
+	}
+	// opcua.anonymous-writes without an auth: block still loads.
+	if _, err := Load(authProject("opcua:\n  anonymous-writes: true\n"), ""); err != nil {
+		t.Errorf("anonymous-writes without auth: %v", err)
 	}
 }
 
