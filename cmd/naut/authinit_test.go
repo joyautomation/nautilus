@@ -106,6 +106,13 @@ func TestAuthInitRefuses(t *testing.T) {
 		{"broken manifest", plainManifest + "bogus: 1\n", []string{"--user", "alice:operator"}, "fix that first"},
 		{"auth already", plainManifest + "auth:\n  users: {}\n", nil, "auth: block already"},
 		{"an argument", plainManifest, []string{"alice"}, "takes no arguments"},
+		// -m spelt another way than ReadManifest cleans it to must still
+		// check the edited text, not the file on disk.
+		{"-m ./ unknown role", plainManifest, []string{"-m", "./nautilus.yaml", "--user", "alice:boss"}, "would not load"},
+		// Text that loads but says something else: a key YAML reads as
+		// null, a block after the document's end.
+		{"a name YAML reads as null", plainManifest, []string{"--user", "null:operator"}, "is unchanged"},
+		{"after the document end", plainManifest + "...\n", []string{"--user", "alice:operator"}, "does not say what was meant"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := authProject(t, tc.manifest)
@@ -271,13 +278,16 @@ func TestOPCUATrustAsRefusesBeforeMoving(t *testing.T) {
 		block func(tps []string) string
 		as    string
 		want  string
+		args  []string
 	}{
-		{"no auth", func([]string) string { return "" }, "scada:operator", "no auth: block"},
-		{"name taken", func(tps []string) string { return mapped(strings.Repeat("ab", 20)) }, "SCADA:operator", "already maps scada"},
-		{"unknown role", func([]string) string { return "auth:\n  users: {}\n" }, "scada:boss", "would not load"},
-		{"unknown area", func([]string) string { return "auth:\n  users: {}\n" }, "scada:operator@receiving", "would not load"},
-		{"not plain", func([]string) string { return "auth:\n  users: {}\n" }, "scada:operator}\n  anonymous: viewer", "not a plain name"},
-		{"flow auth", func([]string) string { return "auth: {users: {}}\n" }, "scada:operator", "add this under it by hand"},
+		{"-m ./ unknown role", func([]string) string { return "auth:\n  users: {}\n" }, "scada:boss", "would not load", []string{"-m", "./nautilus.yaml"}},
+		{"a name YAML reads as null", func([]string) string { return "auth:\n  users: {}\n" }, "null:operator", "nothing changed", nil},
+		{"no auth", func([]string) string { return "" }, "scada:operator", "no auth: block", nil},
+		{"name taken", func(tps []string) string { return mapped(strings.Repeat("ab", 20)) }, "SCADA:operator", "already maps scada", nil},
+		{"unknown role", func([]string) string { return "auth:\n  users: {}\n" }, "scada:boss", "would not load", nil},
+		{"unknown area", func([]string) string { return "auth:\n  users: {}\n" }, "scada:operator@receiving", "would not load", nil},
+		{"not plain", func([]string) string { return "auth:\n  users: {}\n" }, "scada:operator}\n  anonymous: viewer", "not a plain name", nil},
+		{"flow auth", func([]string) string { return "auth: {users: {}}\n" }, "scada:operator", "add this under it by hand", nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir, tps := opcuaTrustProject(t, "")
@@ -285,7 +295,7 @@ func TestOPCUATrustAsRefusesBeforeMoving(t *testing.T) {
 			raw, _ := os.ReadFile(path)
 			orig := string(raw) + tc.block(tps)
 			os.WriteFile(path, []byte(orig), 0o644)
-			code, out, errs := nautTrust(tps[0], "--as", tc.as)
+			code, out, errs := nautTrust(append([]string{tps[0], "--as", tc.as}, tc.args...)...)
 			if code == 0 || !strings.Contains(errs, tc.want) {
 				t.Errorf("%d, want a refusal saying %q:\n%s%s", code, tc.want, out, errs)
 			}
@@ -349,5 +359,33 @@ func TestOPCUATrustAsWithNoManifestHere(t *testing.T) {
 	}
 	if trustedHas(t, dir, tps[0]) {
 		t.Error("moved the certificate")
+	}
+}
+
+// -m names the manifest for both halves: its opcua.pki is the store the
+// certificate moves in, and the mapping is written into it, not into
+// nautilus.yaml.
+func TestOPCUATrustAsWithAnotherManifest(t *testing.T) {
+	dir, tps := opcuaTrustProject(t, "auth:\n  users: {}\n")
+	plain, _ := os.ReadFile(filepath.Join(dir, "nautilus.yaml"))
+	os.Rename(filepath.Join(dir, "pki"), filepath.Join(dir, "sitepki"))
+	site := string(plain) + "opcua:\n  pki: sitepki\n"
+	os.MkdirAll(filepath.Join(dir, "sites"), 0o755)
+	os.WriteFile(filepath.Join(dir, "sites", "a.yaml"), []byte(site), 0o644)
+	if code, out, errs := nautTrust(tps[0], "--as", "scada:operator", "-m", "sites/a.yaml"); code != 0 {
+		t.Fatalf("%d %s %s", code, out, errs)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "sitepki", "trusted", "certs", tps[0]+".der")); err != nil {
+		t.Error("the certificate did not move in the store sites/a.yaml names")
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "nautilus.yaml")); !bytes.Equal(got, plain) {
+		t.Error("nautilus.yaml changed")
+	}
+	m, err := project.ReadManifest(os.DirFS(dir), "sites/a.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, ok := m.AuthPolicy().OPCUACertFor(tps[0], ""); !ok || n != "scada" {
+		t.Error("sites/a.yaml does not map it")
 	}
 }

@@ -33,11 +33,14 @@ func pkiFlag(fs *flag.FlagSet) *string {
 	return fs.String("pki", "", "certificate store directory (default: opcua.pki in ./nautilus.yaml, else ./pki)")
 }
 
-func resolvePKI(flagValue string) string {
+func resolvePKI(flagValue, manifest string) string {
 	if flagValue != "" {
 		return flagValue
 	}
-	raw, err := os.ReadFile("nautilus.yaml")
+	if manifest == "" {
+		manifest = "nautilus.yaml"
+	}
+	raw, err := os.ReadFile(filepath.FromSlash(manifest))
 	if err == nil {
 		var m struct {
 			OPCUA *struct {
@@ -61,7 +64,7 @@ func runOPCUACerts(args []string) int {
 		fmt.Fprintln(os.Stderr, "naut opcua certs: takes no arguments")
 		return 2
 	}
-	dir := resolvePKI(*pkiDir)
+	dir := resolvePKI(*pkiDir, "")
 	if _, err := os.Stat(dir); err != nil {
 		fmt.Fprintf(os.Stderr, "naut opcua certs: no certificate store at %s (the server makes it on its first start; --pki names another)\n", dir)
 		return 1
@@ -155,7 +158,7 @@ func opcuaTrustMain(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "naut opcua trust: %v\n", err)
 		return 1
 	}
-	pki := opcuaserver.PKI{Dir: resolvePKI(*pkiDir)}
+	pki := opcuaserver.PKI{Dir: resolvePKI(*pkiDir, *manifest)}
 	if *as == "" {
 		c, err := pki.Trust(pos[0])
 		if err != nil {
@@ -185,8 +188,17 @@ func opcuaTrustMain(args []string, stdout, stderr io.Writer) int {
 	if err := mapOPCUACert(e, g, c.Thumbprint); err != nil {
 		return fail(err)
 	}
-	if _, err := e.check(); err != nil {
+	took := func(m *project.Manifest) bool {
+		if m.AuthPolicy() == nil {
+			return false
+		}
+		n, ok := m.AuthPolicy().OPCUACertFor(c.Thumbprint, "")
+		return ok && n == strings.ToLower(g.name)
+	}
+	if m, err := e.check(); err != nil {
 		return fail(fmt.Errorf("--as %s would not load, so nothing changed: %w", *as, err))
+	} else if !took(m) {
+		return fail(fmt.Errorf("--as %s loads but does not map the certificate to %s (a name YAML reads otherwise?), so nothing changed", *as, g.name))
 	}
 	if rejected {
 		if c, err = pki.Trust(c.Thumbprint); err != nil {
@@ -196,7 +208,7 @@ func opcuaTrustMain(args []string, stdout, stderr io.Writer) int {
 	} else {
 		fmt.Fprintf(stdout, "%s is trusted already\n", c.Thumbprint)
 	}
-	if _, err := e.save(); err != nil {
+	if _, err := e.save(took); err != nil {
 		return fail(fmt.Errorf("the certificate is trusted, but the mapping was not written: %w\nAdd it under auth.opcua-certificates by hand:\n    %s: {thumbprint: %s, grants: %s}", err, g.name, c.Thumbprint, g.yaml()))
 	}
 	fmt.Fprintf(stdout, "%s: auth.opcua-certificates.%s = %s (thumbprint %s)\n", e.path, g.name, g.yaml(), c.Thumbprint)

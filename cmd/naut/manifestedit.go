@@ -15,9 +15,10 @@ import (
 	"fmt"
 	iofs "io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
-	"testing/fstest"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -40,6 +41,10 @@ func openManifestEdit(dir, name string) (*manifestEdit, error) {
 	if name == "" {
 		name = project.ManifestName
 	}
+	// Cleaned as ReadManifest cleans it ("./nautilus.yaml" is
+	// "nautilus.yaml"), so the overlay check reads the edited text and not
+	// the file on disk.
+	name = path.Clean(filepath.ToSlash(name))
 	e := &manifestEdit{dir: dir, name: name, path: filepath.Join(dir, filepath.FromSlash(name)), nl: "\n"}
 	var err error
 	if e.raw, err = os.ReadFile(e.path); err != nil {
@@ -144,10 +149,17 @@ func (e *manifestEdit) check() (*project.Manifest, error) {
 
 // save checks the edited text and, only when it loads, replaces the file:
 // a temporary file beside it, synced, renamed over it, its mode kept.
-func (e *manifestEdit) save() (*project.Manifest, error) {
+//
+// took says whether the loaded result holds what the edit meant to add:
+// text can load and still mean something else (a key YAML reads as null,
+// lines after a document end marker), and then nothing is written.
+func (e *manifestEdit) save(took func(*project.Manifest) bool) (*project.Manifest, error) {
 	m, err := e.check()
 	if err != nil {
 		return nil, fmt.Errorf("the edit would not load, so %s is unchanged: %w", e.path, err)
+	}
+	if !took(m) {
+		return nil, fmt.Errorf("the edit loads but does not say what was meant (a name YAML reads otherwise, or text the file ends before?), so %s is unchanged", e.path)
 	}
 	mode := iofs.FileMode(0o644)
 	if st, err := os.Stat(e.path); err == nil {
@@ -186,10 +198,26 @@ type overlayFS struct {
 
 func (o overlayFS) Open(name string) (iofs.File, error) {
 	if name == o.name {
-		return fstest.MapFS{name: {Data: o.data, Mode: 0o644}}.Open(name)
+		return &memFile{Reader: bytes.NewReader(o.data), name: path.Base(name), size: int64(len(o.data))}, nil
 	}
 	return o.base.Open(name)
 }
+
+// memFile is the overlay's one file, read from memory.
+type memFile struct {
+	*bytes.Reader
+	name string
+	size int64
+}
+
+func (f *memFile) Stat() (iofs.FileInfo, error) { return f, nil }
+func (f *memFile) Close() error                 { return nil }
+func (f *memFile) Name() string                 { return f.name }
+func (f *memFile) Size() int64                  { return f.size }
+func (f *memFile) Mode() iofs.FileMode          { return 0o644 }
+func (f *memFile) ModTime() time.Time           { return time.Time{} }
+func (f *memFile) IsDir() bool                  { return false }
+func (f *memFile) Sys() any                     { return nil }
 
 func (o overlayFS) ReadFile(name string) ([]byte, error) {
 	if name == o.name {

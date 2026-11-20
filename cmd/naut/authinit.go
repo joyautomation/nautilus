@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/joyautomation/nautilus/auth/users"
+	"github.com/joyautomation/nautilus/internal/project"
 )
 
 const authUsage = `naut auth — turn on users, roles and sign-in (#708)
@@ -93,7 +94,18 @@ func authMain(args []string, stdout, stderr io.Writer) int {
 		return fail(fmt.Errorf("%s has an auth: block already (line %d): edit it there", e.path, k.Line))
 	}
 	e.appendBlock(starterAuth(grants))
-	if _, err := e.save(); err != nil {
+	if _, err := e.save(func(m *project.Manifest) bool {
+		p := m.AuthPolicy()
+		if p == nil {
+			return false
+		}
+		for _, g := range grants {
+			if !p.HasUser(g.name) {
+				return false
+			}
+		}
+		return true
+	}); err != nil {
 		return fail(err)
 	}
 	fmt.Fprintf(stderr, "%s: wrote a starter auth: block", e.path)
