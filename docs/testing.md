@@ -151,7 +151,7 @@ Every iteration runs fully, so an `expect:` or `always:` inside a repeat is
 checked each time; the run stops at the first iteration that fails, and the
 failure names it (`step 2.1 (line 41), repeat 7 of 24`: the step as written,
 dotted inside groups, with the iteration). A step after a group keeps the
-number it has in the file. `repeat` is 1 to 100000, and a test that expands
+number it has in the file. `repeat` is 1 to 10000, and a test that expands
 to more than 100000 steps is refused when the file loads, with the count.
 
 ## `given` — setting the world

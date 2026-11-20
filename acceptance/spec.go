@@ -290,6 +290,10 @@ func (t *Test) steps() ([]*Step, error) {
 // a test that never ends.
 const MaxExpandedSteps = 100000
 
+// MaxRepeat bounds one `repeat:`: a loop that long is a typo or a test
+// that wants a different tool.
+const MaxRepeat = 10000
+
 // hasBody reports whether the step has any key of its own besides the
 // repeat/group pair: something to do or check.
 func (s *Step) hasBody() bool {
@@ -367,7 +371,7 @@ func walkLevel(steps []*Step, path []int, reps []string, fn func(stepRun) (bool,
 		}
 		for k := 1; k <= n; k++ {
 			rs := reps
-			if st.Repeat != nil {
+			if n > 1 { // repeat: 1 is the step as it is today, unlabelled
 				rs = append(append([]string(nil), reps...), fmt.Sprintf("%d of %d", k, n))
 			}
 			if len(st.Steps) > 0 {
@@ -394,8 +398,8 @@ func walkLevel(steps []*Step, path []int, reps []string, fn func(stepRun) (bool,
 
 // validate rejects the mistakes worth catching before anything runs.
 func (s *Step) validate(testName string) error {
-	if s.Repeat != nil && (*s.Repeat < 1 || *s.Repeat > MaxExpandedSteps) {
-		return fmt.Errorf("test %q: repeat must be between 1 and %d, got %d", testName, MaxExpandedSteps, *s.Repeat)
+	if s.Repeat != nil && (*s.Repeat < 1 || *s.Repeat > MaxRepeat) {
+		return fmt.Errorf("test %q: repeat must be between 1 and %d, got %d", testName, MaxRepeat, *s.Repeat)
 	}
 	if len(s.Steps) > 0 {
 		if s.hasBody() {

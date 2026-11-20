@@ -176,13 +176,16 @@ tests:
 	if f == nil || f.Step != 2 || f.StepPath != "" || f.Repeat != "" {
 		t.Fatalf("failure %+v, want step 2 with no path and no repeat", f)
 	}
+	if f.StepLine != 9 {
+		t.Errorf("StepLine %d, want 9: the step's own line in the file", f.StepLine)
+	}
 }
 
 func TestRepeatIsRefusedWhenItCannotWork(t *testing.T) {
 	for _, tc := range []struct{ name, steps, want string }{
 		{"zero", "- { repeat: 0, scans: 1 }", "repeat must be between 1 and"},
 		{"negative", "- { repeat: -2, scans: 1 }", "repeat must be between 1 and"},
-		{"huge", "- { repeat: 100001, scans: 1 }", "repeat must be between 1 and"},
+		{"huge", "- { repeat: 10001, scans: 1 }", "repeat must be between 1 and 10000"},
 		{"nothing to repeat", "- { repeat: 3 }", "needs something to repeat"},
 		{"a group with its own keys", "- { repeat: 3, scans: 1, steps: [{ scans: 1 }] }", "is a group and holds only"},
 		{"an empty group", "- { repeat: 3, steps: [] }", "`steps:` is empty"},
@@ -195,5 +198,24 @@ func TestRepeatIsRefusedWhenItCannotWork(t *testing.T) {
 				t.Errorf("error %v, want one containing %q", err, tc.want)
 			}
 		})
+	}
+}
+
+// repeat: 1 is the step as it is without it: no iteration label.
+func TestRepeatOnceIsUnlabelled(t *testing.T) {
+	res := runCounter(t, `
+tests:
+  - name: once
+    steps:
+      - repeat: 1
+        scans: 1
+        expect: { Count: 99 }
+`)
+	f := res[0].Failure
+	if f == nil || f.Repeat != "" || f.Step != 1 || f.StepPath != "" {
+		t.Fatalf("failure %+v, want step 1 with no repeat label", f)
+	}
+	if strings.Contains(acceptance.FormatFailure(res[0]), "repeat 1 of 1") {
+		t.Error("repeat: 1 reads 'repeat 1 of 1'")
 	}
 }

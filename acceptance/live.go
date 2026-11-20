@@ -135,6 +135,7 @@ func runTestLive(s *Suite, t *Test, live Live) (Result, error) {
 		if fail != nil {
 			fail.Step, fail.StepPath, fail.Repeat = sr.Index, sr.Path, sr.Repeat
 			fail.Line = st.Line
+			fail.StepLine = st.Line
 			fail.AtMs = float64(fail.At) / float64(time.Millisecond)
 			res.Failure = fail
 			res.Elapsed, res.Scans = r.elapsed(), r.scans
