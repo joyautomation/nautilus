@@ -351,7 +351,7 @@ export interface AuthDeps {
  * (the operator chose "Stay" at an unsaved-work guard): the kit listens
  * again, and a note left for the provider is dropped.
  */
-export const LEAVE_RESET_MS = 5_000;
+export const LEAVE_RESET_MS = 15_000; // past the controller's 10 s start timeout
 
 /** The first probe's wait after a stream error, and the longest. */
 export const PROBE_MIN_MS = 2_000;

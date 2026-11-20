@@ -473,6 +473,12 @@ func TestOIDCElevateFinishRefusals(t *testing.T) {
 			t.Errorf("forces: %d", code)
 		}
 	})
+	t.Run("Sec-Fetch-Site none completes (a browser's report of the hop)", func(t *testing.T) {
+		s := ready(t)
+		if rec := elevateFinish(t, s.srv, s.tk, s.c, s.b, header("Sec-Fetch-Site", "none")); rec.Code != http.StatusSeeOther {
+			t.Errorf("%d %s", rec.Code, rec.Body)
+		}
+	})
 	t.Run("no binding cookie", func(t *testing.T) {
 		s := ready(t)
 		if rec := elevateFinish(t, s.srv, s.tk, s.c, nil); rec.Code != http.StatusBadRequest {

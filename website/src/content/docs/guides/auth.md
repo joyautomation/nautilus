@@ -195,7 +195,7 @@ auth:
 - **Offline sites.** The provider must be reachable to sign in, not afterwards. Keep a local user (or `NAUTILUS_TOKEN`) for when it isn't.
 - **Upgrading.** A controller now takes the users lock (`.users.lock` in the state directory) at a name's first sign-in. One left owned by root by an older `sudo naut users` makes those sign-ins fail, with a message naming the `chown`; the next `sudo naut users` gives it back.
 - **Not on a redundant pair yet.** The pins are written by the box that signs a person in, and a pair doesn't share them yet (#710), so `auth.oidc` is refused with `redundancy:`. Use local users on a pair.
-- **Tested against Keycloak** (`tools/keycloak/run.sh` runs the sign-in and the confirmation at the provider against a real Keycloak). Entra ID and Google are not tested yet.
+- **Tested against Keycloak** (`tools/keycloak/run.sh` runs the sign-in and the confirmation at the provider against a real Keycloak), in Chrome and Firefox. Entra ID, Google and Safari are not tested yet.
 
 The hops, for a proxy or firewall rule:
 

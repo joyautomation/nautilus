@@ -152,6 +152,15 @@ func sameSiteRequest(r *http.Request) bool {
 	return false
 }
 
+// notCrossSite is the second step's looser rule: same-origin or none
+// (a browser may report the hop page's refresh as either). The step needs
+// the ticket, the binding cookie and the session's cookie besides, so
+// only a cross-site request (which carries no session cookie anyway) is
+// refused outright.
+func notCrossSite(r *http.Request) bool {
+	return sameSiteRequest(r) || r.Header.Get("Sec-Fetch-Site") == "none"
+}
+
 // liveSession is the session hash names, still live and still standing
 // (sessionStands): a flow dies with its session.
 func (s *Server) liveSession(hash string) (session, bool) {
@@ -403,7 +412,7 @@ func (s *Server) handleOIDCElevated(w http.ResponseWriter, r *http.Request) {
 		refuse(http.StatusBadRequest, "this confirmation has expired or was already used: do the action again", "unknown or expired ticket")
 		return
 	}
-	if !sameSiteRequest(r) {
+	if !notCrossSite(r) {
 		refuse(http.StatusForbidden, "a confirmation completes only on this controller's own page", "cross-site")
 		return
 	}
