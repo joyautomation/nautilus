@@ -1,7 +1,7 @@
 // Command nautilus is the developer CLI for the nautilus SCADA framework.
 //
 //	naut lsp        run the IEC 61131-3 language server (stdio)
-//	naut check      compile .st/.fbd files and report diagnostics (CI-friendly)
+//	naut check      compile .st/.fbd/.ld/.sfc files and report diagnostics (CI-friendly)
 //	naut new        scaffold a new nautilus project (interactive)
 //	naut fbd graph  emit a .fbd file's diagram render model as JSON
 //
@@ -22,8 +22,9 @@ const usage = `nautilus — SCADA, built like software
 Usage:
   naut lsp            Run the ST language server on stdio (used by the
                           VS Code extension; not meant to be run by hand).
-  naut check [path]   Compile every .st file under path (default ".")
-                          and print diagnostics. Exits 1 on any error.
+  naut check [path]   Compile every program under path (default "."): .st,
+                          .ld, .fbd and .sfc. Prints diagnostics and exits 1
+                          on any error.
   naut new [name]     Scaffold a new nautilus project. --template picks
                           the shape: demo (default) or minimal for a manifest
                           project — nautilus.yaml + IEC files, no toolchain —

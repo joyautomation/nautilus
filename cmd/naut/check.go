@@ -28,7 +28,7 @@ import (
 	"github.com/joyautomation/nautilus/virtdev"
 )
 
-// runCheck compiles every .st file under the given paths (files or
+// runCheck compiles every program (.st, .ld, .fbd, .sfc) under the given paths (files or
 // directories; default ".") and prints gcc-style diagnostics:
 //
 //	path/to/program.st:12:5: undeclared identifier "y" ...
