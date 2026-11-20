@@ -160,7 +160,9 @@ your own, with `POST /api/elevate`:
 {"elevatedUntil":"2026-11-20T09:06:05.890423355Z","user":"jsmith"}
 ```
 
-and the action then works. Using an action does not extend the window.
+and the action then works. A user whose roles hold none of these permissions,
+a viewer or an operator, has nothing to confirm: they get a `403`, never a
+password prompt. Using an action does not extend the window.
 Tokens, for scripts and the VS Code extension, always count as elevated,
 since they are sent with every request and their role already limits them.
 Five wrong passwords in a row end the session. The [auth
