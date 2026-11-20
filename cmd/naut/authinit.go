@@ -6,6 +6,7 @@ package main
 // learning the block's shape first, and edits it from there.
 
 import (
+	"cmp"
 	"errors"
 	"flag"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"time"
 
 	"github.com/joyautomation/nautilus/auth/users"
 	"github.com/joyautomation/nautilus/internal/project"
@@ -21,10 +23,13 @@ import (
 const authUsage = `naut auth — turn on users, roles and sign-in (#708)
 
 Usage:
-  naut auth init [--user <name>:<role>]... [--project <dir>] [-m <manifest>]
+  naut auth init [--user <name>:<role>]... [--no-tls] [--project <dir>] [-m <manifest>]
         Write a starter auth: block into nautilus.yaml: the users given,
         and the other keys as commented examples. Refused when the
-        manifest has an auth: block already.
+        manifest has an auth: block already. Unless --no-tls, it also
+        writes server.tls: self-signed (HTTPS with a certificate the
+        controller makes), and prints that certificate's fingerprint;
+        not on a redundant pair, behind a TLS proxy, or with a server.tls.
 
 Roles: viewer, operator, supervisor, engineer, administrator (each adds to
 the one before), or a custom one of the block's roles:.
@@ -34,10 +39,10 @@ never in the project), and restart naut run. Guide: Users, roles & sign-in.
 `
 
 func runAuth(args []string) int {
-	return authMain(args, os.Stdout, os.Stderr)
+	return authMain(args, os.Stdout, os.Stderr, os.Getenv)
 }
 
-func authMain(args []string, stdout, stderr io.Writer) int {
+func authMain(args []string, stdout, stderr io.Writer, getenv func(string) string) int {
 	if len(args) == 0 || args[0] != "init" {
 		if len(args) > 0 && (args[0] == "-h" || args[0] == "--help" || args[0] == "help") {
 			fmt.Fprint(stdout, authUsage)
@@ -51,6 +56,7 @@ func authMain(args []string, stdout, stderr io.Writer) int {
 	fs.Usage = func() { fmt.Fprint(stderr, authUsage) }
 	dir := fs.String("project", ".", "project directory")
 	manifest := fs.String("m", "", manifestFlagUsage)
+	noTLS := fs.Bool("no-tls", false, "write no server.tls: self-signed (a TLS proxy in front, or a certificate of your own)")
 	var specs []string
 	fs.Func("user", "a user and the role to grant, <name>:<role> (repeatable)", func(s string) error {
 		specs = append(specs, s)
@@ -94,6 +100,7 @@ func authMain(args []string, stdout, stderr io.Writer) int {
 	if k, _ := child(e.root, "auth"); k != nil {
 		return fail(fmt.Errorf("%s has an auth: block already (line %d): edit it there", e.path, k.Line))
 	}
+	tlsDone, tlsWhy := addSelfSignedTLS(e, *noTLS)
 	e.appendBlock(starterAuth(grants))
 	// Exact: the result is the manifest as it was plus an auth: block
 	// that names these users with these grants and nothing else.
@@ -101,7 +108,7 @@ func authMain(args []string, stdout, stderr io.Writer) int {
 	for _, g := range grants {
 		want.Users[g.name] = []project.AuthGrant{{Role: g.role, Areas: g.areas}}
 	}
-	if _, err := e.save(func(m *project.Manifest) bool { return exactInit(e.m, m, want) }); err != nil {
+	if _, err := e.save(func(m *project.Manifest) bool { return exactInit(e.m, m, want, tlsDone) }); err != nil {
 		return fail(err)
 	}
 	fmt.Fprintf(stderr, "%s: wrote a starter auth: block", e.path)
@@ -111,6 +118,26 @@ func authMain(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr)
 	}
 	fmt.Fprintln(stderr, "With it, every request needs a credential: reads too, unless you set anonymous: viewer.")
+	if tlsDone {
+		fmt.Fprintln(stderr, "server.tls: self-signed: the controller serves HTTPS with a certificate it makes in its state directory, so passwords never cross the network in the clear.")
+		// The certificate this checkout's naut run will serve, made now so
+		// its fingerprint can be checked against the browser's.
+		// Never renewed here: only naut run renews.
+		sd, err := controllerStateDir("the self-signed certificate", e.m.AuthStateDir(), e.m.Name, e.dir, true, getenv)
+		var c selfSignedCert
+		if err == nil {
+			c, err = ensureSelfSigned(sd, cmp.Or(e.m.Name, "nautilus"), selfSignedHosts(e.m.Server.Addr), time.Now(), false)
+		}
+		if err == nil {
+			fmt.Fprintf(stderr, "  naut run here serves %s, SHA-256 fingerprint:\n    %s\n", c.Path, c.Fingerprint)
+			fmt.Fprintln(stderr, "  A browser warns until you accept it: compare that fingerprint with the one it shows (the warning page, then the certificate's details).")
+		} else {
+			fmt.Fprintf(stderr, "  No certificate made here yet, so no fingerprint to show (%v): naut run makes it at its start and prints its fingerprint.\n", err)
+		}
+		fmt.Fprintln(stderr, "  A box makes its own at its first start, and naut run there prints its fingerprint.")
+	} else if tlsWhy != "" {
+		fmt.Fprintln(stderr, "No server.tls written: "+tlsWhy)
+	}
 	fmt.Fprintln(stderr, "Next:")
 	for _, g := range grants {
 		fmt.Fprintf(stderr, "  naut users add %s       # %s's password, kept on the controller (sudo on a box)\n", g.name, g.name)
@@ -202,17 +229,55 @@ auth:
 }
 
 // exactInit reports whether post is pre (which has no auth: block) with
-// the auth: block want, its users granted in the compiled policy, and
-// every other part of the manifest the same.
-func exactInit(pre, post *project.Manifest, want *project.AuthConfig) bool {
+// the auth: block want, its users granted in the compiled policy, with
+// server.tls: self-signed when tls (and only then), and every other part
+// of the manifest the same.
+func exactInit(pre, post *project.Manifest, want *project.AuthConfig, tls bool) bool {
 	p := post.AuthPolicy()
 	if pre.Auth != nil || p == nil || !reflect.DeepEqual(post.Auth, want) {
 		return false
+	}
+	if tls && (pre.Server.TLS != nil || post.Server.TLS == nil || !post.Server.TLS.SelfSigned || post.Server.TLS.Cert != "" || post.Server.TLS.Key != "") {
+		return false
+	}
+	clear := func(m *project.Manifest) { m.Auth = nil }
+	if tls {
+		clear = func(m *project.Manifest) { m.Auth, m.Server.TLS = nil, nil }
 	}
 	for name := range want.Users {
 		if !p.HasUser(name) {
 			return false
 		}
 	}
-	return sameBut(pre, post, func(m *project.Manifest) { m.Auth = nil })
+	return sameBut(pre, post, clear)
+}
+
+// addSelfSignedTLS adds server.tls: self-signed to the manifest, under its
+// server: block (or a new one), unless noTLS or the manifest is one where
+// that is not the right answer: a server.tls of its own, a redundant pair
+// (the load refuses self-signed there: each controller would make its
+// own), a TLS proxy in front (server.trusted-proxies), or a server: a
+// command cannot add a line to. why says what was not done and what to do.
+func addSelfSignedTLS(e *manifestEdit, noTLS bool) (done bool, why string) {
+	m := e.m
+	switch {
+	case noTLS:
+		return false, "--no-tls. A password then signs in only from the controller's own loopback, or through a TLS proxy named in server.trusted-proxies."
+	case m.Server.TLS != nil:
+		return false, "server.tls is set already, and kept."
+	case m.Redundancy != nil:
+		return false, "a redundant pair serves ONE certificate, and with self-signed each controller would make its own (the load refuses it). Make one certificate and key, copy both to both controllers, and name them: server.tls: {cert: /abs/cert.pem, key: /abs/key.pem}."
+	case len(m.Server.TrustedProxies) > 0:
+		return false, "server.trusted-proxies names a TLS proxy in front, which serves HTTPS. To serve it from the controller too, add server.tls: self-signed."
+	}
+	line := "tls: self-signed          # HTTPS with a certificate the controller makes (naut auth init); {cert, key} for your own"
+	k, v := child(e.root, "server")
+	if k == nil {
+		e.appendBlock("server:\n  " + line + "\n")
+		return true, ""
+	}
+	if err := e.insertUnder(k, v, []string{line}); err != nil {
+		return false, "server: is not a block a command can add a line to. Add tls: self-signed under it by hand."
+	}
+	return true, ""
 }

@@ -599,6 +599,9 @@ type Server struct {
 
 	tls       *CertSource
 	leaderTLS *http.Transport // forwards to the leader over TLS, pinned
+	// tlsPin is the leaf last said served (noteTLSChange).
+	tlsMu     sync.Mutex
+	tlsPin    [32]byte
 	proxies   []netip.Prefix
 	pinMu     sync.Mutex
 	pinRefuse bool // a pin mismatch is journalled (once, until a forward succeeds)
@@ -681,9 +684,14 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 		if c := opts[0].TLS; c != nil {
 			s.tls, s.leaderTLS = c, c.leaderTransport()
 			c.OnReload(s.journalTLSReload)
+			s.tlsPin, _ = c.current()
 			// A connection to the leader was verified against the leaves
-			// accepted then; when they change, make it again.
-			c.OnPinsChange(s.leaderTLS.CloseIdleConnections)
+			// accepted then; when they change, make it again. A change of
+			// the leaf served is said and journalled (tls.changed).
+			c.OnPinsChange(func() {
+				s.leaderTLS.CloseIdleConnections()
+				s.noteTLSChange()
+			})
 		}
 		for name, secret := range opts[0].ServiceTokens {
 			if secret == "" {

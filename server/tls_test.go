@@ -341,6 +341,51 @@ func TestCertReloadFailureIsJournalled(t *testing.T) {
 	}
 }
 
+// Every change of the certificate served is journalled (tls.changed)
+// with the new and the replaced fingerprint, once (#1114 review: a
+// renewal must never swap it unannounced); a recheck that finds nothing
+// new, or the replaced leaf dropped later, journals nothing more.
+func TestCertChangeIsJournalled(t *testing.T) {
+	dir := t.TempDir()
+	cp, kp, first := writeCert(t, dir, "plc", "plc.example")
+	src, err := NewCertSource(cp, kp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := time.Now()
+	src.now = func() time.Time { return clock }
+	srv := auditServer(t, Options{TLS: src})
+	changes := func() []audit.Entry {
+		var out []audit.Entry
+		for _, e := range srv.audit.ring.Recent() {
+			if e.Action == "tls.changed" {
+				out = append(out, e)
+			}
+		}
+		return out
+	}
+	clock = clock.Add(certRecheck)
+	src.GetCertificate(nil)
+	if n := len(changes()); n != 0 {
+		t.Fatalf("no change, %d entries", n)
+	}
+	_, _, second := writeCert(t, dir, "plc", "plc.example")
+	clock = clock.Add(certRecheck)
+	src.GetCertificate(nil)
+	clock = clock.Add(certRecheck)
+	src.GetCertificate(nil)
+	clock = clock.Add(prevKeep + certRecheck)
+	src.Pinned(second) // drops the replaced leaf: the pins change, the leaf served does not
+	got := changes()
+	if len(got) != 1 {
+		t.Fatalf("%d tls.changed entries, want 1: %+v", len(got), got)
+	}
+	d := got[0].Detail
+	if d["fingerprint"] != fingerprint(sha256.Sum256(second)) || d["replaced"] != fingerprint(sha256.Sum256(first)) || d["not_after"] == nil {
+		t.Errorf("detail %v", d)
+	}
+}
+
 // A standby forwards no X-Forwarded-* a client wrote itself: the leader
 // sees only the hop the standby adds, and https only when the request
 // reached the standby securely.

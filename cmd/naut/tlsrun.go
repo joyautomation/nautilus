@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -11,19 +12,86 @@ import (
 	"strings"
 	"time"
 
+	"github.com/joyautomation/nautilus/internal/project"
 	"github.com/joyautomation/nautilus/server"
 )
 
+// tlsSpec is a project's server.tls, as tlsSource takes it.
+type tlsSpec struct {
+	cert, key string
+	// selfSigned is server.tls: self-signed, made in the state directory
+	// stateDir (auth.state-dir), else $STATE_DIRECTORY, else (devFallback,
+	// a checkout) $XDG_STATE_HOME/nautilus/<name>.
+	selfSigned bool
+	stateDir   string
+	name       string
+	// devFallback allows the $XDG_STATE_HOME state directory; listen is
+	// the address served, a name the certificate is made for.
+	devFallback bool
+	listen      string
+	// say gets what is to be told about a self-signed certificate.
+	say func(string)
+	// renew: this command renews the self-signed certificate near its
+	// expiry. Only naut run does; the others make one when there is none
+	// and serve it as it is, so no other process swaps the certificate a
+	// running controller serves.
+	renew bool
+}
+
+// selfSignedDir is the state directory and name of spec's self-signed
+// certificate; use is false when it serves none (no self-signed, or
+// NAUTILUS_TLS_CERT/_KEY set, which win).
+func (spec tlsSpec) selfSignedDir(projectDir string, getenv func(string) string) (dir, name string, use bool, err error) {
+	if !spec.selfSigned || getenv("NAUTILUS_TLS_CERT") != "" || getenv("NAUTILUS_TLS_KEY") != "" {
+		return "", "", false, nil
+	}
+	name = spec.name
+	if name == "" {
+		name = "nautilus"
+	}
+	dir, err = controllerStateDir("the self-signed certificate (server.tls: self-signed)", spec.stateDir, name, projectDir, spec.devFallback, getenv)
+	if err != nil {
+		return "", "", true, fmt.Errorf("tls: %w", err)
+	}
+	return dir, name, true, nil
+}
+
+// tlsSpecOf is a manifest's server.tls (nil: none) as a tlsSpec.
+func tlsSpecOf(t *project.TLSConfig, stateDir, name, listen string, devFallback bool, say func(string)) tlsSpec {
+	s := tlsSpec{stateDir: stateDir, name: name, listen: listen, devFallback: devFallback, say: say}
+	if t != nil {
+		s.cert, s.key, s.selfSigned = t.Cert, t.Key, t.SelfSigned
+	}
+	return s
+}
+
 // tlsSource loads the tag API's certificate (#708, server.tls): the
 // manifest's cert and key, or NAUTILUS_TLS_CERT and NAUTILUS_TLS_KEY when
-// set. Nil when neither names one. A path inside the project is refused:
-// a private key never belongs in a checkout, a build or git.
-func tlsSource(cert, key, projectDir string, getenv func(string) string) (*server.CertSource, error) {
-	if c := getenv("NAUTILUS_TLS_CERT"); c != "" {
-		cert = c
+// set (they win over self-signed too), or the self-signed one in the
+// state directory. Nil when none is named. A path inside the project is
+// refused: a private key never belongs in a checkout, a build or git.
+func tlsSource(spec tlsSpec, projectDir string, getenv func(string) string) (*server.CertSource, error) {
+	cert, key := spec.cert, spec.key
+	envCert, envKey := getenv("NAUTILUS_TLS_CERT"), getenv("NAUTILUS_TLS_KEY")
+	if envCert != "" {
+		cert = envCert
 	}
-	if k := getenv("NAUTILUS_TLS_KEY"); k != "" {
-		key = k
+	if envKey != "" {
+		key = envKey
+	}
+	sd, name, use, err := spec.selfSignedDir(projectDir, getenv)
+	if err != nil {
+		return nil, err
+	}
+	if use {
+		c, err := ensureSelfSigned(sd, name, selfSignedHosts(spec.listen), time.Now(), spec.renew)
+		if err != nil {
+			return nil, err
+		}
+		if spec.say != nil {
+			spec.say(selfSignedNotice(c))
+		}
+		return server.NewCertSource(c.Path, c.Path)
 	}
 	if cert == "" && key == "" {
 		return nil, nil
@@ -47,6 +115,38 @@ func tlsSource(cert, key, projectDir string, getenv func(string) string) (*serve
 		}
 	}
 	return server.NewCertSource(cert, key)
+}
+
+// selfSignedCheckEvery is how often a running naut run looks at its
+// self-signed certificate's expiry.
+var selfSignedCheckEvery = 24 * time.Hour
+
+// keepSelfSignedFresh is naut run's daily look at its self-signed
+// certificate: from selfSignedRenew before its expiry it makes a new one,
+// which the tag API loads within a minute (and journals, tls.changed). A
+// controller that runs for a year never serves an expired one. Returns at
+// once when spec serves no self-signed certificate.
+func keepSelfSignedFresh(ctx context.Context, spec tlsSpec, projectDir string, getenv func(string) string, now func() time.Time, say func(string)) {
+	sd, name, use, err := spec.selfSignedDir(projectDir, getenv)
+	if err != nil || !use {
+		return
+	}
+	t := time.NewTicker(selfSignedCheckEvery)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		c, err := ensureSelfSigned(sd, name, selfSignedHosts(spec.listen), now(), true)
+		switch {
+		case err != nil:
+			say(fmt.Sprintf("WARNING: TLS: the self-signed certificate could not be checked or renewed (%v); the one loaded keeps being served\n", err))
+		case c.Renewed:
+			say("RENEWED " + selfSignedNotice(c))
+		}
+	}
 }
 
 // facadeListener is how naut logix serve and naut siemens serve listen:

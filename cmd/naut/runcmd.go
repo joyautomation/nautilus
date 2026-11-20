@@ -242,6 +242,15 @@ func replicaReady(scanned bool, el leader.Election, pair bool, up time.Duration)
 	}
 }
 
+// runTLS is naut run's server.tls: the one command that renews a
+// self-signed certificate.
+func runTLS(proj *project.Project, dir, addr string) tlsSpec {
+	certFile, keyFile := proj.TLSFiles()
+	return tlsSpec{cert: certFile, key: keyFile, selfSigned: proj.TLSSelfSigned(),
+		stateDir: proj.AuthStateDir, name: proj.Name, devFallback: dir != "", listen: addr, renew: true,
+		say: func(s string) { fmt.Fprint(os.Stderr, "naut run: "+s) }}
+}
+
 // runProject hosts a loaded project: scan loop + tag API, Ctrl+C to stop.
 // dir is the project's on-disk path when running from a checkout ("" for a
 // built binary's embedded project) — it's where live git history capture
@@ -255,16 +264,15 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	}
 	// HTTPS (#708, server.tls): the certificate, re-read on renewal. Loaded
 	// first, so a bad one refuses the start before the pair or the I/O.
-	certFile, keyFile := proj.TLSFiles()
-	tlsSrc, err := tlsSource(certFile, keyFile, dir, os.Getenv)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "naut run:", err)
-		return 1
-	}
-
 	addr := proj.Addr
 	if env := os.Getenv("NAUTILUS_ADDR"); env != "" {
 		addr = env
+	}
+	tlsRun := runTLS(proj, dir, addr)
+	tlsSrc, err := tlsSource(tlsRun, dir, os.Getenv)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "naut run:", err)
+		return 1
 	}
 
 	// The tag API's port is bound first, before the elector, the retained
@@ -559,6 +567,8 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		}()
 	}
 	go srv.Run(ctx)
+	// naut run alone renews a self-signed certificate, daily while it runs.
+	go keepSelfSignedFresh(ctx, tlsRun, dir, os.Getenv, time.Now, tlsRun.say)
 
 	sparkplugUp := false
 	if spNode != nil {

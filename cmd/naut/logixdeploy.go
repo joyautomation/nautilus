@@ -71,8 +71,10 @@ type logixProject struct {
 	agent        string
 	// auth is the manifest's auth: block, compiled; nil without one.
 	auth *auth.Policy
-	// tls is the manifest's server.tls, nil without one.
-	tls *project.TLSConfig
+	// tls is the manifest's server.tls, nil without one; stateDir and name
+	// say where a self-signed one is kept (auth.state-dir, the project's).
+	tls            *project.TLSConfig
+	stateDir, name string
 }
 
 // hardwareError is a target.logix.hardware file that cannot be read.
@@ -160,7 +162,7 @@ func loadLogixProject(dir string) (*logixProject, error) {
 		},
 		host: tgt.Host, slot: tgt.Slot, port: tgt.Port, agent: tgt.Agent,
 		auth: m.AuthPolicy(),
-		tls:  m.Server.TLS,
+		tls:  m.Server.TLS, stateDir: m.AuthStateDir(), name: m.Name,
 	}, nil
 }
 

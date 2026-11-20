@@ -62,10 +62,10 @@ func TestTLSSource(t *testing.T) {
 	proj := t.TempDir()
 	cert, key, _ := selfSigned(t, t.TempDir())
 	none := func(string) string { return "" }
-	if s, err := tlsSource("", "", proj, none); s != nil || err != nil {
+	if s, err := tlsSource(tlsSpec{cert: "", key: ""}, proj, none); s != nil || err != nil {
 		t.Errorf("no certificate: %v %v", s, err)
 	}
-	if s, err := tlsSource(cert, key, proj, none); s == nil || err != nil {
+	if s, err := tlsSource(tlsSpec{cert: cert, key: key}, proj, none); s == nil || err != nil {
 		t.Errorf("a certificate outside the project: %v %v", s, err)
 	}
 	icert, ikey, _ := selfSigned(t, proj)
@@ -81,13 +81,13 @@ func TestTLSSource(t *testing.T) {
 			return map[string]string{"NAUTILUS_TLS_CERT": icert, "NAUTILUS_TLS_KEY": ikey}[k]
 		}, "inside the project"},
 	} {
-		if _, err := tlsSource(c.cert, c.key, proj, c.getenv); err == nil || !strings.Contains(err.Error(), c.want) {
+		if _, err := tlsSource(tlsSpec{cert: c.cert, key: c.key}, proj, c.getenv); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: %v, want %q", c.name, err, c.want)
 		}
 	}
 	// The environment alone, with nothing in the manifest.
 	env := func(k string) string { return map[string]string{"NAUTILUS_TLS_CERT": cert, "NAUTILUS_TLS_KEY": key}[k] }
-	if s, err := tlsSource("", "", proj, env); s == nil || err != nil {
+	if s, err := tlsSource(tlsSpec{cert: "", key: ""}, proj, env); s == nil || err != nil {
 		t.Errorf("NAUTILUS_TLS_CERT/_KEY: %v %v", s, err)
 	}
 }
@@ -97,7 +97,7 @@ func TestTLSSource(t *testing.T) {
 // a warning, not a refusal).
 func TestFacadeListener(t *testing.T) {
 	cert, key, _ := selfSigned(t, t.TempDir())
-	src, err := tlsSource(cert, key, "", func(string) string { return "" })
+	src, err := tlsSource(tlsSpec{cert: cert, key: key}, "", func(string) string { return "" })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,6 +132,29 @@ func TestSiemensServeTakesServerTLS(t *testing.T) {
 	m := "name: s7\ntasks:\n  - program: main.st\n    scan: 100ms\nserver:\n  tls: {cert: " + cert + ", key: " + key + "}\n"
 	os.WriteFile(filepath.Join(dir, "nautilus.yaml"), []byte(m), 0o644)
 	c, err := resolveSiemensServe("192.0.2.10", "naut", "ab", dir, nil, time.Second, "127.0.0.1:0", pw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o := siemensFacadeOptions(c, nil); o.Server.TLS == nil {
+		t.Error("the facade's server has no TLS")
+	}
+}
+
+// naut siemens serve takes server.tls: self-signed: the certificate in
+// the state directory.
+func TestSiemensServeTakesSelfSigned(t *testing.T) {
+	isolateState(t)
+	t.Setenv("NAUTILUS_TLS_CERT", "")
+	t.Setenv("NAUTILUS_TLS_KEY", "")
+	dir := t.TempDir()
+	m := "name: s7\ntasks:\n  - program: main.st\n    scan: 100ms\nserver:\n  tls: self-signed\n"
+	os.WriteFile(filepath.Join(dir, "nautilus.yaml"), []byte(m), 0o644)
+	c, err := resolveSiemensServe("192.0.2.10", "naut", "ab", dir, nil, time.Second, "127.0.0.1:0", func(k string) string {
+		if k == "XDG_STATE_HOME" {
+			return os.Getenv(k)
+		}
+		return pw(k)
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
