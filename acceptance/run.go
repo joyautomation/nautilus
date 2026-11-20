@@ -36,7 +36,12 @@ type Result struct {
 // Failure says what went wrong, where, and — for anything time-dependent —
 // what the process was actually doing when it did.
 type Failure struct {
-	Step int `json:"step"` // 1-based
+	Step int `json:"step"` // 1-based; the top-level step, as ever
+	// StepPath is the dotted position inside groups ("3.2"), empty for a
+	// top-level step. Repeat says which iteration of each enclosing
+	// `repeat:` failed ("7 of 24", outermost first), empty outside one.
+	StepPath string `json:"stepPath,omitempty"`
+	Repeat   string `json:"repeat,omitempty"`
 	// Line is the assertion that broke: the tag key (or ST expression)
 	// inside `expect:` / `always:`, or the `alarms:` key. It is where an
 	// editor anchors the failure.
@@ -223,10 +228,11 @@ func runTest(s *Suite, t *Test, opts runtime.Options, cfg runOptions) (Result, e
 	if err != nil {
 		return res, err
 	}
-	for i, st := range steps {
+	_, err = walkSteps(steps, func(sr stepRun) (bool, error) {
+		st := sr.Step
 		fail, err := r.runStep(st)
 		if err != nil {
-			return res, fmt.Errorf("%s:%d: test %q: %w", s.Path, st.Line, t.Name, err)
+			return true, fmt.Errorf("%s:%d: test %q: %w", s.Path, st.Line, t.Name, err)
 		}
 		// A protocol fault is the reason, ahead of whatever expectation
 		// it made fail: the project asked a device for something the
@@ -237,7 +243,7 @@ func runTest(s *Suite, t *Test, opts runtime.Options, cfg runOptions) (Result, e
 			fail = df
 		}
 		if fail != nil {
-			fail.Step = i + 1
+			fail.Step, fail.StepPath, fail.Repeat = sr.Index, sr.Path, sr.Repeat
 			fail.StepLine = st.Line
 			if fail.Line == 0 {
 				fail.Line = st.Line
@@ -245,8 +251,15 @@ func runTest(s *Suite, t *Test, opts runtime.Options, cfg runOptions) (Result, e
 			fail.AtMs = float64(fail.At) / float64(time.Millisecond)
 			res.Failure = fail
 			res.Elapsed, res.Scans = sch.Elapsed(), sch.ScanCount(runtime.MainTaskName)
-			return res, nil
+			return true, nil
 		}
+		return false, nil
+	})
+	if err != nil {
+		return res, err
+	}
+	if res.Failure != nil {
+		return res, nil
 	}
 
 	// The assertion nobody has to write: a scan that faulted fails the test

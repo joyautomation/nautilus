@@ -100,6 +100,8 @@ A test with no `steps:` **is** one step, so simple cases stay short.
 | `hold: 5s` | with `until`: how long the expectation must *stay* true |
 | `expect` | checked at the end of the step (with `until`, at each tick) |
 | `always` | checked after **every** scan in the step — invariants, not endpoints |
+| `repeat: N` | run this step N times (see below) |
+| `steps: [...]` | make this step a group of steps, which `repeat` repeats as a whole |
 
 Exactly one of `scans` / `advance` / `until` per step. Omit all three to
 assert on the seeded state before anything runs.
@@ -125,6 +127,32 @@ a bare "assert after 45 s" cannot tell the difference:
         always:
           Heater: { between: [0.0, 100.0] }   # the clamp never breaks
 ```
+
+### Repeating a step
+
+A counter, a debounce or a pulse train needs the same stimulus N times.
+`repeat: N` is allowed on any step, wherever a step is, and runs it N times.
+To repeat several steps together, give a step `steps:` and put the repeat
+on it: a group holds only `steps:` and `repeat:`, and groups nest.
+
+```yaml
+  - name: the 10th and 25th pulse
+    steps:
+      - repeat: 9                          # a group: nine pulses
+        steps:
+          - { given: { In: true },  scans: 1 }
+          - { given: { In: false }, scans: 1 }
+      - { given: { In: true }, scans: 1, expect: { Count: 10, Tenth: true } }
+      - repeat: 5                          # a plain step, five times
+        scans: 2
+```
+
+Every iteration runs fully, so an `expect:` or `always:` inside a repeat is
+checked each time; the run stops at the first iteration that fails, and the
+failure names it (`step 2.1 (line 41), repeat 7 of 24`: the step as written,
+dotted inside groups, with the iteration). A step after a group keeps the
+number it has in the file. `repeat` is 1 to 10000, and a test that expands
+to more than 100000 steps is refused when the file loads, with the count.
 
 ## `given` — setting the world
 

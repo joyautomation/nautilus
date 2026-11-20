@@ -290,3 +290,45 @@ tests:
 		}
 	}
 }
+
+// repeat: and groups run on a controller too, and a failure there names the
+// step as written, its line and the iteration (#1075).
+func TestLiveRepeatedGroup(t *testing.T) {
+	c := newFakeController(t)
+	s := liveSuite(t, `
+tests:
+  - name: a group repeats, then the last step fails
+    steps:
+      - repeat: 3
+        steps:
+          - { given: { StartPB: true }, scans: 1, expect: { RunCmd: true } }
+          - { given: { StartPB: false, StopPB: true }, scans: 1, expect: { RunCmd: false } }
+          - { given: { StopPB: false }, scans: 1 }
+      - { scans: 1, expect: { RunCmd: true } }
+`)
+	res, err := RunSuiteLive(s, c.live())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := res[0].Failure
+	if res[0].Passed || f == nil || f.Step != 2 || f.StepPath != "" || f.StepLine != 10 {
+		t.Fatalf("want a failure at step 2 (line 10) after three clean iterations: %+v", f)
+	}
+	s = liveSuite(t, `
+tests:
+  - name: the group fails on its second pass
+    steps:
+      - repeat: 2
+        steps:
+          - { given: { StartPB: true }, scans: 1 }
+          - { scans: 1, expect: { RunCmd: false } }
+`)
+	res, err = RunSuiteLive(s, newFakeController(t).live())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f = res[0].Failure
+	if f == nil || f.Step != 1 || f.StepPath != "1.2" || f.Repeat != "1 of 2" || f.StepLine != 8 {
+		t.Fatalf("want step 1.2 (line 8), repeat 1 of 2, stopped at the first iteration: %+v", f)
+	}
+}
