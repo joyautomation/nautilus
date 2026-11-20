@@ -381,7 +381,8 @@ while the other controller is up, it is a copy of a controller: stop it.
 uncommissioned, and only an operator can re-commission the pair.
 
 A clone that keeps both the original's machine-id and its network
-card's MAC address passes the box check. The voters catch it instead:
+card's MAC address passes the box check. While the pair runs, the voters
+catch it instead:
 each vote message carries the promise its sender's voter has made to the
 other controller, so the voter a clone needs knows the name is taken,
 refuses it, and raises `redundancy.duplicate-member` (#1029). This costs
@@ -394,11 +395,17 @@ links, and 1.2 s with links near the largest delay a 2 s lease allows.
 :::danger[A cloned controller left running is unsafe]
 Until the follow-up to
 [#1029](https://github.com/joyautomation/nautilus/issues/1029) lands, a
-MAC-spoofed clone left running on the network is **unsafe**. When it
-boots together with its original (a clone made before commissioning, or
-a power cycle of the whole site), or when either controller restarts
-while it runs (a deploy update, a reboot), the clone and its original
-can both lead at once. A clone plus a second network fault can too.
+MAC-spoofed clone left running on the network is **unsafe**. The clone
+and its original can both lead at once in any of these cases:
+
+- the clone boots together with its original: a clone made before
+  commissioning, or a power cycle of the whole site;
+- either controller restarts while the clone runs: a deploy update or a
+  reboot;
+- the leader goes unhealthy while the clone runs: its scans hang.
+
+Once that happens, the two leaders last for as long as the clone runs. A
+clone plus a second network fault can also lead.
 `redundancy.duplicate-member` is the signal: when it is raised, find
 the copy and shut it down before you restart anything. Build the second
 controller from a fresh install, never from a copy of the first.

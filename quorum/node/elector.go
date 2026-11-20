@@ -142,6 +142,11 @@ const (
 	// than MaxTermJump above what it promised (Detail: which voter, the
 	// terms). Raised on each side once per change.
 	EventTermJumpRefused EventKind = "redundancy.term-jump-refused"
+	// EventVersionMismatch: a vote or handshake frame was refused for its
+	// protocol version, either way (Detail: who and which versions): the
+	// pair and the witness run releases that can't vote with each other.
+	// Raised on each side once per change.
+	EventVersionMismatch EventKind = "redundancy.version-mismatch"
 	// EventDuplicateMember: this controller's voter refused a vote from a
 	// name whose running promise was granted under another boot nonce:
 	// two processes claim one member of the pair (an env file copied to
@@ -163,6 +168,18 @@ const (
 	// says what changed and how to tell a NIC swap from a clone.
 	EventBoxChanged EventKind = "redundancy.box-changed"
 )
+
+// versionMsg is the version-mismatch report for a frame of version got
+// from (or answered by) who.
+func versionMsg(who string, got byte) string {
+	return fmt.Sprintf("%s speaks vote protocol version %d and this one %d: the pair and the witness run releases that can't vote with each other. Run one release on both controllers and the witness", who, got, quorum.WireVersion)
+}
+
+// olderPeerMsg: who refused this controller's vote frame as malformed,
+// which is how a release before vote protocol version 2 answers one.
+func olderPeerMsg(who string) string {
+	return fmt.Sprintf("%s refused this controller's vote frame as malformed: it most likely runs a release older than vote protocol version %d, which can't vote with this one. Run one release on both controllers and the witness", who, quorum.WireVersion)
+}
 
 // boxChangedMsg is the box-changed report.
 func boxChangedMsg(changed []string) string {
@@ -848,16 +865,28 @@ func (e *Elector) vote(to quorum.NodeID, base string, r quorum.Request) {
 		var se *statusError
 		if errors.As(err, &se) && se.code == http.StatusConflict {
 			kind := EventLeaseMismatch
-			if se.reason == "term-jump" {
+			switch se.reason {
+			case "term-jump":
 				kind = EventTermJumpRefused
+			case "version":
+				kind = EventVersionMismatch
 			}
 			e.mismatched(kind, string(to), se.msg)
+		}
+		if errors.As(err, &se) && se.code == http.StatusBadRequest {
+			e.mismatched(EventVersionMismatch, string(to), olderPeerMsg(string(to)))
 		}
 		if err != nil || body == nil {
 			return
 		}
 		var rep quorum.Reply
-		if rep.UnmarshalBinary(body) != nil || rep.From != to {
+		if err := rep.UnmarshalBinary(body); err != nil {
+			if errors.Is(err, quorum.ErrVersion) {
+				e.mismatched(EventVersionMismatch, string(to), versionMsg(string(to), quorum.FrameVersion(body)))
+			}
+			return
+		}
+		if rep.From != to {
 			return // a voter answers as itself, or not at all
 		}
 		e.reply(to, rep)
@@ -945,6 +974,12 @@ func (e *Elector) serveVote(w http.ResponseWriter, r *http.Request) {
 	}
 	b, err := readFrame(r)
 	var req quorum.Request
+	if err == nil && errors.Is(req.UnmarshalBinary(b), quorum.ErrVersion) {
+		msg := versionMsg(string(e.o.Peer), quorum.FrameVersion(b))
+		e.mismatched(EventVersionMismatch, string(e.o.Peer), msg)
+		refuse(w, "version", msg)
+		return
+	}
 	if err != nil || req.UnmarshalBinary(b) != nil {
 		http.Error(w, "bad frame", http.StatusBadRequest)
 		return
@@ -1066,6 +1101,12 @@ func (e *Elector) serveAdopt(w http.ResponseWriter, r *http.Request) {
 	}
 	b, err := readFrame(r)
 	var m quorum.Adopt
+	if err == nil && errors.Is(m.UnmarshalBinary(b), quorum.ErrVersion) {
+		msg := versionMsg(string(e.o.Peer), quorum.FrameVersion(b))
+		e.mismatched(EventVersionMismatch, string(e.o.Peer), msg)
+		refuse(w, "version", msg)
+		return
+	}
 	if err != nil || m.UnmarshalBinary(b) != nil {
 		http.Error(w, "bad frame", http.StatusBadRequest)
 		return

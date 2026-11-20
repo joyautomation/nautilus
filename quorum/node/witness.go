@@ -61,6 +61,8 @@ type Witness struct {
 	pairs   map[string]*witnessPair
 	wg      sync.WaitGroup // the pairs' writers
 	logInfo func(cluster string) (last, commit uint64, ok bool)
+	// versionSeen: the version-mismatch report last logged per cluster.
+	versionSeen map[string]string
 }
 
 type witnessPair struct {
@@ -370,6 +372,20 @@ func (w *Witness) serveVote(rw http.ResponseWriter, r *http.Request) {
 	}
 	b, err := readFrame(r)
 	var req quorum.Request
+	if err == nil && errors.Is(req.UnmarshalBinary(b), quorum.ErrVersion) {
+		msg := fmt.Sprintf("a controller of cluster %s speaks vote protocol version %d and this witness %d: run one release on both controllers and the witness", name, quorum.FrameVersion(b), quorum.WireVersion)
+		w.mu.Lock()
+		if w.versionSeen[name] != msg {
+			if w.versionSeen == nil {
+				w.versionSeen = map[string]string{}
+			}
+			w.versionSeen[name] = msg
+			w.log.Error("witness: " + msg)
+		}
+		w.mu.Unlock()
+		refuse(rw, "version", msg)
+		return
+	}
 	if err != nil || req.UnmarshalBinary(b) != nil {
 		http.Error(rw, "bad frame", http.StatusBadRequest)
 		return

@@ -116,8 +116,23 @@ type Adopt struct {
 	Operator    uint64
 }
 
+// WireVersion is the vote protocol's frame version. A frame of another
+// version is refused whole (ErrVersion). Version 2 added the relayed
+// promise (#1029 layer 2): a pair that mixes releases across it can't
+// vote, and says so (redundancy.version-mismatch) rather than failing in
+// silence.
+const WireVersion = 2
+
+// FrameVersion returns the version byte a frame carries (0 when empty).
+func FrameVersion(b []byte) byte {
+	if len(b) == 0 {
+		return 0
+	}
+	return b[0]
+}
+
 const (
-	wireVersion = 1
+	wireVersion = WireVersion
 	kindRequest = 1
 	kindReply   = 2
 	kindAdopt   = 3

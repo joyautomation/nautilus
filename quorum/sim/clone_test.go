@@ -122,7 +122,10 @@ func TestStaleRelayEndsAndTheStandbyLeads(t *testing.T) {
 //     before commissioning, or a site-wide power cycle with a clone);
 //   - original: a settled pair with a clone running, and the original
 //     restarts (a deploy update, a reboot);
-//   - peer: the same, and the original's peer restarts.
+//   - peer: the same, and the original's peer restarts;
+//   - unhealthy: the same, and the leader's scans hang for one to four
+//     leases (its candidate stops renewing; its voter keeps answering),
+//     so the lease is handed over while the clone runs (#1079 review).
 //
 // It logs how many of n runs each had two leaders at once; skipped unless
 // QUORUM_MEASURE_CLONE_START=<n>. The follow-up on #1029 must bring all
@@ -134,7 +137,7 @@ func TestMeasureCloneAtStart(t *testing.T) {
 	if n <= 0 {
 		t.Skip("set QUORUM_MEASURE_CLONE_START=<runs>")
 	}
-	for _, mode := range []string{"start", "original", "peer"} {
+	for _, mode := range []string{"start", "original", "peer", "unhealthy"} {
 		both := 0
 		for seed := uint64(1); seed <= uint64(n); seed++ {
 			if overlap(Check(Run(cloneRace(seed, mode)), cloneChecks(cloneRace(seed, mode)))) {
@@ -163,6 +166,22 @@ func cloneRace(seed uint64, mode string) Options {
 		down = peerOf(down)
 	}
 	crash := at + 2*lease + time.Duration(r.Int64N(int64(6*lease)))
+	if mode == "unhealthy" {
+		pre := o
+		pre.Faults = []Fault{{Kind: Clone, At: at, For: 10 * lease, Node: c}}
+		pre.Until = crash
+		gates := Run(pre).Gates()
+		leader := A
+		if len(gates) > 0 {
+			leader = gates[len(gates)-1].Node
+		}
+		o.Faults = []Fault{
+			pre.Faults[0],
+			{Kind: Unhealthy, At: crash, For: lease + time.Duration(r.Int64N(int64(3*lease))), Node: leader},
+		}
+		o.Until = at + 10*lease + bound + 6*lease
+		return o
+	}
 	o.Faults = []Fault{
 		{Kind: Clone, At: at, For: 10 * lease, Node: c},
 		{Kind: Crash, At: crash, For: 50*ms + time.Duration(r.Int64N(int64(lease))), Node: down},

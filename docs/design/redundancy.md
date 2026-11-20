@@ -297,6 +297,19 @@ redundancy:
       outlasts the original in real time whatever the clocks' rates, and no relay runs past a
       lease. A refusal past `left`, in that margin, isn't counted as a duplicate, so a fast
       real restart raises no false `redundancy.duplicate-member`.
+    - **A restarted voter's wait stays one lease** (the #1079 review asked whether it should
+      be `lease·(1+MaxRho)`, the longest a heard promise is held):
+      - **What it forgets:** only the relays heard before its restart. They come back within its
+        wait, since every running relay rides on each probe, every look (`lease/4`), and on
+        every campaign and renewal.
+      - **Why the margin is smaller than it looks:** the margin a forgotten relay needs is
+        the clock-rate gap `ρ·lease` (0.01 by default), not `MaxRho`. `MaxRho` in the hold is
+        a conservative cap.
+      - **What it would take to lose it:** a forgotten relay that is never heard again needs
+        the relaying link to fail after the relay was heard and before the restart. That is a
+        third fault, beyond the clone and the voter's restart.
+      - **What stretching would cost:** every takeover's `W_r` would grow by a tenth of a
+        lease, for that case alone.
     - **Precedence.** A voter's own running promise wins, then the first heard: a conflicting
       relay is counted as a duplicate and never replaces what is held, so a clone that won
       one voter can't turn the original's other voters against it. A voter's newer relay
@@ -307,23 +320,43 @@ redundancy:
       handshake. A controller's voter that has just promised the other controller pushes a
       probe at once (`Voter.RelayChanged`), so the witness hears a new promise within a one-way
       delay rather than a look.
+    - **Wire:** vote protocol version 2 (`quorum.WireVersion`). A frame of another version
+      is refused whole. A pair or witness that mixes releases across it can't vote, and says
+      so (`redundancy.version-mismatch`, either side, and on the witness's log) rather than
+      failing to elect in silence. A release before version 2 answers a new frame with 400
+      "bad frame", which the sender reports the same way.
     - **What it costs:** only refusals. A promise to another node never ends early, and the
       restart wait covers a voter that forgot what it heard. A takeover can lose one refused
       campaign at the witness (§4.5, `R`).
     - **The residual: a clone booted with its original, or running while either controller
-      restarts.** Both copies then campaign while neither holds a promise yet, so there is
-      nothing to relay, and each copy can win one of the other two voters in the same
-      election. That covers a clone made before commissioning, a site-wide power cycle with a
-      clone present, and a deploy update or reboot of either controller while a clone runs.
-      `TestMeasureCloneAtStart` measures it over 10,000 runs per case, with no other fault:
-      two leaders in 172 when the clone boots with its original, in 184 when the original
-      restarts, and in 17 when its peer restarts (1,562 of 5,000 at boot without the relay).
+      restarts or the leader goes unhealthy (a scan hang).**
+      - **Why:** in each case the lease changes hands while the clone runs. The duplicated
+        voter (a copy of the original's) can then back the clone while the original's own
+        voter backs the other controller, as {B, old A voter} against {clone, W}.
+      - **What it covers:** a clone made before commissioning, a site-wide power cycle with
+        a clone present, a deploy update or reboot of either controller while a clone runs,
+        and a leader whose scans hang (`SetHealth`: it stops renewing, its voter keeps
+        answering).
+      - **It persists:** the two leaders last while the clone runs, since a running promise
+        renews its own grantee.
+      - **The rate.** `TestMeasureCloneAtStart` measures it over 10,000 runs per case, with
+        no other fault. Two leaders in:
+        - 172 when the clone boots with its original;
+        - 184 when the original restarts;
+        - 17 when its peer restarts;
+        - 227 when the leader goes unhealthy.
+
+        Without the relay: 1,562 of 5,000 at boot, and about the same rate for an unhealthy
+        leader. The relay neither causes nor closes that last case.
+      - **The alarm:** `redundancy.duplicate-member` was raised in every such run the #1079
+        review traced.
       A clone of a running pair with no restart wins only with a second network fault: the
       two voters other than the cut link can't exchange a probe for about a lease, or a third
       partition (B cut from both A and W, with a clone of A). **The follow-up on #1029** comes
       before `experimental` is lifted and before 3c: a duplicate-name refusal at every voter
-      and a candidate-side check, aiming at 0 two-leader runs in at least 20,000 per case,
-      with a liveness bound for a real controller after a power cycle.
+      and a candidate-side check, aiming at 0 two-leader runs in at least 20,000 per case
+      (boot, original restart, peer restart, unhealthy leader), with a liveness bound for a
+      real controller after a power cycle.
       - The guide keeps "never clone a controller".
 - **`NAUTILUS_NODE` set with no pair in the manifest** is refused: each box would run as its
   own leader against the same I/O.

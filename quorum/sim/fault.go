@@ -58,6 +58,9 @@ const (
 	// MAC-spoofed cloned disk or VM (#1029 layer 2). The default
 	// generator never draws it; the clone schedules do.
 	Clone
+	// Unhealthy hangs Node's scans for For (#621): its candidate stops
+	// renewing and doesn't campaign, while its voter keeps answering.
+	Unhealthy
 	nKinds
 )
 
@@ -69,7 +72,7 @@ const (
 )
 
 var kindNames = [nKinds]string{"Cut", "Delay", "Loss", "Duplicate", "Mirror", "Crash", "Wipe",
-	"Pause", "Freeze", "SlowDisk", "DiskFail", "Skew", "Start", "Replay", "Recommission", "Clone"}
+	"Pause", "Freeze", "SlowDisk", "DiskFail", "Skew", "Start", "Replay", "Recommission", "Clone", "Unhealthy"}
 
 func (k FaultKind) String() string {
 	if k >= 0 && k < nKinds {
@@ -174,6 +177,12 @@ func (w *World) applyFault(i int, on bool) {
 			w.start(w.nodes[f.Node])
 		} else {
 			w.crash(w.nodes[f.Node], false)
+		}
+	case Unhealthy:
+		if on {
+			w.nodes[f.Node].unhealthy++
+		} else {
+			w.nodes[f.Node].unhealthy--
 		}
 	case Clone:
 		n := w.nodes[f.Node]
