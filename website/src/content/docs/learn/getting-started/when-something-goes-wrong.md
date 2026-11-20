@@ -44,6 +44,10 @@ what the logic did.
 - **A value you wrote did not stick.** Writing an `input` is refused (see
   [the last lesson](/learn/getting-started/dashboard-and-tags/)); write the
   setpoint the logic reads, or force the input.
+- **`not rendered: no Chrome, Chromium or Edge`.** `naut check` and
+  `naut hmi build` draw a screen in a browser to look for layout problems.
+  With none on the machine they say so and carry on: the screen is still
+  checked against your tags. Install one of those browsers, or ignore it.
 - **A tag reads but the screen shows nothing.** The name in the screen or
   the logic is misspelt: `naut check` reports a name a screen binds that
   the project does not declare.

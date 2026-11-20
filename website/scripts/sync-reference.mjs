@@ -53,6 +53,18 @@ const pages = [
       'Svelte 5 SCADA faceplates, a realtime SSE client, and a themeable token layer for building operator screens on any nautilus runtime.',
     // Contributor-only; noise for someone reading the docs site.
     dropSections: ['Building the package'],
+    // The package README starts with `npm install`; on the site a reader who
+    // wants a screen served by a controller does not need it (blackbox 022 F-03).
+    intro: `:::note[Serving the screen from a controller?]
+You do not need this package installed. \`naut run\` builds a screen itself
+(a \`*.mimic.json\` drawing, or a small Svelte app in the project) and
+carries this kit, so there is no Node and no npm: see
+[Operator screens](/guides/operator-screens/#serving-the-screens). Install the
+package, below, to build a standalone app on SvelteKit that talks to a
+controller.
+:::
+
+`,
   },
 ];
 
@@ -75,7 +87,7 @@ for (const page of pages) {
   const relink = (text) =>
     text.replace(/\]\(([a-z][a-z0-9-]*)\.md(#[^)]*)?\)/g, (m, name, hash = '') =>
       siblings.includes(name) ? `](/reference/${name}/${hash})` : m);
-  let body = relink(dropSections(lines.slice(1).join('\n').trimStart(), page.dropSections));
+  let body = (page.intro ?? '') + relink(dropSections(lines.slice(1).join('\n').trimStart(), page.dropSections));
   for (const [from, to] of page.replace ?? []) body = body.replaceAll(from, to);
   const out = `---\ntitle: ${JSON.stringify(title)}\ndescription: ${JSON.stringify(page.description)}\n---\n\n${body}`;
   mkdirSync(dirname(page.dest), { recursive: true });
