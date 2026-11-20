@@ -136,6 +136,13 @@ func (p *Project) Sparkplug(rt *runtime.Runtime) (*sparkplug.Node, error) {
 		opts = append(opts, sparkplug.WithDevice(d))
 	}
 	opts = append(opts, sparkplug.WithWritable(c.Writable...))
+	if p.Auth != nil {
+		// Under an auth: block a command writes only what auth.sparkplug
+		// allows, and naut run hands the node that policy (SetIdentity):
+		// until it does, every command write is refused, never let
+		// through on the write gate alone (#708 PR 8b).
+		opts = append(opts, sparkplug.WithIdentityRequired())
+	}
 	return sparkplug.New(rt, cfg, opts...)
 }
 

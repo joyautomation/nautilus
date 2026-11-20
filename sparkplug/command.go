@@ -40,6 +40,11 @@ func (n *Node) handleCommand(_ mqtt.Client, msg mqtt.Message) {
 // applyCommand is handleCommand minus the decode — the seam command_test.go
 // drives, so the write semantics are testable without an MQTT message.
 // device is the DCMD's device id, "" for an NCMD.
+//
+// Under an auth: block (SetIdentity, identity.go) a write must also be
+// allowed by auth.sparkplug, and every write metric, applied or refused,
+// is journalled: one entry each, all of the command's entries recorded as
+// one batch once it has been applied.
 func (n *Node) applyCommand(device string, payload Payload) {
 	for _, m := range payload.Metrics {
 		if m.Name == "Node Control/Rebirth" {
@@ -49,6 +54,9 @@ func (n *Node) applyCommand(device string, payload Payload) {
 			}
 		}
 	}
+	id, idOK := n.identity()
+	j := n.newCmdJournal(id, device)
+	defer j.flush()
 	// Remaining metrics are writes into the tag store. A metric named after
 	// a TEMPLATE MEMBER ("P101/Speed" flattened to "P101.Speed" by the host)
 	// is written to that member of the UDT tag; a name that resolves to
@@ -66,7 +74,7 @@ func (n *Node) applyCommand(device string, payload Payload) {
 			m.Name = memberPath(m.Name)
 		}
 		if owner, _ := n.ownerOf(rootTag(m.Name)); owner != device {
-			n.refuseCommand("addressed to the wrong device", m.Name,
+			n.refuseCommand(j, "addressed to the wrong device", m.Name,
 				"addressedTo", deviceLabel(device), "publishedOn", deviceLabel(owner))
 			continue
 		}
@@ -76,11 +84,11 @@ func (n *Node) applyCommand(device string, payload Payload) {
 		// carries only its connection's inputs, so this refuses every DCMD
 		// until a write reaches the device through its driver.
 		if n.isInput(rootTag(m.Name)) {
-			n.refuseCommand(inputWriteRefusal, m.Name)
+			n.refuseCommand(j, inputWriteRefusal, m.Name)
 			continue
 		}
 		if isArrayType(m.Datatype) {
-			n.refuseCommand(arrayWriteRefusal, m.Name, "datatype", m.Datatype.String())
+			n.refuseCommand(j, arrayWriteRefusal, m.Name, "datatype", m.Datatype.String())
 			continue
 		}
 		// An indexed name ("Levels[1]", "Drives[0].Speed") is an element
@@ -88,37 +96,56 @@ func (n *Node) applyCommand(device string, payload Payload) {
 		// metric, an array of structs is not published — so it is refused
 		// like a whole-array command, whatever sparkplug.writable opens.
 		if strings.ContainsRune(m.Name, '[') {
-			n.refuseCommand(arrayWriteRefusal, m.Name)
+			n.refuseCommand(j, arrayWriteRefusal, m.Name)
 			continue
 		}
 		if m.Datatype == spb.DataType_Template {
 			pruned, arrays := WithoutArrays(m.Name, m)
 			for _, r := range arrays {
-				n.refuseCommand(arrayWriteRefusal, r)
+				n.refuseCommand(j, arrayWriteRefusal, r)
 			}
 			pruned, refused := n.writableTemplate(m.Name, pruned)
 			for _, r := range refused {
-				n.refuseCommand("not writable", r)
+				n.refuseCommand(j, "not writable", r)
 			}
 			if t, _ := pruned.Value.(*Template); t != nil && len(t.Metrics) > 0 {
-				n.commandTemplate(pruned)
+				n.commandTemplate(j, id, idOK, pruned)
 			}
 			continue
 		}
 		if !n.writeAllowed(m.Name) {
-			n.refuseCommand("not writable", m.Name)
+			n.refuseCommand(j, "not writable", m.Name)
 			continue
 		}
-		if v, ok := commandValue(m); ok {
-			// The runtime's one write front door, as HTTP and OPC UA use:
-			// a value the tag's declared type cannot hold is refused, never
-			// stored as a new type, and a forced tag keeps its force.
-			if err := n.writeCommand(m.Name, v); err != nil {
-				n.refuseCommand(writeRefusal(err), m.Name, "datatype", m.Datatype.String(), "error", err)
-				continue
-			}
-			n.log.Debug("sparkplug: command write", "tag", m.Name, "value", m.Value)
+		if ok, why := n.mayWrite(id, idOK, m.Name); !ok {
+			n.refuseCommand(j, why, m.Name)
+			continue
 		}
+		v, ok := commandValue(m)
+		if !ok {
+			// A value of no type the store takes (a DataSet, bytes): never
+			// written, so it is journalled as refused.
+			if j != nil {
+				j.refused(n.canonicalPath(m.Name), "the value does not fit the tag's type")
+			}
+			continue
+		}
+		var before any
+		if j != nil {
+			before, _ = n.rt.Tags().ReadPath(m.Name)
+		}
+		// The runtime's one write front door, as HTTP and OPC UA use:
+		// a value the tag's declared type cannot hold is refused, never
+		// stored as a new type, and a forced tag keeps its force.
+		if err := n.writeCommand(m.Name, v); err != nil {
+			n.refuseCommand(j, writeRefusal(err), m.Name, "datatype", m.Datatype.String(), "error", err)
+			continue
+		}
+		if j != nil {
+			after, _ := n.rt.Tags().ReadPath(m.Name)
+			j.wrote(n.canonicalPath(m.Name), before, after)
+		}
+		n.log.Debug("sparkplug: command write", "tag", m.Name, "value", m.Value)
 	}
 }
 
@@ -264,15 +291,18 @@ func deviceLabel(device string) string {
 // cannot hold, a forced member and a member the type does not have are
 // refused one by one; the template's other members still apply. Members
 // the template does not carry keep the value the edge holds.
-func (n *Node) commandTemplate(m Metric) {
+//
+// Under an auth: block each leaf must also be one auth.sparkplug allows,
+// and each is journalled in j, by its member path.
+func (n *Node) commandTemplate(j *cmdJournal, id Identity, idOK bool, m Metric) {
 	tags := n.rt.Tags()
 	prev, err := tags.ReadGlobal(m.Name)
 	if err != nil {
-		n.refuseCommand("a template for a tag this node does not have", m.Name)
+		n.refuseCommand(j, "a template for a tag this node does not have", m.Name)
 		return
 	}
 	if prev.Kind != ir.TypeStruct || prev.Struct == nil {
-		n.refuseCommand("a template for a tag that is not a UDT", m.Name, "kind", prev.Kind)
+		n.refuseCommand(j, "a template for a tag that is not a UDT", m.Name, "kind", prev.Kind)
 		return
 	}
 	var ops []runtime.WriteOp
@@ -288,11 +318,11 @@ func (n *Node) commandTemplate(m Metric) {
 			// element write past the array refusal, and a dot a path the
 			// node never births.
 			if strings.ContainsRune(mm.Name, '[') {
-				n.refuseCommand(arrayWriteRefusal, p)
+				n.refuseCommand(j, arrayWriteRefusal, p)
 				continue
 			}
 			if strings.ContainsRune(mm.Name, '.') {
-				n.refuseCommand("a member name with a dot", p)
+				n.refuseCommand(j, "a member name with a dot", p)
 				continue
 			}
 			if sub, ok := mm.Value.(*Template); ok {
@@ -306,7 +336,11 @@ func (n *Node) commandTemplate(m Metric) {
 				ok = false // a String metric only for a STRING member, as for a tag
 			}
 			if !ok {
-				n.refuseCommand("the value does not fit the tag's type", p, "datatype", mm.Datatype.String())
+				n.refuseCommand(j, "the value does not fit the tag's type", p, "datatype", mm.Datatype.String())
+				continue
+			}
+			if may, why := n.mayWrite(id, idOK, p); !may {
+				n.refuseCommand(j, why, p)
 				continue
 			}
 			ops = append(ops, runtime.WriteOp{Path: p, Value: v})
@@ -316,6 +350,13 @@ func (n *Node) commandTemplate(m Metric) {
 	if t, _ := m.Value.(*Template); t != nil {
 		walk(m.Name, t)
 	}
+	var befores []any
+	if j != nil {
+		befores = make([]any, len(ops))
+		for i, op := range ops {
+			befores[i], _ = tags.ReadPath(op.Path)
+		}
+	}
 	written := 0
 	for i, err := range tags.Write(ops) {
 		if err != nil {
@@ -323,9 +364,13 @@ func (n *Node) commandTemplate(m Metric) {
 			if strings.Contains(err.Error(), "unknown member") { // ir's error for it is untyped
 				reason = "a member the type does not have"
 			}
-			n.refuseCommand(reason, ops[i].Path, "member", leaves[i].Name, "type", prev.Struct.Name,
+			n.refuseCommand(j, reason, ops[i].Path, "member", leaves[i].Name, "type", prev.Struct.Name,
 				"datatype", leaves[i].Datatype.String(), "error", err)
 			continue
+		}
+		if j != nil {
+			after, _ := tags.ReadPath(ops[i].Path)
+			j.wrote(n.canonicalPath(ops[i].Path), befores[i], after)
 		}
 		written++
 	}

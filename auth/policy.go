@@ -34,6 +34,12 @@ type Settings struct {
 	// trusted certificate the block does not map writes nothing; it signs
 	// in with a user name to write.
 	OPCUACerts map[string]CertGrant
+	// Sparkplug is what a Sparkplug command (NCMD/DCMD) may do, like a
+	// service token's grants (#708 PR 8b). Nil grants nothing: under an
+	// auth: block every command write is refused (Node Control/Rebirth is
+	// not a write). The grants hold for every command, whoever sent it:
+	// the broker does not say who that was.
+	Sparkplug []Grant
 	// Session is how long a browser sign-in lasts, from the moment of
 	// sign-in (absolute, not renewed by use): 0 is DefaultSession.
 	Session time.Duration
@@ -98,6 +104,7 @@ type Policy struct {
 	certs     map[string][]Grant // opcua-certificates' grants, by name
 	certThumb map[string]string  // lowercase thumbprint to a certificate's name
 	certSubj  map[string]string  // subject to a certificate's name
+	sparkplug []Grant            // auth.sparkplug's grants, for every Sparkplug command
 	session   time.Duration
 	elevation time.Duration
 }
@@ -188,6 +195,18 @@ func Compile(c Settings) (*Policy, error) {
 	}
 	if err := p.compileCerts(c.OPCUACerts); err != nil {
 		return nil, err
+	}
+	if c.Sparkplug != nil {
+		if len(c.Sparkplug) == 0 {
+			return nil, fmt.Errorf("auth: sparkplug grants no role: give one (sparkplug: operator), or remove the key to refuse every Sparkplug command write")
+		}
+		// Checked as a service token's, under one name: the block's key.
+		sp := map[string][]Grant{}
+		if err := p.compileGrants("sparkplug", func(string) error { return nil },
+			map[string][]Grant{"sparkplug": c.Sparkplug}, sp); err != nil {
+			return nil, err
+		}
+		p.sparkplug = sp["sparkplug"]
 	}
 	return p, nil
 }
@@ -365,6 +384,8 @@ func (p *Policy) grants(pr Principal) []Grant {
 		return p.users[lower(pr.Name)]
 	case KindOPCUACert:
 		return p.certs[lower(pr.Name)]
+	case KindSparkplug:
+		return p.sparkplug
 	}
 	return nil
 }
@@ -390,6 +411,10 @@ func (p *Policy) Session() time.Duration { return p.session }
 // elevated permission (auth.elevation), from the sign-in or the last
 // re-authentication.
 func (p *Policy) Elevation() time.Duration { return p.elevation }
+
+// SparkplugGranted reports whether auth.sparkplug grants Sparkplug
+// commands anything: without it every command write is refused.
+func (p *Policy) SparkplugGranted() bool { return len(p.sparkplug) > 0 }
 
 // HasUser reports whether the block grants the user name anything: a box
 // user it does not name may not sign in.

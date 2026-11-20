@@ -35,6 +35,7 @@ func TestLoadAuthBlock(t *testing.T) {
   service-tokens:
     historian: viewer
     pit_script: [{role: operator, areas: [receiving]}]
+  sparkplug: [{role: operator, areas: [receiving]}]
 `), "")
 	if err != nil {
 		t.Fatal(err)
@@ -58,6 +59,11 @@ func TestLoadAuthBlock(t *testing.T) {
 		{auth.Service("historian"), auth.Write, "RCV_FLOW", false},
 		{auth.Service("pit_script"), auth.Write, "RCV_FLOW", true},
 		{auth.Service("pit_script"), auth.Write, "OTHER", false},
+		// auth.sparkplug: every Sparkplug command, whatever its label.
+		{auth.Sparkplug("scada-1"), auth.Write, "RCV_FLOW", true},
+		{auth.Sparkplug("other-host"), auth.Write, "PIT_LEVEL", true},
+		{auth.Sparkplug("scada-1"), auth.Write, "OTHER", false},
+		{auth.Sparkplug("scada-1"), auth.Force, "RCV_FLOW", false},
 	} {
 		if got := p.Auth.Can(c.pr, c.perm, c.target).Allowed; got != c.ok {
 			t.Errorf("%s %s %s = %v, want %v", c.pr, c.perm, c.target, got, c.ok)
@@ -107,6 +113,11 @@ func TestLoadAuthRefuses(t *testing.T) {
 		{"auth:\n  opcua-certificates:\n    scada: {thumbprint: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b, grants: boss}\n", `opcua certificate "scada": a grant's role is not a role`},
 		{"auth:\n  opcua-certificates:\n    scada: {thumbprint: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b, grants: [{role: operator, areas: [nowhere]}]}\n", `no area "nowhere"`},
 		{"auth:\n  opcua-certificates:\n    scada: {grants: operator}\n", "names no thumbprint or subject"},
+		// auth.sparkplug (#708 PR 8b): grants as a service token's.
+		{"auth:\n  sparkplug: boss\n", `sparkplug "sparkplug": a grant's role is not a role`},
+		{"auth:\n  sparkplug: [{role: operator, areas: [nowhere]}]\n", `no area "nowhere"`},
+		{"auth:\n  sparkplug: []\n", "sparkplug grants no role"},
+		{"auth:\n  sparkplug: [{role: operator, area: [x]}]\n", "field area not found"},
 		{"auth:\n  opcua-certificates:\n    scada: {thumbprint: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b, subject: CN=x, grants: operator}\n", "both a thumbprint and a subject"},
 		{"auth:\n  opcua-certificates:\n    scada: {thumbprint: 9f86d081884c7d65, grants: operator}\n", "not 40 hex digits"},
 		{"auth:\n  opcua-certificates:\n    scada: {thumbprint: 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b}\n", `opcua certificate "scada" has no role`},

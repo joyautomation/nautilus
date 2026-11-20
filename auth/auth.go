@@ -107,6 +107,7 @@ const (
 	KindService   = "service"    // a named service token
 	KindUser      = "user"       // a signed-in user or a personal access token (#708 PR 5)
 	KindOPCUACert = "opcua-cert" // an OPC UA client certificate the block maps to roles (#708 PR 8a)
+	KindSparkplug = "sparkplug"  // a Sparkplug command (NCMD/DCMD), named by its host: a label, not a proof (#708 PR 8b)
 )
 
 // Principal is who a request acts as.
@@ -131,8 +132,15 @@ func User(name string) Principal { return Principal{Kind: KindUser, Name: name} 
 // names in opcua-certificates.
 func OPCUACert(name string) Principal { return Principal{Kind: KindOPCUACert, Name: name} }
 
+// Sparkplug is the principal of a Sparkplug command, named by the host it
+// is taken to come from: sparkplug.primary-host when set, else the
+// broker's host. The name is a LABEL for the journal, not a credential:
+// anyone who can publish to the broker can send a command, so every
+// Sparkplug command has the grants auth.sparkplug gives, whatever the name.
+func Sparkplug(name string) Principal { return Principal{Kind: KindSparkplug, Name: name} }
+
 // String is how the journal names the principal: "anonymous", "token",
-// "token:<name>", "user:<name>" or "opcua-cert:<name>".
+// "token:<name>", "user:<name>", "opcua-cert:<name>" or "sparkplug:<name>".
 func (p Principal) String() string {
 	switch p.Kind {
 	case KindService:
@@ -141,6 +149,8 @@ func (p Principal) String() string {
 		return "user:" + p.Name
 	case KindOPCUACert:
 		return "opcua-cert:" + p.Name
+	case KindSparkplug:
+		return "sparkplug:" + p.Name
 	case "":
 		return KindAnonymous
 	}

@@ -38,6 +38,13 @@ type AuthConfig struct {
 	// auth: block a trusted certificate it does not map writes nothing;
 	// its client signs in with a user name to write (#708 PR 8a).
 	OPCUACerts map[string]AuthCert `yaml:"opcua-certificates"`
+	// Sparkplug is what a Sparkplug command (NCMD/DCMD) may do: a role, or
+	// grants as a service token's. Without it, under an auth: block, every
+	// command write is refused (Node Control/Rebirth still works). A
+	// command is journalled as sparkplug:<primary-host, else the broker's
+	// host>, a label: anyone who can publish to the broker can send one
+	// (#708 PR 8b).
+	Sparkplug AuthGrants `yaml:"sparkplug"`
 	// StateDir is where the controller keeps its users file (users.json:
 	// password hashes and personal access tokens). Default: systemd's
 	// $STATE_DIRECTORY. Never inside the project, so no hash reaches git.
@@ -173,6 +180,9 @@ func (c *AuthConfig) settings() auth.Settings {
 	}
 	for name, gs := range c.ServiceTokens {
 		s.ServiceTokens[name] = grants(gs)
+	}
+	if c.Sparkplug != nil {
+		s.Sparkplug = append([]auth.Grant{}, grants(c.Sparkplug)...)
 	}
 	if len(c.OPCUACerts) > 0 {
 		s.OPCUACerts = map[string]auth.CertGrant{}

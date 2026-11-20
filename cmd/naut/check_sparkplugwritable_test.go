@@ -64,3 +64,37 @@ END_PROGRAM`,
 		t.Errorf("a struct tag was called unmatched:\n%s", out)
 	}
 }
+
+// Under an auth: block, sparkplug.writable with no auth.sparkplug grant
+// opens nothing: every command write is refused (#708 PR 8b). naut check
+// warns, naming the key that allows them; with the grant, or without an
+// auth: block, it says nothing.
+func TestCheckSparkplugWritableNeedsAGrantUnderAuth(t *testing.T) {
+	files := func(auth string) map[string]string {
+		return map[string]string{
+			"nautilus.yaml": `
+tasks:
+  - program: program.st
+sparkplug:
+  broker: tcp://localhost:1883
+  group-id: Joy
+  writable: ["Pump1"]
+tags:
+  - { name: Pump1, role: setpoint, init: 0.0 }
+` + auth,
+			"program.st": `PROGRAM Main
+VAR_EXTERNAL Pump1 : REAL; END_VAR
+END_PROGRAM`,
+		}
+	}
+	const warn = "the auth: block has no sparkplug: grant, so every Sparkplug command write is refused; add `sparkplug: operator`"
+	out, code := checkIn(t, files("auth:\n  token-role: operator\n"))
+	if code != 0 || !strings.Contains(out, warn) {
+		t.Errorf("no grant under auth: (%d):\n%s", code, out)
+	}
+	for _, block := range []string{"", "auth:\n  sparkplug: operator\n"} {
+		if out, code := checkIn(t, files(block)); code != 0 || strings.Contains(out, "sparkplug: grant") {
+			t.Errorf("%q (%d):\n%s", block, code, out)
+		}
+	}
+}

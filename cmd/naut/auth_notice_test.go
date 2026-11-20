@@ -27,9 +27,25 @@ func TestAuthNotice(t *testing.T) {
 		t.Errorf("no auth: block: %q", msg)
 	}
 	msg := authNotice(load("auth:\n  token-role: operator\n"))
-	if !strings.Contains(msg, "WARNING") || strings.Contains(msg, "NOT GATED") ||
-		!strings.Contains(msg, "Sparkplug writes are NOT covered") || !strings.Contains(msg, "OPC UA reads are not gated") || strings.Contains(msg, "OPC UA server and") {
+	if strings.Contains(msg, "NOT GATED") || strings.Contains(msg, "Sparkplug") ||
+		!strings.Contains(msg, "OPC UA reads are not gated") || strings.Contains(msg, "OPC UA server and") {
 		t.Errorf("auth: block: %q", msg)
+	}
+	// sparkplug.writable open and no auth.sparkplug: every command write
+	// is now refused, and the notice says how to allow them.
+	const sp = "sparkplug:\n  group-id: g\n  writable: [\"*\"]\n"
+	msg = authNotice(load(sp + "auth:\n  token-role: operator\n"))
+	if !strings.Contains(msg, "every Sparkplug command write is refused") || !strings.Contains(msg, "sparkplug: operator") ||
+		!strings.Contains(msg, "restart naut run") || !strings.Contains(msg, "OPC UA reads are not gated") {
+		t.Errorf("writable, no grant: %q", msg)
+	}
+	for _, block := range []string{
+		sp + "auth:\n  sparkplug: operator\n",                             // granted
+		"sparkplug:\n  group-id: g\n" + "auth:\n  token-role: operator\n", // nothing writable
+	} {
+		if msg := authNotice(load(block)); strings.Contains(msg, "Sparkplug") {
+			t.Errorf("%q: %q", block, msg)
+		}
 	}
 }
 
@@ -97,6 +113,37 @@ func TestOPCUAIdentityOnlyUnderAuth(t *testing.T) {
 	}
 	guarded := load("auth:\n  token-role: operator\n")
 	if id := opcuaIdentity(guarded, newServer(guarded)); id == nil {
+		t.Error("an auth: block, no identity")
+	}
+}
+
+// naut run hands its Sparkplug node the tag API's auth: block and journal
+// only under an auth: block (#708 PR 8b): without one the node gates
+// commands with sparkplug.writable alone and journals nothing.
+func TestSparkplugIdentityOnlyUnderAuth(t *testing.T) {
+	load := func(block string) *project.Project {
+		p, err := project.Load(fstest.MapFS{
+			"nautilus.yaml": &fstest.MapFile{Data: []byte("name: p\ntasks:\n  - program: main.st\n    scan: 100ms\n" + block)},
+			"main.st":       &fstest.MapFile{Data: []byte("PROGRAM Main\nEND_PROGRAM\n")},
+		}, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	newServer := func(p *project.Project) *server.Server {
+		rt, err := runtime.New(p.Runtime)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return server.New(rt, server.Options{})
+	}
+	plain := load("")
+	if id := sparkplugIdentity(plain, newServer(plain)); id != nil {
+		t.Errorf("no auth: block, an identity: %v", id)
+	}
+	guarded := load("auth:\n  sparkplug: operator\n")
+	if id := sparkplugIdentity(guarded, newServer(guarded)); id == nil {
 		t.Error("an auth: block, no identity")
 	}
 }
