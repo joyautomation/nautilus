@@ -356,7 +356,11 @@ func TestAgentsFeaturesFollowTheFiles(t *testing.T) {
 	dir := t.TempDir()
 	write := func(name string) {
 		t.Helper()
-		if err := os.WriteFile(filepath.Join(dir, name), nil, 0o644); err != nil {
+		full := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, nil, 0o644); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -371,6 +375,34 @@ func TestAgentsFeaturesFollowTheFiles(t *testing.T) {
 	write("b.mimic.json")
 	if got := agentsFeaturesFor(dir); got != (agentsFeatures{ST: true, LD: true, Screens: true}) {
 		t.Errorf("st + ld + screen: %+v", got)
+	}
+	write("c.fbd")
+	write("d.sfc")
+	if got := agentsFeaturesFor(dir); got != agentsAll {
+		t.Errorf("every kind of file: %+v", got)
+	}
+
+	// The loader lower-cases extensions, so Main.ST and Loop.FBD count.
+	up := t.TempDir()
+	dir = up
+	write("Main.ST")
+	write("Loop.FBD")
+	if got := agentsFeaturesFor(up); got != (agentsFeatures{ST: true, FBD: true}) {
+		t.Errorf("upper-case extensions: %+v", got)
+	}
+
+	// Nested projects, build output, node_modules and dot-directories are
+	// not this project's.
+	nest := t.TempDir()
+	dir = nest
+	write("main.st")
+	write("sub/nautilus.yaml")
+	write("sub/x.mimic.json")
+	write("build/y.ld")
+	write("node_modules/z/z.sfc")
+	write(".hidden/w.fbd")
+	if got := agentsFeaturesFor(nest); got != (agentsFeatures{ST: true}) {
+		t.Errorf("files outside the project counted: %+v", got)
 	}
 }
 

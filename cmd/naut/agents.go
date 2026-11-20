@@ -30,6 +30,7 @@ import (
 	"strings"
 
 	"github.com/joyautomation/nautilus/internal/lsp"
+	"github.com/joyautomation/nautilus/internal/project"
 )
 
 const (
@@ -133,28 +134,37 @@ var agentsAll = agentsFeatures{true, true, true, true, true}
 // about. A project with no program file at all gets every section.
 func agentsFeaturesFor(dir string) agentsFeatures {
 	var f agentsFeatures
-	filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+	root := os.DirFS(dir)
+	// The loader's own rules (project.scanScreens): no dot-directories,
+	// node_modules, build or dist, and no nested project (it has its own
+	// nautilus.yaml). Extensions are compared lower-cased, as the loader
+	// does, so Main.ST counts.
+	fs.WalkDir(root, ".", func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
+		n := d.Name()
 		if d.IsDir() {
-			switch d.Name() {
-			case ".git", "node_modules", ".nautilus":
-				return filepath.SkipDir
+			if p != "." {
+				if strings.HasPrefix(n, ".") || n == "node_modules" || n == "build" || n == "dist" {
+					return fs.SkipDir
+				}
+				if _, err := fs.Stat(root, p+"/"+project.ManifestName); err == nil {
+					return fs.SkipDir
+				}
 			}
 			return nil
 		}
-		name := d.Name()
-		switch {
-		case strings.HasSuffix(name, ".st"):
+		switch n = strings.ToLower(n); {
+		case strings.HasSuffix(n, ".st"):
 			f.ST = true
-		case strings.HasSuffix(name, ".ld"):
+		case strings.HasSuffix(n, ".ld"):
 			f.LD = true
-		case strings.HasSuffix(name, ".fbd"):
+		case strings.HasSuffix(n, ".fbd"):
 			f.FBD = true
-		case strings.HasSuffix(name, ".sfc"):
+		case strings.HasSuffix(n, ".sfc"):
 			f.SFC = true
-		case strings.HasSuffix(name, ".mimic.json"):
+		case strings.HasSuffix(n, ".mimic.json"):
 			f.Screens = true
 		}
 		return nil
@@ -187,7 +197,7 @@ func agentsText(f agentsFeatures) string {
 		{f.LD, "ld.md", "Ladder (`.ld`)", "ladder program", docs + "/languages/ladder/"},
 		{f.FBD, "fbd.md", "Function Block Diagram (`.fbd`)", "function block diagram", docs + "/languages/function-block/"},
 		{f.SFC, "sfc.md", "Sequential Function Chart (`.sfc`)", "sequential function chart", docs + "/languages/sfc/"},
-		{f.Screens, "screens.md", "Operator screens", "operator screen (`*.mimic.json`)", docs + "/guides/operator-screens/"},
+		{f.Screens, "screens.md", "Operator screens", "operator screen (`*.mimic.json`; this section does not cover 3D scenes or a hand-built `hmi/` app)", docs + "/guides/operator-screens/"},
 	} {
 		b.WriteString("\n\n")
 		if sec.on {
