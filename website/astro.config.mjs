@@ -72,6 +72,7 @@ export default defineConfig({
             { label: 'Operator screens', autogenerate: { directory: 'learn/operator-screens' } },
             { label: 'Deploy and operate', autogenerate: { directory: 'learn/deploy-and-operate' } },
             { label: 'Coming from Logix', autogenerate: { directory: 'learn/logix' } },
+            { label: 'Working with an AI agent', autogenerate: { directory: 'learn/ai-agent' } },
             { label: 'Tutorial: your first controller', slug: 'tutorial' },
             { label: 'Getting started (the short version)', slug: 'getting-started' },
             { label: 'Playground (in your browser)', link: '/playground/' },

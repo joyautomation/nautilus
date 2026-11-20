@@ -55,8 +55,12 @@ on the right, and a **Check** button that tests your answer.
 1. [Read a Logix project as text, with no Rockwell software](/learn/logix/read-a-logix-project/)
 2. [Where things live](/learn/logix/where-things-live/)
 
-More tracks follow: working with an AI
-agent. Until they are here, these guides cover them:
+## Working with an AI agent
+
+1. [What your project tells an agent](/learn/ai-agent/what-your-project-tells-an-agent/)
+2. [Ask for the test first, then review what it chose](/learn/ai-agent/ask-for-the-test-first/)
+
+More lessons follow. Until they are here, these guides cover the rest:
 
 - Programming: [Your first program](/guides/first-program/), the
   [languages](/languages/), [function blocks and
