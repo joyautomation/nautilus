@@ -76,10 +76,10 @@ type Fake struct {
 	loaded    map[string]string // CPU address → session that last downloaded
 	// saved is what a saved project holds besides its file: its CPU, the
 	// devices besides it and its protection, restored when it is opened.
-	saved map[string]savedProject
-	claims    map[string]string // CPU address → the session that claimed it (one project per CPU)
-	mux       *http.ServeMux
-	once      sync.Once
+	saved  map[string]savedProject
+	claims map[string]string // CPU address → the session that claimed it (one project per CPU)
+	mux    *http.ServeMux
+	once   sync.Once
 }
 
 type session struct {

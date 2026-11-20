@@ -354,6 +354,7 @@ namespace Tiad
                 }
                 DeviceIdentity read = null;
                 ProjectCpu cpu = null;
+                string cpuWhy = null;
                 List<string> trusted = OnSession(s, delegate(ITia t)
                 {
                     // The CPU's program replaces the project's: it no
@@ -386,6 +387,7 @@ namespace Tiad
                     {
                         Log.Line("upload: reading the project's CPU failed: {0}", Json.Quote(e.Message));
                         cpu = null;
+                        cpuWhy = e.Message;
                     }
                     return tr;
                 });
@@ -413,6 +415,7 @@ namespace Tiad
                 o["pin"] = pin;
                 // What a spec that reuses this CPU must name (section 3.3).
                 o["cpu"] = cpu == null ? null : cpu.ToJson();
+                if (cpuWhy != null) o["cpuError"] = cpuWhy;
                 return o;
             });
         }

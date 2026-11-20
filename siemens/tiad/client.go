@@ -667,7 +667,8 @@ type ProjectCPU struct {
 // KeptDevice is a device in the project besides the CPU's station, kept
 // as found by an apply that reused the CPU (tiad does not configure
 // PROFINET IO devices yet). ProfinetName and Address are "" when it has
-// none.
+// none. A list holds one entry per network node, so a device with two
+// interfaces appears twice under one Name: count names, not entries.
 type KeptDevice struct {
 	Name         string `json:"name"`
 	ProfinetName string `json:"profinetName"`
@@ -843,8 +844,11 @@ type UploadResult struct {
 	// with KindDeviceChanged and leaves the pin as it was.
 	Pin string `json:"pin"`
 	// CPU is the uploaded CPU as the project now holds it: a spec that
-	// names its name, order and firmware reuses it on the next apply.
-	CPU ProjectCPU `json:"cpu"`
+	// names its name, order and firmware reuses it on the next apply. It
+	// is zero when the project's CPU could not be read, and CPUError says
+	// why (a project with two CPUs, for one); the next apply refuses too.
+	CPU      ProjectCPU `json:"cpu"`
+	CPUError string     `json:"cpuError,omitempty"`
 }
 
 // UploadWith is Upload with options.
