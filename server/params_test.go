@@ -269,7 +269,7 @@ func TestParamBusyIs429(t *testing.T) {
 
 // With an auth: block a parameter write needs the config permission: a viewer
 // gets 403, journalled as refused under their principal, and nothing reaches
-// the device; the administrator's token is accepted. Reads need nothing.
+// the device; the administrator's token is accepted. A read needs read.
 func TestParamWriteNeedsConfigUnderAnAuthBlock(t *testing.T) {
 	f := newFakeParams()
 	srv := paramServer(t, f, Options{})
@@ -300,7 +300,14 @@ func TestParamWriteNeedsConfigUnderAnAuthBlock(t *testing.T) {
 	if rec, _ := put("admin-secret"); rec.Code != http.StatusOK || len(f.writes) != 1 {
 		t.Errorf("the administrator's write: %d %s (writes %v)", rec.Code, rec.Body, f.writes)
 	}
-	if rec := call(t, srv, "GET", "/api/iolink/LEVEL1/params/V_Setpoint", "", func(r *http.Request) { r.Header.Del("X-Nautilus-Token") }); rec.Code != http.StatusOK {
-		t.Errorf("a read with no credential: %d (reads need only what GET /api/io needs)", rec.Code)
+	// A parameter read needs read, as every API read does (#708 PR 5b-2).
+	if rec := call(t, srv, "GET", "/api/iolink/LEVEL1/params/V_Setpoint", "", func(r *http.Request) { r.Header.Del("X-Nautilus-Token") }); rec.Code != http.StatusUnauthorized {
+		t.Errorf("a read with no credential: %d, want 401", rec.Code)
+	}
+	if rec := call(t, srv, "GET", "/api/iolink/LEVEL1/params/V_Setpoint", "", func(r *http.Request) {
+		r.Header.Del("X-Nautilus-Token")
+		r.Header.Set("Authorization", "Bearer v-secret")
+	}); rec.Code != http.StatusOK {
+		t.Errorf("a viewer's read: %d %s", rec.Code, rec.Body)
 	}
 }

@@ -1122,24 +1122,20 @@ func embeddedManifest(fsys fs.FS) string {
 
 // authNotice is what naut run says about the manifest's auth: block, so
 // nobody runs a controller believing a block protects it before it does.
-// Today (#708 PR 4b) it decides every write through the HTTP API and
-// /api/audit; reads (until the read gate, PR 5b-2), the OPC UA server and
-// Sparkplug writes (#708 step 8) are not covered yet.
+// It decides every read and write through the HTTP API (#708); the OPC UA
+// server and Sparkplug writes (#708 step 8) are not covered yet.
 func authNotice(proj *project.Project) string {
 	if proj.Auth == nil {
 		return ""
 	}
-	return authReadsNotice + authSurfacesNotice
+	return authSurfacesNotice
 }
 
-const authReadsNotice = "auth: WARNING: reads are NOT GATED yet (#708, until the read gate): anyone who can reach this controller\n" +
-	"      can read its tags, alarms and program. Writes and the audit journal follow the auth: block.\n"
-
 // authFacadeNotice is what naut logix serve --project and naut siemens
-// serve say about an auth: block: they serve the HTTP API only, with no
-// audit journal.
-const authFacadeNotice = "auth: WARNING: reads are NOT GATED yet (#708, until the read gate): anyone who can reach this serve\n" +
-	"      can read the controller's tags and program. Writes and deploys follow the auth: block.\n"
+// serve say about an auth: block: they have no users file, so no browser
+// sign-in, and a request without a token is anonymous.
+const authFacadeNotice = "auth: this serve has no browser sign-in: every request needs a token (Authorization: Bearer …),\n" +
+	"      reads included, unless the auth: block sets anonymous: viewer.\n"
 
 const authSurfacesNotice = "auth: WARNING: the OPC UA server and Sparkplug writes are NOT covered by the auth: block yet (#708):\n" +
 	"      a client that reaches them is not asked for a role.\n"

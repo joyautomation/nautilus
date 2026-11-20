@@ -97,8 +97,8 @@ naut iolink param set   --host plc1 LEVEL1 V_Setpoint 500
   of its ids, so the window is narrowed, not closed.
 - One ISDU call at a time per port: a second request (read or write) while one
   is in flight is refused with `429` and `Retry-After`, with nothing sent to
-  the master, so parameter reads cannot flood it. Reads will sit behind the
-  read gate of the auth work (#708) when that lands.
+  the master, so parameter reads cannot flood it. With an
+  [`auth:` block](/guides/auth/#reads), a read needs the `read` permission.
 - Over a master that carries a parameter as hex text (the ifm masters), a
   parameter over 32 octets cannot be read or written.
 

@@ -120,7 +120,12 @@ func TestNautRunEnforcesAuth(t *testing.T) {
 			{"akhan's token outside it", "POST", "/api/tags", `{"name":"RST_SP","value":6}`, pat, http.StatusForbidden},
 			{"NAUTILUS_TOKEN (supervisor) write", "POST", "/api/tags", `{"name":"RST_SP","value":5}`, "admin-secret", http.StatusNoContent},
 			{"NAUTILUS_TOKEN (supervisor) force", "POST", "/api/forces", `{"name":"RST_SP","value":5}`, "admin-secret", http.StatusForbidden},
-			{"reads stay open", "GET", "/api/state", "", "", http.StatusOK},
+			{"anonymous read (anonymous: none)", "GET", "/api/state", "", "", http.StatusUnauthorized},
+			{"a wrong token's read", "GET", "/api/state", "", "guess", http.StatusUnauthorized},
+			{"viewer read", "GET", "/api/state", "", "h-secret", http.StatusOK},
+			{"akhan's token reads", "GET", "/api/state", "", pat, http.StatusOK},
+			{"liveness, no credential", "GET", "/healthz", "", "", http.StatusOK},
+			{"readiness, no credential", "GET", "/readyz", "", "", http.StatusOK},
 			{"the journal needs audit (viewer)", "GET", "/api/audit", "", "h-secret", http.StatusForbidden},
 			{"the journal needs audit (anonymous)", "GET", "/api/audit", "", "", http.StatusUnauthorized},
 			{"the journal (supervisor)", "GET", "/api/audit", "", "admin-secret", http.StatusOK},
@@ -151,8 +156,8 @@ func TestNautRunEnforcesAuth(t *testing.T) {
 			}
 			time.Sleep(100 * time.Millisecond)
 		}
-		if !strings.Contains(stderr.String(), "reads are NOT GATED") {
-			t.Errorf("no warning on stderr:\n%s", stderr.String())
+		if !strings.Contains(stderr.String(), "OPC UA server and Sparkplug writes are NOT covered") || strings.Contains(stderr.String(), "NOT GATED") {
+			t.Errorf("stderr's auth: notice:\n%s", stderr.String())
 		}
 		ents, _ := os.ReadDir(filepath.Join(dir, "audit"))
 		var log string

@@ -50,7 +50,10 @@
 // (GuardHost). Writes are same-origin-only by default — enough to stop a
 // random browser page from actuating outputs, with zero configuration.
 // Set Options.AuthToken to require a token on writes (and allow authorized
-// cross-origin writers); see authorizeWrite.
+// cross-origin writers); see authorizeWrite. Options.Auth (the manifest's
+// auth: block) decides every write and read by role (authorize, the read
+// gate in readgate.go). GET /healthz and /readyz answer probes without a
+// credential.
 //
 //	srv := server.New(rt)
 //	go srv.Run(ctx)                       // broadcast loop
@@ -302,8 +305,9 @@ type Options struct {
 	// else a same-origin request). With it, every write route asks the
 	// policy (authorize), NAUTILUS_TOKEN is the principal "token" with the
 	// block's token-role, and GET /api/audit needs the audit permission.
-	// Reads are not gated yet: that comes with the read gate (#708 PR
-	// 5b-2). Users with a users file sign in by browser (signin.go).
+	// Every read needs the read permission (readgate.go): every GET under
+	// /api/, and a page a browser opens, which goes to /signin without a
+	// session. Users with a users file sign in by browser (signin.go).
 	Auth *auth.Policy
 
 	// ServiceTokens are the service tokens' secrets, by name (naut run
@@ -683,6 +687,7 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 			s.users = u
 			if s.policy != nil {
 				s.sessions = newSessions(s.policy.Session())
+				s.sessions.OnEnd(s.endSessionStreams)
 				s.signin = newSignInGate()
 			}
 			u.OnChange(s.journalUsersChange)
@@ -1237,6 +1242,11 @@ func (s *Server) answerPreflight(w http.ResponseWriter, r *http.Request) {
 // wraps its handler in it too.
 func (s *Server) GuardHost(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Liveness and readiness carry one word and nothing else: a
+		// probe may reach them by any Host, with no credential.
+		if s.probe(w, r) {
+			return
+		}
 		trusted := s.trustedHost(r.Host)
 		// A browser's CORS preflight never carries the token, so on a token
 		// server a genuine one is answered here (204, no data) and never
@@ -1249,6 +1259,12 @@ func (s *Server) GuardHost(next http.Handler) http.Handler {
 		}
 		if !trusted && !s.validCredential(r) {
 			refuseHost(w, r, "controller", s.credentialsConfigured())
+			return
+		}
+		// With an auth: block, a read needs the read permission
+		// (readgate.go). A facade wraps a handler that is already
+		// wrapped: the second pass decides the same.
+		if s.readRefused(w, r) {
 			return
 		}
 		next.ServeHTTP(w, r)

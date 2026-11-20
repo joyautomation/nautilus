@@ -131,6 +131,13 @@ type client struct {
 	blocks bool     // ?blocks=delta — gate the non-tag blocks too
 	pats   []string // ?tags= globs; nil = every tag
 
+	// session is the hash of the sign-in whose cookie opened the stream
+	// ("" for a bearer credential or none): its end closes the stream.
+	session string
+	// done is closed by end; the stream's handler then returns.
+	done    chan struct{}
+	endOnce sync.Once
+
 	// mu guards the rest. It is taken by the broadcast goroutine once per
 	// tick per client and by handleStream once at connect — never held
 	// across an encode or a send.
@@ -151,6 +158,10 @@ type client struct {
 	// the block rather than losing it.
 	seen blockRevs
 }
+
+// end closes the stream (its session ended). The frame channel is left
+// alone: the broadcast loop may still be sending on it.
+func (c *client) end() { c.endOnce.Do(func() { close(c.done) }) }
 
 // blockRevs is which version of each non-tag block a client holds — the
 // whole state behind "send it only when it changed", three integers wide.
@@ -727,7 +738,10 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	// a client-side inspecting proxy/extension can still buffer regardless.
 	w.Header().Set("X-Accel-Buffering", "no")
 
-	c := &client{ch: make(chan []byte, 8), delta: delta, blocks: blocks, pats: pats}
+	c := &client{ch: make(chan []byte, 8), delta: delta, blocks: blocks, pats: pats, done: make(chan struct{})}
+	if a := s.resolveActor(r); a.session != nil {
+		c.session = a.session.hash
+	}
 
 	// The first frame is built and written BEFORE the client is registered,
 	// which is what keeps its seq honest: registering first would let the
@@ -761,10 +775,30 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		s.mu.Unlock()
 	}()
 
+	// With an auth: block the stream stays open only while its request
+	// may read (readgate.go): checked once now it is registered (a session
+	// ended since the gate checked it is not one endSessionStreams could
+	// see), then every streamRecheck.
+	var recheck <-chan time.Time
+	if s.policy != nil {
+		if !s.streamMayRead(r) {
+			return
+		}
+		t := time.NewTicker(streamRecheck)
+		defer t.Stop()
+		recheck = t.C
+	}
+
 	for {
 		select {
 		case <-r.Context().Done():
 			return
+		case <-c.done:
+			return
+		case <-recheck:
+			if !s.streamMayRead(r) {
+				return
+			}
 		case b := <-c.ch:
 			fmt.Fprintf(w, "data: %s\n\n", b)
 			fl.Flush()

@@ -177,6 +177,14 @@ missing or invalid auth token
 With a valid token, a write is allowed from any origin. That is how an HMI
 served from another host writes.
 
+**With an `auth:` block** in the manifest, roles decide instead, reads
+included: every `GET` under `/api/` (the live stream too) needs the `read`
+permission, and each write its own. No credential is a `401`, a principal
+without the permission a `403`. Only `GET /api/me`, the sign-in routes,
+`/healthz` and `/readyz` answer without one, unless the block sets
+`anonymous: viewer`. A browser signs in instead of sending a token. See
+[Users, roles & sign-in](/guides/auth/).
+
 **Program and I/O configuration endpoints need one more switch.**
 `PUT /api/program`, `POST /api/program/rollback`,
 `POST /api/program/activate` and the `POST /api/io/…` routes are refused
@@ -222,6 +230,9 @@ check comes before the token check. See [Online edits](/guides/online-edits/).
 | `GET` | [`/api/io/files`](#live-io-configuration) | The project files the running I/O configuration differs in (`naut pull --io`) |
 | `GET` | [`/api/history`, `/api/history/…`](#historian-proxy) | Forwarded to the historian |
 | `GET` | [`/api/audit`](#audit-journal) | Who changed what: the audit journal's recent entries |
+| `GET` | [`/api/me`](/guides/auth/#browser-sign-in) | Who the request acts as, and what it may do |
+| `GET` | [`/healthz`](#healthz-and-readyz) | Liveness: `200 ok` |
+| `GET` | [`/readyz`](#healthz-and-readyz) | Readiness: `200 ok` on the controller that runs the process, `503` on a standby |
 
 Outside `/api/`, `GET /` is the built-in dashboard and `/assets/…` its logo
 and fonts. With `server.hmi` set, your HMI build takes `/` and the
@@ -427,8 +438,24 @@ curl -s localhost:8080/api/cluster
 {"mode":"standalone","pod":"","leader":"","isLeader":true,"transitions":0}
 ```
 
-Always `200`, and always answered by the replica you asked, never
-forwarded to the leader.
+Always answered by the replica you asked, never forwarded to the leader.
+With an `auth:` block it needs `read`, like every read. A load balancer or
+probe that only wants to find the leader asks `/readyz` instead.
+
+### `/healthz` and `/readyz`
+
+Two probes for a load balancer, Kubernetes or a floating address. They
+need no credential, are answered by any `Host`, and say one word and
+nothing else: no role, version or tag.
+
+| | `200 ok` | `503 not ready` |
+| --- | --- | --- |
+| `GET /healthz` | whenever the controller serves HTTP, on every replica | never |
+| `GET /readyz` | a controller without redundancy, or the leader | a standby, no leader known, or a leader whose scans have stopped |
+
+Use `/healthz` as a liveness probe: a standby answers it too, so it is
+never restarted for standing by. Use `/readyz` to send traffic only to the
+leader.
 
 ## `POST /api/tags`
 
@@ -1239,7 +1266,10 @@ own status codes come back unchanged.
 
 With [redundancy](/guides/redundancy/#redundancy), a standby forwards every
 `/api/` request to the leader, except `GET /api/cluster` and
-`/api/history*`, which it answers itself. Writes, forces and the stream
+`/api/history*`, which it answers itself. Under an `auth:` block it never
+forwards a browser's sign-in cookie: sessions live on the leader, so it
+answers `503` with the leader's address (see
+[A redundant pair](/guides/auth/#a-redundant-pair)). Writes, forces and the stream
 therefore always reach the controller that is scanning. When the leader
 refuses the connection during a failover, the standby waits up to 10 s for
 a new leader and sends the request there. Any other failure to reach the

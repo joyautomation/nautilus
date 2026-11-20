@@ -83,13 +83,14 @@ spec:
             - name: NAUTILUS_ALLOWED_HOSTS
               value: "water-scada,water-scada.$(POD_NAMESPACE),water-scada.$(POD_NAMESPACE).svc,water-scada.$(POD_NAMESPACE).svc.cluster.local"
           readinessProbe:
-            # /api/cluster answers locally on every replica, leader or
-            # standby — a standby must stay Ready to serve the dashboard
-            # and proxy to the leader.
-            httpGet: {path: /api/cluster, port: api}
+            # /healthz answers 200 on every replica, leader or standby,
+            # with no credential (an auth: block gates /api/): a standby
+            # must stay Ready to serve the dashboard and proxy to the
+            # leader. /readyz is 200 on the leader only.
+            httpGet: {path: /healthz, port: api}
             periodSeconds: 5
           livenessProbe:
-            httpGet: {path: /api/cluster, port: api}
+            httpGet: {path: /healthz, port: api}
             initialDelaySeconds: 10
             periodSeconds: 10
 ---

@@ -25,7 +25,7 @@ func TestAuthNotice(t *testing.T) {
 		t.Errorf("no auth: block: %q", msg)
 	}
 	msg := authNotice(load("auth:\n  token-role: operator\n"))
-	if !strings.Contains(msg, "WARNING") || !strings.Contains(msg, "reads are NOT GATED") ||
+	if !strings.Contains(msg, "WARNING") || strings.Contains(msg, "NOT GATED") ||
 		!strings.Contains(msg, "OPC UA server and Sparkplug writes are NOT covered") {
 		t.Errorf("auth: block: %q", msg)
 	}
