@@ -8,6 +8,7 @@ import (
 	"github.com/gopcua/opcua/ua"
 
 	nio "github.com/joyautomation/nautilus/io"
+	"github.com/joyautomation/nautilus/runtime"
 )
 
 // The start-up baseline decides each output against what the SERVER holds,
@@ -164,5 +165,42 @@ func TestForgetWrittenClearsWhatWaitsForTheFirstRead(t *testing.T) {
 	d.forgetWritten()
 	if len(d.undecided) != 0 {
 		t.Fatalf("undecided = %v after forgetWritten", d.undecided)
+	}
+}
+
+// The first scan computes from init values before anything was read; the
+// baseline must decide on a push computed from the live inputs (#1123 review).
+// Setpoint := Speed + 1; the server holds Speed = 4 and Setpoint = 5.
+func runIncRig(t *testing.T, held float64, scans int) (*Driver, *testServer) {
+	t.Helper()
+	ts := startServerWith(t, freePort(t), "urn:nautilus:test", 4.0)
+	ts.set(t, "Setpoint", held)
+	d := startDriver(t, ts.url, manifest(2))
+	rt, err := runtime.New(runtime.Options{
+		Program: "PROGRAM Main\nVAR_EXTERNAL Speed : REAL; Setpoint : REAL; END_VAR\nSetpoint := Speed + 1.0;\nEND_PROGRAM",
+		Driver:  d,
+		Tags:    []runtime.TagDef{runtime.Input("Speed", runtime.Init(0.0)), runtime.Output("Setpoint", runtime.Init(0.0))},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < scans; i++ {
+		rt.Scan()
+		time.Sleep(20 * time.Millisecond)
+	}
+	return d, ts
+}
+
+func TestStartupNeverDrivesTheInitDerivedValue(t *testing.T) {
+	d, ts := runIncRig(t, 5.0, 40)
+	if w := d.Health().Writes; w != 0 {
+		t.Fatalf("writes = %d, want 0: the server held 5 and the live input makes 5 (the init-derived 1 must never go out); holds %v", w, ts.get(t, "Setpoint"))
+	}
+}
+
+func TestStartupWritesTheLiveValueOnce(t *testing.T) {
+	d, ts := runIncRig(t, 9.0, 40)
+	if w := d.Health().Writes; w != 1 || ts.get(t, "Setpoint") != 5.0 {
+		t.Fatalf("writes = %d, server holds %v, want one write of 5", w, ts.get(t, "Setpoint"))
 	}
 }
