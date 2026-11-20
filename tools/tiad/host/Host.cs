@@ -232,7 +232,16 @@ namespace Tiad.Host
 
             var machine = new WindowsMachine();
             var host = new WindowsHost(machine, cfg.NoTia);
-            var agent = new Agent(cfg, host, delegate { return Openness.Load(machine); }, "");
+            Agent agent;
+            try
+            {
+                agent = new Agent(cfg, host, delegate { return Openness.Load(machine); }, "");
+            }
+            catch (ConfigException e)
+            {
+                Console.Error.WriteLine("tiad: " + e.Message);
+                return 2;
+            }
             var router = new Router();
             agent.Register(router);
             var server = new Server(cfg, router);

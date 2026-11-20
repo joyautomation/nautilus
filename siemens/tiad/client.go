@@ -66,6 +66,13 @@ const (
 	// contract). The session stays open; compare on it before anything
 	// else.
 	KindOutcomeUnknown = "outcome_unknown"
+	// KindDeviceChanged refuses an online call to a CPU whose identity
+	// differs from its device pin (§3.8). Re-pin only after a deliberate
+	// replacement or firmware update.
+	KindDeviceChanged = "device_changed"
+	// KindDeviceUnverified refuses an online call to a pinned CPU whose
+	// identity could not be read, so the pin could not be checked.
+	KindDeviceUnverified = "device_unverified"
 
 	KindUnreachable = "unreachable"
 	KindBadReply    = "bad_reply"
@@ -770,6 +777,12 @@ type UploadResult struct {
 	// TrustedBlindly are the certificate questions answered trusted on
 	// the request's opt-in.
 	TrustedBlindly []string `json:"trustedBlindly"`
+	// Device is the CPU's identity as the upload read it.
+	Device DeviceIdentity `json:"device"`
+	// Pin is PinFirstTrust when this upload pinned the CPU (no pin
+	// existed), or PinMatched. A different identity fails the upload
+	// with KindDeviceChanged and leaves the pin as it was.
+	Pin string `json:"pin"`
 }
 
 // UploadWith is Upload with options.

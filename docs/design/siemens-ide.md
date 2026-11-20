@@ -239,7 +239,9 @@ the session is gone.
 | `declined` | 409 | A download question was answered no. `data.questions` lists them, and nothing is loaded |
 | `compile_failed` | 422 | Compile errors. `data` is the compile result |
 | `not_compiled` | 409 | A download of a project not fully compiled since its last change. Nothing reached TIA |
-| `operation_failed` | 500 | Openness threw (the message carries its text) |
+| `operation_failed` | 500 | Openness threw (the message carries its text), or a device pin file is unreadable (§3.8) |
+| `device_changed` | 409 | The CPU's identity differs from its device pin (§3.8). The message names both; nothing was loaded and the pin stands |
+| `device_unverified` | 409 | The CPU has a device pin, but its identity could not be read, so the pin could not be checked (§3.8) |
 | `outcome_unknown` | 500 | A download may have loaded the CPU, or not: TIA failed once the download was decided, or TIA's side broke the decide contract. Not fatal: compare on the same session before anything else. The client's `OutcomeUnknown` covers this and `unreachable` |
 
 ### 3.3 The station spec
@@ -349,8 +351,9 @@ The client checks each path and the agent checks again.
 | `POST /v1/sessions/{id}/download` | §3.5 (P3) |
 | `POST /v1/sessions/{id}/compare` | → `{equal, differences: [{object, state}]}`. An online compare |
 | `POST /v1/sessions/{id}/export` | `{dir, blocks: "scl" or "xml" or "", tagTables, hardware, gsdml}` → `{files: [path]}` (P6 for `gsdml`) |
-| `POST /v1/sessions/{id}/upload` | → `{}`. CPU into the session's project, for bringing a legacy CPU's program into nautilus *(verify Openness supports it)* |
+| `POST /v1/sessions/{id}/upload` | `{trustUnverifiedCertificate?}` → `{trustedBlindly, device, pin}`. CPU into the session's project, for bringing a legacy CPU's program into nautilus (S2a: works). Pins the CPU's identity on first use, or checks it (§3.8) |
 | `POST /v1/sessions/{id}/save` | `{archive?}` → `{path}` |
+| `GET /v1/pins`, `POST /v1/pins/{address}` | The device pins (§3.8). An upload pins the CPU on first use and must match after; compare and download check the pin first |
 
 `secrets` is `{"webUsers": {"naut": "<password>"}, "protection": "<password>"}`.
 tiad never logs it and never writes it to the work dir. Run tiad on
@@ -507,10 +510,97 @@ start or any later call, and then every call that needs TIA fails with
 - the Openness allowlist entry;
 - GSDML installs (`gsd/install`);
 - the work dir and every project in it (rebuilt from the repo per deploy);
-- the TIA licence state (a fresh trial).
+- the TIA licence state (a fresh trial);
+- the device pins (§3.8). A fresh clone trusts the CPU again on its first
+  upload, unless the pin is set by hand (`POST /v1/pins/{address}`) before
+  its first contact.
 
 **Kept outside the clone:** everything in git, meaning sources, the
 station spec and an adopted project's archive.
+
+### 3.8 Pins: trust on first use, then pin
+
+Plan and decisions: #789 (the plan, approved 2026-11-19; the device-pin
+fields, decided 2026-11-20). The bench CPU uses secure PG/PC communication,
+and TIA shows no certificate to check (S2a Gate B), so the first contact
+is trusted as found and what was found is pinned.
+
+**The device pin (built).** The first upload from a CPU pins its identity
+per address: its **order number and firmware**, read from the station the
+upload brought into the project. The response says `pin: "first-trust"`,
+and the audit line names the fields the pin holds. From then on:
+
+- every upload must report the same identity (`pin: "matched"`);
+- every compare and download, a dry run included, first reads the CPU's
+  identity online and must match. This happens before the CPU is claimed
+  and before TIA's download begins;
+- a different identity fails with `device_changed`, naming the pinned and
+  the new values. The pin stands;
+- an identity that cannot be read fails with `device_unverified`.
+  `tiad.Openness` has no proven online read yet (a read-only probe is
+  planned on #789). **So today, once a CPU is pinned, its compare and
+  download are refused** until an online read is proven: that is the
+  fail-closed design (decided on #789, 2026-11-20). A re-pin records a new
+  identity but does not lift this, and no call removes a pin. On the bench
+  CPU nothing is lost, since its TLS question refuses them already. A CPU
+  that asks no TLS question could be compared before its first upload and
+  cannot after it.
+
+**What it catches, and what it does not.** The device pin catches a
+different model, or firmware of another major.minor version, at the
+address. The firmware it holds is the station's configured version
+(`V3.1`), not the CPU's full one: the bench CPU runs 3.1.3, and a patch
+update (3.1.2 to 3.1.3) is not in the project, so it is **not** caught. A
+future online read returns the full version; the plan is to compare the
+firmware at the pin's precision (a `V3.1` pin matches any 3.1.x), with a
+three-part value recorded only through an audited re-pin and then compared
+exactly. That is a rule change in both copies, made with the read. It
+does **not** catch an identical CPU swapped in, and it does not catch a machine in the middle
+on the first contact. The serial number and the MAC address would catch a
+like-for-like swap, but the uploaded project holds neither. So they are
+fields of the pin now, held as **not read** (`null`, never `""`, which
+could match), and filled only by an audited re-pin once an online read of
+them is proven. A field the pin holds must be read again on every check:
+one that was not read fails closed. Nothing catches a like-for-like swap
+yet. The certificate pin below is meant to, once S2b proves it.
+
+**The certificate pin (after S2b, not built).** After nautilus's first
+download, the project owns the CPU's communication certificate. tiad will
+pin its SHA-256 per address, require TIA to ask no TLS question for a
+pinned address, and refuse the blind upload opt-in there.
+
+**Calls (no TIA):**
+
+| Call | Body → data |
+|---|---|
+| `GET /v1/pins` | → `{pins: [{address, device: {order, firmware, serial, mac}, holds}]}`. `holds` names the fields the pin actually holds; an unread field is `null` |
+| `POST /v1/pins/{address}` | `{device, replace, announced}` → `{address, device, holds, previous?}`. A first pin before any contact (`replace: false`), or a re-pin after a deliberate replacement or firmware update (`replace: true`, which needs an existing pin) |
+
+The address must be a strict dotted quad in `TIAD_TARGETS`, and the call
+must be announced. Every pin set or replaced, every first trust, and every
+online call a pin refuses (changed, unverified or unreadable) is an audit
+line with the values involved; so is the pin inventory at each start, so
+a pin that vanished between runs shows. A malformed pin request (400) is
+not. A pin is never deleted or changed silently.
+
+**Storage.** One file per address in `TIAD_PINS_DIR`
+(`%ProgramData%\tiad\pins`): `<address>.device`, whose first line is the
+identity as JSON, followed by comment lines saying what it is, when, and
+how to re-pin. `install-tiad.ps1` locks the directory like the token
+(Administrators and SYSTEM only) and never wipes it, so a reinstall keeps
+every pin. The agent refuses to start with the directory inside the work
+dir, where the files API would reach it, and when it cannot create, list
+and write it. Only a pin file that is not there means "no pin": any other
+failure to read one, a missing or unreadable directory included, fails
+closed, and online calls to that address are refused.
+- A pin whose **content** is corrupt can be replaced through the audited
+  re-pin (`replace: true`). Its audit line keeps why it was corrupt and
+  its first line, bounded.
+- A pin that **cannot be read** (an I/O or permission error) is never
+  replaced: its identity is unknown, not wrong. Fix the access first.
+
+Editing or deleting a pin file by hand is unaudited and not a supported
+path.
 
 ## 4. Online plane
 

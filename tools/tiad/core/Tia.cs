@@ -185,6 +185,17 @@ namespace Tiad
         // the questions it so answered (empty when none was asked).
         List<string> Upload(object project, string address, bool trustUnverifiedCertificate);
 
+        // ProjectCpu is the identity of the project's CPU as the project
+        // holds it: after an upload, what the CPU reported. Serial and Mac
+        // are null when the project does not hold them.
+        DeviceIdentity ProjectCpu(object project);
+
+        // Identify reads the identity of the CPU at address online, or
+        // returns null when this TIA side cannot: tiad.Openness, until an
+        // online read is proven (section 3.8). The agent then refuses an
+        // online call to a pinned address, since the pin cannot be checked.
+        DeviceIdentity Identify(object project, string address);
+
         // Save saves the project, or writes a project archive, and returns
         // its full path.
         string Save(object project, bool archive);

@@ -395,6 +395,17 @@ namespace Tiad
             return s;
         }
 
+        // OptStr returns a string field, null when absent or null: "not
+        // read", which is different from "".
+        public string OptStr(string key)
+        {
+            var v = Get(key);
+            if (v == null) return null;
+            var s = v as string;
+            if (s == null) throw Wrong(key, "a string", v);
+            return s;
+        }
+
         // Bool returns a boolean field, false when absent or null.
         public bool Bool(string key)
         {

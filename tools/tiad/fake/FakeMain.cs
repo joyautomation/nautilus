@@ -248,6 +248,41 @@ namespace Tiad.Fake
         string failInDoubt = "";
         bool noDryRun;
         bool uploadAsksTls;
+        DeviceIdentity device = BenchDevice();
+        bool noIdentify;
+
+        // BenchDevice is the fake CPU's identity unless a script says
+        // otherwise: the Go fake's tiad.BenchDevice.
+        public static DeviceIdentity BenchDevice()
+        {
+            return new DeviceIdentity { Order = "6ES7 510-1DK03-0AB0", Firmware = "V3.1" };
+        }
+
+        // Device is the fake CPU's identity, as an upload and an online
+        // read report it.
+        public DeviceIdentity Device
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return new DeviceIdentity { Order = device.Order, Firmware = device.Firmware, Serial = device.Serial, Mac = device.Mac };
+                }
+            }
+        }
+
+        // NoIdentify makes the fake's TIA side one that cannot read a CPU's
+        // identity online, as tiad.Openness cannot yet.
+        public bool NoIdentify
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return noIdentify;
+                }
+            }
+        }
 
         // UploadAsksTls makes going online for an upload ask TLS trust, as
         // a CPU with secure PG/PC communication and no known certificate does.
@@ -416,6 +451,9 @@ namespace Tiad.Fake
             string inDoubt = r.Str("failInDoubt");
             bool noDry = r.Bool("noDryRun");
             bool asksTls = r.Bool("uploadAsksTls");
+            var dr = r.Child("device");
+            DeviceIdentity dev = dr == null ? BenchDevice() : DeviceIdentity.Read(dr);
+            bool noId = r.Bool("noIdentify");
             var qs = new List<Question>();
             foreach (var x in r.Children("questions"))
             {
@@ -434,6 +472,8 @@ namespace Tiad.Fake
                 failInDoubt = inDoubt;
                 noDryRun = noDry;
                 uploadAsksTls = asksTls;
+                device = dev;
+                noIdentify = noId;
             }
             return new Obj();
         }
@@ -661,6 +701,18 @@ namespace Tiad.Fake
             return trusted;
         }
 
+        public DeviceIdentity ProjectCpu(object project)
+        {
+            script.Enter("ProjectCpu");
+            return script.Device;
+        }
+
+        public DeviceIdentity Identify(object project, string address)
+        {
+            script.Enter("Identify");
+            return script.NoIdentify ? null : script.Device;
+        }
+
         public string Save(object project, bool archive)
         {
             script.Enter("Save");
@@ -717,7 +769,16 @@ namespace Tiad.Fake
 
             var host = new FakeHost();
             var script = new Script();
-            var agent = new Agent(cfg, host, delegate { return new FakeTia(script); }, "+fake");
+            Agent agent;
+            try
+            {
+                agent = new Agent(cfg, host, delegate { return new FakeTia(script); }, "+fake");
+            }
+            catch (ConfigException e)
+            {
+                Console.Error.WriteLine("tiad-fake: " + e.Message);
+                return 2;
+            }
             var router = new Router();
             agent.Register(router);
             router.Add("PUT", "/fake/gates", host.SetGates);

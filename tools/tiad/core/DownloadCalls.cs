@@ -124,6 +124,9 @@ namespace Tiad
             {
                 throw new TiadException(409, Kinds.NotCompiled, "the project changed since the last full compile; compile hardware and software first");
             }
+            // The CPU must still be the one tiad pinned (section 3.8),
+            // before a dry run too: it reaches the CPU.
+            CheckDevicePin(s, req.Address, req.DryRun ? "dry run" : "download");
             // One project per CPU: the first download claims the CPU for
             // this session, dry runs included, until it is closed.
             sessions.ClaimCpu(s, req.Address);
@@ -242,6 +245,7 @@ namespace Tiad
                 r.Done();
                 string address = CpuOf(s);
                 if (!Target(address)) throw new TiadException(403, Kinds.TargetRefused, address + " is not in TIAD_TARGETS");
+                CheckDevicePin(s, address, "compare");
                 var diffs = new List<Difference>();
                 bool equal = OnSession(s, delegate(ITia t) { return t.Compare(s.Handle, address, diffs); });
                 var list = new List<object>();
@@ -310,6 +314,7 @@ namespace Tiad
                 {
                     throw new TiadException(403, Kinds.TargetRefused, "the project's CPU is not in TIAD_TARGETS");
                 }
+                DeviceIdentity read = null;
                 List<string> trusted = OnSession(s, delegate(ITia t)
                 {
                     // The CPU's program replaces the project's: it no
@@ -317,7 +322,19 @@ namespace Tiad
                     // compile again before anything is downloaded.
                     s.Compiled = false;
                     s.Station = null;
-                    return t.Upload(s.Handle, address, trust);
+                    List<string> tr = t.Upload(s.Handle, address, trust);
+                    // The project is replaced now: a failed identity read
+                    // must not skip the audit lines below.
+                    try
+                    {
+                        read = t.ProjectCpu(s.Handle);
+                    }
+                    catch (Exception e)
+                    {
+                        Log.Line("upload: reading the CPU's identity failed: {0}", Json.Quote(e.Message));
+                        read = null;
+                    }
+                    return tr;
                 });
                 if (trust || trusted.Count > 0)
                 {
@@ -326,8 +343,13 @@ namespace Tiad
                     Log.Line("audit upload session={0} project={1} address={2} trustUnverifiedCertificate={3} trustedBlindly=[{4}]",
                         s.Id, Json.Quote(s.Project), Json.Quote(address), trust ? "yes" : "no", string.Join(",", q.ToArray()));
                 }
+                // Trust on first use: the first upload pins the CPU's
+                // identity; every later one must match it (section 3.8).
+                string pin = PinUpload(s, address, read, trust);
                 var o = new Obj();
                 o["trustedBlindly"] = trusted.ToArray();
+                o["device"] = read.ToJson();
+                o["pin"] = pin;
                 return o;
             });
         }

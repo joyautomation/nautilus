@@ -113,6 +113,7 @@ From the environment only; nothing in a request changes it.
 | `TIAD_TOKEN` / `TIAD_TOKEN_FILE` | none | The bearer token, or a file holding it. Required, on loopback too: the agent refuses to start without one |
 | `TIAD_MAX_FILE_BYTES` | 1 GiB | The largest file a put takes (413 beyond it) |
 | `TIAD_WORKDIR` | `C:\tiad-work` | Required off Windows |
+| `TIAD_PINS_DIR` | `%ProgramData%\tiad\pins` | The device pins (siemens-ide.md §3.8). Required off Windows; refused inside `TIAD_WORKDIR`, which the files API reaches. `install-tiad.ps1` locks it and never wipes it |
 | `TIAD_TARGETS` | none | The only CPU addresses tiad goes online or downloads to. Strict dotted quads |
 | `TIAD_SESSION_IDLE` | `1h` | The idle reaper closes sessions unused this long (a Go duration) |
 | `TIAD_NO_TIA` | unset | `1` fails the `tia` gate, so no call can start TIA (or a trial clock) |

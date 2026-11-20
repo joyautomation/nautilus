@@ -27,7 +27,10 @@ var ctx = context.Background()
 
 func TestAgentRefusesUnsafeConfig(t *testing.T) {
 	bin := fakeBin(t)
-	wd, tok := "TIAD_WORKDIR="+t.TempDir(), "TIAD_TOKEN=t"
+	work := t.TempDir()
+	wd, tok := "TIAD_WORKDIR="+work, "TIAD_TOKEN=t"
+	// Every case gets a pins dir of its own unless it names one.
+	pd := "TIAD_PINS_DIR=" + t.TempDir()
 	cases := []struct {
 		name string
 		env  []string
@@ -57,10 +60,17 @@ func TestAgentRefusesUnsafeConfig(t *testing.T) {
 		{"file cap zero", []string{wd, tok, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_MAX_FILE_BYTES=0"}, "TIAD_MAX_FILE_BYTES"},
 		{"no-TIA switch not 1", []string{wd, tok, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_NO_TIA=true"}, "TIAD_NO_TIA must be 1 or unset"},
 		{"stdin switch not 1", []string{wd, tok, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_EXIT_ON_STDIN=yes"}, "TIAD_EXIT_ON_STDIN must be 1 or unset"},
+		// The files API writes anywhere in the work dir: a pin must never be
+		// within its reach.
+		{"no pins dir off Windows", []string{wd, tok, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_PINS_DIR="}, "TIAD_PINS_DIR is required"},
+		{"pins dir in the work dir", []string{wd, tok, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_PINS_DIR=" + filepath.Join(work, "pins")}, "TIAD_PINS_DIR must be outside TIAD_WORKDIR"},
+		{"pins dir is the work dir", []string{wd, tok, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_PINS_DIR=" + work + "/"}, "TIAD_PINS_DIR must be outside TIAD_WORKDIR"},
+		{"work dir in the pins dir", []string{"TIAD_WORKDIR=" + filepath.Join(filepath.Dir(work), "w"), tok, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_PINS_DIR=" + filepath.Dir(work)}, "TIAD_PINS_DIR must be outside TIAD_WORKDIR"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			code, out := tiadtest.RunToExit(t, bin, c.env...)
+			env := append([]string{pd}, c.env...) // a case's own TIAD_PINS_DIR wins
+			code, out := tiadtest.RunToExit(t, bin, env...)
 			if code != 2 || !strings.Contains(out, c.want) {
 				t.Fatalf("exit %d, want 2 with %q in:\n%s", code, c.want, out)
 			}

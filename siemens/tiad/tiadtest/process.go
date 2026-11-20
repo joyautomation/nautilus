@@ -25,6 +25,8 @@ import (
 type Process struct {
 	URL     string
 	WorkDir string
+	// PinsDir is the agent's own pins directory (TIAD_PINS_DIR).
+	PinsDir string
 
 	client *tiad.Client
 	cmd    *exec.Cmd
@@ -59,9 +61,15 @@ type Script struct {
 	NoDryRun bool `json:"noDryRun,omitempty"`
 	// UploadAsksTLS makes going online for an upload ask TLS trust, as a
 	// CPU with secure PG/PC communication and no known certificate does.
-	UploadAsksTLS bool           `json:"uploadAsksTls,omitempty"`
-	Delays        []ScriptedCall `json:"delays,omitempty"`
-	Failures      []ScriptedCall `json:"failures,omitempty"`
+	UploadAsksTLS bool `json:"uploadAsksTls,omitempty"`
+	// Device is the CPU's identity (nil: BenchDevice), as an upload and
+	// an online read report it.
+	Device *tiad.DeviceIdentity `json:"device,omitempty"`
+	// NoIdentify makes the fake's TIA side one that cannot read a CPU's
+	// identity online, as tiad.Openness cannot yet.
+	NoIdentify bool           `json:"noIdentify,omitempty"`
+	Delays     []ScriptedCall `json:"delays,omitempty"`
+	Failures   []ScriptedCall `json:"failures,omitempty"`
 }
 
 // ScriptedCall names an ITia call ("Compile", "OpenProject", ...).
@@ -120,11 +128,13 @@ func StartProcess(t testing.TB, bin string, cfg Config, env ...string) *Process 
 	if cfg.Token == "" {
 		cfg.Token = RandomToken()
 	}
-	p := &Process{WorkDir: t.TempDir(), done: make(chan struct{})}
+	p := &Process{WorkDir: t.TempDir(), PinsDir: t.TempDir(), done: make(chan struct{})}
 	p.cmd = Command(bin)
 	p.cmd.Env = AgentEnv(append([]string{
 		"TIAD_ADDR=http://127.0.0.1:0",
 		"TIAD_WORKDIR=" + p.WorkDir,
+		// Never the machine's own pins: a test's pins live and die with it.
+		"TIAD_PINS_DIR=" + p.PinsDir,
 		"TIAD_TOKEN=" + cfg.Token,
 		"TIAD_TARGETS=" + strings.Join(cfg.Targets, ","),
 		// The real agent exits when its stdin closes only when asked:
@@ -237,6 +247,17 @@ func (p *Process) SetQuestions(t testing.TB, qs []tiad.Question) {
 	t.Helper()
 	p.mu.Lock()
 	p.script.Questions = qs
+	s := p.script
+	p.mu.Unlock()
+	p.SetScript(t, s)
+}
+
+// SetDevice scripts the CPU's identity and whether it can be read online.
+func (p *Process) SetDevice(t testing.TB, d tiad.DeviceIdentity, noIdentify bool) {
+	t.Helper()
+	p.mu.Lock()
+	p.script.Device = &d
+	p.script.NoIdentify = noIdentify
 	s := p.script
 	p.mu.Unlock()
 	p.SetScript(t, s)

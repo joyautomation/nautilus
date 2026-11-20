@@ -28,6 +28,12 @@ namespace Tiad
         // OutcomeUnknown: a download may have loaded the CPU, or not. The
         // only next step is a compare.
         public const string OutcomeUnknown = "outcome_unknown";
+        // DeviceChanged refuses an online call to a CPU whose identity
+        // differs from its device pin (section 3.8).
+        public const string DeviceChanged = "device_changed";
+        // DeviceUnverified refuses an online call to a pinned CPU whose
+        // identity tiad cannot read, so the pin cannot be checked.
+        public const string DeviceUnverified = "device_unverified";
     }
 
     // TiadException is a failure that becomes an error envelope: its HTTP
