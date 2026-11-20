@@ -8,6 +8,11 @@
 #   hmibuild=true|false examples/lift-station/hmi changed: run
 #                       internal/hmibuild's TestBuildsTheLiftStationApp,
 #                       the one Go test that builds an example's HMI
+#   lessons=true|false  website/lessons/ changed (the interactive lessons):
+#                       cmd/naut's TestLessonsAreRealExercises runs the
+#                       Check on every lesson's start, solution and
+#                       variants; a light PR skips go test, so it runs
+#                       as its own step
 #   extension=true|false the VS Code extension, what it bundles or what its
 #                       tests read changed: tools/vscode-iec/, the hmi/ and
 #                       hmi-3d/ kits it links (file:), every example diagram
@@ -47,7 +52,9 @@
 #                        not .st/.ld/.fbd/.sfc there (the language walks
 #                        in cmd/naut and internal/lsp lint those)
 #   website/**           the docs site -- but not getting-started.md
-#                        (TestInstallDocsDownloadBeforeExtracting reads it)
+#                        (TestInstallDocsDownloadBeforeExtracting reads it).
+#                        website/lessons/** stays light but sets lessons=
+#                        (TestLessonsAreRealExercises reads it)
 #   playground/app/**    the playground's VS Code app shell
 #   docs/**/*.md         design notes -- but not docs/claims/ (tools/evidence)
 #                        or docs/structure-warnings.md (lang/lint reads it)
@@ -57,6 +64,7 @@ set -u
 full=false
 any=false
 hmibuild=false
+lessons=false
 extension=false
 e2eall=false
 roots=()
@@ -99,6 +107,8 @@ while IFS= read -r path; do
       ;;
     website/src/content/docs/getting-started.md)
       full=true ;;
+    website/lessons/*)
+      lessons=true ;;
     website/*|playground/app/*)
       ;;
     docs/claims/*|docs/structure-warnings.md)
@@ -113,5 +123,6 @@ if [ "$any" != true ]; then full=true; extension=true; e2eall=true; fi
 echo "full=$full"
 echo "examples=${roots[*]+"${roots[*]}"}"
 echo "hmibuild=$hmibuild"
+echo "lessons=$lessons"
 echo "extension=$extension"
 echo "e2e-all=$e2eall"
