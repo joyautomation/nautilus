@@ -40,7 +40,13 @@ on the right, and a **Check** button that tests your answer.
 1. [A screen in five minutes](/learn/operator-screens/screen-in-five-minutes/)
 2. [A button and a setpoint that write](/learn/operator-screens/a-button-that-writes/)
 
-More tracks follow: deploying, and working with an AI
+## Deploy and operate
+
+1. [Put it on a Linux box, and let operators open the screen](/learn/deploy-and-operate/put-it-on-a-box/)
+2. [Update, roll back, and back up](/learn/deploy-and-operate/update-roll-back-back-up/)
+3. [Who may operate it](/learn/deploy-and-operate/who-may-operate-it/)
+
+More tracks follow: working with an AI
 agent. Until they are here, these guides cover them:
 
 - Programming: [Your first program](/guides/first-program/), the

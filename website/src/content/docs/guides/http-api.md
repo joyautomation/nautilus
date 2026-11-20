@@ -1135,9 +1135,10 @@ through a symlink out of the project; it does not trust the controller's
 list of paths. `--force` skips the check that your copy is the booted one
 and replaces your edits without a diff; the paths are printed. **`GET
 /api/io/files` returns whole file bodies and, like every read, needs no
-token until users and roles (#708) land (a token guards writes): anyone
-who can reach the port can read the project's I/O files.** Keep the port
-off untrusted networks.
+token from a trusted host (a bare `NAUTILUS_TOKEN` guards writes) until the
+manifest has an `auth:` block, which makes it need `read`: without one,
+anyone who can reach the port can read the project's I/O files.** Keep the
+port off untrusted networks.
 
 | Status | When |
 | --- | --- |
@@ -1221,8 +1222,8 @@ Known limits:
   connection failed, has two entries: `ok` on the leader and a `502` on the
   standby.
 - `GET /api/audit` is open when no auth token is set, as every read is
-  today. With users and roles (#708) it needs a signed-in principal with
-  the `audit` permission.
+  without an `auth:` block. With one it needs a principal (a signed-in
+  user, or a token) with the `audit` permission.
 - The program routes `naut logix serve` answers itself (`PUT /api/program`,
   which edits the Logix project, and `POST /api/logix/deploy`) are not
   journalled yet, nor are the refusals of the program routes on a Siemens
