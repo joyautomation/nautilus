@@ -57,9 +57,13 @@ const oidcClockSkew = 2 * time.Minute
 const oidcFlowLife = 10 * time.Minute
 
 // maxOIDCFlows bounds the sign-ins under way: start is anonymous, so a
-// client must not grow the table without end (its address is throttled
-// too).
-const maxOIDCFlows = 4096
+// client must not grow the table without end. maxOIDCFlowsPerAddr bounds
+// one address's share, so a few addresses cannot fill it and keep
+// everyone else from signing in.
+const (
+	maxOIDCFlows        = 4096
+	maxOIDCFlowsPerAddr = 16
+)
 
 // The provider's request and timeouts: a slow provider must not hold a
 // request for long.
@@ -90,6 +94,7 @@ type oidcFlow struct {
 	redirect string // the redirect URI the sign-in started with
 	next     string // where the browser goes afterwards
 	binding  string // hex SHA-256 of the binding cookie's value
+	addr     string // the client's address key (addrKey), for the per-address cap
 	at       time.Time
 }
 
@@ -106,15 +111,17 @@ func (f *oidcFlows) put(state string, fl oidcFlow) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	now := f.now()
-	if len(f.m) >= maxOIDCFlows {
-		for k, o := range f.m {
-			if now.Sub(o.at) >= oidcFlowLife {
-				delete(f.m, k)
-			}
+	mine := 0
+	for k, o := range f.m {
+		switch {
+		case now.Sub(o.at) >= oidcFlowLife:
+			delete(f.m, k)
+		case o.addr == fl.addr:
+			mine++
 		}
-		if len(f.m) >= maxOIDCFlows {
-			return false
-		}
+	}
+	if len(f.m) >= maxOIDCFlows || mine >= maxOIDCFlowsPerAddr {
+		return false
 	}
 	fl.at = now
 	f.m[state] = fl
@@ -145,15 +152,19 @@ func hashHex(s string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func (s *Server) oidcCookieName(r *http.Request) string {
+// oidcCookieName is the binding cookie of the sign-in state names: one
+// per sign-in under way, so a second tab's start (or another site's
+// request to start) does not overwrite the first one's.
+func (s *Server) oidcCookieName(r *http.Request, state string) string {
+	name := oidcPlainCookie
 	if s.secure(r) {
-		return oidcSecureCookie
+		name = oidcSecureCookie
 	}
-	return oidcPlainCookie
+	return name + "_" + hashHex(state)[:12]
 }
 
-func (s *Server) clearOIDCCookie(w http.ResponseWriter, r *http.Request) {
-	http.SetCookie(w, &http.Cookie{Name: s.oidcCookieName(r), Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: s.secure(r), SameSite: http.SameSiteLaxMode})
+func (s *Server) clearOIDCCookie(w http.ResponseWriter, r *http.Request, state string) {
+	http.SetCookie(w, &http.Cookie{Name: s.oidcCookieName(r, state), Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: s.secure(r), SameSite: http.SameSiteLaxMode})
 }
 
 // oidcRedirectURI is the redirect URI for a sign-in started by r:
@@ -244,13 +255,22 @@ func (s *Server) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
 		if s.secure(r) {
 			scheme = "https"
 		}
-		if u.Scheme != scheme || !strings.EqualFold(withPort(u.Host, u.Scheme), withPort(r.Host, scheme)) {
+		sameHost := strings.EqualFold(withPort(u.Host, u.Scheme), withPort(r.Host, u.Scheme))
+		switch {
+		case sameHost && u.Scheme != scheme:
+			// Already at that host, but the request does not look like it
+			// came over the scheme the URL names: a TLS proxy in front that
+			// server.trusted-proxies does not name. Sending it there again
+			// would loop.
+			refuse(http.StatusForbidden, "auth.oidc.redirect-url is "+u.Scheme+"://, but this request reached the controller as "+scheme+": name the TLS proxy in front in server.trusted-proxies", "redirect-url scheme mismatch")
+			return
+		case !sameHost || u.Scheme != scheme:
 			http.Redirect(w, r, u.Scheme+"://"+u.Host+oidcStartPath+"?next="+url.QueryEscape(next), http.StatusSeeOther)
 			return
 		}
 	}
 	state, binding := randomID(), randomID()
-	fl := oidcFlow{nonce: randomID(), verifier: randomID(), redirect: redirect, next: next, binding: hashHex(binding)}
+	fl := oidcFlow{nonce: randomID(), verifier: randomID(), redirect: redirect, next: next, binding: hashHex(binding), addr: addrKey(s.clientAddr(r))}
 	if !s.oidcFlows.put(state, fl) {
 		refuse(http.StatusServiceUnavailable, "too many sign-ins are under way: try again in a few minutes", "busy")
 		return
@@ -264,7 +284,7 @@ func (s *Server) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.SetCookie(w, &http.Cookie{
-		Name:     s.oidcCookieName(r),
+		Name:     s.oidcCookieName(r, state),
 		Value:    binding,
 		Path:     "/",
 		MaxAge:   int(oidcFlowLife.Seconds()),
@@ -294,12 +314,13 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	e := audit.Entry{User: "anonymous", Source: clientSource(r), Action: "auth.signin", From: s.clientAddr(r), Result: audit.ResultRefused}
 	next := "/"
+	state := r.URL.Query().Get("state")
 	detail := map[string]any{"method": "oidc"}
 	refuse := func(status int, msg, reason string) {
 		detail["status"], detail["reason"] = status, reason
 		e.Detail = detail
 		s.audit.record(e)
-		s.clearOIDCCookie(w, r)
+		s.clearOIDCCookie(w, r, state)
 		s.signInPage(w, r, status, msg, next)
 	}
 	if !s.signInTransport(r) {
@@ -307,14 +328,14 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
-	fl, ok := s.oidcFlows.take(q.Get("state"))
+	fl, ok := s.oidcFlows.take(state)
 	if !ok {
 		refuse(http.StatusBadRequest, "this sign-in has expired or was already used: start it again", "unknown or expired state")
 		return
 	}
 	next = fl.next
 	bound := false
-	for _, c := range r.CookiesNamed(s.oidcCookieName(r)) {
+	for _, c := range r.CookiesNamed(s.oidcCookieName(r, state)) {
 		if subtle.ConstantTimeCompare([]byte(hashHex(c.Value)), []byte(fl.binding)) == 1 {
 			bound = true
 		}
@@ -346,18 +367,20 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		refuse(http.StatusUnauthorized, "the sign-in provider's answer did not verify: start the sign-in again", "nonce mismatch")
 		return
 	}
-	if id.Issuer == "" || id.Subject == "" {
+	if !pinnable(id.Issuer) || !pinnable(id.Subject) {
 		refuse(http.StatusUnauthorized, "the sign-in provider's answer did not verify: start the sign-in again", "no issuer or no subject")
 		return
 	}
 	detail["issuer"], detail["subject"] = id.Issuer, id.Subject
-	name := strings.ToLower(strings.TrimSpace(id.Name))
-	if name == "" {
-		refuse(http.StatusForbidden, "the provider's ID token has no "+id.NameClaim+" claim to name you by: set auth.oidc.username-claim to a claim it sends (preferred_username, email)", "no username claim "+id.NameClaim)
+	if strings.TrimSpace(id.Name) == "" {
+		refuse(http.StatusForbidden, "the provider's ID token has no "+id.NameClaim+" claim to name you by: set auth.oidc.username-claim to a claim it sends that people cannot change themselves (preferred_username on Entra, Keycloak and Okta)", "no username claim "+id.NameClaim)
 		return
 	}
-	if err := auth.ValidOIDCName(name); err != nil {
-		refuse(http.StatusForbidden, "the provider names you in a form this controller cannot use ("+err.Error()+"): set auth.oidc.username-claim to a claim like email", "username claim: "+err.Error())
+	// Lowered as ASCII only, after any other byte is refused: never
+	// strings.ToLower, which folds look-alikes into ASCII names.
+	name, err := auth.OIDCName(id.Name)
+	if err != nil {
+		refuse(http.StatusForbidden, "the provider names you in a form this controller cannot use ("+err.Error()+"): set auth.oidc.username-claim to a claim in that form that people cannot change themselves", "username claim: "+err.Error())
 		return
 	}
 	e.Target = "oidc:" + name
@@ -391,8 +414,11 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		refuse(http.StatusForbidden, "oidc:"+name+" is pinned to another account at this provider; if this is a re-created account, run naut users unpin "+name+" on the controller", "pinned to another account")
 		return
 	}
-	// A fresh id at every sign-in; the session the browser held, if any,
-	// ends (no fixation, and none left behind).
+	// A fresh id at every sign-in. The session cookie is SameSite=Strict,
+	// so a browser does not send it on the provider's cross-site redirect
+	// here: this ends a held session only when the callback came same-site
+	// (a person reloading it). Any other the browser held stays until it
+	// expires, as one in another tab would.
 	cookie := s.cookieName(r)
 	for _, c := range r.CookiesNamed(cookie) {
 		s.sessions.end(c.Value)
@@ -407,7 +433,7 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		authAt = time.Time{}
 	}
 	sid, se := s.sessions.start(session{user: name, oidc: true, issuer: id.Issuer, sub: id.Subject, groups: pr.Groups(), authAt: authAt})
-	s.clearOIDCCookie(w, r)
+	s.clearOIDCCookie(w, r, state)
 	http.SetCookie(w, &http.Cookie{
 		Name:     cookie,
 		Value:    sid,
@@ -432,6 +458,12 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	h.Set("X-Frame-Options", "DENY")
 	w.WriteHeader(http.StatusOK)
 	oidcHopTemplate.Execute(w, struct{ Name, Next string }{name, fl.next})
+}
+
+// pinnable reports an issuer or subject the pins file can hold (and naut
+// users list print): not empty, not long, no control character.
+func pinnable(v string) bool {
+	return v != "" && len(v) <= 512 && !strings.ContainsFunc(v, func(r rune) bool { return r < ' ' || r == 0x7f || r >= 0x80 && r < 0xa0 })
 }
 
 // checkGroups refuses a groups claim no grant could be read from safely:

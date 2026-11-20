@@ -123,7 +123,7 @@ func oidcStart(t *testing.T, srv *Server, next string, mod ...func(*http.Request
 	t.Helper()
 	rec := call(t, srv, "GET", "/auth/oidc/start?next="+url.QueryEscape(next), "", append([]func(*http.Request){fromLoopback}, mod...)...)
 	for _, c := range rec.Result().Cookies() {
-		if c.Name == oidcPlainCookie {
+		if strings.HasPrefix(c.Name, oidcPlainCookie+"_") {
 			return rec, c
 		}
 	}
@@ -208,7 +208,7 @@ func TestOIDCSignInStartsASession(t *testing.T) {
 		switch c.Name {
 		case plainCookie:
 			session = c
-		case oidcPlainCookie:
+		case binding.Name:
 			cleared = c.MaxAge < 0
 		}
 	}
@@ -347,7 +347,7 @@ func TestOIDCCallbackRefusals(t *testing.T) {
 	// The state is spent by the failed attempt: the right cookie later is
 	// too late.
 	st, b = start()
-	other := &http.Cookie{Name: oidcPlainCookie, Value: "someone-elses"}
+	other := &http.Cookie{Name: b.Name, Value: "someone-elses"}
 	noSession("another browser's binding cookie", oidcCallback(t, srv, st, other, from()), http.StatusBadRequest, "binding cookie missing or wrong")
 	noSession("the state after a failed attempt", oidcCallback(t, srv, st, b, from()), http.StatusBadRequest, "unknown or expired state")
 
@@ -690,7 +690,7 @@ func TestOIDCCallbackMore(t *testing.T) {
 	}
 	req := httptest.NewRequest("POST", "http://localhost/", nil)
 	req.AddCookie(sc)
-	if got := srv.recordBy(req, "someone-else"); got != "x@corp.example" {
+	if got := srv.recordBy(req, "someone-else"); got != "oidc:x@corp.example" {
 		t.Errorf("recordBy = %q", got)
 	}
 }
@@ -700,15 +700,79 @@ func TestOIDCCallbackMore(t *testing.T) {
 func TestOIDCFlowsBounded(t *testing.T) {
 	f := newOIDCFlows()
 	for i := 0; i < maxOIDCFlows; i++ {
-		if !f.put(strconv.Itoa(i), oidcFlow{}) {
+		if !f.put(strconv.Itoa(i), oidcFlow{addr: "a" + strconv.Itoa(i/maxOIDCFlowsPerAddr)}) {
 			t.Fatalf("refused at %d", i)
 		}
 	}
-	if f.put("one-more", oidcFlow{}) {
+	if f.put("one-more", oidcFlow{addr: "fresh"}) {
 		t.Error("took one past the cap")
 	}
 	f.now = func() time.Time { return time.Now().Add(oidcFlowLife) }
-	if !f.put("after-expiry", oidcFlow{}) || len(f.m) != 1 {
+	if !f.put("after-expiry", oidcFlow{addr: "fresh"}) || len(f.m) != 1 {
 		t.Errorf("expired flows not swept: %d", len(f.m))
+	}
+	// One address holds only its share; the others still start.
+	g := newOIDCFlows()
+	for i := 0; i < maxOIDCFlowsPerAddr; i++ {
+		g.put("x"+strconv.Itoa(i), oidcFlow{addr: "flooder"})
+	}
+	if g.put("x-more", oidcFlow{addr: "flooder"}) {
+		t.Error("one address took more than its share")
+	}
+	if !g.put("y", oidcFlow{addr: "someone"}) {
+		t.Error("a flooding address kept another from starting")
+	}
+}
+
+// A username claim that only lowers into another name (U+0130 to 'i',
+// the Kelvin sign to 'k') is refused, never folded into the ASCII name and
+// its grant; so are an issuer or subject the pins file cannot hold.
+func TestOIDCNamesAreNotFolded(t *testing.T) {
+	srv, fake, _ := oidcServer(t, Options{})
+	for _, name := range []string{"JSM\u0130TH@corp.example", "a\u212Ahan"} {
+		fake.as(name, "attacker", "g-ops")
+		cb, c := oidcSignIn(t, srv, fake, "/")
+		if c != nil || cb.Code != http.StatusForbidden {
+			t.Errorf("%q: %d %s", name, cb.Code, cb.Body)
+		}
+	}
+	if _, ok, _ := srv.users.Pin("jsmith@corp.example"); ok {
+		t.Error("a look-alike pinned the ASCII name")
+	}
+	fake.as("x@corp.example", "sub\x1b[31m", "g-ops")
+	if cb, c := oidcSignIn(t, srv, fake, "/"); c != nil || cb.Code != http.StatusUnauthorized {
+		t.Errorf("a subject with an escape: %d %s", cb.Code, cb.Body)
+	}
+}
+
+// A second tab's start does not overwrite the first's binding cookie:
+// both sign-ins complete.
+func TestOIDCTwoSignInsUnderWay(t *testing.T) {
+	srv, fake, _ := oidcServer(t, Options{})
+	fake.as("x@corp.example", "sub-1", "g-ops")
+	_, c1 := oidcStart(t, srv, "/one")
+	first := fake.last
+	_, c2 := oidcStart(t, srv, "/two")
+	if c1.Name == c2.Name {
+		t.Fatalf("one cookie name for two sign-ins: %s", c1.Name)
+	}
+	// The provider answers the first tab (its nonce and verifier).
+	fake.mu.Lock()
+	fake.last = first
+	fake.mu.Unlock()
+	cb := oidcCallback(t, srv, first.State, c1, func(r *http.Request) { r.AddCookie(c2) })
+	if cb.Code != http.StatusOK || !strings.Contains(cb.Body.String(), "url=/one") {
+		t.Errorf("the first tab's sign-in after a second start: %d %s", cb.Code, cb.Body)
+	}
+}
+
+// With redirect-url naming https at this very host, a request that
+// arrived as http (a TLS proxy server.trusted-proxies does not name) is
+// refused with the fix, not sent round in a loop.
+func TestOIDCStartNoRedirectLoop(t *testing.T) {
+	srv, _, _ := oidcServer(t, Options{OIDCRedirectURL: "https://localhost/auth/oidc/callback"})
+	rec, _ := oidcStart(t, srv, "/")
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "server.trusted-proxies") {
+		t.Errorf("%d %s %s", rec.Code, rec.Header().Get("Location"), rec.Body)
 	}
 }

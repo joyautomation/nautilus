@@ -57,22 +57,45 @@ func checkOwner(path string, st os.FileInfo) error {
 	return nil
 }
 
+// chownLock gives the open lock f its directory's owner, after checking
+// (on the open file, not the path) that it is a plain file with one link.
+func chownLock(f *os.File, path string) error {
+	var st syscall.Stat_t
+	if err := syscall.Fstat(int(f.Fd()), &st); err != nil {
+		return err
+	}
+	if st.Mode&syscall.S_IFMT != syscall.S_IFREG || st.Nlink != 1 {
+		return fmt.Errorf("%s is not a plain file with one link: remove it (naut users makes a new one)", path)
+	}
+	dir, err := os.Stat(filepath.Dir(path))
+	if err != nil {
+		return nil
+	}
+	if sys, ok := dir.Sys().(*syscall.Stat_t); ok && (st.Uid != sys.Uid || st.Gid != sys.Gid) {
+		return f.Chown(int(sys.Uid), int(sys.Gid))
+	}
+	return nil
+}
+
 // lockFile takes an exclusive lock on path (created 0600), waiting for
 // another naut users to finish.
 func lockFile(path string) (func(), error) {
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	// O_NOFOLLOW: a lock planted as a symbolic link (by whoever owns the
+	// state directory) is refused, never followed.
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
 		return nil, err
 	}
 	// Run as root (sudo naut users), the lock gets its directory's owner,
 	// like the files it guards (keepOwner): the controller takes it too, at
 	// an OIDC name's first sign-in, and must be able to open it. A lock an
-	// earlier release left owned by root is given back the same way.
+	// earlier release left owned by root is given back the same way. Only
+	// a plain file with one link is: root must never hand the directory's
+	// owner a file it reached through a hard link.
 	if geteuid() == 0 {
-		if st, err := os.Stat(filepath.Dir(path)); err == nil {
-			if sys, ok := st.Sys().(*syscall.Stat_t); ok {
-				f.Chown(int(sys.Uid), int(sys.Gid))
-			}
+		if err := chownLock(f, path); err != nil {
+			f.Close()
+			return nil, err
 		}
 	}
 	deadline := time.Now().Add(lockWait)

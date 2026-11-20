@@ -337,3 +337,19 @@ func TestValidOIDCName(t *testing.T) {
 		}
 	}
 }
+
+// OIDCName lowers ASCII only, after refusing any other byte: a look-alike
+// never folds into an ASCII name, at sign-in or in auth.oidc.users.
+func TestOIDCNameDoesNotFold(t *testing.T) {
+	if n, err := OIDCName(" JSmith@Corp.Example "); err != nil || n != "jsmith@corp.example" {
+		t.Errorf("%q %v", n, err)
+	}
+	for _, raw := range []string{"JSM\u0130TH@corp.example", "a\u212Ahan", "jos\u00e9"} {
+		if n, err := OIDCName(raw); err == nil {
+			t.Errorf("%q folded to %q", raw, n)
+		}
+	}
+	if _, err := Compile(Settings{OIDC: true, OIDCUsers: map[string][]Grant{"JSM\u0130TH@corp.example": {{Role: Viewer}}}}); err == nil {
+		t.Error("auth.oidc.users took a name that folds into another")
+	}
+}

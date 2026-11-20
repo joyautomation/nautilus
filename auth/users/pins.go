@@ -79,6 +79,15 @@ func sideName(name string) error {
 	return nil
 }
 
+// pinValue checks a pin's issuer or subject: what naut users list prints
+// to a terminal, so never empty, long or holding a control character.
+func pinValue(v string) error {
+	if v == "" || len(v) > 512 || strings.ContainsFunc(v, func(r rune) bool { return r < ' ' || r == 0x7f || r >= 0x80 && r < 0xa0 }) {
+		return fmt.Errorf("an issuer or subject that is empty, too long or holds a control character")
+	}
+	return nil
+}
+
 // readStrict decodes a side file: unknown fields, a second document and
 // another version are refused, as the users file's are. An absent file is
 // (nil, nil).
@@ -118,8 +127,8 @@ func LoadPins(path string) (*Pins, error) {
 		if err := sideName(n); err != nil {
 			return nil, fmt.Errorf("%s: %w", path, err)
 		}
-		if pin.Issuer == "" || pin.Subject == "" {
-			return nil, fmt.Errorf("%s: the pin of %q names no issuer or no subject", path, n)
+		if pinValue(pin.Issuer) != nil || pinValue(pin.Subject) != nil {
+			return nil, fmt.Errorf("%s: the pin of %q has an issuer or subject that is empty, too long or holds a control character", path, n)
 		}
 	}
 	return &p, nil

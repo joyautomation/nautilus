@@ -291,3 +291,18 @@ func TestPinFirstLockUnopenable(t *testing.T) {
 		t.Errorf("err = %v, want the fix", err)
 	}
 }
+
+// A pins file whose issuer or subject holds a control character (what
+// naut users list would print to a terminal) is refused, and so is pinning
+// one.
+func TestPinValuesArePrintable(t *testing.T) {
+	path := filepath.Join(stateDir(t), PinsName)
+	os.WriteFile(path, []byte(`{"version":1,"pins":{"a":{"issuer":"https://idp","subject":"s\u001b[2J","pinned":"2026-01-01T00:00:00Z"}}}`), 0o600)
+	if _, err := LoadPins(path); err == nil {
+		t.Error("a subject with an escape loaded")
+	}
+	s, _, _ := pinStore(t)
+	if _, _, err := s.PinFirst("a", "https://idp", "s\x1b", time.Now()); err == nil {
+		t.Error("pinned a subject with an escape")
+	}
+}

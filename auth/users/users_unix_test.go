@@ -57,3 +57,35 @@ func TestStoreRefusesWhatIsNotItsOwn(t *testing.T) {
 		t.Errorf("saving over a symbolic link: %v", err)
 	}
 }
+
+// The users lock is never followed through a symbolic link, and root
+// gives only a plain file with one link the directory's owner (a lock the
+// directory's owner planted as a link to another file must not be handed
+// to them).
+func TestLockRefusesLinks(t *testing.T) {
+	dir := stateDir(t)
+	lock := filepath.Join(dir, LockName)
+	target := filepath.Join(t.TempDir(), "elsewhere")
+	os.WriteFile(target, nil, 0o600)
+	if err := os.Symlink(target, lock); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lockFile(lock); err == nil {
+		t.Error("a symlinked lock was followed")
+	}
+	os.Remove(lock)
+	if err := os.Link(target, lock); err != nil {
+		t.Skip("no hard links here")
+	}
+	geteuid = func() int { return 0 }
+	defer func() { geteuid = os.Geteuid }()
+	if _, err := lockFile(lock); err == nil || !strings.Contains(err.Error(), "one link") {
+		t.Errorf("root took a hard-linked lock: %v", err)
+	}
+	os.Remove(lock)
+	unlock, err := lockFile(lock)
+	if err != nil {
+		t.Fatalf("a plain lock as root (own directory): %v", err)
+	}
+	unlock()
+}

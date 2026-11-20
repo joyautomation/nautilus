@@ -244,4 +244,24 @@ func ValidOIDCName(name string) error {
 	return nil
 }
 
+// OIDCName is the OIDC name a username claim's value gives: trimmed, and
+// lowered as ASCII only, after any non-ASCII byte is refused. Lowering
+// first would fold look-alikes into ASCII names (strings.ToLower maps
+// U+0130 'İ' to 'i' and the Kelvin sign to 'k'), and let one account take
+// another's name.
+func OIDCName(raw string) (string, error) {
+	raw = strings.TrimSpace(raw)
+	b := []byte(raw)
+	for i, c := range b {
+		if c > 0x7e {
+			return "", fmt.Errorf("OIDC name %q: it may hold only ASCII letters, digits and - _ . @ + '", raw)
+		}
+		if c >= 'A' && c <= 'Z' {
+			b[i] = c + 'a' - 'A'
+		}
+	}
+	name := string(b)
+	return name, ValidOIDCName(name)
+}
+
 func lower(s string) string { return strings.ToLower(strings.TrimSpace(s)) }

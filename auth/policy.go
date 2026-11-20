@@ -250,6 +250,13 @@ func (p *Policy) compileOIDC(c Settings) error {
 		}
 		return nil
 	}
+	// Each name checked before compileGrants lowers it (strings.ToLower
+	// would fold a look-alike into an ASCII name).
+	for raw := range c.OIDCUsers {
+		if _, err := OIDCName(raw); err != nil {
+			return fmt.Errorf("auth: oidc.users: %v", err)
+		}
+	}
 	if err := p.compileGrants("oidc user", oidcName, c.OIDCUsers, p.oidcUsers); err != nil {
 		return err
 	}

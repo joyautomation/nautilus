@@ -262,7 +262,7 @@ func (s *Store) Pin(name string) (Pin, bool, error) {
 // made it. What someone else changed since the last read is told first
 // (OnChange); the pin made here is not told: the sign-in journals it.
 func (s *Store) PinFirst(name, issuer, subject string, now time.Time) (pin Pin, fresh bool, err error) {
-	if err := sideName(name); err != nil || issuer == "" || subject == "" {
+	if err := sideName(name); err != nil || pinValue(issuer) != nil || pinValue(subject) != nil {
 		return Pin{}, false, fmt.Errorf("pinning %q: an invalid name, or no issuer or subject", name)
 	}
 	s.mu.RLock()
@@ -285,6 +285,8 @@ func (s *Store) PinFirst(name, issuer, subject string, now time.Time) (pin Pin, 
 	}
 	path := PinsPath(s.path)
 	var before, after *Pins
+	var st stamp
+	var serr error
 	err = locked(filepath.Dir(path), path, func() error {
 		if err := checkSide(path); err != nil {
 			return err
@@ -296,6 +298,7 @@ func (s *Store) PinFirst(name, issuer, subject string, now time.Time) (pin Pin, 
 		before = &Pins{Version: p.Version, ChangedBy: p.ChangedBy, ChangedAt: p.ChangedAt, Pins: maps.Clone(p.Pins)}
 		if have, ok := p.Pins[name]; ok {
 			pin, after = have, p
+			st, serr = stat(path)
 			return nil
 		}
 		pin, fresh = Pin{Issuer: issuer, Subject: subject, Pinned: now.UTC().Truncate(time.Second)}, true
@@ -305,12 +308,14 @@ func (s *Store) PinFirst(name, issuer, subject string, now time.Time) (pin Pin, 
 			return err
 		}
 		after = p
+		// The stamp of the file this call wrote, taken under the lock: an
+		// unpin just after must still look like a change to Reload.
+		st, serr = stat(path)
 		return nil
 	})
 	if err != nil {
 		return Pin{}, false, fmt.Errorf("%w (the state directory's %s, %s and %s must be the controller's own: chown them to the user it runs as)", err, LockName, PinsName, FileName)
 	}
-	st, serr := stat(path)
 	s.mu.Lock()
 	old, onChange := s.goodPins, s.onChange
 	if s.err == nil && serr == nil {
