@@ -222,11 +222,17 @@ func (a *auditor) record(e audit.Entry) {
 		e.ID = audit.NewID(e.TS)
 	}
 	a.sweepLocked(now, false)
-	if e.Result != audit.ResultOK && !a.admitLocked(e, now) {
+	if e.Result != audit.ResultOK && !resolves(e) && !a.admitLocked(e, now) {
 		return
 	}
 	a.writeLocked(e)
 }
+
+// resolves reports an entry that resolves another (detail.resolves,
+// oplog_unknown.go): never coalesced, since a summary would lose which
+// entry it resolves. Only this server writes them, bounded by the
+// unknowns it answered.
+func resolves(e audit.Entry) bool { return e.Detail["resolves"] != nil }
 
 // recordBatch journals es as one durable batch: each refusal is counted in
 // its window as record would (and those past their allowance are left
@@ -247,7 +253,7 @@ func (a *auditor) recordBatch(es []audit.Entry) {
 		if e.ID == "" {
 			e.ID = audit.NewID(e.TS)
 		}
-		if e.Result != audit.ResultOK && !a.admitLocked(e, now) {
+		if e.Result != audit.ResultOK && !resolves(e) && !a.admitLocked(e, now) {
 			continue
 		}
 		keep = append(keep, e)

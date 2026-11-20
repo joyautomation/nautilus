@@ -147,7 +147,7 @@ func TestAlarmLapseIsJournalledOnce(t *testing.T) {
 	if e := got["alarm.ack LoFlow"]; e.User != "user:akhan" {
 		t.Errorf("ack LoFlow: %+v", e)
 	}
-	if e := got["alarm.shelve HiTemp"]; e.User != "jsmith" || e.Detail["untilMs"] != int64(99) { // no Principal: By
+	if e := got["alarm.shelve HiTemp"]; e.User != "jsmith" || e.Detail["untilMs"] != int64(99) || e.Detail["principalFrom"] == nil { // no Principal: By, marked a label
 		t.Errorf("shelve HiTemp: %+v", e)
 	}
 	al.Apply(lapse) // applied again: nothing more
@@ -198,9 +198,9 @@ func TestUnknownOutcomeResolved(t *testing.T) {
 		wantResult  string
 		wantOutcome string
 	}{
-		{"unknown then applied", false, false, audit.ResultOK, outcomeApplied},
-		{"applied then unknown", true, false, audit.ResultOK, outcomeApplied},
-		{"unknown then lapsed", false, true, audit.ResultRefused, outcomeLapsed},
+		{"unknown then applied", false, false, audit.ResultOK, outcomeCommitted},
+		{"applied then unknown", true, false, audit.ResultOK, outcomeCommitted},
+		{"unknown then lapsed", false, true, audit.ResultOK, outcomeLapsed},
 	} {
 		u, rec := newTracker()
 		p := proposal("r1")
@@ -216,7 +216,8 @@ func TestUnknownOutcomeResolved(t *testing.T) {
 		}
 		got, ok := rec.next(2 * time.Second)
 		if !ok || got.Result != c.wantResult || got.Detail["outcome"] != c.wantOutcome || got.Detail["resolves"] != "AUDIT1" ||
-			got.Action != "alarm.ack" || got.Target != "HiTemp" || got.User != "user:akhan" || got.Detail["seq"] != uint64(7) {
+			got.Action != actionResolved || got.Detail["action"] != "alarm.ack" || got.Target != "HiTemp" ||
+			got.User != "user:akhan" || got.Detail["seq"] != uint64(7) || got.Detail["principalFrom"] != nil {
 			t.Errorf("%s: %+v (%v)", c.name, got, ok)
 		}
 		if more, ok := rec.next(100 * time.Millisecond); ok {
@@ -247,9 +248,78 @@ func TestUnknownOutcomeStaysUnknown(t *testing.T) {
 		quiet("confirmed", rec)
 	}
 	{
+		// Never committed: another proposal's commit resolves nothing, and
+		// it is still owed when the bound pushes it out.
 		u, rec := newTracker()
 		u.unknown(u.begin(proposal("r1")), "AUDIT1", "alarm.ack", "HiTemp")
+		u.applied(committed(proposal("r2"), 7))
 		quiet("never committed", rec)
+		if !containsReq(u, "r1") {
+			t.Error("never committed: no longer tracked")
+		}
+	}
+	{
+		// Applied, then a second proposal with its request id, then the
+		// first answered unknown: ambiguous, it stays unknown.
+		u, rec := newTracker()
+		p := proposal("r1")
+		a := u.begin(p)
+		u.applied(committed(p, 7))
+		u.begin(p)
+		u.unknown(a, "AUDIT1", "alarm.ack", "HiTemp")
+		quiet("applied, then reused, then unknown", rec)
+	}
+	{
+		// A start heard confirmed but not yet applied here (a forwarded
+		// proposal), its request id reused with another value and answered
+		// unknown: the first one's apply resolves nothing.
+		u, rec := newTracker()
+		a := oplog.Entry{Kind: oplog.KindSubstitute, Tag: "SP", Value: []byte("1"), By: "user:akhan", Req: "client-1"}
+		b := a
+		b.Value = []byte("2")
+		u.confirmed(u.begin(a))
+		u.unknown(u.begin(b), "AUDIT1", "substitute.start", "SP")
+		u.applied(committed(a, 7))
+		quiet("confirmed start, id reused", rec)
+	}
+	{
+		// A start retried with the same requestId and the same content
+		// while the first is confirmed but not yet applied here: the
+		// first's apply is the first's, so the retry stays unknown, and
+		// the first is no longer tracked once applied.
+		u, rec := newTracker()
+		a := oplog.Entry{Kind: oplog.KindSubstitute, Tag: "SP", Value: []byte("1"), By: "user:akhan", Req: "client-1"}
+		first := u.begin(a)
+		u.confirmed(first)
+		u.unknown(u.begin(a), "AUDIT1", "substitute.start", "SP")
+		u.applied(committed(a, 7))
+		quiet("confirmed start, retried identically", rec)
+		if containsTracked(u, first) {
+			t.Error("the confirmed start is still tracked after its apply")
+		}
+	}
+	{
+		// The same, with the first no longer tracked: its value differs, so
+		// its apply is not the second's.
+		u, rec := newTracker()
+		a := oplog.Entry{Kind: oplog.KindSubstitute, Tag: "SP", Value: []byte("1"), GrantedMs: 60000, By: "user:akhan", Req: "client-1"}
+		for _, change := range []func(*oplog.Entry){
+			func(e *oplog.Entry) { e.Value = []byte("2") },
+			func(e *oplog.Entry) { e.GrantedMs = 1 },
+			func(e *oplog.Entry) { e.Until = 5 },
+			func(e *oplog.Entry) { e.AckOnStart = true },
+			func(e *oplog.Entry) { e.Reason = "expired" },
+		} {
+			b := a
+			change(&b)
+			tr := u.begin(b)
+			u.unknown(tr, "AUDIT1", "substitute.start", "SP")
+			u.applied(committed(a, 7))
+			quiet(fmt.Sprintf("different content %+v", b), rec)
+			u.mu.Lock()
+			u.dropLocked(tr)
+			u.mu.Unlock()
+		}
 	}
 	{
 		u, rec := newTracker()
@@ -301,11 +371,16 @@ func TestUnknownOutcomeStaysUnknown(t *testing.T) {
 		quiet("different content", rec)
 	}
 	{
-		u, _ := newTracker()
+		// A restart: the node replays its file before Attach, so the
+		// replayed commit never reaches the tracker, even one that holds
+		// the matching proposal.
+		u, rec := newTracker()
 		p := proposal("r1")
 		u.unknown(u.begin(p), "AUDIT1", "alarm.ack", "HiTemp")
-		restarted, rec := newTracker()
-		restarted.applied(committed(p, 7))
+		al := NewAlarmLog(newTestAlarms(t, map[string]any{"HiTempAlm": true}), func() bool { return false }, noTerm)
+		al.observe(u.applied, func([]audit.Entry) {})
+		e := committed(p, 7)
+		al.Apply(e)
 		quiet("restart", rec)
 	}
 }
@@ -373,7 +448,7 @@ func TestUnknownOutcomeLinksTheSeamEntry(t *testing.T) {
 	for time.Now().Before(deadline) {
 		for _, e := range srv.audit.ring.Recent() {
 			if e.Detail["resolves"] == unknown.ID {
-				if e.Result != audit.ResultOK || e.Target != "HiTemp" || e.Detail["outcome"] != outcomeApplied {
+				if e.Result != audit.ResultOK || e.Action != actionResolved || e.Target != "HiTemp" || e.Detail["outcome"] != outcomeCommitted {
 					t.Fatalf("resolution: %+v", e)
 				}
 				return
@@ -412,5 +487,54 @@ func TestLogsTellOnlyTheirOwnLiveEntries(t *testing.T) {
 		if got := len(heard) == 2; got != c.want || !c.want && len(heard) != 0 {
 			t.Errorf("%s: heard %v", c.name, heard)
 		}
+	}
+}
+
+func containsReq(u *unknowns, req string) bool {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return len(u.byReq[req]) > 0
+}
+
+// Resolutions are never coalesced: each eviction past the bound is its
+// own line, naming the entry it resolves, under its own principal.
+func TestResolutionsAreNotCoalesced(t *testing.T) {
+	srv := New(newTestRuntime(t))
+	u := srv.unknowns
+	for i := 0; i < maxUnknowns+10; i++ {
+		p := proposal(fmt.Sprint("r", i))
+		p.Principal = fmt.Sprint("user:u", i)
+		u.unknown(u.begin(p), fmt.Sprint("AUDIT", i), "alarm.ack", "HiTemp")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		seen := map[string]bool{}
+		for _, e := range srv.audit.ring.Recent() {
+			if r, _ := e.Detail["resolves"].(string); r != "" && e.User == "user:u"+strings.TrimPrefix(r, "AUDIT") {
+				seen[r] = true
+			}
+			if e.Detail["coalesced"] != nil {
+				t.Fatalf("a resolution was coalesced: %+v", e)
+			}
+		}
+		if len(seen) == 10 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d of 10 evictions journalled in full: %v", len(seen), seen)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// A proposal refused before it was proposed (over the log's size cap) is
+// not tracked: its outcome is known.
+func TestProposeForTooLargeIsNotTracked(t *testing.T) {
+	srv := New(newTestRuntime(t))
+	r := srv.withActor(httptest.NewRequest("POST", "/", nil))
+	tooLarge := func(context.Context, oplog.Entry) (oplog.Entry, error) { return oplog.Entry{}, oplog.ErrTooLarge }
+	srv.proposeFor(context.Background(), r, oplog.Entry{Kind: oplog.KindAck, IDs: []string{"HiTemp"}}, true, tooLarge)
+	if n := len(srv.unknowns.order); n != 0 {
+		t.Errorf("%d tracked after a refusal before proposing", n)
 	}
 }

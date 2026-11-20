@@ -315,7 +315,7 @@ func (l *AlarmLog) journalLapse(e oplog.Entry) {
 			if le.Kind == oplog.KindShelve {
 				d["untilMs"] = le.Until
 			}
-			out = append(out, audit.Entry{User: principalOfEntry(le), Source: audit.SourceSystem, Action: "alarm.lapse",
+			out = append(out, audit.Entry{User: principalOfEntryIn(le, d), Source: audit.SourceSystem, Action: "alarm.lapse",
 				Target: id, Result: audit.ResultOK, Detail: d})
 		}
 	}

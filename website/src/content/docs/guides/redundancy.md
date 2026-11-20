@@ -463,16 +463,22 @@ the witness answers" until one of them returns; a substitute's expiry
 still happens on time. A change sent just as a copy went away can be
 answered "outcome unknown": it may still take effect, so re-read before
 sending it again. The journal records it with result `unknown`. If the
-controller that answered later sees that change commit, it adds an entry
-for the same action with `detail.resolves` naming the unknown one:
+controller that answered later sees that change in the log, it adds an
+`oplog.resolved` entry: `detail.resolves` names the unknown entry and
+`detail.action` its action. `detail.outcome` is one of:
 
-- `ok` if the change was carried out;
-- `refused` if it lapsed (committed too late, never carried out);
-- `unknown` with `detail.outcome` "stays unknown (evicted)" if it stopped tracking it.
+- `committed`: the log has it and this controller applied it in order.
+  That doesn't prove it took effect: an alarm engine or the runtime can
+  still refuse it when applying it. Read the state.
+- `lapsed`: committed too late, so it was never carried out.
+- `stays unknown (evicted)`: the controller stopped tracking it.
 
-It does that only on evidence. A change that never commits, one whose
-controller restarts first, and a substitute start sent without a
-`requestId` stay `unknown`. An operator's alarm acknowledgement or shelve
+It does that only on evidence. These stay `unknown`:
+
+- a change that never commits;
+- one whose controller restarts first;
+- a substitute start sent without a `requestId`;
+- a start retried with the same `requestId` while the first is still tracked (both stay unknown). An operator's alarm acknowledgement or shelve
 that lapses is journalled as `alarm.lapse`, one entry per alarm, under
 the operator's name.
 
