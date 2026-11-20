@@ -539,10 +539,12 @@ and the audit line names the fields the pin holds. From then on:
 - an identity that cannot be read fails with `device_unverified`.
   `tiad.Openness` has no proven online read yet (a read-only probe is
   planned on #789). **So today, once a CPU is pinned, its compare and
-  download are refused** until an online read exists or the pin is
-  removed by hand. On the bench CPU nothing is lost, since its TLS
-  question refuses them already. A CPU that asks no TLS question could be
-  compared before its first upload and cannot after it.
+  download are refused** until an online read is proven: that is the
+  fail-closed design (decided on #789, 2026-11-20). A re-pin records a new
+  identity but does not lift this, and no call removes a pin. On the bench
+  CPU nothing is lost, since its TLS question refuses them already. A CPU
+  that asks no TLS question could be compared before its first upload and
+  cannot after it.
 
 **What it catches, and what it does not.** The device pin catches a
 different model or a firmware change at the address. It does **not** catch
@@ -578,7 +580,10 @@ how to re-pin. `install-tiad.ps1` locks the directory like the token
 (Administrators and SYSTEM only) and never wipes it, so a reinstall keeps
 every pin. The agent refuses to start with the directory inside the work
 dir, where the files API would reach it. A pin file it cannot read fails
-closed: online calls to that address are refused until it is fixed by hand.
+closed: online calls to that address are refused until it is replaced
+through the audited re-pin (`replace: true`, whose audit line records the
+old pin as unreadable). Editing or deleting a pin file by hand is
+unaudited and not a supported path.
 
 ## 4. Online plane
 

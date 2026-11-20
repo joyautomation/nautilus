@@ -154,7 +154,8 @@ func contractPinUnverified(t *testing.T, start Starter) {
 	if _, err := s.Compare(ctx); tiad.Kind(err) != tiad.KindDeviceUnverified {
 		t.Fatalf("compare to a pinned CPU it cannot identify: %v", err)
 	}
-	if _, err := s.Download(ctx, dl); tiad.Kind(err) != tiad.KindDeviceUnverified || !strings.Contains(err.Error(), "cannot be checked") {
+	if _, err := s.Download(ctx, dl); tiad.Kind(err) != tiad.KindDeviceUnverified || !strings.Contains(err.Error(), "cannot be checked") ||
+		!strings.Contains(err.Error(), "lifts only once tiad can read a CPU's identity online") || !strings.Contains(err.Error(), "cannot lift this") {
 		t.Fatalf("download to a pinned CPU it cannot identify: %v", err)
 	}
 	if l := a.Loaded(t); len(l) != 0 {

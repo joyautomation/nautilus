@@ -170,7 +170,7 @@ namespace Tiad
         {
             return new TiadException(500, Kinds.OperationFailed,
                 "the device pin for " + address + " is unreadable (" + why + "); tiad refuses online calls to " + address +
-                " until it is fixed or removed by hand in the pins directory");
+                " until it is replaced: POST /v1/pins/" + address + " with replace: true (audited)");
         }
 
         // Device is the device pin for address, or null when there is none.

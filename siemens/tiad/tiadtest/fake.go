@@ -1103,7 +1103,7 @@ func (f *Fake) checkDevicePin(address, call string) *failure {
 	}
 	if f.NoIdentify {
 		return fail(http.StatusConflict, tiad.KindDeviceUnverified,
-			"%s has a device pin, but its identity could not be read (this agent's TIA side cannot read a CPU's identity online yet), so the pin cannot be checked; the %s was refused before it began", address, call)
+			"%s has a device pin, but its identity could not be read (this agent's TIA side cannot read a CPU's identity online yet), so the pin cannot be checked; the %s was refused before it began; it lifts only once tiad can read a CPU's identity online (#789): a re-pin (POST /v1/pins/%s, audited) records a new identity but cannot lift this", address, call, address)
 	}
 	now := f.device()
 	if diff := tiad.DeviceMismatch(pinned, now); diff != "" {

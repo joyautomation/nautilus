@@ -88,7 +88,8 @@ func TestAgentFailsClosedOnABadPinFile(t *testing.T) {
 			p, s := downloadReady(t, "TIAD_PINS_DIR="+dir)
 			unreadable := func(what string, err error) {
 				t.Helper()
-				if tiad.Kind(err) != tiad.KindOperationFailed || !strings.Contains(err.Error(), "the device pin for 192.0.2.10 is unreadable") {
+				if tiad.Kind(err) != tiad.KindOperationFailed || !strings.Contains(err.Error(), "the device pin for 192.0.2.10 is unreadable") ||
+					!strings.Contains(err.Error(), "POST /v1/pins/192.0.2.10 with replace: true") {
 					t.Errorf("%s with a bad pin file: %v", what, err)
 				}
 			}
@@ -105,6 +106,21 @@ func TestAgentFailsClosedOnABadPinFile(t *testing.T) {
 			}
 			if b, _ := os.ReadFile(filepath.Join(dir, "192.0.2.10.device")); string(b) != body {
 				t.Fatalf("the bad pin file was overwritten: %q", b)
+			}
+			// The fix the refusal names: an audited re-pin, never a pin
+			// without replace.
+			c := p.Client()
+			dev := tiad.DeviceIdentity{Order: "6ES7 510-1DK03-0AB0", Firmware: "V3.1"}
+			_, err = c.SetPin(ctx, "192.0.2.10", tiad.PinRequest{Device: &dev, Announced: true})
+			unreadable("a pin without replace", err)
+			if _, err := c.SetPin(ctx, "192.0.2.10", tiad.PinRequest{Device: &dev, Replace: true, Announced: true}); err != nil {
+				t.Fatalf("re-pin over a bad pin file: %v", err)
+			}
+			if !strings.Contains(p.Log(), `audit pin replace address="192.0.2.10" previous=unreadable`) {
+				t.Fatalf("the re-pin's audit line does not say the old pin was unreadable:\n%s", p.Log())
+			}
+			if _, err := s.Compare(ctx); err != nil {
+				t.Fatalf("compare after the re-pin: %v", err)
 			}
 		})
 	}

@@ -65,23 +65,42 @@ namespace Tiad
             string bad = d.Validate();
             if (bad != null) throw TiadException.BadRequest("pin: {0}", bad);
             if (!announced) throw TiadException.BadRequest("{0}", "pin: announce it first (announced: true): a pin decides which CPU tiad trusts");
-            DeviceIdentity previous;
+            DeviceIdentity previous = null;
             lock (pinsMu)
             {
-                previous = pins.Device(address);
+                // An unreadable pin is replaced only with replace: true, and
+                // the audit line says it was unreadable.
+                bool unreadable = false;
+                try
+                {
+                    previous = pins.Device(address);
+                }
+                catch (TiadException)
+                {
+                    if (!replace) throw;
+                    unreadable = true;
+                }
                 if (previous != null && !replace)
                 {
                     throw TiadException.BadRequest("pin: {0} is pinned already ({1}); replace it with replace: true", address, previous.Describe());
                 }
-                if (previous == null && replace) throw TiadException.NotFound("pin: {0} has no device pin to replace", address);
+                if (previous == null && !unreadable && replace) throw TiadException.NotFound("pin: {0} has no device pin to replace", address);
                 pins.SetDevice(address, d, replace ? "re-pinned by hand" : "pinned by hand");
                 Log.Line("audit pin {0} address={1} previous={2} device={3} holds={4}",
                     replace ? "replace" : "set", Json.Quote(address),
-                    previous == null ? "none" : Json.Write(previous.ToJson()), Json.Write(d.ToJson()), Holds(d));
+                    unreadable ? "unreadable" : previous == null ? "none" : Json.Write(previous.ToJson()), Json.Write(d.ToJson()), Holds(d));
             }
             Obj o = PinJson(address, d);
             if (previous != null) o["previous"] = previous.ToJson();
             return o;
+        }
+
+        // Unverifiable is what lifts a device_unverified refusal, and what
+        // does not.
+        static string Unverifiable(string address)
+        {
+            return "; it lifts only once tiad can read a CPU's identity online (#789): a re-pin (POST /v1/pins/" + address +
+                ", audited) records a new identity but cannot lift this";
         }
 
         static TiadException Changed(string address, DeviceIdentity pinned, DeviceIdentity now, string diff, string what)
@@ -105,7 +124,7 @@ namespace Tiad
             {
                 Log.Line("audit pin unverified call={0} session={1} address={2} why={3}", call, s.Id, Json.Quote(address), Json.Quote(bad));
                 throw new TiadException(409, Kinds.DeviceUnverified,
-                    address + " has a device pin, but its identity could not be read (" + bad + "), so the pin cannot be checked; the " + call + " was refused before it began");
+                    address + " has a device pin, but its identity could not be read (" + bad + "), so the pin cannot be checked; the " + call + " was refused before it began" + Unverifiable(address));
             }
             string diff = DeviceIdentity.Mismatch(pinned, now);
             if (diff != null)
