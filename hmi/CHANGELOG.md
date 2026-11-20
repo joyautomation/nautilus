@@ -21,7 +21,8 @@
   port of Go's `path.Match`, tested against the controller's own table). `PortParameters` shows a
   lock while a write would ask for the password. A convenience only: the controller decides.
 - **Acknowledgements recorded as the signed-in user** (#708 PR 7b): the ack and shelve dialogs drop
-  the operator-name field and say whose record it is (`recordedAs`).
+  the operator-name field and say whose record it is (`recordedAs`). The controller decides it: a
+  request acting as a user is recorded under that user, whatever `by` it sends.
 - **`AccountChip`, `ReferralBanner`** (#708 PR 7b): who is signed in, the password window, Sign out
   (through the referral rules on a standby) or Sign in; a standby's unfollowed referral with the
   leader's link. `AuthClient.can`, `.user`, `.signOut`, `currentAuth()`, `passwordState`.

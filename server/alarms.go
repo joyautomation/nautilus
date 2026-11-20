@@ -258,10 +258,10 @@ func (s *Server) handleAlarmAck(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if s.alarmLog != nil {
-		s.alarmAckThroughLog(w, r, ids, req.By)
+		s.alarmAckThroughLog(w, r, ids, s.recordBy(r, req.By))
 		return
 	}
-	n, err := s.alarms.Ack(ids, req.By)
+	n, err := s.alarms.Ack(ids, s.recordBy(r, req.By))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -313,10 +313,10 @@ func (s *Server) handleAlarmShelve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.alarmLog != nil {
-		s.shelveThroughLog(w, r, req.ID, until, req.By)
+		s.shelveThroughLog(w, r, req.ID, until, s.recordBy(r, req.By))
 		return
 	}
-	if err := s.alarms.Shelve(req.ID, until, req.By); err != nil {
+	if err := s.alarms.Shelve(req.ID, until, s.recordBy(r, req.By)); err != nil {
 		http.Error(w, err.Error(), alarmErrStatus(err))
 		return
 	}
@@ -346,10 +346,10 @@ func (s *Server) handleAlarmUnshelve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.alarmLog != nil {
-		s.shelveThroughLog(w, r, req.ID, time.Time{}, req.By)
+		s.shelveThroughLog(w, r, req.ID, time.Time{}, s.recordBy(r, req.By))
 		return
 	}
-	if err := s.alarms.Unshelve(req.ID, req.By); err != nil {
+	if err := s.alarms.Unshelve(req.ID, s.recordBy(r, req.By)); err != nil {
 		http.Error(w, err.Error(), alarmErrStatus(err))
 		return
 	}
@@ -443,4 +443,19 @@ func csv(s string) []string {
 		}
 	}
 	return out
+}
+
+// recordBy is the name an acknowledgement or a shelve is recorded under in
+// the alarm journal: a request that acts as a user (a browser sign-in, a
+// personal access token) is that user, whatever name the client sent, so a
+// signed-in operator cannot record another's name (#708 PR 7b). A token
+// (NAUTILUS_TOKEN, a service token) or no credential at all keeps the name
+// the client typed, as before: an HMI behind a service token names its
+// operator that way. The audit journal names the principal either way, with
+// the typed name in detail.by.
+func (s *Server) recordBy(r *http.Request, typed string) string {
+	if a := s.actorOf(r); a.pr.Kind == auth.KindUser && a.pr.Name != "" {
+		return a.pr.Name
+	}
+	return typed
 }

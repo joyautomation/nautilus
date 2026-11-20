@@ -477,3 +477,73 @@ func TestJournalScanStopsAtTheCap(t *testing.T) {
 		t.Errorf("exhausted journal = %d events, truncated %v; want 0, false", len(out.Events), out.Truncated)
 	}
 }
+
+// A signed-in user's acknowledgement or shelve is recorded in the alarm
+// journal as that user, whatever name the client sent (#708 PR 7b): the
+// identity is the session's or the personal access token's, decided here,
+// never a name a page typed. A token keeps the name the client sends, as
+// before (an HMI behind a service token names its operator so).
+func TestAckAndShelveRecordTheSignedInUser(t *testing.T) {
+	// patServer's engine (auditServer's): HiTemp is active, LoFlow is not.
+	srv, toks, _ := patServer(t)
+	eng := srv.alarms
+	record := func(id string) alarm.Record {
+		t.Helper()
+		for _, rec := range eng.Records() {
+			if rec.ID == id {
+				return rec
+			}
+		}
+		t.Fatalf("no alarm %s", id)
+		return alarm.Record{}
+	}
+
+	// A personal access token acts as its user.
+	if rec := call(t, srv, "POST", "/api/alarms/ack", `{"ids":["HiTemp"],"by":"someone-else"}`, bearer(toks["akhan"])); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"acked":1`) {
+		t.Fatalf("ack with a PAT: %d %s (records %+v)", rec.Code, rec.Body, eng.Records())
+	}
+	if got := record("HiTemp").AckBy; got != "akhan" {
+		t.Errorf("ack by a PAT recorded as %q, want akhan", got)
+	}
+
+	// A browser sign-in too: shelve and unshelve.
+	c := signIn(t, srv, "akhan")
+	if rec := call(t, srv, "POST", "/api/alarms/shelve", `{"id":"HiTemp","seconds":300,"by":"someone-else"}`, withCookie(c.Value), ownOrigin); rec.Code != 200 {
+		t.Fatalf("shelve signed in: %d %s", rec.Code, rec.Body)
+	}
+	if got := record("HiTemp").ShelfBy; got != "akhan" {
+		t.Errorf("shelve signed in recorded as %q, want akhan", got)
+	}
+	if rec := call(t, srv, "POST", "/api/alarms/unshelve", `{"id":"HiTemp","by":"someone-else"}`, withCookie(c.Value), ownOrigin); rec.Code != 200 {
+		t.Fatalf("unshelve signed in: %d %s", rec.Code, rec.Body)
+	}
+	evs, err := eng.Journal(time.Time{}, time.Now().Add(time.Minute), alarm.Filter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range evs {
+		if e.By == "someone-else" {
+			t.Errorf("the alarm journal recorded the client's name: %+v", e)
+		}
+	}
+	// The audit journal keeps the typed name as said, beside the principal.
+	if es := srv.audit.ring.Recent(); len(es) == 0 || es[0].User != "user:akhan" || es[0].Detail["by"] != "someone-else" {
+		t.Errorf("audit entry: %+v", es[0])
+	}
+}
+
+// Without a user (no auth: block, a token), the name the client sends is
+// the record, as it always was.
+func TestAckByTokenKeepsTheTypedName(t *testing.T) {
+	cond := map[string]any{"HiTempAlm": true}
+	srv, eng := alarmServer(t, cond)
+	eng.Evaluate()
+	if rec := do(t, srv, "POST", "/api/alarms/ack", `{"ids":["HiTemp"],"by":"operator1"}`); rec.Code != 200 {
+		t.Fatalf("ack: %d %s", rec.Code, rec.Body)
+	}
+	for _, rec := range eng.Records() {
+		if rec.ID == "HiTemp" && rec.AckBy != "operator1" {
+			t.Errorf("ack recorded as %q, want operator1", rec.AckBy)
+		}
+	}
+}
