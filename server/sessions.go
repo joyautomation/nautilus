@@ -76,6 +76,15 @@ func newSessions(life time.Duration) *sessions {
 	return &sessions{now: time.Now, life: life, byHash: map[string]*session{}}
 }
 
+// clock is the store's time now, its clock read under the lock (a test
+// swaps it while streams re-check).
+func (ss *sessions) clock() time.Time {
+	ss.mu.Lock()
+	now := ss.now
+	ss.mu.Unlock()
+	return now()
+}
+
 // sessionHash is the SHA-256 of a session id, hex: the store's key and the
 // journal's "session".
 func sessionHash(id string) string {

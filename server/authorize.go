@@ -167,7 +167,7 @@ func (s *Server) resolveActor(r *http.Request) actor {
 		return actor{pr: pr}
 	}
 	if se, ok := s.sessionOf(r); ok {
-		return actor{pr: auth.User(se.user), session: &se, at: s.sessions.now()}
+		return actor{pr: auth.User(se.user), session: &se, at: s.sessions.clock()}
 	}
 	return actor{pr: auth.Anonymous}
 }
