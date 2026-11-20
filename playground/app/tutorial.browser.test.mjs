@@ -50,6 +50,8 @@ const lesson = (id) => ({
 	start: tree(join(lessonsDir, id, 'start')),
 	solution: tree(join(lessonsDir, id, 'solution')),
 	check: tree(join(lessonsDir, id, 'check')),
+	next: readFileSync(join(lessonsDir, id, 'lesson.md'), 'utf8').match(/^next:\s*(\S+)/m)?.[1],
+	carry: (readFileSync(join(lessonsDir, id, 'lesson.md'), 'utf8').match(/^carry:\s*\[(.*)\]/m)?.[1] ?? '').split(',').map((x) => x.trim()).filter(Boolean),
 	open: (readFileSync(join(lessonsDir, id, 'lesson.md'), 'utf8').match(/^open:\s*\[(.*)\]/m)?.[1] ?? 'nautilus.yaml').split(',').map((s) => s.trim())
 });
 
@@ -150,6 +152,33 @@ for (const id of shell ? lessonIds : []) {
 			await saidAbout(/Back to the starting project/);
 			await press('check');
 			await saidAbout(/still fail/);
+		} finally {
+			await b.close();
+		}
+	});
+}
+
+// Next: the solved step's work moves on, but only the files the next lesson
+// names in carry:; the rest (the manifest, say) is the next step's own.
+for (const id of shell ? lessonIds : []) {
+	const next = lesson(id).next;
+	if (!next || next === 'none') continue;
+	test(`${id}: Next carries only what ${next} lists in carry:`, { timeout: 300000 }, async () => {
+		const to = lesson(next);
+		const b = await Browser.launch();
+		try {
+			await b.navigate(`${base}/learn/interactive/${id}/`);
+			await waitFor(b, 'controls enabled', `!document.getElementById('check').disabled`);
+			await b.eval(`document.getElementById('solve').click()`);
+			await waitFor(b, 'solution loaded', `/solution is loaded/.test(document.getElementById('result').innerText)`, 60000);
+			await waitFor(b, 'next enabled', `!document.getElementById('next').disabled`, 10000);
+			await b.eval(`document.getElementById('next').click()`);
+			await waitFor(b, 'next lesson page', `location.pathname === '/learn/interactive/${next}/'`, 60000);
+			await waitFor(b, 'controls enabled', `!document.getElementById('check').disabled`);
+			const files = JSON.parse(await b.eval(`(async () => JSON.stringify(await document.querySelector('iframe').contentWindow.nautilusPlayground.lesson.files()))()`));
+			const from = lesson(id).solution;
+			const want = { ...to.start, ...Object.fromEntries(to.carry.map((n) => [n, from[n]])) };
+			assert.deepEqual(files, want);
 		} finally {
 			await b.close();
 		}
