@@ -378,6 +378,8 @@ NAUTILUS_TLS_CERT=/run/credentials/nautilus.service/tls.crt
 NAUTILUS_TLS_KEY=/run/credentials/nautilus.service/tls.key
 ```
 
+Credentials need a machine or a virtual machine systemd can mount them on: in an unprivileged LXC container `CREDENTIALS_DIRECTORY` stays empty and the controller fails to start with `tls: stat /run/credentials/nautilus.service/tls.crt: permission denied`. Use a virtual machine or a real machine (a privileged container has not been tried).
+
 systemd copies credentials when the service starts, so **under `DynamicUser` a renewal needs a service restart**: the controller's own re-reading never sees the new files. With certbot, restart from the deploy hook:
 
 ```sh
