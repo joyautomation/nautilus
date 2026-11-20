@@ -335,8 +335,7 @@ func TestPairLogRefusesWithoutAMajority(t *testing.T) {
 		if who == "" {
 			return false
 		}
-		code, body, _ := r.call(who, "DELETE", "/api/substitutes/"+itoa(id), "")
-
+		code, _, _ := r.call(who, "DELETE", "/api/substitutes/"+itoa(id), "")
 		return code == http.StatusOK
 	})
 }
