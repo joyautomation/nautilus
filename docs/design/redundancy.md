@@ -350,6 +350,10 @@ redundancy:
     - **The standby probes its peer as well as the witness**, every look. A standby cut
       from the witness would otherwise be heard by nobody, and its clone would be the only
       boot of its name any voter sees.
+    - **A term goes to one boot of a name.** A voter never grants a term it granted to one
+      boot of a name to another boot of it, even once that promise has run out: the other
+      boot asks above it. Otherwise a clone and its original could each hold the same term
+      (I4, found in the rich clone schedules).
     - **A voter yields its own round** (`YieldTo`) only to a request it would grant.
     - **Wire: vote protocol version 3.**
     - **Each piece is pinned** by a schedule where it alone stands between the pair and two
@@ -359,6 +363,12 @@ redundancy:
         always reaches its own voter first, so the discount covers it.
       - **First-heard precedence among relays.** A second boot already refuses new grants
         to both.
+      - **#1028's rule** (refuse a name under another nonce while a running promise holds
+        it). A promise and the nonce that asked for it are live for the same window, so the
+        name refusal covers it whole. Its test now pins `dup_name_ignored`.
+      - **The relay rules (a) and (b) are kept,** pinned at the voter, where each still
+        refuses a bad grant alone. No clone schedule inside the claim needs them since step
+        1.
     - **The measure.** `TestCloneRaceSeeds` covers the four cases, plus rich schedules (a
       clone with one to three of a cut, restart, unhealthy controller, delay or loss). Every
       oracle but I7 is on. 0 two-leader runs in 20,000 per case, and in 200,000 clone
@@ -370,7 +380,10 @@ redundancy:
         original beside the witness and the clone beside the peer, or the mirror. Once the
         other boot ages out (a lease), no voter on either side sees two, and each side holds
         two of the three names, since the duplicated voter counts on both sides.
-        `TestMeasureCloneSplit` gives two leaders in 2,000 of 2,000 runs of each shape.
+        `TestMeasureCloneSplit` gives two leaders in 2,000 of 2,000 runs of each shape. An
+        original cut from both other voters, with the clone leading meanwhile, can also
+        come back at a lower term than the clone's (I2): a device that fences by term
+        refuses it until its next re-term, a look or so later.
       - **The 3c fix: a sticky confirmed-duplicate mark.** A voter that has seen two boots
         of a name interleaved keeps refusing that name and discounting its vote until an
         operator clears it, so a split after the clone was seen leaves no leader on either
