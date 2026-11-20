@@ -1,0 +1,119 @@
+# Check for "Count parcels". Each pulse is the eye blocked for a few scans, then clear.
+tests:
+  - name: a parcel that blocks the beam for several scans is counted once, not once per scan
+    steps:
+      - given: { Eye: true }
+        scans: 6
+      - given: { Eye: false }
+        scans: 2
+        expect: { Count: 1 }
+
+  - name: three parcels are counted as three
+    steps:
+      - given: { Eye: true }
+        scans: 3
+      - given: { Eye: false }
+        scans: 2
+      - given: { Eye: true }
+        scans: 3
+      - given: { Eye: false }
+        scans: 2
+      - given: { Eye: true }
+        scans: 3
+      - given: { Eye: false }
+        scans: 2
+        expect: { Count: 3 }
+
+  - name: Reset sets the count back to 0
+    steps:
+      - given: { Eye: true }
+        scans: 3
+      - given: { Eye: false }
+        scans: 2
+      - given: { Eye: true }
+        scans: 3
+      - given: { Eye: false }
+        scans: 2
+      - given: { Eye: true }
+        scans: 3
+      - given: { Eye: false }
+        scans: 2
+      - given: { Reset: true }
+        scans: 2
+        expect: { Count: 0, Full: false }
+
+  - name: Full is still off after four parcels
+    steps:
+      - given: { Eye: true }
+        scans: 3
+      - given: { Eye: false }
+        scans: 2
+      - given: { Eye: true }
+        scans: 3
+      - given: { Eye: false }
+        scans: 2
+      - given: { Eye: true }
+        scans: 3
+      - given: { Eye: false }
+        scans: 2
+      - given: { Eye: true }
+        scans: 3
+      - given: { Eye: false }
+        scans: 2
+        expect: { Count: 4, Full: false }
+
+  - name: Full comes on with the fifth parcel
+    steps:
+      - given: { Eye: true }
+        scans: 3
+      - given: { Eye: false }
+        scans: 2
+      - given: { Eye: true }
+        scans: 3
+      - given: { Eye: false }
+        scans: 2
+      - given: { Eye: true }
+        scans: 3
+      - given: { Eye: false }
+        scans: 2
+      - given: { Eye: true }
+        scans: 3
+      - given: { Eye: false }
+        scans: 2
+      - given: { Eye: true }
+        scans: 3
+      - given: { Eye: false }
+        scans: 2
+        expect: { Count: 5, Full: true }
+
+  - name: the count keeps going after Full
+    steps:
+      - given: { Eye: true }
+        scans: 3
+      - given: { Eye: false }
+        scans: 2
+      - given: { Eye: true }
+        scans: 3
+      - given: { Eye: false }
+        scans: 2
+      - given: { Eye: true }
+        scans: 3
+      - given: { Eye: false }
+        scans: 2
+      - given: { Eye: true }
+        scans: 3
+      - given: { Eye: false }
+        scans: 2
+      - given: { Eye: true }
+        scans: 3
+      - given: { Eye: false }
+        scans: 2
+      - given: { Eye: true }
+        scans: 3
+      - given: { Eye: false }
+        scans: 2
+      - given: { Eye: true }
+        scans: 3
+      - given: { Eye: false }
+        scans: 2
+        expect: { Count: 7, Full: true }
