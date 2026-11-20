@@ -166,6 +166,16 @@ describe('the leader a referral may open', () => {
 		]) {
 			if (leaderTarget(bad, PAGE) !== null) throw new Error(`followed ${JSON.stringify(bad)}`);
 		}
+		// From a plain-http page too, where no downgrade rule stands in front.
+		for (const bad of ['javascript:alert(1)', 'data:text/html,x', 'file:///etc/passwd', 'ftp://plc-b.example', 'ws://plc-b.example']) {
+			let got: string | null = 'threw';
+			try {
+				got = leaderTarget(bad, 'http://10.0.0.7:8086/');
+			} catch {
+				/* a throw is a failure too */
+			}
+			if (got !== null) throw new Error(`from http, followed ${JSON.stringify(bad)}: ${got}`);
+		}
 		expect(leaderTarget(null, PAGE)).toBeNull();
 		expect(leaderTarget(undefined, PAGE)).toBeNull();
 	});
