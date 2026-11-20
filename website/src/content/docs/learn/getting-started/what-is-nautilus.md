@@ -62,10 +62,9 @@ these pages say what carries over:
   instruction you know to its nautilus form.
 - **From Siemens or CODESYS:** [TIA Portal](/coming-from/tia-portal/) and
   [CODESYS](/coming-from/codesys/).
-- **From SCADA (Ignition, Kepware, Wonderware):** the controller serves its
-  tags over [OPC UA](/guides/opcua-server/) and reads other servers with
-  [an OPC UA client](/guides/opcua-client/); [operator
-  screens](/guides/operator-screens/) are files, not a gateway.
+- **From SCADA (Ignition, Kepware, Wonderware):** [Coming from
+  SCADA](/coming-from/scada/) maps tag providers, UDTs, alarm pipelines,
+  views and OPC UA connections to their nautilus form.
 - **From software development:** every value is also available over an
   [HTTP API](/guides/http-api/), the project builds in CI like any other,
   and [an AI agent](/guides/ai-assistants/) can work on it from the files.

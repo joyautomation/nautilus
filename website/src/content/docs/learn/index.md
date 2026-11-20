@@ -18,6 +18,15 @@ run in your browser and, later, a short video.
 4. [Read the dashboard and the tags](/learn/getting-started/dashboard-and-tags/)
 5. [When something goes wrong](/learn/getting-started/when-something-goes-wrong/)
 
+## Interactive lessons
+
+These run in your browser: the lesson on the left, a controller on the right,
+and a **Check** button that tests your answer.
+
+1. [First program: blink an output](/learn/interactive/b1-blink/)
+2. [A motor start/stop in ladder (the seal-in)](/learn/interactive/b2-seal-in/)
+3. [A timer: warn before the motor starts](/learn/interactive/b3-horn-delay/)
+
 More tracks follow: programming, I/O and protocols, operator screens,
 deploying, and working with an AI agent. Until they are here, these guides
 cover them:

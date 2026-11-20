@@ -129,6 +129,7 @@ export default defineConfig({
         {
           label: 'Coming from…',
           items: [
+            { slug: 'coming-from/scada' },
             { slug: 'coming-from/studio-5000' },
             { slug: 'coming-from/tia-portal' },
             { slug: 'coming-from/codesys' },
