@@ -547,8 +547,15 @@ and the audit line names the fields the pin holds. From then on:
   cannot after it.
 
 **What it catches, and what it does not.** The device pin catches a
-different model or a firmware change at the address. It does **not** catch
-an identical CPU swapped in, and it does not catch a machine in the middle
+different model, or firmware of another major.minor version, at the
+address. The firmware it holds is the station's configured version
+(`V3.1`), not the CPU's full one: the bench CPU runs 3.1.3, and a patch
+update (3.1.2 to 3.1.3) is not in the project, so it is **not** caught. A
+future online read returns the full version; the plan is to compare the
+firmware at the pin's precision (a `V3.1` pin matches any 3.1.x), with a
+three-part value recorded only through an audited re-pin and then compared
+exactly. That is a rule change in both copies, made with the read. It
+does **not** catch an identical CPU swapped in, and it does not catch a machine in the middle
 on the first contact. The serial number and the MAC address would catch a
 like-for-like swap, but the uploaded project holds neither. So they are
 fields of the pin now, held as **not read** (`null`, never `""`, which
@@ -570,8 +577,11 @@ pinned address, and refuse the blind upload opt-in there.
 | `POST /v1/pins/{address}` | `{device, replace, announced}` → `{address, device, holds, previous?}`. A first pin before any contact (`replace: false`), or a re-pin after a deliberate replacement or firmware update (`replace: true`, which needs an existing pin) |
 
 The address must be a strict dotted quad in `TIAD_TARGETS`, and the call
-must be announced. Every pin, first trust and refusal is an audit line
-with the old and new values. A pin is never deleted or changed silently.
+must be announced. Every pin set or replaced, every first trust, and every
+online call a pin refuses (changed, unverified or unreadable) is an audit
+line with the values involved; so is the pin inventory at each start, so
+a pin that vanished between runs shows. A malformed pin request (400) is
+not. A pin is never deleted or changed silently.
 
 **Storage.** One file per address in `TIAD_PINS_DIR`
 (`%ProgramData%\tiad\pins`): `<address>.device`, whose first line is the
@@ -579,11 +589,18 @@ identity as JSON, followed by comment lines saying what it is, when, and
 how to re-pin. `install-tiad.ps1` locks the directory like the token
 (Administrators and SYSTEM only) and never wipes it, so a reinstall keeps
 every pin. The agent refuses to start with the directory inside the work
-dir, where the files API would reach it. A pin file it cannot read fails
-closed: online calls to that address are refused until it is replaced
-through the audited re-pin (`replace: true`, whose audit line records the
-old pin as unreadable). Editing or deleting a pin file by hand is
-unaudited and not a supported path.
+dir, where the files API would reach it, and when it cannot create, list
+and write it. Only a pin file that is not there means "no pin": any other
+failure to read one, a missing or unreadable directory included, fails
+closed, and online calls to that address are refused.
+- A pin whose **content** is corrupt can be replaced through the audited
+  re-pin (`replace: true`). Its audit line keeps why it was corrupt and
+  its first line, bounded.
+- A pin that **cannot be read** (an I/O or permission error) is never
+  replaced: its identity is unknown, not wrong. Fix the access first.
+
+Editing or deleting a pin file by hand is unaudited and not a supported
+path.
 
 ## 4. Online plane
 

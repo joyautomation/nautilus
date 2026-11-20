@@ -140,18 +140,62 @@ namespace Tiad
         }
     }
 
+    // PinRead is what reading one pin file found.
+    public enum PinState
+    {
+        None,         // no file: the address is not pinned
+        Ok,           // a valid pin
+        Corrupt,      // the file was read, but it is not a valid pin
+        Inaccessible, // the file or its directory could not be read
+    }
+
+    public sealed class PinRead
+    {
+        public PinState State;
+        public DeviceIdentity Device;
+        public string Why = "";
+        // Raw is the file's first line, for the audit of a corrupt pin.
+        public string Raw = "";
+    }
+
     // PinStore keeps one file per pinned CPU address in the pins directory
     // (TIAD_PINS_DIR): <address>.device, whose first line is the identity
     // as JSON, then comment lines saying what it is and how to re-pin. The
     // directory is outside the work dir, so the files API never reaches it.
+    //
+    // Only a file that is not there is "no pin". Any other failure to read
+    // one, a missing or unreadable directory included, fails closed: a pin
+    // that cannot be read must never let a changed CPU through.
     public sealed class PinStore
     {
         readonly string dir;
         readonly object mu = new object();
 
-        public PinStore(string dir)
+        PinStore(string dir)
         {
             this.dir = dir;
+        }
+
+        // Open creates the pins directory if needed and proves it usable
+        // (a listing, and a file written, read back and removed). The agent
+        // refuses to start otherwise.
+        public static PinStore Open(string dir)
+        {
+            try
+            {
+                Directory.CreateDirectory(dir);
+                Directory.GetFiles(dir);
+                string probe = Path.Combine(dir, ".probe-" + Guid.NewGuid().ToString("N"));
+                File.WriteAllText(probe, "tiad pins directory probe\n");
+                if (File.ReadAllText(probe) != "tiad pins directory probe\n") throw new IOException("a probe file read back differently");
+                File.Delete(probe);
+            }
+            catch (Exception e)
+            {
+                throw new ConfigException("TIAD_PINS_DIR " + dir + " is not usable (" + e.GetType().Name + ": " + e.Message +
+                    "): tiad refuses to start rather than read every device pin as missing");
+            }
+            return new PinStore(dir);
         }
 
         public string Dir
@@ -166,32 +210,36 @@ namespace Tiad
             return Path.Combine(dir, address + ".device");
         }
 
-        static TiadException Unreadable(string address, string why)
+        public static TiadException Unreadable(string address, string why)
         {
+            Log.Line("audit pin unreadable address={0} why={1}", Json.Quote(address), Json.Quote(why));
             return new TiadException(500, Kinds.OperationFailed,
                 "the device pin for " + address + " is unreadable (" + why + "); tiad refuses online calls to " + address +
-                " until it is replaced: POST /v1/pins/" + address + " with replace: true (audited)");
+                " until it can be read, or, if its content is corrupt, until it is replaced: POST /v1/pins/" + address + " with replace: true (audited)");
         }
 
-        // Device is the device pin for address, or null when there is none.
-        // A pin file tiad cannot read fails closed.
-        public DeviceIdentity Device(string address)
+        // Read reads the pin file for address and says what it found.
+        public PinRead Read(string address)
         {
             lock (mu)
             {
                 string f = DeviceFile(address);
-                if (!File.Exists(f)) return null;
                 string first;
                 try
                 {
-                    using (var r = new StreamReader(f, new UTF8Encoding(false)))
+                    using (var fs = new FileStream(f, FileMode.Open, FileAccess.Read, FileShare.Read))
+                    using (var r = new StreamReader(fs, new UTF8Encoding(false)))
                     {
                         first = r.ReadLine() ?? "";
                     }
                 }
+                catch (FileNotFoundException)
+                {
+                    return new PinRead { State = PinState.None };
+                }
                 catch (Exception e)
                 {
-                    throw Unreadable(address, e.GetType().Name);
+                    return new PinRead { State = PinState.Inaccessible, Why = e.GetType().Name + ": " + e.Message };
                 }
                 DeviceIdentity d;
                 try
@@ -202,12 +250,22 @@ namespace Tiad
                 }
                 catch (TiadException e)
                 {
-                    throw Unreadable(address, e.Message);
+                    return new PinRead { State = PinState.Corrupt, Why = e.Message, Raw = first };
                 }
                 string bad = d.Validate();
-                if (bad != null) throw Unreadable(address, bad);
-                return d;
+                if (bad != null) return new PinRead { State = PinState.Corrupt, Why = bad, Raw = first };
+                return new PinRead { State = PinState.Ok, Device = d };
             }
+        }
+
+        // Device is the device pin for address, or null when there is none.
+        // A pin tiad cannot read fails closed.
+        public DeviceIdentity Device(string address)
+        {
+            PinRead r = Read(address);
+            if (r.State == PinState.None) return null;
+            if (r.State == PinState.Ok) return r.Device;
+            throw Unreadable(address, r.Why);
         }
 
         // SetDevice writes the device pin for address, replacing any, in
@@ -217,7 +275,6 @@ namespace Tiad
             lock (mu)
             {
                 string f = DeviceFile(address);
-                Directory.CreateDirectory(dir);
                 var b = new StringBuilder();
                 b.Append(Json.Write(d.ToJson())).Append('\n');
                 b.Append("# tiad device pin for the CPU at ").Append(address).Append(": ").Append(how).Append(", ")
@@ -231,14 +288,25 @@ namespace Tiad
             }
         }
 
-        // Addresses are the pinned addresses, sorted.
+        // Addresses are the pinned addresses, sorted. A directory that
+        // cannot be listed fails closed.
         public List<string> Addresses()
         {
             lock (mu)
             {
+                string[] files;
+                try
+                {
+                    files = Directory.GetFiles(dir, "*.device");
+                }
+                catch (Exception e)
+                {
+                    Log.Line("audit pin unreadable dir={0} why={1}", Json.Quote(dir), Json.Quote(e.GetType().Name + ": " + e.Message));
+                    throw new TiadException(500, Kinds.OperationFailed,
+                        "the pins directory cannot be listed (" + e.GetType().Name + ": " + e.Message + "); tiad refuses online calls to pinned CPUs until it can be read");
+                }
                 var l = new List<string>();
-                if (!Directory.Exists(dir)) return l;
-                foreach (string f in Directory.GetFiles(dir, "*.device"))
+                foreach (string f in files)
                 {
                     // Windows' pattern also matches a longer extension.
                     if (!string.Equals(Path.GetExtension(f), ".device", StringComparison.Ordinal)) continue;

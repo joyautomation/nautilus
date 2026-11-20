@@ -14,6 +14,19 @@ namespace Tiad
         // re-pin and an upload's first trust.
         readonly object pinsMu = new object();
 
+        // LogPins writes the pin inventory at startup, so a pin that
+        // vanished between runs shows in the audit.
+        void LogPins()
+        {
+            var l = new List<string>();
+            foreach (string a in pins.Addresses())
+            {
+                PinRead r = pins.Read(a);
+                l.Add(Json.Quote(a) + (r.State == PinState.Ok ? " holds=" + Holds(r.Device) : " " + r.State.ToString().ToLowerInvariant()));
+            }
+            Log.Line("audit pins at start dir={0} count={1} pins=[{2}]", Json.Quote(pins.Dir), l.Count, string.Join(", ", l.ToArray()));
+        }
+
         void RegisterPins(Router r)
         {
             r.Add("GET", "/v1/pins", ListPins);
@@ -27,6 +40,12 @@ namespace Tiad
             o["device"] = d.ToJson();
             o["holds"] = d.Holds().ToArray();
             return o;
+        }
+
+        // Bounded is at most 200 characters of a corrupt pin's first line.
+        static string Bounded(string s)
+        {
+            return s.Length <= 200 ? s : s.Substring(0, 200) + "...";
         }
 
         static string Holds(DeviceIdentity d)
@@ -68,18 +87,18 @@ namespace Tiad
             DeviceIdentity previous = null;
             lock (pinsMu)
             {
-                // An unreadable pin is replaced only with replace: true, and
-                // the audit line says it was unreadable.
-                bool unreadable = false;
-                try
+                // A pin whose content is corrupt is replaced only with
+                // replace: true, and the audit line keeps why and what it
+                // held. One that cannot be read at all (an I/O error, an
+                // unreadable directory) is never replaced: its identity is
+                // unknown, not wrong.
+                PinRead read = pins.Read(address);
+                if (read.State == PinState.Inaccessible || read.State == PinState.Corrupt && !replace)
                 {
-                    previous = pins.Device(address);
+                    throw PinStore.Unreadable(address, read.Why);
                 }
-                catch (TiadException)
-                {
-                    if (!replace) throw;
-                    unreadable = true;
-                }
+                bool unreadable = read.State == PinState.Corrupt;
+                previous = read.Device;
                 if (previous != null && !replace)
                 {
                     throw TiadException.BadRequest("pin: {0} is pinned already ({1}); replace it with replace: true", address, previous.Describe());
@@ -88,7 +107,8 @@ namespace Tiad
                 pins.SetDevice(address, d, replace ? "re-pinned by hand" : "pinned by hand");
                 Log.Line("audit pin {0} address={1} previous={2} device={3} holds={4}",
                     replace ? "replace" : "set", Json.Quote(address),
-                    unreadable ? "unreadable" : previous == null ? "none" : Json.Write(previous.ToJson()), Json.Write(d.ToJson()), Holds(d));
+                    unreadable ? "corrupt why=" + Json.Quote(read.Why) + " raw=" + Json.Quote(Bounded(read.Raw)) : previous == null ? "none" : Json.Write(previous.ToJson()),
+                    Json.Write(d.ToJson()), Holds(d));
             }
             Obj o = PinJson(address, d);
             if (previous != null) o["previous"] = previous.ToJson();

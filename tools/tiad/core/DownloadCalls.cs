@@ -323,7 +323,17 @@ namespace Tiad
                     s.Compiled = false;
                     s.Station = null;
                     List<string> tr = t.Upload(s.Handle, address, trust);
-                    read = t.ProjectCpu(s.Handle);
+                    // The project is replaced now: a failed identity read
+                    // must not skip the audit lines below.
+                    try
+                    {
+                        read = t.ProjectCpu(s.Handle);
+                    }
+                    catch (Exception e)
+                    {
+                        Log.Line("upload: reading the CPU's identity failed: {0}", e.Message);
+                        read = null;
+                    }
                     return tr;
                 });
                 if (trust || trusted.Count > 0)

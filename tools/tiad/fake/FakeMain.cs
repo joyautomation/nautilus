@@ -769,7 +769,16 @@ namespace Tiad.Fake
 
             var host = new FakeHost();
             var script = new Script();
-            var agent = new Agent(cfg, host, delegate { return new FakeTia(script); }, "+fake");
+            Agent agent;
+            try
+            {
+                agent = new Agent(cfg, host, delegate { return new FakeTia(script); }, "+fake");
+            }
+            catch (ConfigException e)
+            {
+                Console.Error.WriteLine("tiad-fake: " + e.Message);
+                return 2;
+            }
             var router = new Router();
             agent.Register(router);
             router.Add("PUT", "/fake/gates", host.SetGates);
