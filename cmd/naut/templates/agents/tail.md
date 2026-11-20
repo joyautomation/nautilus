@@ -21,6 +21,11 @@ takes one of `scans`, `advance`, `until`; `expect` checks its end, `always`
 every scan, and both take ST expressions (`- E101_Out = 0.0`) too. Test
 every timer, permissive and abort path.
 
+A stimulus that must happen N times (a counter, a debounce, a pulse train)
+is `repeat: N` on a step, or on a group of `steps:` (`- repeat: 24` with
+`steps:` holding the pulse's set and clear); never write the same step out
+N times.
+
 Write the tests from the specification, not from the code: every sentence
 that says the control sets, clears, holds, waits for or times something
 gets a test that checks it, including a command the control must clear
