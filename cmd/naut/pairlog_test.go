@@ -221,7 +221,18 @@ func (r *pairRig) substitutes(n string) []runtime.Substitution { return r.nodes[
 // returns its ID.
 func (r *pairRig) startedID(n string) uint64 {
 	r.t.Helper()
-	code, body, _ := r.call(n, "POST", "/api/substitutes", `{"name":"Level","seconds":600}`)
+	// A certain refusal (nothing proposed) is retried for a few seconds:
+	// right after a pair starts, the lead can move and the new leader's
+	// view of the other copies lag by a ping. Anything else fails at once.
+	var code int
+	var body string
+	for end := time.Now().Add(10 * time.Second); ; time.Sleep(100 * time.Millisecond) {
+		var h http.Header
+		code, body, h = r.call(n, "POST", "/api/substitutes", `{"name":"Level","seconds":600}`)
+		if code == http.StatusOK || h.Get("X-Nautilus-Outcome") != "refused" && !strings.Contains(body, "no leader") || time.Now().After(end) {
+			break
+		}
+	}
 	if code != http.StatusOK {
 		r.t.Fatalf("start through %s: %d %s", n, code, body)
 	}

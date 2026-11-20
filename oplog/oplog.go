@@ -1251,6 +1251,8 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 	var errs []string
 	var newer error
 	silent := 0
+	var uncounted afterResp // the latest log among answers that don't count
+	uncountedFrom := ""
 	type answer struct {
 		got afterResp
 		err error
@@ -1274,6 +1276,9 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 			return true
 		case !n.counts(p, a.got.Unsynced, a.got.Identity):
 			errs = append(errs, p+": its log is not synced")
+			if better(a.got, uncounted) {
+				uncounted, uncountedFrom = a.got, p
+			}
 		default:
 			answered++
 			commit = max(commit, a.got.Commit)
@@ -1287,6 +1292,12 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 		return newer
 	}
 	useVouch := answered < n.majority() && alone && (silent == 0 || mutOplog("vouch_alone_partial"))
+	if useVouch && better(uncounted, best) && !mutOplog("vouch_alone_ignores_ahead") {
+		// A copy that answers but doesn't count yet (a witness in its quiet
+		// period after a re-commission, #1053) holds a later log: going
+		// ahead alone would lose its entries. Wait until it counts.
+		return fmt.Errorf("%w: a vouched catch-up waits: %s holds a later log (term %d, seq %d) but does not count yet", ErrReadOnly, n.name(uncountedFrom), uncounted.LastTerm, uncounted.LastSeq)
+	}
 	if answered < n.majority() && !useVouch {
 		why := ""
 		switch {

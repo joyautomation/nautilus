@@ -215,6 +215,7 @@ var table = []mutation{
 	{"mark_after_log", []string{"TestMarkIsWrittenBeforeTheLog"}},
 	// #1053 review.
 	{"vouch_alone_partial", []string{"TestDoubleVouchWithASilentWitnessKeepsTheWrite"}},
+	{"vouch_alone_ignores_ahead", []string{"TestVouchedCatchUpWaitsForALongerCopyToCount"}},
 	{"vouch_refuses_counting_ahead", []string{"TestVouchOverACountingLongerWitnessRecoversItsEntries", "TestPairBothControllersLostRecoverFromTheWitness"}},
 	{"vouch_refusal_blocks", []string{"TestPairRefusedVouchStillCommissions"}},
 	{"can_sync_stale", []string{"TestCanSyncNeedsACopyHeardWithinTheBound"}},
@@ -251,6 +252,7 @@ var rowPkgs = map[string][]string{
 	"vouch_alone_kept":             {"./oplog", "./cmd/naut"},
 	"mark_after_log":               {"./oplog"},
 	"vouch_alone_partial":          {"./oplog"},
+	"vouch_alone_ignores_ahead":    {"./oplog"},
 	"vouch_refuses_counting_ahead": {"./oplog", "./cmd/naut"},
 	"vouch_refusal_blocks":         {"./cmd/naut"},
 	"can_sync_stale":               {"./oplog"},

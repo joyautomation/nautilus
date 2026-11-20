@@ -53,6 +53,9 @@ import "os"
 //   - vouch_alone_partial: a vouched catch-up goes ahead alone while a
 //     peer is silent, so a write a majority committed without this log is
 //     numbered over (#1053 review);
+//   - vouch_alone_ignores_ahead: a vouched catch-up goes ahead alone over a
+//     longer copy that answers but doesn't count yet (a witness in its
+//     quiet period), losing its entries (#1053 load run);
 //   - vouch_refuses_counting_ahead: a vouch is refused for a later log on a
 //     peer that counts, whose entries the catch-up would have taken;
 //   - can_sync_stale: can-sync counts a copy last heard 10 s ago, not

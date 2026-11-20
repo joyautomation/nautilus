@@ -115,6 +115,7 @@ var Mutations = []string{
 	"yield_ignores_can_sync",       // node: a leader yields to a synced peer that can't sync the others
 	"vouch_refusal_blocks",         // node: a vouch the log refuses refuses the re-commission
 	"vouch_alone_partial",          // oplog: a vouched catch-up goes ahead alone with a peer silent
+	"vouch_alone_ignores_ahead",    // oplog: a vouched catch-up goes ahead alone over a longer copy that does not count yet
 	"vouch_refuses_counting_ahead", // oplog: a vouch is refused for a later log on a peer that counts
 	"can_sync_stale",               // oplog: can-sync counts a copy last heard 10 s ago, not within a lease
 	"placeholder_keeps_synced",     // oplog: a mark under the placeholder identity is adopted synced

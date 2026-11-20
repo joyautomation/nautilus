@@ -529,3 +529,45 @@ func TestVouchSyncedMeanwhileRecordsNothing(t *testing.T) {
 		t.Fatalf("mark: %+v", m)
 	}
 }
+
+// A vouched catch-up doesn't go ahead alone while a copy that answers but
+// doesn't count yet holds a later log (#1053: after a re-commission the
+// witness's copy counts only once its quiet period is over): it waits,
+// and then the witness's entries come back.
+func TestVouchedCatchUpWaitsForALongerCopyToCount(t *testing.T) {
+	var wCounts sync.Mutex
+	counting := true
+	tr := newTrio(t, func(_ int, o *Options) {
+		o.Counts = func(peer, _ string) bool {
+			if peer != "http://n2" {
+				return true
+			}
+			wCounts.Lock()
+			defer wCounts.Unlock()
+			return counting
+		}
+	})
+	mustSync(t, tr, 0)
+	if _, err := tr.propose(0, "X"); err != nil {
+		t.Fatal(err)
+	}
+	tr.wipe(0)
+	tr.wipe(1)
+	if _, err := tr.nodes[0].Vouch(tr.ctx(), "op", nil); err != nil {
+		t.Fatalf("vouch A, the witness counting: %v", err)
+	}
+	wCounts.Lock()
+	counting = false // its quiet period
+	wCounts.Unlock()
+	tr.lead(0)
+	if err := tr.nodes[0].SyncLeader(tr.ctx()); err == nil {
+		t.Fatalf("A caught up alone over the witness's longer log; A holds %v", tr.nodes[0].After(0))
+	}
+	wCounts.Lock()
+	counting = true
+	wCounts.Unlock()
+	mustSync(t, tr, 0)
+	if seq, n := tr.holds(0, "X"); seq == 0 || n != 1 {
+		t.Fatalf("A once the witness counts: X at %d, %d copies", seq, n)
+	}
+}
