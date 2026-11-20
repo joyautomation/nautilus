@@ -365,6 +365,11 @@ func TestDeployK8sAllowsTheServiceNames(t *testing.T) {
 			t.Errorf("deploy/k8s.yaml lacks %q", want)
 		}
 	}
+	// The probes ask /healthz, which answers without a credential: under
+	// an auth: block every /api/ read needs one, and a probe has none.
+	if strings.Count(k8s, "httpGet: {path: /healthz, port: api}") != 2 || strings.Contains(k8s, "path: /api/") {
+		t.Errorf("deploy/k8s.yaml's probes must both ask /healthz:\n%s", k8s)
+	}
 	// Kubernetes expands $(POD_NAMESPACE) only from a variable defined
 	// earlier in the list; after it, the value stays literal.
 	if ns, hosts := strings.Index(k8s, "- name: POD_NAMESPACE"), strings.Index(k8s, "- name: NAUTILUS_ALLOWED_HOSTS"); ns < 0 || hosts < 0 || ns > hosts {

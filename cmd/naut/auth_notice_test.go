@@ -25,7 +25,7 @@ func TestAuthNotice(t *testing.T) {
 		t.Errorf("no auth: block: %q", msg)
 	}
 	msg := authNotice(load("auth:\n  token-role: operator\n"))
-	if !strings.Contains(msg, "WARNING") || !strings.Contains(msg, "reads are NOT GATED") ||
+	if !strings.Contains(msg, "WARNING") || strings.Contains(msg, "NOT GATED") ||
 		!strings.Contains(msg, "OPC UA server and Sparkplug writes are NOT covered") {
 		t.Errorf("auth: block: %q", msg)
 	}
@@ -55,5 +55,15 @@ func TestServiceTokenSecrets(t *testing.T) {
 	env["NAUTILUS_TOKEN_TWIN"] = "h-secret"
 	if _, err := serviceTokenSecrets([]string{"historian", "twin"}, "", func(k string) string { return env[k] }); err == nil || strings.Contains(err.Error(), "h-secret") {
 		t.Errorf("two tokens, one secret: %v", err)
+	}
+}
+
+// naut logix serve and naut siemens serve have no browser sign-in: under
+// an auth: block they say that every request, reads included, needs a
+// token, and no longer that reads are open.
+func TestAuthFacadeNotice(t *testing.T) {
+	if strings.Contains(authFacadeNotice, "NOT GATED") || !strings.Contains(authFacadeNotice, "every request needs a token") ||
+		!strings.Contains(authFacadeNotice, "reads included") || !strings.Contains(authFacadeNotice, "anonymous: viewer") {
+		t.Errorf("authFacadeNotice = %q", authFacadeNotice)
 	}
 }

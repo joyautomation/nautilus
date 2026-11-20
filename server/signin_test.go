@@ -186,8 +186,10 @@ func TestUnknownCookieIsAnonymous(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"principal":"anonymous"`) {
 		t.Errorf("/api/me with an unknown cookie: %d %s", rec.Code, rec.Body)
 	}
-	if rec := call(t, srv, "GET", "/api/state", "", withCookie("forgotten")); rec.Code != http.StatusOK {
-		t.Errorf("a read with an unknown cookie: %d", rec.Code)
+	// Anonymous may not read here (anonymous: none): the unknown cookie's
+	// read is the anonymous refusal, a 401 that says to sign in.
+	if rec := call(t, srv, "GET", "/api/state", "", withCookie("forgotten")); rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), "sign in") {
+		t.Errorf("a read with an unknown cookie: %d %s, want the anonymous 401", rec.Code, rec.Body)
 	}
 	c := signIn(t, srv, "akhan")
 	rec = call(t, srv, "POST", "/api/tags", `{"name":"SP","value":9}`, withCookie(c.Value), ownOrigin, bearer(users.TokenPrefix+"0123456789abcdef_guess"))

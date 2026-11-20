@@ -150,6 +150,12 @@ func (s *Server) actorOf(r *http.Request) actor {
 	if a, ok := r.Context().Value(actorKey{}).(actor); ok {
 		return a
 	}
+	return s.resolveActor(r)
+}
+
+// resolveActor is actorOf without the value withActor fixed: who r acts
+// as now (an open stream re-checks by it).
+func (s *Server) resolveActor(r *http.Request) actor {
 	pr, presented, valid := s.credential(r)
 	if presented {
 		if !valid {

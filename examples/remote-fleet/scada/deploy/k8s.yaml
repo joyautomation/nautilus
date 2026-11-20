@@ -83,13 +83,19 @@ spec:
             - name: NAUTILUS_ALLOWED_HOSTS
               value: "water-scada,water-scada.$(POD_NAMESPACE),water-scada.$(POD_NAMESPACE).svc,water-scada.$(POD_NAMESPACE).svc.cluster.local"
           readinessProbe:
-            # /api/cluster answers locally on every replica, leader or
-            # standby — a standby must stay Ready to serve the dashboard
-            # and proxy to the leader.
-            httpGet: {path: /api/cluster, port: api}
+            # /healthz answers 200 on every replica, leader or standby,
+            # with no credential (an auth: block gates /api/). A standby
+            # must stay Ready: a rollout waits for its new pod to be
+            # Ready, and /readyz is 200 on the leader only. The standby
+            # proxies token clients' /api/ requests to the leader, but
+            # under an auth: block it answers a signed-in browser with a
+            # 503 that names no leader (the pods have no stable names for
+            # redundancy.public-urls): for browser sign-in, put a load
+            # balancer that health-checks /readyz in front of the Service.
+            httpGet: {path: /healthz, port: api}
             periodSeconds: 5
           livenessProbe:
-            httpGet: {path: /api/cluster, port: api}
+            httpGet: {path: /healthz, port: api}
             initialDelaySeconds: 10
             periodSeconds: 10
 ---

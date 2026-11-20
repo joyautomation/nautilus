@@ -1137,6 +1137,9 @@ func ReadManifest(fsys fs.FS, name string) (*Manifest, error) {
 	if err := composeAlarms(fsys, &m); err != nil {
 		return nil, err
 	}
+	if m.Auth == nil && authKeyNull(raw) {
+		return nil, fmt.Errorf("%s: %w", name, errAuthNull)
+	}
 	if m.authPolicy, err = compileAuth(m.Auth); err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}

@@ -3,17 +3,6 @@ title: Users, roles & sign-in
 description: The manifest's auth block — roles, areas, users and service tokens — local users and personal access tokens on the box, browser sign-in, and the audit journal that records who did what.
 ---
 
-:::caution[PREVIEW: not finished yet]
-`auth:` works for writes, but it is not yet a complete access control. Until the read gate lands (#708 PR 5b-2):
-
-- **Reads are not gated.** Anyone who can reach the controller can read its tags, alarms and program. `naut run` prints a warning saying so. Writes, the audit journal and sign-in follow the `auth:` block.
-- **The OPC UA server and Sparkplug writes are not covered.** A client that reaches them is not asked for a role.
-- **Browser sessions live on the leader.** On a redundant pair a failover signs browser users out (see [A redundant pair](#a-redundant-pair)).
-- **Not behind a load balancer that spreads requests over replicas.** A replica that isn't leading refers a signed-in browser to the leader. Point browsers at the leader, or wait for the pair's floating address (#716).
-
-Don't rely on `auth:` to keep data private yet. Use it to control who may change the process, and to journal who did.
-:::
-
 An `auth:` block in `nautilus.yaml` says who may do what on a controller.
 
 - **The manifest, reviewed in git**, holds the roles, the areas and which user has which role.
@@ -70,7 +59,30 @@ An area is a set of tag patterns. A grant with `areas:` limits `write`, `ack`, `
 | `token:<name>` | a service token from `service-tokens:`, its secret in `NAUTILUS_TOKEN_<NAME>` |
 | `user:<name>` | a signed-in browser, or that user's personal access token |
 
-A token is sent as `Authorization: Bearer <token>`. With no credential, a write gets `401`. A principal without the permission gets `403`, and the message names its roles and the permission it lacks.
+A token is sent as `Authorization: Bearer <token>`. With no credential, a request that needs a permission gets `401`. A principal without the permission gets `403`, and the message names its roles and the permission it lacks.
+
+## Reads
+
+With an `auth:` block, reading needs the `read` permission (every built-in role has it):
+
+- **Every `GET` under `/api/`**: tags, the live stream, alarms, forces, the program, I/O, `/api/cluster`, `/api/history` and the rest. No credential is a `401`, a role without `read` a `403`, an unknown token a `401` (never taken as anonymous).
+- **A page.** A browser that opens the dashboard or an HMI screen without a session is sent to `/signin`, and comes back to the page afterwards. The page's own files (scripts, styles, fonts, images) are served to anyone: they hold no tag values, though an HMI build does name its tags.
+- **Without a credential**, only `GET /api/me`, the sign-in page and routes, `/healthz` and `/readyz` answer.
+- **`anonymous: viewer`** lets a request with no credential read, as before `auth:` existed (a wall screen nobody signs in to). `anonymous: none` is the default.
+- **An open live stream ends** when its session does: at sign-out, when the user is disabled, removed or given a new password, and when the session expires. A stream opened with a personal access token ends within about two seconds of the token being revoked or its user disabled. The page shows the stream as lost; reloading it goes to the sign-in page.
+
+**Monitoring, scripts and other services send a token.** A probe or monitor that reads `/api/cluster` or `/api/history`, the historian, or a script reading tags needs a credential that holds `read`: a service token with the `viewer` role (`service-tokens: {monitor: viewer}`), or a personal access token of a user with that role. To find the leader without a credential, use `/readyz`.
+
+### Probes
+
+`/healthz` and `/readyz` answer without a credential, by any `Host`, and say one word, nothing else: no role, version or tag.
+
+| | `200 ok` | `503 not ready` |
+|---|---|---|
+| `GET /healthz` | the controller serves HTTP (every replica) | never |
+| `GET /readyz` | a controller without redundancy, or the leader | a standby, no leader known, or a leader whose scans have stopped |
+
+Point a liveness probe at `/healthz` (a standby answers it, so it is never restarted for standing by) and a load balancer or floating address that should reach only the leader at `/readyz`. The deployment `naut new --deploy` generates probes `/healthz`.
 
 ## Users on the box
 
@@ -105,7 +117,7 @@ Open `/signin` on the controller, enter a user name and password, and the browse
 - **Signing out** (`POST /api/signout`) ends the session on the controller, not just in the browser, and is journalled (`auth.signout`).
 - **Changes on the box end sessions.** Disabling a user, changing their password or removing them ends their sessions at once. A session also remembers the password it was proved with, so one that raced a change ends at its next request.
 - **A restart signs everyone out.** Sessions are kept in memory.
-- **`naut run` only.** `naut logix serve` and `naut siemens serve` take tokens but not browser sign-in.
+- **`naut run` only.** `naut logix serve` and `naut siemens serve` take tokens but not browser sign-in. Under `anonymous: none` every request to them, reads included, needs a token; they say so when they start.
 
 The endpoints, for an HMI of your own:
 
@@ -130,7 +142,18 @@ The endpoints, for an HMI of your own:
   ```
 
   Without `public-urls` the `503` names no address: the `peers:` addresses are the pair's own and are never shown to a browser.
+- **Behind a load balancer or a Kubernetes Service**, a browser lands on the standby on about half its connections and gets the `503`. Give the balancer a health check on [`/readyz`](#probes) so it sends browsers only to the leader. `public-urls` names the pair's controllers `a` and `b`. The two-replica Deployment `naut new --deploy` generates has no stable pod names for it, so there the `503` names no leader and the `/readyz` health check is the way in. Its Service still sends token clients to either pod: a standby forwards their requests to the leader.
 - **A failover signs browser users out.** The new leader doesn't know the old one's sessions, so its users sign in again there. The old leader ends its sessions as soon as it is a standby, so they don't come back if it leads again (journalled as `auth.sessions-ended`).
 - **During an election** a controller that knows no leader refuses a new sign-in (`503`, try again shortly). Sessions it issued still work there and can be signed out. If it then leads again without ever having seen another leader, those sessions carry on: no failover happened as far as it knows.
 - **Sign-out needs the leader.** If no leader is reachable, signing out can't revoke the session. It ends at the next failover or when it expires.
-- **One address for the pair** (a floating address, so a browser never has to be sent anywhere) is #716.
+- **A standby never reads for a browser.** A browser's read reaching a standby gets the same `503` with the leader's address, even for `/api/cluster` and `/api/history`, which the standby otherwise answers itself.
+- **A view of both controllers** (each one's `/api/cluster`, read from one page) needs a token or `anonymous: viewer`: a browser's session cookie belongs to one controller and is never sent to the other.
+- **One address for the pair** (a floating address, so a browser never has to be sent anywhere) is #716. `/readyz` tells it which controller leads.
+
+## Limits
+
+- **The OPC UA server and Sparkplug writes are not covered yet** (#708). A client that reaches them is not asked for a role, and `naut run` prints a warning saying so whenever `auth:` is set.
+- **`naut historian`'s own port is not covered.** It answers its archive by `localhost`, an IP address or an allowed name, or with `NAUTILUS_TOKEN`, as before, with no roles. Reads through the controller's `/api/history` need `read`; keep the historian's port off networks that shouldn't read the archive.
+- **A standby answers some reads from its own users file.** `/api/cluster` and `/api/history` are answered by the standby itself, so a token revoked or a user disabled only on the leader can still read them there until the users file is copied to the standby.
+- **Sessions live on the leader.** On a redundant pair a failover signs browser users out (see [A redundant pair](#a-redundant-pair)).
+- **Not behind a load balancer that spreads requests over replicas.** A replica that isn't leading refers a signed-in browser to the leader. Point browsers at the leader (`/readyz`), or wait for the pair's floating address (#716).

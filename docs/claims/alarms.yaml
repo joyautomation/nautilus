@@ -296,7 +296,8 @@ claims:
   - id: ALM-026
     claim: >-
       Alarm writes (ack, shelve, unshelve) require the same authorization as a
-      tag write (Bearer or X-Nautilus-Token), while reads stay ungated.
+      tag write (Bearer or X-Nautilus-Token), while reads stay ungated
+      (without an auth: block; with one, a read needs the read permission).
     source: "#the-api"
     tests:
       - go ./server TestAlarmWritesHonorAuth
