@@ -153,6 +153,19 @@ case caught it. A mutation joins the nightly run in the PR that builds the rule 
 | a peer still short of the leader's log after the resend rounds counts as having stored the entry (`behind_counted`) | design §1, only a synced replica counts | 3b-4a (#1050 review) |
 | a follower marks itself synced from a request that proves its log only below the commit index (`synced_before_commit`) | design §1, only a synced replica counts | 3b-4a (#1050 review) |
 | an unsynced leader counts its own log in its catch-up (`unsynced_self_counted`) | design §1, only a synced replica counts | 3b-4a (#1050 review) |
+| an unsynced standby campaigns over a reachable, synced peer that may campaign (`campaign_ignores_sync`) | design §1, an unsynced controller leads for control | 3b-4b |
+| an unsynced leader whose catch-up failed never hands over to a synced, able peer (`unsynced_leader_keeps_lead`) | design §1, an unsynced controller leads for control | 3b-4b |
+| a leader yields again within 10 minutes (`yield_undamped`) | design §1, the yield is damped | 3b-4b |
+| a leader yields to a peer that may not campaign (unhealthy scans) (`yield_ignores_may`) | design §1, the yield needs an able peer | 3b-4b |
+| the term lives in memory only, so a lost log takes a deposed leader's replication and its word that the log is synced (`term_not_persisted`) | design §1, the mark keeps the term | 3b-4b (#1050 review carry) |
+| a marked replica takes replication while its own election names no leader (`unnamed_leader_admitted`) | design §1, only a synced replica counts | 3b-4b |
+| a vouch is taken over a lost log, a silent peer or a later log (`vouch_unchecked`) | design §1, a vouch starts a pair | 3b-4b |
+| a vouched log catches up alone at every leadership (`vouch_alone_kept`) | design §1, a vouch starts a pair | 3b-4b |
+| an unsynced log reads writable, so a write ends "outcome unknown" instead of a certain refusal (`unsynced_log_writes`) | design §1, read-only until synced | 3b-4b |
+| the witness's copy admits replication from any member (`witness_log_unbound`) or at any term (`witness_log_term_unbound`) | design §1, the witness follows its vote; §8.1 case 6 | 3b-4b |
+| the leader counts the witness's copy at any incarnation (`witness_log_any_incarnation`) | design §1, F15 | 3b-4b |
+| the pair's log leaves the witness out (`witness_not_a_replica`) | §8.1 cases 1 and 7 | 3b-4b |
+| a leader whose term is unsynced is caught up only by a write (`log_sync_not_retried`) | design §1, the leader retries its catch-up | 3b-4b |
 | an entry of any size is proposed, so one stored can't be read back or fetched (`entry_unbounded`) | design §1 | 3b-4a (#1050 review) |
 | `Liveness` ignores a loop between scans (the behaviour before #858) | design §3.2, starvation | 3 |
 | a standby's gated ticks don't count as on schedule | design §3.2, starvation | 3 |
