@@ -38,6 +38,7 @@ on the right, and a **Check** button that tests your answer.
 2. [From a datasheet to a device map](/learn/io-and-protocols/datasheet-to-device-map/)
 3. [Serve your tags over OPC UA](/learn/io-and-protocols/opcua-first-browse/)
 4. [Publish your tags over MQTT (Sparkplug B)](/learn/io-and-protocols/sparkplug-publish/)
+5. [Read a plant OPC UA server](/learn/io-and-protocols/opcua-read-a-server/)
 
 ## Operator screens
 
