@@ -57,12 +57,46 @@ var nodeIDs = [nNodes]quorum.NodeID{"A", "B", "W", "W", "Z", "A", "B"}
 func isController(a Addr) bool { return a == A || a == B || a == CA || a == CB }
 
 // peerOf is where a controller's votes and handshake go: a clone sends to
-// the original's peer, and the peer to the original, never to a clone.
+// the original's peer, and the peer to the original. A MAC-spoofed clone
+// shares the original's address, so the peer's vote requests reach the
+// clone too while it runs (sendPeerVote; #1113 review): its voter answers
+// them like any voter. The handshake still goes to the original only.
 func peerOf(a Addr) Addr {
 	if a == A || a == CA {
 		return B
 	}
 	return A
+}
+
+// simBoot is a voter boot id unique per node and boot, taken from neither
+// random stream, so adding it moved no seed.
+func simBoot(n *node) uint64 { return uint64(n.addr+1)<<32 | uint64(n.boot+1) }
+
+// cloneOf is the clone slot of controller a (CA for A, CB for B), or a
+// itself for a clone.
+func cloneOf(a Addr) Addr {
+	switch a {
+	case A:
+		return CA
+	case B:
+		return CB
+	}
+	return a
+}
+
+// sendPeerVote sends a vote request (a campaign, a renewal or a probe)
+// from controller n to its peer, and to the peer's running clone too, over
+// the link from n to that clone (whose faults apply): the clone shares
+// the original's address (#1113 review; before, the peer's requests never
+// reached a clone, so no sim run could see a clone's voter grant the peer).
+func (w *World) sendPeerVote(n *node, b []byte) {
+	to := peerOf(n.addr)
+	w.send(n.addr, to, b)
+	if c := cloneOf(to); c != to && !w.o.PeerNeverReachesClone {
+		if cn := w.nodes[c]; cn != nil && cn.up {
+			w.send(n.addr, c, b)
+		}
+	}
 }
 
 // original is the controller a clone copies, or a itself.
@@ -117,6 +151,10 @@ type Options struct {
 
 	// Trace keeps a human-readable line per event in Result.Trace.
 	Trace bool
+	// PeerNeverReachesClone: the peer's vote requests go to the original
+	// only, never to a running clone (the sim before the #1113 review), for
+	// measuring against the old model.
+	PeerNeverReachesClone bool
 }
 
 func (o *Options) defaults() {
@@ -211,6 +249,8 @@ type node struct {
 	addr  Addr
 	clock *Clock
 	rng   *rand.Rand
+	// markSeen is the voter's MarkCount last recorded (reset per boot).
+	markSeen uint64
 
 	up, paused bool
 	deferred   []*event
@@ -453,6 +493,8 @@ func (w *World) start(n *node) {
 	id := nodeIDs[n.addr]
 	if n.addr == W || n.addr == W2 {
 		v, p := quorum.NewWitness(id, w.o.Lease, st, now, func() uint64 { return drawNonZero(n.rng) })
+		v.SetBoot(simBoot(n))
+		n.markSeen = 0
 		n.voter = v
 		w.rec.voterStart(n.addr, n.boot, w.now, readable, v.State().Incarnation)
 		if p != nil {
@@ -461,6 +503,8 @@ func (w *World) start(n *node) {
 		w.tracef("%v start (witness, readable=%v, inc=%d)", n.addr, readable, v.State().Incarnation)
 	} else {
 		n.voter = quorum.NewVoter(id, w.o.Lease, st, now)
+		n.voter.SetBoot(simBoot(n))
+		n.markSeen = 0
 		w.rec.voterStart(n.addr, n.boot, w.now, readable, st.Incarnation)
 	}
 	if !isController(n.addr) {
@@ -544,7 +588,7 @@ func (w *World) tick(n *node) {
 		w.selfDeliver(n, b)
 		r.Promise = n.voter.Relay(w.local(n)) // stamped as it leaves (the self copy carries none)
 		b, _ = r.MarshalBinary()
-		w.send(n.addr, peerOf(n.addr), b)
+		w.sendPeerVote(n, b)
 		w.send(n.addr, W, b)
 	}
 	p, msgs, probe := n.adopt.Tick(now)
@@ -566,7 +610,7 @@ func (w *World) tick(n *node) {
 		w.viaProbe = standby
 		w.send(n.addr, W, b)
 		if standby && quorum.ProbesPeer() {
-			w.send(n.addr, peerOf(n.addr), b) // the peer hears this boot too (#1029 step 1)
+			w.sendPeerVote(n, b) // the peer hears this boot too (#1029 step 1)
 		}
 		w.viaProbe = false
 	}
@@ -724,6 +768,7 @@ func (w *World) deliver(n *node, from Addr, b []byte) {
 			w.tracef("%v counts a duplicate of %s (relay on a reply from %v: %+v)", n.addr, who, from, rep.Promise)
 		}
 	}
+	n.cand.NoteMark(rep) // a probe's reply too: how a marked name hears it cleared
 	if quorum.IsRelayProbe(rep) {
 		return // the relay probe's reply is for the voter only
 	}
@@ -873,6 +918,13 @@ func (w *World) handle(n *node, from Addr, now quorum.Instant, r quorum.Request)
 	w.rec.duplicates[n.addr] += after - dups
 	if after != dups {
 		w.tracef("%v counts a duplicate of %s (request from %v: %s term=%d nonce=%#x)", n.addr, who, from, r.From, r.Term, r.Nonce)
+	}
+	if m, name := n.voter.MarkCount(); m != n.markSeen {
+		// From the mark count, not the cause, which a relay rule counting
+		// in the same Handle overwrites (#1113 review).
+		n.markSeen = m
+		w.rec.Marks = append(w.rec.Marks, Mark{At: w.now, Voter: n.addr, Name: name})
+		w.tracef("%v marks %s a confirmed duplicate", n.addr, name)
 	}
 	if n.cand != nil && n.voter.RelayChanged(now) {
 		if probe := n.cand.PushProbe(now); probe != nil {

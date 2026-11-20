@@ -153,6 +153,14 @@ const (
 	// the wrong box, a cloned disk; design §2). Detail names it. Raised at
 	// most once every dupEvery while it goes on.
 	EventDuplicateMember EventKind = "redundancy.duplicate-member"
+	// EventDuplicateMarked: a voter marks THIS controller's name a
+	// confirmed duplicate (quorum.Reply.Marked): another process runs as
+	// it, and this controller campaigns no more until the mark is cleared
+	// (Detail: which voter). "" Detail once no voter marks it.
+	EventDuplicateMarked EventKind = "redundancy.duplicate-marked"
+	// EventDuplicateCleared: an operator cleared this controller's voter's
+	// mark on a name (ClearDuplicate). Detail names it.
+	EventDuplicateCleared EventKind = "redundancy.duplicate-cleared"
 	// EventConfigDiffers: the peer's hello names another configuration of
 	// the pair (Detail says so), or "same" once it matches again. While
 	// it differs, a controller that does not lead does not campaign.
@@ -193,8 +201,26 @@ func boxChangedMsg(changed []string) string {
 // dupEvery paces the duplicate-member report while it goes on.
 const dupEvery = 10 * time.Second
 
+// confirmedAlarm is the duplicate-member alarm for a mark the voter just
+// made (quorum.Voter.MarkCount), or "" when it made none since markSeen.
+// It follows the mark count, not DuplicateCause: a relay rule can count
+// again in the very Handle that marked, and overwrite the cause. And it
+// is never paced: it comes once per mark, and is the only word on how to
+// clear it (#1113 review).
+func confirmedAlarm(v *quorum.Voter, markSeen *uint64) string {
+	m, name := v.MarkCount()
+	if m == *markSeen || mut("mark_alarm_from_cause") {
+		return ""
+	}
+	*markSeen = m
+	return duplicateMsg(name, quorum.DupConfirmed)
+}
+
 // duplicateMsg is the duplicate-member report.
 func duplicateMsg(who quorum.NodeID, cause quorum.DupCause) string {
+	if cause == quorum.DupConfirmed {
+		return fmt.Sprintf("two processes claim to be %s: this voter heard both running at once, and marks %s: it gives %s no new vote and counts no vote from %s until the mark is cleared. Clear it in this order: (1) stop the copy and confirm it is down (check NAUTILUS_NODE on every box, and that no box runs a clone of another's disk); (2) restart each member that raised this alarm; (3) then restart %s itself, even if it leads (the other controller takes over, which needs the witness). Until the operator command arrives, restarts are the only clear: marks are kept in memory. While a mark stands, a split or a lost witness can leave the pair without a leader", who, who, who, who, who)
+	}
 	if cause == quorum.DupVoterPromised {
 		return fmt.Sprintf("two processes claim to be %s: %s campaigned while its own voter was heard promised to another controller, which %s never does. A copy of %s is running: check NAUTILUS_NODE on every box (it differs per box) and that no box runs a clone of another's disk", who, who, who, who)
 	}
@@ -291,6 +317,7 @@ type Elector struct {
 	peerHeard bool
 	needOp    bool
 	dupSeen   uint64    // the voter's Duplicates count last reported
+	markSeen  uint64    // the voter's MarkCount last reported
 	dupAt     time.Time // when it was last reported
 
 	// The peer's part of the hello (peerinfo.go).
@@ -465,6 +492,7 @@ func (e *Elector) initProtocol(st quorum.VoterState, t quorum.Instant) error {
 	}
 	e.c = c
 	e.a = quorum.NewAdoption(e.v, c, t)
+	e.v.SetBoot(e.nonce) // #1113 review: a hold ends only on this boot's word
 	return nil
 }
 
@@ -740,6 +768,7 @@ func (e *Elector) look() time.Duration {
 func (e *Elector) route(now quorum.Instant, rs []quorum.Reply) {
 	for _, r := range rs {
 		if r.To == e.o.Self {
+			e.noteMark(r)
 			e.c.OnReply(now, r)
 			continue
 		}
@@ -906,6 +935,7 @@ func (e *Elector) reply(from quorum.NodeID, r quorum.Reply) {
 		e.v.Hear(now, from, 0, r.Promise)
 		e.noteDuplicates()
 	}
+	e.noteMark(r) // a probe's reply too: how a marked name hears it cleared
 	if quorum.IsRelayProbe(r) {
 		e.mu.Unlock()
 		return // the relay probe's reply is for the voter only
@@ -1054,6 +1084,12 @@ func (e *Elector) serveVote(w http.ResponseWriter, r *http.Request) {
 // refused, or a relay it heard on a reply (#1029 layer 2). Under mu.
 func (e *Elector) noteDuplicates() {
 	n, who := e.v.Duplicates()
+	if msg := confirmedAlarm(e.v, &e.markSeen); msg != "" {
+		e.dupSeen = n // the mark's own count, reported here
+		e.event(Event{Kind: EventDuplicateMember, Detail: msg})
+		e.log.Error("redundancy: " + msg)
+		return
+	}
 	if n == e.dupSeen {
 		return
 	}
@@ -1064,6 +1100,55 @@ func (e *Elector) noteDuplicates() {
 		e.event(Event{Kind: EventDuplicateMember, Detail: msg})
 		e.log.Error("redundancy: " + msg)
 	}
+}
+
+// noteMark hands a reply meant for this boot to the candidate's mark
+// (quorum.Candidate.NoteMark) and tells the operator when this
+// controller starts or stops being held by one. Under mu.
+func (e *Elector) noteMark(r quorum.Reply) {
+	if r.To != e.o.Self || r.Nonce != e.nonce {
+		return
+	}
+	was := e.c.Marked()
+	e.c.NoteMark(r)
+	switch now := e.c.Marked(); {
+	case now && !was:
+		msg := fmt.Sprintf("voter %s marks %s a confirmed duplicate: another process runs as this controller, so it campaigns no more, and its voter grants %s nothing new, until the mark is cleared. Clear it in this order: (1) stop the copy and confirm it is down; (2) restart the members that raised redundancy.duplicate-member (%s among them); (3) then restart this controller, even if it leads: only its own restart ends this hold once a marking member has restarted", r.From, e.o.Self, e.o.Peer, r.From)
+		e.event(Event{Kind: EventDuplicateMarked, Detail: msg})
+		e.log.Error("redundancy: " + msg)
+	case was && !now:
+		e.event(Event{Kind: EventDuplicateMarked})
+		e.log.Info("redundancy: no voter marks this controller a duplicate any more; it may campaign again")
+	}
+}
+
+// ClearDuplicate clears this controller's voter's mark on name, the
+// operator's step once the copy is stopped (quorum.Voter.ClearDuplicate):
+// name gets new grants here again, and its vote counts toward this
+// controller's lease. It reports whether name was marked. A copy still
+// running is marked again as soon as it is heard beside the original.
+// Restarting the controller clears its marks too (they are in memory).
+func (e *Elector) ClearDuplicate(name string) bool {
+	e.mu.Lock()
+	was := e.v.ClearDuplicate(quorum.NodeID(name))
+	e.mu.Unlock()
+	if was {
+		e.event(Event{Kind: EventDuplicateCleared, Detail: name})
+		e.log.Warn("redundancy: the operator cleared the duplicate mark on " + name)
+	}
+	return was
+}
+
+// DuplicateMarks lists the names this controller's voter has marked as
+// run by two processes at once (quorum.Voter.Marked), sorted.
+func (e *Elector) DuplicateMarks() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	var out []string
+	for _, n := range e.v.Marked() {
+		out = append(out, string(n))
+	}
+	return out
 }
 
 // stamp sets the voter's running promise on a reply as it leaves

@@ -381,15 +381,15 @@ redundancy:
     - **The claim, exactly:** never two leaders while every voter keeps hearing both copies
       of the name. Clone-link cuts are measured, not gated: no pass/fail schedule cuts a
       clone's own links (`richCloneRun` and `TestCloneSeeds` cut only A–B, A–W and B–W).
-    - **What it doesn't close:**
+    - **What it didn't close (closed by 3c-1, below, except where marked irreducible):**
       - **A network split that separates a running clone from its original**, with the
         original beside the witness and the clone beside the peer, or the mirror. Once the
         other boot ages out (a lease), no voter on either side sees two, and each side holds
         two of the three names, since the duplicated voter counts on both sides.
-        `TestMeasureCloneSplit` gives two leaders in 2,000 of 2,000 runs of each shape.
+        Before 3c-1, two leaders in 2,000 of 2,000 runs of each shape (`TestCloneSplitNoTwoLeaders` now).
       - **The overlap can also start when a cut heals** (#1094 review). A voter forgets a
         boot after a lease of silence (`noteNonce`/`dupLeft`), so the first copy back gets
-        a grant. `TestMeasureCloneSplit` measures the review's shapes, for a clone of A with
+        a grant. The review's shapes were measured for a clone of A with
         cuts from 8 s + 2–5 leases for 8 leases. Two leaders per 400 runs:
         - {A–B, clone–B, clone–W, B–W}: 29;
         - {A–W, clone–B, clone–W, B–W}: 63;
@@ -400,17 +400,11 @@ redundancy:
         original cut from both other voters, with the clone leading meanwhile, can also
         come back at a lower term than the clone's (I2): a device that fences by term
         refuses it until its next re-term, a look or so later.
-      - **The 3c fix: a sticky confirmed-duplicate mark.** A voter that has seen two boots
-        of a name interleaved keeps refusing that name and discounting its vote until an
-        operator clears it, so a split after the clone was seen leaves no leader on either
-        side. It needs a guard against a false mark from reordered frames (two alternations,
-        or N1 after N2 by more than the maximum delay) and a reorder test. It comes first in
-        3c, with the operator clear and the spare flow, and lifting `experimental` needs it.
       - **Irreducible: a clone booted on the far side of a split that already exists** is
         never seen beside the original. Only the box check (layer 1) stops it.
-      - **One more 3c item:** a restart faster than the vote link's one-way delay can be
-        counted as a duplicate once, for a promise granted to its old boot after it died.
-        It needs the same evidence rule as the sticky mark.
+      - **A restart faster than the vote link's one-way delay** can still be counted as a
+        duplicate once, by the relay rule, for a promise granted to its old boot after it
+        died (an alarm only; 3c-1 removed the other source, below). Tracked on #616.
     - **What it costs:**
       - **No other fault:** a running clone costs redundancy, not the leader. A clone of a
         healthy settled leader costs no takeover: the renewals of its running promises
@@ -428,6 +422,115 @@ redundancy:
           one boot's own frames can arrive out of order.
       - **Stopping the clone** brings a real controller back within `cloneStopBound`
         (5.6 leases; worst 2.4 s at a 2 s lease in the simulator).
+    - **Step 3c-1: the confirmed-duplicate mark (#1029).** Step 1 forgets a boot after a lease
+      of silence, which is what a split looks like, so the splits and heal shapes above gave
+      two leaders. A voter now remembers, until an operator clears it, that a name ran twice.
+      - **The evidence.** A voter keeps, per name, the boots it heard in that name's OWN
+        requests (never a relay: after a real restart the voters relay their promise to the
+        old boot for up to a lease), with each boot's first receipt and highest `Seq`. A
+        request's `Seq` numbers every request one boot sends, probes included (wire version
+        4); request ids can't serve, every probe carries `ProbeID`. A frame is evidence only
+        when its `Seq` is new for that boot, so a duplicated or replayed frame (F31) proves
+        nothing (while the voter remembers that boot: a voter that restarted, or forgot the
+        boot at its cap, takes a late copy as new). Two boots ran at once when EACH sent a
+        new frame that arrived more than D = lease/4·(1+ρ) after the other's first frame;
+        the voter then **marks** the name. One frame each, not two: the #1113 re-check
+        measured that two would leave a split soon after a clone's start with no voter that
+        marked it far more often (633 against 45 two-leader runs in 3,600 with the split
+        within half a second), and two leaders outrank a false mark (naut-lead, James: when
+        in doubt, nobody leads).
+        A real restart (a plain one, or `naut deploy`'s, which stops the unit before starting
+        it) stops the old process before the new one starts, so every frame of the old boot
+        left before the new boot's first did and arrives within the one-way delay of it: the
+        old boot never qualifies. Two live copies both keep sending, and both qualify within D
+        and a look. Counting alternations instead (k = 2, 3, 4) measured the same, so it
+        isn't used.
+      - **Why both sides (a false-mark route found before review).** The first version took
+        the boot heard FIRST as the older one, and marked when it sent past D after the
+        other's first frame. A voter that never heard the old boot (it has just restarted,
+        the documented clear, or its link to the controller has just come up) can hear a
+        restarted controller's new boot first and then one old frame still in flight, inside
+        the delay rule; the new boot then sends on, and that version marked a controller that
+        had only restarted. `TestAVoterThatMissedTheOldBootMarksNoRestart` pins it, and
+        `TestRestartsBesideAVoterRestartMarkNothing` (a controller restarting beside a voter's
+        restart, links at the delay limit) is red once in 300 runs under the one-sided rule
+        (`dup_mark_one_sided`). A voter keeps eight boots per name and forgets the one heard from
+        longest ago, without banning it: an original cut from the voter while a copy restarted
+        over and over comes back as a new boot and is marked (`evicted_boot_banned`).
+      - **What a mark does.** The marked name gets no new grant (a running promise to that
+        very boot still renews, as in step 1), `Voter.Duplicated` stays true (the candidate
+        discounts that voter's grants), and every reply to the name says `Marked`. A
+        candidate told so by any of its voters stops campaigning; it keeps probing (how it
+        hears the clear) and keeps renewing a lease it holds. The controller says so in its
+        hello ("may not campaign"), and a leader never yields (`maybeYield`) to a peer its
+        own voter marked.
+      - **The two rules of the #1113 review.** Fable found that a single voter restart inside
+        a split could still give two leaders when only that voter had marked the name (a clone
+        that reaches only the witness, the original cut from it, the witness restarted with
+        the copy still running: it forgot the mark, its first unmarked reply freed the clone,
+        and it granted it; 115 of 300 on main, 164 of 300 on the PR as first pushed), and a
+        second route through the clone's copy of the original's voter granting the peer. The
+        simulator delivered the peer's requests to the original only, so it could see
+        neither; it now delivers them to a running clone too (`sendPeerVote`).
+        - **(i) A hold ends only on the word of the voter boot that set it.** Replies carry the
+          voter's boot (`Reply.VoterBoot`); an unmarked reply from another boot of that voter
+          (it restarted and forgot) leaves the hold. Then only the held controller's own
+          restart ends it (`hold_released_by_any_boot`).
+        - **(ii) A held controller's voter makes no new grant to the other controller**
+          (renewals of a running promise go on): one of the two copies of that voter must not
+          hand the other controller a lease beside the original's (`held_voter_grants`). In
+          the simulator the original is held, or discounts its own vote, whenever this
+          happens, so no schedule needs the rule alone; it is pinned at the voter.
+      - **The alarm** counts on the mark only, once per mark, and follows the voter's mark
+        count (`MarkCount`), not the last duplicate's cause: a relay rule can count again in
+        the very `Handle` that marked and overwrite it (#1113 review). It is never paced away
+        by an earlier alarm: it carries the only word on the clear (`mark_alarm_from_cause`). Two live
+        boots are still refused but no longer counted: a fast real restart looks like that
+        for a moment, and a copy running beside the original is confirmed within a quarter
+        lease and a look anyway. The relay rules (a)/(b) count as before.
+      - **A discounted grant never re-terms a leader.** The discount turned a grant into a
+        refusal at the leader's own term, which re-termed it every renewal while a voter
+        stayed duplicated (every clone race failed the steady-state oracle once the mark
+        made that permanent).
+      - **The clear.** `Voter.ClearDuplicate`, exposed as `Elector.ClearDuplicate` and
+        `Witness.ClearDuplicate`; the operator command is 3c-3, and durable marks (state
+        format 6) are scheduled with it. Marks are in memory, so until then the clear is three
+        steps in a strict order: stop the copy and confirm it is down; restart each member
+        that raised the alarm; then restart the marked controller(s), even one that leads
+        (the original shares the marked name: a hand-over that needs the witness).
+      - **The measure.** `TestCloneSplitNoTwoLeaders`: the six shapes above, 0 two-leader
+        runs (200 per shape in CI, 2,000 measured; before, 2,000/2,000 for both splits and
+        126, 306, 58, 13 of 2,000 for the heal shapes). The "mark" oracle (no mark in a run
+        without a clone) runs in every seed suite: 0 in 200,000 default seeds. Without the
+        `Seq` filter, 2 in 20,000 marked a restarted controller on a duplicated old frame.
+      - **A restart inside a split** forgets that member's marks.
+        `TestCloneSplitSingleRestarts`: every split shape (the six, the heal shapes mirrored
+        to a clone of B, and the review's clone that reaches only one voter) × each member
+        restarting once (the original, the clone, the peer, the witness), with the peer's
+        requests reaching the clone: 0 two-leader runs in 48,000 (1,000 per cell; 100 in
+        CI). Two members restarting (`TestMeasureCloneSplitDoubleRestarts`, every pair):
+        0 in 21,600, measured, not claimed. The claim is **no single restart gives two
+        leaders**; the clear's order (copy first) keeps the double out.
+      - **What it costs, stated:**
+        - **During a split with a clone, usually nobody leads**: 0% of the split led in both
+          splits and the two heal shapes that cut B–W (99% and 94% in the other two); never
+          two.
+        - **Once a member that marked a controller restarts, for any reason** (`naut deploy`
+          included), that controller stays held until it is itself restarted.
+        - **After a mark, a witness outage or a cut leaves no leader until it is cleared**:
+          the leader that remains needs both unmarked voters.
+        - A real controller leads again once the cut has healed, the clone is gone and the
+          marks are cleared (100% of the time after it, in every shape).
+      - **Detection window (a stated residual).** A split that starts before any voter has
+        heard both copies send past the delay leaves nothing marked, as a clone booted beyond
+        an existing split does. `TestMeasureCloneEarlyCut` (every split shape, no restart, a
+        2 s lease): two leaders in 52, 21 and 1 of 3,600 with the split 0–0.5 s, 0.5–1 s and
+        1–1.5 s after the clone's start, 0 from 1.5 s on.
+      - **False marks:** a new frame of a dead boot delayed past lease/4 (outside the delay rule;
+        Seq stops a copy or replay of a frame the voter already had, not one it never got), or
+        two processes of one member overlapping for longer than that. Either costs that
+        controller's redundancy until cleared, never the leader. `TestDeployRestartsMarkNothing`
+        restarts both controllers and the witness as `naut deploy` does.
     - **Step 2 (3c): the clone as a spare.** The incumbent keeps the name, and the newcomer
       demotes itself, durably and silently, on a positive "held by" reply; `recommission`
       turns a spare into a replacement.

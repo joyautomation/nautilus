@@ -172,17 +172,39 @@ var table = []mutation{
 	// #1029 step 1: a duplicated name gets no new grant. Each is pinned by
 	// a schedule where it alone stands between the pair and two leaders
 	// (quorum/sim/dupname_test.go), and the clone races catch most.
-	{"dup_name_ignored", []string{"TestADuplicatedNameGetsNoNewGrant", "TestVoterRefusesANameUnderAnotherBootNonce", "TestStandbyProbesItsPeerSoTheCloneIsSeen", "TestCloneRaceSeeds"}},
-	{"same_term_other_boot", []string{"TestATermIsNotGrantedToAnotherBoot", "TestATermGoesToOneBootOfAName"}},
+	// Since 3c-1 the mark also covers the step-1 sim pins (seed 8657's
+	// race, the standby-probe schedule): those rules keep the pins below,
+	// where each still alone stands between the pair and a fault.
+	{"dup_name_ignored", []string{"TestADuplicatedNameGetsNoNewGrant", "TestVoterRefusesANameUnderAnotherBootNonce", "TestDupRelayStopsTheWitnessGrantingAClone"}},
+	{"same_term_other_boot", []string{"TestATermIsNotGrantedToAnotherBoot", "TestATermStaysOneBootsAcrossARestart"}},
 	{"grant_nonce_volatile", []string{"TestATermStaysOneBootsAcrossARestart"}},
 	{"grant_nonce_unwritten", []string{"TestAnUpgradedVoterWritesTheNonceOnARenewal"}},
 	{"dup_refuses_incumbent", []string{"TestADuplicatedNameGetsNoNewGrant", "TestCloneOfTheLeaderCostsNoTakeover"}},
-	{"dup_voter_counts", []string{"TestCandidateDiscountsADuplicatedVoter", "TestDuplicatedVoterBacksNoLease"}},
+	{"dup_voter_counts", []string{"TestCandidateDiscountsADuplicatedVoter", "TestCloneSplitNoTwoLeaders", "TestCloneRaceSeeds"}},
 	{"dup_not_relayed", []string{"TestADuplicatedNameIsRelayed", "TestDupRelayStopsTheWitnessGrantingAClone"}},
-	{"standby_probes_witness_only", []string{"TestStandbyProbesItsPeerSoTheCloneIsSeen", "TestCloneRaceSeeds"}},
+	{"standby_probes_witness_only", []string{"TestTheStandbysPeerProbeLetsItsPeerSeeAClone"}},
 	{"yield_before_refusal", []string{"TestNoYieldToARequestTheVoterRefuses"}},
 	{"dup_strict_ignores_delay", []string{"TestASingleRestartRaisesNoDuplicate"}},
 	{"rule_b_counts_own_boot", []string{"TestRuleBCountsOnlyAnotherBoot", "TestASingleRestartRaisesNoDuplicate"}},
+	// #1029 3c: a voter that heard two boots of a name running at once
+	// marks it until cleared. The split gates are where the mark alone
+	// stands between the pair and two leaders; the hold, where a split's
+	// voters both restart.
+	{"dup_mark_off", []string{"TestAMarkNeedsTheOldBootPastTheDelay", "TestAMarkedNameGetsNoNewGrantUntilCleared", "TestCloneSplitNoTwoLeaders", "TestCloneSplitVoterRestarts"}},
+	{"dup_mark_counts_replays", []string{"TestAReplayedFrameNeverMarks", "TestLateCopiesAfterARestartMarkNothing"}},
+	{"dup_mark_no_delay", []string{"TestAMarkNeedsTheOldBootPastTheDelay"}},
+	{"dup_mark_one_sided", []string{"TestAVoterThatMissedTheOldBootMarksNoRestart", "TestRestartsBesideAVoterRestartMarkNothing"}},
+	{"evicted_boot_banned", []string{"TestAnEvictedOriginalIsMarkedWhenItComesBack"}},
+	// #1113 review, rules (i) and (ii): a hold ends only on the marking
+	// voter boot's word; a held controller's voter makes no new grant.
+	{"hold_released_by_any_boot", []string{"TestAHoldEndsOnlyOnTheMarkingBootsWord", "TestCloneSplitSingleRestarts"}},
+	{"held_voter_grants", []string{"TestAHeldControllersVoterGrantsTheOtherNoNewLease", "TestHeldVoterGrantsNothingInADoubleRestart"}},
+	{"dup_mark_from_relay", []string{"TestARelayedOldBootNeverMarks"}},
+	{"marked_not_told", []string{"TestAMarkedNameGetsNoNewGrantUntilCleared", "TestCloneSplitVoterRestarts"}},
+	{"marked_still_campaigns", []string{"TestAMarkedCandidateStopsCampaigning", "TestCloneSplitVoterRestarts", "TestCloneRaceSeeds"}},
+	{"discount_reterms", []string{"TestADiscountedGrantDoesNotReterm", "TestCloneSeeds"}},
+	{"clear_keeps_mark", []string{"TestClearingAMarkGrantsTheNameAgain"}},
+	{"dup_alarm_unconfirmed", []string{"TestVoterRefusesANameUnderAnotherBootNonce", "TestADuplicatedNameGetsNoNewGrant"}},
 	// The relay refuses a takeover's first campaign at the witness at
 	// times, before its own voter's grant is back: the retry must come
 	// half a look on, not a lease.
@@ -239,6 +261,9 @@ var table = []mutation{
 	{"yield_undamped", []string{"TestLoopbackYieldIsDamped"}},
 	{"yield_ignores_may", []string{"TestLoopbackNoYieldToAnUnhealthyPeer"}},
 	{"yield_ignores_can_sync", []string{"TestLoopbackNoYieldToAPeerThatCannotSync"}},
+	{"yield_to_marked_peer", []string{"TestLoopbackNoYieldToAPeerItsVoterMarked"}},
+	{"may_ignores_mark", []string{"TestLoopbackAMarkedControllerSaysItMayNotCampaign"}},
+	{"mark_alarm_from_cause", []string{"TestTheConfirmedAlarmSurvivesARelayCountInTheSameHandle"}},
 	{"yield_until_due", []string{"TestYieldHoldsUntilTheLeaseIsSeenOver"}},
 	// In the log (oplog).
 	{"term_not_persisted", []string{"TestLostLogKeepsItsTerm"}},
@@ -289,6 +314,7 @@ var rowPkgs = map[string][]string{
 	"vouch_refuses_counting_ahead": {"./oplog", "./cmd/naut"},
 	"vouch_refusal_blocks":         {"./cmd/naut"},
 	"reply_relay_dropped":          {"./cmd/naut"},
+	"standby_probes_witness_only":  {"./quorum/...", "./cmd/naut"},
 	"can_sync_stale":               {"./oplog"},
 	"placeholder_keeps_synced":     {"./oplog"},
 	"unsynced_log_writes":          {"./oplog", "./cmd/naut"},

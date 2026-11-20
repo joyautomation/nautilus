@@ -288,6 +288,19 @@ func (n *pairNode) crash() {
 	}
 }
 
+// stop stops the member as runProject does on SIGTERM (a deploy's
+// restart): the scans and the election's Run end, then Release, then the
+// member closes.
+func (n *pairNode) stop() {
+	n.cancel()
+	<-n.done
+	if n.m != nil {
+		n.m.q.Node().Release()
+		n.m.Close()
+		n.m = nil
+	}
+}
+
 func pairWait(t *testing.T, what string, d time.Duration, ok func() bool) {
 	t.Helper()
 	for end := time.Now().Add(d); time.Now().Before(end); time.Sleep(20 * time.Millisecond) {

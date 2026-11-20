@@ -24,8 +24,11 @@ type Record struct {
 	// duplicates counts, per node, the duplicates its voter counted (a
 	// redundancy.duplicate-member alarm's cause), across its restarts.
 	duplicates [nNodes]uint64
-	starts     []voterStart
-	faults     []faultEdge
+	// Marks are the names voters confirmed as run by two processes at
+	// once (quorum.Voter.Marked, #1029 3c), in order.
+	Marks  []Mark
+	starts []voterStart
+	faults []faultEdge
 
 	// Writes are what the simulated device received (I2): a controller
 	// writes it on each scan while its gate is open.
@@ -491,6 +494,17 @@ type Checks struct {
 	// period and a lease after the last adoption, and an adoption later
 	// than HealAt + SettleAdoptions is a violation ("settle").
 	SettleAdoptions time.Duration
+	// NoMarks: no clone ran, so a voter marking any name a confirmed
+	// duplicate is a false mark ("mark"): it would refuse a real
+	// controller every new grant until an operator clears it (#1029 3c).
+	NoMarks bool
+}
+
+// Mark is a voter confirming a name as run by two processes at once.
+type Mark struct {
+	At    time.Duration
+	Voter Addr
+	Name  quorum.NodeID
 }
 
 // Check runs every oracle over r.
@@ -541,8 +555,24 @@ func Check(r *Record, c Checks) []Violation {
 		}
 		c.SteadyFrom = max(c.SteadyFrom, last+2*r.lease)
 	}
+	if c.NoMarks {
+		for _, m := range r.Marks {
+			add(Violation{"mark", m.At, fmt.Sprintf("%v marked %s a confirmed duplicate with no clone running: a false mark", m.Voter, m.Name)})
+		}
+	}
 	if c.SteadyTo > c.SteadyFrom {
-		for _, v := range r.checkSteady(gates, c.SteadyFrom, c.SteadyTo, c.SteadyVoters) {
+		// A controller whose name a voter marked is held until an operator
+		// clears the mark, which no run does: its voter makes no new grant
+		// to the other controller (#1113 review, rule (ii)), so it isn't
+		// asked to back the leader (the stated cost: after a mark, the
+		// leader needs the other voters).
+		voters := c.SteadyVoters
+		if len(r.Marks) > 0 {
+			voters = slices.DeleteFunc(slices.Clone(voters), func(a Addr) bool {
+				return slices.ContainsFunc(r.Marks, func(m Mark) bool { return isController(a) && m.Name == nodeIDs[a] })
+			})
+		}
+		for _, v := range r.checkSteady(gates, c.SteadyFrom, c.SteadyTo, voters) {
 			add(v)
 		}
 	}

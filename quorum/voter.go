@@ -1,6 +1,9 @@
 package quorum
 
-import "time"
+import (
+	"slices"
+	"time"
+)
 
 // Persist asks the driver to write State durably (fsync) and then call
 // Voter.Persisted with Seq. The driver may coalesce: persisting a later
@@ -66,9 +69,175 @@ type Voter struct {
 	// refused until their time. In memory only, as heard.
 	seen     map[NodeID][]seenNonce
 	dupHeard map[NodeID]Instant
+	// boots: per name, the boots heard in that name's OWN requests (never
+	// a relay), with the first receipt and the highest Seq of each.
+	// marked: the names confirmed as run by two processes at once (one
+	// boot kept sending after another had started, beyond the one-way
+	// delay). A marked name gets no new grant and its vote counts nowhere
+	// this voter's candidate counts, until ClearDuplicate (#1029 3c). In
+	// memory only: a restart clears them, and a copy still running is
+	// marked again within a quarter lease and a look.
+	boots  map[NodeID][]bootSeen
+	banned map[NodeID][]uint64 // evicted_boot_banned only
+	marked map[NodeID]bool
+	// relaySeq: dup_mark_from_relay's stand-in Seq (mutation only).
+	relaySeq uint64
+	// boot identifies this voter's process boot on its replies (SetBoot).
+	boot uint64
+	// ownHeld reports whether this node's own candidate is held by a mark on
+	// its name (Candidate.Marked; NewAdoption wires it): the voter then
+	// makes no new grant to another node (#1113 review).
+	ownHeld func() bool
+	// marks counts the marks this voter made, lastMarked the latest name
+	// (MarkCount): the alarm follows these, not DuplicateCause, which a
+	// later count in the same Handle can overwrite.
+	marks      uint64
+	lastMarked NodeID
 	// pushedTo, pushedNonce: the promise RelayChanged last reported.
 	pushedTo    NodeID
 	pushedNonce uint64
+}
+
+// bootSeen is one boot of a name as its own requests showed it: the
+// nonce, when its first and its latest new request arrived, and the
+// highest Seq heard.
+type bootSeen struct {
+	nonce       uint64
+	first, last Instant // when its first and its latest new request arrived
+	seq         uint64
+}
+
+// maxBoots is how many boots per name a voter keeps evidence for.
+const maxBoots = 8
+
+// noteBoot takes a request from name under nonce with Seq seq, received
+// at now, as evidence (#1029 3c). A frame is new evidence only when its
+// Seq is above every Seq heard from that boot: a duplicated or replayed
+// frame proves nothing. Two boots ran at once when EACH sent a new frame
+// that arrived more than D after the other's first frame. A real restart
+// stops the old boot before the new one starts, so every frame of the old
+// boot left before the new boot's first did, and arrives within the
+// one-way delay of it (at most a quarter lease, the documented rule): the
+// old boot never qualifies, whichever of the two this voter heard first
+// (a voter that restarted, or whose link just came up, may hear the new
+// boot before an old frame still in flight). Two live copies both keep
+// sending, and both qualify within D and a look. D is that quarter lease,
+// stretched by the clock-rate margin (all receipts are this voter's own
+// clock). The name is then marked.
+func (v *Voter) noteBoot(now Instant, name NodeID, nonce, seq uint64) {
+	if nonce == 0 || seq == 0 || name == "" || v.marked[name] || mut("dup_mark_off") {
+		return
+	}
+	if mut("evicted_boot_banned") {
+		for _, x := range v.banned[name] {
+			if x == nonce {
+				return
+			}
+		}
+	}
+	if v.boots == nil {
+		v.boots = map[NodeID][]bootSeen{}
+	}
+	bs := v.boots[name]
+	i := -1
+	for j := range bs {
+		if bs[j].nonce == nonce {
+			i = j
+		}
+	}
+	if i < 0 {
+		if len(bs) >= maxBoots {
+			// Forget the boot heard from longest ago. Forgotten, not
+			// banned: an original cut from this voter while a copy
+			// restarted over and over comes back as a new boot, and is
+			// marked beside the copy (#1113 review). The price: a frame
+			// of a forgotten boot late beyond the delay rule can mark.
+			old := 0
+			for j := range bs {
+				if bs[j].last < bs[old].last {
+					old = j
+				}
+			}
+			if mut("evicted_boot_banned") {
+				if v.banned == nil {
+					v.banned = map[NodeID][]uint64{}
+				}
+				v.banned[name] = append(v.banned[name], bs[old].nonce)
+			}
+			bs = append(bs[:old:old], bs[old+1:]...)
+		}
+		v.boots[name] = append(bs, bootSeen{nonce: nonce, first: now, last: now, seq: seq})
+		return
+	}
+	if seq <= bs[i].seq && !mut("dup_mark_counts_replays") {
+		return // a replay or a duplicate: no new evidence
+	}
+	bs[i].seq = max(bs[i].seq, seq)
+	bs[i].last = now
+	d := time.Duration(float64(max(v.lease, v.st.Lease)/4) * (1 + MaxRho))
+	if mut("dup_mark_no_delay") {
+		d = 0
+	}
+	// One new frame past D from each boot, not two: two frames would let
+	// a split that follows a clone's start by under a lease find no voter
+	// that marked it (633 two-leader runs in 3,600 with the split within
+	// half a second, against 45 with one; #1113 re-check). A late frame
+	// of a boot this voter remembers is caught by Seq; one of a boot it
+	// forgot, beyond the delay rule, can mark (a false mark costs that
+	// controller's redundancy until cleared, never the leader).
+	x := bs[i]
+	for _, y := range bs {
+		if y.nonce == nonce || x.last <= y.first.Add(d) {
+			continue
+		}
+		if y.last > x.first.Add(d) || (mut("dup_mark_one_sided") && x.first <= y.first) {
+			if v.marked == nil {
+				v.marked = map[NodeID]bool{}
+			}
+			v.marked[name] = true
+			v.marks++
+			v.lastMarked = name
+			v.duplicate(true, name, DupConfirmed)
+			return
+		}
+	}
+}
+
+// SetBoot sets the id of this voter's process boot, stamped on every reply
+// (Reply.VoterBoot): the driver's boot nonce, or any value that differs
+// from one start to the next.
+func (v *Voter) SetBoot(boot uint64) { v.boot = boot }
+
+// MarkCount is how many times this voter has marked a name, and the latest
+// name it marked. The driver raises the confirmed duplicate alarm when it
+// rises (#1029 3c).
+func (v *Voter) MarkCount() (uint64, NodeID) {
+	return v.marks, v.lastMarked
+}
+
+// Marked returns the names this voter has confirmed as run by two
+// processes at once, sorted. Each gets no new grant here, and no vote
+// from it counts toward this node's own lease, until ClearDuplicate.
+func (v *Voter) Marked() []NodeID {
+	out := make([]NodeID, 0, len(v.marked))
+	for n := range v.marked {
+		out = append(out, n)
+	}
+	slices.Sort(out)
+	return out
+}
+
+// ClearDuplicate drops the mark on name and the evidence that set it: the
+// operator has stopped the copy. A copy still running is marked again as
+// soon as it is heard beside the original. It reports whether name was
+// marked. Restarting this voter clears every mark too.
+func (v *Voter) ClearDuplicate(name NodeID) bool {
+	was := v.marked[name]
+	if !mut("clear_keeps_mark") {
+		delete(v.marked, name)
+		delete(v.boots, name)
+	}
+	return was
 }
 
 // seenNonce is one boot nonce heard under a name, live until until.
@@ -124,7 +293,7 @@ func (v *Voter) dupLeft(now Instant, name NodeID) time.Duration {
 // candidate counts no grant from a duplicated voter (NewAdoption wires
 // it): two processes cast that vote (#1029 step 1).
 func (v *Voter) Duplicated(now Instant, name NodeID) bool {
-	return v.dupLeft(now, name) > 0 || now < v.dupHeard[name]
+	return v.marked[name] || v.dupLeft(now, name) > 0 || now < v.dupHeard[name]
 }
 
 // dupRefuses reports whether r asks a NEW grant for a duplicated name, and
@@ -141,10 +310,14 @@ func (v *Voter) dupRefuses(now Instant, r Request, active bool) (refuse, counts 
 	}
 	for _, x := range v.seen[r.From] {
 		if x.nonce != r.Nonce && now < x.until {
-			refuse, counts = true, true
+			// Two live boots: refused, but not yet an alarm. A real
+			// restart can look like this for a moment (an old frame
+			// late); a copy running beside it is confirmed (marked)
+			// within a quarter lease and a look, and that counts.
+			refuse, counts = true, mut("dup_alarm_unconfirmed")
 		}
 	}
-	if now < v.dupHeard[r.From] {
+	if now < v.dupHeard[r.From] || v.marked[r.From] {
 		refuse = true
 	}
 	return refuse, counts
@@ -173,6 +346,9 @@ const (
 	// (Candidate.Tick waits out its voter's promise), so another process
 	// runs under its name (#1029 layer 2, rule (b)).
 	DupVoterPromised
+	// DupConfirmed: this voter heard two boots of the name running at
+	// once, and marked it (Marked, #1029 3c).
+	DupConfirmed
 )
 
 type heldGrant struct {
@@ -330,6 +506,10 @@ func (v *Voter) Hear(now Instant, by NodeID, boot uint64, p Relay) {
 		return
 	}
 	left := min(p.Left, max(v.lease, v.st.Lease)) // no promise runs longer than a lease
+	if mut("dup_mark_from_relay") {
+		v.relaySeq++ // above any real Seq: every relay counts as a new frame
+		v.noteBoot(now, p.To, p.Nonce, 1<<62+v.relaySeq)
+	}
 	v.noteNonce(p.To, p.Nonce, now.Add(time.Duration(float64(left)*(1+MaxRho))))
 	// strict: until when the promise certainly still runs, and a conflict
 	// with it is a duplicate's sign. The relay left its sender up to a
@@ -453,12 +633,27 @@ func (v *Voter) wouldYield(now Instant, r Request) bool {
 		now < v.promiseUntil && r.Term > v.st.Promised
 }
 
+// heldRefuses reports whether r asks this voter for a NEW grant to another
+// node while this node's own candidate is held by a mark (rule (ii) of the
+// #1113 review): a copy of a controller carries a copy of its voter, and
+// the held copy's voter must not lead the other controller into a lease
+// beside the original's. A running promise to that very boot renews.
+func (v *Voter) heldRefuses(r Request, active bool) bool {
+	if r.From == v.self || v.ownHeld == nil || mut("held_voter_grants") || !v.ownHeld() {
+		return false
+	}
+	return !(active && v.st.GrantedTo == r.From && r.Nonce == v.grantNonce)
+}
+
 // wouldRefuseName reports whether Handle would refuse r for its name alone
 // (a duplicated name, or a promise relayed to it under another boot),
 // counting nothing: YieldTo asks it first, so a voter never gives up its
 // own candidate's round to a request it then refuses (#1079 review).
 func (v *Voter) wouldRefuseName(now Instant, r Request) bool {
 	if refuse, _ := v.dupRefuses(now, r, false); refuse {
+		return true
+	}
+	if v.heldRefuses(r, false) {
 		return true
 	}
 	refuse, _, _ := v.heardRefuses(now, r)
@@ -513,6 +708,7 @@ func (v *Voter) Handle(now Instant, r Request) (*Persist, []Reply) {
 	// Every request says its sender runs under that boot now: a probe, a
 	// campaign or a renewal, its own candidate's too (#1029 step 1).
 	v.noteNonce(r.From, r.Nonce, now.Add(v.lease))
+	v.noteBoot(now, r.From, r.Nonce, r.Seq)
 	if r.Renewal && r.From != v.self && now.Add(v.lease) > v.renewalUntil {
 		v.renewalFrom, v.renewalUntil = r.From, now.Add(v.lease)
 	}
@@ -531,6 +727,11 @@ func (v *Voter) Handle(now Instant, r Request) (*Persist, []Reply) {
 	case v.dupRefusedCount(now, r, active):
 		// Two boots of this name are live: no new grant to it, to either
 		// boot (#1029 step 1).
+		return nil, refuse
+	case v.heldRefuses(r, active):
+		// This node's own name is marked: another process runs as it, and
+		// one of the two copies of this very voter must not hand the
+		// other controller a lease (#1113 review, route 2).
 		return nil, refuse
 	case r.Term == v.st.Promised && v.st.GrantedTo == r.From && v.grantNonce != 0 && r.Nonce != v.grantNonce && !mut("same_term_other_boot"):
 		// This term went to another boot of this name: a term is one
@@ -615,7 +816,8 @@ func (v *Voter) RelayRefused() uint64 { return v.relayRefused }
 
 func (v *Voter) reply(r Request, granted bool) Reply {
 	return Reply{From: v.self, To: r.From, Term: r.Term, Nonce: r.Nonce, ID: r.ID, Granted: granted,
-		Promised: max(v.st.Promised, v.st.Floor), Incarnation: v.witnessIncarnation()}
+		Promised: max(v.st.Promised, v.st.Floor), Incarnation: v.witnessIncarnation(),
+		Marked: v.marked[r.From] && !mut("marked_not_told"), VoterBoot: v.boot}
 }
 
 // change marks the in-memory state changed and returns the write that

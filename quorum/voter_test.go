@@ -233,8 +233,11 @@ func TestVoterRefusesANameUnderAnotherBootNonce(t *testing.T) {
 	if grant(t, v, at(lease+lease/2), Request{From: "A", Term: 5, Nonce: 0xB, ID: 3, Renewal: true}) {
 		t.Fatal("granted the other process a renewal of the first one's term")
 	}
-	if n, who := v.Duplicates(); n != 2 || who != "A" {
-		t.Fatalf("duplicates %d (%s), want 2 (A)", n, who)
+	// Refused, but no alarm yet: two live boots are also what a fast real
+	// restart looks like for a moment. The alarm waits for the mark
+	// (TestAMarkNeedsTheOldBootPastTheDelay, #1029 3c).
+	if n, who := v.Duplicates(); n != 0 {
+		t.Fatalf("duplicates %d (%s) before the two boots were confirmed, want 0", n, who)
 	}
 	if !grant(t, v, at(lease+lease/2), Request{From: "A", Term: 5, Nonce: 0xA, ID: 4, Renewal: true}) {
 		t.Fatal("the process the promise was made to could not renew")

@@ -89,8 +89,17 @@ type Candidate struct {
 	// reterm: a voter refused a renewal at a term it had promised to
 	// another (a standby's lost campaign); the next renewal asks for a
 	// higher term, which that voter can grant once its promise runs out.
-	reterm   bool
-	nextID   uint64
+	reterm bool
+	nextID uint64
+	// seq numbers every request this boot sends (Request.Seq).
+	seq uint64
+	// markedBy: the voters whose reply said this name is marked a
+	// confirmed duplicate (Reply.Marked), with the boot of the voter that
+	// said so. Only a later unmarked reply from that same voter boot
+	// clears the entry: a voter cut off since, or one that restarted and
+	// forgot its mark, keeps this candidate from campaigning until it is
+	// itself restarted (#1029 3c, #1113 review).
+	markedBy map[NodeID]uint64
 	rounds   []*round
 	leading  bool
 	leaseEnd Instant // leading only until here, on this node's clock
@@ -257,6 +266,9 @@ func (c *Candidate) Tick(now Instant, seenFrom NodeID, seenUntil Instant, health
 	if now < c.holdUntil {
 		return nil // its own voter is in its restart wait
 	}
+	if c.Marked() && !mut("marked_still_campaigns") {
+		return nil // a voter refuses this name every new grant (NoteMark)
+	}
 	return c.send(now, above(c.maxSeen))
 }
 
@@ -274,7 +286,8 @@ func (c *Candidate) Probe(now Instant) *Request {
 		return nil
 	}
 	c.probeAt = now.Add(c.cfg.look())
-	return &Request{From: c.cfg.Self, Nonce: c.cfg.Nonce, ID: ProbeID}
+	c.seq++
+	return &Request{From: c.cfg.Self, Nonce: c.cfg.Nonce, ID: ProbeID, Seq: c.seq}
 }
 
 // PushProbe is Probe at once, whatever the look: the driver sends it when
@@ -287,7 +300,8 @@ func (c *Candidate) PushProbe(now Instant) *Request {
 		return nil
 	}
 	c.probeAt = now.Add(c.cfg.look())
-	return &Request{From: c.cfg.Self, Nonce: c.cfg.Nonce, ID: ProbeID}
+	c.seq++
+	return &Request{From: c.cfg.Self, Nonce: c.cfg.Nonce, ID: ProbeID, Seq: c.seq}
 }
 
 // ProbesPeer reports whether a driver sends the standby's probe (Probe,
@@ -296,6 +310,41 @@ func (c *Candidate) PushProbe(now Instant) *Request {
 // nobody else while cut from it, and a clone of it would then be the only
 // boot of its name any voter sees.
 func ProbesPeer() bool { return !mut("standby_probes_witness_only") }
+
+// NoteMark takes whether one of this candidate's voters marks its name a
+// confirmed duplicate (Reply.Marked), from every reply meant for this
+// boot, a relay probe's included: the driver calls it before handing the
+// reply on (OnReply, or the voter alone for a probe's). While any voter's
+// last word was "marked", the candidate campaigns no more (Tick): that
+// voter grants this name nothing new, and a campaign it can't win only
+// makes its own voter promise it in vain. It keeps probing, which is how
+// it hears the mark cleared, and keeps renewing a lease it holds (a mark
+// leaves the running promise to this very boot alone). The entry stays
+// until that voter answers again, so a voter cut off since keeps the hold:
+// a clone's copy whose far voter restarted inside a split stays quiet
+// (#1029 3c).
+func (c *Candidate) NoteMark(r Reply) {
+	if r.To != c.cfg.Self || r.Nonce != c.cfg.Nonce {
+		return
+	}
+	if r.From != c.cfg.Self && r.From != c.cfg.Peer && r.From != c.cfg.Witness {
+		return
+	}
+	if !r.Marked {
+		if boot, ok := c.markedBy[r.From]; ok && (boot == r.VoterBoot || mut("hold_released_by_any_boot")) {
+			delete(c.markedBy, r.From)
+		}
+		return
+	}
+	if c.markedBy == nil {
+		c.markedBy = map[NodeID]uint64{}
+	}
+	c.markedBy[r.From] = r.VoterBoot
+}
+
+// Marked reports whether a voter's last reply marked this name a
+// confirmed duplicate (NoteMark): the candidate then doesn't campaign.
+func (c *Candidate) Marked() bool { return len(c.markedBy) > 0 }
 
 // ProbeID is the id of a standby's relay probe (Candidate.Probe), which
 // its reply echoes. A driver hands that reply to its voter's Hear only:
@@ -318,7 +367,8 @@ func (c *Candidate) send(now Instant, term uint64) *Request {
 		c.pending = rd
 	}
 	c.rounds = append(c.rounds, rd)
-	return &Request{From: c.cfg.Self, Term: term, Nonce: c.cfg.Nonce, ID: c.nextID, Renewal: !rd.campaign}
+	c.seq++
+	return &Request{From: c.cfg.Self, Term: term, Nonce: c.cfg.Nonce, ID: c.nextID, Renewal: !rd.campaign, Seq: c.seq}
 }
 
 // OnReply takes a voter's reply, received at now. Only the three voters
@@ -348,10 +398,13 @@ func (c *Candidate) OnReply(now Instant, r Reply) {
 	if (r.To != c.cfg.Self && !mut("no_grantee_check")) || (r.Nonce != c.cfg.Nonce && !mut("no_nonce_check")) {
 		return // meant for the other controller, or for an earlier boot
 	}
+	discounted := false
 	if r.Granted && c.duplicated != nil && c.duplicated(now, r.From) && !mut("dup_voter_counts") {
 		// Two processes cast this voter's vote: it backs no lease, this
-		// controller's own included (#1029 step 1).
+		// controller's own included (#1029 step 1). It is still a grant,
+		// not a term conflict: it never re-terms a leader.
 		r.Granted = false
+		discounted = !mut("discount_reterms")
 	}
 	if r.Promised > c.maxSeen {
 		c.maxSeen = r.Promised
@@ -370,13 +423,15 @@ func (c *Candidate) OnReply(now Instant, r Reply) {
 		if !quiet {
 			rd.grants[r.From] = true
 		}
-	} else if c.leading && !rd.campaign && rd.term == c.renewTerm && r.Promised >= rd.term {
+	} else if !discounted && c.leading && !rd.campaign && rd.term == c.renewTerm && r.Promised >= rd.term {
 		// A voter refused our renewal at the term we renew at now: it
 		// promised this term or a later one elsewhere (a standby's lost
 		// campaign). Renew at a higher term from now on, so it can grant us
 		// again once that runs out. A refusal of an older round (late, or
 		// a duplicate refused because we re-termed since) changes nothing,
-		// or stragglers would re-term us without end.
+		// or stragglers would re-term us without end. Nor does a grant
+		// discounted above: re-terming would not change it, and a voter
+		// marked for good would re-term every renewal (#1029 3c).
 		c.reterm = !mut("no_reterm")
 	}
 	if (!r.Granted || (len(rd.replies) == 2 && !mut("retry_after_refusal_only"))) && !c.leading && len(rd.replies) >= 2 && len(rd.grants) < 2 {

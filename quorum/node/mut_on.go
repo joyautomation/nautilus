@@ -40,6 +40,9 @@ var mutations = []string{
 	"yield_undamped",             // a leader yields again within yieldEvery (#710 3b-4b)
 	"yield_ignores_may",          // a leader yields to a peer that may not campaign (#710 3b-4b)
 	"yield_ignores_can_sync",     // a leader yields to a synced peer that can't sync the others (#1053 review)
+	"yield_to_marked_peer",       // a leader yields to a peer its own voter has marked a confirmed duplicate (#1029 3c)
+	"may_ignores_mark",           // a controller a voter marks a duplicate still says it may campaign (#1029 3c)
+	"mark_alarm_from_cause",      // the confirmed alarm follows the last duplicate's cause, which a later count in one Handle overwrites, and is paced (#1113 review)
 	"vouch_refusal_blocks",       // a vouch the log refuses refuses the re-commission (#1053 review)
 	"yield_until_due",            // a yield ends at the lease's due end, though a late grant moved it (#710 3b-4b)
 }

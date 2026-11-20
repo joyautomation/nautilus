@@ -180,6 +180,7 @@ func NewAdoption(v *Voter, c *Candidate, now Instant) *Adoption {
 		c.holdUntil = v.waitUntil
 	}
 	c.duplicated = v.Duplicated // #1029 step 1
+	v.ownHeld = c.Marked        // #1113 review, rule (ii)
 	return a
 }
 

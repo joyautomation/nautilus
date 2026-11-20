@@ -390,26 +390,48 @@ MAC address passes the box check. The voters catch it instead (#1029):
 - Each vote message carries the promise its sender's voter has made, and
   every voter notes the boots it hears under each name.
 - A name heard under two live boots gets no new grant.
-- A duplicated controller's vote counts for nobody.
-- `redundancy.duplicate-member` is raised, naming the duplicated
-  controller.
+- A voter that hears **both copies running at once** (each keeps
+  sending after the other has started) **marks** the name. The mark stays
+  until it is cleared: a marked name gets no new grant from that voter, and
+  its vote counts for nobody that voter's controller counts.
+- A controller told it is marked stops campaigning, and its own voter
+  grants the other controller nothing new. Only the voter that marked it
+  can lift that, and only while that voter has not restarted.
+- `redundancy.duplicate-member` is raised by the voter that marks it,
+  naming the duplicated controller ("two processes claim to be `a`: this
+  voter heard both running at once"). A controller that is marked logs
+  `redundancy.duplicate-marked`.
 
-So **there are never two leaders while every voter keeps hearing both
-copies** of the name.
+So **there are never two leaders once a voter has heard both copies
+running**, also when a later split separates them, or heals one copy back
+first, and also when **any one** member restarts inside such a split
+while the copy still runs. In the simulator, which also lets the other
+controller's votes reach the copy, that held in 48,000 split runs with one
+member restarting, and in 21,600 with two members restarting. Only the
+single restart is claimed.
 
-**A running clone costs redundancy, not the leader:**
+A plain restart, and `naut deploy`'s update or rollback, never marks
+anything: the old process is gone before the new one starts.
+
+**A running clone costs redundancy, not the leader**, until the network
+also fails:
 
 - **With no other fault the pair keeps a leader.** A clone of the healthy
   leader costs no takeover. If a controller restarts or the leader's scans
   hang while the clone runs, the other controller takes over within a
   takeover's time.
-- **A clone plus a cut on one of the pair's own links** (A–B, A–witness
-  or B–witness) can leave the pair with no leader until the clone is
-  stopped or the cut heals. A cut on the clone's own links can do worse.
-  The original cut from the witness and the clone cut from the other
-  controller gave two leaders in 3 of 400 simulated runs.
-  That case is measured and is fixed by the follow-up to #1029 (see the
-  danger box below).
+- **During a split with a clone, usually nobody leads.** If a cut
+  separates the clone from its original, or one of the pair's own links
+  (A–B, A–witness or B–witness) fails while the clone runs, usually
+  neither side can lead until the cut heals and the marks are cleared.
+  Never two.
+- **After a mark, a witness outage or a cut leaves no leader until the
+  mark is cleared**, even once the clone is stopped: the controller that
+  still leads needs both voters that are not marked, and a marked
+  controller can't take over.
+- **Once a member that marked a controller restarts, for any reason**
+  (a `naut deploy` included), that controller stays held until it is
+  restarted itself.
 
 With no leader, no controller drives outputs. The drivers stop asserting
 them, so each device's communication watchdog sees the silence and puts
@@ -417,9 +439,22 @@ that device in its own safe state, as for a hung scan (above). An output
 on a device with no communication watchdog keeps its last value.
 
 **What to do:** the alarm names the duplicated controller ("two processes
-claim to be `a`"). Find the copy and stop it. A real controller then
-leads within about 5.6 leases (11 s at the default 2 s lease); the
-simulator's worst case was 2.4 s.
+claim to be `a`") and the member that raised it. Clear it in this order,
+and only in this order:
+
+1. **Stop the copy, and confirm it is down.** Every later step assumes
+   it is gone: a member restarted while the copy still runs behind a
+   split forgets what it knew about it.
+2. **Restart each member that raised the alarm** (the witness, or the
+   other controller). Marks are kept in memory, so until the operator
+   command for it arrives, a restart is the only way to clear one.
+3. **Then restart the marked controller(s)**, even one that leads. The
+   original shares the marked name, so this is a hand-over to the other
+   controller, which needs the witness up.
+
+A copy that still runs is marked again within a quarter of a lease and a
+look. Once the marks are cleared and the copy is gone, a real controller
+leads within a takeover's time.
 
 **What the check costs:** one more vote round, at most, on a takeover
 after the leader dies. That is at most 0.95 s plus one round trip
@@ -429,22 +464,23 @@ between the controller and the witness at the default 2 s lease
 near the largest delay a 2 s lease allows.
 
 :::danger[What the voters can't catch]
-- **A network fault that keeps a voter from hearing both copies** can
-  give two leaders until the clone is stopped:
-  - The worst case is a split that separates a running clone from its
-    original, with the original beside the witness and the clone beside
-    the other controller, or the other way round. Each side then sees
-    only one copy of the name.
-  - The overlap can also start when such a fault **heals**. A voter
-    forgets a copy it hasn't heard for a lease, and the first copy back
-    gets its vote.
-
-  (#1029 tracks closing this: once the voters have seen both copies, a
-  split is to leave no leader on either side.)
 - **A clone booted on the far side of a split that already exists** is
   never seen by a voter that knows the original. Only the box check
   stops it, so it is caught only when the clone's machine-id or MAC
   differs.
+- **A split within about a second of the clone's start**, before any
+  voter has heard both copies running, leaves nothing marked either. In
+  the simulator (2 s lease) that gave two leaders in 52, 21 and 1 of
+  3,600 runs with the split in the first, second and third half second
+  after the clone started, and none later.
+- **Restarts the order above forbids.** Members restarted while the copy
+  still runs behind a split forget their marks. No case of one or two
+  such restarts gave two leaders in the simulator, but only one is
+  claimed: stop the copy first.
+- **A message delayed past a quarter of a lease** (beyond the delay a
+  lease allows) from a controller that has just restarted can mark that
+  controller by mistake. It costs that
+  controller's redundancy until the mark is cleared, never the leader.
 
 Stop a clone as soon as `redundancy.duplicate-member` names it.
 :::

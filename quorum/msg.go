@@ -29,6 +29,11 @@ type Request struct {
 	ID      uint64
 	Renewal bool
 	Promise Relay
+	// Seq numbers every request one boot sends, probes included, from 1
+	// (#1029 3c): a voter takes a frame as new evidence only when its Seq
+	// is above every Seq it heard from that boot, so a replayed or
+	// duplicated old frame never counts as that boot still running.
+	Seq uint64
 }
 
 // Relay is a voter's running promise to ANOTHER node, as it relays it on
@@ -61,6 +66,14 @@ type Reply struct {
 	Promised    uint64
 	Incarnation uint64
 	Promise     Relay // the voter's running promise to another node (Relay)
+	// Marked: this voter has confirmed To's name as run by two processes
+	// (Voter.Marked), and gives it no new grant until an operator clears
+	// the mark. A candidate told so stops campaigning (#1029 3c).
+	Marked bool
+	// VoterBoot identifies the voter's process boot (Voter.SetBoot): only a
+	// later word from the same boot ends a hold that boot's mark set, since
+	// a restarted voter has forgotten its marks (#1113 review).
+	VoterBoot uint64
 }
 
 // AdoptKind is what an Adopt message says.
@@ -124,9 +137,10 @@ type Adopt struct {
 // WireVersion is the vote protocol's frame version. A frame of another
 // version is refused whole (ErrVersion). Version 2 added the relayed
 // promise (#1029 layer 2), version 3 the duplicated name it carries
-// (#1029 step 1): a pair that mixes releases across one can't vote, and
-// says so (redundancy.version-mismatch) rather than failing in silence.
-const WireVersion = 3
+// (#1029 step 1), version 4 a request's Seq and a reply's Marked and
+// VoterBoot (#1029 3c): a pair that mixes releases across one can't vote, and says so
+// (redundancy.version-mismatch) rather than failing in silence.
+const WireVersion = 4
 
 // FrameVersion returns the version byte a frame carries (0 when empty).
 func FrameVersion(b []byte) byte {
@@ -174,6 +188,7 @@ func (r Request) MarshalBinary() ([]byte, error) {
 	b = binary.BigEndian.AppendUint64(b, r.ID)
 	b = append(b, boolByte(r.Renewal))
 	b = r.Promise.put(b)
+	b = binary.BigEndian.AppendUint64(b, r.Seq)
 	return sealCRC(b), nil
 }
 
@@ -221,6 +236,8 @@ func (r Reply) MarshalBinary() ([]byte, error) {
 	b = binary.BigEndian.AppendUint64(b, r.Promised)
 	b = binary.BigEndian.AppendUint64(b, r.Incarnation)
 	b = r.Promise.put(b)
+	b = append(b, boolByte(r.Marked))
+	b = binary.BigEndian.AppendUint64(b, r.VoterBoot)
 	return sealCRC(b), nil
 }
 
@@ -314,6 +331,7 @@ func (r *Request) UnmarshalBinary(b []byte) error {
 	v := Request{From: NodeID(rd.str()), Term: rd.u64(), Nonce: rd.u64(), ID: rd.u64()}
 	v.Renewal = rd.boolean()
 	v.Promise = rd.relay()
+	v.Seq = rd.u64()
 	if rd.bad || len(rd.b) != 0 {
 		return ErrCorrupt
 	}
@@ -334,6 +352,8 @@ func (r *Reply) UnmarshalBinary(b []byte) error {
 	v.Granted = rd.boolean()
 	v.Promised, v.Incarnation = rd.u64(), rd.u64()
 	v.Promise = rd.relay()
+	v.Marked = rd.boolean()
+	v.VoterBoot = rd.u64()
 	if rd.bad || len(rd.b) != 0 {
 		return ErrCorrupt
 	}

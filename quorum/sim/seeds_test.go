@@ -226,9 +226,13 @@ func checksFor(o Options) Checks {
 	if switches(o) {
 		c.SettleAdoptions = holdCap
 	}
+	c.NoMarks = true
 	for _, f := range o.Faults {
 		if f.Kind == Freeze {
 			c.Exclude = []string{"I1", "I2", "lease"} // F22b: an expected breach
+		}
+		if f.Kind == Clone {
+			c.NoMarks = false
 		}
 	}
 	return c
