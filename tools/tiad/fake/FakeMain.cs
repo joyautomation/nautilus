@@ -600,9 +600,9 @@ namespace Tiad.Fake
                 p.Protection = ConfigProtection.None;
                 p.ProtectedWith = "";
             }
-            else if (action == ConfigProtection.Unprotect)
+            else if (action == ConfigProtection.ProtectThenUnprotect)
             {
-                if (p.Protection == ConfigProtection.WithPassword) throw new TiaException("PLC Master Secret is not provided.");
+                if (p.Protection == ConfigProtection.WithPassword) throw new TiaException("The PLC Master Secret is already configured.");
                 p.Protection = ConfigProtection.None;
             }
             string bad = ConfigProtection.Check(action, p.Protection);

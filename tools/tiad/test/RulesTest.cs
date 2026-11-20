@@ -329,7 +329,7 @@ namespace Tiad.Test
                 new object[] { N, pw, true, ConfigProtection.Protect },
                 new object[] { P, pw, true, ConfigProtection.Nothing },
                 new object[] { N, none, false, ConfigProtection.Nothing },
-                new object[] { W, none, false, ConfigProtection.Unprotect },
+                new object[] { W, none, false, ConfigProtection.ProtectThenUnprotect },
                 new object[] { P, none, true, ConfigProtection.UnprotectWithPassword },
             };
             foreach (var c in acts)
@@ -363,9 +363,12 @@ namespace Tiad.Test
         {
             Eq(ConfigProtection.Check(ConfigProtection.Nothing, ConfigProtection.WithoutPassword), null, "nothing written, nothing checked");
             Eq(ConfigProtection.Check(ConfigProtection.Protect, ConfigProtection.WithPassword), null, "protect reached");
-            Eq(ConfigProtection.Check(ConfigProtection.Unprotect, ConfigProtection.None), null, "unprotect reached");
+            Eq(ConfigProtection.Check(ConfigProtection.ProtectThenUnprotect, ConfigProtection.None), null, "protect-then-unprotect reached");
             Eq(ConfigProtection.Check(ConfigProtection.UnprotectWithPassword, ConfigProtection.None), null, "unprotect with password reached");
-            Contains(ConfigProtection.Check(ConfigProtection.Unprotect, ConfigProtection.WithoutPassword), "reads WithoutPassword, not None", "a bare unprotect TIA ignored");
+            Contains(ConfigProtection.Check(ConfigProtection.ProtectThenUnprotect, ConfigProtection.WithPassword), "reads WithPassword, not None", "an unprotect TIA ignored");
+            string a = ConfigProtection.Throwaway(), b = ConfigProtection.Throwaway();
+            Eq(StationRules.CheckTiaPassword(a), null, "a throwaway meets TIA's rules");
+            True(a != b, "each throwaway is new");
             Contains(ConfigProtection.Check(ConfigProtection.Protect, ConfigProtection.WithoutPassword), "not WithPassword", "a protect TIA ignored");
             Contains(ConfigProtection.Check(ConfigProtection.UnprotectWithPassword, ConfigProtection.WithPassword), "not None", "a wrong password TIA swallowed");
             Contains(ConfigProtection.Check(ConfigProtection.Protect, ConfigProtection.Absent), "reads absent", "a configurator gone");

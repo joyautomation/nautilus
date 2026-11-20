@@ -299,11 +299,17 @@ The rules for applying a spec:
 - **`cpu.configurationProtection` is required on the wire**: the FW 3.1
   protection of the CPU's confidential configuration data (#789, decision
   of 2026-11-19). A FW 3.1 CPU does not compile until it is set up.
+  Setting it up is not enough on its own: a new FW 3.1 CPU also needs a
+  user with the runtime right Full access ("Users and roles"), which the
+  access-control change after this one adds. Until then a new station
+  still fails its hardware compile in TIA, and the fakes, which compile
+  it, are ahead of TIA.
   - `password`: protected, with `secrets.configurationPassword`. A CPU
     already protected is left as it is: TIA cannot check a password
     offline, and a download asks for it.
   - `none`: off, an explicit choice. Turning off a protected CPU needs its
-    password.
+    password. A CPU never set up is turned off by `Protect` with a
+    throwaway password and `Unprotect` with it, two proven steps.
   - `keep`: tiad changes nothing, for an adopted station. A CPU whose
     protection is not set up (TIA's default for a new CPU) refuses `keep`,
     because it would not compile.
@@ -320,13 +326,14 @@ The rules for applying a spec:
     it is `password`: a new station is protected by default.
   - Proven offline on the TIA machine: a new CPU reads
     `WithoutPassword`, `Protect` moves it to `WithPassword`, and
-    `Unprotect` with the password to `None`. Not yet proven: a bare
-    `Unprotect` of a new CPU (`none` on a new station) and `Protect` from
-    `None`. The read-back refuses either if TIA does otherwise.
-- **Passwords meet TIA's rules before any TIA call**: 10 to 120
-  characters (UTF-16 code units), at least one digit, one upper-case and
-  one lower-case letter (ASCII classes, which can only be stricter than
-  TIA). The refusal names every rule broken and never the password.
+    `Unprotect` with the password to `None`. Not yet proven: `Protect`
+    from `None`. The read-back refuses it if TIA does otherwise.
+- **A password that may be set meets TIA's rules before any TIA call**
+  (`password`): 10 to 120 characters (UTF-16 code units), at least one
+  digit, one upper-case and one lower-case letter (ASCII classes, which
+  can only be stricter than TIA). The refusal names every rule broken and
+  never the password. A password that only unlocks (`none`, a download)
+  is never checked: it was set under whatever rules TIA had then.
 - **I-device transfer areas come later**, as `iDevice:` (P6).
 
 **Where a PROFINET device's entry comes from.** In `nautilus.yaml`, a

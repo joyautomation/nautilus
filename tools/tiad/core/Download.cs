@@ -106,8 +106,6 @@ namespace Tiad
             if (!Ip.IsIPv4(Address)) return "download: address " + Json.Quote(Address) + " is not an IPv4 address";
             if (!Hardware && !Software) return "download: neither hardware nor software selected";
             if (!Announced) return "download: announce it first (announced: true); a dry run reaches the CPU too until S2 proves a cancel loads nothing";
-            string e = Secrets.Check();
-            if (e != null) return "download: " + e;
             return null;
         }
     }

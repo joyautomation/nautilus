@@ -25,7 +25,7 @@ func TestPlanProtection(t *testing.T) {
 		{N, pw, true, actProtect, ""},
 		{P, pw, true, actNothing, ""},
 		{N, none, false, actNothing, ""},
-		{W, none, false, actUnprotect, ""},
+		{W, none, false, actProtectThenUnprotect, ""},
 		{P, none, true, actUnprotectWithPassword, ""},
 		{W, keep, true, "", "keep has nothing to keep: set cpu.configurationProtection to password or none"},
 		{A, pw, true, "", "has no configuration protection (firmware 3.1 and later have it): set it to keep"},

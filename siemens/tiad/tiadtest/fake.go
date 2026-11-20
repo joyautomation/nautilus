@@ -113,7 +113,7 @@ const NotConfigured = "Password for confidential PLC configuration data is not c
 const (
 	actNothing               = ""
 	actProtect               = "protect"
-	actUnprotect             = "unprotect"
+	actProtectThenUnprotect  = "protect-then-unprotect"
 	actUnprotectWithPassword = "unprotect-with-password"
 )
 
@@ -146,7 +146,7 @@ func planProtection(current, want string, havePassword bool) (string, *failure) 
 	case ProtectionNone:
 		return actNothing, nil
 	case ProtectionWithoutPassword:
-		return actUnprotect, nil
+		return actProtectThenUnprotect, nil
 	}
 	if !havePassword {
 		return bad("the project's CPU has its configuration protected by a password; turning that off needs it in secrets.configurationPassword")
@@ -172,7 +172,7 @@ func (s *session) protect(want, password string) *failure {
 			return tia("The password is not correct.")
 		}
 		s.protection, s.protectedWith = ProtectionNone, ""
-	case actUnprotect:
+	case actProtectThenUnprotect:
 		s.protection = ProtectionNone
 	}
 	return nil

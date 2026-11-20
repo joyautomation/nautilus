@@ -177,27 +177,19 @@ namespace Tiad
             return s;
         }
 
-        // Check is tiad.Secrets.Check: a configuration password meets
-        // TIA's password rules. It never echoes a password.
-        public string Check()
-        {
-            if (ConfigurationPassword != "")
-            {
-                string e = StationRules.CheckTiaPassword(ConfigurationPassword);
-                if (e != null) return "secrets.configurationPassword " + e;
-            }
-            return null;
-        }
-
-        // CheckFor is tiad.Secrets.CheckFor: Check, and a configuration
-        // password when the station protects the configuration.
+        // CheckFor is tiad.Secrets.CheckFor: when the station protects the
+        // configuration, a configuration password that meets TIA's
+        // password rules, since it may be set. A password that only
+        // unlocks is never checked. It never echoes a password.
         public string CheckFor(Station st)
         {
-            if (st.Cpu.ConfigurationProtection == StationRules.ProtectPassword && ConfigurationPassword == "")
+            if (st.Cpu.ConfigurationProtection != StationRules.ProtectPassword) return null;
+            if (ConfigurationPassword == "")
             {
                 return "cpu.configurationProtection is password, and secrets.configurationPassword is empty (it comes from the secret store, never the spec)";
             }
-            return Check();
+            string e = StationRules.CheckTiaPassword(ConfigurationPassword);
+            return e == null ? null : "secrets.configurationPassword " + e;
         }
     }
 

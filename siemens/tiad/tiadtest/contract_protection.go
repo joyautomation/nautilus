@@ -55,16 +55,18 @@ func benchSecrets(configurationPassword string) map[string]any {
 	return map[string]any{"webUsers": BenchSecrets.WebUsers, "configurationPassword": configurationPassword}
 }
 
-// contractPasswords runs PasswordCases past the client, on a project and
-// on a download: no TIA call sees a password TIA would refuse, and no
-// refusal echoes it.
+// contractPasswords runs PasswordCases past the client wherever a
+// password may be set (password mode): no TIA call sees one TIA would
+// refuse, and no refusal echoes it. A password that only unlocks (none, a
+// download) was set under whatever rules TIA had then, and is never
+// checked, so an adopted station is never locked out.
 func contractPasswords(t *testing.T, start Starter) {
 	a, s := compiledBench(t, start)
 	c := a.Client()
 	for i, pc := range PasswordCases {
 		name := "pw" + string(rune('a'+i))
 		status, b := rawJSON(t, c, "POST", "/v1/projects", map[string]any{"name": name,
-			"station": BenchStation(), "secrets": benchSecrets(pc.Password)})
+			"station": protectedStation(tiad.ProtectPassword), "secrets": benchSecrets(pc.Password)})
 		if pc.Want == "" {
 			if status != http.StatusOK {
 				t.Errorf("%s: HTTP %d %s, want a project", pc.Name, status, b)
@@ -79,15 +81,20 @@ func contractPasswords(t *testing.T, start Starter) {
 		if len(pc.Password) >= 8 && strings.Contains(msg, pc.Password) {
 			t.Errorf("%s: the refusal echoes the password: %s", pc.Name, b)
 		}
-		// A download checks it before anything else reaches TIA.
-		status, b = rawJSON(t, c, "POST", "/v1/sessions/"+s.ID+"/download", map[string]any{"address": benchCPU,
-			"software": true, "announced": true, "secrets": map[string]string{"configurationPassword": pc.Password}})
-		if msg := envelopeMessage(b); status != http.StatusBadRequest || !strings.Contains(msg, "download: secrets.configurationPassword breaks") || !strings.Contains(msg, pc.Want) {
-			t.Errorf("%s: download HTTP %d %s, want 400 naming %q", pc.Name, status, b, pc.Want)
-		}
-		if n := len(a.Loaded(t)); n != 0 {
-			t.Fatalf("%s: a refused password loaded %d downloads", pc.Name, n)
-		}
+	}
+	// Unlock-only passwords are not TIA's rules' business.
+	old := "old pw"
+	if _, err := s.ApplyStation(ctx, BenchStation(), tiad.Secrets{WebUsers: BenchSecrets.WebUsers, ConfigurationPassword: old}); err != nil {
+		t.Errorf("none with an old-rules password: %v", err)
+	}
+	if _, err := s.Compile(ctx, true, true); err != nil {
+		t.Fatal(err)
+	}
+	status, b := rawJSON(t, c, "POST", "/v1/sessions/"+s.ID+"/download", map[string]any{"address": benchCPU,
+		"software": true, "announced": true, "decisions": map[string]any{"startAfter": false},
+		"secrets": map[string]string{"configurationPassword": old}})
+	if status != http.StatusOK {
+		t.Errorf("a download carrying an old-rules password: HTTP %d %s", status, b)
 	}
 }
 

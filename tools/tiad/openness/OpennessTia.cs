@@ -511,9 +511,15 @@ namespace Tiad.Openness
                 }
                 return;
             }
-            if (action == ConfigProtection.Unprotect)
+            if (action == ConfigProtection.ProtectThenUnprotect)
             {
-                c.Unprotect();
+                using (var ss = Secure(ConfigProtection.Throwaway()))
+                {
+                    c.Protect(ss);
+                    string mid = ConfigProtection.Check(ConfigProtection.Protect, c.MasterSecretConfiguration.ToString());
+                    if (mid != null) throw new TiaException(mid);
+                    c.Unprotect(ss);
+                }
             }
             else
             {

@@ -128,9 +128,18 @@ namespace Tiad
         // with no configurator (firmware before 3.1).
         public const string None = "None", WithoutPassword = "WithoutPassword", WithPassword = "WithPassword", Absent = "";
 
-        // Actions. Unprotect is the bare call (no password), proven on
-        // nothing yet; UnprotectWithPassword is proven on WithPassword.
-        public const string Nothing = "", Protect = "protect", Unprotect = "unprotect", UnprotectWithPassword = "unprotect-with-password";
+        // Actions. ProtectThenUnprotect turns off a CPU that was never set
+        // up by Protect with a throwaway password and Unprotect with it:
+        // both steps are proven on the TIA machine, where a bare
+        // Unprotect of a new CPU is not.
+        public const string Nothing = "", Protect = "protect", UnprotectWithPassword = "unprotect-with-password", ProtectThenUnprotect = "protect-then-unprotect";
+
+        // Throwaway is a one-use password for ProtectThenUnprotect that
+        // meets TIA's rules. It is never logged and never kept.
+        public static string Throwaway()
+        {
+            return "Tz" + Guid.NewGuid().ToString("N") + "9";
+        }
 
         // Plan returns the action that takes current to what want asks,
         // or throws a 400 that names the fix. keep never acts, and refuses
@@ -163,7 +172,7 @@ namespace Tiad
             if (want == StationRules.ProtectNone)
             {
                 if (current == None) return Nothing;
-                if (current == WithoutPassword) return Unprotect;
+                if (current == WithoutPassword) return ProtectThenUnprotect;
                 if (!havePassword)
                 {
                     throw TiadException.BadRequest("{0}", "the project's CPU has its configuration protected by a password; turning that off needs it in secrets.configurationPassword");

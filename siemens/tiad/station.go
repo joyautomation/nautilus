@@ -102,25 +102,22 @@ type Secrets struct {
 	ConfigurationPassword string `json:"configurationPassword,omitempty"`
 }
 
-// Check applies the rules a call's secrets obey before TIA hears of them:
-// a configuration password meets TIA's password rules. It never echoes a
-// password.
-func (s Secrets) Check() error {
-	if s.ConfigurationPassword != "" {
-		if err := checkTiaPassword(s.ConfigurationPassword); err != nil {
-			return fmt.Errorf("secrets.configurationPassword %v", err)
-		}
-	}
-	return nil
-}
-
-// CheckFor applies Check and what st needs from the secrets: a
-// configuration password when st protects the configuration.
+// CheckFor applies what st needs from the secrets before TIA hears of
+// them: when st protects the configuration, a configuration password that
+// meets TIA's password rules, since it may be set. A password that only
+// unlocks (none, or a download) is never checked: it was set under
+// whatever rules TIA had then. The error never echoes a password.
 func (s Secrets) CheckFor(st Station) error {
-	if st.CPU.ConfigurationProtection == ProtectPassword && s.ConfigurationPassword == "" {
+	if st.CPU.ConfigurationProtection != ProtectPassword {
+		return nil
+	}
+	if s.ConfigurationPassword == "" {
 		return fmt.Errorf("cpu.configurationProtection is password, and secrets.configurationPassword is empty (it comes from the secret store, never the spec)")
 	}
-	return s.Check()
+	if err := checkTiaPassword(s.ConfigurationPassword); err != nil {
+		return fmt.Errorf("secrets.configurationPassword %v", err)
+	}
+	return nil
 }
 
 // Validate checks the rules tiad enforces before touching TIA, so a bad

@@ -85,11 +85,6 @@ func (r DownloadRequest) Validate() error {
 	if !r.Announced {
 		return fmt.Errorf("download: announce it first (announced: true); a dry run reaches the CPU too until S2 proves a cancel loads nothing")
 	}
-	if r.Secrets != nil {
-		if err := r.Secrets.Check(); err != nil {
-			return fmt.Errorf("download: %v", err)
-		}
-	}
 	return nil
 }
 
