@@ -26,7 +26,7 @@ spec:
         runAsGroup: 5000
       containers:
         - name: glitchtip
-          image: glitchtip/glitchtip:v7.0.0
+          image: glitchtip/glitchtip:7.0.0
           ports:
             - {name: http, containerPort: 8000}
           env:
@@ -42,6 +42,7 @@ spec:
             - name: VALKEY_URL
               value: redis://:$(REDIS_PASSWORD)@glitchtip-redis:6379/0
             - {name: GLITCHTIP_DOMAIN, value: "https://errors.joyautomation.com"}
+            - {name: ALLOWED_HOSTS, value: "errors.joyautomation.com"}
             - {name: DEFAULT_FROM_EMAIL, value: "errors@joyautomation.com"}
             # No mail yet: messages go to the pod log. README.md, "Email".
             - {name: EMAIL_URL, value: "consolemail://"}
