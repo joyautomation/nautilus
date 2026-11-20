@@ -11,8 +11,10 @@ import (
 
 // The T2 run for the log on three replicas (#710 PR 3b-4a, test plan
 // §8.1): seeded schedules of writes, leader changes, replicas down, lost
-// answers, cut links, restarts, lost logs and rebuilt replicas, on the
-// in-process network, with two oracles checked after every step:
+// answers, late ones (handled after the sender stopped waiting, often
+// after a new leader took over), cut links, restarts, lost logs and
+// rebuilt replicas, on the in-process network, with two oracles checked
+// after every step:
 //
 //   - agreement: no two replicas hold different entries at a seq both
 //     have committed;
@@ -129,7 +131,13 @@ func simulate(t *testing.T, seed uint64, steps int) (int, int) {
 		}
 		return true
 	}
+	lateUntil := -1
 	for step := range steps {
+		if step > lateUntil {
+			tr.net.mu.Lock()
+			tr.net.delay = [3]bool{}
+			tr.net.mu.Unlock()
+		}
 		var what string
 		switch k := r.IntN(100); {
 		case k < 35:
@@ -145,13 +153,23 @@ func simulate(t *testing.T, seed uint64, steps int) (int, int) {
 			v := r.IntN(2) == 0
 			tr.setDown(i, v)
 			what = fmt.Sprintf("n%d down=%v", i, v)
-		case k < 54:
+		case k < 51:
 			i := r.IntN(3)
 			v := r.IntN(3) == 0
 			tr.net.mu.Lock()
 			tr.net.dropReply[i] = v
 			tr.net.mu.Unlock()
 			what = fmt.Sprintf("n%d drops answers=%v", i, v)
+		case k < 54:
+			// Late for the next step only: one write, catch-up or
+			// heartbeat whose requests to it land after the sender
+			// stopped waiting, maybe after a new leader.
+			i := r.IntN(3)
+			tr.net.mu.Lock()
+			tr.net.delay[i] = true
+			tr.net.mu.Unlock()
+			lateUntil = step + 1
+			what = fmt.Sprintf("n%d answers late for a step", i)
 		case k < 60:
 			i, j := r.IntN(3), r.IntN(3)
 			v := r.IntN(2) == 0

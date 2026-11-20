@@ -26,8 +26,16 @@ type simnet struct {
 	down      [3]bool    // every request to or from it fails at once
 	silent    [3]bool    // a request to it blocks until its context ends
 	dropReply [3]bool    // it handles the request, its answer is lost
+	delay     [3]bool    // a request to it is handled simDelay late, even after its sender gave up
 	cut       [3][3]bool // the link from i to j fails
+	late      sync.WaitGroup
 }
+
+// simDelay is longer than a fan-out's grace (lease/8, at most 50 ms) and
+// shorter than the call timeout the simulation runs with (300 ms), so a
+// delayed answer can arrive in time, or after the leader stopped waiting,
+// and the delayed handling can land after the next step (a new leader).
+const simDelay = 80 * time.Millisecond
 
 func (s *simnet) set(i int, h http.Handler) {
 	s.mu.Lock()
@@ -57,7 +65,7 @@ func (h hop) RoundTrip(r *http.Request) (*http.Response, error) {
 	}
 	h.s.mu.Lock()
 	down := h.s.down[h.from] || h.s.down[to] || h.s.cut[h.from][to]
-	silent, drop := h.s.silent[to], h.s.dropReply[to]
+	silent, drop, delay := h.s.silent[to], h.s.dropReply[to], h.s.delay[to]
 	hd := h.s.handlers[to]
 	h.s.mu.Unlock()
 	if r.Body != nil {
@@ -77,14 +85,45 @@ func (h hop) RoundTrip(r *http.Request) (*http.Response, error) {
 	if r.Body != nil {
 		body, _ = io.ReadAll(r.Body)
 	}
-	in := httptest.NewRequest(r.Method, r.URL.String(), bytes.NewReader(body)).WithContext(r.Context())
-	in.Header = r.Header.Clone()
-	rec := httptest.NewRecorder()
-	hd.ServeHTTP(rec, in)
+	serve := func(ctx context.Context, hd http.Handler) *http.Response {
+		in := httptest.NewRequest(r.Method, r.URL.String(), bytes.NewReader(body)).WithContext(ctx)
+		in.Header = r.Header.Clone()
+		rec := httptest.NewRecorder()
+		hd.ServeHTTP(rec, in)
+		return rec.Result()
+	}
+	if delay {
+		// On the wire: handled late whatever the sender does meanwhile,
+		// by whichever process then answers at that address.
+		done := make(chan *http.Response, 1)
+		h.s.late.Add(1)
+		go func() {
+			defer h.s.late.Done()
+			time.Sleep(simDelay)
+			h.s.mu.Lock()
+			hd := h.s.handlers[to]
+			h.s.mu.Unlock()
+			if hd == nil {
+				done <- nil
+				return
+			}
+			done <- serve(context.Background(), hd)
+		}()
+		select {
+		case resp := <-done:
+			if resp == nil || drop {
+				return nil, errSimDown
+			}
+			return resp, nil
+		case <-r.Context().Done():
+			return nil, r.Context().Err()
+		}
+	}
+	resp := serve(r.Context(), hd)
 	if drop {
 		return nil, errors.New("simnet: the answer was lost")
 	}
-	return rec.Result(), nil
+	return resp, nil
 }
 
 // trio is three marked replicas on a simnet, with a leadership the test
@@ -121,6 +160,7 @@ func newTrio(t *testing.T, opts func(i int, o *Options)) *trio {
 		tr.start(i)
 	}
 	t.Cleanup(func() {
+		tr.net.late.Wait() // delayed requests land before the replicas close
 		for i := range 3 {
 			tr.stop(i)
 		}

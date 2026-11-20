@@ -250,6 +250,10 @@ type Mark struct {
 	Identity string `json:"identity"`
 	Held     bool   `json:"held"`
 	Synced   bool   `json:"synced"`
+	// Lost is where a log lost under the held mark was kept ("(missing)"
+	// when there was no file): kept until the replica is synced again,
+	// across restarts, so the alarm it raises lasts as long as the loss.
+	Lost string `json:"lost,omitempty"`
 }
 
 // Chunking: a resend or a catch-up read carries at most this many
@@ -281,7 +285,6 @@ type Node struct {
 	file        *os.File
 	lastContact map[string]time.Time
 	mark        Mark                // with Options.Mark
-	lostAt      string              // where a log lost under the held mark was kept ("" none)
 	peers       map[string]peerInfo // what each peer last said of itself
 }
 
@@ -412,8 +415,7 @@ func (n *Node) openMarked() error {
 		if _, err := n.open(); err != nil {
 			return err
 		}
-		n.lostAt = kept
-		m, write = Mark{Identity: n.o.Identity}, true
+		m, write = Mark{Identity: n.o.Identity, Lost: kept}, true
 		n.log.Error("oplog: this replica's operator-intent log was LOST: it counts for nothing (writes, the majority, a takeover's catch-up) until it has synced from the leader", "file", n.o.File, "kept", kept)
 	}
 	if len(n.entries) > 0 && !m.Held {
@@ -516,11 +518,12 @@ func (n *Node) Synced() bool {
 }
 
 // Lost is where a log lost under the held mark was kept ("(missing)" when
-// there was no file; "" when nothing was lost).
+// there was no file), from the loss until this replica is synced again,
+// across restarts; "" otherwise.
 func (n *Node) Lost() string {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	return n.lostAt
+	return n.mark.Lost
 }
 
 // becomeSyncedLocked marks this replica synced, once. Caller holds mu.
@@ -529,7 +532,7 @@ func (n *Node) becomeSyncedLocked(why string) {
 		return
 	}
 	m := n.mark
-	m.Synced = true
+	m.Synced, m.Lost = true, ""
 	if err := n.setMarkLocked(m); err != nil {
 		n.log.Error("oplog: can't record that the log is synced; it keeps counting for nothing", "error", err)
 		return
@@ -1203,7 +1206,6 @@ func (n *Node) sequenceLocked(ctx context.Context, e Entry) (Entry, error) {
 	e.Term = term
 	e.TS = n.o.Now().UnixMilli()
 	fresh, err := n.acceptLocked([]Entry{e})
-	commit := n.commit
 	stored := 0
 	if n.syncedLocked() {
 		stored = 1
@@ -1225,7 +1227,7 @@ func (n *Node) sequenceLocked(ctx context.Context, e Entry) (Entry, error) {
 	// every write by its call timeout (#710 3b-4). A peer cut off then gets
 	// it at its next heartbeat.
 	fanOut(ctx, n, n.others(), func(ctx context.Context, p string) answer {
-		r, err := n.replicateTo(ctx, p, []Entry{e}, term, commit)
+		r, err := n.replicateTo(ctx, p, []Entry{e}, term)
 		return answer{r, err}
 	}, func(p string, a answer) bool {
 		switch {
@@ -1266,7 +1268,7 @@ func (n *Node) sequenceLocked(ctx context.Context, e Entry) (Entry, error) {
 	// a pair) or write. It runs under seqMu, so a holder that stalls
 	// delays every write by up to the call timeout.
 	fanOut(ctx, n, holders, func(ctx context.Context, p string) error {
-		return n.replicateToErr(ctx, p, nil, term, e.Seq)
+		return n.replicateToErr(ctx, p, nil, term)
 	}, func(p string, err error) bool {
 		if err != nil {
 			n.log.Debug("oplog: commit push", "peer", p, "error", err)
@@ -1277,7 +1279,13 @@ func (n *Node) sequenceLocked(ctx context.Context, e Entry) (Entry, error) {
 }
 
 // replicateTo sends entries to one peer, filling a gap it reports.
-func (n *Node) replicateTo(ctx context.Context, peer string, es []Entry, term, commit uint64) (replicateResp, error) {
+//
+// Each request carries the commit index as it is when the request is
+// built, read under the same lock as its previous entry, so a follower's
+// proof of being synced (its log equal up to the commit) is never judged
+// against an older one. A new entry is sent before it is committed, so
+// it goes out under the commit index from before it.
+func (n *Node) replicateTo(ctx context.Context, peer string, es []Entry, term uint64) (replicateResp, error) {
 	send := func(es []Entry) (replicateResp, error) {
 		n.mu.Lock()
 		prev := n.lastLocked() // a heartbeat: the leader's last entry
@@ -1285,6 +1293,7 @@ func (n *Node) replicateTo(ctx context.Context, peer string, es []Entry, term, c
 			prev = es[0].Seq - 1
 		}
 		pt := n.termAtLocked(prev)
+		commit := n.commit
 		synced := n.syncedLocked() && n.syncedTerm == term
 		n.mu.Unlock()
 		var resp replicateResp
@@ -1338,8 +1347,8 @@ func (n *Node) replicateTo(ctx context.Context, peer string, es []Entry, term, c
 }
 
 // replicateToErr is replicateTo for a caller that needs only its error.
-func (n *Node) replicateToErr(ctx context.Context, peer string, es []Entry, term, commit uint64) error {
-	_, err := n.replicateTo(ctx, peer, es, term, commit)
+func (n *Node) replicateToErr(ctx context.Context, peer string, es []Entry, term uint64) error {
+	_, err := n.replicateTo(ctx, peer, es, term)
 	return err
 }
 
@@ -1413,7 +1422,7 @@ func (n *Node) fetchAfter(ctx context.Context, peer string, after uint64) (after
 	var all afterResp
 	for page := 0; ; page++ {
 		var got afterResp
-		if err := n.call(ctx, peer, fmt.Sprintf("/api/oplog?after=%d", after), nil, &got); err != nil {
+		if err := n.call(ctx, peer, fmt.Sprintf("/api/oplog?after=%d&page=1", after), nil, &got); err != nil {
 			return afterResp{}, err
 		}
 		if page == 0 {
@@ -1458,12 +1467,9 @@ func (n *Node) Heartbeat(ctx context.Context) {
 	if n.standalone() || !n.isLeader() {
 		return
 	}
-	n.mu.Lock()
-	commit := n.commit
-	n.mu.Unlock()
 	term := n.currentTerm()
 	fanOut(ctx, n, n.others(), func(ctx context.Context, p string) error {
-		return n.replicateToErr(ctx, p, nil, term, commit)
+		return n.replicateToErr(ctx, p, nil, term)
 	}, func(p string, err error) bool {
 		if err != nil {
 			n.log.Debug("oplog: heartbeat", "peer", p, "error", err)
@@ -1520,7 +1526,7 @@ func (n *Node) Status() Status {
 		}
 	}
 	s := Status{Self: n.o.Self, Leader: n.leaderAddr(), IsLeader: n.isLeader(), Term: n.term, Peers: n.o.Peers, Reached: reached, LastSeq: n.lastLocked(), Commit: n.commit,
-		Unsynced: !n.syncedLocked(), Identity: n.mark.Identity, Lost: n.lostAt}
+		Unsynced: !n.syncedLocked(), Identity: n.mark.Identity, Lost: n.mark.Lost}
 	n.mu.Unlock()
 	switch {
 	case n.standalone():
@@ -1650,7 +1656,9 @@ func (n *Node) Handler() http.Handler {
 		resp := afterResp{Entries: n.afterLocked(after), Commit: n.commit, Term: n.term, LastSeq: last, LastTerm: n.termAtLocked(last),
 			Unsynced: !n.syncedLocked(), Identity: n.mark.Identity}
 		n.mu.Unlock()
-		if !mutOplog("resend_unchunked") {
+		// Pages only for a reader that asks (page=1): one from before
+		// pages would take the first page for the whole tail.
+		if r.URL.Query().Get("page") == "1" && !mutOplog("resend_unchunked") {
 			resp.Entries, resp.More = chunk(resp.Entries)
 		}
 		writeJSON(w, http.StatusOK, resp)

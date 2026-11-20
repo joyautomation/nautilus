@@ -70,6 +70,13 @@ func TestEntryAckedByAAndWSurvivesWLosingItsLog(t *testing.T) {
 	if seq, _ := tr.holds(2, "X"); seq == 0 {
 		t.Fatal("W synced without X")
 	}
+	if l := tr.nodes[2].Lost(); l != "" {
+		t.Fatalf("W still reports its loss (%q) once synced", l)
+	}
+	tr.restart(2)
+	if !tr.nodes[2].Synced() || tr.nodes[2].Lost() != "" {
+		t.Fatal("W's re-sync did not survive a restart")
+	}
 }
 
 // A lost log under the held mark comes back non-counting: kept aside as
@@ -106,10 +113,14 @@ func TestLostLogUnderTheHeldMarkComesBackNonCounting(t *testing.T) {
 	if st := tr.nodes[0].Status(); st.Writable {
 		t.Fatalf("A's status says writable with two unsynced peers: %+v", st)
 	}
-	// Losses survive a restart: still not counting.
+	// Losses survive a restart: still not counting, still reported (the
+	// alarm lasts as long as the loss).
 	tr.restart(1)
 	if tr.nodes[1].Synced() {
 		t.Fatal("B synced after a restart, without any leader")
+	}
+	if tr.nodes[1].Lost() != "(missing)" {
+		t.Fatalf("B's loss forgotten across a restart: Lost = %q", tr.nodes[1].Lost())
 	}
 }
 
@@ -258,6 +269,33 @@ func TestResendAndCatchUpGoInChunks(t *testing.T) {
 	}
 	if got, want := tr.nodes[1].LastSeq(), tr.nodes[0].LastSeq(); got != want {
 		t.Fatalf("B after its catch-up: up to %d of %d", got, want)
+	}
+}
+
+// A reader from before pages (no page=1) still gets the whole tail in one
+// answer: it would take a first page for all of it.
+func TestUnpagedReaderGetsTheWholeTail(t *testing.T) {
+	defer func(a, b int) { maxChunkEntries, maxChunkBytes = a, b }(maxChunkEntries, maxChunkBytes)
+	maxChunkEntries, maxChunkBytes = 4, 4096
+	tr := newTrio(t, nil)
+	mustSync(t, tr, 0)
+	for k := range 10 {
+		if _, err := tr.propose(0, fmt.Sprint("a", k)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var got afterResp
+	if err := tr.nodes[1].call(tr.ctx(), tr.urls[0], "/api/oplog?after=0", nil, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.More || uint64(len(got.Entries)) != tr.nodes[0].LastSeq() {
+		t.Fatalf("an unpaged read got %d of %d entries (more %v)", len(got.Entries), tr.nodes[0].LastSeq(), got.More)
+	}
+	if err := tr.nodes[1].call(tr.ctx(), tr.urls[0], "/api/oplog?after=0&page=1", nil, &got); err != nil {
+		t.Fatal(err)
+	}
+	if !got.More || len(got.Entries) != 4 {
+		t.Fatalf("a paged read got %d entries (more %v), want a page of 4", len(got.Entries), got.More)
 	}
 }
 
