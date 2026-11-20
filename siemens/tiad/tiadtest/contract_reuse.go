@@ -162,4 +162,75 @@ func contractReuse(t *testing.T, start Starter) {
 	if _, err := n.ApplyStation(ctx, other, BenchSecrets); tiad.Kind(err) != tiad.KindCPUMismatch {
 		t.Fatalf("another CPU on a created project is refused, not made anew: %v", err)
 	}
+
+	// A saved project, opened again, holds its CPU: the same spec takes it
+	// over, another CPU refuses.
+	path, err := n.Save(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := n.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	o, err := c.Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := o.ApplyStation(ctx, other, BenchSecrets); tiad.Kind(err) != tiad.KindCPUMismatch {
+		t.Fatalf("another CPU on an opened project: %v", err)
+	}
+	if r, err := o.ApplyStation(ctx, BenchStation(), BenchSecrets); err != nil || !reflect.DeepEqual(r.Changes, []string{"cpu PLC_1 taken over from the project"}) {
+		t.Fatalf("the saved CPU on an opened project: %+v %v", r, err)
+	}
+	if _, err := o.Compile(ctx, true, true); err != nil {
+		t.Fatalf("the opened project, its CPU kept, compiles: %v", err)
+	}
+	if err := o.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// contractReuseAfterARefusedUpload: an upload whose CPU is not the pinned
+// one leaves a project nobody may take over or save; an upload of the
+// pinned CPU cleans the session again.
+func contractReuseAfterARefusedUpload(t *testing.T, start Starter) {
+	a := start(t, Config{Targets: []string{benchCPU}})
+	c := a.Client()
+	installGSD(t, c)
+	s, err := c.CreateProject(ctx, "refused", BenchStation(), BenchSecrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Upload(ctx); err != nil {
+		t.Fatal(err)
+	}
+	adopted := BenchStation()
+	adopted.Profinet = nil
+	adopted.CPU.ConfigurationProtection = tiad.ProtectKeep
+	swapped := BenchDevice()
+	swapped.Order = "6ES7 510-1SK03-0AB0"
+	a.SetDevice(t, swapped, false)
+	if err := s.Upload(ctx); tiad.Kind(err) != tiad.KindDeviceChanged {
+		t.Fatalf("an upload from a swapped CPU: %v", err)
+	}
+	// The project now holds the swapped CPU: named exactly, it is still
+	// not taken over, and the project is not saved.
+	named := adopted
+	named.CPU.Order = swapped.Order
+	if _, err := s.ApplyStation(ctx, named, BenchSecrets); tiad.Kind(err) != tiad.KindUncleanSession {
+		t.Fatalf("an apply after a refused upload: %v", err)
+	}
+	if _, err := s.Save(ctx, false); tiad.Kind(err) != tiad.KindUncleanSession {
+		t.Fatalf("a save after a refused upload: %v", err)
+	}
+	a.SetDevice(t, BenchDevice(), false)
+	if err := s.Upload(ctx); err != nil {
+		t.Fatalf("an upload of the pinned CPU: %v", err)
+	}
+	if _, err := s.ApplyStation(ctx, adopted, BenchSecrets); err != nil {
+		t.Fatalf("an apply after the pinned CPU's upload: %v", err)
+	}
+	if _, err := s.Save(ctx, false); err != nil {
+		t.Fatalf("a save after the pinned CPU's upload: %v", err)
+	}
 }

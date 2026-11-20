@@ -369,9 +369,15 @@ The rules for applying a spec:
     journals that answer too. A kept device that
     shares a name, a PROFINET name or an address with the spec refuses
     (`cpu_mismatch`) rather than coexist.
-  - A refusal before any write (a mismatch, `keep` on a CPU that has
-    nothing to keep, a missing password, a part of the spec this agent
-    cannot configure yet) leaves the session as it was.
+  - A refusal before any write leaves the session as it was: a mismatch,
+    a kept-device collision, a part of the spec this agent cannot
+    configure yet, and, when the CPU is reused, `keep` with nothing to
+    keep or a missing password. When the apply makes the CPU, the
+    protection is decided only once the new CPU exists, so such a
+    refusal there comes after the write and leaves the session unclean.
+  - A project with more than one CPU refuses: tiad handles one.
+  - Each kept device is listed once per network node (every interface),
+    so a collision on any of its addresses or PROFINET names is seen.
   - An apply or an upload that fails part-way leaves the session unclean:
     its project matches no spec, so a later apply or save refuses with
     `unclean_session`, and the session can only be closed without saving.

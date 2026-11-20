@@ -100,6 +100,7 @@ func Contract(t *testing.T, start Starter) {
 	t.Run("Pins", func(t *testing.T) { contractPins(t, start) })
 	t.Run("Protection", func(t *testing.T) { contractProtection(t, start) })
 	t.Run("Reuse", func(t *testing.T) { contractReuse(t, start) })
+	t.Run("ReuseAfterARefusedUpload", func(t *testing.T) { contractReuseAfterARefusedUpload(t, start) })
 }
 
 // ContractNoTIA is the part of the contract that never needs TIA and

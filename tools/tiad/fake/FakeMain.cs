@@ -578,6 +578,9 @@ namespace Tiad.Fake
         readonly HashSet<string> gsd = new HashSet<string>(StringComparer.Ordinal);
         // loaded is what each CPU holds: the project last downloaded to it.
         readonly Dictionary<string, FakeProject> loaded = new Dictionary<string, FakeProject>(StringComparer.Ordinal);
+        // saved is the hardware each saved project file holds, restored
+        // when it is opened: its CPU, the devices besides it, protection.
+        readonly Dictionary<string, FakeProject> saved = new Dictionary<string, FakeProject>(StringComparer.OrdinalIgnoreCase);
 
         public FakeTia(Script script)
         {
@@ -611,13 +614,24 @@ namespace Tiad.Fake
                 throw new TiaException("The project directory " + Path.GetDirectoryName(fullPath) + " is not empty");
             }
             File.WriteAllText(fullPath, "fake TIA project");
+            saved.Remove(fullPath);
+            saved.Remove(Path.ChangeExtension(fullPath, ".zap21"));
             return new FakeProject { Full = fullPath };
         }
 
         public object OpenProject(string fullPath)
         {
             script.Enter("OpenProject");
-            return new FakeProject { Full = fullPath };
+            var p = new FakeProject { Full = fullPath };
+            FakeProject sp;
+            if (saved.TryGetValue(fullPath, out sp))
+            {
+                p.Cpu = sp.Cpu;
+                p.Others = new List<KeptDevice>(sp.Others);
+                p.Protection = sp.Protection;
+                p.ProtectedWith = sp.ProtectedWith;
+            }
+            return p;
         }
 
         public void CloseProject(object project)
@@ -859,6 +873,13 @@ namespace Tiad.Fake
             var p = (FakeProject)project;
             string f = archive ? Path.ChangeExtension(p.Full, ".zap21") : p.Full;
             File.WriteAllText(f, "fake TIA project");
+            saved[f] = new FakeProject
+            {
+                Cpu = p.Cpu == null ? null : new ProjectCpu { Name = p.Cpu.Name, Order = p.Cpu.Order, Firmware = p.Cpu.Firmware },
+                Others = new List<KeptDevice>(p.Others),
+                Protection = p.Protection,
+                ProtectedWith = p.ProtectedWith,
+            };
             return f;
         }
 

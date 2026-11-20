@@ -74,6 +74,9 @@ type Fake struct {
 	next      int
 	downloads []Download
 	loaded    map[string]string // CPU address → session that last downloaded
+	// saved is what a saved project holds besides its file: its CPU, the
+	// devices besides it and its protection, restored when it is opened.
+	saved map[string]savedProject
 	claims    map[string]string // CPU address → the session that claimed it (one project per CPU)
 	mux       *http.ServeMux
 	once      sync.Once
@@ -103,6 +106,13 @@ type session struct {
 	// unclean is set while an apply or upload runs and stays set when it
 	// fails part-way: a later apply or save refuses.
 	unclean bool
+}
+
+// savedProject is the hardware a saved project holds, as TIA keeps it.
+type savedProject struct {
+	cpu                       *tiad.ProjectCPU
+	others                    []tiad.KeptDevice
+	protection, protectedWith string
 }
 
 // UploadedCPUName and UploadedIODevice are what the fake's upload brings
@@ -863,6 +873,12 @@ func (f *Fake) createProject(r *http.Request) (any, *failure) {
 	}
 	s := f.newSession(project)
 	s.guard = guard
+	// The directory is replaced: nothing saved in it survives.
+	for p := range f.saved {
+		if strings.HasPrefix(strings.ToLower(p), strings.ToLower(guard)) {
+			delete(f.saved, p)
+		}
+	}
 	// TIA makes a new CPU with its protection not set up.
 	s.protection = ProtectionWithoutPassword
 	if fl := s.protect(req.Station.CPU.ConfigurationProtection, req.Secrets.ConfigurationPassword); fl != nil {
@@ -894,6 +910,10 @@ func (f *Fake) openSession(r *http.Request) (any, *failure) {
 		return nil, fail(http.StatusConflict, tiad.KindBusy, "project %s is already open", p)
 	}
 	s := f.newSession(p)
+	// The project as it was saved: its CPU and its devices.
+	if sp, ok := f.saved[p]; ok {
+		s.cpu, s.others, s.protection, s.protectedWith = sp.cpu, sp.others, sp.protection, sp.protectedWith
+	}
 	return tiad.Session{ID: s.id, Project: p}, nil
 }
 
@@ -1320,7 +1340,8 @@ func (f *Fake) upload(r *http.Request) (any, *failure) {
 	// The bench CPU's setting, as the S2a upload found it, its name, and
 	// its IO device, which the CPU's station does not hold.
 	s.protection, s.protectedWith = ProtectionNone, ""
-	s.unclean = false
+	// Unclean until the CPU is known to be the pinned one.
+	s.unclean = true
 	up := f.device()
 	s.cpu = &tiad.ProjectCPU{Name: UploadedCPUName, Order: up.Order, Firmware: up.Firmware}
 	s.others = []tiad.KeptDevice{UploadedIODevice()}
@@ -1346,6 +1367,7 @@ func (f *Fake) upload(r *http.Request) (any, *failure) {
 	} else {
 		pin = tiad.PinMatched
 	}
+	s.unclean = false
 	// The fake's CPU asks no TLS question, so nothing is trusted.
 	return tiad.UploadResult{TrustedBlindly: []string{}, Device: read, Pin: pin, CPU: *s.cpu}, nil
 }
@@ -1471,6 +1493,15 @@ func (f *Fake) save(r *http.Request) (any, *failure) {
 		p = strings.TrimSuffix(p, ".ap21") + ".zap21"
 	}
 	f.files[p] = []byte("fake TIA project")
+	if f.saved == nil {
+		f.saved = map[string]savedProject{}
+	}
+	var cpu *tiad.ProjectCPU
+	if s.cpu != nil {
+		c := *s.cpu
+		cpu = &c
+	}
+	f.saved[p] = savedProject{cpu: cpu, others: append([]tiad.KeptDevice(nil), s.others...), protection: s.protection, protectedWith: s.protectedWith}
 	return map[string]string{"path": p}, nil
 }
 

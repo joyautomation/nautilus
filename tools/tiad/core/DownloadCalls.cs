@@ -365,7 +365,6 @@ namespace Tiad
                     s.Kept = new List<KeptDevice>();
                     s.Unclean = true;
                     List<string> tr = t.Upload(s.Handle, address, trust);
-                    s.Unclean = false;
                     // The project is replaced now: a failed identity read
                     // must not skip the audit lines below.
                     try
@@ -399,7 +398,15 @@ namespace Tiad
                 }
                 // Trust on first use: the first upload pins the CPU's
                 // identity; every later one must match it (section 3.8).
+                // The session stays unclean until the CPU is known to be the
+                // pinned one: a refused identity leaves a project nobody
+                // may take over, save or reuse.
                 string pin = PinUpload(s, address, read, trust);
+                OnSession(s, delegate(ITia t)
+                {
+                    s.Unclean = false;
+                    return true;
+                });
                 var o = new Obj();
                 o["trustedBlindly"] = trusted.ToArray();
                 o["device"] = read.ToJson();
@@ -419,9 +426,13 @@ namespace Tiad
                 bool archive = r.Bool("archive");
                 r.Done();
                 // A project left part-way must not be saved, reopened and
-                // its CPU reused.
-                if (s.Unclean) throw CpuReuse.Unclean("saving it");
-                string full = OnSession(s, delegate(ITia t) { return t.Save(s.Handle, archive); });
+                // its CPU reused. Checked on the TIA thread, where the
+                // flag is written.
+                string full = OnSession(s, delegate(ITia t)
+                {
+                    if (s.Unclean) throw CpuReuse.Unclean("saving it");
+                    return t.Save(s.Handle, archive);
+                });
                 var o = new Obj();
                 o["path"] = work.RelInside(full);
                 return o;

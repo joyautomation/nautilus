@@ -1035,9 +1035,16 @@ namespace Tiad.Openness
                     Firmware = CpuAttribute(cpu, "FirmwareVersion"),
                     Protection = new MasterSecret(d, cpu).State(),
                 };
+                var cpus = new List<string>();
                 foreach (HwDevice o in AllDevices(p))
                 {
-                    if (!o.Equals(d)) pc.Others.Add(Kept(o));
+                    if (CpuOf(o) != null) cpus.Add(Json.Quote(o.Name ?? ""));
+                    if (!o.Equals(d)) pc.Others.AddRange(Kept(o));
+                }
+                // A second PLC is no device a download of this one loads.
+                if (cpus.Count > 1)
+                {
+                    throw new TiaException("the project holds " + cpus.Count + " CPUs (" + string.Join(", ", cpus.ToArray()) + "); tiad handles a project with one");
                 }
                 return pc;
             });
@@ -1054,21 +1061,25 @@ namespace Tiad.Openness
             return "";
         }
 
-        // Kept describes a device besides the CPU's station by its name and
-        // its first node's address and PROFINET name.
-        static KeptDevice Kept(HwDevice d)
+        // Kept describes a device besides the CPU's station: one entry per
+        // node (every interface, every node), each with the device's name,
+        // so a collision on any of them is seen; one bare entry for a
+        // device without a node.
+        static List<KeptDevice> Kept(HwDevice d)
         {
-            var k = new KeptDevice { Name = d.Name ?? "" };
+            var ks = new List<KeptDevice>();
+            string name = d.Name ?? "";
             foreach (DeviceItem i in Items(d.DeviceItems))
             {
                 NetworkInterface ni = i.GetService<NetworkInterface>();
-                if (ni == null || ni.Nodes.Count == 0) continue;
-                Node n = ni.Nodes[0];
-                k.Address = OptionalAttribute(n, "Address");
-                k.ProfinetName = OptionalAttribute(n, "PnDeviceName");
-                break;
+                if (ni == null) continue;
+                foreach (Node n in ni.Nodes)
+                {
+                    ks.Add(new KeptDevice { Name = name, Address = OptionalAttribute(n, "Address"), ProfinetName = OptionalAttribute(n, "PnDeviceName") });
+                }
             }
-            return k;
+            if (ks.Count == 0) ks.Add(new KeptDevice { Name = name });
+            return ks;
         }
 
         // Identify cannot read a CPU's identity online yet: no Openness
