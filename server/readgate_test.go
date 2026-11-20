@@ -102,15 +102,22 @@ func gated(rec *httptest.ResponseRecorder) bool {
 // everyone. Without an auth: block nothing is refused.
 func TestEveryReadRouteIsGated(t *testing.T) {
 	routes := readRoutes(t)
-	strip := func(r *http.Request) { r.Header.Del("X-Nautilus-Token") }
+	// A stream that is let in runs until its client leaves: this one
+	// leaves after 300 ms, so an allowed stream answers 200 and a stream
+	// wrongly let in fails its row rather than hanging the suite.
+	strip := func(r *http.Request) {
+		r.Header.Del("X-Nautilus-Token")
+		if r.URL.Path == "/api/stream" {
+			ctx, cancel := context.WithTimeout(r.Context(), 300*time.Millisecond)
+			t.Cleanup(cancel)
+			*r = *r.WithContext(ctx)
+		}
+	}
 	for _, anon := range []string{"", "none", "viewer"} {
 		srv := auditServer(t, Options{})
 		readPolicy(t, srv, anon)
 		for _, p := range routes {
 			path := concrete(p)
-			// An allowed /api/stream never ends: only its refusals are
-			// run here (TestSignOutClosesItsStreams opens one).
-			stream := p == "/api/stream"
 			for _, method := range []string{"GET", "HEAD"} {
 				// No credential: /api/me answers; under anonymous: viewer a
 				// read is allowed (the stream is then not opened here).
@@ -121,7 +128,7 @@ func TestEveryReadRouteIsGated(t *testing.T) {
 					}
 					continue
 				case anon == "viewer":
-					if stream || p == "/api/audit" { // audit needs audit too
+					if p == "/api/audit" { // it needs audit too
 						break
 					}
 					if rec := call(t, srv, method, path, "", strip); gated(rec) {
@@ -141,8 +148,8 @@ func TestEveryReadRouteIsGated(t *testing.T) {
 				} else if method == "GET" && rec.Body.String() != `{"error":"`+srv.policy.Can(auth.Service("blind"), auth.Read, auth.All).Reason+`"}`+"\n" {
 					t.Errorf("a refusal carries more than its error: %s", rec.Body)
 				}
-				if p == "/api/audit" || stream {
-					continue // audit needs audit as well; an allowed stream never ends
+				if p == "/api/audit" {
+					continue // it needs audit as well
 				}
 				if rec := call(t, srv, method, path, "", strip, bearer("v-secret")); gated(rec) {
 					t.Errorf("a viewer: %s %s: %d %s", method, path, rec.Code, rec.Body)
@@ -152,9 +159,6 @@ func TestEveryReadRouteIsGated(t *testing.T) {
 	}
 	srv := auditServer(t, Options{})
 	for _, p := range routes {
-		if p == "/api/stream" {
-			continue
-		}
 		if rec := call(t, srv, "GET", concrete(p), "", strip); gated(rec) {
 			t.Errorf("no auth: block: GET %s: %d %s", p, rec.Code, rec.Body)
 		}

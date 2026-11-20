@@ -156,6 +156,37 @@ func (c *AuthConfig) settings() auth.Settings {
 	return s
 }
 
+// errAuthNull refuses an auth: key with no value. YAML reads "auth:" with
+// nothing after it, "auth: ~" and a block whose every line is commented
+// out as null, the same as no key at all: a controller with every read and
+// write open. Someone who comments out users: while editing must not open
+// the plant without a word, so it is refused; "auth: {}" is a block that
+// grants nobody anything.
+var errAuthNull = fmt.Errorf("auth: is empty: remove the key for an open controller, or give it a policy (auth: {} lets nobody do anything)")
+
+// authKeyNull reports a manifest whose top-level auth: key is present with
+// a null value.
+func authKeyNull(raw []byte) bool {
+	var doc yaml.Node
+	if yaml.Unmarshal(raw, &doc) != nil || len(doc.Content) == 0 {
+		return false
+	}
+	root := doc.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return false
+	}
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value == "auth" {
+			v := root.Content[i+1]
+			for v.Kind == yaml.AliasNode && v.Alias != nil {
+				v = v.Alias
+			}
+			return v.Kind == yaml.ScalarNode && v.Tag == "!!null"
+		}
+	}
+	return false
+}
+
 // compileAuth builds the block's policy; nil when there is no block.
 func compileAuth(c *AuthConfig) (*auth.Policy, error) {
 	if c == nil {

@@ -98,11 +98,32 @@ func TestLoadAuthRefuses(t *testing.T) {
 		{"auth:\n  session: 169h\n", "session 169h0m0s is out of range"},
 		{"auth:\n  session: twelve\n", "bad duration"},
 		{"auth:\n  roles:\n    r: {inherits: viewer, alow: [write]}\n", "field alow not found"},
+		// A present auth: key with no value is not "no block": it would
+		// load as an open controller, silently (#1071 review).
+		{"auth:\n", "auth: is empty"},
+		{"auth: ~\n", "auth: is empty"},
+		{"auth: null\n", "auth: is empty"},
+		{"auth:\n  # users:\n  #   jsmith: [operator]\n", "auth: is empty"},
 	} {
 		_, err := Load(authProject(c.block), "")
 		if err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%q: %v, want %q", c.block, err, c.want)
 		}
+	}
+}
+
+// An empty block (auth: {}) is a policy, not an open controller: nobody
+// may do anything, anonymous least of all. No auth: key at all stays open.
+func TestLoadAuthEmptyBlockClosesEverything(t *testing.T) {
+	p, err := Load(authProject("auth: {}\n"), "")
+	if err != nil || p.Auth == nil {
+		t.Fatalf("auth: {}: %v, policy %v", err, p)
+	}
+	if p.Auth.Holds(auth.Anonymous, auth.Read) || p.Auth.Holds(auth.User("jsmith"), auth.Read) {
+		t.Error("auth: {} lets someone read")
+	}
+	if p, err := Load(authProject(""), ""); err != nil || p.Auth != nil {
+		t.Errorf("no auth: key: %v, policy %v", err, p.Auth)
 	}
 }
 

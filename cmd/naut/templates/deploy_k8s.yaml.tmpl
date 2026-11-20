@@ -85,9 +85,14 @@ spec:
               value: "{{.Name}},{{.Name}}.$(POD_NAMESPACE),{{.Name}}.$(POD_NAMESPACE).svc,{{.Name}}.$(POD_NAMESPACE).svc.cluster.local"
           readinessProbe:
             # /healthz answers 200 on every replica, leader or standby,
-            # with no credential (an auth: block gates /api/): a standby
-            # must stay Ready to serve the dashboard and proxy to the
-            # leader. /readyz is 200 on the leader only.
+            # with no credential (an auth: block gates /api/). A standby
+            # must stay Ready: a rollout waits for its new pod to be
+            # Ready, and /readyz is 200 on the leader only. The standby
+            # proxies token clients' /api/ requests to the leader, but
+            # under an auth: block it answers a signed-in browser with a
+            # 503 that names no leader (the pods have no stable names for
+            # redundancy.public-urls): for browser sign-in, put a load
+            # balancer that health-checks /readyz in front of the Service.
             httpGet: {path: /healthz, port: api}
             periodSeconds: 5
           livenessProbe:

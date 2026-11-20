@@ -142,6 +142,7 @@ The endpoints, for an HMI of your own:
   ```
 
   Without `public-urls` the `503` names no address: the `peers:` addresses are the pair's own and are never shown to a browser.
+- **Behind a load balancer or a Kubernetes Service**, a browser lands on the standby on about half its connections and gets the `503`. Give the balancer a health check on [`/readyz`](#probes) so it sends browsers only to the leader. `public-urls` names the pair's controllers `a` and `b`. The two-replica Deployment `naut new --deploy` generates has no stable pod names for it, so there the `503` names no leader and the `/readyz` health check is the way in. Its Service still sends token clients to either pod: a standby forwards their requests to the leader.
 - **A failover signs browser users out.** The new leader doesn't know the old one's sessions, so its users sign in again there. The old leader ends its sessions as soon as it is a standby, so they don't come back if it leads again (journalled as `auth.sessions-ended`).
 - **During an election** a controller that knows no leader refuses a new sign-in (`503`, try again shortly). Sessions it issued still work there and can be signed out. If it then leads again without ever having seen another leader, those sessions carry on: no failover happened as far as it knows.
 - **Sign-out needs the leader.** If no leader is reachable, signing out can't revoke the session. It ends at the next failover or when it expires.
@@ -153,5 +154,6 @@ The endpoints, for an HMI of your own:
 
 - **The OPC UA server and Sparkplug writes are not covered yet** (#708). A client that reaches them is not asked for a role, and `naut run` prints a warning saying so whenever `auth:` is set.
 - **`naut historian`'s own port is not covered.** It answers its archive by `localhost`, an IP address or an allowed name, or with `NAUTILUS_TOKEN`, as before, with no roles. Reads through the controller's `/api/history` need `read`; keep the historian's port off networks that shouldn't read the archive.
+- **A standby answers some reads from its own users file.** `/api/cluster` and `/api/history` are answered by the standby itself, so a token revoked or a user disabled only on the leader can still read them there until the users file is copied to the standby.
 - **Sessions live on the leader.** On a redundant pair a failover signs browser users out (see [A redundant pair](#a-redundant-pair)).
 - **Not behind a load balancer that spreads requests over replicas.** A replica that isn't leading refers a signed-in browser to the leader. Point browsers at the leader (`/readyz`), or wait for the pair's floating address (#716).
