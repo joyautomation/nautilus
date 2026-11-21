@@ -277,11 +277,11 @@ func TestTheSpareFlagIsDurableAndOnlyASpareIsFormat6(t *testing.T) {
 	if q := v.Unspare(); q == nil || q.State.Spare {
 		t.Fatalf("Unspare wrote %+v", q)
 	}
-	// Format 8 (a later release): ErrVersion, never read as this one.
-	b[len(stateMagic)] = 8
+	// Format 9 (a later release): ErrVersion, never read as this one.
+	b[len(stateMagic)] = stateVersion + 1
 	var x VoterState
 	if err := x.UnmarshalBinary(sealCRC(b[:len(b)-4])); !errors.Is(err, ErrVersion) {
-		t.Fatalf("a format-8 file: %v, want ErrVersion", err)
+		t.Fatalf("a format-9 file: %v, want ErrVersion", err)
 	}
 	// A bad flag byte is corrupt.
 	b[len(stateMagic)] = 6

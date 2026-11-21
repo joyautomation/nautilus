@@ -277,6 +277,9 @@ func TestRebuiltWitnessAdopted(t *testing.T) {
 	if inc, _ := r.c.Counting(); inc != 0 {
 		t.Fatalf("restarted mid-proposal, A counts %d", inc)
 	}
+	// A never heard B's boot in this test: as if it had (a proposal is
+	// taken only by the boot it addresses, #1029 3c-3c-1b).
+	q[0].Echo = b.c.cfg.Nonce
 	ack := b.recv(now, q[0])
 	if inc, from := b.c.Counting(); inc != incJ || from != now.Add(lease) {
 		t.Fatalf("B counts (%d from %v), want %d after the quiet period", inc, from, incJ)
@@ -335,9 +338,13 @@ func TestQuietPeriodHoldsOffTheNewWitness(t *testing.T) {
 // can't move a peer that has moved on.
 func TestStaleProposalRefused(t *testing.T) {
 	b := newCtl(t, "B", commissioned(2, incK, 0), 0)
+	// Each proposal echoes B's boot, so only its generation can refuse
+	// it (a proposal is taken only by the boot it addresses, #1029
+	// 3c-3c-1b).
+	echo := b.c.cfg.Nonce
 	for _, m := range []Adopt{
-		{From: "A", Kind: Propose, Gen: 2, Incarnation: incJ},
-		{From: "A", Kind: Propose, Gen: 1, Incarnation: incJ},
+		{From: "A", Kind: Propose, Gen: 2, Incarnation: incJ, Echo: echo},
+		{From: "A", Kind: Propose, Gen: 1, Incarnation: incJ, Echo: echo},
 		{From: "A", Kind: Ack, Gen: 3, Incarnation: incJ},
 	} {
 		out := b.recv(at(lease), m)
@@ -398,6 +405,9 @@ func TestLateProposalCannotSplitThePair(t *testing.T) {
 	if _, i := adopted(a.v.State()); i != incK {
 		t.Fatalf("A at %d, want %d", i, incK)
 	}
+	// As if A had heard B's boot before sending it, so only its
+	// generation can refuse it.
+	late[0].Echo = b.c.cfg.Nonce
 	b.recv(now.Add(lease), late[0])
 	if _, i := adopted(b.v.State()); i != incK {
 		t.Fatalf("a late proposal moved B to %d while A counts %d", i, incK)
@@ -410,7 +420,7 @@ func TestAckWaitsForItsWrite(t *testing.T) {
 	b := newCtl(t, "B", commissioned(1, incI, 0), 0)
 	b.hold = true
 	now := at(lease)
-	m := Adopt{From: "A", Kind: Propose, Gen: 2, Incarnation: incJ}
+	m := Adopt{From: "A", Kind: Propose, Gen: 2, Incarnation: incJ, Echo: 0xB1}
 	if out := b.recv(now, m); len(out) != 0 {
 		t.Fatalf("acked before the write: %+v", out)
 	}

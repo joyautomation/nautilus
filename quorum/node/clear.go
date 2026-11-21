@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/joyautomation/nautilus/quorum"
@@ -38,7 +39,7 @@ import (
 // dupOp is a /dup request: check or clear name, on behalf of By (the
 // principal the issuing controller authenticated; for the member's log).
 type dupOp struct {
-	Op   string `json:"op"` // "check" or "clear"
+	Op   string `json:"op"` // "check", "clear" or "fence"
 	Name string `json:"name"`
 	By   string `json:"by,omitempty"`
 	// Keep, on a clear: the one boot of the name the check heard (0:
@@ -54,6 +55,10 @@ type dupOp struct {
 	// durable mark ends only on a word with a higher one, which a wiped
 	// voter or a copy from an older disk can't give (#1029 3c-3b).
 	Gen uint64 `json:"gen,omitempty"`
+	// Fence, on a fence (recommission --from-spare's last phase, #1029
+	// 3c-3c-1b): the fence the command carries, the peer's answer for the
+	// witness; the member raises it above its own adoption (quorum.Voter.Fence).
+	Fence uint64 `json:"fence,omitempty"`
 }
 
 // DupAnswer is one member's answer to a check or a clear.
@@ -84,6 +89,9 @@ type DupAnswer struct {
 	Held bool `json:"held,omitempty"`
 	// Cleared: this clear removed the member's mark.
 	Cleared bool `json:"cleared,omitempty"`
+	// Fence is the name's fence at the member (quorum.Voter.FenceOf): the
+	// lowest adoption generation of the name's state it takes, 0 for none.
+	Fence uint64 `json:"fence,omitempty"`
 	// Refused is why the member refused a clear (it hears two boots).
 	Refused string `json:"refused,omitempty"`
 	// Err is why the member could not be asked (unreachable, an older
@@ -152,7 +160,7 @@ var ErrClearIncomplete = errors.New("redundancy: clear incomplete")
 // lock.
 func dupAnswer(v *quorum.Voter, now quorum.Instant, member string, q dupOp) DupAnswer {
 	name := quorum.NodeID(q.Name)
-	a := DupAnswer{Member: member, Boots: v.LiveBoots(now, name), Known: v.KnownBoots(name), Retired: v.RetiredBoots(name), Gen: v.DupGen(name)}
+	a := DupAnswer{Member: member, Boots: v.LiveBoots(now, name), Known: v.KnownBoots(name), Retired: v.RetiredBoots(name), Gen: v.DupGen(name), Fence: v.FenceOf(name)}
 	if !v.Settled(now) {
 		// Started under a lease and D ago: it can't say what boots ran
 		// before, so it answers neither a check nor a clear.
@@ -168,6 +176,11 @@ func dupAnswer(v *quorum.Voter, now quorum.Instant, member string, q dupOp) DupA
 		if n == name {
 			marked = true
 		}
+	}
+	if q.Op == "fence" {
+		// No hearing guard: the clear just before it had one, and a fence
+		// only refuses the name's older state (#1029 3c-3c-1b).
+		a.Fence = v.Fence(name, q.Fence)
 	}
 	if q.Op == "clear" {
 		// A member that marks nothing still retires the boots any member
@@ -203,7 +216,7 @@ func readDupOp(r *http.Request) (dupOp, error) {
 	if q.Op == "state" {
 		return q, nil // a member's commissioning state (commission.go): no name
 	}
-	if (q.Op != "check" && q.Op != "clear") || !memberName.MatchString(q.Name) {
+	if (q.Op != "check" && q.Op != "clear" && q.Op != "fence") || !memberName.MatchString(q.Name) {
 		return q, fmt.Errorf("bad request: op %q, name %q", q.Op, q.Name)
 	}
 	return q, nil
@@ -234,8 +247,55 @@ func (e *Elector) serveDup(w http.ResponseWriter, r *http.Request) {
 	writeDupAnswer(w, e.dupLocal(q))
 }
 
+// fenceNameRefusal is why member refuses a fence on name, "" if it may
+// set one: a controller fences only its peer, the witness only the
+// pair's two controllers (#1164 review, S3: a fence on the witness's own
+// name would make a controller's candidate drop every witness reply).
+func fenceNameRefusal(member string, name string, allowed ...string) string {
+	if mut("fence_any_name") {
+		return ""
+	}
+	for _, n := range allowed {
+		if n == name {
+			return ""
+		}
+	}
+	return fmt.Sprintf("%s fences only %s, not %q", member, strings.Join(allowed, " and "), name)
+}
+
+// dupDurable waits, after a clear or a fence, until v's duplicate records
+// are on disk, for up to d: the answer says "cleared" or "fenced" only of
+// a record a crash can't lose (#1164 review, S1). It returns why not, ""
+// once durable. mu guards v; failing says the writer's last error.
+func dupDurable(mu *sync.Mutex, v *quorum.Voter, d time.Duration, failing func() string) string {
+	if mut("dup_answered_before_write") {
+		return ""
+	}
+	deadline := time.Now().Add(d)
+	for {
+		mu.Lock()
+		owed, why := v.MarksOwed(), failing()
+		mu.Unlock()
+		if !owed {
+			return ""
+		}
+		if time.Now().After(deadline) {
+			if why == "" {
+				why = "the write did not finish in time"
+			}
+			return "its state file could not be written: " + why
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
 // dupLocal applies q to this controller's own voter.
 func (e *Elector) dupLocal(q dupOp) DupAnswer {
+	if q.Op == "fence" {
+		if why := fenceNameRefusal(string(e.o.Self), q.Name, string(e.o.Peer)); why != "" {
+			return DupAnswer{Member: string(e.o.Self), Refused: why}
+		}
+	}
 	e.mu.Lock()
 	a := dupAnswer(e.v, e.now(), string(e.o.Self), q)
 	if q.Name == string(e.o.Self) {
@@ -245,6 +305,11 @@ func (e *Elector) dupLocal(q dupOp) DupAnswer {
 	p := e.v.MarkWrite() // a clear's records, durable without waiting for the next frame
 	e.mu.Unlock()
 	e.w.ask(p)
+	if (q.Op == "clear" || q.Op == "fence") && a.Refused == "" {
+		if why := dupDurable(&e.mu, e.v, e.o.Lease/2, func() string { return e.writeErr }); why != "" {
+			a.Err = string(e.o.Self) + ": " + why
+		}
+	}
 	if a.Cleared {
 		e.event(Event{Kind: EventDuplicateCleared, Detail: q.Name})
 		e.log.Warn("redundancy: the operator cleared the duplicate mark on "+q.Name, "by", q.By)
@@ -282,11 +347,22 @@ func (w *Witness) serveDup(rw http.ResponseWriter, r *http.Request) {
 		writeJSON(rw, m)
 		return
 	}
+	if q.Op == "fence" {
+		if why := fenceNameRefusal("the witness", q.Name, strings.Split(p.members, ",")...); why != "" {
+			writeDupAnswer(rw, DupAnswer{Member: "witness", Refused: why})
+			return
+		}
+	}
 	p.mu.Lock()
 	a := dupAnswer(p.v, w.now(), "witness", q)
 	mw := p.v.MarkWrite()
 	p.mu.Unlock()
 	p.w.ask(mw)
+	if (q.Op == "clear" || q.Op == "fence") && a.Refused == "" {
+		if why := dupDurable(&p.mu, p.v, w.o.Lease/4, func() string { return p.failing }); why != "" {
+			a.Err = "the witness: " + why
+		}
+	}
 	if a.Cleared {
 		p.log.Warn("witness: the operator cleared the duplicate mark on "+q.Name, "by_as_the_controller_says", q.By, "from", r.Header.Get(MembersHeader))
 	}

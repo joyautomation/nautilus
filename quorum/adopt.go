@@ -182,6 +182,10 @@ func NewAdoption(v *Voter, c *Candidate, now Instant) *Adoption {
 	c.duplicated = v.Duplicated     // #1029 step 1
 	v.ownHeld = c.Marked            // #1113 review, rule (ii)
 	c.retiredReply = v.RetiredReply // #1029 3c-3b
+	c.ownGen = func() uint64 { return v.st.Gen }
+	c.commissioned = func() bool { return v.st.Incarnation != 0 }
+	c.ownFences = v.Fences
+	c.fenced = v.Fenced // #1029 3c-3c-1b
 	return a
 }
 
@@ -203,6 +207,12 @@ func (a *Adoption) OnWitness(now Instant, r Reply) {
 	a.heard[r.Incarnation] = heardInc{at: now, promised: max(h.promised, r.Promised)}
 	if r.Incarnation == a.v.st.Incarnation {
 		a.current = now
+	}
+	if a.v.st.Incarnation == 0 && r.Fence != 0 && !mut("fence_unproposed") {
+		// A replacement after --from-spare: the witness refuses its
+		// probes as its name's older state; it re-adopts at the fence or
+		// above (#1029 3c-3c-1b).
+		a.ProposeAtLeast(r.Fence)
 	}
 	for inc, o := range a.heard {
 		if inc != r.Incarnation && now < o.at.Add(a.lease) && (a.lastTwo == 0 || now >= a.lastTwo.Add(a.lease)) {
@@ -237,6 +247,32 @@ func (a *Adoption) floorFor() uint64 {
 	return f
 }
 
+// Fenced reports whether m comes from a state of the peer's name from
+// before an operator replaced it (recommission --from-spare, #1029
+// 3c-3c-1b): OnAdopt drops it unanswered, and the driver does not count it
+// as the peer heard. Two shapes. A commissioned state below the fence
+// (CommitGen): answered, an old box re-sending a stale proposal would
+// re-propose above the fence and climb over it. A proposal below the
+// fence from any state, an uncommissioned one included: an old disk that
+// lost its file and died with a durable re-adoption proposal would else be
+// acked, or answered and re-propose (#1164 review, B3). The replacement's
+// query (Gen 0) is answered, with the fence (Adopt.Fence).
+func (a *Adoption) Fenced(m Adopt) bool {
+	if m.From != a.peer {
+		return false
+	}
+	f := a.v.FenceOf(m.From)
+	switch {
+	case f == 0:
+		return false
+	case m.CommitInc != 0 && m.CommitGen < f && !mut("fence_adopt_off"):
+		return true
+	case m.Kind == Propose && m.Gen != 0 && m.Gen < f && !mut("fenced_propose_answered"):
+		return true
+	}
+	return false
+}
+
 // OnPeer notes that a message from the peer (a request, a reply or an
 // Adopt) arrived at now. A switch is proposed only while the peer has been
 // heard within a lease: a proposer counts no witness until the peer acks,
@@ -263,7 +299,7 @@ func (a *Adoption) Tick(now Instant) (*Persist, []Adopt, *Request) {
 	st := a.v.st
 	var probe *Request
 	if st.Incarnation == 0 {
-		probe = &Request{From: a.self, Nonce: a.c.cfg.Nonce}
+		probe = &Request{From: a.self, Nonce: a.c.cfg.Nonce, Fences: a.v.Fences(), Uncommissioned: true}
 	}
 	if len(a.held) > 0 {
 		return nil, nil, probe // a message waits for its write; it goes then
@@ -297,7 +333,7 @@ func (a *Adoption) Tick(now Instant) (*Persist, []Adopt, *Request) {
 func (a *Adoption) msg(k AdoptKind, gen, inc, floor, echo uint64) Adopt {
 	return Adopt{From: a.self, Kind: k, Gen: gen, Incarnation: inc, Floor: floor,
 		Nonce: a.c.cfg.Nonce, Echo: echo, Pending: a.v.st.PendingGen,
-		CommitGen: a.v.st.Gen, CommitInc: a.v.st.Incarnation, Operator: a.operator(k, inc)}
+		CommitGen: a.v.st.Gen, CommitInc: a.v.st.Incarnation, Operator: a.operator(k, inc), Fence: a.v.FenceOf(a.peer)}
 }
 
 // operator is the Adopt.Operator of a message: the floor of an operator's
@@ -361,6 +397,9 @@ func (a *Adoption) OnAdopt(now Instant, m Adopt) (*Persist, []Adopt) {
 	if m.From != a.peer {
 		return nil, nil
 	}
+	if a.Fenced(m) {
+		return nil, nil
+	}
 	st := a.v.st
 	// fresh: m was sent to this boot. An uncommissioned controller (a lost
 	// file) takes nothing that isn't: a proposal or an ack from before the
@@ -372,11 +411,19 @@ func (a *Adoption) OnAdopt(now Instant, m Adopt) (*Persist, []Adopt) {
 	// it), or name a boot the peer has left. A peer's first message after
 	// its own restart echoes no boot of ours; the reply to it echoes its
 	// nonce directly, and its next message echoes ours.
+	learned := false
 	if m.Echo == a.c.cfg.Nonce || mut("peer_from_any_adopt") {
+		learned = a.peerNonce != m.Nonce
 		a.peerAt, a.peerNonce = now, m.Nonce
 	}
 	if fresh && st.Incarnation == 0 {
 		a.alarm(now, m)
+		if m.Fence != 0 && !mut("fence_unproposed") {
+			// The peer fenced this name (#1029 3c-3c-1b): this controller
+			// is its replacement, and re-adopts at the fence or above.
+			a.ProposeAtLeast(m.Fence)
+			st = a.v.st
+		}
 	}
 	switch m.Kind {
 	case Propose:
@@ -388,6 +435,15 @@ func (a *Adoption) OnAdopt(now Instant, m Adopt) (*Persist, []Adopt) {
 				(m.Gen == st.PendingGen && m.Incarnation >= st.PendingInc))
 		if mut("no_adopt_gen") {
 			accept = m.Gen != 0 && m.Incarnation != 0
+		}
+		// A proposal is taken only by the boot it addresses (#1029
+		// 3c-3c-1b): an old box an operator replaced, booted beside the
+		// peer, must not adopt the peer's proposal meant for the
+		// replacement and climb over its fence. The proposer learns this
+		// boot from the State this refusal answers, and re-sends at its
+		// next look.
+		if !fresh && !mut("propose_any_echo") {
+			accept = false
 		}
 		// Uncommissioned, adopt only a proposal sent to this boot, of an
 		// incarnation heard answering in this boot (the floor needs its
@@ -443,6 +499,10 @@ func (a *Adoption) OnAdopt(now Instant, m Adopt) (*Persist, []Adopt) {
 			// promised term).
 			// An operator's Recommission names the incarnation instead.
 			stale := st.PendingGen != 0 && m.Gen >= st.PendingGen
+			above := max(m.Gen, m.Pending)
+			if st.Incarnation == 0 {
+				above = max(above, st.Gen) // ProposeAtLeast's
+			}
 			lost := st.Incarnation == 0 && st.PendingGen == 0
 			outbid := st.Incarnation == 0 && st.PendingGen != 0 && m.Pending >= st.PendingGen
 			inc := m.Incarnation
@@ -450,7 +510,15 @@ func (a *Adoption) OnAdopt(now Instant, m Adopt) (*Persist, []Adopt) {
 				inc = a.allow
 			}
 			if (stale || lost || outbid) && (st.Incarnation != 0 || a.heardAt(inc)) {
-				return a.propose(max(m.Gen, m.Pending)+1, inc)
+				return a.propose(above+1, inc)
+			}
+			if learned && st.PendingGen != 0 && !mut("propose_resent_at_look") {
+				// This State is the first word from the peer's boot: the
+				// proposal in flight addressed another (a proposal is taken
+				// only by the boot it echoes). Re-sent now, not a look on;
+				// once per peer boot, so a peer that refuses it for good
+				// is not asked in a loop.
+				return a.flush(), a.hold(a.msg(Propose, st.PendingGen, st.PendingInc, a.floorFor(), a.peerNonce))
 			}
 			return nil, nil
 		}
@@ -532,6 +600,19 @@ func (a *Adoption) Recommission(inc, floor uint64) (*Persist, error) {
 	a.v.st.Floor = max(a.v.st.Floor, floor)
 	a.c.raiseSeen(a.v.st.Floor)
 	return a.v.change(), nil
+}
+
+// ProposeAtLeast makes this uncommissioned controller's next proposal at
+// generation gen or above: an operator's re-commission after an earlier
+// recommission --from-spare left a fence at a voter that kept its state
+// (Voter.Fence), which refuses every state below it (#1029 3c-3c-1b). The
+// next write (Recommission's) carries it. Nothing on a commissioned
+// controller, or for gen 0.
+func (a *Adoption) ProposeAtLeast(gen uint64) {
+	if a.v.st.Incarnation != 0 || gen == 0 || a.v.st.Gen >= gen-1 {
+		return
+	}
+	a.v.st.Gen = gen - 1
 }
 
 // KnownFloor is the highest term this controller knows was promised

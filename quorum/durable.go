@@ -36,6 +36,10 @@ type DupRecord struct {
 	Boots []BootSeq
 	// Retired: the boots of Name an operator's clear retired here.
 	Retired []BootSeq
+	// Fence: the lowest adoption generation of Name's state this voter
+	// takes (Voter.Fence, #1029 3c-3c-1b); 0: none. Only a file
+	// with a fence is written in format 8.
+	Fence uint64
 }
 
 // maxDupRecords bounds a state file's records: a pair has two names, so
@@ -66,9 +70,12 @@ func (v *Voter) syncDups() {
 			names[n] = names[n] || false
 		}
 	}
+	for n := range v.fences {
+		names[n] = names[n] || false
+	}
 	var recs []DupRecord
 	for n := range names {
-		r := DupRecord{Name: n, Marked: v.marked[n], Gen: v.gens[n]}
+		r := DupRecord{Name: n, Marked: v.marked[n], Gen: v.gens[n], Fence: v.fences[n]}
 		if r.Marked {
 			bs := slices.Clone(v.boots[n])
 			slices.SortStableFunc(bs, func(a, b bootSeen) int {
@@ -96,6 +103,12 @@ func (v *Voter) syncDups() {
 			}
 			return 1
 		}
+		if (a.Fence != 0) != (b.Fence != 0) {
+			if a.Fence != 0 {
+				return -1 // a fence is never a stray: kept before plain records
+			}
+			return 1
+		}
 		switch {
 		case a.Name < b.Name:
 			return -1
@@ -118,6 +131,12 @@ func (v *Voter) syncDups() {
 func (v *Voter) restoreDups(now Instant) {
 	stale := now - Instant(staleAge)
 	for _, r := range v.st.Dups {
+		if r.Fence != 0 && !mut("fence_volatile") {
+			if v.fences == nil {
+				v.fences = map[NodeID]uint64{}
+			}
+			v.fences[r.Name] = r.Fence
+		}
 		if r.Gen != 0 {
 			if v.gens == nil {
 				v.gens = map[NodeID]uint64{}
@@ -215,4 +234,167 @@ func (v *Voter) RetiredReply(now Instant, name NodeID, boot uint64) bool {
 		v.markRetired(now, name, boot, v.retired[name][i].seq)
 	}
 	return true
+}
+
+// Fence fences name at this voter for an operator's recommission
+// --from-spare (#1029 3c-3c-1b): from now on it refuses every request from
+// a state of name at an adoption generation below the fence, and its
+// candidate counts no reply from one (Fenced). The fence is the lowest
+// generation it takes: carried, the value the command chose, raised on a
+// controller to two above its own Gen and PendingGen, and above any fence
+// it had on name. No state of the name the voters held reaches it:
+//   - a commissioned one adopted only after this peer did, or as the
+//     receiver of this peer's proposal (its Ack lost, the proposal still
+//     pending here): at most max(Gen, PendingGen);
+//   - an uncommissioned one (a lost file) may hold a durable proposal of
+//     its own, at most this peer's max(Gen, PendingGen) + 1 when it was
+//     made (#1164 review, B3); or, a replacement of an earlier
+//     --from-spare that died re-adopting, at most that earlier fence.
+//
+// Those only rise. The replacement learns the fence (Adopt.Fence,
+// Reply.Fence) and re-adopts at it or above. A fence only rises. It
+// returns the fence now set; the write is owed (MarkWrite).
+func (v *Voter) Fence(name NodeID, carried uint64) uint64 {
+	if name == v.self || (mut("fence_witness_unset") && !v.commission) {
+		return v.fences[name]
+	}
+	above := uint64(2)
+	if mut("fence_plus_one") {
+		above = 1
+	}
+	if v.commission && !mut("fence_takes_carried") {
+		// A controller sets its own fence: the command carries it 0, and
+		// one carried in, a value it can't check, would raise the name's
+		// fence for good (#1164 re-check, S6).
+		carried = 0
+	}
+	f := max(carried, v.st.Gen+above)
+	if !mut("fence_peer_own_gen_only") {
+		f = max(f, v.st.PendingGen+above)
+	}
+	if prev := v.fences[name]; prev != 0 && !mut("fence_ignores_previous") {
+		f = max(f, prev+1)
+	}
+	v.setFence(name, f)
+	return v.fences[name]
+}
+
+// setFence raises name's fence to f, owing the write.
+func (v *Voter) setFence(name NodeID, f uint64) {
+	if v.fences == nil {
+		v.fences = map[NodeID]uint64{}
+	}
+	if f <= v.fences[name] {
+		return
+	}
+	v.fences[name] = f
+	v.syncDups()
+}
+
+// Fences are this voter's fences, as its frames carry them (Fences).
+func (v *Voter) Fences() Fences {
+	var out Fences
+	i := 0
+	names := make([]NodeID, 0, len(v.fences))
+	for n := range v.fences {
+		names = append(names, n)
+	}
+	slices.Sort(names)
+	for _, n := range names {
+		if i == len(out) {
+			break
+		}
+		out[i] = FenceRec{Name: n, Fence: v.fences[n]}
+		i++
+	}
+	return out
+}
+
+// LearnFences takes the fences a frame from another member carried
+// (Request.Fences, Reply.Fences), the driver having dropped a fenced
+// sender's frame whole, and installs those this voter may learn: only a
+// voter that lost its state learns (naut-lead's ruling on #1164), so that
+// a fence the operator's command set survives one member's file loss (the
+// peer wiped after it, #1164 review B1/B2; the witness rebuilt, then the
+// peer) while a command that fenced the peer but not the witness stays
+// incomplete (ruling C). A controller learns while uncommissioned (a lost,
+// wiped or moved-aside file), before it can adopt: the driver calls this
+// first, so the reply that makes the witness heard installs the fence
+// before the peer's State is taken. The witness learns a name's fence
+// only while it keeps no record of an operator's command on that name: a rebuilt witness
+// (or one restored from a backup) never saw the command, and a crash
+// before the learned fence is written leaves it learning still; a witness
+// the command reached keeps the name's clear record (an incomplete fence
+// does not spread to it). It reports whether it learnt one; the write is
+// owed (MarkWrite).
+//
+// names are the names it may learn a fence on: a controller its peer's,
+// the witness the pair's two controllers' (#1164 re-check, S5).
+func (v *Voter) LearnFences(fs Fences, names ...NodeID) bool {
+	if mut("fence_not_learned") {
+		return false
+	}
+	learnt := false
+	for _, r := range fs {
+		if r.Fence == 0 || r.Name == v.self || r.Fence <= v.fences[r.Name] {
+			continue
+		}
+		if !slices.Contains(names, r.Name) && !mut("fence_learns_any_name") {
+			continue
+		}
+		switch {
+		case v.commission && v.st.Incarnation == 0:
+		case v.isWitness && !v.hasRecord(r.Name):
+		default:
+			continue
+		}
+		v.setFence(r.Name, r.Fence)
+		learnt = true
+	}
+	return learnt
+}
+
+// hasRecord reports whether this voter keeps a record of an operator's
+// command on name: a clear generation, retired boots or a fence. A mark
+// is not one: a rebuilt witness that marked the name itself (the old box
+// heard beside the replacement) must still learn the fence (#1164 review).
+func (v *Voter) hasRecord(name NodeID) bool {
+	return v.gens[name] != 0 || len(v.retired[name]) > 0 || v.fences[name] != 0
+}
+
+// Fenced reports whether gen, the committed adoption generation a frame of
+// name carries, is below name's fence here: the state of a controller an
+// operator replaced (Fence).
+func (v *Voter) Fenced(name NodeID, gen uint64) bool {
+	f := v.fences[name]
+	return f != 0 && gen < f
+}
+
+// FencedRequest reports whether r comes from a fenced state (Fenced): a
+// driver takes nothing from it, no relayed promise, no term, no yield, no
+// word that the peer is up, and hands it to Handle only for the refusal
+// (#1029 3c-3c-1b).
+func (v *Voter) FencedRequest(r Request) bool {
+	return v.Fenced(r.From, r.Gen) && !mut("fence_requests_off")
+}
+
+// FencedReply reports whether r comes from a fenced state's voter: a
+// driver drops it whole, its relayed promise too (#1029 3c-3c-1b).
+func (v *Voter) FencedReply(r Reply) bool {
+	return r.From != v.self && v.Fenced(r.From, r.Gen) && !mut("fence_replies_off")
+}
+
+// FenceOf is name's fence at this voter: the lowest generation it takes
+// from name's state (0: no fence).
+func (v *Voter) FenceOf(name NodeID) uint64 { return v.fences[name] }
+
+// MaxFence is the highest fence this voter keeps (0: none): a commission
+// or recommission proposes at or above it, so the pair it commissions is
+// never fenced (#1029 3c-3c-1b).
+func (v *Voter) MaxFence() uint64 {
+	var f uint64
+	for _, g := range v.fences {
+		f = max(f, g)
+	}
+	return f
 }

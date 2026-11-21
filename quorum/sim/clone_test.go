@@ -312,6 +312,9 @@ func splitSeeds() uint64 {
 	if v, err := strconv.Atoi(os.Getenv("QUORUM_CLONE_SPLIT_SEEDS")); err == nil && v > 0 {
 		return uint64(v)
 	}
+	if raceOn {
+		return 50 // under -race (CI's race job): the plain job runs 200, the nightly 2,000
+	}
 	return 200
 }
 

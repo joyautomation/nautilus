@@ -160,8 +160,9 @@ func TestRecommissionThroughTheCLIPrintsTheEvidence(t *testing.T) {
 // steps: refused without --copy-stopped, refused while the copy runs
 // (both other voters must hear no process named a), then, the copy
 // stopped, done; restarted, it re-adopts from b, unheld, its operator log
-// synced, and leads. The copy, switched back on with its old disk, is a
-// fresh boot beside the member: it is held, never leads, and goes spare.
+// synced, and leads. The copy, switched back on with its old disk, carries
+// a state from before the command: fenced, it never leads and is told so
+// (#1029 3c-3c-1b).
 func TestTheRealBoxMadeASpareComesBackWithFromSpare(t *testing.T) {
 	r := newBoxRigAPI(t)
 	r.handLeadTo("b")
@@ -217,7 +218,10 @@ func TestTheRealBoxMadeASpareComesBackWithFromSpare(t *testing.T) {
 	if led["clone"] {
 		t.Fatal("the copy, back on, led")
 	}
-	pairWait(t, "the copy to go spare", 10*time.Second, func() bool { return r.el("clone").Spare() })
+	// Its state is from before a was replaced: b and the witness refuse
+	// it (the fence, #1029 3c-3c-1b), so it is told so and campaigns no
+	// more; it is never heard beside a, so it is not marked a copy.
+	pairWait(t, "the copy to learn it is fenced", 10*time.Second, func() bool { return r.el("clone").Status().Superseded != "" })
 	if !r.el("a").IsLeader() {
 		t.Fatal("the member stopped leading when the copy came back")
 	}

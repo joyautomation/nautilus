@@ -194,7 +194,7 @@ func TestABoxChangedControllerNeedsBoxReplaced(t *testing.T) {
 	}
 	// Past the box check with the operator's word (the write then waits
 	// for a writer this unit test doesn't run).
-	if _, err := e.recommission(ctx, "op", 7, 5000, true); errors.Is(err, ErrBoxChanged) {
+	if _, err := e.recommission(ctx, "op", 7, 5000, true, 0); errors.Is(err, ErrBoxChanged) {
 		t.Fatalf("re-commission with --box-replaced: %v", err)
 	}
 }

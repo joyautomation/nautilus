@@ -38,6 +38,9 @@ type Voter struct {
 	need, dupNeed, issued uint64
 	// gens: per name, the clear generation (DupRecord.Gen).
 	gens map[NodeID]uint64
+	// fences: per name, the lowest adoption generation this voter takes
+	// from that name's state (Fence, #1029 3c-3c-1b). Durable.
+	fences map[NodeID]uint64
 
 	// isWitness: this voter is the witness, and stamps its incarnation on
 	// every reply. Set by NewWitness.
@@ -996,7 +999,7 @@ func (v *Voter) releaseSelf(now Instant, r Request) bool {
 // controller, after Candidate.Observe. The witness has no candidate and
 // never yields.
 func YieldTo(now Instant, v *Voter, c *Candidate, r Request) bool {
-	if mut("no_yield") || v == nil || c == nil || r.From != c.cfg.Peer || c.cfg.Self != v.self || !v.wouldYield(now, r) {
+	if mut("no_yield") || v == nil || c == nil || r.From != c.cfg.Peer || c.cfg.Self != v.self || v.FencedRequest(r) || !v.wouldYield(now, r) {
 		return false
 	}
 	if v.wouldRefuseName(now, r) && !mut("yield_before_refusal") {
@@ -1025,6 +1028,28 @@ func (v *Voter) Handle(now Instant, r Request) (*Persist, []Reply) {
 
 func (v *Voter) handle(now Instant, r Request) (*Persist, []Reply) {
 	refuse := []Reply{v.reply(now, r, false)}
+	if v.FencedRequest(r) {
+		// The sender's state is from before an operator replaced its name
+		// (recommission --from-spare): refused, and otherwise ignored, no
+		// renewal under a leader, no relay (#1029 3c-3c-1b). The refusal
+		// still says the incarnation and the promised term, so a
+		// replacement's re-adoption hears the witness. A commissioned old
+		// state is no live boot of the name either: it can never vote
+		// again, and must not mark the replacement. An uncommissioned one
+		// may be a lookalike of the replacement (the old box wiped, or its
+		// file lost) that re-adopts at the fence like it: it is heard as a
+		// boot of the name, so a voter that hears it beside the
+		// replacement marks the name, as it would any copy (#1164
+		// re-check, N1).
+		refuse[0].Fence = v.fences[r.From]
+		if r.Uncommissioned && !mut("fence_hides_lookalike") {
+			v.noteNonce(r.From, r.Nonce, now.Add(v.lease))
+			v.noteBoot(now, r.From, r.Nonce, r.Seq)
+			v.noteHeard(now, r.From, r.Nonce, r.Seq)
+			refuse[0].HeldBy = v.HeldBy(now, r.From, r.Nonce) // as of this frame, as below (#1133 review)
+		}
+		return nil, refuse
+	}
 	// Every request says its sender runs under that boot now: a probe, a
 	// campaign or a renewal, its own candidate's too (#1029 step 1).
 	v.noteNonce(r.From, r.Nonce, now.Add(v.lease))
@@ -1153,7 +1178,8 @@ func (v *Voter) RelayRefused() uint64 { return v.relayRefused }
 func (v *Voter) reply(now Instant, r Request, granted bool) Reply {
 	return Reply{From: v.self, To: r.From, Term: r.Term, Nonce: r.Nonce, ID: r.ID, Granted: granted,
 		Promised: max(v.st.Promised, v.st.Floor), Incarnation: v.witnessIncarnation(),
-		Marked: v.marked[r.From] && !mut("marked_not_told"), ClearGen: v.gens[r.From], VoterBoot: v.boot, HeldBy: v.HeldBy(now, r.From, r.Nonce)}
+		Marked: v.marked[r.From] && !mut("marked_not_told"), ClearGen: v.gens[r.From], VoterBoot: v.boot, HeldBy: v.HeldBy(now, r.From, r.Nonce),
+		Gen: v.st.Gen, Fences: v.Fences()}
 }
 
 // Spare reports whether this voter's state says its controller demoted

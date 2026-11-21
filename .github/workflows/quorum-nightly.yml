@@ -42,8 +42,9 @@ jobs:
       # one names its seed (OPLOG_SIM_ONE=k reruns it with a trace). The
       # clone schedules (#1029 layer 2) run their own 200,000 too, the
       # clone races (#1029 step 1) 20,000 per case, the clone splits
-      # (#1029 3c-1) 2,000 per shape, and the spare gates (#1029 3c-2)
-      # 2,000 per family.
+      # (#1029 3c-1) 2,000 per shape, the spare gates (#1029 3c-2)
+      # 2,000 per family, and the from-spare gate (#1029 3c-3c) 1,000 per
+      # cell.
       - name: QUORUM_SEEDS=200000 go test ./quorum/sim (default and clone schedules), OPLOG_SIM_SEEDS=3000 go test ./oplog
         id: seeds
         if: ${{ !cancelled() }}
@@ -63,7 +64,7 @@ jobs:
           go test -count=1 -timeout 20m ./quorum/sim -run '^TestCloneSeeds$' 2>&1 | tee -a "$RUNNER_TEMP/seeds.log" || rc=1
           go test -count=1 -timeout 30m ./quorum/sim -run '^TestCloneRaceSeeds$' 2>&1 | tee -a "$RUNNER_TEMP/seeds.log" || rc=1
           go test -count=1 -timeout 20m ./quorum/sim -run '^TestCloneSplit' 2>&1 | tee -a "$RUNNER_TEMP/seeds.log" || rc=1
-          go test -count=1 -timeout 20m ./quorum/sim -run '^(TestACloneBesideASettledPairBecomesASpare|TestLateFramesOfARestartMakeNoSpare|TestTheIncumbentRestartsOrDiesWhileTheSpareRuns|TestTheSpareDecisionUnderASplit|TestASplitWithASpareClearsByRestarts|TestALossyOriginalNeverGoesSpare|TestAnOriginalRestartingAfterTheMarkStaysAMember|TestLateFramesToBothVotersUpToALeaseMakeNoSpare)$' 2>&1 | tee -a "$RUNNER_TEMP/seeds.log" || rc=1
+          go test -count=1 -timeout 20m ./quorum/sim -run '^(TestACloneBesideASettledPairBecomesASpare|TestLateFramesOfARestartMakeNoSpare|TestTheIncumbentRestartsOrDiesWhileTheSpareRuns|TestTheSpareDecisionUnderASplit|TestASplitWithASpareClearsByRestarts|TestALossyOriginalNeverGoesSpare|TestAnOriginalRestartingAfterTheMarkStaysAMember|TestLateFramesToBothVotersUpToALeaseMakeNoSpare|TestFromSpareNeverMakesTwoLeaders)$' 2>&1 | tee -a "$RUNNER_TEMP/seeds.log" || rc=1
           go test -count=1 -timeout 20m ./oplog -run '^TestThreeReplicaSimulation$' 2>&1 | tee -a "$RUNNER_TEMP/seeds.log" || rc=1
           exit $rc
       - name: Rolling issue

@@ -433,7 +433,13 @@ journal entry (`redundancy.recommission`).
 
 The voter state, `quorum.state`, lives in the systemd state directory
 (`/var/lib/nautilus` under `naut deploy`) or in `redundancy: state-dir:`.
-Every `naut deploy` step keeps it, and a backup never contains it. It
+Every `naut deploy` step keeps it, and a backup never contains it:
+restoring a voter's state from an old file, the witness's included, is
+not supported. A witness restored from a file older than the last
+`recommission --from-spare` doesn't know that command's fence, and the
+replaced box could lead beside it in a split. If the witness's state is
+lost, rebuild it (a new incarnation, which learns the fences from the
+controllers). It
 records which controller wrote it, and on which box (its machine-id and
 the network cards the pair's links use): a controller refuses to start
 over the other one's file, and a file from another box is treated as
@@ -690,19 +696,34 @@ shapes):
   command then clears the name at both, keeping no process: every
   process of that name they knew, the one they held included, is set
   aside, so if it was only cut off or paused it is marked the moment it
-  is heard again. It moves this box's `quorum.state` aside
+  is heard again. Last, it fences the name at both: from then on they
+  refuse the state the stopped controller carries on its disk, at any
+  term. It moves this box's `quorum.state` aside
   (`quorum.state.previous-spare-<time>`). Then **restart naut on the
   spare**: it starts uncommissioned and re-adopts from the other
   controller within seconds, as after a network card change, and is a
   standby again. A spare answers no other command; its only messages are
-  these two requests.
+  these requests.
+
+  If the command prints **INCOMPLETE: the peer is fenced, the witness is
+  not**, run it again: nothing was moved aside, and the box is still a
+  spare. Until it completes, the stopped controller's state is refused
+  at the other controller only, so if it runs after all it can still
+  lead with the witness.
 
   If the stopped controller is switched back on later with its old disk
-  anyway, it is a new process of the name beside the member: the voters
-  mark it, and it goes spare in turn. **Unless it starts inside a network
-  split**, where no voter hears it beside the member: then each side can
-  elect its own leader. Until a later release closes this (#1029), that
-  is why it must stay off.
+  anyway, both other members refuse it, even inside a network split
+  where neither hears it beside the member. It raises
+  `redundancy.superseded`: *this box's state is from before a was
+  replaced (recommission --from-spare): it can no longer vote*, and stops
+  campaigning. The other members keep that refusal even if one of them
+  later loses its own state file. Wipe its state (move its `quorum.state`
+  aside) **only with the network whole**: wiped, it starts as a copy of
+  the member, is heard beside it and made a spare. Started inside a
+  network split that later moves, where a member hears it beside the
+  member for less than about a lease and a quarter, it is a copy the
+  members can't catch in time (see "What the voters can't catch"
+  below). Or keep it off.
 
 Do not run an older naut release on a spare. A release before the spare
 can't read the spare's `quorum.state`: it sets the file aside and starts
@@ -727,7 +748,15 @@ near the largest delay a 2 s lease allows.
   stops it, so it is caught only when the clone's machine-id or MAC
   differs.
 - **A split within about a second of the clone's start**, before any
-  voter has heard both copies running, leaves nothing marked either. In
+  voter has heard both copies running, leaves nothing marked either.
+  For a controller's old box switched on again after `recommission
+  --from-spare` with its disk wiped, the window is a lease and a quarter
+  (2.5 s at the default lease): the mark comes in time, but it is made a
+  spare only about a lease later, and a split that moves it to the other
+  controller's side before then gives two leaders. In the simulator that
+  happened in every run from an eighth to three quarters of a lease, 41
+  of 100 at one lease, and none from a lease and a quarter. Keep the old
+  box off, or wipe it only with the network whole. In
   the simulator (2 s lease) that gave two leaders in 52, 21 and 1 of
   3,600 runs with the split in the first, second and third half second
   after the clone started, and none later.

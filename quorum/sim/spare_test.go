@@ -412,11 +412,16 @@ func TestMeasureSpare(t *testing.T) {
 	}
 }
 
-// spareSeeds is how many seeds a spare gate runs per family: 100, or
-// QUORUM_SPARE_SEEDS (the nightly runs more).
+// spareSeeds is how many seeds a spare gate runs per family: 100 (20
+// under -race), or QUORUM_SPARE_SEEDS (the nightly runs more).
 func spareSeeds() uint64 {
 	if v, err := strconv.Atoi(os.Getenv("QUORUM_SPARE_SEEDS")); err == nil && v > 0 {
 		return uint64(v)
+	}
+	if raceOn {
+		// Under -race (CI's race job, 10-minute package timeout): a fifth.
+		// The plain test job runs 100, the nightly 2,000.
+		return 20
 	}
 	return 100
 }

@@ -9,13 +9,13 @@ import (
 )
 
 func TestMessageRoundTrip(t *testing.T) {
-	rq := Request{From: "A", Term: 7, Nonce: 0xA1, ID: 99, Renewal: true, Promise: Relay{To: "B", Nonce: 0xB2, Left: 1500 * time.Millisecond, Dup: "A", DupLeft: 900 * time.Millisecond}, Seq: 1 << 40}
+	rq := Request{From: "A", Term: 7, Nonce: 0xA1, ID: 99, Renewal: true, Promise: Relay{To: "B", Nonce: 0xB2, Left: 1500 * time.Millisecond, Dup: "A", DupLeft: 900 * time.Millisecond}, Seq: 1 << 40, Gen: 1<<33 + 5, Fences: Fences{{Name: "B", Fence: 9}}, Uncommissioned: true}
 	b, _ := rq.MarshalBinary()
 	var got Request
 	if err := got.UnmarshalBinary(b); err != nil || got != rq {
 		t.Fatalf("request: %+v %v", got, err)
 	}
-	rp := Reply{From: "W", To: "A", Term: 7, Nonce: 0xA1, ID: 99, Granted: true, Promised: 7, Incarnation: 42, Promise: Relay{To: "A", Nonce: 0xA0, Left: time.Second}, Marked: true, VoterBoot: 0xB007, HeldBy: 0xA0A0}
+	rp := Reply{From: "W", To: "A", Term: 7, Nonce: 0xA1, ID: 99, Granted: true, Promised: 7, Incarnation: 42, Promise: Relay{To: "A", Nonce: 0xA0, Left: time.Second}, Marked: true, VoterBoot: 0xB007, HeldBy: 0xA0A0, ClearGen: 3, Gen: 1<<34 + 9, Fence: 1<<35 + 2, Fences: Fences{{Name: "A", Fence: 3}, {Name: "B", Fence: 4}}}
 	b, _ = rp.MarshalBinary()
 	var gr Reply
 	if err := gr.UnmarshalBinary(b); err != nil || gr != rp {

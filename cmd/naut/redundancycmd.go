@@ -591,6 +591,8 @@ func printFromSpareAnswer(w io.Writer, code int, b []byte) {
 				fmt.Fprintf(bw, "  %-8s NOT REACHED: %s\n", a.Member, a.Err)
 			case a.Refused != "":
 				fmt.Fprintf(bw, "  %-8s REFUSED: %s\n", a.Member, a.Refused)
+			case title == "fence":
+				fmt.Fprintf(bw, "  %-8s refuses %s's state from before this command (below adoption generation %d)\n", a.Member, ans.Report.Name, a.Fence)
 			default:
 				fmt.Fprintf(bw, "  %-8s hears %d process(es) named %s\n", a.Member, len(a.Boots), ans.Report.Name)
 			}
@@ -601,6 +603,7 @@ func printFromSpareAnswer(w io.Writer, code int, b []byte) {
 		fmt.Fprintf(bw, "set aside (marked if heard again): %s\n", bootList(ans.Report.Retired))
 	}
 	phase("clear", ans.Report.Clear)
+	phase("fence", ans.Report.Fence)
 	switch ans.Outcome {
 	case "done":
 		fmt.Fprintf(bw, "done: this box's state file is moved aside to %s.\nNOW RESTART naut on this box (systemctl restart nautilus under naut deploy): it starts uncommissioned and re-adopts from its peer within seconds, as %s.\n", ans.Report.MovedAside, ans.Report.Name)

@@ -281,6 +281,32 @@ var table = []mutation{
 	{"from_spare_peer_unchecked", []string{"TestFromSpareNeedsACommissionedPeer"}},
 	{"from_spare_clears_past_refusal", []string{"TestAFromSpareClearThatMissesAVoterMovesNothing"}},
 	{"from_spare_moves_after_partial", []string{"TestAFromSpareClearThatMissesAVoterMovesNothing"}},
+	// #1029 3c-3c-1b: the adoption-generation fence on --from-spare.
+	{"fence_requests_off", []string{"TestAFencedRequestIsRefusedAndIgnored", "TestFromSpareNeverMakesTwoLeaders"}},
+	{"fence_replies_off", []string{"TestFromSpareNeverMakesTwoLeaders"}},
+	{"fence_witness_unset", []string{"TestFromSpareNeverMakesTwoLeaders"}},
+	{"fence_peer_own_gen_only", []string{"TestTheFenceCoversAPeersProposalFarAboveItsGeneration"}},
+	{"fence_adopt_off", []string{"TestAWitnessReplyThenTheOldBoxsStateGivesNoProposal"}},
+	{"fence_volatile", []string{"TestAFenceIsDurableAndOnlyAFencedFileIsFormat8", "TestFromSpareNeverMakesTwoLeaders"}},
+	{"fence_unnoted", []string{"TestAFencedControllerSaysSoAndCampaignsNoMore", "TestFromSpareNeverMakesTwoLeaders"}},
+	{"fenced_still_campaigns", []string{"TestAFencedControllerSaysSoAndCampaignsNoMore", "TestFromSpareNeverMakesTwoLeaders"}},
+	{"fence_hold_ignores_witness", []string{"TestAFencedControllerSaysSoAndCampaignsNoMore", "TestFromSpareNeverMakesTwoLeaders"}},
+	{"propose_any_echo", []string{"TestAProposalIsTakenOnlyByTheBootItAddresses"}},
+	{"propose_resent_at_look", []string{"TestAProposalIsTakenOnlyByTheBootItAddresses", "TestQuietPeriodHoldsOffTheNewWitness"}},
+	{"recommission_under_fence", []string{"TestARecommissionProposesAboveTheFence"}},
+	// #1164 review: the fence survives a member's file loss, and covers an
+	// old disk that died re-adopting.
+	{"fence_plus_one", []string{"TestTheFenceIsAboveAnyProposalAnOldDiskHolds", "TestFromSpareNeverMakesTwoLeaders"}},
+	{"fence_ignores_previous", []string{"TestASecondFromSpareFencesAboveTheFirst"}},
+	{"fenced_propose_answered", []string{"TestTheFenceIsAboveAnyProposalAnOldDiskHolds"}},
+	{"fence_unproposed", []string{"TestTheFenceIsAboveAnyProposalAnOldDiskHolds", "TestFromSpareNeverMakesTwoLeaders"}},
+	{"fence_not_learned", []string{"TestOnlyAVoterThatLostItsStateLearnsFences", "TestAWitnessReplyThenTheOldBoxsStateGivesNoProposal", "TestFromSpareNeverMakesTwoLeaders"}},
+	{"fence_any_name", []string{"TestAFenceNamesOnlyAPairController"}},
+	{"dup_answered_before_write", []string{"TestAFromSpareWhoseWitnessCantWriteIsIncomplete"}},
+	// #1164 re-check.
+	{"fence_hides_lookalike", []string{"TestAFencedVoterStillHearsAnUncommissionedLookalike", "TestFromSpareNeverMakesTwoLeaders"}},
+	{"fence_learns_any_name", []string{"TestAFenceIsLearntOnlyOnAPairNameAndNeverCarriedToAController"}},
+	{"fence_takes_carried", []string{"TestAFenceIsLearntOnlyOnAPairNameAndNeverCarriedToAController"}},
 	// Outside the quorum tree (rowPkgs): the operator-intent log's late-
 	// start lapse (#1030, #1032 reviews) and the pair's alarm acks (#710
 	// PR 3b-2c).

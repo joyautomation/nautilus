@@ -836,14 +836,91 @@ redundancy:
         PR), and with the incumbent really off the replacement takes over when its peer dies,
         in every run. The split cells reach the retired boots (`clear_forgets_boots` turns
         cut and pause cells red).
-      - **Residual (a MUST before `experimental` lifts, naut-lead): the incumbent switched
-        back on straight into a split.** A fresh boot with its old disk, never heard beside
-        the replacement, is the stated early-split residual above (a clone booted beyond an
-        existing split): two leaders in every such run, 0 after any touch of full
-        connectivity. The guide says the stopped box must stay off (or be wiped). 3c-3c-1b
-        closes it: the `--from-spare` re-adopt bumps the adoption generation, and the peer
-        and the witness, which both took part, refuse frames from a member whose state
-        carries an older one, naming the fix in that box's own alarm. The simulator gives the copy the original's
+      - **The incumbent switched back on straight into a split: the adoption-generation
+        fence (3c-3c-1b, a MUST before `experimental` lifted).** A fresh boot with its old
+        disk, never heard beside the replacement, made two leaders in every such run before
+        1b, often in the same term (Fable on #1157), so no term floor separates the two. The
+        adoption generation does: `--from-spare`'s last phase, after both clears, **fences**
+        the name at the peer, then at the witness at the peer's value (`Voter.Fence`,
+        `DupRecord.Fence`, state format 8, written only with a fence; `fence_volatile`): the
+        lowest generation of the name's state either takes, `max(carried, Gen + 2,
+        PendingGen + 2, previous fence + 1)` at the peer. No state of the name from before the
+        command reaches it: a commissioned one adopted only after the peer did, or as the
+        receiver of the peer's proposal with its Ack lost (still pending at the peer:
+        `fence_peer_own_gen_only`); an uncommissioned one (a lost file) may hold a durable
+        re-adoption proposal of its own at most one above the peer's adoption when made
+        (#1164 review B3, `fence_plus_one`), or, an earlier replacement dead re-adopting, at
+        most the earlier fence (`fence_ignores_previous`). Every request carries the sender's
+        committed generation and every reply the voter's (wire 7: `Request.Gen`, `Reply.Gen`,
+        `Reply.Fence`, `Adopt.Fence`, and each frame's `Fences`; a mixed-version pair is
+        refused by the existing version check). Below its name's fence a frame is refused and
+        otherwise ignored, at any term: no grant, no boot heard from a commissioned old state
+        (no duplicate mark of the replacement), no relayed promise, no yield, no word that the peer is up
+        (`fence_requests_off`; the witness at the peer's value: `fence_witness_unset`); the
+        peer's candidate counts no reply from it (`fence_replies_off`). The peer's handshake
+        drops, **unanswered**, an Adopt from a commissioned state below the fence
+        (`fence_adopt_off`) and a non-zero proposal below it from any state
+        (`fenced_propose_answered`): answered, an old disk would re-propose above it. The
+        replacement's query is answered with the fence (`Adopt.Fence`), and the witness's
+        fenced refusal of its probes carries it too: it re-adopts at it or above
+        (`Adoption.ProposeAtLeast`, `fence_unproposed`). A proposal is taken only by the boot
+        it addresses, so the old box beside the peer can't adopt the peer's proposal meant
+        for the replacement (`propose_any_echo`); the proposer learns the boot from the State
+        that refuses it and re-sends at once, once per peer boot (`propose_resent_at_look`;
+        the witness-switch families measured unchanged, `TestMeasureSwitch`). **The fence
+        survives one member's file loss** (#1164 review B1, B2; naut-lead's ruling (ii)):
+        frames carry the voter's fences, and **only a voter that lost its state learns them**
+        (`Voter.LearnFences`, `fence_not_learned`; only on the pair's names, `fence_learns_any_name`;
+        a controller sets its own fence from its own adoption, never a carried value,
+        `fence_takes_carried`): a controller while uncommissioned, before
+        the reply that makes the witness heard lets it take the peer's State, and the witness
+        for a name it keeps no record of (a rebuilt witness, which waits out its quiet period
+        before the pair counts it, re-teaches a peer wiped later). A witness the command
+        reached keeps the name's clear record, so an incomplete fence does not spread
+        (ruling C). A clear or a fence is answered only once it is on disk
+        (`dup_answered_before_write`), and a member fences only a pair controller's name, a
+        controller only its peer's (`fence_any_name`). The old box learns it is fenced from
+        any refusal, a probe's too, raises `redundancy.superseded` once per boot ("this box's
+        state is from before a was replaced (recommission --from-spare): it can no longer
+        vote ... Wipe its state only with the network whole ... or keep it off";
+        `Status.Superseded`), and campaigns no more while the witness's latest word says it
+        is fenced, or no witness word came and another voter's did
+        (`fenced_still_campaigns`: else it moves its own voter's terms each look).
+        Commission and recommission adopt at or above every member's fence
+        (`MemberState.Fence`, `Adoption.ProposeAtLeast`, `recommission_under_fence`): a
+        both-lost recommission after a `--from-spare` would otherwise restart at generation 1
+        and stay fenced at the witness. **Stated cost (naut-lead's ruling C):** a fence that
+        reached the peer but not the witness ends the command INCOMPLETE ("the peer is
+        fenced, the witness is not: run the command again", exit 1), nothing moved aside;
+        until it runs again the incumbent is refused at the peer and leads only with the
+        witness, which it does once the peer dies (`fence_hold_ignores_witness` leaves no
+        leader then). A fence is never lifted, only passed by the pair's generation. **Stated
+        boundary (naut-lead's ruling on #1164):** an old disk that is uncommissioned with no
+        proposal in flight (wiped, on the alarm's advice too, or a lost file) is
+        indistinguishable from the replacement: it is a copy of the name like any other. A
+        fenced voter still hears an uncommissioned sender's boot (`Request.Uncommissioned`,
+        `fence_hides_lookalike`; the #1164 re-check's N1: ignored whole, a wiped old box that
+        reached the witness alone, then the peer alone, re-adopted at the fence beside the
+        peer and led while the replacement led with the witness, 300/300 before, 0 now), so
+        a voter that hears it beside the replacement marks the name (3c-1). What remains is
+        the clone residual of §2, at a lease's scale for this shape: the mark holds the copy
+        only once it is made a spare, about a lease later, so a wiped old box heard beside the
+        replacement at the witness alone for under about a lease and a quarter, that then
+        moves to the peer's side of a split, still leads there (the #1164 final look: two
+        leaders in 100/100 runs from 1/8 to 3/4 lease, 41/100 at one lease, 0 from 1.25
+        leases, 2 s lease; identical with fenced requests not refused at all, so not added by
+        the fence): the alarm and the guide say wipe it only with the network whole,
+        or keep it off. Stated too: a witness restored from an older file at the same
+        incarnation, which keeps a record of the name but not its newest fence, does not learn
+        it (the #1164 re-check's S7): it takes only an earlier `--from-spare`'s fence, and the
+        old box of a later one can lead beside it in a split. Restoring a voter's state from an old
+        file is unsupported (the guide: a backup never contains `quorum.state`); a witness
+        whose state is lost is rebuilt (a new incarnation learns the fences from the
+        controllers). Numbers: every
+        `TestMeasureFromSpare` cell 0 two leaders (the eight power-into-split cells were
+        200/200), also with both voters restarted before the old box returns, the peer wiped
+        after the command, the witness rebuilt then the peer wiped, the incumbent dead
+        re-adopting, and the old box wiped while off. The simulator gives the copy the original's
         address once `--from-spare` makes it the member (`tookAddress`: the peer's Adopts
         reach it, as its votes already reach a clone); the rig runs the real box as the spare
         end to end, the copy switched back on after (`TestTheRealBoxMadeASpareComesBackWithFromSpare`).
