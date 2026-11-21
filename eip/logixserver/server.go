@@ -43,6 +43,11 @@ type Server struct {
 	failMu  sync.Mutex
 	failing map[string]bool
 
+	// writeLog records the canonical path of every Write Tag request the
+	// server received, for tests that count what reached the controller.
+	writeMu  sync.Mutex
+	writeLog []string
+
 	// frags holds a fragmented write's bytes until the last chunk lands.
 	fragMu sync.Mutex
 	frags  map[string][]byte
@@ -181,10 +186,14 @@ func (s *Server) multipleService(mr cip.MessageRouterRequest) cip.MessageRouterR
 	}
 }
 
-// readTag serves Read Tag (0x4C) / Read Tag Fragmented (0x52). The path
-// determines the form: leading ANSI symbol (0x91) is a symbolic read; leading
-// Template class (0x6C) is a Read Template; leading Symbol class (0x6B) is
-// Symbol-Instance-Addressing.
+// Writes returns the canonical path of every Write Tag request received so
+// far, in arrival order (a struct written member by member is one per member).
+func (s *Server) Writes() []string {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return append([]string(nil), s.writeLog...)
+}
+
 // FailReads makes reads of path (canonical, e.g. "Speed") answer with a
 // transient error (object state conflict, 0x0C) while on is true; the
 // session stays up. For driver read-quality tests.
@@ -203,6 +212,10 @@ func (s *Server) readFails(path string) bool {
 	return s.failing[strings.ToUpper(path)]
 }
 
+// readTag serves Read Tag (0x4C) / Read Tag Fragmented (0x52). The path
+// determines the form: leading ANSI symbol (0x91) is a symbolic read; leading
+// Template class (0x6C) is a Read Template; leading Symbol class (0x6B) is
+// Symbol-Instance-Addressing.
 func (s *Server) readTag(mr cip.MessageRouterRequest) cip.MessageRouterResponse {
 	if len(mr.Path) == 0 {
 		return cip.MRError(mr.Service, cip.StatusPathSegmentError)
@@ -427,6 +440,9 @@ func (s *Server) writeTag(mr cip.MessageRouterRequest) cip.MessageRouterResponse
 		return cip.MRError(mr.Service, cip.StatusPathSegmentError)
 	}
 	path := cip.CanonicalTagPath(segs)
+	s.writeMu.Lock()
+	s.writeLog = append(s.writeLog, path)
+	s.writeMu.Unlock()
 	data := mr.Data
 	if len(data) < 4 {
 		return cip.MRError(mr.Service, cip.StatusNotEnoughData)
