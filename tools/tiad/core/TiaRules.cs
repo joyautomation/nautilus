@@ -1275,6 +1275,21 @@ namespace Tiad
             return l;
         }
 
+        // ElementName names one element of TIA's compare tree from its
+        // offline (left) and online (right) names, by the side that holds
+        // it: an element only the CPU has (LeftMissing) by its online
+        // name, since TIA fills the missing side with a placeholder ("Does
+        // not exist", #789 stage 3 window); one only the project has
+        // (RightMissing) by its offline name; any other by its offline
+        // name, or the online one when that is all TIA gave.
+        public static string ElementName(string state, string left, string right)
+        {
+            left = left ?? "";
+            right = right ?? "";
+            if (state == "LeftMissing") return right != "" ? right : left;
+            return left != "" ? left : right;
+        }
+
         // BlockLabels lists blocks' labels for the journal, at most max of
         // them and then how many more ("Main [OB1], Pump [FB1], +3 more").
         public static string BlockLabels(List<ProjectBlock> blocks, int max)

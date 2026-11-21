@@ -141,6 +141,7 @@ namespace Tiad.Test
                 T("CompareEqual", CompareEqualTests),
                 T("CompareSeesEveryBlock", CompareSeesEveryBlock),
                 T("BlockLabels", BlockLabels),
+                T("ElementNames", ElementNames),
                 T("UserManagementGate", UserManagementGate),
                 T("FileNames", FileNames),
                 T("BlockKinds", BlockKinds),
@@ -1401,6 +1402,20 @@ namespace Tiad.Test
             Eq(string.Join("; ", TiaNames.Labels(Bs(B("Main", "OB", 1), B("Odd", "X", 2))).ToArray()), "Main [OB1]; Odd (X)", "the response's list");
             Eq(TiaNames.Labels(null).Count, 0, "the response's list, no blocks read");
             Eq(TiaNames.BlockLabels(Bs(B("A", "FC", 1), B("B", "FC", 2), B("C", "FC", 3)), 2), "A [FC1], B [FC2], +1 more", "the journal's list, cut");
+        }
+
+        // ElementNames: #789 stage 3 window. A block only the CPU held came
+        // back named "Does not exist": TIA fills the missing side with a
+        // placeholder, so an element is named by the side that holds it.
+        static void ElementNames()
+        {
+            Eq(TiaNames.ElementName("LeftMissing", "Does not exist", "NautStage3 [FC1]"), "NautStage3 [FC1]", "only online: the CPU's name, as the bench showed");
+            Eq(TiaNames.ElementName("RightMissing", "NautStage3 [FC1]", "Does not exist"), "NautStage3 [FC1]", "only offline: the project's name");
+            Eq(TiaNames.ElementName("ObjectsIdentical", "Main [OB1]", "Main [OB1]"), "Main [OB1]", "both sides");
+            Eq(TiaNames.ElementName("ObjectsDifferent", "Main [OB1]", "Main_x [OB1]"), "Main [OB1]", "both sides, differing: the project's name");
+            Eq(TiaNames.ElementName("ObjectsIdentical", "", "PLC_1"), "PLC_1", "only an online name given");
+            Eq(TiaNames.ElementName("LeftMissing", "X", null), "X", "only online, no online name given");
+            Eq(TiaNames.ElementName("FolderContentsIdentical", null, null), "", "no names");
         }
 
         static void FileNames()
