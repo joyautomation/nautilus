@@ -740,7 +740,12 @@ behaviour. So, until then:
   read dropped if it fails, so a diagnostic never changes how the
   download ends, and type names only, since password configurations pass
   there too), then asks the agent for that one answer and writes it,
-  `NoAction` included. A configuration counts as written only once its
+  `NoAction` included. When TIA refuses a selection tiad writes, the log
+  line names it with the configuration's public members, each enum with
+  its value names and each list with its elements, so the next window
+  shows what TIA offers instead (#789 stage 4: a hardware load refused
+  `KeepOnlineUserManagementData`). A password configuration is never
+  described. A configuration counts as written only once its
   write succeeded; one asked twice, an answer it cannot apply, or a write
   that fails cancels the download, and the cancel stands even if TIA
   swallows the exception. Start-after is the request's `startAfter`,
@@ -830,11 +835,18 @@ behaviour. So, until then:
     tiad never writes `NoAction`: texts that disagree with the program are
     not a load)
   - `all-blocks` (`AllBlocksDownload`: load every block; acting)
+  - `overwrite` (`OverwriteSystemData`, "Delete and replace system
+    data in target"): the bench's hardware loads asked it second, right
+    after `stop-cpu` (#789 stage 4), so a hardware download should answer
+    `overwrite: true` up front. Acting.
   - `user-management` (`UserManagementDownload`): answered only by
     `userManagementKeepOnline: true`, which keeps the CPU's online users
     as they are, and only when the spec's `cpu.accessControl` is `keep`
     and no apply on the session ever asked for `fullAccessUser`;
-    otherwise it stays unanswered, naming why. Passive.
+    otherwise it stays unanswered, naming why. Passive. On a hardware
+    load the bench's TIA refused `KeepOnlineUserManagementData` (#789
+    stage 4), so a hardware load cannot answer it yet; its answer there
+    is a follow-up.
     Updating or resetting the CPU's users is never tiad's choice.
   - `identification-data` (`LoadIdentificationData`): answered only by
     `identificationDataLoadNothing: true`. Passive.

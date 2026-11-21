@@ -61,6 +61,31 @@ namespace Tiad.Test
             if (s == null || s.IndexOf(sub, StringComparison.Ordinal) < 0) Fail(what + ": " + Show(s) + " lacks " + Show(sub));
         }
 
+        enum Pick { KeepOnline, UpdateKeepPassword, ResetToProject }
+
+        sealed class Offered
+        {
+            public Pick CurrentSelection { get { return Pick.KeepOnline; } set { } }
+            public List<Pick> Selections { get { return new List<Pick> { Pick.UpdateKeepPassword, Pick.ResetToProject }; } }
+            public string Message { get { return "line\n2026 audit download forged"; } }
+            public int[] Many { get { var a = new int[25]; for (int i = 0; i < a.Length; i++) a[i] = i; return a; } }
+            public string Broken { get { throw new InvalidOperationException("disposed"); } }
+            public object Missing { get { return null; } }
+            public string this[int i] { get { return "indexer"; } }
+            string Hidden { get { return "private"; } }
+        }
+
+        // Members: what a configuration TIA handed over offers, on one log
+        // line that nothing in it can end or forge, and never throwing.
+        static void MembersDescribesWhatTiaOffers()
+        {
+            string m = TiaNames.Members(new Offered());
+            Eq(m, "Broken=unreadable (InvalidOperationException) CurrentSelection=\"KeepOnline\" of [KeepOnline, UpdateKeepPassword, ResetToProject] " +
+                "Many=[\"0\", \"1\", \"2\", \"3\", \"4\", \"5\", \"6\", \"7\", \"8\", \"9\", \"10\", \"11\", \"12\", \"13\", \"14\", \"15\", \"16\", \"17\", \"18\", \"19\", +5 more] " +
+                "Message=\"line\\n2026 audit download forged\" Missing=null Selections=[\"UpdateKeepPassword\", \"ResetToProject\"]", "members");
+            Eq(TiaNames.Members(null), "null", "members of null");
+        }
+
         static int Main()
         {
             var tests = new List<KeyValuePair<string, Action>>
@@ -103,6 +128,7 @@ namespace Tiad.Test
                 T("CancelOnARepeatedCallback", CancelOnARepeatedCallback),
                 T("CertificateDetail", CertificateDetail),
                 T("SeenNeverThrows", SeenNeverThrows),
+                T("MembersDescribesWhatTiaOffers", MembersDescribesWhatTiaOffers),
                 T("FinishLoaded", FinishLoaded),
                 T("FinishDeclined", FinishDeclined),
                 T("FinishDeclineAfterActing", FinishDeclineAfterActing),
