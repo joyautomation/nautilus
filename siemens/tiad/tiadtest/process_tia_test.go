@@ -588,6 +588,50 @@ func TestAgentSaysWhenTheOutcomeIsUnknown(t *testing.T) {
 	}
 }
 
+// TestAgentAnswersConsistentDownload: #789 walk-past window. A real
+// software download onto a CPU in RUN asks StopModules, then
+// ConsistentBlocksDownload ("Download software to device"). Unanswered,
+// tiad cancels there after the stop it wrote: outcome_unknown naming the
+// check and stop-cpu. Answered yes (consistentDownload), the download
+// loads and succeeds on evidence. Overwrite never answers it.
+func TestAgentAnswersConsistentDownload(t *testing.T) {
+	p, s := downloadReady(t)
+	qs := []tiad.Question{{ID: tiad.QuestionStopCPU}, {ID: tiad.QuestionConsistentDownload, Message: "Download software to device"}}
+	req := tiad.DownloadRequest{Address: "192.0.2.10", Software: true, Announced: true,
+		Decisions: tiad.Decisions{StopCPU: tiad.Yes(), Overwrite: tiad.Yes(), StartAfter: tiad.Yes()}}
+	p.SetScript(t, tiadtest.Script{Questions: qs})
+	_, err := s.Download(ctx, req)
+	if tiad.Kind(err) != tiad.KindOutcomeUnknown || !strings.Contains(err.Error(), "ConsistentBlocksDownload") ||
+		!strings.Contains(strings.Join(tiad.ActingAnswers(err), ","), "stop-cpu") {
+		t.Fatalf("stop yes, consistent download unanswered: %v (acting %v), want outcome_unknown naming the check and stop-cpu", err, tiad.ActingAnswers(err))
+	}
+	if l := p.Log(); !strings.Contains(l, `consistentDownload=unanswered`) || !strings.Contains(l, `asked=["stop-cpu","consistent-download"] acting=["stop-cpu","start-after"] outcome=outcome_unknown`) {
+		t.Fatalf("the audit must show the unanswered check and only stop (and start-after) acting:\n%s", l)
+	}
+	req.Decisions.ConsistentDownload = tiad.Yes()
+	p.SetScript(t, tiadtest.Script{Questions: qs})
+	if r, err := s.Download(ctx, req); err != nil || !r.Downloaded || !r.CompareEqual {
+		t.Fatalf("stop yes, consistent download yes: %+v %v, want a verified load", r, err)
+	}
+	// A CPU already in STOP: TIA asks consistent-download first, then a
+	// check the request leaves unanswered. The yes was acting, so the
+	// cancel is outcome_unknown naming it, never a clean refusal.
+	p.SetScript(t, tiadtest.Script{Questions: []tiad.Question{{ID: tiad.QuestionConsistentDownload}, {ID: tiad.QuestionReinitialize, Objects: []string{"Tags"}}}})
+	_, err = s.Download(ctx, req)
+	if tiad.Kind(err) != tiad.KindOutcomeUnknown || !strings.Contains(strings.Join(tiad.ActingAnswers(err), ","), "consistent-download") ||
+		!strings.Contains(err.Error(), "may already have loaded the software") {
+		t.Fatalf("consistent-download yes, then a refusal: %v (acting %v), want outcome_unknown naming consistent-download", err, tiad.ActingAnswers(err))
+	}
+	p.SetScript(t, tiadtest.Script{Questions: qs})
+	if _, err := s.Download(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	if l := p.Log(); !strings.Contains(l, `consistentDownload=yes`) || !strings.Contains(l, `acting=["stop-cpu","consistent-download"] outcome=loaded`) {
+		t.Fatalf("the audit must show consistent-download answered yes, acting, and loaded:\n%s", l)
+	}
+	p.SetScript(t, tiadtest.Script{})
+}
+
 // TestAgentNeverCallsAnEmptyCompareEqual: #789. TIA's compare tree is
 // equal only when its root says identical, at least one object below the
 // root was compared, and nothing anywhere in it differs. A tree that

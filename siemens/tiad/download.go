@@ -16,8 +16,12 @@ const (
 	QuestionStopCPU      = "stop-cpu"
 	QuestionReinitialize = "reinitialize"
 	QuestionOverwrite    = "overwrite"
-	QuestionStartAfter   = "start-after"
-	QuestionPassword     = "password"
+	// QuestionConsistentDownload is TIA's ConsistentBlocksDownload check
+	// ("Download software to device"), asked after stop-cpu: loading the
+	// PLC software as one consistent whole. It acts; yes loads.
+	QuestionConsistentDownload = "consistent-download"
+	QuestionStartAfter         = "start-after"
+	QuestionPassword           = "password"
 	// QuestionConfigurationPassword asks for the password protecting the
 	// CPU's confidential configuration data. It is answered only by
 	// Secrets.ConfigurationPassword, never by the protection password.
@@ -43,9 +47,12 @@ type Question struct {
 // Decisions are a download's answers. A nil pointer is "not answered",
 // which is different from "no".
 type Decisions struct {
-	StopCPU    *bool `json:"stopCpu,omitempty"`
-	Overwrite  *bool `json:"overwrite,omitempty"`
-	StartAfter *bool `json:"startAfter,omitempty"`
+	StopCPU   *bool `json:"stopCpu,omitempty"`
+	Overwrite *bool `json:"overwrite,omitempty"`
+	// ConsistentDownload answers QuestionConsistentDownload; only yes
+	// lets the download go on.
+	ConsistentDownload *bool `json:"consistentDownload,omitempty"`
+	StartAfter         *bool `json:"startAfter,omitempty"`
 	// Reinitialize names every DB the caller agrees to reset. It must
 	// cover every DB the question names.
 	Reinitialize []string `json:"reinitialize,omitempty"`
@@ -240,6 +247,8 @@ func Resolve(qs []Question, d Decisions, haveProtection, haveConfigurationPasswo
 			sortAnswer(q, d.StopCPU, &unanswered, &declined)
 		case QuestionOverwrite:
 			sortAnswer(q, d.Overwrite, &unanswered, &declined)
+		case QuestionConsistentDownload:
+			sortAnswer(q, d.ConsistentDownload, &unanswered, &declined)
 		case QuestionStartAfter:
 			// Either answer is a decision: no means load and stay in
 			// STOP, which is a legitimate choice, not a refusal.

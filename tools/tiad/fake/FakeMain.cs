@@ -1226,6 +1226,8 @@ namespace Tiad.Fake
                     return "StartModules";
                 case QuestionIds.Overwrite:
                     return "OverwriteSystemData";
+                case QuestionIds.ConsistentDownload:
+                    return "ConsistentBlocksDownload";
                 case QuestionIds.Reinitialize:
                     return "DataBlockReinitialization";
                 case QuestionIds.Password:

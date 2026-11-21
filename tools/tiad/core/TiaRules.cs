@@ -239,6 +239,8 @@ namespace Tiad
                     return QuestionIds.StartAfter;
                 case "OverwriteSystemData":
                     return QuestionIds.Overwrite;
+                case "ConsistentBlocksDownload":
+                    return QuestionIds.ConsistentDownload;
                 case "DataBlockReinitialization":
                 case "DataBlockReinitializationOrKeepActualValues":
                     return QuestionIds.Reinitialize;
@@ -268,6 +270,10 @@ namespace Tiad
                     return Setting.Choose(yes ? "StartModule" : "NoAction");
                 case "OverwriteSystemData":
                     return yes ? Setting.Choose("Overwrite") : null;
+                case "ConsistentBlocksDownload":
+                    // V21's only selection: no cannot be written, so it
+                    // cancels.
+                    return yes ? Setting.Choose("ConsistentDownload") : null;
                 case "DataBlockReinitialization":
                 case "DataBlockReinitializationOrKeepActualValues":
                     return yes ? Setting.Choose("StopPlcAndReinitialize") : null;
@@ -286,7 +292,7 @@ namespace Tiad
         // Answered are the configuration types For can answer.
         public static readonly string[] Answered =
         {
-            "StopModules", "StartModules", "OverwriteSystemData", "DataBlockReinitialization",
+            "StopModules", "StartModules", "OverwriteSystemData", "ConsistentBlocksDownload", "DataBlockReinitialization",
             "DataBlockReinitializationOrKeepActualValues", "ModuleReadAccessPassword",
             "ModuleWriteAccessPassword", "PlcMasterSecretPassword", "TlsVerificationConfiguration",
         };
@@ -317,16 +323,18 @@ namespace Tiad
         public static string Consequence(List<string> acting)
         {
             if (acting == null || acting.Count == 0) return "";
-            bool stop = false, start = false, other = false;
+            bool stop = false, start = false, load = false, other = false;
             foreach (string id in acting)
             {
                 if (id == QuestionIds.StopCpu || id == QuestionIds.Reinitialize) stop = true;
                 else if (id == QuestionIds.StartAfter) start = true;
+                else if (id == QuestionIds.ConsistentDownload) load = true;
                 else other = true;
             }
             var l = new List<string>();
             if (stop) l.Add("TIA may already have stopped the CPU: check its mode and start it");
             if (start) l.Add("TIA may already have started the CPU: check its mode");
+            if (load) l.Add("TIA may already have loaded the software: compare");
             if (other) l.Add("TIA may already have acted on them: check the CPU's mode and compare");
             return "tiad had answered " + string.Join(", ", acting.ToArray()) + " before the download ended, so " + string.Join("; ", l.ToArray());
         }

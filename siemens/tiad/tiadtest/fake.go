@@ -1346,7 +1346,7 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 // TIA configuration type (siemens-ide.md §3.5).
 func knownQuestion(id string) bool {
 	switch id {
-	case tiad.QuestionStopCPU, tiad.QuestionReinitialize, tiad.QuestionOverwrite, tiad.QuestionStartAfter,
+	case tiad.QuestionStopCPU, tiad.QuestionReinitialize, tiad.QuestionOverwrite, tiad.QuestionConsistentDownload, tiad.QuestionStartAfter,
 		tiad.QuestionPassword, tiad.QuestionConfigurationPassword, tiad.QuestionCertificate:
 		return true
 	}
@@ -1359,14 +1359,16 @@ func outcomeUnknown(why string, acting []string) *failure {
 	msg := why
 	var data any
 	if len(acting) > 0 {
-		// In the agent's order: stop, start, other.
-		var stop, start, other bool
+		// In the agent's order: stop, start, load, other.
+		var stop, start, load, other bool
 		for _, id := range acting {
 			switch id {
 			case tiad.QuestionStopCPU, tiad.QuestionReinitialize:
 				stop = true
 			case tiad.QuestionStartAfter:
 				start = true
+			case tiad.QuestionConsistentDownload:
+				load = true
 			default:
 				other = true
 			}
@@ -1377,6 +1379,9 @@ func outcomeUnknown(why string, acting []string) *failure {
 		}
 		if start {
 			l = append(l, "TIA may already have started the CPU: check its mode")
+		}
+		if load {
+			l = append(l, "TIA may already have loaded the software: compare")
 		}
 		if other {
 			l = append(l, "TIA may already have acted on them: check the CPU's mode and compare")

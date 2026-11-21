@@ -40,6 +40,13 @@ var ResolveCases = []struct {
 	{"stop no", []tiad.Question{qStop}, tiad.Decisions{StopCPU: tiad.No()}, false, false, "", "stop-cpu"},
 	{"overwrite unanswered", []tiad.Question{{ID: tiad.QuestionOverwrite}}, tiad.Decisions{StopCPU: tiad.Yes()}, false, false, "overwrite", ""},
 	{"overwrite no", []tiad.Question{{ID: tiad.QuestionOverwrite}}, tiad.Decisions{Overwrite: tiad.No()}, false, false, "", "overwrite"},
+	// TIA's ConsistentBlocksDownload: asked after stop-cpu by a real
+	// software download (#789 walk-past window). Only its own decision
+	// answers it, never overwrite.
+	{"consistent-download unanswered", []tiad.Question{{ID: tiad.QuestionConsistentDownload}}, tiad.Decisions{StopCPU: tiad.Yes(), Overwrite: tiad.Yes()}, false, false, "consistent-download", ""},
+	{"consistent-download no", []tiad.Question{{ID: tiad.QuestionConsistentDownload}}, tiad.Decisions{ConsistentDownload: tiad.No()}, false, false, "", "consistent-download"},
+	{"stop, then consistent-download yes", []tiad.Question{qStop, {ID: tiad.QuestionConsistentDownload}, {ID: tiad.QuestionStartAfter}},
+		tiad.Decisions{StopCPU: tiad.Yes(), ConsistentDownload: tiad.Yes(), StartAfter: tiad.Yes()}, false, false, "", ""},
 	{"start-after no is stay in STOP", []tiad.Question{{ID: tiad.QuestionStartAfter}}, tiad.Decisions{StartAfter: tiad.No()}, false, false, "", ""},
 	{"start-after unanswered", []tiad.Question{{ID: tiad.QuestionStartAfter}}, tiad.Decisions{}, false, false, "start-after", ""},
 	{"reinit all agreed, any case", []tiad.Question{qReinit}, tiad.Decisions{Reinitialize: []string{"tags", "PROG_DB"}}, false, false, "", ""},
