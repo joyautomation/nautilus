@@ -170,13 +170,26 @@ func contractHardwareGate(t *testing.T, a Target, s *tiad.Session, req tiad.Down
 			t.Fatalf("%s: %v", c.name, err)
 		}
 	}
-	// Too long to journal is a bad request, whatever else it says.
+	// Too long to journal is a bad request, whatever else it says, from
+	// the agent itself (the client checks first, so the body goes raw).
+	// The limits are bytes: 1001 two-byte runes are over 2000.
 	for _, long := range []tiad.Attestation{{By: strings.Repeat("b", tiad.MaxAttestationBy+1), Text: att.Text}, {By: att.By, Text: strings.Repeat("\u00e9", tiad.MaxAttestationText/2+1)}} {
 		r := AcceptHardware(req)
 		r.Attestation = &long
 		if _, err := s.Download(ctx, r); tiad.Kind(err) != tiad.KindBadRequest || !strings.Contains(err.Error(), "bytes") {
-			t.Fatalf("an attestation over the limit: %v", err)
+			t.Fatalf("an attestation over the limit, client side: %v", err)
 		}
+		status, b := rawJSON(t, a.Client(), "POST", "/v1/sessions/"+s.ID+"/download", r)
+		if status != http.StatusBadRequest || envelopeKind(b) != tiad.KindBadRequest || !strings.Contains(string(b), "bytes") {
+			t.Fatalf("an attestation over the limit: HTTP %d %s", status, b)
+		}
+	}
+	// At the limits it is taken (refused later only for start-after).
+	r := AcceptHardware(req)
+	r.Attestation = &tiad.Attestation{By: strings.Repeat("b", tiad.MaxAttestationBy), Text: strings.Repeat("\u00e9", tiad.MaxAttestationText/2)}
+	r.Decisions.StartAfter = nil
+	if _, err := s.Download(ctx, r); tiad.Kind(err) != tiad.KindDecisionRequired || !strings.Contains(err.Error(), "startAfter") {
+		t.Fatalf("an attestation at the limits: %v", err)
 	}
 	if l := a.Loaded(t); len(l) != 0 {
 		t.Fatalf("the hardware gate let a download load: %+v", l)
