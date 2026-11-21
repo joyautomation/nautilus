@@ -931,15 +931,27 @@ namespace Tiad.Fake
 
     // FakeTia is ITia without TIA: it keeps projects in memory and answers
     // what the Go fake (tiadtest.Fake) answers.
+    // FakeWorld is what outlives a fake TIA instance, as the machine and
+    // the CPUs outlive a real one the agent retires: the catalogue, the
+    // saved project files, and what each CPU holds.
+    sealed class FakeWorld
+    {
+        public readonly HashSet<string> Gsd = new HashSet<string>(StringComparer.Ordinal);
+        public readonly Dictionary<string, FakeProject> Loaded = new Dictionary<string, FakeProject>(StringComparer.Ordinal);
+        public readonly Dictionary<string, FakeProject> Saved = new Dictionary<string, FakeProject>(StringComparer.OrdinalIgnoreCase);
+        public readonly Dictionary<string, int> Loads = new Dictionary<string, int>(StringComparer.Ordinal);
+        public readonly Dictionary<string, int> HardwareLoads = new Dictionary<string, int>(StringComparer.Ordinal);
+    }
+
     sealed class FakeTia : ITia
     {
         readonly Script script;
-        readonly HashSet<string> gsd = new HashSet<string>(StringComparer.Ordinal);
+        readonly HashSet<string> gsd;
         // loaded is what each CPU holds: the project last downloaded to it.
-        readonly Dictionary<string, FakeProject> loaded = new Dictionary<string, FakeProject>(StringComparer.Ordinal);
+        readonly Dictionary<string, FakeProject> loaded;
         // saved is the hardware each saved project file holds, restored
         // when it is opened: its CPU, the devices besides it, protection.
-        readonly Dictionary<string, FakeProject> saved = new Dictionary<string, FakeProject>(StringComparer.OrdinalIgnoreCase);
+        readonly Dictionary<string, FakeProject> saved;
 
         // died is set once a scripted TIA died (tiaDies): for good, as a
         // real TIA that exited stays gone.
@@ -947,21 +959,35 @@ namespace Tiad.Fake
 
         // tlsTrusted is set once this instance answered a TLS question
         // trusted: as TIA does (#789 stage 1b), it asks none again until
-        // it restarts. loads and hardwareLoads count the downloads that
-        // loaded each CPU, for its fingerprint.
+        // it restarts; a new instance starts without it. loads and
+        // hardwareLoads count the downloads that loaded each CPU, for its
+        // fingerprint.
         bool tlsTrusted;
-        readonly Dictionary<string, int> loads = new Dictionary<string, int>(StringComparer.Ordinal);
-        readonly Dictionary<string, int> hardwareLoads = new Dictionary<string, int>(StringComparer.Ordinal);
+        readonly Dictionary<string, int> loads;
+        readonly Dictionary<string, int> hardwareLoads;
 
         public bool Gone
         {
             get { return died; }
         }
 
-        public FakeTia(Script script)
+        public FakeTia(Script script, FakeWorld world)
         {
             this.script = script;
+            gsd = world.Gsd;
+            loaded = world.Loaded;
+            saved = world.Saved;
+            loads = world.Loads;
+            hardwareLoads = world.HardwareLoads;
             script.Enter("start");
+        }
+
+        // Retire ends the instance, as a disposed TIA Portal that exited:
+        // a scripted "retire" failure is a retire that could not show it.
+        public void Retire()
+        {
+            script.Enter("retire");
+            died = true;
         }
 
         public bool CanDryRun
@@ -1613,10 +1639,11 @@ namespace Tiad.Fake
 
             var host = new FakeHost();
             var script = new Script();
+            var world = new FakeWorld();
             Agent agent;
             try
             {
-                agent = new Agent(cfg, host, delegate { return new FakeTia(script); }, "+fake");
+                agent = new Agent(cfg, host, delegate { return new FakeTia(script, world); }, "+fake");
             }
             catch (ConfigException e)
             {

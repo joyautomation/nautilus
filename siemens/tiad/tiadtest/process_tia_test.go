@@ -1336,6 +1336,9 @@ func TestAgentTrustsACertificateOnlyOnTheUploadsOptIn(t *testing.T) {
 	if err != nil || len(r.TrustedBlindly) != 1 || !strings.Contains(r.TrustedBlindly[0], "trust the TLS certificate of PLC_1") {
 		t.Fatalf("an upload with the opt-in: %+v %v, want the question trusted blindly", r, err)
 	}
+	if r.BlindTrust == nil || r.BlindTrust.Call != "upload" || r.BlindTrust.Session != s.ID {
+		t.Fatalf("the upload's blind trust: %+v, want the record this upload set", r.BlindTrust)
+	}
 	line := waitLog(t, p, "audit upload")
 	for _, want := range []string{"address=\"192.0.2.10\"", "trustUnverifiedCertificate=yes", "trustedBlindly=[\"trust the TLS certificate of PLC_1"} {
 		if !strings.Contains(line, want) {
@@ -1687,5 +1690,142 @@ func TestAgentJournalsTheUserManagementReset(t *testing.T) {
 	want(line(tiad.KindBadRequest), "cpuAccessControl=invalid}", "userManagementReset=unset")
 	if n, m := strings.Count(p.Log(), "Z audit download"), strings.Count(p.Log(), "audit download"); n != m {
 		t.Errorf("a forged audit line: %d of %d", n, m)
+	}
+}
+
+// TestAgentRetiresTheInstanceThatTrustedBlindly (#789 D1): closing the
+// last session retires a TIA instance that trusted a CPU's certificate
+// blindly, the next call starts a new one, and the agent clears its
+// record only once that one exists; an instance that trusted nothing is
+// never retired.
+func TestAgentRetiresTheInstanceThatTrustedBlindly(t *testing.T) {
+	p, s := downloadReady(t)
+	c := p.Client()
+	if err := s.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	s, err := c.CreateProject(ctx, "bench", tiadtest.BenchStation(), tiadtest.BenchSecrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, r := countCalls(p.Calls(t), "start"), countCalls(p.Calls(t), "retire"); n != 1 || r != 0 {
+		t.Fatalf("an instance that trusted nothing: %d starts, %d retires, want 1 and 0", n, r)
+	}
+	p.SetFingerprint(t, tiadtest.FingerprintScript{AsksTLS: true})
+	if _, err := s.Fingerprint(ctx, tiad.FingerprintRequest{TrustUnverifiedCertificate: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n, r := countCalls(p.Calls(t), "start"), countCalls(p.Calls(t), "retire"); n != 1 || r != 1 {
+		t.Fatalf("closing the last session on the trusting instance: %d starts, %d retires, want 1 and 1 (no new instance until a call needs one)", n, r)
+	}
+	log := waitLog(t, p, "audit blind-trust retired")
+	if strings.Contains(log, "audit blind-trust cleared") {
+		t.Fatalf("the record was cleared before a new instance existed:\n%s", log)
+	}
+	s, err = c.CreateProject(ctx, "bench", tiadtest.BenchStation(), tiadtest.BenchSecrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := countCalls(p.Calls(t), "start"); n != 2 {
+		t.Fatalf("%d starts after the retire, want 2", n)
+	}
+	waitLog(t, p, "audit blind-trust cleared")
+	if cmp, err := s.Compare(ctx); err != nil || cmp.BlindTrust != nil {
+		t.Fatalf("a compare in the new instance: %+v %v, want no trust", cmp, err)
+	}
+}
+
+// TestAgentTreatsARetireItCannotProveAsTIAGone: a retire that cannot
+// show TIA's process exited leaves an instance that may still hold the
+// trust, so every TIA call is refused, naming the fix, and no new
+// instance starts.
+func TestAgentTreatsARetireItCannotProveAsTIAGone(t *testing.T) {
+	p, s := downloadReady(t)
+	c := p.Client()
+	p.SetScript(t, tiadtest.Script{FingerprintAsksTLS: true, Failures: []tiadtest.ScriptedCall{{Call: "retire", Message: "the process had not exited"}}})
+	if _, err := s.Fingerprint(ctx, tiad.FingerprintRequest{TrustUnverifiedCertificate: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	_, err := c.CreateProject(ctx, "bench", tiadtest.BenchStation(), tiadtest.BenchSecrets)
+	if tiad.Kind(err) != tiad.KindGate || !strings.Contains(err.Error(), "could not be retired") || !strings.Contains(err.Error(), "Restart the agent") {
+		t.Fatalf("a call after a retire that failed: %v, want the tia gate naming the failed retire and the fix", err)
+	}
+	if n := countCalls(p.Calls(t), "start"); n != 1 {
+		t.Fatalf("%d starts, want no new instance after a retire that failed", n)
+	}
+	if strings.Contains(p.Log(), "audit blind-trust cleared") || strings.Contains(p.Log(), "audit blind-trust retired") {
+		t.Fatalf("a failed retire was journalled as done:\n%s", p.Log())
+	}
+}
+
+// TestAgentRetiresAfterTheReaper: a trusting instance whose last session
+// the idle reaper closed is retired too.
+func TestAgentRetiresAfterTheReaper(t *testing.T) {
+	p := tiadtest.StartProcess(t, fakeBin(t), tiadtest.Config{Targets: []string{"192.0.2.10"}}, "TIAD_SESSION_IDLE=1s")
+	c := p.Client()
+	installBench(t, c)
+	s, err := c.CreateProject(ctx, "bench", tiadtest.BenchStation(), tiadtest.BenchSecrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.SetFingerprint(t, tiadtest.FingerprintScript{AsksTLS: true})
+	if _, err := s.Fingerprint(ctx, tiad.FingerprintRequest{TrustUnverifiedCertificate: true}); err != nil {
+		t.Fatal(err)
+	}
+	waitLog(t, p, "closed idle session")
+	waitLog(t, p, "audit blind-trust retired")
+	if n := countCalls(p.Calls(t), "retire"); n != 1 {
+		t.Fatalf("%d retires after the reaper closed the last session, want 1", n)
+	}
+}
+
+// TestAgentBoundsARetire: TIA's Dispose has no bound of its own, so a
+// retire still running after TIAD_RETIRE_WATCH counts as TIA gone: the
+// tia gate says why, and when the retire returns late it is still not
+// journalled as done, and no new instance starts.
+func TestAgentBoundsARetire(t *testing.T) {
+	p, s := downloadReady(t, "TIAD_RETIRE_WATCH=300ms")
+	c := p.Client()
+	p.SetScript(t, tiadtest.Script{FingerprintAsksTLS: true, Delays: []tiadtest.ScriptedCall{{Call: "retire", MS: 2000}}})
+	if _, err := s.Fingerprint(ctx, tiad.FingerprintRequest{TrustUnverifiedCertificate: true}); err != nil {
+		t.Fatal(err)
+	}
+	closed := make(chan error, 1)
+	go func() { closed <- s.Close(ctx) }()
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		pr, err := c.Probe(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, g := range pr.Gates {
+			if g.Name == "tia" && g.Blocks() && strings.Contains(g.Detail, "had not returned 300ms later") {
+				found = true
+			}
+		}
+		if found {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the tia gate never named the stuck retire: %+v", pr.Gates)
+		}
+	}
+	if err := <-closed; err != nil {
+		t.Fatalf("the close the retire followed: %v", err)
+	}
+	if _, err := c.CreateProject(ctx, "bench", tiadtest.BenchStation(), tiadtest.BenchSecrets); tiad.Kind(err) != tiad.KindGate {
+		t.Fatalf("a call after a retire the watch gave up on: %v, want the tia gate", err)
+	}
+	if n := countCalls(p.Calls(t), "start"); n != 1 {
+		t.Fatalf("%d starts, want no new instance", n)
+	}
+	if strings.Contains(p.Log(), "audit blind-trust retired") {
+		t.Fatalf("a retire the watch gave up on was journalled as done:\n%s", p.Log())
 	}
 }

@@ -197,6 +197,7 @@ copies `logixd`, the Logix agent:
   | `TIAD_TARGETS` | — | The only CPU addresses tiad will go online to or download to |
   | `TIAD_PGPC_INTERFACE` | — | The NIC TIA uses to reach the CPUs |
   | `TIAD_SESSION_IDLE` | `1h` | The idle reaper closes a session unused this long (a Go duration). The clock starts when a call ends; a session with a call in flight is never closed |
+  | `TIAD_RETIRE_WATCH` | `3m` | How long a retire of a TIA instance that trusted blindly may take before tiad counts TIA as gone (§3.8; a Go duration, at most `1h`). TIA's dispose has no bound of its own |
   | `TIAD_MAX_FILE_BYTES` | 1 GiB | The largest file a put takes (413 beyond it) |
   | `TIAD_NO_TIA` | — | `1` fails the `tia` gate, so no call can start TIA. tiad is installed and tested this way before a clone's trial may start |
 
@@ -1124,9 +1125,9 @@ matching", no certificate shown), and an upload may. Only the request's
 read fails, naming the opt-in. TIA then keeps that trust **for the rest
 of its instance**: a later read without the opt-in asks nothing and
 succeeds. Nothing is saved, and a TIA restart forgets it (stage 1b). The
-agent starts TIA once, so the agent records the instance's blind trust
-(`blindTrust: {since, call, session, address, questions}`, `since` by
-tiad's clock) and keeps it until it restarts:
+agent records the instance's blind trust (`blindTrust: {since, call,
+session, address, questions}`, `since` by tiad's clock) and keeps it for
+as long as that instance runs:
 
 - the first trust sets the record and is an audit line; later ones are
   logged beside it;
@@ -1140,8 +1141,9 @@ tiad's clock) and keeps it until it restarts:
   TIA's download (never a trust given later, while it ran);
 - a download, a dry run too, that would ride on it is refused before
   anything reaches the CPU (`blind-trust`, §3.5) unless it says
-  `decisions.acceptBlindTrust: true`. The other fix is restarting the
-  agent, for a TIA instance that trusts nothing. The check runs again on
+  `decisions.acceptBlindTrust: true`. The other fix is a TIA instance
+  that trusts nothing: close every session (below), or restart the
+  agent. The check runs again on
   the TIA thread just before TIA's download, so a trust a queued call
   gave in between is caught too; that refusal comes after the pin check
   and the CPU's claim, and says TIA's download was not called.
@@ -1149,9 +1151,43 @@ tiad's clock) and keeps it until it restarts:
   opt-in; one refused for credentials or a question tiad does not know
   does not, since the opt-in answers neither.
 
-So a deploy that reads the fingerprint before loading, in the same
-instance, must accept the blind trust; one that reads it after loading
-leaves the next deploy in that instance to accept it.
+- **the instance is retired once no session is left on it** (#789 D1):
+  when the last session's close ends (a `DELETE`, or the idle reaper)
+  and the instance trusted blindly, tiad disposes TIA Portal and waits
+  for its process to exit (up to 120 s). The next call that needs TIA
+  starts a new instance (about 8 s on the bench machine, plus a cold
+  project open), and only then is the record cleared. Both steps are
+  audit lines (`audit blind-trust retired`, `audit blind-trust
+  cleared`). While any session is open, still opening, still closing,
+  or broken (a close that failed), the instance stays, and the download
+  refusal above holds; a failed open leaves the retire to the next
+  close. A retire that cannot show the process exited (no process id, a
+  failed dispose, a process that outlives the wait) counts as TIA gone:
+  the `tia` gate fails until the agent restarts, since that instance may
+  still hold the trust. So does one still running after
+  `TIAD_RETIRE_WATCH` (`3m`), since TIA's dispose has no bound of its
+  own: the gate then names the stuck retire. An instance that never
+  trusted blindly is never retired.
+
+So a deploy reads the fingerprint after loading, then closes its
+session: the next deploy starts in an instance that trusts nothing and
+needs no `acceptBlindTrust`. A read before loading, in the same session,
+still makes that session's download accept the blind trust; read it in
+a session of its own and close that first.
+
+**Bench-proven (#789 D1 probe, read-only):** a fresh instance asked the
+TLS question; the opt-in read trusted it; a read without the opt-in in
+the same instance then succeeded riding on it; closing the session
+retired the instance (its process exited 5.6 s after the retire began);
+in the new instance, started in the same agent process 6.6 s later, a
+read without the opt-in was asked the TLS question again and refused.
+So TIA's trust goes with the retired instance, not only tiad's record.
+Nor is it kept in a saved project: a project saved after the trusting
+read, reopened in a new instance, was asked the TLS question again.
+The first create after a retire took 31 s (a warm one about 6 s): a
+deploy after a trusting read pays about half a minute. TIA V21 opens
+one project per instance ("Another project is already open"), so on
+real TIA the last session is the only one.
 
 **Calls (no TIA):**
 

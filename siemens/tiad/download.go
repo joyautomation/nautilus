@@ -275,24 +275,24 @@ func CheckHardware(r DownloadRequest) (why string, declined bool) {
 // with blind trust b: the agent's BlindTrustRule.Question.
 func BlindTrustQuestion(b BlindTrust) Question {
 	return Question{ID: QuestionBlindTrust,
-		Message: "download in a TIA instance that trusted a CPU's certificate blindly (" + b.Describe() + "): set decisions.acceptBlindTrust, or restart the agent"}
+		Message: "download in a TIA instance that trusted a CPU's certificate blindly (" + b.Describe() + "): set decisions.acceptBlindTrust, or close every session (the agent then retires that instance) or restart the agent"}
 }
 
 // CheckBlindTrust is the agent's BlindTrustRule.Check: "" when a download
 // may go on in a TIA instance with blind trust b (nil: none), or why not,
 // naming the fix; declined when accept answered no. A download, a dry run
 // too, in such an instance rides on that trust, since TIA asks no TLS
-// question again until it restarts.
+// question again until the instance ends.
 func CheckBlindTrust(b *BlindTrust, accept *bool) (why string, declined bool) {
 	if b == nil {
 		return "", false
 	}
-	w := "this agent's TIA instance trusted a CPU's certificate blindly (" + b.Describe() + "), and TIA keeps that trust until it restarts, so this download would ride on it"
+	w := "this agent's TIA instance trusted a CPU's certificate blindly (" + b.Describe() + "), and TIA keeps that trust until that instance ends, so this download would ride on it"
 	switch {
 	case accept == nil:
-		return w + ": restart the agent for a TIA instance that trusts nothing, or set decisions.acceptBlindTrust", false
+		return w + ": close every session (the agent then retires that instance) or restart the agent for one that trusts nothing, or set decisions.acceptBlindTrust", false
 	case !*accept:
-		return w + ", and decisions.acceptBlindTrust says no: restart the agent for a TIA instance that trusts nothing", true
+		return w + ", and decisions.acceptBlindTrust says no: close every session (the agent then retires that instance) or restart the agent for one that trusts nothing", true
 	}
 	return "", false
 }

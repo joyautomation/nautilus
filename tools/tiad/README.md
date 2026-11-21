@@ -136,6 +136,7 @@ From the environment only; nothing in a request changes it.
 | `TIAD_PINS_DIR` | `%ProgramData%\tiad\pins` | The device pins (siemens-ide.md §3.8). Required off Windows; refused inside `TIAD_WORKDIR`, which the files API reaches. `install-tiad.ps1` locks it and never wipes it |
 | `TIAD_TARGETS` | none | The only CPU addresses tiad goes online or downloads to. Strict dotted quads |
 | `TIAD_SESSION_IDLE` | `1h` | The idle reaper closes sessions unused this long (a Go duration) |
+| `TIAD_RETIRE_WATCH` | `3m` | How long a retire of a TIA instance that trusted blindly may take before tiad counts TIA as gone (a Go duration, at most `1h`) |
 | `TIAD_NO_TIA` | unset | `1` fails the `tia` gate, so no call can start TIA (or a trial clock) |
 | `TIAD_PC_INTERFACE` | none | The PC interface TIA reaches CPUs through, when it lists more than one in PN/IE mode (`install-tiad.ps1 -PcInterface`) |
 | `TIAD_EXIT_ON_STDIN` | unset | `1` ends the agent when its stdin closes (the test harness sets it). Off by default: a scheduled task's stdin may be closed from the start |

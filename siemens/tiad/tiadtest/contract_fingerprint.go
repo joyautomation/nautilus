@@ -11,11 +11,12 @@ import (
 // The fingerprint half of the contract (siemens-ide.md §3.8): a read-only
 // online read of TIA's fingerprint of a session's CPU, which fails rather
 // than answer part of a read, and the TIA instance's blind trust, which
-// TIA keeps until it restarts: every later online call reports it, and a
+// TIA keeps until the instance ends: every later online call reports it, and a
 // download that would ride on it needs decisions.acceptBlindTrust.
 func contractFingerprint(t *testing.T, start Starter) {
 	t.Run("Read", func(t *testing.T) { contractFingerprintRead(t, start) })
 	t.Run("BlindTrust", func(t *testing.T) { contractFingerprintBlindTrust(t, start) })
+	t.Run("Retired", func(t *testing.T) { contractFingerprintRetired(t, start) })
 	t.Run("FailsClosed", func(t *testing.T) { contractFingerprintFailsClosed(t, start) })
 	t.Run("Gates", func(t *testing.T) { contractFingerprintGates(t, start) })
 }
@@ -152,6 +153,73 @@ func contractFingerprintBlindTrust(t *testing.T, start Starter) {
 		"decisions": map[string]any{"startAfter": false, "acceptBlindTrust": "yes"}})
 	if status != http.StatusBadRequest || envelopeKind(b) != tiad.KindBadRequest {
 		t.Errorf("acceptBlindTrust as a string: HTTP %d %s", status, b)
+	}
+}
+
+// contractFingerprintRetired (#789 D1): the TIA instance that trusted
+// blindly is retired once no session is left on it, and the next one
+// trusts nothing, so a deploy's own download never rides on an earlier
+// read's trust. While another session is open the instance stays, and
+// the download gate holds there.
+func contractFingerprintRetired(t *testing.T, start Starter) {
+	a, s := compiledBench(t, start)
+	c := a.Client()
+	a.SetFingerprint(t, FingerprintScript{AsksTLS: true})
+	if r, err := s.Fingerprint(ctx, tiad.FingerprintRequest{TrustUnverifiedCertificate: true}); err != nil || r.BlindTrust == nil {
+		t.Fatalf("a read with the opt-in: %+v %v", r, err)
+	}
+	other, err := c.CreateProject(ctx, "other", BenchStation(), BenchSecrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := other.Compile(ctx, true, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// Another session is left: the instance, and its trust, stay.
+	if cmp, err := other.Compare(ctx); err != nil || cmp.BlindTrust == nil {
+		t.Fatalf("a compare in the session left open: %+v %v, want the trust still reported", cmp, err)
+	}
+	if _, err := other.Download(ctx, benchSoftwareLoad); tiad.Kind(err) != tiad.KindDecisionRequired || !strings.Contains(err.Error(), "close every session") {
+		t.Fatalf("a download while the trusting instance is still up: %v, want decision_required naming the fix", err)
+	}
+	if err := other.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// No session left: the next instance trusts nothing.
+	loaded := len(a.Loaded(t))
+	s2, err := c.CreateProject(ctx, "bench", BenchStation(), BenchSecrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.PutFile(ctx, "src/Main.scl", []byte(programSCL)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s2.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{"src/Main.scl"}, Prune: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s2.Compile(ctx, true, true); err != nil {
+		t.Fatal(err)
+	}
+	if cmp, err := s2.Compare(ctx); err != nil || cmp.BlindTrust != nil {
+		t.Fatalf("a compare in the next instance: %+v %v, want no trust", cmp, err)
+	}
+	dr, err := s2.Download(ctx, benchSoftwareLoad)
+	if err != nil || !dr.Downloaded || dr.BlindTrust != nil {
+		t.Fatalf("a download in the next instance, no acceptBlindTrust: %+v %v, want it loaded riding on nothing", dr, err)
+	}
+	if l := a.Loaded(t); len(l) != loaded+1 {
+		t.Fatalf("loads %+v, want the one download", l)
+	}
+	// The new instance asks the TLS question again: TIA's trust went with
+	// the old one, not only tiad's record of it.
+	if _, err := s2.Fingerprint(ctx, tiad.FingerprintRequest{}); tiad.Kind(err) != tiad.KindOperationFailed || !strings.Contains(err.Error(), "trust the TLS certificate of PLC_1") {
+		t.Fatalf("a read without the opt-in in the next instance: %v, want TIA to ask the TLS question again", err)
+	}
+	if r, err := s2.Fingerprint(ctx, tiad.FingerprintRequest{TrustUnverifiedCertificate: true}); err != nil || r.BlindTrust == nil || r.BlindTrust.Session != s2.ID {
+		t.Fatalf("a read with the opt-in in the next instance: %+v %v, want a new record of this session's trust", r, err)
 	}
 }
 

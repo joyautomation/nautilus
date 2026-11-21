@@ -226,7 +226,7 @@ namespace Tiad.Openness
         // or its process having exited. The process is opened once, at
         // start, and kept (null when unknown): the open handle pins it, so
         // a later process given the same id is never taken for it.
-        volatile bool disposed, detachFailed;
+        volatile bool disposed, detachFailed, retiring;
         readonly System.Diagnostics.Process process;
         readonly object processMu = new object();
 
@@ -252,7 +252,7 @@ namespace Tiad.Openness
                 disposed = true;
                 try
                 {
-                    Log.Line("TIA Portal says it is disposed");
+                    Log.Line(retiring ? "TIA Portal says it is disposed (retired on purpose)" : "TIA Portal says it is disposed");
                 }
                 catch (Exception)
                 {
@@ -283,6 +283,39 @@ namespace Tiad.Openness
                     return process.HasExited;
                 }
             }
+        }
+
+        // RetireWait bounds the wait for TIA's process to exit once it is
+        // disposed: TIA saves its settings on the way out.
+        static readonly TimeSpan RetireWait = TimeSpan.FromSeconds(120);
+
+        // Retire: see ITia. It disposes TIA Portal, which ends the process
+        // this instance started, and waits until the process has exited:
+        // the trust TIA keeps lives in that process. Without a process to
+        // watch, or one that outlives the wait, it throws.
+        public void Retire()
+        {
+            retiring = true;
+            if (process == null) throw new TiaException("TIA Portal's process id is unknown, so tiad cannot tell that it exited");
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            try
+            {
+                portal.Dispose();
+            }
+            catch (Exception e)
+            {
+                throw new TiaException("disposing TIA Portal failed: " + Message(e), e);
+            }
+            bool exited;
+            lock (processMu)
+            {
+                exited = process.WaitForExit((int)RetireWait.TotalMilliseconds);
+            }
+            if (!exited)
+            {
+                throw new TiaException("TIA Portal's process " + process.Id + " was disposed but had not exited " + (int)RetireWait.TotalSeconds + " s later");
+            }
+            Log.Line("TIA Portal's process {0} exited {1} ms after the retire began", process.Id, sw.ElapsedMilliseconds);
         }
 
         // Detached is called by a handler that could not be detached.
