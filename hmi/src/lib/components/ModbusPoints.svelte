@@ -11,6 +11,7 @@
 		path,
 		driver,
 		classes = [],
+		tagClasses = false,
 		text,
 		readonly = false,
 		onedit
@@ -19,6 +20,8 @@
 		driver: string;
 		/** The scan classes the driver declares (scan-classes:). */
 		classes?: string[];
+		/** The driver has tag-classes: patterns. */
+		tagClasses?: boolean;
 		text: string;
 		readonly?: boolean;
 		onedit: (path: string, op: () => Op) => void;
@@ -46,6 +49,7 @@
 <div class="points">
 	<div class="head"><strong>Modbus points</strong> <code>{path}</code> <span class="d">driver {driver}</span></div>
 	<p class="d">Table, address and scan class of a point, and a source's host, port and unit id, can change while running. A point's format, scale, direction, and adding or removing points, need a restart or a deploy. If this file is generated, re-running the import overwrites these edits.</p>
+	{#if tagClasses}<p class="d">This driver has tag-classes: patterns, which override a point's scan class when it runs: the class shown here may not be the one a point polls at.</p>{/if}
 	<table>
 		<caption>Sources</caption>
 		<thead><tr><th>Id</th><th>Host</th><th>Port</th><th>Unit id</th></tr></thead>
@@ -54,8 +58,8 @@
 				<tr>
 					<td>{s.id}</td>
 					<td><input aria-label="source {s.id} host" disabled={readonly} value={s.host} class:invalid={bad('source ' + s.id).length > 0} onchange={(e) => srcEdit(s.index, 'host', e.currentTarget.value)} /></td>
-					<td><input aria-label="source {s.id} port" class="n" disabled={readonly} value={s.port ?? ''} placeholder="502" inputmode="numeric" onchange={(e) => srcEdit(s.index, 'port', e.currentTarget.value)} /></td>
-					<td><input aria-label="source {s.id} unit id" class="n" disabled={readonly} value={s.unitid ?? ''} placeholder="0" inputmode="numeric" onchange={(e) => srcEdit(s.index, 'unitid', e.currentTarget.value)} /></td>
+					<td><input aria-label="source {s.id} port" class="n" disabled={readonly} value={s.port === undefined ? '' : String(s.port)} placeholder="502" inputmode="numeric" onchange={(e) => srcEdit(s.index, 'port', e.currentTarget.value)} /></td>
+					<td><input aria-label="source {s.id} unit id" class="n" disabled={readonly} value={s.unitid === undefined ? '' : String(s.unitid)} placeholder="0" inputmode="numeric" onchange={(e) => srcEdit(s.index, 'unitid', e.currentTarget.value)} /></td>
 				</tr>
 			{/each}
 		</tbody>
@@ -77,7 +81,7 @@
 					</td>
 					<td><input aria-label="{t.name} address" class="n" disabled={readonly} value={t.address ?? ''} inputmode="numeric" onchange={(e) => tagEdit(t.index, 'address', e.currentTarget.value)} /></td>
 					<td><input aria-label="{t.name} scan class" disabled={readonly} value={t.scanclass ?? ''} placeholder="(default)" list={'sc-' + listUid} class:invalid={bad('tag ' + t.name).some((i) => i.message.includes('scan class'))} onchange={(e) => tagEdit(t.index, 'scanclass', e.currentTarget.value)} /></td>
-					<td class="d">{t.format ?? 'bool'}</td>
+					<td class="d">{t.format ?? (t.table === 'coil' || t.table === 'discrete' ? 'bool' : '(default)')}</td>
 					<td class="d">{t.writable ? 'writable' : ''}</td>
 				</tr>
 			{/each}

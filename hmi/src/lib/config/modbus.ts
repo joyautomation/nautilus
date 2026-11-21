@@ -19,8 +19,9 @@ export interface SourceRow {
 	index: number;
 	id: string;
 	host: string;
-	port?: number;
-	unitid?: number;
+	/** As written: a non-number is kept so the check can name it. */
+	port?: Json;
+	unitid?: Json;
 	rest: Row;
 }
 export interface TagRow {
@@ -37,6 +38,8 @@ export interface TagRow {
 export interface ModbusManifest {
 	sources: SourceRow[];
 	tags: TagRow[];
+	/** The file does not parse: nothing else is read from it. */
+	error?: string;
 }
 
 const obj = (v: unknown): v is Row => v !== null && typeof v === 'object' && !Array.isArray(v);
@@ -44,14 +47,19 @@ const num = (v: unknown): number | undefined => (typeof v === 'number' ? v : und
 
 /** The sources and tag bindings in a modbus manifest's text; a malformed entry is skipped, not guessed at. */
 export function parseModbus(text: string): ModbusManifest {
-	const d = parse(text) as unknown;
+	let d: unknown;
+	try {
+		d = parse(text);
+	} catch (e) {
+		return { sources: [], tags: [], error: `this file is not valid YAML (${e instanceof Error ? e.message.split('\n')[0] : String(e)}); fix it in the project before editing here` };
+	}
 	const doc: Row = obj(d) ? d : {};
 	const sources: SourceRow[] = [];
 	const tags: TagRow[] = [];
 	if (Array.isArray(doc.sources))
 		doc.sources.forEach((v, index) => {
 			if (!obj(v)) return;
-			sources.push({ index, id: String(v.id ?? ''), host: String(v.host ?? ''), port: num(v.port), unitid: num(v.unitid), rest: v });
+			sources.push({ index, id: String(v.id ?? ''), host: String(v.host ?? ''), port: v.port as Json | undefined, unitid: v.unitid as Json | undefined, rest: v });
 		});
 	if (Array.isArray(doc.tags))
 		doc.tags.forEach((v, index) => {
@@ -72,21 +80,37 @@ export function parseModbus(text: string): ModbusManifest {
 }
 
 /** The modbus manifests of the project: the files a modbus driver names that the controller sent. */
-export function modbusManifests(files: Record<string, string>, manifest: string): { path: string; driver: string; classes: string[] }[] {
+export interface ModbusFile {
+	path: string;
+	/** The drivers that name this file, joined. */
+	driver: string;
+	/** Scan classes every one of those drivers declares (a class one lacks is refused by its apply). */
+	classes: string[];
+	/** A driver's tag-classes: patterns override a point's scan class at run time. */
+	tagClasses: boolean;
+}
+
+export function modbusManifests(files: Record<string, string>, manifest: string): ModbusFile[] {
 	let rows;
 	try {
 		rows = driverRows(files[manifest] ?? '');
 	} catch {
 		return [];
 	}
-	const out: { path: string; driver: string; classes: string[] }[] = [];
-	const seen = new Set<string>();
+	const out: ModbusFile[] = [];
 	for (const r of rows) {
 		const p = r.value.manifest;
-		if (r.value.type !== 'modbus' || typeof p !== 'string' || seen.has(p) || files[p] === undefined) continue;
-		seen.add(p);
+		if (r.value.type !== 'modbus' || typeof p !== 'string' || files[p] === undefined) continue;
 		const sc = r.value['scan-classes'];
-		out.push({ path: p, driver: String(r.value.name ?? 'modbus'), classes: obj(sc) ? Object.keys(sc) : [] });
+		const classes = obj(sc) ? Object.keys(sc) : [];
+		const tc = obj(r.value['tag-classes']) && Object.keys(r.value['tag-classes'] as Row).length > 0;
+		const name = String(r.value.name ?? 'modbus');
+		const have = out.find((o) => o.path === p);
+		if (have) {
+			have.driver += `, ${name}`;
+			have.classes = have.classes.filter((c) => classes.includes(c));
+			have.tagClasses ||= tc;
+		} else out.push({ path: p, driver: name, classes, tagClasses: tc });
 	}
 	return out;
 }
@@ -114,6 +138,7 @@ export function problems(m: ModbusManifest, classes: string[] = []): Problem[] {
 	// The default class (empty) and the reserved `none` always exist; any other must be a scan-classes: entry of the driver.
 	const declared = new Set([...classes, NO_POLL]);
 	const out: Problem[] = [];
+	if (m.error) return [{ where: 'file', message: m.error }];
 	const ids = new Set(m.sources.map((s) => s.id));
 	for (const s of m.sources) {
 		const at = `source ${s.id}`;

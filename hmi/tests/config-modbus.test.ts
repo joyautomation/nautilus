@@ -51,7 +51,7 @@ describe('modbus points', () => {
 	it('finds the manifests of modbus drivers the controller sent', () => {
 		const nautilus = 'drivers:\n  - { type: modbus, name: a, manifest: m.yaml }\n  - { type: opcua-client, manifest: u.yaml }\n  - { type: modbus, manifest: gone.yaml }\n';
 		const r = modbusManifests({ 'nautilus.yaml': nautilus, 'm.yaml': T, 'u.yaml': 'x: 1' }, 'nautilus.yaml');
-		expect(JSON.stringify(r)).toBe(JSON.stringify([{ path: 'm.yaml', driver: 'a', classes: [] }]));
+		expect(JSON.stringify(r)).toBe(JSON.stringify([{ path: 'm.yaml', driver: 'a', classes: [], tagClasses: false }]));
 		const c = modbusManifests({ 'nautilus.yaml': 'drivers:\n  - { type: modbus, manifest: m.yaml, scan-classes: { fast: 50ms, slow: 1s } }\n', 'm.yaml': T }, 'nautilus.yaml');
 		expect(c[0].classes.join()).toBe('fast,slow');
 		expect(modbusManifests({ 'nautilus.yaml': 'drivers: [' }, 'nautilus.yaml').length).toBe(0);
@@ -70,6 +70,26 @@ describe('modbus points', () => {
 		expect(msg(T.replace('table: input, address: 7, format: uint16', 'table: discrete, address: 7, format: uint16')).includes('must be bool')).toBe(true);
 		expect(msg(T.replace('table: coil, address: 3, format: bool', 'table: coil, address: 3, format: int16')).includes('must be bool')).toBe(true);
 		expect(msg(T.replace('table: input, address: 7, format: uint16', 'table: discrete, address: 7, format: bool')).includes('must be bool')).toBe(false);
+	});
+	it('a non-numeric port or unit id is named, not shown as empty', () => {
+		const msg = problems(parseModbus(T.replace('unitid: 1', 'unitid: abc').replace('port: 1502', 'port: "x"')), ['fast']).map((p) => p.message).join(' | ');
+		expect(msg.includes('port must be')).toBe(true);
+		expect(msg.includes('unit id must be')).toBe(true);
+		expect(parseModbus(T.replace('unitid: 1', 'unitid: abc')).sources[0].unitid).toBe('abc');
+	});
+	it('a file that does not parse is one named problem, not a throw', () => {
+		const m = parseModbus('sources:\n  - {id: A\n\ttags: [');
+		expect(m.tags.length).toBe(0);
+		expect(problems(m).map((p) => p.message).join().includes('not valid YAML')).toBe(true);
+	});
+	it('two drivers on one manifest: only classes both declare, both named, tag-classes noted', () => {
+		const n = 'drivers:\n  - { type: modbus, name: a, manifest: m.yaml, scan-classes: { fast: 50ms, slow: 1s } }\n  - { type: modbus, name: b, manifest: m.yaml, scan-classes: { slow: 1s }, tag-classes: { "P*": slow } }\n';
+		const r = modbusManifests({ 'nautilus.yaml': n, 'm.yaml': T }, 'nautilus.yaml');
+		expect(r.length).toBe(1);
+		expect(r[0].driver).toBe('a, b');
+		expect(r[0].classes.join()).toBe('slow');
+		expect(r[0].tagClasses).toBe(true);
+		expect(modbusManifests({ 'nautilus.yaml': 'drivers:\n  - { type: modbus, manifest: m.yaml, tag-classes: {} }\n', 'm.yaml': T }, 'nautilus.yaml')[0].tagClasses).toBe(false);
 	});
 	it('a scan class the driver does not declare is named; declared ones and none pass', () => {
 		const m = parseModbus(T); // tag B has scanclass: fast

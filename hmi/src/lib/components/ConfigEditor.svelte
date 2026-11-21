@@ -132,7 +132,7 @@
 		{/each}
 		<Button size="sm" onclick={() => run(() => addDevice({ name: 'NewDevice', profile: '', endpoint: '' }))}>Add a device</Button>
 		{#each modbus as mm (mm.path)}
-			<article><ModbusPoints path={mm.path} driver={mm.driver} classes={mm.classes} text={texts[mm.path] ?? ''} onedit={(p, op) => run(op, p)} /></article>
+			<article><ModbusPoints path={mm.path} driver={mm.driver} classes={mm.classes} tagClasses={mm.tagClasses} text={texts[mm.path] ?? ''} onedit={(p, op) => run(op, p)} /></article>
 		{/each}
 		<p class="note">{edited ? 'Edited, not applied.' : 'No changes.'}</p>
 		<ConfigReview before={loaded.files} {overlay} client={review} onapplied={() => void load()} />
