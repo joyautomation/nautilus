@@ -1242,7 +1242,7 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 				data: map[string]any{"questions": []tiad.Question{tiad.HardwareQuestion()}, "keptDevices": keptList(s.kept)}}
 		}
 		if req.Hardware {
-			attested = &tiad.AttestationRecord{By: req.Attestation.By, Text: req.Attestation.Text,
+			attested = &tiad.AttestationRecord{By: req.Attestation.By, Text: req.Attestation.Text, CPUAccessControl: req.Attestation.CPUAccessControl,
 				At: time.Now().UTC().Format("2006-01-02T15:04:05.000Z")}
 		}
 	}

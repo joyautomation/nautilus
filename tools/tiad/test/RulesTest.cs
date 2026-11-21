@@ -188,6 +188,10 @@ namespace Tiad.Test
                 T("ElementNames", ElementNames),
                 T("ModeFromMessages", ModeFromMessages),
                 T("UserManagementGate", UserManagementGate),
+                T("UserManagementResetRule", UserManagementResetRule),
+                T("UserManagementKeepOrReset", UserManagementKeepOrReset),
+                T("UserManagementChoices", UserManagementChoices),
+                T("AttestationAccess", AttestationAccess),
                 T("FileNames", FileNames),
                 T("BlockKinds", BlockKinds),
                 T("OpennessAssemblies", OpennessAssemblies),
@@ -585,6 +589,218 @@ namespace Tiad.Test
                 DownloadRule.Resolve(new List<Question> { new Question { Id = id } }, others, true, true, true, null, u, d);
                 Eq(string.Join(",", Ids(u).ToArray()), id, id + " is not answered by the other decisions");
             }
+        }
+
+        // ResetRequest is a request every conjunct of UserManagementRule
+        // lets reset by the upload route.
+        static DownloadRequest ResetRequest()
+        {
+            var r = new DownloadRequest { Address = "192.0.2.10", Hardware = true, Software = true, Announced = true };
+            r.Decisions.UserManagementResetToProject = true;
+            r.Attestation = new Attestation { By = "op", Text = "as found" };
+            return r;
+        }
+
+        // UserManagementResetRule: #789 stage 4. From a request every
+        // conjunct lets, each one flipped on its own refuses, and only
+        // those (a security property: each is mutation-checked).
+        static void UserManagementResetRule()
+        {
+            int reads = 0;
+            string project = "Disabled";
+            Func<string> read = delegate
+            {
+                reads++;
+                return project;
+            };
+            const string addr = "192.0.2.10";
+            UserManagementRule.Gate g = UserManagementRule.Check(ResetRequest(), true, addr, read);
+            True(g.Allowed, "the baseline is let: " + g.Why);
+            Eq(g.Route, UserManagementRule.RouteUpload, "by the upload route");
+            Eq(reads, 1, "the project is read once");
+
+            DownloadRequest r = ResetRequest();
+            r.Decisions.UserManagementResetToProject = null;
+            g = UserManagementRule.Check(r, true, addr, read);
+            True(!g.Allowed, "not asked");
+            r.Decisions.UserManagementResetToProject = false;
+            True(!UserManagementRule.Check(r, true, addr, read).Allowed, "asked no");
+
+            reads = 0;
+            r = ResetRequest();
+            r.Hardware = false;
+            g = UserManagementRule.Check(r, true, addr, read);
+            True(!g.Allowed, "a software-only download");
+            Contains(g.Why, "loads no hardware", "names why");
+            Contains(g.Why, "an upload from this CPU in this session or attestation.cpuAccessControl \"disabled\"", "and both routes");
+
+            g = UserManagementRule.Check(ResetRequest(), false, addr, read);
+            True(!g.Allowed, "access control not kept");
+            Contains(g.Why, "does not keep access control", "names why");
+            Eq(reads, 0, "the cheap conjuncts refuse before the project is read");
+
+            r = ResetRequest();
+            r.Attestation.CpuAccessControl = Attestation.CpuAccessEnabled;
+            g = UserManagementRule.Check(r, true, addr, read);
+            True(!g.Allowed, "an attestation that says enabled refuses, the upload route too");
+            Contains(g.Why, "never resets a CPU whose access control is on", "names why");
+
+            foreach (string st in new[] { AccessRule.Enabled, AccessRule.Absent, "disabled", "Disabled ", "EnabledWithAccessControlViaAccessLevel", null })
+            {
+                project = st;
+                g = UserManagementRule.Check(ResetRequest(), true, addr, read);
+                True(!g.Allowed, "project access control " + Show(st) + " refuses");
+                Contains(g.Why, "not Disabled", "names why for " + Show(st));
+            }
+            project = "Disabled";
+            g = UserManagementRule.Check(ResetRequest(), true, addr, null);
+            True(!g.Allowed, "no reader refuses");
+            g = UserManagementRule.Check(ResetRequest(), true, addr, delegate { throw new TiadException(500, Kinds.OperationFailed, "TIA said no"); });
+            True(!g.Allowed, "a read that fails refuses");
+            Contains(g.Why, "TIA said no", "and says why");
+            bool fatal = false;
+            try
+            {
+                UserManagementRule.Check(ResetRequest(), true, addr, delegate { throw new TiadException(500, Kinds.OperationFailed, "TIA died", null, true); });
+            }
+            catch (TiadException e)
+            {
+                fatal = e.Fatal;
+            }
+            True(fatal, "a fatal read is not swallowed");
+
+            // The routes: no upload from this address and no attestation
+            // refuses; the attestation saying disabled lets it, only with
+            // who and what.
+            foreach (string up in new[] { "", "192.0.2.11" })
+            {
+                g = UserManagementRule.Check(ResetRequest(), true, up, read);
+                True(!g.Allowed, "uploaded from " + Show(up) + ", no attestation");
+                Contains(g.Why, "nothing shows the CPU's access control is off: upload from 192.0.2.10", "names both routes");
+                r = ResetRequest();
+                r.Attestation.CpuAccessControl = Attestation.CpuAccessDisabled;
+                g = UserManagementRule.Check(r, true, up, read);
+                True(g.Allowed, "attested disabled, uploaded from " + Show(up));
+                Eq(g.Route, UserManagementRule.RouteAttestation, "by the attestation route");
+                r.Attestation.By = " ";
+                True(!UserManagementRule.Check(r, true, up, read).Allowed, "attested disabled without who");
+                r.Attestation.By = "op";
+                r.Attestation.Text = "";
+                True(!UserManagementRule.Check(r, true, up, read).Allowed, "attested disabled without what");
+            }
+            // Both routes: the upload is named.
+            r = ResetRequest();
+            r.Attestation.CpuAccessControl = Attestation.CpuAccessDisabled;
+            Eq(UserManagementRule.Check(r, true, addr, read).Route, UserManagementRule.RouteUpload, "both routes");
+            // A gate nobody filled in refuses.
+            True(!new UserManagementRule.Gate().Allowed, "the zero gate refuses");
+        }
+
+        // UserManagementKeepOrReset: the keep x reset table, through
+        // Resolve, with the rule's verdict let, refused and never made.
+        static void UserManagementKeepOrReset()
+        {
+            var um = new List<Question> { new Question { Id = QuestionIds.UserManagement, Message = "m" } };
+            var let = new UserManagementRule.Gate { Allowed = true, Route = UserManagementRule.RouteUpload };
+            var refused = new UserManagementRule.Gate { Why = "refused because" };
+            bool?[] vals = { null, false, true };
+            foreach (bool? keep in vals)
+            {
+                foreach (bool? reset in vals)
+                {
+                    foreach (var gate in new[] { let, refused, null })
+                    {
+                        var d = new Decisions { UserManagementKeepOnline = keep, UserManagementResetToProject = reset };
+                        var u = new List<Question>(); var dd = new List<Question>();
+                        DownloadRule.Resolve(um, d, false, false, true, gate, u, dd);
+                        string want;
+                        if (keep == true && reset == true) want = "unanswered";
+                        else if (reset == true) want = gate == let ? "answered" : "unanswered";
+                        else if (keep == true) want = "answered";
+                        else if (keep == false || reset == false) want = "declined";
+                        else want = "unanswered";
+                        string got = u.Count > 0 ? "unanswered" : dd.Count > 0 ? "declined" : "answered";
+                        string what = "keep=" + Show(keep) + " reset=" + Show(reset) + " gate=" + (gate == let ? "let" : gate == refused ? "refused" : "null");
+                        Eq(got, want, what);
+                        if (got == "unanswered" && reset == true && keep != true && gate == refused) Contains(u[0].Message, "refused because", what + " names the rule's why");
+                        if (got == "answered")
+                        {
+                            Answer a = DownloadRule.Answers(um, d)[0];
+                            Eq(a.Choice, reset == true ? Answer.ChoiceReset : Answer.ChoiceKeep, what + " choice");
+                        }
+                    }
+                }
+            }
+            var bad = new DownloadRequest { Address = "192.0.2.10", Software = true, Announced = true };
+            bad.Decisions.UserManagementKeepOnline = true;
+            bad.Decisions.UserManagementResetToProject = true;
+            Contains(bad.Validate(), "both yes", "keep and reset both yes is a bad request");
+            bad.Decisions.UserManagementKeepOnline = false;
+            Eq(bad.Validate(), null, "keep no, reset yes is a request");
+        }
+
+        // UserManagementChoices: what each choice writes, and that acting
+        // follows what is written.
+        static void UserManagementChoices()
+        {
+            Eq(S(DownloadChecks.For("UserManagementDownload", true, "")), null, "user management yes without a choice cannot be applied");
+            Eq(S(DownloadChecks.For("UserManagementDownload", true, "update")), null, "an unknown choice cannot be applied");
+            Eq(S(DownloadChecks.For("UserManagementDownload", false, Answer.ChoiceReset)), null, "no with a choice is still no");
+            Eq(S(DownloadChecks.For("StopModules", true, Answer.ChoiceKeep)), null, "a choice on another check cannot be applied");
+            True(!DownloadChecks.ActingAnswer(QuestionIds.UserManagement, true, Answer.ChoiceKeep), "keep is passive");
+            True(DownloadChecks.ActingAnswer(QuestionIds.UserManagement, true, Answer.ChoiceReset), "reset acts");
+            True(!DownloadChecks.ActingAnswer(QuestionIds.UserManagement, true, ""), "no choice writes nothing");
+            True(!DownloadChecks.ActingAnswer(QuestionIds.StartAfter, false, ""), "start-after no is passive");
+            True(DownloadChecks.ActingAnswer(QuestionIds.StartAfter, true, ""), "start-after yes acts");
+            True(DownloadChecks.ActingAnswer(QuestionIds.StopCpu, true, ""), "stop acts");
+            True(!DownloadChecks.ActingAnswer(QuestionIds.Password, true, ""), "a password is passive");
+            foreach (string choice in new[] { Answer.ChoiceKeep, Answer.ChoiceReset })
+            {
+                string c = choice;
+                var r = new Run(delegate(Question q) { return new Answer { Question = q, Yes = true, Choice = c }; });
+                string wrote = N(r, new object(), "UserManagementDownload", "Delete user management data and disable access control in runtime");
+                Eq(wrote, c == Answer.ChoiceKeep ? "KeepOnlineUserManagementData" : "DownloadAllUserManagementDataResetToProject", c + " writes");
+                Eq(string.Join("; ", r.D.Acting.ToArray()), c == Answer.ChoiceKeep ? "" : "UserManagementDownload = DownloadAllUserManagementDataResetToProject", c + " acting");
+            }
+            // The decider cancels an answer with no choice rather than
+            // leave TIA's preselection (reset) standing.
+            var none = new Run(AllYes);
+            bool cancelled = false;
+            try
+            {
+                none.D.Next(new object(), "UserManagementDownload", "m", null);
+            }
+            catch (DownloadCancel e)
+            {
+                cancelled = true;
+                Contains(e.Message, "cannot apply yes", "says why");
+            }
+            True(cancelled, "user management yes without a choice cancels");
+            Contains(DownloadChecks.Consequence(new List<string> { QuestionIds.UserManagement }), "reset the CPU's user management to the project's: check its users and access control", "a reset given before a cancel");
+        }
+
+        // AttestationAccess: the attestation's cpuAccessControl is one of
+        // two words, journalled as a fixed word only, and echoed.
+        static void AttestationAccess()
+        {
+            var r = new DownloadRequest { Address = "192.0.2.10", Software = true, Announced = true };
+            foreach (string ok in new[] { "", "disabled", "enabled" })
+            {
+                r.Attestation.CpuAccessControl = ok;
+                Eq(r.Validate(), null, Show(ok) + " is valid");
+            }
+            foreach (string bad in new[] { "Disabled", "off", "disabled ", "x\naudit download forged" })
+            {
+                r.Attestation.CpuAccessControl = bad;
+                Eq(r.Validate(), "download: attestation.cpuAccessControl is not one of disabled, enabled", Show(bad) + " is refused");
+                Contains(r.Attestation.Audit(), "cpuAccessControl=invalid}", Show(bad) + " is journalled as invalid");
+                True(r.Attestation.Audit().IndexOf("forged", StringComparison.Ordinal) < 0, "never its text");
+            }
+            var a = new Attestation { CpuAccessControl = "disabled" };
+            Eq(a.Audit(), "{by=\"\" at=unset text=\"\" cpuAccessControl=disabled}", "a lone cpuAccessControl is journalled");
+            Eq(new Attestation().Audit(), "unset", "nothing said");
+            Eq(((Obj)a.ToJson())["cpuAccessControl"], "disabled", "echoed");
+            True(!new Attestation { By = "b", Text = "t" }.ToJson().ContainsKey("cpuAccessControl"), "unset is not echoed");
         }
 
         static void ActingAndPassive()

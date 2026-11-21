@@ -1,6 +1,8 @@
 package tiad
 
 import (
+	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -176,5 +178,173 @@ func TestCheckKept(t *testing.T) {
 	}
 	if q := KeptQuestion(io("IO2", "IO1")); q.ID != QuestionKeptDevices || strings.Join(q.Objects, ",") != "IO1,IO2" {
 		t.Errorf("question: %+v", q)
+	}
+}
+
+// resetRequest is a request every conjunct of CheckUserManagementReset
+// lets by the upload route.
+func resetRequest() DownloadRequest {
+	return DownloadRequest{Address: "192.0.2.10", Hardware: true, Software: true, Announced: true,
+		Decisions:   Decisions{UserManagementResetToProject: Yes()},
+		Attestation: &Attestation{By: "op", Text: "as found"}}
+}
+
+// TestCheckUserManagementReset: #789 stage 4. From a request every
+// conjunct lets, each one flipped on its own refuses (a security
+// property: each is mutation-checked); the agent's UserManagementRule
+// has the same table.
+func TestCheckUserManagementReset(t *testing.T) {
+	const addr = "192.0.2.10"
+	project, readable, reads := ProjectAccessDisabled, true, 0
+	read := func() (string, bool) { reads++; return project, readable }
+	if g := CheckUserManagementReset(resetRequest(), true, addr, read); !g.Allowed || g.Route != ResetRouteUpload || reads != 1 {
+		t.Fatalf("the baseline: %+v (reads %d)", g, reads)
+	}
+	refuse := func(name string, g ResetGate, says string) {
+		t.Helper()
+		if g.Allowed || !strings.Contains(g.Why, says) {
+			t.Errorf("%s: %+v, want refused saying %q", name, g, says)
+		}
+	}
+	r := resetRequest()
+	r.Decisions.UserManagementResetToProject = nil
+	refuse("not asked", CheckUserManagementReset(r, true, addr, read), "not asked")
+	r.Decisions.UserManagementResetToProject = No()
+	refuse("asked no", CheckUserManagementReset(r, true, addr, read), "not asked")
+	reads = 0
+	r = resetRequest()
+	r.Hardware = false
+	refuse("software only", CheckUserManagementReset(r, true, addr, read), "loads no hardware")
+	refuse("access control not kept", CheckUserManagementReset(resetRequest(), false, addr, read), "does not keep access control")
+	if reads != 0 {
+		t.Errorf("the cheap conjuncts must refuse before the project is read (%d reads)", reads)
+	}
+	r = resetRequest()
+	r.Attestation.CPUAccessControl = AttestCPUAccessEnabled
+	refuse("attested enabled, the upload route too", CheckUserManagementReset(r, true, addr, read), "never resets a CPU whose access control is on")
+	for _, st := range []string{"EnabledWithAccessControl", "", "disabled", "Disabled ", "EnabledWithAccessControlViaAccessLevel"} {
+		project = st
+		refuse("project "+strconv.Quote(st), CheckUserManagementReset(resetRequest(), true, addr, read), "not Disabled")
+	}
+	project, readable = ProjectAccessDisabled, false
+	refuse("project unreadable", CheckUserManagementReset(resetRequest(), true, addr, read), "unreadable, not Disabled")
+	readable = true
+	refuse("no reader", CheckUserManagementReset(resetRequest(), true, addr, nil), "unreadable")
+	for _, up := range []string{"", "192.0.2.11"} {
+		refuse("uploaded from "+strconv.Quote(up), CheckUserManagementReset(resetRequest(), true, up, read), "upload from 192.0.2.10 in this session first")
+		r := resetRequest()
+		r.Attestation.CPUAccessControl = AttestCPUAccessDisabled
+		if g := CheckUserManagementReset(r, true, up, read); !g.Allowed || g.Route != ResetRouteAttestation {
+			t.Errorf("attested disabled, uploaded from %q: %+v", up, g)
+		}
+		r.Attestation.By = " "
+		refuse("attested without who", CheckUserManagementReset(r, true, up, read), "nothing shows")
+		r.Attestation = &Attestation{By: "op", CPUAccessControl: AttestCPUAccessDisabled}
+		refuse("attested without what", CheckUserManagementReset(r, true, up, read), "nothing shows")
+		r.Attestation = nil
+		refuse("no attestation", CheckUserManagementReset(r, true, up, read), "nothing shows")
+	}
+	if (ResetGate{}).Allowed {
+		t.Fatal("the zero gate must refuse")
+	}
+}
+
+// TestResolveKeepOrReset: the keep x reset table, with the rule's verdict
+// let and refused (the zero gate).
+func TestResolveKeepOrReset(t *testing.T) {
+	let := ResetGate{Allowed: true, Route: ResetRouteUpload}
+	refused := ResetGate{Why: "refused because"}
+	vals := []*bool{nil, No(), Yes()}
+	show := func(b *bool) string {
+		if b == nil {
+			return "nil"
+		}
+		return strconv.FormatBool(*b)
+	}
+	for _, keep := range vals {
+		for _, reset := range vals {
+			for _, gate := range []ResetGate{let, refused, {}} {
+				d := Decisions{UserManagementKeepOnline: keep, UserManagementResetToProject: reset}
+				u, dd := Resolve([]Question{{ID: QuestionUserManagement, Message: "m"}}, d, false, false, true, gate)
+				var want string
+				switch {
+				case isYes(keep) && isYes(reset):
+					want = "unanswered"
+				case isYes(reset):
+					want = map[bool]string{true: "answered", false: "unanswered"}[gate.Allowed]
+				case isYes(keep):
+					want = "answered"
+				case keep != nil || reset != nil:
+					want = "declined"
+				default:
+					want = "unanswered"
+				}
+				got := "answered"
+				if len(u) > 0 {
+					got = "unanswered"
+				} else if len(dd) > 0 {
+					got = "declined"
+				}
+				what := fmt.Sprintf("keep=%s reset=%s gate=%+v", show(keep), show(reset), gate)
+				if got != want {
+					t.Errorf("%s: %s, want %s", what, got, want)
+				}
+				if got == "unanswered" && isYes(reset) && !isYes(keep) && gate.Why != "" && !strings.Contains(u[0].Message, gate.Why) {
+					t.Errorf("%s: %q must name the rule's why", what, u[0].Message)
+				}
+				if got == "answered" {
+					want := AnswerKeep
+					if isYes(reset) {
+						want = AnswerReset
+					}
+					if c := UserManagementChoice(d); c != want {
+						t.Errorf("%s: choice %q, want %q", what, c, want)
+					}
+				}
+			}
+		}
+	}
+	bad := DownloadRequest{Address: "192.0.2.10", Software: true, Announced: true, Decisions: Decisions{UserManagementKeepOnline: Yes(), UserManagementResetToProject: Yes()}}
+	if err := bad.Validate(); err == nil || !strings.Contains(err.Error(), "both yes") {
+		t.Fatalf("keep and reset both yes: %v", err)
+	}
+	bad.Decisions.UserManagementKeepOnline = No()
+	if err := bad.Validate(); err != nil {
+		t.Fatalf("keep no, reset yes: %v", err)
+	}
+	for _, ok := range []string{"", AttestCPUAccessDisabled, AttestCPUAccessEnabled} {
+		r := DownloadRequest{Address: "192.0.2.10", Software: true, Announced: true, Attestation: &Attestation{CPUAccessControl: ok}}
+		if err := r.Validate(); err != nil {
+			t.Errorf("cpuAccessControl %q: %v", ok, err)
+		}
+	}
+	for _, no := range []string{"Disabled", "off", "disabled "} {
+		r := DownloadRequest{Address: "192.0.2.10", Software: true, Announced: true, Attestation: &Attestation{CPUAccessControl: no}}
+		if err := r.Validate(); err == nil || err.Error() != "download: attestation.cpuAccessControl is not one of disabled, enabled" {
+			t.Errorf("cpuAccessControl %q: %v", no, err)
+		}
+	}
+}
+
+// TestActingAnswer: acting by what the answer writes.
+func TestActingAnswer(t *testing.T) {
+	for _, c := range []struct {
+		id     string
+		yes    bool
+		choice string
+		want   bool
+	}{
+		{QuestionUserManagement, true, AnswerKeep, false},
+		{QuestionUserManagement, true, AnswerReset, true},
+		{QuestionUserManagement, true, "", false},
+		{QuestionStartAfter, false, "", false},
+		{QuestionStartAfter, true, "", true},
+		{QuestionStopCPU, true, "", true},
+		{QuestionPassword, true, "", false},
+		{"new-in-v22", true, "", true},
+	} {
+		if got := ActingAnswer(c.id, c.yes, c.choice); got != c.want {
+			t.Errorf("ActingAnswer(%s, %v, %q) = %v, want %v", c.id, c.yes, c.choice, got, c.want)
+		}
 	}
 }
