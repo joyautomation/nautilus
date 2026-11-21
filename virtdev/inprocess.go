@@ -556,9 +556,8 @@ func (ip *InProcess) WriteOutputs(vals nio.Values) error {
 				continue // unchanged since it was last accounted for
 			}
 			f.written[name] = v
-			if baseline && (n.tag == "" || !n.writable || uaHolds(tags, n.tag, v)) {
-				// the device already holds it (#1123), or no node can take it
-				continue
+			if baseline && n.tag != "" && uaHolds(tags, n.tag, v) {
+				continue // the device already holds it: recorded, not sent (#1123)
 			}
 			switch {
 			case n.tag == "":
@@ -619,7 +618,42 @@ func uaHolds(tags interface {
 			cur = iv.I
 		}
 	}
-	return reflect.DeepEqual(cur, v) || fmt.Sprint(cur) == fmt.Sprint(v)
+	// the driver's rule (opcua sameServerValue): same type and value, or two
+	// numbers that are equal; nothing is held by its printed form.
+	if reflect.DeepEqual(cur, v) {
+		return true
+	}
+	a, aok := numeric(cur)
+	b, bok := numeric(v)
+	return aok && bok && a == b
+}
+
+func numeric(v any) (float64, bool) {
+	switch x := v.(type) {
+	case float64:
+		return x, true
+	case float32:
+		return float64(x), true
+	case int:
+		return float64(x), true
+	case int8:
+		return float64(x), true
+	case int16:
+		return float64(x), true
+	case int32:
+		return float64(x), true
+	case int64:
+		return float64(x), true
+	case uint8:
+		return float64(x), true
+	case uint16:
+		return float64(x), true
+	case uint32:
+		return float64(x), true
+	case uint64:
+		return float64(x), true
+	}
+	return 0, false
 }
 
 // modbusRegs encodes v for t as the registers the driver would write; for a
