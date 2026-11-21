@@ -98,7 +98,8 @@ type IOConfig struct {
 	Keep func(ctx context.Context) error
 	// reverted, when set (OnReverted), is called once for an automatic
 	// revert-if-silent that ran (or failed): the change no request made.
-	reverted func(IOWatch)
+	reverted   func(IOWatch)
+	pendingRev []IOWatch // reports made before OnReverted
 	// KeepStore is the retain store's kind ("file", "configmap"): a file
 	// is one replica's own, so a redundant project cannot keep in it.
 	KeepStore string
@@ -1244,7 +1245,7 @@ func (io *IOConfig) apply(ctx context.Context, c *IOCandidate, by string, opts A
 	case c.restore:
 		io.kept = copyUnits(io.running)
 	case opts.RevertIfSilent > 0:
-		io.provisional = &retain.IOProvisional{Gen: gen, From: c.From, By: by, At: at,
+		io.provisional = &retain.IOProvisional{Gen: gen, ID: opts.ID, From: c.From, By: by, At: at,
 			Deadline: at.Add(opts.RevertIfSilent)}
 		io.changed++
 	default:
@@ -1408,6 +1409,7 @@ const (
 	WatchReverting  = "reverting"     // putting it back: a cancel is refused from here
 	WatchRevertFail = "revert-failed" // putting it back failed (Fault)
 	WatchCancelled  = "cancelled"     // CancelRevert: the revert will not happen
+	WatchDropped    = "dropped"       // a restart or takeover did not carry it; the configuration before it runs (a record made at restore, not a live watch)
 	WatchSuperseded = "superseded"    // a newer apply landed; this one is not reverted
 )
 
@@ -1966,5 +1968,25 @@ func (o overlay) Open(name string) (fs.File, error) {
 func (io *IOConfig) OnReverted(f func(IOWatch)) {
 	io.mu.Lock()
 	io.reverted = f
+	pending := io.pendingRev
+	io.pendingRev = nil
 	io.mu.Unlock()
+	for _, w := range pending {
+		go f(w) // reported before the server registered (a restore at start-up)
+	}
+}
+
+// emitReverted tells the registered recorder of a revert (or a dropped
+// apply), or keeps it until one registers: a restore can run before the
+// server does.
+func (io *IOConfig) emitReverted(w IOWatch) {
+	io.mu.Lock()
+	f := io.reverted
+	if f == nil {
+		io.pendingRev = append(io.pendingRev, w)
+	}
+	io.mu.Unlock()
+	if f != nil {
+		go f(w) // the one change no request made: off the apply lock
+	}
 }

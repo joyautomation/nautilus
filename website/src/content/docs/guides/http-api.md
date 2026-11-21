@@ -1163,10 +1163,11 @@ applied by <principal>`, with the reason and whether putting it back worked
 (`result: error` when it did not).
 
 A `revertIfSilent` apply that a restart or a takeover interrupts is not
-reverted by the watch: the new leader brings back the configuration from
-before it and lists the dropped apply under `config.discarded`. The journal
-still shows the apply as `config.apply` (ok); read `config.discarded` for
-what did not survive.
+carried: the controller that comes up brings back the configuration from
+before it, lists the dropped apply under `config.discarded`, and journals a
+`config.revert` by `system` for it (state `dropped`, the apply's id and
+`applied by <principal>` in the note), so the journal does not say ok while
+the old configuration runs.
 
 **What the hashes cover.** A hash is the first 8 bytes (16 hex characters) of
 the SHA-256 of the unit's resolved configuration marshalled as compact JSON

@@ -115,6 +115,11 @@ func TestIOAutoRevertIsJournalledAsTheSystem(t *testing.T) {
 		e.Detail["note"] != "revert of "+id+" applied by user:akhan" || e.Detail["by"] != "user:akhan" || e.Target != id {
 		t.Errorf("entry %+v", e)
 	}
+	f.onRevert(IOWatch{ID: id, By: "user:akhan", State: "dropped", Reason: "not carried"})
+	if es := auditByAction(srv, "config.revert"); len(es) != 2 || es[0].User != "system" || es[0].Result != audit.ResultOK ||
+		!strings.Contains(fmt.Sprint(es[0].Detail["note"]), "dropped at a restart or takeover") {
+		t.Errorf("a dropped apply is journalled %+v, want system ok with the note", es)
+	}
 	f.onRevert(IOWatch{ID: id, By: "user:akhan", State: "revert-failed"})
 	if es := auditByAction(srv, "config.revert"); es[0].Result != audit.ResultError {
 		t.Errorf("a failed revert is journalled %q, want error", es[0].Result)
