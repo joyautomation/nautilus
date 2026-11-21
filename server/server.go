@@ -887,6 +887,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/io/staged/{id}", s.handleIOStaged)
 	mux.Handle("POST /api/io/staged/{id}/validate", s.audited("config.validate", ioStagedTarget, s.handleIOValidate))
 	mux.Handle("POST /api/io/staged/{id}/apply", s.audited("config.apply", ioApplyTarget, s.handleIOApply))
+	mux.HandleFunc("GET /api/config/patch", s.handleConfigPatch)
+	mux.Handle("POST /api/config/commit", s.audited("config.commit", configCommitTarget, s.handleConfigCommit))
 	mux.Handle("POST /api/io/revert/cancel", s.audited("config.revert.cancel", nil, s.handleIOCancelRevert))
 	mux.HandleFunc("GET /api/forces", s.handleForces)
 	mux.HandleFunc("GET /api/substitutes", s.handleSubstitutes)

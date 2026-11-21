@@ -127,7 +127,7 @@ func TestElevatedActionsNeedAFreshPassword(t *testing.T) {
 		}
 	}
 	// The walk reached the recovery actions and every elevated class.
-	for _, a := range []string{"force.set", "force.clear", "force.clear-all", "program.edit", "program.rollback", "program.activate", "config.apply", "param.write"} {
+	for _, a := range []string{"force.set", "force.clear", "force.clear-all", "program.edit", "program.rollback", "program.activate", "config.apply", "config.commit", "param.write"} {
 		if !asked[a] {
 			t.Errorf("no row asked %s for a fresh password", a)
 		}

@@ -10,6 +10,8 @@ package server
 //	GET  /api/io/staged/{id}
 //	GET  /api/io                      what runs, against the manifest
 //	GET  /api/io/files                the project files it differs in (naut pull --io; needs the edit permission)
+//	POST /api/config/commit           {id, message?}: the applied change as a git commit (#711)
+//	GET  /api/config/patch            the applied change as a patch to apply by hand (#711)
 //
 // The engine is the project loader's (internal/project.IOConfig), handed in
 // as Options.IO so this package stays free of it. Writes need the same
@@ -26,6 +28,7 @@ import (
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -90,7 +93,37 @@ type IOHook struct {
 	Sections    func() []string
 	Schema      func(section string, names bool) ([]byte, error)
 	ConfigFiles func() (ConfigFiles, error)
+	// Commit saves what runs, where it differs from the project, as a git
+	// commit in the checkout the controller runs from; nil where the
+	// controller has no git worktree (a built controller), which answers
+	// 409 and names GET /api/config/patch. Errors wrapping ErrIOCommitRefused
+	// answer 409 with the fix in the text, any other 500.
+	Commit func(IOCommit) (IOCommitted, error)
+	// Patch is that change as a unified patch against the project's files
+	// ("" when nothing differs). An error wrapping ErrIOCommitRefused
+	// answers 409.
+	Patch func() (string, error)
 }
+
+// IOCommit is a commit asked for: By is the request's principal (the
+// commit's author), ID the applied candidate (the commit's trailer),
+// Message the author's subject ("" for the default).
+type IOCommit struct {
+	By      string
+	ID      string
+	Message string
+}
+
+// IOCommitted is the commit that was made.
+type IOCommitted struct {
+	Commit string   `json:"commit"`
+	Branch string   `json:"branch"`
+	Files  []string `json:"files"`
+}
+
+// ErrIOCommitRefused is a commit (or patch) the controller will not make as
+// asked; the error text says why and what to do.
+var ErrIOCommitRefused = errors.New("commit refused")
 
 // ErrConfigNoSection is a schema section the manifest does not have.
 var ErrConfigNoSection = errors.New("no such manifest section")
@@ -623,6 +656,101 @@ func (s *Server) handleConfigSchema(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/schema+json")
 	_, _ = w.Write(raw)
+}
+
+// commitRequest is POST /api/config/commit's body: the applied candidate to
+// save, and optionally the commit's subject.
+type commitRequest struct {
+	ID      string `json:"id"`
+	Message string `json:"message"`
+}
+
+// maxCommitMessage bounds the subject a caller may give.
+const maxCommitMessage = 200
+
+// handleConfigCommit saves an applied candidate's change as a git commit in
+// the checkout the controller runs from. It is the config permission and,
+// for a browser sign-in, a fresh password (the route's action is elevated):
+// it writes to the repo in the principal's name. Only where the controller
+// has a worktree; anywhere else GET /api/config/patch is the way out.
+func (s *Server) handleConfigCommit(w http.ResponseWriter, r *http.Request) {
+	// The permission only, not the online-edits switch, like pulling the
+	// files: a change applied while edits were on can still be committed.
+	if code, msg := s.authorizeWrite(r); code != 0 {
+		writeJSON(w, code, map[string]string{"error": msg})
+		return
+	}
+	if s.ioUnavailable(w) {
+		return
+	}
+	var req commitRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<14)).Decode(&req); err != nil || req.ID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": `body must be {"id": "<applied candidate>", "message": "<subject, optional>"}`})
+		return
+	}
+	req.Message = strings.TrimSpace(req.Message)
+	if len(req.Message) > maxCommitMessage || strings.ContainsAny(req.Message, "\x00\r\n") {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("message: one line of at most %d characters", maxCommitMessage)})
+		return
+	}
+	if s.io.Commit == nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "this controller runs from a build, not a git checkout, so it cannot commit: GET /api/config/patch returns the change as a patch to apply in your repo"})
+		return
+	}
+	s.staging.mu.Lock()
+	st := s.staging.all[req.ID]
+	state := ""
+	if st != nil {
+		state = st.State
+	}
+	s.staging.mu.Unlock()
+	switch {
+	case st == nil:
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no staged I/O configuration " + req.ID})
+		return
+	case state != "applied":
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "candidate " + req.ID + " is " + state + "; only an applied candidate is committed (stage, validate and apply it first)"})
+		return
+	}
+	res, err := s.io.Commit(IOCommit{By: s.requester(r), ID: req.ID, Message: req.Message})
+	switch {
+	case errors.Is(err, ErrIOCommitRefused):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+	case err != nil:
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	default:
+		writeJSON(w, http.StatusOK, res)
+	}
+}
+
+// handleConfigPatch serves what runs, where it differs from the project, as
+// a patch. It returns whole file bodies, so it needs the edit permission.
+func (s *Server) handleConfigPatch(w http.ResponseWriter, r *http.Request) {
+	if code, msg := s.authorizeWrite(r); code != 0 {
+		writeJSON(w, code, map[string]string{"error": msg})
+		return
+	}
+	if s.ioUnavailable(w) {
+		return
+	}
+	if s.io.Patch == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "this controller cannot make a patch of its live I/O configuration"})
+		return
+	}
+	p, err := s.io.Patch()
+	switch {
+	case errors.Is(err, ErrIOCommitRefused):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	case err != nil:
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	case p == "":
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "nothing to patch: what runs is the project's I/O configuration"})
+		return
+	}
+	w.Header().Set("Content-Type", "text/x-diff; charset=utf-8")
+	_, _ = w.Write([]byte(p))
 }
 
 // handleConfigFiles serves the manifest text the config screens edit. It
