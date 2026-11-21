@@ -10,6 +10,11 @@ on:
   schedule:
     - cron: '41 5 * * *' # daily, 05:41 UTC
   workflow_dispatch:
+    inputs:
+      image:
+        description: 'Keycloak image (default: the one tools/keycloak/run.sh pins). A nonexistent tag forces a red run, to prove the rolling issue opens.'
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -34,6 +39,9 @@ jobs:
       - name: tools/keycloak/run.sh
         id: run
         shell: bash
+        env:
+          # Empty: run.sh's own pin. Only a manual dispatch sets it.
+          KEYCLOAK_IMAGE: ${{ inputs.image }}
         run: |
           set -o pipefail
           tools/keycloak/run.sh -v 2>&1 | tee "$RUNNER_TEMP/keycloak.log"
