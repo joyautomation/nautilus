@@ -122,6 +122,12 @@ type TagOpt func(*TagDef)
 // Desc sets the HMI description shown in tag tables.
 func Desc(s string) TagOpt { return func(d *TagDef) { d.Meta.Desc = s } }
 
+// Range bounds what an external write may set on a setpoint (#718); a nil
+// side is open. See TagMeta.Min.
+func Range(min, max *float64) TagOpt {
+	return func(d *TagDef) { d.Meta.Min, d.Meta.Max = min, max }
+}
+
 // Unit sets the engineering unit ("°C", "%", "L/s", ...).
 func Unit(s string) TagOpt { return func(d *TagDef) { d.Meta.Unit = s } }
 

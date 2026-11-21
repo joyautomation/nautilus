@@ -47,6 +47,13 @@ type State struct {
 	// IO is the live I/O configuration applied over /api/io and not yet in
 	// the deployed manifest (#706); see IOState.
 	IO *IOState `json:"io,omitempty"`
+	// ParamBases are, per scalar setpoint with a manifest init (a
+	// "parameter", #718), the init the retained value was written over: the
+	// repo's value when the plant and the repo last agreed. Drift is read
+	// from it: the plant moved if the value differs from the init, the repo
+	// moved if the init differs from the base. Absent in a store from
+	// before parameters; each base then starts as the manifest's init.
+	ParamBases map[string]any `json:"paramBases,omitempty"`
 	// Substitutes are the active substitute values (#707) and the
 	// bookkeeping a restart needs to honour them: a substitute is bounded
 	// operator intent meant to run the plant through a bad sensor, so a

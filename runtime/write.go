@@ -91,7 +91,81 @@ func (t *Tags) Write(ops []WriteOp) []error {
 			errs[i] = err
 			continue
 		}
+		if err := t.rangeCheck(op); err != nil {
+			errs[i] = err
+			continue
+		}
 		errs[i] = t.setPathLocked(op.Path, op.Value, true)
 	}
 	return errs
+}
+
+// TagRange is the bound a setpoint's external writes must stay inside
+// (#718). A nil side is open.
+type TagRange struct {
+	Name     string
+	Min, Max *float64
+}
+
+// rangeCheck refuses a whole-tag write of a number outside the tag's
+// declared min/max with ir.ErrOutOfRange and a message that names the range.
+// Only this front door applies it: a program's own assignment never comes
+// through here, so a range never changes control behaviour. A value that is
+// not a number is left to the type rules.
+func (t *Tags) rangeCheck(op WriteOp) error {
+	r, ok := t.ranges[ir.NameKey(op.Path)]
+	if !ok {
+		return nil
+	}
+	var f float64
+	switch x := op.Value.(type) {
+	case float64:
+		f = x
+	case float32:
+		f = float64(x)
+	case int:
+		f = float64(x)
+	case int32:
+		f = float64(x)
+	case int64:
+		f = float64(x)
+	case uint32:
+		f = float64(x)
+	case uint64:
+		f = float64(x)
+	case ir.Value:
+		switch x.Kind {
+		case ir.TypeReal:
+			f = x.F
+		case ir.TypeInt, ir.TypeTime:
+			f = float64(x.I)
+		default:
+			return nil
+		}
+	default:
+		return nil
+	}
+	if (r.Min != nil && f < *r.Min) || (r.Max != nil && f > *r.Max) {
+		return fmt.Errorf("tag %s: %v is outside its range %s — write a value inside it (the range is the tag's min:/max: in the manifest): %w",
+			r.Name, f, r.String(), ir.ErrOutOfRange)
+	}
+	return nil
+}
+
+// String renders the range as "[min, max]", with ".." for an open side.
+func (r TagRange) String() string {
+	lo, hi := "..", ".."
+	if r.Min != nil {
+		lo = fmt.Sprint(*r.Min)
+	}
+	if r.Max != nil {
+		hi = fmt.Sprint(*r.Max)
+	}
+	return "[" + lo + ", " + hi + "]"
+}
+
+// Range reports a tag's declared bounds, for the parameter listing.
+func (t *Tags) Range(name string) (TagRange, bool) {
+	r, ok := t.ranges[ir.NameKey(name)]
+	return r, ok
 }

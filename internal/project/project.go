@@ -874,6 +874,12 @@ type TagConfig struct {
 	// owns, such as run hours or a start count. Needs a retain: section.
 	// An input or an output cannot be retained.
 	Retain bool `yaml:"retain"`
+	// Min and Max bound what an external write may set on a setpoint (an
+	// HMI, the API, Sparkplug, OPC UA): a value outside is refused. A
+	// program's own writes are never refused. A setpoint only; its init
+	// must be inside (#718).
+	Min *float64 `yaml:"min"`
+	Max *float64 `yaml:"max"`
 }
 
 // MetaConfig is HMI documentation for a tag, kept separate from the tag's
@@ -1977,6 +1983,19 @@ func tagDefs(tags []TagConfig) ([]runtime.TagDef, error) {
 		if t.Desc != "" {
 			meta = append(meta, runtime.Desc(t.Desc))
 		}
+		if t.Min != nil || t.Max != nil {
+			if strings.ToLower(t.Role) != "setpoint" {
+				return nil, fmt.Errorf("tag %s: min/max bound a setpoint's external writes; this tag is role %q — remove them or make it a setpoint", t.Name, t.Role)
+			}
+			if t.Min != nil && t.Max != nil && *t.Min > *t.Max {
+				return nil, fmt.Errorf("tag %s: min %v is above max %v — swap them", t.Name, *t.Min, *t.Max)
+			}
+			if f, ok := numericInit(t.Init); ok &&
+				((t.Min != nil && f < *t.Min) || (t.Max != nil && f > *t.Max)) {
+				return nil, fmt.Errorf("tag %s: init %v is outside its range %s — change init: or the range", t.Name, f, runtime.TagRange{Min: t.Min, Max: t.Max})
+			}
+			meta = append(meta, runtime.Range(t.Min, t.Max))
+		}
 		var def runtime.TagDef
 		switch strings.ToLower(t.Role) {
 		case "input":
@@ -2011,6 +2030,21 @@ func tagDefs(tags []TagConfig) ([]runtime.TagDef, error) {
 		defs = append(defs, def)
 	}
 	return defs, nil
+}
+
+// numericInit reads a scalar init as a number, for the range check.
+func numericInit(v any) (float64, bool) {
+	switch x := v.(type) {
+	case int:
+		return float64(x), true
+	case int64:
+		return float64(x), true
+	case uint64:
+		return float64(x), true
+	case float64:
+		return x, true
+	}
+	return 0, false
 }
 
 // applyTagMeta layers a tag-meta: block onto the tags. A key matching a tag

@@ -1101,6 +1101,14 @@
         "retain": {
           "type": "boolean",
           "description": "Keep this tag's value across a restart in the retain store, as CODESYS VAR RETAIN does: for state the logic owns, such as run hours or a start count. Setpoints are always kept. Needs a retain: section. Not for an input or an output."
+        },
+        "min": {
+          "type": "number",
+          "description": "Lowest value an external write (HMI, API, Sparkplug, OPC UA) may set on this setpoint; a lower one is refused. The program's own writes are never refused. Setpoints only; init must not be below it."
+        },
+        "max": {
+          "type": "number",
+          "description": "Highest value an external write (HMI, API, Sparkplug, OPC UA) may set on this setpoint; a higher one is refused. The program's own writes are never refused. Setpoints only; init must not be above it."
         }
       },
       "allOf": [

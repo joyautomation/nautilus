@@ -215,6 +215,11 @@ type taskRun struct {
 type TagMeta struct {
 	Desc string `json:"desc,omitempty"`
 	Unit string `json:"unit,omitempty"`
+	// Min and Max bound what an EXTERNAL write may set on a setpoint
+	// (#718): an HMI, the API, Sparkplug or OPC UA through Tags.Write. A
+	// program's own writes are never refused or clamped. nil is no bound.
+	Min *float64 `json:"min,omitempty"`
+	Max *float64 `json:"max,omitempty"`
 }
 
 // Runtime hosts a Program on a scan loop, binding a Driver's I/O through the
@@ -228,6 +233,7 @@ type Runtime struct {
 	outputs []string
 	dtTag   string
 	meta    map[string]TagMeta
+	params  paramBook // parameters: manifest inits and drift bases (#718)
 	types   map[string]*ir.Type
 	tasks   []*taskRun
 	clock   Clock // nil = wall clock; see clock.go
@@ -574,6 +580,14 @@ func New(o Options) (*Runtime, error) {
 	}
 
 	tags := NewTags()
+	for name, m := range o.Meta {
+		if m.Min != nil || m.Max != nil {
+			if tags.ranges == nil {
+				tags.ranges = map[string]TagRange{}
+			}
+			tags.ranges[ir.NameKey(name)] = TagRange{Name: name, Min: m.Min, Max: m.Max}
+		}
+	}
 	seenCh := map[string]bool{}
 	for _, c := range o.Channels {
 		if c.Name == "" || c.Channel == nil {
@@ -667,6 +681,7 @@ func New(o Options) (*Runtime, error) {
 	if err := r.ownSubstituteCompanions(o.Substitutable, comps); err != nil {
 		return nil, err
 	}
+	r.initParams(o.Tags)
 	r.mono = monoFor(o.Clock)
 	if a, ok := o.Driver.(nio.OutputsRequester); ok {
 		r.asker = a

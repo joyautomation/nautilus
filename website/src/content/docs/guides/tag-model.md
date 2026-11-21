@@ -105,7 +105,10 @@ END_PROGRAM
 - **`StartLevel` and `StopLevel` are `setpoint`s.** The operator tunes
   them: `POST /api/tags` with `{"name": "StartLevel", "value": 65}`, or a
   click in the dashboard. The `retain:` section keeps the 65 across a
-  restart.
+  restart. Add `min:` and `max:` to refuse a write outside the range (an
+  operator, the API, Sparkplug or OPC UA; never the program's own
+  assignment), and `GET /api/parameters` shows where the plant's values
+  differ from the `init:` in Git.
 - **`HighLevel` and `RunHours` are `state`.** The logic owns them.
   `HighLevel` starts at `FALSE`, the zero of its `type:`, and is
   recomputed every scan. `RunHours` is marked `retain: true`, so a restart
