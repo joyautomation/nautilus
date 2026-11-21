@@ -14,6 +14,10 @@
 
 ### Added
 
+- **Option lists in `<SchemaForm/>`** (#711): a string field the controller sent `x-options` /
+  `x-options-builtin` for (a device's `profile`, a port's `iodd`) is a text input with a suggestion
+  list (`Field.options`); built-in profiles that need `naut devices add` say so. Not an enum: any
+  text is still accepted and the loader says what is wrong with it.
 - **`<ConfigReview/>`** (#711 slice 3), inside `<ConfigEditor/>` (own client `review`): the diff of
   the edited files (`unifiedDiff`, `diffFiles`: the shape of `naut pull --io --dry-run`, pure
   TypeScript), then Stage, Validate (checks, probes, changes, what the first scan will command) and
