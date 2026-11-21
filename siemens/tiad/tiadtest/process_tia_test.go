@@ -715,8 +715,11 @@ func TestAgentAnswersTheSoftwareLoadFamily(t *testing.T) {
 
 // TestAgentNeverCallsAnEmptyCompareEqual: #789. TIA's compare tree is
 // equal only when its root says identical, at least one object below the
-// root was compared, and nothing anywhere in it differs. A tree that
-// compares nothing, or hides a difference in a folder, is not equal:
+// root was compared, nothing anywhere in it differs, and every program
+// block the project holds is in it, identical. A tree that compares
+// nothing, hides a difference in a folder, or leaves out a block of the
+// project (the stage 3 gate), or a project whose blocks were not read,
+// is not equal:
 // /compare says equal false and names why, and a download TIA reported
 // loaded ends outcome_unknown naming it, and start-after, since TIA may
 // have started the CPU.
@@ -733,14 +736,22 @@ func TestAgentNeverCallsAnEmptyCompareEqual(t *testing.T) {
 		t.Fatalf("compare, bench-shaped equal tree: %+v %v", r, err)
 	}
 	for _, tc := range []struct{ tree, named string }{
-		{"empty", "PLC_1 nothing compared"},
-		{"emptyFolders", "PLC_1 nothing compared"},
+		{"empty", "PLC_1 nothing compared, Main [OB1] not compared"},
+		{"emptyFolders", "PLC_1 nothing compared, Main [OB1] not compared"},
 		{"folderDiffers", "PLC tags contents differ"},
 		{"irrelevantRoot", "PLC_1 not compared"},
+		{"dropBlock", "Main [OB1] not compared"},
+		{"noBlocks", "no program blocks in the project (or none read)"},
 	} {
 		p.SetScript(t, tiadtest.Script{AskFirst: intp(0), CompareTree: tc.tree})
 		r, err := s.Compare(ctx)
-		if err != nil || r.Equal || len(r.Differences) != 1 || r.Differences[0].Object+" "+r.Differences[0].State != tc.named {
+		var named []string
+		if err == nil {
+			for _, d := range r.Differences {
+				named = append(named, strings.TrimSpace(d.Object+" "+d.State))
+			}
+		}
+		if err != nil || r.Equal || strings.Join(named, ", ") != tc.named {
 			t.Errorf("compare, tree %s: %+v %v, want not equal naming %q", tc.tree, r, err, tc.named)
 		}
 		_, err = s.Download(ctx, start)
@@ -748,6 +759,45 @@ func TestAgentNeverCallsAnEmptyCompareEqual(t *testing.T) {
 			strings.Join(tiad.ActingAnswers(err), ",") != "start-after" {
 			t.Errorf("download, tree %s: %v (acting %v), want outcome_unknown naming %q and start-after", tc.tree, err, tiad.ActingAnswers(err), tc.named)
 		}
+	}
+	p.SetScript(t, tiadtest.Script{})
+}
+
+// TestAgentSeesTheBlockItSent: #789 stage 3 gate. A download that
+// loaded an imported block succeeds only when the compare right after
+// saw that block, in its user group, identical: the response lists it.
+// A compare that leaves it out names it, on /compare and on a download
+// TIA reported loaded (outcome_unknown, start-after named).
+func TestAgentSeesTheBlockItSent(t *testing.T) {
+	p, s := downloadReady(t)
+	c := p.Client()
+	if _, err := c.PutFile(ctx, "src/Pump.scl", []byte("FUNCTION_BLOCK \"Pump\"\r\nBEGIN\r\nEND_FUNCTION_BLOCK\r\n")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{"src/Pump.scl"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Compile(ctx, true, true); err != nil {
+		t.Fatal(err)
+	}
+	start := tiad.DownloadRequest{Address: "192.0.2.10", Software: true, Announced: true,
+		Decisions: tiad.Decisions{StopCPU: tiad.Yes(), StartAfter: tiad.Yes()}}
+	p.SetScript(t, tiadtest.Script{AskFirst: intp(0)})
+	r, err := s.Download(ctx, start)
+	if err != nil || !r.Downloaded || !r.CompareEqual || strings.Join(r.Blocks, ", ") != "Main [OB1], Pump [FB1]" {
+		t.Fatalf("download of an imported block: %+v %v, want equal listing Main [OB1], Pump [FB1]", r, err)
+	}
+	if cr, err := s.Compare(ctx); err != nil || !cr.Equal || strings.Join(cr.Blocks, ", ") != "Main [OB1], Pump [FB1]" {
+		t.Fatalf("compare after it: %+v %v", cr, err)
+	}
+	p.SetScript(t, tiadtest.Script{AskFirst: intp(0), CompareTree: "dropBlock"})
+	if cr, err := s.Compare(ctx); err != nil || cr.Equal || len(cr.Differences) != 1 || cr.Differences[0].Object != "Pump [FB1]" || cr.Differences[0].State != "not compared" {
+		t.Errorf("compare that leaves the block out: %+v %v, want Pump [FB1] not compared", cr, err)
+	}
+	_, err = s.Download(ctx, start)
+	if tiad.Kind(err) != tiad.KindOutcomeUnknown || !strings.Contains(err.Error(), "the compare right after it differs (Pump [FB1] not compared)") ||
+		strings.Join(tiad.ActingAnswers(err), ",") != "start-after" {
+		t.Errorf("download whose compare leaves the block out: %v (acting %v)", err, tiad.ActingAnswers(err))
 	}
 	p.SetScript(t, tiadtest.Script{})
 }

@@ -375,10 +375,11 @@ namespace Tiad
             // here (hardwareVerified: false).
             var diffs = new List<Difference>();
             bool equal;
+            OnlineCompare cmp;
             try
             {
-                CompareNode tree = OnSession(s, delegate(ITia t) { return t.Compare(s.Handle, req.Address); });
-                equal = TiaNames.CompareEqual(tree, diffs);
+                cmp = OnSession(s, delegate(ITia t) { return t.Compare(s.Handle, req.Address); });
+                equal = TiaNames.CompareEqual(cmp == null ? null : cmp.Tree, cmp == null ? null : cmp.Blocks, diffs);
             }
             catch (TiadException e)
             {
@@ -391,13 +392,16 @@ namespace Tiad
                 outcome = Kinds.OutcomeUnknown;
                 MayHaveStarted(req, acting);
                 var names = new List<string>();
-                foreach (var d in diffs) names.Add(d.Object + (d.State == "" ? "" : " " + d.State));
+                foreach (var d in diffs) names.Add((d.Object + " " + d.State).Trim());
                 throw Unknown("TIA reported the download loaded, but the compare right after it differs (" + (names.Count == 0 ? "no differences named" : string.Join(", ", names.ToArray())) + ")", acting);
             }
-            outcome = "loaded state=" + (result.State == "" ? "unknown" : result.State) + " compare=equal" + (req.Hardware ? " hardwareVerified=false" : "");
+            outcome = "loaded state=" + (result.State == "" ? "unknown" : result.State) + " compare=equal blocks=[" + TiaNames.BlockLabels(cmp.Blocks, 20) + "]" + (req.Hardware ? " hardwareVerified=false" : "");
             o["dryRun"] = false;
             o["downloaded"] = true;
             o["compareEqual"] = true;
+            // The blocks the compare saw identical, every block the project
+            // holds: a caller checks the ones it sent are among them.
+            o["blocks"] = new List<object>(TiaNames.Labels(cmp.Blocks).ToArray());
             if (req.Hardware)
             {
                 o["hardwareVerified"] = false;
@@ -432,8 +436,8 @@ namespace Tiad
                 if (!Target(address)) throw new TiadException(403, Kinds.TargetRefused, address + " is not in TIAD_TARGETS");
                 CheckDevicePin(s, address, "compare");
                 var diffs = new List<Difference>();
-                CompareNode tree = OnSession(s, delegate(ITia t) { return t.Compare(s.Handle, address); });
-                bool equal = TiaNames.CompareEqual(tree, diffs);
+                OnlineCompare cmp = OnSession(s, delegate(ITia t) { return t.Compare(s.Handle, address); });
+                bool equal = TiaNames.CompareEqual(cmp == null ? null : cmp.Tree, cmp == null ? null : cmp.Blocks, diffs);
                 var list = new List<object>();
                 foreach (var d in diffs)
                 {
@@ -445,6 +449,7 @@ namespace Tiad
                 var o = new Obj();
                 o["equal"] = equal;
                 o["differences"] = list;
+                o["blocks"] = new List<object>(TiaNames.Labels(cmp == null ? null : cmp.Blocks).ToArray());
                 return o;
             });
         }

@@ -808,6 +808,9 @@ type Difference struct {
 type CompareResult struct {
 	Equal       bool         `json:"equal"`
 	Differences []Difference `json:"differences"`
+	// Blocks are the labels of the program blocks the project holds
+	// ("Main [OB1]"): equal means the compare saw each one identical.
+	Blocks []string `json:"blocks,omitempty"`
 }
 
 // Compare compares the project with the CPU it was downloaded to.

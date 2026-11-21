@@ -600,9 +600,9 @@ namespace Tiad.Fake
             bool clean = r.Bool("cleanCancel");
             bool differs = r.Bool("compareDiffers");
             string tree = r.Str("compareTree");
-            if (tree != "" && tree != "empty" && tree != "emptyFolders" && tree != "folderDiffers" && tree != "irrelevantRoot")
+            if (tree != "" && tree != "empty" && tree != "emptyFolders" && tree != "folderDiffers" && tree != "irrelevantRoot" && tree != "dropBlock" && tree != "noBlocks")
             {
-                throw new TiadException(400, Kinds.BadRequest, "compareTree is empty, emptyFolders, folderDiffers or irrelevantRoot");
+                throw new TiadException(400, Kinds.BadRequest, "compareTree is empty, emptyFolders, folderDiffers, irrelevantRoot, dropBlock or noBlocks");
             }
             string dlState = r.Str("downloadState");
             bool asksTls = r.Bool("uploadAsksTls");
@@ -1249,38 +1249,87 @@ namespace Tiad.Fake
             }
         }
 
-        // Compare reports a compare tree shaped like the one TIA reported
-        // on the bench for an equal CPU (#789 dry-run window): the CPU's
-        // folder over Program blocks and PLC tags, each holding one
-        // identical object, and three empty folders. A CPU that does not
-        // hold the project reports the CPU's own element as different.
-        public CompareNode Compare(object project, string address)
+        // Compare answers TIA's compare tree (#789) with the project's
+        // program blocks. Without a compareTree knob the tree has the
+        // bench's shape: the CPU's folder over its program blocks (Main
+        // [OB1], as TIA makes a CPU, then what ImportSoftware made, one
+        // level deeper in a user group), a tag table and three empty
+        // folders. A CPU that does
+        // not hold the project reports the CPU's own element as different.
+        // The fake labels blocks with the agent's own TiaNames.BlockLabel,
+        // so it cannot prove TIA's labels: only the bench can.
+        public OnlineCompare Compare(object project, string address)
         {
             script.Enter("Compare");
             var p = (FakeProject)project;
             string cpu = p.Station == null ? "" : p.Station.Cpu.Name;
+            List<ProjectBlock> blocks = ProjectBlocks(p);
+            var leaves = new List<CompareNode>();
+            foreach (var b in blocks) leaves.Add(Cmp(TiaNames.BlockLabel(b), "ObjectsIdentical"));
             switch (script.CompareTree)
             {
                 case "empty":
-                    return Cmp(cpu, "FolderContentsIdentical");
+                    return new OnlineCompare { Tree = Cmp(cpu, "FolderContentsIdentical"), Blocks = blocks };
                 case "emptyFolders":
-                    return Cmp(cpu, "FolderContentsIdentical", EmptyFolders());
+                    return new OnlineCompare { Tree = Cmp(cpu, "FolderContentsIdentical", EmptyFolders()), Blocks = blocks };
                 case "folderDiffers":
-                    return Cmp(cpu, "FolderContentsIdentical",
-                        Cmp("Program blocks", "FolderContentsIdentical", Cmp("Main [OB1]", "ObjectsIdentical")),
-                        Cmp("PLC tags", "FolderContentsDifferent"));
+                    return new OnlineCompare
+                    {
+                        Tree = Cmp(cpu, "FolderContentsIdentical",
+                            Program(leaves),
+                            Cmp("PLC tags", "FolderContentsDifferent")),
+                        Blocks = blocks,
+                    };
                 case "irrelevantRoot":
-                    return Cmp(cpu, "CompareIrrelevant", Cmp("Program blocks", "FolderContentsIdentical", Cmp("Main [OB1]", "ObjectsIdentical")));
+                    return new OnlineCompare { Tree = Cmp(cpu, "CompareIrrelevant", Program(leaves)), Blocks = blocks };
+                case "dropBlock":
+                    // The tree leaves out the project's last block; all
+                    // else is identical (an identical tag table among it).
+                    leaves.RemoveAt(leaves.Count - 1);
+                    break;
+                case "noBlocks":
+                    // The project's blocks could not be read.
+                    blocks = new List<ProjectBlock>();
+                    break;
             }
             FakeProject there;
             bool equal = !script.CompareDiffers && loaded.TryGetValue(address, out there) && there == p && !p.Changed;
             var kids = new List<CompareNode>
             {
-                Cmp("Program blocks", "FolderContentsIdentical", Cmp("Main [OB1]", "ObjectsIdentical")),
+                Program(leaves),
                 Cmp("PLC tags", "FolderContentsIdentical", Cmp("Default tag table", "ObjectsIdentical")),
             };
             kids.AddRange(EmptyFolders());
-            return Cmp(cpu, equal ? "FolderContentsIdentical" : "ObjectsDifferent", kids.ToArray());
+            return new OnlineCompare { Tree = Cmp(cpu, equal ? "FolderContentsIdentical" : "ObjectsDifferent", kids.ToArray()), Blocks = blocks };
+        }
+
+        // Program is the program blocks folder over leaves: the first at
+        // its top, as TIA makes Main, the rest in a user group under it.
+        static CompareNode Program(List<CompareNode> leaves)
+        {
+            var top = Cmp("Program blocks", "FolderContentsIdentical");
+            if (leaves.Count > 0) top.Children.Add(leaves[0]);
+            if (leaves.Count > 1) top.Children.Add(Cmp("nautilus", "FolderContentsIdentical", leaves.GetRange(1, leaves.Count - 1).ToArray()));
+            return top;
+        }
+
+        // ProjectBlocks is the fake project's program blocks as Openness
+        // would list them: Main OB1, as TIA makes a CPU (unless a source
+        // made a block of that name), then every block a source made but
+        // data types, numbered from 1 per kind in name order.
+        static List<ProjectBlock> ProjectBlocks(FakeProject p)
+        {
+            var l = new List<ProjectBlock>();
+            bool main = true;
+            foreach (var b in p.Blocks) if (string.Equals(b.Name, "Main", StringComparison.OrdinalIgnoreCase)) main = false;
+            if (main) l.Add(new ProjectBlock { Name = "Main", Type = "OB", Number = 1 });
+            var next = new Dictionary<string, int> { { "OB", main ? 2 : 1 }, { "FB", 1 }, { "FC", 1 }, { "DB", 1 } };
+            foreach (var b in p.Blocks)
+            {
+                if (!next.ContainsKey(b.Kind)) continue;
+                l.Add(new ProjectBlock { Name = b.Name, Type = b.Kind == "DB" ? "GlobalDB" : b.Kind, Number = next[b.Kind]++ });
+            }
+            return l;
         }
 
         static CompareNode[] EmptyFolders()

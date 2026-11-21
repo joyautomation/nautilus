@@ -139,6 +139,8 @@ namespace Tiad.Test
                 T("ResultStates", ResultStates),
                 T("Differences", Differences),
                 T("CompareEqual", CompareEqualTests),
+                T("CompareSeesEveryBlock", CompareSeesEveryBlock),
+                T("BlockLabels", BlockLabels),
                 T("UserManagementGate", UserManagementGate),
                 T("FileNames", FileNames),
                 T("BlockKinds", BlockKinds),
@@ -1245,10 +1247,31 @@ namespace Tiad.Test
                 Cmp("PLC data types", "FolderContentsIdentical"));
         }
 
+        static ProjectBlock B(string name, string type, int number)
+        {
+            return new ProjectBlock { Name = name, Type = type, Number = number };
+        }
+
+        static List<ProjectBlock> Bs(params ProjectBlock[] bs)
+        {
+            return new List<ProjectBlock>(bs);
+        }
+
+        // MainOnly is the bench project's blocks: Main [OB1] alone.
+        static List<ProjectBlock> MainOnly()
+        {
+            return Bs(B("Main", "OB", 1));
+        }
+
         static void CompareIs(CompareNode tree, bool equal, string diffs, string what)
         {
+            CompareIs(tree, MainOnly(), equal, diffs, what);
+        }
+
+        static void CompareIs(CompareNode tree, List<ProjectBlock> blocks, bool equal, string diffs, string what)
+        {
             var l = new List<Difference>();
-            Eq(TiaNames.CompareEqual(tree, l), equal, what + " equal");
+            Eq(TiaNames.CompareEqual(tree, blocks, l), equal, what + " equal");
             Eq(Diffs(l), diffs, what + " differences");
         }
 
@@ -1262,31 +1285,31 @@ namespace Tiad.Test
             CompareIs(BenchTree(), true, "", "the bench's equal tree");
             CompareIs(Cmp("PLC_1", "ObjectsIdentical", Cmp("Main [OB1]", "ObjectsIdentical")), true, "", "an ObjectsIdentical root");
             CompareIs(Cmp("PLC_1", "FolderContentsIdentical", Cmp("A", "FolderContentsIdentical", Cmp("B", "FolderContentsIdentical",
-                Cmp("C", "FolderContentsIdentical", Cmp("D", "FolderContentsIdentical", Cmp("FB1", "ObjectsIdentical")))))), true, "",
-                "an identical object five levels down");
+                Cmp("C", "FolderContentsIdentical", Cmp("D", "FolderContentsIdentical", Cmp("Pump [FB1]", "ObjectsIdentical")))))),
+                Bs(B("Pump", "FB", 1)), true, "", "an identical block five levels down");
 
             // CompareIrrelevant anywhere is not compared (#1156 review).
             CompareIs(Cmp("PLC_1", "FolderContentsIdentical", Cmp("Main [OB1]", "ObjectsIdentical"), Cmp("Info", "CompareIrrelevant")), false, "Info: not compared",
                 "an irrelevant object beside an identical one");
             CompareIs(Cmp("PLC_1", "FolderContentsIdentical", Cmp("Program blocks", "CompareIrrelevant"),
-                Cmp("PLC tags", "FolderContentsIdentical", Cmp("Default tag table", "ObjectsIdentical"))), false, "Program blocks: not compared",
-                "a skipped block folder beside an identical tag table");
+                Cmp("PLC tags", "FolderContentsIdentical", Cmp("Default tag table", "ObjectsIdentical"))), false,
+                "Program blocks: not compared; Main [OB1]: not compared", "a skipped block folder beside an identical tag table");
             CompareIs(Cmp("PLC_1", "FolderContentsIdentical", Cmp("Default tag table", "ObjectsIdentical"),
-                Cmp("Program blocks", "CompareIrrelevant", Cmp("FC1", "ObjectsDifferent"))), false, "Program blocks: not compared; FC1: different",
-                "a differing block under an irrelevant folder is named too");
+                Cmp("Program blocks", "CompareIrrelevant", Cmp("Calc [FC1]", "ObjectsDifferent"))), Bs(B("Calc", "FC", 1)), false,
+                "Program blocks: not compared; Calc [FC1]: different", "a differing block under an irrelevant folder is named too");
             CompareIs(Cmp("PLC_1", "FolderContentsIdentical", Cmp("Main [OB1]", "ObjectsIdentical"), Cmp("X", "")), false, "X: different",
                 "an element with no state");
             CompareIs(Cmp("PLC_1", "FolderContentsIdentical", Cmp("A", "FolderContentsIdentical", Cmp("B", "FolderContentsIdentical",
-                Cmp("C", "FolderContentsIdentical", Cmp("D", "FolderContentsIdentical", Cmp("FB1", "ObjectsIdentical"), Cmp("FB2", "RightMissing")))))),
-                false, "FB2: only offline", "a difference five levels down");
+                Cmp("C", "FolderContentsIdentical", Cmp("D", "FolderContentsIdentical", Cmp("Pump [FB1]", "ObjectsIdentical"), Cmp("Valve [FB2]", "RightMissing")))))),
+                Bs(B("Pump", "FB", 1), B("Valve", "FB", 2)), false, "Valve [FB2]: only offline", "a difference five levels down");
 
             // Nothing compared.
             CompareIs(null, false, ": nothing compared", "no tree");
-            CompareIs(Cmp("PLC_1", "FolderContentsIdentical"), false, "PLC_1: nothing compared", "an identical root with no children");
-            CompareIs(Cmp("PLC_1", "ObjectsIdentical"), false, "PLC_1: nothing compared", "an ObjectsIdentical root alone");
+            CompareIs(Cmp("PLC_1", "FolderContentsIdentical"), false, "PLC_1: nothing compared; Main [OB1]: not compared", "an identical root with no children");
+            CompareIs(Cmp("PLC_1", "ObjectsIdentical"), false, "PLC_1: nothing compared; Main [OB1]: not compared", "an ObjectsIdentical root alone");
             CompareIs(Cmp("PLC_1", "FolderContentsIdentical", Cmp("Software units", "FolderContentsIdentical"), Cmp("PLC data types", "FolderContentsIdentical")),
-                false, "PLC_1: nothing compared", "an identical root over empty folders");
-            CompareIs(Cmp("PLC_1", "FolderContentsIdentical", Cmp("Info", "CompareIrrelevant")), false, "Info: not compared",
+                false, "PLC_1: nothing compared; Main [OB1]: not compared", "an identical root over empty folders");
+            CompareIs(Cmp("PLC_1", "FolderContentsIdentical", Cmp("Info", "CompareIrrelevant")), false, "Info: not compared; Main [OB1]: not compared",
                 "an identical root over an irrelevant object only");
 
             // The root must say identical.
@@ -1297,15 +1320,15 @@ namespace Tiad.Test
 
             // No non-identical state anywhere.
             CompareIs(Cmp("PLC_1", "FolderContentsIdentical",
-                Cmp("Program blocks", "FolderContentsIdentical", Cmp("Main [OB1]", "ObjectsIdentical"), Cmp("FC1", "ObjectsDifferent"))),
-                false, "FC1: different", "a differing block under an identical root");
+                Cmp("Program blocks", "FolderContentsIdentical", Cmp("Main [OB1]", "ObjectsIdentical"), Cmp("Calc [FC1]", "ObjectsDifferent"))),
+                Bs(B("Main", "OB", 1), B("Calc", "FC", 1)), false, "Calc [FC1]: different", "a differing block under an identical root");
             CompareIs(Cmp("PLC_1", "FolderContentsIdentical",
                 Cmp("Program blocks", "FolderContentsIdentical", Cmp("Main [OB1]", "ObjectsIdentical")), Cmp("PLC tags", "FolderContentsDifferent")),
                 false, "PLC tags: contents differ", "a folder whose contents differ, showing no differing child");
             CompareIs(Cmp("PLC_1", "FolderContentsDifferent", Cmp("Main [OB1]", "ObjectsIdentical")), false, "PLC_1: contents differ",
                 "a root whose contents differ, showing no differing child");
-            CompareIs(Cmp("PLC_1", "FolderContentsDifferent", Cmp("Main [OB1]", "ObjectsIdentical"), Cmp("FB1", "RightMissing")), false, "FB1: only offline",
-                "a root whose contents differ names the differing child, not itself");
+            CompareIs(Cmp("PLC_1", "FolderContentsDifferent", Cmp("Main [OB1]", "ObjectsIdentical"), Cmp("Pump [FB1]", "RightMissing")),
+                Bs(B("Main", "OB", 1), B("Pump", "FB", 1)), false, "Pump [FB1]: only offline", "a root whose contents differ names the differing child, not itself");
             CompareIs(Cmp("PLC_1", "FolderContentsIdentical", Cmp("Main [OB1]", "ObjectsIdentical"), Cmp("FB9", "LeftMissing")), false, "FB9: only online",
                 "an object only the CPU has");
             CompareIs(Cmp("PLC_1", "FolderContentsIdentical", Cmp("Main [OB1]", "ObjectsIdentical", Cmp("Network 1", "ObjectsDifferent"))), false,
@@ -1313,8 +1336,71 @@ namespace Tiad.Test
 
             // The decision adds to what is already there and reads only that.
             var l = new List<Difference> { new Difference { Object = "earlier", State = "different" } };
-            Eq(TiaNames.CompareEqual(BenchTree(), l), true, "an equal tree with earlier entries");
+            Eq(TiaNames.CompareEqual(BenchTree(), MainOnly(), l), true, "an equal tree with earlier entries");
             Eq(l.Count, 1, "an equal tree adds nothing");
+        }
+
+        // CompareSeesEveryBlock: #789 stage 3 gate. An equal compare must
+        // show every program block the project holds as an identical
+        // element of its label, wherever it sits; a block the tree leaves
+        // out, a block that cannot be labelled, or a project whose blocks
+        // were not read is not equal and names why.
+        static void CompareSeesEveryBlock()
+        {
+            // The gate's own case: an identical root over an empty block
+            // folder beside an identical tag table proves no block landed.
+            CompareIs(Cmp("PLC_1", "FolderContentsIdentical", Cmp("Program blocks", "FolderContentsIdentical"),
+                Cmp("PLC tags", "FolderContentsIdentical", Cmp("Default tag table", "ObjectsIdentical"))), false, "Main [OB1]: not compared",
+                "an empty block folder beside an identical tag table");
+            // A block the project holds that the tree leaves out.
+            CompareIs(BenchTree(), Bs(B("Main", "OB", 1), B("Pump", "FB", 1)), false, "Pump [FB1]: not compared", "a project block the tree leaves out");
+            // A block in a user group, one level deeper, is found there.
+            var grouped = Cmp("PLC_1", "FolderContentsIdentical",
+                Cmp("Program blocks", "FolderContentsIdentical", Cmp("Main [OB1]", "ObjectsIdentical"),
+                    Cmp("nautilus", "FolderContentsIdentical", Cmp("Pump [FB1]", "ObjectsIdentical"), Cmp("Pump_DB [DB1]", "ObjectsIdentical"))));
+            CompareIs(grouped, Bs(B("Main", "OB", 1), B("Pump", "FB", 1), B("Pump_DB", "InstanceDB", 1)), true, "", "blocks in a user group");
+            // The element must say ObjectsIdentical: a folder that bears
+            // the label proves nothing about the block.
+            CompareIs(Cmp("PLC_1", "FolderContentsIdentical", Cmp("Main [OB1]", "FolderContentsIdentical"), Cmp("Default tag table", "ObjectsIdentical")),
+                false, "Main [OB1]: not compared", "a folder bearing a block's label");
+            // The root is no block, even when it bears one's label.
+            CompareIs(Cmp("Main [OB1]", "ObjectsIdentical", Cmp("Default tag table", "ObjectsIdentical")), false, "Main [OB1]: not compared",
+                "a root bearing a block's label");
+            // Labels match exactly: name case, kind and number.
+            CompareIs(Cmp("PLC_1", "FolderContentsIdentical", Cmp("main [OB1]", "ObjectsIdentical")), false, "Main [OB1]: not compared", "a label in other case");
+            CompareIs(BenchTree(), Bs(B("Main", "OB", 2)), false, "Main [OB2]: not compared", "a block of another number");
+            CompareIs(BenchTree(), Bs(B("Main", "FC", 1)), false, "Main [FC1]: not compared", "a block of another kind");
+            // A block the tree names as differing is named once, as such.
+            CompareIs(Cmp("PLC_1", "FolderContentsIdentical", Cmp("Main [OB1]", "ObjectsDifferent"), Cmp("Default tag table", "ObjectsIdentical")),
+                false, "Main [OB1]: different", "a block the tree says differs");
+            CompareIs(Cmp("PLC_1", "FolderContentsIdentical", Cmp("Main [OB1]", "CompareIrrelevant"), Cmp("Default tag table", "ObjectsIdentical")),
+                false, "Main [OB1]: not compared", "a block the tree skipped");
+            // A block that cannot be labelled is not compared, by name.
+            CompareIs(BenchTree(), Bs(B("Main", "OB", 1), B("Odd", "SomethingNew", 3)), false, "Odd (SomethingNew): not compared", "a block of an unknown type");
+            CompareIs(BenchTree(), Bs(B("Main", "OB", 1), B("Recipe", "PlcStruct", 1)), false, "Recipe (PlcStruct): not compared", "a data type listed as a block");
+            // A project whose blocks were not read proves nothing about them.
+            CompareIs(BenchTree(), null, false, ": no program blocks in the project (or none read)", "no block list");
+            CompareIs(BenchTree(), Bs(), false, ": no program blocks in the project (or none read)", "an empty block list");
+            CompareIs(null, null, false, ": nothing compared", "no tree and no block list");
+        }
+
+        // BlockLabels: a block's label is its name, kind and number as
+        // TIA's compare tree showed Main on the bench ("Main [OB1]", #789
+        // dry-run window); every DB type is a DB. The journal lists them.
+        static void BlockLabels()
+        {
+            Eq(TiaNames.BlockLabel(B("Main", "OB", 1)), "Main [OB1]", "the bench's OB, as TIA showed it");
+            Eq(TiaNames.BlockLabel(B("Pump", "FB", 12)), "Pump [FB12]", "an FB");
+            Eq(TiaNames.BlockLabel(B("Calc", "FC", 3)), "Calc [FC3]", "an FC");
+            Eq(TiaNames.BlockLabel(B("Data", "GlobalDB", 4)), "Data [DB4]", "a global DB");
+            Eq(TiaNames.BlockLabel(B("Pump_DB", "InstanceDB", 5)), "Pump_DB [DB5]", "an instance DB");
+            Eq(TiaNames.BlockLabel(B("Arr", "ArrayDB", 6)), "Arr [DB6]", "an array DB");
+            Eq(TiaNames.BlockLabel(B("Recipe", "PlcStruct", 1)), null, "a data type");
+            Eq(TiaNames.BlockLabel(B("Odd", "SomethingNew", 1)), null, "an unknown type");
+            Eq(TiaNames.BlockLabels(Bs(B("Main", "OB", 1), B("Odd", "X", 2)), 20), "Main [OB1], Odd", "the journal's list");
+            Eq(string.Join("; ", TiaNames.Labels(Bs(B("Main", "OB", 1), B("Odd", "X", 2))).ToArray()), "Main [OB1]; Odd (X)", "the response's list");
+            Eq(TiaNames.Labels(null).Count, 0, "the response's list, no blocks read");
+            Eq(TiaNames.BlockLabels(Bs(B("A", "FC", 1), B("B", "FC", 2), B("C", "FC", 3)), 2), "A [FC1], B [FC2], +1 more", "the journal's list, cut");
         }
 
         static void FileNames()
