@@ -44,6 +44,19 @@ func BenchStation(modules ...tiad.DeviceModule) tiad.Station {
 // BenchSecrets carries the bench station's web user password.
 var BenchSecrets = tiad.Secrets{WebUsers: map[string]string{"naut": "pw"}, FullAccessPassword: BenchFullAccessPassword}
 
+// BenchAttestation is a test operator's attestation for a download that
+// loads hardware (#789 hardware gate).
+var BenchAttestation = tiad.Attestation{By: "bench operator", Text: "the bench CPU's hardware configuration is what I intend to load"}
+
+// AcceptHardware returns r with the opt-in and BenchAttestation that
+// every real download that loads hardware needs.
+func AcceptHardware(r tiad.DownloadRequest) tiad.DownloadRequest {
+	r.Decisions.AcceptUnverifiedHardware = tiad.Yes()
+	a := BenchAttestation
+	r.Attestation = &a
+	return r
+}
+
 // BenchFullAccessPassword meets TIA's password rules. It is a test value,
 // never a real CPU's.
 const BenchFullAccessPassword = "Bench-access-2026"

@@ -161,7 +161,8 @@ func contractProtected(t *testing.T, start Starter) {
 	path := "/v1/sessions/" + s.ID + "/download"
 	body := func(secrets map[string]string) map[string]any {
 		return map[string]any{"address": benchCPU, "hardware": true, "software": true, "announced": true,
-			"decisions": map[string]any{"startAfter": true}, "secrets": secrets}
+			"decisions": map[string]any{"startAfter": true, "acceptUnverifiedHardware": true}, "secrets": secrets,
+			"attestation": map[string]string{"by": BenchAttestation.By, "text": BenchAttestation.Text}}
 	}
 	for _, sec := range []map[string]string{{}, {"protection": BenchConfigurationPassword}} {
 		status, b := rawJSON(t, c, "POST", path, body(sec))

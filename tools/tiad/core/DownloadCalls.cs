@@ -4,7 +4,9 @@
 // A download's refusals all come before TIA is asked anything: the
 // request's shape (announced, dry runs included), the target allowlist,
 // one station spec per CPU, a full compile since the last change, and one
-// project per CPU, and (for a real download) the start-after decision.
+// project per CPU, and (for a real download) the hardware opt-in with its
+// attestation (HardwareRule), the kept devices and the start-after
+// decision.
 // Only then does ITia.Download run. TIA asks its checks one at a time
 // (#789 S2b), so each is answered on its own, only from the request: the
 // first one the request does not answer yes cancels there. Anything that
@@ -121,7 +123,8 @@ namespace Tiad
                 " userManagementKeepOnline=" + YesNo(d.UserManagementKeepOnline) + " identificationDataLoadNothing=" + YesNo(d.IdentificationDataLoadNothing) +
                 " startAfter=" + YesNo(d.StartAfter) + " reinitialize=[" + string.Join(",", reinit) + "]" +
                 " keptDevices=[" + string.Join(",", Quoted(d.KeptDevices)) + "]" +
-                " trustCertificate=" + (d.TrustCertificate == "" ? "unset" : Json.Quote(d.TrustCertificate));
+                " trustCertificate=" + (d.TrustCertificate == "" ? "unset" : Json.Quote(d.TrustCertificate)) +
+                " acceptUnverifiedHardware=" + YesNo(d.AcceptUnverifiedHardware);
         }
 
         // AuditKept is the devices an apply kept as found, for the audit
@@ -165,10 +168,10 @@ namespace Tiad
                 }
                 finally
                 {
-                    Log.Line("audit download session={0} project={1} address={2} hardware={3} software={4} dryRun={5} announced={6} {7} protection={8} configurationPassword={9} kept=[{10}] asked=[{11}] acting=[{12}] outcome={13}",
+                    Log.Line("audit download session={0} project={1} address={2} hardware={3} software={4} dryRun={5} announced={6} {7} protection={8} configurationPassword={9} attestation={10} kept=[{11}] asked=[{12}] acting=[{13}] outcome={14}",
                         s.Id, Json.Quote(s.Project), Json.Quote(req.Address), req.Hardware, req.Software, req.DryRun, req.Announced,
                         AuditDecisions(req.Decisions), req.Secrets.Protection == "" ? "unset" : "set",
-                        req.Secrets.ConfigurationPassword == "" ? "unset" : "set", AuditKept(s.Kept), asked, string.Join(",", Quoted(acting).ToArray()), outcome);
+                        req.Secrets.ConfigurationPassword == "" ? "unset" : "set", req.Attestation.Audit(), AuditKept(s.Kept), asked, string.Join(",", Quoted(acting).ToArray()), outcome);
                 }
             });
         }
@@ -196,6 +199,27 @@ namespace Tiad
             if (!s.Compiled)
             {
                 throw new TiadException(409, Kinds.NotCompiled, "the project changed since the last full compile; compile hardware and software first");
+            }
+            // The hardware configuration loads unverified (#789 hardware
+            // gate): a real download that loads it needs the opt-in and
+            // the operator's attestation, checked before anything reaches
+            // the CPU, on every CPU. A dry run lists the question instead.
+            if (!req.DryRun)
+            {
+                bool hwDeclined;
+                string hwWhy = HardwareRule.Check(req, out hwDeclined);
+                if (hwWhy != null)
+                {
+                    asked = Json.Quote(QuestionIds.UnverifiedHardware);
+                    string kind = hwDeclined ? Kinds.Declined : Kinds.DecisionRequired;
+                    outcome = kind + ":[" + asked + "]";
+                    var hd = new Obj();
+                    hd["questions"] = Question.ToJson(new List<Question> { HardwareRule.Question() });
+                    hd["keptDevices"] = KeptDevice.ToJson(s.Kept);
+                    throw new TiadException(409, kind, hwWhy + "; nothing was sent to the CPU", hd, false);
+                }
+                // When the attestation was accepted, by tiad's clock.
+                if (req.Hardware) req.Attestation.At = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", System.Globalization.CultureInfo.InvariantCulture);
             }
             // The devices an apply kept load too: a real download needs a
             // yes naming exactly them, checked before anything reaches the
@@ -332,6 +356,7 @@ namespace Tiad
                 // the first, sees only that one: the list is incomplete.
                 o["questionsIncomplete"] = true;
                 var dq = new List<Question>(askedQs);
+                if (req.Hardware) dq.Add(HardwareRule.Question());
                 if (s.Kept.Count > 0) dq.Add(KeptRule.Question(s.Kept));
                 o["questions"] = Question.ToJson(dq);
                 o["keptDevices"] = KeptDevice.ToJson(s.Kept);
@@ -406,6 +431,9 @@ namespace Tiad
             {
                 o["hardwareVerified"] = false;
                 o["warning"] = "the hardware configuration is not verified: Openness has no online hardware compare, so only the PLC software was compared after loading";
+                // The operator's attestation that stood in for the check,
+                // for the caller's deploy record.
+                o["attestation"] = req.Attestation.ToJson();
             }
             // TIA's messages come back on success; on a failure they are in
             // the outcome_unknown text (DownloadDecider.Finish).

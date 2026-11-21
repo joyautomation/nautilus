@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/joyautomation/nautilus/siemens/tiad"
 )
@@ -141,6 +142,47 @@ func questionIDs(qs []tiad.Question) string {
 	return strings.Join(s, ",")
 }
 
+// contractHardwareGate: a real download that loads hardware is refused,
+// before anything reaches the CPU, until the request opts in to loading
+// it unverified and carries an attestation saying who and what (#789
+// hardware gate). req loads hardware and answers everything else.
+func contractHardwareGate(t *testing.T, a Target, s *tiad.Session, req tiad.DownloadRequest) {
+	t.Helper()
+	att := BenchAttestation
+	for _, c := range []struct {
+		name   string
+		accept *bool
+		att    *tiad.Attestation
+		kind   string
+		says   string
+	}{
+		{"no opt-in", nil, &att, tiad.KindDecisionRequired, "set decisions.acceptUnverifiedHardware"},
+		{"opt-in, no attestation", tiad.Yes(), nil, tiad.KindDecisionRequired, "needs the operator's attestation"},
+		{"opt-in, no who", tiad.Yes(), &tiad.Attestation{By: " ", Text: att.Text}, tiad.KindDecisionRequired, "needs the operator's attestation"},
+		{"opt-in, no text", tiad.Yes(), &tiad.Attestation{By: att.By, Text: "\t"}, tiad.KindDecisionRequired, "needs the operator's attestation"},
+		{"opt-in no", tiad.No(), &att, tiad.KindDeclined, "download the software only"},
+	} {
+		r := req
+		r.Decisions.AcceptUnverifiedHardware, r.Attestation = c.accept, c.att
+		_, err := s.Download(ctx, r)
+		if tiad.Kind(err) != c.kind || !strings.Contains(err.Error(), c.says) || !strings.Contains(err.Error(), "nothing was sent to the CPU") ||
+			questionIDs(tiad.Questions(err)) != tiad.QuestionUnverifiedHardware || len(tiad.ActingAnswers(err)) != 0 {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+	}
+	// Too long to journal is a bad request, whatever else it says.
+	for _, long := range []tiad.Attestation{{By: strings.Repeat("b", tiad.MaxAttestationBy+1), Text: att.Text}, {By: att.By, Text: strings.Repeat("\u00e9", tiad.MaxAttestationText/2+1)}} {
+		r := AcceptHardware(req)
+		r.Attestation = &long
+		if _, err := s.Download(ctx, r); tiad.Kind(err) != tiad.KindBadRequest || !strings.Contains(err.Error(), "bytes") {
+			t.Fatalf("an attestation over the limit: %v", err)
+		}
+	}
+	if l := a.Loaded(t); len(l) != 0 {
+		t.Fatalf("the hardware gate let a download load: %+v", l)
+	}
+}
+
 // contractDownloadFlow walks PROFINET's P1-P3 and P5: a dry run, a real
 // download into RUN, compare, a changed module, and again.
 func contractDownloadFlow(t *testing.T, start Starter) {
@@ -152,8 +194,9 @@ func contractDownloadFlow(t *testing.T, start Starter) {
 	// A dry run cancels at TIA's first check, so it sees only that one.
 	dry := req
 	dry.DryRun, dry.Decisions = true, tiad.Decisions{}
+	// It lists tiad's own unverified-hardware question too, unanswered.
 	dr, err := s.Download(ctx, dry)
-	if err != nil || !dr.DryRun || !dr.Provisional || !dr.QuestionsIncomplete || dr.Downloaded || questionIDs(dr.Questions) != "stop-cpu" || dr.Questions[0].Message != "The CPU must stop" {
+	if err != nil || !dr.DryRun || !dr.Provisional || !dr.QuestionsIncomplete || dr.Downloaded || questionIDs(dr.Questions) != "stop-cpu,unverified-hardware" || dr.Questions[0].Message != "The CPU must stop" {
 		t.Fatalf("dry run: %+v %v", dr, err)
 	}
 	if l := a.Loaded(t); len(l) != 0 {
@@ -162,6 +205,9 @@ func contractDownloadFlow(t *testing.T, start Starter) {
 	if cmp, err := s.Compare(ctx); err != nil || cmp.Equal {
 		t.Fatalf("compare before any download: %+v %v", cmp, err)
 	}
+	contractHardwareGate(t, a, s, req)
+	before := time.Now().UTC().Add(-time.Second)
+	req = AcceptHardware(req)
 	res, err := s.Download(ctx, req)
 	if err != nil || !res.Downloaded || res.DryRun || res.State != "RUN" || res.StateSource != tiad.StateFromTIAMessage || len(res.Questions) != 2 {
 		t.Fatalf("download: %+v %v", res, err)
@@ -170,6 +216,13 @@ func contractDownloadFlow(t *testing.T, start Starter) {
 	// loaded is said to be unverified, never silently green.
 	if !res.CompareEqual || res.HardwareVerified == nil || *res.HardwareVerified || !strings.Contains(res.Warning, "hardware configuration is not verified") {
 		t.Fatalf("download evidence: compareEqual %v hardwareVerified %v warning %q", res.CompareEqual, res.HardwareVerified, res.Warning)
+	}
+	// The attestation that stood in for the hardware check comes back as
+	// journalled, stamped by tiad's clock, for the caller's deploy record.
+	if at := res.Attestation; at == nil || at.By != BenchAttestation.By || at.Text != BenchAttestation.Text {
+		t.Fatalf("download attestation: %+v", res.Attestation)
+	} else if when, err := time.Parse("2006-01-02T15:04:05.000Z", at.At); err != nil || when.Before(before) || when.After(time.Now().UTC().Add(time.Second)) {
+		t.Fatalf("attestation time %q (%v), want tiad's UTC clock at the download", at.At, err)
 	}
 	if cmp, err := s.Compare(ctx); err != nil || !cmp.Equal || len(cmp.Differences) != 0 {
 		t.Fatalf("compare after the download: %+v %v", cmp, err)
@@ -575,7 +628,7 @@ func contractS2aSequence(t *testing.T, start Starter) {
 	if _, err := s.Compare(ctx); err != nil {
 		t.Fatalf("compare after the upload: %v", err)
 	}
-	dl := tiad.DownloadRequest{Address: benchCPU, Hardware: true, Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}}
+	dl := AcceptHardware(tiad.DownloadRequest{Address: benchCPU, Hardware: true, Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}})
 	if _, err := s.Download(ctx, dl); tiad.Kind(err) != tiad.KindBadRequest || !strings.Contains(err.Error(), "no station spec") {
 		t.Fatalf("download straight after the upload: %v", err)
 	}

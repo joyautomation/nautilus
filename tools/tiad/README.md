@@ -78,7 +78,11 @@ Mono:
   reads them in the same call) in the tree as an identical element of
   its label (`TiaNames.BlockLabel`, `Main [OB1]`); an empty tree, or one
   that leaves out a project block, is never equal. A hardware download
-  says `hardwareVerified: false`. How a download ended is decided in core too
+  says `hardwareVerified: false`: tiad cannot verify the hardware, so
+  one is refused before TIA hears of it unless the request says
+  `decisions.acceptUnverifiedHardware: true` and carries the operator's
+  `attestation` (`by`, `text`), on every CPU, the bench included
+  (`HardwareRule`; siemens-ide.md §3.5). How a download ended is decided in core too
   (`DownloadDecider.Finish`). Before TIA starts, every selection tiad may
   write is checked against this Openness's enum types.
 - **No dry runs yet.** With no pre-download callback there is nothing to

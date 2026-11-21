@@ -459,6 +459,19 @@ func TestAgentRefusesDownloadsBeforeTIA(t *testing.T) {
 	if n := countCalls(p.Calls(t), "Download"); n != 0 {
 		t.Fatalf("TIA heard of a download without start-after (%d)", n)
 	}
+	// So is one that loads hardware without the opt-in and the
+	// attestation (#789 hardware gate), on this CPU as on any.
+	hw := tiad.DownloadRequest{Address: "192.0.2.10", Hardware: true, Software: true, Announced: true, Decisions: tiad.Decisions{StopCPU: tiad.Yes(), StartAfter: tiad.No()}}
+	if _, err := s.Download(ctx, hw); tiad.Kind(err) != tiad.KindDecisionRequired || len(tiad.Questions(err)) != 1 || tiad.Questions(err)[0].ID != tiad.QuestionUnverifiedHardware {
+		t.Fatalf("hardware without the opt-in: %v", err)
+	}
+	hw.Decisions.AcceptUnverifiedHardware = tiad.Yes()
+	if _, err := s.Download(ctx, hw); tiad.Kind(err) != tiad.KindDecisionRequired || !strings.Contains(err.Error(), "attestation") {
+		t.Fatalf("hardware without the attestation: %v", err)
+	}
+	if n := countCalls(p.Calls(t), "Download"); n != 0 {
+		t.Fatalf("TIA heard of a hardware download without the opt-in or the attestation (%d)", n)
+	}
 	// A dry run and an unanswered download reach TIA and load nothing.
 	if _, err := s.Download(ctx, tiad.DownloadRequest{Address: "192.0.2.10", Software: true, DryRun: true, Announced: true}); err != nil {
 		t.Fatal(err)
@@ -1012,6 +1025,66 @@ func TestAgentAuditsEveryDownload(t *testing.T) {
 	waitLog(t, p, "outcome=bad_request")
 }
 
+// TestAgentJournalsTheHardwareAttestation: the operator's attestation that
+// stands in for the hardware check (#789 hardware gate) is in the audit
+// line on every outcome: who, what, and when by tiad's clock once it was
+// accepted, each quoted so a request cannot forge a line.
+func TestAgentJournalsTheHardwareAttestation(t *testing.T) {
+	p, s := downloadReady(t)
+	att := &tiad.Attestation{By: "op\naudit download forged", Text: "hardware as intended\r\u2028audit download forged"}
+	req := tiad.DownloadRequest{Address: "192.0.2.10", Hardware: true, Software: true, Announced: true,
+		Decisions: tiad.Decisions{StartAfter: tiad.No(), AcceptUnverifiedHardware: tiad.Yes()}, Attestation: att}
+	quoted := `by="op\naudit download forged" at=20`
+	text := `text="hardware as intended\r\u2028audit download forged"}`
+	auditLine := func(outcome string) string {
+		t.Helper()
+		log := waitLog(t, p, "outcome="+outcome)
+		for _, l := range strings.Split(log, "\n") {
+			if strings.Contains(l, "Z audit download") && strings.Contains(l, "outcome="+outcome) {
+				return l
+			}
+		}
+		t.Fatalf("no audit line with outcome=%s:\n%s", outcome, log)
+		return ""
+	}
+
+	res, err := s.Download(ctx, req)
+	if err != nil || res.Attestation == nil || res.Attestation.By != att.By || res.Attestation.Text != att.Text {
+		t.Fatalf("download: %+v %v", res, err)
+	}
+	line := auditLine("loaded")
+	for _, want := range []string{"hardware=True", "acceptUnverifiedHardware=yes", "attestation={" + quoted + res.Attestation.At[2:], text, "hardwareVerified=false"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("the audit line lacks %s:\n%s", want, line)
+		}
+	}
+
+	// A download that ends in doubt after loading hardware journals the
+	// attestation too: that is where it matters most.
+	p.SetScript(t, tiadtest.Script{CompareDiffers: true})
+	if _, err := s.Download(ctx, req); tiad.Kind(err) != tiad.KindOutcomeUnknown {
+		t.Fatalf("compare differs: %v", err)
+	}
+	if line := auditLine(tiad.KindOutcomeUnknown); !strings.Contains(line, "attestation={"+quoted) || !strings.Contains(line, text) {
+		t.Errorf("the outcome_unknown audit line lacks the attestation:\n%s", line)
+	}
+	p.SetScript(t, tiadtest.Script{})
+
+	// A refusal journals what was said, never accepted, so no time.
+	refused := req
+	refused.Decisions.AcceptUnverifiedHardware = nil
+	if _, err := s.Download(ctx, refused); tiad.Kind(err) != tiad.KindDecisionRequired {
+		t.Fatalf("no opt-in: %v", err)
+	}
+	if line := auditLine(tiad.KindDecisionRequired); !strings.Contains(line, `attestation={by="op\naudit download forged" at=unset `+text) || !strings.Contains(line, "acceptUnverifiedHardware=unanswered") {
+		t.Errorf("the refusal's audit line:\n%s", line)
+	}
+	// The forged lines start nowhere: every audit line is tiad's own.
+	if n, m := strings.Count(p.Log(), "Z audit download"), strings.Count(p.Log(), "audit download"); n != m-6 {
+		t.Fatalf("%d audit lines and %d mentions (want 6 forged mentions inside quotes):\n%s", n, m, p.Log())
+	}
+}
+
 // TestAgentKeepsTheProtectionPasswordOut: the CPU's protection password
 // goes to TIA and nowhere else.
 func TestAgentKeepsTheProtectionPasswordOut(t *testing.T) {
@@ -1048,7 +1121,7 @@ func TestAgentKeepsTheProtectionPasswordOut(t *testing.T) {
 // earlier compile.
 func TestAgentForgetsACompileWhenAChangeFails(t *testing.T) {
 	p, s := downloadReady(t)
-	dl := tiad.DownloadRequest{Address: "192.0.2.10", Hardware: true, Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}}
+	dl := tiadtest.AcceptHardware(tiad.DownloadRequest{Address: "192.0.2.10", Hardware: true, Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}})
 	fail := func(call string) {
 		t.Helper()
 		p.SetScript(t, tiadtest.Script{Failures: []tiadtest.ScriptedCall{{Call: call, Message: call + " failed part-way"}}})
@@ -1239,8 +1312,8 @@ func TestAgentTrustsACertificateOnlyOnTheUploadsOptIn(t *testing.T) {
 	if _, err := s.Compile(ctx, true, true); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Download(ctx, tiad.DownloadRequest{Address: "192.0.2.10", Hardware: true, Software: true, Announced: true,
-		Decisions: tiad.Decisions{StartAfter: tiad.No(), KeptDevices: []string{"io-device-up"}}}); err != nil {
+	if _, err := s.Download(ctx, tiadtest.AcceptHardware(tiad.DownloadRequest{Address: "192.0.2.10", Hardware: true, Software: true, Announced: true,
+		Decisions: tiad.Decisions{StartAfter: tiad.No(), KeptDevices: []string{"io-device-up"}}})); err != nil {
 		t.Fatal(err)
 	}
 	line = waitLog(t, p, "audit download")

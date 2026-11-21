@@ -46,7 +46,13 @@ const (
 	// download also loads the devices an apply kept as found. Its Objects
 	// name them; Decisions.KeptDevices must name exactly those.
 	QuestionKeptDevices = "kept-devices"
-	QuestionOther       = "other"
+	// QuestionUnverifiedHardware is the agent's own question too: a
+	// download that loads the hardware configuration, which tiad cannot
+	// verify (Openness V21 has no online hardware compare). Only
+	// Decisions.AcceptUnverifiedHardware yes with the request's
+	// Attestation answers it (CheckHardware).
+	QuestionUnverifiedHardware = "unverified-hardware"
+	QuestionOther              = "other"
 )
 
 // Question is one pre-download check that needs an answer.
@@ -91,6 +97,10 @@ type Decisions struct {
 	// set: a yes for another set is refused, so an old answer does not
 	// carry over. Leave it empty when nothing is kept.
 	KeptDevices []string `json:"keptDevices,omitempty"`
+	// AcceptUnverifiedHardware answers QuestionUnverifiedHardware: load
+	// the hardware configuration although tiad cannot verify it. Yes
+	// needs DownloadRequest.Attestation too.
+	AcceptUnverifiedHardware *bool `json:"acceptUnverifiedHardware,omitempty"`
 }
 
 // KeptQuestion is the question a download asks when the project keeps
@@ -163,6 +173,69 @@ type DownloadRequest struct {
 	// until S2. It is a convention, not a safety.
 	Announced bool     `json:"announced"`
 	Secrets   *Secrets `json:"secrets,omitempty"`
+	// Attestation is the operator's statement that stands in for the
+	// hardware check tiad cannot make: needed, with
+	// Decisions.AcceptUnverifiedHardware, by every real download that
+	// loads hardware, on every CPU (#789 hardware gate).
+	Attestation *Attestation `json:"attestation,omitempty"`
+}
+
+// Attestation is the operator's statement that the CPU's hardware
+// configuration is what they intend to load. By is who says so: the
+// caller's claim, since tiad knows only a bearer token, so a naut caller
+// fills it from the principal it authenticated. Text is the statement.
+// Each is at most MaxAttestationBy / MaxAttestationText bytes.
+type Attestation struct {
+	By   string `json:"by"`
+	Text string `json:"text"`
+}
+
+// Attestation limits, in bytes.
+const (
+	MaxAttestationBy   = 200
+	MaxAttestationText = 2000
+)
+
+// AttestationRecord is an attestation as tiad journalled it: At is when
+// tiad accepted the download, by tiad's own UTC clock
+// ("2006-01-02T15:04:05.000Z"), never the caller's.
+type AttestationRecord struct {
+	By   string `json:"by"`
+	At   string `json:"at"`
+	Text string `json:"text"`
+}
+
+// given is whether a says both who and what.
+func (a *Attestation) given() bool {
+	return a != nil && strings.TrimSpace(a.By) != "" && strings.TrimSpace(a.Text) != ""
+}
+
+// HardwareQuestion is the question a download asks when it loads the
+// hardware configuration: the agent's HardwareRule.Question.
+func HardwareQuestion() Question {
+	return Question{ID: QuestionUnverifiedHardware,
+		Message: "load the hardware configuration unverified: set decisions.acceptUnverifiedHardware and give attestation.by and attestation.text, the operator's statement that the CPU's hardware configuration is what they intend to load"}
+}
+
+const hardwareWhy = "the download loads the hardware configuration, which tiad cannot verify (Openness V21 has no online hardware compare; only the PLC software is compared after loading)"
+
+// CheckHardware is the agent's HardwareRule.Check: "" when r may load
+// hardware, or why not, naming the fix; declined when r answered no. A
+// software-only download needs nothing.
+func CheckHardware(r DownloadRequest) (why string, declined bool) {
+	if !r.Hardware {
+		return "", false
+	}
+	d := r.Decisions.AcceptUnverifiedHardware
+	switch {
+	case d == nil:
+		return hardwareWhy + ": set decisions.acceptUnverifiedHardware and give attestation.by and attestation.text to load it, or download the software only (hardware: false)", false
+	case !*d:
+		return hardwareWhy + ", and decisions.acceptUnverifiedHardware says no: download the software only (hardware: false)", true
+	case !r.Attestation.given():
+		return hardwareWhy + ": decisions.acceptUnverifiedHardware needs the operator's attestation too (attestation.by: who, attestation.text: that the CPU's hardware configuration is what they intend to load)", false
+	}
+	return "", false
 }
 
 // DownloadResult is a download's outcome. After a dry run, Questions are
@@ -194,6 +267,10 @@ type DownloadResult struct {
 	// success. Warning says so in words.
 	HardwareVerified *bool  `json:"hardwareVerified,omitempty"`
 	Warning          string `json:"warning,omitempty"`
+	// Attestation is, on a download that loaded hardware, the operator's
+	// attestation that stood in for the check, as tiad journalled it:
+	// keep it in the deploy record.
+	Attestation *AttestationRecord `json:"attestation,omitempty"`
 	// Messages is TIA's download result's messages, when it has any.
 	Messages string `json:"messages,omitempty"`
 	// State is the CPU's mode after the download, "RUN" or "STOP", or ""
@@ -267,6 +344,14 @@ func (r DownloadRequest) Validate() error {
 	}
 	if !r.Announced {
 		return fmt.Errorf("download: announce it first (announced: true); a dry run reaches the CPU too until S2 proves a cancel loads nothing")
+	}
+	if a := r.Attestation; a != nil {
+		if len(a.By) > MaxAttestationBy {
+			return fmt.Errorf("download: attestation.by is longer than %d bytes", MaxAttestationBy)
+		}
+		if len(a.Text) > MaxAttestationText {
+			return fmt.Errorf("download: attestation.text is longer than %d bytes", MaxAttestationText)
+		}
 	}
 	return nil
 }

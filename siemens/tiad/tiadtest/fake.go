@@ -30,6 +30,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/joyautomation/nautilus/siemens/station"
 	"github.com/joyautomation/nautilus/siemens/tiad"
@@ -1222,6 +1223,25 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 	if req.DryRun {
 		call = "dry run"
 	}
+	// The hardware configuration loads unverified (#789 hardware gate):
+	// the opt-in and the operator's attestation, on every CPU, before
+	// anything reaches the CPU; a dry run lists the question instead.
+	var attested *tiad.AttestationRecord
+	if !req.DryRun {
+		if why, declined := tiad.CheckHardware(req); why != "" {
+			kind := tiad.KindDecisionRequired
+			if declined {
+				kind = tiad.KindDeclined
+			}
+			return nil, &failure{status: http.StatusConflict, kind: kind,
+				msg:  why + "; nothing was sent to the CPU",
+				data: map[string]any{"questions": []tiad.Question{tiad.HardwareQuestion()}, "keptDevices": keptList(s.kept)}}
+		}
+		if req.Hardware {
+			attested = &tiad.AttestationRecord{By: req.Attestation.By, Text: req.Attestation.Text,
+				At: time.Now().UTC().Format("2006-01-02T15:04:05.000Z")}
+		}
+	}
 	// The kept devices load too: a yes naming exactly them, before
 	// anything reaches the CPU; a dry run lists the question instead.
 	if why := tiad.CheckKept(s.kept, req.Decisions.KeptDevices); why != "" && !req.DryRun {
@@ -1275,6 +1295,9 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 		asked = append(asked, q)
 		if req.DryRun {
 			dq := append([]tiad.Question{}, asked...)
+			if req.Hardware {
+				dq = append(dq, tiad.HardwareQuestion())
+			}
 			if len(s.kept) > 0 {
 				dq = append(dq, tiad.KeptQuestion(s.kept))
 			}
@@ -1348,6 +1371,7 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 	if req.Hardware {
 		res.HardwareVerified = new(bool)
 		res.Warning = "the hardware configuration is not verified: Openness has no online hardware compare, so only the PLC software was compared after loading"
+		res.Attestation = attested
 	}
 	return res, nil
 }
