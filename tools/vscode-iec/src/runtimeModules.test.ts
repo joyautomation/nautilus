@@ -27,7 +27,10 @@ test("the runtime has every client entry svelte exports", { skip: !HAS_DEPS && "
 test("the runtime has every entry the kit exports", { skip: !HAS_DEPS && "webview-ui deps not installed" }, () => {
   const kit = readJson(path.join(WEBVIEW, "@joyautomation", "nautilus-hmi", "package.json"));
   const name = (k: string) => (k === "." ? kit.name : `${kit.name}/${k.slice(2)}`);
-  const keys = Object.keys(kit.exports as Exports).filter((k) => k !== "./package.json");
+  // ./config (the configuration screens, #711) carries the YAML parser and
+  // is for the controller's own screens: a component on a mimic never imports
+  // it, so it stays out of the runtime and its bundle.
+  const keys = Object.keys(kit.exports as Exports).filter((k) => k !== "./package.json" && k !== "./config");
   assert.deepEqual([...KIT_MODULES].sort(), keys.filter((k) => !k.endsWith(".css")).map(name).sort());
   assert.deepEqual([...KIT_STYLES].sort(), keys.filter((k) => k.endsWith(".css")).map(name).sort());
 });
