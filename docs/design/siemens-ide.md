@@ -631,7 +631,8 @@ behaviour. So, until then:
   tiad's handlers afterwards never throws, so a TIA that is gone cannot
   turn the answer into `operation_failed` (`DownloadSteps` in core).
   **When TIA itself dies** (`ITia.Gone`: TIA Portal's `Disposed` event, a
-  handler that cannot be detached from its objects, or its process gone),
+  handler that cannot be detached from its objects (failing closed: that
+  counts as gone even if TIA lives on), or its process gone),
   every project open on it goes with it, and the agent starts TIA only
   once. So the call it died in ends its session (fatal, `outcome_unknown`
   once the download call was entered, `operation_failed` before) and

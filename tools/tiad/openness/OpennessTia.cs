@@ -197,9 +197,12 @@ namespace Tiad.Openness
         readonly HashSet<string> attributesLogged = new HashSet<string>(StringComparer.Ordinal);
         // What tells that TIA died (Gone): TIA Portal's own Disposed
         // event, a handler that could not be detached from its objects,
-        // or its process (pid, 0 when unknown) having exited.
+        // or its process having exited. The process is opened once, at
+        // start, and kept (null when unknown): the open handle pins it, so
+        // a later process given the same id is never taken for it.
         volatile bool disposed, detachFailed;
-        readonly int pid;
+        readonly System.Diagnostics.Process process;
+        readonly object processMu = new object();
 
         // OpennessTia starts TIA Portal, without its user interface. This
         // is the one place tiad starts TIA.
@@ -224,7 +227,8 @@ namespace Tiad.Openness
             };
             try
             {
-                pid = portal.GetCurrentProcess().Id;
+                int pid = portal.GetCurrentProcess().Id;
+                process = System.Diagnostics.Process.GetProcessById(pid);
                 Log.Line("TIA Portal runs as process {0}", pid);
             }
             catch (Exception e)
@@ -240,17 +244,10 @@ namespace Tiad.Openness
             get
             {
                 if (disposed || detachFailed) return true;
-                if (pid == 0) return false;
-                try
+                if (process == null) return false;
+                lock (processMu)
                 {
-                    using (var p = System.Diagnostics.Process.GetProcessById(pid))
-                    {
-                        return p.HasExited;
-                    }
-                }
-                catch (ArgumentException)
-                {
-                    return true; // no process with that id
+                    return process.HasExited;
                 }
             }
         }
