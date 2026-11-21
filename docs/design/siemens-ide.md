@@ -430,12 +430,14 @@ The rules for applying a spec:
     (the default, left out) or `keep`.
   - A download raises TIA's `UserManagementDownload` (keep the CPU's
     users, update them but keep its passwords, or load the project's).
-    tiad answers it only with keep (`user-management`,
-    `userManagementKeepOnline`), and only for a session whose specs have
-    only ever kept access control: under `fullAccessUser`, or `keep`
-    after `fullAccessUser` on the same session, it is refused. Loading
-    the users tiad set (a new station's first live download) still waits
-    for a proven answer. The rule is per session: a project an earlier
+    tiad answers it with keep (`user-management`,
+    `userManagementKeepOnline`) only for a session whose specs have only
+    ever kept access control: under `fullAccessUser`, or `keep` after
+    `fullAccessUser` on the same session, it is refused. On a hardware
+    load, where TIA refuses keep, it may answer reset to the project's
+    (`userManagementResetToProject`), only when the CPU's access control
+    is off and stays off (§3.5). Loading the users tiad set (a new
+    station's first live download) still waits for a proven answer. The rule is per session: a project an earlier
     session set to `fullAccessUser`, saved, then reopened and kept, counts
     as found like any adopted project (it still holds tiad's Full access
     user). Its first hardware download with `userManagementKeepOnline`
@@ -590,18 +592,22 @@ Request:
   "dryRun": false,
   "decisions": { "stopCpu": true, "reinitialize": ["Tags"], "overwrite": true,
                  "consistentDownload": true, "alarmTexts": true, "allBlocks": true,
-                 "userManagementKeepOnline": true, "identificationDataLoadNothing": true,
+                 "userManagementKeepOnline": true, "userManagementResetToProject": false,
+                 "identificationDataLoadNothing": true,
                  "startAfter": true, "trustCertificate": "<sha256 fingerprint>",
                  "keptDevices": ["<device name>"], "acceptUnverifiedHardware": true },
   "announced": true,
-  "attestation": { "by": "<who>", "text": "<the CPU's hardware configuration is what I intend to load>" },
+  "attestation": { "by": "<who>", "text": "<the CPU's hardware configuration is what I intend to load>",
+                   "cpuAccessControl": "disabled" },
   "secrets": { "protection": "<password>", "configurationPassword": "<password>" }
 }
 ```
 
 Response: `{dryRun, downloaded, questions: [{id, message, detail, objects}], state, stateSource, keptDevices}`,
 and on a download that loaded hardware `hardwareVerified: false`, a
-`warning` and the `attestation` as journalled (`{by, at, text}`).
+`warning` and the `attestation` as journalled (`{by, at, text,
+cpuAccessControl}`); on a download that reset the CPU's user management,
+`userManagementReset`, the route that let it (`upload` or `attestation`).
 
 **What a download verifies, and what it does not.** A download verifies
 the PLC software: it succeeds only when an online compare right after it
@@ -618,7 +624,11 @@ both:
 - `attestation`: the operator's statement that the CPU's hardware
   configuration is what they intend to load, `by` who (at most 200
   bytes) and `text` (at most 2000 bytes), neither blank. One over a
-  limit is a `bad_request`, journalled by its size only.
+  limit is a `bad_request`, journalled by its size only. It may also
+  say the CPU's access control as it is now, `cpuAccessControl`:
+  `disabled` or `enabled` (any other word is a `bad_request`, journalled
+  as `invalid`); a user-management reset can rest on `disabled`
+  (`user-management`, below).
 
 This holds on every CPU, the bench included: tiad cannot tell a bench
 CPU from a customer's, so it never tries. Without the opt-in the
@@ -628,7 +638,8 @@ is `declined` (download the software only). `by` is the caller's claim,
 since tiad knows only a bearer token: a naut client fills it from the
 principal it authenticated. `at` is tiad's own UTC clock when it
 accepted the download, never the request's. The audit line journals
-the attestation (`attestation={by=... at=... text=...}`, quoted) on every
+the attestation (`attestation={by=... at=... text=... cpuAccessControl=...}`,
+`by` and `text` quoted) on every
 outcome, refusals and `outcome_unknown` included; a successful download
 echoes it for the caller's deploy record (§7). A client shows
 `hardwareVerified: false` as a warning, never as a silent success. A
@@ -811,8 +822,8 @@ behaviour. So, until then:
   question IDs asked (never TIA's text), the acting answers given, the
   decisions (request-supplied names quoted), whether a protection password and a configuration
   password were set (never their values), the hardware attestation
-  (quoted, `at=unset` until accepted) and the outcome, refusals
-  included.
+  (quoted, `at=unset` until accepted), what came of a user-management
+  reset (`userManagementReset`) and the outcome, refusals included.
 
 - **A dry run** (provisional, see above) cancels at TIA's first
   pre-download check and returns that one as `questions`, with
@@ -841,15 +852,45 @@ behaviour. So, until then:
     data in target"): the bench's hardware loads asked it second, right
     after `stop-cpu` (#789 stage 4), so a hardware download should answer
     `overwrite: true` up front. Acting.
-  - `user-management` (`UserManagementDownload`): answered only by
-    `userManagementKeepOnline: true`, which keeps the CPU's online users
-    as they are, and only when the spec's `cpu.accessControl` is `keep`
-    and no apply on the session ever asked for `fullAccessUser`;
-    otherwise it stays unanswered, naming why. Passive. On a hardware
-    load the bench's TIA refused `KeepOnlineUserManagementData` (#789
-    stage 4), so a hardware load cannot answer it yet; its answer there
-    is a follow-up.
-    Updating or resetting the CPU's users is never tiad's choice.
+  - `user-management` (`UserManagementDownload`): answered by one of two
+    decisions, never both (both yes is a `bad_request`; with no yes, a no
+    declines):
+    - `userManagementKeepOnline: true` keeps the CPU's online users as
+      they are (`KeepOnlineUserManagementData`), only when the spec's
+      `cpu.accessControl` is `keep` and no apply on the session ever
+      asked for `fullAccessUser`; otherwise it stays unanswered, naming
+      why. Passive. On a hardware load the bench's TIA refused it (#789
+      stage 4: "The configuration provided is invalid").
+    - `userManagementResetToProject: true` resets the CPU's user
+      management to the project's
+      (`DownloadAllUserManagementDataResetToProject`, which TIA
+      preselects on a hardware load and words "Delete user management
+      data and disable access control in runtime"). Acting: it deletes
+      the CPU's users and sets its access control as the project has it.
+      tiad gives it only when all of these hold, checked before anything
+      reaches the CPU (refused: `decision_required` for `user-management`,
+      naming why, "nothing was sent to the CPU", the attestation
+      unstamped), and the same verdict answers TIA's check:
+      - the download loads hardware (a software-only one is refused);
+      - the spec's `cpu.accessControl` is `keep` and no apply on the
+        session ever asked for `fullAccessUser`;
+      - the project's access control, read by tiad from the session's
+        project, is exactly `Disabled` (anything else, absent included,
+        is refused), so the reset leaves access control off;
+      - the CPU's access control is shown off too, by one of two routes:
+        this session uploaded from that very address (the project's
+        setting is then the CPU's, and a later `keep` apply keeps it), or
+        `attestation.cpuAccessControl: "disabled"`, the operator's
+        statement, with `by` and `text`.
+      An attestation that says `"enabled"` refuses, whatever else holds:
+      tiad never resets a CPU whose access control is on. A reset given,
+      then a cancel at a later check, is `outcome_unknown` naming
+      `user-management`. The audit line says what came of it
+      (`userManagementReset=unset|refused|allowed:<route>|given:<route>`),
+      and a successful download returns the route
+      (`userManagementReset`) for the deploy record.
+    Updating the CPU's users (`UpdateUserManagementDataButKeepOnlinePassword`)
+    is never tiad's choice.
   - `identification-data` (`LoadIdentificationData`): answered only by
     `identificationDataLoadNothing: true`. Passive.
   Every other download configuration V21 defines (memory card,
