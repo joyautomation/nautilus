@@ -1211,11 +1211,14 @@ needs the config permission and, for a browser sign-in, a fresh password
 the principal, with the commit, branch and files. The journal being down
 refuses it, like an apply.
 
-A commit is refused, with the fix in the answer (`409`), when the
+A commit saves what runs, so only the candidate whose apply is in force can
+be committed: after a later apply, or an automatic revert, the earlier id is
+refused (`409`). A commit is also refused, with the fix in the answer, when the
 controller is a standby; the files it would write are not ones this
 project's manifest names (never program sources, hidden paths or `.git`);
 the applied manifest names files the project's does not (use
-`naut pull --io --new`); a file was edited since the controller booted, or
+`naut pull --io --new`); a file was edited since the controller booted (git is asked what it held
+at start, and what the controller last committed counts as booted), or
 has uncommitted changes in the worktree; or HEAD is detached. Nothing else
 in the worktree, staged or not, goes into the commit; if git refuses it (a
 hook), the files are put back as they were.

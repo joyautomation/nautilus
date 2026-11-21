@@ -261,6 +261,10 @@ type ioStaging struct {
 	mu   sync.Mutex
 	next int
 	all  map[string]*stagedIO
+	// last is the candidate whose apply is what runs: a commit saves what
+	// runs, so only it may be committed. A later apply replaces it, a revert
+	// clears it.
+	last string
 }
 
 func (s *Server) ioConfigState() *IOConfigState {
@@ -581,6 +585,7 @@ func (s *Server) handleIOApply(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case err == nil:
 		st.State, st.Result, st.Error = "applied", body, ""
+		s.staging.last = st.ID
 	case errors.Is(err, ErrIOConflict):
 		// Busy or stale: nothing ran; it can be validated again.
 		st.State, st.Error = "invalid", err.Error()
@@ -606,6 +611,10 @@ func (s *Server) handleIOApply(w http.ResponseWriter, r *http.Request) {
 // made it, so it is the system's, never the applier's name; the apply it
 // undid and its principal are in the detail.
 func (s *Server) recordIORevert(w IOWatch) {
+	// What runs is no longer any candidate's apply.
+	s.staging.mu.Lock()
+	s.staging.last = ""
+	s.staging.mu.Unlock()
 	result := audit.ResultOK
 	if w.State != "reverted" && w.State != "dropped" {
 		result = audit.ResultError
@@ -699,6 +708,7 @@ func (s *Server) handleConfigCommit(w http.ResponseWriter, r *http.Request) {
 	}
 	s.staging.mu.Lock()
 	st := s.staging.all[req.ID]
+	last := s.staging.last
 	state := ""
 	if st != nil {
 		state = st.State
@@ -710,6 +720,9 @@ func (s *Server) handleConfigCommit(w http.ResponseWriter, r *http.Request) {
 		return
 	case state != "applied":
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "candidate " + req.ID + " is " + state + "; only an applied candidate is committed (stage, validate and apply it first)"})
+		return
+	case last != req.ID:
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "candidate " + req.ID + " is no longer what runs (a later apply or a revert replaced it): a commit saves what runs, so commit the candidate whose apply is in force"})
 		return
 	}
 	res, err := s.io.Commit(IOCommit{By: s.requester(r), ID: req.ID, Message: req.Message})

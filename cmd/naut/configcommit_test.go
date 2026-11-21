@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/joyautomation/nautilus/server"
 )
@@ -39,7 +40,13 @@ func gitProject(t *testing.T, body string) string {
 	return dir
 }
 
-func committer(dir string) *gitCommitter { return &gitCommitter{dir: dir, host: "plant-1"} }
+// committer is as wireConfigCommit makes one: HEAD now is "boot".
+func committer(t *testing.T, dir string) *gitCommitter {
+	t.Helper()
+	g := &gitCommitter{dir: dir, host: "plant-1", wrote: map[string]string{}}
+	g.boot = gitIn(t, dir, "rev-parse", "HEAD")
+	return g
+}
 
 func TestConfigCommitCommitsOnlyTheChangedFiles(t *testing.T) {
 	dir := gitProject(t, "a: 1\nb: 2\n")
@@ -48,7 +55,7 @@ func TestConfigCommitCommitsOnlyTheChangedFiles(t *testing.T) {
 	gitIn(t, dir, "add", "other.st")
 	os.WriteFile(filepath.Join(dir, "scratch.txt"), []byte("s\n"), 0o644)
 
-	res, err := committer(dir).commit(ioState("a: 1\nb: 2\n", "a: 1\nb: 3\n"), server.IOCommit{By: "user:akhan", ID: "7"})
+	res, err := committer(t, dir).commit(ioState("a: 1\nb: 2\n", "a: 1\nb: 3\n"), server.IOCommit{By: "user:akhan", ID: "7"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +82,7 @@ func TestConfigCommitCommitsOnlyTheChangedFiles(t *testing.T) {
 
 func TestConfigCommitMessage(t *testing.T) {
 	dir := gitProject(t, "a: 1\n")
-	if _, err := committer(dir).commit(ioState("a: 1\n", "a: 2\n"), server.IOCommit{By: "token", ID: "1", Message: "raise setpoint"}); err != nil {
+	if _, err := committer(t, dir).commit(ioState("a: 1\n", "a: 2\n"), server.IOCommit{By: "token", ID: "1", Message: "raise setpoint"}); err != nil {
 		t.Fatal(err)
 	}
 	if s := gitIn(t, dir, "show", "-s", "--format=%s", "HEAD"); s != "raise setpoint" {
@@ -94,10 +101,16 @@ func TestConfigCommitRefusals(t *testing.T) {
 		{"edited since boot", func(t *testing.T, dir string) {
 			os.WriteFile(filepath.Join(dir, "modbus.yaml"), []byte("a: 1\nb: mine\n"), 0o644)
 			gitIn(t, dir, "commit", "-qam", "mine")
-		}, ioState("a: 1\nb: 2\n", "a: 1\nb: 3\n"), "overwrite your edits", "a: 1\nb: mine\n"},
+			// Booted is what the controller reports: in a checkout it is the hash
+			// of the file as it is now, so only git can say it was edited.
+		}, ioState("a: 1\nb: mine\n", "a: 1\nb: 3\n"), "overwrite your edits", "a: 1\nb: mine\n"},
 		{"uncommitted work in the file", func(t *testing.T, dir string) {
-			os.WriteFile(filepath.Join(dir, "modbus.yaml"), []byte("a: 1\nb: 2\n# wip\n"), 0o644)
-		}, func() server.IOFiles { s := ioState("a: 1\nb: 2\n# wip\n", "a: 1\nb: 3\n"); return s }(), "uncommitted changes", "a: 1\nb: 2\n# wip\n"},
+			// Someone committed a change and put the old text back: the file
+			// is as booted, and uncommitted against HEAD.
+			os.WriteFile(filepath.Join(dir, "modbus.yaml"), []byte("a: 1\nb: 9\n"), 0o644)
+			gitIn(t, dir, "commit", "-qam", "other")
+			os.WriteFile(filepath.Join(dir, "modbus.yaml"), []byte("a: 1\nb: 2\n"), 0o644)
+		}, ioState("a: 1\nb: 2\n", "a: 1\nb: 3\n"), "uncommitted changes", "a: 1\nb: 2\n"},
 		{"detached HEAD", func(t *testing.T, dir string) { gitIn(t, dir, "checkout", "-q", "--detach") },
 			ioState("a: 1\nb: 2\n", "a: 1\nb: 3\n"), "detached HEAD", "a: 1\nb: 2\n"},
 		{"standby", nil, func() server.IOFiles { s := ioState("a: 1\nb: 2\n", "a: 1\nb: 3\n"); s.Leading = false; return s }(), "standby", "a: 1\nb: 2\n"},
@@ -120,11 +133,12 @@ func TestConfigCommitRefusals(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			dir := gitProject(t, "a: 1\nb: 2\n")
+			g := committer(t, dir) // boot is before anything the case does
 			if c.setup != nil {
 				c.setup(t, dir)
 			}
 			head := gitIn(t, dir, "rev-parse", "HEAD")
-			_, err := committer(dir).commit(c.st, server.IOCommit{By: "user:a", ID: "1"})
+			_, err := g.commit(c.st, server.IOCommit{By: "user:a", ID: "1"})
 			if !errors.Is(err, server.ErrIOCommitRefused) || !strings.Contains(err.Error(), c.want) {
 				t.Fatalf("err = %v, want a refusal containing %q", err, c.want)
 			}
@@ -145,7 +159,7 @@ func TestConfigCommitFailureRestoresTheFiles(t *testing.T) {
 	hook := filepath.Join(dir, ".git", "hooks", "pre-commit")
 	os.WriteFile(hook, []byte("#!/bin/sh\necho no >&2\nexit 1\n"), 0o755)
 	head := gitIn(t, dir, "rev-parse", "HEAD")
-	_, err := committer(dir).commit(ioState("a: 1\nb: 2\n", "a: 1\nb: 3\n"), server.IOCommit{By: "user:a", ID: "1"})
+	_, err := committer(t, dir).commit(ioState("a: 1\nb: 2\n", "a: 1\nb: 3\n"), server.IOCommit{By: "user:a", ID: "1"})
 	if err == nil || errors.Is(err, server.ErrIOCommitRefused) || !strings.Contains(err.Error(), "back as they were") {
 		t.Fatalf("err = %v", err)
 	}
@@ -227,5 +241,87 @@ func TestWireConfigCommitOnlyInAWorktree(t *testing.T) {
 	wireConfigCommit(h, os.DirFS(dir), dir)
 	if h.Commit == nil {
 		t.Fatal("a git worktree must have a commit")
+	}
+}
+
+// A second commit after the first goes through: what this controller wrote
+// counts as booted, and a file edited and committed by someone else does not.
+func TestConfigCommitRemembersWhatItWrote(t *testing.T) {
+	dir := gitProject(t, "a: 1\n")
+	g := committer(t, dir)
+	if _, err := g.commit(ioState("a: 1\n", "a: 2\n"), server.IOCommit{By: "token", ID: "1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.commit(ioState("a: 2\n", "a: 3\n"), server.IOCommit{By: "token", ID: "2"}); err != nil {
+		t.Fatalf("second commit over our own: %v", err)
+	}
+	os.WriteFile(filepath.Join(dir, "modbus.yaml"), []byte("a: hand\n"), 0o644)
+	gitIn(t, dir, "commit", "-qam", "by hand")
+	if _, err := g.commit(ioState("a: hand\n", "a: 4\n"), server.IOCommit{By: "token", ID: "3"}); err == nil || !strings.Contains(err.Error(), "overwrite your edits") {
+		t.Fatalf("over a hand edit: %v", err)
+	}
+}
+
+// Paths are literal: a name with glob characters does not widen the commit.
+func TestConfigCommitPathsAreLiteral(t *testing.T) {
+	dir := gitProject(t, "a: 1\n")
+	os.WriteFile(filepath.Join(dir, "nautilus.yaml"), []byte("name: p\ndrivers:\n  - {type: modbus, manifest: 'm[1].yaml'}\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "m[1].yaml"), []byte("x: 1\n"), 0o644)
+	os.WriteFile(filepath.Join(dir, "m1.yaml"), []byte("y: 1\n"), 0o644)
+	gitIn(t, dir, "add", ".")
+	gitIn(t, dir, "commit", "-qm", "more")
+	os.WriteFile(filepath.Join(dir, "m1.yaml"), []byte("y: wip\n"), 0o644) // dirty, and matched by the glob
+	st := server.IOFiles{Leading: true, Units: []server.IODiffer{{Driver: "m"}}, Files: []server.IOFile{{Path: "m[1].yaml", Running: "x: 2\n"}}}
+	if _, err := committer(t, dir).commit(st, server.IOCommit{By: "token", ID: "1"}); err != nil {
+		t.Fatal(err)
+	}
+	if files := gitIn(t, dir, "show", "--name-only", "--format=", "HEAD"); files != "m[1].yaml" {
+		t.Fatalf("commit holds %q", files)
+	}
+}
+
+// A git that never answers is cut off, the files put back, the lock freed.
+func TestConfigCommitGitTimeout(t *testing.T) {
+	dir := gitProject(t, "a: 1\nb: 2\n")
+	os.WriteFile(filepath.Join(dir, ".git", "hooks", "pre-commit"), []byte("#!/bin/sh\nexec sleep 30\n"), 0o755)
+	old := gitTimeout
+	gitTimeout = 500 * time.Millisecond
+	defer func() { gitTimeout = old }()
+	g := committer(t, dir)
+	start := time.Now()
+	_, err := g.commit(ioState("a: 1\nb: 2\n", "a: 1\nb: 3\n"), server.IOCommit{By: "token", ID: "1"})
+	if err == nil || time.Since(start) > 10*time.Second {
+		t.Fatalf("err %v after %v", err, time.Since(start))
+	}
+	if got := readFile(t, dir, "modbus.yaml"); got != "a: 1\nb: 2\n" {
+		t.Fatalf("modbus.yaml = %q", got)
+	}
+	if st := gitIn(t, dir, "status", "--porcelain"); st != "" {
+		t.Fatalf("index or worktree left changed: %q", st)
+	}
+}
+
+// A patch applies whatever the end of the file looks like.
+func TestConfigPatchEndOfFile(t *testing.T) {
+	for _, c := range []struct{ name, was, now string }{
+		{"base has no final newline", "a: 1\nb: 2", "a: 1\nb: 3\n"},
+		{"running has none", "a: 1\nb: 2\n", "a: 1\nb: 3"},
+		{"neither", "a: 1\nb: 2", "a: 1\nb: 3"},
+		{"only the final newline differs", "a: 1\nb: 2", "a: 1\nb: 2\n"},
+		{"newline removed", "a: 1\nb: 2\n", "a: 1\nb: 2"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			dir := gitProject(t, c.was)
+			p, err := ioPatch(os.DirFS(dir), ioState(c.was, c.now))
+			if err != nil {
+				t.Fatal(err)
+			}
+			pf := filepath.Join(t.TempDir(), "x.patch")
+			os.WriteFile(pf, []byte(p), 0o644)
+			gitIn(t, dir, "apply", pf)
+			if got := readFile(t, dir, "modbus.yaml"); got != c.now {
+				t.Fatalf("after apply %q, want %q", got, c.now)
+			}
+		})
 	}
 }

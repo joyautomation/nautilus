@@ -13,6 +13,7 @@ package main
 // worktree.
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -22,8 +23,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/joyautomation/nautilus/server"
 )
@@ -34,7 +37,14 @@ const commitTrailer = "Nautilus-Staged"
 type gitCommitter struct {
 	dir  string
 	host string
-	mu   sync.Mutex
+	// boot is HEAD when the controller started; wrote is the content hash of
+	// each file this controller last committed. A file is "as booted" when
+	// it holds what boot had or what this controller last wrote: anything
+	// else was edited since (the files' own Booted hash cannot say, a
+	// checkout's boot FS being the live directory).
+	boot  string
+	wrote map[string]string
+	mu    sync.Mutex
 }
 
 // inGitWorktree reports whether dir is inside a git worktree.
@@ -57,7 +67,8 @@ func wireConfigCommit(h *server.IOHook, base fs.FS, dir string) {
 		return
 	}
 	host, _ := os.Hostname()
-	g := &gitCommitter{dir: dir, host: host}
+	g := &gitCommitter{dir: dir, host: host, wrote: map[string]string{}}
+	g.boot, _ = g.git(nil, "rev-parse", "HEAD")
 	h.Commit = func(c server.IOCommit) (server.IOCommitted, error) { return g.commit(h.Files(), c) }
 }
 
@@ -101,7 +112,7 @@ type ioChange struct {
 
 // planIOChange is `naut pull --io`'s check, for a commit: which files differ
 // and whether each may be written. Nothing here writes.
-func planIOChange(dir string, st server.IOFiles) ([]ioChange, error) {
+func planIOChange(dir string, st server.IOFiles, asBooted func(f server.IOFile, was []byte) bool) ([]ioChange, error) {
 	if !st.Leading {
 		return nil, refuse("this controller is a standby: its running I/O configuration is not the one in force; commit on the leader")
 	}
@@ -144,11 +155,8 @@ func planIOChange(dir string, st server.IOFiles) ([]ioChange, error) {
 		if exist && string(was) == f.Running {
 			continue
 		}
-		if exist {
-			sum := sha256.Sum256(was)
-			if hex.EncodeToString(sum[:]) != f.Booted {
-				edited = append(edited, f.Path)
-			}
+		if exist && !asBooted(f, was) {
+			edited = append(edited, f.Path)
 		}
 		out = append(out, ioChange{path: f.Path, was: was, exist: exist, run: f.Running})
 	}
@@ -161,10 +169,45 @@ func planIOChange(dir string, st server.IOFiles) ([]ioChange, error) {
 	return out, nil
 }
 
+// gitTimeout bounds one git run: a hook or a signing prompt that never
+// answers must not hold the commit lock, with files written, forever.
+var gitTimeout = 30 * time.Second
+
+// asBooted reports whether was, the file on disk, is what the controller
+// booted with or last committed itself.
+func (g *gitCommitter) asBooted(f server.IOFile, was []byte) bool {
+	sum := sha256.Sum256(was)
+	h := hex.EncodeToString(sum[:])
+	if g.wrote[f.Path] == h {
+		return true
+	}
+	if g.boot == "" {
+		return false
+	}
+	// "./" is relative to dir, which may be inside a bigger repository.
+	b, err := exec.Command("git", "-C", g.dir, "show", g.boot+":./"+f.Path).Output()
+	if err != nil {
+		return false
+	}
+	bs := sha256.Sum256(b)
+	return hex.EncodeToString(bs[:]) == h
+}
+
 func (g *gitCommitter) git(env []string, args ...string) (string, error) {
-	cmd := exec.Command("git", append([]string{"-C", g.dir}, args...)...)
-	cmd.Env = append(os.Environ(), env...)
+	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", g.dir}, args...)...)
+	cmd.WaitDelay = 2 * time.Second
+	// Paths are literal names, never globs or pathspec magic; the repo is
+	// the one at dir, whatever the controller's environment says; nothing
+	// may wait for a person at a terminal.
+	cmd.Env = append(slices.DeleteFunc(os.Environ(), func(e string) bool {
+		return strings.HasPrefix(e, "GIT_DIR=") || strings.HasPrefix(e, "GIT_INDEX_FILE=") || strings.HasPrefix(e, "GIT_WORK_TREE=")
+	}), append([]string{"GIT_LITERAL_PATHSPECS=1", "GIT_TERMINAL_PROMPT=0"}, env...)...)
 	out, err := cmd.CombinedOutput()
+	if err != nil && ctx.Err() != nil {
+		err = fmt.Errorf("timed out after %s: %w", gitTimeout, context.DeadlineExceeded)
+	}
 	return strings.TrimSpace(string(out)), err
 }
 
@@ -173,7 +216,7 @@ func (g *gitCommitter) git(env []string, args ...string) (string, error) {
 func (g *gitCommitter) commit(st server.IOFiles, c server.IOCommit) (server.IOCommitted, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	changes, err := planIOChange(g.dir, st)
+	changes, err := planIOChange(g.dir, st, g.asBooted)
 	if err != nil {
 		return server.IOCommitted{}, err
 	}
@@ -218,6 +261,16 @@ func (g *gitCommitter) commit(st server.IOFiles, c server.IOCommit) (server.IOCo
 	}
 	undo := func(why error, out string) (server.IOCommitted, error) {
 		restore(len(changes))
+		if errors.Is(why, context.DeadlineExceeded) {
+			// The killed git left its index lock behind, and nothing else
+			// of ours is running (the commit lock is held).
+			if lock, err := g.git(nil, "rev-parse", "--git-path", "index.lock"); err == nil {
+				if !filepath.IsAbs(lock) {
+					lock = filepath.Join(g.dir, lock)
+				}
+				_ = os.Remove(lock)
+			}
+		}
 		_, _ = g.git(nil, append([]string{"reset", "-q", "--"}, paths...)...)
 		return server.IOCommitted{}, fmt.Errorf("git %v: %s (the files are back as they were)", why, out)
 	}
@@ -228,7 +281,7 @@ func (g *gitCommitter) commit(st server.IOFiles, c server.IOCommit) (server.IOCo
 	if msg == "" {
 		msg = "config: live I/O change (" + driverNames(st) + ")"
 	}
-	body := fmt.Sprintf("%s\n\nApplied live by %s over the controller's API and saved from it.\n\n%s: %s\n", msg, c.By, commitTrailer, c.ID)
+	body := fmt.Sprintf("%s\n\nSaved by %s from the controller's live I/O configuration.\n\n%s: %s\n", msg, c.By, commitTrailer, c.ID)
 	an, ae := ident(c.By, g.host)
 	env := []string{
 		"GIT_AUTHOR_NAME=" + an, "GIT_AUTHOR_EMAIL=" + ae,
@@ -242,7 +295,15 @@ func (g *gitCommitter) commit(st server.IOFiles, c server.IOCommit) (server.IOCo
 	if err != nil {
 		return server.IOCommitted{}, errors.New("committed, but could not read the commit: " + sha)
 	}
+	for _, ch := range changes {
+		g.wrote[ch.path] = hashHex(ch.run)
+	}
 	return server.IOCommitted{Commit: sha, Branch: branch, Files: paths}, nil
+}
+
+func hashHex(s string) string {
+	b := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(b[:])
 }
 
 func ident2(host string) string {

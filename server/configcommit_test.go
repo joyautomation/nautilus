@@ -126,3 +126,25 @@ func TestConfigPatchRoute(t *testing.T) {
 		t.Fatalf("no engine support: %d", rec.Code)
 	}
 }
+
+// A commit saves what runs: only the candidate whose apply is in force. A
+// later apply replaces it; a revert leaves none.
+func TestConfigCommitOnlyWhatRuns(t *testing.T) {
+	f := &fakeIO{valid: true, drivers: []string{"modbus"}, commit: okCommit}
+	srv := commitServer(t, f)
+	first := stageValidateApply(t, srv)
+	second := stageValidateApply(t, srv)
+	rec := call(t, srv, "POST", "/api/config/commit", `{"id":"`+first+`"}`)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "no longer what runs") || len(f.commits) != 0 {
+		t.Fatalf("older apply: %d %s (engine asked %d)", rec.Code, rec.Body, len(f.commits))
+	}
+	if rec := call(t, srv, "POST", "/api/config/commit", `{"id":"`+second+`"}`); rec.Code != http.StatusOK {
+		t.Fatalf("latest apply: %d %s", rec.Code, rec.Body)
+	}
+	// An auto-revert puts the configuration before it back: nothing to commit.
+	f.onRevert(IOWatch{ID: second, State: "reverted", By: "anonymous"})
+	rec = call(t, srv, "POST", "/api/config/commit", `{"id":"`+second+`"}`)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "no longer what runs") || len(f.commits) != 1 {
+		t.Fatalf("after a revert: %d %s (engine asked %d)", rec.Code, rec.Body, len(f.commits))
+	}
+}
