@@ -106,4 +106,64 @@ func TestPGJournal(t *testing.T) {
 	if len(after) != 2 {
 		t.Fatalf("after Prune: %d events, want 2", len(after))
 	}
+
+	// A notify row (#715) keeps its own columns; a state change leaves
+	// them NULL and reads back zero; ExceptKinds drops the kind.
+	note := Event{TS: base.Add(3 * time.Minute).UnixMilli(), ID: "RTU12_INT_YA", Name: "Intrusion", Kind: KindNotify,
+		Priority: Critical, Site: "RTU12", State: "unack-active", By: "system",
+		Level: 2, To: "oidc:carol", Via: "log", Result: NotifySent, Reason: "joined late: x"}
+	if err := j.Append(note); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	notes, err := j.Query(time.Time{}, time.Time{}, Filter{Kinds: []string{KindNotify}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(notes) != 1 || notes[0] != note {
+		t.Fatalf("notify row = %+v, want %+v", notes, note)
+	}
+	rest, err := j.Query(time.Time{}, time.Time{}, Filter{ExceptKinds: []string{KindNotify}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rest) != 2 || rest[0].Level != 0 || rest[0].To != "" {
+		t.Fatalf("ExceptKinds notify = %+v, want the 2 state changes with empty notify fields", rest)
+	}
+}
+
+// A table an older nautilus created (no notify columns) is migrated in
+// place at open, and its rows still read.
+func TestPGJournalMigratesOldTable(t *testing.T) {
+	url := os.Getenv("NAUTILUS_TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("set NAUTILUS_TEST_DATABASE_URL to run this test against a real Postgres")
+	}
+	j, err := NewPostgres(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{
+		`DROP TABLE IF EXISTS alarm_events`,
+		`CREATE TABLE alarm_events (ts timestamptz NOT NULL, id text NOT NULL, name text, kind text NOT NULL,
+		  priority text, site text, state text, "by" text)`,
+		`INSERT INTO alarm_events (ts, id, kind) VALUES (now(), 'OLD', 'active')`,
+	} {
+		if _, err := j.db.Exec(q); err != nil {
+			t.Fatalf("%s: %v", q, err)
+		}
+	}
+	j.Close()
+
+	j, err = NewPostgres(url)
+	if err != nil {
+		t.Fatalf("open over an old table: %v", err)
+	}
+	defer j.Close()
+	got, err := j.Query(time.Time{}, time.Time{}, Filter{})
+	if err != nil || len(got) != 1 || got[0].ID != "OLD" {
+		t.Fatalf("old row after migration = %+v, %v", got, err)
+	}
 }

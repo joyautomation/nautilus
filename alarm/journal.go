@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -20,6 +21,20 @@ const (
 	KindUnshelve   = "unshelve"
 	KindSuppress   = "suppress"
 	KindUnsuppress = "unsuppress"
+
+	// KindNotify is not a state change: it records one notification an
+	// escalation policy sent, or tried to (#715). Engine.Notified writes
+	// it; it never reaches Notifiers or OnEvent. The journal's HTTP view
+	// leaves it out unless a client asks for it by kind, so an HMI that
+	// predates it never sees a row it cannot label.
+	KindNotify = "notify"
+)
+
+// Notify results: Event.Result on a KindNotify row.
+const (
+	NotifySent         = "sent"
+	NotifyFailed       = "failed"
+	NotifyNobodyOnCall = "nobody-on-call"
 )
 
 // Event is one append-only journal row.
@@ -38,6 +53,17 @@ type Event struct {
 	Site     string   `json:"site,omitempty"`
 	State    string   `json:"state,omitempty"` // the state arrived at
 	By       string   `json:"by,omitempty"`    // operator string, unauthenticated
+
+	// The rest are set only on a KindNotify row (#715): the escalation
+	// level (1 is the first), who was notified (a principal: a user name
+	// or oidc:<name>, never an address), the channel kind, the result
+	// (NotifySent, NotifyFailed, NotifyNobodyOnCall) and why, when there
+	// is more to say than the result ("joined late: …").
+	Level  int    `json:"level,omitempty"`
+	To     string `json:"to,omitempty"`
+	Via    string `json:"via,omitempty"`
+	Result string `json:"result,omitempty"`
+	Reason string `json:"reason,omitempty"`
 }
 
 // Time is the event's timestamp as a time.Time.
@@ -51,7 +77,10 @@ type Filter struct {
 	Priorities []string `json:"priorities,omitempty"`
 	IDs        []string `json:"ids,omitempty"`
 	Kinds      []string `json:"kinds,omitempty"`
-	Limit      int      `json:"limit,omitempty"`
+	// ExceptKinds drops these kinds; it is applied after Kinds. The HTTP
+	// journal view sets it to KindNotify when a client names no kind.
+	ExceptKinds []string `json:"exceptKinds,omitempty"`
+	Limit       int      `json:"limit,omitempty"`
 }
 
 // DefaultQueryLimit bounds a journal query that does not ask for a bound,
@@ -68,7 +97,8 @@ func (f Filter) limit() int {
 
 func (f Filter) match(e Event) bool {
 	return inSet(f.Sites, e.Site) && inSet(f.IDs, e.ID) &&
-		inSet(f.Kinds, e.Kind) && inSet(f.Priorities, e.Priority.String())
+		inSet(f.Kinds, e.Kind) && inSet(f.Priorities, e.Priority.String()) &&
+		!slices.Contains(f.ExceptKinds, e.Kind)
 }
 
 func inSet(set []string, v string) bool {

@@ -246,3 +246,27 @@ func TestStateWireTokens(t *testing.T) {
 		t.Error("ParseState should reject an unknown token")
 	}
 }
+
+// A notify row's fields survive the file journal, and ExceptKinds drops a
+// kind after Kinds has chosen.
+func TestNotifyRowRoundTripAndExcept(t *testing.T) {
+	path := t.TempDir() + "/alarms.jsonl"
+	j, err := NewFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	ts := time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC).UnixMilli()
+	row := Event{TS: ts, ID: "TT1", Kind: KindNotify, By: "system", State: "unack-active",
+		Level: 2, To: "oidc:carol", Via: "log", Result: NotifyFailed, Reason: "joined late: x"}
+	j.Append(Event{TS: ts - 1, ID: "TT1", Kind: KindActive})
+	j.Append(row)
+	got, err := j.Query(time.Time{}, time.Time{}, Filter{Kinds: []string{KindNotify}})
+	if err != nil || len(got) != 1 || got[0] != row {
+		t.Fatalf("notify row = %+v, %v; want %+v", got, err, row)
+	}
+	got, _ = j.Query(time.Time{}, time.Time{}, Filter{ExceptKinds: []string{KindNotify}})
+	if len(got) != 1 || got[0].Kind != KindActive {
+		t.Fatalf("ExceptKinds notify = %+v, want the activation only", got)
+	}
+}

@@ -56,6 +56,11 @@ const alarmEventsDDL = `
 CREATE TABLE IF NOT EXISTS alarm_events (
   ts timestamptz NOT NULL, id text NOT NULL, name text, kind text NOT NULL,
   priority text, site text, state text, "by" text);
+ALTER TABLE alarm_events ADD COLUMN IF NOT EXISTS level integer;
+ALTER TABLE alarm_events ADD COLUMN IF NOT EXISTS "to" text;
+ALTER TABLE alarm_events ADD COLUMN IF NOT EXISTS via text;
+ALTER TABLE alarm_events ADD COLUMN IF NOT EXISTS result text;
+ALTER TABLE alarm_events ADD COLUMN IF NOT EXISTS reason text;
 CREATE INDEX IF NOT EXISTS alarm_events_site_ts ON alarm_events (site, ts DESC);
 CREATE INDEX IF NOT EXISTS alarm_events_ts ON alarm_events (ts DESC);`
 
@@ -209,24 +214,33 @@ func (j *PGJournal) writer() {
 // trip per few hundred events rather than one per event.
 func (j *PGJournal) insert(batch []Event) error {
 	var b strings.Builder
-	b.WriteString(`INSERT INTO alarm_events (ts, id, name, kind, priority, site, state, "by") VALUES `)
-	args := make([]any, 0, len(batch)*8)
+	b.WriteString(`INSERT INTO alarm_events (ts, id, name, kind, priority, site, state, "by", level, "to", via, result, reason) VALUES `)
+	const cols = 13
+	args := make([]any, 0, len(batch)*cols)
 	for i, e := range batch {
 		if i > 0 {
 			b.WriteString(",")
 		}
-		n := i * 8
-		fmt.Fprintf(&b, "($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)",
-			n+1, n+2, n+3, n+4, n+5, n+6, n+7, n+8)
+		b.WriteString("(")
+		for c := 1; c <= cols; c++ {
+			if c > 1 {
+				b.WriteString(",")
+			}
+			fmt.Fprintf(&b, "$%d", i*cols+c)
+		}
+		b.WriteString(")")
+		// The notify columns are NULL on a state change, so a query over
+		// state changes reads the table it always did.
 		args = append(args, e.Time().UTC(), e.ID, e.Name, e.Kind,
-			e.Priority.String(), e.Site, e.State, e.By)
+			e.Priority.String(), e.Site, e.State, e.By,
+			nullInt(e.Level), nullStr(e.To), nullStr(e.Via), nullStr(e.Result), nullStr(e.Reason))
 	}
 	_, err := j.db.Exec(b.String(), args...)
 	return err
 }
 
 func (j *PGJournal) Query(from, to time.Time, f Filter) ([]Event, error) {
-	q := `SELECT ts, id, name, kind, priority, site, state, "by" FROM alarm_events WHERE true`
+	q := `SELECT ts, id, name, kind, priority, site, state, "by", level, "to", via, result, reason FROM alarm_events WHERE true`
 	args := []any{}
 	add := func(clause string, v any) {
 		args = append(args, v)
@@ -252,6 +266,9 @@ func (j *PGJournal) Query(from, to time.Time, f Filter) ([]Event, error) {
 	if len(f.Priorities) > 0 {
 		add(" AND priority = ANY($%d)", pq.Array(f.Priorities))
 	}
+	if len(f.ExceptKinds) > 0 {
+		add(" AND kind <> ALL($%d)", pq.Array(f.ExceptKinds))
+	}
 	add(" ORDER BY ts DESC LIMIT $%d", f.limit())
 
 	rows, err := j.db.Query(q, args...)
@@ -266,13 +283,17 @@ func (j *PGJournal) Query(from, to time.Time, f Filter) ([]Event, error) {
 			ts                                  time.Time
 			id, kind                            string
 			name, priority, site, state, byUser sql.NullString
+			level                               sql.NullInt64
+			to, via, result, reason             sql.NullString
 		)
-		if err := rows.Scan(&ts, &id, &name, &kind, &priority, &site, &state, &byUser); err != nil {
+		if err := rows.Scan(&ts, &id, &name, &kind, &priority, &site, &state, &byUser,
+			&level, &to, &via, &result, &reason); err != nil {
 			return nil, err
 		}
 		e := Event{
 			TS: ts.UnixMilli(), ID: id, Kind: kind,
 			Name: name.String, Site: site.String, State: state.String, By: byUser.String,
+			Level: int(level.Int64), To: to.String, Via: via.String, Result: result.String, Reason: reason.String,
 		}
 		if p, err := ParsePriority(priority.String); err == nil {
 			e.Priority = p
@@ -324,4 +345,19 @@ func (n *nullTime) Scan(v any) error {
 		*n.t = t
 	}
 	return nil
+}
+
+// nullStr and nullInt store a notify column's zero value as NULL.
+func nullStr(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+func nullInt(n int) any {
+	if n == 0 {
+		return nil
+	}
+	return n
 }

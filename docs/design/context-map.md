@@ -49,7 +49,7 @@ into another's.
 | **Field drivers** | `modbus/…` `eip/…` (`cip`, `logix`, `codegen`) `optommp/…` `plcnext/…` `profinet/…` `sparkplug/host/…` `replay` (and the pending `opcua` client) | each protocol's own: register, coil, holding; CIP path, symbol, UDT; AR, IOCR, IOPS, station name; metric, NBIRTH. | nothing above the seam | **Anti-corruption layer.** The protocol's names stop at the package. What crosses is `io.Driver` upward and `internal/tagfile.Tag` into the tag file. |
 | **IT drivers** | `hw` `snmp/…` `redfish/…` `prom/…` | source, scan class, the shared UDT set (SwitchPort, PSU, …), counter→rate. `hw` is to these what `runtime` is to the languages. | nothing above the seam | Same ACL rule as field drivers; `hw` owns the shared UDTs so a port is one struct whether it came from IF-MIB or REST |
 | **Sparkplug edge** | `sparkplug` `sparkplug/spb` | node, device, metric, birth, rebirth, NCMD, RBE. | Sparkplug host (payload codec) | The one adapter that imports `runtime` directly: it publishes a runtime's store, so it is downstream of Runtime, not a driver |
-| **Alarms** | `alarm` | ISA-18.2: definition, rule, active, unacked, shelved, journal, notifier. | Operator surface | Imports only `lang/ir` and `retain`; the manifest hands it a tag store. It does not import `runtime`, and that is the point |
+| **Alarms** | `alarm` `alarm/escalate` | ISA-18.2: definition, rule, active, unacked, shelved, journal, notifier; escalation policy, level, step, roster, on call, channel (#715). | Operator surface | Imports only `lang/ir` and `retain`; the manifest hands it a tag store. It does not import `runtime`, and that is the point. `alarm/escalate` reads the engine's records and is gated by the write gate the manifest hands it |
 | **Operator surface** | `server` `oplog` `hist`, `audit` and `auth` ([identity-audit.md](identity-audit.md)) | tag API, snapshot, SSE stream, write, program history, operator intent, sink; principal, role, area, permission, elevation, session, audit entry, chain. | HMI 2D, HMI 3D, external clients | Serves Runtime and Alarms; knows no protocol |
 | **Manifest** | `internal/project` `internal/dialect` `cmd/naut` | `nautilus.yaml` nouns: tags, tasks, drivers, alarms, scene, dialect. | nothing; it is the composition root | Every context's manifest form lives here (`project.TagConfig` ↔ `runtime.TagDef`). It is the only package allowed to import everything |
 | **Verification** | `acceptance` `lang/conformance` `internal/vcs` | suite, case, expect, virtual time, corpus. | CLI, Authoring | Composes whatever it tests; held to no import rule |
@@ -112,7 +112,11 @@ break one changes this section first and says why.
   (its READ/WRITE channels' sends run on a fenced context, redundancy design §3.4; fence
   imports only `io`).
   It never knows a driver, the server, alarms or the manifest.
-- Alarms import only `lang/ir` and `retain`.
+- Alarms import only `lang/ir`, `retain` and each other. `alarm/escalate`
+  (escalation policies, on-call rosters and the dispatcher, #715) imports
+  only `alarm`: it learns who leads only through the gate function the
+  manifest hands it (the same lease check as the write gate), never from
+  `leader` or `runtime`.
 - Field and IT drivers and `sparkplug/host` never import `runtime`,
   `server`, `alarm`, `acceptance`, `internal/project`, `internal/lsp` or
   the CLI.

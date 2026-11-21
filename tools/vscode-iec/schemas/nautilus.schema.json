@@ -1724,6 +1724,16 @@
           },
           "description": "Where events go besides the journal. Notifiers run off the scan goroutine on a bounded queue: a slow endpoint drops events with a counter rather than stalling the scan."
         },
+        "oncall": {
+          "$ref": "#/definitions/alarm-oncall"
+        },
+        "escalation": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/alarm-escalation"
+          },
+          "description": "Escalation policies: page people about alarms nobody has acknowledged, level by level. The first policy (in order) whose match covers an alarm, and whose `when:` window covers the moment it began waiting, runs it. Only `naut run` pages; tests never do."
+        },
         "rules": {
           "type": "array",
           "items": {
@@ -1834,6 +1844,251 @@
               "const": "file"
             }
           }
+        }
+      }
+    },
+    "alarm-oncall": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Who is on call. Rosters name people (a user name, or oidc:<name>), never addresses.",
+      "properties": {
+        "timezone": {
+          "type": "string",
+          "description": "IANA time zone rosters and `when:` windows are read in, e.g. America/Chicago. Default UTC."
+        },
+        "rosters": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/alarm-roster"
+          },
+          "description": "On-call rosters; a level names one as roster:<id>."
+        }
+      }
+    },
+    "alarm-roster": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id"
+      ],
+      "description": "One roster. Either `members` (everyone always, or one at a time with `rotate`), or `shifts`.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Named by a level as roster:<id>."
+        },
+        "members": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "People: a user name (alice) or oidc:<name>. Without rotate, all are on call all the time."
+        },
+        "rotate": {
+          "enum": [
+            "daily",
+            "weekly"
+          ],
+          "description": "One member at a time, in order, changing at each handover."
+        },
+        "start": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+          "description": "YYYY-MM-DD: the first member's first turn. A weekly rotation hands over on this date's weekday."
+        },
+        "handover": {
+          "$ref": "#/definitions/alarm-clock",
+          "description": "HH:MM a turn changes. Default 00:00."
+        },
+        "shifts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/alarm-shift"
+          },
+          "description": "Shifts by time of day: whoever's shift covers the moment is on call."
+        }
+      }
+    },
+    "alarm-shift": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "from",
+        "to",
+        "members"
+      ],
+      "description": "One shift: a window and who works it. A shift past midnight belongs to the day it starts on.",
+      "properties": {
+        "days": {
+          "$ref": "#/definitions/alarm-days"
+        },
+        "from": {
+          "$ref": "#/definitions/alarm-clock"
+        },
+        "to": {
+          "$ref": "#/definitions/alarm-clock"
+        },
+        "members": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        }
+      }
+    },
+    "alarm-window": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "from",
+        "to"
+      ],
+      "description": "A time-of-day window. to not after from runs past midnight; from == to is 24 hours from from.",
+      "properties": {
+        "days": {
+          "$ref": "#/definitions/alarm-days"
+        },
+        "from": {
+          "$ref": "#/definitions/alarm-clock"
+        },
+        "to": {
+          "$ref": "#/definitions/alarm-clock"
+        }
+      }
+    },
+    "alarm-days": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^([Mm][Oo][Nn]|[Tt][Uu][Ee]|[Ww][Ee][Dd]|[Tt][Hh][Uu]|[Ff][Rr][Ii]|[Ss][Aa][Tt]|[Ss][Uu][Nn])(-([Mm][Oo][Nn]|[Tt][Uu][Ee]|[Ww][Ee][Dd]|[Tt][Hh][Uu]|[Ff][Rr][Ii]|[Ss][Aa][Tt]|[Ss][Uu][Nn]))?$"
+      },
+      "description": "Days of the week: mon … sun, or a range like mon-fri. Empty is every day."
+    },
+    "alarm-clock": {
+      "type": "string",
+      "pattern": "^([01]?[0-9]|2[0-3]):[0-5][0-9]$",
+      "description": "A time of day, HH:MM, 24-hour."
+    },
+    "alarm-escalation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "levels"
+      ],
+      "description": "One escalation policy.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "match": {
+          "$ref": "#/definitions/alarm-escalation-match"
+        },
+        "when": {
+          "$ref": "#/definitions/alarm-window",
+          "description": "Only for alarms that began waiting inside this window (in alarms.oncall.timezone). The policy then runs to the end."
+        },
+        "levels": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/definitions/alarm-level"
+          },
+          "description": "In order of `after`. No fixed cap."
+        },
+        "repeat": {
+          "$ref": "#/definitions/alarm-repeat"
+        },
+        "stop": {
+          "enum": [
+            "ack",
+            "ack-or-rtn"
+          ],
+          "description": "ack (default): only an acknowledgement, a shelf or a suppression stops it. ack-or-rtn: a return to normal does too."
+        }
+      }
+    },
+    "alarm-escalation-match": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Which alarms a policy covers. Every field is optional; they AND together. Globs are case-insensitive.",
+      "properties": {
+        "priority": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "diagnostic",
+              "low",
+              "medium",
+              "high",
+              "critical"
+            ]
+          },
+          "description": "Any of these priorities."
+        },
+        "id": {
+          "type": "string",
+          "description": "Glob on the alarm id."
+        },
+        "site": {
+          "type": "string",
+          "description": "Glob on the alarm's site."
+        },
+        "area": {
+          "type": "string",
+          "description": "Glob on the alarm's area."
+        },
+        "class": {
+          "type": "string",
+          "description": "Glob on the alarm's class."
+        }
+      }
+    },
+    "alarm-level": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "notify",
+        "via"
+      ],
+      "description": "One level: who, by which channels, how long after the alarm began waiting.",
+      "properties": {
+        "after": {
+          "$ref": "#/definitions/duration",
+          "description": "How long after the alarm began waiting this level is sent. Default 0s."
+        },
+        "notify": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string"
+          },
+          "description": "roster:<id> (whoever is on call when it is sent) or a person (alice, oidc:carol)."
+        },
+        "via": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "enum": [
+              "log"
+            ]
+          },
+          "description": "Channel kinds; each person gets one send per kind. This release has log."
+        }
+      }
+    },
+    "alarm-repeat": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Repeat the last level.",
+      "properties": {
+        "every": {
+          "$ref": "#/definitions/duration"
+        },
+        "times": {
+          "type": "integer",
+          "minimum": 0
         }
       }
     },

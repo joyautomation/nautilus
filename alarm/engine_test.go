@@ -630,3 +630,110 @@ func TestRenameNamesWhatFollows(t *testing.T) {
 		t.Error("renamed an alarm that does not exist")
 	}
 }
+
+// WaitMs (#715) marks when an alarm began waiting on a person. It holds
+// while a latched-by-ack alarm flaps between unack-active and unack-rtn,
+// and an ack, a shelf or a return to normal ends it.
+func TestWaitMs(t *testing.T) {
+	r := newRig(t, def("a", "A"))
+	wait := func() int64 {
+		for _, rec := range r.Records() {
+			if rec.ID == "a" {
+				return rec.WaitMs
+			}
+		}
+		return -1
+	}
+	r.tags["A"] = false
+	r.Evaluate()
+	if w := wait(); w != 0 {
+		t.Fatalf("normal: WaitMs %d, want 0", w)
+	}
+	r.tags["A"] = true
+	r.Evaluate()
+	start := r.clk.now().UnixMilli()
+	if w := wait(); w != start {
+		t.Fatalf("active: WaitMs %d, want %d", w, start)
+	}
+	r.clk.advance(time.Minute)
+	r.tags["A"] = false
+	r.Evaluate() // unack-rtn
+	r.clk.advance(time.Minute)
+	r.tags["A"] = true
+	r.Evaluate() // unack-active again
+	if w := wait(); w != start {
+		t.Fatalf("after a flap: WaitMs %d, want the first wait's %d", w, start)
+	}
+	r.Ack([]string{"a"}, "op")
+	if w := wait(); w != 0 {
+		t.Fatalf("acked: WaitMs %d, want 0", w)
+	}
+	r.clk.advance(time.Minute)
+	r.tags["A"] = false
+	r.Evaluate()
+	r.clk.advance(time.Minute)
+	r.tags["A"] = true
+	r.Evaluate()
+	if w := wait(); w != r.clk.now().UnixMilli() {
+		t.Fatalf("new activation after ack: WaitMs %d, want now", w)
+	}
+	if err := r.Shelve("a", r.clk.at(time.Hour), "op"); err != nil {
+		t.Fatal(err)
+	}
+	if w := wait(); w != 0 {
+		t.Fatalf("shelved: WaitMs %d, want 0", w)
+	}
+	// Unshelved while still unacknowledged: a new wait, from the unshelve.
+	r.clk.advance(time.Minute)
+	if err := r.Unshelve("a", "op"); err != nil {
+		t.Fatal(err)
+	}
+	if st, w := r.state(t, "a"), wait(); st.Unacked() && w != r.clk.now().UnixMilli() {
+		t.Fatalf("unshelved to %s: WaitMs %d, want now", st, w)
+	}
+	// Suppressed: waits on nobody.
+	r.Engine.mu.Lock()
+	r.inst[r.byID["a"]].def.Enable = "EN"
+	r.Engine.mu.Unlock()
+	r.tags["EN"] = false
+	r.Evaluate()
+	if w := wait(); w != 0 {
+		t.Fatalf("suppressed: WaitMs %d, want 0", w)
+	}
+}
+
+// Notified journals a notify row with the alarm's fields and reaches
+// neither the notifiers nor OnEvent.
+func TestNotifiedJournalsOnly(t *testing.T) {
+	clk, ring := newClock(), NewRing(10)
+	rec := &countingNotifier{}
+	e, err := New(Options{Defs: []Def{def("a", "A")}, Read: tags{"A": true}.read, Now: clk.now,
+		Journal: ring, Notify: []Notifier{rec}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	heard := 0
+	e.OnEvent(func(Event) { heard++ })
+	e.Evaluate()
+	before := heard
+	e.Notified("a", Notice{Level: 1, To: "alice", Via: "log", Result: NotifySent})
+	e.Close() // flushes the notifier queue
+	if heard != before {
+		t.Fatalf("OnEvent heard the notify row")
+	}
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	if len(rec.seen) == 0 {
+		t.Fatal("the notifier heard nothing: the test proves nothing")
+	}
+	for _, ev := range rec.seen {
+		if ev.Kind == KindNotify {
+			t.Fatalf("a notifier heard the notify row: %+v", ev)
+		}
+	}
+	got, _ := ring.Query(time.Time{}, time.Time{}, Filter{Kinds: []string{KindNotify}})
+	if len(got) != 1 || got[0].Name != "a" || got[0].Priority != Medium || got[0].State != "unack-active" ||
+		got[0].To != "alice" || got[0].By != "system" {
+		t.Fatalf("notify row %+v", got)
+	}
+}

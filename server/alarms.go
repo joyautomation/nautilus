@@ -31,6 +31,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -116,6 +117,13 @@ func (s *Server) handleAlarmJournal(w http.ResponseWriter, r *http.Request) {
 		IDs:        csv(q.Get("id")),
 		Kinds:      csv(q.Get("kind")),
 	}
+	if len(f.Kinds) == 0 {
+		// A notify row (#715) is not a state change, and an HMI that
+		// predates it keys its journal rows on ts:id:kind and labels them
+		// by kind: several notifications in one millisecond would collide.
+		// It is shown only to a client that asks for it (kind=notify).
+		f.ExceptKinds = []string{alarm.KindNotify}
+	}
 	if limit <= 0 {
 		limit = alarm.DefaultQueryLimit
 	}
@@ -172,7 +180,7 @@ func (s *Server) journalPage(from, to time.Time, f alarm.Filter, limit int, stat
 			return nil, false, err
 		}
 		got := len(raw)
-		events := filterEvents(raw, states, text)
+		events := filterEvents(raw, states, text, f.ExceptKinds)
 		if len(events) > limit {
 			return events[:limit], true, nil
 		}
@@ -191,13 +199,20 @@ func (s *Server) journalPage(from, to time.Time, f alarm.Filter, limit int, stat
 
 // filterEvents applies the two filters the Journal interface deliberately
 // does not carry.
-func filterEvents(events []alarm.Event, states []string, text string) []alarm.Event {
-	if len(states) == 0 && text == "" {
+//
+// except drops kinds again after the journal has: ExceptKinds is newer
+// than the Journal interface, and a journal written outside nautilus may
+// not honour it, which would hand an old HMI notify rows it cannot key.
+func filterEvents(events []alarm.Event, states []string, text string, except []string) []alarm.Event {
+	if len(states) == 0 && text == "" && len(except) == 0 {
 		return events
 	}
 	text = strings.ToLower(text)
 	out := events[:0]
 	for _, e := range events {
+		if slices.Contains(except, e.Kind) {
+			continue
+		}
 		if len(states) > 0 && !containsFold(states, e.State) {
 			continue
 		}

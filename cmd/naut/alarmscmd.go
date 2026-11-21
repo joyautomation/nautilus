@@ -31,6 +31,12 @@ Usage:
                                -count prints only the total; -site and
                                -priority narrow the list; -o yaml|table
                                picks the format (default table).
+  naut alarms oncall [dir]       Who each on-call roster has on call
+                               now, or -at "YYYY-MM-DD HH:MM".
+  naut alarms escalation [dir]   How many alarms each escalation policy
+                               covers; -id <alarm> prints the steps it
+                               would send (who, when, by which channel)
+                               if it began waiting -at a moment.
 `
 
 func runAlarms(args []string) int {
@@ -41,6 +47,10 @@ func runAlarms(args []string) int {
 	switch args[0] {
 	case "list":
 		return runAlarmsList(args[1:])
+	case "oncall":
+		return runAlarmsOncall(args[1:])
+	case "escalation":
+		return runAlarmsEscalation(args[1:])
 	case "help", "--help", "-h":
 		fmt.Print(alarmsUsage)
 		return 0
