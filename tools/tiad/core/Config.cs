@@ -206,9 +206,11 @@ namespace Tiad
             if (watch != "")
             {
                 long ns;
-                if (!GoDuration.TryParse(watch, out ns) || ns < 1000000L)
+                // At most 1h: a timer takes no more than about 49 days, and
+                // a retire that long is stuck anyway.
+                if (!GoDuration.TryParse(watch, out ns) || ns < 1000000L || ns > 3600L * 1000000000L)
                 {
-                    throw new ConfigException("TIAD_RETIRE_WATCH must be a duration of at least 1ms (e.g. 3m)");
+                    throw new ConfigException("TIAD_RETIRE_WATCH must be a duration from 1ms to 1h (e.g. 3m)");
                 }
                 c.RetireWatch = TimeSpan.FromTicks(ns / 100);
             }

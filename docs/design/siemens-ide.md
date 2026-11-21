@@ -197,7 +197,7 @@ copies `logixd`, the Logix agent:
   | `TIAD_TARGETS` | — | The only CPU addresses tiad will go online to or download to |
   | `TIAD_PGPC_INTERFACE` | — | The NIC TIA uses to reach the CPUs |
   | `TIAD_SESSION_IDLE` | `1h` | The idle reaper closes a session unused this long (a Go duration). The clock starts when a call ends; a session with a call in flight is never closed |
-  | `TIAD_RETIRE_WATCH` | `3m` | How long a retire of a TIA instance that trusted blindly may take before tiad counts TIA as gone (§3.8; a Go duration). TIA's dispose has no bound of its own |
+  | `TIAD_RETIRE_WATCH` | `3m` | How long a retire of a TIA instance that trusted blindly may take before tiad counts TIA as gone (§3.8; a Go duration, at most `1h`). TIA's dispose has no bound of its own |
   | `TIAD_MAX_FILE_BYTES` | 1 GiB | The largest file a put takes (413 beyond it) |
   | `TIAD_NO_TIA` | — | `1` fails the `tia` gate, so no call can start TIA. tiad is installed and tested this way before a clone's trial may start |
 

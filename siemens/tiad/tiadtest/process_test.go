@@ -58,6 +58,8 @@ func TestAgentRefusesUnsafeConfig(t *testing.T) {
 		{"file cap not a number", []string{wd, tok, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_MAX_FILE_BYTES=1e9"}, "TIAD_MAX_FILE_BYTES"},
 		{"idle not a duration", []string{wd, tok, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_SESSION_IDLE=60"}, "TIAD_SESSION_IDLE"},
 		{"idle too short", []string{wd, tok, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_SESSION_IDLE=1us"}, "TIAD_SESSION_IDLE"},
+		{"retire watch not a duration", []string{wd, tok, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_RETIRE_WATCH=60"}, "TIAD_RETIRE_WATCH"},
+		{"retire watch too long", []string{wd, tok, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_RETIRE_WATCH=1h1s"}, "TIAD_RETIRE_WATCH"},
 		{"file cap zero", []string{wd, tok, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_MAX_FILE_BYTES=0"}, "TIAD_MAX_FILE_BYTES"},
 		{"no-TIA switch not 1", []string{wd, tok, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_NO_TIA=true"}, "TIAD_NO_TIA must be 1 or unset"},
 		{"stdin switch not 1", []string{wd, tok, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_EXIT_ON_STDIN=yes"}, "TIAD_EXIT_ON_STDIN must be 1 or unset"},
