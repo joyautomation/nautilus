@@ -9,7 +9,7 @@ package server
 //	POST /api/io/staged/{id}/apply                                → applied | failed
 //	GET  /api/io/staged/{id}
 //	GET  /api/io                      what runs, against the manifest
-//	GET  /api/io/files                the project files it differs in (naut pull --io)
+//	GET  /api/io/files                the project files it differs in (naut pull --io; needs the edit permission)
 //
 // The engine is the project loader's (internal/project.IOConfig), handed in
 // as Options.IO so this package stays free of it. Writes need the same
@@ -291,8 +291,17 @@ func (s *Server) handleIO(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleIOFiles serves the project files the running I/O configuration
-// differs in, for naut pull --io. Read-only, like GET /api/io.
+// differs in, for naut pull --io. It returns whole file bodies, so it needs
+// the edit permission (a plain read gets /api/io, which carries no file
+// text), like staging a change.
 func (s *Server) handleIOFiles(w http.ResponseWriter, r *http.Request) {
+	// The permission only, not the online-edits switch: changes applied
+	// while edits were on must still be pullable into git after they are
+	// turned off.
+	if code, msg := s.authorizeWrite(r); code != 0 {
+		writeJSON(w, code, map[string]string{"error": msg})
+		return
+	}
 	if s.ioUnavailable(w) {
 		return
 	}
@@ -615,8 +624,7 @@ func (s *Server) handleConfigSchema(w http.ResponseWriter, r *http.Request) {
 // needs the edit permission, like staging a change.
 func (s *Server) handleConfigFiles(w http.ResponseWriter, r *http.Request) {
 	// The whole manifest (users, grants, hosts), not what an apply changed:
-	// it needs the permission to edit it, not the plain read of GET
-	// /api/io/files.
+	// it needs the permission to edit it, as GET /api/io/files does.
 	if code, msg := s.authorizeProgramEdit(r); code != 0 {
 		writeJSON(w, code, map[string]string{"error": msg})
 		return

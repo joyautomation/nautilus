@@ -457,7 +457,7 @@ func TestIOFilesRoute(t *testing.T) {
 	if w, _ := doJSON(t, h, "GET", "/api/io/files", nil); w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("without the hook: %d, want 503", w.Code)
 	}
-	if w, _ := doJSON(t, New(newTestRuntime(t), Options{}).Handler(), "GET", "/api/io/files", nil); w.Code != http.StatusServiceUnavailable {
+	if w, _ := doJSON(t, New(newTestRuntime(t), Options{OnlineEdits: true}).Handler(), "GET", "/api/io/files", nil); w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("without live I/O: %d, want 503", w.Code)
 	}
 }
@@ -523,6 +523,7 @@ func TestConfigCommitIsStrict(t *testing.T) {
 func TestConfigFilesNeedTheEditPermission(t *testing.T) {
 	f := &fakeIO{}
 	hook := f.hook()
+	hook.Files = func() IOFiles { return IOFiles{Leading: true} }
 	hook.Sections = func() []string { return []string{"drivers"} }
 	hook.Schema = func(string) ([]byte, error) { return []byte(`{}`), nil }
 	hook.ConfigFiles = func() (ConfigFiles, error) {
@@ -540,16 +541,29 @@ func TestConfigFilesNeedTheEditPermission(t *testing.T) {
 	o := ioOptions(f, false)
 	o.IO = hook
 	if code := get(New(newTestRuntime(t), o).Handler(), "/api/config/files", ""); code != http.StatusForbidden {
-		t.Errorf("online edits off: %d, want 403", code)
+		t.Errorf("/api/config/files, online edits off: %d, want 403", code)
+	}
+	// Changes applied while edits were on stay pullable into git once they
+	// are off: /api/io/files wants the permission (the token), not the
+	// online-edits switch.
+	o.AuthToken = "s3cret"
+	off := New(newTestRuntime(t), o).Handler()
+	if code := get(off, "/api/io/files", ""); code != http.StatusUnauthorized {
+		t.Errorf("/api/io/files, edits off, no token: %d, want 401", code)
+	}
+	if code := get(off, "/api/io/files", "s3cret"); code != http.StatusOK {
+		t.Errorf("/api/io/files, edits off, with the token: %d, want 200", code)
 	}
 	o = ioOptions(f, true)
 	o.IO, o.AuthToken = hook, "s3cret"
 	h := New(newTestRuntime(t), o).Handler()
-	if code := get(h, "/api/config/files", ""); code != http.StatusUnauthorized {
-		t.Errorf("no token: %d, want 401", code)
-	}
-	if code := get(h, "/api/config/files", "s3cret"); code != http.StatusOK {
-		t.Errorf("with the token: %d, want 200", code)
+	for _, p := range []string{"/api/config/files", "/api/io/files"} {
+		if code := get(h, p, ""); code != http.StatusUnauthorized {
+			t.Errorf("%s, no token: %d, want 401", p, code)
+		}
+		if code := get(h, p, "s3cret"); code != http.StatusOK {
+			t.Errorf("%s, with the token: %d, want 200", p, code)
+		}
 	}
 	if code := get(h, "/api/config/schema?section=drivers", ""); code != http.StatusOK {
 		t.Errorf("schema without a token: %d, want 200", code)
