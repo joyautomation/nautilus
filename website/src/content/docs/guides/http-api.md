@@ -1296,6 +1296,7 @@ The journal's files are the record. For queries, screens and export,
 audit:
   sink: postgres
   # dsn-env: SITE_AUDIT_DB   # default NAUTILUS_AUDIT_DB_URL, then DATABASE_URL
+  # anchor-every: 5m         # how often the head is anchored (below)
 ```
 
 The connection string comes from an environment variable, never the
@@ -1320,17 +1321,76 @@ variable empty stops `naut run` at start, naming the variable.
   lines cut off the end, or a line that doesn't chain on from the copy's
   newest), the copy stops and is left as it is. Run `naut audit verify`
   and compare the two before restarting.
-- **It needs INSERT and SELECT only.** The sink creates its tables when
-  they are missing. A database administrator can create them instead,
-  under another role, and grant the controller's role just those two.
+- **It needs SELECT, and INSERT on some columns.** The sink creates its
+  tables when they are missing, but then its role owns them and could
+  rewrite them (below). Have a database administrator create them instead:
+  `naut audit pg-schema --role <the controller's role>` prints the
+  statements, run as another role.
+- **It anchors the journal's head.** The copy writes its newest line's
+  `seq` and hash to `audit_anchors`: at start, every `anchor-every`
+  (default 5 minutes) when it has moved, at once after it copies a prune,
+  and at a clean stop. The time (`at`) and the role that wrote it
+  (`writer`) are the database's, as is each row's `copied_at`.
 - **It is shown:** an `audit copy` card on the drivers block: `connected`
   when the copy holds every entry, `connecting` while it catches up,
-  `degraded` with the error while Postgres is unreachable, `error` when
-  it stopped. The card shows the copied `seq` against the journal's, and
-  any gaps.
+  `degraded` with the error while Postgres is unreachable (or an anchor
+  could not be written, or the anchors are not protected), `error` when it
+  stopped. The card shows the copied and anchored `seq` against the
+  journal's, and any gaps.
+
+#### Checking the journal against the copy
+
+```sh
+naut audit verify --anchor postgres
+```
+
+Run it in the project's directory: the controller's name and the
+connection string come from `nautilus.yaml`, as `naut run` names them
+(`--controller` and `--dsn-env` override; on a pair, give
+`--controller <project>/<node>`). Besides the journal's own chain, it
+checks:
+
+- every anchor's line hashes as anchored, and the journal reaches the
+  newest anchor (lines cut off the end are found);
+- every line both hold is the same line, and the copy holds nothing past
+  the journal's head (a journal rewritten with its chain recomputed is
+  found);
+- every gap in the copy is explained by the `audit.prune` of the line
+  before it (otherwise `UNEXPLAINED GAP`);
+- every prune is one `naut run` would have written. Its `keep` is the
+  retention `naut run` journalled (`audit.retention`, at every start) and
+  at least one day. Its time is within `--clock-skew` (default 5m) of the
+  line before it and of the database's clock. Every file it removed is
+  older than that `keep` (otherwise `PRUNED EARLY`).
+
+The verdict is `verified` (exit 0), `BROKEN` (exit 1, each failure on its
+own line) or `UNPROTECTED` (exit 3). `UNPROTECTED` means every check
+passed, but a role that wrote an anchor could have rewritten the copy or
+the anchors: it is a superuser, owns or can become the owner of a table,
+holds `CREATEROLE`, `UPDATE`, `DELETE` or `TRUNCATE`, or may set
+`copied_at`, `at` or `writer`. The anchors then prove nothing against
+someone holding that role. Run `naut audit pg-schema --role <role>`.
+
+**A lowered retention is the thing to look at.** Every lowering is
+printed as a `WARNING` whatever the verdict, with when and who started
+`naut run`. A lower `keep` prunes sooner, and a lowering is how someone
+would make a prune look honest. When `keep-days` is lowered, `naut run`
+holds the first prune until Postgres anchors the new retention. A prune
+whose lowering was journalled and pruned under the same anchor is
+`BROKEN`. If Postgres stays down and the journal's disk passes 90% full,
+the prune goes ahead, marked unanchored, and `verify` names it as an
+`UNANCHORED LOWERING` warning. The check stops a naive forger, not a
+careful one: the controller's role can write an anchor itself, so a
+forger with its connection string can anchor a lowering at once and then
+prune. The warning still names that lowering, and the copy still holds
+every entry the prune removed. Prunes journalled before this check
+existed (before the first `audit.retention`) are listed as not checked.
 
 On its own the copy is a convenience, not proof: whoever can write the
-journal's files can rewrite them before the copy reads them.
+journal's files can rewrite them before the copy reads them. With the
+anchors under a role the controller's service user does not hold, and
+`verify --anchor` run elsewhere, what happened before the newest anchor
+no longer rests on the controller's word.
 
 ### `GET /api/audit`
 

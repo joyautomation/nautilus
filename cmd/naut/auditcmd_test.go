@@ -107,7 +107,9 @@ func TestAuditPGSchema(t *testing.T) {
 // one waits for its anchor; past the disk threshold (or when the disk's
 // use is unknown) it prunes unanchored, saying so; it stops with ctx.
 func TestWaitToPrune(t *testing.T) {
-	ans := func(a gateAnswer) func(context.Context) gateAnswer { return func(context.Context) gateAnswer { return a } }
+	ans := func(a gateAnswer) func(context.Context) gateAnswer {
+		return func(context.Context) gateAnswer { return a }
+	}
 	used := func(u float64, err error) func() (float64, error) { return func() (float64, error) { return u, err } }
 	ctx := t.Context()
 	var log strings.Builder
