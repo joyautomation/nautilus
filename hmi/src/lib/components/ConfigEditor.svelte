@@ -35,7 +35,13 @@
 			return e as Error;
 		}
 	});
-	const devices = $derived(manifest ? deviceRows(manifest) : []);
+	const devices = $derived.by(() => {
+		try {
+			return manifest ? deviceRows(manifest) : [];
+		} catch {
+			return [];
+		}
+	});
 	const edited = $derived(!!loaded && Object.keys(texts).some((p) => texts[p] !== loaded?.files[p]));
 
 	async function load() {
@@ -77,8 +83,8 @@
 		}
 	}
 
-	const issuesOf = (f: Field, r: Row): Issue[] => validate({ ...f, required: true }, r, [f.key]);
-	const label = (r: RowRef) => String(r.value.name ?? r.value.type ?? r.path.join('.'));
+	const issuesOf = (f: Field, r: Row): Issue[] => validate({ ...f, required: true }, r ?? {}, [f.key]);
+	const label = (r: RowRef) => String(r.value?.name ?? r.value?.type ?? r.path.join('.'));
 </script>
 
 <section class="config">

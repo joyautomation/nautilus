@@ -27,7 +27,12 @@
 	} = $props();
 
 	const here = (k: string) => path.concat(k).join('.');
-	const problems = (k: string) => issues.filter((i) => i.path.endsWith(here(k)) || i.path.endsWith(`${field.key}.${k}`));
+	// An issue belongs to the setting whose path is its prefix, by whole
+	// segments (`username` is not `name`); one that no rendered setting
+	// owns (a stray key) is listed under the form.
+	const owns = (k: string, i: Issue) => i.path === `${field.key}.${k}` || i.path.startsWith(`${field.key}.${k}.`);
+	const problems = (k: string) => issues.filter((i) => owns(k, i));
+	const unowned = $derived(issues.filter((i) => !(field.fields ?? []).some((f) => owns(f.key, i))));
 
 	function text(f: Field, v: Json | undefined): string {
 		if (v === undefined || v === null) return '';
@@ -95,6 +100,7 @@
 			{#each bad as i}<span class="e">{i.message}</span>{/each}
 		</label>
 	{/each}
+	{#each unowned as i}<p class="e stray">{i.message}</p>{/each}
 </div>
 
 <style>
@@ -105,6 +111,7 @@
 	input, select { font: inherit; padding: var(--space-1) var(--space-2); border-radius: var(--radius-sm); min-width: 0; }
 	.invalid input, .invalid select { outline: 1px solid var(--crit); }
 	.d { grid-column: 2; color: var(--muted); font-size: var(--font-2xs); }
+	.stray { margin: 0; }
 	.e { grid-column: 2; color: var(--crit); font-size: var(--font-xs); }
 	.raw { margin: 0; font-family: var(--mono); font-size: var(--font-xs); color: var(--muted); white-space: pre-wrap; }
 </style>

@@ -20,8 +20,11 @@ export type Op =
 	| { op: 'append'; path: Path; value: { [k: string]: Json } };
 
 const WORDS = /^(true|false|yes|no|on|off|y|n|null|~)$/i;
-const NUMBERISH = /^[-+]?(\.?\d[\d_]*\.?[\d_]*([eE][-+]?\d+)?|0x[0-9a-fA-F_]+|0o?[0-7_]+|\.inf|\.nan)$/i;
-const PLAIN = /^[A-Za-z0-9_./][A-Za-z0-9_./:@+-]*$/;
+const NUMBERISH = /^[-+]?(\.?\d[\d_]*\.?[\d_]*([eE][-+]?\d+)?|0x[0-9a-fA-F_]+|0b[01_]+|0o?[0-7_]+|\.inf|\.nan)$/i;
+// A timestamp the Go loader reads as a time when the target is untyped.
+const DATEISH = /^\d{4}-\d\d?-\d\d?/;
+// No trailing colon: `k: a:` is not YAML.
+const PLAIN = /^[A-Za-z0-9_./](?:[A-Za-z0-9_./:@+-]*[A-Za-z0-9_./@+])?$/;
 
 /**
  * One scalar as manifest text. A string that either loader could read as
@@ -36,7 +39,7 @@ export function renderScalar(v: Json): string {
 		return String(v);
 	}
 	if (typeof v !== 'string') throw new Error('not a scalar');
-	if (v !== '' && PLAIN.test(v) && !WORDS.test(v) && !NUMBERISH.test(v)) return v;
+	if (v !== '' && PLAIN.test(v) && !WORDS.test(v) && !NUMBERISH.test(v) && !DATEISH.test(v)) return v;
 	return JSON.stringify(v);
 }
 
@@ -59,10 +62,14 @@ function trimEnd(t: string, e: number, floor: number): number {
 	while (e > floor && /\s/.test(t[e - 1])) e--;
 	return e;
 }
+// The end of the line holding i, before its newline (and before a \r of a
+// CRLF file).
 function lineEnd(t: string, i: number): number {
 	const n = t.indexOf('\n', i);
-	return n < 0 ? t.length : n;
+	if (n < 0) return t.length;
+	return n > 0 && t[n - 1] === '\r' ? n - 1 : n;
 }
+const eolOf = (t: string) => (t.includes('\r\n') ? '\r\n' : '\n');
 const col = (t: string, i: number) => i - lineStart(t, i);
 
 function splice(t: string, from: number, to: number, s: string): string {
@@ -103,14 +110,31 @@ export function patch(text: string, ops: Op[]): string {
 
 function apply(text: string, o: Op): string {
 	const doc = parse(text);
+	let out: string;
 	switch (o.op) {
 		case 'set':
-			return set(text, doc, o.path, o.value);
+			out = set(text, doc, o.path, o.value);
+			break;
 		case 'delete':
-			return del(text, doc, o.path);
+			out = del(text, doc, o.path);
+			break;
 		case 'append':
-			return append(text, doc, o.path, o.value);
+			out = append(text, doc, o.path, o.value);
+			break;
 	}
+	// Never hand back text that does not parse: a bad splice must fail here,
+	// not leave a manifest the editor cannot read again.
+	if (out !== text) {
+		const check = parseDocument(out);
+		if (check.errors.length) throw new Error(`that edit would leave the manifest invalid (${check.errors[0].message}); nothing was changed`);
+	}
+	return out;
+}
+
+/** A node another part of the file may share (an anchor) or retype (a tag): not edited in place. */
+function shared(n: unknown): boolean {
+	const x = n as { anchor?: string; tag?: string } | null | undefined;
+	return !!x && (!!x.anchor || !!x.tag);
 }
 
 function sameValue(n: unknown, v: Json): boolean {
@@ -127,7 +151,14 @@ function set(text: string, doc: ReturnType<typeof parse>, path: Path, value: Jso
 	const existing = doc.getIn(path, true) as Node | undefined;
 	if (existing) {
 		if (sameValue(existing, value)) return text; // nothing changed: not a byte moves
+		if (shared(existing)) throw new Error(`${path.join('.')} carries an anchor or a tag in the manifest; edit it in the file`);
 		const [s, e] = nodeRange(existing);
+		if (isScalar(existing) && s === e) {
+			// An empty value (`host:`): the new text goes after the colon.
+			const at = trimEnd(text, s, 0);
+			const scalar = value === null || typeof value !== 'object';
+			return splice(text, at, at, ' ' + (scalar ? renderScalar(value) : renderFlow(value)));
+		}
 		const scalar = value === null || typeof value !== 'object';
 		return splice(text, s, trimEnd(text, e, s), scalar ? renderScalar(value) : renderFlow(value));
 	}
@@ -150,7 +181,7 @@ function insertPair(text: string, parent: YAMLMap, k: string, value: Json): stri
 	const first = nodeRange(parent.items[0].key as Node)[0];
 	const e = trimEnd(text, ve, first);
 	const at = lineEnd(text, e);
-	return splice(text, at, at, `\n${' '.repeat(col(text, first))}${key(k)}: ${rendered}`);
+	return splice(text, at, at, `${eolOf(text)}${' '.repeat(col(text, first))}${key(k)}: ${rendered}`);
 }
 
 function del(text: string, doc: ReturnType<typeof parse>, path: Path): string {
@@ -175,6 +206,7 @@ function removeItem(text: string, parent: YAMLMap | YAMLSeq, idx: number, isPair
 	const item = parent.items[idx];
 	const startNode = (isPairItem ? (item as Pair).key : item) as Node;
 	const endNode = (isPairItem ? ((item as Pair).value ?? (item as Pair).key) : item) as Node;
+	if (shared(endNode)) throw new Error('cannot delete a setting that carries an anchor or a tag; edit it in the file');
 	const [s] = nodeRange(startNode);
 	const [, ve] = nodeRange(endNode);
 	const e = trimEnd(text, ve, s);
@@ -198,14 +230,29 @@ function removeItem(text: string, parent: YAMLMap | YAMLSeq, idx: number, isPair
 	} else {
 		if (!/^\s*-\s*$/.test(before)) throw new Error('cannot delete a row written on one line with other text');
 	}
-	const le = lineEnd(text, e);
-	const to = le < text.length ? le + 1 : le;
-	if (to === text.length && from > 0) from -= 1; // the last line: take the newline before it
+	const nl = text.indexOf('\n', e);
+	const to = nl < 0 ? text.length : nl + 1;
+	// The last line has no newline of its own: take the one before it, so
+	// the file does not end in a blank line.
+	if (nl < 0 && from > 0) from -= text[from - 2] === '\r' ? 2 : 1;
 	return splice(text, from, to, '');
 }
 
 function append(text: string, doc: ReturnType<typeof parse>, path: Path, row: { [k: string]: Json }): string {
 	const seq = doc.getIn(path, true) as Node | undefined;
+	if (isScalar(seq) && seq.value == null && path.length) {
+		// `devices:` with nothing after it.
+		const [parentPath] = parentAndLast(path);
+		const parent = (parentPath.length ? doc.getIn(parentPath, true) : doc.contents) as Node | undefined;
+		const pair = isMap(parent) ? pairOf(parent, String(path[path.length - 1])) : undefined;
+		if (!pair) throw new Error(`cannot add to ${path.join('.')}`);
+		const at = trimEnd(text, nodeRange(seq)[0], 0);
+		return splice(text, at, at, `${eolOf(text)}${' '.repeat(col(text, nodeRange(pair.key as Node)[0]) + 2)}- ${renderFlow(row)}`);
+	}
+	if (isSeq(seq) && seq.flow && !seq.items.length) {
+		const [s, e] = nodeRange(seq);
+		return splice(text, s, e, `[${renderFlow(row)}]`);
+	}
 	if (!seq) {
 		const [parentPath, k] = parentAndLast(path);
 		const parent = (parentPath.length ? doc.getIn(parentPath, true) : doc.contents) as Node | undefined;
@@ -216,7 +263,7 @@ function append(text: string, doc: ReturnType<typeof parse>, path: Path, row: { 
 		const e = trimEnd(text, nodeRange((last.value ?? last.key) as Node)[1], first);
 		const at = lineEnd(text, e);
 		const ind = ' '.repeat(col(text, first));
-		return splice(text, at, at, `\n${ind}${key(k)}:\n${ind}  - ${renderFlow(row)}`);
+		return splice(text, at, at, `${eolOf(text)}${ind}${key(k)}:${eolOf(text)}${ind}  - ${renderFlow(row)}`);
 	}
 	if (!isSeq(seq)) throw new Error(`${path.join('.')} is not a list in the manifest`);
 	if (!seq.items.length) throw new Error('cannot add a row to an empty list in the manifest');
@@ -234,10 +281,10 @@ function append(text: string, doc: ReturnType<typeof parse>, path: Path, row: { 
 		body = `${ind}- ${renderFlow(row)}`;
 	} else {
 		const lines = Object.entries(row).map(([k, v]) => `${key(k)}: ${v !== null && typeof v === 'object' ? renderFlow(v) : renderScalar(v)}`);
-		body = lines.map((l, i) => (i === 0 ? `${ind}- ${l}` : `${ind}  ${l}`)).join('\n');
+		body = lines.map((l, i) => (i === 0 ? `${ind}- ${l}` : `${ind}  ${l}`)).join(eolOf(text));
 	}
 	const at = lineEnd(text, e);
-	return splice(text, at, at, `\n${body}`);
+	return splice(text, at, at, `${eolOf(text)}${body}`);
 }
 
 export { isPair };

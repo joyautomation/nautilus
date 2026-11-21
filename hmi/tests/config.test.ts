@@ -126,6 +126,24 @@ describe('config schema: the validator', () => {
 	});
 });
 
+describe('config schema: review findings (#1152)', () => {
+	const devices = sectionField(slice('devices'), 'devices');
+	it('a map key that breaks the key rule is named (ports are numbers)', () => {
+		const m = validate(devices, [{ name: 'M', profile: 'p', endpoint: 'h', ports: { a: { name: 'x' } } }]).map((i) => i.message).join(' | ');
+		expect(m.includes('the name a is not in the form')).toBe(true);
+		expect(validate(devices, [{ name: 'M', profile: 'p', endpoint: 'h', ports: { '1': { name: 'x' } } }]).filter((i) => i.message.includes('the name')).length).toBe(0);
+	});
+});
+
+describe('config form: an issue belongs to its own setting', () => {
+	const src = readFileSync('src/lib/components/SchemaForm.svelte', 'utf8');
+	it('matches by whole path segments, never by suffix, and lists the unowned ones', () => {
+		expect(src.includes('endsWith')).toBe(false);
+		expect(src.includes("i.path.startsWith(`${field.key}.${k}.`)")).toBe(true);
+		expect(src.includes('unowned')).toBe(true);
+	});
+});
+
 describe('config client: every refusal says what to do', () => {
 	const fake = (status: number, body: unknown) => (async () => new Response(typeof body === 'string' ? body : JSON.stringify(body), { status })) as unknown as typeof fetch;
 	it('reads a slice and the files', async () => {

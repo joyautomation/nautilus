@@ -182,3 +182,51 @@ describe('config patch: a value reads back as what was meant', () => {
 		});
 	}
 });
+
+describe('config patch: review findings (#1152)', () => {
+	const bad = (text: string, ops: Parameters<typeof patch>[1]) => {
+		try {
+			patch(text, ops);
+			return '';
+		} catch (e) {
+			return String(e);
+		}
+	};
+	it('sets a value that is empty: after the colon, with or without a trailing comment', () => {
+		expect(patch('a:\nb: 2\n', [{ op: 'set', path: ['a'], value: 'x' }])).toBe('a: x\nb: 2\n');
+		expect(patch('b: 2\na:', [{ op: 'set', path: ['a'], value: 'x' }])).toBe('b: 2\na: x');
+		expect(patch('a: # note\nb: 2\n', [{ op: 'set', path: ['a'], value: 'x' }])).toBe('a: x # note\nb: 2\n');
+		expect(parse(patch('a: # note\nb: 2\n', [{ op: 'set', path: ['a'], value: 'x' }])).a).toBe('x');
+	});
+	it('never returns text that does not parse', () => {
+		// an anchored node an alias uses is refused rather than edited or removed
+		expect(bad('a: &x 1\nb: *x\n', [{ op: 'delete', path: ['a'] }]).includes('anchor')).toBe(true);
+		expect(bad('a: &x 1\nb: *x\n', [{ op: 'set', path: ['a'], value: 2 }]).includes('anchor')).toBe(true);
+		expect(bad('a: !!binary aGk=\n', [{ op: 'set', path: ['a'], value: 'z' }]).includes('tag')).toBe(true);
+	});
+	it('strings ending in a colon, binary and date look-alikes are quoted', () => {
+		for (const [v, want] of [['COM1:', '"COM1:"'], ['a:b:', '"a:b:"'], ['0b101', '"0b101"'], ['2024-01-05', '"2024-01-05"']] as const) {
+			expect(renderScalar(v)).toBe(want);
+			expect(parse(`k: ${renderScalar(v)}`).k).toBe(v);
+		}
+	});
+	it('deleting the last item keeps the file\'s final newline', () => {
+		expect(patch('a: 1\nb: 2\n', [{ op: 'delete', path: ['b'] }])).toBe('a: 1\n');
+		expect(patch('a: 1\nb: 2', [{ op: 'delete', path: ['b'] }])).toBe('a: 1');
+		expect(patch('x: 1\nl:\n  - { a: 1 }\n  - { a: 2 }\n', [{ op: 'delete', path: ['l', 1] }])).toBe('x: 1\nl:\n  - { a: 1 }\n');
+	});
+	it('a CRLF file stays CRLF through insert, append and delete', () => {
+		const t = 'a:\r\n  x: 1\r\nb: 2\r\nl:\r\n  - { n: 1 }\r\n';
+		const out = patch(t, [
+			{ op: 'set', path: ['a', 'y'], value: 2 },
+			{ op: 'append', path: ['l'], value: { n: 2 } },
+			{ op: 'delete', path: ['b'] }
+		]);
+		expect(out.replace(/\r\n/g, '').includes('\n')).toBe(false);
+		expect(JSON.stringify(parse(out))).toBe(JSON.stringify({ a: { x: 1, y: 2 }, l: [{ n: 1 }, { n: 2 }] }));
+	});
+	it('adds the first row to a list that is bare, null or []', () => {
+		expect(patch('name: x\ndevices:\ntags: []\n', [{ op: 'append', path: ['devices'], value: { name: 'M' } }])).toBe('name: x\ndevices:\n  - { name: M }\ntags: []\n');
+		expect(patch('devices: []\nname: x\n', [{ op: 'append', path: ['devices'], value: { name: 'M' } }])).toBe('devices: [{ name: M }]\nname: x\n');
+	});
+});

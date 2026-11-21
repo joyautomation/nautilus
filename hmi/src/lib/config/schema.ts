@@ -35,6 +35,8 @@ export interface Field {
 	minLength?: number;
 	minItems?: number;
 	pattern?: string;
+	/** map: the pattern its keys must match. */
+	keyPattern?: string;
 	/** list: what one entry is. map: what one value is. */
 	item?: Field;
 	/** object: its properties, in schema order. */
@@ -130,7 +132,8 @@ function field(root: Root, key: string, schema: Schema, required: boolean): Fiel
 					const pn = n.propertyNames as Schema;
 					if (Object.keys(pn).some((k) => k !== 'pattern')) return rawOf(key, required, 'a propertyNames rule', description);
 				}
-				return { ...base, kind: 'map', item: field(root, key, ap as Schema, false) };
+				const kp = (n.propertyNames as Schema | undefined)?.pattern;
+				return { ...base, kind: 'map', keyPattern: typeof kp === 'string' ? kp : undefined, item: field(root, key, ap as Schema, false) };
 			}
 			const req = new Set((n.required as string[] | undefined) ?? []);
 			const fields = Object.entries(props ?? {}).map(([k, v]) => field(root, k, v, req.has(k)));
@@ -238,7 +241,10 @@ export function validate(f: Field, value: Json | undefined, path: string[] = [f.
 				bad(`${at} must be a map`);
 				break;
 			}
-			for (const [k, v] of Object.entries(value)) out.push(...validate(f.item as Field, v, path.concat(k)));
+			for (const [k, v] of Object.entries(value)) {
+				if (f.keyPattern && !new RegExp(f.keyPattern).test(k)) out.push({ path: show(path.concat(k)), message: `${show(path.concat(k))}: the name ${k} is not in the form ${f.keyPattern}` });
+				out.push(...validate(f.item as Field, v, path.concat(k)));
+			}
 			break;
 		case 'object': {
 			if (typeof value !== 'object' || Array.isArray(value)) {
