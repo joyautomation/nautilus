@@ -277,6 +277,14 @@ namespace Tiad
         // going online when address is not the project CPU's address.
         OnlineCheckResult OnlineCheck(object project, string address, bool trustUnverifiedCertificate, bool fingerprint);
 
+        // ProbeUploadTwin (PROBE ONLY, #789 upload-twin window, never
+        // merged) uploads the CPU at address uploads times as new stations
+        // beside the project's, deleting nothing, and reports what TIA made
+        // of each and how they compare offline (hardware and software).
+        // With rehearse, a master copy of the project's station stands in
+        // for each upload: no CPU contact. It never saves.
+        List<string> ProbeUploadTwin(object project, string address, bool trustUnverifiedCertificate, int uploads, bool rehearse);
+
         // Save saves the project, or writes a project archive, and returns
         // its full path.
         string Save(object project, bool archive);

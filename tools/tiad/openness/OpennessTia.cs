@@ -1675,5 +1675,357 @@ namespace Tiad.Openness
                 return online.TrustedBlindly;
             });
         }
+
+        // ---- PROBE ONLY (#789 upload-twin window), never merged ----
+
+        // ProbeUploadTwin: see ITia. Each upload is Upload's (same PC
+        // interface, same certificate handling, nothing answered), minus
+        // the deletion of the project's devices. With rehearse, a master
+        // copy of the project's station stands in for each upload, so the
+        // report runs offline first. Every report step catches its own
+        // failure, so one throw loses only its own lines.
+        public List<string> ProbeUploadTwin(object project, string address, bool trustUnverifiedCertificate, int uploads, bool rehearse)
+        {
+            return Tia(delegate
+            {
+                var lines = new List<string>();
+                Project p = Of(project).Project;
+                HwDevice orig = StationOf(p);
+                if (orig == null) throw new TiaException("probe: the project has no CPU");
+                DeviceItem origCpu = CpuOf(orig);
+                var before = new List<HwDevice>(AllDevices(p));
+                lines.Add(string.Format("mode: {0}, uploads {1}", rehearse ? "REHEARSE (master copy, no CPU contact)" : "UPLOAD", uploads));
+                lines.Add("before: devices " + before.Count + ", subnets " + ProbeSubnets(p));
+                foreach (HwDevice d in before) ProbeStep(lines, "ident before", delegate { lines.Add("  device " + ProbeIdent(d)); });
+                ProbeStep(lines, "blocks orig before", delegate { ProbeBlocks(origCpu, "orig", lines); });
+                string origIdentBefore = ProbeIdent(orig);
+
+                var twins = new List<HwDevice>();
+                for (int n = 1; n <= uploads; n++)
+                {
+                    var known = new List<HwDevice>(AllDevices(p));
+                    HwDevice twin = rehearse ? ProbeDup(p, orig, lines) : ProbeUpload(p, address, trustUnverifiedCertificate, lines, n);
+                    var fresh = new List<HwDevice>();
+                    foreach (HwDevice d in AllDevices(p))
+                    {
+                        if (!known.Contains(d)) fresh.Add(d);
+                    }
+                    lines.Add(string.Format("after #{0}: devices {1}, subnets {2}, new devices {3}", n, AllDevices(p).Count, ProbeSubnets(p), fresh.Count));
+                    foreach (HwDevice d in fresh) ProbeStep(lines, "ident new", delegate { lines.Add("  NEW " + ProbeIdent(d)); });
+                    if (twin == null)
+                    {
+                        foreach (HwDevice d in fresh)
+                        {
+                            if (twin == null && CpuOf(d) != null) twin = d;
+                        }
+                        lines.Add("  UploadedStation was null; twin from the device diff: " + (twin == null ? "none" : twin.Name));
+                    }
+                    else if (!fresh.Contains(twin)) lines.Add("  NOTE: UploadedStation is not among the new devices");
+                    if (twin == null || CpuOf(twin) == null)
+                    {
+                        lines.Add("  no CPU came in; stopping the report");
+                        return lines;
+                    }
+                    twins.Add(twin);
+                }
+                string origIdentAfter = ProbeIdent(orig);
+                lines.Add("orig station changed by the upload(s): " + (origIdentAfter == origIdentBefore ? "no" : "YES: " + origIdentAfter));
+                ProbeStep(lines, "blocks orig after", delegate { ProbeBlocks(origCpu, "orig", lines); });
+                for (int i = 0; i < twins.Count; i++)
+                {
+                    HwDevice tw = twins[i];
+                    string tag = "twin" + (i + 1);
+                    ProbeStep(lines, "blocks " + tag, delegate { ProbeBlocks(CpuOf(tw), tag, lines); });
+                    ProbeStep(lines, "io " + tag, delegate { ProbeIo(tw, tag, lines); });
+                }
+                ProbeStep(lines, "io orig", delegate { ProbeIo(orig, "orig", lines); });
+                DeviceItem t1 = CpuOf(twins[0]);
+                ProbeStep(lines, "hw orig->twin1", delegate { ProbeHw("hw orig->twin1", origCpu, t1, lines); });
+                ProbeStep(lines, "hw twin1->orig", delegate { ProbeHw("hw twin1->orig", t1, origCpu, lines); });
+                ProbeStep(lines, "sw orig->twin1", delegate { ProbeSw("sw orig->twin1", origCpu, t1, lines); });
+                if (twins.Count > 1)
+                {
+                    DeviceItem t2 = CpuOf(twins[1]);
+                    ProbeStep(lines, "hw twin1->twin2", delegate { ProbeHw("hw twin1->twin2", t1, t2, lines); });
+                    ProbeStep(lines, "sw twin1->twin2", delegate { ProbeSw("sw twin1->twin2", t1, t2, lines); });
+                }
+                // Negative control, offline, on the last twin only: one CPU
+                // parameter changed must flip its leaf against the first.
+                DeviceItem last = CpuOf(twins[twins.Count - 1]);
+                ProbeStep(lines, "control", delegate
+                {
+                    object v = last.GetAttribute("CycleMaximumCycleTime");
+                    object nv = ProbeBump(v);
+                    if (nv == null)
+                    {
+                        lines.Add("control: CycleMaximumCycleTime " + ProbeShow(v) + " cannot be bumped");
+                        return;
+                    }
+                    last.SetAttribute("CycleMaximumCycleTime", nv);
+                    lines.Add("control: last twin CycleMaximumCycleTime " + ProbeShow(v) + " -> " + ProbeShow(last.GetAttribute("CycleMaximumCycleTime")));
+                    if (twins.Count > 1) ProbeHw("hw twin1->twin2 after control", t1, last, lines);
+                    else ProbeHw("hw orig->twin1 after control", origCpu, last, lines);
+                });
+                lines.Add("project IsModified " + ProbeProp(p, "IsModified") + " (never saved; close without saving)");
+                return lines;
+            });
+        }
+
+        // ProbeUpload is Upload without deleting anything; it returns
+        // TIA's UploadedStation (may be null).
+        HwDevice ProbeUpload(Project p, string address, bool trustUnverifiedCertificate, List<string> lines, int n)
+        {
+            StationUploadProvider sup = p.GetService<StationUploadProvider>();
+            ConfigurationPcInterface pc = PcInterface(sup.Configuration);
+            ConfigurationAddress at = pc.Addresses.Create(address);
+            var ups = new UploadAsks();
+            UploadResult r;
+            var online = new OnlineAsks(sup.Configuration, Detached, trustUnverifiedCertificate, address);
+            DateTime t0 = DateTime.UtcNow;
+            try
+            {
+                r = sup.StationUpload(at, delegate(UploadConfiguration c)
+                {
+                    ups.Handle(delegate { return c.GetType().Name + " (" + (c.Message ?? "") + ")"; });
+                });
+            }
+            catch (Exception e)
+            {
+                if (ups.Asked != null) throw new TiaException("probe upload #" + n + " asked " + ups.Asked + ", which tiad does not answer; nothing was uploaded", e);
+                TiaException refused = online.Explain(address, e);
+                if (refused != null) throw refused;
+                throw;
+            }
+            finally
+            {
+                online.Stop();
+            }
+            if (ups.Asked != null) throw new TiaException("probe upload #" + n + " asked " + ups.Asked + ", which tiad does not answer; TIA went on anyway");
+            online.Check(address, "upload");
+            lines.Add(string.Format("upload #{0}: state {1}, errors {2}, warnings {3}, {4} ms, trusted blindly {5}", n, r.State, r.ErrorCount, r.WarningCount,
+                (int)(DateTime.UtcNow - t0).TotalMilliseconds, online.TrustedBlindly.Count));
+            ProbeMessages(r.Messages, 1, lines);
+            if (!TiaNames.DownloadLoaded(r.State.ToString())) throw new TiaException("probe upload #" + n + " ended " + r.State);
+            return r.UploadedStation;
+        }
+
+        // ProbeDup puts a master copy of station into the project (the
+        // rehearsal's stand-in for an upload).
+        static object probeMasterCopy;
+
+        static HwDevice ProbeDup(Project p, HwDevice station, List<string> lines)
+        {
+            if (probeMasterCopy == null)
+            {
+                object lib = p.GetType().GetProperty("ProjectLibrary").GetValue(p, null);
+                object mcf = lib.GetType().GetProperty("MasterCopyFolder").GetValue(lib, null);
+                object mcs = mcf.GetType().GetProperty("MasterCopies").GetValue(mcf, null);
+                System.Reflection.MethodInfo create = null;
+                foreach (System.Reflection.MethodInfo m in mcs.GetType().GetMethods())
+                {
+                    if (m.Name == "Create" && m.GetParameters().Length == 1 && m.GetParameters()[0].ParameterType.IsInstanceOfType(station)) create = m;
+                }
+                if (create == null) throw new TiaException("probe: no MasterCopyComposition.Create for a device");
+                probeMasterCopy = create.Invoke(mcs, new object[] { station });
+            }
+            System.Reflection.MethodInfo cf = null;
+            foreach (System.Reflection.MethodInfo m in p.Devices.GetType().GetMethods())
+            {
+                if (m.Name == "CreateFrom" && m.GetParameters().Length == 1 && m.GetParameters()[0].ParameterType.IsInstanceOfType(probeMasterCopy)) cf = m;
+            }
+            if (cf == null) throw new TiaException("probe: no DeviceComposition.CreateFrom for a master copy");
+            lines.Add("rehearse: station duplicated from a master copy");
+            return (HwDevice)cf.Invoke(p.Devices, new object[] { probeMasterCopy });
+        }
+
+        static void ProbeStep(List<string> lines, string what, Action a)
+        {
+            try
+            {
+                a();
+            }
+            catch (Exception e)
+            {
+                while (e is System.Reflection.TargetInvocationException && e.InnerException != null) e = e.InnerException;
+                lines.Add("  [" + what + "] threw " + e.GetType().Name + ": " + TiaNames.LogSafe(e.Message ?? ""));
+            }
+        }
+
+        static void ProbeMessages(UploadResultMessageComposition ms, int depth, List<string> lines)
+        {
+            foreach (UploadResultMessage m in ms)
+            {
+                lines.Add(string.Format("{0}msg {1}: {2}", new string(' ', depth * 2), m.State, m.Message ?? ""));
+                if (m.Messages.Count > 0) ProbeMessages(m.Messages, depth + 1, lines);
+            }
+        }
+
+        static string ProbeProp(object o, string name)
+        {
+            try
+            {
+                System.Reflection.PropertyInfo pi = o.GetType().GetProperty(name);
+                return pi == null ? "(no property)" : Convert.ToString(pi.GetValue(o, null));
+            }
+            catch (Exception e)
+            {
+                return "(" + e.GetType().Name + ")";
+            }
+        }
+
+        static string ProbeShow(object v)
+        {
+            if (v == null) return "null";
+            var eo = v as IEngineeringObject;
+            if (eo != null) return v.GetType().Name + "(" + ProbeAttr(eo, "Name") + ")";
+            return Convert.ToString(v, System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        static string ProbeAttr(IEngineeringObject o, string name)
+        {
+            try
+            {
+                return ProbeShow(o.GetAttribute(name));
+            }
+            catch (Exception e)
+            {
+                return "(" + e.GetType().Name + ")";
+            }
+        }
+
+        static string ProbeSubnets(Project p)
+        {
+            var names = new List<string>();
+            foreach (Subnet s in p.Subnets) names.Add(s.Name);
+            return names.Count + " [" + string.Join(", ", names.ToArray()) + "]";
+        }
+
+        // ProbeIdent is a device's name, CPU name and every node.
+        static string ProbeIdent(HwDevice d)
+        {
+            DeviceItem c = CpuOf(d);
+            var nodes = new List<string>();
+            foreach (DeviceItem i in Items(d.DeviceItems))
+            {
+                NetworkInterface ni = i.GetService<NetworkInterface>();
+                if (ni == null) continue;
+                foreach (Node n in ni.Nodes)
+                {
+                    nodes.Add(string.Format("{0}: ip {1} pnName {2} pnAuto {3} subnet {4}", i.Name, ProbeAttr(n, "Address"), ProbeAttr(n, "PnDeviceName"),
+                        ProbeAttr(n, "PnDeviceNameAutoGeneration"), n.ConnectedSubnet == null ? "-" : n.ConnectedSubnet.Name));
+                }
+            }
+            return string.Format("{0} (cpu {1}, type {2}) nodes [{3}]", d.Name, c == null ? "-" : c.Name, ProbeAttr(d, "TypeIdentifier"), string.Join("; ", nodes.ToArray()));
+        }
+
+        static void ProbeBlocks(DeviceItem cpu, string tag, List<string> lines)
+        {
+            var sw = (PlcSoftware)cpu.GetService<SoftwareContainer>().Software;
+            ProbeBlockGroup(sw.BlockGroup, "", tag, lines);
+        }
+
+        static void ProbeBlockGroup(PlcBlockGroup g, string path, string tag, List<string> lines)
+        {
+            foreach (PlcBlock b in g.Blocks)
+            {
+                lines.Add(string.Format("  block {0} {1}{2} [{3}{4}] consistent {5} codeModified {6} ifModified {7} compiled {8}", tag, path, b.Name, b.GetType().Name, b.Number,
+                    ProbeAttr(b, "IsConsistent"), ProbeAttr(b, "CodeModifiedDate"), ProbeAttr(b, "InterfaceModifiedDate"), ProbeAttr(b, "CompileDate")));
+            }
+            foreach (PlcBlockUserGroup u in g.Groups) ProbeBlockGroup(u, path + u.Name + "/", tag, lines);
+        }
+
+        // ProbeIo lists each IO system the station controls and the IO
+        // devices connected to it.
+        static void ProbeIo(HwDevice d, string tag, List<string> lines)
+        {
+            foreach (DeviceItem i in Items(d.DeviceItems))
+            {
+                NetworkInterface ni = i.GetService<NetworkInterface>();
+                if (ni == null) continue;
+                foreach (IoController ic in ni.IoControllers)
+                {
+                    IoSystem s = ic.IoSystem;
+                    if (s == null)
+                    {
+                        lines.Add("  io " + tag + " " + i.Name + ": controller, no IO system");
+                        continue;
+                    }
+                    var devs = new List<string>();
+                    foreach (IoConnector c in s.ConnectedIoDevices)
+                    {
+                        devs.Add(ProbeOwner(c));
+                    }
+                    lines.Add(string.Format("  io {0} {1}: IO system {2}, {3} IO devices [{4}]", tag, i.Name, s.Name, devs.Count, string.Join(", ", devs.ToArray())));
+                }
+            }
+        }
+
+        // ProbeOwner names the device an IO connector belongs to.
+        static string ProbeOwner(IEngineeringObject o)
+        {
+            for (int k = 0; o != null && k < 12; k++)
+            {
+                if (o is HwDevice) return ((HwDevice)o).Name;
+                o = o.Parent;
+            }
+            return "?";
+        }
+
+        static object ProbeBump(object v)
+        {
+            if (v is UInt64) return (UInt64)v + 1;
+            if (v is UInt32) return (UInt32)v + 1;
+            if (v is Int32) return (Int32)v + 1;
+            if (v is Int64) return (Int64)v + 1;
+            if (v is UInt16) return (UInt16)((UInt16)v + 1);
+            if (v is Double) return (Double)v + 1;
+            return null;
+        }
+
+        static void ProbeHw(string tag, DeviceItem a, DeviceItem b, List<string> lines)
+        {
+            DateTime t0 = DateTime.UtcNow;
+            CompareResult r = a.CompareTo((IHardwareCompareTarget)b);
+            ProbeTree(tag, r, (int)(DateTime.UtcNow - t0).TotalMilliseconds, lines);
+        }
+
+        static void ProbeSw(string tag, DeviceItem a, DeviceItem b, List<string> lines)
+        {
+            var sa = (PlcSoftware)a.GetService<SoftwareContainer>().Software;
+            var sb = (PlcSoftware)b.GetService<SoftwareContainer>().Software;
+            DateTime t0 = DateTime.UtcNow;
+            CompareResult r = sa.CompareTo((ISoftwareCompareTarget)(object)sb);
+            ProbeTree(tag, r, (int)(DateTime.UtcNow - t0).TotalMilliseconds, lines);
+        }
+
+        // ProbeTree writes the whole compare tree, full depth, with TIA's
+        // detail text (capped at 1500 lines a tree).
+        static void ProbeTree(string tag, CompareResult r, int ms, List<string> lines)
+        {
+            if (r == null || r.RootElement == null)
+            {
+                lines.Add("=== " + tag + ": no result");
+                return;
+            }
+            lines.Add(string.Format("=== {0}: root {1} ({2} ms)", tag, r.RootElement.ComparisonResult, ms));
+            int count = 0;
+            ProbeWalk(r.RootElement, 1, lines, ref count);
+            if (count >= 1500) lines.Add("  ... TRUNCATED at 1500 lines");
+        }
+
+        static void ProbeWalk(CompareResultElement e, int depth, List<string> lines, ref int count)
+        {
+            if (count >= 1500) return;
+            count++;
+            if (e == null)
+            {
+                lines.Add(new string(' ', depth * 2) + "(null element)");
+                return;
+            }
+            string name = e.LeftName == e.RightName ? e.LeftName : e.LeftName + " | " + e.RightName;
+            string info = string.IsNullOrEmpty(e.DetailedInformation) ? "" : " info: " + e.DetailedInformation;
+            lines.Add(string.Format("{0}{1} = {2}{3}", new string(' ', depth * 2), TiaNames.LogSafe(name ?? ""), e.ComparisonResult, TiaNames.LogSafe(info)));
+            foreach (CompareResultElement k in e.Elements) ProbeWalk(k, depth + 1, lines, ref count);
+        }
     }
 }

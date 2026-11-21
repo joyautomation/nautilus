@@ -33,6 +33,62 @@ namespace Tiad
             r.Add("POST", "/v1/pins/{address}", SetPin);
             r.Add("POST", "/v1/identify", Identify);
             r.Add("POST", "/v1/sessions/{id}/online-check", OnlineCheck);
+            r.Add("POST", "/v1/sessions/{id}/probe-upload-twin", ProbeUploadTwin);
+        }
+
+        // ProbeUploadTwin (PROBE ONLY, #789 upload-twin window, never
+        // merged): uploads the CPU at address beside the project's station
+        // and reports how the two compare. The session is left unclean, so
+        // it can never be saved or downloaded from; close it without
+        // saving. A rehearsal makes no CPU contact. Announced, audited.
+        object ProbeUploadTwin(Call c)
+        {
+            NeedTia();
+            return WithSession(c, delegate(Session s)
+            {
+                var r = c.Json();
+                string address = r.Str("address");
+                bool trust = r.Bool("trustUnverifiedCertificate");
+                bool announced = r.Bool("announced");
+                bool rehearse = r.Bool("rehearse");
+                bool second = r.Bool("secondUpload");
+                r.Done();
+                int uploads = second ? 2 : 1;
+                if (!Ip.IsIPv4(address)) throw TiadException.BadRequest("probe-upload-twin: address {0} is not an IPv4 address", Json.Quote(address));
+                if (!Target(address)) throw new TiadException(403, Kinds.TargetRefused, address + " is not in TIAD_TARGETS");
+                if (!rehearse && !announced) throw TiadException.BadRequest("{0}", "probe-upload-twin: announce it first (announced: true): it reaches the CPU");
+                List<string> lines = null;
+                string outcome = "";
+                try
+                {
+                    lines = OnSession(s, delegate(ITia t)
+                    {
+                        s.Unclean = true;
+                        s.Compiled = false;
+                        return t.ProbeUploadTwin(s.Handle, address, trust, uploads, rehearse);
+                    });
+                    outcome = "ok";
+                }
+                catch (TiadException e)
+                {
+                    outcome = e.Kind;
+                    throw;
+                }
+                catch (Exception)
+                {
+                    outcome = "error";
+                    throw;
+                }
+                finally
+                {
+                    Log.Line("audit probe-upload-twin session={0} address={1} rehearse={2} uploads={3} trustUnverifiedCertificate={4} lines={5} outcome={6}",
+                        s.Id, Json.Quote(address), rehearse, uploads, trust, lines == null ? 0 : lines.Count, outcome);
+                }
+                for (int i = 0; i < lines.Count && i < 400; i++) Log.Line("probe upload-twin: {0}", Json.Quote(lines[i]));
+                var o = new Obj();
+                o["lines"] = lines.ToArray();
+                return o;
+            });
         }
 
         // OnlineCheck goes online read-only from a session's project to the
