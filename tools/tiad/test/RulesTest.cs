@@ -115,6 +115,7 @@ namespace Tiad.Test
                 T("LicenceFailedStaysFailed", LicenceFailedStaysFailed),
                 T("LicenceFailsOnALaterCall", LicenceFailsOnALaterCall),
                 T("QuestionIds", QuestionIdsOfConfigurations),
+                T("TrustFixOnlyForCertificates", TrustFixOnlyForCertificates),
                 T("Settings", SettingsForAnswers),
                 T("PasswordsNeverCross", PasswordsNeverCross),
                 T("ProtectionPlan", ProtectionPlan),
@@ -309,6 +310,20 @@ namespace Tiad.Test
         }
 
         // ---- download configurations ----
+
+        // The fingerprint read names its trust opt-in only for a refusal of
+        // certificate questions alone: the opt-in answers no other.
+        static void TrustFixOnlyForCertificates()
+        {
+            string cert = OnlineChecks.Ask("TlsVerificationConfiguration", "PLC_1", "certificate not matching", new List<string>());
+            string cred = OnlineChecks.Ask("OnlineAuthenticationConfiguration", "", "", new List<string>());
+            string other = OnlineChecks.Ask("SomethingNewConfiguration", "", "", new List<string>());
+            True(FingerprintRule.CertificateOnly("TIA: " + TiaNames.OnlineRefused("192.0.2.10", new List<string> { cert }, "x")), "a certificate question alone");
+            True(!FingerprintRule.CertificateOnly("TIA: " + TiaNames.OnlineRefused("192.0.2.10", new List<string> { cred }, "x")), "credentials: " + cred);
+            True(!FingerprintRule.CertificateOnly("TIA: " + TiaNames.OnlineRefused("192.0.2.10", new List<string> { cert, cred }, "x")), "a certificate and credentials");
+            True(!FingerprintRule.CertificateOnly("TIA: " + TiaNames.OnlineRefused("192.0.2.10", new List<string> { other }, "x")), "a question tiad does not know: " + other);
+            True(!FingerprintRule.CertificateOnly("TIA: the fingerprint service failed"), "no question asked");
+        }
 
         static void QuestionIdsOfConfigurations()
         {

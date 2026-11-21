@@ -1516,6 +1516,8 @@ namespace Tiad.Fake
         {
             script.Enter("ReadFingerprint");
             var p = (FakeProject)project;
+            // As the glue: no CPU, or one at another address, is refused.
+            if (p.Station == null && p.Cpu == null) throw new TiaException("fingerprint read: the project has no CPU");
             if (p.Station != null && p.Station.Cpu.Address != address)
             {
                 throw new TiaException("fingerprint read: the project's CPU is at " + p.Station.Cpu.Address + ", not " + address);

@@ -175,9 +175,12 @@ namespace Tiad
                 // the safe side).
                 string reset = "unset";
                 var acting = new List<string>();
+                // rode is the blind trust the download was checked against:
+                // the instance's when the call began, then at each check.
+                BlindTrust rode = blindTrust;
                 try
                 {
-                    object result = DownloadChecked(s, req, ref asked, ref outcome, ref reset, acting);
+                    object result = DownloadChecked(s, req, ref asked, ref outcome, ref reset, ref rode, acting);
                     return result;
                 }
                 catch (TiadException e)
@@ -195,13 +198,13 @@ namespace Tiad
                     Log.Line("audit download session={0} project={1} address={2} hardware={3} software={4} dryRun={5} announced={6} {7} protection={8} configurationPassword={9} attestation={10} userManagementReset={11} blindTrust={12} kept=[{13}] asked=[{14}] acting=[{15}] outcome={16}",
                         s.Id, Json.Quote(s.Project), Json.Quote(req.Address), req.Hardware, req.Software, req.DryRun, req.Announced,
                         AuditDecisions(req.Decisions), req.Secrets.Protection == "" ? "unset" : "set",
-                        req.Secrets.ConfigurationPassword == "" ? "unset" : "set", req.Attestation.Audit(), reset, BlindTrust.Audit(blindTrust),
+                        req.Secrets.ConfigurationPassword == "" ? "unset" : "set", req.Attestation.Audit(), reset, BlindTrust.Audit(rode),
                         AuditKept(s.Kept), asked, string.Join(",", Quoted(acting).ToArray()), outcome);
                 }
             });
         }
 
-        object DownloadChecked(Session s, DownloadRequest req, ref string asked, ref string outcome, ref string resetAudit, List<string> acting)
+        object DownloadChecked(Session s, DownloadRequest req, ref string asked, ref string outcome, ref string resetAudit, ref BlindTrust rode, List<string> acting)
         {
             string bad = req.Validate();
             if (bad != null) throw TiadException.BadRequest("{0}", bad);
@@ -309,7 +312,8 @@ namespace Tiad
             // A download, a dry run too, that would ride on this TIA
             // instance's blind trust needs the request's yes (BlindTrustRule),
             // checked before anything reaches the CPU.
-            TiadException btRefused = BlindTrustRefusal(blindTrust, req, s);
+            rode = blindTrust;
+            TiadException btRefused = BlindTrustRefusal(rode, req, s);
             if (btRefused != null)
             {
                 asked = Json.Quote(QuestionIds.BlindTrust);
@@ -368,14 +372,22 @@ namespace Tiad
             };
 
             DownloadOutcome result;
+            BlindTrust ranWith = rode;
+            bool lateRefused = false;
             try
             {
                 result = OnSession(s, delegate(ITia t)
                 {
                     // Again on the TIA thread, where trust is recorded: a
-                    // call queued ahead of this one may have given it.
-                    TiadException late = BlindTrustRefusal(blindTrust, req, s);
-                    if (late != null) throw late;
+                    // call queued ahead of this one may have given it. What
+                    // it reads here is what the download rides on.
+                    ranWith = blindTrust;
+                    TiadException late = BlindTrustRefusal(ranWith, req, s, "TIA's download was not called");
+                    if (late != null)
+                    {
+                        lateRefused = true;
+                        throw late;
+                    }
                     // A dry run never starts the CPU, whatever the request
                     // says (#1154 review): if TIA loads it without asking,
                     // start-after is NoAction.
@@ -384,6 +396,13 @@ namespace Tiad
             }
             catch (TiadException e)
             {
+                rode = ranWith;
+                if (lateRefused)
+                {
+                    asked = Json.Quote(QuestionIds.BlindTrust);
+                    outcome = e.Kind + ":[" + asked + "]";
+                    throw;
+                }
                 asked = Ids(askedQs);
                 // An outcome_unknown from TIA's side (its download had
                 // begun when it failed) passes through, with the acting
@@ -409,6 +428,7 @@ namespace Tiad
             {
                 // A reset is journalled given only once tiad answered it.
                 if (given != "") resetAudit = "given:" + given;
+                rode = ranWith;
             }
             asked = Ids(askedQs);
 
@@ -442,7 +462,7 @@ namespace Tiad
                 if (s.Kept.Count > 0) dq.Add(KeptRule.Question(s.Kept));
                 o["questions"] = Question.ToJson(dq);
                 o["keptDevices"] = KeptDevice.ToJson(s.Kept);
-                o["blindTrust"] = BlindTrustJson();
+                o["blindTrust"] = rode == null ? null : rode.ToJson();
                 return o;
             }
             // A cancel after an acting answer is never a clean refusal: TIA
@@ -534,8 +554,9 @@ namespace Tiad
                 o["stateSource"] = result.StateSource;
             }
             // The TIA instance's blind trust the download rode on, if any,
-            // for the deploy record (BlindTrustRule).
-            o["blindTrust"] = BlindTrustJson();
+            // for the deploy record (BlindTrustRule): as the TIA thread read
+            // it just before TIA's download, not later.
+            o["blindTrust"] = rode == null ? null : rode.ToJson();
             return o;
         }
 
@@ -559,12 +580,17 @@ namespace Tiad
                 if (!Target(address)) throw new TiadException(403, Kinds.TargetRefused, address + " is not in TIAD_TARGETS");
                 CheckDevicePin(s, address, "compare");
                 var diffs = new List<Difference>();
-                OnlineCompare cmp = OnSession(s, delegate(ITia t) { return t.Compare(s.Handle, address); });
-                BlindTrust bt = blindTrust;
-                if (bt != null)
+                // Journalled before it goes online, so a compare that fails
+                // is journalled as riding on the trust too.
+                OnlineCompare cmp = OnSession(s, delegate(ITia t)
                 {
-                    Log.Line("audit compare session={0} project={1} address={2} blindTrust={3}", s.Id, Json.Quote(s.Project), Json.Quote(address), BlindTrust.Audit(bt));
-                }
+                    BlindTrust bt = blindTrust;
+                    if (bt != null)
+                    {
+                        Log.Line("audit compare session={0} project={1} address={2} blindTrust={3}", s.Id, Json.Quote(s.Project), Json.Quote(address), BlindTrust.Audit(bt));
+                    }
+                    return t.Compare(s.Handle, address);
+                });
                 bool equal = TiaNames.CompareEqual(cmp == null ? null : cmp.Tree, cmp == null ? null : cmp.Blocks, diffs);
                 var list = new List<object>();
                 foreach (var d in diffs)

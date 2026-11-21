@@ -23,6 +23,17 @@ namespace Tiad
         // these bound what the audit line can carry from the CPU.
         public const int MaxItems = 64, MaxIdentifier = 128, MaxValue = 1024;
 
+        // CertificateOnly is true when a refusal (TiaNames.OnlineRefused)
+        // names only certificate questions, which the opt-in answers; it
+        // answers no credentials and no question tiad does not know.
+        public static bool CertificateOnly(string message)
+        {
+            return message.IndexOf("tiad trusts no CPU certificate", StringComparison.Ordinal) >= 0 &&
+                message.IndexOf("TIA asked: trust the TLS certificate", StringComparison.Ordinal) >= 0 &&
+                message.IndexOf("credentials (", StringComparison.Ordinal) < 0 &&
+                message.IndexOf("a question tiad does not know", StringComparison.Ordinal) < 0;
+        }
+
         // Check returns null for a whole read, or what is wrong with it.
         public static string Check(FingerprintRead r)
         {
@@ -88,8 +99,10 @@ namespace Tiad
 
         // TrustingCall runs an ITia call that took trustUnverifiedCertificate:
         // if it fails inside TIA's side, TIA may have trusted a certificate
-        // before it failed, so that is recorded as trust. Run on the TIA
-        // thread.
+        // before it failed, so that is recorded as trust. That includes
+        // failures before going online (no CPU, another address): the safe
+        // side, since tiad cannot tell from the failure how far it got.
+        // Run on the TIA thread.
         T TrustingCall<T>(string call, Session s, string address, bool trust, Func<T> f)
         {
             try
@@ -115,6 +128,14 @@ namespace Tiad
         // refuses, or null when it may go on.
         static TiadException BlindTrustRefusal(BlindTrust b, DownloadRequest req, Session s)
         {
+            return BlindTrustRefusal(b, req, s, "nothing was sent to the CPU");
+        }
+
+        // BlindTrustRefusal with the suffix that says how far the download
+        // got: the backstop on the TIA thread runs after the pin check and
+        // the claim, just before TIA's download is called.
+        static TiadException BlindTrustRefusal(BlindTrust b, DownloadRequest req, Session s, string got)
+        {
             bool declined;
             string why = BlindTrustRule.Check(b, req.Decisions.AcceptBlindTrust, out declined);
             if (why == null) return null;
@@ -122,7 +143,7 @@ namespace Tiad
             d["questions"] = Question.ToJson(new List<Question> { BlindTrustRule.Question(b) });
             d["keptDevices"] = KeptDevice.ToJson(s.Kept);
             d["blindTrust"] = b.ToJson();
-            return new TiadException(409, declined ? Kinds.Declined : Kinds.DecisionRequired, why + "; nothing was sent to the CPU", d, false);
+            return new TiadException(409, declined ? Kinds.Declined : Kinds.DecisionRequired, why + "; " + got, d, false);
         }
 
         object Fingerprint(Call c)
@@ -130,17 +151,21 @@ namespace Tiad
             NeedTia();
             return WithSession(c, delegate(Session s)
             {
-                var r = c.Json();
-                // An explicit, per-call opt-in, as an upload's.
-                bool trust = r.Bool("trustUnverifiedCertificate");
-                r.Done();
-                string address = CpuOf(s);
-                if (!Target(address)) throw new TiadException(403, Kinds.TargetRefused, address + " is not in TIAD_TARGETS");
+                // Every read is journalled, refusals too: the request and
+                // the gates are checked inside the try.
+                bool trust = false;
+                string address = s.Address;
                 BlindTrust before = blindTrust;
                 FingerprintRead read = null;
                 string outcome = "";
                 try
                 {
+                    var r = c.Json();
+                    // An explicit, per-call opt-in, as an upload's.
+                    trust = r.Bool("trustUnverifiedCertificate");
+                    r.Done();
+                    address = CpuOf(s);
+                    if (!Target(address)) throw new TiadException(403, Kinds.TargetRefused, address + " is not in TIAD_TARGETS");
                     // An online call: the CPU must still be the pinned one.
                     CheckDevicePin(s, address, "fingerprint read");
                     read = OnSession(s, delegate(ITia t)
@@ -158,7 +183,7 @@ namespace Tiad
                     outcome = e.Kind;
                     // A certificate question answered no (TiaNames.OnlineRefused):
                     // name the opt-in.
-                    if (!trust && e.Kind == Kinds.OperationFailed && e.Message.IndexOf("tiad trusts no CPU certificate", StringComparison.Ordinal) >= 0)
+                    if (!trust && e.Kind == Kinds.OperationFailed && FingerprintRule.CertificateOnly(e.Message))
                     {
                         throw new TiadException(e.Status, e.Kind, e.Message + "; " + TrustFix, e.Payload, e.Fatal);
                     }
