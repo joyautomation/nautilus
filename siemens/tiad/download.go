@@ -54,7 +54,11 @@ const (
 	// Decisions.AcceptUnverifiedHardware yes with the request's
 	// Attestation answers it (CheckHardware).
 	QuestionUnverifiedHardware = "unverified-hardware"
-	QuestionOther              = "other"
+	// QuestionBlindTrust is the agent's own question too: a download in a
+	// TIA instance that trusted a CPU's certificate blindly earlier
+	// (CheckBlindTrust). Only Decisions.AcceptBlindTrust yes answers it.
+	QuestionBlindTrust = "blind-trust"
+	QuestionOther      = "other"
 )
 
 // Question is one pre-download check that needs an answer.
@@ -111,6 +115,12 @@ type Decisions struct {
 	// the hardware configuration although tiad cannot verify it. Yes
 	// needs DownloadRequest.Attestation too.
 	AcceptUnverifiedHardware *bool `json:"acceptUnverifiedHardware,omitempty"`
+	// AcceptBlindTrust answers QuestionBlindTrust: download although the
+	// agent's TIA instance trusted a CPU's certificate blindly earlier (an
+	// upload's or a fingerprint read's trustUnverifiedCertificate). It
+	// answers no TLS question of the download's own: that still takes
+	// TrustCertificate.
+	AcceptBlindTrust *bool `json:"acceptBlindTrust,omitempty"`
 }
 
 // KeptQuestion is the question a download asks when the project keeps
@@ -261,6 +271,32 @@ func CheckHardware(r DownloadRequest) (why string, declined bool) {
 	return "", false
 }
 
+// BlindTrustQuestion is the question a download asks in a TIA instance
+// with blind trust b: the agent's BlindTrustRule.Question.
+func BlindTrustQuestion(b BlindTrust) Question {
+	return Question{ID: QuestionBlindTrust,
+		Message: "download in a TIA instance that trusted a CPU's certificate blindly (" + b.Describe() + "): set decisions.acceptBlindTrust, or restart the agent"}
+}
+
+// CheckBlindTrust is the agent's BlindTrustRule.Check: "" when a download
+// may go on in a TIA instance with blind trust b (nil: none), or why not,
+// naming the fix; declined when accept answered no. A download, a dry run
+// too, in such an instance rides on that trust, since TIA asks no TLS
+// question again until it restarts.
+func CheckBlindTrust(b *BlindTrust, accept *bool) (why string, declined bool) {
+	if b == nil {
+		return "", false
+	}
+	w := "this agent's TIA instance trusted a CPU's certificate blindly (" + b.Describe() + "), and TIA keeps that trust until it restarts, so this download would ride on it"
+	switch {
+	case accept == nil:
+		return w + ": restart the agent for a TIA instance that trusts nothing, or set decisions.acceptBlindTrust", false
+	case !*accept:
+		return w + ", and decisions.acceptBlindTrust says no: restart the agent for a TIA instance that trusts nothing", true
+	}
+	return "", false
+}
+
 // DownloadResult is a download's outcome. After a dry run, Questions are
 // what a real download must answer.
 type DownloadResult struct {
@@ -312,6 +348,10 @@ type DownloadResult struct {
 	// download loads them too. A decision_required or declined error
 	// lists them as well (KeptDevicesOf), before anything is loaded.
 	KeptDevices []KeptDevice `json:"keptDevices"`
+	// BlindTrust is the agent's TIA instance's blind trust the download
+	// rode on (Decisions.AcceptBlindTrust), or nil: keep it in the deploy
+	// record.
+	BlindTrust *BlindTrust `json:"blindTrust"`
 }
 
 // Acting reports whether answering the question id can change the CPU
@@ -400,6 +440,22 @@ func StateOf(err error) (state, source string) {
 
 // KeptDevicesOf returns the kept devices a decision_required or declined
 // download error lists.
+// BlindTrustOf is the TIA instance's blind trust a decision_required or
+// declined download error names (CheckBlindTrust), or nil.
+func BlindTrustOf(err error) *BlindTrust {
+	var e *Error
+	if !errors.As(err, &e) || len(e.Data) == 0 {
+		return nil
+	}
+	var d struct {
+		BlindTrust *BlindTrust `json:"blindTrust"`
+	}
+	if json.Unmarshal(e.Data, &d) != nil {
+		return nil
+	}
+	return d.BlindTrust
+}
+
 func KeptDevicesOf(err error) []KeptDevice {
 	var e *Error
 	if !errors.As(err, &e) || len(e.Data) == 0 {

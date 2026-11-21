@@ -74,6 +74,17 @@ type Fake struct {
 	uploadAccess  string
 	accessRecords string
 
+	// fingerprint scripts the fingerprint reads (SetFingerprint).
+	// tlsTrusted is set once the fake's TIA answered a TLS question
+	// trusted: as TIA does, it asks none again. blindTrust is the agent's
+	// record of it (BlindTrust). loads and hardwareLoads count the loads
+	// of each CPU, for its fingerprint.
+	fingerprint   FingerprintScript
+	tlsTrusted    bool
+	blindTrust    *tiad.BlindTrust
+	loads         map[string]int
+	hardwareLoads map[string]int
+
 	mu        sync.Mutex
 	pins      map[string]tiad.DeviceIdentity // CPU address → device pin
 	files     map[string][]byte
@@ -450,6 +461,8 @@ func (f *Fake) init() {
 		f.loaded = map[string]string{}
 		f.claims = map[string]string{}
 		f.pins = map[string]tiad.DeviceIdentity{}
+		f.loads = map[string]int{}
+		f.hardwareLoads = map[string]int{}
 		m := http.NewServeMux()
 		m.HandleFunc("GET /v1/health", f.wrap(f.health, false))
 		m.HandleFunc("GET /v1/probe", f.wrap(f.probe, false))
@@ -470,6 +483,7 @@ func (f *Fake) init() {
 		m.HandleFunc("POST /v1/sessions/{id}/export", f.wrap(f.export, true))
 		m.HandleFunc("POST /v1/sessions/{id}/upload", f.wrap(f.upload, true))
 		m.HandleFunc("POST /v1/sessions/{id}/save", f.wrap(f.save, true))
+		m.HandleFunc("POST /v1/sessions/{id}/fingerprint", f.wrap(f.readFingerprint, true))
 		m.HandleFunc("GET /v1/pins", f.wrap(f.listPins, false))
 		m.HandleFunc("POST /v1/pins/{address}", f.wrap(f.setPin, false))
 		f.mux = m
@@ -1275,6 +1289,17 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 			data: map[string]any{"questions": []tiad.Question{{ID: tiad.QuestionStartAfter, Message: "start the CPU after loading", Detail: "StartModules"}},
 				"keptDevices": keptList(s.kept)}}
 	}
+	// A download, a dry run too, that would ride on the TIA instance's
+	// blind trust needs the request's yes, before anything reaches the CPU.
+	if why, declined := tiad.CheckBlindTrust(f.blindTrust, req.Decisions.AcceptBlindTrust); why != "" {
+		kind := tiad.KindDecisionRequired
+		if declined {
+			kind = tiad.KindDeclined
+		}
+		return nil, &failure{status: http.StatusConflict, kind: kind,
+			msg:  why + "; nothing was sent to the CPU",
+			data: map[string]any{"questions": []tiad.Question{tiad.BlindTrustQuestion(*f.blindTrust)}, "keptDevices": keptList(s.kept), "blindTrust": f.blindTrust}}
+	}
 	if fl := f.checkDevicePin(req.Address, call); fl != nil {
 		return nil, fl
 	}
@@ -1319,7 +1344,7 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 			if len(s.kept) > 0 {
 				dq = append(dq, tiad.KeptQuestion(s.kept))
 			}
-			return tiad.DownloadResult{DryRun: true, Provisional: true, QuestionsIncomplete: true, Questions: dq, KeptDevices: keptList(s.kept)}, nil
+			return tiad.DownloadResult{DryRun: true, Provisional: true, QuestionsIncomplete: true, Questions: dq, KeptDevices: keptList(s.kept), BlindTrust: f.blindTrust}, nil
 		}
 		unanswered, declined := tiad.Resolve([]tiad.Question{q}, req.Decisions, haveProtection, haveConfigurationPassword, accessControlKept, reset)
 		if len(unanswered) == 0 && len(declined) == 0 {
@@ -1370,6 +1395,10 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 	rec := req
 	rec.Secrets = nil
 	f.downloads = append(f.downloads, Download{Session: s.id, Request: rec, State: state})
+	f.loads[req.Address]++
+	if req.Hardware {
+		f.hardwareLoads[req.Address]++
+	}
 	// tiad reports the mode only as TIA's messages say it: TIA says
 	// nothing of a CPU it never stopped.
 	said, source := "", ""
@@ -1404,7 +1433,7 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 		}
 		return nil, fl
 	}
-	res := tiad.DownloadResult{Downloaded: true, Questions: asked, State: said, StateSource: source, KeptDevices: keptList(s.kept), CompareEqual: true}
+	res := tiad.DownloadResult{Downloaded: true, Questions: asked, State: said, StateSource: source, KeptDevices: keptList(s.kept), CompareEqual: true, BlindTrust: f.blindTrust}
 	if req.Hardware {
 		res.HardwareVerified = new(bool)
 		res.Warning = "the hardware configuration is not verified: Openness has no online hardware compare, so only the PLC software was compared after loading"
@@ -1492,9 +1521,9 @@ func (f *Fake) compare(r *http.Request) (any, *failure) {
 		return nil, fl
 	}
 	if f.loaded[s.station.CPU.Address] == s.id && !s.changed {
-		return tiad.CompareResult{Equal: true, Differences: []tiad.Difference{}}, nil
+		return tiad.CompareResult{Equal: true, Differences: []tiad.Difference{}, BlindTrust: f.blindTrust}, nil
 	}
-	return tiad.CompareResult{Differences: []tiad.Difference{{Object: s.station.CPU.Name, State: "different"}}}, nil
+	return tiad.CompareResult{Differences: []tiad.Difference{{Object: s.station.CPU.Name, State: "different"}}, BlindTrust: f.blindTrust}, nil
 }
 
 func (f *Fake) export(r *http.Request) (any, *failure) {
@@ -1605,8 +1634,153 @@ func (f *Fake) upload(r *http.Request) (any, *failure) {
 	s.unclean = false
 	// The project's CPU is now what this CPU reported.
 	s.uploadedFrom = address
-	// The fake's CPU asks no TLS question, so nothing is trusted.
-	return tiad.UploadResult{TrustedBlindly: []string{}, Device: read, Pin: pin, CPU: *s.cpu, RemovedAccess: removed}, nil
+	// The fake's CPU asks no TLS question going online for an upload, so
+	// nothing is trusted (the C# fake's uploadAsksTls models one).
+	return tiad.UploadResult{TrustedBlindly: []string{}, Device: read, Pin: pin, CPU: *s.cpu, RemovedAccess: removed, BlindTrust: f.blindTrust}, nil
+}
+
+// FingerprintScript scripts the fake CPU's fingerprint reads.
+type FingerprintScript struct {
+	// AsksTLS makes a read ask TLS trust, as the bench CPU's does (#789
+	// stage 1b), until the fake's TIA trusted once.
+	AsksTLS bool
+	// Items, when set, is what every read returns instead of the fake
+	// CPU's own; NoItems makes it return none.
+	Items   []tiad.FingerprintItem
+	NoItems bool
+	// Fails makes every read fail inside TIA's side with this message.
+	Fails string
+}
+
+// SetFingerprint scripts the fingerprint reads.
+func (f *Fake) SetFingerprint(fs FingerprintScript) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fingerprint = fs
+}
+
+// BlindTrust is the fake agent's record of its TIA instance's blind trust,
+// or nil.
+func (f *Fake) BlindTrust() *tiad.BlindTrust {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.blindTrust == nil {
+		return nil
+	}
+	b := *f.blindTrust
+	return &b
+}
+
+// recordBlindTrust is the agent's RecordBlindTrust: the first trust sets
+// the instance's record.
+func (f *Fake) recordBlindTrust(call, session, address string, trusted []string) {
+	if len(trusted) == 0 || f.blindTrust != nil {
+		return
+	}
+	f.blindTrust = &tiad.BlindTrust{Since: time.Now().UTC().Format("2006-01-02T15:04:05.000Z"), Call: call, Session: session, Address: address,
+		Questions: append([]string(nil), trusted...)}
+}
+
+// fingerprintUnknownTrust is the agent's UnknownTrust.
+const fingerprintUnknownTrust = "unknown: the call failed after its trustUnverifiedCertificate opt-in, so TIA may have trusted a certificate"
+
+// fingerprintItems is the fake CPU's fingerprint: the bench's eight
+// identifiers, with synthetic values that change as TIA's do (#789 stage
+// (C)): DownloadId and the change counters on every load, Hardware on a
+// hardware load.
+func (f *Fake) fingerprintItems(address string) []tiad.FingerprintItem {
+	n, hw := f.loads[address], f.hardwareLoads[address]
+	return []tiad.FingerprintItem{
+		{Identifier: "TextLists", Value: "fake-textlists-1"},
+		{Identifier: "Hardware", Value: "fake-hardware-" + strconv.Itoa(hw)},
+		{Identifier: "Certificates", Value: "fake-certificates-1"},
+		{Identifier: "Routing", Value: "fake-routing-1"},
+		{Identifier: "Connection", Value: "fake-connection-1"},
+		{Identifier: "DownloadId", Value: "fake-download-" + strconv.Itoa(n)},
+		{Identifier: "ChangeCounterPersistent", Value: strconv.Itoa(100 + n)},
+		{Identifier: "ChangeCounterRetain", Value: strconv.Itoa(100 + n)},
+	}
+}
+
+func (f *Fake) readFingerprint(r *http.Request) (any, *failure) {
+	s, fl := f.session(r)
+	if fl != nil {
+		return nil, fl
+	}
+	var req tiad.FingerprintRequest
+	if fl := decode(r, &req); fl != nil {
+		return nil, fl
+	}
+	if s.station == nil {
+		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "the project has no station spec")
+	}
+	address := s.station.CPU.Address
+	if !contains(f.Targets, address) {
+		return nil, fail(http.StatusForbidden, tiad.KindTargetRefused, "%s is not in TIAD_TARGETS", address)
+	}
+	if fl := f.checkDevicePin(address, "fingerprint read"); fl != nil {
+		return nil, fl
+	}
+	const call = "fingerprint read"
+	if f.fingerprint.Fails != "" {
+		if req.TrustUnverifiedCertificate {
+			f.recordBlindTrust(call, s.id, address, []string{fingerprintUnknownTrust})
+		}
+		return nil, fail(http.StatusInternalServerError, tiad.KindOperationFailed, "TIA: %s", f.fingerprint.Fails)
+	}
+	trusted := []string{}
+	if f.fingerprint.AsksTLS && !f.tlsTrusted {
+		ask := "trust the TLS certificate of PLC_1 [" + address + "]: certificate not matching"
+		if !req.TrustUnverifiedCertificate {
+			return nil, fail(http.StatusInternalServerError, tiad.KindOperationFailed,
+				"TIA: going online to %s, TIA asked: %s. tiad trusts no CPU certificate and holds no CPU credentials yet, so it answered no (TIA: Online connection failed.); %s",
+				address, ask, fingerprintTrustFix)
+		}
+		f.tlsTrusted = true
+		trusted = append(trusted, ask)
+	}
+	f.recordBlindTrust(call, s.id, address, trusted)
+	items := f.fingerprintItems(address)
+	if f.fingerprint.Items != nil {
+		items = append([]tiad.FingerprintItem(nil), f.fingerprint.Items...)
+	}
+	if f.fingerprint.NoItems {
+		items = nil
+	}
+	if why := checkFingerprint(items); why != "" {
+		return nil, fail(http.StatusInternalServerError, tiad.KindOperationFailed, "fingerprint read: %s", why)
+	}
+	return tiad.FingerprintResult{Address: address, Items: items, TrustedBlindly: trusted, BlindTrust: f.blindTrust}, nil
+}
+
+// fingerprintTrustFix is the agent's fix for a fingerprint read TIA's TLS
+// question refused.
+const fingerprintTrustFix = "to read it anyway, trust the CPU's certificate blindly (trustUnverifiedCertificate: true); the agent's TIA instance then keeps that trust, and a download in it needs decisions.acceptBlindTrust, until the agent restarts"
+
+// checkFingerprint is the agent's FingerprintRule.Check.
+func checkFingerprint(items []tiad.FingerprintItem) string {
+	const maxItems, maxIdentifier, maxValue = 64, 128, 1024
+	if len(items) == 0 {
+		return "TIA's fingerprint service returned no items"
+	}
+	if len(items) > maxItems {
+		return fmt.Sprintf("TIA's fingerprint service returned %d items, more than %d", len(items), maxItems)
+	}
+	seen := map[string]bool{}
+	for _, it := range items {
+		switch {
+		case it.Identifier == "":
+			return "TIA's fingerprint service returned an item with no identifier"
+		case len(it.Identifier) > maxIdentifier:
+			return fmt.Sprintf("TIA's fingerprint service returned an identifier longer than %d bytes", maxIdentifier)
+		case len(it.Value) > maxValue:
+			return fmt.Sprintf("TIA's fingerprint service returned a value longer than %d bytes for %q", maxValue, it.Identifier)
+		case seen[it.Identifier]:
+			return fmt.Sprintf("TIA's fingerprint service returned %q twice", it.Identifier)
+		}
+		seen[it.Identifier] = true
+	}
+	return ""
 }
 
 // BenchDevice is the fake CPU's identity unless a test says otherwise.

@@ -811,6 +811,9 @@ type CompareResult struct {
 	// Blocks are the labels of the program blocks the project holds
 	// ("Main [OB1]"): equal means the compare saw each one identical.
 	Blocks []string `json:"blocks,omitempty"`
+	// BlindTrust is the agent's TIA instance's blind trust, or nil: a
+	// compare asks no TLS question of its own, so it may ride on it.
+	BlindTrust *BlindTrust `json:"blindTrust"`
 }
 
 // Compare compares the project with the CPU it was downloaded to.
@@ -855,8 +858,9 @@ type UploadRequest struct {
 	// TrustUnverifiedCertificate answers TIA's TLS question going online
 	// to the CPU "trusted", blindly: TIA shows no certificate to check. An
 	// explicit, per-call opt-in for a read-only upload from a CPU in
-	// TIAD_TARGETS; credentials and other questions still cancel. Download
-	// and compare have no such option.
+	// TIAD_TARGETS; credentials and other questions still cancel. TIA
+	// keeps the trust for the rest of its instance (BlindTrust). Only an
+	// upload and a fingerprint read take this option.
 	TrustUnverifiedCertificate bool `json:"trustUnverifiedCertificate,omitempty"`
 }
 
@@ -882,12 +886,81 @@ type UploadResult struct {
 	// access"`), which the upload removed with the station they belonged
 	// to. A user or role the project held before is never removed.
 	RemovedAccess []string `json:"removedAccess,omitempty"`
+	// BlindTrust is the agent's TIA instance's blind trust after the
+	// upload, or nil.
+	BlindTrust *BlindTrust `json:"blindTrust"`
 }
 
 // UploadWith is Upload with options.
 func (s *Session) UploadWith(ctx context.Context, req UploadRequest) (UploadResult, error) {
 	var r UploadResult
 	_, err := s.c.doJSON(ctx, http.MethodPost, s.path("upload"), req, &r)
+	return r, err
+}
+
+// BlindTrust is when the agent's TIA instance first answered a CPU's TLS
+// certificate question trusted, blindly, on a request's
+// trustUnverifiedCertificate. TIA keeps that trust until it restarts, and
+// the agent starts TIA once, so only an agent restart clears it: a later
+// online call asks nothing and rides on it (#789 stage 1b). Since is the
+// agent's UTC clock; Call, Session and Address say which call gave it;
+// Questions are what it answered.
+type BlindTrust struct {
+	Since     string   `json:"since"`
+	Call      string   `json:"call"`
+	Session   string   `json:"session"`
+	Address   string   `json:"address"`
+	Questions []string `json:"questions"`
+}
+
+// Describe is the agent's BlindTrust.Describe.
+func (b BlindTrust) Describe() string {
+	return "since " + b.Since + ", by the " + b.Call + " of session " + b.Session + " from " + b.Address
+}
+
+// FingerprintRequest is a fingerprint read's options.
+type FingerprintRequest struct {
+	// TrustUnverifiedCertificate answers the TLS question TIA's
+	// fingerprint service asks "trusted", blindly, as an upload's does.
+	// The bench CPU's read asks it (#789 stage 1b).
+	TrustUnverifiedCertificate bool `json:"trustUnverifiedCertificate,omitempty"`
+}
+
+// FingerprintItem is one item of TIA's fingerprint of a CPU, as TIA names
+// it ("Hardware", "DownloadId", "ChangeCounterRetain", ...).
+type FingerprintItem struct {
+	Identifier string `json:"identifier"`
+	Value      string `json:"value"`
+}
+
+// FingerprintResult is a fingerprint read: TIA's items in TIA's order. They
+// are checksums and counters of what the CPU holds, not its identity.
+type FingerprintResult struct {
+	Address string            `json:"address"`
+	Items   []FingerprintItem `json:"items"`
+	// TrustedBlindly are this read's certificate questions answered
+	// trusted on the request's opt-in; BlindTrust is the TIA instance's,
+	// which a read that asked nothing may ride on.
+	TrustedBlindly []string    `json:"trustedBlindly"`
+	BlindTrust     *BlindTrust `json:"blindTrust"`
+}
+
+// Value is the item named id, and whether the read holds it.
+func (r FingerprintResult) Value(id string) (string, bool) {
+	for _, it := range r.Items {
+		if it.Identifier == id {
+			return it.Value, true
+		}
+	}
+	return "", false
+}
+
+// Fingerprint reads, online and read-only, what TIA's fingerprint service
+// reports for the session's CPU (siemens-ide.md §3.8). It fails, never
+// answers part of a read.
+func (s *Session) Fingerprint(ctx context.Context, req FingerprintRequest) (FingerprintResult, error) {
+	var r FingerprintResult
+	_, err := s.c.doJSON(ctx, http.MethodPost, s.path("fingerprint"), req, &r)
 	return r, err
 }
 

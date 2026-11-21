@@ -53,6 +53,10 @@ namespace Tiad
         // anything before it failed is unknown, so it counts as trusted.
         const string UnknownTrust = "unknown: the call failed after its trustUnverifiedCertificate opt-in, so TIA may have trusted a certificate";
 
+        // TrustFix is the fix a fingerprint read TIA's TLS question
+        // refused names.
+        const string TrustFix = "to read it anyway, trust the CPU's certificate blindly (trustUnverifiedCertificate: true); the agent's TIA instance then keeps that trust, and a download in it needs decisions.acceptBlindTrust, until the agent restarts";
+
         void RegisterFingerprint(Router r)
         {
             r.Add("POST", "/v1/sessions/{id}/fingerprint", Fingerprint);
@@ -152,6 +156,12 @@ namespace Tiad
                 catch (TiadException e)
                 {
                     outcome = e.Kind;
+                    // A certificate question answered no (TiaNames.OnlineRefused):
+                    // name the opt-in.
+                    if (!trust && e.Kind == Kinds.OperationFailed && e.Message.IndexOf("tiad trusts no CPU certificate", StringComparison.Ordinal) >= 0)
+                    {
+                        throw new TiadException(e.Status, e.Kind, e.Message + "; " + TrustFix, e.Payload, e.Fatal);
+                    }
                     throw;
                 }
                 catch (Exception)

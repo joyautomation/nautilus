@@ -584,8 +584,9 @@ func contractExportUploadSave(t *testing.T, start Starter) {
 	if err := s.Upload(ctx); err != nil {
 		t.Fatalf("upload: %v", err)
 	}
-	// Only an upload takes trustUnverifiedCertificate, as an explicit
-	// opt-in; download and compare refuse it as an unknown field.
+	// Only an upload and a fingerprint read take trustUnverifiedCertificate,
+	// as an explicit opt-in; download and compare refuse it as an unknown
+	// field.
 	if r, err := s.UploadWith(ctx, tiad.UploadRequest{TrustUnverifiedCertificate: true}); err != nil || r.TrustedBlindly == nil || len(r.TrustedBlindly) != 0 {
 		t.Fatalf("upload with the opt-in, no TLS question: %+v %v", r, err)
 	}
