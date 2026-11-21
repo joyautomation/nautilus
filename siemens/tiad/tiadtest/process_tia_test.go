@@ -1404,9 +1404,18 @@ func TestAgentJournalsTheUserManagementReset(t *testing.T) {
 	}
 
 	// Refused before TIA: never uploaded from there, nothing attested.
+	// tiad read the project, and neither went online nor called TIA's
+	// download.
 	p.SetScript(t, tiadtest.Script{Questions: []tiad.Question{um}})
+	before := p.Calls(t)
 	if _, err := s.Download(ctx, tiadtest.ResetLoad(other)); tiad.Kind(err) != tiad.KindDecisionRequired {
 		t.Fatalf("no route: %v", err)
+	}
+	after := p.Calls(t)
+	for call, want := range map[string]int{"ReadCpu": 1, "Download": 0, "Identify": 0} {
+		if n := countCalls(after, call) - countCalls(before, call); n != want {
+			t.Errorf("a refused reset called TIA's %s %d times, want %d", call, n, want)
+		}
 	}
 	want(line(tiad.KindDecisionRequired+`:["user-management"]`), "userManagementResetToProject=yes", "at=unset", "cpuAccessControl=unset}", "userManagementReset=refused", `asked=["user-management"] acting=[]`)
 

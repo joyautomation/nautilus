@@ -211,15 +211,35 @@ func contractUserManagementReset(t *testing.T, start Starter) {
 		}
 	})
 
-	t.Run("SpecSetsAccessControl", func(t *testing.T) {
-		// The bench spec sets access control (fullAccessUser): no reset,
-		// whatever the attestation says.
-		a, s := compiledBench(t, start)
+	t.Run("SessionSetAccessControl", func(t *testing.T) {
+		// A session that once applied fullAccessUser (the bench spec, at
+		// create), then uploaded the CPU (Disabled) and kept it: every
+		// other conjunct holds, the upload route included, yet keep after
+		// fullAccessUser keeps what tiad set (#1159), so no reset.
+		a := start(t, Config{Targets: []string{benchCPU}})
+		c := a.Client()
+		installGSD(t, c)
+		s, err := c.CreateProject(ctx, "um", BenchStation(), BenchSecrets)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Upload(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.ApplyStation(ctx, adoptedStation(), BenchSecrets); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.PutFile(ctx, "src/Main.scl", []byte(programSCL)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{"src/Main.scl"}, Prune: true}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Compile(ctx, true, true); err != nil {
+			t.Fatal(err)
+		}
 		a.SetQuestions(t, benchHardwareChecks)
-		att := ResetLoad(benchCPU)
-		att.Decisions.KeptDevices = nil
-		att.Attestation.CPUAccessControl = tiad.AttestCPUAccessDisabled
-		_, err := s.Download(ctx, att)
-		wantResetRefused(t, "spec sets access control", err, "does not keep access control")
+		_, err = s.Download(ctx, ResetLoad(benchCPU))
+		wantResetRefused(t, "the session set access control", err, "does not keep access control")
 	})
 }
