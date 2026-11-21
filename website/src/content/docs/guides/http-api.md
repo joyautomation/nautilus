@@ -428,7 +428,7 @@ anything but a setpoint.
 
 Each row also carries `editedBy` and `editedAtMs` (who last wrote the value
 from outside the logic: `user:…`, `token:…`, `sparkplug`, `opcua`, or
-`external`), `committed: true` for a plant-ahead value a write-back commit has
+`external`; `program` when the logic changed the value after an edit), `committed: true` for a plant-ahead value a write-back commit has
 already put in the repo (it waits for a redeploy), and `unwritable` when the
 write-back cannot edit its `init:`. The answer's `writeBack` is the manifest's
 mode.

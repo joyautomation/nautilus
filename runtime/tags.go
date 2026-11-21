@@ -80,7 +80,7 @@ type Tags struct {
 	ranges map[string]TagRange
 	// paramNote, when set, hears each external write that landed: the
 	// parameters' edit attribution (#718). Set once in New.
-	paramNote func(path, by string)
+	paramNote func(path, by string, val any)
 	// divZero counts every integer or REAL division (or MOD) by zero the
 	// VM has evaluated against this store, controller-wide, since start
 	// (ir.DivZeroCounter). Surfaced as ScanStats.DivZero.

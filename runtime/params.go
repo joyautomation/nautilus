@@ -95,7 +95,7 @@ type paramBook struct {
 
 // noteWrite records an external write to a parameter. Called by
 // Tags.Write under the store lock; it takes only the book's.
-func (b *paramBook) noteWrite(path, by string) {
+func (b *paramBook) noteWrite(path, by string, val any) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	name, ok := b.byKey[ir.NameKey(path)]
@@ -112,7 +112,7 @@ func (b *paramBook) noteWrite(path, by string) {
 	if b.edits == nil {
 		b.edits = map[string]retain.ParamEdit{}
 	}
-	b.edits[name] = retain.ParamEdit{By: by, AtMs: now().UnixMilli()}
+	b.edits[name] = retain.ParamEdit{By: by, AtMs: now().UnixMilli(), Val: val}
 }
 
 // initParams records each scalar setpoint's manifest init.
@@ -164,6 +164,27 @@ func (b *paramBook) load(bases map[string]any, edits map[string]retain.ParamEdit
 	}
 }
 
+// programBy names the writer when the logic changed a parameter after an
+// operator's edit: the commit then says who actually set the value.
+const programBy = "program"
+
+// reconcile is the edit record for name given the value it holds now. The
+// caller holds b.mu. If the value is no longer the one the recorded write
+// left, something else set it (the logic: every external write goes through
+// noteWrite), so the record becomes the program's, as of now.
+func (b *paramBook) reconcile(name string, e retain.ParamEdit, cur any) retain.ParamEdit {
+	if e.Val == nil || e.By == programBy || paramEq(e.Val, cur) {
+		return e
+	}
+	now := time.Now
+	if b.now != nil {
+		now = b.now
+	}
+	e = retain.ParamEdit{By: programBy, AtMs: now().UnixMilli(), Val: cur}
+	b.edits[name] = e
+	return e
+}
+
 // snapshot is what a save writes: bases, and the edit attribution and
 // committed values of the parameters still off their init. A parameter in
 // step has neither: its edit is history and its commit has landed.
@@ -192,6 +213,9 @@ func (b *paramBook) snapshot(values map[string]any) (bases map[string]any, edits
 		if _, ok := b.inits[name]; !ok {
 			delete(b.edits, name)
 			continue
+		}
+		if cur, ok := values[name]; ok {
+			e = b.reconcile(name, e, cur)
 		}
 		if edits == nil {
 			edits = map[string]retain.ParamEdit{}
@@ -300,7 +324,15 @@ func (r *Runtime) Parameters() []Parameter {
 		if hasC && !paramEq(c, init) {
 			p.LastCommitted = c
 		}
-		if e, ok := edits[name]; ok && (p.State != ParamInStep || p.LastCommitted != nil) {
+		e, ok := edits[name]
+		if ok {
+			// Not under the book's lock while reading the tag: the write
+			// hook takes the store's lock, then the book's.
+			r.params.mu.Lock()
+			e = r.params.reconcile(name, e, cur)
+			r.params.mu.Unlock()
+		}
+		if ok && (p.State != ParamInStep || p.LastCommitted != nil) {
 			p.EditedBy, p.EditedAtMs = e.By, e.AtMs
 		}
 		if hasC && p.State == ParamPlantAhead && paramEq(c, cur) {

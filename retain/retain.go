@@ -76,6 +76,9 @@ type State struct {
 type ParamEdit struct {
 	By   string `json:"by"`
 	AtMs int64  `json:"atMs"`
+	// Val is the value that write left. A value that differs later was set
+	// by something else (the program), and the record then says so.
+	Val any `json:"val,omitempty"`
 }
 
 // SubstituteState is what a controller keeps of its substitutes.

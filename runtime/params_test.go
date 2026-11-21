@@ -300,3 +300,35 @@ func TestParameterEditAttributionAndPending(t *testing.T) {
 		t.Fatalf("bookkeeping kept for a parameter in step: %+v %+v", store.state.ParamEdits, store.state.ParamCommitted)
 	}
 }
+
+// A program's write after an operator's edit takes the attribution: the
+// commit must not name an operator for a value the logic set.
+func TestParameterProgramWriteTakesTheAttribution(t *testing.T) {
+	store := &fakeStore{}
+	rt := paramRT(t, store, 65)
+	rt.Scan()
+	if err := rt.Tags().WriteAs([]WriteOp{{Path: "SP", Value: 70.0}}, "user:akhan")[0]; err != nil {
+		t.Fatal(err)
+	}
+	if p := param(t, rt, "SP"); p.EditedBy != "user:akhan" {
+		t.Fatalf("operator edit: %+v", p)
+	}
+	// The logic overwrites it.
+	rt.Tags().Set("Push", true)
+	rt.Scan()
+	if p := param(t, rt, "SP"); p.Value != 500.0 || p.EditedBy != "program" {
+		t.Fatalf("after the program's write: %+v", p)
+	}
+	// It survives a save, and a later operator edit takes it back.
+	rt.saveRetained(nil)
+	if e := store.state.ParamEdits["SP"]; e.By != "program" {
+		t.Fatalf("retained attribution: %+v", e)
+	}
+	rt.Tags().Set("Push", false)
+	if err := rt.Tags().WriteAs([]WriteOp{{Path: "SP", Value: 60.0}}, "user:bchen")[0]; err != nil {
+		t.Fatal(err)
+	}
+	if p := param(t, rt, "SP"); p.EditedBy != "user:bchen" {
+		t.Fatalf("operator after program: %+v", p)
+	}
+}

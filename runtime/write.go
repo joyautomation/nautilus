@@ -102,7 +102,11 @@ func (t *Tags) WriteAs(ops []WriteOp, by string) []error {
 		}
 		errs[i] = t.setPathLocked(op.Path, op.Value, true)
 		if errs[i] == nil && t.paramNote != nil {
-			t.paramNote(op.Path, by)
+			// The value as the store now holds it, for the attribution to
+			// tell later a program's write from this one.
+			if tv, name, ok := t.lookupLocked(op.Path); ok {
+				t.paramNote(op.Path, by, plainNumeric(t.liveLocked(name, tv)))
+			}
 		}
 	}
 	return errs
