@@ -71,3 +71,44 @@ describe('config review: the staged-apply client', () => {
 		if (!down.ok) expect(down.kind).toBe('unreachable');
 	});
 });
+
+describe('config review: commit and patch', () => {
+	const make = (status: number, body: string | unknown, calls: { url: string; method?: string; body?: string }[] = []) =>
+		((async (url: string, init?: RequestInit) => {
+			calls.push({ url, method: init?.method, body: init?.body as string });
+			return new Response(typeof body === 'string' ? body : JSON.stringify(body), { status });
+		}) as unknown as typeof fetch);
+	it('commits the candidate, with the message only when given', async () => {
+		const calls: { url: string; method?: string; body?: string }[] = [];
+		const c = new ReviewClient({ fetch: make(200, { commit: 'abc', branch: 'main', files: ['nautilus.yaml'] }, calls) });
+		const r = await c.commit('7', 'raise setpoint');
+		await c.commit('7');
+		expect(calls[0].url).toBe('/api/config/commit');
+		expect(calls[0].method).toBe('POST');
+		expect(calls[0].body).toBe('{"id":"7","message":"raise setpoint"}');
+		expect(calls[1].body).toBe('{"id":"7"}');
+		expect(r.ok && r.value.branch).toBe('main');
+	});
+	it('passes the 409 text through, it names the patch route', async () => {
+		const r = await new ReviewClient({ fetch: make(409, { error: 'this controller runs from a build; GET /api/config/patch returns the change' }) }).commit('7');
+		expect(r.ok).toBe(false);
+		if (!r.ok) { expect(r.status).toBe(409); expect(r.message.includes('/api/config/patch')).toBe(true); }
+	});
+	it('maps sign-in and forbidden like the other steps', async () => {
+		const a = await new ReviewClient({ fetch: make(401, { error: 'x' }) }).commit('7');
+		if (!a.ok) expect(a.kind).toBe('signin');
+		const b = await new ReviewClient({ fetch: make(403, { error: 'x' }) }).patch();
+		if (!b.ok) expect(b.kind).toBe('forbidden');
+	});
+	it('returns the patch text whole', async () => {
+		const calls: { url: string; method?: string }[] = [];
+		const r = await new ReviewClient({ fetch: make(200, '--- a/x\n+++ b/x\n', calls) }).patch();
+		expect(calls[0].url).toBe('/api/config/patch');
+		expect(calls[0].method).toBe('GET');
+		expect(r.ok && r.patch).toBe('--- a/x\n+++ b/x\n');
+	});
+	it('nothing to patch is a refusal, not an empty patch', async () => {
+		const r = await new ReviewClient({ fetch: make(409, { error: 'nothing to patch: what runs is the project' }) }).patch();
+		expect(r.ok).toBe(false);
+	});
+});
