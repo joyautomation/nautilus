@@ -10,6 +10,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Text;
 
 namespace Tiad
 {
@@ -47,6 +48,10 @@ namespace Tiad
         // KeptDevices is the agent's own question, never TIA's: a download
         // also loads the devices an apply kept as found (KeptRule).
         public const string KeptDevices = "kept-devices";
+        // UnverifiedHardware is the agent's own question too: a download
+        // that loads the hardware configuration, which tiad cannot verify
+        // (HardwareRule).
+        public const string UnverifiedHardware = "unverified-hardware";
         public const string Other = "other";
     }
 
@@ -90,6 +95,10 @@ namespace Tiad
         // KeptDevices names every device the caller agrees to load as the
         // project keeps it; it must be exactly the kept set (KeptRule).
         public List<string> KeptDevices = new List<string>();
+        // AcceptUnverifiedHardware answers UnverifiedHardware: load the
+        // hardware configuration although tiad cannot verify it. Yes
+        // needs the request's attestation too (HardwareRule).
+        public bool? AcceptUnverifiedHardware;
 
         public static Decisions Read(Reader r)
         {
@@ -106,6 +115,7 @@ namespace Tiad
             d.Reinitialize = r.Strs("reinitialize");
             d.TrustCertificate = r.Str("trustCertificate");
             d.KeptDevices = r.Strs("keptDevices");
+            d.AcceptUnverifiedHardware = r.OptBool("acceptUnverifiedHardware");
             return d;
         }
     }
@@ -116,6 +126,7 @@ namespace Tiad
         public bool Hardware, Software, DryRun, Announced;
         public Decisions Decisions = new Decisions();
         public Secrets Secrets = new Secrets();
+        public Attestation Attestation = new Attestation();
 
         public static DownloadRequest Read(Reader r)
         {
@@ -127,6 +138,7 @@ namespace Tiad
             d.Decisions = Decisions.Read(r.Child("decisions"));
             d.Announced = r.Bool("announced");
             d.Secrets = Secrets.Read(r.Child("secrets"));
+            d.Attestation = Attestation.Read(r.Child("attestation"));
             return d;
         }
 
@@ -139,6 +151,104 @@ namespace Tiad
             if (!Ip.IsIPv4(Address)) return "download: address " + Json.Quote(Address) + " is not an IPv4 address";
             if (!Hardware && !Software) return "download: neither hardware nor software selected";
             if (!Announced) return "download: announce it first (announced: true); a dry run reaches the CPU too until S2 proves a cancel loads nothing";
+            if (Encoding.UTF8.GetByteCount(Attestation.By) > Attestation.MaxBy) return "download: attestation.by is longer than " + Attestation.MaxBy + " bytes";
+            if (Encoding.UTF8.GetByteCount(Attestation.Text) > Attestation.MaxText) return "download: attestation.text is longer than " + Attestation.MaxText + " bytes";
+            return null;
+        }
+    }
+
+    // Attestation is the operator's statement that the CPU's hardware
+    // configuration is what they intend to load: the second part of #789's
+    // hardware gate, since tiad cannot verify the hardware (HardwareRule).
+    // By and Text come from the request; By is the caller's claim, since
+    // tiad knows only a bearer token (naut fills it from the principal it
+    // authenticated). At is tiad's own UTC clock when it accepted the
+    // download, never the request's. The audit line journals all three on
+    // every outcome; a successful download echoes them.
+    public sealed class Attestation
+    {
+        // In UTF-8 bytes, as Go's len counts them (an unpaired surrogate
+        // is U+FFFD on both sides).
+        public const int MaxBy = 200, MaxText = 2000;
+        public string By = "", Text = "", At = "";
+
+        public static Attestation Read(Reader r)
+        {
+            var a = new Attestation();
+            if (r == null) return a;
+            a.By = r.Str("by");
+            a.Text = r.Str("text");
+            return a;
+        }
+
+        // Given is whether both who and what are said.
+        public bool Given
+        {
+            get { return By.Trim() != "" && Text.Trim() != ""; }
+        }
+
+        // Audit is the attestation for the audit line, every
+        // request-supplied part quoted so none can forge a line.
+        public string Audit()
+        {
+            if (By == "" && Text == "") return "unset";
+            return "{by=" + Part(By, MaxBy) + " at=" + (At == "" ? "unset" : At) + " text=" + Part(Text, MaxText) + "}";
+        }
+
+        // Part is one part for the audit line: quoted, or only its size
+        // when it is over the limit, so a refused request cannot flood the
+        // journal (#1166 review).
+        static string Part(string s, int max)
+        {
+            int n = Encoding.UTF8.GetByteCount(s);
+            if (n > max) return "<" + n + " bytes, over the limit>";
+            return Json.Quote(s);
+        }
+
+        public Obj ToJson()
+        {
+            var o = new Obj();
+            o["by"] = By;
+            o["at"] = At;
+            o["text"] = Text;
+            return o;
+        }
+    }
+
+    // HardwareRule is #789's hardware gate. Openness V21 has no online
+    // hardware compare, so a download that loads the hardware
+    // configuration loads something tiad cannot verify. It goes ahead
+    // only on decisions.acceptUnverifiedHardware yes and an attestation
+    // that says who and what, on every CPU, the bench included: tiad
+    // cannot tell a bench CPU from a customer's, so it never tries.
+    public static class HardwareRule
+    {
+        public const string Why = "the download loads the hardware configuration, which tiad cannot verify (Openness V21 has no online hardware compare; only the PLC software is compared after loading)";
+
+        public static Question Question()
+        {
+            return new Question
+            {
+                Id = QuestionIds.UnverifiedHardware,
+                Message = "load the hardware configuration unverified: set decisions.acceptUnverifiedHardware and give attestation.by and attestation.text, the operator's statement that the CPU's hardware configuration is what they intend to load",
+            };
+        }
+
+        // Check returns null when the request may load hardware, or why
+        // not, naming the fix; declined is set when the request answered
+        // no. A software-only download needs nothing.
+        public static string Check(DownloadRequest req, out bool declined)
+        {
+            declined = false;
+            if (!req.Hardware) return null;
+            var d = req.Decisions.AcceptUnverifiedHardware;
+            if (!d.HasValue) return Why + ": set decisions.acceptUnverifiedHardware and give attestation.by and attestation.text to load it, or download the software only (hardware: false)";
+            if (!d.Value)
+            {
+                declined = true;
+                return Why + ", and decisions.acceptUnverifiedHardware says no: download the software only (hardware: false)";
+            }
+            if (!req.Attestation.Given) return Why + ": decisions.acceptUnverifiedHardware needs the operator's attestation too (attestation.by: who, attestation.text: that the CPU's hardware configuration is what they intend to load)";
             return null;
         }
     }

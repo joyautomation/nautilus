@@ -592,13 +592,48 @@ Request:
                  "consistentDownload": true, "alarmTexts": true, "allBlocks": true,
                  "userManagementKeepOnline": true, "identificationDataLoadNothing": true,
                  "startAfter": true, "trustCertificate": "<sha256 fingerprint>",
-                 "keptDevices": ["<device name>"] },
+                 "keptDevices": ["<device name>"], "acceptUnverifiedHardware": true },
   "announced": true,
+  "attestation": { "by": "<who>", "text": "<the CPU's hardware configuration is what I intend to load>" },
   "secrets": { "protection": "<password>", "configurationPassword": "<password>" }
 }
 ```
 
-Response: `{dryRun, downloaded, questions: [{id, message, detail, objects}], state, stateSource, keptDevices}`.
+Response: `{dryRun, downloaded, questions: [{id, message, detail, objects}], state, stateSource, keptDevices}`,
+and on a download that loaded hardware `hardwareVerified: false`, a
+`warning` and the `attestation` as journalled (`{by, at, text}`).
+
+**What a download verifies, and what it does not.** A download verifies
+the PLC software: it succeeds only when an online compare right after it
+is equal, with every block the project holds seen identical (below). It
+does **not** verify the hardware configuration, module parameters
+included. Openness V21 has no online hardware compare, and every way
+round it failed on the bench (#789: `HardwareObject.CompareTo` compares
+only offline objects, the CPU compares different against any copy of
+itself, and uploading the CPU next to the project's station fails or
+crashes TIA). So a download that loads hardware (`hardware: true`) is
+refused, before anything reaches the CPU, unless the request carries
+both:
+- `decisions.acceptUnverifiedHardware: true`, the opt-in, and
+- `attestation`: the operator's statement that the CPU's hardware
+  configuration is what they intend to load, `by` who (at most 200
+  bytes) and `text` (at most 2000 bytes), neither blank. One over a
+  limit is a `bad_request`, journalled by its size only.
+
+This holds on every CPU, the bench included: tiad cannot tell a bench
+CPU from a customer's, so it never tries. Without the opt-in the
+refusal is `decision_required` for the agent's own question
+`unverified-hardware`, naming the fix; `acceptUnverifiedHardware: false`
+is `declined` (download the software only). `by` is the caller's claim,
+since tiad knows only a bearer token: a naut client fills it from the
+principal it authenticated. `at` is tiad's own UTC clock when it
+accepted the download, never the request's. The audit line journals
+the attestation (`attestation={by=... at=... text=...}`, quoted) on every
+outcome, refusals and `outcome_unknown` included; a successful download
+echoes it for the caller's deploy record (§7). A client shows
+`hardwareVerified: false` as a warning, never as a silent success. A
+later check of modules and their parameters through the CPU's Web API
+(§4) may sit beside the attestation; it would not replace it.
 
 **`state` is TIA's word, not a read of the CPU** (#789). Openness has no
 read of the CPU's operating mode, so `state` (`RUN` or `STOP`) comes
@@ -608,8 +643,11 @@ last message that is exactly "<cpu> started." or "<cpu> stopped." for
 the CPU loaded decides. `stateSource: "tia-message"` labels it as that
 evidence. No such message means no `state`: a download that never
 stopped the CPU (TIA says nothing of its mode then), or TIA in a language
-other than English. A proof of the mode is the Web API's
-`Plc.ReadOperatingMode` (§4), separate from the download.
+other than English. A download that loaded and then ends in doubt (the
+compare after it fails or differs) carries the same `state` and
+`stateSource` in its `outcome_unknown` data (Go: `tiad.StateOf`). A
+proof of the mode is the Web API's `Plc.ReadOperatingMode` (§4),
+separate from the download.
 
 **The dry run is provisional.** Openness is believed to answer TIA's
 pre-download checks through a callback inside the real download call,
@@ -688,10 +726,9 @@ behaviour. So, until then:
   `PlcSoftware.CompareToOnline`). So a download that loaded hardware
   says `hardwareVerified: false` and a `warning` in words, the audit line
   says `hardwareVerified=false`, and a client shows it as a warning, never
-  a silent success. A hardware check (upload the CPU's hardware into a
-  scratch project, then compare offline) is a follow-up proven on the
-  bench, and a gate on #789 before the first hardware download to a
-  customer CPU.
+  a silent success. No hardware check stands in for it: the opt-in and
+  the operator's attestation do ("What a download verifies, and what it
+  does not", above; #789 revised gate).
 - **Anything that leaves the CPU in doubt answers `outcome_unknown`**:
   TIA failing once it asked a check (a cancel included, since "a cancel
   loads nothing" is what S2 must prove), a cancel after an acting answer,
@@ -766,13 +803,16 @@ behaviour. So, until then:
 - **Every download is audited**: one log line with the address, the
   question IDs asked (never TIA's text), the acting answers given, the
   decisions (request-supplied names quoted), whether a protection password and a configuration
-  password were set (never their values) and the outcome, refusals
+  password were set (never their values), the hardware attestation
+  (quoted, `at=unset` until accepted) and the outcome, refusals
   included.
 
 - **A dry run** (provisional, see above) cancels at TIA's first
   pre-download check and returns that one as `questions`, with
   `questionsIncomplete: true`: TIA asks one check at a time, so a dry run
-  sees no more (and the kept-devices question, when there is one). The
+  sees no more (and the agent's own `unverified-hardware` question for a
+  download that loads hardware, and the kept-devices question, when
+  there is one). The
   `id` is one of:
   - `stop-cpu`
   - `reinitialize` (`objects` lists the DBs)
@@ -811,6 +851,9 @@ behaviour. So, until then:
   - `kept-devices`: the agent's own question, never TIA's, asked when the
     last apply kept devices as found ("Which CPU an apply uses"). `objects`
     names them.
+  - `unverified-hardware`: the agent's own question, asked of every
+    download that loads hardware; answered only by
+    `acceptUnverifiedHardware: true` with an `attestation` (above).
   - `other` (the check's own text).
 - **A real download** answers each question only from `decisions`.
   - The first check the request does not answer fails the call with
@@ -818,6 +861,9 @@ behaviour. So, until then:
     it, and TIA may ask another. After an acting answer it is
     `outcome_unknown` instead (above).
   - A `reinitialize` answer must name every DB the check named.
+  - A download that loads hardware needs `acceptUnverifiedHardware: true`
+    and an `attestation`, checked before anything reaches the CPU
+    ("What a download verifies", above).
   - `decisions.keptDevices` must name exactly the kept devices, checked
     before anything reaches the CPU. Missing, or naming another set (an
     older yes carried by a script), it fails with `decision_required`.

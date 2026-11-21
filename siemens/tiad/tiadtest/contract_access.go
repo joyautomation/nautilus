@@ -234,7 +234,7 @@ func contractAccessNewStation(t *testing.T, start Starter) {
 		t.Fatalf("a rotated secret: %+v %v", r, err)
 	}
 	// A password set is a change to the project: compile again first.
-	dl := tiad.DownloadRequest{Address: benchCPU, Hardware: true, Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}}
+	dl := AcceptHardware(tiad.DownloadRequest{Address: benchCPU, Hardware: true, Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}})
 	if _, err := s.Download(ctx, dl); tiad.Kind(err) != tiad.KindNotCompiled {
 		t.Fatalf("a download after a password was set, before a compile: %v", err)
 	}

@@ -115,7 +115,8 @@ func contractReuse(t *testing.T, start Starter) {
 		t.Fatalf("a dry run: %+v %v", res, err)
 	}
 	dl.DryRun = false
-	dl.Decisions = tiad.Decisions{StartAfter: tiad.No()}
+	dl = AcceptHardware(dl)
+	dl.Decisions.StartAfter = tiad.No()
 	_, err = s.Download(ctx, dl)
 	if tiad.Kind(err) != tiad.KindDecisionRequired || !keptQ(tiad.Questions(err)) || !reflect.DeepEqual(tiad.KeptDevicesOf(err), kept) ||
 		!strings.Contains(err.Error(), "name them in decisions.keptDevices") {
@@ -130,19 +131,19 @@ func contractReuse(t *testing.T, start Starter) {
 	if len(a.Loaded(t)) != 0 {
 		t.Fatalf("loaded without a matching yes: %+v", a.Loaded(t))
 	}
-	dl.Decisions = tiad.Decisions{KeptDevices: []string{"io-device-up"}}
+	dl.Decisions = tiad.Decisions{AcceptUnverifiedHardware: tiad.Yes(), KeptDevices: []string{"io-device-up"}}
 	_, err = s.Download(ctx, dl)
 	if tiad.Kind(err) != tiad.KindDecisionRequired || !reflect.DeepEqual(tiad.KeptDevicesOf(err), kept) {
 		t.Fatalf("a download needing decisions: %v, kept %+v", err, tiad.KeptDevicesOf(err))
 	}
 	a.SetQuestions(t, []tiad.Question{{ID: tiad.QuestionStopCPU, Message: "Stop the CPU"}})
-	dl.Decisions = tiad.Decisions{StopCPU: tiad.No(), StartAfter: tiad.No(), KeptDevices: []string{"io-device-up"}}
+	dl.Decisions = tiad.Decisions{AcceptUnverifiedHardware: tiad.Yes(), StopCPU: tiad.No(), StartAfter: tiad.No(), KeptDevices: []string{"io-device-up"}}
 	_, err = s.Download(ctx, dl)
 	if tiad.Kind(err) != tiad.KindDeclined || !reflect.DeepEqual(tiad.KeptDevicesOf(err), kept) {
 		t.Fatalf("a declined download: %v, kept %+v", err, tiad.KeptDevicesOf(err))
 	}
 	a.SetQuestions(t, nil)
-	dl.Decisions = tiad.Decisions{StartAfter: tiad.No(), KeptDevices: []string{"io-device-up"}}
+	dl.Decisions = tiad.Decisions{AcceptUnverifiedHardware: tiad.Yes(), StartAfter: tiad.No(), KeptDevices: []string{"io-device-up"}}
 	res, err := s.Download(ctx, dl)
 	if err != nil || !res.Downloaded || !reflect.DeepEqual(res.KeptDevices, kept) {
 		t.Fatalf("the download: %+v %v", res, err)

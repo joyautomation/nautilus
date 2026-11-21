@@ -113,3 +113,26 @@ func TestFakeNeverRunsWithoutAToken(t *testing.T) {
 		t.Fatalf("health with some token: %v", err)
 	}
 }
+
+// TestFakeCarriesTheModeOfADoubtfulDownload: the Go fake's compare that
+// differs after a load says the mode TIA's messages gave, as the agent
+// does (TestAgentCarriesTheModeOfADoubtfulDownload).
+func TestFakeCarriesTheModeOfADoubtfulDownload(t *testing.T) {
+	f := tiadtest.New()
+	f.Targets = []string{"192.0.2.10"}
+	_, c := f.Serve(t)
+	installBench(t, c)
+	s, err := c.CreateProject(context.Background(), "bench", tiadtest.BenchStation(), tiadtest.BenchSecrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Compile(ctx, true, true); err != nil {
+		t.Fatal(err)
+	}
+	f.PreDownload = func(tiad.DownloadRequest) []tiad.Question { return []tiad.Question{{ID: tiad.QuestionStopCPU}} }
+	f.CompareResult = &tiad.CompareResult{Differences: []tiad.Difference{{Object: "PLC_1", State: "different"}}}
+	_, err = s.Download(ctx, tiad.DownloadRequest{Address: "192.0.2.10", Software: true, Announced: true, Decisions: tiad.Decisions{StopCPU: tiad.Yes(), StartAfter: tiad.No()}})
+	if state, source := tiad.StateOf(err); tiad.Kind(err) != tiad.KindOutcomeUnknown || state != "STOP" || source != tiad.StateFromTIAMessage {
+		t.Fatalf("%v (state %q %q)", err, state, source)
+	}
+}
