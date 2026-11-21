@@ -20,7 +20,11 @@ import "os"
 //     standby proxy like a write, so a standby that knows no leader
 //     refuses them with a 503 (#1029 3c-3a);
 //   - redundancy_same_origin: without an auth: block, the pair's operator
-//     commands take the write rule (same-origin with no credential).
+//     commands take the write rule (same-origin with no credential);
+//   - retained_stale_ignored: a takeover restores a superseded log's
+//     retained substitutes (#1029 3c-3c-2a);
+//   - superseded_alarms_kept: a superseded log's acks and shelves are
+//     carried by a takeover, and kept by a leader that learns it.
 var mutOn = os.Getenv("QUORUM_MUT")
 
 func mutServer(name string) bool { return name == mutOn }

@@ -13,10 +13,12 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/joyautomation/nautilus/alarm"
+	"github.com/joyautomation/nautilus/audit"
 	"github.com/joyautomation/nautilus/auth/users"
 	"github.com/joyautomation/nautilus/internal/project"
 	"github.com/joyautomation/nautilus/leader"
@@ -77,6 +79,15 @@ type pairMember struct {
 	// it succeeds: the log is read-only under this leader (node.LogState).
 	stuckTerm atomic.Uint64
 	box       func() string // this box's fingerprint (BoxFunc), nil without
+
+	// The supersede self-restart (#1029 3c-3c-2a, ruling 20d): getenv
+	// tells a supervisor (INVOCATION_ID, NOTIFY_SOCKET); restart closes
+	// once, asking naut run to exit for the supervisor to start it again;
+	// journal records it (SetJournal).
+	getenv      func(string) string
+	restart     chan struct{}
+	restartOnce sync.Once
+	journal     atomic.Pointer[audit.Recorder]
 }
 
 // swapHandler serves the handler it is given later, 503 before.
@@ -194,7 +205,7 @@ func newPairMember(r *project.RedundancyConfig, apiAddr, dir string, d pairDeps)
 	if err := os.MkdirAll(filepath.Dir(o.StatePath), 0o750); err != nil {
 		return nil, fmt.Errorf("state directory: %w", err)
 	}
-	m := &pairMember{peers: r.Peers, box: boxFn}
+	m := &pairMember{peers: r.Peers, box: boxFn, getenv: d.getenv, restart: make(chan struct{})}
 	o.OnEvent = m.onEvent // events start with the election's Run, after m.q is set
 	// The election first: it locks the state file, so a second process of
 	// this controller stops here, before it binds anything.
@@ -465,8 +476,9 @@ const (
 const PairNoMajority = "operator-intent log has no majority: neither the other controller nor the witness answers; substitutes cannot be started, stopped or acknowledged, nor alarms acknowledged or shelved, until one of them returns"
 
 // OplogReadOnly is the condition of a synced leader that can't sync: no
-// other copy counts (both lost or rebuilt), and no vouch is pending.
-const OplogReadOnly = "operator log read-only: no second counting copy — recommission (3c)"
+// other copy counts (both lost or rebuilt, or silent), and no vouch is
+// pending.
+const OplogReadOnly = "operator log read-only: no second counting copy; if the other controller and the witness can't be brought back, a person accepts what they may hold: naut redundancy vouch (it prints what would be lost), then naut redundancy vouch --accept-loss=<digest>"
 
 // startLog builds the pair's replicated log of operator intent (oplog,
 // design §1) over rt and mounts it on the peer listener: A, B and the
@@ -535,23 +547,36 @@ func (m *pairMember) startLog(rt *runtime.Runtime, wait time.Duration, eng *alar
 			return sl.Lapse(e, now) || (al != nil && al.Lapse(e, now))
 		},
 		Token: m.o.Token, Timeout: max(m.o.Lease/2, 500*time.Millisecond),
+		// A copy superseded by another history (#1029 3c-3c-2a): the
+		// runtime ends the old history's substitutes at once, leading or
+		// not (driveLog repeats it).
+		OnSuperseded: func(oplog.Lineage) { m.endSuperseded() },
 	})
 	if err != nil {
+		return nil, nil, fmt.Errorf("operator-intent log: %w", err)
+	}
+	if err := dropStaleRetained(n, rt); err != nil {
+		n.Close()
 		return nil, nil, fmt.Errorf("operator-intent log: %w", err)
 	}
 	m.logPending.Store(pending)
 	m.rt = rt
 	el := m.q.Node()
 	el.SetLog(func() node.LogState {
-		return node.LogState{Synced: n.Synced(), Stuck: m.stuck(), CanSync: n.CanSync(m.o.Lease)}
+		own, _ := n.History()
+		return node.LogState{Synced: n.Synced(), Stuck: m.stuck(), CanSync: n.CanSync(m.o.Lease), History: own.History, HistoryID: own.HistoryID}
 	})
-	el.SetVouch(func(ctx context.Context, by string, inc uint64) error {
+	el.SetVouch(func(ctx context.Context, by string, inc uint64, acc node.LogAccept) (json.RawMessage, error) {
 		// The witness's copy counts at the incarnation being adopted.
-		v, err := n.Vouch(ctx, by, witnessCounts(wit, func() uint64 { return inc }))
+		v, pic, err := n.Vouch(ctx, by, witnessCounts(wit, func() uint64 { return inc }), oplog.VouchAccept{Loss: acc.Loss, LostLog: acc.LostLog})
 		if err == nil && v.By != "" {
-			slog.Warn("redundancy: a person vouched for this controller's operator-intent log", "by", v.By, "lastTerm", v.LastTerm, "lastSeq", v.LastSeq)
+			slog.Warn("redundancy: a person vouched for this controller's operator-intent log", "by", v.By, "lastTerm", v.LastTerm, "lastSeq", v.LastSeq, "accepted", pic.Needs, "digest", pic.Digest)
 		}
-		return err
+		var raw json.RawMessage
+		if pic.Digest != "" {
+			raw, _ = json.Marshal(pic)
+		}
+		return raw, err
 	})
 	m.q.SetLogStatus(func() *leader.LogStatus { return m.logStatus() })
 	sl.Attach(n)
@@ -573,6 +598,26 @@ func (m *pairMember) startLog(rt *runtime.Runtime, wait time.Duration, eng *alar
 	return sl, al, nil
 }
 
+// dropStaleRetained drops what the retain store keeps of a superseded
+// log's intent (substitutes, acks, shelves), once its start moved that log aside (#1029 3c-3c-2a,
+// ruling 20d), before the runtime runs: their IDs are the old history's
+// seqs. The log's mark says it is owed until done (Mark.DropRetained), so
+// a start that dies in between drops them at the next. An error refuses
+// the start: running with them would restore them at a takeover.
+func dropStaleRetained(n *oplog.Node, rt *runtime.Runtime) error {
+	if _, to := n.History(); to.History != 0 || !n.RetainedStale() || mutNaut("stale_retained_kept") {
+		return nil // superseding (not yet moved aside), or nothing owed
+	}
+	k, err := rt.DropRetainedIntent()
+	if err != nil {
+		return fmt.Errorf("dropping a superseded log's intent from the retain store: %w", err)
+	}
+	if k > 0 {
+		slog.Warn("redundancy: dropped the superseded operator-intent log's substitutes, acks and shelves from the retain store", "entries", k)
+	}
+	return n.RetainedDropped()
+}
+
 // driveLog is the log's periodic work, every half lease: the leader's
 // heartbeat (it carries the commit index, so the follower applies what is
 // committed), the follower's catch-up, and the pings that keep its
@@ -591,6 +636,7 @@ func (m *pairMember) driveLog(ctx context.Context) {
 			continue // a spare neither replicates nor syncs (#1029 3c-2)
 		}
 		m.rebindLog()
+		m.learnPeerHistory()
 		cctx, cancel := context.WithTimeout(ctx, max(m.o.Lease, time.Second))
 		m.retrySync(cctx)
 		m.log.Heartbeat(cctx)
@@ -601,6 +647,128 @@ func (m *pairMember) driveLog(ctx context.Context) {
 			m.al.Reconcile() // the leader's view holds only acks its engine holds
 		}
 		m.logConditions()
+		m.endSuperseded()
+		m.supersedeRestart()
+	}
+}
+
+// endSuperseded ends every substitute the runtime holds while this
+// controller's log is superseded (#1029 3c-3c-2a): they are the old
+// history's. A leader keeps leading for control, read-only for operator
+// intent, and hands over to a synced controller at the new history that
+// may campaign (maybeYield).
+func (m *pairMember) endSuperseded() {
+	if m.log == nil || m.rt == nil || mutNaut("superseded_lead_keeps_substitutes") {
+		return
+	}
+	if _, to := m.log.History(); to.History != 0 {
+		m.rt.EndSupersededSubstitutes()
+		if m.al != nil {
+			m.al.EndSuperseded()
+		}
+	}
+}
+
+// learnPeerHistory takes a higher log history the other controller's
+// hello reports (authenticated by the pair's MAC), so this copy stops
+// counting from first contact, not only once replication meets it (#1029
+// 3c-3c-2a).
+func (m *pairMember) learnPeerHistory() {
+	pl, ok := m.q.Node().PeerLog()
+	learnFromHello(m.log, pl, ok)
+}
+
+// historyLearner is the log as learnFromHello uses it.
+type historyLearner interface {
+	History() (own, to oplog.Lineage)
+	LearnHistory(oplog.Lineage) error
+}
+
+// learnFromHello takes a higher history the other controller's last
+// hello reported (heard: within the last lease).
+func learnFromHello(log historyLearner, pl node.PeerLog, heard bool) {
+	if !heard || mutNaut("hello_history_ignored") {
+		return
+	}
+	if own, _ := log.History(); pl.History > own.History {
+		if err := log.LearnHistory(oplog.Lineage{History: pl.History, HistoryID: pl.HistoryID}); err != nil {
+			slog.Error("redundancy: can't record the newer operator-intent log history the other controller reports", "error", err)
+		}
+	}
+}
+
+// supersedeWhy is why a superseded controller does not restart itself
+// (supersedeRestart), "" when it may: it does not lead; the other
+// controller leads, synced, at the history it takes; a supervisor starts
+// it again; and this start did not already move a superseded log aside
+// (once per mark, so it never loops: a person decides a second time).
+func (m *pairMember) supersedeWhy(to oplog.Lineage) string {
+	pl, ok := m.q.Node().PeerLog()
+	leading := m.q.IsLeader() || m.rt != nil && m.rt.Leading()
+	supervised := m.getenv("INVOCATION_ID") != "" || m.getenv("NOTIFY_SOCKET") != ""
+	return supersedeRule(leading, pl, ok, to, supervised, m.log.SupersededAtStart())
+}
+
+// supersedeRule is supersedeWhy's decision (ruling 20d), "" when the
+// controller restarts itself.
+func supersedeRule(leading bool, pl node.PeerLog, heard bool, to oplog.Lineage, supervised, restartedForOne bool) string {
+	switch {
+	case leading && !mutNaut("restart_while_leading"):
+		return "it leads: it never restarts itself while leading; restart naut on it once the other controller leads"
+	case (!heard || !pl.Leads || !pl.Synced || pl.History != to.History || pl.HistoryID != to.HistoryID) && !mutNaut("restart_peer_unchecked"):
+		return "the other controller does not lead synced at that history yet; it restarts itself once it does"
+	case !supervised && !mutNaut("restart_unsupervised"):
+		return "no supervisor would start it again (not run by systemd): restart naut on it"
+	case restartedForOne && !mutNaut("restart_loops"):
+		return "it already restarted once for a superseded log since it started: restart naut on it"
+	}
+	return ""
+}
+
+// supersedeRestart raises the superseded condition and, under ruling 20d,
+// restarts this controller once: its log can be moved aside, before it is
+// replayed, only at a start (the runtime holds what the old history
+// applied). Journalled as redundancy.oplog-superseded-restart.
+func (m *pairMember) supersedeRestart() {
+	own, to := m.log.History()
+	if to.History == 0 {
+		m.q.SetCondition("oplog-superseded", "")
+		return
+	}
+	who := to.HistoryBy
+	if who == "" {
+		who = "a person"
+	}
+	msg := fmt.Sprintf("this controller's operator-intent log was superseded by history %d (a loss %s accepted on another copy): it counts for nothing until naut restarts here, which moves the old log aside and syncs the new one", to.History, who)
+	why := m.supersedeWhy(to)
+	if why != "" {
+		m.q.SetCondition("oplog-superseded", msg+"; "+why)
+		return
+	}
+	m.q.SetCondition("oplog-superseded", msg+"; restarting now")
+	m.restartOnce.Do(func() {
+		slog.Error("redundancy: restarting naut to take the operator-intent log's newer history", "history", own.History, "to", to.History, "acceptedBy", to.HistoryBy)
+		if j := m.journal.Load(); j != nil {
+			_, _ = (*j).Record(audit.Entry{
+				User: "system", Source: audit.SourceSystem,
+				Action: "redundancy.oplog-superseded-restart", Target: string(m.o.Self),
+				Detail: map[string]any{"history": own.History, "to": to.History, "toId": fmt.Sprintf("%x", to.HistoryID), "acceptedBy": to.HistoryBy,
+					"why": "standby, the other controller leads synced at the new history, under a supervisor: exits for the supervisor to start it again, moving the superseded log aside before it is replayed"},
+				Result: audit.ResultOK,
+			})
+		}
+		close(m.restart)
+	})
+}
+
+// RestartRequested is closed when this controller asks naut run to exit
+// for its supervisor to start it again (supersedeRestart).
+func (m *pairMember) RestartRequested() <-chan struct{} { return m.restart }
+
+// SetJournal gives the pair the audit journal its own actions go to.
+func (m *pairMember) SetJournal(j audit.Recorder) {
+	if j != nil {
+		m.journal.Store(&j)
 	}
 }
 
@@ -642,12 +810,20 @@ func (m *pairMember) logConditions() {
 	lost, unsynced := "", ""
 	switch {
 	case st.Lost != "":
-		lost = "this controller's operator-intent log was lost (kept at " + st.Lost + "): it counts for nothing, and while this controller leads substitutes, alarm acknowledgements and shelves are refused, until it has synced from the other controller and the witness"
-	case st.Unsynced:
-		unsynced = "this controller's operator-intent log is not synced: it counts for nothing, and while this controller leads substitutes, alarm acknowledgements and shelves are refused, until it has synced from the other controller and the witness, or a person vouches for it (re-commission)"
+		lost = "this controller's operator-intent log was lost (kept at " + st.Lost + "): it counts for nothing, and while this controller leads substitutes, alarm acknowledgements and shelves are refused, until it has synced from the other controller and the witness; if neither holds the log, a person accepts its loss: naut redundancy vouch, then naut redundancy vouch --accept-lost-log=<digest>"
+	case st.Unsynced && st.SupersedeTo == 0:
+		unsynced = "this controller's operator-intent log is not synced: it counts for nothing, and while this controller leads substitutes, alarm acknowledgements and shelves are refused, until it has synced from the other controller and the witness, or a person vouches for it (naut redundancy vouch)"
 	}
 	m.q.SetCondition("oplog-lost", lost)
 	m.q.SetCondition("oplog-unsynced", unsynced)
+	forked := ""
+	for _, f := range st.Forked {
+		if forked != "" {
+			forked += "; "
+		}
+		forked += fmt.Sprintf("operator log forked at history %d (accepted by %s here, %s on %s): choose one with naut redundancy vouch on the controller whose log you keep", f.History, nonEmpty(f.Ours, "a person"), nonEmpty(f.Theirs, "a person"), f.Peer)
+	}
+	m.q.SetCondition("oplog-forked", forked)
 	readOnly := ""
 	if !st.Unsynced && m.stuck() && !m.log.CanSync(m.o.Lease) {
 		// Synced, leading, but alone among the copies that count: entries
@@ -660,6 +836,13 @@ func (m *pairMember) logConditions() {
 		m.q.SetCondition("oplog-yield", "")
 		m.q.SetCondition("oplog-vouch-refused", "")
 	}
+}
+
+func nonEmpty(s, or string) string {
+	if s == "" {
+		return or
+	}
+	return s
 }
 
 // logIdentity is this controller's log identity: cluster, node and box,
@@ -723,6 +906,10 @@ func (m *pairMember) logStatus() *leader.LogStatus {
 	if v := st.Vouch; v != nil {
 		ls.Vouch = &leader.LogVouch{By: v.By, At: time.UnixMilli(v.At).UTC(), LastTerm: v.LastTerm, LastSeq: v.LastSeq}
 	}
+	ls.History, ls.HistoryBy, ls.SupersedeTo, ls.Superseded = st.History, st.HistoryBy, st.SupersedeTo, st.Superseded
+	for _, f := range st.Forked {
+		ls.Forked = append(ls.Forked, f.Peer)
+	}
 	return ls
 }
 
@@ -778,3 +965,7 @@ func peerServer(h http.Handler) *http.Server {
 	return &http.Server{Handler: h, ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 5 * time.Second,
 		WriteTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute, MaxHeaderBytes: 8 << 10}
 }
+
+// The pair's Quorum answers the commissioning routes (a fake in the
+// server's tests would not say when the interface moves).
+var _ server.Commissioner = (*leader.Quorum)(nil)

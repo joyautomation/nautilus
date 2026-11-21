@@ -134,8 +134,11 @@ type CommissionReport struct {
 	Incarnation uint64        `json:"incarnation,omitempty"`
 	Floor       uint64        `json:"floor,omitempty"`
 	// VouchRefused is the operator-intent log's refusal of the vouch: the
-	// pair is commissioned all the same, its log read-only until synced.
-	VouchRefused string `json:"vouchRefused,omitempty"`
+	// pair is commissioned all the same, its log read-only until synced;
+	// Picture what the vouch saw (oplog.Picture), with the digest that
+	// accepts a loss (naut redundancy vouch).
+	VouchRefused string          `json:"vouchRefused,omitempty"`
+	Picture      json.RawMessage `json:"picture,omitempty"`
 	// Leader is who leads once the pair settles ("" if none did within
 	// the wait: it may still).
 	Leader  string `json:"leader,omitempty"`
@@ -147,9 +150,9 @@ type CommissionReport struct {
 // (commissionCheck);
 // this controller adopts the witness's incarnation with a floor above
 // every term the members know, and its peer adopts it from here. by names
-// the person (the log's vouch). It returns ErrCommandRefused when it
-// changed nothing.
-func (e *Elector) Commission(ctx context.Context, by string) (CommissionReport, error) {
+// the person (the log's vouch), acc what they accepted for it. It returns
+// ErrCommandRefused when it changed nothing.
+func (e *Elector) Commission(ctx context.Context, by string, acc LogAccept) (CommissionReport, error) {
 	rep := CommissionReport{Cluster: e.o.Cluster}
 	if e.Spare() {
 		rep.Refused = "this controller is a spare (a copy of a member): run recommission --from-spare on it, or commission from the other controller"
@@ -166,7 +169,7 @@ func (e *Elector) Commission(ctx context.Context, by string) (CommissionReport, 
 	}
 	rep.Incarnation = rep.Members[2].Incarnation
 	rep.Floor = highest + commissionMargin
-	vr, err := e.recommission(ctx, by, rep.Incarnation, rep.Floor, false, maxFence(rep.Members))
+	vr, err := e.recommission(ctx, by, rep.Incarnation, rep.Floor, false, maxFence(rep.Members), acc, &rep.Picture)
 	if vr != nil {
 		rep.VouchRefused = vr.Error()
 	}
@@ -241,6 +244,8 @@ type RecommissionRequest struct {
 	// BoxReplaced: the operator's word that this controller's box was
 	// replaced (its state was written on another box), not cloned.
 	BoxReplaced bool `json:"boxReplaced,omitempty"`
+	// Accept is what the person accepted for the log's vouch.
+	Accept LogAccept `json:"accept,omitempty"`
 }
 
 // RecommissionReport is what recommission did.
@@ -256,9 +261,10 @@ type RecommissionReport struct {
 	BoxReplaced bool   `json:"boxReplaced,omitempty"`
 	// Unheard names the members that did not answer: the terms they used
 	// are not in Evidence.
-	Unheard      []string `json:"unheard,omitempty"`
-	VouchRefused string   `json:"vouchRefused,omitempty"`
-	Refused      string   `json:"refused,omitempty"`
+	Unheard      []string        `json:"unheard,omitempty"`
+	VouchRefused string          `json:"vouchRefused,omitempty"`
+	Picture      json.RawMessage `json:"picture,omitempty"`
+	Refused      string          `json:"refused,omitempty"`
 }
 
 // RecommissionChecked is the operator's recommission (#1029 3c-3c): the
@@ -283,7 +289,7 @@ func (e *Elector) RecommissionChecked(ctx context.Context, by string, req Recomm
 		return refuse("%s", why)
 	}
 	rep.Incarnation, rep.Floor = wit.Incarnation, req.Floor
-	vr, err := e.recommission(ctx, by, rep.Incarnation, rep.Floor, req.BoxReplaced, maxFence(rep.Members))
+	vr, err := e.recommission(ctx, by, rep.Incarnation, rep.Floor, req.BoxReplaced, maxFence(rep.Members), req.Accept, &rep.Picture)
 	if vr != nil {
 		rep.VouchRefused = vr.Error()
 	}
@@ -509,4 +515,45 @@ func fromSpareCheck(name string, check []DupAnswer) (retire []quorum.BootSeq, ge
 		return nil, 0, fmt.Sprintf("%s hear(s) a process named %s within the last lease and a quarter: the controller the voters count as %s still runs. Stop it, confirm it is down (powered off, or its process ended), and run this again a lease and a quarter later", strings.Join(hearing, " and "), name, name)
 	}
 	return quorum.UnionBoots(known...), gen + 1, ""
+}
+
+// VouchReport is what naut redundancy vouch did (#1029 3c-3c-2a).
+type VouchReport struct {
+	Cluster string `json:"cluster"`
+	// Picture is what the vouch saw of the log's copies (oplog.Picture):
+	// each copy's answer, whether it counts, its last entry and history,
+	// what would be lost, and the digest that accepts it.
+	Picture json.RawMessage `json:"picture,omitempty"`
+	Refused string          `json:"refused,omitempty"`
+}
+
+// Vouch is the operator's vouch for this controller's copy of the
+// operator-intent log, by itself: log only (no adoption, no floor, no
+// election change), on a commissioned controller, judging the witness's
+// copy at the incarnation it counts. acc is what the person accepted, as
+// the digest of the picture a run without it printed. It returns
+// ErrCommandRefused when it changed nothing; a vouch that needs nothing
+// (the copy synced, another counting) changes nothing either, and says so
+// in the picture.
+func (e *Elector) Vouch(ctx context.Context, by string, acc LogAccept) (VouchReport, error) {
+	rep := VouchReport{Cluster: e.o.Cluster}
+	if e.Spare() {
+		rep.Refused = "this controller is a spare (a copy of a member): its log takes no vouch; recommission --from-spare turns it into the member"
+		return rep, ErrCommandRefused
+	}
+	e.mu.Lock()
+	inc := e.v.State().Incarnation
+	e.mu.Unlock()
+	if inc == 0 {
+		rep.Refused = "this controller is not commissioned: commission it (naut redundancy commission) or recommission it; both vouch for its log and take --accept-loss and --accept-lost-log"
+		return rep, ErrCommandRefused
+	}
+	pic, err := e.vouch(ctx, by, inc, acc)
+	rep.Picture = pic
+	if err != nil {
+		rep.Refused = err.Error()
+		return rep, ErrCommandRefused
+	}
+	e.log.Warn("redundancy: a person vouched for this controller's operator-intent log", "by", by, "accepted", !acc.Empty())
+	return rep, nil
 }

@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/joyautomation/nautilus/oplog"
 	"github.com/joyautomation/nautilus/quorum"
 	"github.com/joyautomation/nautilus/quorum/node"
 )
@@ -57,6 +58,24 @@ Usage:
       It clears the name's marks, keeping none, moves this box's state
       file aside, and asks you to restart naut here: it then re-adopts
       from its peer.
+  naut redundancy [flags] vouch [--accept-loss=<digest>] [--accept-lost-log=<digest>]
+      vouch for this commissioned controller's copy of the operator-intent
+      log: the way out when the log is read-only ("no second counting
+      copy", "lost", "vouch again"). Log only: nothing in the election
+      changes. Without a flag it prints each copy (does it answer, does it
+      count, its last entry, its history), what accepting would lose, and
+      a digest of that picture, and goes ahead only if nothing would be
+      lost. --accept-loss=<digest> accepts losing what the other copies may
+      hold (a copy that does not answer, a later log that does not count,
+      a log forked from this one, or every other copy lost);
+      --accept-lost-log=<digest> accepts that this copy's own log was lost.
+      If the copies changed since the picture was printed, it refuses and
+      prints the new one. An accepted loss that overrides a copy starts a
+      new log history: that copy never counts again, and is moved aside
+      (kept as oplog.jsonl.superseded-<time>) when it meets the new one,
+      after one restart of naut there (automatic under systemd).
+      commission and recommission take the same two flags for the vouch
+      they run.
   naut redundancy [flags] status
       this controller's view of the pair: the leader, the names its voter
       marks as run by two processes at once, whether it is held by a mark,
@@ -89,8 +108,8 @@ Flags:
 Under an auth: block the commands need the redundancy permission
 (administrator by default). Without one they take only NAUTILUS_TOKEN.
 Every command but new-pair is written to the controller's audit journal
-(redundancy.commission, redundancy.recommission,
-redundancy.clear-duplicate), accepted or refused.
+(redundancy.commission, redundancy.recommission, redundancy.vouch,
+redundancy.clear-duplicate), accepted or refused, with what was accepted.
 
 Exit status: 0 done; 1 refused, incomplete or failed; 2 usage.
 `
@@ -120,6 +139,8 @@ func redundancyMain(args []string, getenv func(string) string, stdout, stderr io
 	incarnation := fs.String("incarnation", "", "")
 	boxReplaced := fs.Bool("box-replaced", false, "")
 	fromSpare := fs.Bool("from-spare", false, "")
+	acceptLoss := fs.String("accept-loss", "", "")
+	acceptLostLog := fs.String("accept-lost-log", "", "")
 	// Flags may follow the subcommand and its name too: parse what is left
 	// after each positional argument.
 	var pos []string
@@ -202,7 +223,35 @@ func redundancyMain(args []string, getenv func(string) string, stdout, stderr io
 		b, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 		return resp.StatusCode, b, err
 	}
+	accept := func(body map[string]any) {
+		if *acceptLoss != "" {
+			body["acceptLoss"] = *acceptLoss
+		}
+		if *acceptLostLog != "" {
+			body["acceptLostLog"] = *acceptLostLog
+		}
+	}
 	switch pos[0] {
+	case "vouch":
+		if len(pos) != 1 {
+			fmt.Fprint(stderr, redundancyUsage)
+			return 2
+		}
+		body := map[string]any{}
+		accept(body)
+		code, b, err := do(http.MethodPost, "/api/cluster/vouch", body)
+		if err != nil {
+			return fail("%v", err)
+		}
+		if *asJSON {
+			stdout.Write(b)
+		} else {
+			printVouchAnswer(stdout, code, b)
+		}
+		if code != http.StatusOK {
+			return 1
+		}
+		return 0
 	case "status":
 		if len(pos) != 1 {
 			fmt.Fprint(stderr, redundancyUsage)
@@ -227,7 +276,9 @@ func redundancyMain(args []string, getenv func(string) string, stdout, stderr io
 			return 2
 		}
 		fmt.Fprintln(stdout, "commissioning the pair (this takes a few leases)...")
-		code, b, err := do(http.MethodPost, "/api/cluster/commission", map[string]any{})
+		body := map[string]any{}
+		accept(body)
+		code, b, err := do(http.MethodPost, "/api/cluster/commission", body)
 		if err != nil {
 			return fail("%v", err)
 		}
@@ -250,6 +301,9 @@ func redundancyMain(args []string, getenv func(string) string, stdout, stderr io
 			if *floor != 0 || *incarnation != "" || *boxReplaced {
 				return fail("--from-spare takes no --floor, --incarnation or --box-replaced: the spare re-adopts from its peer")
 			}
+			if *acceptLoss != "" || *acceptLostLog != "" {
+				return fail("--from-spare takes no --accept-loss or --accept-lost-log: the spare's log syncs from the pair")
+			}
 			if !*copyStopped {
 				return fail("stop the controller the voters hold under this name, confirm it is down (powered off, or its process ended) and keep it from starting again, then run this again with --copy-stopped")
 			}
@@ -268,6 +322,7 @@ func redundancyMain(args []string, getenv func(string) string, stdout, stderr io
 			if *boxReplaced {
 				body["boxReplaced"] = true
 			}
+			accept(body)
 		}
 		code, b, err := do(http.MethodPost, "/api/cluster/recommission", body)
 		if err != nil {
@@ -322,6 +377,15 @@ func printClusterStatus(w io.Writer, b []byte) {
 		Held     bool     `json:"held"`
 		Spare    bool     `json:"spare"`
 		Warnings []string `json:"warnings"`
+		Log      *struct {
+			Synced      bool     `json:"synced"`
+			Lost        string   `json:"lost"`
+			History     uint64   `json:"history"`
+			HistoryBy   string   `json:"historyBy"`
+			SupersedeTo uint64   `json:"supersedeTo"`
+			Superseded  string   `json:"superseded"`
+			Forked      []string `json:"forked"`
+		} `json:"log"`
 	}
 	if json.Unmarshal(b, &st) != nil {
 		w.Write(b)
@@ -350,6 +414,29 @@ func printClusterStatus(w io.Writer, b []byte) {
 	}
 	if st.Held {
 		fmt.Fprintf(bw, "HELD: a member marks %s as run by two processes, so it does not campaign until the mark is cleared\n", st.Pod)
+	}
+	if l := st.Log; l != nil {
+		state := "synced"
+		if !l.Synced {
+			state = "NOT SYNCED"
+		}
+		fmt.Fprintf(bw, "operator-intent log: %s", state)
+		if l.History > 0 {
+			fmt.Fprintf(bw, "; history %d (a loss accepted by %s)", l.History, nonEmpty(l.HistoryBy, "a person"))
+		}
+		fmt.Fprintln(bw)
+		if l.Lost != "" {
+			fmt.Fprintf(bw, "LOST: this copy's log was lost (kept at %s)\n", l.Lost)
+		}
+		if l.SupersedeTo > 0 {
+			fmt.Fprintf(bw, "SUPERSEDED by history %d: naut restarts here to move this copy aside and sync (see the condition)\n", l.SupersedeTo)
+		}
+		if l.Superseded != "" {
+			fmt.Fprintf(bw, "last superseded copy kept at %s\n", l.Superseded)
+		}
+		if len(l.Forked) > 0 {
+			fmt.Fprintf(bw, "FORKED: the log of %s forked from this one: choose one with naut redundancy vouch\n", strings.Join(l.Forked, ", "))
+		}
 	}
 	for _, x := range st.Warnings {
 		fmt.Fprintf(bw, "warning: %s\n", x)
@@ -523,12 +610,14 @@ func printCommissionAnswer(w io.Writer, code int, b []byte) {
 			ans.Report.Cluster, ans.Report.Incarnation, ans.Report.Floor, ans.Report.Floor)
 		if ans.Report.VouchRefused != "" {
 			fmt.Fprintf(bw, "vouch refused (the operator-intent log stays read-only until synced): %s\n", ans.Report.VouchRefused)
+			printPicture(bw, ans.Report.Picture, true)
 		}
 		return
 	}
 	fmt.Fprintf(bw, "commissioned cluster %s: incarnation %x, floor %d\n", ans.Report.Cluster, ans.Report.Incarnation, ans.Report.Floor)
 	if ans.Report.VouchRefused != "" {
 		fmt.Fprintf(bw, "vouch refused (the pair is commissioned all the same; its operator-intent log stays read-only until synced): %s\n", ans.Report.VouchRefused)
+		printPicture(bw, ans.Report.Picture, true)
 	}
 	fmt.Fprintf(bw, "leader: %s\n", ans.Report.Leader)
 }
@@ -564,7 +653,97 @@ func printRecommissionAnswer(w io.Writer, code int, b []byte) {
 	fmt.Fprintln(bw)
 	if ans.Report.VouchRefused != "" {
 		fmt.Fprintf(bw, "vouch refused (re-commissioned all the same; the operator-intent log stays read-only until synced): %s\n", ans.Report.VouchRefused)
+		printPicture(bw, ans.Report.Picture, true)
 	}
+}
+
+// printVouchAnswer prints POST /api/cluster/vouch's answer: the picture,
+// then what was done or how to accept.
+func printVouchAnswer(w io.Writer, code int, b []byte) {
+	var ans struct {
+		Outcome string           `json:"outcome"`
+		Error   string           `json:"error"`
+		Report  node.VouchReport `json:"report"`
+	}
+	if json.Unmarshal(b, &ans) != nil || ans.Outcome == "" {
+		fmt.Fprintf(w, "refused (%d): %s\n", code, bytes.TrimSpace(b))
+		return
+	}
+	bw := bufio.NewWriter(w)
+	defer bw.Flush()
+	refused := ans.Outcome != "done"
+	if refused && len(ans.Report.Picture) == 0 {
+		fmt.Fprintf(bw, "REFUSED, nothing changed: %s\n", ans.Error)
+		return
+	}
+	printPicture(bw, ans.Report.Picture, refused)
+	switch {
+	case refused:
+		fmt.Fprintf(bw, "REFUSED, nothing changed: %s\n", ans.Error)
+	default:
+		var p oplog.Picture
+		_ = json.Unmarshal(ans.Report.Picture, &p)
+		if p.Self.Synced && len(p.Needs) == 0 {
+			fmt.Fprintln(bw, "nothing to vouch for: this copy is synced, and another copy counts beside it (or a vouch's catch-up is already pending)")
+			return
+		}
+		fmt.Fprintln(bw, "vouched: this copy counts as synced; its next catch-up as leader goes ahead as accepted, once")
+	}
+}
+
+// printPicture prints the operator-intent log's picture (oplog.Picture):
+// each copy, what would be lost, and, when refused for want of an
+// acceptance, the command that accepts it.
+func printPicture(w io.Writer, raw json.RawMessage, refused bool) {
+	var p oplog.Picture
+	if len(raw) == 0 || json.Unmarshal(raw, &p) != nil || p.Digest == "" {
+		return
+	}
+	copyLine := func(c oplog.CopyState) string {
+		if !c.Answers {
+			return "DOES NOT ANSWER: " + c.Err
+		}
+		var s []string
+		switch {
+		case c.Counts:
+			s = append(s, "counts")
+		case c.Forked:
+			s = append(s, fmt.Sprintf("FORKED: history %d accepted by %s, another override's", c.History, nonEmpty(c.HistoryBy, "a person")))
+		case c.Synced:
+			s = append(s, "synced, but does not count here")
+		default:
+			s = append(s, "not synced (does not count)")
+		}
+		if c.Lost {
+			s = append(s, "LOST")
+		}
+		s = append(s, fmt.Sprintf("last entry term %d, seq %d", c.LastTerm, c.LastSeq))
+		if c.History > 0 && !c.Forked {
+			s = append(s, fmt.Sprintf("history %d", c.History))
+		}
+		return strings.Join(s, "; ")
+	}
+	fmt.Fprintln(w, "operator-intent log copies:")
+	fmt.Fprintf(w, "  %-16s %s\n", "this controller", copyLine(p.Self))
+	for _, c := range p.Copies {
+		fmt.Fprintf(w, "  %-16s %s\n", c.Name, copyLine(c))
+	}
+	for _, why := range p.Why {
+		fmt.Fprintf(w, "would be lost: %s\n", why)
+	}
+	if !refused || len(p.Needs) == 0 {
+		return
+	}
+	var flags []string
+	for _, n := range p.Needs {
+		switch n {
+		case oplog.NeedLoss:
+			flags = append(flags, "--accept-loss="+p.Digest)
+		case oplog.NeedLostLog:
+			flags = append(flags, "--accept-lost-log="+p.Digest)
+		}
+	}
+	fmt.Fprintf(w, "picture digest %s. If that loss is acceptable, run on this controller:\n  naut redundancy vouch %s\n", p.Digest, strings.Join(flags, " "))
 }
 
 // printFromSpareAnswer prints recommission --from-spare's answer.

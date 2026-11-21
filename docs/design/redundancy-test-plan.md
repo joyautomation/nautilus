@@ -165,6 +165,27 @@ case caught it. A mutation joins the nightly run in the PR that builds the rule 
 | a marked replica takes replication while its own election names no leader (`unnamed_leader_admitted`) | design §1, only a synced replica counts | 3b-4b |
 | a vouch is taken over a lost log, a silent peer or a later log (`vouch_unchecked`) | design §1, a vouch starts a pair | 3b-4b |
 | a vouched log catches up alone at every leadership (`vouch_alone_kept`) | design §1, a vouch starts a pair | 3b-4b |
+| a vouched catch-up overrides a copy outside what the person accepted (`accept_loss_blanket`) | design §1, a person accepts a loss | 3c-3c-2a |
+| a log synced by the normal path keeps its acceptance (`accept_kept_after_sync`) | design §1, a person accepts a loss | 3c-3c-2a |
+| a lost log is vouched for without `--accept-lost-log` (`lost_log_vouch_unchecked`) | design §1, a person accepts a loss | 3c-3c-2a |
+| a synced copy alone is granted the one-shot without `--accept-loss` (`synced_alone_without_accept`) | design §1, a person accepts a loss | 3c-3c-2a |
+| an override starts no new history, so the overridden copy counts when it returns (`history_not_bumped`) | design §1, the log history | 3c-3c-2a |
+| the new history is recorded after the copy is synced for its term (`history_after_write`) | design §1, the log history | 3c-3c-2a |
+| a copy at a lower history counts (`history_lower_counted`) | design §1, the log history | 3c-3c-2a |
+| a forked copy counts and is replicated to (`history_fork_counted`); a catch-up over an accepted fork starts no new history (`fork_resolved_without_bump`) | design §1, the log history (fork) | 3c-3c-2a |
+| a superseded copy keeps and replays its log at its start (`superseded_not_reset`), takes replication before it (`superseded_takes`), or holds the higher history in memory only (`supersede_not_durable`) | design §1, the log history | 3c-3c-2a |
+| a leader that hears a higher history while replicating commits what it stored (`history_moved_commits`) | design §1, the log history | 3c-3c-2a |
+| a peer's log at a lower or forked history is one to defer and yield to (`lower_history_peer_synced`); a higher history in the hello is not learnt (`hello_history_ignored`) | design §1, the log history | 3c-3c-2a |
+| a superseded controller restarts itself while leading, before the other leads synced at the new history, with no supervisor, or a second time (`restart_while_leading`, `restart_peer_unchecked`, `restart_unsupervised`, `restart_loops`) | design §1, ruling 20d | 3c-3c-2a |
+| the witness's copy waits for a restart to take a newer history (`witness_supersede_waits`) | design §1, the log history | 3c-3c-2a |
+| a takeover restores a superseded log's substitutes (`retained_stale_ignored`); its restart leaves them in the retain store (`stale_retained_kept`) | design §1, ruling 20d | 3c-3c-2a |
+| a vouched catch-up overrides with every other copy silent (`override_all_silent`) | design §1, a person accepts a loss (i) | 3c-3c-2a |
+| the superseded verdict takes the log's lock, so a takeover and a commit deadlock (`stale_under_lock`) | design §1, the log history | 3c-3c-2a (#1177 review) |
+| "vouch again" is a no-op while a one-shot is pending (`vouch_again_noop`); a no-op vouch takes any digest (`noop_digest_unchecked`); a vouch on a leader caught up for its term waits for its next term (`vouch_keeps_term_synced`) | design §1, a person accepts a loss | 3c-3c-2a (#1177 review) |
+| a start after a superseded log keeps the retain store's acks and shelves (`stale_retained_alarms_kept`) | design §1, the log history | 3c-3c-2a (#1177 review) |
+| a vouch's one-shot whose spend can't be written stays armed in memory (`spend_failure_keeps_alone`) | design §1, a vouch starts a pair (spent) | 3c-3c-2a (#1177 CI) |
+| a vouch's one-shot and acceptance survive a restart (`accept_survives_reboot`) | design §1, a person accepts a loss | 3c-3c-2a (#1177, naut-lead) |
+| a controller that learns it is superseded runs the old history's substitutes until a takeover (`superseded_lead_keeps_substitutes`), or keeps its acks and shelves (`superseded_alarms_kept`) | design §1, the log history | 3c-3c-2a |
 | an unsynced log reads writable, so a write ends "outcome unknown" instead of a certain refusal (`unsynced_log_writes`) | design §1, read-only until synced | 3b-4b |
 | the witness's copy admits replication from any member (`witness_log_unbound`) or at any term (`witness_log_term_unbound`) | design §1, the witness follows its vote; §8.1 case 6 | 3b-4b |
 | the leader counts the witness's copy at any incarnation (`witness_log_any_incarnation`) | design §1, F15 | 3b-4b |

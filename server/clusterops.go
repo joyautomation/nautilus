@@ -39,6 +39,7 @@ var localClusterOps = map[string]bool{
 	"/api/cluster/clear-duplicate": true,
 	"/api/cluster/commission":      true,
 	"/api/cluster/recommission":    true,
+	"/api/cluster/vouch":           true,
 }
 
 // copyStoppedAttest is the journal's words for the operator's attestation.
@@ -150,14 +151,58 @@ type clusterBrief struct {
 
 // Commissioner is a redundant pair's commissioning commands (#1029 3c-3c).
 // An Options.Cluster value that also implements it (leader.Quorum does)
-// gets POST /api/cluster/commission and /api/cluster/recommission. by is
-// the principal. outcome is "done", "refused" (nothing changed) or
+// gets POST /api/cluster/commission, /api/cluster/recommission and
+// /api/cluster/vouch. by is the principal; acceptLoss and acceptLostLog
+// the digests of the log's picture the person accepts (#1029 3c-3c-2a;
+// "" accepts nothing). outcome is "done", "refused" (nothing changed) or
 // "incomplete" (--from-spare cleared at one voter only); report is the
 // command's report, as JSON, and reason one line saying why when the
 // outcome is not "done".
 type Commissioner interface {
-	Commission(ctx context.Context, by string) (report any, outcome, reason string)
-	Recommission(ctx context.Context, by string, incarnation, floor uint64, boxReplaced, fromSpare bool) (report any, outcome, reason string)
+	Commission(ctx context.Context, by, acceptLoss, acceptLostLog string) (report any, outcome, reason string)
+	Recommission(ctx context.Context, by string, incarnation, floor uint64, boxReplaced, fromSpare bool, acceptLoss, acceptLostLog string) (report any, outcome, reason string)
+	Vouch(ctx context.Context, by, acceptLoss, acceptLostLog string) (report any, outcome, reason string)
+}
+
+// acceptBody is what a person accepts for the operator-intent log's
+// vouch: the digest of the picture a run without it printed.
+type acceptBody struct {
+	AcceptLoss    string `json:"acceptLoss,omitempty"`
+	AcceptLostLog string `json:"acceptLostLog,omitempty"`
+}
+
+// check refuses a digest that is not one (ten hex digits).
+func (a acceptBody) check() string {
+	for _, d := range []struct{ flag, v string }{{"acceptLoss", a.AcceptLoss}, {"acceptLostLog", a.AcceptLostLog}} {
+		if d.v != "" && !isDigest(d.v) {
+			return d.flag + " takes the digest the picture printed (ten hex digits), not " + fmt.Sprintf("%q", d.v)
+		}
+	}
+	return ""
+}
+
+func isDigest(s string) bool {
+	if len(s) != 10 {
+		return false
+	}
+	for _, c := range s {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+// detail adds what was accepted to an entry's detail.
+func (a acceptBody) detail(d map[string]any) {
+	if a.AcceptLoss != "" {
+		d["acceptLoss"] = a.AcceptLoss
+		d["attestLoss"] = acceptLossAttest
+	}
+	if a.AcceptLostLog != "" {
+		d["acceptLostLog"] = a.AcceptLostLog
+		d["attestLostLog"] = acceptLostLogAttest
+	}
 }
 
 // recommissionBody is POST /api/cluster/recommission's body.
@@ -170,17 +215,23 @@ type recommissionBody struct {
 	// the box the voters held under this name is stopped and confirmed
 	// down. Journalled with the principal.
 	CopyStopped bool `json:"copyStopped,omitempty"`
+	acceptBody
 }
 
 // The journal's words for what the operator states.
 const (
 	incumbentStoppedAttest = "the operator states the controller the voters held under this name is stopped, confirmed down, and kept from starting again"
 	boxReplacedAttest      = "the operator states this controller's box was replaced, not copied"
+	acceptLossAttest       = "the operator accepts losing what the other copies of the operator-intent log may hold, as the picture with this digest showed"
+	acceptLostLogAttest    = "the operator accepts that this controller's own operator-intent log was lost, as the picture with this digest showed"
 )
 
 // commissionTarget is the pair's entry: the cluster's status before.
 func (s *Server) commissionTarget(r *http.Request, body []byte) auditTarget {
 	t := auditTarget{target: "pair", detail: map[string]any{}}
+	var b acceptBody
+	_ = json.NewDecoder(bytes.NewReader(body)).Decode(&b)
+	b.detail(t.detail)
 	t.answered, t.failed = answeredReport, failedReport
 	return t
 }
@@ -213,8 +264,53 @@ func (s *Server) recommissionTarget(r *http.Request, body []byte) auditTarget {
 			t.detail["attest"] = incumbentStoppedAttest
 		}
 	}
+	b.acceptBody.detail(t.detail)
 	t.answered, t.failed = answeredReport, failedReport
 	return t
+}
+
+// vouchTarget is the vouch's entry: this controller, and what the person
+// accepted. The answer (or refusal) carries the picture.
+func (s *Server) vouchTarget(r *http.Request, body []byte) auditTarget {
+	var b acceptBody
+	_ = json.NewDecoder(bytes.NewReader(body)).Decode(&b)
+	t := auditTarget{target: "this controller", detail: map[string]any{}}
+	if s.cluster != nil {
+		if st := s.cluster.Status(); st.Pod != "" {
+			t.target = st.Pod
+		}
+	}
+	b.detail(t.detail)
+	t.answered, t.failed = answeredReport, failedReport
+	return t
+}
+
+// handleVouch is the operator's vouch for this controller's copy of the
+// operator-intent log (#1029 3c-3c-2a): log only. Without an acceptance
+// it answers the picture (refused, when one is needed); the accepting
+// run names the picture's digest. As handleClearDuplicate: the redundancy
+// permission, NAUTILUS_TOKEN only without an auth: block.
+func (s *Server) handleVouch(w http.ResponseWriter, r *http.Request) {
+	if code, msg := s.redundancyAuthorized(r); code != 0 {
+		WriteRefusal(w, code, msg)
+		return
+	}
+	c, ok := s.cluster.(Commissioner)
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "this controller is not a member of a redundant pair (redundancy: peers:)"})
+		return
+	}
+	var b acceptBody
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&b); err != nil && err != io.EOF {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": `want {} or {"acceptLoss": "<digest>", "acceptLostLog": "<digest>"}`})
+		return
+	}
+	if why := b.check(); why != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": why})
+		return
+	}
+	report, outcome, reason := c.Vouch(r.Context(), s.principalOf(r), b.AcceptLoss, b.AcceptLostLog)
+	writeOutcome(w, report, outcome, reason)
 }
 
 // answeredReport reads an accepted command's report from its answer.
@@ -251,7 +347,16 @@ func (s *Server) handleCommission(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "this controller is not a member of a redundant pair (redundancy: peers:)"})
 		return
 	}
-	report, outcome, reason := c.Commission(r.Context(), s.principalOf(r))
+	var b acceptBody
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&b); err != nil && err != io.EOF {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": `want {} or {"acceptLoss": "<digest>", "acceptLostLog": "<digest>"}`})
+		return
+	}
+	if why := b.check(); why != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": why})
+		return
+	}
+	report, outcome, reason := c.Commission(r.Context(), s.principalOf(r), b.AcceptLoss, b.AcceptLostLog)
 	writeOutcome(w, report, outcome, reason)
 }
 
@@ -280,7 +385,15 @@ func (s *Server) handleRecommission(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "stop the controller the voters hold under this name, confirm it is down (powered off, or its process ended) and keep it from starting again, then say so: copyStopped: true (naut redundancy recommission --from-spare --copy-stopped)"})
 		return
 	}
-	report, outcome, reason := c.Recommission(r.Context(), s.principalOf(r), b.Incarnation, b.Floor, b.BoxReplaced, b.FromSpare)
+	if why := b.check(); why != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": why})
+		return
+	}
+	if b.FromSpare && (b.AcceptLoss != "" || b.AcceptLostLog != "") {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "fromSpare takes no acceptance: the spare's log syncs from the pair"})
+		return
+	}
+	report, outcome, reason := c.Recommission(r.Context(), s.principalOf(r), b.Incarnation, b.Floor, b.BoxReplaced, b.FromSpare, b.AcceptLoss, b.AcceptLostLog)
 	writeOutcome(w, report, outcome, reason)
 }
 

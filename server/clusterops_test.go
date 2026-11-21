@@ -59,11 +59,13 @@ func TestAStandbyWithNoLeaderAnswersClearDuplicate(t *testing.T) {
 	}
 	// A new pair has no leader until it is commissioned, and a controller
 	// that lost its state knows none until it is re-commissioned (#1029
-	// 3c-3c): both commands are answered here.
+	// 3c-3c), and its log may need a person's vouch (3c-3c-2a): the
+	// commands are answered here.
 	for i, c := range []struct{ path, body string }{
 		{"/api/cluster/commission", `{}`},
 		{"/api/cluster/recommission", `{"floor":5000}`},
 		{"/api/cluster/recommission", `{"fromSpare":true,"copyStopped":true}`},
+		{"/api/cluster/vouch", `{}`},
 	} {
 		if rec := call(t, srv, "POST", c.path, c.body, bearer("s3cret")); rec.Code != http.StatusOK || len(pair.by) != 2+i {
 			t.Fatalf("%s %s on a leaderless standby: %d %s", c.path, c.body, rec.Code, rec.Body)
@@ -82,6 +84,7 @@ func TestTheCommissioningRoutesOutsideAPairAnswer404(t *testing.T) {
 		{"/api/cluster/commission", `{}`},
 		{"/api/cluster/recommission", `{"floor":5000}`},
 		{"/api/cluster/recommission", `{"fromSpare":true,"copyStopped":true}`},
+		{"/api/cluster/vouch", `{}`},
 	} {
 		if rec := call(t, srv, "POST", c.path, c.body, bearer("s3cret")); rec.Code != http.StatusNotFound {
 			t.Fatalf("%s %s outside a pair: %d %s", c.path, c.body, rec.Code, rec.Body)

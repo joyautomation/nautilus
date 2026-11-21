@@ -46,7 +46,11 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -55,9 +59,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -258,9 +264,22 @@ type Options struct {
 	// refusals): "controller a", "the witness".
 	Names map[string]string
 
+	// OnSuperseded, when set, is called (in its own goroutine) when this
+	// copy records a higher log history it waits for a restart to take
+	// (Mark.SupersedeTo): what the runtime applied of the old history must
+	// stop at once, leading or not.
+	OnSuperseded func(to Lineage)
+
+	// ResetInPlace: a replica that hears a higher log history moves its
+	// log aside and starts empty at once, in this process (the witness's
+	// copy: no runtime applies it). Without it (a controller's) the move
+	// waits for the next start (Mark.SupersedeTo).
+	ResetInPlace bool
+
 	transport     http.RoundTripper // tests: an in-process network
 	afterVouchAsk func()            // tests: Vouch, between its asks and its mark
 	lim           limits            // tests: smaller chunks and bounds
+	markWrite     func(Mark) error  // tests: fails a mark write
 }
 
 // Mark is a replica's log mark, kept in Options.Mark.
@@ -279,9 +298,107 @@ type Mark struct {
 	// starts from 0.
 	Term uint64 `json:"term,omitempty"`
 	// Vouch is the last time a person vouched for this log (Node.Vouch),
-	// and Alone says that vouch's one-shot catch-up is still unused.
+	// and Alone says that vouch's one-shot catch-up is still unused, in
+	// this boot: a start drops Alone and Accept (naut-lead, #1177).
 	Vouch *Vouch `json:"vouch,omitempty"`
 	Alone bool   `json:"alone,omitempty"`
+	// Accept is what the person accepted to lose at that vouch (Picture,
+	// VouchAccept), per peer: the one-shot catch-up overrides a peer only
+	// within it. Spent with Alone, and dropped when the log syncs by the
+	// normal path (#1029 3c-3c-2a).
+	Accept *Accept `json:"accept,omitempty"`
+
+	// Lineage is the log's history (#1029 3c-3c-2a): 0 until a vouched
+	// catch-up overrides a copy (a silent one, a later one that does not
+	// count, a forked one), which starts history+1 under a new random id.
+	// A copy at a lower history does not count; one that hears a higher
+	// history is superseded: its log moves aside (File+".superseded-<unix>")
+	// and it syncs from scratch. The same number under another id is a
+	// fork: neither counts the other, and a person chooses (Vouch). It
+	// survives a lost log, as Term does.
+	Lineage
+	// SupersedeTo (SupersedeID, SupersedeBy): a higher history was heard,
+	// and this copy (a controller's) moves its log aside at its next start,
+	// taking it. It counts for nothing and takes nothing until then: the
+	// runtime holds what the old history applied.
+	SupersedeTo uint64 `json:"supersedeTo,omitempty"`
+	SupersedeID uint64 `json:"supersedeId,omitempty,string"`
+	SupersedeBy string `json:"supersedeBy,omitempty"`
+	// Superseded is where the last superseded log was kept: one, the
+	// newest.
+	Superseded string `json:"superseded,omitempty"`
+	// DropRetained: a superseded log was moved aside, and what the runtime
+	// retained of its entries (substitutes, by the old history's seqs) is
+	// not yet dropped (RetainedDropped): set in the same write, so a crash
+	// in between drops them at the next start.
+	DropRetained bool `json:"dropRetained,omitempty"`
+}
+
+// Lineage is a log history (Mark.Lineage): its number, the random id it
+// was started under (0 for history 0) and who accepted the loss that
+// started it. Carried by every answer that says what a log holds.
+type Lineage struct {
+	History   uint64 `json:"history,omitempty"`
+	HistoryID uint64 `json:"historyId,omitempty,string"`
+	HistoryBy string `json:"historyBy,omitempty"`
+}
+
+// same: the same history (number and id; who is a label).
+func (l Lineage) same(o Lineage) bool { return l.History == o.History && l.HistoryID == o.HistoryID }
+
+// forks: the same number under another id, started by another override.
+func (l Lineage) forks(o Lineage) bool { return l.History == o.History && l.HistoryID != o.HistoryID }
+
+// Fork is a copy whose log forked from this one (Status.Forked): the
+// same history number, started by another person's override.
+type Fork struct {
+	Peer    string `json:"peer"`
+	History uint64 `json:"history"`
+	Ours    string `json:"ours,omitempty"`   // who accepted this copy's
+	Theirs  string `json:"theirs,omitempty"` // who accepted the peer's
+}
+
+// Accept is a person's acceptance of a loss at a vouch (Mark.Accept):
+// who, when, the picture's digest, and per peer (by URL) what it was
+// accepted to hold.
+type Accept struct {
+	By     string                  `json:"by"`
+	At     int64                   `json:"at"` // epoch ms
+	Digest string                  `json:"digest"`
+	Peers  map[string]AcceptedPeer `json:"peers,omitempty"`
+}
+
+// AcceptedPeer is what a peer was accepted as: silent (it may be silent,
+// or answer anything), forked (its log is another override's), or
+// holding a later log that does not count, up to (LastTerm, LastSeq).
+type AcceptedPeer struct {
+	Silent   bool   `json:"silent,omitempty"`
+	Forked   bool   `json:"forked,omitempty"`
+	LastTerm uint64 `json:"lastTerm,omitempty"`
+	LastSeq  uint64 `json:"lastSeq,omitempty"`
+}
+
+// covers reports whether the acceptance covers what peer answered now:
+// silent (err), forked, or a later log that does not count at (term, seq).
+func (a *Accept) covers(peer string, silent, forked bool, term, seq uint64) bool {
+	if a == nil {
+		return false
+	}
+	if mutOplog("accept_loss_blanket") {
+		return true
+	}
+	p, ok := a.Peers[peer]
+	switch {
+	case !ok:
+		return false
+	case p.Silent:
+		return true
+	case forked:
+		return p.Forked
+	case silent:
+		return false
+	}
+	return term < p.LastTerm || term == p.LastTerm && seq <= p.LastSeq
 }
 
 // Vouch is a person's word that a replica's log holds every committed
@@ -343,12 +460,22 @@ type Node struct {
 	mark        Mark                // with Options.Mark
 	pending     bool                // Options.Pending, until Rebind
 	peers       map[string]peerInfo // what each peer last said of itself
+	// supersededAtStart: this process's start moved a superseded log aside
+	// (Mark.SupersedeTo), so a restart for a later one is a person's call.
+	supersededAtStart bool
+	// stale is RetainedStale's answer, kept with the mark (setMarkMem) so
+	// it is read without mu.
+	stale atomic.Bool
+	// spendOwed: a vouch's one-shot was spent in memory but the mark that
+	// records it could not be written (usedVouchLocked retries).
+	spendOwed bool
 }
 
 // peerInfo is what a peer's last answer said of its log.
 type peerInfo struct {
 	unsynced bool
 	identity string
+	lineage  Lineage
 }
 
 // Status is what /api/quorum reports.
@@ -380,6 +507,16 @@ type Status struct {
 	// (and counts); Vouch is this replica's last vouch.
 	Synced []string `json:"synced,omitempty"`
 	Vouch  *Vouch   `json:"vouch,omitempty"`
+	// History is this log's history number (Mark.History); SupersedeTo a
+	// higher one it heard and takes at its next start, and Superseded
+	// where the last superseded log was kept.
+	Lineage
+	SupersedeTo uint64 `json:"supersedeTo,omitempty"`
+	Superseded  string `json:"superseded,omitempty"`
+	// Forked: copies whose log forked from this one (same history number,
+	// another override): neither counts the other until a person chooses
+	// one (naut redundancy vouch).
+	Forked []Fork `json:"forked,omitempty"`
 }
 
 // ErrReadOnly says this instance cannot commit a write right now.
@@ -465,7 +602,7 @@ func (n *Node) openMarked() error {
 		// may count as synced (UnmarkedSynced), so it must never be left
 		// by a start that dies, or fails to write the mark, in between.
 		if !mutOplog("mark_after_log") {
-			if err := writeMark(n.o.Mark, m); err != nil {
+			if err := n.writeMarkFile(m); err != nil {
 				return fmt.Errorf("oplog: the log's mark: %w", err)
 			}
 		} else {
@@ -484,6 +621,16 @@ func (n *Node) openMarked() error {
 			n.log.Warn("oplog: the log belongs to another identity of this replica; kept aside, starting empty and unsynced", "kept", kept, "was", m.Identity, "now", n.o.Identity)
 		}
 		m, write = Mark{Identity: n.o.Identity}, true
+	case m.SupersedeTo > m.History && !mutOplog("superseded_not_reset"):
+		// A higher log history was heard (learnHistoryLocked): the log is
+		// moved aside BEFORE it is replayed, so nothing of the old history
+		// is applied in this process, and this copy starts empty at the
+		// new history, unsynced (#1029 3c-3c-2a).
+		var err error
+		if m, err = n.supersede(m); err != nil {
+			return err
+		}
+		n.supersededAtStart = true
 	}
 	_, statErr := os.Stat(n.o.File)
 	missing := errors.Is(statErr, os.ErrNotExist)
@@ -509,23 +656,81 @@ func (n *Node) openMarked() error {
 		if _, err := n.open(); err != nil {
 			return err
 		}
-		m, write = Mark{Identity: n.o.Identity, Lost: kept, Term: m.Term}, true
+		m, write = Mark{Identity: n.o.Identity, Lost: kept, Term: m.Term, Lineage: m.Lineage, Superseded: m.Superseded, DropRetained: m.DropRetained}, true
 		n.log.Error("oplog: this replica's operator-intent log was LOST: it counts for nothing (writes, the majority, a takeover's catch-up) until it has synced from the leader", "file", n.o.File, "kept", kept)
 	}
 	if len(n.entries) > 0 && !m.Held {
 		m.Held, write = true, true // a log from before marks
 	}
+	if (m.Alone || m.Accept != nil) && !mutOplog("accept_survives_reboot") {
+		// A vouch's one-shot and what the person accepted hold for the
+		// boot they were given in (naut-lead, #1177): the picture they
+		// were bound to may not be true after a restart, and a spend that
+		// could not be written before a crash must not re-arm them. The
+		// copy stays synced (the vouch's word stands); a person vouches
+		// again against the picture as it is now.
+		n.log.Warn("oplog: a vouch's one-shot catch-up from before this start is dropped: if it is still needed, naut redundancy vouch again")
+		m.Alone, m.Accept, write = false, nil, true
+	}
 	if !mutOplog("term_not_persisted") {
 		n.term = max(n.term, m.Term)
 	}
-	n.mark = m
+	n.setMarkMem(m)
 	if write {
-		if err := writeMark(n.o.Mark, m); err != nil {
+		if err := n.writeMarkFile(m); err != nil {
 			n.file.Close()
 			return fmt.Errorf("oplog: the log's mark: %w", err)
 		}
 	}
 	return nil
+}
+
+// supersede moves a superseded log aside (Mark.SupersedeTo) and returns
+// the mark that starts the new history: empty, never held, unsynced, at
+// SupersedeTo, its term kept. Exactly one superseded log is kept, the
+// newest: older ones are removed only once the mark naming the newest is
+// durable. The log file must be closed (New, or the caller closed it).
+// The returned mark is durable when the error is nil.
+func (n *Node) supersede(m Mark) (Mark, error) {
+	kept, err := n.moveAside(".superseded-")
+	if err != nil {
+		return m, err
+	}
+	if kept == "" {
+		// Moved by an earlier start that died before its mark: the newest
+		// one there is it.
+		kept = newestSuperseded(n.o.File)
+	}
+	if kept == "" {
+		kept = "(empty)"
+	}
+	nm := Mark{Identity: m.Identity, Term: m.Term, Lineage: Lineage{History: m.SupersedeTo, HistoryID: m.SupersedeID, HistoryBy: m.SupersedeBy}, Superseded: kept,
+		DropRetained: !n.o.ResetInPlace}
+	if err := n.writeMarkFile(nm); err != nil {
+		return m, fmt.Errorf("oplog: the log's mark: %w", err)
+	}
+	olds, _ := filepath.Glob(n.o.File + ".superseded-*")
+	for _, f := range olds {
+		if f != kept {
+			os.Remove(f)
+		}
+	}
+	n.log.Error("oplog: this copy's operator-intent log was SUPERSEDED by a newer history a person accepted elsewhere: kept aside, starting empty; it syncs from the leader", "kept", kept, "history", nm.History)
+	return nm, nil
+}
+
+// newestSuperseded is the newest File+".superseded-<unix>" there is, "" if
+// none.
+func newestSuperseded(file string) string {
+	fs, _ := filepath.Glob(file + ".superseded-*")
+	newest, at := "", int64(-1)
+	for _, f := range fs {
+		var u int64
+		if _, err := fmt.Sscanf(strings.TrimPrefix(f, file+".superseded-"), "%d", &u); err == nil && u >= at {
+			newest, at = f, u
+		}
+	}
+	return newest
 }
 
 // Rebind gives a Pending replica its identity, once it can be known: the
@@ -551,7 +756,7 @@ func (n *Node) Rebind(identity, placeholder string) error {
 		m := n.mark
 		m.Identity = identity
 		if !mutOplog("placeholder_keeps_synced") {
-			m.Synced, m.Alone = false, false
+			m.Synced, m.Alone, m.Accept = false, false, nil
 		}
 		if err := n.setMarkLocked(m); err != nil {
 			return fmt.Errorf("oplog: the log's mark: %w", err)
@@ -643,16 +848,155 @@ func syncDir(dir string) {
 
 // setMarkLocked records m durably, then holds it. Caller holds mu.
 func (n *Node) setMarkLocked(m Mark) error {
-	if err := writeMark(n.o.Mark, m); err != nil {
+	if err := n.writeMarkFile(m); err != nil {
 		return err
 	}
-	n.mark = m
+	n.setMarkMem(m)
 	return nil
+}
+
+// writeMarkFile writes this replica's mark (writeMark), through the
+// tests' hook.
+func (n *Node) writeMarkFile(m Mark) error {
+	if n.o.markWrite != nil {
+		if err := n.o.markWrite(m); err != nil {
+			return err
+		}
+	}
+	return writeMark(n.o.Mark, m)
 }
 
 // syncedLocked: this replica's log is known to hold every committed entry
 // (always, without a mark). Caller holds mu.
-func (n *Node) syncedLocked() bool { return n.o.Mark == "" || n.mark.Synced && !n.pending }
+func (n *Node) syncedLocked() bool {
+	return n.o.Mark == "" || n.mark.Synced && !n.pending && !n.supersedingLocked()
+}
+
+// supersedingLocked: this copy heard a higher log history and moves its
+// log aside at its next start (Mark.SupersedeTo): it takes, commits and
+// applies nothing until then. Caller holds mu.
+func (n *Node) supersedingLocked() bool {
+	return n.mark.SupersedeTo > n.mark.History && !mutOplog("superseded_takes")
+}
+
+// errSuperseded refuses what a superseded copy would take or do.
+var errSuperseded = errors.New("oplog: this copy's log was superseded by a newer history: restart naut on this controller to move it aside and sync")
+
+// learnHistoryLocked takes a higher log history h, heard from a peer
+// (#1029 3c-3c-2a): this copy's log is another history's, so it counts
+// for nothing from now on. A controller's records SupersedeTo durably and
+// moves the log aside at its next start (the runtime holds what the old
+// history applied); with ResetInPlace (the witness's) the log moves aside
+// now and the copy starts empty at h. Caller holds mu (and seqMu, or is a
+// handler that takes nothing more of the request when it is superseded).
+func (n *Node) learnHistoryLocked(l Lineage) error {
+	h := l.History
+	if n.o.Mark != "" && h == n.mark.SupersedeTo && l.HistoryID == n.mark.SupersedeID && n.mark.SupersedeBy == "" && l.HistoryBy != "" {
+		// Learnt first from the hello, which carries no name: an
+		// authenticated answer says who accepted it (the journal's row).
+		m := n.mark
+		m.SupersedeBy = l.HistoryBy
+		if err := n.setMarkLocked(m); err != nil {
+			n.log.Warn("oplog: can't record who accepted the newer history", "error", err)
+		}
+		return nil
+	}
+	if n.o.Mark == "" || h <= n.mark.History || h <= n.mark.SupersedeTo {
+		return nil
+	}
+	m := n.mark
+	m.SupersedeTo, m.SupersedeID, m.SupersedeBy = h, l.HistoryID, l.HistoryBy
+	m.Synced, m.Alone, m.Accept = false, false, nil
+	if mutOplog("supersede_not_durable") {
+		n.setMarkMem(m)
+	} else if err := n.setMarkLocked(m); err != nil {
+		return fmt.Errorf("oplog: recording the newer log history %d: %w", h, err)
+	}
+	n.syncedTerm = 0
+	if !n.o.ResetInPlace {
+		n.log.Error("oplog: a newer operator-intent log history was heard: this copy counts for nothing; restart naut on this controller to move its log aside and sync", "history", n.mark.History, "heard", h)
+		if f := n.o.OnSuperseded; f != nil {
+			go f(l)
+		}
+		return nil
+	}
+	if n.file != nil {
+		n.file.Close()
+	}
+	n.file, n.entries, n.commit, n.syncedTerm = nil, nil, 0, 0
+	nm, err := n.supersede(m)
+	if err != nil {
+		return err
+	}
+	n.setMarkMem(nm)
+	if _, err := n.open(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// LearnHistory takes a higher log history heard from the other controller
+// by an authenticated channel (its hello), as learnHistoryLocked: a
+// controller's copy is superseded from first contact.
+func (n *Node) LearnHistory(l Lineage) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.learnHistoryLocked(l)
+}
+
+// History is this copy's log history (Mark.Lineage), and the higher one it
+// waits for a restart to take (Mark.SupersedeTo; History 0 when none).
+func (n *Node) History() (own, to Lineage) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.supersedingLocked() {
+		to = Lineage{History: n.mark.SupersedeTo, HistoryID: n.mark.SupersedeID, HistoryBy: n.mark.SupersedeBy}
+	}
+	return n.mark.Lineage, to
+}
+
+// RetainedStale: what the runtime retained of this log's entries (its
+// substitutes, numbered by the log's seqs) may be another log history's:
+// this copy is superseded and waits for its restart, or its restart moved
+// a superseded log aside and the caller has not yet dropped them
+// (RetainedDropped). A takeover must restore none of them.
+func (n *Node) RetainedStale() bool {
+	if mutOplog("stale_under_lock") {
+		n.mu.Lock()
+		defer n.mu.Unlock()
+	}
+	return n.stale.Load()
+}
+
+// setMarkMem holds m as this replica's mark, and the verdicts read
+// without mu from it (RetainedStale: the runtime and the alarm log ask it
+// under their own locks, which a commit's Apply takes under mu, #1177
+// review). Caller holds mu, or is New.
+func (n *Node) setMarkMem(m Mark) {
+	n.mark = m
+	n.stale.Store(n.supersedingLocked() || m.DropRetained)
+}
+
+// RetainedDropped records that the caller dropped what the runtime
+// retained of a superseded log's entries (Mark.DropRetained).
+func (n *Node) RetainedDropped() error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if !n.mark.DropRetained {
+		return nil
+	}
+	m := n.mark
+	m.DropRetained = false
+	return n.setMarkLocked(m)
+}
+
+// SupersededAtStart: this process's start moved a superseded log aside,
+// so a self-restart for a later one would loop: a person decides.
+func (n *Node) SupersededAtStart() bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.supersededAtStart
+}
 
 // Synced reports whether this replica's log is known to hold every
 // committed entry (Options.Mark). A replica that isn't counts for nothing,
@@ -685,7 +1029,7 @@ func (n *Node) CanSync(within time.Duration) bool {
 		if p == n.o.Self || now.Sub(n.lastContact[p]) >= within {
 			continue
 		}
-		if pi, ok := n.peers[p]; ok && n.counts(p, pi.unsynced, pi.identity) {
+		if n.countsLocked(p) {
 			return true
 		}
 	}
@@ -737,28 +1081,54 @@ func (n *Node) raiseTermLocked(t uint64) error {
 // has since been caught up with a majority or by a synced leader. Caller
 // holds mu.
 func (n *Node) usedVouchLocked() {
-	if !n.mark.Alone || mutOplog("vouch_alone_kept") {
+	if mutOplog("vouch_alone_kept") {
+		return
+	}
+	if !n.mark.Alone && (n.mark.Accept == nil || mutOplog("accept_kept_after_sync")) && !n.spendOwed {
 		return
 	}
 	m := n.mark
 	m.Alone = false
-	if err := n.setMarkLocked(m); err != nil {
-		n.log.Warn("oplog: can't record that the vouch's catch-up is used", "error", err)
+	if !mutOplog("accept_kept_after_sync") {
+		m.Accept = nil
 	}
+	if err := n.setMarkLocked(m); err != nil {
+		// Fail closed (#1177 CI, naut-lead): spent in this process at once,
+		// so no catch-up uses it again here, and the durable write is owed:
+		// every later proving replication retries it.
+		n.spendOwed = true
+		if !mutOplog("spend_failure_keeps_alone") {
+			n.setMarkMem(m)
+		}
+		n.log.Error("oplog: can't record that the vouch's catch-up is used: spent in this process, retried at the next replication", "error", err)
+		return
+	}
+	n.spendOwed = false
 }
 
 // counts reports whether a peer's answer counts toward a commit or a
-// catch-up: only a synced one, at an identity Options.Counts accepts.
-func (n *Node) counts(peer string, unsynced bool, identity string) bool {
+// catch-up: only a synced one, at an identity Options.Counts accepts, and
+// at this copy's log history (own): a lower history's log is one a person
+// accepted to lose (#1029 3c-3c-2a), a higher one supersedes this copy.
+func (n *Node) counts(peer string, unsynced bool, identity string, l, own Lineage) bool {
 	if unsynced && !mutOplog("unsynced_counted") {
+		return false
+	}
+	if !l.same(own) && !(l.History < own.History && mutOplog("history_lower_counted")) && !(l.forks(own) && mutOplog("history_fork_counted")) {
 		return false
 	}
 	return n.o.Counts == nil || n.o.Counts(peer, identity)
 }
 
 // notePeer records what a peer said of its log. Caller holds mu.
-func (n *Node) notePeerLocked(peer string, unsynced bool, identity string) {
-	n.peers[peer] = peerInfo{unsynced: unsynced, identity: identity}
+func (n *Node) notePeerLocked(peer string, unsynced bool, identity string, l Lineage) {
+	n.peers[peer] = peerInfo{unsynced: unsynced, identity: identity, lineage: l}
+}
+
+// countsLocked is counts for a peer's last answer. Caller holds mu.
+func (n *Node) countsLocked(peer string) bool {
+	pi, ok := n.peers[peer]
+	return ok && n.counts(peer, pi.unsynced, pi.identity, pi.lineage, n.mark.Lineage)
 }
 
 // fileLine is one line of the local copy: an entry, or a commit mark.
@@ -1136,6 +1506,11 @@ type replicateReq struct {
 	// its log holds every committed entry: a follower this request proves
 	// equal up to Commit is synced too.
 	Synced bool `json:"synced,omitempty"`
+	// Lineage is the sender's log history (Mark.Lineage): a follower at a
+	// higher one refuses it (409 "history"), at a forked one too (409
+	// "forked"); one at a lower one is superseded (#1029 3c-3c-2a).
+	// Omitted (0) by a build from before.
+	Lineage
 }
 
 type replicateResp struct {
@@ -1146,6 +1521,9 @@ type replicateResp struct {
 	// before marks counts, as it did.
 	Unsynced bool   `json:"unsynced,omitempty"`
 	Identity string `json:"identity,omitempty"`
+	// Lineage is the follower's log history; on a 409 "history",
+	// "forked" or "superseded" it says which.
+	Lineage
 }
 
 type proposeResp struct {
@@ -1170,6 +1548,10 @@ type afterResp struct {
 	More     bool   `json:"more,omitempty"`
 	Unsynced bool   `json:"unsynced,omitempty"`
 	Identity string `json:"identity,omitempty"`
+	// Lineage is the answering log's history (Mark.Lineage), Lost whether
+	// it was lost and not synced since (#1029 3c-3c-2a).
+	Lineage
+	Lost bool `json:"lost,omitempty"`
 }
 
 // Propose takes an operator event from this instance's client: sequenced
@@ -1222,6 +1604,10 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 		n.mu.Unlock()
 		return nil
 	}
+	if n.supersedingLocked() {
+		n.mu.Unlock()
+		return fmt.Errorf("%w: %w", ErrReadOnly, errSuperseded)
+	}
 	// From the COMMIT index, not the last entry: an uncommitted suffix of
 	// this leader's own may be stale (stored, never replicated, and since
 	// overtaken by a committed entry at the same seq), and only answers
@@ -1236,8 +1622,11 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 	// log among itself and those that count, even when that is itself
 	// alone. Once. A silent peer may hold a write a majority committed
 	// without this log (#1053 review: two vouched controllers, one silent
-	// witness): then it fails, and the vouch is kept for when it answers.
+	// witness): then it fails, and the vouch is kept for when it answers,
+	// unless the person accepted that peer's loss (Mark.Accept).
 	alone := selfCounts && n.mark.Alone
+	accept := n.mark.Accept
+	hist := n.mark.Lineage
 	n.mu.Unlock()
 	// The most advanced log is Raft's "up to date", compared on each WHOLE
 	// log's last entry: the higher term wins, then the higher seq, so an
@@ -1254,13 +1643,18 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 	var best afterResp
 	bestSelf, answered, commit := false, 0, uint64(0)
 	if selfCounts {
-		best, bestSelf, answered, commit = own, true, 1, own.Commit
+		best, bestSelf = own, true
+		answered, commit = 1, own.Commit
 	}
 	var errs []string
 	var newer error
-	silent := 0
-	var uncounted afterResp // the latest log among answers that don't count
-	uncountedFrom := ""
+	var silent []string
+	type ahead struct {
+		p   string
+		got afterResp
+	}
+	var uncounted []ahead // answers that don't count, at this history
+	var forked []string   // copies whose log forked from this one
 	type answer struct {
 		got afterResp
 		err error
@@ -1277,16 +1671,29 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 		switch {
 		case a.err != nil:
 			errs = append(errs, p+": "+a.err.Error())
-			silent++
+			silent = append(silent, p)
+		case a.got.History > hist.History:
+			// A newer log history (a person accepted a loss elsewhere):
+			// this copy's log is superseded (fetchAfter has learnt it).
+			newer = fmt.Errorf("%w: %s holds a newer log history (%d; this copy %d): %w", ErrReadOnly, n.name(p), a.got.History, hist.History, errSuperseded)
+			return true
 		case a.got.Term > term:
 			// A peer has seen a newer term: this leadership is over.
 			newer = fmt.Errorf("%w: a peer is at term %d, this leader at %d", ErrReadOnly, a.got.Term, term)
 			return true
-		case !n.counts(p, a.got.Unsynced, a.got.Identity):
+		case a.got.History < hist.History && !mutOplog("history_lower_counted"):
+			// An older history's copy: its loss was accepted when this one
+			// started; it neither counts nor holds anything to wait for.
+			errs = append(errs, p+": its log is an older history's (superseded)")
+		case a.got.Lineage.forks(hist) && !mutOplog("history_fork_counted"):
+			// Another override's log at the same number: it never counts,
+			// and only a person's choice (a vouch here, its catch-up
+			// overriding it) ends the fork.
+			errs = append(errs, fmt.Sprintf("%s: its log forked from this one at history %d (accepted by %s)", p, a.got.History, a.got.HistoryBy))
+			forked = append(forked, p)
+		case !n.counts(p, a.got.Unsynced, a.got.Identity, a.got.Lineage, hist):
 			errs = append(errs, p+": its log is not synced")
-			if better(a.got, uncounted) {
-				uncounted, uncountedFrom = a.got, p
-			}
+			uncounted = append(uncounted, ahead{p, a.got})
 		default:
 			answered++
 			commit = max(commit, a.got.Commit)
@@ -1299,12 +1706,62 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 	if newer != nil {
 		return newer
 	}
-	useVouch := answered < n.majority() && alone && (silent == 0 || mutOplog("vouch_alone_partial"))
-	if useVouch && better(uncounted, best) && !mutOplog("vouch_alone_ignores_ahead") {
-		// A copy that answers but doesn't count yet (a witness in its quiet
-		// period after a re-commission, #1053) holds a later log: going
-		// ahead alone would lose its entries. Wait until it counts.
-		return fmt.Errorf("%w: a vouched catch-up waits: %s holds a later log (term %d, seq %d) but does not count yet", ErrReadOnly, n.name(uncountedFrom), uncounted.LastTerm, uncounted.LastSeq)
+	// What going ahead alone would override: a silent peer (it may hold a
+	// write a majority committed without this log), and a copy that
+	// answers but doesn't count yet with a later log (a witness in its
+	// quiet period after a re-commission, #1053), whose entries would be
+	// lost. Each only as the person accepted (Mark.Accept), else it waits.
+	var outside []string
+	for _, p := range silent {
+		if !accept.covers(p, true, false, 0, 0) && !mutOplog("vouch_alone_partial") {
+			outside = append(outside, n.name(p)+" does not answer")
+		}
+	}
+	overrides := len(silent) > 0
+	waitAhead := ""
+	for _, u := range uncounted {
+		if !better(u.got, best) {
+			continue
+		}
+		overrides = true
+		if accept.covers(u.p, false, false, u.got.LastTerm, u.got.LastSeq) || mutOplog("vouch_alone_ignores_ahead") {
+			continue
+		}
+		if accept == nil {
+			waitAhead = fmt.Sprintf("%s holds a later log (term %d, seq %d) but does not count yet", n.name(u.p), u.got.LastTerm, u.got.LastSeq)
+		}
+		outside = append(outside, fmt.Sprintf("%s holds a later log (term %d, seq %d) that does not count", n.name(u.p), u.got.LastTerm, u.got.LastSeq))
+	}
+	// A fork the person accepted at the vouch is overridden by this
+	// catch-up even with a majority that counts: the only case a vouch
+	// acts on a synced copy whose majority counts, since choosing one side
+	// of a fork is what it is for. A fork not accepted waits.
+	resolves := false
+	for _, p := range forked {
+		switch {
+		case alone && accept.covers(p, false, true, 0, 0):
+			resolves = !mutOplog("fork_resolved_without_bump")
+		case alone:
+			outside = append(outside, n.name(p)+"'s log forked from this one")
+		}
+	}
+	useVouch := answered < n.majority() && alone
+	if (useVouch || alone && len(forked) > 0) && len(outside) > 0 {
+		if waitAhead != "" && len(outside) == 1 {
+			return fmt.Errorf("%w: a vouched catch-up waits: %s", ErrReadOnly, waitAhead)
+		}
+		if accept == nil {
+			return fmt.Errorf("%w: catch-up heard from %d of %d that count (%s); a vouched catch-up needs every copy to answer", ErrReadOnly, answered, len(n.o.Peers), strings.Join(errs, "; "))
+		}
+		sort.Strings(outside)
+		return fmt.Errorf("%w: a vouched catch-up waits: not what was accepted (%s): naut redundancy vouch again", ErrReadOnly, strings.Join(outside, "; "))
+	}
+	if useVouch && overrides && len(silent) == len(n.others()) && !mutOplog("override_all_silent") {
+		// Every other copy silent (naut-lead, 3c-3c-2a (i)): the new
+		// history would sit on this copy alone, and the other two, back at
+		// the old one, could commit there and lose it all at first contact.
+		// Alone this copy commits nothing anyway.
+		return fmt.Errorf("%w: a loss accepted with every other copy silent would leave the new history on this copy alone: bring one back or rebuild it (a rebuilt witness answers), then naut redundancy vouch again", ErrReadOnly)
 	}
 	if answered < n.majority() && !useVouch {
 		why := ""
@@ -1318,19 +1775,40 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if useVouch && !mutOplog("vouch_alone_kept") {
-		// Spent before it is used: a mark that can't record that never
-		// leaves a second use.
-		m := n.mark
-		m.Alone = false
-		if err := n.setMarkLocked(m); err != nil {
-			return fmt.Errorf("oplog: recording that the vouch's catch-up is used: %w", err)
-		}
+	if !n.mark.Lineage.same(hist) || n.supersedingLocked() {
+		// A newer history was heard while the peers were asked.
+		return fmt.Errorf("%w: the log history moved during the catch-up", ErrReadOnly)
 	}
+	// A counting copy's entries (the same history's) are taken first: a
+	// crash before the bump below then leaves this copy at the old history
+	// with them and its one-shot pending, never at the new one without
+	// them (#1177 review nit).
 	if !bestSelf && len(best.Entries) > 0 {
 		if _, err := n.acceptLocked(best.Entries); err != nil {
 			n.log.Warn("oplog: leader catch-up", "error", err)
 			return err
+		}
+	}
+	if useVouch || resolves {
+		// Spent before it is used: a mark that can't record that never
+		// leaves a second use. An override starts a new log history in
+		// the same write, durable before this copy is synced or takes or
+		// sequences anything at it: the copies it overrides then count for
+		// nothing, and are moved aside when they meet it.
+		m := n.mark
+		if !mutOplog("vouch_alone_kept") {
+			m.Alone = false
+		}
+		m.Accept = nil
+		bump := (overrides && useVouch || resolves) && !mutOplog("history_not_bumped") && !mutOplog("history_after_write")
+		if bump {
+			m.Lineage = newLineage(hist, accept)
+		}
+		if err := n.setMarkLocked(m); err != nil {
+			return fmt.Errorf("oplog: recording that the vouch's catch-up is used: %w", err)
+		}
+		if bump {
+			n.log.Warn("oplog: a vouched catch-up overrode a copy, as a person accepted: a new log history starts; the overridden copies count for nothing and are moved aside when they meet it", "history", m.History)
 		}
 	}
 	// The best log a majority answered with holds every committed entry,
@@ -1338,11 +1816,36 @@ func (n *Node) leaderCatchUp(ctx context.Context, term uint64) error {
 	n.commitTo(commit)
 	n.syncedTerm = term
 	n.becomeSyncedLocked("caught up from a majority as leader")
+	if useVouch && overrides && mutOplog("history_after_write") {
+		m := n.mark
+		m.Lineage = newLineage(hist, accept)
+		if err := n.setMarkLocked(m); err != nil {
+			n.syncedTerm = 0
+			return fmt.Errorf("oplog: recording the new log history: %w", err)
+		}
+	}
 	if useVouch {
-		n.log.Warn("oplog: caught up on a vouched log, every copy answering, without a majority that counts", "answered", answered, "commit", n.commit)
+		n.log.Warn("oplog: caught up on a vouched log, without a majority that counts", "answered", answered, "commit", n.commit)
 	}
 	n.usedVouchLocked()
 	return nil
+}
+
+// newLineage is the history an override starts after hist: the next
+// number, under a fresh random id (never 0), accepted by the acceptance's
+// person.
+func newLineage(hist Lineage, a *Accept) Lineage {
+	var b [8]byte
+	var id uint64
+	for id == 0 {
+		_, _ = rand.Read(b[:])
+		id = binary.BigEndian.Uint64(b[:])
+	}
+	l := Lineage{History: hist.History + 1, HistoryID: id}
+	if a != nil {
+		l.HistoryBy = a.By
+	}
+	return l
 }
 
 // carrierLocked is what a leader of term sequences to commit the entries
@@ -1443,86 +1946,258 @@ func (n *Node) TermSynced() bool {
 // why, naming the replica).
 var ErrVouchRefused = errors.New("oplog: vouch refused")
 
+// VouchAccept is what a person accepts at a vouch (#1029 3c-3c-2a), each
+// as the digest of the picture they saw (Picture.Digest; "" accepts
+// nothing): Loss, what the other copies may hold (a silent copy, a later
+// log that does not count, or every other copy lost while this one is
+// synced); LostLog, that this copy's own log was lost.
+type VouchAccept struct {
+	Loss    string `json:"loss,omitempty"`
+	LostLog string `json:"lostLog,omitempty"`
+}
+
+// Picture is what a vouch saw of the copies: this one, and each other's
+// answer. Digest names it (Err left out): an accepting run must see the
+// same picture. Needs is what the vouch needs accepted ("loss",
+// "lost-log"), and Why says, a line each, what would be lost.
+type Picture struct {
+	Self   CopyState   `json:"self"`
+	Copies []CopyState `json:"copies"`
+	Digest string      `json:"digest"`
+	Needs  []string    `json:"needs,omitempty"`
+	Why    []string    `json:"why,omitempty"`
+}
+
+// CopyState is one copy of the log, as a vouch saw it.
+type CopyState struct {
+	Name     string `json:"name"`
+	Answers  bool   `json:"answers"`
+	Err      string `json:"err,omitempty"`
+	Counts   bool   `json:"counts"`
+	Synced   bool   `json:"synced"`
+	Lost     bool   `json:"lost,omitempty"`
+	LastTerm uint64 `json:"lastTerm"`
+	LastSeq  uint64 `json:"lastSeq"`
+	// Lineage is its log history; Forked, the same number under another
+	// override's id.
+	Lineage
+	Forked bool `json:"forked,omitempty"`
+}
+
+// The needs a vouch names (Picture.Needs).
+const (
+	NeedLoss    = "loss"
+	NeedLostLog = "lost-log"
+)
+
+// digest is the picture's short digest: sha256 over its copies (Err left
+// out, so a silent copy's changing error text does not change it) and its
+// needs.
+func (p Picture) digest() string {
+	strip := func(c CopyState) CopyState { c.Err = ""; return c }
+	cs := make([]CopyState, 0, len(p.Copies))
+	for _, c := range p.Copies {
+		cs = append(cs, strip(c))
+	}
+	b, _ := json.Marshal(struct {
+		Self   CopyState
+		Copies []CopyState
+		Needs  []string
+	}{strip(p.Self), cs, p.Needs})
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])[:10]
+}
+
 // Vouch is a person's word that this replica's log holds every committed
 // entry, given when a controller is commissioned or recommissioned (#710
-// 3b-4b): with only synced replicas counting, a new pair (three empty,
-// unsynced logs) could never sync, and nor could a pair whose logs were
-// all lost or rebuilt. The log counts as one synced replica from then on,
-// and its first catch-up as leader may succeed with no other replica that
-// counts (Mark.Alone, leaderCatchUp): only when every peer answers, and it
-// takes the most up-to-date log among those that count.
+// 3b-4b), or by itself (naut redundancy vouch, #1029 3c-3c-2a): with only
+// synced replicas counting, a new pair (three empty, unsynced logs) could
+// never sync, and nor could a pair whose logs were all lost or rebuilt.
+// The log counts as one synced replica from then on, and its first
+// catch-up as leader may succeed with no other replica that counts
+// (Mark.Alone, leaderCatchUp): when every peer answers, or as the person
+// accepted (Mark.Accept), taking the most up-to-date log among those that
+// count.
 //
-// A log that is already synced needs no word: Vouch does nothing and
-// returns a zero Vouch. Otherwise it refuses (ErrVouchRefused):
-//   - a log that was lost (Lost): recommission the other controller;
-//   - when any peer does not answer: it may hold entries this log lacks
-//     (a synced witness rebooting). Bring it back, or rebuild it;
-//   - when a peer that does NOT count holds a later log (its last term,
-//     then its last seq), naming it: its entries would be lost. A later
-//     log on a peer that counts is fine: the catch-up takes it (#1053
-//     review: A and B lost, the witness synced and longer).
+// It returns the picture it saw. Without an acceptance it refuses
+// (ErrVouchRefused) what would lose entries, naming the flag that accepts
+// it with the picture's digest:
+//   - this copy's log was lost (Lost): --accept-lost-log (or recommission
+//     the other controller);
+//   - a peer does not answer: it may hold entries this log lacks.
+//     --accept-loss, or bring it back or rebuild it;
+//   - a peer that does NOT count holds a later log (its last term, then
+//     its last seq): its entries would be lost. --accept-loss. A later log
+//     on a peer that counts is fine: the catch-up takes it (#1053 review);
+//   - this copy is synced, and no other copy counts (both lost or
+//     rebuilt): entries committed while it lagged may be on them.
+//     --accept-loss grants the one-shot catch-up.
+//
+// An accepting run must see the same picture (the digest), else it
+// refuses and returns the new one. A synced log another copy counts
+// beside needs no word: Vouch does nothing and returns a zero Vouch.
 //
 // counts says whether a peer's copy counts, by the identity it reports,
 // for this vouch (a re-commission judges the witness at the incarnation
 // it adopts); nil: Options.Counts. Without a mark it does nothing.
-func (n *Node) Vouch(ctx context.Context, by string, counts func(peer, identity string) bool) (Vouch, error) {
+func (n *Node) Vouch(ctx context.Context, by string, counts func(peer, identity string) bool, acc VouchAccept) (Vouch, Picture, error) {
 	if n.o.Mark == "" || n.standalone() {
-		return Vouch{}, nil
+		return Vouch{}, Picture{}, nil
 	}
 	n.seqMu.Lock()
 	defer n.seqMu.Unlock()
 	n.mu.Lock()
-	if n.syncedLocked() {
+	if n.supersedingLocked() {
 		n.mu.Unlock()
-		return Vouch{}, nil
+		return Vouch{}, Picture{}, fmt.Errorf("%w: %w", ErrVouchRefused, errSuperseded)
 	}
-	lost, last := n.mark.Lost, n.lastLocked()
+	synced, alone, lost, last := n.syncedLocked(), n.mark.Alone, n.mark.Lost, n.lastLocked()
 	lastTerm := n.termAtLocked(last)
+	hist := n.mark.Lineage
 	n.mu.Unlock()
 	check := !mutOplog("vouch_unchecked")
-	if lost != "" && check {
-		return Vouch{}, fmt.Errorf("%w: this controller's operator-intent log was lost (kept at %s): recommission the other controller instead", ErrVouchRefused, lost)
-	}
+	pic := Picture{Self: CopyState{Name: n.name(n.o.Self), Answers: true, Counts: synced, Synced: synced, Lost: lost != "", LastTerm: lastTerm, LastSeq: last, Lineage: hist}}
 	type answer struct {
 		got afterResp
 		err error
 	}
-	var problems []string
+	got := map[string]answer{}
 	// Every peer, each to its own call timeout: none is skipped.
 	fanOut(ctx, n, n.others(), func(ctx context.Context, p string) answer {
-		var got afterResp
-		err := n.call(ctx, p, fmt.Sprintf("/api/oplog?after=%d&page=1", last), nil, &got)
-		return answer{got, err}
-	}, func(p string, a answer) bool {
-		switch {
-		case a.err != nil:
-			problems = append(problems, fmt.Sprintf("%s does not answer (%v): it may hold entries this log lacks; bring it back, or rebuild it, then vouch again", n.name(p), a.err))
-		case (a.got.LastTerm > lastTerm || a.got.LastTerm == lastTerm && a.got.LastSeq > last) &&
-			(mutOplog("vouch_refuses_counting_ahead") || !n.vouchCounts(counts, p, a.got)):
-			problems = append(problems, fmt.Sprintf("%s holds a later log that does not count (term %d, seq %d; this one ends at term %d, seq %d): its entries would be lost", n.name(p), a.got.LastTerm, a.got.LastSeq, lastTerm, last))
+		var a afterResp
+		err := n.call(ctx, p, fmt.Sprintf("/api/oplog?after=%d&page=1", last), nil, &a)
+		if err == nil {
+			n.mu.Lock()
+			n.notePeerLocked(p, a.Unsynced, a.Identity, a.Lineage)
+			err = n.learnHistoryLocked(a.Lineage)
+			n.mu.Unlock()
 		}
+		return answer{a, err}
+	}, func(p string, a answer) bool {
+		got[p] = a
 		return false
 	})
+	acceptPeers := map[string]AcceptedPeer{}
+	var needs, why []string
+	need := func(what, line string) {
+		if !slices.Contains(needs, what) {
+			needs = append(needs, what)
+		}
+		why = append(why, line)
+	}
+	if lost != "" {
+		need(NeedLostLog, fmt.Sprintf("this controller's operator-intent log was lost (kept at %s): recommission the other controller instead, or accept its loss with --accept-lost-log", lost))
+	}
+	otherCounts, anyForked := false, false
+	for _, p := range n.others() {
+		a := got[p]
+		c := CopyState{Name: n.name(p), Answers: a.err == nil}
+		if a.err != nil {
+			c.Err = a.err.Error()
+			pic.Copies = append(pic.Copies, c)
+			acceptPeers[p] = AcceptedPeer{Silent: true}
+			need(NeedLoss, fmt.Sprintf("%s does not answer: it may hold entries this log lacks; bring it back or rebuild it, or accept what it may hold with --accept-loss", n.name(p)))
+			continue
+		}
+		g := a.got
+		if g.History > hist.History {
+			return Vouch{}, pic, fmt.Errorf("%w: %s holds a newer log history (%d; this copy %d): %w", ErrVouchRefused, n.name(p), g.History, hist.History, errSuperseded)
+		}
+		c.Synced, c.Lost, c.LastTerm, c.LastSeq, c.Lineage = !g.Unsynced, g.Lost, g.LastTerm, g.LastSeq, g.Lineage
+		c.Forked = g.Lineage.forks(hist)
+		c.Counts = g.Lineage.same(hist) && n.vouchCounts(counts, p, g)
+		pic.Copies = append(pic.Copies, c)
+		later := g.LastTerm > lastTerm || g.LastTerm == lastTerm && g.LastSeq > last
+		otherCounts = otherCounts || c.Counts
+		switch {
+		case g.History < hist.History:
+			// An older history's copy: its loss was accepted already.
+		case c.Forked:
+			// Another override's log at this number: choosing this copy
+			// loses that side (its catch-up overrides it and starts the
+			// next history).
+			anyForked = true
+			acceptPeers[p] = AcceptedPeer{Forked: true}
+			need(NeedLoss, fmt.Sprintf("%s's log forked from this one at history %d (this one accepted by %s, that one by %s): choosing this one loses that side's entries; accept that with --accept-loss", n.name(p), g.History, hist.HistoryBy, g.HistoryBy))
+		case later && (!c.Counts || mutOplog("vouch_refuses_counting_ahead")):
+			// A later log on a copy that counts is fine: the catch-up
+			// takes it (#1053 review).
+			acceptPeers[p] = AcceptedPeer{LastTerm: g.LastTerm, LastSeq: g.LastSeq}
+			need(NeedLoss, fmt.Sprintf("%s holds a later log that does not count (term %d, seq %d; this one ends at term %d, seq %d): its entries would be lost; accept that with --accept-loss", n.name(p), g.LastTerm, g.LastSeq, lastTerm, last))
+		}
+	}
+	if synced && !anyForked {
+		if otherCounts || alone && mutOplog("vouch_again_noop") {
+			// Another copy counts: its catch-up takes from it, nothing to
+			// vouch for. (A pending one-shot alone is no reason: its
+			// catch-up may have refused as not what was accepted, and
+			// "vouch again" must judge the picture anew, #1177 review.) A
+			// digest given must still name this picture.
+			pic.Digest = pic.digest()
+			for _, d := range []struct{ flag, given string }{{"--accept-loss", acc.Loss}, {"--accept-lost-log", acc.LostLog}} {
+				if d.given != "" && d.given != pic.Digest && !mutOplog("noop_digest_unchecked") {
+					return Vouch{}, pic, fmt.Errorf("%w: %s=%s does not match what the copies show now (%s; nothing needs accepting): read the picture again", ErrVouchRefused, d.flag, d.given, pic.Digest)
+				}
+			}
+			return Vouch{}, pic, nil
+		}
+		need(NeedLoss, "no other copy counts (each was lost or rebuilt): entries committed while this one lagged may have been on them; accept that with --accept-loss")
+		if mutOplog("synced_alone_without_accept") {
+			needs = slices.DeleteFunc(needs, func(s string) bool { return s == NeedLoss })
+		}
+	}
+	if mutOplog("lost_log_vouch_unchecked") {
+		needs = slices.DeleteFunc(needs, func(s string) bool { return s == NeedLostLog })
+	}
+	pic.Needs, pic.Why = needs, why
+	pic.Digest = pic.digest()
+	var problems, flags []string
+	for _, f := range []struct{ need, flag, given string }{{NeedLoss, "--accept-loss", acc.Loss}, {NeedLostLog, "--accept-lost-log", acc.LostLog}} {
+		if slices.Contains(needs, f.need) {
+			flags = append(flags, f.flag+"="+pic.Digest)
+		}
+		switch {
+		case f.given != "" && f.given != pic.Digest:
+			problems = append(problems, fmt.Sprintf("%s=%s does not match what the copies show now (%s): read the picture again", f.flag, f.given, pic.Digest))
+		case f.given == "" && slices.Contains(needs, f.need):
+			problems = append(problems, "not accepted")
+		}
+	}
+	if len(problems) > 0 && len(flags) > 0 {
+		problems = append(problems, "if that loss is acceptable, run on this controller: naut redundancy vouch "+strings.Join(flags, " "))
+	}
 	if len(problems) > 0 && check {
-		sort.Strings(problems)
-		return Vouch{}, fmt.Errorf("%w: %s", ErrVouchRefused, strings.Join(problems, "; "))
+		return Vouch{}, pic, fmt.Errorf("%w: %s; %s", ErrVouchRefused, strings.Join(why, "; "), strings.Join(problems, "; "))
 	}
 	v := Vouch{By: by, At: n.o.Now().UnixMilli(), LastTerm: lastTerm, LastSeq: last}
+	var acceptance *Accept
+	if acc.Loss != "" && (len(acceptPeers) > 0 || synced) {
+		acceptance = &Accept{By: by, At: v.At, Digest: pic.Digest, Peers: acceptPeers}
+	}
 	if n.o.afterVouchAsk != nil {
 		n.o.afterVouchAsk()
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if n.syncedLocked() {
-		return Vouch{}, nil // synced meanwhile, by a synced leader
+	if !n.mark.Lineage.same(hist) || n.supersedingLocked() {
+		return Vouch{}, pic, fmt.Errorf("%w: the log history moved during the vouch: run it again", ErrVouchRefused)
+	}
+	if !synced && n.syncedLocked() {
+		return Vouch{}, pic, nil // synced meanwhile, by a synced leader
 	}
 	m := n.mark
-	m.Synced, m.Lost, m.Vouch, m.Alone = true, "", &v, true
+	m.Synced, m.Lost, m.Vouch, m.Alone, m.Accept = true, "", &v, true, acceptance
 	if err := n.setMarkLocked(m); err != nil {
-		return Vouch{}, fmt.Errorf("oplog: recording the vouch: %w", err)
+		return Vouch{}, pic, fmt.Errorf("oplog: recording the vouch: %w", err)
 	}
-	n.log.Warn("oplog: a person vouched for this replica's log: it counts as synced", "by", by, "lastTerm", lastTerm, "lastSeq", last)
-	return v, nil
+	if !mutOplog("vouch_keeps_term_synced") {
+		// A leader already caught up for its term catches up again, so the
+		// one-shot is used now (a fork chosen on the leader is resolved),
+		// not at its next term (#1177 review).
+		n.syncedTerm = 0
+	}
+	n.log.Warn("oplog: a person vouched for this replica's log: it counts as synced", "by", by, "lastTerm", lastTerm, "lastSeq", last, "accepted", pic.Needs, "digest", pic.Digest)
+	return v, pic, nil
 }
 
 // vouchCounts: a peer's answer counts for a vouch (Vouch's counts).
@@ -1533,7 +2208,7 @@ func (n *Node) vouchCounts(counts func(peer, identity string) bool, p string, a 
 	if counts != nil {
 		return counts(p, a.Identity)
 	}
-	return n.counts(p, false, a.Identity)
+	return n.counts(p, false, a.Identity, a.Lineage, a.Lineage) // its history is judged by the caller
 }
 
 // name is how a peer is named to a person (Options.Names), else its URL.
@@ -1586,6 +2261,11 @@ func (n *Node) sequenceLocked(ctx context.Context, e Entry) (Entry, error) {
 	}
 	term := n.currentTerm()
 	n.mu.Lock()
+	if n.supersedingLocked() {
+		n.mu.Unlock()
+		return Entry{}, fmt.Errorf("%w: %w", ErrReadOnly, errSuperseded)
+	}
+	hist := n.mark.Lineage
 	e.Seq = n.lastLocked() + 1
 	e.Term = term
 	e.TS = n.o.Now().UnixMilli()
@@ -1619,7 +2299,7 @@ func (n *Node) sequenceLocked(ctx context.Context, e Entry) (Entry, error) {
 			errs = append(errs, p+": "+a.err.Error())
 		case a.resp.Have < e.Seq && !mutOplog("behind_counted"):
 			errs = append(errs, fmt.Sprintf("%s: answered, but holds only up to %d", p, a.resp.Have))
-		case !n.counts(p, a.resp.Unsynced, a.resp.Identity):
+		case !n.counts(p, a.resp.Unsynced, a.resp.Identity, a.resp.Lineage, hist):
 			holders = append(holders, p)
 			errs = append(errs, p+": stored, but its log is not synced")
 		default:
@@ -1628,18 +2308,28 @@ func (n *Node) sequenceLocked(ctx context.Context, e Entry) (Entry, error) {
 		}
 		return stored >= n.majority()
 	})
+	// The history checked and the commit made under one lock: a higher
+	// history learnt in between (the hello, a straggler's answer) would
+	// otherwise let a superseded leader apply an old-history entry (#1177
+	// review).
+	n.mu.Lock()
+	moved := !n.mark.Lineage.same(hist) || n.supersedingLocked()
+	if moved && !mutOplog("history_moved_commits") {
+		// A newer log history was heard while replicating: this copy is
+		// superseded, and what it stored is the old history's.
+		stored = 0
+		errs = append(errs, errSuperseded.Error())
+	}
 	if stored < n.majority() {
 		// Kept, not truncated: a follower whose reply was lost may hold
 		// it, and the number reused for another entry of this term would
 		// pass that follower's previous-entry check and leave it applying
 		// a different entry at the same seq. The next write (or leader)
 		// carries it to a majority, or a newer term's leader replaces it.
-		n.mu.Lock()
 		n.syncedTerm = 0 // a peer may know more than we do: catch up before the next write
 		n.mu.Unlock()
 		return Entry{}, fmt.Errorf("%w: %w: %d of %d stored (%s)", ErrReadOnly, ErrUnconfirmed, stored, len(n.o.Peers), strings.Join(errs, "; "))
 	}
-	n.mu.Lock()
 	n.commitTo(e.Seq)
 	n.mu.Unlock()
 	// The followers stored the entry under the commit index from before
@@ -1681,7 +2371,8 @@ func (n *Node) replicateTo(ctx context.Context, peer string, es []Entry, term ui
 		pt := n.termAtLocked(prev)
 		commit := n.commit
 		synced := n.syncedLocked() && n.syncedTerm == term
-		termSynced := n.syncedTerm == term
+		termSynced := n.syncedTerm == term && !n.supersedingLocked()
+		hist := n.mark.Lineage
 		n.mu.Unlock()
 		// Nothing leaves a leader that has not caught up for this term
 		// (#1050 review): what it holds past its commit index may be an
@@ -1692,11 +2383,25 @@ func (n *Node) replicateTo(ctx context.Context, peer string, es []Entry, term ui
 		}
 		var resp replicateResp
 		err := n.call(ctx, peer, "/api/oplog/replicate",
-			replicateReq{From: n.o.Self, Node: n.o.Node, Synced: synced, Term: term, Commit: commit, PrevSeq: prev, PrevTerm: pt, Entries: es}, &resp)
-		if err == nil {
+			replicateReq{From: n.o.Self, Node: n.o.Node, Synced: synced, Term: term, Commit: commit, PrevSeq: prev, PrevTerm: pt, Entries: es, Lineage: hist}, &resp)
+		var he *httpError
+		switch {
+		case err == nil:
 			n.mu.Lock()
-			n.notePeerLocked(peer, resp.Unsynced, resp.Identity)
+			n.notePeerLocked(peer, resp.Unsynced, resp.Identity, resp.Lineage)
+			herr := n.learnHistoryLocked(resp.Lineage)
 			n.mu.Unlock()
+			if herr != nil {
+				return resp, herr
+			}
+		case errors.As(err, &he) && he.history:
+			// Refused for its log history: a higher one supersedes this
+			// leader's log; a forked one is noted (#1029 3c-3c-2a).
+			n.mu.Lock()
+			n.notePeerLocked(peer, true, "", resp.Lineage)
+			herr := n.learnHistoryLocked(resp.Lineage)
+			n.mu.Unlock()
+			err = errors.Join(err, herr)
 		}
 		return resp, err
 	}
@@ -1851,14 +2556,21 @@ func (n *Node) fetchAfter(ctx context.Context, peer string, after uint64) (after
 			}
 			all.Entries = append(all.Entries, got.Entries...)
 			all.Commit, all.LastSeq, all.LastTerm = got.Commit, got.LastSeq, got.LastTerm
-			all.Unsynced, all.Identity = got.Unsynced, got.Identity
+			if !got.Lineage.same(all.Lineage) {
+				return afterResp{}, fmt.Errorf("oplog: %s's log moved while it was read page by page", peer)
+			}
+			all.Unsynced, all.Identity, all.Lost = got.Unsynced, got.Identity, got.Lost
 			all.LeaderSynced = all.LeaderSynced && got.LeaderSynced
 		}
 		if !got.More || len(got.Entries) == 0 {
 			all.More = false
 			n.mu.Lock()
-			n.notePeerLocked(peer, all.Unsynced, all.Identity)
+			n.notePeerLocked(peer, all.Unsynced, all.Identity, all.Lineage)
+			err := n.learnHistoryLocked(all.Lineage)
 			n.mu.Unlock()
+			if err != nil {
+				return afterResp{}, err
+			}
 			return all, nil
 		}
 		if page >= 1<<14 {
@@ -1930,6 +2642,15 @@ func (n *Node) CatchUp(ctx context.Context) error {
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	switch {
+	case n.supersedingLocked():
+		return errSuperseded
+	case !got.Lineage.same(n.mark.Lineage) && !mutOplog("history_lower_counted") && !mutOplog("history_fork_counted"):
+		// A lower history's leader (its log is one a person accepted to
+		// lose; a higher one superseded this copy in fetchAfter), or a
+		// forked one.
+		return fmt.Errorf("%w: the leader's log is at history %d (id %x), this copy's at %d (id %x)", errConflict, got.History, got.HistoryID, n.mark.History, n.mark.HistoryID)
+	}
 	if got.Term < n.term {
 		return fmt.Errorf("%w: leader at term %d, have seen %d", errConflict, got.Term, n.term)
 	}
@@ -1949,25 +2670,31 @@ func (n *Node) Status() Status {
 	var synced []string
 	for _, p := range n.o.Peers {
 		if p != n.o.Self {
-			if pi, ok := n.peers[p]; ok && n.counts(p, pi.unsynced, pi.identity) {
+			if n.countsLocked(p) {
 				synced = append(synced, p)
 			}
 		}
 		if p == n.o.Self || now.Sub(n.lastContact[p]) < 10*time.Second {
 			reached = append(reached, p)
-			pi := n.peers[p]
 			switch {
 			case p == n.o.Self && n.syncedLocked():
 				counted++
-			case p != n.o.Self && n.counts(p, pi.unsynced, pi.identity):
+			case p != n.o.Self && n.countsLocked(p):
 				counted++
 			}
 		}
 	}
 	leader := n.leaderAddr()
-	leaderUnsynced := n.peers[leader].unsynced
+	leaderUnsynced := n.peers[leader].unsynced || !n.peers[leader].lineage.same(n.mark.Lineage)
+	var forked []Fork
+	for _, p := range n.o.Peers {
+		if pi, ok := n.peers[p]; ok && p != n.o.Self && pi.lineage.forks(n.mark.Lineage) {
+			forked = append(forked, Fork{Peer: n.name(p), History: pi.lineage.History, Ours: n.mark.HistoryBy, Theirs: pi.lineage.HistoryBy})
+		}
+	}
 	s := Status{Self: n.o.Self, Leader: leader, IsLeader: n.isLeader(), Term: n.term, Peers: n.o.Peers, Reached: reached, LastSeq: n.lastLocked(), Commit: n.commit,
-		Unsynced: !n.syncedLocked(), Identity: n.mark.Identity, Lost: n.mark.Lost, Synced: synced, Vouch: n.mark.Vouch}
+		Unsynced: !n.syncedLocked(), Identity: n.mark.Identity, Lost: n.mark.Lost, Synced: synced, Vouch: n.mark.Vouch,
+		Lineage: n.mark.Lineage, SupersedeTo: n.mark.SupersedeTo, Superseded: n.mark.Superseded, Forked: forked}
 	n.mu.Unlock()
 	switch {
 	case n.standalone():
@@ -2015,8 +2742,10 @@ func (n *Node) Ping(ctx context.Context) {
 		if n.call(ctx, p, "/api/quorum", nil, &st) != nil {
 			return false
 		}
+		// Noted, never learnt: /api/quorum is answered without the token,
+		// so only an authenticated answer supersedes this copy.
 		n.mu.Lock()
-		n.notePeerLocked(p, st.Unsynced, st.Identity)
+		n.notePeerLocked(p, st.Unsynced, st.Identity, st.Lineage)
 		n.mu.Unlock()
 		return true
 	}, func(string, bool) bool { return false })
@@ -2027,7 +2756,11 @@ type httpError struct {
 	// resend: a replicate refused for a gap or a mismatched previous
 	// entry; the answer's Have says where to resend from.
 	resend bool
-	body   string
+	// history: refused for its log history ("history": the follower's is
+	// higher; "superseded": it heard a higher one); the answer's History
+	// says which.
+	history bool
+	body    string
 }
 
 func (e *httpError) Error() string { return fmt.Sprintf("HTTP %d: %s", e.code, e.body) }
@@ -2064,6 +2797,7 @@ func (n *Node) call(ctx context.Context, base, path string, body any, out any) e
 		if resp.StatusCode == http.StatusConflict && out != nil {
 			_ = json.Unmarshal(data, out) // a gap answer carries the peer's last seq
 			he.resend = strings.Contains(he.body, `"gap"`) || strings.Contains(he.body, `"mismatch"`)
+			he.history = strings.Contains(he.body, `"history"`) || strings.Contains(he.body, `"superseded"`) || strings.Contains(he.body, `"forked"`)
 		}
 		return he
 	}
@@ -2104,7 +2838,7 @@ func (n *Node) Handler() http.Handler {
 		n.mu.Lock()
 		last := n.lastLocked()
 		resp := afterResp{Entries: n.afterLocked(after), Commit: n.commit, Term: n.term, LastSeq: last, LastTerm: n.termAtLocked(last),
-			Unsynced: !n.syncedLocked(), Identity: n.mark.Identity}
+			Unsynced: !n.syncedLocked(), Identity: n.mark.Identity, Lineage: n.mark.Lineage, Lost: n.mark.Lost != ""}
 		resp.LeaderSynced = n.isLeader() && n.syncedTerm != 0 && n.syncedTerm == n.currentTerm()
 		n.mu.Unlock()
 		// Pages only for a reader that asks (page=1): one from before
@@ -2165,6 +2899,39 @@ func (n *Node) Handler() http.Handler {
 			}
 		}
 		n.mu.Lock()
+		// The log history first (#1029 3c-3c-2a): a sender at a lower one
+		// is refused, as a lower term is, and answered with ours, so it
+		// learns it is superseded; a higher one supersedes this copy. A
+		// controller's then takes nothing more until its restart moves the
+		// log aside; the witness's (ResetInPlace) starts empty at once and
+		// takes the request on that.
+		if n.o.Mark != "" {
+			if req.History > n.mark.History {
+				if err := n.learnHistoryLocked(req.Lineage); err != nil {
+					n.mu.Unlock()
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+			}
+			switch {
+			case n.supersedingLocked():
+				h := n.mark.Lineage
+				n.mu.Unlock()
+				writeJSON(w, http.StatusConflict, historyRefusal("superseded", h, errSuperseded.Error()))
+				return
+			case req.History < n.mark.History && !mutOplog("history_lower_counted"):
+				h := n.mark.Lineage
+				n.mu.Unlock()
+				writeJSON(w, http.StatusConflict, historyRefusal("history", h, fmt.Sprintf("this copy's log is at history %d, the sender's at %d: a person accepted the loss of the older one", h.History, req.History)))
+				return
+			case req.Lineage.forks(n.mark.Lineage) && !mutOplog("history_fork_counted"):
+				h := n.mark.Lineage
+				n.peers[req.From] = peerInfo{unsynced: true, lineage: req.Lineage}
+				n.mu.Unlock()
+				writeJSON(w, http.StatusConflict, historyRefusal("forked", h, fmt.Sprintf("this copy's log forked from the sender's at history %d (accepted by %s; the sender's by %s): a person chooses one with naut redundancy vouch", h.History, h.HistoryBy, req.HistoryBy)))
+				return
+			}
+		}
 		if req.Term < n.term {
 			have := n.lastLocked()
 			n.mu.Unlock()
@@ -2223,11 +2990,22 @@ func (n *Node) Handler() http.Handler {
 			return
 		}
 		n.mu.Lock()
-		unsynced, identity := !n.syncedLocked(), n.mark.Identity
+		unsynced, identity, hist := !n.syncedLocked(), n.mark.Identity, n.mark.Lineage
 		n.mu.Unlock()
-		writeJSON(w, http.StatusOK, replicateResp{Have: have, Commit: commit, Unsynced: unsynced, Identity: identity})
+		writeJSON(w, http.StatusOK, replicateResp{Have: have, Commit: commit, Unsynced: unsynced, Identity: identity, Lineage: hist})
 	}))
 	return mux
+}
+
+// historyRefusal is a replicate's 409 for its log history: kind is
+// "history", "forked" or "superseded"; h this copy's history.
+func historyRefusal(kind string, h Lineage, detail string) map[string]any {
+	out := map[string]any{"error": kind, "history": h.History, "detail": detail}
+	if h.HistoryID != 0 {
+		out["historyId"] = fmt.Sprint(h.HistoryID)
+		out["historyBy"] = h.HistoryBy
+	}
+	return out
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

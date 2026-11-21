@@ -84,6 +84,16 @@ type LogStatus struct {
 	Replicas []LogReplica `json:"replicas"`
 	// Vouch is the last time a person vouched for this copy.
 	Vouch *LogVouch `json:"vouch,omitempty"`
+	// History is the log's history (#1029 3c-3c-2a): above 0 once a
+	// person accepted a loss, HistoryBy who. SupersedeTo is a higher one
+	// this copy takes at its next start, Superseded where its last
+	// superseded log was kept, and Forked the copies whose log
+	// forked from this one.
+	History     uint64   `json:"history,omitempty"`
+	HistoryBy   string   `json:"historyBy,omitempty"`
+	SupersedeTo uint64   `json:"supersedeTo,omitempty"`
+	Superseded  string   `json:"superseded,omitempty"`
+	Forked      []string `json:"forked,omitempty"` // by name
 }
 
 // LogReplica is one copy of the log: a, b or the witness.

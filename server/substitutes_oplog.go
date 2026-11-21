@@ -121,6 +121,16 @@ func NewSubstituteLog(rt *runtime.Runtime) *SubstituteLog { return &SubstituteLo
 // Attach sets the oplog node proposals go to.
 func (l *SubstituteLog) Attach(n *oplog.Node) { l.node = n }
 
+// RetainedStale reports whether the retain store's substitutes may be
+// another log history's (oplog.Node.RetainedStale, #1029 3c-3c-2a): a
+// takeover then restores none of them (runtime.StaleRetained).
+func (l *SubstituteLog) RetainedStale() bool {
+	if l.node == nil || mutServer("retained_stale_ignored") {
+		return false
+	}
+	return l.node.RetainedStale()
+}
+
 // Apply applies a committed entry if it is a substitute kind, and reports
 // whether it was one (an Applier composed of several hands the others on).
 func (l *SubstituteLog) Apply(e oplog.Entry) (bool, error) {

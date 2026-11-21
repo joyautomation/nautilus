@@ -41,7 +41,7 @@ func (c *cluster) settledNewPair() {
 func TestCommissionCommissionsANewPair(t *testing.T) {
 	c := newCluster(t)
 	c.settledNewPair()
-	rep, err := c.elector("a").Commission(opCtx(t), "op")
+	rep, err := c.elector("a").Commission(opCtx(t), "op", LogAccept{})
 	if err != nil {
 		t.Fatalf("commission: %v (%s)", err, rep.Refused)
 	}
@@ -78,7 +78,7 @@ func TestCommissionRefusesAPairThatWasCommissioned(t *testing.T) {
 	c.wipe("a")
 	a := c.start("a")
 	time.Sleep(leases(2))
-	rep, err := a.Commission(opCtx(t), "op")
+	rep, err := a.Commission(opCtx(t), "op", LogAccept{})
 	if !errors.Is(err, ErrCommandRefused) {
 		t.Fatalf("commission over a commissioned pair: %v %+v", err, rep)
 	}
@@ -96,7 +96,7 @@ func TestCommissionNeedsEveryMember(t *testing.T) {
 	c := newCluster(t)
 	c.settledNewPair()
 	c.stopWitness()
-	rep, err := c.elector("a").Commission(opCtx(t), "op")
+	rep, err := c.elector("a").Commission(opCtx(t), "op", LogAccept{})
 	if !errors.Is(err, ErrCommandRefused) || !strings.Contains(rep.Refused, "witness is not reachable") {
 		t.Fatalf("commission without the witness: %v %s", err, rep.Refused)
 	}
@@ -194,7 +194,7 @@ func TestABoxChangedControllerNeedsBoxReplaced(t *testing.T) {
 	}
 	// Past the box check with the operator's word (the write then waits
 	// for a writer this unit test doesn't run).
-	if _, err := e.recommission(ctx, "op", 7, 5000, true, 0); errors.Is(err, ErrBoxChanged) {
+	if _, err := e.recommission(ctx, "op", 7, 5000, true, 0, LogAccept{}, nil); errors.Is(err, ErrBoxChanged) {
 		t.Fatalf("re-commission with --box-replaced: %v", err)
 	}
 }

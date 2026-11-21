@@ -405,7 +405,7 @@ type Elector struct {
 
 	// The operator-intent log's seams and what they decided (logpref.go).
 	logFn     func() LogState
-	vouchFn   func(ctx context.Context, by string, inc uint64) error
+	vouchFn   func(ctx context.Context, by string, inc uint64, acc LogAccept) (json.RawMessage, error)
 	peerLog   peerLog
 	holdSince time.Time      // since when the log has held a campaign
 	yieldedAt time.Time      // the last yield (at most one per yieldEvery)
@@ -1668,12 +1668,14 @@ func (e *Elector) Recommission(ctx context.Context, inc, floor uint64) error {
 func (e *Elector) RecommissionBy(ctx context.Context, by string, inc, floor uint64) (vouchRefused, err error) {
 	// The members' fences, as RecommissionChecked takes them: one that
 	// does not answer adds none (#1164 review).
-	return e.recommission(ctx, by, inc, floor, false, maxFence(e.membersState(ctx)))
+	return e.recommission(ctx, by, inc, floor, false, maxFence(e.membersState(ctx)), LogAccept{}, nil)
 }
 
 // fence is the highest fence any member keeps (MemberState.Fence): the
 // adoption the re-commission makes is at or above it (#1029 3c-3c-1b).
-func (e *Elector) recommission(ctx context.Context, by string, inc, floor uint64, boxReplaced bool, fence uint64) (vouchRefused, err error) {
+// acc is what the person accepted for the log's vouch, and pic, when not
+// nil, gets the picture the vouch saw (#1029 3c-3c-2a).
+func (e *Elector) recommission(ctx context.Context, by string, inc, floor uint64, boxReplaced bool, fence uint64, acc LogAccept, pic *json.RawMessage) (vouchRefused, err error) {
 	// Its own refusals first, so a refused re-commission vouches for
 	// nothing.
 	e.mu.Lock()
@@ -1693,7 +1695,11 @@ func (e *Elector) recommission(ctx context.Context, by string, inc, floor uint64
 	case floor-known > MaxTermJump/2:
 		return nil, fmt.Errorf("quorum: re-commission floor %d is more than %d above the terms this controller knows (%d): the voters would refuse the pair's next campaign as a term jump", floor, MaxTermJump/2, known)
 	}
-	if verr := e.vouch(ctx, by, inc); verr != nil {
+	vp, verr := e.vouch(ctx, by, inc, acc)
+	if pic != nil {
+		*pic = vp
+	}
+	if verr != nil {
 		if mut("vouch_refusal_blocks") {
 			return nil, fmt.Errorf("quorum: re-commission refused by the operator-intent log: %w", verr)
 		}

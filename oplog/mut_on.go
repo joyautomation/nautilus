@@ -65,6 +65,54 @@ import "os"
 //   - unsynced_log_writes: a log that would sequence while unsynced reads
 //     writable, so a write is proposed and ends "outcome unknown" instead
 //     of being refused for certain.
+//
+// #1029 3c-3c-2a, accepting a loss and the log history:
+//
+//   - accept_loss_blanket: a vouched catch-up overrides a copy outside
+//     what the person accepted (silent now, though it answered then; a
+//     later log beyond the one accepted);
+//   - accept_kept_after_sync: a log synced by the normal path keeps its
+//     acceptance;
+//   - history_not_bumped: a catch-up that overrides a copy starts no new
+//     history, so the copy it overrode counts when it returns;
+//   - history_after_write: the new history is recorded after the copy is
+//     synced for its term, so a failed write leaves it synced at the old
+//     one with its vouch spent;
+//   - history_lower_counted: a copy at a lower history counts;
+//   - history_fork_counted: a copy at the same history number under
+//     another override's id (a fork) counts, and its replication is taken;
+//   - fork_resolved_without_bump: a vouched catch-up that overrides an
+//     accepted fork starts no new history, so the other side never moves;
+//   - superseded_not_reset: a superseded copy keeps its log at its next
+//     start (and replays it);
+//   - superseded_takes: a superseded copy takes, commits and applies
+//     replication before its restart;
+//   - supersede_not_durable: a heard higher history is held in memory
+//     only, so a restart replays the old history;
+//   - history_moved_commits: a leader that hears a higher history while
+//     replicating commits what it stored;
+//   - lost_log_vouch_unchecked: a lost log is vouched for without
+//     --accept-lost-log;
+//   - synced_alone_without_accept: a synced copy alone among the copies
+//     is granted the one-shot catch-up without --accept-loss;
+//   - override_all_silent: a vouched catch-up overrides with every other
+//     copy silent, leaving the new history on this copy alone;
+//   - stale_under_lock: RetainedStale takes the node's lock, which a
+//     commit's Apply holds while it takes the runtime's and the alarm
+//     log's (#1177 review: a takeover deadlocks);
+//   - vouch_again_noop: a vouch with its one-shot pending does nothing, so
+//     "vouch again" after a refused catch-up can't change what was
+//     accepted;
+//   - noop_digest_unchecked: a vouch with nothing to accept takes any
+//     digest;
+//   - spend_failure_keeps_alone: a vouch's one-shot whose spend can't be
+//     written stays armed in memory (#1177 CI: fail open);
+//   - accept_survives_reboot: a vouch's one-shot and acceptance survive a
+//     restart (a spend lost to a crash re-arms them, for a picture that may
+//     no longer be true);
+//   - vouch_keeps_term_synced: a vouch on a leader caught up for its term
+//     waits for its next term to use the one-shot (a fork chosen there
+//     stays a fork).
 var mutOn = os.Getenv("QUORUM_MUT")
 
 func mutOplog(name string) bool { return name == mutOn }

@@ -913,6 +913,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/cluster/clear-duplicate", s.audited("redundancy.clear-duplicate", s.clearDuplicateTarget, s.handleClearDuplicate))
 	mux.Handle("POST /api/cluster/commission", s.audited("redundancy.commission", s.commissionTarget, s.handleCommission))
 	mux.Handle("POST /api/cluster/recommission", s.audited("redundancy.recommission", s.recommissionTarget, s.handleRecommission))
+	mux.Handle("POST /api/cluster/vouch", s.audited("redundancy.vouch", s.vouchTarget, s.handleVouch))
 	mux.HandleFunc("GET /api/audit", s.handleAudit)
 	mux.HandleFunc("GET /api/me", s.handleMe)
 	// Sign-in and sign-out journal themselves (auth.signin, auth.signout),

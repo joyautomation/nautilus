@@ -66,6 +66,20 @@ type IntentLog interface {
 	ProposeExpiry(ctx context.Context, id uint64) error
 }
 
+// SubstituteReasonLogSuperseded: a takeover ended the substitute because
+// this controller's operator-intent log was superseded by another history
+// (a loss a person accepted elsewhere, #1029 3c-3c-2a): it was that old
+// history's.
+const SubstituteReasonLogSuperseded = "log-superseded"
+
+// StaleRetained is an IntentLog that can say the retain store's
+// substitutes may be another log history's (#1029 3c-3c-2a: a person
+// accepted a loss elsewhere and this copy is superseded): a takeover whose
+// catch-up failed then restores none of them.
+type StaleRetained interface {
+	RetainedStale() bool
+}
+
 // RequestIDWindow is how long a client request ID is remembered after
 // the start it carried, on the log's clock: a retry within it is
 // answered with that entry (or refused if it asks for something else);
@@ -416,6 +430,13 @@ func (r *Runtime) loadIntentFallback(entries []retain.SubstituteRetain, now time
 	if r.intent.synced {
 		return nil
 	}
+	if s, ok := r.intentLog().(StaleRetained); ok && len(entries) > 0 && s.RetainedStale() {
+		// Another log history's substitutes (#1029 3c-3c-2a): their IDs
+		// are that history's seqs, which the new one numbers again. None
+		// is restored; the fault below still says the catch-up failed.
+		slog.Warn("runtime: the retain store's substitutes are from a superseded operator-intent log; restoring none of them", "entries", len(entries))
+		entries = nil
+	}
 	var fresh []retain.SubstituteRetain
 	for _, re := range entries {
 		if re.ID > r.intent.applied && !t.hasIDLocked(re.ID) {
@@ -472,10 +493,22 @@ func (r *Runtime) intentAfterTakeover() {
 	defer r.subMu.Unlock()
 	t := r.tags
 	t.mu.Lock()
+	var ended []SubstituteEvent
+	if s, ok := r.intentLog().(StaleRetained); ok && s.RetainedStale() {
+		// This copy's log was superseded by another history (#1029
+		// 3c-3c-2a): every substitute it holds, applied from its old log
+		// or the retain store, is that history's, which a person accepted
+		// to lose. None runs.
+		ended = r.endAllSubstitutesLocked(SubstituteReasonLogSuperseded)
+	}
 	raised := !t.subSyncFault
 	t.subSyncFault = true
 	t.syncSubLocked()
 	t.mu.Unlock()
+	if len(ended) > 0 {
+		slog.Warn("runtime: the operator-intent log was superseded by another history: ending every substitute it held", "ended", len(ended))
+		r.publishSub(ended)
+	}
 	if raised {
 		evs := []SubstituteEvent{{Kind: SubstituteEventFault, Reason: SubstituteReasonCatchUpFailed, By: "system", AtMs: r.wallNow().UnixMilli()}}
 		logSubEvents(evs)
@@ -661,4 +694,98 @@ func (r *Runtime) PendingExpiries() []uint64 {
 	in.expMu.Lock()
 	defer in.expMu.Unlock()
 	return append([]uint64(nil), in.expiries...)
+}
+
+// endAllSubstitutesLocked ends every substitute, active or still waiting
+// for its input, for reason, and returns the events. Caller holds subMu
+// and t.mu.
+func (r *Runtime) endAllSubstitutesLocked(reason string) []SubstituteEvent {
+	t := r.tags
+	at := r.wallNow().UnixMilli()
+	var ended []SubstituteEvent
+	var ids []uint64
+	for _, ss := range t.subs {
+		for i := range ss.entries {
+			ids = append(ids, ss.entries[i].ID)
+		}
+	}
+	for _, id := range ids {
+		if s, ok := t.unsubstituteLocked(id); ok {
+			ended = append(ended, SubstituteEvent{Kind: SubstituteEventStop, Reason: reason, Entry: s, By: "system", AtMs: at})
+			ended = append(ended, faultCleared(s, at)...)
+		}
+	}
+	var waiting []uint64
+	for _, re := range r.subPending {
+		waiting = append(waiting, re.ID)
+	}
+	for _, id := range waiting {
+		if s, ok := r.pendingRestore(id); ok {
+			ended = append(ended, SubstituteEvent{Kind: SubstituteEventStop, Reason: reason, Entry: s, By: "system", AtMs: at})
+		}
+	}
+	r.subPendingN.Store(int32(len(r.subPending)))
+	return ended
+}
+
+// EndSupersededSubstitutes ends every substitute this runtime holds,
+// active or waiting, because its operator-intent log was superseded by
+// another history (#1029 3c-3c-2a): they are the old history's. Leading or
+// standing by, at once: a leader that learns it is superseded must not
+// run them a scan longer. It returns how many it ended.
+func (r *Runtime) EndSupersededSubstitutes() int {
+	r.subMu.Lock()
+	t := r.tags
+	t.mu.Lock()
+	ended := r.endAllSubstitutesLocked(SubstituteReasonLogSuperseded)
+	t.syncSubLocked()
+	t.mu.Unlock()
+	r.subMu.Unlock()
+	if len(ended) > 0 {
+		slog.Warn("runtime: the operator-intent log was superseded by another history: ending every substitute it held", "ended", len(ended))
+		r.publishSub(ended)
+	}
+	n := 0
+	for _, e := range ended {
+		if e.Kind == SubstituteEventStop {
+			n++
+		}
+	}
+	return n
+}
+
+// DropRetainedIntent removes the operator intent the retain store keeps of
+// the log (the active substitutes, and the alarms' acknowledgements and
+// shelves), keeping its other state and the substitutes' HighID, and says
+// how many substitutes and alarms it removed (#1029 3c-3c-2a): a
+// controller whose operator-intent log was superseded by another history
+// moves its log aside at its start, and what it retained of the old
+// history (substitutes numbered by that history's seqs, shelves a person
+// accepted to lose) must never be restored. Call it at the start, before
+// Run: nothing else reads or writes the store then.
+func (r *Runtime) DropRetainedIntent() (int, error) {
+	if r.retainStore == nil {
+		return 0, nil
+	}
+	st, err := r.retainStore.Load()
+	if err != nil {
+		return 0, err
+	}
+	n := len(st.Alarms)
+	if mutRuntime("stale_retained_alarms_kept") {
+		n = 0
+	}
+	if st.Substitutes != nil {
+		n += len(st.Substitutes.Entries)
+	}
+	if n == 0 {
+		return 0, nil
+	}
+	if st.Substitutes != nil {
+		st.Substitutes.Entries, st.Substitutes.LastSeenMs = nil, 0
+	}
+	if !mutRuntime("stale_retained_alarms_kept") {
+		st.Alarms = nil
+	}
+	return n, r.retainStore.Save(st)
 }
