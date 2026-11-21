@@ -163,7 +163,7 @@ func contractDownloadFlow(t *testing.T, start Starter) {
 		t.Fatalf("compare before any download: %+v %v", cmp, err)
 	}
 	res, err := s.Download(ctx, req)
-	if err != nil || !res.Downloaded || res.DryRun || res.State != "RUN" || len(res.Questions) != 2 {
+	if err != nil || !res.Downloaded || res.DryRun || res.State != "RUN" || res.StateSource != tiad.StateFromTIAMessage || len(res.Questions) != 2 {
 		t.Fatalf("download: %+v %v", res, err)
 	}
 	// Success rests on an equal compare right after; the hardware it
@@ -198,8 +198,10 @@ func contractDownloadFlow(t *testing.T, start Starter) {
 		t.Fatal("compare is equal after compiling a change that was never downloaded")
 	}
 	a.SetQuestions(t, nil)
-	if res, err := s.Download(ctx, req); err != nil || !res.Downloaded || res.State != "RUN" {
-		t.Fatalf("second download: %+v %v", res, err)
+	// TIA asked nothing, so it never stopped the CPU and says nothing of
+	// its mode: tiad claims none (the fake CPU itself stays in RUN).
+	if res, err := s.Download(ctx, req); err != nil || !res.Downloaded || res.State != "" || res.StateSource != "" {
+		t.Fatalf("second download, CPU never stopped: %+v %v", res, err)
 	}
 	if cmp, _ := s.Compare(ctx); !cmp.Equal {
 		t.Fatal("compare after the second download")
@@ -276,13 +278,13 @@ func contractDownloadRules(t *testing.T, start Starter) {
 		t.Fatalf("an undecided start-after loaded %+v", l)
 	}
 	yes.Decisions.StartAfter = tiad.No()
-	if r, err := s.Download(ctx, yes); err != nil || r.State != "STOP" {
+	if r, err := s.Download(ctx, yes); err != nil || r.State != "STOP" || r.StateSource != tiad.StateFromTIAMessage {
 		t.Fatalf("stopped with startAfter no stays in STOP: %+v %v", r, err)
 	}
 	a.SetQuestions(t, []tiad.Question{qStop, {ID: tiad.QuestionStartAfter}})
 	stay := base
 	stay.Decisions = tiad.Decisions{StopCPU: tiad.Yes(), StartAfter: tiad.No()}
-	if r, err := s.Download(ctx, stay); err != nil || !r.Downloaded || r.State != "STOP" {
+	if r, err := s.Download(ctx, stay); err != nil || !r.Downloaded || r.State != "STOP" || r.StateSource != tiad.StateFromTIAMessage {
 		t.Fatalf("load and stay in STOP: %+v %v", r, err)
 	}
 	if n := len(a.Loaded(t)); n != 2 {

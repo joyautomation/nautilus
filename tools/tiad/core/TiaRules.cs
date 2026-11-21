@@ -888,11 +888,16 @@ namespace Tiad
 
     // DownloadCall is what TIA's download call returned: its result's
     // state and messages, read inside the call (a failure reading them is
-    // in doubt too).
+    // in doubt too). MessageList is the same messages one per element, as
+    // TIA gave them (Messages joins them with "; "), and Cpu the name of
+    // the CPU loaded: TiaNames.ModeFromMessages reads the CPU's mode from
+    // them.
     public sealed class DownloadCall
     {
         public string State;
         public string Messages = "";
+        public List<string> MessageList = new List<string>();
+        public string Cpu = "";
     }
 
     // DownloadSteps runs one download through TIA in three steps:
@@ -962,7 +967,17 @@ namespace Tiad
                 throw new TiaException(TiaNames.OnlineRefused(address, refused, end.Failure ?? "TIA went on with the download"), error, entered);
             }
             if (end.Failure != null) throw new TiaException(end.Failure, error, end.InDoubt);
-            return new DownloadOutcome { Questions = decider.Asked, Loaded = end.Loaded, Messages = call == null ? "" : (call.Messages ?? "") };
+            // The CPU's mode afterwards is only what TIA's own messages
+            // say (#789): evidence, labelled as such, never a proof.
+            string mode = call == null ? "" : TiaNames.ModeFromMessages(call.Cpu, call.MessageList);
+            return new DownloadOutcome
+            {
+                Questions = decider.Asked,
+                Loaded = end.Loaded,
+                Messages = call == null ? "" : (call.Messages ?? ""),
+                State = mode,
+                StateSource = mode == "" ? "" : TiaNames.StateFromTiaMessage,
+            };
         }
 
         // Quietly runs f, a clean-up step described by what, logging and
@@ -1273,6 +1288,30 @@ namespace Tiad
             if (blocks == null) return l;
             foreach (ProjectBlock b in blocks) l.Add(BlockLabel(b) ?? b.Name + " (" + b.Type + ")");
             return l;
+        }
+
+        // StateFromTiaMessage labels a CPU mode read from TIA's download
+        // messages: evidence of what TIA did, not a read of the CPU.
+        public const string StateFromTiaMessage = "tia-message";
+
+        // ModeFromMessages is the CPU's mode after a download as TIA's
+        // download messages say it, one message per element: TIA reports
+        // each step ("PLC_1 stopped.", "'Main' was loaded successfully.",
+        // "PLC_1 started.", #789 stages 2 and 3). The last message that is
+        // exactly "<cpu> started." or "<cpu> stopped." decides: "RUN" or
+        // "STOP". No such message (TIA did not stop the CPU, another
+        // language, another CPU's name) is "": unknown, never guessed.
+        public static string ModeFromMessages(string cpu, List<string> messages)
+        {
+            if (string.IsNullOrEmpty(cpu) || messages == null) return "";
+            string mode = "";
+            foreach (string m in messages)
+            {
+                string t = (m ?? "").Trim();
+                if (t == cpu + " started.") mode = "RUN";
+                else if (t == cpu + " stopped.") mode = "STOP";
+            }
+            return mode;
         }
 
         // ElementName names one element of TIA's compare tree from its

@@ -9,6 +9,10 @@ import (
 	"strings"
 )
 
+// StateFromTIAMessage is DownloadResult.StateSource for a CPU mode read
+// from TIA's download messages.
+const StateFromTIAMessage = "tia-message"
+
 // Question IDs: what TIA's pre-download checks can ask (siemens-ide.md
 // §3.5). Anything tiad does not recognise is QuestionOther, which no
 // decision answers.
@@ -192,7 +196,13 @@ type DownloadResult struct {
 	Warning          string `json:"warning,omitempty"`
 	// Messages is TIA's download result's messages, when it has any.
 	Messages string `json:"messages,omitempty"`
-	State    string `json:"state,omitempty"` // "RUN" | "STOP" | "" (unknown)
+	// State is the CPU's mode after the download, "RUN" or "STOP", or ""
+	// when nothing says. StateSource says where it comes from:
+	// StateFromTIAMessage is TIA's own download messages ("PLC_1
+	// started."), evidence of what TIA did, not a read of the CPU. A
+	// download that never stopped the CPU has no state.
+	State       string `json:"state,omitempty"`
+	StateSource string `json:"stateSource,omitempty"`
 	// KeptDevices are the devices the last apply kept as found: the
 	// download loads them too. A decision_required or declined error
 	// lists them as well (KeptDevicesOf), before anything is loaded.

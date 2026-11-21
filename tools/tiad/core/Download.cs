@@ -280,8 +280,11 @@ namespace Tiad
         // Loaded is true when TIA loaded the CPU (or ran its download
         // without asking anything, which counts as loaded).
         public bool Loaded;
-        // State is the CPU's mode afterwards ("RUN", "STOP"), or "".
+        // State is the CPU's mode afterwards ("RUN", "STOP"), or "" when
+        // nothing says, and StateSource what says it: "tia-message" (TIA's
+        // download messages, TiaNames.ModeFromMessages), or "".
         public string State = "";
+        public string StateSource = "";
         // Messages is TIA's download result's messages, joined, or "".
         public string Messages = "";
     }

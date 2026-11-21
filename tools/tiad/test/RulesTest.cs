@@ -142,6 +142,7 @@ namespace Tiad.Test
                 T("CompareSeesEveryBlock", CompareSeesEveryBlock),
                 T("BlockLabels", BlockLabels),
                 T("ElementNames", ElementNames),
+                T("ModeFromMessages", ModeFromMessages),
                 T("UserManagementGate", UserManagementGate),
                 T("FileNames", FileNames),
                 T("BlockKinds", BlockKinds),
@@ -1421,6 +1422,29 @@ namespace Tiad.Test
             // stand in for a project block's label (it then fails closed,
             // the block not compared).
             Eq(TiaNames.ElementName("ObjectsIdentical", "Does not exist", "Main [OB1]"), "Does not exist", "identical, placeholder offline name");
+        }
+
+        // ModeFromMessages: #789 stages 2 and 3. TIA's download messages,
+        // one per step, are the only word on the CPU's mode after a load:
+        // the last exact "<cpu> started." / "<cpu> stopped." decides.
+        static void ModeFromMessages()
+        {
+            var bench = new List<string> { "PLC_1 stopped.", "'Main' was loaded successfully.", "'Default' was loaded successfully.", "'Drive' was loaded successfully.", "PLC_1 started." };
+            Eq(TiaNames.ModeFromMessages("PLC_1", bench), "RUN", "the bench's messages: stopped, loaded, started");
+            Eq(TiaNames.ModeFromMessages("PLC_1", new List<string> { "PLC_1 stopped.", "'Main' was loaded successfully." }), "STOP", "stopped, never started");
+            Eq(TiaNames.ModeFromMessages("PLC_1", new List<string> { "PLC_1 started.", "PLC_1 stopped." }), "STOP", "the last one decides");
+            Eq(TiaNames.ModeFromMessages("PLC_1", new List<string> { "  PLC_1 started.  " }), "RUN", "trimmed");
+            Eq(TiaNames.ModeFromMessages("PLC_1", new List<string> { "'Main' was loaded successfully." }), "", "never stopped: nothing said");
+            Eq(TiaNames.ModeFromMessages("PLC_1", new List<string> { "PLC_2 stopped.", "PLC_2 started." }), "", "another CPU's messages");
+            Eq(TiaNames.ModeFromMessages("PLC_1", new List<string> { "PLC_10 started.", "XPLC_1 started.", "PLC_1 started" }), "", "only the exact message");
+            Eq(TiaNames.ModeFromMessages("PLC_1", new List<string> { "PLC_1 gestartet." }), "", "another language: unknown");
+            // A message is one element as TIA gave it: a name inside one
+            // that reads like a start must never pass for one.
+            Eq(TiaNames.ModeFromMessages("PLC_1", new List<string> { "PLC_1 stopped.", "'x; PLC_1 started.' was loaded successfully." }), "STOP", "a start quoted inside another message");
+            Eq(TiaNames.ModeFromMessages("", bench), "", "no CPU name");
+            Eq(TiaNames.ModeFromMessages(null, bench), "", "null CPU name");
+            Eq(TiaNames.ModeFromMessages("PLC_1", null), "", "no messages");
+            Eq(TiaNames.ModeFromMessages("PLC_1", new List<string> { null, "PLC_1 started." }), "RUN", "a null message skipped");
         }
 
         static void FileNames()

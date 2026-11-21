@@ -1320,6 +1320,12 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 	rec := req
 	rec.Secrets = nil
 	f.downloads = append(f.downloads, Download{Session: s.id, Request: rec, State: state})
+	// tiad reports the mode only as TIA's messages say it: TIA says
+	// nothing of a CPU it never stopped.
+	said, source := "", ""
+	if stopped {
+		said, source = state, tiad.StateFromTIAMessage
+	}
 	f.loaded[req.Address] = s.id
 	s.changed = false
 	// A dry run TIA asks nothing about cannot be cancelled: TIA loads.
@@ -1338,7 +1344,7 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 		}
 		return nil, outcomeUnknown("TIA reported the download loaded, but the compare right after it differs ("+strings.Join(names, ", ")+")", acting)
 	}
-	res := tiad.DownloadResult{Downloaded: true, Questions: asked, State: state, KeptDevices: keptList(s.kept), CompareEqual: true}
+	res := tiad.DownloadResult{Downloaded: true, Questions: asked, State: said, StateSource: source, KeptDevices: keptList(s.kept), CompareEqual: true}
 	if req.Hardware {
 		res.HardwareVerified = new(bool)
 		res.Warning = "the hardware configuration is not verified: Openness has no online hardware compare, so only the PLC software was compared after loading"
