@@ -223,7 +223,7 @@ Groups beyond the token's size limit (Entra's overage claim) are refused with a 
 - **Exempt as ways back to normal** (James, 2026-11-18): clearing forces and rolling back an edit are allowed while the journal is down; their response carries `X-Nautilus-Audit-Journal: down`.
 - Built in #894 for today's routes (setting a force, program edit and activate refused; every action classed, unclassed ones refused): the system alarm `nautilus.audit-journal` (when the project has alarms) and an `audit` card on the drivers block. The action that first finds the journal broken has already been applied; elevated actions are refused from the next one.
 
-**Flooding:** an unauthenticated client could force an fsynced entry per refused request. Refusals are coalesced per (source address, action): the first few in a minute are written in full, the rest as one `refused ×n` summary entry. Accepted actions are never coalesced.
+**Flooding:** an unauthenticated client could force an fsynced entry per refused request. Refusals are coalesced per (source address, action, principal): the first few in a minute are written in full, the rest as one `refused ×n` summary entry. Accepted actions are never coalesced.
 
 **Retention:** `audit.keep-days` (default 365; a manifest duration would read "8760h") and `audit.max-size`, for small flash (`max-size` is not built yet; #894). Pruning the oldest file writes an `audit.prune` entry carrying the pruned file's last hash and `seq`, so `verify` knows where the chain legitimately begins.
 

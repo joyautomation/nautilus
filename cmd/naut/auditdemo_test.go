@@ -59,9 +59,10 @@ func TestPostgresAuditDemoScript(t *testing.T) {
 	}
 	// The script fails on its own checks; these pin that it reached them.
 	for _, want := range []string{
-		`user:alice\s+force\.set\s+refused`,
+		`user:alice\s+force\.set\s+LIT101_Level\s.*refused`,
 		`system\s+substitute\.expire\s+PIT101_Pressure`,
 		`BROKEN: the journal's chain breaks`,
+		`BROKEN: controller "lift-station", 268 journal entries in 31 files, head seq 364;`,
 		`the line was rewritten after it was copied`,
 		`seq \d+: user:alice alarm\.ack`,
 		`WARNING: retention LOWERED from 30d to 7d`,

@@ -61,6 +61,10 @@ const (
 	targetMax       = 1024
 	valueMax        = 64 << 10
 	refusedValueMax = 4 << 10
+	// refusedBodyMax and refusedBodyWait bound what the seam reads of a
+	// refused request to name its target: a known principal's, refused
+	// by role or for a fresh password.
+	refusedBodyMax = 8 << 10
 )
 
 // actionClass classes every action the seam journals, for when the journal
@@ -202,7 +206,7 @@ type journalHealth struct {
 // its own window per target: a flood of write-gate refusals of one tag
 // must not fold an auth refusal of another tag into a summary that
 // drops its target.
-type refusalKey struct{ from, action, result, source, class, target string }
+type refusalKey struct{ from, action, result, source, class, target, user string }
 
 type refusals struct {
 	since time.Time
@@ -500,7 +504,10 @@ func (a *auditor) keepLocked(e audit.Entry, err error) {
 // admitLocked counts a refusal in its (address, action) window and
 // reports whether it is journalled in full.
 func (a *auditor) admitLocked(e audit.Entry, now time.Time) bool {
-	key := refusalKey{from: hostOf(e.From), action: e.Action, result: e.Result, source: e.Source}
+	// The principal is in the key: a named person's refusals are counted
+	// apart from anyone else's from the same address, so a flood of
+	// anonymous refusals cannot fold a person's into a summary.
+	key := refusalKey{from: hostOf(e.From), action: e.Action, result: e.Result, source: e.Source, user: e.User}
 	if c, _ := e.Detail["class"].(string); c == audit.ClassAuth {
 		key.class, key.target = c, e.Target
 	}
@@ -511,7 +518,7 @@ func (a *auditor) admitLocked(e audit.Entry, now time.Time) bool {
 	}
 	if w == nil {
 		if len(a.windows) >= coalesceKeys {
-			key.from, key.target = "*", ""
+			key.from, key.target, key.user = "*", "", ""
 			w = a.windows[key]
 		}
 		if w == nil {
@@ -603,14 +610,30 @@ func (s *Server) audited(action string, tf targetFunc, h http.HandlerFunc) *audi
 
 func (a *auditedRoute) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r = a.s.withActor(r)
-	if code, msg := a.s.preAuthorize(r, a.action); code != 0 {
+	if code, msg, known := a.s.preAuthorize(r, a.action); code != 0 {
+		// A known person refused by role (or for a fresh password) is
+		// journalled with what they tried to change; anyone else's body
+		// is never read. Only a parse: nothing is looked up for a request
+		// that will not run (no before, no device read). A body that is
+		// not read (past refusedBodyMax, slower than refusedBodyWait, too
+		// many refused reads at once, any read error) names only what the
+		// path does, and the entry says the body went unread.
+		var t auditTarget
+		if rf := refusalTargets[a.action]; known && rf != nil {
+			if body, ok := readRefusedBody(w, r); ok {
+				t = rf(r, body)
+			} else {
+				t = rf(r, nil)
+				t.detail = map[string]any{"body": "unread"}
+			}
+		}
 		r.Body, r.ContentLength = http.NoBody, 0
 		if a.s.policy == nil {
 			// The handler answers, as it always has: it refuses first.
 			a.answer(w, r, auditTarget{}, a.h)
 			return
 		}
-		a.answer(w, r, auditTarget{}, func(w http.ResponseWriter, _ *http.Request) {
+		a.answer(w, r, t, func(w http.ResponseWriter, _ *http.Request) {
 			// Nothing ran: a client that reads the outcome (the HMI kit's
 			// substitutes and IO-Link parameters) must not take a refusal
 			// by role as an action that may still take effect.
@@ -922,6 +945,101 @@ func (s *Server) unforceTarget(r *http.Request, _ []byte) auditTarget {
 
 func (s *Server) unforceAllTarget(*http.Request, []byte) auditTarget {
 	return auditTarget{before: s.rt.Tags().ForcedValues()}
+}
+
+// refusedBodyWait bounds how long the seam waits for a refused request's
+// body (a var so a test can shorten it).
+var refusedBodyWait = 5 * time.Second
+
+// refusedReads holds a slot for every refused body being read: past
+// cap(refusedReads) at once, a refusal names only what its path does.
+var refusedReads = make(chan struct{}, 16)
+
+// readRefusedBody reads up to refusedBodyMax of a refused request's body,
+// for its journal entry, and reports whether it got all of it. It never
+// waits past refusedBodyWait: the read has its own goroutine, holding a
+// refusedReads slot until it really ends (bounded by the connection's read
+// deadline where the writer lets the seam set one), so a body that never
+// comes cannot pile reads up past the cap.
+//
+// On the timeout path that goroutine may still be reading r.Body after the
+// handler returns. net/http's body Close takes the same lock as Read, so
+// on a writer with no read deadline the server's own close of that body
+// waits on the read: at most cap(refusedReads) connections, one stuck
+// each, until their clients send or go away.
+func readRefusedBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
+	if r.Body == nil || r.Body == http.NoBody {
+		return nil, true
+	}
+	select {
+	case refusedReads <- struct{}{}:
+	default:
+		return nil, false
+	}
+	rc := http.NewResponseController(w)
+	deadline := rc.SetReadDeadline(time.Now().Add(refusedBodyWait)) == nil
+	type read struct {
+		b   []byte
+		err error
+	}
+	done := make(chan read, 1)
+	body := r.Body
+	go func() {
+		defer func() { <-refusedReads }()
+		b, err := io.ReadAll(io.LimitReader(body, refusedBodyMax+1))
+		done <- read{b, err}
+	}()
+	timer := time.NewTimer(refusedBodyWait)
+	defer timer.Stop()
+	select {
+	case got := <-done:
+		body.Close()
+		if deadline {
+			_ = rc.SetReadDeadline(time.Time{})
+		}
+		return got.b, got.err == nil && len(got.b) <= refusedBodyMax
+	case <-timer.C:
+		return nil, false
+	}
+}
+
+// refusalTargets name what a refused request tried to change, by parsing
+// it alone: they read no state (no before value, no device), so a refusal
+// costs the controller nothing but the parse. None is a *Server method:
+// four (alarm ack and shelving, SFC) are the routes' own targetFuncs,
+// which are parses too; the rest are separate because the routes' read
+// state. An action not listed is journalled without a target.
+var refusalTargets = map[string]targetFunc{
+	"tag.write":        nameValueTarget,
+	"force.set":        nameValueTarget,
+	"substitute.start": nameValueTarget,
+	"force.clear":      pathTarget("name"),
+	"alarm.ack":        ackTarget,
+	"alarm.shelve":     shelveTarget,
+	"alarm.unshelve":   unshelveTarget,
+	"sfc.step":         sfcTarget(true),
+	"sfc.transition":   sfcTarget(false),
+	"param.write": func(r *http.Request, body []byte) auditTarget {
+		t := auditTarget{target: r.PathValue("port") + "/" + r.PathValue("ref")}
+		if v, ok := decodeParamBody(body); ok {
+			t.after = v
+		}
+		return t
+	},
+}
+
+// nameValueTarget is {"name", "value"}: the target and what was asked.
+func nameValueTarget(_ *http.Request, body []byte) auditTarget {
+	var req struct {
+		Name  string `json:"name"`
+		Value any    `json:"value"`
+	}
+	decodeBody(body, &req)
+	return auditTarget{target: req.Name, after: req.Value}
+}
+
+func pathTarget(key string) targetFunc {
+	return func(r *http.Request, _ []byte) auditTarget { return auditTarget{target: r.PathValue(key)} }
 }
 
 func sfcTarget(step bool) targetFunc {

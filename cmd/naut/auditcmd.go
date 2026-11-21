@@ -304,7 +304,7 @@ func auditVerifyAnchored(a anchoredArgs, stdout, stderr io.Writer, getenv func(s
 
 func printAnchored(r audit.AnchorReport, controller string, stdout io.Writer) int {
 	fmt.Fprintf(stdout, "%s: controller %q, %d journal entries in %d files, head seq %d; %d copied rows (%d compared line for line), %d anchors (newest seq %d)\n",
-		r.Verdict, controller, r.Chain.Entries, r.Chain.Files, r.Chain.HeadSeq, r.CopyRows, r.Compared, r.Anchors, r.NewestAnchor)
+		r.Verdict, controller, r.JournalLines, r.JournalFiles, r.JournalHead, r.CopyRows, r.Compared, r.Anchors, r.NewestAnchor)
 	for _, w := range r.Warnings {
 		fmt.Fprintf(stdout, "WARNING: %s\n", w)
 	}
