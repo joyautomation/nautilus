@@ -1,0 +1,73 @@
+// The config screens' review step (#711, slice 3): the unified diff and the
+// staged-apply client's calls and refusals.
+import { describe, it, expect } from './harness.js';
+import { unifiedDiff, diffFiles } from '../src/lib/config/diff.js';
+import { ReviewClient } from '../src/lib/config/review.js';
+
+describe('config review: unified diff', () => {
+	it('is empty for equal text', () => expect(unifiedDiff('a', 'b', 'x\n', 'x\n')).toBe(''));
+	it('matches the shape of naut pull --io --dry-run', () => {
+		const d = unifiedDiff('a/n.yaml', 'b/n.yaml', 'one\ntwo\nthree\n', 'one\n2\nthree\n');
+		expect(d).toBe('--- a/n.yaml\n+++ b/n.yaml\n@@ -1,3 +1,3 @@\n one\n-two\n+2\n three\n');
+	});
+	it('keeps distant changes in separate hunks, with line numbers', () => {
+		const a = Array.from({ length: 20 }, (_, i) => `l${i}`).join('\n') + '\n';
+		const b = a.replace('l1\n', 'L1\n').replace('l18\n', 'L18\n');
+		const d = unifiedDiff('a', 'b', a, b);
+		expect(d.split('\n').filter((l) => l.startsWith('@@')).length).toBe(2);
+		expect(d.includes('@@ -16,5 +16,5 @@')).toBe(true);
+	});
+	it('merges changes whose contexts touch into one hunk', () => {
+		const a = Array.from({ length: 12 }, (_, i) => `l${i}`).join('\n') + '\n';
+		const b = a.replace('l2\n', 'L2\n').replace('l7\n', 'L7\n');
+		const d = unifiedDiff('a', 'b', a, b);
+		expect(d.split('\n').filter((l) => l.startsWith('@@')).length).toBe(1);
+		expect(d.includes('@@ -1,11 +1,11 @@')).toBe(true);
+	});
+	it('shows a new file as all additions', () => {
+		expect(unifiedDiff('a', 'b', '', 'x\ny\n')).toBe('--- a\n+++ b\n@@ -0,0 +1,2 @@\n+x\n+y\n');
+	});
+	it('diffs only the files that changed', () => {
+		const r = diffFiles({ 'a.yaml': 'x\n', 'b.yaml': 'y\n' }, { 'a.yaml': 'x\n', 'b.yaml': 'z\n', 'c.yaml': 'new\n' });
+		expect(r.map((x) => x.path).join(',')).toBe('b.yaml,c.yaml');
+	});
+});
+
+describe('config review: the staged-apply client', () => {
+	type Call = { url: string; method?: string; body?: string; token?: string };
+	const rec = (status: number, body: unknown, calls: Call[] = []) =>
+		((async (url: string, init?: RequestInit) => {
+			calls.push({ url, method: init?.method, body: init?.body as string, token: (init?.headers as Record<string, string>)?.['X-Nautilus-Token'] });
+			return new Response(JSON.stringify(body), { status });
+		}) as unknown as typeof fetch);
+
+	it('stages the files, validates, applies with revertIfSilent', async () => {
+		const calls: Call[] = [];
+		const c = new ReviewClient({ fetch: rec(200, { id: '7', state: 'pending' }, calls), token: 't' });
+		await c.stage({ 'nautilus.yaml': 'x' });
+		await c.validate('7');
+		await c.apply('7', '10s');
+		await c.apply('7');
+		expect(calls.map((x) => `${x.method} ${x.url}`).join('|')).toBe('POST /api/io/staged|POST /api/io/staged/7/validate|POST /api/io/staged/7/apply|POST /api/io/staged/7/apply');
+		expect(calls[0].body).toBe('{"files":{"nautilus.yaml":"x"}}');
+		expect(calls[2].body).toBe('{"revertIfSilent":"10s"}');
+		expect(calls[3].body).toBe(undefined);
+		expect(calls[0].token).toBe('t');
+	});
+	it('a failed apply answers with the candidate error, not a bare status', async () => {
+		const r = await new ReviewClient({ fetch: rec(422, { id: '7', state: 'failed', error: 'rollback worked' }) }).apply('7');
+		expect(r.ok).toBe(false);
+		if (!r.ok) expect(r.message.includes('rollback worked')).toBe(true);
+		if (!r.ok) expect(r.staged?.state).toBe('failed');
+	});
+	it('refusals name the fix', async () => {
+		const stale = await new ReviewClient({ fetch: rec(409, { error: 'candidate 7 is applied' }) }).validate('7');
+		if (!stale.ok) expect(stale.message.includes('Validate the candidate again')).toBe(true);
+		const bad = await new ReviewClient({ fetch: rec(422, { error: 'unknown driver type' }) }).stage({ a: 'b' });
+		if (!bad.ok) expect(bad.message.includes('Fix it in the form')).toBe(true);
+		const nope = await new ReviewClient({ fetch: rec(403, { error: 'x' }) }).stage({ a: 'b' });
+		if (!nope.ok) expect(nope.kind).toBe('forbidden');
+		const down = await new ReviewClient({ fetch: (async () => { throw new Error('boom'); }) as unknown as typeof fetch }).stage({ a: 'b' });
+		if (!down.ok) expect(down.kind).toBe('unreachable');
+	});
+});

@@ -11,12 +11,17 @@
 	import { patch, type Op } from '../config/yamlpatch.js';
 	import SchemaForm from './SchemaForm.svelte';
 	import Button from './Button.svelte';
+	import ConfigReview from './ConfigReview.svelte';
+	import { ReviewClient } from '../config/review.js';
 
 	let {
 		client = new ConfigClient(),
+		review = new ReviewClient(),
 		onoverlay
 	}: {
 		client?: ConfigClient;
+		/** The staged-apply client the review panel drives. */
+		review?: ReviewClient;
 		/** Called with the files changed so far (empty when nothing is). */
 		onoverlay?: (o: Overlay) => void;
 	} = $props();
@@ -25,6 +30,7 @@
 	let fields = $state<{ drivers: Field; devices: Field } | null>(null);
 	let texts = $state<Record<string, string>>({});
 	let error = $state<string | null>(null);
+	let overlay = $state<Overlay>({ files: {}, changed: [] });
 
 	const manifestPath = $derived(loaded?.manifest ?? 'nautilus.yaml');
 	const manifest = $derived(texts[manifestPath] ?? '');
@@ -53,6 +59,8 @@
 		error = null;
 		loaded = f.value;
 		texts = { ...f.value.files };
+		overlay = { files: {}, changed: [] };
+		onoverlay?.(overlay);
 		let driversField: Field;
 		try {
 			const single = driverRows(f.value.files[f.value.manifest] ?? '')[0]?.path[0] === 'driver';
@@ -70,7 +78,8 @@
 		if (!loaded) return;
 		const changed: Record<string, string> = {};
 		for (const [p, t] of Object.entries(texts)) if (t !== loaded.files[p]) changed[p] = t;
-		onoverlay?.({ files: changed, changed: Object.keys(changed).sort() });
+		overlay = { files: changed, changed: Object.keys(changed).sort() };
+		onoverlay?.(overlay);
 	}
 
 	function run(op: () => Op) {
@@ -120,6 +129,7 @@
 		{/each}
 		<Button size="sm" onclick={() => run(() => addDevice({ name: 'NewDevice', profile: '', endpoint: '' }))}>Add a device</Button>
 		<p class="note">{edited ? 'Edited, not applied.' : 'No changes.'}</p>
+		<ConfigReview before={loaded.files} {overlay} client={review} onapplied={() => void load()} />
 	{:else if !error}
 		<p class="note">Reading the configuration…</p>
 	{/if}
