@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"slices"
 	"time"
+
+	"github.com/joyautomation/nautilus/quorum"
 )
 
 // FaultKind is one kind of injected fault (test plan §5).
@@ -61,7 +63,25 @@ const (
 	// Unhealthy hangs Node's scans for For (#621): its candidate stops
 	// renewing and doesn't campaign, while its voter keeps answering.
 	Unhealthy
+	// Clear is the operator's clear-duplicate at member Node's voter at At
+	// (#1029 3c-3): every mark it holds is dropped. It is a model of the
+	// command, not the command: the check reads every member at the same
+	// instant and needs no message (the real one asks each over the peer
+	// port, a few milliseconds apart). With Value ClearGuarded
+	// it is refused while that voter hears two boots of a marked name
+	// (quorum.Voter.CopyHeard), as the command is. For is ignored. The
+	// generator never draws it; Record.Clears says what each did.
+	Clear
 	nKinds
+)
+
+// A Clear's Value bits. ClearGuarded: this voter's own guard. ClearPreflight:
+// the command's check phase too, all or nothing: every real member (A, B,
+// W) is up and passes its guard for every name any of them marks, else
+// this Clear clears nothing (#1029 3c-3, naut-lead's condition (i)).
+const (
+	ClearGuarded   = 1
+	ClearPreflight = 2
 )
 
 // The frame kinds a Cut's Value may name (wire kind bits).
@@ -72,7 +92,7 @@ const (
 )
 
 var kindNames = [nKinds]string{"Cut", "Delay", "Loss", "Duplicate", "Mirror", "Crash", "Wipe",
-	"Pause", "Freeze", "SlowDisk", "DiskFail", "Skew", "Start", "Replay", "Recommission", "Clone", "Unhealthy"}
+	"Pause", "Freeze", "SlowDisk", "DiskFail", "Skew", "Start", "Replay", "Recommission", "Clone", "Unhealthy", "Clear"}
 
 func (k FaultKind) String() string {
 	if k >= 0 && k < nKinds {
@@ -138,6 +158,52 @@ func addOrRemove[T comparable](xs []T, v T, on bool) []T {
 	return xs
 }
 
+// clearPlan is one clear command's check: the boot kept and the boots
+// retired per name, or refused.
+type clearPlan struct {
+	at     time.Duration
+	keep   map[quorum.NodeID]uint64
+	retire map[quorum.NodeID][]quorum.BootSeq
+	ok     bool
+}
+
+// clearPreflight is the clear command's check phase: every real member is
+// up, and the members together hear no more than one boot of a name any
+// of them marks.
+func (w *World) clearPreflight() (map[quorum.NodeID]uint64, map[quorum.NodeID][]quorum.BootSeq, bool) {
+	var names []quorum.NodeID
+	for _, m := range []Addr{A, B, W} {
+		n := w.nodes[m]
+		if !n.up || n.voter == nil {
+			return nil, nil, false
+		}
+		names = append(names, n.voter.Marked()...)
+	}
+	keep := map[quorum.NodeID]uint64{}
+	retire := map[quorum.NodeID][]quorum.BootSeq{}
+	// Two live boots of a name, at one member or across them, refuse it.
+	for _, name := range names {
+		var answers [][]uint64
+		var known [][]quorum.BootSeq
+		for _, m := range []Addr{A, B, W} {
+			n := w.nodes[m]
+			answers = append(answers, n.voter.LiveBoots(w.local(n), name))
+			known = append(known, n.voter.KnownBoots(name))
+		}
+		k := quorum.KeptBoot(answers...)
+		if quorum.CopyLive(answers...) || k == 0 {
+			return nil, nil, false
+		}
+		keep[name] = k
+		for _, b := range quorum.UnionBoots(known...) {
+			if b.Nonce != k {
+				retire[name] = append(retire[name], b)
+			}
+		}
+	}
+	return keep, retire, true
+}
+
 // applyFault starts (on) or heals fault i.
 func (w *World) applyFault(i int, on bool) {
 	f := w.o.Faults[i]
@@ -178,6 +244,55 @@ func (w *World) applyFault(i int, on bool) {
 		} else {
 			w.crash(w.nodes[f.Node], false)
 		}
+	case Clear:
+		n := w.nodes[f.Node]
+		if !on || !n.up || n.voter == nil {
+			return
+		}
+		now := w.local(n)
+		c := ClearRec{Node: n.addr, At: w.now}
+		keep := map[quorum.NodeID]uint64{}
+		retire := map[quorum.NodeID][]quorum.BootSeq{}
+		if f.Value&ClearPreflight != 0 {
+			var ok bool
+			if w.clearPlan == nil || w.clearPlan.at != w.now {
+				k, r, ok := w.clearPreflight()
+				w.clearPlan = &clearPlan{at: w.now, keep: k, retire: r, ok: ok}
+			}
+			keep, retire, ok = w.clearPlan.keep, w.clearPlan.retire, w.clearPlan.ok
+			if !ok {
+				c.Refused = n.voter.Marked()
+				w.tracef("%v: the operator's clear is refused at the check phase", n.addr)
+				w.rec.Clears = append(w.rec.Clears, c)
+				return
+			}
+		}
+		names := n.voter.Marked()
+		for name := range keep {
+			// An unmarked member retires the members' boots too.
+			if !slices.Contains(names, name) && !quorum.MutClearRetiresMarkedOnly() {
+				names = append(names, name)
+			}
+		}
+		for _, name := range names {
+			was := slices.Contains(n.voter.Marked(), name)
+			if f.Value&ClearGuarded != 0 && n.voter.CopyHeard(now, name) {
+				c.Refused = append(c.Refused, name)
+				continue
+			}
+			k, checked := keep[name]
+			if !checked {
+				if bs := n.voter.LiveBoots(now, name); len(bs) == 1 {
+					k = bs[0]
+				}
+			}
+			n.voter.ClearDuplicateKeeping(name, k, retire[name])
+			if was {
+				c.Cleared = append(c.Cleared, name)
+			}
+		}
+		w.tracef("%v: the operator clears marks: cleared %v, refused %v", n.addr, c.Cleared, c.Refused)
+		w.rec.Clears = append(w.rec.Clears, c)
 	case Unhealthy:
 		if on {
 			w.nodes[f.Node].unhealthy++

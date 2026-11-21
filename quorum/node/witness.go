@@ -187,11 +187,14 @@ func (w *Witness) Close() {
 	}
 }
 
-// Handler serves votes for every cluster: POST Prefix + cluster + "/vote".
+// Handler serves votes for every cluster: POST Prefix + cluster + "/vote",
+// and the operator's clear-duplicate check and clear from a pair member:
+// POST Prefix + cluster + "/dup" (#1029 3c-3a).
 // Mount it behind Guard.
 func (w *Witness) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST "+Prefix+"{cluster}/vote", w.serveVote)
+	mux.HandleFunc("POST "+Prefix+"{cluster}/dup", w.serveDup)
 	return mux
 }
 

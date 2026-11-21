@@ -208,8 +208,8 @@ func boxChangedMsg(changed []string) string {
 func spareMsg(self quorum.NodeID) string {
 	return fmt.Sprintf("duplicate of %s - spare: another process runs as %s, and both other members hold that one (they heard it first) as %s. "+
 		"This process is a COPY (a cloned disk or VM, or NAUTILUS_NODE set to %s on a second box) and has made itself a spare: it neither votes nor campaigns, and answers nobody, until an operator acts. "+
-		"If this box is the copy, stop it (decommission). If this box is the real %s: (1) stop the copy and confirm it is down; (2) restart the members that raised redundancy.duplicate-member (their marks on %s would hold this box for good; restarting the other controller while it leads alone leaves the pair without a leader until it is back); "+
-		"(3) then on this box stop naut, delete the voter state file and start naut: it re-adopts from the other controller. Turning a spare into a replacement is a later command (recommission --from-spare)", self, self, self, self, self, self)
+		"If this box is the copy, stop it (decommission). If this box is the real %s: (1) stop the copy and confirm it is down (powered off or its process ended, not just unplugged or paused); (2) on this box stop naut, delete the voter state file and start naut: it re-adopts from the other controller (a spare answers no command, so this comes first); "+
+		"(3) a lease and a quarter later, on the other controller, run naut redundancy clear-duplicate %s --copy-stopped (the members' marks on %s would otherwise hold this box for good). Turning a spare into a replacement is a later command (recommission --from-spare)", self, self, self, self, self, self, self)
 }
 
 // ErrSpare: a spare refuses an operator's re-commission (#1029 3c-2).
@@ -243,7 +243,7 @@ func confirmedAlarm(v *quorum.Voter, markSeen *uint64) string {
 // duplicateMsg is the duplicate-member report.
 func duplicateMsg(who quorum.NodeID, cause quorum.DupCause) string {
 	if cause == quorum.DupConfirmed {
-		return fmt.Sprintf("two processes claim to be %s: this voter heard both running at once, and marks %s: it gives %s no new vote and counts no vote from %s until the mark is cleared. Clear it in this order: (1) stop the copy and confirm it is down (check NAUTILUS_NODE on every box, and that no box runs a clone of another's disk); (2) restart each member that raised this alarm; (3) then restart %s itself, even if it leads (the other controller takes over, which needs the witness). Until the operator command arrives, restarts are the only clear: marks are kept in memory. While a mark stands, a split or a lost witness can leave the pair without a leader", who, who, who, who, who)
+		return fmt.Sprintf("two processes claim to be %s: this voter heard both running at once, and marks %s: it gives %s no new vote and counts no vote from %s until the mark is cleared. Clear it: (1) stop the copy and confirm it is down: powered off or its process ended, not just unplugged or paused (check NAUTILUS_NODE on every box, and that no box runs a clone of another's disk); (2) on either controller, run naut redundancy clear-duplicate %s --copy-stopped: it checks every member, clears the mark at each, and frees %s without a restart. Where that command can't reach a member (an older release), restart each member that raised this alarm, then %s itself, even if it leads. While a mark stands, a split or a lost witness can leave the pair without a leader", who, who, who, who, who, who, who)
 	}
 	if cause == quorum.DupVoterPromised {
 		return fmt.Sprintf("two processes claim to be %s: %s campaigned while its own voter was heard promised to another controller, which %s never does. A copy of %s is running: check NAUTILUS_NODE on every box (it differs per box) and that no box runs a clone of another's disk", who, who, who, who)
@@ -306,6 +306,12 @@ type Status struct {
 	// Spare: this controller is a copy of a member and silent (EventSpare,
 	// #1029 3c-2). It names no leader: its tag API forwards nothing.
 	Spare bool
+	// Marked are the names this controller's voter marks as run by two
+	// processes at once (#1029 3c), sorted. Held: a voter's last reply
+	// marked this controller's own name, so it campaigns no more until the
+	// mark is cleared (quorum.Candidate.Marked).
+	Marked []string
+	Held   bool
 	// ConfigDiffers: the peer's hello named another configuration of the
 	// pair (EventConfigDiffers). HelloDuplicates counts hellos that showed
 	// two processes behind the peer's name.
@@ -1077,6 +1083,7 @@ func (e *Elector) Handler() http.Handler {
 	mux.HandleFunc("POST "+base+"/vote", e.serveVote)
 	mux.HandleFunc("POST "+base+"/adopt", e.serveAdopt)
 	mux.HandleFunc("GET "+base+"/hello", e.serveHello)
+	mux.HandleFunc("POST "+base+"/dup", e.serveDup)
 	return mux
 }
 
@@ -1191,7 +1198,7 @@ func (e *Elector) noteMark(r quorum.Reply) {
 	e.c.NoteMark(r)
 	switch now := e.c.Marked(); {
 	case now && !was:
-		msg := fmt.Sprintf("voter %s marks %s a confirmed duplicate: another process runs as this controller, so it campaigns no more, and its voter grants %s nothing new, until the mark is cleared. Clear it in this order: (1) stop the copy and confirm it is down; (2) restart the members that raised redundancy.duplicate-member (%s among them); (3) then restart this controller, even if it leads: only its own restart ends this hold once a marking member has restarted", r.From, e.o.Self, e.o.Peer, r.From)
+		msg := fmt.Sprintf("voter %s marks %s a confirmed duplicate: another process runs as this controller, so it campaigns no more, and its voter grants %s nothing new, until the mark is cleared. Clear it: (1) stop the copy and confirm it is down; (2) run naut redundancy clear-duplicate %s --copy-stopped (on either controller): the hold ends without a restart. If a marking member (%s among them) has restarted since it marked, only this controller's own restart ends this hold", r.From, e.o.Self, e.o.Peer, e.o.Self, r.From)
 		e.event(Event{Kind: EventDuplicateMarked, Detail: msg})
 		e.log.Error("redundancy: " + msg)
 	case was && !now:
@@ -1693,6 +1700,10 @@ func (e *Elector) Status() Status {
 	s.Leading = g.open && g.end.Sub(now) > e.Fence()
 	s.Term = g.epoch
 	s.Spare = e.spare.Load()
+	for _, n := range e.v.Marked() {
+		s.Marked = append(s.Marked, string(n))
+	}
+	s.Held = e.c.Marked()
 	switch from, until := e.v.LeaderSeen(); {
 	case s.Spare:
 		// A spare hears nobody and names no leader.

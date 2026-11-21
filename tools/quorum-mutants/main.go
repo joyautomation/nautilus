@@ -234,6 +234,22 @@ var table = []mutation{
 	{"spare_forgotten_on_box_change", []string{"TestASpareStartsSilentWhateverTheBox"}},
 	{"newer_state_moved_aside", []string{"TestANewerStateFileIsRefusedAndLeftAlone"}},
 	{"spare_log_runs", []string{"TestASparesPeerListenerAnswersNobody"}},
+	// #1029 3c-3a: the operator's clear-duplicate command.
+	{"clear_per_member", []string{"TestCopyLiveTakesTheMembersTogether", "TestAClearWhileTheCopyRunsBehindASplitIsRefused"}},
+	{"clear_partial_check", []string{"TestClearDuplicateAllNeedsEveryMember"}},
+	// #1135 review.
+	{"clear_forgets_boots", []string{"TestACopyUnheardAtTheClearIsMarkedWhenItReturns"}},
+	{"clear_unsettled", []string{"TestAJustStartedMemberAnswersNoClear"}},
+	{"clear_ignores_keep", []string{"TestAClearRefusesABootOtherThanTheOneItKeeps", "TestADupClearReChecksItsOwnVoter"}},
+	{"clear_done_ignores_clear", []string{"TestAClearMissedAtAMemberIsNotDoneAndRunsAgain"}},
+	{"clear_rerun_refused", []string{"TestAClearMissedAtAMemberIsNotDoneAndRunsAgain"}},
+	{"recheck_marks_only", []string{"TestTheRecheckReportsACopyHeardAfterTheClear"}},
+	// naut-lead's ruling on the #1135 review: retire the union, keep one.
+	{"clear_retires_own_only", []string{"TestACopyKnownToOneMemberIsRetiredAtAll"}},
+	{"clear_retires_marked_only", []string{"TestACopyKnownToOneMemberIsRetiredAtAll"}},
+	{"clear_without_keep", []string{"TestTheCheckPhaseKeepsOneBootAndRetiresTheRest"}},
+	{"cluster_ops_proxied", []string{"TestAStandbyWithNoLeaderAnswersClearDuplicate"}},
+	{"redundancy_same_origin", []string{"TestEveryWritePathJournalsExactlyOneEntry"}},
 	// Outside the quorum tree (rowPkgs): the operator-intent log's late-
 	// start lapse (#1030, #1032 reviews) and the pair's alarm acks (#710
 	// PR 3b-2c).
@@ -352,6 +368,8 @@ var rowPkgs = map[string][]string{
 	"alarm_view_ignored":           {"./cmd/naut"},
 	"engine_not_reset":             {"./server"},
 	"reconcile_before_restore":     {"./server"},
+	"cluster_ops_proxied":          {"./server"},
+	"redundancy_same_origin":       {"./server"},
 	"gate_per_batch":               {"./hw"},
 	"old_term_sent":                {"./hw"},
 	"send_no_deadline":             {"./internal/fence", "./hw", "./modbus", "./eip", "./eip/cip", "./optommp"},

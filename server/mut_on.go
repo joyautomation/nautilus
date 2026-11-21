@@ -15,7 +15,12 @@ import "os"
 //     frozen operator state instead of resetting it first;
 //   - reconcile_before_restore: the log counts as live from the lease on,
 //     before the takeover restored the view, so Reconcile clears every
-//     carried ack against the unrestored engine (#1033 CI).
+//     carried ack against the unrestored engine (#1033 CI);
+//   - cluster_ops_proxied: the pair's operator commands go through the
+//     standby proxy like a write, so a standby that knows no leader
+//     refuses them with a 503 (#1029 3c-3a);
+//   - redundancy_same_origin: without an auth: block, the pair's operator
+//     commands take the write rule (same-origin with no credential).
 var mutOn = os.Getenv("QUORUM_MUT")
 
 func mutServer(name string) bool { return name == mutOn }

@@ -129,6 +129,8 @@ Usage:
   naut witness        Run the witness of a redundant controller pair: the
                           third voter, on its peer port (--listen, --state,
                           --lease; needs NAUTILUS_PEER_TOKEN).
+  naut redundancy     A redundant pair's operator commands on the box:
+                          status, clear-duplicate <name> --copy-stopped.
   naut audit verify   Check the runtime audit journal's hash chain
                           (default dir: audit).
   naut auth init      Turn on users, roles and sign-in: write a starter
@@ -231,6 +233,8 @@ func main() {
 		os.Exit(runHistorian(os.Args[2:]))
 	case "witness":
 		os.Exit(runWitness(os.Args[2:]))
+	case "redundancy":
+		os.Exit(runRedundancy(os.Args[2:]))
 	case "audit":
 		os.Exit(runAudit(os.Args[2:]))
 	case "users":

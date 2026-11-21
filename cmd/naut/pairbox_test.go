@@ -87,9 +87,19 @@ type boxRig struct {
 	wdone        chan int
 	nodes        map[string]*pairNode
 	links        *links
+	// apis, when set, are the controllers' tag API listeners (newBoxRigAPI),
+	// served by each one's first start; apiURL their base URLs.
+	apis   map[string]net.Listener
+	apiURL map[string]string
 }
 
-func newBoxRig(t *testing.T) *boxRig {
+func newBoxRig(t *testing.T) *boxRig { t.Helper(); return newBoxRigOpts(t, false) }
+
+// newBoxRigAPI is newBoxRig with each controller's tag API served (with
+// NAUTILUS_TOKEN "api-secret"), for the operator commands.
+func newBoxRigAPI(t *testing.T) *boxRig { t.Helper(); return newBoxRigOpts(t, true) }
+
+func newBoxRigOpts(t *testing.T, api bool) *boxRig {
 	t.Helper()
 	if testing.Short() {
 		t.Skip("runs members and a witness on loopback for several leases")
@@ -115,6 +125,17 @@ func newBoxRig(t *testing.T) *boxRig {
 	r.files = pairProject(r.lns[0].Addr().String(), r.lns[1].Addr().String(), r.wit)
 	for _, n := range []string{"a", "b"} {
 		r.env[n] = map[string]string{"NAUTILUS_NODE": n, "NAUTILUS_PEER_TOKEN": token, "NAUTILUS_CLUSTER": cluster, "STATE_DIRECTORY": t.TempDir()}
+		if api {
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if r.apis == nil {
+				r.apis, r.apiURL = map[string]net.Listener{}, map[string]string{}
+			}
+			r.apis[n], r.apiURL[n] = ln, "http://"+ln.Addr().String()
+			r.env[n]["NAUTILUS_TOKEN"] = "api-secret"
+		}
 	}
 	r.start("a", "box-a", r.env["a"], r.lns[0])
 	r.start("b", "box-b", r.env["b"], r.lns[1])
@@ -194,7 +215,9 @@ func (r *boxRig) start(id, box string, env map[string]string, ln net.Listener) {
 // read (a link that doesn't resolve).
 func (r *boxRig) startBox(id string, box *atomic.Value, env map[string]string, ln net.Listener) {
 	r.t.Helper()
-	r.nodes[id] = startPairNodeWith(r.t, r.files, env, ln, nil, func(d *pairDeps) {
+	api := r.apis[id]
+	delete(r.apis, id) // served once: a restarted member has no API here
+	r.nodes[id] = startPairNodeWith(r.t, r.files, env, ln, api, func(d *pairDeps) {
 		d.box = func([]string) (string, error) {
 			b := box.Load().(string)
 			if b == "" {

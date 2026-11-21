@@ -493,12 +493,72 @@ redundancy:
         refusal at the leader's own term, which re-termed it every renewal while a voter
         stayed duplicated (every clone race failed the steady-state oracle once the mark
         made that permanent).
-      - **The clear.** `Voter.ClearDuplicate`, exposed as `Elector.ClearDuplicate` and
-        `Witness.ClearDuplicate`; the operator command is 3c-3, and durable marks (state
-        format 6) are scheduled with it. Marks are in memory, so until then the clear is three
-        steps in a strict order: stop the copy and confirm it is down; restart each member
-        that raised the alarm; then restart the marked controller(s), even one that leads
-        (the original shares the marked name: a hand-over that needs the witness).
+      - **The clear (3c-3a).** `naut redundancy clear-duplicate <name> --copy-stopped` on
+        either controller: `POST /api/cluster/clear-duplicate`, the `redundancy` permission
+        (elevated, administrator; without an `auth:` block `NAUTILUS_TOKEN` only, never the
+        same-origin rule), journalled as `redundancy.clear-duplicate` with the operator's
+        attestation (`--copy-stopped`) and the principal, answered by the controller itself
+        (never proxied to a leader, never the no-leader 503: it is needed exactly when
+        nobody leads). `Elector.ClearDuplicateAll` (`quorum/node/clear.go`) asks every
+        member over the peer port (`POST …/dup`, behind `Guard`; no `WireVersion` change, an
+        older member answers 404) in three phases:
+        1. **Check, all or nothing.** Every member must answer, and the boots of the name
+           the members heard in the last lease and D, **taken together**
+           (`Voter.LiveBoots`, `quorum.CopyLive`), must be at most one. One member alone is
+           not enough: an early split can put the copy with one member and its original with
+           another, so each hears one boot; clearing the member that hears only the copy
+           frees it (the copy's hold rests on that member's mark alone), and it leads beside
+           the original. Measured: asking each member alone, 7 of 300 runs gave two leaders
+           with the copy running behind an early split (unguarded 7); together, every such
+           clear was refused, 0.
+        2. **Clear**, carrying the one boot the check heard (`quorum.KeptBoot`) and every
+           other boot ANY member knew (`Voter.KnownBoots`, `quorum.UnionBoots`, gathered by the
+           check; `checkPhase`). A check that heard no boot at all is refused ("nothing
+           running under a to keep"): a clear that keeps nothing has no use, and would retire
+           a real controller that is only paused (naut-lead's ruling; `clear_without_keep`).
+           Each member refuses if it hears any other boot (so a clear a peer sends without a
+           check is guarded too), clears its mark if it has one, and **retires** all those
+           boots, marked or not (`Voter.ClearDuplicateKeeping`; `clear_retires_marked_only`,
+           `clear_retires_own_only`): a new frame from a retired boot marks the
+           name again at once, before any grant (`retiredFrame`). A copy that was alive but
+           unheard at the clear (unplugged, paused: a wrong attestation) comes back as the
+           same boot. #1135 review: such a copy returning into a split gave two leaders in
+           26, 23, 14 of 500 (touch 0, <1 s, <2 s), more than the restart route's 25, 6, 2;
+           with retired boots, 0 (`TestACopyUnheardAtTheClearIsMarkedWhenItReturns`,
+           `clear_forgets_boots`). The union matters when only one member knew the copy and it
+           returns beside the other: 26, 25, 23, 9, 14, 6 of 500 when each member retires only
+           its own; 0 with the union (`TestACopyKnownToOneMemberIsRetiredAtAll`). A real
+           restart is a new boot and is never retired. **Residual (Fable re-check):** a copy
+           PAUSED or with hung scans at the clear, back straight into a split beside the peer:
+           4 of 1,000 (pause) and up to 13 (unhealthy) gave two leaders for 36 ms to 0.8 s,
+           against 56 and 57 for the restart route. `retiredFrame` fires on the copy's own
+           request; until it arrives the peer counts renewal grants from the copy's voter.
+           The candidate side can close it: a reply whose `VoterBoot` is a retired boot is
+           not counted and marks (a follow-up). Retired boots are in memory, like marks;
+           3c-3b makes both durable.
+
+           A run after a clear that missed a member (it errored or refused, so it retired
+           nothing) is not done (`ClearReport.Done` checks the clear phase), and the check
+           lets it run again with no mark left while a boot is still to be retired somewhere
+           (`DupAnswer.Retired`; `clear_done_ignores_clear`, `clear_rerun_refused`).
+        3. **Re-check a lease later**, in the command's output: a mark back, or two boots
+           heard across the members (`CopyLive` again), means a copy runs.
+
+        A member whose voter started under a lease and D ago (`Voter.Settled`) answers
+        neither phase, and a witness that has not heard the pair since it started answers
+        503: either could only say "heard nothing" (#1135 review: about 10% of checks passed
+        that way with a member just restarted; 0 two leaders, the old boot's hold held).
+
+        The held controller is freed without a restart: rule (i) lets the same voter boot's
+        unmarked reply release its hold. A member the clear phase can't reach keeps its mark
+        (never worse than marks on: 0 two leaders in 300 runs per split shape for one or two
+        members cleared, `TestAPartialClearAfterTheCopyStopsIsNeverWorse`), and the command
+        says so. The old route stays for an older member: restart each member that raised
+        the alarm, then the marked controller(s). Measured on the sim (`TestMeasureClear`,
+        a `Clear` fault per member): cleared after the heal, the pair was leaderless 0.0 s on
+        average (0.7 s at most), against 3.2 to 4.5 s (5.3 s) for the restarts. Marks are
+        still kept in memory; durable marks are 3c-3b, which must not land before this
+        command.
       - **The measure.** `TestCloneSplitNoTwoLeaders`: the six shapes above, 0 two-leader
         runs (200 per shape in CI, 2,000 measured; before, 2,000/2,000 for both splits and
         126, 306, 58, 13 of 2,000 for the heal shapes). The "mark" oracle (no mark in a run
@@ -1449,6 +1509,7 @@ Every redundancy event is written as a #709 entry. The fields are `ts`, `user`, 
 | Quorum | `redundancy.quorum.lost` and `.regained` |
 | Witness | `redundancy.witness.incarnation`, when one is adopted; `redundancy.witness.copies`, when two incarnations answer within a lease; `redundancy.witness.lost`, when a controller must be re-commissioned by hand (the controller, the dead committed generation and incarnation or none, the incarnations heard, the time since boot); `redundancy.recommission`, the engineer's command (the incarnation, the supplied and the effective floor, the dead committed generation and incarnation, the floor's evidence); `redundancy.witness.readopt-over-switch`, a re-adoption taken over a pending switch (the floor may miss terms, §3.1) |
 | Stale takeover | `redundancy.stale`, a cold takeover with its staleness |
+| Duplicate | `redundancy.clear-duplicate`, the operator's clear (target: the marked name; `detail.attest`, the operator's word that the copy is stopped; after: each member's check, clear and re-check; refused when a member is silent or two boots are heard; `error` when a member still marks it after) (#1029 3c-3a) |
 
 **Where records go.** With quorum, a record goes through `oplog`, as #709 specifies. Without
 quorum, which is the override's whole case, it is fsynced to a local append-only JSONL journal

@@ -110,6 +110,8 @@ var actionClass = map[string]string{
 	// Cancelling a pending revert keeps a change its device has not
 	// answered: it overrides a safeguard the apply asked for.
 	"config.revert.cancel": strict,
+	// Which process a redundant pair counts as its member.
+	"redundancy.clear-duplicate": strict,
 }
 
 const (

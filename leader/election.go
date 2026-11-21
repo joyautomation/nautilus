@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"maps"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -126,7 +127,66 @@ func (q *Quorum) Status() Status {
 	return st
 }
 func quorumStatus(s node.Status) Status {
-	return Status{Mode: "quorum", Pod: s.Self, Leader: s.Leader, LeaderAddr: s.LeaderAddr, IsLeader: s.Leading, Transitions: s.Acquisitions}
+	return Status{Mode: "quorum", Pod: s.Self, Leader: s.Leader, LeaderAddr: s.LeaderAddr, IsLeader: s.Leading, Transitions: s.Acquisitions,
+		Marked: s.Marked, Held: s.Held, Spare: s.Spare}
+}
+
+// The outcomes of ClearDuplicate.
+const (
+	ClearDone       = "done"       // every member answered, and none marks the name a lease later
+	ClearRefused    = "refused"    // the check phase refused: nothing was cleared
+	ClearIncomplete = "incomplete" // cleared, but a member still marks the name, or was not reached
+)
+
+// ClearDuplicate is the operator's clear-duplicate command (#1029 3c-3a,
+// node.Elector.ClearDuplicateAll): name is the marked member, by the
+// person, for the members' logs. It returns the report (JSON), the outcome
+// (ClearDone, ClearRefused, ClearIncomplete) and, when not done, why.
+func (q *Quorum) ClearDuplicate(ctx context.Context, name, by string) (report any, outcome, reason string) {
+	rep, err := q.n.ClearDuplicateAll(ctx, name, by)
+	switch {
+	case err == nil:
+		return rep, ClearDone, ""
+	case errors.Is(err, node.ErrClearRefused):
+		return rep, ClearRefused, rep.Refused
+	case len(rep.Clear) == 0:
+		return rep, ClearRefused, err.Error()
+	}
+	return rep, ClearIncomplete, incompleteReason(rep, err)
+}
+
+// incompleteReason says which members still mark the name, or were not
+// reached, after a clear.
+func incompleteReason(rep node.ClearReport, err error) string {
+	var still []string
+	for _, a := range rep.Recheck {
+		switch {
+		case a.Err != "":
+			still = append(still, a.Member+" not reached ("+a.Err+")")
+		case a.Marked:
+			still = append(still, a.Member+" marks "+rep.Name+" again: a copy still runs where it can hear it")
+		}
+	}
+	for _, a := range rep.Clear {
+		switch {
+		case a.Err != "":
+			still = append(still, a.Member+" missed the clear ("+a.Err+")")
+		case a.Refused != "":
+			still = append(still, a.Refused)
+		}
+	}
+	for _, a := range rep.Recheck {
+		if a.Refused != "" {
+			still = append(still, a.Refused)
+		}
+	}
+	if rep.CopyHeardAfter {
+		still = append(still, "the members heard two processes named "+rep.Name+" since the clear: a copy is still running (perhaps behind a split, where no single member hears both); find it and stop it, then run this again")
+	}
+	if len(still) == 0 {
+		return err.Error()
+	}
+	return "cleared, but " + strings.Join(still, "; ") + ". Run it again once that member answers; a mark that comes back means the copy is not stopped"
 }
 
 // SetHealth makes renewing and campaigning depend on h, asked at every

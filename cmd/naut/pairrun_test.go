@@ -256,6 +256,7 @@ func startPairNodeFull(t *testing.T, files fstest.MapFS, env map[string]string, 
 	n := &pairNode{m: m, rt: rt, cancel: cancel, done: make(chan struct{}), eng: eng, al: al}
 	if api != nil {
 		sopts := proj.Server
+		sopts.AuthToken = env["NAUTILUS_TOKEN"] // as runProject takes it from the environment
 		sopts.Cluster = m.q
 		sopts.SubstituteLog = sl
 		if eng != nil {

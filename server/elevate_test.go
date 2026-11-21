@@ -292,7 +292,7 @@ func TestElevateRefreshesTheWindow(t *testing.T) {
 		t.Errorf("the user's other sign-in was elevated too: %d %s", rec.Code, rec.Body)
 	}
 	me := call(t, srv, "GET", "/api/me", "", withCookie(c.Value)).Body.String()
-	if !strings.Contains(me, `"elevatedUntil":"`+want.Format(time.RFC3339Nano)) || !strings.Contains(me, `"elevated":["force","edit","activate","deploy","config","users","override"]`) {
+	if !strings.Contains(me, `"elevatedUntil":"`+want.Format(time.RFC3339Nano)) || !strings.Contains(me, `"elevated":["force","edit","activate","deploy","config","users","override","redundancy"]`) {
 		t.Errorf("/api/me: %s", me)
 	}
 	// The window is fixed: using it does not slide it.

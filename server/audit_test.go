@@ -235,6 +235,31 @@ func auditRows() []auditRow {
 			method: "POST", path: "/api/forces/clear",
 			action: "force.clear-all", user: "anonymous", source: "api", result: "refused"},
 
+		{name: "clear a duplicate mark", pattern: "POST /api/cluster/clear-duplicate", server: pairServer("done"),
+			method: "POST", path: "/api/cluster/clear-duplicate", body: `{"name":"a","copyStopped":true}`,
+			header: map[string]string{"Authorization": "Bearer s3cret"},
+			action: "redundancy.clear-duplicate", target: "a", user: "token", source: "api", result: "ok",
+			check: wantDetail("attest", copyStoppedAttest)},
+		{name: "clear a duplicate mark, no credential configured", pattern: "POST /api/cluster/clear-duplicate", server: pairServerNoToken("done"),
+			method: "POST", path: "/api/cluster/clear-duplicate", body: `{"name":"a","copyStopped":true}`,
+			action: "redundancy.clear-duplicate", target: "a", user: "anonymous", source: "api", result: "refused",
+			check: wantReason("NAUTILUS_TOKEN")},
+		{name: "clear a duplicate mark, the copy not said stopped", pattern: "POST /api/cluster/clear-duplicate", server: pairServer("done"),
+			method: "POST", path: "/api/cluster/clear-duplicate", body: `{"name":"a"}`,
+			header: map[string]string{"Authorization": "Bearer s3cret"},
+			action: "redundancy.clear-duplicate", target: "a", user: "token", source: "api", result: "refused",
+			check: wantReason("copyStopped")},
+		{name: "clear a duplicate mark, the check phase refuses", pattern: "POST /api/cluster/clear-duplicate", server: pairServer("refused"),
+			method: "POST", path: "/api/cluster/clear-duplicate", body: `{"name":"a","copyStopped":true}`,
+			header: map[string]string{"Authorization": "Bearer s3cret"},
+			action: "redundancy.clear-duplicate", target: "a", user: "token", source: "api", result: "refused",
+			check: wantReason("fake refused")},
+		{name: "clear a duplicate mark, a member still marks it", pattern: "POST /api/cluster/clear-duplicate", server: pairServer("incomplete"),
+			method: "POST", path: "/api/cluster/clear-duplicate", body: `{"name":"a","copyStopped":true}`,
+			header: map[string]string{"Authorization": "Bearer s3cret"},
+			action: "redundancy.clear-duplicate", target: "a", user: "token", source: "api", result: "error",
+			check: wantReason("fake incomplete")},
+
 		{name: "parameter write", pattern: "PUT /api/iolink/{port}/params/{ref}", server: paramAuditServer(newFakeParams()),
 			method: "PUT", path: "/api/iolink/LEVEL1/params/V_Setpoint", body: `{"value":500}`,
 			action: "param.write", target: "LEVEL1/V_Setpoint", user: "anonymous", source: "api", result: "ok", before: int64(100), after: int64(500)},
@@ -416,6 +441,38 @@ func ioStaged(validate bool) func(*testing.T, *Server) {
 			if w, _ := doJSON(t, h, "POST", "/api/io/staged/1/validate", nil); w.Code != http.StatusOK {
 				t.Fatalf("validate: %d", w.Code)
 			}
+		}
+	}
+}
+
+// fakePair is a redundant pair member for the clear-duplicate route: it
+// answers every clear with outcome, and records who asked.
+type fakePair struct {
+	outcome string
+	by      []string
+}
+
+func (f *fakePair) Status() leader.Status {
+	return leader.Status{Mode: "quorum", Pod: "b", Leader: "b", IsLeader: true, Marked: []string{"a"}}
+}
+
+func (f *fakePair) ClearDuplicate(_ context.Context, name, by string) (any, string, string) {
+	f.by = append(f.by, by)
+	return map[string]any{"name": name}, f.outcome, "fake " + f.outcome
+}
+
+func pairServer(outcome string) func(*testing.T) *Server {
+	return plain(Options{AuthToken: "s3cret", Cluster: &fakePair{outcome: outcome}})
+}
+
+func pairServerNoToken(outcome string) func(*testing.T) *Server {
+	return plain(Options{Cluster: &fakePair{outcome: outcome}})
+}
+
+func wantDetail(key, want string) func(*testing.T, audit.Entry) {
+	return func(t *testing.T, e audit.Entry) {
+		if got, _ := e.Detail[key].(string); got != want {
+			t.Errorf("detail.%s = %q, want %q", key, got, want)
 		}
 	}
 }

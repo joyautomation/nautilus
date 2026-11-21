@@ -32,6 +32,7 @@ const (
 	PermDeploy     = auth.Deploy     // a Logix or Siemens download
 	PermConfig     = auth.Config     // live I/O configuration (#706, #711)
 	PermAudit      = auth.Audit      // reading the audit journal
+	PermRedundancy = auth.Redundancy // the redundant pair's operator commands (#1029 3c-3)
 )
 
 // actionPerm is the permission each journalled action needs. It is kept
@@ -62,6 +63,8 @@ var actionPerm = map[string]string{
 	"substitute.start": PermSubstitute,
 	"substitute.stop":  PermSubstitute,
 	"substitute.ack":   PermSubstitute,
+	// The redundant pair's operator commands (#1029 3c-3).
+	"redundancy.clear-duplicate": PermRedundancy,
 }
 
 // presentedToken is the credential a request carries, in either

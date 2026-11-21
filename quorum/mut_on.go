@@ -183,6 +183,20 @@ var Mutations = []string{
 	"peer_dial_lingers",             // node: a peer connection closes with a FIN, its unsent frames retransmitted after the process is gone (#1133 review)
 	"spare_forgotten_on_box_change", // node: a spare's flag is read after the box check, which loses it on a copy's box (#1029 3c-2)
 	"newer_state_moved_aside",       // node: a state file of a newer format is moved aside as lost, not refused (#1029 3c-2)
+	// #1029 3c-3a: the operator's clear-duplicate command.
+	"clear_per_member",          // quorum: the clear's check phase asks each member alone, not the members' boots together
+	"clear_partial_check",       // node: the clear goes ahead with a member that did not answer the check phase
+	"clear_done_ignores_clear",  // node: the clear reports done though a member missed the clear phase
+	"clear_rerun_refused",       // node: a clear that missed a member can't run again once no member marks
+	"clear_ignores_keep",        // node: a member clears though it hears a boot other than the one the check kept
+	"clear_without_keep",        // node: the clear goes ahead when the check heard no boot of the name to keep
+	"clear_retires_marked_only", // node: a member that marks nothing retires no boot on the clear
+	"recheck_marks_only",        // node: the re-check counts only re-marks, not two boots heard across the members
+	"clear_unsettled",           // quorum: a voter started under a lease and D ago answers the clear's check as if it heard every boot
+	"clear_retires_own_only",    // quorum: each member retires only the boots it knew, not every member's
+	"clear_forgets_boots",       // quorum: the clear retires no boot, so a copy unheard at the clear comes back unmarked (#1135 review)
+	"cluster_ops_proxied",       // server: the pair's operator commands go through the standby proxy (503 with no leader)
+	"redundancy_same_origin",    // server: without an auth: block, the pair's operator commands take the same-origin write rule
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")
