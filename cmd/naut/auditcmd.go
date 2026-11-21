@@ -270,7 +270,7 @@ func auditVerifyAnchored(a anchoredArgs, stdout, stderr io.Writer, getenv func(s
 		if err != nil {
 			return fail("checking role %q: %v", role, err)
 		}
-		ctl = &audit.RoleCheck{Role: role, WriterCheck: c}
+		ctl = &audit.RoleCheck{Role: role, WriterCheck: c, FromConnection: a.controllerRole == ""}
 	}
 	var others []string
 	if names, err := store.Controllers(ctx); err == nil {
@@ -295,8 +295,9 @@ func auditVerifyAnchored(a anchoredArgs, stdout, stderr io.Writer, getenv func(s
 	}
 	if len(others) > 0 {
 		// The name comes from nautilus.yaml and the environment, which
-		// whoever holds the box can change: say which others there are.
-		r.Warnings = append(r.Warnings, fmt.Sprintf("other controllers have anchors in this database: %s; this checked %q (is it the one this journal was anchored as?)", strings.Join(others, ", "), a.controller))
+		// whoever holds the box can change: say which others there are
+		// (a note: a pair or a fleet always has some).
+		r.Notes = append(r.Notes, fmt.Sprintf("other controllers have anchors in this database: %s; this checked %q (is it the one this journal was anchored as?)", strings.Join(others, ", "), a.controller))
 	}
 	return printAnchored(r, a.controller, stdout)
 }

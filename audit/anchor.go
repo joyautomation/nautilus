@@ -69,6 +69,10 @@ type AnchorInput struct {
 type RoleCheck struct {
 	Role string
 	WriterCheck
+	// FromConnection: the role is the connection's, taken as the
+	// controller's because verify used the controller's connection
+	// string.
+	FromConnection bool
 }
 
 // Verdicts.
@@ -540,7 +544,11 @@ func VerifyAnchored(in AnchorInput) (AnchorReport, error) {
 	case c == nil:
 		r.Unprotected = append(r.Unprotected, "the controller's database role is not known, so whether it could rewrite the copy or the anchors (their writer column included) is not known: give --controller-role <the role in the controller's connection string>")
 	case !seenW[c.Role] && !c.Protected:
-		r.Unprotected = append(r.Unprotected, fmt.Sprintf("the controller's role %q could rewrite the copy or the anchors, their writer column included (%s): nothing here proves anything against it; run naut audit pg-schema --role %s", c.Role, c.Why, c.Role))
+		msg := fmt.Sprintf("the controller's role %q could rewrite the copy or the anchors, their writer column included (%s): nothing here proves anything against it; run naut audit pg-schema --role %s", c.Role, c.Why, c.Role)
+		if c.FromConnection {
+			msg += " (the role of this connection string, taken as the controller's; if it is not, give --controller-role)"
+		}
+		r.Unprotected = append(r.Unprotected, msg)
 	case seenW[c.Role] && !c.Protected:
 		// Already listed as an anchor's writer.
 	}
@@ -549,7 +557,7 @@ func VerifyAnchored(in AnchorInput) (AnchorReport, error) {
 	// before it were copied, and first anchored, after they were written.
 	if len(anchors) > 0 {
 		r.FirstAnchor = anchors[0].At
-		r.Notes = append(r.Notes, fmt.Sprintf("anchored since %s; %d entries are dated before that, so they rest on the journal as it stood then", r.FirstAnchor.UTC().Format(time.RFC3339), beforeAnchors))
+		r.Notes = append(r.Notes, fmt.Sprintf("anchored since %s; %d entries are dated (by their own times, which the journal's writer sets) before that, so they rest on the journal as it stood then", r.FirstAnchor.UTC().Format(time.RFC3339), beforeAnchors))
 	}
 
 	switch {

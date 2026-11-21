@@ -270,7 +270,7 @@ func TestPostgresNautRunCopiesTheJournal(t *testing.T) {
 	vcmd.Env = cmd.Env
 	out, err = vcmd.CombinedOutput()
 	if !errors.As(err, &xe) || xe.ExitCode() != 3 || !strings.Contains(string(out), "the controller's database role is not known") ||
-		!strings.Contains(string(out), "WARNING: other controllers have anchors in this database: another") {
+		!strings.Contains(string(out), "note: other controllers have anchors in this database: another") {
 		t.Errorf("verify --anchor postgres --dsn-env: %v\n%s", err, out)
 	}
 	vcmd = exec.Command(bin, "audit", "verify", "--anchor", "postgres", "--controller", "elsewhere")

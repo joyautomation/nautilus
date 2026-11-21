@@ -175,6 +175,10 @@ func Schema(role string) string {
 		b.WriteString(strings.TrimSpace(ddl) + "\n")
 	}
 	b.WriteString(addCopiedAt + ";\n")
+	b.WriteString("-- No journal writes a seq below 1 (tables made before the check get it too).\n")
+	for _, t := range []string{"audit_entries", "audit_anchors"} {
+		b.WriteString("DO $$ BEGIN ALTER TABLE " + t + " ADD CONSTRAINT " + t + "_seq_check CHECK (seq >= 1) NOT VALID; EXCEPTION WHEN duplicate_object THEN NULL; END $$;\n")
+	}
 	b.WriteString("-- Tables the sink created itself are owned by it: take them over.\n")
 	for _, t := range Tables {
 		b.WriteString("ALTER TABLE " + t + " OWNER TO CURRENT_USER;\n")

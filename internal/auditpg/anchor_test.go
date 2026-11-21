@@ -192,6 +192,15 @@ func TestPostgresAnchorUpgradesA9aCopy(t *testing.T) {
 	if c := protection(t, s, "naut_9b_up"); !c.Protected {
 		t.Errorf("after pg-schema: %+v, want the grant narrowed", c)
 	}
+	// The 9a table gained the seq check (and pg-schema runs again).
+	if _, err := db.Exec(Schema("naut_9b_up")); err != nil {
+		t.Fatalf("pg-schema again: %v", err)
+	}
+	_, err := db.Exec(`INSERT INTO audit_entries (controller, seq, id, ts, "user", source, action, result, hash, file, file_offset, line)
+		VALUES ('plant-a', 0, 'i', now(), 'u', 's', 'a', 'ok', 'h', 'f', 1, 'l')`)
+	if err == nil || !strings.Contains(err.Error(), "audit_entries_seq_check") {
+		t.Errorf("a row at seq 0 on the upgraded table: %v, want the check", err)
+	}
 }
 
 // verify --anchor's reads, against a real database: the copy's rows with

@@ -1388,7 +1388,8 @@ printed as a `WARNING` whatever the verdict, with when and who started
 would make a prune look honest. When `keep-days` is lowered, `naut run`
 holds each prune until Postgres anchors the new retention (and while
 Postgres is down, since it then cannot say which retention it anchored
-last). A prune whose lowering was journalled and pruned under the same
+last: through a long outage, files outlive `keep-days` until it is back
+or the disk fills). A prune whose lowering was journalled and pruned under the same
 anchor is `BROKEN`. If Postgres stays down and the journal's disk passes
 90% full, the prune goes ahead, marked unanchored, and `verify` names it
 as an `UNANCHORED LOWERING` warning. That mark is written by the

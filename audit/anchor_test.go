@@ -736,7 +736,7 @@ func TestAnchoredControllerRoleIsChecked(t *testing.T) {
 	}
 	in = s.input()
 	r, _ = VerifyAnchored(in)
-	if r.Verdict != Verified || r.FirstAnchor.IsZero() || !strings.Contains(strings.Join(r.Notes, "\n"), "anchored since 2026-11-18T14:00:01Z; 2 entries are dated before that") {
+	if r.Verdict != Verified || r.FirstAnchor.IsZero() || !strings.Contains(strings.Join(r.Notes, "\n"), "anchored since 2026-11-18T14:00:01Z; 2 entries are dated (by their own times") {
 		t.Errorf("a protected controller role: %s, notes %v", r.Verdict, r.Notes)
 	}
 }
