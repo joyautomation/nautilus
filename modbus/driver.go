@@ -1759,7 +1759,9 @@ func (d *Driver) pollBlock(ctx context.Context, s *source, c conn, br *blockRun)
 			}
 		} else {
 			s.snapshot[t.Name] = bits[off]
-			queued = s.recordOutputLocked(t.Name, devValue{decoded: bits[off]}, !aware) || queued
+			if s.recording && s.isOutput(t.Name) { // as the word branch: no work for inputs
+				queued = s.recordOutputLocked(t.Name, devValue{decoded: bits[off]}, !aware) || queued
+			}
 		}
 	}
 	s.mu.Unlock()
