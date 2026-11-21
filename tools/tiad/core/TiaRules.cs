@@ -323,16 +323,18 @@ namespace Tiad
         public static string Consequence(List<string> acting)
         {
             if (acting == null || acting.Count == 0) return "";
-            bool stop = false, start = false, other = false;
+            bool stop = false, start = false, load = false, other = false;
             foreach (string id in acting)
             {
                 if (id == QuestionIds.StopCpu || id == QuestionIds.Reinitialize) stop = true;
                 else if (id == QuestionIds.StartAfter) start = true;
+                else if (id == QuestionIds.ConsistentDownload) load = true;
                 else other = true;
             }
             var l = new List<string>();
             if (stop) l.Add("TIA may already have stopped the CPU: check its mode and start it");
             if (start) l.Add("TIA may already have started the CPU: check its mode");
+            if (load) l.Add("TIA may already have loaded the software: compare");
             if (other) l.Add("TIA may already have acted on them: check the CPU's mode and compare");
             return "tiad had answered " + string.Join(", ", acting.ToArray()) + " before the download ended, so " + string.Join("; ", l.ToArray());
         }

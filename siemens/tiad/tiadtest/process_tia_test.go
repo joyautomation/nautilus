@@ -613,6 +613,19 @@ func TestAgentAnswersConsistentDownload(t *testing.T) {
 	if r, err := s.Download(ctx, req); err != nil || !r.Downloaded || !r.CompareEqual {
 		t.Fatalf("stop yes, consistent download yes: %+v %v, want a verified load", r, err)
 	}
+	// A CPU already in STOP: TIA asks consistent-download first, then a
+	// check the request leaves unanswered. The yes was acting, so the
+	// cancel is outcome_unknown naming it, never a clean refusal.
+	p.SetScript(t, tiadtest.Script{Questions: []tiad.Question{{ID: tiad.QuestionConsistentDownload}, {ID: tiad.QuestionReinitialize, Objects: []string{"Tags"}}}})
+	_, err = s.Download(ctx, req)
+	if tiad.Kind(err) != tiad.KindOutcomeUnknown || !strings.Contains(strings.Join(tiad.ActingAnswers(err), ","), "consistent-download") ||
+		!strings.Contains(err.Error(), "may already have loaded the software") {
+		t.Fatalf("consistent-download yes, then a refusal: %v (acting %v), want outcome_unknown naming consistent-download", err, tiad.ActingAnswers(err))
+	}
+	p.SetScript(t, tiadtest.Script{Questions: qs})
+	if _, err := s.Download(ctx, req); err != nil {
+		t.Fatal(err)
+	}
 	if l := p.Log(); !strings.Contains(l, `consistentDownload=yes`) || !strings.Contains(l, `acting=["stop-cpu","consistent-download"] outcome=loaded`) {
 		t.Fatalf("the audit must show consistent-download answered yes, acting, and loaded:\n%s", l)
 	}

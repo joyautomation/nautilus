@@ -523,6 +523,8 @@ namespace Tiad.Test
             Contains(DownloadChecks.Consequence(new List<string> { QuestionIds.Reinitialize }), "stopped the CPU", "reinitialize stops it");
             Contains(DownloadChecks.Consequence(new List<string> { QuestionIds.StartAfter }), "started the CPU", "start");
             Contains(DownloadChecks.Consequence(new List<string> { QuestionIds.Overwrite }), "acted on them", "overwrite");
+            Eq(DownloadChecks.Consequence(new List<string> { QuestionIds.ConsistentDownload }),
+                "tiad had answered consistent-download before the download ended, so TIA may already have loaded the software: compare", "consistent download loads");
             Contains(DownloadChecks.Consequence(new List<string> { QuestionIds.StopCpu, QuestionIds.Overwrite }), "tiad had answered stop-cpu, overwrite before the download ended", "names them");
         }
 

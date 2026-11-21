@@ -745,7 +745,11 @@ behaviour. So, until then:
   - `consistent-download` (TIA's `ConsistentBlocksDownload`, "Download
     software to device": loading the PLC software as one consistent
     whole. A real software download onto a CPU in RUN asks it right after
-    `stop-cpu`, #789 walk-past window; V21 offers only yes)
+    `stop-cpu`, #789 walk-past window; V21 offers only yes). A dry run
+    sees only the first check, so it never shows this one: **a software
+    download should answer `consistentDownload` up front**. Left out, the
+    download cancels there after `stop-cpu` was written, which is
+    `outcome_unknown` with the CPU possibly stopped.
   - `start-after`
   - `password`
   - `configuration-password` (TIA's `PlcMasterSecretPassword`: the
