@@ -706,6 +706,131 @@ namespace Tiad
         }
     }
 
+    // OnlineAnswers is how one online handler answers: the upload's
+    // trustUnverifiedCertificate opt-in holds only until the handler is
+    // stopped. Stopping marks it stopped before detaching it, so a handler
+    // that could not be detached from TIA answers no from then on, never
+    // Trusted.
+    public sealed class OnlineAnswers
+    {
+        readonly bool trustUnverifiedCertificate;
+        volatile bool stopped;
+
+        public OnlineAnswers(bool trustUnverifiedCertificate)
+        {
+            this.trustUnverifiedCertificate = trustUnverifiedCertificate;
+        }
+
+        // Answer is how a question of type is answered now (OnlineChecks).
+        public string Answer(string type)
+        {
+            return OnlineChecks.Answer(type, trustUnverifiedCertificate && !stopped);
+        }
+
+        // Stop marks the handler stopped, then detaches it with detach,
+        // never throwing; it reports whether the detach worked.
+        public bool Stop(Action detach, string what)
+        {
+            stopped = true;
+            return DownloadSteps.Quietly(detach, what);
+        }
+    }
+
+    // DownloadCall is what TIA's download call returned: its result's
+    // state and messages, read inside the call (a failure reading them is
+    // in doubt too).
+    public sealed class DownloadCall
+    {
+        public string State;
+        public string Messages = "";
+    }
+
+    // DownloadSteps runs one download through TIA in three steps:
+    // prepare (finding the CPU, attaching tiad's handlers, the address: a
+    // failure there loads nothing), TIA's download call (from its start, a
+    // failure of any kind is in doubt), and stop (detaching the handlers).
+    // TIA may be gone by the time stop runs (in #789 stage 2 it died inside
+    // the download call and took its objects with it), so whatever stop
+    // throws is logged and dropped: it never replaces how the download
+    // ended. Everything after the call is read inside one catch, so the
+    // agent answers outcome_unknown, never operation_failed, once the call
+    // was entered.
+    public static class DownloadSteps
+    {
+        // Run runs the steps and returns the outcome, or throws a
+        // TiaException that is InDoubt once the download call was entered.
+        // asked lists the questions tiad answered no going online (empty
+        // when none): one fails the download even when TIA went on.
+        public static DownloadOutcome Run(DownloadDecider decider, string address, Action prepare,
+            Func<DownloadCall> download, Action stop, Func<List<string>> asked)
+        {
+            bool entered = false;
+            DownloadCall call = null;
+            Exception error = null;
+            try
+            {
+                prepare();
+                entered = true;
+                call = download();
+                if (call == null) throw new TiaException("TIA's download call returned nothing");
+            }
+            catch (Exception e)
+            {
+                call = null;
+                error = e;
+            }
+            finally
+            {
+                Quietly(stop, "download: detaching tiad's handlers from TIA");
+            }
+            DownloadEnd end;
+            List<string> refused;
+            try
+            {
+                // How it ended is decided in DownloadDecider.Finish.
+                end = decider.Finish(entered, call == null ? null : call.State, call == null ? "" : (call.Messages ?? ""), error);
+                refused = asked() ?? new List<string>();
+            }
+            catch (Exception e)
+            {
+                throw new TiaException("reading how TIA's download ended failed (" + TiaNames.Message(e) + ")" +
+                    (error == null ? "" : " after " + TiaNames.Message(error)), error ?? e, entered);
+            }
+            // A question going online fails the download, even one TIA
+            // went on with: once TIA's download call was entered, in doubt.
+            if (refused.Count > 0)
+            {
+                throw new TiaException(TiaNames.OnlineRefused(address, refused, end.Failure ?? "TIA went on with the download"), error, entered);
+            }
+            if (end.Failure != null) throw new TiaException(end.Failure, error, end.InDoubt);
+            return new DownloadOutcome { Questions = decider.Asked, Loaded = end.Loaded };
+        }
+
+        // Quietly runs f, a clean-up step described by what, logging and
+        // dropping whatever it throws (the log line included): a handler
+        // that cannot be detached from a TIA that is gone must not replace
+        // the failure that matters. It reports whether f worked.
+        public static bool Quietly(Action f, string what)
+        {
+            try
+            {
+                f();
+                return true;
+            }
+            catch (Exception e)
+            {
+                try
+                {
+                    Log.Line("{0} failed ({1}: {2}); TIA may be gone", what, e.GetType().Name, TiaNames.LogSafe(TiaNames.Message(e)));
+                }
+                catch (Exception)
+                {
+                }
+                return false;
+            }
+        }
+    }
+
     // TiaNames are the small mappings from TIA's names to the agent's.
     public static class TiaNames
     {

@@ -16,7 +16,75 @@ namespace Tiad
         readonly TiaThread tiaThread = new TiaThread();
         readonly SessionTable sessions = new SessionTable();
         readonly Func<ITia> makeTia;
-        ITia tia; // made on the TIA thread by the first call that needs it
+        volatile ITia tia; // made on the TIA thread by the first call that needs it
+        // tiaGone is why TIA is gone (ITia.Gone), null while it is not.
+        // Once set it stays set: every call that needs TIA is refused,
+        // naming the fix, until the agent restarts.
+        volatile string tiaGone;
+        readonly object goneMu = new object();
+
+        // GoneFix is what to do once TIA died.
+        const string GoneFix = "every project open on it is gone, and the agent starts TIA only once. Restart the agent, then compare in a fresh session (the read-only after-check) before anything else";
+
+        // TiaGoneNow reports why TIA is gone, or null while it is not,
+        // recording it the first time. A Gone that throws counts as gone.
+        string TiaGoneNow()
+        {
+            string why = tiaGone;
+            if (why != null) return why;
+            ITia t = tia;
+            if (t == null) return null;
+            string how = "";
+            bool gone;
+            try
+            {
+                gone = t.Gone;
+            }
+            catch (Exception e)
+            {
+                gone = true;
+                how = " (reading whether it is alive failed: " + e.GetType().Name + ")";
+            }
+            if (!gone) return null;
+            lock (goneMu)
+            {
+                if (tiaGone == null)
+                {
+                    tiaGone = "TIA Portal died" + how + ", noticed " + DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
+                    Log.Line("{0}: {1}", tiaGone, GoneFix);
+                }
+                return tiaGone;
+            }
+        }
+
+        // TiaGate is the host's tia gate, failed once TIA is gone.
+        Gate TiaGate(Gate host)
+        {
+            string why = TiaGoneNow();
+            if (why == null) return host;
+            return new Gate { Name = "tia", State = Gate.StateFailed, Detail = why + ": " + GoneFix, Remedy = "restart the agent" };
+        }
+
+        // GoneRefusal refuses a call once TIA is gone, the way a failed
+        // gate does.
+        static TiadException GoneRefusal(string why)
+        {
+            return new TiadException(412, Kinds.Gate, "gate tia: " + why + ": " + GoneFix);
+        }
+
+        // Died is the answer for the call TIA died in. It ends the
+        // session: in doubt (outcome_unknown) when TIA's side says its
+        // download had begun, else a plain failure; both name the fix.
+        static TiadException Died(Exception e, string why)
+        {
+            string msg = "TIA: " + (e is TiaException ? e.Message : TiaNames.Message(e)) + "; " + why;
+            var te = e as TiaException;
+            if (te != null && te.InDoubt)
+            {
+                return new TiadException(500, Kinds.OutcomeUnknown, msg + ", so the CPU may or may not be loaded, and " + GoneFix, null, true);
+            }
+            return new TiadException(500, Kinds.OperationFailed, msg + ": " + GoneFix, null, true);
+        }
 
         void RegisterTia(Router r)
         {
@@ -70,11 +138,15 @@ namespace Tiad
             }
         }
 
-        // OnTia runs f on the TIA thread with ITia, made on first use.
+        // OnTia runs f on the TIA thread with ITia, made on first use. Once
+        // TIA is gone it refuses, also a call that was queued behind the
+        // one TIA died in; a call TIA dies in answers Died.
         T OnTia<T>(Func<ITia, T> f)
         {
             return tiaThread.Run(delegate
             {
+                string gone = TiaGoneNow();
+                if (gone != null) throw GoneRefusal(gone);
                 if (tia == null)
                 {
                     try
@@ -92,9 +164,11 @@ namespace Tiad
                 {
                     return f(tia);
                 }
-                catch (TiaException e)
+                catch (Exception e)
                 {
-                    host.TiaFailed(e);
+                    string why = TiaGoneNow();
+                    if (why != null) throw Died(e, why);
+                    if (e is TiaException) host.TiaFailed(e);
                     throw;
                 }
             });
@@ -111,8 +185,19 @@ namespace Tiad
             });
         }
 
+        // Close closes a session's project. Once TIA is gone there is no
+        // project left to close: the session is dropped, never kept broken.
         void Close(Session s)
         {
+            bool done = tiaThread.Run<bool>(delegate
+            {
+                if (s.Closed) return true;
+                if (TiaGoneNow() == null) return false;
+                s.Closed = true;
+                Log.Line("session {0}: TIA is gone, so its project is dropped without closing it", s.Id);
+                return true;
+            });
+            if (done) return;
             OnTia<object>(delegate(ITia t)
             {
                 if (!s.Closed)

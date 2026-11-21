@@ -146,7 +146,8 @@ namespace Tiad
         // runs only when all of them pass.
         public List<Gate> Gates()
         {
-            var gs = new List<Gate>(host.Gates());
+            var gs = new List<Gate>();
+            foreach (var g in host.Gates()) gs.Add(g.Name == "tia" ? TiaGate(g) : g);
             gs.Add(WorkDirGate());
             return gs;
         }

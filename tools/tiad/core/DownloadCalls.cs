@@ -39,6 +39,15 @@ namespace Tiad
                 why + "; the CPU may or may not be loaded: compare before anything else", null, false);
         }
 
+        // UnknownAfter is Unknown for a failure TIA's side reported after
+        // decide ran; one that ended the session (TIA died) keeps its own
+        // text, which names the fix, and stays fatal.
+        static TiadException UnknownAfter(TiadException e)
+        {
+            if (e.Fatal) return new TiadException(500, Kinds.OutcomeUnknown, e.Message + "; the CPU may or may not be loaded", null, true);
+            return Unknown("TIA failed during the download (" + e.Message + ")");
+        }
+
         static string Ids(List<Question> qs)
         {
             var ids = new List<string>();
@@ -202,7 +211,7 @@ namespace Tiad
                 {
                     if (askedQs != null) asked = Ids(askedQs);
                     outcome = Kinds.OutcomeUnknown;
-                    throw Unknown("TIA failed during the download (" + e.Message + ")");
+                    throw UnknownAfter(e);
                 }
                 throw;
             }

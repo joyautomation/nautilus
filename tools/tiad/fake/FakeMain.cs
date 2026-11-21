@@ -246,6 +246,7 @@ namespace Tiad.Fake
         int decideCalls = 1;
         string failAfterDecide = "";
         string failInDoubt = "";
+        string tiaDies = "";
         bool noDryRun;
         bool uploadAsksTls;
         string cannotApply = "";
@@ -385,6 +386,21 @@ namespace Tiad.Fake
             }
         }
 
+        // TiaDies, when set, makes TIA die inside Download the way it did in
+        // #789 stage 2, taking its objects with it so that detaching
+        // tiad's handlers throws too: "preparing" before TIA's download
+        // call, "downloading" inside it, before any question.
+        public string TiaDies
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return tiaDies;
+                }
+            }
+        }
+
         // DecideCalls is how many times Download calls decide (1, as the
         // ITia contract says; 0 or 2 for an ITia that breaks it).
         public int DecideCalls
@@ -511,6 +527,8 @@ namespace Tiad.Fake
             int? calls = r.OptInt("decideCalls");
             string after = r.Str("failAfterDecide");
             string inDoubt = r.Str("failInDoubt");
+            string dies = r.Str("tiaDies");
+            if (dies != "" && dies != "preparing" && dies != "downloading") throw new TiadException(400, Kinds.BadRequest, "tiaDies is preparing or downloading");
             bool noDry = r.Bool("noDryRun");
             bool asksTls = r.Bool("uploadAsksTls");
             string cannot = r.Str("cannotApply");
@@ -545,6 +563,7 @@ namespace Tiad.Fake
                 decideCalls = calls.HasValue ? calls.Value : 1;
                 failAfterDecide = after;
                 failInDoubt = inDoubt;
+                tiaDies = dies;
                 noDryRun = noDry;
                 uploadAsksTls = asksTls;
                 cannotApply = cannot;
@@ -795,6 +814,15 @@ namespace Tiad.Fake
         // when it is opened: its CPU, the devices besides it, protection.
         readonly Dictionary<string, FakeProject> saved = new Dictionary<string, FakeProject>(StringComparer.OrdinalIgnoreCase);
 
+        // died is set once a scripted TIA died (tiaDies): for good, as a
+        // real TIA that exited stays gone.
+        volatile bool died;
+
+        public bool Gone
+        {
+            get { return died; }
+        }
+
         public FakeTia(Script script)
         {
             this.script = script;
@@ -990,6 +1018,30 @@ namespace Tiad.Fake
             script.Enter("Download");
             var p = (FakeProject)project;
             if (script.FailInDoubt != "") throw new TiaException(script.FailInDoubt, null, true);
+            string dies = script.TiaDies;
+            if (dies != "")
+            {
+                // As tiad.Openness runs it, through DownloadSteps, with a
+                // TIA that is gone: its objects are disposed, so the step
+                // that dies and detaching the handlers both throw.
+                return DownloadSteps.Run(new DownloadDecider(decide), address,
+                    delegate
+                    {
+                        if (dies != "preparing") return;
+                        died = true;
+                        throw new ObjectDisposedException("DownloadProvider", "TIA Portal has exited");
+                    },
+                    delegate
+                    {
+                        died = true;
+                        throw new ObjectDisposedException("DownloadProvider", "TIA Portal has exited");
+                    },
+                    delegate
+                    {
+                        throw new ObjectDisposedException("ConnectionConfiguration", "TIA Portal has exited");
+                    },
+                    delegate { return new List<string>(); });
+            }
             var outcome = new DownloadOutcome { Questions = script.Questions };
             // A protected configuration asks for its password when the
             // hardware loads (provisional until S2b).

@@ -55,6 +55,11 @@ type Script struct {
 	// FailInDoubt makes the fake fail the way TIA fails inside a
 	// download it had begun, before asking anything.
 	FailInDoubt string `json:"failInDoubt,omitempty"`
+	// TiaDies makes TIA die inside a download, as it did in #789 stage
+	// 2, taking its objects with it so that detaching tiad's handlers
+	// fails too: "preparing" before TIA's download call, "downloading"
+	// inside it, before anything is asked.
+	TiaDies string `json:"tiaDies,omitempty"`
 	// NoDryRun makes the fake's TIA side one that cannot promise a dry
 	// run loads nothing (tiad.Openness until S2b): the agent refuses dry
 	// runs.
@@ -79,7 +84,7 @@ type Script struct {
 	UploadAccessControl string          `json:"uploadAccessControl,omitempty"`
 	AccessRecords       string          `json:"accessRecords,omitempty"`
 	Delays              []ScriptedCall  `json:"delays,omitempty"`
-	Failures   []ScriptedCall `json:"failures,omitempty"`
+	Failures            []ScriptedCall  `json:"failures,omitempty"`
 }
 
 // ScriptedCall names an ITia call ("Compile", "OpenProject", ...).
