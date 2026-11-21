@@ -243,17 +243,17 @@ fetch('/api/audit').then(r => r.json()).then(j => j.entries.slice(0, 5).forEach(
 ```
 
 ```text
-oidc:alice auth.signin ok
 oidc:alice force.clear ok
 oidc:alice auth.elevate ok
 oidc:alice force.clear refused
 oidc:alice force.set ok
+oidc:alice auth.signin ok
 ```
 
-Newest first: she signed in again, cleared the force, confirmed at the provider,
-was refused the clear without it, and forced the tag. And `oidc:bob force.set
-refused`, further down. (Your list will also have the lines for the other times
-you signed in.)
+Newest first: she cleared the force, confirmed at the provider, was refused the
+clear without that, forced the tag, and signed in. Bob's refused force is
+further down: `oidc:bob force.set refused`. (Your list will also hold the lines
+for any other times you signed in.)
 
 ## 7. When it goes wrong
 
