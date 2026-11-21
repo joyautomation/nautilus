@@ -318,6 +318,25 @@ func ActingAnswers(err error) []string {
 	return d.ActingAnswers
 }
 
+// StateOf returns the CPU's mode an outcome_unknown download error
+// carries, as DownloadResult.State and StateSource: what TIA's messages
+// said before the download ended in doubt (a compare after the load that
+// failed or differs), or "" when they said nothing.
+func StateOf(err error) (state, source string) {
+	var e *Error
+	if !errors.As(err, &e) || len(e.Data) == 0 {
+		return "", ""
+	}
+	var d struct {
+		State       string `json:"state"`
+		StateSource string `json:"stateSource"`
+	}
+	if json.Unmarshal(e.Data, &d) != nil {
+		return "", ""
+	}
+	return d.State, d.StateSource
+}
+
 // KeptDevicesOf returns the kept devices a decision_required or declined
 // download error lists.
 func KeptDevicesOf(err error) []KeptDevice {

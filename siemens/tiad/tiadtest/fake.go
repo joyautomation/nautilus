@@ -1365,7 +1365,17 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 		for _, d := range f.CompareResult.Differences {
 			names = append(names, strings.TrimSpace(d.Object+" "+d.State))
 		}
-		return nil, outcomeUnknown("TIA reported the download loaded, but the compare right after it differs ("+strings.Join(names, ", ")+")", acting)
+		fl := outcomeUnknown("TIA reported the download loaded, but the compare right after it differs ("+strings.Join(names, ", ")+")", acting)
+		// The mode TIA's messages said, as the agent carries it.
+		if said != "" {
+			d, _ := fl.data.(map[string]any)
+			if d == nil {
+				d = map[string]any{}
+			}
+			d["state"], d["stateSource"] = said, source
+			fl.data = d
+		}
+		return nil, fl
 	}
 	res := tiad.DownloadResult{Downloaded: true, Questions: asked, State: said, StateSource: source, KeptDevices: keptList(s.kept), CompareEqual: true}
 	if req.Hardware {

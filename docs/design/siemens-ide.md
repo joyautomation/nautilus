@@ -642,8 +642,11 @@ last message that is exactly "<cpu> started." or "<cpu> stopped." for
 the CPU loaded decides. `stateSource: "tia-message"` labels it as that
 evidence. No such message means no `state`: a download that never
 stopped the CPU (TIA says nothing of its mode then), or TIA in a language
-other than English. A proof of the mode is the Web API's
-`Plc.ReadOperatingMode` (§4), separate from the download.
+other than English. A download that loaded and then ends in doubt (the
+compare after it fails or differs) carries the same `state` and
+`stateSource` in its `outcome_unknown` data (Go: `tiad.StateOf`). A
+proof of the mode is the Web API's `Plc.ReadOperatingMode` (§4),
+separate from the download.
 
 **The dry run is provisional.** Openness is believed to answer TIA's
 pre-download checks through a callback inside the real download call,

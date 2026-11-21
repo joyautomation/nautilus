@@ -48,10 +48,25 @@ namespace Tiad
 
         static TiadException Unknown(string why, List<string> acting, bool fatal)
         {
+            return Unknown(why, acting, fatal, null);
+        }
+
+        // Unknown after TIA's download returned carries the CPU's mode as
+        // TIA's messages said it (data.state, data.stateSource), when they
+        // said one: evidence of what TIA did, as on a success.
+        static TiadException Unknown(string why, List<string> acting, bool fatal, DownloadOutcome result)
+        {
             string c = DownloadChecks.Consequence(acting);
             string msg = why + (c == "" ? "" : "; " + c) + "; the CPU may or may not be loaded";
             if (!fatal) msg += ": compare before anything else";
-            return new TiadException(500, Kinds.OutcomeUnknown, msg, ActingData(acting), fatal);
+            Obj data = ActingData(acting);
+            if (result != null && result.State != "")
+            {
+                if (data == null) data = new Obj();
+                data["state"] = result.State;
+                data["stateSource"] = result.StateSource;
+            }
+            return new TiadException(500, Kinds.OutcomeUnknown, msg, data, fatal);
         }
 
         static Obj ActingData(List<string> acting)
@@ -390,7 +405,7 @@ namespace Tiad
             {
                 outcome = Kinds.OutcomeUnknown;
                 MayHaveStarted(req, acting);
-                throw Unknown("TIA approved the download but did not report a load", acting);
+                throw Unknown("TIA approved the download but did not report a load", acting, false, result);
             }
             // Success only on evidence (#789): TIA's result says loaded, and
             // an online compare right after, in this same call, is equal.
@@ -410,7 +425,7 @@ namespace Tiad
             {
                 outcome = Kinds.OutcomeUnknown;
                 MayHaveStarted(req, acting);
-                throw Unknown("TIA reported the download loaded, but the compare right after it failed (" + e.Message + ")", acting, e.Fatal);
+                throw Unknown("TIA reported the download loaded, but the compare right after it failed (" + e.Message + ")", acting, e.Fatal, result);
             }
             if (!equal)
             {
@@ -418,7 +433,7 @@ namespace Tiad
                 MayHaveStarted(req, acting);
                 var names = new List<string>();
                 foreach (var d in diffs) names.Add((d.Object + " " + d.State).Trim());
-                throw Unknown("TIA reported the download loaded, but the compare right after it differs (" + (names.Count == 0 ? "no differences named" : string.Join(", ", names.ToArray())) + ")", acting);
+                throw Unknown("TIA reported the download loaded, but the compare right after it differs (" + (names.Count == 0 ? "no differences named" : string.Join(", ", names.ToArray())) + ")", acting, false, result);
             }
             outcome = "loaded state=" + (result.State == "" ? "unknown" : result.State + " (" + result.StateSource + ")") + " compare=equal blocks=[" + TiaNames.BlockLabels(cmp.Blocks, 20) + "]" + (req.Hardware ? " hardwareVerified=false" : "");
             o["dryRun"] = false;

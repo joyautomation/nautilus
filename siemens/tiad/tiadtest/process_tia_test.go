@@ -1025,6 +1025,30 @@ func TestAgentAuditsEveryDownload(t *testing.T) {
 	waitLog(t, p, "outcome=bad_request")
 }
 
+// TestAgentCarriesTheModeOfADoubtfulDownload: a download that loaded and
+// then ends in doubt (the compare after it differs or fails) still says
+// the CPU's mode TIA's messages gave, labelled as that evidence; one TIA
+// never stopped says none.
+func TestAgentCarriesTheModeOfADoubtfulDownload(t *testing.T) {
+	p, s := downloadReady(t)
+	stop := []tiad.Question{{ID: tiad.QuestionStopCPU}}
+	req := tiad.DownloadRequest{Address: "192.0.2.10", Software: true, Announced: true, Decisions: tiad.Decisions{StopCPU: tiad.Yes(), StartAfter: tiad.No()}}
+	for _, sc := range []tiadtest.Script{{Questions: stop, CompareDiffers: true}, {Questions: stop, Failures: []tiadtest.ScriptedCall{{Call: "Compare", Message: "the CPU went offline"}}}} {
+		p.SetScript(t, sc)
+		_, err := s.Download(ctx, req)
+		if state, source := tiad.StateOf(err); tiad.Kind(err) != tiad.KindOutcomeUnknown || state != "STOP" || source != tiad.StateFromTIAMessage ||
+			strings.Join(tiad.ActingAnswers(err), ",") != "stop-cpu" {
+			t.Fatalf("%+v: %v (state %q %q)", sc, err, state, source)
+		}
+	}
+	p.SetScript(t, tiadtest.Script{CompareDiffers: true})
+	if _, err := s.Download(ctx, req); tiad.Kind(err) != tiad.KindOutcomeUnknown {
+		t.Fatalf("never stopped: %v", err)
+	} else if state, source := tiad.StateOf(err); state != "" || source != "" {
+		t.Fatalf("never stopped, yet state %q %q", state, source)
+	}
+}
+
 // TestAgentJournalsTheHardwareAttestation: the operator's attestation that
 // stands in for the hardware check (#789 hardware gate) is in the audit
 // line on every outcome: who, what, and when by tiad's clock once it was
