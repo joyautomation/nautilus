@@ -4,7 +4,7 @@
 // the elevation prompt apply as everywhere in the kit.
 
 import { kitFetch } from '../kitfetch.js';
-import { classify, failureText, type ConfigResult } from './client.js';
+import { classify, failureText, type ConfigFailure } from './client.js';
 
 export interface Check { name: string; ok: boolean; skipped?: boolean; detail?: string }
 export interface Probe { driver: string; device?: string; mode: string; why: string; ok: boolean; detail?: string; bad?: string[] }
@@ -38,6 +38,9 @@ export function refusal(status: number, body: string): { kind: ReturnType<typeof
 	return classify(status, body);
 }
 
+/** A step's answer; a failure that moved the candidate carries it. */
+export type ReviewResult = { ok: true; value: Staged } | { ok: false; kind: ConfigFailure; status: number; message: string; staged?: Staged };
+
 export interface ReviewClientOptions { url?: string; token?: string; fetch?: typeof fetch }
 
 export class ReviewClient {
@@ -51,7 +54,7 @@ export class ReviewClient {
 		this.#fetch = opts.fetch ?? kitFetch;
 	}
 
-	async #post(path: string, body?: unknown): Promise<ConfigResult<Staged>> {
+	async #post(path: string, body?: unknown): Promise<ReviewResult> {
 		const headers: Record<string, string> = {};
 		if (this.#token) headers['X-Nautilus-Token'] = this.#token;
 		if (body !== undefined) headers['Content-Type'] = 'application/json';
@@ -66,21 +69,21 @@ export class ReviewClient {
 		let value: Staged | undefined;
 		try { const j = JSON.parse(text) as Staged; if (j && typeof j.id === 'string') value = j; } catch { /* error body */ }
 		if (res.ok && value) return { ok: true, value };
-		if (value?.error) return { ok: false, kind: 'failed', status: res.status, message: value.error };
-		return { ok: false, ...refusal(res.status, text), status: res.status };
+		const r = refusal(res.status, value?.error ? JSON.stringify({ error: value.error }) : text);
+		return { ok: false, ...r, status: res.status, staged: value };
 	}
 
 	/** Stage the changed files over what the controller runs. */
-	stage(files: Record<string, string>): Promise<ConfigResult<Staged>> {
+	stage(files: Record<string, string>): Promise<ReviewResult> {
 		return this.#post('/staged', { files });
 	}
 
-	validate(id: string): Promise<ConfigResult<Staged>> {
+	validate(id: string): Promise<ReviewResult> {
 		return this.#post(`/staged/${encodeURIComponent(id)}/validate`);
 	}
 
 	/** Apply a valid candidate; revertIfSilent is a duration like "10s". */
-	apply(id: string, revertIfSilent?: string): Promise<ConfigResult<Staged>> {
+	apply(id: string, revertIfSilent?: string): Promise<ReviewResult> {
 		return this.#post(`/staged/${encodeURIComponent(id)}/apply`, revertIfSilent ? { revertIfSilent } : undefined);
 	}
 }

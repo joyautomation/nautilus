@@ -57,7 +57,8 @@ describe('config review: the staged-apply client', () => {
 	it('a failed apply answers with the candidate error, not a bare status', async () => {
 		const r = await new ReviewClient({ fetch: rec(422, { id: '7', state: 'failed', error: 'rollback worked' }) }).apply('7');
 		expect(r.ok).toBe(false);
-		if (!r.ok) expect(r.message).toBe('rollback worked');
+		if (!r.ok) expect(r.message.includes('rollback worked')).toBe(true);
+		if (!r.ok) expect(r.staged?.state).toBe('failed');
 	});
 	it('refusals name the fix', async () => {
 		const stale = await new ReviewClient({ fetch: rec(409, { error: 'candidate 7 is applied' }) }).validate('7');

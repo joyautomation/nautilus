@@ -3,7 +3,7 @@
 	// then Stage -> Validate -> Apply on #706's routes. Nothing is applied
 	// without a valid validation; every refusal says what to do.
 	import { diffFiles } from '../config/diff.js';
-	import { ReviewClient, type Staged } from '../config/review.js';
+	import { ReviewClient, type ReviewResult, type Staged } from '../config/review.js';
 	import type { Overlay } from '../config/form.js';
 	import Button from './Button.svelte';
 
@@ -34,12 +34,24 @@
 	const shown = $derived(!!staged && !stale && (staged.state !== 'applied' || diffs.length === 0));
 	const v = $derived(staged?.validation);
 
-	async function step(f: () => ReturnType<ReviewClient['stage']>, forKey = key) {
+	async function step(f: () => Promise<ReviewResult>, forKey = key) {
 		busy = true;
-		const r = await f();
-		busy = false;
+		let r;
+		try {
+			r = await f();
+		} catch (e) {
+			error = e instanceof Error ? e.message : String(e);
+			return;
+		} finally {
+			busy = false;
+		}
 		if (!r.ok) {
 			error = r.message;
+			// A refused step may still have moved the candidate (failed, invalid).
+			if (r.staged) {
+				staged = r.staged;
+				stagedFor = forKey;
+			}
 			return;
 		}
 		error = null;
@@ -52,14 +64,14 @@
 	const apply = () => staged && step(() => client.apply(staged!.id, revert.trim() || undefined), stagedFor);
 </script>
 
-<section class="review" aria-label="Review changes">
+<section class="review" aria-label="Review changes" aria-live="polite">
 	{#if error}<p class="msg" role="alert">{error}</p>{/if}
 	{#if diffs.length === 0 && staged?.state !== 'applied'}
 		<p class="note">No changes to review.</p>
 	{:else}
 		{#if diffs.length}<h3>Changes</h3>{/if}
 		{#each diffs as d (d.path)}
-			<pre class="diff" data-path={d.path}>{#each d.diff.split('\n') as l, i (i)}<span class:add={l.startsWith('+') && !l.startsWith('+++')} class:del={l.startsWith('-') && !l.startsWith('---')}>{l}
+			<pre class="diff" data-path={d.path}>{#each d.diff.split('\n') as l, i (i)}<span class:add={i > 1 && l.startsWith('+')} class:del={i > 1 && l.startsWith('-')}>{l}
 </span>{/each}</pre>
 		{/each}
 		{#if diffs.length}<div class="actions">

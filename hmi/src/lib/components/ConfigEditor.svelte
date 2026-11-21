@@ -60,6 +60,7 @@
 		loaded = f.value;
 		texts = { ...f.value.files };
 		overlay = { files: {}, changed: [] };
+		onoverlay?.(overlay);
 		let driversField: Field;
 		try {
 			const single = driverRows(f.value.files[f.value.manifest] ?? '')[0]?.path[0] === 'driver';
