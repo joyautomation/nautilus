@@ -91,6 +91,8 @@ func TestAuditPGSchema(t *testing.T) {
 		`GRANT SELECT ON audit_entries, audit_gaps, audit_anchors TO "naut""sink"`,
 		`GRANT INSERT (controller, seq, hash, reason) ON audit_anchors TO "naut""sink"`,
 		"ADD COLUMN IF NOT EXISTS copied_at",
+		"ALTER TABLE audit_anchors OWNER TO CURRENT_USER;",
+		"REVOKE ALL ON audit_entries, audit_gaps, audit_anchors FROM PUBLIC;",
 	} {
 		if !strings.Contains(sql, want) {
 			t.Errorf("schema lacks %q:\n%s", want, sql)
@@ -199,5 +201,64 @@ func TestPruneAuditMarksAnUnanchoredPrune(t *testing.T) {
 		if got := strings.Contains(line, `"unanchored":true`); got != c.mark {
 			t.Errorf("%+v: unanchored %v, want %v: %s", c, got, c.mark, line)
 		}
+	}
+}
+
+// The gate reads the database: lowered against what the newest anchor
+// covers; a database that cannot answer reads as lowered (Fable 9b
+// review, 2): a prune taken as "not lowered" then could never be shown to
+// follow its lowering.
+func TestPruneGate(t *testing.T) {
+	keep := func(k int64, ok bool, err error) func(context.Context) (int64, bool, error) {
+		return func(context.Context) (int64, bool, error) { return k, ok, err }
+	}
+	n := func(v uint64) func() uint64 { return func() uint64 { return v } }
+	for _, c := range []struct {
+		name string
+		g    func(context.Context) gateAnswer
+		want gateAnswer
+	}{
+		{"lowered", pruneGate(keep(30*86400, true, nil), n(0), n(5), 7*86400), gateAnswer{lowered: true}},
+		{"equal", pruneGate(keep(7*86400, true, nil), n(0), n(5), 7*86400), gateAnswer{}},
+		{"longer", pruneGate(keep(7*86400, true, nil), n(0), n(5), 30*86400), gateAnswer{}},
+		{"nothing anchored yet", pruneGate(keep(0, false, nil), n(0), n(5), 7*86400), gateAnswer{}},
+		{"database down", pruneGate(keep(0, false, errors.New("refused")), n(0), n(5), 7*86400), gateAnswer{lowered: true, unknown: true}},
+		{"anchored", pruneGate(keep(30*86400, true, nil), n(5), n(5), 7*86400), gateAnswer{lowered: true, anchored: true}},
+	} {
+		if got := c.g(t.Context()); got != c.want {
+			t.Errorf("%s: %+v, want %+v", c.name, got, c.want)
+		}
+	}
+}
+
+// A journal whose retention was not journalled at open journals it before
+// its first prune.
+func TestPruneAuditJournalsAMissingRetention(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	j, err := audit.OpenFile(dir, audit.FileOptions{Keep: 24 * time.Hour, Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	j.Record(audit.Entry{User: "u", Source: audit.SourceHMI, Action: "tag.write", Result: audit.ResultOK})
+	now = now.Add(72 * time.Hour)
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { defer close(done); pruneAuditWith(ctx, j, nil, nil, io.Discard) }()
+	var b []byte
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		files, _ := filepath.Glob(filepath.Join(dir, "audit-*.jsonl"))
+		if len(files) > 0 {
+			if b, _ = os.ReadFile(files[len(files)-1]); strings.Contains(string(b), `"audit.prune"`) {
+				break
+			}
+		}
+	}
+	cancel()
+	<-done
+	ret, prune := strings.Index(string(b), `"audit.retention"`), strings.Index(string(b), `"audit.prune"`)
+	if ret < 0 || prune < 0 || ret > prune {
+		t.Errorf("want the retention, then the prune:\n%s", b)
 	}
 }

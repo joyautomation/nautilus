@@ -77,15 +77,28 @@ func startAuditCopy(ctx context.Context, proj *project.Project, j *audit.FileJou
 		store.Close()
 	}
 	cur := audit.KeepSeconds(keep)
-	gate := func(ctx context.Context) gateAnswer {
-		lowered := j.Lowered()
-		if k, ok, err := store.AnchoredKeep(ctx); err == nil {
-			// The database knows what was anchored last: compare with that.
-			lowered = ok && audit.ShorterKeep(cur, k)
-		}
-		return gateAnswer{lowered: lowered, anchored: t.Status().Anchored >= j.RetentionSeq()}
-	}
+	gate := pruneGate(store.AnchoredKeep, func() uint64 { return t.Status().Anchored }, j.RetentionSeq, cur)
 	return t, stop, gate, nil
+}
+
+// pruneGate answers waitToPrune from the database: the run's retention
+// (cur) is lowered when it is shorter than the one the newest anchor
+// covers, and anchored once this run's anchors reach its retention entry.
+// A database that cannot answer is read as lowered: the last anchored
+// retention is not known, and a prune taken as "not lowered" then could
+// never be shown to have followed its lowering.
+func pruneGate(anchoredKeep func(context.Context) (int64, bool, error), anchored, retSeq func() uint64, cur int64) func(context.Context) gateAnswer {
+	return func(ctx context.Context) gateAnswer {
+		a := gateAnswer{anchored: anchored() >= retSeq()}
+		k, ok, err := anchoredKeep(ctx)
+		switch {
+		case err != nil:
+			a.lowered, a.unknown = true, true
+		case ok:
+			a.lowered = audit.ShorterKeep(cur, k)
+		}
+		return a
+	}
 }
 
 // checkCopyRole asks the database, once it answers, whether the copy's own
@@ -119,7 +132,8 @@ func checkCopyRole(ctx context.Context, store *auditpg.Store, t *audit.Tailer, s
 
 // gateAnswer is what the prune gate knows now.
 type gateAnswer struct {
-	lowered  bool // the run's retention is shorter than the last anchored one
+	lowered  bool // the run's retention is shorter than the last anchored one (or that is not known)
+	unknown  bool // the database could not say what was anchored last
 	anchored bool // the run's retention entry is anchored
 }
 
@@ -128,7 +142,7 @@ type gateAnswer struct {
 // ahead, marked unanchored.
 const pruneFullAt = 0.90
 
-// waitToPrune holds the run's first prune while the retention is lowered
+// waitToPrune holds a prune while the retention is lowered (or may be)
 // and its record not yet anchored, so the anchors show the lowering came
 // before the prune (verify reads a lowering anchored only with its prune
 // as forged). An equal or longer retention prunes at once. The wait is
@@ -155,7 +169,11 @@ func waitToPrune(ctx context.Context, gate func(context.Context) gateAnswer, use
 			return true, true
 		}
 		if !said {
-			fmt.Fprintln(stderr, "audit: the retention was lowered: the first prune waits until Postgres anchors the lowering (files are kept meanwhile)")
+			if a.unknown {
+				fmt.Fprintln(stderr, "audit: Postgres cannot say which retention it anchored last: the prune waits until it anchors this run's (files are kept meanwhile)")
+			} else {
+				fmt.Fprintln(stderr, "audit: the retention was lowered: the prune waits until Postgres anchors the lowering (files are kept meanwhile)")
+			}
 			said = true
 		}
 		select {

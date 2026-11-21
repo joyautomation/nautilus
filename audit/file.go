@@ -62,9 +62,6 @@ type FileJournal struct {
 	seq    uint64 // Seq of the last line written
 	broken error  // set when a failed write could not be undone: refuse until reopened
 	retSeq uint64 // Seq of the newest audit.retention entry this journal wrote, 0 before one
-	// lowered: the retention this journal recorded is shorter than the
-	// one the journal recorded before it.
-	lowered bool
 }
 
 // OpenFile opens (creating) the journal in dir and continues its chain from
@@ -396,17 +393,8 @@ func keepSeconds(keep time.Duration) int64 {
 // RecordRetention journals the retention in force (the journal's Keep) as
 // an audit.retention entry. by names who started the journal (the
 // process's user), for a report that lists a lowered retention.
-//
-// It also notes whether that retention is shorter than the one the journal
-// last recorded (Lowered): naut run then holds the first prune until the
-// lowering is anchored, so the anchor shows it came first.
 func (j *FileJournal) RecordRetention(by string) (Entry, error) {
-	keep := keepSeconds(j.opts.Keep)
-	prev, found, err := j.lastRetention()
-	if err != nil {
-		return Entry{}, err
-	}
-	d := map[string]any{"keep": keep}
+	d := map[string]any{"keep": keepSeconds(j.opts.Keep)}
 	if by != "" {
 		d["by"] = by
 	}
@@ -416,47 +404,8 @@ func (j *FileJournal) RecordRetention(by string) (Entry, error) {
 	}
 	j.mu.Lock()
 	j.retSeq = e.Seq
-	if found {
-		j.lowered = j.lowered || lower(keep, prev)
-	}
 	j.mu.Unlock()
 	return e, nil
-}
-
-// Lowered reports whether a retention this journal recorded since it was
-// opened is shorter than the one recorded before it.
-func (j *FileJournal) Lowered() bool {
-	j.mu.Lock()
-	defer j.mu.Unlock()
-	return j.lowered
-}
-
-// lastRetention is the keep of the newest audit.retention entry in the
-// files, read from the newest file back until one is found.
-func (j *FileJournal) lastRetention() (int64, bool, error) {
-	files, err := listFiles(j.dir)
-	if err != nil {
-		return 0, false, err
-	}
-	for k := len(files) - 1; k >= 0; k-- {
-		d, err := os.ReadFile(filepath.Join(j.dir, files[k]))
-		if err != nil {
-			return 0, false, err
-		}
-		lines := bytes.Split(bytes.TrimSuffix(d[:bytes.LastIndexByte(d, '\n')+1], []byte{'\n'}), []byte{'\n'})
-		for i := len(lines) - 1; i >= 0; i-- {
-			if !bytes.Contains(lines[i], []byte(ActionRetention)) {
-				continue
-			}
-			var e Entry
-			if json.Unmarshal(lines[i], &e) == nil && e.Action == ActionRetention {
-				if keep, ok := keepOf(e); ok {
-					return keep, true, nil
-				}
-			}
-		}
-	}
-	return 0, false, nil
 }
 
 // RetentionSeq is the Seq of the newest audit.retention entry this

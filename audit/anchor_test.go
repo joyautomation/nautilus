@@ -116,9 +116,10 @@ func (s *site) input() AnchorInput {
 			i++
 			return CopyRow{Seq: l.Seq, Hash: l.Hash, File: l.File, CopiedAt: s.s.copiedAt[l.Seq], Line: l.Raw}, true, nil
 		},
-		Gaps:    s.s.gaps,
-		Anchors: s.s.anchors,
-		Writers: map[string]WriterCheck{"naut_sink": {Protected: true}},
+		Gaps:       s.s.gaps,
+		Anchors:    s.s.anchors,
+		Writers:    map[string]WriterCheck{"naut_sink": {Protected: true}},
+		Controller: &RoleCheck{Role: "naut_sink", WriterCheck: WriterCheck{Protected: true}},
 	}
 }
 
@@ -301,9 +302,6 @@ func TestAnchoredHonestLoweringVerifies(t *testing.T) {
 	s := newSite(t, 30*day)
 	s.days(4)
 	s.start(2 * day)
-	if !s.j.Lowered() {
-		t.Fatal("the journal does not see its retention lowered")
-	}
 	s.step() // the run's first anchor covers the lowered retention
 	if got := s.tl.Status().Anchored; got < s.j.RetentionSeq() {
 		t.Fatalf("anchored %d, retention at %d", got, s.j.RetentionSeq())
@@ -598,23 +596,16 @@ func TestTailerAnchors(t *testing.T) {
 // and a prune journals the retention again before removing the file that
 // holds it.
 func TestRetentionIsJournalled(t *testing.T) {
+	for _, c := range []struct {
+		a, b  int64
+		short bool
+	}{{86400, 2 * 86400, true}, {2 * 86400, 86400, false}, {86400, 86400, false}, {86400, -1, true}, {-1, 86400, false}, {-1, -1, false}} {
+		if got := ShorterKeep(c.a, c.b); got != c.short {
+			t.Errorf("ShorterKeep(%d, %d) = %v", c.a, c.b, got)
+		}
+	}
 	s := newSite(t, 3*day)
-	if s.j.Lowered() {
-		t.Error("a first retention reads as lowered")
-	}
 	s.days(5)
-	s.start(30 * day)
-	if s.j.Lowered() {
-		t.Error("a longer retention reads as lowered")
-	}
-	s.start(2 * day)
-	if !s.j.Lowered() {
-		t.Error("a shorter retention does not read as lowered")
-	}
-	s.start(-1)
-	if s.j.Lowered() {
-		t.Error("keeping forever reads as lowered")
-	}
 	s.start(2 * day)
 	before := s.j.RetentionSeq()
 	// Rotate so the newest retention sits in a file old enough to prune.
@@ -658,5 +649,94 @@ func jsonUnmarshal(t *testing.T, b []byte, v any) {
 	t.Helper()
 	if err := json.Unmarshal(b, v); err != nil {
 		t.Fatalf("%s: %v", b, err)
+	}
+}
+
+// Fable 9b review, 1: a row put into the copy at seq 0 holding a keep-less
+// prune that claims to cover everything must not switch the prune checks
+// off. A row below seq 1 is itself a break, and a prune covers only lines
+// before it.
+func TestAnchoredHandMadeRowsDoNotSilencePrunes(t *testing.T) {
+	s := newSite(t, 30*day)
+	s.days(3)
+	s.forgePrune("audit-20261118.jsonl", float64(30*86400), s.c.t)
+	s.step()
+	in := s.input()
+	real := in.Copy
+	raw := []byte(`{"id":"x","seq":0,"ts":"2026-01-01T00:00:00Z","user":"system","source":"system","action":"audit.prune","target":"audit-20250101.jsonl","result":"ok","detail":{"last":"sha256:00","seq":1e15}}`)
+	first := true
+	in.Copy = func() (CopyRow, bool, error) {
+		if first {
+			first = false
+			return CopyRow{Seq: 0, Hash: lineHash(raw), File: "audit-20250101.jsonl", CopiedAt: s.c.t, Line: raw}, true, nil
+		}
+		return real()
+	}
+	r, err := VerifyAnchored(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantVerdict(t, r, Broken, "a row at a seq below 1", "PRUNED EARLY")
+
+	// The same prune in the journal itself, after the retention: it
+	// claims to remove lines after it.
+	s2 := newSite(t, 30*day)
+	s2.days(2)
+	s2.forge(Entry{Action: ActionPrune, Target: "audit-20200101.jsonl", Detail: map[string]any{"last": "sha256:00", "seq": float64(1e15), "keep": float64(30 * 86400)}})
+	s2.step()
+	wantVerdict(t, s2.verify(), Broken, "which is not before it")
+}
+
+// A row added to the copy next to real ones must chain on from them.
+func TestAnchoredCopyRowsChain(t *testing.T) {
+	s := newSite(t, 30*day)
+	s.days(3)
+	// Replace seq 3's row with a self-consistent line that does not
+	// chain from seq 2 (hash and line agree; prev is wrong).
+	for i, r := range s.s.rows {
+		if r.Seq == 3 {
+			raw := bytes.Replace(r.Raw, []byte(`"prev":"sha256:`), []byte(`"prev":"sha256:00`), 1)
+			s.s.rows[i].Raw, s.s.rows[i].Hash = raw, lineHash(raw)
+		}
+	}
+	wantVerdict(t, s.verify(), Broken, "does not chain on from its row for seq 2")
+}
+
+// A prune stamped ahead whose anchor came late (the database refused
+// anchors for days): the row's copied_at still bounds its time.
+func TestAnchoredCopiedAtBoundsThePrune(t *testing.T) {
+	s := newSite(t, 2*day)
+	s.days(3)
+	s.forgePrune("audit-20261120.jsonl", float64(2*86400), s.c.t.Add(10*day))
+	s.s.failNext = errors.New("refused")
+	s.step() // copied now; its anchor refused
+	s.c.t = s.c.t.Add(11 * day)
+	s.step() // anchored eleven days later
+	wantVerdict(t, s.verify(), Broken, "its time was set ahead")
+}
+
+// Fable 9b review, 4: an anchor's writer column is only as good as the
+// controller's role. A role that could rewrite it (here renaming the
+// writer to a protected role) leaves the verdict UNPROTECTED, and so does
+// a controller role nobody named.
+func TestAnchoredControllerRoleIsChecked(t *testing.T) {
+	s := newSite(t, 30*day)
+	s.days(2)
+	in := s.input()
+	in.Controller = &RoleCheck{Role: "naut_ctl", WriterCheck: WriterCheck{Why: "it owns audit_anchors"}}
+	r, _ := VerifyAnchored(in)
+	if r.Verdict != Unprotected || !strings.Contains(strings.Join(r.Unprotected, "\n"), `the controller's role "naut_ctl" could rewrite`) {
+		t.Errorf("an owning controller role: %s %v", r.Verdict, r.Unprotected)
+	}
+	in = s.input()
+	in.Controller = nil
+	r, _ = VerifyAnchored(in)
+	if r.Verdict != Unprotected || !strings.Contains(strings.Join(r.Unprotected, "\n"), "--controller-role") {
+		t.Errorf("an unknown controller role: %s %v", r.Verdict, r.Unprotected)
+	}
+	in = s.input()
+	r, _ = VerifyAnchored(in)
+	if r.Verdict != Verified || r.FirstAnchor.IsZero() || !strings.Contains(strings.Join(r.Notes, "\n"), "anchored since 2026-11-18T14:00:01Z; 2 entries are dated before that") {
+		t.Errorf("a protected controller role: %s, notes %v", r.Verdict, r.Notes)
 	}
 }

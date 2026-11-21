@@ -1347,14 +1347,17 @@ naut audit verify --anchor postgres
 Run it in the project's directory: the controller's name and the
 connection string come from `nautilus.yaml`, as `naut run` names them
 (`--controller` and `--dsn-env` override; on a pair, give
-`--controller <project>/<node>`). Besides the journal's own chain, it
-checks:
+`--controller <project>/<node>`). With `--dsn-env`, name the controller's
+database role with `--controller-role`. It prints when the anchors began
+and how many entries are dated before that, and warns when other
+controllers have anchors in the same database. Besides the journal's own
+chain, it checks:
 
 - every anchor's line hashes as anchored, and the journal reaches the
   newest anchor (lines cut off the end are found);
-- every line both hold is the same line, and the copy holds nothing past
-  the journal's head (a journal rewritten with its chain recomputed is
-  found);
+- every line both hold is the same line, the copy's own rows chain, and
+  the copy holds nothing past the journal's head (a journal rewritten with
+  its chain recomputed is found);
 - every gap in the copy is explained by the `audit.prune` of the line
   before it (otherwise `UNEXPLAINED GAP`);
 - every prune is one `naut run` would have written. Its `keep` is the
@@ -1365,21 +1368,32 @@ checks:
 
 The verdict is `verified` (exit 0), `BROKEN` (exit 1, each failure on its
 own line) or `UNPROTECTED` (exit 3). `UNPROTECTED` means every check
-passed, but a role that wrote an anchor could have rewritten the copy or
-the anchors: it is a superuser, owns or can become the owner of a table,
-holds `CREATEROLE`, `UPDATE`, `DELETE` or `TRUNCATE`, or may set
+passed, but a role that wrote an anchor, or the controller's own role,
+could have rewritten the copy or the anchors: it is a superuser, owns or
+can become the owner of a table, holds `CREATEROLE`, or holds `UPDATE`
+(on any column), `DELETE`, `TRUNCATE` or `TRIGGER`, or may set
 `copied_at`, `at` or `writer`. The anchors then prove nothing against
-someone holding that role. Run `naut audit pg-schema --role <role>`.
+someone holding that role. Run `naut audit pg-schema --role <role>`. A
+controller role verify does not know (with `--dsn-env` and no
+`--controller-role`) is `UNPROTECTED` too.
+
+Run `verify` where the controller's service user cannot change it: not
+with a connection string, a `nautilus.yaml` or a copy of the journal that
+user can edit. On the controller's own box, that user can point `verify`
+at a database of its own.
 
 **A lowered retention is the thing to look at.** Every lowering is
 printed as a `WARNING` whatever the verdict, with when and who started
 `naut run`. A lower `keep` prunes sooner, and a lowering is how someone
 would make a prune look honest. When `keep-days` is lowered, `naut run`
-holds the first prune until Postgres anchors the new retention. A prune
-whose lowering was journalled and pruned under the same anchor is
-`BROKEN`. If Postgres stays down and the journal's disk passes 90% full,
-the prune goes ahead, marked unanchored, and `verify` names it as an
-`UNANCHORED LOWERING` warning. The check stops a naive forger, not a
+holds each prune until Postgres anchors the new retention (and while
+Postgres is down, since it then cannot say which retention it anchored
+last). A prune whose lowering was journalled and pruned under the same
+anchor is `BROKEN`. If Postgres stays down and the journal's disk passes
+90% full, the prune goes ahead, marked unanchored, and `verify` names it
+as an `UNANCHORED LOWERING` warning. That mark is written by the
+controller, so it proves nothing: it only says why the prune did not
+wait. The check stops a naive forger, not a
 careful one: the controller's role can write an anchor itself, so a
 forger with its connection string can anchor a lowering at once and then
 prune. The warning still names that lowering, and the copy still holds

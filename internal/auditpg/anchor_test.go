@@ -64,7 +64,7 @@ func TestPostgresAnchorRoleCheck(t *testing.T) {
 	dsn := testDSN(t)
 	db := fresh(t, dsn)
 	asRole(t, dsn, "x")
-	roles(t, db, "naut_9b_sink", "naut_9b_wide", "naut_9b_update", "naut_9b_super", "naut_9b_creat", "naut_9b_owner")
+	roles(t, db, "naut_9b_sink", "naut_9b_wide", "naut_9b_update", "naut_9b_super", "naut_9b_creat", "naut_9b_owner", "naut_9b_colupd", "naut_9b_trig")
 	ctx := context.Background()
 	// The administrator runs pg-schema's statements, twice (it is safe to
 	// run again).
@@ -126,6 +126,8 @@ func TestPostgresAnchorRoleCheck(t *testing.T) {
 		`GRANT SELECT, UPDATE ON audit_entries TO naut_9b_update`,
 		`GRANT postgres TO naut_9b_super`,
 		`ALTER ROLE naut_9b_creat CREATEROLE`,
+		`GRANT UPDATE (line, hash) ON audit_entries TO naut_9b_colupd`,
+		`GRANT TRIGGER ON audit_anchors TO naut_9b_trig`,
 		`ALTER TABLE audit_gaps OWNER TO naut_9b_owner`,
 		`GRANT naut_9b_owner TO naut_9b_sink`,
 	} {
@@ -141,6 +143,8 @@ func TestPostgresAnchorRoleCheck(t *testing.T) {
 		"naut_9b_owner":  "it owns audit_gaps",
 		"naut_9b_sink":   "can SET ROLE naut_9b_owner, which owns audit_gaps",
 		"naut_9b_gone":   "no longer exists",
+		"naut_9b_colupd": "holds UPDATE on audit_entries",
+		"naut_9b_trig":   "holds TRIGGER on audit_anchors",
 	} {
 		if c := protection(t, admin, role); c.Protected || !strings.Contains(c.Why, why) {
 			t.Errorf("%s: %+v, want not protected because %q", role, c, why)

@@ -1347,6 +1347,19 @@ func pruneAuditWith(ctx context.Context, j *audit.FileJournal, gate func(context
 	t := time.NewTicker(24 * time.Hour)
 	defer t.Stop()
 	for {
+		// Every prune names the retention journalled before it: one that
+		// failed at open is tried again, and nothing is pruned without it.
+		if j.RetentionSeq() == 0 {
+			if _, err := j.RecordRetention(processUser()); err != nil {
+				fmt.Fprintf(stderr, "audit: prune skipped: the retention could not be journalled: %v\n", err)
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+				}
+				continue
+			}
+		}
 		prune := j.Prune
 		if gate != nil {
 			ok, unanchored := waitToPrune(ctx, gate, used, 2*time.Second, stderr)

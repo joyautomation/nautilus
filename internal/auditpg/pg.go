@@ -33,7 +33,7 @@ import (
 const entriesDDL = `
 CREATE TABLE audit_entries (
   controller text NOT NULL,
-  seq bigint NOT NULL,
+  seq bigint NOT NULL CHECK (seq >= 1),
   id text NOT NULL,
   ts timestamptz NOT NULL,
   "user" text NOT NULL,
@@ -62,7 +62,7 @@ CREATE INDEX audit_entries_ts ON audit_entries (controller, ts);`
 const anchorsDDL = `
 CREATE TABLE audit_anchors (
   controller text NOT NULL,
-  seq bigint NOT NULL,
+  seq bigint NOT NULL CHECK (seq >= 1),
   hash text NOT NULL,
   reason text NOT NULL,
   at timestamptz NOT NULL DEFAULT now(),
@@ -144,8 +144,8 @@ func (s *Store) ensure(ctx context.Context) error {
 	// A copy made before 9b has no copied_at: add it (as the owner), or
 	// say what to run.
 	var has bool
-	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.columns
-		WHERE table_name = 'audit_entries' AND column_name = 'copied_at' AND table_schema = current_schema())`).Scan(&has); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_attribute
+		WHERE attrelid = to_regclass('audit_entries') AND attname = 'copied_at' AND NOT attisdropped)`).Scan(&has); err != nil {
 		return err
 	}
 	if !has {
@@ -175,6 +175,11 @@ func Schema(role string) string {
 		b.WriteString(strings.TrimSpace(ddl) + "\n")
 	}
 	b.WriteString(addCopiedAt + ";\n")
+	b.WriteString("-- Tables the sink created itself are owned by it: take them over.\n")
+	for _, t := range Tables {
+		b.WriteString("ALTER TABLE " + t + " OWNER TO CURRENT_USER;\n")
+	}
+	b.WriteString("REVOKE ALL ON " + strings.Join(Tables, ", ") + " FROM PUBLIC;\n")
 	b.WriteString("REVOKE ALL ON " + strings.Join(Tables, ", ") + " FROM " + r + ";\n")
 	b.WriteString("GRANT SELECT ON " + strings.Join(Tables, ", ") + " TO " + r + ";\n")
 	for _, t := range Tables {
@@ -187,9 +192,9 @@ func quoteIdent(s string) string { return `"` + strings.ReplaceAll(s, `"`, `""`)
 
 // Protection checks whether role could rewrite the copy or the anchors:
 // it, or any role it is a member of (it can SET ROLE to any of them), is a
-// superuser, holds CREATEROLE, owns one of the tables, holds UPDATE,
-// DELETE or TRUNCATE on one, or may INSERT into a column whose default is
-// the evidence (copied_at, an anchor's at or writer). A role that no
+// superuser, holds CREATEROLE, owns one of the tables, holds UPDATE (on
+// any column), DELETE, TRUNCATE or TRIGGER on one, or may INSERT into a
+// column whose default is the evidence (copied_at, an anchor's at or writer). A role that no
 // longer exists cannot be checked, so it is not protected.
 func (s *Store) Protection(ctx context.Context, role string) (audit.WriterCheck, error) {
 	if err := s.ensure(ctx); err != nil {
@@ -252,7 +257,17 @@ func (s *Store) Protection(ctx context.Context, role string) (audit.WriterCheck,
 				why = append(why, as(m)+" owns "+t)
 				continue
 			}
-			for _, p := range []string{"UPDATE", "DELETE", "TRUNCATE"} {
+			// UPDATE on any one column rewrites a row; TRIGGER lets a
+			// session-long trigger rewrite the defaults that are evidence
+			// as rows go in.
+			var upd bool
+			if err := s.db.QueryRowContext(ctx, `SELECT has_any_column_privilege($1, $2, 'UPDATE')`, m.name, t).Scan(&upd); err != nil {
+				return audit.WriterCheck{}, err
+			}
+			if upd {
+				privs = append(privs, "UPDATE")
+			}
+			for _, p := range []string{"DELETE", "TRUNCATE", "TRIGGER"} {
 				var has bool
 				if err := s.db.QueryRowContext(ctx, `SELECT has_table_privilege($1, $2, $3)`, m.name, t, p).Scan(&has); err != nil {
 					return audit.WriterCheck{}, err
@@ -403,7 +418,10 @@ func (s *Store) Rows(ctx context.Context) (next func() (audit.CopyRow, bool, err
 		if err := rows.Scan(&seq, &r.Hash, &r.File, &r.CopiedAt, &line); err != nil {
 			return r, false, err
 		}
-		r.Seq, r.Line = uint64(seq), []byte(line)
+		r.Line = []byte(line)
+		if seq >= 1 {
+			r.Seq = uint64(seq) // below 1 stays 0: verify reports it
+		}
 		return r, true, nil
 	}
 	return next, func() { rows.Close() }, nil

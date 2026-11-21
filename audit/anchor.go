@@ -58,6 +58,17 @@ type AnchorInput struct {
 	// ClockSkew is the tolerance between the controller's clock (entry
 	// times) and the database's (default 5 minutes).
 	ClockSkew time.Duration
+	// Controller is the controller's own database role and its check:
+	// an anchor's writer column is only as good as the roles that could
+	// rewrite it, and the controller's is the one that matters. Nil: not
+	// known, which is never verified.
+	Controller *RoleCheck
+}
+
+// RoleCheck is a database role and whether it could rewrite the evidence.
+type RoleCheck struct {
+	Role string
+	WriterCheck
 }
 
 // Verdicts.
@@ -86,8 +97,10 @@ type AnchorReport struct {
 	Anchors     int
 	CopyRows    int
 	Compared    int // lines both the journal and the copy hold, compared hash for hash
-	// NewestAnchor is the newest anchor's Seq.
+	// NewestAnchor is the newest anchor's Seq; FirstAnchor the first
+	// anchor's time.
 	NewestAnchor uint64
+	FirstAnchor  time.Time
 }
 
 func (r *AnchorReport) problem(format string, a ...any) {
@@ -198,14 +211,17 @@ func VerifyAnchored(in AnchorInput) (AnchorReport, error) {
 	}
 
 	var (
-		prunes      []pruneRec
-		retentions  []retentionRec
-		ranges      = map[string]*fileRange{}
-		prevTS      time.Time
-		havePrevTS  bool
-		lastCopy    uint64
-		beforeFiles struct{ n, lo, hi uint64 }
-		pastHead    struct{ n, lo, hi uint64 }
+		prunes     []pruneRec
+		retentions []retentionRec
+		ranges     = map[string]*fileRange{}
+		prevTS     time.Time
+		havePrevTS bool
+		lastCopy   uint64
+		// beforeAnchors counts entries dated before the first anchor.
+		beforeAnchors int
+		lastHash      string // the hash of the copy's row at lastCopy
+		beforeFiles   struct{ n, lo, hi uint64 }
+		pastHead      struct{ n, lo, hi uint64 }
 		// fileHead is the journal's last line read so far (its head once
 		// the files are read): the chain walk stops at a break, this
 		// does not.
@@ -220,6 +236,15 @@ func VerifyAnchored(in AnchorInput) (AnchorReport, error) {
 		return r, err
 	}
 	for fok || cok {
+		if cok && cr.Seq == 0 {
+			// No journal writes a seq below 1: a row put in by hand
+			// (sorted first, so it is at the start).
+			r.problem("the copy holds a row at a seq below 1, which no journal writes: rows were put into the copy by hand")
+			if cr, cok, err = nextRow(in.Copy); err != nil {
+				return r, err
+			}
+			continue
+		}
 		var s seen
 		var fLine *Line
 		var row *CopyRow
@@ -244,7 +269,12 @@ func VerifyAnchored(in AnchorInput) (AnchorReport, error) {
 					r.problem("the copy is missing seq %d to %d and no gap records it: rows were removed from the copy", lastCopy+1, row.Seq-1)
 				}
 			}
-			lastCopy = row.Seq
+			// The copy's own chain: a row next to another chains on from
+			// it, as the tailer checked when it copied them.
+			if lastCopy > 0 && row.Seq == lastCopy+1 && e.Prev != lastHash {
+				r.problem("the copy's row for seq %d does not chain on from its row for seq %d: rows were put into the copy by hand", row.Seq, lastCopy)
+			}
+			lastCopy, lastHash = row.Seq, row.Hash
 			fr := ranges[row.File]
 			if fr == nil {
 				fr = &fileRange{min: row.Seq}
@@ -308,6 +338,9 @@ func VerifyAnchored(in AnchorInput) (AnchorReport, error) {
 			prunes = append(prunes, p)
 		}
 		prevTS, havePrevTS = s.e.TS, true
+		if len(anchors) > 0 && s.e.TS.Before(anchors[0].At) {
+			beforeAnchors++
+		}
 
 		if fLine != nil {
 			if fl, fok, err = files.next(); err != nil {
@@ -376,6 +409,11 @@ func VerifyAnchored(in AnchorInput) (AnchorReport, error) {
 	legacy := 0
 	covered := uint64(0) // the highest Seq an earlier prune removed
 	for _, p := range prunes {
+		// A prune removes lines written before it, never itself or later.
+		if p.lastSeq >= p.seq {
+			r.problem("the audit.prune at seq %d records removing up to seq %d, which is not before it: a prune naut does not write", p.seq, p.lastSeq)
+			continue
+		}
 		lo := covered
 		if p.lastSeq > covered {
 			covered = p.lastSeq
@@ -496,6 +534,22 @@ func VerifyAnchored(in AnchorInput) (AnchorReport, error) {
 		if !c.Protected {
 			r.Unprotected = append(r.Unprotected, fmt.Sprintf("anchor present but not protected: it proves nothing against someone with role %q (%s); run naut audit pg-schema --role %s", w, c.Why, w))
 		}
+	}
+
+	switch c := in.Controller; {
+	case c == nil:
+		r.Unprotected = append(r.Unprotected, "the controller's database role is not known, so whether it could rewrite the copy or the anchors (their writer column included) is not known: give --controller-role <the role in the controller's connection string>")
+	case !seenW[c.Role] && !c.Protected:
+		r.Unprotected = append(r.Unprotected, fmt.Sprintf("the controller's role %q could rewrite the copy or the anchors, their writer column included (%s): nothing here proves anything against it; run naut audit pg-schema --role %s", c.Role, c.Why, c.Role))
+	case seenW[c.Role] && !c.Protected:
+		// Already listed as an anchor's writer.
+	}
+
+	// When the anchors began, by the database's clock: entries dated
+	// before it were copied, and first anchored, after they were written.
+	if len(anchors) > 0 {
+		r.FirstAnchor = anchors[0].At
+		r.Notes = append(r.Notes, fmt.Sprintf("anchored since %s; %d entries are dated before that, so they rest on the journal as it stood then", r.FirstAnchor.UTC().Format(time.RFC3339), beforeAnchors))
 	}
 
 	switch {

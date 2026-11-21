@@ -22,7 +22,7 @@ const auditUsage = `naut audit — the runtime audit journal (#709)
 Usage:
   naut audit verify [dir]                    Walk the journal's hash chain (default dir: audit)
   naut audit verify [dir] --anchor postgres  Also check it against the copy and anchors in Postgres
-        [--dsn-env VAR] [--controller name] [--clock-skew 5m]
+        [--dsn-env VAR] [--controller name] [--controller-role role] [--clock-skew 5m]
   naut audit pg-schema --role <role>         Print the SQL that gives <role> the copy, unable to rewrite it
 
 verify checks that every line of every file is an audit entry whose prev is
@@ -45,9 +45,15 @@ from nautilus.yaml in this directory, as naut run names them, unless given.
 Its verdict:
   verified     every check passed and no anchor's writer could rewrite them (exit 0)
   BROKEN       a check failed (exit 1)
-  UNPROTECTED  the checks passed, but an anchor's database role could have
-               rewritten the copy or the anchors, so they prove nothing
-               against someone holding it (exit 3)
+  UNPROTECTED  the checks passed, but an anchor's database role, or the
+               controller's, could have rewritten the copy or the anchors,
+               so they prove nothing against someone holding it; or the
+               controller's role is not known (exit 3)
+The controller's role is the connection's when verify uses the
+controller's connection string; with --dsn-env, name it with
+--controller-role. Run verify where the controller's service user cannot
+change its connection string or its copy of the journal: on that box it
+can point verify at a database of its own.
 A lowered retention is printed as a WARNING whatever the verdict: it is
 the thing to look at, since what was pruned after it went sooner.
 Exit 2 is a usage or I/O error, or no anchors for the controller.
@@ -78,14 +84,15 @@ func runAuditTo(args []string, stdout, stderr io.Writer, getenv func(string) str
 		dsnEnv := fs.String("dsn-env", "", "the environment variable holding the copy's connection string")
 		controller := fs.String("controller", "", "the controller's name in the copy (default: nautilus.yaml's, as naut run names it)")
 		skew := fs.Duration("clock-skew", 5*time.Minute, "the tolerance between the controller's clock and the database's")
+		ctlRole := fs.String("controller-role", "", "the controller's database role (default: the role of the connection string, when it is the controller's)")
 		dir, err := parseInterleaved(fs, args[1:])
 		if err != nil {
 			fmt.Fprintf(stderr, "naut audit verify: %v\n", err)
 			return 2
 		}
 		if *anchor == "" {
-			if *dsnEnv != "" || *controller != "" {
-				fmt.Fprintln(stderr, "naut audit verify: --dsn-env and --controller go with --anchor postgres")
+			if *dsnEnv != "" || *controller != "" || *ctlRole != "" {
+				fmt.Fprintln(stderr, "naut audit verify: --dsn-env, --controller and --controller-role go with --anchor postgres")
 				return 2
 			}
 			if dir == "" {
@@ -97,7 +104,7 @@ func runAuditTo(args []string, stdout, stderr io.Writer, getenv func(string) str
 			fmt.Fprintf(stderr, "naut audit verify: --anchor %q: want postgres\n", *anchor)
 			return 2
 		}
-		return auditVerifyAnchored(anchoredArgs{dir: dir, dsnEnv: *dsnEnv, controller: *controller, skew: *skew}, stdout, stderr, getenv)
+		return auditVerifyAnchored(anchoredArgs{dir: dir, dsnEnv: *dsnEnv, controller: *controller, controllerRole: *ctlRole, skew: *skew}, stdout, stderr, getenv)
 	case "pg-schema":
 		fs := flag.NewFlagSet("naut audit pg-schema", flag.ContinueOnError)
 		fs.SetOutput(stderr)
@@ -168,8 +175,8 @@ func printChainNotes(r audit.Report, stdout io.Writer) {
 }
 
 type anchoredArgs struct {
-	dir, dsnEnv, controller string
-	skew                    time.Duration
+	dir, dsnEnv, controller, controllerRole string
+	skew                                    time.Duration
 }
 
 // auditVerifyAnchored is verify --anchor postgres: the journal against its
@@ -249,6 +256,30 @@ func auditVerifyAnchored(a anchoredArgs, stdout, stderr io.Writer, getenv func(s
 		}
 		writers[an.Writer] = c
 	}
+	// The controller's own role: named, or the connection's when verify
+	// uses the controller's connection string (no --dsn-env).
+	var ctl *audit.RoleCheck
+	role := a.controllerRole
+	if role == "" && a.dsnEnv == "" {
+		if role, err = store.Role(ctx); err != nil {
+			return fail("%v", err)
+		}
+	}
+	if role != "" {
+		c, err := store.Protection(ctx, role)
+		if err != nil {
+			return fail("checking role %q: %v", role, err)
+		}
+		ctl = &audit.RoleCheck{Role: role, WriterCheck: c}
+	}
+	var others []string
+	if names, err := store.Controllers(ctx); err == nil {
+		for _, n := range names {
+			if n != a.controller {
+				others = append(others, n)
+			}
+		}
+	}
 	gaps, err := store.Gaps(ctx)
 	if err != nil {
 		return fail("reading the gaps: %v", err)
@@ -258,9 +289,14 @@ func auditVerifyAnchored(a anchoredArgs, stdout, stderr io.Writer, getenv func(s
 		return fail("reading the copy: %v", err)
 	}
 	defer done()
-	r, err := audit.VerifyAnchored(audit.AnchorInput{Dir: a.dir, Copy: next, Gaps: gaps, Anchors: anchors, Writers: writers, ClockSkew: a.skew})
+	r, err := audit.VerifyAnchored(audit.AnchorInput{Dir: a.dir, Copy: next, Gaps: gaps, Anchors: anchors, Writers: writers, ClockSkew: a.skew, Controller: ctl})
 	if err != nil {
 		return fail("%v", err)
+	}
+	if len(others) > 0 {
+		// The name comes from nautilus.yaml and the environment, which
+		// whoever holds the box can change: say which others there are.
+		r.Warnings = append(r.Warnings, fmt.Sprintf("other controllers have anchors in this database: %s; this checked %q (is it the one this journal was anchored as?)", strings.Join(others, ", "), a.controller))
 	}
 	return printAnchored(r, a.controller, stdout)
 }
