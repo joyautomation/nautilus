@@ -61,7 +61,8 @@ Mono:
   the after-download callback, `NoAction` unless decided or after a
   cancel. It also cancels on a configuration asked twice, an answer it
   cannot apply, or a write that fails. Answers that can change the CPU
-  (stop, start, overwrite, reinitialize, anything unknown; never a
+  (stop, start, overwrite, consistent download, reinitialize, anything
+  unknown; never a
   start-after answered no, which writes `NoAction`:
   `DownloadChecks.Acting`) are kept as written: TIA may act on one before
   it asks the next, so a cancel after one is `outcome_unknown`, naming it

@@ -18,6 +18,11 @@ namespace Tiad
         public const string StopCpu = "stop-cpu";
         public const string Reinitialize = "reinitialize";
         public const string Overwrite = "overwrite";
+        // ConsistentDownload is TIA's ConsistentBlocksDownload check
+        // ("Download software to device"): loading the PLC software as one
+        // consistent whole. It is asked after stop-cpu (#789 walk-past
+        // window) and acts: yes loads.
+        public const string ConsistentDownload = "consistent-download";
         public const string StartAfter = "start-after";
         public const string Password = "password";
         // ConfigurationPassword is answered only by the request's
@@ -63,7 +68,7 @@ namespace Tiad
     // is different from false.
     public sealed class Decisions
     {
-        public bool? StopCpu, Overwrite, StartAfter;
+        public bool? StopCpu, Overwrite, ConsistentDownload, StartAfter;
         public List<string> Reinitialize = new List<string>();
         public string TrustCertificate = "";
         // KeptDevices names every device the caller agrees to load as the
@@ -76,6 +81,7 @@ namespace Tiad
             if (r == null) return d;
             d.StopCpu = r.OptBool("stopCpu");
             d.Overwrite = r.OptBool("overwrite");
+            d.ConsistentDownload = r.OptBool("consistentDownload");
             d.StartAfter = r.OptBool("startAfter");
             d.Reinitialize = r.Strs("reinitialize");
             d.TrustCertificate = r.Str("trustCertificate");
@@ -160,6 +166,9 @@ namespace Tiad
                         break;
                     case QuestionIds.Overwrite:
                         Sort(q, d.Overwrite, unanswered, declined);
+                        break;
+                    case QuestionIds.ConsistentDownload:
+                        Sort(q, d.ConsistentDownload, unanswered, declined);
                         break;
                     case QuestionIds.StartAfter:
                         // Either answer is a decision: no means load and

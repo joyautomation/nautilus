@@ -1346,7 +1346,7 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 // TIA configuration type (siemens-ide.md §3.5).
 func knownQuestion(id string) bool {
 	switch id {
-	case tiad.QuestionStopCPU, tiad.QuestionReinitialize, tiad.QuestionOverwrite, tiad.QuestionStartAfter,
+	case tiad.QuestionStopCPU, tiad.QuestionReinitialize, tiad.QuestionOverwrite, tiad.QuestionConsistentDownload, tiad.QuestionStartAfter,
 		tiad.QuestionPassword, tiad.QuestionConfigurationPassword, tiad.QuestionCertificate:
 		return true
 	}

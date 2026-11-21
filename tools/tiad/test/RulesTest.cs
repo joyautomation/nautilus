@@ -264,6 +264,7 @@ namespace Tiad.Test
                 { "StopModules", QuestionIds.StopCpu },
                 { "StartModules", QuestionIds.StartAfter },
                 { "OverwriteSystemData", QuestionIds.Overwrite },
+                { "ConsistentBlocksDownload", QuestionIds.ConsistentDownload },
                 { "DataBlockReinitialization", QuestionIds.Reinitialize },
                 { "DataBlockReinitializationOrKeepActualValues", QuestionIds.Reinitialize },
                 { "ModuleReadAccessPassword", QuestionIds.Password },
@@ -312,6 +313,8 @@ namespace Tiad.Test
             Eq(S(DownloadChecks.For("StartModules", false)), "NoAction", "start no");
             Eq(S(DownloadChecks.For("OverwriteSystemData", true)), "Overwrite", "overwrite yes");
             Eq(S(DownloadChecks.For("OverwriteSystemData", false)), null, "overwrite no");
+            Eq(S(DownloadChecks.For("ConsistentBlocksDownload", true)), "ConsistentDownload", "consistent download yes");
+            Eq(S(DownloadChecks.For("ConsistentBlocksDownload", false)), null, "consistent download no");
             Eq(S(DownloadChecks.For("DataBlockReinitialization", true)), "StopPlcAndReinitialize", "reinit yes");
             Eq(S(DownloadChecks.For("DataBlockReinitializationOrKeepActualValues", true)), "StopPlcAndReinitialize", "reinit-or-keep yes");
             Eq(S(DownloadChecks.For("DataBlockReinitialization", false)), null, "reinit no");
@@ -487,7 +490,7 @@ namespace Tiad.Test
 
         static void ActingAndPassive()
         {
-            foreach (string id in new[] { QuestionIds.StopCpu, QuestionIds.StartAfter, QuestionIds.Overwrite, QuestionIds.Reinitialize, QuestionIds.Other, "new-in-v22" })
+            foreach (string id in new[] { QuestionIds.StopCpu, QuestionIds.StartAfter, QuestionIds.Overwrite, QuestionIds.ConsistentDownload, QuestionIds.Reinitialize, QuestionIds.Other, "new-in-v22" })
             {
                 True(DownloadChecks.Acting(id), id + " is acting");
             }
@@ -1016,6 +1019,7 @@ namespace Tiad.Test
             var want = new List<string>
             {
                 "StopModules.StopAll", "StartModules.StartModule", "StartModules.NoAction", "OverwriteSystemData.Overwrite",
+                "ConsistentBlocksDownload.ConsistentDownload",
                 "DataBlockReinitialization.StopPlcAndReinitialize", "DataBlockReinitializationOrKeepActualValues.StopPlcAndReinitialize",
                 "TlsVerificationConfiguration.Trusted",
             };

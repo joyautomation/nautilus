@@ -582,7 +582,7 @@ Request:
   "hardware": true, "software": true,
   "dryRun": false,
   "decisions": { "stopCpu": true, "reinitialize": ["Tags"], "overwrite": true,
-                 "startAfter": true, "trustCertificate": "<sha256 fingerprint>",
+                 "consistentDownload": true, "startAfter": true, "trustCertificate": "<sha256 fingerprint>",
                  "keptDevices": ["<device name>"] },
   "announced": true,
   "secrets": { "protection": "<password>", "configurationPassword": "<password>" }
@@ -612,7 +612,8 @@ behaviour. So, until then:
   answer yes cancels the download there. TIA's side applies the answers as
   given; it never derives one itself.
 - **Answers that can change the CPU are acting** (`stop-cpu`,
-  `start-after` answered yes, `overwrite`, `reinitialize`, and any check
+  `start-after` answered yes, `overwrite`, `consistent-download`,
+  `reinitialize`, and any check
   tiad does not know; a password, a certificate or a start-after answered
   no is not). TIA may act on an answer
   before it asks the next check (Siemens's own sample says StopModules'
@@ -741,6 +742,10 @@ behaviour. So, until then:
   - `stop-cpu`
   - `reinitialize` (`objects` lists the DBs)
   - `overwrite`
+  - `consistent-download` (TIA's `ConsistentBlocksDownload`, "Download
+    software to device": loading the PLC software as one consistent
+    whole. A real software download onto a CPU in RUN asks it right after
+    `stop-cpu`, #789 walk-past window; V21 offers only yes)
   - `start-after`
   - `password`
   - `configuration-password` (TIA's `PlcMasterSecretPassword`: the
@@ -789,7 +794,8 @@ behaviour. So, until then:
 - **An upload replaces the project with the CPU's program**: the
   project no longer matches its spec, so a download needs a spec applied
   and a compile again. Compare and export still know the CPU.
-- **An answer of no** to `stop-cpu`, `overwrite` or `certificate` fails
+- **An answer of no** to `stop-cpu`, `overwrite`, `consistent-download`
+  or `certificate` fails
   the call with `declined`, and nothing is loaded (after an acting answer,
   `outcome_unknown`). `start-after: false` is
   a decision, not a refusal: load and stay in STOP.

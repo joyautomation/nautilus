@@ -239,6 +239,8 @@ namespace Tiad
                     return QuestionIds.StartAfter;
                 case "OverwriteSystemData":
                     return QuestionIds.Overwrite;
+                case "ConsistentBlocksDownload":
+                    return QuestionIds.ConsistentDownload;
                 case "DataBlockReinitialization":
                 case "DataBlockReinitializationOrKeepActualValues":
                     return QuestionIds.Reinitialize;
@@ -268,6 +270,10 @@ namespace Tiad
                     return Setting.Choose(yes ? "StartModule" : "NoAction");
                 case "OverwriteSystemData":
                     return yes ? Setting.Choose("Overwrite") : null;
+                case "ConsistentBlocksDownload":
+                    // V21's only selection: no cannot be written, so it
+                    // cancels.
+                    return yes ? Setting.Choose("ConsistentDownload") : null;
                 case "DataBlockReinitialization":
                 case "DataBlockReinitializationOrKeepActualValues":
                     return yes ? Setting.Choose("StopPlcAndReinitialize") : null;
@@ -286,7 +292,7 @@ namespace Tiad
         // Answered are the configuration types For can answer.
         public static readonly string[] Answered =
         {
-            "StopModules", "StartModules", "OverwriteSystemData", "DataBlockReinitialization",
+            "StopModules", "StartModules", "OverwriteSystemData", "ConsistentBlocksDownload", "DataBlockReinitialization",
             "DataBlockReinitializationOrKeepActualValues", "ModuleReadAccessPassword",
             "ModuleWriteAccessPassword", "PlcMasterSecretPassword", "TlsVerificationConfiguration",
         };
