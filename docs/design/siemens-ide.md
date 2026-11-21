@@ -877,16 +877,19 @@ behaviour. So, until then:
       - the project's access control, read by tiad from the session's
         project, is exactly `Disabled` (anything else, absent included,
         is refused), so the reset leaves access control off;
-      - the CPU's access control is shown off too, by one of two routes:
-        this session uploaded from that very address (the project's
-        setting is then the CPU's, and a later `keep` apply keeps it), or
+      - the CPU's access control is shown off too:
         `attestation.cpuAccessControl: "disabled"`, the operator's
         statement, with `by` and `text`.
-      Unproven: the upload route assumes an upload brings the CPU's
-      access control into the project. Only the bench CPU (`Disabled`)
-      has been uploaded; that a CPU with access control on reads back as
-      anything but `Disabled` is modelled by the fakes only, until a
-      bench upload of such a CPU shows it.
+      A second route, this session having uploaded from that very
+      address (the project's setting is then the CPU's, and a later
+      `keep` apply keeps it), is built and tested but OFF
+      (`UploadRouteEnabled`, naut-lead 2026-11-21): it assumes an upload
+      brings the CPU's access control into the project, and only the
+      bench CPU (`Disabled`) has been uploaded. That a CPU with access
+      control on reads back as anything but `Disabled` is modelled by
+      the fakes only. It is turned on (agent and Go together) only with a
+      bench upload of such a CPU; until then every refusal says it is not
+      yet available.
       An attestation that says `"enabled"` refuses, whatever else holds:
       tiad never resets a CPU whose access control is on. A reset given,
       then a cancel at a later check, is `outcome_unknown` naming
