@@ -225,7 +225,7 @@ export { default as AccountChip } from './components/AccountChip.svelte';
 export { default as ReferralBanner } from './components/ReferralBanner.svelte';
 // The audit journal (#709): GET /api/audit, read and shown.
 export { default as AuditTable } from './components/AuditTable.svelte';
-export { AuditClient, auditQuery, changeText, actorText } from './audit.js';
+export { AuditClient, auditQuery, changeText, changeRaw, actorText } from './audit.js';
 export type { AuditEntry, AuditFilter, AuditAnswer, AuditClientOptions } from './audit.js';
 export type { Fetch } from './kitfetch.js';
 

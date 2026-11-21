@@ -31,7 +31,11 @@ export interface AuditEntry {
 	prev?: string;
 }
 
-/** What to ask for. Empty fields match everything; matches are exact, ignoring case. */
+/**
+ * What to ask for. Empty fields match everything; matches are exact, ignoring
+ * case. `user` takes the full principal (`user:alice`) or the bare name the
+ * Who column shows (`alice`).
+ */
 export interface AuditFilter {
 	user?: string;
 	action?: string;
@@ -111,13 +115,82 @@ export class AuditClient {
 	}
 }
 
-/** The value an entry changed, for one line: `before → after`, or '' when it carries neither. */
-export function changeText(e: AuditEntry): string {
-	const show = (v: unknown) => (v === undefined ? '' : typeof v === 'string' ? v : JSON.stringify(v));
-	const b = show(e.before);
-	const a = show(e.after);
-	if (!b && !a) return '';
-	return b && a ? `${b} → ${a}` : a || b;
+const show = (v: unknown): string => (v === undefined || v === null ? '' : typeof v === 'string' ? v : JSON.stringify(v));
+const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+const SHORT = 48;
+const clip = (t: string) => (t.length > SHORT ? t.slice(0, SHORT - 1) + '…' : t);
+
+/** A clock time for an epoch-ms instant, in the viewer's zone. */
+export function clockText(ms: number): string {
+	return new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+/** An object as `key value, key value` for one line (values as short JSON). */
+function flat(o: Record<string, unknown>): string {
+	return clip(
+		Object.entries(o)
+			.map(([k, v]) => `${k} ${isObj(v) || Array.isArray(v) ? JSON.stringify(v) : show(v)}`)
+			.join(', ')
+	);
+}
+
+/**
+ * The value an entry changed, for one line. Plain values read `before → after`;
+ * the substitute actions read as the value, who set it and until when; any
+ * other object is flattened to `key value, …` and clipped. The whole of it
+ * stays available as `changeRaw`.
+ */
+export function changeText(e: AuditEntry, time: (ms: number) => string = clockText): string {
+	const b = isObj(e.before) ? e.before : undefined;
+	const a = isObj(e.after) ? e.after : undefined;
+	const d = e.detail;
+	switch (e.action) {
+		case 'substitute.start':
+			if (a && 'value' in a) {
+				const until = typeof a.untilMs === 'number' ? ` until ${time(a.untilMs)}` : '';
+				const live = b && 'value' in b ? ` (live ${show(b.value)})` : '';
+				return `${show(a.value)}${until}${live}`;
+			}
+			break;
+		case 'substitute.stop':
+			if (b && 'value' in b) {
+				const live = 'live' in b ? ` → live ${show(b.live)}` : '';
+				return `${show(b.value)}${live}`;
+			}
+			break;
+		case 'substitute.expire':
+		case 'substitute.lapse':
+			if (b && 'value' in b) {
+				const by = typeof b.by === 'string' && b.by ? ` by ${b.by}` : '';
+				const until = typeof d?.untilMs === 'number' ? ` until ${time(d.untilMs)}` : '';
+				const live = a && 'live' in a ? ` → live ${show(a.live)}` : '';
+				return `${show(b.value)}${by}${until}${live}`;
+			}
+			break;
+		case 'alarm.ack':
+			if (Array.isArray(e.after)) {
+				const ids = e.after.map(show);
+				return ids.length ? `acknowledged ${clip(ids.join(', '))}${ids.join(', ').length > SHORT ? ` (${ids.length})` : ''}` : 'nothing to acknowledge';
+			}
+			break;
+	}
+	const sb = b ? flat(b) : show(e.before);
+	const sa = a ? flat(a) : show(e.after);
+	if (!sb && !sa) return '';
+	return sb && sa ? `${sb} → ${sa}` : sa || sb;
+}
+
+/**
+ * The raw before/after as indented JSON, for the expandable detail; '' when
+ * `changeText` already says all of it (plain values on both sides).
+ */
+export function changeRaw(e: AuditEntry): string {
+	const structured = (v: unknown) => typeof v === 'object' && v !== null;
+	if (!structured(e.before) && !structured(e.after)) return '';
+	const o: Record<string, unknown> = {};
+	if (e.before !== undefined) o.before = e.before;
+	if (e.after !== undefined) o.after = e.after;
+	return JSON.stringify(o, null, 2);
 }
 
 /** The entry's principal for a person: the user's name, else as recorded. */

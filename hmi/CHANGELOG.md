@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Changed
+
+- **`<AuditTable/>` reads at a glance** (#709): the Change column says the substitute actions in a
+  few words (`95 until 14:05:00 (live 40)`, `95 → live 40`, `95 by akhan until … → live 41`) and an
+  acknowledge-all as the alarms it took (`acknowledged HiTemp, LoFlow`); other objects are
+  flattened and clipped, and the whole before/after is under an expandable "raw" on the cell
+  (`changeRaw`). Below 640 px of its own width the table stacks, one labelled card per entry,
+  instead of scrolling sideways. The user filter takes the bare name the Who column shows
+  (`alice`) as well as `user:alice`. `changeText` takes an optional clock formatter.
+
 ### Added
 
 - **`@joyautomation/nautilus-hmi/config`** (#711 slice 2): the configuration screens' kit, in its own

@@ -1061,10 +1061,21 @@ func ackTarget(_ *http.Request, body []byte) auditTarget {
 	var req ackRequest
 	decodeBody(body, &req)
 	target := strings.Join(req.IDs, ",")
+	t := auditTarget{target: target, detail: byDetail(req.By)}
 	if req.All {
-		target = "*"
+		// One entry for the one request, target "*"; what it acknowledged
+		// goes in after (the alarm ids the answer lists), since "*" alone
+		// would not say which alarms an operator accepted.
+		t.target = "*"
+		t.answered = func(body []byte) any {
+			var a ackAnswer
+			if json.Unmarshal(body, &a) != nil {
+				return nil
+			}
+			return a.IDs
+		}
 	}
-	return auditTarget{target: target, detail: byDetail(req.By)}
+	return t
 }
 
 func shelveTarget(_ *http.Request, body []byte) auditTarget {
@@ -1299,7 +1310,7 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 	out := auditResponse{Entries: []audit.Entry{}}
 	for _, e := range s.audit.ring.Recent() {
 		if (!from.IsZero() && e.TS.Before(from)) || (!to.IsZero() && e.TS.After(to)) ||
-			!matches(q.Get("user"), e.User) || !matches(q.Get("action"), e.Action) ||
+			!matchesUser(q.Get("user"), e.User) || !matches(q.Get("action"), e.Action) ||
 			!matches(q.Get("target"), e.Target) || !matches(q.Get("result"), e.Result) {
 			continue
 		}
@@ -1315,4 +1326,16 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 // matches is a filter: empty matches everything, else equal ignoring case.
 func matches(want, got string) bool {
 	return want == "" || strings.EqualFold(want, got)
+}
+
+// matchesUser is the user filter: the full principal ("user:alice"), or the
+// bare name the Who column shows ("alice"), which matches a person's
+// principal only: "token" or "system" are not names, and a bare "user"
+// does not match everyone.
+func matchesUser(want, got string) bool {
+	if matches(want, got) {
+		return true
+	}
+	name, ok := strings.CutPrefix(got, "user:")
+	return ok && strings.EqualFold(want, name)
 }

@@ -51,7 +51,15 @@
 		margin: 0 auto;
 		padding: 20px 24px 48px;
 		display: grid;
+		/* minmax(0, …): a wide table inside a card scrolls or stacks in the
+		   card instead of widening the column past the window. */
+		grid-template-columns: minmax(0, 1fr);
 		gap: 16px;
+	}
+	@media (max-width: 600px) {
+		.page {
+			padding: 12px 12px 32px;
+		}
 	}
 	.card {
 		background: var(--surface);

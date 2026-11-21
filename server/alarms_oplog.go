@@ -553,7 +553,7 @@ func (s *Server) alarmAckThroughLog(w http.ResponseWriter, r *http.Request, ids 
 	if ids == nil {
 		ids = s.alarms.UnackedIDs()
 		if len(ids) == 0 {
-			writeJSON(w, http.StatusOK, map[string]int{"acked": 0})
+			writeJSON(w, http.StatusOK, ackAnswer{IDs: []string{}})
 			return
 		}
 	}
@@ -578,7 +578,7 @@ func (s *Server) alarmAckThroughLog(w http.ResponseWriter, r *http.Request, ids 
 		unknownOutcome(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]int{"acked": n})
+	writeJSON(w, http.StatusOK, ackAnswer{Acked: n, IDs: ids})
 }
 
 // shelveThroughLog proposes a shelve, or an unshelve when until is zero.

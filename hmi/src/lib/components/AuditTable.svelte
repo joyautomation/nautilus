@@ -5,10 +5,16 @@
 	// exact matches on user, action, target and result, a time range, and a
 	// limit; the controller sends newest first and says when it cut the list.
 	//
+	// The Change column says known actions in a few words (a substitute's
+	// value, until when; the alarms an acknowledge-all took); what the entry
+	// holds in full is under "raw" on that cell. Below 640 px of its own
+	// width the table stacks, one card per entry, instead of scrolling
+	// sideways.
+	//
 	// The journal needs the audit permission. A role without it is told so
 	// rather than shown an empty table.
 	import { onMount } from 'svelte';
-	import { AuditClient, actorText, changeText, type AuditEntry, type AuditFilter } from '../audit.js';
+	import { AuditClient, actorText, changeText, changeRaw, type AuditEntry, type AuditFilter } from '../audit.js';
 	import { deniedFor } from '../auth.svelte.js';
 	import Button from './Button.svelte';
 	import StatusPill from './StatusPill.svelte';
@@ -103,31 +109,46 @@
 		{#if error}<p class="msg err" role="alert">{error}</p>{/if}
 
 		<div class="tablescroll">
-			<table>
-				<thead>
-					<tr>
-						<th>Time</th>
-						<th>Who</th>
-						<th>Action</th>
-						<th>Target</th>
-						<th>Change</th>
-						<th>Result</th>
-						<th>Detail</th>
+			<!-- svelte-ignore a11y_no_redundant_roles -->
+			<table role="table">
+				<!-- svelte-ignore a11y_no_redundant_roles -->
+				<thead role="rowgroup">
+					<!-- svelte-ignore a11y_no_redundant_roles -->
+					<tr role="row">
+						<th role="columnheader">Time</th>
+						<th role="columnheader">Who</th>
+						<th role="columnheader">Action</th>
+						<th role="columnheader">Target</th>
+						<th role="columnheader">Change</th>
+						<th role="columnheader">Result</th>
+						<th role="columnheader">Detail</th>
 					</tr>
 				</thead>
-				<tbody>
+				<!-- svelte-ignore a11y_no_redundant_roles -->
+				<tbody role="rowgroup">
 					{#each entries as e (e.id)}
-						<tr>
-							<td class="num">{fmtTime(e.ts)}</td>
-							<td title={`${e.user} via ${e.source}${e.from ? ` from ${e.from}` : ''}`}>{actorText(e)}</td>
-							<td class="mono">{e.action}</td>
-							<td class="mono">{e.target ?? ''}</td>
-							<td class="mono">{changeText(e)}</td>
-							<td><StatusPill kind={RESULT_KIND[e.result] ?? 'off'} label={e.result} /></td>
-							<td class="detail">{detailText(e)}</td>
+						{@const raw = changeRaw(e)}
+						{@const change = changeText(e)}
+						<!-- svelte-ignore a11y_no_redundant_roles -->
+						<tr role="row">
+							<td role="cell" class="num" data-label="Time">{fmtTime(e.ts)}</td>
+							<td role="cell" data-label="Who" title={`${e.user} via ${e.source}${e.from ? ` from ${e.from}` : ''}`}>{actorText(e)}</td>
+							<td role="cell" class="mono" data-label="Action">{e.action}</td>
+							<td role="cell" class="mono" data-label="Target">{e.target ?? ''}</td>
+							<td role="cell" class="change" class:none={!change && !raw} data-label="Change">
+								{#if change}<span class="mono">{change}</span>{/if}
+								{#if raw}
+									<details>
+										<summary>raw</summary>
+										<pre>{raw}</pre>
+									</details>
+								{/if}
+							</td>
+							<td role="cell" data-label="Result"><StatusPill kind={RESULT_KIND[e.result] ?? 'off'} label={e.result} /></td>
+							<td role="cell" class="detail" class:none={!detailText(e)} data-label="Detail">{detailText(e)}</td>
 						</tr>
 					{:else}
-						<tr class="empty"><td colspan="7">{loading ? 'Reading…' : 'No entries match.'}</td></tr>
+						<tr class="empty"><td role="cell" colspan="7">{loading ? 'Reading…' : 'No entries match.'}</td></tr>
 					{/each}
 				</tbody>
 			</table>
@@ -141,6 +162,7 @@
 <style>
 	.wrap {
 		display: grid;
+		grid-template-columns: minmax(0, 1fr);
 		gap: 10px;
 	}
 	.filters {
@@ -163,6 +185,7 @@
 		padding: 5px 8px;
 	}
 	.tablescroll {
+		container-type: inline-size;
 		overflow-x: auto;
 		border: 1px solid var(--border);
 		border-radius: var(--radius, 8px);
@@ -195,15 +218,84 @@
 		font-family: var(--mono);
 		font-variant-numeric: tabular-nums;
 	}
-	td.detail {
+	td.detail,
+	td.change {
 		white-space: normal;
+		overflow-wrap: anywhere;
+	}
+	td.change {
+		min-width: 10rem;
+		max-width: 26rem;
+	}
+	td.detail {
 		color: var(--muted);
 		font-size: var(--font-2xs);
+	}
+	summary {
+		cursor: pointer;
+		color: var(--muted);
+		font-size: var(--font-2xs);
+	}
+	pre {
+		margin: 4px 0 0;
+		font-family: var(--mono);
+		font-size: var(--font-2xs);
+		white-space: pre-wrap;
+		overflow-wrap: anywhere;
+		color: var(--ink-2);
 	}
 	tr.empty td {
 		text-align: center;
 		color: var(--muted);
 		padding: 16px;
+	}
+	/* Stacked: a card per entry, each cell labelled by its column. */
+	@container (max-width: 640px) {
+		/* Hidden to the eye, kept for assistive tech (display: none would drop it). */
+		thead {
+			position: absolute;
+			width: 1px;
+			height: 1px;
+			overflow: hidden;
+			clip-path: inset(50%);
+		}
+		table,
+		tbody {
+			display: block;
+		}
+		tr {
+			display: block;
+			padding: 6px 10px;
+			border-bottom: 1px solid var(--border);
+		}
+		td {
+			display: grid;
+			grid-template-columns: 5.5rem minmax(0, 1fr);
+			gap: 8px;
+			align-items: baseline;
+			padding: 3px 0;
+			border: 0;
+			white-space: normal;
+			overflow-wrap: anywhere;
+			max-width: none;
+		}
+		td::before {
+			content: attr(data-label);
+			font-size: var(--font-2xs);
+			font-weight: 600;
+			letter-spacing: 0.04em;
+			text-transform: uppercase;
+			color: var(--muted);
+		}
+		td.none {
+			display: none;
+		}
+		tr.empty td {
+			display: block;
+		}
+		tr.empty td::before {
+			content: none;
+		}
 	}
 	.msg {
 		margin: 0;
