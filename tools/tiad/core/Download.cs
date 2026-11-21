@@ -225,11 +225,13 @@ namespace Tiad
     {
         // Questions are TIA's pre-download checks, as asked.
         public List<Question> Questions = new List<Question>();
-        // Loaded is true only when the decide callback approved and TIA
-        // loaded the CPU.
+        // Loaded is true when TIA loaded the CPU (or ran its download
+        // without asking anything, which counts as loaded).
         public bool Loaded;
         // State is the CPU's mode afterwards ("RUN", "STOP"), or "".
         public string State = "";
+        // Messages is TIA's download result's messages, joined, or "".
+        public string Messages = "";
     }
 
     public sealed class Difference

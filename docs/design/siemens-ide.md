@@ -244,7 +244,7 @@ the session is gone.
 | `device_unverified` | 409 | The CPU has a device pin, but its identity could not be read, so the pin could not be checked (§3.8) |
 | `cpu_mismatch` | 409 | An apply's spec does not name the project's CPU (name, order, firmware), or a device of the spec's shares a name or an address with one the project keeps (§3.3). `data.cpu` is the project's CPU; nothing was changed |
 | `unclean_session` | 409 | An apply or an upload failed part-way on this session, so its project matches no spec: a later apply or save refuses. Close the session without saving (§3.3) |
-| `outcome_unknown` | 500 | A download may have loaded the CPU, or not: TIA failed once the download was decided, or TIA's side broke the decide contract. Not fatal: compare on the same session before anything else. The exception: when TIA Portal itself died in the download, it is fatal and names the fix (restart the agent, then compare in a fresh session), since every project open on that TIA is gone. The client's `OutcomeUnknown` covers this and `unreachable` |
+| `outcome_unknown` | 500 | A download may have loaded the CPU, or not: TIA failed once it asked a check, tiad cancelled after an answer that can change the CPU (`data.actingAnswers` names them), the compare right after a load failed or differs, or TIA's side broke its contract. Not fatal: compare on the same session before anything else. The exception: when TIA Portal itself died in the download, it is fatal and names the fix (restart the agent, then compare in a fresh session), since every project open on that TIA is gone. The client's `OutcomeUnknown` covers this and `unreachable` |
 
 ### 3.3 The station spec
 
@@ -602,34 +602,79 @@ behaviour. So, until then:
 - **A dry run must be announced too** (`announced: true`): it reaches
   the CPU.
 - **Its response says `provisional: true`.**
-- **TIA's side calls decide exactly once, before anything loads, even
-  when TIA asks nothing**, so a dry run without questions still cancels.
-  decide returns one resolved answer per question (or cancels), and TIA's
-  side applies those answers as given; it never derives one itself.
+- **TIA asks its checks one at a time, and lists them nowhere** (#789
+  S2b, measured on the bench CPU and by reflecting over Openness V21
+  offline): the pre-download callback gets one configuration per call,
+  that configuration has no parent, and no Openness type holds the pending
+  ones; Siemens documents only "called for each configuration that
+  requires an action". So each check is answered on its own, only from
+  the request, as TIA asks it, and the first one the request does not
+  answer yes cancels the download there. TIA's side applies the answers as
+  given; it never derives one itself.
+- **Answers that can change the CPU are acting** (`stop-cpu`,
+  `start-after` answered yes, `overwrite`, `reinitialize`, and any check
+  tiad does not know; a password, a certificate or a start-after answered
+  no is not). TIA may act on an answer
+  before it asks the next check (Siemens's own sample says StopModules'
+  StopAll "will set PLC into Stop mode"), so a cancel after an acting
+  answer is never a clean refusal: it answers `outcome_unknown`, lists the
+  acting answers in `data.actingAnswers`, and says plainly what they may
+  have done ("TIA may already have stopped the CPU: check its mode and
+  start it"). The audit line lists them too. Answer every check you are
+  prepared to answer in the first request: a later cancel after a stop
+  can leave the CPU in STOP. Whether TIA acts between checks is the
+  question for the next bench window that walks past the first check.
+- **A real download succeeds only on evidence** (#789): TIA's result
+  says it loaded (`Success`, `Information` or `Warning`; TIA's messages
+  come back in `messages`), AND an online compare of the PLC software
+  right after, in the same call, is equal (`compareEqual: true`).
+  Anything less is `outcome_unknown`, naming the part that failed: TIA's
+  result (an `Error` state is never loaded, asked or not), the compare
+  failing, or the compare differing (with the differing objects). This
+  holds whether TIA asked no check or many. It fails closed, by design,
+  where the compare cannot be equal: a CPU whose online access asks for
+  credentials (tiad answers no, so the compare fails), a hardware-only
+  download onto software that already differs, a kept device or system
+  block that compares different. Until a bench download shows what an
+  equal compare of a real CPU reports, an empty compare (no element
+  compared) also reads as equal. When the request said start
+  the CPU and the download ends in doubt after TIA's call,
+  `actingAnswers` names `start-after` too: TIA may have started it after
+  loading.
+  **The hardware configuration is never verified here**: Openness V21
+  has no online hardware compare (`HardwareObject.CompareTo` compares two
+  offline objects; the only online compare is
+  `PlcSoftware.CompareToOnline`). So a download that loaded hardware
+  says `hardwareVerified: false` and a `warning` in words, the audit line
+  says `hardwareVerified=false`, and a client shows it as a warning, never
+  a silent success. A hardware check (upload the CPU's hardware into a
+  scratch project, then compare offline) is a follow-up proven on the
+  bench, and a gate on #789 before the first hardware download to a
+  customer CPU.
 - **Anything that leaves the CPU in doubt answers `outcome_unknown`**:
-  TIA failing once the download was decided (a cancel included, since
-  "a cancel loads nothing" is what S2 must prove), a load tiad did not
-  approve, decide called zero times or twice. Never success, never a
-  plain refusal. The session stays open for the compare, unless TIA
-  itself died (below).
-- **How `tiad.Openness` keeps "decide once".** Openness calls its
-  pre-download callback once per configuration. At the first callback
-  `tiad.Openness` lists every pending configuration from that
-  configuration's parent, calls decide once with all of them as questions
-  (plus `start-after` when none asks it, so starting the CPU is decided
-  before loading and applied in the after-download callback), then writes
-  each configuration's resolved answer in its own callback, `NoAction`
-  included. A configuration counts as answered only once its write
-  succeeded; a list it cannot read, a configuration missing from it or
-  asked twice, or a write that fails cancels the download, and the cancel
-  stands even if TIA swallows the exception. After loading, start-after
-  is always written (`NoAction` unless decided), never left to TIA's
-  default. Before TIA starts, every selection tiad may write is checked
-  against this Openness's own enum types. Once TIA's download call is
-  entered, any failure answers `outcome_unknown`, whatever its kind,
-  including TIA itself dying inside the call (#789 stage 2): detaching
-  tiad's handlers afterwards never throws, so a TIA that is gone cannot
-  turn the answer into `operation_failed` (`DownloadSteps` in core).
+  TIA failing once it asked a check (a cancel included, since "a cancel
+  loads nothing" is what S2 must prove), a cancel after an acting answer,
+  a load tiad did not approve, a configuration asked twice. Never success,
+  never a plain refusal. The session stays open for the compare, unless
+  TIA itself died (below).
+- **How `tiad.Openness` answers.** In each pre-download callback it first
+  logs the configuration as handed over (its type and its parent's; each
+  read dropped if it fails, so a diagnostic never changes how the
+  download ends, and type names only, since password configurations pass
+  there too), then asks the agent for that one answer and writes it,
+  `NoAction` included. A configuration counts as written only once its
+  write succeeded; one asked twice, an answer it cannot apply, or a write
+  that fails cancels the download, and the cancel stands even if TIA
+  swallows the exception. Start-after is the request's `startAfter`,
+  decided before TIA is called and written in the after-download
+  callback (`NoAction` unless decided yes, and always `NoAction` after a
+  cancel), never left to TIA's default. Before TIA starts, every
+  selection tiad may write is checked against this Openness's own enum
+  types. Once TIA's download call is entered, any failure answers
+  `outcome_unknown`, whatever its kind, including TIA itself dying inside
+  the call (#789 stage 2): detaching tiad's handlers afterwards never
+  throws, so a TIA that is gone cannot turn the answer into
+  `operation_failed` (`DownloadSteps` in core).
   **What tiad throws back into TIA.** TIA Portal runs in its own process
   and calls tiad's delegates from there: the download's pre- and
   after-download callbacks, the upload's callback, the online handler.
@@ -638,8 +683,8 @@ behaviour. So, until then:
   tiad exception thrown from the pre-download callback killed TIA Portal
   that way. So each of those delegates is only `Boundary.Call` (core): it
   records the failure on tiad's side first (the decider's cancel, the
-  question asked, the upload's configuration), logs the reason and the
-  pending checks as read, then throws TIA a plain `OperationCanceledException`
+  question asked, the upload's configuration), logs the reason and each
+  check as handed over, then throws TIA a plain `OperationCanceledException`
   with that message and nothing else. How the download ended is read from
   that kept state, never from getting the thrown object back: a decline
   counts only when the decider declined, TIA called no callback after
@@ -661,25 +706,33 @@ behaviour. So, until then:
   without calling TIA. The `certificate` question's fingerprint is not read yet, so a trust decision
   cannot match it: a TLS check refuses until S2b. All of this is pure code
   in `tools/tiad/core/TiaRules.cs`, unit-tested without TIA.
-- **The gap: a download TIA asks nothing about.** With no pre-download
-  callback, `tiad.Openness` has nothing to cancel from, so "decide even
-  when TIA asks nothing" cannot hold: such a download loads, and the agent
-  answers `outcome_unknown` (decide ran zero times). So **the agent
-  refuses every dry run** (400, before TIA hears of it, no CPU claimed)
-  while its TIA side says it cannot promise the cancel (`ITia.CanDryRun`):
-  `tiad.Openness` says so until S2b shows TIA always asks at least one
-  check. The fakes still model the dry run the contract aims for.
-- **Start-after is always asked.** A real download needs a `startAfter`
-  decision, or it answers `decision_required`, even when TIA would not stop
-  the CPU. Both fakes ask it the same way.
+- **A download TIA asks nothing about.** Siemens calls the callback only
+  for a configuration that needs an answer, so a real download may ask
+  nothing: then the request alone approved it, it loads, and it succeeds
+  only on the evidence above. A dry run never passes a start-after to
+  TIA (it is always `NoAction`), so even a dry run TIA loads unasked never
+  starts the CPU. A dry run
+  has nothing to cancel from then: TIA loads, and the agent answers
+  `outcome_unknown`. So **the agent refuses every dry run** (400, before
+  TIA hears of it, no CPU claimed) while its TIA side says it cannot
+  promise the cancel (`ITia.CanDryRun`): `tiad.Openness` says so until
+  S2b shows a cancel at the first check loads nothing. The fakes model
+  the dry run the contract aims for.
+- **Start-after is decided before TIA is called.** A real download needs
+  a `startAfter` decision, or it answers `decision_required` before
+  anything reaches the CPU, even when TIA would not stop the CPU. Both
+  fakes do the same.
 - **Every download is audited**: one log line with the address, the
-  question IDs asked (never TIA's text), the decisions (request-supplied
-  names quoted), whether a protection password and a configuration
+  question IDs asked (never TIA's text), the acting answers given, the
+  decisions (request-supplied names quoted), whether a protection password and a configuration
   password were set (never their values) and the outcome, refusals
   included.
 
-- **A dry run** (provisional, see above) runs TIA's pre-download checks
-  and returns them as `questions`. The `id` is one of:
+- **A dry run** (provisional, see above) cancels at TIA's first
+  pre-download check and returns that one as `questions`, with
+  `questionsIncomplete: true`: TIA asks one check at a time, so a dry run
+  sees no more (and the kept-devices question, when there is one). The
+  `id` is one of:
   - `stop-cpu`
   - `reinitialize` (`objects` lists the DBs)
   - `overwrite`
@@ -695,8 +748,10 @@ behaviour. So, until then:
   - `other` (the check's own text). TIA's `UserManagementDownload` is
     one until S2b (§3.3, `cpu.accessControl`).
 - **A real download** answers each question only from `decisions`.
-  - An unanswered question fails the call with `decision_required`, and
-    nothing is loaded.
+  - The first check the request does not answer fails the call with
+    `decision_required`, naming that one, and nothing is loaded; answer
+    it, and TIA may ask another. After an acting answer it is
+    `outcome_unknown` instead (above).
   - A `reinitialize` answer must name every DB the check named.
   - `decisions.keptDevices` must name exactly the kept devices, checked
     before anything reaches the CPU. Missing, or naming another set (an
@@ -705,6 +760,15 @@ behaviour. So, until then:
   - tiad never picks a default.
   - An `other` question always refuses, so a check tiad has never seen
     cannot be answered by accident.
+  - `tiad.Openness` does not read a `reinitialize` check's DBs or a
+    `certificate` check's fingerprint yet, so on a real CPU both always
+    refuse. After a `stop-cpu` yes that refusal is `outcome_unknown` (the
+    CPU may be in STOP): until those are read, a download that would
+    reinitialize DBs cannot run, and the next bench window must not
+    expect one.
+  - A password answer is passive: a decline after it is still a clean
+    refusal, though TIA may already have used the password to log on to
+    the CPU. That changes neither the CPU's program nor its mode.
 - **`address`** must be in `TIAD_TARGETS`, or the call fails with
   `target_refused`. It must also equal the station's `cpu.address`
   (one station spec per CPU). In v1 this rules out a first download to a
@@ -721,7 +785,8 @@ behaviour. So, until then:
   project no longer matches its spec, so a download needs a spec applied
   and a compile again. Compare and export still know the CPU.
 - **An answer of no** to `stop-cpu`, `overwrite` or `certificate` fails
-  the call with `declined`, and nothing is loaded. `start-after: false` is
+  the call with `declined`, and nothing is loaded (after an acting answer,
+  `outcome_unknown`). `start-after: false` is
   a decision, not a refusal: load and stay in STOP.
 - **`announced`** must be true for a real download. It records that the
   shared-CPU rule was followed (tell naut-lead first). It is a convention,

@@ -13,8 +13,8 @@
 // at the first call that needs TIA, after every gate holds.
 //
 // Provisional until S2a and S2b (siemens-ide.md section 3.5): that a cancel
-// from the pre-download callback loads nothing, that a configuration's
-// parent lists every pending one, the connection addresses, and the CPU's
+// from the pre-download callback loads nothing, whether TIA acts on an
+// answer before it asks the next check, the connection addresses, and the CPU's
 // attribute names (checked against GetAttributeInfos before each is set,
 // never assumed). What only S2a can tell is refused, not guessed: GSDML
 // install, PROFINET devices, rack modules, the web server, upload
@@ -1039,9 +1039,10 @@ namespace Tiad.Openness
         // ---- download ----
 
         public DownloadOutcome Download(object project, string address, bool hardware, bool software,
-            Secrets secrets, Func<List<Question>, List<Answer>> decide)
+            Secrets secrets, bool? startAfter, Func<Question, Answer> answer)
         {
-            var decider = new DownloadDecider(decide);
+            var decider = new DownloadDecider(answer, startAfter);
+            int checks = 0;
             OnlineAsks online = null;
             DownloadProvider dp = null;
             ConfigurationTargetInterface target = null;
@@ -1070,12 +1071,19 @@ namespace Tiad.Openness
                     // TIA calls both callbacks from its own process: each is
                     // only Boundary.Call, and the decider keeps every cancel
                     // and failure (Keep) before TIA gets Boundary.Fail's.
+                    // TIA asks one configuration per call and lists them
+                    // nowhere (#789 S2b): each is logged as handed over
+                    // (touching only c, every read dropped if it fails),
+                    // then answered on its own.
                     DownloadResult r = dp.Download(target, at,
                         delegate(DownloadConfiguration c)
                         {
                             Boundary.Call("download: before loading", delegate
                             {
-                                Step st = decider.Next(c, c.GetType().Name, c.Message ?? "", delegate { return PendingOf(c); });
+                                DownloadDecider.Seen(++checks,
+                                    delegate { return c.GetType().Name; },
+                                    delegate { var p = c.Parent; return p == null ? null : p.GetType().Name; });
+                                Step st = decider.Next(c, c.GetType().Name, c.Message ?? "", null);
                                 Write(decider, c, st, secrets);
                             }, decider.Keep);
                         },
@@ -1117,26 +1125,6 @@ namespace Tiad.Openness
                 throw decider.Fail("writing " + st.Setting + " into " + c.GetType().Name + " failed: " + Message(e));
             }
             decider.Wrote(st);
-        }
-
-        // Pending lists every configuration pending with c, from c's parent.
-        // null when the parent does not list them.
-        static List<Pending> PendingOf(DownloadConfiguration c)
-        {
-            var parent = c.Parent as IEngineeringObject;
-            if (parent == null) return null;
-            var all = new List<Pending>();
-            foreach (EngineeringCompositionInfo ci in parent.GetCompositionInfos())
-            {
-                var comp = parent.GetComposition(ci.Name) as IEngineeringComposition;
-                if (comp == null) continue;
-                foreach (IEngineeringObject o in comp)
-                {
-                    var d = o as DownloadConfiguration;
-                    if (d != null) all.Add(new Pending { Key = d, Type = d.GetType().Name, Message = d.Message ?? "" });
-                }
-            }
-            return all;
         }
 
         // Apply writes a setting into a configuration: a selection by its

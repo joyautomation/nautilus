@@ -291,6 +291,46 @@ namespace Tiad
             "ModuleWriteAccessPassword", "PlcMasterSecretPassword", "TlsVerificationConfiguration",
         };
 
+        // Acting is whether answering the question id can change the CPU
+        // itself (stop it, start it, overwrite or reset its data), as
+        // opposed to a password or a certificate, which only lets the
+        // download go on. TIA asks its checks one at a time and may act on
+        // an answer before it asks the next (#789 S2b), so an acting answer
+        // written before a later cancel leaves the CPU in doubt. A question
+        // tiad does not know is acting.
+        public static bool Acting(string questionId)
+        {
+            switch (questionId)
+            {
+                case QuestionIds.Password:
+                case QuestionIds.ConfigurationPassword:
+                case QuestionIds.Certificate:
+                    return false;
+                default:
+                    return true;
+            }
+        }
+
+        // Consequence says plainly what acting answers (question ids)
+        // given before the download ended may already have done to the
+        // CPU, and what to do about it, or "" when there were none.
+        public static string Consequence(List<string> acting)
+        {
+            if (acting == null || acting.Count == 0) return "";
+            bool stop = false, start = false, other = false;
+            foreach (string id in acting)
+            {
+                if (id == QuestionIds.StopCpu || id == QuestionIds.Reinitialize) stop = true;
+                else if (id == QuestionIds.StartAfter) start = true;
+                else other = true;
+            }
+            var l = new List<string>();
+            if (stop) l.Add("TIA may already have stopped the CPU: check its mode and start it");
+            if (start) l.Add("TIA may already have started the CPU: check its mode");
+            if (other) l.Add("TIA may already have acted on them: check the CPU's mode and compare");
+            return "tiad had answered " + string.Join(", ", acting.ToArray()) + " before the download ended, so " + string.Join("; ", l.ToArray());
+        }
+
         // Selections are every (configuration type, selection) tiad may
         // write: For's selections, and start-after's NoAction, which an
         // after-download callback gets when nothing decided it.
@@ -308,14 +348,6 @@ namespace Tiad
             }
             return l;
         }
-    }
-
-    // Pending is one configuration TIA has pending before a download: Key
-    // is TIA's object (compared with Equals), Type its Openness type name.
-    public sealed class Pending
-    {
-        public object Key;
-        public string Type = "", Message = "";
     }
 
     // DownloadCancel is how the decider stops a download, inside tiad:
@@ -345,48 +377,55 @@ namespace Tiad
         public bool InDoubt;
     }
 
-    // Step is one answer to write into one TIA configuration. The glue
-    // writes Setting, then reports Wrote; a write that fails is reported
-    // with Fail. Index is the decided configuration's, or -1 for a write
-    // no decision covers (start-after's NoAction after an undecided load).
+    // Step is one answer to write into one TIA configuration of Type. The
+    // glue writes Setting, then reports Wrote; a write that fails is
+    // reported with Fail.
     public sealed class Step
     {
         public Setting Setting;
-        public int Index = -1;
+        public string Type = "";
     }
 
     // DownloadDecider keeps ITia.Download's promise over Openness's
-    // pre-download callback, which TIA calls once per configuration:
-    // decide runs exactly once, at the first callback, with every pending
-    // configuration as a question, before anything loads. Each callback
-    // then gets that configuration's resolved answer, written explicitly.
-    // Anything that would leave a configuration to TIA's default cancels:
-    // a list that cannot be read, a configuration missing from it or
-    // asked twice, an answer that cannot be applied. Provisional until S2b
-    // shows TIA lists its pending configurations and a cancel loads nothing.
+    // pre-download callback. TIA calls it once per configuration that
+    // needs an answer, one at a time, and lists them nowhere: no
+    // configuration has a parent, and no Openness type holds them (#789
+    // S2b, offline reflection on V21). So each callback is answered on its
+    // own, only from what the request decided (answer), before its answer
+    // is written; the first one the request does not answer yes cancels
+    // there. A configuration asked twice, an answer that cannot be applied,
+    // or anything that would leave a configuration to TIA's default
+    // cancels too.
     //
-    // Whether the CPU starts after loading is decided before loading too:
-    // when no pending configuration asks it, start-after is asked anyway,
-    // and TIA's after-download callback (After) gets that answer.
+    // TIA may act on an answer before it asks the next configuration (its
+    // own sample: StopModules StopAll "will set PLC into Stop mode"), so
+    // the decider keeps the acting answers it wrote (Acting): a cancel
+    // after one is never a clean decline, the CPU is in doubt.
+    //
+    // Whether the CPU starts after loading is the request's startAfter,
+    // decided before TIA is called; TIA's after-download callback (After)
+    // gets it.
     public sealed class DownloadDecider
     {
         // StartAfterType is the configuration that starts the CPU after a
         // download.
         public const string StartAfterType = "StartModules";
 
-        // AfterKey stands for a configuration TIA asks only after loading.
-        static readonly object AfterKey = new object();
+        readonly Func<Question, Answer> answer;
+        readonly bool? startAfter;
+        readonly List<object> seen = new List<object>();
 
-        readonly Func<List<Question>, List<Answer>> decide;
-        List<Pending> pending;
-        List<Setting> settings;
-        bool[] applied;
-
-        // Asked is the questions decide was asked, in order.
+        // Asked is the questions TIA asked, in order, each as answer got
+        // it.
         public readonly List<Question> Asked = new List<Question>();
 
-        // Approved is true once decide answered every question.
-        public bool Approved;
+        // Approved is how many of them answer approved.
+        public int Approved;
+
+        // Acting is every acting answer written into TIA before the
+        // download ended, as "Type = setting", in order
+        // (DownloadChecks.Acting).
+        public readonly List<string> Acting = new List<string>();
 
         // Cancelled is the cancel this decider made, if any: the state how
         // the download ended is read from. What comes back out of TIA's
@@ -400,9 +439,14 @@ namespace Tiad
         // however close in words, never does.
         public readonly string Token = NewToken();
 
-        public DownloadDecider(Func<List<Question>, List<Answer>> decide)
+        // answer is called once per configuration TIA asks, with its
+        // question; it returns the answer to write, or null to cancel the
+        // download there. startAfter is the request's decision whether the
+        // CPU starts after loading (null: it stays as it is).
+        public DownloadDecider(Func<Question, Answer> answer, bool? startAfter)
         {
-            this.decide = decide;
+            this.answer = answer;
+            this.startAfter = startAfter;
         }
 
         static string NewToken()
@@ -414,60 +458,64 @@ namespace Tiad
             return t.ToString();
         }
 
-        public bool Decided
-        {
-            get { return pending != null; }
-        }
-
         DownloadCancel Cancel(string why, bool declined)
         {
             Cancelled = new DownloadCancel(why, declined);
             return Cancelled;
         }
 
-        static string Name(Pending p)
+        static string Name(string type, string message)
         {
-            return p.Message == "" ? p.Type : p.Type + " (" + p.Message + ")";
+            return message == "" ? type : type + " (" + message + ")";
         }
 
-        int IndexOf(object key)
+        // Next answers TIA's callback for the configuration key, of type,
+        // with TIA's message. extra, when TIA's side read more, carries it:
+        // the blocks a reinitialize names (Objects) and the certificate a
+        // trust decision must match (Detail); null otherwise. It returns
+        // the step to write, or throws a DownloadCancel.
+        public Step Next(object key, string type, string message, Question extra)
         {
-            for (int i = 0; i < pending.Count; i++)
-            {
-                if (object.Equals(pending[i].Key, key)) return i;
-            }
-            return -1;
-        }
-
-        // Next answers TIA's callback for the configuration key. list reads
-        // every configuration pending: it runs once, at the first callback,
-        // and returns null when TIA's side cannot list them. Next returns
-        // the step to write, or throws a DownloadCancel. A configuration
-        // counts as answered only once its write is reported (Wrote).
-        public Step Next(object key, string type, string message, Func<List<Pending>> list)
-        {
+            string what = Name(type, message);
             if (Cancelled != null)
             {
                 // A callback after a decline: TIA went on past the cancel,
                 // so the download can no longer end declined.
-                if (Cancelled.Declined) Fail("TIA asked " + Name(new Pending { Type = type, Message = message }) + " after tiad declined the download (" + Cancelled.Message + "): TIA went on");
+                if (Cancelled.Declined) Fail("TIA asked " + what + " after tiad declined the download (" + Cancelled.Message + "): TIA went on");
                 throw Cancelled;
             }
-            if (pending == null) Decide(key, type, message, list);
-            int i = IndexOf(key);
-            if (i < 0)
+            foreach (object k in seen)
             {
-                throw Cancel("TIA asked " + Name(new Pending { Type = type, Message = message }) + " after the decision, which did not cover it", false);
+                if (object.Equals(k, key)) throw Cancel("TIA asked " + what + " twice", false);
             }
-            if (applied[i]) throw Cancel("TIA asked " + Name(pending[i]) + " twice", false);
-            return new Step { Setting = settings[i], Index = i };
+            seen.Add(key);
+            // Detail names TIA's configuration, except for a certificate,
+            // whose detail is what a trust decision must match: none unless
+            // TIA's side read one.
+            string id = DownloadChecks.QuestionId(type);
+            var q = new Question { Id = id, Message = message, Detail = id == QuestionIds.Certificate ? "" : type };
+            if (extra != null)
+            {
+                if (extra.Objects != null) q.Objects.AddRange(extra.Objects);
+                if (id == QuestionIds.Certificate) q.Detail = extra.Detail ?? "";
+            }
+            Asked.Add(q);
+            Answer a = answer(q.Copy());
+            if (a == null) throw Cancel("tiad cancels the download at TIA's " + what + ": the request does not answer it yes (" + Token + ")", true);
+            if (a.Question == null || a.Question.Id != id) throw Cancel("the answer to " + what + " is not to " + id, false);
+            Setting s = DownloadChecks.For(type, a.Yes);
+            if (s == null) throw Cancel("tiad cannot apply " + (a.Yes ? "yes" : "no") + " to " + what, false);
+            Approved++;
+            return new Step { Setting = s, Type = type };
         }
 
         // Wrote reports that step's setting is written into TIA's
-        // configuration.
+        // configuration. NoAction (start-after answered no) changes
+        // nothing, so it is never acting.
         public void Wrote(Step step)
         {
-            if (step.Index >= 0) applied[step.Index] = true;
+            if (step.Setting.Kind == Setting.Select && step.Setting.Value == "NoAction") return;
+            if (DownloadChecks.Acting(DownloadChecks.QuestionId(step.Type))) Acting.Add(step.Type + " = " + step.Setting);
         }
 
         // Fail reports that writing an answer failed: the download is
@@ -482,9 +530,8 @@ namespace Tiad
 
         // Keep records why a callback failed with e and returns the reason
         // to send TIA (Boundary.Call): the decider's own cancel as it is,
-        // anything else (a list that threw, a decide that threw, a log
-        // line) as a failure the decider keeps, so the download can never
-        // end declined after it.
+        // anything else (an answer that threw, a log line) as a failure the
+        // decider keeps, so the download can never end declined after it.
         public string Keep(Exception e)
         {
             var c = e as DownloadCancel;
@@ -501,140 +548,61 @@ namespace Tiad
             return Fail("tiad's download callback failed: " + text).Message;
         }
 
-        // loadSeen is set by TIA's after-download callback: TIA loaded.
-        bool loadSeen;
-
-        void Decide(object key, string type, string message, Func<List<Pending>> list)
-        {
-            string what = Name(new Pending { Type = type, Message = message });
-            List<Pending> all;
-            try
-            {
-                all = list();
-            }
-            catch (Exception e)
-            {
-                Listed(what, null);
-                throw Cancel("tiad cannot list TIA's pre-download checks (TIA asked " + what + "; reading them failed: " + TiaNames.Message(e) + "), so it asked nothing and cancelled", false);
-            }
-            Listed(what, all);
-            if (all == null || all.Count == 0)
-            {
-                throw Cancel("tiad cannot list TIA's pre-download checks (TIA asked " + what + "), so it asked nothing and cancelled", false);
-            }
-            for (int i = 0; i < all.Count; i++)
-            {
-                for (int j = 0; j < i; j++)
-                {
-                    if (object.Equals(all[i].Key, all[j].Key)) throw Cancel("TIA listed " + Name(all[i]) + " twice", false);
-                }
-            }
-            pending = all;
-            if (IndexOf(key) < 0)
-            {
-                pending = null;
-                throw Cancel("TIA asked " + what + ", which its list of pre-download checks lacks", false);
-            }
-            bool startAsked = false;
-            foreach (var p in all)
-            {
-                if (DownloadChecks.QuestionId(p.Type) == QuestionIds.StartAfter) startAsked = true;
-            }
-            if (!startAsked)
-            {
-                all = new List<Pending>(all);
-                all.Add(new Pending { Key = AfterKey, Type = StartAfterType, Message = "start the CPU after loading" });
-                pending = all;
-            }
-            foreach (var p in all)
-            {
-                // Detail names TIA's configuration, except for a certificate,
-                // whose detail is what a trust decision must match.
-                string id = DownloadChecks.QuestionId(p.Type);
-                Asked.Add(new Question { Id = id, Message = p.Message, Detail = id == QuestionIds.Certificate ? "" : p.Type });
-            }
-            applied = new bool[all.Count];
-            List<Answer> answers = decide(Copy(Asked));
-            if (answers == null) throw Cancel("the download was not decided: nothing was loaded (" + Token + ")", true);
-            if (answers.Count != all.Count) throw Cancel("decide answered " + answers.Count + " of " + all.Count + " questions", false);
-            settings = new List<Setting>();
-            for (int i = 0; i < all.Count; i++)
-            {
-                if (answers[i] == null || answers[i].Question == null || answers[i].Question.Id != Asked[i].Id)
-                {
-                    throw Cancel("decide's answer " + (i + 1) + " is not to " + Asked[i].Id, false);
-                }
-                Setting s = DownloadChecks.For(all[i].Type, answers[i].Yes);
-                if (s == null)
-                {
-                    throw Cancel("tiad cannot apply " + (answers[i].Yes ? "yes" : "no") + " to " + Name(all[i]), false);
-                }
-                settings.Add(s);
-            }
-            Approved = true;
-        }
-
-        // Listed logs TIA's pending configurations as read, before anything
-        // is decided from them: why a download was cancelled must never
-        // depend on the cancel coming back out of TIA (stage 2 lost it).
-        static void Listed(string what, List<Pending> all)
+        // Seen logs one callback as TIA hands it over, before anything is
+        // decided from it: its type and its parent's, each read on its own
+        // and dropped if reading it fails, so a diagnostic never changes
+        // how the download ends. Type names only: a password configuration
+        // passes here too.
+        public static void Seen(int n, Func<string> type, Func<string> parent)
         {
             try
             {
-                if (all == null)
-                {
-                    Log.Line("download: TIA asked {0}; its list of pending checks could not be read", TiaNames.LogSafe(what));
-                    return;
-                }
-                var names = new List<string>();
-                foreach (var p in all) names.Add(p == null ? "null" : Name(p));
-                Log.Line("download: TIA asked {0}; it lists {1} pending check(s): {2}", TiaNames.LogSafe(what), all.Count, TiaNames.LogSafe(string.Join("; ", names.ToArray())));
+                Log.Line("download: TIA asks check {0}: {1}; its parent: {2}", n, TiaNames.LogSafe(Read(type)), TiaNames.LogSafe(Read(parent)));
             }
             catch (Exception)
             {
             }
         }
 
-        static List<Question> Copy(List<Question> qs)
+        static string Read(Func<string> f)
         {
-            var l = new List<Question>();
-            foreach (var q in qs) l.Add(q.Copy());
-            return l;
+            try
+            {
+                return f() ?? "null";
+            }
+            catch (Exception e)
+            {
+                return "unreadable (" + e.GetType().Name + ")";
+            }
         }
 
+        // loadSeen is set by TIA's after-download callback: TIA loaded.
+        bool loadSeen;
+
         // After answers TIA's after-download callback for a configuration
-        // of type: the decided answer to the same configuration when it is
-        // still unapplied, and start-after's again if TIA asks it again
-        // after loading. Starting the CPU is never left to TIA's
-        // default: with nothing decided (a load nobody approved),
-        // start-after is written NoAction, so the CPU stays as it is. For
-        // any other configuration, null: TIA's own setting stands, since it
-        // cannot change what was loaded. Any after-download callback means
-        // TIA loaded.
+        // of type. Starting the CPU is never left to TIA's default: start-
+        // after gets the request's startAfter, or NoAction (the CPU stays
+        // as it is) when it said no, said nothing, or tiad cancelled (a
+        // load nobody approved). For any other configuration, null: TIA's
+        // own setting stands, since it cannot change what was loaded. Any
+        // after-download callback means TIA loaded.
         public Step After(string type)
         {
             loadSeen = true;
-            if (Approved)
-            {
-                // The decided answer, written again if TIA asks again.
-                for (int i = 0; i < pending.Count; i++)
-                {
-                    if (pending[i].Type == type && (!applied[i] || type == StartAfterType)) return new Step { Setting = settings[i], Index = i };
-                }
-            }
-            if (type == StartAfterType) return new Step { Setting = Setting.Choose("NoAction") };
-            return null;
+            if (type != StartAfterType) return null;
+            bool start = Cancelled == null && startAfter.HasValue && startAfter.Value;
+            return new Step { Setting = Setting.Choose(start ? "StartModule" : "NoAction"), Type = type };
         }
 
         // Finish reads how TIA's download call ended: entered is whether
         // TIA's download call was made at all, state its result's state
         // when it returned (null when it threw), messages its result's
         // messages, error what was thrown. A cancel TIA swallowed, a
-        // failed state, or a decided configuration TIA never asked about
-        // is a failure, and any failure once the call was entered is in
-        // doubt. A download TIA ran without one callback is loaded
-        // undecided: the agent reports that as outcome_unknown (decide ran
-        // zero times), never as a refusal.
+        // failed state, or a cancel after an acting answer is a failure,
+        // and any failure once the call was entered is in doubt. A
+        // download TIA ran without one callback is loaded when its result
+        // says so: the agent decides what that means (a dry run cannot
+        // cancel it).
         public DownloadEnd Finish(bool entered, string state, string messages, Exception error)
         {
             DownloadEnd end = Ended(state, messages, error);
@@ -667,6 +635,11 @@ namespace Tiad
             return false;
         }
 
+        string ActingNote()
+        {
+            return Acting.Count == 0 ? "" : " (after tiad wrote " + string.Join(", ", Acting.ToArray()) + ")";
+        }
+
         DownloadEnd Ended(string state, string messages, Exception error)
         {
             var end = new DownloadEnd();
@@ -675,54 +648,36 @@ namespace Tiad
                 if (Cancelled != null)
                 {
                     // A decline only when what TIA threw carries that
-                    // cancel and nothing shows it loaded anyway.
-                    if (Cancelled.Declined && !loadSeen && Carries(error, Token)) end.Declined = true;
-                    else if (Cancelled.Declined) end.Failure = "TIA went on after tiad cancelled the download (" + Cancelled.Message + "): " + TiaNames.Message(error);
-                    else end.Failure = Cancelled.Message;
+                    // cancel, nothing shows it loaded anyway, and no
+                    // acting answer went in before it.
+                    if (Cancelled.Declined && !loadSeen && Carries(error, Token))
+                    {
+                        if (Acting.Count == 0) end.Declined = true;
+                        else end.Failure = Cancelled.Message + ActingNote();
+                    }
+                    else if (Cancelled.Declined) end.Failure = "TIA went on after tiad cancelled the download (" + Cancelled.Message + ")" + ActingNote() + ": " + TiaNames.Message(error);
+                    else end.Failure = Cancelled.Message + ActingNote();
                     return end;
                 }
-                end.Failure = TiaNames.Message(error);
+                end.Failure = TiaNames.Message(error) + ActingNote();
                 return end;
             }
             string ended = "TIA's download ended " + (state ?? "without a state") + (string.IsNullOrEmpty(messages) ? "" : ": " + messages);
             if (Cancelled != null)
             {
-                end.Failure = "TIA went on after tiad cancelled the download (" + Cancelled.Message + "); " + ended;
+                end.Failure = "TIA went on after tiad cancelled the download (" + Cancelled.Message + ")" + ActingNote() + "; " + ended;
                 return end;
             }
-            if (!Decided)
-            {
-                end.Loaded = true;
-                return end;
-            }
+            // TIA's result state decides, asked or not: a download TIA ran
+            // without one callback is loaded only when its result says so
+            // (#1154 review), and in doubt otherwise.
             if (!TiaNames.DownloadLoaded(state))
             {
-                end.Failure = ended;
-                return end;
-            }
-            List<string> missed = Unapplied();
-            if (missed.Count > 0)
-            {
-                end.Failure = "TIA loaded without asking " + string.Join(", ", missed.ToArray()) + " again, so its answer was never written";
+                end.Failure = ended + ActingNote();
                 return end;
             }
             end.Loaded = true;
             return end;
-        }
-
-        // Unapplied names the decided pre-download configurations TIA
-        // never asked about in a callback, so never got their answer. The
-        // start-after question asked for the after-download callback is
-        // not one: TIA asks it only when it stopped the CPU.
-        public List<string> Unapplied()
-        {
-            var l = new List<string>();
-            if (pending == null) return l;
-            for (int i = 0; i < pending.Count; i++)
-            {
-                if (!applied[i] && pending[i].Key != AfterKey) l.Add(Name(pending[i]));
-            }
-            return l;
         }
     }
 
@@ -976,7 +931,7 @@ namespace Tiad
                 throw new TiaException(TiaNames.OnlineRefused(address, refused, end.Failure ?? "TIA went on with the download"), error, entered);
             }
             if (end.Failure != null) throw new TiaException(end.Failure, error, end.InDoubt);
-            return new DownloadOutcome { Questions = decider.Asked, Loaded = end.Loaded };
+            return new DownloadOutcome { Questions = decider.Asked, Loaded = end.Loaded, Messages = call == null ? "" : (call.Messages ?? "") };
         }
 
         // Quietly runs f, a clean-up step described by what, logging and

@@ -12,9 +12,12 @@ import (
 
 // The download half of the contract (siemens-ide.md §3.5): every
 // question answered only from the request, refusals before TIA, and a
-// dry run that loads nothing. Whether Openness can list the checks and
-// cancel with nothing loaded is provisional until S2; this is the
-// contract the agent aims for.
+// dry run that loads nothing. TIA asks its checks one at a time and lists
+// them nowhere (#789 S2b): each is answered on its own, the first not
+// answered yes cancels there, a dry run cancels at the first, and a
+// cancel after an acting answer (tiad.Acting) is outcome_unknown. That a
+// cancel loads nothing is provisional until S2; this is the contract the
+// agent aims for.
 
 const otherCPU = "192.0.2.99"
 
@@ -54,8 +57,14 @@ var ResolveCases = []struct {
 	{"protection password never answers configuration-password", []tiad.Question{qConfigPw}, tiad.Decisions{}, true, false, "configuration-password", ""},
 	{"configuration password never answers password", []tiad.Question{{ID: tiad.QuestionPassword}}, tiad.Decisions{}, false, true, "password", ""},
 	{"other never answered", []tiad.Question{{ID: tiad.QuestionOther, Message: "Something new"}}, tiad.Decisions{StopCPU: tiad.Yes(), Overwrite: tiad.Yes(), StartAfter: tiad.Yes()}, true, false, "other", ""},
-	{"unknown id is other", []tiad.Question{{ID: "new-in-v22"}}, tiad.Decisions{StopCPU: tiad.Yes()}, true, false, "new-in-v22", ""},
-	{"unanswered wins over declined", []tiad.Question{qStop, {ID: tiad.QuestionOverwrite}}, tiad.Decisions{StopCPU: tiad.No()}, false, false, "overwrite", "stop-cpu"},
+	{"an unknown check is other", []tiad.Question{{ID: "new-in-v22"}}, tiad.Decisions{StopCPU: tiad.Yes()}, true, false, "other", ""},
+	// TIA asks one check at a time: the first not answered yes decides.
+	{"the first check decides: declined", []tiad.Question{qStop, {ID: tiad.QuestionOverwrite}}, tiad.Decisions{StopCPU: tiad.No()}, false, false, "", "stop-cpu"},
+	{"the first check decides: unanswered", []tiad.Question{{ID: tiad.QuestionOverwrite}, qStop}, tiad.Decisions{StopCPU: tiad.No()}, false, false, "overwrite", ""},
+	{"a password first, then a refusal", []tiad.Question{{ID: tiad.QuestionPassword}, qStop}, tiad.Decisions{StopCPU: tiad.No()}, true, false, "", "stop-cpu"},
+	// Start-after answered no changes nothing, so a refusal after it is
+	// still clean.
+	{"start-after no first, then a refusal", []tiad.Question{{ID: tiad.QuestionStartAfter}, {ID: tiad.QuestionOverwrite}}, tiad.Decisions{StartAfter: tiad.No()}, false, false, "overwrite", ""},
 	{"all answered", []tiad.Question{qStop, qReinit, {ID: tiad.QuestionOverwrite}, {ID: tiad.QuestionStartAfter}, qCert, {ID: tiad.QuestionPassword}},
 		tiad.Decisions{StopCPU: tiad.Yes(), Overwrite: tiad.Yes(), StartAfter: tiad.Yes(), Reinitialize: []string{"Tags", "Prog_DB"}, TrustCertificate: "AB12"}, true, false, "", ""},
 }
@@ -122,10 +131,11 @@ func contractDownloadFlow(t *testing.T, start Starter) {
 	req := tiad.DownloadRequest{Address: benchCPU, Hardware: true, Software: true, Announced: true,
 		Decisions: tiad.Decisions{StopCPU: tiad.Yes(), StartAfter: tiad.Yes()}, Secrets: &tiad.Secrets{Protection: "protection-must-not-be-recorded"}}
 
+	// A dry run cancels at TIA's first check, so it sees only that one.
 	dry := req
 	dry.DryRun, dry.Decisions = true, tiad.Decisions{}
 	dr, err := s.Download(ctx, dry)
-	if err != nil || !dr.DryRun || !dr.Provisional || dr.Downloaded || questionIDs(dr.Questions) != "stop-cpu,start-after" || dr.Questions[0].Message != "The CPU must stop" {
+	if err != nil || !dr.DryRun || !dr.Provisional || !dr.QuestionsIncomplete || dr.Downloaded || questionIDs(dr.Questions) != "stop-cpu" || dr.Questions[0].Message != "The CPU must stop" {
 		t.Fatalf("dry run: %+v %v", dr, err)
 	}
 	if l := a.Loaded(t); len(l) != 0 {
@@ -137,6 +147,11 @@ func contractDownloadFlow(t *testing.T, start Starter) {
 	res, err := s.Download(ctx, req)
 	if err != nil || !res.Downloaded || res.DryRun || res.State != "RUN" || len(res.Questions) != 2 {
 		t.Fatalf("download: %+v %v", res, err)
+	}
+	// Success rests on an equal compare right after; the hardware it
+	// loaded is said to be unverified, never silently green.
+	if !res.CompareEqual || res.HardwareVerified == nil || *res.HardwareVerified || !strings.Contains(res.Warning, "hardware configuration is not verified") {
+		t.Fatalf("download evidence: compareEqual %v hardwareVerified %v warning %q", res.CompareEqual, res.HardwareVerified, res.Warning)
 	}
 	if cmp, err := s.Compare(ctx); err != nil || !cmp.Equal || len(cmp.Differences) != 0 {
 		t.Fatalf("compare after the download: %+v %v", cmp, err)
@@ -192,9 +207,25 @@ func contractDownloadRules(t *testing.T, start Starter) {
 	a.SetQuestions(t, []tiad.Question{qStop, {ID: tiad.QuestionReinitialize, Message: "reinit", Objects: []string{"Main_DB"}}})
 	base := tiad.DownloadRequest{Address: benchCPU, Software: true, Announced: true}
 
+	// Whether the CPU starts after loading is decided before TIA is
+	// called; then TIA's checks come one at a time.
 	_, err := s.Download(ctx, base)
-	if tiad.Kind(err) != tiad.KindDecisionRequired || questionIDs(tiad.Questions(err)) != "stop-cpu,reinitialize,start-after" {
+	if tiad.Kind(err) != tiad.KindDecisionRequired || questionIDs(tiad.Questions(err)) != "start-after" {
 		t.Fatalf("no decisions: %v %+v", err, tiad.Questions(err))
+	}
+	first := base
+	first.Decisions = tiad.Decisions{StartAfter: tiad.No()}
+	if _, err := s.Download(ctx, first); tiad.Kind(err) != tiad.KindDecisionRequired || questionIDs(tiad.Questions(err)) != "stop-cpu" {
+		t.Fatalf("only start-after decided: %v %+v", err, tiad.Questions(err))
+	}
+	// Stop answered yes, then a check the request does not answer: TIA
+	// may already have stopped the CPU, so never a clean refusal.
+	acted := base
+	acted.Decisions = tiad.Decisions{StopCPU: tiad.Yes(), StartAfter: tiad.No()}
+	_, err = s.Download(ctx, acted)
+	if tiad.Kind(err) != tiad.KindOutcomeUnknown || strings.Join(tiad.ActingAnswers(err), ",") != "stop-cpu" ||
+		!strings.Contains(err.Error(), "TIA may already have stopped the CPU: check its mode and start it") || !strings.Contains(err.Error(), "compare before anything else") {
+		t.Fatalf("a cancel after an acting answer: %v, want outcome_unknown naming stop-cpu", err)
 	}
 	no := base
 	no.Decisions = tiad.Decisions{StopCPU: tiad.No(), Reinitialize: []string{"Main_DB"}, StartAfter: tiad.No()}
@@ -217,7 +248,7 @@ func contractDownloadRules(t *testing.T, start Starter) {
 		t.Fatalf("refusals loaded %+v", l)
 	}
 	// Whether the CPU starts after loading is always decided before
-	// loading, even when TIA would not ask (tiad.Openness asks it).
+	// loading, even when TIA would not ask.
 	yes := base
 	yes.Decisions = tiad.Decisions{StopCPU: tiad.Yes(), Reinitialize: []string{"main_db"}}
 	if _, err := s.Download(ctx, yes); tiad.Kind(err) != tiad.KindDecisionRequired || questionIDs(tiad.Questions(err)) != "start-after" {
@@ -249,8 +280,8 @@ func contractResolve(t *testing.T, start Starter) {
 	loads := 0
 	for _, rc := range ResolveCases {
 		a.SetQuestions(t, rc.Questions)
-		// The agent asks start-after when TIA does not; "no" (stay as it
-		// is) leaves each case's outcome to its own questions.
+		// The agent needs start-after before TIA is called; "no" (stay as
+		// it is) leaves each case's outcome to its own questions.
 		d := rc.Decisions
 		if !strings.Contains(questionIDs(rc.Questions), "start-after") && d.StartAfter == nil {
 			d.StartAfter = tiad.No()
@@ -296,7 +327,7 @@ func contractResolve(t *testing.T, start Starter) {
 	// A partly agreed reinitialize names the DBs not agreed.
 	a.SetQuestions(t, []tiad.Question{qReinit})
 	_, b := rawJSON(t, c, "POST", path, map[string]any{"address": benchCPU, "software": true, "announced": true,
-		"decisions": map[string]any{"reinitialize": []string{"tags"}}})
+		"decisions": map[string]any{"reinitialize": []string{"tags"}, "startAfter": false}})
 	if !strings.Contains(string(b), "(not agreed: Prog_DB)") {
 		t.Errorf("a partly agreed reinitialize: %s", b)
 	}
@@ -569,7 +600,9 @@ func contractOneCPU(t *testing.T, start Starter) {
 		return s
 	}
 	one, two := mk("one"), mk("two")
-	dl := tiad.DownloadRequest{Address: benchCPU, Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}}
+	// The dry run cancels at TIA's first check.
+	a.SetQuestions(t, []tiad.Question{qStop})
+	dl := tiad.DownloadRequest{Address: benchCPU, Software: true, Announced: true, Decisions: tiad.Decisions{StopCPU: tiad.Yes(), StartAfter: tiad.No()}}
 	dry := dl
 	dry.DryRun = true
 	if _, err := one.Download(ctx, dry); err != nil {

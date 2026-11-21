@@ -190,15 +190,18 @@ namespace Tiad
         CompileResult Compile(object project, bool hardware, bool software);
 
         // Download loads the project into the CPU at address, never at
-        // any address of the project's own. It calls decide EXACTLY ONCE,
-        // with every pre-download check TIA asks as questions (an empty
-        // list when TIA asks nothing), BEFORE anything is loaded. decide
-        // returns null to cancel, and then nothing may be loaded; or one
-        // Answer per question, in order, to apply exactly as given. A dry
-        // run is a download whose decide always returns null. secrets
-        // carries the protection password a password question needs.
+        // any address of the project's own. TIA asks its pre-download
+        // checks one at a time and lists them nowhere (#789 S2b), so
+        // Download calls answer ONCE PER CHECK, in TIA's order, before
+        // that check's answer is written: answer returns null to cancel
+        // the download there, or the Answer to apply exactly as given. A
+        // dry run is a download whose answer always returns null: it
+        // cancels at the first check, and cannot cancel one TIA runs
+        // without asking anything. startAfter is whether the CPU starts
+        // after loading (null: it stays as it is). secrets carries the
+        // protection password a password question needs.
         DownloadOutcome Download(object project, string address, bool hardware, bool software,
-            Secrets secrets, Func<List<Question>, List<Answer>> decide);
+            Secrets secrets, bool? startAfter, Func<Question, Answer> answer);
 
         // Compare compares the project with the CPU at address and fills
         // differences; it returns whether they are equal.

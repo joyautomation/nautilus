@@ -51,26 +51,34 @@ CI has no Siemens assemblies, so `tiad.Openness` decides nothing itself. Every
 decision is pure code in `core/TiaRules.cs`, unit-tested by `test/` under
 Mono:
 
-- **Download, decide once.** Openness calls the pre-download callback once
-  per configuration, but `ITia.Download` calls `decide` once, with every
-  question, before anything loads. At the first callback the glue lists
-  every pending configuration (from that configuration's parent), asks
-  `decide` once, and then writes each configuration's resolved answer in its
-  own callback, `NoAction` included. Whether to start the CPU afterwards is
-  asked before loading too. It cancels (throws from the callback) on a list
-  it cannot read, a configuration missing from the list or asked twice, an
-  answer it cannot apply, a write that fails, or a no. A configuration is
-  answered only once its write succeeded. After loading, start-after is
-  always written, `NoAction` unless decided. Once TIA's download call is
-  entered, any failure answers `outcome_unknown`, and so does a download
-  TIA made without a single callback. How a download ended is decided in
-  core too (`DownloadDecider.Finish`). Before TIA starts, every selection
-  tiad may write is checked against this Openness's enum types.
+- **Download, one check at a time.** Openness calls the pre-download
+  callback once per configuration and lists them nowhere: a configuration
+  has no parent, and no Openness type holds them (#789 S2b, V21). So
+  `ITia.Download` calls `answer` once per check, in TIA's order, and each
+  is answered on its own, only from the request; the first one not
+  answered yes cancels there (throws from the callback). Start-after is
+  the request's `startAfter`, decided before TIA is called and written in
+  the after-download callback, `NoAction` unless decided or after a
+  cancel. It also cancels on a configuration asked twice, an answer it
+  cannot apply, or a write that fails. Answers that can change the CPU
+  (stop, start, overwrite, reinitialize, anything unknown; never a
+  start-after answered no, which writes `NoAction`:
+  `DownloadChecks.Acting`) are kept as written: TIA may act on one before
+  it asks the next, so a cancel after one is `outcome_unknown`, naming it
+  and what to check. Each callback is logged as TIA hands it over (its type
+  and its parent's; every read dropped if it fails) before anything is
+  decided. Once TIA's download call is entered, any failure answers
+  `outcome_unknown`. A real download succeeds only when TIA's result says
+  loaded AND the agent's online compare right after (PLC software only:
+  Openness has no online hardware compare) is equal; a hardware download
+  says `hardwareVerified: false`. How a download ended is decided in core too
+  (`DownloadDecider.Finish`). Before TIA starts, every selection tiad may
+  write is checked against this Openness's enum types.
 - **No dry runs yet.** With no pre-download callback there is nothing to
   cancel from, so a dry run could load. `ITia.CanDryRun` is false for
   `tiad.Openness`, and the agent refuses every dry run before TIA hears of
-  it, until S2b proves TIA always asks, the list, and that a cancel loads
-  nothing.
+  it, until S2b proves a cancel at the first check loads nothing (a dry
+  run sees only that first check: TIA asks one at a time).
 - **Names are checked, not guessed.** The CPU's attributes (address, subnet
   mask, router, PROFINET name, generated names off) are checked against
   `GetAttributeInfos` before each is set; a missing one fails, naming the
