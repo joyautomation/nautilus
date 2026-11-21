@@ -73,6 +73,7 @@ $CfgDir       = Join-Path $env:ProgramData 'tiad'
 $TokenFile    = Join-Path $CfgDir "$TaskName.token"
 $AccessKeyFile = Join-Path $CfgDir "$TaskName.access-key"
 $PinsDir      = Join-Path $CfgDir 'pins'
+$DeploysDir   = Join-Path $CfgDir 'deploys'
 $FwGroup      = "tiad $TaskName"
 
 # The agent runs elevated, so everything it runs, reads or works in is
@@ -251,7 +252,7 @@ if ($Uninstall) {
     if (Test-Path $InstallDir) { Remove-Item $InstallDir -Recurse -Force; Ok "$InstallDir removed" }
     # The token grants downloads to a CPU: never leave it behind.
     if (Test-Path $TokenFile) { Remove-Item $TokenFile -Force; Ok "token removed" }
-    Say "left alone: $WorkDir, the logs, the device pins ($PinsDir) and the access-record key ($AccessKeyFile) in $CfgDir, and the Openness group membership"
+    Say "left alone: $WorkDir, the logs, the device pins ($PinsDir), the deploy record ($DeploysDir) and the access-record key ($AccessKeyFile) in $CfgDir, and the Openness group membership"
     exit 0
 }
 
@@ -417,6 +418,11 @@ Secure-Dir $WorkDir
 # the agent restarts) keeps every pin.
 Secure-Dir $PinsDir
 Ok "device pins in $PinsDir (kept across reinstalls)"
+# The deploy record says what each CPU was loaded with: every deploy's
+# project archive and the journal. Locked like the pins, outside the work
+# dir, and never wiped.
+Secure-Dir $DeploysDir
+Ok "deploy record in $DeploysDir (kept across reinstalls)"
 $bat = Join-Path $InstallDir 'run-tiad.bat'
 $noTiaLine = if ($NoTia) { 'set TIAD_NO_TIA=1' } else { 'set TIAD_NO_TIA=' }
 @"
@@ -428,6 +434,7 @@ set TIAD_TOKEN_FILE=$TokenFile
 set TIAD_ACCESS_KEY_FILE=$AccessKeyFile
 set TIAD_WORKDIR=$WorkDir
 set TIAD_PINS_DIR=$PinsDir
+set TIAD_DEPLOYS_DIR=$DeploysDir
 set TIAD_TARGETS=$Targets
 $noTiaLine
 set "TIAD_PC_INTERFACE=$PcInterface"

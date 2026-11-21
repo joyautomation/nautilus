@@ -30,8 +30,11 @@ func TestAgentRefusesUnsafeConfig(t *testing.T) {
 	bin := fakeBin(t)
 	work := t.TempDir()
 	wd, tok := "TIAD_WORKDIR="+work, "TIAD_TOKEN=t"
-	// Every case gets a pins dir of its own unless it names one.
-	pd := "TIAD_PINS_DIR=" + t.TempDir()
+	// Every case gets a pins dir and a deploys dir of its own unless it
+	// names one.
+	pins, deploys := t.TempDir(), t.TempDir()
+	pd := "TIAD_PINS_DIR=" + pins
+	dd := "TIAD_DEPLOYS_DIR=" + deploys
 	cases := []struct {
 		name string
 		env  []string
@@ -69,10 +72,19 @@ func TestAgentRefusesUnsafeConfig(t *testing.T) {
 		{"pins dir in the work dir", []string{wd, tok, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_PINS_DIR=" + filepath.Join(work, "pins")}, "TIAD_PINS_DIR must be outside TIAD_WORKDIR"},
 		{"pins dir is the work dir", []string{wd, tok, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_PINS_DIR=" + work + "/"}, "TIAD_PINS_DIR must be outside TIAD_WORKDIR"},
 		{"work dir in the pins dir", []string{"TIAD_WORKDIR=" + filepath.Join(filepath.Dir(work), "w"), tok, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_PINS_DIR=" + filepath.Dir(work)}, "TIAD_PINS_DIR must be outside TIAD_WORKDIR"},
+		// Nor the deploy record: an archive or a journal line there could
+		// be replaced by any caller. And each store owns its directory.
+		{"no deploys dir off Windows", []string{wd, tok, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_DEPLOYS_DIR="}, "TIAD_DEPLOYS_DIR is required"},
+		{"deploys dir in the work dir", []string{wd, tok, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_DEPLOYS_DIR=" + filepath.Join(work, "deploys")}, "TIAD_DEPLOYS_DIR must be outside TIAD_WORKDIR"},
+		{"deploys dir is the work dir", []string{wd, tok, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_DEPLOYS_DIR=" + work + "/"}, "TIAD_DEPLOYS_DIR must be outside TIAD_WORKDIR"},
+		{"work dir in the deploys dir", []string{"TIAD_WORKDIR=" + filepath.Join(filepath.Dir(work), "w2"), tok, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_DEPLOYS_DIR=" + filepath.Dir(work)}, "TIAD_DEPLOYS_DIR must be outside TIAD_WORKDIR"},
+		{"deploys dir in the pins dir", []string{wd, tok, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_DEPLOYS_DIR=" + filepath.Join(pins, "deploys")}, "TIAD_DEPLOYS_DIR and TIAD_PINS_DIR"},
+		{"pins dir in the deploys dir", []string{wd, tok, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_PINS_DIR=" + filepath.Join(deploys, "pins")}, "TIAD_DEPLOYS_DIR and TIAD_PINS_DIR"},
+		{"deploys dir is the pins dir", []string{wd, tok, "TIAD_ADDR=http://127.0.0.1:0", "TIAD_DEPLOYS_DIR=" + pins}, "TIAD_DEPLOYS_DIR and TIAD_PINS_DIR"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			env := append([]string{pd}, c.env...) // a case's own TIAD_PINS_DIR wins
+			env := append([]string{pd, dd}, c.env...) // a case's own dirs win
 			code, out := tiadtest.RunToExit(t, bin, env...)
 			if code != 2 || !strings.Contains(out, c.want) {
 				t.Fatalf("exit %d, want 2 with %q in:\n%s", code, c.want, out)

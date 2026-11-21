@@ -52,6 +52,48 @@ namespace Tiad
         }
     }
 
+    // FingerprintRun is one audited fingerprint read: its opt-in and
+    // address, what TIA returned, and the instance's trust after it.
+    public sealed class FingerprintRun
+    {
+        public bool Trust;
+        public string Address = "";
+        public FingerprintRead Read;
+        public BlindTrust BlindTrust;
+
+        // Value is the item named id, or null.
+        public string Value(string id)
+        {
+            if (Read == null) return null;
+            foreach (KeyValuePair<string, string> kv in Read.Items)
+            {
+                if (kv.Key == id) return kv.Value ?? "";
+            }
+            return null;
+        }
+
+        // ToJson is the read for a response or the deploy record: the
+        // items in TIA's order, this read's own trusted questions, and the
+        // instance's trust (a read that asked nothing may ride on an
+        // earlier one).
+        public Obj ToJson()
+        {
+            var list = new List<object>();
+            foreach (KeyValuePair<string, string> kv in Read.Items)
+            {
+                var x = new Obj();
+                x["identifier"] = kv.Key;
+                x["value"] = kv.Value ?? "";
+                list.Add(x);
+            }
+            var o = new Obj();
+            o["items"] = list;
+            o["trustedBlindly"] = (Read.TrustedBlindly ?? new List<string>()).ToArray();
+            o["blindTrust"] = BlindTrust == null ? null : BlindTrust.ToJson();
+            return o;
+        }
+    }
+
     public sealed partial class Agent
     {
         // blindTrust is this TIA instance's blind trust (BlindTrust), or
@@ -152,95 +194,100 @@ namespace Tiad
             return WithSession(c, delegate(Session s)
             {
                 // Every read is journalled, refusals too: the request and
-                // the gates are checked inside the try.
-                bool trust = false;
-                string address = s.Address;
-                BlindTrust before = blindTrust;
-                // after is the instance's trust as the TIA thread read it
-                // once the read ended; ran says the read reached it.
-                BlindTrust after = null;
-                bool ran = false;
-                FingerprintRead read = null;
-                string outcome = "";
-                try
+                // the gates are checked inside the audited read.
+                FingerprintRun run = ReadFingerprintAudited(s, null, TrustFix, delegate(FingerprintRun r)
                 {
-                    var r = c.Json();
+                    var req = c.Json();
                     // An explicit, per-call opt-in, as an upload's.
-                    trust = r.Bool("trustUnverifiedCertificate");
-                    r.Done();
-                    address = CpuOf(s);
-                    if (!Target(address)) throw new TiadException(403, Kinds.TargetRefused, address + " is not in TIAD_TARGETS");
+                    r.Trust = req.Bool("trustUnverifiedCertificate");
+                    req.Done();
+                    r.Address = CpuOf(s);
+                    if (!Target(r.Address)) throw new TiadException(403, Kinds.TargetRefused, r.Address + " is not in TIAD_TARGETS");
                     // An online call: the CPU must still be the pinned one.
-                    CheckDevicePin(s, address, "fingerprint read");
-                    read = OnSession(s, delegate(ITia t)
-                    {
-                        try
-                        {
-                            FingerprintRead fr = TrustingCall("fingerprint read", s, address, trust, delegate { return t.ReadFingerprint(s.Handle, address, trust); });
-                            if (fr != null) RecordBlindTrust("fingerprint read", s, address, fr.TrustedBlindly);
-                            return fr;
-                        }
-                        finally
-                        {
-                            after = blindTrust;
-                            ran = true;
-                        }
-                    });
-                    string bad = FingerprintRule.Check(read);
-                    if (bad != null) throw new TiadException(500, Kinds.OperationFailed, "fingerprint read: " + bad);
-                    outcome = "ok";
-                }
-                catch (TiadException e)
-                {
-                    outcome = e.Kind;
-                    // A certificate question answered no (TiaNames.OnlineRefused):
-                    // name the opt-in.
-                    if (!trust && e.Kind == Kinds.OperationFailed && FingerprintRule.CertificateOnly(e.Message))
-                    {
-                        throw new TiadException(e.Status, e.Kind, e.Message + "; " + TrustFix, e.Payload, e.Fatal);
-                    }
-                    throw;
-                }
-                catch (Exception)
-                {
-                    outcome = "error";
-                    throw;
-                }
-                finally
-                {
-                    // Every value as TIA returned it, quoted and bounded
-                    // (FingerprintRule), only from a whole read.
-                    var items = new List<string>();
-                    var tr = new List<string>();
-                    if (read != null && outcome == "ok")
-                    {
-                        foreach (KeyValuePair<string, string> kv in read.Items) items.Add(Json.Quote(kv.Key) + "=" + Json.Quote(kv.Value ?? ""));
-                    }
-                    if (read != null && read.TrustedBlindly != null)
-                    {
-                        foreach (string x in read.TrustedBlindly) tr.Add(Json.Quote(x));
-                    }
-                    Log.Line("audit fingerprint session={0} project={1} address={2} trustUnverifiedCertificate={3} trustedBlindly=[{4}] blindTrustBefore={5} blindTrust={6} items=[{7}] outcome={8}",
-                        s.Id, Json.Quote(s.Project), Json.Quote(address), trust ? "yes" : "no", string.Join(",", tr.ToArray()),
-                        BlindTrust.Audit(before), BlindTrust.Audit(ran ? after : blindTrust), string.Join(", ", items.ToArray()), outcome);
-                }
-                var list = new List<object>();
-                foreach (KeyValuePair<string, string> kv in read.Items)
-                {
-                    var x = new Obj();
-                    x["identifier"] = kv.Key;
-                    x["value"] = kv.Value ?? "";
-                    list.Add(x);
-                }
+                    CheckDevicePin(s, r.Address, "fingerprint read");
+                });
                 var o = new Obj();
-                o["address"] = address;
-                o["items"] = list;
-                // This read's own questions, and the instance's trust: a
-                // read that asked nothing may still ride on an earlier one.
-                o["trustedBlindly"] = (read.TrustedBlindly ?? new List<string>()).ToArray();
-                o["blindTrust"] = after == null ? null : after.ToJson();
+                o["address"] = run.Address;
+                foreach (var kv in run.ToJson()) o[kv.Key] = kv.Value;
                 return o;
             });
+        }
+
+        // ReadFingerprintAudited reads the fingerprint of the session's CPU
+        // through the trust path (TrustingCall, RecordBlindTrust), checks
+        // the read is whole, and journals it on every outcome, refusals
+        // included. prepare runs first, inside the journalled part: it sets
+        // the opt-in and the address, and may refuse. deploy, when not
+        // null, is the deploy the read belongs to (the post-load read);
+        // fix is what a refusal of TIA's TLS question names.
+        FingerprintRun ReadFingerprintAudited(Session s, string deploy, string fix, Action<FingerprintRun> prepare)
+        {
+            var run = new FingerprintRun { Address = s.Address };
+            BlindTrust before = blindTrust;
+            // after is the instance's trust as the TIA thread read it once
+            // the read ended; ran says the read reached it.
+            bool ran = false;
+            string outcome = "";
+            try
+            {
+                prepare(run);
+                string address = run.Address;
+                bool trust = run.Trust;
+                run.Read = OnSession(s, delegate(ITia t)
+                {
+                    try
+                    {
+                        FingerprintRead fr = TrustingCall("fingerprint read", s, address, trust, delegate { return t.ReadFingerprint(s.Handle, address, trust); });
+                        if (fr != null) RecordBlindTrust("fingerprint read", s, address, fr.TrustedBlindly);
+                        return fr;
+                    }
+                    finally
+                    {
+                        run.BlindTrust = blindTrust;
+                        ran = true;
+                    }
+                });
+                string bad = FingerprintRule.Check(run.Read);
+                if (bad != null) throw new TiadException(500, Kinds.OperationFailed, "fingerprint read: " + bad);
+                outcome = "ok";
+            }
+            catch (TiadException e)
+            {
+                outcome = e.Kind;
+                // A certificate question answered no (TiaNames.OnlineRefused):
+                // name the opt-in.
+                if (!run.Trust && e.Kind == Kinds.OperationFailed && FingerprintRule.CertificateOnly(e.Message))
+                {
+                    throw new TiadException(e.Status, e.Kind, e.Message + "; " + fix, e.Payload, e.Fatal);
+                }
+                throw;
+            }
+            catch (Exception)
+            {
+                outcome = "error";
+                throw;
+            }
+            finally
+            {
+                // Every value as TIA returned it, quoted and bounded
+                // (FingerprintRule), only from a whole read.
+                var items = new List<string>();
+                var tr = new List<string>();
+                FingerprintRead read = run.Read;
+                if (read != null && outcome == "ok")
+                {
+                    foreach (KeyValuePair<string, string> kv in read.Items) items.Add(Json.Quote(kv.Key) + "=" + Json.Quote(kv.Value ?? ""));
+                }
+                if (read != null && read.TrustedBlindly != null)
+                {
+                    foreach (string x in read.TrustedBlindly) tr.Add(Json.Quote(x));
+                }
+                Log.Line("audit fingerprint session={0} project={1} address={2} trustUnverifiedCertificate={3} trustedBlindly=[{4}] blindTrustBefore={5} blindTrust={6} items=[{7}] outcome={8}{9}",
+                    s.Id, Json.Quote(s.Project), Json.Quote(run.Address), run.Trust ? "yes" : "no", string.Join(",", tr.ToArray()),
+                    BlindTrust.Audit(before), BlindTrust.Audit(ran ? run.BlindTrust : blindTrust), string.Join(", ", items.ToArray()), outcome,
+                    deploy == null ? "" : " deploy=" + deploy);
+            }
+            return run;
         }
     }
 }

@@ -27,6 +27,8 @@ type Process struct {
 	WorkDir string
 	// PinsDir is the agent's own pins directory (TIAD_PINS_DIR).
 	PinsDir string
+	// DeploysDir is the agent's deploy record (TIAD_DEPLOYS_DIR).
+	DeploysDir string
 
 	client *tiad.Client
 	cmd    *exec.Cmd
@@ -57,11 +59,18 @@ type Script struct {
 	// FailInDoubt makes the fake fail the way TIA fails inside a
 	// download it had begun, before asking anything.
 	FailInDoubt string `json:"failInDoubt,omitempty"`
+	// DownloadThrows makes the fake's download fail with an exception that
+	// is not TIA's, before it asks anything: an internal error of tiad's.
+	// With TiaDies set too, TIA is gone when it throws.
+	DownloadThrows string `json:"downloadThrows,omitempty"`
 	// TiaDies makes TIA die inside a download, as it did in #789 stage
 	// 2, taking its objects with it so that detaching tiad's handlers
 	// fails too: "preparing" before TIA's download call, "downloading"
 	// inside it, before anything is asked.
 	TiaDies string `json:"tiaDies,omitempty"`
+	// ArchiveSame makes every archive for a deploy record the same bytes,
+	// so two deploys share one content address.
+	ArchiveSame bool `json:"archiveSame,omitempty"`
 	// NoDryRun makes the fake's TIA side one that cannot promise a dry
 	// run loads nothing (tiad.Openness until S2b): the agent refuses dry
 	// runs.
@@ -173,13 +182,15 @@ func StartProcess(t testing.TB, bin string, cfg Config, env ...string) *Process 
 	if cfg.Token == "" {
 		cfg.Token = RandomToken()
 	}
-	p := &Process{WorkDir: t.TempDir(), PinsDir: t.TempDir(), done: make(chan struct{})}
+	p := &Process{WorkDir: t.TempDir(), PinsDir: t.TempDir(), DeploysDir: t.TempDir(), done: make(chan struct{})}
 	p.cmd = Command(bin)
 	p.cmd.Env = AgentEnv(append([]string{
 		"TIAD_ADDR=http://127.0.0.1:0",
 		"TIAD_WORKDIR=" + p.WorkDir,
 		// Never the machine's own pins: a test's pins live and die with it.
 		"TIAD_PINS_DIR=" + p.PinsDir,
+		// Nor the machine's own deploy record.
+		"TIAD_DEPLOYS_DIR=" + p.DeploysDir,
 		"TIAD_TOKEN=" + cfg.Token,
 		"TIAD_TARGETS=" + strings.Join(cfg.Targets, ","),
 		// The real agent exits when its stdin closes only when asked:
@@ -337,6 +348,26 @@ func (p *Process) SetFingerprint(t testing.TB, fs FingerprintScript) {
 	}
 	if fs.Fails != "" {
 		failures = append(failures, ScriptedCall{Call: "ReadFingerprint", Message: fs.Fails})
+	}
+	p.script.Failures = failures
+	s := p.script
+	p.mu.Unlock()
+	p.SetScript(t, s)
+}
+
+// SetArchiveFails makes every archive for a deploy record fail inside
+// TIA's side with msg ("" archives again).
+func (p *Process) SetArchiveFails(t testing.TB, msg string) {
+	t.Helper()
+	p.mu.Lock()
+	var failures []ScriptedCall
+	for _, f := range p.script.Failures {
+		if f.Call != "Archive" {
+			failures = append(failures, f)
+		}
+	}
+	if msg != "" {
+		failures = append(failures, ScriptedCall{Call: "Archive", Message: msg})
 	}
 	p.script.Failures = failures
 	s := p.script

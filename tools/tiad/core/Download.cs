@@ -146,6 +146,13 @@ namespace Tiad
         public Decisions Decisions = new Decisions();
         public Secrets Secrets = new Secrets();
         public Attestation Attestation = new Attestation();
+        // Source is the caller's claim of what the project was built from,
+        // for the deploy record (null: none); tiad checks only its shape.
+        public DeploySource Source;
+        // FingerprintTrust is the post-load fingerprint read's own opt-in
+        // (fingerprint.trustUnverifiedCertificate), as a fingerprint
+        // call's: TIA's TLS question answered trusted, blindly.
+        public bool FingerprintTrust;
 
         public static DownloadRequest Read(Reader r)
         {
@@ -158,6 +165,9 @@ namespace Tiad
             d.Announced = r.Bool("announced");
             d.Secrets = Secrets.Read(r.Child("secrets"));
             d.Attestation = Attestation.Read(r.Child("attestation"));
+            d.Source = DeploySource.Read(r.Child("source"));
+            Reader fp = r.Child("fingerprint");
+            if (fp != null) d.FingerprintTrust = fp.Bool("trustUnverifiedCertificate");
             return d;
         }
 
@@ -176,6 +186,11 @@ namespace Tiad
             if (Decisions.UserManagementKeepOnline == true && Decisions.UserManagementResetToProject == true)
             {
                 return "download: decisions.userManagementKeepOnline and decisions.userManagementResetToProject are both yes; user-management takes one answer";
+            }
+            if (Source != null)
+            {
+                string bad = Source.Validate();
+                if (bad != null) return "download: " + bad;
             }
             return null;
         }

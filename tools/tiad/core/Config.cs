@@ -47,6 +47,11 @@ namespace Tiad
         // PinsDir holds the device pins (TIAD_PINS_DIR; on Windows
         // %ProgramData%\tiad\pins by default). Never inside the work dir.
         public string PinsDir;
+        // DeploysDir holds the deploy record: every deploy's project
+        // archive and the journal (TIAD_DEPLOYS_DIR; on Windows
+        // %ProgramData%\tiad\deploys by default). Never inside the work
+        // dir, and never nested with the pins dir.
+        public string DeploysDir;
         public List<string> Targets = new List<string>();
         // AccessKey is the agent's access record key (TIAD_ACCESS_KEY_FILE,
         // 64 hex characters, made by the installer and kept across
@@ -103,7 +108,7 @@ namespace Tiad
         }
 
         // FromEnv reads TIAD_ADDR, TIAD_TOKEN or TIAD_TOKEN_FILE,
-        // TIAD_WORKDIR, TIAD_PINS_DIR and TIAD_TARGETS, and refuses a configuration that
+        // TIAD_WORKDIR, TIAD_PINS_DIR, TIAD_DEPLOYS_DIR and TIAD_TARGETS, and refuses a configuration that
         // would be unsafe: no token, or a target that is not an IPv4
         // address.
         public static Config FromEnv()
@@ -183,6 +188,24 @@ namespace Tiad
             if (Inside(c.PinsDir, c.WorkDir) || Inside(c.WorkDir, c.PinsDir))
             {
                 throw new ConfigException("TIAD_PINS_DIR must be outside TIAD_WORKDIR (and not contain it): the files API must never reach a pin");
+            }
+
+            c.DeploysDir = Env("TIAD_DEPLOYS_DIR");
+            if (c.DeploysDir == "")
+            {
+                if (Path.DirectorySeparatorChar != '\\') throw new ConfigException("TIAD_DEPLOYS_DIR is required off Windows");
+                c.DeploysDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "tiad", "deploys");
+            }
+            // The files API writes anywhere in the work dir: an archive or a
+            // journal line there could be replaced by any caller, unaudited.
+            if (Inside(c.DeploysDir, c.WorkDir) || Inside(c.WorkDir, c.DeploysDir))
+            {
+                throw new ConfigException("TIAD_DEPLOYS_DIR must be outside TIAD_WORKDIR (and not contain it): the files API must never reach the deploy record");
+            }
+            // Each store owns its directory: neither lists the other's files.
+            if (Inside(c.DeploysDir, c.PinsDir) || Inside(c.PinsDir, c.DeploysDir))
+            {
+                throw new ConfigException("TIAD_DEPLOYS_DIR and TIAD_PINS_DIR must not be the same directory or one inside the other");
             }
 
             string max = Env("TIAD_MAX_FILE_BYTES");

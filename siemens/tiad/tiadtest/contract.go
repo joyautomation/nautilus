@@ -42,6 +42,9 @@ type Target interface {
 	// SetFingerprint scripts the fingerprint reads: whether they ask TLS
 	// trust, what they return, a failure inside TIA's side.
 	SetFingerprint(t testing.TB, fs FingerprintScript)
+	// SetArchiveFails makes the archive a download makes for its deploy
+	// record fail inside TIA's side with msg ("" archives again).
+	SetArchiveFails(t testing.TB, msg string)
 }
 
 // Loaded is one download that loaded a CPU.
@@ -91,6 +94,7 @@ func (g goFake) SetAccess(_ testing.TB, a AccessScript) { g.f.SetAccess(a) }
 func (g goFake) SetFingerprint(_ testing.TB, fs FingerprintScript) {
 	g.f.SetFingerprint(fs)
 }
+func (g goFake) SetArchiveFails(_ testing.TB, msg string) { g.f.SetArchiveFails(msg) }
 func (g goFake) Loaded(testing.TB) []Loaded {
 	var out []Loaded
 	for _, d := range g.f.Downloads() {
@@ -114,6 +118,7 @@ func Contract(t *testing.T, start Starter) {
 	t.Run("ReuseAfterARefusedUpload", func(t *testing.T) { contractReuseAfterARefusedUpload(t, start) })
 	t.Run("UserManagementReset", func(t *testing.T) { contractUserManagementReset(t, start) })
 	t.Run("Fingerprint", func(t *testing.T) { contractFingerprint(t, start) })
+	t.Run("Deploys", func(t *testing.T) { contractDeploys(t, start) })
 }
 
 // ContractNoTIA is the part of the contract that never needs TIA and

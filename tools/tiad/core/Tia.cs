@@ -274,6 +274,12 @@ namespace Tiad
         // Save saves the project, or writes a project archive, and returns
         // its full path.
         string Save(object project, bool archive);
+
+        // Archive saves the project and writes a project archive of it
+        // into dir, an empty directory of the deploy record's outside the
+        // work dir, and returns the archive's full path: the deploy record
+        // (section 7, D7) archives the project just before TIA's download.
+        string Archive(object project, string dir);
     }
 
     // TiaThread runs work items one at a time on one STA thread.

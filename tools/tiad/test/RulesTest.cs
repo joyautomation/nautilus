@@ -116,6 +116,8 @@ namespace Tiad.Test
                 T("LicenceFailsOnALaterCall", LicenceFailsOnALaterCall),
                 T("QuestionIds", QuestionIdsOfConfigurations),
                 T("TrustFixOnlyForCertificates", TrustFixOnlyForCertificates),
+                T("DeployStatusOf", DeployStatusOf),
+                T("DeploySourceShape", DeploySourceShape),
                 T("SessionsLeftCountsClosing", SessionsLeftCountsClosing),
                 T("Settings", SettingsForAnswers),
                 T("PasswordsNeverCross", PasswordsNeverCross),
@@ -1921,6 +1923,56 @@ namespace Tiad.Test
             Eq(MachineGates.PublicApiDir(m), api, "registered");
             m.Files.Clear();
             Eq(MachineGates.PublicApiDir(m), "", "registered, assemblies missing");
+        }
+
+        // DeployStatusOf is tiad.DeployStatusOf's table: only the kinds that
+        // say nothing was loaded are not-loaded; anything else is in doubt.
+        static void DeployStatusOf()
+        {
+            var want = new Dictionary<string, string>
+            {
+                { "loaded", DeployStatus.Loaded },
+                { Kinds.DecisionRequired, DeployStatus.NotLoaded },
+                { Kinds.Declined, DeployStatus.NotLoaded },
+                { Kinds.BadRequest, DeployStatus.InDoubt },
+                { Kinds.TargetRefused, DeployStatus.InDoubt },
+                { Kinds.Busy, DeployStatus.InDoubt },
+                { Kinds.NotCompiled, DeployStatus.InDoubt },
+                { Kinds.OperationFailed, DeployStatus.NotLoaded },
+                { Kinds.OutcomeUnknown, DeployStatus.InDoubt },
+                { Kinds.NotFound, DeployStatus.InDoubt },
+                { Kinds.Gate, DeployStatus.InDoubt },
+                { Kinds.UncleanSession, DeployStatus.InDoubt },
+                { "error", DeployStatus.InDoubt },
+                { "", DeployStatus.InDoubt },
+            };
+            foreach (var kv in want) Eq(DeployStatus.Of(kv.Key), kv.Value, "status of " + Json.Quote(kv.Key));
+        }
+
+        // DeploySourceShape is tiad.DeploySource.Validate's table.
+        static void DeploySourceShape()
+        {
+            string c40 = "0123456789abcdef0123456789abcdef01234567", h = "sha256:" + c40 + "0123456789abcdef01234567";
+            var cases = new[]
+            {
+                new[] { c40, "", "" },
+                new[] { c40 + "0123456789abcdef01234567", h, "" },
+                new[] { "", "", "source.commit" },
+                new[] { c40.Substring(1), "", "source.commit" },
+                new[] { c40.ToUpperInvariant(), "", "source.commit" },
+                new[] { c40.Substring(1) + "g", "", "source.commit" },
+                new[] { c40 + "0", "", "source.commit" },
+                new[] { c40, h.Substring(7), "source.hash" },
+                new[] { c40, "SHA256:" + h.Substring(7), "source.hash" },
+                new[] { c40, h + "0", "source.hash" },
+                new[] { c40, h.Substring(0, h.Length - 1) + "G", "source.hash" },
+            };
+            foreach (var c in cases)
+            {
+                string got = new DeploySource { Commit = c[0], Hash = c[1] }.Validate();
+                if (c[2] == "") Eq(got, null, "source " + Json.Quote(c[0]) + " " + Json.Quote(c[1]));
+                else True(got != null && got.StartsWith(c[2], StringComparison.Ordinal), "source " + Json.Quote(c[0]) + " " + Json.Quote(c[1]) + ": " + Show(got) + ", want " + c[2]);
+            }
         }
     }
 }

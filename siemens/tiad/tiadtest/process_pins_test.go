@@ -194,7 +194,7 @@ func TestAgentFailsClosedOnAnUnreadablePin(t *testing.T) {
 // its pins directory does not start, rather than read every pin as missing.
 func TestAgentRefusesAnUnusablePinsDir(t *testing.T) {
 	bin := fakeBin(t)
-	base := []string{"TIAD_WORKDIR=" + t.TempDir(), "TIAD_TOKEN=t", "TIAD_ADDR=http://127.0.0.1:0"}
+	base := []string{"TIAD_WORKDIR=" + t.TempDir(), "TIAD_DEPLOYS_DIR=" + t.TempDir(), "TIAD_TOKEN=t", "TIAD_ADDR=http://127.0.0.1:0"}
 	file := filepath.Join(t.TempDir(), "a-file")
 	if err := os.WriteFile(file, nil, 0o600); err != nil {
 		t.Fatal(err)

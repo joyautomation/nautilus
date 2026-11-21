@@ -178,33 +178,49 @@ namespace Tiad
                 // rode is the blind trust the download was checked against:
                 // the instance's when the call began, then at each check.
                 BlindTrust rode = blindTrust;
+                // run is the deploy record of a real download, once tiad
+                // archived the project and wrote its intent line.
+                var run = new DeployRun();
                 try
                 {
-                    object result = DownloadChecked(s, req, ref asked, ref outcome, ref reset, ref rode, acting);
+                    object result = DownloadChecked(s, req, ref asked, ref outcome, ref reset, ref rode, acting, run);
+                    run.Kind = DeployStatus.Loaded;
                     return result;
                 }
                 catch (TiadException e)
                 {
                     if (outcome == "") outcome = e.Kind;
+                    run.Kind = e.Kind;
+                    run.Message = e.Message;
+                    run.Payload = e.Payload as Obj;
+                    // Whatever the end, the caller can find its record.
+                    if (run.IntentWritten) throw WithDeploy(e, run.Id);
                     throw;
                 }
-                catch (Exception)
+                catch (Exception e)
                 {
                     if (outcome == "") outcome = "error";
+                    run.Kind = "error";
+                    run.Message = "internal error in the agent (" + e.GetType().Name + "); see its log";
                     throw;
                 }
                 finally
                 {
-                    Log.Line("audit download session={0} project={1} address={2} hardware={3} software={4} dryRun={5} announced={6} {7} protection={8} configurationPassword={9} attestation={10} userManagementReset={11} blindTrust={12} kept=[{13}] asked=[{14}] acting=[{15}] outcome={16}",
+                    // The outcome line, on every end once the intent line
+                    // was written: a record with no outcome means the agent
+                    // died during the download.
+                    if (run.IntentWritten) WriteOutcome(run, rode, acting);
+                    Log.Line("audit download session={0} project={1} address={2} hardware={3} software={4} dryRun={5} announced={6} {7} protection={8} configurationPassword={9} attestation={10} userManagementReset={11} blindTrust={12} source={13} deploy={14} kept=[{15}] asked=[{16}] acting=[{17}] outcome={18}",
                         s.Id, Json.Quote(s.Project), Json.Quote(req.Address), req.Hardware, req.Software, req.DryRun, req.Announced,
                         AuditDecisions(req.Decisions), req.Secrets.Protection == "" ? "unset" : "set",
                         req.Secrets.ConfigurationPassword == "" ? "unset" : "set", req.Attestation.Audit(), reset, BlindTrust.Audit(rode),
+                        DeploySource.Audit(req.Source), run.IntentWritten ? run.Id + (run.Recorded ? "" : "(outcome-not-recorded)") : "unset",
                         AuditKept(s.Kept), asked, string.Join(",", Quoted(acting).ToArray()), outcome);
                 }
             });
         }
 
-        object DownloadChecked(Session s, DownloadRequest req, ref string asked, ref string outcome, ref string resetAudit, ref BlindTrust rode, List<string> acting)
+        object DownloadChecked(Session s, DownloadRequest req, ref string asked, ref string outcome, ref string resetAudit, ref BlindTrust rode, List<string> acting, DeployRun run)
         {
             string bad = req.Validate();
             if (bad != null) throw TiadException.BadRequest("{0}", bad);
@@ -388,10 +404,31 @@ namespace Tiad
                         lateRefused = true;
                         throw late;
                     }
-                    // A dry run never starts the CPU, whatever the request
-                    // says (#1154 review): if TIA loads it without asking,
-                    // start-after is NoAction.
-                    return t.Download(s.Handle, req.Address, req.Hardware, req.Software, req.Secrets, req.DryRun ? (bool?)null : req.Decisions.StartAfter, answer);
+                    // The deploy record, in this same work item, so what is
+                    // archived is what TIA loads: the project archived, then
+                    // the intent line. Either failing refuses the download.
+                    // A dry run leaves no record: before CanDryRun is ever
+                    // true for tiad.Openness, a dry run TIA loads without
+                    // asking (outcome_unknown below) must get a record too
+                    // (#1180 review), as it must get the hardware opt-in.
+                    if (!req.DryRun) Record(t, s, req, ranWith, run);
+                    try
+                    {
+                        // A dry run never starts the CPU, whatever the request
+                        // says (#1154 review): if TIA loads it without asking,
+                        // start-after is NoAction.
+                        return t.Download(s.Handle, req.Address, req.Hardware, req.Software, req.Secrets, req.DryRun ? (bool?)null : req.Decisions.StartAfter, answer);
+                    }
+                    catch (Exception e)
+                    {
+                        // An internal error in tiad's side of the download,
+                        // not TIA's: whether TIA had begun is unknown, so a
+                        // recorded deploy is in doubt, never not-loaded
+                        // (#1180 review).
+                        if (e is TiaException || e is TiadException || !run.IntentWritten) throw;
+                        Log.Line("download: internal error in the agent's TIA call: {0}", e);
+                        throw Unknown("internal error in the agent's TIA call during the download (" + e.GetType().Name + "); see its log", acting);
+                    }
                 });
             }
             catch (TiadException e)
@@ -557,6 +594,17 @@ namespace Tiad
             // for the deploy record (BlindTrustRule): as the TIA thread read
             // it just before TIA's download, not later.
             o["blindTrust"] = rode == null ? null : rode.ToJson();
+            run.State = result.State;
+            run.StateSource = result.StateSource;
+            run.Blocks = TiaNames.Labels(cmp.Blocks);
+            run.Hardware = req.Hardware;
+            run.UserManagementReset = given;
+            // The CPU's fingerprint after the load, in this session, read
+            // through the same trust path as a fingerprint call: its
+            // DownloadId names this load. A read that fails changes nothing
+            // of the verdict: the download loaded, and compared equal.
+            ReadDeployFingerprint(s, req, run);
+            o["deploy"] = run.Response;
             return o;
         }
 

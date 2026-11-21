@@ -100,6 +100,10 @@ namespace Tiad
             // Refuses to start (ConfigException) on a pins dir it cannot use.
             pins = PinStore.Open(cfg.PinsDir);
             LogPins();
+            // Refuses to start on a deploys dir it cannot use either: a
+            // download it could not record is refused.
+            deploys = DeployStore.Open(cfg.DeploysDir);
+            Log.Line("deploys: the deploy record is in {0}", Json.Quote(cfg.DeploysDir));
             if (cfg.AccessKey != "")
             {
                 records = AccessRecords.FromHex(cfg.AccessKey);
@@ -130,6 +134,7 @@ namespace Tiad
             RegisterDownload(r);
             RegisterPins(r);
             RegisterFingerprint(r);
+            RegisterDeploys(r);
         }
 
         object Health(Call c)

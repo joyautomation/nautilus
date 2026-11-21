@@ -246,8 +246,14 @@ namespace Tiad.Fake
         int askFirst = 1;
         string failAfterDecide = "";
         string failInDoubt = "";
+        // downloadThrows makes the download fail with an exception that is
+        // not TIA's, before it asks anything: an internal error.
+        string downloadThrows = "";
         string tiaDies = "";
         bool noDryRun;
+        // archiveSame makes every archive the same bytes, so two deploys
+        // share one content address.
+        bool archiveSame;
         bool cleanCancel;
         bool compareDiffers;
         string compareTree = "";
@@ -467,6 +473,17 @@ namespace Tiad.Fake
             }
         }
 
+        public bool ArchiveSame
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return archiveSame;
+                }
+            }
+        }
+
         public bool NoDryRun
         {
             get
@@ -480,6 +497,17 @@ namespace Tiad.Fake
 
         // FailInDoubt, when set, makes Download fail the way TIA fails
         // inside a download it had begun, before any question.
+        public string DownloadThrows
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return downloadThrows;
+                }
+            }
+        }
+
         public string FailInDoubt
         {
             get
@@ -635,9 +663,11 @@ namespace Tiad.Fake
             int? first = r.OptInt("askFirst");
             string after = r.Str("failAfterDecide");
             string inDoubt = r.Str("failInDoubt");
+            string throws = r.Str("downloadThrows");
             string dies = r.Str("tiaDies");
             if (dies != "" && dies != "preparing" && dies != "downloading") throw new TiadException(400, Kinds.BadRequest, "tiaDies is preparing or downloading");
             bool noDry = r.Bool("noDryRun");
+            bool same = r.Bool("archiveSame");
             bool clean = r.Bool("cleanCancel");
             bool differs = r.Bool("compareDiffers");
             string tree = r.Str("compareTree");
@@ -683,8 +713,10 @@ namespace Tiad.Fake
                 askFirst = first.HasValue ? first.Value : 1;
                 failAfterDecide = after;
                 failInDoubt = inDoubt;
+                downloadThrows = throws;
                 tiaDies = dies;
                 noDryRun = noDry;
+                archiveSame = same;
                 cleanCancel = clean;
                 compareDiffers = differs;
                 compareTree = tree;
@@ -1179,6 +1211,12 @@ namespace Tiad.Fake
             script.Enter("Download");
             var p = (FakeProject)project;
             if (script.FailInDoubt != "") throw new TiaException(script.FailInDoubt, null, true);
+            if (script.DownloadThrows != "")
+            {
+                // With tiaDies too, TIA is gone by the time it throws.
+                if (script.TiaDies != "") died = true;
+                throw new InvalidOperationException(script.DownloadThrows);
+            }
             var decider = new DownloadDecider(answer, startAfter);
             string dies = script.TiaDies;
             if (dies != "")
@@ -1573,6 +1611,20 @@ namespace Tiad.Fake
         {
             script.Enter("Identify");
             return script.NoIdentify ? null : script.Device;
+        }
+
+        // archives counts the archives this fake wrote, so each one's bytes
+        // differ, as a real archive's do (time stamps).
+        static int archives;
+
+        public string Archive(object project, string dir)
+        {
+            script.Enter("Archive");
+            var p = (FakeProject)project;
+            string f = Path.Combine(dir, Path.GetFileNameWithoutExtension(p.Full) + ".zap21");
+            int n = System.Threading.Interlocked.Increment(ref archives);
+            File.WriteAllText(f, script.ArchiveSame ? "fake TIA project archive" : "fake TIA project archive " + n + " of " + p.Full);
+            return f;
         }
 
         public string Save(object project, bool archive)
