@@ -191,19 +191,47 @@ type Driver struct {
 	lastSent     time.Time
 	reconnectGap time.Duration
 
-	mu             sync.Mutex
-	in             map[string]any
-	quality        map[string]nio.Quality
-	commanded      map[string]any       // last output value accepted
-	pending        map[string]any       // accepted, not yet written
-	term           uint64               // the write gate's reopens (see flushCount)
-	wrote          map[string]time.Time // when each output was last written
-	disagree       map[string]bool      // digital outputs whose state is not their command
-	quietTrip      bool                 // the last quiet check outran the watchdog
-	holdOut        bool                 // after a watchdog standby's takeover: no command until fresh inputs are read
-	freshIn        bool                 // a leader's delivery since holdOut was set
-	slotFault      map[int]string       // slot → why its tags are Bad
-	absent         []byte               // channel-present mask as last read (nil: unknown)
+	mu        sync.Mutex
+	in        map[string]any
+	quality   map[string]nio.Quality
+	commanded map[string]any       // last output value accepted
+	pending   map[string]any       // accepted, not yet written
+	term      uint64               // the write gate's reopens (see flushCount)
+	wrote     map[string]time.Time // when each output was last written
+	disagree  map[string]bool      // digital outputs whose state is not their command
+	quietTrip bool                 // the last quiet check outran the watchdog
+	// baseline (under mu) is armed by Start unless the driver began as a
+	// standby (sawShut): the first push is not a command, it is decided per
+	// output against what the unit holds (#1123). holdBaseline makes it
+	// record and never send (a held swap, io.BaselineHolder).
+	baseline     bool
+	holdBaseline bool
+	// undecided holds the start-up baseline's outputs no live read of the
+	// unit has settled yet: the program's latest value for each. They are
+	// not in commanded until decided, so nothing that walks it (a requeue,
+	// the read-back check) sees them.
+	undecided map[string]any
+	// inLive: a scan of the unit has been delivered on the current session,
+	// so d.in holds a live read of every output. scanRead/scanUnread are
+	// what BeginScan froze for the scan in progress (the baseline decides
+	// only against them, and only on a push from that scan); scanUnread
+	// marks outputs whose read is Bad.
+	inLive     bool
+	scanLive   bool
+	scanRead   map[string]any
+	scanUnread map[string]bool
+	// scanAware: BeginScan has been called, so a runtime drives the driver
+	// and the baseline decides on its pushes; without one the driver decides
+	// itself at the delivery.
+	scanAware atomic.Bool
+	// sawShut: the write gate has been seen closed, so this driver began
+	// (or became) a standby, which has no baseline: its takeover commands
+	// every output (#606).
+	sawShut        atomic.Bool
+	holdOut        bool           // after a watchdog standby's takeover: no command until fresh inputs are read
+	freshIn        bool           // a leader's delivery since holdOut was set
+	slotFault      map[int]string // slot → why its tags are Bad
+	absent         []byte         // channel-present mask as last read (nil: unknown)
 	unit           string
 	firmware       string
 	watchdogMs     int64  // the unit's watchdog as last read; -1 before
@@ -266,6 +294,7 @@ func New(m Manifest, opts ...Option) (*Driver, error) {
 		in:         map[string]any{},
 		quality:    map[string]nio.Quality{},
 		commanded:  map[string]any{},
+		undecided:  map[string]any{},
 		pending:    map[string]any{},
 		wrote:      map[string]time.Time{},
 		disagree:   map[string]bool{},
@@ -433,6 +462,10 @@ func (d *Driver) look() (bool, time.Duration, uint64) {
 		switch {
 		case !open && !d.gateShut.Load():
 			d.gateShut.Store(true)
+			d.sawShut.Store(true)
+			d.mu.Lock()
+			d.baseline = false // a standby has no baseline (#606)
+			d.mu.Unlock()
 			if d.plain.Load() {
 				if d.skipsStandby() {
 					d.log.Warn("optommp: the scans are not live; holding no session so the unit's watchdog takes the outputs", "host", d.m.Host)
@@ -473,6 +506,7 @@ func (d *Driver) forgetCommanded() {
 	d.mu.Lock()
 	clear(d.commanded)
 	clear(d.pending)
+	clear(d.undecided)
 	clear(d.disagree)
 	d.term++
 	d.mu.Unlock()
@@ -565,6 +599,11 @@ var (
 func (d *Driver) Start(ctx context.Context) {
 	ctx, d.cancel = context.WithCancel(ctx)
 	d.done = make(chan struct{})
+	d.mu.Lock()
+	d.baseline = !d.sawShut.Load() // a standby has none (#606)
+	d.holdBaseline = false
+	d.inLive = false
+	d.mu.Unlock()
 	go d.run(ctx)
 }
 
@@ -625,6 +664,9 @@ func (d *Driver) run(ctx context.Context) {
 		}
 		d.fedWatchdog.Store(0) // not polling now
 		d.connected.Store(false)
+		d.mu.Lock()
+		d.inLive = false // no read of the unit is live any more (#1123)
+		d.mu.Unlock()
 		d.markStale()
 		if ctx.Err() != nil {
 			d.online.Store(false) // a stop, not an outage
@@ -1196,6 +1238,16 @@ func (d *Driver) deliver(c *Client, img []uint32) (int, error) {
 	if checkOut && d.holdOut {
 		d.freshIn = true // a leader's delivery: the hold ends once it is read
 	}
+	if checkOut {
+		d.inLive = true
+		if !d.scanAware.Load() {
+			// No runtime drives the driver: what this delivery read is live,
+			// and the waiting outputs are decided against it (#1123).
+			for name := range d.undecided {
+				d.decideLocked(name, false)
+			}
+		}
+	}
 	d.mu.Unlock()
 	d.reads.Add(1)
 	for _, t := range turned {
@@ -1491,6 +1543,116 @@ func (d *Driver) disagreesLocked(name string, got any, now time.Time) bool {
 	return false
 }
 
+// decideLocked settles one undecided output against what the unit holds,
+// when a live read of it is at hand: recorded as commanded when the unit
+// holds the program's value, queued as one command when it does not (or
+// when the read is Bad). aware: a runtime drives the driver, so only what
+// BeginScan froze counts; otherwise the latest delivery does. Reports
+// whether it queued. Caller holds mu.
+func (d *Driver) decideLocked(name string, aware bool) bool {
+	v, ok := d.undecided[name]
+	if !ok {
+		return false
+	}
+	var got any
+	var unread bool
+	if aware {
+		if !d.scanLive {
+			return false
+		}
+		got, unread = d.scanRead[name], d.scanUnread[name]
+	} else {
+		if !d.inLive {
+			return false
+		}
+		got, unread = d.readOf(name)
+	}
+	delete(d.undecided, name)
+	d.commanded[name] = v
+	if !unread && outputHolds(v, got) {
+		return false
+	}
+	d.pending[name] = v
+	return true
+}
+
+// readOf is an output's last delivered value, or unread when it is Bad (an
+// absent channel, a slot fault) and says nothing about what is set. Caller
+// holds mu.
+func (d *Driver) readOf(name string) (any, bool) {
+	v, ok := d.in[name]
+	if !ok || d.quality[name] != nio.Good {
+		return nil, true
+	}
+	return v, false
+}
+
+// outputHolds reports whether the unit's value got is the program's v, as
+// the unit would hold it: a REAL as its 32 bits, an integer as its int32. A
+// value that cannot be converted is not equal, and the write reports it.
+func outputHolds(v, got any) bool {
+	switch g := got.(type) {
+	case bool:
+		want, err := toBool(v)
+		return err == nil && want == g
+	case int64:
+		want, err := toInt(v)
+		return err == nil && int64(int32(want)) == g
+	case float64:
+		want, err := toFloat(v)
+		return err == nil && (float64(float32(want)) == g || math.IsNaN(want) && math.IsNaN(g))
+	}
+	return false
+}
+
+// BeginScan is the driver's io.ScanBeginner: the runtime calls it before it
+// reads this scan's inputs, so the push that scan makes was computed from
+// what the unit has delivered by now. It freezes that for the start-up
+// baseline, which decides only on such a push, never on one computed from
+// init values before the first read (#1123), and asks the runtime for the
+// whole output set when an output is waiting and decidable.
+func (d *Driver) BeginScan() {
+	d.scanAware.Store(true)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if !d.baseline && len(d.undecided) == 0 {
+		d.scanLive, d.scanRead, d.scanUnread = false, nil, nil
+		return
+	}
+	d.scanLive = d.inLive
+	d.scanRead, d.scanUnread = map[string]any{}, map[string]bool{}
+	if d.scanLive {
+		for name := range d.outputs {
+			if v, u := d.readOf(name); u {
+				d.scanUnread[name] = true
+			} else {
+				d.scanRead[name] = v
+			}
+		}
+		if len(d.undecided) > 0 {
+			d.wanted.Store(true) // a waiting output is decidable: push it
+		}
+	}
+}
+
+// DisarmBaseline makes the next WriteOutputs a command rather than the
+// start-up baseline (io.BaselineDisarmer): a driver swapped into a running
+// set starts from the current commands. Call it after Start.
+func (d *Driver) DisarmBaseline() {
+	d.mu.Lock()
+	d.baseline = false
+	d.mu.Unlock()
+}
+
+// HoldBaseline makes the start-up baseline record and never send, whatever
+// the unit holds (io.BaselineHolder): a driver swapped in under
+// HoldOutputsOnSwap. Call it after Start.
+func (d *Driver) HoldBaseline() {
+	d.mu.Lock()
+	d.holdBaseline = true
+	d.mu.Unlock()
+}
+
 func (d *Driver) fail(err error) {
 	d.errs.Add(1)
 	d.lastErr.Store(err.Error())
@@ -1547,10 +1709,13 @@ func (d *Driver) ReadInputsInto(dst nio.Values) error {
 	return nil
 }
 
-// WriteOutputs is io.Driver. Nautilus owns the outputs it binds: the first
-// value handed over for a tag is written, and after that every change —
-// plus every command again on reconnect, and the digital and analog ones
-// after the unit may have applied watchdog values (rearm). Commands are
+// WriteOutputs is io.Driver. Nautilus owns the outputs it binds, but the
+// first value handed over for a tag is not a command: it is decided
+// against what the unit holds, on a push computed from a scan that read it
+// live. Equal is recorded and nothing is written; a different value is
+// written once. After that every change is written, plus every command
+// again on reconnect, and the digital and analog ones after the unit may
+// have applied watchdog values (rearm). Commands are
 // held across a disconnect. While the write gate is closed nothing is
 // accepted, and nothing is rewritten; once it reopens every output is a
 // command again (see SetWriteGate).
@@ -1566,8 +1731,38 @@ func (d *Driver) WriteOutputs(vals nio.Values) error {
 		d.mu.Unlock()
 		return nil
 	}
+	baseline := d.baseline
+	recordOnly := baseline && d.holdBaseline
+	d.baseline = false
+	aware := d.scanAware.Load()
 	for name, v := range vals {
 		if _, ok := d.outputs[name]; !ok {
+			continue
+		}
+		if _, waiting := d.undecided[name]; waiting {
+			// still waiting for a push computed from its live read: the
+			// latest value is the one to decide with, baseline push or not
+			d.undecided[name] = v
+			if d.decideLocked(name, aware) {
+				queued = true
+			}
+			continue
+		}
+		if recordOnly {
+			// Record, never send. A command already queued keeps it.
+			if _, q := d.pending[name]; !q {
+				d.commanded[name] = v
+			}
+			continue
+		}
+		if baseline {
+			if _, q := d.pending[name]; q {
+				continue
+			}
+			d.undecided[name] = v
+			if d.decideLocked(name, aware) {
+				queued = true
+			}
 			continue
 		}
 		if prev, ok := d.commanded[name]; ok && sameScalar(prev, v) {

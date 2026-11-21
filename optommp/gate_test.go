@@ -133,7 +133,8 @@ func TestQueuedWritesGoNowhereAfterTheGateClosed(t *testing.T) {
 	dev.Drop()
 	eventually(t, "Stale after the drop", func() bool { return drv.Quality()["EPIC_M0_DI00"] == nio.Stale })
 	rt := gateRuntime(t, drv, leaderFunc(g.open.Load))
-	rt.Scan() // leader, processor away: the commands are held
+	drv.DisarmBaseline() // a leader that took over, not a start-up: its push is commands (#1123)
+	rt.Scan()            // leader, processor away: the commands are held
 	drv.mu.Lock()
 	held := len(drv.pending)
 	drv.mu.Unlock()

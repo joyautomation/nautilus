@@ -80,6 +80,9 @@ type Device struct {
 	mu   sync.Mutex
 	mem  map[uint32]byte
 	reqs int // requests served
+	// writes counts the write requests that addressed each address, for
+	// tests that count what reached the unit.
+	writes map[uint32]int
 	// drop, when set, closes the connection on the next request.
 	drop bool
 
@@ -322,6 +325,10 @@ func (d *Device) Serve(conn net.Conn) {
 			data := make([]byte, n)
 			io.ReadFull(conn, data)
 			d.mu.Lock()
+			if d.writes == nil {
+				d.writes = map[uint32]int{}
+			}
+			d.writes[addr]++
 			d.put(addr, data)
 			d.effects(addr, data)
 			d.mu.Unlock()
@@ -501,6 +508,13 @@ func (d *Device) Drop() {
 	d.mu.Lock()
 	d.drop = true
 	d.mu.Unlock()
+}
+
+// WritesTo is how many write requests have addressed addr.
+func (d *Device) WritesTo(addr uint32) int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.writes[addr]
 }
 
 // Requests is how many requests the device has served.

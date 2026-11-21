@@ -311,16 +311,18 @@ claims:
       Listed under Not supported; nothing asserts the refusal.
   - id: EIP-030
     claim: >-
-      There is no baseline rule: the first scan's output values, including
-      an output's `init:`, are written to the controller.
+      An unchanged output since start is not a command: the first scan's
+      values (computed before anything was read) are never sent, and the
+      first push computed from a live read decides each output against the
+      controller: equal is recorded, different is written once (a struct:
+      the differing members), and an output that cannot be read back is
+      written once. A REAL compares as its 32 bits.
     source: "#writes"
     tests:
+      - go ./eip TestStartupNeverDrivesTheInitDerivedValue
+      - go ./eip TestStartupComparesInTheControllersEncoding
+      - go ./eip TestStartupStructWritesOnlyTheDifferingMember
       - go ./cmd/naut TestLogixEmulateDriverRoundTrip
-    partial: true
-    note: >-
-      The round trip calls Scan once and waits for Batch_Ack on the
-      emulator, so the first scan's output being written is asserted; that
-      an output's `init:` reaches the controller is not.
   - id: EIP-031
     claim: >-
       A write the controller refuses on a live connection is logged,
@@ -407,10 +409,19 @@ claims:
   - id: EIP-050
     claim: >-
       A replica that started as a standby commands every output on its
-      first takeover: the driver has no baseline.
+      first takeover: a standby has no start-up baseline.
     source: "#redundancy"
     tests:
       - go ./eip TestStandbyFirstTakeoverCommands
+      - go ./eip TestStartupBaselineIsNotArmedForAStandby
+  - id: EIP-053
+    claim: >-
+      A driver swapped into a running set commands its first push (disarmed),
+      or only records it under HoldOutputsOnSwap (held), whatever the
+      controller holds.
+    source: "#writes"
+    tests:
+      - go ./eip TestSwappedDriverBaseline
   - id: EIP-051
     claim: >-
       The driver sees the gate change only by looking at it: on every push

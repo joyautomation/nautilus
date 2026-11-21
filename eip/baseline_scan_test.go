@@ -204,14 +204,15 @@ func TestSwappedDriverBaseline(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		arm  func(*Driver)
+		held float64 // what the controller holds; the push is 7
 		want int
 	}{
-		{"disarmed commands", (*Driver).DisarmBaseline, 1},
-		{"held records only", (*Driver).HoldBaseline, 0},
+		{"disarmed commands even what the controller holds", (*Driver).DisarmBaseline, 7.0, 1},
+		{"held records, though the controller differs", (*Driver).HoldBaseline, 3.0, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, port, store, srv, _ := startEmulatorFull(t, false)
-			store.UpdateValue("SpeedCmd", 3.0) // differs from the push: a baseline would write it
+			store.UpdateValue("SpeedCmd", tc.held)
 			d, err := New("127.0.0.1", testManifest(), WithPort(port), WithScanRate(10*time.Millisecond))
 			if err != nil {
 				t.Fatal(err)

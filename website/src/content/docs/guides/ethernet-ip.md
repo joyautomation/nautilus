@@ -232,8 +232,9 @@ values. A dotted path resolves to its root tag: a UDT arrives whole, so
 ## Writes
 
 A binding marked `writable` in the manifest is a `role: output` tag. The
-runtime pushes output changes — the first scan, then any scan where an output
-moved — and the driver diffs again against its own last-written set, so an
+runtime pushes output changes — the first value of each output is decided
+against the controller (below), then any scan where an output moved — and the
+driver diffs again against its own last-written set, so an
 unchanged value never reaches the wire twice. Queued writes flush between
 polls on the same connection: a write kicks the poll loop awake rather than
 waiting out the next interval.
@@ -241,16 +242,30 @@ waiting out the next interval.
 - **An elementary scalar** goes as one CIP Write Tag with its Logix type code.
 - **A struct** is written member by member, symbolically
   (`Device.Member.Sub`), and only the members that actually changed since the
-  last write — every member on the first write. Nested structs recurse.
+  last write — every member when nothing is known to be held. Nested
+  structs recurse.
 - **Strings and array members inside a struct are not written**, and a
   top-level `STRING` or array binding is not a writable target either.
 
-**There is no baseline rule here.** Where the Modbus and Sparkplug-host
-drivers record the first snapshot after `Start` and send it to nobody, this
-driver commands what the first scan produces — an output tag's `init:` reaches
-the controller. Give every output an `init:` that is safe to command. A typed
-output with no `init:` starts at zero in the program but is not sent until
-something writes it (see [the tag model](/guides/tag-model/#an-output-with-a-type-starts-at-zero)).
+**An unchanged output since start is not a command.** "Unchanged" at start
+means unchanged against what the controller holds, not against the program's
+first value. The first time a scan that has read the controller hands the
+driver the program's value for an output, the driver compares it with the tag
+as read: equal, nothing is sent; different, the program's value is written
+once (a struct: only the members that differ). The very first scan runs before
+anything was read, on the inputs' initial values; its values are never sent.
+A program that computes `Cmd := In + 1` therefore never drives `1` before the
+real `In` arrives. The output is the controller program's to own: a value an
+operator sets in the controller belongs in an input, not in an output. An
+output waits for its first read when the controller is down at start and is
+never taken as sent. An output that cannot be read back (`scan-class: none`,
+or a read that failed) is written once at the first push computed from a live
+connection. Earlier versions wrote the first scan's values, an output's
+`init:` included (#1123). A typed output with no `init:` starts at zero in the
+program (see [the tag model](/guides/tag-model/#an-output-with-a-type-starts-at-zero)).
+Commands that arrive later, and every command after a takeover, go out as
+before. An output computed from another source's input is not waited for:
+interlock on that source's `__Online` in the program.
 
 Queued writes go out in tag-name order, a struct's members in field order.
 When the **connection breaks** partway through, the write that broke and
@@ -296,8 +311,8 @@ command in the program, or make it edge-like, if a second write would act
 twice.
 
 **A replica that started as a standby commands every output on its first
-takeover.** The driver has no baseline (see [Writes](#writes)), so the
-takeover push is a set of commands, as the new primary of a hot-standby PLC
+takeover.** A standby has no start-up baseline (see [Writes](#writes)), so
+the takeover push is a set of commands, as the new primary of a hot-standby PLC
 pair drives its outputs at once.
 
 **A flip between two looks is not seen.** A gate func cannot say it
