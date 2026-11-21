@@ -1505,7 +1505,7 @@ namespace Tiad.Openness
         // OnlineCheck: see ITia. Every step after going online records its
         // own failure instead of throwing, so the check always goes offline
         // and reports what it saw.
-        public OnlineCheckResult OnlineCheck(object project, string address, bool trustUnverifiedCertificate)
+        public OnlineCheckResult OnlineCheck(object project, string address, bool trustUnverifiedCertificate, bool fingerprint)
         {
             return Tia(delegate
             {
@@ -1537,7 +1537,7 @@ namespace Tiad.Openness
                     Log.Line("online-check: state {0}{1}", res.State, res.OnlineError == "" ? "" : "; " + TiaNames.LogSafe(res.OnlineError));
                     if (st == OnlineState.Online)
                     {
-                        try
+                        if (fingerprint) try
                         {
                             FingerprintDataProvider fp = portal.GetService<FingerprintDataProvider>();
                             ConfigurationPcInterface fpc = PcInterface(fp.Configuration);

@@ -47,6 +47,7 @@ namespace Tiad
                 string address = r.Str("address");
                 bool trust = r.Bool("trustUnverifiedCertificate");
                 bool announced = r.Bool("announced");
+                bool skipFingerprint = r.Bool("skipFingerprint");
                 r.Done();
                 if (!Ip.IsIPv4(address)) throw TiadException.BadRequest("online-check: address {0} is not an IPv4 address", Json.Quote(address));
                 if (!Target(address)) throw new TiadException(403, Kinds.TargetRefused, address + " is not in TIAD_TARGETS");
@@ -55,7 +56,7 @@ namespace Tiad
                 string outcome = "";
                 try
                 {
-                    res = OnSession(s, delegate(ITia t) { return t.OnlineCheck(s.Handle, address, trust); });
+                    res = OnSession(s, delegate(ITia t) { return t.OnlineCheck(s.Handle, address, trust, !skipFingerprint); });
                     outcome = "ok";
                 }
                 catch (TiadException e)

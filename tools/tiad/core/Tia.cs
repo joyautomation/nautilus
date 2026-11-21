@@ -275,7 +275,7 @@ namespace Tiad
         // while online, the fingerprint read and the online software
         // compare; then offline, always. It never saves. It refuses before
         // going online when address is not the project CPU's address.
-        OnlineCheckResult OnlineCheck(object project, string address, bool trustUnverifiedCertificate);
+        OnlineCheckResult OnlineCheck(object project, string address, bool trustUnverifiedCertificate, bool fingerprint);
 
         // Save saves the project, or writes a project archive, and returns
         // its full path.
