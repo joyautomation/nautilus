@@ -39,6 +39,7 @@ on the right, and a **Check** button that tests your answer.
 3. [Serve your tags over OPC UA](/learn/io-and-protocols/opcua-first-browse/)
 4. [Publish your tags over MQTT (Sparkplug B)](/learn/io-and-protocols/sparkplug-publish/)
 5. [Read a plant OPC UA server](/learn/io-and-protocols/opcua-read-a-server/)
+6. [Read a Logix controller over EtherNet/IP](/learn/io-and-protocols/eip-read-a-logix/)
 
 ## Operator screens
 
