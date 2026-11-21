@@ -14,6 +14,12 @@
 
 ### Added
 
+- **Modbus points in `<ConfigEditor/>`** (#711): each Modbus driver's manifest file shows its
+  sources and points as tables. A point's table, address and scan class and a source's host, port
+  and unit id are editable, because a live apply may change those and nothing else; format, scale,
+  direction and adding or removing points are shown, not edited. A scan class the driver does not
+  declare under `scan-classes:` is named before staging, with the declared ones offered. Pure side
+  in `config/modbus.ts`.
 - **Commit and patch in `<ConfigReview/>`** (#711): once a change is applied, a Commit button
   (optional message) saves it as a git commit via `POST /api/config/commit`, and Download patch
   fetches `GET /api/config/patch` for controllers that run from a build rather than a checkout; a

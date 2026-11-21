@@ -10,6 +10,8 @@
 	import { driverRows, deviceRows, setField, addDriver, addDevice, removeRow, type Overlay, type Row, type RowRef } from '../config/form.js';
 	import { patch, type Op } from '../config/yamlpatch.js';
 	import SchemaForm from './SchemaForm.svelte';
+	import ModbusPoints from './ModbusPoints.svelte';
+	import { modbusManifests } from '../config/modbus.js';
 	import Button from './Button.svelte';
 	import ConfigReview from './ConfigReview.svelte';
 	import { ReviewClient } from '../config/review.js';
@@ -48,6 +50,7 @@
 			return [];
 		}
 	});
+	const modbus = $derived(loaded ? modbusManifests(texts, manifestPath) : []);
 	const edited = $derived(!!loaded && Object.keys(texts).some((p) => texts[p] !== loaded?.files[p]));
 
 	async function load() {
@@ -82,9 +85,9 @@
 		onoverlay?.(overlay);
 	}
 
-	function run(op: () => Op) {
+	function run(op: () => Op, file = manifestPath) {
 		try {
-			texts[manifestPath] = patch(manifest, [op()]);
+			texts[file] = patch(texts[file] ?? '', [op()]);
 			error = null;
 			report();
 		} catch (e) {
@@ -128,6 +131,9 @@
 			</article>
 		{/each}
 		<Button size="sm" onclick={() => run(() => addDevice({ name: 'NewDevice', profile: '', endpoint: '' }))}>Add a device</Button>
+		{#each modbus as mm (mm.path)}
+			<article><ModbusPoints path={mm.path} driver={mm.driver} classes={mm.classes} text={texts[mm.path] ?? ''} onedit={(p, op) => run(op, p)} /></article>
+		{/each}
 		<p class="note">{edited ? 'Edited, not applied.' : 'No changes.'}</p>
 		<ConfigReview before={loaded.files} {overlay} client={review} onapplied={() => void load()} />
 	{:else if !error}
