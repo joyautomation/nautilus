@@ -280,3 +280,55 @@ func TestParamWriteBackPatchForARepolessController(t *testing.T) {
 	}
 	var _ retain.State
 }
+
+// After a commit the file holds the committed value while the running init
+// is the old one. A second edit is written over it (the file moved by our
+// own commit, not by anyone else), and tuning back to the running init is
+// committed too, so the repo never silently disagrees with the plant.
+func TestParamWriteBackAfterItsOwnCommit(t *testing.T) {
+	r := newWBRig(t)
+	quiet := func() { r.now = r.now.Add(31 * time.Second) }
+	r.write(t, "user:akhan", "SP", 70)
+	quiet()
+	if n := r.wb.step(); n != 1 {
+		t.Fatalf("first commit: %d", n)
+	}
+	// A second edit: 70 -> 72, running init still 65.
+	r.write(t, "user:akhan", "SP", 72)
+	quiet()
+	if n := r.wb.step(); n != 1 {
+		t.Fatalf("second edit after a commit: %d commits, unwritable %v", n, r.wb.hook().Unwritable())
+	}
+	if m, _ := os.ReadFile(filepath.Join(r.dir, "nautilus.yaml")); !strings.Contains(string(m), "init: 72\n") {
+		t.Fatalf("manifest:\n%s", m)
+	}
+	// Back to the running init (65): in step with what runs, yet the repo
+	// says 72, so the init goes back.
+	r.write(t, "user:akhan", "SP", 65)
+	quiet()
+	if n := r.wb.step(); n != 1 {
+		t.Fatalf("tuned back: %d", n)
+	}
+	if m, _ := os.ReadFile(filepath.Join(r.dir, "nautilus.yaml")); !strings.Contains(string(m), "init: 65\n") {
+		t.Fatalf("manifest:\n%s", m)
+	}
+	quiet()
+	if n := r.wb.step(); n != 0 || len(r.rt.PendingParameters()) != 0 {
+		t.Fatalf("still pending after the revert: %d %+v", n, r.rt.PendingParameters())
+	}
+	if log := r.commits(t); len(log) != 4 {
+		t.Fatalf("log %q", log)
+	}
+}
+
+// The I/O commit and the write-back share one committer for a worktree: one
+// lock over git's index, one record of what the controller wrote.
+func TestCommitterIsSharedPerWorktree(t *testing.T) {
+	dir := gitProject(t, "a: 1\n")
+	if committerFor(dir) != committerFor(dir) {
+		t.Fatal("two committers for one worktree")
+	}
+	if newParamWriteBack(nil, "commit", dir, "", nil, nil).g != committerFor(dir) {
+		t.Fatal("the write-back has its own committer")
+	}
+}

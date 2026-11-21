@@ -156,7 +156,19 @@ func planParamWriteBack(read readFn, manifest string, pend []runtime.Parameter) 
 			continue
 		}
 		var cur any
-		if err := vn.Decode(&cur); err != nil || !runtime.ParamValuesEqual(cur, pr.Init) {
+		if err := vn.Decode(&cur); err != nil {
+			unw("%s line %d: its init %q does not read as a value", in, vn.Line, vn.Value)
+			continue
+		}
+		if runtime.ParamValuesEqual(cur, pr.Value) {
+			// The repo already says it (a redeploy, or a hand edit): nothing
+			// to write, and nothing left to carry.
+			plan.Written[pr.Name] = pr.Value
+			continue
+		}
+		// The file holds what this controller started with, or what its own
+		// last commit put there; anything else moved without it.
+		if !runtime.ParamValuesEqual(cur, pr.Init) && (pr.LastCommitted == nil || !runtime.ParamValuesEqual(cur, pr.LastCommitted)) {
 			unw("%s line %d: the file's init is %s, not the %v this controller started with, so the repo moved since: bring it up to date, then redeploy", in, vn.Line, vn.Value, pr.Init)
 			continue
 		}

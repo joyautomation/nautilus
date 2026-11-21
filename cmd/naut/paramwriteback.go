@@ -16,7 +16,6 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
-	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -61,8 +60,7 @@ func newParamWriteBack(rt *runtime.Runtime, mode, dir, manifest string, base fs.
 		now: time.Now, unwritable: map[string]string{},
 	}
 	if mode == "commit" && inGitWorktree(dir) {
-		host, _ := os.Hostname()
-		w.g = &gitCommitter{dir: dir, host: host, wrote: map[string]string{}}
+		w.g = committerFor(dir)
 	}
 	return w
 }
@@ -193,6 +191,10 @@ func (w *paramWriteBack) step() int {
 		unwritable = append(unwritable, plan.Unwritable...)
 		if len(plan.Files) == 0 {
 			w.g.mu.Unlock()
+			if len(plan.Written) > 0 { // the repo already says it: settle it
+				w.rt.MarkParametersCommitted(plan.Written)
+				made++
+			}
 			continue
 		}
 		res, err := w.g.commitFiles(plan.Files, by, paramCommitMessage(by, plan))

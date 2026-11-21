@@ -62,11 +62,24 @@ type Parameter struct {
 	// commit made it), waiting for a redeploy to bring it into the running
 	// manifest. It is not pending.
 	Committed bool `json:"committed,omitempty"`
+	// LastCommitted is the value a write-back commit last put in the repo,
+	// while the running manifest's init has not caught up with it (a
+	// redeploy does that). The repo holds it, whatever the plant does next.
+	LastCommitted any `json:"lastCommitted,omitempty"`
 }
 
 // Pending is the parameters a write-back commit would write: plant-ahead
 // and not already committed. Repo-ahead and conflict never are.
-func (p Parameter) Pending() bool { return p.State == ParamPlantAhead && !p.Committed }
+//
+// A parameter tuned back to the running init after a commit is in step with
+// the manifest that runs, yet the repo holds the committed value: that is
+// pending too (the commit puts the init back).
+func (p Parameter) Pending() bool {
+	if p.State == ParamPlantAhead {
+		return !p.Committed
+	}
+	return p.State == ParamInStep && p.LastCommitted != nil && !paramEq(p.LastCommitted, p.Value)
+}
 
 // paramBook holds the parameters' manifest inits and drift bases.
 type paramBook struct {
@@ -160,9 +173,19 @@ func (b *paramBook) snapshot(values map[string]any) (bases map[string]any, edits
 	defer b.mu.Unlock()
 	for name, init := range b.inits {
 		cur, ok := values[name]
-		if !ok || paramEq(cur, init) {
-			delete(b.edits, name)
+		if !ok {
+			continue
+		}
+		// Back at the init with nothing committed that differs from it:
+		// the edit is history. A committed value the init has not caught up
+		// with stays (the repo holds it) until the init does.
+		c, hasC := b.committed[name]
+		if hasC && paramEq(c, init) {
 			delete(b.committed, name)
+			hasC = false
+		}
+		if paramEq(cur, init) && !hasC {
+			delete(b.edits, name)
 		}
 	}
 	for name, e := range b.edits {
@@ -273,10 +296,14 @@ func (r *Runtime) Parameters() []Parameter {
 		if m, ok := r.meta[name]; ok {
 			p.Unit, p.Desc = m.Unit, m.Desc
 		}
-		if e, ok := edits[name]; ok && p.State != ParamInStep {
+		c, hasC := committed[name]
+		if hasC && !paramEq(c, init) {
+			p.LastCommitted = c
+		}
+		if e, ok := edits[name]; ok && (p.State != ParamInStep || p.LastCommitted != nil) {
 			p.EditedBy, p.EditedAtMs = e.By, e.AtMs
 		}
-		if c, ok := committed[name]; ok && p.State == ParamPlantAhead && paramEq(c, cur) {
+		if hasC && p.State == ParamPlantAhead && paramEq(c, cur) {
 			p.Committed = true
 		}
 		if rg, ok := r.tags.Range(name); ok {

@@ -66,10 +66,30 @@ func wireConfigCommit(h *server.IOHook, base fs.FS, dir string) {
 	if !inGitWorktree(dir) {
 		return
 	}
+	g := committerFor(dir)
+	h.Commit = func(c server.IOCommit) (server.IOCommitted, error) { return g.commit(h.Files(), c) }
+}
+
+var (
+	committersMu sync.Mutex
+	committers   = map[string]*gitCommitter{}
+)
+
+// committerFor is the one committer for a worktree: the live I/O commit and
+// the parameter write-back change files in the same repo, so they share a
+// lock (git's index) and a record of what the controller itself wrote. Its
+// boot is HEAD when it was first asked for, at startup.
+func committerFor(dir string) *gitCommitter {
+	committersMu.Lock()
+	defer committersMu.Unlock()
+	if g, ok := committers[dir]; ok {
+		return g
+	}
 	host, _ := os.Hostname()
 	g := &gitCommitter{dir: dir, host: host, wrote: map[string]string{}}
 	g.boot, _ = g.git(nil, "rev-parse", "HEAD")
-	h.Commit = func(c server.IOCommit) (server.IOCommitted, error) { return g.commit(h.Files(), c) }
+	committers[dir] = g
+	return g
 }
 
 var unsafeIdent = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
