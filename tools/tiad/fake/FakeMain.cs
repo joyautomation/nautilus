@@ -253,6 +253,9 @@ namespace Tiad.Fake
         string compareTree = "";
         string downloadState = "";
         bool uploadAsksTls;
+        bool fingerprintAsksTls;
+        List<KeyValuePair<string, string>> fingerprintItems = new List<KeyValuePair<string, string>>();
+        bool fingerprintNoItems;
         string cannotApply = "";
         DeviceIdentity device = BenchDevice();
         bool noIdentify;
@@ -360,6 +363,44 @@ namespace Tiad.Fake
                 lock (mu)
                 {
                     return uploadAsksTls;
+                }
+            }
+        }
+
+        // FingerprintAsksTls makes a fingerprint read ask TLS trust, as the
+        // bench CPU's does (#789 stage 1b: going online asks nothing).
+        public bool FingerprintAsksTls
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return fingerprintAsksTls;
+                }
+            }
+        }
+
+        // FingerprintItems, when not empty, is what every fingerprint read
+        // returns instead of the fake CPU's own; FingerprintNoItems makes
+        // it return none.
+        public List<KeyValuePair<string, string>> FingerprintItems
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return new List<KeyValuePair<string, string>>(fingerprintItems);
+                }
+            }
+        }
+
+        public bool FingerprintNoItems
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return fingerprintNoItems;
                 }
             }
         }
@@ -606,6 +647,10 @@ namespace Tiad.Fake
             }
             string dlState = r.Str("downloadState");
             bool asksTls = r.Bool("uploadAsksTls");
+            bool fpAsksTls = r.Bool("fingerprintAsksTls");
+            var fpItems = new List<KeyValuePair<string, string>>();
+            foreach (var x in r.Children("fingerprintItems")) fpItems.Add(new KeyValuePair<string, string>(x.Str("identifier"), x.Str("value")));
+            bool fpNone = r.Bool("fingerprintNoItems");
             string cannot = r.Str("cannotApply");
             var dr = r.Child("device");
             DeviceIdentity dev = dr == null ? BenchDevice() : DeviceIdentity.Read(dr);
@@ -645,6 +690,9 @@ namespace Tiad.Fake
                 compareTree = tree;
                 downloadState = dlState;
                 uploadAsksTls = asksTls;
+                fingerprintAsksTls = fpAsksTls;
+                fingerprintItems = fpItems;
+                fingerprintNoItems = fpNone;
                 cannotApply = cannot;
                 device = dev;
                 noIdentify = noId;
@@ -896,6 +944,14 @@ namespace Tiad.Fake
         // died is set once a scripted TIA died (tiaDies): for good, as a
         // real TIA that exited stays gone.
         volatile bool died;
+
+        // tlsTrusted is set once this instance answered a TLS question
+        // trusted: as TIA does (#789 stage 1b), it asks none again until
+        // it restarts. loads and hardwareLoads count the downloads that
+        // loaded each CPU, for its fingerprint.
+        bool tlsTrusted;
+        readonly Dictionary<string, int> loads = new Dictionary<string, int>(StringComparer.Ordinal);
+        readonly Dictionary<string, int> hardwareLoads = new Dictionary<string, int>(StringComparer.Ordinal);
 
         public bool Gone
         {
@@ -1213,6 +1269,8 @@ namespace Tiad.Fake
                     rec["software"] = software;
                     rec["state"] = state;
                     script.Loaded(rec);
+                    loads[address] = Count(loads, address) + 1;
+                    if (hardware) hardwareLoads[address] = Count(hardwareLoads, address) + 1;
                     loaded[address] = p;
                     p.Changed = false;
                     return new DownloadCall { State = resultState, MessageList = said, Messages = string.Join("; ", said.ToArray()), Cpu = cpu };
@@ -1385,16 +1443,7 @@ namespace Tiad.Fake
             script.Enter("Upload");
             var trusted = new List<string>();
             // As tiad.Openness answers TIA's TLS question going online.
-            if (script.UploadAsksTls)
-            {
-                const string type = "TlsVerificationConfiguration";
-                string ask = OnlineChecks.Ask(type, "PLC_1 [" + address + "]", "certificate not matching", new List<string>());
-                if (OnlineChecks.Answer(type, trustUnverifiedCertificate) != OnlineChecks.Trusted)
-                {
-                    throw new TiaException(TiaNames.OnlineRefused(address, new List<string> { ask }, "Online connection failed."));
-                }
-                trusted.Add(ask);
-            }
+            if (script.UploadAsksTls) AskTls(address, trustUnverifiedCertificate, trusted);
             var up = (FakeProject)project;
             up.Changed = true;
             // The bench CPU's setting, as the S2a upload found it, and its
@@ -1435,6 +1484,63 @@ namespace Tiad.Fake
                 Name = p.Cpu.Name, Order = p.Cpu.Order, Firmware = p.Cpu.Firmware,
                 Protection = p.Protection, AccessControl = p.AccessControl, Others = new List<KeptDevice>(p.Others),
             };
+        }
+
+        // AskTls asks TLS trust as TIA does going online to a CPU whose
+        // certificate it does not know, unless this instance trusted one
+        // already, and answers as tiad.Openness does.
+        void AskTls(string address, bool trustUnverifiedCertificate, List<string> trusted)
+        {
+            if (tlsTrusted) return;
+            const string type = "TlsVerificationConfiguration";
+            string ask = OnlineChecks.Ask(type, "PLC_1 [" + address + "]", "certificate not matching", new List<string>());
+            if (OnlineChecks.Answer(type, trustUnverifiedCertificate) != OnlineChecks.Trusted)
+            {
+                throw new TiaException(TiaNames.OnlineRefused(address, new List<string> { ask }, "Online connection failed."));
+            }
+            tlsTrusted = true;
+            trusted.Add(ask);
+        }
+
+        static int Count(Dictionary<string, int> d, string address)
+        {
+            int n;
+            return d.TryGetValue(address, out n) ? n : 0;
+        }
+
+        // ReadFingerprint returns the fake CPU's fingerprint: the bench's
+        // eight identifiers, with synthetic values that change as TIA's do
+        // (#789 stage (C)): DownloadId and the change counters on every
+        // load, Hardware on a hardware load.
+        public FingerprintRead ReadFingerprint(object project, string address, bool trustUnverifiedCertificate)
+        {
+            script.Enter("ReadFingerprint");
+            var p = (FakeProject)project;
+            // As the glue: no CPU, or one at another address, is refused.
+            if (p.Station == null && p.Cpu == null) throw new TiaException("fingerprint read: the project has no CPU");
+            if (p.Station != null && p.Station.Cpu.Address != address)
+            {
+                throw new TiaException("fingerprint read: the project's CPU is at " + p.Station.Cpu.Address + ", not " + address);
+            }
+            var r = new FingerprintRead();
+            if (script.FingerprintAsksTls) AskTls(address, trustUnverifiedCertificate, r.TrustedBlindly);
+            if (script.FingerprintNoItems) return r;
+            List<KeyValuePair<string, string>> scripted = script.FingerprintItems;
+            if (scripted.Count > 0)
+            {
+                r.Items = scripted;
+                return r;
+            }
+            int n = Count(loads, address), hw = Count(hardwareLoads, address);
+            r.Items.Add(new KeyValuePair<string, string>("TextLists", "fake-textlists-1"));
+            r.Items.Add(new KeyValuePair<string, string>("Hardware", "fake-hardware-" + hw));
+            r.Items.Add(new KeyValuePair<string, string>("Certificates", "fake-certificates-1"));
+            r.Items.Add(new KeyValuePair<string, string>("Routing", "fake-routing-1"));
+            r.Items.Add(new KeyValuePair<string, string>("Connection", "fake-connection-1"));
+            r.Items.Add(new KeyValuePair<string, string>("DownloadId", "fake-download-" + n));
+            r.Items.Add(new KeyValuePair<string, string>("ChangeCounterPersistent", (100 + n).ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            r.Items.Add(new KeyValuePair<string, string>("ChangeCounterRetain", (100 + n).ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            return r;
         }
 
         public DeviceIdentity Identify(object project, string address)

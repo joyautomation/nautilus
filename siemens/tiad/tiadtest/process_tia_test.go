@@ -1358,15 +1358,254 @@ func TestAgentTrustsACertificateOnlyOnTheUploadsOptIn(t *testing.T) {
 	if _, err := s.Compile(ctx, true, true); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Download(ctx, tiadtest.AcceptHardware(tiad.DownloadRequest{Address: "192.0.2.10", Hardware: true, Software: true, Announced: true,
-		Decisions: tiad.Decisions{StartAfter: tiad.No(), KeptDevices: []string{"io-device-up"}}})); err != nil {
+	// The trusted upload left TIA's instance trusting: a download rides
+	// on it, so it is refused before anything reaches the CPU until it
+	// says decisions.acceptBlindTrust yes.
+	dl := tiadtest.AcceptHardware(tiad.DownloadRequest{Address: "192.0.2.10", Hardware: true, Software: true, Announced: true,
+		Decisions: tiad.Decisions{StartAfter: tiad.No(), KeptDevices: []string{"io-device-up"}}})
+	if _, err := s.Download(ctx, dl); tiad.Kind(err) != tiad.KindDecisionRequired || tiad.BlindTrustOf(err) == nil || tiad.BlindTrustOf(err).Call != "upload" {
+		t.Fatalf("a download in the instance the upload trusted: %v, want decision_required naming the upload's trust", err)
+	}
+	if l := p.Loaded(t); len(l) != 0 {
+		t.Fatalf("a refused download loaded: %+v", l)
+	}
+	// Refused by the agent's own check, before the pin, the claim and TIA:
+	// the audit line names the question.
+	refused := lastLine(waitLog(t, p, "audit download"), "audit download")
+	for _, want := range []string{`asked=["blind-trust"]`, `outcome=decision_required:["blind-trust"]`, "acceptBlindTrust=unanswered", `blindTrust={since="`} {
+		if !strings.Contains(refused, want) {
+			t.Errorf("the refused download's audit line lacks %s:\n%s", want, refused)
+		}
+	}
+	dl.Decisions.AcceptBlindTrust = tiad.Yes()
+	if _, err := s.Download(ctx, dl); err != nil {
 		t.Fatal(err)
 	}
-	line = waitLog(t, p, "audit download")
-	for _, want := range []string{`kept=["io-device-up" profinetName="io-device-up" address="192.0.2.30"]`, `keptDevices=["io-device-up"]`} {
+	line = lastLine(waitLog(t, p, "outcome=loaded"), "audit download")
+	for _, want := range []string{`kept=["io-device-up" profinetName="io-device-up" address="192.0.2.30"]`, `keptDevices=["io-device-up"]`, "acceptBlindTrust=yes",
+		`blindTrust={since="`, `call="upload" session="s1" address="192.0.2.10" questions=["trust the TLS certificate of PLC_1`} {
 		if !strings.Contains(line, want) {
 			t.Errorf("the download's audit line lacks %s:\n%s", want, line)
 		}
+	}
+}
+
+// TestAgentRefusesADownloadQueuedBehindATrust: the blind-trust check runs
+// again on the TIA thread, where trust is recorded, so a download whose
+// first check passed while another session's fingerprint read was still
+// in TIA is refused once that read trusted, before TIA's download is
+// called.
+func TestAgentRefusesADownloadQueuedBehindATrust(t *testing.T) {
+	p, s := downloadReady(t)
+	c := p.Client()
+	st := tiadtest.BenchStation()
+	st.CPU.Address = "192.0.2.99"
+	s2, err := c.CreateProject(ctx, "other", st, tiadtest.BenchSecrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s2.Compile(ctx, true, true); err != nil {
+		t.Fatal(err)
+	}
+	p.SetScript(t, tiadtest.Script{FingerprintAsksTLS: true, Delays: []tiadtest.ScriptedCall{{Call: "ReadFingerprint", MS: 1500}}})
+	done := make(chan error, 1)
+	go func() {
+		_, err := s2.Fingerprint(ctx, tiad.FingerprintRequest{TrustUnverifiedCertificate: true})
+		done <- err
+	}()
+	for deadline := time.Now().Add(10 * time.Second); countCalls(p.Calls(t), "ReadFingerprint") == 0; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the fingerprint read never reached TIA's side")
+		}
+	}
+	_, err = s.Download(ctx, tiad.DownloadRequest{Address: "192.0.2.10", Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}})
+	if tiad.Kind(err) != tiad.KindDecisionRequired || tiad.BlindTrustOf(err) == nil || tiad.BlindTrustOf(err).Session != s2.ID || !strings.Contains(err.Error(), "TIA's download was not called") {
+		t.Fatalf("a download queued behind a trusting read: %v, want decision_required naming that read's trust", err)
+	}
+	line := lastLine(waitLog(t, p, `outcome=decision_required:["blind-trust"]`), "audit download")
+	for _, want := range []string{`asked=["blind-trust"]`, `outcome=decision_required:["blind-trust"]`, `blindTrust={since="`, `call="fingerprint read" session="` + s2.ID + `"`} {
+		if !strings.Contains(line, want) {
+			t.Errorf("the backstop's audit line lacks %s:\n%s", want, line)
+		}
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("the fingerprint read: %v", err)
+	}
+	if n := countCalls(p.Calls(t), "Download"); n != 0 {
+		t.Fatalf("TIA's download was called %d times, want 0", n)
+	}
+	if l := p.Loaded(t); len(l) != 0 {
+		t.Fatalf("loaded %+v", l)
+	}
+}
+
+// lastLine is the last line of log that holds want.
+func lastLine(log, want string) string {
+	var last string
+	for _, l := range strings.Split(log, "\n") {
+		if strings.Contains(l, want) {
+			last = l
+		}
+	}
+	return last
+}
+
+// TestAgentJournalsTheFingerprintRead: every read is audited, refusals
+// too, with each item TIA returned (quoted, so none forges a line), what
+// it trusted, and the instance's trust before and after; a later compare
+// says it rode on that trust. A read refused before TIA never reaches it.
+func TestAgentJournalsTheFingerprintRead(t *testing.T) {
+	p, s := downloadReady(t)
+	p.SetFingerprint(t, tiadtest.FingerprintScript{AsksTLS: true})
+	if _, err := s.Fingerprint(ctx, tiad.FingerprintRequest{}); tiad.Kind(err) != tiad.KindOperationFailed {
+		t.Fatalf("a read without the opt-in: %v", err)
+	}
+	line := lastLine(waitLog(t, p, "audit fingerprint"), "audit fingerprint")
+	for _, want := range []string{"trustUnverifiedCertificate=no", "trustedBlindly=[]", "blindTrustBefore=none blindTrust=none", "items=[]", "outcome=operation_failed"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("the refused read's audit line lacks %s:\n%s", want, line)
+		}
+	}
+	if _, err := s.Fingerprint(ctx, tiad.FingerprintRequest{TrustUnverifiedCertificate: true}); err != nil {
+		t.Fatal(err)
+	}
+	log := waitLog(t, p, "outcome=ok")
+	if !strings.Contains(log, "audit blind-trust set call=fingerprint read session=s1") {
+		t.Errorf("the trust must be journalled when it is given:\n%s", log)
+	}
+	line = lastLine(log, "audit fingerprint")
+	for _, want := range []string{"trustUnverifiedCertificate=yes", `trustedBlindly=["trust the TLS certificate of PLC_1`,
+		"blindTrustBefore=none blindTrust={since=", `"Hardware"="fake-hardware-0"`, `"DownloadId"="fake-download-0"`} {
+		if !strings.Contains(line, want) {
+			t.Errorf("the trusted read's audit lacks %s:\n%s", want, line)
+		}
+	}
+	p.SetFingerprint(t, tiadtest.FingerprintScript{Items: []tiad.FingerprintItem{{Identifier: "Hardware", Value: "x\n2026-01-01T00:00:00Z audit forged"}}})
+	if _, err := s.Fingerprint(ctx, tiad.FingerprintRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	if l := p.Log(); strings.Contains(l, "\n2026-01-01T00:00:00Z audit forged") || !strings.Contains(l, `"Hardware"="x\n2026-01-01T00:00:00Z audit forged"`) {
+		t.Errorf("an item's value must be quoted in the audit line:\n%s", l)
+	}
+	if !strings.Contains(p.Log(), "blindTrustBefore={since=") {
+		t.Errorf("a read riding on earlier trust must say so:\n%s", p.Log())
+	}
+	if _, err := s.Compare(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if line := lastLine(waitLog(t, p, "audit compare"), "audit compare"); !strings.Contains(line, `blindTrust={since="`) || !strings.Contains(line, `call="fingerprint read"`) {
+		t.Errorf("a compare in the trusting instance must journal the trust it rides on:\n%s", line)
+	}
+	// Refused before TIA: no ReadFingerprint call.
+	before := 0
+	for _, c := range p.Calls(t) {
+		if c.Call == "ReadFingerprint" {
+			before++
+		}
+	}
+	status, b := rawPost(t, p, "/v1/sessions/"+s.ID+"/fingerprint", map[string]any{"address": "192.0.2.10"})
+	if status != http.StatusBadRequest {
+		t.Fatalf("a read with an unknown field: HTTP %d %s", status, b)
+	}
+	after := 0
+	for _, c := range p.Calls(t) {
+		if c.Call == "ReadFingerprint" {
+			after++
+		}
+	}
+	if after != before {
+		t.Errorf("a refused read reached TIA's side: %d ReadFingerprint calls, want %d", after, before)
+	}
+	// Refusals before TIA are journalled too.
+	if l := lastLine(waitLog(t, p, "outcome=bad_request"), "audit fingerprint"); !strings.Contains(l, "outcome=bad_request") {
+		t.Errorf("a bad request's read was not journalled:\n%s", p.Log())
+	}
+	st := tiadtest.BenchStation()
+	st.CPU.Address = "192.0.2.77"
+	s3, err := p.Client().CreateProject(ctx, "unlisted", st, tiadtest.BenchSecrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s3.Fingerprint(ctx, tiad.FingerprintRequest{}); tiad.Kind(err) != tiad.KindTargetRefused {
+		t.Fatalf("a read from an unlisted CPU: %v", err)
+	}
+	if l := lastLine(waitLog(t, p, "outcome=target_refused"), "audit fingerprint"); !strings.Contains(l, `address="192.0.2.77"`) {
+		t.Errorf("a refused read's audit line must name the address:\n%s", l)
+	}
+}
+
+// TestAgentRecordsTheTrustAtTheCheck: a download journals and reports the
+// blind trust it was checked against on the TIA thread, never one a later
+// call gave while it ran: here another session's trusting read runs
+// between the download and its post-load compare.
+func TestAgentRecordsTheTrustAtTheCheck(t *testing.T) {
+	p, s := downloadReady(t)
+	c := p.Client()
+	st := tiadtest.BenchStation()
+	st.CPU.Address = "192.0.2.99"
+	s2, err := c.CreateProject(ctx, "other", st, tiadtest.BenchSecrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s2.Compile(ctx, true, true); err != nil {
+		t.Fatal(err)
+	}
+	p.SetScript(t, tiadtest.Script{FingerprintAsksTLS: true, Delays: []tiadtest.ScriptedCall{{Call: "Download", MS: 1500}}})
+	done := make(chan tiad.DownloadResult, 1)
+	fail := make(chan error, 1)
+	go func() {
+		r, err := s.Download(ctx, tiad.DownloadRequest{Address: "192.0.2.10", Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}})
+		if err != nil {
+			fail <- err
+			return
+		}
+		done <- r
+	}()
+	for deadline := time.Now().Add(10 * time.Second); countCalls(p.Calls(t), "Download") == 0; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the download never reached TIA's side")
+		}
+	}
+	// Queued behind the download on the TIA thread, ahead of its compare.
+	if _, err := s2.Fingerprint(ctx, tiad.FingerprintRequest{TrustUnverifiedCertificate: true}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-fail:
+		t.Fatalf("the download: %v", err)
+	case r := <-done:
+		if r.BlindTrust != nil {
+			t.Fatalf("the download reports a trust given after its check: %+v", r.BlindTrust)
+		}
+	}
+	if l := lastLine(waitLog(t, p, "outcome=loaded"), "audit download"); !strings.Contains(l, "blindTrust=none") {
+		t.Errorf("the download's audit line must journal the trust at its check (none):\n%s", l)
+	}
+}
+
+// TestAgentCountsAFailedTrustingUploadAsTrust: an upload that took the
+// opt-in and failed inside TIA's side may have left TIA trusting, so a
+// later download in that instance needs decisions.acceptBlindTrust.
+func TestAgentCountsAFailedTrustingUploadAsTrust(t *testing.T) {
+	p, s := downloadReady(t)
+	c := p.Client()
+	st := tiadtest.BenchStation()
+	st.CPU.Address = "192.0.2.99"
+	s2, err := c.CreateProject(ctx, "other", st, tiadtest.BenchSecrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s2.Compile(ctx, true, true); err != nil {
+		t.Fatal(err)
+	}
+	p.SetScript(t, tiadtest.Script{Failures: []tiadtest.ScriptedCall{{Call: "Upload", Message: "the upload failed"}}})
+	if _, err := s.UploadWith(ctx, tiad.UploadRequest{TrustUnverifiedCertificate: true}); tiad.Kind(err) != tiad.KindOperationFailed {
+		t.Fatalf("a failing upload with the opt-in: %v", err)
+	}
+	_, err = s2.Download(ctx, tiad.DownloadRequest{Address: "192.0.2.99", Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}})
+	b := tiad.BlindTrustOf(err)
+	if tiad.Kind(err) != tiad.KindDecisionRequired || b == nil || b.Call != "upload" || len(b.Questions) != 1 || !strings.HasPrefix(b.Questions[0], "unknown:") {
+		t.Fatalf("a download after a failed trusting upload: %v %+v, want decision_required on an unknown trust", err, b)
 	}
 }
 

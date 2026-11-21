@@ -140,7 +140,7 @@ namespace Tiad
                 " startAfter=" + YesNo(d.StartAfter) + " reinitialize=[" + string.Join(",", reinit) + "]" +
                 " keptDevices=[" + string.Join(",", Quoted(d.KeptDevices)) + "]" +
                 " trustCertificate=" + (d.TrustCertificate == "" ? "unset" : Json.Quote(d.TrustCertificate)) +
-                " acceptUnverifiedHardware=" + YesNo(d.AcceptUnverifiedHardware);
+                " acceptUnverifiedHardware=" + YesNo(d.AcceptUnverifiedHardware) + " acceptBlindTrust=" + YesNo(d.AcceptBlindTrust);
         }
 
         // AuditKept is the devices an apply kept as found, for the audit
@@ -175,9 +175,12 @@ namespace Tiad
                 // the safe side).
                 string reset = "unset";
                 var acting = new List<string>();
+                // rode is the blind trust the download was checked against:
+                // the instance's when the call began, then at each check.
+                BlindTrust rode = blindTrust;
                 try
                 {
-                    object result = DownloadChecked(s, req, ref asked, ref outcome, ref reset, acting);
+                    object result = DownloadChecked(s, req, ref asked, ref outcome, ref reset, ref rode, acting);
                     return result;
                 }
                 catch (TiadException e)
@@ -192,15 +195,16 @@ namespace Tiad
                 }
                 finally
                 {
-                    Log.Line("audit download session={0} project={1} address={2} hardware={3} software={4} dryRun={5} announced={6} {7} protection={8} configurationPassword={9} attestation={10} userManagementReset={11} kept=[{12}] asked=[{13}] acting=[{14}] outcome={15}",
+                    Log.Line("audit download session={0} project={1} address={2} hardware={3} software={4} dryRun={5} announced={6} {7} protection={8} configurationPassword={9} attestation={10} userManagementReset={11} blindTrust={12} kept=[{13}] asked=[{14}] acting=[{15}] outcome={16}",
                         s.Id, Json.Quote(s.Project), Json.Quote(req.Address), req.Hardware, req.Software, req.DryRun, req.Announced,
                         AuditDecisions(req.Decisions), req.Secrets.Protection == "" ? "unset" : "set",
-                        req.Secrets.ConfigurationPassword == "" ? "unset" : "set", req.Attestation.Audit(), reset, AuditKept(s.Kept), asked, string.Join(",", Quoted(acting).ToArray()), outcome);
+                        req.Secrets.ConfigurationPassword == "" ? "unset" : "set", req.Attestation.Audit(), reset, BlindTrust.Audit(rode),
+                        AuditKept(s.Kept), asked, string.Join(",", Quoted(acting).ToArray()), outcome);
                 }
             });
         }
 
-        object DownloadChecked(Session s, DownloadRequest req, ref string asked, ref string outcome, ref string resetAudit, List<string> acting)
+        object DownloadChecked(Session s, DownloadRequest req, ref string asked, ref string outcome, ref string resetAudit, ref BlindTrust rode, List<string> acting)
         {
             string bad = req.Validate();
             if (bad != null) throw TiadException.BadRequest("{0}", bad);
@@ -305,6 +309,17 @@ namespace Tiad
                 sd["keptDevices"] = KeptDevice.ToJson(s.Kept);
                 throw new TiadException(409, Kinds.DecisionRequired, "the request does not say whether the CPU starts after loading (decisions.startAfter); nothing was sent to the CPU", sd, false);
             }
+            // A download, a dry run too, that would ride on this TIA
+            // instance's blind trust needs the request's yes (BlindTrustRule),
+            // checked before anything reaches the CPU.
+            rode = blindTrust;
+            TiadException btRefused = BlindTrustRefusal(rode, req, s);
+            if (btRefused != null)
+            {
+                asked = Json.Quote(QuestionIds.BlindTrust);
+                outcome = btRefused.Kind + ":[" + asked + "]";
+                throw btRefused;
+            }
             // The CPU must still be the one tiad pinned (section 3.8),
             // before a dry run too: it reaches the CPU.
             CheckDevicePin(s, req.Address, req.DryRun ? "dry run" : "download");
@@ -357,10 +372,22 @@ namespace Tiad
             };
 
             DownloadOutcome result;
+            BlindTrust ranWith = rode;
+            bool lateRefused = false;
             try
             {
                 result = OnSession(s, delegate(ITia t)
                 {
+                    // Again on the TIA thread, where trust is recorded: a
+                    // call queued ahead of this one may have given it. What
+                    // it reads here is what the download rides on.
+                    ranWith = blindTrust;
+                    TiadException late = BlindTrustRefusal(ranWith, req, s, "TIA's download was not called");
+                    if (late != null)
+                    {
+                        lateRefused = true;
+                        throw late;
+                    }
                     // A dry run never starts the CPU, whatever the request
                     // says (#1154 review): if TIA loads it without asking,
                     // start-after is NoAction.
@@ -369,6 +396,13 @@ namespace Tiad
             }
             catch (TiadException e)
             {
+                rode = ranWith;
+                if (lateRefused)
+                {
+                    asked = Json.Quote(QuestionIds.BlindTrust);
+                    outcome = e.Kind + ":[" + asked + "]";
+                    throw;
+                }
                 asked = Ids(askedQs);
                 // An outcome_unknown from TIA's side (its download had
                 // begun when it failed) passes through, with the acting
@@ -394,6 +428,7 @@ namespace Tiad
             {
                 // A reset is journalled given only once tiad answered it.
                 if (given != "") resetAudit = "given:" + given;
+                rode = ranWith;
             }
             asked = Ids(askedQs);
 
@@ -427,6 +462,7 @@ namespace Tiad
                 if (s.Kept.Count > 0) dq.Add(KeptRule.Question(s.Kept));
                 o["questions"] = Question.ToJson(dq);
                 o["keptDevices"] = KeptDevice.ToJson(s.Kept);
+                o["blindTrust"] = rode == null ? null : rode.ToJson();
                 return o;
             }
             // A cancel after an acting answer is never a clean refusal: TIA
@@ -517,6 +553,10 @@ namespace Tiad
                 o["state"] = result.State;
                 o["stateSource"] = result.StateSource;
             }
+            // The TIA instance's blind trust the download rode on, if any,
+            // for the deploy record (BlindTrustRule): as the TIA thread read
+            // it just before TIA's download, not later.
+            o["blindTrust"] = rode == null ? null : rode.ToJson();
             return o;
         }
 
@@ -540,7 +580,17 @@ namespace Tiad
                 if (!Target(address)) throw new TiadException(403, Kinds.TargetRefused, address + " is not in TIAD_TARGETS");
                 CheckDevicePin(s, address, "compare");
                 var diffs = new List<Difference>();
-                OnlineCompare cmp = OnSession(s, delegate(ITia t) { return t.Compare(s.Handle, address); });
+                // Journalled before it goes online, so a compare that fails
+                // is journalled as riding on the trust too.
+                OnlineCompare cmp = OnSession(s, delegate(ITia t)
+                {
+                    BlindTrust bt = blindTrust;
+                    if (bt != null)
+                    {
+                        Log.Line("audit compare session={0} project={1} address={2} blindTrust={3}", s.Id, Json.Quote(s.Project), Json.Quote(address), BlindTrust.Audit(bt));
+                    }
+                    return t.Compare(s.Handle, address);
+                });
                 bool equal = TiaNames.CompareEqual(cmp == null ? null : cmp.Tree, cmp == null ? null : cmp.Blocks, diffs);
                 var list = new List<object>();
                 foreach (var d in diffs)
@@ -554,6 +604,9 @@ namespace Tiad
                 o["equal"] = equal;
                 o["differences"] = list;
                 o["blocks"] = new List<object>(TiaNames.Labels(cmp == null ? null : cmp.Blocks).ToArray());
+                // A compare asks no TLS question of its own; it may ride on
+                // the instance's blind trust.
+                o["blindTrust"] = BlindTrustJson();
                 return o;
             });
         }
@@ -634,7 +687,8 @@ namespace Tiad
                         removed = t.RemoveAccess(s.Handle, s.Made);
                         s.Made = new AccessMade();
                     }
-                    List<string> tr = t.Upload(s.Handle, address, trust);
+                    List<string> tr = TrustingCall("upload", s, address, trust, delegate { return t.Upload(s.Handle, address, trust); });
+                    RecordBlindTrust("upload", s, address, tr);
                     // The project is replaced now: a failed identity read
                     // must not skip the audit lines below.
                     try
@@ -660,12 +714,12 @@ namespace Tiad
                     }
                     return tr;
                 });
-                if (trust || trusted.Count > 0)
+                if (trust || trusted.Count > 0 || blindTrust != null)
                 {
                     var q = new List<string>();
                     foreach (string x in trusted) q.Add(Json.Quote(x));
-                    Log.Line("audit upload session={0} project={1} address={2} trustUnverifiedCertificate={3} trustedBlindly=[{4}]",
-                        s.Id, Json.Quote(s.Project), Json.Quote(address), trust ? "yes" : "no", string.Join(",", q.ToArray()));
+                    Log.Line("audit upload session={0} project={1} address={2} trustUnverifiedCertificate={3} trustedBlindly=[{4}] blindTrust={5}",
+                        s.Id, Json.Quote(s.Project), Json.Quote(address), trust ? "yes" : "no", string.Join(",", q.ToArray()), BlindTrust.Audit(blindTrust));
                 }
                 // Trust on first use: the first upload pins the CPU's
                 // identity; every later one must match it (section 3.8).
@@ -683,6 +737,7 @@ namespace Tiad
                 });
                 var o = new Obj();
                 o["trustedBlindly"] = trusted.ToArray();
+                o["blindTrust"] = BlindTrustJson();
                 o["device"] = read.ToJson();
                 o["pin"] = pin;
                 // What a spec that reuses this CPU must name (section 3.3).

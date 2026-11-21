@@ -33,6 +33,7 @@ using Siemens.Engineering.Compiler;
 using Siemens.Engineering.Connection;
 using Siemens.Engineering.Download;
 using Siemens.Engineering.Download.Configurations;
+using Siemens.Engineering.FingerprintData;
 using Siemens.Engineering.HW;
 using Siemens.Engineering.HW.Features;
 using Siemens.Engineering.Online;
@@ -93,7 +94,17 @@ namespace Tiad.Openness
             this.gone = gone;
             answers = new OnlineAnswers(trustUnverifiedCertificate);
             this.address = address;
-            cc.OnlineLegitimation += Handle;
+            if (cc != null) cc.OnlineLegitimation += Handle;
+        }
+
+        // ForCallback answers the questions of a call that takes its own
+        // OnlineConfigurationDelegate (GetFingerprintData) instead of a
+        // connection's OnlineLegitimation event: pass Handle to it. It
+        // answers through the same OnlineRecord.Handle path, so TIA gets
+        // only Boundary.Fail's exception from it (#1145).
+        public static OnlineAsks ForCallback(Action gone, bool trustUnverifiedCertificate, string address)
+        {
+            return new OnlineAsks(null, gone, trustUnverifiedCertificate, address);
         }
 
         // Stop detaches the handler and never throws: TIA may be gone
@@ -104,7 +115,7 @@ namespace Tiad.Openness
         // (OnlineAnswers), and TIA counts as gone.
         public void Stop()
         {
-            if (!answers.Stop(delegate { cc.OnlineLegitimation -= Handle; }, "online: detaching tiad's online handler from TIA")) gone();
+            if (!answers.Stop(delegate { if (cc != null) cc.OnlineLegitimation -= Handle; }, "online: detaching tiad's online handler from TIA")) gone();
         }
 
         // Handle answers one question, as OnlineChecks decides: a
@@ -115,7 +126,7 @@ namespace Tiad.Openness
         // recorded as a question answered no (the operation fails), and
         // TIA gets Boundary.Fail's exception, never a tiad type
         // (OnlineRecord.Handle, in core).
-        void Handle(OnlineConfiguration c)
+        public void Handle(OnlineConfiguration c)
         {
             record.Handle(delegate { return c.GetType().Name; }, delegate(string type, OnlineRecord.Call call) { Answer(c, type, call); });
         }
@@ -1467,6 +1478,83 @@ namespace Tiad.Openness
         // Upload replaces the project's station with the one the CPU at
         // address holds. It answers no upload configuration: one that
         // asks (a password, missing products) cancels it, naming it.
+        // ReadFingerprint: see ITia. Going online from the project's CPU
+        // asks nothing on the bench CPU; TIA's fingerprint service, which
+        // the portal serves, asks TLS trust through its own callback (#789
+        // stage 1b). The portal's service alone, with no project online,
+        // never reached the bench CPU (stage 1), so the read goes online
+        // first. Every step fails the read; offline always.
+        public FingerprintRead ReadFingerprint(object project, string address, bool trustUnverifiedCertificate)
+        {
+            return Tia(delegate
+            {
+                Project p = Of(project).Project;
+                HwDevice d = StationOf(p);
+                if (d == null) throw new TiaException("fingerprint read: the project has no CPU");
+                DeviceItem cpu = CpuOf(d);
+                string at0 = OptionalAttribute(CpuNode(cpu), "Address");
+                if (at0 != address) throw new TiaException("fingerprint read: the project's CPU is at " + at0 + ", not " + address);
+                FingerprintDataProvider fp = portal.GetService<FingerprintDataProvider>();
+                if (fp == null) throw new TiaException("fingerprint read: TIA serves no FingerprintDataProvider");
+                OnlineProvider op = cpu.GetService<OnlineProvider>();
+                ConfigurationAddress at = TargetInterface(PcInterface(op.Configuration)).Addresses.Create(address);
+                ConfigurationPcInterface fpc = PcInterface(fp.Configuration);
+                ConfigurationAddress fat = fpc.TargetInterfaces.Count > 0 ? TargetInterface(fpc).Addresses.Create(address) : fpc.Addresses.Create(address);
+                var online = new OnlineAsks(op.Configuration, Detached, trustUnverifiedCertificate, address);
+                var asks = OnlineAsks.ForCallback(Detached, trustUnverifiedCertificate, address);
+                var r = new FingerprintRead();
+                try
+                {
+                    OnlineState st = op.GoOnline(at);
+                    bool failed = true;
+                    try
+                    {
+                        if (st != OnlineState.Online)
+                        {
+                            if (online.Asked.Count > 0) throw new TiaException(TiaNames.OnlineRefused(address, online.Asked, "online state " + st));
+                            throw new TiaException("fingerprint read: TIA could not go online to " + address + ": " + st);
+                        }
+                        FingerprintDataResult res = fp.GetFingerprintData(fat, asks.Handle);
+                        if (res == null || res.FingerprintDataItems == null) throw new TiaException("fingerprint read: TIA returned no result");
+                        foreach (FingerprintDataItem it in res.FingerprintDataItems)
+                        {
+                            r.Items.Add(new KeyValuePair<string, string>(it.FingerprintDataIdentifier ?? "", it.FingerprintDataValue ?? ""));
+                        }
+                        failed = false;
+                    }
+                    finally
+                    {
+                        // After a failure TIA may be gone: going offline
+                        // then must not replace that failure.
+                        if (failed) DownloadSteps.Quietly(delegate { op.GoOffline(); }, "fingerprint read: going offline after a failed read (if TIA is alive, the project may still be online)");
+                        else op.GoOffline();
+                    }
+                }
+                catch (TiaException)
+                {
+                    throw;
+                }
+                catch (Exception e)
+                {
+                    TiaException refused = asks.Explain(address, e) ?? online.Explain(address, e);
+                    if (refused != null) throw refused;
+                    throw;
+                }
+                finally
+                {
+                    online.Stop();
+                    asks.Stop();
+                    r.TrustedBlindly.AddRange(online.TrustedBlindly);
+                    r.TrustedBlindly.AddRange(asks.TrustedBlindly);
+                }
+                // A question answered no is a refusal, even when TIA went on.
+                online.Check(address, "fingerprint read");
+                asks.Check(address, "fingerprint read");
+                Log.Line("fingerprint read: {0} items from {1}; trusted blindly {2}", r.Items.Count, TiaNames.LogSafe(address), r.TrustedBlindly.Count);
+                return r;
+            });
+        }
+
         public List<string> Upload(object project, string address, bool trustUnverifiedCertificate)
         {
             return Tia(delegate

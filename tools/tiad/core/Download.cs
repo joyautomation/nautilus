@@ -54,6 +54,10 @@ namespace Tiad
         // that loads the hardware configuration, which tiad cannot verify
         // (HardwareRule).
         public const string UnverifiedHardware = "unverified-hardware";
+        // BlindTrust is the agent's own question too: a download in a TIA
+        // instance that has trusted a CPU's certificate blindly
+        // (BlindTrustRule).
+        public const string BlindTrust = "blind-trust";
         public const string Other = "other";
     }
 
@@ -108,6 +112,10 @@ namespace Tiad
         // hardware configuration although tiad cannot verify it. Yes
         // needs the request's attestation too (HardwareRule).
         public bool? AcceptUnverifiedHardware;
+        // AcceptBlindTrust answers BlindTrust: download although this TIA
+        // instance trusted a CPU's certificate blindly earlier. It answers
+        // no TLS question of the download's own (BlindTrustRule).
+        public bool? AcceptBlindTrust;
 
         public static Decisions Read(Reader r)
         {
@@ -126,6 +134,7 @@ namespace Tiad
             d.TrustCertificate = r.Str("trustCertificate");
             d.KeptDevices = r.Strs("keptDevices");
             d.AcceptUnverifiedHardware = r.OptBool("acceptUnverifiedHardware");
+            d.AcceptBlindTrust = r.OptBool("acceptBlindTrust");
             return d;
         }
     }
@@ -283,6 +292,81 @@ namespace Tiad
                 return Why + ", and decisions.acceptUnverifiedHardware says no: download the software only (hardware: false)";
             }
             if (!req.Attestation.Given) return Why + ": decisions.acceptUnverifiedHardware needs the operator's attestation too (attestation.by: who, attestation.text: that the CPU's hardware configuration is what they intend to load)";
+            return null;
+        }
+    }
+
+    // BlindTrust is when this agent's TIA instance first answered a CPU's
+    // TLS certificate question trusted, blindly, on a request's
+    // trustUnverifiedCertificate (an upload, a fingerprint read). TIA keeps
+    // that trust for the rest of the instance: a later online call asks
+    // nothing and rides on it (#789 stage 1b). The agent starts TIA once,
+    // so only a restart clears it. Since is tiad's UTC clock; Call,
+    // Session and Address say which call gave it; Questions are the
+    // questions it answered, as tiad recorded them.
+    public sealed class BlindTrust
+    {
+        public string Since = "", Call = "", Session = "", Address = "";
+        public List<string> Questions = new List<string>();
+
+        public Obj ToJson()
+        {
+            var o = new Obj();
+            o["since"] = Since;
+            o["call"] = Call;
+            o["session"] = Session;
+            o["address"] = Address;
+            o["questions"] = Questions.ToArray();
+            return o;
+        }
+
+        public string Describe()
+        {
+            return "since " + Since + ", by the " + Call + " of session " + Session + " from " + Address;
+        }
+
+        // Audit is the record for an audit line: "none", or every field,
+        // each quoted.
+        public static string Audit(BlindTrust b)
+        {
+            if (b == null) return "none";
+            var q = new List<string>();
+            foreach (string x in b.Questions) q.Add(Json.Quote(x));
+            return "{since=" + Json.Quote(b.Since) + " call=" + Json.Quote(b.Call) + " session=" + Json.Quote(b.Session) +
+                " address=" + Json.Quote(b.Address) + " questions=[" + string.Join(",", q.ToArray()) + "]}";
+        }
+    }
+
+    // BlindTrustRule: a download, a dry run too, in a TIA instance that
+    // trusted a CPU's certificate blindly rides on that trust, since TIA
+    // asks no TLS question again. It needs decisions.acceptBlindTrust,
+    // checked before anything reaches the CPU; the fix without it is an
+    // agent restart. The yes answers no TLS question the download asks
+    // itself: that still takes decisions.trustCertificate.
+    public static class BlindTrustRule
+    {
+        public static Question Question(BlindTrust b)
+        {
+            return new Question
+            {
+                Id = QuestionIds.BlindTrust,
+                Message = "download in a TIA instance that trusted a CPU's certificate blindly (" + b.Describe() + "): set decisions.acceptBlindTrust, or restart the agent",
+            };
+        }
+
+        // Check returns null when the request may go on, or why not,
+        // naming the fix; declined is set when the request answered no.
+        public static string Check(BlindTrust b, bool? accept, out bool declined)
+        {
+            declined = false;
+            if (b == null) return null;
+            string why = "this agent's TIA instance trusted a CPU's certificate blindly (" + b.Describe() + "), and TIA keeps that trust until it restarts, so this download would ride on it";
+            if (!accept.HasValue) return why + ": restart the agent for a TIA instance that trusts nothing, or set decisions.acceptBlindTrust";
+            if (!accept.Value)
+            {
+                declined = true;
+                return why + ", and decisions.acceptBlindTrust says no: restart the agent for a TIA instance that trusts nothing";
+            }
             return null;
         }
     }

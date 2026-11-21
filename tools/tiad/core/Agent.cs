@@ -129,6 +129,7 @@ namespace Tiad
             RegisterTia(r);
             RegisterDownload(r);
             RegisterPins(r);
+            RegisterFingerprint(r);
         }
 
         object Health(Call c)

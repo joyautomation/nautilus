@@ -90,6 +90,13 @@ type Script struct {
 	// UploadAsksTLS makes going online for an upload ask TLS trust, as a
 	// CPU with secure PG/PC communication and no known certificate does.
 	UploadAsksTLS bool `json:"uploadAsksTls,omitempty"`
+	// FingerprintAsksTLS makes a fingerprint read ask TLS trust, as the
+	// bench CPU's does, until the fake's TIA trusted once.
+	FingerprintAsksTLS bool `json:"fingerprintAsksTls,omitempty"`
+	// FingerprintItems, when set, is what every fingerprint read returns;
+	// FingerprintNoItems makes it return none.
+	FingerprintItems   []tiad.FingerprintItem `json:"fingerprintItems,omitempty"`
+	FingerprintNoItems bool                   `json:"fingerprintNoItems,omitempty"`
 	// CannotApply is what the TIA side says it cannot apply yet (as
 	// tiad.Openness says of rack modules), refusing every apply before
 	// any write.
@@ -309,6 +316,29 @@ func (p *Process) SetAccess(t testing.TB, a AccessScript) {
 	p.script.PasswordPolicy = a.Policy
 	p.script.UploadAccessControl = a.UploadAccessControl
 	p.script.AccessRecords = a.Records
+	s := p.script
+	p.mu.Unlock()
+	p.SetScript(t, s)
+}
+
+// SetFingerprint scripts the fingerprint reads; Fails is a scripted
+// failure of the ReadFingerprint call.
+func (p *Process) SetFingerprint(t testing.TB, fs FingerprintScript) {
+	t.Helper()
+	p.mu.Lock()
+	p.script.FingerprintAsksTLS = fs.AsksTLS
+	p.script.FingerprintItems = fs.Items
+	p.script.FingerprintNoItems = fs.NoItems
+	var failures []ScriptedCall
+	for _, f := range p.script.Failures {
+		if f.Call != "ReadFingerprint" {
+			failures = append(failures, f)
+		}
+	}
+	if fs.Fails != "" {
+		failures = append(failures, ScriptedCall{Call: "ReadFingerprint", Message: fs.Fails})
+	}
+	p.script.Failures = failures
 	s := p.script
 	p.mu.Unlock()
 	p.SetScript(t, s)

@@ -39,6 +39,9 @@ type Target interface {
 	// SetAccess scripts the projects' password policy for local users and
 	// the access control an upload brings ("": Disabled).
 	SetAccess(t testing.TB, a AccessScript)
+	// SetFingerprint scripts the fingerprint reads: whether they ask TLS
+	// trust, what they return, a failure inside TIA's side.
+	SetFingerprint(t testing.TB, fs FingerprintScript)
 }
 
 // Loaded is one download that loaded a CPU.
@@ -85,6 +88,9 @@ func (g goFake) SetDevice(_ testing.TB, d tiad.DeviceIdentity, noIdentify bool) 
 	g.f.SetDevice(d, noIdentify)
 }
 func (g goFake) SetAccess(_ testing.TB, a AccessScript) { g.f.SetAccess(a) }
+func (g goFake) SetFingerprint(_ testing.TB, fs FingerprintScript) {
+	g.f.SetFingerprint(fs)
+}
 func (g goFake) Loaded(testing.TB) []Loaded {
 	var out []Loaded
 	for _, d := range g.f.Downloads() {
@@ -107,6 +113,7 @@ func Contract(t *testing.T, start Starter) {
 	t.Run("Reuse", func(t *testing.T) { contractReuse(t, start) })
 	t.Run("ReuseAfterARefusedUpload", func(t *testing.T) { contractReuseAfterARefusedUpload(t, start) })
 	t.Run("UserManagementReset", func(t *testing.T) { contractUserManagementReset(t, start) })
+	t.Run("Fingerprint", func(t *testing.T) { contractFingerprint(t, start) })
 }
 
 // ContractNoTIA is the part of the contract that never needs TIA and

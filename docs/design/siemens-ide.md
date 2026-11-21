@@ -568,9 +568,10 @@ The client checks each path and the agent checks again.
 | `POST /v1/sessions/{id}/software` | `{group, sources, tagTables, prune}` → `{results: [{path, ok, messages}], blocks: [{name, kind}]}`. Generates blocks into the group named `group`. With `prune`, blocks in that group that no source produced are deleted |
 | `POST /v1/sessions/{id}/compile` | `{hardware, software}` → `{result: "success" or "warning" or "error", errors, warnings, messages: [{object, severity, text}]}` |
 | `POST /v1/sessions/{id}/download` | §3.5 (P3) |
-| `POST /v1/sessions/{id}/compare` | → `{equal, differences: [{object, state}]}`. An online compare |
+| `POST /v1/sessions/{id}/compare` | → `{equal, differences: [{object, state}], blindTrust}`. An online compare. `blindTrust` is the TIA instance's (§3.8), or `null` |
+| `POST /v1/sessions/{id}/fingerprint` | `{trustUnverifiedCertificate?}` → `{address, items: [{identifier, value}], trustedBlindly, blindTrust}`. TIA's fingerprint of the session's CPU, read online and read-only (§3.8) |
 | `POST /v1/sessions/{id}/export` | `{dir, blocks: "scl" or "xml" or "", tagTables, hardware, gsdml}` → `{files: [path]}` (P6 for `gsdml`) |
-| `POST /v1/sessions/{id}/upload` | `{trustUnverifiedCertificate?}` → `{trustedBlindly, device, pin, cpu: {name, order, firmware}, removedAccess?: [string]}`. CPU into the session's project, for bringing a legacy CPU's program into nautilus (S2a: works). Pins the CPU's identity on first use, or checks it (§3.8). `cpu` is what a spec must name to keep the uploaded CPU. `removedAccess` names the user and role this session had made, removed first (§3.3, `cpu.accessControl`) |
+| `POST /v1/sessions/{id}/upload` | `{trustUnverifiedCertificate?}` → `{trustedBlindly, blindTrust, device, pin, cpu: {name, order, firmware}, removedAccess?: [string]}`. CPU into the session's project, for bringing a legacy CPU's program into nautilus (S2a: works). Pins the CPU's identity on first use, or checks it (§3.8). `cpu` is what a spec must name to keep the uploaded CPU. `removedAccess` names the user and role this session had made, removed first (§3.3, `cpu.accessControl`) |
 | `POST /v1/sessions/{id}/save` | `{archive?}` → `{path}`. Refused (`unclean_session`) after an apply or upload failed part-way |
 | `GET /v1/pins`, `POST /v1/pins/{address}` | The device pins (§3.8). An upload pins the CPU on first use and must match after; compare and download check the pin first |
 
@@ -594,14 +595,15 @@ Request:
                  "consistentDownload": true, "alarmTexts": true, "allBlocks": true,
                  "identificationDataLoadNothing": true,
                  "startAfter": true, "trustCertificate": "<sha256 fingerprint>",
-                 "keptDevices": ["<device name>"], "acceptUnverifiedHardware": true },
+                 "keptDevices": ["<device name>"], "acceptUnverifiedHardware": true,
+                 "acceptBlindTrust": true },
   "announced": true,
   "attestation": { "by": "<who>", "text": "<the CPU's hardware configuration is what I intend to load>" },
   "secrets": { "protection": "<password>", "configurationPassword": "<password>" }
 }
 ```
 
-Response: `{dryRun, downloaded, questions: [{id, message, detail, objects}], state, stateSource, keptDevices}`,
+Response: `{dryRun, downloaded, questions: [{id, message, detail, objects}], state, stateSource, keptDevices, blindTrust}`,
 and on a download that loaded hardware `hardwareVerified: false`, a
 `warning` and the `attestation` as journalled (`{by, at, text,
 cpuAccessControl}`); on a download that reset the CPU's user management,
@@ -924,6 +926,13 @@ behaviour. So, until then:
   - `unverified-hardware`: the agent's own question, asked of every
     download that loads hardware; answered only by
     `acceptUnverifiedHardware: true` with an `attestation` (above).
+  - `blind-trust`: the agent's own question, asked of every download, a
+    dry run too, in a TIA instance that trusted a CPU's certificate
+    blindly (§3.8); answered only by `acceptBlindTrust: true`, checked
+    before anything reaches the CPU. `false` is `declined`. The yes
+    answers no TLS question the download asks itself: that still takes
+    `trustCertificate`. The error's data and a successful download carry
+    `blindTrust`, the record it rode on, for the deploy record.
   - `other` (the check's own text).
 - **A real download** answers each question only from `decisions`.
   - The first check the request does not answer fails the call with
@@ -1047,10 +1056,10 @@ and the audit line names the fields the pin holds. From then on:
   planned on #789). **So today, once a CPU is pinned, its compare and
   download are refused** until an online read is proven: that is the
   fail-closed design (decided on #789, 2026-11-20). A re-pin records a new
-  identity but does not lift this, and no call removes a pin. On the bench
-  CPU nothing is lost, since its TLS question refuses them already. A CPU
-  that asks no TLS question could be compared before its first upload and
-  cannot after it.
+  identity but does not lift this, and no call removes a pin. A CPU can
+  be compared before its first upload and cannot after it: going online
+  and comparing ask no TLS question on the bench CPU (#789 stage 1b), so
+  nothing but the pin refuses them.
 
 **What it catches, and what it does not.** The device pin catches a
 different model, or firmware of another major.minor version, at the
@@ -1074,6 +1083,75 @@ yet. The certificate pin below is meant to, once S2b proves it.
 download, the project owns the CPU's communication certificate. tiad will
 pin its SHA-256 per address, require TIA to ask no TLS question for a
 pinned address, and refuse the blind upload opt-in there.
+
+**The fingerprint read (built).** `POST /v1/sessions/{id}/fingerprint`
+goes online from the session's CPU, reads what TIA's fingerprint service
+reports for the CPU, and goes offline (after a failure, as far as TIA
+still answers: the project may stay online if TIA is failing). It writes nothing and
+saves nothing. On the bench CPU (#789 stages 1b and (C)) it returns eight
+items, in TIA's order and named as TIA names them: `TextLists`,
+`Hardware`, `Certificates`, `Routing` and `Connection` checksums,
+`DownloadId`, `ChangeCounterPersistent` and `ChangeCounterRetain`.
+
+- **They are checksums and counters, not the CPU's identity**: no order
+  number, no serial, no program checksum. They say whether what the CPU
+  holds changed. `DownloadId` and both counters changed on every bench
+  load. `Hardware` changed on the first tiad hardware load and stayed the
+  same on the next, an identical one. That first load also reset the
+  CPU's user management, and one observation cannot tell which of the two
+  changed it: read it as "the first tiad load or a user-management reset
+  changes it once" until more loads show which.
+- **It fails, never answers part of a read**: the CPU not reached
+  online, any question not answered, any failure in TIA's side, no
+  items, an item with no identifier, one named twice, more than 64, an
+  identifier over 128 bytes or a value over 1024 bytes. A failure leaves
+  nothing to compare against.
+- **Same gates as a compare, before the read:** the session's CPU
+  address, `TIAD_TARGETS`, and the device pin (whose check reads the
+  CPU's identity through TIA when a pin exists).
+- **Journalled:** every read, refusals too (a bad request, a gate), is an audit line with each
+  item quoted, what it trusted, and the instance's blind trust before and
+  after it.
+- **The call sequence is bench-proven** (the stage-1b probe build). The
+  fail-closed shape is proven on the fakes only. TIA's portal service
+  alone, with no project online, never reached the bench CPU (stage 1),
+  so the read goes online from the project first.
+
+**Blind trust (built).** Going online and comparing ask no TLS question
+on the bench CPU, but the fingerprint read asks one ("certificate not
+matching", no certificate shown), and an upload may. Only the request's
+`trustUnverifiedCertificate: true` answers it, blindly; without it the
+read fails, naming the opt-in. TIA then keeps that trust **for the rest
+of its instance**: a later read without the opt-in asks nothing and
+succeeds. Nothing is saved, and a TIA restart forgets it (stage 1b). The
+agent starts TIA once, so the agent records the instance's blind trust
+(`blindTrust: {since, call, session, address, questions}`, `since` by
+tiad's clock) and keeps it until it restarts:
+
+- the first trust sets the record and is an audit line; later ones are
+  logged beside it;
+- a call that took the opt-in and then failed in TIA's side counts as
+  trust (`questions: ["unknown: ..."]`), since TIA may have trusted before
+  it failed. That includes a failure before going online (no CPU, another
+  address): the safe side, since tiad cannot tell how far it got;
+- every later fingerprint read, compare, upload and download reports it
+  (`blindTrust`, `null` while there is none) and journals it: a compare
+  before it goes online, a download as the TIA thread read it just before
+  TIA's download (never a trust given later, while it ran);
+- a download, a dry run too, that would ride on it is refused before
+  anything reaches the CPU (`blind-trust`, §3.5) unless it says
+  `decisions.acceptBlindTrust: true`. The other fix is restarting the
+  agent, for a TIA instance that trusts nothing. The check runs again on
+  the TIA thread just before TIA's download, so a trust a queued call
+  gave in between is caught too; that refusal comes after the pin check
+  and the CPU's claim, and says TIA's download was not called.
+- a fingerprint read refused for a certificate question alone names the
+  opt-in; one refused for credentials or a question tiad does not know
+  does not, since the opt-in answers neither.
+
+So a deploy that reads the fingerprint before loading, in the same
+instance, must accept the blind trust; one that reads it after loading
+leaves the next deploy in that instance to accept it.
 
 **Calls (no TIA):**
 
