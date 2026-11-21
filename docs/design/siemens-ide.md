@@ -742,7 +742,9 @@ behaviour. So, until then:
   there too), then asks the agent for that one answer and writes it,
   `NoAction` included. When TIA refuses a selection tiad writes, the log
   line names it with the configuration's public members, each enum with
-  its value names and each list with its elements, so the next window
+  its value names and each list with its first 20 elements, and never
+  reading a property whose name says password, secret, credential,
+  token or key, so the next window
   shows what TIA offers instead (#789 stage 4: a hardware load refused
   `KeepOnlineUserManagementData`). A password configuration is never
   described. A configuration counts as written only once its

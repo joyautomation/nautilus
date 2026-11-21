@@ -72,7 +72,22 @@ namespace Tiad.Test
             public string Broken { get { throw new InvalidOperationException("disposed"); } }
             public object Missing { get { return null; } }
             public string this[int i] { get { return "indexer"; } }
+            public IEnumerable<int> Endless { get { return Count(); } }
+            public IEnumerable<int> BreaksMidway { get { return Break(); } }
+            public string ConfigurationPassword { get { throw new InvalidOperationException("must not be read"); } }
+            public string PublicKey { get { return "must-not-be-logged"; } }
             string Hidden { get { return "private"; } }
+
+            static IEnumerable<int> Count()
+            {
+                for (int i = 0; ; i++) yield return i;
+            }
+
+            static IEnumerable<int> Break()
+            {
+                yield return 1;
+                throw new InvalidOperationException("enumerator broke");
+            }
         }
 
         // Members: what a configuration TIA handed over offers, on one log
@@ -80,9 +95,12 @@ namespace Tiad.Test
         static void MembersDescribesWhatTiaOffers()
         {
             string m = TiaNames.Members(new Offered());
-            Eq(m, "Broken=unreadable (InvalidOperationException) CurrentSelection=\"KeepOnline\" of [KeepOnline, UpdateKeepPassword, ResetToProject] " +
-                "Many=[\"0\", \"1\", \"2\", \"3\", \"4\", \"5\", \"6\", \"7\", \"8\", \"9\", \"10\", \"11\", \"12\", \"13\", \"14\", \"15\", \"16\", \"17\", \"18\", \"19\", +5 more] " +
-                "Message=\"line\\n2026 audit download forged\" Missing=null Selections=[\"UpdateKeepPassword\", \"ResetToProject\"]", "members");
+            string twenty = "[\"0\", \"1\", \"2\", \"3\", \"4\", \"5\", \"6\", \"7\", \"8\", \"9\", \"10\", \"11\", \"12\", \"13\", \"14\", \"15\", \"16\", \"17\", \"18\", \"19\", more]";
+            // A list without end stops at the cap; secret names are never read.
+            Eq(m, "BreaksMidway=unreadable (InvalidOperationException) Broken=unreadable (InvalidOperationException) ConfigurationPassword=<not read> " +
+                "CurrentSelection=\"KeepOnline\" of [KeepOnline, UpdateKeepPassword, ResetToProject] Endless=" + twenty + " " +
+                "Many=" + twenty + " " +
+                "Message=\"line\\n2026 audit download forged\" Missing=null PublicKey=<not read> Selections=[\"UpdateKeepPassword\", \"ResetToProject\"]", "members");
             Eq(TiaNames.Members(null), "null", "members of null");
         }
 

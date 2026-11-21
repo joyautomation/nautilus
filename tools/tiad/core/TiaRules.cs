@@ -1075,8 +1075,9 @@ namespace Tiad
         // Members describes an object TIA handed over for one log line: each
         // public instance property's name and value, a list as its elements
         // (at most MaxElements), an enum's type as its value names too, and
-        // each read that fails as its exception's type. Every value is
-        // LogSafe. It never throws. Only for objects that carry no secret:
+        // each read that fails as its exception's type, and a property
+        // whose name says secret (password, secret, credential, token,
+        // key) as not read. Every value is LogSafe. It never throws. Only for objects that carry no secret:
         // the glue never passes a password configuration (#789 stage 4: a
         // selection TIA refused to take, with what it offers instead).
         public const int MaxElements = 20;
@@ -1099,6 +1100,11 @@ namespace Tiad
             {
                 if (!p.CanRead || p.GetIndexParameters().Length > 0) continue;
                 string v;
+                if (SecretName(p.Name))
+                {
+                    parts.Add(p.Name + "=<not read>");
+                    continue;
+                }
                 try
                 {
                     v = Value(p.GetValue(o, null));
@@ -1121,13 +1127,31 @@ namespace Tiad
             var seq = v as System.Collections.IEnumerable;
             if (seq == null) return LogSafe(v.ToString());
             var l = new List<string>();
-            int n = 0;
+            bool more = false;
+            // Stops past the cap, so a list without end cannot hold up the
+            // cancel this is logged before (#1167 review).
             foreach (object x in seq)
             {
-                if (++n > MaxElements) continue;
+                if (l.Count == MaxElements)
+                {
+                    more = true;
+                    break;
+                }
                 l.Add(LogSafe(x == null ? "null" : x.ToString()));
             }
-            return "[" + string.Join(", ", l.ToArray()) + (n > MaxElements ? ", +" + (n - MaxElements) + " more" : "") + "]";
+            return "[" + string.Join(", ", l.ToArray()) + (more ? ", more" : "") + "]";
+        }
+
+        // SecretName is a property whose name says it may hold a secret:
+        // never read, whatever type carries it.
+        static bool SecretName(string name)
+        {
+            string n = name.ToLowerInvariant();
+            foreach (string w in new[] { "password", "secret", "credential", "token", "key" })
+            {
+                if (n.Contains(w)) return true;
+            }
+            return false;
         }
 
         // OnlineRefused is the failure when TIA asked questions going online:
