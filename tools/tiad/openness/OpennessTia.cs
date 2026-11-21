@@ -531,7 +531,7 @@ namespace Tiad.Openness
                     "PnDeviceNameAutoGeneration", false,
                     "PnDeviceName", next.Cpu.ProfinetName);
                 ProtectionSteps.Run(new MasterSecret(station, cpu), next.Cpu.ConfigurationProtection, secrets.ConfigurationPassword, notes);
-                AccessSteps.Run(new Access(p, station, cpu), next.Cpu.AccessControl, secrets.FullAccessPassword, decision == CpuReuse.Create, made, notes);
+                AccessSteps.Run(new Access(p, station, cpu), next.Cpu.AccessControl, secrets.FullAccessPassword, secrets.FullAccessFingerprint, decision == CpuReuse.Create, made, notes);
                 return true;
             });
         }
@@ -673,6 +673,39 @@ namespace Tiad.Openness
             public void MakeUser(string user, string password)
             {
                 using (var ss = Secure(password)) Umac(p).ProjectUsers.Create(user, ss);
+            }
+
+            // SetPassword maps TIA's refusal of a password the user has had to
+            // PasswordReusedException. Openness has no typed error for it,
+            // so it matches the one phrase TIA V21 words it with ("The
+            // specified password has already been used", seen on the TIA
+            // machine 2026-11-20), and nothing wider; any other failure
+            // stays TIA's own.
+            public void SetPassword(string user, string password)
+            {
+                ProjectUser pu = Umac(p).ProjectUsers.Find(user);
+                using (var ss = Secure(password))
+                {
+                    try
+                    {
+                        pu.SetPassword(ss);
+                    }
+                    catch (EngineeringException e)
+                    {
+                        if (TiaNames.Message(e).IndexOf("password has already been used", StringComparison.Ordinal) >= 0) throw new PasswordReusedException(e);
+                        throw;
+                    }
+                }
+            }
+
+            public string Comment(string user)
+            {
+                return Umac(p).ProjectUsers.Find(user).Comment ?? "";
+            }
+
+            public void SetComment(string user, string comment)
+            {
+                Umac(p).ProjectUsers.Find(user).Comment = comment;
             }
 
             public void AddRole(string user, string role)

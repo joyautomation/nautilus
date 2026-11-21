@@ -53,6 +53,9 @@ namespace Tiad.Test
                 return Users.ContainsKey(user);
             }
 
+            public Dictionary<string, string> Comments = new Dictionary<string, string>();
+            public Dictionary<string, List<string>> History = new Dictionary<string, List<string>>();
+
             // MakeUser refuses a user that exists, as TIA's Create would.
             public void MakeUser(string user, string password)
             {
@@ -60,6 +63,30 @@ namespace Tiad.Test
                 if (Users.ContainsKey(user)) throw new InvalidOperationException("the user exists");
                 Users[user] = password;
                 UserRoles[user] = new HashSet<string>();
+                History[user] = new List<string> { password };
+            }
+
+            // SetPassword refuses a password the user has had, as TIA does.
+            public void SetPassword(string user, string password)
+            {
+                Calls.Add("set-password");
+                List<string> h;
+                if (!History.TryGetValue(user, out h)) h = History[user] = new List<string> { Users[user] };
+                if (h.Contains(password)) throw new PasswordReusedException(new InvalidOperationException("already been used"));
+                Users[user] = password;
+                h.Add(password);
+            }
+
+            public string Comment(string user)
+            {
+                string c;
+                return Comments.TryGetValue(user, out c) ? c : "";
+            }
+
+            public void SetComment(string user, string comment)
+            {
+                Calls.Add("comment");
+                Comments[user] = comment;
             }
 
             public void AddRole(string user, string role)
@@ -76,6 +103,15 @@ namespace Tiad.Test
                 if (!Granted.Contains(role)) return "the role " + role + " lacks Full access";
                 return null;
             }
+        }
+
+        static readonly byte[] TestKey = AccessKey.Key("test-token");
+
+        // FP is AccessKey's fingerprint of a password under the test key, or
+        // "" for none, as the agent fills it in.
+        static string FP(string password)
+        {
+            return password == "" ? "" : AccessKey.Fingerprint(TestKey, AccessSteps.UserName, password);
         }
 
         // AccessPlan: keep never refuses; fullAccessUser needs its password,
@@ -115,8 +151,10 @@ namespace Tiad.Test
             var off = new ScriptedAccess { State_ = "Disabled" };
             var made = new AccessMade();
             var notes = new List<string>();
-            AccessSteps.Run(off, StationRules.AccessFullAccessUser, "Full-access-1", true, made, notes);
-            Eq(string.Join(",", off.Calls.ToArray()), "enable,make-role,grant,make-user,add-role", "a new CPU with access control off");
+            AccessSteps.Run(off, StationRules.AccessFullAccessUser, "Full-access-1", FP("Full-access-1"), true, made, notes);
+            Eq(string.Join(",", off.Calls.ToArray()), "enable,make-role,grant,make-user,comment,add-role", "a new CPU with access control off");
+            Eq(off.Comments[AccessSteps.UserName], AccessKey.Comment(FP("Full-access-1")), "the made user keeps the fingerprint, never the password");
+            True(!off.Comments[AccessSteps.UserName].Contains("Full-access-1"), "the comment never holds the password");
             Eq(off.State_, AccessRule.Enabled, "access control on");
             Eq(off.Users[AccessSteps.UserName], "Full-access-1", "the user has the secret");
             True(made.User && made.Role, "both recorded as made");
@@ -124,17 +162,17 @@ namespace Tiad.Test
             Contains(notes[0], "made the user \"nautilus\"", "the note says it was made");
 
             var fresh = new ScriptedAccess();
-            AccessSteps.Run(fresh, StationRules.AccessFullAccessUser, "Full-access-1", true, new AccessMade(), new List<string>());
-            Eq(string.Join(",", fresh.Calls.ToArray()), "make-role,grant,make-user,add-role", "TIA's default needs no write");
+            AccessSteps.Run(fresh, StationRules.AccessFullAccessUser, "Full-access-1", FP("Full-access-1"), true, new AccessMade(), new List<string>());
+            Eq(string.Join(",", fresh.Calls.ToArray()), "make-role,grant,make-user,comment,add-role", "TIA's default needs no write");
 
             var keep = new ScriptedAccess { State_ = "Disabled" };
             var none = new AccessMade();
-            AccessSteps.Run(keep, StationRules.AccessKeep, "", true, none, new List<string>());
+            AccessSteps.Run(keep, StationRules.AccessKeep, "", FP(""), true, none, new List<string>());
             Eq(keep.Calls.Count, 0, "keep calls nothing, even on a new CPU");
             True(!none.Any, "keep makes nothing");
 
             var absent = new ScriptedAccess { State_ = AccessRule.Absent };
-            var e = Throws<TiaException>(delegate { AccessSteps.Run(absent, StationRules.AccessFullAccessUser, "Full-access-1", true, new AccessMade(), new List<string>()); }, "no setting");
+            var e = Throws<TiaException>(delegate { AccessSteps.Run(absent, StationRules.AccessFullAccessUser, "Full-access-1", FP("Full-access-1"), true, new AccessMade(), new List<string>()); }, "no setting");
             if (e != null) Contains(e.Message, "set cpu.accessControl to keep", "no setting names the fix");
             Eq(absent.Calls.Count, 0, "nothing written on a CPU without the setting");
         }
@@ -145,7 +183,7 @@ namespace Tiad.Test
         static void AccessStepsKeptCpu()
         {
             var off = new ScriptedAccess { State_ = "Disabled" };
-            var e = Throws<TiadException>(delegate { AccessSteps.Run(off, StationRules.AccessFullAccessUser, "Full-access-1", false, new AccessMade(), new List<string>()); }, "kept CPU, access control off");
+            var e = Throws<TiadException>(delegate { AccessSteps.Run(off, StationRules.AccessFullAccessUser, "Full-access-1", FP("Full-access-1"), false, new AccessMade(), new List<string>()); }, "kept CPU, access control off");
             if (e != null) Contains(e.Message, "set cpu.accessControl to keep", "kept CPU names the fix");
             Eq(off.Calls.Count, 0, "nothing written on a kept CPU with access control off");
 
@@ -156,21 +194,40 @@ namespace Tiad.Test
             held.UserRoles[AccessSteps.UserName] = new HashSet<string> { AccessSteps.RoleName };
             var made = new AccessMade();
             var notes = new List<string>();
-            AccessSteps.Run(held, StationRules.AccessFullAccessUser, "New-access-22", false, made, notes);
-            Eq(held.Calls.Count, 0, "found with its role and grant: nothing written");
-            Eq(held.Users[AccessSteps.UserName], "Old-access-1", "a found user's password is left as found (TIA refuses one it has had)");
+            AccessSteps.Run(held, StationRules.AccessFullAccessUser, "New-access-22", FP("New-access-22"), false, made, notes);
+            // No record that tiad set it: the secret is set, and recorded.
+            Eq(string.Join(",", held.Calls.ToArray()), "set-password,comment", "found without a record: the password is set");
+            Eq(held.Users[AccessSteps.UserName], "New-access-22", "the password is the secret now");
             True(!made.Any, "nothing recorded as made: an upload must not remove it");
-            Eq(notes[0], AccessSteps.FoundNote, "the note says it was found, and its password left");
-            Contains(notes[0], "its password is left as found", "the note names what was not done");
-            Contains(notes[0], "POST /v1/projects", "the note names the fix");
+            Eq(notes[0], AccessSteps.SetNote, "the note says the password was set");
+            // The same secret again: nothing set (TIA would refuse it).
+            held.Calls.Clear();
+            notes.Clear();
+            AccessSteps.Run(held, StationRules.AccessFullAccessUser, "New-access-22", FP("New-access-22"), false, made, notes);
+            Eq(held.Calls.Count, 0, "the same secret: nothing written");
+            Eq(notes[0], AccessSteps.UnchangedNote, "the note says the password is unchanged");
+            // A rotated secret is set.
+            notes.Clear();
+            AccessSteps.Run(held, StationRules.AccessFullAccessUser, "Third-access-3", FP("Third-access-3"), false, made, notes);
+            Eq(held.Users[AccessSteps.UserName], "Third-access-3", "a rotated secret is set");
+            Eq(notes[0], AccessSteps.SetNote, "rotated: set");
+            // Back to one the user had: TIA refuses, and tiad says what to do.
+            var re = Throws<TiaException>(delegate { AccessSteps.Run(held, StationRules.AccessFullAccessUser, "New-access-22", FP("New-access-22"), false, made, new List<string>()); }, "a recent password");
+            if (re != null) Eq(re.Message, AccessSteps.Reused, "a recent password names the fix");
+            Eq(held.Users[AccessSteps.UserName], "Third-access-3", "the refused password is not set");
+            Eq(held.Comments[AccessSteps.UserName], AccessKey.Comment(FP("Third-access-3")), "the record is the password set, not the refused one");
+            // Another agent's key gives no match: the secret is set.
+            var other = AccessKey.Fingerprint(AccessKey.Key("other-token"), AccessSteps.UserName, "Fourth-access-4");
+            True(other != FP("Fourth-access-4"), "the key is the token's");
+            True(FP("Fourth-access-4") != AccessKey.Fingerprint(TestKey, "someone", "Fourth-access-4"), "the user is in the fingerprint");
 
             var userOnly = new ScriptedAccess();
             userOnly.Users[AccessSteps.UserName] = "Old-access-1";
             userOnly.UserRoles[AccessSteps.UserName] = new HashSet<string>();
             var m2 = new AccessMade();
-            AccessSteps.Run(userOnly, StationRules.AccessFullAccessUser, "New-access-22", false, m2, new List<string>());
+            AccessSteps.Run(userOnly, StationRules.AccessFullAccessUser, "New-access-22", FP("New-access-22"), false, m2, new List<string>());
             True(m2.Role && !m2.User, "only the role is recorded as made");
-            Eq(string.Join(",", userOnly.Calls.ToArray()), "make-role,grant,add-role", "a found user is never made again");
+            Eq(string.Join(",", userOnly.Calls.ToArray()), "make-role,grant,set-password,comment,add-role", "a found user is never made again; without a record its password is set");
         }
 
         // AccessStepsReadBack: a grant TIA ignored refuses; what was made
@@ -179,12 +236,12 @@ namespace Tiad.Test
         {
             var c = new ScriptedAccess { GrantIgnored = true };
             var made = new AccessMade();
-            var e = Throws<TiaException>(delegate { AccessSteps.Run(c, StationRules.AccessFullAccessUser, "Full-access-1", true, made, new List<string>()); }, "grant ignored");
+            var e = Throws<TiaException>(delegate { AccessSteps.Run(c, StationRules.AccessFullAccessUser, "Full-access-1", FP("Full-access-1"), true, made, new List<string>()); }, "grant ignored");
             if (e != null) Contains(e.Message, "lacks Full access", "grant ignored");
             True(made.User && made.Role, "made before the refusal, still recorded");
 
             var stuck = new ScriptedAccess { State_ = "Disabled", EnableLeaves = "Disabled" };
-            e = Throws<TiaException>(delegate { AccessSteps.Run(stuck, StationRules.AccessFullAccessUser, "Full-access-1", true, new AccessMade(), new List<string>()); }, "enable ignored");
+            e = Throws<TiaException>(delegate { AccessSteps.Run(stuck, StationRules.AccessFullAccessUser, "Full-access-1", FP("Full-access-1"), true, new AccessMade(), new List<string>()); }, "enable ignored");
             if (e != null) Contains(e.Message, "after turning access control on the CPU reads Disabled, not EnabledWithAccessControl", "enable ignored");
             Eq(string.Join(",", stuck.Calls.ToArray()), "enable", "nothing after an ignored enable");
         }

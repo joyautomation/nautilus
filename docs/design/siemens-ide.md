@@ -358,12 +358,21 @@ The rules for applying a spec:
       access levels, a CPU without the setting) refuses before any write,
       naming `keep`.
     - The user and the role are found or made, by name. A user the
-      project held is never made again, and its password is left as found:
-      TIA refuses to set a password the user has had (its current one
-      included, as many as the project's policy blocks for reuse, 5 by
-      default), and cannot check one offline. The apply's `notes` say so.
-      A station naut makes is made again on every deploy
-      (`POST /v1/projects`), so it gets the user anew with the secret.
+      project held is never made again. TIA refuses to set a password the
+      user has had (its current one included, as many as the project's
+      policy blocks for reuse, 5 by default) and cannot check one offline,
+      so tiad keeps a fingerprint of the password it set: an HMAC-SHA256
+      of the user and the password under a key derived from the agent's
+      token, in the user's comment in the project (never the password).
+      An apply whose secret has that fingerprint leaves the password
+      ("unchanged" in `notes`); any other secret is set ("now
+      secrets.fullAccessPassword"), so a rotated secret reaches a reused
+      project too. A secret TIA refuses as one the user had fails the
+      apply, naming the fix: choose another password, or make the project
+      again. A project without tiad's record (another agent's token, a
+      user tiad did not set) gets the secret set. Openness has no typed
+      error for that refusal, so the glue matches TIA's one phrase ("The
+      specified password has already been used") and nothing wider.
     - After the writes tiad reads back that the user holds Full access
       through the role on this CPU, and refuses otherwise.
     - The password meets TIA's rules (below) before any TIA call, and the
@@ -521,8 +530,7 @@ The client checks each path and the agent checks again.
 `secrets` is `{"webUsers": {"naut": "<password>"}, "protection": "<password>", "configurationPassword": "<password>", "fullAccessPassword": "<password>"}`.
 Each password answers only its own question: the protection password
 never answers `configuration-password`, and the other way round. The Full
-access user's password is set only on the user an apply makes, and
-answers no download question.
+access user's password answers no download question.
 tiad never logs it and never writes it to the work dir. Run tiad on
 loopback or across the tailnet, because the requests are plain HTTP.
 

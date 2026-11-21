@@ -50,7 +50,7 @@ func noteWith(notes []string, part string) bool {
 
 const (
 	madeUser  = `made the user "nautilus" with the runtime right Full access`
-	foundUser = FoundUserNote
+	foundUser = UnchangedUserNote
 )
 
 // contractAccessPassword: a Full access user needs its own password,
@@ -116,13 +116,27 @@ func contractAccessNewStation(t *testing.T, start Starter) {
 	if _, err := s.Compile(ctx, true, true); err != nil {
 		t.Fatalf("a new CPU with its Full access user: %v", err)
 	}
+	// The same secret again: the password is unchanged (TIA would refuse
+	// to set it).
+	if r, err := s.ApplyStation(ctx, BenchStation(), BenchSecrets); err != nil || !noteWith(r.Notes, UnchangedUserNote) || noteWith(r.Notes, madeUser) {
+		t.Fatalf("the same secret again: %+v %v", r, err)
+	}
+	// A rotated secret is set, and is then the one tiad last set.
 	rotated := BenchSecrets
 	rotated.FullAccessPassword = "Rotated-access-2027"
-	if r, err := s.ApplyStation(ctx, BenchStation(), rotated); err != nil || !noteWith(r.Notes, foundUser) || noteWith(r.Notes, madeUser) {
-		t.Fatalf("fullAccessUser again: %+v %v", r, err)
+	if r, err := s.ApplyStation(ctx, BenchStation(), rotated); err != nil || !noteWith(r.Notes, SetUserNote) {
+		t.Fatalf("a rotated secret: %+v %v", r, err)
+	}
+	if r, err := s.ApplyStation(ctx, BenchStation(), rotated); err != nil || !noteWith(r.Notes, UnchangedUserNote) {
+		t.Fatalf("the rotated secret again: %+v %v", r, err)
 	}
 	if _, err := s.Compile(ctx, true, true); err != nil {
 		t.Fatal(err)
+	}
+	// Back to a password the user had: TIA refuses it, and the apply says
+	// what to do.
+	if _, err := s.ApplyStation(ctx, BenchStation(), BenchSecrets); err == nil || !strings.Contains(err.Error(), ReusedPassword) {
+		t.Fatalf("a password the user had: %v", err)
 	}
 }
 

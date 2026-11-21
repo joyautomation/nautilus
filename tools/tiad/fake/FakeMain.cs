@@ -610,14 +610,17 @@ namespace Tiad.Fake
         {
             AccessControl = from.AccessControl;
             Users = new Dictionary<string, FakeUser>(StringComparer.Ordinal);
-            foreach (var kv in from.Users) Users[kv.Key] = new FakeUser { Password = kv.Value.Password, Roles = new HashSet<string>(kv.Value.Roles) };
+            foreach (var kv in from.Users) Users[kv.Key] = new FakeUser { Password = kv.Value.Password, Comment = kv.Value.Comment, History = new List<string>(kv.Value.History), Roles = new HashSet<string>(kv.Value.Roles) };
             Roles = new Dictionary<string, bool>(from.Roles, StringComparer.Ordinal);
         }
     }
 
     sealed class FakeUser
     {
-        public string Password = "";
+        public string Password = "", Comment = "";
+        // History is the user's last passwords, the current one last; TIA
+        // refuses any of them as a new one (5 by default policy).
+        public List<string> History = new List<string>();
         public HashSet<string> Roles = new HashSet<string>(StringComparer.Ordinal);
     }
 
@@ -668,7 +671,27 @@ namespace Tiad.Fake
         {
             if (p.Users.ContainsKey(user)) throw new TiaException("A user with the name " + user + " already exists.");
             if (policy.Check(password) != null) throw new TiaException("The password does not meet the password policy.");
-            p.Users[user] = new FakeUser { Password = password };
+            p.Users[user] = new FakeUser { Password = password, History = new List<string> { password } };
+        }
+
+        public void SetPassword(string user, string password)
+        {
+            FakeUser u = p.Users[user];
+            if (u.History.Contains(password)) throw new PasswordReusedException(new TiaException("Operation failed. The specified password has already been used. Select another password."));
+            if (policy.Check(password) != null) throw new TiaException("The password does not meet the password policy.");
+            u.Password = password;
+            u.History.Add(password);
+            if (u.History.Count > 5) u.History.RemoveAt(0);
+        }
+
+        public string Comment(string user)
+        {
+            return p.Users[user].Comment;
+        }
+
+        public void SetComment(string user, string comment)
+        {
+            p.Users[user].Comment = comment;
         }
 
         public void AddRole(string user, string role)
@@ -828,7 +851,7 @@ namespace Tiad.Fake
             p.Changed = true;
             p.Station = null;
             ProtectionSteps.Run(new FakeMasterSecret(p), next.Cpu.ConfigurationProtection, secrets.ConfigurationPassword, notes);
-            AccessSteps.Run(new FakeAccess(p, script.Policy), next.Cpu.AccessControl, secrets.FullAccessPassword, decision == CpuReuse.Create, made, notes);
+            AccessSteps.Run(new FakeAccess(p, script.Policy), next.Cpu.AccessControl, secrets.FullAccessPassword, secrets.FullAccessFingerprint, decision == CpuReuse.Create, made, notes);
             p.Station = next;
             p.Changed = was || CpuReuse.Changes(decision, prev, next).Count > 0;
         }

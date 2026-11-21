@@ -174,6 +174,10 @@ namespace Tiad
         // right Full access (cpu.accessControl fullAccessUser): its own
         // secret, never Protection or ConfigurationPassword.
         public string FullAccessPassword = "";
+        // FullAccessFingerprint is AccessKey's fingerprint of
+        // FullAccessPassword, which the agent computes for each call; never
+        // read from a request, never written anywhere but the user's comment.
+        public string FullAccessFingerprint = "";
 
         public static Secrets Read(Reader r)
         {

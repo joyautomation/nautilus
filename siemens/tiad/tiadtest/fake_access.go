@@ -1,6 +1,8 @@
 package tiadtest
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -21,9 +23,22 @@ const (
 // control on and no user holding the runtime right Full access on it.
 const NoFullAccess = "Users and roles: At least one user must have the following runtime right: Full access"
 
-// FoundUserNote is what an apply says about a "nautilus" user the project
-// held (AccessSteps.FoundNote).
-const FoundUserNote = `the project's user "nautilus" has the runtime right Full access (role "nautilus full access"); its password is left as found: TIA refuses to set a password the user has had and cannot check one offline, so a changed secrets.fullAccessPassword does not reach this project; a project made again (POST /v1/projects) gets the user anew with the secret`
+// UnchangedUserNote and SetUserNote are what an apply says about a
+// "nautilus" user the project held (AccessSteps.UnchangedNote, SetNote);
+// ReusedPassword is the refusal of a password the user has had
+// (AccessSteps.Reused).
+const (
+	UnchangedUserNote = `the project's user "nautilus" has the runtime right Full access (role "nautilus full access"); its password is unchanged: secrets.fullAccessPassword is the one tiad last set`
+	SetUserNote       = `the project's user "nautilus" has the runtime right Full access (role "nautilus full access"); its password is now secrets.fullAccessPassword`
+	ReusedPassword    = `TIA refuses secrets.fullAccessPassword for the user "nautilus": that password was used recently on this project (TIA blocks a user's recent passwords, the current one included, and this project carries no record that tiad set it): choose another password, or make the project again (POST /v1/projects)`
+)
+
+// fingerprint stands in for the agent's keyed fingerprint (AccessKey):
+// the fake never keeps a password where tiad would not.
+func fingerprint(password string) string {
+	h := sha256.Sum256([]byte("fake\n" + password))
+	return hex.EncodeToString(h[:])
+}
 
 // The user and role tiad makes for cpu.accessControl fullAccessUser
 // (AccessSteps.UserName and RoleName).
@@ -114,7 +129,13 @@ type access struct {
 
 type fakeUser struct {
 	password string
-	roles    map[string]bool
+	// history is the user's last passwords, the current one last: TIA
+	// refuses any of them as a new one (5, its default policy).
+	history []string
+	// fingerprint is what tiad recorded of the password it set (the
+	// user's comment in TIA).
+	fingerprint string
+	roles       map[string]bool
 }
 
 func (a access) clone() access {
@@ -124,7 +145,7 @@ func (a access) clone() access {
 		for r := range u.roles {
 			rs[r] = true
 		}
-		c.users[n] = &fakeUser{password: u.password, roles: rs}
+		c.users[n] = &fakeUser{password: u.password, history: append([]string(nil), u.history...), fingerprint: u.fingerprint, roles: rs}
 	}
 	for n, g := range a.roles {
 		c.roles[n] = g
@@ -203,17 +224,35 @@ func (s *session) applyAccess(want, password string, madeCPU bool, notes *[]stri
 		s.made.role = true
 	}
 	s.access.roles[FullAccessRole] = true
-	// A found user's password is left as found: TIA refuses any password
-	// the user has had, and cannot check one offline.
+	// A found user's password is set only when the secret is not the one
+	// tiad last set (its fingerprint), and TIA refuses one the user has
+	// had.
+	fp := fingerprint(password)
 	u, ok := s.access.users[FullAccessUser]
-	if !ok {
-		u = &fakeUser{password: password, roles: map[string]bool{}}
+	note := ""
+	switch {
+	case !ok:
+		u = &fakeUser{password: password, history: []string{password}, fingerprint: fp, roles: map[string]bool{}}
 		s.access.users[FullAccessUser] = u
 		s.made.user = true
+	case u.fingerprint == fp:
+		note = UnchangedUserNote
+	default:
+		for _, h := range u.history {
+			if h == password {
+				return fail(http.StatusInternalServerError, tiad.KindOperationFailed, "TIA: %s", ReusedPassword)
+			}
+		}
+		u.password, u.fingerprint = password, fp
+		u.history = append(u.history, password)
+		if len(u.history) > 5 {
+			u.history = u.history[1:]
+		}
+		note = SetUserNote
 	}
 	u.roles[FullAccessRole] = true
 	if ok {
-		*notes = append(*notes, FoundUserNote)
+		*notes = append(*notes, note)
 	} else {
 		*notes = append(*notes, fmt.Sprintf("made the user %q with the runtime right Full access (role %q), its password from secrets.fullAccessPassword", FullAccessUser, FullAccessRole))
 	}

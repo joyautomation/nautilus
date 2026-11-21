@@ -213,6 +213,13 @@ namespace Tiad
             }
         }
 
+        // Fingerprint fills in the fingerprint of the Full access password
+        // (AccessKey), under a key from the agent's token.
+        void Fingerprint(Secrets sec)
+        {
+            sec.FullAccessFingerprint = sec.FullAccessPassword == "" ? "" : AccessKey.Fingerprint(AccessKey.Key(cfg.Token), AccessSteps.UserName, sec.FullAccessPassword);
+        }
+
         // CheckPolicy refuses, before any write, a Full access password the
         // project's own password policy for local users would refuse.
         static void CheckPolicy(ITia t, object project, Secrets sec)
@@ -275,6 +282,7 @@ namespace Tiad
             r.Done();
             CheckProjectName(name);
             CheckStation(st, sec);
+            Fingerprint(sec);
             string project = "projects/" + name + "/" + name + ".ap21";
             string full = work.Resolve(project);
             // The session owns projects/<name>/: it is replaced only while
@@ -382,6 +390,7 @@ namespace Tiad
                 Secrets sec = Secrets.Read(r.Child("secrets"));
                 r.Done();
                 CheckStation(st, sec);
+                Fingerprint(sec);
                 // The session's state changes only on the TIA thread, in
                 // call order. Until TIA has applied the spec, the project
                 // is neither compiled nor described by any spec, so a

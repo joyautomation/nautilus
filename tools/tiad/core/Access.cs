@@ -7,6 +7,8 @@
 
 using System;
 using System.Collections.Generic;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace Tiad
 {
@@ -66,6 +68,59 @@ namespace Tiad
         public bool Any { get { return User || Role; } }
     }
 
+    // PasswordReusedException is TIA refusing a password the user has had
+    // (its current one, or one its project's policy still blocks).
+    public sealed class PasswordReusedException : Exception
+    {
+        public PasswordReusedException(Exception inner) : base("TIA refuses a password the user has had", inner)
+        {
+        }
+    }
+
+    // AccessKey fingerprints the Full access password tiad set, so a later
+    // apply knows whether secrets.fullAccessPassword changed without ever
+    // keeping the secret: an HMAC-SHA256 of the user and the password under
+    // a key derived from the agent's token (domain-separated). The
+    // fingerprint lives in the user's comment in the project, so it travels
+    // with the project. Another agent's token, or a project tiad never set
+    // the password of, gives no match: tiad then sets the password.
+    public static class AccessKey
+    {
+        const string Prefix = "tiad password fingerprint ";
+
+        public static byte[] Key(string token)
+        {
+            using (var h = new HMACSHA256(Encoding.UTF8.GetBytes(token)))
+            {
+                return h.ComputeHash(Encoding.UTF8.GetBytes("tiad access fingerprint v1"));
+            }
+        }
+
+        public static string Fingerprint(byte[] key, string user, string password)
+        {
+            using (var h = new HMACSHA256(key))
+            {
+                byte[] d = h.ComputeHash(Encoding.UTF8.GetBytes(user + "\n" + password));
+                var sb = new StringBuilder("v1:");
+                foreach (byte b in d) sb.Append(b.ToString("x2", System.Globalization.CultureInfo.InvariantCulture));
+                return sb.ToString();
+            }
+        }
+
+        // Comment is what the user's comment holds for fingerprint fp.
+        public static string Comment(string fp)
+        {
+            return Prefix + fp;
+        }
+
+        // FromComment is the fingerprint a user's comment holds, or "".
+        public static string FromComment(string comment)
+        {
+            if (comment == null || !comment.StartsWith(Prefix, StringComparison.Ordinal)) return "";
+            return comment.Substring(Prefix.Length);
+        }
+    }
+
     // IAccessControl is the CPU's access control and the project's users
     // and roles as TIA's Openness offers them (PlcAccessControlConfiguration
     // provider, UmacConfigurator, UmacDevice). tiad.Openness wraps TIA's;
@@ -87,11 +142,17 @@ namespace Tiad
         void GrantFullAccess(string role);
         // HasUser reports whether the project holds the local user.
         bool HasUser(string user);
-        // MakeUser makes the local user with password. There is no call
-        // that sets a found user's password: TIA refuses any password the
-        // user has had (its current one included, as many as the project's
-        // policy blocks for reuse), and cannot check one offline.
+        // MakeUser makes the local user with password.
         void MakeUser(string user, string password);
+        // SetPassword sets a found user's password. TIA refuses any
+        // password the user has had (its current one included, as many as
+        // the project's policy blocks for reuse): then it throws
+        // PasswordReusedException.
+        void SetPassword(string user, string password);
+        // Comment and SetComment are the user's comment, where AccessKey
+        // keeps the fingerprint of the password tiad set.
+        string Comment(string user);
+        void SetComment(string user, string comment);
         // AddRole assigns role to user, unless it has it.
         void AddRole(string user, string role);
         // Check returns why user does not hold the runtime right Full access
@@ -139,17 +200,28 @@ namespace Tiad
     {
         public const string UserName = "nautilus", RoleName = "nautilus full access";
 
-        // FoundNote is what an apply says about a user the project held:
-        // its password is left as found.
-        public const string FoundNote = "the project's user \"nautilus\" has the runtime right Full access (role \"nautilus full access\"); its password is left as found: TIA refuses to set a password the user has had and cannot check one offline, so a changed secrets.fullAccessPassword does not reach this project; a project made again (POST /v1/projects) gets the user anew with the secret";
+        // UnchangedNote and SetNote are what an apply says about a user the
+        // project held: its password is the secret tiad last set, so it is
+        // left; or the secret changed (or tiad has no record), so it is set.
+        public const string UnchangedNote = "the project's user \"nautilus\" has the runtime right Full access (role \"nautilus full access\"); its password is unchanged: secrets.fullAccessPassword is the one tiad last set";
+        public const string SetNote = "the project's user \"nautilus\" has the runtime right Full access (role \"nautilus full access\"); its password is now secrets.fullAccessPassword";
 
-        // Run does what want asks. made is the CPU the apply made (true) or
-        // kept (false); into collects what this run made in the project's
-        // users and roles, as soon as it is made, so a failure part-way
-        // still leaves it on the session.
-        public static void Run(IAccessControl c, string want, string password, bool madeCpu, AccessMade into, List<string> notes)
+        // Reused is the refusal when TIA will not take the secret as the
+        // found user's new password.
+        public const string Reused = "TIA refuses secrets.fullAccessPassword for the user \"nautilus\": that password was used recently on this project (TIA blocks a user's recent passwords, the current one included, and this project carries no record that tiad set it): choose another password, or make the project again (POST /v1/projects)";
+
+        // Run does what want asks. fingerprint is AccessKey's of password.
+        // madeCpu is the CPU the apply made (true) or kept (false); into
+        // collects what this run made in the project's users and roles, as
+        // soon as it is made, so a failure part-way still leaves it on the
+        // session.
+        public static void Run(IAccessControl c, string want, string password, string fingerprint, bool madeCpu, AccessMade into, List<string> notes)
         {
             if (want == StationRules.AccessKeep) return;
+            if (want == StationRules.AccessFullAccessUser && password != "" && fingerprint == "")
+            {
+                throw new TiaException("the Full access password has no fingerprint: the agent computes one for every apply");
+            }
             string current = c.State();
             AccessRule.Plan(madeCpu ? null : current, want, password != "");
             if (madeCpu && current != AccessRule.Enabled)
@@ -169,17 +241,35 @@ namespace Tiad
             if (madeRole) into.Role = true;
             c.GrantFullAccess(RoleName);
             bool madeUser = !c.HasUser(UserName);
+            string note;
             if (madeUser)
             {
                 c.MakeUser(UserName, password);
                 into.User = true;
+                c.SetComment(UserName, AccessKey.Comment(fingerprint));
+                note = "made the user " + Json.Quote(UserName) + " with the runtime right Full access (role " + Json.Quote(RoleName) + "), its password from secrets.fullAccessPassword";
+            }
+            else if (AccessKey.FromComment(c.Comment(UserName)) == fingerprint)
+            {
+                note = UnchangedNote;
+            }
+            else
+            {
+                try
+                {
+                    c.SetPassword(UserName, password);
+                }
+                catch (PasswordReusedException e)
+                {
+                    throw new TiaException(Reused, e);
+                }
+                c.SetComment(UserName, AccessKey.Comment(fingerprint));
+                note = SetNote;
             }
             c.AddRole(UserName, RoleName);
             string bad = c.Check(UserName, RoleName);
             if (bad != null) throw new TiaException(bad);
-            notes.Add(madeUser
-                ? "made the user " + Json.Quote(UserName) + " with the runtime right Full access (role " + Json.Quote(RoleName) + "), its password from secrets.fullAccessPassword"
-                : FoundNote);
+            notes.Add(note);
             Log.Line("access control: {0}, user {1}, role {2}", c.State(), madeUser ? "made" : "found", madeRole ? "made" : "found");
         }
     }
