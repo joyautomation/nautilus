@@ -66,8 +66,13 @@ func rules(u universe) []rule {
 		},
 		{
 			from: []string{"alarm"},
-			to:   u.allBut("lang/ir", "retain"),
+			to:   u.allBut("alarm", "lang/ir", "retain"),
 			why:  "alarms are a context of their own, wired to a tag store by the manifest, not by importing one",
+		},
+		{
+			from: []string{"alarm/escalate"},
+			to:   u.allBut("alarm"),
+			why:  "escalation reads the alarm engine and is handed its gate by the manifest; it never learns the runtime, the elector or the server",
 		},
 		{
 			from: []string{"modbus", "eip", "optommp", "plcnext", "profinet", "hw", "snmp", "redfish", "prom", "replay", "sparkplug/host"},

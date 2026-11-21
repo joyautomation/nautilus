@@ -130,6 +130,13 @@ type instance struct {
 	retainedAckAt time.Time
 
 	started bool // seen at least one evaluation
+
+	// waitAt is when the alarm began waiting on a person: set as it
+	// enters an unacknowledged state from any other, kept while it moves
+	// between unack-active and unack-rtn (a latched alarm that flaps is
+	// still the same wait), cleared by an ack, a shelf or a suppression.
+	// Escalation (#715) runs from it. Maintained by emit.
+	waitAt time.Time
 }
 
 // qualify folds the raw bit into the qualified condition, applying the

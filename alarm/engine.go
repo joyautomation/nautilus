@@ -274,6 +274,11 @@ func (e *Engine) unsuppress(in *instance, now time.Time) {
 // now reads differently".
 func (e *Engine) emit(in *instance, now time.Time, kind, by string) {
 	e.rev++
+	if !in.state.Unacked() {
+		in.waitAt = time.Time{}
+	} else if in.waitAt.IsZero() {
+		in.waitAt = now
+	}
 	ev := Event{
 		TS:       now.UnixMilli(),
 		ID:       in.def.ID,
@@ -328,6 +333,10 @@ type Record struct {
 	RTNMs        int64 `json:"rtnMs,omitempty"`
 	AckMs        int64 `json:"ackMs,omitempty"`
 	ShelfUntilMs int64 `json:"shelfUntilMs,omitempty"`
+	// WaitMs is when the alarm began waiting on a person: its first
+	// unacknowledged state since it was last acknowledged, shelved,
+	// suppressed or normal. Zero while it waits on nobody.
+	WaitMs int64 `json:"waitMs,omitempty"`
 
 	AckBy   string `json:"ackBy,omitempty"`
 	ShelfBy string `json:"shelfBy,omitempty"`
@@ -355,11 +364,25 @@ func (in *instance) record() Record {
 	if !in.ackAt.IsZero() {
 		r.AckMs = in.ackAt.UnixMilli()
 	}
+	if !in.waitAt.IsZero() {
+		r.WaitMs = in.waitAt.UnixMilli()
+	}
 	if !in.shelfUntil.IsZero() {
 		r.ShelfUntilMs = in.shelfUntil.UnixMilli()
 		r.ShelfBy = in.shelfBy
 	}
 	return r
+}
+
+// Lookup returns one alarm's record by id, the way Records shows it.
+func (e *Engine) Lookup(id string) (Record, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	i, ok := e.byID[id]
+	if !ok {
+		return Record{}, false
+	}
+	return e.inst[i].record(), true
 }
 
 // Active returns everything annunciating — active, unack-RTN and shelved —
@@ -630,6 +653,37 @@ func (e *Engine) OnEvent(fn func(Event)) {
 	e.mu.Lock()
 	e.onEvent = fn
 	e.mu.Unlock()
+}
+
+// Notice is one notification an escalation policy sent or tried to send
+// (#715), as Notified journals it. To is a principal, never an address.
+type Notice struct {
+	Level  int    // 1 is the first level
+	To     string // principal: a user name or oidc:<name>
+	Via    string // channel kind
+	Result string // NotifySent, NotifyFailed, NotifyNobodyOnCall
+	Reason string // optional: "joined late: …"
+}
+
+// Notified journals a KindNotify row for alarm id, with the alarm's name,
+// priority, site and current state, under the engine's clock. Like Note it
+// only journals: it is not a state change, so it bumps no Rev and reaches
+// neither the Notifiers nor OnEvent (a webhook notifier must not hear of
+// its own escalation, and a pair's ack-clear hook has nothing to do with
+// it). An unknown id is journalled bare: the alarm may have left the
+// definition set while a send was in flight.
+func (e *Engine) Notified(id string, n Notice) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	ev := Event{TS: e.now().UnixMilli(), ID: id, Kind: KindNotify, By: "system",
+		Level: n.Level, To: n.To, Via: n.Via, Result: n.Result, Reason: n.Reason}
+	if i, ok := e.byID[id]; ok {
+		in := &e.inst[i]
+		ev.Name, ev.Priority, ev.Site, ev.State = in.displayName(), in.def.Priority, in.def.Site, in.state.String()
+	}
+	if err := e.jrn.Append(ev); err != nil {
+		e.log.Warn("alarm journal append failed", "id", id, "kind", ev.Kind, "err", err)
+	}
 }
 
 // Note journals a system event that belongs to no alarm definition

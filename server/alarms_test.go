@@ -294,6 +294,33 @@ func TestJournalQuery(t *testing.T) {
 	}
 }
 
+// A notify row (#715) is not a state change, and an HMI that predates it
+// keys journal rows on ts:id:kind: the journal view leaves notify rows out
+// unless a client asks for that kind.
+func TestJournalHidesNotifyUnlessAsked(t *testing.T) {
+	srv, eng := alarmServer(t, map[string]any{"HiTempAlm": true, "LoFlowAlm": false})
+	eng.Evaluate()
+	eng.Notified("HiTemp", alarm.Notice{Level: 1, To: "alice", Via: "log", Result: alarm.NotifySent})
+	eng.Notified("HiTemp", alarm.Notice{Level: 1, To: "dave", Via: "log", Result: alarm.NotifySent})
+
+	var out journalResponse
+	rec := do(t, srv, "GET", "/api/alarms/journal", "")
+	json.Unmarshal(rec.Body.Bytes(), &out)
+	if len(out.Events) != 1 || out.Events[0].Kind != alarm.KindActive {
+		t.Fatalf("default journal = %+v, want only the activation", out.Events)
+	}
+	rec = do(t, srv, "GET", "/api/alarms/journal?kind=notify", "")
+	json.Unmarshal(rec.Body.Bytes(), &out)
+	if len(out.Events) != 2 || out.Events[0].To == "" || out.Events[0].Result != alarm.NotifySent {
+		t.Fatalf("kind=notify = %+v, want both rows with their recipient and result", out.Events)
+	}
+	rec = do(t, srv, "GET", "/api/alarms/journal?kind=notify,active", "")
+	json.Unmarshal(rec.Body.Bytes(), &out)
+	if len(out.Events) != 3 {
+		t.Fatalf("kind=notify,active = %d rows, want 3", len(out.Events))
+	}
+}
+
 func TestParseTimeAcceptsBothForms(t *testing.T) {
 	want := time.UnixMilli(1700000000000)
 	for _, s := range []string{"1700000000000", want.UTC().Format(time.RFC3339)} {
@@ -545,5 +572,37 @@ func TestAckByTokenKeepsTheTypedName(t *testing.T) {
 		if rec.ID == "HiTemp" && rec.AckBy != "operator1" {
 			t.Errorf("ack recorded as %q, want operator1", rec.AckBy)
 		}
+	}
+}
+
+// oldJournal is a Journal written before ExceptKinds existed: it ignores it.
+type oldJournal struct{ *alarm.RingJournal }
+
+func (j oldJournal) Query(from, to time.Time, f alarm.Filter) ([]alarm.Event, error) {
+	f.ExceptKinds = nil
+	return j.RingJournal.Query(from, to, f)
+}
+
+// A journal that does not honour ExceptKinds still never hands an old HMI
+// a notify row: the server drops the kind again itself.
+func TestJournalHidesNotifyFromAnOldJournal(t *testing.T) {
+	cond := map[string]any{"HiTempAlm": true}
+	eng, err := alarm.New(alarm.Options{
+		Defs:    []alarm.Def{{ID: "HiTemp", Tag: "HiTempAlm", Priority: alarm.High, AckRequired: true, AutoClear: true}},
+		Read:    func(p string) (any, bool) { v, ok := cond[p]; return v, ok },
+		Journal: oldJournal{alarm.NewRing(100)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { eng.Close() })
+	srv := New(newTestRuntime(t), Options{Alarms: eng})
+	eng.Evaluate()
+	eng.Notified("HiTemp", alarm.Notice{Level: 1, To: "alice", Via: "log", Result: alarm.NotifySent})
+	var out journalResponse
+	rec := do(t, srv, "GET", "/api/alarms/journal", "")
+	json.Unmarshal(rec.Body.Bytes(), &out)
+	if len(out.Events) != 1 || out.Events[0].Kind != alarm.KindActive {
+		t.Fatalf("default journal over an old Journal = %+v, want only the activation", out.Events)
 	}
 }

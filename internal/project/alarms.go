@@ -19,10 +19,13 @@ import (
 	"log/slog"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/joyautomation/nautilus/alarm"
+	"github.com/joyautomation/nautilus/alarm/escalate"
 	"github.com/joyautomation/nautilus/devbind"
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/runtime"
@@ -47,6 +50,14 @@ type AlarmsConfig struct {
 	// Notify is the notification pipeline: log lines, webhooks. Notifiers
 	// run off the scan goroutine on a bounded queue.
 	Notify []AlarmNotifyConfig `yaml:"notify"`
+
+	// Oncall and Escalation page people about alarms nobody has
+	// acknowledged (#715): rosters of who is on call, and policies of
+	// levels (who, by which channel, how long after the alarm began
+	// waiting). Addresses never live here: a level names people (a user
+	// name, oidc:<name>) or roster:<id>.
+	Oncall     escalate.Oncall   `yaml:"oncall"`
+	Escalation []escalate.Policy `yaml:"escalation"`
 
 	Rules []alarm.Rule `yaml:"rules"`
 	Defs  []alarm.Def  `yaml:"defs"`
@@ -149,6 +160,9 @@ func (c *AlarmsConfig) validate() error {
 	if strings.EqualFold(c.Journal.Sink, "file") && c.Journal.Path == "" {
 		return errors.New("alarms.journal: sink: file needs path: (where the JSONL goes)")
 	}
+	if _, err := c.escalation(); err != nil {
+		return err
+	}
 	for i, n := range c.Notify {
 		if !n.Log && n.Webhook == "" {
 			return fmt.Errorf("alarms.notify[%d]: an entry is either `log: true` or `webhook: <url>`", i)
@@ -158,6 +172,36 @@ func (c *AlarmsConfig) validate() error {
 		}
 	}
 	return nil
+}
+
+// EscalationAlarmID is the system alarm raised while a notification
+// channel keeps failing (#715): sends to it fail FailAfter times in a row.
+const EscalationAlarmID = "nautilus.alarm-notify"
+
+// EscalationChannels are the channel kinds a level's `via:` may name on
+// this release. Email, SMS, voice and webhook come with #715 PR 3.
+var EscalationChannels = []string{"log"}
+
+// EscalationConfig is the section's escalation config (#715), validated and
+// prepared: what `naut alarms oncall` and `naut alarms escalation` read.
+// Nil, nil when it declares no policies.
+func (c *AlarmsConfig) EscalationConfig() (*escalate.Config, error) { return c.escalation() }
+
+// escalation is the section's escalation config, validated and prepared;
+// nil when it declares no policies.
+func (c *AlarmsConfig) escalation() (*escalate.Config, error) {
+	if len(c.Escalation) == 0 && len(c.Oncall.Rosters) == 0 && c.Oncall.Timezone == "" {
+		return nil, nil
+	}
+	ec := &escalate.Config{Oncall: c.Oncall, Policies: slices.Clone(c.Escalation)}
+	ec.Oncall.Rosters = slices.Clone(c.Oncall.Rosters)
+	if err := ec.Prepare(EscalationChannels); err != nil {
+		return nil, err
+	}
+	if len(ec.Policies) == 0 {
+		return nil, nil
+	}
+	return ec, nil
 }
 
 // composeAlarms folds alarm-files into the manifest's own `alarms:`
@@ -416,6 +460,10 @@ type Alarms struct {
 	Defs        []alarm.Def
 	ShelveTimes []time.Duration
 
+	// Escalation runs the escalation policies; nil without any, and
+	// always nil off `naut run` (a test never pages anyone).
+	Escalation *escalate.Dispatcher
+
 	cancel  func()
 	closers []io.Closer
 }
@@ -428,6 +476,9 @@ func (a *Alarms) Close() error {
 	if a.cancel != nil {
 		a.cancel()
 		a.cancel = nil
+	}
+	if a.Escalation != nil {
+		a.Escalation.Close()
 	}
 	var errs []error
 	if a.Engine != nil {
@@ -498,6 +549,31 @@ func (p *Project) alarms(rt *runtime.Runtime, durable bool, log *slog.Logger, sy
 			return tags.ReadPath(path)
 		}
 	}
+	// Escalation pages people, so only `naut run` builds it: the
+	// acceptance harness and `nautilus test` (durable false) never send.
+	var esc *escalate.Config
+	var disp atomic.Pointer[escalate.Dispatcher]
+	if durable {
+		if esc, err = p.Alarms.escalation(); err != nil {
+			return nil, err
+		}
+	}
+	if esc != nil {
+		failing := alarm.Def{
+			ID: EscalationAlarmID, Tag: "__nautilus.alarm-notify-failing",
+			Name:     "Alarm notifications are failing: people may not be paged (see the alarm journal's notify rows)",
+			Priority: alarm.High, Class: "system", AckRequired: true, AutoClear: true,
+		}
+		defs = append(defs, failing)
+		inner := read
+		read = func(path string) (any, bool) {
+			if path == failing.Tag {
+				d := disp.Load()
+				return d != nil && d.AnyFailing(), true
+			}
+			return inner(path)
+		}
+	}
 	out := &Alarms{Defs: defs, ShelveTimes: p.Alarms.ShelveDurations()}
 
 	journal := alarm.Journal(alarm.NewRing(p.Alarms.Journal.Keep))
@@ -536,10 +612,40 @@ func (p *Project) alarms(rt *runtime.Runtime, durable bool, log *slog.Logger, sy
 		return nil, err
 	}
 	out.Engine = eng
+	if esc != nil {
+		o := escalate.Options{Config: esc, Engine: eng, Log: log,
+			Channels: map[string]escalate.Channel{"log": escalate.LogChannel{Log: log}}}
+		// The write gate itself (leader.Election.IsLeader on a pair or a
+		// Kubernetes lease), asked by the sender before every send: never
+		// a cached role, so a standby whose role is stale pages nobody.
+		if p.WriteGate != nil {
+			t, ok := p.Runtime.Coordinator.(runtime.Termed)
+			if !ok {
+				out.Close()
+				return nil, errors.New("alarms.escalation: this controller's elector names no leadership term, " +
+					"so a page queued under one leader could leave under the next; escalation needs a termed elector")
+			}
+			o.Gate, o.Term = p.WriteGate, t.Term
+		}
+		d, err := escalate.New(o)
+		if err != nil {
+			out.Close()
+			return nil, err
+		}
+		disp.Store(d)
+		out.Escalation = d
+	}
 	// Evaluate after each main scan, not on a ticker: the store is
 	// consistent there, and a wall-clock ticker inside the engine would
-	// never fire against a stopped virtual clock.
-	out.cancel = rt.OnScan(func(*runtime.Tags) { eng.Evaluate() })
+	// never fire against a stopped virtual clock. Escalation looks after
+	// the evaluation, on the same clock.
+	d := out.Escalation
+	out.cancel = rt.OnScan(func(*runtime.Tags) {
+		eng.Evaluate()
+		if d != nil {
+			d.Tick(time.UnixMilli(tags.NowMs()))
+		}
+	})
 	return out, nil
 }
 

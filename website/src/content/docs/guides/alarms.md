@@ -216,7 +216,8 @@ like a quiet plant.
 ## The journal
 
 Every state change produces exactly one event: `active`, `rtn`, `ack`,
-`shelve`, `unshelve`, `suppress`, `unsuppress`.
+`shelve`, `unshelve`, `suppress`, `unsuppress`. An escalation's sends are
+journalled too, as `notify` rows (see [Escalation and on-call](#escalation-and-on-call)).
 
 An in-memory ring is **always on**, in front of any sink, so the journal
 page works on a box with no database at all — and it is bounded by
@@ -243,6 +244,95 @@ historian uses.
 off the scan goroutine on a bounded queue: a slow endpoint drops events
 with a counter rather than stalling the scan, because a controller that
 waits on an HTTP call is a controller that stops controlling.
+
+## Escalation and on-call
+
+`notify:` ships every event. Escalation is different: it pages *people*
+about an alarm nobody has acknowledged, level by level, until someone
+does.
+
+```yaml
+alarms:
+  oncall:
+    timezone: America/Chicago        # rosters and windows read in this zone
+    rosters:
+      - { id: operators, members: [alice, dave] }          # everyone, always
+      - id: standby                                        # one at a time
+        members: [bob, erin]
+        rotate: weekly                                     # or daily
+        start: 2026-11-02                                  # bob's first week
+        handover: "07:00"
+      - id: crew                                           # by shift
+        shifts:
+          - { days: [mon-fri], from: "06:00", to: "18:00", members: [alice] }
+          - { days: [mon-fri], from: "18:00", to: "06:00", members: [dave] }
+  escalation:
+    - id: process
+      match: { class: process, priority: [high, critical] }  # also id, site, area
+      # when: { days: [mon-fri], from: "06:00", to: "18:00" }  # optional
+      levels:
+        - { after: 0s,  notify: [roster:operators], via: [log] }
+        - { after: 10m, notify: [roster:standby],   via: [log] }
+        - { after: 30m, notify: [carol],            via: [log] }
+      repeat: { every: 15m, times: 2 }   # the last level again
+      stop: ack                          # or ack-or-rtn
+```
+
+- **People, not addresses.** A level names a roster (`roster:<id>`, read
+  when the level is sent, so a handover between levels pages the new
+  person) or a person by principal: a user name, or `oidc:<name>`. Email
+  addresses and phone numbers never go in the manifest.
+- **The first policy that covers the alarm runs it.** `match:` fields AND
+  together; `when:` is read once, at the moment the alarm began waiting, and
+  the policy then runs to the end even past the window.
+- **The clock starts when the alarm begins waiting on a person,** not at
+  its latest activation: a latched alarm that flaps between unack-active
+  and unack-rtn keeps climbing. An acknowledgement, a shelf or a
+  suppression ends the escalation; with `stop: ack-or-rtn`, so does a
+  return to normal.
+- **Only the controller holding the write gate pages.** The gate is asked
+  immediately before every send, so a standby sends nothing, and a leader
+  that loses its lease sends nothing more. A controller that wins the
+  lease again with an escalation already under way sends the level now
+  due, once, never a burst of the earlier ones; the journal says
+  `joined late`. The escalation clock does not survive a restart or a
+  takeover yet: an alarm still waiting there is a new wait, and starts
+  again at level 1.
+- **A roster is read once per level,** when that level falls due. A
+  handover after it pages the new person at the next level, never with
+  the levels already sent.
+- **A failed send is not retried.** The channel's own retries apart, the
+  next level, or a repeat, comes on its own timer: escalation never waits
+  on delivery.
+- **An alarm with `ack-required: false` never pages:** it never waits on a
+  person, so nothing could stop the escalation. `naut alarms escalation`
+  counts these apart, and `naut check` warns when a policy matches one.
+- **Only `naut run` pages.** `naut test` and the acceptance harness build
+  no escalation at all.
+- **The browser playground has no time-zone database,** so there a
+  project loads only with `timezone: UTC` (or none); `naut` itself has
+  every IANA zone built in.
+
+Every send is journalled as a `notify` row (level, the person, the
+channel, and `sent`, `failed` or `nobody-on-call`), never with an
+address. `GET /api/alarms/journal` leaves these rows out unless asked:
+`?kind=notify`. They count against the in-memory ring's `keep` like any
+other row. A channel whose last three sends all failed raises the system
+alarm `nautilus.alarm-notify`, until a send on it succeeds (or this
+controller stops leading).
+
+This release has one channel, `log`, which writes each page to the log
+stream: it is how a policy is tried before people are paged. Email, SMS,
+voice and webhook channels, and acknowledging from a notification, come
+next.
+
+Check a policy offline:
+
+```sh
+naut alarms oncall -at "2026-11-23 06:55" .         # who each roster has on call
+naut alarms escalation .                            # alarms covered, per policy
+naut alarms escalation -id LSHH101 -at "2026-11-23 06:55" .   # the steps one alarm would page
+```
 
 ## On the HMI
 

@@ -117,6 +117,9 @@ Usage:
                           and print every definition (-o yaml, -count,
                           -site, -priority). The auditable half of "a few
                           rules cover thousands of alarms".
+  naut alarms oncall  Who each on-call roster has on call (-at).
+  naut alarms escalation  What each escalation policy covers, and the
+                          steps one alarm would page (-id, -at).
   naut pull           Pull a controller's online edits back into the
                           program file (--host <controller>). Inverse of the
                           VS Code "Download Program to Controller" command.

@@ -786,6 +786,12 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 		fmt.Printf("%s: warning: %s\n", loc.file, m)
 	}
 	if proj.Alarms != nil {
+		if c, err := proj.Alarms.EscalationConfig(); err == nil && c != nil {
+			for _, m := range escalationNoAckWarnings(c, defs) {
+				warns++
+				fmt.Printf("%s: warning: %s\n", loc.file, m)
+			}
+		}
 		// The count is the auditable half of "a few rules cover thousands
 		// of alarms": `naut alarms list` dumps what they became.
 		fmt.Printf("%s: %d alarm definitions\n", loc.file, len(defs))

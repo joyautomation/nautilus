@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/joyautomation/nautilus/alarm"
+	"github.com/joyautomation/nautilus/alarm/escalate"
 	"github.com/joyautomation/nautilus/devbind"
 	"gopkg.in/yaml.v3"
 )
@@ -66,6 +67,9 @@ func goKeys(v any) []string {
 	t := reflect.TypeOf(v)
 	var out []string
 	for i := range t.NumField() {
+		if !t.Field(i).IsExported() {
+			continue // YAML never reads it: load-time bookkeeping
+		}
 		name, _, _ := strings.Cut(t.Field(i).Tag.Get("yaml"), ",")
 		if name == "" {
 			name = strings.ToLower(t.Field(i).Name)
@@ -128,6 +132,14 @@ func TestSchemaMatchesLoader(t *testing.T) {
 		{"alarm defaults", goKeys(alarm.Defaults{}), schemaKeys(s.Definitions["alarm-defaults"].Properties)},
 		{"the alarm journal", goKeys(AlarmJournalConfig{}), schemaKeys(s.Definitions["alarm-journal"].Properties)},
 		{"an alarm notifier", goKeys(AlarmNotifyConfig{}), schemaKeys(s.Definitions["alarm-notify"].Properties)},
+		{"alarm on-call", goKeys(escalate.Oncall{}), schemaKeys(s.Definitions["alarm-oncall"].Properties)},
+		{"an on-call roster", goKeys(escalate.Roster{}), schemaKeys(s.Definitions["alarm-roster"].Properties)},
+		{"a roster's shift", slices.Sorted(slices.Values(append(goKeys(escalate.Window{}), "members"))), schemaKeys(s.Definitions["alarm-shift"].Properties)},
+		{"a time window", goKeys(escalate.Window{}), schemaKeys(s.Definitions["alarm-window"].Properties)},
+		{"an escalation policy", goKeys(escalate.Policy{}), schemaKeys(s.Definitions["alarm-escalation"].Properties)},
+		{"an escalation match", goKeys(escalate.Match{}), schemaKeys(s.Definitions["alarm-escalation-match"].Properties)},
+		{"an escalation level", goKeys(escalate.Level{}), schemaKeys(s.Definitions["alarm-level"].Properties)},
+		{"an escalation repeat", goKeys(escalate.Repeat{}), schemaKeys(s.Definitions["alarm-repeat"].Properties)},
 		{"an alarm rule", goKeys(alarm.Rule{}), schemaKeys(s.Definitions["alarm-rule"].Properties)},
 		{"an alarm rule's match", goKeys(alarm.Match{}), schemaKeys(s.Definitions["alarm-match"].Properties)},
 		{"substitutes", goKeys(SubstitutesConfig{}), schemaKeys(s.Definitions["substitutes"].Properties)},
