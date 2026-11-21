@@ -11,6 +11,7 @@
 		"@threlte/core": "8.6.1",
 		"@threlte/extras": "9.22.2",
 		"svelte": "5.57.1",
-		"three": "0.186.1"
+		"three": "0.186.1",
+		"yaml": "2.9.1"
 	}
 }
