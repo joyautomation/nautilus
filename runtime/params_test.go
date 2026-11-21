@@ -205,3 +205,35 @@ func TestParametersAreScalarSetpoints(t *testing.T) {
 		t.Fatalf("parameters = %v, want SP and Free but not the state tag Push", names)
 	}
 }
+
+// A text or boolean write to a ranged tag cannot slip past the numeric
+// bound (a TIME literal such as T#99h), and a text init cannot carry a range.
+func TestRangedTagTakesOnlyNumbers(t *testing.T) {
+	rt := paramRT(t, nil, 65)
+	rt.Scan()
+	for _, v := range []any{"T#99h", "50", true} {
+		if err := rt.Tags().Write([]WriteOp{{Path: "SP", Value: v}})[0]; !errors.Is(err, ir.ErrTypeMismatch) {
+			t.Errorf("write %#v: err = %v, want a type mismatch naming the range", v, err)
+		}
+	}
+}
+
+// A text init is not a parameter, and a setpoint outside an explicit retain
+// list is not either: neither can be compared or can persist drift.
+func TestParametersSkipTextInitAndUnretained(t *testing.T) {
+	rt, err := New(Options{
+		Program: "PROGRAM P\nVAR_EXTERNAL A : REAL; B : REAL; END_VAR\nEND_PROGRAM",
+		Tags:    []TagDef{Setpoint("A", 1.0), Setpoint("B", 2.0), Setpoint("Hold", "T#5s")},
+		Retain:  &fakeStore{}, RetainTags: []string{"A", "Hold"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, p := range rt.Parameters() {
+		names = append(names, p.Name)
+	}
+	if len(names) != 1 || names[0] != "A" {
+		t.Fatalf("parameters = %v, want only A", names)
+	}
+}

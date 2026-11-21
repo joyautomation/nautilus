@@ -20,6 +20,7 @@ func TestTagRangeDeclaration(t *testing.T) {
 		{"init below", TagConfig{Name: "SP", Role: "setpoint", Init: 5, Min: f(10)}, "init 5 is outside its range [10, ..]"},
 		{"init above", TagConfig{Name: "SP", Role: "setpoint", Init: 95.5, Max: f(90)}, "outside its range"},
 		{"min above max", TagConfig{Name: "SP", Role: "setpoint", Init: 5, Min: f(9), Max: f(3)}, "min 9 is above max 3"},
+		{"text init", TagConfig{Name: "H", Role: "setpoint", Init: "T#5s", Max: f(9)}, "init \"T#5s\" is text"},
 		{"on an output", TagConfig{Name: "Y", Role: "output", Init: false, Max: f(1)}, "bound a setpoint"},
 		{"on state", TagConfig{Name: "S", Role: "state", Init: 1, Min: f(0)}, "bound a setpoint"},
 	}

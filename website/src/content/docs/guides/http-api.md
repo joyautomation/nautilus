@@ -411,8 +411,11 @@ and the plant still holds the value the old one gave) or `conflict` (both
 moved, to different values). `base` is the `init:` the plant and the repo
 last agreed on. A store written before parameters has no base, and the plant
 is then taken to have started at the current `init:`. `outOfRange: true`
-marks a value outside `min`/`max`, which only the program's own write can
-cause (see below).
+marks a value outside `min`/`max`. An external write cannot cause it; the
+program's own write can, and so can a redeploy that narrows the range under
+a retained value (see below). Only numeric and boolean setpoints that are
+retained are listed: a text init (a TIME written `T#5s`) is not compared, and
+a setpoint outside the `retain:` list returns to its `init:` on a restart.
 
 `min:` and `max:` on a setpoint refuse **external** writes only: an HMI, the
 API, Sparkplug and OPC UA all go through one write path, and a number outside

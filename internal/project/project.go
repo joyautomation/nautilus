@@ -1990,6 +1990,9 @@ func tagDefs(tags []TagConfig) ([]runtime.TagDef, error) {
 			if t.Min != nil && t.Max != nil && *t.Min > *t.Max {
 				return nil, fmt.Errorf("tag %s: min %v is above max %v — swap them", t.Name, *t.Min, *t.Max)
 			}
+			if _, isText := t.Init.(string); isText {
+				return nil, fmt.Errorf("tag %s: min/max bound a number; init %q is text — give it a numeric init (a TIME in milliseconds) or remove the range", t.Name, t.Init)
+			}
 			if f, ok := numericInit(t.Init); ok &&
 				((t.Min != nil && f < *t.Min) || (t.Max != nil && f > *t.Max)) {
 				return nil, fmt.Errorf("tag %s: init %v is outside its range %s — change init: or the range", t.Name, f, runtime.TagRange{Min: t.Min, Max: t.Max})

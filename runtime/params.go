@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"math"
+	"slices"
 	"sort"
 	"sync"
 )
@@ -61,9 +62,16 @@ func (r *Runtime) initParams(defs []TagDef) {
 			continue
 		}
 		switch d.Init.(type) {
-		case float64, int, int64, bool, string:
+		case float64, int, int64, bool:
 		default:
-			continue // a struct or array init is not a parameter
+			// A struct or array init is not a parameter, and neither is a
+			// text init: a TIME written T#5s or an enumeration member name
+			// reads back as a number, so a comparison would call it drift
+			// for ever.
+			continue
+		}
+		if r.retainStore != nil && !slices.Contains(r.retainTags, d.Name) {
+			continue // not retained: it returns to its init on a restart, so it cannot drift
 		}
 		if r.params.inits == nil {
 			r.params.inits = map[string]any{}

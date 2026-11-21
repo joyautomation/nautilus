@@ -143,7 +143,10 @@ func (t *Tags) rangeCheck(op WriteOp) error {
 			return nil
 		}
 	default:
-		return nil
+		// A text or boolean value for a ranged tag (a TIME literal such as
+		// T#99h would otherwise slip past the numeric bound): a range
+		// applies to numbers.
+		return fmt.Errorf("tag %s has the range %s: write a number inside it: %w", r.Name, r.String(), ir.ErrTypeMismatch)
 	}
 	if (r.Min != nil && f < *r.Min) || (r.Max != nil && f > *r.Max) {
 		return fmt.Errorf("tag %s: %v is outside its range %s — write a value inside it (the range is the tag's min:/max: in the manifest): %w",
