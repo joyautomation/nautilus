@@ -1692,7 +1692,7 @@ namespace Tiad.Openness
         {
             return Tia(delegate
             {
-                var lines = new List<string>();
+                var lines = new ProbeLog();
                 Project p = Of(project).Project;
                 HwDevice orig = StationOf(p);
                 if (orig == null) throw new TiaException("probe: the project has no CPU");
@@ -1786,7 +1786,7 @@ namespace Tiad.Openness
 
         // ProbeUpload is Upload without deleting anything; it returns
         // TIA's UploadedStation (may be null).
-        HwDevice ProbeUpload(Project p, string address, bool trustUnverifiedCertificate, List<string> lines, int n)
+        HwDevice ProbeUpload(Project p, string address, bool trustUnverifiedCertificate, ProbeLog lines, int n)
         {
             StationUploadProvider sup = p.GetService<StationUploadProvider>();
             ConfigurationPcInterface pc = PcInterface(sup.Configuration);
@@ -1826,7 +1826,7 @@ namespace Tiad.Openness
         // rehearsal's stand-in for an upload).
         static object probeMasterCopy;
 
-        static HwDevice ProbeDup(Project p, HwDevice station, List<string> lines)
+        static HwDevice ProbeDup(Project p, HwDevice station, ProbeLog lines)
         {
             if (probeMasterCopy == null)
             {
@@ -1851,7 +1851,19 @@ namespace Tiad.Openness
             return (HwDevice)cf.Invoke(p.Devices, new object[] { probeMasterCopy });
         }
 
-        static void ProbeStep(List<string> lines, string what, Action a)
+        // ProbeLog writes every report line to tiad's log as it is made, so
+        // a throw or a TIA crash mid-probe keeps what came before (both
+        // upload-twin windows lost their report to a throw).
+        sealed class ProbeLog : List<string>
+        {
+            public new void Add(string s)
+            {
+                base.Add(s);
+                Log.Line("probe upload-twin: {0}", TiaNames.LogSafe(s));
+            }
+        }
+
+        static void ProbeStep(ProbeLog lines, string what, Action a)
         {
             try
             {
@@ -1864,7 +1876,7 @@ namespace Tiad.Openness
             }
         }
 
-        static void ProbeMessages(UploadResultMessageComposition ms, int depth, List<string> lines)
+        static void ProbeMessages(UploadResultMessageComposition ms, int depth, ProbeLog lines)
         {
             foreach (UploadResultMessage m in ms)
             {
@@ -1931,13 +1943,13 @@ namespace Tiad.Openness
             return string.Format("{0} (cpu {1}, type {2}) nodes [{3}]", d.Name, c == null ? "-" : c.Name, ProbeAttr(d, "TypeIdentifier"), string.Join("; ", nodes.ToArray()));
         }
 
-        static void ProbeBlocks(DeviceItem cpu, string tag, List<string> lines)
+        static void ProbeBlocks(DeviceItem cpu, string tag, ProbeLog lines)
         {
             var sw = (PlcSoftware)cpu.GetService<SoftwareContainer>().Software;
             ProbeBlockGroup(sw.BlockGroup, "", tag, lines);
         }
 
-        static void ProbeBlockGroup(PlcBlockGroup g, string path, string tag, List<string> lines)
+        static void ProbeBlockGroup(PlcBlockGroup g, string path, string tag, ProbeLog lines)
         {
             foreach (PlcBlock b in g.Blocks)
             {
@@ -1949,7 +1961,7 @@ namespace Tiad.Openness
 
         // ProbeIo lists each IO system the station controls and the IO
         // devices connected to it.
-        static void ProbeIo(HwDevice d, string tag, List<string> lines)
+        static void ProbeIo(HwDevice d, string tag, ProbeLog lines)
         {
             foreach (DeviceItem i in Items(d.DeviceItems))
             {
@@ -1995,14 +2007,14 @@ namespace Tiad.Openness
             return null;
         }
 
-        static void ProbeHw(string tag, DeviceItem a, DeviceItem b, List<string> lines)
+        static void ProbeHw(string tag, DeviceItem a, DeviceItem b, ProbeLog lines)
         {
             DateTime t0 = DateTime.UtcNow;
             CompareResult r = a.CompareTo((IHardwareCompareTarget)b);
             ProbeTree(tag, r, (int)(DateTime.UtcNow - t0).TotalMilliseconds, lines);
         }
 
-        static void ProbeSw(string tag, DeviceItem a, DeviceItem b, List<string> lines)
+        static void ProbeSw(string tag, DeviceItem a, DeviceItem b, ProbeLog lines)
         {
             var sa = (PlcSoftware)a.GetService<SoftwareContainer>().Software;
             var sb = (PlcSoftware)b.GetService<SoftwareContainer>().Software;
@@ -2013,7 +2025,7 @@ namespace Tiad.Openness
 
         // ProbeTree writes the whole compare tree, full depth, with TIA's
         // detail text (capped at 1500 lines a tree).
-        static void ProbeTree(string tag, CompareResult r, int ms, List<string> lines)
+        static void ProbeTree(string tag, CompareResult r, int ms, ProbeLog lines)
         {
             if (r == null || r.RootElement == null)
             {
@@ -2026,7 +2038,7 @@ namespace Tiad.Openness
             if (count >= 1500) lines.Add("  ... TRUNCATED at 1500 lines");
         }
 
-        static void ProbeWalk(CompareResultElement e, int depth, List<string> lines, ref int count)
+        static void ProbeWalk(CompareResultElement e, int depth, ProbeLog lines, ref int count)
         {
             if (count >= 1500) return;
             count++;

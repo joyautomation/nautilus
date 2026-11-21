@@ -85,7 +85,6 @@ namespace Tiad
                     Log.Line("audit probe-upload-twin session={0} address={1} rehearse={2} renameOriginal={7} uploads={3} trustUnverifiedCertificate={4} lines={5} outcome={6}",
                         s.Id, Json.Quote(address), rehearse, uploads, trust, lines == null ? 0 : lines.Count, outcome, rename);
                 }
-                for (int i = 0; i < lines.Count && i < 400; i++) Log.Line("probe upload-twin: {0}", Json.Quote(lines[i]));
                 var o = new Obj();
                 o["lines"] = lines.ToArray();
                 return o;
