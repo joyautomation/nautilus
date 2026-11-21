@@ -24,6 +24,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/joyautomation/nautilus/internal/securefile"
 )
 
 // FileName is the users file's name in the state directory.
@@ -157,45 +159,7 @@ func (f *File) Save(path, by string) error {
 // keepOwner says, fsynced, renamed over the old one, the directory
 // fsynced. A path that is a symbolic link is refused.
 func writeAtomic(path string, b []byte) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	if st, err := os.Lstat(path); err == nil && st.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("%s is a symbolic link: it must be a plain file", path)
-	}
-	tmp, err := os.CreateTemp(dir, ".users-*.json")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(tmp.Name()) // a no-op after the rename
-	if err := tmp.Chmod(0o600); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := keepOwner(tmp, path, dir); err != nil {
-		tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(b); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp.Name(), path); err != nil {
-		return err
-	}
-	if d, err := os.Open(dir); err == nil {
-		d.Sync()
-		d.Close()
-	}
-	return nil
+	return securefile.WriteAtomic(path, ".users-*.json", b, geteuid() == 0)
 }
 
 // CheckMode refuses a users file that anyone but its owner may read or
@@ -205,23 +169,7 @@ func writeAtomic(path string, b []byte) error {
 // checks. On Windows, where Go reports every file 0666 and access is the
 // ACL's, the mode bits say nothing and are not checked.
 func CheckMode(path string) error {
-	if st, err := os.Stat(filepath.Dir(path)); err == nil && othersMayWrite(st.Mode().Perm()) {
-		return fmt.Errorf("%s is mode %04o: other users can replace the users file in it; chmod go-w it", filepath.Dir(path), st.Mode().Perm())
-	}
-	st, err := os.Lstat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if st.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("%s is a symbolic link: the users file must be a plain file", path)
-	}
-	if m := st.Mode().Perm(); othersMayRead(m) {
-		return fmt.Errorf("%s is mode %04o: other users can read the password hashes; chmod 600 it", path, m)
-	}
-	return nil
+	return securefile.CheckMode(path, "the users file", "the password hashes")
 }
 
 // LockName is the lock file beside the users file that serializes naut
