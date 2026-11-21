@@ -1072,6 +1072,88 @@ namespace Tiad
             return Json.Quote(s ?? "");
         }
 
+        // Members describes an object TIA handed over for one log line: each
+        // public instance property's name and value, a list as its elements
+        // (at most MaxElements), an enum's type as its value names too, and
+        // each read that fails as its exception's type, and a property
+        // whose name says secret (password, secret, credential, token,
+        // key) as not read. Every value is LogSafe. It never throws. Only for objects that carry no secret:
+        // the glue never passes a password configuration (#789 stage 4: a
+        // selection TIA refused to take, with what it offers instead).
+        public const int MaxElements = 20;
+
+        public static string Members(object o)
+        {
+            if (o == null) return "null";
+            var parts = new List<string>();
+            System.Reflection.PropertyInfo[] props;
+            try
+            {
+                props = o.GetType().GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+            }
+            catch (Exception e)
+            {
+                return "unreadable (" + e.GetType().Name + ")";
+            }
+            Array.Sort(props, delegate(System.Reflection.PropertyInfo a, System.Reflection.PropertyInfo b) { return string.CompareOrdinal(a.Name, b.Name); });
+            foreach (var p in props)
+            {
+                if (!p.CanRead || p.GetIndexParameters().Length > 0) continue;
+                string v;
+                if (SecretName(p.Name))
+                {
+                    parts.Add(p.Name + "=<not read>");
+                    continue;
+                }
+                try
+                {
+                    v = Value(p.GetValue(o, null));
+                    if (p.PropertyType.IsEnum) v += " of [" + string.Join(", ", Enum.GetNames(p.PropertyType)) + "]";
+                }
+                catch (Exception e)
+                {
+                    Exception x = e is System.Reflection.TargetInvocationException && e.InnerException != null ? e.InnerException : e;
+                    v = "unreadable (" + x.GetType().Name + ")";
+                }
+                parts.Add(p.Name + "=" + v);
+            }
+            return string.Join(" ", parts.ToArray());
+        }
+
+        static string Value(object v)
+        {
+            if (v == null) return "null";
+            if (v is string) return LogSafe((string)v);
+            var seq = v as System.Collections.IEnumerable;
+            if (seq == null) return LogSafe(v.ToString());
+            var l = new List<string>();
+            bool more = false;
+            // Stops past the cap, so a list without end cannot hold up the
+            // cancel this is logged before (#1167 review).
+            foreach (object x in seq)
+            {
+                if (l.Count == MaxElements)
+                {
+                    more = true;
+                    break;
+                }
+                l.Add(LogSafe(x == null ? "null" : x.ToString()));
+            }
+            return "[" + string.Join(", ", l.ToArray()) + (more ? ", more" : "") + "]";
+        }
+
+        // SecretName is a property whose name says it may hold a secret:
+        // never read, whatever type carries it.
+        static bool SecretName(string name)
+        {
+            string n = name.ToLowerInvariant();
+            foreach (string w in new[] { "password", "secret", "credential", "token", "key" })
+            {
+                if (n.Contains(w)) return true;
+            }
+            return false;
+        }
+
         // OnlineRefused is the failure when TIA asked questions going online:
         // tiad answered no (it trusts no certificate and holds no CPU
         // credentials yet), and the operation fails even if TIA went on.

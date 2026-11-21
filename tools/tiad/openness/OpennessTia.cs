@@ -1129,6 +1129,18 @@ namespace Tiad.Openness
             }
             catch (Exception e)
             {
+                // What the configuration offers instead, for the next
+                // window (#789 stage 4); never a password configuration's.
+                if (!(c is DownloadPasswordConfiguration))
+                {
+                    try
+                    {
+                        Log.Line("download: {0} refused {1}; as handed over: {2}", c.GetType().Name, st.Setting, TiaNames.Members(c));
+                    }
+                    catch (Exception)
+                    {
+                    }
+                }
                 throw decider.Fail("writing " + st.Setting + " into " + c.GetType().Name + " failed: " + Message(e));
             }
             decider.Wrote(st);
