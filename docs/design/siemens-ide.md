@@ -1086,7 +1086,8 @@ pinned address, and refuse the blind upload opt-in there.
 
 **The fingerprint read (built).** `POST /v1/sessions/{id}/fingerprint`
 goes online from the session's CPU, reads what TIA's fingerprint service
-reports for the CPU, and goes offline, always. It writes nothing and
+reports for the CPU, and goes offline (after a failure, as far as TIA
+still answers: the project may stay online if TIA is failing). It writes nothing and
 saves nothing. On the bench CPU (#789 stages 1b and (C)) it returns eight
 items, in TIA's order and named as TIA names them: `TextLists`,
 `Hardware`, `Certificates`, `Routing` and `Connection` checksums,
@@ -1094,18 +1095,21 @@ items, in TIA's order and named as TIA names them: `TextLists`,
 
 - **They are checksums and counters, not the CPU's identity**: no order
   number, no serial, no program checksum. They say whether what the CPU
-  holds changed. `DownloadId` and both counters change on every load;
-  `Hardware` changed on the first tiad hardware load and stayed the same
-  on the next (the first tiad load or a user-management reset changes it
-  once).
+  holds changed. `DownloadId` and both counters changed on every bench
+  load. `Hardware` changed on the first tiad hardware load and stayed the
+  same on the next, an identical one. That first load also reset the
+  CPU's user management, and one observation cannot tell which of the two
+  changed it: read it as "the first tiad load or a user-management reset
+  changes it once" until more loads show which.
 - **It fails, never answers part of a read**: the CPU not reached
   online, any question not answered, any failure in TIA's side, no
   items, an item with no identifier, one named twice, more than 64, an
   identifier over 128 bytes or a value over 1024 bytes. A failure leaves
   nothing to compare against.
-- **Same gates as a compare, before TIA is called:** the session's CPU
-  address, `TIAD_TARGETS`, and the device pin.
-- **Journalled:** every read, refusals too, is an audit line with each
+- **Same gates as a compare, before the read:** the session's CPU
+  address, `TIAD_TARGETS`, and the device pin (whose check reads the
+  CPU's identity through TIA when a pin exists).
+- **Journalled:** every read, refusals too (a bad request, a gate), is an audit line with each
   item quoted, what it trusted, and the instance's blind trust before and
   after it.
 - **The call sequence is bench-proven** (the stage-1b probe build). The
@@ -1128,13 +1132,22 @@ tiad's clock) and keeps it until it restarts:
   logged beside it;
 - a call that took the opt-in and then failed in TIA's side counts as
   trust (`questions: ["unknown: ..."]`), since TIA may have trusted before
-  it failed;
+  it failed. That includes a failure before going online (no CPU, another
+  address): the safe side, since tiad cannot tell how far it got;
 - every later fingerprint read, compare, upload and download reports it
-  (`blindTrust`, `null` while there is none) and journals it;
+  (`blindTrust`, `null` while there is none) and journals it: a compare
+  before it goes online, a download as the TIA thread read it just before
+  TIA's download (never a trust given later, while it ran);
 - a download, a dry run too, that would ride on it is refused before
   anything reaches the CPU (`blind-trust`, §3.5) unless it says
   `decisions.acceptBlindTrust: true`. The other fix is restarting the
-  agent, for a TIA instance that trusts nothing.
+  agent, for a TIA instance that trusts nothing. The check runs again on
+  the TIA thread just before TIA's download, so a trust a queued call
+  gave in between is caught too; that refusal comes after the pin check
+  and the CPU's claim, and says TIA's download was not called.
+- a fingerprint read refused for a certificate question alone names the
+  opt-in; one refused for credentials or a question tiad does not know
+  does not, since the opt-in answers neither.
 
 So a deploy that reads the fingerprint before loading, in the same
 instance, must accept the blind trust; one that reads it after loading

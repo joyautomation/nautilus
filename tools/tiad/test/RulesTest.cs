@@ -322,6 +322,7 @@ namespace Tiad.Test
             True(!FingerprintRule.CertificateOnly("TIA: " + TiaNames.OnlineRefused("192.0.2.10", new List<string> { cred }, "x")), "credentials: " + cred);
             True(!FingerprintRule.CertificateOnly("TIA: " + TiaNames.OnlineRefused("192.0.2.10", new List<string> { cert, cred }, "x")), "a certificate and credentials");
             True(!FingerprintRule.CertificateOnly("TIA: " + TiaNames.OnlineRefused("192.0.2.10", new List<string> { other }, "x")), "a question tiad does not know: " + other);
+            True(!FingerprintRule.CertificateOnly("TIA: " + TiaNames.OnlineRefused("192.0.2.10", new List<string> { cert, other }, "x")), "a certificate and a question tiad does not know");
             True(!FingerprintRule.CertificateOnly("TIA: the fingerprint service failed"), "no question asked");
         }
 
