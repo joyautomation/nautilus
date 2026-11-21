@@ -86,6 +86,14 @@ namespace Tiad
         // download had begun, else a plain failure; both name the fix.
         static TiadException Died(Exception e, string why)
         {
+            // tiad's own outcome_unknown (an internal error inside a
+            // recorded download) stays in doubt: TIA going too settles
+            // nothing about the CPU (#1180 review).
+            var tde = e as TiadException;
+            if (tde != null && tde.Kind == Kinds.OutcomeUnknown)
+            {
+                return new TiadException(500, Kinds.OutcomeUnknown, tde.Message + "; " + why + ", and " + GoneFix, tde.Payload, true);
+            }
             string msg = "TIA: " + (e is TiaException ? e.Message : TiaNames.Message(e)) + "; " + why;
             var te = e as TiaException;
             if (te != null && te.InDoubt)

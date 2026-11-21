@@ -282,6 +282,7 @@ func TestAgentRecordsHowADownloadFailed(t *testing.T) {
 		{"TIA dies downloading", tiadtest.Script{TiaDies: "downloading"}, tiad.KindOutcomeUnknown, tiad.DeployInDoubt},
 		{"TIA fails in doubt", tiadtest.Script{FailInDoubt: "the connection dropped"}, tiad.KindOutcomeUnknown, tiad.DeployInDoubt},
 		{"an internal error", tiadtest.Script{DownloadThrows: "a null reference"}, tiad.KindOutcomeUnknown, tiad.DeployInDoubt},
+		{"an internal error as TIA dies", tiadtest.Script{DownloadThrows: "a null reference", TiaDies: "downloading"}, tiad.KindOutcomeUnknown, tiad.DeployInDoubt},
 		{"the compare differs", tiadtest.Script{CompareDiffers: true}, tiad.KindOutcomeUnknown, tiad.DeployInDoubt},
 	} {
 		t.Run(c.name, func(t *testing.T) {

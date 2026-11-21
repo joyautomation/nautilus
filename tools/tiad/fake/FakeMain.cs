@@ -1211,7 +1211,12 @@ namespace Tiad.Fake
             script.Enter("Download");
             var p = (FakeProject)project;
             if (script.FailInDoubt != "") throw new TiaException(script.FailInDoubt, null, true);
-            if (script.DownloadThrows != "") throw new InvalidOperationException(script.DownloadThrows);
+            if (script.DownloadThrows != "")
+            {
+                // With tiaDies too, TIA is gone by the time it throws.
+                if (script.TiaDies != "") died = true;
+                throw new InvalidOperationException(script.DownloadThrows);
+            }
             var decider = new DownloadDecider(answer, startAfter);
             string dies = script.TiaDies;
             if (dies != "")
