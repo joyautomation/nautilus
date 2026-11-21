@@ -1416,6 +1416,11 @@ namespace Tiad.Test
             Eq(TiaNames.ElementName("ObjectsIdentical", "", "PLC_1"), "PLC_1", "only an online name given");
             Eq(TiaNames.ElementName("LeftMissing", "X", null), "X", "only online, no online name given");
             Eq(TiaNames.ElementName("FolderContentsIdentical", null, null), "", "no names");
+            // An identical element keeps its offline name even when TIA
+            // gave the placeholder there: an online-only name must never
+            // stand in for a project block's label (it then fails closed,
+            // the block not compared).
+            Eq(TiaNames.ElementName("ObjectsIdentical", "Does not exist", "Main [OB1]"), "Does not exist", "identical, placeholder offline name");
         }
 
         static void FileNames()
