@@ -78,7 +78,12 @@ func (e *ForcedError) Is(target error) bool { return target == ErrForced }
 
 // Write applies ops in order under one lock and returns one error per op,
 // nil where it landed. See the front door's rules above.
-func (t *Tags) Write(ops []WriteOp) []error {
+func (t *Tags) Write(ops []WriteOp) []error { return t.WriteAs(ops, "") }
+
+// WriteAs is Write by a named principal (a journal user such as
+// "user:akhan", or a system writer such as "sparkplug"), which a
+// parameter's edit attribution records; "" is recorded as "external".
+func (t *Tags) WriteAs(ops []WriteOp, by string) []error {
 	errs := make([]error, len(ops))
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -96,6 +101,13 @@ func (t *Tags) Write(ops []WriteOp) []error {
 			continue
 		}
 		errs[i] = t.setPathLocked(op.Path, op.Value, true)
+		if errs[i] == nil && t.paramNote != nil {
+			// The value as the store now holds it, for the attribution to
+			// tell later a program's write from this one.
+			if tv, name, ok := t.lookupLocked(op.Path); ok {
+				t.paramNote(op.Path, by, plainNumeric(t.liveLocked(name, tv)))
+			}
+		}
 	}
 	return errs
 }

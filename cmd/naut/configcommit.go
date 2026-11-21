@@ -66,10 +66,30 @@ func wireConfigCommit(h *server.IOHook, base fs.FS, dir string) {
 	if !inGitWorktree(dir) {
 		return
 	}
+	g := committerFor(dir)
+	h.Commit = func(c server.IOCommit) (server.IOCommitted, error) { return g.commit(h.Files(), c) }
+}
+
+var (
+	committersMu sync.Mutex
+	committers   = map[string]*gitCommitter{}
+)
+
+// committerFor is the one committer for a worktree: the live I/O commit and
+// the parameter write-back change files in the same repo, so they share a
+// lock (git's index) and a record of what the controller itself wrote. Its
+// boot is HEAD when it was first asked for, at startup.
+func committerFor(dir string) *gitCommitter {
+	committersMu.Lock()
+	defer committersMu.Unlock()
+	if g, ok := committers[dir]; ok {
+		return g
+	}
 	host, _ := os.Hostname()
 	g := &gitCommitter{dir: dir, host: host, wrote: map[string]string{}}
 	g.boot, _ = g.git(nil, "rev-parse", "HEAD")
-	h.Commit = func(c server.IOCommit) (server.IOCommitted, error) { return g.commit(h.Files(), c) }
+	committers[dir] = g
+	return g
 }
 
 var unsafeIdent = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
@@ -220,6 +240,20 @@ func (g *gitCommitter) commit(st server.IOFiles, c server.IOCommit) (server.IOCo
 	if err != nil {
 		return server.IOCommitted{}, err
 	}
+	msg := c.Message
+	if msg == "" {
+		msg = "config: live I/O change (" + driverNames(st) + ")"
+	}
+	body := fmt.Sprintf("%s\n\nSaved by %s from the controller's live I/O configuration.\n\n%s: %s\n", msg, c.By, commitTrailer, c.ID)
+	return g.commitFiles(changes, c.By, body)
+}
+
+// commitFiles writes changes into the worktree and commits just those
+// files with message body, authored by the principal; the committer is the
+// controller. The caller holds g.mu and has decided the files may change.
+// A detached HEAD and uncommitted work in a file to be written are refused;
+// any failure puts the files back as they were.
+func (g *gitCommitter) commitFiles(changes []ioChange, by, body string) (server.IOCommitted, error) {
 	branch, err := g.git(nil, "symbolic-ref", "--short", "-q", "HEAD")
 	if err != nil {
 		return server.IOCommitted{}, refuse("the checkout is on a detached HEAD: check out the branch the change belongs on, then commit")
@@ -277,12 +311,7 @@ func (g *gitCommitter) commit(st server.IOFiles, c server.IOCommit) (server.IOCo
 	if out, err := g.git(nil, append([]string{"add", "--"}, paths...)...); err != nil {
 		return undo(err, out)
 	}
-	msg := c.Message
-	if msg == "" {
-		msg = "config: live I/O change (" + driverNames(st) + ")"
-	}
-	body := fmt.Sprintf("%s\n\nSaved by %s from the controller's live I/O configuration.\n\n%s: %s\n", msg, c.By, commitTrailer, c.ID)
-	an, ae := ident(c.By, g.host)
+	an, ae := ident(by, g.host)
 	env := []string{
 		"GIT_AUTHOR_NAME=" + an, "GIT_AUTHOR_EMAIL=" + ae,
 		"GIT_COMMITTER_NAME=nautilus", "GIT_COMMITTER_EMAIL=nautilus@" + ident2(g.host),

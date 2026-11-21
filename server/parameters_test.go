@@ -55,3 +55,55 @@ func TestParametersRouteAndRangeRefusal(t *testing.T) {
 		t.Error("/api/meta does not carry the range")
 	}
 }
+
+// Slice 2 (#718): the listing names who edited and the write-back mode, the
+// patch route hands out what a commit would write (409 when the mode is off
+// or nothing differs), and a pending parameter the write-back cannot edit
+// says why.
+func TestParametersWriteBackRoutes(t *testing.T) {
+	rt, err := runtime.New(runtime.Options{
+		Program: "PROGRAM P\nVAR_EXTERNAL SP : REAL; END_VAR\nEND_PROGRAM",
+		Tags:    []runtime.TagDef{runtime.Setpoint("SP", 65.0)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt.Scan()
+	off := New(rt)
+	if rec := call(t, off, "GET", "/api/parameters/patch", ""); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "writeBack is off") {
+		t.Fatalf("patch with write-back off: %d %s", rec.Code, rec.Body)
+	}
+	if !strings.Contains(call(t, off, "GET", "/api/parameters", "").Body.String(), `"writeBack":"off"`) {
+		t.Error("listing does not say write-back is off")
+	}
+
+	patch := "diff --git a/nautilus.yaml b/nautilus.yaml\n"
+	srv := New(rt, Options{ParamWriteBack: &ParamWriteBack{
+		Mode:       "patch",
+		Patch:      func() (string, error) { return patch, nil },
+		Unwritable: func() map[string]string { return map[string]string{"SP": "its init is generated"} },
+	}})
+	if rec := call(t, srv, "POST", "/api/tags", `{"name":"SP","value":70}`); rec.Code != http.StatusNoContent {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	rec := call(t, srv, "GET", "/api/parameters", "")
+	var got struct {
+		WriteBack  string              `json:"writeBack"`
+		Parameters []runtime.Parameter `json:"parameters"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	p := got.Parameters[0]
+	if got.WriteBack != "patch" || p.EditedBy == "" || p.Unwritable != "its init is generated" {
+		t.Fatalf("listing: %s", rec.Body)
+	}
+	rec = call(t, srv, "GET", "/api/parameters/patch", "")
+	if rec.Code != http.StatusOK || rec.Body.String() != patch || !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/x-diff") {
+		t.Fatalf("patch: %d %q %v", rec.Code, rec.Body, rec.Header())
+	}
+	patch = ""
+	if rec = call(t, srv, "GET", "/api/parameters/patch", ""); rec.Code != http.StatusConflict {
+		t.Fatalf("empty patch: %d", rec.Code)
+	}
+}

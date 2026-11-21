@@ -54,6 +54,15 @@ type State struct {
 	// moved if the init differs from the base. Absent in a store from
 	// before parameters; each base then starts as the manifest's init.
 	ParamBases map[string]any `json:"paramBases,omitempty"`
+	// ParamEdits records, per parameter, who last wrote the retained value
+	// from outside the logic and when (#718): the attribution a write-back
+	// commit carries. Dropped for a parameter once it is back in step.
+	ParamEdits map[string]ParamEdit `json:"paramEdits,omitempty"`
+	// ParamCommitted is, per parameter, the value a write-back commit last
+	// put in the repo. A plant-ahead value already committed (the running
+	// manifest's init stays the old one until a redeploy) is not committed
+	// again. Dropped once the parameter is back in step.
+	ParamCommitted map[string]any `json:"paramCommitted,omitempty"`
 	// Substitutes are the active substitute values (#707) and the
 	// bookkeeping a restart needs to honour them: a substitute is bounded
 	// operator intent meant to run the plant through a bad sensor, so a
@@ -61,6 +70,15 @@ type State struct {
 	// Nil until the first substitute; a store written before substitutes
 	// existed loads unchanged.
 	Substitutes *SubstituteState `json:"substitutes,omitempty"`
+}
+
+// ParamEdit is one parameter's last external write.
+type ParamEdit struct {
+	By   string `json:"by"`
+	AtMs int64  `json:"atMs"`
+	// Val is the value that write left. A value that differs later was set
+	// by something else (the program), and the record then says so.
+	Val any `json:"val,omitempty"`
 }
 
 // SubstituteState is what a controller keeps of its substitutes.

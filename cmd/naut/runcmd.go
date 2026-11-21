@@ -584,6 +584,21 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		}
 		go pruneAudit(ctx, j, gate, os.Stderr)
 	}
+	// Tuned setpoints back to the repo (#718): a patch, or a commit where
+	// the controller runs from a git checkout.
+	if proj.WriteBack == project.WriteBackPatch || proj.WriteBack == project.WriteBackCommit {
+		var rec audit.Recorder
+		if j != nil {
+			rec = j
+		}
+		wb := newParamWriteBack(rt, proj.WriteBack, dir, manifest, fsys, rec)
+		sopts.ParamWriteBack = wb.hook()
+		if wb.g != nil {
+			go wb.Run(ctx)
+		} else if proj.WriteBack == project.WriteBackCommit {
+			fmt.Fprintln(os.Stderr, "naut run: parameters.writeBack is commit, but this controller does not run from a git checkout: tuned values are offered as a patch at GET /api/parameters/patch")
+		}
+	}
 	srv := server.New(rt, sopts)
 	srvRef.Store(srv)
 	if j != nil {

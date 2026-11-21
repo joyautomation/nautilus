@@ -57,6 +57,7 @@ var actionPerm = map[string]string{
 	"config.validate":      PermConfig,
 	"config.apply":         PermConfig,
 	"config.commit":        PermConfig,
+	"param.commit":         PermConfig,
 	"config.revert.cancel": PermConfig,
 	// A parameter written to a device on an IO-Link port is a change to a
 	// device, like a configuration apply (#705): the config permission.

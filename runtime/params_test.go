@@ -237,3 +237,98 @@ func TestParametersSkipTextInitAndUnretained(t *testing.T) {
 		t.Fatalf("parameters = %v, want only A", names)
 	}
 }
+
+// Slice 2 (#718): who edited, what is pending, and what a commit settles.
+func TestParameterEditAttributionAndPending(t *testing.T) {
+	store := &fakeStore{}
+	rt := paramRT(t, store, 65)
+	rt.Scan()
+	if got := rt.PendingParameters(); len(got) != 0 {
+		t.Fatalf("pending in a fresh plant: %+v", got)
+	}
+	if err := rt.Tags().WriteAs([]WriteOp{{Path: "SP", Value: 70.0}}, "user:akhan")[0]; err != nil {
+		t.Fatal(err)
+	}
+	// A refused write is not an edit; neither is a program's own write.
+	_ = rt.Tags().WriteAs([]WriteOp{{Path: "SP", Value: 99.0}}, "user:other")
+	p := param(t, rt, "SP")
+	if p.EditedBy != "user:akhan" || p.EditedAtMs == 0 || !p.Pending() {
+		t.Fatalf("after an edit: %+v", p)
+	}
+	// Attribution and the plant-ahead set survive a restart (a takeover
+	// reads the same store).
+	rt.saveRetained(nil)
+	rt = paramRT(t, store, 65)
+	rt.LoadRetained()
+	rt.Scan()
+	if p := param(t, rt, "SP"); p.EditedBy != "user:akhan" || !p.Pending() {
+		t.Fatalf("after a restart: %+v", p)
+	}
+	// An unattributed writer (Sparkplug passes its name; a bare Write has none).
+	if err := rt.Tags().Write([]WriteOp{{Path: "SP", Value: 71.0}})[0]; err != nil {
+		t.Fatal(err)
+	}
+	if p := param(t, rt, "SP"); p.EditedBy != "external" {
+		t.Fatalf("bare Write: %+v", p)
+	}
+	// Committed: not pending again while the running init is the old one.
+	rt.MarkParametersCommitted(map[string]any{"SP": 71.0})
+	if got := rt.PendingParameters(); len(got) != 0 {
+		t.Fatalf("pending after a commit: %+v", got)
+	}
+	rt.saveRetained(nil)
+	if store.state.ParamCommitted["SP"] != 71.0 {
+		t.Fatalf("committed not retained: %+v", store.state.ParamCommitted)
+	}
+	// A further edit is pending again.
+	_ = rt.Tags().WriteAs([]WriteOp{{Path: "SP", Value: 72.0}}, "user:akhan")
+	if got := rt.PendingParameters(); len(got) != 1 {
+		t.Fatalf("pending after a new edit: %+v", got)
+	}
+	// Redeploy with the committed value as the init: in step, and the
+	// bookkeeping is dropped.
+	_ = rt.Tags().WriteAs([]WriteOp{{Path: "SP", Value: 71.0}}, "user:akhan")
+	rt.saveRetained(nil)
+	rt = paramRT(t, store, 71)
+	rt.LoadRetained()
+	rt.Scan()
+	rt.saveRetained(nil)
+	if p := param(t, rt, "SP"); p.State != ParamInStep || p.EditedBy != "" || p.Committed {
+		t.Fatalf("after the redeploy: %+v", p)
+	}
+	if len(store.state.ParamEdits) != 0 || len(store.state.ParamCommitted) != 0 {
+		t.Fatalf("bookkeeping kept for a parameter in step: %+v %+v", store.state.ParamEdits, store.state.ParamCommitted)
+	}
+}
+
+// A program's write after an operator's edit takes the attribution: the
+// commit must not name an operator for a value the logic set.
+func TestParameterProgramWriteTakesTheAttribution(t *testing.T) {
+	store := &fakeStore{}
+	rt := paramRT(t, store, 65)
+	rt.Scan()
+	if err := rt.Tags().WriteAs([]WriteOp{{Path: "SP", Value: 70.0}}, "user:akhan")[0]; err != nil {
+		t.Fatal(err)
+	}
+	if p := param(t, rt, "SP"); p.EditedBy != "user:akhan" {
+		t.Fatalf("operator edit: %+v", p)
+	}
+	// The logic overwrites it.
+	rt.Tags().Set("Push", true)
+	rt.Scan()
+	if p := param(t, rt, "SP"); p.Value != 500.0 || p.EditedBy != "program" {
+		t.Fatalf("after the program's write: %+v", p)
+	}
+	// It survives a save, and a later operator edit takes it back.
+	rt.saveRetained(nil)
+	if e := store.state.ParamEdits["SP"]; e.By != "program" {
+		t.Fatalf("retained attribution: %+v", e)
+	}
+	rt.Tags().Set("Push", false)
+	if err := rt.Tags().WriteAs([]WriteOp{{Path: "SP", Value: 60.0}}, "user:bchen")[0]; err != nil {
+		t.Fatal(err)
+	}
+	if p := param(t, rt, "SP"); p.EditedBy != "user:bchen" {
+		t.Fatalf("operator after program: %+v", p)
+	}
+}
