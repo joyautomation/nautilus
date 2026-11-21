@@ -47,7 +47,11 @@ export interface Field {
 	open?: boolean;
 	/** raw: why the form leaves it as text. */
 	rawWhy?: string;
+	/** string: suggestions from the controller (`x-options`: usable now; `x-options-builtin`: usable after `naut devices add`). Not an enum: any text is accepted. */
+	options?: { value: string; hint?: string }[];
 }
+
+const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
 
 /** Keywords the walker understands. Anything else makes a node raw. */
 export const HANDLED = new Set([
@@ -70,7 +74,7 @@ export const HANDLED = new Set([
 	'propertyNames'
 ]);
 /** Keywords that carry no rule. */
-const IGNORED = new Set(['description', 'title', '$comment', 'default', 'examples', '$schema', 'definitions']);
+const IGNORED = new Set(['description', 'title', '$comment', 'default', 'examples', '$schema', 'definitions', 'x-options', 'x-options-builtin']);
 
 interface Root {
 	definitions?: Record<string, Schema>;
@@ -114,7 +118,13 @@ function field(root: Root, key: string, schema: Schema, required: boolean): Fiel
 		return { ...base, kind: 'enum', enum: n.enum as string[] };
 	}
 	switch (n.type) {
-		case 'string':
+		case 'string': {
+			const now = strings(n['x-options']);
+			const later = strings(n['x-options-builtin']);
+			if (now.length || later.length)
+				base.options = [...now.map((value) => ({ value })), ...later.map((value) => ({ value, hint: 'run naut devices add ' + value + ' first' }))];
+			return { ...base, kind: 'string' };
+		}
 		case 'integer':
 		case 'number':
 		case 'boolean':

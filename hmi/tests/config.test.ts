@@ -279,3 +279,26 @@ describe('config patch fixtures (also read by the Go loader)', () => {
 		});
 	}
 });
+
+describe('config schema: the controller\'s option lists', () => {
+	const devices = (): Schema => {
+		const s = JSON.parse(JSON.stringify(slice('devices'))) as Schema & { definitions: Record<string, { properties: Record<string, Record<string, unknown>> }> };
+		const p = s.definitions.device.properties.profile;
+		p['x-options'] = ['mine'];
+		p['x-options-builtin'] = ['asi-275m'];
+		return s;
+	};
+	it('become suggestions on the string field, not an enum and not raw', () => {
+		const dev = sectionField(devices(), 'devices').item as Field;
+		const prof = dev.fields?.find((f) => f.key === 'profile') as Field;
+		expect(prof.kind).toBe('string');
+		expect(prof.options?.map((o) => o.value).join(',')).toBe('mine,asi-275m');
+		expect(prof.options?.[0].hint).toBe(undefined);
+		expect((prof.options?.[1].hint ?? '').includes('naut devices add asi-275m')).toBe(true);
+		expect(validate({ ...dev, required: true }, { name: 'D', profile: 'anything-else', endpoint: 'h' }, ['devices']).length).toBe(0);
+	});
+	it('are absent when the controller sent none', () => {
+		const prof = (sectionField(slice('devices'), 'devices').item as Field).fields?.find((f) => f.key === 'profile') as Field;
+		expect(prof.options).toBe(undefined);
+	});
+});

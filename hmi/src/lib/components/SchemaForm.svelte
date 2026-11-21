@@ -26,6 +26,9 @@
 		onedit: (path: string[], value: Json | undefined) => void;
 	} = $props();
 
+	// datalist ids must be unique on the page: several forms share it.
+	const uid = Math.random().toString(36).slice(2, 8);
+	const listId = (p: string[], f: { key: string }) => `opts-${uid}-${p.concat(f.key).join('.')}`;
 	const here = (k: string) => path.concat(k).join('.');
 	// An issue belongs to the setting whose path is its prefix, by whole
 	// segments (`username` is not `name`); one that no rendered setting
@@ -93,8 +96,12 @@
 					value={text(f, v)}
 					placeholder={f.kind === 'list' ? 'a, b, c' : f.kind === 'map' ? '{"key": "value"}' : ''}
 					inputmode={f.kind === 'integer' || f.kind === 'number' ? 'decimal' : undefined}
+					list={f.options ? listId(path, f) : undefined}
 					onchange={(e) => commit(f, e.currentTarget.value)}
 				/>
+			{/if}
+			{#if f.options}
+				<datalist id={listId(path, f)}>{#each f.options as o (o.value)}<option value={o.value} label={o.hint}></option>{/each}</datalist>
 			{/if}
 			{#if f.description}<span class="d">{f.description.split(/\.\s/)[0]}</span>{/if}
 			{#each bad as i}<span class="e">{i.message}</span>{/each}
