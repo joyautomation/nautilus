@@ -1234,14 +1234,15 @@ namespace Tiad.Openness
             foreach (PlcBlockUserGroup u in g.Groups) ProjectBlocks(u, into);
         }
 
-        // Node copies one element of TIA's compare tree, and its children;
-        // an element only the CPU has carries its online name only. A null
+        // Node copies one element of TIA's compare tree, and its children,
+        // named by TiaNames.ElementName from both sides' names. A null
         // child is kept with no state, which the agent reads as different:
         // the glue drops nothing.
         static CompareNode Node(CompareResultElement e)
         {
             if (e == null) return null;
-            var n = new CompareNode { Name = !string.IsNullOrEmpty(e.LeftName) ? e.LeftName : (e.RightName ?? ""), State = e.ComparisonResult.ToString() };
+            string state = e.ComparisonResult.ToString();
+            var n = new CompareNode { Name = TiaNames.ElementName(state, e.LeftName, e.RightName), State = state };
             foreach (CompareResultElement c in e.Elements)
             {
                 n.Children.Add(Node(c) ?? new CompareNode());
