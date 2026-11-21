@@ -503,7 +503,7 @@ func TestConfigSchemaAndFilesRoutes(t *testing.T) {
 		if w, _ := doJSON(t, h, "GET", p, nil); w.Code != http.StatusServiceUnavailable {
 			t.Errorf("%s without the hook: %d, want 503", p, w.Code)
 		}
-		if w, _ := doJSON(t, New(newTestRuntime(t), Options{}).Handler(), "GET", p, nil); w.Code != http.StatusServiceUnavailable {
+		if w, _ := doJSON(t, New(newTestRuntime(t), Options{OnlineEdits: true}).Handler(), "GET", p, nil); w.Code != http.StatusServiceUnavailable {
 			t.Errorf("%s without live I/O: %d, want 503", p, w.Code)
 		}
 	}
@@ -514,5 +514,44 @@ func TestConfigSchemaAndFilesRoutes(t *testing.T) {
 func TestConfigCommitIsStrict(t *testing.T) {
 	if actionClass["config.commit"] != strict {
 		t.Fatalf("config.commit class = %q, want strict", actionClass["config.commit"])
+	}
+}
+
+// GET /api/config/files is the whole manifest: it needs the permission to
+// edit it (online edits on, the token when one is set), not the plain read
+// of /api/io/files. The schema is static and stays a plain read.
+func TestConfigFilesNeedTheEditPermission(t *testing.T) {
+	f := &fakeIO{}
+	hook := f.hook()
+	hook.Sections = func() []string { return []string{"drivers"} }
+	hook.Schema = func(string) ([]byte, error) { return []byte(`{}`), nil }
+	hook.ConfigFiles = func() (ConfigFiles, error) {
+		return ConfigFiles{Manifest: "nautilus.yaml", Files: map[string]string{"nautilus.yaml": "x"}}, nil
+	}
+	get := func(h http.Handler, path, token string) int {
+		req := httptest.NewRequest("GET", "http://localhost"+path, nil)
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		return w.Code
+	}
+	o := ioOptions(f, false)
+	o.IO = hook
+	if code := get(New(newTestRuntime(t), o).Handler(), "/api/config/files", ""); code != http.StatusForbidden {
+		t.Errorf("online edits off: %d, want 403", code)
+	}
+	o = ioOptions(f, true)
+	o.IO, o.AuthToken = hook, "s3cret"
+	h := New(newTestRuntime(t), o).Handler()
+	if code := get(h, "/api/config/files", ""); code != http.StatusUnauthorized {
+		t.Errorf("no token: %d, want 401", code)
+	}
+	if code := get(h, "/api/config/files", "s3cret"); code != http.StatusOK {
+		t.Errorf("with the token: %d, want 200", code)
+	}
+	if code := get(h, "/api/config/schema?section=drivers", ""); code != http.StatusOK {
+		t.Errorf("schema without a token: %d, want 200", code)
 	}
 }

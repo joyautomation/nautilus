@@ -611,8 +611,16 @@ func (s *Server) handleConfigSchema(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(raw)
 }
 
-// handleConfigFiles serves the manifest text the config screens edit.
+// handleConfigFiles serves the manifest text the config screens edit. It
+// needs the edit permission, like staging a change.
 func (s *Server) handleConfigFiles(w http.ResponseWriter, r *http.Request) {
+	// The whole manifest (users, grants, hosts), not what an apply changed:
+	// it needs the permission to edit it, not the plain read of GET
+	// /api/io/files.
+	if code, msg := s.authorizeProgramEdit(r); code != 0 {
+		writeJSON(w, code, map[string]string{"error": msg})
+		return
+	}
 	if s.ioUnavailable(w) {
 		return
 	}

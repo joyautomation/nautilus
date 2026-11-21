@@ -233,7 +233,7 @@ check comes before the token check. See [Online edits](/guides/online-edits/).
 | `GET` | [`/api/io/staged/{id}`](#live-io-configuration) | One candidate's state |
 | `GET` | [`/api/io/files`](#live-io-configuration) | The project files the running I/O configuration differs in (`naut pull --io`) |
 | `GET` | [`/api/config/schema`](#configuration-screens) | The manifest's JSON Schema, one section at a time (`?section=drivers`), or the list of sections |
-| `GET` | [`/api/config/files`](#configuration-screens) | The manifest and the files its drivers name, as what runs |
+| `GET` | [`/api/config/files`](#configuration-screens) | The manifest and the files its drivers name, as what runs (needs the edit permission) |
 | `GET` | [`/api/history`, `/api/history/…`](#historian-proxy) | Forwarded to the historian |
 | `GET` | [`/api/audit`](#audit-journal) | Who changed what: the audit journal's recent entries |
 | `GET` | [`/api/me`](/guides/auth/#browser-sign-in) | Who the request acts as, and what it may do |
@@ -1163,8 +1163,14 @@ what they edit is applied through the staged routes above.
   runs now: an I/O apply's files laid over the ones the controller booted
   from. `differs` lists the paths whose text is an apply's.
 
-Like `GET /api/io/files`, both are plain reads and follow the same rule:
-once the manifest has an `auth:` block they need `read`.
+`/api/config/schema` is static and a plain read. **`/api/config/files` is
+the whole manifest (users, grants, hosts), so it needs the permission to
+edit it, not the plain read `GET /api/io/files` takes:** online edits on,
+and the write token or a principal that may write. It serves only YAML
+files inside the project with no hidden path component (never `.env`, a
+program source, a path outside the project, or anything reached through a
+symbolic link), and the text as written: secrets are environment or file
+references in the manifest, but a comment is served too.
 
 **Who is recorded.** Every stage, validate, apply and revert cancel is
 journalled (`config.stage`, `config.validate`, `config.apply`,

@@ -8,6 +8,8 @@ package project
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -168,5 +170,55 @@ func TestConfigFilesFollowTheRunningConfiguration(t *testing.T) {
 	}
 	if c.Files["nautilus.yaml"] != string(files["nautilus.yaml"].Data) {
 		t.Error("nautilus.yaml changed though the apply did not touch it")
+	}
+}
+
+// A driver's manifest: names a file; only a YAML data file inside the
+// project, with no hidden component and no symbolic link on the way, is
+// served. A manifest cannot make the screens read .env, a program source,
+// a path outside the project, or what a link points at.
+func TestConfigFilesServeOnlySafeProjectFiles(t *testing.T) {
+	dir := t.TempDir()
+	outside := t.TempDir()
+	write := func(p, s string) {
+		t.Helper()
+		full := filepath.Join(dir, p)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(s), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("nautilus.yaml", "name: x\ntasks:\n  - program: main.st\n    scan: 5ms\ntags:\n  - { name: A, role: input, type: DINT }\ndrivers:\n  - type: memory\n")
+	write("main.st", "PROGRAM main\nEND_PROGRAM\n")
+	write("ok.yaml", "fine: 1\n")
+	write(".env", "SECRET=1\n")
+	write("sub/.hidden.yaml", "h: 1\n")
+	if err := os.WriteFile(filepath.Join(outside, "pw.yaml"), []byte("password: hunter2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(outside, "pw.yaml"), filepath.Join(dir, "link.yaml")); err != nil {
+		t.Skip("no symlinks here:", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "linkdir")); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		path string
+		want bool
+	}{
+		{"ok.yaml", true},
+		{"main.st", false},
+		{".env", false},
+		{"sub/.hidden.yaml", false},
+		{"../x.yaml", false},
+		{"link.yaml", false},
+		{"linkdir/pw.yaml", false},
+	} {
+		_, got := readConfigFile(os.DirFS(dir), c.path, false)
+		if got != c.want {
+			t.Errorf("%s: served = %v, want %v", c.path, got, c.want)
+		}
 	}
 }
