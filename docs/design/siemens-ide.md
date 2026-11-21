@@ -435,7 +435,11 @@ The rules for applying a spec:
     only ever kept access control: under `fullAccessUser`, or `keep`
     after `fullAccessUser` on the same session, it is refused. Loading
     the users tiad set (a new station's first live download) still waits
-    for a proven answer.
+    for a proven answer. The rule is per session: a project an earlier
+    session set to `fullAccessUser`, saved, then reopened and kept, counts
+    as found like any adopted project (it still holds tiad's Full access
+    user). Its first hardware download with `userManagementKeepOnline`
+    is a watched bench step until TIA's handling of that is proven.
   - Proven offline on the TIA machine (2026-11-20, through the agent):
     a new station with `password` and `fullAccessUser` compiles with 0
     errors, applying it again finds the user and changes nothing, and the

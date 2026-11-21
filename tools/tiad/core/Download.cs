@@ -205,7 +205,7 @@ namespace Tiad
                         // that sets it would leave them disagreeing.
                         if (d.UserManagementKeepOnline.HasValue && d.UserManagementKeepOnline.Value && !accessControlKept)
                         {
-                            q.Message = q.Message + " (tiad keeps the CPU's online user management only when the spec's accessControl is keep)";
+                            q.Message = q.Message + " (tiad keeps the CPU's online user management only for a keep spec on a session that never set access control: an apply of fullAccessUser on this session needs a fresh session that applies keep)";
                             unanswered.Add(q);
                         }
                         else Sort(q, d.UserManagementKeepOnline, unanswered, declined);

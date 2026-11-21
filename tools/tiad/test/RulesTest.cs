@@ -525,7 +525,7 @@ namespace Tiad.Test
             u.Clear(); d.Clear();
             DownloadRule.Resolve(um, keep, false, false, false, u, d);
             Eq(string.Join(",", Ids(u).ToArray()), QuestionIds.UserManagement, "keep with access control set is unanswered");
-            Contains(u[0].Message, "accessControl is keep", "and names why");
+            Contains(u[0].Message, "a keep spec on a session that never set access control", "and names why");
             u.Clear(); d.Clear();
             DownloadRule.Resolve(um, new Decisions { UserManagementKeepOnline = false }, false, false, true, u, d);
             Eq(string.Join(",", Ids(d).ToArray()), QuestionIds.UserManagement, "no is declined");

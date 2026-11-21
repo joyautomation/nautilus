@@ -282,7 +282,7 @@ func Resolve(qs []Question, d Decisions, haveProtection, haveConfigurationPasswo
 			// Keeping the CPU's users is the only answer, and only for a
 			// spec that keeps access control.
 			if d.UserManagementKeepOnline != nil && *d.UserManagementKeepOnline && !accessControlKept {
-				q.Message += " (tiad keeps the CPU's online user management only when the spec's accessControl is keep)"
+				q.Message += " (tiad keeps the CPU's online user management only for a keep spec on a session that never set access control: an apply of fullAccessUser on this session needs a fresh session that applies keep)"
 				unanswered = append(unanswered, q)
 			} else {
 				sortAnswer(q, d.UserManagementKeepOnline, &unanswered, &declined)

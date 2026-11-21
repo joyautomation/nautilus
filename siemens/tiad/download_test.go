@@ -95,7 +95,7 @@ func TestResolveSoftwareLoadFamily(t *testing.T) {
 		})
 	}
 	u, _ := Resolve([]Question{{ID: QuestionUserManagement}}, Decisions{UserManagementKeepOnline: Yes()}, false, false, false)
-	if len(u) != 1 || !strings.Contains(u[0].Message, "accessControl is keep") {
+	if len(u) != 1 || !strings.Contains(u[0].Message, "a keep spec on a session that never set access control") {
 		t.Fatalf("a refused keep must name why: %+v", u)
 	}
 	for _, id := range []string{QuestionAlarmTexts, QuestionAllBlocks} {
