@@ -352,38 +352,54 @@ func TestCloneSplitNoTwoLeaders(t *testing.T) {
 // can clear across the cut. Without that hold, two leaders in all but one
 // of 1000 runs of each split. The case left open (both voters AND the
 // clone restart inside one split) is why durable marks stay on the list
-// before experimental is lifted. marked_still_campaigns turns it red.
+// before experimental is lifted. Since 3c-2 the copy goes spare about 3.4
+// s after it starts, before these splits (two to five leases on), so the
+// test also runs each split one to two seconds after the clone's start:
+// after the mark, before the spare can decide, where the hold alone keeps
+// the clone quiet (both restarting: two leaders in 200 of 200 runs under
+// marked_not_told or marked_still_campaigns).
 func TestCloneSplitVoterRestarts(t *testing.T) {
 	n := splitSeeds()
-	for _, mirror := range []bool{false, true} {
-		for _, who := range []string{"peer", "witness", "both"} {
-			failing := 0
-			for seed := uint64(1); seed <= n; seed++ {
-				o := cloneSplit(seed, mirror)
-				c := o.Faults[0].Node
-				cut := o.Faults[1].At
-				peer := peerOf(original(c))
-				r := rand.New(rand.NewPCG(seed, 0x72737472))
-				down := cut + lease + time.Duration(r.Int64N(int64(4*lease)))
-				switch who {
-				case "peer":
-					o.Faults = append(o.Faults, Fault{Kind: Crash, At: down, For: 100 * ms, Node: peer})
-				case "witness":
-					o.Faults = append(o.Faults, Fault{Kind: Crash, At: down, For: 100 * ms, Node: W})
-				default:
-					o.Faults = append(o.Faults,
-						Fault{Kind: Crash, At: down, For: 100 * ms, Node: W},
-						Fault{Kind: Crash, At: down + lease/3, For: 100 * ms, Node: peer})
-				}
-				if overlap(Check(Run(o), cloneChecks(o))) {
-					failing++
-					if failing <= 3 {
-						t.Errorf("mirror %v, %s restarts, seed %d: two leaders", mirror, who, seed)
+	for _, early := range []bool{false, true} {
+		for _, mirror := range []bool{false, true} {
+			for _, who := range []string{"peer", "witness", "both"} {
+				failing := 0
+				for seed := uint64(1); seed <= n; seed++ {
+					o := cloneSplit(seed, mirror)
+					c := o.Faults[0].Node
+					if early {
+						r := rand.New(rand.NewPCG(seed, 0x65617279))
+						at := o.Faults[0].At + sec + time.Duration(r.Int64N(int64(sec)))
+						for i := range o.Faults {
+							if o.Faults[i].Kind == Cut {
+								o.Faults[i].At = at
+							}
+						}
+					}
+					cut := o.Faults[1].At
+					peer := peerOf(original(c))
+					r := rand.New(rand.NewPCG(seed, 0x72737472))
+					down := cut + lease + time.Duration(r.Int64N(int64(4*lease)))
+					switch who {
+					case "peer":
+						o.Faults = append(o.Faults, Fault{Kind: Crash, At: down, For: 100 * ms, Node: peer})
+					case "witness":
+						o.Faults = append(o.Faults, Fault{Kind: Crash, At: down, For: 100 * ms, Node: W})
+					default:
+						o.Faults = append(o.Faults,
+							Fault{Kind: Crash, At: down, For: 100 * ms, Node: W},
+							Fault{Kind: Crash, At: down + lease/3, For: 100 * ms, Node: peer})
+					}
+					if overlap(Check(Run(o), cloneChecks(o))) {
+						failing++
+						if failing <= 3 {
+							t.Errorf("early %v, mirror %v, %s restarts, seed %d: two leaders", early, mirror, who, seed)
+						}
 					}
 				}
-			}
-			if failing > 0 {
-				t.Errorf("mirror %v, %s restarts: two leaders in %d of %d", mirror, who, failing, n)
+				if failing > 0 {
+					t.Errorf("early %v, mirror %v, %s restarts: two leaders in %d of %d", early, mirror, who, failing, n)
+				}
 			}
 		}
 	}

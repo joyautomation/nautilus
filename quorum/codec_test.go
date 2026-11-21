@@ -14,7 +14,7 @@ func TestMessageRoundTrip(t *testing.T) {
 	if err := got.UnmarshalBinary(b); err != nil || got != rq {
 		t.Fatalf("request: %+v %v", got, err)
 	}
-	rp := Reply{From: "W", To: "A", Term: 7, Nonce: 0xA1, ID: 99, Granted: true, Promised: 7, Incarnation: 42, Promise: Relay{To: "A", Nonce: 0xA0, Left: time.Second}, Marked: true, VoterBoot: 0xB007}
+	rp := Reply{From: "W", To: "A", Term: 7, Nonce: 0xA1, ID: 99, Granted: true, Promised: 7, Incarnation: 42, Promise: Relay{To: "A", Nonce: 0xA0, Left: time.Second}, Marked: true, VoterBoot: 0xB007, HeldBy: 0xA0A0}
 	b, _ = rp.MarshalBinary()
 	var gr Reply
 	if err := gr.UnmarshalBinary(b); err != nil || gr != rp {

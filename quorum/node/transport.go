@@ -187,11 +187,28 @@ func newClient(dial func(ctx context.Context, network, addr string) (net.Conn, e
 	}
 	return &http.Client{Transport: &http.Transport{
 		Proxy:               nil, // peers are reached directly, never through an HTTP proxy
-		DialContext:         dial,
+		DialContext:         resetOnClose(dial),
 		MaxIdleConnsPerHost: 4,
 		IdleConnTimeout:     90 * time.Second,
 		ForceAttemptHTTP2:   false,
 	}}
+}
+
+// resetOnClose dials with SO_LINGER 0, so every close of a peer
+// connection is a reset: a process that exits (or closes a connection)
+// drops the frames its kernel still holds instead of retransmitting them
+// through a link outage. Such a frame of a dead boot arriving more than a
+// lease late could make both voters name that boot the incumbent, and its
+// restarted controller a spare (#1029 3c-2, #1133 review). The residual
+// then needs that much delay inside the network itself.
+func resetOnClose(dial func(ctx context.Context, network, addr string) (net.Conn, error)) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		c, err := dial(ctx, network, addr)
+		if tc, ok := c.(*net.TCPConn); ok && err == nil && !mut("peer_dial_lingers") {
+			_ = tc.SetLinger(0)
+		}
+		return c, err
+	}
 }
 
 // caller makes peer calls for one sender.

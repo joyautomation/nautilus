@@ -180,7 +180,7 @@ var table = []mutation{
 	{"grant_nonce_volatile", []string{"TestATermStaysOneBootsAcrossARestart"}},
 	{"grant_nonce_unwritten", []string{"TestAnUpgradedVoterWritesTheNonceOnARenewal"}},
 	{"dup_refuses_incumbent", []string{"TestADuplicatedNameGetsNoNewGrant", "TestCloneOfTheLeaderCostsNoTakeover"}},
-	{"dup_voter_counts", []string{"TestCandidateDiscountsADuplicatedVoter", "TestCloneSplitNoTwoLeaders", "TestCloneRaceSeeds"}},
+	{"dup_voter_counts", []string{"TestCandidateDiscountsADuplicatedVoter", "TestCloneRaceSeeds"}}, // the split gate no longer: the spare silences the copy before its splits (3c-2)
 	{"dup_not_relayed", []string{"TestADuplicatedNameIsRelayed", "TestDupRelayStopsTheWitnessGrantingAClone"}},
 	{"standby_probes_witness_only", []string{"TestTheStandbysPeerProbeLetsItsPeerSeeAClone"}},
 	{"yield_before_refusal", []string{"TestNoYieldToARequestTheVoterRefuses"}},
@@ -210,6 +210,30 @@ var table = []mutation{
 	// half a look on, not a lease.
 	{"retry_after_refusal_only", []string{"TestCandidateRetriesWhenItsOwnGrantComesBackLast", "TestStaleRelayEndsAndTheStandbyLeads"}},
 	{"reply_relay_dropped", []string{"TestSpoofedCloneOfTheLeaderWithTheABLinkDown"}},
+	// #1029 3c-2: a copy that both other voters hold another boot of its
+	// name for demotes itself to a spare, its flag durable first, then
+	// silent. The sim gates (quorum/sim/spare_test.go) are where a rule
+	// alone stands between a real controller and a false spare.
+	{"held_by_stale", []string{"TestAStoppedBootIsNoIncumbent"}}, // at the voter only: since the #1133 review a restarted original is told nothing, stale or not
+	{"held_by_last_heard", []string{"TestAVoterNamesTheFirstHeardBootTheIncumbent", "TestACloneBesideASettledPairBecomesASpare"}},
+	// #1133 review: a refusal names the incumbent as of the frame it
+	// answers (a lossy original), and nobody to a boot first heard after
+	// the mark (an original restarted beside a running copy).
+	{"held_by_before_frame", []string{"TestARefusalCountsTheFrameItAnswers", "TestALossyOriginalNeverGoesSpare"}},
+	{"held_by_names_to_unknown", []string{"TestAStoppedBootIsNoIncumbent", "TestAnOriginalRestartingAfterTheMarkStaysAMember"}},
+	{"spare_flag_kept_after_failure", []string{"TestAFailedSpareWriteTakesTheFlagBack"}},
+	{"peer_dial_lingers", []string{"TestPeerConnectionsCloseWithAReset"}},
+	{"spare_one_voter", []string{"TestACopyDemotesOnlyOnBothOtherVotersWordForALease", "TestLateFramesOfARestartMakeNoSpare"}},
+	{"spare_own_voter_counts", []string{"TestOnlyTheOtherVotersWordsToThisBootCount"}},
+	{"spare_no_span", []string{"TestACopyDemotesOnlyOnBothOtherVotersWordForALease"}},
+	{"spare_while_leading", []string{"TestALeaseHolderIsNeverDemoted"}},
+	{"state_always_v6", []string{"TestTheSpareFlagIsDurableAndOnlyASpareIsFormat6"}},
+	{"spare_flag_after_silence", []string{"TestASpareGoesSilentOnlyOnceItsFlagIsWritten"}},
+	{"spare_answers_votes", []string{"TestASpareStartsSilentWhateverTheBox"}},
+	{"spare_still_looks", []string{"TestASpareSendsNothing"}},
+	{"spare_forgotten_on_box_change", []string{"TestASpareStartsSilentWhateverTheBox"}},
+	{"newer_state_moved_aside", []string{"TestANewerStateFileIsRefusedAndLeftAlone"}},
+	{"spare_log_runs", []string{"TestASparesPeerListenerAnswersNobody"}},
 	// Outside the quorum tree (rowPkgs): the operator-intent log's late-
 	// start lapse (#1030, #1032 reviews) and the pair's alarm acks (#710
 	// PR 3b-2c).
@@ -323,6 +347,7 @@ var rowPkgs = map[string][]string{
 	"witness_log_any_incarnation":  {"./cmd/naut"},
 	"witness_not_a_replica":        {"./cmd/naut"},
 	"log_sync_not_retried":         {"./cmd/naut"},
+	"spare_log_runs":               {"./cmd/naut"},
 	"ack_clear_off":                {"./cmd/naut"},
 	"alarm_view_ignored":           {"./cmd/naut"},
 	"engine_not_reset":             {"./server"},

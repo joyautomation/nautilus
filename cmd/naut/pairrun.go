@@ -210,7 +210,7 @@ func newPairMember(r *project.RedundancyConfig, apiAddr, dir string, d pairDeps)
 	for _, p := range []string{"/api/oplog", "/api/oplog/", "/api/quorum"} {
 		mux.Handle(p, &m.logH)
 	}
-	h, err := node.Guard(o.Token, mux)
+	h, err := node.Guard(o.Token, spareSilent(q.Node().Spare, mux))
 	if err != nil {
 		q.Node().Close()
 		return nil, err
@@ -357,7 +357,22 @@ func (m *pairMember) onEvent(ev node.Event) {
 		m.q.SetCondition("oplog-vouch-refused", ev.Detail)
 	case node.EventYielded:
 		m.q.SetCondition("oplog-yield", ev.Detail+" (at "+time.Now().UTC().Format(time.RFC3339)+")")
+	case node.EventSpare:
+		m.q.SetCondition("spare", ev.Detail)
 	}
+}
+
+// spareSilent answers every request on the peer listener 503 while this
+// controller is a spare (#1029 3c-2): the vote protocol and the
+// operator-intent log's replication alike, as a stopped controller would.
+func spareSilent(spare func() bool, h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if spare() && !mutNaut("spare_log_runs") {
+			http.Error(w, "not running: this controller is a spare", http.StatusServiceUnavailable)
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
 }
 
 // pairCredentials is what a pair member compares with its peer at every
@@ -571,6 +586,9 @@ func (m *pairMember) driveLog(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+		}
+		if m.q.Node().Spare() && !mutNaut("spare_log_runs") {
+			continue // a spare neither replicates nor syncs (#1029 3c-2)
 		}
 		m.rebindLog()
 		cctx, cancel := context.WithTimeout(ctx, max(m.o.Lease, time.Second))

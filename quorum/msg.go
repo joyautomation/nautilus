@@ -74,6 +74,13 @@ type Reply struct {
 	// later word from the same boot ends a hold that boot's mark set, since
 	// a restarted voter has forgotten its marks (#1113 review).
 	VoterBoot uint64
+	// HeldBy names, for a marked name, the boot this voter holds the
+	// incumbent: of the boots of To's name it heard, the one heard first
+	// among those that sent a new frame within half a lease (Voter.HeldBy).
+	// 0 when To's name is not marked or no boot is fresh. A copy that both
+	// other voters name another boot of its name for a lease demotes itself
+	// to a spare (Candidate.Spare, #1029 3c-2).
+	HeldBy uint64
 }
 
 // AdoptKind is what an Adopt message says.
@@ -138,9 +145,10 @@ type Adopt struct {
 // version is refused whole (ErrVersion). Version 2 added the relayed
 // promise (#1029 layer 2), version 3 the duplicated name it carries
 // (#1029 step 1), version 4 a request's Seq and a reply's Marked and
-// VoterBoot (#1029 3c): a pair that mixes releases across one can't vote, and says so
+// VoterBoot (#1029 3c), version 5 a reply's HeldBy (#1029 3c-2): a pair
+// that mixes releases across one can't vote, and says so
 // (redundancy.version-mismatch) rather than failing in silence.
-const WireVersion = 4
+const WireVersion = 5
 
 // FrameVersion returns the version byte a frame carries (0 when empty).
 func FrameVersion(b []byte) byte {
@@ -238,6 +246,7 @@ func (r Reply) MarshalBinary() ([]byte, error) {
 	b = r.Promise.put(b)
 	b = append(b, boolByte(r.Marked))
 	b = binary.BigEndian.AppendUint64(b, r.VoterBoot)
+	b = binary.BigEndian.AppendUint64(b, r.HeldBy)
 	return sealCRC(b), nil
 }
 
@@ -354,6 +363,7 @@ func (r *Reply) UnmarshalBinary(b []byte) error {
 	v.Promise = rd.relay()
 	v.Marked = rd.boolean()
 	v.VoterBoot = rd.u64()
+	v.HeldBy = rd.u64()
 	if rd.bad || len(rd.b) != 0 {
 		return ErrCorrupt
 	}

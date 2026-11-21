@@ -245,6 +245,9 @@ func (e *Elector) probeLog(ctx context.Context) {
 // askLog is one hello asked for the peer's log report only; a verified
 // answer is recorded.
 func (e *Elector) askLog(ctx context.Context) {
+	if e.mute() {
+		return
+	}
 	c := newChallenge()
 	q := url.Values{"c": {c}, "from": {string(e.o.Self)}, "log": {"1"}}
 	e.selfInfo().query(q)
