@@ -882,6 +882,11 @@ behaviour. So, until then:
         setting is then the CPU's, and a later `keep` apply keeps it), or
         `attestation.cpuAccessControl: "disabled"`, the operator's
         statement, with `by` and `text`.
+      Unproven: the upload route assumes an upload brings the CPU's
+      access control into the project. Only the bench CPU (`Disabled`)
+      has been uploaded; that a CPU with access control on reads back as
+      anything but `Disabled` is modelled by the fakes only, until a
+      bench upload of such a CPU shows it.
       An attestation that says `"enabled"` refuses, whatever else holds:
       tiad never resets a CPU whose access control is on. A reset given,
       then a cancel at a later check, is `outcome_unknown` naming
