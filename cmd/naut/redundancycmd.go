@@ -284,6 +284,9 @@ func printClearAnswer(w io.Writer, code int, b []byte) {
 		}
 	}
 	phase("check", ans.Report.Check)
+	if ans.Outcome != "refused" && len(ans.Report.Retired) == 0 {
+		fmt.Fprintf(bw, "note: no member knew another process named %s, so none was set aside: a copy still alive is marked again only once heard beside the original. Make sure it is stopped.\n", ans.Report.Name)
+	}
 	phase("clear", ans.Report.Clear)
 	phase("re-check a lease later", ans.Report.Recheck)
 	switch ans.Outcome {

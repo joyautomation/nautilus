@@ -29,6 +29,13 @@ type Record struct {
 	Marks []Mark
 	// Clears are the operator's clears (Clear faults), in order.
 	Clears []ClearRec
+	// MarksRestored: a voter start that read a mark back from its file,
+	// one per name (#1029 3c-3b). MarkWritesLost counts the crashes with
+	// a mark or a clear not yet durable. MarkedAtEnd: the voters up at
+	// the end, with each name they still mark.
+	MarksRestored  []Mark
+	MarkWritesLost int
+	MarkedAtEnd    []Mark
 	// Spares are the controller copies that demoted themselves to a
 	// spare (#1029 3c-2), in order: when the flag became durable, and
 	// each restart that read it.
@@ -709,14 +716,18 @@ func (r *Record) spareCost(v, leader Addr, to time.Duration) bool {
 	name := nodeIDs[leader]
 	return slices.ContainsFunc(r.Spares, func(s Spare) bool { return s.At < to && nodeIDs[s.Node] == name }) &&
 		slices.ContainsFunc(r.Marks, func(m Mark) bool {
-			return m.Voter == v && m.Name == name && m.At < to && !r.restartedAfter(v, m.At, to)
+			return m.Voter == v && m.Name == name && m.At < to && !r.forgotAfter(v, name, m.At, to)
 		})
 }
 
-// restartedAfter: voter a started again in (from, to), forgetting the
-// marks it held at from.
-func (r *Record) restartedAfter(a Addr, from, to time.Duration) bool {
-	return slices.ContainsFunc(r.starts, func(s voterStart) bool { return s.node == a && s.at > from && s.at < to })
+// forgotAfter: voter a started again in (from, to) without reading name's
+// mark back from its file (a mark lost before its write, or a wiped file:
+// a durable mark survives a restart, #1029 3c-3b).
+func (r *Record) forgotAfter(a Addr, name quorum.NodeID, from, to time.Duration) bool {
+	return slices.ContainsFunc(r.starts, func(s voterStart) bool {
+		return s.node == a && s.at > from && s.at < to &&
+			!slices.ContainsFunc(r.MarksRestored, func(m Mark) bool { return m.Voter == a && m.At == s.at && m.Name == name })
+	})
 }
 
 // I1: no instant has two open gates.

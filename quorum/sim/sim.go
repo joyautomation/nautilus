@@ -144,6 +144,10 @@ type Options struct {
 	// every boot of every controller nonce 1: both only to set up hostile
 	// cases (a nonce collision) deliberately.
 	NoJitter, SameNonce bool
+	// VoterBootApart keeps a controller's voter boot apart from its
+	// candidate's nonce (the sim before #1029 3c-3b; the node never did):
+	// only to measure the retired-boot reply rule against it.
+	VoterBootApart bool
 
 	// Faults is the schedule. Until is when the run stops.
 	Faults []Fault
@@ -433,6 +437,13 @@ func Run(o Options) *Record {
 	}
 	w.rec.until = w.o.Until
 	w.rec.Hash = w.hash
+	for _, n := range w.nodes {
+		if n.up && n.voter != nil {
+			for _, nm := range n.voter.Marked() {
+				w.rec.MarkedAtEnd = append(w.rec.MarkedAtEnd, Mark{At: w.now, Voter: n.addr, Name: nm})
+			}
+		}
+	}
 	for a := Addr(0); a < nNodes; a++ {
 		w.rec.clocks[a] = w.nodes[a].clock
 	}
@@ -505,6 +516,12 @@ func (w *World) start(n *node) {
 			st = quorum.VoterState{}
 		}
 	}
+	for _, r := range st.Dups {
+		if r.Marked {
+			w.rec.MarksRestored = append(w.rec.MarksRestored, Mark{At: w.now, Voter: n.addr, Name: r.Name})
+			w.tracef("%v start restores its mark on %v", n.addr, r.Name)
+		}
+	}
 	id := nodeIDs[n.addr]
 	if n.addr == W || n.addr == W2 {
 		v, p := quorum.NewWitness(id, w.o.Lease, st, now, func() uint64 { return drawNonZero(n.rng) })
@@ -538,6 +555,12 @@ func (w *World) start(n *node) {
 	n.nonce = drawNonZero(n.rng)
 	if w.o.SameNonce {
 		n.nonce = 1
+	}
+	if !w.o.VoterBootApart {
+		// As the node: a controller's voter boot is its candidate's nonce
+		// (node.Elector), so a reply's VoterBoot names the very boot an
+		// operator's clear retired (Voter.RetiredReply).
+		n.voter.SetBoot(n.nonce)
 	}
 	cfg := quorum.Config{
 		Self: nodeIDs[n.addr], Peer: nodeIDs[peerOf(n.addr)], Witness: "W",
@@ -1055,7 +1078,9 @@ func (w *World) diskDone(n *node) {
 				return
 			}
 			n.spareSeq = 0 // a failed write: still held, and it decides again on the next reply
-			n.voter.SpareWriteFailed()
+			if p := n.voter.SpareWriteFailed(); p != nil {
+				w.persist(n, p)
+			}
 		}
 	} else {
 		w.replyHeld(n, n.voter.Persisted(wr.seq, ok))
@@ -1097,6 +1122,10 @@ func (w *World) crash(n *node, wipe bool) {
 	}
 	if wipe {
 		n.disk.file = nil
+	}
+	if n.voter != nil && n.voter.MarksOwed() {
+		w.rec.MarkWritesLost++
+		w.tracef("%v crash loses a mark write in flight", n.addr)
 	}
 	n.up = false
 	w.rec.stops[n.addr] = append(w.rec.stops[n.addr], w.now)

@@ -193,9 +193,26 @@ func (r *boxRig) startWitness(addr string) string {
 	}
 }
 
+// clearDuplicate runs the operator's clear-duplicate (#1029 3c-3a) for
+// name from whichever controller reaches both other members (a cut may
+// leave one that can't). Marks are durable (#1029 3c-3b): no restart
+// clears them. It reports whether a clear completed.
+func (r *boxRig) clearDuplicate(name string) bool {
+	r.t.Helper()
+	for _, id := range []string{"a", "b"} {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		rep, err := r.el(id).ClearDuplicateAll(ctx, name, "user:test")
+		cancel()
+		if err == nil {
+			return true
+		}
+		r.t.Logf("clear-duplicate %s from %s: %v (refused %q)", name, id, err, rep.Refused)
+	}
+	return false
+}
+
 // restartWitness stops the witness and starts it again on its address
-// and state: until the operator command (#1029 3c-3), the only way to
-// clear its duplicate marks.
+// and state (its marks are kept, #1029 3c-3b).
 func (r *boxRig) restartWitness() {
 	r.t.Helper()
 	r.wstop()
@@ -418,17 +435,12 @@ func spoofedCloneCase(t *testing.T, member string, cut func(r *boxRig), raised f
 	// clone plus a cut may leave the pair without a leader (fail-safe:
 	// none beats two). A voter that heard both copies running marks the
 	// name for good (#1029 3c): stopping the clone is no longer enough
-	// while the cut stands. The clear is three steps, in order: stop the
-	// copy; clear the marking members (the controllers' through the Go
-	// call 3c-3's command will make, the witness's by a restart); then
-	// restart the marked controller, whose hold a restarted voter can't
-	// release (#1113 review, rule (i)), and whose held voter grants the
-	// other controller nothing new meanwhile (rule (ii)).
+	// while the cut stands. Stop the copy, then the operator's clear
+	// (#1029 3c-3a), once the copy's boot is out of every member's last
+	// lease and D: no restart, and none clears a mark (#1029 3c-3b).
 	r.nodes["clone"].crash()
-	r.el("a").ClearDuplicate(member)
-	r.el("b").ClearDuplicate(member)
-	r.restartWitness()
-	r.deployRestart(member)
+	time.Sleep(2 * time.Second)
+	r.clearDuplicate(member)
 	pairWait(t, "a real controller to lead once the clone is stopped and the marks cleared", 15*time.Second, func() bool { return r.el("a").IsLeader() || r.el("b").IsLeader() })
 	if !raised(r, logs.String()) {
 		t.Fatalf("redundancy.duplicate-member not raised where it should be; logs:\n%s", logs.String())
@@ -593,8 +605,8 @@ func TestBoxRigHandOverLeavesBothAbleToLead(t *testing.T) {
 // up. The peer, hearing both copies of a running at once, marks a: the
 // alarm says so, the clone never leads, and the mark stands after the
 // clone is stopped (no lease of silence ends it: a split looks just the
-// same). Clearing it (the peer's through the Go call, the witness's by a
-// restart) gives a its grants back: it can lead again.
+// same), also across the witness's restart (#1029 3c-3b). The operator's
+// clear gives a its grants back: it can lead again, with no restart.
 func TestSpoofedCloneBesideTheOriginalIsMarkedUntilCleared(t *testing.T) {
 	logs := &lockedBuffer{}
 	old := slog.Default()
@@ -615,14 +627,13 @@ func TestSpoofedCloneBesideTheOriginalIsMarkedUntilCleared(t *testing.T) {
 	if !slices.Contains(r.el("b").DuplicateMarks(), "a") {
 		t.Fatal("b's mark on a ended without a clear once the clone fell silent")
 	}
-	if !r.el("b").ClearDuplicate("a") {
-		t.Fatal("ClearDuplicate reported a unmarked")
-	}
-	r.el("a").ClearDuplicate("a")
 	r.restartWitness()
-	r.deployRestart("a") // the marked controller: step 3 of the clear
-	// A leader first (b, while a sits out its restart hold), then the lead
-	// handed to a: handLeadTo hands over only from a controller leading.
+	time.Sleep(2 * time.Second) // the witness's voter settled (Voter.Settled)
+	if !r.clearDuplicate("a") {
+		t.Fatal("the clear didn't complete")
+	}
+	// A leader first, then the lead handed to a: handLeadTo hands over only
+	// from a controller leading.
 	pairWait(t, "a leader after the clear", 15*time.Second, func() bool { return r.el("a").IsLeader() || r.el("b").IsLeader() })
 	r.handLeadTo("a")
 	if m := r.el("b").DuplicateMarks(); len(m) != 0 {
@@ -743,52 +754,6 @@ func TestASpoofedCloneBesideTheLeaderBecomesASpare(t *testing.T) {
 	if led := watchOneLeader(t, 2*time.Second, els); led["clone"] {
 		t.Fatalf("the restarted spare led: %v", led)
 	}
-}
-
-// The way out before the 3c-3 command when the REAL box is the one made a
-// spare (its copy was running first: here a's clone takes over while a is
-// down, then a comes back): stop the copy and confirm it is down, clear
-// the members that marked a (restart the witness, then b), then on the
-// real box stop naut, delete the voter state file and start naut. It
-// re-adopts from b (the box-change path's re-adoption) and both
-// controllers can lead again.
-func TestTheRealBoxMadeASpareRecoversByTheGuidesSteps(t *testing.T) {
-	r := newBoxRig(t)
-	r.handLeadTo("b")
-	r.nodes["a"].crash()
-	r.cloneDiskEnv("a", "box-a")
-	time.Sleep(2 * time.Second) // four leases: the copy is the a everyone hears
-	ln, err := net.Listen("tcp", r.lns[0].Addr().String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	r.start("a", "box-a", r.env["a"], ln)
-	pairWait(t, "the real a to go spare beside the copy heard first", 10*time.Second, func() bool { return r.el("a").Spare() })
-	if r.el("clone").Spare() {
-		t.Fatal("both copies went spare")
-	}
-	// (1) Stop the copy. (2) Clear the marking members: the witness, then b
-	// (the deploy path's restart). (3) On the real box: stop, delete the
-	// state, start.
-	r.nodes["clone"].crash()
-	r.restartWitness()
-	r.deployRestart("b")
-	r.nodes["a"].stop()
-	if err := os.Remove(filepath.Join(r.env["a"]["STATE_DIRECTORY"], pairStateFile)); err != nil {
-		t.Fatal(err)
-	}
-	ln, err = net.Listen("tcp", r.lns[0].Addr().String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	r.start("a", "box-a", r.env["a"], ln)
-	pairWait(t, "a to re-adopt from b", 15*time.Second, func() bool { return r.el("a").Status().Commissioned })
-	if r.el("a").Spare() {
-		t.Fatal("still a spare after its state was deleted")
-	}
-	pairWait(t, "a leader", 15*time.Second, func() bool { return r.el("a").IsLeader() || r.el("b").IsLeader() })
-	r.handLeadTo("a")
-	r.handLeadTo("b")
 }
 
 // A spare's peer listener answers every request 503, the vote protocol

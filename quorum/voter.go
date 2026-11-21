@@ -29,6 +29,15 @@ type Voter struct {
 	// state it promises (held), so no grant ever leaves ahead of its fsync.
 	dirty, durable uint64
 	held           []heldGrant
+	// need is the Seq a grant (and an adoption message) waits for: the
+	// last change to anything but the duplicate records. dupNeed is the
+	// last change to those (syncDups): a mark's write is off the grant
+	// path, so a failing or slow one never holds up a renewal (#1029
+	// 3c-3b). issued is the highest Seq handed to the driver and not yet
+	// reported (MarkWrite asks no second write while one is in flight).
+	need, dupNeed, issued uint64
+	// gens: per name, the clear generation (DupRecord.Gen).
+	gens map[NodeID]uint64
 
 	// isWitness: this voter is the witness, and stamps its incarnation on
 	// every reply. Set by NewWitness.
@@ -74,9 +83,9 @@ type Voter struct {
 	// marked: the names confirmed as run by two processes at once (one
 	// boot kept sending after another had started, beyond the one-way
 	// delay). A marked name gets no new grant and its vote counts nowhere
-	// this voter's candidate counts, until ClearDuplicate (#1029 3c). In
-	// memory only: a restart clears them, and a copy still running is
-	// marked again within a quarter lease and a look.
+	// this voter's candidate counts, until ClearDuplicate (#1029 3c).
+	// Written to the state file (VoterState.Dups, #1029 3c-3b): a restart
+	// keeps them, with the boots known at the mark (restored stale).
 	boots map[NodeID][]bootSeen
 	// bootsHeard: per name, the boots heard in that name's own requests and
 	// when each was last heard, kept whether or not the name is marked
@@ -89,7 +98,8 @@ type Voter struct {
 	// boot marks the name again at once, before anything is granted: a
 	// copy that was unplugged, paused or cut off at the clear (alive, just
 	// unheard) comes back as that same boot (#1135 review). A real restart
-	// is a new boot and is never retired. In memory, as marks are.
+	// is a new boot and is never retired. Durable, as marks are (#1029
+	// 3c-3b); a reply from one counts nothing and marks (RetiredReply).
 	retired map[NodeID][]bootSeen
 	// started is when this voter started (NewVoter): LiveBoots knows
 	// nothing of the time before it.
@@ -228,6 +238,9 @@ func (v *Voter) CopyHeard(now Instant, name NodeID) bool {
 // maxBoots is how many boots per name a voter keeps evidence for.
 const maxBoots = 8
 
+// maxRetired bounds the boots a clear retires per name (the oldest drop).
+const maxRetired = 4 * maxBoots
+
 // noteBoot takes a request from name under nonce with Seq seq, received
 // at now, as evidence (#1029 3c). A frame is new evidence only when its
 // Seq is above every Seq heard from that boot: a duplicated or replayed
@@ -330,6 +343,7 @@ func (v *Voter) noteBoot(now Instant, name NodeID, nonce, seq uint64) {
 			v.marks++
 			v.lastMarked = name
 			v.duplicate(true, name, DupConfirmed)
+			v.syncDups()
 			return
 		}
 	}
@@ -363,7 +377,7 @@ func (v *Voter) Marked() []NodeID {
 // operator has stopped the copy. A copy still running is marked again as
 // soon as it is heard beside the original. It reports whether name was
 // marked. Restarting this voter clears every mark too.
-func (v *Voter) ClearDuplicate(name NodeID) bool { return v.clearDuplicate(name, 0, false, nil) }
+func (v *Voter) ClearDuplicate(name NodeID) bool { return v.clearDuplicate(name, 0, false, nil, 0) }
 
 // MutClearRetiresMarkedOnly reports the clear_retires_marked_only
 // mutation, for the simulator's model of the command.
@@ -435,14 +449,18 @@ func addBoot(out []BootSeq, nonce, seq uint64) []BootSeq {
 // check. Every other boot of name this voter knows, and every boot in
 // also (what the other members knew), is retired: a new frame from one
 // marks name again at once (retiredFrame).
-func (v *Voter) ClearDuplicateKeeping(name NodeID, keep uint64, also []BootSeq) bool {
+//
+// gen is the clear generation the command chose, above every member's and
+// every hold's (DupGen, Candidate.HoldGen): this voter's for name becomes
+// at least gen, and above its own (#1029 3c-3b).
+func (v *Voter) ClearDuplicateKeeping(name NodeID, keep uint64, also []BootSeq, gen uint64) bool {
 	if mut("clear_retires_own_only") {
 		also = nil
 	}
-	return v.clearDuplicate(name, keep, true, also)
+	return v.clearDuplicate(name, keep, true, also, gen)
 }
 
-func (v *Voter) clearDuplicate(name NodeID, keep uint64, retire bool, also []BootSeq) bool {
+func (v *Voter) clearDuplicate(name NodeID, keep uint64, retire bool, also []BootSeq, gen uint64) bool {
 	was := v.marked[name]
 	if mut("clear_keeps_mark") {
 		return was
@@ -473,8 +491,8 @@ func (v *Voter) clearDuplicate(name NodeID, keep uint64, retire bool, also []Boo
 		for _, b := range also {
 			add(b.Nonce, b.Seq)
 		}
-		if len(rs) > 4*maxBoots {
-			rs = rs[len(rs)-4*maxBoots:]
+		if len(rs) > maxRetired {
+			rs = rs[len(rs)-maxRetired:]
 		}
 		if v.retired == nil {
 			v.retired = map[NodeID][]bootSeen{}
@@ -483,6 +501,8 @@ func (v *Voter) clearDuplicate(name NodeID, keep uint64, retire bool, also []Boo
 	}
 	delete(v.marked, name)
 	delete(v.boots, name)
+	v.setGen(name, gen)
+	v.syncDups()
 	return was
 }
 
@@ -497,6 +517,14 @@ func (v *Voter) retiredFrame(now Instant, name NodeID, nonce, seq uint64) bool {
 		return false
 	}
 	v.retired[name][i].seq = seq
+	v.markRetired(now, name, nonce, seq)
+	return true
+}
+
+// markRetired marks name again for a retired boot heard alive (a new
+// frame, or a reply: RetiredReply). The boots evidence is rebuilt from
+// what this voter heard, so HeldBy names the boot heard first.
+func (v *Voter) markRetired(now Instant, name NodeID, nonce, seq uint64) {
 	var bs []bootSeen
 	for _, h := range v.bootsHeard[name] {
 		if h.nonce != nonce {
@@ -515,7 +543,7 @@ func (v *Voter) retiredFrame(now Instant, name NodeID, nonce, seq uint64) bool {
 	v.marks++
 	v.lastMarked = name
 	v.duplicate(true, name, DupConfirmed)
-	return true
+	v.syncDups()
 }
 
 // seenNonce is one boot nonce heard under a name, live until until.
@@ -668,6 +696,8 @@ func NewVoter(self NodeID, lease time.Duration, st VoterState, now Instant) *Vot
 		v.dirty++
 	}
 	v.st.Lease = bound
+	v.need = v.dirty
+	v.restoreDups(now)
 	return v
 }
 
@@ -702,6 +732,7 @@ func NewWitness(self NodeID, lease time.Duration, st VoterState, now Instant, dr
 	}
 	v.st = VoterState{Incarnation: inc, Lease: lease}
 	v.dirty++
+	v.need = v.dirty
 	return v, &Persist{Seq: v.dirty, State: v.st}
 }
 
@@ -982,6 +1013,17 @@ func YieldTo(now Instant, v *Voter, c *Candidate, r Request) bool {
 // itself only from Persisted. A renewal that changes nothing durable is
 // answered at once, unless an earlier change is still unconfirmed.
 func (v *Voter) Handle(now Instant, r Request) (*Persist, []Reply) {
+	p, rs := v.handle(now, r)
+	if p == nil {
+		// No write of its own: the one the duplicate records are owed, if
+		// any (a mark this very frame made). Its replies don't wait on it.
+		return v.MarkWrite(), rs
+	}
+	v.issued = max(v.issued, p.Seq)
+	return p, rs
+}
+
+func (v *Voter) handle(now Instant, r Request) (*Persist, []Reply) {
 	refuse := []Reply{v.reply(now, r, false)}
 	// Every request says its sender runs under that boot now: a probe, a
 	// campaign or a renewal, its own candidate's too (#1029 step 1).
@@ -1039,15 +1081,20 @@ func (v *Voter) Handle(now Instant, r Request) (*Persist, []Reply) {
 		// grant's boot nonce goes with it (one term, one boot).
 		v.st.Promised, v.st.GrantedTo, v.st.Lease, v.st.GrantNonce = r.Term, r.From, v.lease, r.Nonce
 		v.dirty++
+		v.need = v.dirty
 	}
 	g := v.reply(now, r, true)
-	if v.durable >= v.dirty {
+	need := v.need
+	if mut("mark_write_on_grant_path") {
+		need = v.dirty
+	}
+	if v.durable >= need {
 		return nil, []Reply{g}
 	}
 	if mut("answer_before_fsync") {
 		return &Persist{Seq: v.dirty, State: v.st}, []Reply{g}
 	}
-	v.held = append(v.held, heldGrant{need: v.dirty, reply: g})
+	v.held = append(v.held, heldGrant{need: need, reply: g})
 	return &Persist{Seq: v.dirty, State: v.st}, nil
 }
 
@@ -1071,6 +1118,9 @@ func (v *Voter) Persisted(seq uint64, ok bool) []Reply {
 	v.held = keep
 	if ok && seq > v.durable {
 		v.durable = seq
+	}
+	if seq >= v.issued {
+		v.issued = 0 // nothing in flight: a failed write of the records is asked again (MarkWrite)
 	}
 	return out
 }
@@ -1103,7 +1153,7 @@ func (v *Voter) RelayRefused() uint64 { return v.relayRefused }
 func (v *Voter) reply(now Instant, r Request, granted bool) Reply {
 	return Reply{From: v.self, To: r.From, Term: r.Term, Nonce: r.Nonce, ID: r.ID, Granted: granted,
 		Promised: max(v.st.Promised, v.st.Floor), Incarnation: v.witnessIncarnation(),
-		Marked: v.marked[r.From] && !mut("marked_not_told"), VoterBoot: v.boot, HeldBy: v.HeldBy(now, r.From, r.Nonce)}
+		Marked: v.marked[r.From] && !mut("marked_not_told"), ClearGen: v.gens[r.From], VoterBoot: v.boot, HeldBy: v.HeldBy(now, r.From, r.Nonce)}
 }
 
 // Spare reports whether this voter's state says its controller demoted
@@ -1123,12 +1173,20 @@ func (v *Voter) MakeSpare() *Persist {
 
 // SpareWriteFailed takes back the flag MakeSpare set, its write having
 // failed: a later write must not carry it to disk unasked (a held copy
-// whose incumbent then stopped would start silent). The driver decides
-// again on a later reply.
-func (v *Voter) SpareWriteFailed() {
-	if !mut("spare_flag_kept_after_failure") {
-		v.st.Spare = false
+// whose incumbent then stopped would start silent). One may already be in
+// flight (a duplicate record's, handed out after MakeSpare and carrying
+// the flag), so it returns a write of the state without the flag, later
+// than any: the driver asks it (#1144 review). The driver decides again
+// on a later reply.
+func (v *Voter) SpareWriteFailed() *Persist {
+	if mut("spare_flag_kept_after_failure") {
+		return nil
 	}
+	v.st.Spare = false
+	if mut("spare_failure_unwritten") {
+		return nil
+	}
+	return v.change()
 }
 
 // Unspare clears the spare flag and returns the write. Tests use it, and
@@ -1185,6 +1243,8 @@ func (v *Voter) HeldBy(now Instant, name NodeID, asker uint64) uint64 {
 // makes it durable.
 func (v *Voter) change() *Persist {
 	v.dirty++
+	v.need = v.dirty
+	v.issued = max(v.issued, v.dirty)
 	return &Persist{Seq: v.dirty, State: v.st}
 }
 

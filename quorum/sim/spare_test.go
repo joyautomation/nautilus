@@ -218,6 +218,24 @@ func withRestartClear(o Options) Options {
 	return o
 }
 
+// withCommandClear is withRestartClear's schedule with the operator's
+// clear-duplicate command (a Clear at every member, guarded, behind the
+// command's check) in place of the restarts, which no longer clear a mark
+// (#1029 3c-3b).
+func withCommandClear(o Options) Options {
+	end := o.Faults[0].At + o.Faults[0].For
+	for _, f := range o.Faults {
+		if f.Kind == Cut {
+			end = max(end, f.At+f.For)
+		}
+	}
+	at := end + lease
+	o.Faults = append(o.Faults, Fault{Kind: Cut, At: at, For: ms, From: W2, To: Z})
+	o = withClear(o, at+lease+lease/2, clearMembers, ClearGuarded|ClearPreflight)
+	o.Until = at + 4*lease + bound + 6*lease
+	return o
+}
+
 // clearFrom is where withRestartClear's clear starts, 0 when none.
 func clearFrom(o Options) time.Duration {
 	for _, f := range o.Faults {
@@ -542,18 +560,25 @@ func TestTheSpareDecisionUnderASplit(t *testing.T) {
 }
 
 // After a spare, every split shape heals to one leader once an operator
-// does the clear the guide gives before the 3c-3 command (restart the
-// witness, the original's peer, then the original): full steady state,
-// every voter backing the leader. Without the clear the original often
-// leads on two voters to the end (the stated cost, oracle spareCost), and
-// TestCloneSplitNoTwoLeaders judges that run.
-func TestASplitWithASpareClearsByRestarts(t *testing.T) {
+// runs the clear-duplicate command with the copy stopped: full steady
+// state, every voter backing the leader, and no mark left. Without the
+// clear the original often leads on two voters to the end (the stated
+// cost, oracle spareCost), and TestCloneSplitNoTwoLeaders judges that run.
+// Restarts no longer clear a mark (#1029 3c-3b).
+func TestASplitWithASpareClearsByTheCommand(t *testing.T) {
 	n := spareSeeds() / 2
 	for _, sh := range restartShapes() {
 		failing := 0
 		for seed := uint64(1); seed <= n; seed++ {
-			o := withRestartClear(sh.run(seed))
+			o := withCommandClear(sh.run(seed))
 			r := Run(o)
+			if len(r.MarkedAtEnd) > 0 {
+				failing++
+				if failing <= 2 {
+					t.Errorf("%s seed %d: still marked at the end: %v", sh.name, seed, r.MarkedAtEnd)
+				}
+				continue
+			}
 			if vs := Check(r, cloneChecks(o)); len(vs) > 0 {
 				failing++
 				if failing <= 2 {

@@ -218,7 +218,7 @@ var ErrSpare = errors.New("quorum: this controller is a spare (a copy of a membe
 // newerStateMsg is the refusal of a state file in a format above this
 // release's.
 func newerStateMsg(path string) string {
-	return fmt.Sprintf("the voter state file %s was written by a newer release of naut (format 6 and later: from 6 on, the box may have been made a spare, a copy of a member that must stay silent). "+
+	return fmt.Sprintf("the voter state file %s was written by a newer release of naut (format 6 and later: from 6 on, the box may have been made a spare, a copy of a member that must stay silent; from 7 on, it may hold duplicate marks). "+
 		"This release can't read it and won't start over it: run the release that wrote it. To run this release anyway, first make sure no other box runs as this member, then move the file aside: it starts uncommissioned and re-adopts from the other controller", path)
 }
 
@@ -243,7 +243,7 @@ func confirmedAlarm(v *quorum.Voter, markSeen *uint64) string {
 // duplicateMsg is the duplicate-member report.
 func duplicateMsg(who quorum.NodeID, cause quorum.DupCause) string {
 	if cause == quorum.DupConfirmed {
-		return fmt.Sprintf("two processes claim to be %s: this voter heard both running at once, and marks %s: it gives %s no new vote and counts no vote from %s until the mark is cleared. Clear it: (1) stop the copy and confirm it is down: powered off or its process ended, not just unplugged or paused (check NAUTILUS_NODE on every box, and that no box runs a clone of another's disk); (2) on either controller, run naut redundancy clear-duplicate %s --copy-stopped: it checks every member, clears the mark at each, and frees %s without a restart. Where that command can't reach a member (an older release), restart each member that raised this alarm, then %s itself, even if it leads. While a mark stands, a split or a lost witness can leave the pair without a leader", who, who, who, who, who, who, who)
+		return fmt.Sprintf("two processes claim to be %s: this voter heard both running at once, and marks %s: it gives %s no new vote and counts no vote from %s until the mark is cleared. Clear it: (1) stop the copy and confirm it is down: powered off or its process ended, not just unplugged or paused (check NAUTILUS_NODE on every box, and that no box runs a clone of another's disk); (2) on either controller, run naut redundancy clear-duplicate %s --copy-stopped: it checks every member, clears the mark at each, and frees %s without a restart. A restart doesn't clear it: the mark is kept on disk. While a mark stands, a split or a lost witness can leave the pair without a leader", who, who, who, who, who, who)
 	}
 	if cause == quorum.DupVoterPromised {
 		return fmt.Sprintf("two processes claim to be %s: %s campaigned while its own voter was heard promised to another controller, which %s never does. A copy of %s is running: check NAUTILUS_NODE on every box (it differs per box) and that no box runs a clone of another's disk", who, who, who, who)
@@ -929,6 +929,7 @@ func (e *Elector) emit(ctx context.Context) {
 
 // persisted is the writer's report of the write of seq.
 func (e *Elector) persisted(seq uint64, err error) {
+	var fix *quorum.Persist // a failed spare write's correction (#1144 review)
 	e.mu.Lock()
 	now := e.now()
 	replies, msgs := e.a.Persisted(now, seq, err == nil || mut("controller_write_ignored"))
@@ -951,7 +952,7 @@ func (e *Elector) persisted(seq uint64, err error) {
 			e.becomeSpare(now)
 		} else {
 			e.spareSeq = 0 // still held, not silent: it decides again on the next reply
-			e.v.SpareWriteFailed()
+			fix = e.v.SpareWriteFailed()
 		}
 	}
 	close(e.written)
@@ -959,6 +960,7 @@ func (e *Elector) persisted(seq uint64, err error) {
 	e.after(now)
 	silent := e.spare.Load()
 	e.mu.Unlock()
+	e.w.ask(fix)
 	if !silent {
 		e.adopts(msgs)
 	}
@@ -1198,7 +1200,7 @@ func (e *Elector) noteMark(r quorum.Reply) {
 	e.c.NoteMark(r)
 	switch now := e.c.Marked(); {
 	case now && !was:
-		msg := fmt.Sprintf("voter %s marks %s a confirmed duplicate: another process runs as this controller, so it campaigns no more, and its voter grants %s nothing new, until the mark is cleared. Clear it: (1) stop the copy and confirm it is down; (2) run naut redundancy clear-duplicate %s --copy-stopped (on either controller): the hold ends without a restart. If a marking member (%s among them) has restarted since it marked, only this controller's own restart ends this hold", r.From, e.o.Self, e.o.Peer, e.o.Self, r.From)
+		msg := fmt.Sprintf("voter %s marks %s a confirmed duplicate: another process runs as this controller, so it campaigns no more, and its voter grants %s nothing new, until the mark is cleared. Clear it: (1) stop the copy and confirm it is down; (2) run naut redundancy clear-duplicate %s --copy-stopped (on either controller): the hold ends without a restart. A restart of this controller or of a marking member doesn't end it", r.From, e.o.Self, e.o.Peer, e.o.Self)
 		e.event(Event{Kind: EventDuplicateMarked, Detail: msg})
 		e.log.Error("redundancy: " + msg)
 	case was && !now:
@@ -1261,23 +1263,6 @@ func (e *Elector) Unspare(ctx context.Context) error {
 	}
 	e.w.ask(p)
 	return e.waitDurable(ctx, p.Seq)
-}
-
-// ClearDuplicate clears this controller's voter's mark on name, the
-// operator's step once the copy is stopped (quorum.Voter.ClearDuplicate):
-// name gets new grants here again, and its vote counts toward this
-// controller's lease. It reports whether name was marked. A copy still
-// running is marked again as soon as it is heard beside the original.
-// Restarting the controller clears its marks too (they are in memory).
-func (e *Elector) ClearDuplicate(name string) bool {
-	e.mu.Lock()
-	was := e.v.ClearDuplicate(quorum.NodeID(name))
-	e.mu.Unlock()
-	if was {
-		e.event(Event{Kind: EventDuplicateCleared, Detail: name})
-		e.log.Warn("redundancy: the operator cleared the duplicate mark on " + name)
-	}
-	return was
 }
 
 // DuplicateMarks lists the names this controller's voter has marked as

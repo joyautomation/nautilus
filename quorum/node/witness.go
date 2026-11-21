@@ -261,27 +261,6 @@ func (w *Witness) Grant(cluster string) (grantedTo quorum.NodeID, promised, inca
 	return st.GrantedTo, st.Promised, st.Incarnation, st.Incarnation != 0
 }
 
-// ClearDuplicate clears the witness's mark on name in cluster's pair, the
-// operator's step once the copy is stopped (quorum.Voter.ClearDuplicate,
-// #1029 3c). It reports whether name was marked; false too for a pair
-// this witness hasn't answered since it started. Restarting the witness
-// clears every mark (they are in memory).
-func (w *Witness) ClearDuplicate(cluster, name string) bool {
-	w.mu.Lock()
-	p, found := w.pairs[cluster]
-	w.mu.Unlock()
-	if !found {
-		return false
-	}
-	p.mu.Lock()
-	was := p.v.ClearDuplicate(quorum.NodeID(name))
-	p.mu.Unlock()
-	if was {
-		p.log.Warn("witness: the operator cleared the duplicate mark on " + name)
-	}
-	return was
-}
-
 // Pairs lists the pairs this witness has answered since it started.
 func (w *Witness) Pairs() []PairStatus {
 	w.mu.Lock()

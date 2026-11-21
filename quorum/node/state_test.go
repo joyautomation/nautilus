@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/joyautomation/nautilus/quorum"
@@ -21,7 +22,7 @@ func TestStateRoundTripAndMissing(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := s.Load()
-	if err != nil || got != sample {
+	if err != nil || !reflect.DeepEqual(got, sample) {
 		t.Fatalf("Load = %+v, %v; want %+v", got, err, sample)
 	}
 	if _, err := os.Stat(s.tmp()); !errors.Is(err, os.ErrNotExist) {
@@ -39,7 +40,7 @@ func TestStateTornAtEveryOffset(t *testing.T) {
 			t.Fatal(err)
 		}
 		st, err := s.Load()
-		if !errors.Is(err, quorum.ErrCorrupt) || st != (quorum.VoterState{}) {
+		if !errors.Is(err, quorum.ErrCorrupt) || !reflect.DeepEqual(st, quorum.VoterState{}) {
 			t.Fatalf("torn at %d of %d: %+v, %v; want the zero state and ErrCorrupt", k, len(good), st, err)
 		}
 		flipped := append([]byte(nil), good...)
@@ -73,7 +74,7 @@ func TestStateCrashMidWriteKeepsTheOld(t *testing.T) {
 			t.Fatalf("crash at %d: Save = %v", k, err)
 		}
 		got, err := s.Load()
-		if err != nil || got != old {
+		if err != nil || !reflect.DeepEqual(got, old) {
 			t.Fatalf("crash at byte %d of %d: Load = %+v, %v; want the old state %+v", k, len(next), got, err, old)
 		}
 	}

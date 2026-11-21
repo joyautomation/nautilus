@@ -179,8 +179,9 @@ func NewAdoption(v *Voter, c *Candidate, now Instant) *Adoption {
 	if !mut("campaign_in_restart_wait") {
 		c.holdUntil = v.waitUntil
 	}
-	c.duplicated = v.Duplicated // #1029 step 1
-	v.ownHeld = c.Marked        // #1113 review, rule (ii)
+	c.duplicated = v.Duplicated     // #1029 step 1
+	v.ownHeld = c.Marked            // #1113 review, rule (ii)
+	c.retiredReply = v.RetiredReply // #1029 3c-3b
 	return a
 }
 
@@ -346,10 +347,10 @@ func (a *Adoption) flush() *Persist {
 // hold returns m to send now when the voter's state is durable, or keeps
 // it for Persisted: no Adopt leaves ahead of the state it vouches for.
 func (a *Adoption) hold(m Adopt) []Adopt {
-	if a.v.durable >= a.v.dirty {
+	if a.v.durable >= a.v.need {
 		return []Adopt{m}
 	}
-	a.held = append(a.held, heldAdopt{need: a.v.dirty, msg: m})
+	a.held = append(a.held, heldAdopt{need: a.v.need, msg: m})
 	return nil
 }
 

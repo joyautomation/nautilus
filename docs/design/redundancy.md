@@ -533,9 +533,8 @@ redundancy:
            4 of 1,000 (pause) and up to 13 (unhealthy) gave two leaders for 36 ms to 0.8 s,
            against 56 and 57 for the restart route. `retiredFrame` fires on the copy's own
            request; until it arrives the peer counts renewal grants from the copy's voter.
-           The candidate side can close it: a reply whose `VoterBoot` is a retired boot is
-           not counted and marks (a follow-up). Retired boots are in memory, like marks;
-           3c-3b makes both durable.
+           3c-3b closes it: a reply whose `VoterBoot` is a retired boot is not counted and
+           marks (below). 3c-3b also makes retired boots durable, with the marks.
 
            A run after a clear that missed a member (it errored or refused, so it retired
            nothing) is not done (`ClearReport.Done` checks the clear phase), and the check
@@ -553,12 +552,92 @@ redundancy:
         unmarked reply release its hold. A member the clear phase can't reach keeps its mark
         (never worse than marks on: 0 two leaders in 300 runs per split shape for one or two
         members cleared, `TestAPartialClearAfterTheCopyStopsIsNeverWorse`), and the command
-        says so. The old route stays for an older member: restart each member that raised
-        the alarm, then the marked controller(s). Measured on the sim (`TestMeasureClear`,
-        a `Clear` fault per member): cleared after the heal, the pair was leaderless 0.0 s on
-        average (0.7 s at most), against 3.2 to 4.5 s (5.3 s) for the restarts. Marks are
-        still kept in memory; durable marks are 3c-3b, which must not land before this
-        command.
+        says so. Measured on the sim (`TestMeasureClear`, a `Clear` fault per member):
+        cleared after the heal, the pair was leaderless 0.0 s on average (0.7 s at most),
+        against 3.2 to 4.5 s (5.3 s) for the restart route 3c-3a still had (3c-3b removes
+        it: marks are durable).
+      - **Durable marks (#1029 3c-3b).** A voter keeps one `DupRecord` per name it marked or
+        an operator cleared, in `quorum.state` format 7 (written only while a record exists;
+        5 or 6 otherwise, so a pair with no duplicate can still go back a release): marked,
+        the boots it knew when it marked (incumbent first, up to 8), the retired boots (up
+        to 32), and the name's clear generation.
+        - **Told at once, written after.** `Reply.Marked` leaves at once; the record is
+          written as a change of its own (`Voter.MarkWrite`, handed out by `Handle`). A
+          grant waits only for the grant's state (`need`), never for a record write: the
+          prototype that held renewals behind it lost the incumbent's lease in 300 of 300
+          runs with the witness's disk failing across the mark (161 today, and with this
+          rule). Telling only once durable was worse in the fsync window (115 against
+          today's 22 of 300): a mark lost before its write then also set no hold.
+        - **Restored boots are stale** until a new frame (a Seq above the stored one), so
+          `HeldBy` names no dead incumbent after a restart, and names the live one once it
+          sends. All the boots known at the mark are kept, not just the incumbent:
+          `HeldBy` answers only an asker it knows, so without the copy's boot a copy is
+          never told it is a spare (early single peer restart: copies made spare 6 of 3,600
+          with the incumbent alone, 2,997 with every boot).
+        - **The hold rule.** A hold ends on an unmarked word from the boot that marked
+          (rule (i)), or from any boot of that voter whose `Reply.ClearGen` is above the
+          generation the hold was set under. Only an operator's clear raises a name's
+          generation, and the clear sets every member to one above every member's and
+          every hold's (`DupAnswer.Gen`, `HoldGen`; `checkPhase`). So a voter that forgot
+          the mark (crashed before its write, wiped, rebuilt, restored from a backup, or a
+          copy booted from an older disk) can't end a hold, and every clear does, also
+          with one member's generation behind (`TestAClearFreesAHoldWhenAMemberIsRestoredFromABackup`,
+          `TestAHoldEndsOnlyOnALaterClear`, `TestAHoldAVoterForgotEndsOnTheClear`). The
+          prototype's bare any-boot release for a durable mark (approved shape) measured
+          the same in every family; the generation replaces it because it also frees a
+          hold whose mark was lost before its write, which rule (i) alone left to the held
+          controller's restart.
+        - **Retired-boot replies.** A reply whose `VoterBoot` is a boot this controller's
+          own voter retired for that voter's name counts for nothing and marks the name
+          (`Voter.RetiredReply`). `VoterBoot` is the controller's boot nonce in the node;
+          the sim now uses it too (it used a separate id). Copy paused, hung or with hung
+          scans at the clear, back into a split (`TestMeasurePausedAtTheClear`, 1,000 per
+          cell): 4 (pause) and 13 and 2 (hung scans) without the rule, 0 with it
+          (`TestACopyPausedOrHungAtTheClearIsMarkedWhenItReturns`).
+        - **Measured** (`TestMeasureDurable`, 300 seeds per shape): two-leader counts in
+          the restart families equal today's, and are all the unmarked early-cut residual.
+          Today's restart families make the original a spare in 307 to 348 of 3,600 early
+          triples and 309 of 3,600 early peer and witness doubles (a forgotten mark,
+          re-marked after the heal on whichever boot is heard first); kept marks: 0 or 1.
+          The fsync window (disk slowed to 0.3 to 1.5 s, both voters crashing inside it):
+          two leaders in 13, 20, 19, 24 of 300 against 22, 22, 29, 24 with marks not kept,
+          originals made spare 15, 56, 15, 48 against 57, 57, 48, 48. A wiped member
+          forgets, as before (309 of 3,600 originals made spare with the peer and witness
+          wiped early, either way). The renewal cell (a failing disk across the mark):
+          161 of 300 incumbent leases broken, as today (the pre-existing gap), not the 300
+          a mark write on the grant path gave. With a clear after a voter restart and the
+          other controller then dead (`clearlive`): never without a leader (rule (i) alone
+          left the held controller out in 1,051 to 1,506 of 1,800 in the prototype).
+        - **Costs.** A false mark is permanent until cleared (no restart clears); the
+          steady hold (a voter still marking the leader at the end) in 64 to 181 of 3,600
+          late double and triple restarts where the original restarts (today 0 to 85). A
+          member that ever marked or cleared a name keeps its record (generation, retired
+          boots) and writes format 7 from then on, also after the clear; an earlier release
+          refuses that file (`newerStateMsg` names the way on: move it aside, re-adopt).
+        - **Review (#1144, Fable).** A hold can outlive every member's mark (the marking voter
+          crashed before its write, or was wiped): the check counts the held controller as
+          marked (`DupAnswer.Held`, `clear_ignores_held`), and the clear's generation frees
+          it; no member knows the copy's boot then, so none is retired, and the command
+          says so. A retired boot's reply marks only when matched to a round of this boot
+          (`retired_reply_unmatched`). A hold's generation is the highest this candidate saw
+          from that voter, never lowered (`hold_gen_reset_on_boot`): a restored older disk
+          can't end a hold a wiped boot set, and `HoldGen` covers every generation seen, so
+          a hold set between the check and the clear phase still ends on the clear
+          (`hold_gen_ignores_seen`); the re-check reports a controller still held as not
+          done (`done_ignores_held`). A failed spare write hands out a later write
+          without the flag (`spare_failure_unwritten`), so a record write in flight can't
+          leave the disk on a spare the controller doesn't know it is. **Residual, stated:**
+          a restored boot's stored Seq is the one at the mark, so after a restart a frame
+          the dead incumbent sent between the mark and the restart, replayed or late, makes
+          it fresh for half a lease; making the real box a spare that way needs such frames
+          at both other voters for a lease.
+        - **Rules (i) and (ii) since durable marks.** A restart no longer forgets a mark, so
+          the old restart families no longer exercise them (the full runner found
+          `hold_released_by_any_boot`, `held_voter_grants`, `marked_not_told` and
+          `marked_still_campaigns` masked there). They still matter in the fsync window, the
+          one place a mark is lost: `TestTheFsyncWindowKeepsRulesIAndII` (both voters crash
+          inside a slowed write; 44 two-leader runs of 600, 93 without rule (i), 71 without
+          rule (ii)) is their sim pin, beside the unit tests.
       - **The measure.** `TestCloneSplitNoTwoLeaders`: the six shapes above, 0 two-leader
         runs (200 per shape in CI, 2,000 measured; before, 2,000/2,000 for both splits and
         126, 306, 58, 13 of 2,000 for the heal shapes). The "mark" oracle (no mark in a run
@@ -659,10 +738,11 @@ redundancy:
           goes quiet before a split can take the original's lease, so the original keeps
           leading, and the peer that marked it never re-grants it (76 to 112 of 200 runs per
           split shape end that way; the steady oracle accepts exactly that, `spareCost`: a voter
-          that marked the leader's name and has not restarted since). One
-          more fault then leaves no leader. The guide's restart clear brings every shape back
-          to a full steady state: 0 of 2,400 short of it, leaderless 3.2 to 4.5 s on average
-          and 5.3 s at most across the clear (`TestASplitWithASpareClearsByRestarts`).
+          that marked the leader's name and has not read the mark back since a restart). One
+          more fault then leaves no leader. The clear-duplicate command brings every shape
+          back to a full steady state with no mark left (`TestASplitWithASpareClearsByTheCommand`;
+          before 3c-3b the restart clear did, leaderless 3.2 to 4.5 s on average and 5.3 s
+          at most across it).
         - **Incumbent = who ran first, not which box is real.** A copy booted with its
           original, while the original was down, or heard before the original's restart within
           about a second of the copy's start (before the mark), may keep the name: the original
@@ -678,13 +758,10 @@ redundancy:
           link outage; the elector dials its peer connections with SO_LINGER 0 (`resetOnClose`,
           `peer_dial_lingers`, `TestPeerConnectionsCloseWithAReset`), so an exiting process's
           unsent frames die with it, and the residual needs more than a lease of delay inside
-          the network. The simulator has no kernel and was not re-measured for it. The way out before 3c-3:
-          stop the copy, restart the marking members, then on the real box stop naut, delete
-          `quorum.state` and start (it re-adopts from the peer), the rig's
-          `TestTheRealBoxMadeASpareRecoversByTheGuidesSteps`. The marking members' restart is
-          needed (without it the box re-adopts but never leads), and restarting the controller
-          that leads alone is leaderless for its start-up plus about a lease (0.53 to 0.57 s at
-          the rig's 500 ms lease).
+          the network. The simulator has no kernel and was not re-measured for it. The way out: stop the copy, reset the
+          real box (stop naut, delete `quorum.state`, start: it re-adopts from the peer), then
+          the operator's clear (the rig's `TestTheRealBoxMadeASpareRecoversWithTheCommand`).
+          Restarts no longer clear marks (#1029 3c-3b).
 - **`NAUTILUS_NODE` set with no pair in the manifest** is refused: each box would run as its
   own leader against the same I/O.
 - **A pair member's tag API must be reachable by its peer.** The manifest's default

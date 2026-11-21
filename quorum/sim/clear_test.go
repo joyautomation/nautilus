@@ -504,3 +504,91 @@ func TestACopyKnownToOneMemberIsRetiredAtAll(t *testing.T) {
 		}
 	}
 }
+
+// returnSilencedIntoSplit is returnIntoSplit with the copy paused (Pause:
+// its process stopped, its sockets open) or hung (Freeze: its clock and
+// timers stopped) at the clear instead of cut off, or cut off with its
+// scans hung from then on (Unhealthy): alive, unheard, and back as the
+// same boot. The #1135 re-check's residual: 4 (pause) and up to 13 (hung
+// scans) of 1,000 two-leader runs (#1029 3c-3b closes it).
+func returnSilencedIntoSplit(seed uint64, mirror bool, touchMax time.Duration, how FaultKind) Options {
+	o := returnIntoSplit(seed, mirror, touchMax, true)
+	cut := o.Faults[1] // the copy cut from every member: faults 1..3
+	if how == Unhealthy {
+		clone := o.Faults[0]
+		o.Faults = append(o.Faults, Fault{Kind: Unhealthy, At: cut.At, For: clone.At + clone.For - cut.At, Node: cut.From})
+		return o
+	}
+	f := []Fault{o.Faults[0], {Kind: how, At: cut.At, For: cut.For, Node: cut.From}}
+	o.Faults = append(f, o.Faults[1+len(clearMembers):]...)
+	return o
+}
+
+// A copy paused or hung at the operator's clear runs on as the boot the
+// clear retired: its first new frame marks the name again (retiredFrame),
+// and its voter's replies count nowhere and mark the name at the
+// controller that hears them (Voter.RetiredReply), so it never backs a
+// second leader when it returns into a split. Before 3c-3b: 4 and up to 13
+// of 1,000 two-leader runs (pause, hung scans). retired_reply_counted
+// turns it red.
+func TestACopyPausedOrHungAtTheClearIsMarkedWhenItReturns(t *testing.T) {
+	n := splitSeeds()
+	for _, how := range []FaultKind{Pause, Freeze, Unhealthy} {
+		for _, touch := range []time.Duration{0, lease / 2, lease} {
+			for _, mirror := range []bool{false, true} {
+				two, cleared := 0, 0
+				for seed := uint64(1); seed <= n; seed++ {
+					o := returnSilencedIntoSplit(seed, mirror, touch, how)
+					rec := Run(o)
+					if overlap(Check(rec, cloneChecks(o))) {
+						two++
+						if two <= 3 {
+							t.Errorf("%v, touch <%v, mirror %v, seed %d: two leaders", kindNames[how], touch, mirror, seed)
+						}
+					}
+					for _, c := range rec.Clears {
+						cleared += len(c.Cleared)
+					}
+				}
+				if two > 0 {
+					t.Errorf("%v, touch <%v, mirror %v: two leaders in %d of %d", kindNames[how], touch, mirror, two, n)
+				}
+				if cleared == 0 {
+					t.Errorf("%v, touch <%v, mirror %v: no clear went through; the test proves nothing", kindNames[how], touch, mirror)
+				}
+			}
+		}
+	}
+}
+
+// TestMeasurePausedAtTheClear prints the two-leader counts of
+// returnSilencedIntoSplit (QUORUM_MEASURE_PAUSED=1, QUORUM_MEASURE_N seeds,
+// default 1000), for the PR and the ablations.
+func TestMeasurePausedAtTheClear(t *testing.T) {
+	if os.Getenv("QUORUM_MEASURE_PAUSED") == "" {
+		t.Skip("set QUORUM_MEASURE_PAUSED=1")
+	}
+	n := uint64(1000)
+	fmt.Sscan(os.Getenv("QUORUM_MEASURE_N"), &n)
+	apart := os.Getenv("QUORUM_VOTER_BOOT_APART") != ""
+	for _, how := range []FaultKind{Pause, Freeze, Unhealthy, Cut} {
+		for _, touch := range []time.Duration{0, lease / 2, lease} {
+			for _, mirror := range []bool{false, true} {
+				two := 0
+				for seed := uint64(1); seed <= n; seed++ {
+					var o Options
+					if how == Cut {
+						o = returnIntoSplit(seed, mirror, touch, true)
+					} else {
+						o = returnSilencedIntoSplit(seed, mirror, touch, how)
+					}
+					o.VoterBootApart = apart
+					if overlap(Check(Run(o), cloneChecks(o))) {
+						two++
+					}
+				}
+				fmt.Printf("PAUSED mut=%s apart=%v %-6v touch<%-5v mirror=%-5v two leaders %d of %d\n", os.Getenv("QUORUM_MUT"), apart, kindNames[how], touch, mirror, two, n)
+			}
+		}
+	}
+}

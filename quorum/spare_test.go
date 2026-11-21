@@ -2,6 +2,7 @@ package quorum
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 )
 
@@ -85,6 +86,28 @@ func TestAFailedSpareWriteTakesTheFlagBack(t *testing.T) {
 	v.SpareWriteFailed()
 	if v.Spare() || v.change().State.Spare {
 		t.Fatal("the flag of a failed write rides a later write")
+	}
+}
+
+// A write already handed out after MakeSpare (a duplicate record's, #1029
+// 3c-3b) carries the flag; when the flag's own write fails, the voter
+// hands out a later write without it, so the disk can't end on a spare
+// the controller doesn't know it is (#1144 review). spare_failure_unwritten
+// turns it red.
+func TestAFailedSpareWriteIsWrittenOver(t *testing.T) {
+	v, now := markA(t)
+	written(v)
+	sp := v.MakeSpare()
+	v.Handle(now.Add(lease), probe("A", 0xD, 1)) // a new boot: nothing to mark yet
+	v.ClearDuplicate("A")
+	rec := v.MarkWrite()
+	if rec == nil || !rec.State.Spare || rec.Seq <= sp.Seq {
+		t.Fatalf("no record write carrying the flag after it: %+v", rec)
+	}
+	v.Persisted(sp.Seq, false)
+	fix := v.SpareWriteFailed()
+	if fix == nil || fix.State.Spare || fix.Seq <= rec.Seq {
+		t.Fatalf("the failed spare write left %+v: want a later write without the flag", fix)
 	}
 }
 
@@ -238,7 +261,7 @@ func TestTheSpareFlagIsDurableAndOnlyASpareIsFormat6(t *testing.T) {
 		t.Fatalf("a spare's file is format %d, want 6", b[len(stateMagic)])
 	}
 	var back VoterState
-	if err := back.UnmarshalBinary(b); err != nil || back != p.State {
+	if err := back.UnmarshalBinary(b); err != nil || !reflect.DeepEqual(back, p.State) {
 		t.Fatalf("round trip: %+v %v", back, err)
 	}
 	if NewVoter("A", lease, back, 0).Spare() != true {
@@ -254,11 +277,11 @@ func TestTheSpareFlagIsDurableAndOnlyASpareIsFormat6(t *testing.T) {
 	if q := v.Unspare(); q == nil || q.State.Spare {
 		t.Fatalf("Unspare wrote %+v", q)
 	}
-	// Format 7 (a later release): ErrVersion, never read as this one.
-	b[len(stateMagic)] = 7
+	// Format 8 (a later release): ErrVersion, never read as this one.
+	b[len(stateMagic)] = 8
 	var x VoterState
 	if err := x.UnmarshalBinary(sealCRC(b[:len(b)-4])); !errors.Is(err, ErrVersion) {
-		t.Fatalf("a format-7 file: %v, want ErrVersion", err)
+		t.Fatalf("a format-8 file: %v, want ErrVersion", err)
 	}
 	// A bad flag byte is corrupt.
 	b[len(stateMagic)] = 6
