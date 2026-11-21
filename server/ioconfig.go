@@ -83,10 +83,12 @@ type IOHook struct {
 	Files func() IOFiles
 	// Sections are the manifest sections the config screens can render;
 	// Schema is one as a self-contained JSON Schema (an error wrapping
-	// ErrConfigNoSection answers 404). ConfigFiles is the manifest text
+	// ErrConfigNoSection answers 404). names says the caller may see the
+	// project's file names (profiles/, iodd/): it holds the write
+	// permission, as GET /api/io/files needs. ConfigFiles is the manifest text
 	// the screens edit (#711).
 	Sections    func() []string
-	Schema      func(section string) ([]byte, error)
+	Schema      func(section string, names bool) ([]byte, error)
 	ConfigFiles func() (ConfigFiles, error)
 }
 
@@ -607,7 +609,10 @@ func (s *Server) handleConfigSchema(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"sections": s.io.Sections()})
 		return
 	}
-	raw, err := s.io.Schema(section)
+	// File-name suggestions only for a caller who may write, the rule
+	// /api/io/files has; anyone else gets the schema without them, silently.
+	code, _ := s.authorizeWrite(r)
+	raw, err := s.io.Schema(section, code == 0)
 	if errors.Is(err, ErrConfigNoSection) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 		return

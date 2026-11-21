@@ -88,8 +88,8 @@ func (io *IOConfig) Hook(snapshot func(sha string) (fs.FS, bool), base fs.FS) *s
 			return out
 		},
 		Sections: SchemaSections,
-		Schema: func(section string) ([]byte, error) {
-			b, err := io.ConfigSchema(section)
+		Schema: func(section string, names bool) ([]byte, error) {
+			b, err := io.ConfigSchema(section, names)
 			if errors.Is(err, ErrNoSection) {
 				return nil, fmt.Errorf("%w: %w", server.ErrConfigNoSection, err)
 			}

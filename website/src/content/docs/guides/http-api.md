@@ -1159,18 +1159,21 @@ what they edit is applied through the staged routes above.
   self-contained JSON Schema (`application/schema+json`): the section under
   `properties` and only the `definitions` it reaches. It is a slice of the
   schema the editor uses. An unknown section is `404` and names the ones
-  there are. The `devices` slice also carries the project's option lists,
-  as suggestions rather than an enum: `x-options` on `profile` (the ids
-  vendored in `profiles/`, usable now) and `x-options-builtin` (the device
-  library's other ids, usable after `naut devices add`), and `x-options` on
-  a port's `iodd` (the files in `iodd/`). Only names are listed, never
-  contents; hidden files and symbolic links are left out.
+  there are. The `devices` slice also carries option lists, as suggestions rather
+  than an enum: `x-options-builtin` on `profile` (the device library's ids,
+  usable after `naut devices add`) for everyone, and, **for a caller who
+  holds the write permission** (the rule `GET /api/io/files` has; anyone
+  else gets the schema without them, silently), `x-options` on `profile`
+  (the ids vendored in `profiles/`, usable now) and on a port's `iodd` (the
+  files in `iodd/`). Only names are listed, never contents; hidden files
+  and symbolic links are left out. The form renders the `profile` list; a
+  port's `iodd` list is served for clients that render `ports`.
 - `GET /api/config/files` returns `manifest` (its file name), `files` (that
   file and the file each driver names, path to text) and `leading`, as what
   runs now: an I/O apply's files laid over the ones the controller booted
   from. `differs` lists the paths whose text is an apply's.
 
-`/api/config/schema` is a plain read (the schema, plus those file names). **`/api/config/files` is
+`/api/config/schema` is a plain read (the schema; the file names above only for a caller who may write). **`/api/config/files` is
 the whole manifest (users, grants, hosts), so it needs the permission to
 edit it, and online edits on:** online edits on,
 and the write token or a principal that may write. It serves only YAML

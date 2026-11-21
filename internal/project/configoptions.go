@@ -23,7 +23,7 @@ import (
 
 // withOptions adds the project's option lists to a schema slice. A slice
 // that has none of those fields comes back untouched.
-func withOptions(raw []byte, fsys fs.FS) ([]byte, error) {
+func withOptions(raw []byte, fsys fs.FS, names bool) ([]byte, error) {
 	var root map[string]any
 	if err := json.Unmarshal(raw, &root); err != nil {
 		return nil, err
@@ -33,11 +33,16 @@ func withOptions(raw []byte, fsys fs.FS) ([]byte, error) {
 		return raw, nil
 	}
 	if prof, ok := dev["profile"].(map[string]any); ok {
-		vendored := dirIDs(fsys, "profiles", ".yaml")
-		prof["x-options"] = vendored
+		// The project's own file names only for a caller who may see them;
+		// the built-in library is public, so an anonymous caller gets all of
+		// it (not minus what is vendored, which would say what is).
 		have := map[string]bool{}
-		for _, v := range vendored {
-			have[v] = true
+		if names {
+			vendored := dirIDs(fsys, "profiles", ".yaml")
+			prof["x-options"] = vendored
+			for _, v := range vendored {
+				have[v] = true
+			}
 		}
 		builtin := []string{}
 		if ps, err := devprofile.Builtin(); err == nil {
@@ -49,7 +54,7 @@ func withOptions(raw []byte, fsys fs.FS) ([]byte, error) {
 		}
 		prof["x-options-builtin"] = builtin
 	}
-	if iodd := dig(dev, "ports", "additionalProperties", "properties", "iodd"); iodd != nil {
+	if iodd := dig(dev, "ports", "additionalProperties", "properties", "iodd"); iodd != nil && names {
 		iodd["x-options"] = dirIDs(fsys, "iodd", "")
 	}
 	return json.Marshal(root)
@@ -71,8 +76,11 @@ func dig(m map[string]any, keys ...string) map[string]any {
 // any), by name without the extension when one was asked for, sorted. A
 // symbolic link is skipped, as everywhere the screens read the project.
 func dirIDs(fsys fs.FS, dir, ext string) []string {
-	ents, err := fs.ReadDir(fsys, dir)
 	out := []string{}
+	if fsys == nil {
+		return out
+	}
+	ents, err := fs.ReadDir(fsys, dir)
 	if err != nil {
 		return out
 	}
@@ -94,10 +102,11 @@ func dirIDs(fsys fs.FS, dir, ext string) []string {
 }
 
 // ConfigSchema is SchemaSlice with the project's option lists on it.
-func (io *IOConfig) ConfigSchema(section string) ([]byte, error) {
+// names says whether the project's own file names go in (see withOptions).
+func (io *IOConfig) ConfigSchema(section string, names bool) ([]byte, error) {
 	raw, err := SchemaSlice(section)
 	if err != nil {
 		return nil, err
 	}
-	return withOptions(raw, io.bootFS)
+	return withOptions(raw, io.bootFS, names)
 }

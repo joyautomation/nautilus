@@ -468,7 +468,7 @@ func TestConfigSchemaAndFilesRoutes(t *testing.T) {
 	f := &fakeIO{}
 	hook := f.hook()
 	hook.Sections = func() []string { return []string{"devices", "drivers"} }
-	hook.Schema = func(s string) ([]byte, error) {
+	hook.Schema = func(s string, _ bool) ([]byte, error) {
 		if s != "drivers" {
 			return nil, fmt.Errorf("%w %q", ErrConfigNoSection, s)
 		}
@@ -525,7 +525,7 @@ func TestConfigFilesNeedTheEditPermission(t *testing.T) {
 	hook := f.hook()
 	hook.Files = func() IOFiles { return IOFiles{Leading: true} }
 	hook.Sections = func() []string { return []string{"drivers"} }
-	hook.Schema = func(string) ([]byte, error) { return []byte(`{}`), nil }
+	hook.Schema = func(string, bool) ([]byte, error) { return []byte(`{}`), nil }
 	hook.ConfigFiles = func() (ConfigFiles, error) {
 		return ConfigFiles{Manifest: "nautilus.yaml", Files: map[string]string{"nautilus.yaml": "x"}}, nil
 	}
@@ -567,5 +567,40 @@ func TestConfigFilesNeedTheEditPermission(t *testing.T) {
 	}
 	if code := get(h, "/api/config/schema?section=drivers", ""); code != http.StatusOK {
 		t.Errorf("schema without a token: %d, want 200", code)
+	}
+}
+
+// The schema route offers the project's file names only to a caller who
+// holds the write permission (the rule GET /api/io/files has); anyone else
+// gets the schema, and no error, without them.
+func TestConfigSchemaNamesNeedTheWritePermission(t *testing.T) {
+	f := &fakeIO{}
+	hook := f.hook()
+	hook.Sections = func() []string { return []string{"devices"} }
+	var asked []bool
+	hook.Schema = func(_ string, names bool) ([]byte, error) {
+		asked = append(asked, names)
+		return []byte(`{}`), nil
+	}
+	o := ioOptions(f, true)
+	o.IO, o.AuthToken = hook, "s3cret"
+	h := New(newTestRuntime(t), o).Handler()
+	get := func(token string) int {
+		req := httptest.NewRequest("GET", "http://localhost/api/config/schema?section=devices", nil)
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		return w.Code
+	}
+	if code := get(""); code != http.StatusOK {
+		t.Fatalf("no token: %d, want 200 (a plain read)", code)
+	}
+	if code := get("s3cret"); code != http.StatusOK {
+		t.Fatalf("with the token: %d, want 200", code)
+	}
+	if len(asked) != 2 || asked[0] || !asked[1] {
+		t.Fatalf("names asked = %v, want [false true]", asked)
 	}
 }
