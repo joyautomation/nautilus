@@ -34,6 +34,10 @@ type fakeIO struct {
 	applyBody                           any
 	changes                             []any // validation\'s changes
 	onRevert                            func(IOWatch)
+	// commit, when set, is the hook's Commit; commits what it was asked
+	commit  func(IOCommit) (IOCommitted, error)
+	commits []IOCommit
+	patch   func() (string, error)
 }
 
 func (f *fakeIO) hook() *IOHook {
@@ -86,6 +90,16 @@ func (f *fakeIO) hook() *IOHook {
 		},
 		Differs: func() []IODiffer { return f.differs },
 		Fault:   func() string { return f.fault },
+		Patch:   f.patch,
+		Commit: func() func(IOCommit) (IOCommitted, error) {
+			if f.commit == nil {
+				return nil
+			}
+			return func(c IOCommit) (IOCommitted, error) {
+				f.commits = append(f.commits, c)
+				return f.commit(c)
+			}
+		}(),
 	}
 }
 

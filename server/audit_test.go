@@ -465,6 +465,13 @@ func auditRows() []auditRow {
 		{name: "io apply nothing", pattern: "POST /api/io/staged/{id}/apply", server: ioSrv,
 			method: "POST", path: "/api/io/staged/9/apply",
 			action: "config.apply", target: "9", user: "anonymous", source: "api", result: "refused"},
+		{name: "io commit an applied candidate", pattern: "POST /api/config/commit", server: ioCommitSrv, prep: ioStagedApplied,
+			method: "POST", path: "/api/config/commit", body: `{"id":"1"}`,
+			action: "config.commit", target: "1", user: "anonymous", source: "api", result: "ok",
+			after: map[string]any{"commit": "c0ffee", "branch": "main", "files": "modbus.yaml"}},
+		{name: "io commit what was not applied", pattern: "POST /api/config/commit", server: ioCommitSrv, prep: ioStaged(true),
+			method: "POST", path: "/api/config/commit", body: `{"id":"1"}`,
+			action: "config.commit", target: "1", user: "anonymous", source: "api", result: "refused"},
 		{name: "io cancel a pending revert", pattern: "POST /api/io/revert/cancel", server: ioRevertSrv,
 			method: "POST", path: "/api/io/revert/cancel",
 			action: "config.revert.cancel", target: "", user: "anonymous", source: "api", result: "ok"},
@@ -482,6 +489,22 @@ func ioRevertSrv(t *testing.T) *Server {
 
 func ioSrv(t *testing.T) *Server {
 	return New(newTestRuntime(t), ioOptions(&fakeIO{valid: true, drivers: []string{"modbus"}}, true))
+}
+
+// ioCommitSrv is ioSrv on a controller that can commit.
+func ioCommitSrv(t *testing.T) *Server {
+	f := &fakeIO{valid: true, drivers: []string{"modbus"}, commit: func(IOCommit) (IOCommitted, error) {
+		return IOCommitted{Commit: "c0ffee", Branch: "main", Files: []string{"modbus.yaml"}}, nil
+	}}
+	return New(newTestRuntime(t), ioOptions(f, true))
+}
+
+// ioStagedApplied stages, validates and applies candidate 1.
+func ioStagedApplied(t *testing.T, s *Server) {
+	ioStaged(true)(t, s)
+	if w, _ := doJSON(t, s.Handler(), "POST", "/api/io/staged/1/apply", nil); w.Code != http.StatusOK {
+		t.Fatalf("apply: %d", w.Code)
+	}
 }
 
 // ioStaged stages candidate 1 (and validates it), outside the seam.

@@ -96,8 +96,11 @@ func unifiedDiff(nameA, nameB, a, b string) string {
 				bLen++
 			}
 			body.WriteByte(o.kind)
-			body.WriteString(o.text)
+			body.WriteString(strings.TrimSuffix(o.text, noEOL))
 			body.WriteByte('\n')
+			if strings.HasSuffix(o.text, noEOL) {
+				body.WriteString("\\ No newline at end of file\n")
+			}
 		}
 		if aLen == 0 {
 			aStart--
@@ -111,9 +114,18 @@ func unifiedDiff(nameA, nameB, a, b string) string {
 	return sb.String()
 }
 
+// noEOL marks a last line the text ends without a newline after: it is a
+// different line from the same text with one, and is printed with git's
+// "\ No newline at end of file", so a patch of it applies.
+const noEOL = "\x00"
+
 func splitLines(s string) []string {
 	if s == "" {
 		return nil
 	}
-	return strings.Split(strings.TrimSuffix(s, "\n"), "\n")
+	lines := strings.Split(strings.TrimSuffix(s, "\n"), "\n")
+	if !strings.HasSuffix(s, "\n") {
+		lines[len(lines)-1] += noEOL
+	}
+	return lines
 }

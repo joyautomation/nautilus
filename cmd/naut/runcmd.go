@@ -544,6 +544,9 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 			snap, ok := vcs.SnapshotFS(hist(), sha)
 			return snap, ok
 		}, fsys)
+		// Saving an applied change as a commit where there is a worktree,
+		// or as a patch where there is not (#711).
+		wireConfigCommit(sopts.IO, fsys, dir)
 	}
 	// IO-Link device parameters (#705): the port devices' ISDU behind
 	// /api/iolink, when the project has any.

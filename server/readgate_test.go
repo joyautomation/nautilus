@@ -96,7 +96,7 @@ func readPolicy(t *testing.T, srv *Server, anonymous string) {
 // the audit journal needs audit; the file text of the live I/O routes
 // (/api/io/files, /api/config/files) needs the permission to edit it.
 func stricterRead(route string) bool {
-	return route == "/api/audit" || route == "/api/config/files" || route == "/api/io/files"
+	return route == "/api/audit" || route == "/api/config/files" || route == "/api/config/patch" || route == "/api/io/files"
 }
 
 func gated(rec *httptest.ResponseRecorder) bool {
@@ -156,7 +156,7 @@ func TestEveryReadRouteIsGated(t *testing.T) {
 				} else if method == "GET" && rec.Body.String() != `{"error":"`+srv.policy.Can(auth.Service("blind"), auth.Read, auth.All).Reason+`"}`+"\n" {
 					t.Errorf("a refusal carries more than its error: %s", rec.Body)
 				}
-				if p == "/api/config/files" || p == "/api/io/files" {
+				if p == "/api/config/files" || p == "/api/config/patch" || p == "/api/io/files" {
 					// File text needs the edit permission: a viewer may read
 					// the rest of the API and is refused these.
 					if rec := call(t, srv, method, path, "", strip, bearer("v-secret")); rec.Code != http.StatusForbidden {

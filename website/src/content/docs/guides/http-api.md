@@ -234,6 +234,8 @@ check comes before the token check. See [Online edits](/guides/online-edits/).
 | `GET` | [`/api/io/files`](#live-io-configuration) | The project files the running I/O configuration differs in (`naut pull --io`; needs the write permission) |
 | `GET` | [`/api/config/schema`](#configuration-screens) | The manifest's JSON Schema, one section at a time (`?section=drivers`), or the list of sections |
 | `GET` | [`/api/config/files`](#configuration-screens) | The manifest and the files its drivers name, as what runs (needs the edit permission) |
+| `POST` | [`/api/config/commit`](#saving-a-change) | Save an applied candidate as a git commit (only where the controller runs from a git checkout) |
+| `GET` | [`/api/config/patch`](#saving-a-change) | The applied change as a patch for `git apply` (needs the edit permission) |
 | `GET` | [`/api/history`, `/api/history/…`](#historian-proxy) | Forwarded to the historian |
 | `GET` | [`/api/audit`](#audit-journal) | Who changed what: the audit journal's recent entries |
 | `GET` | [`/api/me`](/guides/auth/#browser-sign-in) | Who the request acts as, and what it may do |
@@ -1181,6 +1183,45 @@ files inside the project with no hidden path component (never `.env`, a
 program source, a path outside the project, or anything reached through a
 symbolic link), and the text as written: secrets are environment or file
 references in the manifest, but a comment is served too.
+
+### Saving a change
+
+An applied change lives on the controller until it is in git. Two routes
+get it there; which one you can use depends on where the controller runs
+from.
+
+- **`POST /api/config/commit`** with `{"id": "<applied candidate>", "message": "<subject, optional>"}`
+  writes what runs (where it differs from the project: what `naut pull --io`
+  writes) into the checkout the controller runs from and commits exactly
+  those files. It exists **only where the controller sees a git worktree**
+  (`naut run` on a project directory). A controller built with `naut build`,
+  which is what most deployed boxes are, has no repository: it answers
+  `409` and names the patch route.
+- **`GET /api/config/patch`** returns the same change as a unified patch
+  (`text/x-diff`) against the project the controller was built from.
+  Apply it in your repo: `curl … /api/config/patch | git apply`, review,
+  commit. It works everywhere and needs the edit permission.
+
+The commit is the principal's: **author** `<principal>` with the address
+`<name>@<controller host>` (the controller knows no mailbox), **committer**
+`nautilus`, and the message ends in a `Nautilus-Staged: <id>` trailer naming
+the candidate. It lands on the checked-out branch and is never pushed. It
+needs the config permission and, for a browser sign-in, a fresh password
+(it is elevated, like an apply); the journal records `config.commit` under
+the principal, with the commit, branch and files. The journal being down
+refuses it, like an apply.
+
+A commit saves what runs, so only the candidate whose apply is in force can
+be committed: after a later apply, or an automatic revert, the earlier id is
+refused (`409`). A commit is also refused, with the fix in the answer, when the
+controller is a standby; the files it would write are not ones this
+project's manifest names (never program sources, hidden paths or `.git`);
+the applied manifest names files the project's does not (use
+`naut pull --io --new`); a file was edited since the controller booted (git is asked what it held
+at start, and what the controller last committed counts as booted), or
+has uncommitted changes in the worktree; or HEAD is detached. Nothing else
+in the worktree, staged or not, goes into the commit; if git refuses it (a
+hook), the files are put back as they were.
 
 **Who is recorded.** Every stage, validate, apply and revert cancel is
 journalled (`config.stage`, `config.validate`, `config.apply`,

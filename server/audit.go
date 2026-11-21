@@ -1256,6 +1256,21 @@ func appliedState(body []byte) any {
 	return out
 }
 
+// configCommitTarget is a commit of an applied candidate: the target is the
+// candidate, and the entry's after is the commit it made (and the branch and
+// files), read from the answer.
+func configCommitTarget(_ *http.Request, body []byte) auditTarget {
+	var req commitRequest
+	decodeBody(body, &req)
+	return auditTarget{target: req.ID, answered: func(b []byte) any {
+		var c IOCommitted
+		if json.Unmarshal(b, &c) != nil || c.Commit == "" {
+			return nil
+		}
+		return map[string]any{"commit": c.Commit, "branch": capText(c.Branch, byMax), "files": capText(strings.Join(c.Files, ","), reasonMax)}
+	}}
+}
+
 // stagedState reads a staged candidate's id and state from an answer.
 func stagedState(body []byte) any {
 	var st struct {
