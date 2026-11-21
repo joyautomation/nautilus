@@ -441,14 +441,16 @@ The rules for applying a spec:
     `fullAccessUser` naming `keep`, and `keep` compiles; the user and role
     survive a CPU deleted in TIA, and an apply that makes the CPU anew
     finds them and grants Full access on it (0 errors); an upload's
-    removal runs on TIA. TIA serves the runtime rights from the station,
+    removal runs on TIA, the role taken off its users first; with the
+    record: the same secret is left, a rotated one is set and is then
+    unchanged, one the user had is refused before any write (the same
+    session then applies and saves), and a reopened project's record
+    still matches. TIA serves the runtime rights from the station,
     and Full access is the right `ProtectionLevelFullAccess`. Unproven:
     whether TIA refuses to make a user again, under a removed user's name,
     with a password that user had (an upload, then an apply; it needs a
-    live upload); whether TIA deletes a role a user still holds (tiad
-    takes it off the users first); the v2 record format and the
-    record-first ordering ran only in the fakes and unit tests (the v1
-    record ran on the TIA machine).
+    live upload); whether TIA deletes a role a user still holds without
+    that (tiad never asks it to).
 - **Which CPU an apply uses** (#789). The agent reads the project's CPU
   before it writes anything, and decides:
   - The project holds no CPU: the apply removes every device and makes
