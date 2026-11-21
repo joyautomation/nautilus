@@ -152,10 +152,13 @@ func TestPostgresAnchorRoleCheck(t *testing.T) {
 }
 
 // A copy made before 9b (no copied_at) gains the column when the sink owns
-// the table; pg-schema's SQL adds it too.
+// the table; pg-schema's SQL adds it too, and narrows 9a's whole-row
+// grant to the columns that are not evidence.
 func TestPostgresAnchorUpgradesA9aCopy(t *testing.T) {
 	dsn := testDSN(t)
 	db := fresh(t, dsn)
+	asRole(t, dsn, "x")
+	roles(t, db, "naut_9b_up")
 	old := strings.Replace(entriesDDL, "  copied_at timestamptz NOT NULL DEFAULT now(),\n", "", 1)
 	if old == entriesDDL {
 		t.Fatal("the 9a shape was not made")
@@ -171,6 +174,19 @@ func TestPostgresAnchorUpgradesA9aCopy(t *testing.T) {
 	db.QueryRow(`SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'audit_entries' AND column_name = 'copied_at')`).Scan(&has)
 	if !has {
 		t.Error("copied_at not added")
+	}
+	// 9a told the administrator to grant INSERT and SELECT on the tables.
+	if _, err := db.Exec(`GRANT INSERT, SELECT ON audit_entries, audit_gaps, audit_anchors TO naut_9b_up`); err != nil {
+		t.Fatal(err)
+	}
+	if c := protection(t, s, "naut_9b_up"); c.Protected {
+		t.Fatal("9a's grant reads as protected")
+	}
+	if _, err := db.Exec(Schema("naut_9b_up")); err != nil {
+		t.Fatalf("pg-schema's SQL over a 9a copy: %v", err)
+	}
+	if c := protection(t, s, "naut_9b_up"); !c.Protected {
+		t.Errorf("after pg-schema: %+v, want the grant narrowed", c)
 	}
 }
 
