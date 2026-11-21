@@ -45,6 +45,7 @@ on the right, and a **Check** button that tests your answer.
 
 1. [A screen in five minutes](/learn/operator-screens/screen-in-five-minutes/)
 2. [A button and a setpoint that write](/learn/operator-screens/a-button-that-writes/)
+3. [Alarms: raise, acknowledge, shelve](/learn/operator-screens/alarms/)
 
 ## Deploy and operate
 
