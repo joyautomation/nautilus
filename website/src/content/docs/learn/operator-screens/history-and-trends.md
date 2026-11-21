@@ -12,7 +12,11 @@ sees into a database. In this lesson you start one, look at what it keeps, and
 ask it questions. About fifteen minutes. You need `naut`
 ([install](/learn/getting-started/install/)), and **Docker**, for a throwaway
 Postgres database (the one thing the historian needs that `naut` does not
-include).
+include). The commands also use `curl`, and `jq` and GNU `date` (on macOS, use
+`gdate` from coreutils) to tidy and time-stamp the answers. You work in three
+terminal windows: one for the controller, one for the historian, one to ask
+questions. Give it about two minutes of running before step 5, so there is
+history to ask for.
 
 ## 1. A database to keep it in
 
@@ -103,7 +107,8 @@ server:
   historian: http://127.0.0.1:9100
 ```
 
-Run `naut run` again. Now ask for the last five minutes of the temperature,
+Run `naut run` again (if it moved to another port before, it moves again; keep
+using that one). Now ask for the last five minutes of the temperature,
 split into at most six points (`date` fills in "now" in milliseconds):
 
 ```sh
@@ -115,15 +120,17 @@ curl -s "localhost:8080/api/history?from=$((NOW-300000))&to=$NOW&tags=TempC&maxP
 {"TempC":[[1795241050000,59.94],[1795241100000,59.97],[1795241150000,60.39]]}
 ```
 
-(`jq` only tidies the output.) Each pair is a time and the *average* over that
-slice, which is how a week of one-second samples fits a chart in about six
+(`jq` only tidies the output; the real values have many more decimals than
+shown here, and you will see as many points as your minutes of history allow.)
+Each pair is a time and the *average* over that slice, which is how a week of one-second samples fits a chart in about six
 hundred points. Ask for a shorter window or a larger `maxPoints` and the slices
 get finer.
 
 Notice what happened to the history while you restarted the controller: nothing
 was lost, and nothing was invented either. The historian kept running, and for
 the few seconds the controller was down there are no samples, so a chart shows
-a gap rather than a straight line drawn across it. You can see the gaps:
+a gap rather than a straight line drawn across it. You can see the gaps (one for each time you restarted it, so your list may show
+one, not two):
 
 ```sh
 docker exec lesson-pg psql -U postgres -c \
@@ -141,7 +148,8 @@ docker exec lesson-pg psql -U postgres -c \
 
 A report wants single numbers. The historian computes them, so you never fetch
 a day of rows to reduce them yourself. The highest level and temperature in the
-window:
+window (the `ts` of each answer is the start of the window you asked about, not
+the moment of the peak):
 
 ```sh
 curl -s "localhost:8080/api/history/agg?tags=LevelPct,TempC&from=$((NOW-300000))&to=$NOW&fn=max" | jq -c .
@@ -162,10 +170,10 @@ curl -s "localhost:8080/api/history/agg?tags=PumpRun&from=$((NOW-300000))&to=$NO
 [{"tag":"PumpRun","ts":1795240883665,"value":43.8}]
 ```
 
-And the tank's level and temperature as they were a minute ago:
+And the tank's level and temperature as they were half a minute ago:
 
 ```sh
-curl -s "localhost:8080/api/history/at?tags=LevelPct,TempC&at=$((NOW-60000))" | jq -c .
+curl -s "localhost:8080/api/history/at?tags=LevelPct,TempC&at=$((NOW-30000))" | jq -c .
 ```
 
 ```text
@@ -175,8 +183,8 @@ curl -s "localhost:8080/api/history/at?tags=LevelPct,TempC&at=$((NOW-60000))" | 
 Other functions: `min`, `avg`, `sum`, `count`, `first`, `last` and `delta`
 (the change over the window, for a totalizer that only counts up). Add
 `&bucket=1h` to get one number per hour instead of one for the whole window.
-Asking `at` a time before the first sample returns an empty list: the historian
-does not guess.
+Asking `at` a time before the first sample (say, with the historian only twenty
+seconds old) returns an empty list: the historian does not guess.
 
 ## 7. Clean up
 
