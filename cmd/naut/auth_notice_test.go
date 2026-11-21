@@ -31,6 +31,10 @@ func TestAuthNotice(t *testing.T) {
 		!strings.Contains(msg, "OPC UA reads are not gated") || strings.Contains(msg, "OPC UA server and") {
 		t.Errorf("auth: block: %q", msg)
 	}
+	// The notice points at the issue that is still open (#708 is closed).
+	if !strings.Contains(msg, "(#1131)") || strings.Contains(msg, "#708") {
+		t.Errorf("notice should name #1131, not #708: %q", msg)
+	}
 	// sparkplug.writable open and no auth.sparkplug: every command write
 	// is now refused, and the notice says how to allow them.
 	const sp = "sparkplug:\n  group-id: g\n  writable: [\"*\"]\n"

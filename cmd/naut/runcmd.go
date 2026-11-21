@@ -1236,7 +1236,7 @@ func opcuaIdentity(proj *project.Project, srv *server.Server) opcuaserver.Identi
 const authFacadeNotice = "auth: this serve has no browser sign-in: every request needs a token (Authorization: Bearer …),\n" +
 	"      reads included, unless the auth: block sets anonymous: viewer.\n"
 
-const authSurfacesNotice = "auth: OPC UA reads are not gated by the auth: block yet (#708): a client that reaches the OPC UA server reads without a role.\n"
+const authSurfacesNotice = "auth: OPC UA reads are not gated by the auth: block yet (#1131): a client that reaches the OPC UA server reads without a role.\n"
 
 // authSparkplugNotice is the line for a project whose sparkplug.writable
 // opens tags while its auth: block grants Sparkplug commands nothing.
