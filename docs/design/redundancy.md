@@ -908,9 +908,10 @@ redundancy:
         or keep it off. Stated too: a witness restored from an older file at the same
         incarnation, which keeps a record of the name but not its newest fence, does not learn
         it (the #1164 re-check's S7): it takes only an earlier `--from-spare`'s fence, and the
-        old box of a later one can lead beside it in a split. Restore a witness only from a
-        file written after the last `--from-spare`, or rebuild it (a new incarnation learns the
-        fences from the controllers). Numbers: every
+        old box of a later one can lead beside it in a split. Restoring a voter's state from an old
+        file is unsupported (the guide: a backup never contains `quorum.state`); a witness
+        whose state is lost is rebuilt (a new incarnation learns the fences from the
+        controllers). Numbers: every
         `TestMeasureFromSpare` cell 0 two leaders (the eight power-into-split cells were
         200/200), also with both voters restarted before the old box returns, the peer wiped
         after the command, the witness rebuilt then the peer wiped, the incumbent dead

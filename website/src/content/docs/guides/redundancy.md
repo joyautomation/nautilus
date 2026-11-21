@@ -433,7 +433,13 @@ journal entry (`redundancy.recommission`).
 
 The voter state, `quorum.state`, lives in the systemd state directory
 (`/var/lib/nautilus` under `naut deploy`) or in `redundancy: state-dir:`.
-Every `naut deploy` step keeps it, and a backup never contains it. It
+Every `naut deploy` step keeps it, and a backup never contains it:
+restoring a voter's state from an old file, the witness's included, is
+not supported. A witness restored from a file older than the last
+`recommission --from-spare` doesn't know that command's fence, and the
+replaced box could lead beside it in a split. If the witness's state is
+lost, rebuild it (a new incarnation, which learns the fences from the
+controllers). It
 records which controller wrote it, and on which box (its machine-id and
 the network cards the pair's links use): a controller refuses to start
 over the other one's file, and a file from another box is treated as
