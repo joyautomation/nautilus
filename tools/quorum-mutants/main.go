@@ -293,7 +293,7 @@ var table = []mutation{
 	{"fence_hold_ignores_witness", []string{"TestAFencedControllerSaysSoAndCampaignsNoMore", "TestFromSpareNeverMakesTwoLeaders"}},
 	{"propose_any_echo", []string{"TestAProposalIsTakenOnlyByTheBootItAddresses"}},
 	{"propose_resent_at_look", []string{"TestAProposalIsTakenOnlyByTheBootItAddresses", "TestQuietPeriodHoldsOffTheNewWitness"}},
-	{"recommission_under_fence", []string{"TestARecommissionAfterAFromSpareIsNotFenced"}},
+	{"recommission_under_fence", []string{"TestARecommissionProposesAboveTheFence"}},
 	// #1164 review: the fence survives a member's file loss, and covers an
 	// old disk that died re-adopting.
 	{"fence_plus_one", []string{"TestTheFenceIsAboveAnyProposalAnOldDiskHolds", "TestFromSpareNeverMakesTwoLeaders"}},

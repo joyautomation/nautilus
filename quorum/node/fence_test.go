@@ -114,9 +114,10 @@ func TestTheOldBoxIsFencedAfterFromSpare(t *testing.T) {
 
 // After a --from-spare, both controllers lose their files and an
 // operator re-commissions: the witness keeps a's fence, so the
-// re-commission adopts at or above it (MemberState.Fence), and a leads
-// with the witness once b is gone. recommission_under_fence adopts at 1,
-// below it: a can't lead.
+// pair adopts at or above it, and a leads with the witness once b is
+// gone. Two things raise the generation: the re-commission's own
+// (MemberState.Fence, pinned by the next test) and a's, learnt from the
+// witness's refusals of its frames (Reply.Fence).
 func TestARecommissionAfterAFromSpareIsNotFenced(t *testing.T) {
 	c, _, _ := fromSpareReplaced(t)
 	for _, id := range []quorum.NodeID{"a", "b"} {
@@ -190,5 +191,34 @@ func TestAFenceNamesOnlyAPairController(t *testing.T) {
 	}
 	if !c.elector("b").IsLeader() && !a.IsLeader() {
 		t.Fatal("no leader after the refused fences")
+	}
+}
+
+// The re-commission itself proposes at or above the witness's fence on a
+// (MemberState.Fence), whichever controller the operator runs it on. With
+// a down, nothing else can raise b's proposal: a's refusal of a low
+// proposal would (it learns its fence from the witness's refusals), so
+// the end-to-end test above can't tell the two apart.
+// recommission_under_fence proposes at 1, below it.
+func TestARecommissionProposesAboveTheFence(t *testing.T) {
+	c, _, _ := fromSpareReplaced(t)
+	for _, id := range []quorum.NodeID{"a", "b"} {
+		c.kill(id)
+		c.wipe(id)
+	}
+	b := c.start("b")
+	c.waitFor("b to hear the witness", leases(20), func() bool { return b.Status().WitnessIncarnation != 0 })
+	probe, _ := b.RecommissionChecked(opCtx(t), "op", RecommissionRequest{})
+	fence := probe.Members[2].Fence
+	if fence == 0 {
+		t.Fatalf("the witness reports no fence: %+v", probe.Members[2])
+	}
+	if _, err := b.RecommissionChecked(opCtx(t), "op", RecommissionRequest{Floor: probe.Suggested}); err != nil {
+		t.Fatalf("re-commission: %v", err)
+	}
+	// Recommission writes Gen one below the fence; the proposal at its
+	// next look is Gen+1.
+	if st := b.v.State(); max(st.Gen+1, st.PendingGen) < fence {
+		t.Fatalf("re-commission proposes generation %d, below the witness's fence %d on a", max(st.Gen+1, st.PendingGen), fence)
 	}
 }
