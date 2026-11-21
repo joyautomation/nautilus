@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/runtime"
 )
 
@@ -165,4 +166,38 @@ func TestSwappedDriverBaseline(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Start-up with the processor away and the gate closing before it is back:
+// the first push waits undecided, nothing is sent while the gate is closed,
+// and the takeover commands everything (the gate test's case at start-up).
+func TestStartupAwayThenGateClosesSendsNothing(t *testing.T) {
+	dev := newBenchDevice()
+	g := &gateWatch{}
+	g.open.Store(true)
+	var down atomic.Bool
+	down.Store(true)
+	drv := gatedDriver(t, dev, g.gate, &down)
+	rt := gateRuntime(t, drv, leaderFunc(g.open.Load))
+	rt.Scan() // armed baseline, processor away: waits undecided
+	drv.mu.Lock()
+	undecided, pending := len(drv.undecided), len(drv.pending)
+	drv.mu.Unlock()
+	if undecided != 2 || pending != 0 {
+		t.Fatalf("undecided=%d pending=%d, want 2 and 0", undecided, pending)
+	}
+	g.open.Store(false)
+	down.Store(false)
+	eventually(t, "Good after connect", func() bool { return drv.Quality()["EPIC_M0_DI00"] == nio.Good })
+	scansPast(t, drv, 3)
+	for i := 0; i < 5; i++ {
+		rt.Scan()
+	}
+	scansPast(t, drv, 2)
+	if do00(dev) || dev.U32(addrScratchInts) != 0 {
+		t.Fatalf("a standby sent a start-up command")
+	}
+	g.open.Store(true)
+	rt.Scan()
+	eventually(t, "the commands after the takeover", func() bool { return commanded(dev) })
 }

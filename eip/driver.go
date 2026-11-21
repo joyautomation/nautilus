@@ -1529,8 +1529,8 @@ func (d *Driver) writeStructLeaves(ctx context.Context, sess *session, devPath s
 		fv := v.Fld[i]
 		leaf := devPath + "." + f.deviceName()
 		if code, isElem := elementaryCode(f.Type); isElem && f.ArrayLen == 0 {
-			if scalarEqual(fv, held.Fld[i]) {
-				continue
+			if scalarEqual(fv, held.Fld[i]) || scalarBytesEqual(code, plainScalar(fv), plainScalar(held.Fld[i])) {
+				continue // held as the same bytes: a REAL that rounds the same
 			}
 			data, err := logix.EncodeScalar(code, plainScalar(fv))
 			if err != nil {

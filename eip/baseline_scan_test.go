@@ -24,7 +24,7 @@ const incSpeedProg = "PROGRAM Main\nVAR_EXTERNAL Speed : REAL; SpeedCmd : REAL; 
 // controller is reachable from the start; else it is down until up is set.
 // noPoll makes the outputs unreadable (class none).
 func tags(prog string) []runtime.TagDef {
-	if prog == incStructProg {
+	if strings.Contains(prog, "TRSCmd") {
 		return []runtime.TagDef{runtime.Input("Speed", runtime.Init(0.0)),
 			{Name: "TRSCmd", Role: runtime.RoleOutput, Type: "Plt_Type"}}
 	}
@@ -171,6 +171,56 @@ func TestStartupStructWritesOnlyTheDifferingMember(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A struct member the controller holds as the same 32 bits is not written,
+// though the program's float64 differs from what decodes back.
+func TestStartupStructSkipsARealHeldAsTheSameBits(t *testing.T) {
+	prog := strings.Replace(incStructProg, "9.75", "0.1", 1)
+	_, scan, srv, _ := baselineRig(t, prog, false, false, func(s *logixserver.TagStore) {
+		s.UpdateValue("Speed", 4.0)
+		s.UpdateValue("TRSCmd.Header.Displacement", float64(float32(0.1)))
+		s.UpdateValue("TRSCmd.Header.Valid", true)
+		s.UpdateValue("TRSCmd.Count", 9.0)
+	})
+	scan(80)
+	if got := cmdWrites(srv, "TRSCmd"); !slices.Equal(got, []string{"TRSCmd.Count"}) {
+		t.Fatalf("writes = %v, want only TRSCmd.Count", got)
+	}
+}
+
+// Start-up with the controller away and the gate closing before it is back:
+// the first push waits undecided, nothing is sent while the gate is closed,
+// and the takeover commands everything (#607 at start-up).
+func TestStartupAwayThenGateClosesSendsNothing(t *testing.T) {
+	host, emPort, store := startEmulator(t)
+	port, up := switchProxy(t, fmt.Sprintf("%s:%d", host, emPort))
+	g := &gateWatch{}
+	g.open.Store(true)
+	d := startGated(t, port, g)
+	waitFor(t, "a failed connect", func() bool { return d.Health().LastError != "" })
+	rt := gateRuntime(t, d, leaderFunc(g.open.Load))
+	rt.Scan() // armed baseline, controller away: waits undecided
+	d.wmu.Lock()
+	undecided, pending := len(d.undecided), len(d.pending)
+	d.wmu.Unlock()
+	if undecided != 2 || pending != 0 {
+		t.Fatalf("undecided=%d pending=%d, want 2 and 0", undecided, pending)
+	}
+	g.open.Store(false)
+	up.Store(true)
+	waitFor(t, "primed", func() bool { return d.Health().Primed })
+	pollsPast(t, d, 2)
+	for i := 0; i < 5; i++ {
+		rt.Scan()
+	}
+	pollsPast(t, d, 2)
+	if v := storeVal(store, "SpeedCmd"); v != 0.0 {
+		t.Errorf("SpeedCmd = %v: a standby sent a start-up command", v)
+	}
+	g.open.Store(true)
+	rt.Scan()
+	waitFor(t, "the commands after the takeover", func() bool { return commanded(store) })
 }
 
 // A driver that began as a standby has no baseline: when its gate opens,
