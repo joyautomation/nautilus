@@ -14,6 +14,10 @@
 
 ### Added
 
+- **Commit and patch in `<ConfigReview/>`** (#711): once a change is applied, a Commit button
+  (optional message) saves it as a git commit via `POST /api/config/commit`, and Download patch
+  fetches `GET /api/config/patch` for controllers that run from a build rather than a checkout; a
+  refusal shows the server's text, which names the other way. `ReviewClient.commit()` / `.patch()`.
 - **Option lists in `<SchemaForm/>`** (#711): a string field the controller sent `x-options` /
   `x-options-builtin` for (a device's `profile`) is a text input with a suggestion
   list (`Field.options`); built-in profiles that need `naut devices add` say so. Not an enum: any

@@ -3,7 +3,7 @@
 	// then Stage -> Validate -> Apply on #706's routes. Nothing is applied
 	// without a valid validation; every refusal says what to do.
 	import { diffFiles } from '../config/diff.js';
-	import { ReviewClient, type ReviewResult, type Staged } from '../config/review.js';
+	import { ReviewClient, type Committed, type ReviewResult, type Staged } from '../config/review.js';
 	import type { Overlay } from '../config/form.js';
 	import Button from './Button.svelte';
 
@@ -25,6 +25,9 @@
 	let busy = $state(false);
 	let error = $state<string | null>(null);
 	let revert = $state('');
+	let message = $state('');
+	let committed = $state<{ id: string; c: Committed } | null>(null);
+	let canPatch = $state(false);
 
 	const key = $derived(JSON.stringify(overlay.files));
 	const diffs = $derived(diffFiles(before, overlay.files));
@@ -55,9 +58,35 @@
 			return;
 		}
 		error = null;
+		canPatch = false;
 		staged = r.value;
 		stagedFor = forKey;
 		if (r.value.state === 'applied') onapplied?.(r.value);
+	}
+	// Saving what runs: a git commit where the controller has a checkout,
+	// else the patch (the server's 409 says which, and names the other way).
+	async function commit() {
+		if (!staged) return;
+		busy = true;
+		try {
+			const r = await client.commit(staged.id, message.trim() || undefined);
+			if (r.ok) { committed = { id: staged.id, c: r.value }; message = ''; error = null; canPatch = false; } else { error = r.message; canPatch = !!r.patch; }
+		} finally { busy = false; }
+	}
+	async function patch() {
+		busy = true;
+		try {
+			const r = await client.patch();
+			if (!r.ok) { error = r.message; return; }
+			error = null;
+			const a = document.createElement('a');
+			const url = URL.createObjectURL(new Blob([r.patch], { type: 'text/x-diff' }));
+			a.href = url; a.download = 'nautilus-config.patch';
+			document.body.appendChild(a);
+			a.click();
+			a.remove();
+			setTimeout(() => URL.revokeObjectURL(url), 10_000);
+		} finally { busy = false; }
 	}
 	const stage = () => step(() => client.stage(overlay.files));
 	const validate = () => staged && step(() => client.validate(staged!.id), stagedFor);
@@ -102,6 +131,17 @@
 					{#if staged.result.pending?.length}Waiting on {staged.result.pending.join(', ')}.{/if}
 					{#if staged.result.answered?.length}Answered: {staged.result.answered.join(', ')}.{/if}
 				</p>
+				{#if staged.result.watch?.state === 'reverted'}
+					<p class="note">This apply was reverted, so there is nothing to commit.</p>
+				{:else if committed?.id === staged.id}
+					<p class="note" data-committed>Committed {committed.c.commit.slice(0, 12)} on {committed.c.branch}: {committed.c.files.join(', ')}.</p>
+				{:else}
+					<div class="actions">
+						<input bind:value={message} placeholder="Commit message (optional)" size="28" maxlength="200" aria-label="Commit message" />
+						<Button size="sm" disabled={busy} onclick={commit}>Commit</Button>
+						<Button size="sm" disabled={busy} onclick={patch}>{canPatch ? 'Download patch instead' : 'Download patch'}</Button>
+					</div>
+				{/if}
 			{/if}
 		{/if}
 	{/if}
