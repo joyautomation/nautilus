@@ -1,6 +1,7 @@
 package quorum
 
 import (
+	"slices"
 	"testing"
 )
 
@@ -346,6 +347,11 @@ func TestOnlyAVoterThatLostItsStateLearnsFences(t *testing.T) {
 	rebuilt, _ := NewWitness("W", lease, VoterState{Incarnation: 7}, 0, nil)
 	if !rebuilt.LearnFences(fs, "A", "B") || rebuilt.FenceOf("A") != 5 || rebuilt.FenceOf("B") != 7 {
 		t.Fatalf("a witness with no record: A %d B %d", rebuilt.FenceOf("A"), rebuilt.FenceOf("B"))
+	}
+	marked, _ := markA(t) // a rebuilt witness heard the old box beside the replacement
+	marked.isWitness = true
+	if !slices.Contains(marked.Marked(), "A") || !marked.LearnFences(Fences{{Name: "A", Fence: 5}}, "A", "B") {
+		t.Fatalf("a rebuilt witness that marked A itself: marked %v, fence %d", marked.Marked(), marked.FenceOf("A"))
 	}
 	reached, _ := NewWitness("W", lease, VoterState{Incarnation: 7}, 0, nil)
 	reached.ClearDuplicateKeeping("A", 0, nil, 3) // the command's clear reached it

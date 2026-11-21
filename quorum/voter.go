@@ -1046,6 +1046,7 @@ func (v *Voter) handle(now Instant, r Request) (*Persist, []Reply) {
 			v.noteNonce(r.From, r.Nonce, now.Add(v.lease))
 			v.noteBoot(now, r.From, r.Nonce, r.Seq)
 			v.noteHeard(now, r.From, r.Nonce, r.Seq)
+			refuse[0].HeldBy = v.HeldBy(now, r.From, r.Nonce) // as of this frame, as below (#1133 review)
 		}
 		return nil, refuse
 	}

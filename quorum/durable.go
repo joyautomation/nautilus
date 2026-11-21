@@ -321,7 +321,7 @@ func (v *Voter) Fences() Fences {
 // wiped or moved-aside file), before it can adopt: the driver calls this
 // first, so the reply that makes the witness heard installs the fence
 // before the peer's State is taken. The witness learns a name's fence
-// only while it keeps no record of that name at all: a rebuilt witness
+// only while it keeps no record of an operator's command on that name: a rebuilt witness
 // (or one restored from a backup) never saw the command, and a crash
 // before the learned fence is written leaves it learning still; a witness
 // the command reached keeps the name's clear record (an incomplete fence
@@ -354,10 +354,12 @@ func (v *Voter) LearnFences(fs Fences, names ...NodeID) bool {
 	return learnt
 }
 
-// hasRecord reports whether this voter keeps any duplicate record of
-// name: a mark, a clear generation, retired boots or a fence.
+// hasRecord reports whether this voter keeps a record of an operator's
+// command on name: a clear generation, retired boots or a fence. A mark
+// is not one: a rebuilt witness that marked the name itself (the old box
+// heard beside the replacement) must still learn the fence (#1164 review).
 func (v *Voter) hasRecord(name NodeID) bool {
-	return v.marked[name] || v.gens[name] != 0 || len(v.retired[name]) > 0 || v.fences[name] != 0
+	return v.gens[name] != 0 || len(v.retired[name]) > 0 || v.fences[name] != 0
 }
 
 // Fenced reports whether gen, the committed adoption generation a frame of

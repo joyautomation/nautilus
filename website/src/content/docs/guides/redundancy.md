@@ -720,9 +720,10 @@ shapes):
   later loses its own state file. Wipe its state (move its `quorum.state`
   aside) **only with the network whole**: wiped, it starts as a copy of
   the member, is heard beside it and made a spare. Started inside a
-  network split that later moves, where no member ever hears it beside
-  the member, it is a copy the members can't catch (see "What the voters
-  can't catch" below). Or keep it off.
+  network split that later moves, where a member hears it beside the
+  member for less than about a lease and a quarter, it is a copy the
+  members can't catch in time (see "What the voters can't catch"
+  below). Or keep it off.
 
 Do not run an older naut release on a spare. A release before the spare
 can't read the spare's `quorum.state`: it sets the file aside and starts
@@ -747,7 +748,15 @@ near the largest delay a 2 s lease allows.
   stops it, so it is caught only when the clone's machine-id or MAC
   differs.
 - **A split within about a second of the clone's start**, before any
-  voter has heard both copies running, leaves nothing marked either. In
+  voter has heard both copies running, leaves nothing marked either.
+  For a controller's old box switched on again after `recommission
+  --from-spare` with its disk wiped, the window is a lease and a quarter
+  (2.5 s at the default lease): the mark comes in time, but it is made a
+  spare only about a lease later, and a split that moves it to the other
+  controller's side before then gives two leaders. In the simulator that
+  happened in every run from an eighth to three quarters of a lease, 41
+  of 100 at one lease, and none from a lease and a quarter. Keep the old
+  box off, or wipe it only with the network whole. In
   the simulator (2 s lease) that gave two leaders in 52, 21 and 1 of
   3,600 runs with the split in the first, second and third half second
   after the clone started, and none later.

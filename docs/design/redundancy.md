@@ -903,8 +903,13 @@ redundancy:
         reached the witness alone, then the peer alone, re-adopted at the fence beside the
         peer and led while the replacement led with the witness, 300/300 before, 0 now), so
         a voter that hears it beside the replacement marks the name (3c-1). What remains is
-        the clone residual of §2 (a copy no voter ever hears beside the original, behind a
-        split that moves): the alarm and the guide say wipe it only with the network whole,
+        the clone residual of §2, at a lease's scale for this shape: the mark holds the copy
+        only once it is made a spare, about a lease later, so a wiped old box heard beside the
+        replacement at the witness alone for under about a lease and a quarter, that then
+        moves to the peer's side of a split, still leads there (the #1164 final look: two
+        leaders in 100/100 runs from 1/8 to 3/4 lease, 41/100 at one lease, 0 from 1.25
+        leases, 2 s lease; identical with fenced requests not refused at all, so not added by
+        the fence): the alarm and the guide say wipe it only with the network whole,
         or keep it off. Stated too: a witness restored from an older file at the same
         incarnation, which keeps a record of the name but not its newest fence, does not learn
         it (the #1164 re-check's S7): it takes only an earlier `--from-spare`'s fence, and the
