@@ -349,8 +349,8 @@ claims:
       the drivers only after the elector's first decision, which Run makes
       at once rather than a tick in (a first Lease GET that fails is
       retried, not taken as standby), bounded by 5 s; a stop during that
-      wait starts nothing (EtherNet/IP and OptoMMP have no baseline, so a
-      plain start commands every output too). The hw drivers (SNMP,
+      wait starts nothing (EtherNet/IP and OptoMMP decide their outputs
+      against the device at start, as Modbus does). The hw drivers (SNMP,
       Redfish, Prometheus) do not do this: the first value after their gate
       opens is a baseline.
     source: "#redundancy"

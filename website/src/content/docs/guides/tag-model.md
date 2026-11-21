@@ -167,8 +167,10 @@ That zero is where the tag starts, not a command. The driver is not handed
 the output until something first writes it: the program (its zero
 included), an operator, or a force. A controller that starts, or a standby
 that takes over, does not drive zero onto a device output the logic has not
-written yet. An output with an `init:` is different: its `init:` goes to the
-driver with the first scan, as it always has.
+written yet. An output with an `init:` is different: its `init:` is handed to
+the driver with the first scan, as it always has; the Modbus, OPC UA,
+EtherNet/IP and OptoMMP drivers then decide it against what the device holds
+instead of writing it blindly.
 
 ### Inputs from a device that is down
 

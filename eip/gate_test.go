@@ -180,7 +180,8 @@ func TestQueuedWritesGoNowhereAfterTheGateClosed(t *testing.T) {
 	waitFor(t, "a failed connect", func() bool { return d.Health().LastError != "" })
 
 	rt := gateRuntime(t, d, leaderFunc(g.open.Load))
-	rt.Scan() // leader, controller down: the commands are queued
+	d.DisarmBaseline() // a leader that took over, not a start-up: its push is commands (#1123)
+	rt.Scan()          // leader, controller down: the commands are queued
 	d.wmu.Lock()
 	queued := len(d.pending)
 	d.wmu.Unlock()

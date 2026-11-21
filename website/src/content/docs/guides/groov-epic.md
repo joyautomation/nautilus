@@ -130,7 +130,9 @@ A scan is the fewest OptoMMP requests the bindings allow, because each
 costs about the same (≈ 0.75 ms inside the processor's I/O server)
 whatever its size. For the bench chassis that is three: the analog
 values, the digital state with its quality mask and latches, and the
-scratchpad. Outputs go out when they change: every digital output in one
+scratchpad. Outputs go out when they change: the first value of each is
+decided against what the unit holds, never sent just because it is first, and
+every digital output in one
 must-on/must-off write that touches only the commanded channels, so
 another client's outputs on the same module are left alone. Outputs are
 read back too. An output tag's value is what the program commands, but
@@ -140,6 +142,18 @@ client, a watchdog trip, a fault) makes its tag **bad** until it does.
 The driver checks the chassis against the manifest on connect and every
 5 s after (groov modules hot-swap), and reconnects with backoff when the
 processor goes away; commands written meanwhile go out when it is back.
+
+**An unchanged output since start is not a command.** The first scan runs on
+the inputs' initial values, before anything was read, and its outputs are
+never sent. The first push computed from a scan that has read the unit decides
+each output against what the unit holds: equal (a REAL as its 32 bits, an
+integer as its int32), nothing is written; different, the program's value is
+written once. An output whose read is bad (an absent channel) is written once.
+Every output is a read-back point in every mode (poll, custom area, stream),
+so all of them are decided this way. Earlier versions wrote the first value
+handed over (#1123). A program that computes `Out := In + 1` never drives `1`
+before the real `In` arrives. An output computed from another source's input is
+not waited for: interlock on that source's `__Online` in the program.
 
 ## Quality per channel
 
@@ -481,8 +495,9 @@ Until that push the reconnect and watchdog rewrites have nothing to write,
 so a command from the previous term is never sent.
 
 **A replica that started as a standby commands every output on its first
-takeover.** Like a plain start, the first value handed over for each
-output is written (see [What a scan does](#what-a-scan-does)).
+takeover.** A standby has no start-up baseline, so the first value handed over
+for each output is written, equal to the unit's or not (see
+[What a scan does](#what-a-scan-does)).
 
 **A flip between two looks is not seen.** A gate func cannot say it
 changed, so the driver looks at it: on every push and flush, before every

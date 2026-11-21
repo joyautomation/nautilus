@@ -341,11 +341,25 @@ claims:
   - id: EPIC-027
     claim: >-
       A replica that started as a standby commands every output on its
-      first takeover: the first value handed over for each output is
-      written.
+      first takeover: a standby has no start-up baseline, so the first value
+      handed over for each output is written, equal to the unit's or not.
     source: "#redundancy"
     tests:
       - go ./optommp TestStandbyFirstTakeoverCommands
+      - go ./optommp TestStartupBaselineIsNotArmedForAStandby
+  - id: EPIC-040
+    claim: >-
+      An unchanged output since start is not a command: the first scan's
+      values (computed before anything was read) are never sent, and the
+      first push computed from a scan that read the unit decides each output
+      against what the unit holds: equal is recorded, different is written
+      once. A REAL compares as its 32 bits. A driver swapped in is disarmed
+      (commands) or held (records).
+    source: "#what-a-scan-does"
+    tests:
+      - go ./optommp TestStartupNeverDrivesTheInitDerivedValue
+      - go ./optommp TestStartupComparesInTheUnitsEncoding
+      - go ./optommp TestSwappedDriverBaseline
   - id: EPIC-028
     claim: >-
       The driver sees the gate change only by looking at it: on every push
