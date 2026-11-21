@@ -857,8 +857,9 @@ behaviour. So, until then:
 - **`announced`** must be true for a real download. It records that the
   shared-CPU rule was followed (tell naut-lead first). It is a convention,
   not a safety.
-- **`state`** is the CPU's mode afterwards, `RUN` or `STOP`, when tiad can
-  read it.
+- **`state`** is the CPU's mode afterwards, `RUN` or `STOP`, as TIA's
+  download messages say it (`stateSource: "tia-message"`, above); absent
+  when TIA said nothing.
 
 ### 3.6 PROFINET's requirements (#723)
 

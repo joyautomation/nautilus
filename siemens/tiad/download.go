@@ -9,13 +9,13 @@ import (
 	"strings"
 )
 
-// Question IDs: what TIA's pre-download checks can ask (siemens-ide.md
-// §3.5). Anything tiad does not recognise is QuestionOther, which no
-// decision answers.
 // StateFromTIAMessage is DownloadResult.StateSource for a CPU mode read
 // from TIA's download messages.
 const StateFromTIAMessage = "tia-message"
 
+// Question IDs: what TIA's pre-download checks can ask (siemens-ide.md
+// §3.5). Anything tiad does not recognise is QuestionOther, which no
+// decision answers.
 const (
 	QuestionStopCPU      = "stop-cpu"
 	QuestionReinitialize = "reinitialize"
