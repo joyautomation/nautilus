@@ -103,10 +103,31 @@ namespace Tiad.Openness
         // Handle answers one question, as OnlineChecks decides: a
         // certificate is set NonTrusted before anything else is read, and
         // anything else cancels. Every question is recorded, so the
-        // operation fails even if TIA goes on.
+        // operation fails even if TIA goes on. TIA calls it from its own
+        // process, so it is only Boundary.Call: a failure anywhere in it is
+        // recorded as a question answered no (the operation fails), and
+        // TIA gets Boundary.Fail's exception, never a tiad type.
         void Handle(OnlineConfiguration c)
         {
-            string type = c.GetType().Name;
+            int before = Asked.Count + TrustedBlindly.Count;
+            string type = "";
+            Boundary.Call("online: answering TIA", delegate
+            {
+                type = c.GetType().Name;
+                Answer(c, type);
+            }, delegate(Exception e)
+            {
+                if (Asked.Count + TrustedBlindly.Count == before)
+                {
+                    Asked.Add(OnlineChecks.Ask(type == "" ? "an unreadable question" : type, "", "", new List<string>()));
+                }
+                return "tiad cancels going online: TIA asked " + (Asked.Count > 0 ? Asked[Asked.Count - 1] : type);
+            });
+        }
+
+        // Answer answers one question and records it; it throws to cancel.
+        void Answer(OnlineConfiguration c, string type)
+        {
             var tls = c as TlsVerificationConfiguration;
             string answer = answers.Answer(type);
             if ((answer == OnlineChecks.NotTrusted || answer == OnlineChecks.Trusted) && tls != null)
@@ -145,7 +166,6 @@ namespace Tiad.Openness
             }
             string ask = OnlineChecks.Ask(type, "", "", new List<string>());
             Asked.Add(ask);
-            Log.Line("online: TIA asks {0}; tiad cancels", TiaNames.LogSafe(ask));
             throw new TiaException("tiad cancels going online: TIA asked " + ask);
         }
 
@@ -220,10 +240,17 @@ namespace Tiad.Openness
             {
                 throw new TiaException(Message(e), e);
             }
+            // TIA raises it: nothing may be thrown back (Boundary).
             portal.Disposed += delegate
             {
                 disposed = true;
-                Log.Line("TIA Portal says it is disposed");
+                try
+                {
+                    Log.Line("TIA Portal says it is disposed");
+                }
+                catch (Exception)
+                {
+                }
             };
             try
             {
@@ -322,6 +349,12 @@ namespace Tiad.Openness
             }
             catch (EngineeringException e)
             {
+                throw new TiaException(Message(e), e);
+            }
+            catch (OperationCanceledException e)
+            {
+                // A cancel tiad sent TIA (Boundary), or TIA's own, back out
+                // of TIA: TIA's text, never an internal error.
                 throw new TiaException(Message(e), e);
             }
         }
@@ -1039,17 +1072,26 @@ namespace Tiad.Openness
                 },
                 delegate
                 {
+                    // TIA calls both callbacks from its own process: each is
+                    // only Boundary.Call, and the decider keeps every cancel
+                    // and failure (Keep) before TIA gets Boundary.Fail's.
                     DownloadResult r = dp.Download(target, at,
                         delegate(DownloadConfiguration c)
                         {
-                            Step st = decider.Next(c, c.GetType().Name, c.Message ?? "", delegate { return PendingOf(c); });
-                            Write(decider, c, st, secrets);
+                            Boundary.Call("download: before loading", delegate
+                            {
+                                Step st = decider.Next(c, c.GetType().Name, c.Message ?? "", delegate { return PendingOf(c); });
+                                Write(decider, c, st, secrets);
+                            }, decider.Keep);
                         },
                         delegate(DownloadConfiguration c)
                         {
-                            Step st = decider.After(c.GetType().Name);
-                            if (st != null) Write(decider, c, st, secrets);
-                            else Log.Line("download: after loading, TIA reports {0}: {1}", c.GetType().Name, c.Message ?? "");
+                            Boundary.Call("download: after loading", delegate
+                            {
+                                Step st = decider.After(c.GetType().Name);
+                                if (st != null) Write(decider, c, st, secrets);
+                                else Log.Line("download: after loading, TIA reports {0}: {1}", c.GetType().Name, TiaNames.LogSafe(c.Message ?? ""));
+                            }, decider.Keep);
                         },
                         options);
                     // Read inside the call: a failure reading the result of
@@ -1412,10 +1454,21 @@ namespace Tiad.Openness
                 var online = new OnlineAsks(sup.Configuration, Detached, trustUnverifiedCertificate, address);
                 try
                 {
+                    // TIA calls it from its own process: only Boundary.Call,
+                    // and `asked` is set whatever fails, before TIA gets
+                    // Boundary.Fail's exception.
                     r = sup.StationUpload(at, delegate(UploadConfiguration c)
                     {
-                        asked = c.GetType().Name + " (" + (c.Message ?? "") + ")";
-                        throw new TiaException("upload asked " + asked + ", which tiad does not answer");
+                        Boundary.Call("upload: answering TIA", delegate
+                        {
+                            asked = "an upload configuration";
+                            asked = c.GetType().Name + " (" + (c.Message ?? "") + ")";
+                            throw new TiaException("upload asked " + asked + ", which tiad does not answer");
+                        }, delegate(Exception e)
+                        {
+                            if (asked == null) asked = "an upload configuration";
+                            return "upload asked " + asked + ", which tiad does not answer";
+                        });
                     });
                 }
                 catch (Exception e)

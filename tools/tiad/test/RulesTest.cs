@@ -119,6 +119,13 @@ namespace Tiad.Test
                 T("InDoubtOnceEntered", InDoubtOnceEntered),
                 T("DownloadStepsTiaDies", DownloadStepsTiaDies),
                 T("DownloadStepsAfterTheCall", DownloadStepsAfterTheCall),
+                T("ATiadTypeKillsTia", ATiadTypeKillsTia),
+                T("BoundarySendsOnlyACancel", BoundarySendsOnlyACancel),
+                T("DeclineSurvivesTiasCopy", DeclineSurvivesTiasCopy),
+                T("DeclineNeedsItsOwnCancelBack", DeclineNeedsItsOwnCancelBack),
+                T("EveryCancelCrossesAndIsKept", EveryCancelCrossesAndIsKept),
+                T("ListThrowingCancelsNamingIt", ListThrowingCancelsNamingIt),
+                T("DownloadStepsDeclineThroughTia", DownloadStepsDeclineThroughTia),
                 T("OnlineAnswersAfterStop", OnlineAnswersAfterStop),
                 T("QuietlyEvenWhenTheLogFails", QuietlyEvenWhenTheLogFails),
                 T("Selections", SelectionsWritten),
@@ -703,8 +710,11 @@ namespace Tiad.Test
                 thrown = new InvalidOperationException("wrapped", c);
             }
             End(r.D.Finish(true, null, "", thrown), false, false, "after the decision", "a cancel after approval");
-            // A cancel the glue threw itself, found inside TIA's exception.
-            DownloadEnd own = Approved(new object()).D.Finish(true, null, "", new InvalidOperationException("wrapped", new DownloadCancel("no protection password", false)));
+            // A cancel the glue made itself (Write's Fail): its kept reason,
+            // whatever TIA's exception says.
+            var g = Approved(new object());
+            g.D.Fail("no protection password");
+            DownloadEnd own = g.D.Finish(true, null, "", new InvalidOperationException("wrapped", new OperationCanceledException("no protection password")));
             End(own, false, false, "no protection password", "the glue's own cancel");
             Eq(own.Failure, "no protection password", "the glue's own cancel, without TIA's wrapping");
             // A decided configuration TIA never asked about.

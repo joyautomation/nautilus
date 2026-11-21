@@ -318,9 +318,11 @@ namespace Tiad
         public string Type = "", Message = "";
     }
 
-    // DownloadCancel is thrown out of TIA's pre-download callback to stop
-    // the download. Declined is true when decide said no: a clean cancel,
-    // nothing approved. Any other cancel is a failure.
+    // DownloadCancel is how the decider stops a download, inside tiad:
+    // Declined is true when decide said no (a clean cancel, nothing
+    // approved); any other cancel is a failure. It never reaches TIA: the
+    // glue's callbacks run through Boundary.Call with Keep, which throws
+    // TIA only Boundary.Fail's exception, carrying the cancel's message.
     public sealed class DownloadCancel : Exception
     {
         public readonly bool Declined;
@@ -386,8 +388,10 @@ namespace Tiad
         // Approved is true once decide answered every question.
         public bool Approved;
 
-        // Cancelled is the cancel this decider threw, if any: TIA may wrap
-        // it before it comes back out of the download.
+        // Cancelled is the cancel this decider made, if any: the state how
+        // the download ended is read from. What comes back out of TIA's
+        // download is at best a copy of what crossed (Boundary), so it is
+        // never matched by reference.
         public DownloadCancel Cancelled;
 
         public DownloadDecider(Func<List<Question>, List<Answer>> decide)
@@ -455,13 +459,35 @@ namespace Tiad
             return Cancelled;
         }
 
+        // Keep records why a callback failed with e and returns the reason
+        // to send TIA (Boundary.Call): the decider's own cancel as it is,
+        // anything else (a list that threw, a decide that threw, a log
+        // line) as a failure the decider keeps, so the download can never
+        // end declined after it.
+        public string Keep(Exception e)
+        {
+            var c = e as DownloadCancel;
+            if (c != null && object.ReferenceEquals(c, Cancelled)) return Cancelled.Message;
+            return Fail("tiad's download callback failed: " + TiaNames.Message(e)).Message;
+        }
+
         // loadSeen is set by TIA's after-download callback: TIA loaded.
         bool loadSeen;
 
         void Decide(object key, string type, string message, Func<List<Pending>> list)
         {
-            List<Pending> all = list();
             string what = Name(new Pending { Type = type, Message = message });
+            List<Pending> all;
+            try
+            {
+                all = list();
+            }
+            catch (Exception e)
+            {
+                Listed(what, null);
+                throw Cancel("tiad cannot list TIA's pre-download checks (TIA asked " + what + "; reading them failed: " + TiaNames.Message(e) + "), so it asked nothing and cancelled", false);
+            }
+            Listed(what, all);
             if (all == null || all.Count == 0)
             {
                 throw Cancel("tiad cannot list TIA's pre-download checks (TIA asked " + what + "), so it asked nothing and cancelled", false);
@@ -518,6 +544,27 @@ namespace Tiad
             Approved = true;
         }
 
+        // Listed logs TIA's pending configurations as read, before anything
+        // is decided from them: why a download was cancelled must never
+        // depend on the cancel coming back out of TIA (stage 2 lost it).
+        static void Listed(string what, List<Pending> all)
+        {
+            try
+            {
+                if (all == null)
+                {
+                    Log.Line("download: TIA asked {0}; its list of pending checks could not be read", TiaNames.LogSafe(what));
+                    return;
+                }
+                var names = new List<string>();
+                foreach (var p in all) names.Add(p == null ? "null" : Name(p));
+                Log.Line("download: TIA asked {0}; it lists {1} pending check(s): {2}", TiaNames.LogSafe(what), all.Count, TiaNames.LogSafe(string.Join("; ", names.ToArray())));
+            }
+            catch (Exception)
+            {
+            }
+        }
+
         static List<Question> Copy(List<Question> qs)
         {
             var l = new List<Question>();
@@ -565,11 +612,19 @@ namespace Tiad
             return end;
         }
 
-        static bool Wraps(Exception error, Exception what)
+        // Carries is whether TIA's exception, or one inside it, is the
+        // cancel that crossed: by its message, since TIA hands back a
+        // deserialized copy at best, maybe inside its own exception or with
+        // the message embedded in its own text. Anything else is not that
+        // cancel, and the download is in doubt.
+        static bool Carries(Exception error, string message)
         {
-            for (Exception i = error; i != null; i = i.InnerException)
+            if (string.IsNullOrEmpty(message)) return false;
+            int n = 0;
+            for (Exception i = error; i != null && n < 16; i = i.InnerException, n++)
             {
-                if (object.ReferenceEquals(i, what)) return true;
+                string m = i.Message;
+                if (m != null && m.IndexOf(message, StringComparison.Ordinal) >= 0) return true;
             }
             return false;
         }
@@ -581,20 +636,12 @@ namespace Tiad
             {
                 if (Cancelled != null)
                 {
-                    // A decline only when TIA threw that very cancel and
-                    // nothing shows it loaded anyway.
-                    if (Cancelled.Declined && !loadSeen && Wraps(error, Cancelled)) end.Declined = true;
+                    // A decline only when what TIA threw carries that
+                    // cancel and nothing shows it loaded anyway.
+                    if (Cancelled.Declined && !loadSeen && Carries(error, Cancelled.Message)) end.Declined = true;
                     else if (Cancelled.Declined) end.Failure = "TIA went on after tiad cancelled the download (" + Cancelled.Message + "): " + TiaNames.Message(error);
                     else end.Failure = Cancelled.Message;
                     return end;
-                }
-                for (Exception i = error; i != null; i = i.InnerException)
-                {
-                    if (i is DownloadCancel)
-                    {
-                        end.Failure = i.Message;
-                        return end;
-                    }
                 }
                 end.Failure = TiaNames.Message(error);
                 return end;
@@ -778,6 +825,15 @@ namespace Tiad
             {
                 call = null;
                 error = e;
+                // What TIA threw back, level by level: whether a cancel
+                // came back as tiad's own (a decline) is read from it.
+                try
+                {
+                    Log.Line("download: {0} threw: {1}", entered ? "TIA's download call" : "preparing the download", TiaNames.LogSafe(Boundary.Chain(e)));
+                }
+                catch (Exception)
+                {
+                }
             }
             finally
             {

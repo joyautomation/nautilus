@@ -630,6 +630,22 @@ behaviour. So, until then:
   including TIA itself dying inside the call (#789 stage 2): detaching
   tiad's handlers afterwards never throws, so a TIA that is gone cannot
   turn the answer into `operation_failed` (`DownloadSteps` in core).
+  **What tiad throws back into TIA.** TIA Portal runs in its own process
+  and calls tiad's delegates from there: the download's pre- and
+  after-download callbacks, the upload's callback, the online handler.
+  Whatever a delegate throws goes back to TIA's process, which must
+  deserialize it and has none of tiad's assemblies; in #789 stage 2 a
+  tiad exception thrown from the pre-download callback killed TIA Portal
+  that way. So each of those delegates is only `Boundary.Call` (core): it
+  records the failure on tiad's side first (the decider's cancel, the
+  question asked, the upload's configuration), logs the reason and the
+  pending checks as read, then throws TIA a plain `OperationCanceledException`
+  with that message and nothing else. How the download ended is read from
+  that kept state, never from getting the thrown object back: a decline
+  counts only when the decider declined, TIA never called the
+  after-download callback, and what TIA threw carries the decline's
+  message; anything else is `outcome_unknown`. Provisional until a
+  download on a CPU shows what TIA does with that cancel.
   **When TIA itself dies** (`ITia.Gone`: TIA Portal's `Disposed` event, a
   handler that cannot be detached from its objects (failing closed: that
   counts as gone even if TIA lives on), or its process gone),
