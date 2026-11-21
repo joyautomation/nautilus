@@ -188,6 +188,10 @@ namespace Tiad.Test
                 T("ElementNames", ElementNames),
                 T("ModeFromMessages", ModeFromMessages),
                 T("UserManagementGate", UserManagementGate),
+                T("UserManagementResetRule", UserManagementResetRule),
+                T("UserManagementKeepOrReset", UserManagementKeepOrReset),
+                T("UserManagementChoices", UserManagementChoices),
+                T("AttestationAccess", AttestationAccess),
                 T("FileNames", FileNames),
                 T("BlockKinds", BlockKinds),
                 T("OpennessAssemblies", OpennessAssemblies),
@@ -364,34 +368,34 @@ namespace Tiad.Test
 
         static void SettingsForAnswers()
         {
-            Eq(S(DownloadChecks.For("StopModules", true)), "StopAll", "stop yes");
-            Eq(S(DownloadChecks.For("StopModules", false)), null, "stop no");
-            Eq(S(DownloadChecks.For("StartModules", true)), "StartModule", "start yes");
-            Eq(S(DownloadChecks.For("StartModules", false)), "NoAction", "start no");
-            Eq(S(DownloadChecks.For("OverwriteSystemData", true)), "Overwrite", "overwrite yes");
-            Eq(S(DownloadChecks.For("OverwriteSystemData", false)), null, "overwrite no");
-            Eq(S(DownloadChecks.For("ConsistentBlocksDownload", true)), "ConsistentDownload", "consistent download yes");
-            Eq(S(DownloadChecks.For("ConsistentBlocksDownload", false)), null, "consistent download no");
-            Eq(S(DownloadChecks.For("AlarmTextLibrariesDownload", true)), "ConsistentDownload", "alarm texts yes");
-            Eq(S(DownloadChecks.For("AlarmTextLibrariesDownload", false)), null, "alarm texts no never writes NoAction");
-            Eq(S(DownloadChecks.For("AllBlocksDownload", true)), "DownloadAllBlocks", "all blocks yes");
-            Eq(S(DownloadChecks.For("AllBlocksDownload", false)), null, "all blocks no");
-            Eq(S(DownloadChecks.For("UserManagementDownload", false)), null, "user management no");
-            Eq(S(DownloadChecks.For("LoadIdentificationData", true)), "LoadNothing", "identification data yes loads nothing");
-            Eq(S(DownloadChecks.For("LoadIdentificationData", false)), null, "identification data no");
-            Eq(S(DownloadChecks.For("DataBlockReinitialization", true)), "StopPlcAndReinitialize", "reinit yes");
-            Eq(S(DownloadChecks.For("DataBlockReinitializationOrKeepActualValues", true)), "StopPlcAndReinitialize", "reinit-or-keep yes");
-            Eq(S(DownloadChecks.For("DataBlockReinitialization", false)), null, "reinit no");
-            Eq(S(DownloadChecks.For("ModuleWriteAccessPassword", true)), Setting.Password, "password yes");
-            Eq(S(DownloadChecks.For("ModuleReadAccessPassword", true)), Setting.Password, "read password yes");
-            Eq(S(DownloadChecks.For("ModuleWriteAccessPassword", false)), null, "password no");
-            Eq(S(DownloadChecks.For("PlcMasterSecretPassword", true)), Setting.ConfigurationPassword, "configuration password yes");
-            Eq(S(DownloadChecks.For("PlcMasterSecretPassword", false)), null, "configuration password no");
-            Eq(S(DownloadChecks.For("TlsVerificationConfiguration", true)), "Trusted", "certificate yes");
-            Eq(S(DownloadChecks.For("TlsVerificationConfiguration", false)), null, "certificate no");
-            Eq(S(DownloadChecks.For("ResetModule", true)), null, "an unknown configuration, yes");
-            Eq(S(DownloadChecks.For("ResetModule", false)), null, "an unknown configuration, no");
-            Eq(DownloadChecks.For("StopModules", true).Kind, Setting.Select, "a selection's kind");
+            Eq(S(DownloadChecks.For("StopModules", true, "")), "StopAll", "stop yes");
+            Eq(S(DownloadChecks.For("StopModules", false, "")), null, "stop no");
+            Eq(S(DownloadChecks.For("StartModules", true, "")), "StartModule", "start yes");
+            Eq(S(DownloadChecks.For("StartModules", false, "")), "NoAction", "start no");
+            Eq(S(DownloadChecks.For("OverwriteSystemData", true, "")), "Overwrite", "overwrite yes");
+            Eq(S(DownloadChecks.For("OverwriteSystemData", false, "")), null, "overwrite no");
+            Eq(S(DownloadChecks.For("ConsistentBlocksDownload", true, "")), "ConsistentDownload", "consistent download yes");
+            Eq(S(DownloadChecks.For("ConsistentBlocksDownload", false, "")), null, "consistent download no");
+            Eq(S(DownloadChecks.For("AlarmTextLibrariesDownload", true, "")), "ConsistentDownload", "alarm texts yes");
+            Eq(S(DownloadChecks.For("AlarmTextLibrariesDownload", false, "")), null, "alarm texts no never writes NoAction");
+            Eq(S(DownloadChecks.For("AllBlocksDownload", true, "")), "DownloadAllBlocks", "all blocks yes");
+            Eq(S(DownloadChecks.For("AllBlocksDownload", false, "")), null, "all blocks no");
+            Eq(S(DownloadChecks.For("UserManagementDownload", false, "")), null, "user management no");
+            Eq(S(DownloadChecks.For("LoadIdentificationData", true, "")), "LoadNothing", "identification data yes loads nothing");
+            Eq(S(DownloadChecks.For("LoadIdentificationData", false, "")), null, "identification data no");
+            Eq(S(DownloadChecks.For("DataBlockReinitialization", true, "")), "StopPlcAndReinitialize", "reinit yes");
+            Eq(S(DownloadChecks.For("DataBlockReinitializationOrKeepActualValues", true, "")), "StopPlcAndReinitialize", "reinit-or-keep yes");
+            Eq(S(DownloadChecks.For("DataBlockReinitialization", false, "")), null, "reinit no");
+            Eq(S(DownloadChecks.For("ModuleWriteAccessPassword", true, "")), Setting.Password, "password yes");
+            Eq(S(DownloadChecks.For("ModuleReadAccessPassword", true, "")), Setting.Password, "read password yes");
+            Eq(S(DownloadChecks.For("ModuleWriteAccessPassword", false, "")), null, "password no");
+            Eq(S(DownloadChecks.For("PlcMasterSecretPassword", true, "")), Setting.ConfigurationPassword, "configuration password yes");
+            Eq(S(DownloadChecks.For("PlcMasterSecretPassword", false, "")), null, "configuration password no");
+            Eq(S(DownloadChecks.For("TlsVerificationConfiguration", true, "")), "Trusted", "certificate yes");
+            Eq(S(DownloadChecks.For("TlsVerificationConfiguration", false, "")), null, "certificate no");
+            Eq(S(DownloadChecks.For("ResetModule", true, "")), null, "an unknown configuration, yes");
+            Eq(S(DownloadChecks.For("ResetModule", false, "")), null, "an unknown configuration, no");
+            Eq(DownloadChecks.For("StopModules", true, "").Kind, Setting.Select, "a selection's kind");
         }
 
         // PasswordsNeverCross: each password setting writes its own secret,
@@ -401,26 +405,27 @@ namespace Tiad.Test
             var both = new Secrets { Protection = "protection-pw", ConfigurationPassword = "configuration-pw" };
             var onlyProtection = new Secrets { Protection = "protection-pw" };
             var onlyConfiguration = new Secrets { ConfigurationPassword = "configuration-pw" };
-            Setting module = DownloadChecks.For("ModuleWriteAccessPassword", true);
-            Setting master = DownloadChecks.For("PlcMasterSecretPassword", true);
+            Setting module = DownloadChecks.For("ModuleWriteAccessPassword", true, "");
+            Setting master = DownloadChecks.For("PlcMasterSecretPassword", true, "");
             Eq(Setting.Secret(module, both), "protection-pw", "module password, both set");
             Eq(Setting.Secret(master, both), "configuration-pw", "master secret, both set");
             Eq(Setting.Secret(module, onlyConfiguration), "", "module password never takes the configuration password");
             Eq(Setting.Secret(master, onlyProtection), "", "master secret never takes the protection password");
-            Eq(Setting.Secret(DownloadChecks.For("StopModules", true), both), null, "a selection has no secret");
+            Eq(Setting.Secret(DownloadChecks.For("StopModules", true, ""), both), null, "a selection has no secret");
             // The Full access user's password answers no download question:
             // no setting takes it. UserManagementDownload is answered only by
-            // keeping the CPU's online users, a selection, never a password.
+            // keeping or resetting the CPU's users, a selection, never a password.
             var onlyFull = new Secrets { FullAccessPassword = "full-access-pw" };
             foreach (string type in DownloadChecks.Answered)
             {
-                Setting st = DownloadChecks.For(type, true);
+                Setting st = DownloadChecks.For(type, true, "");
                 if (st == null) continue;
                 string got = Setting.Secret(st, onlyFull);
                 True(got == null || got == "", type + " never takes the Full access password");
             }
             Eq(DownloadChecks.QuestionId("UserManagementDownload"), QuestionIds.UserManagement, "user management is its own question");
-            Eq(S(DownloadChecks.For("UserManagementDownload", true)), "KeepOnlineUserManagementData", "user management is answered only by keeping the CPU's users");
+            Eq(S(DownloadChecks.For("UserManagementDownload", true, Answer.ChoiceKeep)), "KeepOnlineUserManagementData", "user management keep");
+            Eq(S(DownloadChecks.For("UserManagementDownload", true, Answer.ChoiceReset)), "DownloadAllUserManagementDataResetToProject", "user management reset, as V21 names it");
         }
 
         // ProtectionPlan is ConfigProtection.Plan over every state and
@@ -568,22 +573,277 @@ namespace Tiad.Test
             var keep = new Decisions { UserManagementKeepOnline = true };
             var um = new List<Question> { new Question { Id = QuestionIds.UserManagement } };
             var u = new List<Question>(); var d = new List<Question>();
-            DownloadRule.Resolve(um, keep, false, false, true, u, d);
+            DownloadRule.Resolve(um, keep, false, false, true, null, u, d);
             Eq(u.Count + d.Count, 0, "keep with access control kept is answered");
             u.Clear(); d.Clear();
-            DownloadRule.Resolve(um, keep, false, false, false, u, d);
+            DownloadRule.Resolve(um, keep, false, false, false, null, u, d);
             Eq(string.Join(",", Ids(u).ToArray()), QuestionIds.UserManagement, "keep with access control set is unanswered");
             Contains(u[0].Message, "a keep spec on a session that never set access control", "and names why");
             u.Clear(); d.Clear();
-            DownloadRule.Resolve(um, new Decisions { UserManagementKeepOnline = false }, false, false, true, u, d);
+            DownloadRule.Resolve(um, new Decisions { UserManagementKeepOnline = false }, false, false, true, null, u, d);
             Eq(string.Join(",", Ids(d).ToArray()), QuestionIds.UserManagement, "no is declined");
             var others = new Decisions { StopCpu = true, Overwrite = true, ConsistentDownload = true, StartAfter = true };
             foreach (string id in new[] { QuestionIds.AlarmTexts, QuestionIds.AllBlocks, QuestionIds.UserManagement, QuestionIds.IdentificationData })
             {
                 u.Clear(); d.Clear();
-                DownloadRule.Resolve(new List<Question> { new Question { Id = id } }, others, true, true, true, u, d);
+                DownloadRule.Resolve(new List<Question> { new Question { Id = id } }, others, true, true, true, null, u, d);
                 Eq(string.Join(",", Ids(u).ToArray()), id, id + " is not answered by the other decisions");
             }
+        }
+
+        // ResetRequest is a request every conjunct of UserManagementRule
+        // lets reset by the upload route.
+        static DownloadRequest ResetRequest()
+        {
+            var r = new DownloadRequest { Address = "192.0.2.10", Hardware = true, Software = true, Announced = true };
+            r.Decisions.UserManagementResetToProject = true;
+            r.Attestation = new Attestation { By = "op", Text = "as found" };
+            return r;
+        }
+
+        // UserManagementResetRule: #789 stage 4. From a request every
+        // conjunct lets, each one flipped on its own refuses, and only
+        // those (a security property: each is mutation-checked).
+        static void UserManagementResetRule()
+        {
+            int reads = 0;
+            string project = "Disabled";
+            Func<string> read = delegate
+            {
+                reads++;
+                return project;
+            };
+            const string addr = "192.0.2.10";
+            UserManagementRule.Gate g = UserManagementRule.Check(ResetRequest(), true, addr, true, read);
+            True(g.Allowed, "the baseline is let: " + g.Why);
+            Eq(g.Route, UserManagementRule.RouteUpload, "by the upload route");
+            Eq(reads, 1, "the project is read once");
+
+            DownloadRequest r = ResetRequest();
+            r.Decisions.UserManagementResetToProject = null;
+            g = UserManagementRule.Check(r, true, addr, true, read);
+            True(!g.Allowed, "not asked");
+            r.Decisions.UserManagementResetToProject = false;
+            True(!UserManagementRule.Check(r, true, addr, true, read).Allowed, "asked no");
+
+            reads = 0;
+            r = ResetRequest();
+            r.Hardware = false;
+            g = UserManagementRule.Check(r, true, addr, true, read);
+            True(!g.Allowed, "a software-only download");
+            Contains(g.Why, "loads no hardware", "names why");
+            Contains(g.Why, "an upload from this CPU in this session or attestation.cpuAccessControl \"disabled\"", "and both routes");
+
+            g = UserManagementRule.Check(ResetRequest(), false, addr, true, read);
+            True(!g.Allowed, "access control not kept");
+            Contains(g.Why, "does not keep access control", "names why");
+            Eq(reads, 0, "the cheap conjuncts refuse before the project is read");
+
+            r = ResetRequest();
+            r.Attestation.CpuAccessControl = Attestation.CpuAccessEnabled;
+            g = UserManagementRule.Check(r, true, addr, true, read);
+            True(!g.Allowed, "an attestation that says enabled refuses, the upload route too");
+            Contains(g.Why, "never resets a CPU whose access control is on", "names why");
+
+            foreach (string st in new[] { AccessRule.Enabled, AccessRule.Absent, "disabled", "Disabled ", "EnabledWithAccessControlViaAccessLevel", null })
+            {
+                project = st;
+                g = UserManagementRule.Check(ResetRequest(), true, addr, true, read);
+                True(!g.Allowed, "project access control " + Show(st) + " refuses");
+                Contains(g.Why, "not Disabled", "names why for " + Show(st));
+            }
+            project = "Disabled";
+            g = UserManagementRule.Check(ResetRequest(), true, addr, true, null);
+            True(!g.Allowed, "no reader refuses");
+            g = UserManagementRule.Check(ResetRequest(), true, addr, true, delegate { throw new TiadException(500, Kinds.OperationFailed, "TIA said no"); });
+            True(!g.Allowed, "a read that fails refuses");
+            Contains(g.Why, "TIA said no", "and says why");
+            bool fatal = false;
+            try
+            {
+                UserManagementRule.Check(ResetRequest(), true, addr, true, delegate { throw new TiadException(500, Kinds.OperationFailed, "TIA died", null, true); });
+            }
+            catch (TiadException e)
+            {
+                fatal = e.Fatal;
+            }
+            True(fatal, "a fatal read is not swallowed");
+
+            // The routes: no upload from this address and no attestation
+            // refuses; the attestation saying disabled lets it, only with
+            // who and what.
+            foreach (string up in new[] { "", "192.0.2.11" })
+            {
+                g = UserManagementRule.Check(ResetRequest(), true, up, true, read);
+                True(!g.Allowed, "uploaded from " + Show(up) + ", no attestation");
+                Contains(g.Why, "nothing shows the CPU's access control is off: upload from 192.0.2.10", "names both routes");
+                r = ResetRequest();
+                r.Attestation.CpuAccessControl = Attestation.CpuAccessDisabled;
+                g = UserManagementRule.Check(r, true, up, true, read);
+                True(g.Allowed, "attested disabled, uploaded from " + Show(up));
+                Eq(g.Route, UserManagementRule.RouteAttestation, "by the attestation route");
+                r.Attestation.By = " ";
+                True(!UserManagementRule.Check(r, true, up, true, read).Allowed, "attested disabled without who");
+                r.Attestation.By = "op";
+                r.Attestation.Text = "";
+                True(!UserManagementRule.Check(r, true, up, true, read).Allowed, "attested disabled without what");
+            }
+            // Both routes: the upload is named.
+            r = ResetRequest();
+            r.Attestation.CpuAccessControl = Attestation.CpuAccessDisabled;
+            Eq(UserManagementRule.Check(r, true, addr, true, read).Route, UserManagementRule.RouteUpload, "both routes");
+            // A gate nobody filled in refuses.
+            True(!new UserManagementRule.Gate().Allowed, "the zero gate refuses");
+            // With the upload route off (UploadRouteEnabled), an upload
+            // from this very CPU shows nothing: only the attestation lets
+            // a reset, and the refusal says why.
+            g = UserManagementRule.Check(ResetRequest(), true, addr, false, read);
+            True(!g.Allowed, "upload route off");
+            Contains(g.Why, "the upload route is not yet available", "says so");
+            r = ResetRequest();
+            r.Hardware = false;
+            Contains(UserManagementRule.Check(r, true, addr, false, read).Why, "the upload route is not yet available", "every refusal says so");
+            r = ResetRequest();
+            r.Attestation.CpuAccessControl = Attestation.CpuAccessDisabled;
+            g = UserManagementRule.Check(r, true, addr, false, read);
+            True(g.Allowed && g.Route == UserManagementRule.RouteAttestation, "upload route off, attested disabled");
+            // The conjuncts flipped one at a time from the baseline
+            // production runs: the upload route off, the operator attesting
+            // disabled, no upload.
+            Func<DownloadRequest> att = delegate
+            {
+                DownloadRequest b = ResetRequest();
+                b.Attestation.CpuAccessControl = Attestation.CpuAccessDisabled;
+                return b;
+            };
+            project = "Disabled";
+            g = UserManagementRule.Check(att(), true, "", false, read);
+            True(g.Allowed && g.Route == UserManagementRule.RouteAttestation, "the attestation baseline: " + g.Why);
+            r = att(); r.Hardware = false;
+            True(!UserManagementRule.Check(r, true, "", false, read).Allowed, "attestation route, software only");
+            True(!UserManagementRule.Check(att(), false, "", false, read).Allowed, "attestation route, access control set");
+            True(!UserManagementRule.Check(att(), true, "", false, delegate { return AccessRule.Enabled; }).Allowed, "attestation route, project enabled");
+            True(!UserManagementRule.Check(att(), true, "", false, delegate { return null; }).Allowed, "attestation route, project unreadable");
+            r = att(); r.Attestation.By = "";
+            True(!UserManagementRule.Check(r, true, "", false, read).Allowed, "attestation route, no who");
+            r = att(); r.Attestation.Text = " ";
+            True(!UserManagementRule.Check(r, true, "", false, read).Allowed, "attestation route, no what");
+            r = att(); r.Attestation.CpuAccessControl = Attestation.CpuAccessEnabled;
+            True(!UserManagementRule.Check(r, true, "", false, read).Allowed, "attestation route, attested enabled");
+            r = att(); r.Attestation.CpuAccessControl = "";
+            True(!UserManagementRule.Check(r, true, addr, false, read).Allowed, "attestation route, attested nothing, uploaded here");
+            r = att(); r.Decisions.UserManagementResetToProject = null;
+            True(!UserManagementRule.Check(r, true, "", false, read).Allowed, "attestation route, reset not asked");
+            // Off until a bench upload of a CPU with access control on
+            // reads back as not Disabled (naut-lead 2026-11-21).
+            True(!UserManagementRule.UploadRouteEnabled, "UploadRouteEnabled is on: it needs a bench upload of a CPU with access control on that reads back as not Disabled");
+        }
+
+        // UserManagementKeepOrReset: the keep x reset table, through
+        // Resolve, with the rule's verdict let, refused and never made.
+        static void UserManagementKeepOrReset()
+        {
+            var um = new List<Question> { new Question { Id = QuestionIds.UserManagement, Message = "m" } };
+            var let = new UserManagementRule.Gate { Allowed = true, Route = UserManagementRule.RouteUpload };
+            var refused = new UserManagementRule.Gate { Why = "refused because" };
+            bool?[] vals = { null, false, true };
+            foreach (bool? keep in vals)
+            {
+                foreach (bool? reset in vals)
+                {
+                    foreach (var gate in new[] { let, refused, null })
+                    {
+                        var d = new Decisions { UserManagementKeepOnline = keep, UserManagementResetToProject = reset };
+                        var u = new List<Question>(); var dd = new List<Question>();
+                        DownloadRule.Resolve(um, d, false, false, true, gate, u, dd);
+                        string want;
+                        if (keep == true && reset == true) want = "unanswered";
+                        else if (reset == true) want = gate == let ? "answered" : "unanswered";
+                        else if (keep == true) want = "answered";
+                        else if (keep == false || reset == false) want = "declined";
+                        else want = "unanswered";
+                        string got = u.Count > 0 ? "unanswered" : dd.Count > 0 ? "declined" : "answered";
+                        string what = "keep=" + Show(keep) + " reset=" + Show(reset) + " gate=" + (gate == let ? "let" : gate == refused ? "refused" : "null");
+                        Eq(got, want, what);
+                        if (got == "unanswered" && reset == true && keep != true && gate == refused) Contains(u[0].Message, "refused because", what + " names the rule's why");
+                        if (got == "answered")
+                        {
+                            Answer a = DownloadRule.Answers(um, d)[0];
+                            Eq(a.Choice, reset == true ? Answer.ChoiceReset : Answer.ChoiceKeep, what + " choice");
+                        }
+                    }
+                }
+            }
+            var bad = new DownloadRequest { Address = "192.0.2.10", Software = true, Announced = true };
+            bad.Decisions.UserManagementKeepOnline = true;
+            bad.Decisions.UserManagementResetToProject = true;
+            Contains(bad.Validate(), "both yes", "keep and reset both yes is a bad request");
+            bad.Decisions.UserManagementKeepOnline = false;
+            Eq(bad.Validate(), null, "keep no, reset yes is a request");
+        }
+
+        // UserManagementChoices: what each choice writes, and that acting
+        // follows what is written.
+        static void UserManagementChoices()
+        {
+            Eq(S(DownloadChecks.For("UserManagementDownload", true, "")), null, "user management yes without a choice cannot be applied");
+            Eq(S(DownloadChecks.For("UserManagementDownload", true, "update")), null, "an unknown choice cannot be applied");
+            Eq(S(DownloadChecks.For("UserManagementDownload", false, Answer.ChoiceReset)), null, "no with a choice is still no");
+            Eq(S(DownloadChecks.For("StopModules", true, Answer.ChoiceKeep)), null, "a choice on another check cannot be applied");
+            True(!DownloadChecks.ActingAnswer(QuestionIds.UserManagement, true, Answer.ChoiceKeep), "keep is passive");
+            True(DownloadChecks.ActingAnswer(QuestionIds.UserManagement, true, Answer.ChoiceReset), "reset acts");
+            True(!DownloadChecks.ActingAnswer(QuestionIds.UserManagement, true, ""), "no choice writes nothing");
+            True(!DownloadChecks.ActingAnswer(QuestionIds.StartAfter, false, ""), "start-after no is passive");
+            True(DownloadChecks.ActingAnswer(QuestionIds.StartAfter, true, ""), "start-after yes acts");
+            True(DownloadChecks.ActingAnswer(QuestionIds.StopCpu, true, ""), "stop acts");
+            True(!DownloadChecks.ActingAnswer(QuestionIds.Password, true, ""), "a password is passive");
+            foreach (string choice in new[] { Answer.ChoiceKeep, Answer.ChoiceReset })
+            {
+                string c = choice;
+                var r = new Run(delegate(Question q) { return new Answer { Question = q, Yes = true, Choice = c }; });
+                string wrote = N(r, new object(), "UserManagementDownload", "Delete user management data and disable access control in runtime");
+                Eq(wrote, c == Answer.ChoiceKeep ? "KeepOnlineUserManagementData" : "DownloadAllUserManagementDataResetToProject", c + " writes");
+                Eq(string.Join("; ", r.D.Acting.ToArray()), c == Answer.ChoiceKeep ? "" : "UserManagementDownload = DownloadAllUserManagementDataResetToProject", c + " acting");
+            }
+            // The decider cancels an answer with no choice rather than
+            // leave TIA's preselection (reset) standing.
+            var none = new Run(AllYes);
+            bool cancelled = false;
+            try
+            {
+                none.D.Next(new object(), "UserManagementDownload", "m", null);
+            }
+            catch (DownloadCancel e)
+            {
+                cancelled = true;
+                Contains(e.Message, "cannot apply yes", "says why");
+            }
+            True(cancelled, "user management yes without a choice cancels");
+            Contains(DownloadChecks.Consequence(new List<string> { QuestionIds.UserManagement }), "reset the CPU's user management to the project's: check its users and access control", "a reset given before a cancel");
+        }
+
+        // AttestationAccess: the attestation's cpuAccessControl is one of
+        // two words, journalled as a fixed word only, and echoed.
+        static void AttestationAccess()
+        {
+            var r = new DownloadRequest { Address = "192.0.2.10", Software = true, Announced = true };
+            foreach (string ok in new[] { "", "disabled", "enabled" })
+            {
+                r.Attestation.CpuAccessControl = ok;
+                Eq(r.Validate(), null, Show(ok) + " is valid");
+            }
+            foreach (string bad in new[] { "Disabled", "off", "disabled ", "x\naudit download forged" })
+            {
+                r.Attestation.CpuAccessControl = bad;
+                Eq(r.Validate(), "download: attestation.cpuAccessControl is not one of disabled, enabled", Show(bad) + " is refused");
+                Contains(r.Attestation.Audit(), "cpuAccessControl=invalid}", Show(bad) + " is journalled as invalid");
+                True(r.Attestation.Audit().IndexOf("forged", StringComparison.Ordinal) < 0, "never its text");
+            }
+            var a = new Attestation { CpuAccessControl = "disabled" };
+            Eq(a.Audit(), "{by=\"\" at=unset text=\"\" cpuAccessControl=disabled}", "a lone cpuAccessControl is journalled");
+            Eq(new Attestation().Audit(), "unset", "nothing said");
+            Eq(((Obj)a.ToJson())["cpuAccessControl"], "disabled", "echoed");
+            True(!new Attestation { By = "b", Text = "t" }.ToJson().ContainsKey("cpuAccessControl"), "unset is not echoed");
         }
 
         static void ActingAndPassive()
@@ -602,6 +862,7 @@ namespace Tiad.Test
             var r = new Run(AllYes);
             N(r, pw, "ModuleWriteAccessPassword", "pw");
             Eq(r.D.Acting.Count, 0, "a password written");
+            True(new Step().Acting, "a step that does not say is acting, the safe side");
             Step st = r.D.Next(stop, "StopModules", "stop", null);
             Eq(r.D.Acting.Count, 0, "stop answered, not yet written");
             r.D.Wrote(st);
@@ -1122,7 +1383,7 @@ namespace Tiad.Test
             {
                 "StopModules.StopAll", "StartModules.StartModule", "StartModules.NoAction", "OverwriteSystemData.Overwrite",
                 "ConsistentBlocksDownload.ConsistentDownload", "AlarmTextLibrariesDownload.ConsistentDownload",
-                "AllBlocksDownload.DownloadAllBlocks", "UserManagementDownload.KeepOnlineUserManagementData", "LoadIdentificationData.LoadNothing",
+                "AllBlocksDownload.DownloadAllBlocks", "UserManagementDownload.KeepOnlineUserManagementData", "UserManagementDownload.DownloadAllUserManagementDataResetToProject", "LoadIdentificationData.LoadNothing",
                 "DataBlockReinitialization.StopPlcAndReinitialize", "DataBlockReinitializationOrKeepActualValues.StopPlcAndReinitialize",
                 "TlsVerificationConfiguration.Trusted",
             };
@@ -1136,7 +1397,7 @@ namespace Tiad.Test
             }
             foreach (string t in DownloadChecks.Answered)
             {
-                True(DownloadChecks.For(t, true) != null, t + ": yes has no setting");
+                True(DownloadChecks.For(t, true, "") != null || DownloadChecks.For(t, true, Answer.ChoiceKeep) != null, t + ": yes has no setting");
             }
             // After's NoAction for start-after is among them.
             True(got.Contains("StartModules." + Decider().After(DownloadDecider.StartAfterType).Setting.Value), "after-download NoAction");

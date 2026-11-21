@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -28,9 +29,10 @@ const (
 	// answered only by its own decision: alarm-texts (TIA's
 	// AlarmTextLibrariesDownload, acting) and all-blocks
 	// (AllBlocksDownload, acting) load; user-management
-	// (UserManagementDownload) keeps the CPU's online users, and only when
-	// the spec's accessControl is keep; identification-data
-	// (LoadIdentificationData) loads nothing. The last two are passive.
+	// (UserManagementDownload) keeps the CPU's online users (passive), only
+	// when the spec's accessControl is keep, or, on a hardware load, resets
+	// them to the project's (acting), only under CheckUserManagementReset;
+	// identification-data (LoadIdentificationData) loads nothing (passive).
 	QuestionAlarmTexts         = "alarm-texts"
 	QuestionAllBlocks          = "all-blocks"
 	QuestionUserManagement     = "user-management"
@@ -82,6 +84,14 @@ type Decisions struct {
 	// CPU's online user management as it is. The agent accepts it only
 	// when the spec's accessControl is keep.
 	UserManagementKeepOnline *bool `json:"userManagementKeepOnline,omitempty"`
+	// UserManagementResetToProject answers QuestionUserManagement by
+	// resetting the CPU's user management to the project's (TIA's
+	// DownloadAllUserManagementDataResetToProject: "Delete user management
+	// data and disable access control in runtime" when the project has
+	// access control off). It acts, and the agent accepts it only under
+	// CheckUserManagementReset. It and UserManagementKeepOnline are never
+	// both yes.
+	UserManagementResetToProject *bool `json:"userManagementResetToProject,omitempty"`
 	// IdentificationDataLoadNothing answers QuestionIdentificationData:
 	// load no identification data.
 	IdentificationDataLoadNothing *bool `json:"identificationDataLoadNothing,omitempty"`
@@ -185,10 +195,22 @@ type DownloadRequest struct {
 // caller's claim, since tiad knows only a bearer token, so a naut caller
 // fills it from the principal it authenticated. Text is the statement.
 // Each is at most MaxAttestationBy / MaxAttestationText bytes.
+//
+// CPUAccessControl is the operator's statement of the CPU's access control
+// as it is now: AttestCPUAccessDisabled, AttestCPUAccessEnabled or ""
+// (unset). A user-management reset can rest on "disabled"
+// (CheckUserManagementReset).
 type Attestation struct {
-	By   string `json:"by"`
-	Text string `json:"text"`
+	By               string `json:"by"`
+	Text             string `json:"text"`
+	CPUAccessControl string `json:"cpuAccessControl,omitempty"`
 }
+
+// Attestation.CPUAccessControl's words.
+const (
+	AttestCPUAccessDisabled = "disabled"
+	AttestCPUAccessEnabled  = "enabled"
+)
 
 // Attestation limits, in bytes.
 const (
@@ -200,9 +222,10 @@ const (
 // tiad accepted the download, by tiad's own UTC clock
 // ("2006-01-02T15:04:05.000Z"), never the caller's.
 type AttestationRecord struct {
-	By   string `json:"by"`
-	At   string `json:"at"`
-	Text string `json:"text"`
+	By               string `json:"by"`
+	At               string `json:"at"`
+	Text             string `json:"text"`
+	CPUAccessControl string `json:"cpuAccessControl,omitempty"`
 }
 
 // given is whether a says both who and what.
@@ -271,6 +294,11 @@ type DownloadResult struct {
 	// attestation that stood in for the check, as tiad journalled it:
 	// keep it in the deploy record.
 	Attestation *AttestationRecord `json:"attestation,omitempty"`
+	// UserManagementReset is set when tiad answered TIA's user-management
+	// check by resetting it to the project's: the route that let it,
+	// ResetRouteUpload or ResetRouteAttestation. Keep it in the deploy
+	// record.
+	UserManagementReset string `json:"userManagementReset,omitempty"`
 	// Messages is TIA's download result's messages, when it has any.
 	Messages string `json:"messages,omitempty"`
 	// State is the CPU's mode after the download, "RUN" or "STOP", or ""
@@ -299,6 +327,39 @@ func Acting(id string) bool {
 		return false
 	}
 	return true
+}
+
+// ActingAnswer is whether answering id yes (with choice, for
+// user-management: AnswerKeep or AnswerReset) acts on the CPU, by what the
+// answer writes: start-after no changes nothing, user-management keep
+// changes nothing, its reset deletes the CPU's users and sets its access
+// control.
+func ActingAnswer(id string, yes bool, choice string) bool {
+	switch id {
+	case QuestionStartAfter:
+		return yes
+	case QuestionUserManagement:
+		return choice == AnswerReset
+	}
+	return Acting(id)
+}
+
+// User-management's two yeses (the agent's Answer.Choice).
+const (
+	AnswerKeep  = "keep"
+	AnswerReset = "reset"
+)
+
+// UserManagementChoice is the answer d gives user-management once Resolve
+// let it through: AnswerReset, AnswerKeep, or "" for no yes.
+func UserManagementChoice(d Decisions) string {
+	switch {
+	case d.UserManagementResetToProject != nil && *d.UserManagementResetToProject:
+		return AnswerReset
+	case d.UserManagementKeepOnline != nil && *d.UserManagementKeepOnline:
+		return AnswerKeep
+	}
+	return ""
 }
 
 // ActingAnswers returns the acting answers (question IDs) the agent gave
@@ -371,8 +432,114 @@ func (r DownloadRequest) Validate() error {
 		if len(a.Text) > MaxAttestationText {
 			return fmt.Errorf("download: attestation.text is longer than %d bytes", MaxAttestationText)
 		}
+		if !validCPUAccess(a.CPUAccessControl) {
+			return fmt.Errorf("download: attestation.cpuAccessControl is not one of disabled, enabled")
+		}
+	}
+	if isYes(r.Decisions.UserManagementKeepOnline) && isYes(r.Decisions.UserManagementResetToProject) {
+		return fmt.Errorf("download: decisions.userManagementKeepOnline and decisions.userManagementResetToProject are both yes; user-management takes one answer")
 	}
 	return nil
+}
+
+func validCPUAccess(s string) bool {
+	return s == "" || s == AttestCPUAccessDisabled || s == AttestCPUAccessEnabled
+}
+
+func isYes(b *bool) bool { return b != nil && *b }
+
+// ProjectAccessDisabled is TIA's PlcAccessControlConfiguration name for
+// access control off, exactly.
+const ProjectAccessDisabled = "Disabled"
+
+// The routes that show a CPU's access control is off
+// (DownloadResult.UserManagementReset).
+const (
+	ResetRouteUpload      = "upload"
+	ResetRouteAttestation = "attestation"
+)
+
+// ResetGate is CheckUserManagementReset's verdict. Its zero value refuses:
+// a download that never checked cannot reset.
+type ResetGate struct {
+	Allowed bool
+	Why     string
+	Route   string
+}
+
+// UploadRouteEnabled turns CheckUserManagementReset's upload route on. It
+// is off (naut-lead, 2026-11-21): that an upload brings a CPU's access
+// control into the project is proven only for the bench's Disabled CPU.
+// Turn it on, here and in the agent's UserManagementRule.UploadRouteEnabled,
+// only with a bench upload of a CPU with access control on that reads back
+// as not Disabled.
+const UploadRouteEnabled = false
+
+const (
+	resetRefused   = "decisions.userManagementResetToProject (delete the CPU's user management data and set its access control as the project has it) is refused: "
+	uploadRouteWhy = "the upload route is not yet available: that an upload brings a CPU's access control into the project is unproven until a bench upload of a CPU with access control on shows it"
+)
+
+func resetRoutes(uploadRoute bool) string {
+	if uploadRoute {
+		return `tiad resets it only on a hardware download, with cpu.accessControl keep, a project whose access control is Disabled, and either an upload from this CPU in this session or attestation.cpuAccessControl "disabled"`
+	}
+	return `tiad resets it only on a hardware download, with cpu.accessControl keep, a project whose access control is Disabled, and attestation.cpuAccessControl "disabled" (` + uploadRouteWhy + ")"
+}
+
+// UserManagementResetQuestion is the question a refused reset lists.
+func UserManagementResetQuestion(why string) Question {
+	return Question{ID: QuestionUserManagement, Message: why, Detail: "UserManagementDownload"}
+}
+
+// CheckUserManagementReset is the agent's UserManagementRule.Check: when
+// tiad may answer TIA's user-management check by resetting the CPU's user
+// management to the project's. A hardware load asks it, TIA refuses keep
+// there, and its reset deletes the CPU's users and sets its access
+// control as the project has it (#789 stage 4). It is let only when that
+// changes nothing that protects the CPU: r loads hardware,
+// accessControlKept (the spec keeps access control and no apply on the
+// session set it), the project's access control (projectAccess, read
+// only once the rest holds; ok false when it could not be read) is
+// exactly Disabled, and the CPU's is shown off: this session uploaded
+// from r.Address (uploadedFrom; only when uploadRoute, UploadRouteEnabled
+// for the agent), or the attestation says "disabled". An attestation that
+// says "enabled" refuses whatever else holds.
+func CheckUserManagementReset(r DownloadRequest, accessControlKept bool, uploadedFrom string, uploadRoute bool, projectAccess func() (string, bool)) ResetGate {
+	switch {
+	case !isYes(r.Decisions.UserManagementResetToProject):
+		return ResetGate{Why: resetRefused + "it is not asked"}
+	case !r.Hardware:
+		return ResetGate{Why: resetRefused + "this download loads no hardware; " + resetRoutes(uploadRoute)}
+	case !accessControlKept:
+		return ResetGate{Why: resetRefused + "the session's spec does not keep access control as found (cpu.accessControl keep on a session that never applied fullAccessUser); " + resetRoutes(uploadRoute)}
+	case r.Attestation != nil && r.Attestation.CPUAccessControl == AttestCPUAccessEnabled:
+		return ResetGate{Why: resetRefused + "the attestation says the CPU's access control is enabled, and a reset would turn it off and delete its users; tiad never resets a CPU whose access control is on"}
+	}
+	project, ok := "", false
+	if projectAccess != nil {
+		project, ok = projectAccess()
+	}
+	if !ok || project != ProjectAccessDisabled {
+		what := "unreadable"
+		switch {
+		case ok && project == "":
+			what = "absent (no such setting)"
+		case ok:
+			what = strconv.Quote(project)
+		}
+		return ResetGate{Why: resetRefused + "the project's access control is " + what + ", not Disabled; " + resetRoutes(uploadRoute)}
+	}
+	if uploadRoute && uploadedFrom != "" && uploadedFrom == r.Address {
+		return ResetGate{Allowed: true, Route: ResetRouteUpload}
+	}
+	if r.Attestation.given() && r.Attestation.CPUAccessControl == AttestCPUAccessDisabled {
+		return ResetGate{Allowed: true, Route: ResetRouteAttestation}
+	}
+	if !uploadRoute {
+		return ResetGate{Why: resetRefused + `nothing shows the CPU's access control is off: give attestation.cpuAccessControl "disabled" (with attestation.by and attestation.text), the operator's own observation of the CPU, never a value a caller fills in by default; ` + uploadRouteWhy}
+	}
+	return ResetGate{Why: resetRefused + "nothing shows the CPU's access control is off: upload from " + r.Address + ` in this session first, or give attestation.cpuAccessControl "disabled" (with attestation.by and attestation.text), the operator's own observation of the CPU, never a value a caller fills in by default`}
 }
 
 // Resolve applies the download rule: every question is answered only from
@@ -382,8 +549,14 @@ func (r DownloadRequest) Validate() error {
 // secret and a configuration-password question by its configuration
 // password, never by a decision and never by each other's secret.
 // accessControlKept is whether the session's spec keeps the CPU's access
-// control as found: only then can user-management be answered.
-func Resolve(qs []Question, d Decisions, haveProtection, haveConfigurationPassword, accessControlKept bool) (unanswered, declined []Question) {
+// control as found: only then can user-management be answered keep.
+// reset is CheckUserManagementReset's verdict (its zero value refuses):
+// only an allowed one answers it reset.
+//
+// user-management, keep x reset: a yes answers it (both yes is a bad
+// request, refused before this); with no yes, a no declines; with
+// neither, it is unanswered.
+func Resolve(qs []Question, d Decisions, haveProtection, haveConfigurationPassword, accessControlKept bool, reset ResetGate) (unanswered, declined []Question) {
 	for _, q := range qs {
 		switch q.ID {
 		case QuestionStopCPU:
@@ -397,13 +570,33 @@ func Resolve(qs []Question, d Decisions, haveProtection, haveConfigurationPasswo
 		case QuestionAllBlocks:
 			sortAnswer(q, d.AllBlocks, &unanswered, &declined)
 		case QuestionUserManagement:
-			// Keeping the CPU's users is the only answer, and only for a
-			// spec that keeps access control.
-			if d.UserManagementKeepOnline != nil && *d.UserManagementKeepOnline && !accessControlKept {
-				q.Message += " (tiad keeps the CPU's online user management only for a keep spec on a session that never set access control: an apply of fullAccessUser on this session needs a fresh session that applies keep)"
+			keep, resetYes := isYes(d.UserManagementKeepOnline), isYes(d.UserManagementResetToProject)
+			switch {
+			case keep && resetYes:
+				q.Message += " (decisions.userManagementKeepOnline and decisions.userManagementResetToProject are both yes; user-management takes one answer)"
 				unanswered = append(unanswered, q)
-			} else {
-				sortAnswer(q, d.UserManagementKeepOnline, &unanswered, &declined)
+			case resetYes:
+				// Resetting acts: only the verdict tiad checked before
+				// calling TIA lets it.
+				if !reset.Allowed {
+					why := reset.Why
+					if why == "" {
+						why = "decisions.userManagementResetToProject is refused"
+					}
+					q.Message += " (" + why + ")"
+					unanswered = append(unanswered, q)
+				}
+			case keep:
+				// Keeping the CPU's users only for a spec that keeps
+				// access control.
+				if !accessControlKept {
+					q.Message += " (tiad keeps the CPU's online user management only for a keep spec on a session that never set access control: an apply of fullAccessUser on this session needs a fresh session that applies keep)"
+					unanswered = append(unanswered, q)
+				}
+			case d.UserManagementKeepOnline != nil || d.UserManagementResetToProject != nil:
+				declined = append(declined, q)
+			default:
+				unanswered = append(unanswered, q)
 			}
 		case QuestionIdentificationData:
 			sortAnswer(q, d.IdentificationDataLoadNothing, &unanswered, &declined)

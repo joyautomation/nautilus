@@ -30,9 +30,11 @@ namespace Tiad
         // AlarmTexts is AlarmTextLibrariesDownload (acting: yes loads the
         // alarm and text list texts). AllBlocks is AllBlocksDownload
         // (acting: yes loads every block). UserManagement is
-        // UserManagementDownload, answered only by keeping the CPU's
-        // online user management, and only when the spec keeps access
-        // control as found (passive: nothing on the CPU changes).
+        // UserManagementDownload, answered by keeping the CPU's online
+        // user management (passive: nothing on the CPU changes), only when
+        // the spec keeps access control as found, or, on a hardware load,
+        // by resetting it to the project's (acting), only under
+        // UserManagementRule.
         // IdentificationData is LoadIdentificationData, answered only by
         // loading nothing (passive).
         public const string AlarmTexts = "alarm-texts";
@@ -90,6 +92,13 @@ namespace Tiad
     {
         public bool? StopCpu, Overwrite, ConsistentDownload, StartAfter;
         public bool? AlarmTexts, AllBlocks, UserManagementKeepOnline, IdentificationDataLoadNothing;
+        // UserManagementResetToProject answers UserManagement by resetting
+        // the CPU's user management to the project's
+        // (DownloadAllUserManagementDataResetToProject: "Delete user
+        // management data and disable access control in runtime" when the
+        // project has access control off). It acts, and only
+        // UserManagementRule lets it.
+        public bool? UserManagementResetToProject;
         public List<string> Reinitialize = new List<string>();
         public string TrustCertificate = "";
         // KeptDevices names every device the caller agrees to load as the
@@ -110,6 +119,7 @@ namespace Tiad
             d.AlarmTexts = r.OptBool("alarmTexts");
             d.AllBlocks = r.OptBool("allBlocks");
             d.UserManagementKeepOnline = r.OptBool("userManagementKeepOnline");
+            d.UserManagementResetToProject = r.OptBool("userManagementResetToProject");
             d.IdentificationDataLoadNothing = r.OptBool("identificationDataLoadNothing");
             d.StartAfter = r.OptBool("startAfter");
             d.Reinitialize = r.Strs("reinitialize");
@@ -153,6 +163,11 @@ namespace Tiad
             if (!Announced) return "download: announce it first (announced: true); a dry run reaches the CPU too until S2 proves a cancel loads nothing";
             if (Encoding.UTF8.GetByteCount(Attestation.By) > Attestation.MaxBy) return "download: attestation.by is longer than " + Attestation.MaxBy + " bytes";
             if (Encoding.UTF8.GetByteCount(Attestation.Text) > Attestation.MaxText) return "download: attestation.text is longer than " + Attestation.MaxText + " bytes";
+            if (!Attestation.CpuAccessControlValid) return "download: attestation.cpuAccessControl is not one of disabled, enabled";
+            if (Decisions.UserManagementKeepOnline == true && Decisions.UserManagementResetToProject == true)
+            {
+                return "download: decisions.userManagementKeepOnline and decisions.userManagementResetToProject are both yes; user-management takes one answer";
+            }
             return null;
         }
     }
@@ -170,7 +185,11 @@ namespace Tiad
         // In UTF-8 bytes, as Go's len counts them (an unpaired surrogate
         // is U+FFFD on both sides).
         public const int MaxBy = 200, MaxText = 2000;
-        public string By = "", Text = "", At = "";
+        // CpuAccessControl is the operator's statement of the CPU's access
+        // control as it is now: "disabled", "enabled" or unset ("").
+        // UserManagementRule's second route rests on "disabled".
+        public const string CpuAccessDisabled = "disabled", CpuAccessEnabled = "enabled";
+        public string By = "", Text = "", At = "", CpuAccessControl = "";
 
         public static Attestation Read(Reader r)
         {
@@ -178,7 +197,21 @@ namespace Tiad
             if (r == null) return a;
             a.By = r.Str("by");
             a.Text = r.Str("text");
+            a.CpuAccessControl = r.Str("cpuAccessControl");
             return a;
+        }
+
+        public bool CpuAccessControlValid
+        {
+            get { return CpuAccessControl == "" || CpuAccessControl == CpuAccessDisabled || CpuAccessControl == CpuAccessEnabled; }
+        }
+
+        // AuditAccess is CpuAccessControl for the audit line: only the
+        // fixed words, never what a refused request sent.
+        string AuditAccess()
+        {
+            if (CpuAccessControl == "") return "unset";
+            return CpuAccessControlValid ? CpuAccessControl : "invalid";
         }
 
         // Given is whether both who and what are said.
@@ -191,8 +224,8 @@ namespace Tiad
         // request-supplied part quoted so none can forge a line.
         public string Audit()
         {
-            if (By == "" && Text == "") return "unset";
-            return "{by=" + Part(By, MaxBy) + " at=" + (At == "" ? "unset" : At) + " text=" + Part(Text, MaxText) + "}";
+            if (By == "" && Text == "" && CpuAccessControl == "") return "unset";
+            return "{by=" + Part(By, MaxBy) + " at=" + (At == "" ? "unset" : At) + " text=" + Part(Text, MaxText) + " cpuAccessControl=" + AuditAccess() + "}";
         }
 
         // Part is one part for the audit line: quoted, or only its size
@@ -211,6 +244,7 @@ namespace Tiad
             o["by"] = By;
             o["at"] = At;
             o["text"] = Text;
+            if (CpuAccessControl != "") o["cpuAccessControl"] = CpuAccessControl;
             return o;
         }
     }
@@ -253,15 +287,142 @@ namespace Tiad
         }
     }
 
+    // UserManagementRule is when tiad may answer TIA's user-management
+    // check by resetting the CPU's user management to the project's
+    // (decisions.userManagementResetToProject). A hardware load asks it,
+    // TIA refuses keep there, and its reset deletes the CPU's users and
+    // sets its access control as the project has it (#789 stage 4
+    // logging window). tiad lets it only when that changes nothing that
+    // protects the CPU: a hardware download, a spec that keeps access
+    // control as found on a session that never set it, a project whose
+    // access control reads exactly Disabled, and evidence that the CPU's
+    // is off too: this session uploaded from that very CPU (the project's
+    // setting is the CPU's), or the operator attests it
+    // (attestation.cpuAccessControl "disabled"). An attestation that says
+    // enabled refuses whatever else holds. The upload route is off
+    // (UploadRouteEnabled) until a bench upload proves its premise.
+    public static class UserManagementRule
+    {
+        // UploadRouteEnabled turns the upload route on. It is off
+        // (naut-lead, 2026-11-21): that an upload brings a CPU's access
+        // control into the project is proven only for the bench's
+        // Disabled CPU. Turn it on, here and in Go's
+        // tiad.UploadRouteEnabled, only with a bench upload of a CPU with
+        // access control on that reads back as not Disabled. Not a const,
+        // so the code behind it compiles and stays tested.
+        public static readonly bool UploadRouteEnabled = false;
+        const string UploadRouteWhy = "the upload route is not yet available: that an upload brings a CPU's access control into the project is unproven until a bench upload of a CPU with access control on shows it";
+
+        // ProjectDisabled is PlcAccessControlConfiguration's name for
+        // access control off, exactly.
+        public const string ProjectDisabled = "Disabled";
+        // The routes that show the CPU's access control is off.
+        public const string RouteUpload = "upload", RouteAttestation = "attestation";
+
+        // Gate is Check's verdict. Its zero value refuses: a download that
+        // never checked cannot reset.
+        public sealed class Gate
+        {
+            public bool Allowed;
+            public string Why = "", Route = "";
+        }
+
+        const string Refused = "decisions.userManagementResetToProject (delete the CPU's user management data and set its access control as the project has it) is refused: ";
+        static string Routes(bool uploadRoute)
+        {
+            if (uploadRoute) return "tiad resets it only on a hardware download, with cpu.accessControl keep, a project whose access control is Disabled, and either an upload from this CPU in this session or attestation.cpuAccessControl \"disabled\"";
+            return "tiad resets it only on a hardware download, with cpu.accessControl keep, a project whose access control is Disabled, and attestation.cpuAccessControl \"disabled\" (" + UploadRouteWhy + ")";
+        }
+
+        public static Question Question(string why)
+        {
+            return new Question
+            {
+                Id = QuestionIds.UserManagement,
+                Message = why,
+                Detail = "UserManagementDownload",
+            };
+        }
+
+        // Check decides a reset for req. accessControlKept is whether the
+        // session's spec keeps access control and no apply on it ever set
+        // it; uploadedFrom the address this session last uploaded from
+        // ("" for none); uploadRoute whether the upload route counts
+        // (UploadRouteEnabled, for the agent); projectAccessControl reads
+        // the project's PlcAccessControlConfiguration, asked only once
+        // everything cheaper holds. A read that fails or reads nothing
+        // refuses.
+        public static Gate Check(DownloadRequest req, bool accessControlKept, string uploadedFrom, bool uploadRoute, Func<string> projectAccessControl)
+        {
+            var g = new Gate();
+            if (req.Decisions.UserManagementResetToProject != true)
+            {
+                g.Why = Refused + "it is not asked";
+                return g;
+            }
+            if (!req.Hardware)
+            {
+                g.Why = Refused + "this download loads no hardware; " + Routes(uploadRoute);
+                return g;
+            }
+            if (!accessControlKept)
+            {
+                g.Why = Refused + "the session's spec does not keep access control as found (cpu.accessControl keep on a session that never applied fullAccessUser); " + Routes(uploadRoute);
+                return g;
+            }
+            if (req.Attestation.CpuAccessControl == Attestation.CpuAccessEnabled)
+            {
+                g.Why = Refused + "the attestation says the CPU's access control is enabled, and a reset would turn it off and delete its users; tiad never resets a CPU whose access control is on";
+                return g;
+            }
+            string project;
+            try
+            {
+                project = projectAccessControl == null ? null : projectAccessControl();
+            }
+            catch (TiadException e)
+            {
+                if (e.Fatal) throw;
+                g.Why = Refused + "reading the project's access control failed (" + e.Message + "); " + Routes(uploadRoute);
+                return g;
+            }
+            if (project != ProjectDisabled)
+            {
+                g.Why = Refused + "the project's access control is " + (project == null ? "unreadable" : project == AccessRule.Absent ? "absent (no such setting)" : Json.Quote(project)) + ", not Disabled; " + Routes(uploadRoute);
+                return g;
+            }
+            if (uploadRoute && uploadedFrom != "" && uploadedFrom == req.Address)
+            {
+                g.Allowed = true;
+                g.Route = RouteUpload;
+                return g;
+            }
+            if (req.Attestation.Given && req.Attestation.CpuAccessControl == Attestation.CpuAccessDisabled)
+            {
+                g.Allowed = true;
+                g.Route = RouteAttestation;
+                return g;
+            }
+            if (uploadRoute) g.Why = Refused + "nothing shows the CPU's access control is off: upload from " + req.Address + " in this session first, or give attestation.cpuAccessControl \"disabled\" (with attestation.by and attestation.text), the operator's own observation of the CPU, never a value a caller fills in by default";
+            else g.Why = Refused + "nothing shows the CPU's access control is off: give attestation.cpuAccessControl \"disabled\" (with attestation.by and attestation.text), the operator's own observation of the CPU, never a value a caller fills in by default; " + UploadRouteWhy;
+            return g;
+        }
+    }
+
     // Answer is the agent's resolved answer to one question: Yes means do
     // what the question asks (stop the CPU, reinitialize the DBs it names,
     // overwrite, trust the certificate, use the protection password, start
     // the CPU after loading). The only question that can be answered no
-    // and still load is start-after: no means stay in STOP.
+    // and still load is start-after: no means stay in STOP. Choice is
+    // which answer a question with more than one yes gets: user-management
+    // keep (ChoiceKeep) or reset (ChoiceReset); "" for every other
+    // question, and never reset by default.
     public sealed class Answer
     {
+        public const string ChoiceKeep = "keep", ChoiceReset = "reset";
         public Question Question;
         public bool Yes;
+        public string Choice = "";
     }
 
     public static class DownloadRule
@@ -275,8 +436,15 @@ namespace Tiad
             foreach (var q in qs)
             {
                 bool yes = true;
+                string choice = "";
                 if (q.Id == QuestionIds.StartAfter) yes = d.StartAfter.HasValue && d.StartAfter.Value;
-                outp.Add(new Answer { Question = q.Copy(), Yes = yes });
+                if (q.Id == QuestionIds.UserManagement)
+                {
+                    // Resolve let exactly one yes through.
+                    if (d.UserManagementResetToProject == true) choice = Answer.ChoiceReset;
+                    else if (d.UserManagementKeepOnline == true) choice = Answer.ChoiceKeep;
+                }
+                outp.Add(new Answer { Question = q.Copy(), Yes = yes, Choice = choice });
             }
             return outp;
         }
@@ -286,8 +454,13 @@ namespace Tiad
         // answered no; a download goes ahead only when both are empty.
         // accessControlKept is whether the session's spec keeps the CPU's
         // access control as found: only then can user-management be
-        // answered.
-        public static void Resolve(List<Question> qs, Decisions d, bool haveProtection, bool haveConfigurationPassword, bool accessControlKept, List<Question> unanswered, List<Question> declined)
+        // answered keep. reset is UserManagementRule's verdict on a reset
+        // (null refuses): only an allowed one answers it reset.
+        //
+        // user-management, keep x reset: a yes answers it (both yes is a
+        // bad request, refused before this); with no yes, a no declines;
+        // with neither, it is unanswered.
+        public static void Resolve(List<Question> qs, Decisions d, bool haveProtection, bool haveConfigurationPassword, bool accessControlKept, UserManagementRule.Gate reset, List<Question> unanswered, List<Question> declined)
         {
             foreach (var q0 in qs)
             {
@@ -310,15 +483,36 @@ namespace Tiad
                         Sort(q, d.AllBlocks, unanswered, declined);
                         break;
                     case QuestionIds.UserManagement:
-                        // Keeping the CPU's users is tiad's only answer, and
-                        // only for a spec that keeps access control; a spec
-                        // that sets it would leave them disagreeing.
-                        if (d.UserManagementKeepOnline.HasValue && d.UserManagementKeepOnline.Value && !accessControlKept)
+                        bool keep = d.UserManagementKeepOnline == true, resetYes = d.UserManagementResetToProject == true;
+                        if (keep && resetYes)
                         {
-                            q.Message = q.Message + " (tiad keeps the CPU's online user management only for a keep spec on a session that never set access control: an apply of fullAccessUser on this session needs a fresh session that applies keep)";
+                            q.Message = q.Message + " (decisions.userManagementKeepOnline and decisions.userManagementResetToProject are both yes; user-management takes one answer)";
                             unanswered.Add(q);
                         }
-                        else Sort(q, d.UserManagementKeepOnline, unanswered, declined);
+                        else if (resetYes)
+                        {
+                            // Resetting is acting: only UserManagementRule
+                            // lets it, the same verdict tiad checked before
+                            // calling TIA.
+                            if (reset == null || !reset.Allowed)
+                            {
+                                q.Message = q.Message + " (" + (reset == null || reset.Why == "" ? "decisions.userManagementResetToProject is refused" : reset.Why) + ")";
+                                unanswered.Add(q);
+                            }
+                        }
+                        else if (keep)
+                        {
+                            // Keeping the CPU's users only for a spec that
+                            // keeps access control; a spec that sets it
+                            // would leave them disagreeing.
+                            if (!accessControlKept)
+                            {
+                                q.Message = q.Message + " (tiad keeps the CPU's online user management only for a keep spec on a session that never set access control: an apply of fullAccessUser on this session needs a fresh session that applies keep)";
+                                unanswered.Add(q);
+                            }
+                        }
+                        else if (d.UserManagementKeepOnline == false || d.UserManagementResetToProject == false) declined.Add(q);
+                        else unanswered.Add(q);
                         break;
                     case QuestionIds.IdentificationData:
                         Sort(q, d.IdentificationDataLoadNothing, unanswered, declined);

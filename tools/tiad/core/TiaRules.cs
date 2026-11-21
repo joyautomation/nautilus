@@ -267,9 +267,22 @@ namespace Tiad
         // For is the setting that applies answer yes or no to a
         // configuration of type, or null when that answer cannot be
         // applied: then the download is cancelled, never left to TIA's
-        // default.
-        public static Setting For(string type, bool yes)
+        // default. choice picks between yeses (Answer.Choice): only
+        // user-management has more than one, and it must name one; any
+        // other type with a choice cannot be applied.
+        public static Setting For(string type, bool yes, string choice)
         {
+            if (type == "UserManagementDownload")
+            {
+                // Keep, or reset to the project's, never TIA's preselection
+                // and never an update: which one is the request's, under
+                // UserManagementRule.
+                if (!yes) return null;
+                if (choice == Answer.ChoiceKeep) return Setting.Choose(UserManagementKeep);
+                if (choice == Answer.ChoiceReset) return Setting.Choose(UserManagementReset);
+                return null;
+            }
+            if (choice != "") return null;
             switch (type)
             {
                 case "StopModules":
@@ -288,10 +301,6 @@ namespace Tiad
                     return yes ? Setting.Choose("ConsistentDownload") : null;
                 case "AllBlocksDownload":
                     return yes ? Setting.Choose("DownloadAllBlocks") : null;
-                case "UserManagementDownload":
-                    // Only keep: updating or resetting the CPU's users is
-                    // never tiad's to choose.
-                    return yes ? Setting.Choose("KeepOnlineUserManagementData") : null;
                 case "LoadIdentificationData":
                     return yes ? Setting.Choose("LoadNothing") : null;
                 case "DataBlockReinitialization":
@@ -309,6 +318,11 @@ namespace Tiad
             }
         }
 
+        // The user-management selections tiad may write, as V21 names them
+        // (#789 7065368046).
+        public const string UserManagementKeep = "KeepOnlineUserManagementData";
+        public const string UserManagementReset = "DownloadAllUserManagementDataResetToProject";
+
         // Answered are the configuration types For can answer.
         public static readonly string[] Answered =
         {
@@ -324,7 +338,8 @@ namespace Tiad
         // download go on. TIA asks its checks one at a time and may act on
         // an answer before it asks the next (#789 S2b), so an acting answer
         // written before a later cancel leaves the CPU in doubt. A question
-        // tiad does not know is acting.
+        // tiad does not know is acting. An answer is classified by
+        // ActingAnswer, by what it writes.
         public static bool Acting(string questionId)
         {
             switch (questionId)
@@ -340,24 +355,38 @@ namespace Tiad
             }
         }
 
+        // ActingAnswer is whether the answer yes/choice to questionId acts
+        // on the CPU, by what it writes: start-after answered no
+        // (NoAction) changes nothing, user-management keep changes
+        // nothing, its reset deletes the CPU's users and sets its access
+        // control. The agent's record and the decider's both use it.
+        public static bool ActingAnswer(string questionId, bool yes, string choice)
+        {
+            if (questionId == QuestionIds.StartAfter) return yes;
+            if (questionId == QuestionIds.UserManagement) return choice == Answer.ChoiceReset;
+            return Acting(questionId);
+        }
+
         // Consequence says plainly what acting answers (question ids)
         // given before the download ended may already have done to the
         // CPU, and what to do about it, or "" when there were none.
         public static string Consequence(List<string> acting)
         {
             if (acting == null || acting.Count == 0) return "";
-            bool stop = false, start = false, load = false, other = false;
+            bool stop = false, start = false, load = false, users = false, other = false;
             foreach (string id in acting)
             {
                 if (id == QuestionIds.StopCpu || id == QuestionIds.Reinitialize) stop = true;
                 else if (id == QuestionIds.StartAfter) start = true;
                 else if (id == QuestionIds.ConsistentDownload || id == QuestionIds.AlarmTexts || id == QuestionIds.AllBlocks) load = true;
+                else if (id == QuestionIds.UserManagement) users = true;
                 else other = true;
             }
             var l = new List<string>();
             if (stop) l.Add("TIA may already have stopped the CPU: check its mode and start it");
             if (start) l.Add("TIA may already have started the CPU: check its mode");
             if (load) l.Add("TIA may already have loaded the software: compare");
+            if (users) l.Add("TIA may already have reset the CPU's user management to the project's: check its users and access control");
             if (other) l.Add("TIA may already have acted on them: check the CPU's mode and compare");
             return "tiad had answered " + string.Join(", ", acting.ToArray()) + " before the download ended, so " + string.Join("; ", l.ToArray());
         }
@@ -372,9 +401,12 @@ namespace Tiad
             {
                 foreach (bool yes in new[] { true, false })
                 {
-                    Setting s = For(t, yes);
-                    if (s == null || s.Kind != Setting.Select) continue;
-                    l.Add(new KeyValuePair<string, string>(t, s.Value));
+                    foreach (string choice in new[] { "", Answer.ChoiceKeep, Answer.ChoiceReset })
+                    {
+                        Setting s = For(t, yes, choice);
+                        if (s == null || s.Kind != Setting.Select) continue;
+                        l.Add(new KeyValuePair<string, string>(t, s.Value));
+                    }
                 }
             }
             return l;
@@ -415,6 +447,10 @@ namespace Tiad
     {
         public Setting Setting;
         public string Type = "";
+        // Acting is whether writing Setting acts on the CPU
+        // (DownloadChecks.ActingAnswer). It defaults to acting, the safe
+        // side: a step that forgets to say records its write.
+        public bool Acting = true;
     }
 
     // DownloadDecider keeps ITia.Download's promise over Openness's
@@ -534,19 +570,18 @@ namespace Tiad
             Answer a = answer(q.Copy());
             if (a == null) throw Cancel("tiad cancels the download at TIA's " + what + ": the request does not answer it yes (" + Token + ")", true);
             if (a.Question == null || a.Question.Id != id) throw Cancel("the answer to " + what + " is not to " + id, false);
-            Setting s = DownloadChecks.For(type, a.Yes);
-            if (s == null) throw Cancel("tiad cannot apply " + (a.Yes ? "yes" : "no") + " to " + what, false);
+            string choice = a.Choice ?? "";
+            Setting s = DownloadChecks.For(type, a.Yes, choice);
+            if (s == null) throw Cancel("tiad cannot apply " + (a.Yes ? "yes" : "no") + (choice == "" ? "" : " (" + choice + ")") + " to " + what, false);
             Approved++;
-            return new Step { Setting = s, Type = type };
+            return new Step { Setting = s, Type = type, Acting = DownloadChecks.ActingAnswer(id, a.Yes, choice) };
         }
 
         // Wrote reports that step's setting is written into TIA's
-        // configuration. NoAction (start-after answered no) changes
-        // nothing, so it is never acting.
+        // configuration; an acting one is recorded (Step.Acting).
         public void Wrote(Step step)
         {
-            if (step.Setting.Kind == Setting.Select && step.Setting.Value == "NoAction") return;
-            if (DownloadChecks.Acting(DownloadChecks.QuestionId(step.Type))) Acting.Add(step.Type + " = " + step.Setting);
+            if (step.Acting) Acting.Add(step.Type + " = " + step.Setting);
         }
 
         // Fail reports that writing an answer failed: the download is
@@ -620,9 +655,16 @@ namespace Tiad
         public Step After(string type)
         {
             loadSeen = true;
+            if (type == "UserManagementDownload")
+            {
+                // tiad answers user management only before loading. One
+                // asked after it is left to TIA, whose preselection on a
+                // hardware load is the reset (#789 stage 4): say so loudly.
+                Log.Line("download: WARNING TIA asked UserManagementDownload after loading; tiad wrote nothing, so TIA's own selection stands (on a hardware load TIA preselects the reset to the project's): check the CPU's users and access control");
+            }
             if (type != StartAfterType) return null;
             bool start = Cancelled == null && startAfter.HasValue && startAfter.Value;
-            return new Step { Setting = Setting.Choose(start ? "StartModule" : "NoAction"), Type = type };
+            return new Step { Setting = Setting.Choose(start ? "StartModule" : "NoAction"), Type = type, Acting = start };
         }
 
         // Finish reads how TIA's download call ended: entered is whether

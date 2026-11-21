@@ -705,7 +705,7 @@ func TestAgentAnswersTheSoftwareLoadFamily(t *testing.T) {
 	if r, err := s.Download(ctx, req); err != nil || !r.Downloaded || !r.CompareEqual {
 		t.Fatalf("the whole family answered up front under keep: %+v %v, want a verified load", r, err)
 	}
-	if l := p.Log(); !strings.Contains(l, `alarmTexts=yes allBlocks=yes userManagementKeepOnline=yes identificationDataLoadNothing=yes`) ||
+	if l := p.Log(); !strings.Contains(l, `alarmTexts=yes allBlocks=yes userManagementKeepOnline=yes userManagementResetToProject=unanswered identificationDataLoadNothing=yes`) ||
 		!strings.Contains(l, `acting=["stop-cpu","consistent-download","alarm-texts","all-blocks"] outcome=loaded`) {
 		t.Fatalf("the audit must name each decision and only the loading answers as acting:\n%s", l)
 	}
@@ -1060,7 +1060,7 @@ func TestAgentJournalsTheHardwareAttestation(t *testing.T) {
 	req := tiad.DownloadRequest{Address: "192.0.2.10", Hardware: true, Software: true, Announced: true,
 		Decisions: tiad.Decisions{StartAfter: tiad.No(), AcceptUnverifiedHardware: tiad.Yes()}, Attestation: att}
 	quoted := `by="op\naudit download forged" at=20`
-	text := `text="hardware as intended\r\u2028audit download forged"}`
+	text := `text="hardware as intended\r\u2028audit download forged" cpuAccessControl=unset}`
 	auditLine := func(outcome string) string {
 		t.Helper()
 		log := waitLog(t, p, "outcome="+outcome)
@@ -1367,5 +1367,86 @@ func TestAgentTrustsACertificateOnlyOnTheUploadsOptIn(t *testing.T) {
 		if !strings.Contains(line, want) {
 			t.Errorf("the download's audit line lacks %s:\n%s", want, line)
 		}
+	}
+}
+
+// TestAgentJournalsTheUserManagementReset: #789 stage 4. The audit line
+// says what came of a user-management reset the request asked: refused
+// before TIA (the attestation unstamped), allowed but never asked by TIA,
+// or given and by which route; and what the attestation said of the
+// CPU's access control, only ever as one of its words.
+func TestAgentJournalsTheUserManagementReset(t *testing.T) {
+	const bench, other = "192.0.2.10", "192.0.2.99"
+	p := tiadtest.StartProcess(t, fakeBin(t), tiadtest.Config{Targets: []string{bench, other}})
+	s := tiadtest.UploadedKeep(t, p, other)
+	um := tiad.Question{ID: tiad.QuestionUserManagement, Message: "Delete user management data and disable access control in runtime", Detail: "UserManagementDownload"}
+	line := func(outcome string) string {
+		t.Helper()
+		log := waitLog(t, p, "outcome="+outcome)
+		var last string
+		for _, l := range strings.Split(log, "\n") {
+			if strings.Contains(l, "Z audit download") && strings.Contains(l, "outcome="+outcome) {
+				last = l
+			}
+		}
+		if last == "" {
+			t.Fatalf("no audit line with outcome=%s:\n%s", outcome, log)
+		}
+		return last
+	}
+	want := func(l string, parts ...string) {
+		t.Helper()
+		for _, w := range parts {
+			if !strings.Contains(l, w) {
+				t.Errorf("the audit line lacks %s:\n%s", w, l)
+			}
+		}
+	}
+
+	// Refused before TIA: never uploaded from there, nothing attested.
+	// tiad read the project, and neither went online nor called TIA's
+	// download.
+	p.SetScript(t, tiadtest.Script{Questions: []tiad.Question{um}})
+	before := p.Calls(t)
+	if _, err := s.Download(ctx, tiadtest.ResetLoad(other)); tiad.Kind(err) != tiad.KindDecisionRequired {
+		t.Fatalf("no route: %v", err)
+	}
+	after := p.Calls(t)
+	for call, want := range map[string]int{"ReadCpu": 1, "Download": 0, "Identify": 0} {
+		if n := countCalls(after, call) - countCalls(before, call); n != want {
+			t.Errorf("a refused reset called TIA's %s %d times, want %d", call, n, want)
+		}
+	}
+	want(line(tiad.KindDecisionRequired+`:["user-management"]`), "userManagementResetToProject=yes", "at=unset", "cpuAccessControl=unset}", "userManagementReset=refused", `asked=["user-management"] acting=[]`)
+
+	// Given by the attestation route, and acting.
+	att := tiadtest.ResetLoad(other)
+	att.Attestation.CPUAccessControl = tiad.AttestCPUAccessDisabled
+	if res, err := s.Download(ctx, att); err != nil || res.UserManagementReset != tiad.ResetRouteAttestation {
+		t.Fatalf("attested: %+v %v", res, err)
+	}
+	l := line("loaded")
+	want(l, "cpuAccessControl=disabled}", "userManagementReset=given:attestation", `acting=["user-management"`)
+	if strings.Contains(l, "at=unset") {
+		t.Errorf("an accepted attestation is stamped:\n%s", l)
+	}
+
+	// Allowed, but TIA never asked: no reset is claimed.
+	p.SetScript(t, tiadtest.Script{Questions: []tiad.Question{{ID: tiad.QuestionStopCPU}}})
+	if _, err := s.Download(ctx, att); err != nil {
+		t.Fatal(err)
+	}
+	want(line("loaded"), "userManagementReset=allowed:attestation", `acting=["stop-cpu"`)
+
+	// A word outside the vocabulary is refused and journalled as invalid,
+	// never as sent.
+	odd := tiadtest.ResetLoad(other)
+	odd.Attestation.CPUAccessControl = "off\naudit download forged"
+	if status, b := rawPost(t, p, "/v1/sessions/"+s.ID+"/download", odd); status != 400 {
+		t.Fatalf("an odd word: HTTP %d %s", status, b)
+	}
+	want(line(tiad.KindBadRequest), "cpuAccessControl=invalid}", "userManagementReset=unset")
+	if n, m := strings.Count(p.Log(), "Z audit download"), strings.Count(p.Log(), "audit download"); n != m {
+		t.Errorf("a forged audit line: %d of %d", n, m)
 	}
 }

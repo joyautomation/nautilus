@@ -59,6 +59,12 @@ var ResolveCases = []struct {
 	{"identification-data unanswered", []tiad.Question{{ID: tiad.QuestionIdentificationData}}, tiad.Decisions{StopCPU: tiad.Yes()}, false, false, "identification-data", ""},
 	{"user-management keep refused when the spec sets access control", []tiad.Question{{ID: tiad.QuestionUserManagement}}, tiad.Decisions{UserManagementKeepOnline: tiad.Yes()}, false, false, "user-management", ""},
 	{"user-management no", []tiad.Question{{ID: tiad.QuestionUserManagement}}, tiad.Decisions{UserManagementKeepOnline: tiad.No()}, false, false, "", "user-management"},
+	// Resetting it to the project's: a software download is refused before
+	// TIA (CheckUserManagementReset: it loads no hardware); a no declines,
+	// keep's or reset's.
+	{"user-management reset refused", []tiad.Question{{ID: tiad.QuestionUserManagement}}, tiad.Decisions{UserManagementResetToProject: tiad.Yes()}, false, false, "user-management", ""},
+	{"user-management reset no", []tiad.Question{{ID: tiad.QuestionUserManagement}}, tiad.Decisions{UserManagementResetToProject: tiad.No()}, false, false, "", "user-management"},
+	{"user-management keep no, reset no", []tiad.Question{{ID: tiad.QuestionUserManagement}}, tiad.Decisions{UserManagementKeepOnline: tiad.No(), UserManagementResetToProject: tiad.No()}, false, false, "", "user-management"},
 	{"start-after no is stay in STOP", []tiad.Question{{ID: tiad.QuestionStartAfter}}, tiad.Decisions{StartAfter: tiad.No()}, false, false, "", ""},
 	{"start-after unanswered", []tiad.Question{{ID: tiad.QuestionStartAfter}}, tiad.Decisions{}, false, false, "start-after", ""},
 	{"reinit all agreed, any case", []tiad.Question{qReinit}, tiad.Decisions{Reinitialize: []string{"tags", "PROG_DB"}}, false, false, "", ""},

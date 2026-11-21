@@ -106,6 +106,7 @@ func Contract(t *testing.T, start Starter) {
 	t.Run("AccessControl", func(t *testing.T) { contractAccessControl(t, start) })
 	t.Run("Reuse", func(t *testing.T) { contractReuse(t, start) })
 	t.Run("ReuseAfterARefusedUpload", func(t *testing.T) { contractReuseAfterARefusedUpload(t, start) })
+	t.Run("UserManagementReset", func(t *testing.T) { contractUserManagementReset(t, start) })
 }
 
 // ContractNoTIA is the part of the contract that never needs TIA and
