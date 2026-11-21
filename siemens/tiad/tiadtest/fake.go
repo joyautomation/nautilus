@@ -1326,7 +1326,7 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 	// same call, must be equal (it covers the PLC software only). The
 	// compare failing, TIA's result state, and start-after named after a
 	// load that ends in doubt are modelled by the C# fake only (process
-	// tests, knobs downloadState and compareDiffers).
+	// tests, knobs downloadState, compareDiffers and compareTree).
 	if f.CompareResult != nil && !f.CompareResult.Equal {
 		var names []string
 		for _, d := range f.CompareResult.Differences {

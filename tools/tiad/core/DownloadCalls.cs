@@ -372,7 +372,8 @@ namespace Tiad
             bool equal;
             try
             {
-                equal = OnSession(s, delegate(ITia t) { return t.Compare(s.Handle, req.Address, diffs); });
+                CompareNode tree = OnSession(s, delegate(ITia t) { return t.Compare(s.Handle, req.Address); });
+                equal = TiaNames.CompareEqual(tree, diffs);
             }
             catch (TiadException e)
             {
@@ -426,7 +427,8 @@ namespace Tiad
                 if (!Target(address)) throw new TiadException(403, Kinds.TargetRefused, address + " is not in TIAD_TARGETS");
                 CheckDevicePin(s, address, "compare");
                 var diffs = new List<Difference>();
-                bool equal = OnSession(s, delegate(ITia t) { return t.Compare(s.Handle, address, diffs); });
+                CompareNode tree = OnSession(s, delegate(ITia t) { return t.Compare(s.Handle, address); });
+                bool equal = TiaNames.CompareEqual(tree, diffs);
                 var list = new List<object>();
                 foreach (var d in diffs)
                 {

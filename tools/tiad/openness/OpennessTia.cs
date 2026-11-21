@@ -1158,9 +1158,10 @@ namespace Tiad.Openness
 
         // ---- compare ----
 
-        // Compare goes online to the CPU at address and compares the PLC
-        // software with it.
-        public bool Compare(object project, string address, List<Difference> differences)
+        // Compare goes online to the CPU at address, compares the PLC
+        // software with it and returns TIA's compare tree as is; the agent
+        // decides what it proves (TiaNames.CompareEqual).
+        public CompareNode Compare(object project, string address)
         {
             return Tia(delegate
             {
@@ -1174,6 +1175,7 @@ namespace Tiad.Openness
                 // The handler stays attached until offline: TIA may ask while
                 // it compares, too.
                 var online = new OnlineAsks(op.Configuration, Detached);
+                CompareNode tree = null;
                 try
                 {
                     OnlineState st = op.GoOnline(at);
@@ -1186,7 +1188,7 @@ namespace Tiad.Openness
                             throw new TiaException("TIA could not go online to " + address + ": " + st);
                         }
                         CompareResult cr = ((PlcSoftware)cpu.GetService<SoftwareContainer>().Software).CompareToOnline();
-                        Walk(cr.RootElement, differences);
+                        tree = cr == null ? null : Node(cr.RootElement);
                         failed = false;
                     }
                     finally
@@ -1212,15 +1214,23 @@ namespace Tiad.Openness
                     online.Stop();
                 }
                 online.Check(address, "compare");
-                return differences.Count == 0;
+                return tree;
             });
         }
 
-        static void Walk(CompareResultElement e, List<Difference> into)
+        // Node copies one element of TIA's compare tree, and its children;
+        // an element only the CPU has carries its online name only. A null
+        // child is kept with no state, which the agent reads as different:
+        // the glue drops nothing.
+        static CompareNode Node(CompareResultElement e)
         {
-            string state = TiaNames.Difference(e.ComparisonResult.ToString());
-            if (state != "") into.Add(new Difference { Object = e.LeftName ?? "", State = state });
-            foreach (CompareResultElement c in e.Elements) Walk(c, into);
+            if (e == null) return null;
+            var n = new CompareNode { Name = !string.IsNullOrEmpty(e.LeftName) ? e.LeftName : (e.RightName ?? ""), State = e.ComparisonResult.ToString() };
+            foreach (CompareResultElement c in e.Elements)
+            {
+                n.Children.Add(Node(c) ?? new CompareNode());
+            }
+            return n;
         }
 
         // ---- export ----

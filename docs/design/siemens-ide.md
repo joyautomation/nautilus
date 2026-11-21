@@ -635,9 +635,14 @@ behaviour. So, until then:
   where the compare cannot be equal: a CPU whose online access asks for
   credentials (tiad answers no, so the compare fails), a hardware-only
   download onto software that already differs, a kept device or system
-  block that compares different. Until a bench download shows what an
-  equal compare of a real CPU reports, an empty compare (no element
-  compared) also reads as equal. When the request said start
+  block that compares different. Equal is the agent's call on TIA's
+  compare tree, never TIA's tree alone: its root says identical, at
+  least one object below the root was compared and found identical, and
+  no element anywhere is in a non-identical state. An empty tree, a tree
+  of empty folders, or a folder that says its contents differ without
+  showing a differing child is not equal and names why (`nothing
+  compared`, `not compared`, `contents differ`). The shape was pinned
+  from the real tree an equal bench CPU reported (#789 dry-run window). When the request said start
   the CPU and the download ends in doubt after TIA's call,
   `actingAnswers` names `start-after` too: TIA may have started it after
   loading.

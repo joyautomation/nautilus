@@ -250,6 +250,7 @@ namespace Tiad.Fake
         bool noDryRun;
         bool cleanCancel;
         bool compareDiffers;
+        string compareTree = "";
         string downloadState = "";
         bool uploadAsksTls;
         string cannotApply = "";
@@ -372,6 +373,13 @@ namespace Tiad.Fake
         // the agent itself never calls that a clean refusal.
         // CompareDiffers makes every compare differ, even right after a
         // download: a CPU that did not take what was sent.
+        // CompareTree, when set, is the compare tree TIA reports, whatever
+        // the CPU holds: "empty" (an identical root, nothing under it),
+        // "emptyFolders" (an identical root over empty folders only),
+        // "folderDiffers" (a folder says its contents differ but shows no
+        // differing child) or "irrelevantRoot" (the root is
+        // CompareIrrelevant over an identical block): trees that compare
+        // nothing or hide a difference, which must never pass as equal.
         // DownloadState is the state TIA's download result reports when it
         // ran ("" = Success).
         public string DownloadState
@@ -392,6 +400,17 @@ namespace Tiad.Fake
                 lock (mu)
                 {
                     return compareDiffers;
+                }
+            }
+        }
+
+        public string CompareTree
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return compareTree;
                 }
             }
         }
@@ -580,6 +599,11 @@ namespace Tiad.Fake
             bool noDry = r.Bool("noDryRun");
             bool clean = r.Bool("cleanCancel");
             bool differs = r.Bool("compareDiffers");
+            string tree = r.Str("compareTree");
+            if (tree != "" && tree != "empty" && tree != "emptyFolders" && tree != "folderDiffers" && tree != "irrelevantRoot")
+            {
+                throw new TiadException(400, Kinds.BadRequest, "compareTree is empty, emptyFolders, folderDiffers or irrelevantRoot");
+            }
             string dlState = r.Str("downloadState");
             bool asksTls = r.Bool("uploadAsksTls");
             string cannot = r.Str("cannotApply");
@@ -618,6 +642,7 @@ namespace Tiad.Fake
                 noDryRun = noDry;
                 cleanCancel = clean;
                 compareDiffers = differs;
+                compareTree = tree;
                 downloadState = dlState;
                 uploadAsksTls = asksTls;
                 cannotApply = cannot;
@@ -1214,14 +1239,55 @@ namespace Tiad.Fake
             }
         }
 
-        public bool Compare(object project, string address, List<Difference> differences)
+        // Compare reports a compare tree shaped like the one TIA reported
+        // on the bench for an equal CPU (#789 dry-run window): the CPU's
+        // folder over Program blocks and PLC tags, each holding one
+        // identical object, and three empty folders. A CPU that does not
+        // hold the project reports the CPU's own element as different.
+        public CompareNode Compare(object project, string address)
         {
             script.Enter("Compare");
             var p = (FakeProject)project;
+            string cpu = p.Station == null ? "" : p.Station.Cpu.Name;
+            switch (script.CompareTree)
+            {
+                case "empty":
+                    return Cmp(cpu, "FolderContentsIdentical");
+                case "emptyFolders":
+                    return Cmp(cpu, "FolderContentsIdentical", EmptyFolders());
+                case "folderDiffers":
+                    return Cmp(cpu, "FolderContentsIdentical",
+                        Cmp("Program blocks", "FolderContentsIdentical", Cmp("Main [OB1]", "ObjectsIdentical")),
+                        Cmp("PLC tags", "FolderContentsDifferent"));
+                case "irrelevantRoot":
+                    return Cmp(cpu, "CompareIrrelevant", Cmp("Program blocks", "FolderContentsIdentical", Cmp("Main [OB1]", "ObjectsIdentical")));
+            }
             FakeProject there;
-            if (!script.CompareDiffers && loaded.TryGetValue(address, out there) && there == p && !p.Changed) return true;
-            differences.Add(new Difference { Object = p.Station == null ? "" : p.Station.Cpu.Name, State = "different" });
-            return false;
+            bool equal = !script.CompareDiffers && loaded.TryGetValue(address, out there) && there == p && !p.Changed;
+            var kids = new List<CompareNode>
+            {
+                Cmp("Program blocks", "FolderContentsIdentical", Cmp("Main [OB1]", "ObjectsIdentical")),
+                Cmp("PLC tags", "FolderContentsIdentical", Cmp("Default tag table", "ObjectsIdentical")),
+            };
+            kids.AddRange(EmptyFolders());
+            return Cmp(cpu, equal ? "FolderContentsIdentical" : "ObjectsDifferent", kids.ToArray());
+        }
+
+        static CompareNode[] EmptyFolders()
+        {
+            return new[]
+            {
+                Cmp("Software units", "FolderContentsIdentical"),
+                Cmp("Technology objects", "FolderContentsIdentical"),
+                Cmp("PLC data types", "FolderContentsIdentical"),
+            };
+        }
+
+        static CompareNode Cmp(string name, string state, params CompareNode[] children)
+        {
+            var n = new CompareNode { Name = name, State = state };
+            n.Children.AddRange(children);
+            return n;
         }
 
         public List<string> Export(object project, string dir, ExportOptions o)
