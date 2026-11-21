@@ -1558,8 +1558,12 @@ namespace Tiad.Openness
                         Log.Line("online-check: fingerprint items {0}{1}", res.Fingerprint.Count, res.FingerprintError == "" ? "" : "; " + TiaNames.LogSafe(res.FingerprintError));
                         try
                         {
-                            CompareResult cr = ((PlcSoftware)cpu.GetService<SoftwareContainer>().Software).CompareToOnline();
-                            Walk(cr.RootElement, res.Differences);
+                            PlcSoftware csw = (PlcSoftware)cpu.GetService<SoftwareContainer>().Software;
+                            var cblocks = new List<ProjectBlock>();
+                            ProjectBlocks(csw.BlockGroup, cblocks);
+                            CompareResult cr = csw.CompareToOnline();
+                            bool equal = TiaNames.CompareEqual(cr == null ? null : Node(cr.RootElement), cblocks, res.Differences);
+                            Log.Line("online-check: compare equal {0}", equal);
                             res.Compared = true;
                         }
                         catch (Exception e)
