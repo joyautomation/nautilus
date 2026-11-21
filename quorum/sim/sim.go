@@ -284,6 +284,13 @@ type node struct {
 	downs, pauses, freezes int // active crash, pause and freeze faults
 	unhealthy              int // active Unhealthy faults: its scans hang
 	savedRate              PPM
+
+	// spareSeq: the write of the spare flag this boot decided on
+	// (quorum.Voter.MakeSpare), 0 when none is in flight. spare: the flag
+	// is durable and this process is silent (#1029 3c-2). A restart reads
+	// the flag from the disk.
+	spareSeq uint64
+	spare    bool
 }
 
 type legitGrant struct {
@@ -444,6 +451,9 @@ func (w *World) step(e *event) {
 	if !n.up || (e.boot >= 0 && e.boot != n.boot) {
 		return // the process that armed it is gone (a message, boot -1, goes to whoever is up)
 	}
+	if n.spare {
+		return // a spare is silent: no look, no answer, nothing heard (#1029 3c-2)
+	}
 	if n.paused {
 		n.deferred = append(n.deferred, e)
 		return
@@ -479,6 +489,7 @@ func (w *World) start(n *node) {
 	n.boot++
 	n.sent, n.grantEnd, n.legit = nil, nil, nil
 	n.disk.queue, n.disk.busy = nil, false
+	n.spareSeq, n.spare = 0, false
 	now := w.local(n)
 
 	var st quorum.VoterState
@@ -511,6 +522,13 @@ func (w *World) start(n *node) {
 		if n.addr != W && n.addr != W2 {
 			w.tracef("%v start (voter, readable=%v)", n.addr, readable)
 		}
+		return
+	}
+	if st.Spare {
+		// A spare's flag is read first, and it stays silent (#1029 3c-2).
+		n.spare, n.voter = true, nil
+		w.rec.Spares = append(w.rec.Spares, Spare{At: w.now, Node: n.addr, Boot: n.boot, Restart: true})
+		w.tracef("%v start (spare: silent)", n.addr)
 		return
 	}
 	n.nonce = drawNonZero(n.rng)
@@ -769,6 +787,17 @@ func (w *World) deliver(n *node, from Addr, b []byte) {
 		}
 	}
 	n.cand.NoteMark(rep) // a probe's reply too: how a marked name hears it cleared
+	n.cand.NoteHeld(now, rep)
+	if n.spareSeq == 0 && n.cand.Spare(now) {
+		// Both other voters hold another boot of this name the incumbent:
+		// the flag is written first, and the copy goes quiet once it is
+		// durable (diskDone). Until then it is the held copy it was.
+		p := n.voter.MakeSpare()
+		n.spareSeq = p.Seq
+		w.rec.spareDecided = append(w.rec.spareDecided, Spare{At: w.now, Node: n.addr, Boot: n.boot})
+		w.tracef("%v decides it is a spare (flag write seq=%d)", n.addr, p.Seq)
+		w.persist(n, p)
+	}
 	if quorum.IsRelayProbe(rep) {
 		return // the relay probe's reply is for the voter only
 	}
@@ -1016,6 +1045,14 @@ func (w *World) diskDone(n *node) {
 		w.sendAdopts(n, msgs)
 		w.observe(n)
 		w.gate(n)
+		if n.spareSeq != 0 && wr.seq >= n.spareSeq {
+			if ok {
+				w.becomeSpare(n)
+				return
+			}
+			n.spareSeq = 0 // a failed write: still held, and it decides again on the next reply
+			n.voter.SpareWriteFailed()
+		}
 	} else {
 		w.replyHeld(n, n.voter.Persisted(wr.seq, ok))
 	}
@@ -1067,6 +1104,19 @@ func (w *World) crash(n *node, wipe bool) {
 		w.rec.gate(n.addr, w.now, false, 0, 0)
 		w.count(n, 0, 0)
 	}
+}
+
+// becomeSpare silences n once its spare flag is durable: nothing it had
+// queued is sent, and it neither looks nor answers again (#1029 3c-2).
+func (w *World) becomeSpare(n *node) {
+	n.spare, n.spareSeq = true, 0
+	w.rec.Spares = append(w.rec.Spares, Spare{At: w.now, Node: n.addr, Boot: n.boot})
+	w.tracef("%v is a spare: silent", n.addr)
+	n.voter, n.cand, n.adopt = nil, nil, nil
+	n.deferred = nil
+	n.disk.queue = nil
+	w.rec.gate(n.addr, w.now, false, 0, 0)
+	w.count(n, 0, 0)
 }
 
 func (w *World) pause(n *node, on bool) {

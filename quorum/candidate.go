@@ -100,6 +100,9 @@ type Candidate struct {
 	// forgot its mark, keeps this candidate from campaigning until it is
 	// itself restarted (#1029 3c, #1113 review).
 	markedBy map[NodeID]uint64
+	// held: the latest HeldBy word of each of the two OTHER voters on
+	// this boot's replies, and since when it has said so (NoteHeld).
+	held     map[NodeID]heldWord
 	rounds   []*round
 	leading  bool
 	leaseEnd Instant // leading only until here, on this node's clock
@@ -345,6 +348,75 @@ func (c *Candidate) NoteMark(r Reply) {
 // Marked reports whether a voter's last reply marked this name a
 // confirmed duplicate (NoteMark): the candidate then doesn't campaign.
 func (c *Candidate) Marked() bool { return len(c.markedBy) > 0 }
+
+// heldWord is what one voter last said holds this candidate's name
+// (Reply.HeldBy), since when it has said so without a break, and when it
+// last said it.
+type heldWord struct {
+	by          uint64
+	since, last Instant
+}
+
+// NoteHeld takes the incumbent a voter names for this candidate's marked
+// name (Reply.HeldBy), from every reply meant for this boot, a relay
+// probe's included, received at now (#1029 3c-2). Only the two OTHER
+// voters count: this node's own voter may run from a copied disk, and
+// its word would be the copy's own. A changed word starts over.
+func (c *Candidate) NoteHeld(now Instant, r Reply) {
+	if r.To != c.cfg.Self || r.Nonce != c.cfg.Nonce {
+		return
+	}
+	if r.From != c.cfg.Peer && r.From != c.cfg.Witness && !(r.From == c.cfg.Self && mut("spare_own_voter_counts")) {
+		return
+	}
+	if c.held == nil {
+		c.held = map[NodeID]heldWord{}
+	}
+	h := c.held[r.From]
+	if r.HeldBy == 0 || r.HeldBy != h.by {
+		h = heldWord{by: r.HeldBy, since: now}
+	}
+	h.last = now
+	c.held[r.From] = h
+}
+
+// Spare reports whether this boot should demote itself to a spare
+// (#1029 3c-2): BOTH other voters have named the SAME other boot of this
+// name the incumbent (NoteHeld) for at least a lease each without a
+// break. Both, never one: a late frame of a real restart's old boot can
+// make one voter name it (false spares up to 300 of 300 with one voter's
+// word, 0 with both), and a partitioned original then can't be demoted
+// by the one voter it still reaches. Never while this boot holds a
+// lease: a leader is not demoted under its own lease (it can't be the
+// copy two voters agree on while they renew it, so this only guards a
+// rule change). The words are each voter's latest: one cut off since
+// keeps its word, as a mark's hold does. The driver then makes the flag
+// durable (Voter.MakeSpare) and goes quiet.
+func (c *Candidate) Spare(now Instant) bool {
+	if c.Leading(now) && !mut("spare_while_leading") {
+		return false
+	}
+	span := c.cfg.Lease
+	if mut("spare_no_span") {
+		span = 0
+	}
+	need := 2 // both other voters (held keeps only theirs)
+	if mut("spare_one_voter") {
+		need = 1
+	}
+	agree := map[uint64]int{}
+	for _, h := range c.held {
+		if h.by != 0 && h.by != c.cfg.Nonce && h.last.Sub(h.since) >= span {
+			agree[h.by]++
+		}
+	}
+	for _, n := range agree {
+		if n >= need {
+			return true
+		}
+	}
+	return false
+}
 
 // ProbeID is the id of a standby's relay probe (Candidate.Probe), which
 // its reply echoes. A driver hands that reply to its voter's Hear only:

@@ -438,6 +438,48 @@ them, so each device's communication watchdog sees the silence and puts
 that device in its own safe state, as for a hung scan (above). An output
 on a device with no communication watchdog keeps its last value.
 
+**The copy makes itself a spare.** Once both other members have marked
+the name, each tells it which process it holds as that member: the one
+it heard **first**, among those still sending. A process of that name
+the members first heard only after they marked it (the original,
+restarted beside a running copy, or a copy restarted before it went
+spare) is told nothing, and stays held. A copy that both other
+members name another process for a full lease writes "spare" into its
+`quorum.state` and goes silent: it no longer votes, campaigns, probes,
+answers the other controller or takes part in the operator-intent log,
+its tag API refuses writes (it knows no leader), and its `/api/cluster`
+says `duplicate of a - spare`. It also raises `redundancy.spare`, at the
+decision and every time it starts again. A spare stays one across
+restarts and a box change: only an operator turns it back.
+
+- In the simulator, a clone that came up beside a running pair went spare
+  in every run, 3.4 s after it started on average and 4.0 s at most (2 s
+  lease). The original never did, also with 30 to 80% message loss on
+  its links. A real controller never went spare where a restart's late
+  messages marked it by mistake on one member: one member's word is
+  never enough, it takes both.
+- **"First" means who was running first, not which box is real.** The
+  pair can't tell a copy from its original. A copy that boots together
+  with its original (a site-wide power cycle), comes up while the
+  original is down, or is heard before the original's restart within
+  about a second of the copy's start, may keep the name, and the
+  **real** box then goes spare: 87 of 300 same-time boots in the
+  simulator, and 300, 257 and 3 of 300 with the original restarting a
+  quarter, half and one second after the copy started (none later).
+  Never both: the other copy carries on held, as above.
+- **A leader is never demoted under its own lease.**
+
+What a spare costs:
+
+- **If the process the voters hold dies while the spare runs**, the pair
+  runs on the other controller and the witness alone until an operator
+  acts: redundancy is lost, not the leader.
+- **After a spare, one controller leads on two members until the marks
+  are cleared.** The copy goes quiet before any split can take the
+  original's lease, so the original keeps leading, while the member that
+  marked it gives it nothing new. One more fault (the witness down, or a
+  cut) then leaves no leader until the marks are cleared.
+
 **What to do:** the alarm names the duplicated controller ("two processes
 claim to be `a`") and the member that raised it. Clear it in this order,
 and only in this order:
@@ -454,7 +496,36 @@ and only in this order:
 
 A copy that still runs is marked again within a quarter of a lease and a
 look. Once the marks are cleared and the copy is gone, a real controller
-leads within a takeover's time.
+leads within a takeover's time. In the simulator the pair was leaderless
+for 3.2 to 4.5 s on average across this clear, 5.3 s at most.
+
+**When a spare is involved** (until the `recommission --from-spare`
+command arrives):
+
+- **The spare is the copy** (`redundancy.spare` on a box that is not the
+  real controller): stop it, and keep it stopped. That is step 1 above.
+- **The spare is the real box** (its copy was running first): stop the
+  copy and confirm it is down, restart the members that raised the alarm
+  (steps 1 and 2), then on the real box stop naut, delete `quorum.state`
+  and start naut again. It starts uncommissioned and re-adopts from the
+  other controller within seconds, as after a network card change. Step
+  2 is not optional: while the members that marked it run, their marks
+  hold the real box for good, and it never leads. It has a cost here:
+  the other controller leads alone (the spare is no standby), so
+  restarting it leaves the pair without a leader until it is back: its
+  own start-up plus about one lease, while its restarted voter waits
+  before it grants (0.53 to 0.57 s with a 500 ms lease in our tests,
+  start-up not counted).
+
+Do not run an older naut release on a spare. A release before the spare
+can't read the spare's `quorum.state`: it sets the file aside and starts
+uncommissioned, so the box would forget it is a spare. It can't vote with
+the newer pair (`redundancy.version-mismatch`: the vote protocol changed
+with the spare), and that is the only thing that keeps it out. From this
+release on, naut refuses to start over a `quorum.state` written by a newer
+release, and says to run that release. A controller that is not a spare
+writes the same file format as before, so it can go back to an earlier
+release.
 
 **What the check costs:** one more vote round, at most, on a takeover
 after the leader dies. That is at most 0.95 s plus one round trip
@@ -481,6 +552,18 @@ near the largest delay a 2 s lease allows.
   lease allows) from a controller that has just restarted can mark that
   controller by mistake. It costs that
   controller's redundancy until the mark is cleared, never the leader.
+  Late to one member, it never makes that controller a spare: that takes
+  both other members. Late to **both**, by more than about 1.25 leases,
+  the restarted controller can go spare: in the simulator 0 of 300 up to
+  a lease late, 24, 150 and 299 of 300 at 1.25, 1.5 and 2 leases. Then
+  that box is silent until an operator acts; the other controller leads.
+  A controller resets its peer connections when it closes them, so an
+  exiting process's unsent messages die with it rather than being
+  retransmitted after a link outage: this takes more than a lease of
+  delay inside the network itself.
+- **A copy that boots with its original, or while the original is down**,
+  may be the one the voters hold, and then the real box goes spare (see
+  above).
 
 Stop a clone as soon as `redundancy.duplicate-member` names it.
 :::

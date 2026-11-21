@@ -26,9 +26,16 @@ type Record struct {
 	duplicates [nNodes]uint64
 	// Marks are the names voters confirmed as run by two processes at
 	// once (quorum.Voter.Marked, #1029 3c), in order.
-	Marks  []Mark
-	starts []voterStart
-	faults []faultEdge
+	Marks []Mark
+	// Spares are the controller copies that demoted themselves to a
+	// spare (#1029 3c-2), in order: when the flag became durable, and
+	// each restart that read it.
+	Spares []Spare
+	// spareDecided: when a copy decided it is a spare, before its flag
+	// was durable.
+	spareDecided []Spare
+	starts       []voterStart
+	faults       []faultEdge
 
 	// Writes are what the simulated device received (I2): a controller
 	// writes it on each scan while its gate is open.
@@ -500,6 +507,15 @@ type Checks struct {
 	NoMarks bool
 }
 
+// Spare is a controller copy silent as a spare: from At, its flag durable
+// (Restart: a later boot that read it).
+type Spare struct {
+	At      time.Duration
+	Node    Addr
+	Boot    int
+	Restart bool
+}
+
 // Mark is a voter confirming a name as run by two processes at once.
 type Mark struct {
 	At    time.Duration
@@ -560,6 +576,22 @@ func Check(r *Record, c Checks) []Violation {
 			add(Violation{"mark", m.At, fmt.Sprintf("%v marked %s a confirmed duplicate with no clone running: a false mark", m.Voter, m.Name)})
 		}
 	}
+	// A spare is a copy of a name another boot of it holds (#1029 3c-2):
+	// both copies of one name silent, or a spare with no clone running,
+	// is a controller lost for nothing ("spare").
+	for _, sp := range r.Spares {
+		if sp.Restart {
+			continue
+		}
+		if c.NoMarks {
+			add(Violation{"spare", sp.At, fmt.Sprintf("%v demoted itself to a spare with no clone running", sp.Node)})
+		}
+		if slices.ContainsFunc(r.Spares, func(o Spare) bool {
+			return o.Node != sp.Node && nodeIDs[o.Node] == nodeIDs[sp.Node] && o.At <= sp.At && !o.Restart
+		}) {
+			add(Violation{"spare", sp.At, fmt.Sprintf("%v demoted itself to a spare, and the other copy of %s already had: neither runs the name", sp.Node, nodeIDs[sp.Node])})
+		}
+	}
 	if c.SteadyTo > c.SteadyFrom {
 		// A controller whose name a voter marked is held until an operator
 		// clears the mark, which no run does: its voter makes no new grant
@@ -613,6 +645,9 @@ func (r *Record) checkSteady(gates []Interval, from, to time.Duration, voters []
 	}
 	var vs []Violation
 	for _, v := range voters {
+		if r.spareCost(v, holder.Node, to) {
+			continue
+		}
 		// Union of v's running promises to the holder over [from, to).
 		cov := from
 		for {
@@ -645,6 +680,33 @@ func (r *Record) checkSteady(gates []Interval, from, to time.Duration, voters []
 		vs = append(vs, Violation{"steady", from, fmt.Sprintf("vote terms still moving after the run settled: %v", terms)})
 	}
 	return vs
+}
+
+// acceptSpareCost: the steady oracle accepts spareCost. Off only to count
+// the runs that end on it (TestMeasureSpare).
+var acceptSpareCost = true
+
+// spareCost: voter v marked leader's name, has not restarted since (a
+// restart forgets the mark: the clear), and a copy of that name went
+// spare before to. The stated cost of a spare (#1029 3c-2): the copy goes
+// quiet before a split can take the original's lease, so the original
+// keeps leading on the other voters, and v, which gives the marked name
+// no new grant, backs it no more until an operator clears the mark.
+func (r *Record) spareCost(v, leader Addr, to time.Duration) bool {
+	if !acceptSpareCost {
+		return false
+	}
+	name := nodeIDs[leader]
+	return slices.ContainsFunc(r.Spares, func(s Spare) bool { return s.At < to && nodeIDs[s.Node] == name }) &&
+		slices.ContainsFunc(r.Marks, func(m Mark) bool {
+			return m.Voter == v && m.Name == name && m.At < to && !r.restartedAfter(v, m.At, to)
+		})
+}
+
+// restartedAfter: voter a started again in (from, to), forgetting the
+// marks it held at from.
+func (r *Record) restartedAfter(a Addr, from, to time.Duration) bool {
+	return slices.ContainsFunc(r.starts, func(s voterStart) bool { return s.node == a && s.at > from && s.at < to })
 }
 
 // I1: no instant has two open gates.

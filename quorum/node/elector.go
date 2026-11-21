@@ -175,6 +175,12 @@ const (
 	// treated as lost, so this controller starts uncommissioned. Detail
 	// says what changed and how to tell a NIC swap from a clone.
 	EventBoxChanged EventKind = "redundancy.box-changed"
+	// EventSpare: this controller is a COPY of a member that both other
+	// voters hold another boot of the name for (#1029 3c-2): it demoted
+	// itself to a spare, wrote that down, and is silent: no vote, no
+	// campaign, no hello, no answer to the peer. Raised at the decision
+	// and at every start of a spare (Detail says what to do).
+	EventSpare EventKind = "redundancy.spare"
 )
 
 // versionMsg is the version-mismatch report for a frame of version got
@@ -196,6 +202,24 @@ func boxChangedMsg(changed []string) string {
 		"it re-adopts from the other controller within seconds (redundancy.witness.incarnation). If it stays uncommissioned while " +
 		"the other controller is up, this box is a COPY of a controller (a cloned disk or VM): stop it, since a clone must never " +
 		"run as a member, and never re-commission it"
+}
+
+// spareMsg is the spare report for this controller's name.
+func spareMsg(self quorum.NodeID) string {
+	return fmt.Sprintf("duplicate of %s - spare: another process runs as %s, and both other members hold that one (they heard it first) as %s. "+
+		"This process is a COPY (a cloned disk or VM, or NAUTILUS_NODE set to %s on a second box) and has made itself a spare: it neither votes nor campaigns, and answers nobody, until an operator acts. "+
+		"If this box is the copy, stop it (decommission). If this box is the real %s: (1) stop the copy and confirm it is down; (2) restart the members that raised redundancy.duplicate-member (their marks on %s would hold this box for good; restarting the other controller while it leads alone leaves the pair without a leader until it is back); "+
+		"(3) then on this box stop naut, delete the voter state file and start naut: it re-adopts from the other controller. Turning a spare into a replacement is a later command (recommission --from-spare)", self, self, self, self, self, self)
+}
+
+// ErrSpare: a spare refuses an operator's re-commission (#1029 3c-2).
+var ErrSpare = errors.New("quorum: this controller is a spare (a copy of a member): it takes no re-commission")
+
+// newerStateMsg is the refusal of a state file in a format above this
+// release's.
+func newerStateMsg(path string) string {
+	return fmt.Sprintf("the voter state file %s was written by a newer release of naut (format 6 and later: from 6 on, the box may have been made a spare, a copy of a member that must stay silent). "+
+		"This release can't read it and won't start over it: run the release that wrote it. To run this release anyway, first make sure no other box runs as this member, then move the file aside: it starts uncommissioned and re-adopts from the other controller", path)
 }
 
 // dupEvery paces the duplicate-member report while it goes on.
@@ -279,6 +303,9 @@ type Status struct {
 	// BoxPending: this box's fingerprint can't be read yet, so this
 	// controller neither votes nor campaigns (Options.BoxFunc).
 	BoxPending bool
+	// Spare: this controller is a copy of a member and silent (EventSpare,
+	// #1029 3c-2). It names no leader: its tag API forwards nothing.
+	Spare bool
 	// ConfigDiffers: the peer's hello named another configuration of the
 	// pair (EventConfigDiffers). HelloDuplicates counts hellos that showed
 	// two processes behind the peer's name.
@@ -339,6 +366,11 @@ type Elector struct {
 	mismatch   map[string]string // the last lease-mismatch report per voter, to report each change once
 	durable    uint64            // the highest Seq known on disk
 	written    chan struct{}     // closed and replaced at every write report
+	// spareSeq: the write of the spare flag in flight (Voter.MakeSpare),
+	// 0 when none. spare: the flag is durable (or was read at start), and
+	// this controller is silent (#1029 3c-2).
+	spareSeq uint64
+	spare    atomic.Bool
 
 	// The operator-intent log's seams and what they decided (logpref.go).
 	logFn     func() LogState
@@ -441,10 +473,33 @@ func New(o Options) (*Elector, error) {
 	}
 	e.file.Box = box
 	st, err := e.file.Load()
+	if errors.Is(err, quorum.ErrVersion) && !mut("newer_state_moved_aside") {
+		// Written by a newer release, a spare's maybe: never treated as
+		// lost, which would make a copy a member again (#1029 3c-2).
+		free()
+		return nil, errors.New("redundancy: " + newerStateMsg(o.StatePath))
+	}
 	if err == nil {
 		if err := e.file.CheckOwner(st); err != nil {
 			free()
 			return nil, err
+		}
+		if st.Spare && !mut("spare_forgotten_on_box_change") {
+			// A spare stays one, read before the box check: a copy's box
+			// differs, and the check would treat the file as lost.
+			e.spare.Store(true)
+			e.storedBox = st.Box
+			e.event(Event{Kind: EventSpare, Detail: spareMsg(o.Self)})
+			e.log.Error("redundancy: " + spareMsg(o.Self))
+			t := now()
+			if err := e.initProtocol(st, t); err != nil {
+				free()
+				return nil, err
+			}
+			e.free = free
+			e.w = newWriter(e.file.Save, e.persisted)
+			e.publish(t)
+			return e, nil
 		}
 		e.storedBox = st.Box
 		if box == "" && o.BoxFunc != nil && !mut("box_wait_skipped") {
@@ -711,6 +766,9 @@ func (e *Elector) poke() {
 // look is one look of the candidate and the handshake. It returns how long
 // until the next.
 func (e *Elector) look() time.Duration {
+	if e.mute() {
+		return e.o.Lease // a spare looks at nothing and sends nothing (#1029 3c-2)
+	}
 	e.mu.Lock()
 	h := e.health
 	e.mu.Unlock()
@@ -834,6 +892,9 @@ func (e *Elector) publish(now quorum.Instant) {
 	if e.c.Leading(now) {
 		g.epoch, g.end = max(g.epoch, e.c.Term()), e.c.LeaseEnd()
 		g.open = (!e.released && !e.unhealthy) || mut("gate_ignores_health")
+		if e.spare.Load() {
+			g.open = false
+		}
 	}
 	e.gate.Store(g)
 }
@@ -879,11 +940,22 @@ func (e *Elector) persisted(seq uint64, err error) {
 	if err == nil && seq > e.durable {
 		e.durable = seq
 	}
+	if e.spareSeq != 0 && seq >= e.spareSeq {
+		if err == nil {
+			e.becomeSpare(now)
+		} else {
+			e.spareSeq = 0 // still held, not silent: it decides again on the next reply
+			e.v.SpareWriteFailed()
+		}
+	}
 	close(e.written)
 	e.written = make(chan struct{})
 	e.after(now)
+	silent := e.spare.Load()
 	e.mu.Unlock()
-	e.adopts(msgs)
+	if !silent {
+		e.adopts(msgs)
+	}
 	e.poke()
 }
 
@@ -936,6 +1008,12 @@ func (e *Elector) reply(from quorum.NodeID, r quorum.Reply) {
 		e.noteDuplicates()
 	}
 	e.noteMark(r) // a probe's reply too: how a marked name hears it cleared
+	spareP := e.noteHeld(now, r)
+	if spareP != nil || e.spare.Load() {
+		e.mu.Unlock()
+		e.w.ask(spareP)
+		return
+	}
 	if quorum.IsRelayProbe(r) {
 		e.mu.Unlock()
 		return // the relay probe's reply is for the voter only
@@ -1003,7 +1081,7 @@ func (e *Elector) Handler() http.Handler {
 }
 
 func (e *Elector) serveVote(w http.ResponseWriter, r *http.Request) {
-	if !e.running.Load() {
+	if !e.running.Load() || e.silent() {
 		http.Error(w, "not running", http.StatusServiceUnavailable)
 		return
 	}
@@ -1122,6 +1200,62 @@ func (e *Elector) noteMark(r quorum.Reply) {
 	}
 }
 
+// noteHeld hands a reply meant for this boot to the candidate's spare
+// rule (quorum.Candidate.NoteHeld) and, when both other voters hold
+// another boot of this name the incumbent, decides: the flag's write is
+// returned for the writer, and the controller goes silent only once it is
+// durable (persisted). Until then it is the held copy it was. Under mu.
+func (e *Elector) noteHeld(now quorum.Instant, r quorum.Reply) *quorum.Persist {
+	if e.spare.Load() || r.To != e.o.Self || r.Nonce != e.nonce {
+		return nil
+	}
+	e.c.NoteHeld(now, r)
+	if e.spareSeq != 0 || !e.c.Spare(now) {
+		return nil
+	}
+	p := e.v.MakeSpare()
+	e.spareSeq = p.Seq
+	e.log.Warn("redundancy: both other members hold another process of this name: this one is a copy, and makes itself a spare once that is written down")
+	if mut("spare_flag_after_silence") {
+		e.becomeSpare(now)
+	}
+	return p
+}
+
+// becomeSpare silences this controller: its spare flag is durable. Under
+// mu.
+func (e *Elector) becomeSpare(now quorum.Instant) {
+	e.spareSeq = 0
+	if e.spare.Swap(true) {
+		return
+	}
+	for k := range e.waiters {
+		delete(e.waiters, k) // an answer still held for a write is never sent
+	}
+	e.publish(now)
+	msg := spareMsg(e.o.Self)
+	e.event(Event{Kind: EventSpare, Detail: msg})
+	e.log.Error("redundancy: " + msg)
+}
+
+// Spare reports whether this controller is a spare (#1029 3c-2): silent
+// until an operator acts.
+func (e *Elector) Spare() bool { return e.spare.Load() }
+
+// Unspare clears the spare flag on disk. Tests use it; the operator's
+// recommission --from-spare will (3c-3). The controller stays silent
+// until it is restarted, and starts then as the member its file says.
+func (e *Elector) Unspare(ctx context.Context) error {
+	e.mu.Lock()
+	p := e.v.Unspare()
+	e.mu.Unlock()
+	if p == nil {
+		return nil
+	}
+	e.w.ask(p)
+	return e.waitDurable(ctx, p.Seq)
+}
+
 // ClearDuplicate clears this controller's voter's mark on name, the
 // operator's step once the copy is stopped (quorum.Voter.ClearDuplicate):
 // name gets new grants here again, and its vote counts toward this
@@ -1189,7 +1323,7 @@ func answer(w http.ResponseWriter, r *http.Request, replies []quorum.Reply, ch c
 }
 
 func (e *Elector) serveAdopt(w http.ResponseWriter, r *http.Request) {
-	if !e.running.Load() {
+	if !e.running.Load() || e.silent() {
 		http.Error(w, "not running", http.StatusServiceUnavailable)
 		return
 	}
@@ -1222,6 +1356,10 @@ func (e *Elector) serveAdopt(w http.ResponseWriter, r *http.Request) {
 }
 
 func (e *Elector) serveHello(w http.ResponseWriter, r *http.Request) {
+	if e.silent() {
+		http.Error(w, "not running", http.StatusServiceUnavailable)
+		return
+	}
 	c := r.URL.Query().Get("c")
 	if len(c) < 16 || len(c) > 128 {
 		http.Error(w, "challenge", http.StatusBadRequest)
@@ -1251,6 +1389,14 @@ func (e *Elector) serveHello(w http.ResponseWriter, r *http.Request) {
 		TLS: credOK, TLSMAC: credMAC(e.o.Token, c, e.o.Peer, e.o.Self, "tls", credOK, cr.TLS)})
 }
 
+// silent: a spare answers nobody, as if it were down (#1029 3c-2).
+func (e *Elector) silent() bool { return e.spare.Load() && !mut("spare_answers_votes") }
+
+// mute: a spare sends nothing, no vote, probe or hello: one that kept
+// probing would stay the fresh boot of its name at the voters, and an
+// original that restarts would then be named a copy of it (#1029 3c-2).
+func (e *Elector) mute() bool { return e.spare.Load() && !mut("spare_still_looks") }
+
 // credentials reads this controller's credentials now (Options.Credentials).
 func (e *Elector) credentials() Credentials {
 	if e.o.Credentials == nil {
@@ -1278,6 +1424,9 @@ func (e *Elector) hello(ctx context.Context) {
 }
 
 func (e *Elector) checkToken(ctx context.Context) {
+	if e.mute() {
+		return // a spare says nothing to its peer, its boot nonce included
+	}
 	c := newChallenge()
 	q := url.Values{"c": {c}, "from": {string(e.o.Self)}}
 	e.selfInfo().query(q)
@@ -1448,6 +1597,8 @@ func (e *Elector) RecommissionBy(ctx context.Context, by string, inc, floor uint
 	commissioned, known := e.v.State().Incarnation != 0, e.a.KnownFloor()
 	e.mu.Unlock()
 	switch {
+	case e.spare.Load():
+		return nil, ErrSpare
 	case commissioned:
 		return nil, quorum.ErrCommissioned
 	case inc == 0 || floor == 0:
@@ -1541,7 +1692,10 @@ func (e *Elector) Status() Status {
 	g := e.gate.Load()
 	s.Leading = g.open && g.end.Sub(now) > e.Fence()
 	s.Term = g.epoch
+	s.Spare = e.spare.Load()
 	switch from, until := e.v.LeaderSeen(); {
+	case s.Spare:
+		// A spare hears nobody and names no leader.
 	case s.Leading:
 		s.Leader, s.LeaderAddr = s.Self, e.o.SelfAPI
 	case from == e.o.Peer && now < until:

@@ -16,6 +16,8 @@ import "os"
 //   - witness_not_a_replica: the pair's log leaves the witness out;
 //   - log_sync_not_retried: a leader whose term is not synced is caught up
 //     only by its next write, never by the log's own drive.
+//   - spare_log_runs: a spare's peer listener still answers (votes and the
+//     log's replication), and its log drive still runs (#1029 3c-2).
 var mutOn = os.Getenv("QUORUM_MUT")
 
 func mutNaut(name string) bool { return name == mutOn }

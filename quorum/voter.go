@@ -100,7 +100,8 @@ type Voter struct {
 
 // bootSeen is one boot of a name as its own requests showed it: the
 // nonce, when its first and its latest new request arrived, and the
-// highest Seq heard.
+// highest Seq heard. Once the name is marked, last and seq go on
+// following the boots already known (HeldBy).
 type bootSeen struct {
 	nonce       uint64
 	first, last Instant // when its first and its latest new request arrived
@@ -125,7 +126,18 @@ const maxBoots = 8
 // stretched by the clock-rate margin (all receipts are this voter's own
 // clock). The name is then marked.
 func (v *Voter) noteBoot(now Instant, name NodeID, nonce, seq uint64) {
-	if nonce == 0 || seq == 0 || name == "" || v.marked[name] || mut("dup_mark_off") {
+	if nonce == 0 || seq == 0 || name == "" || mut("dup_mark_off") {
+		return
+	}
+	if v.marked[name] {
+		// Marked: no more evidence to weigh, but whether each boot it
+		// knows still sends new frames names the incumbent (HeldBy). A
+		// boot first heard after the mark is never added, so never named.
+		for i := range v.boots[name] {
+			if b := &v.boots[name][i]; b.nonce == nonce && seq > b.seq {
+				b.seq, b.last = seq, now
+			}
+		}
 		return
 	}
 	if mut("evicted_boot_banned") {
@@ -704,11 +716,18 @@ func YieldTo(now Instant, v *Voter, c *Candidate, r Request) bool {
 // itself only from Persisted. A renewal that changes nothing durable is
 // answered at once, unless an earlier change is still unconfirmed.
 func (v *Voter) Handle(now Instant, r Request) (*Persist, []Reply) {
-	refuse := []Reply{v.reply(r, false)}
+	refuse := []Reply{v.reply(now, r, false)}
 	// Every request says its sender runs under that boot now: a probe, a
 	// campaign or a renewal, its own candidate's too (#1029 step 1).
 	v.noteNonce(r.From, r.Nonce, now.Add(v.lease))
 	v.noteBoot(now, r.From, r.Nonce, r.Seq)
+	if !mut("held_by_before_frame") {
+		// The incumbent as of this very frame: a marked standby gets only
+		// refusals, and a lossy original's frames can be half a lease
+		// apart, so a word that missed its own frame would name the copy
+		// to it (#1133 review).
+		refuse[0].HeldBy = v.HeldBy(now, r.From, r.Nonce)
+	}
 	if r.Renewal && r.From != v.self && now.Add(v.lease) > v.renewalUntil {
 		v.renewalFrom, v.renewalUntil = r.From, now.Add(v.lease)
 	}
@@ -754,7 +773,7 @@ func (v *Voter) Handle(now Instant, r Request) (*Persist, []Reply) {
 		v.st.Promised, v.st.GrantedTo, v.st.Lease, v.st.GrantNonce = r.Term, r.From, v.lease, r.Nonce
 		v.dirty++
 	}
-	g := v.reply(r, true)
+	g := v.reply(now, r, true)
 	if v.durable >= v.dirty {
 		return nil, []Reply{g}
 	}
@@ -814,10 +833,85 @@ func (v *Voter) refusedByHeard(now Instant, r Request) bool {
 // 2), duplicates and refusals in a heard promise's clock-rate margin both.
 func (v *Voter) RelayRefused() uint64 { return v.relayRefused }
 
-func (v *Voter) reply(r Request, granted bool) Reply {
+func (v *Voter) reply(now Instant, r Request, granted bool) Reply {
 	return Reply{From: v.self, To: r.From, Term: r.Term, Nonce: r.Nonce, ID: r.ID, Granted: granted,
 		Promised: max(v.st.Promised, v.st.Floor), Incarnation: v.witnessIncarnation(),
-		Marked: v.marked[r.From] && !mut("marked_not_told"), VoterBoot: v.boot}
+		Marked: v.marked[r.From] && !mut("marked_not_told"), VoterBoot: v.boot, HeldBy: v.HeldBy(now, r.From, r.Nonce)}
+}
+
+// Spare reports whether this voter's state says its controller demoted
+// itself to a spare (VoterState.Spare, #1029 3c-2).
+func (v *Voter) Spare() bool { return v.st.Spare }
+
+// MakeSpare records that this voter's controller is a spare (Candidate.Spare)
+// and returns the write that makes it durable: every call, so a driver
+// whose write failed asks again. The flag rides on every later write of
+// this voter's state. The driver goes quiet only once that write is
+// durable: a crash before it leaves a held copy that decides again, never
+// a spare that forgot it is one.
+func (v *Voter) MakeSpare() *Persist {
+	v.st.Spare = true
+	return v.change()
+}
+
+// SpareWriteFailed takes back the flag MakeSpare set, its write having
+// failed: a later write must not carry it to disk unasked (a held copy
+// whose incumbent then stopped would start silent). The driver decides
+// again on a later reply.
+func (v *Voter) SpareWriteFailed() {
+	if !mut("spare_flag_kept_after_failure") {
+		v.st.Spare = false
+	}
+}
+
+// Unspare clears the spare flag and returns the write. Tests use it, and
+// the operator's recommission --from-spare will (3c-3): a spare never
+// clears it itself.
+func (v *Voter) Unspare() *Persist {
+	if !v.st.Spare {
+		return nil
+	}
+	v.st.Spare = false
+	return v.change()
+}
+
+// HeldBy is the boot of a marked name this voter holds the incumbent,
+// told to that name's boot asker (Reply.HeldBy, #1029 3c-2): of the boots
+// it heard under that name before the mark, the one heard FIRST among
+// those that sent a new frame (a Seq above its last) within half a lease.
+// 0 when name is not marked, is this voter's own, no boot it knows is
+// fresh, or asker is a boot it doesn't know: a boot first heard after the
+// mark is never named, and never told another holds the name, so an
+// original restarted beside a running copy stays held, not spare (#1133
+// review). First heard is who was
+// running first, not which box is real: the protocol can't tell a copy
+// from its original, and on a same-time boot the name may go to the copy.
+// A fresh frame, not a live nonce: a boot that stopped is no incumbent
+// within half a lease, though its nonce stays live for a lease, so the
+// original's restart after a spare was named finds no dead boot named
+// over it.
+func (v *Voter) HeldBy(now Instant, name NodeID, asker uint64) uint64 {
+	if !v.marked[name] || name == v.self {
+		return 0
+	}
+	if !mut("held_by_names_to_unknown") && !slices.ContainsFunc(v.boots[name], func(b bootSeen) bool { return b.nonce == asker }) {
+		return 0
+	}
+	fresh := time.Duration(float64(max(v.lease, v.st.Lease)) * 0.5)
+	var best *bootSeen
+	for i := range v.boots[name] {
+		b := &v.boots[name][i]
+		if now.Sub(b.last) > fresh && !mut("held_by_stale") {
+			continue
+		}
+		if best == nil || b.first < best.first || (mut("held_by_last_heard") && b.first > best.first) {
+			best = b
+		}
+	}
+	if best == nil {
+		return 0
+	}
+	return best.nonce
 }
 
 // change marks the in-memory state changed and returns the write that

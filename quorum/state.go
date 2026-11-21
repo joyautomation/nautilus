@@ -71,16 +71,27 @@ type VoterState struct {
 	// a term goes to one boot of a name, also across this voter's restart
 	// (#1029 step 1, #1094 review). 0 in a file before format 5.
 	GrantNonce uint64
+	// Spare: this controller demoted itself to a spare, a copy of a member
+	// another boot of its name holds (Candidate.Spare, #1029 3c-2). Written
+	// before it goes quiet, and kept by every later write: a spare stays
+	// one across restarts and a box change, until an operator turns it
+	// back. Only a spare's file is written in format 6.
+	Spare bool
 }
 
 const stateMagic = "nqv"
 
 // stateVersion is the state file's format: 2 since VoterState.Lease, 3
-// since Owner and Cluster, 4 since Box, 5 since GrantNonce. A version-4
+// since Owner and Cluster, 4 since Box, 5 since GrantNonce, 6 since Spare.
+// Only a spare's file is written as 6; every other is still 5, so a
+// member that is no spare can go back to an earlier release. A version-4
 // file still reads (GrantNonce 0, as before it was kept), so an upgrade
 // keeps the voter's promises; a file of any other version reads as
 // ErrVersion, not as corrupt.
-const stateVersion = 5
+const (
+	stateVersion      = 6
+	stateVersionPlain = 5 // what a file without the spare flag is written as
+)
 
 // MarshalBinary encodes s for its state file: a magic, a version byte, a
 // length, the fields, and a CRC-32C, so a torn write is detected.
@@ -106,7 +117,12 @@ func (s VoterState) MarshalBinary() ([]byte, error) {
 	p = putString(p, s.Cluster)
 	p = putString(p, s.Box)
 	p = binary.BigEndian.AppendUint64(p, s.GrantNonce)
-	b := append([]byte(stateMagic), stateVersion)
+	version := byte(stateVersionPlain)
+	if s.Spare || mut("state_always_v6") {
+		version = stateVersion
+		p = append(p, boolByte(s.Spare))
+	}
+	b := append([]byte(stateMagic), version)
 	b = binary.BigEndian.AppendUint32(b, uint32(len(p)))
 	b = append(b, p...)
 	return binary.BigEndian.AppendUint32(b, crc32.Checksum(b, castagnoli)), nil
@@ -129,7 +145,7 @@ func (s *VoterState) UnmarshalBinary(b []byte) error {
 		return ErrCorrupt
 	}
 	version := b[len(stateMagic)]
-	if version != stateVersion && version != 4 {
+	if version < 4 || version > stateVersion {
 		return ErrVersion
 	}
 	rd := &reader{b: b[head : head+n]}
@@ -141,6 +157,9 @@ func (s *VoterState) UnmarshalBinary(b []byte) error {
 	v.Owner, v.Cluster, v.Box = NodeID(rd.str()), rd.str(), rd.str()
 	if version >= 5 {
 		v.GrantNonce = rd.u64()
+	}
+	if version >= 6 {
+		v.Spare = rd.boolean()
 	}
 	if rd.bad || len(rd.b) != 0 || flags&^3 != 0 || v.Lease < 0 {
 		return ErrCorrupt

@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"maps"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	goruntime "runtime"
@@ -610,7 +612,7 @@ func TestSpoofedCloneBesideTheOriginalIsMarkedUntilCleared(t *testing.T) {
 // so a voter never hears the old boot send after the new one's first
 // frame and marks nothing (#1029 3c). Restart each controller several
 // times that way, and the witness between: no duplicate-member alarm, no
-// mark, a leader each time. Run under load too (taskset -c 0,1 with CPU
+// mark, no spare, a leader each time. Run under load too (taskset -c 0,1 with CPU
 // hogs), as the PR says.
 func TestDeployRestartsMarkNothing(t *testing.T) {
 	logs := &lockedBuffer{}
@@ -630,6 +632,9 @@ func TestDeployRestartsMarkNothing(t *testing.T) {
 	for _, m := range []string{"a", "b"} {
 		if marks := r.el(m).DuplicateMarks(); len(marks) != 0 {
 			t.Fatalf("%s marks %v after deploy restarts", m, marks)
+		}
+		if r.el(m).Spare() {
+			t.Fatalf("%s went spare after deploy restarts", m) // #1029 3c-2
 		}
 	}
 	if l := logs.String(); strings.Contains(l, "two processes claim") || strings.Contains(l, "confirmed duplicate") {
@@ -652,4 +657,155 @@ func TestTheStandbysPeerProbeLetsItsPeerSeeAClone(t *testing.T) {
 	}
 	r.cloneDisk("b", "box-b")
 	pairWait(t, "A to mark b", 10*time.Second, func() bool { return slices.Contains(r.el("a").DuplicateMarks(), "b") })
+}
+
+// cloneDiskEnv is cloneDisk returning the clone's env too, so a test can
+// restart it on its own state.
+func (r *boxRig) cloneDiskEnv(member, box string) map[string]string {
+	r.t.Helper()
+	dir := r.t.TempDir()
+	if err := os.CopyFS(dir, os.DirFS(r.env[member]["STATE_DIRECTORY"])); err != nil {
+		r.t.Fatal(err)
+	}
+	env := maps.Clone(r.env[member])
+	env["STATE_DIRECTORY"] = dir
+	r.start("clone", box, env, r.lns[2])
+	return env
+}
+
+// restartClone stops the clone and starts it again on its box, address
+// and state.
+func (r *boxRig) restartClone(box string, env map[string]string) {
+	r.t.Helper()
+	r.nodes["clone"].crash()
+	ln, err := net.Listen("tcp", r.lns[2].Addr().String())
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	r.start("clone", box, env, ln)
+}
+
+// hasWarning reports whether member's /api/cluster warnings hold one
+// containing s.
+func (r *boxRig) hasWarning(member, s string) bool {
+	return slices.ContainsFunc(r.nodes[member].m.q.Status().Warnings, func(w string) bool { return strings.Contains(w, s) })
+}
+
+// #1029 3c-2, end to end: a MAC-spoofed clone of the leader runs beside
+// it, every link up. Both other members hear both copies of a running,
+// mark a, and hold the original (heard first) as a: the clone demotes
+// itself to a spare, writes that down, and goes silent. It never leads,
+// /api/cluster on it says "duplicate of a - spare", the original keeps
+// leading, and the spare stays one across its own restart (the flag is
+// read before the box check). The original's lease never broke.
+func TestASpoofedCloneBesideTheLeaderBecomesASpare(t *testing.T) {
+	r := newBoxRig(t)
+	env := r.cloneDiskEnv("a", "box-a")
+	els := map[string]*node.Elector{"a": r.el("a"), "b": r.el("b"), "clone": r.el("clone")}
+	pairWait(t, "the clone to go spare", 10*time.Second, func() bool { return r.el("clone").Spare() })
+	if led := watchOneLeader(t, 2*time.Second, els); led["clone"] || led["b"] {
+		t.Fatalf("led: %v; want a alone", led)
+	}
+	if !r.hasWarning("clone", "duplicate of a - spare") {
+		t.Fatalf("the spare's /api/cluster warnings: %v", r.nodes["clone"].m.q.Status().Warnings)
+	}
+	if r.el("a").Spare() || r.el("b").Spare() {
+		t.Fatal("a real controller went spare")
+	}
+	r.restartClone("box-a", env)
+	if !r.el("clone").Spare() {
+		t.Fatal("the spare forgot it is one across its restart")
+	}
+	els["clone"] = r.el("clone")
+	if led := watchOneLeader(t, 2*time.Second, els); led["clone"] {
+		t.Fatalf("the restarted spare led: %v", led)
+	}
+}
+
+// The way out before the 3c-3 command when the REAL box is the one made a
+// spare (its copy was running first: here a's clone takes over while a is
+// down, then a comes back): stop the copy and confirm it is down, clear
+// the members that marked a (restart the witness, then b), then on the
+// real box stop naut, delete the voter state file and start naut. It
+// re-adopts from b (the box-change path's re-adoption) and both
+// controllers can lead again.
+func TestTheRealBoxMadeASpareRecoversByTheGuidesSteps(t *testing.T) {
+	r := newBoxRig(t)
+	r.handLeadTo("b")
+	r.nodes["a"].crash()
+	r.cloneDiskEnv("a", "box-a")
+	time.Sleep(2 * time.Second) // four leases: the copy is the a everyone hears
+	ln, err := net.Listen("tcp", r.lns[0].Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.start("a", "box-a", r.env["a"], ln)
+	pairWait(t, "the real a to go spare beside the copy heard first", 10*time.Second, func() bool { return r.el("a").Spare() })
+	if r.el("clone").Spare() {
+		t.Fatal("both copies went spare")
+	}
+	// (1) Stop the copy. (2) Clear the marking members: the witness, then b
+	// (the deploy path's restart). (3) On the real box: stop, delete the
+	// state, start.
+	r.nodes["clone"].crash()
+	r.restartWitness()
+	r.deployRestart("b")
+	r.nodes["a"].stop()
+	if err := os.Remove(filepath.Join(r.env["a"]["STATE_DIRECTORY"], pairStateFile)); err != nil {
+		t.Fatal(err)
+	}
+	ln, err = net.Listen("tcp", r.lns[0].Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.start("a", "box-a", r.env["a"], ln)
+	pairWait(t, "a to re-adopt from b", 15*time.Second, func() bool { return r.el("a").Status().Commissioned })
+	if r.el("a").Spare() {
+		t.Fatal("still a spare after its state was deleted")
+	}
+	pairWait(t, "a leader", 15*time.Second, func() bool { return r.el("a").IsLeader() || r.el("b").IsLeader() })
+	r.handLeadTo("a")
+	r.handLeadTo("b")
+}
+
+// A spare's peer listener answers every request 503, the vote protocol
+// and the operator-intent log's replication alike, as a stopped
+// controller would; a member's passes through (#1029 3c-2).
+// spare_log_runs turns it red.
+func TestASparesPeerListenerAnswersNobody(t *testing.T) {
+	var spare atomic.Bool
+	h := spareSilent(spare.Load, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	for _, p := range []string{"/api/oplog/append", "/api/quorum", node.Prefix + "x/vote"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, p, nil))
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("a member's %s: %d", p, rec.Code)
+		}
+		spare.Store(true)
+		rec = httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, p, nil))
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("a spare's %s: %d, want 503", p, rec.Code)
+		}
+		spare.Store(false)
+	}
+}
+
+// Once the clone is a spare, its original restarting (naut deploy's way)
+// stays a member: the silent spare is no fresh boot at the voters, so
+// nobody names it over the original's new boot, and the pair keeps a
+// leader. (Before the #1133 review's rule, a spare that still probed,
+// spare_still_looks, demoted the original too; now the voters tell a boot
+// first heard after the mark nothing, and TestASpareSendsNothing pins the
+// silence at the driver.)
+func TestAnOriginalRestartingBesideItsSpareStaysAMember(t *testing.T) {
+	r := newBoxRig(t)
+	r.cloneDiskEnv("a", "box-a")
+	pairWait(t, "the clone to go spare", 10*time.Second, func() bool { return r.el("clone").Spare() })
+	r.deployRestart("a")
+	time.Sleep(3 * time.Second) // six leases: past a decision's span
+	if r.el("a").Spare() {
+		t.Fatal("the original went spare beside its silent spare")
+	}
+	pairWait(t, "a leader", 10*time.Second, func() bool { return r.el("a").IsLeader() || r.el("b").IsLeader() })
 }

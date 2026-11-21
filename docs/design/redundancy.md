@@ -320,7 +320,8 @@ redundancy:
       handshake. A controller's voter that has just promised the other controller pushes a
       probe at once (`Voter.RelayChanged`), so the witness hears a new promise within a one-way
       delay rather than a look.
-    - **Wire:** vote protocol version 2 (`quorum.WireVersion`; 3 since step 1 below). A frame of another version
+    - **Wire:** vote protocol version 2 (`quorum.WireVersion`; 3 since step 1, 4 since 3c-1, 5
+      since 3c-2, below). A frame of another version
       is refused whole. A pair or witness that mixes releases across it can't vote, and says
       so (`redundancy.version-mismatch`, either side, and on the witness's log) rather than
       failing to elect in silence. A release before version 2 answers a new frame with 400
@@ -531,9 +532,99 @@ redundancy:
         two processes of one member overlapping for longer than that. Either costs that
         controller's redundancy until cleared, never the leader. `TestDeployRestartsMarkNothing`
         restarts both controllers and the witness as `naut deploy` does.
-    - **Step 2 (3c): the clone as a spare.** The incumbent keeps the name, and the newcomer
-      demotes itself, durably and silently, on a positive "held by" reply; `recommission`
-      turns a spare into a replacement.
+    - **Step 3c-2: the clone as a spare (#1029).** A mark holds the copy but leaves it
+      running beside the original, probing and held, until an operator acts. Now the copy
+      that is not the incumbent demotes itself to a **spare**: durable, silent, and never
+      automatic in the other direction (`recommission --from-spare` turns a spare into a
+      replacement, 3c-3).
+      - **The incumbent (voter).** Every reply to a marked name carries `HeldBy` (wire version
+        5): of the boots of that name the voter heard before the mark, the one heard FIRST
+        among those that sent a new frame (a `Seq` above its last) within lease/2; 0 when the
+        name is unmarked, is the voter's own, or no boot is fresh. After the mark the voter
+        keeps following the known boots' frames (no new boot is added, none is marked). A
+        fresh frame and not a live nonce: a nonce stays live for a lease after its process
+        stopped, so the original's restart after a spare was named would find its dead boot
+        named over it (1 of 300 demoted both with "live", 0 with "fresh"; `held_by_stale`).
+        Preferring the boot holding the voter's running promise first was measured too:
+        identical counts in every family, so it is not used. Two rules from the #1133 review:
+        a refusal names the incumbent as of the frame it answers (a marked standby gets only
+        refusals, and a lossy original's frames can be half a lease apart: naming it before
+        its own frame demoted the original in 2 to 121 of 300 runs at 30 to 80% loss, and
+        both copies in 3; now 0; `held_by_before_frame`), and a voter names no incumbent to a
+        boot it first heard after the mark (an original restarted 1.5 to 3 s after a copy
+        started was told the copy holds the name and went spare in 300, 300, 288, 196 of 300;
+        now 0, it stays held or the copy goes spare; `held_by_names_to_unknown`).
+      - **The decision (copy).** A candidate counts only the two OTHER voters' words on replies
+        to its own boot (its own voter may be the copy's). It demotes when BOTH name the same
+        other boot, each for a full lease without a break, and never while it holds a lease
+        (a guard: it never fires in the simulator; `spare_while_leading`). Both, never one:
+        with one voter's word, late frames of a real restart's old boot (the 3c-1 false-mark
+        residual) gave false spares in 0, 0, 0, 0, 73, 198, 300, 299 of 300 at delays of 0.25
+        to 2.5 leases; with both, 0 at every delay (`spare_one_voter`). It also keeps a
+        partitioned original from being demoted by the one voter it still reaches. A voter's
+        word is its latest: one cut off since keeps its word, as a mark's hold does.
+      - **Durable, then silent.** The flag (`VoterState.Spare`, state format 6, written only
+        for a spare so a member that is not one still writes format 5 and can go back to an
+        earlier release) is written first, and rides every later write. Only once the write
+        is durable does the controller go silent: no look (no campaign, probe or renewal), no
+        answer to votes, adopts or hellos (503, as a stopped controller), no hello of its own,
+        no operator-intent log replication either way, no re-commission (`ErrSpare`), its gate
+        closed and no leader named (so its tag API refuses writes). A crash before the write
+        leaves the held copy, which decides again; a failed write the same
+        (`spare_flag_after_silence`), and the flag is taken back in memory so no later write
+        carries it unasked (`spare_flag_kept_after_failure`). A copy that restarts before its
+        flag landed (or any time after the mark) is a boot the voters first heard after the
+        mark: they name it nothing, so it stays the held copy (3c-1), never a spare. The flag is read at start before the box check (a
+        copy's box differs, and the check would treat the file as lost:
+        `spare_forgotten_on_box_change`), and `redundancy.spare` is raised at the decision
+        and at every start. A state file of a format above the release's own is refused at
+        start and left in place, with the fix named (`newer_state_moved_aside`). Releases
+        before this one can't do that: they set a format-6 file aside and start
+        uncommissioned, and only the vote protocol's version change keeps them from voting
+        with a newer pair.
+      - **The measure** (`TestMeasureSpare`, 2 s lease; the PR has the table). A clone beside
+        a settled pair, with the original or its peer restarting or the leader's scans
+        hanging: the clone went spare in 300 of 300 runs of each, 3.4 s after it started on
+        average, 4.0 s at most, the original never (`TestACloneBesideASettledPairBecomesASpare`).
+        Never both copies spare, never two leaders, in any family; the early-cut residual
+        unchanged (20 and 7 of 1,200, as without the spare). Late frames of a restart, eight
+        delays: 0 spares in 2,400 (`TestLateFramesOfARestartMakeNoSpare`). The incumbent
+        restarting or dying while the spare runs: the spare stays, the original is never
+        demoted. A voter restarting between the mark and the decision, under a cut: the
+        decision may not come (608 of 1,200 went spare), never the original.
+      - **What it costs, stated:**
+        - **The incumbent dies while the spare runs**: the pair runs on the other controller
+          and the witness alone until an operator acts (redundancy lost, not the leader).
+        - **After a spare, one leader on two voters until the marks are cleared**: the copy
+          goes quiet before a split can take the original's lease, so the original keeps
+          leading, and the peer that marked it never re-grants it (76 to 112 of 200 runs per
+          split shape end that way; the steady oracle accepts exactly that, `spareCost`: a voter
+          that marked the leader's name and has not restarted since). One
+          more fault then leaves no leader. The guide's restart clear brings every shape back
+          to a full steady state: 0 of 2,400 short of it, leaderless 3.2 to 4.5 s on average
+          and 5.3 s at most across the clear (`TestASplitWithASpareClearsByRestarts`).
+        - **Incumbent = who ran first, not which box is real.** A copy booted with its
+          original, while the original was down, or heard before the original's restart within
+          about a second of the copy's start (before the mark), may keep the name: the original
+          went spare in 87 of 300 same-time boots, 42 of 300 rich races, and 300, 257, 3 of 300
+          restarting 0.25, 0.5, 1 s after the copy (0 from 1.5 s).
+        - **Late frames to both voters** (the restarted controller's uplink holding its old
+          boot's frames more than about 1.25 leases, five times the delay rule): both voters
+          can name the old boot, and the only copy goes spare: 0 of 300 up to a lease late,
+          then 24, 150, 299 of 300 at 2.5, 3, 4 s (`TestLateFramesToBothVotersUpToALeaseMakeNoSpare`
+          gates the first part). The other controller leads; that box is silent until an
+          operator acts. The realistic source of a dead boot's frame that late is the old
+          process's kernel send buffer, which a graceful close keeps retransmitting through a
+          link outage; the elector dials its peer connections with SO_LINGER 0 (`resetOnClose`,
+          `peer_dial_lingers`, `TestPeerConnectionsCloseWithAReset`), so an exiting process's
+          unsent frames die with it, and the residual needs more than a lease of delay inside
+          the network. The simulator has no kernel and was not re-measured for it. The way out before 3c-3:
+          stop the copy, restart the marking members, then on the real box stop naut, delete
+          `quorum.state` and start (it re-adopts from the peer), the rig's
+          `TestTheRealBoxMadeASpareRecoversByTheGuidesSteps`. The marking members' restart is
+          needed (without it the box re-adopts but never leads), and restarting the controller
+          that leads alone is leaderless for its start-up plus about a lease (0.53 to 0.57 s at
+          the rig's 500 ms lease).
 - **`NAUTILUS_NODE` set with no pair in the manifest** is refused: each box would run as its
   own leader against the same I/O.
 - **A pair member's tag API must be reachable by its peer.** The manifest's default
@@ -1237,8 +1328,10 @@ same driver contract as the simulator.
     keeps the file aside. The witness refuses to start over an unreadable file unless
     `--rebuild` is given: the file is then kept aside and the pair gets a new incarnation.
 - **The boot nonce** is drawn from `crypto/rand` at every start and written nowhere.
-- **The state file's format is version 4** since `Box` (version 3 added `Owner` and `Cluster`,
-  §2). The driver stamps them on every write: the member, the cluster ID and the box
+- **The state file's format is version 5** since `GrantNonce` (version 3 added `Owner` and
+  `Cluster`, 4 `Box`, §2); a spare's file is version 6 (`Spare`, #1029 3c-2), and only a
+  spare's, so a member that is not one can go back to an earlier release. A file of a version
+  above the release's own stops the start and is left where it is. The driver stamps them on every write: the member, the cluster ID and the box
   fingerprint on a controller; `w`, the pair's cluster ID and no box on the witness. A file another member or pair wrote stops the start
   (`ErrNotOwner`) and is left where it is.
 - **Controllers** refuse to start without `CLOCK_BOOTTIME` (Linux). The witness runs anywhere.
