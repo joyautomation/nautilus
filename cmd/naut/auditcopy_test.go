@@ -255,14 +255,29 @@ func TestPostgresNautRunCopiesTheJournal(t *testing.T) {
 	out, err := vcmd.CombinedOutput()
 	var xe *exec.ExitError
 	if !errors.As(err, &xe) || xe.ExitCode() != 3 || !strings.HasPrefix(string(out), "UNPROTECTED: controller \"copied\"") ||
-		!strings.Contains(string(out), "anchor present but not protected") || strings.Contains(string(out), "BROKEN") {
+		!strings.Contains(string(out), "anchor present but not protected") || strings.Contains(string(out), "BROKEN") ||
+		strings.Contains(string(out), "is not known") || !strings.Contains(string(out), "note: anchored since") {
 		t.Errorf("verify --anchor postgres: %v\n%s", err, out)
+	}
+	// Another connection string, with no --controller-role: the
+	// controller's role is not known. And another controller's anchors in
+	// the database are named.
+	if _, err := db.Exec(`INSERT INTO audit_anchors (controller, seq, hash, reason) VALUES ('another', 1, 'sha256:00', 'start')`); err != nil {
+		t.Fatal(err)
+	}
+	vcmd = exec.Command(bin, "audit", "verify", "--anchor", "postgres", "--dsn-env", "COPY_TEST_DB")
+	vcmd.Dir = dir
+	vcmd.Env = cmd.Env
+	out, err = vcmd.CombinedOutput()
+	if !errors.As(err, &xe) || xe.ExitCode() != 3 || !strings.Contains(string(out), "the controller's database role is not known") ||
+		!strings.Contains(string(out), "WARNING: other controllers have anchors in this database: another") {
+		t.Errorf("verify --anchor postgres --dsn-env: %v\n%s", err, out)
 	}
 	vcmd = exec.Command(bin, "audit", "verify", "--anchor", "postgres", "--controller", "elsewhere")
 	vcmd.Dir = dir
 	vcmd.Env = cmd.Env
 	out, err = vcmd.CombinedOutput()
-	if !errors.As(err, &xe) || xe.ExitCode() != 2 || !strings.Contains(string(out), "controllers with anchors: copied") {
+	if !errors.As(err, &xe) || xe.ExitCode() != 2 || !strings.Contains(string(out), "controllers with anchors: another, copied") {
 		t.Errorf("verify for a controller without anchors: %v\n%s", err, out)
 	}
 }
