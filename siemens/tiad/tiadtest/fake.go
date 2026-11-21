@@ -85,6 +85,14 @@ type Fake struct {
 	loads         map[string]int
 	hardwareLoads map[string]int
 
+	// deployRecs is the deploy record, oldest first, each intent with its
+	// outcome once written; archives the archived projects by sha256;
+	// archiveFails, when set, fails every archive (SetArchiveFails).
+	deployRecs   []*tiad.Deploy
+	archives     map[string][]byte
+	archiveFails string
+	archiveN     int
+
 	mu        sync.Mutex
 	pins      map[string]tiad.DeviceIdentity // CPU address → device pin
 	files     map[string][]byte
@@ -463,6 +471,7 @@ func (f *Fake) init() {
 		f.pins = map[string]tiad.DeviceIdentity{}
 		f.loads = map[string]int{}
 		f.hardwareLoads = map[string]int{}
+		f.archives = map[string][]byte{}
 		m := http.NewServeMux()
 		m.HandleFunc("GET /v1/health", f.wrap(f.health, false))
 		m.HandleFunc("GET /v1/probe", f.wrap(f.probe, false))
@@ -485,6 +494,7 @@ func (f *Fake) init() {
 		m.HandleFunc("POST /v1/sessions/{id}/save", f.wrap(f.save, true))
 		m.HandleFunc("POST /v1/sessions/{id}/fingerprint", f.wrap(f.readFingerprint, true))
 		m.HandleFunc("GET /v1/pins", f.wrap(f.listPins, false))
+		m.HandleFunc("GET /v1/deploys", f.wrap(f.listDeploys, false))
 		m.HandleFunc("POST /v1/pins/{address}", f.wrap(f.setPin, false))
 		f.mux = m
 	})
@@ -1324,6 +1334,27 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 		return nil, fail(http.StatusConflict, tiad.KindBusy, "CPU %s belongs to session %s: one CPU, one project; close that session first", req.Address, holder)
 	}
 	f.claims[req.Address] = s.id
+	// The deploy record of a real download: the project archived, then
+	// the intent line, just before TIA's download; either failing refuses
+	// it with nothing sent to the CPU.
+	var run *tiad.Deploy
+	if !req.DryRun {
+		var fl *failure
+		if run, fl = f.recordIntent(s, req, attested); fl != nil {
+			return nil, fl
+		}
+	}
+	var acting []string
+	res, fl := f.downloadTIA(s, req, attested, accessControlKept, reset, &acting)
+	if run == nil {
+		return res, fl
+	}
+	return f.recordOutcome(run, s, req, res, fl, acting)
+}
+
+// downloadTIA is the part of a download after every refusal the agent
+// makes itself: TIA's checks, the load and the compare right after it.
+func (f *Fake) downloadTIA(s *session, req tiad.DownloadRequest, attested *tiad.AttestationRecord, accessControlKept bool, reset tiad.ResetGate, actingOut *[]string) (any, *failure) {
 	var qs []tiad.Question
 	if f.PreDownload != nil {
 		qs = f.PreDownload(req)
@@ -1345,6 +1376,8 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 	haveConfigurationPassword := req.Secrets != nil && req.Secrets.ConfigurationPassword != ""
 	var asked []tiad.Question
 	var acting []string
+	// The acting answers given, for the deploy record, on every end.
+	defer func() { *actingOut = acting }()
 	given := ""
 	for _, q := range qs {
 		if !knownQuestion(q.ID) {
@@ -1736,20 +1769,27 @@ func (f *Fake) readFingerprint(r *http.Request) (any, *failure) {
 	if fl := f.checkDevicePin(address, "fingerprint read"); fl != nil {
 		return nil, fl
 	}
+	return f.fingerprintOf(s, address, req.TrustUnverifiedCertificate, fingerprintTrustFix)
+}
+
+// fingerprintOf is the agent's audited read, once its gates passed: the
+// trust path, then a check that the read is whole. fix is what a refusal
+// of TIA's TLS question names.
+func (f *Fake) fingerprintOf(s *session, address string, trust bool, fix string) (tiad.FingerprintResult, *failure) {
 	const call = "fingerprint read"
 	if f.fingerprint.Fails != "" {
-		if req.TrustUnverifiedCertificate {
+		if trust {
 			f.recordBlindTrust(call, s.id, address, []string{fingerprintUnknownTrust})
 		}
-		return nil, fail(http.StatusInternalServerError, tiad.KindOperationFailed, "TIA: %s", f.fingerprint.Fails)
+		return tiad.FingerprintResult{}, fail(http.StatusInternalServerError, tiad.KindOperationFailed, "TIA: %s", f.fingerprint.Fails)
 	}
 	trusted := []string{}
 	if f.fingerprint.AsksTLS && !f.tlsTrusted {
 		ask := "trust the TLS certificate of PLC_1 [" + address + "]: certificate not matching"
-		if !req.TrustUnverifiedCertificate {
-			return nil, fail(http.StatusInternalServerError, tiad.KindOperationFailed,
+		if !trust {
+			return tiad.FingerprintResult{}, fail(http.StatusInternalServerError, tiad.KindOperationFailed,
 				"TIA: going online to %s, TIA asked: %s. tiad trusts no CPU certificate and holds no CPU credentials yet, so it answered no (TIA: Online connection failed.); %s",
-				address, ask, fingerprintTrustFix)
+				address, ask, fix)
 		}
 		f.tlsTrusted = true
 		trusted = append(trusted, ask)
@@ -1763,7 +1803,7 @@ func (f *Fake) readFingerprint(r *http.Request) (any, *failure) {
 		items = nil
 	}
 	if why := checkFingerprint(items); why != "" {
-		return nil, fail(http.StatusInternalServerError, tiad.KindOperationFailed, "fingerprint read: %s", why)
+		return tiad.FingerprintResult{}, fail(http.StatusInternalServerError, tiad.KindOperationFailed, "fingerprint read: %s", why)
 	}
 	return tiad.FingerprintResult{Address: address, Items: items, TrustedBlindly: trusted, BlindTrust: f.blindTrust}, nil
 }

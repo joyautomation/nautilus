@@ -134,6 +134,7 @@ From the environment only; nothing in a request changes it.
 | `TIAD_MAX_FILE_BYTES` | 1 GiB | The largest file a put takes (413 beyond it) |
 | `TIAD_WORKDIR` | `C:\tiad-work` | Required off Windows |
 | `TIAD_PINS_DIR` | `%ProgramData%\tiad\pins` | The device pins (siemens-ide.md §3.8). Required off Windows; refused inside `TIAD_WORKDIR`, which the files API reaches. `install-tiad.ps1` locks it and never wipes it |
+| `TIAD_DEPLOYS_DIR` | `%ProgramData%\tiad\deploys` | The deploy record (siemens-ide.md §3.5, §7): every deploy's project archive (`archives/<sha256>.zap21`) and the journal (`deploys.jsonl`). Required off Windows; refused inside `TIAD_WORKDIR` and nested with `TIAD_PINS_DIR` either way. `install-tiad.ps1` locks it and never wipes it |
 | `TIAD_TARGETS` | none | The only CPU addresses tiad goes online or downloads to. Strict dotted quads |
 | `TIAD_SESSION_IDLE` | `1h` | The idle reaper closes sessions unused this long (a Go duration) |
 | `TIAD_RETIRE_WATCH` | `3m` | How long a retire of a TIA instance that trusted blindly may take before tiad counts TIA as gone (a Go duration, at most `1h`) |

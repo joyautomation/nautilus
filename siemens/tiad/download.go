@@ -198,6 +198,15 @@ type DownloadRequest struct {
 	// Decisions.AcceptUnverifiedHardware, by every real download that
 	// loads hardware, on every CPU (#789 hardware gate).
 	Attestation *Attestation `json:"attestation,omitempty"`
+	// Source is the caller's claim of what the project was built from,
+	// kept in the deploy record as the caller's claim.
+	Source *DeploySource `json:"source,omitempty"`
+	// Fingerprint is the options of the fingerprint read the agent makes
+	// after a load that compared equal, for the deploy record: its own
+	// opt-in to trust the CPU's certificate blindly, which the agent's
+	// TIA instance then keeps (Decisions.AcceptBlindTrust) until every
+	// session is closed. Close the session after a deploy.
+	Fingerprint *FingerprintRequest `json:"fingerprint,omitempty"`
 }
 
 // Attestation is the operator's statement that the CPU's hardware
@@ -352,6 +361,11 @@ type DownloadResult struct {
 	// rode on (Decisions.AcceptBlindTrust), or nil: keep it in the deploy
 	// record.
 	BlindTrust *BlindTrust `json:"blindTrust"`
+	// Deploy is a successful download's deploy record: the archive of
+	// what was loaded, the source the caller claimed, and the CPU's
+	// fingerprint after the load. A failure after the agent archived the
+	// project names its record too (DeployIDOf).
+	Deploy *DeployResult `json:"deploy,omitempty"`
 }
 
 // Acting reports whether answering the question id can change the CPU
@@ -494,6 +508,11 @@ func (r DownloadRequest) Validate() error {
 	}
 	if isYes(r.Decisions.UserManagementKeepOnline) && isYes(r.Decisions.UserManagementResetToProject) {
 		return fmt.Errorf("download: decisions.userManagementKeepOnline and decisions.userManagementResetToProject are both yes; user-management takes one answer")
+	}
+	if r.Source != nil {
+		if err := r.Source.Validate(); err != nil {
+			return fmt.Errorf("download: %w", err)
+		}
 	}
 	return nil
 }

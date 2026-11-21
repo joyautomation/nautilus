@@ -575,6 +575,7 @@ The client checks each path and the agent checks again.
 | `POST /v1/sessions/{id}/upload` | `{trustUnverifiedCertificate?}` → `{trustedBlindly, blindTrust, device, pin, cpu: {name, order, firmware}, removedAccess?: [string]}`. CPU into the session's project, for bringing a legacy CPU's program into nautilus (S2a: works). Pins the CPU's identity on first use, or checks it (§3.8). `cpu` is what a spec must name to keep the uploaded CPU. `removedAccess` names the user and role this session had made, removed first (§3.3, `cpu.accessControl`) |
 | `POST /v1/sessions/{id}/save` | `{archive?}` → `{path}`. Refused (`unclean_session`) after an apply or upload failed part-way |
 | `GET /v1/pins`, `POST /v1/pins/{address}` | The device pins (§3.8). An upload pins the CPU on first use and must match after; compare and download check the pin first |
+| `GET /v1/deploys[?address=]` | → `{deploys: [{id, at, session, project, address, hardware, software, source, tia, archive, attestation, keptDevices, blindTrust, outcome, status}], unreadableLines}`. The deploy record, newest first (§3.5, "The deploy record"). Never starts TIA |
 
 `secrets` is `{"webUsers": {"naut": "<password>"}, "protection": "<password>", "configurationPassword": "<password>", "fullAccessPassword": "<password>"}`.
 Each password answers only its own question: the protection password
@@ -600,7 +601,9 @@ Request:
                  "acceptBlindTrust": true },
   "announced": true,
   "attestation": { "by": "<who>", "text": "<the CPU's hardware configuration is what I intend to load>" },
-  "secrets": { "protection": "<password>", "configurationPassword": "<password>" }
+  "secrets": { "protection": "<password>", "configurationPassword": "<password>" },
+  "source": { "commit": "<git commit id>", "hash": "sha256:<hash of the sources sent>" },
+  "fingerprint": { "trustUnverifiedCertificate": true }
 }
 ```
 
@@ -987,6 +990,64 @@ behaviour. So, until then:
   download messages say it (`stateSource: "tia-message"`, above); absent
   when TIA said nothing.
 
+**The deploy record (D7, §7).** Every real download is recorded under
+`TIAD_DEPLOYS_DIR`, which is outside the work dir, so the files API never
+reaches it. A dry run, and a download tiad refuses itself, leave no record.
+- **Archive first.** Once every refusal tiad makes itself has passed, the
+  download's own TIA work item does the following:
+  - It saves the session's project and archives it (`.zap21`).
+  - It hashes the archive and moves it to `archives/<sha256>.zap21`. A
+    file already at that name is replaced, never taken by its name.
+  - It writes an intent line to `deploys.jsonl`.
+  - Only then does it call TIA's download.
+
+  Because this is one work item, what is archived is what TIA loads. An
+  archive or an intent line that cannot be written refuses the download
+  (`operation_failed`, "nothing was sent to the CPU").
+- **The intent line** holds the following:
+  - the deploy id, the session, the project and the address;
+  - `hardware` and `software`;
+  - `source`, `{commit, hash, claimedBy: "caller"}`. This is the caller's
+    claim; tiad checks only its shape. A commit is 40 or 64 lower-case hex
+    digits, and a hash is `sha256:` and 64 more. Any other shape is a
+    `bad_request`;
+  - `tia`, `{version, openness, agent}`;
+  - `archive`, `{file, sha256, bytes}`;
+  - the attestation of a hardware load, the kept devices, and the blind
+    trust the download was checked against.
+- **An outcome line on every end.** `status` is one of:
+  - `loaded`: TIA loaded and the compare right after it was equal;
+  - `not-loaded`: a check cancelled the download, or TIA failed before it
+    asked one;
+  - `in-doubt`: everything else, `outcome_unknown` included.
+
+  The line also holds `outcome` (`loaded` or the error's kind) and the
+  evidence: `state`, the blocks, `hardwareVerified`,
+  `userManagementReset`, the acting answers, and the fingerprint read after
+  the load. A failure carries its message, at most 4000 characters.
+- **When the outcome line is missing.** A record with an intent line and no
+  outcome line lists as `in-doubt`: the agent died during the download. An
+  outcome line that cannot be written leaves the load as it is. The
+  response then says `deploy.recorded: false`, with `recordError`. An error
+  after the intent line names its record in `data.deploy`.
+- **The fingerprint after the load.** After a load that compared equal,
+  tiad reads the CPU's fingerprint (§3.8) in the same session, through the
+  fingerprint call's trust path and audit line (with `deploy=<id>`).
+  - `DownloadId` names the load.
+  - `Hardware` changes on the first tiad load and on a user-management
+    reset. #789 stage (C) saw it change on the first hardware load and stay
+    the same on the next one.
+  - Its opt-in is the request's own, `fingerprint.trustUnverifiedCertificate`.
+    The bench CPU's read asks TLS trust, while its download does not. With
+    that opt-in, TIA's instance trusts blindly from then on, so a later
+    download in it needs `acceptBlindTrust`. Close the session after a
+    deploy: the agent then retires that instance.
+  - A read that fails is recorded (`fingerprintError`) and changes nothing
+    of the verdict.
+- **The response.** A successful download returns `deploy: {id, archive,
+  source, fingerprint, fingerprintError?, downloadId?, recorded,
+  recordError?}`. `GET /v1/deploys` lists the records.
+
 ### 3.6 PROFINET's requirements (#723)
 
 | | Need | Call |
@@ -1364,9 +1425,22 @@ So:
 - **Fallback.** Master copies of the compiled blocks are the fallback, only
   if the archive route hits a wall.
 
-This is not built yet. It is a later PR, after the hardware question on
-#789 is settled: Openness compares hardware only in-project, and whether an
-uploaded CPU compares identical to the project's CPU needs a CPU window.
+**Built (D1a):** the archive per deploy, the journal, the fingerprint
+after the load and `GET /v1/deploys` (§3.5, "The deploy record").
+
+**Not built yet (D1b):** `POST /v1/deploys/verify`. It opens a deploy's
+archive and runs `CompareToOnline`. An archive whose sha256 differs from
+its journal line is *broken*, never equal. A last deploy that compares
+different, or whose `DownloadId` or `Hardware` changed, raises
+`changedOutside`. It waits for the one-project rule, because TIA V21 holds
+one open project per instance and verify opens one.
+
+**Unproven:** whether a pre-download archive, retrieved later, compares
+equal to the CPU it was loaded into. The #789 probes covered block copies
+and rebuilds, not this. It needs a bench window (archive, load, close,
+retrieve, compare) before D7 can be called proven. Openness compares
+hardware only in-project, so the hardware question on #789 still stands
+beside it.
 
 **Code that doesn't need the image,** in order:
 1. the Web API client;

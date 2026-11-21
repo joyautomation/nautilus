@@ -248,6 +248,9 @@ namespace Tiad.Fake
         string failInDoubt = "";
         string tiaDies = "";
         bool noDryRun;
+        // archiveSame makes every archive the same bytes, so two deploys
+        // share one content address.
+        bool archiveSame;
         bool cleanCancel;
         bool compareDiffers;
         string compareTree = "";
@@ -467,6 +470,17 @@ namespace Tiad.Fake
             }
         }
 
+        public bool ArchiveSame
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return archiveSame;
+                }
+            }
+        }
+
         public bool NoDryRun
         {
             get
@@ -638,6 +652,7 @@ namespace Tiad.Fake
             string dies = r.Str("tiaDies");
             if (dies != "" && dies != "preparing" && dies != "downloading") throw new TiadException(400, Kinds.BadRequest, "tiaDies is preparing or downloading");
             bool noDry = r.Bool("noDryRun");
+            bool same = r.Bool("archiveSame");
             bool clean = r.Bool("cleanCancel");
             bool differs = r.Bool("compareDiffers");
             string tree = r.Str("compareTree");
@@ -685,6 +700,7 @@ namespace Tiad.Fake
                 failInDoubt = inDoubt;
                 tiaDies = dies;
                 noDryRun = noDry;
+                archiveSame = same;
                 cleanCancel = clean;
                 compareDiffers = differs;
                 compareTree = tree;
@@ -1573,6 +1589,20 @@ namespace Tiad.Fake
         {
             script.Enter("Identify");
             return script.NoIdentify ? null : script.Device;
+        }
+
+        // archives counts the archives this fake wrote, so each one's bytes
+        // differ, as a real archive's do (time stamps).
+        static int archives;
+
+        public string Archive(object project, string dir)
+        {
+            script.Enter("Archive");
+            var p = (FakeProject)project;
+            string f = Path.Combine(dir, Path.GetFileNameWithoutExtension(p.Full) + ".zap21");
+            int n = System.Threading.Interlocked.Increment(ref archives);
+            File.WriteAllText(f, script.ArchiveSame ? "fake TIA project archive" : "fake TIA project archive " + n + " of " + p.Full);
+            return f;
         }
 
         public string Save(object project, bool archive)

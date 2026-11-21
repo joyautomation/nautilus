@@ -473,6 +473,28 @@ namespace Tiad.Openness
             Tia(delegate { Of(project).Project.Close(); });
         }
 
+        // ArchiveInto writes a compressed archive of o, already saved, into
+        // dir, which must not be the project's own directory, and returns
+        // its full path.
+        static string ArchiveInto(OpenProject o, string dir)
+        {
+            string name = Path.GetFileNameWithoutExtension(o.Full) + ".zap21";
+            o.Project.Archive(new DirectoryInfo(dir), name, ProjectArchivationMode.Compressed);
+            string made = Path.Combine(dir, name);
+            if (!File.Exists(made)) throw new TiaException("TIA archived the project somewhere other than " + made);
+            return made;
+        }
+
+        public string Archive(object project, string dir)
+        {
+            return Tia(delegate
+            {
+                OpenProject o = Of(project);
+                o.Project.Save();
+                return ArchiveInto(o, dir);
+            });
+        }
+
         public string Save(object project, bool archive)
         {
             return Tia(delegate
@@ -491,9 +513,7 @@ namespace Tiad.Openness
                 Directory.CreateDirectory(tmp);
                 try
                 {
-                    o.Project.Archive(new DirectoryInfo(tmp), name, ProjectArchivationMode.Compressed);
-                    string made = Path.Combine(tmp, name);
-                    if (!File.Exists(made)) throw new TiaException("TIA archived the project somewhere other than " + made);
+                    string made = ArchiveInto(o, tmp);
                     if (File.Exists(full)) File.Delete(full);
                     File.Move(made, full);
                 }
