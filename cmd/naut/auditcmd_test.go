@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -111,7 +112,9 @@ func TestWaitToPrune(t *testing.T) {
 		return func(context.Context) gateAnswer { return a }
 	}
 	used := func(u float64, err error) func() (float64, error) { return func() (float64, error) { return u, err } }
-	ctx := t.Context()
+	// Bounded, so a wait that never ends fails the test rather than hangs.
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
 	var log strings.Builder
 	if ok, un := waitToPrune(ctx, ans(gateAnswer{}), used(0.1, nil), time.Millisecond, &log); !ok || un {
 		t.Errorf("not lowered: %v %v", ok, un)
@@ -138,9 +141,63 @@ func TestWaitToPrune(t *testing.T) {
 	if ok, un := waitToPrune(ctx, ans(gateAnswer{lowered: true}), used(0, errors.New("statfs")), time.Millisecond, &log); !ok || !un {
 		t.Errorf("disk unknown: %v %v", ok, un)
 	}
-	cctx, cancel := context.WithCancel(ctx)
-	cancel()
+	cctx, ccancel := context.WithCancel(ctx)
+	ccancel()
 	if ok, _ := waitToPrune(cctx, ans(gateAnswer{lowered: true}), used(0.5, nil), time.Millisecond, &log); ok {
 		t.Error("a cancelled wait prunes")
+	}
+}
+
+// naut run's prune loop: a lowered retention that cannot wait (the disk
+// full) prunes with its prunes marked unanchored; one that may prunes
+// plainly.
+func TestPruneAuditMarksAnUnanchoredPrune(t *testing.T) {
+	for _, c := range []struct {
+		gate gateAnswer
+		used float64
+		mark bool
+	}{
+		{gateAnswer{lowered: true}, 0.95, true},
+		{gateAnswer{lowered: true, anchored: true}, 0.95, false},
+		{gateAnswer{}, 0.95, false},
+	} {
+		dir := t.TempDir()
+		now := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+		j, err := audit.OpenFile(dir, audit.FileOptions{Keep: 24 * time.Hour, Now: func() time.Time { return now }})
+		if err != nil {
+			t.Fatal(err)
+		}
+		j.Record(audit.Entry{User: "u", Source: audit.SourceHMI, Action: "tag.write", Result: audit.ResultOK})
+		now = now.Add(72 * time.Hour)
+		j.Record(audit.Entry{User: "u", Source: audit.SourceHMI, Action: "tag.write", Result: audit.ResultOK})
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			pruneAuditWith(ctx, j, func(context.Context) gateAnswer { return c.gate }, func() (float64, error) { return c.used, nil }, io.Discard)
+		}()
+		deadline := time.Now().Add(5 * time.Second)
+		var line string
+		for line == "" && time.Now().Before(deadline) {
+			files, _ := filepath.Glob(filepath.Join(dir, "audit-*.jsonl"))
+			for _, f := range files {
+				b, _ := os.ReadFile(f)
+				for _, l := range strings.Split(string(b), "\n") {
+					if strings.Contains(l, `"action":"audit.prune"`) {
+						line = l
+					}
+				}
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		cancel()
+		<-done
+		j.Close()
+		if line == "" {
+			t.Fatalf("%+v: no prune", c)
+		}
+		if got := strings.Contains(line, `"unanchored":true`); got != c.mark {
+			t.Errorf("%+v: unanchored %v, want %v: %s", c, got, c.mark, line)
+		}
 	}
 }

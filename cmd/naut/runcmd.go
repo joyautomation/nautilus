@@ -1340,12 +1340,16 @@ func processUser() string {
 // a lowered retention is not yet anchored (waitToPrune).
 func pruneAudit(ctx context.Context, j *audit.FileJournal, gate func(context.Context) gateAnswer, stderr io.Writer) {
 	dir := j.Dir()
+	pruneAuditWith(ctx, j, gate, func() (float64, error) { return diskUsed(dir) }, stderr)
+}
+
+func pruneAuditWith(ctx context.Context, j *audit.FileJournal, gate func(context.Context) gateAnswer, used func() (float64, error), stderr io.Writer) {
 	t := time.NewTicker(24 * time.Hour)
 	defer t.Stop()
 	for {
 		prune := j.Prune
 		if gate != nil {
-			ok, unanchored := waitToPrune(ctx, gate, func() (float64, error) { return diskUsed(dir) }, 2*time.Second, stderr)
+			ok, unanchored := waitToPrune(ctx, gate, used, 2*time.Second, stderr)
 			if !ok {
 				return
 			}

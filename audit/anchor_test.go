@@ -229,7 +229,7 @@ func TestAnchoredUnexplainedGap(t *testing.T) {
 	if len(s.s.gaps) != 1 {
 		t.Fatalf("gaps %+v, want the copy to record one", s.s.gaps)
 	}
-	wantVerdict(t, s.verify(), Broken, "UNEXPLAINED GAP")
+	wantVerdict(t, s.verify(), Broken, "UNEXPLAINED GAP", "the journal's chain breaks")
 }
 
 // MUST pin: recent files deleted and a correctly chained audit.prune
@@ -380,7 +380,64 @@ func TestAnchoredCutOffTheEnd(t *testing.T) {
 	s.j.Close()
 	name := "audit-20261119.jsonl"
 	os.WriteFile(filepath.Join(s.dir, name), nil, 0o600) // the day's lines gone
-	wantVerdict(t, s.verify(), Broken, "past the journal's head", "lines were cut from the end")
+	wantVerdict(t, s.verify(), Broken, "past the journal's head", "lines were cut from the end", "an anchor (")
+}
+
+// A file missing from the middle: the chain breaks, and the copy holds
+// lines the files do not.
+func TestAnchoredMissingMiddleFile(t *testing.T) {
+	s := newSite(t, 30*day)
+	s.days(3)
+	os.Remove(filepath.Join(s.dir, "audit-20261119.jsonl"))
+	wantVerdict(t, s.verify(), Broken, "the journal's chain breaks", "which the journal's files do not")
+}
+
+// A copy row rewritten in the database with its hash recomputed (a role
+// with UPDATE): where the journal no longer holds the line, the anchor
+// still catches it.
+func TestAnchoredRewrittenCopyRow(t *testing.T) {
+	s := newSite(t, 2*day)
+	s.days(5)
+	s.j.Prune()
+	s.step()
+	first := s.s.anchors[0].Seq // anchored at start, since pruned from the files
+	for i, r := range s.s.rows {
+		if r.Seq == first {
+			raw := bytes.Replace(r.Raw, []byte(`"result":"ok"`), []byte(`"result":"refused"`), 1)
+			s.s.rows[i].Raw, s.s.rows[i].Hash = raw, lineHash(raw)
+		}
+	}
+	wantVerdict(t, s.verify(), Broken, "does not match the copy's row")
+}
+
+// A prune with a keep but no retention journalled at all is not one naut
+// writes.
+func TestAnchoredPruneWithoutRetention(t *testing.T) {
+	dir := t.TempDir()
+	c := &clock{t0()}
+	s := &site{t: t, dir: dir, c: c, s: &anchorStore{c: c}}
+	s.j = open(t, dir, c, FileOptions{Keep: 2 * day})
+	s.tl = NewTailer(dir, s.s, s.j.Head)
+	s.tl.now = c.now
+	s.tl.AnchorTo(s.s, 5*time.Minute)
+	s.days(4)
+	s.j.Prune()
+	s.step()
+	wantVerdict(t, s.verify(), Broken, "follows no audit.retention entry")
+}
+
+// A forged prune that names an old file it never removed, while the files
+// it did remove are recent: the copy's rows say which files they were in.
+// It also names the wrong hash for the last line it removed.
+func TestAnchoredPruneNamesAnotherFile(t *testing.T) {
+	s := newSite(t, 3*day)
+	s.days(4)
+	s.forge(Entry{Action: ActionPrune, Target: "audit-20200101.jsonl",
+		Detail: map[string]any{"last": "sha256:00", "seq": float64(3), "keep": float64(3 * 86400)}})
+	os.Remove(filepath.Join(s.dir, "audit-20261118.jsonl"))
+	os.Remove(filepath.Join(s.dir, "audit-20261119.jsonl"))
+	s.step()
+	wantVerdict(t, s.verify(), Broken, "removed entries the copy holds from audit-20261119.jsonl", "names seq 3's hash as sha256:00")
 }
 
 // A journal rewritten with its chain recomputed passes the chain walk,

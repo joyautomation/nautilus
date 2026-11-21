@@ -82,3 +82,13 @@ func TestAuditCopyDSN(t *testing.T) {
 		}
 	}
 }
+
+// audit.anchor-every defaults to 5 minutes.
+func TestAuditAnchorEvery(t *testing.T) {
+	if got := (&Project{}).AuditAnchorEvery(); got != 5*time.Minute {
+		t.Errorf("default %v", got)
+	}
+	if got := (&Project{Audit: &AuditConfig{Sink: "postgres", AnchorEvery: Duration(time.Minute)}}).AuditAnchorEvery(); got != time.Minute {
+		t.Errorf("set %v", got)
+	}
+}

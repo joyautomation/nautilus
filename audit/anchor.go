@@ -206,15 +206,14 @@ func VerifyAnchored(in AnchorInput) (AnchorReport, error) {
 		lastCopy    uint64
 		beforeFiles struct{ n, lo, hi uint64 }
 		pastHead    struct{ n, lo, hi uint64 }
-		fileFirst   uint64
-		fileHead    = chain.HeadSeq
+		// fileHead is the journal's last line read so far (its head once
+		// the files are read): the chain walk stops at a break, this
+		// does not.
+		fileHead uint64
 	)
 	fl, fok, err := files.next()
 	if err != nil {
 		return r, err
-	}
-	if fok {
-		fileFirst = fl.Seq
 	}
 	cr, cok, err := nextRow(in.Copy)
 	if err != nil {
@@ -257,14 +256,16 @@ func VerifyAnchored(in AnchorInput) (AnchorReport, error) {
 			}
 			if fLine == nil {
 				switch {
-				case row.Seq > fileHead:
+				case !fok:
+					// The files ended before it.
 					if pastHead.n == 0 {
 						pastHead.lo = row.Seq
 					}
 					pastHead.n++
 					pastHead.hi = row.Seq
-				case row.Seq < fileFirst:
-					// Pruned from the journal, kept in the copy.
+				case fileHead == 0:
+					// Before the journal's first line: pruned from the
+					// journal, kept in the copy.
 					if beforeFiles.n == 0 {
 						beforeFiles.lo = row.Seq
 					}
@@ -286,6 +287,7 @@ func VerifyAnchored(in AnchorInput) (AnchorReport, error) {
 			s = seen{seq: fLine.Seq, e: fLine.Entry, file: fLine.File}
 		}
 		if fLine != nil {
+			fileHead = fLine.Seq
 			if h := atAnchor[fLine.Seq]; h != nil {
 				h.file = fLine.Hash
 			}
