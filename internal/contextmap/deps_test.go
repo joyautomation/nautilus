@@ -120,6 +120,16 @@ func rules(u universe) []rule {
 			why:  "the OIDC seam is between the operator surface and the CLI's wiring; nothing else uses it",
 		},
 		{
+			from: []string{"internal/auditpg"},
+			to:   u.allBut("audit"),
+			why:  "the audit journal's Postgres copy is an adapter over audit's tailer: it knows the journal and nothing else of ours",
+		},
+		{
+			from: u.allBut("cmd", "internal/auditpg"),
+			to:   []string{"internal/auditpg"},
+			why:  "only the CLI wires the audit journal's Postgres copy (naut run tails into it, naut audit reads it), so nothing else links the database driver for it",
+		},
+		{
 			from: u.allBut("cmd", "virtdev"),
 			to:   []string{"virtdev"},
 			why:  "virtual devices are a test and commissioning context; only the CLI and verification compose them",
@@ -233,6 +243,10 @@ var moduleAllowed = map[string][]string{
 	// auth/oidc: sign-in at an OpenID Connect provider (#708 PR 6,
 	// identity-audit.md §3, question 4).
 	"auth/oidc": {"github.com/coreos/go-oidc/v3/", "golang.org/x/oauth2", "github.com/go-jose/go-jose/v4"},
+	// internal/auditpg: the audit journal's Postgres copy (#709 PR 9,
+	// identity-audit.md §4). The trailing slash makes the audit entry an
+	// exact match, not a prefix of auditpg itself.
+	"internal/auditpg": {module + "/audit/", "github.com/lib/pq"},
 }
 
 // oidcModules are the modules only auth/oidc may link, and oidcFree the

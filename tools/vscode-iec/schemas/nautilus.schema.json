@@ -133,6 +133,17 @@
         "keep-days": {
           "type": "integer",
           "description": "Days of journal files kept (default 365). A negative number keeps every file."
+        },
+        "sink": {
+          "type": "string",
+          "enum": [
+            "postgres"
+          ],
+          "description": "Keep a copy of the journal in Postgres (the audit_entries table) for queries and export. It tails the files and catches up after any outage; the files stay the source of truth."
+        },
+        "dsn-env": {
+          "type": "string",
+          "description": "The environment variable holding the copy's connection string (default NAUTILUS_AUDIT_DB_URL, then DATABASE_URL). Never the connection string itself."
         }
       }
     },

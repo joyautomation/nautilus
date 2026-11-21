@@ -1287,6 +1287,51 @@ Known limits:
   journalled yet, nor are the refusals of the program routes on a Siemens
   facade.
 
+### A copy in Postgres
+
+The journal's files are the record. For queries, screens and export,
+`naut run` can also keep a copy in Postgres:
+
+```yaml
+audit:
+  sink: postgres
+  # dsn-env: SITE_AUDIT_DB   # default NAUTILUS_AUDIT_DB_URL, then DATABASE_URL
+```
+
+The connection string comes from an environment variable, never the
+manifest, by default the historian's `DATABASE_URL`. A sink with that
+variable empty stops `naut run` at start, naming the variable.
+
+- **It tails the files.** Each line is copied, byte for byte, into the
+  `audit_entries` table (one row per entry: `seq`, `id`, `ts`, `user`,
+  `source`, `action`, `target`, `result`, `before`, `after`, `detail` as
+  `jsonb`, `from`, `session`, and `line`, the exact line). Only lines that
+  are already on disk are copied, about once a second.
+- **It catches up.** While Postgres is down the controller runs as
+  before. The copy resumes from its newest row when Postgres is back.
+  Nothing is lost unless the journal prunes files the copy hasn't read
+  (`audit.keep-days`); such a gap is recorded in `audit_gaps`.
+- **Several controllers share one database.** Rows carry a `controller`
+  column: the project's name, plus `NAUTILUS_NODE` on a redundant pair or
+  `POD_NAME` in a cluster (run it as a StatefulSet, so the name and the
+  journal's volume stay with the replica).
+- **It never writes over itself.** The copy is only ever added to. If the
+  journal no longer matches what the copy holds (a copied line changed,
+  lines cut off the end, or a line that doesn't chain on from the copy's
+  newest), the copy stops and is left as it is. Run `naut audit verify`
+  and compare the two before restarting.
+- **It needs INSERT and SELECT only.** The sink creates its tables when
+  they are missing. A database administrator can create them instead,
+  under another role, and grant the controller's role just those two.
+- **It is shown:** an `audit copy` card on the drivers block: `connected`
+  when the copy holds every entry, `connecting` while it catches up,
+  `degraded` with the error while Postgres is unreachable, `error` when
+  it stopped. The card shows the copied `seq` against the journal's, and
+  any gaps.
+
+On its own the copy is a convenience, not proof: whoever can write the
+journal's files can rewrite them before the copy reads them.
+
 ### `GET /api/audit`
 
 The last 1000 entries, newest first:

@@ -95,7 +95,12 @@ break one changes this section first and says why.
   (`internal/oidcseam`, stdlib only, imported only by `server` and the
   CLI; internal so it is not stable Go API while #708 is open), so the
   server, the runtime, `acceptance`, the languages and the wasm build
-  never link those modules. `retain` imports only `internal/k8sapi`. `quorum` and its subtree
+  never link those modules. `internal/auditpg` (the audit journal's
+  Postgres copy, #709 PR 9) imports only `audit` and `github.com/lib/pq`,
+  and only the CLI imports it: the tailer that reads the journal's files,
+  checks their chain and decides what is copied stays in `audit`, so the
+  adapter only stores rows, and the server never links a database driver
+  for it. `retain` imports only `internal/k8sapi`. `quorum` and its subtree
   import only each other, and only `leader`, the CLI and Verification import
   them: nothing else learns the vote protocol.
 - `internal/fence` (how a write leaves in time on a redundant pair,

@@ -301,6 +301,60 @@ type AuditConfig struct {
 	// KeepDays is how many days of files are kept (default 365); a
 	// negative number keeps every file.
 	KeepDays int `yaml:"keep-days"`
+	// Sink keeps a copy of the journal elsewhere. "postgres" tails the
+	// files into the audit_entries table, catching up after any outage;
+	// the files stay the source of truth (#709 PR 9).
+	Sink string `yaml:"sink"`
+	// DSNEnv names the ENVIRONMENT VARIABLE holding the copy's connection
+	// string, never the DSN itself (a manifest is committed). Default
+	// NAUTILUS_AUDIT_DB_URL, falling back to DATABASE_URL, the
+	// historian's.
+	DSNEnv string `yaml:"dsn-env"`
+}
+
+// DefaultAuditDSNEnv / FallbackAuditDSNEnv are where the audit journal's
+// Postgres copy looks for its connection string when the manifest names
+// no variable.
+const (
+	DefaultAuditDSNEnv  = "NAUTILUS_AUDIT_DB_URL"
+	FallbackAuditDSNEnv = "DATABASE_URL"
+)
+
+func checkAudit(a *AuditConfig) error {
+	if a == nil {
+		return nil
+	}
+	switch a.Sink {
+	case "", "postgres":
+	default:
+		return fmt.Errorf("audit.sink %q: want postgres (omit it for the journal's files alone)", a.Sink)
+	}
+	if a.DSNEnv != "" && a.Sink == "" {
+		return errors.New("audit.dsn-env is set but audit.sink is not: add sink: postgres")
+	}
+	return nil
+}
+
+// AuditCopyDSN is the connection string of the journal's Postgres copy:
+// "" when audit.sink is not postgres, and an error naming the variable
+// when it is and the variable is empty.
+func (p *Project) AuditCopyDSN(getenv func(string) string) (string, error) {
+	if p.Audit == nil || p.Audit.Sink != "postgres" {
+		return "", nil
+	}
+	env := p.Audit.DSNEnv
+	if env == "" {
+		env = DefaultAuditDSNEnv
+	}
+	dsn := getenv(env)
+	if dsn == "" && p.Audit.DSNEnv == "" {
+		dsn = getenv(FallbackAuditDSNEnv)
+		env += " (or " + FallbackAuditDSNEnv + ")"
+	}
+	if dsn == "" {
+		return "", fmt.Errorf("audit.sink: postgres, but %s is empty: the connection string is an environment variable, never the manifest", env)
+	}
+	return dsn, nil
 }
 
 // AuditJournal resolves the audit section's defaults: the journal's
@@ -1431,6 +1485,9 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 	opts.Substitutable = substitutableRoots(substitutes)
 	if err := checkNetworkSections(m); err != nil {
 		return nil, err
+	}
+	if err := checkAudit(m.Audit); err != nil {
+		return nil, fmt.Errorf("%s: %w", name, err)
 	}
 	if err := checkRedundancy(m.Redundancy); err != nil {
 		return nil, err

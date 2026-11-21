@@ -918,10 +918,11 @@ jobs:
   postgres:
     needs: changes
     if: needs.changes.outputs.full != 'false'
-    # The historian's Postgres store and the alarm journal's Postgres table
-    # skip unless NAUTILUS_TEST_DATABASE_URL is set; here they run against a
-    # real Postgres, so the docs' Postgres claims have evidence.
-    name: Postgres — historian and alarm journal
+    # The historian's Postgres store, the alarm journal's Postgres table and
+    # the audit journal's Postgres copy skip unless NAUTILUS_TEST_DATABASE_URL
+    # is set; here they run against a real Postgres, so the docs' Postgres
+    # claims have evidence.
+    name: Postgres — historian, alarm journal and audit copy
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -941,7 +942,7 @@ jobs:
           NAUTILUS_TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
         run: |
           mkdir -p evidence
-          go test -json ./hist/ ./alarm/ -run 'Postgres|PGJournal' -v -timeout 120s | tee evidence/postgres.json | go run ./tools/evidence cat
+          go test -json ./hist/ ./alarm/ ./internal/auditpg/ ./cmd/naut/ -run 'Postgres|PGJournal' -v -timeout 300s | tee evidence/postgres.json | go run ./tools/evidence cat
       - name: Keep the results as runtime evidence
         uses: actions/upload-artifact@v4
         with:

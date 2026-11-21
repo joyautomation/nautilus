@@ -301,6 +301,11 @@ type Options struct {
 	// refused meanwhile (#709, design §6 question 5).
 	AuditUnavailable error
 
+	// AuditCopy reports the journal's copy elsewhere (audit.sink:
+	// postgres, #709 PR 9), shown as its own card on the drivers block;
+	// nil when there is none.
+	AuditCopy func() audit.CopyStatus
+
 	// Auth is the manifest's compiled auth: block (#708): who may do what.
 	// Nil keeps the write rule of before it existed (AuthToken when set,
 	// else a same-origin request). With it, every write route asks the
@@ -548,6 +553,7 @@ type Server struct {
 	allowHosts  map[string]bool
 	onlineEdits bool
 	drivers     func() []DriverStatus
+	auditCopy   func() audit.CopyStatus
 	cluster     interface{ Status() leader.Status }
 	historian   string
 	historyFn   func() *ProgramHistory
@@ -665,6 +671,7 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 	s.allowHosts = allowedHostSet(configured)
 	if len(opts) > 0 {
 		s.drivers = opts[0].Drivers
+		s.auditCopy = opts[0].AuditCopy
 		s.cluster = opts[0].Cluster
 		s.historian = opts[0].HistorianURL
 		s.historyFn = opts[0].History
@@ -832,6 +839,9 @@ func (s *Server) driverStatus(now time.Time) []DriverStatus {
 	}
 	if j := s.audit.status(); j != nil {
 		ds = append(ds, *j)
+	}
+	if s.auditCopy != nil {
+		ds = append(ds, copyCard(s.auditCopy()))
 	}
 	if ds == nil {
 		return nil
