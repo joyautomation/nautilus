@@ -200,15 +200,20 @@ func readDupOp(r *http.Request) (dupOp, error) {
 	if err := json.Unmarshal(b, &q); err != nil {
 		return q, err
 	}
+	if q.Op == "state" {
+		return q, nil // a member's commissioning state (commission.go): no name
+	}
 	if (q.Op != "check" && q.Op != "clear") || !memberName.MatchString(q.Name) {
 		return q, fmt.Errorf("bad request: op %q, name %q", q.Op, q.Name)
 	}
 	return q, nil
 }
 
-func writeDupAnswer(w http.ResponseWriter, a DupAnswer) {
+func writeDupAnswer(w http.ResponseWriter, a DupAnswer) { writeJSON(w, a) }
+
+func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(a)
+	_ = json.NewEncoder(w).Encode(v)
 }
 
 // serveDup answers the peer's check or clear for this controller's voter.
@@ -220,6 +225,10 @@ func (e *Elector) serveDup(w http.ResponseWriter, r *http.Request) {
 	q, err := readDupOp(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if q.Op == "state" {
+		writeJSON(w, e.stateLocal())
 		return
 	}
 	writeDupAnswer(w, e.dupLocal(q))
@@ -264,6 +273,13 @@ func (w *Witness) serveDup(rw http.ResponseWriter, r *http.Request) {
 	}
 	if members := r.Header.Get(MembersHeader); members != p.members {
 		http.Error(rw, "not this cluster's members", http.StatusForbidden)
+		return
+	}
+	if q.Op == "state" {
+		p.mu.Lock()
+		m := voterState(p.v, w.now(), "witness")
+		p.mu.Unlock()
+		writeJSON(rw, m)
 		return
 	}
 	p.mu.Lock()

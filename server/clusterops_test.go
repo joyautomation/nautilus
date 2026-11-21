@@ -57,7 +57,34 @@ func TestAStandbyWithNoLeaderAnswersClearDuplicate(t *testing.T) {
 	if rec.Code != http.StatusOK || len(pair.by) != 1 {
 		t.Fatalf("clear on a leaderless standby: %d %s (ran %d times)", rec.Code, rec.Body, len(pair.by))
 	}
+	// A new pair has no leader until it is commissioned, and a controller
+	// that lost its state knows none until it is re-commissioned (#1029
+	// 3c-3c): both commands are answered here.
+	for i, c := range []struct{ path, body string }{
+		{"/api/cluster/commission", `{}`},
+		{"/api/cluster/recommission", `{"floor":5000}`},
+		{"/api/cluster/recommission", `{"fromSpare":true,"copyStopped":true}`},
+	} {
+		if rec := call(t, srv, "POST", c.path, c.body, bearer("s3cret")); rec.Code != http.StatusOK || len(pair.by) != 2+i {
+			t.Fatalf("%s %s on a leaderless standby: %d %s", c.path, c.body, rec.Code, rec.Body)
+		}
+	}
 	if rec := call(t, srv, "POST", "/api/tags", `{"name":"SP","value":1}`, bearer("s3cret")); rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("a tag write on the same standby: %d, want the 503 (the test's premise)", rec.Code)
+	}
+}
+
+// A server outside a pair answers the commissioning routes 404, and
+// journals the refusal: the audit seam reads no cluster that isn't there.
+func TestTheCommissioningRoutesOutsideAPairAnswer404(t *testing.T) {
+	srv := auditServer(t, Options{AuthToken: "s3cret"})
+	for _, c := range []struct{ path, body string }{
+		{"/api/cluster/commission", `{}`},
+		{"/api/cluster/recommission", `{"floor":5000}`},
+		{"/api/cluster/recommission", `{"fromSpare":true,"copyStopped":true}`},
+	} {
+		if rec := call(t, srv, "POST", c.path, c.body, bearer("s3cret")); rec.Code != http.StatusNotFound {
+			t.Fatalf("%s %s outside a pair: %d %s", c.path, c.body, rec.Code, rec.Body)
+		}
 	}
 }

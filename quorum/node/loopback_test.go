@@ -33,24 +33,26 @@ var errCut = errors.New("link cut by the test")
 
 // cluster is one pair and its witness.
 type cluster struct {
-	t     *testing.T
-	pair  string
-	mu    sync.Mutex
-	cut   map[[2]quorum.NodeID]bool // [from, to]
-	mute  map[quorum.NodeID]bool    // its vote requests are lost (the rest goes through)
-	addr  map[quorum.NodeID]string  // the name peers use: a DNS name nothing allows
-	byHP  map[string]quorum.NodeID
-	real  map[string]string // name -> the address it listens on now
-	ctl   map[quorum.NodeID]*member
-	wit   *witnessMember
-	tok   map[quorum.NodeID]string // peer token per node
-	ctok  map[quorum.NodeID]string // client token per node
-	led   map[uint64]quorum.NodeID // term -> who led it
-	stop  chan struct{}
-	done  chan struct{}
-	evMu  sync.Mutex
-	evs   []Event
-	bytes map[quorum.NodeID]*tap
+	t    *testing.T
+	pair string
+	mu   sync.Mutex
+	cut  map[[2]quorum.NodeID]bool // [from, to]
+	mute map[quorum.NodeID]bool    // its vote requests are lost (the rest goes through)
+	// noAdopt: every Adopt to or from it is lost (the rest goes through).
+	noAdopt map[quorum.NodeID]bool
+	addr    map[quorum.NodeID]string // the name peers use: a DNS name nothing allows
+	byHP    map[string]quorum.NodeID
+	real    map[string]string // name -> the address it listens on now
+	ctl     map[quorum.NodeID]*member
+	wit     *witnessMember
+	tok     map[quorum.NodeID]string // peer token per node
+	ctok    map[quorum.NodeID]string // client token per node
+	led     map[uint64]quorum.NodeID // term -> who led it
+	stop    chan struct{}
+	done    chan struct{}
+	evMu    sync.Mutex
+	evs     []Event
+	bytes   map[quorum.NodeID]*tap
 	// fail reports an oracle breach: t.Errorf, or a recorder in the
 	// monitor's own test.
 	fail func(format string, args ...any)
@@ -274,7 +276,8 @@ func (f *faultRT) RoundTrip(r *http.Request) (*http.Response, error) {
 		return nil, errCut
 	}
 	f.c.mu.Lock()
-	mute := f.c.mute[f.from] && strings.HasSuffix(r.URL.Path, "/vote")
+	mute := f.c.mute[f.from] && strings.HasSuffix(r.URL.Path, "/vote") ||
+		(f.c.noAdopt[f.from] || f.c.noAdopt[to]) && strings.HasSuffix(r.URL.Path, "/adopt")
 	f.c.mu.Unlock()
 	if mute {
 		return nil, errCut

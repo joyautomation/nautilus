@@ -61,6 +61,18 @@ var mutations = []string{
 	"mark_alarm_from_cause",         // the confirmed alarm follows the last duplicate's cause, which a later count in one Handle overwrites, and is paced (#1113 review)
 	"vouch_refusal_blocks",          // a vouch the log refuses refuses the re-commission (#1053 review)
 	"yield_until_due",               // a yield ends at the lease's due end, though a late grant moved it (#710 3b-4b)
+	// #1029 3c-3c: commissioning and the spare's way back.
+	"commission_unchecked",           // node: commission goes ahead on a pair a member says was commissioned or used terms
+	"recommission_local_floor_only",  // node: recommission's floor is checked against this controller's terms only, not the peer's and the witness's
+	"box_replaced_unchecked",         // node: a box-changed controller is re-commissioned without the operator's --box-replaced
+	"from_spare_not_spare",           // node: --from-spare runs on a controller that is not a spare
+	"from_spare_own_view",            // node: --from-spare checks only its own (silent) voter, not the other two
+	"from_spare_one_voter",           // node: --from-spare checks the witness only, not the peer's voter too
+	"from_spare_write_after_move",    // node: a write after --from-spare's move puts the spare's state file back
+	"uncommissioned_looks_unpaced",   // node: an uncommissioned controller looks whenever a frame pokes it: two ping-pong at network speed
+	"from_spare_peer_unchecked",      // node: --from-spare runs with the other controller uncommissioned, moving aside what may be the pair's only terms
+	"from_spare_clears_past_refusal", // node: --from-spare asks the witness to clear after the peer refused
+	"from_spare_moves_after_partial", // node: --from-spare moves the spare's file aside though a voter missed the clear
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")

@@ -65,6 +65,8 @@ var actionPerm = map[string]string{
 	"substitute.ack":   PermSubstitute,
 	// The redundant pair's operator commands (#1029 3c-3).
 	"redundancy.clear-duplicate": PermRedundancy,
+	"redundancy.commission":      PermRedundancy,
+	"redundancy.recommission":    PermRedundancy,
 }
 
 // presentedToken is the credential a request carries, in either

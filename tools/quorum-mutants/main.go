@@ -268,6 +268,19 @@ var table = []mutation{
 	// #1144 re-check.
 	{"hold_gen_ignores_seen", []string{"TestAHoldSetBetweenTheCheckAndTheClearEndsOnTheClear"}},
 	{"done_ignores_held", []string{"TestAClearIsNotDoneWhileTheControllerIsHeld"}},
+	// #1029 3c-3c: commissioning and the spare's way back.
+	{"commission_unchecked", []string{"TestCommissionRefusesAPairThatWasCommissioned"}},
+	{"recommission_local_floor_only", []string{"TestTheFloorsEvidenceIsEveryMembersTerms"}},
+	{"box_replaced_unchecked", []string{"TestABoxChangedControllerNeedsBoxReplaced"}},
+	{"from_spare_not_spare", []string{"TestFromSpareRunsOnlyOnASpare"}},
+	{"from_spare_own_view", []string{"TestFromSpareRefusesWhileEitherVoterHearsTheName"}},
+	{"from_spare_one_voter", []string{"TestFromSpareRefusesWhileEitherVoterHearsTheName"}},
+	{"from_spare_write_after_move", []string{"TestNoWriteAfterTheMoveAside"}},
+	{"uncommissioned_looks_unpaced", []string{"TestANewPairWaitingForCommissionIsQuiet"}},
+	// #1157 review.
+	{"from_spare_peer_unchecked", []string{"TestFromSpareNeedsACommissionedPeer"}},
+	{"from_spare_clears_past_refusal", []string{"TestAFromSpareClearThatMissesAVoterMovesNothing"}},
+	{"from_spare_moves_after_partial", []string{"TestAFromSpareClearThatMissesAVoterMovesNothing"}},
 	// Outside the quorum tree (rowPkgs): the operator-intent log's late-
 	// start lapse (#1030, #1032 reviews) and the pair's alarm acks (#710
 	// PR 3b-2c).

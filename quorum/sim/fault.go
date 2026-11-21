@@ -72,6 +72,16 @@ const (
 	// (quorum.Voter.CopyHeard), as the command is. For is ignored. The
 	// generator never draws it; Record.Clears says what each did.
 	Clear
+	// FromSpare is the operator's recommission --from-spare on the spare
+	// Node at At (#1029 3c-3c): refused unless Node is a spare and both
+	// other voters of its name (its peer's and the witness's) are up,
+	// settled and hear no boot of it; then both clear the name keeping no
+	// boot (every boot either knew retired, the generation above both),
+	// and Node's state file is moved aside (Node stops, its disk wiped).
+	// At At+For the operator restarts it: a fresh, uncommissioned boot
+	// that re-adopts from its peer. The generator never draws it;
+	// Record.FromSpares says what each did.
+	FromSpare
 	nKinds
 )
 
@@ -92,7 +102,7 @@ const (
 )
 
 var kindNames = [nKinds]string{"Cut", "Delay", "Loss", "Duplicate", "Mirror", "Crash", "Wipe",
-	"Pause", "Freeze", "SlowDisk", "DiskFail", "Skew", "Start", "Replay", "Recommission", "Clone", "Unhealthy", "Clear"}
+	"Pause", "Freeze", "SlowDisk", "DiskFail", "Skew", "Start", "Replay", "Recommission", "Clone", "Unhealthy", "Clear", "FromSpare"}
 
 func (k FaultKind) String() string {
 	if k >= 0 && k < nKinds {
@@ -314,6 +324,8 @@ func (w *World) applyFault(i int, on bool) {
 		}
 		w.tracef("%v: the operator clears marks: cleared %v, refused %v", n.addr, c.Cleared, c.Refused)
 		w.rec.Clears = append(w.rec.Clears, c)
+	case FromSpare:
+		w.fromSpare(i, f, on)
 	case Unhealthy:
 		if on {
 			w.nodes[f.Node].unhealthy++
@@ -390,4 +402,60 @@ func (w *World) applyFault(i int, on bool) {
 		n.clock.SetRate(w.now, rate)
 		w.arm(n)
 	}
+}
+
+// fromSpare applies FromSpare fault i (see FromSpare): the command's
+// check and clear at both other voters at once, as the clear's model does
+// (the real one asks each over the peer port, a few milliseconds apart),
+// then the move aside; on heal, the operator's restart.
+func (w *World) fromSpare(i int, f Fault, on bool) {
+	n := w.nodes[f.Node]
+	if !on {
+		if w.fromSpareDone[i] {
+			w.tracef("%v: the operator restarts the former spare", n.addr)
+			w.start(n)
+		}
+		return
+	}
+	rec := FromSpareRec{At: w.now, Node: n.addr}
+	defer func() { w.rec.FromSpares = append(w.rec.FromSpares, rec) }()
+	name := nodeIDs[n.addr]
+	if !n.up || !n.spare {
+		rec.Refused = "not a spare"
+		return
+	}
+	voters := []Addr{peerOf(n.addr), W}
+	var known [][]quorum.BootSeq
+	var gen uint64
+	for _, m := range voters {
+		v := w.nodes[m]
+		switch {
+		case !v.up || v.voter == nil || v.paused:
+			rec.Refused = m.String() + " does not answer"
+			return
+		case !v.voter.Settled(w.local(v)):
+			rec.Refused = m.String() + " not settled"
+			return
+		case len(v.voter.LiveBoots(w.local(v), name)) > 0:
+			rec.Refused = m.String() + " hears " + string(name)
+			return
+		}
+		known = append(known, v.voter.KnownBoots(name))
+		gen = max(gen, v.voter.DupGen(name))
+	}
+	retire := quorum.UnionBoots(known...)
+	for _, m := range voters {
+		v := w.nodes[m]
+		v.voter.ClearDuplicateKeeping(name, 0, retire, gen+1)
+		if p := v.voter.MarkWrite(); p != nil {
+			w.persist(v, p)
+		}
+	}
+	rec.Retired = len(retire)
+	w.fromSpareDone[i] = true
+	if n.addr != original(n.addr) {
+		w.tookAddress[n.addr] = true
+	}
+	w.tracef("%v: the operator's from-spare: %d boots of %v retired, the spare's file moved aside", n.addr, len(retire), name)
+	w.crash(n, true)
 }

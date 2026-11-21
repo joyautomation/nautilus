@@ -89,7 +89,7 @@ func TestPairMemberRefusesToStart(t *testing.T) {
 		{"no NAUTILUS_NODE", "NAUTILUS_NODE", "", "", "NAUTILUS_NODE is not set"},
 		{"NAUTILUS_NODE not a or b", "NAUTILUS_NODE", "c", "", `NAUTILUS_NODE="c"`},
 		{"no peer token", "NAUTILUS_PEER_TOKEN", "", "", "NAUTILUS_PEER_TOKEN is not set"},
-		{"no cluster ID", "NAUTILUS_CLUSTER", "", "", "not commissioned"},
+		{"no cluster ID", "NAUTILUS_CLUSTER", "", "", "naut redundancy new-pair"},
 		{"a malformed cluster ID", "NAUTILUS_CLUSTER", "plant-a", "", "32 lowercase hex"},
 		{"no state directory", "STATE_DIRECTORY", "", "", "no state directory"},
 		{"a state directory in the project", "STATE_DIRECTORY", filepath.Join(projDir, ".naut"), projDir, "inside the project"},

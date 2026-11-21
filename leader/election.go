@@ -155,6 +155,60 @@ func (q *Quorum) ClearDuplicate(ctx context.Context, name, by string) (report an
 	return rep, ClearIncomplete, incompleteReason(rep, err)
 }
 
+// Commission commissions a new pair from this controller (#1029 3c-3c,
+// node.Elector.Commission): the report (JSON), the outcome (ClearDone,
+// ClearRefused) and, when refused, why.
+func (q *Quorum) Commission(ctx context.Context, by string) (report any, outcome, reason string) {
+	rep, err := q.n.Commission(ctx, by)
+	if err != nil {
+		return rep, ClearRefused, refusedReason(rep.Refused, err)
+	}
+	return rep, ClearDone, ""
+}
+
+// Recommission is the operator's re-commission of this controller (#1029
+// 3c-3c, node.Elector.RecommissionChecked), or with fromSpare its
+// recommission --from-spare (node.Elector.FromSpare).
+func (q *Quorum) Recommission(ctx context.Context, by string, incarnation, floor uint64, boxReplaced, fromSpare bool) (report any, outcome, reason string) {
+	if fromSpare {
+		rep, err := q.n.FromSpare(ctx, by)
+		switch {
+		case err == nil:
+			return rep, ClearDone, ""
+		case errors.Is(err, node.ErrFromSpareIncomplete):
+			if rep.Refused != "" {
+				return rep, ClearIncomplete, rep.Refused // both cleared; the move aside failed
+			}
+			var cleared, missed []string
+			for _, a := range rep.Clear {
+				if a.Err != "" || a.Refused != "" {
+					missed = append(missed, a.Err+a.Refused)
+				} else {
+					cleared = append(cleared, a.Member)
+				}
+			}
+			done := "no voter cleared " + rep.Name
+			if len(cleared) > 0 {
+				done = strings.Join(cleared, " and ") + " cleared " + rep.Name
+			}
+			return rep, ClearIncomplete, done + ", the other did not (" + strings.Join(missed, "; ") + "); nothing was moved aside, and this box is still a spare. Run it again once both answer; a voter that hears " + rep.Name + " means the stopped controller runs again"
+		}
+		return rep, ClearRefused, refusedReason(rep.Refused, err)
+	}
+	rep, err := q.n.RecommissionChecked(ctx, by, node.RecommissionRequest{Incarnation: incarnation, Floor: floor, BoxReplaced: boxReplaced})
+	if err != nil {
+		return rep, ClearRefused, refusedReason(rep.Refused, err)
+	}
+	return rep, ClearDone, ""
+}
+
+func refusedReason(refused string, err error) string {
+	if refused != "" {
+		return refused
+	}
+	return err.Error()
+}
+
 // incompleteReason says which members still mark the name, or were not
 // reached, after a clear.
 func incompleteReason(rep node.ClearReport, err error) string {

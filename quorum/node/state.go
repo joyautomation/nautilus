@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/joyautomation/nautilus/quorum"
 )
@@ -30,6 +31,11 @@ type State struct {
 
 	// write writes b to f; tests replace it to crash part-way.
 	write func(f *os.File, b []byte) (int, error)
+
+	// mu orders Save and MoveAside; aside is where MoveAside put the file,
+	// after which every Save is refused (#1029 3c-3c).
+	mu    sync.Mutex
+	aside string
 }
 
 func (s *State) tmp() string { return s.Path + ".tmp" }
@@ -56,6 +62,11 @@ func (s *State) Load() (quorum.VoterState, error) {
 // (both the file's data and the rename), or an error, when the old state
 // still stands.
 func (s *State) Save(st quorum.VoterState) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.aside != "" && !mut("from_spare_write_after_move") {
+		return fmt.Errorf("the state file was moved aside to %s (recommission --from-spare): nothing more is written until naut restarts on this box", s.aside)
+	}
 	st.Owner, st.Cluster, st.Box = s.Owner, s.Cluster, s.Box
 	b, err := st.MarshalBinary()
 	if err != nil {
@@ -121,4 +132,32 @@ func (s *State) CheckOwner(st quorum.VoterState) error {
 			ErrNotOwner, s.Path, st.Owner, st.Cluster, s.Owner, s.Cluster)
 	}
 	return nil
+}
+
+// MoveAside renames the state file to aside, durably (the directory
+// fsynced), and refuses every later Save: a write still queued can't put
+// the file back (recommission --from-spare, #1029 3c-3c). It returns where
+// the file went; with no file, there is nothing to move and later Saves
+// are refused all the same.
+func (s *State) MoveAside(aside string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.aside != "" {
+		return s.aside, nil
+	}
+	switch err := os.Rename(s.Path, aside); {
+	case errors.Is(err, fs.ErrNotExist):
+		aside = "(no file)"
+	case err != nil:
+		return "", err
+	default:
+		if err := syncDir(filepath.Dir(s.Path)); err != nil {
+			// Renamed, but maybe not durably: put it back, so a crash
+			// can't leave the spare's flag half gone.
+			_ = os.Rename(aside, s.Path)
+			return "", err
+		}
+	}
+	s.aside = aside
+	return aside, nil
 }

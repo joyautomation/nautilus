@@ -222,8 +222,9 @@ redundancy:
 - **The cluster ID** (§6.2) is `NAUTILUS_CLUSTER`, beside `NAUTILUS_PEER_TOKEN` in
   `/etc/nautilus/env`, outside the state directory. A controller whose state directory is wiped
   therefore still starts, and re-adopts the pair's witness incarnation from its peer (#976).
-  Commissioning (3c) draws it and installs it on A, B and the witness. A member started
-  without it is refused, with a message that says how to commission.
+  `naut redundancy new-pair` draws it and writes it into each controller's env file (3c-3c);
+  the witness keys each pair by it as the controllers first vote, and needs only the peer
+  token. A member started without it is refused, with a message that names new-pair.
 - **The tag API addresses** that `/api/cluster` and the standby's proxy use are each
   controller's `peers:` host with this controller's API port: both run one manifest.
 - **Misconfiguration is refused at start, never resolved quietly.** A peer list that differs
@@ -761,7 +762,91 @@ redundancy:
           the network. The simulator has no kernel and was not re-measured for it. The way out: stop the copy, reset the
           real box (stop naut, delete `quorum.state`, start: it re-adopts from the peer), then
           the operator's clear (the rig's `TestTheRealBoxMadeASpareRecoversWithTheCommand`).
-          Restarts no longer clear marks (#1029 3c-3b).
+          Restarts no longer clear marks (#1029 3c-3b). Since 3c-3c,
+          `recommission --from-spare` does it in one command (below).
+    - **Step 3c-3c: commissioning, and the spare's way back (#1029).** The operator's
+      commands that make a pair and remake a member (`naut redundancy`, `quorum/node/commission.go`,
+      routes `POST /api/cluster/commission` and `/api/cluster/recommission`, the `redundancy`
+      permission, journalled `redundancy.commission` and `redundancy.recommission` with the
+      cluster ID and each flag named). Each asks the other members over the peer port first:
+      the clear's `/dup` route takes a third op, `state` (no wire bump; an older release
+      answers 400 and is named as one).
+      - **`new-pair`** (offline) draws the cluster ID and a 32-byte peer token and writes
+        `a.env`, `b.env`, `witness.env` at mode 0600, never over a file; it prints the paths
+        and what is not secret, the token only with `--print-secrets` (naut-lead).
+      - **`commission`** refuses unless every member answers and is settled and neither
+        controller is commissioned or holds a floor (one under way). Terms don't tell a new
+        pair: the witness promises terms to uncommissioned campaigns before any
+        commissioning (9 in the loopback test). Nor can the witness tell a new pair from one
+        whose two controllers both lost their state (B2, below): the floor is a margin (1000,
+        far under `MaxTermJump/2`) above every term the three report, and a term the two
+        controllers granted each other without the witness is lost with both files, which
+        no command can know. `commission_unchecked`.
+      - **`recommission`**: the floor's evidence is every answering member's highest term
+        (promise, floor, known floor), not only this controller's, which knows little after
+        a lost file (`recommission_local_floor_only`). Without `--floor` it prints the
+        evidence and a floor above it and changes nothing; a member that did not answer is
+        named. The witness must answer; `--incarnation` must be its current one. A
+        box-changed controller needs `--box-replaced`, refused in the Elector, not only the
+        CLI (`ErrBoxChanged`, `box_replaced_unchecked`).
+      - **`recommission --from-spare --copy-stopped`**, on the spare: the operator states the
+        boot the voters held under the name is stopped (journalled), and both other voters
+        (the peer's and the witness's, not the spare's own silent one: `from_spare_own_view`,
+        `from_spare_one_voter`) must answer, be settled, and hear **no** boot of the name
+        within a lease and D, stricter than "the incumbent's boot unheard" and needing no
+        incumbent nonce, which a spare's file doesn't keep; the voters' records name it, and
+        the command prints and journals it. Then both clear the name **keeping no boot**:
+        every boot either knew is retired and the generation goes above both (naut-lead's
+        ruling lifts #1135's "nothing to keep" refusal on this path only; the
+        clear-duplicate check still refuses it). Each re-checks its own voter at the clear as
+        the clear-duplicate command's members do. Last, the spare's `quorum.state` is moved
+        aside through its state file (`State.MoveAside`: renamed, directory fsynced, every
+        later write refused, `from_spare_write_after_move`) and it stays silent until the
+        operator restarts naut: a fresh, uncommissioned boot that re-adopts from the peer
+        (#976), unknown to every voter, so unheld. An in-process re-initialisation was not
+        built: it would be new code on the safety path where a restart reuses the start-up
+        one. Every order fails closed: a clear that missed a voter moves nothing (run it
+        again); a spare never restarted stays silent. The spare's only messages are these
+        `/dup` requests, which carry no boot. It refuses unless the peer is a commissioned
+        member (it re-adopts from it; with the peer uncommissioned too, the spare's file may
+        hold the pair's only terms, `from_spare_peer_unchecked`), and it clears the peer
+        first and the witness only if the peer cleared: a voter that refuses heard the name
+        since the check, and a clear at the other would mark that process there for nothing
+        (`from_spare_clears_past_refusal`); a clear that missed a voter moves nothing aside
+        (`from_spare_moves_after_partial`).
+      - **An uncommissioned controller looks at most every lease/8** (#1157 review). Its look
+        always sends the peer a query `Adopt` and the witness a term-0 probe, and every answer
+        poked the next look at once: two uncommissioned controllers (a new pair waiting for
+        `commission`, or both files lost) ping-ponged some 30,000 requests a second each
+        (40,000 sockets in TIME_WAIT per loopback test, a likely source of loopback-timing
+        flakes in CI). It holds no gate and grants nothing, so pacing costs adoption latency
+        only (`uncommissioned_looks_unpaced`, `TestANewPairWaitingForCommissionIsQuiet`). The marks its own voter held on other names go
+        aside with its file (3c-3b's wiped-voter case). Its operator-intent log is left as
+        it is: a spare is either the real box (its own log, silent since: it catches up as
+        after an outage) or a MAC-spoofed copy (a copy of that log, from the clone's
+        start); a copy on another box has another log identity and its log is kept aside.
+      - **The operator's "stopped" wrong** (simulator `FromSpare` fault,
+        `TestFromSpareNeverMakesTwoLeaders`, `TestMeasureFromSpare`): the incumbent cut off,
+        paused or frozen at the command returns with a retired boot; switched off and back
+        on, it returns as a fresh boot with its old state beside the replacement; hung, it is
+        still heard and the command refuses (every run). The real box or the copy as the
+        spare, returning with every link up or into #1135's split shape (the incumbent with
+        one voter, the replacement with the other, the peer cut from the witness; at the
+        heal, after a touch, or into a split two leases old): 0 two leaders (numbers in the
+        PR), and with the incumbent really off the replacement takes over when its peer dies,
+        in every run. The split cells reach the retired boots (`clear_forgets_boots` turns
+        cut and pause cells red).
+      - **Residual (a MUST before `experimental` lifts, naut-lead): the incumbent switched
+        back on straight into a split.** A fresh boot with its old disk, never heard beside
+        the replacement, is the stated early-split residual above (a clone booted beyond an
+        existing split): two leaders in every such run, 0 after any touch of full
+        connectivity. The guide says the stopped box must stay off (or be wiped). 3c-3c-1b
+        closes it: the `--from-spare` re-adopt bumps the adoption generation, and the peer
+        and the witness, which both took part, refuse frames from a member whose state
+        carries an older one, naming the fix in that box's own alarm. The simulator gives the copy the original's
+        address once `--from-spare` makes it the member (`tookAddress`: the peer's Adopts
+        reach it, as its votes already reach a clone); the rig runs the real box as the spare
+        end to end, the copy switched back on after (`TestTheRealBoxMadeASpareComesBackWithFromSpare`).
 - **`NAUTILUS_NODE` set with no pair in the manifest** is refused: each box would run as its
   own leader against the same I/O.
 - **A pair member's tag API must be reachable by its peer.** The manifest's default
@@ -1587,6 +1672,7 @@ Every redundancy event is written as a #709 entry. The fields are `ts`, `user`, 
 | Witness | `redundancy.witness.incarnation`, when one is adopted; `redundancy.witness.copies`, when two incarnations answer within a lease; `redundancy.witness.lost`, when a controller must be re-commissioned by hand (the controller, the dead committed generation and incarnation or none, the incarnations heard, the time since boot); `redundancy.recommission`, the engineer's command (the incarnation, the supplied and the effective floor, the dead committed generation and incarnation, the floor's evidence); `redundancy.witness.readopt-over-switch`, a re-adoption taken over a pending switch (the floor may miss terms, §3.1) |
 | Stale takeover | `redundancy.stale`, a cold takeover with its staleness |
 | Duplicate | `redundancy.clear-duplicate`, the operator's clear (target: the marked name; `detail.attest`, the operator's word that the copy is stopped; after: each member's check, clear and re-check; refused when a member is silent or two boots are heard; `error` when a member still marks it after) (#1029 3c-3a) |
+| Commissioning | `redundancy.commission` (target `pair`; after: each member's state, the incarnation and floor taken, a refused vouch, the leader) and `redundancy.recommission` (target: this controller; `detail.floor`, `detail.incarnation`, `detail.boxReplaced` with `detail.attestBox`, `detail.fromSpare` with `detail.attest`, the operator's word that the held boot is stopped; after: the evidence, or for `--from-spare` each voter's check and clear, the boots retired and where the state file went) (#1029 3c-3c) |
 
 **Where records go.** With quorum, a record goes through `oplog`, as #709 specifies. Without
 quorum, which is the override's whole case, it is fsynced to a local append-only JSONL journal

@@ -101,6 +101,22 @@ func newBoxRigAPI(t *testing.T) *boxRig { t.Helper(); return newBoxRigOpts(t, tr
 
 func newBoxRigOpts(t *testing.T, api bool) *boxRig {
 	t.Helper()
+	r := newBoxRigBare(t, api)
+	ea, eb := r.el("a"), r.el("b")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := ea.Recommission(ctx, ea.Status().WitnessIncarnation, max(ea.KnownFloor(), eb.KnownFloor())+1000); err != nil {
+		t.Fatal(err)
+	}
+	pairWait(t, "a leader", 15*time.Second, func() bool { return ea.IsLeader() || eb.IsLeader() })
+	r.handLeadTo("a")
+	return r
+}
+
+// newBoxRigBare is newBoxRigOpts's pair, running and hearing the witness,
+// not commissioned: a new pair.
+func newBoxRigBare(t *testing.T, api bool) *boxRig {
+	t.Helper()
 	if testing.Short() {
 		t.Skip("runs members and a witness on loopback for several leases")
 	}
@@ -143,14 +159,21 @@ func newBoxRigOpts(t *testing.T, api bool) *boxRig {
 	pairWait(t, "both to hear the witness", 10*time.Second, func() bool {
 		return ea.Status().WitnessIncarnation != 0 && eb.Status().WitnessIncarnation != 0
 	})
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := ea.Recommission(ctx, ea.Status().WitnessIncarnation, max(ea.KnownFloor(), eb.KnownFloor())+1000); err != nil {
-		t.Fatal(err)
-	}
-	pairWait(t, "a leader", 15*time.Second, func() bool { return ea.IsLeader() || eb.IsLeader() })
-	r.handLeadTo("a")
 	return r
+}
+
+// withAPI gives member's next start a tag API of its own (start serves
+// one listener once).
+func (r *boxRig) withAPI(member string) {
+	r.t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		r.t.Fatal(err)
+	}
+	if r.apis == nil {
+		r.apis, r.apiURL = map[string]net.Listener{}, map[string]string{}
+	}
+	r.apis[member], r.apiURL[member] = ln, "http://"+ln.Addr().String()
 }
 
 // handLeadTo makes member lead: if the other controller leads, its
