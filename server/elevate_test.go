@@ -143,7 +143,7 @@ func TestElevationIsDecidedOnce(t *testing.T) {
 	at(15*time.Minute - time.Second)
 	r := httptestRequest("POST", "/api/forces", `{"name":"SP","value":1}`, withCookie(id), ownOrigin)
 	r = srv.withActor(r)
-	if code, msg := srv.preAuthorize(r, "force.set"); code != 0 {
+	if code, msg, _ := srv.preAuthorize(r, "force.set"); code != 0 {
 		t.Fatalf("seam: %d %s", code, msg)
 	}
 	at(time.Hour) // the window lapses after the seam decided
@@ -571,5 +571,36 @@ func TestElevateRefusesAUserWithNothingToElevate(t *testing.T) {
 	srv.signin.sessions.mu.Unlock()
 	if spent {
 		t.Error("the refusal spent the session's bucket")
+	}
+}
+
+// A signed-in person whose password has gone stale is refused a force and
+// journalled with the tag they tried to force; the same session from
+// another site's page is journalled without its body (the seam never
+// reads a request from another origin).
+func TestRefusedSessionJournalsItsTargetOnlyFromItsOwnPage(t *testing.T) {
+	for _, c := range []struct {
+		what   string
+		stale  bool
+		origin func(*http.Request)
+		target string
+	}{
+		{"stale password, own page", true, ownOrigin, "SP"},
+		{"fresh password, another site", false, func(r *http.Request) { r.Header.Set("Origin", "http://elsewhere.example") }, ""},
+	} {
+		srv := auditServer(t, Options{})
+		id, _, at := elevateAs(t, srv)
+		if c.stale {
+			at(time.Hour)
+		}
+		n := len(srv.audit.ring.Recent())
+		rec := call(t, srv, "POST", "/api/forces", `{"name":"SP","value":1}`, withCookie(id), c.origin)
+		es := srv.audit.ring.Recent()
+		if rec.Code < 400 || len(es)-n != 1 {
+			t.Fatalf("%s: %d, %d entries", c.what, rec.Code, len(es)-n)
+		}
+		if e := es[0]; e.Result != "refused" || e.Target != c.target {
+			t.Errorf("%s: %s target %q, want refused target %q", c.what, e.Result, e.Target, c.target)
+		}
 	}
 }

@@ -740,3 +740,47 @@ func TestAnchoredControllerRoleIsChecked(t *testing.T) {
 		t.Errorf("a protected controller role: %s, notes %v", r.Verdict, r.Notes)
 	}
 }
+
+// The report's journal counts come from reading every line, not from the
+// chain walk, which stops at a break: a BROKEN report still says how many
+// entries the journal holds and where its head is. Intact, they are the
+// chain's.
+func TestAnchoredReportCountsTheWholeJournal(t *testing.T) {
+	s := newSite(t, 30*day)
+	s.days(4)
+	s.j.Close()
+	r := s.verify()
+	wantVerdict(t, r, Verified)
+	if r.JournalLines != r.Chain.Entries || r.JournalFiles != r.Chain.Files || r.JournalHead != r.Chain.HeadSeq || r.JournalHead == 0 {
+		t.Fatalf("intact: journal %d lines, %d files, head %d; chain %d, %d, %d",
+			r.JournalLines, r.JournalFiles, r.JournalHead, r.Chain.Entries, r.Chain.Files, r.Chain.HeadSeq)
+	}
+	lines, files, head := r.JournalLines, r.JournalFiles, r.JournalHead
+
+	// One line edited in the oldest file: the chain stops there, the
+	// counts do not.
+	names, err := listFiles(s.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(s.dir, names[0])
+	data, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edited := bytes.Replace(data, []byte(`"target":"SP"`), []byte(`"target":"XX"`), 1)
+	if bytes.Equal(edited, data) {
+		t.Fatal("nothing to edit in the oldest file")
+	}
+	if err := os.WriteFile(p, edited, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r = s.verify()
+	wantVerdict(t, r, Broken, "the journal's chain breaks")
+	if r.Chain.HeadSeq != 0 {
+		t.Fatalf("the chain walk was expected to stop at the break (head %d); the test no longer shows the difference", r.Chain.HeadSeq)
+	}
+	if r.JournalLines != lines || r.JournalFiles != files || r.JournalHead != head {
+		t.Errorf("broken: journal %d lines, %d files, head %d; want %d, %d, %d", r.JournalLines, r.JournalFiles, r.JournalHead, lines, files, head)
+	}
+}

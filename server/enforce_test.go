@@ -1,16 +1,19 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/joyautomation/nautilus/auth"
 )
@@ -203,6 +206,99 @@ func TestAuthBlockDecidesEveryWrite(t *testing.T) {
 	}
 }
 
+// A known principal refused by role is journalled with what it tried to
+// change (the body is read for the target), so the journal says which tag
+// a named person was refused; a request with no credential is journalled
+// without its body, as before.
+func TestRoleRefusalJournalsItsTarget(t *testing.T) {
+	n := 0
+	for _, row := range auditRows() {
+		if row.result != "ok" || row.target == "" {
+			continue
+		}
+		want := ""
+		if refusalTargets[row.action] != nil {
+			want = row.target
+			n++
+		}
+		for _, c := range []struct {
+			auth   string
+			target string
+		}{{"Bearer v-secret", want}, {"", ""}, {"Bearer garbage", ""}} {
+			srv := row.server(t)
+			if row.prep != nil {
+				row.prep(t, srv)
+			}
+			enforce(t, srv)
+			k := len(srv.audit.ring.Recent())
+			rec := call(t, srv, row.method, row.path, row.body, func(r *http.Request) {
+				for k, v := range row.header {
+					r.Header.Set(k, v)
+				}
+				r.Header.Del("X-Nautilus-Token")
+				if c.auth != "" {
+					r.Header.Set("Authorization", c.auth)
+				}
+			})
+			es := srv.audit.ring.Recent()
+			if len(es)-k != 1 || rec.Code < 400 {
+				t.Fatalf("%s (%q): %d, %d entries", row.name, c.auth, rec.Code, len(es)-k)
+			}
+			if e := es[0]; e.Result != "refused" || e.Target != c.target || e.Before != nil {
+				t.Errorf("%s (%q): %s target %q before %v, want refused target %q, no before", row.name, c.auth, e.Result, e.Target, e.Before, c.target)
+			}
+		}
+	}
+	if n < 8 {
+		t.Fatalf("only %d accepted rows with a refusal target", n)
+	}
+}
+
+// Every action a refusal names a target for is a journalled action, so a
+// misspelt key cannot silently drop the target.
+func TestRefusalTargetsAreActions(t *testing.T) {
+	for a := range refusalTargets {
+		if _, ok := actionPerm[a]; !ok {
+			t.Errorf("refusalTargets names %q, which no route journals", a)
+		}
+	}
+}
+
+// A refusal reads at most refusedBodyMax of a known principal's body, and
+// names nothing past it; an anonymous request's body is not read at all.
+func TestRefusalBodyIsBounded(t *testing.T) {
+	big := `{"name":"SP","value":"` + strings.Repeat("x", refusedBodyMax) + `"}`
+	for _, c := range []struct {
+		what, auth, body, target string
+		maxRead                  int
+	}{
+		{"viewer, small body", "Bearer v-secret", `{"name":"SP","value":1}`, "SP", refusedBodyMax + 1},
+		{"viewer, body past the cap", "Bearer v-secret", big, "", refusedBodyMax + 1},
+		// A small value padded past the cap: its first JSON value would
+		// parse from the part read, but a body past the cap names nothing.
+		{"viewer, padded past the cap", "Bearer v-secret", `{"name":"SP","value":1}` + strings.Repeat(" ", refusedBodyMax), "", refusedBodyMax + 1},
+		{"anonymous", "", `{"name":"SP","value":1}`, "", 0},
+	} {
+		srv := auditServer(t, Options{})
+		enforce(t, srv)
+		body := &countingBody{r: strings.NewReader(c.body)}
+		n := len(srv.audit.ring.Recent())
+		rec := call(t, srv, "POST", "/api/forces", "", func(r *http.Request) {
+			r.Body = body
+			if c.auth != "" {
+				r.Header.Set("Authorization", c.auth)
+			}
+		})
+		es := srv.audit.ring.Recent()
+		if rec.Code < 400 || len(es)-n != 1 {
+			t.Fatalf("%s: %d, %d entries", c.what, rec.Code, len(es)-n)
+		}
+		if es[0].Target != c.target || body.n > c.maxRead {
+			t.Errorf("%s: target %q (want %q), %d bytes read (at most %d)", c.what, es[0].Target, c.target, body.n, c.maxRead)
+		}
+	}
+}
+
 // Every action whose permission areas scope (write, ack, shelve,
 // substitute, force) checks the target it acts on: a principal holding the
 // permission only over another area is refused, and nothing changes. An
@@ -303,10 +399,10 @@ func TestUnmappedActionIsRefused(t *testing.T) {
 	enforce(t, srv)
 	r := httptest.NewRequest("POST", "http://localhost/x", nil)
 	r.Header.Set("Authorization", "Bearer admin-secret")
-	if code, _ := srv.preAuthorize(r, "made.up"); code != http.StatusForbidden {
+	if code, _, _ := srv.preAuthorize(r, "made.up"); code != http.StatusForbidden {
 		t.Errorf("an unmapped action: %d", code)
 	}
-	if code, _ := srv.preAuthorize(r, "tag.write"); code != 0 {
+	if code, _, _ := srv.preAuthorize(r, "tag.write"); code != 0 {
 		t.Errorf("a mapped one: %d", code)
 	}
 }
@@ -367,5 +463,152 @@ func TestClearAllForcesClearsOnlyWhatItChecked(t *testing.T) {
 	}
 	if got := fmt.Sprint(srv.rt.Tags().ForcedValues()); got != "map[Out:1]" {
 		t.Errorf("forced after the clear: %s, want only area b's Out", got)
+	}
+}
+
+// A known principal's refused request whose body stalls is answered once
+// refusedBodyWait passes (over a real connection, where the read deadline
+// applies), journalled with no target: a low-role account cannot hold the
+// seam open by trickling a body.
+func TestRefusalBodyReadHasADeadline(t *testing.T) {
+	defer func(w time.Duration) { refusedBodyWait = w }(refusedBodyWait)
+	refusedBodyWait = 200 * time.Millisecond
+	srv := auditServer(t, Options{})
+	enforce(t, srv)
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	pr, pw := io.Pipe()
+	defer pw.Close()
+	// A whole value, then nothing: what was read must not be parsed.
+	go pw.Write([]byte(`{"name":"SP","value":1}`))
+	req, err := http.NewRequest("POST", ts.URL+"/api/forces", pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer v-secret")
+	n := len(srv.audit.ring.Recent())
+	start := time.Now()
+	res, err := (&http.Client{Timeout: 3 * time.Second}).Do(req)
+	if err != nil {
+		t.Fatalf("no answer: %v", err)
+	}
+	res.Body.Close()
+	if took := time.Since(start); res.StatusCode != http.StatusForbidden || took > 5*time.Second {
+		t.Fatalf("%d after %v, want 403 within the deadline", res.StatusCode, took)
+	}
+	es := srv.audit.ring.Recent()
+	if len(es)-n != 1 || es[0].Result != "refused" || es[0].Target != "" || es[0].Detail["body"] != "unread" {
+		t.Errorf("entries %+v, want one refusal with no target and its body unread", es[:len(es)-n])
+	}
+}
+
+// A person's refusal is not folded into a summary by anyone else's: five
+// refusals with no credential from the same address fill that window,
+// and a viewer's probe after them is still journalled in full, with its
+// target.
+func TestNamedRefusalHasItsOwnWindow(t *testing.T) {
+	srv := auditServer(t, Options{})
+	enforce(t, srv)
+	for i := 0; i < refuseFull+2; i++ {
+		call(t, srv, "POST", "/api/tags", `{"name":"SP","value":1}`)
+	}
+	n := len(srv.audit.ring.Recent())
+	call(t, srv, "POST", "/api/tags", `{"name":"SP","value":2}`, func(r *http.Request) { r.Header.Set("Authorization", "Bearer v-secret") })
+	es := srv.audit.ring.Recent()
+	if len(es)-n != 1 || es[0].User != "token:viewer" || es[0].Target != "SP" {
+		t.Errorf("the viewer's refusal after an anonymous flood: %+v", es[:len(es)-n])
+	}
+}
+
+// Past cap(refusedReads) refused bodies at once, a refusal reads nothing
+// and names only what its path does, saying the body went unread; a body
+// past the cap does the same.
+func TestRefusedBodyUnreadKeepsThePath(t *testing.T) {
+	for _, c := range []struct {
+		what, method, path, body, target string
+		busy                             bool
+	}{
+		{"too many reads at once", "POST", "/api/forces", `{"name":"SP","value":1}`, "", true},
+		{"too many reads, a path target", "DELETE", "/api/forces/SP", `{}`, "SP", true},
+		{"a body past the cap, a path target", "DELETE", "/api/forces/SP", strings.Repeat(" ", refusedBodyMax+1), "SP", false},
+	} {
+		srv := auditServer(t, Options{})
+		enforce(t, srv)
+		if c.busy {
+			for i := 0; i < cap(refusedReads); i++ {
+				refusedReads <- struct{}{}
+			}
+		}
+		body := &countingBody{r: strings.NewReader(c.body)}
+		n := len(srv.audit.ring.Recent())
+		call(t, srv, c.method, c.path, "", func(r *http.Request) {
+			r.Body = body
+			r.Header.Set("Authorization", "Bearer v-secret")
+		})
+		if c.busy {
+			for i := 0; i < cap(refusedReads); i++ {
+				<-refusedReads
+			}
+		}
+		es := srv.audit.ring.Recent()
+		if len(es)-n != 1 {
+			t.Fatalf("%s: %d entries", c.what, len(es)-n)
+		}
+		e := es[0]
+		if e.Result != "refused" || e.Target != c.target || e.Detail["body"] != "unread" || (c.busy && body.n != 0) {
+			t.Errorf("%s: %s target %q detail %v, %d bytes read", c.what, e.Result, e.Target, e.Detail, body.n)
+		}
+	}
+}
+
+// Where the seam cannot set a read deadline (a writer that does not let
+// it, like a test recorder or an embedder's middleware), a refused body
+// that never comes still does not hold the request past refusedBodyWait.
+func TestRefusedBodyWaitWithoutADeadline(t *testing.T) {
+	defer func(w time.Duration) { refusedBodyWait = w }(refusedBodyWait)
+	refusedBodyWait = 100 * time.Millisecond
+	srv := auditServer(t, Options{})
+	enforce(t, srv)
+	pr, pw := io.Pipe()
+	defer pw.Close() // ends the read, freeing its slot
+	n := len(srv.audit.ring.Recent())
+	done := make(chan struct{})
+	go func() {
+		call(t, srv, "POST", "/api/forces", "", func(r *http.Request) {
+			r.Body = pr
+			r.Header.Set("Authorization", "Bearer v-secret")
+		})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("a refused request with a stalled body was held past refusedBodyWait")
+	}
+	es := srv.audit.ring.Recent()
+	if len(es)-n != 1 || es[0].Detail["body"] != "unread" {
+		t.Errorf("entries %+v, want one refusal whose body went unread", es[:len(es)-n])
+	}
+}
+
+// failingReader fails every read: a connection that breaks mid-body.
+type failingReader struct{}
+
+func (failingReader) Read([]byte) (int, error) { return 0, errors.New("connection reset") }
+
+// A refused body whose read fails after a whole value is not parsed: what
+// arrived before the error names nothing, and the entry says the body went
+// unread.
+func TestRefusedBodyReadErrorNamesNothing(t *testing.T) {
+	srv := auditServer(t, Options{})
+	enforce(t, srv)
+	n := len(srv.audit.ring.Recent())
+	call(t, srv, "POST", "/api/forces", "", func(r *http.Request) {
+		r.Body = io.NopCloser(io.MultiReader(strings.NewReader(`{"name":"SP","value":1}`), failingReader{}))
+		r.Header.Set("Authorization", "Bearer v-secret")
+	})
+	es := srv.audit.ring.Recent()
+	if len(es)-n != 1 || es[0].Target != "" || es[0].Detail["body"] != "unread" {
+		t.Errorf("entries %+v, want one refusal with no target and its body unread", es[:len(es)-n])
 	}
 }

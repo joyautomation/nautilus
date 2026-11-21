@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -260,5 +261,20 @@ func TestPruneAuditJournalsAMissingRetention(t *testing.T) {
 	ret, prune := strings.Index(string(b), `"audit.retention"`), strings.Index(string(b), `"audit.prune"`)
 	if ret < 0 || prune < 0 || ret > prune {
 		t.Errorf("want the retention, then the prune:\n%s", b)
+	}
+}
+
+// The verify headline gives the journal as read line by line, so a
+// BROKEN report (whose chain walk stopped at the break) still says how far
+// the journal goes.
+func TestPrintAnchoredHeadlineCountsTheWholeJournal(t *testing.T) {
+	r := audit.AnchorReport{Verdict: audit.Broken, JournalLines: 268, JournalFiles: 31, JournalHead: 364,
+		Chain: audit.Report{Entries: 76, Files: 10}, Problems: []string{"the journal's chain breaks at x"}}
+	var out bytes.Buffer
+	if code := printAnchored(r, "plant", &out); code != 1 {
+		t.Errorf("exit %d, want 1", code)
+	}
+	if first := strings.SplitN(out.String(), "\n", 2)[0]; !strings.Contains(first, "268 journal entries in 31 files, head seq 364;") {
+		t.Errorf("headline %q", first)
 	}
 }

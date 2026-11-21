@@ -88,9 +88,18 @@ const MinKeep = 24 * time.Hour
 
 // AnchorReport is what VerifyAnchored found.
 type AnchorReport struct {
-	Chain    Report // the journal's own chain walk
-	Verdict  string
-	Problems []string // each one makes the verdict BROKEN
+	Chain Report // the journal's own chain walk
+	// JournalFiles, JournalLines and JournalHead are the journal as read
+	// line by line against the copy: every file, every entry, and the
+	// last entry's seq. Unlike Chain's counts they do not stop where the
+	// chain breaks, so a BROKEN report still says how far the journal goes.
+	// Lines the walk skips (not an entry, or a seq not above the one
+	// before) are not counted.
+	JournalFiles int
+	JournalLines int
+	JournalHead  uint64
+	Verdict      string
+	Problems     []string // each one makes the verdict BROKEN
 	// Warnings are printed whatever the verdict: every lowered
 	// retention, prunes that predate 9b, a lowering pruned unanchored.
 	Warnings []string
@@ -231,6 +240,7 @@ func VerifyAnchored(in AnchorInput) (AnchorReport, error) {
 		// does not.
 		fileHead uint64
 	)
+	r.JournalFiles = len(files.files)
 	fl, fok, err := files.next()
 	if err != nil {
 		return r, err
@@ -322,6 +332,7 @@ func VerifyAnchored(in AnchorInput) (AnchorReport, error) {
 		}
 		if fLine != nil {
 			fileHead = fLine.Seq
+			r.JournalLines++
 			if h := atAnchor[fLine.Seq]; h != nil {
 				h.file = fLine.Hash
 			}
@@ -361,6 +372,7 @@ func VerifyAnchored(in AnchorInput) (AnchorReport, error) {
 	if beforeFiles.n > 0 {
 		r.Notes = append(r.Notes, fmt.Sprintf("the copy holds %d entries from before the journal's files (seq %d to %d): pruned from the journal, kept in the copy", beforeFiles.n, beforeFiles.lo, beforeFiles.hi))
 	}
+	r.JournalHead = fileHead
 	if pastHead.n > 0 {
 		r.problem("the copy holds %d entries past the journal's head seq %d (seq %d to %d): lines were cut from the end of the journal", pastHead.n, fileHead, pastHead.lo, pastHead.hi)
 	}

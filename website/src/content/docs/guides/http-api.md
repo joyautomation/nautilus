@@ -1251,11 +1251,17 @@ Each entry has:
 An online edit is journalled as program hashes, never the source. A
 request refused for want of the token (or from a cross-origin page) is
 journalled without reading its body: who, from where and which action,
-with no target or values. Otherwise the target is capped at 1 KiB, and
+with no target or values. A signed-in user or a token refused by role,
+or for want of a fresh password, is journalled with what it tried to
+change, read from the request alone: the target and the value asked for
+(tag writes, forces, substitutes, alarm and SFC commands, IO-Link
+parameters), never a `before`. A body over 8 KiB, slower than 5 s, or
+one of too many refused at once is not read: the entry names only what
+the path does and says `detail.body: "unread"`. Otherwise the target is capped at 1 KiB, and
 `before` and `after` at 64 KiB of JSON (4 KiB on a refusal); a larger
 value is journalled as `{"truncated": true, "bytes": …, "sha256": …}`.
 Refusals and errors from one address are coalesced: five a minute in full
-per action, then one entry counting the rest (`detail.coalesced`). A write
+per action and principal, then one entry counting the rest (`detail.coalesced`). A write
 body over 16 MiB is refused with `413`. On a redundant pair, a write is
 journalled by the leader that applies it; one a standby answers itself
 (`503` while it holds the lease with its scans stalled, `502` when the

@@ -73,7 +73,7 @@ permission (from `supervisor` up); an operator does not.
 ```text
 07:49:54  user:alice  auth.signin                                                ok
 07:49:54  user:alice  tag.write          InflowGpm        190 → 240              ok
-07:49:54  user:alice  force.set                                                  refused  user:alice (operator) may not force
+07:49:54  user:alice  force.set          LIT101_Level      → 85                  refused  user:alice (operator) may not force
 07:49:54  user:alice  tag.write          ForceLSHH        false → true           ok
 07:49:56  user:alice  alarm.ack          LSHH101                                 ok
 07:49:56  user:alice  tag.write          ForceLSHH        true → false           ok
@@ -126,12 +126,10 @@ copy did.
 alarm acknowledgement from alice to bob:
 
 ```text
-BROKEN: controller "lift-station", 76 journal entries in 10 files, head seq 0; 276 copied rows (268 compared line for line), 4 anchors (newest seq 364)
+BROKEN: controller "lift-station", 268 journal entries in 31 files, head seq 364; 276 copied rows (268 compared line for line), 4 anchors (newest seq 364)
 BROKEN: the journal's chain breaks at audit-20261031.jsonl:5: prev does not match the line before: a line was edited, removed, inserted or moved, or a file is missing
 BROKEN: seq 172 differs between the journal (audit-20261031.jsonl:sha256:7f4d7753…) and the copy (sha256:b40e8e88…): the line was rewritten after it was copied
 ```
-
-(The counts on the first line stop where the chain breaks.)
 
 `verify` exits 1, and the copy still holds the original line:
 `seq 172: user:alice alarm.ack HighLevel`.
@@ -209,7 +207,7 @@ in the HTTP API guide. The ones that matter most for an audit:
   rewrite the copy and the anchors. Keep that role away from the box, and
   run `verify` from a machine the controller's service user can't change.
 - **Refusals are coalesced.** One address gets five refusals a minute in
-  full per action, then one entry that counts the rest.
+  full per action and person, then one entry that counts the rest.
 - **While the journal can't be written** (a full disk), operator actions
   (tag writes, alarm acknowledgements, SFC commands) still go through, so
   a full disk can't stop the plant, and so do the ways back to normal:

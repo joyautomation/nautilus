@@ -506,29 +506,38 @@ func (s *Server) Authorize(r *http.Request, perm, target string) (int, string) {
 // do action at all? Without an auth: block, the write policy; with one,
 // the principal must hold the action's permission somewhere (the handler
 // checks the target it names). An action with no permission is refused.
-func (s *Server) preAuthorize(r *http.Request, action string) (int, string) {
+//
+// known reports, for a refusal, that it came from a principal the
+// controller knows (a valid credential, from its own page when it is a
+// session) and was refused for what it may do: by role, or for want of a
+// fresh password. The seam then reads the body for the entry's target, so
+// the journal says what a named person tried to change. A request with no
+// credential, a bad one or from another site is journalled without it.
+func (s *Server) preAuthorize(r *http.Request, action string) (code int, msg string, known bool) {
 	if s.policy == nil {
-		return s.authorizeWrite(r)
+		code, msg = s.authorizeWrite(r)
+		return code, msg, false
 	}
 	perm, ok := actionPerm[action]
 	if !ok {
-		return http.StatusForbidden, fmt.Sprintf("%s needs a permission nobody has been given (the server does not map it)", action)
+		return http.StatusForbidden, fmt.Sprintf("%s needs a permission nobody has been given (the server does not map it)", action), false
 	}
 	a := s.actorOf(r)
 	if a.invalid {
-		return http.StatusUnauthorized, "invalid credential"
+		return http.StatusUnauthorized, "invalid credential", false
 	}
 	if code, msg := s.cookieRefused(r, a); code != 0 {
-		return code, msg
+		return code, msg, false
 	}
 	if s.policy.Holds(a.pr, perm) {
-		return s.elevationRefused(a, perm)
+		code, msg = s.elevationRefused(a, perm)
+		return code, msg, code != 0
 	}
 	reason := s.policy.Can(a.pr, perm, auth.All).Reason
 	if a.pr.Kind == auth.KindAnonymous {
-		return http.StatusUnauthorized, reason + signInHint
+		return http.StatusUnauthorized, reason + signInHint, false
 	}
-	return http.StatusForbidden, reason
+	return http.StatusForbidden, reason, true
 }
 
 // seamDecided marks a request the audit seam has authorized for its
