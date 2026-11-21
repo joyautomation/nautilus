@@ -62,6 +62,11 @@ jobs:
         run: .github/scripts/quorum-nightly-issue.test.sh
       - name: keycloak-nightly's rolling-issue script passes its own table test
         run: .github/scripts/keycloak-nightly-issue.test.sh
+      # The error reporter's scrubber (website/src/errors, #1073): what a visitor's
+      # browser may send to the error server. A pure-node test, so a light
+      # (website-only) PR runs it too; the real-Chrome one is in the playground job.
+      - name: the error reporter's scrubber passes its own test
+        run: node --test website/src/errors/scrub.test.mjs
       - name: scope
         id: scope
         env:

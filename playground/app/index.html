@@ -23,6 +23,16 @@
 			<p>Loading…</p>
 			<small>VS Code and the nautilus compiler and runtime download once (about 10 MB), then everything runs on your machine.</small>
 		</div>
+		<!-- The docs site's error reporter (website/src/errors, #1073): only on the
+		     docs site's own host, and it is empty unless that build had a DSN. -->
+		<script>
+			if (location.hostname === 'nautilus.joyautomation.com') {
+				var s = document.createElement('script');
+				s.src = '/errors/errors.js';
+				s.defer = true;
+				document.head.appendChild(s);
+			}
+		</script>
 		<script type="module" src="./main.js"></script>
 	</body>
 </html>

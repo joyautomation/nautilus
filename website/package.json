@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "sync": "node scripts/sync-reference.mjs && node scripts/sync-playground.mjs && node scripts/sync-lessons.mjs",
+    "sync": "node scripts/sync-reference.mjs && node scripts/sync-playground.mjs && node scripts/sync-lessons.mjs && node scripts/build-errors.mjs",
     "verified": "node scripts/fetch-verified.mjs",
     "predev": "npm run verified",
     "dev": "npm run sync && astro dev",
@@ -16,7 +16,11 @@
     "@fontsource-variable/space-grotesk": "^5.3.0",
     "@fontsource/ibm-plex-mono": "^5.3.0",
     "@fontsource/righteous": "^5.3.0",
+    "@sentry/browser": "10.78.0",
     "astro": "^5.7.0",
     "sharp": "^0.33.5"
+  },
+  "devDependencies": {
+    "esbuild": "0.27.7"
   }
 }

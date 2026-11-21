@@ -13,6 +13,7 @@
 // lists the playground's examples (engine/examples/index.json); a visitor's
 // edits to one are kept in their browser, so switching loses nothing.
 import '../../styles/fonts.css';
+import { ERRORS_ENABLED } from '../../lib/errors.mjs';
 import logo from '../../assets/logo.svg';
 
 const title = 'Playground | nautilus';
@@ -33,6 +34,7 @@ const description =
     <meta property="og:description" content={description} />
     <meta property="og:url" content="https://nautilus.joyautomation.com/playground/" />
     <meta name="color-scheme" content="dark" />
+    {ERRORS_ENABLED && <script is:inline defer src="/errors/errors.js"></script>}
     <script async src="https://www.googletagmanager.com/gtag/js?id=G-5EGNNTRBYC"></script>
     <script is:inline>
       window.dataLayer = window.dataLayer || [];

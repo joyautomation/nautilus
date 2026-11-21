@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import { RUNTIME_LISTED } from './src/lib/runtime-listed.mjs';
+import { ERRORS_ENABLED } from './src/lib/errors.mjs';
 
 // The VS Code extension's TextMate grammars, reused as-is so IEC code blocks
 // highlight the way they do in the editor. Fence tags: iecst, iecld, iecfbd,
@@ -29,7 +30,10 @@ export default defineConfig({
       // Google Analytics — the same GA4 property joyautomation.com reports to
       // (src/app.html there); the docs show up under their own hostname.
       // Starlight pages are full loads, so `config` on each page is enough.
+      // Error reporting (#1073): our own GlitchTip, JavaScript errors only,
+      // loaded only when the build had a DSN (src/errors/, /privacy/).
       head: [
+        ...(ERRORS_ENABLED ? [{ tag: 'script', attrs: { src: '/errors/errors.js', defer: true } }] : []),
         {
           tag: 'script',
           attrs: { src: 'https://www.googletagmanager.com/gtag/js?id=G-5EGNNTRBYC', async: true },
@@ -159,6 +163,7 @@ export default defineConfig({
             { slug: 'reference/testing' },
             { slug: 'reference/hmi' },
             { slug: 'reference/structure-warnings' },
+            { slug: 'privacy' },
           ],
         },
         {

@@ -132,7 +132,12 @@ argv). Then:
    A browser DSN is public by design: it can only send events, not read them. It
    still belongs in the build's configuration (a repository variable), not in a
    committed file, so it can be rotated.
-5. Storage is bounded two ways: `GLITCHTIP_RETENTION_DAYS=30` in
+5. Reports must not carry an address: `scrub_ip_addresses` is on by default for
+   both the organisation and the project (Project settings → Data privacy),
+   and the docs client never sends one (#1073, /privacy/). Check after a
+   rebuild, in a Django shell: `Organization.objects.get(name='joy').scrub_ip_addresses`
+   and the project's must both be `True`.
+6. Storage is bounded two ways: `GLITCHTIP_RETENTION_DAYS=30` in
    `glitchtip.yml` deletes events, transactions and logs older than 30 days
    (GlitchTip's default is 90), and the project's rate limit (Project settings)
    caps a noisy page. Watch the volume anyway for the first weeks:
