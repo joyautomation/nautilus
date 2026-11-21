@@ -208,8 +208,7 @@ func boxChangedMsg(changed []string) string {
 func spareMsg(self quorum.NodeID) string {
 	return fmt.Sprintf("duplicate of %s - spare: another process runs as %s, and both other members hold that one (they heard it first) as %s. "+
 		"This process is a COPY (a cloned disk or VM, or NAUTILUS_NODE set to %s on a second box) and has made itself a spare: it neither votes nor campaigns, and answers nobody, until an operator acts. "+
-		"If this box is the copy, stop it (decommission). If this box is the real %s: (1) stop the copy and confirm it is down (powered off or its process ended, not just unplugged or paused); (2) on this box stop naut, delete the voter state file and start naut: it re-adopts from the other controller (a spare answers no command, so this comes first); "+
-		"(3) a lease and a quarter later, on the other controller, run naut redundancy clear-duplicate %s --copy-stopped (the members' marks on %s would otherwise hold this box for good). Turning a spare into a replacement is a later command (recommission --from-spare)", self, self, self, self, self, self, self)
+		"If this box is the copy, stop it (decommission). If this box should be %s (the real box, or a replacement for a dead original): stop the other process, confirm it is down (powered off or its process ended, not just unplugged or paused) and keep it from starting again, then on this box run naut redundancy recommission --from-spare --copy-stopped and restart naut: it re-adopts from the other controller", self, self, self, self, self)
 }
 
 // ErrSpare: a spare refuses an operator's re-commission (#1029 3c-2).
@@ -306,6 +305,9 @@ type Status struct {
 	// Spare: this controller is a copy of a member and silent (EventSpare,
 	// #1029 3c-2). It names no leader: its tag API forwards nothing.
 	Spare bool
+	// FromSpare is where recommission --from-spare moved this spare's state
+	// file (#1029 3c-3c): naut must be restarted on this box, "" otherwise.
+	FromSpare string
 	// Marked are the names this controller's voter marks as run by two
 	// processes at once (#1029 3c), sorted. Held: a voter's last reply
 	// marked this controller's own name, so it campaigns no more until the
@@ -360,8 +362,13 @@ type Elector struct {
 	cfgDiffAt  time.Time // the last hello that showed it
 	boxChanged string    // EventBoxChanged's report
 	boxPending bool      // the box can't be read yet: Run waits (BoxFunc)
-	storedBox  string    // the box the state file named
-	peerNonces []uint64  // the boot nonces the peer's name answered under, oldest first
+	fromSpare  string    // recommission --from-spare moved the state file here: restart naut
+	// lookedAt is an uncommissioned controller's last look (pace); paced:
+	// it has one.
+	lookedAt   quorum.Instant
+	paced      bool
+	storedBox  string   // the box the state file named
+	peerNonces []uint64 // the boot nonces the peer's name answered under, oldest first
 	helloDups  uint64
 	helloDupAt time.Time
 	token      ClientToken
@@ -760,6 +767,33 @@ func (e *Elector) Close() {
 	}
 }
 
+// uncommissionedEvery is how often, at most, an uncommissioned controller
+// looks. Its look always sends the peer a query Adopt and the witness a
+// term-0 probe, and every answer pokes the next look at once, so two
+// uncommissioned controllers (a new pair waiting for commission, or both
+// files lost) would ping-pong at network speed: some 30,000 requests a
+// second each (#1029 3c-3c review). A controller with no incarnation holds
+// no gate and grants nothing, so pacing it costs adoption latency only.
+func uncommissionedEvery(lease time.Duration) time.Duration { return lease / 8 }
+
+// pace returns how long an uncommissioned controller waits before its next
+// look, 0 when it looks now (and notes the look).
+func (e *Elector) pace() time.Duration {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.v.State().Incarnation != 0 || mut("uncommissioned_looks_unpaced") {
+		return 0
+	}
+	now := e.now()
+	if e.paced {
+		if next := e.lookedAt.Add(uncommissionedEvery(e.o.Lease)); now < next {
+			return next.Sub(now)
+		}
+	}
+	e.lookedAt, e.paced = now, true
+	return 0
+}
+
 // poke asks the loop for a look now: a reply may have won a lease, which
 // renews at once, or moved the next look earlier.
 func (e *Elector) poke() {
@@ -774,6 +808,9 @@ func (e *Elector) poke() {
 func (e *Elector) look() time.Duration {
 	if e.mute() {
 		return e.o.Lease // a spare looks at nothing and sends nothing (#1029 3c-2)
+	}
+	if wait := e.pace(); wait > 0 {
+		return wait
 	}
 	e.mu.Lock()
 	h := e.health
@@ -1582,15 +1619,25 @@ func (e *Elector) Recommission(ctx context.Context, inc, floor uint64) error {
 // re-commission (#1053 review: control never waits on operator data): it
 // goes ahead, the log stays unsynced and read-only, and the refusal is
 // returned as vouchRefused, raised as EventVouchRefused and logged.
+//
+// A controller whose state was written on another box (Status.BoxChanged)
+// is refused (ErrBoxChanged): RecommissionChecked takes the operator's
+// word that the box was replaced, not cloned (#1029 3c-3c).
 func (e *Elector) RecommissionBy(ctx context.Context, by string, inc, floor uint64) (vouchRefused, err error) {
+	return e.recommission(ctx, by, inc, floor, false)
+}
+
+func (e *Elector) recommission(ctx context.Context, by string, inc, floor uint64, boxReplaced bool) (vouchRefused, err error) {
 	// Its own refusals first, so a refused re-commission vouches for
 	// nothing.
 	e.mu.Lock()
-	commissioned, known := e.v.State().Incarnation != 0, e.a.KnownFloor()
+	commissioned, known, boxChanged := e.v.State().Incarnation != 0, e.a.KnownFloor(), e.boxChanged
 	e.mu.Unlock()
 	switch {
 	case e.spare.Load():
 		return nil, ErrSpare
+	case boxChanged != "" && !boxReplaced && !mut("box_replaced_unchecked"):
+		return nil, fmt.Errorf("%w (%s): re-commission it only if its box was replaced, saying so (--box-replaced); a copy of a running controller must be stopped", ErrBoxChanged, boxChanged)
 	case commissioned:
 		return nil, quorum.ErrCommissioned
 	case inc == 0 || floor == 0:
@@ -1685,6 +1732,7 @@ func (e *Elector) Status() Status {
 	s.Leading = g.open && g.end.Sub(now) > e.Fence()
 	s.Term = g.epoch
 	s.Spare = e.spare.Load()
+	s.FromSpare = e.fromSpare
 	for _, n := range e.v.Marked() {
 		s.Marked = append(s.Marked, string(n))
 	}

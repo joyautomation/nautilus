@@ -274,9 +274,9 @@ env:
 ### A redundant pair without Kubernetes (experimental)
 
 Two controllers and a small third voter, `naut witness`, can elect a
-leader without a cluster. The full operator guide (commissioning,
-re-commissioning by hand, the takeover time) comes with the rest of the
-work (#710). For now the pair is an explicit opt-in:
+leader without a cluster. Commissioning and re-commissioning are below;
+the rest of the operator guide (the takeover time) comes with the rest
+of the work (#710). For now the pair is an explicit opt-in:
 
 ```yaml
 redundancy:
@@ -360,8 +360,76 @@ under `naut deploy`):
   box**: never copy one controller's env file to the other unchanged;
 - `NAUTILUS_PEER_TOKEN`: the secret every peer and witness request
   carries, the same on all three boxes;
-- `NAUTILUS_CLUSTER`: the pair's cluster ID, drawn when the pair is
-  commissioned, the same on all three boxes.
+- `NAUTILUS_CLUSTER`: the pair's cluster ID, the same on both
+  controllers (the witness keys each pair by it as they first vote).
+
+#### Commissioning a new pair
+
+1. **Draw the pair's identity**, on any machine, before anything runs:
+
+   ```sh
+   naut redundancy new-pair --dir ./pair-env
+   ```
+
+   It writes `a.env`, `b.env` and `witness.env` (mode 0600) and prints
+   their paths and the cluster ID, never the token. It refuses to write
+   over an existing file. Copy each file to its box's `/etc/nautilus/env`
+   and delete the copies here: `NAUTILUS_PEER_TOKEN` is the pair's shared
+   secret. (`--print-secrets` prints all three to the terminal instead,
+   and writes nothing.)
+2. **Start** both controllers and the witness. A new pair waits for the
+   operator: it elects no leader until it is commissioned.
+3. **Commission**, on either controller:
+
+   ```sh
+   naut redundancy commission
+   ```
+
+   Every member must answer, and neither controller may have been
+   commissioned before. A member that started less than a lease and a
+   quarter ago can't answer yet: run it again a moment later. It takes
+   the witness's incarnation and a floor above every term the three
+   members report, and prints the pair's leader once one is elected.
+   It needs the `redundancy` permission (administrator by default)
+   under an `auth:` block, else `NAUTILUS_TOKEN`; it is journalled as
+   `redundancy.commission`, accepted or refused.
+
+The witness can't tell a new pair from one whose **two controllers both
+lost their state**: commission would go ahead there too, with its floor
+above every term the three still report. A term the two controllers
+granted each other while the witness was down is lost with both files,
+and no command can know it, the re-commission below included. That is
+safe: a term is held only by a controller's running process, and both
+controllers lost their files, so neither still runs under one. Both
+controllers losing their state is exactly the case where only an
+operator can commission the pair again.
+
+#### Re-commissioning a controller by hand
+
+A controller that lost its state normally re-adopts from the other one
+within seconds. When it can't (the alarm says "re-commission by hand":
+the other controller is down too, or its witness incarnation is gone),
+run on it:
+
+```sh
+naut redundancy recommission
+```
+
+Without `--floor` it changes nothing and prints the evidence: the
+highest term each member knows, and a floor above them all. Then:
+
+```sh
+naut redundancy recommission --floor <n>
+```
+
+The floor must be above every term a member that answered knows (not
+only this controller's: one that lost its file knows little). A member
+that did not answer is named; the floor must then also be above any term
+it ever used. The witness must answer. `--incarnation` is the witness's
+current one, the default. A controller that reports
+`redundancy.box-changed` needs `--box-replaced`: you replaced its box,
+it is not a copy of a running controller. Each flag is named in the
+journal entry (`redundancy.recommission`).
 
 The voter state, `quorum.state`, lives in the systemd state directory
 (`/var/lib/nautilus` under `naut deploy`) or in `redundancy: state-dir:`.
@@ -441,6 +509,13 @@ also fails:
   mark is cleared**, even once the clone is stopped: the controller that
   still leads needs both voters that are not marked, and a marked
   controller can't take over.
+- **Operator writes that go through the operator-intent log are refused**
+  (substitutes, alarm acknowledgements and shelves) while a copy runs in a
+  member's place or a spare stands in for one: neither the copy's log nor
+  a silent spare's counts, so the leader has too few copies that count.
+  Control goes on; those writes come back once the member is a member
+  again (the copy stopped and the original back, or the spare made the
+  member with `recommission --from-spare` and restarted).
 - **A restart doesn't clear a mark.** Each member writes its marks into
   its `quorum.state`, so a mark outlives restarts, upgrades and `naut
   deploy`, also a mark made by mistake (below). Only the clear-duplicate
@@ -591,24 +666,43 @@ shapes):
   for the other controller. This is why step 1 means powered off or its
   process ended.
 
-**When a spare is involved** (until the `recommission --from-spare`
-command arrives):
+**When a spare is involved:**
 
 - **The spare is the copy** (`redundancy.spare` on a box that is not the
-  real controller): stop it, and keep it stopped. That is step 1 above.
-- **The spare is the real box** (its copy was running first): stop the
-  copy and confirm it is down. Then, on the real box, stop naut, delete
-  `quorum.state` and start naut again: it starts uncommissioned and
-  re-adopts from the other controller within seconds, as after a network
-  card change. A spare answers no command, so this comes before the
-  clear. Then, a lease and a quarter later, run the clear on the other
-  controller. The clear is not optional: while the members' marks stand,
-  they hold the real box for good, and it never leads. It has a cost here:
-  the other controller leads alone (the spare is no standby), so
-  restarting it leaves the pair without a leader until it is back: its
-  own start-up plus about one lease, while its restarted voter waits
-  before it grants (0.53 to 0.57 s with a 500 ms lease in our tests,
-  start-up not counted).
+  real controller) and the real controller still runs: stop the copy,
+  and keep it stopped. That is step 1 above.
+- **The spare should become the member**: the real box made a spare
+  because its copy ran first, or a copy you mean to keep in place of a
+  dead original (on the original's addresses). First stop the controller
+  the other members hold under that name, confirm it is down (powered
+  off, or its process ended), **and keep it from starting again**: leave
+  it off, or wipe its disk. Wait a lease and a quarter, then run on the
+  spare:
+
+  ```sh
+  naut redundancy recommission --from-spare --copy-stopped
+  ```
+
+  `--copy-stopped` is your statement, journalled under your name. On top
+  of it, the other controller must be a commissioned member (the spare
+  re-adopts from it), and its voter and the witness must both answer and
+  both hear no process under that name, else nothing changes. The
+  command then clears the name at both, keeping no process: every
+  process of that name they knew, the one they held included, is set
+  aside, so if it was only cut off or paused it is marked the moment it
+  is heard again. It moves this box's `quorum.state` aside
+  (`quorum.state.previous-spare-<time>`). Then **restart naut on the
+  spare**: it starts uncommissioned and re-adopts from the other
+  controller within seconds, as after a network card change, and is a
+  standby again. A spare answers no other command; its only messages are
+  these two requests.
+
+  If the stopped controller is switched back on later with its old disk
+  anyway, it is a new process of the name beside the member: the voters
+  mark it, and it goes spare in turn. **Unless it starts inside a network
+  split**, where no voter hears it beside the member: then each side can
+  elect its own leader. Until a later release closes this (#1029), that
+  is why it must stay off.
 
 Do not run an older naut release on a spare. A release before the spare
 can't read the spare's `quorum.state`: it sets the file aside and starts
@@ -725,11 +819,11 @@ changes committed while it lagged may have been on them, so it leads
 read-only and says "operator log read-only: no second counting copy —
 recommission (3c)". Bringing back a copy that still holds its log ends
 it; otherwise the way past is a person's decision (a re-commission that
-accepts the loss, coming with the commissioning commands).
+accepts the loss: `--accept-loss`, coming in the next release, #1029).
 
 **A new pair's logs are vouched for at commissioning.** All three copies
-start empty, so none is synced yet: the re-commission that commissions
-the pair vouches for that controller's copy, and its first takeover
+start empty, so none is synced yet: `naut redundancy commission` vouches
+for the copy of the controller it runs on, and its first takeover
 syncs the other two (it waits until every copy answers). A vouch is
 refused while any other copy doesn't answer (it may hold entries the
 vouched one lacks: bring it back, or rebuild it), when a copy that

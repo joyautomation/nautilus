@@ -322,12 +322,19 @@ type World struct {
 	// all the Clear faults at one instant (the real command checks once
 	// and sends every member the same plan).
 	clearPlan *clearPlan
-	o         Options
-	now       time.Duration
-	seq       uint64
-	q         queue
-	nodes     [nNodes]*node
-	net       *rand.Rand
+	// fromSpareDone: FromSpare fault i went through, so its heal restarts
+	// the former spare.
+	fromSpareDone map[int]bool
+	// tookAddress: a copy an operator's --from-spare made the member,
+	// which the peer's Adopts now reach too (the copy took the original's
+	// address, as a replacement does; votes reach a clone already).
+	tookAddress map[Addr]bool
+	o           Options
+	now         time.Duration
+	seq         uint64
+	q           queue
+	nodes       [nNodes]*node
+	net         *rand.Rand
 	// probeNet draws the network's chances for the standby's probes and
 	// their replies (#1029 layer 2), and viaProbe says a send is one: the
 	// probes leave every other frame's draws as they were, so a seed's
@@ -351,7 +358,7 @@ type World struct {
 
 func newWorld(o Options) *World {
 	o.defaults()
-	w := &World{o: o, net: rand.New(rand.NewPCG(o.Seed, 0x6e6574)), probeNet: rand.New(rand.NewPCG(o.Seed, 0x70726f6265))}
+	w := &World{o: o, net: rand.New(rand.NewPCG(o.Seed, 0x6e6574)), probeNet: rand.New(rand.NewPCG(o.Seed, 0x70726f6265)), fromSpareDone: map[int]bool{}, tookAddress: map[Addr]bool{}}
 	for a := Addr(0); a < nNodes; a++ {
 		w.nodes[a] = &node{
 			addr:  a,
@@ -851,7 +858,13 @@ func (w *World) sendAdopts(n *node, msgs []quorum.Adopt) {
 	for _, m := range msgs {
 		w.tracef("%v sends %v gen=%d inc=%d floor=%d", n.addr, m.Kind, m.Gen, m.Incarnation, m.Floor)
 		b, _ := m.MarshalBinary()
-		w.send(n.addr, peerOf(n.addr), b)
+		to := peerOf(n.addr)
+		w.send(n.addr, to, b)
+		if c := cloneOf(to); c != to && w.tookAddress[c] {
+			if cn := w.nodes[c]; cn != nil && cn.up {
+				w.send(n.addr, c, b)
+			}
+		}
 	}
 }
 

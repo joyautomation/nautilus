@@ -261,6 +261,43 @@ func auditRows() []auditRow {
 			header: map[string]string{"Authorization": "Bearer s3cret"},
 			action: "redundancy.clear-duplicate", target: "a", user: "token", source: "api", result: "refused",
 			check: wantReason("fake refused")},
+		{name: "commission a pair", pattern: "POST /api/cluster/commission", server: pairServer("done"),
+			method: "POST", path: "/api/cluster/commission", body: `{}`,
+			header: map[string]string{"Authorization": "Bearer s3cret"},
+			action: "redundancy.commission", target: "pair", user: "token", source: "api", result: "ok"},
+		{name: "commission a pair, a member was commissioned", pattern: "POST /api/cluster/commission", server: pairServer("refused"),
+			method: "POST", path: "/api/cluster/commission", body: `{}`,
+			header: map[string]string{"Authorization": "Bearer s3cret"},
+			action: "redundancy.commission", target: "pair", user: "token", source: "api", result: "refused",
+			check: wantReason("fake refused")},
+		{name: "commission a pair, no credential configured", pattern: "POST /api/cluster/commission", server: pairServerNoToken("done"),
+			method: "POST", path: "/api/cluster/commission", body: `{}`,
+			action: "redundancy.commission", target: "pair", user: "anonymous", source: "api", result: "refused",
+			check: wantReason("NAUTILUS_TOKEN")},
+		{name: "re-commission with a floor, box replaced", pattern: "POST /api/cluster/recommission", server: pairServer("done"),
+			method: "POST", path: "/api/cluster/recommission", body: `{"floor":5000,"boxReplaced":true}`,
+			header: map[string]string{"Authorization": "Bearer s3cret"},
+			action: "redundancy.recommission", target: "b", user: "token", source: "api", result: "ok",
+			check: wantDetail("attestBox", boxReplacedAttest)},
+		{name: "re-commission from a spare", pattern: "POST /api/cluster/recommission", server: pairServer("done"),
+			method: "POST", path: "/api/cluster/recommission", body: `{"fromSpare":true,"copyStopped":true}`,
+			header: map[string]string{"Authorization": "Bearer s3cret"},
+			action: "redundancy.recommission", target: "b", user: "token", source: "api", result: "ok",
+			check: wantDetail("attest", incumbentStoppedAttest)},
+		{name: "re-commission from a spare, the incumbent not said stopped", pattern: "POST /api/cluster/recommission", server: pairServer("done"),
+			method: "POST", path: "/api/cluster/recommission", body: `{"fromSpare":true}`,
+			header: map[string]string{"Authorization": "Bearer s3cret"},
+			action: "redundancy.recommission", target: "b", user: "token", source: "api", result: "refused",
+			check: wantReason("copyStopped")},
+		{name: "re-commission from a spare, cleared at one voter only", pattern: "POST /api/cluster/recommission", server: pairServer("incomplete"),
+			method: "POST", path: "/api/cluster/recommission", body: `{"fromSpare":true,"copyStopped":true}`,
+			header: map[string]string{"Authorization": "Bearer s3cret"},
+			action: "redundancy.recommission", target: "b", user: "token", source: "api", result: "error",
+			check: wantReason("fake incomplete")},
+		{name: "re-commission, no credential configured", pattern: "POST /api/cluster/recommission", server: pairServerNoToken("done"),
+			method: "POST", path: "/api/cluster/recommission", body: `{"floor":5000}`,
+			action: "redundancy.recommission", target: "b", user: "anonymous", source: "api", result: "refused",
+			check: wantReason("NAUTILUS_TOKEN")},
 		{name: "clear a duplicate mark, a member still marks it", pattern: "POST /api/cluster/clear-duplicate", server: pairServer("incomplete"),
 			method: "POST", path: "/api/cluster/clear-duplicate", body: `{"name":"a","copyStopped":true}`,
 			header: map[string]string{"Authorization": "Bearer s3cret"},
@@ -476,6 +513,16 @@ func (f *fakePair) Status() leader.Status {
 func (f *fakePair) ClearDuplicate(_ context.Context, name, by string) (any, string, string) {
 	f.by = append(f.by, by)
 	return map[string]any{"name": name}, f.outcome, "fake " + f.outcome
+}
+
+func (f *fakePair) Commission(_ context.Context, by string) (any, string, string) {
+	f.by = append(f.by, by)
+	return map[string]any{"cluster": "c"}, f.outcome, "fake " + f.outcome
+}
+
+func (f *fakePair) Recommission(_ context.Context, by string, inc, floor uint64, boxReplaced, fromSpare bool) (any, string, string) {
+	f.by = append(f.by, by)
+	return map[string]any{"floor": floor, "fromSpare": fromSpare}, f.outcome, "fake " + f.outcome
 }
 
 func pairServer(outcome string) func(*testing.T) *Server {

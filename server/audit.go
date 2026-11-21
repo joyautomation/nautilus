@@ -119,6 +119,8 @@ var actionClass = map[string]string{
 	"config.revert.cancel": strict,
 	// Which process a redundant pair counts as its member.
 	"redundancy.clear-duplicate": strict,
+	"redundancy.commission":      strict,
+	"redundancy.recommission":    strict,
 }
 
 const (

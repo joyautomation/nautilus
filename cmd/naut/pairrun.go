@@ -252,9 +252,9 @@ func pairOptions(r *project.RedundancyConfig, apiAddr, dir string, getenv func(s
 	cluster := strings.TrimSpace(getenv("NAUTILUS_CLUSTER"))
 	switch {
 	case cluster == "":
-		return o, "", errors.New("NAUTILUS_CLUSTER is not set: this pair is not commissioned. Commissioning draws the pair's cluster ID (32 hex digits) and sets NAUTILUS_CLUSTER beside NAUTILUS_PEER_TOKEN on both controllers and the witness (/etc/nautilus/env under naut deploy); the operator guide covers it")
+		return o, "", errors.New("NAUTILUS_CLUSTER is not set: a new pair's cluster ID (32 hex digits) and peer token are drawn by `naut redundancy new-pair`, which writes each box's env lines (/etc/nautilus/env under naut deploy); then start all three and run `naut redundancy commission`. The operator guide covers it")
 	case !node.ValidCluster(cluster):
-		return o, "", fmt.Errorf("NAUTILUS_CLUSTER=%q: want the 32 lowercase hex digits commissioning drew", cluster)
+		return o, "", fmt.Errorf("NAUTILUS_CLUSTER=%q: want the 32 lowercase hex digits naut redundancy new-pair drew", cluster)
 	}
 	stateDir, err := pairStateDir(r, dir, getenv)
 	if err != nil {

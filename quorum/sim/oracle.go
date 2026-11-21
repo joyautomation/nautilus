@@ -29,6 +29,9 @@ type Record struct {
 	Marks []Mark
 	// Clears are the operator's clears (Clear faults), in order.
 	Clears []ClearRec
+	// FromSpares are the operator's recommission --from-spare (FromSpare
+	// faults), in order (#1029 3c-3c).
+	FromSpares []FromSpareRec
 	// MarksRestored: a voter start that read a mark back from its file,
 	// one per name (#1029 3c-3b). MarkWritesLost counts the crashes with
 	// a mark or a clear not yet durable. MarkedAtEnd: the voters up at
@@ -532,6 +535,15 @@ type Mark struct {
 	Name  quorum.NodeID
 }
 
+// FromSpareRec is one operator's recommission --from-spare (a FromSpare
+// fault, #1029 3c-3c).
+type FromSpareRec struct {
+	At      time.Duration
+	Node    Addr
+	Refused string // why the command was refused, "" when done
+	Retired int    // boots of the name the voters retired
+}
+
 // ClearRec is one operator clear at a member's voter (a Clear fault): the
 // names it cleared, and those its guard refused (#1029 3c-3).
 type ClearRec struct {
@@ -604,7 +616,11 @@ func Check(r *Record, c Checks) []Violation {
 			add(Violation{"spare", sp.At, fmt.Sprintf("%v demoted itself to a spare with no clone running", sp.Node)})
 		}
 		if slices.ContainsFunc(r.Spares, func(o Spare) bool {
-			return o.Node != sp.Node && nodeIDs[o.Node] == nodeIDs[sp.Node] && o.At <= sp.At && !o.Restart
+			return o.Node != sp.Node && nodeIDs[o.Node] == nodeIDs[sp.Node] && o.At <= sp.At && !o.Restart &&
+				// An operator's --from-spare made that copy the member again.
+				!slices.ContainsFunc(r.FromSpares, func(f FromSpareRec) bool {
+					return f.Node == o.Node && f.Refused == "" && f.At >= o.At && f.At <= sp.At
+				})
 		}) {
 			add(Violation{"spare", sp.At, fmt.Sprintf("%v demoted itself to a spare, and the other copy of %s already had: neither runs the name", sp.Node, nodeIDs[sp.Node])})
 		}
