@@ -128,6 +128,8 @@ export function setTagField(index: number, key: TagField, value: Json | undefine
 	return value === undefined ? { op: 'delete', path: ['tags', index, key] } : { op: 'set', path: ['tags', index, key], value };
 }
 
+const inRange = (v: Json, lo: number, hi: number): boolean => typeof v === 'number' && Number.isInteger(v) && v >= lo && v <= hi;
+
 export interface Problem {
 	where: string;
 	message: string;
@@ -143,8 +145,8 @@ export function problems(m: ModbusManifest, classes: string[] = []): Problem[] {
 	for (const s of m.sources) {
 		const at = `source ${s.id}`;
 		if (!s.host.trim()) out.push({ where: at, message: `${at} needs a host` });
-		if (s.port !== undefined && !(Number.isInteger(s.port) && s.port >= 0 && s.port <= 65535)) out.push({ where: at, message: `${at}: port must be a whole number from 0 to 65535 (0 or empty means 502)` });
-		if (s.unitid !== undefined && !(Number.isInteger(s.unitid) && s.unitid >= 0 && s.unitid <= 255)) out.push({ where: at, message: `${at}: unit id must be a whole number from 0 to 255` });
+		if (s.port !== undefined && !inRange(s.port, 0, 65535)) out.push({ where: at, message: `${at}: port must be a whole number from 0 to 65535 (0 or empty means 502)` });
+		if (s.unitid !== undefined && !inRange(s.unitid, 0, 255)) out.push({ where: at, message: `${at}: unit id must be a whole number from 0 to 255` });
 	}
 	for (const t of m.tags) {
 		const at = `tag ${t.name}`;

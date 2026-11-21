@@ -76,6 +76,8 @@ describe('modbus points', () => {
 		expect(msg.includes('port must be')).toBe(true);
 		expect(msg.includes('unit id must be')).toBe(true);
 		expect(parseModbus(T.replace('unitid: 1', 'unitid: abc')).sources[0].unitid).toBe('abc');
+		expect(problems(parseModbus(T.replace('port: 1502', 'port: 15.5')), ['fast']).length).toBe(1);
+		expect(problems(parseModbus(T.replace('unitid: 1', 'unitid: true')), ['fast']).length).toBe(1);
 	});
 	it('a file that does not parse is one named problem, not a throw', () => {
 		const m = parseModbus('sources:\n  - {id: A\n\ttags: [');
