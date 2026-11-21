@@ -231,7 +231,7 @@ check comes before the token check. See [Online edits](/guides/online-edits/).
 | `POST` | [`/api/io/staged/{id}/validate`](#live-io-configuration) | Check it against what runs |
 | `POST` | [`/api/io/staged/{id}/apply`](#live-io-configuration) | Apply it while the scan runs |
 | `GET` | [`/api/io/staged/{id}`](#live-io-configuration) | One candidate's state |
-| `GET` | [`/api/io/files`](#live-io-configuration) | The project files the running I/O configuration differs in (`naut pull --io`) |
+| `GET` | [`/api/io/files`](#live-io-configuration) | The project files the running I/O configuration differs in (`naut pull --io`; needs the edit permission) |
 | `GET` | [`/api/config/schema`](#configuration-screens) | The manifest's JSON Schema, one section at a time (`?section=drivers`), or the list of sections |
 | `GET` | [`/api/config/files`](#configuration-screens) | The manifest and the files its drivers name, as what runs (needs the edit permission) |
 | `GET` | [`/api/history`, `/api/history/…`](#historian-proxy) | Forwarded to the historian |
@@ -1141,11 +1141,12 @@ It never writes a hidden path, `.git` or a program source, and never
 through a symlink out of the project; it does not trust the controller's
 list of paths. `--force` skips the check that your copy is the booted one
 and replaces your edits without a diff; the paths are printed. **`GET
-/api/io/files` returns whole file bodies and, like every read, needs no
-token from a trusted host (a bare `NAUTILUS_TOKEN` guards writes) until the
-manifest has an `auth:` block, which makes it need `read`: without one,
-anyone who can reach the port can read the project's I/O files.** Keep the
-port off untrusted networks.
+/api/io/files` returns whole file bodies, so it needs the edit permission,
+like `/api/config/files`: online edits on, and the write token or a
+principal that may write. A plain read gets `GET /api/io`, which carries no
+file text. Change since v0.22.0: reading staged or differing I/O files now
+needs the edit permission; `naut pull --io` sends `NAUTILUS_TOKEN`, so it
+keeps working where that token is set.**
 
 ### Configuration screens
 
@@ -1165,7 +1166,7 @@ what they edit is applied through the staged routes above.
 
 `/api/config/schema` is static and a plain read. **`/api/config/files` is
 the whole manifest (users, grants, hosts), so it needs the permission to
-edit it, not the plain read `GET /api/io/files` takes:** online edits on,
+edit it, as `GET /api/io/files` does:** online edits on,
 and the write token or a principal that may write. It serves only YAML
 files inside the project with no hidden path component (never `.env`, a
 program source, a path outside the project, or anything reached through a

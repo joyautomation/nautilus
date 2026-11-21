@@ -93,10 +93,10 @@ func readPolicy(t *testing.T, srv *Server, anonymous string) {
 // gated reports a refusal by the read gate, as opposed to whatever the
 // route itself answers (404 with no alarm engine, 400 for a bad query…).
 // stricterRead is a read route that needs more than read on top of it:
-// the audit journal needs audit; the manifest text of the config screens
-// needs the permission to edit it (#711).
+// the audit journal needs audit; the file text of the live I/O routes
+// (/api/io/files, /api/config/files) needs the permission to edit it.
 func stricterRead(route string) bool {
-	return route == "/api/audit" || route == "/api/config/files"
+	return route == "/api/audit" || route == "/api/config/files" || route == "/api/io/files"
 }
 
 func gated(rec *httptest.ResponseRecorder) bool {
@@ -155,6 +155,13 @@ func TestEveryReadRouteIsGated(t *testing.T) {
 					t.Errorf("anonymous %q: a role without read: %s %s: %d, want 403", anon, method, path, rec.Code)
 				} else if method == "GET" && rec.Body.String() != `{"error":"`+srv.policy.Can(auth.Service("blind"), auth.Read, auth.All).Reason+`"}`+"\n" {
 					t.Errorf("a refusal carries more than its error: %s", rec.Body)
+				}
+				if p == "/api/config/files" || p == "/api/io/files" {
+					// File text needs the edit permission: a viewer may read
+					// the rest of the API and is refused these.
+					if rec := call(t, srv, method, path, "", strip, bearer("v-secret")); rec.Code != http.StatusForbidden {
+						t.Errorf("a viewer: %s %s: %d, want 403", method, path, rec.Code)
+					}
 				}
 				if stricterRead(p) {
 					continue // it needs audit, or write, as well
