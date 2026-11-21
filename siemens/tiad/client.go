@@ -900,9 +900,11 @@ func (s *Session) UploadWith(ctx context.Context, req UploadRequest) (UploadResu
 
 // BlindTrust is when the agent's TIA instance first answered a CPU's TLS
 // certificate question trusted, blindly, on a request's
-// trustUnverifiedCertificate. TIA keeps that trust until it restarts, and
-// the agent starts TIA once, so only an agent restart clears it: a later
-// online call asks nothing and rides on it (#789 stage 1b). Since is the
+// trustUnverifiedCertificate. TIA keeps that trust until the instance ends:
+// a later online call in it asks nothing and rides on it (#789 stage 1b).
+// The agent retires the instance once no session is left on it, and the
+// next call starts one that trusts nothing (#789 D1); an agent restart
+// clears it too. Since is the
 // agent's UTC clock; Call, Session and Address say which call gave it;
 // Questions are what it answered.
 type BlindTrust struct {

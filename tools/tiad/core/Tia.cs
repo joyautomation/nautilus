@@ -147,9 +147,18 @@ namespace Tiad
         // Gone reports whether the TIA this side drives has died (its
         // process exited, its objects disposed), taking every project open
         // on it. It is read from any thread, also while a call runs, so it
-        // never touches TIA's objects. Once true, true for good: this side
-        // starts TIA once, so only a restart of the agent brings it back.
+        // never touches TIA's objects. Once true, true for good: an
+        // instance never comes back. After a death only a restart of the
+        // agent brings TIA back; after Retire the agent makes a new one.
         bool Gone { get; }
+
+        // Retire ends this TIA instance on purpose, with no project open
+        // on it: the agent retires an instance that trusted a CPU's
+        // certificate blindly once no session is left (#789 D1). It
+        // returns only once TIA's process has exited, so nothing the
+        // instance trusted outlives it; when it cannot tell, it throws,
+        // and the agent then treats TIA as gone.
+        void Retire();
 
         // GsdInstalled reports whether a GSDML file of that name is in the
         // hardware catalogue.

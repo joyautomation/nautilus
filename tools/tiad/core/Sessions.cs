@@ -70,6 +70,10 @@ namespace Tiad
         // session is closed (a broken session keeps it).
         readonly Dictionary<string, Session> cpus = new Dictionary<string, Session>(StringComparer.Ordinal);
         int next;
+        // closing counts the sessions taken out of the table to be closed
+        // (Remove, TakeIdle) whose close has not ended yet (Closed,
+        // Restore): their projects are still open on TIA.
+        int closing;
 
         // ClaimCpu claims address for s, atomically, or refuses (busy)
         // when another session holds it.
@@ -215,6 +219,17 @@ namespace Tiad
             {
                 s.Broken = true;
                 byId[s.Id] = s;
+                closing--;
+            }
+        }
+
+        // Closed records that the close of a session taken out of the
+        // table (Remove, TakeIdle) ended: its project is closed or gone.
+        public void Closed(Session s)
+        {
+            lock (mu)
+            {
+                closing--;
             }
         }
 
@@ -228,12 +243,15 @@ namespace Tiad
             }
         }
 
-        // Remove takes a session out of the table (it is being closed).
+        // Remove takes a session out of the table (it is being closed):
+        // Closed or Restore must follow when it returns true.
         public bool Remove(Session s)
         {
             lock (mu)
             {
-                return byId.Remove(s.Id);
+                if (!byId.Remove(s.Id)) return false;
+                closing++;
+                return true;
             }
         }
 
@@ -250,6 +268,7 @@ namespace Tiad
                     if (s.Handle != null && s.InFlight == 0 && now - s.LastUsed > limit) outp.Add(s);
                 }
                 foreach (var s in outp) byId.Remove(s.Id);
+                closing += outp.Count;
             }
             return outp;
         }
@@ -272,6 +291,20 @@ namespace Tiad
         public int Count
         {
             get { return Open().Count; }
+        }
+
+        // Any reports whether any session is left: one in the table, one
+        // still opening (reserved, no handle yet), or one whose close has
+        // not ended (its project is still open on TIA).
+        public bool Any
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return byId.Count > 0 || closing > 0;
+                }
+            }
         }
     }
 }
