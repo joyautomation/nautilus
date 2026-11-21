@@ -209,10 +209,10 @@ func (s *session) ensureAccess() {
 // prepareAccess is AccessSteps.Prepare: before any write of the apply, a
 // found user's password, and a refusal of a user or role tiad did not
 // make. A refusal leaves the project as it was.
-func (s *session) prepareAccess(want, password string, recordOnly bool, notes *[]string) *failure {
-	bad := func(m string) *failure { return fail(http.StatusBadRequest, tiad.KindBadRequest, "%s", m) }
+func (s *session) prepareAccess(want, password string, recordOnly bool, notes *[]string) (wrote bool, fl *failure) {
+	bad := func(m string) (bool, *failure) { return false, fail(http.StatusBadRequest, tiad.KindBadRequest, "%s", m) }
 	if want != tiad.AccessFullAccessUser {
-		return nil
+		return false, nil
 	}
 	s.ensureAccess()
 	if _, ok := s.access.roles[FullAccessRole]; ok && !s.access.ours[FullAccessRole] {
@@ -220,7 +220,7 @@ func (s *session) prepareAccess(want, password string, recordOnly bool, notes *[
 	}
 	u, ok := s.access.users[FullAccessUser]
 	if !ok {
-		return nil
+		return false, nil
 	}
 	switch {
 	case u.recordKey == "":
@@ -231,6 +231,7 @@ func (s *session) prepareAccess(want, password string, recordOnly bool, notes *[
 		*notes = append(*notes, TakenOverNote)
 	case u.recordKey == "this" && u.recordPassword == password:
 		*notes = append(*notes, UnchangedUserNote)
+		return false, nil
 	case recordOnly:
 		u.recordKey, u.recordPassword = "this", password
 		*notes = append(*notes, RecordedUserNote)
@@ -250,7 +251,7 @@ func (s *session) prepareAccess(want, password string, recordOnly bool, notes *[
 		}
 		*notes = append(*notes, SetUserNote)
 	}
-	return nil
+	return true, nil
 }
 
 // applyAccess is AccessSteps.Run on s's project. madeCPU is the CPU the

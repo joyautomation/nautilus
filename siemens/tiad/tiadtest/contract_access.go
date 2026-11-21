@@ -227,8 +227,16 @@ func contractAccessNewStation(t *testing.T, start Starter) {
 	// A rotated secret is set, and is then the one tiad last set.
 	rotated := BenchSecrets
 	rotated.FullAccessPassword = "Rotated-access-2027"
-	if r, err := s.ApplyStation(ctx, BenchStation(), rotated); err != nil || !noteWith(r.Notes, SetUserNote) {
+	if _, err := s.Compile(ctx, true, true); err != nil {
+		t.Fatal(err)
+	}
+	if r, err := s.ApplyStation(ctx, BenchStation(), rotated); err != nil || !noteWith(r.Notes, SetUserNote) || len(r.Changes) != 0 {
 		t.Fatalf("a rotated secret: %+v %v", r, err)
+	}
+	// A password set is a change to the project: compile again first.
+	dl := tiad.DownloadRequest{Address: benchCPU, Hardware: true, Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}}
+	if _, err := s.Download(ctx, dl); tiad.Kind(err) != tiad.KindNotCompiled {
+		t.Fatalf("a download after a password was set, before a compile: %v", err)
 	}
 	if r, err := s.ApplyStation(ctx, BenchStation(), rotated); err != nil || !noteWith(r.Notes, UnchangedUserNote) {
 		t.Fatalf("the rotated secret again: %+v %v", r, err)

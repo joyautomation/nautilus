@@ -688,7 +688,9 @@ type ApplyOptions struct {
 	// FullAccessRecordOnly records secrets.fullAccessPassword as a found
 	// Full access user's password without setting it (journalled): for a
 	// project whose record tiad cannot verify (another agent token), when
-	// TIA refuses the unchanged secret as one the user has.
+	// TIA refuses the unchanged secret as one the user has. It trusts the
+	// caller: naut sends it only on an operator's explicit action, never
+	// as a retry default.
 	FullAccessRecordOnly bool
 }
 

@@ -156,6 +156,8 @@ namespace Tiad.Test
             True(TestRecords.Ours(rec) && !OtherRecords.Ours(rec), "the key id tells whose");
             True(AccessRecords.IsRecord(rec) && !AccessRecords.IsRecord("made by an engineer") && !AccessRecords.IsRecord(""), "a record, and comments that are not");
             True(!AccessRecords.IsRecord("tiad password record v2:630dcd29:00:11"), "a cut record is none");
+            True(!AccessRecords.IsRecord(rec.Replace(":0001", ":zz01")), "a record with a field that is not hex is none (never a parse error)");
+            True(!TestRecords.Matches(rec.Replace(":0001", ":zz01"), AccessSteps.UserName, "Full-access-1"), "and never matches");
             string a = TestRecords.Make(AccessSteps.UserName, "Full-access-1"), b = TestRecords.Make(AccessSteps.UserName, "Full-access-1");
             True(a != b, "each record has its own salt");
             True(TestRecords.Matches(a, AccessSteps.UserName, "Full-access-1") && TestRecords.Matches(b, AccessSteps.UserName, "Full-access-1"), "both verify");
@@ -269,6 +271,7 @@ namespace Tiad.Test
 
             var same = Found("Same-access-1", TestRecords);
             AccessSteps.Prepare(same, StationRules.AccessFullAccessUser, "Same-access-1", TestRecords, false, w, notes);
+            True(!w.Wrote, "unchanged is no write");
             Eq(same.Calls.Count, 0, "the same secret: nothing written (TIA would refuse it)");
             Eq(notes[0], AccessSteps.UnchangedNote, "unchanged");
 
@@ -279,6 +282,7 @@ namespace Tiad.Test
             Eq(rot.Users[AccessSteps.UserName], "New-access-22", "set");
             True(TestRecords.Matches(rot.Comments[AccessSteps.UserName], AccessSteps.UserName, "New-access-22"), "recorded");
             Eq(notes[0], AccessSteps.SetNote, "set note");
+            True(w.Wrote, "a set password is a write");
 
             // Back to one the user had, with this agent's record: plainly
             // reused, and the project is as it was.

@@ -410,6 +410,8 @@ namespace Tiad
                         kept = pc.Others;
                     }
                     if (st.Cpu.AccessControl == StationRules.AccessFullAccessUser) CheckPolicy(t, s.Handle, sec);
+                    string cannot = t.CannotApply(st);
+                    if (cannot != null) throw new TiaException(cannot);
                     // A found user's password, before any write: a refusal
                     // leaves the session as it was, unless putting the
                     // user's record back failed.
@@ -427,9 +429,8 @@ namespace Tiad
                         }
                         throw;
                     }
-                    string cannot = t.CannotApply(st);
-                    if (cannot != null) throw new TiaException(cannot);
-                    bool was = s.Compiled;
+                    // A password set or recorded is a change to the project.
+                    bool was = s.Compiled && !w.Wrote;
                     Station prev = s.Station;
                     s.Compiled = false;
                     s.Station = null;

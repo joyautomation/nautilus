@@ -1020,7 +1020,8 @@ func (f *Fake) applyStation(r *http.Request) (any, *failure) {
 	}
 	// A found user's password and a user or role tiad did not make,
 	// before any write: a refusal leaves the session as it was.
-	if fl := s.prepareAccess(req.Station.CPU.AccessControl, req.Secrets.FullAccessPassword, req.FullAccessRecordOnly, &notes); fl != nil {
+	wrote, fl := s.prepareAccess(req.Station.CPU.AccessControl, req.Secrets.FullAccessPassword, req.FullAccessRecordOnly, &notes)
+	if fl != nil {
 		return nil, fl
 	}
 	prev := s.station
@@ -1037,7 +1038,8 @@ func (f *Fake) applyStation(r *http.Request) (any, *failure) {
 	}
 	// Until the spec is applied the project matches no spec: a failure
 	// part-way leaves nothing downloadable, and the session unclean.
-	was, wasChanged := s.compiled, s.changed
+	// A password set or recorded is a change to the project.
+	was, wasChanged := s.compiled && !wrote, s.changed || wrote
 	s.station, s.uploaded, s.compiled, s.changed = nil, false, false, true
 	s.unclean = true
 	if n := protectionNote(s.protection, req.Station.CPU.ConfigurationProtection); n != "" {

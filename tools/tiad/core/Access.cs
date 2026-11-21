@@ -84,6 +84,9 @@ namespace Tiad
     public sealed class AccessWrites
     {
         public bool Dirty;
+        // Wrote is set when the step changed the project's users (a record
+        // or a password): the project then needs compiling again.
+        public bool Wrote;
     }
 
     // AccessRecords is tiad's record of the Full access password it set or
@@ -159,6 +162,13 @@ namespace Tiad
             if (comment == null || !comment.StartsWith(Prefix, StringComparison.Ordinal)) return null;
             string[] p = comment.Substring(Prefix.Length).Split(':');
             if (p.Length != 3 || p[0].Length != 8 || p[1].Length != 32 || p[2].Length != 64) return null;
+            foreach (string f in p)
+            {
+                foreach (char ch in f)
+                {
+                    if (!(ch >= '0' && ch <= '9' || ch >= 'a' && ch <= 'f')) return null;
+                }
+            }
             return p;
         }
 
@@ -318,6 +328,7 @@ namespace Tiad
             {
                 if (!recordOnly) throw TiadException.BadRequest("{0}", ForeignUser);
                 u.SetComment(UserName, records.Make(UserName, password));
+                w.Wrote = true;
                 notes.Add(TakenOverNote);
                 Log.Line("audit access-record user={0}: taken over, secrets.fullAccessPassword recorded as its password without setting it (fullAccessRecordOnly)", Json.Quote(UserName));
                 return;
@@ -330,6 +341,7 @@ namespace Tiad
             if (recordOnly)
             {
                 u.SetComment(UserName, records.Make(UserName, password));
+                w.Wrote = true;
                 notes.Add(RecordedNote);
                 Log.Line("audit access-record user={0}: secrets.fullAccessPassword recorded as its password without setting it (fullAccessRecordOnly)", Json.Quote(UserName));
                 return;
@@ -353,6 +365,7 @@ namespace Tiad
                 PutBack(u, had, w);
                 throw;
             }
+            w.Wrote = true;
             notes.Add(SetNote);
         }
 
