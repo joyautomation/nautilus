@@ -66,6 +66,12 @@ type Fake struct {
 	// pinned CPU then fail with device_unverified.
 	NoIdentify bool
 
+	// policy is the projects' password policy for local users (nil:
+	// TIA's default), uploadAccess the access control an upload brings
+	// ("": Disabled). Set them with SetAccess.
+	policy       *PasswordPolicy
+	uploadAccess string
+
 	mu        sync.Mutex
 	pins      map[string]tiad.DeviceIdentity // CPU address → device pin
 	files     map[string][]byte
@@ -103,6 +109,12 @@ type session struct {
 	cpu    *tiad.ProjectCPU
 	others []tiad.KeptDevice
 	kept   []tiad.KeptDevice
+	// accessControl is the CPU's access control (one of the Access*
+	// states), access the project's users and roles, made what applies on
+	// this session made in them (an upload removes exactly that).
+	accessControl string
+	access        access
+	made          accessMade
 	// unclean is set while an apply or upload runs and stays set when it
 	// fails part-way: a later apply or save refuses.
 	unclean bool
@@ -113,6 +125,8 @@ type savedProject struct {
 	cpu                       *tiad.ProjectCPU
 	others                    []tiad.KeptDevice
 	protection, protectedWith string
+	accessControl             string
+	access                    access
 }
 
 // UploadedCPUName and UploadedIODevice are what the fake's upload brings
@@ -866,6 +880,9 @@ func (f *Fake) createProject(r *http.Request) (any, *failure) {
 	if fl := f.checkStation(req.Station, req.Secrets); fl != nil {
 		return nil, fl
 	}
+	if fl := f.checkPolicy(req.Station, req.Secrets); fl != nil {
+		return nil, fl
+	}
 	project := "projects/" + req.Name + "/" + req.Name + ".ap21"
 	guard := "projects/" + req.Name + "/"
 	if f.projectOpen(project, guard) {
@@ -879,15 +896,22 @@ func (f *Fake) createProject(r *http.Request) (any, *failure) {
 			delete(f.saved, p)
 		}
 	}
-	// TIA makes a new CPU with its protection not set up.
+	// TIA makes a new CPU with its protection not set up and access
+	// control on.
 	s.protection = ProtectionWithoutPassword
+	s.accessControl = AccessEnabled
+	s.cpu = &tiad.ProjectCPU{Name: req.Station.CPU.Name, Order: req.Station.CPU.Order, Firmware: req.Station.CPU.Firmware}
 	if fl := s.protect(req.Station.CPU.ConfigurationProtection, req.Secrets.ConfigurationPassword); fl != nil {
+		delete(f.sessions, s.id)
+		return nil, fl
+	}
+	var notes []string
+	if fl := s.applyAccess(req.Station.CPU.AccessControl, req.Secrets.FullAccessPassword, true, &notes); fl != nil {
 		delete(f.sessions, s.id)
 		return nil, fl
 	}
 	st := req.Station
 	s.station = &st
-	s.cpu = &tiad.ProjectCPU{Name: st.CPU.Name, Order: st.CPU.Order, Firmware: st.CPU.Firmware}
 	f.files[project] = []byte("fake TIA project")
 	return tiad.Session{ID: s.id, Project: project}, nil
 }
@@ -913,6 +937,7 @@ func (f *Fake) openSession(r *http.Request) (any, *failure) {
 	// The project as it was saved: its CPU and its devices.
 	if sp, ok := f.saved[p]; ok {
 		s.cpu, s.others, s.protection, s.protectedWith = sp.cpu, sp.others, sp.protection, sp.protectedWith
+		s.accessControl, s.access = sp.accessControl, sp.access.clone()
 	}
 	return tiad.Session{ID: s.id, Project: p}, nil
 }
@@ -975,7 +1000,14 @@ func (f *Fake) applyStation(r *http.Request) (any, *failure) {
 		if _, fl := planProtection(s.protection, req.Station.CPU.ConfigurationProtection, req.Secrets.ConfigurationPassword != ""); fl != nil {
 			return nil, fl
 		}
+		current := s.accessControl
+		if fl := planAccess(&current, req.Station.CPU.AccessControl, req.Secrets.FullAccessPassword != ""); fl != nil {
+			return nil, fl
+		}
 		kept = s.others
+	}
+	if fl := f.checkPolicy(req.Station, req.Secrets); fl != nil {
+		return nil, fl
 	}
 	prev := s.station
 	if s.uploaded {
@@ -986,6 +1018,8 @@ func (f *Fake) applyStation(r *http.Request) (any, *failure) {
 		s.cpu = &tiad.ProjectCPU{Name: req.Station.CPU.Name, Order: req.Station.CPU.Order, Firmware: req.Station.CPU.Firmware}
 		s.others = nil
 		s.protection, s.protectedWith = ProtectionWithoutPassword, ""
+		s.accessControl = AccessEnabled
+		s.access.dropGrants()
 	}
 	// Until the spec is applied the project matches no spec: a failure
 	// part-way leaves nothing downloadable, and the session unclean.
@@ -996,6 +1030,9 @@ func (f *Fake) applyStation(r *http.Request) (any, *failure) {
 		notes = append(notes, n)
 	}
 	if fl := s.protect(req.Station.CPU.ConfigurationProtection, req.Secrets.ConfigurationPassword); fl != nil {
+		return nil, fl
+	}
+	if fl := s.applyAccess(req.Station.CPU.AccessControl, req.Secrets.FullAccessPassword, !reuse, &notes); fl != nil {
 		return nil, fl
 	}
 	s.unclean = false
@@ -1116,6 +1153,8 @@ func (f *Fake) compile(r *http.Request) (any, *failure) {
 	res := f.CompileResult
 	if req.Hardware && s.protection == ProtectionWithoutPassword {
 		res = tiad.CompileResult{Result: "error", Errors: 1, Messages: []tiad.CompileMessage{{Severity: "error", Text: NotConfigured}}}
+	} else if req.Hardware && s.accessControl == AccessEnabled && !s.access.fullAccess() {
+		res = tiad.CompileResult{Result: "error", Errors: 1, Messages: []tiad.CompileMessage{{Severity: "error", Text: NoFullAccess}}}
 	}
 	if res.Result == "" {
 		res.Result = "success"
@@ -1340,6 +1379,11 @@ func (f *Fake) upload(r *http.Request) (any, *failure) {
 	// The bench CPU's setting, as the S2a upload found it, its name, and
 	// its IO device, which the CPU's station does not hold.
 	s.protection, s.protectedWith = ProtectionNone, ""
+	s.accessControl = f.uploadAccessControl()
+	s.access.dropGrants()
+	// What this session made in the users and roles belongs to the
+	// station the upload replaces.
+	removed := s.removeMade()
 	// Unclean until the CPU is known to be the pinned one.
 	s.unclean = true
 	up := f.device()
@@ -1369,7 +1413,7 @@ func (f *Fake) upload(r *http.Request) (any, *failure) {
 	}
 	s.unclean = false
 	// The fake's CPU asks no TLS question, so nothing is trusted.
-	return tiad.UploadResult{TrustedBlindly: []string{}, Device: read, Pin: pin, CPU: *s.cpu}, nil
+	return tiad.UploadResult{TrustedBlindly: []string{}, Device: read, Pin: pin, CPU: *s.cpu, RemovedAccess: removed}, nil
 }
 
 // BenchDevice is the fake CPU's identity unless a test says otherwise.
@@ -1501,7 +1545,8 @@ func (f *Fake) save(r *http.Request) (any, *failure) {
 		c := *s.cpu
 		cpu = &c
 	}
-	f.saved[p] = savedProject{cpu: cpu, others: append([]tiad.KeptDevice(nil), s.others...), protection: s.protection, protectedWith: s.protectedWith}
+	f.saved[p] = savedProject{cpu: cpu, others: append([]tiad.KeptDevice(nil), s.others...), protection: s.protection, protectedWith: s.protectedWith,
+		accessControl: s.accessControl, access: s.access.clone()}
 	return map[string]string{"path": p}, nil
 }
 

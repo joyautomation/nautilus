@@ -86,6 +86,11 @@ namespace Tiad.Test
                 T("ProtectionStepsHappyPaths", ProtectionStepsHappyPaths),
                 T("ProtectionStepsStranded", ProtectionStepsStranded),
                 T("ProtectionStepsReadBack", ProtectionStepsReadBack),
+                T("AccessPlan", AccessPlan),
+                T("AccessStepsNewCpu", AccessStepsNewCpu),
+                T("AccessStepsKeptCpu", AccessStepsKeptCpu),
+                T("AccessStepsReadBack", AccessStepsReadBack),
+                T("AccessPasswordChecks", AccessPasswordChecks),
                 T("DecideOnceAtTheFirstCallback", DecideOnceAtTheFirstCallback),
                 T("DecideAsksStartAfterBeforeLoading", DecideAsksStartAfterBeforeLoading),
                 T("NoSyntheticStartAfterWhenAsked", NoSyntheticStartAfterWhenAsked),
@@ -320,6 +325,18 @@ namespace Tiad.Test
             Eq(Setting.Secret(module, onlyConfiguration), "", "module password never takes the configuration password");
             Eq(Setting.Secret(master, onlyProtection), "", "master secret never takes the protection password");
             Eq(Setting.Secret(DownloadChecks.For("StopModules", true), both), null, "a selection has no secret");
+            // The Full access user's password answers no download question
+            // (UserManagementDownload waits for S2b): no setting takes it.
+            var onlyFull = new Secrets { FullAccessPassword = "full-access-pw" };
+            foreach (string type in DownloadChecks.Answered)
+            {
+                Setting st = DownloadChecks.For(type, true);
+                if (st == null) continue;
+                string got = Setting.Secret(st, onlyFull);
+                True(got == null || got == "", type + " never takes the Full access password");
+            }
+            Eq(DownloadChecks.QuestionId("UserManagementDownload"), QuestionIds.Other, "user management is a question nothing answers yet");
+            Eq(DownloadChecks.For("UserManagementDownload", true), null, "user management is never answered yet");
         }
 
         // ProtectionPlan is ConfigProtection.Plan over every state and

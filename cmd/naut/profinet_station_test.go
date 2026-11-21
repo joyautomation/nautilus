@@ -139,8 +139,8 @@ func TestExpandedStationThroughTiad(t *testing.T) {
 	if st.CPU.ConfigurationProtection != tiad.ProtectPassword {
 		t.Fatalf("a CPU naming no configuration protection expands to %q, want password", st.CPU.ConfigurationProtection)
 	}
-	sec := tiad.Secrets{ConfigurationPassword: tiadtest.BenchConfigurationPassword}
-	if _, err := c.CreateProject(ctx, "bench", st, tiad.Secrets{}); tiad.Kind(err) != tiad.KindBadRequest ||
+	sec := tiad.Secrets{ConfigurationPassword: tiadtest.BenchConfigurationPassword, FullAccessPassword: tiadtest.BenchFullAccessPassword}
+	if _, err := c.CreateProject(ctx, "bench", st, tiad.Secrets{FullAccessPassword: tiadtest.BenchFullAccessPassword}); tiad.Kind(err) != tiad.KindBadRequest ||
 		!strings.Contains(err.Error(), "secrets.configurationPassword is empty") {
 		t.Fatalf("a protected station without its password: %v", err)
 	}
@@ -302,6 +302,19 @@ func TestStationCPUDefaults(t *testing.T) {
 		c.ConfigurationProtection = in
 		if got := stationCPU(c).ConfigurationProtection; got != want {
 			t.Errorf("configuration-protection %q expands to %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestStationCPUAccessControl: the manifest's empty access control is the
+// default, a Full access user (#789: access control on for stations naut
+// makes), and its kebab-case values become the wire's.
+func TestStationCPUAccessControl(t *testing.T) {
+	for in, want := range map[string]string{"": "fullAccessUser", "full-access-user": "fullAccessUser", "keep": "keep"} {
+		c := benchCPU()
+		c.AccessControl = in
+		if got := stationCPU(c).AccessControl; got != want {
+			t.Errorf("access-control %q expands to %q, want %q", in, got, want)
 		}
 	}
 }

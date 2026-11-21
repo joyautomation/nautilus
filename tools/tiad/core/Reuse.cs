@@ -48,13 +48,14 @@ namespace Tiad
     }
 
     // ProjectCpu is the project's CPU as the project holds it: the CPU
-    // device item's name (not its station's), order number, firmware and
-    // configuration protection (ConfigProtection's states), and the other
-    // devices in the project.
+    // device item's name (not its station's), order number, firmware,
+    // configuration protection (ConfigProtection's states) and access
+    // control (AccessRule's states), and the other devices in the project.
     public sealed class ProjectCpu
     {
         public string Name = "", Order = "", Firmware = "";
         public string Protection = ConfigProtection.Absent;
+        public string AccessControl = AccessRule.Absent;
         public List<KeptDevice> Others = new List<KeptDevice>();
 
         // ToJson is the part a station spec copies: what naut needs to

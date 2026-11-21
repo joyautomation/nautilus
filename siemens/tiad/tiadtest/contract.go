@@ -36,6 +36,9 @@ type Target interface {
 	// read report it, and with noIdentify a TIA side that cannot read it
 	// online (tiad.Openness today).
 	SetDevice(t testing.TB, d tiad.DeviceIdentity, noIdentify bool)
+	// SetAccess scripts the projects' password policy for local users and
+	// the access control an upload brings ("": Disabled).
+	SetAccess(t testing.TB, policy PasswordPolicy, uploadAccessControl string)
 }
 
 // Loaded is one download that loaded a CPU.
@@ -81,6 +84,9 @@ func (g goFake) SetQuestions(_ testing.TB, qs []tiad.Question) { g.f.SetQuestion
 func (g goFake) SetDevice(_ testing.TB, d tiad.DeviceIdentity, noIdentify bool) {
 	g.f.SetDevice(d, noIdentify)
 }
+func (g goFake) SetAccess(_ testing.TB, policy PasswordPolicy, uploadAccessControl string) {
+	g.f.SetAccess(policy, uploadAccessControl)
+}
 func (g goFake) Loaded(testing.TB) []Loaded {
 	var out []Loaded
 	for _, d := range g.f.Downloads() {
@@ -99,6 +105,7 @@ func Contract(t *testing.T, start Starter) {
 	contractDownload(t, start)
 	t.Run("Pins", func(t *testing.T) { contractPins(t, start) })
 	t.Run("Protection", func(t *testing.T) { contractProtection(t, start) })
+	t.Run("AccessControl", func(t *testing.T) { contractAccessControl(t, start) })
 	t.Run("Reuse", func(t *testing.T) { contractReuse(t, start) })
 	t.Run("ReuseAfterARefusedUpload", func(t *testing.T) { contractReuseAfterARefusedUpload(t, start) })
 }

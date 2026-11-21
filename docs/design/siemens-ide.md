@@ -305,10 +305,8 @@ The rules for applying a spec:
   protection of the CPU's confidential configuration data (#789, decision
   of 2026-11-19). A FW 3.1 CPU does not compile until it is set up.
   Setting it up is not enough on its own: a new FW 3.1 CPU also needs a
-  user with the runtime right Full access ("Users and roles"), which the
-  access-control change after this one adds. Until then a new station
-  still fails its hardware compile in TIA, and the fakes, which compile
-  it, are ahead of TIA.
+  user with the runtime right Full access ("Users and roles"), which
+  `cpu.accessControl` gives it (below).
   - `password`: protected, with `secrets.configurationPassword`. A CPU
     already protected is left as it is: TIA cannot check a password
     offline, and a download asks for it. The apply's `notes` say so,
@@ -341,6 +339,71 @@ The rules for applying a spec:
     `Unprotect` with a wrong password is refused by TIA ("the provided
     PLC Master secret is not matching", proven 2026-11-20), and the
     protection stays on.
+- **`cpu.accessControl` is required on the wire**: the CPU's PLC access
+  control, users and roles (#789, decision of 2026-11-20). A new FW 3.1
+  CPU has access control on (TIA's default, `EnabledWithAccessControl`)
+  and does not compile until a user holds the runtime right Full access
+  ("Users and roles: At least one user must have the following runtime
+  right: Full access").
+  - `fullAccessUser`: access control on, with one local user,
+    `nautilus`, in one custom role, `nautilus full access`, which holds
+    the CPU's runtime right Full access. The user's password is
+    `secrets.fullAccessPassword`, its own secret, never the protection or
+    configuration password.
+    - On a CPU the apply makes, tiad sets access control on (TIA's
+      default already is) and reads it back.
+    - On a CPU the apply keeps, access control must already be on: tiad
+      never turns it on for a CPU it did not make. Anything else
+      (`Disabled`, as the S2a upload found the bench CPU, the legacy
+      access levels, a CPU without the setting) refuses before any write,
+      naming `keep`.
+    - The user and the role are found or made, by name. A user the
+      project held is never made again, and its password is left as found:
+      TIA refuses to set a password the user has had (its current one
+      included, as many as the project's policy blocks for reuse, 5 by
+      default), and cannot check one offline. The apply's `notes` say so.
+      A station naut makes is made again on every deploy
+      (`POST /v1/projects`), so it gets the user anew with the secret.
+    - After the writes tiad reads back that the user holds Full access
+      through the role on this CPU, and refuses otherwise.
+    - The password meets TIA's rules (below) before any TIA call, and the
+      project's own password policy for local users before any write
+      (TIA's default: 10 characters, a digit, upper and lower case; a
+      project may ask more). The refusal names every rule and never the
+      password.
+  - `keep`: tiad changes nothing, for an adopted station. Unlike
+    `configurationProtection`, a new CPU takes `keep` too; it then fails
+    its hardware compile, which names the missing Full access user.
+  - Users and roles belong to the project, not to the CPU: they outlive
+    any device delete (an apply that makes the CPU, an upload). An upload
+    removes, before it uploads, exactly the user and role that applies on
+    the same session made, and reports them in `removedAccess`, so an
+    adopted project holds no user tiad made for the station a create
+    started from. A user or role the project held before (one an earlier
+    deploy made on purpose) is never removed.
+  - A plain local user does not protect the project: it still opens
+    without a login (only a project administrator does that, which tiad
+    never makes).
+  - In `nautilus.yaml` the field is `access-control`: `full-access-user`
+    (the default, left out) or `keep`.
+  - A download raises TIA's `UserManagementDownload` (keep the CPU's
+    users, update them but keep its passwords, or load the project's).
+    tiad answers it only once S2b proves it against the CPU; until then
+    it is an `other` question and any download that meets it is refused,
+    so a new station's first live download waits for S2b.
+  - Proven offline on the TIA machine (2026-11-20, through the agent):
+    a new station with `password` and `fullAccessUser` compiles with 0
+    errors, applying it again finds the user and changes nothing, and the
+    saved project reopens without a login; a new CPU with `keep` fails
+    its compile on Full access; the S2a copy (`Disabled`) refuses
+    `fullAccessUser` naming `keep`, and `keep` compiles; the user and role
+    survive a CPU deleted in TIA, and an apply that makes the CPU anew
+    finds them and grants Full access on it (0 errors); an upload's
+    removal runs on TIA. TIA serves the runtime rights from the station,
+    and Full access is the right `ProtectionLevelFullAccess`. Unproven:
+    whether TIA refuses to make a user again, under a removed user's name,
+    with a password that user had (an upload, then an apply; it needs a
+    live upload).
 - **Which CPU an apply uses** (#789). The agent reads the project's CPU
   before it writes anything, and decides:
   - The project holds no CPU: the apply removes every device and makes
@@ -391,7 +454,7 @@ The rules for applying a spec:
     the hardware compiles with 0 errors; a created project's second apply
     of the same spec changes nothing.
 - **A password that may be set meets TIA's rules before any TIA call**
-  (`password`): 10 to 120 characters (UTF-16 code units), at least one
+  (`configurationProtection: password`, `accessControl: fullAccessUser`): 10 to 120 characters (UTF-16 code units), at least one
   digit, one upper-case and one lower-case letter (ASCII classes, which
   can only be stricter than TIA). The refusal names every rule broken and
   never the password. A password that only unlocks (`none`, a download)
@@ -445,19 +508,21 @@ The client checks each path and the agent checks again.
 | `POST /v1/sessions` | `{path}` (a project or archive in the work dir) → `{session, project}` |
 | `GET /v1/sessions` | → `{sessions: [{session, project, idleSeconds}]}` |
 | `DELETE /v1/sessions/{id}` | → `{}`. Closes without saving |
-| `PUT /v1/sessions/{id}/station` | `{station, secrets}` → `{changes: [string], notes?: [string], keptDevices?: [{name, profinetName, address}]}` (P2, P5). Keeps the project's CPU or makes one (§3.3, "Which CPU an apply uses"). `notes` is what the caller should know besides the changes (a protected CPU kept its password, devices kept as found) |
+| `PUT /v1/sessions/{id}/station` | `{station, secrets}` → `{changes: [string], notes?: [string], keptDevices?: [{name, profinetName, address}]}` (P2, P5). Keeps the project's CPU or makes one (§3.3, "Which CPU an apply uses"). `notes` is what the caller should know besides the changes (a protected CPU kept its password, the Full access user made or found, devices kept as found) |
 | `POST /v1/sessions/{id}/software` | `{group, sources, tagTables, prune}` → `{results: [{path, ok, messages}], blocks: [{name, kind}]}`. Generates blocks into the group named `group`. With `prune`, blocks in that group that no source produced are deleted |
 | `POST /v1/sessions/{id}/compile` | `{hardware, software}` → `{result: "success" or "warning" or "error", errors, warnings, messages: [{object, severity, text}]}` |
 | `POST /v1/sessions/{id}/download` | §3.5 (P3) |
 | `POST /v1/sessions/{id}/compare` | → `{equal, differences: [{object, state}]}`. An online compare |
 | `POST /v1/sessions/{id}/export` | `{dir, blocks: "scl" or "xml" or "", tagTables, hardware, gsdml}` → `{files: [path]}` (P6 for `gsdml`) |
-| `POST /v1/sessions/{id}/upload` | `{trustUnverifiedCertificate?}` → `{trustedBlindly, device, pin, cpu: {name, order, firmware}}`. CPU into the session's project, for bringing a legacy CPU's program into nautilus (S2a: works). Pins the CPU's identity on first use, or checks it (§3.8). `cpu` is what a spec must name to keep the uploaded CPU |
+| `POST /v1/sessions/{id}/upload` | `{trustUnverifiedCertificate?}` → `{trustedBlindly, device, pin, cpu: {name, order, firmware}, removedAccess?: [string]}`. CPU into the session's project, for bringing a legacy CPU's program into nautilus (S2a: works). Pins the CPU's identity on first use, or checks it (§3.8). `cpu` is what a spec must name to keep the uploaded CPU. `removedAccess` names the user and role this session had made, removed first (§3.3, `cpu.accessControl`) |
 | `POST /v1/sessions/{id}/save` | `{archive?}` → `{path}`. Refused (`unclean_session`) after an apply or upload failed part-way |
 | `GET /v1/pins`, `POST /v1/pins/{address}` | The device pins (§3.8). An upload pins the CPU on first use and must match after; compare and download check the pin first |
 
-`secrets` is `{"webUsers": {"naut": "<password>"}, "protection": "<password>", "configurationPassword": "<password>"}`.
+`secrets` is `{"webUsers": {"naut": "<password>"}, "protection": "<password>", "configurationPassword": "<password>", "fullAccessPassword": "<password>"}`.
 Each password answers only its own question: the protection password
-never answers `configuration-password`, and the other way round.
+never answers `configuration-password`, and the other way round. The Full
+access user's password is set only on the user an apply makes, and
+answers no download question.
 tiad never logs it and never writes it to the work dir. Run tiad on
 loopback or across the tailnet, because the requests are plain HTTP.
 
@@ -549,7 +614,8 @@ behaviour. So, until then:
   - `kept-devices`: the agent's own question, never TIA's, asked when the
     last apply kept devices as found ("Which CPU an apply uses"). `objects`
     names them.
-  - `other` (the check's own text)
+  - `other` (the check's own text). TIA's `UserManagementDownload` is
+    one until S2b (§3.3, `cpu.accessControl`).
 - **A real download** answers each question only from `decisions`.
   - An unanswered question fails the call with `decision_required`, and
     nothing is loaded.

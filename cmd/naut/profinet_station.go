@@ -27,15 +27,24 @@ import (
 // default the manifest leaves out made explicit: the wire form has none.
 // A CPU that names no configuration protection is protected
 // (station.DefaultConfigurationProtection, #789: new stations are
-// protected by default); an adopted station says keep.
+// protected by default), and one that names no access control gets a
+// Full access user (station.DefaultAccessControl); an adopted station
+// says keep for both. The manifest was validated, so its access-control
+// is one station.WireAccessControl takes.
 func stationCPU(c station.CPU) tiad.CPU {
 	protection := c.ConfigurationProtection
 	if protection == "" {
 		protection = station.DefaultConfigurationProtection
 	}
+	access, err := station.WireAccessControl(c.AccessControl)
+	if err != nil {
+		// Unreachable for a validated manifest; an empty value would fail
+		// tiad's own check rather than pick a default here.
+		access = ""
+	}
 	return tiad.CPU{Name: c.Name, Order: c.Order, Firmware: c.Firmware, Address: c.Address,
 		SubnetMask: c.SubnetMask, Router: c.Router, ProfinetName: c.ProfinetName,
-		ConfigurationProtection: protection}
+		ConfigurationProtection: protection, AccessControl: access}
 }
 
 // gsdFile is a GSDML file a deploy puts in tiad's work dir and installs

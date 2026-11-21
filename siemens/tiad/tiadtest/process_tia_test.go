@@ -248,7 +248,8 @@ func TestAgentKeepsSecretsOut(t *testing.T) {
 	p := tiadtest.StartProcess(t, fakeBin(t), tiadtest.Config{})
 	c := p.Client()
 	installBench(t, c)
-	sec := tiad.Secrets{WebUsers: map[string]string{"naut": "web-password-must-not-leak"}, Protection: "protection-must-not-leak"}
+	sec := tiad.Secrets{WebUsers: map[string]string{"naut": "web-password-must-not-leak"}, Protection: "protection-must-not-leak",
+		FullAccessPassword: "Full-access-must-not-leak-1"}
 	s, err := c.CreateProject(ctx, "p", tiadtest.BenchStation(), sec)
 	if err != nil {
 		t.Fatal(err)
@@ -772,7 +773,10 @@ func TestAgentForgetsACompileWhenAChangeFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	notDownloadable("after an upload", "no station spec")
-	if _, err := s.ApplyStation(ctx, tiadtest.BenchStation(), tiadtest.BenchSecrets); err != nil {
+	// The uploaded CPU has no access control (the S2a upload): keep it.
+	uploaded := tiadtest.BenchStation()
+	uploaded.CPU.AccessControl = tiad.AccessKeep
+	if _, err := s.ApplyStation(ctx, uploaded, tiadtest.BenchSecrets); err != nil {
 		t.Fatal(err)
 	}
 	notDownloadable("after an upload and a spec", "compile")
@@ -837,6 +841,7 @@ func TestAgentTrustsACertificateOnlyOnTheUploadsOptIn(t *testing.T) {
 	st := tiadtest.BenchStation()
 	st.Profinet = nil
 	st.CPU.ConfigurationProtection = tiad.ProtectKeep
+	st.CPU.AccessControl = tiad.AccessKeep
 	if _, err := s.ApplyStation(ctx, st, tiadtest.BenchSecrets); err != nil {
 		t.Fatal(err)
 	}

@@ -213,6 +213,14 @@ namespace Tiad
             }
         }
 
+        // CheckPolicy refuses, before any write, a Full access password the
+        // project's own password policy for local users would refuse.
+        static void CheckPolicy(ITia t, object project, Secrets sec)
+        {
+            string e = t.ReadPolicy(project).Check(sec.FullAccessPassword);
+            if (e != null) throw TiadException.BadRequest("secrets.fullAccessPassword {0}", e);
+        }
+
         // CheckStation applies the agent-side station rules: the spec's
         // own, an installed GSDML for every device, a password for every
         // web user.
@@ -284,7 +292,8 @@ namespace Tiad
                     object h = t.CreateProject(full, name);
                     try
                     {
-                        t.ApplyStation(h, st, CpuReuse.Create, sec, new List<string>());
+                        if (st.Cpu.AccessControl == StationRules.AccessFullAccessUser) CheckPolicy(t, h, sec);
+                        t.ApplyStation(h, st, CpuReuse.Create, sec, new List<string>(), s.Made);
                     }
                     catch
                     {
@@ -389,8 +398,10 @@ namespace Tiad
                     {
                         CpuReuse.Collides(pc, st);
                         ConfigProtection.Plan(pc.Protection, st.Cpu.ConfigurationProtection, sec.ConfigurationPassword != "");
+                        AccessRule.Plan(pc.AccessControl, st.Cpu.AccessControl, sec.FullAccessPassword != "");
                         kept = pc.Others;
                     }
+                    if (st.Cpu.AccessControl == StationRules.AccessFullAccessUser) CheckPolicy(t, s.Handle, sec);
                     string cannot = t.CannotApply(st);
                     if (cannot != null) throw new TiaException(cannot);
                     bool was = s.Compiled;
@@ -398,7 +409,7 @@ namespace Tiad
                     s.Compiled = false;
                     s.Station = null;
                     s.Unclean = true;
-                    t.ApplyStation(s.Handle, st, decision, sec, notes);
+                    t.ApplyStation(s.Handle, st, decision, sec, notes, s.Made);
                     s.Unclean = false;
                     string kn = CpuReuse.KeptNote(kept);
                     if (kn != null) notes.Add(kn);

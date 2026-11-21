@@ -12,7 +12,8 @@ func intp(i int) *int { return &i }
 func benchStation() Station {
 	return Station{
 		CPU: CPU{Name: "PLC_1", Order: "6ES7 510-1DK03-0AB0", Firmware: "V3.1",
-			Address: "192.0.2.10", SubnetMask: "255.255.255.0", ProfinetName: "plc-1", ConfigurationProtection: ProtectNone},
+			Address: "192.0.2.10", SubnetMask: "255.255.255.0", ProfinetName: "plc-1", ConfigurationProtection: ProtectNone,
+			AccessControl: AccessFullAccessUser},
 		WebServer: &WebServer{Enabled: true, Users: []WebUser{{Name: "naut", Rights: []string{"read", "write", "mode"}}}},
 		Modules:   []Module{{Slot: 2, Order: "6ES7 131-6BH01-0BA0", InputStart: intp(0)}},
 		Profinet: &Profinet{UpdateTime: "16ms", Devices: []Device{{

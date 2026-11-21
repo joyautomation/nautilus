@@ -71,8 +71,13 @@ type Script struct {
 	Device *tiad.DeviceIdentity `json:"device,omitempty"`
 	// NoIdentify makes the fake's TIA side one that cannot read a CPU's
 	// identity online, as tiad.Openness cannot yet.
-	NoIdentify bool           `json:"noIdentify,omitempty"`
-	Delays     []ScriptedCall `json:"delays,omitempty"`
+	NoIdentify bool `json:"noIdentify,omitempty"`
+	// PasswordPolicy is the projects' password policy for local users
+	// (nil: TIA's default), UploadAccessControl the access control an
+	// upload brings ("": Disabled, as the S2a upload found the bench CPU).
+	PasswordPolicy      *PasswordPolicy `json:"passwordPolicy,omitempty"`
+	UploadAccessControl string          `json:"uploadAccessControl,omitempty"`
+	Delays              []ScriptedCall  `json:"delays,omitempty"`
 	Failures   []ScriptedCall `json:"failures,omitempty"`
 }
 
@@ -262,6 +267,18 @@ func (p *Process) SetDevice(t testing.TB, d tiad.DeviceIdentity, noIdentify bool
 	p.mu.Lock()
 	p.script.Device = &d
 	p.script.NoIdentify = noIdentify
+	s := p.script
+	p.mu.Unlock()
+	p.SetScript(t, s)
+}
+
+// SetAccess scripts the projects' password policy for local users and the
+// access control an upload brings.
+func (p *Process) SetAccess(t testing.TB, policy PasswordPolicy, uploadAccessControl string) {
+	t.Helper()
+	p.mu.Lock()
+	p.script.PasswordPolicy = &policy
+	p.script.UploadAccessControl = uploadAccessControl
 	s := p.script
 	p.mu.Unlock()
 	p.SetScript(t, s)

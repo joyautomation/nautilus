@@ -849,6 +849,11 @@ type UploadResult struct {
 	// why (a project with two CPUs, for one); the next apply refuses too.
 	CPU      ProjectCPU `json:"cpu"`
 	CPUError string     `json:"cpuError,omitempty"`
+	// RemovedAccess names what applies on this session had made in the
+	// project's users and roles (`user "nautilus"`, `role "nautilus full
+	// access"`), which the upload removed with the station they belonged
+	// to. A user or role the project held before is never removed.
+	RemovedAccess []string `json:"removedAccess,omitempty"`
 }
 
 // UploadWith is Upload with options.

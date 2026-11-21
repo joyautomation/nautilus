@@ -76,6 +76,32 @@ func TestConfigurationProtectionProblems(t *testing.T) {
 	}
 }
 
+// TestAccessControlProblems: empty is the default, the manifest's two
+// values pass, and anything else, the wire's spelling included, is a
+// problem at its YAML path.
+func TestAccessControlProblems(t *testing.T) {
+	cpu := CPU{Name: "PLC_1", Order: "6ES7 510-1DK03-0AB0", Firmware: "V3.1",
+		Address: "192.0.2.10", SubnetMask: "255.255.255.0", ProfinetName: "plc-1"}
+	for _, ok := range []string{"", "full-access-user", "keep"} {
+		c := cpu
+		c.AccessControl = ok
+		if ps := (Station{CPU: c}).Problems(); len(ps) != 0 {
+			t.Errorf("%q: %v", ok, ps)
+		}
+	}
+	for _, bad := range []string{"off", "fullAccessUser", "disabled"} {
+		c := cpu
+		c.AccessControl = bad
+		ps := (Station{CPU: c}).Problems()
+		if want := `cpu.access-control: "` + bad + `" is not one of full-access-user, keep`; len(ps) != 1 || ps[0].String() != want {
+			t.Errorf("%s: %v, want %s", bad, ps, want)
+		}
+	}
+	if err := CheckAccessControl("full-access-user"); err == nil {
+		t.Error("the wire check takes the manifest's spelling")
+	}
+}
+
 // TestCheckTiaPassword: the rules TIA words, every broken one named, and
 // never the password itself.
 func TestCheckTiaPassword(t *testing.T) {

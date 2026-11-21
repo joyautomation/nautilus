@@ -153,9 +153,18 @@ namespace Tiad
         // decided (CpuReuse.Decide): Create removes every device and makes
         // the CPU anew; Reuse keeps the project's CPU and the devices
         // besides it, as found. Either way it then applies next's CPU
-        // settings and cpu.configurationProtection (ProtectionSteps.Run).
-        // notes gets what the caller should know besides the changes.
-        void ApplyStation(object project, Station next, string decision, Secrets secrets, List<string> notes);
+        // settings, cpu.configurationProtection (ProtectionSteps.Run) and
+        // cpu.accessControl (AccessSteps.Run). notes gets what the caller
+        // should know besides the changes; made collects what it made in
+        // the project's users and roles, as soon as it is made.
+        void ApplyStation(object project, Station next, string decision, Secrets secrets, List<string> notes, AccessMade made);
+
+        // ReadPolicy is the project's password policy for local users.
+        PasswordPolicy ReadPolicy(object project);
+
+        // RemoveAccess removes from the project's users and roles what made
+        // names (AccessSteps' user and role), and nothing else.
+        void RemoveAccess(object project, AccessMade made);
 
         // CannotApply is why this side cannot apply next at all yet (a
         // part of the spec it cannot configure), or null. The agent asks

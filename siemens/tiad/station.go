@@ -31,6 +31,10 @@ type CPU struct {
 	// (siemens-ide.md §3.3). Its password travels in
 	// Secrets.ConfigurationPassword.
 	ConfigurationProtection string `json:"configurationProtection"`
+	// AccessControl is required: "fullAccessUser" or "keep"
+	// (siemens-ide.md §3.3). The user's password travels in
+	// Secrets.FullAccessPassword.
+	AccessControl string `json:"accessControl"`
 }
 
 // The configuration protection values.
@@ -38,6 +42,12 @@ const (
 	ProtectPassword = station.ProtectPassword
 	ProtectNone     = station.ProtectNone
 	ProtectKeep     = station.ProtectKeep
+)
+
+// The access control values.
+const (
+	AccessFullAccessUser = station.AccessFullAccessUser
+	AccessKeep           = station.AccessKeep
 )
 
 // WebServer turns on the CPU's web server, which carries the Web API the
@@ -100,24 +110,40 @@ type Secrets struct {
 	// data (cpu.configurationProtection). It is its own secret: never the
 	// protection password, never a web user's.
 	ConfigurationPassword string `json:"configurationPassword,omitempty"`
+	// FullAccessPassword is the password of the CPU's user with the
+	// runtime right Full access (cpu.accessControl). It is its own secret:
+	// never the protection or configuration password, never a web user's.
+	FullAccessPassword string `json:"fullAccessPassword,omitempty"`
 }
 
 // CheckFor applies what st needs from the secrets before TIA hears of
 // them: when st protects the configuration, a configuration password that
-// meets TIA's password rules, since it may be set. A password that only
-// unlocks (none, or a download) is never checked: it was set under
-// whatever rules TIA had then. The error never echoes a password.
+// meets TIA's password rules, since it may be set; when st has a Full
+// access user, that user's password, by the same rules (TIA's default
+// policy for local users; tiad checks the project's own before any
+// write). A password that only unlocks (none, or a download) is never
+// checked: it was set under whatever rules TIA had then. The error never
+// echoes a password.
 func (s Secrets) CheckFor(st Station) error {
-	if st.CPU.ConfigurationProtection != ProtectPassword {
+	var errs []string
+	if st.CPU.ConfigurationProtection == ProtectPassword {
+		if s.ConfigurationPassword == "" {
+			errs = append(errs, "cpu.configurationProtection is password, and secrets.configurationPassword is empty (it comes from the secret store, never the spec)")
+		} else if err := checkTiaPassword(s.ConfigurationPassword); err != nil {
+			errs = append(errs, fmt.Sprintf("secrets.configurationPassword %v", err))
+		}
+	}
+	if st.CPU.AccessControl == AccessFullAccessUser {
+		if s.FullAccessPassword == "" {
+			errs = append(errs, "cpu.accessControl is fullAccessUser, and secrets.fullAccessPassword is empty (it comes from the secret store, never the spec)")
+		} else if err := checkTiaPassword(s.FullAccessPassword); err != nil {
+			errs = append(errs, fmt.Sprintf("secrets.fullAccessPassword %v", err))
+		}
+	}
+	if len(errs) == 0 {
 		return nil
 	}
-	if s.ConfigurationPassword == "" {
-		return fmt.Errorf("cpu.configurationProtection is password, and secrets.configurationPassword is empty (it comes from the secret store, never the spec)")
-	}
-	if err := checkTiaPassword(s.ConfigurationPassword); err != nil {
-		return fmt.Errorf("secrets.configurationPassword %v", err)
-	}
-	return nil
+	return fmt.Errorf("%s", strings.Join(errs, "; "))
 }
 
 // Validate checks the rules tiad enforces before touching TIA, so a bad
@@ -153,6 +179,11 @@ func (s Station) Validate() error {
 		bad("cpu.configurationProtection is empty (one of password, none, keep)")
 	} else if err := checkConfigurationProtection(c.ConfigurationProtection); err != nil {
 		bad("cpu.configurationProtection: %v", err)
+	}
+	if c.AccessControl == "" {
+		bad("cpu.accessControl is empty (one of fullAccessUser, keep)")
+	} else if err := checkAccessControl(c.AccessControl); err != nil {
+		bad("cpu.accessControl: %v", err)
 	}
 
 	if w := s.WebServer; w != nil {
@@ -266,6 +297,7 @@ var (
 	checkStationName = station.CheckStationName
 
 	checkConfigurationProtection = station.CheckConfigurationProtection
+	checkAccessControl           = station.CheckAccessControl
 	checkTiaPassword             = station.CheckTiaPassword
 )
 

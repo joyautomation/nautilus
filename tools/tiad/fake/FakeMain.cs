@@ -251,6 +251,37 @@ namespace Tiad.Fake
         string cannotApply = "";
         DeviceIdentity device = BenchDevice();
         bool noIdentify;
+        PasswordPolicy policy = new PasswordPolicy();
+        string uploadAccess = UploadedAccessControl;
+
+        // UploadedAccessControl is the bench CPU's access control as the
+        // S2a upload found it, unless a script says otherwise.
+        public const string UploadedAccessControl = "Disabled";
+
+        // Policy is the projects' password policy for local users: TIA's
+        // default unless a script says otherwise.
+        public PasswordPolicy Policy
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return new PasswordPolicy { MinLength = policy.MinLength, MinDigits = policy.MinDigits, MinSpecial = policy.MinSpecial, UpperAndLower = policy.UpperAndLower };
+                }
+            }
+        }
+
+        // UploadAccessControl is the access control an upload brings.
+        public string UploadAccessControl
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return uploadAccess;
+                }
+            }
+        }
 
         // BenchDevice is the fake CPU's identity unless a script says
         // otherwise: the Go fake's tiad.BenchDevice.
@@ -469,6 +500,17 @@ namespace Tiad.Fake
             var dr = r.Child("device");
             DeviceIdentity dev = dr == null ? BenchDevice() : DeviceIdentity.Read(dr);
             bool noId = r.Bool("noIdentify");
+            var pol = new PasswordPolicy();
+            var pr = r.Child("passwordPolicy");
+            if (pr != null)
+            {
+                pol.MinLength = pr.Int("minLength");
+                pol.MinDigits = pr.Int("minDigits");
+                pol.MinSpecial = pr.Int("minSpecial");
+                pol.UpperAndLower = pr.Bool("upperAndLower");
+            }
+            string upAccess = r.Str("uploadAccessControl");
+            if (upAccess == "") upAccess = UploadedAccessControl;
             var qs = new List<Question>();
             foreach (var x in r.Children("questions"))
             {
@@ -490,6 +532,8 @@ namespace Tiad.Fake
                 cannotApply = cannot;
                 device = dev;
                 noIdentify = noId;
+                policy = pol;
+                uploadAccess = upAccess;
             }
             return new Obj();
         }
@@ -522,12 +566,124 @@ namespace Tiad.Fake
         // Others the devices besides its station.
         public ProjectCpu Cpu;
         public List<KeptDevice> Others = new List<KeptDevice>();
+        // AccessControl is the CPU's PLC access control (AccessRule's
+        // states): a new CPU is EnabledWithAccessControl, as TIA makes one;
+        // an upload brings the bench CPU's Disabled. Users and Roles are
+        // the project's, not the CPU's: they outlive any device delete. A
+        // role maps to whether it holds Full access on the project's CPU:
+        // replacing the CPU (a create, an upload) clears every grant, as
+        // deleting the device drops its rights.
+        public string AccessControl = AccessRule.Absent;
+        public Dictionary<string, FakeUser> Users = new Dictionary<string, FakeUser>(StringComparer.Ordinal);
+        public Dictionary<string, bool> Roles = new Dictionary<string, bool>(StringComparer.Ordinal);
 
         // CompileError is what a hardware compile of this project fails
         // with, as TIA words it, or null.
         public string CompileError()
         {
-            return Protection == ConfigProtection.WithoutPassword ? FakeTia.NotConfigured : null;
+            if (Protection == ConfigProtection.WithoutPassword) return FakeTia.NotConfigured;
+            if (AccessControl == AccessRule.Enabled && !AnyFullAccess()) return FakeTia.NoFullAccess;
+            return null;
+        }
+
+        bool AnyFullAccess()
+        {
+            foreach (var u in Users.Values)
+            {
+                foreach (string r in u.Roles)
+                {
+                    bool on;
+                    if (Roles.TryGetValue(r, out on) && on) return true;
+                }
+            }
+            return false;
+        }
+
+        // DropGrants clears every role's Full access: its CPU is gone.
+        public void DropGrants()
+        {
+            foreach (string r in new List<string>(Roles.Keys)) Roles[r] = false;
+        }
+
+        // CopyAccess copies the access control, users and roles of from.
+        public void CopyAccess(FakeProject from)
+        {
+            AccessControl = from.AccessControl;
+            Users = new Dictionary<string, FakeUser>(StringComparer.Ordinal);
+            foreach (var kv in from.Users) Users[kv.Key] = new FakeUser { Password = kv.Value.Password, Roles = new HashSet<string>(kv.Value.Roles) };
+            Roles = new Dictionary<string, bool>(from.Roles, StringComparer.Ordinal);
+        }
+    }
+
+    sealed class FakeUser
+    {
+        public string Password = "";
+        public HashSet<string> Roles = new HashSet<string>(StringComparer.Ordinal);
+    }
+
+    // FakeAccess behaves like TIA's access control and users and roles as
+    // the TIA machine showed them: a new CPU has access control on, users
+    // are the project's, and a user's password must meet the project's
+    // password policy.
+    sealed class FakeAccess : IAccessControl
+    {
+        readonly FakeProject p;
+        readonly PasswordPolicy policy;
+
+        public FakeAccess(FakeProject p, PasswordPolicy policy)
+        {
+            this.p = p;
+            this.policy = policy;
+        }
+
+        public string State()
+        {
+            return p.AccessControl;
+        }
+
+        public void Enable()
+        {
+            if (p.AccessControl == AccessRule.Absent) throw new TiaException("The CPU has no access control setting.");
+            p.AccessControl = AccessRule.Enabled;
+        }
+
+        public bool EnsureRole(string role)
+        {
+            if (p.Roles.ContainsKey(role)) return false;
+            p.Roles[role] = false;
+            return true;
+        }
+
+        public void GrantFullAccess(string role)
+        {
+            p.Roles[role] = true;
+        }
+
+        public bool HasUser(string user)
+        {
+            return p.Users.ContainsKey(user);
+        }
+
+        public void MakeUser(string user, string password)
+        {
+            if (p.Users.ContainsKey(user)) throw new TiaException("A user with the name " + user + " already exists.");
+            if (policy.Check(password) != null) throw new TiaException("The password does not meet the password policy.");
+            p.Users[user] = new FakeUser { Password = password };
+        }
+
+        public void AddRole(string user, string role)
+        {
+            p.Users[user].Roles.Add(role);
+        }
+
+        public string Check(string user, string role)
+        {
+            FakeUser u;
+            bool on;
+            if (!p.Users.TryGetValue(user, out u)) return "the user " + Json.Quote(user) + " is not in the project";
+            if (!u.Roles.Contains(role)) return "the user " + Json.Quote(user) + " lacks the role " + Json.Quote(role);
+            if (!p.Roles.TryGetValue(role, out on) || !on) return "the role " + Json.Quote(role) + " lacks Full access on the CPU";
+            return null;
         }
     }
 
@@ -567,6 +723,8 @@ namespace Tiad.Fake
             p.Cpu = null;
             p.Protection = ConfigProtection.Absent;
             p.ProtectedWith = "";
+            p.AccessControl = AccessRule.Absent;
+            p.DropGrants();
         }
     }
 
@@ -630,6 +788,7 @@ namespace Tiad.Fake
                 p.Others = new List<KeptDevice>(sp.Others);
                 p.Protection = sp.Protection;
                 p.ProtectedWith = sp.ProtectedWith;
+                p.CopyAccess(sp);
             }
             return p;
         }
@@ -640,12 +799,13 @@ namespace Tiad.Fake
         }
 
         public const string NotConfigured = "Password for confidential PLC configuration data is not configured in the PLC.";
+        public const string NoFullAccess = "Users and roles: At least one user must have the following runtime right: Full access";
 
         // ApplyStation does what tiad.Openness does: it makes the CPU anew,
         // as TIA makes one, or keeps the project's, as the agent decided;
         // then it applies cpu.configurationProtection through the agent's
         // ProtectionSteps over a configurator that behaves like TIA's.
-        public void ApplyStation(object project, Station next, string decision, Secrets secrets, List<string> notes)
+        public void ApplyStation(object project, Station next, string decision, Secrets secrets, List<string> notes, AccessMade made)
         {
             script.Enter("ApplyStation");
             var p = (FakeProject)project;
@@ -656,6 +816,8 @@ namespace Tiad.Fake
                 p.Others = new List<KeptDevice>();
                 p.Protection = ConfigProtection.WithoutPassword;
                 p.ProtectedWith = "";
+                p.AccessControl = AccessRule.Enabled;
+                p.DropGrants();
             }
             else if (p.Cpu == null)
             {
@@ -666,8 +828,27 @@ namespace Tiad.Fake
             p.Changed = true;
             p.Station = null;
             ProtectionSteps.Run(new FakeMasterSecret(p), next.Cpu.ConfigurationProtection, secrets.ConfigurationPassword, notes);
+            AccessSteps.Run(new FakeAccess(p, script.Policy), next.Cpu.AccessControl, secrets.FullAccessPassword, decision == CpuReuse.Create, made, notes);
             p.Station = next;
             p.Changed = was || CpuReuse.Changes(decision, prev, next).Count > 0;
+        }
+
+        public PasswordPolicy ReadPolicy(object project)
+        {
+            script.Enter("ReadPolicy");
+            return script.Policy;
+        }
+
+        public void RemoveAccess(object project, AccessMade made)
+        {
+            script.Enter("RemoveAccess");
+            var p = (FakeProject)project;
+            if (made.User) p.Users.Remove(AccessSteps.UserName);
+            if (made.Role)
+            {
+                p.Roles.Remove(AccessSteps.RoleName);
+                foreach (var u in p.Users.Values) u.Roles.Remove(AccessSteps.RoleName);
+            }
         }
 
         public string CannotApply(Station next)
@@ -827,6 +1008,8 @@ namespace Tiad.Fake
             // IO device, which the CPU's station does not hold.
             up.Protection = ConfigProtection.None;
             up.ProtectedWith = "";
+            up.AccessControl = script.UploadAccessControl;
+            up.DropGrants();
             DeviceIdentity d = script.Device;
             up.Cpu = new ProjectCpu { Name = UploadedCpuName, Order = d.Order, Firmware = d.Firmware };
             up.Others = new List<KeptDevice> { UploadedIoDevice() };
@@ -857,7 +1040,7 @@ namespace Tiad.Fake
             return new ProjectCpu
             {
                 Name = p.Cpu.Name, Order = p.Cpu.Order, Firmware = p.Cpu.Firmware,
-                Protection = p.Protection, Others = new List<KeptDevice>(p.Others),
+                Protection = p.Protection, AccessControl = p.AccessControl, Others = new List<KeptDevice>(p.Others),
             };
         }
 
@@ -880,6 +1063,7 @@ namespace Tiad.Fake
                 Protection = p.Protection,
                 ProtectedWith = p.ProtectedWith,
             };
+            saved[f].CopyAccess(p);
             return f;
         }
 
