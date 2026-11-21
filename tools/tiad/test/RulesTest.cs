@@ -614,54 +614,54 @@ namespace Tiad.Test
                 return project;
             };
             const string addr = "192.0.2.10";
-            UserManagementRule.Gate g = UserManagementRule.Check(ResetRequest(), true, addr, read);
+            UserManagementRule.Gate g = UserManagementRule.Check(ResetRequest(), true, addr, true, read);
             True(g.Allowed, "the baseline is let: " + g.Why);
             Eq(g.Route, UserManagementRule.RouteUpload, "by the upload route");
             Eq(reads, 1, "the project is read once");
 
             DownloadRequest r = ResetRequest();
             r.Decisions.UserManagementResetToProject = null;
-            g = UserManagementRule.Check(r, true, addr, read);
+            g = UserManagementRule.Check(r, true, addr, true, read);
             True(!g.Allowed, "not asked");
             r.Decisions.UserManagementResetToProject = false;
-            True(!UserManagementRule.Check(r, true, addr, read).Allowed, "asked no");
+            True(!UserManagementRule.Check(r, true, addr, true, read).Allowed, "asked no");
 
             reads = 0;
             r = ResetRequest();
             r.Hardware = false;
-            g = UserManagementRule.Check(r, true, addr, read);
+            g = UserManagementRule.Check(r, true, addr, true, read);
             True(!g.Allowed, "a software-only download");
             Contains(g.Why, "loads no hardware", "names why");
             Contains(g.Why, "an upload from this CPU in this session or attestation.cpuAccessControl \"disabled\"", "and both routes");
 
-            g = UserManagementRule.Check(ResetRequest(), false, addr, read);
+            g = UserManagementRule.Check(ResetRequest(), false, addr, true, read);
             True(!g.Allowed, "access control not kept");
             Contains(g.Why, "does not keep access control", "names why");
             Eq(reads, 0, "the cheap conjuncts refuse before the project is read");
 
             r = ResetRequest();
             r.Attestation.CpuAccessControl = Attestation.CpuAccessEnabled;
-            g = UserManagementRule.Check(r, true, addr, read);
+            g = UserManagementRule.Check(r, true, addr, true, read);
             True(!g.Allowed, "an attestation that says enabled refuses, the upload route too");
             Contains(g.Why, "never resets a CPU whose access control is on", "names why");
 
             foreach (string st in new[] { AccessRule.Enabled, AccessRule.Absent, "disabled", "Disabled ", "EnabledWithAccessControlViaAccessLevel", null })
             {
                 project = st;
-                g = UserManagementRule.Check(ResetRequest(), true, addr, read);
+                g = UserManagementRule.Check(ResetRequest(), true, addr, true, read);
                 True(!g.Allowed, "project access control " + Show(st) + " refuses");
                 Contains(g.Why, "not Disabled", "names why for " + Show(st));
             }
             project = "Disabled";
-            g = UserManagementRule.Check(ResetRequest(), true, addr, null);
+            g = UserManagementRule.Check(ResetRequest(), true, addr, true, null);
             True(!g.Allowed, "no reader refuses");
-            g = UserManagementRule.Check(ResetRequest(), true, addr, delegate { throw new TiadException(500, Kinds.OperationFailed, "TIA said no"); });
+            g = UserManagementRule.Check(ResetRequest(), true, addr, true, delegate { throw new TiadException(500, Kinds.OperationFailed, "TIA said no"); });
             True(!g.Allowed, "a read that fails refuses");
             Contains(g.Why, "TIA said no", "and says why");
             bool fatal = false;
             try
             {
-                UserManagementRule.Check(ResetRequest(), true, addr, delegate { throw new TiadException(500, Kinds.OperationFailed, "TIA died", null, true); });
+                UserManagementRule.Check(ResetRequest(), true, addr, true, delegate { throw new TiadException(500, Kinds.OperationFailed, "TIA died", null, true); });
             }
             catch (TiadException e)
             {
@@ -674,26 +674,42 @@ namespace Tiad.Test
             // who and what.
             foreach (string up in new[] { "", "192.0.2.11" })
             {
-                g = UserManagementRule.Check(ResetRequest(), true, up, read);
+                g = UserManagementRule.Check(ResetRequest(), true, up, true, read);
                 True(!g.Allowed, "uploaded from " + Show(up) + ", no attestation");
                 Contains(g.Why, "nothing shows the CPU's access control is off: upload from 192.0.2.10", "names both routes");
                 r = ResetRequest();
                 r.Attestation.CpuAccessControl = Attestation.CpuAccessDisabled;
-                g = UserManagementRule.Check(r, true, up, read);
+                g = UserManagementRule.Check(r, true, up, true, read);
                 True(g.Allowed, "attested disabled, uploaded from " + Show(up));
                 Eq(g.Route, UserManagementRule.RouteAttestation, "by the attestation route");
                 r.Attestation.By = " ";
-                True(!UserManagementRule.Check(r, true, up, read).Allowed, "attested disabled without who");
+                True(!UserManagementRule.Check(r, true, up, true, read).Allowed, "attested disabled without who");
                 r.Attestation.By = "op";
                 r.Attestation.Text = "";
-                True(!UserManagementRule.Check(r, true, up, read).Allowed, "attested disabled without what");
+                True(!UserManagementRule.Check(r, true, up, true, read).Allowed, "attested disabled without what");
             }
             // Both routes: the upload is named.
             r = ResetRequest();
             r.Attestation.CpuAccessControl = Attestation.CpuAccessDisabled;
-            Eq(UserManagementRule.Check(r, true, addr, read).Route, UserManagementRule.RouteUpload, "both routes");
+            Eq(UserManagementRule.Check(r, true, addr, true, read).Route, UserManagementRule.RouteUpload, "both routes");
             // A gate nobody filled in refuses.
             True(!new UserManagementRule.Gate().Allowed, "the zero gate refuses");
+            // With the upload route off (UploadRouteEnabled), an upload
+            // from this very CPU shows nothing: only the attestation lets
+            // a reset, and the refusal says why.
+            g = UserManagementRule.Check(ResetRequest(), true, addr, false, read);
+            True(!g.Allowed, "upload route off");
+            Contains(g.Why, "the upload route is not yet available", "says so");
+            r = ResetRequest();
+            r.Hardware = false;
+            Contains(UserManagementRule.Check(r, true, addr, false, read).Why, "the upload route is not yet available", "every refusal says so");
+            r = ResetRequest();
+            r.Attestation.CpuAccessControl = Attestation.CpuAccessDisabled;
+            g = UserManagementRule.Check(r, true, addr, false, read);
+            True(g.Allowed && g.Route == UserManagementRule.RouteAttestation, "upload route off, attested disabled");
+            // Off until a bench upload of a CPU with access control on
+            // reads back as not Disabled (naut-lead 2026-11-21).
+            True(!UserManagementRule.UploadRouteEnabled, "UploadRouteEnabled is on: it needs a bench upload of a CPU with access control on that reads back as not Disabled");
         }
 
         // UserManagementKeepOrReset: the keep x reset table, through

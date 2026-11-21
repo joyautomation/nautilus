@@ -467,10 +467,25 @@ type ResetGate struct {
 	Route   string
 }
 
+// UploadRouteEnabled turns CheckUserManagementReset's upload route on. It
+// is off (naut-lead, 2026-11-21): that an upload brings a CPU's access
+// control into the project is proven only for the bench's Disabled CPU.
+// Turn it on, here and in the agent's UserManagementRule.UploadRouteEnabled,
+// only with a bench upload of a CPU with access control on that reads back
+// as not Disabled.
+const UploadRouteEnabled = false
+
 const (
-	resetRefused = "decisions.userManagementResetToProject (delete the CPU's user management data and set its access control as the project has it) is refused: "
-	resetRoutes  = `tiad resets it only on a hardware download, with cpu.accessControl keep, a project whose access control is Disabled, and either an upload from this CPU in this session or attestation.cpuAccessControl "disabled"`
+	resetRefused   = "decisions.userManagementResetToProject (delete the CPU's user management data and set its access control as the project has it) is refused: "
+	uploadRouteWhy = "the upload route is not yet available: that an upload brings a CPU's access control into the project is unproven until a bench upload of a CPU with access control on shows it"
 )
+
+func resetRoutes(uploadRoute bool) string {
+	if uploadRoute {
+		return `tiad resets it only on a hardware download, with cpu.accessControl keep, a project whose access control is Disabled, and either an upload from this CPU in this session or attestation.cpuAccessControl "disabled"`
+	}
+	return `tiad resets it only on a hardware download, with cpu.accessControl keep, a project whose access control is Disabled, and attestation.cpuAccessControl "disabled" (` + uploadRouteWhy + ")"
+}
 
 // UserManagementResetQuestion is the question a refused reset lists.
 func UserManagementResetQuestion(why string) Question {
@@ -487,16 +502,17 @@ func UserManagementResetQuestion(why string) Question {
 // session set it), the project's access control (projectAccess, read
 // only once the rest holds; ok false when it could not be read) is
 // exactly Disabled, and the CPU's is shown off: this session uploaded
-// from r.Address (uploadedFrom), or the attestation says "disabled". An
-// attestation that says "enabled" refuses whatever else holds.
-func CheckUserManagementReset(r DownloadRequest, accessControlKept bool, uploadedFrom string, projectAccess func() (string, bool)) ResetGate {
+// from r.Address (uploadedFrom; only when uploadRoute, UploadRouteEnabled
+// for the agent), or the attestation says "disabled". An attestation that
+// says "enabled" refuses whatever else holds.
+func CheckUserManagementReset(r DownloadRequest, accessControlKept bool, uploadedFrom string, uploadRoute bool, projectAccess func() (string, bool)) ResetGate {
 	switch {
 	case !isYes(r.Decisions.UserManagementResetToProject):
 		return ResetGate{Why: resetRefused + "it is not asked"}
 	case !r.Hardware:
-		return ResetGate{Why: resetRefused + "this download loads no hardware; " + resetRoutes}
+		return ResetGate{Why: resetRefused + "this download loads no hardware; " + resetRoutes(uploadRoute)}
 	case !accessControlKept:
-		return ResetGate{Why: resetRefused + "the session's spec does not keep access control as found (cpu.accessControl keep on a session that never applied fullAccessUser); " + resetRoutes}
+		return ResetGate{Why: resetRefused + "the session's spec does not keep access control as found (cpu.accessControl keep on a session that never applied fullAccessUser); " + resetRoutes(uploadRoute)}
 	case r.Attestation != nil && r.Attestation.CPUAccessControl == AttestCPUAccessEnabled:
 		return ResetGate{Why: resetRefused + "the attestation says the CPU's access control is enabled, and a reset would turn it off and delete its users; tiad never resets a CPU whose access control is on"}
 	}
@@ -512,13 +528,16 @@ func CheckUserManagementReset(r DownloadRequest, accessControlKept bool, uploade
 		case ok:
 			what = strconv.Quote(project)
 		}
-		return ResetGate{Why: resetRefused + "the project's access control is " + what + ", not Disabled; " + resetRoutes}
+		return ResetGate{Why: resetRefused + "the project's access control is " + what + ", not Disabled; " + resetRoutes(uploadRoute)}
 	}
-	if uploadedFrom != "" && uploadedFrom == r.Address {
+	if uploadRoute && uploadedFrom != "" && uploadedFrom == r.Address {
 		return ResetGate{Allowed: true, Route: ResetRouteUpload}
 	}
 	if r.Attestation.given() && r.Attestation.CPUAccessControl == AttestCPUAccessDisabled {
 		return ResetGate{Allowed: true, Route: ResetRouteAttestation}
+	}
+	if !uploadRoute {
+		return ResetGate{Why: resetRefused + `nothing shows the CPU's access control is off: give attestation.cpuAccessControl "disabled" (with attestation.by and attestation.text), the operator's statement that it is; ` + uploadRouteWhy}
 	}
 	return ResetGate{Why: resetRefused + "nothing shows the CPU's access control is off: upload from " + r.Address + ` in this session first, or give attestation.cpuAccessControl "disabled" (with attestation.by and attestation.text), the operator's statement that it is`}
 }

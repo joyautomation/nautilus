@@ -299,9 +299,20 @@ namespace Tiad
     // is off too: this session uploaded from that very CPU (the project's
     // setting is the CPU's), or the operator attests it
     // (attestation.cpuAccessControl "disabled"). An attestation that says
-    // enabled refuses whatever else holds.
+    // enabled refuses whatever else holds. The upload route is off
+    // (UploadRouteEnabled) until a bench upload proves its premise.
     public static class UserManagementRule
     {
+        // UploadRouteEnabled turns the upload route on. It is off
+        // (naut-lead, 2026-11-21): that an upload brings a CPU's access
+        // control into the project is proven only for the bench's
+        // Disabled CPU. Turn it on, here and in Go's
+        // tiad.UploadRouteEnabled, only with a bench upload of a CPU with
+        // access control on that reads back as not Disabled. Not a const,
+        // so the code behind it compiles and stays tested.
+        public static readonly bool UploadRouteEnabled = false;
+        const string UploadRouteWhy = "the upload route is not yet available: that an upload brings a CPU's access control into the project is unproven until a bench upload of a CPU with access control on shows it";
+
         // ProjectDisabled is PlcAccessControlConfiguration's name for
         // access control off, exactly.
         public const string ProjectDisabled = "Disabled";
@@ -317,7 +328,11 @@ namespace Tiad
         }
 
         const string Refused = "decisions.userManagementResetToProject (delete the CPU's user management data and set its access control as the project has it) is refused: ";
-        const string Routes = "tiad resets it only on a hardware download, with cpu.accessControl keep, a project whose access control is Disabled, and either an upload from this CPU in this session or attestation.cpuAccessControl \"disabled\"";
+        static string Routes(bool uploadRoute)
+        {
+            if (uploadRoute) return "tiad resets it only on a hardware download, with cpu.accessControl keep, a project whose access control is Disabled, and either an upload from this CPU in this session or attestation.cpuAccessControl \"disabled\"";
+            return "tiad resets it only on a hardware download, with cpu.accessControl keep, a project whose access control is Disabled, and attestation.cpuAccessControl \"disabled\" (" + UploadRouteWhy + ")";
+        }
 
         public static Question Question(string why)
         {
@@ -332,10 +347,12 @@ namespace Tiad
         // Check decides a reset for req. accessControlKept is whether the
         // session's spec keeps access control and no apply on it ever set
         // it; uploadedFrom the address this session last uploaded from
-        // ("" for none); projectAccessControl reads the project's
-        // PlcAccessControlConfiguration, asked only once everything cheaper
-        // holds. A read that fails or reads nothing refuses.
-        public static Gate Check(DownloadRequest req, bool accessControlKept, string uploadedFrom, Func<string> projectAccessControl)
+        // ("" for none); uploadRoute whether the upload route counts
+        // (UploadRouteEnabled, for the agent); projectAccessControl reads
+        // the project's PlcAccessControlConfiguration, asked only once
+        // everything cheaper holds. A read that fails or reads nothing
+        // refuses.
+        public static Gate Check(DownloadRequest req, bool accessControlKept, string uploadedFrom, bool uploadRoute, Func<string> projectAccessControl)
         {
             var g = new Gate();
             if (req.Decisions.UserManagementResetToProject != true)
@@ -345,12 +362,12 @@ namespace Tiad
             }
             if (!req.Hardware)
             {
-                g.Why = Refused + "this download loads no hardware; " + Routes;
+                g.Why = Refused + "this download loads no hardware; " + Routes(uploadRoute);
                 return g;
             }
             if (!accessControlKept)
             {
-                g.Why = Refused + "the session's spec does not keep access control as found (cpu.accessControl keep on a session that never applied fullAccessUser); " + Routes;
+                g.Why = Refused + "the session's spec does not keep access control as found (cpu.accessControl keep on a session that never applied fullAccessUser); " + Routes(uploadRoute);
                 return g;
             }
             if (req.Attestation.CpuAccessControl == Attestation.CpuAccessEnabled)
@@ -366,15 +383,15 @@ namespace Tiad
             catch (TiadException e)
             {
                 if (e.Fatal) throw;
-                g.Why = Refused + "reading the project's access control failed (" + e.Message + "); " + Routes;
+                g.Why = Refused + "reading the project's access control failed (" + e.Message + "); " + Routes(uploadRoute);
                 return g;
             }
             if (project != ProjectDisabled)
             {
-                g.Why = Refused + "the project's access control is " + (project == null ? "unreadable" : project == AccessRule.Absent ? "absent (no such setting)" : Json.Quote(project)) + ", not Disabled; " + Routes;
+                g.Why = Refused + "the project's access control is " + (project == null ? "unreadable" : project == AccessRule.Absent ? "absent (no such setting)" : Json.Quote(project)) + ", not Disabled; " + Routes(uploadRoute);
                 return g;
             }
-            if (uploadedFrom != "" && uploadedFrom == req.Address)
+            if (uploadRoute && uploadedFrom != "" && uploadedFrom == req.Address)
             {
                 g.Allowed = true;
                 g.Route = RouteUpload;
@@ -386,7 +403,8 @@ namespace Tiad
                 g.Route = RouteAttestation;
                 return g;
             }
-            g.Why = Refused + "nothing shows the CPU's access control is off: upload from " + req.Address + " in this session first, or give attestation.cpuAccessControl \"disabled\" (with attestation.by and attestation.text), the operator's statement that it is";
+            if (uploadRoute) g.Why = Refused + "nothing shows the CPU's access control is off: upload from " + req.Address + " in this session first, or give attestation.cpuAccessControl \"disabled\" (with attestation.by and attestation.text), the operator's statement that it is";
+            else g.Why = Refused + "nothing shows the CPU's access control is off: give attestation.cpuAccessControl \"disabled\" (with attestation.by and attestation.text), the operator's statement that it is; " + UploadRouteWhy;
             return g;
         }
     }

@@ -197,7 +197,7 @@ func TestCheckUserManagementReset(t *testing.T) {
 	const addr = "192.0.2.10"
 	project, readable, reads := ProjectAccessDisabled, true, 0
 	read := func() (string, bool) { reads++; return project, readable }
-	if g := CheckUserManagementReset(resetRequest(), true, addr, read); !g.Allowed || g.Route != ResetRouteUpload || reads != 1 {
+	if g := CheckUserManagementReset(resetRequest(), true, addr, true, read); !g.Allowed || g.Route != ResetRouteUpload || reads != 1 {
 		t.Fatalf("the baseline: %+v (reads %d)", g, reads)
 	}
 	refuse := func(name string, g ResetGate, says string) {
@@ -208,44 +208,63 @@ func TestCheckUserManagementReset(t *testing.T) {
 	}
 	r := resetRequest()
 	r.Decisions.UserManagementResetToProject = nil
-	refuse("not asked", CheckUserManagementReset(r, true, addr, read), "not asked")
+	refuse("not asked", CheckUserManagementReset(r, true, addr, true, read), "not asked")
 	r.Decisions.UserManagementResetToProject = No()
-	refuse("asked no", CheckUserManagementReset(r, true, addr, read), "not asked")
+	refuse("asked no", CheckUserManagementReset(r, true, addr, true, read), "not asked")
 	reads = 0
 	r = resetRequest()
 	r.Hardware = false
-	refuse("software only", CheckUserManagementReset(r, true, addr, read), "loads no hardware")
-	refuse("access control not kept", CheckUserManagementReset(resetRequest(), false, addr, read), "does not keep access control")
+	refuse("software only", CheckUserManagementReset(r, true, addr, true, read), "loads no hardware")
+	refuse("access control not kept", CheckUserManagementReset(resetRequest(), false, addr, true, read), "does not keep access control")
 	if reads != 0 {
 		t.Errorf("the cheap conjuncts must refuse before the project is read (%d reads)", reads)
 	}
 	r = resetRequest()
 	r.Attestation.CPUAccessControl = AttestCPUAccessEnabled
-	refuse("attested enabled, the upload route too", CheckUserManagementReset(r, true, addr, read), "never resets a CPU whose access control is on")
+	refuse("attested enabled, the upload route too", CheckUserManagementReset(r, true, addr, true, read), "never resets a CPU whose access control is on")
 	for _, st := range []string{"EnabledWithAccessControl", "", "disabled", "Disabled ", "EnabledWithAccessControlViaAccessLevel"} {
 		project = st
-		refuse("project "+strconv.Quote(st), CheckUserManagementReset(resetRequest(), true, addr, read), "not Disabled")
+		refuse("project "+strconv.Quote(st), CheckUserManagementReset(resetRequest(), true, addr, true, read), "not Disabled")
 	}
 	project, readable = ProjectAccessDisabled, false
-	refuse("project unreadable", CheckUserManagementReset(resetRequest(), true, addr, read), "unreadable, not Disabled")
+	refuse("project unreadable", CheckUserManagementReset(resetRequest(), true, addr, true, read), "unreadable, not Disabled")
 	readable = true
-	refuse("no reader", CheckUserManagementReset(resetRequest(), true, addr, nil), "unreadable")
+	refuse("no reader", CheckUserManagementReset(resetRequest(), true, addr, true, nil), "unreadable")
 	for _, up := range []string{"", "192.0.2.11"} {
-		refuse("uploaded from "+strconv.Quote(up), CheckUserManagementReset(resetRequest(), true, up, read), "upload from 192.0.2.10 in this session first")
+		refuse("uploaded from "+strconv.Quote(up), CheckUserManagementReset(resetRequest(), true, up, true, read), "upload from 192.0.2.10 in this session first")
 		r := resetRequest()
 		r.Attestation.CPUAccessControl = AttestCPUAccessDisabled
-		if g := CheckUserManagementReset(r, true, up, read); !g.Allowed || g.Route != ResetRouteAttestation {
+		if g := CheckUserManagementReset(r, true, up, true, read); !g.Allowed || g.Route != ResetRouteAttestation {
 			t.Errorf("attested disabled, uploaded from %q: %+v", up, g)
 		}
 		r.Attestation.By = " "
-		refuse("attested without who", CheckUserManagementReset(r, true, up, read), "nothing shows")
+		refuse("attested without who", CheckUserManagementReset(r, true, up, true, read), "nothing shows")
 		r.Attestation = &Attestation{By: "op", CPUAccessControl: AttestCPUAccessDisabled}
-		refuse("attested without what", CheckUserManagementReset(r, true, up, read), "nothing shows")
+		refuse("attested without what", CheckUserManagementReset(r, true, up, true, read), "nothing shows")
 		r.Attestation = nil
-		refuse("no attestation", CheckUserManagementReset(r, true, up, read), "nothing shows")
+		refuse("no attestation", CheckUserManagementReset(r, true, up, true, read), "nothing shows")
 	}
 	if (ResetGate{}).Allowed {
 		t.Fatal("the zero gate must refuse")
+	}
+	// With the upload route off (UploadRouteEnabled), an upload from this
+	// very CPU shows nothing: only the attestation lets a reset, and the
+	// refusal says the upload route is not yet available.
+	refuse("upload route off", CheckUserManagementReset(resetRequest(), true, addr, false, read), "the upload route is not yet available")
+	refuse("upload route off, software only", func() ResetGate { r := resetRequest(); r.Hardware = false; return CheckUserManagementReset(r, true, addr, false, read) }(), "the upload route is not yet available")
+	r = resetRequest()
+	r.Attestation.CPUAccessControl = AttestCPUAccessDisabled
+	if g := CheckUserManagementReset(r, true, addr, false, read); !g.Allowed || g.Route != ResetRouteAttestation {
+		t.Fatalf("upload route off, attested disabled: %+v", g)
+	}
+}
+
+// TestUploadRouteOff pins the upload route off (naut-lead 2026-11-21):
+// turn it on only with a bench upload of a CPU with access control on
+// that reads back as not Disabled, and the agent's flag with it.
+func TestUploadRouteOff(t *testing.T) {
+	if UploadRouteEnabled {
+		t.Fatal("UploadRouteEnabled is on: it needs a bench upload of a CPU with access control on that reads back as not Disabled (siemens-ide.md §3.5)")
 	}
 }
 

@@ -121,18 +121,39 @@ func contractUserManagementReset(t *testing.T, start Starter) {
 			t.Fatalf("a refused reset loaded %+v", l)
 		}
 		// This session uploaded from this CPU and keeps its access control
-		// (Disabled): the reset goes, by the upload route, without an
-		// attestation of the CPU's access control.
-		res, err := s.Download(ctx, ResetLoad(benchCPU))
-		if err != nil || !res.Downloaded || res.UserManagementReset != tiad.ResetRouteUpload || questionIDs(res.Questions) != "stop-cpu,overwrite,consistent-download,user-management" {
-			t.Fatalf("reset by the upload route: %+v %v", res, err)
+		// (Disabled). While the upload route is off (tiad.UploadRouteEnabled)
+		// that shows nothing, and the refusal says why; with it on, the
+		// reset goes by the upload route without an attestation of the
+		// CPU's access control.
+		if tiad.UploadRouteEnabled {
+			res, err := s.Download(ctx, ResetLoad(benchCPU))
+			if err != nil || !res.Downloaded || res.UserManagementReset != tiad.ResetRouteUpload || questionIDs(res.Questions) != "stop-cpu,overwrite,consistent-download,user-management" {
+				t.Fatalf("reset by the upload route: %+v %v", res, err)
+			}
+			if res.Attestation == nil || res.Attestation.CPUAccessControl != "" {
+				t.Fatalf("the attestation said nothing of access control: %+v", res.Attestation)
+			}
+		} else {
+			_, err := s.Download(ctx, ResetLoad(benchCPU))
+			wantResetRefused(t, "the upload route, off", err, "the upload route is not yet available")
+			if l := a.Loaded(t); len(l) != 0 {
+				t.Fatalf("the upload route, off, loaded %+v", l)
+			}
 		}
-		if res.Attestation == nil || res.Attestation.CPUAccessControl != "" {
-			t.Fatalf("the attestation said nothing of access control: %+v", res.Attestation)
+		attested := ResetLoad(benchCPU)
+		attested.Attestation.CPUAccessControl = tiad.AttestCPUAccessDisabled
+		a.SetQuestions(t, benchHardwareChecks)
+		res, err := s.Download(ctx, attested)
+		want := tiad.ResetRouteAttestation
+		if tiad.UploadRouteEnabled {
+			want = tiad.ResetRouteUpload
+		}
+		if err != nil || !res.Downloaded || res.UserManagementReset != want || questionIDs(res.Questions) != "stop-cpu,overwrite,consistent-download,user-management" {
+			t.Fatalf("reset, attested disabled: %+v %v, want route %s", res, err, want)
 		}
 		// A reset TIA never asks is no reset.
 		a.SetQuestions(t, []tiad.Question{qStop})
-		if res, err := s.Download(ctx, ResetLoad(benchCPU)); err != nil || res.UserManagementReset != "" {
+		if res, err := s.Download(ctx, attested); err != nil || res.UserManagementReset != "" {
 			t.Fatalf("a reset TIA never asked: %+v %v", res, err)
 		}
 		// Keep and reset both yes is a bad request, from the agent itself.
@@ -162,6 +183,7 @@ func contractUserManagementReset(t *testing.T, start Starter) {
 			t.Fatalf("keep, then overwrite unanswered: %v (acting %v), want a clean decision_required", err, tiad.ActingAnswers(err))
 		}
 		reset := ResetLoad(benchCPU)
+		reset.Attestation.CPUAccessControl = tiad.AttestCPUAccessDisabled
 		reset.Decisions.Overwrite = nil
 		a.SetQuestions(t, later)
 		_, err = s.Download(ctx, reset)
@@ -182,7 +204,11 @@ func contractUserManagementReset(t *testing.T, start Starter) {
 		s := UploadedKeep(t, a, otherCPU)
 		a.SetQuestions(t, benchHardwareChecks)
 		_, err := s.Download(ctx, ResetLoad(otherCPU))
-		wantResetRefused(t, "uploaded from another address, no attestation", err, `nothing shows the CPU's access control is off: upload from `+otherCPU+` in this session first, or give attestation.cpuAccessControl "disabled"`)
+		says := `nothing shows the CPU's access control is off: give attestation.cpuAccessControl "disabled"`
+		if tiad.UploadRouteEnabled {
+			says = `nothing shows the CPU's access control is off: upload from ` + otherCPU + ` in this session first, or give attestation.cpuAccessControl "disabled"`
+		}
+		wantResetRefused(t, "uploaded from another address, no attestation", err, says)
 		att := ResetLoad(otherCPU)
 		att.Attestation.CPUAccessControl = tiad.AttestCPUAccessDisabled
 		res, err := s.Download(ctx, att)

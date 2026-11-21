@@ -1259,7 +1259,7 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 	accessControlKept := s.station != nil && s.station.CPU.AccessControl == tiad.AccessKeep && !s.accessSet
 	var reset tiad.ResetGate
 	if !req.DryRun && req.Decisions.UserManagementResetToProject != nil && *req.Decisions.UserManagementResetToProject {
-		reset = tiad.CheckUserManagementReset(req, accessControlKept, s.uploadedFrom, func() (string, bool) { return s.accessControl, true })
+		reset = tiad.CheckUserManagementReset(req, accessControlKept, s.uploadedFrom, tiad.UploadRouteEnabled, func() (string, bool) { return s.accessControl, true })
 		if !reset.Allowed {
 			return nil, &failure{status: http.StatusConflict, kind: tiad.KindDecisionRequired,
 				msg:  reset.Why + "; nothing was sent to the CPU",

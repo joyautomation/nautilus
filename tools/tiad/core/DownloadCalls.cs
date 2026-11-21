@@ -268,7 +268,7 @@ namespace Tiad
             var reset = new UserManagementRule.Gate();
             if (!req.DryRun && req.Decisions.UserManagementResetToProject == true)
             {
-                reset = UserManagementRule.Check(req, accessControlKept, s.UploadedFrom, delegate
+                reset = UserManagementRule.Check(req, accessControlKept, s.UploadedFrom, UserManagementRule.UploadRouteEnabled, delegate
                 {
                     return OnSession(s, delegate(ITia t)
                     {
