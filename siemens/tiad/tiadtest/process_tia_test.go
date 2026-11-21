@@ -1781,3 +1781,48 @@ func TestAgentRetiresAfterTheReaper(t *testing.T) {
 		t.Fatalf("%d retires after the reaper closed the last session, want 1", n)
 	}
 }
+
+// TestAgentBoundsARetire: TIA's Dispose has no bound of its own, so a
+// retire still running after TIAD_RETIRE_WATCH counts as TIA gone: the
+// tia gate says why, and when the retire returns late it is still not
+// journalled as done, and no new instance starts.
+func TestAgentBoundsARetire(t *testing.T) {
+	p, s := downloadReady(t, "TIAD_RETIRE_WATCH=300ms")
+	c := p.Client()
+	p.SetScript(t, tiadtest.Script{FingerprintAsksTLS: true, Delays: []tiadtest.ScriptedCall{{Call: "retire", MS: 2000}}})
+	if _, err := s.Fingerprint(ctx, tiad.FingerprintRequest{TrustUnverifiedCertificate: true}); err != nil {
+		t.Fatal(err)
+	}
+	closed := make(chan error, 1)
+	go func() { closed <- s.Close(ctx) }()
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(20 * time.Millisecond) {
+		pr, err := c.Probe(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, g := range pr.Gates {
+			if g.Name == "tia" && g.Blocks() && strings.Contains(g.Detail, "had not returned 300ms later") {
+				found = true
+			}
+		}
+		if found {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the tia gate never named the stuck retire: %+v", pr.Gates)
+		}
+	}
+	if err := <-closed; err != nil {
+		t.Fatalf("the close the retire followed: %v", err)
+	}
+	if _, err := c.CreateProject(ctx, "bench", tiadtest.BenchStation(), tiadtest.BenchSecrets); tiad.Kind(err) != tiad.KindGate {
+		t.Fatalf("a call after a retire the watch gave up on: %v, want the tia gate", err)
+	}
+	if n := countCalls(p.Calls(t), "start"); n != 1 {
+		t.Fatalf("%d starts, want no new instance", n)
+	}
+	if strings.Contains(p.Log(), "audit blind-trust retired") {
+		t.Fatalf("a retire the watch gave up on was journalled as done:\n%s", p.Log())
+	}
+}

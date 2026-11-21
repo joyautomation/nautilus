@@ -197,6 +197,7 @@ copies `logixd`, the Logix agent:
   | `TIAD_TARGETS` | — | The only CPU addresses tiad will go online to or download to |
   | `TIAD_PGPC_INTERFACE` | — | The NIC TIA uses to reach the CPUs |
   | `TIAD_SESSION_IDLE` | `1h` | The idle reaper closes a session unused this long (a Go duration). The clock starts when a call ends; a session with a call in flight is never closed |
+  | `TIAD_RETIRE_WATCH` | `3m` | How long a retire of a TIA instance that trusted blindly may take before tiad counts TIA as gone (§3.8; a Go duration). TIA's dispose has no bound of its own |
   | `TIAD_MAX_FILE_BYTES` | 1 GiB | The largest file a put takes (413 beyond it) |
   | `TIAD_NO_TIA` | — | `1` fails the `tia` gate, so no call can start TIA. tiad is installed and tested this way before a clone's trial may start |
 
@@ -1157,13 +1158,16 @@ as long as that instance runs:
   starts a new instance (about 8 s on the bench machine, plus a cold
   project open), and only then is the record cleared. Both steps are
   audit lines (`audit blind-trust retired`, `audit blind-trust
-  cleared`). While any session is open, still opening, or still
-  closing, the instance stays, and the download refusal above holds. A
-  retire that cannot show the process exited (no process id, a failed
-  dispose, a process that outlives the wait) counts as TIA gone: the
-  `tia` gate fails until the agent restarts, since that instance may
-  still hold the trust. An instance that never trusted blindly is never
-  retired.
+  cleared`). While any session is open, still opening, still closing,
+  or broken (a close that failed), the instance stays, and the download
+  refusal above holds; a failed open leaves the retire to the next
+  close. A retire that cannot show the process exited (no process id, a
+  failed dispose, a process that outlives the wait) counts as TIA gone:
+  the `tia` gate fails until the agent restarts, since that instance may
+  still hold the trust. So does one still running after
+  `TIAD_RETIRE_WATCH` (`3m`), since TIA's dispose has no bound of its
+  own: the gate then names the stuck retire. An instance that never
+  trusted blindly is never retired.
 
 So a deploy reads the fingerprint after loading, then closes its
 session: the next deploy starts in an instance that trusts nothing and

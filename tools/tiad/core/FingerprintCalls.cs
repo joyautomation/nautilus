@@ -156,6 +156,10 @@ namespace Tiad
                 bool trust = false;
                 string address = s.Address;
                 BlindTrust before = blindTrust;
+                // after is the instance's trust as the TIA thread read it
+                // once the read ended; ran says the read reached it.
+                BlindTrust after = null;
+                bool ran = false;
                 FingerprintRead read = null;
                 string outcome = "";
                 try
@@ -170,9 +174,17 @@ namespace Tiad
                     CheckDevicePin(s, address, "fingerprint read");
                     read = OnSession(s, delegate(ITia t)
                     {
-                        FingerprintRead fr = TrustingCall("fingerprint read", s, address, trust, delegate { return t.ReadFingerprint(s.Handle, address, trust); });
-                        if (fr != null) RecordBlindTrust("fingerprint read", s, address, fr.TrustedBlindly);
-                        return fr;
+                        try
+                        {
+                            FingerprintRead fr = TrustingCall("fingerprint read", s, address, trust, delegate { return t.ReadFingerprint(s.Handle, address, trust); });
+                            if (fr != null) RecordBlindTrust("fingerprint read", s, address, fr.TrustedBlindly);
+                            return fr;
+                        }
+                        finally
+                        {
+                            after = blindTrust;
+                            ran = true;
+                        }
                     });
                     string bad = FingerprintRule.Check(read);
                     if (bad != null) throw new TiadException(500, Kinds.OperationFailed, "fingerprint read: " + bad);
@@ -210,7 +222,7 @@ namespace Tiad
                     }
                     Log.Line("audit fingerprint session={0} project={1} address={2} trustUnverifiedCertificate={3} trustedBlindly=[{4}] blindTrustBefore={5} blindTrust={6} items=[{7}] outcome={8}",
                         s.Id, Json.Quote(s.Project), Json.Quote(address), trust ? "yes" : "no", string.Join(",", tr.ToArray()),
-                        BlindTrust.Audit(before), BlindTrust.Audit(blindTrust), string.Join(", ", items.ToArray()), outcome);
+                        BlindTrust.Audit(before), BlindTrust.Audit(ran ? after : blindTrust), string.Join(", ", items.ToArray()), outcome);
                 }
                 var list = new List<object>();
                 foreach (KeyValuePair<string, string> kv in read.Items)
@@ -226,7 +238,7 @@ namespace Tiad
                 // This read's own questions, and the instance's trust: a
                 // read that asked nothing may still ride on an earlier one.
                 o["trustedBlindly"] = (read.TrustedBlindly ?? new List<string>()).ToArray();
-                o["blindTrust"] = BlindTrustJson();
+                o["blindTrust"] = after == null ? null : after.ToJson();
                 return o;
             });
         }

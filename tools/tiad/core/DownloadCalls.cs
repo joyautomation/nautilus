@@ -580,11 +580,15 @@ namespace Tiad
                 if (!Target(address)) throw new TiadException(403, Kinds.TargetRefused, address + " is not in TIAD_TARGETS");
                 CheckDevicePin(s, address, "compare");
                 var diffs = new List<Difference>();
+                // Read on the TIA thread, where trust is recorded: what the
+                // compare rode on, also once a later close retired it.
+                BlindTrust rode = null;
                 // Journalled before it goes online, so a compare that fails
                 // is journalled as riding on the trust too.
                 OnlineCompare cmp = OnSession(s, delegate(ITia t)
                 {
                     BlindTrust bt = blindTrust;
+                    rode = bt;
                     if (bt != null)
                     {
                         Log.Line("audit compare session={0} project={1} address={2} blindTrust={3}", s.Id, Json.Quote(s.Project), Json.Quote(address), BlindTrust.Audit(bt));
@@ -606,7 +610,7 @@ namespace Tiad
                 o["blocks"] = new List<object>(TiaNames.Labels(cmp == null ? null : cmp.Blocks).ToArray());
                 // A compare asks no TLS question of its own; it may ride on
                 // the instance's blind trust.
-                o["blindTrust"] = BlindTrustJson();
+                o["blindTrust"] = rode == null ? null : rode.ToJson();
                 return o;
             });
         }
@@ -666,6 +670,9 @@ namespace Tiad
                 ProjectCpu cpu = null;
                 string cpuWhy = null;
                 var removed = new List<string>();
+                // The instance's trust as the TIA thread read it after the
+                // upload: what this upload rode on or gave.
+                BlindTrust upTrust = null;
                 List<string> trusted = OnSession(s, delegate(ITia t)
                 {
                     // An upload replaces devices, not users: users an apply
@@ -689,6 +696,7 @@ namespace Tiad
                     }
                     List<string> tr = TrustingCall("upload", s, address, trust, delegate { return t.Upload(s.Handle, address, trust); });
                     RecordBlindTrust("upload", s, address, tr);
+                    upTrust = blindTrust;
                     // The project is replaced now: a failed identity read
                     // must not skip the audit lines below.
                     try
@@ -714,12 +722,12 @@ namespace Tiad
                     }
                     return tr;
                 });
-                if (trust || trusted.Count > 0 || blindTrust != null)
+                if (trust || trusted.Count > 0 || upTrust != null)
                 {
                     var q = new List<string>();
                     foreach (string x in trusted) q.Add(Json.Quote(x));
                     Log.Line("audit upload session={0} project={1} address={2} trustUnverifiedCertificate={3} trustedBlindly=[{4}] blindTrust={5}",
-                        s.Id, Json.Quote(s.Project), Json.Quote(address), trust ? "yes" : "no", string.Join(",", q.ToArray()), BlindTrust.Audit(blindTrust));
+                        s.Id, Json.Quote(s.Project), Json.Quote(address), trust ? "yes" : "no", string.Join(",", q.ToArray()), BlindTrust.Audit(upTrust));
                 }
                 // Trust on first use: the first upload pins the CPU's
                 // identity; every later one must match it (section 3.8).
@@ -737,7 +745,7 @@ namespace Tiad
                 });
                 var o = new Obj();
                 o["trustedBlindly"] = trusted.ToArray();
-                o["blindTrust"] = BlindTrustJson();
+                o["blindTrust"] = upTrust == null ? null : upTrust.ToJson();
                 o["device"] = read.ToJson();
                 o["pin"] = pin;
                 // What a spec that reuses this CPU must name (section 3.3).

@@ -60,6 +60,12 @@ namespace Tiad
         // reaper closes it (TIAD_SESSION_IDLE, a Go duration).
         public TimeSpan SessionIdle = TimeSpan.FromHours(1);
 
+        // RetireWatch is how long the agent waits for a retire of a TIA
+        // instance that trusted blindly before it counts TIA as gone
+        // (TIAD_RETIRE_WATCH, a Go duration): TIA's Dispose has no bound
+        // of its own.
+        public TimeSpan RetireWatch = TimeSpan.FromSeconds(180);
+
         // NoTia (TIAD_NO_TIA=1) fails the tia gate, so no call can start
         // TIA: the agent is installed and testable before the trial clock
         // may start.
@@ -194,6 +200,17 @@ namespace Tiad
                     throw new ConfigException("TIAD_SESSION_IDLE must be a duration of at least 1ms (e.g. 1h)");
                 }
                 c.SessionIdle = TimeSpan.FromTicks(ns / 100);
+            }
+
+            string watch = Env("TIAD_RETIRE_WATCH");
+            if (watch != "")
+            {
+                long ns;
+                if (!GoDuration.TryParse(watch, out ns) || ns < 1000000L)
+                {
+                    throw new ConfigException("TIAD_RETIRE_WATCH must be a duration of at least 1ms (e.g. 3m)");
+                }
+                c.RetireWatch = TimeSpan.FromTicks(ns / 100);
             }
 
             c.NoTia = Flag("TIAD_NO_TIA");
