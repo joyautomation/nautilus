@@ -116,6 +116,9 @@ type session struct {
 	accessControl string
 	access        access
 	made          accessMade
+	// accessSet is set once an apply on this session asked for
+	// fullAccessUser: user-management keep is refused from then on.
+	accessSet bool
 	// unclean is set while an apply or upload runs and stays set when it
 	// fails part-way: a later apply or save refuses.
 	unclean bool
@@ -1277,7 +1280,7 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 			}
 			return tiad.DownloadResult{DryRun: true, Provisional: true, QuestionsIncomplete: true, Questions: dq, KeptDevices: keptList(s.kept)}, nil
 		}
-		accessControlKept := s.station != nil && s.station.CPU.AccessControl == tiad.AccessKeep
+		accessControlKept := s.station != nil && s.station.CPU.AccessControl == tiad.AccessKeep && !s.accessSet
 		unanswered, declined := tiad.Resolve([]tiad.Question{q}, req.Decisions, haveProtection, haveConfigurationPassword, accessControlKept)
 		if len(unanswered) == 0 && len(declined) == 0 {
 			// Start-after answered no (NoAction) changes nothing.

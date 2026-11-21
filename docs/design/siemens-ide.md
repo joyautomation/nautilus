@@ -430,9 +430,12 @@ The rules for applying a spec:
     (the default, left out) or `keep`.
   - A download raises TIA's `UserManagementDownload` (keep the CPU's
     users, update them but keep its passwords, or load the project's).
-    tiad answers it only once S2b proves it against the CPU; until then
-    it is an `other` question and any download that meets it is refused,
-    so a new station's first live download waits for S2b.
+    tiad answers it only with keep (`user-management`,
+    `userManagementKeepOnline`), and only for a session whose specs have
+    only ever kept access control: under `fullAccessUser`, or `keep`
+    after `fullAccessUser` on the same session, it is refused. Loading
+    the users tiad set (a new station's first live download) still waits
+    for a proven answer.
   - Proven offline on the TIA machine (2026-11-20, through the agent):
     a new station with `password` and `fullAccessUser` compiles with 0
     errors, applying it again finds the user and changes nothing, and the
@@ -759,8 +762,9 @@ behaviour. So, until then:
   - `all-blocks` (`AllBlocksDownload`: load every block; acting)
   - `user-management` (`UserManagementDownload`): answered only by
     `userManagementKeepOnline: true`, which keeps the CPU's online users
-    as they are, and only when the spec's `cpu.accessControl` is `keep`;
-    under `fullAccessUser` it stays unanswered, naming why. Passive.
+    as they are, and only when the spec's `cpu.accessControl` is `keep`
+    and no apply on the session ever asked for `fullAccessUser`;
+    otherwise it stays unanswered, naming why. Passive.
     Updating or resetting the CPU's users is never tiad's choice.
   - `identification-data` (`LoadIdentificationData`): answered only by
     `identificationDataLoadNothing: true`. Passive.
@@ -777,8 +781,7 @@ behaviour. So, until then:
   - `kept-devices`: the agent's own question, never TIA's, asked when the
     last apply kept devices as found ("Which CPU an apply uses"). `objects`
     names them.
-  - `other` (the check's own text). TIA's `UserManagementDownload` is
-    one until S2b (§3.3, `cpu.accessControl`).
+  - `other` (the check's own text).
 - **A real download** answers each question only from `decisions`.
   - The first check the request does not answer fails the call with
     `decision_required`, naming that one, and nothing is loaded; answer

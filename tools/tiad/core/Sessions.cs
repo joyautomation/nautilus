@@ -32,6 +32,12 @@ namespace Tiad
         // Made is what applies on this session made in the project's users
         // and roles; an upload on it removes exactly that first.
         public AccessMade Made = new AccessMade();
+        // AccessControlSet is set once any apply on this session asked for
+        // access control tiad sets (fullAccessUser), failed or not: a
+        // later keep then keeps what tiad set, not what the project had,
+        // so a download never keeps the CPU's online users for it (#1159
+        // review).
+        public bool AccessControlSet;
         // UsersUnclean is set when an apply's password step left the
         // project's users part-way (AccessWrites.Dirty): an upload, which
         // replaces devices but not users, refuses too.

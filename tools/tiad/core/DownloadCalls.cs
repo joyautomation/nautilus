@@ -232,7 +232,9 @@ namespace Tiad
 
             bool haveProtection = req.Secrets.Protection != "";
             bool haveConfigurationPassword = req.Secrets.ConfigurationPassword != "";
-            bool accessControlKept = s.Station != null && s.Station.Cpu != null && s.Station.Cpu.AccessControl == StationRules.AccessKeep;
+            // Kept only when the spec keeps it AND no apply on this session
+            // ever set it: keep after fullAccessUser keeps what tiad set.
+            bool accessControlKept = s.Station != null && s.Station.Cpu != null && s.Station.Cpu.AccessControl == StationRules.AccessKeep && !s.AccessControlSet;
             var unanswered = new List<Question>();
             var declined = new List<Question>();
             var askedQs = new List<Question>();

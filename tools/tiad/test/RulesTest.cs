@@ -139,6 +139,7 @@ namespace Tiad.Test
                 T("ResultStates", ResultStates),
                 T("Differences", Differences),
                 T("CompareEqual", CompareEqualTests),
+                T("UserManagementGate", UserManagementGate),
                 T("FileNames", FileNames),
                 T("BlockKinds", BlockKinds),
                 T("OpennessAssemblies", OpennessAssemblies),
@@ -502,6 +503,39 @@ namespace Tiad.Test
             Eq(r.D.Asked.Count, 3, "asked");
             Eq(string.Join("; ", r.D.Acting.ToArray()), "StopModules = StopAll; OverwriteSystemData = Overwrite; StartModules = StartModule", "acting answers written");
             True(r.D.Cancelled == null, "cancelled");
+        }
+
+        static List<string> Ids(List<Question> qs)
+        {
+            var l = new List<string>();
+            foreach (var q in qs) l.Add(q.Id);
+            return l;
+        }
+
+        // UserManagementGate: #1159. Keeping the CPU's online users answers
+        // user-management only when access control was kept; every
+        // software-load check is answered only by its own decision.
+        static void UserManagementGate()
+        {
+            var keep = new Decisions { UserManagementKeepOnline = true };
+            var um = new List<Question> { new Question { Id = QuestionIds.UserManagement } };
+            var u = new List<Question>(); var d = new List<Question>();
+            DownloadRule.Resolve(um, keep, false, false, true, u, d);
+            Eq(u.Count + d.Count, 0, "keep with access control kept is answered");
+            u.Clear(); d.Clear();
+            DownloadRule.Resolve(um, keep, false, false, false, u, d);
+            Eq(string.Join(",", Ids(u).ToArray()), QuestionIds.UserManagement, "keep with access control set is unanswered");
+            Contains(u[0].Message, "accessControl is keep", "and names why");
+            u.Clear(); d.Clear();
+            DownloadRule.Resolve(um, new Decisions { UserManagementKeepOnline = false }, false, false, true, u, d);
+            Eq(string.Join(",", Ids(d).ToArray()), QuestionIds.UserManagement, "no is declined");
+            var others = new Decisions { StopCpu = true, Overwrite = true, ConsistentDownload = true, StartAfter = true };
+            foreach (string id in new[] { QuestionIds.AlarmTexts, QuestionIds.AllBlocks, QuestionIds.UserManagement, QuestionIds.IdentificationData })
+            {
+                u.Clear(); d.Clear();
+                DownloadRule.Resolve(new List<Question> { new Question { Id = id } }, others, true, true, true, u, d);
+                Eq(string.Join(",", Ids(u).ToArray()), id, id + " is not answered by the other decisions");
+            }
         }
 
         static void ActingAndPassive()
