@@ -521,8 +521,8 @@ func (ip *InProcess) WriteOutputs(vals nio.Values) error {
 				continue // unchanged since it was last accounted for
 			}
 			f.written[name] = v
-			if baseline && t.Rewrite <= 0 {
-				continue // recorded, never sent: the driver's start-up baseline
+			if baseline && t.Rewrite <= 0 && modbusHolds(ms, t, v) {
+				continue // the device already holds it: recorded, not sent (#1123)
 			}
 			if err := writeModbus(ms, t, v); err != nil {
 				ip.fault("modbus write %s (%s): %v", name, ms.device, err)
@@ -555,8 +555,9 @@ func (ip *InProcess) WriteOutputs(vals nio.Values) error {
 				continue // unchanged since it was last accounted for
 			}
 			f.written[name] = v
-			if baseline {
-				continue // recorded, never sent: the driver's start-up baseline
+			if baseline && (n.tag == "" || !n.writable || uaHolds(tags, n.tag, v)) {
+				// the device already holds it (#1123), or no node can take it
+				continue
 			}
 			switch {
 			case n.tag == "":
@@ -573,6 +574,86 @@ func (ip *InProcess) WriteOutputs(vals nio.Values) error {
 	return nil
 }
 
+// modbusHolds reports whether the device already holds v at t, as the
+// driver's live read at start-up would find it. A read it cannot make
+// reports false: the driver commands what it cannot read once.
+func modbusHolds(ms *mbSource, t modbus.TagBinding, v any) bool {
+	if t.Table == modbus.TableCoil {
+		resp, exc := ms.unit.Handle(0x01, []byte{byte(t.Address >> 8), byte(t.Address), 0, 1})
+		return exc == 0 && len(resp) >= 2 && (resp[1]&1 == 1) == truthy(v)
+	}
+	regs, err := modbusRegs(ms, t, v)
+	if err != nil {
+		return false
+	}
+	resp, exc := ms.unit.Handle(0x03, []byte{byte(t.Address >> 8), byte(t.Address), byte(len(regs) >> 8), byte(len(regs))})
+	if exc != 0 || len(resp) < 1+2*len(regs) {
+		return false
+	}
+	for i, r := range regs {
+		if binary.BigEndian.Uint16(resp[1+2*i:]) != r {
+			return false
+		}
+	}
+	return true
+}
+
+// uaHolds reports whether the plant tag already holds v.
+func uaHolds(tags interface {
+	ReadPath(string) (any, bool)
+}, tag string, v any) bool {
+	cur, ok := tags.ReadPath(tag)
+	if !ok {
+		return false
+	}
+	if iv, isIR := cur.(ir.Value); isIR {
+		switch iv.Kind {
+		case ir.TypeBool:
+			cur = iv.B
+		case ir.TypeReal:
+			cur = iv.F
+		case ir.TypeString:
+			cur = iv.S
+		default:
+			cur = iv.I
+		}
+	}
+	return reflect.DeepEqual(cur, v) || fmt.Sprint(cur) == fmt.Sprint(v)
+}
+
+// modbusRegs encodes v for t as the registers the driver would write; for a
+// bit in a register it is the register with that bit set or cleared.
+func modbusRegs(ms *mbSource, t modbus.TagBinding, v any) ([]uint16, error) {
+	format := t.Format
+	if format == "" {
+		format = "uint16"
+	}
+	f, err := modbus.ParseFormat(format)
+	if err != nil {
+		return nil, err
+	}
+	regs, err := modbus.Encode(f, v, ms.src.WordOrder, ms.src.ByteOrder, t.Scale, t.Offset)
+	if err != nil {
+		return nil, err
+	}
+	if f.Kind == "bit" {
+		// Read-modify-write, as the driver does for a bit in a register.
+		resp, exc := ms.unit.Handle(0x03, []byte{byte(t.Address >> 8), byte(t.Address), 0, 1})
+		if exc != 0 {
+			return nil, fmt.Errorf("FC 03 holding %d answered exception %02X", t.Address, exc)
+		}
+		cur := binary.BigEndian.Uint16(resp[1:])
+		mask, _ := modbus.Encode(f, true, ms.src.WordOrder, ms.src.ByteOrder, 0, 0)
+		if truthy(v) {
+			cur |= mask[0]
+		} else {
+			cur &^= mask[0]
+		}
+		regs = []uint16{cur}
+	}
+	return regs, nil
+}
+
 // writeModbus sends one binding's value as the request the driver sends.
 func writeModbus(ms *mbSource, t modbus.TagBinding, v any) error {
 	if t.Table == modbus.TableCoil {
@@ -585,32 +666,9 @@ func writeModbus(ms *mbSource, t modbus.TagBinding, v any) error {
 		}
 		return nil
 	}
-	format := t.Format
-	if format == "" {
-		format = "uint16"
-	}
-	f, err := modbus.ParseFormat(format)
+	regs, err := modbusRegs(ms, t, v)
 	if err != nil {
 		return err
-	}
-	regs, err := modbus.Encode(f, v, ms.src.WordOrder, ms.src.ByteOrder, t.Scale, t.Offset)
-	if err != nil {
-		return err
-	}
-	if f.Kind == "bit" {
-		// Read-modify-write, as the driver does for a bit in a register.
-		resp, exc := ms.unit.Handle(0x03, []byte{byte(t.Address >> 8), byte(t.Address), 0, 1})
-		if exc != 0 {
-			return fmt.Errorf("FC 03 holding %d answered exception %02X", t.Address, exc)
-		}
-		cur := binary.BigEndian.Uint16(resp[1:])
-		mask, _ := modbus.Encode(f, true, ms.src.WordOrder, ms.src.ByteOrder, 0, 0)
-		if truthy(v) {
-			cur |= mask[0]
-		} else {
-			cur &^= mask[0]
-		}
-		regs = []uint16{cur}
 	}
 	req := make([]byte, 5+2*len(regs))
 	binary.BigEndian.PutUint16(req[0:], t.Address)

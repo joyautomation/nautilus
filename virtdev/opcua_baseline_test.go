@@ -61,9 +61,12 @@ func TestInProcessOPCUAWritesAsTheDriver(t *testing.T) {
 	if err := plant.SetPath(node, int64(5)); err != nil { // the device's power-up value
 		t.Fatal(err)
 	}
-	push(0)
-	if got := device(); got != 5 {
-		t.Errorf("the start-up push reached the device: %d, want its own 5", got)
+	push(0) // the program's first value differs from the device's: one write (#1123)
+	if got := device(); got != 0 {
+		t.Errorf("the start-up push did not reach a device holding 5: %d, want 0", got)
+	}
+	if err := plant.SetPath(node, int64(5)); err != nil { // the plant moves it
+		t.Fatal(err)
 	}
 	push(0)
 	if got := device(); got != 5 {
