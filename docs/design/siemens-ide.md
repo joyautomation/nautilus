@@ -993,11 +993,15 @@ behaviour. So, until then:
 **The deploy record (D7, §7).** Every real download is recorded under
 `TIAD_DEPLOYS_DIR`, which is outside the work dir, so the files API never
 reaches it. A dry run, and a download tiad refuses itself, leave no record.
+A dry run can leave none only while it cannot load. Before `CanDryRun` is
+ever true for `tiad.Openness`, a dry run that TIA loads without asking must
+get a record too, just as it must get the hardware opt-in (#1180 review).
 - **Archive first.** Once every refusal tiad makes itself has passed, the
   download's own TIA work item does the following:
   - It saves the session's project and archives it (`.zap21`).
-  - It hashes the archive and moves it to `archives/<sha256>.zap21`. A
-    file already at that name is replaced, never taken by its name.
+  - It flushes the archive to disk, hashes it and moves it to
+    `archives/<sha256>.zap21`. A file already at that name is replaced,
+    never taken by its name.
   - It writes an intent line to `deploys.jsonl`.
   - Only then does it call TIA's download.
 
@@ -1017,8 +1021,10 @@ reaches it. A dry run, and a download tiad refuses itself, leave no record.
     trust the download was checked against.
 - **An outcome line on every end.** `status` is one of:
   - `loaded`: TIA loaded and the compare right after it was equal;
-  - `not-loaded`: a check cancelled the download, or TIA failed before it
-    asked one;
+  - `not-loaded`: a check cancelled the download (`decision_required`,
+    `declined`), or TIA failed before it asked one (`operation_failed`).
+    An internal error of tiad's own during TIA's download is
+    `outcome_unknown`, not `operation_failed`;
   - `in-doubt`: everything else, `outcome_unknown` included.
 
   The line also holds `outcome` (`loaded` or the error's kind) and the
@@ -1043,10 +1049,17 @@ reaches it. A dry run, and a download tiad refuses itself, leave no record.
     download in it needs `acceptBlindTrust`. Close the session after a
     deploy: the agent then retires that instance.
   - A read that fails is recorded (`fingerprintError`) and changes nothing
-    of the verdict.
+    of the verdict. A failed read with the opt-in may still have trusted,
+    so the instance counts it as trust. `blindTrustAfter`, in the response
+    and the outcome line, is the instance's trust once the read ended,
+    whether it read or failed.
+- **Retention.** Every attempt past tiad's own refusals keeps its archive,
+  including one a TIA check cancels. Nothing prunes them yet. A full disk
+  refuses every download, which is safe but is an outage. Pruning is a
+  follow-up (#616).
 - **The response.** A successful download returns `deploy: {id, archive,
-  source, fingerprint, fingerprintError?, downloadId?, recorded,
-  recordError?}`. `GET /v1/deploys` lists the records.
+  source, fingerprint, fingerprintError?, downloadId?, blindTrustAfter,
+  recorded, recordError?}`. `GET /v1/deploys` lists the records.
 
 ### 3.6 PROFINET's requirements (#723)
 

@@ -211,12 +211,19 @@ func TestAgentKeepsDeploysAcrossRestarts(t *testing.T) {
 	}
 	f.Close()
 	left := filepath.Join(dir, "staging", "d-left")
-	if err := os.MkdirAll(left, 0o700); err != nil {
-		t.Fatal(err)
+	other := filepath.Join(dir, "staging", "not-a-deploy")
+	for _, d := range []string{left, other} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
 	}
 	p2, s2 := downloadReady(t, env)
 	if _, err := os.Stat(left); !os.IsNotExist(err) {
 		t.Fatalf("staging left by an earlier run: %v", err)
+	}
+	// Only what the agent names: anything else under staging stays.
+	if _, err := os.Stat(other); err != nil {
+		t.Fatalf("a directory the agent did not make: %v", err)
 	}
 	r2, err := s2.Download(ctx, deployLoad)
 	if err != nil {
@@ -255,5 +262,40 @@ func TestAgentAuditsARefusedSource(t *testing.T) {
 	l := p.Log()
 	if strings.Contains(l, "\naudit download forged") || !strings.Contains(l, `source={commit="x\naudit download forged" hash=unset}`) {
 		t.Fatalf("the refused source in the log:\n%s", l)
+	}
+}
+
+// TestAgentRecordsHowADownloadFailed: every way TIA's part of a recorded
+// download can fail gets an outcome line whose status is what the CPU may
+// hold, and the error names the record. Only TIA failing before it asked
+// anything is not-loaded; an internal error of tiad's, TIA dying inside
+// the download, a failure TIA reports in doubt and a compare that differs
+// are in doubt.
+func TestAgentRecordsHowADownloadFailed(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		script tiadtest.Script
+		kind   string
+		status string
+	}{
+		{"TIA dies preparing", tiadtest.Script{TiaDies: "preparing"}, tiad.KindOperationFailed, tiad.DeployNotLoaded},
+		{"TIA dies downloading", tiadtest.Script{TiaDies: "downloading"}, tiad.KindOutcomeUnknown, tiad.DeployInDoubt},
+		{"TIA fails in doubt", tiadtest.Script{FailInDoubt: "the connection dropped"}, tiad.KindOutcomeUnknown, tiad.DeployInDoubt},
+		{"an internal error", tiadtest.Script{DownloadThrows: "a null reference"}, tiad.KindOutcomeUnknown, tiad.DeployInDoubt},
+		{"the compare differs", tiadtest.Script{CompareDiffers: true}, tiad.KindOutcomeUnknown, tiad.DeployInDoubt},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			p, s := downloadReady(t)
+			p.SetScript(t, c.script)
+			_, err := s.Download(ctx, deployLoad)
+			id := tiad.DeployIDOf(err)
+			if tiad.Kind(err) != c.kind || id == "" {
+				t.Fatalf("download: %v (kind %s), want %s naming its record", err, tiad.Kind(err), c.kind)
+			}
+			lines := journalLines(t, p.DeploysDir)
+			if len(lines) != 2 || lines[1]["kind"] != "outcome" || lines[1]["deploy"] != id || lines[1]["status"] != c.status || lines[1]["outcome"] != c.kind {
+				t.Fatalf("journal: %+v, want an outcome line %s/%s", lines, c.status, c.kind)
+			}
+		})
 	}
 }

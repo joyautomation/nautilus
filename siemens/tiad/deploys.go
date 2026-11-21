@@ -95,6 +95,10 @@ type DeployResult struct {
 	Fingerprint      *DeployFingerprint `json:"fingerprint"`
 	FingerprintError string             `json:"fingerprintError,omitempty"`
 	DownloadID       string             `json:"downloadId,omitempty"`
+	// BlindTrustAfter is the agent's TIA instance's blind trust once the
+	// read ended, read or failed (a failed read with the opt-in may have
+	// trusted): what a later download in it rides on.
+	BlindTrustAfter *BlindTrust `json:"blindTrustAfter"`
 	// Recorded is whether the outcome line was written; when not, the
 	// record lists as in doubt and RecordError says why.
 	Recorded    bool   `json:"recorded"`
@@ -113,13 +117,15 @@ const (
 )
 
 // DeployStatusOf is the agent's DeployStatus.Of: the status for a download
-// that ended with kind (DeployLoaded on success). Only the kinds that say
-// nothing was loaded are DeployNotLoaded; anything else is in doubt.
+// that ended with kind (DeployLoaded on success), once its intent line was
+// written. Only the kinds that there say nothing was loaded are
+// DeployNotLoaded: a check TIA asked that the request does not answer yes,
+// and TIA failing before it asked one. Anything else is in doubt.
 func DeployStatusOf(kind string) string {
 	switch kind {
 	case DeployLoaded:
 		return DeployLoaded
-	case KindDecisionRequired, KindDeclined, KindBadRequest, KindTargetRefused, KindBusy, KindNotCompiled, KindOperationFailed:
+	case KindDecisionRequired, KindDeclined, KindOperationFailed:
 		return DeployNotLoaded
 	}
 	return DeployInDoubt
@@ -149,6 +155,7 @@ type DeployOutcome struct {
 	Fingerprint         *DeployFingerprint `json:"fingerprint,omitempty"`
 	FingerprintError    string             `json:"fingerprintError,omitempty"`
 	DownloadID          string             `json:"downloadId,omitempty"`
+	BlindTrustAfter     *BlindTrust        `json:"blindTrustAfter,omitempty"`
 	ActingAnswers       []string           `json:"actingAnswers,omitempty"`
 	BlindTrust          *BlindTrust        `json:"blindTrust"`
 }

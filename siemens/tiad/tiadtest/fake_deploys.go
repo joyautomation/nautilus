@@ -90,6 +90,9 @@ func (f *Fake) recordOutcome(d *tiad.Deploy, s *session, req tiad.DownloadReques
 		o.Outcome = fl.kind
 		o.Status = tiad.DeployStatusOf(fl.kind)
 		o.Message = fl.msg
+		if len(o.Message) > 4000 {
+			o.Message = fmt.Sprintf("%s ... (%d characters in all)", o.Message[:4000], len(o.Message))
+		}
 		data, _ := fl.data.(map[string]any)
 		if data == nil {
 			data = map[string]any{}
@@ -124,6 +127,8 @@ func (f *Fake) recordOutcome(d *tiad.Deploy, s *session, req tiad.DownloadReques
 			dr.DownloadID, o.DownloadID = v, v
 		}
 	}
+	// The instance's trust after the read, read or failed.
+	dr.BlindTrustAfter, o.BlindTrustAfter = f.blindTrust, f.blindTrust
 	d.Outcome, d.Status = o, o.Status
 	dr.Recorded = true
 	r.Deploy = dr

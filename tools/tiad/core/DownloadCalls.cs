@@ -407,11 +407,28 @@ namespace Tiad
                     // The deploy record, in this same work item, so what is
                     // archived is what TIA loads: the project archived, then
                     // the intent line. Either failing refuses the download.
+                    // A dry run leaves no record: before CanDryRun is ever
+                    // true for tiad.Openness, a dry run TIA loads without
+                    // asking (outcome_unknown below) must get a record too
+                    // (#1180 review), as it must get the hardware opt-in.
                     if (!req.DryRun) Record(t, s, req, ranWith, run);
-                    // A dry run never starts the CPU, whatever the request
-                    // says (#1154 review): if TIA loads it without asking,
-                    // start-after is NoAction.
-                    return t.Download(s.Handle, req.Address, req.Hardware, req.Software, req.Secrets, req.DryRun ? (bool?)null : req.Decisions.StartAfter, answer);
+                    try
+                    {
+                        // A dry run never starts the CPU, whatever the request
+                        // says (#1154 review): if TIA loads it without asking,
+                        // start-after is NoAction.
+                        return t.Download(s.Handle, req.Address, req.Hardware, req.Software, req.Secrets, req.DryRun ? (bool?)null : req.Decisions.StartAfter, answer);
+                    }
+                    catch (Exception e)
+                    {
+                        // An internal error in tiad's side of the download,
+                        // not TIA's: whether TIA had begun is unknown, so a
+                        // recorded deploy is in doubt, never not-loaded
+                        // (#1180 review).
+                        if (e is TiaException || e is TiadException || !run.IntentWritten) throw;
+                        Log.Line("download: internal error in the agent's TIA call: {0}", e);
+                        throw Unknown("internal error in the agent's TIA call during the download (" + e.GetType().Name + "); see its log", acting);
+                    }
                 });
             }
             catch (TiadException e)

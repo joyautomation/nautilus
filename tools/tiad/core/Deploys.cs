@@ -124,8 +124,11 @@ namespace Tiad
         public const string InDoubt = "in-doubt";
 
         // Of is the status for a download that ended with kind ("loaded" on
-        // success). Only the kinds that say nothing was loaded are
-        // not-loaded; anything else is in doubt, the safe side.
+        // success), once its intent line was written. Only the kinds that,
+        // there, say nothing was loaded are not-loaded: a check TIA asked
+        // that the request does not answer yes, and TIA failing before it
+        // asked one (an internal error of tiad's is outcome_unknown there).
+        // Anything else is in doubt, the safe side.
         public static string Of(string kind)
         {
             if (kind == Loaded) return Loaded;
@@ -133,10 +136,6 @@ namespace Tiad
             {
                 case Kinds.DecisionRequired:
                 case Kinds.Declined:
-                case Kinds.BadRequest:
-                case Kinds.TargetRefused:
-                case Kinds.Busy:
-                case Kinds.NotCompiled:
                 case Kinds.OperationFailed:
                     return NotLoaded;
             }
@@ -181,7 +180,9 @@ namespace Tiad
                 System.IO.File.WriteAllText(probe, "tiad deploys directory probe\n");
                 if (System.IO.File.ReadAllText(probe) != "tiad deploys directory probe\n") throw new IOException("a probe file read back differently");
                 System.IO.File.Delete(probe);
-                foreach (string d in Directory.GetDirectories(st.staging))
+                // Only what NewId names: a mis-set TIAD_DEPLOYS_DIR loses
+                // nothing else.
+                foreach (string d in Directory.GetDirectories(st.staging, "d-*"))
                 {
                     Log.Line("deploys: removing staging left by an earlier run: {0}", Json.Quote(Path.GetFileName(d)));
                     Directory.Delete(d, true);
@@ -253,9 +254,12 @@ namespace Tiad
             }
             string sha;
             long bytes;
-            using (var f = new FileStream(full, FileMode.Open, FileAccess.Read, FileShare.Read))
+            // Through to the disk before it is hashed, as the intent line
+            // that will name it is.
+            using (var f = new FileStream(full, FileMode.Open, FileAccess.ReadWrite, FileShare.Read))
             using (var h = SHA256.Create())
             {
+                f.Flush(true);
                 sha = Hex(h.ComputeHash(f));
                 bytes = f.Length;
             }
@@ -408,6 +412,10 @@ namespace Tiad
         public List<string> Blocks = new List<string>();
         public FingerprintRun Fingerprint;
         public string FingerprintError = "", DownloadId = "";
+        // TrustAfter is the instance's blind trust once the post-load read
+        // ended, read or failed: a failed read with the opt-in may have
+        // trusted (UnknownTrust).
+        public BlindTrust TrustAfter;
         // Response is the success's "deploy" object; "recorded" is set once
         // the outcome line was written.
         public Obj Response;
@@ -514,6 +522,7 @@ namespace Tiad
                 line["fingerprint"] = run.Fingerprint == null ? null : run.Fingerprint.ToJson();
                 if (run.FingerprintError != "") line["fingerprintError"] = DeployStore.Bound(run.FingerprintError);
                 if (run.DownloadId != "") line["downloadId"] = run.DownloadId;
+                line["blindTrustAfter"] = run.TrustAfter == null ? null : run.TrustAfter.ToJson();
             }
             else
             {
@@ -579,6 +588,7 @@ namespace Tiad
                 run.FingerprintError = e.Message;
             }
             run.Fingerprint = fp;
+            run.TrustAfter = fp != null ? fp.BlindTrust : blindTrust;
             var d = new Obj();
             d["id"] = run.Id;
             d["archive"] = run.Archive.ToJson();
@@ -591,6 +601,9 @@ namespace Tiad
                 run.DownloadId = dl;
                 d["downloadId"] = dl;
             }
+            // The instance's trust after the read, whether it read or not:
+            // what a later download in it rides on.
+            d["blindTrustAfter"] = run.TrustAfter == null ? null : run.TrustAfter.ToJson();
             d["recorded"] = false;
             run.Response = d;
         }
@@ -620,8 +633,9 @@ namespace Tiad
             {
                 list = deploys.List(address, out unreadable);
             }
-            catch (IOException e)
+            catch (Exception e)
             {
+                if (!(e is IOException) && !(e is UnauthorizedAccessException)) throw;
                 throw new TiadException(500, Kinds.OperationFailed, "the deploy journal cannot be read (" + e.Message + ")");
             }
             var o = new Obj();

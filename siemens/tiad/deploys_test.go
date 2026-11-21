@@ -10,8 +10,8 @@ import (
 // not-loaded; anything else is in doubt.
 func TestDeployStatusOf(t *testing.T) {
 	want := map[string]string{
-		DeployLoaded: DeployLoaded, KindDecisionRequired: DeployNotLoaded, KindDeclined: DeployNotLoaded, KindBadRequest: DeployNotLoaded,
-		KindTargetRefused: DeployNotLoaded, KindBusy: DeployNotLoaded, KindNotCompiled: DeployNotLoaded, KindOperationFailed: DeployNotLoaded,
+		DeployLoaded: DeployLoaded, KindDecisionRequired: DeployNotLoaded, KindDeclined: DeployNotLoaded, KindOperationFailed: DeployNotLoaded,
+		KindBadRequest: DeployInDoubt, KindTargetRefused: DeployInDoubt, KindBusy: DeployInDoubt, KindNotCompiled: DeployInDoubt,
 		KindOutcomeUnknown: DeployInDoubt, KindNotFound: DeployInDoubt, KindGate: DeployInDoubt, KindUncleanSession: DeployInDoubt, "error": DeployInDoubt, "": DeployInDoubt,
 	}
 	for k, w := range want {

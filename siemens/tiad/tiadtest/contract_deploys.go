@@ -286,6 +286,23 @@ func contractDeployFingerprintFails(t *testing.T, start Starter) {
 	if e := deploys(t, a.Client(), "").Deploys[0]; e.Status != tiad.DeployLoaded {
 		t.Fatalf("the record: %+v", e)
 	}
+	if r.Deploy.BlindTrustAfter != nil {
+		t.Fatalf("a failed read without the opt-in trusted: %+v", r.Deploy.BlindTrustAfter)
+	}
+	// With the opt-in, a read that fails may have trusted: the instance
+	// counts it as trust, and the record says so.
+	req := benchSoftwareLoad
+	req.Fingerprint = &tiad.FingerprintRequest{TrustUnverifiedCertificate: true}
+	r, err = s.Download(ctx, req)
+	if err != nil || r.Deploy == nil || r.Deploy.Fingerprint != nil || r.Deploy.BlindTrustAfter == nil || r.Deploy.BlindTrustAfter.Call != "fingerprint read" {
+		t.Fatalf("a load whose read with the opt-in fails: %+v %v", r.Deploy, err)
+	}
+	if e := deploys(t, a.Client(), "").Deploys[0]; e.Outcome == nil || e.Outcome.BlindTrustAfter == nil {
+		t.Fatalf("the record of a failed trusting read: %+v", e.Outcome)
+	}
+	if _, err := s.Download(ctx, benchSoftwareLoad); tiad.Kind(err) != tiad.KindDecisionRequired || !strings.Contains(err.Error(), "trusted a CPU's certificate blindly") {
+		t.Fatalf("a download after a failed trusting read: %v", err)
+	}
 }
 
 // contractDeployListQuery: the list takes an IPv4 address and nothing

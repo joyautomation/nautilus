@@ -59,6 +59,9 @@ type Script struct {
 	// FailInDoubt makes the fake fail the way TIA fails inside a
 	// download it had begun, before asking anything.
 	FailInDoubt string `json:"failInDoubt,omitempty"`
+	// DownloadThrows makes the fake's download fail with an exception that
+	// is not TIA's, before it asks anything: an internal error of tiad's.
+	DownloadThrows string `json:"downloadThrows,omitempty"`
 	// TiaDies makes TIA die inside a download, as it did in #789 stage
 	// 2, taking its objects with it so that detaching tiad's handlers
 	// fails too: "preparing" before TIA's download call, "downloading"

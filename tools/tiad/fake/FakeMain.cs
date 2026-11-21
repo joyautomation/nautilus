@@ -246,6 +246,9 @@ namespace Tiad.Fake
         int askFirst = 1;
         string failAfterDecide = "";
         string failInDoubt = "";
+        // downloadThrows makes the download fail with an exception that is
+        // not TIA's, before it asks anything: an internal error.
+        string downloadThrows = "";
         string tiaDies = "";
         bool noDryRun;
         // archiveSame makes every archive the same bytes, so two deploys
@@ -494,6 +497,17 @@ namespace Tiad.Fake
 
         // FailInDoubt, when set, makes Download fail the way TIA fails
         // inside a download it had begun, before any question.
+        public string DownloadThrows
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return downloadThrows;
+                }
+            }
+        }
+
         public string FailInDoubt
         {
             get
@@ -649,6 +663,7 @@ namespace Tiad.Fake
             int? first = r.OptInt("askFirst");
             string after = r.Str("failAfterDecide");
             string inDoubt = r.Str("failInDoubt");
+            string throws = r.Str("downloadThrows");
             string dies = r.Str("tiaDies");
             if (dies != "" && dies != "preparing" && dies != "downloading") throw new TiadException(400, Kinds.BadRequest, "tiaDies is preparing or downloading");
             bool noDry = r.Bool("noDryRun");
@@ -698,6 +713,7 @@ namespace Tiad.Fake
                 askFirst = first.HasValue ? first.Value : 1;
                 failAfterDecide = after;
                 failInDoubt = inDoubt;
+                downloadThrows = throws;
                 tiaDies = dies;
                 noDryRun = noDry;
                 archiveSame = same;
@@ -1195,6 +1211,7 @@ namespace Tiad.Fake
             script.Enter("Download");
             var p = (FakeProject)project;
             if (script.FailInDoubt != "") throw new TiaException(script.FailInDoubt, null, true);
+            if (script.DownloadThrows != "") throw new InvalidOperationException(script.DownloadThrows);
             var decider = new DownloadDecider(answer, startAfter);
             string dies = script.TiaDies;
             if (dies != "")
