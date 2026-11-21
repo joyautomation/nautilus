@@ -1182,6 +1182,8 @@ retired the instance (its process exited 5.6 s after the retire began);
 in the new instance, started in the same agent process 6.6 s later, a
 read without the opt-in was asked the TLS question again and refused.
 So TIA's trust goes with the retired instance, not only tiad's record.
+Nor is it kept in a saved project: a project saved after the trusting
+read, reopened in a new instance, was asked the TLS question again.
 The first create after a retire took 31 s (a warm one about 6 s): a
 deploy after a trusting read pays about half a minute. TIA V21 opens
 one project per instance ("Another project is already open"), so on
