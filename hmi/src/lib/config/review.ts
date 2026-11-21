@@ -44,7 +44,8 @@ export type ReviewResult = { ok: true; value: Staged } | { ok: false; kind: Conf
 /** The commit POST /api/config/commit made. */
 export interface Committed { commit: string; branch: string; files: string[] }
 
-export type CommitResult = { ok: true; value: Committed } | { ok: false; kind: ConfigFailure; status: number; message: string };
+/** `patch` is set when the refusal names the patch route as the way out (no checkout). */
+export type CommitResult = { ok: true; value: Committed } | { ok: false; kind: ConfigFailure; status: number; message: string; patch?: boolean };
 export type PatchResult = { ok: true; patch: string } | { ok: false; kind: ConfigFailure; status: number; message: string };
 
 export interface ReviewClientOptions { url?: string; configUrl?: string; token?: string; fetch?: typeof fetch }
@@ -107,6 +108,11 @@ export class ReviewClient {
 		}
 		const text = await res.text();
 		if (res.ok) return { ok: true, text };
+		if (res.status === 404 && method === 'POST') {
+			let m = text;
+			try { m = (JSON.parse(text) as { error?: string }).error ?? text; } catch { /* text */ }
+			return { ok: false, kind: 'failed', status: 404, message: `${m.trim()} (the controller may have restarted). Stage, validate and apply the change again, then commit.` };
+		}
 		if (res.status === 409) {
 			// The server's text already names the way out (the patch, the
 			// candidate to commit); pass it through whole.
@@ -120,7 +126,7 @@ export class ReviewClient {
 	/** Save the applied candidate's change as a git commit (only where the controller runs from a checkout). */
 	async commit(id: string, message?: string): Promise<CommitResult> {
 		const r = await this.#config('POST', '/commit', message ? { id, message } : { id });
-		if (!r.ok) return r;
+		if (!r.ok) return { ...r, patch: r.status === 409 && r.message.includes('/api/config/patch') };
 		try { return { ok: true, value: JSON.parse(r.text) as Committed }; } catch { return { ok: false, kind: 'failed', status: 200, message: 'The controller answered the commit with something unreadable.' }; }
 	}
 

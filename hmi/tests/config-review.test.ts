@@ -111,4 +111,23 @@ describe('config review: commit and patch', () => {
 		const r = await new ReviewClient({ fetch: make(409, { error: 'nothing to patch: what runs is the project' }) }).patch();
 		expect(r.ok).toBe(false);
 	});
+	it('marks only the no-checkout refusal as having the patch way out', async () => {
+		const a = await new ReviewClient({ fetch: make(409, { error: 'this controller runs from a build; GET /api/config/patch returns the change' }) }).commit('7');
+		const b = await new ReviewClient({ fetch: make(409, { error: 'candidate 7 is no longer what runs' }) }).commit('7');
+		if (!a.ok) expect(a.patch).toBe(true);
+		if (!b.ok) expect(b.patch).toBe(false);
+	});
+	it('a commit for a candidate the controller forgot says to apply again', async () => {
+		const r = await new ReviewClient({ fetch: make(404, { error: 'no staged I/O configuration 7' }) }).commit('7');
+		expect(r.ok).toBe(false);
+		if (!r.ok) expect(r.message.includes('apply the change again')).toBe(true);
+	});
+	it('5xx and network failures are refusals, an unreadable 200 too', async () => {
+		const a = await new ReviewClient({ fetch: make(500, { error: 'git failed' }) }).commit('7');
+		expect(a.ok).toBe(false);
+		const b = await new ReviewClient({ fetch: (async () => { throw new Error('boom'); }) as unknown as typeof fetch }).commit('7');
+		if (!b.ok) expect(b.kind).toBe('unreachable');
+		const c = await new ReviewClient({ fetch: make(200, 'not json') }).commit('7');
+		expect(c.ok).toBe(false);
+	});
 });

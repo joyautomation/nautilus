@@ -58,6 +58,7 @@
 			return;
 		}
 		error = null;
+		canPatch = false;
 		staged = r.value;
 		stagedFor = forKey;
 		if (r.value.state === 'applied') onapplied?.(r.value);
@@ -69,7 +70,7 @@
 		busy = true;
 		try {
 			const r = await client.commit(staged.id, message.trim() || undefined);
-			if (r.ok) { committed = { id: staged.id, c: r.value }; error = null; canPatch = false; } else { error = r.message; canPatch = r.status === 409; }
+			if (r.ok) { committed = { id: staged.id, c: r.value }; message = ''; error = null; canPatch = false; } else { error = r.message; canPatch = !!r.patch; }
 		} finally { busy = false; }
 	}
 	async function patch() {
@@ -80,8 +81,11 @@
 			error = null;
 			const a = document.createElement('a');
 			const url = URL.createObjectURL(new Blob([r.patch], { type: 'text/x-diff' }));
-			a.href = url; a.download = 'nautilus-config.patch'; a.click();
-			URL.revokeObjectURL(url);
+			a.href = url; a.download = 'nautilus-config.patch';
+			document.body.appendChild(a);
+			a.click();
+			a.remove();
+			setTimeout(() => URL.revokeObjectURL(url), 10_000);
 		} finally { busy = false; }
 	}
 	const stage = () => step(() => client.stage(overlay.files));
@@ -127,11 +131,13 @@
 					{#if staged.result.pending?.length}Waiting on {staged.result.pending.join(', ')}.{/if}
 					{#if staged.result.answered?.length}Answered: {staged.result.answered.join(', ')}.{/if}
 				</p>
-				{#if committed?.id === staged.id}
+				{#if staged.result.watch?.state === 'reverted'}
+					<p class="note">This apply was reverted, so there is nothing to commit.</p>
+				{:else if committed?.id === staged.id}
 					<p class="note" data-committed>Committed {committed.c.commit.slice(0, 12)} on {committed.c.branch}: {committed.c.files.join(', ')}.</p>
 				{:else}
 					<div class="actions">
-						<input bind:value={message} placeholder="Commit message (optional)" size="28" aria-label="Commit message" />
+						<input bind:value={message} placeholder="Commit message (optional)" size="28" maxlength="200" aria-label="Commit message" />
 						<Button size="sm" disabled={busy} onclick={commit}>Commit</Button>
 						<Button size="sm" disabled={busy} onclick={patch}>{canPatch ? 'Download patch instead' : 'Download patch'}</Button>
 					</div>
