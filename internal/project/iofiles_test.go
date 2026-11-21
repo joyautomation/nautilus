@@ -137,3 +137,36 @@ func TestIODiffersFlagsOnlyTheDriverThatDiffers(t *testing.T) {
 		t.Fatalf("%d of %d rows differ, want exactly the modbus row of several", flagged, total)
 	}
 }
+
+// ConfigFiles is what the config screens edit: the manifest and the file
+// each driver names, as what runs. Before an apply they are the boot copy;
+// after one, the applied bytes, and Differs names them.
+func TestConfigFilesFollowTheRunningConfiguration(t *testing.T) {
+	s1, s2, s3 := newSlave(t, 4), newSlave(t, 7), newSlave(t, 9)
+	files := ioFiles(slavePort(s1), slavePort(s2), "")
+	r := startKeepRig(t, files, keepOpts{store: &memStore{}})
+	r.leading(t)
+	c, err := r.io.ConfigFiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Manifest != "nautilus.yaml" || !c.Leading || len(c.Differs) != 0 ||
+		c.Files["nautilus.yaml"] != string(files["nautilus.yaml"].Data) ||
+		c.Files["modbus.yaml"] != string(files["modbus.yaml"].Data) {
+		t.Fatalf("before an apply: %+v", c)
+	}
+	r.applyMove(t, files, slavePort(s3), slavePort(s2), ApplyOptions{})
+	c, err = r.io.ConfigFiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := modbusYAML(slavePort(s3), slavePort(s2), "", ""); c.Files["modbus.yaml"] != want {
+		t.Errorf("modbus.yaml after an apply = %q, want the applied bytes", c.Files["modbus.yaml"])
+	}
+	if len(c.Differs) != 1 || c.Differs[0] != "modbus.yaml" {
+		t.Errorf("differs = %v, want [modbus.yaml]", c.Differs)
+	}
+	if c.Files["nautilus.yaml"] != string(files["nautilus.yaml"].Data) {
+		t.Error("nautilus.yaml changed though the apply did not touch it")
+	}
+}

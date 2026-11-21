@@ -104,6 +104,9 @@ var actionClass = map[string]string{
 	"config.stage":     strict,
 	"config.validate":  strict,
 	"config.apply":     strict,
+	// Saving an applied configuration as a commit (#711) writes to the
+	// repo the controller runs from, in the principal's name.
+	"config.commit": strict,
 	// A parameter is written to the device on an IO-Link port, through its
 	// master: a change to a device, like a configuration apply.
 	"param.write": strict,

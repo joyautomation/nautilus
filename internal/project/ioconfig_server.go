@@ -87,6 +87,21 @@ func (io *IOConfig) Hook(snapshot func(sha string) (fs.FS, bool), base fs.FS) *s
 			}
 			return out
 		},
+		Sections: SchemaSections,
+		Schema: func(section string) ([]byte, error) {
+			b, err := SchemaSlice(section)
+			if errors.Is(err, ErrNoSection) {
+				return nil, fmt.Errorf("%w: %w", server.ErrConfigNoSection, err)
+			}
+			return b, err
+		},
+		ConfigFiles: func() (server.ConfigFiles, error) {
+			st, err := io.ConfigFiles()
+			if err != nil {
+				return server.ConfigFiles{}, err
+			}
+			return server.ConfigFiles(st), nil
+		},
 		Watch: func() *server.IOWatch {
 			if w := io.Watch(); w != nil {
 				sw := server.IOWatch(*w)
