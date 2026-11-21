@@ -588,6 +588,45 @@ func TestAgentSaysWhenTheOutcomeIsUnknown(t *testing.T) {
 	}
 }
 
+// TestAgentNeverCallsAnEmptyCompareEqual: #789. TIA's compare tree is
+// equal only when its root says identical, at least one object below the
+// root was compared, and nothing anywhere in it differs. A tree that
+// compares nothing, or hides a difference in a folder, is not equal:
+// /compare says equal false and names why, and a download TIA reported
+// loaded ends outcome_unknown naming it, and start-after, since TIA may
+// have started the CPU.
+func TestAgentNeverCallsAnEmptyCompareEqual(t *testing.T) {
+	p, s := downloadReady(t)
+	start := tiad.DownloadRequest{Address: "192.0.2.10", Software: true, Announced: true,
+		Decisions: tiad.Decisions{StopCPU: tiad.Yes(), StartAfter: tiad.Yes()}}
+	// The bench-shaped equal tree passes, both ways.
+	p.SetScript(t, tiadtest.Script{AskFirst: intp(0)})
+	if r, err := s.Download(ctx, start); err != nil || !r.Downloaded || !r.CompareEqual {
+		t.Fatalf("download, bench-shaped equal tree: %+v %v", r, err)
+	}
+	if r, err := s.Compare(ctx); err != nil || !r.Equal || len(r.Differences) != 0 {
+		t.Fatalf("compare, bench-shaped equal tree: %+v %v", r, err)
+	}
+	for _, tc := range []struct{ tree, named string }{
+		{"empty", "PLC_1 nothing compared"},
+		{"emptyFolders", "PLC_1 nothing compared"},
+		{"folderDiffers", "PLC tags contents differ"},
+		{"irrelevantRoot", "PLC_1 not compared"},
+	} {
+		p.SetScript(t, tiadtest.Script{AskFirst: intp(0), CompareTree: tc.tree})
+		r, err := s.Compare(ctx)
+		if err != nil || r.Equal || len(r.Differences) != 1 || r.Differences[0].Object+" "+r.Differences[0].State != tc.named {
+			t.Errorf("compare, tree %s: %+v %v, want not equal naming %q", tc.tree, r, err, tc.named)
+		}
+		_, err = s.Download(ctx, start)
+		if tiad.Kind(err) != tiad.KindOutcomeUnknown || !strings.Contains(err.Error(), "the compare right after it differs ("+tc.named+")") ||
+			strings.Join(tiad.ActingAnswers(err), ",") != "start-after" {
+			t.Errorf("download, tree %s: %v (acting %v), want outcome_unknown naming %q and start-after", tc.tree, err, tiad.ActingAnswers(err), tc.named)
+		}
+	}
+	p.SetScript(t, tiadtest.Script{})
+}
+
 // TestAgentSaysUnknownWhenTIADiesInsideTheDownload: #789 stage 2. TIA
 // died inside its download call before asking anything, and detaching
 // tiad's handlers from its disposed objects threw too; that second error

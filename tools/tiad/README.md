@@ -70,7 +70,10 @@ Mono:
   decided. Once TIA's download call is entered, any failure answers
   `outcome_unknown`. A real download succeeds only when TIA's result says
   loaded AND the agent's online compare right after (PLC software only:
-  Openness has no online hardware compare) is equal; a hardware download
+  Openness has no online hardware compare) is equal. Equal is decided in
+  core from TIA's compare tree (`TiaNames.CompareEqual`): an identical
+  root, at least one object compared below it, nothing non-identical
+  anywhere; an empty tree is never equal. A hardware download
   says `hardwareVerified: false`. How a download ended is decided in core too
   (`DownloadDecider.Finish`). Before TIA starts, every selection tiad may
   write is checked against this Openness's enum types.

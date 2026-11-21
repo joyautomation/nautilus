@@ -74,6 +74,13 @@ type Script struct {
 	// CompareDiffers makes every compare differ, even right after a
 	// download: a CPU that did not take what was sent.
 	CompareDiffers bool `json:"compareDiffers,omitempty"`
+	// CompareTree, when set, is the compare tree TIA reports whatever
+	// the CPU holds (#789): "empty" (an identical root, nothing under
+	// it), "emptyFolders" (an identical root over empty folders only),
+	// "folderDiffers" (a folder says its contents differ but shows no
+	// differing child) or "irrelevantRoot" (a CompareIrrelevant root over
+	// an identical block). None of them may pass as equal.
+	CompareTree string `json:"compareTree,omitempty"`
 	// DownloadState is the state TIA's download result reports when it
 	// ran ("" = Success; "Error" = a failed load).
 	DownloadState string `json:"downloadState,omitempty"`

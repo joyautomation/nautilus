@@ -203,9 +203,12 @@ namespace Tiad
         DownloadOutcome Download(object project, string address, bool hardware, bool software,
             Secrets secrets, bool? startAfter, Func<Question, Answer> answer);
 
-        // Compare compares the project with the CPU at address and fills
-        // differences; it returns whether they are equal.
-        bool Compare(object project, string address, List<Difference> differences);
+        // Compare compares the project's PLC software with the CPU at
+        // address and returns TIA's compare tree as TIA reports it (null
+        // when TIA reports none). It decides nothing: the agent runs
+        // TiaNames.CompareEqual on the tree, so an empty or partial tree
+        // can never pass as equal (#789).
+        CompareNode Compare(object project, string address);
 
         // Export writes what o asks for under dir and returns the full
         // paths it wrote.

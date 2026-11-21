@@ -138,6 +138,7 @@ namespace Tiad.Test
                 T("CheckAttribute", CheckAttribute),
                 T("ResultStates", ResultStates),
                 T("Differences", Differences),
+                T("CompareEqual", CompareEqualTests),
                 T("FileNames", FileNames),
                 T("BlockKinds", BlockKinds),
                 T("OpennessAssemblies", OpennessAssemblies),
@@ -1155,6 +1156,91 @@ namespace Tiad.Test
             Eq(TiaNames.Difference("FolderContentEqualOwnStateDifferent"), "different", "folder's own state");
             Eq(TiaNames.Difference("FolderContainsDifferencesOwnStateDifferent"), "different", "folder's own state and contents");
             Eq(TiaNames.Difference("Bogus"), "different", "unknown");
+        }
+
+        static CompareNode Cmp(string name, string state, params CompareNode[] children)
+        {
+            var n = new CompareNode { Name = name, State = state };
+            n.Children.AddRange(children);
+            return n;
+        }
+
+        static string Diffs(List<Difference> l)
+        {
+            var s = new List<string>();
+            foreach (var d in l) s.Add(d.Object + ": " + d.State);
+            return string.Join("; ", s.ToArray());
+        }
+
+        // BenchTree is the shape TIA reported for an equal CPU in the #789
+        // dry-run window (names here are TIA's defaults): the CPU's folder
+        // over five children, three identical objects among them, and three
+        // empty folders.
+        static CompareNode BenchTree()
+        {
+            return Cmp("PLC_1", "FolderContentsIdentical",
+                Cmp("Program blocks", "FolderContentsIdentical", Cmp("Main [OB1]", "ObjectsIdentical")),
+                Cmp("PLC tags", "FolderContentsIdentical", Cmp("Default tag table", "ObjectsIdentical"), Cmp("Tag table_1", "ObjectsIdentical")),
+                Cmp("Software units", "FolderContentsIdentical"),
+                Cmp("Technology objects", "FolderContentsIdentical"),
+                Cmp("PLC data types", "FolderContentsIdentical"));
+        }
+
+        static void CompareIs(CompareNode tree, bool equal, string diffs, string what)
+        {
+            var l = new List<Difference>();
+            Eq(TiaNames.CompareEqual(tree, l), equal, what + " equal");
+            Eq(Diffs(l), diffs, what + " differences");
+        }
+
+        // CompareEqualTests: #789. A compare is equal only when the root
+        // says identical, at least one object below it was compared, and
+        // nothing anywhere is in a non-identical state; the bench tree
+        // passes, and every tree that compares nothing or hides a
+        // difference fails, naming why.
+        static void CompareEqualTests()
+        {
+            CompareIs(BenchTree(), true, "", "the bench's equal tree");
+            CompareIs(Cmp("PLC_1", "ObjectsIdentical", Cmp("Main [OB1]", "ObjectsIdentical")), true, "", "an ObjectsIdentical root");
+            // CompareIrrelevant below the root is neutral.
+            CompareIs(Cmp("PLC_1", "FolderContentsIdentical", Cmp("Main [OB1]", "ObjectsIdentical"), Cmp("Info", "CompareIrrelevant")), true, "",
+                "an irrelevant object beside an identical one");
+
+            // Nothing compared.
+            CompareIs(null, false, ": nothing compared", "no tree");
+            CompareIs(Cmp("PLC_1", "FolderContentsIdentical"), false, "PLC_1: nothing compared", "an identical root with no children");
+            CompareIs(Cmp("PLC_1", "ObjectsIdentical"), false, "PLC_1: nothing compared", "an ObjectsIdentical root alone");
+            CompareIs(Cmp("PLC_1", "FolderContentsIdentical", Cmp("Software units", "FolderContentsIdentical"), Cmp("PLC data types", "FolderContentsIdentical")),
+                false, "PLC_1: nothing compared", "an identical root over empty folders");
+            CompareIs(Cmp("PLC_1", "FolderContentsIdentical", Cmp("Info", "CompareIrrelevant")), false, "PLC_1: nothing compared",
+                "an identical root over an irrelevant object only");
+
+            // The root must say identical.
+            CompareIs(Cmp("PLC_1", "CompareIrrelevant", Cmp("Main [OB1]", "ObjectsIdentical")), false, "PLC_1: not compared",
+                "an irrelevant root over an identical object");
+            CompareIs(Cmp("PLC_1", "Bogus", Cmp("Main [OB1]", "ObjectsIdentical")), false, "PLC_1: different", "an unknown root state");
+            CompareIs(Cmp("PLC_1", "ObjectsDifferent", Cmp("Main [OB1]", "ObjectsIdentical")), false, "PLC_1: different", "a different root");
+
+            // No non-identical state anywhere.
+            CompareIs(Cmp("PLC_1", "FolderContentsIdentical",
+                Cmp("Program blocks", "FolderContentsIdentical", Cmp("Main [OB1]", "ObjectsIdentical"), Cmp("FC1", "ObjectsDifferent"))),
+                false, "FC1: different", "a differing block under an identical root");
+            CompareIs(Cmp("PLC_1", "FolderContentsIdentical",
+                Cmp("Program blocks", "FolderContentsIdentical", Cmp("Main [OB1]", "ObjectsIdentical")), Cmp("PLC tags", "FolderContentsDifferent")),
+                false, "PLC tags: contents differ", "a folder whose contents differ, showing no differing child");
+            CompareIs(Cmp("PLC_1", "FolderContentsDifferent", Cmp("Main [OB1]", "ObjectsIdentical")), false, "PLC_1: contents differ",
+                "a root whose contents differ, showing no differing child");
+            CompareIs(Cmp("PLC_1", "FolderContentsDifferent", Cmp("Main [OB1]", "ObjectsIdentical"), Cmp("FB1", "RightMissing")), false, "FB1: only offline",
+                "a root whose contents differ names the differing child, not itself");
+            CompareIs(Cmp("PLC_1", "FolderContentsIdentical", Cmp("Main [OB1]", "ObjectsIdentical"), Cmp("FB9", "LeftMissing")), false, "FB9: only online",
+                "an object only the CPU has");
+            CompareIs(Cmp("PLC_1", "FolderContentsIdentical", Cmp("Main [OB1]", "ObjectsIdentical", Cmp("Network 1", "ObjectsDifferent"))), false,
+                "Network 1: different", "a differing part inside an identical object");
+
+            // The decision adds to what is already there and reads only that.
+            var l = new List<Difference> { new Difference { Object = "earlier", State = "different" } };
+            Eq(TiaNames.CompareEqual(BenchTree(), l), true, "an equal tree with earlier entries");
+            Eq(l.Count, 1, "an equal tree adds nothing");
         }
 
         static void FileNames()

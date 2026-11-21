@@ -239,6 +239,16 @@ namespace Tiad
         public string Object = "", State = "";
     }
 
+    // CompareNode is one element of TIA's online compare tree, as TIA
+    // reports it: the object's name, TIA's comparison state for it
+    // (ComparisonResult's name, e.g. "ObjectsIdentical") and its
+    // children. TiaNames.CompareEqual decides what the tree proves.
+    public sealed class CompareNode
+    {
+        public string Name = "", State = "";
+        public List<CompareNode> Children = new List<CompareNode>();
+    }
+
     public sealed class ExportOptions
     {
         public string Blocks = ""; // "scl", "xml" or ""
