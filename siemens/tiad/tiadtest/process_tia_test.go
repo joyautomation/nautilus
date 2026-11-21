@@ -516,6 +516,39 @@ func TestAgentSaysWhenTheOutcomeIsUnknown(t *testing.T) {
 	}
 }
 
+// TestAgentSaysUnknownWhenTIADiesInsideTheDownload: #789 stage 2. TIA
+// died inside its download call before asking anything, and detaching
+// tiad's handlers from its disposed objects threw too; that second error
+// replaced the first and the agent answered operation_failed. Once TIA's
+// download call was entered the CPU may or may not be loaded, whatever
+// the failure, so the answer is outcome_unknown, dry run or not. A TIA
+// that dies before its download call loaded nothing: operation_failed,
+// naming the failure itself, not the one detaching. (Whether a session
+// whose TIA died can still compare is not covered here: the fake keeps
+// running.)
+func TestAgentSaysUnknownWhenTIADiesInsideTheDownload(t *testing.T) {
+	p, s := downloadReady(t)
+	dry := tiad.DownloadRequest{Address: "192.0.2.10", Software: true, DryRun: true, Announced: true}
+	real := tiad.DownloadRequest{Address: "192.0.2.10", Software: true, Announced: true,
+		Decisions: tiad.Decisions{StopCPU: tiad.Yes(), StartAfter: tiad.No()}}
+	for _, req := range []tiad.DownloadRequest{dry, real} {
+		p.SetScript(t, tiadtest.Script{TiaDies: "downloading"})
+		_, err := s.Download(ctx, req)
+		if tiad.Kind(err) != tiad.KindOutcomeUnknown || tiad.IsFatal(err) || !tiad.OutcomeUnknown(err) ||
+			!strings.Contains(err.Error(), "compare before anything else") || !strings.Contains(err.Error(), "DownloadProvider") {
+			t.Errorf("dry run %v, TIA dies in its download call: %v, want a non-fatal outcome_unknown naming the download's failure", req.DryRun, err)
+		}
+		p.SetScript(t, tiadtest.Script{TiaDies: "preparing"})
+		_, err = s.Download(ctx, req)
+		if tiad.Kind(err) != tiad.KindOperationFailed || !strings.Contains(err.Error(), "DownloadProvider") || strings.Contains(err.Error(), "ConnectionConfiguration") {
+			t.Errorf("dry run %v, TIA dies before its download call: %v, want operation_failed naming the failure, not the detach", req.DryRun, err)
+		}
+	}
+	if l := p.Loaded(t); len(l) != 0 {
+		t.Fatalf("a TIA that died loaded %+v", l)
+	}
+}
+
 // TestAgentDecidesEveryDryRun: decide runs exactly once even when TIA
 // asks nothing, so a dry run with no questions still cancels; start-after
 // is asked all the same.

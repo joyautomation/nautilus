@@ -117,6 +117,8 @@ namespace Tiad.Test
                 T("AnsweredOnlyOnceWritten", AnsweredOnlyOnceWritten),
                 T("AFailedWriteCancels", AFailedWriteCancels),
                 T("InDoubtOnceEntered", InDoubtOnceEntered),
+                T("DownloadStepsTiaDies", DownloadStepsTiaDies),
+                T("DownloadStepsAfterTheCall", DownloadStepsAfterTheCall),
                 T("Selections", SelectionsWritten),
                 T("ALoadAfterADeclineIsInDoubt", ALoadAfterADeclineIsInDoubt),
                 T("TypeIdentifiers", TypeIdentifiers),
@@ -771,6 +773,74 @@ namespace Tiad.Test
             End(r.D.Finish(true, "Success", "", null), false, false, "TIA went on after tiad cancelled the download (writing StopAll", "TIA reported success");
             // A second failure keeps the first cancel.
             True(object.ReferenceEquals(r.D.Fail("other"), c), "a second failure");
+        }
+
+        // DownloadStepsRun runs DownloadSteps.Run and returns what it threw
+        // (null when it returned).
+        static TiaException DownloadStepsRun(DownloadDecider d, Action prepare, Func<DownloadCall> download, Action stop, Func<List<string>> asked, out DownloadOutcome o)
+        {
+            o = null;
+            try
+            {
+                o = DownloadSteps.Run(d, "192.0.2.10", prepare, download, stop, asked);
+                return null;
+            }
+            catch (TiaException e)
+            {
+                return e;
+            }
+        }
+
+        static List<string> NoneAsked()
+        {
+            return new List<string>();
+        }
+
+        // #789 stage 2: TIA died inside its download call, and detaching
+        // the handlers from its disposed objects threw too.
+        static void DownloadStepsTiaDies()
+        {
+            DownloadOutcome o;
+            Action gone = delegate { throw new ObjectDisposedException("ConnectionConfiguration", "detach failed"); };
+            TiaException e = DownloadStepsRun(new DownloadDecider(AllYes), delegate { },
+                delegate { throw new ObjectDisposedException("DownloadProvider", "TIA exited"); }, gone, NoneAsked, out o);
+            True(e != null && e.InDoubt, "TIA dies inside its download call: in doubt");
+            Contains(e.Message, "TIA exited", "the download's own failure");
+            True(e.Message.IndexOf("detach failed", StringComparison.Ordinal) < 0, "not the detach's");
+            // Any failure inside the call, not only TIA's own.
+            e = DownloadStepsRun(new DownloadDecider(AllYes), delegate { },
+                delegate { throw new InvalidOperationException("reading the result failed"); }, delegate { }, NoneAsked, out o);
+            True(e != null && e.InDoubt, "any failure inside the call: in doubt");
+            // Before the call: nothing loaded, the failure itself named.
+            e = DownloadStepsRun(new DownloadDecider(AllYes), delegate { throw new ObjectDisposedException("DownloadProvider", "TIA exited"); },
+                delegate { throw new InvalidOperationException("the call was made"); }, gone, NoneAsked, out o);
+            True(e != null && !e.InDoubt, "TIA dies before its download call: not in doubt");
+            Contains(e.Message, "TIA exited", "the prepare's own failure");
+            True(e.Message.IndexOf("detach failed", StringComparison.Ordinal) < 0, "not the detach's, before the call");
+            // A download that loaded stays loaded when detaching fails.
+            e = DownloadStepsRun(Approved(new object()).D, delegate { }, delegate { return new DownloadCall { State = "Success" }; }, gone, NoneAsked, out o);
+            True(e == null && o != null && o.Loaded, "loaded, then detaching fails: loaded");
+            // stop runs every time, also when the call throws.
+            int stops = 0;
+            DownloadStepsRun(new DownloadDecider(AllYes), delegate { }, delegate { throw new InvalidOperationException("x"); }, delegate { stops++; }, NoneAsked, out o);
+            DownloadStepsRun(new DownloadDecider(AllYes), delegate { throw new InvalidOperationException("x"); }, delegate { return null; }, delegate { stops++; }, NoneAsked, out o);
+            Eq(stops, 2, "stop runs after a failure, before and inside the call");
+        }
+
+        // After the call, nothing escapes as a plain exception.
+        static void DownloadStepsAfterTheCall()
+        {
+            DownloadOutcome o;
+            Func<List<string>> broken = delegate { throw new InvalidOperationException("Asked is disposed"); };
+            TiaException e = DownloadStepsRun(Approved(new object()).D, delegate { }, delegate { return new DownloadCall { State = "Success" }; }, delegate { }, broken, out o);
+            True(e != null && e.InDoubt, "reading the questions fails after the call: in doubt");
+            e = DownloadStepsRun(new DownloadDecider(AllYes), delegate { }, delegate { return null; }, delegate { }, NoneAsked, out o);
+            True(e != null && e.InDoubt, "the call returned nothing: in doubt");
+            // A question going online fails it, even when TIA went on.
+            e = DownloadStepsRun(Approved(new object()).D, delegate { }, delegate { return new DownloadCall { State = "Success" }; }, delegate { },
+                delegate { return new List<string> { "trust the TLS certificate of PLC_1" }; }, out o);
+            True(e != null && e.InDoubt, "asked going online, TIA went on: in doubt");
+            Contains(e.Message, "TLS certificate of PLC_1", "the question");
         }
 
         static void InDoubtOnceEntered()

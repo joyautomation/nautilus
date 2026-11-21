@@ -72,6 +72,7 @@ namespace Tiad.Openness
         // TrustedBlindly are the certificate questions answered Trusted,
         // on the upload's explicit opt-in.
         public readonly List<string> TrustedBlindly = new List<string>();
+        volatile bool stopped;
 
         public OnlineAsks(ConnectionConfiguration cc) : this(cc, false, "")
         {
@@ -85,9 +86,15 @@ namespace Tiad.Openness
             cc.OnlineLegitimation += Handle;
         }
 
+        // Stop detaches the handler and never throws: TIA may be gone
+        // (#789 stage 2: it died inside a download, and detaching from its
+        // disposed objects threw in place of the download's own failure).
+        // A handler that cannot be detached answers no from then on, even
+        // to a question it would have trusted on the upload's opt-in.
         public void Stop()
         {
-            cc.OnlineLegitimation -= Handle;
+            stopped = true;
+            DownloadSteps.Quietly(delegate { cc.OnlineLegitimation -= Handle; }, "online");
         }
 
         // Handle answers one question, as OnlineChecks decides: a
@@ -98,7 +105,7 @@ namespace Tiad.Openness
         {
             string type = c.GetType().Name;
             var tls = c as TlsVerificationConfiguration;
-            string answer = OnlineChecks.Answer(type, trustUnverifiedCertificate);
+            string answer = OnlineChecks.Answer(type, trustUnverifiedCertificate && !stopped);
             if ((answer == OnlineChecks.NotTrusted || answer == OnlineChecks.Trusted) && tls != null)
             {
                 bool trust = answer == OnlineChecks.Trusted;
@@ -959,64 +966,57 @@ namespace Tiad.Openness
         public DownloadOutcome Download(object project, string address, bool hardware, bool software,
             Secrets secrets, Func<List<Question>, List<Answer>> decide)
         {
-            Project p = Of(project).Project;
             var decider = new DownloadDecider(decide);
-            string state = null, messages = "";
-            Exception error = null;
-            bool entered = false;
             OnlineAsks online = null;
-            try
-            {
-                HwDevice d = StationOf(p);
-                if (d == null) throw new TiaException("the project has no CPU");
-                DownloadProvider dp = CpuOf(d).GetService<DownloadProvider>();
-                online = new OnlineAsks(dp.Configuration);
-                ConfigurationPcInterface pc = PcInterface(dp.Configuration);
-                ConfigurationTargetInterface target = TargetInterface(pc);
-                // Provisional until S2b: the address on the target
-                // interface, for Download's address overload.
-                ConfigurationAddress at = target.Addresses.Create(address);
-                DownloadOptions options = DownloadOptions.None;
-                if (hardware) options |= DownloadOptions.Hardware;
-                if (software) options |= DownloadOptions.Software;
-                entered = true;
-                DownloadResult r = dp.Download(target, at,
-                    delegate(DownloadConfiguration c)
-                    {
-                        Step st = decider.Next(c, c.GetType().Name, c.Message ?? "", delegate { return PendingOf(c); });
-                        Write(decider, c, st, secrets);
-                    },
-                    delegate(DownloadConfiguration c)
-                    {
-                        Step st = decider.After(c.GetType().Name);
-                        if (st != null) Write(decider, c, st, secrets);
-                        else Log.Line("download: after loading, TIA reports {0}: {1}", c.GetType().Name, c.Message ?? "");
-                    },
-                    options);
-                // Read inside the try: a failure reading the result of a
-                // download TIA ran is in doubt too.
-                messages = DownloadMessages(r.Messages);
-                state = r.State.ToString();
-            }
-            catch (Exception e)
-            {
-                state = null;
-                error = e;
-            }
-            finally
-            {
-                if (online != null) online.Stop();
-            }
-            // How it ended is decided in core (DownloadDecider.Finish).
-            DownloadEnd end = decider.Finish(entered, state, messages, error);
-            // A question going online fails the download, even one TIA went
-            // on with: once TIA's download call was entered, in doubt.
-            if (online != null && online.Asked.Count > 0)
-            {
-                throw new TiaException(TiaNames.OnlineRefused(address, online.Asked, end.Failure ?? "TIA went on with the download"), error, entered);
-            }
-            if (end.Failure != null) throw new TiaException(end.Failure, error, end.InDoubt);
-            return new DownloadOutcome { Questions = decider.Asked, Loaded = end.Loaded };
+            DownloadProvider dp = null;
+            ConfigurationTargetInterface target = null;
+            ConfigurationAddress at = null;
+            DownloadOptions options = DownloadOptions.None;
+            // DownloadSteps (core) decides how it ended: from TIA's download
+            // call on, any failure is in doubt, and detaching the handlers
+            // from a TIA that died never replaces that.
+            return DownloadSteps.Run(decider, address,
+                delegate
+                {
+                    HwDevice d = StationOf(Of(project).Project);
+                    if (d == null) throw new TiaException("the project has no CPU");
+                    dp = CpuOf(d).GetService<DownloadProvider>();
+                    online = new OnlineAsks(dp.Configuration);
+                    ConfigurationPcInterface pc = PcInterface(dp.Configuration);
+                    target = TargetInterface(pc);
+                    // Provisional until S2b: the address on the target
+                    // interface, for Download's address overload.
+                    at = target.Addresses.Create(address);
+                    if (hardware) options |= DownloadOptions.Hardware;
+                    if (software) options |= DownloadOptions.Software;
+                },
+                delegate
+                {
+                    DownloadResult r = dp.Download(target, at,
+                        delegate(DownloadConfiguration c)
+                        {
+                            Step st = decider.Next(c, c.GetType().Name, c.Message ?? "", delegate { return PendingOf(c); });
+                            Write(decider, c, st, secrets);
+                        },
+                        delegate(DownloadConfiguration c)
+                        {
+                            Step st = decider.After(c.GetType().Name);
+                            if (st != null) Write(decider, c, st, secrets);
+                            else Log.Line("download: after loading, TIA reports {0}: {1}", c.GetType().Name, c.Message ?? "");
+                        },
+                        options);
+                    // Read inside the call: a failure reading the result of
+                    // a download TIA ran is in doubt too.
+                    return new DownloadCall { Messages = DownloadMessages(r.Messages), State = r.State.ToString() };
+                },
+                delegate
+                {
+                    if (online != null) online.Stop();
+                },
+                delegate
+                {
+                    return online == null ? new List<string>() : online.Asked;
+                });
         }
 
         // Write writes one step into a configuration and reports it. A
@@ -1105,6 +1105,7 @@ namespace Tiad.Openness
                 try
                 {
                     OnlineState st = op.GoOnline(at);
+                    bool failed = true;
                     try
                     {
                         if (st != OnlineState.Online)
@@ -1114,10 +1115,14 @@ namespace Tiad.Openness
                         }
                         CompareResult cr = ((PlcSoftware)cpu.GetService<SoftwareContainer>().Software).CompareToOnline();
                         Walk(cr.RootElement, differences);
+                        failed = false;
                     }
                     finally
                     {
-                        op.GoOffline();
+                        // After a failure TIA may be gone: going offline
+                        // then must not replace that failure.
+                        if (failed) DownloadSteps.Quietly(delegate { op.GoOffline(); }, "compare");
+                        else op.GoOffline();
                     }
                 }
                 catch (TiaException)

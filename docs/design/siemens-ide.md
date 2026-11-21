@@ -625,7 +625,10 @@ behaviour. So, until then:
   is always written (`NoAction` unless decided), never left to TIA's
   default. Before TIA starts, every selection tiad may write is checked
   against this Openness's own enum types. Once TIA's download call is
-  entered, any failure answers `outcome_unknown`. The
+  entered, any failure answers `outcome_unknown`, whatever its kind,
+  including TIA itself dying inside the call (#789 stage 2): detaching
+  tiad's handlers afterwards never throws, so a TIA that is gone cannot
+  turn the answer into `operation_failed` (`DownloadSteps` in core). The
   `certificate` question's fingerprint is not read yet, so a trust decision
   cannot match it: a TLS check refuses until S2b. All of this is pure code
   in `tools/tiad/core/TiaRules.cs`, unit-tested without TIA.
