@@ -75,6 +75,17 @@ namespace Tiad
         }
     }
 
+    // FingerprintRead is what TIA's fingerprint service returned for a
+    // CPU, items in TIA's order and named as TIA names them, and the
+    // certificate questions answered trusted, blindly, to read it. The
+    // items are checksums and counters (TextLists, Hardware, DownloadId,
+    // ...), not the CPU's identity.
+    public sealed class FingerprintRead
+    {
+        public List<KeyValuePair<string, string>> Items = new List<KeyValuePair<string, string>>();
+        public List<string> TrustedBlindly = new List<string>();
+    }
+
     public sealed class SoftwareResult
     {
         public List<SourceResult> Results = new List<SourceResult>();
@@ -222,6 +233,17 @@ namespace Tiad
         // certificate question is answered trusted, blindly; Upload returns
         // the questions it so answered (empty when none was asked).
         List<string> Upload(object project, string address, bool trustUnverifiedCertificate);
+
+        // ReadFingerprint goes online, read-only, from the project's CPU
+        // to address, reads what TIA's fingerprint service reports for it,
+        // and goes offline, always. It writes nothing and never saves.
+        // With trustUnverifiedCertificate, the request's explicit opt-in, a
+        // TLS certificate question is answered trusted, blindly; anything
+        // else TIA asks fails the read. It fails, never returns part of a
+        // read, when the CPU is not reached online or any step fails. It
+        // refuses before going online when address is not the project
+        // CPU's address.
+        FingerprintRead ReadFingerprint(object project, string address, bool trustUnverifiedCertificate);
 
         // ProjectCpu is the identity of the project's CPU as the project
         // holds it: after an upload, what the CPU reported. Serial and Mac
