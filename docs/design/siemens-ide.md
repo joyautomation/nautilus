@@ -598,7 +598,18 @@ Request:
 }
 ```
 
-Response: `{dryRun, downloaded, questions: [{id, message, detail, objects}], state, keptDevices}`.
+Response: `{dryRun, downloaded, questions: [{id, message, detail, objects}], state, stateSource, keptDevices}`.
+
+**`state` is TIA's word, not a read of the CPU** (#789). Openness has no
+read of the CPU's operating mode, so `state` (`RUN` or `STOP`) comes
+from TIA's own download messages, one per step ("PLC_1 stopped.",
+"'Main' was loaded successfully.", "PLC_1 started." on the bench): the
+last message that is exactly "<cpu> started." or "<cpu> stopped." for
+the CPU loaded decides. `stateSource: "tia-message"` labels it as that
+evidence. No such message means no `state`: a download that never
+stopped the CPU (TIA says nothing of its mode then), or TIA in a language
+other than English. A proof of the mode is the Web API's
+`Plc.ReadOperatingMode` (§4), separate from the download.
 
 **The dry run is provisional.** Openness is believed to answer TIA's
 pre-download checks through a callback inside the real download call,
