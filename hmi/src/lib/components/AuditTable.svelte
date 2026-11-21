@@ -109,28 +109,34 @@
 		{#if error}<p class="msg err" role="alert">{error}</p>{/if}
 
 		<div class="tablescroll">
-			<table>
-				<thead>
-					<tr>
-						<th>Time</th>
-						<th>Who</th>
-						<th>Action</th>
-						<th>Target</th>
-						<th>Change</th>
-						<th>Result</th>
-						<th>Detail</th>
+			<!-- svelte-ignore a11y_no_redundant_roles -->
+			<table role="table">
+				<!-- svelte-ignore a11y_no_redundant_roles -->
+				<thead role="rowgroup">
+					<!-- svelte-ignore a11y_no_redundant_roles -->
+					<tr role="row">
+						<th role="columnheader">Time</th>
+						<th role="columnheader">Who</th>
+						<th role="columnheader">Action</th>
+						<th role="columnheader">Target</th>
+						<th role="columnheader">Change</th>
+						<th role="columnheader">Result</th>
+						<th role="columnheader">Detail</th>
 					</tr>
 				</thead>
-				<tbody>
+				<!-- svelte-ignore a11y_no_redundant_roles -->
+				<tbody role="rowgroup">
 					{#each entries as e (e.id)}
 						{@const raw = changeRaw(e)}
-						<tr>
-							<td class="num" data-label="Time">{fmtTime(e.ts)}</td>
-							<td data-label="Who" title={`${e.user} via ${e.source}${e.from ? ` from ${e.from}` : ''}`}>{actorText(e)}</td>
-							<td class="mono" data-label="Action">{e.action}</td>
-							<td class="mono" data-label="Target">{e.target ?? ''}</td>
-							<td class="change" data-label="Change">
-								{#if changeText(e)}<span class="mono">{changeText(e)}</span>{/if}
+						{@const change = changeText(e)}
+						<!-- svelte-ignore a11y_no_redundant_roles -->
+						<tr role="row">
+							<td role="cell" class="num" data-label="Time">{fmtTime(e.ts)}</td>
+							<td role="cell" data-label="Who" title={`${e.user} via ${e.source}${e.from ? ` from ${e.from}` : ''}`}>{actorText(e)}</td>
+							<td role="cell" class="mono" data-label="Action">{e.action}</td>
+							<td role="cell" class="mono" data-label="Target">{e.target ?? ''}</td>
+							<td role="cell" class="change" class:none={!change && !raw} data-label="Change">
+								{#if change}<span class="mono">{change}</span>{/if}
 								{#if raw}
 									<details>
 										<summary>raw</summary>
@@ -138,11 +144,11 @@
 									</details>
 								{/if}
 							</td>
-							<td data-label="Result"><StatusPill kind={RESULT_KIND[e.result] ?? 'off'} label={e.result} /></td>
-							<td class="detail" data-label="Detail">{detailText(e)}</td>
+							<td role="cell" data-label="Result"><StatusPill kind={RESULT_KIND[e.result] ?? 'off'} label={e.result} /></td>
+							<td role="cell" class="detail" class:none={!detailText(e)} data-label="Detail">{detailText(e)}</td>
 						</tr>
 					{:else}
-						<tr class="empty"><td colspan="7">{loading ? 'Reading…' : 'No entries match.'}</td></tr>
+						<tr class="empty"><td role="cell" colspan="7">{loading ? 'Reading…' : 'No entries match.'}</td></tr>
 					{/each}
 				</tbody>
 			</table>
@@ -245,8 +251,13 @@
 	}
 	/* Stacked: a card per entry, each cell labelled by its column. */
 	@container (max-width: 640px) {
+		/* Hidden to the eye, kept for assistive tech (display: none would drop it). */
 		thead {
-			display: none;
+			position: absolute;
+			width: 1px;
+			height: 1px;
+			overflow: hidden;
+			clip-path: inset(50%);
 		}
 		table,
 		tbody {
@@ -276,8 +287,7 @@
 			text-transform: uppercase;
 			color: var(--muted);
 		}
-		td.change:empty,
-		td.detail:empty {
+		td.none {
 			display: none;
 		}
 		tr.empty td {
