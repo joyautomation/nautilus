@@ -124,6 +124,7 @@ export default defineConfig({
           items: [
             { slug: 'guides/deployment' },
             { slug: 'guides/auth' },
+            { slug: 'guides/audit-trail' },
             { slug: 'guides/real-time' },
             { slug: 'guides/redundancy' },
           ],

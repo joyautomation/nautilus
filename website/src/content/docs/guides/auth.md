@@ -7,7 +7,7 @@ An `auth:` block in `nautilus.yaml` says who may do what on a controller.
 
 - **The manifest, reviewed in git**, holds the roles, the areas and which user has which role.
 - **The box** holds the credentials: passwords and personal access tokens, in a users file that never enters the project.
-- **The [audit journal](/guides/http-api/)** records every change, with the user who made it.
+- **The [audit journal](/guides/http-api/#audit-journal)** records every change, with the user who made it. [Audit trail](/guides/audit-trail/) shows it end to end, tampering included.
 
 ## Turn it on
 
