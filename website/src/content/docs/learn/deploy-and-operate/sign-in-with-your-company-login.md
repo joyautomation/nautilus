@@ -100,8 +100,8 @@ Next:
 lesson. The issuer is the address of the realm, and the `client-id` is the
 application the realm knows. Now say which group may do what. In `nautilus.yaml`,
 in the `auth:` block the command added, replace the commented `groups:` lines with
-the two real ones, and shorten `elevation` to a minute so you can see it work (the
-default is fifteen):
+the two real ones, and add `elevation: 1m` (it is commented out; the default is
+fifteen minutes, a minute lets you see it work):
 
 ```yaml
 auth:
@@ -115,10 +115,12 @@ auth:
   elevation: 1m
 ```
 
-The group names are the ones in the login token (Keycloak gives names; Entra ID
-gives ids, below). People in `eng` act as an `engineer`, people in `ops` as an
+The keys are the group names exactly as they arrive in the login token. Keycloak,
+as set up above, sends plain names (`eng`); Entra ID sends ids, below. The line
+the command printed about "the id, never the display name" is about providers
+where a name can be changed or repeated. People in `eng` act as an `engineer`, people in `ops` as an
 `operator`. Give the project a screen so there is a page to sign in to: save this
-as `signin.mimic.json` (the [screen lesson](/learn/operator-screens/screen-in-five-minutes/)
+as `signin.mimic.json` in the project folder (the [screen lesson](/learn/operator-screens/screen-in-five-minutes/)
 explains it):
 
 ```json
@@ -131,8 +133,7 @@ explains it):
 }
 ```
 
-`naut check .` should say `0 with errors` (ignore a warning about `AGENTS.md` or
-the *Diagnostics* page: those are about `naut` itself). The application's secret
+`naut check .` should say `0 with errors` (ignore a warning about `AGENTS.md` or about small text on the *Diagnostics* page: those are about `naut`'s own screens, not yours). The application's secret
 never goes in the project. It goes in an environment variable of the controller:
 
 ```sh
@@ -149,14 +150,16 @@ nautilus · signin — hmi (the project's mimics, 3 pages, built in 3s) + tag AP
 
 ## 3. Sign in
 
-Open <http://localhost:8080> (use the port `naut run` printed). You are sent to
+Open the address `naut run` printed (<http://localhost:8080> unless it said it
+moved). You are sent to
 a sign-in page with one button, **Sign in with localhost** (the provider's name is
 its host name). Press it. Keycloak's own page opens: sign in as `alice` with
 `alice-password`. The browser comes back to the tank screen.
 
 The password went to Keycloak, never to the controller. Ask the controller who it
 thinks you are. Open the browser's developer console on the controller's page
-(F12, *Console*) and run:
+(F12, *Console*) and run (the console shows these fields as an object you can
+open; the lines below are its contents):
 
 ```js
 fetch('/api/me').then(r => r.json()).then(console.log)
