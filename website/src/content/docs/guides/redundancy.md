@@ -481,23 +481,96 @@ What a spare costs:
   cut) then leaves no leader until the marks are cleared.
 
 **What to do:** the alarm names the duplicated controller ("two processes
-claim to be `a`") and the member that raised it. Clear it in this order,
-and only in this order:
+claim to be `a`") and the member that raised it.
 
-1. **Stop the copy, and confirm it is down.** Every later step assumes
-   it is gone: a member restarted while the copy still runs behind a
-   split forgets what it knew about it.
-2. **Restart each member that raised the alarm** (the witness, or the
-   other controller). Marks are kept in memory, so until the operator
-   command for it arrives, a restart is the only way to clear one.
-3. **Then restart the marked controller(s)**, even one that leads. The
-   original shares the marked name, so this is a hand-over to the other
-   controller, which needs the witness up.
+1. **Stop the copy, and confirm it is down**: powered off, or its process
+   ended. Unplugging its cable, pausing or suspending a VM is not stopping
+   it: it comes back as the same process.
+2. **On either controller, run the clear:**
 
-A copy that still runs is marked again within a quarter of a lease and a
-look. Once the marks are cleared and the copy is gone, a real controller
-leads within a takeover's time. In the simulator the pair was leaderless
-for 3.2 to 4.5 s on average across this clear, 5.3 s at most.
+   ```sh
+   naut redundancy clear-duplicate a --copy-stopped
+   ```
+
+   `--copy-stopped` is your word that step 1 is done, and the audit
+   journal records it under your name (`redundancy.clear-duplicate`). The
+   command then:
+   - **checks every member** (this controller, the other one and the
+     witness). All three must be up (a member that started less than a
+     lease and a quarter ago can't answer yet: try again shortly; one that
+     is down for good holds no marks once it is back, so bring it back
+     first), and together they must hear **one**
+     process named `a` in the last lease and a quarter. Otherwise it
+     clears nothing and says who is silent, or who still hears two. One
+     member alone can't tell: a split can put the copy where one member
+     hears it and the original where another does. So the members' answers
+     are taken together;
+   - **clears the mark at each member**, each checking its own voter again
+     first. Each member also keeps the process the check heard and sets
+     aside every other process of that name any member knew. If one of
+     those comes back (a copy that was only unplugged or paused after
+     all), its first message marks the name again, before it gets any
+     vote, whichever member it reaches. If no member hears any process of
+     the name, there is nothing to keep, and the clear is refused: start
+     the real controller (or heal its links), then clear;
+   - **checks again a lease later** and prints what each member says. A
+     mark that came back, or a second process heard by any member, means a
+     copy still runs.
+
+   The controller that was held campaigns again on its own: **no restart,
+   no hand-over.** If a member couldn't be reached during the clear, it
+   keeps its mark (never worse than before) and the command says so: run
+   it again once that member answers.
+
+`naut redundancy status` shows what this controller's voter marks, and
+whether this controller is held or a spare. The same is in `GET
+/api/cluster` (`marked`, `held`, `spare`).
+
+**Who may run it.** Under an `auth:` block, the `redundancy` permission
+(`administrator` by default). In a browser session it asks for your
+password again, like the other elevated actions. A personal access token
+or `NAUTILUS_TOKEN` counts as fresh, so on the command line it is the
+role alone. While nobody leads, signing in through a browser waits for
+an election, so use the command line with a token then. Without an `auth:` block, only `NAUTILUS_TOKEN` will do, as a
+bearer token. These commands decide which process the pair counts as a
+member, so a same-origin request with no credential is refused, unlike
+other writes. The command line reads the credential from
+`NAUTILUS_TOKEN` or `--token-file`, never from its arguments.
+
+**Without the command** (a member on an older release, which answers
+404), clear by restarts, in this order: restart each member that raised
+the alarm, then the marked controller(s), even one that leads. The
+original shares the marked name, so that last restart is a hand-over to
+the other controller, which needs the witness up. Marks are kept in
+memory, so a restart clears them. A member restarted while the copy still
+runs behind a split forgets what it knew about it, which is why step 1
+comes first either way.
+
+In the simulator (two-second lease, 300 runs for each of eight split
+shapes):
+- **No clear gave two leaders**, also when it reached only one or two of
+  the members.
+- **Cleared once the split had healed and the copy was stopped**, the pair
+  was never without a leader on average, and for 0.7 s at most. The
+  restarts, measured the same way, left it without one for 3.2 to 4.5 s on
+  average, and 5.3 s at most.
+- **Cleared during the split**, the longest time without a leader after
+  the split healed averaged 0.1 to 0.5 s (1.0 s at most). A clear that
+  reached only some members averaged up to 1.5 s (4.0 s at most).
+- **With the copy still running behind a split** (step 1 skipped), the
+  check refused every clear. Asking each member alone instead let
+  through clears that gave two leaders in 7 of 300 runs.
+- **With the copy only cut off at the clear** (unplugged, not stopped)
+  and coming back later into a split, no two leaders in 3,000 runs: its
+  first message marked it again. Without that, 26 of 500, more than the
+  restarts' 25.
+- **With the copy only paused, or its scans hung, at the clear**, and
+  coming back straight into a split beside the other controller: two
+  leaders in 4 of 1,000 runs (paused) and up to 13 of 1,000 (hung), for
+  36 ms to 0.8 s, against 56 and 57 of 1,000 with the restarts. Until the
+  copy's own first message arrives, its voter's answers can still count
+  for the other controller. This is why step 1 means powered off or its
+  process ended.
 
 **When a spare is involved** (until the `recommission --from-spare`
 command arrives):
@@ -505,12 +578,13 @@ command arrives):
 - **The spare is the copy** (`redundancy.spare` on a box that is not the
   real controller): stop it, and keep it stopped. That is step 1 above.
 - **The spare is the real box** (its copy was running first): stop the
-  copy and confirm it is down, restart the members that raised the alarm
-  (steps 1 and 2), then on the real box stop naut, delete `quorum.state`
-  and start naut again. It starts uncommissioned and re-adopts from the
-  other controller within seconds, as after a network card change. Step
-  2 is not optional: while the members that marked it run, their marks
-  hold the real box for good, and it never leads. It has a cost here:
+  copy and confirm it is down. Then, on the real box, stop naut, delete
+  `quorum.state` and start naut again: it starts uncommissioned and
+  re-adopts from the other controller within seconds, as after a network
+  card change. A spare answers no command, so this comes before the
+  clear. Then, a lease and a quarter later, run the clear on the other
+  controller. The clear is not optional: while the members' marks stand,
+  they hold the real box for good, and it never leads. It has a cost here:
   the other controller leads alone (the spare is no standby), so
   restarting it leaves the pair without a leader until it is back: its
   own start-up plus about one lease, while its restarted voter waits

@@ -50,7 +50,7 @@ const signedIn = (extra: Partial<Me> = {}): Me => ({
 	roles: ['engineer'],
 	permissions: { '*': ['read', 'write', 'force', 'substitute'] },
 	session: { expires: '2026-11-20T20:00:00Z', elevatedUntil: '2026-11-20T08:00:00Z' },
-	elevated: ['force', 'edit', 'activate', 'deploy', 'config', 'users', 'override'],
+	elevated: ['force', 'edit', 'activate', 'deploy', 'config', 'users', 'override', 'redundancy'],
 	signIn: true,
 	now: '2026-11-20T09:00:00Z',
 	...extra

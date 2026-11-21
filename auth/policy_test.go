@@ -264,11 +264,12 @@ func TestAreaEdges(t *testing.T) {
 }
 
 // The elevated permissions are exactly those that change the program, the
-// I/O, a forced value or who may do what (#708 PR 5c): an operator's
+// I/O, a forced value, who may do what (#708 PR 5c), or which process a
+// redundant pair counts as its member (#1029 3c-3a): an operator's
 // writes, acks and SFC commands, and a supervisor's shelving and
 // substitutes, never ask for the password again.
 func TestElevatedPermissions(t *testing.T) {
-	want := map[string]bool{Force: true, Edit: true, Activate: true, Deploy: true, Config: true, Users: true, Override: true}
+	want := map[string]bool{Force: true, Edit: true, Activate: true, Deploy: true, Config: true, Users: true, Override: true, Redundancy: true}
 	for _, p := range Permissions {
 		if Elevated(p) != want[p] {
 			t.Errorf("Elevated(%q) = %v, want %v", p, Elevated(p), want[p])

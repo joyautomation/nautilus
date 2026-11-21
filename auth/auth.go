@@ -35,10 +35,15 @@ const (
 	Audit      = "audit"      // reading the audit journal
 	Users      = "users"      // managing users and tokens
 	Override   = "override"   // #787's engineer override
+	// Redundancy is the redundant pair's operator commands: clearing a
+	// duplicate mark, commissioning and re-commissioning (#710, #1029
+	// 3c-3). Safety-critical: who may tell the pair which process is the
+	// member.
+	Redundancy = "redundancy"
 )
 
 // Permissions lists every permission, in the order /api/me reports them.
-var Permissions = []string{Read, Write, Ack, Shelve, Substitute, Force, SFC, Edit, Activate, Deploy, Config, Audit, Users, Override}
+var Permissions = []string{Read, Write, Ack, Shelve, Substitute, Force, SFC, Edit, Activate, Deploy, Config, Audit, Users, Override, Redundancy}
 
 // areaScoped are the permissions an area limits to its tags. The rest
 // apply to the whole controller, whatever areas a grant names.
@@ -49,9 +54,10 @@ func AreaScoped(perm string) bool { return areaScoped[perm] }
 
 // ElevatedPermissions are the permissions a browser sign-in holds only
 // while its password is fresh (auth.elevation, #708 PR 5c): what changes
-// the program, the I/O, a forced value or who may do what. A token always
+// the program, the I/O, a forced value, who may do what, or which process
+// a redundant pair counts as its member. A token always
 // counts as fresh. In /api/me's order.
-var ElevatedPermissions = []string{Force, Edit, Activate, Deploy, Config, Users, Override}
+var ElevatedPermissions = []string{Force, Edit, Activate, Deploy, Config, Users, Override, Redundancy}
 
 // Elevated reports whether perm is one of the ElevatedPermissions.
 func Elevated(perm string) bool { return slices.Contains(ElevatedPermissions, perm) }
@@ -81,7 +87,7 @@ var builtins = []struct {
 	{Operator, []string{Write, Ack, SFC}},
 	{Supervisor, []string{Shelve, Substitute, Audit}},
 	{Engineer, []string{Force, Edit, Activate, Deploy, Config}},
-	{Administrator, []string{Users, Override}},
+	{Administrator, []string{Users, Override, Redundancy}},
 }
 
 // builtinRoles is each built-in role's permission set.

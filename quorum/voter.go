@@ -77,9 +77,25 @@ type Voter struct {
 	// this voter's candidate counts, until ClearDuplicate (#1029 3c). In
 	// memory only: a restart clears them, and a copy still running is
 	// marked again within a quarter lease and a look.
-	boots  map[NodeID][]bootSeen
-	banned map[NodeID][]uint64 // evicted_boot_banned only
-	marked map[NodeID]bool
+	boots map[NodeID][]bootSeen
+	// bootsHeard: per name, the boots heard in that name's own requests and
+	// when each was last heard, kept whether or not the name is marked
+	// (boots stops taking new boots at the mark). The operator's clear is
+	// refused while two of them were heard within a lease and D (CopyHeard).
+	bootsHeard map[NodeID][]bootHeard
+	// retired: per name, the boots an operator's clear set aside: every
+	// boot of the name this voter knew but the one the clear kept (the
+	// one the members heard at the check). A NEW frame from a retired
+	// boot marks the name again at once, before anything is granted: a
+	// copy that was unplugged, paused or cut off at the clear (alive, just
+	// unheard) comes back as that same boot (#1135 review). A real restart
+	// is a new boot and is never retired. In memory, as marks are.
+	retired map[NodeID][]bootSeen
+	// started is when this voter started (NewVoter): LiveBoots knows
+	// nothing of the time before it.
+	started Instant
+	banned  map[NodeID][]uint64 // evicted_boot_banned only
+	marked  map[NodeID]bool
 	// relaySeq: dup_mark_from_relay's stand-in Seq (mutation only).
 	relaySeq uint64
 	// boot identifies this voter's process boot on its replies (SetBoot).
@@ -108,6 +124,107 @@ type bootSeen struct {
 	seq         uint64
 }
 
+// bootHeard is one boot of a name and when its latest request arrived.
+type bootHeard struct {
+	nonce uint64
+	at    Instant
+	seq   uint64 // the highest Seq heard from it
+}
+
+// noteHeard records that name's own request under nonce arrived at now.
+func (v *Voter) noteHeard(now Instant, name NodeID, nonce, seq uint64) {
+	if nonce == 0 || name == "" {
+		return
+	}
+	if v.bootsHeard == nil {
+		v.bootsHeard = map[NodeID][]bootHeard{}
+	}
+	hs := v.bootsHeard[name]
+	for i := range hs {
+		if hs[i].nonce == nonce {
+			hs[i].at = max(hs[i].at, now)
+			hs[i].seq = max(hs[i].seq, seq)
+			return
+		}
+	}
+	if len(hs) >= maxBoots {
+		old := 0
+		for j := range hs {
+			if hs[j].at < hs[old].at {
+				old = j
+			}
+		}
+		hs = append(hs[:old:old], hs[old+1:]...)
+	}
+	v.bootsHeard[name] = append(hs, bootHeard{nonce: nonce, at: now, seq: seq})
+}
+
+// LiveBoots returns the boots of name that each sent this voter a request
+// within the last lease and D (D: the one-way delay rule, a quarter lease
+// stretched by the clock-rate margin), by nonce, sorted. The operator's
+// clear is refused while the members' answers, taken together, name two
+// (#1029 3c-3): a copy behind a split may reach one member and its
+// original another, so no single member hears both. A copy that has gone
+// quiet (stopped, or a spare) drops out after that time; a copy no member
+// hears can't be seen at all, which is why the operator also attests that
+// it is off. A real restart reads as two boots for that long too: the
+// clear waits it out.
+func (v *Voter) LiveBoots(now Instant, name NodeID) []uint64 {
+	l := max(v.lease, v.st.Lease)
+	since := now.Add(-(l + time.Duration(float64(l/4)*(1+MaxRho))))
+	var out []uint64
+	for _, h := range v.bootsHeard[name] {
+		if h.at >= since {
+			out = append(out, h.nonce)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// Settled reports whether this voter has run for a lease and D, the
+// window LiveBoots looks back over: until then it can't say what boots
+// ran, and the operator's clear is refused (#1135 review).
+func (v *Voter) Settled(now Instant) bool {
+	l := max(v.lease, v.st.Lease)
+	return now >= v.started.Add(l+time.Duration(float64(l/4)*(1+MaxRho))) || mut("clear_unsettled")
+}
+
+// CopyLive reports whether the members' LiveBoots answers for one name,
+// taken together, name two or more boots: a copy still runs where some
+// member hears it, and the operator's clear is refused (#1029 3c-3). Each
+// member alone may hear just one: a split can put the copy with one member
+// and its original with another.
+func CopyLive(answers ...[]uint64) bool {
+	live := map[uint64]bool{}
+	for _, a := range answers {
+		if mut("clear_per_member") && len(a) < 2 {
+			continue
+		}
+		for _, b := range a {
+			live[b] = true
+		}
+	}
+	return len(live) >= 2
+}
+
+// KeptBoot is the one boot the members' LiveBoots answers name, which the
+// clear keeps (CopyLive refused more than one); 0 when none heard any.
+func KeptBoot(answers ...[]uint64) uint64 {
+	for _, a := range answers {
+		if len(a) > 0 {
+			return a[0]
+		}
+	}
+	return 0
+}
+
+// CopyHeard reports whether this voter alone hears two boots of name
+// (LiveBoots): a copy still reaches it, and its own clear is refused.
+func (v *Voter) CopyHeard(now Instant, name NodeID) bool {
+	return len(v.LiveBoots(now, name)) >= 2
+}
+
 // maxBoots is how many boots per name a voter keeps evidence for.
 const maxBoots = 8
 
@@ -127,6 +244,9 @@ const maxBoots = 8
 // clock). The name is then marked.
 func (v *Voter) noteBoot(now Instant, name NodeID, nonce, seq uint64) {
 	if nonce == 0 || seq == 0 || name == "" || mut("dup_mark_off") {
+		return
+	}
+	if !v.marked[name] && v.retiredFrame(now, name, nonce, seq) {
 		return
 	}
 	if v.marked[name] {
@@ -243,13 +363,159 @@ func (v *Voter) Marked() []NodeID {
 // operator has stopped the copy. A copy still running is marked again as
 // soon as it is heard beside the original. It reports whether name was
 // marked. Restarting this voter clears every mark too.
-func (v *Voter) ClearDuplicate(name NodeID) bool {
-	was := v.marked[name]
-	if !mut("clear_keeps_mark") {
-		delete(v.marked, name)
-		delete(v.boots, name)
+func (v *Voter) ClearDuplicate(name NodeID) bool { return v.clearDuplicate(name, 0, false, nil) }
+
+// MutClearRetiresMarkedOnly reports the clear_retires_marked_only
+// mutation, for the simulator's model of the command.
+func MutClearRetiresMarkedOnly() bool { return mut("clear_retires_marked_only") }
+
+// BootSeq is one boot of a name and the highest Seq heard from it.
+type BootSeq struct {
+	Nonce uint64 `json:"nonce"`
+	Seq   uint64 `json:"seq"`
+}
+
+// KnownBoots is every boot of name this voter knows (heard in its own
+// requests, marked or retired), with the highest Seq heard from each: the
+// clear's check gathers them from every member, so each retires the
+// boots any member knew (#1135, naut-lead's ruling).
+func (v *Voter) KnownBoots(name NodeID) []BootSeq {
+	var out []BootSeq
+	add := func(nonce, seq uint64) { out = addBoot(out, nonce, seq) }
+	for _, b := range v.retired[name] {
+		add(b.nonce, b.seq)
 	}
+	for _, b := range v.boots[name] {
+		add(b.nonce, b.seq)
+	}
+	for _, h := range v.bootsHeard[name] {
+		add(h.nonce, h.seq)
+	}
+	return out
+}
+
+// RetiredBoots is the boots of name an operator's clear retired at this
+// voter, by nonce: the clear's check uses them to see whether a boot is
+// still to be retired somewhere (a member the last clear missed).
+func (v *Voter) RetiredBoots(name NodeID) []uint64 {
+	var out []uint64
+	for _, b := range v.retired[name] {
+		out = append(out, b.nonce)
+	}
+	return out
+}
+
+// UnionBoots merges the members' KnownBoots, each boot once with the
+// highest Seq any member heard.
+func UnionBoots(lists ...[]BootSeq) []BootSeq {
+	var out []BootSeq
+	for _, l := range lists {
+		for _, b := range l {
+			out = addBoot(out, b.Nonce, b.Seq)
+		}
+	}
+	return out
+}
+
+func addBoot(out []BootSeq, nonce, seq uint64) []BootSeq {
+	if nonce == 0 {
+		return out
+	}
+	for i := range out {
+		if out[i].Nonce == nonce {
+			out[i].Seq = max(out[i].Seq, seq)
+			return out
+		}
+	}
+	return append(out, BootSeq{Nonce: nonce, Seq: seq})
+}
+
+// ClearDuplicateKeeping is ClearDuplicate for the operator's command
+// (#1029 3c-3a): keep is the one boot of name the members heard at its
+// check. Every other boot of name this voter knows, and every boot in
+// also (what the other members knew), is retired: a new frame from one
+// marks name again at once (retiredFrame).
+func (v *Voter) ClearDuplicateKeeping(name NodeID, keep uint64, also []BootSeq) bool {
+	if mut("clear_retires_own_only") {
+		also = nil
+	}
+	return v.clearDuplicate(name, keep, true, also)
+}
+
+func (v *Voter) clearDuplicate(name NodeID, keep uint64, retire bool, also []BootSeq) bool {
+	was := v.marked[name]
+	if mut("clear_keeps_mark") {
+		return was
+	}
+	if retire && !mut("clear_forgets_boots") {
+		var rs []bootSeen
+		add := func(nonce, seq uint64) {
+			if nonce == keep {
+				return
+			}
+			for i := range rs {
+				if rs[i].nonce == nonce {
+					rs[i].seq = max(rs[i].seq, seq)
+					return
+				}
+			}
+			rs = append(rs, bootSeen{nonce: nonce, seq: seq})
+		}
+		for _, b := range v.retired[name] {
+			add(b.nonce, b.seq)
+		}
+		for _, b := range v.boots[name] {
+			add(b.nonce, b.seq)
+		}
+		for _, h := range v.bootsHeard[name] {
+			add(h.nonce, h.seq)
+		}
+		for _, b := range also {
+			add(b.Nonce, b.Seq)
+		}
+		if len(rs) > 4*maxBoots {
+			rs = rs[len(rs)-4*maxBoots:]
+		}
+		if v.retired == nil {
+			v.retired = map[NodeID][]bootSeen{}
+		}
+		v.retired[name] = rs
+	}
+	delete(v.marked, name)
+	delete(v.boots, name)
 	return was
+}
+
+// retiredFrame marks name at once when nonce is a boot the operator's
+// clear retired and seq is a new frame from it (above any Seq heard from
+// it: a replay proves nothing). The boots evidence is rebuilt from what
+// this voter heard, so HeldBy names the boot heard first. It reports
+// whether it marked.
+func (v *Voter) retiredFrame(now Instant, name NodeID, nonce, seq uint64) bool {
+	i := slices.IndexFunc(v.retired[name], func(b bootSeen) bool { return b.nonce == nonce })
+	if i < 0 || seq <= v.retired[name][i].seq {
+		return false
+	}
+	v.retired[name][i].seq = seq
+	var bs []bootSeen
+	for _, h := range v.bootsHeard[name] {
+		if h.nonce != nonce {
+			bs = append(bs, bootSeen{nonce: h.nonce, first: h.at, last: h.at, seq: h.seq})
+		}
+	}
+	bs = append(bs, bootSeen{nonce: nonce, first: now, last: now, seq: seq})
+	if v.boots == nil {
+		v.boots = map[NodeID][]bootSeen{}
+	}
+	v.boots[name] = bs
+	if v.marked == nil {
+		v.marked = map[NodeID]bool{}
+	}
+	v.marked[name] = true
+	v.marks++
+	v.lastMarked = name
+	v.duplicate(true, name, DupConfirmed)
+	return true
 }
 
 // seenNonce is one boot nonce heard under a name, live until until.
@@ -389,7 +655,7 @@ func NewVoter(self NodeID, lease time.Duration, st VoterState, now Instant) *Vot
 	if mut("restart_grants") {
 		wait = now
 	}
-	v := &Voter{self: self, lease: lease, st: st, waitUntil: wait}
+	v := &Voter{self: self, lease: lease, st: st, waitUntil: wait, started: now}
 	if !mut("grant_nonce_volatile") {
 		v.grantNonce = st.GrantNonce // a term stays one boot's across a restart
 	}
@@ -721,6 +987,7 @@ func (v *Voter) Handle(now Instant, r Request) (*Persist, []Reply) {
 	// campaign or a renewal, its own candidate's too (#1029 step 1).
 	v.noteNonce(r.From, r.Nonce, now.Add(v.lease))
 	v.noteBoot(now, r.From, r.Nonce, r.Seq)
+	v.noteHeard(now, r.From, r.Nonce, r.Seq)
 	if !mut("held_by_before_frame") {
 		// The incumbent as of this very frame: a marked standby gets only
 		// refusals, and a lossy original's frames can be half a lease

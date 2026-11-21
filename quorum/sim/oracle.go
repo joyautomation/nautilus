@@ -27,6 +27,8 @@ type Record struct {
 	// Marks are the names voters confirmed as run by two processes at
 	// once (quorum.Voter.Marked, #1029 3c), in order.
 	Marks []Mark
+	// Clears are the operator's clears (Clear faults), in order.
+	Clears []ClearRec
 	// Spares are the controller copies that demoted themselves to a
 	// spare (#1029 3c-2), in order: when the flag became durable, and
 	// each restart that read it.
@@ -521,6 +523,14 @@ type Mark struct {
 	At    time.Duration
 	Voter Addr
 	Name  quorum.NodeID
+}
+
+// ClearRec is one operator clear at a member's voter (a Clear fault): the
+// names it cleared, and those its guard refused (#1029 3c-3).
+type ClearRec struct {
+	At               time.Duration
+	Node             Addr
+	Cleared, Refused []quorum.NodeID
 }
 
 // Check runs every oracle over r.

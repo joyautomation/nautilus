@@ -898,6 +898,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/sfc/step", s.audited("sfc.step", sfcTarget(true), s.handleSFCStep))
 	mux.Handle("POST /api/sfc/transition", s.audited("sfc.transition", sfcTarget(false), s.handleSFCTransition))
 	mux.HandleFunc("GET /api/cluster", s.handleCluster)
+	mux.Handle("POST /api/cluster/clear-duplicate", s.audited("redundancy.clear-duplicate", s.clearDuplicateTarget, s.handleClearDuplicate))
 	mux.HandleFunc("GET /api/audit", s.handleAudit)
 	mux.HandleFunc("GET /api/me", s.handleMe)
 	// Sign-in and sign-out journal themselves (auth.signin, auth.signout),
@@ -975,6 +976,10 @@ func (s *Server) proxyStandby(routes *http.ServeMux, mux http.Handler) http.Hand
 		}
 		if !strings.HasPrefix(r.URL.Path, "/api/") ||
 			r.URL.Path == "/api/cluster" ||
+			// The pair's operator commands act on this controller and its
+			// members, never on the leader's tag store, and are needed
+			// exactly when nobody leads (#1029 3c-3a).
+			(localClusterOps[r.URL.Path] && !mutServer("cluster_ops_proxied")) ||
 			strings.HasPrefix(r.URL.Path, "/api/history") {
 			mux.ServeHTTP(w, r)
 			return

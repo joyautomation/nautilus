@@ -59,6 +59,14 @@ type Status struct {
 	// copies, reached or not, synced or not, and this one's. Nil
 	// elsewhere.
 	Log *LogStatus `json:"log,omitempty"`
+	// A redundant pair member's duplicate state (#1029 3c): Marked, the
+	// names its voter marks as run by two processes at once; Held, a
+	// voter's last word marked this controller's own name, so it
+	// campaigns no more until the mark is cleared; Spare, this controller
+	// is a copy and silent.
+	Marked []string `json:"marked,omitempty"`
+	Held   bool     `json:"held,omitempty"`
+	Spare  bool     `json:"spare,omitempty"`
 }
 
 // LogStatus is a pair's operator-intent log as one controller sees it.

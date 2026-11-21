@@ -105,19 +105,20 @@ What changes is that `naut run` journals every action (§3) with `user: anonymou
   - `config` (#706/#711 applies);
   - `audit` (read the journal);
   - `users` (manage users and tokens);
-  - `override` (#787's engineer override).
+  - `override` (#787's engineer override);
+  - `redundancy` (the redundant pair's operator commands: clear a duplicate mark, commission, re-commission; #1029 3c-3).
 - **Built-in roles:**
   - viewer: read.
   - operator: + write, ack, sfc.
   - supervisor: + shelve, suppress, audit.
   - engineer: + force, edit, activate, deploy, config.
-  - administrator: + users, override.
+  - administrator: + users, override, redundancy (#1029 3c-3: the pair's operator commands).
   - Custom roles inherit and add or remove actions.
 - **Areas** scope `write`, `ack`, `shelve`, `suppress` and `force` by tag patterns (tag classes later).
   - A grant without areas covers the whole controller.
   - The server checks the target tag against the grant, and refuses with 403 and a journal entry.
 - **Screens.** The HMI kit hides or disables what the user can't do (from `GET /api/me`). Screens are enforced through the data: the API refuses the action, and a screen the user may not see shows nothing they may not read. That is said plainly in the guide; screen-level hiding is a convenience, not the control.
-- **Elevation.** Actions marked elevated (default: force, edit, activate, deploy, config, users, override) need a re-authentication within the last `elevation`.
+- **Elevation.** Actions marked elevated (default: force, edit, activate, deploy, config, users, override, redundancy) need a re-authentication within the last `elevation`.
   - Without one, the API answers 401 with `{"elevate": true}`; the HMI and the extension prompt and retry.
   - Local users re-enter their password. OIDC users go through `prompt=login&max_age=0`, and the server checks `auth_time`.
 - **Service tokens and the historian.** #849 says the historian's `NAUTILUS_TOKEN` is the same secret as the controller's.
@@ -217,7 +218,7 @@ Groups beyond the token's size limit (Entra's overage claim) are refused with a 
   - **The chain is per controller.** `prev` chains each controller's own file in its own write order. It isn't part of the replicated entry, whose identity is `id`. Two files that hold the same entries in a different order both verify.
 
 **When the journal can't be written** (disk full, read-only filesystem), the action and the entry must not part ways silently.
-- **Decided** (question 5, §6, 2026-11-18): elevated actions (force, edit, activate, deploy, config, users, override, and #707's substitutes) are **refused** (503, "audit journal cannot be written").
+- **Decided** (question 5, §6, 2026-11-18): elevated actions (force, edit, activate, deploy, config, users, override, redundancy, and #707's substitutes) are **refused** (503, "audit journal cannot be written").
 - Operator actions (write, ack, shelve, sfc) are **allowed, and an "audit journal cannot be written" system alarm is raised**, so a full disk can't stop an operator running the plant. A failed entry leaves nothing in the file (it is cut back), so the server's recording seam keeps it in the ring and records it again, with the same `id`, when the file can be written.
 - **Exempt as ways back to normal** (James, 2026-11-18): clearing forces and rolling back an edit are allowed while the journal is down; their response carries `X-Nautilus-Audit-Journal: down`.
 - Built in #894 for today's routes (setting a force, program edit and activate refused; every action classed, unclassed ones refused): the system alarm `nautilus.audit-journal` (when the project has alarms) and an `audit` card on the drivers block. The action that first finds the journal broken has already been applied; elevated actions are refused from the next one.

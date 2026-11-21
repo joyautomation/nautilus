@@ -314,12 +314,16 @@ type pendingGrant struct {
 
 // World is one run in progress.
 type World struct {
-	o     Options
-	now   time.Duration
-	seq   uint64
-	q     queue
-	nodes [nNodes]*node
-	net   *rand.Rand
+	// clearPlan is the operator's clear command's check, made once for
+	// all the Clear faults at one instant (the real command checks once
+	// and sends every member the same plan).
+	clearPlan *clearPlan
+	o         Options
+	now       time.Duration
+	seq       uint64
+	q         queue
+	nodes     [nNodes]*node
+	net       *rand.Rand
 	// probeNet draws the network's chances for the standby's probes and
 	// their replies (#1029 layer 2), and viaProbe says a send is one: the
 	// probes leave every other frame's draws as they were, so a seed's
