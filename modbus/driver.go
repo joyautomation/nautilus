@@ -1189,6 +1189,11 @@ func (s *source) holds(name string, v any, dv devValue) bool {
 	return true
 }
 
+func (s *source) isOutput(name string) bool {
+	_, ok := s.byName[name]
+	return ok
+}
+
 // recordOutputLocked records what a poll read for one output, while the
 // start-up baseline still needs it. It decides nothing: the decision is made
 // on a push computed from the read (BeginScan). Only with no runtime driving
@@ -1749,7 +1754,9 @@ func (d *Driver) pollBlock(ctx context.Context, s *source, c conn, br *blockRun)
 				continue
 			}
 			s.snapshot[t.Name] = v
-			queued = s.recordOutputLocked(t.Name, devValue{words: append([]uint16(nil), words...), decoded: v}, !aware) || queued
+			if s.recording && s.isOutput(t.Name) {
+				queued = s.recordOutputLocked(t.Name, devValue{words: append([]uint16(nil), words...), decoded: v}, !aware) || queued
+			}
 		} else {
 			s.snapshot[t.Name] = bits[off]
 			queued = s.recordOutputLocked(t.Name, devValue{decoded: bits[off]}, !aware) || queued
@@ -2337,14 +2344,17 @@ func (s *source) resetLiveLocked() {
 	}
 }
 
-// liveLocked: the source is online and every block has been answered on this
-// connection, so a scan reading it now reads all of it live. Caller holds mu.
+// liveLocked: the source is online and every block has been answered (or
+// reports no gateway answer) on this connection, so a scan reading it now reads all of it live. Caller holds mu.
 func (s *source) liveLocked() bool {
 	if !s.online {
 		return false
 	}
 	for _, br := range s.blocks {
-		if !br.live {
+		// A block the gateway keeps answering 0x0A/0x0B for (a dead device
+		// behind it) is settled for the others: waiting on it would hold
+		// every output of a source that is otherwise reading.
+		if !br.live && !br.gwFail {
 			return false
 		}
 	}

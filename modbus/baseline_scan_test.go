@@ -150,6 +150,16 @@ func TestUnreadableOutputIsCommandedAtTheLivePush(t *testing.T) {
 // driver written to directly decides at the read, as before. A read that
 // came before the connection dropped is not one to decide against.
 func TestADroppedConnectionsReadIsNotLive(t *testing.T) {
+	for _, aware := range []bool{false, true} {
+		name := "driven directly"
+		if aware {
+			name = "with a runtime's scans"
+		}
+		t.Run(name, func(t *testing.T) { droppedConnectionsRead(t, aware) })
+	}
+}
+
+func droppedConnectionsRead(t *testing.T, aware bool) {
 	srv := newSlave(t)
 	srv.Unit(1).SetHolding(200, 5)
 	rec := &recorder{}
@@ -177,13 +187,24 @@ func TestADroppedConnectionsReadIsNotLive(t *testing.T) {
 	up.Store(false)
 	(*conns.Load()).Close() // the connection drops after a read
 	waitFor(t, "offline", func() bool { v, _ := d.ReadInputs(); return v["DEV__Online"] == false })
+	if aware {
+		d.BeginScan()
+	}
 	_ = d.WriteOutputs(nio.Values{"SP": float64(1)}) // differs from the stale read of 5
 	settle()
 	if q := d.Health().Sources[0].QueuedWrites; q != 0 {
 		t.Fatalf("queued = %d: the baseline decided on a read from a dropped connection", q)
 	}
 	up.Store(true)
-	waitFor(t, "decided on the new connection's read", func() bool { return srv.Unit(1).Holding(200) == 1 })
+	waitFor(t, "decided on the new connection's read", func() bool {
+		if aware { // a runtime's scans: BeginScan, then the push
+			d.BeginScan()
+			if d.OutputsWanted() {
+				_ = d.WriteOutputs(nio.Values{"SP": float64(1)})
+			}
+		}
+		return srv.Unit(1).Holding(200) == 1
+	})
 }
 
 // A readable output waiting for its first read while the gate closes sends
@@ -272,5 +293,53 @@ func TestAnUnchangingOutputIsStillDecidedAtTheLivePush(t *testing.T) {
 	scan(60)
 	if got := cmdWrites(rec); len(got) != 1 || got[0] != 7 {
 		t.Fatalf("FC6 frames to Cmd = %v, want [7]", got)
+	}
+}
+
+// One block the gateway keeps answering 0x0B for (a dead device behind it)
+// must not hold the outputs of a source that is otherwise reading: they are
+// decided on the live inputs, and later commands go out.
+func TestADeadBlockBehindAGatewayDoesNotHoldTheOutputs(t *testing.T) {
+	srv := newSlave(t)
+	u := srv.Unit(1)
+	u.SetHolding(0, 4)
+	u.SetHolding(10, 9)
+	u.InjectExceptionAt(FCReadHoldingRegisters, 1000, 0x0B)
+	rec := &recorder{}
+	m := Manifest{Sources: []Source{fastSource("DEV", srv.Addr())}, Tags: []TagBinding{
+		{Name: "In", Source: "DEV", Table: TableHolding, Address: 0, Format: "uint16"},
+		{Name: "Cmd", Source: "DEV", Table: TableHolding, Address: 10, Format: "uint16", Writable: true},
+		{Name: "Far", Source: "DEV", Table: TableHolding, Address: 1000, Format: "uint16"},
+	}}
+	d, err := New(m, WithScanRate(10*time.Millisecond), WithDialer(recordingDialer(rec)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(d.sources[0].blocks); n < 2 {
+		t.Fatalf("blocks = %d, want 2", n)
+	}
+	rt, err := runtime.New(runtime.Options{
+		Program: incProgram, Driver: d,
+		Tags: []runtime.TagDef{runtime.Input("In", runtime.Init(int64(0))), runtime.Input("Far", runtime.Init(int64(0))), runtime.Output("Cmd", runtime.Init(int64(0))),
+			runtime.Input("DEV__Online", runtime.Init(false)), runtime.Input("DEV__Outages", runtime.Init(int64(0)))},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	startDriver(t, d)
+	for i := 0; i < 80; i++ {
+		rt.Scan()
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := cmdWrites(rec); len(got) != 1 || got[0] != 5 {
+		t.Fatalf("FC6 frames to Cmd = %v, want [5]: the live value once, never the init-derived 1", got)
+	}
+	u.SetHolding(0, 20) // the program now commands 21
+	for i := 0; i < 80; i++ {
+		rt.Scan()
+		time.Sleep(10 * time.Millisecond)
+	}
+	if u.Holding(10) != 21 {
+		t.Fatalf("device Cmd = %d, the program commands 21: frames %v", u.Holding(10), cmdWrites(rec))
 	}
 }
