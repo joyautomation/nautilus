@@ -1100,6 +1100,32 @@ The CLI hands the writer what it needs from the manifest.
    - the override force layer (D4);
    - the LAD reader/writer sized by S3.
 
+**What the CPU runs: one archive per deploy (decided 2026-11-21, #789).**
+TIA's compare cannot say that a CPU runs what is in git by rebuilding from
+source. The offline probes on #789 showed this:
+- Two builds of the same SCL compare *different*. The blocks differ only in
+  their time stamps.
+- A copy of the compiled block compares *identical*.
+- An XML import gets new time stamps, so it compares *different*.
+
+So:
+- **Archive every deploy.** Each successful download archives the session
+  project (`.zap`, content-addressed). It journals the git commit, the
+  source hash, TIA's build and version, the archive's hash, and the
+  `DownloadId` read after the load.
+- **Checking a git commit.** To check that the CPU runs a commit, tiad
+  follows the commit to its deploy record. It opens that archive and runs
+  `CompareToOnline`, which must come back equal.
+- **Changes made outside nautilus.** A compare against the last deploy's
+  archive that comes back different means the CPU was changed outside
+  nautilus. That raises an alarm.
+- **Fallback.** Master copies of the compiled blocks are the fallback, only
+  if the archive route hits a wall.
+
+This is not built yet. It is a later PR, after the hardware question on
+#789 is settled: Openness compares hardware only in-project, and whether an
+uploaded CPU compares identical to the project's CPU needs a CPU window.
+
 **Code that doesn't need the image,** in order:
 1. the Web API client;
 2. `target: siemens`;
@@ -1120,3 +1146,4 @@ The SimaticML reader waits for real S2a exports to use as fixtures.
 | D4 | Write-only first, then the opt-in override layer for I/O-bound tags. Forcing is required, so it is on the roadmap. The CPU's FORCE LED stays dark under it, and the docs must say so |
 | D5 | Adoption early: S3 follows the first bench download (§2a, §7) |
 | D6 | The read-only S1 probe is approved. Anything that is not read-only is announced to naut-lead first |
+| D7 | (2026-11-21) What the CPU runs is proven against the archived project of the deploy, never against a rebuild from source (§7, #789) |
