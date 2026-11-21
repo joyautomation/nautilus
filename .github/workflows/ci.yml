@@ -129,12 +129,13 @@ jobs:
       # prints the stream as the usual go test output.
       # TestReleaseTargetsBuildWithoutCgo cross-compiles the CLI seven times
       # (about 4 minutes, most of cmd/naut's time): the go-crossbuild job runs
-      # it in parallel instead (#752).
+      # it in parallel instead (#752). -timeout 20m: cmd/naut alone runs
+      # about 580 s here, against go test's default 10 m per package.
       - name: go test ./...
         shell: bash
         run: |
           mkdir -p evidence
-          go test -json -count=1 -coverprofile=evidence/cover.out -skip '^TestReleaseTargetsBuildWithoutCgo$' ./... | tee evidence/go-test.json | go run ./tools/evidence cat
+          go test -json -count=1 -timeout 20m -coverprofile=evidence/cover.out -skip '^TestReleaseTargetsBuildWithoutCgo$' ./... | tee evidence/go-test.json | go run ./tools/evidence cat
       # Test plan §3.4 (#710 PR 3b-3a): the quorumtest build's pause hooks
       # between a write's gate check and its send, swept on a real socket
       # (a few seconds). The tag adds the hooks, so it runs apart from ./...
