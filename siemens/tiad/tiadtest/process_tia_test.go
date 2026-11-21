@@ -632,6 +632,87 @@ func TestAgentAnswersConsistentDownload(t *testing.T) {
 	p.SetScript(t, tiadtest.Script{})
 }
 
+// TestAgentAnswersTheSoftwareLoadFamily: #789 restart window. A real
+// software download onto a CPU in RUN asks StopModules,
+// ConsistentBlocksDownload, then AlarmTextLibrariesDownload, and may ask
+// AllBlocksDownload, UserManagementDownload and LoadIdentificationData.
+// Answered up front, it loads; keeping the CPU's online users is accepted
+// only under a spec whose accessControl is keep, and the passive answers
+// are never named as acting.
+func TestAgentAnswersTheSoftwareLoadFamily(t *testing.T) {
+	p, s := downloadReady(t)
+	qs := []tiad.Question{{ID: tiad.QuestionStopCPU}, {ID: tiad.QuestionConsistentDownload}, {ID: tiad.QuestionAlarmTexts},
+		{ID: tiad.QuestionAllBlocks}, {ID: tiad.QuestionUserManagement}, {ID: tiad.QuestionIdentificationData}}
+	req := tiad.DownloadRequest{Address: "192.0.2.10", Software: true, Announced: true,
+		Decisions: tiad.Decisions{StopCPU: tiad.Yes(), ConsistentDownload: tiad.Yes(), AlarmTexts: tiad.Yes(), AllBlocks: tiad.Yes(),
+			UserManagementKeepOnline: tiad.Yes(), IdentificationDataLoadNothing: tiad.Yes(), StartAfter: tiad.Yes()}}
+	// The bench spec sets access control: keeping the CPU's users is
+	// refused at that check, after the loading answers were written.
+	p.SetScript(t, tiadtest.Script{Questions: qs})
+	_, err := s.Download(ctx, req)
+	if tiad.Kind(err) != tiad.KindOutcomeUnknown || !strings.Contains(err.Error(), "UserManagementDownload") ||
+		strings.Join(tiad.ActingAnswers(err), ",") != "stop-cpu,consistent-download,alarm-texts,all-blocks,start-after" {
+		t.Fatalf("user management under a spec that sets access control: %v (acting %v)", err, tiad.ActingAnswers(err))
+	}
+	// Keep after fullAccessUser on the same session keeps what tiad set,
+	// not what the project had: still refused (#1159 review).
+	keep := tiadtest.BenchStation()
+	keep.CPU.AccessControl = tiad.AccessKeep
+	if _, err := s.ApplyStation(ctx, keep, tiadtest.BenchSecrets); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Compile(ctx, true, true); err != nil {
+		t.Fatal(err)
+	}
+	p.SetScript(t, tiadtest.Script{Questions: qs})
+	if _, err := s.Download(ctx, req); tiad.Kind(err) != tiad.KindOutcomeUnknown || !strings.Contains(err.Error(), "UserManagementDownload") {
+		t.Fatalf("keep after fullAccessUser on one session: %v, want user management refused", err)
+	}
+	// A fresh session on the saved project that only ever keeps access
+	// control: keeping the CPU's online users is accepted.
+	if _, err := s.Save(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	project := s.Project
+	if err := s.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	s, err = p.Client().Open(ctx, project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ApplyStation(ctx, keep, tiadtest.BenchSecrets); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Compile(ctx, true, true); err != nil {
+		t.Fatal(err)
+	}
+	p.SetScript(t, tiadtest.Script{Questions: qs})
+	if r, err := s.Download(ctx, req); err != nil || !r.Downloaded || !r.CompareEqual {
+		t.Fatalf("the whole family answered up front under keep: %+v %v, want a verified load", r, err)
+	}
+	if l := p.Log(); !strings.Contains(l, `alarmTexts=yes allBlocks=yes userManagementKeepOnline=yes identificationDataLoadNothing=yes`) ||
+		!strings.Contains(l, `acting=["stop-cpu","consistent-download","alarm-texts","all-blocks"] outcome=loaded`) {
+		t.Fatalf("the audit must name each decision and only the loading answers as acting:\n%s", l)
+	}
+	// The same opened session then sets access control and keeps it
+	// again: the apply set it, so keeping the CPU's users is refused.
+	if _, err := s.ApplyStation(ctx, tiadtest.BenchStation(), tiadtest.BenchSecrets); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ApplyStation(ctx, keep, tiadtest.BenchSecrets); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Compile(ctx, true, true); err != nil {
+		t.Fatal(err)
+	}
+	p.SetScript(t, tiadtest.Script{Questions: qs})
+	if _, err := s.Download(ctx, req); tiad.Kind(err) != tiad.KindOutcomeUnknown || !strings.Contains(err.Error(), "UserManagementDownload") {
+		t.Fatalf("keep after an apply of fullAccessUser on an opened session: %v, want user management refused", err)
+	}
+	p.SetScript(t, tiadtest.Script{})
+}
+
 // TestAgentNeverCallsAnEmptyCompareEqual: #789. TIA's compare tree is
 // equal only when its root says identical, at least one object below the
 // root was compared, and nothing anywhere in it differs. A tree that

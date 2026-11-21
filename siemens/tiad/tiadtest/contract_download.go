@@ -47,6 +47,17 @@ var ResolveCases = []struct {
 	{"consistent-download no", []tiad.Question{{ID: tiad.QuestionConsistentDownload}}, tiad.Decisions{ConsistentDownload: tiad.No()}, false, false, "", "consistent-download"},
 	{"stop, then consistent-download yes", []tiad.Question{qStop, {ID: tiad.QuestionConsistentDownload}, {ID: tiad.QuestionStartAfter}},
 		tiad.Decisions{StopCPU: tiad.Yes(), ConsistentDownload: tiad.Yes(), StartAfter: tiad.Yes()}, false, false, "", ""},
+	// The rest of the software-load family (#789 restart window): each
+	// only by its own decision. The bench spec sets access control
+	// (fullAccessUser), so keeping the CPU's users is refused there.
+	{"alarm-texts unanswered", []tiad.Question{{ID: tiad.QuestionAlarmTexts}}, tiad.Decisions{ConsistentDownload: tiad.Yes(), AllBlocks: tiad.Yes()}, false, false, "alarm-texts", ""},
+	{"alarm-texts yes", []tiad.Question{{ID: tiad.QuestionAlarmTexts}}, tiad.Decisions{AlarmTexts: tiad.Yes()}, false, false, "", ""},
+	{"all-blocks unanswered", []tiad.Question{{ID: tiad.QuestionAllBlocks}}, tiad.Decisions{ConsistentDownload: tiad.Yes(), AlarmTexts: tiad.Yes()}, false, false, "all-blocks", ""},
+	{"all-blocks no", []tiad.Question{{ID: tiad.QuestionAllBlocks}}, tiad.Decisions{AllBlocks: tiad.No()}, false, false, "", "all-blocks"},
+	{"identification-data load nothing", []tiad.Question{{ID: tiad.QuestionIdentificationData}}, tiad.Decisions{IdentificationDataLoadNothing: tiad.Yes()}, false, false, "", ""},
+	{"identification-data unanswered", []tiad.Question{{ID: tiad.QuestionIdentificationData}}, tiad.Decisions{StopCPU: tiad.Yes()}, false, false, "identification-data", ""},
+	{"user-management keep refused when the spec sets access control", []tiad.Question{{ID: tiad.QuestionUserManagement}}, tiad.Decisions{UserManagementKeepOnline: tiad.Yes()}, false, false, "user-management", ""},
+	{"user-management no", []tiad.Question{{ID: tiad.QuestionUserManagement}}, tiad.Decisions{UserManagementKeepOnline: tiad.No()}, false, false, "", "user-management"},
 	{"start-after no is stay in STOP", []tiad.Question{{ID: tiad.QuestionStartAfter}}, tiad.Decisions{StartAfter: tiad.No()}, false, false, "", ""},
 	{"start-after unanswered", []tiad.Question{{ID: tiad.QuestionStartAfter}}, tiad.Decisions{}, false, false, "start-after", ""},
 	{"reinit all agreed, any case", []tiad.Question{qReinit}, tiad.Decisions{Reinitialize: []string{"tags", "PROG_DB"}}, false, false, "", ""},

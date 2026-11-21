@@ -20,6 +20,17 @@ const (
 	// ("Download software to device"), asked after stop-cpu: loading the
 	// PLC software as one consistent whole. It acts; yes loads.
 	QuestionConsistentDownload = "consistent-download"
+	// The rest of the software-load family (#789 restart window), each
+	// answered only by its own decision: alarm-texts (TIA's
+	// AlarmTextLibrariesDownload, acting) and all-blocks
+	// (AllBlocksDownload, acting) load; user-management
+	// (UserManagementDownload) keeps the CPU's online users, and only when
+	// the spec's accessControl is keep; identification-data
+	// (LoadIdentificationData) loads nothing. The last two are passive.
+	QuestionAlarmTexts         = "alarm-texts"
+	QuestionAllBlocks          = "all-blocks"
+	QuestionUserManagement     = "user-management"
+	QuestionIdentificationData = "identification-data"
 	QuestionStartAfter         = "start-after"
 	QuestionPassword           = "password"
 	// QuestionConfigurationPassword asks for the password protecting the
@@ -52,7 +63,19 @@ type Decisions struct {
 	// ConsistentDownload answers QuestionConsistentDownload; only yes
 	// lets the download go on.
 	ConsistentDownload *bool `json:"consistentDownload,omitempty"`
-	StartAfter         *bool `json:"startAfter,omitempty"`
+	// AlarmTexts answers QuestionAlarmTexts: load the alarm and text
+	// list texts with the software.
+	AlarmTexts *bool `json:"alarmTexts,omitempty"`
+	// AllBlocks answers QuestionAllBlocks: load every block.
+	AllBlocks *bool `json:"allBlocks,omitempty"`
+	// UserManagementKeepOnline answers QuestionUserManagement: keep the
+	// CPU's online user management as it is. The agent accepts it only
+	// when the spec's accessControl is keep.
+	UserManagementKeepOnline *bool `json:"userManagementKeepOnline,omitempty"`
+	// IdentificationDataLoadNothing answers QuestionIdentificationData:
+	// load no identification data.
+	IdentificationDataLoadNothing *bool `json:"identificationDataLoadNothing,omitempty"`
+	StartAfter                    *bool `json:"startAfter,omitempty"`
 	// Reinitialize names every DB the caller agrees to reset. It must
 	// cover every DB the question names.
 	Reinitialize []string `json:"reinitialize,omitempty"`
@@ -181,7 +204,7 @@ type DownloadResult struct {
 // acting.
 func Acting(id string) bool {
 	switch id {
-	case QuestionPassword, QuestionConfigurationPassword, QuestionCertificate:
+	case QuestionPassword, QuestionConfigurationPassword, QuestionCertificate, QuestionUserManagement, QuestionIdentificationData:
 		return false
 	}
 	return true
@@ -240,7 +263,9 @@ func (r DownloadRequest) Validate() error {
 // default. A password question is answered by the request's protection
 // secret and a configuration-password question by its configuration
 // password, never by a decision and never by each other's secret.
-func Resolve(qs []Question, d Decisions, haveProtection, haveConfigurationPassword bool) (unanswered, declined []Question) {
+// accessControlKept is whether the session's spec keeps the CPU's access
+// control as found: only then can user-management be answered.
+func Resolve(qs []Question, d Decisions, haveProtection, haveConfigurationPassword, accessControlKept bool) (unanswered, declined []Question) {
 	for _, q := range qs {
 		switch q.ID {
 		case QuestionStopCPU:
@@ -249,6 +274,21 @@ func Resolve(qs []Question, d Decisions, haveProtection, haveConfigurationPasswo
 			sortAnswer(q, d.Overwrite, &unanswered, &declined)
 		case QuestionConsistentDownload:
 			sortAnswer(q, d.ConsistentDownload, &unanswered, &declined)
+		case QuestionAlarmTexts:
+			sortAnswer(q, d.AlarmTexts, &unanswered, &declined)
+		case QuestionAllBlocks:
+			sortAnswer(q, d.AllBlocks, &unanswered, &declined)
+		case QuestionUserManagement:
+			// Keeping the CPU's users is the only answer, and only for a
+			// spec that keeps access control.
+			if d.UserManagementKeepOnline != nil && *d.UserManagementKeepOnline && !accessControlKept {
+				q.Message += " (tiad keeps the CPU's online user management only for a keep spec on a session that never set access control: an apply of fullAccessUser on this session needs a fresh session that applies keep)"
+				unanswered = append(unanswered, q)
+			} else {
+				sortAnswer(q, d.UserManagementKeepOnline, &unanswered, &declined)
+			}
+		case QuestionIdentificationData:
+			sortAnswer(q, d.IdentificationDataLoadNothing, &unanswered, &declined)
 		case QuestionStartAfter:
 			// Either answer is a decision: no means load and stay in
 			// STOP, which is a legitimate choice, not a refusal.

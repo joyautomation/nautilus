@@ -52,7 +52,7 @@ func TestResolve(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			u, d := Resolve(c.qs, c.d, c.protection, c.configPassword)
+			u, d := Resolve(c.qs, c.d, c.protection, c.configPassword, false)
 			if ids(u) != c.unanswered || ids(d) != c.declined {
 				t.Fatalf("Resolve = unanswered %q declined %q, want %q %q", ids(u), ids(d), c.unanswered, c.declined)
 			}
@@ -60,9 +60,59 @@ func TestResolve(t *testing.T) {
 	}
 }
 
+// TestResolveSoftwareLoadFamily: #789. Each check of the software-load
+// family is answered only by its own decision, never by another's, and
+// user-management only when the spec keeps access control.
+func TestResolveSoftwareLoadFamily(t *testing.T) {
+	all := Decisions{StopCPU: Yes(), Overwrite: Yes(), ConsistentDownload: Yes(), StartAfter: Yes()}
+	cases := []struct {
+		name                 string
+		q                    string
+		d                    Decisions
+		kept                 bool
+		unanswered, declined string
+	}{
+		{"alarm texts not answered by the others", QuestionAlarmTexts, all, true, "alarm-texts", ""},
+		{"alarm texts yes", QuestionAlarmTexts, Decisions{AlarmTexts: Yes()}, false, "", ""},
+		{"alarm texts no", QuestionAlarmTexts, Decisions{AlarmTexts: No()}, false, "", "alarm-texts"},
+		{"all blocks not answered by the others", QuestionAllBlocks, all, true, "all-blocks", ""},
+		{"all blocks yes", QuestionAllBlocks, Decisions{AllBlocks: Yes()}, false, "", ""},
+		{"all blocks no", QuestionAllBlocks, Decisions{AllBlocks: No()}, false, "", "all-blocks"},
+		{"identification data not answered by the others", QuestionIdentificationData, all, true, "identification-data", ""},
+		{"identification data yes", QuestionIdentificationData, Decisions{IdentificationDataLoadNothing: Yes()}, false, "", ""},
+		{"identification data no", QuestionIdentificationData, Decisions{IdentificationDataLoadNothing: No()}, false, "", "identification-data"},
+		{"user management not answered by the others", QuestionUserManagement, all, true, "user-management", ""},
+		{"user management keep, access control kept", QuestionUserManagement, Decisions{UserManagementKeepOnline: Yes()}, true, "", ""},
+		{"user management keep, access control set by the spec", QuestionUserManagement, Decisions{UserManagementKeepOnline: Yes()}, false, "user-management", ""},
+		{"user management no", QuestionUserManagement, Decisions{UserManagementKeepOnline: No()}, true, "", "user-management"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			u, d := Resolve([]Question{{ID: c.q}}, c.d, true, true, c.kept)
+			if ids(u) != c.unanswered || ids(d) != c.declined {
+				t.Fatalf("Resolve = unanswered %q declined %q, want %q %q", ids(u), ids(d), c.unanswered, c.declined)
+			}
+		})
+	}
+	u, _ := Resolve([]Question{{ID: QuestionUserManagement}}, Decisions{UserManagementKeepOnline: Yes()}, false, false, false)
+	if len(u) != 1 || !strings.Contains(u[0].Message, "a keep spec on a session that never set access control") {
+		t.Fatalf("a refused keep must name why: %+v", u)
+	}
+	for _, id := range []string{QuestionAlarmTexts, QuestionAllBlocks} {
+		if !Acting(id) {
+			t.Errorf("%s must be acting", id)
+		}
+	}
+	for _, id := range []string{QuestionUserManagement, QuestionIdentificationData} {
+		if Acting(id) {
+			t.Errorf("%s must be passive", id)
+		}
+	}
+}
+
 func TestResolveNamesTheMissingDB(t *testing.T) {
 	q := Question{ID: QuestionReinitialize, Message: "Reinitialise", Objects: []string{"Tags", "Prog_DB"}}
-	u, _ := Resolve([]Question{q}, Decisions{Reinitialize: []string{"Tags"}}, false, false)
+	u, _ := Resolve([]Question{q}, Decisions{Reinitialize: []string{"Tags"}}, false, false, false)
 	if len(u) != 1 || !strings.Contains(u[0].Message, "not agreed: Prog_DB") {
 		t.Fatalf("got %+v", u)
 	}

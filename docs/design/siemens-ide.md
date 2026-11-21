@@ -430,9 +430,16 @@ The rules for applying a spec:
     (the default, left out) or `keep`.
   - A download raises TIA's `UserManagementDownload` (keep the CPU's
     users, update them but keep its passwords, or load the project's).
-    tiad answers it only once S2b proves it against the CPU; until then
-    it is an `other` question and any download that meets it is refused,
-    so a new station's first live download waits for S2b.
+    tiad answers it only with keep (`user-management`,
+    `userManagementKeepOnline`), and only for a session whose specs have
+    only ever kept access control: under `fullAccessUser`, or `keep`
+    after `fullAccessUser` on the same session, it is refused. Loading
+    the users tiad set (a new station's first live download) still waits
+    for a proven answer. The rule is per session: a project an earlier
+    session set to `fullAccessUser`, saved, then reopened and kept, counts
+    as found like any adopted project (it still holds tiad's Full access
+    user). Its first hardware download with `userManagementKeepOnline`
+    is a watched bench step until TIA's handling of that is proven.
   - Proven offline on the TIA machine (2026-11-20, through the agent):
     a new station with `password` and `fullAccessUser` compiles with 0
     errors, applying it again finds the user and changes nothing, and the
@@ -582,7 +589,9 @@ Request:
   "hardware": true, "software": true,
   "dryRun": false,
   "decisions": { "stopCpu": true, "reinitialize": ["Tags"], "overwrite": true,
-                 "consistentDownload": true, "startAfter": true, "trustCertificate": "<sha256 fingerprint>",
+                 "consistentDownload": true, "alarmTexts": true, "allBlocks": true,
+                 "userManagementKeepOnline": true, "identificationDataLoadNothing": true,
+                 "startAfter": true, "trustCertificate": "<sha256 fingerprint>",
                  "keptDevices": ["<device name>"] },
   "announced": true,
   "secrets": { "protection": "<password>", "configurationPassword": "<password>" }
@@ -613,9 +622,9 @@ behaviour. So, until then:
   given; it never derives one itself.
 - **Answers that can change the CPU are acting** (`stop-cpu`,
   `start-after` answered yes, `overwrite`, `consistent-download`,
-  `reinitialize`, and any check
-  tiad does not know; a password, a certificate or a start-after answered
-  no is not). TIA may act on an answer
+  `alarm-texts`, `all-blocks`, `reinitialize`, and any check
+  tiad does not know; a password, a certificate, `user-management`,
+  `identification-data` or a start-after answered no is not). TIA may act on an answer
   before it asks the next check (Siemens's own sample says StopModules'
   StopAll "will set PLC into Stop mode"), so a cancel after an acting
   answer is never a clean refusal: it answers `outcome_unknown`, lists the
@@ -750,6 +759,23 @@ behaviour. So, until then:
     download should answer `consistentDownload` up front**. Left out, the
     download cancels there after `stop-cpu` was written, which is
     `outcome_unknown` with the CPU possibly stopped.
+  - `alarm-texts` (TIA's `AlarmTextLibrariesDownload`: load the alarm and
+    text list texts with the software; acting. Asked third on the bench.
+    tiad never writes `NoAction`: texts that disagree with the program are
+    not a load)
+  - `all-blocks` (`AllBlocksDownload`: load every block; acting)
+  - `user-management` (`UserManagementDownload`): answered only by
+    `userManagementKeepOnline: true`, which keeps the CPU's online users
+    as they are, and only when the spec's `cpu.accessControl` is `keep`
+    and no apply on the session ever asked for `fullAccessUser`;
+    otherwise it stays unanswered, naming why. Passive.
+    Updating or resetting the CPU's users is never tiad's choice.
+  - `identification-data` (`LoadIdentificationData`): answered only by
+    `identificationDataLoadNothing: true`. Passive.
+  Every other download configuration V21 defines (memory card,
+  protection level, initialise or reset memory, selective delete, H
+  systems, web applications, HMI data and the rest; the full list is on
+  #789) is `other` and refused.
   - `start-after`
   - `password`
   - `configuration-password` (TIA's `PlcMasterSecretPassword`: the
@@ -759,8 +785,7 @@ behaviour. So, until then:
   - `kept-devices`: the agent's own question, never TIA's, asked when the
     last apply kept devices as found ("Which CPU an apply uses"). `objects`
     names them.
-  - `other` (the check's own text). TIA's `UserManagementDownload` is
-    one until S2b (§3.3, `cpu.accessControl`).
+  - `other` (the check's own text).
 - **A real download** answers each question only from `decisions`.
   - The first check the request does not answer fails the call with
     `decision_required`, naming that one, and nothing is loaded; answer

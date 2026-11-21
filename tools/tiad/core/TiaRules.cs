@@ -241,6 +241,14 @@ namespace Tiad
                     return QuestionIds.Overwrite;
                 case "ConsistentBlocksDownload":
                     return QuestionIds.ConsistentDownload;
+                case "AlarmTextLibrariesDownload":
+                    return QuestionIds.AlarmTexts;
+                case "AllBlocksDownload":
+                    return QuestionIds.AllBlocks;
+                case "UserManagementDownload":
+                    return QuestionIds.UserManagement;
+                case "LoadIdentificationData":
+                    return QuestionIds.IdentificationData;
                 case "DataBlockReinitialization":
                 case "DataBlockReinitializationOrKeepActualValues":
                     return QuestionIds.Reinitialize;
@@ -274,6 +282,18 @@ namespace Tiad
                     // V21's only selection: no cannot be written, so it
                     // cancels.
                     return yes ? Setting.Choose("ConsistentDownload") : null;
+                case "AlarmTextLibrariesDownload":
+                    // NoAction (skip the texts) is never written: texts
+                    // that disagree with the program are not a load.
+                    return yes ? Setting.Choose("ConsistentDownload") : null;
+                case "AllBlocksDownload":
+                    return yes ? Setting.Choose("DownloadAllBlocks") : null;
+                case "UserManagementDownload":
+                    // Only keep: updating or resetting the CPU's users is
+                    // never tiad's to choose.
+                    return yes ? Setting.Choose("KeepOnlineUserManagementData") : null;
+                case "LoadIdentificationData":
+                    return yes ? Setting.Choose("LoadNothing") : null;
                 case "DataBlockReinitialization":
                 case "DataBlockReinitializationOrKeepActualValues":
                     return yes ? Setting.Choose("StopPlcAndReinitialize") : null;
@@ -292,7 +312,8 @@ namespace Tiad
         // Answered are the configuration types For can answer.
         public static readonly string[] Answered =
         {
-            "StopModules", "StartModules", "OverwriteSystemData", "ConsistentBlocksDownload", "DataBlockReinitialization",
+            "StopModules", "StartModules", "OverwriteSystemData", "ConsistentBlocksDownload", "AlarmTextLibrariesDownload",
+            "AllBlocksDownload", "UserManagementDownload", "LoadIdentificationData", "DataBlockReinitialization",
             "DataBlockReinitializationOrKeepActualValues", "ModuleReadAccessPassword",
             "ModuleWriteAccessPassword", "PlcMasterSecretPassword", "TlsVerificationConfiguration",
         };
@@ -311,6 +332,8 @@ namespace Tiad
                 case QuestionIds.Password:
                 case QuestionIds.ConfigurationPassword:
                 case QuestionIds.Certificate:
+                case QuestionIds.UserManagement:
+                case QuestionIds.IdentificationData:
                     return false;
                 default:
                     return true;
@@ -328,7 +351,7 @@ namespace Tiad
             {
                 if (id == QuestionIds.StopCpu || id == QuestionIds.Reinitialize) stop = true;
                 else if (id == QuestionIds.StartAfter) start = true;
-                else if (id == QuestionIds.ConsistentDownload) load = true;
+                else if (id == QuestionIds.ConsistentDownload || id == QuestionIds.AlarmTexts || id == QuestionIds.AllBlocks) load = true;
                 else other = true;
             }
             var l = new List<string>();

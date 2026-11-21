@@ -259,6 +259,11 @@ func (s *session) prepareAccess(want, password string, recordOnly bool, notes *[
 // password is prepareAccess's.
 func (s *session) applyAccess(want, password string, madeCPU bool, notes *[]string) *failure {
 	tiaFail := func(m string) *failure { return fail(http.StatusInternalServerError, tiad.KindOperationFailed, "TIA: %s", m) }
+	if want == tiad.AccessFullAccessUser {
+		// As the agent: once set on this session, a later keep keeps
+		// what tiad set (#1159 review).
+		s.accessSet = true
+	}
 	if want == tiad.AccessKeep {
 		return nil
 	}

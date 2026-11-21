@@ -378,7 +378,11 @@ namespace Tiad
                     object h = t.CreateProject(full, name);
                     try
                     {
-                        if (st.Cpu.AccessControl == StationRules.AccessFullAccessUser) CheckPolicy(t, h, sec);
+                        if (st.Cpu.AccessControl == StationRules.AccessFullAccessUser)
+                        {
+                            s.AccessControlSet = true;
+                            CheckPolicy(t, h, sec);
+                        }
                         t.ApplyStation(h, st, CpuReuse.Create, sec, new List<string>(), s.Made);
                     }
                     catch
@@ -494,7 +498,11 @@ namespace Tiad
                         AccessRule.Plan(pc.AccessControl, st.Cpu.AccessControl, sec.FullAccessPassword != "");
                         kept = pc.Others;
                     }
-                    if (st.Cpu.AccessControl == StationRules.AccessFullAccessUser) CheckPolicy(t, s.Handle, sec);
+                    if (st.Cpu.AccessControl == StationRules.AccessFullAccessUser)
+                    {
+                        s.AccessControlSet = true;
+                        CheckPolicy(t, s.Handle, sec);
+                    }
                     string cannot = t.CannotApply(st);
                     if (cannot != null) throw new TiaException(cannot);
                     // A found user's password, before any write: a refusal
