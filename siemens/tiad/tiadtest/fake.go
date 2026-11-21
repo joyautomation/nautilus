@@ -920,6 +920,7 @@ func (f *Fake) createProject(r *http.Request) (any, *failure) {
 	// a refusal comes after the old project of that name was replaced.
 	if fl := f.checkPolicy(req.Station, req.Secrets); fl != nil {
 		delete(f.sessions, s.id)
+		f.retireIfTrusted()
 		return nil, fl
 	}
 	// TIA makes a new CPU with its protection not set up and access
@@ -929,11 +930,13 @@ func (f *Fake) createProject(r *http.Request) (any, *failure) {
 	s.cpu = &tiad.ProjectCPU{Name: req.Station.CPU.Name, Order: req.Station.CPU.Order, Firmware: req.Station.CPU.Firmware}
 	if fl := s.protect(req.Station.CPU.ConfigurationProtection, req.Secrets.ConfigurationPassword); fl != nil {
 		delete(f.sessions, s.id)
+		f.retireIfTrusted()
 		return nil, fl
 	}
 	var notes []string
 	if fl := s.applyAccess(req.Station.CPU.AccessControl, req.Secrets.FullAccessPassword, true, &notes); fl != nil {
 		delete(f.sessions, s.id)
+		f.retireIfTrusted()
 		return nil, fl
 	}
 	st := req.Station
@@ -997,7 +1000,19 @@ func (f *Fake) closeSession(r *http.Request) (any, *failure) {
 			delete(f.claims, addr)
 		}
 	}
+	f.retireIfTrusted()
 	return struct{}{}, nil
+}
+
+// retireIfTrusted is the agent's RetireIfTrusted: once the TIA instance
+// trusted a CPU's certificate blindly and no session is left, the agent
+// retires it, and the next instance trusts nothing.
+func (f *Fake) retireIfTrusted() {
+	if f.blindTrust == nil || len(f.sessions) > 0 {
+		return
+	}
+	f.tlsTrusted = false
+	f.blindTrust = nil
 }
 
 func (f *Fake) applyStation(r *http.Request) (any, *failure) {
@@ -1755,7 +1770,7 @@ func (f *Fake) readFingerprint(r *http.Request) (any, *failure) {
 
 // fingerprintTrustFix is the agent's fix for a fingerprint read TIA's TLS
 // question refused.
-const fingerprintTrustFix = "to read it anyway, trust the CPU's certificate blindly (trustUnverifiedCertificate: true); the agent's TIA instance then keeps that trust, and a download in it needs decisions.acceptBlindTrust, until the agent restarts"
+const fingerprintTrustFix = "to read it anyway, trust the CPU's certificate blindly (trustUnverifiedCertificate: true); the agent's TIA instance then keeps that trust, and a download in it needs decisions.acceptBlindTrust, until every session is closed (the agent then retires that instance) or the agent restarts"
 
 // checkFingerprint is the agent's FingerprintRule.Check.
 func checkFingerprint(items []tiad.FingerprintItem) string {

@@ -116,6 +116,7 @@ namespace Tiad.Test
                 T("LicenceFailsOnALaterCall", LicenceFailsOnALaterCall),
                 T("QuestionIds", QuestionIdsOfConfigurations),
                 T("TrustFixOnlyForCertificates", TrustFixOnlyForCertificates),
+                T("SessionsLeftCountsClosing", SessionsLeftCountsClosing),
                 T("Settings", SettingsForAnswers),
                 T("PasswordsNeverCross", PasswordsNeverCross),
                 T("ProtectionPlan", ProtectionPlan),
@@ -313,6 +314,42 @@ namespace Tiad.Test
 
         // The fingerprint read names its trust opt-in only for a refusal of
         // certificate questions alone: the opt-in answers no other.
+        // SessionsLeftCountsClosing: a session taken out of the table to be
+        // closed still counts until its close ended, so the agent never
+        // retires a TIA instance a project is still open on (#789 D1).
+        static void SessionsLeftCountsClosing()
+        {
+            var t = new SessionTable();
+            True(!t.Any, "an empty table");
+            Session a = t.Reserve("a.ap21", "/w/a.ap21", "");
+            True(t.Any, "a session still opening");
+            a.Handle = new object();
+            t.End(a);
+            Session b = t.Reserve("b.ap21", "/w/b.ap21", "");
+            b.Handle = new object();
+            t.End(b);
+            True(t.Remove(a), "remove a");
+            t.Closed(a);
+            True(t.Any, "b left");
+            True(t.Remove(b), "remove b");
+            True(t.Any, "b out of the table, its close not ended");
+            t.Restore(b);
+            True(t.Any, "b back, broken");
+            True(t.Remove(b), "remove b again");
+            t.Closed(b);
+            True(!t.Any, "every close ended");
+            True(!t.Remove(b), "remove b twice");
+            True(!t.Any, "a second remove counts nothing");
+            Session c = t.Reserve("c.ap21", "/w/c.ap21", "");
+            c.Handle = new object();
+            t.End(c);
+            c.LastUsed = DateTime.UtcNow.AddHours(-1);
+            Eq(t.TakeIdle(TimeSpan.FromMinutes(1)).Count, 1, "the reaper takes c");
+            True(t.Any, "c taken by the reaper, its close not ended");
+            t.Closed(c);
+            True(!t.Any, "the reaper's close ended");
+        }
+
         static void TrustFixOnlyForCertificates()
         {
             string cert = OnlineChecks.Ask("TlsVerificationConfiguration", "PLC_1", "certificate not matching", new List<string>());

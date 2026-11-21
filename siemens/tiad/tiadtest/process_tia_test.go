@@ -1689,3 +1689,95 @@ func TestAgentJournalsTheUserManagementReset(t *testing.T) {
 		t.Errorf("a forged audit line: %d of %d", n, m)
 	}
 }
+
+// TestAgentRetiresTheInstanceThatTrustedBlindly (#789 D1): closing the
+// last session retires a TIA instance that trusted a CPU's certificate
+// blindly, the next call starts a new one, and the agent clears its
+// record only once that one exists; an instance that trusted nothing is
+// never retired.
+func TestAgentRetiresTheInstanceThatTrustedBlindly(t *testing.T) {
+	p, s := downloadReady(t)
+	c := p.Client()
+	if err := s.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	s, err := c.CreateProject(ctx, "bench", tiadtest.BenchStation(), tiadtest.BenchSecrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, r := countCalls(p.Calls(t), "start"), countCalls(p.Calls(t), "retire"); n != 1 || r != 0 {
+		t.Fatalf("an instance that trusted nothing: %d starts, %d retires, want 1 and 0", n, r)
+	}
+	p.SetFingerprint(t, tiadtest.FingerprintScript{AsksTLS: true})
+	if _, err := s.Fingerprint(ctx, tiad.FingerprintRequest{TrustUnverifiedCertificate: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if n, r := countCalls(p.Calls(t), "start"), countCalls(p.Calls(t), "retire"); n != 1 || r != 1 {
+		t.Fatalf("closing the last session on the trusting instance: %d starts, %d retires, want 1 and 1 (no new instance until a call needs one)", n, r)
+	}
+	log := waitLog(t, p, "audit blind-trust retired")
+	if strings.Contains(log, "audit blind-trust cleared") {
+		t.Fatalf("the record was cleared before a new instance existed:\n%s", log)
+	}
+	s, err = c.CreateProject(ctx, "bench", tiadtest.BenchStation(), tiadtest.BenchSecrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := countCalls(p.Calls(t), "start"); n != 2 {
+		t.Fatalf("%d starts after the retire, want 2", n)
+	}
+	waitLog(t, p, "audit blind-trust cleared")
+	if cmp, err := s.Compare(ctx); err != nil || cmp.BlindTrust != nil {
+		t.Fatalf("a compare in the new instance: %+v %v, want no trust", cmp, err)
+	}
+}
+
+// TestAgentTreatsARetireItCannotProveAsTIAGone: a retire that cannot
+// show TIA's process exited leaves an instance that may still hold the
+// trust, so every TIA call is refused, naming the fix, and no new
+// instance starts.
+func TestAgentTreatsARetireItCannotProveAsTIAGone(t *testing.T) {
+	p, s := downloadReady(t)
+	c := p.Client()
+	p.SetScript(t, tiadtest.Script{FingerprintAsksTLS: true, Failures: []tiadtest.ScriptedCall{{Call: "retire", Message: "the process had not exited"}}})
+	if _, err := s.Fingerprint(ctx, tiad.FingerprintRequest{TrustUnverifiedCertificate: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	_, err := c.CreateProject(ctx, "bench", tiadtest.BenchStation(), tiadtest.BenchSecrets)
+	if tiad.Kind(err) != tiad.KindGate || !strings.Contains(err.Error(), "could not be retired") || !strings.Contains(err.Error(), "Restart the agent") {
+		t.Fatalf("a call after a retire that failed: %v, want the tia gate naming the failed retire and the fix", err)
+	}
+	if n := countCalls(p.Calls(t), "start"); n != 1 {
+		t.Fatalf("%d starts, want no new instance after a retire that failed", n)
+	}
+	if strings.Contains(p.Log(), "audit blind-trust cleared") || strings.Contains(p.Log(), "audit blind-trust retired") {
+		t.Fatalf("a failed retire was journalled as done:\n%s", p.Log())
+	}
+}
+
+// TestAgentRetiresAfterTheReaper: a trusting instance whose last session
+// the idle reaper closed is retired too.
+func TestAgentRetiresAfterTheReaper(t *testing.T) {
+	p := tiadtest.StartProcess(t, fakeBin(t), tiadtest.Config{Targets: []string{"192.0.2.10"}}, "TIAD_SESSION_IDLE=1s")
+	c := p.Client()
+	installBench(t, c)
+	s, err := c.CreateProject(ctx, "bench", tiadtest.BenchStation(), tiadtest.BenchSecrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.SetFingerprint(t, tiadtest.FingerprintScript{AsksTLS: true})
+	if _, err := s.Fingerprint(ctx, tiad.FingerprintRequest{TrustUnverifiedCertificate: true}); err != nil {
+		t.Fatal(err)
+	}
+	waitLog(t, p, "closed idle session")
+	waitLog(t, p, "audit blind-trust retired")
+	if n := countCalls(p.Calls(t), "retire"); n != 1 {
+		t.Fatalf("%d retires after the reaper closed the last session, want 1", n)
+	}
+}

@@ -66,7 +66,7 @@ namespace Tiad
 
         // TrustFix is the fix a fingerprint read TIA's TLS question
         // refused names.
-        const string TrustFix = "to read it anyway, trust the CPU's certificate blindly (trustUnverifiedCertificate: true); the agent's TIA instance then keeps that trust, and a download in it needs decisions.acceptBlindTrust, until the agent restarts";
+        const string TrustFix = "to read it anyway, trust the CPU's certificate blindly (trustUnverifiedCertificate: true); the agent's TIA instance then keeps that trust, and a download in it needs decisions.acceptBlindTrust, until every session is closed (the agent then retires that instance) or the agent restarts";
 
         void RegisterFingerprint(Router r)
         {
@@ -89,7 +89,7 @@ namespace Tiad
                     Since = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", System.Globalization.CultureInfo.InvariantCulture),
                     Call = call, Session = s.Id, Address = address, Questions = new List<string>(trusted),
                 };
-                Log.Line("audit blind-trust set call={0} session={1} address={2} questions=[{3}]: every later online call in this TIA instance rides on it until the agent restarts",
+                Log.Line("audit blind-trust set call={0} session={1} address={2} questions=[{3}]: every later online call in this TIA instance rides on it until the instance is retired or the agent restarts",
                     call, s.Id, Json.Quote(address), string.Join(",", q.ToArray()));
                 return;
             }

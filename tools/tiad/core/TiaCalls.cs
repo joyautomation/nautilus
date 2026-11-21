@@ -23,8 +23,14 @@ namespace Tiad
         volatile string tiaGone;
         readonly object goneMu = new object();
 
+        // retired is the blind trust of the instance the agent retired
+        // last (RetireIfTrusted), until the next instance is made: the
+        // record is cleared only then, never before a new instance exists.
+        // Written and read on the TIA thread.
+        BlindTrust retired;
+
         // GoneFix is what to do once TIA died.
-        const string GoneFix = "every project open on it is gone, and the agent starts TIA only once. Restart the agent, then compare in a fresh session (the read-only after-check) before anything else";
+        const string GoneFix = "every project open on it is gone, and the agent starts TIA again only when it restarts. Restart the agent, then compare in a fresh session (the read-only after-check) before anything else";
 
         // TiaGoneNow reports why TIA is gone, or null while it is not,
         // recording it the first time. A Gone that throws counts as gone.
@@ -114,13 +120,16 @@ namespace Tiad
                         {
                             Close(s);
                             sessions.ReleaseCpus(s);
+                            sessions.Closed(s);
                             Log.Line("closed idle session {0} ({1})", s.Id, s.Project);
                         }
                         catch (Exception e)
                         {
                             sessions.Restore(s);
                             Log.Line("closing idle session {0}: {1}", s.Id, e.Message);
+                            continue;
                         }
+                        RetireIfTrusted();
                     }
                 }
             });
@@ -159,6 +168,14 @@ namespace Tiad
                         throw;
                     }
                     host.TiaStarted(null);
+                    // A new instance after a retire trusts nothing: the
+                    // retired one's record goes only now.
+                    if (retired != null)
+                    {
+                        Log.Line("audit blind-trust cleared: a new TIA instance started; the instance that trusted blindly ({0}) was retired", BlindTrust.Audit(retired));
+                        if (blindTrust == retired) blindTrust = null;
+                        retired = null;
+                    }
                 }
                 try
                 {
@@ -187,6 +204,8 @@ namespace Tiad
 
         // Close closes a session's project. Once TIA is gone there is no
         // project left to close: the session is dropped, never kept broken.
+        // No retire comes between (RetireIfTrusted waits for every close
+        // to end), so the project is on the instance it was opened on.
         void Close(Session s)
         {
             bool done = tiaThread.Run<bool>(delegate
@@ -205,6 +224,47 @@ namespace Tiad
                     t.CloseProject(s.Handle);
                     s.Closed = true;
                 }
+                return null;
+            });
+        }
+
+        // RetireIfTrusted retires the TIA instance once it trusted a CPU's
+        // certificate blindly and no session is left on it (#789 D1): the
+        // next call that needs TIA starts a new instance, which trusts
+        // nothing, so a deploy's own download never rides on an earlier
+        // read's trust. While any session is open, or still opening, the
+        // instance stays and the download gate (BlindTrustRule) holds. A
+        // retire that cannot show TIA's process exited counts as TIA gone:
+        // nothing runs on an instance that may still hold the trust.
+        void RetireIfTrusted()
+        {
+            tiaThread.Run<object>(delegate
+            {
+                if (blindTrust == null || tia == null || sessions.Any) return null;
+                if (TiaGoneNow() != null) return null;
+                ITia old = tia;
+                BlindTrust bt = blindTrust;
+                // Before Retire: a gate that reads the old instance's Gone
+                // meanwhile must not take the retire for a death.
+                tia = null;
+                try
+                {
+                    old.Retire();
+                }
+                catch (Exception e)
+                {
+                    lock (goneMu)
+                    {
+                        if (tiaGone == null)
+                        {
+                            tiaGone = "TIA Portal could not be retired after it trusted a CPU's certificate blindly (" + TiaNames.Message(e) + "), noticed " + DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
+                            Log.Line("{0}: {1}", tiaGone, GoneFix);
+                        }
+                    }
+                    return null;
+                }
+                retired = bt;
+                Log.Line("audit blind-trust retired: no session left on the TIA instance that trusted blindly ({0}); it exited, and the next call starts a new one", BlindTrust.Audit(bt));
                 return null;
             });
         }
@@ -398,6 +458,7 @@ namespace Tiad
             catch
             {
                 sessions.Drop(s);
+                RetireIfTrusted();
                 throw;
             }
             sessions.End(s);
@@ -420,6 +481,7 @@ namespace Tiad
             catch
             {
                 sessions.Drop(s);
+                RetireIfTrusted();
                 throw;
             }
             sessions.End(s);
@@ -459,6 +521,8 @@ namespace Tiad
                 throw;
             }
             sessions.ReleaseCpus(s);
+            sessions.Closed(s);
+            RetireIfTrusted();
             return new Obj();
         }
 
