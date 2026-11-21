@@ -83,6 +83,21 @@ namespace Tiad
         public List<string> TrustedBlindly = new List<string>();
     }
 
+    // OnlineCheckResult is what an online check saw. Errors are TIA's text.
+    public sealed class OnlineCheckResult
+    {
+        public string ProjectCertificate = "";
+        public string State = "";
+        public string OnlineError = "";
+        public List<string> Asked = new List<string>();
+        public List<string> TrustedBlindly = new List<string>();
+        public List<KeyValuePair<string, string>> Fingerprint = new List<KeyValuePair<string, string>>();
+        public string FingerprintError = "";
+        public bool Compared;
+        public List<Difference> Differences = new List<Difference>();
+        public string CompareError = "";
+    }
+
     public sealed class SoftwareResult
     {
         public List<SourceResult> Results = new List<SourceResult>();
@@ -254,6 +269,13 @@ namespace Tiad
         // opt-in, a TLS certificate question is answered trusted, blindly;
         // anything else TIA asks fails the read.
         FingerprintRead ReadFingerprint(string address, bool trustUnverifiedCertificate);
+
+        // OnlineCheck goes online, read-only, from the project's CPU to
+        // address (#789 S2b stage 1b): what TLS asks and the state reached;
+        // while online, the fingerprint read and the online software
+        // compare; then offline, always. It never saves. It refuses before
+        // going online when address is not the project CPU's address.
+        OnlineCheckResult OnlineCheck(object project, string address, bool trustUnverifiedCertificate);
 
         // Save saves the project, or writes a project archive, and returns
         // its full path.

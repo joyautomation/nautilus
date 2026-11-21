@@ -1502,6 +1502,130 @@ namespace Tiad.Openness
             });
         }
 
+        // OnlineCheck: see ITia. Every step after going online records its
+        // own failure instead of throwing, so the check always goes offline
+        // and reports what it saw.
+        public OnlineCheckResult OnlineCheck(object project, string address, bool trustUnverifiedCertificate)
+        {
+            return Tia(delegate
+            {
+                Project p = Of(project).Project;
+                HwDevice d = StationOf(p);
+                if (d == null) throw new TiaException("the project has no CPU");
+                DeviceItem cpu = CpuOf(d);
+                string at0 = OptionalAttribute(CpuNode(cpu), "Address");
+                if (at0 != address) throw new TiaException("online-check: the project's CPU is at " + at0 + ", not " + address);
+                var res = new OnlineCheckResult();
+                res.ProjectCertificate = DescribeCertificate(cpu);
+                Log.Line("online-check: project CPU certificate {0}", TiaNames.LogSafe(res.ProjectCertificate));
+                OnlineProvider op = cpu.GetService<OnlineProvider>();
+                ConfigurationAddress at = TargetInterface(PcInterface(op.Configuration)).Addresses.Create(address);
+                var online = new OnlineAsks(op.Configuration, trustUnverifiedCertificate, address);
+                try
+                {
+                    OnlineState st = OnlineState.Offline;
+                    try
+                    {
+                        st = op.GoOnline(at);
+                        res.State = st.ToString();
+                    }
+                    catch (Exception e)
+                    {
+                        res.State = op.State.ToString();
+                        res.OnlineError = Message(e);
+                    }
+                    Log.Line("online-check: state {0}{1}", res.State, res.OnlineError == "" ? "" : "; " + TiaNames.LogSafe(res.OnlineError));
+                    if (st == OnlineState.Online)
+                    {
+                        try
+                        {
+                            FingerprintDataProvider fp = portal.GetService<FingerprintDataProvider>();
+                            ConfigurationPcInterface fpc = PcInterface(fp.Configuration);
+                            ConfigurationAddress fat = fpc.TargetInterfaces.Count > 0 ? TargetInterface(fpc).Addresses.Create(address) : fpc.Addresses.Create(address);
+                            var fpAsks = OnlineAsks.ForCallback(trustUnverifiedCertificate, address);
+                            FingerprintDataResult fr = fp.GetFingerprintData(fat, fpAsks.Handle);
+                            foreach (FingerprintDataItem it in fr.FingerprintDataItems)
+                            {
+                                res.Fingerprint.Add(new KeyValuePair<string, string>(it.FingerprintDataIdentifier ?? "", it.FingerprintDataValue ?? ""));
+                            }
+                            res.Asked.AddRange(fpAsks.Asked);
+                            res.TrustedBlindly.AddRange(fpAsks.TrustedBlindly);
+                        }
+                        catch (Exception e)
+                        {
+                            res.FingerprintError = Message(e);
+                        }
+                        Log.Line("online-check: fingerprint items {0}{1}", res.Fingerprint.Count, res.FingerprintError == "" ? "" : "; " + TiaNames.LogSafe(res.FingerprintError));
+                        try
+                        {
+                            CompareResult cr = ((PlcSoftware)cpu.GetService<SoftwareContainer>().Software).CompareToOnline();
+                            Walk(cr.RootElement, res.Differences);
+                            res.Compared = true;
+                        }
+                        catch (Exception e)
+                        {
+                            res.CompareError = Message(e);
+                        }
+                        Log.Line("online-check: compared {0}, differences {1}{2}", res.Compared, res.Differences.Count, res.CompareError == "" ? "" : "; " + TiaNames.LogSafe(res.CompareError));
+                    }
+                }
+                finally
+                {
+                    try
+                    {
+                        if (op.State != OnlineState.Offline) op.GoOffline();
+                    }
+                    catch (Exception e)
+                    {
+                        Log.Line("online-check: going offline failed: {0}", TiaNames.LogSafe(Message(e)));
+                    }
+                    online.Stop();
+                    res.Asked.AddRange(online.Asked);
+                    res.TrustedBlindly.AddRange(online.TrustedBlindly);
+                    Log.Line("online-check: offline ({0}); asked {1}, trusted blindly {2}", op.State, online.Asked.Count, online.TrustedBlindly.Count);
+                }
+                return res;
+            });
+        }
+
+        // DescribeCertificate is the project CPU's PlcCommunicationCertificate
+        // as TIA holds it: its type, and the SHA-256 of any X.509 inside.
+        static string DescribeCertificate(DeviceItem cpu)
+        {
+            object c;
+            try
+            {
+                c = cpu.GetAttribute("PlcCommunicationCertificate");
+            }
+            catch (Exception e)
+            {
+                return "unreadable (" + e.GetType().Name + ": " + Message(e) + ")";
+            }
+            if (c == null) return "none";
+            var parts = new List<string> { c.GetType().FullName };
+            var x = c as System.Security.Cryptography.X509Certificates.X509Certificate2;
+            if (x != null) parts.Add("SHA-256 " + TiaNames.Fingerprint(x.RawData) + " subject " + x.Subject + " valid to " + x.NotAfter.ToUniversalTime().ToString("o"));
+            foreach (System.Reflection.PropertyInfo pi in c.GetType().GetProperties())
+            {
+                if (pi.GetIndexParameters().Length > 0) continue;
+                object v;
+                try
+                {
+                    v = pi.GetValue(c, null);
+                }
+                catch (Exception e)
+                {
+                    parts.Add(pi.Name + "=(" + e.GetType().Name + ")");
+                    continue;
+                }
+                var vx = v as System.Security.Cryptography.X509Certificates.X509Certificate2;
+                if (vx != null) parts.Add(pi.Name + "=X509 SHA-256 " + TiaNames.Fingerprint(vx.RawData) + " subject " + vx.Subject + " valid to " + vx.NotAfter.ToUniversalTime().ToString("o"));
+                else if (v is byte[]) parts.Add(pi.Name + "=bytes SHA-256 " + TiaNames.Fingerprint((byte[])v));
+                else parts.Add(pi.Name + "=" + (v == null ? "null" : v.ToString()));
+            }
+            return string.Join("; ", parts.ToArray());
+        }
+
         // ---- upload ----
 
         // Upload replaces the project's station with the one the CPU at

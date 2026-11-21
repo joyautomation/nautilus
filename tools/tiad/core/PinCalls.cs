@@ -32,6 +32,78 @@ namespace Tiad
             r.Add("GET", "/v1/pins", ListPins);
             r.Add("POST", "/v1/pins/{address}", SetPin);
             r.Add("POST", "/v1/identify", Identify);
+            r.Add("POST", "/v1/sessions/{id}/online-check", OnlineCheck);
+        }
+
+        // OnlineCheck goes online read-only from a session's project to the
+        // CPU at address and back offline (#789 S2b stage 1b). No pin is
+        // set or checked, no CPU claimed, nothing saved. Announced, audited.
+        object OnlineCheck(Call c)
+        {
+            NeedTia();
+            return WithSession(c, delegate(Session s)
+            {
+                var r = c.Json();
+                string address = r.Str("address");
+                bool trust = r.Bool("trustUnverifiedCertificate");
+                bool announced = r.Bool("announced");
+                r.Done();
+                if (!Ip.IsIPv4(address)) throw TiadException.BadRequest("online-check: address {0} is not an IPv4 address", Json.Quote(address));
+                if (!Target(address)) throw new TiadException(403, Kinds.TargetRefused, address + " is not in TIAD_TARGETS");
+                if (!announced) throw TiadException.BadRequest("{0}", "online-check: announce it first (announced: true): it reaches the CPU");
+                OnlineCheckResult res = null;
+                string outcome = "";
+                try
+                {
+                    res = OnSession(s, delegate(ITia t) { return t.OnlineCheck(s.Handle, address, trust); });
+                    outcome = "ok";
+                }
+                catch (TiadException e)
+                {
+                    outcome = e.Kind;
+                    throw;
+                }
+                catch (Exception)
+                {
+                    outcome = "error";
+                    throw;
+                }
+                finally
+                {
+                    Log.Line("audit online-check session={0} address={1} trustUnverifiedCertificate={2} state={3} asked={4} trustedBlindly={5} fingerprintItems={6} compared={7} differences={8} outcome={9}",
+                        s.Id, Json.Quote(address), trust, res == null ? "-" : res.State, res == null ? 0 : res.Asked.Count,
+                        res == null ? 0 : res.TrustedBlindly.Count, res == null ? 0 : res.Fingerprint.Count,
+                        res != null && res.Compared, res == null ? 0 : res.Differences.Count, outcome);
+                }
+                var fp = new List<object>();
+                foreach (KeyValuePair<string, string> kv in res.Fingerprint)
+                {
+                    var x = new Obj();
+                    x["identifier"] = kv.Key;
+                    x["value"] = kv.Value;
+                    fp.Add(x);
+                }
+                var diffs = new List<object>();
+                foreach (Difference d in res.Differences)
+                {
+                    var x = new Obj();
+                    x["object"] = d.Object;
+                    x["state"] = d.State;
+                    diffs.Add(x);
+                }
+                var o = new Obj();
+                o["projectCertificate"] = res.ProjectCertificate;
+                o["state"] = res.State;
+                o["onlineError"] = res.OnlineError;
+                o["asked"] = res.Asked.ToArray();
+                o["trustedBlindly"] = res.TrustedBlindly.ToArray();
+                o["fingerprint"] = fp;
+                o["fingerprintError"] = res.FingerprintError;
+                o["compared"] = res.Compared;
+                o["differences"] = diffs;
+                o["compareError"] = res.CompareError;
+                return o;
+            });
         }
 
         // Identify reads, read-only, what TIA's fingerprint service reports

@@ -1453,6 +1453,12 @@ namespace Tiad.Fake
             return r;
         }
 
+        public OnlineCheckResult OnlineCheck(object project, string address, bool trustUnverifiedCertificate)
+        {
+            script.Enter("OnlineCheck");
+            return new OnlineCheckResult { State = "Online", Compared = true };
+        }
+
         public string Save(object project, bool archive)
         {
             script.Enter("Save");
