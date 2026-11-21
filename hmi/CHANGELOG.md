@@ -14,6 +14,12 @@
 
 ### Added
 
+- **`<ConfigReview/>`** (#711 slice 3), inside `<ConfigEditor/>` (own client `review`): the diff of
+  the edited files (`unifiedDiff`, `diffFiles`: the shape of `naut pull --io --dry-run`, pure
+  TypeScript), then Stage, Validate (checks, probes, changes, what the first scan will command) and
+  Apply with an optional revert-if-silent duration on #706's `/api/io/staged` routes
+  (`ReviewClient`). Apply is only enabled on a valid candidate, an edit after staging makes the
+  candidate stale, and every refusal says what to do. Seen in a browser against a running controller.
 - **`@joyautomation/nautilus-hmi/config`** (#711 slice 2): the configuration screens' kit, in its own
   entry because it carries the `yaml` parser (an HMI that imports only the root never bundles it;
   a test walks the root's import graph to keep that true). `<ConfigEditor/>` reads the controller's
