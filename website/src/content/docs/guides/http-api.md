@@ -232,6 +232,8 @@ check comes before the token check. See [Online edits](/guides/online-edits/).
 | `POST` | [`/api/io/staged/{id}/apply`](#live-io-configuration) | Apply it while the scan runs |
 | `GET` | [`/api/io/staged/{id}`](#live-io-configuration) | One candidate's state |
 | `GET` | [`/api/io/files`](#live-io-configuration) | The project files the running I/O configuration differs in (`naut pull --io`) |
+| `GET` | [`/api/config/schema`](#configuration-screens) | The manifest's JSON Schema, one section at a time (`?section=drivers`), or the list of sections |
+| `GET` | [`/api/config/files`](#configuration-screens) | The manifest and the files its drivers name, as what runs (needs the edit permission) |
 | `GET` | [`/api/history`, `/api/history/…`](#historian-proxy) | Forwarded to the historian |
 | `GET` | [`/api/audit`](#audit-journal) | Who changed what: the audit journal's recent entries |
 | `GET` | [`/api/me`](/guides/auth/#browser-sign-in) | Who the request acts as, and what it may do |
@@ -1144,6 +1146,31 @@ token from a trusted host (a bare `NAUTILUS_TOKEN` guards writes) until the
 manifest has an `auth:` block, which makes it need `read`: without one,
 anyone who can reach the port can read the project's I/O files.** Keep the
 port off untrusted networks.
+
+### Configuration screens
+
+The routes the configuration screens read (#711); they write nothing, and
+what they edit is applied through the staged routes above.
+
+- `GET /api/config/schema` lists the manifest sections the schema describes
+  (`{"sections": [...]}`). `?section=drivers` returns that one section as a
+  self-contained JSON Schema (`application/schema+json`): the section under
+  `properties` and only the `definitions` it reaches. It is a slice of the
+  schema the editor uses. An unknown section is `404` and names the ones
+  there are.
+- `GET /api/config/files` returns `manifest` (its file name), `files` (that
+  file and the file each driver names, path to text) and `leading`, as what
+  runs now: an I/O apply's files laid over the ones the controller booted
+  from. `differs` lists the paths whose text is an apply's.
+
+`/api/config/schema` is static and a plain read. **`/api/config/files` is
+the whole manifest (users, grants, hosts), so it needs the permission to
+edit it, not the plain read `GET /api/io/files` takes:** online edits on,
+and the write token or a principal that may write. It serves only YAML
+files inside the project with no hidden path component (never `.env`, a
+program source, a path outside the project, or anything reached through a
+symbolic link), and the text as written: secrets are environment or file
+references in the manifest, but a comment is served too.
 
 **Who is recorded.** Every stage, validate, apply and revert cancel is
 journalled (`config.stage`, `config.validate`, `config.apply`,

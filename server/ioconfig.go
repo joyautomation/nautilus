@@ -81,6 +81,25 @@ type IOHook struct {
 	CancelRevert func(by string) (*IOWatch, error)
 	// Files is the project files the running I/O configuration differs in.
 	Files func() IOFiles
+	// Sections are the manifest sections the config screens can render;
+	// Schema is one as a self-contained JSON Schema (an error wrapping
+	// ErrConfigNoSection answers 404). ConfigFiles is the manifest text
+	// the screens edit (#711).
+	Sections    func() []string
+	Schema      func(section string) ([]byte, error)
+	ConfigFiles func() (ConfigFiles, error)
+}
+
+// ErrConfigNoSection is a schema section the manifest does not have.
+var ErrConfigNoSection = errors.New("no such manifest section")
+
+// ConfigFiles is GET /api/config/files: the manifest file and the files its
+// drivers name, as what runs now. Differs are the paths an apply changed.
+type ConfigFiles struct {
+	Leading  bool              `json:"leading"`
+	Manifest string            `json:"manifest"`
+	Files    map[string]string `json:"files"`
+	Differs  []string          `json:"differs,omitempty"`
 }
 
 // IOFile is one project file the running I/O configuration differs in:
@@ -562,4 +581,57 @@ func (s *Server) recordIORevert(w IOWatch) {
 			"reason": capText(w.Reason, reasonMax), "state": w.State, "gen": w.Gen,
 		},
 	})
+}
+
+// handleConfigSchema serves one manifest section as a JSON Schema for the
+// config screens, or (no section) lists the sections. Read-only.
+func (s *Server) handleConfigSchema(w http.ResponseWriter, r *http.Request) {
+	if s.ioUnavailable(w) {
+		return
+	}
+	if s.io.Schema == nil || s.io.Sections == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "this controller cannot serve its manifest schema"})
+		return
+	}
+	section := r.URL.Query().Get("section")
+	if section == "" {
+		writeJSON(w, http.StatusOK, map[string]any{"sections": s.io.Sections()})
+		return
+	}
+	raw, err := s.io.Schema(section)
+	if errors.Is(err, ErrConfigNoSection) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	w.Header().Set("Content-Type", "application/schema+json")
+	_, _ = w.Write(raw)
+}
+
+// handleConfigFiles serves the manifest text the config screens edit. It
+// needs the edit permission, like staging a change.
+func (s *Server) handleConfigFiles(w http.ResponseWriter, r *http.Request) {
+	// The whole manifest (users, grants, hosts), not what an apply changed:
+	// it needs the permission to edit it, not the plain read of GET
+	// /api/io/files.
+	if code, msg := s.authorizeProgramEdit(r); code != 0 {
+		writeJSON(w, code, map[string]string{"error": msg})
+		return
+	}
+	if s.ioUnavailable(w) {
+		return
+	}
+	if s.io.ConfigFiles == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "this controller cannot list its configuration files"})
+		return
+	}
+	f, err := s.io.ConfigFiles()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, f)
 }

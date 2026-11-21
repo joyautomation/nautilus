@@ -461,3 +461,97 @@ func TestIOFilesRoute(t *testing.T) {
 		t.Fatalf("without live I/O: %d, want 503", w.Code)
 	}
 }
+
+// The config screens' two read routes (#711): a schema slice per section,
+// a list of sections without one, and the manifest text.
+func TestConfigSchemaAndFilesRoutes(t *testing.T) {
+	f := &fakeIO{}
+	hook := f.hook()
+	hook.Sections = func() []string { return []string{"devices", "drivers"} }
+	hook.Schema = func(s string) ([]byte, error) {
+		if s != "drivers" {
+			return nil, fmt.Errorf("%w %q", ErrConfigNoSection, s)
+		}
+		return []byte(`{"title":"drivers"}`), nil
+	}
+	hook.ConfigFiles = func() (ConfigFiles, error) {
+		return ConfigFiles{Leading: true, Manifest: "nautilus.yaml", Files: map[string]string{"nautilus.yaml": "name: x\n"}, Differs: []string{"modbus.yaml"}}, nil
+	}
+	o := ioOptions(f, true)
+	o.IO = hook
+	h := New(newTestRuntime(t), o).Handler()
+
+	w, body := doJSON(t, h, "GET", "/api/config/schema", nil)
+	if w.Code != http.StatusOK || fmt.Sprint(body["sections"]) != "[devices drivers]" {
+		t.Fatalf("list: %d %v", w.Code, body)
+	}
+	w, body = doJSON(t, h, "GET", "/api/config/schema?section=drivers", nil)
+	if w.Code != http.StatusOK || body["title"] != "drivers" || !strings.Contains(w.Header().Get("Content-Type"), "schema+json") {
+		t.Fatalf("slice: %d %v %q", w.Code, body, w.Header().Get("Content-Type"))
+	}
+	if w, _ := doJSON(t, h, "GET", "/api/config/schema?section=nope", nil); w.Code != http.StatusNotFound {
+		t.Fatalf("unknown section: %d, want 404", w.Code)
+	}
+	w, body = doJSON(t, h, "GET", "/api/config/files", nil)
+	if w.Code != http.StatusOK || body["manifest"] != "nautilus.yaml" || body["leading"] != true ||
+		fmt.Sprint(body["files"]) != "map[nautilus.yaml:name: x\n]" || fmt.Sprint(body["differs"]) != "[modbus.yaml]" {
+		t.Fatalf("files: %d %v", w.Code, body)
+	}
+
+	hook.Schema, hook.ConfigFiles = nil, nil
+	for _, p := range []string{"/api/config/schema?section=drivers", "/api/config/files"} {
+		if w, _ := doJSON(t, h, "GET", p, nil); w.Code != http.StatusServiceUnavailable {
+			t.Errorf("%s without the hook: %d, want 503", p, w.Code)
+		}
+		if w, _ := doJSON(t, New(newTestRuntime(t), Options{OnlineEdits: true}).Handler(), "GET", p, nil); w.Code != http.StatusServiceUnavailable {
+			t.Errorf("%s without live I/O: %d, want 503", p, w.Code)
+		}
+	}
+}
+
+// config.commit is classed strict: refused while the journal is down, like
+// the other configuration actions.
+func TestConfigCommitIsStrict(t *testing.T) {
+	if actionClass["config.commit"] != strict {
+		t.Fatalf("config.commit class = %q, want strict", actionClass["config.commit"])
+	}
+}
+
+// GET /api/config/files is the whole manifest: it needs the permission to
+// edit it (online edits on, the token when one is set), not the plain read
+// of /api/io/files. The schema is static and stays a plain read.
+func TestConfigFilesNeedTheEditPermission(t *testing.T) {
+	f := &fakeIO{}
+	hook := f.hook()
+	hook.Sections = func() []string { return []string{"drivers"} }
+	hook.Schema = func(string) ([]byte, error) { return []byte(`{}`), nil }
+	hook.ConfigFiles = func() (ConfigFiles, error) {
+		return ConfigFiles{Manifest: "nautilus.yaml", Files: map[string]string{"nautilus.yaml": "x"}}, nil
+	}
+	get := func(h http.Handler, path, token string) int {
+		req := httptest.NewRequest("GET", "http://localhost"+path, nil)
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		return w.Code
+	}
+	o := ioOptions(f, false)
+	o.IO = hook
+	if code := get(New(newTestRuntime(t), o).Handler(), "/api/config/files", ""); code != http.StatusForbidden {
+		t.Errorf("online edits off: %d, want 403", code)
+	}
+	o = ioOptions(f, true)
+	o.IO, o.AuthToken = hook, "s3cret"
+	h := New(newTestRuntime(t), o).Handler()
+	if code := get(h, "/api/config/files", ""); code != http.StatusUnauthorized {
+		t.Errorf("no token: %d, want 401", code)
+	}
+	if code := get(h, "/api/config/files", "s3cret"); code != http.StatusOK {
+		t.Errorf("with the token: %d, want 200", code)
+	}
+	if code := get(h, "/api/config/schema?section=drivers", ""); code != http.StatusOK {
+		t.Errorf("schema without a token: %d, want 200", code)
+	}
+}

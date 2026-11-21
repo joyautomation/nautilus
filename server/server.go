@@ -881,6 +881,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/iolink/{port}/params/{ref}", s.handleParamRead)
 	mux.Handle("PUT /api/iolink/{port}/params/{ref}", s.audited("param.write", s.paramTarget, s.handleParamWrite))
 	mux.HandleFunc("GET /api/io/files", s.handleIOFiles)
+	mux.HandleFunc("GET /api/config/schema", s.handleConfigSchema)
+	mux.HandleFunc("GET /api/config/files", s.handleConfigFiles)
 	mux.Handle("POST /api/io/staged", s.audited("config.stage", ioStageTarget, s.handleIOStage))
 	mux.HandleFunc("GET /api/io/staged/{id}", s.handleIOStaged)
 	mux.Handle("POST /api/io/staged/{id}/validate", s.audited("config.validate", ioStagedTarget, s.handleIOValidate))
