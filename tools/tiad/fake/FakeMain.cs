@@ -1147,6 +1147,7 @@ namespace Tiad.Fake
             bool despite = script.LoadDespiteCancel;
             string resultState = script.DownloadState == "" ? "Success" : script.DownloadState;
             string state = "";
+            string cpu = p.Cpu == null ? "" : p.Cpu.Name;
             // As tiad.Openness runs it: through DownloadSteps, the decider
             // answering TIA's pre-download callback once per check, in
             // order, as TIA calls it (#789 S2b: one at a time, no list).
@@ -1196,6 +1197,16 @@ namespace Tiad.Fake
                     Boundary.Call("download: after loading", delegate { after = decider.After(DownloadDecider.StartAfterType); }, decider.Keep);
                     Log.Line("fake TIA: after loading, start-after written {0}", after == null ? "nothing" : after.Setting.ToString());
                     if (stopped && (after == null || after.Setting.Value != "StartModule")) state = "STOP";
+                    // TIA reports its steps as messages, as on the bench
+                    // (#789 stages 2 and 3): the stop, each block loaded,
+                    // the start. It says nothing of a CPU it never stopped,
+                    // so tiad reports no mode then. The mode tiad reports
+                    // is read from these by core, never set here; state
+                    // above is the fake CPU's own mode (/fake/downloads).
+                    var said = new List<string>();
+                    if (stopped) said.Add(cpu + " stopped.");
+                    foreach (Block b in p.Blocks) said.Add("'" + b.Name + "' was loaded successfully.");
+                    if (stopped && state == "RUN") said.Add(cpu + " started.");
                     var rec = new Obj();
                     rec["address"] = address;
                     rec["hardware"] = hardware;
@@ -1204,11 +1215,10 @@ namespace Tiad.Fake
                     script.Loaded(rec);
                     loaded[address] = p;
                     p.Changed = false;
-                    return new DownloadCall { State = resultState };
+                    return new DownloadCall { State = resultState, MessageList = said, Messages = string.Join("; ", said.ToArray()), Cpu = cpu };
                 },
                 delegate { },
                 delegate { return new List<string>(); });
-            if (outcome.Loaded) outcome.State = state;
             return outcome;
         }
 

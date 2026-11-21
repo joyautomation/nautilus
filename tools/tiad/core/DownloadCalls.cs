@@ -395,7 +395,7 @@ namespace Tiad
                 foreach (var d in diffs) names.Add((d.Object + " " + d.State).Trim());
                 throw Unknown("TIA reported the download loaded, but the compare right after it differs (" + (names.Count == 0 ? "no differences named" : string.Join(", ", names.ToArray())) + ")", acting);
             }
-            outcome = "loaded state=" + (result.State == "" ? "unknown" : result.State) + " compare=equal blocks=[" + TiaNames.BlockLabels(cmp.Blocks, 20) + "]" + (req.Hardware ? " hardwareVerified=false" : "");
+            outcome = "loaded state=" + (result.State == "" ? "unknown" : result.State + " (" + result.StateSource + ")") + " compare=equal blocks=[" + TiaNames.BlockLabels(cmp.Blocks, 20) + "]" + (req.Hardware ? " hardwareVerified=false" : "");
             o["dryRun"] = false;
             o["downloaded"] = true;
             o["compareEqual"] = true;
@@ -412,7 +412,13 @@ namespace Tiad
             if (result.Messages != "") o["messages"] = result.Messages;
             o["questions"] = Question.ToJson(askedQs);
             o["keptDevices"] = KeptDevice.ToJson(s.Kept);
-            if (result.State != "") o["state"] = result.State;
+            // The CPU's mode as TIA's messages say it, labelled by where it
+            // comes from: evidence, not a read of the CPU (#789).
+            if (result.State != "")
+            {
+                o["state"] = result.State;
+                o["stateSource"] = result.StateSource;
+            }
             return o;
         }
 

@@ -1048,6 +1048,7 @@ namespace Tiad.Openness
             ConfigurationTargetInterface target = null;
             ConfigurationAddress at = null;
             DownloadOptions options = DownloadOptions.None;
+            string cpuName = "";
             // DownloadSteps (core) decides how it ended: from TIA's download
             // call on, any failure is in doubt, and detaching the handlers
             // from a TIA that died never replaces that.
@@ -1056,7 +1057,11 @@ namespace Tiad.Openness
                 {
                     HwDevice d = StationOf(Of(project).Project);
                     if (d == null) throw new TiaException("the project has no CPU");
-                    dp = CpuOf(d).GetService<DownloadProvider>();
+                    DeviceItem cpu = CpuOf(d);
+                    // Its name, which TIA's download messages use (core
+                    // reads the CPU's mode from them).
+                    cpuName = cpu.Name ?? "";
+                    dp = cpu.GetService<DownloadProvider>();
                     online = new OnlineAsks(dp.Configuration, Detached);
                     ConfigurationPcInterface pc = PcInterface(dp.Configuration);
                     target = TargetInterface(pc);
@@ -1099,7 +1104,9 @@ namespace Tiad.Openness
                         options);
                     // Read inside the call: a failure reading the result of
                     // a download TIA ran is in doubt too.
-                    return new DownloadCall { Messages = DownloadMessages(r.Messages), State = r.State.ToString() };
+                    var list = new List<string>();
+                    DownloadMessages(r.Messages, list);
+                    return new DownloadCall { Messages = string.Join("; ", list.ToArray()), MessageList = list, State = r.State.ToString(), Cpu = cpuName };
                 },
                 delegate
                 {
@@ -1145,15 +1152,16 @@ namespace Tiad.Openness
             prop.SetValue(c, Enum.Parse(prop.PropertyType, s.Value), null);
         }
 
-        static string DownloadMessages(DownloadResultMessageComposition ms)
+        // DownloadMessages adds TIA's download result's messages to into,
+        // one per element, depth first: a message with messages under it
+        // is those messages.
+        static void DownloadMessages(DownloadResultMessageComposition ms, List<string> into)
         {
-            var l = new List<string>();
             foreach (DownloadResultMessage m in ms)
             {
-                if (m.Messages.Count > 0) l.Add(DownloadMessages(m.Messages));
-                else if (!string.IsNullOrEmpty(m.Message)) l.Add(m.Message);
+                if (m.Messages.Count > 0) DownloadMessages(m.Messages, into);
+                else if (!string.IsNullOrEmpty(m.Message)) into.Add(m.Message);
             }
-            return string.Join("; ", l.ToArray());
         }
 
         // ---- compare ----

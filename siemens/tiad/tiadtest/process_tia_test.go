@@ -987,7 +987,7 @@ func TestAgentAuditsEveryDownload(t *testing.T) {
 	if _, err := s.Download(ctx, req); err != nil {
 		t.Fatal(err)
 	}
-	log := waitLog(t, p, "outcome=loaded state=STOP")
+	log := waitLog(t, p, "outcome=loaded state=STOP (tia-message)")
 	line := ""
 	for _, l := range strings.Split(log, "\n") {
 		if strings.Contains(l, "audit download") && strings.Contains(l, "outcome=loaded") {
