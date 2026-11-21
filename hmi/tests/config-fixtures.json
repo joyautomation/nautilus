@@ -1,0 +1,405 @@
+{
+ "comment": "Source of truth for the kit patcher (tests/config.test.ts: patch(before, ops) must equal after) and the Go loader (internal/project/configpatch_fixture_test.go: after must read as want).",
+ "cases": [
+  {
+   "name": "client-id \"on\"",
+   "before": "name: x\ndrivers:\n  - { type: eip, host: plc.local, manifest: eip.yaml }\n  - { type: sparkplug-host, broker: \"tcp://b:1883\", host-id: h, manifest: sp.yaml, group-id: g }\n",
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "drivers",
+      1,
+      "client-id"
+     ],
+     "value": "on"
+    }
+   ],
+   "after": "name: x\ndrivers:\n  - { type: eip, host: plc.local, manifest: eip.yaml }\n  - { type: sparkplug-host, broker: \"tcp://b:1883\", host-id: h, manifest: sp.yaml, group-id: g, client-id: \"on\" }\n",
+   "want": {
+    "row": 1,
+    "field": "ClientID",
+    "value": "on"
+   }
+  },
+  {
+   "name": "client-id \"yes\"",
+   "before": "name: x\ndrivers:\n  - { type: eip, host: plc.local, manifest: eip.yaml }\n  - { type: sparkplug-host, broker: \"tcp://b:1883\", host-id: h, manifest: sp.yaml, group-id: g }\n",
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "drivers",
+      1,
+      "client-id"
+     ],
+     "value": "yes"
+    }
+   ],
+   "after": "name: x\ndrivers:\n  - { type: eip, host: plc.local, manifest: eip.yaml }\n  - { type: sparkplug-host, broker: \"tcp://b:1883\", host-id: h, manifest: sp.yaml, group-id: g, client-id: \"yes\" }\n",
+   "want": {
+    "row": 1,
+    "field": "ClientID",
+    "value": "yes"
+   }
+  },
+  {
+   "name": "client-id \"No\"",
+   "before": "name: x\ndrivers:\n  - { type: eip, host: plc.local, manifest: eip.yaml }\n  - { type: sparkplug-host, broker: \"tcp://b:1883\", host-id: h, manifest: sp.yaml, group-id: g }\n",
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "drivers",
+      1,
+      "client-id"
+     ],
+     "value": "No"
+    }
+   ],
+   "after": "name: x\ndrivers:\n  - { type: eip, host: plc.local, manifest: eip.yaml }\n  - { type: sparkplug-host, broker: \"tcp://b:1883\", host-id: h, manifest: sp.yaml, group-id: g, client-id: \"No\" }\n",
+   "want": {
+    "row": 1,
+    "field": "ClientID",
+    "value": "No"
+   }
+  },
+  {
+   "name": "client-id \"0x10\"",
+   "before": "name: x\ndrivers:\n  - { type: eip, host: plc.local, manifest: eip.yaml }\n  - { type: sparkplug-host, broker: \"tcp://b:1883\", host-id: h, manifest: sp.yaml, group-id: g }\n",
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "drivers",
+      1,
+      "client-id"
+     ],
+     "value": "0x10"
+    }
+   ],
+   "after": "name: x\ndrivers:\n  - { type: eip, host: plc.local, manifest: eip.yaml }\n  - { type: sparkplug-host, broker: \"tcp://b:1883\", host-id: h, manifest: sp.yaml, group-id: g, client-id: \"0x10\" }\n",
+   "want": {
+    "row": 1,
+    "field": "ClientID",
+    "value": "0x10"
+   }
+  },
+  {
+   "name": "client-id \"010\"",
+   "before": "name: x\ndrivers:\n  - { type: eip, host: plc.local, manifest: eip.yaml }\n  - { type: sparkplug-host, broker: \"tcp://b:1883\", host-id: h, manifest: sp.yaml, group-id: g }\n",
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "drivers",
+      1,
+      "client-id"
+     ],
+     "value": "010"
+    }
+   ],
+   "after": "name: x\ndrivers:\n  - { type: eip, host: plc.local, manifest: eip.yaml }\n  - { type: sparkplug-host, broker: \"tcp://b:1883\", host-id: h, manifest: sp.yaml, group-id: g, client-id: \"010\" }\n",
+   "want": {
+    "row": 1,
+    "field": "ClientID",
+    "value": "010"
+   }
+  },
+  {
+   "name": "client-id \"1e3\"",
+   "before": "name: x\ndrivers:\n  - { type: eip, host: plc.local, manifest: eip.yaml }\n  - { type: sparkplug-host, broker: \"tcp://b:1883\", host-id: h, manifest: sp.yaml, group-id: g }\n",
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "drivers",
+      1,
+      "client-id"
+     ],
+     "value": "1e3"
+    }
+   ],
+   "after": "name: x\ndrivers:\n  - { type: eip, host: plc.local, manifest: eip.yaml }\n  - { type: sparkplug-host, broker: \"tcp://b:1883\", host-id: h, manifest: sp.yaml, group-id: g, client-id: \"1e3\" }\n",
+   "want": {
+    "row": 1,
+    "field": "ClientID",
+    "value": "1e3"
+   }
+  },
+  {
+   "name": "client-id \"12\"",
+   "before": "name: x\ndrivers:\n  - { type: eip, host: plc.local, manifest: eip.yaml }\n  - { type: sparkplug-host, broker: \"tcp://b:1883\", host-id: h, manifest: sp.yaml, group-id: g }\n",
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "drivers",
+      1,
+      "client-id"
+     ],
+     "value": "12"
+    }
+   ],
+   "after": "name: x\ndrivers:\n  - { type: eip, host: plc.local, manifest: eip.yaml }\n  - { type: sparkplug-host, broker: \"tcp://b:1883\", host-id: h, manifest: sp.yaml, group-id: g, client-id: \"12\" }\n",
+   "want": {
+    "row": 1,
+    "field": "ClientID",
+    "value": "12"
+   }
+  },
+  {
+   "name": "client-id \"null\"",
+   "before": "name: x\ndrivers:\n  - { type: eip, host: plc.local, manifest: eip.yaml }\n  - { type: sparkplug-host, broker: \"tcp://b:1883\", host-id: h, manifest: sp.yaml, group-id: g }\n",
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "drivers",
+      1,
+      "client-id"
+     ],
+     "value": "null"
+    }
+   ],
+   "after": "name: x\ndrivers:\n  - { type: eip, host: plc.local, manifest: eip.yaml }\n  - { type: sparkplug-host, broker: \"tcp://b:1883\", host-id: h, manifest: sp.yaml, group-id: g, client-id: \"null\" }\n",
+   "want": {
+    "row": 1,
+    "field": "ClientID",
+    "value": "null"
+   }
+  },
+  {
+   "name": "client-id \"~\"",
+   "before": "name: x\ndrivers:\n  - { type: eip, host: plc.local, manifest: eip.yaml }\n  - { type: sparkplug-host, broker: \"tcp://b:1883\", host-id: h, manifest: sp.yaml, group-id: g }\n",
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "drivers",
+      1,
+      "client-id"
+     ],
+     "value": "~"
+    }
+   ],
+   "after": "name: x\ndrivers:\n  - { type: eip, host: plc.local, manifest: eip.yaml }\n  - { type: sparkplug-host, broker: \"tcp://b:1883\", host-id: h, manifest: sp.yaml, group-id: g, client-id: \"~\" }\n",
+   "want": {
+    "row": 1,
+    "field": "ClientID",
+    "value": "~"
+   }
+  },
+  {
+   "name": "client-id \"a: b\"",
+   "before": "name: x\ndrivers:\n  - { type: eip, host: plc.local, manifest: eip.yaml }\n  - { type: sparkplug-host, broker: \"tcp://b:1883\", host-id: h, manifest: sp.yaml, group-id: g }\n",
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "drivers",
+      1,
+      "client-id"
+     ],
+     "value": "a: b"
+    }
+   ],
+   "after": "name: x\ndrivers:\n  - { type: eip, host: plc.local, manifest: eip.yaml }\n  - { type: sparkplug-host, broker: \"tcp://b:1883\", host-id: h, manifest: sp.yaml, group-id: g, client-id: \"a: b\" }\n",
+   "want": {
+    "row": 1,
+    "field": "ClientID",
+    "value": "a: b"
+   }
+  },
+  {
+   "name": "client-id \"# c\"",
+   "before": "name: x\ndrivers:\n  - { type: eip, host: plc.local, manifest: eip.yaml }\n  - { type: sparkplug-host, broker: \"tcp://b:1883\", host-id: h, manifest: sp.yaml, group-id: g }\n",
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "drivers",
+      1,
+      "client-id"
+     ],
+     "value": "# c"
+    }
+   ],
+   "after": "name: x\ndrivers:\n  - { type: eip, host: plc.local, manifest: eip.yaml }\n  - { type: sparkplug-host, broker: \"tcp://b:1883\", host-id: h, manifest: sp.yaml, group-id: g, client-id: \"# c\" }\n",
+   "want": {
+    "row": 1,
+    "field": "ClientID",
+    "value": "# c"
+   }
+  },
+  {
+   "name": "client-id \"\"",
+   "before": "name: x\ndrivers:\n  - { type: eip, host: plc.local, manifest: eip.yaml }\n  - { type: sparkplug-host, broker: \"tcp://b:1883\", host-id: h, manifest: sp.yaml, group-id: g }\n",
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "drivers",
+      1,
+      "client-id"
+     ],
+     "value": ""
+    }
+   ],
+   "after": "name: x\ndrivers:\n  - { type: eip, host: plc.local, manifest: eip.yaml }\n  - { type: sparkplug-host, broker: \"tcp://b:1883\", host-id: h, manifest: sp.yaml, group-id: g, client-id: \"\" }\n",
+   "want": {
+    "row": 1,
+    "field": "ClientID",
+    "value": ""
+   }
+  },
+  {
+   "name": "client-id \"café\"",
+   "before": "name: x\ndrivers:\n  - { type: eip, host: plc.local, manifest: eip.yaml }\n  - { type: sparkplug-host, broker: \"tcp://b:1883\", host-id: h, manifest: sp.yaml, group-id: g }\n",
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "drivers",
+      1,
+      "client-id"
+     ],
+     "value": "café"
+    }
+   ],
+   "after": "name: x\ndrivers:\n  - { type: eip, host: plc.local, manifest: eip.yaml }\n  - { type: sparkplug-host, broker: \"tcp://b:1883\", host-id: h, manifest: sp.yaml, group-id: g, client-id: \"café\" }\n",
+   "want": {
+    "row": 1,
+    "field": "ClientID",
+    "value": "café"
+   }
+  },
+  {
+   "name": "client-id \"plain-id\"",
+   "before": "name: x\ndrivers:\n  - { type: eip, host: plc.local, manifest: eip.yaml }\n  - { type: sparkplug-host, broker: \"tcp://b:1883\", host-id: h, manifest: sp.yaml, group-id: g }\n",
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "drivers",
+      1,
+      "client-id"
+     ],
+     "value": "plain-id"
+    }
+   ],
+   "after": "name: x\ndrivers:\n  - { type: eip, host: plc.local, manifest: eip.yaml }\n  - { type: sparkplug-host, broker: \"tcp://b:1883\", host-id: h, manifest: sp.yaml, group-id: g, client-id: plain-id }\n",
+   "want": {
+    "row": 1,
+    "field": "ClientID",
+    "value": "plain-id"
+   }
+  },
+  {
+   "name": "client-id \"opc.tcp://h:4840\"",
+   "before": "name: x\ndrivers:\n  - { type: eip, host: plc.local, manifest: eip.yaml }\n  - { type: sparkplug-host, broker: \"tcp://b:1883\", host-id: h, manifest: sp.yaml, group-id: g }\n",
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "drivers",
+      1,
+      "client-id"
+     ],
+     "value": "opc.tcp://h:4840"
+    }
+   ],
+   "after": "name: x\ndrivers:\n  - { type: eip, host: plc.local, manifest: eip.yaml }\n  - { type: sparkplug-host, broker: \"tcp://b:1883\", host-id: h, manifest: sp.yaml, group-id: g, client-id: opc.tcp://h:4840 }\n",
+   "want": {
+    "row": 1,
+    "field": "ClientID",
+    "value": "opc.tcp://h:4840"
+   }
+  },
+  {
+   "name": "typed scalars",
+   "before": "name: x\ndrivers:\n  - { type: eip, host: plc.local, manifest: eip.yaml }\n  - { type: sparkplug-host, broker: \"tcp://b:1883\", host-id: h, manifest: sp.yaml, group-id: g }\n",
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "drivers",
+      0,
+      "slot"
+     ],
+     "value": 3
+    },
+    {
+     "op": "set",
+     "path": [
+      "drivers",
+      0,
+      "scan-rate"
+     ],
+     "value": "250ms"
+    },
+    {
+     "op": "set",
+     "path": [
+      "drivers",
+      1,
+      "primary"
+     ],
+     "value": true
+    },
+    {
+     "op": "set",
+     "path": [
+      "drivers",
+      1,
+      "rebirth-on-start"
+     ],
+     "value": false
+    },
+    {
+     "op": "set",
+     "path": [
+      "drivers",
+      1,
+      "group-ids"
+     ],
+     "value": [
+      "a",
+      "on",
+      "b"
+     ]
+    }
+   ],
+   "after": "name: x\ndrivers:\n  - { type: eip, host: plc.local, manifest: eip.yaml, slot: 3, scan-rate: 250ms }\n  - { type: sparkplug-host, broker: \"tcp://b:1883\", host-id: h, manifest: sp.yaml, group-id: g, primary: true, rebirth-on-start: false, group-ids: [a, \"on\", b] }\n",
+   "want": {
+    "slot": 3,
+    "scanRate": "250ms",
+    "primary": true,
+    "rebirthOnStart": false,
+    "groupIDs": [
+     "a",
+     "on",
+     "b"
+    ]
+   }
+  },
+  {
+   "name": "live: a Modbus source port edit (an integer) (ports 41001-41003 stand in)",
+   "file": "modbus.yaml",
+   "before": "sources:\n  - {id: DEV_A, host: 127.0.0.1, port: 41001, unitid: 1, timeout: 500ms, retrymin: 20ms, retrymax: 80ms}\n  - {id: DEV_B, host: 127.0.0.1, port: 41002, unitid: 1, timeout: 500ms, retrymin: 20ms, retrymax: 80ms}\ntags:\n  - {name: A_In, source: DEV_A, table: holding, address: 0, format: int16}\n  - {name: A_Cmd, source: DEV_A, table: holding, address: 10, format: int16, writable: true}\n  - {name: B_In, source: DEV_B, table: holding, address: 0, format: int16}\n  - {name: B_Cmd, source: DEV_B, table: holding, address: 10, format: int16, writable: true}\n",
+   "ops": [
+    {
+     "op": "set",
+     "path": [
+      "sources",
+      0,
+      "port"
+     ],
+     "value": 41003
+    }
+   ],
+   "after": "sources:\n  - {id: DEV_A, host: 127.0.0.1, port: 41003, unitid: 1, timeout: 500ms, retrymin: 20ms, retrymax: 80ms}\n  - {id: DEV_B, host: 127.0.0.1, port: 41002, unitid: 1, timeout: 500ms, retrymin: 20ms, retrymax: 80ms}\ntags:\n  - {name: A_In, source: DEV_A, table: holding, address: 0, format: int16}\n  - {name: A_Cmd, source: DEV_A, table: holding, address: 10, format: int16, writable: true}\n  - {name: B_In, source: DEV_B, table: holding, address: 0, format: int16}\n  - {name: B_Cmd, source: DEV_B, table: holding, address: 10, format: int16, writable: true}\n",
+   "live": true
+  }
+ ]
+}

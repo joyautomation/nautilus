@@ -4,6 +4,19 @@
 
 ### Added
 
+- **`@joyautomation/nautilus-hmi/config`** (#711 slice 2): the configuration screens' kit, in its own
+  entry because it carries the `yaml` parser (an HMI that imports only the root never bundles it;
+  a test walks the root's import graph to keep that true). `<ConfigEditor/>` reads the controller's
+  manifest (`GET /api/config/files`) and schema (`GET /api/config/schema`), shows each driver and
+  `devices:` row as a `<SchemaForm/>` and reports the overlay of changed files through
+  `onoverlay` (`{files, changed}`); it stages and applies nothing. Edits are text patches
+  (`patch`, `renderScalar`): a changed value replaces only its own text, a same-value edit changes
+  no byte, and comments, order and flow style survive. Strings the loaders could read as something
+  else (`on`, `yes`, `0x10`, `1e3`) are written quoted. The schema walker (`sectionField`,
+  `validate`) supports exactly the keywords the drivers and devices sections use and shows
+  anything else as raw text, never dropped. `ConfigClient` names the fix for each refusal (sign in,
+  the write permission, online edits off, a standby). Editing `driver:` (one) is supported; adding
+  a second driver to it asks for a `drivers:` list first.
 - **`createAuth`, `AuthClient`, `AuthSession`** (#708): the kit's side of sign-in. Mounted once
   beside `<ConfirmDialog/>`, it installs its fetch for every kit client: a `401` with
   `elevate: true` asks for the password, proves it (`POST /api/elevate`) and repeats the request
