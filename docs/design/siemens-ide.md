@@ -1169,9 +1169,19 @@ So a deploy reads the fingerprint after loading, then closes its
 session: the next deploy starts in an instance that trusts nothing and
 needs no `acceptBlindTrust`. A read before loading, in the same session,
 still makes that session's download accept the blind trust; read it in
-a session of its own and close that first. Whether a new instance in the
-same agent process forgets TIA's trust is bench-checked (#789 D1 probe)
-before this ships; an agent restart is proven to (stage 1b).
+a session of its own and close that first.
+
+**Bench-proven (#789 D1 probe, read-only):** a fresh instance asked the
+TLS question; the opt-in read trusted it; a read without the opt-in in
+the same instance then succeeded riding on it; closing the session
+retired the instance (its process exited 5.6 s after the retire began);
+in the new instance, started in the same agent process 6.6 s later, a
+read without the opt-in was asked the TLS question again and refused.
+So TIA's trust goes with the retired instance, not only tiad's record.
+The first create after a retire took 31 s (a warm one about 6 s): a
+deploy after a trusting read pays about half a minute. TIA V21 opens
+one project per instance ("Another project is already open"), so on
+real TIA the last session is the only one.
 
 **Calls (no TIA):**
 
