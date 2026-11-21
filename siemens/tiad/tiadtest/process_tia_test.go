@@ -1336,6 +1336,9 @@ func TestAgentTrustsACertificateOnlyOnTheUploadsOptIn(t *testing.T) {
 	if err != nil || len(r.TrustedBlindly) != 1 || !strings.Contains(r.TrustedBlindly[0], "trust the TLS certificate of PLC_1") {
 		t.Fatalf("an upload with the opt-in: %+v %v, want the question trusted blindly", r, err)
 	}
+	if r.BlindTrust == nil || r.BlindTrust.Call != "upload" || r.BlindTrust.Session != s.ID {
+		t.Fatalf("the upload's blind trust: %+v, want the record this upload set", r.BlindTrust)
+	}
 	line := waitLog(t, p, "audit upload")
 	for _, want := range []string{"address=\"192.0.2.10\"", "trustUnverifiedCertificate=yes", "trustedBlindly=[\"trust the TLS certificate of PLC_1"} {
 		if !strings.Contains(line, want) {
