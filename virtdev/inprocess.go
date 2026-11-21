@@ -59,9 +59,9 @@ type InProcess struct {
 
 type mbFace struct {
 	drv *modbus.Driver
-	// baselined is set by the first WriteOutputs, which the driver records
-	// and never sends (its start-up baseline: a controller coming up does
-	// not stomp the field with its initial values); written is what was
+	// baselined is set by the first WriteOutputs, which the driver decides
+	// against what the device holds (its start-up baseline: equal is
+	// recorded, different is one write, #1123); written is what was
 	// last accounted for, so only changes go out after it.
 	baselined bool
 	written   map[string]any
@@ -96,7 +96,8 @@ type uaFace struct {
 	// command tags are no node of the device, and are never dropped here.
 	ports func(nio.Values) (nio.Values, error)
 	// baselined and written are the driver's write rule (opcua.Driver's
-	// WriteOutputs): the first push is recorded, never sent; after it
+	// WriteOutputs): the first push is decided against the device's value
+	// (equal recorded, different one write, #1123); after it
 	// only a value changed since the last one accounted for is a write.
 	baselined bool
 	written   map[string]any
