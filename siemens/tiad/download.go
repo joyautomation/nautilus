@@ -180,6 +180,10 @@ type DownloadResult struct {
 	// in the same call, to be equal (#789); anything less is
 	// outcome_unknown.
 	CompareEqual bool `json:"compareEqual,omitempty"`
+	// Blocks are the labels of every program block the project holds
+	// ("Main [OB1]"), each of which that compare saw identical: check
+	// the blocks a download sent are among them.
+	Blocks []string `json:"blocks,omitempty"`
 	// HardwareVerified is set (false) on a download that loaded hardware:
 	// the compare covers the PLC software only, since Openness has no
 	// online hardware compare. Show it as a warning, never a silent

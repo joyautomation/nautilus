@@ -1216,9 +1216,14 @@ namespace Tiad
         // show is named itself. A null tree is not equal. Blocks are
         // matched by label anywhere in the tree, not by folder: TIA names
         // its folders in the UI language, and imported blocks sit in a
-        // user group one level deeper. System blocks and the project's
-        // data types and tag tables are not required by name; they fall
-        // under the rule that nothing in the tree may differ.
+        // user group one level deeper. Only the project's user program
+        // blocks (its block group and user groups) are required by name:
+        // system blocks, software units, data types and tag tables are
+        // not, and fall under the rule that nothing in the tree may
+        // differ. Residual: a label is matched against every identical
+        // element, so a tag table named exactly like a block the tree
+        // leaves out ("Pump [FB1]") would stand in for it; tiad names no
+        // object so, and it takes a name made to collide.
         public static bool CompareEqual(CompareNode root, List<ProjectBlock> blocks, List<Difference> into)
         {
             if (root == null)
@@ -1240,7 +1245,7 @@ namespace Tiad
             }
             if (blocks == null || blocks.Count == 0)
             {
-                into.Add(new Difference { Object = "", State = "no project blocks read" });
+                into.Add(new Difference { Object = "", State = "no program blocks in the project (or none read)" });
                 return false;
             }
             var named = new HashSet<string>(StringComparer.Ordinal);
@@ -1258,6 +1263,16 @@ namespace Tiad
                 }
             }
             return into.Count == before;
+        }
+
+        // Labels is every block's label, or its name and type when it has
+        // none: the blocks a compare checked, as a response lists them.
+        public static List<string> Labels(List<ProjectBlock> blocks)
+        {
+            var l = new List<string>();
+            if (blocks == null) return l;
+            foreach (ProjectBlock b in blocks) l.Add(BlockLabel(b) ?? b.Name + " (" + b.Type + ")");
+            return l;
         }
 
         // BlockLabels lists blocks' labels for the journal, at most max of

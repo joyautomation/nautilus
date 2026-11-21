@@ -399,6 +399,9 @@ namespace Tiad
             o["dryRun"] = false;
             o["downloaded"] = true;
             o["compareEqual"] = true;
+            // The blocks the compare saw identical, every block the project
+            // holds: a caller checks the ones it sent are among them.
+            o["blocks"] = new List<object>(TiaNames.Labels(cmp.Blocks).ToArray());
             if (req.Hardware)
             {
                 o["hardwareVerified"] = false;
@@ -446,6 +449,7 @@ namespace Tiad
                 var o = new Obj();
                 o["equal"] = equal;
                 o["differences"] = list;
+                o["blocks"] = new List<object>(TiaNames.Labels(cmp == null ? null : cmp.Blocks).ToArray());
                 return o;
             });
         }

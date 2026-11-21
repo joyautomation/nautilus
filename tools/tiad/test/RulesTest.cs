@@ -1379,8 +1379,8 @@ namespace Tiad.Test
             CompareIs(BenchTree(), Bs(B("Main", "OB", 1), B("Odd", "SomethingNew", 3)), false, "Odd (SomethingNew): not compared", "a block of an unknown type");
             CompareIs(BenchTree(), Bs(B("Main", "OB", 1), B("Recipe", "PlcStruct", 1)), false, "Recipe (PlcStruct): not compared", "a data type listed as a block");
             // A project whose blocks were not read proves nothing about them.
-            CompareIs(BenchTree(), null, false, ": no project blocks read", "no block list");
-            CompareIs(BenchTree(), Bs(), false, ": no project blocks read", "an empty block list");
+            CompareIs(BenchTree(), null, false, ": no program blocks in the project (or none read)", "no block list");
+            CompareIs(BenchTree(), Bs(), false, ": no program blocks in the project (or none read)", "an empty block list");
             CompareIs(null, null, false, ": nothing compared", "no tree and no block list");
         }
 
@@ -1398,6 +1398,8 @@ namespace Tiad.Test
             Eq(TiaNames.BlockLabel(B("Recipe", "PlcStruct", 1)), null, "a data type");
             Eq(TiaNames.BlockLabel(B("Odd", "SomethingNew", 1)), null, "an unknown type");
             Eq(TiaNames.BlockLabels(Bs(B("Main", "OB", 1), B("Odd", "X", 2)), 20), "Main [OB1], Odd", "the journal's list");
+            Eq(string.Join("; ", TiaNames.Labels(Bs(B("Main", "OB", 1), B("Odd", "X", 2))).ToArray()), "Main [OB1]; Odd (X)", "the response's list");
+            Eq(TiaNames.Labels(null).Count, 0, "the response's list, no blocks read");
             Eq(TiaNames.BlockLabels(Bs(B("A", "FC", 1), B("B", "FC", 2), B("C", "FC", 3)), 2), "A [FC1], B [FC2], +1 more", "the journal's list, cut");
         }
 

@@ -648,18 +648,23 @@ behaviour. So, until then:
   block that compares different. Equal is the agent's call on TIA's
   compare tree, never TIA's tree alone: its root says identical, at
   least one object below the root was compared and found identical, no
-  element anywhere is in a non-identical state, and every program block
-  the project holds (read in the same call, in every block group) is in
+  element anywhere is in a non-identical state, and every user program
+  block the project holds (read in the same call, in its block group and
+  every user group) is in
   the tree, wherever it sits, as an identical element of its label
   (`Main [OB1]`: name, kind, number). An empty tree, a tree of empty
   folders, a folder that says its contents differ without showing a
   differing child, or a tree that leaves out a block of the project is
   not equal and names why (`nothing compared`, `not compared`,
   `contents differ`, `<block> [FB1] not compared`); so is a block tiad
-  cannot label, and a project whose blocks were not read (`no project
-  blocks read`). So a download's success proves every block it sent
-  landed, by name (the audit line lists them). System blocks, data
-  types and tag tables are not required by name, only never different.
+  cannot label, and a project with no blocks, or whose blocks were not
+  read. So a download's success proves every block it sent landed, by
+  name: the response's `blocks` (and `/compare`'s) and the audit line
+  list them, so a caller checks the blocks it sent are among them.
+  System blocks, software units, data types and tag tables are not
+  required by name, only never different; and a tag table named exactly
+  like a block the tree leaves out would stand in for it (no object
+  tiad makes is so named).
   The shape was pinned from the real tree an equal bench CPU reported
   (#789 dry-run window); the label of an FB, FC or DB is the same shape
   by reasoning, until a bench compare shows one. When the request said start

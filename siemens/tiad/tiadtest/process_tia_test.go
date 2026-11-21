@@ -741,7 +741,7 @@ func TestAgentNeverCallsAnEmptyCompareEqual(t *testing.T) {
 		{"folderDiffers", "PLC tags contents differ"},
 		{"irrelevantRoot", "PLC_1 not compared"},
 		{"dropBlock", "Main [OB1] not compared"},
-		{"noBlocks", "no project blocks read"},
+		{"noBlocks", "no program blocks in the project (or none read)"},
 	} {
 		p.SetScript(t, tiadtest.Script{AskFirst: intp(0), CompareTree: tc.tree})
 		r, err := s.Compare(ctx)
@@ -759,6 +759,45 @@ func TestAgentNeverCallsAnEmptyCompareEqual(t *testing.T) {
 			strings.Join(tiad.ActingAnswers(err), ",") != "start-after" {
 			t.Errorf("download, tree %s: %v (acting %v), want outcome_unknown naming %q and start-after", tc.tree, err, tiad.ActingAnswers(err), tc.named)
 		}
+	}
+	p.SetScript(t, tiadtest.Script{})
+}
+
+// TestAgentSeesTheBlockItSent: #789 stage 3 gate. A download that
+// loaded an imported block succeeds only when the compare right after
+// saw that block, in its user group, identical: the response lists it.
+// A compare that leaves it out names it, on /compare and on a download
+// TIA reported loaded (outcome_unknown, start-after named).
+func TestAgentSeesTheBlockItSent(t *testing.T) {
+	p, s := downloadReady(t)
+	c := p.Client()
+	if _, err := c.PutFile(ctx, "src/Pump.scl", []byte("FUNCTION_BLOCK \"Pump\"\r\nBEGIN\r\nEND_FUNCTION_BLOCK\r\n")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{"src/Pump.scl"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Compile(ctx, true, true); err != nil {
+		t.Fatal(err)
+	}
+	start := tiad.DownloadRequest{Address: "192.0.2.10", Software: true, Announced: true,
+		Decisions: tiad.Decisions{StopCPU: tiad.Yes(), StartAfter: tiad.Yes()}}
+	p.SetScript(t, tiadtest.Script{AskFirst: intp(0)})
+	r, err := s.Download(ctx, start)
+	if err != nil || !r.Downloaded || !r.CompareEqual || strings.Join(r.Blocks, ", ") != "Main [OB1], Pump [FB1]" {
+		t.Fatalf("download of an imported block: %+v %v, want equal listing Main [OB1], Pump [FB1]", r, err)
+	}
+	if cr, err := s.Compare(ctx); err != nil || !cr.Equal || strings.Join(cr.Blocks, ", ") != "Main [OB1], Pump [FB1]" {
+		t.Fatalf("compare after it: %+v %v", cr, err)
+	}
+	p.SetScript(t, tiadtest.Script{AskFirst: intp(0), CompareTree: "dropBlock"})
+	if cr, err := s.Compare(ctx); err != nil || cr.Equal || len(cr.Differences) != 1 || cr.Differences[0].Object != "Pump [FB1]" || cr.Differences[0].State != "not compared" {
+		t.Errorf("compare that leaves the block out: %+v %v, want Pump [FB1] not compared", cr, err)
+	}
+	_, err = s.Download(ctx, start)
+	if tiad.Kind(err) != tiad.KindOutcomeUnknown || !strings.Contains(err.Error(), "the compare right after it differs (Pump [FB1] not compared)") ||
+		strings.Join(tiad.ActingAnswers(err), ",") != "start-after" {
+		t.Errorf("download whose compare leaves the block out: %v (acting %v)", err, tiad.ActingAnswers(err))
 	}
 	p.SetScript(t, tiadtest.Script{})
 }
