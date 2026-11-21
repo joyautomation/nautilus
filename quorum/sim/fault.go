@@ -79,11 +79,19 @@ const (
 	// boot (every boot either knew retired, the generation above both),
 	// and Node's state file is moved aside (Node stops, its disk wiped).
 	// At At+For the operator restarts it: a fresh, uncommissioned boot
-	// that re-adopts from its peer. The generator never draws it;
-	// Record.FromSpares says what each did.
+	// that re-adopts from its peer. The last phase before the move fences
+	// the name at the peer, then at the witness (#1029 3c-3c-1b). Value
+	// FromSpareWitnessUnfenced: the witness's fence fails, so the command
+	// ends INCOMPLETE with the peer fenced: nothing is moved aside and the
+	// spare stays one. The generator never draws it; Record.FromSpares
+	// says what each did.
 	FromSpare
 	nKinds
 )
+
+// FromSpareWitnessUnfenced is a FromSpare's Value: the witness's fence
+// fails (an incomplete command, the peer fenced).
+const FromSpareWitnessUnfenced = 1
 
 // A Clear's Value bits. ClearGuarded: this voter's own guard. ClearPreflight:
 // the command's check phase too, all or nothing: every real member (A, B,
@@ -451,6 +459,22 @@ func (w *World) fromSpare(i int, f Fault, on bool) {
 			w.persist(v, p)
 		}
 	}
+	// The fence, last: the peer's, then the witness at the peer's value
+	// (#1029 3c-3c-1b).
+	var fence uint64
+	for _, m := range voters {
+		if m == W && f.Value == FromSpareWitnessUnfenced {
+			rec.Refused = "incomplete: the peer is fenced, the witness is not"
+			w.tracef("%v: the operator's from-spare is incomplete: %v fenced %v at %d, the witness not", n.addr, voters[0], name, fence)
+			return
+		}
+		v := w.nodes[m]
+		fence = v.voter.Fence(name, fence)
+		if p := v.voter.MarkWrite(); p != nil {
+			w.persist(v, p)
+		}
+	}
+	rec.Fence = fence
 	rec.Retired = len(retire)
 	w.fromSpareDone[i] = true
 	if n.addr != original(n.addr) {

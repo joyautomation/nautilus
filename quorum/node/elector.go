@@ -181,7 +181,19 @@ const (
 	// campaign, no hello, no answer to the peer. Raised at the decision
 	// and at every start of a spare (Detail says what to do).
 	EventSpare EventKind = "redundancy.spare"
+	// EventSuperseded: a voter refused this controller as fenced: its
+	// state is from before an operator replaced it with recommission
+	// --from-spare (the box that was switched off and on again, its old
+	// disk in it), and it can't vote any more (#1029 3c-3c-1b). It
+	// campaigns no more in this boot. Once per boot.
+	EventSuperseded EventKind = "redundancy.superseded"
 )
+
+// supersededMsg is the old box's alarm (EventSuperseded): self's state is
+// from before an operator replaced it; voter said so.
+func supersededMsg(self, voter quorum.NodeID) string {
+	return fmt.Sprintf("this box's state is from before %s was replaced (recommission --from-spare): it can no longer vote (%s refuses it). Wipe its state only with the network whole (move its state file aside: it then starts as a copy, is heard beside the replacement and made a spare), or keep it off", self, voter)
+}
 
 // versionMsg is the version-mismatch report for a frame of version got
 // from (or answered by) who.
@@ -217,7 +229,7 @@ var ErrSpare = errors.New("quorum: this controller is a spare (a copy of a membe
 // newerStateMsg is the refusal of a state file in a format above this
 // release's.
 func newerStateMsg(path string) string {
-	return fmt.Sprintf("the voter state file %s was written by a newer release of naut (format 6 and later: from 6 on, the box may have been made a spare, a copy of a member that must stay silent; from 7 on, it may hold duplicate marks). "+
+	return fmt.Sprintf("the voter state file %s was written by a newer release of naut (format 6 and later: from 6 on, the box may have been made a spare, a copy of a member that must stay silent; from 7 on, it may hold duplicate marks; from 8 on, a fence on a member an operator replaced). "+
 		"This release can't read it and won't start over it: run the release that wrote it. To run this release anyway, first make sure no other box runs as this member, then move the file aside: it starts uncommissioned and re-adopts from the other controller", path)
 }
 
@@ -314,6 +326,10 @@ type Status struct {
 	// mark is cleared (quorum.Candidate.Marked).
 	Marked []string
 	Held   bool
+	// Superseded names a voter that refused this controller as fenced:
+	// its state is from before an operator replaced it (EventSuperseded,
+	// #1029 3c-3c-1b), "" otherwise.
+	Superseded string
 	// ConfigDiffers: the peer's hello named another configuration of the
 	// pair (EventConfigDiffers). HelloDuplicates counts hellos that showed
 	// two processes behind the peer's name.
@@ -351,9 +367,11 @@ type Elector struct {
 	peerAt    quorum.Instant
 	peerHeard bool
 	needOp    bool
-	dupSeen   uint64    // the voter's Duplicates count last reported
-	markSeen  uint64    // the voter's MarkCount last reported
-	dupAt     time.Time // when it was last reported
+	dupSeen   uint64 // the voter's Duplicates count last reported
+	// supersededTold: EventSuperseded was raised in this boot.
+	supersededTold bool
+	markSeen       uint64    // the voter's MarkCount last reported
+	dupAt          time.Time // when it was last reported
 
 	// The peer's part of the hello (peerinfo.go).
 	peerCaps   []string
@@ -1048,6 +1066,16 @@ func (e *Elector) vote(to quorum.NodeID, base string, r quorum.Request) {
 func (e *Elector) reply(from quorum.NodeID, r quorum.Reply) {
 	e.mu.Lock()
 	now := e.now()
+	if e.v.FencedReply(r) {
+		e.mu.Unlock()
+		return // a fenced state's voter: nothing it says counts (#1029 3c-3c-1b)
+	}
+	if e.v.LearnFences(r.Fences, e.o.Peer) {
+		// Uncommissioned (a lost file): the fences the voter that answered
+		// keeps, learnt before this same reply can make the witness heard
+		// and the peer's State taken (#1164 review, B1/B2).
+		e.w.ask(e.v.MarkWrite())
+	}
 	if !mut("reply_relay_dropped") {
 		e.v.Hear(now, from, 0, r.Promise)
 		e.noteDuplicates()
@@ -1164,15 +1192,20 @@ func (e *Elector) serveVote(w http.ResponseWriter, r *http.Request) {
 		refuse(w, "term-jump", msg)
 		return
 	}
-	if !(req.Term == 0 && req.ID == quorum.ProbeID) {
-		// A relay probe is for the voter only (#1029 step 1): the
-		// handshake keeps its own idea of hearing the peer.
-		e.a.OnPeer(now)
-		e.peerAt, e.peerHeard = now, true
+	if fenced := e.v.FencedRequest(req); !fenced {
+		// A fenced state's frame (an old box an operator replaced) is
+		// only refused (#1029 3c-3c-1b).
+		e.v.LearnFences(req.Fences, e.o.Peer) // its write goes with Handle's (MarkWrite)
+		if !(req.Term == 0 && req.ID == quorum.ProbeID) {
+			// A relay probe is for the voter only (#1029 step 1): the
+			// handshake keeps its own idea of hearing the peer.
+			e.a.OnPeer(now)
+			e.peerAt, e.peerHeard = now, true
+		}
+		e.v.Hear(now, req.From, req.Nonce, req.Promise)
+		e.c.Observe(req.Term)
+		quorum.YieldTo(now, e.v, e.c, req)
 	}
-	e.v.Hear(now, req.From, req.Nonce, req.Promise)
-	e.c.Observe(req.Term)
-	quorum.YieldTo(now, e.v, e.c, req)
 	p, replies := e.v.Handle(now, req)
 	var push *quorum.Request
 	if e.v.RelayChanged(now) {
@@ -1235,6 +1268,12 @@ func (e *Elector) noteMark(r quorum.Reply) {
 	}
 	was := e.c.Marked()
 	e.c.NoteMark(r)
+	if by := e.c.Superseded(); by != "" && !e.supersededTold {
+		e.supersededTold = true
+		msg := supersededMsg(e.o.Self, by)
+		e.event(Event{Kind: EventSuperseded, Detail: msg})
+		e.log.Error("redundancy: " + msg)
+	}
 	switch now := e.c.Marked(); {
 	case now && !was:
 		msg := fmt.Sprintf("voter %s marks %s a confirmed duplicate: another process runs as this controller, so it campaigns no more, and its voter grants %s nothing new, until the mark is cleared. Clear it: (1) stop the copy and confirm it is down; (2) run naut redundancy clear-duplicate %s --copy-stopped (on either controller): the hold ends without a restart. A restart of this controller or of a marking member doesn't end it", r.From, e.o.Self, e.o.Peer, e.o.Self)
@@ -1374,8 +1413,11 @@ func (e *Elector) serveAdopt(w http.ResponseWriter, r *http.Request) {
 	}
 	e.mu.Lock()
 	now := e.now()
+	fenced := e.a.Fenced(m)
 	p, msgs := e.a.OnAdopt(now, m)
-	e.peerAt, e.peerHeard = now, true
+	if !fenced {
+		e.peerAt, e.peerHeard = now, true // a fenced state's Adopt is no word from the peer (#1029 3c-3c-1b)
+	}
 	e.after(now)
 	e.mu.Unlock()
 	e.w.ask(p)
@@ -1624,10 +1666,14 @@ func (e *Elector) Recommission(ctx context.Context, inc, floor uint64) error {
 // is refused (ErrBoxChanged): RecommissionChecked takes the operator's
 // word that the box was replaced, not cloned (#1029 3c-3c).
 func (e *Elector) RecommissionBy(ctx context.Context, by string, inc, floor uint64) (vouchRefused, err error) {
-	return e.recommission(ctx, by, inc, floor, false)
+	// The members' fences, as RecommissionChecked takes them: one that
+	// does not answer adds none (#1164 review).
+	return e.recommission(ctx, by, inc, floor, false, maxFence(e.membersState(ctx)))
 }
 
-func (e *Elector) recommission(ctx context.Context, by string, inc, floor uint64, boxReplaced bool) (vouchRefused, err error) {
+// fence is the highest fence any member keeps (MemberState.Fence): the
+// adoption the re-commission makes is at or above it (#1029 3c-3c-1b).
+func (e *Elector) recommission(ctx context.Context, by string, inc, floor uint64, boxReplaced bool, fence uint64) (vouchRefused, err error) {
 	// Its own refusals first, so a refused re-commission vouches for
 	// nothing.
 	e.mu.Lock()
@@ -1662,6 +1708,9 @@ func (e *Elector) recommission(ctx context.Context, by string, inc, floor uint64
 	if known := e.a.KnownFloor(); floor > known && floor-known > MaxTermJump/2 {
 		e.mu.Unlock()
 		return vouchRefused, fmt.Errorf("quorum: re-commission floor %d is more than %d above the terms this controller knows (%d): the voters would refuse the pair's next campaign as a term jump", floor, MaxTermJump/2, known)
+	}
+	if !mut("recommission_under_fence") {
+		e.a.ProposeAtLeast(fence)
 	}
 	p, err := e.a.Recommission(inc, floor)
 	if err != nil {
@@ -1737,6 +1786,7 @@ func (e *Elector) Status() Status {
 		s.Marked = append(s.Marked, string(n))
 	}
 	s.Held = e.c.Marked()
+	s.Superseded = string(e.c.Superseded())
 	switch from, until := e.v.LeaderSeen(); {
 	case s.Spare:
 		// A spare hears nobody and names no leader.

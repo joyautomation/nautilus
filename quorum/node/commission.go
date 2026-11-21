@@ -44,6 +44,10 @@ type MemberState struct {
 	BoxChanged string `json:"boxChanged,omitempty"`
 	// Settled: the voter started a lease and D ago (quorum.Voter.Settled).
 	Settled bool `json:"settled"`
+	// Fence is the highest fence the member's voter keeps
+	// (quorum.Voter.MaxFence): a commission or re-commission adopts at or
+	// above it, or the voter would refuse the pair it makes (#1029 3c-3c-1b).
+	Fence uint64 `json:"fence,omitempty"`
 	// Err is why the member could not be asked, "" when it answered.
 	Err string `json:"error,omitempty"`
 }
@@ -53,7 +57,16 @@ func (m MemberState) Highest() uint64 { return max(m.Promised, m.Floor, m.KnownF
 
 func voterState(v *quorum.Voter, now quorum.Instant, member string) MemberState {
 	st := v.State()
-	return MemberState{Member: member, Incarnation: st.Incarnation, Promised: st.Promised, Floor: st.Floor, Settled: v.Settled(now)}
+	return MemberState{Member: member, Incarnation: st.Incarnation, Promised: st.Promised, Floor: st.Floor, Settled: v.Settled(now), Fence: v.MaxFence()}
+}
+
+// maxFence is the highest fence any member that answered keeps.
+func maxFence(ms []MemberState) uint64 {
+	var f uint64
+	for _, m := range ms {
+		f = max(f, m.Fence)
+	}
+	return f
 }
 
 // stateLocal is this controller's own answer to "state".
@@ -153,7 +166,7 @@ func (e *Elector) Commission(ctx context.Context, by string) (CommissionReport, 
 	}
 	rep.Incarnation = rep.Members[2].Incarnation
 	rep.Floor = highest + commissionMargin
-	vr, err := e.recommission(ctx, by, rep.Incarnation, rep.Floor, false)
+	vr, err := e.recommission(ctx, by, rep.Incarnation, rep.Floor, false, maxFence(rep.Members))
 	if vr != nil {
 		rep.VouchRefused = vr.Error()
 	}
@@ -270,7 +283,7 @@ func (e *Elector) RecommissionChecked(ctx context.Context, by string, req Recomm
 		return refuse("%s", why)
 	}
 	rep.Incarnation, rep.Floor = wit.Incarnation, req.Floor
-	vr, err := e.recommission(ctx, by, rep.Incarnation, rep.Floor, req.BoxReplaced)
+	vr, err := e.recommission(ctx, by, rep.Incarnation, rep.Floor, req.BoxReplaced, maxFence(rep.Members))
 	if vr != nil {
 		rep.VouchRefused = vr.Error()
 	}
@@ -337,6 +350,11 @@ type FromSpareReport struct {
 	// Check and Clear are the peer's and the witness's answers.
 	Check []DupAnswer `json:"check"`
 	Clear []DupAnswer `json:"clear,omitempty"`
+	// Fence is the peer's and the witness's answers to the fence, the last
+	// phase: from then on they refuse every state of the name from before
+	// this command (the incumbent's disk), at whatever term (#1029
+	// 3c-3c-1b).
+	Fence []DupAnswer `json:"fence,omitempty"`
 	// Retired are the boots of the name the voters knew, the incumbent's
 	// among them, which the clear set aside: one that comes back is marked
 	// before any grant.
@@ -421,6 +439,26 @@ func (e *Elector) FromSpare(ctx context.Context, by string) (FromSpareReport, er
 			// the command again finishes the clear.
 			return rep, ErrFromSpareIncomplete
 		}
+	}
+	// The fence, last, the peer first: it raises the fence above its own
+	// adoption (pending included), and the witness, which keeps none,
+	// takes the peer's (#1029 3c-3c-1b).
+	var fence uint64
+	for _, m := range []struct{ member, base string }{{string(e.o.Peer), e.peer}, {"witness", e.wit}} {
+		a := e.dupRemote(ctx, m.member, m.base, dupOp{Op: "fence", Name: name, By: by, Fence: fence})
+		rep.Fence = append(rep.Fence, a)
+		if a.Err == "" && a.Refused == "" && a.Fence == 0 {
+			a.Err = m.member + " set no fence"
+		}
+		if a.Err != "" || a.Refused != "" {
+			if len(rep.Fence) == 1 {
+				rep.Refused = "both voters cleared " + name + ", but " + m.member + " was not fenced: " + a.Err + a.Refused + ". Nothing was moved aside; run the command again"
+			} else {
+				rep.Refused = "the peer is fenced, the witness is not (" + a.Err + a.Refused + "): run the command again. Until then " + name + "'s old state is refused at " + string(e.o.Peer) + " only"
+			}
+			return rep, ErrFromSpareIncomplete
+		}
+		fence = a.Fence
 	}
 	aside, err := e.file.MoveAside(fmt.Sprintf("%s.previous-spare-%d", e.o.StatePath, time.Now().Unix()))
 	if err != nil {

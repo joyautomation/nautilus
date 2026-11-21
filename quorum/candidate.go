@@ -147,7 +147,73 @@ type Candidate struct {
 	// boots: a grant from it counts for nothing (NewAdoption sets it to
 	// Voter.Duplicated). nil counts every grant.
 	duplicated func(now Instant, name NodeID) bool
+
+	// ownGen is this controller's committed adoption generation, which
+	// every request carries (Request.Gen); fenced reports a voter name its
+	// own voter fenced at a generation (Voter.Fenced): a reply from that
+	// name below it counts for nothing. commissioned: this controller has
+	// adopted an incarnation. NewAdoption wires the three (#1029
+	// 3c-3c-1b). superseded: a voter refused this boot as fenced: its
+	// state is from before an operator replaced its name (Superseded).
+	ownGen       func() uint64
+	commissioned func() bool
+	ownFences    func() Fences
+	fenced       func(name NodeID, gen uint64) bool
+	superseded   NodeID
+	// fencedBy: per voter, whether its latest word to this boot said this
+	// state is fenced; witnessWord: the witness answered this boot
+	// (fencedHold).
+	fencedBy    map[NodeID]bool
+	witnessWord bool
 }
+
+// fencedHold: this boot campaigns no more, as a state from before an
+// operator replaced its name (#1029 3c-3c-1b): the witness's latest word
+// said it is fenced, or the witness has not answered this boot and
+// another voter's did. A complete --from-spare fences the witness last,
+// so the old box holds wherever it is, a split beside the peer included
+// (else it would campaign each look, moving its own voter's terms in
+// vain). Only an incomplete one (naut-lead's ruling C: the peer fenced,
+// the witness not) leaves the incumbent free to lead with the witness.
+func (c *Candidate) fencedHold() bool {
+	if mut("fenced_still_campaigns") {
+		return false
+	}
+	if c.fencedBy[c.cfg.Witness] {
+		return true
+	}
+	if c.witnessWord && !mut("fence_hold_ignores_witness") {
+		return false
+	}
+	for _, f := range c.fencedBy {
+		if f {
+			return true
+		}
+	}
+	return false
+}
+
+// fences are the fences this controller's requests carry.
+func (c *Candidate) fences() Fences {
+	if c.ownFences == nil {
+		return Fences{}
+	}
+	return c.ownFences()
+}
+
+// gen is the adoption generation this controller's requests carry.
+func (c *Candidate) gen() uint64 {
+	if c.ownGen == nil {
+		return 0
+	}
+	return c.ownGen()
+}
+
+// Superseded names a voter that refused this boot as fenced, "" when none
+// did: this controller's state is from before an operator replaced its
+// name with recommission --from-spare, and it can't vote any more (#1029
+// 3c-3c-1b). The driver raises the alarm.
+func (c *Candidate) Superseded() NodeID { return c.superseded }
 
 // NewCandidate starts a candidate at now that knows of terms up to known
 // (its own voter's promised term). cfg must pass Validate.
@@ -286,6 +352,9 @@ func (c *Candidate) Tick(now Instant, seenFrom NodeID, seenUntil Instant, health
 	if c.Marked() && !mut("marked_still_campaigns") {
 		return nil // a voter refuses this name every new grant (NoteMark)
 	}
+	if c.fencedHold() {
+		return nil // a state from before an operator replaced this name (#1029 3c-3c-1b)
+	}
 	return c.send(now, above(c.maxSeen))
 }
 
@@ -304,7 +373,7 @@ func (c *Candidate) Probe(now Instant) *Request {
 	}
 	c.probeAt = now.Add(c.cfg.look())
 	c.seq++
-	return &Request{From: c.cfg.Self, Nonce: c.cfg.Nonce, ID: ProbeID, Seq: c.seq}
+	return &Request{From: c.cfg.Self, Nonce: c.cfg.Nonce, ID: ProbeID, Seq: c.seq, Gen: c.gen(), Fences: c.fences(), Uncommissioned: c.commissioned != nil && !c.commissioned()}
 }
 
 // PushProbe is Probe at once, whatever the look: the driver sends it when
@@ -318,7 +387,7 @@ func (c *Candidate) PushProbe(now Instant) *Request {
 	}
 	c.probeAt = now.Add(c.cfg.look())
 	c.seq++
-	return &Request{From: c.cfg.Self, Nonce: c.cfg.Nonce, ID: ProbeID, Seq: c.seq}
+	return &Request{From: c.cfg.Self, Nonce: c.cfg.Nonce, ID: ProbeID, Seq: c.seq, Gen: c.gen(), Fences: c.fences(), Uncommissioned: c.commissioned != nil && !c.commissioned()}
 }
 
 // ProbesPeer reports whether a driver sends the standby's probe (Probe,
@@ -346,6 +415,22 @@ func (c *Candidate) NoteMark(r Reply) {
 	}
 	if r.From != c.cfg.Self && r.From != c.cfg.Peer && r.From != c.cfg.Witness {
 		return
+	}
+	// Fenced: this commissioned state is below the voter's fence for its
+	// name (#1029 3c-3c-1b). A probe's refusal says so too, so a standby
+	// that hears a leader and never campaigns learns it. Not a
+	// replacement's: uncommissioned, it re-adopts at the fence, and a
+	// late refusal of one of its earlier probes is not below it.
+	fenced := r.Fence != 0 && c.commissioned != nil && c.commissioned() && c.gen() < r.Fence && !mut("fence_unnoted")
+	if fenced && c.superseded == "" {
+		c.superseded = r.From
+	}
+	if c.fencedBy == nil {
+		c.fencedBy = map[NodeID]bool{}
+	}
+	c.fencedBy[r.From] = fenced
+	if r.From == c.cfg.Witness {
+		c.witnessWord = true
 	}
 	if c.genSeen == nil {
 		c.genSeen = map[NodeID]uint64{}
@@ -525,7 +610,7 @@ func (c *Candidate) send(now Instant, term uint64) *Request {
 	}
 	c.rounds = append(c.rounds, rd)
 	c.seq++
-	return &Request{From: c.cfg.Self, Term: term, Nonce: c.cfg.Nonce, ID: c.nextID, Renewal: !rd.campaign, Seq: c.seq}
+	return &Request{From: c.cfg.Self, Term: term, Nonce: c.cfg.Nonce, ID: c.nextID, Renewal: !rd.campaign, Seq: c.seq, Gen: c.gen(), Fences: c.fences(), Uncommissioned: c.commissioned != nil && !c.commissioned()}
 }
 
 // OnReply takes a voter's reply, received at now. Only the three voters
@@ -554,6 +639,12 @@ func (c *Candidate) OnReply(now Instant, r Reply) {
 	}
 	if (r.To != c.cfg.Self && !mut("no_grantee_check")) || (r.Nonce != c.cfg.Nonce && !mut("no_nonce_check")) {
 		return // meant for the other controller, or for an earlier boot
+	}
+	if r.From != c.cfg.Self && c.fenced != nil && c.fenced(r.From, r.Gen) && !mut("fence_replies_off") {
+		// The voter's state is from before an operator replaced its name
+		// (recommission --from-spare): its word counts for nothing here,
+		// grant, refusal or promised term (#1029 3c-3c-1b).
+		return
 	}
 	discounted := false
 	if mut("retired_reply_unmatched") {

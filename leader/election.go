@@ -177,7 +177,7 @@ func (q *Quorum) Recommission(ctx context.Context, by string, incarnation, floor
 			return rep, ClearDone, ""
 		case errors.Is(err, node.ErrFromSpareIncomplete):
 			if rep.Refused != "" {
-				return rep, ClearIncomplete, rep.Refused // both cleared; the move aside failed
+				return rep, ClearIncomplete, rep.Refused // both cleared; a fence or the move aside failed
 			}
 			var cleared, missed []string
 			for _, a := range rep.Clear {

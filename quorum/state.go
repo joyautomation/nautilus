@@ -87,14 +87,16 @@ const stateMagic = "nqv"
 
 // stateVersion is the state file's format: 2 since VoterState.Lease, 3
 // since Owner and Cluster, 4 since Box, 5 since GrantNonce, 6 since Spare,
-// 7 since Dups. Only a file with a duplicate record is written as 7, and
+// 7 since Dups, 8 since DupRecord.Fence. Only a file with a fence is
+// written as 8, only one with a duplicate record is written as 7, and
 // only a spare's without one as 6; every other is still 5, so a member
 // with neither can go back to an earlier release. A version-4
 // file still reads (GrantNonce 0, as before it was kept), so an upgrade
 // keeps the voter's promises; a file of any other version reads as
 // ErrVersion, not as corrupt.
 const (
-	stateVersion      = 7
+	stateVersion      = 8
+	stateVersionDups  = 7 // a file with duplicate records but no fence
 	stateVersionSpare = 6 // a spare's file with no duplicate record
 	stateVersionPlain = 5 // what a file without the spare flag is written as
 )
@@ -129,7 +131,12 @@ func (s VoterState) MarshalBinary() ([]byte, error) {
 		p = append(p, boolByte(s.Spare))
 	}
 	if len(s.Dups) > 0 {
-		version = stateVersion
+		version = stateVersionDups
+		for _, r := range s.Dups {
+			if r.Fence != 0 {
+				version = stateVersion
+			}
+		}
 		p = append(p, byte(len(s.Dups)))
 		for _, r := range s.Dups {
 			p = putString(p, string(r.Name))
@@ -137,6 +144,9 @@ func (s VoterState) MarshalBinary() ([]byte, error) {
 			p = binary.BigEndian.AppendUint64(p, r.Gen)
 			p = putBoots(p, r.Boots)
 			p = putBoots(p, r.Retired)
+			if version >= 8 {
+				p = binary.BigEndian.AppendUint64(p, r.Fence)
+			}
 		}
 	}
 	b := append([]byte(stateMagic), version)
@@ -186,6 +196,9 @@ func (s *VoterState) UnmarshalBinary(b []byte) error {
 		for i := 0; i < k && !rd.bad; i++ {
 			r := DupRecord{Name: NodeID(rd.str()), Marked: rd.boolean(), Gen: rd.u64()}
 			r.Boots, r.Retired = rd.boots(), rd.boots()
+			if version >= 8 {
+				r.Fence = rd.u64()
+			}
 			v.Dups = append(v.Dups, r)
 		}
 	}

@@ -73,6 +73,9 @@ var mutations = []string{
 	"from_spare_peer_unchecked",      // node: --from-spare runs with the other controller uncommissioned, moving aside what may be the pair's only terms
 	"from_spare_clears_past_refusal", // node: --from-spare asks the witness to clear after the peer refused
 	"from_spare_moves_after_partial", // node: --from-spare moves the spare's file aside though a voter missed the clear
+	"recommission_under_fence",       // node: a commission or re-commission adopts below a member's fence, which then refuses the pair
+	"fence_any_name",                 // node: a member takes a fence on any name, the witness's or its own included
+	"dup_answered_before_write",      // node: a clear or fence is answered before its write is durable: a crash then loses what the command reported done
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")

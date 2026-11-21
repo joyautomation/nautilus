@@ -34,8 +34,8 @@ func restart(t *testing.T, v *Voter, now Instant, boot uint64) *Voter {
 func TestAMarkSurvivesTheVotersRestart(t *testing.T) {
 	v, now := markA(t)
 	written(v)
-	if b, _ := v.State().MarshalBinary(); b[len(stateMagic)] != stateVersion {
-		t.Fatalf("a marking voter's file is format %d, want %d", b[len(stateMagic)], stateVersion)
+	if b, _ := v.State().MarshalBinary(); b[len(stateMagic)] != stateVersionDups {
+		t.Fatalf("a marking voter's file is format %d, want %d", b[len(stateMagic)], stateVersionDups)
 	}
 	if b, _ := ready("W").State().MarshalBinary(); b[len(stateMagic)] != stateVersionPlain {
 		t.Fatalf("a file with no mark is format %d, want %d", b[len(stateMagic)], stateVersionPlain)

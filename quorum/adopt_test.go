@@ -277,6 +277,9 @@ func TestRebuiltWitnessAdopted(t *testing.T) {
 	if inc, _ := r.c.Counting(); inc != 0 {
 		t.Fatalf("restarted mid-proposal, A counts %d", inc)
 	}
+	// A never heard B's boot in this test: as if it had (a proposal is
+	// taken only by the boot it addresses, #1029 3c-3c-1b).
+	q[0].Echo = b.c.cfg.Nonce
 	ack := b.recv(now, q[0])
 	if inc, from := b.c.Counting(); inc != incJ || from != now.Add(lease) {
 		t.Fatalf("B counts (%d from %v), want %d after the quiet period", inc, from, incJ)
@@ -410,7 +413,7 @@ func TestAckWaitsForItsWrite(t *testing.T) {
 	b := newCtl(t, "B", commissioned(1, incI, 0), 0)
 	b.hold = true
 	now := at(lease)
-	m := Adopt{From: "A", Kind: Propose, Gen: 2, Incarnation: incJ}
+	m := Adopt{From: "A", Kind: Propose, Gen: 2, Incarnation: incJ, Echo: 0xB1}
 	if out := b.recv(now, m); len(out) != 0 {
 		t.Fatalf("acked before the write: %+v", out)
 	}

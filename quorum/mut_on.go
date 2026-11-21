@@ -225,6 +225,28 @@ var Mutations = []string{
 	"from_spare_peer_unchecked",      // node: --from-spare runs with the other controller uncommissioned, moving aside what may be the pair's only terms
 	"from_spare_clears_past_refusal", // node: --from-spare asks the witness to clear after the peer refused
 	"from_spare_moves_after_partial", // node: --from-spare moves the spare's file aside though a voter missed the clear
+	"fence_requests_off",             // a voter takes a request from a fenced state as any other (#1029 3c-3c-1b)
+	"fence_replies_off",              // a controller counts a reply from a fenced state's voter, relay and all
+	"fence_witness_unset",            // the witness takes no fence: only the peer refuses the replaced member's old state
+	"fence_peer_own_gen_only",        // the peer's fence ignores its pending proposal: a receiver that adopted it first (its Ack lost) is above the fence
+	"fence_adopt_off",                // a controller takes handshake messages from a fenced peer: an old box re-proposes over the fence
+	"fence_volatile",                 // a restarted voter forgets its fences
+	"fence_unnoted",                  // a controller never learns its state is fenced: no alarm, and it campaigns on
+	"fenced_still_campaigns",         // a fenced controller campaigns each look, moving its own voter's terms in vain
+	"fence_hold_ignores_witness",     // a controller one voter fenced campaigns no more though the witness answers it unfenced: an incomplete --from-spare leaves no leader once the peer dies
+	"propose_any_echo",               // a commissioned controller takes a proposal addressed to another boot of the peer
+	"propose_resent_at_look",         // a proposal refused for its echo waits a look before it goes again
+	"fence_plus_one",                 // the fence one above the peer's own adoption: an old disk that died re-adopting holds a proposal at it (#1164 review, B3)
+	"fence_ignores_previous",         // a second --from-spare's fence ignores the first: the first replacement, dead re-adopting at it, passes
+	"fenced_propose_answered",        // the peer answers (or acks) a proposal below the fence from an uncommissioned old disk
+	"fence_unproposed",               // a replacement re-adopts at the peer's generation + 1, ignoring the fence it was told: it is fenced, no leader
+	"fence_not_learned",              // a voter that lost its state never learns the fences: a wiped peer grants the old box (#1164 review, B1)
+	"fence_hides_lookalike",          // a fenced voter hears no boot of an uncommissioned sender: a wiped old box is never marked beside the replacement (#1164 re-check, N1)
+	"fence_learns_any_name",          // a voter learns a fence on any name a frame carries, the witness's included
+	"fence_takes_carried",            // a controller takes the carried fence value, which it can't check, and raises the name's fence for good
+	"recommission_under_fence",       // node: a commission or re-commission adopts below a member's fence, which then refuses the pair
+	"fence_any_name",                 // node: a member takes a fence on any name, the witness's or its own included
+	"dup_answered_before_write",      // node: a clear or fence is answered before its write is durable: a crash then loses what the command reported done
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")

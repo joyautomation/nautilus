@@ -34,6 +34,63 @@ type Request struct {
 	// is above every Seq it heard from that boot, so a replayed or
 	// duplicated old frame never counts as that boot still running.
 	Seq uint64
+	// Gen is the sender's committed adoption generation (VoterState.Gen; 0
+	// from an uncommissioned controller): a voter that fenced the sender's
+	// name refuses a request below its fence (#1029 3c-3c-1b).
+	Gen uint64
+	// Fences are the sending voter's fences (Voter.Fences): a voter that
+	// lost its state learns them (Voter.LearnFences).
+	Fences Fences
+	// Uncommissioned: the sender has adopted no incarnation (a new
+	// install, or a lost file). A fenced voter still hears its boot (Voter
+	// handle, #1164 re-check): it may be a wiped old box, a lookalike of
+	// the replacement.
+	Uncommissioned bool
+}
+
+// Fences are a voter's fences on the pair's names (Voter.Fence), as its
+// frames carry them (#1029 3c-3c-1b): a pair has two names, so two at
+// most. A zero entry is none.
+type Fences [2]FenceRec
+
+// FenceRec is one name's fence: the lowest adoption generation of its
+// state the voter takes.
+type FenceRec struct {
+	Name  NodeID
+	Fence uint64
+}
+
+func (f Fences) put(b []byte) []byte {
+	n := 0
+	for _, r := range f {
+		if r.Fence != 0 {
+			n++
+		}
+	}
+	b = append(b, byte(n))
+	for _, r := range f {
+		if r.Fence != 0 {
+			b = putString(b, string(r.Name))
+			b = binary.BigEndian.AppendUint64(b, r.Fence)
+		}
+	}
+	return b
+}
+
+func (r *reader) fences() Fences {
+	var f Fences
+	n := int(r.byte1())
+	if n > len(f) {
+		r.bad = true
+		return f
+	}
+	for i := 0; i < n && !r.bad; i++ {
+		f[i] = FenceRec{Name: NodeID(r.str()), Fence: r.u64()}
+		if f[i].Fence == 0 {
+			r.bad = true
+		}
+	}
+	return f
 }
 
 // Relay is a voter's running promise to ANOTHER node, as it relays it on
@@ -86,6 +143,18 @@ type Reply struct {
 	// other voters name another boot of its name for a lease demotes itself
 	// to a spare (Candidate.Spare, #1029 3c-2).
 	HeldBy uint64
+	// Gen is the voter's committed adoption generation (0 from the
+	// witness): a candidate that fenced the voter's name counts no reply
+	// below its fence (#1029 3c-3c-1b).
+	Gen uint64
+	// Fence, on a refusal for it: the requester's name's fence at this
+	// voter (Voter.Fence, #1029 3c-3c-1b), the lowest generation of that
+	// name's state it takes; the request's was below it: a state from
+	// before an operator replaced the name (recommission --from-spare). 0
+	// on every other reply.
+	Fence uint64
+	// Fences are the voter's fences (Request.Fences).
+	Fences Fences
 }
 
 // AdoptKind is what an Adopt message says.
@@ -144,6 +213,10 @@ type Adopt struct {
 	CommitGen   uint64
 	CommitInc   uint64
 	Operator    uint64
+	// Fence is the sender's fence on the receiver's name (Voter.FenceOf),
+	// 0 for none: a replacement re-adopting proposes at or above it
+	// (#1029 3c-3c-1b).
+	Fence uint64
 }
 
 // WireVersion is the vote protocol's frame version. A frame of another
@@ -151,10 +224,11 @@ type Adopt struct {
 // promise (#1029 layer 2), version 3 the duplicated name it carries
 // (#1029 step 1), version 4 a request's Seq and a reply's Marked and
 // VoterBoot (#1029 3c), version 5 a reply's HeldBy (#1029 3c-2), version 6
-// a reply's ClearGen (#1029 3c-3b): a pair
+// a reply's ClearGen (#1029 3c-3b), version 7 a request's and a reply's
+// Gen and a reply's Fence (#1029 3c-3c-1b): a pair
 // that mixes releases across one can't vote, and says so
 // (redundancy.version-mismatch) rather than failing in silence.
-const WireVersion = 6
+const WireVersion = 7
 
 // FrameVersion returns the version byte a frame carries (0 when empty).
 func FrameVersion(b []byte) byte {
@@ -203,6 +277,9 @@ func (r Request) MarshalBinary() ([]byte, error) {
 	b = append(b, boolByte(r.Renewal))
 	b = r.Promise.put(b)
 	b = binary.BigEndian.AppendUint64(b, r.Seq)
+	b = binary.BigEndian.AppendUint64(b, r.Gen)
+	b = r.Fences.put(b)
+	b = append(b, boolByte(r.Uncommissioned))
 	return sealCRC(b), nil
 }
 
@@ -254,6 +331,9 @@ func (r Reply) MarshalBinary() ([]byte, error) {
 	b = binary.BigEndian.AppendUint64(b, r.VoterBoot)
 	b = binary.BigEndian.AppendUint64(b, r.HeldBy)
 	b = binary.BigEndian.AppendUint64(b, r.ClearGen)
+	b = binary.BigEndian.AppendUint64(b, r.Gen)
+	b = binary.BigEndian.AppendUint64(b, r.Fence)
+	b = r.Fences.put(b)
 	return sealCRC(b), nil
 }
 
@@ -264,7 +344,7 @@ func (a Adopt) MarshalBinary() ([]byte, error) {
 	b = append(b, byte(a.Kind))
 	b = binary.BigEndian.AppendUint64(b, a.Gen)
 	b = binary.BigEndian.AppendUint64(b, a.Incarnation)
-	for _, v := range []uint64{a.Floor, a.Nonce, a.Echo, a.Pending, a.CommitGen, a.CommitInc, a.Operator} {
+	for _, v := range []uint64{a.Floor, a.Nonce, a.Echo, a.Pending, a.CommitGen, a.CommitInc, a.Operator, a.Fence} {
 		b = binary.BigEndian.AppendUint64(b, v)
 	}
 	return sealCRC(b), nil
@@ -348,6 +428,9 @@ func (r *Request) UnmarshalBinary(b []byte) error {
 	v.Renewal = rd.boolean()
 	v.Promise = rd.relay()
 	v.Seq = rd.u64()
+	v.Gen = rd.u64()
+	v.Fences = rd.fences()
+	v.Uncommissioned = rd.boolean()
 	if rd.bad || len(rd.b) != 0 {
 		return ErrCorrupt
 	}
@@ -372,6 +455,9 @@ func (r *Reply) UnmarshalBinary(b []byte) error {
 	v.VoterBoot = rd.u64()
 	v.HeldBy = rd.u64()
 	v.ClearGen = rd.u64()
+	v.Gen = rd.u64()
+	v.Fence = rd.u64()
+	v.Fences = rd.fences()
 	if rd.bad || len(rd.b) != 0 {
 		return ErrCorrupt
 	}
@@ -393,6 +479,7 @@ func (a *Adopt) UnmarshalBinary(b []byte) error {
 	v.Gen, v.Incarnation, v.Floor = rd.u64(), rd.u64(), rd.u64()
 	v.Nonce, v.Echo, v.Pending = rd.u64(), rd.u64(), rd.u64()
 	v.CommitGen, v.CommitInc, v.Operator = rd.u64(), rd.u64(), rd.u64()
+	v.Fence = rd.u64()
 	if rd.bad || len(rd.b) != 0 || v.Kind < Propose || v.Kind > State {
 		return ErrCorrupt
 	}

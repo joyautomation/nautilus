@@ -6,6 +6,7 @@ import (
 	"os"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -106,6 +107,11 @@ func fromSpareSplit(seed uint64, realBox, mirror bool, how string, touchMax time
 	switch how {
 	case "power":
 		o.Faults = append(o.Faults, Fault{Kind: Crash, At: ts, For: tR - ts, Node: incumbent})
+	case "wipe":
+		// Wiped while off (the alarm's own advice, or a lost disk): back
+		// uncommissioned, a lookalike of the replacement (the stated
+		// boundary, #1029 3c-3c-1b).
+		o.Faults = append(o.Faults, Fault{Kind: Wipe, At: ts, For: tR - ts, Node: incumbent})
 	case "pause":
 		o.Faults = append(o.Faults, Fault{Kind: Pause, At: ts, For: tR - ts, Node: incumbent})
 	case "freeze":
@@ -138,7 +144,16 @@ func fromSpareSplit(seed uint64, realBox, mirror bool, how string, touchMax time
 // fromSpareTally classifies runs.
 type fromSpareTally struct {
 	runs, notSpare, refused, done, two, other, led, ledOf int
-	firstOther, firstTwo                                  string
+	// noLeaderAtEnd: runs with no leader in the last two leases.
+	noLeaderAtEnd int
+	// incompleteFam: only runs the command left INCOMPLETE (the peer
+	// fenced, the witness not) are judged beyond two leaders; incomplete
+	// counts them. In the others the command refused (the incumbent was
+	// heard), its marks still hold it, and a peer that dies leaves no
+	// leader until an operator clears them: #1135's cost, not the fence's.
+	incompleteFam        bool
+	incomplete           int
+	firstOther, firstTwo string
 }
 
 func (t *fromSpareTally) add(seed uint64, o Options, r *Record, spare Addr, tf time.Duration, how string) {
@@ -156,6 +171,18 @@ func (t *fromSpareTally) add(seed uint64, o Options, r *Record, spare Addr, tf t
 		t.done++
 	}
 	vs := Check(r, cloneChecks(o))
+	if t.incompleteFam && (rec == nil || !strings.HasPrefix(rec.Refused, "incomplete")) {
+		if overlap(vs) {
+			t.two++
+			if t.firstTwo == "" {
+				t.firstTwo = fmt.Sprintf("seed %d: %v", seed, vs[0])
+			}
+		}
+		return
+	}
+	if t.incompleteFam {
+		t.incomplete++
+	}
 	if overlap(vs) {
 		t.two++
 		if t.firstTwo == "" {
@@ -166,6 +193,14 @@ func (t *fromSpareTally) add(seed uint64, o Options, r *Record, spare Addr, tf t
 		if t.firstOther == "" {
 			t.firstOther = fmt.Sprintf("seed %d: %v", seed, vs[0])
 		}
+	}
+	end := o.Until - 2*lease
+	led := false
+	for _, g := range r.Gates() {
+		led = led || g.To > end
+	}
+	if !led {
+		t.noLeaderAtEnd++
 	}
 	if how == "off" && rec != nil && rec.Refused == "" {
 		t.ledOf++
@@ -179,8 +214,8 @@ func (t *fromSpareTally) add(seed uint64, o Options, r *Record, spare Addr, tf t
 }
 
 func (t *fromSpareTally) String() string {
-	return fmt.Sprintf("runs=%d notSpare=%d refused=%d done=%d TWO=%d other=%d replacementLed=%d/%d %s %s",
-		t.runs, t.notSpare, t.refused, t.done, t.two, t.other, t.led, t.ledOf, t.firstTwo, t.firstOther)
+	return fmt.Sprintf("runs=%d notSpare=%d refused=%d done=%d incomplete=%d TWO=%d other=%d replacementLed=%d/%d noLeaderAtEnd=%d %s %s",
+		t.runs, t.notSpare, t.refused, t.done, t.incomplete, t.two, t.other, t.led, t.ledOf, t.noLeaderAtEnd, t.firstTwo, t.firstOther)
 }
 
 type fromSpareFam struct {
@@ -190,20 +225,107 @@ type fromSpareFam struct {
 	// split: fromSpareSplit, with mirror, touch and pre.
 	split, mirror, pre bool
 	touch              time.Duration
+	// voterRestart: the peer, then the witness, restart between the
+	// command and the incumbent's return (a fence is durable).
+	voterRestart bool
+	// incomplete: the witness's fence fails (FromSpareWitnessUnfenced):
+	// the spare stays one, the peer fenced; the incumbent, switched off,
+	// comes back on its own disk, the pair's member still, and the peer
+	// dies at the end (#1029 3c-3c-1b, naut-lead's ruling C: a stated
+	// cost).
+	incomplete bool
+	// later: a member's file lost after the command, before the old box
+	// is back (#1164 review, B1): "peer" wiped, or "witness, peer" (the
+	// witness rebuilt, then the peer wiped): only a voter that lost its
+	// state learns the fence back (naut-lead's ruling (ii)).
+	later string
+	// moving: the old box wiped while off comes back reaching only the
+	// witness, then the peer only, the replacement with the witness: a
+	// split that moves (#1164 re-check, N1). A fenced voter still hears an
+	// uncommissioned lookalike's boot, so the witness marks the name.
+	moving bool
+	// pending: the incumbent lost its file shortly before it was
+	// switched off, and died re-adopting, its proposal durable, the link
+	// to its peer lossy (#1164 review, B3).
+	pending bool
 }
 
-// residual: the stated #1029 residual of a copy booted beyond an existing
-// split. An incumbent switched back on (a fresh boot, its old disk) right
-// into the split, never heard beside the replacement, leads on its side:
-// two leaders in every run until 3c-3c-1b (naut-lead: a MUST before
-// experimental lifts). After a touch of full connectivity it is marked: 0.
-func (f fromSpareFam) residual() bool { return f.split && f.how == "power" && f.touch == 0 }
-
 func (f fromSpareFam) run(seed uint64) (Options, Addr, Addr, time.Duration) {
+	var o Options
+	var spare, inc Addr
+	var tf time.Duration
 	if f.split {
-		return fromSpareSplit(seed, f.realBox, f.mirror, f.how, f.touch, f.pre)
+		o, spare, inc, tf = fromSpareSplit(seed, f.realBox, f.mirror, f.how, f.touch, f.pre)
+	} else {
+		o, spare, inc, tf = fromSpareRun(seed, f.realBox, f.how)
 	}
-	return fromSpareRun(seed, f.realBox, f.how)
+	if f.moving {
+		// Fable's N1 schedule: the family's own split is replaced.
+		peer := peerOf(original(spare))
+		var tR time.Duration
+		var fs []Fault
+		for _, x := range o.Faults {
+			if x.Kind == Wipe && x.Node == inc {
+				tR = x.At + x.For
+			}
+			if x.Kind == Cut && tR != 0 && x.At >= tR {
+				continue
+			}
+			fs = append(fs, x)
+		}
+		gap := 4 * lease
+		o.Faults = append(fs,
+			Fault{Kind: Cut, At: tR - lease, For: lease + gap, From: inc, To: peer, Both: true}, // the old box: the witness only
+			Fault{Kind: Cut, At: tR + lease, For: 12 * lease, From: spare, To: peer, Both: true},
+			Fault{Kind: Cut, At: tR + lease, For: 12 * lease, From: peer, To: W, Both: true},
+			Fault{Kind: Cut, At: tR + gap, For: 9 * lease, From: inc, To: W, Both: true}, // then the peer only
+			Fault{Kind: Cut, At: tR - lease, For: 14 * lease, From: inc, To: spare, Both: true})
+		o.Until = tR + 21*lease
+	}
+	for i := range o.Faults {
+		if o.Faults[i].Kind != FromSpare {
+			continue
+		}
+		fs := o.Faults[i]
+		peer := peerOf(original(spare))
+		switch f.later {
+		case "peer":
+			o.Faults = append(o.Faults, Fault{Kind: Wipe, At: tf + fs.For + 3*lease, For: 300 * ms, Node: peer})
+		case "witness, peer":
+			o.Faults = append(o.Faults,
+				Fault{Kind: Wipe, At: tf + fs.For + 2*lease, For: 500 * ms, Node: W},
+				Fault{Kind: Wipe, At: tf + fs.For + 6*lease, For: 300 * ms, Node: peer})
+		}
+		if f.pending {
+			var ts time.Duration
+			for _, x := range o.Faults {
+				if x.Kind == Crash && x.Node == inc && x.At < tf {
+					ts = x.At
+				}
+			}
+			r := rand.New(rand.NewPCG(seed, 0x5252))
+			wipeAt := ts - lease/4 - time.Duration(r.Int64N(int64(lease)))
+			o.Faults = append(o.Faults,
+				Fault{Kind: Wipe, At: wipeAt, For: 50 * ms, Node: inc},
+				Fault{Kind: Loss, At: wipeAt, For: ts - wipeAt, From: inc, To: peer, Value: 60})
+		}
+		if f.incomplete {
+			o.Faults[i].Value = FromSpareWitnessUnfenced
+			// The peer dies at the end: the incumbent, fenced at the peer
+			// only, leads with the witness (the stated cost).
+			o.Faults = append(o.Faults, Fault{Kind: Crash, At: o.Until, Node: peerOf(original(spare))})
+			o.Until += 8 * lease
+		}
+		if f.voterRestart {
+			// Staggered: the pair keeps two voters up.
+			at := tf + fs.For + 2*lease
+			o.Faults = append(o.Faults,
+				Fault{Kind: Crash, At: at, For: 300 * ms, Node: peerOf(original(spare))},
+				Fault{Kind: Crash, At: at + 2*lease, For: 300 * ms, Node: W})
+		}
+		break
+	}
+	return o, spare, inc, tf
 }
 
 func fromSpareFams() []fromSpareFam {
@@ -227,12 +349,46 @@ func fromSpareFams() []fromSpareFam {
 			}
 		}
 	}
+	// #1029 3c-3c-1b: a fence is durable (the voters restart before the
+	// old box returns into the split), and an incomplete command (the
+	// witness unfenced) with the incumbent switched off and on again.
+	for _, realBox := range []bool{true, false} {
+		box := map[bool]string{true: "real box spare", false: "copy spare"}[realBox]
+		for _, mirror := range []bool{false, true} {
+			side := map[bool]string{false: "with the peer", true: "with the witness"}[mirror]
+			out = append(out, fromSpareFam{name: box + ", incumbent power, back " + side + " at the heal, the voters restarted first",
+				realBox: realBox, how: "power", split: true, mirror: mirror, voterRestart: true})
+		}
+		out = append(out, fromSpareFam{name: box + ", incomplete (the witness unfenced), incumbent power", realBox: realBox, how: "power", incomplete: true})
+		// #1164 review: a member's file lost after the command (B1, and
+		// the witness rebuilt then the peer), the incumbent dead
+		// re-adopting (B3), and the stated boundary: the old box wiped,
+		// back into the split.
+		for _, mirror := range []bool{false, true} {
+			side := map[bool]string{false: "with the peer", true: "with the witness"}[mirror]
+			for _, later := range []string{"peer", "witness, peer"} {
+				out = append(out, fromSpareFam{name: box + ", incumbent power, back " + side + " at the heal, then " + later + " wiped first",
+					realBox: realBox, how: "power", split: true, mirror: mirror, later: later})
+			}
+			out = append(out, fromSpareFam{name: box + ", incumbent wiped re-adopting then off, back " + side + " at the heal",
+				realBox: realBox, how: "power", split: true, mirror: mirror, pending: true})
+			if !mirror {
+				out = append(out, fromSpareFam{name: box + ", incumbent wiped while off, back to the witness only, then the peer only",
+					realBox: realBox, how: "wipe", split: true, moving: true})
+			}
+			for _, pre := range []bool{false, true} {
+				at := map[bool]string{false: "at the heal", true: "into a split 2 leases old"}[pre]
+				out = append(out, fromSpareFam{name: box + ", incumbent wiped while off, back " + side + " " + at,
+					realBox: realBox, how: "wipe", split: true, mirror: mirror, pre: pre})
+			}
+		}
+	}
 	return out
 }
 
 func runFromSpareFam(f fromSpareFam, n uint64) *fromSpareTally {
 	var mu sync.Mutex
-	t := &fromSpareTally{}
+	t := &fromSpareTally{incompleteFam: f.incomplete}
 	seeds := make(chan uint64)
 	var wg sync.WaitGroup
 	for range runtime.GOMAXPROCS(0) {
@@ -269,24 +425,31 @@ func TestMeasureFromSpare(t *testing.T) {
 }
 
 // --from-spare never makes two leaders, whichever way the operator's
-// "stopped" was wrong (#1029 3c-3c), but for the stated residual
-// (fromSpareFam.residual): an incumbent cut off, paused or
+// "stopped" was wrong (#1029 3c-3c): an incumbent cut off, paused or
 // frozen returns with a boot the clear retired, and is marked before any
-// grant; a hung one is still heard, so the command refuses; one switched back on returns as a fresh boot beside the
-// replacement, and the two boots are marked as a copy's are. With the
-// incumbent really off, the command goes through in most runs and the
-// replacement takes over when its peer dies.
+// grant; a hung one is still heard, so the command refuses; one switched
+// back on returns on its old disk, below the fence the command set at the
+// peer and the witness, and is refused at any term, beside the
+// replacement or into a split where no voter hears both (#1029 3c-3c-1b;
+// the same term: Fable's note on #1157). With the incumbent really off,
+// the command goes through in most runs and the replacement takes over
+// when its peer dies.
 func TestFromSpareNeverMakesTwoLeaders(t *testing.T) {
 	n := spareSeeds() / 2
 	for _, f := range fromSpareFams() {
-		if f.residual() {
-			continue // measured by TestMeasureFromSpare; #1029 3c-3c-1b closes it
-		}
 		tl := runFromSpareFam(f, n)
 		if tl.two > 0 || tl.other > 0 {
 			t.Errorf("%s: %v", f.name, tl)
 		}
 		switch {
+		case f.incomplete:
+			// The stated cost (naut-lead's ruling C): the command ends
+			// INCOMPLETE, the spare stays one, and the incumbent, fenced
+			// at the peer only, leads with the witness once the peer dies.
+			if tl.done > 0 || tl.incomplete*2 < tl.runs || tl.noLeaderAtEnd > 0 {
+				t.Errorf("%s: %v", f.name, tl)
+			}
+			continue
 		case f.how == "unhealthy" && tl.done > 0:
 			// A hung incumbent's voter and probes still run: it is heard,
 			// so the command refuses (fail closed).

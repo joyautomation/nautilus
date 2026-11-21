@@ -542,6 +542,7 @@ type FromSpareRec struct {
 	Node    Addr
 	Refused string // why the command was refused, "" when done
 	Retired int    // boots of the name the voters retired
+	Fence   uint64 // the adoption generation the voters fenced the name at (#1029 3c-3c-1b)
 }
 
 // ClearRec is one operator clear at a member's voter (a Clear fault): the

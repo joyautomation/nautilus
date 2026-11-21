@@ -346,6 +346,15 @@ func (w *Witness) pair(name, members string) (*witnessPair, error) {
 	return p, nil
 }
 
+// controllers are the pair's two controller names.
+func (p *witnessPair) controllers() []quorum.NodeID {
+	var out []quorum.NodeID
+	for _, n := range strings.Split(p.members, ",") {
+		out = append(out, quorum.NodeID(n))
+	}
+	return out
+}
+
 func (p *witnessPair) persisted(seq uint64, err error) {
 	p.mu.Lock()
 	for _, r := range p.v.Persisted(seq, err == nil || mut("witness_write_ignored")) {
@@ -431,7 +440,10 @@ func (w *Witness) serveVote(rw http.ResponseWriter, r *http.Request) {
 		refuse(rw, "term-jump", fmt.Sprintf("term %d is more than %d above the %d this witness promised", req.Term, uint64(MaxTermJump), max(st.Promised, st.Floor)))
 		return
 	}
-	p.v.Hear(now, req.From, req.Nonce, req.Promise)
+	if !p.v.FencedRequest(req) {
+		p.v.Hear(now, req.From, req.Nonce, req.Promise) // a fenced state's relay is not heard (#1029 3c-3c-1b)
+		p.v.LearnFences(req.Fences, p.controllers()...) // a rebuilt witness learns them (its write goes with Handle's)
+	}
 	persist, replies := p.v.Handle(now, req)
 	if msg := confirmedAlarm(p.v, &p.markSeen); msg != "" {
 		p.dupSeen, _ = p.v.Duplicates() // the mark's own count, reported here

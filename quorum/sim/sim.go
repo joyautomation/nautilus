@@ -764,7 +764,13 @@ func (w *World) deliver(n *node, from Addr, b []byte) {
 	now := w.local(n)
 	var req quorum.Request
 	if err := req.UnmarshalBinary(b); err == nil {
-		if n.adopt != nil && from == peerOf(n.addr) && !(req.Term == 0 && req.ID == quorum.ProbeID) {
+		if n.voter.FencedRequest(req) {
+			w.tracef("%v refuses %v as fenced (gen %d below %d)", n.addr, from, req.Gen, n.voter.FenceOf(req.From))
+			w.handle(n, from, now, req)
+			return
+		}
+		n.voter.LearnFences(req.Fences, learnNames(n.addr)...) // its write goes with Handle's (MarkWrite)
+		if n.adopt != nil && w.fromPeer(n, from) && !(req.Term == 0 && req.ID == quorum.ProbeID) {
 			n.adopt.OnPeer(now) // a relay probe is for the voter only (#1029 step 1)
 		}
 		if from != n.addr {
@@ -811,6 +817,16 @@ func (w *World) deliver(n *node, from Addr, b []byte) {
 	if n.cand == nil {
 		return
 	}
+	if n.voter.FencedReply(rep) {
+		w.tracef("%v drops %v's reply as fenced (gen %d)", n.addr, from, rep.Gen)
+		return
+	}
+	if n.voter.LearnFences(rep.Fences, learnNames(n.addr)...) {
+		w.tracef("%v learns the fences %v from %v", n.addr, rep.Fences, from)
+		if p := n.voter.MarkWrite(); p != nil {
+			w.persist(n, p)
+		}
+	}
 	if from != n.addr {
 		dups, _ := n.voter.Duplicates()
 		n.voter.Hear(now, rep.From, 0, rep.Promise)
@@ -842,7 +858,7 @@ func (w *World) deliver(n *node, from Addr, b []byte) {
 	w.tracef("%v hears %v: term=%d id=%d granted=%v to=%s inc=%d", n.addr, from, rep.Term, rep.ID, rep.Granted, rep.To, rep.Incarnation)
 	n.cand.OnReply(now, rep)
 	switch {
-	case from == peerOf(n.addr):
+	case w.fromPeer(n, from):
 		n.adopt.OnPeer(now)
 	case rep.From == "W":
 		n.adopt.OnWitness(now, rep)
@@ -850,6 +866,25 @@ func (w *World) deliver(n *node, from Addr, b []byte) {
 	}
 	w.soonerLook(n)
 	w.gate(n)
+}
+
+// learnNames are the names a's voter may learn fences on, as the node's:
+// a controller its peer's, the witness the two controllers'.
+func learnNames(a Addr) []quorum.NodeID {
+	if nodeIDs[a] == "W" { // the witness, or a second copy of it
+		return []quorum.NodeID{nodeIDs[A], nodeIDs[B]}
+	}
+	return []quorum.NodeID{nodeIDs[peerOf(a)]}
+}
+
+// fromPeer reports whether a frame from address from is from n's peer: the
+// peer's own address, or a copy an operator's from-spare made the member
+// at its address (tookAddress), as the node hears it by the peer link,
+// not by box (#1164: before, a pair whose member was such a copy never
+// heard its peer in the handshake, so it never switched to a rebuilt
+// witness).
+func (w *World) fromPeer(n *node, from Addr) bool {
+	return from == peerOf(n.addr) || (w.tookAddress[from] && original(from) == peerOf(n.addr))
 }
 
 // sendAdopts sends a controller's handshake messages to its peer, over the
@@ -971,7 +1006,7 @@ func (w *World) noteHostile(n *node, r quorum.Reply) {
 }
 
 func (w *World) handle(n *node, from Addr, now quorum.Instant, r quorum.Request) {
-	if n.cand != nil && from != n.addr {
+	if n.cand != nil && from != n.addr && !n.voter.FencedRequest(r) {
 		n.cand.Observe(r.Term)
 		if quorum.YieldTo(now, n.voter, n.cand, r) {
 			w.rec.released = append(w.rec.released, release{voter: n.addr, at: w.now})
