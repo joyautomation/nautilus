@@ -1520,7 +1520,7 @@ namespace Tiad.Openness
                 Log.Line("online-check: project CPU certificate {0}", TiaNames.LogSafe(res.ProjectCertificate));
                 OnlineProvider op = cpu.GetService<OnlineProvider>();
                 ConfigurationAddress at = TargetInterface(PcInterface(op.Configuration)).Addresses.Create(address);
-                var online = new OnlineAsks(op.Configuration, trustUnverifiedCertificate, address);
+                var online = new OnlineAsks(op.Configuration, Detached, trustUnverifiedCertificate, address);
                 try
                 {
                     OnlineState st = OnlineState.Offline;
