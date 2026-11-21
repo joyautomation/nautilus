@@ -10,6 +10,7 @@
 // desktop; the playground is not started there.
 import { getCollection, render } from 'astro:content';
 import '../../../styles/fonts.css';
+import { ERRORS_ENABLED } from '../../../lib/errors.mjs';
 import logo from '../../../assets/logo.svg';
 
 export async function getStaticPaths() {
@@ -30,6 +31,7 @@ const title = `${entry.data.title} | nautilus tutorial`;
     <meta name="color-scheme" content="dark" />
     <meta name="robots" content="noindex" />
     <link rel="icon" href="/favicon.png" />
+    {ERRORS_ENABLED && <script is:inline defer src="/errors/errors.js"></script>}
   </head>
   <body data-lesson={id}>
     <header class="bar">

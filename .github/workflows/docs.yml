@@ -122,7 +122,11 @@ jobs:
         run: ./playground/scripts/build.sh
       - name: Build container image
         if: steps.gate.outputs.go == 'true'
-        run: docker build -f website/Dockerfile -t registry.digitalocean.com/jar-containers/nautilus-docs:$(echo $GITHUB_SHA | head -c7) .
+        # NAUT_ERRORS_DSN: the repository variable naming the error server's
+        # project (a DSN is a public key; unset = the site reports nothing).
+        env:
+          NAUT_ERRORS_DSN: ${{ vars.NAUT_ERRORS_DSN }}
+        run: docker build -f website/Dockerfile --build-arg NAUT_ERRORS_DSN="$NAUT_ERRORS_DSN" --build-arg NAUT_ERRORS_RELEASE="nautilus-docs@$(echo $GITHUB_SHA | head -c7)" -t registry.digitalocean.com/jar-containers/nautilus-docs:$(echo $GITHUB_SHA | head -c7) .
       - name: Log in to DigitalOcean Container Registry
         if: steps.gate.outputs.go == 'true'
         run: doctl registry login --expiry-seconds 1200

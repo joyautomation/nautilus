@@ -16,3 +16,5 @@ src/data/runtime.json
 public/playground/
 # bundled from ../lessons by scripts/sync-lessons.mjs
 public/learn/lessons/
+# The error reporter, built by scripts/build-errors.mjs (a DSN at build time)
+public/errors/

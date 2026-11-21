@@ -9,6 +9,10 @@ COPY tools/vscode-iec/syntaxes ./tools/vscode-iec/syntaxes
 COPY playground/dist ./playground/dist
 COPY website ./website
 WORKDIR /repo/website
+# The error reporter's DSN and release, baked in at build time (#1073). Empty:
+# the site loads no reporter and sends nothing.
+ARG NAUT_ERRORS_DSN=
+ARG NAUT_ERRORS_RELEASE=
 RUN npm ci && npm run build
 
 FROM nginx:alpine
