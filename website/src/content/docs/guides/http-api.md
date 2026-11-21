@@ -463,6 +463,25 @@ changes in the files it would touch. Each commit is journalled as
 The patch, `text/x-diff`, needs the edit permission. `409` when `writeBack` is
 `off`, when this controller is a standby, or when nothing differs.
 
+### Exporting and comparing a parameter set
+
+Two read-only commands read `GET /api/parameters` and change nothing on the
+controller:
+
+```sh
+naut params export --host plc1 -o set.yaml     # the live values, as a file
+naut params diff   --host plc1                 # live vs the manifest's init
+naut params diff   --host plc1 --file set.yaml --check
+```
+
+The file is `version: 1` and a `parameters:` map of tag name to value (the unit
+and the drift state ride along as comments; `--drift` keeps only parameters
+whose live value is not the manifest's `init:`). `diff --file` shows what
+applying a set would change, and marks a line `REFUSED` for a name the
+controller does not know, a value of another kind, or one outside the tag's
+`min`/`max`. `--check` exits 1 on a difference or a refusal, 2 when the
+controller cannot be reached or the file cannot be read.
+
 ### `GET /api/drivers`
 
 Each field driver's and publisher's status. `[]` when the project has none

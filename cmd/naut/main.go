@@ -120,6 +120,7 @@ Usage:
   naut alarms oncall  Who each on-call roster has on call (-at).
   naut alarms escalation  What each escalation policy covers, and the
                           steps one alarm would page (-id, -at).
+  naut params         Export and diff a controller's tuned setpoints
   naut pull           Pull a controller's online edits back into the
                           program file (--host <controller>). Inverse of the
                           VS Code "Download Program to Controller" command.
@@ -230,6 +231,8 @@ func main() {
 		os.Exit(runAlarms(os.Args[2:]))
 	case "pull":
 		os.Exit(runPull(os.Args[2:]))
+	case "params":
+		os.Exit(runParams(os.Args[2:]))
 	case "compose":
 		os.Exit(runCompose(os.Args[2:]))
 	case "historian":
