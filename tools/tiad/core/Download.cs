@@ -403,8 +403,8 @@ namespace Tiad
                 g.Route = RouteAttestation;
                 return g;
             }
-            if (uploadRoute) g.Why = Refused + "nothing shows the CPU's access control is off: upload from " + req.Address + " in this session first, or give attestation.cpuAccessControl \"disabled\" (with attestation.by and attestation.text), the operator's statement that it is";
-            else g.Why = Refused + "nothing shows the CPU's access control is off: give attestation.cpuAccessControl \"disabled\" (with attestation.by and attestation.text), the operator's statement that it is; " + UploadRouteWhy;
+            if (uploadRoute) g.Why = Refused + "nothing shows the CPU's access control is off: upload from " + req.Address + " in this session first, or give attestation.cpuAccessControl \"disabled\" (with attestation.by and attestation.text), the operator's own observation of the CPU, never a value a caller fills in by default";
+            else g.Why = Refused + "nothing shows the CPU's access control is off: give attestation.cpuAccessControl \"disabled\" (with attestation.by and attestation.text), the operator's own observation of the CPU, never a value a caller fills in by default; " + UploadRouteWhy;
             return g;
         }
     }

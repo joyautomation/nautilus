@@ -177,6 +177,10 @@ func contractUserManagementReset(t *testing.T, start Starter) {
 		later := []tiad.Question{qUserManagement, {ID: tiad.QuestionOverwrite}}
 		keep := ResetLoad(benchCPU)
 		keep.Decisions.UserManagementResetToProject, keep.Decisions.UserManagementKeepOnline, keep.Decisions.Overwrite = nil, tiad.Yes(), nil
+		// A software load, where TIA takes keep (#789 restart window);
+		// a hardware load refuses it on the bench, which the fakes do not
+		// model.
+		keep.Hardware, keep.Decisions.AcceptUnverifiedHardware, keep.Attestation = false, nil, nil
 		a.SetQuestions(t, later)
 		_, err := s.Download(ctx, keep)
 		if tiad.Kind(err) != tiad.KindDecisionRequired || questionIDs(tiad.Questions(err)) != tiad.QuestionOverwrite || len(tiad.ActingAnswers(err)) != 0 {
@@ -240,8 +244,8 @@ func contractUserManagementReset(t *testing.T, start Starter) {
 	t.Run("SessionSetAccessControl", func(t *testing.T) {
 		// A session that once applied fullAccessUser (the bench spec, at
 		// create), then uploaded the CPU (Disabled) and kept it: every
-		// other conjunct holds, the upload route included, yet keep after
-		// fullAccessUser keeps what tiad set (#1159), so no reset.
+		// other conjunct holds, the attestation route included, yet keep
+		// after fullAccessUser keeps what tiad set (#1159), so no reset.
 		a := start(t, Config{Targets: []string{benchCPU}})
 		c := a.Client()
 		installGSD(t, c)
@@ -265,7 +269,9 @@ func contractUserManagementReset(t *testing.T, start Starter) {
 			t.Fatal(err)
 		}
 		a.SetQuestions(t, benchHardwareChecks)
-		_, err = s.Download(ctx, ResetLoad(benchCPU))
+		att := ResetLoad(benchCPU)
+		att.Attestation.CPUAccessControl = tiad.AttestCPUAccessDisabled
+		_, err = s.Download(ctx, att)
 		wantResetRefused(t, "the session set access control", err, "does not keep access control")
 	})
 }

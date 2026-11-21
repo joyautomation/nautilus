@@ -167,8 +167,12 @@ namespace Tiad
                 string asked = "";
                 string outcome = "";
                 // userManagementReset is what came of a reset the request
-                // asked: unset (not asked), refused, allowed:<route> (TIA
-                // never asked it) or given:<route> (written).
+                // asked: unset (not asked, or the download ended before
+                // tiad checked it: a bad request, the hardware gate, the
+                // kept devices, a dry run), refused, allowed:<route> (TIA
+                // never asked it) or given:<route> (tiad answered TIA's
+                // check reset; a write TIA then refused still reads given,
+                // the safe side).
                 string reset = "unset";
                 var acting = new List<string>();
                 try

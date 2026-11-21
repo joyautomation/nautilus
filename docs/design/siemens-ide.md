@@ -592,13 +592,11 @@ Request:
   "dryRun": false,
   "decisions": { "stopCpu": true, "reinitialize": ["Tags"], "overwrite": true,
                  "consistentDownload": true, "alarmTexts": true, "allBlocks": true,
-                 "userManagementKeepOnline": true, "userManagementResetToProject": false,
                  "identificationDataLoadNothing": true,
                  "startAfter": true, "trustCertificate": "<sha256 fingerprint>",
                  "keptDevices": ["<device name>"], "acceptUnverifiedHardware": true },
   "announced": true,
-  "attestation": { "by": "<who>", "text": "<the CPU's hardware configuration is what I intend to load>",
-                   "cpuAccessControl": "disabled" },
+  "attestation": { "by": "<who>", "text": "<the CPU's hardware configuration is what I intend to load>" },
   "secrets": { "protection": "<password>", "configurationPassword": "<password>" }
 }
 ```
@@ -608,6 +606,10 @@ and on a download that loaded hardware `hardwareVerified: false`, a
 `warning` and the `attestation` as journalled (`{by, at, text,
 cpuAccessControl}`); on a download that reset the CPU's user management,
 `userManagementReset`, the route that let it (`upload` or `attestation`).
+The example leaves `user-management` out: a software load answers it
+with `userManagementKeepOnline: true`, while a hardware load, where TIA
+refuses keep, needs `userManagementResetToProject` under its rule
+(`user-management`, below).
 
 **What a download verifies, and what it does not.** A download verifies
 the PLC software: it succeeds only when an online compare right after it
@@ -628,7 +630,9 @@ both:
   say the CPU's access control as it is now, `cpuAccessControl`:
   `disabled` or `enabled` (any other word is a `bad_request`, journalled
   as `invalid`); a user-management reset can rest on `disabled`
-  (`user-management`, below).
+  (`user-management`, below). It must be the operator's own observation
+  of the CPU, never a value a client fills in by default: it is the one
+  piece of evidence a reset rests on.
 
 This holds on every CPU, the bench included: tiad cannot tell a bench
 CPU from a customer's, so it never tries. Without the opt-in the
@@ -894,7 +898,10 @@ behaviour. So, until then:
       tiad never resets a CPU whose access control is on. A reset given,
       then a cancel at a later check, is `outcome_unknown` naming
       `user-management`. The audit line says what came of it
-      (`userManagementReset=unset|refused|allowed:<route>|given:<route>`),
+      (`userManagementReset=unset|refused|allowed:<route>|given:<route>`:
+      `unset` when no reset was asked or the download ended before tiad
+      checked it; `given` once tiad answered TIA's check reset, even if
+      TIA then refused the write, the safe side),
       and a successful download returns the route
       (`userManagementReset`) for the deploy record.
     Updating the CPU's users (`UpdateUserManagementDataButKeepOnlinePassword`)

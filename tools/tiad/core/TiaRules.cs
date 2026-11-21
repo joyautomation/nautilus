@@ -448,8 +448,9 @@ namespace Tiad
         public Setting Setting;
         public string Type = "";
         // Acting is whether writing Setting acts on the CPU
-        // (DownloadChecks.ActingAnswer).
-        public bool Acting;
+        // (DownloadChecks.ActingAnswer). It defaults to acting, the safe
+        // side: a step that forgets to say records its write.
+        public bool Acting = true;
     }
 
     // DownloadDecider keeps ITia.Download's promise over Openness's
@@ -654,6 +655,13 @@ namespace Tiad
         public Step After(string type)
         {
             loadSeen = true;
+            if (type == "UserManagementDownload")
+            {
+                // tiad answers user management only before loading. One
+                // asked after it is left to TIA, whose preselection on a
+                // hardware load is the reset (#789 stage 4): say so loudly.
+                Log.Line("download: WARNING TIA asked UserManagementDownload after loading; tiad wrote nothing, so TIA's own selection stands (on a hardware load TIA preselects the reset to the project's): check the CPU's users and access control");
+            }
             if (type != StartAfterType) return null;
             bool start = Cancelled == null && startAfter.HasValue && startAfter.Value;
             return new Step { Setting = Setting.Choose(start ? "StartModule" : "NoAction"), Type = type, Acting = start };

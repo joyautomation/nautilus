@@ -251,11 +251,69 @@ func TestCheckUserManagementReset(t *testing.T) {
 	// very CPU shows nothing: only the attestation lets a reset, and the
 	// refusal says the upload route is not yet available.
 	refuse("upload route off", CheckUserManagementReset(resetRequest(), true, addr, false, read), "the upload route is not yet available")
-	refuse("upload route off, software only", func() ResetGate { r := resetRequest(); r.Hardware = false; return CheckUserManagementReset(r, true, addr, false, read) }(), "the upload route is not yet available")
+	refuse("upload route off, software only", func() ResetGate {
+		r := resetRequest()
+		r.Hardware = false
+		return CheckUserManagementReset(r, true, addr, false, read)
+	}(), "the upload route is not yet available")
 	r = resetRequest()
 	r.Attestation.CPUAccessControl = AttestCPUAccessDisabled
 	if g := CheckUserManagementReset(r, true, addr, false, read); !g.Allowed || g.Route != ResetRouteAttestation {
 		t.Fatalf("upload route off, attested disabled: %+v", g)
+	}
+}
+
+// TestResetFromTheAttestationRoute: the conjuncts flipped one at a time
+// from the baseline production runs: the upload route off, the operator
+// attesting disabled, no upload.
+func TestResetFromTheAttestationRoute(t *testing.T) {
+	read := func() (string, bool) { return ProjectAccessDisabled, true }
+	base := func() DownloadRequest {
+		r := resetRequest()
+		r.Attestation.CPUAccessControl = AttestCPUAccessDisabled
+		return r
+	}
+	if g := CheckUserManagementReset(base(), true, "", false, read); !g.Allowed || g.Route != ResetRouteAttestation {
+		t.Fatalf("the baseline: %+v", g)
+	}
+	for name, g := range map[string]ResetGate{
+		"software only": func() ResetGate {
+			r := base()
+			r.Hardware = false
+			return CheckUserManagementReset(r, true, "", false, read)
+		}(),
+		"access control set": CheckUserManagementReset(base(), false, "", false, read),
+		"project enabled":    CheckUserManagementReset(base(), true, "", false, func() (string, bool) { return "EnabledWithAccessControl", true }),
+		"project unreadable": CheckUserManagementReset(base(), true, "", false, func() (string, bool) { return "", false }),
+		"no who": func() ResetGate {
+			r := base()
+			r.Attestation.By = ""
+			return CheckUserManagementReset(r, true, "", false, read)
+		}(),
+		"no what": func() ResetGate {
+			r := base()
+			r.Attestation.Text = " "
+			return CheckUserManagementReset(r, true, "", false, read)
+		}(),
+		"attested enabled": func() ResetGate {
+			r := base()
+			r.Attestation.CPUAccessControl = AttestCPUAccessEnabled
+			return CheckUserManagementReset(r, true, "", false, read)
+		}(),
+		"attested nothing": func() ResetGate {
+			r := base()
+			r.Attestation.CPUAccessControl = ""
+			return CheckUserManagementReset(r, true, "192.0.2.10", false, read)
+		}(),
+		"reset not asked": func() ResetGate {
+			r := base()
+			r.Decisions.UserManagementResetToProject = nil
+			return CheckUserManagementReset(r, true, "", false, read)
+		}(),
+	} {
+		if g.Allowed {
+			t.Errorf("%s: let a reset", name)
+		}
 	}
 }
 

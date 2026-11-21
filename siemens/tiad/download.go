@@ -537,9 +537,9 @@ func CheckUserManagementReset(r DownloadRequest, accessControlKept bool, uploade
 		return ResetGate{Allowed: true, Route: ResetRouteAttestation}
 	}
 	if !uploadRoute {
-		return ResetGate{Why: resetRefused + `nothing shows the CPU's access control is off: give attestation.cpuAccessControl "disabled" (with attestation.by and attestation.text), the operator's statement that it is; ` + uploadRouteWhy}
+		return ResetGate{Why: resetRefused + `nothing shows the CPU's access control is off: give attestation.cpuAccessControl "disabled" (with attestation.by and attestation.text), the operator's own observation of the CPU, never a value a caller fills in by default; ` + uploadRouteWhy}
 	}
-	return ResetGate{Why: resetRefused + "nothing shows the CPU's access control is off: upload from " + r.Address + ` in this session first, or give attestation.cpuAccessControl "disabled" (with attestation.by and attestation.text), the operator's statement that it is`}
+	return ResetGate{Why: resetRefused + "nothing shows the CPU's access control is off: upload from " + r.Address + ` in this session first, or give attestation.cpuAccessControl "disabled" (with attestation.by and attestation.text), the operator's own observation of the CPU, never a value a caller fills in by default`}
 }
 
 // Resolve applies the download rule: every question is answered only from

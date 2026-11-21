@@ -707,6 +707,33 @@ namespace Tiad.Test
             r.Attestation.CpuAccessControl = Attestation.CpuAccessDisabled;
             g = UserManagementRule.Check(r, true, addr, false, read);
             True(g.Allowed && g.Route == UserManagementRule.RouteAttestation, "upload route off, attested disabled");
+            // The conjuncts flipped one at a time from the baseline
+            // production runs: the upload route off, the operator attesting
+            // disabled, no upload.
+            Func<DownloadRequest> att = delegate
+            {
+                DownloadRequest b = ResetRequest();
+                b.Attestation.CpuAccessControl = Attestation.CpuAccessDisabled;
+                return b;
+            };
+            project = "Disabled";
+            g = UserManagementRule.Check(att(), true, "", false, read);
+            True(g.Allowed && g.Route == UserManagementRule.RouteAttestation, "the attestation baseline: " + g.Why);
+            r = att(); r.Hardware = false;
+            True(!UserManagementRule.Check(r, true, "", false, read).Allowed, "attestation route, software only");
+            True(!UserManagementRule.Check(att(), false, "", false, read).Allowed, "attestation route, access control set");
+            True(!UserManagementRule.Check(att(), true, "", false, delegate { return AccessRule.Enabled; }).Allowed, "attestation route, project enabled");
+            True(!UserManagementRule.Check(att(), true, "", false, delegate { return null; }).Allowed, "attestation route, project unreadable");
+            r = att(); r.Attestation.By = "";
+            True(!UserManagementRule.Check(r, true, "", false, read).Allowed, "attestation route, no who");
+            r = att(); r.Attestation.Text = " ";
+            True(!UserManagementRule.Check(r, true, "", false, read).Allowed, "attestation route, no what");
+            r = att(); r.Attestation.CpuAccessControl = Attestation.CpuAccessEnabled;
+            True(!UserManagementRule.Check(r, true, "", false, read).Allowed, "attestation route, attested enabled");
+            r = att(); r.Attestation.CpuAccessControl = "";
+            True(!UserManagementRule.Check(r, true, addr, false, read).Allowed, "attestation route, attested nothing, uploaded here");
+            r = att(); r.Decisions.UserManagementResetToProject = null;
+            True(!UserManagementRule.Check(r, true, "", false, read).Allowed, "attestation route, reset not asked");
             // Off until a bench upload of a CPU with access control on
             // reads back as not Disabled (naut-lead 2026-11-21).
             True(!UserManagementRule.UploadRouteEnabled, "UploadRouteEnabled is on: it needs a bench upload of a CPU with access control on that reads back as not Disabled");
@@ -835,6 +862,7 @@ namespace Tiad.Test
             var r = new Run(AllYes);
             N(r, pw, "ModuleWriteAccessPassword", "pw");
             Eq(r.D.Acting.Count, 0, "a password written");
+            True(new Step().Acting, "a step that does not say is acting, the safe side");
             Step st = r.D.Next(stop, "StopModules", "stop", null);
             Eq(r.D.Acting.Count, 0, "stop answered, not yet written");
             r.D.Wrote(st);
