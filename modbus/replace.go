@@ -214,6 +214,11 @@ type ReplaceOptions struct {
 type FirstShare struct {
 	// Queued are the commands the share queued for the device, by tag.
 	Queued map[string]any
+	// Undecided are outputs the share left to decide: each is compared
+	// with what its device holds at its first live read, and commanded then
+	// only if it differs (the start-up baseline, #1123). They are not in
+	// Queued, and may never be commanded.
+	Undecided []string
 	// GateClosed: the write gate was closed, so nothing was queued.
 	GateClosed bool
 	// Parked: the source's enable tag is false; the commands wait in the

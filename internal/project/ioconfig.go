@@ -1320,6 +1320,15 @@ func (io *IOConfig) apply(ctx context.Context, c *IOCandidate, by string, opts A
 		for n, v := range s.Queued {
 			cmds[n] = v
 		}
+		if len(s.Undecided) > 0 {
+			names := s.Undecided
+			more := ""
+			if len(names) > 5 {
+				names, more = names[:5], ", ..."
+			}
+			res.Notes = append(res.Notes, fmt.Sprintf("%s: %d output(s) are decided against what the device holds at their first read, and commanded then only if they differ (%s%s)",
+				what, len(s.Undecided), strings.Join(names, ", "), more))
+		}
 	}
 	for _, sh := range shares {
 		select {

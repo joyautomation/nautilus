@@ -1128,6 +1128,12 @@ func (d *Driver) WriteOutputs(vals nio.Values) error {
 				}
 			}
 		}
+		if share != nil {
+			for name := range s.undecided {
+				share.Undecided = append(share.Undecided, name)
+			}
+			sort.Strings(share.Undecided)
+		}
 		s.mu.Unlock()
 	}
 	for s := range kicked {

@@ -376,7 +376,15 @@ So the driver reads its output set as follows.
 
 - **The first snapshot after `Start` is the baseline.** It is recorded
   and published to nobody: it describes the world at t=0, it does not
-  command it.
+  command it. This differs on purpose from the Modbus and OPC UA
+  drivers, which compare each output's first computed value with what
+  their device holds and write it if it differs: those outputs drive
+  the controller's own field device. A host's outputs are commands into
+  *another* controller's state, and an edge node owns its setpoints, so
+  starting a host never writes over them. The consequence: a host's
+  first computed value is sent only when it changes afterwards. A value
+  your program computes once, and never changes, is not sent to a site
+  that holds something else.
 - **Thereafter only a value that actually moved is a command**, and it
   is published once, however many scans hand it back afterwards.
 - **A member output adopts the site's live value** the moment its parent

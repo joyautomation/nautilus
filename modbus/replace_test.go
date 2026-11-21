@@ -737,3 +737,29 @@ func TestReplaceSourceObservesAParkedSource(t *testing.T) {
 		t.Fatalf("%+v, want Parked", s)
 	}
 }
+
+// A swapped-in driver's first share lists what it left to decide: an output
+// not yet read from its device is compared at that read, so it is not in
+// Queued and the apply's report must say it may follow (#1123).
+func TestFirstShareListsTheOutputsLeftToDecide(t *testing.T) {
+	ss := &slaveSet{a: newSlave(t), b: newSlave(t)}
+	m := Manifest{
+		Sources: []Source{fastSource("B", ss.b.Addr())},
+		Tags:    []TagBinding{{Name: "B_Cmd", Source: "B", Table: TableHolding, Address: 10, Format: "uint16", Writable: true}},
+	}
+	d, err := New(m, WithScanRate(10*time.Millisecond)) // never started: nothing read yet
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make(chan FirstShare, 1)
+	if n := d.ObserveFirstShares(func(_ string, s FirstShare) { got <- s }); n != 1 {
+		t.Fatalf("ObserveFirstShares = %d sources, want 1", n)
+	}
+	if err := d.WriteOutputs(nio.Values{"B_Cmd": uint16(7)}); err != nil {
+		t.Fatal(err)
+	}
+	s := <-got
+	if len(s.Queued) != 0 || fmt.Sprint(s.Undecided) != "[B_Cmd]" {
+		t.Fatalf("first share = %+v, want nothing queued and B_Cmd undecided", s)
+	}
+}
