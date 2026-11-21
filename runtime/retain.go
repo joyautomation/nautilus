@@ -341,6 +341,7 @@ func (r *Runtime) loadRetained() error {
 	for _, n := range r.retainTags {
 		allowed[n] = true
 	}
+	r.params.load(st.ParamBases)
 	var errs []error
 	for name, v := range st.Tags {
 		if !allowed[name] {
@@ -648,6 +649,7 @@ func (r *Runtime) retainState() retain.State {
 			st.Tags[name] = plainNumeric(v) // an enumeration as its integer: it reloads as a number
 		}
 	}
+	st.ParamBases = r.params.bases(st.Tags)
 	record := func(task string, p *Program) {
 		if !p.Dirty() {
 			return

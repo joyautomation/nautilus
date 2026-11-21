@@ -74,6 +74,10 @@ type Tags struct {
 	// depth (#247) — and an array index counts from the declared lower
 	// bound. Set once in New, read-only after.
 	types map[string]*ir.Type
+	// ranges maps ir.NameKey(tag) to the bounds an external write must
+	// stay inside (TagMeta.Min/Max, #718). Set once in New, read-only
+	// after; only Write consults it.
+	ranges map[string]TagRange
 	// divZero counts every integer or REAL division (or MOD) by zero the
 	// VM has evaluated against this store, controller-wide, since start
 	// (ir.DivZeroCounter). Surfaced as ScanStats.DivZero.

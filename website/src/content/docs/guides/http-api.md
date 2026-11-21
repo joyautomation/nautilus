@@ -202,6 +202,7 @@ check comes before the token check. See [Online edits](/guides/online-edits/).
 | `GET` | [`/api/state`](#get-apistate) | One snapshot: every tag, the scan diagnostics, quality, forces, alarm counts |
 | `GET` | [`/api/stream`](#get-apistream) | The same snapshot as Server-Sent Events, every 250 ms |
 | `GET` | [`/api/meta`](#get-apimeta) | Tag types, units and descriptions, the I/O lists, capability flags |
+| `GET` | [`/api/parameters`](#get-apiparameters) | The setpoint parameters: value, manifest `init:`, range, whether the plant and the repo agree |
 | `GET` | [`/api/drivers`](#get-apidrivers) | Field driver and publisher status |
 | `GET` | [`/api/cluster`](#get-apicluster) | This replica's redundancy status |
 | `POST` | [`/api/tags`](#post-apitags) | Write one tag or one member |
@@ -390,6 +391,40 @@ whether this controller accepts member writes, runs an alarm engine,
 reports quality, understands `delta=1` and `blocks=delta`, and holds a
 force table. `shelveTimes` is in **seconds**. Always `200`.
 
+### `GET /api/parameters`
+
+A **parameter** is a scalar `setpoint` with an `init:` in the manifest: the
+operator-tuned numbers of a plant. A retained value wins over `init:` on a
+restart, a failover and a redeploy, so what the repo says and what the plant
+runs can differ. This route says where, and changes nothing.
+
+```json
+{"parameters": [
+  {"name": "StartLevel", "value": 70, "init": 65, "base": 65,
+   "unit": "%", "min": 10, "max": 90, "state": "plant-ahead"}
+]}
+```
+
+`state` is `in-step` (the value is the `init:`), `plant-ahead` (an operator
+edit the repo does not have), `repo-ahead` (a redeploy brought a new `init:`
+and the plant still holds the value the old one gave) or `conflict` (both
+moved, to different values). `base` is the `init:` the plant and the repo
+last agreed on. A store written before parameters has no base, and the plant
+is then taken to have started at the current `init:`. `outOfRange: true`
+marks a value outside `min`/`max`. An external write cannot cause it; the
+program's own write can, and so can a redeploy that narrows the range under
+a retained value (see below). Only numeric and boolean setpoints that are
+retained are listed: a text init (a TIME written `T#5s`) is not compared, and
+a setpoint outside the `retain:` list returns to its `init:` on a restart.
+
+`min:` and `max:` on a setpoint refuse **external** writes only: an HMI, the
+API, Sparkplug and OPC UA all go through one write path, and a number outside
+the range is refused there with a `400` that names the range. The program's
+own writes are never refused or clamped (that would change what the logic
+does); a value it puts outside the range shows as `outOfRange`. The manifest
+refuses an `init:` outside its own range, `min` above `max`, and a range on
+anything but a setpoint.
+
 ### `GET /api/drivers`
 
 Each field driver's and publisher's status. `[]` when the project has none
@@ -565,6 +600,7 @@ That check comes first, so a forced input answers "forced", not "input".
 | `400` | The tag is an input (whole, or a member of it) | see above |
 | `400` | A member path names no member | `tag P101: unknown member Sped (did you mean Speed?)` |
 | `400` | An integer outside its declared width | `tag Starts: 70000 is outside INT (-32768..32767)` |
+| `400` | A number outside the setpoint's `min:`/`max:` | `tag StartLevel: 95 is outside its range [10, 90] — write a value inside it (the range is the tag's min:/max: in the manifest)` |
 | `400` | The wrong kind of value for a **member**, or for an enumerated tag | `tag P101.Enable: want BOOL, got a number` |
 | `401` | A token is set and the request has none, or the wrong one | `missing or invalid auth token` |
 | `403` | No token is set and a browser page on another origin wrote | `cross-origin writes require an auth token (start nautilus with one, e.g. NAUTILUS_TOKEN)` |

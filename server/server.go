@@ -13,6 +13,7 @@
 //	                   ?blocks=delta   — and gate the NON-tag blocks the
 //	                                     same way (scan/drivers/alarms)
 //	                   ?full=1         — never send deltas on this stream
+//	GET  /api/parameters  the setpoint parameters: value, manifest init, range, drift state (#718)
 //	GET  /api/meta     tag descriptions/units/declared types, I/O binding, scan target
 //	POST /api/tags     {"name": "TempSP", "value": 65.0} — write one tag,
 //	                   or one member of a struct tag by dotted path:
@@ -860,6 +861,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/state", s.handleState)
 	mux.HandleFunc("GET /api/meta", s.handleMeta)
+	mux.HandleFunc("GET /api/parameters", s.handleParameters)
 	mux.HandleFunc("GET /api/drivers", s.handleDrivers)
 	// Alarms: always registered, 404 when no engine — see server/alarms.go.
 	// Registering them unconditionally is what makes "this controller has
@@ -1696,6 +1698,17 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 		Forces:       s.tagWriter == nil,
 		ShelveTimes:  shelveSeconds(s.shelveTimes),
 	})
+}
+
+// handleParameters is GET /api/parameters: every scalar setpoint with a
+// manifest init, its live value, its range and whether the plant and the
+// repo agree (runtime.Parameter). Read-only; drift is reported, not
+// resolved.
+func (s *Server) handleParameters(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(struct {
+		Parameters []runtime.Parameter `json:"parameters"`
+	}{s.rt.Parameters()})
 }
 
 func shelveSeconds(ds []time.Duration) []int {
