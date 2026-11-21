@@ -1202,9 +1202,24 @@ namespace Tiad.Test
         {
             CompareIs(BenchTree(), true, "", "the bench's equal tree");
             CompareIs(Cmp("PLC_1", "ObjectsIdentical", Cmp("Main [OB1]", "ObjectsIdentical")), true, "", "an ObjectsIdentical root");
-            // CompareIrrelevant below the root is neutral.
-            CompareIs(Cmp("PLC_1", "FolderContentsIdentical", Cmp("Main [OB1]", "ObjectsIdentical"), Cmp("Info", "CompareIrrelevant")), true, "",
+            CompareIs(Cmp("PLC_1", "FolderContentsIdentical", Cmp("A", "FolderContentsIdentical", Cmp("B", "FolderContentsIdentical",
+                Cmp("C", "FolderContentsIdentical", Cmp("D", "FolderContentsIdentical", Cmp("FB1", "ObjectsIdentical")))))), true, "",
+                "an identical object five levels down");
+
+            // CompareIrrelevant anywhere is not compared (#1156 review).
+            CompareIs(Cmp("PLC_1", "FolderContentsIdentical", Cmp("Main [OB1]", "ObjectsIdentical"), Cmp("Info", "CompareIrrelevant")), false, "Info: not compared",
                 "an irrelevant object beside an identical one");
+            CompareIs(Cmp("PLC_1", "FolderContentsIdentical", Cmp("Program blocks", "CompareIrrelevant"),
+                Cmp("PLC tags", "FolderContentsIdentical", Cmp("Default tag table", "ObjectsIdentical"))), false, "Program blocks: not compared",
+                "a skipped block folder beside an identical tag table");
+            CompareIs(Cmp("PLC_1", "FolderContentsIdentical", Cmp("Default tag table", "ObjectsIdentical"),
+                Cmp("Program blocks", "CompareIrrelevant", Cmp("FC1", "ObjectsDifferent"))), false, "Program blocks: not compared; FC1: different",
+                "a differing block under an irrelevant folder is named too");
+            CompareIs(Cmp("PLC_1", "FolderContentsIdentical", Cmp("Main [OB1]", "ObjectsIdentical"), Cmp("X", "")), false, "X: different",
+                "an element with no state");
+            CompareIs(Cmp("PLC_1", "FolderContentsIdentical", Cmp("A", "FolderContentsIdentical", Cmp("B", "FolderContentsIdentical",
+                Cmp("C", "FolderContentsIdentical", Cmp("D", "FolderContentsIdentical", Cmp("FB1", "ObjectsIdentical"), Cmp("FB2", "RightMissing")))))),
+                false, "FB2: only offline", "a difference five levels down");
 
             // Nothing compared.
             CompareIs(null, false, ": nothing compared", "no tree");
@@ -1212,7 +1227,7 @@ namespace Tiad.Test
             CompareIs(Cmp("PLC_1", "ObjectsIdentical"), false, "PLC_1: nothing compared", "an ObjectsIdentical root alone");
             CompareIs(Cmp("PLC_1", "FolderContentsIdentical", Cmp("Software units", "FolderContentsIdentical"), Cmp("PLC data types", "FolderContentsIdentical")),
                 false, "PLC_1: nothing compared", "an identical root over empty folders");
-            CompareIs(Cmp("PLC_1", "FolderContentsIdentical", Cmp("Info", "CompareIrrelevant")), false, "PLC_1: nothing compared",
+            CompareIs(Cmp("PLC_1", "FolderContentsIdentical", Cmp("Info", "CompareIrrelevant")), false, "Info: not compared",
                 "an identical root over an irrelevant object only");
 
             // The root must say identical.

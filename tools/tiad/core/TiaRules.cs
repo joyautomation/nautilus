@@ -1170,10 +1170,11 @@ namespace Tiad
         //     folders, compared nothing and proves nothing;
         //   - no element anywhere in the tree is in a non-identical state,
         //     so a differing child under an identical-looking root fails.
-        // CompareIrrelevant below the root is neutral: TIA left that object
-        // out, so it neither counts as compared nor differs. A folder that
-        // says its contents differ without a differing child to show is
-        // named itself. A null tree is not equal.
+        // CompareIrrelevant anywhere is "not compared": TIA left that
+        // object out, so nothing says it matches (#1156 review: a skipped
+        // block folder beside one identical tag table must not pass). A
+        // folder that says its contents differ without a differing child to
+        // show is named itself. A null tree is not equal.
         public static bool CompareEqual(CompareNode root, List<Difference> into)
         {
             if (root == null)
@@ -1200,6 +1201,7 @@ namespace Tiad
             int at = into.Count;
             string own = Difference(n.State);
             if (own != "") into.Add(new Difference { Object = n.Name, State = own });
+            else if (n.State == "CompareIrrelevant" && !root) into.Add(new Difference { Object = n.Name, State = "not compared" });
             else if (n.State == "ObjectsIdentical" && !root) compared++;
             foreach (CompareNode c in n.Children) Tally(c, into, ref compared, false);
             if (n.State == "FolderContentsDifferent" && into.Count == at)

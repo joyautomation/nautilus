@@ -206,8 +206,8 @@ namespace Tiad
         // Compare compares the project's PLC software with the CPU at
         // address and returns TIA's compare tree as TIA reports it (null
         // when TIA reports none). It decides nothing: the agent runs
-        // TiaNames.CompareEqual on the tree, so an empty or partial tree
-        // can never pass as equal (#789).
+        // TiaNames.CompareEqual on the tree, so an empty tree, or one with
+        // an element skipped or differing, never passes as equal (#789).
         CompareNode Compare(object project, string address);
 
         // Export writes what o asks for under dir and returns the full

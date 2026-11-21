@@ -1219,15 +1219,16 @@ namespace Tiad.Openness
         }
 
         // Node copies one element of TIA's compare tree, and its children;
-        // an element only the CPU has carries its online name only.
+        // an element only the CPU has carries its online name only. A null
+        // child is kept with no state, which the agent reads as different:
+        // the glue drops nothing.
         static CompareNode Node(CompareResultElement e)
         {
             if (e == null) return null;
             var n = new CompareNode { Name = !string.IsNullOrEmpty(e.LeftName) ? e.LeftName : (e.RightName ?? ""), State = e.ComparisonResult.ToString() };
             foreach (CompareResultElement c in e.Elements)
             {
-                CompareNode k = Node(c);
-                if (k != null) n.Children.Add(k);
+                n.Children.Add(Node(c) ?? new CompareNode());
             }
             return n;
         }
