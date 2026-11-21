@@ -17,6 +17,8 @@ namespace Tiad
         public string Name = "", Order = "", Firmware = "", Address = "", SubnetMask = "", Router = "", ProfinetName = "";
         // ConfigurationProtection is required: password, none or keep.
         public string ConfigurationProtection = "";
+        // AccessControl is required: fullAccessUser or keep.
+        public string AccessControl = "";
 
         public static Cpu Read(Reader r)
         {
@@ -30,6 +32,7 @@ namespace Tiad
             c.Router = r.Str("router");
             c.ProfinetName = r.Str("profinetName");
             c.ConfigurationProtection = r.Str("configurationProtection");
+            c.AccessControl = r.Str("accessControl");
             return c;
         }
 
@@ -44,6 +47,7 @@ namespace Tiad
             if (Router != "") o["router"] = Router;
             o["profinetName"] = ProfinetName;
             o["configurationProtection"] = ConfigurationProtection;
+            o["accessControl"] = AccessControl;
             return o;
         }
     }
@@ -166,6 +170,13 @@ namespace Tiad
         // ConfigurationPassword protects the CPU's confidential
         // configuration data: its own secret, never Protection.
         public string ConfigurationPassword = "";
+        // FullAccessPassword is the password of the user with the runtime
+        // right Full access (cpu.accessControl fullAccessUser): its own
+        // secret, never Protection or ConfigurationPassword.
+        public string FullAccessPassword = "";
+        // Records is the agent's access record key (AccessRecords), which
+        // the agent sets for each call; never read from a request.
+        public AccessRecords Records;
 
         public static Secrets Read(Reader r)
         {
@@ -174,22 +185,57 @@ namespace Tiad
             s.WebUsers = r.StrMap("webUsers");
             s.Protection = r.Str("protection");
             s.ConfigurationPassword = r.Str("configurationPassword");
+            s.FullAccessPassword = r.Str("fullAccessPassword");
             return s;
         }
 
         // CheckFor is tiad.Secrets.CheckFor: when the station protects the
         // configuration, a configuration password that meets TIA's
-        // password rules, since it may be set. A password that only
-        // unlocks is never checked. It never echoes a password.
+        // password rules, since it may be set; when it has a Full access
+        // user, that user's password, by the same rules (TIA's default
+        // policy for local users; the agent checks the project's own before
+        // any write). A password that only unlocks is never checked. It
+        // never echoes a password.
         public string CheckFor(Station st)
         {
-            if (st.Cpu.ConfigurationProtection != StationRules.ProtectPassword) return null;
-            if (ConfigurationPassword == "")
+            var errs = new List<string>();
+            if (st.Cpu.ConfigurationProtection == StationRules.ProtectPassword)
             {
-                return "cpu.configurationProtection is password, and secrets.configurationPassword is empty (it comes from the secret store, never the spec)";
+                if (ConfigurationPassword == "")
+                {
+                    errs.Add("cpu.configurationProtection is password, and secrets.configurationPassword is empty (it comes from the secret store, never the spec)");
+                }
+                else
+                {
+                    string e = StationRules.CheckTiaPassword(ConfigurationPassword);
+                    if (e != null) errs.Add("secrets.configurationPassword " + e);
+                }
             }
-            string e = StationRules.CheckTiaPassword(ConfigurationPassword);
-            return e == null ? null : "secrets.configurationPassword " + e;
+            if (st.Cpu.AccessControl == StationRules.AccessFullAccessUser)
+            {
+                if (FullAccessPassword == "")
+                {
+                    errs.Add("cpu.accessControl is fullAccessUser, and secrets.fullAccessPassword is empty (it comes from the secret store, never the spec)");
+                }
+                else
+                {
+                    string e = StationRules.CheckTiaPassword(FullAccessPassword);
+                    if (e != null) errs.Add("secrets.fullAccessPassword " + e);
+                    string same = FullAccessPassword == ConfigurationPassword ? "secrets.configurationPassword"
+                        : FullAccessPassword == Protection ? "secrets.protection" : null;
+                    if (same == null)
+                    {
+                        var names = new List<string>(WebUsers.Keys);
+                        names.Sort(StringComparer.Ordinal);
+                        foreach (string n in names)
+                        {
+                            if (WebUsers[n] == FullAccessPassword) { same = "secrets.webUsers[" + Json.Quote(n) + "]"; break; }
+                        }
+                    }
+                    if (same != null) errs.Add("secrets.fullAccessPassword is the same as " + same + ": each password is its own secret");
+                }
+            }
+            return errs.Count == 0 ? null : string.Join("; ", errs.ToArray());
         }
     }
 
@@ -288,6 +334,12 @@ namespace Tiad
             {
                 e = StationRules.CheckConfigurationProtection(c.ConfigurationProtection);
                 if (e != null) errs.Add("cpu.configurationProtection: " + e);
+            }
+            if (c.AccessControl == "") errs.Add("cpu.accessControl is empty (one of fullAccessUser, keep)");
+            else
+            {
+                e = StationRules.CheckAccessControl(c.AccessControl);
+                if (e != null) errs.Add("cpu.accessControl: " + e);
             }
 
             if (WebServer != null)
@@ -459,6 +511,15 @@ namespace Tiad
         {
             if (v == ProtectPassword || v == ProtectNone || v == ProtectKeep) return null;
             return Json.Quote(v) + " is not one of password, none, keep";
+        }
+
+        public const string AccessFullAccessUser = "fullAccessUser", AccessKeep = "keep";
+
+        // CheckAccessControl accepts fullAccessUser and keep.
+        public static string CheckAccessControl(string v)
+        {
+            if (v == AccessFullAccessUser || v == AccessKeep) return null;
+            return Json.Quote(v) + " is not one of fullAccessUser, keep";
         }
 
         public const int MinTiaPassword = 10, MaxTiaPassword = 120;

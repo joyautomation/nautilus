@@ -71,6 +71,7 @@ $AllowListKey = 'SOFTWARE\Siemens\Automation\Openness\AllowList'
 $ExeName      = 'tiad.exe'
 $CfgDir       = Join-Path $env:ProgramData 'tiad'
 $TokenFile    = Join-Path $CfgDir "$TaskName.token"
+$AccessKeyFile = Join-Path $CfgDir "$TaskName.access-key"
 $PinsDir      = Join-Path $CfgDir 'pins'
 $FwGroup      = "tiad $TaskName"
 
@@ -250,7 +251,7 @@ if ($Uninstall) {
     if (Test-Path $InstallDir) { Remove-Item $InstallDir -Recurse -Force; Ok "$InstallDir removed" }
     # The token grants downloads to a CPU: never leave it behind.
     if (Test-Path $TokenFile) { Remove-Item $TokenFile -Force; Ok "token removed" }
-    Say "left alone: $WorkDir, the logs and the device pins ($PinsDir) in $CfgDir, and the Openness group membership"
+    Say "left alone: $WorkDir, the logs, the device pins ($PinsDir) and the access-record key ($AccessKeyFile) in $CfgDir, and the Openness group membership"
     exit 0
 }
 
@@ -378,6 +379,33 @@ if (Test-Path -LiteralPath $TokenFile) {
 $why = NotLocked $TokenFile
 if ($why) { Die "the token file is not locked ($why)" }
 Ok "token at $TokenFile (Administrators and SYSTEM only; the agent runs elevated)"
+# The access-record key signs tiad's record of the Full access password it
+# set in a project. It is kept across reinstalls (and an uninstall), like
+# the pins: a new key makes every earlier record another key's. Locked and
+# checked like the token; anything else is replaced, which only costs the
+# records (fullAccessRecordOnly re-records them).
+if (Test-Path -LiteralPath $AccessKeyFile) {
+    $why = NotLocked $AccessKeyFile
+    if (-not $why -and (Links $AccessKeyFile) -ne 1) { $why = "it has another name (a hard link)" }
+    if (-not $why -and [IO.File]::ReadAllText($AccessKeyFile) -cnotmatch '^[0-9a-f]{64}$') { $why = "it is not a key this script wrote" }
+    if ($why) {
+        Remove-Item -LiteralPath $AccessKeyFile -Force
+        Warn "replaced the access-record key: $why (earlier records now read as another key's)"
+    }
+}
+if (Test-Path -LiteralPath $AccessKeyFile) {
+    Ok "reusing the existing access-record key"
+} else {
+    $b = New-Object byte[] 32
+    [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b)
+    $text = [Text.Encoding]::ASCII.GetBytes((($b | ForEach-Object { $_.ToString('x2') }) -join ''))
+    $fs = New-Object IO.FileStream($AccessKeyFile, [IO.FileMode]::CreateNew, [Security.AccessControl.FileSystemRights]::FullControl,
+        [IO.FileShare]::None, 4096, [IO.FileOptions]::None, (LockedAcl))
+    try { $fs.Write($text, 0, $text.Length) } finally { $fs.Close() }
+    Ok "generated a new access-record key"
+}
+$why = NotLocked $AccessKeyFile
+if ($why) { Die "the access-record key is not locked ($why)" }
 
 # --------------------------------------------------------------- 5. runner
 Write-Host "`n5. Scheduled task"
@@ -397,6 +425,7 @@ rem Written by install-tiad.ps1. The token is in TIAD_TOKEN_FILE, never here.
 set TIAD_ADDR=http://${Listen}:${Port}
 set TIAD_TOKEN=
 set TIAD_TOKEN_FILE=$TokenFile
+set TIAD_ACCESS_KEY_FILE=$AccessKeyFile
 set TIAD_WORKDIR=$WorkDir
 set TIAD_PINS_DIR=$PinsDir
 set TIAD_TARGETS=$Targets

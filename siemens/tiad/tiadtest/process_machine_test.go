@@ -290,7 +290,7 @@ func TestLicenceLatch(t *testing.T) {
 		const refused = "Error when calling method 'CreateWithItem'. Necessary license 'STEP 7 Professional' is missing."
 		p.SetScript(t, tiadtest.Script{Failures: []tiadtest.ScriptedCall{{Call: "CreateProject", Message: refused}}})
 		if _, err := c.CreateProject(ctx, "p", tiad.Station{CPU: tiad.CPU{Name: "PLC_1", Order: "6ES7 510-1DK03-0AB0", Firmware: "V3.1",
-			Address: "192.0.2.10", SubnetMask: "255.255.255.0", ProfinetName: "plc-1", ConfigurationProtection: tiad.ProtectNone}}, tiad.Secrets{}); tiad.Kind(err) != tiad.KindOperationFailed {
+			Address: "192.0.2.10", SubnetMask: "255.255.255.0", ProfinetName: "plc-1", ConfigurationProtection: tiad.ProtectNone, AccessControl: tiad.AccessKeep}}, tiad.Secrets{}); tiad.Kind(err) != tiad.KindOperationFailed {
 			t.Fatalf("a call TIA refuses for its licence: %v, want operation_failed", err)
 		}
 		l, usable := licence(t, c)

@@ -680,6 +680,22 @@ type KeptDevice struct {
 // it, with the devices besides it (KeptDevices); any other CPU refuses
 // with KindCPUMismatch. tiad never replaces a project's CPU on an apply.
 func (s *Session) ApplyStation(ctx context.Context, st Station, sec Secrets) (StationResult, error) {
+	return s.ApplyStationWith(ctx, st, sec, ApplyOptions{})
+}
+
+// ApplyOptions are an apply's options besides the spec and its secrets.
+type ApplyOptions struct {
+	// FullAccessRecordOnly records secrets.fullAccessPassword as a found
+	// Full access user's password without setting it (journalled): for a
+	// project whose record tiad cannot verify (another agent token), when
+	// TIA refuses the unchanged secret as one the user has. It trusts the
+	// caller: naut sends it only on an operator's explicit action, never
+	// as a retry default.
+	FullAccessRecordOnly bool
+}
+
+// ApplyStationWith is ApplyStation with options.
+func (s *Session) ApplyStationWith(ctx context.Context, st Station, sec Secrets, o ApplyOptions) (StationResult, error) {
 	if err := st.Validate(); err != nil {
 		return StationResult{}, &Error{Kind: KindBadRequest, Message: err.Error()}
 	}
@@ -687,7 +703,11 @@ func (s *Session) ApplyStation(ctx context.Context, st Station, sec Secrets) (St
 		return StationResult{}, &Error{Kind: KindBadRequest, Message: err.Error()}
 	}
 	var r StationResult
-	_, err := s.c.doJSON(ctx, http.MethodPut, s.path("station"), map[string]any{"station": st, "secrets": sec}, &r)
+	body := map[string]any{"station": st, "secrets": sec}
+	if o.FullAccessRecordOnly {
+		body["fullAccessRecordOnly"] = true
+	}
+	_, err := s.c.doJSON(ctx, http.MethodPut, s.path("station"), body, &r)
 	return r, err
 }
 
@@ -849,6 +869,11 @@ type UploadResult struct {
 	// why (a project with two CPUs, for one); the next apply refuses too.
 	CPU      ProjectCPU `json:"cpu"`
 	CPUError string     `json:"cpuError,omitempty"`
+	// RemovedAccess names what applies on this session had made in the
+	// project's users and roles (`user "nautilus"`, `role "nautilus full
+	// access"`), which the upload removed with the station they belonged
+	// to. A user or role the project held before is never removed.
+	RemovedAccess []string `json:"removedAccess,omitempty"`
 }
 
 // UploadWith is Upload with options.

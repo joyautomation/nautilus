@@ -51,8 +51,28 @@ func protectedStation(mode string) tiad.Station {
 	return st
 }
 
+// uploadedStation is protectedStation for the CPU an upload brought: the
+// bench CPU has no access control (the S2a upload), so the spec keeps it.
+func uploadedStation(mode string) tiad.Station {
+	st := protectedStation(mode)
+	st.CPU.AccessControl = tiad.AccessKeep
+	return st
+}
+
+// protectionNotes are the notes about the configuration protection: the
+// Full access user's are another field's.
+func protectionNotes(notes []string) []string {
+	var out []string
+	for _, n := range notes {
+		if !strings.Contains(n, `"nautilus"`) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
 func benchSecrets(configurationPassword string) map[string]any {
-	return map[string]any{"webUsers": BenchSecrets.WebUsers, "configurationPassword": configurationPassword}
+	return map[string]any{"webUsers": BenchSecrets.WebUsers, "configurationPassword": configurationPassword, "fullAccessPassword": BenchFullAccessPassword}
 }
 
 // contractPasswords runs PasswordCases past the client wherever a
@@ -84,7 +104,7 @@ func contractPasswords(t *testing.T, start Starter) {
 	}
 	// Unlock-only passwords are not TIA's rules' business.
 	old := "old pw"
-	if _, err := s.ApplyStation(ctx, BenchStation(), tiad.Secrets{WebUsers: BenchSecrets.WebUsers, ConfigurationPassword: old}); err != nil {
+	if _, err := s.ApplyStation(ctx, BenchStation(), tiad.Secrets{WebUsers: BenchSecrets.WebUsers, ConfigurationPassword: old, FullAccessPassword: BenchFullAccessPassword}); err != nil {
 		t.Errorf("none with an old-rules password: %v", err)
 	}
 	if _, err := s.Compile(ctx, true, true); err != nil {
@@ -125,13 +145,13 @@ func contractProtected(t *testing.T, start Starter) {
 	rotated := sec
 	rotated.ConfigurationPassword = "Rotated-config-2027"
 	r, err := s.ApplyStation(ctx, st, rotated)
-	if err != nil || len(r.Changes) != 0 || len(r.Notes) != 1 ||
-		!strings.Contains(r.Notes[0], "apply none with the old password, then password with the new one") {
+	if n := protectionNotes(r.Notes); err != nil || len(r.Changes) != 0 || len(n) != 1 ||
+		!strings.Contains(n[0], "apply none with the old password, then password with the new one") {
 		t.Fatalf("applying the protected spec again with another password: %+v %v, want no change and one note", r, err)
 	}
 	// keep with a password sent changes nothing: the CPU stays
 	// protected, and a download still asks for the password.
-	if r, err := s.ApplyStation(ctx, protectedStation(tiad.ProtectKeep), sec); err != nil || len(r.Notes) != 0 {
+	if r, err := s.ApplyStation(ctx, protectedStation(tiad.ProtectKeep), sec); err != nil || len(protectionNotes(r.Notes)) != 0 {
 		t.Fatalf("keep with a password: %+v %v", r, err)
 	}
 	if _, err := s.Compile(ctx, true, true); err != nil {
@@ -229,16 +249,16 @@ func contractProtectionModes(t *testing.T, start Starter) {
 	if err := s.Upload(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.ApplyStation(ctx, protectedStation(tiad.ProtectKeep), BenchSecrets); err != nil {
+	if _, err := s.ApplyStation(ctx, uploadedStation(tiad.ProtectKeep), BenchSecrets); err != nil {
 		t.Fatalf("keep after an upload: %v", err)
 	}
 	if _, err := s.Compile(ctx, true, true); err != nil {
 		t.Fatalf("the uploaded CPU, kept, compiles: %v", err)
 	}
-	if _, err := s.ApplyStation(ctx, protectedStation(tiad.ProtectPassword), sec); err != nil {
+	if _, err := s.ApplyStation(ctx, uploadedStation(tiad.ProtectPassword), sec); err != nil {
 		t.Fatalf("password on the uploaded CPU: %v", err)
 	}
-	if _, err := s.ApplyStation(ctx, none, sec); err != nil {
+	if _, err := s.ApplyStation(ctx, uploadedStation(tiad.ProtectNone), sec); err != nil {
 		t.Fatalf("none with its password on the uploaded CPU: %v", err)
 	}
 	if _, err := s.Compile(ctx, true, true); err != nil {

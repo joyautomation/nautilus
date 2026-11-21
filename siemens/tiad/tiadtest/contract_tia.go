@@ -29,7 +29,10 @@ func BenchStation(modules ...tiad.DeviceModule) tiad.Station {
 			Address: benchCPU, SubnetMask: "255.255.255.0", ProfinetName: "plc-1",
 			// The bench CPU's own setting (the S2a upload): a download of
 			// the bench station leaves its protection as it is.
-			ConfigurationProtection: tiad.ProtectNone},
+			ConfigurationProtection: tiad.ProtectNone,
+			// A station naut makes has access control on, with its Full
+			// access user (#789).
+			AccessControl: tiad.AccessFullAccessUser},
 		WebServer: &tiad.WebServer{Enabled: true, Users: []tiad.WebUser{{Name: "naut", Rights: []string{"read", "write", "mode"}}}},
 		Modules:   []tiad.Module{{Slot: 2, Order: "6ES7 131-6BH01-0BA0", InputStart: intp(0)}},
 		Profinet: &tiad.Profinet{UpdateTime: "16ms", Devices: []tiad.Device{{
@@ -39,7 +42,11 @@ func BenchStation(modules ...tiad.DeviceModule) tiad.Station {
 }
 
 // BenchSecrets carries the bench station's web user password.
-var BenchSecrets = tiad.Secrets{WebUsers: map[string]string{"naut": "pw"}}
+var BenchSecrets = tiad.Secrets{WebUsers: map[string]string{"naut": "pw"}, FullAccessPassword: BenchFullAccessPassword}
+
+// BenchFullAccessPassword meets TIA's password rules. It is a test value,
+// never a real CPU's.
+const BenchFullAccessPassword = "Bench-access-2026"
 
 // BenchConfigurationPassword meets TIA's password rules. It is a test
 // value, never a real CPU's.
@@ -62,6 +69,9 @@ var StationCases = []struct {
 	{"cpu router", func(s *tiad.Station) { s.CPU.Router = "gw" }, `cpu.router "gw" is not an IPv4 address`},
 	{"cpu configuration protection empty", func(s *tiad.Station) { s.CPU.ConfigurationProtection = "" }, "cpu.configurationProtection is empty (one of password, none, keep)"},
 	{"cpu configuration protection unknown", func(s *tiad.Station) { s.CPU.ConfigurationProtection = "Password" }, `cpu.configurationProtection: "Password" is not one of password, none, keep`},
+	{"cpu access control empty", func(s *tiad.Station) { s.CPU.AccessControl = "" }, "cpu.accessControl is empty (one of fullAccessUser, keep)"},
+	// The manifest's spelling is not the wire's.
+	{"cpu access control unknown", func(s *tiad.Station) { s.CPU.AccessControl = "full-access-user" }, `cpu.accessControl: "full-access-user" is not one of fullAccessUser, keep`},
 	{"cpu station name upper", func(s *tiad.Station) { s.CPU.ProfinetName = "PLC_1" }, `cpu.profinetName: "PLC_1": only lowercase letters, digits, hyphens and dots are allowed`},
 	{"device name empty", func(s *tiad.Station) { s.Profinet.Devices[0].Name = "" }, "profinet.devices[0].name: empty (names are always explicit)"},
 	{"device name ip-shaped", func(s *tiad.Station) { s.Profinet.Devices[0].Name = "1.2.3.4" }, `"1.2.3.4" has the form n.n.n.n (n = 0-999), which PROFINET forbids`},
@@ -257,7 +267,7 @@ func contractProjects(t *testing.T, start Starter) {
 		t.Fatalf("uninstalled GSDML: %v", err)
 	}
 	installGSD(t, c)
-	if _, err := c.CreateProject(ctx, "bench", BenchStation(), tiad.Secrets{}); tiad.Kind(err) != tiad.KindBadRequest || !strings.Contains(err.Error(), "web user naut has no password") {
+	if _, err := c.CreateProject(ctx, "bench", BenchStation(), tiad.Secrets{FullAccessPassword: BenchFullAccessPassword}); tiad.Kind(err) != tiad.KindBadRequest || !strings.Contains(err.Error(), "web user naut has no password") {
 		t.Fatalf("missing web password: %v", err)
 	}
 	s, err := c.CreateProject(ctx, "bench", BenchStation(), BenchSecrets)
@@ -393,7 +403,7 @@ func contractStrictJSON(t *testing.T, start Starter) {
 	path := "/v1/sessions/" + s.ID + "/station"
 	body := func(edit func(st map[string]any, root map[string]any)) map[string]any {
 		st := stationBody(t, BenchStation())
-		root := map[string]any{"station": st, "secrets": map[string]any{"webUsers": map[string]any{"naut": "pw"}}}
+		root := map[string]any{"station": st, "secrets": map[string]any{"webUsers": map[string]any{"naut": "pw"}, "fullAccessPassword": BenchFullAccessPassword}}
 		edit(st, root)
 		return root
 	}

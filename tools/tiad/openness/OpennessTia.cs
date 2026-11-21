@@ -43,6 +43,7 @@ using Siemens.Engineering.SW.Blocks;
 using Siemens.Engineering.SW.ExternalSources;
 using Siemens.Engineering.SW.Tags;
 using Siemens.Engineering.SW.Types;
+using Siemens.Engineering.Umac;
 using Siemens.Engineering.Upload;
 using Siemens.Engineering.Upload.Configurations;
 using HwDevice = Siemens.Engineering.HW.Device;
@@ -500,7 +501,7 @@ namespace Tiad.Openness
             return null;
         }
 
-        public void ApplyStation(object project, Station next, string decision, Secrets secrets, List<string> notes)
+        public void ApplyStation(object project, Station next, string decision, Secrets secrets, List<string> notes, AccessMade made)
         {
             string cannot = CannotApply(next);
             if (cannot != null) throw new TiaException(cannot);
@@ -530,8 +531,254 @@ namespace Tiad.Openness
                     "PnDeviceNameAutoGeneration", false,
                     "PnDeviceName", next.Cpu.ProfinetName);
                 ProtectionSteps.Run(new MasterSecret(station, cpu), next.Cpu.ConfigurationProtection, secrets.ConfigurationPassword, notes);
+                AccessSteps.Run(new Access(p, station, cpu), next.Cpu.AccessControl, secrets.FullAccessPassword, secrets.Records, decision == CpuReuse.Create, made, notes);
                 return true;
             });
+        }
+
+        public PasswordPolicy ReadPolicy(object project)
+        {
+            return Tia(delegate
+            {
+                PasswordPolicyConfigurator c = Of(project).Project.GetService<PasswordPolicyConfigurator>();
+                if (c == null) throw new TiaException("TIA offers no password policy (PasswordPolicyConfigurator) for the project");
+                var pol = new PasswordPolicy
+                {
+                    MinLength = c.MinimumLength,
+                    MinDigits = c.MinimumNumericCharacterLength,
+                    MinSpecial = c.MinimumSpecialCharacterLength,
+                    UpperAndLower = c.IncludesLowerCaseAndUpperCaseCharacters,
+                };
+                Log.Line("password policy: {0}", pol.Describe());
+                return pol;
+            });
+        }
+
+        public void PrepareAccess(object project, Station next, Secrets secrets, bool recordOnly, AccessWrites w, List<string> notes)
+        {
+            Tia(delegate
+            {
+                AccessSteps.Prepare(new Users(Of(project).Project), next.Cpu.AccessControl, secrets.FullAccessPassword, secrets.Records, recordOnly, w, notes);
+                return true;
+            });
+        }
+
+        // RemoveAccess takes the role off every user before deleting it, so
+        // a user the project held, holding the role, is never in the way.
+        public List<string> RemoveAccess(object project, AccessMade made)
+        {
+            return Tia(delegate
+            {
+                var removed = new List<string>();
+                UmacConfigurator u = Users.Umac(Of(project).Project);
+                if (made.User)
+                {
+                    ProjectUser user = u.ProjectUsers.Find(AccessSteps.UserName);
+                    if (user != null)
+                    {
+                        user.Delete();
+                        removed.Add("user " + Json.Quote(AccessSteps.UserName));
+                    }
+                }
+                if (made.Role)
+                {
+                    CustomRole role = u.CustomRoles.Find(AccessSteps.RoleName);
+                    if (role != null)
+                    {
+                        foreach (ProjectUser pu in u.ProjectUsers)
+                        {
+                            if (pu.Roles.Contains(role)) pu.Roles.Remove(role);
+                        }
+                        role.Delete();
+                        removed.Add("role " + Json.Quote(AccessSteps.RoleName));
+                    }
+                }
+                Log.Line("access control: removed what this session made: {0}", removed.Count == 0 ? "nothing left" : string.Join(", ", removed.ToArray()));
+                return removed;
+            });
+        }
+
+        // Users is the project's users and roles (TIA's UmacConfigurator)
+        // for AccessSteps, with the SecureStrings made here.
+        class Users : IProjectUsers
+        {
+            protected readonly Project p;
+
+            public Users(Project p)
+            {
+                this.p = p;
+            }
+
+            public static UmacConfigurator Umac(Project p)
+            {
+                UmacConfigurator u = p.GetService<UmacConfigurator>();
+                if (u == null) throw new TiaException("TIA offers no users and roles (UmacConfigurator) for the project");
+                return u;
+            }
+
+            protected ProjectUser User(string user)
+            {
+                ProjectUser pu = Umac(p).ProjectUsers.Find(user);
+                if (pu == null) throw new TiaException("the user " + Json.Quote(user) + " is not in the project");
+                return pu;
+            }
+
+            protected CustomRole Role(string role)
+            {
+                CustomRole r = Umac(p).CustomRoles.Find(role);
+                if (r == null) throw new TiaException("the role " + Json.Quote(role) + " is not in the project");
+                return r;
+            }
+
+            public bool HasUser(string user)
+            {
+                return Umac(p).ProjectUsers.Find(user) != null;
+            }
+
+            public void MakeUser(string user, string password)
+            {
+                using (var ss = Secure(password)) Umac(p).ProjectUsers.Create(user, ss);
+            }
+
+            // SetPassword maps TIA's refusal of a password the user has had to
+            // PasswordReusedException. Openness has no typed error for it,
+            // so it matches the one phrase TIA V21 words it with ("The
+            // specified password has already been used", seen on the TIA
+            // machine 2026-11-20), and nothing wider; any other failure
+            // stays TIA's own.
+            public void SetPassword(string user, string password)
+            {
+                ProjectUser pu = User(user);
+                using (var ss = Secure(password))
+                {
+                    try
+                    {
+                        pu.SetPassword(ss);
+                    }
+                    catch (EngineeringException e)
+                    {
+                        if (TiaNames.Message(e).IndexOf("password has already been used", StringComparison.Ordinal) >= 0) throw new PasswordReusedException(e);
+                        throw;
+                    }
+                }
+            }
+
+            public string Comment(string user)
+            {
+                return User(user).Comment ?? "";
+            }
+
+            public void SetComment(string user, string comment)
+            {
+                User(user).Comment = comment;
+            }
+
+            public bool HasRole(string role)
+            {
+                return Umac(p).CustomRoles.Find(role) != null;
+            }
+
+            public string RoleComment(string role)
+            {
+                return Role(role).Comment ?? "";
+            }
+
+            public void MakeRole(string role, string comment)
+            {
+                Umac(p).CustomRoles.Create(role, comment);
+            }
+
+            public void AddRole(string user, string role)
+            {
+                ProjectUser pu = User(user);
+                CustomRole r = Role(role);
+                if (!pu.Roles.Contains(r)) pu.Roles.Add(r);
+            }
+        }
+
+        // Access is the CPU's access control besides the project's users and
+        // roles: TIA's PlcAccessControlConfigurationProvider on the CPU and
+        // the station's UmacDevice.
+        sealed class Access : Users, IAccessControl
+        {
+            // FullAccessId is the identifier of the runtime right Full access
+            // ("Full access" in TIA's English UI), as the TIA machine showed
+            // it (2026-11-20).
+            const string FullAccessId = "ProtectionLevelFullAccess";
+
+            readonly HwDevice station;
+            readonly DeviceItem cpu;
+            readonly PlcAccessControlConfigurationProvider prov;
+            UmacDevice dev;
+
+            public Access(Project p, HwDevice station, DeviceItem cpu) : base(p)
+            {
+                this.station = station;
+                this.cpu = cpu;
+                prov = cpu.GetService<PlcAccessControlConfigurationProvider>();
+            }
+
+            // Device is the CPU's runtime rights. The station serves them
+            // (learned on the TIA machine, 2026-11-20), not the CPU's
+            // device item.
+            UmacDevice Device()
+            {
+                if (dev != null) return dev;
+                dev = station.GetService<UmacDevice>();
+                if (dev == null) throw new TiaException("TIA offers no runtime rights (UmacDevice) for the station of the CPU " + cpu.Name);
+                return dev;
+            }
+
+            // FullAccess is the CPU's runtime right Full access. A miss names
+            // every right the CPU offers.
+            DeviceFunctionRight FullAccess()
+            {
+                var all = new List<string>();
+                foreach (DeviceFunctionRight r in Device().AvailableDeviceFunctionRights)
+                {
+                    if (r.Identifier == FullAccessId) return r;
+                    all.Add(Json.Quote(r.Identifier) + " (" + Json.Quote(r.Name) + ")");
+                }
+                throw new TiaException("the CPU " + cpu.Name + " offers no runtime right " + Json.Quote(FullAccessId) + " (Full access); it offers " + string.Join(", ", all.ToArray()));
+            }
+
+            public string State()
+            {
+                return prov == null ? AccessRule.Absent : prov.PlcAccessControlConfiguration.ToString();
+            }
+
+            public void Enable()
+            {
+                prov.PlcAccessControlConfiguration = PlcAccessControlConfiguration.EnabledWithAccessControl;
+            }
+
+            public void GrantFullAccess(string role)
+            {
+                CustomRole r = Role(role);
+                DeviceFunctionRight full = FullAccess();
+                if (Has(r, full)) return;
+                r.AssignDeviceFunctionRight(Device(), full);
+            }
+
+            bool Has(CustomRole r, DeviceFunctionRight full)
+            {
+                foreach (DeviceFunctionRight x in r.GetAssignedDeviceFunctionRights(Device()))
+                {
+                    if (x.Identifier == full.Identifier) return true;
+                }
+                return false;
+            }
+
+            public string Check(string user, string role)
+            {
+                UmacConfigurator u = Umac(p);
+                ProjectUser pu = u.ProjectUsers.Find(user);
+                if (pu == null) return "the user " + Json.Quote(user) + " is not in the project";
+                CustomRole r = u.CustomRoles.Find(role);
+                if (r == null || !pu.Roles.Contains(r)) return "the user " + Json.Quote(user) + " lacks the role " + Json.Quote(role);
+                if (!Has(r, FullAccess())) return "the role " + Json.Quote(role) + " lacks the runtime right Full access on the CPU";
+                return null;
+            }
         }
 
         // MasterSecret is TIA's PlcMasterSecretConfigurator for
@@ -1034,6 +1281,7 @@ namespace Tiad.Openness
                     Order = CpuAttribute(cpu, "OrderNumber"),
                     Firmware = CpuAttribute(cpu, "FirmwareVersion"),
                     Protection = new MasterSecret(d, cpu).State(),
+                    AccessControl = new Access(p, d, cpu).State(),
                 };
                 var cpus = new List<string>();
                 foreach (HwDevice o in AllDevices(p))

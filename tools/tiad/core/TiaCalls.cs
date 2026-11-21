@@ -213,6 +213,14 @@ namespace Tiad
             }
         }
 
+        // CheckPolicy refuses, before any write, a Full access password the
+        // project's own password policy for local users would refuse.
+        static void CheckPolicy(ITia t, object project, Secrets sec)
+        {
+            string e = t.ReadPolicy(project).Check(sec.FullAccessPassword);
+            if (e != null) throw TiadException.BadRequest("secrets.fullAccessPassword {0}", e);
+        }
+
         // CheckStation applies the agent-side station rules: the spec's
         // own, an installed GSDML for every device, a password for every
         // web user.
@@ -267,6 +275,7 @@ namespace Tiad
             r.Done();
             CheckProjectName(name);
             CheckStation(st, sec);
+            sec.Records = records;
             string project = "projects/" + name + "/" + name + ".ap21";
             string full = work.Resolve(project);
             // The session owns projects/<name>/: it is replaced only while
@@ -284,7 +293,8 @@ namespace Tiad
                     object h = t.CreateProject(full, name);
                     try
                     {
-                        t.ApplyStation(h, st, CpuReuse.Create, sec, new List<string>());
+                        if (st.Cpu.AccessControl == StationRules.AccessFullAccessUser) CheckPolicy(t, h, sec);
+                        t.ApplyStation(h, st, CpuReuse.Create, sec, new List<string>(), s.Made);
                     }
                     catch
                     {
@@ -371,8 +381,15 @@ namespace Tiad
                 var r = c.Json();
                 Station st = Station.Read(r.Child("station"));
                 Secrets sec = Secrets.Read(r.Child("secrets"));
+                bool recordOnly = r.Bool("fullAccessRecordOnly");
                 r.Done();
                 CheckStation(st, sec);
+                sec.Records = records;
+                if (recordOnly)
+                {
+                    if (st.Cpu.AccessControl != StationRules.AccessFullAccessUser) throw TiadException.BadRequest("{0}", "fullAccessRecordOnly goes with cpu.accessControl fullAccessUser");
+                    Log.Line("audit access-record session={0} project={1} fullAccessRecordOnly=yes", s.Id, Json.Quote(s.Project));
+                }
                 // The session's state changes only on the TIA thread, in
                 // call order. Until TIA has applied the spec, the project
                 // is neither compiled nor described by any spec, so a
@@ -389,16 +406,36 @@ namespace Tiad
                     {
                         CpuReuse.Collides(pc, st);
                         ConfigProtection.Plan(pc.Protection, st.Cpu.ConfigurationProtection, sec.ConfigurationPassword != "");
+                        AccessRule.Plan(pc.AccessControl, st.Cpu.AccessControl, sec.FullAccessPassword != "");
                         kept = pc.Others;
                     }
+                    if (st.Cpu.AccessControl == StationRules.AccessFullAccessUser) CheckPolicy(t, s.Handle, sec);
                     string cannot = t.CannotApply(st);
                     if (cannot != null) throw new TiaException(cannot);
-                    bool was = s.Compiled;
+                    // A found user's password, before any write: a refusal
+                    // leaves the session as it was, unless putting the
+                    // user's record back failed.
+                    var w = new AccessWrites();
+                    try
+                    {
+                        t.PrepareAccess(s.Handle, st, sec, recordOnly, w, notes);
+                    }
+                    catch
+                    {
+                        if (w.Dirty)
+                        {
+                            s.Unclean = true;
+                            s.UsersUnclean = true;
+                        }
+                        throw;
+                    }
+                    // A password set or recorded is a change to the project.
+                    bool was = s.Compiled && !w.Wrote;
                     Station prev = s.Station;
                     s.Compiled = false;
                     s.Station = null;
                     s.Unclean = true;
-                    t.ApplyStation(s.Handle, st, decision, sec, notes);
+                    t.ApplyStation(s.Handle, st, decision, sec, notes, s.Made);
                     s.Unclean = false;
                     string kn = CpuReuse.KeptNote(kept);
                     if (kn != null) notes.Add(kn);

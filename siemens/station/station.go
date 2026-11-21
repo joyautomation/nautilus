@@ -44,6 +44,12 @@ type CPU struct {
 	// project's setting as found, for an adopted station). Empty means
 	// the default.
 	ConfigurationProtection string `yaml:"configuration-protection"`
+	// AccessControl is the CPU's PLC access control (users and roles):
+	// full-access-user (the default: access control on, one user
+	// "nautilus" with the runtime right Full access, its password from the
+	// secret store) or keep (leave the project's access control and users
+	// as found, for an adopted station). Empty means the default.
+	AccessControl string `yaml:"access-control"`
 }
 
 // WebServer turns on the CPU's web server. Passwords are never here.
@@ -134,6 +140,11 @@ func (s Station) Problems() []Problem {
 	if c.ConfigurationProtection != "" {
 		if err := CheckConfigurationProtection(c.ConfigurationProtection); err != nil {
 			bad("cpu.configuration-protection", "%v", err)
+		}
+	}
+	if c.AccessControl != "" {
+		if _, err := WireAccessControl(c.AccessControl); err != nil {
+			bad("cpu.access-control", "%v", err)
 		}
 	}
 
@@ -268,6 +279,43 @@ func CheckConfigurationProtection(v string) error {
 		return nil
 	}
 	return fmt.Errorf("%q is not one of password, none, keep", v)
+}
+
+// The access control values on the wire (tiad's cpu.accessControl).
+const (
+	// AccessFullAccessUser turns PLC access control on with one user,
+	// "nautilus", that has the runtime right Full access; its password
+	// comes from the secret store.
+	AccessFullAccessUser = "fullAccessUser"
+	// AccessKeep leaves the project's access control and users as found.
+	AccessKeep = "keep"
+)
+
+// DefaultAccessControl is what a manifest that names none gets: a station
+// naut makes has access control on (#789, decision of 2026-11-20).
+const DefaultAccessControl = AccessFullAccessUser
+
+// CheckAccessControl accepts the wire values fullAccessUser and keep.
+func CheckAccessControl(v string) error {
+	switch v {
+	case AccessFullAccessUser, AccessKeep:
+		return nil
+	}
+	return fmt.Errorf("%q is not one of fullAccessUser, keep", v)
+}
+
+// WireAccessControl turns the manifest's access-control (full-access-user
+// or keep; empty is the default) into the wire value.
+func WireAccessControl(v string) (string, error) {
+	switch v {
+	case "":
+		return DefaultAccessControl, nil
+	case "full-access-user":
+		return AccessFullAccessUser, nil
+	case "keep":
+		return AccessKeep, nil
+	}
+	return "", fmt.Errorf("%q is not one of full-access-user, keep", v)
 }
 
 // TIA's password rules (TIA Portal V21, as it words them when it refuses

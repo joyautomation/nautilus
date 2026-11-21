@@ -23,6 +23,7 @@ func contractReuse(t *testing.T, start Starter) {
 		st := BenchStation()
 		st.Profinet = nil
 		st.CPU.ConfigurationProtection = tiad.ProtectKeep
+		st.CPU.AccessControl = tiad.AccessKeep
 		return st
 	}
 
@@ -207,6 +208,7 @@ func contractReuseAfterARefusedUpload(t *testing.T, start Starter) {
 	adopted := BenchStation()
 	adopted.Profinet = nil
 	adopted.CPU.ConfigurationProtection = tiad.ProtectKeep
+	adopted.CPU.AccessControl = tiad.AccessKeep
 	swapped := BenchDevice()
 	swapped.Order = "6ES7 510-1SK03-0AB0"
 	a.SetDevice(t, swapped, false)

@@ -48,6 +48,10 @@ namespace Tiad
         // %ProgramData%\tiad\pins by default). Never inside the work dir.
         public string PinsDir;
         public List<string> Targets = new List<string>();
+        // AccessKey is the agent's access record key (TIAD_ACCESS_KEY_FILE,
+        // 64 hex characters, made by the installer and kept across
+        // reinstalls), or "" for a key of this run only.
+        public string AccessKey = "";
 
         // MaxFileBytes caps one uploaded file (TIAD_MAX_FILE_BYTES).
         public long MaxFileBytes = 1L << 30;
@@ -139,6 +143,20 @@ namespace Tiad
                 // process on the machine, or a browser on it, reaches
                 // loopback too.
                 throw new ConfigException("a token is required (TIAD_TOKEN or TIAD_TOKEN_FILE), on loopback too");
+            }
+
+            string keyFile = Env("TIAD_ACCESS_KEY_FILE");
+            if (keyFile != "")
+            {
+                try
+                {
+                    c.AccessKey = File.ReadAllText(keyFile).Trim();
+                    AccessRecords.FromHex(c.AccessKey);
+                }
+                catch (Exception e)
+                {
+                    throw new ConfigException("TIAD_ACCESS_KEY_FILE: " + e.Message);
+                }
             }
 
             c.WorkDir = Env("TIAD_WORKDIR");

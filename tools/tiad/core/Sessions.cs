@@ -29,6 +29,13 @@ namespace Tiad
         // Kept are the devices the last apply kept as found besides the
         // CPU's station: a download lists them and journals them.
         public List<KeptDevice> Kept = new List<KeptDevice>();
+        // Made is what applies on this session made in the project's users
+        // and roles; an upload on it removes exactly that first.
+        public AccessMade Made = new AccessMade();
+        // UsersUnclean is set when an apply's password step left the
+        // project's users part-way (AccessWrites.Dirty): an upload, which
+        // replaces devices but not users, refuses too.
+        public bool UsersUnclean;
         public bool Closed;
         // Broken is set when closing the project failed: TIA may still
         // hold it. Every call but another close refuses.

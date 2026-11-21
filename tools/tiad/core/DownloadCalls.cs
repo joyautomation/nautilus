@@ -355,8 +355,12 @@ namespace Tiad
                 DeviceIdentity read = null;
                 ProjectCpu cpu = null;
                 string cpuWhy = null;
+                var removed = new List<string>();
                 List<string> trusted = OnSession(s, delegate(ITia t)
                 {
+                    // An upload replaces devices, not users: users an apply
+                    // left part-way stay that way.
+                    if (s.UsersUnclean) throw CpuReuse.Unclean("an upload");
                     // The CPU's program replaces the project's: it no
                     // longer matches its spec, and it must take a spec and
                     // compile again before anything is downloaded. Until
@@ -365,6 +369,13 @@ namespace Tiad
                     s.Station = null;
                     s.Kept = new List<KeptDevice>();
                     s.Unclean = true;
+                    // What this session made in the project's users and
+                    // roles belongs to the station the upload replaces.
+                    if (s.Made.Any)
+                    {
+                        removed = t.RemoveAccess(s.Handle, s.Made);
+                        s.Made = new AccessMade();
+                    }
                     List<string> tr = t.Upload(s.Handle, address, trust);
                     // The project is replaced now: a failed identity read
                     // must not skip the audit lines below.
@@ -416,6 +427,9 @@ namespace Tiad
                 // What a spec that reuses this CPU must name (section 3.3).
                 o["cpu"] = cpu == null ? null : cpu.ToJson();
                 if (cpuWhy != null) o["cpuError"] = cpuWhy;
+                // What this session had made in the project's users and
+                // roles, removed with the station it belonged to.
+                if (removed.Count > 0) o["removedAccess"] = removed.ToArray();
                 return o;
             });
         }

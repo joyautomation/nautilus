@@ -2105,6 +2105,12 @@
           "enum": ["password", "none", "keep"],
           "default": "password",
           "description": "FW 3.1 protection of the CPU's confidential configuration data. password (the default): protected, with the password from the secret store, never this file. none: off, an explicit choice. keep: leave the project's setting as found (an adopted station)."
+        },
+        "access-control": {
+          "type": "string",
+          "enum": ["full-access-user", "keep"],
+          "default": "full-access-user",
+          "description": "The CPU's PLC access control (users and roles). full-access-user (the default): access control on, with one user, nautilus, holding the runtime right Full access; its password comes from the secret store, never this file. keep: leave the project's access control and users as found (an adopted station)."
         }
       }
     },

@@ -82,6 +82,7 @@ namespace Tiad
         public const string Version = "0.1.0";
 
         readonly Config cfg;
+        readonly AccessRecords records;
         readonly IHost host;
         readonly WorkDir work;
         readonly string version;
@@ -99,6 +100,15 @@ namespace Tiad
             // Refuses to start (ConfigException) on a pins dir it cannot use.
             pins = PinStore.Open(cfg.PinsDir);
             LogPins();
+            if (cfg.AccessKey != "")
+            {
+                records = AccessRecords.FromHex(cfg.AccessKey);
+            }
+            else
+            {
+                records = AccessRecords.Random();
+                Log.Line("access records: no TIAD_ACCESS_KEY_FILE, so the key is this run's only: a later run cannot verify its records");
+            }
             version = Version + versionSuffix;
             StartReaper(cfg.SessionIdle);
         }
