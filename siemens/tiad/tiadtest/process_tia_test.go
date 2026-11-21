@@ -1369,11 +1369,19 @@ func TestAgentTrustsACertificateOnlyOnTheUploadsOptIn(t *testing.T) {
 	if l := p.Loaded(t); len(l) != 0 {
 		t.Fatalf("a refused download loaded: %+v", l)
 	}
+	// Refused by the agent's own check, before the pin, the claim and TIA:
+	// the audit line names the question.
+	refused := lastLine(waitLog(t, p, "audit download"), "audit download")
+	for _, want := range []string{`asked=["blind-trust"]`, `outcome=decision_required:["blind-trust"]`, "acceptBlindTrust=unanswered", `blindTrust={since="`} {
+		if !strings.Contains(refused, want) {
+			t.Errorf("the refused download's audit line lacks %s:\n%s", want, refused)
+		}
+	}
 	dl.Decisions.AcceptBlindTrust = tiad.Yes()
 	if _, err := s.Download(ctx, dl); err != nil {
 		t.Fatal(err)
 	}
-	line = waitLog(t, p, "outcome=loaded")
+	line = lastLine(waitLog(t, p, "outcome=loaded"), "audit download")
 	for _, want := range []string{`kept=["io-device-up" profinetName="io-device-up" address="192.0.2.30"]`, `keptDevices=["io-device-up"]`, "acceptBlindTrust=yes",
 		`blindTrust={since="`, `call="upload" session="s1" address="192.0.2.10" questions=["trust the TLS certificate of PLC_1`} {
 		if !strings.Contains(line, want) {
