@@ -3,6 +3,7 @@ package tiadtest_test
 import (
 	"fmt"
 	"io/fs"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1103,9 +1104,30 @@ func TestAgentJournalsTheHardwareAttestation(t *testing.T) {
 	if line := auditLine(tiad.KindDecisionRequired); !strings.Contains(line, `attestation={by="op\naudit download forged" at=unset `+text) || !strings.Contains(line, "acceptUnverifiedHardware=unanswered") {
 		t.Errorf("the refusal's audit line:\n%s", line)
 	}
+	// So does a refusal after the gate passed: tiad accepts the
+	// attestation only once nothing of its own refuses the download.
+	late := req
+	late.Decisions.StartAfter = nil
+	if _, err := s.Download(ctx, late); tiad.Kind(err) != tiad.KindDecisionRequired || !strings.Contains(err.Error(), "startAfter") {
+		t.Fatalf("no start-after: %v", err)
+	}
+	if line := auditLine(tiad.KindDecisionRequired + `:["start-after"]`); !strings.Contains(line, `attestation={by="op\naudit download forged" at=unset `+text) {
+		t.Errorf("the start-after refusal's audit line stamps a time:\n%s", line)
+	}
+	// One over the limit is refused, and journalled by its size only, so
+	// a request cannot flood the journal.
 	// The forged lines start nowhere: every audit line is tiad's own.
-	if n, m := strings.Count(p.Log(), "Z audit download"), strings.Count(p.Log(), "audit download"); n != m-6 {
-		t.Fatalf("%d audit lines and %d mentions (want 6 forged mentions inside quotes):\n%s", n, m, p.Log())
+	if n, m := strings.Count(p.Log(), "Z audit download"), strings.Count(p.Log(), "audit download"); n != m-8 {
+		t.Fatalf("%d audit lines and %d mentions (want 8 forged mentions inside quotes):\n%s", n, m, p.Log())
+	}
+	huge := req
+	huge.Attestation = &tiad.Attestation{By: "op", Text: strings.Repeat("flood ", 1000)}
+	status, b := rawPost(t, p, "/v1/sessions/"+s.ID+"/download", huge)
+	if status != http.StatusBadRequest {
+		t.Fatalf("an attestation over the limit: HTTP %d %s", status, b)
+	}
+	if line := auditLine(tiad.KindBadRequest); !strings.Contains(line, `text=<6000 bytes, over the limit>`) || strings.Contains(line, "flood") {
+		t.Errorf("the over-limit attestation's audit line:\n%s", line)
 	}
 }
 

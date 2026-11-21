@@ -233,9 +233,12 @@ namespace Tiad
                     hd["keptDevices"] = KeptDevice.ToJson(s.Kept);
                     throw new TiadException(409, kind, hwWhy + "; nothing was sent to the CPU", hd, false);
                 }
-                // When the attestation was accepted, by tiad's clock.
-                if (req.Hardware) req.Attestation.At = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", System.Globalization.CultureInfo.InvariantCulture);
             }
+            // A dry run passes the gate unanswered: it lists the question.
+            // That holds only while a dry run cannot load. If TIA runs one
+            // without asking, it loads (outcome_unknown, below), so before
+            // CanDryRun is ever true for tiad.Openness, a hardware dry run
+            // must need the opt-in too (#1166 review).
             // The devices an apply kept load too: a real download needs a
             // yes naming exactly them, checked before anything reaches the
             // CPU. A dry run lists the question instead.
@@ -268,6 +271,10 @@ namespace Tiad
             // One project per CPU: the first download claims the CPU for
             // this session, dry runs included, until it is closed.
             sessions.ClaimCpu(s, req.Address);
+            // The attestation is accepted here, once every refusal tiad
+            // makes itself has passed and just before TIA is called: by
+            // tiad's clock, never the request's.
+            if (req.Hardware && !req.DryRun) req.Attestation.At = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", System.Globalization.CultureInfo.InvariantCulture);
 
             bool haveProtection = req.Secrets.Protection != "";
             bool haveConfigurationPassword = req.Secrets.ConfigurationPassword != "";
@@ -405,7 +412,7 @@ namespace Tiad
             {
                 outcome = Kinds.OutcomeUnknown;
                 MayHaveStarted(req, acting);
-                throw Unknown("TIA approved the download but did not report a load", acting, false, result);
+                throw Unknown("TIA approved the download but did not report a load", acting);
             }
             // Success only on evidence (#789): TIA's result says loaded, and
             // an online compare right after, in this same call, is equal.

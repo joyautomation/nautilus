@@ -3,6 +3,7 @@ package tiadtest_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -148,6 +149,26 @@ func emptyFile(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return f
+}
+
+// rawPost posts body as JSON past the client's own checks, so the agent
+// itself decides.
+func rawPost(t *testing.T, p *tiadtest.Process, rawPath string, body any) (int, string) {
+	t.Helper()
+	b, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, _ := http.NewRequest(http.MethodPost, p.URL+rawPath, bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+p.Client().Token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, err.Error()
+	}
+	defer resp.Body.Close()
+	out, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, string(out)
 }
 
 func put(t *testing.T, p *tiadtest.Process, rawPath string, body []byte) (int, string) {

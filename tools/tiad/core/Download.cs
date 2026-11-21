@@ -192,7 +192,17 @@ namespace Tiad
         public string Audit()
         {
             if (By == "" && Text == "") return "unset";
-            return "{by=" + Json.Quote(By) + " at=" + (At == "" ? "unset" : At) + " text=" + Json.Quote(Text) + "}";
+            return "{by=" + Part(By, MaxBy) + " at=" + (At == "" ? "unset" : At) + " text=" + Part(Text, MaxText) + "}";
+        }
+
+        // Part is one part for the audit line: quoted, or only its size
+        // when it is over the limit, so a refused request cannot flood the
+        // journal (#1166 review).
+        static string Part(string s, int max)
+        {
+            int n = Encoding.UTF8.GetByteCount(s);
+            if (n > max) return "<" + n + " bytes, over the limit>";
+            return Json.Quote(s);
         }
 
         public Obj ToJson()

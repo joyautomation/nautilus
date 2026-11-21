@@ -617,7 +617,8 @@ both:
 - `decisions.acceptUnverifiedHardware: true`, the opt-in, and
 - `attestation`: the operator's statement that the CPU's hardware
   configuration is what they intend to load, `by` who (at most 200
-  bytes) and `text` (at most 2000 bytes), neither blank.
+  bytes) and `text` (at most 2000 bytes), neither blank. One over a
+  limit is a `bad_request`, journalled by its size only.
 
 This holds on every CPU, the bench included: tiad cannot tell a bench
 CPU from a customer's, so it never tries. Without the opt-in the

@@ -173,7 +173,7 @@ func contractHardwareGate(t *testing.T, a Target, s *tiad.Session, req tiad.Down
 	// Too long to journal is a bad request, whatever else it says, from
 	// the agent itself (the client checks first, so the body goes raw).
 	// The limits are bytes: 1001 two-byte runes are over 2000.
-	for _, long := range []tiad.Attestation{{By: strings.Repeat("b", tiad.MaxAttestationBy+1), Text: att.Text}, {By: att.By, Text: strings.Repeat("\u00e9", tiad.MaxAttestationText/2+1)}} {
+	for _, long := range []tiad.Attestation{{By: strings.Repeat("\u00e9", tiad.MaxAttestationBy/2+1), Text: att.Text}, {By: att.By, Text: strings.Repeat("\u00e9", tiad.MaxAttestationText/2+1)}} {
 		r := AcceptHardware(req)
 		r.Attestation = &long
 		if _, err := s.Download(ctx, r); tiad.Kind(err) != tiad.KindBadRequest || !strings.Contains(err.Error(), "bytes") {
@@ -183,6 +183,13 @@ func contractHardwareGate(t *testing.T, a Target, s *tiad.Session, req tiad.Down
 		if status != http.StatusBadRequest || envelopeKind(b) != tiad.KindBadRequest || !strings.Contains(string(b), "bytes") {
 			t.Fatalf("an attestation over the limit: HTTP %d %s", status, b)
 		}
+	}
+	// The time is tiad's alone: a request cannot send one.
+	body := map[string]any{"address": req.Address, "hardware": true, "software": true, "announced": true,
+		"decisions":   map[string]any{"acceptUnverifiedHardware": true, "stopCpu": true, "startAfter": true},
+		"attestation": map[string]string{"by": att.By, "text": att.Text, "at": "2020-01-01T00:00:00.000Z"}}
+	if status, b := rawJSON(t, a.Client(), "POST", "/v1/sessions/"+s.ID+"/download", body); status != http.StatusBadRequest || !strings.Contains(string(b), "unknown field") {
+		t.Fatalf("an attestation with its own time: HTTP %d %s", status, b)
 	}
 	// At the limits it is taken (refused later only for start-after).
 	r := AcceptHardware(req)
