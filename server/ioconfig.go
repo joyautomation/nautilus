@@ -295,7 +295,10 @@ func (s *Server) handleIO(w http.ResponseWriter, r *http.Request) {
 // the edit permission (a plain read gets /api/io, which carries no file
 // text), like staging a change.
 func (s *Server) handleIOFiles(w http.ResponseWriter, r *http.Request) {
-	if code, msg := s.authorizeProgramEdit(r); code != 0 {
+	// The permission only, not the online-edits switch: changes applied
+	// while edits were on must still be pullable into git after they are
+	// turned off.
+	if code, msg := s.authorizeWrite(r); code != 0 {
 		writeJSON(w, code, map[string]string{"error": msg})
 		return
 	}

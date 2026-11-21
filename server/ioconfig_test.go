@@ -540,10 +540,19 @@ func TestConfigFilesNeedTheEditPermission(t *testing.T) {
 	}
 	o := ioOptions(f, false)
 	o.IO = hook
-	for _, p := range []string{"/api/config/files", "/api/io/files"} {
-		if code := get(New(newTestRuntime(t), o).Handler(), p, ""); code != http.StatusForbidden {
-			t.Errorf("%s, online edits off: %d, want 403", p, code)
-		}
+	if code := get(New(newTestRuntime(t), o).Handler(), "/api/config/files", ""); code != http.StatusForbidden {
+		t.Errorf("/api/config/files, online edits off: %d, want 403", code)
+	}
+	// Changes applied while edits were on stay pullable into git once they
+	// are off: /api/io/files wants the permission (the token), not the
+	// online-edits switch.
+	o.AuthToken = "s3cret"
+	off := New(newTestRuntime(t), o).Handler()
+	if code := get(off, "/api/io/files", ""); code != http.StatusUnauthorized {
+		t.Errorf("/api/io/files, edits off, no token: %d, want 401", code)
+	}
+	if code := get(off, "/api/io/files", "s3cret"); code != http.StatusOK {
+		t.Errorf("/api/io/files, edits off, with the token: %d, want 200", code)
 	}
 	o = ioOptions(f, true)
 	o.IO, o.AuthToken = hook, "s3cret"
