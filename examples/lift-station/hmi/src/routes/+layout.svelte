@@ -160,4 +160,28 @@
 			display: none;
 		}
 	}
+	/* A phone: the status row would be wider than the window (max-content),
+	   clipping the signed-in name and Sign out. Let it take a row of its own
+	   and wrap, the account chip's name truncating before Sign out does. */
+	@media (max-width: 600px) {
+		.bar {
+			padding: 8px 12px;
+		}
+		.title {
+			flex: 1 1 100%;
+		}
+		.views {
+			flex: 1 1 auto;
+		}
+		.views a {
+			flex: 1;
+			text-align: center;
+		}
+		.status {
+			flex: 1 1 100%;
+			min-width: 0;
+			flex-wrap: wrap;
+			justify-content: flex-start;
+		}
+	}
 </style>

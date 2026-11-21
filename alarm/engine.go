@@ -506,19 +506,27 @@ var ErrNoAlarm = errors.New("no alarm")
 // journal records what it was told — which is worth saying plainly rather
 // than implying an identity the system does not have.
 func (e *Engine) Ack(ids []string, by string) (int, error) {
+	acked, err := e.AckIDs(ids, by)
+	return len(acked), err
+}
+
+// AckIDs is Ack that says which alarms it acknowledged (the ones that
+// actually changed), in the order it did them. The audit journal records
+// them for an acknowledge-all, whose target is only "*".
+func (e *Engine) AckIDs(ids []string, by string) ([]string, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	now := e.now()
+	acked := []string{}
 
 	if len(ids) == 0 || (len(ids) == 1 && ids[0] == "*") {
-		n := 0
 		for i := range e.inst {
 			if e.inst[i].ack(now, by) {
-				n++
+				acked = append(acked, e.inst[i].def.ID)
 				e.emit(&e.inst[i], now, KindAck, by)
 			}
 		}
-		return n, nil
+		return acked, nil
 	}
 
 	// Resolve every id before changing anything: a typo in one id should
@@ -527,18 +535,17 @@ func (e *Engine) Ack(ids []string, by string) (int, error) {
 	for _, id := range ids {
 		i, ok := e.byID[id]
 		if !ok {
-			return 0, fmt.Errorf("%w %q", ErrNoAlarm, id)
+			return nil, fmt.Errorf("%w %q", ErrNoAlarm, id)
 		}
 		idx = append(idx, i)
 	}
-	n := 0
 	for _, i := range idx {
 		if e.inst[i].ack(now, by) {
-			n++
+			acked = append(acked, e.inst[i].def.ID)
 			e.emit(&e.inst[i], now, KindAck, by)
 		}
 	}
-	return n, nil
+	return acked, nil
 }
 
 // Shelve silences one alarm until a deadline. There is no permanent shelf:

@@ -167,6 +167,13 @@ type auditRow struct {
 	check                                func(*testing.T, audit.Entry)
 }
 
+func ackAll(t *testing.T, s *Server) {
+	t.Helper()
+	if _, err := s.alarms.Ack(nil, "prep"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func plain(o Options) func(*testing.T) *Server {
 	return func(t *testing.T) *Server { return auditServer(t, o) }
 }
@@ -325,6 +332,16 @@ func auditRows() []auditRow {
 					t.Errorf("detail.by = %v, want the name the client gave", e.Detail["by"])
 				}
 			}},
+		// An acknowledge-all has the target "*"; the entry says which alarms it
+		// acknowledged (one entry for the one request).
+		{name: "ack all", pattern: "POST /api/alarms/ack", server: none,
+			method: "POST", path: "/api/alarms/ack", body: `{"all":true,"by":"op1"}`,
+			action: "alarm.ack", target: "*", user: "anonymous", source: "api", result: "ok",
+			after: []string{"HiTemp"}},
+		{name: "ack all, a second time", pattern: "POST /api/alarms/ack", server: none, prep: ackAll,
+			method: "POST", path: "/api/alarms/ack", body: `{"all":true,"by":"op1"}`,
+			action: "alarm.ack", target: "*", user: "anonymous", source: "api", result: "ok",
+			after: []string{}},
 		{name: "ack nothing", pattern: "POST /api/alarms/ack", server: none,
 			method: "POST", path: "/api/alarms/ack", body: `{"ids":[],"by":"op1"}`,
 			action: "alarm.ack", user: "anonymous", source: "api", result: "refused"},
@@ -1412,5 +1429,42 @@ func TestAuthRefusalsKeepTheirOwnWindow(t *testing.T) {
 	}
 	if summary == nil || summary.Target != "Valve_A" || summary.Detail["coalesced"] != 2*refuseFull+1-refuseFull {
 		t.Fatalf("auth summary = %+v", summary)
+	}
+}
+
+// The user filter takes what the Who column shows ("alice") as well as the
+// full principal ("user:alice"); a bare word never matches the other kinds
+// of principal by their prefix.
+func TestAuditUserFilterTakesTheBareName(t *testing.T) {
+	srv := New(newTestRuntime(t))
+	for _, u := range []string{"user:alice", "user:bob", "token:alice", "system"} {
+		srv.audit.record(audit.Entry{ID: audit.NewID(time.Now()), User: u, Source: "api", Action: "tag.write", Result: "ok"})
+	}
+	users := func(q string) string {
+		t.Helper()
+		rec := call(t, srv, "GET", "/api/audit?user="+q, "")
+		var out auditResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		var us []string
+		for _, e := range out.Entries {
+			us = append(us, e.User)
+		}
+		sort.Strings(us)
+		return strings.Join(us, ",")
+	}
+	for q, want := range map[string]string{
+		"alice":       "user:alice",
+		"ALICE":       "user:alice",
+		"user:alice":  "user:alice",
+		"token:alice": "token:alice",
+		"system":      "system",
+		"user":        "",
+		"ali":         "",
+	} {
+		if got := users(q); got != want {
+			t.Errorf("?user=%s matched %q, want %q", q, got, want)
+		}
 	}
 }

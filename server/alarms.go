@@ -229,6 +229,13 @@ type ackRequest struct {
 	By  string   `json:"by"`
 }
 
+// ackAnswer is the answer to POST /api/alarms/ack: how many changed, and
+// which (the journal records them for an acknowledge-all).
+type ackAnswer struct {
+	Acked int      `json:"acked"`
+	IDs   []string `json:"ids"`
+}
+
 func (s *Server) handleAlarmAck(w http.ResponseWriter, r *http.Request) {
 	if code, msg := s.authorizeWrite(r); code != 0 {
 		http.Error(w, msg, code)
@@ -264,12 +271,12 @@ func (s *Server) handleAlarmAck(w http.ResponseWriter, r *http.Request) {
 		s.alarmAckThroughLog(w, r, ids, s.recordBy(r, req.By))
 		return
 	}
-	n, err := s.alarms.Ack(ids, s.recordBy(r, req.By))
+	acked, err := s.alarms.AckIDs(ids, s.recordBy(r, req.By))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]int{"acked": n})
+	writeJSON(w, http.StatusOK, ackAnswer{Acked: len(acked), IDs: acked})
 }
 
 // shelveRequest is POST /api/alarms/shelve. Until is an RFC3339 timestamp
