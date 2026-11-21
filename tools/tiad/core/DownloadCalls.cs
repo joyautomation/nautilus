@@ -4,11 +4,13 @@
 // A download's refusals all come before TIA is asked anything: the
 // request's shape (announced, dry runs included), the target allowlist,
 // one station spec per CPU, a full compile since the last change, and one
-// project per CPU. Only then does ITia.Download run. It calls decide
-// exactly once, before anything loads; decide cancels unless every
-// question has an answer in the request, and then hands TIA one resolved
-// answer per question. Anything that leaves the CPU's state in doubt
-// answers outcome_unknown, never success and never a plain refusal.
+// project per CPU, and (for a real download) the start-after decision.
+// Only then does ITia.Download run. TIA asks its checks one at a time
+// (#789 S2b), so each is answered on its own, only from the request: the
+// first one the request does not answer yes cancels there. Anything that
+// leaves the CPU's state in doubt answers outcome_unknown, never success
+// and never a plain refusal, and names any acting answer tiad gave before
+// the cancel (DownloadChecks.Acting).
 
 using System;
 using System.Collections.Generic;
@@ -33,19 +35,60 @@ namespace Tiad
             return cfg.Targets.Contains(address);
         }
 
-        static TiadException Unknown(string why)
+        // Unknown is outcome_unknown: the CPU may or may not be loaded.
+        // acting is the acting answers tiad gave TIA before it ended
+        // (question ids): the answer names them, says plainly what they
+        // may have done to the CPU, and lists them (data.actingAnswers).
+        static TiadException Unknown(string why, List<string> acting)
         {
-            return new TiadException(500, Kinds.OutcomeUnknown,
-                why + "; the CPU may or may not be loaded: compare before anything else", null, false);
+            return Unknown(why, acting, false);
         }
 
-        // UnknownAfter is Unknown for a failure TIA's side reported after
-        // decide ran; one that ended the session (TIA died) keeps its own
-        // text, which names the fix, and stays fatal.
-        static TiadException UnknownAfter(TiadException e)
+        static TiadException Unknown(string why, List<string> acting, bool fatal)
         {
-            if (e.Fatal) return new TiadException(500, Kinds.OutcomeUnknown, e.Message + "; the CPU may or may not be loaded", null, true);
-            return Unknown("TIA failed during the download (" + e.Message + ")");
+            string c = DownloadChecks.Consequence(acting);
+            string msg = why + (c == "" ? "" : "; " + c) + "; the CPU may or may not be loaded";
+            if (!fatal) msg += ": compare before anything else";
+            return new TiadException(500, Kinds.OutcomeUnknown, msg, ActingData(acting), fatal);
+        }
+
+        static Obj ActingData(List<string> acting)
+        {
+            if (acting == null || acting.Count == 0) return null;
+            var l = new List<object>();
+            foreach (string a in acting) l.Add(a);
+            var data = new Obj();
+            data["actingAnswers"] = l;
+            return data;
+        }
+
+        // WithActing is TIA's side's own outcome_unknown, which already
+        // says the CPU is in doubt, with the acting answers tiad gave
+        // named.
+        static TiadException WithActing(TiadException e, List<string> acting)
+        {
+            string c = DownloadChecks.Consequence(acting);
+            if (c == "") return e;
+            return new TiadException(e.Status, e.Kind, e.Message + "; " + c, ActingData(acting), e.Fatal);
+        }
+
+        // MayHaveStarted adds start-after to the acting answers of a real
+        // download whose request said start it, when it ends in doubt
+        // after TIA's call: TIA's after-download callback may have written
+        // StartModule before the failure (#1154 review).
+        static void MayHaveStarted(DownloadRequest req, List<string> acting)
+        {
+            if (req.DryRun || !req.Decisions.StartAfter.HasValue || !req.Decisions.StartAfter.Value) return;
+            if (!acting.Contains(QuestionIds.StartAfter)) acting.Add(QuestionIds.StartAfter);
+        }
+
+        // UnknownAfter is Unknown for a failure TIA's side reported once it
+        // asked a check; one that ended the session (TIA died) keeps its
+        // own text, which names the fix, and stays fatal.
+        static TiadException UnknownAfter(TiadException e, List<string> acting)
+        {
+            if (e.Fatal) return Unknown(e.Message, acting, true);
+            return Unknown("TIA failed during the download (" + e.Message + ")", acting);
         }
 
         static string Ids(List<Question> qs)
@@ -102,9 +145,10 @@ namespace Tiad
                 // appear only as set or unset.
                 string asked = "";
                 string outcome = "";
+                var acting = new List<string>();
                 try
                 {
-                    object result = DownloadChecked(s, req, ref asked, ref outcome);
+                    object result = DownloadChecked(s, req, ref asked, ref outcome, acting);
                     return result;
                 }
                 catch (TiadException e)
@@ -119,15 +163,15 @@ namespace Tiad
                 }
                 finally
                 {
-                    Log.Line("audit download session={0} project={1} address={2} hardware={3} software={4} dryRun={5} announced={6} {7} protection={8} configurationPassword={9} kept=[{10}] asked=[{11}] outcome={12}",
+                    Log.Line("audit download session={0} project={1} address={2} hardware={3} software={4} dryRun={5} announced={6} {7} protection={8} configurationPassword={9} kept=[{10}] asked=[{11}] acting=[{12}] outcome={13}",
                         s.Id, Json.Quote(s.Project), Json.Quote(req.Address), req.Hardware, req.Software, req.DryRun, req.Announced,
                         AuditDecisions(req.Decisions), req.Secrets.Protection == "" ? "unset" : "set",
-                        req.Secrets.ConfigurationPassword == "" ? "unset" : "set", AuditKept(s.Kept), asked, outcome);
+                        req.Secrets.ConfigurationPassword == "" ? "unset" : "set", AuditKept(s.Kept), asked, string.Join(",", Quoted(acting).ToArray()), outcome);
                 }
             });
         }
 
-        object DownloadChecked(Session s, DownloadRequest req, ref string asked, ref string outcome)
+        object DownloadChecked(Session s, DownloadRequest req, ref string asked, ref string outcome, List<string> acting)
         {
             string bad = req.Validate();
             if (bad != null) throw TiadException.BadRequest("{0}", bad);
@@ -164,6 +208,19 @@ namespace Tiad
                 kd["keptDevices"] = KeptDevice.ToJson(s.Kept);
                 throw new TiadException(409, Kinds.DecisionRequired, keptWhy + "; nothing was sent to the CPU", kd, false);
             }
+            // Whether the CPU starts after loading is decided before TIA
+            // is called: TIA asks it, if at all, only after loading. A dry
+            // run never loads, so it needs no answer.
+            if (!req.DryRun && !req.Decisions.StartAfter.HasValue)
+            {
+                var sq = new Question { Id = QuestionIds.StartAfter, Message = "start the CPU after loading", Detail = DownloadDecider.StartAfterType };
+                asked = Json.Quote(QuestionIds.StartAfter);
+                outcome = Kinds.DecisionRequired + ":[" + asked + "]";
+                var sd = new Obj();
+                sd["questions"] = Question.ToJson(new List<Question> { sq });
+                sd["keptDevices"] = KeptDevice.ToJson(s.Kept);
+                throw new TiadException(409, Kinds.DecisionRequired, "the request does not say whether the CPU starts after loading (decisions.startAfter); nothing was sent to the CPU", sd, false);
+            }
             // The CPU must still be the one tiad pinned (section 3.8),
             // before a dry run too: it reaches the CPU.
             CheckDevicePin(s, req.Address, req.DryRun ? "dry run" : "download");
@@ -175,20 +232,37 @@ namespace Tiad
             bool haveConfigurationPassword = req.Secrets.ConfigurationPassword != "";
             var unanswered = new List<Question>();
             var declined = new List<Question>();
-            List<Question> askedQs = null;
-            int decided = 0;
-            bool approved = false;
-            Func<List<Question>, List<Answer>> decide = delegate(List<Question> qs)
+            var askedQs = new List<Question>();
+            int calls = 0;
+            bool cancelled = false;
+            // answer runs once per check TIA asks, in TIA's order. Each is
+            // answered on its own, only from the request; the first one
+            // not answered yes cancels the download there, and from then
+            // on nothing is approved. A dry run cancels at the first.
+            Func<Question, Answer> answer = delegate(Question q0)
             {
-                decided++;
-                if (decided > 1) return null; // a second decide is a broken ITia: cancel it
-                askedQs = new List<Question>();
-                foreach (var q in qs ?? new List<Question>()) askedQs.Add(q.Copy());
-                if (req.DryRun) return null;
-                DownloadRule.Resolve(askedQs, req.Decisions, haveProtection, haveConfigurationPassword, unanswered, declined);
-                if (unanswered.Count > 0 || declined.Count > 0) return null;
-                approved = true;
-                return DownloadRule.Answers(askedQs, req.Decisions);
+                calls++;
+                var q = q0 == null ? new Question { Id = QuestionIds.Other } : q0.Copy();
+                askedQs.Add(q);
+                if (cancelled || req.DryRun)
+                {
+                    cancelled = true;
+                    return null;
+                }
+                var one = new List<Question> { q };
+                int u = unanswered.Count, d = declined.Count;
+                DownloadRule.Resolve(one, req.Decisions, haveProtection, haveConfigurationPassword, unanswered, declined);
+                if (unanswered.Count > u || declined.Count > d)
+                {
+                    cancelled = true;
+                    return null;
+                }
+                Answer a = DownloadRule.Answers(one, req.Decisions)[0];
+                // Recorded when given, before TIA's side writes it: a write
+                // that then fails over-reports, which is the safe side.
+                // Start-after answered no (NoAction) changes nothing.
+                if (DownloadChecks.Acting(q.Id) && !(q.Id == QuestionIds.StartAfter && !a.Yes)) acting.Add(q.Id);
+                return a;
             };
 
             DownloadOutcome result;
@@ -196,38 +270,49 @@ namespace Tiad
             {
                 result = OnSession(s, delegate(ITia t)
                 {
-                    return t.Download(s.Handle, req.Address, req.Hardware, req.Software, req.Secrets, decide);
+                    // A dry run never starts the CPU, whatever the request
+                    // says (#1154 review): if TIA loads it without asking,
+                    // start-after is NoAction.
+                    return t.Download(s.Handle, req.Address, req.Hardware, req.Software, req.Secrets, req.DryRun ? (bool?)null : req.Decisions.StartAfter, answer);
                 });
             }
             catch (TiadException e)
             {
-                // An outcome_unknown from TIA's side (its download had begun
-                // when it failed) passes through as it is.
-                if (askedQs != null) asked = Ids(askedQs);
-                // TIA failed once the download was decided. Whether a
-                // cancel loads nothing is unproven, so from there on a
-                // failure leaves the CPU in doubt.
-                if (decided > 0 && e.Kind == Kinds.OperationFailed)
+                asked = Ids(askedQs);
+                // An outcome_unknown from TIA's side (its download had
+                // begun when it failed) passes through, with the acting
+                // answers tiad gave named.
+                if (e.Kind == Kinds.OutcomeUnknown)
                 {
-                    if (askedQs != null) asked = Ids(askedQs);
                     outcome = Kinds.OutcomeUnknown;
-                    throw UnknownAfter(e);
+                    MayHaveStarted(req, acting);
+                    throw WithActing(e, acting);
+                }
+                // TIA failed once it asked a check: whether it acted on an
+                // answer, or loaded, is unknown, so from there on a failure
+                // leaves the CPU in doubt.
+                if (calls > 0 && e.Kind == Kinds.OperationFailed)
+                {
+                    outcome = Kinds.OutcomeUnknown;
+                    MayHaveStarted(req, acting);
+                    throw UnknownAfter(e, acting);
                 }
                 throw;
             }
-            if (askedQs != null) asked = Ids(askedQs);
+            asked = Ids(askedQs);
 
-            // The ITia contract, checked: decide exactly once, and a load
-            // only when decide approved.
-            if (decided != 1)
+            // The ITia contract, checked: a load only when nothing was
+            // cancelled, and a dry run never loads.
+            if (result.Loaded && (cancelled || req.DryRun))
             {
                 outcome = Kinds.OutcomeUnknown;
-                throw Unknown("TIA's side called decide " + decided + " times, not once");
+                if (calls == 0) throw Unknown("TIA ran the dry run's download without asking a single check, so tiad could not cancel it", acting);
+                throw Unknown("TIA loaded the CPU although tiad cancelled the download", acting);
             }
-            if (result.Loaded && !approved)
+            if (!result.Loaded && calls == 0)
             {
                 outcome = Kinds.OutcomeUnknown;
-                throw Unknown("TIA loaded the CPU although tiad cancelled the download");
+                throw Unknown("TIA's side neither asked a check nor loaded", acting);
             }
             var o = new Obj();
             if (req.DryRun)
@@ -238,11 +323,22 @@ namespace Tiad
                 // Provisional until S2 proves a cancelled download loads
                 // nothing (section 3.5).
                 o["provisional"] = true;
+                // TIA asks one check at a time, so a dry run, cancelled at
+                // the first, sees only that one: the list is incomplete.
+                o["questionsIncomplete"] = true;
                 var dq = new List<Question>(askedQs);
                 if (s.Kept.Count > 0) dq.Add(KeptRule.Question(s.Kept));
                 o["questions"] = Question.ToJson(dq);
                 o["keptDevices"] = KeptDevice.ToJson(s.Kept);
                 return o;
+            }
+            // A cancel after an acting answer is never a clean refusal: TIA
+            // may have acted on that answer before it asked the next check.
+            if ((unanswered.Count > 0 || declined.Count > 0) && acting.Count > 0)
+            {
+                outcome = Kinds.OutcomeUnknown;
+                var at = unanswered.Count > 0 ? unanswered[0] : declined[0];
+                throw Unknown("tiad cancelled the download at TIA's " + at.Id + " check, which the request does not answer yes", acting);
             }
             if (unanswered.Count > 0)
             {
@@ -250,7 +346,7 @@ namespace Tiad
                 var d = new Obj();
                 d["questions"] = Question.ToJson(unanswered);
                 d["keptDevices"] = KeptDevice.ToJson(s.Kept);
-                throw new TiadException(409, Kinds.DecisionRequired, unanswered.Count + " question(s) have no answer; nothing was loaded", d, false);
+                throw new TiadException(409, Kinds.DecisionRequired, "TIA asked a check the request does not answer; nothing was loaded (TIA asks one check at a time: answer it, and it may ask another)", d, false);
             }
             if (declined.Count > 0)
             {
@@ -258,16 +354,52 @@ namespace Tiad
                 var d = new Obj();
                 d["questions"] = Question.ToJson(declined);
                 d["keptDevices"] = KeptDevice.ToJson(s.Kept);
-                throw new TiadException(409, Kinds.Declined, declined.Count + " question(s) were answered no; nothing was loaded", d, false);
+                throw new TiadException(409, Kinds.Declined, "TIA asked a check the request answers no; nothing was loaded", d, false);
             }
             if (!result.Loaded)
             {
                 outcome = Kinds.OutcomeUnknown;
-                throw Unknown("TIA approved the download but did not report a load");
+                MayHaveStarted(req, acting);
+                throw Unknown("TIA approved the download but did not report a load", acting);
             }
-            outcome = "loaded state=" + (result.State == "" ? "unknown" : result.State);
+            // Success only on evidence (#789): TIA's result says loaded, and
+            // an online compare right after, in this same call, is equal.
+            // Anything less is in doubt, naming the part that failed. The
+            // compare covers the PLC software only: Openness has no online
+            // hardware compare, so a hardware download is never verified
+            // here (hardwareVerified: false).
+            var diffs = new List<Difference>();
+            bool equal;
+            try
+            {
+                equal = OnSession(s, delegate(ITia t) { return t.Compare(s.Handle, req.Address, diffs); });
+            }
+            catch (TiadException e)
+            {
+                outcome = Kinds.OutcomeUnknown;
+                MayHaveStarted(req, acting);
+                throw Unknown("TIA reported the download loaded, but the compare right after it failed (" + e.Message + ")", acting, e.Fatal);
+            }
+            if (!equal)
+            {
+                outcome = Kinds.OutcomeUnknown;
+                MayHaveStarted(req, acting);
+                var names = new List<string>();
+                foreach (var d in diffs) names.Add(d.Object + (d.State == "" ? "" : " " + d.State));
+                throw Unknown("TIA reported the download loaded, but the compare right after it differs (" + (names.Count == 0 ? "no differences named" : string.Join(", ", names.ToArray())) + ")", acting);
+            }
+            outcome = "loaded state=" + (result.State == "" ? "unknown" : result.State) + " compare=equal" + (req.Hardware ? " hardwareVerified=false" : "");
             o["dryRun"] = false;
             o["downloaded"] = true;
+            o["compareEqual"] = true;
+            if (req.Hardware)
+            {
+                o["hardwareVerified"] = false;
+                o["warning"] = "the hardware configuration is not verified: Openness has no online hardware compare, so only the PLC software was compared after loading";
+            }
+            // TIA's messages come back on success; on a failure they are in
+            // the outcome_unknown text (DownloadDecider.Finish).
+            if (result.Messages != "") o["messages"] = result.Messages;
             o["questions"] = Question.ToJson(askedQs);
             o["keptDevices"] = KeptDevice.ToJson(s.Kept);
             if (result.State != "") o["state"] = result.State;

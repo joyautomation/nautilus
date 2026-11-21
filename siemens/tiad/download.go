@@ -138,13 +138,63 @@ type DownloadResult struct {
 	Downloaded bool `json:"downloaded"`
 	// Provisional marks a dry run: that a cancelled download loads
 	// nothing is unproven until S2 (siemens-ide.md §3.5).
-	Provisional bool       `json:"provisional,omitempty"`
-	Questions   []Question `json:"questions"`
-	State       string     `json:"state,omitempty"` // "RUN" | "STOP" | "" (unknown)
+	Provisional bool `json:"provisional,omitempty"`
+	// QuestionsIncomplete marks a dry run's questions as only the
+	// first check TIA asked: TIA asks its checks one at a time and lists
+	// them nowhere, so a dry run, cancelled at the first, sees no more
+	// (#789 S2b).
+	QuestionsIncomplete bool       `json:"questionsIncomplete,omitempty"`
+	Questions           []Question `json:"questions"`
+	// CompareEqual is true on every successful real download: success
+	// needs TIA's result to say loaded AND an online compare right after,
+	// in the same call, to be equal (#789); anything less is
+	// outcome_unknown.
+	CompareEqual bool `json:"compareEqual,omitempty"`
+	// HardwareVerified is set (false) on a download that loaded hardware:
+	// the compare covers the PLC software only, since Openness has no
+	// online hardware compare. Show it as a warning, never a silent
+	// success. Warning says so in words.
+	HardwareVerified *bool  `json:"hardwareVerified,omitempty"`
+	Warning          string `json:"warning,omitempty"`
+	// Messages is TIA's download result's messages, when it has any.
+	Messages string `json:"messages,omitempty"`
+	State    string `json:"state,omitempty"` // "RUN" | "STOP" | "" (unknown)
 	// KeptDevices are the devices the last apply kept as found: the
 	// download loads them too. A decision_required or declined error
 	// lists them as well (KeptDevicesOf), before anything is loaded.
 	KeptDevices []KeptDevice `json:"keptDevices"`
+}
+
+// Acting reports whether answering the question id can change the CPU
+// itself (stop it, start it, overwrite or reset its data), as opposed to a
+// password or a certificate, which only lets the download go on. TIA asks
+// its checks one at a time and may act on an answer before it asks the
+// next (#789 S2b), so a download cancelled after an acting answer is
+// outcome_unknown, naming it (ActingAnswers). An ID tiad does not know is
+// acting.
+func Acting(id string) bool {
+	switch id {
+	case QuestionPassword, QuestionConfigurationPassword, QuestionCertificate:
+		return false
+	}
+	return true
+}
+
+// ActingAnswers returns the acting answers (question IDs) the agent gave
+// TIA before a download ended outcome_unknown: what TIA may already have
+// done to the CPU (a stop, a start) even though nothing may be loaded.
+func ActingAnswers(err error) []string {
+	var e *Error
+	if !errors.As(err, &e) || len(e.Data) == 0 {
+		return nil
+	}
+	var d struct {
+		ActingAnswers []string `json:"actingAnswers"`
+	}
+	if json.Unmarshal(e.Data, &d) != nil {
+		return nil
+	}
+	return d.ActingAnswers
 }
 
 // KeptDevicesOf returns the kept devices a decision_required or declined

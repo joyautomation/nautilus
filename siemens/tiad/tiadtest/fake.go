@@ -1226,6 +1226,15 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 			msg:  why + "; nothing was sent to the CPU",
 			data: map[string]any{"questions": []tiad.Question{tiad.KeptQuestion(s.kept)}, "keptDevices": keptList(s.kept)}}
 	}
+	// Whether the CPU starts after loading is decided before TIA is
+	// called: TIA asks it, if at all, only after loading. A dry run never
+	// loads, so it needs no answer.
+	if !req.DryRun && req.Decisions.StartAfter == nil {
+		return nil, &failure{status: http.StatusConflict, kind: tiad.KindDecisionRequired,
+			msg: "the request does not say whether the CPU starts after loading (decisions.startAfter); nothing was sent to the CPU",
+			data: map[string]any{"questions": []tiad.Question{{ID: tiad.QuestionStartAfter, Message: "start the CPU after loading", Detail: "StartModules"}},
+				"keptDevices": keptList(s.kept)}}
+	}
 	if fl := f.checkDevicePin(req.Address, call); fl != nil {
 		return nil, fl
 	}
@@ -1248,40 +1257,55 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 		qs = append(append([]tiad.Question{}, qs...), tiad.Question{ID: tiad.QuestionConfigurationPassword,
 			Message: "password for the confidential PLC configuration data", Detail: "PlcMasterSecretPassword"})
 	}
-	// As tiad.Openness does: whether the CPU starts after loading is
-	// always decided before loading.
-	startAsked := false
-	for _, q := range qs {
-		startAsked = startAsked || q.ID == tiad.QuestionStartAfter
-	}
-	if !startAsked {
-		qs = append(append([]tiad.Question{}, qs...), tiad.Question{ID: tiad.QuestionStartAfter, Message: "start the CPU after loading", Detail: "StartModules"})
-	}
-	// A dry run loading nothing is the contract tiad aims for. Whether
-	// Openness can list the checks and cancel with nothing loaded is
-	// provisional until S2 (siemens-ide.md §3.5); the fake models the aim.
-	if req.DryRun {
-		if len(s.kept) > 0 {
-			qs = append(append([]tiad.Question{}, qs...), tiad.KeptQuestion(s.kept))
-		}
-		return tiad.DownloadResult{DryRun: true, Provisional: true, Questions: qs, KeptDevices: keptList(s.kept)}, nil
-	}
+	// As tiad.Openness does (#789 S2b): TIA asks its checks one at a
+	// time, and each is answered on its own, only from the request. The
+	// first not answered yes cancels there; a dry run cancels at the
+	// first. A check tiad does not know is other.
 	haveProtection := req.Secrets != nil && req.Secrets.Protection != ""
 	haveConfigurationPassword := req.Secrets != nil && req.Secrets.ConfigurationPassword != ""
-	unanswered, declined := tiad.Resolve(qs, req.Decisions, haveProtection, haveConfigurationPassword)
-	if len(unanswered) > 0 {
-		return nil, &failure{status: http.StatusConflict, kind: tiad.KindDecisionRequired,
-			msg:  fmt.Sprintf("%d question(s) have no answer; nothing was loaded", len(unanswered)),
-			data: map[string]any{"questions": unanswered, "keptDevices": keptList(s.kept)}}
-	}
-	if len(declined) > 0 {
+	var asked []tiad.Question
+	var acting []string
+	for _, q := range qs {
+		if !knownQuestion(q.ID) {
+			q.ID = tiad.QuestionOther
+		}
+		asked = append(asked, q)
+		if req.DryRun {
+			dq := append([]tiad.Question{}, asked...)
+			if len(s.kept) > 0 {
+				dq = append(dq, tiad.KeptQuestion(s.kept))
+			}
+			return tiad.DownloadResult{DryRun: true, Provisional: true, QuestionsIncomplete: true, Questions: dq, KeptDevices: keptList(s.kept)}, nil
+		}
+		unanswered, declined := tiad.Resolve([]tiad.Question{q}, req.Decisions, haveProtection, haveConfigurationPassword)
+		if len(unanswered) == 0 && len(declined) == 0 {
+			// Start-after answered no (NoAction) changes nothing.
+			noAction := q.ID == tiad.QuestionStartAfter && (req.Decisions.StartAfter == nil || !*req.Decisions.StartAfter)
+			if tiad.Acting(q.ID) && !noAction {
+				acting = append(acting, q.ID)
+			}
+			continue
+		}
+		// A cancel after an acting answer is never a clean refusal: TIA
+		// may have acted on it before it asked this check.
+		if len(acting) > 0 {
+			return nil, outcomeUnknown("tiad cancelled the download at TIA's "+q.ID+" check, which the request does not answer yes", acting)
+		}
+		if len(unanswered) > 0 {
+			return nil, &failure{status: http.StatusConflict, kind: tiad.KindDecisionRequired,
+				msg:  "TIA asked a check the request does not answer; nothing was loaded (TIA asks one check at a time: answer it, and it may ask another)",
+				data: map[string]any{"questions": unanswered, "keptDevices": keptList(s.kept)}}
+		}
 		return nil, &failure{status: http.StatusConflict, kind: tiad.KindDeclined,
-			msg:  fmt.Sprintf("%d question(s) were answered no; nothing was loaded", len(declined)),
+			msg:  "TIA asked a check the request answers no; nothing was loaded",
 			data: map[string]any{"questions": declined, "keptDevices": keptList(s.kept)}}
+	}
+	if asked == nil {
+		asked = []tiad.Question{}
 	}
 	state := "RUN"
 	stopped := false
-	for _, q := range qs {
+	for _, q := range asked {
 		if q.ID == tiad.QuestionStopCPU {
 			stopped = true
 		}
@@ -1294,7 +1318,74 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 	f.downloads = append(f.downloads, Download{Session: s.id, Request: rec, State: state})
 	f.loaded[req.Address] = s.id
 	s.changed = false
-	return tiad.DownloadResult{Downloaded: true, Questions: qs, State: state, KeptDevices: keptList(s.kept)}, nil
+	// A dry run TIA asks nothing about cannot be cancelled: TIA loads.
+	if req.DryRun {
+		return nil, outcomeUnknown("TIA ran the dry run's download without asking a single check, so tiad could not cancel it", nil)
+	}
+	// Success only on evidence: an online compare right after, in the
+	// same call, must be equal (it covers the PLC software only). The
+	// compare failing, TIA's result state, and start-after named after a
+	// load that ends in doubt are modelled by the C# fake only (process
+	// tests, knobs downloadState and compareDiffers).
+	if f.CompareResult != nil && !f.CompareResult.Equal {
+		var names []string
+		for _, d := range f.CompareResult.Differences {
+			names = append(names, strings.TrimSpace(d.Object+" "+d.State))
+		}
+		return nil, outcomeUnknown("TIA reported the download loaded, but the compare right after it differs ("+strings.Join(names, ", ")+")", acting)
+	}
+	res := tiad.DownloadResult{Downloaded: true, Questions: asked, State: state, KeptDevices: keptList(s.kept), CompareEqual: true}
+	if req.Hardware {
+		res.HardwareVerified = new(bool)
+		res.Warning = "the hardware configuration is not verified: Openness has no online hardware compare, so only the PLC software was compared after loading"
+	}
+	return res, nil
+}
+
+// knownQuestion is whether id is a pre-download check tiad maps from a
+// TIA configuration type (siemens-ide.md §3.5).
+func knownQuestion(id string) bool {
+	switch id {
+	case tiad.QuestionStopCPU, tiad.QuestionReinitialize, tiad.QuestionOverwrite, tiad.QuestionStartAfter,
+		tiad.QuestionPassword, tiad.QuestionConfigurationPassword, tiad.QuestionCertificate:
+		return true
+	}
+	return false
+}
+
+// outcomeUnknown is the agent's outcome_unknown for a download, naming
+// the acting answers given before it ended and what they may have done.
+func outcomeUnknown(why string, acting []string) *failure {
+	msg := why
+	var data any
+	if len(acting) > 0 {
+		// In the agent's order: stop, start, other.
+		var stop, start, other bool
+		for _, id := range acting {
+			switch id {
+			case tiad.QuestionStopCPU, tiad.QuestionReinitialize:
+				stop = true
+			case tiad.QuestionStartAfter:
+				start = true
+			default:
+				other = true
+			}
+		}
+		var l []string
+		if stop {
+			l = append(l, "TIA may already have stopped the CPU: check its mode and start it")
+		}
+		if start {
+			l = append(l, "TIA may already have started the CPU: check its mode")
+		}
+		if other {
+			l = append(l, "TIA may already have acted on them: check the CPU's mode and compare")
+		}
+		msg += "; tiad had answered " + strings.Join(acting, ", ") + " before the download ended, so " + strings.Join(l, "; ")
+		data = map[string]any{"actingAnswers": acting}
+	}
+	return &failure{status: http.StatusInternalServerError, kind: tiad.KindOutcomeUnknown,
+		msg: msg + "; the CPU may or may not be loaded: compare before anything else", data: data}
 }
 
 func (f *Fake) compare(r *http.Request) (any, *failure) {

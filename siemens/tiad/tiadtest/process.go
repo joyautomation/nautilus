@@ -46,11 +46,13 @@ type Script struct {
 	// LoadDespiteCancel makes the fake TIA load even when the agent
 	// cancels: a misbehaving TIA, to prove the agent reports it.
 	LoadDespiteCancel bool `json:"loadDespiteCancel,omitempty"`
-	// DecideCalls is how often the fake calls decide (nil: once, as the
-	// ITia contract says; 0 or 2 break it).
-	DecideCalls *int `json:"decideCalls,omitempty"`
-	// FailAfterDecide makes the fake fail the way TIA fails after decide
-	// answered.
+	// AskFirst is how many times the fake's TIA asks its first check
+	// (nil: once, as TIA does; 0 asks nothing at all and loads; 2 asks
+	// the same configuration twice).
+	AskFirst *int `json:"askFirst,omitempty"`
+	// FailAfterDecide makes the fake fail the way TIA fails once its
+	// checks were asked, or after a cancel, with its own exception that
+	// carries no decline.
 	FailAfterDecide string `json:"failAfterDecide,omitempty"`
 	// FailInDoubt makes the fake fail the way TIA fails inside a
 	// download it had begun, before asking anything.
@@ -64,6 +66,17 @@ type Script struct {
 	// run loads nothing (tiad.Openness until S2b): the agent refuses dry
 	// runs.
 	NoDryRun bool `json:"noDryRun,omitempty"`
+	// CleanCancel makes the fake's TIA side answer each check itself,
+	// without the decider, and report a clean cancel (nothing loaded,
+	// nothing thrown) at the first unanswered one, even after acting
+	// answers: a TIA side breaking the ITia contract.
+	CleanCancel bool `json:"cleanCancel,omitempty"`
+	// CompareDiffers makes every compare differ, even right after a
+	// download: a CPU that did not take what was sent.
+	CompareDiffers bool `json:"compareDiffers,omitempty"`
+	// DownloadState is the state TIA's download result reports when it
+	// ran ("" = Success; "Error" = a failed load).
+	DownloadState string `json:"downloadState,omitempty"`
 	// UploadAsksTLS makes going online for an upload ask TLS trust, as a
 	// CPU with secure PG/PC communication and no known certificate does.
 	UploadAsksTLS bool `json:"uploadAsksTls,omitempty"`

@@ -448,14 +448,22 @@ func TestAgentRefusesDownloadsBeforeTIA(t *testing.T) {
 	if n := countCalls(p.Calls(t), "Download"); n != 0 {
 		t.Fatalf("TIA heard of %d refused downloads", n)
 	}
-	// A dry run and an unanswered download reach TIA and load nothing.
+	// A download that does not say whether the CPU starts after loading
+	// is refused before TIA hears of it.
 	if _, err := s.Compile(ctx, true, true); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := s.Download(ctx, tiad.DownloadRequest{Address: "192.0.2.10", Software: true, Announced: true}); tiad.Kind(err) != tiad.KindDecisionRequired || len(tiad.Questions(err)) != 1 || tiad.Questions(err)[0].ID != tiad.QuestionStartAfter {
+		t.Fatalf("no start-after: %v", err)
+	}
+	if n := countCalls(p.Calls(t), "Download"); n != 0 {
+		t.Fatalf("TIA heard of a download without start-after (%d)", n)
+	}
+	// A dry run and an unanswered download reach TIA and load nothing.
 	if _, err := s.Download(ctx, tiad.DownloadRequest{Address: "192.0.2.10", Software: true, DryRun: true, Announced: true}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Download(ctx, tiad.DownloadRequest{Address: "192.0.2.10", Software: true, Announced: true}); tiad.Kind(err) != tiad.KindDecisionRequired {
+	if _, err := s.Download(ctx, tiad.DownloadRequest{Address: "192.0.2.10", Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}}); tiad.Kind(err) != tiad.KindDecisionRequired {
 		t.Fatalf("unanswered: %v", err)
 	}
 	if n := countCalls(p.Calls(t), "Download"); n != 2 {
@@ -474,9 +482,9 @@ func TestAgentRefusesDownloadsBeforeTIA(t *testing.T) {
 func TestAgentSaysWhenTheOutcomeIsUnknown(t *testing.T) {
 	p, s := downloadReady(t)
 	dry := tiad.DownloadRequest{Address: "192.0.2.10", Software: true, DryRun: true, Announced: true}
-	real := tiad.DownloadRequest{Address: "192.0.2.10", Software: true, Announced: true}
+	real := tiad.DownloadRequest{Address: "192.0.2.10", Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}}
 	no := real
-	no.Decisions = tiad.Decisions{StopCPU: tiad.No()}
+	no.Decisions = tiad.Decisions{StopCPU: tiad.No(), StartAfter: tiad.No()}
 	yes := real
 	yes.Decisions = tiad.Decisions{StopCPU: tiad.Yes(), StartAfter: tiad.No()}
 	stop := []tiad.Question{{ID: tiad.QuestionStopCPU}}
@@ -488,9 +496,15 @@ func TestAgentSaysWhenTheOutcomeIsUnknown(t *testing.T) {
 		{"loads a dry run", tiadtest.Script{Questions: stop, LoadDespiteCancel: true}, dry},
 		{"loads an unanswered download", tiadtest.Script{Questions: stop, LoadDespiteCancel: true}, real},
 		{"loads a declined download", tiadtest.Script{Questions: stop, LoadDespiteCancel: true}, no},
-		{"never asks, dry run", tiadtest.Script{DecideCalls: intp(0)}, dry},
-		{"never asks", tiadtest.Script{DecideCalls: intp(0)}, yes},
-		{"asks twice", tiadtest.Script{Questions: stop, DecideCalls: intp(2)}, yes},
+		// A dry run TIA asks nothing about cannot be cancelled.
+		{"never asks, dry run", tiadtest.Script{Questions: stop, AskFirst: intp(0)}, dry},
+		{"asks twice", tiadtest.Script{Questions: stop, AskFirst: intp(2)}, yes},
+		// Stop answered yes and written, then a check the request does
+		// not answer: TIA may already have stopped the CPU.
+		{"cancels after an acting answer", tiadtest.Script{Questions: []tiad.Question{{ID: tiad.QuestionStopCPU}, {ID: tiad.QuestionOverwrite}}}, yes},
+		// TIA's side fails plainly (not in doubt) after asking a check:
+		// the agent itself says outcome_unknown.
+		{"fails plainly after a check", tiadtest.Script{CleanCancel: true, Questions: stop, FailAfterDecide: "The connection to the CPU was lost"}, yes},
 		{"fails after an approval", tiadtest.Script{Questions: stop, FailAfterDecide: "The connection to the CPU was lost"}, yes},
 		{"fails after a cancel", tiadtest.Script{Questions: stop, FailAfterDecide: "The connection to the CPU was lost"}, real},
 		{"fails after a dry run", tiadtest.Script{FailAfterDecide: "The connection to the CPU was lost"}, dry},
@@ -505,11 +519,68 @@ func TestAgentSaysWhenTheOutcomeIsUnknown(t *testing.T) {
 			t.Errorf("%s: %v, want a non-fatal outcome_unknown", tc.name, err)
 			continue
 		}
+		if tc.name == "cancels after an acting answer" && (strings.Join(tiad.ActingAnswers(err), ",") != "stop-cpu" || !strings.Contains(err.Error(), "TIA may already have stopped the CPU: check its mode and start it")) {
+			t.Errorf("%s: %v (acting %v), want it to name stop-cpu and what to do", tc.name, err, tiad.ActingAnswers(err))
+		}
 		p.SetScript(t, tiadtest.Script{})
 		if _, err := s.Compare(ctx); err != nil {
 			t.Errorf("%s: compare on the same session: %v", tc.name, err)
 		}
 	}
+	// A TIA side that reports a clean cancel after an acting answer
+	// (breaking the ITia contract): the agent itself says outcome_unknown,
+	// naming the answer.
+	p.SetScript(t, tiadtest.Script{CleanCancel: true, Questions: []tiad.Question{{ID: tiad.QuestionStopCPU}, {ID: tiad.QuestionOverwrite}}})
+	_, err := s.Download(ctx, yes)
+	if tiad.Kind(err) != tiad.KindOutcomeUnknown || strings.Join(tiad.ActingAnswers(err), ",") != "stop-cpu" ||
+		!strings.Contains(err.Error(), "at TIA's overwrite check") || !strings.Contains(err.Error(), "check its mode and start it") {
+		t.Fatalf("a clean cancel after an acting answer: %v (acting %v)", err, tiad.ActingAnswers(err))
+	}
+	// A download TIA asks nothing about is approved by the request alone,
+	// and succeeds only on evidence: TIA's result says loaded and an
+	// online compare right after is equal (#789).
+	p.SetScript(t, tiadtest.Script{AskFirst: intp(0)})
+	compares := countCalls(p.Calls(t), "Compare")
+	if r, err := s.Download(ctx, yes); err != nil || !r.Downloaded || !r.CompareEqual || r.HardwareVerified != nil {
+		t.Fatalf("TIA asks nothing, compare equal: %+v %v", r, err)
+	}
+	if n := countCalls(p.Calls(t), "Compare"); n != compares+1 {
+		t.Fatalf("the download compared %d times, want once", n-compares)
+	}
+	// TIA asks nothing and its result says the load failed: in doubt,
+	// never loaded (#1154 review), even if a compare would be equal.
+	p.SetScript(t, tiadtest.Script{AskFirst: intp(0), DownloadState: "Error"})
+	if _, err := s.Download(ctx, yes); tiad.Kind(err) != tiad.KindOutcomeUnknown || !strings.Contains(err.Error(), "TIA's download ended Error") {
+		t.Fatalf("TIA asks nothing, result Error: %v, want outcome_unknown naming it", err)
+	}
+	// A dry run TIA runs without asking never starts the CPU, even when
+	// the request says start-after yes (#1154 review).
+	p.SetScript(t, tiadtest.Script{AskFirst: intp(0)})
+	dryStart := dry
+	dryStart.Decisions = tiad.Decisions{StartAfter: tiad.Yes()}
+	if _, err := s.Download(ctx, dryStart); tiad.Kind(err) != tiad.KindOutcomeUnknown {
+		t.Fatalf("a dry run TIA asks nothing about: %v", err)
+	}
+	if l := p.Log(); !strings.Contains(l, "start-after written NoAction") || strings.Contains(l, "start-after written StartModule") {
+		t.Fatalf("a dry run's after-download start-after: want NoAction only:\n%s", l)
+	}
+	// A real download that said start it and then fails in doubt names
+	// start-after: TIA may have started the CPU after loading.
+	start := real
+	start.Decisions = tiad.Decisions{StartAfter: tiad.Yes()}
+	p.SetScript(t, tiadtest.Script{AskFirst: intp(0), CompareDiffers: true})
+	if _, err := s.Download(ctx, start); tiad.Kind(err) != tiad.KindOutcomeUnknown || strings.Join(tiad.ActingAnswers(err), ",") != "start-after" || !strings.Contains(err.Error(), "started the CPU") {
+		t.Fatalf("start-after yes, then the compare differs: %v (acting %v)", err, tiad.ActingAnswers(err))
+	}
+	p.SetScript(t, tiadtest.Script{AskFirst: intp(0), CompareDiffers: true})
+	if _, err := s.Download(ctx, yes); tiad.Kind(err) != tiad.KindOutcomeUnknown || !strings.Contains(err.Error(), "the compare right after it differs (PLC_1 different)") {
+		t.Fatalf("TIA asks nothing, compare differs: %v, want outcome_unknown naming it", err)
+	}
+	p.SetScript(t, tiadtest.Script{AskFirst: intp(0), Failures: []tiadtest.ScriptedCall{{Call: "Compare", Message: "the CPU went offline"}}})
+	if _, err := s.Download(ctx, yes); tiad.Kind(err) != tiad.KindOutcomeUnknown || !strings.Contains(err.Error(), "the compare right after it failed") || !strings.Contains(err.Error(), "the CPU went offline") {
+		t.Fatalf("TIA asks nothing, compare fails: %v, want outcome_unknown naming it", err)
+	}
+	p.SetScript(t, tiadtest.Script{})
 	// A TIA failure before anything was decided is a plain failure.
 	p.SetScript(t, tiadtest.Script{Failures: []tiadtest.ScriptedCall{{Call: "Download", Message: "No route to the CPU"}}})
 	if _, err := s.Download(ctx, yes); tiad.Kind(err) != tiad.KindOperationFailed {
@@ -605,17 +676,34 @@ func TestAgentRefusesACallQueuedBehindTheOneTIADiedIn(t *testing.T) {
 	}
 }
 
-// TestAgentDecidesEveryDryRun: decide runs exactly once even when TIA
-// asks nothing, so a dry run with no questions still cancels; start-after
-// is asked all the same.
+// TestAgentDecidesEveryDryRun: #789 stage-2 retry. TIA asks its checks
+// one at a time, with no parent and nothing listing them; the dry run
+// cancelled at the first as "cannot list", which came back
+// outcome_unknown. A dry run now declines at the first check, cleanly:
+// nothing loaded, that one question, marked incomplete, and TIA asked
+// nothing more.
 func TestAgentDecidesEveryDryRun(t *testing.T) {
 	p, s := downloadReady(t)
+	p.SetQuestions(t, []tiad.Question{{ID: tiad.QuestionStopCPU, Message: "The modules are stopped for downloading to device."}, {ID: tiad.QuestionOverwrite}, {ID: tiad.QuestionStartAfter}})
 	r, err := s.Download(ctx, tiad.DownloadRequest{Address: "192.0.2.10", Software: true, DryRun: true, Announced: true})
-	if err != nil || !r.DryRun || !r.Provisional || r.Downloaded || len(r.Questions) != 1 || r.Questions[0].ID != tiad.QuestionStartAfter {
-		t.Fatalf("a dry run TIA asks nothing about: %+v %v", r, err)
+	if err != nil || !r.DryRun || !r.Provisional || !r.QuestionsIncomplete || r.Downloaded || len(r.Questions) != 1 || r.Questions[0].ID != tiad.QuestionStopCPU {
+		t.Fatalf("a dry run: %+v %v", r, err)
 	}
 	if l := p.Loaded(t); len(l) != 0 {
-		t.Fatalf("a dry run with no questions loaded %+v", l)
+		t.Fatalf("a dry run loaded %+v", l)
+	}
+	log := waitLog(t, p, "outcome=dry-run")
+	if !strings.Contains(log, `asked=["stop-cpu"] acting=[]`) {
+		t.Fatalf("the audit line: want one check asked, nothing acting:\n%s", log)
+	}
+	// Decisions that answer every check yes never make a dry run load.
+	r, err = s.Download(ctx, tiad.DownloadRequest{Address: "192.0.2.10", Software: true, DryRun: true, Announced: true,
+		Decisions: tiad.Decisions{StopCPU: tiad.Yes(), Overwrite: tiad.Yes(), StartAfter: tiad.Yes()}})
+	if err != nil || !r.DryRun || r.Downloaded || len(r.Questions) != 1 {
+		t.Fatalf("a dry run with every check answered yes: %+v %v", r, err)
+	}
+	if l := p.Loaded(t); len(l) != 0 {
+		t.Fatalf("a dry run with every check answered yes loaded %+v", l)
 	}
 }
 
@@ -693,7 +781,7 @@ func TestAgentAuditsEveryDownload(t *testing.T) {
 		}
 	}
 	for _, want := range []string{"address=\"192.0.2.10\"", "dryRun=False", "announced=True", "stopCpu=yes", "startAfter=no",
-		"protection=set", "configurationPassword=set", `asked=["stop-cpu","password","configuration-password","start-after"]`, `reinitialize=["evil\naudit download forged"]`} {
+		"protection=set", "configurationPassword=set", `asked=["stop-cpu","password","configuration-password"]`, `acting=["stop-cpu"]`, `reinitialize=["evil\naudit download forged"]`} {
 		if !strings.Contains(line, want) {
 			t.Errorf("the audit line lacks %s:\n%s", want, line)
 		}

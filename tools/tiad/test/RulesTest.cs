@@ -93,28 +93,24 @@ namespace Tiad.Test
                 T("AccessPrepare", AccessPrepare),
                 T("AccessRecordsKnownAnswer", AccessRecordsKnownAnswer),
                 T("AccessPasswordChecks", AccessPasswordChecks),
-                T("DecideOnceAtTheFirstCallback", DecideOnceAtTheFirstCallback),
-                T("DecideAsksStartAfterBeforeLoading", DecideAsksStartAfterBeforeLoading),
-                T("NoSyntheticStartAfterWhenAsked", NoSyntheticStartAfterWhenAsked),
-                T("CancelWhenTheListIsUnreadable", CancelWhenTheListIsUnreadable),
-                T("CancelWhenTheListLacksTheCallback", CancelWhenTheListLacksTheCallback),
-                T("CancelWhenTheListRepeats", CancelWhenTheListRepeats),
+                T("AnswersEachCallbackOnItsOwn", AnswersEachCallbackOnItsOwn),
+                T("ActingAndPassive", ActingAndPassive),
+                T("ConsequenceNamesWhatToDo", ConsequenceNamesWhatToDo),
+                T("AfterGetsTheRequestsStartAfter", AfterGetsTheRequestsStartAfter),
                 T("DeclineIsClean", DeclineIsClean),
                 T("CancelOnABrokenAnswer", CancelOnABrokenAnswer),
                 T("CancelOnAnUnappliableAnswer", CancelOnAnUnappliableAnswer),
-                T("CancelOnAnUndecidedCallback", CancelOnAnUndecidedCallback),
                 T("CancelOnARepeatedCallback", CancelOnARepeatedCallback),
-                T("UnappliedNamesWhatTiaSkipped", UnappliedNamesWhatTiaSkipped),
-                T("AfterOnlyOnceApproved", AfterOnlyOnceApproved),
-                T("CertificateDetailIsLeftEmpty", CertificateDetailIsLeftEmpty),
+                T("CertificateDetail", CertificateDetail),
+                T("SeenNeverThrows", SeenNeverThrows),
                 T("FinishLoaded", FinishLoaded),
                 T("FinishDeclined", FinishDeclined),
+                T("FinishDeclineAfterActing", FinishDeclineAfterActing),
                 T("FinishFailures", FinishFailures),
                 T("FinishSwallowedCancel", FinishSwallowedCancel),
                 T("FinishWithoutACallback", FinishWithoutACallback),
                 T("Messages", Messages),
                 T("OnlineAsks", OnlineAsks),
-                T("AnsweredOnlyOnceWritten", AnsweredOnlyOnceWritten),
                 T("AFailedWriteCancels", AFailedWriteCancels),
                 T("InDoubtOnceEntered", InDoubtOnceEntered),
                 T("DownloadStepsTiaDies", DownloadStepsTiaDies),
@@ -124,7 +120,7 @@ namespace Tiad.Test
                 T("DeclineSurvivesTiasCopy", DeclineSurvivesTiasCopy),
                 T("DeclineNeedsItsOwnCancelBack", DeclineNeedsItsOwnCancelBack),
                 T("EveryCancelCrossesAndIsKept", EveryCancelCrossesAndIsKept),
-                T("ListThrowingCancelsNamingIt", ListThrowingCancelsNamingIt),
+                T("DiagnosticsNeverFlipADecline", DiagnosticsNeverFlipADecline),
                 T("DownloadStepsDeclineThroughTia", DownloadStepsDeclineThroughTia),
                 T("ASerializableTiadTypeStillKillsTia", ASerializableTiadTypeStillKillsTia),
                 T("DeclineNeedsItsToken", DeclineNeedsItsToken),
@@ -292,9 +288,9 @@ namespace Tiad.Test
         }
 
         // N is one callback the glue answers: the step, then its write.
-        static string N(Run r, object key, string type, string message, Func<List<Pending>> list)
+        static string N(Run r, object key, string type, string message)
         {
-            Step st = r.D.Next(key, type, message, list);
+            Step st = r.D.Next(key, type, message, null);
             r.D.Wrote(st);
             return S(st);
         }
@@ -433,99 +429,115 @@ namespace Tiad.Test
             Contains(ConfigProtection.Check(ConfigProtection.Protect, ConfigProtection.Absent), "reads absent", "a configurator gone");
         }
 
-        // A fake TIA side for the decider: configurations are plain objects.
+        // A fake TIA side for the decider: configurations are plain objects,
+        // asked one at a time, as Openness does (#789 S2b).
         sealed class Run
         {
-            public int Decides;
-            public List<Question> Seen;
-            public Func<List<Question>, List<Answer>> Reply;
+            public int Answers;
+            public readonly List<Question> Seen = new List<Question>();
+            public Func<Question, Answer> Reply;
             public DownloadDecider D;
 
-            public Run(Func<List<Question>, List<Answer>> reply)
+            public Run(Func<Question, Answer> reply) : this(reply, false)
+            {
+            }
+
+            public Run(Func<Question, Answer> reply, bool? startAfter)
             {
                 Reply = reply;
-                D = new DownloadDecider(delegate(List<Question> qs)
+                D = new DownloadDecider(delegate(Question q)
                 {
-                    Decides++;
-                    Seen = qs;
-                    return Reply(qs);
-                });
+                    Answers++;
+                    Seen.Add(q);
+                    return Reply(q);
+                }, startAfter);
             }
         }
 
-        static List<Answer> AllYes(List<Question> qs)
+        static Answer AllYes(Question q)
         {
-            var l = new List<Answer>();
-            foreach (var q in qs) l.Add(new Answer { Question = q, Yes = true });
-            return l;
+            return new Answer { Question = q, Yes = true };
         }
 
-        static List<Pending> List(params Pending[] ps)
+        static DownloadDecider Decider()
         {
-            return new List<Pending>(ps);
+            return new DownloadDecider(AllYes, false);
         }
 
-        static Pending P(object key, string type, string message)
+        static void AnswersEachCallbackOnItsOwn()
         {
-            return new Pending { Key = key, Type = type, Message = message };
-        }
-
-        static void DecideOnceAtTheFirstCallback()
-        {
+            // #789 stage-2 retry: TIA's first callback had no parent and
+            // nothing listed its checks; each is answered as it comes.
             object stop = new object(), over = new object(), start = new object();
-            var all = List(P(stop, "StopModules", "stop the CPU"), P(over, "OverwriteSystemData", "overwrite"), P(start, "StartModules", "start"));
-            int lists = 0;
-            Func<List<Pending>> list = delegate
-            {
-                lists++;
-                return all;
-            };
             var r = new Run(AllYes);
-            Eq(N(r, over, "OverwriteSystemData", "overwrite", list), "Overwrite", "first callback");
-            Eq(r.Decides, 1, "decides after the first callback");
-            Eq(r.Seen.Count, 3, "questions");
+            Eq(N(r, stop, "StopModules", "stop the CPU"), "StopAll", "first callback");
+            Eq(r.Answers, 1, "answered after the first callback: one, never a look ahead");
             Eq(r.Seen[0].Id, QuestionIds.StopCpu, "question 1");
             Eq(r.Seen[0].Message, "stop the CPU", "question 1 message");
             Eq(r.Seen[0].Detail, "StopModules", "question 1 detail");
-            Eq(r.Seen[1].Id, QuestionIds.Overwrite, "question 2");
-            Eq(r.Seen[2].Id, QuestionIds.StartAfter, "question 3");
-            Eq(N(r, stop, "StopModules", "stop the CPU", list), "StopAll", "second callback");
-            Eq(N(r, start, "StartModules", "start", list), "StartModule", "third callback");
-            Eq(r.Decides, 1, "decides in all");
-            Eq(lists, 1, "lists read");
-            True(r.D.Approved, "approved");
+            Eq(N(r, over, "OverwriteSystemData", "overwrite"), "Overwrite", "second callback");
+            Eq(N(r, start, "StartModules", "start"), "StartModule", "third callback");
+            Eq(r.Answers, 3, "answered in all");
+            Eq(r.D.Approved, 3, "approved");
             Eq(r.D.Asked.Count, 3, "asked");
-            Eq(r.D.Unapplied().Count, 0, "unapplied");
+            Eq(string.Join("; ", r.D.Acting.ToArray()), "StopModules = StopAll; OverwriteSystemData = Overwrite; StartModules = StartModule", "acting answers written");
             True(r.D.Cancelled == null, "cancelled");
         }
 
-        static void DecideAsksStartAfterBeforeLoading()
+        static void ActingAndPassive()
         {
-            object stop = new object();
-            var r = new Run(delegate(List<Question> qs)
+            foreach (string id in new[] { QuestionIds.StopCpu, QuestionIds.StartAfter, QuestionIds.Overwrite, QuestionIds.Reinitialize, QuestionIds.Other, "new-in-v22" })
             {
-                var a = AllYes(qs);
-                a[1].Yes = false;
-                return a;
-            });
-            Eq(N(r, stop, "StopModules", "stop", delegate { return List(P(stop, "StopModules", "stop")); }), "StopAll", "callback");
-            Eq(r.Seen.Count, 2, "questions");
-            Eq(r.Seen[1].Id, QuestionIds.StartAfter, "the start-after question");
-            Eq(r.Seen[1].Detail, DownloadDecider.StartAfterType, "its detail");
-            Eq(r.D.Unapplied().Count, 0, "unapplied, with start-after not asked after loading");
-            Eq(A(r.D, "StartModules"), "NoAction", "after loading");
-            Eq(A(r.D, "StartModules"), "NoAction", "after loading, again: start-after is never left to TIA");
-            Eq(A(r.D, "StopModules"), null, "an applied configuration after loading");
-            Eq(A(r.D, "SomethingElse"), null, "another configuration after loading");
+                True(DownloadChecks.Acting(id), id + " is acting");
+            }
+            foreach (string id in new[] { QuestionIds.Password, QuestionIds.ConfigurationPassword, QuestionIds.Certificate })
+            {
+                True(!DownloadChecks.Acting(id), id + " is passive");
+            }
+            // An answer counts as acting only once written, and a passive
+            // one never does.
+            object pw = new object(), stop = new object();
+            var r = new Run(AllYes);
+            N(r, pw, "ModuleWriteAccessPassword", "pw");
+            Eq(r.D.Acting.Count, 0, "a password written");
+            Step st = r.D.Next(stop, "StopModules", "stop", null);
+            Eq(r.D.Acting.Count, 0, "stop answered, not yet written");
+            r.D.Wrote(st);
+            Eq(r.D.Acting.Count, 1, "stop written");
+            // Start-after answered no writes NoAction, which changes
+            // nothing: not acting.
+            var n = new Run(delegate(Question q) { return new Answer { Question = q, Yes = false }; });
+            N(n, new object(), "StartModules", "start");
+            Eq(n.D.Acting.Count, 0, "start-after no");
         }
 
-        static void NoSyntheticStartAfterWhenAsked()
+        static void ConsequenceNamesWhatToDo()
         {
-            object start = new object();
-            var r = new Run(AllYes);
-            N(r, start, "StartModules", "start", delegate { return List(P(start, "StartModules", "start")); });
-            Eq(r.Seen.Count, 1, "questions");
-            Eq(A(r.D, "StartModules"), "StartModule", "after loading, already applied: the decided answer again, never NoAction over it");
+            Eq(DownloadChecks.Consequence(new List<string>()), "", "none");
+            Eq(DownloadChecks.Consequence(null), "", "null");
+            Contains(DownloadChecks.Consequence(new List<string> { QuestionIds.StopCpu }), "TIA may already have stopped the CPU: check its mode and start it", "stop");
+            Contains(DownloadChecks.Consequence(new List<string> { QuestionIds.Reinitialize }), "stopped the CPU", "reinitialize stops it");
+            Contains(DownloadChecks.Consequence(new List<string> { QuestionIds.StartAfter }), "started the CPU", "start");
+            Contains(DownloadChecks.Consequence(new List<string> { QuestionIds.Overwrite }), "acted on them", "overwrite");
+            Contains(DownloadChecks.Consequence(new List<string> { QuestionIds.StopCpu, QuestionIds.Overwrite }), "tiad had answered stop-cpu, overwrite before the download ended", "names them");
+        }
+
+        static void AfterGetsTheRequestsStartAfter()
+        {
+            object stop = new object();
+            foreach (var c in new[] { new KeyValuePair<bool?, string>(true, "StartModule"), new KeyValuePair<bool?, string>(false, "NoAction"), new KeyValuePair<bool?, string>(null, "NoAction") })
+            {
+                var r = new Run(AllYes, c.Key);
+                N(r, stop, "StopModules", "stop");
+                Eq(A(r.D, "StartModules"), c.Value, "startAfter " + c.Key);
+                Eq(A(r.D, "StartModules"), c.Value, "asked again: never left to TIA");
+                Eq(A(r.D, "StopModules"), null, "another configuration after loading");
+            }
+            // A load nobody approved never starts the CPU.
+            var d = new Run(delegate { return null; }, true);
+            Throws<DownloadCancel>(delegate { d.D.Next(stop, "StopModules", "stop", null); }, "declined");
+            Eq(A(d.D, "StartModules"), "NoAction", "after a decline, start-after yes in the request");
+            Eq(A(new DownloadDecider(AllYes, true), "StartModules"), "StartModule", "no check asked: the request's start-after");
         }
 
         static void Cancelled(Run r, Action f, string sub, bool declined, string what)
@@ -537,50 +549,20 @@ namespace Tiad.Test
             True(object.ReferenceEquals(r.D.Cancelled, c), what + ": the decider keeps the cancel");
         }
 
-        static void CancelWhenTheListIsUnreadable()
-        {
-            object k = new object();
-            foreach (var empty in new List<Pending>[] { null, new List<Pending>() })
-            {
-                var r = new Run(AllYes);
-                var l = empty;
-                Cancelled(r, delegate { r.D.Next(k, "StopModules", "stop", delegate { return l; }); }, "cannot list", false, "unreadable list");
-                Eq(r.Decides, 0, "decides");
-                True(!r.D.Decided, "decided");
-                // Once cancelled, every later callback cancels too.
-                Cancelled(r, delegate { r.D.Next(k, "StopModules", "stop", delegate { return List(P(k, "StopModules", "")); }); }, "cannot list", false, "a later callback");
-            }
-        }
-
-        static void CancelWhenTheListLacksTheCallback()
-        {
-            var r = new Run(AllYes);
-            object k = new object(), other = new object();
-            Cancelled(r, delegate { r.D.Next(k, "StopModules", "stop", delegate { return List(P(other, "StopModules", "stop")); }); }, "lacks", false, "a list without the callback's configuration");
-            Eq(r.Decides, 0, "decides");
-            True(!r.D.Decided, "decided");
-        }
-
-        static void CancelWhenTheListRepeats()
-        {
-            var r = new Run(AllYes);
-            object k = new object();
-            Cancelled(r, delegate { r.D.Next(k, "StopModules", "stop", delegate { return List(P(k, "StopModules", "stop"), P(k, "StopModules", "stop")); }); }, "twice", false, "a list naming one configuration twice");
-            Eq(r.Decides, 0, "decides");
-        }
-
         static void DeclineIsClean()
         {
             var r = new Run(delegate { return null; });
             object k = new object();
-            Cancelled(r, delegate { r.D.Next(k, "StopModules", "stop", delegate { return List(P(k, "StopModules", "stop")); }); }, "not decided", true, "decide says no");
-            Eq(r.Decides, 1, "decides");
-            True(!r.D.Approved, "approved");
-            Eq(r.D.Asked.Count, 2, "asked: the configuration and start-after");
+            Cancelled(r, delegate { r.D.Next(k, "StopModules", "stop", null); }, "at TIA's StopModules (stop)", true, "the request says no");
+            Contains(r.D.Cancelled.Message, r.D.Token, "the decline carries the token");
+            Eq(r.Answers, 1, "answered");
+            Eq(r.D.Approved, 0, "approved");
+            Eq(r.D.Asked.Count, 1, "asked: the one configuration");
             // A later callback means TIA went on past the decline: a
-            // failure from then on, never a decline (#1145 review).
-            Cancelled(r, delegate { r.D.Next(k, "StopModules", "stop", null); }, "TIA went on", false, "a later callback");
-            Eq(r.Decides, 1, "decides after a later callback");
+            // failure from then on, never a decline (#1145 review), and
+            // nothing more is asked.
+            Cancelled(r, delegate { r.D.Next(new object(), "OverwriteSystemData", "over", null); }, "TIA went on", false, "a later callback");
+            Eq(r.Answers, 1, "answered after a later callback");
             Eq(A(r.D, "StartModules"), "NoAction", "after a load nobody approved");
             Eq(A(r.D, "StopModules"), null, "another configuration after a load nobody approved");
         }
@@ -588,73 +570,63 @@ namespace Tiad.Test
         static void CancelOnABrokenAnswer()
         {
             object k = new object();
-            Func<List<Pending>> list = delegate { return List(P(k, "StopModules", "stop")); };
-            var cases = new Dictionary<string, Func<List<Question>, List<Answer>>>
+            var cases = new Dictionary<string, Func<Question, Answer>>
             {
-                { "answered 1 of 2", delegate(List<Question> qs) { return AllYes(qs).GetRange(0, 1); } },
-                { "answer 1 is not", delegate(List<Question> qs) { var a = AllYes(qs); a[0].Question = new Question { Id = QuestionIds.Overwrite }; return a; } },
-                { "answer 2 is not", delegate(List<Question> qs) { var a = AllYes(qs); a[1] = null; return a; } },
+                { "is not to stop-cpu", delegate(Question q) { return new Answer { Question = new Question { Id = QuestionIds.Overwrite }, Yes = true }; } },
+                { "is not to", delegate(Question q) { return new Answer { Question = null, Yes = true }; } },
             };
             foreach (var c in cases)
             {
                 var r = new Run(c.Value);
-                Cancelled(r, delegate { r.D.Next(k, "StopModules", "stop", list); }, c.Key, false, c.Key);
-                Eq(r.Decides, 1, c.Key + ": decides");
-                True(!r.D.Approved, c.Key + ": approved");
+                Cancelled(r, delegate { r.D.Next(k, "StopModules", "stop", null); }, c.Key, false, c.Key);
+                Eq(r.D.Approved, 0, c.Key + ": approved");
             }
         }
 
         static void CancelOnAnUnappliableAnswer()
         {
             object k = new object();
-            var r = new Run(delegate(List<Question> qs) { var a = AllYes(qs); a[0].Yes = false; return a; });
-            Cancelled(r, delegate { r.D.Next(k, "StopModules", "stop", delegate { return List(P(k, "StopModules", "stop")); }); }, "cannot apply no to StopModules", false, "no to stop");
-            True(!r.D.Approved, "no to stop: approved");
+            var r = new Run(delegate(Question q) { return new Answer { Question = q, Yes = false }; });
+            Cancelled(r, delegate { r.D.Next(k, "StopModules", "stop", null); }, "cannot apply no to StopModules", false, "no to stop");
+            Eq(r.D.Approved, 0, "no to stop: approved");
             object u = new object();
             r = new Run(AllYes);
-            Cancelled(r, delegate { r.D.Next(u, "ResetModule", "reset", delegate { return List(P(u, "ResetModule", "reset")); }); }, "cannot apply yes to ResetModule (reset)", false, "yes to an unknown configuration");
-        }
-
-        static void CancelOnAnUndecidedCallback()
-        {
-            object a = new object(), b = new object();
-            var r = new Run(AllYes);
-            N(r, a, "StopModules", "stop", delegate { return List(P(a, "StopModules", "stop")); });
-            Cancelled(r, delegate { r.D.Next(b, "OverwriteSystemData", "over", null); }, "after the decision, which did not cover it", false, "an undecided configuration");
+            Cancelled(r, delegate { r.D.Next(u, "ResetModule", "reset", null); }, "cannot apply yes to ResetModule (reset)", false, "yes to an unknown configuration");
+            Eq(r.Seen[0].Id, QuestionIds.Other, "an unknown configuration is other");
         }
 
         static void CancelOnARepeatedCallback()
         {
             object a = new object();
             var r = new Run(AllYes);
-            N(r, a, "StopModules", "stop", delegate { return List(P(a, "StopModules", "stop")); });
+            N(r, a, "StopModules", "stop");
             Cancelled(r, delegate { r.D.Next(a, "StopModules", "stop", null); }, "twice", false, "a repeated configuration");
+            Eq(r.Answers, 1, "the repeat is never answered");
         }
 
-        static void UnappliedNamesWhatTiaSkipped()
-        {
-            object a = new object(), b = new object();
-            var r = new Run(AllYes);
-            N(r, a, "StopModules", "stop", delegate { return List(P(a, "StopModules", "stop"), P(b, "OverwriteSystemData", "over")); });
-            List<string> u = r.D.Unapplied();
-            Eq(u.Count, 1, "unapplied");
-            if (u.Count == 1) Eq(u[0], "OverwriteSystemData (over)", "unapplied name");
-            Eq(new DownloadDecider(AllYes).Unapplied().Count, 0, "unapplied before any callback");
-        }
-
-        static void AfterOnlyOnceApproved()
-        {
-            Eq(A(new DownloadDecider(AllYes), "StartModules"), "NoAction", "start-after, before any callback");
-            Eq(A(new DownloadDecider(AllYes), "StopModules"), null, "another configuration, before any callback");
-        }
-
-        static void CertificateDetailIsLeftEmpty()
+        static void CertificateDetail()
         {
             object c = new object();
             var r = new Run(AllYes);
-            r.D.Next(c, "TlsVerificationConfiguration", "trust?", delegate { return List(P(c, "TlsVerificationConfiguration", "trust?")); });
+            r.D.Next(c, "TlsVerificationConfiguration", "trust?", null);
             Eq(r.Seen[0].Id, QuestionIds.Certificate, "id");
-            Eq(r.Seen[0].Detail, "", "detail");
+            Eq(r.Seen[0].Detail, "", "detail, nothing read");
+            r = new Run(AllYes);
+            r.D.Next(c, "TlsVerificationConfiguration", "trust?", new Question { Detail = "AB12" });
+            Eq(r.Seen[0].Detail, "AB12", "detail, as read");
+            r = new Run(AllYes);
+            r.D.Next(c, "DataBlockReinitialization", "reinit", new Question { Detail = "AB12", Objects = new List<string> { "Tags" } });
+            Eq(r.Seen[0].Detail, "DataBlockReinitialization", "another configuration's detail is its type");
+            Eq(string.Join(",", r.Seen[0].Objects.ToArray()), "Tags", "its objects");
+        }
+
+        static void SeenNeverThrows()
+        {
+            // The glue's diagnostics before the decision: reading TIA's
+            // object may fail; it must never change how the download ends.
+            Func<string> broken = delegate { throw new ObjectDisposedException("DownloadConfiguration"); };
+            True(Caught(delegate { DownloadDecider.Seen(1, broken, broken); }) == null, "every read fails");
+            True(Caught(delegate { DownloadDecider.Seen(2, delegate { return "StopModules"; }, delegate { return null; }); }) == null, "nulls");
         }
 
         // ---- how a download ended ----
@@ -667,11 +639,12 @@ namespace Tiad.Test
             else Contains(e.Failure, failure, what + ": failure");
         }
 
-        // Approved runs a decider through an approved first callback.
+        // Approved runs a decider through an approved, passive first
+        // callback (a password: nothing acting written).
         static Run Approved(object key)
         {
             var r = new Run(AllYes);
-            N(r, key, "StopModules", "stop", delegate { return List(P(key, "StopModules", "stop")); });
+            N(r, key, "ModuleWriteAccessPassword", "pw");
             return r;
         }
 
@@ -690,13 +663,47 @@ namespace Tiad.Test
             Exception thrown = null;
             try
             {
-                r.D.Next(k, "StopModules", "stop", delegate { return List(P(k, "StopModules", "stop")); });
+                r.D.Next(k, "StopModules", "stop", null);
             }
             catch (DownloadCancel c)
             {
                 thrown = new InvalidOperationException("wrapped by TIA", c);
             }
             End(r.D.Finish(true, null, "", thrown), false, true, null, "declined, as TIA rethrows it");
+        }
+
+        static void FinishDeclineAfterActing()
+        {
+            // TIA asked stop (answered yes, written), then overwrite, which
+            // the request does not answer: TIA may have stopped the CPU
+            // already, so the clean decline is in doubt, naming the answer.
+            var r = new Run(delegate(Question q) { return q.Id == QuestionIds.StopCpu ? AllYes(q) : null; });
+            N(r, new object(), "StopModules", "stop");
+            Exception thrown = null;
+            try
+            {
+                r.D.Next(new object(), "OverwriteSystemData", "over", null);
+            }
+            catch (DownloadCancel c)
+            {
+                thrown = new InvalidOperationException("wrapped by TIA", c);
+            }
+            True(r.D.Cancelled != null && r.D.Cancelled.Declined, "the decline is kept as a decline");
+            DownloadEnd e = r.D.Finish(true, null, "", thrown);
+            End(e, false, false, "after tiad wrote StopModules = StopAll", "a decline after an acting answer");
+            True(e.InDoubt, "in doubt");
+            // A passive answer before it leaves the decline clean.
+            var p = new Run(delegate(Question q) { return q.Id == QuestionIds.Password ? AllYes(q) : null; });
+            N(p, new object(), "ModuleWriteAccessPassword", "pw");
+            try
+            {
+                p.D.Next(new object(), "StopModules", "stop", null);
+            }
+            catch (DownloadCancel c)
+            {
+                thrown = new InvalidOperationException("wrapped by TIA", c);
+            }
+            End(p.D.Finish(true, null, "", thrown), false, true, null, "a decline after a passive answer");
         }
 
         static void FinishFailures()
@@ -706,18 +713,19 @@ namespace Tiad.Test
             End(Approved(new object()).D.Finish(true, "Bogus", "", null), false, false, "TIA's download ended Bogus", "unknown state");
             // TIA failed while loading.
             End(Approved(new object()).D.Finish(true, null, "", new TiaException("connection lost", new Exception("timeout"))), false, false, "connection lost: timeout", "TIA threw");
-            // A cancel after the decision, wrapped by TIA.
+            // A cancel after approval (an answer tiad cannot apply), wrapped
+            // by TIA.
             var r = Approved(new object());
             Exception thrown = null;
             try
             {
-                r.D.Next(new object(), "OverwriteSystemData", "over", null);
+                r.D.Next(new object(), "ResetModule", "reset", null);
             }
             catch (DownloadCancel c)
             {
                 thrown = new InvalidOperationException("wrapped", c);
             }
-            End(r.D.Finish(true, null, "", thrown), false, false, "after the decision", "a cancel after approval");
+            End(r.D.Finish(true, null, "", thrown), false, false, "cannot apply yes to ResetModule", "a cancel after approval");
             // A cancel the glue made itself (Write's Fail): its kept reason,
             // whatever TIA's exception says.
             var g = Approved(new object());
@@ -725,13 +733,14 @@ namespace Tiad.Test
             DownloadEnd own = g.D.Finish(true, null, "", new InvalidOperationException("wrapped", new OperationCanceledException("no protection password")));
             End(own, false, false, "no protection password", "the glue's own cancel");
             Eq(own.Failure, "no protection password", "the glue's own cancel, without TIA's wrapping");
-            // A decided configuration TIA never asked about.
-            object a = new object(), b = new object();
-            var u = new Run(AllYes);
-            N(u, a, "StopModules", "stop", delegate { return List(P(a, "StopModules", "stop"), P(b, "OverwriteSystemData", "over")); });
-            End(u.D.Finish(true, "Success", "", null), false, false, "without asking OverwriteSystemData (over)", "unapplied");
+            // With an acting answer written before it, the failure names it.
+            var s = new Run(AllYes);
+            N(s, new object(), "StopModules", "stop");
+            s.D.Fail("writing Overwrite into OverwriteSystemData failed: denied");
+            End(s.D.Finish(true, null, "", new InvalidOperationException("wrapped")), false, false, "denied (after tiad wrote StopModules = StopAll)", "a failure after an acting answer");
+            End(s.D.Finish(true, "Error", "", null), false, false, "after tiad wrote StopModules = StopAll", "TIA went on after the failure");
             // Before any callback: TIA refused, nothing decided.
-            End(new DownloadDecider(AllYes).Finish(true, null, "", new TiaException("no route")), false, false, "no route", "before any callback");
+            End(Decider().Finish(true, null, "", new TiaException("no route")), false, false, "no route", "before any callback");
         }
 
         static void FinishSwallowedCancel()
@@ -742,7 +751,7 @@ namespace Tiad.Test
                 object k = new object();
                 try
                 {
-                    r.D.Next(k, "StopModules", "stop", delegate { return List(P(k, "StopModules", "stop")); });
+                    r.D.Next(k, declined ? "StopModules" : "ResetModule", "x", null);
                 }
                 catch (DownloadCancel)
                 {
@@ -757,37 +766,28 @@ namespace Tiad.Test
 
         static void FinishWithoutACallback()
         {
-            // TIA loaded without asking anything: loaded, undecided, which
-            // the agent reports as outcome_unknown.
-            foreach (string st in new[] { "Success", "Error" })
+            // TIA ran its download without asking anything: loaded when its
+            // result says so (which the agent refuses to call a dry run),
+            // in doubt when it does not (#1154 review: never loaded on an
+            // Error state just because nothing was asked).
+            End(Decider().Finish(true, "Success", "", null), true, false, null, "Success");
+            foreach (string st in new[] { "Error", "Bogus", null })
             {
-                End(new DownloadDecider(AllYes).Finish(true, st, "", null), true, false, null, st);
+                DownloadEnd e = Decider().Finish(true, st, "", null);
+                End(e, false, false, "TIA's download ended", st ?? "no state");
+                True(e.InDoubt, (st ?? "no state") + ": in doubt");
             }
-        }
-
-        static void AnsweredOnlyOnceWritten()
-        {
-            // A step TIA asked for but whose write was never reported is
-            // not answered: a load then fails, naming it.
-            object a = new object();
-            var r = new Run(AllYes);
-            Step st = r.D.Next(a, "StopModules", "stop", delegate { return List(P(a, "StopModules", "stop")); });
-            Eq(st.Setting.ToString(), "StopAll", "the step");
-            Eq(r.D.Unapplied().Count, 1, "unapplied before the write");
-            End(r.D.Finish(true, "Success", "", null), false, false, "without asking StopModules (stop)", "a load before the write was reported");
-            r.D.Wrote(st);
-            Eq(r.D.Unapplied().Count, 0, "unapplied after the write");
-            Cancelled(r, delegate { r.D.Next(a, "StopModules", "stop", null); }, "twice", false, "asked again once written");
         }
 
         static void AFailedWriteCancels()
         {
             object a = new object(), b = new object();
             var r = new Run(AllYes);
-            r.D.Next(a, "StopModules", "stop", delegate { return List(P(a, "StopModules", "stop"), P(b, "OverwriteSystemData", "over")); });
+            r.D.Next(a, "StopModules", "stop", null);
             DownloadCancel c = r.D.Fail("writing StopAll into StopModules failed: no such value");
             True(object.ReferenceEquals(r.D.Cancelled, c), "the decider keeps the cancel");
             Eq(c.Declined, false, "declined");
+            Eq(r.D.Acting.Count, 0, "a write that failed is not written");
             // TIA swallowed the exception and went on.
             Cancelled(r, delegate { r.D.Next(b, "OverwriteSystemData", "over", null); }, "no such value", false, "the next callback");
             End(r.D.Finish(true, "Success", "", null), false, false, "TIA went on after tiad cancelled the download (writing StopAll", "TIA reported success");
@@ -822,17 +822,17 @@ namespace Tiad.Test
         {
             DownloadOutcome o;
             Action gone = delegate { throw new ObjectDisposedException("ConnectionConfiguration", "detach failed"); };
-            TiaException e = DownloadStepsRun(new DownloadDecider(AllYes), delegate { },
+            TiaException e = DownloadStepsRun(Decider(), delegate { },
                 delegate { throw new ObjectDisposedException("DownloadProvider", "TIA exited"); }, gone, NoneAsked, out o);
             True(e != null && e.InDoubt, "TIA dies inside its download call: in doubt");
             Contains(e.Message, "TIA exited", "the download's own failure");
             True(e.Message.IndexOf("detach failed", StringComparison.Ordinal) < 0, "not the detach's");
             // Any failure inside the call, not only TIA's own.
-            e = DownloadStepsRun(new DownloadDecider(AllYes), delegate { },
+            e = DownloadStepsRun(Decider(), delegate { },
                 delegate { throw new InvalidOperationException("reading the result failed"); }, delegate { }, NoneAsked, out o);
             True(e != null && e.InDoubt, "any failure inside the call: in doubt");
             // Before the call: nothing loaded, the failure itself named.
-            e = DownloadStepsRun(new DownloadDecider(AllYes), delegate { throw new ObjectDisposedException("DownloadProvider", "TIA exited"); },
+            e = DownloadStepsRun(Decider(), delegate { throw new ObjectDisposedException("DownloadProvider", "TIA exited"); },
                 delegate { throw new InvalidOperationException("the call was made"); }, gone, NoneAsked, out o);
             True(e != null && !e.InDoubt, "TIA dies before its download call: not in doubt");
             Contains(e.Message, "TIA exited", "the prepare's own failure");
@@ -842,8 +842,8 @@ namespace Tiad.Test
             True(e == null && o != null && o.Loaded, "loaded, then detaching fails: loaded");
             // stop runs every time, also when the call throws.
             int stops = 0;
-            DownloadStepsRun(new DownloadDecider(AllYes), delegate { }, delegate { throw new InvalidOperationException("x"); }, delegate { stops++; }, NoneAsked, out o);
-            DownloadStepsRun(new DownloadDecider(AllYes), delegate { throw new InvalidOperationException("x"); }, delegate { return null; }, delegate { stops++; }, NoneAsked, out o);
+            DownloadStepsRun(Decider(), delegate { }, delegate { throw new InvalidOperationException("x"); }, delegate { stops++; }, NoneAsked, out o);
+            DownloadStepsRun(Decider(), delegate { throw new InvalidOperationException("x"); }, delegate { return null; }, delegate { stops++; }, NoneAsked, out o);
             Eq(stops, 2, "stop runs after a failure, before and inside the call");
         }
 
@@ -854,7 +854,7 @@ namespace Tiad.Test
             Func<List<string>> broken = delegate { throw new InvalidOperationException("Asked is disposed"); };
             TiaException e = DownloadStepsRun(Approved(new object()).D, delegate { }, delegate { return new DownloadCall { State = "Success" }; }, delegate { }, broken, out o);
             True(e != null && e.InDoubt, "reading the questions fails after the call: in doubt");
-            e = DownloadStepsRun(new DownloadDecider(AllYes), delegate { }, delegate { return null; }, delegate { }, NoneAsked, out o);
+            e = DownloadStepsRun(Decider(), delegate { }, delegate { return null; }, delegate { }, NoneAsked, out o);
             True(e != null && e.InDoubt, "the call returned nothing: in doubt");
             // A question going online fails it, even when TIA went on.
             e = DownloadStepsRun(Approved(new object()).D, delegate { }, delegate { return new DownloadCall { State = "Success" }; }, delegate { },
@@ -926,9 +926,9 @@ namespace Tiad.Test
         {
             DownloadEnd e = Approved(new object()).D.Finish(true, "Error", "", null);
             True(e.InDoubt, "a failed state once entered");
-            e = new DownloadDecider(AllYes).Finish(true, null, "", new TiaException("connection lost"));
+            e = Decider().Finish(true, null, "", new TiaException("connection lost"));
             True(e.InDoubt, "TIA threw once entered, before any callback");
-            e = new DownloadDecider(AllYes).Finish(false, null, "", new TiaException("no PC interface"));
+            e = Decider().Finish(false, null, "", new TiaException("no PC interface"));
             True(!e.InDoubt, "a failure before TIA's download call");
             e = Approved(new object()).D.Finish(true, "Success", "", null);
             True(!e.InDoubt && e.Loaded, "loaded");
@@ -937,7 +937,7 @@ namespace Tiad.Test
             Exception thrown = null;
             try
             {
-                r.D.Next(k, "StopModules", "stop", delegate { return List(P(k, "StopModules", "stop")); });
+                r.D.Next(k, "StopModules", "stop", null);
             }
             catch (DownloadCancel x)
             {
@@ -945,17 +945,18 @@ namespace Tiad.Test
             }
             e = r.D.Finish(true, null, "", thrown);
             True(e.Declined && !e.InDoubt, "declined is not in doubt");
-            // A cancel before decide that TIA swallowed: in doubt.
+            // A cancel (an answer tiad cannot apply) that TIA swallowed: in
+            // doubt.
             r = new Run(AllYes);
             try
             {
-                r.D.Next(k, "StopModules", "stop", delegate { return null; });
+                r.D.Next(k, "ResetModule", "reset", null);
             }
             catch (DownloadCancel)
             {
             }
             e = r.D.Finish(true, "Success", "", null);
-            True(e.InDoubt && e.Failure != null, "a swallowed cancel before decide");
+            True(e.InDoubt && e.Failure != null, "a swallowed cancel");
         }
 
         // Declined runs a decider whose decide says no, and returns the
@@ -966,7 +967,7 @@ namespace Tiad.Test
             object k = new object();
             try
             {
-                r.D.Next(k, "StopModules", "stop", delegate { return List(P(k, "StopModules", "stop")); });
+                r.D.Next(k, "StopModules", "stop", null);
             }
             catch (DownloadCancel c)
             {
@@ -1030,7 +1031,7 @@ namespace Tiad.Test
                 True(DownloadChecks.For(t, true) != null, t + ": yes has no setting");
             }
             // After's NoAction for start-after is among them.
-            True(got.Contains("StartModules." + new DownloadDecider(AllYes).After(DownloadDecider.StartAfterType).Setting.Value), "after-download NoAction");
+            True(got.Contains("StartModules." + Decider().After(DownloadDecider.StartAfterType).Setting.Value), "after-download NoAction");
         }
 
         static void OnlineAsks()

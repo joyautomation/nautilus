@@ -776,11 +776,14 @@ func (s *Session) Compile(ctx context.Context, hardware, software bool) (Compile
 	return r, err
 }
 
-// Download loads the project into the CPU at req.Address. See Resolve for
-// how questions are answered. A dry run lists the questions and cancels;
+// Download loads the project into the CPU at req.Address. TIA asks its
+// pre-download checks one at a time; each is answered only from req (see
+// Resolve), and the first not answered yes cancels there. A dry run
+// cancels at the first check and returns that one (QuestionsIncomplete);
 // it reaches the CPU too, so it must be announced like a real download,
 // and that it loads nothing is provisional until S2 proves it
-// (siemens-ide.md §3.5; the result says Provisional).
+// (siemens-ide.md §3.5; the result says Provisional). A cancel after an
+// answer that can change the CPU is outcome_unknown (ActingAnswers).
 //
 // When OutcomeUnknown(err) (the agent did not answer, ctx was cancelled,
 // or the agent answered outcome_unknown), the CPU may or may not be

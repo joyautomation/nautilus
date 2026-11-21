@@ -243,11 +243,14 @@ namespace Tiad.Fake
         Dictionary<string, string> failures = new Dictionary<string, string>(StringComparer.Ordinal);
         List<Question> questions = new List<Question>();
         bool loadDespiteCancel;
-        int decideCalls = 1;
+        int askFirst = 1;
         string failAfterDecide = "";
         string failInDoubt = "";
         string tiaDies = "";
         bool noDryRun;
+        bool cleanCancel;
+        bool compareDiffers;
+        string downloadState = "";
         bool uploadAsksTls;
         string cannotApply = "";
         DeviceIdentity device = BenchDevice();
@@ -362,6 +365,48 @@ namespace Tiad.Fake
 
         // NoDryRun makes the fake's TIA side one that cannot promise a dry
         // run loads nothing, as tiad.Openness cannot until S2b.
+        // CleanCancel makes the fake's TIA side one that answers each check
+        // itself, without the decider, and reports a clean cancel (nothing
+        // loaded, nothing thrown) at the first answer of null, even after
+        // acting answers: a TIA side breaking the ITia contract, to prove
+        // the agent itself never calls that a clean refusal.
+        // CompareDiffers makes every compare differ, even right after a
+        // download: a CPU that did not take what was sent.
+        // DownloadState is the state TIA's download result reports when it
+        // ran ("" = Success).
+        public string DownloadState
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return downloadState;
+                }
+            }
+        }
+
+        public bool CompareDiffers
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return compareDiffers;
+                }
+            }
+        }
+
+        public bool CleanCancel
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return cleanCancel;
+                }
+            }
+        }
+
         public bool NoDryRun
         {
             get
@@ -401,21 +446,23 @@ namespace Tiad.Fake
             }
         }
 
-        // DecideCalls is how many times Download calls decide (1, as the
-        // ITia contract says; 0 or 2 for an ITia that breaks it).
-        public int DecideCalls
+        // AskFirst is how many times the fake's TIA asks its first check:
+        // 1 as TIA does; 0 asks nothing at all and loads; 2 asks the same
+        // configuration twice.
+        public int AskFirst
         {
             get
             {
                 lock (mu)
                 {
-                    return decideCalls;
+                    return askFirst;
                 }
             }
         }
 
         // FailAfterDecide, when set, makes Download fail the way TIA fails
-        // after decide has answered.
+        // once its checks were asked (or after a cancel, with its own
+        // exception, which carries no decline).
         public string FailAfterDecide
         {
             get
@@ -427,7 +474,8 @@ namespace Tiad.Fake
             }
         }
 
-        // LoadDespiteCancel makes Download load even when decide says no:
+        // LoadDespiteCancel makes Download load even when a check is
+        // cancelled:
         // a TIA that ignores the cancel, to prove the agent says so.
         public bool LoadDespiteCancel
         {
@@ -524,12 +572,15 @@ namespace Tiad.Fake
             var f = new Dictionary<string, string>(StringComparer.Ordinal);
             foreach (var x in r.Children("failures")) f[x.Str("call")] = x.Str("message");
             bool despite = r.Bool("loadDespiteCancel");
-            int? calls = r.OptInt("decideCalls");
+            int? first = r.OptInt("askFirst");
             string after = r.Str("failAfterDecide");
             string inDoubt = r.Str("failInDoubt");
             string dies = r.Str("tiaDies");
             if (dies != "" && dies != "preparing" && dies != "downloading") throw new TiadException(400, Kinds.BadRequest, "tiaDies is preparing or downloading");
             bool noDry = r.Bool("noDryRun");
+            bool clean = r.Bool("cleanCancel");
+            bool differs = r.Bool("compareDiffers");
+            string dlState = r.Str("downloadState");
             bool asksTls = r.Bool("uploadAsksTls");
             string cannot = r.Str("cannotApply");
             var dr = r.Child("device");
@@ -560,11 +611,14 @@ namespace Tiad.Fake
                 failures = f;
                 questions = qs;
                 loadDespiteCancel = despite;
-                decideCalls = calls.HasValue ? calls.Value : 1;
+                askFirst = first.HasValue ? first.Value : 1;
                 failAfterDecide = after;
                 failInDoubt = inDoubt;
                 tiaDies = dies;
                 noDryRun = noDry;
+                cleanCancel = clean;
+                compareDiffers = differs;
+                downloadState = dlState;
                 uploadAsksTls = asksTls;
                 cannotApply = cannot;
                 device = dev;
@@ -1013,18 +1067,19 @@ namespace Tiad.Fake
         }
 
         public DownloadOutcome Download(object project, string address, bool hardware, bool software,
-            Secrets secrets, Func<List<Question>, List<Answer>> decide)
+            Secrets secrets, bool? startAfter, Func<Question, Answer> answer)
         {
             script.Enter("Download");
             var p = (FakeProject)project;
             if (script.FailInDoubt != "") throw new TiaException(script.FailInDoubt, null, true);
+            var decider = new DownloadDecider(answer, startAfter);
             string dies = script.TiaDies;
             if (dies != "")
             {
                 // As tiad.Openness runs it, through DownloadSteps, with a
                 // TIA that is gone: its objects are disposed, so the step
                 // that dies and detaching the handlers both throw.
-                return DownloadSteps.Run(new DownloadDecider(decide), address,
+                return DownloadSteps.Run(decider, address,
                     delegate
                     {
                         if (dies != "preparing") return;
@@ -1042,45 +1097,121 @@ namespace Tiad.Fake
                     },
                     delegate { return new List<string>(); });
             }
-            var outcome = new DownloadOutcome { Questions = script.Questions };
+            List<Question> qs = script.Questions;
             // A protected configuration asks for its password when the
             // hardware loads (provisional until S2b).
             if (hardware && p.Protection == ConfigProtection.WithPassword)
             {
-                outcome.Questions.Add(new Question { Id = QuestionIds.ConfigurationPassword, Message = "password for the confidential PLC configuration data", Detail = "PlcMasterSecretPassword" });
+                qs.Add(new Question { Id = QuestionIds.ConfigurationPassword, Message = "password for the confidential PLC configuration data", Detail = "PlcMasterSecretPassword" });
             }
-            // As tiad.Openness does: whether the CPU starts after loading is
-            // always decided before loading.
-            bool startAsked = false;
-            foreach (var q in outcome.Questions)
+            if (script.CleanCancel)
             {
-                if (q.Id == QuestionIds.StartAfter) startAsked = true;
+                var asked = new List<Question>();
+                foreach (var q in qs)
+                {
+                    asked.Add(q.Copy());
+                    if (answer(q.Copy()) == null) break;
+                }
+                // A plain TIA failure after the checks, not in doubt on
+                // TIA's side: the agent itself must say outcome_unknown.
+                if (script.FailAfterDecide != "") throw new TiaException(script.FailAfterDecide);
+                return new DownloadOutcome { Questions = asked, Loaded = false };
             }
-            if (!startAsked) outcome.Questions.Add(new Question { Id = QuestionIds.StartAfter, Message = "start the CPU after loading", Detail = DownloadDecider.StartAfterType });
-            List<Answer> answers = null;
-            for (int i = 0; i < script.DecideCalls; i++) answers = decide(outcome.Questions);
-            if (script.FailAfterDecide != "") throw new TiaException(script.FailAfterDecide);
-            if (answers == null && !(script.LoadDespiteCancel || script.DecideCalls == 0)) return outcome;
-            // TIA stops the CPU to load it when it asks to; it starts it
-            // again only when start-after is answered yes.
-            outcome.State = "RUN";
-            bool stops = false, starts = false;
-            foreach (var a in answers ?? new List<Answer>())
-            {
-                if (a.Question.Id == QuestionIds.StopCpu && a.Yes) stops = true;
-                if (a.Question.Id == QuestionIds.StartAfter && a.Yes) starts = true;
-            }
-            if (stops && !starts) outcome.State = "STOP";
-            var rec = new Obj();
-            rec["address"] = address;
-            rec["hardware"] = hardware;
-            rec["software"] = software;
-            rec["state"] = outcome.State;
-            script.Loaded(rec);
-            loaded[address] = p;
-            p.Changed = false;
-            outcome.Loaded = true;
+            int askFirst = script.AskFirst;
+            string failAfter = script.FailAfterDecide;
+            bool despite = script.LoadDespiteCancel;
+            string resultState = script.DownloadState == "" ? "Success" : script.DownloadState;
+            string state = "";
+            // As tiad.Openness runs it: through DownloadSteps, the decider
+            // answering TIA's pre-download callback once per check, in
+            // order, as TIA calls it (#789 S2b: one at a time, no list).
+            DownloadOutcome outcome = DownloadSteps.Run(decider, address,
+                delegate { },
+                delegate
+                {
+                    bool stopped = false;
+                    try
+                    {
+                        for (int i = 0; i < qs.Count && askFirst > 0; i++)
+                        {
+                            for (int k = 0; k < (i == 0 ? askFirst : 1); k++)
+                            {
+                                Question q = qs[i];
+                                object key = i;
+                                Boundary.Call("download: before loading", delegate
+                                {
+                                    Step st = decider.Next(key, OpennessType(q), q.Message ?? "", q);
+                                    if (st.Setting.Kind != Setting.Select && string.IsNullOrEmpty(Setting.Secret(st.Setting, secrets)))
+                                    {
+                                        throw decider.Fail("writing " + st.Setting + " into " + st.Type + " failed: no secret");
+                                    }
+                                    decider.Wrote(st);
+                                    if (q.Id == QuestionIds.StopCpu) stopped = true;
+                                }, decider.Keep);
+                            }
+                        }
+                    }
+                    catch (Exception e)
+                    {
+                        // As TIA does: a callback that throws cancels the
+                        // download, and TIA throws its own exception with
+                        // the callback's inside. failAfterDecide is a TIA
+                        // that throws its own instead; loadDespiteCancel
+                        // one that swallows the cancel and loads.
+                        if (failAfter != "") throw new TiaException(failAfter);
+                        if (!despite) throw new InvalidOperationException("Error when executing delegate.", e);
+                    }
+                    if (failAfter != "") throw new TiaException(failAfter);
+                    // TIA stopped the CPU to load it when it asked to; it
+                    // starts it again only when the after-download
+                    // callback's start-after says so. The fake's TIA asks
+                    // start-after after every load, and logs the answer.
+                    state = "RUN";
+                    Step after = null;
+                    Boundary.Call("download: after loading", delegate { after = decider.After(DownloadDecider.StartAfterType); }, decider.Keep);
+                    Log.Line("fake TIA: after loading, start-after written {0}", after == null ? "nothing" : after.Setting.ToString());
+                    if (stopped && (after == null || after.Setting.Value != "StartModule")) state = "STOP";
+                    var rec = new Obj();
+                    rec["address"] = address;
+                    rec["hardware"] = hardware;
+                    rec["software"] = software;
+                    rec["state"] = state;
+                    script.Loaded(rec);
+                    loaded[address] = p;
+                    p.Changed = false;
+                    return new DownloadCall { State = resultState };
+                },
+                delegate { },
+                delegate { return new List<string>(); });
+            if (outcome.Loaded) outcome.State = state;
             return outcome;
+        }
+
+        // OpennessType is the Openness configuration type the fake's TIA
+        // hands its callback for a scripted question: its detail when that
+        // is a type tiad knows, else the type for its id.
+        static string OpennessType(Question q)
+        {
+            if (q.Detail != "" && DownloadChecks.QuestionId(q.Detail) == q.Id) return q.Detail;
+            switch (q.Id)
+            {
+                case QuestionIds.StopCpu:
+                    return "StopModules";
+                case QuestionIds.StartAfter:
+                    return "StartModules";
+                case QuestionIds.Overwrite:
+                    return "OverwriteSystemData";
+                case QuestionIds.Reinitialize:
+                    return "DataBlockReinitialization";
+                case QuestionIds.Password:
+                    return "ModuleWriteAccessPassword";
+                case QuestionIds.ConfigurationPassword:
+                    return "PlcMasterSecretPassword";
+                case QuestionIds.Certificate:
+                    return "TlsVerificationConfiguration";
+                default:
+                    return "ACheckTiadDoesNotKnow";
+            }
         }
 
         public bool Compare(object project, string address, List<Difference> differences)
@@ -1088,7 +1219,7 @@ namespace Tiad.Fake
             script.Enter("Compare");
             var p = (FakeProject)project;
             FakeProject there;
-            if (loaded.TryGetValue(address, out there) && there == p && !p.Changed) return true;
+            if (!script.CompareDiffers && loaded.TryGetValue(address, out there) && there == p && !p.Changed) return true;
             differences.Add(new Difference { Object = p.Station == null ? "" : p.Station.Cpu.Name, State = "different" });
             return false;
         }

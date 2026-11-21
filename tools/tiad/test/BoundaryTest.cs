@@ -155,12 +155,22 @@ namespace Tiad.Test
             True(Caught(delegate { Boundary.Call("test", delegate { }, delegate(Exception x) { throw new Exception("keep ran"); }); }) == null, "a body that returns");
         }
 
-        // Pre is the download's pre-download callback as the glue writes it.
-        static Action Pre(DownloadDecider d, object key, string type, Func<List<Pending>> list)
+        // Pre is the download's pre-download callback as the glue writes it:
+        // the diagnostics (seen reads TIA's object), then the decision.
+        static Action Pre(DownloadDecider d, object key, string type)
+        {
+            return Pre(d, key, type, delegate { return "Parent"; });
+        }
+
+        static Action Pre(DownloadDecider d, object key, string type, Func<string> seen)
         {
             return delegate
             {
-                Boundary.Call("download: before loading", delegate { d.Next(key, type, "msg", list); }, d.Keep);
+                Boundary.Call("download: before loading", delegate
+                {
+                    DownloadDecider.Seen(1, seen, seen);
+                    d.Next(key, type, "msg", null);
+                }, d.Keep);
             };
         }
 
@@ -173,16 +183,16 @@ namespace Tiad.Test
                 Exception back;
                 if (shape == "as thrown")
                 {
-                    back = Caught(Pre(r.D, k, "StopModules", delegate { return List(P(k, "StopModules", "stop")); }));
+                    back = Caught(Pre(r.D, k, "StopModules"));
                 }
                 else if (shape == "embedded")
                 {
-                    Exception copy = ThroughTia(Pre(r.D, k, "StopModules", delegate { return List(P(k, "StopModules", "stop")); }), false, shape);
+                    Exception copy = ThroughTia(Pre(r.D, k, "StopModules"), false, shape);
                     back = new InvalidOperationException("Download failed: " + copy.Message);
                 }
                 else
                 {
-                    back = ThroughTia(Pre(r.D, k, "StopModules", delegate { return List(P(k, "StopModules", "stop")); }), shape == "wrapped copy", shape);
+                    back = ThroughTia(Pre(r.D, k, "StopModules"), shape == "wrapped copy", shape);
                 }
                 if (shape == "as thrown") Crossed(back, r.D.Cancelled.Message, shape + ": what crossed");
                 DownloadEnd end = r.D.Finish(true, null, "", back);
@@ -200,7 +210,7 @@ namespace Tiad.Test
             {
                 var r = new Run(delegate { return null; });
                 object k = new object();
-                Caught(Pre(r.D, k, "StopModules", delegate { return List(P(k, "StopModules", "stop")); }));
+                Caught(Pre(r.D, k, "StopModules"));
                 True(r.D.Cancelled != null && r.D.Cancelled.Declined, other.Message + ": the decline is kept");
                 DownloadEnd end = r.D.Finish(true, null, "", other);
                 True(!end.Declined, Show(other.Message) + ": not declined");
@@ -209,7 +219,7 @@ namespace Tiad.Test
             // decide said no and TIA's after-download callback came: loaded.
             var l = new Run(delegate { return null; });
             object a = new object();
-            Exception back = ThroughTia(Pre(l.D, a, "StopModules", delegate { return List(P(a, "StopModules", "stop")); }), true, "then loaded");
+            Exception back = ThroughTia(Pre(l.D, a, "StopModules"), true, "then loaded");
             l.D.After("StartModules");
             DownloadEnd e2 = l.D.Finish(true, null, "", back);
             True(!e2.Declined && e2.InDoubt, "a decline TIA loaded after is in doubt");
@@ -218,28 +228,27 @@ namespace Tiad.Test
         static void EveryCancelCrossesAndIsKept()
         {
             object k = new object();
-            var cases = new KeyValuePair<string, Func<List<Pending>>>[]
+            var cases = new KeyValuePair<string, Action<Run>>[]
             {
-                new KeyValuePair<string, Func<List<Pending>>>("an unreadable list", delegate { return null; }),
-                new KeyValuePair<string, Func<List<Pending>>>("a list that throws", delegate { throw new NotSerializable("parent disposed"); }),
-                new KeyValuePair<string, Func<List<Pending>>>("a list without the callback", delegate { return List(P(new object(), "StopModules", "stop")); }),
-                new KeyValuePair<string, Func<List<Pending>>>("an unknown configuration", delegate { return List(P(k, "ResetModule", "reset")); }),
+                new KeyValuePair<string, Action<Run>>("an unknown configuration", delegate(Run r) { Caught(Pre(r.D, k, "ResetModule")); }),
+                new KeyValuePair<string, Action<Run>>("a repeated configuration", delegate(Run r) { Caught(Pre(r.D, k, "ModuleWriteAccessPassword")); }),
             };
             foreach (var c in cases)
             {
                 var r = new Run(AllYes);
-                Exception back = ThroughTia(Pre(r.D, k, c.Key == "an unknown configuration" ? "ResetModule" : "StopModules", c.Value), true, c.Key);
+                c.Value(r);
+                Exception back = ThroughTia(Pre(r.D, k, c.Key == "an unknown configuration" ? "ResetModule" : "ModuleWriteAccessPassword"), true, c.Key);
                 True(r.D.Cancelled != null && !r.D.Cancelled.Declined, c.Key + ": a failure kept");
                 DownloadEnd end = r.D.Finish(true, null, "", back);
                 Eq(end.Failure, r.D.Cancelled == null ? null : r.D.Cancelled.Message, c.Key + ": the kept reason");
                 True(end.InDoubt && !end.Declined, c.Key + ": in doubt");
             }
-            // decide itself throws: a failure, never a decline.
-            var d = new Run(delegate(List<Question> qs) { throw new NotSerializable("decide broke"); });
-            Exception b2 = ThroughTia(Pre(d.D, k, "StopModules", delegate { return List(P(k, "StopModules", "stop")); }), true, "decide throws");
-            Contains(d.D.Cancelled == null ? null : d.D.Cancelled.Message, "decide broke", "decide throws: kept");
+            // answer itself throws: a failure, never a decline.
+            var d = new Run(delegate(Question q) { throw new NotSerializable("answer broke"); });
+            Exception b2 = ThroughTia(Pre(d.D, k, "StopModules"), true, "answer throws");
+            Contains(d.D.Cancelled == null ? null : d.D.Cancelled.Message, "answer broke", "answer throws: kept");
             DownloadEnd e3 = d.D.Finish(true, null, "", b2);
-            True(e3.InDoubt && !e3.Declined, "decide throws: in doubt");
+            True(e3.InDoubt && !e3.Declined, "answer throws: in doubt");
             // A failed write, before and after loading (Write's decider.Fail).
             foreach (bool after in new[] { false, true })
             {
@@ -258,14 +267,19 @@ namespace Tiad.Test
             }
         }
 
-        static void ListThrowingCancelsNamingIt()
+        // The glue's diagnostics run before the decision, inside the
+        // callback: reading TIA's object failing there must never turn a
+        // dry run's clean decline into a failure (which Keep would make of
+        // anything thrown), nor stop the decision.
+        static void DiagnosticsNeverFlipADecline()
         {
             object k = new object();
-            var r = new Run(AllYes);
-            Caught(Pre(r.D, k, "StopModules", delegate { throw new NotSerializable("parent disposed"); }));
-            Contains(r.D.Cancelled == null ? null : r.D.Cancelled.Message, "cannot list", "the reason");
-            Contains(r.D.Cancelled == null ? null : r.D.Cancelled.Message, "parent disposed", "what failed");
-            Eq(r.Decides, 0, "decide never ran");
+            var r = new Run(delegate { return null; });
+            Exception back = ThroughTia(Pre(r.D, k, "StopModules", delegate { throw new NotSerializable("parent disposed"); }), true, "diagnostics fail");
+            True(r.D.Cancelled != null && r.D.Cancelled.Declined, "still the decline (" + (r.D.Cancelled == null ? "" : r.D.Cancelled.Message) + ")");
+            Eq(r.Answers, 1, "the decision ran");
+            DownloadEnd end = r.D.Finish(true, null, "", back);
+            True(end.Declined && !end.InDoubt, "declined, not in doubt");
         }
 
         static void DownloadStepsDeclineThroughTia()
@@ -280,7 +294,7 @@ namespace Tiad.Test
             {
                 o = DownloadSteps.Run(r.D, "192.0.2.1", delegate { }, delegate
                 {
-                    Exception back = ThroughTia(Pre(r.D, k, "StopModules", delegate { return List(P(k, "StopModules", "stop")); }), true, "steps");
+                    Exception back = ThroughTia(Pre(r.D, k, "StopModules"), true, "steps");
                     throw back;
                 }, delegate { }, delegate { return new List<string>(); });
             });
@@ -292,13 +306,13 @@ namespace Tiad.Test
             {
                 DownloadSteps.Run(f.D, "192.0.2.1", delegate { }, delegate
                 {
-                    throw ThroughTia(Pre(f.D, k, "StopModules", delegate { return null; }), true, "steps failure");
+                    throw ThroughTia(Pre(f.D, k, "ResetModule"), true, "steps failure");
                 }, delegate { }, delegate { return new List<string>(); });
             }, "a failure");
             if (t != null)
             {
                 True(t.InDoubt, "a failure is in doubt");
-                Contains(t.Message, "cannot list", "a failure names the kept reason");
+                Contains(t.Message, "cannot apply yes to ResetModule", "a failure names the kept reason");
             }
         }
     
@@ -337,16 +351,16 @@ namespace Tiad.Test
         {
             var r = new Run(delegate { return null; });
             object k = new object();
-            Caught(Pre(r.D, k, "StopModules", delegate { return List(P(k, "StopModules", "stop")); }));
+            Caught(Pre(r.D, k, "StopModules"));
             Contains(r.D.Cancelled.Message, r.D.Token, "the decline carries the token");
             True(System.Text.RegularExpressions.Regex.IsMatch(r.D.Token, "^tiad-decline:[0-9a-f]{16}$"), "token shape " + r.D.Token);
-            True(new DownloadDecider(AllYes).Token != new DownloadDecider(AllYes).Token, "a token per download");
-            string words = "the download was not decided: nothing was loaded";
+            True(Decider().Token != Decider().Token, "a token per download");
+            string words = "tiad cancels the download at TIA's StopModules (msg): the request does not answer it yes";
             foreach (Exception other in new Exception[]
             {
                 new InvalidOperationException("Download failed: " + words),
                 new OperationCanceledException(words),
-                new InvalidOperationException("wrapped", new OperationCanceledException(words + " (" + new DownloadDecider(AllYes).Token + ")")),
+                new InvalidOperationException("wrapped", new OperationCanceledException(words + " (" + Decider().Token + ")")),
             })
             {
                 DownloadEnd end = r.D.Finish(true, null, "", other);
@@ -361,9 +375,8 @@ namespace Tiad.Test
             // token in what it throws back.
             var r = new Run(delegate { return null; });
             object a = new object(), b = new object();
-            Func<List<Pending>> list = delegate { return List(P(a, "StopModules", "stop"), P(b, "OverwriteSystemData", "over")); };
-            Exception first = ThroughTia(Pre(r.D, a, "StopModules", list), true, "first");
-            Exception second = ThroughTia(Pre(r.D, b, "OverwriteSystemData", list), true, "second");
+            Exception first = ThroughTia(Pre(r.D, a, "StopModules"), true, "first");
+            Exception second = ThroughTia(Pre(r.D, b, "OverwriteSystemData"), true, "second");
             True(r.D.Cancelled != null && !r.D.Cancelled.Declined, "a callback after the decline is a failure");
             Contains(r.D.Cancelled == null ? null : r.D.Cancelled.Message, "TIA went on", "named");
             foreach (Exception back in new[] { first, second })
