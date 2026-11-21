@@ -21,6 +21,94 @@ func contractAccessControl(t *testing.T, start Starter) {
 	t.Run("NewStation", func(t *testing.T) { contractAccessNewStation(t, start) })
 	t.Run("Adopted", func(t *testing.T) { contractAccessAdopted(t, start) })
 	t.Run("UploadRemovesWhatTheSessionMade", func(t *testing.T) { contractAccessUpload(t, start) })
+	t.Run("NoRecord", func(t *testing.T) { contractAccessNoRecord(t, start) })
+}
+
+// contractAccessNoRecord: a found user whose record is another agent
+// key's, a user tiad did not make, a role tiad did not make. Each refusal
+// comes before any write, so the same session takes the fix:
+// fullAccessRecordOnly records the secret without setting it, or takes a
+// foreign user over; a foreign role is never taken over.
+func contractAccessNoRecord(t *testing.T, start Starter) {
+	a := start(t, Config{Targets: []string{benchCPU}})
+	c := a.Client()
+	installGSD(t, c)
+	s, err := c.CreateProject(ctx, "norec", BenchStation(), BenchSecrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Save(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	open := func(records string) *tiad.Session {
+		t.Helper()
+		a.SetAccess(t, AccessScript{Records: records})
+		s, err := c.Open(ctx, "projects/norec/norec.ap21")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	recordOnly := tiad.ApplyOptions{FullAccessRecordOnly: true}
+
+	// Another agent key's record and the unchanged secret: ambiguous.
+	s = open("rekey")
+	if _, err := s.ApplyStation(ctx, BenchStation(), BenchSecrets); tiad.Kind(err) != tiad.KindBadRequest || !strings.Contains(err.Error(), ReusedOtherKey) {
+		t.Fatalf("the unchanged secret under another key's record: %v", err)
+	}
+	keep := BenchStation()
+	keep.CPU.AccessControl = tiad.AccessKeep
+	if _, err := s.ApplyStationWith(ctx, keep, BenchSecrets, recordOnly); tiad.Kind(err) != tiad.KindBadRequest ||
+		!strings.Contains(err.Error(), "fullAccessRecordOnly goes with cpu.accessControl fullAccessUser") {
+		t.Fatalf("fullAccessRecordOnly with keep: %v", err)
+	}
+	if r, err := s.ApplyStationWith(ctx, BenchStation(), BenchSecrets, recordOnly); err != nil || !noteWith(r.Notes, RecordedUserNote) {
+		t.Fatalf("fullAccessRecordOnly on the same session after the refusal: %+v %v", r, err)
+	}
+	if r, err := s.ApplyStation(ctx, BenchStation(), BenchSecrets); err != nil || !noteWith(r.Notes, UnchangedUserNote) {
+		t.Fatalf("the secret after it was recorded: %+v %v", r, err)
+	}
+	rotated := BenchSecrets
+	rotated.FullAccessPassword = "Rotated-access-2027"
+	if r, err := s.ApplyStation(ctx, BenchStation(), rotated); err != nil || !noteWith(r.Notes, SetUserNote) {
+		t.Fatalf("a rotated secret after the record: %+v %v", r, err)
+	}
+	if _, err := s.Compile(ctx, true, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// A user that carries no tiad record: refused, then taken over only
+	// when asked.
+	s = open("strip-users")
+	if _, err := s.ApplyStation(ctx, BenchStation(), BenchSecrets); tiad.Kind(err) != tiad.KindBadRequest || !strings.Contains(err.Error(), ForeignUser) {
+		t.Fatalf("a user tiad did not make: %v", err)
+	}
+	if r, err := s.ApplyStationWith(ctx, BenchStation(), BenchSecrets, recordOnly); err != nil || !noteWith(r.Notes, TakenOverNote) {
+		t.Fatalf("taking a foreign user over: %+v %v", r, err)
+	}
+	if r, err := s.ApplyStation(ctx, BenchStation(), BenchSecrets); err != nil || !noteWith(r.Notes, UnchangedUserNote) {
+		t.Fatalf("after the take-over: %+v %v", r, err)
+	}
+	if err := s.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// A role tiad did not make: never granted Full access.
+	s = open("strip-roles")
+	for _, o := range []tiad.ApplyOptions{{}, recordOnly} {
+		if _, err := s.ApplyStationWith(ctx, BenchStation(), BenchSecrets, o); tiad.Kind(err) != tiad.KindBadRequest || !strings.Contains(err.Error(), ForeignRole) {
+			t.Fatalf("a role tiad did not make (%+v): %v", o, err)
+		}
+	}
+	if r, err := s.ApplyStation(ctx, keep, BenchSecrets); err != nil {
+		t.Fatalf("keep beside a foreign role, after the refusals: %+v %v", r, err)
+	}
 }
 
 func accessStation(mode string) tiad.Station {
@@ -49,7 +137,7 @@ func noteWith(notes []string, part string) bool {
 }
 
 const (
-	madeUser  = `made the user "nautilus" with the runtime right Full access`
+	madeUser  = MadeUserNote
 	foundUser = UnchangedUserNote
 )
 
@@ -73,6 +161,21 @@ func contractAccessPassword(t *testing.T, start Starter) {
 	if status != http.StatusBadRequest || !strings.Contains(envelopeMessage(b), "secrets.fullAccessPassword is empty") {
 		t.Fatalf("a Full access user with only the other passwords: HTTP %d %s", status, b)
 	}
+	// Each password is its own secret.
+	for _, c2 := range []struct{ field, want string }{
+		{"configurationPassword", "secrets.configurationPassword"},
+		{"protection", "secrets.protection"},
+	} {
+		status, b = create("same", map[string]any{"webUsers": BenchSecrets.WebUsers, "fullAccessPassword": BenchFullAccessPassword, c2.field: BenchFullAccessPassword})
+		if msg := envelopeMessage(b); status != http.StatusBadRequest || !strings.Contains(msg, "secrets.fullAccessPassword is the same as "+c2.want+": each password is its own secret") ||
+			strings.Contains(msg, BenchFullAccessPassword) {
+			t.Fatalf("the Full access password equal to %s: HTTP %d %s", c2.field, status, b)
+		}
+	}
+	status, b = create("same", map[string]any{"webUsers": map[string]string{"naut": BenchFullAccessPassword}, "fullAccessPassword": BenchFullAccessPassword})
+	if status != http.StatusBadRequest || !strings.Contains(envelopeMessage(b), `secrets.fullAccessPassword is the same as secrets.webUsers["naut"]`) {
+		t.Fatalf("the Full access password equal to a web user's: HTTP %d %s", status, b)
+	}
 	weak := "weakpass1x"
 	status, b = create("weak", map[string]any{"webUsers": BenchSecrets.WebUsers, "fullAccessPassword": weak})
 	if msg := envelopeMessage(b); status != http.StatusBadRequest || !strings.Contains(msg, "secrets.fullAccessPassword breaks TIA's password rules") ||
@@ -81,7 +184,7 @@ func contractAccessPassword(t *testing.T, start Starter) {
 	}
 	// A project whose own policy is stricter than TIA's default refuses
 	// before any write, naming its rules.
-	a.SetAccess(t, PasswordPolicy{MinLength: 12, MinDigits: 1, MinSpecial: 3, UpperAndLower: true}, "")
+	a.SetAccess(t, AccessScript{Policy: &PasswordPolicy{MinLength: 12, MinDigits: 1, MinSpecial: 3, UpperAndLower: true}})
 	status, b = create("strict", map[string]any{"webUsers": BenchSecrets.WebUsers, "fullAccessPassword": BenchFullAccessPassword})
 	if msg := envelopeMessage(b); status != http.StatusBadRequest ||
 		!strings.Contains(msg, "secrets.fullAccessPassword breaks the project's password policy for local users (at least 12 characters, 1 digit(s), 3 special character(s), upper and lower case): fewer than 3 special character(s)") ||
@@ -133,10 +236,16 @@ func contractAccessNewStation(t *testing.T, start Starter) {
 	if _, err := s.Compile(ctx, true, true); err != nil {
 		t.Fatal(err)
 	}
-	// Back to a password the user had: TIA refuses it, and the apply says
-	// what to do.
-	if _, err := s.ApplyStation(ctx, BenchStation(), BenchSecrets); err == nil || !strings.Contains(err.Error(), ReusedPassword) {
+	// Back to a password the user had: TIA refuses it before any write,
+	// the apply says what to do, and the session is as it was.
+	if _, err := s.ApplyStation(ctx, BenchStation(), BenchSecrets); tiad.Kind(err) != tiad.KindBadRequest || !strings.Contains(err.Error(), ReusedPassword) {
 		t.Fatalf("a password the user had: %v", err)
+	}
+	if r, err := s.ApplyStation(ctx, BenchStation(), rotated); err != nil || !noteWith(r.Notes, UnchangedUserNote) {
+		t.Fatalf("the session after the refusal: %+v %v", r, err)
+	}
+	if _, err := s.Save(ctx, false); err != nil {
+		t.Fatalf("a save after the refusal: %v", err)
 	}
 }
 
@@ -169,7 +278,7 @@ func contractAccessAdopted(t *testing.T, start Starter) {
 		t.Fatalf("an adopted CPU without access control compiles: %v", err)
 	}
 
-	a.SetAccess(t, DefaultPasswordPolicy(), AccessEnabled)
+	a.SetAccess(t, AccessScript{UploadAccessControl: AccessEnabled})
 	s2, err := c.CreateProject(ctx, "adopt2", BenchStation(), BenchSecrets)
 	if err != nil {
 		t.Fatal(err)
@@ -178,12 +287,12 @@ func contractAccessAdopted(t *testing.T, start Starter) {
 		t.Fatal(err)
 	}
 	// The project's own policy is checked before any write on an apply too.
-	a.SetAccess(t, PasswordPolicy{MinLength: 12, MinDigits: 1, MinSpecial: 3, UpperAndLower: true}, AccessEnabled)
+	a.SetAccess(t, AccessScript{Policy: &PasswordPolicy{MinLength: 12, MinDigits: 1, MinSpecial: 3, UpperAndLower: true}, UploadAccessControl: AccessEnabled})
 	if _, err := s2.ApplyStation(ctx, full, BenchSecrets); tiad.Kind(err) != tiad.KindBadRequest ||
 		!strings.Contains(err.Error(), "secrets.fullAccessPassword breaks the project's password policy for local users") {
 		t.Fatalf("a password the project's policy refuses, on an apply: %v", err)
 	}
-	a.SetAccess(t, DefaultPasswordPolicy(), AccessEnabled)
+	a.SetAccess(t, AccessScript{UploadAccessControl: AccessEnabled})
 	if r, err := s2.ApplyStation(ctx, full, BenchSecrets); err != nil || !noteWith(r.Notes, madeUser) {
 		t.Fatalf("fullAccessUser on an adopted CPU with access control on (the policy refusal left the session as it was): %+v %v", r, err)
 	}
@@ -202,7 +311,7 @@ func contractAccessUpload(t *testing.T, start Starter) {
 	installGSD(t, c)
 	// Uploads bring a CPU with access control on, so an apply after one
 	// shows whether the user is still there.
-	a.SetAccess(t, DefaultPasswordPolicy(), AccessEnabled)
+	a.SetAccess(t, AccessScript{UploadAccessControl: AccessEnabled})
 	full := adoptedStation()
 	full.CPU.AccessControl = tiad.AccessFullAccessUser
 

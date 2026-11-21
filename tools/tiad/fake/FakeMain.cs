@@ -253,6 +253,23 @@ namespace Tiad.Fake
         bool noIdentify;
         PasswordPolicy policy = new PasswordPolicy();
         string uploadAccess = UploadedAccessControl;
+        string accessRecords = "";
+
+        // AccessRecords is what an open does to tiad's records in a saved
+        // project: "" keeps them; "strip-users" opens the users without
+        // them and "strip-roles" the roles without tiad's comment, as in a
+        // project tiad did not make them in; "rekey" opens the records as
+        // another agent key's.
+        public string AccessRecords
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return accessRecords;
+                }
+            }
+        }
 
         // UploadedAccessControl is the bench CPU's access control as the
         // S2a upload found it, unless a script says otherwise.
@@ -510,6 +527,7 @@ namespace Tiad.Fake
                 pol.UpperAndLower = pr.Bool("upperAndLower");
             }
             string upAccess = r.Str("uploadAccessControl");
+            string records = r.Str("accessRecords");
             if (upAccess == "") upAccess = UploadedAccessControl;
             var qs = new List<Question>();
             foreach (var x in r.Children("questions"))
@@ -534,6 +552,7 @@ namespace Tiad.Fake
                 noIdentify = noId;
                 policy = pol;
                 uploadAccess = upAccess;
+                accessRecords = records;
             }
             return new Obj();
         }
@@ -576,6 +595,7 @@ namespace Tiad.Fake
         public string AccessControl = AccessRule.Absent;
         public Dictionary<string, FakeUser> Users = new Dictionary<string, FakeUser>(StringComparer.Ordinal);
         public Dictionary<string, bool> Roles = new Dictionary<string, bool>(StringComparer.Ordinal);
+        public Dictionary<string, string> RoleComments = new Dictionary<string, string>(StringComparer.Ordinal);
 
         // CompileError is what a hardware compile of this project fails
         // with, as TIA words it, or null.
@@ -612,6 +632,7 @@ namespace Tiad.Fake
             Users = new Dictionary<string, FakeUser>(StringComparer.Ordinal);
             foreach (var kv in from.Users) Users[kv.Key] = new FakeUser { Password = kv.Value.Password, Comment = kv.Value.Comment, History = new List<string>(kv.Value.History), Roles = new HashSet<string>(kv.Value.Roles) };
             Roles = new Dictionary<string, bool>(from.Roles, StringComparer.Ordinal);
+            RoleComments = new Dictionary<string, string>(from.RoleComments, StringComparer.Ordinal);
         }
     }
 
@@ -650,11 +671,22 @@ namespace Tiad.Fake
             p.AccessControl = AccessRule.Enabled;
         }
 
-        public bool EnsureRole(string role)
+        public bool HasRole(string role)
         {
-            if (p.Roles.ContainsKey(role)) return false;
+            return p.Roles.ContainsKey(role);
+        }
+
+        public string RoleComment(string role)
+        {
+            string c;
+            return p.RoleComments.TryGetValue(role, out c) ? c : "";
+        }
+
+        public void MakeRole(string role, string comment)
+        {
+            if (p.Roles.ContainsKey(role)) throw new TiaException("A role with the name " + role + " already exists.");
             p.Roles[role] = false;
-            return true;
+            p.RoleComments[role] = comment;
         }
 
         public void GrantFullAccess(string role)
@@ -705,7 +737,7 @@ namespace Tiad.Fake
             bool on;
             if (!p.Users.TryGetValue(user, out u)) return "the user " + Json.Quote(user) + " is not in the project";
             if (!u.Roles.Contains(role)) return "the user " + Json.Quote(user) + " lacks the role " + Json.Quote(role);
-            if (!p.Roles.TryGetValue(role, out on) || !on) return "the role " + Json.Quote(role) + " lacks Full access on the CPU";
+            if (!p.Roles.TryGetValue(role, out on) || !on) return "the role " + Json.Quote(role) + " lacks the runtime right Full access on the CPU";
             return null;
         }
     }
@@ -812,6 +844,17 @@ namespace Tiad.Fake
                 p.Protection = sp.Protection;
                 p.ProtectedWith = sp.ProtectedWith;
                 p.CopyAccess(sp);
+                string how = script.AccessRecords;
+                if (how == "strip-users") foreach (var u in p.Users.Values) u.Comment = "";
+                if (how == "strip-roles") p.RoleComments.Clear();
+                if (how == "rekey")
+                {
+                    const string v2 = "tiad password record v2:";
+                    foreach (var u in p.Users.Values)
+                    {
+                        if (u.Comment.StartsWith(v2, StringComparison.Ordinal)) u.Comment = v2 + "00000000" + u.Comment.Substring(v2.Length + 8);
+                    }
+                }
             }
             return p;
         }
@@ -851,7 +894,7 @@ namespace Tiad.Fake
             p.Changed = true;
             p.Station = null;
             ProtectionSteps.Run(new FakeMasterSecret(p), next.Cpu.ConfigurationProtection, secrets.ConfigurationPassword, notes);
-            AccessSteps.Run(new FakeAccess(p, script.Policy), next.Cpu.AccessControl, secrets.FullAccessPassword, secrets.FullAccessFingerprint, decision == CpuReuse.Create, made, notes);
+            AccessSteps.Run(new FakeAccess(p, script.Policy), next.Cpu.AccessControl, secrets.FullAccessPassword, secrets.Records, decision == CpuReuse.Create, made, notes);
             p.Station = next;
             p.Changed = was || CpuReuse.Changes(decision, prev, next).Count > 0;
         }
@@ -862,16 +905,25 @@ namespace Tiad.Fake
             return script.Policy;
         }
 
-        public void RemoveAccess(object project, AccessMade made)
+        public void PrepareAccess(object project, Station next, Secrets secrets, bool recordOnly, AccessWrites w, List<string> notes)
+        {
+            script.Enter("PrepareAccess");
+            AccessSteps.Prepare(new FakeAccess((FakeProject)project, script.Policy), next.Cpu.AccessControl, secrets.FullAccessPassword, secrets.Records, recordOnly, w, notes);
+        }
+
+        public List<string> RemoveAccess(object project, AccessMade made)
         {
             script.Enter("RemoveAccess");
             var p = (FakeProject)project;
-            if (made.User) p.Users.Remove(AccessSteps.UserName);
-            if (made.Role)
+            var removed = new List<string>();
+            if (made.User && p.Users.Remove(AccessSteps.UserName)) removed.Add("user " + Json.Quote(AccessSteps.UserName));
+            if (made.Role && p.Roles.Remove(AccessSteps.RoleName))
             {
-                p.Roles.Remove(AccessSteps.RoleName);
+                p.RoleComments.Remove(AccessSteps.RoleName);
                 foreach (var u in p.Users.Values) u.Roles.Remove(AccessSteps.RoleName);
+                removed.Add("role " + Json.Quote(AccessSteps.RoleName));
             }
+            return removed;
         }
 
         public string CannotApply(Station next)

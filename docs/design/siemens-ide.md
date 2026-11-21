@@ -357,39 +357,72 @@ The rules for applying a spec:
       (`Disabled`, as the S2a upload found the bench CPU, the legacy
       access levels, a CPU without the setting) refuses before any write,
       naming `keep`.
-    - The user and the role are found or made, by name. A user the
-      project held is never made again. TIA refuses to set a password the
-      user has had (its current one included, as many as the project's
-      policy blocks for reuse, 5 by default) and cannot check one offline,
-      so tiad keeps a fingerprint of the password it set: an HMAC-SHA256
-      of the user and the password under a key derived from the agent's
-      token, in the user's comment in the project (never the password).
-      An apply whose secret has that fingerprint leaves the password
-      ("unchanged" in `notes`); any other secret is set ("now
-      secrets.fullAccessPassword"), so a rotated secret reaches a reused
-      project too. A secret TIA refuses as one the user had fails the
-      apply, naming the fix: choose another password, or make the project
-      again. A project without tiad's record (another agent's token, a
-      user tiad did not set) gets the secret set. Openness has no typed
-      error for that refusal, so the glue matches TIA's one phrase ("The
-      specified password has already been used") and nothing wider.
+    - The user and the role are found or made, by name. tiad takes over
+      neither unasked: a found role must carry tiad's comment, and a
+      found user tiad's record (below), or the apply refuses before any
+      write, naming `keep`. A found user without a record can be taken
+      over only explicitly, with `fullAccessRecordOnly` (journalled); a
+      found role never is.
+    - **tiad's record.** TIA refuses to set a password the user has had
+      (its current one included, as many as the project's policy blocks
+      for reuse, 5 by default), and cannot check one offline. So tiad
+      keeps a record of the password it set in the user's comment in the
+      project, never the password: `tiad password record
+      v2:<key id>:<salt>:<HMAC-SHA256>` of the salt, the user and the
+      password, under the agent's own random key (`TIAD_ACCESS_KEY_FILE`,
+      made by the installer, locked like the token, kept across reinstalls
+      and an uninstall; not the token). The salt is random per record, so
+      one password gives a different record in every project, and the key
+      id tells this agent's records from another key's.
+    - **A found user's password, before any write.** The apply settles
+      it first, so a refusal leaves the session as it was:
+      - the record matches the secret: left ("unchanged" in `notes`);
+      - otherwise tiad writes the new record, then sets the password
+        ("now secrets.fullAccessPassword"), so a rotated secret reaches a
+        reused project; if TIA refuses the password as one the user had,
+        tiad puts the old record back and refuses: "choose another
+        password". If putting it back fails, the session is unclean, and an
+        upload (which replaces devices, not users) refuses too;
+      - the record is another agent key's (a new machine, a lost key) and
+        TIA refuses the unchanged secret: tiad cannot tell the current
+        password from an older one, says so, and names
+        `fullAccessRecordOnly`;
+      - `fullAccessRecordOnly` (on `PUT .../station`, with
+        `fullAccessUser`) records the secret as the user's password without
+        setting it, journalled on the agent's log.
+      Openness has no typed error for TIA's refusal, so the glue matches
+      its one phrase ("The specified password has already been used") and
+      nothing wider; any other failure stays TIA's own.
+    - The record tells what tiad last set or recorded in this project, not
+      what the user has now: a password changed in TIA by hand still reads
+      "unchanged". Nor does it say anything about the CPU until a download
+      loads the users (below).
     - After the writes tiad reads back that the user holds Full access
       through the role on this CPU, and refuses otherwise.
-    - The password meets TIA's rules (below) before any TIA call, and the
-      project's own password policy for local users before any write
-      (TIA's default: 10 characters, a digit, upper and lower case; a
-      project may ask more). The refusal names every rule and never the
+    - The password meets TIA's rules (below) before any TIA call; it is
+      none of the other secrets (protection, configuration, a web user's);
+      and it meets the project's own password policy for local users
+      before any write of an apply (TIA's default: 10 characters, a
+      digit, upper and lower case; a project may ask more; a special
+      character is ASCII punctuation only, never looser than TIA). The
+      policy is checked even when the password will not be set. On
+      `POST /v1/projects` the new project's policy is read once it is
+      made, so a refusal there has replaced the old project of that name,
+      as any create does. The refusal names every rule and never the
       password.
   - `keep`: tiad changes nothing, for an adopted station. Unlike
     `configurationProtection`, a new CPU takes `keep` too; it then fails
     its hardware compile, which names the missing Full access user.
   - Users and roles belong to the project, not to the CPU: they outlive
-    any device delete (an apply that makes the CPU, an upload). An upload
-    removes, before it uploads, exactly the user and role that applies on
-    the same session made, and reports them in `removedAccess`, so an
-    adopted project holds no user tiad made for the station a create
-    started from. A user or role the project held before (one an earlier
-    deploy made on purpose) is never removed.
+    a device delete (proven for a CPU deleted in TIA; for an upload,
+    modelled by the fakes, unproven live). An upload removes, before it
+    uploads, exactly the user and role that applies on the same session
+    made (taking the role off every user first), and reports what it
+    removed in `removedAccess`, so a create, upload and apply on one
+    session leave an adopted project with no user tiad made for the
+    throwaway station. A project saved, reopened and uploaded keeps them,
+    as does a user or role the project held before (one an earlier deploy
+    made on purpose).
   - A plain local user does not protect the project: it still opens
     without a login (only a project administrator does that, which tiad
     never makes).
@@ -412,7 +445,10 @@ The rules for applying a spec:
     and Full access is the right `ProtectionLevelFullAccess`. Unproven:
     whether TIA refuses to make a user again, under a removed user's name,
     with a password that user had (an upload, then an apply; it needs a
-    live upload).
+    live upload); whether TIA deletes a role a user still holds (tiad
+    takes it off the users first); the v2 record format and the
+    record-first ordering ran only in the fakes and unit tests (the v1
+    record ran on the TIA machine).
 - **Which CPU an apply uses** (#789). The agent reads the project's CPU
   before it writes anything, and decides:
   - The project holds no CPU: the apply removes every device and makes

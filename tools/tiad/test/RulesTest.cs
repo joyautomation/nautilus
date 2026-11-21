@@ -90,6 +90,8 @@ namespace Tiad.Test
                 T("AccessStepsNewCpu", AccessStepsNewCpu),
                 T("AccessStepsKeptCpu", AccessStepsKeptCpu),
                 T("AccessStepsReadBack", AccessStepsReadBack),
+                T("AccessPrepare", AccessPrepare),
+                T("AccessRecordsKnownAnswer", AccessRecordsKnownAnswer),
                 T("AccessPasswordChecks", AccessPasswordChecks),
                 T("DecideOnceAtTheFirstCallback", DecideOnceAtTheFirstCallback),
                 T("DecideAsksStartAfterBeforeLoading", DecideAsksStartAfterBeforeLoading),

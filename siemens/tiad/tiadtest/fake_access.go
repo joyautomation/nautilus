@@ -1,8 +1,6 @@
 package tiadtest
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -23,22 +21,19 @@ const (
 // control on and no user holding the runtime right Full access on it.
 const NoFullAccess = "Users and roles: At least one user must have the following runtime right: Full access"
 
-// UnchangedUserNote and SetUserNote are what an apply says about a
-// "nautilus" user the project held (AccessSteps.UnchangedNote, SetNote);
-// ReusedPassword is the refusal of a password the user has had
-// (AccessSteps.Reused).
+// The notes and refusals of AccessSteps, word for word.
 const (
-	UnchangedUserNote = `the project's user "nautilus" has the runtime right Full access (role "nautilus full access"); its password is unchanged: secrets.fullAccessPassword is the one tiad last set`
+	MadeUserNote      = `made the user "nautilus" with the runtime right Full access (role "nautilus full access"), its password from secrets.fullAccessPassword`
+	UnchangedUserNote = `the project's user "nautilus" has the runtime right Full access (role "nautilus full access"); its password is unchanged: secrets.fullAccessPassword is the one tiad last set or recorded in this project (a change made in TIA since would not show)`
 	SetUserNote       = `the project's user "nautilus" has the runtime right Full access (role "nautilus full access"); its password is now secrets.fullAccessPassword`
-	ReusedPassword    = `TIA refuses secrets.fullAccessPassword for the user "nautilus": TIA blocks a user's recent passwords for reuse (the current one included, when tiad has no record of having set it in this project): choose another password, or make the project again (POST /v1/projects)`
+	RecordedUserNote  = `the project's user "nautilus" has the runtime right Full access (role "nautilus full access"); its password was not set: on fullAccessRecordOnly, tiad now records secrets.fullAccessPassword as the user's password, which it cannot check offline`
+	TakenOverNote     = `the project's user "nautilus", which carried no tiad record, is taken over on fullAccessRecordOnly: its comment is now tiad's record of secrets.fullAccessPassword as its password, which tiad did not set and cannot check offline, and it gets the runtime right Full access (role "nautilus full access")`
+	ReusedPassword    = `TIA refuses secrets.fullAccessPassword for the user "nautilus": the user had that password recently, and TIA blocks a user's recent passwords for reuse: choose another password, or make the project again (POST /v1/projects)`
+	ReusedOtherKey    = `TIA refuses secrets.fullAccessPassword for the user "nautilus" as a password the user has now or had recently, and the project's record of it was made under another agent key, so tiad cannot tell which: if the password did not change, apply again with fullAccessRecordOnly to record it under this agent's key without setting it (journalled); otherwise choose another password, or make the project again (POST /v1/projects)`
+	ForeignUser       = `the project holds a user "nautilus" that carries no tiad record, so tiad did not make it and does not take it over unasked: set cpu.accessControl to keep, or apply with fullAccessRecordOnly to take it over with secrets.fullAccessPassword recorded as its password (journalled; tiad does not set it and cannot check it)`
+	ForeignRole       = `the project holds a role "nautilus full access" that tiad did not make, and tiad does not grant Full access to a role it did not make: set cpu.accessControl to keep`
 )
 
-// fingerprint stands in for the agent's keyed fingerprint (AccessKey):
-// the fake never keeps a password where tiad would not.
-func fingerprint(password string) string {
-	h := sha256.Sum256([]byte("fake\n" + password))
-	return hex.EncodeToString(h[:])
-}
 
 // The user and role tiad makes for cpu.accessControl fullAccessUser
 // (AccessSteps.UserName and RoleName).
@@ -91,7 +86,7 @@ func (p PasswordPolicy) check(pw string) string {
 			upper = true
 		case r >= 'a' && r <= 'z':
 			lower = true
-		default:
+		case r > ' ' && r < 127:
 			special++
 		}
 	}
@@ -121,10 +116,11 @@ func (p PasswordPolicy) check(pw string) string {
 // project's, not the CPU's, so they outlive any device delete. A role
 // maps to whether it holds Full access on the project's CPU: replacing the
 // CPU (a create, an upload) clears every grant, as deleting the device
-// drops its rights.
+// drops its rights. ours holds the roles that carry tiad's comment.
 type access struct {
 	users map[string]*fakeUser
 	roles map[string]bool
+	ours  map[string]bool
 }
 
 type fakeUser struct {
@@ -132,23 +128,29 @@ type fakeUser struct {
 	// history is the user's last passwords, the current one last: TIA
 	// refuses any of them as a new one (5, its default policy).
 	history []string
-	// fingerprint is what tiad recorded of the password it set (the
-	// user's comment in TIA).
-	fingerprint string
-	roles       map[string]bool
+	// recordKey is whose record the user's comment holds: "this" agent's,
+	// an "other" agent key's, or "" for no tiad record; recordPassword is
+	// the password it records. The fake never keeps it anywhere tiad would
+	// not: tiad keeps only a salted HMAC.
+	recordKey, recordPassword string
+	roles                     map[string]bool
 }
 
 func (a access) clone() access {
-	c := access{users: map[string]*fakeUser{}, roles: map[string]bool{}}
+	c := access{users: map[string]*fakeUser{}, roles: map[string]bool{}, ours: map[string]bool{}}
 	for n, u := range a.users {
 		rs := map[string]bool{}
 		for r := range u.roles {
 			rs[r] = true
 		}
-		c.users[n] = &fakeUser{password: u.password, history: append([]string(nil), u.history...), fingerprint: u.fingerprint, roles: rs}
+		c.users[n] = &fakeUser{password: u.password, history: append([]string(nil), u.history...),
+			recordKey: u.recordKey, recordPassword: u.recordPassword, roles: rs}
 	}
 	for n, g := range a.roles {
 		c.roles[n] = g
+	}
+	for n, o := range a.ours {
+		c.ours[n] = o
 	}
 	return c
 }
@@ -198,9 +200,64 @@ func planAccess(current *string, want string, havePassword bool) *failure {
 	return bad("the project's CPU has its access control %s, and tiad turns access control on only for a CPU it makes: to keep the CPU as found, set cpu.accessControl to keep", what)
 }
 
+func (s *session) ensureAccess() {
+	if s.access.users == nil {
+		s.access = access{users: map[string]*fakeUser{}, roles: map[string]bool{}, ours: map[string]bool{}}
+	}
+}
+
+// prepareAccess is AccessSteps.Prepare: before any write of the apply, a
+// found user's password, and a refusal of a user or role tiad did not
+// make. A refusal leaves the project as it was.
+func (s *session) prepareAccess(want, password string, recordOnly bool, notes *[]string) *failure {
+	bad := func(m string) *failure { return fail(http.StatusBadRequest, tiad.KindBadRequest, "%s", m) }
+	if want != tiad.AccessFullAccessUser {
+		return nil
+	}
+	s.ensureAccess()
+	if _, ok := s.access.roles[FullAccessRole]; ok && !s.access.ours[FullAccessRole] {
+		return bad(ForeignRole)
+	}
+	u, ok := s.access.users[FullAccessUser]
+	if !ok {
+		return nil
+	}
+	switch {
+	case u.recordKey == "":
+		if !recordOnly {
+			return bad(ForeignUser)
+		}
+		u.recordKey, u.recordPassword = "this", password
+		*notes = append(*notes, TakenOverNote)
+	case u.recordKey == "this" && u.recordPassword == password:
+		*notes = append(*notes, UnchangedUserNote)
+	case recordOnly:
+		u.recordKey, u.recordPassword = "this", password
+		*notes = append(*notes, RecordedUserNote)
+	default:
+		for _, h := range u.history {
+			if h == password {
+				if u.recordKey == "this" {
+					return bad(ReusedPassword)
+				}
+				return bad(ReusedOtherKey)
+			}
+		}
+		u.password, u.recordKey, u.recordPassword = password, "this", password
+		u.history = append(u.history, password)
+		if len(u.history) > 5 {
+			u.history = u.history[1:]
+		}
+		*notes = append(*notes, SetUserNote)
+	}
+	return nil
+}
+
 // applyAccess is AccessSteps.Run on s's project. madeCPU is the CPU the
-// apply made; what it makes is recorded on s at once.
+// apply made; what it makes is recorded on s at once. A found user's
+// password is prepareAccess's.
 func (s *session) applyAccess(want, password string, madeCPU bool, notes *[]string) *failure {
+	tiaFail := func(m string) *failure { return fail(http.StatusInternalServerError, tiad.KindOperationFailed, "TIA: %s", m) }
 	if want == tiad.AccessKeep {
 		return nil
 	}
@@ -213,49 +270,28 @@ func (s *session) applyAccess(want, password string, madeCPU bool, notes *[]stri
 	}
 	if madeCPU {
 		if s.accessControl == AccessAbsent {
-			return fail(http.StatusInternalServerError, tiad.KindOperationFailed, "TIA: the new CPU has no access control setting, so it cannot have a Full access user: set cpu.accessControl to keep")
+			return tiaFail("the new CPU has no access control setting, so it cannot have a Full access user: set cpu.accessControl to keep")
 		}
 		s.accessControl = AccessEnabled
 	}
-	if s.access.users == nil {
-		s.access = access{users: map[string]*fakeUser{}, roles: map[string]bool{}}
-	}
+	s.ensureAccess()
 	if _, ok := s.access.roles[FullAccessRole]; !ok {
+		s.access.ours[FullAccessRole] = true
 		s.made.role = true
+	} else if !s.access.ours[FullAccessRole] {
+		return tiaFail(ForeignRole)
 	}
 	s.access.roles[FullAccessRole] = true
-	// A found user's password is set only when the secret is not the one
-	// tiad last set (its fingerprint), and TIA refuses one the user has
-	// had.
-	fp := fingerprint(password)
 	u, ok := s.access.users[FullAccessUser]
-	note := ""
-	switch {
-	case !ok:
-		u = &fakeUser{password: password, history: []string{password}, fingerprint: fp, roles: map[string]bool{}}
+	if !ok {
+		u = &fakeUser{password: password, history: []string{password}, recordKey: "this", recordPassword: password, roles: map[string]bool{}}
 		s.access.users[FullAccessUser] = u
 		s.made.user = true
-	case u.fingerprint == fp:
-		note = UnchangedUserNote
-	default:
-		for _, h := range u.history {
-			if h == password {
-				return fail(http.StatusInternalServerError, tiad.KindOperationFailed, "TIA: %s", ReusedPassword)
-			}
-		}
-		u.password, u.fingerprint = password, fp
-		u.history = append(u.history, password)
-		if len(u.history) > 5 {
-			u.history = u.history[1:]
-		}
-		note = SetUserNote
+		*notes = append(*notes, MadeUserNote)
+	} else if u.recordKey == "" {
+		return tiaFail(ForeignUser)
 	}
 	u.roles[FullAccessRole] = true
-	if ok {
-		*notes = append(*notes, note)
-	} else {
-		*notes = append(*notes, fmt.Sprintf("made the user %q with the runtime right Full access (role %q), its password from secrets.fullAccessPassword", FullAccessUser, FullAccessRole))
-	}
 	return nil
 }
 
@@ -263,12 +299,13 @@ func (s *session) applyAccess(want, password string, madeCPU bool, notes *[]stri
 // returns what the upload reports as removedAccess.
 func (s *session) removeMade() []string {
 	var removed []string
-	if s.made.user {
+	if _, ok := s.access.users[FullAccessUser]; ok && s.made.user {
 		delete(s.access.users, FullAccessUser)
 		removed = append(removed, fmt.Sprintf("user %q", FullAccessUser))
 	}
-	if s.made.role {
+	if _, ok := s.access.roles[FullAccessRole]; ok && s.made.role {
 		delete(s.access.roles, FullAccessRole)
+		delete(s.access.ours, FullAccessRole)
 		for _, u := range s.access.users {
 			delete(u.roles, FullAccessRole)
 		}
@@ -278,14 +315,46 @@ func (s *session) removeMade() []string {
 	return removed
 }
 
-// SetAccess scripts the projects' password policy for local users and the
-// access control an upload brings ("" means Disabled, as the S2a upload
-// found the bench CPU).
-func (f *Fake) SetAccess(policy PasswordPolicy, uploadAccessControl string) {
+// openRecords is what an open does to tiad's records (AccessScript.Records).
+func (f *Fake) openRecords(a access) {
+	switch f.accessRecords {
+	case "strip-users":
+		for _, u := range a.users {
+			u.recordKey, u.recordPassword = "", ""
+		}
+	case "strip-roles":
+		for r := range a.ours {
+			delete(a.ours, r)
+		}
+	case "rekey":
+		for _, u := range a.users {
+			if u.recordKey == "this" {
+				u.recordKey = "other"
+			}
+		}
+	}
+}
+
+// AccessScript scripts what TIA holds about access control: the
+// projects' password policy for local users (nil: TIA's default), the
+// access control an upload brings ("": Disabled, as the S2a upload found
+// the bench CPU), and Records, what an open does to tiad's records in a
+// saved project: "" keeps them; "strip-users" opens the users without
+// them and "strip-roles" the roles without tiad's comment (a project tiad
+// did not make them in); "rekey" opens them as another agent key's.
+type AccessScript struct {
+	Policy              *PasswordPolicy `json:"passwordPolicy,omitempty"`
+	UploadAccessControl string          `json:"uploadAccessControl,omitempty"`
+	Records             string          `json:"accessRecords,omitempty"`
+}
+
+// SetAccess scripts access control (AccessScript).
+func (f *Fake) SetAccess(a AccessScript) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.policy = &policy
-	f.uploadAccess = uploadAccessControl
+	f.policy = a.Policy
+	f.uploadAccess = a.UploadAccessControl
+	f.accessRecords = a.Records
 }
 
 func (f *Fake) passwordPolicy() PasswordPolicy {

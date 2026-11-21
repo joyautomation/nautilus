@@ -111,6 +111,7 @@ From the environment only; nothing in a request changes it.
 |---|---|---|
 | `TIAD_ADDR` | `http://127.0.0.1:8190` | Port 0 picks a free port (tests) |
 | `TIAD_TOKEN` / `TIAD_TOKEN_FILE` | none | The bearer token, or a file holding it. Required, on loopback too: the agent refuses to start without one |
+| `TIAD_ACCESS_KEY_FILE` | none | The access-record key (64 hex characters): it signs tiad's record of the Full access password it set in a project (`cpu.accessControl`). The installer makes it and keeps it across reinstalls. Without it the key is the run's own, and a later run reads every record as another key's |
 | `TIAD_MAX_FILE_BYTES` | 1 GiB | The largest file a put takes (413 beyond it) |
 | `TIAD_WORKDIR` | `C:\tiad-work` | Required off Windows |
 | `TIAD_PINS_DIR` | `%ProgramData%\tiad\pins` | The device pins (siemens-ide.md §3.8). Required off Windows; refused inside `TIAD_WORKDIR`, which the files API reaches. `install-tiad.ps1` locks it and never wipes it |

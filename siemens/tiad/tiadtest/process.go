@@ -77,6 +77,7 @@ type Script struct {
 	// upload brings ("": Disabled, as the S2a upload found the bench CPU).
 	PasswordPolicy      *PasswordPolicy `json:"passwordPolicy,omitempty"`
 	UploadAccessControl string          `json:"uploadAccessControl,omitempty"`
+	AccessRecords       string          `json:"accessRecords,omitempty"`
 	Delays              []ScriptedCall  `json:"delays,omitempty"`
 	Failures   []ScriptedCall `json:"failures,omitempty"`
 }
@@ -274,11 +275,12 @@ func (p *Process) SetDevice(t testing.TB, d tiad.DeviceIdentity, noIdentify bool
 
 // SetAccess scripts the projects' password policy for local users and the
 // access control an upload brings.
-func (p *Process) SetAccess(t testing.TB, policy PasswordPolicy, uploadAccessControl string) {
+func (p *Process) SetAccess(t testing.TB, a AccessScript) {
 	t.Helper()
 	p.mu.Lock()
-	p.script.PasswordPolicy = &policy
-	p.script.UploadAccessControl = uploadAccessControl
+	p.script.PasswordPolicy = a.Policy
+	p.script.UploadAccessControl = a.UploadAccessControl
+	p.script.AccessRecords = a.Records
 	s := p.script
 	p.mu.Unlock()
 	p.SetScript(t, s)

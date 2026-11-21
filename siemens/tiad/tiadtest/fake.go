@@ -69,8 +69,9 @@ type Fake struct {
 	// policy is the projects' password policy for local users (nil:
 	// TIA's default), uploadAccess the access control an upload brings
 	// ("": Disabled). Set them with SetAccess.
-	policy       *PasswordPolicy
-	uploadAccess string
+	policy        *PasswordPolicy
+	uploadAccess  string
+	accessRecords string
 
 	mu        sync.Mutex
 	pins      map[string]tiad.DeviceIdentity // CPU address → device pin
@@ -880,9 +881,6 @@ func (f *Fake) createProject(r *http.Request) (any, *failure) {
 	if fl := f.checkStation(req.Station, req.Secrets); fl != nil {
 		return nil, fl
 	}
-	if fl := f.checkPolicy(req.Station, req.Secrets); fl != nil {
-		return nil, fl
-	}
 	project := "projects/" + req.Name + "/" + req.Name + ".ap21"
 	guard := "projects/" + req.Name + "/"
 	if f.projectOpen(project, guard) {
@@ -895,6 +893,12 @@ func (f *Fake) createProject(r *http.Request) (any, *failure) {
 		if strings.HasPrefix(strings.ToLower(p), strings.ToLower(guard)) {
 			delete(f.saved, p)
 		}
+	}
+	// As tiad does: the new project's policy is read once it is made, so
+	// a refusal comes after the old project of that name was replaced.
+	if fl := f.checkPolicy(req.Station, req.Secrets); fl != nil {
+		delete(f.sessions, s.id)
+		return nil, fl
 	}
 	// TIA makes a new CPU with its protection not set up and access
 	// control on.
@@ -938,6 +942,7 @@ func (f *Fake) openSession(r *http.Request) (any, *failure) {
 	if sp, ok := f.saved[p]; ok {
 		s.cpu, s.others, s.protection, s.protectedWith = sp.cpu, sp.others, sp.protection, sp.protectedWith
 		s.accessControl, s.access = sp.accessControl, sp.access.clone()
+		f.openRecords(s.access)
 	}
 	return tiad.Session{ID: s.id, Project: p}, nil
 }
@@ -979,14 +984,18 @@ func (f *Fake) applyStation(r *http.Request) (any, *failure) {
 		return nil, fl
 	}
 	var req struct {
-		Station tiad.Station `json:"station"`
-		Secrets tiad.Secrets `json:"secrets"`
+		Station              tiad.Station `json:"station"`
+		Secrets              tiad.Secrets `json:"secrets"`
+		FullAccessRecordOnly bool         `json:"fullAccessRecordOnly"`
 	}
 	if fl := decode(r, &req); fl != nil {
 		return nil, fl
 	}
 	if fl := f.checkStation(req.Station, req.Secrets); fl != nil {
 		return nil, fl
+	}
+	if req.FullAccessRecordOnly && req.Station.CPU.AccessControl != tiad.AccessFullAccessUser {
+		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "fullAccessRecordOnly goes with cpu.accessControl fullAccessUser")
 	}
 	// As the agent does: decided from the project's CPU before any write,
 	// so a refusal leaves the session as it was.
@@ -1007,6 +1016,11 @@ func (f *Fake) applyStation(r *http.Request) (any, *failure) {
 		kept = s.others
 	}
 	if fl := f.checkPolicy(req.Station, req.Secrets); fl != nil {
+		return nil, fl
+	}
+	// A found user's password and a user or role tiad did not make,
+	// before any write: a refusal leaves the session as it was.
+	if fl := s.prepareAccess(req.Station.CPU.AccessControl, req.Secrets.FullAccessPassword, req.FullAccessRecordOnly, &notes); fl != nil {
 		return nil, fl
 	}
 	prev := s.station

@@ -2,6 +2,7 @@ package tiad
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/joyautomation/nautilus/siemens/station"
@@ -136,8 +137,32 @@ func (s Secrets) CheckFor(st Station) error {
 	if st.CPU.AccessControl == AccessFullAccessUser {
 		if s.FullAccessPassword == "" {
 			errs = append(errs, "cpu.accessControl is fullAccessUser, and secrets.fullAccessPassword is empty (it comes from the secret store, never the spec)")
-		} else if err := checkTiaPassword(s.FullAccessPassword); err != nil {
-			errs = append(errs, fmt.Sprintf("secrets.fullAccessPassword %v", err))
+		} else {
+			if err := checkTiaPassword(s.FullAccessPassword); err != nil {
+				errs = append(errs, fmt.Sprintf("secrets.fullAccessPassword %v", err))
+			}
+			same := ""
+			switch s.FullAccessPassword {
+			case s.ConfigurationPassword:
+				same = "secrets.configurationPassword"
+			case s.Protection:
+				same = "secrets.protection"
+			default:
+				names := make([]string, 0, len(s.WebUsers))
+				for n := range s.WebUsers {
+					names = append(names, n)
+				}
+				sort.Strings(names)
+				for _, n := range names {
+					if s.WebUsers[n] == s.FullAccessPassword {
+						same = fmt.Sprintf("secrets.webUsers[%q]", n)
+						break
+					}
+				}
+			}
+			if same != "" {
+				errs = append(errs, "secrets.fullAccessPassword is the same as "+same+": each password is its own secret")
+			}
 		}
 	}
 	if len(errs) == 0 {

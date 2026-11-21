@@ -174,10 +174,9 @@ namespace Tiad
         // right Full access (cpu.accessControl fullAccessUser): its own
         // secret, never Protection or ConfigurationPassword.
         public string FullAccessPassword = "";
-        // FullAccessFingerprint is AccessKey's fingerprint of
-        // FullAccessPassword, which the agent computes for each call; never
-        // read from a request, never written anywhere but the user's comment.
-        public string FullAccessFingerprint = "";
+        // Records is the agent's access record key (AccessRecords), which
+        // the agent sets for each call; never read from a request.
+        public AccessRecords Records;
 
         public static Secrets Read(Reader r)
         {
@@ -222,6 +221,18 @@ namespace Tiad
                 {
                     string e = StationRules.CheckTiaPassword(FullAccessPassword);
                     if (e != null) errs.Add("secrets.fullAccessPassword " + e);
+                    string same = FullAccessPassword == ConfigurationPassword ? "secrets.configurationPassword"
+                        : FullAccessPassword == Protection ? "secrets.protection" : null;
+                    if (same == null)
+                    {
+                        var names = new List<string>(WebUsers.Keys);
+                        names.Sort(StringComparer.Ordinal);
+                        foreach (string n in names)
+                        {
+                            if (WebUsers[n] == FullAccessPassword) { same = "secrets.webUsers[" + Json.Quote(n) + "]"; break; }
+                        }
+                    }
+                    if (same != null) errs.Add("secrets.fullAccessPassword is the same as " + same + ": each password is its own secret");
                 }
             }
             return errs.Count == 0 ? null : string.Join("; ", errs.ToArray());

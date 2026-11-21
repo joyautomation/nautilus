@@ -162,9 +162,14 @@ namespace Tiad
         // ReadPolicy is the project's password policy for local users.
         PasswordPolicy ReadPolicy(object project);
 
+        // PrepareAccess runs AccessSteps.Prepare on the project's users,
+        // before any write of an apply.
+        void PrepareAccess(object project, Station next, Secrets secrets, bool recordOnly, AccessWrites w, List<string> notes);
+
         // RemoveAccess removes from the project's users and roles what made
-        // names (AccessSteps' user and role), and nothing else.
-        void RemoveAccess(object project, AccessMade made);
+        // names (AccessSteps' user and role), and nothing else; it returns
+        // what it removed ("user \"nautilus\"", "role \"...\"").
+        List<string> RemoveAccess(object project, AccessMade made);
 
         // CannotApply is why this side cannot apply next at all yet (a
         // part of the spec it cannot configure), or null. The agent asks

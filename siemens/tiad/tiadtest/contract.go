@@ -38,7 +38,7 @@ type Target interface {
 	SetDevice(t testing.TB, d tiad.DeviceIdentity, noIdentify bool)
 	// SetAccess scripts the projects' password policy for local users and
 	// the access control an upload brings ("": Disabled).
-	SetAccess(t testing.TB, policy PasswordPolicy, uploadAccessControl string)
+	SetAccess(t testing.TB, a AccessScript)
 }
 
 // Loaded is one download that loaded a CPU.
@@ -84,9 +84,7 @@ func (g goFake) SetQuestions(_ testing.TB, qs []tiad.Question) { g.f.SetQuestion
 func (g goFake) SetDevice(_ testing.TB, d tiad.DeviceIdentity, noIdentify bool) {
 	g.f.SetDevice(d, noIdentify)
 }
-func (g goFake) SetAccess(_ testing.TB, policy PasswordPolicy, uploadAccessControl string) {
-	g.f.SetAccess(policy, uploadAccessControl)
-}
+func (g goFake) SetAccess(_ testing.TB, a AccessScript) { g.f.SetAccess(a) }
 func (g goFake) Loaded(testing.TB) []Loaded {
 	var out []Loaded
 	for _, d := range g.f.Downloads() {

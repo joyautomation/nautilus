@@ -358,6 +358,9 @@ namespace Tiad
                 var removed = new List<string>();
                 List<string> trusted = OnSession(s, delegate(ITia t)
                 {
+                    // An upload replaces devices, not users: users an apply
+                    // left part-way stay that way.
+                    if (s.UsersUnclean) throw CpuReuse.Unclean("an upload");
                     // The CPU's program replaces the project's: it no
                     // longer matches its spec, and it must take a spec and
                     // compile again before anything is downloaded. Until
@@ -370,9 +373,7 @@ namespace Tiad
                     // roles belongs to the station the upload replaces.
                     if (s.Made.Any)
                     {
-                        t.RemoveAccess(s.Handle, s.Made);
-                        if (s.Made.User) removed.Add("user " + Json.Quote(AccessSteps.UserName));
-                        if (s.Made.Role) removed.Add("role " + Json.Quote(AccessSteps.RoleName));
+                        removed = t.RemoveAccess(s.Handle, s.Made);
                         s.Made = new AccessMade();
                     }
                     List<string> tr = t.Upload(s.Handle, address, trust);
