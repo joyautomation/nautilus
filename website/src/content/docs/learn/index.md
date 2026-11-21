@@ -53,6 +53,7 @@ on the right, and a **Check** button that tests your answer.
 1. [Put it on a Linux box, and let operators open the screen](/learn/deploy-and-operate/put-it-on-a-box/)
 2. [Update, roll back, and back up](/learn/deploy-and-operate/update-roll-back-back-up/)
 3. [Who may operate it](/learn/deploy-and-operate/who-may-operate-it/)
+4. [Sign in with your company login](/learn/deploy-and-operate/sign-in-with-your-company-login/)
 
 ## Coming from Logix
 
