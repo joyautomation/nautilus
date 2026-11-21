@@ -1688,7 +1688,7 @@ namespace Tiad.Openness
         // copy of the project's station stands in for each upload, so the
         // report runs offline first. Every report step catches its own
         // failure, so one throw loses only its own lines.
-        public List<string> ProbeUploadTwin(object project, string address, bool trustUnverifiedCertificate, int uploads, bool rehearse)
+        public List<string> ProbeUploadTwin(object project, string address, bool trustUnverifiedCertificate, int uploads, bool rehearse, bool renameOriginal)
         {
             return Tia(delegate
             {
@@ -1698,7 +1698,16 @@ namespace Tiad.Openness
                 if (orig == null) throw new TiaException("probe: the project has no CPU");
                 DeviceItem origCpu = CpuOf(orig);
                 var before = new List<HwDevice>(AllDevices(p));
-                lines.Add(string.Format("mode: {0}, uploads {1}", rehearse ? "REHEARSE (master copy, no CPU contact)" : "UPLOAD", uploads));
+                lines.Add(string.Format("mode: {0}, uploads {1}, renameOriginal {2}", rehearse ? "REHEARSE (master copy, no CPU contact)" : "UPLOAD", uploads, renameOriginal));
+                if (renameOriginal)
+                {
+                    // Only in this unsaved copy: TIA refuses a station
+                    // upload whose station name the project already uses.
+                    string sn = orig.Name, cn = origCpu.Name;
+                    orig.Name = sn + "_orig";
+                    origCpu.Name = cn + "_orig";
+                    lines.Add("renamed original: station " + sn + " -> " + orig.Name + ", cpu " + cn + " -> " + origCpu.Name);
+                }
                 lines.Add("before: devices " + before.Count + ", subnets " + ProbeSubnets(p));
                 foreach (HwDevice d in before) ProbeStep(lines, "ident before", delegate { lines.Add("  device " + ProbeIdent(d)); });
                 ProbeStep(lines, "blocks orig before", delegate { ProbeBlocks(origCpu, "orig", lines); });

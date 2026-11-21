@@ -1459,7 +1459,7 @@ namespace Tiad.Fake
             return new OnlineCheckResult { State = "Online", Compared = true };
         }
 
-        public List<string> ProbeUploadTwin(object project, string address, bool trustUnverifiedCertificate, int uploads, bool rehearse)
+        public List<string> ProbeUploadTwin(object project, string address, bool trustUnverifiedCertificate, int uploads, bool rehearse, bool renameOriginal)
         {
             script.Enter("ProbeUploadTwin");
             return new List<string> { "fake: no upload twin" };

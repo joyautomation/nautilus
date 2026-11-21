@@ -282,8 +282,10 @@ namespace Tiad
         // beside the project's, deleting nothing, and reports what TIA made
         // of each and how they compare offline (hardware and software).
         // With rehearse, a master copy of the project's station stands in
-        // for each upload: no CPU contact. It never saves.
-        List<string> ProbeUploadTwin(object project, string address, bool trustUnverifiedCertificate, int uploads, bool rehearse);
+        // for each upload: no CPU contact. With renameOriginal, the
+        // project's station and CPU are renamed first (TIA refuses an upload
+        // whose station name is in use). It never saves.
+        List<string> ProbeUploadTwin(object project, string address, bool trustUnverifiedCertificate, int uploads, bool rehearse, bool renameOriginal);
 
         // Save saves the project, or writes a project archive, and returns
         // its full path.
