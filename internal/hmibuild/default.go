@@ -330,6 +330,15 @@ const defaultLayout = `<script>
 	.nx-status { flex: 1 1 0; min-width: max-content; display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
 	main { flex: 1; min-height: 0; overflow: auto; padding: 16px; position: relative; }
 	@media (max-width: 900px) { .nx-title span { display: none; } }
+	/* a phone: the status row (max-content) would be wider than the window
+	   and clip; give it a row of its own and let it wrap */
+	@media (max-width: 600px) {
+		header { padding: 8px 12px; }
+		.nx-title { flex-basis: 100%%; }
+		nav { flex: 1 1 auto; }
+		nav a { flex: 1; text-align: center; }
+		.nx-status { flex: 1 1 100%%; min-width: 0; flex-wrap: wrap; justify-content: flex-start; }
+	}
 </style>
 `
 
