@@ -1382,6 +1382,49 @@ func TestAgentTrustsACertificateOnlyOnTheUploadsOptIn(t *testing.T) {
 	}
 }
 
+// TestAgentRefusesADownloadQueuedBehindATrust: the blind-trust check runs
+// again on the TIA thread, where trust is recorded, so a download whose
+// first check passed while another session's fingerprint read was still
+// in TIA is refused once that read trusted, before TIA's download is
+// called.
+func TestAgentRefusesADownloadQueuedBehindATrust(t *testing.T) {
+	p, s := downloadReady(t)
+	c := p.Client()
+	st := tiadtest.BenchStation()
+	st.CPU.Address = "192.0.2.99"
+	s2, err := c.CreateProject(ctx, "other", st, tiadtest.BenchSecrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s2.Compile(ctx, true, true); err != nil {
+		t.Fatal(err)
+	}
+	p.SetScript(t, tiadtest.Script{FingerprintAsksTLS: true, Delays: []tiadtest.ScriptedCall{{Call: "ReadFingerprint", MS: 1500}}})
+	done := make(chan error, 1)
+	go func() {
+		_, err := s2.Fingerprint(ctx, tiad.FingerprintRequest{TrustUnverifiedCertificate: true})
+		done <- err
+	}()
+	for deadline := time.Now().Add(10 * time.Second); countCalls(p.Calls(t), "ReadFingerprint") == 0; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the fingerprint read never reached TIA's side")
+		}
+	}
+	_, err = s.Download(ctx, tiad.DownloadRequest{Address: "192.0.2.10", Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}})
+	if tiad.Kind(err) != tiad.KindDecisionRequired || tiad.BlindTrustOf(err) == nil || tiad.BlindTrustOf(err).Session != s2.ID {
+		t.Fatalf("a download queued behind a trusting read: %v, want decision_required naming that read's trust", err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("the fingerprint read: %v", err)
+	}
+	if n := countCalls(p.Calls(t), "Download"); n != 0 {
+		t.Fatalf("TIA's download was called %d times, want 0", n)
+	}
+	if l := p.Loaded(t); len(l) != 0 {
+		t.Fatalf("loaded %+v", l)
+	}
+}
+
 // lastLine is the last line of log that holds want.
 func lastLine(log, want string) string {
 	var last string
