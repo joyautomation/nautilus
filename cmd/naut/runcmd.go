@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"os/user"
 	"path"
 	"path/filepath"
 	"sort"
@@ -567,9 +568,8 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	stopCopy := func() {}
 	if j != nil {
 		sopts.Audit = j
-		go pruneAudit(ctx, j, os.Stderr)
 		// The journal's copy in Postgres (audit.sink: postgres, #709 PR 9).
-		copier, stop, err := startAuditCopy(ctx, proj, j, os.Getenv, os.Stderr)
+		copier, stop, gate, err := startAuditCopy(ctx, proj, j, os.Getenv, os.Stderr)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "audit:", err)
 			j.Close()
@@ -579,6 +579,7 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 			sopts.AuditCopy = copier.Status
 			stopCopy = stop
 		}
+		go pruneAudit(ctx, j, gate, os.Stderr)
 	}
 	srv := server.New(rt, sopts)
 	srvRef.Store(srv)
@@ -1318,16 +1319,41 @@ func openAudit(proj *project.Project, stderr io.Writer) (*audit.FileJournal, err
 		fmt.Fprintf(stderr, "audit: ERROR: %v: actions are allowed but journalled in memory only, lost on restart (set audit.path in nautilus.yaml to a writable directory)\n", err)
 		return nil, err
 	}
+	// The retention in force, journalled at every open: every prune names
+	// it, and verify --anchor checks each prune against it (#709 PR 9b).
+	if _, err := j.RecordRetention(processUser()); err != nil {
+		fmt.Fprintf(stderr, "audit: recording the retention: %v\n", err)
+	}
 	return j, nil
 }
 
+// processUser names who started naut run, for the retention entry.
+func processUser() string {
+	if u, err := user.Current(); err == nil {
+		return u.Username
+	}
+	return ""
+}
+
 // pruneAudit removes journal files older than audit.keep-days, at start
-// and then daily.
-func pruneAudit(ctx context.Context, j *audit.FileJournal, stderr io.Writer) {
+// and then daily. With a copy in Postgres (gate set), a prune waits while
+// a lowered retention is not yet anchored (waitToPrune).
+func pruneAudit(ctx context.Context, j *audit.FileJournal, gate func(context.Context) gateAnswer, stderr io.Writer) {
+	dir := j.Dir()
 	t := time.NewTicker(24 * time.Hour)
 	defer t.Stop()
 	for {
-		if _, err := j.Prune(); err != nil {
+		prune := j.Prune
+		if gate != nil {
+			ok, unanchored := waitToPrune(ctx, gate, func() (float64, error) { return diskUsed(dir) }, 2*time.Second, stderr)
+			if !ok {
+				return
+			}
+			if unanchored {
+				prune = j.PruneUnanchored
+			}
+		}
+		if _, err := prune(); err != nil {
 			fmt.Fprintf(stderr, "audit: prune: %v\n", err)
 		}
 		select {

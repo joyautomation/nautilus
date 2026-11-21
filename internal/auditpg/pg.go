@@ -1,7 +1,7 @@
 // Package auditpg keeps a copy of the runtime audit journal in Postgres
 // (#709 PR 9, docs/design/identity-audit.md §4): `audit.sink: postgres`.
 //
-// It is a store, nothing more. audit.Tailer reads the journal's files,
+// It is a store, nothing more (and the anchors' role check). audit.Tailer reads the journal's files,
 // checks their chain and decides what is copied; this package keeps the
 // rows and says which is the newest. The files stay the source of truth.
 //
@@ -51,8 +51,38 @@ CREATE TABLE audit_entries (
   file text NOT NULL,
   file_offset bigint NOT NULL,
   line text NOT NULL,
+  copied_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (controller, seq));
 CREATE INDEX audit_entries_ts ON audit_entries (controller, ts);`
+
+// The anchor (#709 PR 9b): the copy's newest line, written every
+// audit.anchor-every, at once after a copied audit.prune, and at a clean
+// stop. at and writer are the database's: the sink's role is never
+// granted those columns, so it cannot set them (nor copied_at above).
+const anchorsDDL = `
+CREATE TABLE audit_anchors (
+  controller text NOT NULL,
+  seq bigint NOT NULL,
+  hash text NOT NULL,
+  reason text NOT NULL,
+  at timestamptz NOT NULL DEFAULT now(),
+  writer text NOT NULL DEFAULT current_user);
+CREATE INDEX audit_anchors_seq ON audit_anchors (controller, seq);`
+
+// The columns the sink's role may INSERT: everything but the defaults
+// that are evidence (copied_at, noticed, at, writer).
+var insertColumns = map[string][]string{
+	"audit_entries": {"controller", "seq", "id", "ts", `"user"`, "source", "action", "target", "result", "before", "after", "detail", `"from"`, "session", "prev", "hash", "file", "file_offset", "line"},
+	"audit_gaps":    {"controller", "after_seq", "next_seq", "after_file"},
+	"audit_anchors": {"controller", "seq", "hash", "reason"},
+}
+
+// evidenceColumns are the columns whose database default is evidence: a
+// role that can INSERT into one can forge it.
+var evidenceColumns = [][2]string{{"audit_entries", "copied_at"}, {"audit_anchors", "at"}, {"audit_anchors", "writer"}}
+
+// Tables are the copy's tables, in creation order.
+var Tables = []string{"audit_entries", "audit_gaps", "audit_anchors"}
 
 const gapsDDL = `
 CREATE TABLE audit_gaps (
@@ -99,7 +129,7 @@ func (s *Store) ensure(ctx context.Context) error {
 	if s.schema {
 		return nil
 	}
-	for _, t := range []struct{ name, ddl string }{{"audit_entries", entriesDDL}, {"audit_gaps", gapsDDL}} {
+	for _, t := range []struct{ name, ddl string }{{"audit_entries", entriesDDL}, {"audit_gaps", gapsDDL}, {"audit_anchors", anchorsDDL}} {
 		var reg sql.NullString
 		if err := s.db.QueryRowContext(ctx, `SELECT to_regclass($1)::text`, t.name).Scan(&reg); err != nil {
 			return err
@@ -108,11 +138,275 @@ func (s *Store) ensure(ctx context.Context) error {
 			continue
 		}
 		if _, err := s.db.ExecContext(ctx, t.ddl); err != nil {
-			return fmt.Errorf("auditpg: create %s: %w (a database administrator can create it and grant this role INSERT and SELECT on it)", t.name, err)
+			return fmt.Errorf("auditpg: create %s: %w (a database administrator creates the tables: naut audit pg-schema --role <this role> prints the statements)", t.name, err)
+		}
+	}
+	// A copy made before 9b has no copied_at: add it (as the owner), or
+	// say what to run.
+	var has bool
+	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.columns
+		WHERE table_name = 'audit_entries' AND column_name = 'copied_at' AND table_schema = current_schema())`).Scan(&has); err != nil {
+		return err
+	}
+	if !has {
+		if _, err := s.db.ExecContext(ctx, addCopiedAt); err != nil {
+			return fmt.Errorf("auditpg: audit_entries has no copied_at column: %w (a database administrator runs the statements naut audit pg-schema --role <this role> prints)", err)
 		}
 	}
 	s.schema = true
 	return nil
+}
+
+const addCopiedAt = `ALTER TABLE audit_entries ADD COLUMN IF NOT EXISTS copied_at timestamptz NOT NULL DEFAULT now()`
+
+// Schema is the SQL a database administrator runs, as the role that will
+// own the tables, so that role (the controller's) can run the sink and
+// cannot rewrite the copy or the anchors: SELECT, and INSERT only on the
+// columns that are not evidence. It is safe to run again (an upgrade from
+// a copy made before 9b adds copied_at and narrows the grants).
+func Schema(role string) string {
+	r := quoteIdent(role)
+	var b strings.Builder
+	b.WriteString("-- The audit journal's copy and anchors (naut audit pg-schema). Run as the\n")
+	b.WriteString("-- role that owns them, never as " + r + ".\n")
+	for _, ddl := range []string{entriesDDL, gapsDDL, anchorsDDL} {
+		ddl = strings.ReplaceAll(ddl, "CREATE TABLE ", "CREATE TABLE IF NOT EXISTS ")
+		ddl = strings.ReplaceAll(ddl, "CREATE INDEX ", "CREATE INDEX IF NOT EXISTS ")
+		b.WriteString(strings.TrimSpace(ddl) + "\n")
+	}
+	b.WriteString(addCopiedAt + ";\n")
+	b.WriteString("REVOKE ALL ON " + strings.Join(Tables, ", ") + " FROM " + r + ";\n")
+	b.WriteString("GRANT SELECT ON " + strings.Join(Tables, ", ") + " TO " + r + ";\n")
+	for _, t := range Tables {
+		b.WriteString("GRANT INSERT (" + strings.Join(insertColumns[t], ", ") + ") ON " + t + " TO " + r + ";\n")
+	}
+	return b.String()
+}
+
+func quoteIdent(s string) string { return `"` + strings.ReplaceAll(s, `"`, `""`) + `"` }
+
+// Protection checks whether role could rewrite the copy or the anchors:
+// it, or any role it is a member of (it can SET ROLE to any of them), is a
+// superuser, holds CREATEROLE, owns one of the tables, holds UPDATE,
+// DELETE or TRUNCATE on one, or may INSERT into a column whose default is
+// the evidence (copied_at, an anchor's at or writer). A role that no
+// longer exists cannot be checked, so it is not protected.
+func (s *Store) Protection(ctx context.Context, role string) (audit.WriterCheck, error) {
+	if err := s.ensure(ctx); err != nil {
+		return audit.WriterCheck{}, err
+	}
+	var exists bool
+	if err := s.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $1)`, role).Scan(&exists); err != nil {
+		return audit.WriterCheck{}, err
+	}
+	if !exists {
+		return audit.WriterCheck{Why: "the role no longer exists, so what it could do cannot be checked"}, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT rolname, rolsuper, rolcreaterole FROM pg_roles WHERE pg_has_role($1, oid, 'MEMBER')`, role)
+	if err != nil {
+		return audit.WriterCheck{}, err
+	}
+	type member struct {
+		name         string
+		super, creat bool
+	}
+	var members []member
+	for rows.Next() {
+		var m member
+		if err := rows.Scan(&m.name, &m.super, &m.creat); err != nil {
+			rows.Close()
+			return audit.WriterCheck{}, err
+		}
+		members = append(members, m)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return audit.WriterCheck{}, err
+	}
+	var why []string
+	as := func(m member) string {
+		if m.name == role {
+			return "it"
+		}
+		return fmt.Sprintf("it can SET ROLE %s, which", m.name)
+	}
+	for _, m := range members {
+		if m.super && m.name == role {
+			// A superuser can do anything; the rest would only repeat it.
+			return audit.WriterCheck{Why: "it is a superuser"}, nil
+		}
+		if m.super {
+			why = append(why, as(m)+" is a superuser")
+			continue
+		}
+		if m.creat {
+			why = append(why, as(m)+" holds CREATEROLE")
+		}
+		for _, t := range Tables {
+			var owner bool
+			var privs []string
+			if err := s.db.QueryRowContext(ctx, `SELECT c.relowner = r.oid FROM pg_class c, pg_roles r WHERE c.oid = to_regclass($1) AND r.rolname = $2`, t, m.name).Scan(&owner); err != nil {
+				return audit.WriterCheck{}, fmt.Errorf("auditpg: %s: %w", t, err)
+			}
+			if owner {
+				why = append(why, as(m)+" owns "+t)
+				continue
+			}
+			for _, p := range []string{"UPDATE", "DELETE", "TRUNCATE"} {
+				var has bool
+				if err := s.db.QueryRowContext(ctx, `SELECT has_table_privilege($1, $2, $3)`, m.name, t, p).Scan(&has); err != nil {
+					return audit.WriterCheck{}, err
+				}
+				if has {
+					privs = append(privs, p)
+				}
+			}
+			if len(privs) > 0 {
+				why = append(why, as(m)+" holds "+strings.Join(privs, ", ")+" on "+t)
+			}
+		}
+		for _, c := range evidenceColumns {
+			var has bool
+			if err := s.db.QueryRowContext(ctx, `SELECT has_column_privilege($1, $2, $3, 'INSERT')`, m.name, c[0], c[1]).Scan(&has); err != nil {
+				return audit.WriterCheck{}, fmt.Errorf("auditpg: %s.%s: %w", c[0], c[1], err)
+			}
+			if has {
+				why = append(why, as(m)+" may INSERT "+c[0]+"."+c[1])
+			}
+		}
+	}
+	if len(why) > 0 {
+		return audit.WriterCheck{Why: strings.Join(why, "; ")}, nil
+	}
+	return audit.WriterCheck{Protected: true}, nil
+}
+
+// Role is the database role the store connects as.
+func (s *Store) Role(ctx context.Context) (string, error) {
+	var r string
+	err := s.db.QueryRowContext(ctx, `SELECT current_user`).Scan(&r)
+	return r, err
+}
+
+// Anchor writes the copy's newest row as an anchor, in one statement, so
+// an anchor never runs ahead of the copy. It returns the anchored Seq, 0
+// when the copy holds nothing yet.
+func (s *Store) Anchor(ctx context.Context, reason string) (uint64, error) {
+	if err := s.ensure(ctx); err != nil {
+		return 0, err
+	}
+	var seq int64
+	err := s.db.QueryRowContext(ctx, `INSERT INTO audit_anchors (controller, seq, hash, reason)
+		SELECT controller, seq, hash, $2 FROM audit_entries WHERE controller = $1 ORDER BY seq DESC LIMIT 1
+		RETURNING seq`, s.controller, reason).Scan(&seq)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("auditpg: anchor: %w", err)
+	}
+	return uint64(seq), nil
+}
+
+// AnchoredKeep is the retention (seconds, -1 forever) the newest anchor
+// covers: the keep of the newest audit.retention row at or before it.
+func (s *Store) AnchoredKeep(ctx context.Context) (keep int64, ok bool, err error) {
+	if err := s.ensure(ctx); err != nil {
+		return 0, false, err
+	}
+	var k sql.NullInt64
+	err = s.db.QueryRowContext(ctx, `SELECT (detail->>'keep')::bigint FROM audit_entries
+		WHERE controller = $1 AND action = 'audit.retention'
+		  AND seq <= (SELECT max(seq) FROM audit_anchors WHERE controller = $1)
+		ORDER BY seq DESC LIMIT 1`, s.controller).Scan(&k)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return k.Int64, k.Valid, nil
+}
+
+// Controllers is every controller the anchors name.
+func (s *Store) Controllers(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT controller FROM audit_anchors ORDER BY 1`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var c string
+		if err := rows.Scan(&c); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// Anchors is every anchor for the controller.
+func (s *Store) Anchors(ctx context.Context) ([]audit.Anchor, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT seq, hash, at, reason, writer FROM audit_anchors WHERE controller = $1 ORDER BY at, seq`, s.controller)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []audit.Anchor
+	for rows.Next() {
+		var a audit.Anchor
+		var seq int64
+		if err := rows.Scan(&seq, &a.Hash, &a.At, &a.Reason, &a.Writer); err != nil {
+			return nil, err
+		}
+		a.Seq = uint64(seq)
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// Gaps is every gap recorded for the controller.
+func (s *Store) Gaps(ctx context.Context) ([]audit.Gap, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT after_seq, next_seq, after_file FROM audit_gaps WHERE controller = $1 ORDER BY next_seq`, s.controller)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []audit.Gap
+	for rows.Next() {
+		var g audit.Gap
+		var a, n int64
+		if err := rows.Scan(&a, &n, &g.AfterFile); err != nil {
+			return nil, err
+		}
+		g.AfterSeq, g.NextSeq = uint64(a), uint64(n)
+		out = append(out, g)
+	}
+	return out, rows.Err()
+}
+
+// Rows streams the controller's copy in Seq order: next returns one row at
+// a time, ok false at the end; call done when finished.
+func (s *Store) Rows(ctx context.Context) (next func() (audit.CopyRow, bool, error), done func(), err error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT seq, hash, file, copied_at, line FROM audit_entries WHERE controller = $1 ORDER BY seq`, s.controller)
+	if err != nil {
+		return nil, nil, err
+	}
+	next = func() (audit.CopyRow, bool, error) {
+		if !rows.Next() {
+			return audit.CopyRow{}, false, rows.Err()
+		}
+		var r audit.CopyRow
+		var seq int64
+		var line string
+		if err := rows.Scan(&seq, &r.Hash, &r.File, &r.CopiedAt, &line); err != nil {
+			return r, false, err
+		}
+		r.Seq, r.Line = uint64(seq), []byte(line)
+		return r, true, nil
+	}
+	return next, func() { rows.Close() }, nil
 }
 
 // Last is the newest line the copy holds for this controller.
@@ -237,4 +531,7 @@ func noNUL(v any) any {
 	return v
 }
 
-var _ audit.CopyStore = (*Store)(nil)
+var (
+	_ audit.CopyStore = (*Store)(nil)
+	_ audit.Anchorer  = (*Store)(nil)
+)

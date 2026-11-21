@@ -310,6 +310,22 @@ type AuditConfig struct {
 	// NAUTILUS_AUDIT_DB_URL, falling back to DATABASE_URL, the
 	// historian's.
 	DSNEnv string `yaml:"dsn-env"`
+	// AnchorEvery is how often the copy writes an anchor (the journal's
+	// head, where the controller's service user cannot rewrite it) when
+	// the copy has moved (default 5m). It also anchors at start, after
+	// every prune, and at a clean stop (#709 PR 9b).
+	AnchorEvery Duration `yaml:"anchor-every"`
+}
+
+// DefaultAuditAnchorEvery is audit.anchor-every's default.
+const DefaultAuditAnchorEvery = 5 * time.Minute
+
+// AuditAnchorEvery is how often the copy anchors the journal's head.
+func (p *Project) AuditAnchorEvery() time.Duration {
+	if p.Audit == nil || p.Audit.AnchorEvery == 0 {
+		return DefaultAuditAnchorEvery
+	}
+	return time.Duration(p.Audit.AnchorEvery)
 }
 
 // DefaultAuditDSNEnv / FallbackAuditDSNEnv are where the audit journal's
@@ -331,6 +347,12 @@ func checkAudit(a *AuditConfig) error {
 	}
 	if a.DSNEnv != "" && a.Sink == "" {
 		return errors.New("audit.dsn-env is set but audit.sink is not: add sink: postgres")
+	}
+	if a.AnchorEvery != 0 && a.Sink == "" {
+		return errors.New("audit.anchor-every is set but audit.sink is not: the anchor is written to the copy; add sink: postgres")
+	}
+	if a.AnchorEvery != 0 && time.Duration(a.AnchorEvery) < time.Second {
+		return fmt.Errorf("audit.anchor-every %s: want at least 1s", time.Duration(a.AnchorEvery))
 	}
 	return nil
 }

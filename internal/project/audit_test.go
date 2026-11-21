@@ -38,6 +38,10 @@ func TestAuditSinkIsChecked(t *testing.T) {
 		{"audit:\n  sink: postgres\n  dsn-env: SITE_DB\n", ""},
 		{"audit:\n  sink: mongo\n", "audit.sink \"mongo\""},
 		{"audit:\n  dsn-env: SITE_DB\n", "audit.dsn-env is set but audit.sink is not"},
+		{"audit:\n  sink: postgres\n  anchor-every: 1m\n", ""},
+		{"audit:\n  anchor-every: 1m\n", "audit.anchor-every is set but audit.sink is not"},
+		{"audit:\n  sink: postgres\n  anchor-every: 10ms\n", "want at least 1s"},
+		{"audit:\n  sink: postgres\n  anchor-every: soon\n", "bad duration"},
 	} {
 		fsys := fstest.MapFS{
 			"nautilus.yaml": {Data: []byte("name: p\ntasks:\n  - program: main.st\n    scan: 20ms\n" + c.section)},

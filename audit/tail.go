@@ -94,7 +94,30 @@ type CopyStatus struct {
 	Gaps      int    // gaps recorded since start
 	LastError string
 	Since     time.Time // when State began
+	// Anchored is the Seq of the newest anchor this run wrote, 0 before
+	// one; AnchorError the last failure to write one.
+	Anchored    uint64
+	AnchoredAt  time.Time
+	AnchorError string
+	// Unprotected, when set, says why the anchors prove nothing: the
+	// copy's own database role could rewrite them.
+	Unprotected string
 }
+
+// Anchorer writes an anchor: the copy's newest line, kept where the
+// controller's service user cannot rewrite it. It returns the anchored
+// Seq, 0 when the copy holds nothing yet.
+type Anchorer interface {
+	Anchor(ctx context.Context, reason string) (uint64, error)
+}
+
+// Anchor reasons.
+const (
+	AnchorStart    = "start"    // the first of a run, as soon as the copy holds a line
+	AnchorInterval = "interval" // every anchor-every, when the copy moved
+	AnchorPrune    = "prune"    // the copy just copied an audit.prune
+	AnchorStop     = "stop"     // at a clean stop
+)
 
 // Tailer copies a journal directory into a CopyStore. Step and Run are
 // not safe for concurrent use with each other; Status is.
@@ -117,6 +140,14 @@ type Tailer struct {
 	// time the state changes (to log it).
 	OnChange func(CopyStatus)
 
+	anchorer    Anchorer
+	anchorEvery time.Duration
+	anchored    uint64    // Seq of the newest anchor this run wrote
+	anchoredAt  time.Time // when (this process's clock), for the interval
+	// owe is the reason an anchor is owed now (a run's first, a copied
+	// prune), "" when only the interval is due; a failed write keeps it.
+	owe string
+
 	resumed bool
 	have    bool   // the copy holds a line: pos is it
 	pos     Line   // the copy's newest line (File, Offset, Seq, Hash)
@@ -138,6 +169,61 @@ type Tailer struct {
 func NewTailer(dir string, store CopyStore, head func() (string, uint64)) *Tailer {
 	return &Tailer{dir: dir, store: store, head: head, batch: 256, maxRead: 4096, now: time.Now,
 		st: CopyStatus{State: CopyStarting, Since: time.Now()}}
+}
+
+// AnchorTo makes the tailer write an anchor through a: the first as soon
+// as the copy holds a line, then every interval when the copy has moved,
+// at once whenever it copies an audit.prune, and on AnchorNow. Call before
+// Run.
+func (t *Tailer) AnchorTo(a Anchorer, every time.Duration) {
+	t.anchorer, t.anchorEvery, t.owe = a, every, AnchorStart
+}
+
+// SetUnprotected records why the anchors prove nothing ("" when they do),
+// for the drivers block.
+func (t *Tailer) SetUnprotected(why string) {
+	t.setStatus(func(s *CopyStatus) { s.Unprotected = why })
+}
+
+// AnchorNow writes an anchor now if the copy moved since the last one (at
+// a clean stop, after the last Step).
+func (t *Tailer) AnchorNow(ctx context.Context, reason string) error {
+	if t.anchorer == nil || t.halt != nil || !t.have || (t.anchored >= t.pos.Seq && t.owe == "") {
+		return nil
+	}
+	return t.anchor(ctx, reason)
+}
+
+// maybeAnchor writes the anchor owed or due after a step.
+func (t *Tailer) maybeAnchor(ctx context.Context) {
+	if t.anchorer == nil || !t.have {
+		return
+	}
+	reason := t.owe
+	if reason == "" {
+		if t.pos.Seq <= t.anchored || t.now().Sub(t.anchoredAt) < t.anchorEvery {
+			return
+		}
+		reason = AnchorInterval
+	}
+	t.anchor(ctx, reason)
+}
+
+func (t *Tailer) anchor(ctx context.Context, reason string) error {
+	seq, err := t.anchorer.Anchor(ctx, reason)
+	if err != nil {
+		if t.owe == "" {
+			t.owe = reason
+		}
+		t.setStatus(func(s *CopyStatus) { s.AnchorError = err.Error() })
+		return err
+	}
+	t.owe = ""
+	if seq > 0 {
+		t.anchored, t.anchoredAt = seq, t.now()
+	}
+	t.setStatus(func(s *CopyStatus) { s.Anchored, s.AnchoredAt, s.AnchorError = t.anchored, t.anchoredAt, "" })
+	return nil
 }
 
 // Status is the copy's state now.
@@ -193,6 +279,14 @@ func (t *Tailer) Step(ctx context.Context) (int, error) {
 		return 0, t.halt
 	}
 	n, err := t.step(ctx)
+	if ctx.Err() == nil {
+		var mm *CopyMismatch
+		if !errors.As(err, &mm) {
+			// Whatever was copied is anchored, even when the step
+			// then failed: the lines before the failure are in.
+			t.maybeAnchor(ctx)
+		}
+	}
 	_, headSeq := t.head()
 	var mm *CopyMismatch
 	if err != nil && ctx.Err() != nil && !errors.As(err, &mm) {
@@ -434,6 +528,11 @@ func (t *Tailer) apply(ctx context.Context, lines []Line) (int, error) {
 		}
 		if err := t.store.Apply(ctx, b); err != nil {
 			return done, err
+		}
+		for _, l := range b.Lines {
+			if l.Entry.Action == ActionPrune && t.anchorer != nil {
+				t.owe = AnchorPrune
+			}
 		}
 		last := b.Lines[n-1]
 		t.have, t.pos, t.pruned = true, last, false

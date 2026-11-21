@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -57,23 +58,23 @@ func TestStartAuditCopyNeedsItsVariable(t *testing.T) {
 	defer j.Close()
 	ctx := t.Context()
 	none := &project.Project{Name: "plant"}
-	if tl, stop, err := startAuditCopy(ctx, none, j, envOf(nil), io.Discard); tl != nil || err != nil {
+	if tl, stop, _, err := startAuditCopy(ctx, none, j, envOf(nil), io.Discard); tl != nil || err != nil {
 		t.Errorf("no sink: %v %v", tl, err)
 	} else {
 		stop()
 	}
 	pg := &project.Project{Name: "plant", Audit: &project.AuditConfig{Sink: "postgres"}}
-	_, _, err = startAuditCopy(ctx, pg, j, envOf(nil), io.Discard)
+	_, _, _, err = startAuditCopy(ctx, pg, j, envOf(nil), io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "NAUTILUS_AUDIT_DB_URL") || !strings.Contains(err.Error(), "DATABASE_URL") {
 		t.Errorf("sink without a DSN: %v, want the variables named", err)
 	}
 	named := &project.Project{Name: "plant", Audit: &project.AuditConfig{Sink: "postgres", DSNEnv: "SITE_AUDIT_DB"}}
-	_, _, err = startAuditCopy(ctx, named, j, envOf(map[string]string{"DATABASE_URL": "postgres://x"}), io.Discard)
+	_, _, _, err = startAuditCopy(ctx, named, j, envOf(map[string]string{"DATABASE_URL": "postgres://x"}), io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "SITE_AUDIT_DB") {
 		t.Errorf("a named variable that is empty: %v, want it named (and no fallback to DATABASE_URL)", err)
 	}
 	// A database that is down is not an error: the copy waits for it.
-	tl, stop, err := startAuditCopy(ctx, pg, j, envOf(map[string]string{"DATABASE_URL": "postgres://nobody@127.0.0.1:1/x?sslmode=disable&connect_timeout=1"}), io.Discard)
+	tl, stop, _, err := startAuditCopy(ctx, pg, j, envOf(map[string]string{"DATABASE_URL": "postgres://nobody@127.0.0.1:1/x?sslmode=disable&connect_timeout=1"}), io.Discard)
 	if err != nil || tl == nil {
 		t.Fatalf("a database that is down: %v %v, want the copy started", tl, err)
 	}
@@ -172,7 +173,8 @@ func TestPostgresNautRunCopiesTheJournal(t *testing.T) {
 	if code := post(`{"name":"SP","value":7}`); code != http.StatusNoContent {
 		t.Fatalf("write = %d; stderr:\n%s", code, stderr.String())
 	}
-	// The card says the copy is current once it has the write.
+	// The card says the copy is current once it has the write, and (9b)
+	// that its anchors prove nothing: the superuser writes them.
 	deadline := time.Now().Add(15 * time.Second)
 	for {
 		resp, err := http.Get("http://" + api + "/api/drivers")
@@ -181,11 +183,12 @@ func TestPostgresNautRunCopiesTheJournal(t *testing.T) {
 		}
 		b, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		if strings.Contains(string(b), `"name":"audit copy"`) && strings.Contains(string(b), `"state":"connected"`) {
+		if strings.Contains(string(b), `"name":"audit copy"`) && strings.Contains(string(b), "holds every journal entry") &&
+			strings.Contains(string(b), `"state":"degraded"`) && strings.Contains(string(b), `anchor not protected: it proves nothing against someone with role \"postgres\"`) {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("/api/drivers = %s, want the audit copy's card, connected; stderr:\n%s", b, stderr.String())
+			t.Fatalf("/api/drivers = %s, want the audit copy's card, current but unprotected; stderr:\n%s", b, stderr.String())
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -224,5 +227,42 @@ func TestPostgresNautRunCopiesTheJournal(t *testing.T) {
 	}
 	if !strings.Contains(journal[len(journal)-1], `"coalesced":3`) {
 		t.Errorf("the journal's last line is not the stop's summary: %s", journal[len(journal)-1])
+	}
+	// #709 PR 9b: the run journalled its retention first, anchored at
+	// start and at stop, and said its role (the superuser here) leaves the
+	// anchors unprotected.
+	if !strings.Contains(journal[0], `"action":"audit.retention"`) || !strings.Contains(journal[0], `"keep":31536000`) {
+		t.Errorf("the journal's first line is not the retention: %s", journal[0])
+	}
+	var reasons string
+	db.QueryRow(`SELECT string_agg(reason, ',' ORDER BY at) FROM audit_anchors WHERE controller = 'copied'`).Scan(&reasons)
+	if !strings.HasPrefix(reasons, "start") || !strings.HasSuffix(reasons, "stop") {
+		t.Errorf("anchors %q, want the run's first at start and its last at stop", reasons)
+	}
+	var newest int64
+	db.QueryRow(`SELECT max(seq) FROM audit_anchors WHERE controller = 'copied'`).Scan(&newest)
+	if int(newest) != len(journal) {
+		t.Errorf("the stop anchor holds seq %d, want the journal's head %d", newest, len(journal))
+	}
+	if !strings.Contains(stderr.String(), "anchor not protected") {
+		t.Errorf("naut run did not say the superuser's anchors are unprotected; stderr:\n%s\nstdout:\n%s", stderr.String(), stdout.String())
+	}
+	// verify --anchor postgres from the project: controller and DSN from
+	// nautilus.yaml, as naut run names them.
+	vcmd := exec.Command(bin, "audit", "verify", "--anchor", "postgres")
+	vcmd.Dir = dir
+	vcmd.Env = cmd.Env
+	out, err := vcmd.CombinedOutput()
+	var xe *exec.ExitError
+	if !errors.As(err, &xe) || xe.ExitCode() != 3 || !strings.HasPrefix(string(out), "UNPROTECTED: controller \"copied\"") ||
+		!strings.Contains(string(out), "anchor present but not protected") || strings.Contains(string(out), "BROKEN") {
+		t.Errorf("verify --anchor postgres: %v\n%s", err, out)
+	}
+	vcmd = exec.Command(bin, "audit", "verify", "--anchor", "postgres", "--controller", "elsewhere")
+	vcmd.Dir = dir
+	vcmd.Env = cmd.Env
+	out, err = vcmd.CombinedOutput()
+	if !errors.As(err, &xe) || xe.ExitCode() != 2 || !strings.Contains(string(out), "controllers with anchors: copied") {
+		t.Errorf("verify for a controller without anchors: %v\n%s", err, out)
 	}
 }

@@ -144,6 +144,10 @@
         "dsn-env": {
           "type": "string",
           "description": "The environment variable holding the copy's connection string (default NAUTILUS_AUDIT_DB_URL, then DATABASE_URL). Never the connection string itself."
+        },
+        "anchor-every": {
+          "type": "string",
+          "description": "How often the copy anchors the journal's head in Postgres when it has moved (default 5m, at least 1s), a duration such as 5m. It also anchors at start, after every prune and at a clean stop; naut audit verify --anchor postgres checks the journal against the anchors."
         }
       }
     },

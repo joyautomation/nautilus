@@ -61,6 +61,10 @@ type FileJournal struct {
 	head   string // "sha256:<hex>" of the last line written, "" before the first
 	seq    uint64 // Seq of the last line written
 	broken error  // set when a failed write could not be undone: refuse until reopened
+	retSeq uint64 // Seq of the newest audit.retention entry this journal wrote, 0 before one
+	// lowered: the retention this journal recorded is shorter than the
+	// one the journal recorded before it.
+	lowered bool
 }
 
 // OpenFile opens (creating) the journal in dir and continues its chain from
@@ -352,6 +356,9 @@ func (j *FileJournal) Head() (string, uint64) {
 	return j.head, j.seq
 }
 
+// Dir is the journal's directory.
+func (j *FileJournal) Dir() string { return j.dir }
+
 // Close closes the current file.
 func (j *FileJournal) Close() error {
 	j.mu.Lock()
@@ -368,11 +375,115 @@ func (j *FileJournal) Close() error {
 	return err
 }
 
+// ActionRetention is the entry recording the retention in force: naut run
+// writes one at every journal open (RecordRetention), and every
+// audit.prune carries the same keep, so a check against an anchored copy
+// can tell an honest prune from a forged one (VerifyAnchored).
+const ActionRetention = "audit.retention"
+
+// ActionPrune is the entry recording a pruned file.
+const ActionPrune = "audit.prune"
+
+// keepSeconds is how a retention is journalled: whole seconds, -1 for
+// keeping every file.
+func keepSeconds(keep time.Duration) int64 {
+	if keep < 0 {
+		return -1
+	}
+	return int64(keep / time.Second)
+}
+
+// RecordRetention journals the retention in force (the journal's Keep) as
+// an audit.retention entry. by names who started the journal (the
+// process's user), for a report that lists a lowered retention.
+//
+// It also notes whether that retention is shorter than the one the journal
+// last recorded (Lowered): naut run then holds the first prune until the
+// lowering is anchored, so the anchor shows it came first.
+func (j *FileJournal) RecordRetention(by string) (Entry, error) {
+	keep := keepSeconds(j.opts.Keep)
+	prev, found, err := j.lastRetention()
+	if err != nil {
+		return Entry{}, err
+	}
+	d := map[string]any{"keep": keep}
+	if by != "" {
+		d["by"] = by
+	}
+	e, err := j.Record(Entry{User: "system", Source: SourceSystem, Action: ActionRetention, Result: ResultOK, Detail: d})
+	if err != nil {
+		return e, err
+	}
+	j.mu.Lock()
+	j.retSeq = e.Seq
+	if found {
+		j.lowered = j.lowered || lower(keep, prev)
+	}
+	j.mu.Unlock()
+	return e, nil
+}
+
+// Lowered reports whether a retention this journal recorded since it was
+// opened is shorter than the one recorded before it.
+func (j *FileJournal) Lowered() bool {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.lowered
+}
+
+// lastRetention is the keep of the newest audit.retention entry in the
+// files, read from the newest file back until one is found.
+func (j *FileJournal) lastRetention() (int64, bool, error) {
+	files, err := listFiles(j.dir)
+	if err != nil {
+		return 0, false, err
+	}
+	for k := len(files) - 1; k >= 0; k-- {
+		d, err := os.ReadFile(filepath.Join(j.dir, files[k]))
+		if err != nil {
+			return 0, false, err
+		}
+		lines := bytes.Split(bytes.TrimSuffix(d[:bytes.LastIndexByte(d, '\n')+1], []byte{'\n'}), []byte{'\n'})
+		for i := len(lines) - 1; i >= 0; i-- {
+			if !bytes.Contains(lines[i], []byte(ActionRetention)) {
+				continue
+			}
+			var e Entry
+			if json.Unmarshal(lines[i], &e) == nil && e.Action == ActionRetention {
+				if keep, ok := keepOf(e); ok {
+					return keep, true, nil
+				}
+			}
+		}
+	}
+	return 0, false, nil
+}
+
+// RetentionSeq is the Seq of the newest audit.retention entry this
+// journal wrote, 0 before one.
+func (j *FileJournal) RetentionSeq() uint64 {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.retSeq
+}
+
 // Prune removes files whose day is older than Keep, never the current one,
 // and records each removal as an "audit.prune" entry carrying the removed
 // file's last line hash and Seq, so Verify knows the chain legitimately
-// begins there. It returns the files removed.
-func (j *FileJournal) Prune() ([]string, error) {
+// begins there, and the keep it pruned by. It returns the files removed.
+//
+// A journal that recorded its retention (RecordRetention) records it again
+// before removing the file that holds that record, so the retention every
+// prune names is never pruned away from the journal itself.
+func (j *FileJournal) Prune() ([]string, error) { return j.prune(false) }
+
+// PruneUnanchored prunes as Prune does, marking each audit.prune
+// unanchored: naut run held a lowered retention's first prune for its
+// anchor, and the disk filled first. Verify reports such a prune as an
+// UNANCHORED LOWERING.
+func (j *FileJournal) PruneUnanchored() ([]string, error) { return j.prune(true) }
+
+func (j *FileJournal) prune(unanchored bool) ([]string, error) {
 	if j.opts.Keep < 0 {
 		return nil, nil
 	}
@@ -397,10 +508,15 @@ func (j *FileJournal) Prune() ([]string, error) {
 		if err != nil {
 			return removed, err
 		}
+		if r := j.RetentionSeq(); r > 0 && r <= seq {
+			if _, err := j.RecordRetention(""); err != nil {
+				return removed, err
+			}
+		}
 		// Record first: a crash between the two leaves a record of a
 		// removal that did not happen, the safe direction.
-		if _, err := j.Record(Entry{User: "system", Source: SourceSystem, Action: "audit.prune",
-			Target: name, Result: ResultOK, Detail: map[string]any{"last": last, "seq": seq}}); err != nil {
+		if _, err := j.Record(Entry{User: "system", Source: SourceSystem, Action: ActionPrune,
+			Target: name, Result: ResultOK, Detail: pruneDetail(last, seq, keepSeconds(j.opts.Keep), unanchored)}); err != nil {
 			return removed, err
 		}
 		if err := os.Remove(filepath.Join(j.dir, name)); err != nil {
@@ -409,6 +525,14 @@ func (j *FileJournal) Prune() ([]string, error) {
 		removed = append(removed, name)
 	}
 	return removed, nil
+}
+
+func pruneDetail(last string, seq uint64, keep int64, unanchored bool) map[string]any {
+	d := map[string]any{"last": last, "seq": seq, "keep": keep}
+	if unanchored {
+		d["unanchored"] = true
+	}
+	return d
 }
 
 // listFiles is the journal's files in chain order: by day, then rotation.
