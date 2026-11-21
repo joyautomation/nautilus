@@ -262,10 +262,13 @@ func TestOnlineWriteOnlySourceWithoutRewrite(t *testing.T) {
 	startDriver(t, d)
 	read := func() nio.Values { v, _ := d.ReadInputs(); return v }
 	waitFor(t, "online on connect", func() bool { return read()["DEV__Online"] == true })
-	// The first snapshot after Start is the baseline, not a command.
+	// A write-only output cannot be compared with the device, so the start-up
+	// baseline commands it once (#1123). Let that write land before the
+	// gateway starts refusing, so it is not one of the refused writes.
 	if err := d.WriteOutputs(nio.Values{"CMD": int64(1)}); err != nil {
 		t.Fatal(err)
 	}
+	waitFor(t, "the baseline write", func() bool { return u.Holding(8) == 1 })
 
 	// Three in a row, pinned here rather than read from the constant.
 	const misses = 3

@@ -142,3 +142,14 @@ func (m *Memory) WriteOutputs(v Values) error {
 	}
 	return nil
 }
+
+// ScanBeginner is a driver that wants to know which scan an output push
+// belongs to. The runtime calls BeginScan at the start of every scan,
+// before it reads the inputs: whatever the driver holds live at that moment
+// is delivered to that scan's read, so the push that scan makes was computed
+// from it. A driver whose start-up baseline decides each output against what
+// the device holds (modbus, opcua) uses it to decide only on a push computed
+// from the device's live inputs, never on one computed from init values
+// before the first read (#1123). A composite forwards it to its children.
+// Internal seam, not stable API.
+type ScanBeginner interface{ BeginScan() }

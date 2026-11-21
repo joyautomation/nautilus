@@ -777,33 +777,37 @@ func TestIOKeptDriverDroppedWithItsDevice(t *testing.T) {
 }
 
 // A standalone restart with a kept unit behaves as a boot does: the first
-// scan's outputs are the start-up baseline, recorded and not sent, on the
-// re-applied device and on the untouched one alike; a change is sent.
-func TestIOKeptRestartKeepsTheStartBaseline(t *testing.T) {
+// scan's outputs are the start-up baseline, decided against what each device
+// holds (#1123), on the re-applied device and on the untouched one alike: a
+// device holding another value is commanded once, and a change is sent.
+func TestIOKeptRestartDecidesTheStartBaselineAgainstTheDevice(t *testing.T) {
 	store, _, s2, s3, files := keptThenRestart(t)
 	s3.Unit(1).SetHolding(10, 999)
 	s2.Unit(1).SetHolding(10, 999)
-	// Inputs at their seed (0), so each Cmd is 1 whether the first scan ran
-	// before the first read or after: the first push is the only write a
-	// held baseline holds back, whatever the timing.
-	s3.Unit(1).SetHolding(0, 0)
-	s2.Unit(1).SetHolding(0, 0)
+	// Inputs off their seed (5, not 0): the first scan computes Cmd from the
+	// seed (1) before anything was read, and that value must never go out.
+	s3.Unit(1).SetHolding(0, 5)
+	s2.Unit(1).SetHolding(0, 5)
 	r := startKeepRig(t, files, keepOpts{store: store})
 	r.leading(t)
 	eventually(t, "both devices polled", func() bool {
 		return r.rt.TagQuality("A_In").IsGood() && r.rt.TagQuality("B_In").IsGood()
 	})
 	time.Sleep(150 * time.Millisecond)
-	if a, b := s3.Unit(1).Holding(10), s2.Unit(1).Holding(10); a != 999 || b != 999 {
-		t.Fatalf("Cmd on the re-applied device %d, on the untouched one %d: a restart sent what a boot holds back", a, b)
-	}
+	eventually(t, "the live-input value decided against both devices", func() bool {
+		if s3.Unit(1).Holding(10) == 1 || s2.Unit(1).Holding(10) == 1 {
+			t.Fatal("the init-derived first value went out before the inputs were read")
+		}
+		return s3.Unit(1).Holding(10) == 6 && s2.Unit(1).Holding(10) == 6
+	})
 	s3.Unit(1).SetHolding(0, 11)
 	eventually(t, "a change sent", func() bool { return s3.Unit(1).Holding(10) == 12 })
 }
 
 // The same for a driver swapped whole by the restore (a kept change to its
-// own settings): its start-up baseline is not disarmed.
-func TestIOKeptDriverSwapAtStartKeepsTheBaseline(t *testing.T) {
+// own settings): its start-up baseline is not disarmed, so it decides
+// against the device as a boot does.
+func TestIOKeptDriverSwapAtStartDecidesTheBaselineAgainstTheDevice(t *testing.T) {
 	s1, s2, s3 := newSlave(t, 4), newSlave(t, 7), newSlave(t, 9)
 	ua := uaServer(t, 1.5)
 	files := ioFiles(slavePort(s1), slavePort(s2), ua)
@@ -822,8 +826,8 @@ func TestIOKeptDriverSwapAtStartKeepsTheBaseline(t *testing.T) {
 	r.stop()
 	s3.Unit(1).SetHolding(10, 999)
 	s2.Unit(1).SetHolding(10, 999)
-	s3.Unit(1).SetHolding(0, 0) // seed values: see TestIOKeptRestartKeepsTheStartBaseline
-	s2.Unit(1).SetHolding(0, 0)
+	s3.Unit(1).SetHolding(0, 5) // off the seed: see TestIOKeptRestartDecidesTheStartBaselineAgainstTheDevice
+	s2.Unit(1).SetHolding(0, 5)
 	r2 := startKeepRig(t, files, keepOpts{store: store})
 	r2.leading(t)
 	if d, ok := unitOf(r2.io.Differs(), "modbus"); !ok || d.RunningHash == d.ManifestHash {
@@ -833,9 +837,12 @@ func TestIOKeptDriverSwapAtStartKeepsTheBaseline(t *testing.T) {
 		return r2.rt.TagQuality("A_In").IsGood() && r2.rt.TagQuality("B_In").IsGood()
 	})
 	time.Sleep(150 * time.Millisecond)
-	if a, b := s3.Unit(1).Holding(10), s2.Unit(1).Holding(10); a != 999 || b != 999 {
-		t.Fatalf("Cmd %d and %d: the restored driver sent what a boot holds back", a, b)
-	}
+	eventually(t, "the live-input value decided against both devices", func() bool {
+		if s3.Unit(1).Holding(10) == 1 || s2.Unit(1).Holding(10) == 1 {
+			t.Fatal("the init-derived first value went out before the inputs were read")
+		}
+		return s3.Unit(1).Holding(10) == 6 && s2.Unit(1).Holding(10) == 6
+	})
 }
 
 // A redundant project whose store is a file (one replica's own) cannot

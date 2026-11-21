@@ -168,9 +168,12 @@ driver keeps: an unchanged value is not a command; a command made while the sess
 down goes out on reconnect (the last value per tag); a write the server
 refuses on a healthy session is dropped and reported, not retried forever.
 "Unchanged" at start means unchanged against what the server holds. The
-first time the driver reads an output's node it compares the program's
-first value with the server's: equal, nothing is sent; different, the
-program's value is written once. A controller that computes `true` at
+first time a scan that has read the server's inputs hands the driver the
+program's value for an output, the driver compares it with the server's:
+equal, nothing is sent; different, the program's value is written once. The
+very first scan runs before anything was read, on the inputs' initial
+values, and its values are never sent. An output computed from another
+device's input is not waited for: interlock on that device's `__Online`. A controller that computes `true` at
 start therefore drives a server that holds `false`, and a program that
 starts at its default overwrites a value left on the server. The output
 is the controller's to own: a value an operator sets on the server belongs

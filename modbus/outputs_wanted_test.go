@@ -62,9 +62,11 @@ func TestUndeliveredSetpointGoesOutAgainAfterTheBackoff(t *testing.T) {
 	}
 	startDriver(t, d)
 	waitFor(t, "connect", func() bool { return d.Health().Sources[0].State == "connected" })
+	u.SetHolding(400, 7) // the seed: the device holds what the program starts at (#1123)
+	waitFor(t, "first read", func() bool { v, _ := d.ReadInputs(); f, _ := toFloat(v["KA"]); return f == 7 })
 	rt := newOutputsRuntime(t, d, nil)
 
-	rt.Scan() // the first push is the driver's baseline: recorded, not sent
+	rt.Scan() // the first push is the driver's baseline: equal to the device, not sent
 	u.InjectExceptionAt(FCWriteSingleRegister, 500, 0x0B)
 	rt.Tags().SetReal("SP", 21)
 	rt.Scan()

@@ -63,6 +63,10 @@ func TestStandbyTakeoverCommandsEveryOutput(t *testing.T) {
 			waitFor(t, "connect", func() bool { return d.Health().Sources[0].State == "connected" })
 			rt := newOutputsRuntime(t, d, leaderFunc(g.open.Load))
 			rt.Tags().SetReal("SP", 77) // what the program holds when it leads
+			if !tc.standby {
+				u.SetHolding(500, 77) // a plain start whose device holds it: equal, nothing sent (#1123)
+				waitFor(t, "first read", func() bool { v, _ := d.ReadInputs(); f, _ := toFloat(v["SP"]); return f == 77 })
+			}
 
 			if tc.standby {
 				rt.Scan() // standing by: no scan
@@ -77,7 +81,7 @@ func TestStandbyTakeoverCommandsEveryOutput(t *testing.T) {
 				return
 			}
 			time.Sleep(60 * time.Millisecond)
-			if n := len(rec.writes(FCWriteSingleRegister, 500)); n != 0 || u.Holding(500) != 0 {
+			if n := len(rec.writes(FCWriteSingleRegister, 500)); n != 0 || u.Holding(500) != 77 {
 				t.Errorf("a plain start sent its baseline setpoint: %d frames, holding 500 = %d", n, u.Holding(500))
 			}
 		})

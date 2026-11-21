@@ -15,6 +15,14 @@ import (
 // (#706) can then start from the current commands.
 type BaselineDisarmer interface{ DisarmBaseline() }
 
+// BaselineHolder is a driver whose start-up baseline decides each output
+// against what the device holds (modbus, #1123) and that can be told to keep
+// the older, stricter rule instead: the first push is recorded, never sent,
+// whatever the device holds. A driver swapped in live under
+// Options.HoldOutputsOnSwap is held this way: a held swap commands nothing
+// until an output changes.
+type BaselineHolder interface{ HoldBaseline() }
+
 // StartReporter says whether Start has run. A driver that has not been
 // started cannot be read (Modbus and OPC UA error), so Replace refuses one.
 type StartReporter interface{ Started() bool }
@@ -409,6 +417,18 @@ func (m *Multi) OutputsWanted() bool {
 		}
 	}
 	return wanted
+}
+
+// BeginScan tells every child that wants to know a scan is starting
+// (ScanBeginner).
+func (m *Multi) BeginScan() {
+	m.set.RLock()
+	defer m.set.RUnlock()
+	for _, c := range m.children {
+		if b, ok := c.Driver.(ScanBeginner); ok {
+			b.BeginScan()
+		}
+	}
 }
 
 // InputsReady is true when every child that can say so is ready: a

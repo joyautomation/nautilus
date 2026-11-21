@@ -327,10 +327,23 @@ A `writable: true` binding on a holding or coil table becomes a `role:
 output` tag whose writes reach the device as FC 5/6/15/16.
 
 **Outputs are commands; an unchanged output since start is not a command.**
-An output's value before anyone writes it is its `init:` — usually zero —
-and taken at face value, a controller restarting against a running plant
-would command every setpoint to zero. So the **first snapshot after `Start`
-is the baseline**: recorded, sent to nobody. Thereafter only a value that
+"Unchanged" at start means unchanged against what the device holds, not
+against the program's first value. The first time a scan
+that has read the device's inputs hands the driver the program's value for
+an output, the driver compares it with what the coil or register holds:
+equal, nothing is sent; different, the program's value is written once. (The
+very first scan runs before anything was read, on the inputs' initial values;
+its values are never sent.) A controller that computes `true` at start therefore drives a coil
+that holds `false`, and a program that starts at its default overwrites a
+value left in the device. The output is the controller's to own: a value an
+operator sets in the device belongs in an input (a setpoint the program
+reads), not in an output. An output whose register has not been read yet
+(the device is down at start) waits for its first read and is never taken as
+sent; one the device refuses to read, or that has `scan-class: none` or
+`write-only: true`, is written once. An output computed from another device's
+input is not waited for: interlock on that device's `__Online` in the
+program. Earlier versions took the first value as already sent and never
+wrote it (#1123). Thereafter only a value that
 actually moved goes on the wire, once. A command raised while the source is
 down is queued per source (latest value per tag) and flushed on reconnect,
 counted as `queuedWrites` on the device row. If the link breaks partway

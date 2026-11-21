@@ -50,20 +50,22 @@ func TestBrokenFlushResendsOnlyUnconfirmedRuns(t *testing.T) {
 	u := srv.Unit(1)
 	rec := &recorder{}
 
+	// The outputs are not read back (NoPoll), so the start-up baseline
+	// commands them once (#1123), as it does for a register it cannot read.
 	m := Manifest{
 		Sources: []Source{fastSource("DEV", srv.Addr())},
 		Tags: []TagBinding{
 			// Send order in one flush: the bit RMW, then register runs by
 			// address (100, 200, 300), then the coil run.
-			{Name: "BIT", Source: "DEV", Table: TableHolding, Address: 50, Format: "bit:0", Writable: true},
-			{Name: "A1", Source: "DEV", Table: TableHolding, Address: 100, Format: "uint16", Writable: true},
-			{Name: "A2", Source: "DEV", Table: TableHolding, Address: 101, Format: "uint16", Writable: true},
-			{Name: "B1", Source: "DEV", Table: TableHolding, Address: 200, Format: "uint16", Writable: true},
-			{Name: "B2", Source: "DEV", Table: TableHolding, Address: 201, Format: "uint16", Writable: true},
-			{Name: "C1", Source: "DEV", Table: TableHolding, Address: 300, Format: "uint16", Writable: true},
-			{Name: "C2", Source: "DEV", Table: TableHolding, Address: 301, Format: "uint16", Writable: true},
-			{Name: "K1", Source: "DEV", Table: TableCoil, Address: 10, Writable: true},
-			{Name: "K2", Source: "DEV", Table: TableCoil, Address: 11, Writable: true},
+			{Name: "BIT", Source: "DEV", Table: TableHolding, Address: 50, Format: "bit:0", Writable: true, ScanClass: NoPoll},
+			{Name: "A1", Source: "DEV", Table: TableHolding, Address: 100, Format: "uint16", Writable: true, ScanClass: NoPoll},
+			{Name: "A2", Source: "DEV", Table: TableHolding, Address: 101, Format: "uint16", Writable: true, ScanClass: NoPoll},
+			{Name: "B1", Source: "DEV", Table: TableHolding, Address: 200, Format: "uint16", Writable: true, ScanClass: NoPoll},
+			{Name: "B2", Source: "DEV", Table: TableHolding, Address: 201, Format: "uint16", Writable: true, ScanClass: NoPoll},
+			{Name: "C1", Source: "DEV", Table: TableHolding, Address: 300, Format: "uint16", Writable: true, ScanClass: NoPoll},
+			{Name: "C2", Source: "DEV", Table: TableHolding, Address: 301, Format: "uint16", Writable: true, ScanClass: NoPoll},
+			{Name: "K1", Source: "DEV", Table: TableCoil, Address: 10, Writable: true, ScanClass: NoPoll},
+			{Name: "K2", Source: "DEV", Table: TableCoil, Address: 11, Writable: true, ScanClass: NoPoll},
 		},
 	}
 
@@ -180,17 +182,17 @@ type flushStep struct {
 // write never left), and every write after it goes out once.
 func TestBrokenFlushAtEveryPoint(t *testing.T) {
 	tags := []TagBinding{
-		{Name: "BA", Source: "DEV", Table: TableHolding, Address: 50, Format: "bit:0", Writable: true},
-		{Name: "BB", Source: "DEV", Table: TableHolding, Address: 60, Format: "bit:0", Writable: true},
-		{Name: "A1", Source: "DEV", Table: TableHolding, Address: 100, Format: "uint16", Writable: true},
-		{Name: "A2", Source: "DEV", Table: TableHolding, Address: 101, Format: "uint16", Writable: true},
-		{Name: "B1", Source: "DEV", Table: TableHolding, Address: 200, Format: "uint16", Writable: true},
-		{Name: "B2", Source: "DEV", Table: TableHolding, Address: 201, Format: "uint16", Writable: true},
-		{Name: "C1", Source: "DEV", Table: TableHolding, Address: 300, Format: "uint16", Writable: true},
-		{Name: "C2", Source: "DEV", Table: TableHolding, Address: 301, Format: "uint16", Writable: true},
-		{Name: "K1", Source: "DEV", Table: TableCoil, Address: 10, Writable: true},
-		{Name: "K2", Source: "DEV", Table: TableCoil, Address: 11, Writable: true},
-		{Name: "K3", Source: "DEV", Table: TableCoil, Address: 20, Writable: true},
+		{Name: "BA", Source: "DEV", Table: TableHolding, Address: 50, Format: "bit:0", Writable: true, ScanClass: NoPoll},
+		{Name: "BB", Source: "DEV", Table: TableHolding, Address: 60, Format: "bit:0", Writable: true, ScanClass: NoPoll},
+		{Name: "A1", Source: "DEV", Table: TableHolding, Address: 100, Format: "uint16", Writable: true, ScanClass: NoPoll},
+		{Name: "A2", Source: "DEV", Table: TableHolding, Address: 101, Format: "uint16", Writable: true, ScanClass: NoPoll},
+		{Name: "B1", Source: "DEV", Table: TableHolding, Address: 200, Format: "uint16", Writable: true, ScanClass: NoPoll},
+		{Name: "B2", Source: "DEV", Table: TableHolding, Address: 201, Format: "uint16", Writable: true, ScanClass: NoPoll},
+		{Name: "C1", Source: "DEV", Table: TableHolding, Address: 300, Format: "uint16", Writable: true, ScanClass: NoPoll},
+		{Name: "C2", Source: "DEV", Table: TableHolding, Address: 301, Format: "uint16", Writable: true, ScanClass: NoPoll},
+		{Name: "K1", Source: "DEV", Table: TableCoil, Address: 10, Writable: true, ScanClass: NoPoll},
+		{Name: "K2", Source: "DEV", Table: TableCoil, Address: 11, Writable: true, ScanClass: NoPoll},
+		{Name: "K3", Source: "DEV", Table: TableCoil, Address: 20, Writable: true, ScanClass: NoPoll},
 	}
 	base := nio.Values{"BA": false, "BB": false, "A1": float64(0), "A2": float64(0),
 		"B1": float64(0), "B2": float64(0), "C1": float64(0), "C2": float64(0),
