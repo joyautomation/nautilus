@@ -1190,23 +1190,36 @@ namespace Tiad
             }
         }
 
-        // CompareEqual decides whether TIA's compare tree proves the CPU
+        // CompareEqual decides whether an online compare proves the CPU
         // holds exactly the project's PLC software (#789), and adds to
-        // into what differs, or why the tree proves nothing. Equal needs
-        // all three:
+        // into what differs, or why the compare proves nothing. Equal
+        // needs all four:
         //   - the root says identical (FolderContentsIdentical or
         //     ObjectsIdentical);
         //   - at least one object below the root was compared and found
         //     identical (ObjectsIdentical): an empty tree, or one of empty
         //     folders, compared nothing and proves nothing;
         //   - no element anywhere in the tree is in a non-identical state,
-        //     so a differing child under an identical-looking root fails.
+        //     so a differing child under an identical-looking root fails;
+        //   - every program block the project holds is in the tree as an
+        //     element of its label (BlockLabel) that says ObjectsIdentical,
+        //     wherever it sits: a block the tree leaves out was not
+        //     compared, so nothing says the CPU holds it (#789 stage 3
+        //     gate: an empty identical block folder beside one identical
+        //     tag table must not pass). A block with no label is not
+        //     compared either, and a project with no blocks read proves
+        //     nothing about blocks.
         // CompareIrrelevant anywhere is "not compared": TIA left that
         // object out, so nothing says it matches (#1156 review: a skipped
         // block folder beside one identical tag table must not pass). A
         // folder that says its contents differ without a differing child to
-        // show is named itself. A null tree is not equal.
-        public static bool CompareEqual(CompareNode root, List<Difference> into)
+        // show is named itself. A null tree is not equal. Blocks are
+        // matched by label anywhere in the tree, not by folder: TIA names
+        // its folders in the UI language, and imported blocks sit in a
+        // user group one level deeper. System blocks and the project's
+        // data types and tag tables are not required by name; they fall
+        // under the rule that nothing in the tree may differ.
+        public static bool CompareEqual(CompareNode root, List<ProjectBlock> blocks, List<Difference> into)
         {
             if (root == null)
             {
@@ -1215,7 +1228,8 @@ namespace Tiad
             }
             int before = into.Count;
             int compared = 0;
-            Tally(root, into, ref compared, true);
+            var identical = new HashSet<string>(StringComparer.Ordinal);
+            Tally(root, into, ref compared, identical, true);
             if (root.State != "FolderContentsIdentical" && root.State != "ObjectsIdentical" && into.Count == before)
             {
                 into.Add(new Difference { Object = root.Name, State = "not compared" });
@@ -1224,17 +1238,68 @@ namespace Tiad
             {
                 into.Add(new Difference { Object = root.Name, State = "nothing compared" });
             }
+            if (blocks == null || blocks.Count == 0)
+            {
+                into.Add(new Difference { Object = "", State = "no project blocks read" });
+                return false;
+            }
+            var named = new HashSet<string>(StringComparer.Ordinal);
+            for (int i = before; i < into.Count; i++) named.Add(into[i].Object);
+            foreach (ProjectBlock b in blocks)
+            {
+                string label = BlockLabel(b);
+                if (label == null)
+                {
+                    into.Add(new Difference { Object = b.Name + " (" + b.Type + ")", State = "not compared" });
+                }
+                else if (!identical.Contains(label) && !named.Contains(label))
+                {
+                    into.Add(new Difference { Object = label, State = "not compared" });
+                }
+            }
             return into.Count == before;
         }
 
-        static void Tally(CompareNode n, List<Difference> into, ref int compared, bool root)
+        // BlockLabels lists blocks' labels for the journal, at most max of
+        // them and then how many more ("Main [OB1], Pump [FB1], +3 more").
+        public static string BlockLabels(List<ProjectBlock> blocks, int max)
+        {
+            var l = new List<string>();
+            foreach (ProjectBlock b in blocks)
+            {
+                if (l.Count == max)
+                {
+                    l.Add("+" + (blocks.Count - max).ToString(CultureInfo.InvariantCulture) + " more");
+                    break;
+                }
+                l.Add(BlockLabel(b) ?? b.Name);
+            }
+            return string.Join(", ", l.ToArray());
+        }
+
+        // BlockLabel is the name TIA's compare tree gives a program block:
+        // its name, then its kind and number in brackets ("Main [OB1]",
+        // the shape the bench's equal tree showed, #789), or null for an
+        // Openness type that is no program block tiad can label.
+        public static string BlockLabel(ProjectBlock b)
+        {
+            string kind = BlockKind(b.Type);
+            if (kind == "" || kind == "UDT") return null;
+            return b.Name + " [" + kind + b.Number.ToString(CultureInfo.InvariantCulture) + "]";
+        }
+
+        static void Tally(CompareNode n, List<Difference> into, ref int compared, HashSet<string> identical, bool root)
         {
             int at = into.Count;
             string own = Difference(n.State);
             if (own != "") into.Add(new Difference { Object = n.Name, State = own });
             else if (n.State == "CompareIrrelevant" && !root) into.Add(new Difference { Object = n.Name, State = "not compared" });
-            else if (n.State == "ObjectsIdentical" && !root) compared++;
-            foreach (CompareNode c in n.Children) Tally(c, into, ref compared, false);
+            else if (n.State == "ObjectsIdentical" && !root)
+            {
+                compared++;
+                identical.Add(n.Name);
+            }
+            foreach (CompareNode c in n.Children) Tally(c, into, ref compared, identical, false);
             if (n.State == "FolderContentsDifferent" && into.Count == at)
             {
                 into.Add(new Difference { Object = n.Name, State = "contents differ" });

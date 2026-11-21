@@ -301,6 +301,28 @@ namespace Tiad
         public List<CompareNode> Children = new List<CompareNode>();
     }
 
+    // ProjectBlock is one program block the project holds, as Openness
+    // reports it: its name, its Openness type name ("OB", "FB", "FC",
+    // "GlobalDB", "InstanceDB", "ArrayDB", ...) and its number. The glue
+    // reads them and decides nothing; TiaNames.BlockLabel names the block
+    // as TIA's compare tree does.
+    public sealed class ProjectBlock
+    {
+        public string Name = "", Type = "";
+        public int Number;
+    }
+
+    // OnlineCompare is one online compare: TIA's compare tree, and every
+    // program block the project held when it was compared, read in the
+    // same call. TiaNames.CompareEqual needs both: an equal tree proves
+    // the CPU holds the project only when every one of those blocks is in
+    // it, compared and identical (#789 stage 3 gate).
+    public sealed class OnlineCompare
+    {
+        public CompareNode Tree;
+        public List<ProjectBlock> Blocks;
+    }
+
     public sealed class ExportOptions
     {
         public string Blocks = ""; // "scl", "xml" or ""

@@ -1158,10 +1158,11 @@ namespace Tiad.Openness
 
         // ---- compare ----
 
-        // Compare goes online to the CPU at address, compares the PLC
-        // software with it and returns TIA's compare tree as is; the agent
-        // decides what it proves (TiaNames.CompareEqual).
-        public CompareNode Compare(object project, string address)
+        // Compare reads every program block the project holds, then goes
+        // online to the CPU at address, compares the PLC software with it
+        // and returns TIA's compare tree as is, with those blocks; the
+        // agent decides what they prove (TiaNames.CompareEqual).
+        public OnlineCompare Compare(object project, string address)
         {
             return Tia(delegate
             {
@@ -1169,6 +1170,9 @@ namespace Tiad.Openness
                 HwDevice d = StationOf(p);
                 if (d == null) throw new TiaException("the project has no CPU");
                 DeviceItem cpu = CpuOf(d);
+                PlcSoftware sw = (PlcSoftware)cpu.GetService<SoftwareContainer>().Software;
+                var blocks = new List<ProjectBlock>();
+                ProjectBlocks(sw.BlockGroup, blocks);
                 OnlineProvider op = cpu.GetService<OnlineProvider>();
                 ConfigurationPcInterface pc = PcInterface(op.Configuration);
                 ConfigurationAddress at = TargetInterface(pc).Addresses.Create(address);
@@ -1187,7 +1191,7 @@ namespace Tiad.Openness
                             if (online.Asked.Count > 0) throw new TiaException(TiaNames.OnlineRefused(address, online.Asked, "online state " + st));
                             throw new TiaException("TIA could not go online to " + address + ": " + st);
                         }
-                        CompareResult cr = ((PlcSoftware)cpu.GetService<SoftwareContainer>().Software).CompareToOnline();
+                        CompareResult cr = sw.CompareToOnline();
                         tree = cr == null ? null : Node(cr.RootElement);
                         failed = false;
                     }
@@ -1214,8 +1218,20 @@ namespace Tiad.Openness
                     online.Stop();
                 }
                 online.Check(address, "compare");
-                return tree;
+                return new OnlineCompare { Tree = tree, Blocks = blocks };
             });
+        }
+
+        // ProjectBlocks adds every block in g and in its user groups, at
+        // any depth, as Openness reports it: no block is left out for its
+        // type, so the agent names one it cannot label.
+        static void ProjectBlocks(PlcBlockGroup g, List<ProjectBlock> into)
+        {
+            foreach (PlcBlock b in g.Blocks)
+            {
+                into.Add(new ProjectBlock { Name = b.Name, Type = b.GetType().Name, Number = b.Number });
+            }
+            foreach (PlcBlockUserGroup u in g.Groups) ProjectBlocks(u, into);
         }
 
         // Node copies one element of TIA's compare tree, and its children;

@@ -74,7 +74,10 @@ Mono:
   Openness has no online hardware compare) is equal. Equal is decided in
   core from TIA's compare tree (`TiaNames.CompareEqual`): an identical
   root, at least one object compared below it, nothing non-identical
-  anywhere; an empty tree is never equal. A hardware download
+  anywhere, and every program block the project holds (`ITia.Compare`
+  reads them in the same call) in the tree as an identical element of
+  its label (`TiaNames.BlockLabel`, `Main [OB1]`); an empty tree, or one
+  that leaves out a project block, is never equal. A hardware download
   says `hardwareVerified: false`. How a download ended is decided in core too
   (`DownloadDecider.Finish`). Before TIA starts, every selection tiad may
   write is checked against this Openness's enum types.

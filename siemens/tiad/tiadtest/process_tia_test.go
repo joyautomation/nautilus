@@ -715,8 +715,11 @@ func TestAgentAnswersTheSoftwareLoadFamily(t *testing.T) {
 
 // TestAgentNeverCallsAnEmptyCompareEqual: #789. TIA's compare tree is
 // equal only when its root says identical, at least one object below the
-// root was compared, and nothing anywhere in it differs. A tree that
-// compares nothing, or hides a difference in a folder, is not equal:
+// root was compared, nothing anywhere in it differs, and every program
+// block the project holds is in it, identical. A tree that compares
+// nothing, hides a difference in a folder, or leaves out a block of the
+// project (the stage 3 gate), or a project whose blocks were not read,
+// is not equal:
 // /compare says equal false and names why, and a download TIA reported
 // loaded ends outcome_unknown naming it, and start-after, since TIA may
 // have started the CPU.
@@ -733,14 +736,22 @@ func TestAgentNeverCallsAnEmptyCompareEqual(t *testing.T) {
 		t.Fatalf("compare, bench-shaped equal tree: %+v %v", r, err)
 	}
 	for _, tc := range []struct{ tree, named string }{
-		{"empty", "PLC_1 nothing compared"},
-		{"emptyFolders", "PLC_1 nothing compared"},
+		{"empty", "PLC_1 nothing compared, Main [OB1] not compared"},
+		{"emptyFolders", "PLC_1 nothing compared, Main [OB1] not compared"},
 		{"folderDiffers", "PLC tags contents differ"},
 		{"irrelevantRoot", "PLC_1 not compared"},
+		{"dropBlock", "Main [OB1] not compared"},
+		{"noBlocks", "no project blocks read"},
 	} {
 		p.SetScript(t, tiadtest.Script{AskFirst: intp(0), CompareTree: tc.tree})
 		r, err := s.Compare(ctx)
-		if err != nil || r.Equal || len(r.Differences) != 1 || r.Differences[0].Object+" "+r.Differences[0].State != tc.named {
+		var named []string
+		if err == nil {
+			for _, d := range r.Differences {
+				named = append(named, strings.TrimSpace(d.Object+" "+d.State))
+			}
+		}
+		if err != nil || r.Equal || strings.Join(named, ", ") != tc.named {
 			t.Errorf("compare, tree %s: %+v %v, want not equal naming %q", tc.tree, r, err, tc.named)
 		}
 		_, err = s.Download(ctx, start)

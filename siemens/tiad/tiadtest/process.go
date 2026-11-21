@@ -78,8 +78,11 @@ type Script struct {
 	// the CPU holds (#789): "empty" (an identical root, nothing under
 	// it), "emptyFolders" (an identical root over empty folders only),
 	// "folderDiffers" (a folder says its contents differ but shows no
-	// differing child) or "irrelevantRoot" (a CompareIrrelevant root over
-	// an identical block). None of them may pass as equal.
+	// differing child), "irrelevantRoot" (a CompareIrrelevant root over
+	// an identical block), "dropBlock" (an otherwise identical tree that
+	// leaves out the project's last program block) or "noBlocks" (the
+	// project's blocks could not be read). None of them may pass as
+	// equal.
 	CompareTree string `json:"compareTree,omitempty"`
 	// DownloadState is the state TIA's download result reports when it
 	// ran ("" = Success; "Error" = a failed load).
