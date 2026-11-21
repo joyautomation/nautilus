@@ -69,10 +69,17 @@ namespace Tiad.Openness
         readonly OnlineAnswers answers;
         readonly Action gone;
         readonly string address;
-        public readonly List<string> Asked = new List<string>();
+        readonly OnlineRecord record = new OnlineRecord();
+        public List<string> Asked
+        {
+            get { return record.Asked; }
+        }
         // TrustedBlindly are the certificate questions answered Trusted,
         // on the upload's explicit opt-in.
-        public readonly List<string> TrustedBlindly = new List<string>();
+        public List<string> TrustedBlindly
+        {
+            get { return record.TrustedBlindly; }
+        }
 
         // gone is called when the handler cannot be detached: TIA's
         // objects are disposed, so TIA is taken to be gone.
@@ -106,27 +113,15 @@ namespace Tiad.Openness
         // operation fails even if TIA goes on. TIA calls it from its own
         // process, so it is only Boundary.Call: a failure anywhere in it is
         // recorded as a question answered no (the operation fails), and
-        // TIA gets Boundary.Fail's exception, never a tiad type.
+        // TIA gets Boundary.Fail's exception, never a tiad type
+        // (OnlineRecord.Handle, in core).
         void Handle(OnlineConfiguration c)
         {
-            int before = Asked.Count + TrustedBlindly.Count;
-            string type = "";
-            Boundary.Call("online: answering TIA", delegate
-            {
-                type = c.GetType().Name;
-                Answer(c, type);
-            }, delegate(Exception e)
-            {
-                if (Asked.Count + TrustedBlindly.Count == before)
-                {
-                    Asked.Add(OnlineChecks.Ask(type == "" ? "an unreadable question" : type, "", "", new List<string>()));
-                }
-                return "tiad cancels going online: TIA asked " + (Asked.Count > 0 ? Asked[Asked.Count - 1] : type);
-            });
+            record.Handle(delegate { return c.GetType().Name; }, delegate(string type, OnlineRecord.Call call) { Answer(c, type, call); });
         }
 
         // Answer answers one question and records it; it throws to cancel.
-        void Answer(OnlineConfiguration c, string type)
+        void Answer(OnlineConfiguration c, string type, OnlineRecord.Call call)
         {
             var tls = c as TlsVerificationConfiguration;
             string answer = answers.Answer(type);
@@ -160,12 +155,12 @@ namespace Tiad.Openness
                     Log.Line("online: reading a TLS question failed ({0}); answered {1}", e.GetType().Name, trust ? "TRUSTED BLINDLY" : "not trusted");
                 }
                 string question = OnlineChecks.Ask(type, plc, info, fps);
-                if (trust) TrustedBlindly.Add(question);
-                else Asked.Add(question);
+                if (trust) call.Trust(question);
+                else call.Refuse(question);
                 return;
             }
             string ask = OnlineChecks.Ask(type, "", "", new List<string>());
-            Asked.Add(ask);
+            call.Refuse(ask);
             throw new TiaException("tiad cancels going online: TIA asked " + ask);
         }
 
@@ -1449,31 +1444,21 @@ namespace Tiad.Openness
                 // so no target interface).
                 ConfigurationAddress at = pc.Addresses.Create(address);
                 foreach (HwDevice d in AllDevices(p)) d.Delete();
-                string asked = null;
+                var ups = new UploadAsks();
                 UploadResult r;
                 var online = new OnlineAsks(sup.Configuration, Detached, trustUnverifiedCertificate, address);
                 try
                 {
-                    // TIA calls it from its own process: only Boundary.Call,
-                    // and `asked` is set whatever fails, before TIA gets
-                    // Boundary.Fail's exception.
+                    // TIA calls it from its own process: UploadAsks (core)
+                    // records what it asked, then sends only Boundary.Fail's.
                     r = sup.StationUpload(at, delegate(UploadConfiguration c)
                     {
-                        Boundary.Call("upload: answering TIA", delegate
-                        {
-                            asked = "an upload configuration";
-                            asked = c.GetType().Name + " (" + (c.Message ?? "") + ")";
-                            throw new TiaException("upload asked " + asked + ", which tiad does not answer");
-                        }, delegate(Exception e)
-                        {
-                            if (asked == null) asked = "an upload configuration";
-                            return "upload asked " + asked + ", which tiad does not answer";
-                        });
+                        ups.Handle(delegate { return c.GetType().Name + " (" + (c.Message ?? "") + ")"; });
                     });
                 }
                 catch (Exception e)
                 {
-                    if (asked != null) throw new TiaException("upload asked " + asked + ", which tiad does not answer; nothing was uploaded", e);
+                    if (ups.Asked != null) throw new TiaException("upload asked " + ups.Asked + ", which tiad does not answer; nothing was uploaded", e);
                     TiaException refused = online.Explain(address, e);
                     if (refused != null) throw refused;
                     throw;
@@ -1483,7 +1468,7 @@ namespace Tiad.Openness
                     online.Stop();
                 }
                 // A refusal TIA swallowed is still a refusal.
-                if (asked != null) throw new TiaException("upload asked " + asked + ", which tiad does not answer; TIA went on anyway");
+                if (ups.Asked != null) throw new TiaException("upload asked " + ups.Asked + ", which tiad does not answer; TIA went on anyway");
                 online.Check(address, "upload");
                 string state = r.State.ToString();
                 if (!TiaNames.DownloadLoaded(state)) throw new TiaException("TIA's upload ended " + state);

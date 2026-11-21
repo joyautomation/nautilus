@@ -126,6 +126,12 @@ namespace Tiad.Test
                 T("EveryCancelCrossesAndIsKept", EveryCancelCrossesAndIsKept),
                 T("ListThrowingCancelsNamingIt", ListThrowingCancelsNamingIt),
                 T("DownloadStepsDeclineThroughTia", DownloadStepsDeclineThroughTia),
+                T("ASerializableTiadTypeStillKillsTia", ASerializableTiadTypeStillKillsTia),
+                T("DeclineNeedsItsToken", DeclineNeedsItsToken),
+                T("DeclineThenTiaGoesOn", DeclineThenTiaGoesOn),
+                T("KeepRecordsWhenTheMessageThrows", KeepRecordsWhenTheMessageThrows),
+                T("OnlineRecordFailsClosed", OnlineRecordFailsClosed),
+                T("UploadAsksRecordsFirst", UploadAsksRecordsFirst),
                 T("OnlineAnswersAfterStop", OnlineAnswersAfterStop),
                 T("QuietlyEvenWhenTheLogFails", QuietlyEvenWhenTheLogFails),
                 T("Selections", SelectionsWritten),
@@ -571,7 +577,9 @@ namespace Tiad.Test
             Eq(r.Decides, 1, "decides");
             True(!r.D.Approved, "approved");
             Eq(r.D.Asked.Count, 2, "asked: the configuration and start-after");
-            Cancelled(r, delegate { r.D.Next(k, "StopModules", "stop", null); }, "not decided", true, "a later callback");
+            // A later callback means TIA went on past the decline: a
+            // failure from then on, never a decline (#1145 review).
+            Cancelled(r, delegate { r.D.Next(k, "StopModules", "stop", null); }, "TIA went on", false, "a later callback");
             Eq(r.Decides, 1, "decides after a later callback");
             Eq(A(r.D, "StartModules"), "NoAction", "after a load nobody approved");
             Eq(A(r.D, "StopModules"), null, "another configuration after a load nobody approved");

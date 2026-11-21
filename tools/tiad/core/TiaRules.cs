@@ -394,9 +394,24 @@ namespace Tiad
         // never matched by reference.
         public DownloadCancel Cancelled;
 
+        // Token marks this decider's decline: "tiad-decline:" and 16
+        // random hex digits, new for every download. A decline counts only
+        // when what TIA throws back carries it (Ended): TIA's own text,
+        // however close in words, never does.
+        public readonly string Token = NewToken();
+
         public DownloadDecider(Func<List<Question>, List<Answer>> decide)
         {
             this.decide = decide;
+        }
+
+        static string NewToken()
+        {
+            var b = new byte[8];
+            using (var rng = new System.Security.Cryptography.RNGCryptoServiceProvider()) rng.GetBytes(b);
+            var t = new StringBuilder("tiad-decline:");
+            foreach (byte x in b) t.Append(x.ToString("x2", CultureInfo.InvariantCulture));
+            return t.ToString();
         }
 
         public bool Decided
@@ -431,7 +446,13 @@ namespace Tiad
         // counts as answered only once its write is reported (Wrote).
         public Step Next(object key, string type, string message, Func<List<Pending>> list)
         {
-            if (Cancelled != null) throw Cancelled;
+            if (Cancelled != null)
+            {
+                // A callback after a decline: TIA went on past the cancel,
+                // so the download can no longer end declined.
+                if (Cancelled.Declined) Fail("TIA asked " + Name(new Pending { Type = type, Message = message }) + " after tiad declined the download (" + Cancelled.Message + "): TIA went on");
+                throw Cancelled;
+            }
             if (pending == null) Decide(key, type, message, list);
             int i = IndexOf(key);
             if (i < 0)
@@ -468,7 +489,16 @@ namespace Tiad
         {
             var c = e as DownloadCancel;
             if (c != null && object.ReferenceEquals(c, Cancelled)) return Cancelled.Message;
-            return Fail("tiad's download callback failed: " + TiaNames.Message(e)).Message;
+            string text;
+            try
+            {
+                text = TiaNames.Message(e);
+            }
+            catch (Exception)
+            {
+                text = "(" + e.GetType().Name + ", its message unreadable)";
+            }
+            return Fail("tiad's download callback failed: " + text).Message;
         }
 
         // loadSeen is set by TIA's after-download callback: TIA loaded.
@@ -525,7 +555,7 @@ namespace Tiad
             }
             applied = new bool[all.Count];
             List<Answer> answers = decide(Copy(Asked));
-            if (answers == null) throw Cancel("the download was not decided: nothing was loaded", true);
+            if (answers == null) throw Cancel("the download was not decided: nothing was loaded (" + Token + ")", true);
             if (answers.Count != all.Count) throw Cancel("decide answered " + answers.Count + " of " + all.Count + " questions", false);
             settings = new List<Setting>();
             for (int i = 0; i < all.Count; i++)
@@ -613,18 +643,26 @@ namespace Tiad
         }
 
         // Carries is whether TIA's exception, or one inside it, is the
-        // cancel that crossed: by its message, since TIA hands back a
+        // decline that crossed: by its token (Token), since TIA hands back a
         // deserialized copy at best, maybe inside its own exception or with
-        // the message embedded in its own text. Anything else is not that
-        // cancel, and the download is in doubt.
-        static bool Carries(Exception error, string message)
+        // the message embedded in its own text. Anything without the token
+        // is not that decline, and the download is in doubt.
+        static bool Carries(Exception error, string token)
         {
-            if (string.IsNullOrEmpty(message)) return false;
+            if (string.IsNullOrEmpty(token)) return false;
             int n = 0;
             for (Exception i = error; i != null && n < 16; i = i.InnerException, n++)
             {
-                string m = i.Message;
-                if (m != null && m.IndexOf(message, StringComparison.Ordinal) >= 0) return true;
+                string m;
+                try
+                {
+                    m = i.Message;
+                }
+                catch (Exception)
+                {
+                    m = null;
+                }
+                if (m != null && m.IndexOf(token, StringComparison.Ordinal) >= 0) return true;
             }
             return false;
         }
@@ -638,7 +676,7 @@ namespace Tiad
                 {
                     // A decline only when what TIA threw carries that
                     // cancel and nothing shows it loaded anyway.
-                    if (Cancelled.Declined && !loadSeen && Carries(error, Cancelled.Message)) end.Declined = true;
+                    if (Cancelled.Declined && !loadSeen && Carries(error, Token)) end.Declined = true;
                     else if (Cancelled.Declined) end.Failure = "TIA went on after tiad cancelled the download (" + Cancelled.Message + "): " + TiaNames.Message(error);
                     else end.Failure = Cancelled.Message;
                     return end;
@@ -780,6 +818,85 @@ namespace Tiad
         {
             stopped = true;
             return DownloadSteps.Quietly(detach, what);
+        }
+    }
+
+    // OnlineRecord is what TIA asked going online for one operation: the
+    // questions answered no (Asked: any one fails the operation) and the
+    // certificate questions trusted blindly on an upload's opt-in. Handle
+    // runs one of TIA's online questions (OnlineLegitimation) through
+    // Boundary.Call: if answering it fails anywhere, that call records a
+    // question answered no before TIA gets the cancel, so the operation
+    // fails, even if the call had recorded a trust first.
+    public sealed class OnlineRecord
+    {
+        readonly object mu = new object();
+        public readonly List<string> Asked = new List<string>();
+        public readonly List<string> TrustedBlindly = new List<string>();
+
+        // Call is one question being answered: answer records it with
+        // Refuse or Trust.
+        public sealed class Call
+        {
+            readonly OnlineRecord r;
+            internal string Refused;
+
+            internal Call(OnlineRecord r)
+            {
+                this.r = r;
+            }
+
+            public void Refuse(string question)
+            {
+                lock (r.mu) r.Asked.Add(question);
+                Refused = question;
+            }
+
+            public void Trust(string question)
+            {
+                lock (r.mu) r.TrustedBlindly.Add(question);
+            }
+        }
+
+        // Handle answers one question: type reads its Openness type name,
+        // answer(type, call) answers and records it, throwing to cancel.
+        public void Handle(Func<string> type, Action<string, Call> answer)
+        {
+            var call = new Call(this);
+            string t = "";
+            Boundary.Call("online: answering TIA", delegate
+            {
+                t = type();
+                answer(t, call);
+            }, delegate(Exception e)
+            {
+                if (call.Refused == null) call.Refuse(OnlineChecks.Ask(t == "" ? "an unreadable question" : t, "", "", new List<string>()));
+                return "tiad cancels going online: TIA asked " + call.Refused;
+            });
+        }
+
+    }
+
+    // UploadAsks answers the upload's callback (StationUpload), which tiad
+    // never answers: Handle records what TIA asked before anything else,
+    // then refuses it through Boundary.Call. Asked is set (to a plain
+    // description when the configuration cannot be read) once TIA asked.
+    public sealed class UploadAsks
+    {
+        public volatile string Asked;
+
+        // Handle refuses one question; describe reads "type (message)".
+        public void Handle(Func<string> describe)
+        {
+            Boundary.Call("upload: answering TIA", delegate
+            {
+                Asked = describe();
+                throw new TiaException("upload asked " + Asked + ", which tiad does not answer");
+            }, delegate(Exception e)
+            {
+                if (Asked == null) Asked = "an upload configuration";
+                return "upload asked " + Asked + ", which tiad does not answer";
+            });
         }
     }
 

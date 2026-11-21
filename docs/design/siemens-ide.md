@@ -642,9 +642,11 @@ behaviour. So, until then:
   pending checks as read, then throws TIA a plain `OperationCanceledException`
   with that message and nothing else. How the download ended is read from
   that kept state, never from getting the thrown object back: a decline
-  counts only when the decider declined, TIA never called the
-  after-download callback, and what TIA threw carries the decline's
-  message; anything else is `outcome_unknown`. Provisional until a
+  counts only when the decider declined, TIA called no callback after
+  it (neither another pre-download one nor the after-download one), and
+  what TIA threw carries the decline's token (`tiad-decline:` and 16
+  random hex digits, new for every download; TIA's own text never has
+  it, however close its words); anything else is `outcome_unknown`. Provisional until a
   download on a CPU shows what TIA does with that cancel.
   **When TIA itself dies** (`ITia.Gone`: TIA Portal's `Disposed` event, a
   handler that cannot be detached from its objects (failing closed: that

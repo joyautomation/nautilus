@@ -301,5 +301,135 @@ namespace Tiad.Test
                 Contains(t.Message, "cannot list", "a failure names the kept reason");
             }
         }
+    
+        // LooksSerializable is [Serializable] but from a tiad-side assembly:
+        // a same-process round trip passes, TIA's process cannot read it.
+        [Serializable]
+        sealed class LooksSerializable : Exception
+        {
+            public LooksSerializable(string m) : base(m)
+            {
+            }
+
+            LooksSerializable(SerializationInfo info, StreamingContext ctx) : base(info, ctx)
+            {
+            }
+        }
+
+        // UnreadableMessage is an exception whose Message getter throws.
+        sealed class UnreadableMessage : Exception
+        {
+            public override string Message
+            {
+                get { throw new NotSerializable("message getter"); }
+            }
+        }
+
+        static void ASerializableTiadTypeStillKillsTia()
+        {
+            string died;
+            True(Cross(new LooksSerializable("x"), out died) == null, "a [Serializable] tiad-side exception crosses");
+            True(Cross(new InvalidOperationException("x", new LooksSerializable("inner")), out died) == null, "one inside a BCL exception crosses");
+            Crossed(Caught(delegate { Boundary.Call("test", delegate { throw new LooksSerializable("odd"); }, null); }), "odd", "the guard sends it as a cancel");
+        }
+
+        static void DeclineNeedsItsToken()
+        {
+            var r = new Run(delegate { return null; });
+            object k = new object();
+            Caught(Pre(r.D, k, "StopModules", delegate { return List(P(k, "StopModules", "stop")); }));
+            Contains(r.D.Cancelled.Message, r.D.Token, "the decline carries the token");
+            True(System.Text.RegularExpressions.Regex.IsMatch(r.D.Token, "^tiad-decline:[0-9a-f]{16}$"), "token shape " + r.D.Token);
+            True(new DownloadDecider(AllYes).Token != new DownloadDecider(AllYes).Token, "a token per download");
+            string words = "the download was not decided: nothing was loaded";
+            foreach (Exception other in new Exception[]
+            {
+                new InvalidOperationException("Download failed: " + words),
+                new OperationCanceledException(words),
+                new InvalidOperationException("wrapped", new OperationCanceledException(words + " (" + new DownloadDecider(AllYes).Token + ")")),
+            })
+            {
+                DownloadEnd end = r.D.Finish(true, null, "", other);
+                True(!end.Declined && end.InDoubt, Show(Boundary.Chain(other)) + ": without this download's token, in doubt");
+            }
+        }
+
+        static void DeclineThenTiaGoesOn()
+        {
+            // decide said no, then TIA asked another configuration anyway:
+            // it went on past the cancel, so never a decline, even with the
+            // token in what it throws back.
+            var r = new Run(delegate { return null; });
+            object a = new object(), b = new object();
+            Func<List<Pending>> list = delegate { return List(P(a, "StopModules", "stop"), P(b, "OverwriteSystemData", "over")); };
+            Exception first = ThroughTia(Pre(r.D, a, "StopModules", list), true, "first");
+            Exception second = ThroughTia(Pre(r.D, b, "OverwriteSystemData", list), true, "second");
+            True(r.D.Cancelled != null && !r.D.Cancelled.Declined, "a callback after the decline is a failure");
+            Contains(r.D.Cancelled == null ? null : r.D.Cancelled.Message, "TIA went on", "named");
+            foreach (Exception back in new[] { first, second })
+            {
+                DownloadEnd end = r.D.Finish(true, null, "", back);
+                True(!end.Declined && end.InDoubt, "in doubt");
+            }
+        }
+
+        static void KeepRecordsWhenTheMessageThrows()
+        {
+            var r = Approved(new object());
+            Exception e = Caught(delegate { Boundary.Call("download", delegate { throw new UnreadableMessage(); }, r.D.Keep); });
+            True(e is OperationCanceledException, "a cancel crosses");
+            True(r.D.Cancelled != null && !r.D.Cancelled.Declined, "the decider keeps a failure");
+            // TIA swallowed it and reported a load: still a failure.
+            r.D.After("StartModules");
+            DownloadEnd end = r.D.Finish(true, "Success", "", null);
+            True(!end.Loaded && end.InDoubt, "never loaded after a swallowed failure");
+        }
+
+        static void OnlineRecordFailsClosed()
+        {
+            // The type cannot be read.
+            var r = new OnlineRecord();
+            Exception e = Caught(delegate { r.Handle(delegate { throw new NotSerializable("disposed"); }, delegate(string t, OnlineRecord.Call c) { }); });
+            Crossed(e, null, "unreadable type");
+            Eq(r.Asked.Count, 1, "unreadable type: refused");
+            // Refused, then cancelled: one entry, named in the cancel.
+            r = new OnlineRecord();
+            e = Caught(delegate { r.Handle(delegate { return "CredentialsConfiguration"; }, delegate(string t, OnlineRecord.Call c) { c.Refuse("credentials"); throw new TiaException("cancel"); }); });
+            Crossed(e, "tiad cancels going online: TIA asked credentials", "refused");
+            Eq(r.Asked.Count, 1, "refused once");
+            // Trusted, then a failure: refused too (fail closed).
+            r = new OnlineRecord();
+            Caught(delegate { r.Handle(delegate { return "TlsVerificationConfiguration"; }, delegate(string t, OnlineRecord.Call c) { c.Trust("tls"); throw new NotSerializable("late"); }); });
+            Eq(r.Asked.Count, 1, "a trust then a failure is refused");
+            // Trusted cleanly: nothing thrown, nothing refused.
+            r = new OnlineRecord();
+            True(Caught(delegate { r.Handle(delegate { return "TlsVerificationConfiguration"; }, delegate(string t, OnlineRecord.Call c) { c.Trust("tls"); }); }) == null, "a clean trust throws nothing");
+            Eq(r.Asked.Count, 0, "a clean trust refuses nothing");
+            Eq(r.TrustedBlindly.Count, 1, "a clean trust is recorded");
+            // Per call: another call's record never counts for this one.
+            r = new OnlineRecord();
+            var rr = r;
+            Caught(delegate
+            {
+                rr.Handle(delegate { return "A"; }, delegate(string t, OnlineRecord.Call c)
+                {
+                    rr.Handle(delegate { return "B"; }, delegate(string t2, OnlineRecord.Call c2) { c2.Trust("b"); });
+                    throw new NotSerializable("a failed");
+                });
+            });
+            Eq(r.Asked.Count, 1, "the failing call refused, though another call recorded meanwhile");
+        }
+
+        static void UploadAsksRecordsFirst()
+        {
+            var u = new UploadAsks();
+            Exception e = Caught(delegate { u.Handle(delegate { throw new NotSerializable("disposed"); }); });
+            Crossed(e, "upload asked an upload configuration, which tiad does not answer", "unreadable");
+            Eq(u.Asked, "an upload configuration", "recorded");
+            u = new UploadAsks();
+            e = Caught(delegate { u.Handle(delegate { return "UploadPassword (pw)"; }); });
+            Crossed(e, "upload asked UploadPassword (pw), which tiad does not answer", "named");
+            Eq(u.Asked, "UploadPassword (pw)", "recorded by name");
+        }
     }
 }
