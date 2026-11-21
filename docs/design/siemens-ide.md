@@ -233,7 +233,7 @@ the session is gone.
 | `unreachable` | — | Client-side: no reply (agent down, or the context was cancelled; the cause unwraps). After a download, the outcome is **unknown**, so compare before retrying |
 | `not_found` | 404 | No such session or file |
 | `busy` | 409 | The project has a writer, the session has a call in flight, or the CPU belongs to another session's project |
-| `gate` | 412 | A probe gate failed (TIA, group, licence). The message names it |
+| `gate` | 412 | A probe gate failed (TIA, group, licence). The message names it. Once TIA Portal has died the `tia` gate fails for good: restart the agent |
 | `target_refused` | 403 | The CPU address is not in `TIAD_TARGETS` |
 | `decision_required` | 409 | A download question has no answer in the request. `data.questions` lists them |
 | `declined` | 409 | A download question was answered no. `data.questions` lists them, and nothing is loaded |
@@ -244,7 +244,7 @@ the session is gone.
 | `device_unverified` | 409 | The CPU has a device pin, but its identity could not be read, so the pin could not be checked (§3.8) |
 | `cpu_mismatch` | 409 | An apply's spec does not name the project's CPU (name, order, firmware), or a device of the spec's shares a name or an address with one the project keeps (§3.3). `data.cpu` is the project's CPU; nothing was changed |
 | `unclean_session` | 409 | An apply or an upload failed part-way on this session, so its project matches no spec: a later apply or save refuses. Close the session without saving (§3.3) |
-| `outcome_unknown` | 500 | A download may have loaded the CPU, or not: TIA failed once the download was decided, or TIA's side broke the decide contract. Not fatal: compare on the same session before anything else. The client's `OutcomeUnknown` covers this and `unreachable` |
+| `outcome_unknown` | 500 | A download may have loaded the CPU, or not: TIA failed once the download was decided, or TIA's side broke the decide contract. Not fatal: compare on the same session before anything else. The exception: when TIA Portal itself died in the download, it is fatal and names the fix (restart the agent, then compare in a fresh session), since every project open on that TIA is gone. The client's `OutcomeUnknown` covers this and `unreachable` |
 
 ### 3.3 The station spec
 
@@ -610,7 +610,8 @@ behaviour. So, until then:
   TIA failing once the download was decided (a cancel included, since
   "a cancel loads nothing" is what S2 must prove), a load tiad did not
   approve, decide called zero times or twice. Never success, never a
-  plain refusal. The session stays open for the compare.
+  plain refusal. The session stays open for the compare, unless TIA
+  itself died (below).
 - **How `tiad.Openness` keeps "decide once".** Openness calls its
   pre-download callback once per configuration. At the first callback
   `tiad.Openness` lists every pending configuration from that
@@ -628,8 +629,17 @@ behaviour. So, until then:
   entered, any failure answers `outcome_unknown`, whatever its kind,
   including TIA itself dying inside the call (#789 stage 2): detaching
   tiad's handlers afterwards never throws, so a TIA that is gone cannot
-  turn the answer into `operation_failed` (`DownloadSteps` in core). The
-  `certificate` question's fingerprint is not read yet, so a trust decision
+  turn the answer into `operation_failed` (`DownloadSteps` in core).
+  **When TIA itself dies** (`ITia.Gone`: TIA Portal's `Disposed` event, a
+  handler that cannot be detached from its objects, or its process gone),
+  every project open on it goes with it, and the agent starts TIA only
+  once. So the call it died in ends its session (fatal, `outcome_unknown`
+  once the download call was entered, `operation_failed` before) and
+  names the fix: restart the agent, then compare in a fresh session (the
+  read-only after-check). From then on the `tia` gate fails, every call
+  that needs TIA is refused with that fix (412 `gate`), a call already
+  queued behind the dying one included, and closing a session drops it
+  without calling TIA. The `certificate` question's fingerprint is not read yet, so a trust decision
   cannot match it: a TLS check refuses until S2b. All of this is pure code
   in `tools/tiad/core/TiaRules.cs`, unit-tested without TIA.
 - **The gap: a download TIA asks nothing about.** With no pre-download

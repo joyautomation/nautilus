@@ -814,6 +814,15 @@ namespace Tiad.Fake
         // when it is opened: its CPU, the devices besides it, protection.
         readonly Dictionary<string, FakeProject> saved = new Dictionary<string, FakeProject>(StringComparer.OrdinalIgnoreCase);
 
+        // died is set once a scripted TIA died (tiaDies): for good, as a
+        // real TIA that exited stays gone.
+        volatile bool died;
+
+        public bool Gone
+        {
+            get { return died; }
+        }
+
         public FakeTia(Script script)
         {
             this.script = script;
@@ -1018,10 +1027,13 @@ namespace Tiad.Fake
                 return DownloadSteps.Run(new DownloadDecider(decide), address,
                     delegate
                     {
-                        if (dies == "preparing") throw new ObjectDisposedException("DownloadProvider", "TIA Portal has exited");
+                        if (dies != "preparing") return;
+                        died = true;
+                        throw new ObjectDisposedException("DownloadProvider", "TIA Portal has exited");
                     },
                     delegate
                     {
+                        died = true;
                         throw new ObjectDisposedException("DownloadProvider", "TIA Portal has exited");
                     },
                     delegate

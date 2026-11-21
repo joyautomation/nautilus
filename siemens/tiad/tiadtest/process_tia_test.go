@@ -1,6 +1,7 @@
 package tiadtest_test
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -521,31 +522,86 @@ func TestAgentSaysWhenTheOutcomeIsUnknown(t *testing.T) {
 // tiad's handlers from its disposed objects threw too; that second error
 // replaced the first and the agent answered operation_failed. Once TIA's
 // download call was entered the CPU may or may not be loaded, whatever
-// the failure, so the answer is outcome_unknown, dry run or not. A TIA
-// that dies before its download call loaded nothing: operation_failed,
-// naming the failure itself, not the one detaching. (Whether a session
-// whose TIA died can still compare is not covered here: the fake keeps
-// running.)
+// the failure, so the answer is outcome_unknown, dry run or not; before
+// the call, operation_failed naming the failure itself, not the detach.
+// Either way TIA is gone, and with it every project open on it, and the
+// agent starts TIA only once: the answer ends the session (fatal) and
+// names the fix (restart the agent, then compare in a fresh session).
+// From then on every call that needs TIA is refused with that fix, the
+// same session's compare and a new session included, probe shows the tia
+// gate failed, and a close drops the session instead of keeping it broken.
 func TestAgentSaysUnknownWhenTIADiesInsideTheDownload(t *testing.T) {
-	p, s := downloadReady(t)
+	const fix = "Restart the agent, then compare in a fresh session"
 	dry := tiad.DownloadRequest{Address: "192.0.2.10", Software: true, DryRun: true, Announced: true}
 	real := tiad.DownloadRequest{Address: "192.0.2.10", Software: true, Announced: true,
 		Decisions: tiad.Decisions{StopCPU: tiad.Yes(), StartAfter: tiad.No()}}
-	for _, req := range []tiad.DownloadRequest{dry, real} {
-		p.SetScript(t, tiadtest.Script{TiaDies: "downloading"})
-		_, err := s.Download(ctx, req)
-		if tiad.Kind(err) != tiad.KindOutcomeUnknown || tiad.IsFatal(err) || !tiad.OutcomeUnknown(err) ||
-			!strings.Contains(err.Error(), "compare before anything else") || !strings.Contains(err.Error(), "DownloadProvider") {
-			t.Errorf("dry run %v, TIA dies in its download call: %v, want a non-fatal outcome_unknown naming the download's failure", req.DryRun, err)
-		}
-		p.SetScript(t, tiadtest.Script{TiaDies: "preparing"})
-		_, err = s.Download(ctx, req)
-		if tiad.Kind(err) != tiad.KindOperationFailed || !strings.Contains(err.Error(), "DownloadProvider") || strings.Contains(err.Error(), "ConnectionConfiguration") {
-			t.Errorf("dry run %v, TIA dies before its download call: %v, want operation_failed naming the failure, not the detach", req.DryRun, err)
+	for _, dies := range []string{"downloading", "preparing"} {
+		for _, req := range []tiad.DownloadRequest{dry, real} {
+			name := fmt.Sprintf("TIA dies %s, dry run %v", dies, req.DryRun)
+			p, s := downloadReady(t)
+			c := p.Client()
+			p.SetScript(t, tiadtest.Script{TiaDies: dies})
+			_, err := s.Download(ctx, req)
+			if dies == "downloading" {
+				if tiad.Kind(err) != tiad.KindOutcomeUnknown || !tiad.OutcomeUnknown(err) || !tiad.IsFatal(err) ||
+					!strings.Contains(err.Error(), "DownloadProvider") || !strings.Contains(err.Error(), fix) {
+					t.Errorf("%s: %v, want a fatal outcome_unknown naming the download's failure and the fix", name, err)
+				}
+			} else if tiad.Kind(err) != tiad.KindOperationFailed || !tiad.IsFatal(err) || !strings.Contains(err.Error(), "DownloadProvider") ||
+				strings.Contains(err.Error(), "ConnectionConfiguration") || !strings.Contains(err.Error(), fix) {
+				t.Errorf("%s: %v, want a fatal operation_failed naming the failure (not the detach) and the fix", name, err)
+			}
+			pr, err := c.Probe(ctx)
+			if g := gate(t, pr, "tia"); err != nil || pr.Usable || g.State != tiad.GateFailed || !strings.Contains(g.Detail, fix) || g.Remedy == "" {
+				t.Errorf("%s: probe %+v %v, want the tia gate failed naming the fix", name, pr, err)
+			}
+			if _, err := s.Compare(ctx); tiad.Kind(err) != tiad.KindGate || !strings.Contains(err.Error(), fix) {
+				t.Errorf("%s: compare on the same session: %v, want refused naming the fix", name, err)
+			}
+			if _, err := c.CreateProject(ctx, "after", tiadtest.BenchStation(), tiadtest.BenchSecrets); tiad.Kind(err) != tiad.KindGate || !strings.Contains(err.Error(), fix) {
+				t.Errorf("%s: a new session: %v, want refused naming the fix", name, err)
+			}
+			if err := s.Close(ctx); err != nil {
+				t.Errorf("%s: close: %v", name, err)
+			}
+			if l, err := c.Sessions(ctx); err != nil || len(l) != 0 {
+				t.Errorf("%s: sessions after the close: %+v %v, want none (not kept broken)", name, l, err)
+			}
+			if l := p.Loaded(t); len(l) != 0 {
+				t.Errorf("%s: a TIA that died loaded %+v", name, l)
+			}
 		}
 	}
-	if l := p.Loaded(t); len(l) != 0 {
-		t.Fatalf("a TIA that died loaded %+v", l)
+}
+
+// TestAgentRefusesACallQueuedBehindTheOneTIADiedIn: a call that passed
+// the gates while TIA was still alive, then waited on the TIA thread
+// behind the download TIA died in, is refused naming the fix too; it
+// never runs on the dead TIA.
+func TestAgentRefusesACallQueuedBehindTheOneTIADiedIn(t *testing.T) {
+	p, s := downloadReady(t)
+	c := p.Client()
+	other, err := c.CreateProject(ctx, "other", tiadtest.BenchStation(), tiadtest.BenchSecrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.SetScript(t, tiadtest.Script{TiaDies: "downloading", Delays: []tiadtest.ScriptedCall{{Call: "Download", MS: 1500}}})
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.Download(ctx, tiad.DownloadRequest{Address: "192.0.2.10", Software: true, DryRun: true, Announced: true})
+		done <- err
+	}()
+	for deadline := time.Now().Add(10 * time.Second); countCalls(p.Calls(t), "Download") < 1; time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the download never reached TIA's side")
+		}
+	}
+	_, err = other.Compile(ctx, true, true)
+	if tiad.Kind(err) != tiad.KindGate || !strings.Contains(err.Error(), "Restart the agent") {
+		t.Errorf("a compile queued behind the dying download: %v, want refused naming the fix", err)
+	}
+	if err := <-done; tiad.Kind(err) != tiad.KindOutcomeUnknown || !tiad.IsFatal(err) {
+		t.Errorf("the download TIA died in: %v", err)
 	}
 }
 

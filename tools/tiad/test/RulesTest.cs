@@ -119,6 +119,8 @@ namespace Tiad.Test
                 T("InDoubtOnceEntered", InDoubtOnceEntered),
                 T("DownloadStepsTiaDies", DownloadStepsTiaDies),
                 T("DownloadStepsAfterTheCall", DownloadStepsAfterTheCall),
+                T("OnlineAnswersAfterStop", OnlineAnswersAfterStop),
+                T("QuietlyEvenWhenTheLogFails", QuietlyEvenWhenTheLogFails),
                 T("Selections", SelectionsWritten),
                 T("ALoadAfterADeclineIsInDoubt", ALoadAfterADeclineIsInDoubt),
                 T("TypeIdentifiers", TypeIdentifiers),
@@ -841,6 +843,65 @@ namespace Tiad.Test
                 delegate { return new List<string> { "trust the TLS certificate of PLC_1" }; }, out o);
             True(e != null && e.InDoubt, "asked going online, TIA went on: in doubt");
             Contains(e.Message, "TLS certificate of PLC_1", "the question");
+        }
+
+        // A handler that could not be detached answers no from then on,
+        // never Trusted, even on the upload's opt-in.
+        static void OnlineAnswersAfterStop()
+        {
+            const string tls = "TlsVerificationConfiguration", creds = "OnlinePasswordConfiguration";
+            var a = new OnlineAnswers(true);
+            Eq(a.Answer(tls), OnlineChecks.Trusted, "opted in, before stop");
+            Eq(a.Answer(creds), OnlineChecks.Cancel, "credentials, before stop");
+            bool ok = a.Stop(delegate { throw new ObjectDisposedException("ConnectionConfiguration"); }, "test: detaching");
+            True(!ok, "a detach that throws reports failure");
+            Eq(a.Answer(tls), OnlineChecks.NotTrusted, "after a failed detach");
+            Eq(a.Answer(creds), OnlineChecks.Cancel, "credentials, after a failed detach");
+            var b = new OnlineAnswers(true);
+            True(b.Stop(delegate { }, "test: detaching"), "a detach that works");
+            Eq(b.Answer(tls), OnlineChecks.NotTrusted, "after stop");
+            Eq(new OnlineAnswers(false).Answer(tls), OnlineChecks.NotTrusted, "not opted in");
+        }
+
+        sealed class BrokenWriter : System.IO.TextWriter
+        {
+            public override System.Text.Encoding Encoding
+            {
+                get { return System.Text.Encoding.UTF8; }
+            }
+
+            public override void Write(char value)
+            {
+                throw new System.IO.IOException("stderr is gone");
+            }
+
+            public override void WriteLine(string value)
+            {
+                throw new System.IO.IOException("stderr is gone");
+            }
+        }
+
+        // Quietly never throws, even when logging what it dropped fails.
+        static void QuietlyEvenWhenTheLogFails()
+        {
+            System.IO.TextWriter was = Console.Error;
+            bool ok = true;
+            Exception escaped = null;
+            Console.SetError(new BrokenWriter());
+            try
+            {
+                ok = DownloadSteps.Quietly(delegate { throw new ObjectDisposedException("ConnectionConfiguration"); }, "test: detaching");
+            }
+            catch (Exception e)
+            {
+                escaped = e;
+            }
+            finally
+            {
+                Console.SetError(was);
+            }
+            True(escaped == null, "nothing escapes: " + (escaped == null ? "" : escaped.Message));
+            True(!ok, "reports the failure");
         }
 
         static void InDoubtOnceEntered()

@@ -64,7 +64,9 @@ const (
 	// KindOutcomeUnknown: a download may have loaded the CPU, or not
 	// (TIA failed once the download was decided, or TIA's side broke the
 	// contract). The session stays open; compare on it before anything
-	// else.
+	// else. Unless TIA Portal itself died in the download: then the error
+	// is fatal and names the fix (restart the agent, then compare in a
+	// fresh session).
 	KindOutcomeUnknown = "outcome_unknown"
 	// KindDeviceChanged refuses an online call to a CPU whose identity
 	// differs from its device pin (§3.8). Re-pin only after a deliberate

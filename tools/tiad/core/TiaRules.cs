@@ -706,6 +706,36 @@ namespace Tiad
         }
     }
 
+    // OnlineAnswers is how one online handler answers: the upload's
+    // trustUnverifiedCertificate opt-in holds only until the handler is
+    // stopped. Stopping marks it stopped before detaching it, so a handler
+    // that could not be detached from TIA answers no from then on, never
+    // Trusted.
+    public sealed class OnlineAnswers
+    {
+        readonly bool trustUnverifiedCertificate;
+        volatile bool stopped;
+
+        public OnlineAnswers(bool trustUnverifiedCertificate)
+        {
+            this.trustUnverifiedCertificate = trustUnverifiedCertificate;
+        }
+
+        // Answer is how a question of type is answered now (OnlineChecks).
+        public string Answer(string type)
+        {
+            return OnlineChecks.Answer(type, trustUnverifiedCertificate && !stopped);
+        }
+
+        // Stop marks the handler stopped, then detaches it with detach,
+        // never throwing; it reports whether the detach worked.
+        public bool Stop(Action detach, string what)
+        {
+            stopped = true;
+            return DownloadSteps.Quietly(detach, what);
+        }
+    }
+
     // DownloadCall is what TIA's download call returned: its result's
     // state and messages, read inside the call (a failure reading them is
     // in doubt too).
@@ -751,7 +781,7 @@ namespace Tiad
             }
             finally
             {
-                Quietly(stop, "download");
+                Quietly(stop, "download: detaching tiad's handlers from TIA");
             }
             DownloadEnd end;
             List<string> refused;
@@ -776,18 +806,27 @@ namespace Tiad
             return new DownloadOutcome { Questions = decider.Asked, Loaded = end.Loaded };
         }
 
-        // Quietly runs stop, logging and dropping whatever it throws: a
-        // handler that cannot be detached from a TIA that is gone must not
-        // replace the failure that matters.
-        public static void Quietly(Action stop, string what)
+        // Quietly runs f, a clean-up step described by what, logging and
+        // dropping whatever it throws (the log line included): a handler
+        // that cannot be detached from a TIA that is gone must not replace
+        // the failure that matters. It reports whether f worked.
+        public static bool Quietly(Action f, string what)
         {
             try
             {
-                stop();
+                f();
+                return true;
             }
             catch (Exception e)
             {
-                Log.Line("{0}: detaching tiad's handlers from TIA failed ({1}: {2}); TIA may be gone", what, e.GetType().Name, TiaNames.LogSafe(TiaNames.Message(e)));
+                try
+                {
+                    Log.Line("{0} failed ({1}: {2}); TIA may be gone", what, e.GetType().Name, TiaNames.LogSafe(TiaNames.Message(e)));
+                }
+                catch (Exception)
+                {
+                }
+                return false;
             }
         }
     }

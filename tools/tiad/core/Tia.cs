@@ -133,6 +133,13 @@ namespace Tiad
         // refuses a dry run, before calling Download, when it cannot.
         bool CanDryRun { get; }
 
+        // Gone reports whether the TIA this side drives has died (its
+        // process exited, its objects disposed), taking every project open
+        // on it. It is read from any thread, also while a call runs, so it
+        // never touches TIA's objects. Once true, true for good: this side
+        // starts TIA once, so only a restart of the agent brings it back.
+        bool Gone { get; }
+
         // GsdInstalled reports whether a GSDML file of that name is in the
         // hardware catalogue.
         bool GsdInstalled(string fileName);

@@ -66,22 +66,25 @@ namespace Tiad.Openness
     sealed class OnlineAsks
     {
         readonly ConnectionConfiguration cc;
-        readonly bool trustUnverifiedCertificate;
+        readonly OnlineAnswers answers;
+        readonly Action gone;
         readonly string address;
         public readonly List<string> Asked = new List<string>();
         // TrustedBlindly are the certificate questions answered Trusted,
         // on the upload's explicit opt-in.
         public readonly List<string> TrustedBlindly = new List<string>();
-        volatile bool stopped;
 
-        public OnlineAsks(ConnectionConfiguration cc) : this(cc, false, "")
+        // gone is called when the handler cannot be detached: TIA's
+        // objects are disposed, so TIA is taken to be gone.
+        public OnlineAsks(ConnectionConfiguration cc, Action gone) : this(cc, gone, false, "")
         {
         }
 
-        public OnlineAsks(ConnectionConfiguration cc, bool trustUnverifiedCertificate, string address)
+        public OnlineAsks(ConnectionConfiguration cc, Action gone, bool trustUnverifiedCertificate, string address)
         {
             this.cc = cc;
-            this.trustUnverifiedCertificate = trustUnverifiedCertificate;
+            this.gone = gone;
+            answers = new OnlineAnswers(trustUnverifiedCertificate);
             this.address = address;
             cc.OnlineLegitimation += Handle;
         }
@@ -90,11 +93,11 @@ namespace Tiad.Openness
         // (#789 stage 2: it died inside a download, and detaching from its
         // disposed objects threw in place of the download's own failure).
         // A handler that cannot be detached answers no from then on, even
-        // to a question it would have trusted on the upload's opt-in.
+        // to a question it would have trusted on the upload's opt-in
+        // (OnlineAnswers), and TIA counts as gone.
         public void Stop()
         {
-            stopped = true;
-            DownloadSteps.Quietly(delegate { cc.OnlineLegitimation -= Handle; }, "online");
+            if (!answers.Stop(delegate { cc.OnlineLegitimation -= Handle; }, "online: detaching tiad's online handler from TIA")) gone();
         }
 
         // Handle answers one question, as OnlineChecks decides: a
@@ -105,7 +108,7 @@ namespace Tiad.Openness
         {
             string type = c.GetType().Name;
             var tls = c as TlsVerificationConfiguration;
-            string answer = OnlineChecks.Answer(type, trustUnverifiedCertificate && !stopped);
+            string answer = answers.Answer(type);
             if ((answer == OnlineChecks.NotTrusted || answer == OnlineChecks.Trusted) && tls != null)
             {
                 bool trust = answer == OnlineChecks.Trusted;
@@ -192,6 +195,11 @@ namespace Tiad.Openness
         // are in the log already: the first TIA start's log is how the
         // names a later change needs are learned.
         readonly HashSet<string> attributesLogged = new HashSet<string>(StringComparer.Ordinal);
+        // What tells that TIA died (Gone): TIA Portal's own Disposed
+        // event, a handler that could not be detached from its objects,
+        // or its process (pid, 0 when unknown) having exited.
+        volatile bool disposed, detachFailed;
+        readonly int pid;
 
         // OpennessTia starts TIA Portal, without its user interface. This
         // is the one place tiad starts TIA.
@@ -209,6 +217,48 @@ namespace Tiad.Openness
             {
                 throw new TiaException(Message(e), e);
             }
+            portal.Disposed += delegate
+            {
+                disposed = true;
+                Log.Line("TIA Portal says it is disposed");
+            };
+            try
+            {
+                pid = portal.GetCurrentProcess().Id;
+                Log.Line("TIA Portal runs as process {0}", pid);
+            }
+            catch (Exception e)
+            {
+                Log.Line("TIA Portal's process id is unknown ({0}): only its Disposed event and a failed detach tell that it died", e.GetType().Name);
+            }
+        }
+
+        // Gone: see ITia. A read that throws counts as gone (the agent's
+        // TiaGoneNow).
+        public bool Gone
+        {
+            get
+            {
+                if (disposed || detachFailed) return true;
+                if (pid == 0) return false;
+                try
+                {
+                    using (var p = System.Diagnostics.Process.GetProcessById(pid))
+                    {
+                        return p.HasExited;
+                    }
+                }
+                catch (ArgumentException)
+                {
+                    return true; // no process with that id
+                }
+            }
+        }
+
+        // Detached is called by a handler that could not be detached.
+        void Detached()
+        {
+            detachFailed = true;
         }
 
         // The namespaces a configuration type tiad answers may live in.
@@ -981,7 +1031,7 @@ namespace Tiad.Openness
                     HwDevice d = StationOf(Of(project).Project);
                     if (d == null) throw new TiaException("the project has no CPU");
                     dp = CpuOf(d).GetService<DownloadProvider>();
-                    online = new OnlineAsks(dp.Configuration);
+                    online = new OnlineAsks(dp.Configuration, Detached);
                     ConfigurationPcInterface pc = PcInterface(dp.Configuration);
                     target = TargetInterface(pc);
                     // Provisional until S2b: the address on the target
@@ -1101,7 +1151,7 @@ namespace Tiad.Openness
                 ConfigurationAddress at = TargetInterface(pc).Addresses.Create(address);
                 // The handler stays attached until offline: TIA may ask while
                 // it compares, too.
-                var online = new OnlineAsks(op.Configuration);
+                var online = new OnlineAsks(op.Configuration, Detached);
                 try
                 {
                     OnlineState st = op.GoOnline(at);
@@ -1121,7 +1171,7 @@ namespace Tiad.Openness
                     {
                         // After a failure TIA may be gone: going offline
                         // then must not replace that failure.
-                        if (failed) DownloadSteps.Quietly(delegate { op.GoOffline(); }, "compare");
+                        if (failed) DownloadSteps.Quietly(delegate { op.GoOffline(); }, "compare: going offline after a failed compare (if TIA is alive, the project may still be online)");
                         else op.GoOffline();
                     }
                 }
@@ -1362,7 +1412,7 @@ namespace Tiad.Openness
                 foreach (HwDevice d in AllDevices(p)) d.Delete();
                 string asked = null;
                 UploadResult r;
-                var online = new OnlineAsks(sup.Configuration, trustUnverifiedCertificate, address);
+                var online = new OnlineAsks(sup.Configuration, Detached, trustUnverifiedCertificate, address);
                 try
                 {
                     r = sup.StationUpload(at, delegate(UploadConfiguration c)
