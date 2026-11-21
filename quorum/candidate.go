@@ -95,11 +95,25 @@ type Candidate struct {
 	seq uint64
 	// markedBy: the voters whose reply said this name is marked a
 	// confirmed duplicate (Reply.Marked), with the boot of the voter that
-	// said so. Only a later unmarked reply from that same voter boot
-	// clears the entry: a voter cut off since, or one that restarted and
-	// forgot its mark, keeps this candidate from campaigning until it is
-	// itself restarted (#1029 3c, #1113 review).
-	markedBy map[NodeID]uint64
+	// said so. A later unmarked reply from that same voter boot clears
+	// the entry (rule (i)): a voter cut off since keeps this candidate
+	// from campaigning (#1029 3c, #1113 review). So does an unmarked reply
+	// from another boot of it whose clear generation is above the one the
+	// hold was set under: only an operator's clear raises it, so a voter
+	// that restarted and forgot the mark (a crash before its write), a
+	// wiped one, or a copy booted from an older disk can't end the hold,
+	// and the clear always does (#1029 3c-3b).
+	markedBy map[NodeID]markHold
+	// retiredReply reports a reply from a voter boot an operator's clear
+	// retired, marking the name again (Voter.RetiredReply; NewAdoption
+	// wires it): its grant counts for nothing (#1029 3c-3b).
+	retiredReply func(now Instant, name NodeID, boot uint64) bool
+	// genSeen: per voter, the highest clear generation any of its replies
+	// to this boot carried, never lowered. A hold is set under it, so a
+	// word from an older disk of that voter (a backup, a copy) that is
+	// below what this candidate already saw can't end a hold set under a
+	// lower one by a wiped boot (#1144 review).
+	genSeen map[NodeID]uint64
 	// held: the latest HeldBy word of each of the two OTHER voters on
 	// this boot's replies, and since when it has said so (NoteHeld).
 	held     map[NodeID]heldWord
@@ -333,16 +347,87 @@ func (c *Candidate) NoteMark(r Reply) {
 	if r.From != c.cfg.Self && r.From != c.cfg.Peer && r.From != c.cfg.Witness {
 		return
 	}
+	if c.genSeen == nil {
+		c.genSeen = map[NodeID]uint64{}
+	}
+	seen := c.genSeen[r.From]
+	if !mut("hold_gen_reset_on_boot") {
+		c.genSeen[r.From] = max(seen, r.ClearGen)
+	}
 	if !r.Marked {
-		if boot, ok := c.markedBy[r.From]; ok && (boot == r.VoterBoot || mut("hold_released_by_any_boot")) {
+		if h, ok := c.markedBy[r.From]; ok && h.releasedBy(r) {
 			delete(c.markedBy, r.From)
 		}
 		return
 	}
 	if c.markedBy == nil {
-		c.markedBy = map[NodeID]uint64{}
+		c.markedBy = map[NodeID]markHold{}
 	}
-	c.markedBy[r.From] = r.VoterBoot
+	h, ok := c.markedBy[r.From]
+	if !ok || h.boot != r.VoterBoot {
+		h = markHold{boot: r.VoterBoot, gen: h.gen}
+		if mut("hold_gen_reset_on_boot") {
+			h.gen = 0
+		}
+	}
+	h.gen = max(h.gen, r.ClearGen, c.genSeen[r.From])
+	c.markedBy[r.From] = h
+}
+
+// noteRetired takes a reply matched to a round of this boot: from a voter
+// boot an operator's clear retired, the copy runs again (paused or hung at
+// the clear), and answers now. Its grant backs nothing, and the name is
+// marked again (#1135's stated residual, #1029 3c-3b). Only a matched
+// reply: a late or replayed one proves nothing (#1144 review). It reports
+// whether a grant was discounted.
+func (c *Candidate) noteRetired(now Instant, r *Reply) bool {
+	if r.From == c.cfg.Self || c.retiredReply == nil || !c.retiredReply(now, r.From, r.VoterBoot) {
+		return false
+	}
+	if !r.Granted {
+		return false
+	}
+	r.Granted = false
+	return !mut("discount_reterms")
+}
+
+// markHold is one voter's mark on this candidate's name (NoteMark): the
+// voter boot that told it, and the clear generation it was marked under.
+type markHold struct {
+	boot uint64
+	gen  uint64
+}
+
+// releasedBy reports whether an unmarked reply ends the hold.
+func (h markHold) releasedBy(r Reply) bool {
+	switch {
+	case h.boot == r.VoterBoot, mut("hold_released_by_any_boot"):
+		return true // rule (i): the very boot that marked
+	case mut("release_ignores_gen"):
+		return false // 3c-1's rule (i) alone: only the marking boot
+	}
+	// Another boot: only after a clear since the hold, not a voter that
+	// forgot (restarted before its write, or wiped), nor an older copy.
+	return r.ClearGen > h.gen
+}
+
+// HoldGen is the highest clear generation any hold on this candidate was
+// set under, or could be (the highest any voter's reply carried,
+// genSeen: a hold set between the clear's check and its clear phase
+// starts there, #1144 re-check): the operator's clear sets every member
+// above it, so a member restored from a backup with an older generation
+// can't leave this candidate held (#1029 3c-3b).
+func (c *Candidate) HoldGen() uint64 {
+	var g uint64
+	for _, h := range c.markedBy {
+		g = max(g, h.gen)
+	}
+	if !mut("hold_gen_ignores_seen") {
+		for _, s := range c.genSeen {
+			g = max(g, s)
+		}
+	}
+	return g
 }
 
 // Marked reports whether a voter's last reply marked this name a
@@ -471,6 +556,9 @@ func (c *Candidate) OnReply(now Instant, r Reply) {
 		return // meant for the other controller, or for an earlier boot
 	}
 	discounted := false
+	if mut("retired_reply_unmatched") {
+		discounted = c.noteRetired(now, &r)
+	}
 	if r.Granted && c.duplicated != nil && c.duplicated(now, r.From) && !mut("dup_voter_counts") {
 		// Two processes cast this voter's vote: it backs no lease, this
 		// controller's own included (#1029 step 1). It is still a grant,
@@ -489,6 +577,9 @@ func (c *Candidate) OnReply(now Instant, r Reply) {
 	}
 	if rd == nil {
 		return // not ours, or long gone: a replay, or late
+	}
+	if !mut("retired_reply_unmatched") && c.noteRetired(now, &r) {
+		discounted = true
 	}
 	rd.replies[r.From] = true
 	if r.Granted {

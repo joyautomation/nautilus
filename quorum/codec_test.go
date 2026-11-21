@@ -3,6 +3,7 @@ package quorum
 import (
 	"encoding/binary"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -67,7 +68,7 @@ func TestStateFileTornAtEveryOffset(t *testing.T) {
 		InSync: Mark{Known: true, Current: true, Term: 12, Scan: 3400}, Owner: "a", Cluster: "0123456789abcdef0123456789abcdef", Box: "m=1 n=2"}
 	b, _ := s.MarshalBinary()
 	var got VoterState
-	if err := got.UnmarshalBinary(b); err != nil || got != s {
+	if err := got.UnmarshalBinary(b); err != nil || !reflect.DeepEqual(got, s) {
 		t.Fatalf("round trip: %+v %v", got, err)
 	}
 	for n := 0; n < len(b); n++ {
@@ -75,7 +76,7 @@ func TestStateFileTornAtEveryOffset(t *testing.T) {
 		if err := keep.UnmarshalBinary(b[:n]); err == nil {
 			t.Fatalf("a file torn at byte %d decoded", n)
 		}
-		if keep != (VoterState{Promised: 1}) {
+		if !reflect.DeepEqual(keep, VoterState{Promised: 1}) {
 			t.Fatalf("a torn file at byte %d changed the target: %+v", n, keep)
 		}
 	}
@@ -100,7 +101,7 @@ func TestStateFileVersion(t *testing.T) {
 		t.Fatalf("state version %d, want 5", b[len(stateMagic)])
 	}
 	var back VoterState
-	if err := back.UnmarshalBinary(b); err != nil || back != st5 {
+	if err := back.UnmarshalBinary(b); err != nil || !reflect.DeepEqual(back, st5) {
 		t.Fatalf("round trip: %+v %v", back, err)
 	}
 	// Version 4: the same file without the trailing GrantNonce.
@@ -110,7 +111,7 @@ func TestStateFileVersion(t *testing.T) {
 	var old4 VoterState
 	want := st5
 	want.GrantNonce = 0
-	if err := old4.UnmarshalBinary(sealCRC(v4)); err != nil || old4 != want {
+	if err := old4.UnmarshalBinary(sealCRC(v4)); err != nil || !reflect.DeepEqual(old4, want) {
 		t.Fatalf("a version-4 file: %+v %v, want %+v", old4, err, want)
 	}
 	for _, v := range []byte{1, 2, 3} {

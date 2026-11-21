@@ -70,6 +70,11 @@ type Reply struct {
 	// (Voter.Marked), and gives it no new grant until an operator clears
 	// the mark. A candidate told so stops campaigning (#1029 3c).
 	Marked bool
+	// ClearGen is To's name's clear generation at this voter
+	// (Voter.DupGen): marked, the one a hold is set under; unmarked, a
+	// clear's above it ends the hold from any boot of this voter
+	// (Candidate.NoteMark, #1029 3c-3b).
+	ClearGen uint64
 	// VoterBoot identifies the voter's process boot (Voter.SetBoot): only a
 	// later word from the same boot ends a hold that boot's mark set, since
 	// a restarted voter has forgotten its marks (#1113 review).
@@ -145,10 +150,11 @@ type Adopt struct {
 // version is refused whole (ErrVersion). Version 2 added the relayed
 // promise (#1029 layer 2), version 3 the duplicated name it carries
 // (#1029 step 1), version 4 a request's Seq and a reply's Marked and
-// VoterBoot (#1029 3c), version 5 a reply's HeldBy (#1029 3c-2): a pair
+// VoterBoot (#1029 3c), version 5 a reply's HeldBy (#1029 3c-2), version 6
+// a reply's ClearGen (#1029 3c-3b): a pair
 // that mixes releases across one can't vote, and says so
 // (redundancy.version-mismatch) rather than failing in silence.
-const WireVersion = 5
+const WireVersion = 6
 
 // FrameVersion returns the version byte a frame carries (0 when empty).
 func FrameVersion(b []byte) byte {
@@ -247,6 +253,7 @@ func (r Reply) MarshalBinary() ([]byte, error) {
 	b = append(b, boolByte(r.Marked))
 	b = binary.BigEndian.AppendUint64(b, r.VoterBoot)
 	b = binary.BigEndian.AppendUint64(b, r.HeldBy)
+	b = binary.BigEndian.AppendUint64(b, r.ClearGen)
 	return sealCRC(b), nil
 }
 
@@ -364,6 +371,7 @@ func (r *Reply) UnmarshalBinary(b []byte) error {
 	v.Marked = rd.boolean()
 	v.VoterBoot = rd.u64()
 	v.HeldBy = rd.u64()
+	v.ClearGen = rd.u64()
 	if rd.bad || len(rd.b) != 0 {
 		return ErrCorrupt
 	}

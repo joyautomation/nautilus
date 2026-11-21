@@ -164,23 +164,30 @@ type clearPlan struct {
 	at     time.Duration
 	keep   map[quorum.NodeID]uint64
 	retire map[quorum.NodeID][]quorum.BootSeq
+	gen    map[quorum.NodeID]uint64
 	ok     bool
 }
 
 // clearPreflight is the clear command's check phase: every real member is
 // up, and the members together hear no more than one boot of a name any
 // of them marks.
-func (w *World) clearPreflight() (map[quorum.NodeID]uint64, map[quorum.NodeID][]quorum.BootSeq, bool) {
+func (w *World) clearPreflight() (map[quorum.NodeID]uint64, map[quorum.NodeID][]quorum.BootSeq, map[quorum.NodeID]uint64, bool) {
 	var names []quorum.NodeID
 	for _, m := range []Addr{A, B, W} {
 		n := w.nodes[m]
 		if !n.up || n.voter == nil {
-			return nil, nil, false
+			return nil, nil, nil, false
 		}
 		names = append(names, n.voter.Marked()...)
+		if n.cand != nil && n.cand.Marked() && !quorum.MutClearIgnoresHeld() && !slices.Contains(names, nodeIDs[m]) {
+			// A held controller counts as marked (node.checkPhase): its
+			// marks may all be forgotten (#1144 review).
+			names = append(names, nodeIDs[m])
+		}
 	}
 	keep := map[quorum.NodeID]uint64{}
 	retire := map[quorum.NodeID][]quorum.BootSeq{}
+	gen := map[quorum.NodeID]uint64{}
 	// Two live boots of a name, at one member or across them, refuse it.
 	for _, name := range names {
 		var answers [][]uint64
@@ -189,10 +196,20 @@ func (w *World) clearPreflight() (map[quorum.NodeID]uint64, map[quorum.NodeID][]
 			n := w.nodes[m]
 			answers = append(answers, n.voter.LiveBoots(w.local(n), name))
 			known = append(known, n.voter.KnownBoots(name))
+			// The new clear generation: above every member's and every
+			// hold's (node.checkPhase).
+			gen[name] = max(gen[name], n.voter.DupGen(name))
+			if n.cand != nil && nodeIDs[m] == name {
+				gen[name] = max(gen[name], n.cand.HoldGen())
+			}
+		}
+		gen[name]++
+		if quorum.MutClearGenIgnoresHolds() {
+			gen[name] = 1
 		}
 		k := quorum.KeptBoot(answers...)
 		if quorum.CopyLive(answers...) || k == 0 {
-			return nil, nil, false
+			return nil, nil, nil, false
 		}
 		keep[name] = k
 		for _, b := range quorum.UnionBoots(known...) {
@@ -201,7 +218,7 @@ func (w *World) clearPreflight() (map[quorum.NodeID]uint64, map[quorum.NodeID][]
 			}
 		}
 	}
-	return keep, retire, true
+	return keep, retire, gen, true
 }
 
 // applyFault starts (on) or heals fault i.
@@ -253,13 +270,14 @@ func (w *World) applyFault(i int, on bool) {
 		c := ClearRec{Node: n.addr, At: w.now}
 		keep := map[quorum.NodeID]uint64{}
 		retire := map[quorum.NodeID][]quorum.BootSeq{}
+		gen := map[quorum.NodeID]uint64{}
 		if f.Value&ClearPreflight != 0 {
 			var ok bool
 			if w.clearPlan == nil || w.clearPlan.at != w.now {
-				k, r, ok := w.clearPreflight()
-				w.clearPlan = &clearPlan{at: w.now, keep: k, retire: r, ok: ok}
+				k, r, g, ok := w.clearPreflight()
+				w.clearPlan = &clearPlan{at: w.now, keep: k, retire: r, gen: g, ok: ok}
 			}
-			keep, retire, ok = w.clearPlan.keep, w.clearPlan.retire, w.clearPlan.ok
+			keep, retire, gen, ok = w.clearPlan.keep, w.clearPlan.retire, w.clearPlan.gen, w.clearPlan.ok
 			if !ok {
 				c.Refused = n.voter.Marked()
 				w.tracef("%v: the operator's clear is refused at the check phase", n.addr)
@@ -286,10 +304,13 @@ func (w *World) applyFault(i int, on bool) {
 					k = bs[0]
 				}
 			}
-			n.voter.ClearDuplicateKeeping(name, k, retire[name])
+			n.voter.ClearDuplicateKeeping(name, k, retire[name], gen[name])
 			if was {
 				c.Cleared = append(c.Cleared, name)
 			}
+		}
+		if p := n.voter.MarkWrite(); p != nil {
+			w.persist(n, p)
 		}
 		w.tracef("%v: the operator clears marks: cleared %v, refused %v", n.addr, c.Cleared, c.Refused)
 		w.rec.Clears = append(w.rec.Clears, c)

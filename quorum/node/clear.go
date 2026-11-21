@@ -49,6 +49,11 @@ type dupOp struct {
 	// check but Keep; each member retires them all, so a copy known to one
 	// member is retired at the others too (naut-lead's ruling on #1135).
 	Retire []quorum.BootSeq `json:"retire,omitempty"`
+	// Gen, on a clear: the name's new clear generation, above every
+	// member's and every hold's at the check (checkPhase). A hold on a
+	// durable mark ends only on a word with a higher one, which a wiped
+	// voter or a copy from an older disk can't give (#1029 3c-3b).
+	Gen uint64 `json:"gen,omitempty"`
 }
 
 // DupAnswer is one member's answer to a check or a clear.
@@ -64,6 +69,19 @@ type DupAnswer struct {
 	Retired []uint64         `json:"retired,omitempty"`
 	// Marked: the member's voter marks the name (after a clear: still).
 	Marked bool `json:"marked"`
+	// Gen is the name's clear generation at the member's voter, and
+	// HoldGen the highest a hold on this controller's own candidate was
+	// set under (a controller's own name only): the clear's generation
+	// goes above both, so no hold is left on an older one (a member
+	// restored from a backup).
+	Gen     uint64 `json:"gen,omitempty"`
+	HoldGen uint64 `json:"holdGen,omitempty"`
+	// Held: this controller's own candidate is held by a mark (its own
+	// name only). A hold can outlive every member's mark (the marking
+	// voter crashed before its write, or was wiped), and only a clear's
+	// generation ends it then, so the check counts it as a mark (#1144
+	// review).
+	Held bool `json:"held,omitempty"`
 	// Cleared: this clear removed the member's mark.
 	Cleared bool `json:"cleared,omitempty"`
 	// Refused is why the member refused a clear (it hears two boots).
@@ -87,6 +105,11 @@ type ClearReport struct {
 	Refused string `json:"refused,omitempty"`
 	// Keep is the one boot the check heard, which the clear kept (0: none).
 	Keep uint64 `json:"keep,omitempty"`
+	// Retired are the other boots of the name the members knew, which the
+	// clear set aside: empty when no member knew one (a hold whose marks
+	// were all forgotten), so a copy still alive would not be marked again
+	// on its return, only on being heard beside the original.
+	Retired []quorum.BootSeq `json:"retired,omitempty"`
 	// CopyHeardAfter: at the re-check the members together heard two
 	// processes of the name: a copy runs.
 	CopyHeardAfter bool `json:"copyHeardAfter,omitempty"`
@@ -110,6 +133,9 @@ func (r ClearReport) Done() bool {
 		if a.Marked || a.Err != "" || a.Refused != "" {
 			return false
 		}
+		if a.Held && !mut("done_ignores_held") {
+			return false // a hold still standing: not done (#1144 re-check)
+		}
 	}
 	return true
 }
@@ -126,7 +152,7 @@ var ErrClearIncomplete = errors.New("redundancy: clear incomplete")
 // lock.
 func dupAnswer(v *quorum.Voter, now quorum.Instant, member string, q dupOp) DupAnswer {
 	name := quorum.NodeID(q.Name)
-	a := DupAnswer{Member: member, Boots: v.LiveBoots(now, name), Known: v.KnownBoots(name), Retired: v.RetiredBoots(name)}
+	a := DupAnswer{Member: member, Boots: v.LiveBoots(now, name), Known: v.KnownBoots(name), Retired: v.RetiredBoots(name), Gen: v.DupGen(name)}
 	if !v.Settled(now) {
 		// Started under a lease and D ago: it can't say what boots ran
 		// before, so it answers neither a check nor a clear.
@@ -155,8 +181,9 @@ func dupAnswer(v *quorum.Voter, now quorum.Instant, member string, q dupOp) DupA
 		if other && !mut("clear_ignores_keep") {
 			a.Refused = fmt.Sprintf("%s hears a process named %s other than the one the check heard: stop the copy first", member, q.Name)
 		} else if marked || !mut("clear_retires_marked_only") {
-			v.ClearDuplicateKeeping(name, q.Keep, q.Retire)
+			v.ClearDuplicateKeeping(name, q.Keep, q.Retire, q.Gen)
 			a.Cleared, marked = marked, false
+			a.Gen = v.DupGen(name)
 		}
 	}
 	a.Marked = marked
@@ -202,7 +229,13 @@ func (e *Elector) serveDup(w http.ResponseWriter, r *http.Request) {
 func (e *Elector) dupLocal(q dupOp) DupAnswer {
 	e.mu.Lock()
 	a := dupAnswer(e.v, e.now(), string(e.o.Self), q)
+	if q.Name == string(e.o.Self) {
+		a.HoldGen = e.c.HoldGen()
+		a.Held = e.c.Marked()
+	}
+	p := e.v.MarkWrite() // a clear's records, durable without waiting for the next frame
 	e.mu.Unlock()
+	e.w.ask(p)
 	if a.Cleared {
 		e.event(Event{Kind: EventDuplicateCleared, Detail: q.Name})
 		e.log.Warn("redundancy: the operator cleared the duplicate mark on "+q.Name, "by", q.By)
@@ -235,7 +268,9 @@ func (w *Witness) serveDup(rw http.ResponseWriter, r *http.Request) {
 	}
 	p.mu.Lock()
 	a := dupAnswer(p.v, w.now(), "witness", q)
+	mw := p.v.MarkWrite()
 	p.mu.Unlock()
+	p.w.ask(mw)
 	if a.Cleared {
 		p.log.Warn("witness: the operator cleared the duplicate mark on "+q.Name, "by_as_the_controller_says", q.By, "from", r.Header.Get(MembersHeader))
 	}
@@ -277,7 +312,7 @@ func (e *Elector) dupAll(ctx context.Context, q dupOp) []DupAnswer {
 // checkPhase decides the clear's check (all or nothing) from every
 // member's answer: the boot to keep, the boots to retire (every boot any
 // member knew but that one), or why the command is refused.
-func checkPhase(name string, check []DupAnswer) (keep uint64, retire []quorum.BootSeq, refused string) {
+func checkPhase(name string, check []DupAnswer) (keep uint64, retire []quorum.BootSeq, gen uint64, refused string) {
 	var silent, hearing []string
 	var answers [][]uint64
 	var known [][]quorum.BootSeq
@@ -294,7 +329,12 @@ func checkPhase(name string, check []DupAnswer) (keep uint64, retire []quorum.Bo
 		if len(a.Boots) > 0 {
 			hearing = append(hearing, fmt.Sprintf("%s hears %d", a.Member, len(a.Boots)))
 		}
-		marked = marked || a.Marked
+		marked = marked || a.Marked || (a.Held && !mut("clear_ignores_held"))
+		gen = max(gen, a.Gen, a.HoldGen)
+	}
+	gen++
+	if mut("clear_gen_ignores_holds") {
+		gen = 1
 	}
 	keep = quorum.KeptBoot(answers...)
 	for _, b := range quorum.UnionBoots(known...) {
@@ -315,17 +355,17 @@ func checkPhase(name string, check []DupAnswer) (keep uint64, retire []quorum.Bo
 	}
 	switch {
 	case len(silent) > 0 && !mut("clear_partial_check"):
-		return 0, nil, "every member must answer before anything is cleared: " + strings.Join(silent, "; ")
+		return 0, nil, 0, "every member must answer before anything is cleared: " + strings.Join(silent, "; ")
 	case quorum.CopyLive(answers...):
-		return 0, nil, fmt.Sprintf("two processes named %s were heard within the last lease (%s): stop the copy, confirm it is down, and try again a lease later", name, strings.Join(hearing, ", "))
+		return 0, nil, 0, fmt.Sprintf("two processes named %s were heard within the last lease (%s): stop the copy, confirm it is down, and try again a lease later", name, strings.Join(hearing, ", "))
 	case !marked && !pending:
-		return 0, nil, "no member marks " + name + ", and every member has retired the other processes it knew: nothing to clear"
+		return 0, nil, 0, "no member marks " + name + ", and every member has retired the other processes it knew: nothing to clear"
 	case keep == 0 && !mut("clear_without_keep"):
 		// A clear that keeps nothing has no use, and would retire a real
 		// controller that is only paused (naut-lead's ruling on #1135).
-		return 0, nil, "nothing running under " + name + " to keep: no member heard a process named " + name + " in the last lease and a quarter. Start the real controller, or heal its links if it is cut off from the other members, then clear"
+		return 0, nil, 0, "nothing running under " + name + " to keep: no member heard a process named " + name + " in the last lease and a quarter. Start the real controller, or heal its links if it is cut off from the other members, then clear"
 	}
-	return keep, retire, ""
+	return keep, retire, gen, ""
 }
 
 // ClearDuplicateAll is the operator's clear-duplicate command (see the top
@@ -346,11 +386,13 @@ func (e *Elector) ClearDuplicateAll(ctx context.Context, name, by string) (Clear
 	}
 	rep.Check = e.dupAll(ctx, dupOp{Op: "check", Name: name, By: by})
 	var retire []quorum.BootSeq
-	rep.Keep, retire, rep.Refused = checkPhase(name, rep.Check)
+	var gen uint64
+	rep.Keep, retire, gen, rep.Refused = checkPhase(name, rep.Check)
+	rep.Retired = retire
 	if rep.Refused != "" {
 		return rep, ErrClearRefused
 	}
-	rep.Clear = e.dupAll(ctx, dupOp{Op: "clear", Name: name, By: by, Keep: rep.Keep, Retire: retire})
+	rep.Clear = e.dupAll(ctx, dupOp{Op: "clear", Name: name, By: by, Keep: rep.Keep, Retire: retire, Gen: gen})
 	select {
 	case <-ctx.Done():
 		return rep, ctx.Err()

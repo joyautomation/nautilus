@@ -14,26 +14,31 @@ import (
 // markOld marks name at voter v with two boots heard interleaved long
 // enough ago (four leases) that neither is live any more: a copy that ran
 // beside name's real process and has since been stopped. Under the
-// voter's lock.
-func markOld(t *testing.T, v *quorum.Voter, now quorum.Instant, name quorum.NodeID) {
+// voter's lock. It returns the write of the mark, for the driver.
+func markOld(t *testing.T, v *quorum.Voter, now quorum.Instant, name quorum.NodeID) *quorum.Persist {
 	t.Helper()
+	var w *quorum.Persist
 	base := now.Add(-4 * loopLease)
 	d := time.Duration(float64(loopLease/4)*(1+quorum.MaxRho)) + 50*time.Millisecond
 	for i, at := range []time.Duration{0, 10 * time.Millisecond, d, d + 10*time.Millisecond, d + 20*time.Millisecond, d + 30*time.Millisecond} {
 		nonce := []uint64{0xA1, 0xC1}[i%2]
-		v.Handle(base.Add(at), quorum.Request{From: name, Nonce: nonce, ID: quorum.ProbeID, Seq: uint64(1 + i/2)})
+		if p, _ := v.Handle(base.Add(at), quorum.Request{From: name, Nonce: nonce, ID: quorum.ProbeID, Seq: uint64(1 + i/2)}); p != nil {
+			w = p
+		}
 	}
 	if !slices.Contains(v.Marked(), name) {
 		t.Fatalf("the sequence didn't mark %s", name)
 	}
+	return w
 }
 
 // markAt marks name at the controller id's voter (markOld).
 func (c *cluster) markAt(id quorum.NodeID, name quorum.NodeID) {
 	e := c.elector(id)
 	e.mu.Lock()
-	defer e.mu.Unlock()
-	markOld(c.t, e.v, e.now(), name)
+	p := markOld(c.t, e.v, e.now(), name)
+	e.mu.Unlock()
+	e.w.ask(p)
 }
 
 // witnessVoter runs f on the witness's voter for the pair, under its lock.
@@ -251,7 +256,7 @@ func TestTheRecheckReportsACopyHeardAfterTheClear(t *testing.T) {
 // boots to retire are every boot any member knew but the kept one.
 func TestTheCheckPhaseKeepsOneBootAndRetiresTheRest(t *testing.T) {
 	quiet := []DupAnswer{{Member: "a"}, {Member: "b", Marked: true, Known: []quorum.BootSeq{{Nonce: 0xA, Seq: 9}, {Nonce: 0xC, Seq: 4}}}, {Member: "witness"}}
-	if _, _, why := checkPhase("a", quiet); !strings.Contains(why, "nothing running under a to keep") {
+	if _, _, _, why := checkPhase("a", quiet); !strings.Contains(why, "nothing running under a to keep") {
 		t.Fatalf("no boot heard anywhere: refused %q; want nothing to keep", why)
 	}
 	heard := []DupAnswer{
@@ -259,7 +264,7 @@ func TestTheCheckPhaseKeepsOneBootAndRetiresTheRest(t *testing.T) {
 		{Member: "b", Marked: true, Known: []quorum.BootSeq{{Nonce: 0xA, Seq: 9}, {Nonce: 0xC, Seq: 4}}},
 		{Member: "witness", Boots: []uint64{0xA}, Known: []quorum.BootSeq{{Nonce: 0xA, Seq: 11}, {Nonce: 0xE, Seq: 2}}},
 	}
-	keep, retire, why := checkPhase("a", heard)
+	keep, retire, _, why := checkPhase("a", heard)
 	if why != "" || keep != 0xA {
 		t.Fatalf("keep %x, refused %q; want 0xA kept", keep, why)
 	}
@@ -287,13 +292,168 @@ func TestAClearMissedAtAMemberIsNotDoneAndRunsAgain(t *testing.T) {
 		{Member: "b", Boots: []uint64{0xA}, Known: []quorum.BootSeq{{Nonce: 0xA, Seq: 19}, {Nonce: 0xC, Seq: 4}}, Retired: []uint64{0xC}},
 		{Member: "witness", Boots: []uint64{0xA}, Known: []quorum.BootSeq{{Nonce: 0xA, Seq: 18}, {Nonce: 0xC, Seq: 5}}},
 	}
-	keep, retire, why := checkPhase("a", again)
+	keep, retire, _, why := checkPhase("a", again)
 	if why != "" || keep != 0xA || !slices.Equal(retire, []quorum.BootSeq{{Nonce: 0xC, Seq: 5}}) {
 		t.Fatalf("a run after a missed member: keep %x retire %+v refused %q; want it to go ahead and retire 0xC", keep, retire, why)
 	}
 	again[2].Retired = []uint64{0xC}
 	again[0].Retired = []uint64{0xC}
-	if _, _, why := checkPhase("a", again); why == "" {
+	if _, _, _, why := checkPhase("a", again); why == "" {
 		t.Fatal("with every member retired and no mark, a clear went ahead: want nothing to clear")
+	}
+}
+
+// The clear's generation goes above every member's and every hold's, so a
+// legitimate clear always frees the held controller on the next word of
+// each voter, even when a member restored from a backup carries an older
+// generation than the one its mark set the hold under (naut-lead's
+// liveness pin on #1029 3c-3b). The restored member's own unmarked word,
+// older, frees nothing, as a wiped voter's wouldn't. clear_gen_ignores_holds
+// turns it red: the clear's generation falls at or under the hold's, and
+// the controller stays held until it restarts.
+func TestAClearFreesAHoldWhenAMemberIsRestoredFromABackup(t *testing.T) {
+	lease := time.Second
+	now := quorum.Instant(10 * time.Second)
+	c, err := quorum.NewCandidate(quorum.Config{Self: "a", Peer: "b", Witness: "witness", Lease: lease, Rho: 0.01, Incarnation: 7, Nonce: 0xA}, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ask := func(v *quorum.Voter, at quorum.Instant, seq uint64) quorum.Reply {
+		_, out := v.Handle(at, quorum.Request{From: "a", Nonce: 0xA, ID: quorum.ProbeID, Seq: seq})
+		c.NoteMark(out[0])
+		return out[0]
+	}
+	// The witness marked a under generation 5 (two clears it took that the
+	// others missed), durably: the hold is set under 5.
+	w := quorum.NewVoter("witness", lease, quorum.VoterState{Dups: []quorum.DupRecord{{Name: "a", Marked: true, Gen: 5}}}, now)
+	w.SetBoot(1)
+	if r := ask(w, now, 1); !r.Marked || r.ClearGen != 5 || !c.Marked() {
+		t.Fatalf("not held under generation 5: %+v", r)
+	}
+	// The witness is restored from a backup taken at generation 3, before
+	// it marked: its unmarked word is older than the hold, and frees nothing.
+	later := now.Add(3 * lease)
+	w = quorum.NewVoter("witness", lease, quorum.VoterState{Dups: []quorum.DupRecord{{Name: "a", Gen: 3}}}, later)
+	w.SetBoot(2)
+	if r := ask(w, later, 2); r.Marked || !c.Marked() {
+		t.Fatalf("the restored witness's older word (%+v) freed the hold, or it marked", r)
+	}
+	// Every member answers the check with generation 3; the held
+	// controller says its hold's.
+	check := []DupAnswer{
+		{Member: "a", Boots: []uint64{0xA}, Gen: 3, HoldGen: c.HoldGen()},
+		{Member: "b", Boots: []uint64{0xA}, Marked: true, Gen: 3},
+		{Member: "witness", Boots: []uint64{0xA}, Gen: w.DupGen("a")},
+	}
+	keep, _, gen, why := checkPhase("a", check)
+	if why != "" || keep != 0xA {
+		t.Fatalf("check refused %q (keep %x)", why, keep)
+	}
+	w.ClearDuplicateKeeping("a", keep, nil, gen)
+	if r := ask(w, later.Add(lease/4), 3); c.Marked() {
+		t.Fatalf("the clear's word (%+v, generation %d) left the hold set under %d", r, gen, c.HoldGen())
+	}
+}
+
+// A mark is kept on disk (#1029 3c-3b): b's voter, restarted, still marks
+// a, so a stays held; a restart no longer clears it. The clear does,
+// without a restart of a.
+func TestAMarkSurvivesARestartAndTheClearEndsIt(t *testing.T) {
+	c := newCluster(t)
+	c.startAll()
+	c.commission()
+	c.settledLeader(leases(20))
+	c.markAt("b", "a")
+	c.waitFor("a to be held by b's mark", leases(10), func() bool { return c.status("a").Held })
+	time.Sleep(leases(1)) // the mark's write lands
+	c.kill("b")
+	c.start("b")
+	c.waitFor("b's restarted voter to mark a again from its file", leases(10), func() bool {
+		return slices.Contains(c.status("b").Marked, "a")
+	})
+	time.Sleep(leases(3))
+	if !c.status("a").Held {
+		t.Fatal("a was freed by b's restart")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), leases(10))
+	defer cancel()
+	rep, err := c.elector("a").ClearDuplicateAll(ctx, "a", "user:op")
+	if err != nil {
+		t.Fatalf("clear: %v (report %+v)", err, rep)
+	}
+	c.waitFor("a's hold to end without a restart", leases(10), func() bool { return !c.status("a").Held })
+}
+
+// A hold can outlive every member's mark: the only voter that marked a
+// crashed before its write (or was wiped), and comes back unmarked, with
+// nothing pending. The check still goes ahead, counting the held
+// controller as marked, and the clear's generation frees it (#1144
+// review). clear_ignores_held turns it red: "nothing to clear", and a
+// stays held until it restarts.
+func TestAClearFreesAHoldNoMemberMarksAnyMore(t *testing.T) {
+	lease := loopLease
+	now := quorum.Instant(10 * time.Second)
+	c, err := quorum.NewCandidate(quorum.Config{Self: "a", Peer: "b", Witness: "witness", Lease: lease, Rho: 0.01, Incarnation: 7, Nonce: 0xA}, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ask := func(v *quorum.Voter, at quorum.Instant, seq uint64) quorum.Reply {
+		_, out := v.Handle(at, quorum.Request{From: "a", Nonce: 0xA, ID: quorum.ProbeID, Seq: seq})
+		c.NoteMark(out[0])
+		return out[0]
+	}
+	w := quorum.NewVoter("witness", lease, quorum.VoterState{}, 0)
+	w.SetBoot(1)
+	markOld(t, w, now, "a")
+	if r := ask(w, now, 9); !r.Marked || !c.Marked() {
+		t.Fatalf("not held: %+v", r)
+	}
+	// The witness crashes before the mark's write: back with no record.
+	later := now.Add(3 * lease)
+	w = quorum.NewVoter("witness", lease, quorum.VoterState{}, later)
+	w.SetBoot(2)
+	settled := later.Add(2 * lease)
+	ask(w, settled, 10)
+	if !c.Marked() {
+		t.Fatal("the forgetting witness's word freed the hold")
+	}
+	b := quorum.NewVoter("b", lease, quorum.VoterState{}, later)
+	ctl := quorum.NewVoter("a", lease, quorum.VoterState{}, later)
+	for _, v := range []*quorum.Voter{w, b, ctl} {
+		v.Handle(settled, quorum.Request{From: "a", Nonce: 0xA, ID: quorum.ProbeID, Seq: 11})
+	}
+	check := []DupAnswer{
+		dupAnswer(ctl, settled, "a", dupOp{Op: "check", Name: "a"}),
+		dupAnswer(b, settled, "b", dupOp{Op: "check", Name: "a"}),
+		dupAnswer(w, settled, "witness", dupOp{Op: "check", Name: "a"}),
+	}
+	check[0].Held, check[0].HoldGen = c.Marked(), c.HoldGen() // as dupLocal says for its own name
+	keep, retire, gen, why := checkPhase("a", check)
+	if why != "" || keep != 0xA {
+		t.Fatalf("the check refused %q (keep %x): a held controller no member marks is something to clear", why, keep)
+	}
+	if len(retire) != 0 {
+		t.Fatalf("retired %+v: no member knew another boot", retire)
+	}
+	dupAnswer(w, settled.Add(time.Millisecond), "witness", dupOp{Op: "clear", Name: "a", Keep: keep, Gen: gen})
+	if r := ask(w, settled.Add(2*time.Millisecond), 12); c.Marked() {
+		t.Fatalf("the clear's word (%+v) left the hold", r)
+	}
+}
+
+// The re-check counts a controller still held as not done: the command
+// says incomplete, and the operator runs it again (#1144 re-check).
+// done_ignores_held turns it red.
+func TestAClearIsNotDoneWhileTheControllerIsHeld(t *testing.T) {
+	rep := ClearReport{Name: "a",
+		Clear:   []DupAnswer{{Member: "a", Cleared: true}, {Member: "b"}, {Member: "witness"}},
+		Recheck: []DupAnswer{{Member: "a", Boots: []uint64{0xA}, Held: true}, {Member: "b", Boots: []uint64{0xA}}, {Member: "witness", Boots: []uint64{0xA}}},
+	}
+	if rep.Done() {
+		t.Fatal("a held controller at the re-check reported done")
+	}
+	rep.Recheck[0].Held = false
+	if !rep.Done() {
+		t.Fatal("with nothing held or marked, not done")
 	}
 }

@@ -2,6 +2,7 @@ package quorum
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -130,7 +131,7 @@ func TestAdoptRoundTripAndCorruption(t *testing.T) {
 	s := VoterState{Promised: 5, GrantedTo: "A", Incarnation: 77, Gen: 3, PendingGen: 4, PendingInc: 99, Floor: 12}
 	sb, _ := s.MarshalBinary()
 	var gs VoterState
-	if err := gs.UnmarshalBinary(sb); err != nil || gs != s {
+	if err := gs.UnmarshalBinary(sb); err != nil || !reflect.DeepEqual(gs, s) {
 		t.Fatalf("state: %+v %v", gs, err)
 	}
 }

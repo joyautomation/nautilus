@@ -413,6 +413,18 @@ single restart is claimed.
 A plain restart, and `naut deploy`'s update or rollback, never marks
 anything: the old process is gone before the new one starts.
 
+**Marks survive restarts.** A member writes a mark into its
+`quorum.state` right after it tells the marked controller, so members
+restarted inside a split, while the copy still runs, still hold it when
+they come back. Before marks were kept, such restarts made the voters
+pick again, and often picked the copy: the **real** box went spare in
+307 to 348 of 3,600 simulator runs where the peer and the witness both
+restarted within two seconds of the clone's start, and 309 of 3,600 with
+the peer and the witness alone. With marks kept, 0 or 1. A member that
+crashes between telling the mark and writing it (a few milliseconds)
+forgets it: the controller it held stays held, and the clear below frees
+it.
+
 **A running clone costs redundancy, not the leader**, until the network
 also fails:
 
@@ -429,9 +441,10 @@ also fails:
   mark is cleared**, even once the clone is stopped: the controller that
   still leads needs both voters that are not marked, and a marked
   controller can't take over.
-- **Once a member that marked a controller restarts, for any reason**
-  (a `naut deploy` included), that controller stays held until it is
-  restarted itself.
+- **A restart doesn't clear a mark.** Each member writes its marks into
+  its `quorum.state`, so a mark outlives restarts, upgrades and `naut
+  deploy`, also a mark made by mistake (below). Only the clear-duplicate
+  command ends it.
 
 With no leader, no controller drives outputs. The drivers stop asserting
 them, so each device's communication watchdog sees the silence and puts
@@ -443,7 +456,8 @@ the name, each tells it which process it holds as that member: the one
 it heard **first**, among those still sending. A process of that name
 the members first heard only after they marked it (the original,
 restarted beside a running copy, or a copy restarted before it went
-spare) is told nothing, and stays held. A copy that both other
+spare) is told nothing, and stays held. A member that restarted tells a copy it is a spare only once it hears
+the process it holds send again. A copy that both other
 members name another process for a full lease writes "spare" into its
 `quorum.state` and goes silent: it no longer votes, campaigns, probes,
 answers the other controller or takes part in the operator-intent log,
@@ -498,8 +512,8 @@ claim to be `a`") and the member that raised it.
    - **checks every member** (this controller, the other one and the
      witness). All three must be up (a member that started less than a
      lease and a quarter ago can't answer yet: try again shortly; one that
-     is down for good holds no marks once it is back, so bring it back
-     first), and together they must hear **one**
+     is down must be brought back first: it keeps its marks on disk), and
+     together they must hear **one**
      process named `a` in the last lease and a quarter. Otherwise it
      clears nothing and says who is silent, or who still hears two. One
      member alone can't tell: a split can put the copy where one member
@@ -507,10 +521,11 @@ claim to be `a`") and the member that raised it.
      are taken together;
    - **clears the mark at each member**, each checking its own voter again
      first. Each member also keeps the process the check heard and sets
-     aside every other process of that name any member knew. If one of
-     those comes back (a copy that was only unplugged or paused after
-     all), its first message marks the name again, before it gets any
-     vote, whichever member it reaches. If no member hears any process of
+     aside every other process of that name any member knew, on disk too.
+     If one of those comes back (a copy that was only unplugged, paused
+     or hung after all), its first message, or its first answer to the
+     other controller's vote, marks the name again before that counts
+     for anything, whichever member it reaches. If no member hears any process of
      the name, there is nothing to keep, and the clear is refused: start
      the real controller (or heal its links), then clear;
    - **checks again a lease later** and prints what each member says. A
@@ -537,14 +552,18 @@ member, so a same-origin request with no credential is refused, unlike
 other writes. The command line reads the credential from
 `NAUTILUS_TOKEN` or `--token-file`, never from its arguments.
 
-**Without the command** (a member on an older release, which answers
-404), clear by restarts, in this order: restart each member that raised
-the alarm, then the marked controller(s), even one that leads. The
-original shares the marked name, so that last restart is a hand-over to
-the other controller, which needs the witness up. Marks are kept in
-memory, so a restart clears them. A member restarted while the copy still
-runs behind a split forgets what it knew about it, which is why step 1
-comes first either way.
+**Restarts don't clear marks**, since they are kept on disk: the command
+is the only way. Each clear also raises a number the members keep for
+that name, so a member that comes back without the mark (wiped, rebuilt,
+restored from a backup, or a copy of one) can't end a hold by forgetting
+it; only a clear does, and every clear does, also when one member is
+behind. Once a member has marked or cleared a name, it keeps that record
+(the number, and the processes the clear set aside) in a newer
+`quorum.state` format, also after the clear. An earlier release refuses
+to start on that file and says how to go on: move the file aside, and
+that member starts uncommissioned and re-adopts from the other
+controller (the witness, as a new incarnation the controllers adopt).
+Its records go with the file, so do that only with the copy stopped.
 
 In the simulator (two-second lease, 300 runs for each of eight split
 shapes):
@@ -618,14 +637,17 @@ near the largest delay a 2 s lease allows.
   the simulator (2 s lease) that gave two leaders in 52, 21 and 1 of
   3,600 runs with the split in the first, second and third half second
   after the clone started, and none later.
-- **Restarts the order above forbids.** Members restarted while the copy
-  still runs behind a split forget their marks. No case of one or two
-  such restarts gave two leaders in the simulator, but only one is
-  claimed: stop the copy first.
+- **A member that crashes between telling a mark and writing it**, or
+  whose disk is wiped, forgets the mark: until it marks again, it
+  counts the copy as a member. In the simulator, with the disk slowed to
+  0.3 to 1.5 s per write and both voters crashing inside that window,
+  that gave two leaders in 13 to 24 of 300 runs (22 to 29 when marks
+  were not kept at all). Real writes take milliseconds.
 - **A message delayed past a quarter of a lease** (beyond the delay a
   lease allows) from a controller that has just restarted can mark that
   controller by mistake. It costs that
-  controller's redundancy until the mark is cleared, never the leader.
+  controller's redundancy until the mark is cleared (a restart no longer
+  does), never the leader.
   Late to one member, it never makes that controller a spare: that takes
   both other members. Late to **both**, by more than about 1.25 leases,
   the restarted controller can go spare: in the simulator 0 of 300 up to

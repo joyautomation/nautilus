@@ -197,6 +197,22 @@ var Mutations = []string{
 	"clear_forgets_boots",       // quorum: the clear retires no boot, so a copy unheard at the clear comes back unmarked (#1135 review)
 	"cluster_ops_proxied",       // server: the pair's operator commands go through the standby proxy (503 with no leader)
 	"redundancy_same_origin",    // server: without an auth: block, the pair's operator commands take the same-origin write rule
+	// #1029 3c-3b: durable marks.
+	"marks_volatile",           // quorum: the duplicate records are never written: a restart forgets every mark (today's 3c-3a)
+	"mark_not_restored",        // quorum: a restart reads the records but marks nothing from them
+	"restored_boot_fresh",      // quorum: a restored boot counts as just heard, so HeldBy names a dead incumbent after a restart
+	"retired_not_restored",     // quorum: a restart forgets the boots an operator's clear retired
+	"mark_write_on_grant_path", // quorum: a grant waits for the mark's write too, so a failing one drops the incumbent's renewals
+	"retired_reply_counted",    // quorum: a reply from a retired boot counts and marks nothing (#1135's residual)
+	"release_ignores_gen",      // quorum: a hold ends only on the marking boot's word (3c-1's rule (i) alone), never on a clear's generation
+	"clear_gen_not_bumped",     // quorum: a clear leaves the name's clear generation as it was
+	"spare_failure_unwritten",  // quorum: a failed spare write takes the flag back in memory only, leaving a write in flight that carries it (#1144 review)
+	"retired_reply_unmatched",  // quorum: a retired boot's reply marks before it is matched to a round (late or replayed ones too, #1144 review)
+	"done_ignores_held",        // node: the clear reports done though the held controller is still held at the re-check (#1144 re-check)
+	"hold_gen_ignores_seen",    // quorum: HoldGen covers the holds only, not the generations seen, so a hold set between the clear's check and its clear outlives it (#1144 re-check)
+	"hold_gen_reset_on_boot",   // quorum: a hold's generation starts from the reply alone, below what this candidate already saw (#1144 review)
+	"clear_ignores_held",       // node/sim: the clear's check counts a held controller no member marks as nothing to clear (#1144 review)
+	"clear_gen_ignores_holds",  // node/sim: the clear's generation is 1, not above every member's and every hold's
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")

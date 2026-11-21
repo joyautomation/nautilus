@@ -197,11 +197,11 @@ var table = []mutation{
 	{"evicted_boot_banned", []string{"TestAnEvictedOriginalIsMarkedWhenItComesBack"}},
 	// #1113 review, rules (i) and (ii): a hold ends only on the marking
 	// voter boot's word; a held controller's voter makes no new grant.
-	{"hold_released_by_any_boot", []string{"TestAHoldEndsOnlyOnTheMarkingBootsWord", "TestCloneSplitSingleRestarts"}},
-	{"held_voter_grants", []string{"TestAHeldControllersVoterGrantsTheOtherNoNewLease", "TestHeldVoterGrantsNothingInADoubleRestart"}},
+	{"hold_released_by_any_boot", []string{"TestAHoldEndsOnlyOnTheMarkingBootsWord", "TestTheFsyncWindowKeepsRulesIAndII"}}, // since 3c-3b a restart keeps the mark: the sim pin is the fsync window
+	{"held_voter_grants", []string{"TestAHeldControllersVoterGrantsTheOtherNoNewLease", "TestTheFsyncWindowKeepsRulesIAndII"}},
 	{"dup_mark_from_relay", []string{"TestARelayedOldBootNeverMarks"}},
-	{"marked_not_told", []string{"TestAMarkedNameGetsNoNewGrantUntilCleared", "TestCloneSplitVoterRestarts"}},
-	{"marked_still_campaigns", []string{"TestAMarkedCandidateStopsCampaigning", "TestCloneSplitVoterRestarts", "TestCloneRaceSeeds"}},
+	{"marked_not_told", []string{"TestAMarkedNameGetsNoNewGrantUntilCleared", "TestTheFsyncWindowKeepsRulesIAndII"}},
+	{"marked_still_campaigns", []string{"TestAMarkedCandidateStopsCampaigning", "TestTheFsyncWindowKeepsRulesIAndII"}},
 	{"discount_reterms", []string{"TestADiscountedGrantDoesNotReterm", "TestCloneSeeds"}},
 	{"clear_keeps_mark", []string{"TestClearingAMarkGrantsTheNameAgain"}},
 	{"dup_alarm_unconfirmed", []string{"TestVoterRefusesANameUnderAnotherBootNonce", "TestADuplicatedNameGetsNoNewGrant"}},
@@ -250,6 +250,24 @@ var table = []mutation{
 	{"clear_without_keep", []string{"TestTheCheckPhaseKeepsOneBootAndRetiresTheRest"}},
 	{"cluster_ops_proxied", []string{"TestAStandbyWithNoLeaderAnswersClearDuplicate"}},
 	{"redundancy_same_origin", []string{"TestEveryWritePathJournalsExactlyOneEntry"}},
+	// #1029 3c-3b: durable marks.
+	{"marks_volatile", []string{"TestAMarkSurvivesTheVotersRestart", "TestRetiredBootsSurviveTheVotersRestart", "TestRestartedVotersKeepTheMarkAndTheIncumbent"}},
+	{"mark_not_restored", []string{"TestAMarkSurvivesTheVotersRestart"}},
+	{"restored_boot_fresh", []string{"TestARestoredIncumbentIsNamedOnceHeardAgain"}},
+	{"retired_not_restored", []string{"TestRetiredBootsSurviveTheVotersRestart"}},
+	{"mark_write_on_grant_path", []string{"TestAFailingMarkWriteHoldsNoRenewal"}},
+	{"retired_reply_counted", []string{"TestAReplyFromARetiredBootCountsNothingAndMarks", "TestACopyPausedOrHungAtTheClearIsMarkedWhenItReturns"}},
+	{"release_ignores_gen", []string{"TestAHoldAVoterForgotEndsOnTheClear"}},
+	{"clear_gen_not_bumped", []string{"TestAHoldEndsOnlyOnALaterClear"}},
+	{"clear_gen_ignores_holds", []string{"TestAClearFreesAHoldWhenAMemberIsRestoredFromABackup"}},
+	// #1144 review.
+	{"clear_ignores_held", []string{"TestAClearFreesAHoldNoMemberMarksAnyMore"}},
+	{"retired_reply_unmatched", []string{"TestALateReplyFromARetiredBootMarksNothing"}},
+	{"hold_gen_reset_on_boot", []string{"TestAHoldIsSetUnderTheHighestGenerationSeen"}},
+	{"spare_failure_unwritten", []string{"TestAFailedSpareWriteIsWrittenOver"}},
+	// #1144 re-check.
+	{"hold_gen_ignores_seen", []string{"TestAHoldSetBetweenTheCheckAndTheClearEndsOnTheClear"}},
+	{"done_ignores_held", []string{"TestAClearIsNotDoneWhileTheControllerIsHeld"}},
 	// Outside the quorum tree (rowPkgs): the operator-intent log's late-
 	// start lapse (#1030, #1032 reviews) and the pair's alarm acks (#710
 	// PR 3b-2c).

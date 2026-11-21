@@ -77,19 +77,25 @@ type VoterState struct {
 	// one across restarts and a box change, until an operator turns it
 	// back. Only a spare's file is written in format 6.
 	Spare bool
+	// Dups are the voter's duplicate records (#1029 3c-3b): the names it
+	// marks, the boots an operator's clear retired, the clear
+	// generations. Only a file with a record is written in format 7.
+	Dups []DupRecord
 }
 
 const stateMagic = "nqv"
 
 // stateVersion is the state file's format: 2 since VoterState.Lease, 3
-// since Owner and Cluster, 4 since Box, 5 since GrantNonce, 6 since Spare.
-// Only a spare's file is written as 6; every other is still 5, so a
-// member that is no spare can go back to an earlier release. A version-4
+// since Owner and Cluster, 4 since Box, 5 since GrantNonce, 6 since Spare,
+// 7 since Dups. Only a file with a duplicate record is written as 7, and
+// only a spare's without one as 6; every other is still 5, so a member
+// with neither can go back to an earlier release. A version-4
 // file still reads (GrantNonce 0, as before it was kept), so an upgrade
 // keeps the voter's promises; a file of any other version reads as
 // ErrVersion, not as corrupt.
 const (
-	stateVersion      = 6
+	stateVersion      = 7
+	stateVersionSpare = 6 // a spare's file with no duplicate record
 	stateVersionPlain = 5 // what a file without the spare flag is written as
 )
 
@@ -118,9 +124,20 @@ func (s VoterState) MarshalBinary() ([]byte, error) {
 	p = putString(p, s.Box)
 	p = binary.BigEndian.AppendUint64(p, s.GrantNonce)
 	version := byte(stateVersionPlain)
-	if s.Spare || mut("state_always_v6") {
-		version = stateVersion
+	if s.Spare || len(s.Dups) > 0 || mut("state_always_v6") {
+		version = stateVersionSpare
 		p = append(p, boolByte(s.Spare))
+	}
+	if len(s.Dups) > 0 {
+		version = stateVersion
+		p = append(p, byte(len(s.Dups)))
+		for _, r := range s.Dups {
+			p = putString(p, string(r.Name))
+			p = append(p, boolByte(r.Marked))
+			p = binary.BigEndian.AppendUint64(p, r.Gen)
+			p = putBoots(p, r.Boots)
+			p = putBoots(p, r.Retired)
+		}
 	}
 	b := append([]byte(stateMagic), version)
 	b = binary.BigEndian.AppendUint32(b, uint32(len(p)))
@@ -161,9 +178,44 @@ func (s *VoterState) UnmarshalBinary(b []byte) error {
 	if version >= 6 {
 		v.Spare = rd.boolean()
 	}
+	if version >= 7 {
+		k := int(rd.byte1())
+		if k == 0 || k > maxDupRecords {
+			rd.bad = true
+		}
+		for i := 0; i < k && !rd.bad; i++ {
+			r := DupRecord{Name: NodeID(rd.str()), Marked: rd.boolean(), Gen: rd.u64()}
+			r.Boots, r.Retired = rd.boots(), rd.boots()
+			v.Dups = append(v.Dups, r)
+		}
+	}
 	if rd.bad || len(rd.b) != 0 || flags&^3 != 0 || v.Lease < 0 {
 		return ErrCorrupt
 	}
 	*s = v
 	return nil
+}
+
+// putBoots appends a list of boots: a count byte, then each nonce and Seq.
+func putBoots(p []byte, bs []BootSeq) []byte {
+	p = append(p, byte(len(bs)))
+	for _, b := range bs {
+		p = binary.BigEndian.AppendUint64(p, b.Nonce)
+		p = binary.BigEndian.AppendUint64(p, b.Seq)
+	}
+	return p
+}
+
+// boots reads a list putBoots wrote, of at most maxRetired.
+func (r *reader) boots() []BootSeq {
+	n := int(r.byte1())
+	if n > maxRetired {
+		r.bad = true
+		return nil
+	}
+	var out []BootSeq
+	for i := 0; i < n && !r.bad; i++ {
+		out = append(out, BootSeq{Nonce: r.u64(), Seq: r.u64()})
+	}
+	return out
 }
