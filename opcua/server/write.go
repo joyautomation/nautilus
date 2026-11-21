@@ -449,7 +449,7 @@ func writeAttributes(srv *opcserver.Server, ns *namespace, sc *uasc.SecureChanne
 		ops, at = nil, nil
 	}
 	if len(ops) > 0 {
-		for k, err := range ns.rt.Tags().Write(ops) {
+		for k, err := range ns.rt.Tags().WriteAs(ops, "opcua") {
 			results[at[k]] = frontDoorStatus(err)
 			if err != nil {
 				details[at[k]] = err.Error()

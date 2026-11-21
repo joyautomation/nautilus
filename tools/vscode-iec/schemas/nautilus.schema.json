@@ -97,6 +97,18 @@
       "$ref": "#/definitions/sparkplug",
       "description": "Republish the tag store as a Sparkplug B edge node."
     },
+    "parameters": {
+      "type": "object",
+      "description": "How operator-tuned setpoint values get back to Git (#718). Absent, drift is only reported (GET /api/parameters).",
+      "additionalProperties": false,
+      "properties": {
+        "writeBack": {
+          "enum": ["off", "patch", "commit"],
+          "default": "off",
+          "description": "off: report only. patch: GET /api/parameters/patch returns the plant-ahead values as a patch. commit: a controller running from a git checkout commits them itself (one commit per editor, after 30 s of quiet or 50 pending), editing only each tag's init:."
+        }
+      }
+    },
     "retain": {
       "type": [
         "object",

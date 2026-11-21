@@ -401,6 +401,9 @@ type Options struct {
 	// parameters of the device on a port, and writes of them through its
 	// master. naut run wires the project's port devices into it.
 	Params *ParamHook
+	// ParamWriteBack is how operator-tuned setpoints get back to the repo
+	// (#718 slice 2); nil is mode off.
+	ParamWriteBack *ParamWriteBack
 
 	// HMI, when set, serves a built HMI — a SvelteKit `adapter-static`
 	// build, or any other static SPA bundle — at "/", so the controller is
@@ -559,9 +562,10 @@ type Server struct {
 	historian   string
 	historyFn   func() *ProgramHistory
 	sourcesAt   func(sha string) (map[string]string, error)
-	io          *IOHook    // live I/O configuration (ioconfig.go); nil: none
-	params      *ParamHook // IO-Link device parameters (params.go); nil: none
-	staging     ioStaging  // its staged candidates
+	paramWB     *ParamWriteBack // parameter write-back (#718); nil: off
+	io          *IOHook         // live I/O configuration (ioconfig.go); nil: none
+	params      *ParamHook      // IO-Link device parameters (params.go); nil: none
+	staging     ioStaging       // its staged candidates
 	hmi         fs.FS
 	alarms      *alarm.Engine
 	shelveTimes []time.Duration
@@ -678,6 +682,7 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 		s.historyFn = opts[0].History
 		s.sourcesAt = opts[0].SourcesAt
 		s.io = opts[0].IO
+		s.paramWB = opts[0].ParamWriteBack
 		s.params = opts[0].Params
 		s.hmi = opts[0].HMI
 		s.alarms = opts[0].Alarms
@@ -862,6 +867,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/state", s.handleState)
 	mux.HandleFunc("GET /api/meta", s.handleMeta)
 	mux.HandleFunc("GET /api/parameters", s.handleParameters)
+	mux.HandleFunc("GET /api/parameters/patch", s.handleParametersPatch)
 	mux.HandleFunc("GET /api/drivers", s.handleDrivers)
 	// Alarms: always registered, 404 when no engine — see server/alarms.go.
 	// Registering them unconditionally is what makes "this controller has
@@ -1706,9 +1712,66 @@ func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
 // resolved.
 func (s *Server) handleParameters(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	ps := s.rt.Parameters()
+	mode := "off"
+	if wb := s.paramWB; wb != nil {
+		if wb.Mode != "" {
+			mode = wb.Mode
+		}
+		if wb.Unwritable != nil {
+			why := wb.Unwritable()
+			for i := range ps {
+				if ps[i].Pending() {
+					ps[i].Unwritable = why[ps[i].Name]
+				}
+			}
+		}
+	}
 	json.NewEncoder(w).Encode(struct {
+		WriteBack  string              `json:"writeBack"`
 		Parameters []runtime.Parameter `json:"parameters"`
-	}{s.rt.Parameters()})
+	}{mode, ps})
+}
+
+// ParamWriteBack is the controller's way of putting plant-ahead parameter
+// values back in the repo (#718): the mode, the patch of what a commit
+// would write, and why some parameters cannot be written.
+type ParamWriteBack struct {
+	Mode string // off | patch | commit
+	// Patch is the plant-ahead values as a patch ("" when nothing would
+	// change). An error wrapping ErrIOCommitRefused is a 409.
+	Patch func() (string, error)
+	// Unwritable is, by parameter name, why a pending one is left as drift.
+	Unwritable func() map[string]string
+}
+
+// handleParametersPatch is GET /api/parameters/patch: what a commit would
+// write, as a patch for `git apply`, for a controller with no repo. It
+// returns whole files' lines, so it needs the edit permission.
+func (s *Server) handleParametersPatch(w http.ResponseWriter, r *http.Request) {
+	if code, msg := s.authorizeWrite(r); code != 0 {
+		writeJSON(w, code, map[string]string{"error": msg})
+		return
+	}
+	wb := s.paramWB
+	if wb == nil || wb.Patch == nil || wb.Mode == "" || wb.Mode == "off" {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "parameters.writeBack is off: set it to patch or commit in nautilus.yaml to get tuned values back as a patch"})
+		return
+	}
+	p, err := wb.Patch()
+	switch {
+	case errors.Is(err, ErrIOCommitRefused):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
+		return
+	case err != nil:
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	case p == "":
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "nothing to patch: no parameter is ahead of the repo (or the ones that are cannot be written: GET /api/parameters says why)"})
+		return
+	}
+	w.Header().Set("Content-Type", "text/x-diff; charset=utf-8")
+	_, _ = w.Write([]byte(p))
 }
 
 func shelveSeconds(ds []time.Duration) []int {
@@ -1893,7 +1956,7 @@ func (s *Server) handleWriteTag(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if member || enum {
-		s.frontDoor(w, req, false)
+		s.frontDoor(w, req, false, s.principalOf(r))
 		return
 	}
 	// Whole-tag scalar write. JSON numbers decode to float64; booleans to
@@ -1929,7 +1992,7 @@ func (s *Server) handleWriteTag(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "value must be a number or boolean", http.StatusUnprocessableEntity)
 		return
 	}
-	s.frontDoor(w, req, true)
+	s.frontDoor(w, req, true, s.principalOf(r))
 }
 
 // frontDoor applies one write through the runtime's front door
@@ -1944,8 +2007,8 @@ func (s *Server) handleWriteTag(w http.ResponseWriter, r *http.Request) {
 // it cannot be born retyped (#421 on the output a Sparkplug host commands
 // through). Only a tag with no declared type at all, which has nothing to
 // convert against, is written as it comes.
-func (s *Server) frontDoor(w http.ResponseWriter, req writeTagRequest, whole bool) {
-	err := s.rt.Tags().Write([]runtime.WriteOp{{Path: req.Name, Value: req.Value}})[0]
+func (s *Server) frontDoor(w http.ResponseWriter, req writeTagRequest, whole bool, by string) {
+	err := s.rt.Tags().WriteAs([]runtime.WriteOp{{Path: req.Name, Value: req.Value}}, by)[0]
 	if whole && errors.Is(err, runtime.ErrUndefined) {
 		if t := s.rt.Tags().TypeOf(req.Name); t != nil {
 			var nv ir.Value

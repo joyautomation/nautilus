@@ -93,6 +93,9 @@ type Manifest struct {
 	// Both are wired by `naut run` — check/build/LSP only validate.
 	Retain     *RetainConfig     `yaml:"retain"`
 	Redundancy *RedundancyConfig `yaml:"redundancy"`
+	// Parameters is how operator-tuned setpoint values get back to the
+	// repo (#718 slice 2). Absent, nothing is ever written to it.
+	Parameters *ParametersConfig `yaml:"parameters"`
 	// Audit places the runtime audit journal `naut run` always keeps
 	// (#709); absent takes the defaults.
 	Audit *AuditConfig `yaml:"audit"`
@@ -288,6 +291,31 @@ type RetainConfig struct {
 	File string `yaml:"file"`
 	// ConfigMap is the in-cluster store's name (default <name>-retain).
 	ConfigMap string `yaml:"configmap"`
+}
+
+// ParametersConfig is the manifest's parameters: section (#718).
+type ParametersConfig struct {
+	// WriteBack: "off" (the default) keeps drift to a report; "patch" has
+	// GET /api/parameters/patch hand the plant-ahead values out as a patch
+	// to apply by hand; "commit" also has a controller that runs from a git
+	// checkout commit them to the repo, a commit per editor, after a quiet
+	// period.
+	WriteBack string `yaml:"writeBack"`
+}
+
+// WriteBack modes.
+const (
+	WriteBackOff    = "off"
+	WriteBackPatch  = "patch"
+	WriteBackCommit = "commit"
+)
+
+// WriteBackMode is the manifest's write-back mode, "off" when absent.
+func (m *Manifest) WriteBackMode() string {
+	if m.Parameters == nil || m.Parameters.WriteBack == "" {
+		return WriteBackOff
+	}
+	return m.Parameters.WriteBack
 }
 
 // AuditConfig places the runtime audit journal (#709). `naut run` always
@@ -1116,7 +1144,9 @@ type Project struct {
 	// load projects too, and must not touch a cluster to do it.
 	Retain     *RetainConfig
 	Redundancy *RedundancyConfig
-	Audit      *AuditConfig
+	// WriteBack is parameters.writeBack: off, patch or commit (#718).
+	WriteBack string
+	Audit     *AuditConfig
 	// Auth is the compiled auth: block, or nil when the manifest has none.
 	Auth *auth.Policy
 	// AuthStateDir is the auth: block's state-dir (where the users file
@@ -1268,6 +1298,13 @@ func ReadManifest(fsys fs.FS, name string) (*Manifest, error) {
 			return nil, fmt.Errorf("%s: devices: %w", name, err)
 		}
 		m.devices = set
+	}
+	if m.Parameters != nil {
+		switch m.Parameters.WriteBack {
+		case "", WriteBackOff, WriteBackPatch, WriteBackCommit:
+		default:
+			return nil, fmt.Errorf("%s: parameters.writeBack %q is not one of off, patch, commit", name, m.Parameters.WriteBack)
+		}
 	}
 	if err := composeTags(fsys, &m, name); err != nil {
 		return nil, err
@@ -1646,6 +1683,7 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 		devices:     m.devices,
 		OPCUA:       m.OPCUA,
 		Retain:      m.Retain,
+		WriteBack:   m.WriteBackMode(),
 		Audit:       m.Audit,
 		Auth:        m.authPolicy,
 		Redundancy:  m.Redundancy,

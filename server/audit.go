@@ -114,6 +114,8 @@ var actionClass = map[string]string{
 	// A parameter is written to the device on an IO-Link port, through its
 	// master: a change to a device, like a configuration apply.
 	"param.write": strict,
+	// A tuned setpoint put back in the repo by the controller itself.
+	"param.commit": strict,
 	// Cancelling a pending revert keeps a change its device has not
 	// answered: it overrides a safeguard the apply asked for.
 	"config.revert.cancel": strict,

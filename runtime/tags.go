@@ -78,6 +78,9 @@ type Tags struct {
 	// stay inside (TagMeta.Min/Max, #718). Set once in New, read-only
 	// after; only Write consults it.
 	ranges map[string]TagRange
+	// paramNote, when set, hears each external write that landed: the
+	// parameters' edit attribution (#718). Set once in New.
+	paramNote func(path, by string)
 	// divZero counts every integer or REAL division (or MOD) by zero the
 	// VM has evaluated against this store, controller-wide, since start
 	// (ir.DivZeroCounter). Surfaced as ScanStats.DivZero.

@@ -202,7 +202,8 @@ check comes before the token check. See [Online edits](/guides/online-edits/).
 | `GET` | [`/api/state`](#get-apistate) | One snapshot: every tag, the scan diagnostics, quality, forces, alarm counts |
 | `GET` | [`/api/stream`](#get-apistream) | The same snapshot as Server-Sent Events, every 250 ms |
 | `GET` | [`/api/meta`](#get-apimeta) | Tag types, units and descriptions, the I/O lists, capability flags |
-| `GET` | [`/api/parameters`](#get-apiparameters) | The setpoint parameters: value, manifest `init:`, range, whether the plant and the repo agree |
+| `GET` | [`/api/parameters`](#get-apiparameters) | The setpoint parameters: value, manifest `init:`, range, whether the plant and the repo agree, who edited |
+| `GET` | [`/api/parameters/patch`](#get-apiparametersrpatch) | The plant-ahead values as a patch to the manifest (needs `parameters.writeBack`) |
 | `GET` | [`/api/drivers`](#get-apidrivers) | Field driver and publisher status |
 | `GET` | [`/api/cluster`](#get-apicluster) | This replica's redundancy status |
 | `POST` | [`/api/tags`](#post-apitags) | Write one tag or one member |
@@ -424,6 +425,43 @@ own writes are never refused or clamped (that would change what the logic
 does); a value it puts outside the range shows as `outOfRange`. The manifest
 refuses an `init:` outside its own range, `min` above `max`, and a range on
 anything but a setpoint.
+
+Each row also carries `editedBy` and `editedAtMs` (who last wrote the value
+from outside the logic: `user:…`, `token:…`, `sparkplug`, `opcua`, or
+`external`), `committed: true` for a plant-ahead value a write-back commit has
+already put in the repo (it waits for a redeploy), and `unwritable` when the
+write-back cannot edit its `init:`. The answer's `writeBack` is the manifest's
+mode.
+
+### Writing tuned values back to Git
+
+```yaml
+parameters:
+  writeBack: commit   # off (default) | patch | commit
+```
+
+`off` only reports. With `patch`, `GET /api/parameters/patch` returns the
+plant-ahead values as a patch for `git apply`. With `commit`, a controller
+that runs from a git checkout (`naut run` on the project directory) commits
+them itself, 30 seconds after the last edit, or at once from 50 pending: one
+commit per editor, authored as that editor (the committer is the controller),
+each changing only that tag's `init:` in place: comments and layout stay. A
+controller built into a binary has no repo, and answers as `patch`.
+
+There is no queue. What would be written is the set of plant-ahead
+parameters, so a restart or a standby takeover finds the same set. A
+`repo-ahead` or `conflict` value is never written: a person decides. A value
+that cannot be edited in place (its tag comes from a device profile, or its
+`init:` is quoted or not a plain number or boolean, or the file's `init:` is
+no longer what runs) stays drift and `unwritable` says why. A commit is
+refused (and retried a minute later) on a detached HEAD or over uncommitted
+changes in the files it would touch. Each commit is journalled as
+`param.commit`, by `system`, naming the editor and the commit.
+
+### `GET /api/parameters/patch`
+
+The patch, `text/x-diff`, needs the edit permission. `409` when `writeBack` is
+`off`, when this controller is a standby, or when nothing differs.
 
 ### `GET /api/drivers`
 

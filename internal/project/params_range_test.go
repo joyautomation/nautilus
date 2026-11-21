@@ -3,6 +3,7 @@ package project
 import (
 	"strings"
 	"testing"
+	"testing/fstest"
 )
 
 // min/max are declared on a setpoint, the manifest refuses nonsense about
@@ -36,6 +37,32 @@ func TestTagRangeDeclaration(t *testing.T) {
 		}
 		if err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: err = %v, want %q", c.name, err, c.want)
+		}
+	}
+}
+
+// parameters.writeBack takes off|patch|commit; anything else is refused
+// with the choices named (#718 slice 2).
+func TestParametersWriteBackMode(t *testing.T) {
+	for _, c := range []struct{ yaml, want, mode string }{
+		{"", "", "off"},
+		{"parameters:\n  writeBack: patch\n", "", "patch"},
+		{"parameters:\n  writeBack: commit\n", "", "commit"},
+		{"parameters:\n  writeBack: off\n", "", "off"},
+		{"parameters: {}\n", "", "off"},
+		{"parameters:\n  writeBack: auto\n", "not one of off, patch, commit", ""},
+		{"parameters:\n  writeback: commit\n", "writeback", ""},
+	} {
+		fsys := fstest.MapFS{"nautilus.yaml": {Data: []byte("name: x\ntasks:\n  - program: main.st\n" + c.yaml)}}
+		m, err := ReadManifest(fsys, "")
+		if c.want != "" {
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Errorf("%q: err = %v, want %q", c.yaml, err, c.want)
+			}
+			continue
+		}
+		if err != nil || m.WriteBackMode() != c.mode {
+			t.Errorf("%q: mode %v, err %v, want %s", c.yaml, m, err, c.mode)
 		}
 	}
 }

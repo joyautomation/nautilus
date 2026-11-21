@@ -166,7 +166,7 @@ func (n *Node) writeCommand(name string, v any) error {
 		// to parse (a TIME literal, a number).
 		return fmt.Errorf("tag %s: a String metric (%q) for a tag that is not a STRING: %w", name, s, ir.ErrTypeMismatch)
 	}
-	err := tags.Write([]runtime.WriteOp{{Path: name, Value: v}})[0]
+	err := tags.WriteAs([]runtime.WriteOp{{Path: name, Value: v}}, "sparkplug")[0]
 	if !errors.Is(err, runtime.ErrUndefined) || strings.ContainsRune(name, '.') {
 		return err
 	}
@@ -358,7 +358,7 @@ func (n *Node) commandTemplate(j *cmdJournal, id Identity, idOK bool, m Metric) 
 		}
 	}
 	written := 0
-	for i, err := range tags.Write(ops) {
+	for i, err := range tags.WriteAs(ops, "sparkplug") {
 		if err != nil {
 			reason := writeRefusal(err)
 			if strings.Contains(err.Error(), "unknown member") { // ir's error for it is untyped
