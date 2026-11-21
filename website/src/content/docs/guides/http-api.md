@@ -203,7 +203,7 @@ check comes before the token check. See [Online edits](/guides/online-edits/).
 | `GET` | [`/api/stream`](#get-apistream) | The same snapshot as Server-Sent Events, every 250 ms |
 | `GET` | [`/api/meta`](#get-apimeta) | Tag types, units and descriptions, the I/O lists, capability flags |
 | `GET` | [`/api/parameters`](#get-apiparameters) | The setpoint parameters: value, manifest `init:`, range, whether the plant and the repo agree, who edited |
-| `GET` | [`/api/parameters/patch`](#get-apiparametersrpatch) | The plant-ahead values as a patch to the manifest (needs `parameters.writeBack`) |
+| `GET` | [`/api/parameters/patch`](#get-apiparameterspatch) | The plant-ahead values as a patch to the manifest (needs `parameters.writeBack`) |
 | `GET` | [`/api/drivers`](#get-apidrivers) | Field driver and publisher status |
 | `GET` | [`/api/cluster`](#get-apicluster) | This replica's redundancy status |
 | `POST` | [`/api/tags`](#post-apitags) | Write one tag or one member |
