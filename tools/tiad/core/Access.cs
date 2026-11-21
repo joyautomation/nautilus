@@ -208,7 +208,7 @@ namespace Tiad
 
         // Reused is the refusal when TIA will not take the secret as the
         // found user's new password.
-        public const string Reused = "TIA refuses secrets.fullAccessPassword for the user \"nautilus\": that password was used recently on this project (TIA blocks a user's recent passwords, the current one included, and this project carries no record that tiad set it): choose another password, or make the project again (POST /v1/projects)";
+        public const string Reused = "TIA refuses secrets.fullAccessPassword for the user \"nautilus\": TIA blocks a user's recent passwords for reuse (the current one included, when tiad has no record of having set it in this project): choose another password, or make the project again (POST /v1/projects)";
 
         // Run does what want asks. fingerprint is AccessKey's of password.
         // madeCpu is the CPU the apply made (true) or kept (false); into

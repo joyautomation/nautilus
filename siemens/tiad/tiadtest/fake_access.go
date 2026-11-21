@@ -30,7 +30,7 @@ const NoFullAccess = "Users and roles: At least one user must have the following
 const (
 	UnchangedUserNote = `the project's user "nautilus" has the runtime right Full access (role "nautilus full access"); its password is unchanged: secrets.fullAccessPassword is the one tiad last set`
 	SetUserNote       = `the project's user "nautilus" has the runtime right Full access (role "nautilus full access"); its password is now secrets.fullAccessPassword`
-	ReusedPassword    = `TIA refuses secrets.fullAccessPassword for the user "nautilus": that password was used recently on this project (TIA blocks a user's recent passwords, the current one included, and this project carries no record that tiad set it): choose another password, or make the project again (POST /v1/projects)`
+	ReusedPassword    = `TIA refuses secrets.fullAccessPassword for the user "nautilus": TIA blocks a user's recent passwords for reuse (the current one included, when tiad has no record of having set it in this project): choose another password, or make the project again (POST /v1/projects)`
 )
 
 // fingerprint stands in for the agent's keyed fingerprint (AccessKey):
