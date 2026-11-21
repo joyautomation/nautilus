@@ -75,6 +75,14 @@ namespace Tiad
         }
     }
 
+    // FingerprintRead is what TIA's fingerprint service returned, as TIA
+    // names it, and the certificate questions answered trusted blindly.
+    public sealed class FingerprintRead
+    {
+        public List<KeyValuePair<string, string>> Items = new List<KeyValuePair<string, string>>();
+        public List<string> TrustedBlindly = new List<string>();
+    }
+
     public sealed class SoftwareResult
     {
         public List<SourceResult> Results = new List<SourceResult>();
@@ -239,6 +247,13 @@ namespace Tiad
         // online read is proven (section 3.8). The agent then refuses an
         // online call to a pinned address, since the pin cannot be checked.
         DeviceIdentity Identify(object project, string address);
+
+        // ReadFingerprint reads, read-only, what TIA's fingerprint service
+        // reports for the CPU at address, with no project (#789 S2b stage
+        // 1). With trustUnverifiedCertificate, the request's explicit
+        // opt-in, a TLS certificate question is answered trusted, blindly;
+        // anything else TIA asks fails the read.
+        FingerprintRead ReadFingerprint(string address, bool trustUnverifiedCertificate);
 
         // Save saves the project, or writes a project archive, and returns
         // its full path.

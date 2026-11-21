@@ -1443,6 +1443,16 @@ namespace Tiad.Fake
             return script.NoIdentify ? null : script.Device;
         }
 
+        public FingerprintRead ReadFingerprint(string address, bool trustUnverifiedCertificate)
+        {
+            script.Enter("ReadFingerprint");
+            var r = new FingerprintRead();
+            if (script.NoIdentify) return r;
+            r.Items.Add(new KeyValuePair<string, string>("OrderNumber", script.Device.Order));
+            r.Items.Add(new KeyValuePair<string, string>("FirmwareVersion", script.Device.Firmware));
+            return r;
+        }
+
         public string Save(object project, bool archive)
         {
             script.Enter("Save");

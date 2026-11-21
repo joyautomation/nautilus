@@ -31,6 +31,65 @@ namespace Tiad
         {
             r.Add("GET", "/v1/pins", ListPins);
             r.Add("POST", "/v1/pins/{address}", SetPin);
+            r.Add("POST", "/v1/identify", Identify);
+        }
+
+        // Identify reads, read-only, what TIA's fingerprint service reports
+        // for the CPU at address (#789 S2b stage 1): no project, no pin set
+        // or checked, no CPU claimed. It reaches the CPU, so it must be
+        // announced, and it is audited with every value TIA returned (the
+        // agent's log is the machine's own).
+        object Identify(Call c)
+        {
+            NeedTia();
+            var r = c.Json();
+            string address = r.Str("address");
+            bool trust = r.Bool("trustUnverifiedCertificate");
+            bool announced = r.Bool("announced");
+            r.Done();
+            if (!Ip.IsIPv4(address)) throw TiadException.BadRequest("identify: address {0} is not an IPv4 address", Json.Quote(address));
+            if (!Target(address)) throw new TiadException(403, Kinds.TargetRefused, address + " is not in TIAD_TARGETS");
+            if (!announced) throw TiadException.BadRequest("{0}", "identify: announce it first (announced: true): it reaches the CPU");
+            string outcome = "";
+            FingerprintRead read = null;
+            try
+            {
+                read = OnTia(delegate(ITia t) { return t.ReadFingerprint(address, trust); });
+                outcome = "ok";
+            }
+            catch (TiadException e)
+            {
+                outcome = e.Kind;
+                throw;
+            }
+            catch (Exception)
+            {
+                outcome = "error";
+                throw;
+            }
+            finally
+            {
+                var items = new List<string>();
+                if (read != null)
+                {
+                    foreach (KeyValuePair<string, string> kv in read.Items) items.Add(Json.Quote(kv.Key) + "=" + Json.Quote(kv.Value));
+                }
+                Log.Line("audit identify address={0} announced={1} trustUnverifiedCertificate={2} trustedBlindly={3} items=[{4}] outcome={5}",
+                    Json.Quote(address), announced, trust, read == null ? 0 : read.TrustedBlindly.Count, string.Join(", ", items.ToArray()), outcome);
+            }
+            var list = new List<object>();
+            foreach (KeyValuePair<string, string> kv in read.Items)
+            {
+                var x = new Obj();
+                x["identifier"] = kv.Key;
+                x["value"] = kv.Value;
+                list.Add(x);
+            }
+            var o = new Obj();
+            o["address"] = address;
+            o["items"] = list;
+            o["trustedBlindly"] = read.TrustedBlindly.ToArray();
+            return o;
         }
 
         static Obj PinJson(string address, DeviceIdentity d)

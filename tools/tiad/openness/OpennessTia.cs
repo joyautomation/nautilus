@@ -33,6 +33,7 @@ using Siemens.Engineering.Compiler;
 using Siemens.Engineering.Connection;
 using Siemens.Engineering.Download;
 using Siemens.Engineering.Download.Configurations;
+using Siemens.Engineering.FingerprintData;
 using Siemens.Engineering.HW;
 using Siemens.Engineering.HW.Features;
 using Siemens.Engineering.Online;
@@ -93,7 +94,15 @@ namespace Tiad.Openness
             this.gone = gone;
             answers = new OnlineAnswers(trustUnverifiedCertificate);
             this.address = address;
-            cc.OnlineLegitimation += Handle;
+            if (cc != null) cc.OnlineLegitimation += Handle;
+        }
+
+        // ForCallback answers the questions of a call that takes its own
+        // OnlineConfigurationDelegate (GetFingerprintData) instead of the
+        // connection's OnlineLegitimation event: pass Handle to it.
+        public static OnlineAsks ForCallback(bool trustUnverifiedCertificate, string address)
+        {
+            return new OnlineAsks(null, delegate { }, trustUnverifiedCertificate, address);
         }
 
         // Stop detaches the handler and never throws: TIA may be gone
@@ -104,6 +113,7 @@ namespace Tiad.Openness
         // (OnlineAnswers), and TIA counts as gone.
         public void Stop()
         {
+            if (cc == null) return;
             if (!answers.Stop(delegate { cc.OnlineLegitimation -= Handle; }, "online: detaching tiad's online handler from TIA")) gone();
         }
 
@@ -115,7 +125,7 @@ namespace Tiad.Openness
         // recorded as a question answered no (the operation fails), and
         // TIA gets Boundary.Fail's exception, never a tiad type
         // (OnlineRecord.Handle, in core).
-        void Handle(OnlineConfiguration c)
+        public void Handle(OnlineConfiguration c)
         {
             record.Handle(delegate { return c.GetType().Name; }, delegate(string type, OnlineRecord.Call call) { Answer(c, type, call); });
         }
@@ -1448,6 +1458,48 @@ namespace Tiad.Openness
         public DeviceIdentity Identify(object project, string address)
         {
             return null;
+        }
+
+        // ReadFingerprint asks TIA's fingerprint service, which the portal
+        // serves (not a project), for the CPU at address. Read-only: no
+        // project is opened and nothing is written. Every question TIA asks
+        // is recorded; one answered no fails the read even if TIA went on.
+        public FingerprintRead ReadFingerprint(string address, bool trustUnverifiedCertificate)
+        {
+            return Tia(delegate
+            {
+                FingerprintDataProvider fp = portal.GetService<FingerprintDataProvider>();
+                if (fp == null) throw new TiaException("TIA serves no FingerprintDataProvider");
+                ConfigurationPcInterface pc = PcInterface(fp.Configuration);
+                var targets = new List<string>();
+                foreach (ConfigurationTargetInterface t in pc.TargetInterfaces) targets.Add(t.Name);
+                Log.Line("identify: PC interface {0}, target interfaces [{1}]", TiaNames.LogSafe(pc.Name), TiaNames.LogSafe(string.Join(", ", targets.ToArray())));
+                ConfigurationAddress at = targets.Count > 0 ? TargetInterface(pc).Addresses.Create(address) : pc.Addresses.Create(address);
+                var online = OnlineAsks.ForCallback(trustUnverifiedCertificate, address);
+                var r = new FingerprintRead();
+                FingerprintDataResult res;
+                try
+                {
+                    res = fp.GetFingerprintData(at, online.Handle);
+                }
+                catch (TiaException)
+                {
+                    throw;
+                }
+                catch (Exception e)
+                {
+                    TiaException refused = online.Explain(address, e);
+                    if (refused != null) throw refused;
+                    throw new TiaException(Message(e), e);
+                }
+                online.Check(address, "fingerprint read");
+                r.TrustedBlindly.AddRange(online.TrustedBlindly);
+                foreach (FingerprintDataItem it in res.FingerprintDataItems)
+                {
+                    r.Items.Add(new KeyValuePair<string, string>(it.FingerprintDataIdentifier ?? "", it.FingerprintDataValue ?? ""));
+                }
+                return r;
+            });
         }
 
         // ---- upload ----
