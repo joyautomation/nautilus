@@ -52,7 +52,7 @@ func TestResolve(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			u, d := Resolve(c.qs, c.d, c.protection, c.configPassword, false)
+			u, d := Resolve(c.qs, c.d, c.protection, c.configPassword, false, ResetGate{})
 			if ids(u) != c.unanswered || ids(d) != c.declined {
 				t.Fatalf("Resolve = unanswered %q declined %q, want %q %q", ids(u), ids(d), c.unanswered, c.declined)
 			}
@@ -88,13 +88,13 @@ func TestResolveSoftwareLoadFamily(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			u, d := Resolve([]Question{{ID: c.q}}, c.d, true, true, c.kept)
+			u, d := Resolve([]Question{{ID: c.q}}, c.d, true, true, c.kept, ResetGate{})
 			if ids(u) != c.unanswered || ids(d) != c.declined {
 				t.Fatalf("Resolve = unanswered %q declined %q, want %q %q", ids(u), ids(d), c.unanswered, c.declined)
 			}
 		})
 	}
-	u, _ := Resolve([]Question{{ID: QuestionUserManagement}}, Decisions{UserManagementKeepOnline: Yes()}, false, false, false)
+	u, _ := Resolve([]Question{{ID: QuestionUserManagement}}, Decisions{UserManagementKeepOnline: Yes()}, false, false, false, ResetGate{})
 	if len(u) != 1 || !strings.Contains(u[0].Message, "a keep spec on a session that never set access control") {
 		t.Fatalf("a refused keep must name why: %+v", u)
 	}
@@ -112,7 +112,7 @@ func TestResolveSoftwareLoadFamily(t *testing.T) {
 
 func TestResolveNamesTheMissingDB(t *testing.T) {
 	q := Question{ID: QuestionReinitialize, Message: "Reinitialise", Objects: []string{"Tags", "Prog_DB"}}
-	u, _ := Resolve([]Question{q}, Decisions{Reinitialize: []string{"Tags"}}, false, false, false)
+	u, _ := Resolve([]Question{q}, Decisions{Reinitialize: []string{"Tags"}}, false, false, false, ResetGate{})
 	if len(u) != 1 || !strings.Contains(u[0].Message, "not agreed: Prog_DB") {
 		t.Fatalf("got %+v", u)
 	}

@@ -5,8 +5,8 @@
 // request's shape (announced, dry runs included), the target allowlist,
 // one station spec per CPU, a full compile since the last change, and one
 // project per CPU, and (for a real download) the hardware opt-in with its
-// attestation (HardwareRule), the kept devices and the start-after
-// decision.
+// attestation (HardwareRule), the kept devices, a user-management reset
+// (UserManagementRule) and the start-after decision.
 // Only then does ITia.Download run. TIA asks its checks one at a time
 // (#789 S2b), so each is answered on its own, only from the request: the
 // first one the request does not answer yes cancels there. Anything that
@@ -135,7 +135,8 @@ namespace Tiad
             foreach (var n in d.Reinitialize) reinit.Add(Json.Quote(n));
             return "stopCpu=" + YesNo(d.StopCpu) + " overwrite=" + YesNo(d.Overwrite) + " consistentDownload=" + YesNo(d.ConsistentDownload) +
                 " alarmTexts=" + YesNo(d.AlarmTexts) + " allBlocks=" + YesNo(d.AllBlocks) +
-                " userManagementKeepOnline=" + YesNo(d.UserManagementKeepOnline) + " identificationDataLoadNothing=" + YesNo(d.IdentificationDataLoadNothing) +
+                " userManagementKeepOnline=" + YesNo(d.UserManagementKeepOnline) + " userManagementResetToProject=" + YesNo(d.UserManagementResetToProject) +
+                " identificationDataLoadNothing=" + YesNo(d.IdentificationDataLoadNothing) +
                 " startAfter=" + YesNo(d.StartAfter) + " reinitialize=[" + string.Join(",", reinit) + "]" +
                 " keptDevices=[" + string.Join(",", Quoted(d.KeptDevices)) + "]" +
                 " trustCertificate=" + (d.TrustCertificate == "" ? "unset" : Json.Quote(d.TrustCertificate)) +
@@ -165,10 +166,14 @@ namespace Tiad
                 // appear only as set or unset.
                 string asked = "";
                 string outcome = "";
+                // userManagementReset is what came of a reset the request
+                // asked: unset (not asked), refused, allowed:<route> (TIA
+                // never asked it) or given:<route> (written).
+                string reset = "unset";
                 var acting = new List<string>();
                 try
                 {
-                    object result = DownloadChecked(s, req, ref asked, ref outcome, acting);
+                    object result = DownloadChecked(s, req, ref asked, ref outcome, ref reset, acting);
                     return result;
                 }
                 catch (TiadException e)
@@ -183,15 +188,15 @@ namespace Tiad
                 }
                 finally
                 {
-                    Log.Line("audit download session={0} project={1} address={2} hardware={3} software={4} dryRun={5} announced={6} {7} protection={8} configurationPassword={9} attestation={10} kept=[{11}] asked=[{12}] acting=[{13}] outcome={14}",
+                    Log.Line("audit download session={0} project={1} address={2} hardware={3} software={4} dryRun={5} announced={6} {7} protection={8} configurationPassword={9} attestation={10} userManagementReset={11} kept=[{12}] asked=[{13}] acting=[{14}] outcome={15}",
                         s.Id, Json.Quote(s.Project), Json.Quote(req.Address), req.Hardware, req.Software, req.DryRun, req.Announced,
                         AuditDecisions(req.Decisions), req.Secrets.Protection == "" ? "unset" : "set",
-                        req.Secrets.ConfigurationPassword == "" ? "unset" : "set", req.Attestation.Audit(), AuditKept(s.Kept), asked, string.Join(",", Quoted(acting).ToArray()), outcome);
+                        req.Secrets.ConfigurationPassword == "" ? "unset" : "set", req.Attestation.Audit(), reset, AuditKept(s.Kept), asked, string.Join(",", Quoted(acting).ToArray()), outcome);
                 }
             });
         }
 
-        object DownloadChecked(Session s, DownloadRequest req, ref string asked, ref string outcome, List<string> acting)
+        object DownloadChecked(Session s, DownloadRequest req, ref string asked, ref string outcome, ref string resetAudit, List<string> acting)
         {
             string bad = req.Validate();
             if (bad != null) throw TiadException.BadRequest("{0}", bad);
@@ -252,6 +257,37 @@ namespace Tiad
                 kd["keptDevices"] = KeptDevice.ToJson(s.Kept);
                 throw new TiadException(409, Kinds.DecisionRequired, keptWhy + "; nothing was sent to the CPU", kd, false);
             }
+            // Kept only when the spec keeps it AND no apply on this session
+            // ever set it: keep after fullAccessUser keeps what tiad set.
+            bool accessControlKept = s.Station != null && s.Station.Cpu != null && s.Station.Cpu.AccessControl == StationRules.AccessKeep && !s.AccessControlSet;
+            // A user-management reset acts on the CPU's users and access
+            // control: a real download that asks it is checked here, before
+            // anything reaches the CPU (UserManagementRule), and the same
+            // verdict answers TIA's check below. Anything else leaves it
+            // refused. A dry run never answers.
+            var reset = new UserManagementRule.Gate();
+            if (!req.DryRun && req.Decisions.UserManagementResetToProject == true)
+            {
+                reset = UserManagementRule.Check(req, accessControlKept, s.UploadedFrom, delegate
+                {
+                    return OnSession(s, delegate(ITia t)
+                    {
+                        ProjectCpu pc = t.ReadCpu(s.Handle);
+                        return pc == null ? null : pc.AccessControl;
+                    });
+                });
+                if (!reset.Allowed)
+                {
+                    resetAudit = "refused";
+                    asked = Json.Quote(QuestionIds.UserManagement);
+                    outcome = Kinds.DecisionRequired + ":[" + asked + "]";
+                    var ud = new Obj();
+                    ud["questions"] = Question.ToJson(new List<Question> { UserManagementRule.Question(reset.Why) });
+                    ud["keptDevices"] = KeptDevice.ToJson(s.Kept);
+                    throw new TiadException(409, Kinds.DecisionRequired, reset.Why + "; nothing was sent to the CPU", ud, false);
+                }
+                resetAudit = "allowed:" + reset.Route;
+            }
             // Whether the CPU starts after loading is decided before TIA
             // is called: TIA asks it, if at all, only after loading. A dry
             // run never loads, so it needs no answer.
@@ -278,9 +314,7 @@ namespace Tiad
 
             bool haveProtection = req.Secrets.Protection != "";
             bool haveConfigurationPassword = req.Secrets.ConfigurationPassword != "";
-            // Kept only when the spec keeps it AND no apply on this session
-            // ever set it: keep after fullAccessUser keeps what tiad set.
-            bool accessControlKept = s.Station != null && s.Station.Cpu != null && s.Station.Cpu.AccessControl == StationRules.AccessKeep && !s.AccessControlSet;
+            string given = "";
             var unanswered = new List<Question>();
             var declined = new List<Question>();
             var askedQs = new List<Question>();
@@ -302,7 +336,7 @@ namespace Tiad
                 }
                 var one = new List<Question> { q };
                 int u = unanswered.Count, d = declined.Count;
-                DownloadRule.Resolve(one, req.Decisions, haveProtection, haveConfigurationPassword, accessControlKept, unanswered, declined);
+                DownloadRule.Resolve(one, req.Decisions, haveProtection, haveConfigurationPassword, accessControlKept, reset, unanswered, declined);
                 if (unanswered.Count > u || declined.Count > d)
                 {
                     cancelled = true;
@@ -311,8 +345,10 @@ namespace Tiad
                 Answer a = DownloadRule.Answers(one, req.Decisions)[0];
                 // Recorded when given, before TIA's side writes it: a write
                 // that then fails over-reports, which is the safe side.
-                // Start-after answered no (NoAction) changes nothing.
-                if (DownloadChecks.Acting(q.Id) && !(q.Id == QuestionIds.StartAfter && !a.Yes)) acting.Add(q.Id);
+                // Acting by what the answer writes (start-after no and
+                // user-management keep change nothing).
+                if (DownloadChecks.ActingAnswer(q.Id, a.Yes, a.Choice)) acting.Add(q.Id);
+                if (q.Id == QuestionIds.UserManagement && a.Choice == Answer.ChoiceReset) given = reset.Route;
                 return a;
             };
 
@@ -349,6 +385,11 @@ namespace Tiad
                     throw UnknownAfter(e, acting);
                 }
                 throw;
+            }
+            finally
+            {
+                // A reset is journalled given only once tiad answered it.
+                if (given != "") resetAudit = "given:" + given;
             }
             asked = Ids(askedQs);
 
@@ -457,6 +498,9 @@ namespace Tiad
                 // for the caller's deploy record.
                 o["attestation"] = req.Attestation.ToJson();
             }
+            // A user-management reset tiad wrote, and the route that let it
+            // (UserManagementRule), for the deploy record.
+            if (given != "") o["userManagementReset"] = given;
             // TIA's messages come back on success; on a failure they are in
             // the outcome_unknown text (DownloadDecider.Finish).
             if (result.Messages != "") o["messages"] = result.Messages;
@@ -578,6 +622,7 @@ namespace Tiad
                     s.Station = null;
                     s.Kept = new List<KeptDevice>();
                     s.Unclean = true;
+                    s.UploadedFrom = "";
                     // What this session made in the project's users and
                     // roles belongs to the station the upload replaces.
                     if (s.Made.Any)
@@ -627,6 +672,9 @@ namespace Tiad
                 OnSession(s, delegate(ITia t)
                 {
                     s.Unclean = false;
+                    // The project's CPU is now what this CPU reported
+                    // (UserManagementRule's upload route).
+                    s.UploadedFrom = address;
                     return true;
                 });
                 var o = new Obj();

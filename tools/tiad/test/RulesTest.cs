@@ -364,34 +364,34 @@ namespace Tiad.Test
 
         static void SettingsForAnswers()
         {
-            Eq(S(DownloadChecks.For("StopModules", true)), "StopAll", "stop yes");
-            Eq(S(DownloadChecks.For("StopModules", false)), null, "stop no");
-            Eq(S(DownloadChecks.For("StartModules", true)), "StartModule", "start yes");
-            Eq(S(DownloadChecks.For("StartModules", false)), "NoAction", "start no");
-            Eq(S(DownloadChecks.For("OverwriteSystemData", true)), "Overwrite", "overwrite yes");
-            Eq(S(DownloadChecks.For("OverwriteSystemData", false)), null, "overwrite no");
-            Eq(S(DownloadChecks.For("ConsistentBlocksDownload", true)), "ConsistentDownload", "consistent download yes");
-            Eq(S(DownloadChecks.For("ConsistentBlocksDownload", false)), null, "consistent download no");
-            Eq(S(DownloadChecks.For("AlarmTextLibrariesDownload", true)), "ConsistentDownload", "alarm texts yes");
-            Eq(S(DownloadChecks.For("AlarmTextLibrariesDownload", false)), null, "alarm texts no never writes NoAction");
-            Eq(S(DownloadChecks.For("AllBlocksDownload", true)), "DownloadAllBlocks", "all blocks yes");
-            Eq(S(DownloadChecks.For("AllBlocksDownload", false)), null, "all blocks no");
-            Eq(S(DownloadChecks.For("UserManagementDownload", false)), null, "user management no");
-            Eq(S(DownloadChecks.For("LoadIdentificationData", true)), "LoadNothing", "identification data yes loads nothing");
-            Eq(S(DownloadChecks.For("LoadIdentificationData", false)), null, "identification data no");
-            Eq(S(DownloadChecks.For("DataBlockReinitialization", true)), "StopPlcAndReinitialize", "reinit yes");
-            Eq(S(DownloadChecks.For("DataBlockReinitializationOrKeepActualValues", true)), "StopPlcAndReinitialize", "reinit-or-keep yes");
-            Eq(S(DownloadChecks.For("DataBlockReinitialization", false)), null, "reinit no");
-            Eq(S(DownloadChecks.For("ModuleWriteAccessPassword", true)), Setting.Password, "password yes");
-            Eq(S(DownloadChecks.For("ModuleReadAccessPassword", true)), Setting.Password, "read password yes");
-            Eq(S(DownloadChecks.For("ModuleWriteAccessPassword", false)), null, "password no");
-            Eq(S(DownloadChecks.For("PlcMasterSecretPassword", true)), Setting.ConfigurationPassword, "configuration password yes");
-            Eq(S(DownloadChecks.For("PlcMasterSecretPassword", false)), null, "configuration password no");
-            Eq(S(DownloadChecks.For("TlsVerificationConfiguration", true)), "Trusted", "certificate yes");
-            Eq(S(DownloadChecks.For("TlsVerificationConfiguration", false)), null, "certificate no");
-            Eq(S(DownloadChecks.For("ResetModule", true)), null, "an unknown configuration, yes");
-            Eq(S(DownloadChecks.For("ResetModule", false)), null, "an unknown configuration, no");
-            Eq(DownloadChecks.For("StopModules", true).Kind, Setting.Select, "a selection's kind");
+            Eq(S(DownloadChecks.For("StopModules", true, "")), "StopAll", "stop yes");
+            Eq(S(DownloadChecks.For("StopModules", false, "")), null, "stop no");
+            Eq(S(DownloadChecks.For("StartModules", true, "")), "StartModule", "start yes");
+            Eq(S(DownloadChecks.For("StartModules", false, "")), "NoAction", "start no");
+            Eq(S(DownloadChecks.For("OverwriteSystemData", true, "")), "Overwrite", "overwrite yes");
+            Eq(S(DownloadChecks.For("OverwriteSystemData", false, "")), null, "overwrite no");
+            Eq(S(DownloadChecks.For("ConsistentBlocksDownload", true, "")), "ConsistentDownload", "consistent download yes");
+            Eq(S(DownloadChecks.For("ConsistentBlocksDownload", false, "")), null, "consistent download no");
+            Eq(S(DownloadChecks.For("AlarmTextLibrariesDownload", true, "")), "ConsistentDownload", "alarm texts yes");
+            Eq(S(DownloadChecks.For("AlarmTextLibrariesDownload", false, "")), null, "alarm texts no never writes NoAction");
+            Eq(S(DownloadChecks.For("AllBlocksDownload", true, "")), "DownloadAllBlocks", "all blocks yes");
+            Eq(S(DownloadChecks.For("AllBlocksDownload", false, "")), null, "all blocks no");
+            Eq(S(DownloadChecks.For("UserManagementDownload", false, "")), null, "user management no");
+            Eq(S(DownloadChecks.For("LoadIdentificationData", true, "")), "LoadNothing", "identification data yes loads nothing");
+            Eq(S(DownloadChecks.For("LoadIdentificationData", false, "")), null, "identification data no");
+            Eq(S(DownloadChecks.For("DataBlockReinitialization", true, "")), "StopPlcAndReinitialize", "reinit yes");
+            Eq(S(DownloadChecks.For("DataBlockReinitializationOrKeepActualValues", true, "")), "StopPlcAndReinitialize", "reinit-or-keep yes");
+            Eq(S(DownloadChecks.For("DataBlockReinitialization", false, "")), null, "reinit no");
+            Eq(S(DownloadChecks.For("ModuleWriteAccessPassword", true, "")), Setting.Password, "password yes");
+            Eq(S(DownloadChecks.For("ModuleReadAccessPassword", true, "")), Setting.Password, "read password yes");
+            Eq(S(DownloadChecks.For("ModuleWriteAccessPassword", false, "")), null, "password no");
+            Eq(S(DownloadChecks.For("PlcMasterSecretPassword", true, "")), Setting.ConfigurationPassword, "configuration password yes");
+            Eq(S(DownloadChecks.For("PlcMasterSecretPassword", false, "")), null, "configuration password no");
+            Eq(S(DownloadChecks.For("TlsVerificationConfiguration", true, "")), "Trusted", "certificate yes");
+            Eq(S(DownloadChecks.For("TlsVerificationConfiguration", false, "")), null, "certificate no");
+            Eq(S(DownloadChecks.For("ResetModule", true, "")), null, "an unknown configuration, yes");
+            Eq(S(DownloadChecks.For("ResetModule", false, "")), null, "an unknown configuration, no");
+            Eq(DownloadChecks.For("StopModules", true, "").Kind, Setting.Select, "a selection's kind");
         }
 
         // PasswordsNeverCross: each password setting writes its own secret,
@@ -401,26 +401,27 @@ namespace Tiad.Test
             var both = new Secrets { Protection = "protection-pw", ConfigurationPassword = "configuration-pw" };
             var onlyProtection = new Secrets { Protection = "protection-pw" };
             var onlyConfiguration = new Secrets { ConfigurationPassword = "configuration-pw" };
-            Setting module = DownloadChecks.For("ModuleWriteAccessPassword", true);
-            Setting master = DownloadChecks.For("PlcMasterSecretPassword", true);
+            Setting module = DownloadChecks.For("ModuleWriteAccessPassword", true, "");
+            Setting master = DownloadChecks.For("PlcMasterSecretPassword", true, "");
             Eq(Setting.Secret(module, both), "protection-pw", "module password, both set");
             Eq(Setting.Secret(master, both), "configuration-pw", "master secret, both set");
             Eq(Setting.Secret(module, onlyConfiguration), "", "module password never takes the configuration password");
             Eq(Setting.Secret(master, onlyProtection), "", "master secret never takes the protection password");
-            Eq(Setting.Secret(DownloadChecks.For("StopModules", true), both), null, "a selection has no secret");
+            Eq(Setting.Secret(DownloadChecks.For("StopModules", true, ""), both), null, "a selection has no secret");
             // The Full access user's password answers no download question:
             // no setting takes it. UserManagementDownload is answered only by
-            // keeping the CPU's online users, a selection, never a password.
+            // keeping or resetting the CPU's users, a selection, never a password.
             var onlyFull = new Secrets { FullAccessPassword = "full-access-pw" };
             foreach (string type in DownloadChecks.Answered)
             {
-                Setting st = DownloadChecks.For(type, true);
+                Setting st = DownloadChecks.For(type, true, "");
                 if (st == null) continue;
                 string got = Setting.Secret(st, onlyFull);
                 True(got == null || got == "", type + " never takes the Full access password");
             }
             Eq(DownloadChecks.QuestionId("UserManagementDownload"), QuestionIds.UserManagement, "user management is its own question");
-            Eq(S(DownloadChecks.For("UserManagementDownload", true)), "KeepOnlineUserManagementData", "user management is answered only by keeping the CPU's users");
+            Eq(S(DownloadChecks.For("UserManagementDownload", true, Answer.ChoiceKeep)), "KeepOnlineUserManagementData", "user management keep");
+            Eq(S(DownloadChecks.For("UserManagementDownload", true, Answer.ChoiceReset)), "DownloadAllUserManagementDataResetToProject", "user management reset, as V21 names it");
         }
 
         // ProtectionPlan is ConfigProtection.Plan over every state and
@@ -568,20 +569,20 @@ namespace Tiad.Test
             var keep = new Decisions { UserManagementKeepOnline = true };
             var um = new List<Question> { new Question { Id = QuestionIds.UserManagement } };
             var u = new List<Question>(); var d = new List<Question>();
-            DownloadRule.Resolve(um, keep, false, false, true, u, d);
+            DownloadRule.Resolve(um, keep, false, false, true, null, u, d);
             Eq(u.Count + d.Count, 0, "keep with access control kept is answered");
             u.Clear(); d.Clear();
-            DownloadRule.Resolve(um, keep, false, false, false, u, d);
+            DownloadRule.Resolve(um, keep, false, false, false, null, u, d);
             Eq(string.Join(",", Ids(u).ToArray()), QuestionIds.UserManagement, "keep with access control set is unanswered");
             Contains(u[0].Message, "a keep spec on a session that never set access control", "and names why");
             u.Clear(); d.Clear();
-            DownloadRule.Resolve(um, new Decisions { UserManagementKeepOnline = false }, false, false, true, u, d);
+            DownloadRule.Resolve(um, new Decisions { UserManagementKeepOnline = false }, false, false, true, null, u, d);
             Eq(string.Join(",", Ids(d).ToArray()), QuestionIds.UserManagement, "no is declined");
             var others = new Decisions { StopCpu = true, Overwrite = true, ConsistentDownload = true, StartAfter = true };
             foreach (string id in new[] { QuestionIds.AlarmTexts, QuestionIds.AllBlocks, QuestionIds.UserManagement, QuestionIds.IdentificationData })
             {
                 u.Clear(); d.Clear();
-                DownloadRule.Resolve(new List<Question> { new Question { Id = id } }, others, true, true, true, u, d);
+                DownloadRule.Resolve(new List<Question> { new Question { Id = id } }, others, true, true, true, null, u, d);
                 Eq(string.Join(",", Ids(u).ToArray()), id, id + " is not answered by the other decisions");
             }
         }
@@ -1122,7 +1123,7 @@ namespace Tiad.Test
             {
                 "StopModules.StopAll", "StartModules.StartModule", "StartModules.NoAction", "OverwriteSystemData.Overwrite",
                 "ConsistentBlocksDownload.ConsistentDownload", "AlarmTextLibrariesDownload.ConsistentDownload",
-                "AllBlocksDownload.DownloadAllBlocks", "UserManagementDownload.KeepOnlineUserManagementData", "LoadIdentificationData.LoadNothing",
+                "AllBlocksDownload.DownloadAllBlocks", "UserManagementDownload.KeepOnlineUserManagementData", "UserManagementDownload.DownloadAllUserManagementDataResetToProject", "LoadIdentificationData.LoadNothing",
                 "DataBlockReinitialization.StopPlcAndReinitialize", "DataBlockReinitializationOrKeepActualValues.StopPlcAndReinitialize",
                 "TlsVerificationConfiguration.Trusted",
             };
@@ -1136,7 +1137,7 @@ namespace Tiad.Test
             }
             foreach (string t in DownloadChecks.Answered)
             {
-                True(DownloadChecks.For(t, true) != null, t + ": yes has no setting");
+                True(DownloadChecks.For(t, true, "") != null || DownloadChecks.For(t, true, Answer.ChoiceKeep) != null, t + ": yes has no setting");
             }
             // After's NoAction for start-after is among them.
             True(got.Contains("StartModules." + Decider().After(DownloadDecider.StartAfterType).Setting.Value), "after-download NoAction");

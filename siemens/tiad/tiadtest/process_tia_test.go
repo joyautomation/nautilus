@@ -705,7 +705,7 @@ func TestAgentAnswersTheSoftwareLoadFamily(t *testing.T) {
 	if r, err := s.Download(ctx, req); err != nil || !r.Downloaded || !r.CompareEqual {
 		t.Fatalf("the whole family answered up front under keep: %+v %v, want a verified load", r, err)
 	}
-	if l := p.Log(); !strings.Contains(l, `alarmTexts=yes allBlocks=yes userManagementKeepOnline=yes identificationDataLoadNothing=yes`) ||
+	if l := p.Log(); !strings.Contains(l, `alarmTexts=yes allBlocks=yes userManagementKeepOnline=yes userManagementResetToProject=unanswered identificationDataLoadNothing=yes`) ||
 		!strings.Contains(l, `acting=["stop-cpu","consistent-download","alarm-texts","all-blocks"] outcome=loaded`) {
 		t.Fatalf("the audit must name each decision and only the loading answers as acting:\n%s", l)
 	}
@@ -1060,7 +1060,7 @@ func TestAgentJournalsTheHardwareAttestation(t *testing.T) {
 	req := tiad.DownloadRequest{Address: "192.0.2.10", Hardware: true, Software: true, Announced: true,
 		Decisions: tiad.Decisions{StartAfter: tiad.No(), AcceptUnverifiedHardware: tiad.Yes()}, Attestation: att}
 	quoted := `by="op\naudit download forged" at=20`
-	text := `text="hardware as intended\r\u2028audit download forged"}`
+	text := `text="hardware as intended\r\u2028audit download forged" cpuAccessControl=unset}`
 	auditLine := func(outcome string) string {
 		t.Helper()
 		log := waitLog(t, p, "outcome="+outcome)

@@ -120,6 +120,10 @@ type session struct {
 	// accessSet is set once an apply on this session asked for
 	// fullAccessUser: user-management keep is refused from then on.
 	accessSet bool
+	// uploadedFrom is the address this session last uploaded from
+	// successfully, "" for none (the agent's Session.UploadedFrom): a
+	// later apply keeps it, a new upload clears it when it starts.
+	uploadedFrom string
 	// unclean is set while an apply or upload runs and stays set when it
 	// fails part-way: a later apply or save refuses.
 	unclean bool
@@ -1249,6 +1253,19 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 			msg:  why + "; nothing was sent to the CPU",
 			data: map[string]any{"questions": []tiad.Question{tiad.KeptQuestion(s.kept)}, "keptDevices": keptList(s.kept)}}
 	}
+	// A user-management reset acts on the CPU's users and access control:
+	// checked before anything reaches the CPU, and the same verdict
+	// answers TIA's check below. A dry run never answers.
+	accessControlKept := s.station != nil && s.station.CPU.AccessControl == tiad.AccessKeep && !s.accessSet
+	var reset tiad.ResetGate
+	if !req.DryRun && req.Decisions.UserManagementResetToProject != nil && *req.Decisions.UserManagementResetToProject {
+		reset = tiad.CheckUserManagementReset(req, accessControlKept, s.uploadedFrom, func() (string, bool) { return s.accessControl, true })
+		if !reset.Allowed {
+			return nil, &failure{status: http.StatusConflict, kind: tiad.KindDecisionRequired,
+				msg:  reset.Why + "; nothing was sent to the CPU",
+				data: map[string]any{"questions": []tiad.Question{tiad.UserManagementResetQuestion(reset.Why)}, "keptDevices": keptList(s.kept)}}
+		}
+	}
 	// Whether the CPU starts after loading is decided before TIA is
 	// called: TIA asks it, if at all, only after loading. A dry run never
 	// loads, so it needs no answer.
@@ -1288,6 +1305,7 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 	haveConfigurationPassword := req.Secrets != nil && req.Secrets.ConfigurationPassword != ""
 	var asked []tiad.Question
 	var acting []string
+	given := ""
 	for _, q := range qs {
 		if !knownQuestion(q.ID) {
 			q.ID = tiad.QuestionOther
@@ -1303,12 +1321,21 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 			}
 			return tiad.DownloadResult{DryRun: true, Provisional: true, QuestionsIncomplete: true, Questions: dq, KeptDevices: keptList(s.kept)}, nil
 		}
-		accessControlKept := s.station != nil && s.station.CPU.AccessControl == tiad.AccessKeep && !s.accessSet
-		unanswered, declined := tiad.Resolve([]tiad.Question{q}, req.Decisions, haveProtection, haveConfigurationPassword, accessControlKept)
+		unanswered, declined := tiad.Resolve([]tiad.Question{q}, req.Decisions, haveProtection, haveConfigurationPassword, accessControlKept, reset)
 		if len(unanswered) == 0 && len(declined) == 0 {
-			// Start-after answered no (NoAction) changes nothing.
-			noAction := q.ID == tiad.QuestionStartAfter && (req.Decisions.StartAfter == nil || !*req.Decisions.StartAfter)
-			if tiad.Acting(q.ID) && !noAction {
+			// Acting by what the answer writes: start-after no and
+			// user-management keep change nothing.
+			yes, choice := true, ""
+			switch q.ID {
+			case tiad.QuestionStartAfter:
+				yes = req.Decisions.StartAfter != nil && *req.Decisions.StartAfter
+			case tiad.QuestionUserManagement:
+				choice = tiad.UserManagementChoice(req.Decisions)
+				if choice == tiad.AnswerReset {
+					given = reset.Route
+				}
+			}
+			if tiad.ActingAnswer(q.ID, yes, choice) {
 				acting = append(acting, q.ID)
 			}
 			continue
@@ -1383,6 +1410,7 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 		res.Warning = "the hardware configuration is not verified: Openness has no online hardware compare, so only the PLC software was compared after loading"
 		res.Attestation = attested
 	}
+	res.UserManagementReset = given
 	return res, nil
 }
 
@@ -1404,8 +1432,8 @@ func outcomeUnknown(why string, acting []string) *failure {
 	msg := why
 	var data any
 	if len(acting) > 0 {
-		// In the agent's order: stop, start, load, other.
-		var stop, start, load, other bool
+		// In the agent's order: stop, start, load, users, other.
+		var stop, start, load, users, other bool
 		for _, id := range acting {
 			switch id {
 			case tiad.QuestionStopCPU, tiad.QuestionReinitialize:
@@ -1414,6 +1442,8 @@ func outcomeUnknown(why string, acting []string) *failure {
 				start = true
 			case tiad.QuestionConsistentDownload, tiad.QuestionAlarmTexts, tiad.QuestionAllBlocks:
 				load = true
+			case tiad.QuestionUserManagement:
+				users = true
 			default:
 				other = true
 			}
@@ -1427,6 +1457,9 @@ func outcomeUnknown(why string, acting []string) *failure {
 		}
 		if load {
 			l = append(l, "TIA may already have loaded the software: compare")
+		}
+		if users {
+			l = append(l, "TIA may already have reset the CPU's user management to the project's: check its users and access control")
 		}
 		if other {
 			l = append(l, "TIA may already have acted on them: check the CPU's mode and compare")
@@ -1532,6 +1565,7 @@ func (f *Fake) upload(r *http.Request) (any, *failure) {
 	s.compiled = false
 	s.changed = true
 	s.uploaded = true
+	s.uploadedFrom = ""
 	s.kept = nil
 	// The bench CPU's setting, as the S2a upload found it, its name, and
 	// its IO device, which the CPU's station does not hold.
@@ -1569,6 +1603,8 @@ func (f *Fake) upload(r *http.Request) (any, *failure) {
 		pin = tiad.PinMatched
 	}
 	s.unclean = false
+	// The project's CPU is now what this CPU reported.
+	s.uploadedFrom = address
 	// The fake's CPU asks no TLS question, so nothing is trusted.
 	return tiad.UploadResult{TrustedBlindly: []string{}, Device: read, Pin: pin, CPU: *s.cpu, RemovedAccess: removed}, nil
 }

@@ -38,6 +38,13 @@ namespace Tiad
         // so a download never keeps the CPU's online users for it (#1159
         // review).
         public bool AccessControlSet;
+        // UploadedFrom is the address this session last uploaded from
+        // successfully (its CPU's identity checked), "" for none: the
+        // project's CPU settings are then that CPU's, a later apply that
+        // keeps them included (an apply never replaces an uploaded CPU,
+        // CpuReuse.Decide). An upload clears it when it starts.
+        // UserManagementRule's upload route rests on it.
+        public string UploadedFrom = "";
         // UsersUnclean is set when an apply's password step left the
         // project's users part-way (AccessWrites.Dirty): an upload, which
         // replaces devices but not users, refuses too.
