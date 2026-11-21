@@ -23,6 +23,21 @@ namespace Tiad
         // consistent whole. It is asked after stop-cpu (#789 walk-past
         // window) and acts: yes loads.
         public const string ConsistentDownload = "consistent-download";
+        // The rest of the software-load family a real download asks
+        // (#789 restart window; naut-lead's mapping of V21's
+        // configurations): each answered only by its own decision.
+        // AlarmTexts is AlarmTextLibrariesDownload (acting: yes loads the
+        // alarm and text list texts). AllBlocks is AllBlocksDownload
+        // (acting: yes loads every block). UserManagement is
+        // UserManagementDownload, answered only by keeping the CPU's
+        // online user management, and only when the spec keeps access
+        // control as found (passive: nothing on the CPU changes).
+        // IdentificationData is LoadIdentificationData, answered only by
+        // loading nothing (passive).
+        public const string AlarmTexts = "alarm-texts";
+        public const string AllBlocks = "all-blocks";
+        public const string UserManagement = "user-management";
+        public const string IdentificationData = "identification-data";
         public const string StartAfter = "start-after";
         public const string Password = "password";
         // ConfigurationPassword is answered only by the request's
@@ -69,6 +84,7 @@ namespace Tiad
     public sealed class Decisions
     {
         public bool? StopCpu, Overwrite, ConsistentDownload, StartAfter;
+        public bool? AlarmTexts, AllBlocks, UserManagementKeepOnline, IdentificationDataLoadNothing;
         public List<string> Reinitialize = new List<string>();
         public string TrustCertificate = "";
         // KeptDevices names every device the caller agrees to load as the
@@ -82,6 +98,10 @@ namespace Tiad
             d.StopCpu = r.OptBool("stopCpu");
             d.Overwrite = r.OptBool("overwrite");
             d.ConsistentDownload = r.OptBool("consistentDownload");
+            d.AlarmTexts = r.OptBool("alarmTexts");
+            d.AllBlocks = r.OptBool("allBlocks");
+            d.UserManagementKeepOnline = r.OptBool("userManagementKeepOnline");
+            d.IdentificationDataLoadNothing = r.OptBool("identificationDataLoadNothing");
             d.StartAfter = r.OptBool("startAfter");
             d.Reinitialize = r.Strs("reinitialize");
             d.TrustCertificate = r.Str("trustCertificate");
@@ -154,7 +174,10 @@ namespace Tiad
         // Resolve applies the download rule: every question is answered
         // only from d. It fills the questions with no answer and the ones
         // answered no; a download goes ahead only when both are empty.
-        public static void Resolve(List<Question> qs, Decisions d, bool haveProtection, bool haveConfigurationPassword, List<Question> unanswered, List<Question> declined)
+        // accessControlKept is whether the session's spec keeps the CPU's
+        // access control as found: only then can user-management be
+        // answered.
+        public static void Resolve(List<Question> qs, Decisions d, bool haveProtection, bool haveConfigurationPassword, bool accessControlKept, List<Question> unanswered, List<Question> declined)
         {
             foreach (var q0 in qs)
             {
@@ -169,6 +192,26 @@ namespace Tiad
                         break;
                     case QuestionIds.ConsistentDownload:
                         Sort(q, d.ConsistentDownload, unanswered, declined);
+                        break;
+                    case QuestionIds.AlarmTexts:
+                        Sort(q, d.AlarmTexts, unanswered, declined);
+                        break;
+                    case QuestionIds.AllBlocks:
+                        Sort(q, d.AllBlocks, unanswered, declined);
+                        break;
+                    case QuestionIds.UserManagement:
+                        // Keeping the CPU's users is tiad's only answer, and
+                        // only for a spec that keeps access control; a spec
+                        // that sets it would leave them disagreeing.
+                        if (d.UserManagementKeepOnline.HasValue && d.UserManagementKeepOnline.Value && !accessControlKept)
+                        {
+                            q.Message = q.Message + " (tiad keeps the CPU's online user management only when the spec's accessControl is keep)";
+                            unanswered.Add(q);
+                        }
+                        else Sort(q, d.UserManagementKeepOnline, unanswered, declined);
+                        break;
+                    case QuestionIds.IdentificationData:
+                        Sort(q, d.IdentificationDataLoadNothing, unanswered, declined);
                         break;
                     case QuestionIds.StartAfter:
                         // Either answer is a decision: no means load and

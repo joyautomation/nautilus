@@ -1228,6 +1228,14 @@ namespace Tiad.Fake
                     return "OverwriteSystemData";
                 case QuestionIds.ConsistentDownload:
                     return "ConsistentBlocksDownload";
+                case QuestionIds.AlarmTexts:
+                    return "AlarmTextLibrariesDownload";
+                case QuestionIds.AllBlocks:
+                    return "AllBlocksDownload";
+                case QuestionIds.UserManagement:
+                    return "UserManagementDownload";
+                case QuestionIds.IdentificationData:
+                    return "LoadIdentificationData";
                 case QuestionIds.Reinitialize:
                     return "DataBlockReinitialization";
                 case QuestionIds.Password:

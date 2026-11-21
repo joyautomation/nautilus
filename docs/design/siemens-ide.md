@@ -582,7 +582,9 @@ Request:
   "hardware": true, "software": true,
   "dryRun": false,
   "decisions": { "stopCpu": true, "reinitialize": ["Tags"], "overwrite": true,
-                 "consistentDownload": true, "startAfter": true, "trustCertificate": "<sha256 fingerprint>",
+                 "consistentDownload": true, "alarmTexts": true, "allBlocks": true,
+                 "userManagementKeepOnline": true, "identificationDataLoadNothing": true,
+                 "startAfter": true, "trustCertificate": "<sha256 fingerprint>",
                  "keptDevices": ["<device name>"] },
   "announced": true,
   "secrets": { "protection": "<password>", "configurationPassword": "<password>" }
@@ -613,9 +615,9 @@ behaviour. So, until then:
   given; it never derives one itself.
 - **Answers that can change the CPU are acting** (`stop-cpu`,
   `start-after` answered yes, `overwrite`, `consistent-download`,
-  `reinitialize`, and any check
-  tiad does not know; a password, a certificate or a start-after answered
-  no is not). TIA may act on an answer
+  `alarm-texts`, `all-blocks`, `reinitialize`, and any check
+  tiad does not know; a password, a certificate, `user-management`,
+  `identification-data` or a start-after answered no is not). TIA may act on an answer
   before it asks the next check (Siemens's own sample says StopModules'
   StopAll "will set PLC into Stop mode"), so a cancel after an acting
   answer is never a clean refusal: it answers `outcome_unknown`, lists the
@@ -750,6 +752,22 @@ behaviour. So, until then:
     download should answer `consistentDownload` up front**. Left out, the
     download cancels there after `stop-cpu` was written, which is
     `outcome_unknown` with the CPU possibly stopped.
+  - `alarm-texts` (TIA's `AlarmTextLibrariesDownload`: load the alarm and
+    text list texts with the software; acting. Asked third on the bench.
+    tiad never writes `NoAction`: texts that disagree with the program are
+    not a load)
+  - `all-blocks` (`AllBlocksDownload`: load every block; acting)
+  - `user-management` (`UserManagementDownload`): answered only by
+    `userManagementKeepOnline: true`, which keeps the CPU's online users
+    as they are, and only when the spec's `cpu.accessControl` is `keep`;
+    under `fullAccessUser` it stays unanswered, naming why. Passive.
+    Updating or resetting the CPU's users is never tiad's choice.
+  - `identification-data` (`LoadIdentificationData`): answered only by
+    `identificationDataLoadNothing: true`. Passive.
+  Every other download configuration V21 defines (memory card,
+  protection level, initialise or reset memory, selective delete, H
+  systems, web applications, HMI data and the rest; the full list is on
+  #789) is `other` and refused.
   - `start-after`
   - `password`
   - `configuration-password` (TIA's `PlcMasterSecretPassword`: the

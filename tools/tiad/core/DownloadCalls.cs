@@ -117,6 +117,8 @@ namespace Tiad
             var reinit = new List<string>();
             foreach (var n in d.Reinitialize) reinit.Add(Json.Quote(n));
             return "stopCpu=" + YesNo(d.StopCpu) + " overwrite=" + YesNo(d.Overwrite) + " consistentDownload=" + YesNo(d.ConsistentDownload) +
+                " alarmTexts=" + YesNo(d.AlarmTexts) + " allBlocks=" + YesNo(d.AllBlocks) +
+                " userManagementKeepOnline=" + YesNo(d.UserManagementKeepOnline) + " identificationDataLoadNothing=" + YesNo(d.IdentificationDataLoadNothing) +
                 " startAfter=" + YesNo(d.StartAfter) + " reinitialize=[" + string.Join(",", reinit) + "]" +
                 " keptDevices=[" + string.Join(",", Quoted(d.KeptDevices)) + "]" +
                 " trustCertificate=" + (d.TrustCertificate == "" ? "unset" : Json.Quote(d.TrustCertificate));
@@ -230,6 +232,7 @@ namespace Tiad
 
             bool haveProtection = req.Secrets.Protection != "";
             bool haveConfigurationPassword = req.Secrets.ConfigurationPassword != "";
+            bool accessControlKept = s.Station != null && s.Station.Cpu != null && s.Station.Cpu.AccessControl == StationRules.AccessKeep;
             var unanswered = new List<Question>();
             var declined = new List<Question>();
             var askedQs = new List<Question>();
@@ -251,7 +254,7 @@ namespace Tiad
                 }
                 var one = new List<Question> { q };
                 int u = unanswered.Count, d = declined.Count;
-                DownloadRule.Resolve(one, req.Decisions, haveProtection, haveConfigurationPassword, unanswered, declined);
+                DownloadRule.Resolve(one, req.Decisions, haveProtection, haveConfigurationPassword, accessControlKept, unanswered, declined);
                 if (unanswered.Count > u || declined.Count > d)
                 {
                     cancelled = true;

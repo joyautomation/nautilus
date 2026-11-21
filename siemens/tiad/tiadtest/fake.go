@@ -1277,7 +1277,8 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 			}
 			return tiad.DownloadResult{DryRun: true, Provisional: true, QuestionsIncomplete: true, Questions: dq, KeptDevices: keptList(s.kept)}, nil
 		}
-		unanswered, declined := tiad.Resolve([]tiad.Question{q}, req.Decisions, haveProtection, haveConfigurationPassword)
+		accessControlKept := s.station != nil && s.station.CPU.AccessControl == tiad.AccessKeep
+		unanswered, declined := tiad.Resolve([]tiad.Question{q}, req.Decisions, haveProtection, haveConfigurationPassword, accessControlKept)
 		if len(unanswered) == 0 && len(declined) == 0 {
 			// Start-after answered no (NoAction) changes nothing.
 			noAction := q.ID == tiad.QuestionStartAfter && (req.Decisions.StartAfter == nil || !*req.Decisions.StartAfter)
@@ -1347,6 +1348,7 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 func knownQuestion(id string) bool {
 	switch id {
 	case tiad.QuestionStopCPU, tiad.QuestionReinitialize, tiad.QuestionOverwrite, tiad.QuestionConsistentDownload, tiad.QuestionStartAfter,
+		tiad.QuestionAlarmTexts, tiad.QuestionAllBlocks, tiad.QuestionUserManagement, tiad.QuestionIdentificationData,
 		tiad.QuestionPassword, tiad.QuestionConfigurationPassword, tiad.QuestionCertificate:
 		return true
 	}
@@ -1367,7 +1369,7 @@ func outcomeUnknown(why string, acting []string) *failure {
 				stop = true
 			case tiad.QuestionStartAfter:
 				start = true
-			case tiad.QuestionConsistentDownload:
+			case tiad.QuestionConsistentDownload, tiad.QuestionAlarmTexts, tiad.QuestionAllBlocks:
 				load = true
 			default:
 				other = true

@@ -265,6 +265,14 @@ namespace Tiad.Test
                 { "StartModules", QuestionIds.StartAfter },
                 { "OverwriteSystemData", QuestionIds.Overwrite },
                 { "ConsistentBlocksDownload", QuestionIds.ConsistentDownload },
+                { "AlarmTextLibrariesDownload", QuestionIds.AlarmTexts },
+                { "AllBlocksDownload", QuestionIds.AllBlocks },
+                { "UserManagementDownload", QuestionIds.UserManagement },
+                { "LoadIdentificationData", QuestionIds.IdentificationData },
+                { "OverwriteOnMemoryCard", QuestionIds.Other },
+                { "ProtectionLevelChanged", QuestionIds.Other },
+                { "InitializeMemory", QuestionIds.Other },
+                { "SelectiveDeleteDownload", QuestionIds.Other },
                 { "DataBlockReinitialization", QuestionIds.Reinitialize },
                 { "DataBlockReinitializationOrKeepActualValues", QuestionIds.Reinitialize },
                 { "ModuleReadAccessPassword", QuestionIds.Password },
@@ -315,6 +323,13 @@ namespace Tiad.Test
             Eq(S(DownloadChecks.For("OverwriteSystemData", false)), null, "overwrite no");
             Eq(S(DownloadChecks.For("ConsistentBlocksDownload", true)), "ConsistentDownload", "consistent download yes");
             Eq(S(DownloadChecks.For("ConsistentBlocksDownload", false)), null, "consistent download no");
+            Eq(S(DownloadChecks.For("AlarmTextLibrariesDownload", true)), "ConsistentDownload", "alarm texts yes");
+            Eq(S(DownloadChecks.For("AlarmTextLibrariesDownload", false)), null, "alarm texts no never writes NoAction");
+            Eq(S(DownloadChecks.For("AllBlocksDownload", true)), "DownloadAllBlocks", "all blocks yes");
+            Eq(S(DownloadChecks.For("AllBlocksDownload", false)), null, "all blocks no");
+            Eq(S(DownloadChecks.For("UserManagementDownload", false)), null, "user management no");
+            Eq(S(DownloadChecks.For("LoadIdentificationData", true)), "LoadNothing", "identification data yes loads nothing");
+            Eq(S(DownloadChecks.For("LoadIdentificationData", false)), null, "identification data no");
             Eq(S(DownloadChecks.For("DataBlockReinitialization", true)), "StopPlcAndReinitialize", "reinit yes");
             Eq(S(DownloadChecks.For("DataBlockReinitializationOrKeepActualValues", true)), "StopPlcAndReinitialize", "reinit-or-keep yes");
             Eq(S(DownloadChecks.For("DataBlockReinitialization", false)), null, "reinit no");
@@ -344,8 +359,9 @@ namespace Tiad.Test
             Eq(Setting.Secret(module, onlyConfiguration), "", "module password never takes the configuration password");
             Eq(Setting.Secret(master, onlyProtection), "", "master secret never takes the protection password");
             Eq(Setting.Secret(DownloadChecks.For("StopModules", true), both), null, "a selection has no secret");
-            // The Full access user's password answers no download question
-            // (UserManagementDownload waits for S2b): no setting takes it.
+            // The Full access user's password answers no download question:
+            // no setting takes it. UserManagementDownload is answered only by
+            // keeping the CPU's online users, a selection, never a password.
             var onlyFull = new Secrets { FullAccessPassword = "full-access-pw" };
             foreach (string type in DownloadChecks.Answered)
             {
@@ -354,8 +370,8 @@ namespace Tiad.Test
                 string got = Setting.Secret(st, onlyFull);
                 True(got == null || got == "", type + " never takes the Full access password");
             }
-            Eq(DownloadChecks.QuestionId("UserManagementDownload"), QuestionIds.Other, "user management is a question nothing answers yet");
-            Eq(DownloadChecks.For("UserManagementDownload", true), null, "user management is never answered yet");
+            Eq(DownloadChecks.QuestionId("UserManagementDownload"), QuestionIds.UserManagement, "user management is its own question");
+            Eq(S(DownloadChecks.For("UserManagementDownload", true)), "KeepOnlineUserManagementData", "user management is answered only by keeping the CPU's users");
         }
 
         // ProtectionPlan is ConfigProtection.Plan over every state and
@@ -490,11 +506,11 @@ namespace Tiad.Test
 
         static void ActingAndPassive()
         {
-            foreach (string id in new[] { QuestionIds.StopCpu, QuestionIds.StartAfter, QuestionIds.Overwrite, QuestionIds.ConsistentDownload, QuestionIds.Reinitialize, QuestionIds.Other, "new-in-v22" })
+            foreach (string id in new[] { QuestionIds.StopCpu, QuestionIds.StartAfter, QuestionIds.Overwrite, QuestionIds.ConsistentDownload, QuestionIds.AlarmTexts, QuestionIds.AllBlocks, QuestionIds.Reinitialize, QuestionIds.Other, "new-in-v22" })
             {
                 True(DownloadChecks.Acting(id), id + " is acting");
             }
-            foreach (string id in new[] { QuestionIds.Password, QuestionIds.ConfigurationPassword, QuestionIds.Certificate })
+            foreach (string id in new[] { QuestionIds.Password, QuestionIds.ConfigurationPassword, QuestionIds.Certificate, QuestionIds.UserManagement, QuestionIds.IdentificationData })
             {
                 True(!DownloadChecks.Acting(id), id + " is passive");
             }
@@ -525,6 +541,8 @@ namespace Tiad.Test
             Contains(DownloadChecks.Consequence(new List<string> { QuestionIds.Overwrite }), "acted on them", "overwrite");
             Eq(DownloadChecks.Consequence(new List<string> { QuestionIds.ConsistentDownload }),
                 "tiad had answered consistent-download before the download ended, so TIA may already have loaded the software: compare", "consistent download loads");
+            Contains(DownloadChecks.Consequence(new List<string> { QuestionIds.AlarmTexts }), "may already have loaded the software", "alarm texts load");
+            Contains(DownloadChecks.Consequence(new List<string> { QuestionIds.AllBlocks }), "may already have loaded the software", "all blocks load");
             Contains(DownloadChecks.Consequence(new List<string> { QuestionIds.StopCpu, QuestionIds.Overwrite }), "tiad had answered stop-cpu, overwrite before the download ended", "names them");
         }
 
@@ -1021,7 +1039,8 @@ namespace Tiad.Test
             var want = new List<string>
             {
                 "StopModules.StopAll", "StartModules.StartModule", "StartModules.NoAction", "OverwriteSystemData.Overwrite",
-                "ConsistentBlocksDownload.ConsistentDownload",
+                "ConsistentBlocksDownload.ConsistentDownload", "AlarmTextLibrariesDownload.ConsistentDownload",
+                "AllBlocksDownload.DownloadAllBlocks", "UserManagementDownload.KeepOnlineUserManagementData", "LoadIdentificationData.LoadNothing",
                 "DataBlockReinitialization.StopPlcAndReinitialize", "DataBlockReinitializationOrKeepActualValues.StopPlcAndReinitialize",
                 "TlsVerificationConfiguration.Trusted",
             };
