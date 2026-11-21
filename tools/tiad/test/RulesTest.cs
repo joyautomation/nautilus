@@ -119,6 +119,19 @@ namespace Tiad.Test
                 T("InDoubtOnceEntered", InDoubtOnceEntered),
                 T("DownloadStepsTiaDies", DownloadStepsTiaDies),
                 T("DownloadStepsAfterTheCall", DownloadStepsAfterTheCall),
+                T("ATiadTypeKillsTia", ATiadTypeKillsTia),
+                T("BoundarySendsOnlyACancel", BoundarySendsOnlyACancel),
+                T("DeclineSurvivesTiasCopy", DeclineSurvivesTiasCopy),
+                T("DeclineNeedsItsOwnCancelBack", DeclineNeedsItsOwnCancelBack),
+                T("EveryCancelCrossesAndIsKept", EveryCancelCrossesAndIsKept),
+                T("ListThrowingCancelsNamingIt", ListThrowingCancelsNamingIt),
+                T("DownloadStepsDeclineThroughTia", DownloadStepsDeclineThroughTia),
+                T("ASerializableTiadTypeStillKillsTia", ASerializableTiadTypeStillKillsTia),
+                T("DeclineNeedsItsToken", DeclineNeedsItsToken),
+                T("DeclineThenTiaGoesOn", DeclineThenTiaGoesOn),
+                T("KeepRecordsWhenTheMessageThrows", KeepRecordsWhenTheMessageThrows),
+                T("OnlineRecordFailsClosed", OnlineRecordFailsClosed),
+                T("UploadAsksRecordsFirst", UploadAsksRecordsFirst),
                 T("OnlineAnswersAfterStop", OnlineAnswersAfterStop),
                 T("QuietlyEvenWhenTheLogFails", QuietlyEvenWhenTheLogFails),
                 T("Selections", SelectionsWritten),
@@ -564,7 +577,9 @@ namespace Tiad.Test
             Eq(r.Decides, 1, "decides");
             True(!r.D.Approved, "approved");
             Eq(r.D.Asked.Count, 2, "asked: the configuration and start-after");
-            Cancelled(r, delegate { r.D.Next(k, "StopModules", "stop", null); }, "not decided", true, "a later callback");
+            // A later callback means TIA went on past the decline: a
+            // failure from then on, never a decline (#1145 review).
+            Cancelled(r, delegate { r.D.Next(k, "StopModules", "stop", null); }, "TIA went on", false, "a later callback");
             Eq(r.Decides, 1, "decides after a later callback");
             Eq(A(r.D, "StartModules"), "NoAction", "after a load nobody approved");
             Eq(A(r.D, "StopModules"), null, "another configuration after a load nobody approved");
@@ -703,8 +718,11 @@ namespace Tiad.Test
                 thrown = new InvalidOperationException("wrapped", c);
             }
             End(r.D.Finish(true, null, "", thrown), false, false, "after the decision", "a cancel after approval");
-            // A cancel the glue threw itself, found inside TIA's exception.
-            DownloadEnd own = Approved(new object()).D.Finish(true, null, "", new InvalidOperationException("wrapped", new DownloadCancel("no protection password", false)));
+            // A cancel the glue made itself (Write's Fail): its kept reason,
+            // whatever TIA's exception says.
+            var g = Approved(new object());
+            g.D.Fail("no protection password");
+            DownloadEnd own = g.D.Finish(true, null, "", new InvalidOperationException("wrapped", new OperationCanceledException("no protection password")));
             End(own, false, false, "no protection password", "the glue's own cancel");
             Eq(own.Failure, "no protection password", "the glue's own cancel, without TIA's wrapping");
             // A decided configuration TIA never asked about.
