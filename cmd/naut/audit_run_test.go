@@ -137,7 +137,11 @@ func TestNautRunJournalsWrites(t *testing.T) {
 				!strings.Contains(l, `"user":"anonymous"`) || !strings.Contains(l, `"after":7`) {
 				t.Fatalf("journal line:\n%s", l)
 			}
-			if r, err := audit.Verify(jdir); err != nil || !r.OK() || r.Entries != 1 {
+			// The retention naut run journals at open (#709 PR 9b), then the write.
+			if !strings.HasPrefix(string(b), `{"id"`) || !strings.Contains(strings.SplitN(string(b), "\n", 2)[0], `"action":"audit.retention"`) {
+				t.Fatalf("the journal's first line is not the retention:\n%s", b)
+			}
+			if r, err := audit.Verify(jdir); err != nil || !r.OK() || r.Entries != 2 {
 				t.Fatalf("verify: %+v %v", r, err)
 			}
 			if goruntime.GOOS == "windows" {
@@ -164,7 +168,7 @@ func TestNautRunJournalsWrites(t *testing.T) {
 			if n := strings.Count(string(b), `"result":"refused"`); n != 6 || !strings.Contains(string(b), `"coalesced":3`) {
 				t.Fatalf("after the stop, %d refused lines, want 5 in full and the ×3 summary:\n%s", n, b)
 			}
-			if r, err := audit.Verify(jdir); err != nil || !r.OK() || r.Entries != 7 {
+			if r, err := audit.Verify(jdir); err != nil || !r.OK() || r.Entries != 8 {
 				t.Fatalf("verify after the stop: %+v %v", r, err)
 			}
 		})

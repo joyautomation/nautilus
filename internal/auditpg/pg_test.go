@@ -41,7 +41,7 @@ func fresh(t *testing.T, dsn string) *sql.DB {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-	if _, err := db.Exec(`DROP TABLE IF EXISTS audit_entries, audit_gaps`); err != nil {
+	if _, err := db.Exec(`DROP TABLE IF EXISTS audit_entries, audit_gaps, audit_anchors`); err != nil {
 		t.Fatal(err)
 	}
 	return db
@@ -277,7 +277,7 @@ func TestPostgresAuditCopyRunsWithInsertOnly(t *testing.T) {
 		}
 	}
 	t.Cleanup(func() {
-		db.Exec(`DROP TABLE IF EXISTS audit_entries, audit_gaps`)
+		db.Exec(`DROP TABLE IF EXISTS audit_entries, audit_gaps, audit_anchors`)
 		db.Exec(`DROP ROLE IF EXISTS naut_audit_sink_test`)
 	})
 	u.User = url.UserPassword("naut_audit_sink_test", "sinktest")

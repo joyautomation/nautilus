@@ -51,4 +51,21 @@ func TestAuditCopyCard(t *testing.T) {
 	if len(gaps.Metrics) != 3 || gaps.Metrics[2].Label != "gaps" || gaps.Metrics[2].Value != 2 {
 		t.Errorf("gaps not shown: %+v", gaps.Metrics)
 	}
+	// The anchor: its seq shown; a failed write or an unprotected role
+	// degrades a current copy, saying why.
+	card := func(st audit.CopyStatus) DriverStatus {
+		return New(newTestRuntime(t), Options{AuditCopy: func() audit.CopyStatus { return st }}).driverStatus(time.Now())[0]
+	}
+	a := card(audit.CopyStatus{State: audit.CopyCurrent, Copied: 9, Head: 9, Anchored: 8})
+	if a.State != "connected" || a.Metrics[len(a.Metrics)-1].Label != "anchored seq" || a.Metrics[len(a.Metrics)-1].Value != 8 {
+		t.Errorf("anchored: %+v", a)
+	}
+	a = card(audit.CopyStatus{State: audit.CopyCurrent, AnchorError: "permission denied for table audit_anchors"})
+	if a.State != "degraded" || !strings.Contains(a.Message, "the anchor could not be written (permission denied") {
+		t.Errorf("anchor error: %+v", a)
+	}
+	a = card(audit.CopyStatus{State: audit.CopyCurrent, Unprotected: "anchor not protected: it proves nothing against someone with role \"postgres\""})
+	if a.State != "degraded" || !strings.Contains(a.Message, "anchor not protected") {
+		t.Errorf("unprotected: %+v", a)
+	}
 }

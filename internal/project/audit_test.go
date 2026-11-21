@@ -38,6 +38,10 @@ func TestAuditSinkIsChecked(t *testing.T) {
 		{"audit:\n  sink: postgres\n  dsn-env: SITE_DB\n", ""},
 		{"audit:\n  sink: mongo\n", "audit.sink \"mongo\""},
 		{"audit:\n  dsn-env: SITE_DB\n", "audit.dsn-env is set but audit.sink is not"},
+		{"audit:\n  sink: postgres\n  anchor-every: 1m\n", ""},
+		{"audit:\n  anchor-every: 1m\n", "audit.anchor-every is set but audit.sink is not"},
+		{"audit:\n  sink: postgres\n  anchor-every: 10ms\n", "want at least 1s"},
+		{"audit:\n  sink: postgres\n  anchor-every: soon\n", "bad duration"},
 	} {
 		fsys := fstest.MapFS{
 			"nautilus.yaml": {Data: []byte("name: p\ntasks:\n  - program: main.st\n    scan: 20ms\n" + c.section)},
@@ -76,5 +80,15 @@ func TestAuditCopyDSN(t *testing.T) {
 		if got != c.want || (c.err == "") != (err == nil) || err != nil && !strings.Contains(err.Error(), c.err) {
 			t.Errorf("%+v %v: %q %v, want %q %q", c.p.Audit, c.env, got, err, c.want, c.err)
 		}
+	}
+}
+
+// audit.anchor-every defaults to 5 minutes.
+func TestAuditAnchorEvery(t *testing.T) {
+	if got := (&Project{}).AuditAnchorEvery(); got != 5*time.Minute {
+		t.Errorf("default %v", got)
+	}
+	if got := (&Project{Audit: &AuditConfig{Sink: "postgres", AnchorEvery: Duration(time.Minute)}}).AuditAnchorEvery(); got != time.Minute {
+		t.Errorf("set %v", got)
 	}
 }

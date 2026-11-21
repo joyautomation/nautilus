@@ -391,6 +391,24 @@ func copyCard(st audit.CopyStatus) DriverStatus {
 	default: // stopped
 		d.State, d.Message = "error", "the copy stopped: the journal's files no longer match what the copy holds, so it is left as it is (it is the evidence). Run naut audit verify, and compare the journal with the copy before restarting"
 	}
+	// The anchor (#709 PR 9b): the copy's head, kept where the
+	// controller's service user cannot rewrite it, unless the copy's own
+	// role can.
+	if st.Anchored > 0 {
+		d.Metrics = append(d.Metrics, DriverMetric{Label: "anchored seq", Value: float64(st.Anchored), Volatile: true})
+	}
+	if st.AnchorError != "" {
+		if d.State == "connected" {
+			d.State = "degraded"
+		}
+		d.Message += "; the anchor could not be written (" + st.AnchorError + "): it is retried"
+	}
+	if st.Unprotected != "" {
+		if d.State == "connected" {
+			d.State = "degraded"
+		}
+		d.Message += "; " + st.Unprotected
+	}
 	return d
 }
 
