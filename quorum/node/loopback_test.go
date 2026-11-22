@@ -213,7 +213,7 @@ func (c *cluster) start(id quorum.NodeID) *Elector {
 	}
 	e, err := New(Options{Cluster: c.pair, Self: id, Peer: peer, PeerAddr: c.addr[peer], WitnessAddr: c.addr[WitnessID],
 		Lease: loopLease, StatePath: m.state, Token: c.tok[id], ClientToken: c.ctok[id],
-		SelfAPI: apiAddr(id), PeerAPI: apiAddr(peer), TLS: c.clientTLS(id),
+		SelfAPI: apiAddr(id), TLS: c.clientTLS(id),
 		client: &http.Client{Transport: &faultRT{c: c, from: id, base: c.transportFor(id)}},
 		OnEvent: func(ev Event) {
 			c.evMu.Lock()
@@ -253,7 +253,15 @@ func (c *cluster) kill(id quorum.NodeID) {
 	e.Close()
 }
 
-func apiAddr(id quorum.NodeID) string { return "api-" + string(id) + ":8080" }
+// apiAddr is a controller's tag API: on its own port, as two boxes whose
+// manifests differ only there have it (the standby must name the leader's
+// port, not its own: #710 demo finding 1).
+func apiAddr(id quorum.NodeID) string {
+	if id == "a" {
+		return "api-a:8081"
+	}
+	return "api-" + string(id) + ":8082"
+}
 
 func (c *cluster) wipe(id quorum.NodeID) {
 	if err := os.Remove(c.ctl[id].state); err != nil {

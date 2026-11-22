@@ -697,6 +697,10 @@ type Server struct {
 	// same reason as pushService.sender: a concrete *http.Transport in Server's
 	// fields keeps its methods, and crypto/tls with them, in the wasm.
 	leaderTLS leaderTransport
+	// leaderPlain forwards to the leader over plain HTTP, with the same
+	// deadlines (withLeaderDeadlines). Set by New, nil under NewPlayground;
+	// an interface for the reason leaderTLS is one.
+	leaderPlain leaderTransport
 	// tlsPin is the leaf last said served (noteTLSChange).
 	tlsMu     sync.Mutex
 	tlsPin    [32]byte
@@ -729,6 +733,7 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 		s.wirePush(rt, opts[0].Push)
 	}
 	s.standby = s.proxyStandby
+	s.leaderPlain = withLeaderDeadlines(http.DefaultTransport.(*http.Transport).Clone())
 	return s
 }
 
@@ -1371,6 +1376,50 @@ const maxReplayBody = 1 << 20
 // answers nothing (#483). Overridable in tests.
 var failoverWait = 10 * time.Second
 
+// The deadlines on a standby's forward to the leader (#710). Without them
+// a leader that accepts the connection and never answers held the request
+// for as long as the client waited, and a dial to a leader whose host is
+// gone took the system's 30 s before failing over.
+//
+// leaderHeaderTimeout bounds the wait for the leader's response headers.
+// It must stay ABOVE the longest wait a leader's own handler makes before
+// it answers. A shorter deadline would turn a write the leader commits
+// late into a 502 at the standby, with the write applied, and hide the
+// leader's own message. Those waits:
+//   - substituteProposeWait, paramTimeout, pushSaveWait: 10 s;
+//   - oidcExchangeTimeout: 15 s;
+//   - an I/O apply (POST /api/io/staged/{id}/apply), whose failure path
+//     adds them up: each driver put back may take undoTimeout (10 s), then
+//     the put-back is saved (putBackWait, 10 s);
+//   - a program download or activation, which compiles, on an ARM box.
+//
+// So 2 minutes: room for a failed I/O apply across several drivers. Don't
+// tighten it without bounding those. It still ends the wait on a leader
+// that took a request and will never answer, which before had none. It
+// bounds only the headers, never the body, so a stream (SSE) runs as long
+// as it likes. Vars for tests.
+var (
+	leaderHeaderTimeout = 2 * time.Minute
+	leaderDialTimeout   = 2 * time.Second
+)
+
+const leaderHandshakeTimeout = 2 * time.Second
+
+// withLeaderDeadlines puts the deadlines above on t, the transport a
+// standby forwards to the leader with (plain or TLS). A dial that times out
+// is a dial error, so a write the leader never received is replayed to the
+// next leader (forwardTo); a leader that never sends its headers is a 502.
+func withLeaderDeadlines(t *http.Transport) *http.Transport {
+	d := &net.Dialer{Timeout: leaderDialTimeout, KeepAlive: 30 * time.Second}
+	t.DialContext = d.DialContext
+	t.TLSHandshakeTimeout = leaderHandshakeTimeout
+	t.ResponseHeaderTimeout = leaderHeaderTimeout
+	if mutServer("leader_headers_unbounded") {
+		t.ResponseHeaderTimeout = 0
+	}
+	return t
+}
+
 // forwardTo reverse-proxies r to the leader at addr. When the leader
 // refuses the connection, the request never reached it, so replaying it
 // cannot apply a write twice: with replay set, the standby waits for the
@@ -1392,6 +1441,9 @@ func (s *Server) forwardTo(w http.ResponseWriter, r *http.Request, addr string, 
 	proxy.Director = func(out *http.Request) {
 		direct(out)
 		s.forwardHeaders(out)
+	}
+	if s.leaderPlain != nil {
+		proxy.Transport = s.leaderPlain
 	}
 	if s.leaderTLS != nil {
 		proxy.Transport = s.leaderTLS

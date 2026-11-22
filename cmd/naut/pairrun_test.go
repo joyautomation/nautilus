@@ -130,8 +130,9 @@ func TestPairMemberOptions(t *testing.T) {
 	if o.Self != "b" || o.Peer != "a" || o.PeerAddr != "127.0.0.1:9450" || o.WitnessAddr != "127.0.0.3:9460" || listen != "127.0.0.2:9451" {
 		t.Errorf("self %s peer %s at %s, witness %s, listen %s", o.Self, o.Peer, o.PeerAddr, o.WitnessAddr, listen)
 	}
-	if o.SelfAPI != "127.0.0.2:8080" || o.PeerAPI != "127.0.0.1:8080" {
-		t.Errorf("API addresses %s (self) %s (peer)", o.SelfAPI, o.PeerAPI)
+	// Its own tag API only: the peer's is what the peer's hello announces.
+	if o.SelfAPI != "127.0.0.2:8080" {
+		t.Errorf("tag API %s, want this box's peers: host and its own API port", o.SelfAPI)
 	}
 	if o.StatePath != filepath.Join(env["STATE_DIRECTORY"], pairStateFile) || o.Lease != 500*time.Millisecond || o.ClientToken != "client" {
 		t.Errorf("state %s lease %v client token %q", o.StatePath, o.Lease, o.ClientToken)
@@ -319,65 +320,8 @@ func pairWait(t *testing.T, what string, d time.Duration, ok func() bool) {
 // names the leader's tag API; when the leader dies without a word, the
 // standby takes over (cold) and scans.
 func TestPairElectsAndTakesOverThroughNautRun(t *testing.T) {
-	if testing.Short() {
-		t.Skip("runs a pair and a witness on loopback for several leases")
-	}
-	if goruntime.GOOS != "linux" {
-		t.Skip("a pair member needs CLOCK_BOOTTIME (Linux)")
-	}
-	lnA, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	lnB, err := net.Listen("tcp", "127.0.0.2:0")
-	if err != nil {
-		lnA.Close()
-		t.Skip("no 127.0.0.2 on this host:", err)
-	}
-	// Both tag APIs on one port, as two boxes running one manifest have.
-	apiA, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, apiPort, _ := net.SplitHostPort(apiA.Addr().String())
-	apiB, err := net.Listen("tcp", "127.0.0.2:"+apiPort)
-	if err != nil {
-		apiA.Close()
-		t.Skip("127.0.0.2 does not take the same API port:", err)
-	}
-	cluster, token := node.NewClusterID(), testPeerToken
-	wctx, wstop := context.WithCancel(context.Background())
-	wready, wdone := make(chan string, 1), make(chan int, 1)
-	go func() {
-		wdone <- witnessMain(wctx, []string{"--listen", "127.0.0.1:0", "--state", t.TempDir(), "--lease", "500ms"},
-			pairEnv(map[string]string{"NAUTILUS_PEER_TOKEN": token}), io.Discard, io.Discard, wready)
-	}()
-	t.Cleanup(func() { wstop(); <-wdone })
-	var wit string
-	select {
-	case wit = <-wready:
-	case code := <-wdone:
-		t.Fatalf("the witness exited %d", code)
-	}
-	files := pairProject(lnA.Addr().String(), lnB.Addr().String(), wit)
-	env := func(self string) map[string]string {
-		return map[string]string{"NAUTILUS_NODE": self, "NAUTILUS_PEER_TOKEN": token, "NAUTILUS_CLUSTER": cluster, "STATE_DIRECTORY": t.TempDir()}
-	}
-	nodes := map[string]*pairNode{"a": startPairNodeAPI(t, files, env("a"), lnA, apiA), "b": startPairNodeAPI(t, files, env("b"), lnB, apiB)}
+	nodes, host, apiPort := startLoopbackPair(t, true)
 	a, b := nodes["a"].m.q.Node(), nodes["b"].m.q.Node()
-
-	// A new pair: both hear the witness and wait for the operator.
-	pairWait(t, "both members to hear the witness", 10*time.Second, func() bool {
-		return a.Status().WitnessIncarnation != 0 && b.Status().WitnessIncarnation != 0
-	})
-	if a.IsLeader() || b.IsLeader() || nodes["a"].rt.Stats().Count+nodes["b"].rt.Stats().Count != 0 {
-		t.Fatal("an uncommissioned pair elected or scanned")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := a.Recommission(ctx, a.Status().WitnessIncarnation, max(a.KnownFloor(), b.KnownFloor())+1000); err != nil {
-		t.Fatal(err)
-	}
 
 	var lead, stand string
 	pairWait(t, "a leader", 15*time.Second, func() bool {
@@ -391,13 +335,12 @@ func TestPairElectsAndTakesOverThroughNautRun(t *testing.T) {
 	})
 	l, s := nodes[lead], nodes[stand]
 	pairWait(t, "the leader to scan", 5*time.Second, func() bool { return l.rt.Stats().Count > 0 })
-	host := map[string]string{"a": "127.0.0.1", "b": "127.0.0.2"}
 	pairWait(t, "the standby to name the leader's tag API", 5*time.Second, func() bool {
-		return s.m.q.Status().LeaderAddr == host[lead]+":"+apiPort
+		return s.m.q.Status().LeaderAddr == host[lead]+":"+apiPort[lead]
 	})
 	// A write to the standby's tag API lands on the leader: the standby's
 	// proxy follows Status.LeaderAddr.
-	resp, err := http.Post("http://"+host[stand]+":"+apiPort+"/api/tags", "application/json", strings.NewReader(`{"name":"SP","value":7.5}`))
+	resp, err := http.Post("http://"+host[stand]+":"+apiPort[stand]+"/api/tags", "application/json", strings.NewReader(`{"name":"SP","value":7.5}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -436,6 +379,119 @@ func TestPairElectsAndTakesOverThroughNautRun(t *testing.T) {
 	pairWait(t, "the standby to take over", 15*time.Second, func() bool { return s.m.q.IsLeader() })
 	pairWait(t, "the new leader to scan", 5*time.Second, func() bool { return s.rt.Stats().Count > 0 })
 	t.Logf("%s led, crashed; %s took over in term %d", lead, stand, s.m.q.Term())
+}
+
+// startLoopbackPair is two pair members (127.0.0.1 and .2) and `naut
+// witness` on loopback, through naut run's wiring, commissioned. Their tag
+// APIs share one port (sameAPIPort) or each has its own. It returns the
+// members, their hosts and their API ports, by name.
+func startLoopbackPair(t *testing.T, sameAPIPort bool) (map[string]*pairNode, map[string]string, map[string]string) {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("runs a pair and a witness on loopback for several leases")
+	}
+	if goruntime.GOOS != "linux" {
+		t.Skip("a pair member needs CLOCK_BOOTTIME (Linux)")
+	}
+	lnA, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lnB, err := net.Listen("tcp", "127.0.0.2:0")
+	if err != nil {
+		lnA.Close()
+		t.Skip("no 127.0.0.2 on this host:", err)
+	}
+	// Both tag APIs on one port, as two boxes running one manifest have,
+	// or each on its own (manifests that differ there, or mapped ports).
+	apiA, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, portA, _ := net.SplitHostPort(apiA.Addr().String())
+	portB := "0"
+	if sameAPIPort {
+		portB = portA
+	}
+	apiB, err := net.Listen("tcp", "127.0.0.2:"+portB)
+	if err != nil {
+		apiA.Close()
+		t.Skip("127.0.0.2 does not take the API port:", err)
+	}
+	_, portB, _ = net.SplitHostPort(apiB.Addr().String())
+	if !sameAPIPort && portA == portB {
+		t.Skip("the two API ports came out the same")
+	}
+	cluster, token := node.NewClusterID(), testPeerToken
+	wctx, wstop := context.WithCancel(context.Background())
+	wready, wdone := make(chan string, 1), make(chan int, 1)
+	go func() {
+		wdone <- witnessMain(wctx, []string{"--listen", "127.0.0.1:0", "--state", t.TempDir(), "--lease", "500ms"},
+			pairEnv(map[string]string{"NAUTILUS_PEER_TOKEN": token}), io.Discard, io.Discard, wready)
+	}()
+	t.Cleanup(func() { wstop(); <-wdone })
+	var wit string
+	select {
+	case wit = <-wready:
+	case code := <-wdone:
+		t.Fatalf("the witness exited %d", code)
+	}
+	files := pairProject(lnA.Addr().String(), lnB.Addr().String(), wit)
+	env := func(self string) map[string]string {
+		return map[string]string{"NAUTILUS_NODE": self, "NAUTILUS_PEER_TOKEN": token, "NAUTILUS_CLUSTER": cluster, "STATE_DIRECTORY": t.TempDir()}
+	}
+	nodes := map[string]*pairNode{"a": startPairNodeAPI(t, files, env("a"), lnA, apiA), "b": startPairNodeAPI(t, files, env("b"), lnB, apiB)}
+	a, b := nodes["a"].m.q.Node(), nodes["b"].m.q.Node()
+
+	// A new pair: both hear the witness and wait for the operator.
+	pairWait(t, "both members to hear the witness", 10*time.Second, func() bool {
+		return a.Status().WitnessIncarnation != 0 && b.Status().WitnessIncarnation != 0
+	})
+	if a.IsLeader() || b.IsLeader() || nodes["a"].rt.Stats().Count+nodes["b"].rt.Stats().Count != 0 {
+		t.Fatal("an uncommissioned pair elected or scanned")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := a.Recommission(ctx, a.Status().WitnessIncarnation, max(a.KnownFloor(), b.KnownFloor())+1000); err != nil {
+		t.Fatal(err)
+	}
+
+	return nodes, map[string]string{"a": "127.0.0.1", "b": "127.0.0.2"}, map[string]string{"a": portA, "b": portB}
+}
+
+// A standby proxies a write to the leader's own tag API port, which need
+// not be its own: the port the leader's hello announced (#710 demo finding
+// 1). Before, it proxied to the leader's host at its OWN port, where
+// nothing (or something else) answers; peer_api_guessed turns this red.
+func TestPairStandbyProxiesToTheLeadersOwnAPIPort(t *testing.T) {
+	nodes, host, apiPort := startLoopbackPair(t, false)
+	var lead, stand string
+	pairWait(t, "a leader", 15*time.Second, func() bool {
+		switch {
+		case nodes["a"].m.q.IsLeader():
+			lead, stand = "a", "b"
+		case nodes["b"].m.q.IsLeader():
+			lead, stand = "b", "a"
+		}
+		return lead != ""
+	})
+	l, s := nodes[lead], nodes[stand]
+	pairWait(t, "the standby to name the leader's tag API, on the leader's port", 5*time.Second, func() bool {
+		return s.m.q.Status().LeaderAddr == host[lead]+":"+apiPort[lead]
+	})
+	resp, err := http.Post("http://"+host[stand]+":"+apiPort[stand]+"/api/tags", "application/json", strings.NewReader(`{"name":"SP","value":7.5}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		t.Fatalf("a write to the standby (API port %s, the leader's %s): %d %s", apiPort[stand], apiPort[lead], resp.StatusCode, body)
+	}
+	pairWait(t, "the write to reach the leader's store", 5*time.Second, func() bool {
+		v, _ := l.rt.Tags().ReadPath("SP")
+		return fmt.Sprint(v) == "7.5"
+	})
 }
 
 // The peer port is bound once: a second member of the same controller
@@ -530,14 +586,15 @@ func TestRedundancyWithPeersIsThePair(t *testing.T) {
 // answer a browser by (design §6.1): an IP, localhost or a listed name
 // (any case) passes.
 func TestPairWarnsAboutUntrustedAdvertisedNames(t *testing.T) {
-	m := &pairMember{o: node.Options{SelfAPI: "ctl-a.plant.lan:8080", PeerAPI: "ctl-b.plant.lan:8080"}}
+	m := &pairMember{o: node.Options{Self: "a", Peer: "b", SelfAPI: "ctl-a.plant.lan:8080"},
+		peers: map[string]string{"a": "ctl-a.plant.lan:9450", "b": "ctl-b.plant.lan:9450"}}
 	if got := m.untrustedAPIs(nil); len(got) != 2 || got[0] != "ctl-a.plant.lan" || got[1] != "ctl-b.plant.lan" {
 		t.Errorf("nothing listed: %q, want both names", got)
 	}
 	if got := m.untrustedAPIs([]string{"CTL-A.plant.lan"}); len(got) != 1 || got[0] != "ctl-b.plant.lan" {
 		t.Errorf("a listed: %q, want only b", got)
 	}
-	m.o = node.Options{SelfAPI: "10.0.0.5:8080", PeerAPI: "localhost:8080"}
+	m.o.SelfAPI, m.peers["b"] = "10.0.0.5:8080", "localhost:9450"
 	if got := m.untrustedAPIs(nil); len(got) != 0 {
 		t.Errorf("an IP and localhost: %q, want no warning", got)
 	}
