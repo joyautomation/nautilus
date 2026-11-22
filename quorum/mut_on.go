@@ -303,6 +303,10 @@ var Mutations = []string{
 	"clear_any_later_ack",               // server: a late hand-off clears an ack of a later occurrence (#715)
 	"clear_ack_taken_after",             // server: a late hand-off clears an ack the view took after its event (#715)
 	"engine_event_blocks",               // server: the engine's hook blocks when the hand-off is full (#715, #1053)
+	"clear_while_engine_holds",          // server: a late hand-off clears an ack the engine holds (#715)
+	"clear_without_livemu",              // server: a late hand-off is judged without waiting out an in-flight Apply (#715)
+	"reconcile_without_livemu",          // server: Reconcile reads the engine's acks and the view's without liveMu (#715)
+	"ack_clear_any_occurrence",          // server: an ack-clear naming one occurrence removes another occurrence's ack (#715)
 	"occurrences_not_synced",            // server: the leader proposes no occurrence-start or -end (#715)
 }
 

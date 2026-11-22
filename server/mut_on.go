@@ -35,6 +35,10 @@ import "os"
 //     after its event fired;
 //   - engine_event_blocks: the engine's hook blocks when the hand-off
 //     is full;
+//   - clear_while_engine_holds: a late hand-off clears an ack the engine holds;
+//   - clear_without_livemu: a late hand-off is judged without waiting out an in-flight Apply;
+//   - reconcile_without_livemu: Reconcile reads the engine's acks and the view's without liveMu;
+//   - ack_clear_any_occurrence: an ack-clear naming one occurrence removes another occurrence's ack;
 //   - superseded_alarms_kept: a superseded log's acks and shelves are
 //     carried by a takeover, and kept by a leader that learns it.
 var mutOn = os.Getenv("QUORUM_MUT")

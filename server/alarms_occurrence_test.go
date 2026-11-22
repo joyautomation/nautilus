@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
 	"slices"
 	"strings"
 	"sync"
@@ -688,5 +689,163 @@ func TestAFullHandOffDropsAndReconcileClears(t *testing.T) {
 			t.Fatal("Reconcile did not clear the ack whose end the full hand-off dropped")
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// Fable's window (#1198 focused review): an event fires between the
+// view's ack and the engine's. The alarm is in unack-rtn, the scan is
+// mid-evaluation holding the engine's lock, the committed ack has written
+// the view and waits for the engine; the scan re-activates the alarm on
+// the same occurrence and hands that off; then the engine takes the ack.
+// The judgement waits out that Apply and asks the engine, which holds the
+// ack: no clear.
+func TestAnEventBetweenTheViewsAckAndTheEnginesLeavesTheAck(t *testing.T) {
+	var lead atomic.Bool
+	lead.Store(true)
+	cond := map[string]any{"HiTempAlm": true, "LoFlowAlm": false}
+	var block atomic.Bool
+	reading, release := make(chan struct{}, 1), make(chan struct{})
+	eng, err := alarm.New(alarm.Options{
+		Defs: []alarm.Def{{ID: "HiTemp", Tag: "HiTempAlm", Name: "High temperature",
+			Priority: alarm.High, AckRequired: true, AutoClear: true, Shelvable: true}},
+		Read: func(p string) (any, bool) {
+			if block.Load() {
+				block.Store(false)
+				reading <- struct{}{}
+				<-release // the scan holds the engine's lock here
+			}
+			v, ok := cond[p]
+			return v, ok
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { eng.Close() })
+	al := NewAlarmLog(eng, lead.Load, noTerm)
+	al.clrRetry = time.Hour
+	PairAlarms{Engine: eng, Log: al}.RestoreAlarmsSynced(nil, true)
+	eng.Evaluate()
+	cond["HiTempAlm"] = false
+	eng.Evaluate() // unack-rtn, still occurrence O1
+	o1 := occOf(t, eng, "HiTemp")
+
+	block.Store(true)
+	cond["HiTempAlm"] = true
+	go eng.Evaluate()
+	<-reading
+	applied := make(chan struct{})
+	go func() {
+		_, _ = al.Apply(oplog.Entry{Kind: oplog.KindAck, IDs: []string{"HiTemp"},
+			Occs: []oplog.Occ{{ID: "HiTemp", Occ: o1.Occurrence, ActiveMs: o1.ActiveMs}}, By: "op"})
+		close(applied)
+	}()
+	for !al.Held(true, nil)["HiTemp"].Acked {
+		time.Sleep(time.Millisecond) // the view has the ack; the engine waits for the scan
+	}
+	close(release) // the scan re-activates on O1 and hands it off
+	<-applied
+	time.Sleep(100 * time.Millisecond) // the hand-off is judged
+	if _, held := eng.AckHeld("HiTemp"); !held {
+		t.Fatalf("the engine does not hold the ack: %s", state(eng, "HiTemp"))
+	}
+	al.clrMu.Lock()
+	queued := slices.Clone(al.clr)
+	al.clrMu.Unlock()
+	if len(queued) != 0 {
+		t.Fatalf("a clear of the ack the engine holds was queued: %v", queued)
+	}
+}
+
+// Reconcile reads the engine's acks and the view's under liveMu: an Apply
+// of an ack between its two reads waits, so the fresh ack never looks
+// stale.
+func TestReconcileNeverClearsAnAckAppliedBetweenItsReads(t *testing.T) {
+	var lead atomic.Bool
+	lead.Store(true)
+	cond := map[string]any{"HiTempAlm": true, "LoFlowAlm": false}
+	_, eng, al, _ := loggedAlarms(t, cond, &lead)
+	al.clrRetry = time.Hour
+	PairAlarms{Engine: eng, Log: al}.RestoreAlarmsSynced(nil, true)
+	eng.Evaluate()
+	o := occOf(t, eng, "HiTemp")
+	reconcileGap = func() {
+		done := make(chan struct{})
+		go func() {
+			_, _ = al.Apply(oplog.Entry{Kind: oplog.KindAck, IDs: []string{"HiTemp"},
+				Occs: []oplog.Occ{{ID: "HiTemp", Occ: o.Occurrence, ActiveMs: o.ActiveMs}}, By: "op"})
+			close(done)
+		}()
+		select {
+		case <-done: // only without liveMu: the ack landed between the reads
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+	t.Cleanup(func() { reconcileGap = nil })
+	al.Reconcile()
+	reconcileGap = nil
+	al.clrMu.Lock()
+	queued := slices.Clone(al.clr)
+	al.clrMu.Unlock()
+	if len(queued) != 0 {
+		t.Fatalf("Reconcile queued a clear of an ack applied between its reads: %v", queued)
+	}
+}
+
+// An ack-clear that names an occurrence leaves an ack the view holds for
+// another (newer) one: a clear queued for O1 that commits after an ack of
+// O2 never removes the O2 ack.
+func TestAckClearOfAnotherOccurrenceLeavesTheAck(t *testing.T) {
+	_, al, _ := standbyLog(t, map[string]any{"HiTempAlm": true, "LoFlowAlm": false})
+	for _, e := range []oplog.Entry{
+		{Kind: oplog.KindAck, IDs: []string{"HiTemp"}, Occs: []oplog.Occ{{ID: "HiTemp", Occ: "0202020202020202", ActiveMs: 2}}, By: "op"},
+		{Kind: oplog.KindAckClear, IDs: []string{"HiTemp"}, Occs: []oplog.Occ{{ID: "HiTemp", Occ: "0101010101010101"}}, By: "system"},
+	} {
+		if _, err := al.Apply(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if h := al.Held(true, nil)["HiTemp"]; !h.Acked || h.Occurrence != "0202020202020202" {
+		t.Fatalf("view %+v; want the ack of the newer occurrence kept", h)
+	}
+}
+
+// A hand-off that fired in another leadership is not judged in this one
+// (Reconcile judges this one's acks).
+func TestHandOffFromAnotherTermIsNotJudged(t *testing.T) {
+	var lead atomic.Bool
+	lead.Store(true)
+	_, _, al, _ := loggedAlarms(t, map[string]any{"HiTempAlm": true, "LoFlowAlm": false}, &lead)
+	al.clrRetry = time.Hour
+	al.mu.Lock()
+	al.view["HiTemp"] = alarmIntent{acked: true, ackBy: "op", occ: "0303030303030303", activeMs: 2}
+	al.mu.Unlock()
+	al.clearIfAcked(endedOcc{id: "HiTemp", occ: "0303030303030303", gen: 1, term: 7})
+	al.clrMu.Lock()
+	queued := slices.Clone(al.clr)
+	al.clrMu.Unlock()
+	if len(queued) != 0 {
+		t.Fatalf("a hand-off from term 7 was judged in term 0: %v", queued)
+	}
+}
+
+// The view sets an ack in one place, Apply's KindAck, which bumps ackGen
+// (the hand-off's ordering rests on it). A new path that sets acked must
+// bump ackGen too; this test counts the writes so it is noticed.
+func TestOnlyKindAckSetsAViewAck(t *testing.T) {
+	src, err := os.ReadFile("alarms_oplog.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(string(src), "v.acked, v.ackBy, v.ackMs, v.ackSeq = true,"); n != 1 {
+		t.Fatalf("%d places set a view ack; want 1 (Apply's KindAck). A new one must bump ackGen: see AlarmLog.ackGen", n)
+	}
+	_, al, _ := standbyLog(t, map[string]any{"HiTempAlm": true, "LoFlowAlm": false})
+	before := al.ackGen.Load()
+	if _, err := al.Apply(oplog.Entry{Kind: oplog.KindAck, IDs: []string{"HiTemp"}, By: "op"}); err != nil {
+		t.Fatal(err)
+	}
+	if v := al.view["HiTemp"]; al.ackGen.Load() != before+1 || v.ackGen != before+1 {
+		t.Fatalf("ackGen %d, view stamp %d; want both %d", al.ackGen.Load(), v.ackGen, before+1)
 	}
 }

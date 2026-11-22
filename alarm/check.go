@@ -139,6 +139,19 @@ type OccurrenceOf struct {
 	Waiting bool
 }
 
+// AckHeld reports whether alarm id's current occurrence is acknowledged
+// (ack-active, or shelved over it), and which occurrence that is.
+func (e *Engine) AckHeld(id string) (string, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	i, ok := e.byID[id]
+	if !ok {
+		return "", false
+	}
+	in := &e.inst[i]
+	return in.occ, in.underShelf() == AckActive
+}
+
 // AckHeldIDs are the alarms whose current occurrence is acknowledged:
 // ack-active, or shelved over ack-active. A pair's leader reconciles its
 // log's alarm view against it.

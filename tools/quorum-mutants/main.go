@@ -443,6 +443,10 @@ var table = []mutation{
 	{"clear_any_later_ack", []string{"TestLateHandOffKeepsALaterAck"}},
 	{"clear_ack_taken_after", []string{"TestHandOffNeverClearsAnAckTakenAfterTheEvent"}},
 	{"engine_event_blocks", []string{"TestAFullHandOffDropsAndReconcileClears"}},
+	{"clear_while_engine_holds", []string{"TestAnEventBetweenTheViewsAckAndTheEnginesLeavesTheAck"}},
+	{"clear_without_livemu", []string{"TestAnEventBetweenTheViewsAckAndTheEnginesLeavesTheAck"}},
+	{"reconcile_without_livemu", []string{"TestReconcileNeverClearsAnAckAppliedBetweenItsReads"}},
+	{"ack_clear_any_occurrence", []string{"TestAckClearOfAnotherOccurrenceLeavesTheAck"}},
 	{"occurrences_not_synced", []string{"TestLeaderSyncsOccurrences"}},
 }
 
@@ -538,6 +542,10 @@ var rowPkgs = map[string][]string{
 	"clear_any_later_ack":               {"./server"},
 	"clear_ack_taken_after":             {"./server"},
 	"engine_event_blocks":               {"./server"},
+	"clear_while_engine_holds":          {"./server"},
+	"clear_without_livemu":              {"./server"},
+	"reconcile_without_livemu":          {"./server"},
+	"ack_clear_any_occurrence":          {"./server"},
 	"occurrences_not_synced":            {"./server"},
 	"reconcile_before_restore":          {"./server"},
 	"cluster_ops_proxied":               {"./server"},

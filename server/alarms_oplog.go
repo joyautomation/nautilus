@@ -158,13 +158,16 @@ type AlarmLog struct {
 	ended chan endedOcc
 	// ackGen counts the acks the view has taken; each view ack keeps the
 	// count it was taken at, and each hand-off the count when its event
-	// fired, so a late judgement clears only an ack that existed then.
-	// It rests on one invariant: every path that acks the engine from the
-	// log (Apply's KindAck through applyAck, adoptPending through
-	// AckCommitted, a takeover's restore) writes the view, bumping
-	// ackGen, BEFORE the engine is acked, so an event that ends an ack
-	// always carries a count at or above that ack's. Break it and a real
-	// end goes unjudged until Reconcile.
+	// fired, so a late judgement never clears an ack taken after its
+	// event. The ONE place the view sets acked is Apply's KindAck, which
+	// bumps it there; any new path that sets acked must bump it too
+	// (TestOnlyKindAckSetsAViewAck). Every engine ack from the log comes
+	// after that write: applyAck in the same Apply, AckCommitted (an
+	// adoption) later, a takeover's restore later (it reads Held under
+	// liveMu, which excludes Apply). The count says only that the ack is
+	// not newer than the event, not that the event ended it: an event can
+	// fire between the view's ack and the engine's, so clearIfAcked also
+	// asks the engine, under liveMu (which waits out that Apply).
 	ackGen atomic.Uint64
 
 	// seen hears every committed alarm entry this replica proposed, once
@@ -246,6 +249,7 @@ func NewAlarmLog(eng *alarm.Engine, leading func() bool, term func() uint64) *Al
 type endedOcc struct {
 	id, occ string
 	gen     uint64 // AlarmLog.ackGen when the event fired
+	term    uint64 // the leadership it fired in
 }
 
 // endedQueue is the hand-off from the engine's hook to clearEnded: deep
@@ -357,6 +361,9 @@ func (l *AlarmLog) Apply(e oplog.Entry) (bool, error) {
 				notes = append(notes, l.cancelAdopt(id, "its ack was cleared: the occurrence left ack-active before this takeover"))
 			}
 			if v, ok := l.view[id]; ok && id != "" {
+				if o, named := occ[id]; named && o.Occ != "" && v.occ != "" && o.Occ != v.occ && !mutServer("ack_clear_any_occurrence") {
+					continue // it ends another occurrence's ack: this one is newer
+				}
 				v.acked, v.ackBy, v.ackMs, v.ackSeq = false, "", 0, 0
 				// The acknowledged occurrence left ack-active: it ended, or
 				// it is in unack-rtn, which no takeover continues. Its
@@ -482,15 +489,15 @@ func (l *AlarmLog) engineEvent(ev alarm.Event) {
 		return
 	}
 	if mutServer("engine_event_waits") {
-		l.clearIfAcked(endedOcc{ev.ID, ev.Occurrence, l.ackGen.Load()})
+		l.clearIfAcked(endedOcc{ev.ID, ev.Occurrence, l.ackGen.Load(), l.term()})
 		return
 	}
 	if mutServer("engine_event_blocks") {
-		l.ended <- endedOcc{ev.ID, ev.Occurrence, l.ackGen.Load()}
+		l.ended <- endedOcc{ev.ID, ev.Occurrence, l.ackGen.Load(), l.term()}
 		return
 	}
 	select {
-	case l.ended <- endedOcc{ev.ID, ev.Occurrence, l.ackGen.Load()}:
+	case l.ended <- endedOcc{ev.ID, ev.Occurrence, l.ackGen.Load(), l.term()}:
 	default:
 	}
 }
@@ -510,17 +517,39 @@ func (l *AlarmLog) clearEnded() {
 // occurrence the view's ack is for. An ack the view took since, for a
 // later occurrence, is not cleared.
 func (l *AlarmLog) clearIfAcked(e endedOcc) {
+	if !l.live() || l.term() != e.term {
+		return // fired in another leadership; Reconcile judges this one's
+	}
+	// Under liveMu: an Apply that wrote the view's ack but has not acked
+	// the engine yet finishes first, so the engine is asked after it.
+	if !mutServer("clear_without_livemu") {
+		l.liveMu.Lock()
+	}
 	l.mu.Lock()
 	v := l.view[e.id]
 	_, adopting := l.adopt[e.id]
 	l.mu.Unlock()
-	if v.ackGen > e.gen && !mutServer("clear_ack_taken_after") {
-		return // the view took this ack after the event: the event is not its end
+	clear := v.acked && (v.ackGen <= e.gen || mutServer("clear_ack_taken_after")) &&
+		(v.occ == "" || v.occ == e.occ || adopting || mutServer("clear_any_later_ack"))
+	if clear && !mutServer("clear_while_engine_holds") {
+		// The event fired between the view's ack and the engine's (an
+		// unack-rtn alarm re-activating on the same occurrence, a shelf
+		// expiring): the engine holds the ack now, and it stands.
+		if occ, held := l.eng.AckHeld(e.id); held && (v.occ == "" || occ == v.occ) {
+			clear = false
+		}
 	}
-	if v.acked && (v.occ == "" || v.occ == e.occ || adopting || mutServer("clear_any_later_ack")) {
+	if !mutServer("clear_without_livemu") {
+		l.liveMu.Unlock()
+	}
+	if clear {
 		l.queueClear(e.id, v.occ)
 	}
 }
+
+// reconcileGap, when set (tests), runs inside Reconcile between its read
+// of the engine's acks and its read of the view.
+var reconcileGap func()
 
 // Reconcile clears from the log any ack the leader's engine doesn't hold
 // (an occurrence that ended by a path no event caught, or a view left
@@ -532,7 +561,15 @@ func (l *AlarmLog) Reconcile() {
 		return
 	}
 	l.adoptPending() // first: an ack it applies is held below
+	// The engine's acks and the view's, read together under liveMu: an
+	// Apply between the two reads would make its fresh ack look stale.
+	if !mutServer("reconcile_without_livemu") {
+		l.liveMu.Lock()
+	}
 	held := l.eng.AckHeldIDs()
+	if reconcileGap != nil {
+		reconcileGap()
+	}
 	l.mu.Lock()
 	var stale []string
 	for id, v := range l.view {
@@ -544,6 +581,9 @@ func (l *AlarmLog) Reconcile() {
 		}
 	}
 	l.mu.Unlock()
+	if !mutServer("reconcile_without_livemu") {
+		l.liveMu.Unlock()
+	}
 	for _, id := range stale {
 		l.queueClear(id, "")
 	}
