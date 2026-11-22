@@ -1273,7 +1273,8 @@ func (f *Fake) software(r *http.Request) (any, *failure) {
 	if s.obInfo == nil {
 		s.obInfo = map[string]projectBlock{}
 	}
-	// The cyclic interrupt OBs first, as the agent makes them.
+	// The cyclic interrupt OBs first, as the agent makes them: every
+	// delete before any import.
 	for _, st := range steps {
 		k := strings.ToLower(st.Name)
 		if st.Action == tiad.OBRemoved || st.Action == tiad.OBRecreated {
@@ -1281,6 +1282,9 @@ func (f *Fake) software(r *http.Request) (any, *failure) {
 			delete(s.groups, k)
 			delete(s.obInfo, k)
 		}
+	}
+	for _, st := range steps {
+		k := strings.ToLower(st.Name)
 		if st.Action == tiad.OBCreated || st.Action == tiad.OBRecreated {
 			for _, ob := range req.OBs {
 				if strings.EqualFold(ob.Name, st.Name) {
@@ -1318,6 +1322,10 @@ func (f *Fake) software(r *http.Request) (any, *failure) {
 			}
 		}
 		switch conflict := constantClash(s.projectBlocks(), heads); {
+		case bytes.Contains(b, []byte("FAKE_SOURCE_ERROR")):
+			// An SCL error TIA reports as the source not importing.
+			sr.OK = false
+			sr.Messages = []string{"An error occurred during code generation. The block generation has been stopped. Row 000003: syntax error."}
 		case len(heads) == 0:
 			sr.OK = false
 			sr.Messages = []string{"no block found in source"}
@@ -1371,7 +1379,11 @@ func (f *Fake) software(r *http.Request) (any, *failure) {
 			"the import changed program blocks outside group %q (%s): this session can no longer be saved, archived for a deploy or downloaded. Close it without saving",
 			req.Group, strings.Join(changed, "; "))
 	}
-	if bad := verifyOBs(req.OBs, s.projectBlocks(), req.Group); len(bad) > 0 {
+	bad := failedOBSources(ds, req.OBs, res.Results)
+	if len(bad) == 0 {
+		bad = verifyOBs(req.OBs, s.projectBlocks(), req.Group)
+	}
+	if len(bad) > 0 {
 		s.foreignChanged = true
 		return nil, fail(http.StatusInternalServerError, tiad.KindOperationFailed,
 			"after the import, %s: this session can no longer be saved, archived for a deploy or downloaded. Close it without saving", strings.Join(bad, "; "))

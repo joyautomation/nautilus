@@ -75,6 +75,12 @@ namespace Tiad.Test
             True(clash("FB", "naut_OB_main") == null, "a name that does not start with OB_");
             True(clash("UDT", "OB_Main") == null, "a data type is refused on its own");
             True(clash("FB", "OB_") == null, "OB_ alone names no OB");
+            // the other way round: an asked OB whose constant would take a
+            // block's name
+            var held = new List<ProjectBlock> { PB("Main", "OB", 1, ""), PB("OB_naut_OB_main", "FB", 7, "Customer") };
+            TiadException r = CyclicObs.ConstantClash(new List<Declared>(), held, obs);
+            True(r != null && r.Message.Contains("obs asks OB \"naut_OB_main\", whose system constant OB_naut_OB_main would take the name of the project's block \"OB_naut_OB_main\""),
+                "an asked OB against a block named like its constant");
         }
 
         static OBStep Step(List<OBStep> l, string name)
@@ -126,10 +132,14 @@ namespace Tiad.Test
             Eq(l.Count, 2, "a removal and a creation");
             Eq(l[0].Name + " " + l[0].Action, "naut_OB_old removed", "the removal comes first");
             Eq(Step(l, "naut_OB_main").Action, "created", "then the creation");
-            // an OB of the group asked for under another number keeps its own
+            // an OB of the group asked for under another number frees its own
+            // (recreated; every delete comes before any import), with or
+            // without prune: two OBs may trade numbers
             var two = new List<CyclicOB> { want[0], new CyclicOB { Name = "naut_OB_old", Number = 31, CycleMs = 10 } };
-            e = Throws<TiadException>(delegate { CyclicObs.Plan(two, new List<ProjectBlock> { main, other }, "nautilus", true); }, "an asked OB holding the number");
-            True(e != null && e.Kind == Kinds.BadRequest, "an OB still asked for is never removed for another");
+            l = CyclicObs.Plan(two, new List<ProjectBlock> { main, other }, "nautilus", false);
+            Eq(Step(l, "naut_OB_main").Action + "; " + Step(l, "naut_OB_old").Action + " " + Step(l, "naut_OB_old").Was + " -> " + Step(l, "naut_OB_old").Now,
+                "created; recreated OB30, cyclic interrupt, 0 ms -> OB31, cyclic interrupt, 10 ms", "a renumbering");
+            Eq(l.Count, 2, "nothing removed");
         }
 
         static void CyclicObsVerifyAndXml()
@@ -153,6 +163,12 @@ namespace Tiad.Test
             ob.CycleMicros = 99999;
             Contains(string.Join("; ", CyclicObs.Verify(want, new List<ProjectBlock> { ob }, "nautilus").ToArray()), "99999 \u00b5s", "an odd cycle in microseconds");
             Eq(CyclicObs.VerifyFailed(new List<string> { "x" }).Kind, Kinds.OperationFailed, "the failure's kind");
+            var decl = new List<Declared> { new Declared { Kind = "OB", Name = "naut_OB_main", Source = "ob.scl" }, new Declared { Kind = "FB", Name = "F", Source = "fb.scl" } };
+            var results = new List<SourceResult> { new SourceResult { Path = "ob.scl", Ok = false, Messages = new List<string> { "syntax error" } }, new SourceResult { Path = "fb.scl", Ok = false } };
+            Eq(string.Join("; ", CyclicObs.FailedSources(decl, results).ToArray()), "the source of OB \"naut_OB_main\" (ob.scl) did not import: syntax error",
+                "an asked OB's failed source, not another failed source");
+            results[0].Ok = true;
+            Eq(CyclicObs.FailedSources(decl, results).Count, 0, "an imported OB source");
 
             string x = CyclicObs.Xml(new CyclicOB { Name = "a<b&c", Number = 31, CycleMs = 250 });
             Contains(x, "<CyclicTime>250000</CyclicTime>", "the cycle in microseconds");

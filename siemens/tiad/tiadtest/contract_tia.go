@@ -841,6 +841,20 @@ func contractSoftwareCyclicOBs(t *testing.T, start Starter) {
 	if err != nil || obSteps(r.OBs) != "naut_OB_main kept now OB30, cyclic interrupt, 50 ms" {
 		t.Fatalf("after the refusals: %s %v", obSteps(r.OBs), err)
 	}
+	// Two OBs trade numbers: every delete comes before any import.
+	put("src/OB_b.scl", obSCL("naut_OB_b"))
+	pair := []string{"src/Main.scl", "src/OB_main.scl", "src/OB_b.scl"}
+	if _, err := s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: pair, OBs: []tiad.CyclicOB{{Name: "naut_OB_main", Number: 30, CycleMS: 50}, {Name: "naut_OB_b", Number: 31, CycleMS: 10}}, Prune: true}); err != nil {
+		t.Fatal(err)
+	}
+	r, err = s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: pair, OBs: []tiad.CyclicOB{{Name: "naut_OB_main", Number: 31, CycleMS: 50}, {Name: "naut_OB_b", Number: 30, CycleMS: 10}}, Prune: true})
+	if err != nil || obSteps(r.OBs) != "naut_OB_main recreated was OB30, cyclic interrupt, 50 ms now OB31, cyclic interrupt, 50 ms; naut_OB_b recreated was OB31, cyclic interrupt, 10 ms now OB30, cyclic interrupt, 10 ms" {
+		t.Fatalf("a swap: %s %v", obSteps(r.OBs), err)
+	}
+	r, err = s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: src, OBs: []tiad.CyclicOB{{Name: "naut_OB_main", Number: 30, CycleMS: 50}}, Prune: true})
+	if err != nil || obSteps(r.OBs) != "naut_OB_b removed was OB30, cyclic interrupt, 10 ms; naut_OB_main recreated was OB31, cyclic interrupt, 50 ms now OB30, cyclic interrupt, 50 ms" {
+		t.Fatalf("back to one (prune removes the OB that holds 30): %s %v", obSteps(r.OBs), err)
+	}
 	// With prune, an OB of the group that holds the number goes first.
 	r, err = s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{"src/Main.scl", "src/OB_fast.scl"}, OBs: []tiad.CyclicOB{{Name: "naut_OB_fast", Number: 30, CycleMS: 10}}, Prune: true})
 	if err != nil || obSteps(r.OBs) != "naut_OB_main removed was OB30, cyclic interrupt, 50 ms; naut_OB_fast created now OB30, cyclic interrupt, 10 ms" ||
@@ -873,6 +887,29 @@ func contractSoftwareCyclicOBNotAsAsked(t *testing.T, start Starter) {
 	if _, err := s.Download(ctx, benchSoftwareLoad); tiad.Kind(err) != tiad.KindUncleanSession {
 		t.Fatalf("a download after it: %v", err)
 	}
+	// A failed OB source fails the import too, naming TIA's error, on a
+	// session of its own.
+	if err := s.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	s2, err := c.CreateProject(ctx, "obbad", BenchStation(), BenchSecrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.PutFile(ctx, "src/OB_bad.scl", []byte(strings.Replace(obSCL("naut_OB_main"), "BEGIN", "BEGIN\n\tFAKE_SOURCE_ERROR", 1))); err != nil {
+		t.Fatal(err)
+	}
+	_, err = s2.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{"src/Main.scl", "src/OB_bad.scl"}, OBs: []tiad.CyclicOB{{Name: "naut_OB_main", Number: 30, CycleMS: 100}}})
+	if tiad.Kind(err) != tiad.KindOperationFailed || !strings.Contains(err.Error(), `the source of OB "naut_OB_main" (src/OB_bad.scl) did not import: `) || !strings.Contains(err.Error(), "syntax error") {
+		t.Fatalf("a failed OB source: %v", err)
+	}
+	if _, err := s2.Save(ctx, false); tiad.Kind(err) != tiad.KindUncleanSession {
+		t.Fatalf("a save after a failed OB source: %v", err)
+	}
+	if err := s2.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+
 	if l := a.Loaded(t); len(l) != 0 {
 		t.Fatalf("loaded %+v", l)
 	}

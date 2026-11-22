@@ -1514,7 +1514,15 @@ namespace Tiad.Fake
                     if (b != null) heads.Add(b);
                 }
                 string conflict = ConstantClash(p, heads);
-                if (heads.Count == 0)
+                // FAKE_SOURCE_ERROR in a source is an SCL error TIA reports
+                // as the source not importing.
+                bool broken = File.ReadAllText(src.FullPath, Encoding.UTF8).Contains("FAKE_SOURCE_ERROR");
+                if (broken)
+                {
+                    sr.Ok = false;
+                    sr.Messages.Add("An error occurred during code generation. The block generation has been stopped. Row 000003: syntax error.");
+                }
+                else if (heads.Count == 0)
                 {
                     sr.Ok = false;
                     sr.Messages.Add("no block found in source");
@@ -1549,7 +1557,11 @@ namespace Tiad.Fake
                 string g;
                 p.GroupOf.TryGetValue(b.Name, out g);
                 // Prune deletes only in the import's group.
-                if (prune && Ownership.Owned(g ?? "", group)) continue;
+                if (prune && Ownership.Owned(g ?? "", group))
+                {
+                    if (!made.Exists(delegate(Block m) { return string.Equals(m.Name, b.Name, StringComparison.OrdinalIgnoreCase); })) p.ObInfo.Remove(b.Name);
+                    continue;
+                }
                 byName[b.Name.ToLowerInvariant()] = b;
             }
             foreach (var b in made)

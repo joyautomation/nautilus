@@ -1606,7 +1606,19 @@ namespace Tiad.Openness
                     pb.Class = ob.SecondaryType ?? "";
                     // CyclicTime (microseconds) exists on a cyclic
                     // interrupt OB only (TIA VM, 2026-11-22).
-                    if (pb.Class == CyclicObs.Cyclic) pb.CycleMicros = Convert.ToInt64(b.GetAttribute("CyclicTime"), CultureInfo.InvariantCulture);
+                    // A cycle it cannot read (-1) never matches an asked
+                    // one, and fails no import of a block it does not own.
+                    if (pb.Class == CyclicObs.Cyclic)
+                    {
+                        try
+                        {
+                            pb.CycleMicros = Convert.ToInt64(b.GetAttribute("CyclicTime"), CultureInfo.InvariantCulture);
+                        }
+                        catch (EngineeringException)
+                        {
+                            pb.CycleMicros = -1;
+                        }
+                    }
                 }
                 into.Add(pb);
             }

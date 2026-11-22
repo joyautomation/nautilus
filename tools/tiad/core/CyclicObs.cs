@@ -127,6 +127,16 @@ namespace Tiad
                 if (obNames.Contains(of))
                     problems.Add(d.Source + " declares \"" + d.Name + "\", the name of TIA's system constant for OB \"" + of + "\" (TIA keeps OB_<name> for every OB)");
             }
+            // The other way round: an asked OB whose constant would take the
+            // name of a block the project holds.
+            foreach (var ob in obs)
+            {
+                foreach (var b in blocks)
+                {
+                    if (string.Equals(b.Name, "OB_" + ob.Name, StringComparison.OrdinalIgnoreCase))
+                        problems.Add("obs asks OB \"" + ob.Name + "\", whose system constant OB_" + ob.Name + " would take the name of the project's block \"" + b.Name + "\"");
+                }
+            }
             if (problems.Count == 0) return null;
             return TiadException.BadRequest(string.Join("; ", problems.ToArray()) + ". Nothing was imported. Rename the block (a name that does not start with OB_)");
         }
@@ -148,7 +158,11 @@ namespace Tiad
                     if (b.Type != "OB" || b.Number != ob.Number || string.Equals(b.Name, ob.Name, StringComparison.OrdinalIgnoreCase)) continue;
                     if (!Ownership.Owned(b.Group, group))
                         throw new TiadException(409, Kinds.ForeignBlock, "obs asks OB" + ob.Number + " for \"" + ob.Name + "\", but \"" + b.Name + "\" [OB" + b.Number + "] outside group \"" + group + "\" holds it. Nothing was imported. Choose another number");
-                    if (!prune || asked.Contains(b.Name))
+                    // An OB the request asks for under another number frees
+                    // this one: it is recreated, and every delete comes
+                    // before any import.
+                    if (asked.Contains(b.Name)) continue;
+                    if (!prune)
                         throw TiadException.BadRequest("obs asks OB" + ob.Number + " for \"" + ob.Name + "\", but \"" + b.Name + "\" [OB" + b.Number + "] in the group holds it. Nothing was imported. Choose another number, or import with prune to remove it");
                     removals.Add(new OBStep { Name = b.Name, Action = "removed", Was = Describe(b) });
                 }
@@ -182,6 +196,23 @@ namespace Tiad
             return bad;
         }
 
+        // FailedSources lists every OB whose declaring source did not import
+        // (results by the request's path). Every OB source names an asked OB
+        // by then (SourcesRefused).
+        public static List<string> FailedSources(List<Declared> declared, List<SourceResult> results)
+        {
+            var failed = new Dictionary<string, SourceResult>(StringComparer.Ordinal);
+            foreach (var r in results) if (!r.Ok) failed[r.Path] = r;
+            var l = new List<string>();
+            foreach (var d in declared)
+            {
+                SourceResult r;
+                if (d.Kind == "OB" && failed.TryGetValue(d.Source, out r))
+                    l.Add("the source of OB \"" + d.Name + "\" (" + d.Source + ") did not import: " + string.Join(" ", r.Messages.ToArray()));
+            }
+            return l;
+        }
+
         public static TiadException VerifyFailed(List<string> bad)
         {
             return new TiadException(500, Kinds.OperationFailed,
@@ -210,7 +241,8 @@ namespace Tiad
         }
 
         // Xml is the SimaticML for an empty LAD cyclic interrupt OB: the
-        // shape TIA V21 exported and imported on the VM (2026-11-22), with
+        // shape TIA V21 exported and imported on the VM (2026-11-22; tiad
+        // runs on V21 only, so the document says V21), with
         // AutoNumber off so TIA never picks another number, and no texts,
         // so no project language is assumed.
         public static string Xml(CyclicOB ob)

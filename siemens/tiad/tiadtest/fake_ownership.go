@@ -286,6 +286,13 @@ func obConstantClash(ds []declared, blocks []projectBlock, obs []tiad.CyclicOB) 
 			problems = append(problems, fmt.Sprintf("%s declares %q, the name of TIA's system constant for OB %q (TIA keeps OB_<name> for every OB)", d.source, d.Name, of))
 		}
 	}
+	for _, ob := range obs {
+		for _, b := range blocks {
+			if strings.EqualFold(b.name, "OB_"+ob.Name) {
+				problems = append(problems, fmt.Sprintf("obs asks OB %q, whose system constant OB_%s would take the name of the project's block %q", ob.Name, ob.Name, b.name))
+			}
+		}
+	}
 	if len(problems) == 0 {
 		return nil
 	}
@@ -334,7 +341,12 @@ func planOBs(obs []tiad.CyclicOB, blocks []projectBlock, group string, prune boo
 			if !owned(b.group, group) {
 				return nil, fail(http.StatusConflict, tiad.KindForeignBlock, "obs asks OB%d for %q, but %s outside group %q holds it. Nothing was imported. Choose another number", ob.Number, ob.Name, b.label(), group)
 			}
-			if !prune || asked[strings.ToLower(b.name)] {
+			// An OB asked for under another number frees this one (it is
+			// recreated; every delete comes before any import).
+			if asked[strings.ToLower(b.name)] {
+				continue
+			}
+			if !prune {
 				return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "obs asks OB%d for %q, but %s in the group holds it. Nothing was imported. Choose another number, or import with prune to remove it", ob.Number, ob.Name, b.label())
 			}
 			removals = append(removals, tiad.OBStep{Name: b.name, Action: tiad.OBRemoved, Was: describeBlock(b)})
@@ -351,6 +363,27 @@ func planOBs(obs []tiad.CyclicOB, blocks []projectBlock, group string, prune boo
 		steps = append(steps, st)
 	}
 	return append(removals, steps...), nil
+}
+
+// failedOBSources is CyclicObs.FailedSources.
+func failedOBSources(ds []declared, obs []tiad.CyclicOB, results []tiad.SourceResult) []string {
+	asked := map[string]bool{}
+	for _, ob := range obs {
+		asked[strings.ToLower(ob.Name)] = true
+	}
+	failed := map[string]tiad.SourceResult{}
+	for _, r := range results {
+		if !r.OK {
+			failed[r.Path] = r
+		}
+	}
+	var l []string
+	for _, d := range ds {
+		if r, ok := failed[d.source]; ok && d.Kind == "OB" && asked[strings.ToLower(d.Name)] {
+			l = append(l, fmt.Sprintf("the source of OB %q (%s) did not import: %s", d.Name, d.source, strings.Join(r.Messages, " ")))
+		}
+	}
+	return l
 }
 
 // verifyOBs is CyclicObs.Verify.
