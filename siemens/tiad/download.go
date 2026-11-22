@@ -492,6 +492,9 @@ func (r DownloadRequest) Validate() error {
 	if !r.Hardware && !r.Software {
 		return fmt.Errorf("download: neither hardware nor software selected")
 	}
+	if r.Fingerprint != nil && r.Fingerprint.Secrets != nil {
+		return fmt.Errorf("download: the Full access password goes in secrets.fullAccessPassword, not in the fingerprint's secrets")
+	}
 	if !r.Announced {
 		return fmt.Errorf("download: announce it first (announced: true); a dry run reaches the CPU too until S2 proves a cancel loads nothing")
 	}

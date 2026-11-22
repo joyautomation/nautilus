@@ -220,8 +220,13 @@ namespace Tiad
         // without asking anything. startAfter is whether the CPU starts
         // after loading (null: it stays as it is). secrets carries the
         // protection password a password question needs.
+        //
+        // login, in Download, Compare, Upload and ReadFingerprint, is what
+        // the call answers when TIA asks credentials going online (null:
+        // none). Each operation makes its own LoginUse of it, which decides
+        // every answer (OnlineLogin, LoginUse).
         DownloadOutcome Download(object project, string address, bool hardware, bool software,
-            Secrets secrets, bool? startAfter, Func<Question, Answer> answer);
+            Secrets secrets, bool? startAfter, Func<Question, Answer> answer, OnlineLogin login);
 
         // Compare compares the project's PLC software with the CPU at
         // address and returns TIA's compare tree as TIA reports it (null
@@ -231,7 +236,7 @@ namespace Tiad
         // empty tree, one with an element skipped or differing, or one
         // that leaves out a block the project holds, never passes as
         // equal (#789).
-        OnlineCompare Compare(object project, string address);
+        OnlineCompare Compare(object project, string address, OnlineLogin login);
 
         // Export writes what o asks for under dir and returns the full
         // paths it wrote.
@@ -241,7 +246,7 @@ namespace Tiad
         // trustUnverifiedCertificate, the request's explicit opt-in, a TLS
         // certificate question is answered trusted, blindly; Upload returns
         // the questions it so answered (empty when none was asked).
-        List<string> Upload(object project, string address, bool trustUnverifiedCertificate);
+        List<string> Upload(object project, string address, bool trustUnverifiedCertificate, OnlineLogin login);
 
         // ReadFingerprint goes online, read-only, from the project's CPU
         // to address, reads what TIA's fingerprint service reports for it,
@@ -252,7 +257,7 @@ namespace Tiad
         // read, when the CPU is not reached online or any step fails. It
         // refuses before going online when address is not the project
         // CPU's address.
-        FingerprintRead ReadFingerprint(object project, string address, bool trustUnverifiedCertificate);
+        FingerprintRead ReadFingerprint(object project, string address, bool trustUnverifiedCertificate, OnlineLogin login);
 
         // ProjectCpu is the identity of the project's CPU as the project
         // holds it: after an upload, what the CPU reported. Serial and Mac

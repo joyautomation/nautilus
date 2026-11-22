@@ -63,7 +63,7 @@ func UploadedKeep(t *testing.T, a Target, address string) *tiad.Session {
 // checks (and the device an upload keeps) and asks a user-management
 // reset.
 func ResetLoad(address string) tiad.DownloadRequest {
-	return AcceptHardware(tiad.DownloadRequest{Address: address, Hardware: true, Software: true, Announced: true,
+	return AcceptHardware(tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: address, Hardware: true, Software: true, Announced: true,
 		Decisions: tiad.Decisions{StopCPU: tiad.Yes(), Overwrite: tiad.Yes(), ConsistentDownload: tiad.Yes(), StartAfter: tiad.Yes(),
 			KeptDevices: []string{UploadedIODevice().Name}, UserManagementResetToProject: tiad.Yes()}})
 }

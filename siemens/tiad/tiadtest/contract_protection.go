@@ -190,7 +190,7 @@ func contractProtected(t *testing.T, start Starter) {
 	if n := len(a.Loaded(t)); n != 0 {
 		t.Fatalf("loaded %d without the configuration password", n)
 	}
-	status, b = rawJSON(t, c, "POST", path, body(map[string]string{"configurationPassword": BenchConfigurationPassword}))
+	status, b = rawJSON(t, c, "POST", path, body(map[string]string{"configurationPassword": BenchConfigurationPassword, "fullAccessPassword": BenchFullAccessPassword}))
 	if status != http.StatusOK || len(a.Loaded(t)) != 1 {
 		t.Fatalf("with the configuration password: HTTP %d %s", status, b)
 	}

@@ -215,7 +215,7 @@ func contractDownloadFlow(t *testing.T, start Starter) {
 	a, s := compiledBench(t, start)
 	a.SetQuestions(t, []tiad.Question{qStop, {ID: tiad.QuestionStartAfter, Message: "Start the CPU after loading"}})
 	req := tiad.DownloadRequest{Address: benchCPU, Hardware: true, Software: true, Announced: true,
-		Decisions: tiad.Decisions{StopCPU: tiad.Yes(), StartAfter: tiad.Yes()}, Secrets: &tiad.Secrets{Protection: "protection-must-not-be-recorded"}}
+		Decisions: tiad.Decisions{StopCPU: tiad.Yes(), StartAfter: tiad.Yes()}, Secrets: &tiad.Secrets{Protection: "protection-must-not-be-recorded", FullAccessPassword: BenchFullAccessPassword}}
 
 	// A dry run cancels at TIA's first check, so it sees only that one.
 	dry := req
@@ -228,7 +228,7 @@ func contractDownloadFlow(t *testing.T, start Starter) {
 	if l := a.Loaded(t); len(l) != 0 {
 		t.Fatalf("a dry run loaded %+v", l)
 	}
-	if cmp, err := s.Compare(ctx); err != nil || cmp.Equal {
+	if cmp, err := s.CompareWith(ctx, BenchCompare); err != nil || cmp.Equal {
 		t.Fatalf("compare before any download: %+v %v", cmp, err)
 	}
 	contractHardwareGate(t, a, s, req)
@@ -250,7 +250,7 @@ func contractDownloadFlow(t *testing.T, start Starter) {
 	} else if when, err := time.Parse("2006-01-02T15:04:05.000Z", at.At); err != nil || when.Before(before) || when.After(time.Now().UTC().Add(time.Second)) {
 		t.Fatalf("attestation time %q (%v), want tiad's UTC clock at the download", at.At, err)
 	}
-	if cmp, err := s.Compare(ctx); err != nil || !cmp.Equal || len(cmp.Differences) != 0 {
+	if cmp, err := s.CompareWith(ctx, BenchCompare); err != nil || !cmp.Equal || len(cmp.Differences) != 0 {
 		t.Fatalf("compare after the download: %+v %v", cmp, err)
 	}
 	want := []Loaded{{Address: benchCPU, Hardware: true, Software: true, State: "RUN"}}
@@ -264,7 +264,7 @@ func contractDownloadFlow(t *testing.T, start Starter) {
 	if _, err := s.ApplyStation(ctx, BenchStation(mod), BenchSecrets); err != nil {
 		t.Fatal(err)
 	}
-	if cmp, _ := s.Compare(ctx); cmp.Equal {
+	if cmp, _ := s.CompareWith(ctx, BenchCompare); cmp.Equal {
 		t.Fatal("compare is equal after a station change")
 	}
 	if _, err := s.Download(ctx, req); tiad.Kind(err) != tiad.KindNotCompiled {
@@ -273,7 +273,7 @@ func contractDownloadFlow(t *testing.T, start Starter) {
 	if _, err := s.Compile(ctx, true, true); err != nil {
 		t.Fatal(err)
 	}
-	if cmp, _ := s.Compare(ctx); cmp.Equal {
+	if cmp, _ := s.CompareWith(ctx, BenchCompare); cmp.Equal {
 		t.Fatal("compare is equal after compiling a change that was never downloaded")
 	}
 	a.SetQuestions(t, nil)
@@ -282,7 +282,7 @@ func contractDownloadFlow(t *testing.T, start Starter) {
 	if res, err := s.Download(ctx, req); err != nil || !res.Downloaded || res.State != "" || res.StateSource != "" {
 		t.Fatalf("second download, CPU never stopped: %+v %v", res, err)
 	}
-	if cmp, _ := s.Compare(ctx); !cmp.Equal {
+	if cmp, _ := s.CompareWith(ctx, BenchCompare); !cmp.Equal {
 		t.Fatal("compare after the second download")
 	}
 	if n := len(a.Loaded(t)); n != 2 {
@@ -304,7 +304,7 @@ func contractDownloadFlow(t *testing.T, start Starter) {
 func contractDownloadRules(t *testing.T, start Starter) {
 	a, s := compiledBench(t, start, benchCPU, otherCPU)
 	a.SetQuestions(t, []tiad.Question{qStop, {ID: tiad.QuestionReinitialize, Message: "reinit", Objects: []string{"Main_DB"}}})
-	base := tiad.DownloadRequest{Address: benchCPU, Software: true, Announced: true}
+	base := tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: benchCPU, Software: true, Announced: true}
 
 	// Whether the CPU starts after loading is decided before TIA is
 	// called; then TIA's checks come one at a time.
@@ -525,7 +525,7 @@ func contractDownloadPrecedence(t *testing.T, start Starter) {
 
 func contractCompare(t *testing.T, start Starter) {
 	_, s := compiledBench(t, start)
-	if cmp, err := s.Compare(ctx); err != nil || cmp.Equal || len(cmp.Differences) == 0 || cmp.Differences[0].Object != "PLC_1" {
+	if cmp, err := s.CompareWith(ctx, BenchCompare); err != nil || cmp.Equal || len(cmp.Differences) == 0 || cmp.Differences[0].Object != "PLC_1" {
 		t.Fatalf("compare before a download: %+v %v", cmp, err)
 	}
 	// A CPU not in TIAD_TARGETS is never gone online to.
@@ -536,7 +536,7 @@ func contractCompare(t *testing.T, start Starter) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s2.Compare(ctx); tiad.Kind(err) != tiad.KindTargetRefused {
+	if _, err := s2.CompareWith(ctx, BenchCompare); tiad.Kind(err) != tiad.KindTargetRefused {
 		t.Fatalf("compare with an unlisted CPU: %v", err)
 	}
 	if err := s2.Upload(ctx); tiad.Kind(err) != tiad.KindTargetRefused {
@@ -587,7 +587,7 @@ func contractExportUploadSave(t *testing.T, start Starter) {
 	// Only an upload and a fingerprint read take trustUnverifiedCertificate,
 	// as an explicit opt-in; download and compare refuse it as an unknown
 	// field.
-	if r, err := s.UploadWith(ctx, tiad.UploadRequest{TrustUnverifiedCertificate: true}); err != nil || r.TrustedBlindly == nil || len(r.TrustedBlindly) != 0 {
+	if r, err := s.UploadWith(ctx, tiad.UploadRequest{Secrets: BenchLogin, TrustUnverifiedCertificate: true}); err != nil || r.TrustedBlindly == nil || len(r.TrustedBlindly) != 0 {
 		t.Fatalf("upload with the opt-in, no TLS question: %+v %v", r, err)
 	}
 	for _, call := range []struct {
@@ -606,7 +606,7 @@ func contractExportUploadSave(t *testing.T, start Starter) {
 		t.Fatalf("a refused download loaded %+v", l)
 	}
 	// After an upload the project no longer matches its spec.
-	if _, err := s.Download(ctx, tiad.DownloadRequest{Address: benchCPU, Software: true, Announced: true}); tiad.Kind(err) != tiad.KindBadRequest || !strings.Contains(err.Error(), "no station spec") {
+	if _, err := s.Download(ctx, tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: benchCPU, Software: true, Announced: true}); tiad.Kind(err) != tiad.KindBadRequest || !strings.Contains(err.Error(), "no station spec") {
 		t.Fatalf("download after an upload: %v", err)
 	}
 	if p, err := s.Save(ctx, false); err != nil || p != "projects/bench/bench.ap21" {
@@ -652,10 +652,10 @@ func contractS2aSequence(t *testing.T, start Starter) {
 	if len(exports[0]) == 0 || string(exports[0]) != string(exports[1]) {
 		t.Fatalf("the two hardware exports differ or are missing:\n%s\n%s", exports[0], exports[1])
 	}
-	if _, err := s.Compare(ctx); err != nil {
+	if _, err := s.CompareWith(ctx, BenchCompare); err != nil {
 		t.Fatalf("compare after the upload: %v", err)
 	}
-	dl := AcceptHardware(tiad.DownloadRequest{Address: benchCPU, Hardware: true, Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}})
+	dl := AcceptHardware(tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: benchCPU, Hardware: true, Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}})
 	if _, err := s.Download(ctx, dl); tiad.Kind(err) != tiad.KindBadRequest || !strings.Contains(err.Error(), "no station spec") {
 		t.Fatalf("download straight after the upload: %v", err)
 	}
@@ -702,7 +702,7 @@ func contractOneCPU(t *testing.T, start Starter) {
 	// TIA opens one project at a time (#616), so a second project for the
 	// CPU cannot even open while the first is open: one CPU, one project.
 	one := mk("one")
-	dl := tiad.DownloadRequest{Address: benchCPU, Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}}
+	dl := tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: benchCPU, Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}}
 	if _, err := one.Download(ctx, dl); err != nil {
 		t.Fatalf("the first project's download: %v", err)
 	}

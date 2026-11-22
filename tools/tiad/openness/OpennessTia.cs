@@ -60,8 +60,10 @@ namespace Tiad.Openness
 
     // OnlineAsks answers what TIA asks when it goes online to a CPU
     // (ConnectionConfiguration.OnlineLegitimation): a TLS certificate to
-    // trust, or credentials. tiad trusts no CPU certificate and holds no CPU
-    // credentials yet, so every answer is no, and each question is recorded
+    // trust, or credentials. A certificate is answered not trusted unless
+    // the request opts in; a project user's legitimation is answered as the
+    // CPU's user "nautilus" when the operation's LoginUse (core) says so;
+    // anything else is answered no. Each question answered no is recorded
     // so the failure names it: the certificate's fingerprint is what a
     // later, explicit trust decision has to match.
     sealed class OnlineAsks
@@ -70,6 +72,8 @@ namespace Tiad.Openness
         readonly OnlineAnswers answers;
         readonly Action gone;
         readonly string address;
+        // use is the operation's login, shared by its handlers.
+        readonly LoginUse use;
         readonly OnlineRecord record = new OnlineRecord();
         public List<string> Asked
         {
@@ -84,16 +88,17 @@ namespace Tiad.Openness
 
         // gone is called when the handler cannot be detached: TIA's
         // objects are disposed, so TIA is taken to be gone.
-        public OnlineAsks(ConnectionConfiguration cc, Action gone) : this(cc, gone, false, "")
+        public OnlineAsks(ConnectionConfiguration cc, Action gone, LoginUse use, string address) : this(cc, gone, false, address, use)
         {
         }
 
-        public OnlineAsks(ConnectionConfiguration cc, Action gone, bool trustUnverifiedCertificate, string address)
+        public OnlineAsks(ConnectionConfiguration cc, Action gone, bool trustUnverifiedCertificate, string address, LoginUse use)
         {
             this.cc = cc;
             this.gone = gone;
             answers = new OnlineAnswers(trustUnverifiedCertificate);
             this.address = address;
+            this.use = use;
             if (cc != null) cc.OnlineLegitimation += Handle;
         }
 
@@ -102,9 +107,9 @@ namespace Tiad.Openness
         // connection's OnlineLegitimation event: pass Handle to it. It
         // answers through the same OnlineRecord.Handle path, so TIA gets
         // only Boundary.Fail's exception from it (#1145).
-        public static OnlineAsks ForCallback(Action gone, bool trustUnverifiedCertificate, string address)
+        public static OnlineAsks ForCallback(Action gone, bool trustUnverifiedCertificate, string address, LoginUse use)
         {
-            return new OnlineAsks(null, gone, trustUnverifiedCertificate, address);
+            return new OnlineAsks(null, gone, trustUnverifiedCertificate, address, use);
         }
 
         // Stop detaches the handler and never throws: TIA may be gone
@@ -136,6 +141,12 @@ namespace Tiad.Openness
         {
             var tls = c as TlsVerificationConfiguration;
             string answer = answers.Answer(type);
+            var auth = c as OnlineAuthenticationConfiguration;
+            if (answer == OnlineChecks.Login && auth != null)
+            {
+                Login(auth, type, call);
+                return;
+            }
             if ((answer == OnlineChecks.NotTrusted || answer == OnlineChecks.Trusted) && tls != null)
             {
                 bool trust = answer == OnlineChecks.Trusted;
@@ -166,13 +177,59 @@ namespace Tiad.Openness
                     Log.Line("online: reading a TLS question failed ({0}); answered {1}", e.GetType().Name, trust ? "TRUSTED BLINDLY" : "not trusted");
                 }
                 string question = OnlineChecks.Ask(type, plc, info, fps);
-                if (trust) call.Trust(question);
+                if (trust)
+                {
+                    call.Trust(question);
+                    // No password goes over a connection trusted blindly.
+                    use.Trusted();
+                }
                 else call.Refuse(question);
                 return;
             }
             string ask = OnlineChecks.Ask(type, "", "", new List<string>());
             call.Refuse(ask);
             throw new TiaException("tiad cancels going online: TIA asked " + ask);
+        }
+
+        // Login answers a project user's legitimation as LoginUse decides:
+        // what TIA offers is read first (whether the connection is secure,
+        // the user types the CPU supports: an unreadable one refuses), then
+        // the user "nautilus", as a project user, and the password are
+        // written. The configuration is never described: it holds the
+        // credentials. The log names the user types only, so the next
+        // window shows what a CPU with access control offers.
+        void Login(OnlineAuthenticationConfiguration auth, string type, OnlineRecord.Call call)
+        {
+            bool? secure = null;
+            List<string> types = null;
+            try
+            {
+                secure = auth.IsSecureCommunication;
+            }
+            catch (Exception e)
+            {
+                Log.Line("online: reading IsSecureCommunication failed ({0})", e.GetType().Name);
+            }
+            try
+            {
+                var t = new List<string>();
+                foreach (Siemens.Engineering.Online.Configurations.AuthenticationType a in auth.GetSupportedAuthenticationTypes()) t.Add(a.CurrentUserType.ToString());
+                types = t;
+            }
+            catch (Exception e)
+            {
+                Log.Line("online: reading the supported user types failed ({0})", e.GetType().Name);
+            }
+            Log.Line("online: {0} asks credentials ({1}): secure communication {2}, user types [{3}]", TiaNames.LogSafe(address), type,
+                secure == null ? "unreadable" : secure.Value ? "yes" : "no", types == null ? "unreadable" : string.Join(", ", types.ToArray()));
+            use.Answer(call, type, this, secure, types, delegate(string password)
+            {
+                OnlineCredentials cr = auth.OnlineCredentials;
+                if (cr == null) throw new TiaException("TIA's credentials question holds no OnlineCredentials");
+                cr.Type = UserType.ProjectUser;
+                cr.Name = OnlineLogin.User;
+                using (SecureString pw = OpennessTia.Secure(password)) cr.SetPassword(pw);
+            });
         }
 
         // Describe lists an online question's attributes and their values,
@@ -201,7 +258,10 @@ namespace Tiad.Openness
         // something going online, what it asked.
         public TiaException Explain(string address, Exception e)
         {
-            if (Asked.Count == 0) return null;
+            if (Asked.Count == 0)
+            {
+                return record.LoggedIn.Count == 0 ? null : new TiaException(TiaNames.LoginFailed(address, TiaNames.Message(e)), e);
+            }
             return new TiaException(TiaNames.OnlineRefused(address, Asked, TiaNames.Message(e)), e);
         }
 
@@ -961,7 +1021,7 @@ namespace Tiad.Openness
             }
         }
 
-        static SecureString Secure(string s)
+        internal static SecureString Secure(string s)
         {
             var ss = new SecureString();
             foreach (char ch in s) ss.AppendChar(ch);
@@ -1103,9 +1163,10 @@ namespace Tiad.Openness
         // ---- download ----
 
         public DownloadOutcome Download(object project, string address, bool hardware, bool software,
-            Secrets secrets, bool? startAfter, Func<Question, Answer> answer)
+            Secrets secrets, bool? startAfter, Func<Question, Answer> answer, OnlineLogin login)
         {
             var decider = new DownloadDecider(answer, startAfter);
+            var use = new LoginUse(login, "download", address);
             int checks = 0;
             OnlineAsks online = null;
             DownloadProvider dp = null;
@@ -1126,7 +1187,7 @@ namespace Tiad.Openness
                     // reads the CPU's mode from them).
                     cpuName = cpu.Name ?? "";
                     dp = cpu.GetService<DownloadProvider>();
-                    online = new OnlineAsks(dp.Configuration, Detached);
+                    online = new OnlineAsks(dp.Configuration, Detached, use, address);
                     ConfigurationPcInterface pc = PcInterface(dp.Configuration);
                     target = TargetInterface(pc);
                     // Provisional until S2b: the address on the target
@@ -1246,7 +1307,7 @@ namespace Tiad.Openness
         // online to the CPU at address, compares the PLC software with it
         // and returns TIA's compare tree as is, with those blocks; the
         // agent decides what they prove (TiaNames.CompareEqual).
-        public OnlineCompare Compare(object project, string address)
+        public OnlineCompare Compare(object project, string address, OnlineLogin login)
         {
             return Tia(delegate
             {
@@ -1262,7 +1323,7 @@ namespace Tiad.Openness
                 ConfigurationAddress at = TargetInterface(pc).Addresses.Create(address);
                 // The handler stays attached until offline: TIA may ask while
                 // it compares, too.
-                var online = new OnlineAsks(op.Configuration, Detached);
+                var online = new OnlineAsks(op.Configuration, Detached, new LoginUse(login, "compare", address), address);
                 CompareNode tree = null;
                 try
                 {
@@ -1555,7 +1616,7 @@ namespace Tiad.Openness
         // stage 1b). The portal's service alone, with no project online,
         // never reached the bench CPU (stage 1), so the read goes online
         // first. Every step fails the read; offline always.
-        public FingerprintRead ReadFingerprint(object project, string address, bool trustUnverifiedCertificate)
+        public FingerprintRead ReadFingerprint(object project, string address, bool trustUnverifiedCertificate, OnlineLogin login)
         {
             return Tia(delegate
             {
@@ -1571,8 +1632,9 @@ namespace Tiad.Openness
                 ConfigurationAddress at = TargetInterface(PcInterface(op.Configuration)).Addresses.Create(address);
                 ConfigurationPcInterface fpc = PcInterface(fp.Configuration);
                 ConfigurationAddress fat = fpc.TargetInterfaces.Count > 0 ? TargetInterface(fpc).Addresses.Create(address) : fpc.Addresses.Create(address);
-                var online = new OnlineAsks(op.Configuration, Detached, trustUnverifiedCertificate, address);
-                var asks = OnlineAsks.ForCallback(Detached, trustUnverifiedCertificate, address);
+                var use = new LoginUse(login, "fingerprint read", address);
+                var online = new OnlineAsks(op.Configuration, Detached, trustUnverifiedCertificate, address, use);
+                var asks = OnlineAsks.ForCallback(Detached, trustUnverifiedCertificate, address, use);
                 var r = new FingerprintRead();
                 try
                 {
@@ -1626,7 +1688,7 @@ namespace Tiad.Openness
             });
         }
 
-        public List<string> Upload(object project, string address, bool trustUnverifiedCertificate)
+        public List<string> Upload(object project, string address, bool trustUnverifiedCertificate, OnlineLogin login)
         {
             return Tia(delegate
             {
@@ -1640,7 +1702,7 @@ namespace Tiad.Openness
                 foreach (HwDevice d in AllDevices(p)) d.Delete();
                 var ups = new UploadAsks();
                 UploadResult r;
-                var online = new OnlineAsks(sup.Configuration, Detached, trustUnverifiedCertificate, address);
+                var online = new OnlineAsks(sup.Configuration, Detached, trustUnverifiedCertificate, address, new LoginUse(login, "upload", address));
                 try
                 {
                     // TIA calls it from its own process: UploadAsks (core)

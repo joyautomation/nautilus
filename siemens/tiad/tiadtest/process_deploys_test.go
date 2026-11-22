@@ -18,7 +18,7 @@ import (
 // The deploy record on disk (tools/tiad/core/Deploys.cs): what only the
 // C# agent's own file system and log can show.
 
-var deployLoad = tiad.DownloadRequest{Address: "192.0.2.10", Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}}
+var deployLoad = tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}}
 
 func journalLines(t *testing.T, dir string) []map[string]any {
 	t.Helper()

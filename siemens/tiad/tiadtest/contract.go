@@ -150,6 +150,7 @@ func Contract(t *testing.T, start Starter) {
 	t.Run("Fingerprint", func(t *testing.T) { contractFingerprint(t, start) })
 	t.Run("Deploys", func(t *testing.T) { contractDeploys(t, start) })
 	t.Run("Verify", func(t *testing.T) { contractVerify(t, start) })
+	t.Run("Credentials", func(t *testing.T) { contractCredentials(t, start) })
 }
 
 // ContractNoTIA is the part of the contract that never needs TIA and

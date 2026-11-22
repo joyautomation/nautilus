@@ -727,7 +727,8 @@ behaviour. So, until then:
   failing, or the compare differing (with the differing objects). This
   holds whether TIA asked no check or many. It fails closed, by design,
   where the compare cannot be equal: a CPU whose online access asks for
-  credentials (tiad answers no, so the compare fails), a hardware-only
+  credentials the request does not carry, or refuses them (§3.9: the
+  compare fails), a hardware-only
   download onto software that already differs, a kept device or system
   block that compares different. Equal is the agent's call on TIA's
   compare tree, never TIA's tree alone: its root says identical, at
@@ -1364,6 +1365,70 @@ closed, and online calls to that address are refused.
 
 Editing or deleting a pin file by hand is unaudited and not a supported
 path.
+
+### 3.9 Credentials going online (#789 stage 5 (A))
+
+A station naut makes has access control on, with the project user
+`nautilus` holding the runtime right Full access (`cpu.accessControl:
+fullAccessUser`, its password `secrets.fullAccessPassword`). Once a
+hardware load puts that on a CPU, TIA asks credentials every time it goes
+online to it. Before this, tiad answered no, so a CPU it made locked it out
+of its own compare, upload, download and verify: the lockout James's stage
+5 go was conditional on.
+
+**What tiad answers.** Each online call takes the password of the CPU's
+user `nautilus`:
+
+| Call | Where the password goes |
+|---|---|
+| `POST …/compare`, `…/upload`, `…/fingerprint`, `POST /v1/deploys/verify` | `secrets.fullAccessPassword` (the only secret they take) |
+| `POST …/download` | its `secrets.fullAccessPassword`, also for the compare and fingerprint read after the load |
+
+When TIA asks a project user's legitimation
+(`OnlineAuthenticationConfiguration`), tiad logs on as the project user
+`nautilus` with that password (`LoginUse` in core, the one rule both the
+glue and tiad-fake run). It answers no, naming why, when:
+
+- the request carries no password;
+- the agent's TIA instance trusts a certificate blindly (§3.8), or this
+  call trusted one: no password goes to a CPU tiad cannot verify. Closing
+  every session retires the instance (#789 D1), and the next one logs on;
+- the connection is not secure communication, or tiad cannot read whether
+  it is;
+- the CPU offers no project-user legitimation, or tiad cannot read what it
+  offers;
+- this connection was answered before: TIA asking again means the CPU
+  refused the password. tiad never tries one twice, since a CPU may lock a
+  user out after failed logons, and no other connection of the same call
+  answers either.
+
+Legacy access-level passwords (`OnlinePasswordConfiguration`,
+`OnlineReadAccessPassword`) and anything tiad does not know still cancel.
+Every answer and refusal is an audit line (`audit online-login`) naming the
+call, address and user, never the password; the glue logs whether the
+connection is secure and which user types the CPU offers, never the
+configuration itself. A refusal fails the call as any question answered no
+does: `operation_failed` for a compare, upload, read or verify, and
+`outcome_unknown` inside a download, where TIA's call had begun.
+
+**What the fakes prove, and what they do not.** Both fakes model a CPU
+that asks credentials once a hardware load of a fullAccessUser station
+turned its access control on, as that load left its password, and asks
+again when the password is wrong. The contract suite (`Credentials`)
+drives every online call through it with, without, and with a wrong
+password, and with a blind trust. tiad-fake answers through the core rule,
+so a mutant of it fails the suite. What only the bench can show: which
+configuration type the real CPU asks, whether an upload asks through the
+connection or through its own callback (`UploadPasswordConfiguration`,
+which tiad still refuses), and whether TIA keeps a logon for later calls in
+the same instance. The glue's log lines answer these in the first window
+on a CPU with access control on.
+
+**Not covered yet.** Changing the user's password (rotation): the
+download that loads a new password needs the old one to go online and the
+new one for the compare after it, and tiad takes one. Until a request
+carries both, such a download ends `outcome_unknown` at the compare, and
+the CPU holds the new password.
 
 ## 4. Online plane
 

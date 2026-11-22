@@ -234,7 +234,7 @@ func contractAccessNewStation(t *testing.T, start Starter) {
 		t.Fatalf("a rotated secret: %+v %v", r, err)
 	}
 	// A password set is a change to the project: compile again first.
-	dl := AcceptHardware(tiad.DownloadRequest{Address: benchCPU, Hardware: true, Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}})
+	dl := AcceptHardware(tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: benchCPU, Hardware: true, Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}})
 	if _, err := s.Download(ctx, dl); tiad.Kind(err) != tiad.KindNotCompiled {
 		t.Fatalf("a download after a password was set, before a compile: %v", err)
 	}
@@ -269,7 +269,7 @@ func contractAccessAdopted(t *testing.T, start Starter) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.UploadWith(ctx, tiad.UploadRequest{}); err != nil {
+	if _, err := s.UploadWith(ctx, tiad.UploadRequest{Secrets: BenchLogin}); err != nil {
 		t.Fatal(err)
 	}
 	full := adoptedStation()
@@ -292,7 +292,7 @@ func contractAccessAdopted(t *testing.T, start Starter) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s2.UploadWith(ctx, tiad.UploadRequest{}); err != nil {
+	if _, err := s2.UploadWith(ctx, tiad.UploadRequest{Secrets: BenchLogin}); err != nil {
 		t.Fatal(err)
 	}
 	// The project's own policy is checked before any write on an apply too.
@@ -328,7 +328,7 @@ func contractAccessUpload(t *testing.T, start Starter) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	up, err := s.UploadWith(ctx, tiad.UploadRequest{})
+	up, err := s.UploadWith(ctx, tiad.UploadRequest{Secrets: BenchLogin})
 	if want := []string{`user "nautilus"`, `role "nautilus full access"`}; err != nil || !reflect.DeepEqual(up.RemovedAccess, want) {
 		t.Fatalf("an upload on the session that made the user: %+v %v, want removedAccess %q", up, err, want)
 	}
@@ -337,14 +337,14 @@ func contractAccessUpload(t *testing.T, start Starter) {
 	if _, err := s.ApplyStation(ctx, adoptedStation(), BenchSecrets); err != nil {
 		t.Fatal(err)
 	}
-	if up, err := s.UploadWith(ctx, tiad.UploadRequest{}); err != nil || len(up.RemovedAccess) != 0 {
+	if up, err := s.UploadWith(ctx, tiad.UploadRequest{Secrets: BenchLogin}); err != nil || len(up.RemovedAccess) != 0 {
 		t.Fatalf("an upload after one that removed what the session made: %+v %v", up, err)
 	}
 	if r, err := s.ApplyStation(ctx, full, BenchSecrets); err != nil || !noteWith(r.Notes, madeUser) {
 		t.Fatalf("the user after the upload removed it: %+v %v", r, err)
 	}
 	// Made on this session again, so the next upload removes it again.
-	if up, err := s.UploadWith(ctx, tiad.UploadRequest{}); err != nil || len(up.RemovedAccess) != 2 {
+	if up, err := s.UploadWith(ctx, tiad.UploadRequest{Secrets: BenchLogin}); err != nil || len(up.RemovedAccess) != 2 {
 		t.Fatalf("a second upload: %+v %v", up, err)
 	}
 	if _, err := s.Save(ctx, false); err != nil {
@@ -376,7 +376,7 @@ func contractAccessUpload(t *testing.T, start Starter) {
 	if r, err := s4.ApplyStation(ctx, keep, BenchSecrets); err != nil || noteWith(r.Notes, "nautilus") {
 		t.Fatalf("keep on the opened project: %+v %v", r, err)
 	}
-	up, err = s4.UploadWith(ctx, tiad.UploadRequest{})
+	up, err = s4.UploadWith(ctx, tiad.UploadRequest{Secrets: BenchLogin})
 	if err != nil || len(up.RemovedAccess) != 0 {
 		t.Fatalf("an upload on a session that made nothing: %+v %v", up, err)
 	}

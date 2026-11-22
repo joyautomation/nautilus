@@ -58,6 +58,9 @@ namespace Tiad
     {
         public bool Trust;
         public string Address = "";
+        // Password is the request's secrets.fullAccessPassword (OnlineLogin);
+        // never logged, never in ToJson.
+        public string Password = "";
         public FingerprintRead Read;
         public BlindTrust BlindTrust;
 
@@ -139,6 +142,17 @@ namespace Tiad
                 call, s.Id, Json.Quote(address), string.Join(",", q.ToArray()), BlindTrust.Audit(blindTrust));
         }
 
+        // OnlinePassword reads the one secret an online call takes:
+        // secrets.fullAccessPassword, the password of the CPU's user
+        // "nautilus", which tiad answers when TIA asks credentials going
+        // online (OnlineLogin). "" when the request carries none. The root's
+        // Done refuses any other secret.
+        static string OnlinePassword(Reader r)
+        {
+            Reader sec = r.Child("secrets");
+            return sec == null ? "" : sec.Str("fullAccessPassword");
+        }
+
         // TrustingCall runs an ITia call that took trustUnverifiedCertificate:
         // if it fails inside TIA's side, TIA may have trusted a certificate
         // before it failed, so that is recorded as trust. That includes
@@ -200,6 +214,7 @@ namespace Tiad
                     var req = c.Json();
                     // An explicit, per-call opt-in, as an upload's.
                     r.Trust = req.Bool("trustUnverifiedCertificate");
+                    r.Password = OnlinePassword(req);
                     req.Done();
                     r.Address = CpuOf(s);
                     if (!Target(r.Address)) throw new TiadException(403, Kinds.TargetRefused, r.Address + " is not in TIAD_TARGETS");
@@ -233,11 +248,12 @@ namespace Tiad
                 prepare(run);
                 string address = run.Address;
                 bool trust = run.Trust;
+                string password = run.Password;
                 run.Read = OnSession(s, delegate(ITia t)
                 {
                     try
                     {
-                        FingerprintRead fr = TrustingCall("fingerprint read", s, address, trust, delegate { return t.ReadFingerprint(s.Handle, address, trust); });
+                        FingerprintRead fr = TrustingCall("fingerprint read", s, address, trust, delegate { return t.ReadFingerprint(s.Handle, address, trust, OnlineLogin.For(password, blindTrust)); });
                         if (fr != null) RecordBlindTrust("fingerprint read", s, address, fr.TrustedBlindly);
                         return fr;
                     }

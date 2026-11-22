@@ -427,7 +427,8 @@ namespace Tiad
                         // A dry run never starts the CPU, whatever the request
                         // says (#1154 review): if TIA loads it without asking,
                         // start-after is NoAction.
-                        return t.Download(s.Handle, req.Address, req.Hardware, req.Software, req.Secrets, req.DryRun ? (bool?)null : req.Decisions.StartAfter, answer);
+                        return t.Download(s.Handle, req.Address, req.Hardware, req.Software, req.Secrets, req.DryRun ? (bool?)null : req.Decisions.StartAfter, answer,
+                            OnlineLogin.For(req.Secrets.FullAccessPassword, ranWith));
                     }
                     catch (Exception e)
                     {
@@ -553,7 +554,7 @@ namespace Tiad
             OnlineCompare cmp;
             try
             {
-                cmp = OnSession(s, delegate(ITia t) { return t.Compare(s.Handle, req.Address); });
+                cmp = OnSession(s, delegate(ITia t) { return t.Compare(s.Handle, req.Address, OnlineLogin.For(req.Secrets.FullAccessPassword, blindTrust)); });
                 equal = TiaNames.CompareEqual(cmp == null ? null : cmp.Tree, cmp == null ? null : cmp.Blocks, diffs);
             }
             catch (TiadException e)
@@ -633,6 +634,7 @@ namespace Tiad
             return WithSession(c, delegate(Session s)
             {
                 var r = c.Json();
+                string password = OnlinePassword(r);
                 r.Done();
                 string address = CpuOf(s);
                 if (!Target(address)) throw new TiadException(403, Kinds.TargetRefused, address + " is not in TIAD_TARGETS");
@@ -651,7 +653,7 @@ namespace Tiad
                     {
                         Log.Line("audit compare session={0} project={1} address={2} blindTrust={3}", s.Id, Json.Quote(s.Project), Json.Quote(address), BlindTrust.Audit(bt));
                     }
-                    return t.Compare(s.Handle, address);
+                    return t.Compare(s.Handle, address, OnlineLogin.For(password, bt));
                 });
                 bool equal = TiaNames.CompareEqual(cmp == null ? null : cmp.Tree, cmp == null ? null : cmp.Blocks, diffs);
                 var list = new List<object>();
@@ -718,6 +720,7 @@ namespace Tiad
                 // An explicit, per-call opt-in, only here: trust the CPU's
                 // TLS certificate blindly for this read-only upload.
                 bool trust = r.Bool("trustUnverifiedCertificate");
+                string password = OnlinePassword(r);
                 r.Done();
                 string address = s.Address;
                 if (address == "" || !Target(address))
@@ -752,7 +755,7 @@ namespace Tiad
                         removed = t.RemoveAccess(s.Handle, s.Made);
                         s.Made = new AccessMade();
                     }
-                    List<string> tr = TrustingCall("upload", s, address, trust, delegate { return t.Upload(s.Handle, address, trust); });
+                    List<string> tr = TrustingCall("upload", s, address, trust, delegate { return t.Upload(s.Handle, address, trust, OnlineLogin.For(password, blindTrust)); });
                     RecordBlindTrust("upload", s, address, tr);
                     upTrust = blindTrust;
                     // The project is replaced now: a failed identity read
