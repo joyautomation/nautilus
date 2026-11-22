@@ -91,3 +91,13 @@ func TestValidateWebhookURLNotEchoed(t *testing.T) {
 		t.Errorf("an account with ':' (splits basic auth): %v", err)
 	}
 }
+
+// A provider URL written with credentials is refused without repeating them.
+func TestValidateProviderURLNotEchoed(t *testing.T) {
+	for _, u := range []string{"https://AC1:tok-secret@api.example.com", "http://api.example.com/tok-secret"} {
+		c := Config{SMS: &Provider{URL: u, Account: "AC1", From: "+15550100"}}
+		if err := c.Validate(); err == nil || strings.Contains(err.Error(), "tok-secret") {
+			t.Errorf("%s: %v", u, err)
+		}
+	}
+}

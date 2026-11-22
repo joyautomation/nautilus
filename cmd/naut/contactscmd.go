@@ -79,6 +79,10 @@ func contactsMain(which string, args []string, load func(dir string) (*project.M
 		fmt.Fprint(stderr, contactsUsage)
 		return 2
 	}
+	if fs.Arg(0) == "help" {
+		fmt.Fprint(stdout, contactsUsage) // before any state directory is needed
+		return 0
+	}
 	fail := func(err error) int {
 		fmt.Fprintf(stderr, "naut alarms %s: %v\n", which, err)
 		return 1

@@ -270,12 +270,14 @@ func (c *Config) Validate() error {
 		if p.p == nil {
 			continue
 		}
+		// A refusal names the host only: a URL written with credentials
+		// in it must not land in naut check's or CI's output.
 		u, err := url.Parse(p.p.URL)
 		if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-			return fmt.Errorf("%s.%s.provider: %q is not a base URL (e.g. https://api.twilio.com)", at, p.kind, p.p.URL)
+			return fmt.Errorf("%s.%s.provider: not a base URL with no credentials, query or fragment (e.g. https://api.twilio.com)", at, p.kind)
 		}
 		if u.Scheme != "https" {
-			return fmt.Errorf("%s.%s.provider: %q is not https: the provider's token never crosses plaintext, insecure or not", at, p.kind, p.p.URL)
+			return fmt.Errorf("%s.%s.provider: the URL to %s is not https: the provider's token never crosses plaintext, insecure or not", at, p.kind, u.Host)
 		}
 		if p.p.Account == "" || strings.ContainsAny(p.p.Account, "/?#%:@\r\n ") {
 			return fmt.Errorf("%s.%s.account: the provider's account id is required (letters and digits)", at, p.kind)

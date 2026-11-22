@@ -411,7 +411,9 @@ browser playground has no state directory, so a project there with
 - **A proxy:** the SMS, voice and webhook channels honour `HTTPS_PROXY`
   and `NO_PROXY`. TLS stays end to end through it; `naut run` journals
   which channels go through which proxy host (`alarm.channel-proxy`) at
-  start, never its credentials.
+  start, never its credentials. Through an `https://` proxy, a channel's
+  `ca-file:` must also hold the proxy's CA, and `insecure: true` skips
+  verifying the proxy too.
 - **Each channel kind has its own sender,** so a mail server that hangs
   delays only email, never an SMS.
 

@@ -329,3 +329,20 @@ channels:
 }
 
 func yamlInto(src string, v any) error { return yaml.Unmarshal([]byte(src), v) }
+
+// naut alarms contacts help prints the usage, even where no state
+// directory resolves (a built controller run by hand outside systemd).
+func TestContactsHelpNeedsNoStateDir(t *testing.T) {
+	var out, errb bytes.Buffer
+	code := contactsMain("contacts", []string{"help"}, func(string) (*project.Manifest, string, error) {
+		return &project.Manifest{}, "", nil
+	}, false, func(k string) string {
+		if k == "INVOCATION_ID" {
+			return "x"
+		}
+		return ""
+	}, strings.NewReader(""), &out, &errb)
+	if code != 0 || !strings.Contains(out.String(), "naut alarms contacts") {
+		t.Fatalf("help = %d\n%s%s", code, out.String(), errb.String())
+	}
+}
