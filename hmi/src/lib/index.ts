@@ -222,6 +222,9 @@ export { passwordState } from './auth.js';
 export { deniedFor, asksPassword } from './auth.svelte.js';
 export type { AuthView } from './authview.js';
 export { default as AccountChip } from './components/AccountChip.svelte';
+export { default as PushCard } from './components/PushCard.svelte';
+export { PushClient, pushState, readPushEnv, realPushBrowser, enablePush, disablePush, endpointId, keyBytes } from './push.js';
+export type { PushDevice, PushEnv, PushState, PushStateKind, PushBrowser, PushSub, EnableResult } from './push.js';
 export { default as ReferralBanner } from './components/ReferralBanner.svelte';
 // The audit journal (#709): GET /api/audit, read and shown.
 export { default as AuditTable } from './components/AuditTable.svelte';

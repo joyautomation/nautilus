@@ -345,7 +345,7 @@ const defaultLayout = `<script>
 // defaultDiagnostics is the Diagnostics page: the controller's scan timing
 // and its field drivers.
 const defaultDiagnostics = `<script>
-	import { ScanDiagnostics, DriverStatusPanel } from '@joyautomation/nautilus-hmi';
+	import { ScanDiagnostics, DriverStatusPanel, PushCard } from '@joyautomation/nautilus-hmi';
 	import { rt } from 'nx:default/client';
 </script>
 
@@ -357,6 +357,10 @@ const defaultDiagnostics = `<script>
 	<section>
 		<h2>Field drivers</h2>
 		<DriverStatusPanel drivers={rt.frame?.drivers ?? []} />
+	</section>
+	<section>
+		<h2>This device</h2>
+		<PushCard />
 	</section>
 </div>
 

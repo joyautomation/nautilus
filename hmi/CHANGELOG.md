@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Added
+
+- **`<PushCard/>` and `PushClient`** (#722): notifications and install for this device. Turn on
+  asks the browser's permission (it must be a tap, and only after the controller has said it can
+  page: a controller with no push never causes a prompt), subscribes, and hands the controller the
+  subscription, which belongs to the signed-in person. It says why it cannot instead of showing a
+  dead button: plain http ("install needs https"), an iPhone not yet on the Home Screen, a browser
+  with no push, signed out, a controller with no push, a blocked permission. The controller never
+  returns an endpoint or a key, so the list of other devices names a push service's host only. A
+  subscription the controller refuses is dropped from the browser again. The built-in HMI shows it
+  on Diagnostics. Pure parts (`pushState`, `readPushEnv`, `enablePush`, `disablePush`,
+  `keyBytes`, `endpointId`) are exported.
+
 ### Changed
 
 - **`<AuditTable/>` reads at a glance** (#709): the Change column says the substitute actions in a
