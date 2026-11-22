@@ -56,7 +56,7 @@ export function chatteringIds(alarms: Pick<AlarmInstance, 'id' | 'chatter'>[]): 
  */
 export function focusSplit<T extends Pick<AlarmInstance, 'priority' | 'activeMs' | 'chatter' | 'state' | 'name'>>(
 	alarms: T[],
-	flood: Pick<AlarmFloodBrief, 'sinceMs'> | null
+	flood: Pick<AlarmFloodBrief, 'sinceMs' | 'windowMs'> | null
 ): { first: T[]; also: T[] } {
 	const order = (a: T, b: T) =>
 		PRIORITY_ORDER.indexOf(b.priority) - PRIORITY_ORDER.indexOf(a.priority) ||
@@ -65,7 +65,10 @@ export function focusSplit<T extends Pick<AlarmInstance, 'priority' | 'activeMs'
 	const first: T[] = [];
 	const also: T[] = [];
 	for (const a of alarms) {
-		const stale = a.state === 'ack-active' && flood !== null && (a.activeMs ?? 0) < flood.sinceMs;
+		// `sinceMs` is the activation that tipped the count over the limit; the
+		// flood's first alarms came up to one window before it and are the
+		// likely cause, so only what stood before that window is stale.
+		const stale = a.state === 'ack-active' && flood !== null && (a.activeMs ?? 0) < flood.sinceMs - flood.windowMs;
 		// An unacknowledged critical alarm is never buried, chattering or not:
 		// during a flood is when it matters most (naut-lead, #1249).
 		const unackedCritical = a.priority === 'critical' && (a.state === 'unack-active' || a.state === 'unack-rtn');

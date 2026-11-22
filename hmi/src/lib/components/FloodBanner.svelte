@@ -24,7 +24,7 @@
 		focused?: boolean;
 		/** Toggles focus. Omit it to hide the toggle. */
 		onfocus?: (on: boolean) => void;
-		/** Where the sequence of events is (the history page); a link when set. */
+		/** Where the alarm list is; a link when set. */
 		journalHref?: string;
 	} = $props();
 
@@ -41,7 +41,7 @@
 					{focused ? 'Focus on' : 'Focus'}
 				</Button>
 			{/if}
-			{#if journalHref}<a href={journalHref}>Sequence of events</a>{/if}
+			{#if journalHref}<a href={journalHref}>Alarm list</a>{/if}
 		</div>
 		{#if flood.firstOut?.length}
 			<ol class="first" aria-label="First out">

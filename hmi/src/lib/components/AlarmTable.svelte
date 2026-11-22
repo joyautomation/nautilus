@@ -159,7 +159,17 @@
 	// shown only when opened.
 	const split = $derived(focus && flood ? focusSplit(filtered, flood) : null);
 	const ordered = $derived(split ? [...split.first, ...(alsoOpen ? split.also : [])] : sorted);
+	const unackedAlso = $derived((split?.also ?? []).filter((a) => a.state === 'unack-active' || a.state === 'unack-rtn').length);
 	const chatteringCount = $derived(alarms.filter((a) => a.chatter).length);
+
+	// Under flood focus, a row collapsed out of sight is not selected: Ack (N)
+	// must not act on what the operator cannot see.
+	$effect(() => {
+		if (!split) return;
+		const visible = new Set(ordered.map((a) => a.id));
+		const kept = [...untrack(() => selected)].filter((id) => visible.has(id));
+		if (kept.length !== untrack(() => selected).size) selected = new Set(kept);
+	});
 
 	const pageCount = $derived(Math.max(1, Math.ceil(ordered.length / pageSize)));
 	$effect(() => {
@@ -354,7 +364,7 @@
 		</div>
 
 		<div class="actions">
-			<span class="count">{unackedCount} unack · {sorted.length} shown</span>
+			<span class="count">{unackedCount} unack · {ordered.length} shown</span>
 			<Button size="sm" icon="check" disabled={!selected.size || !!ackDenied} title={ackDenied || undefined} onclick={ackSelected}>
 				Ack ({selected.size})
 			</Button>
@@ -451,7 +461,7 @@
 	{#if split?.also.length}
 		<div class="also">
 			<Button size="sm" variant="ghost" onclick={() => (alsoOpen = !alsoOpen)} aria-expanded={alsoOpen}>
-				Also standing ({split.also.length}): chattering or acknowledged before the flood. {alsoOpen ? 'Hide' : 'Show'}
+				Also standing ({split.also.length}{unackedAlso ? `, ${unackedAlso} unacknowledged` : ''}): chattering or acknowledged before the flood. {alsoOpen ? 'Hide' : 'Show'}
 			</Button>
 		</div>
 	{/if}

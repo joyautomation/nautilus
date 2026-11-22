@@ -82,7 +82,7 @@ type A = Parameters<typeof focusSplit>[0][number];
 const al = (name: string, o: Partial<A> = {}): A => ({ name, priority: 'medium', activeMs: 100, state: 'unack-active', ...o });
 
 describe('flood focus', () => {
-	const flood = { sinceMs: 1000 };
+	const flood = { sinceMs: 10_000, windowMs: 5000 };
 	it('puts the highest priority first and the oldest first within it', () => {
 		const { first, also } = focusSplit(
 			[al('low', { priority: 'low' }), al('crit-late', { priority: 'critical', activeMs: 2000 }), al('crit-early', { priority: 'critical', activeMs: 1500 }), al('med')],
@@ -94,9 +94,9 @@ describe('flood focus', () => {
 	it('puts a chattering alarm and one acknowledged before the flood under also standing', () => {
 		const alarms = [
 			al('chatty', { priority: 'high', chatter: chat() }),
-			al('old-acked', { state: 'ack-active', activeMs: 500 }),
-			al('new-acked', { state: 'ack-active', activeMs: 1500 }),
-			al('fresh', { priority: 'high', activeMs: 1200 })
+			al('old-acked', { state: 'ack-active', activeMs: 4000 }),
+			al('new-acked', { state: 'ack-active', activeMs: 6000 }),
+			al('fresh', { priority: 'high', activeMs: 7000 })
 		];
 		const { first, also } = focusSplit(alarms, flood);
 		expect(first.map((a) => a.name)).toEqual(['fresh', 'new-acked']);
@@ -110,6 +110,12 @@ describe('flood focus', () => {
 		const { first, also } = focusSplit([unack, rtn, acked, highUnack], flood);
 		expect(first.map((a) => a.name)).toEqual(['crit-rtn', 'crit-unack']);
 		expect(also.map((a) => a.name)).toEqual(['crit-acked', 'high-unack']);
+	});
+	it('does not call a first-out alarm stale just because the operator acknowledged it', () => {
+		// activated inside the window before the one that tipped the flood
+		const { first, also } = focusSplit([al('cause', { state: 'ack-active', activeMs: 9000 })], flood);
+		expect(first.length).toBe(1);
+		expect(also.length).toBe(0);
 	});
 	it('never drops an alarm, and treats nothing as stale with no flood', () => {
 		const alarms = [al('a', { state: 'ack-active', activeMs: 1 }), al('b', { chatter: chat() }), al('c')];

@@ -94,7 +94,7 @@ func TestBuildsTheDefaultAppFromMimics(t *testing.T) {
 	}
 	// a flood shows on every screen and the alarms page can focus on it; a
 	// chattering alarm wears its badge (#1249)
-	for _, want := range []string{"Alarm flood", "First out", "Also standing", "data-chatter"} {
+	for _, want := range []string{"Alarm flood", "First out", "Also standing", "data-chatter", "nx-flood"} {
 		if !strings.Contains(js.String(), want) {
 			t.Errorf("the built default app lacks %q: the flood banner or chatter badge is not mounted", want)
 		}
