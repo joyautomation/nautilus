@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/joyautomation/nautilus/internal/project"
@@ -29,7 +30,11 @@ in notes.jsonl; a redundant pair's are in its operator-intent log
 
   json   notes with every revision, oldest first
   csv    one row per revision: note, rev, at, by, principal, target kind,
-         id, occurrence, kind, re, retracted, reason, text
+         id, occurrence, kind, re, retracted, reason, text, history
+
+A pair whose log was replaced (naut redundancy vouch) keeps the old log aside:
+its notes are exported too, flagged "superseded" (json) or in the history
+column (csv: "superseded <when moved aside>"), never mixed into the live ones.
 
 A note is never deleted: a retracted one is exported with its history, and
 every revision's text is there. The audit journal also holds each write's
@@ -47,7 +52,7 @@ func runNotes(args []string) int {
 // loadNotes reads the notes a state directory holds: the file of a
 // controller on its own, else a pair's log replayed. none says there is
 // neither (a controller that never wrote one).
-func loadNotes(sd string, stderr io.Writer) (all []notes.Note, source string, err error) {
+func loadNotes(sd string, stderr io.Writer) (all []exportNote, source string, err error) {
 	file, logf := filepath.Join(sd, NotesFile), filepath.Join(sd, pairLogFile)
 	fi, ferr := os.Stat(file)
 	li, lerr := os.Stat(logf)
@@ -67,7 +72,7 @@ func loadNotes(sd string, stderr io.Writer) (all []notes.Note, source string, er
 		if err != nil {
 			return nil, "", err
 		}
-		return s.All(), file, nil
+		return live(s.All()), file, nil
 	}
 	if lerr == nil {
 		es, err := oplog.ReadCommitted(logf)
@@ -78,9 +83,48 @@ func loadNotes(sd string, stderr io.Writer) (all []notes.Note, source string, er
 		if bad > 0 {
 			fmt.Fprintf(stderr, "naut notes: %d note entries in %s could not be applied (a revision that lost a race, a gap, or an entry with no readable body); the rest are shown\n", bad, logf)
 		}
-		return s.All(), logf, nil
+		out := live(s.All())
+		// the history a vouch replaced, kept aside: a record of what was
+		// written then, flagged, never merged into the live notes. A note
+		// the live history holds too is not repeated.
+		if old := oplog.NewestSuperseded(logf); old != "" {
+			if oes, err := oplog.ReadCommitted(old); err == nil {
+				os, _ := notes.Replay(oes)
+				moved := ""
+				if i := strings.LastIndex(old, ".superseded-"); i >= 0 {
+					if u, err := strconv.ParseInt(old[i+len(".superseded-"):], 10, 64); err == nil {
+						moved = time.Unix(u, 0).UTC().Format(time.RFC3339)
+					}
+				}
+				for _, n := range os.All() {
+					if _, ok := s.Get(n.ID); !ok {
+						out = append(out, exportNote{Note: n, Superseded: true, MovedAside: moved})
+					}
+				}
+			} else {
+				fmt.Fprintf(stderr, "naut notes: %s (a replaced history) could not be read: %v\n", old, err)
+			}
+		}
+		return out, logf, nil
 	}
 	return nil, "", nil
+}
+
+// exportNote is a note as exported: the note, and whether it comes from a
+// log history that was replaced (naut redundancy vouch), which is a record
+// and not part of the live notes.
+type exportNote struct {
+	notes.Note
+	Superseded bool   `json:"superseded,omitempty"`
+	MovedAside string `json:"movedAside,omitempty"`
+}
+
+func live(ns []notes.Note) []exportNote {
+	out := make([]exportNote, len(ns))
+	for i, n := range ns {
+		out[i] = exportNote{Note: n}
+	}
+	return out
 }
 
 func notesMain(args []string, load func(dir string) (*project.Manifest, string, error), devFallback bool,
@@ -160,7 +204,7 @@ func notesMain(args []string, load func(dir string) (*project.Manifest, string, 
 	if source == "" {
 		fmt.Fprintf(stderr, "naut notes: no notes file or operator-intent log in %s: nothing has been written\n", sd)
 	}
-	var out []notes.Note
+	var out []exportNote
 	for _, n := range all {
 		if at := n.First().At; (from > 0 && at < from) || (to > 0 && at >= to) {
 			continue
@@ -171,7 +215,7 @@ func notesMain(args []string, load func(dir string) (*project.Manifest, string, 
 		enc := json.NewEncoder(stdout)
 		enc.SetIndent("", "  ")
 		if out == nil {
-			out = []notes.Note{}
+			out = []exportNote{}
 		}
 		if err := enc.Encode(out); err != nil {
 			return fail(err)
@@ -179,16 +223,20 @@ func notesMain(args []string, load func(dir string) (*project.Manifest, string, 
 		return 0
 	}
 	w := csv.NewWriter(stdout)
-	_ = w.Write([]string{"note", "rev", "at", "by", "principal", "target_kind", "target_id", "occurrence", "kind", "re", "retracted", "reason", "text"})
+	_ = w.Write([]string{"note", "rev", "at", "by", "principal", "target_kind", "target_id", "occurrence", "kind", "re", "retracted", "reason", "text", "history"})
 	for _, n := range out {
 		for _, r := range n.Revisions {
 			kind := r.Kind
 			if kind == "" {
 				kind = notes.NoteNote
 			}
+			history := "live"
+			if n.Superseded {
+				history = "superseded " + n.MovedAside
+			}
 			_ = w.Write([]string{
 				r.Note, strconv.Itoa(r.Rev), time.UnixMilli(r.At).UTC().Format(time.RFC3339), csvSafe(r.By), csvSafe(r.Principal),
-				csvSafe(r.Target.Kind), csvSafe(r.Target.ID), csvSafe(r.Target.Occurrence), kind, csvSafe(r.Re), strconv.FormatBool(r.Retract), csvSafe(r.Reason), csvSafe(r.Text),
+				csvSafe(r.Target.Kind), csvSafe(r.Target.ID), csvSafe(r.Target.Occurrence), kind, csvSafe(r.Re), strconv.FormatBool(r.Retract), csvSafe(r.Reason), csvSafe(r.Text), history,
 			})
 		}
 	}

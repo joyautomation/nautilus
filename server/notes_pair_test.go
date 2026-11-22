@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -218,5 +220,87 @@ func TestAConcurrentRevisionThatLostIsNotAnswered200(t *testing.T) {
 	rs, bad := notes.Replay(np.nodes[0].After(0))
 	if got, _ := rs.Get(v.ID); bad != 1 || len(got.Revisions) != 2 || got.Latest().Text != "first writer" {
 		t.Errorf("replay: bad %d, %+v", bad, got.Revisions)
+	}
+}
+
+// A copy's replaced history is a record: its notes are shown read-only,
+// labelled with who accepted the loss and when the log was moved aside,
+// are never in the live index, and a note the live history also holds is
+// not repeated.
+func TestSupersededHistoryNotesAreShownReadOnlyAndNeverApplied(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "oplog.jsonl.superseded-1700000000")
+	var lines []string
+	add := func(v any) { b, _ := json.Marshal(v); lines = append(lines, string(b)) }
+	ent := func(seq uint64, r notes.Revision) oplog.Entry {
+		e := notes.Entry(r)
+		e.Seq, e.Term, e.TS = seq, 1, r.At
+		return e
+	}
+	rv := func(id, text string) notes.Revision {
+		return notes.Revision{Note: id, Rev: 1, At: 1700000000000, By: "alice", Principal: "user:alice", Target: notes.Target{Kind: notes.KindLog}, Text: text}
+	}
+	add(map[string]any{"e": ent(1, rv("only-old", "handover from the old history"))})
+	add(map[string]any{"e": ent(2, rv("both", "in both histories"))})
+	add(map[string]any{"e": ent(3, rv("uncommitted", "never committed"))})
+	add(map[string]any{"c": 2})
+	os.WriteFile(file, []byte(strings.Join(lines, "\n")+"\n"), 0o600)
+
+	nl := NewNotesLog()
+	nl.supersededAt = func() (string, string) { return file, "akhan" }
+	nl.Apply(ent(1, rv("both", "in both histories")))
+	nl.Apply(ent(2, rv("live", "from the new history")))
+	srv := New(newTestRuntime(t), Options{AuthToken: "tok", NotesLog: nl})
+
+	rec := call(t, srv, "GET", "/api/notes?superseded=1", "", bearer("tok"))
+	var got supersededAnswer
+	json.Unmarshal(rec.Body.Bytes(), &got)
+	if rec.Code != 200 || len(got.Notes) != 1 || got.Notes[0].ID != "only-old" || got.History == nil || got.History.By != "akhan" || got.History.MovedAt != 1700000000000 {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	// never in the live view, never changeable
+	live := call(t, srv, "GET", "/api/notes", "", bearer("tok")).Body.String()
+	if strings.Contains(live, "only-old") || strings.Contains(live, "uncommitted") {
+		t.Errorf("the old history is in the live list: %s", live)
+	}
+	if _, ok := nl.Store().Get("only-old"); ok {
+		t.Error("the old history was applied to the live index")
+	}
+	if rec := call(t, srv, "GET", "/api/notes/only-old", "", bearer("tok")); rec.Code != http.StatusNotFound {
+		t.Errorf("a superseded note by id: %d", rec.Code)
+	}
+	b, _ := json.Marshal(map[string]string{"text": "edit"})
+	if rec := call(t, srv, "POST", "/api/notes/only-old/revise", string(b), bearer("tok"), asJSON); rec.Code == http.StatusOK {
+		t.Error("a superseded note was revised")
+	}
+	// a controller with no replaced history says so: an empty list, no history
+	nl2 := NewNotesLog()
+	srv2 := New(newTestRuntime(t), Options{AuthToken: "tok", NotesLog: nl2})
+	var none supersededAnswer
+	rec2 := call(t, srv2, "GET", "/api/notes?superseded=1", "", bearer("tok"))
+	json.Unmarshal(rec2.Body.Bytes(), &none)
+	if rec2.Code != 200 || len(none.Notes) != 0 || none.History != nil {
+		t.Errorf("%d %s", rec2.Code, rec2.Body)
+	}
+}
+
+func TestNoteCountsByTarget(t *testing.T) {
+	np := newNotesPair(t)
+	for _, body := range []string{
+		`{"target":{"kind":"tag","id":"SP"},"text":"a"}`, `{"target":{"kind":"tag","id":"SP"},"text":"b"}`,
+		`{"target":{"kind":"tag","id":"Level"},"text":"c"}`, `{"target":{"kind":"log"},"text":"d"}`,
+	} {
+		if rec := tokPost(t, np.srvs[0], "/api/notes", body); rec.Code != http.StatusCreated {
+			t.Fatalf("%d %s", rec.Code, rec.Body)
+		}
+	}
+	rec := call(t, np.srvs[0], "GET", "/api/notes/counts?target=tag", "", bearer("tok"))
+	var got struct{ Counts map[string]int }
+	json.Unmarshal(rec.Body.Bytes(), &got)
+	if rec.Code != 200 || got.Counts["SP"] != 2 || got.Counts["Level"] != 1 || len(got.Counts) != 2 {
+		t.Errorf("%d %s", rec.Code, rec.Body)
+	}
+	if rec := call(t, np.srvs[0], "GET", "/api/notes/counts?target=tank", "", bearer("tok")); rec.Code != http.StatusBadRequest {
+		t.Errorf("bad target: %d", rec.Code)
 	}
 }

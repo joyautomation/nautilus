@@ -161,6 +161,7 @@ func defaultApp(project, title string) (*appSource, error) {
 	alarmsHref := "undefined"
 	for _, pg := range []struct{ slug, label, text string }{
 		{"diagnostics", "Diagnostics", defaultDiagnostics},
+		{"log", "Log", defaultLog},
 		{"alarms", "", defaultAlarms},
 	} {
 		if takenSlug[pg.slug] {
@@ -369,6 +370,25 @@ const defaultDiagnostics = `<script>
 	section { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius, 10px); padding: 16px; }
 	h2 { font-size: 0.78rem; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); margin: 0 0 0.7rem; }
 	p { color: var(--muted); margin: 0; }
+</style>
+`
+
+// defaultLog is the shift log (#720): the notes for whoever works next,
+// written and read here. A controller with no auth: users keeps none and
+// the page says so.
+const defaultLog = `<script>
+	import { ShiftLog } from '@joyautomation/nautilus-hmi';
+</script>
+
+<div class="nx-page">
+	<section>
+		<ShiftLog />
+	</section>
+</div>
+
+<style>
+	.nx-page { max-width: 900px; margin: 0 auto; display: grid; gap: 16px; }
+	section { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius, 10px); padding: 16px; }
 </style>
 `
 

@@ -528,3 +528,19 @@ func (s *Store) All() []Note {
 	sort.SliceStable(out, func(i, j int) bool { return out[i].First().At < out[j].First().At })
 	return out
 }
+
+// Counts is how many live (not retracted) notes each target of the kind
+// has, by target id: what a screen shows as "N notes" beside an alarm or a
+// tag without reading the notes.
+func (s *Store) Counts(kind string) map[string]int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := map[string]int{}
+	for _, n := range s.notes {
+		f := n.First()
+		if !n.Retracted() && f.Target.Kind == kind && f.Target.ID != "" {
+			out[f.Target.ID]++
+		}
+	}
+	return out
+}
