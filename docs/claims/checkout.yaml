@@ -146,3 +146,21 @@ claims:
       recorded as interrupted when the store is opened (tested on the store);
       that naut run calls it at start is not itself tested. A takeover is not
       applicable yet: a redundant pair refuses the checkout.
+
+  - id: CHK-010
+    claim: >-
+      A run exports as JSON or CSV by `GET /api/checkout/runs/{id}/export`,
+      read like the run itself: every result is kept (a fail before a pass),
+      the points are in the sheet's order and the same run gives the same
+      bytes, results for a point the sheet no longer lists are kept, the
+      content says it is unsealed (and, for a rehearsal, that it can never be
+      signed), a note that would be a spreadsheet formula is defused, and the
+      file's name is built from the run's id alone.
+    source: "#export"
+    tests:
+      - go ./server TestCheckoutExport
+      - go ./server TestCheckoutExportOfARehearsalSaysSo
+      - go ./checkout TestNeutralize
+      - go ./checkout TestFileStemIsBuiltFromTheIDAlone
+      - go ./checkout TestExportKeepsResultsForPointsTheSheetNoLongerHas
+      - go ./checkout TestExportIsDeterministic

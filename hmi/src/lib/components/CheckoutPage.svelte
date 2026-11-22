@@ -163,6 +163,8 @@
 			<span class="meta">sheet {view.hash.slice(0, 8)}</span>
 			{#if run}
 				<span class="badge" class:rehearsal={run.rehearsal}>{run.rehearsal ? 'Rehearsal: can never be signed' : 'Live run'}</span>
+				<a class="exp" href={`/api/checkout/runs/${encodeURIComponent(run.id)}/export?format=csv`} download>CSV</a>
+				<a class="exp" href={`/api/checkout/runs/${encodeURIComponent(run.id)}/export?format=json`} download>JSON</a>
 				<Button size="sm" variant="ghost" disabled={busy} onclick={abandon}>Abandon run</Button>
 			{:else}
 				<Button size="sm" disabled={busy} onclick={() => begin(false)}>Begin run</Button>
@@ -278,6 +280,7 @@
 	.progress { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: var(--space-2); }
 	table { width: 100%; border-collapse: collapse; font-size: var(--font-xs); }
 	th, td { text-align: left; padding: var(--space-1) var(--space-2); border-bottom: 1px solid var(--border); }
+	.exp { font-size: var(--font-xs); color: var(--ink-2, var(--muted)); }
 	.scroll { overflow-x: auto; }
 	.acts { white-space: nowrap; display: flex; gap: 4px; flex-wrap: wrap; }
 	.pass { color: var(--good, #2a7); }

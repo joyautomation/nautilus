@@ -147,9 +147,25 @@ still stands is not known.
 A custom HMI app can mount `CheckoutPage` and `CheckoutBanner` from the kit
 itself.
 
+## Export
+
+`GET /api/checkout/runs/{id}/export` gives a run as a file: `?format=json`
+(the default) or `?format=csv`, for anyone who may read the run. It holds every
+result, a fail before a pass included, by point in the sheet's order; the same
+run gives the same bytes. The file says in its own content that it is
+**unsealed** and, for a rehearsal run, that it can never be signed. A note that
+a spreadsheet would read as a formula (it starts with `=`, `+`, `-` or `@`) gets
+a leading apostrophe. The file is named `checkout-<run id>.json` or `.csv`.
+
+```sh
+curl -H "Authorization: Bearer $TOKEN" -o run.csv \
+  "https://controller/api/checkout/runs/<run id>/export?format=csv"
+```
+
+The Checkout page has the same two links for the open run.
+
 ## Not yet
 
-- Sealing a run, the signed JSON and CSV export, the printable report and
-  `naut checkout verify`.
+- Sealing a run (the signed JSON), the printable report and `naut checkout verify`.
 - A redundant pair: its controllers answer that the checkout is not available
   yet, rather than keep results on one box.

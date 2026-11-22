@@ -71,6 +71,7 @@ func (co *CheckoutOptions) mount(s *Server, mux *http.ServeMux) {
 	a := &checkoutAPI{s: s, co: co}
 	mux.HandleFunc("GET /api/checkout", a.handleCheckout)
 	mux.HandleFunc("GET /api/checkout/runs/{id}", a.handleCheckoutRun)
+	mux.HandleFunc("GET /api/checkout/runs/{id}/export", a.handleCheckoutExport)
 	mux.Handle("POST /api/checkout/runs", s.audited("checkout.begin", a.checkoutTarget("checkout.begin"), a.checkoutBegin))
 	mux.Handle("POST /api/checkout/runs/{id}/results", s.audited("checkout.result", a.checkoutTarget("checkout.result"), a.checkoutResult))
 	mux.Handle("POST /api/checkout/runs/{id}/force", s.audited("checkout.force", a.checkoutTarget("checkout.force"), a.checkoutForceStart))
@@ -149,6 +150,45 @@ func (a *checkoutAPI) handleCheckoutRun(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, checkoutRunView{Run: run, Latest: latest,
 		ByDevice: sh.ProgressBy(func(p checkout.Point) string { return p.Device }, latest),
 		ByArea:   sh.ProgressBy(func(p checkout.Point) string { return p.Area }, latest)})
+}
+
+// handleCheckoutExport is a run as a file: ?format=json (the default) or csv.
+// It is a read like the run's own GET (the same permission, whatever the core
+// asks of any GET under /api/), and it says in its content that it is
+// unsealed. The file's name is built from the run's id alone.
+func (a *checkoutAPI) handleCheckoutExport(w http.ResponseWriter, r *http.Request) {
+	if a.checkoutOff(w) {
+		return
+	}
+	run, ok := a.co.Store.Get(r.PathValue("id"))
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such run"})
+		return
+	}
+	ex := checkout.BuildExport(run, a.co.Sheet, a.co.Store.Results(run.ID))
+	var body []byte
+	var err error
+	var ctype, ext string
+	switch f := r.URL.Query().Get("format"); f {
+	case "", "json":
+		body, err = ex.JSON()
+		ctype, ext = "application/json", "json"
+	case "csv":
+		body, err = ex.CSV()
+		ctype, ext = "text/csv; charset=utf-8", "csv"
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "format: want json or csv"})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not build the export"})
+		return
+	}
+	w.Header().Set("Content-Type", ctype)
+	w.Header().Set("Content-Disposition", `attachment; filename="`+checkout.FileStem(run.ID)+"."+ext+`"`)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = w.Write(body)
 }
 
 // checkoutPerson is who records: a person, never a token (a token names
