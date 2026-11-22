@@ -291,3 +291,38 @@ func TestPairStandbyWithNoLeaderRefusesWrites(t *testing.T) {
 		}
 	}
 }
+
+// TestClusterEndpointNamesThePeersFromPublicURLs: a browser whose own
+// controller died needs the other one's address (#716). Only the URLs the
+// operator named (redundancy.public-urls) go out, sorted, with this
+// replica's view of who leads; LeaderAddr still never does.
+func TestClusterEndpointNamesThePeersFromPublicURLs(t *testing.T) {
+	srv := New(newTestRuntime(t), Options{
+		Cluster:    fakeCluster{status: leader.Status{Mode: "cluster", Pod: "a", Leader: "b", LeaderAddr: "10.0.0.7:8080"}},
+		LeaderURLs: map[string]string{"b": "https://plc-b.plant.example", "a": "https://plc-a.plant.example"},
+	})
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/api/cluster", nil))
+	if strings.Contains(rec.Body.String(), "10.0.0.7") {
+		t.Fatalf("a peer-link address leaked: %s", rec.Body.String())
+	}
+	var body struct {
+		Leader string        `json:"leader"`
+		Peers  []clusterPeer `json:"peers"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	want := []clusterPeer{{"a", "https://plc-a.plant.example", false}, {"b", "https://plc-b.plant.example", true}}
+	if body.Leader != "b" || len(body.Peers) != 2 || body.Peers[0] != want[0] || body.Peers[1] != want[1] {
+		t.Errorf("body = %+v", body)
+	}
+
+	// No public-urls: no peers key at all.
+	srv = New(newTestRuntime(t), Options{Cluster: fakeCluster{status: leader.Status{Mode: "cluster", Pod: "a"}}})
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost/api/cluster", nil))
+	if strings.Contains(rec.Body.String(), "peers") {
+		t.Errorf("peers without public-urls: %s", rec.Body.String())
+	}
+}
