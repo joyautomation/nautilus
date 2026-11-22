@@ -64,7 +64,9 @@ Reports:
 Where the journal comes from:
   -journal FILE  a file journal (alarms.journal.sink: file), read with its
                  rotated generation FILE.1; nothing is created
-  -host HOST     a running controller's journal API (any sink)
+  -host HOST     a running controller's journal API (any sink); a
+                 controller with auth: wants a token with read: set
+                 NAUTILUS_TOKEN (naut users token <you> makes one)
 
 Flags:
   -from, -to     the range: RFC3339, "YYYY-MM-DD" or "YYYY-MM-DD HH:MM"
@@ -504,7 +506,7 @@ func fetchJournal(base string, from, to time.Time, f alarm.Filter) ([]alarm.Even
 			return nil, err
 		}
 		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("%s/api/alarms/journal returned %s: %s", base, resp.Status, strings.TrimSpace(string(body)))
+			return nil, fmt.Errorf("%s/api/alarms/journal returned %s: %s%s", base, resp.Status, strings.TrimSpace(string(body)), apiclient.RefusalHint(resp.StatusCode))
 		}
 		var page struct {
 			Events    []alarm.Event `json:"events"`

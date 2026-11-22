@@ -23,6 +23,19 @@ func Authorize(req *http.Request) {
 	}
 }
 
+// RefusalHint is what a tool adds to a controller's 401 or 403, so the
+// person knows the credential it sent (or did not): the only one these
+// tools send is NAUTILUS_TOKEN. Any other status gets "".
+func RefusalHint(status int) string {
+	if status != http.StatusUnauthorized && status != http.StatusForbidden {
+		return ""
+	}
+	if os.Getenv("NAUTILUS_TOKEN") == "" {
+		return " (no credential was sent: set NAUTILUS_TOKEN to a token the controller accepts, such as a personal access token from naut users token <you>, or a service token)"
+	}
+	return " (sent NAUTILUS_TOKEN: the controller does not accept it, or its holder lacks the permission)"
+}
+
 // BaseURL is the controller's API base for a tool's --host and --port:
 // a URL given as --host ("https://plc.example:8443") is taken as it is,
 // its port included (or its scheme's), and its certificate checked

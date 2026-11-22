@@ -64,8 +64,8 @@ func TestBuildsTheDefaultAppFromMimics(t *testing.T) {
 	}
 	// naut's diagnostics and alarms pages, and the project's own
 	// FilterCell on the components page
-	if got := strings.Join(res.Pages, " "); got != "/ /pumps /diagnostics /parameters /log /configuration /alarms /components" {
-		t.Errorf("pages = %q, want / /pumps /diagnostics /parameters /log /configuration /alarms /components", got)
+	if got := strings.Join(res.Pages, " "); got != "/ /pumps /diagnostics /parameters /log /configuration /audit /alarms /components" {
+		t.Errorf("pages = %q, want / /pumps /diagnostics /parameters /log /configuration /audit /alarms /components", got)
 	}
 	if !strings.Contains(string(res.Files["index.html"]), "<title>Filter gallery</title>") {
 		t.Errorf("index.html: %s", res.Files["index.html"])
@@ -230,8 +230,8 @@ func TestComponentsPageDrawsEachExample(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(res.Pages, " "); got != "/ /diagnostics /parameters /log /configuration /alarms /components" {
-		t.Errorf("pages = %q, want / /diagnostics /parameters /log /configuration /alarms /components", got)
+	if got := strings.Join(res.Pages, " "); got != "/ /diagnostics /parameters /log /configuration /audit /alarms /components" {
+		t.Errorf("pages = %q, want / /diagnostics /parameters /log /configuration /audit /alarms /components", got)
 	}
 	var all strings.Builder
 	for name, b := range res.Files {
@@ -404,5 +404,30 @@ func TestAssetsOfKeepsAPlantPieceTheCallerDoesNotMake(t *testing.T) {
 	}
 	if got := assetsOf(raw, nil); len(got) != 1 {
 		t.Errorf("no plant makes it: the drawing's panel keeps its page, got %d", len(got))
+	}
+}
+
+// The audit page is for whoever holds the audit permission: its link is
+// listed only to them, and the page says so to anyone who gets there.
+func TestAuditPageNeedsTheAuditPermission(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "a.mimic.json", `{"name":"A","equipment":[]}`)
+	res, err := Build(Options{Project: dir, Title: "t"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(res.Pages, " "), "/audit") {
+		t.Fatalf("pages %v: an audit page", res.Pages)
+	}
+	var js strings.Builder
+	for n, b := range res.Files {
+		if strings.HasSuffix(n, ".js") {
+			js.Write(b)
+		}
+	}
+	for _, want := range []string{`label: "Audit", needs: "audit"`, "This page needs the audit permission"} {
+		if !strings.Contains(js.String(), want) {
+			t.Errorf("the built app lacks %q", want)
+		}
 	}
 }
