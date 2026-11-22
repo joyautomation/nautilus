@@ -277,13 +277,13 @@ func TestAlarmsReportSaysWhenTheJournalIsYoungerThanTheRange(t *testing.T) {
 		}
 		return out.String()
 	}
-	first := reportNow.Add(-5 * time.Minute)
+	first := reportNow.Add(-5*time.Minute + 17*time.Second) // -from floors to the minute
 	young := writeJournal(t, []alarm.Event{
 		{TS: first.UnixMilli(), ID: "A", Kind: alarm.KindActive},
 		{TS: reportNow.Add(-time.Minute).UnixMilli(), ID: "A", Kind: alarm.KindRTN},
 	})
 	out := table(young)
-	at := first.Local().Format(reportTime)
+	at := first.Local().Truncate(time.Minute).Format(reportTime)
 	for _, want := range []string{
 		"the first event is at " + at + ", 6d 23h into the range",
 		"Rates and window counts below are over the whole range",

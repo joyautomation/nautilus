@@ -658,7 +658,7 @@ func TestAckLinkPageSaysWhoItAcknowledgesAs(t *testing.T) {
 	s, _, _ := patServer(t)
 	withLinks(t, s)
 	path, _ := linkPath(t, s, "HiTemp", "akhan")
-	const as = "acknowledges as <strong>akhan</strong>, the person this page was sent to"
+	const as = "acts as <strong>akhan</strong>, the person this page was sent to"
 
 	body := do(t, s, "GET", path, "").Body.String()
 	if !strings.Contains(body, as+".") || strings.Contains(body, "signed in on this browser") {

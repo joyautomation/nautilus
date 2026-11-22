@@ -670,7 +670,10 @@ claims:
       - go ./server TestAckLinkPageSaysWhoItAcknowledgesAs
       - go ./server TestAckLinkPageIsReadableOnAPhone
     partial: true
-    note: The HTML and CSS are asserted; no test renders the page on a phone.
+    note: >-
+      The HTML and CSS are asserted; no test renders the page on a phone.
+      Whether the person may still acknowledge is checked at the press, not
+      on the page. A signed-in OIDC person as the other is not tested.
 
   - id: ALM-059
     claim: >-

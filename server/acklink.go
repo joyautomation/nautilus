@@ -520,7 +520,7 @@ p{margin:.75rem 0}
 </dl>{{end}}
 {{if .Error}}<p class="err" role="alert">{{.Error}}</p>{{end}}
 {{if .Done}}<p class="ok" role="status">{{.Done}}</p>{{end}}
-{{if and .Action (not .Error) (not .Done)}}{{if .SignIn}}<p>Sign in as {{.For}} to acknowledge.</p><a class="btn" href="{{.SignIn}}">Sign in</a>{{else}}<p class="who">Pressing Acknowledge acknowledges as <strong>{{.For}}</strong>, the person this page was sent to{{if .Other}}, not as {{.Other}}, who is signed in on this browser{{end}}.</p><form method="post">
+{{if and .Action (not .Error) (not .Done)}}{{if .SignIn}}<p>Sign in as {{.For}} to acknowledge.</p><a class="btn" href="{{.SignIn}}">Sign in</a>{{else}}<p class="who">Pressing Acknowledge acts as <strong>{{.For}}</strong>, the person this page was sent to{{if .Other}}, not as {{.Other}}, who is signed in on this browser{{end}}.</p><form method="post">
 <button type="submit">Acknowledge</button>
 </form>
 <p>The link works once, until {{.Expires}}.</p>{{end}}{{end}}
