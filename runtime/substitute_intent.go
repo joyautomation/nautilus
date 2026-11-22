@@ -785,7 +785,7 @@ func (r *Runtime) DropRetainedIntent() (int, error) {
 		st.Substitutes.Entries, st.Substitutes.LastSeenMs = nil, 0
 	}
 	if !mutRuntime("stale_retained_alarms_kept") {
-		st.Alarms = nil
+		st.Alarms, st.AlarmFlood = nil, nil
 	}
 	return n, r.retainStore.Save(st)
 }

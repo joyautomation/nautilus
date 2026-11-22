@@ -692,3 +692,28 @@ claims:
     partial: true
     note: >-
       The Postgres round trip runs only with NAUTILUS_TEST_DATABASE_URL set.
+
+  - id: AMG-054
+    claim: >-
+      A chattering episode or a flood in progress carries over a standalone
+      restart (the retain store) and a pair's synced takeover (the
+      operator-intent log, which records only an episode's start and end):
+      the controller that continues it writes its end row under its start
+      and id, ends it one window after the restore unless activations keep
+      it going, ends at once one whose window passed while stopped, and an
+      unsynced takeover carries none.
+    source: "#chattering-and-floods-live"
+    tests:
+      - go ./alarm TestChatterCarriedOverARestart
+      - go ./alarm TestChatterCarriedPastItsWindowEndsAtOnce
+      - go ./alarm TestFloodCarriedOverARestart
+      - go ./alarm TestFloodCarriedPastItsWindowEndsAtOnce
+      - go ./alarm TestCarriedEpisodesEndWithinAWindowOfTheRestore
+      - go ./alarm TestCarriedEpisodesResetAndReplace
+      - go ./runtime TestAlarmFloodRoundTripsThroughRetain
+      - go ./runtime TestPairTakeoverNeverRestoresTheStoresFlood
+      - go ./server TestLeaderSyncsEpisodes
+      - go ./server TestTakeoverContinuesTheViewsEpisodes
+      - go ./server TestDetectEntriesNameWhatTheyEnd
+      - go ./server TestDroppedViewCarriesNoEpisode
+      - go ./cmd/naut TestPairEpisodesCarryAcrossTheLeadersDeath

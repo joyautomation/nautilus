@@ -261,6 +261,15 @@ const (
 	KindOccurrenceStart = "occurrence-start"
 	KindOccurrenceEnd   = "occurrence-end"
 
+	// KindAlarmDetect keeps, for a takeover, the alarm floods and
+	// chattering episodes the leader's engine is in (#1249): Value is a
+	// versioned JSON body (server's detectEntry) naming the episodes
+	// begun and ended since the last one. Proposed by the leader when an
+	// episode begins or ends, at most one per log tick, never as its
+	// numbers move; never lapsed. A replica that predates it ignores it,
+	// and its takeover starts with no episode.
+	KindAlarmDetect = "alarm-detect"
+
 	// KindOutOfService takes a piece of equipment's alarms out of service
 	// until Until (#715 PR 5): ID is the equipment, Reason why, By who.
 	// Lapses as a shelve does: late, it would hide alarms nobody meant

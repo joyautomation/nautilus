@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/joyautomation/nautilus/retain"
 )
 
 // Live chattering and flood detection (#1249 slice 1).
@@ -137,6 +139,7 @@ type chatterState struct {
 	last     int64 // its last qualifying activation: it ends window after
 	acts     int   // activations in the episode
 	episodes int   // episodes since the engine started (or was reset)
+	carried  int64 // a restart or takeover carried the episode then (ms); 0: begun here
 }
 
 // chatterEpisode is an episode's numbers, for its rows.
@@ -172,7 +175,7 @@ func (c *chatterState) add(ms, window int64) (started bool) {
 		}
 		return false
 	case qualifies:
-		c.on, c.since, c.last, c.acts = true, c.ring[c.n%k], ms, k
+		c.on, c.since, c.last, c.acts, c.carried = true, c.ring[c.n%k], ms, k, 0
 		c.episodes++
 		return true
 	}
@@ -366,6 +369,10 @@ type Chatter struct {
 	Episodes    int   `json:"episodes"`    // since the engine started
 	WindowMs    int64 `json:"windowMs"`
 	Count       int   `json:"count"` // the configured count
+	// CarriedMs is when a restart or a takeover carried the episode to
+	// this controller: Activations counts the ones before it as the
+	// carrier had them. Absent for an episode begun here.
+	CarriedMs int64 `json:"carriedMs,omitempty"`
 }
 
 // FloodBrief is a flood in progress, as the summary carries it: numbers
@@ -379,6 +386,10 @@ type FloodBrief struct {
 	WindowMs  int64  `json:"windowMs"`
 	Threshold int    `json:"threshold"`
 	Saturated bool   `json:"saturated,omitempty"`
+	// CarriedMs is when a restart or a takeover carried the flood to
+	// this controller: Count counts from then, and Total and Peak read
+	// as at least the carried ones. Absent for a flood begun here.
+	CarriedMs int64 `json:"carriedMs,omitempty"`
 }
 
 // Flood is a flood in progress with what an operator reads first: the
@@ -477,11 +488,12 @@ func (e *Engine) activated(i int, now time.Time) {
 	ms := now.UnixMilli()
 	if d.chat.add(ms, e.chatWindow) {
 		e.chattering++
-		e.journalChatter(in, d.chat.episode(), KindChatter, ms)
+		e.journalChatter(in, d.chat.episode(), KindChatter, ms, "")
 	}
 	if e.flood.Add(ms, int32(i)) {
 		e.floodSeq++
 		e.floodID = floodID(now, e.floodSeq)
+		e.floodCarried = 0
 		for j := range e.det {
 			e.det[j].floodActs = 0
 		}
@@ -522,16 +534,31 @@ func (e *Engine) detectTick(now time.Time) {
 		if d.chat.on && ms > d.chat.endAt(e.chatWindow) {
 			d.chat.on = false
 			e.chattering--
-			e.journalChatter(&e.inst[i], d.chat.episode(), KindChatterEnd, d.chat.endAt(e.chatWindow))
+			end := d.chat.endAt(e.chatWindow)
+			e.journalChatter(&e.inst[i], d.chat.episode(), KindChatterEnd, end, carriedReason(d.chat.carried, end))
 		}
 	}
 }
 
 // journalChatter writes a chatter row of kind for episode ep.
-func (e *Engine) journalChatter(in *instance, ep chatterEpisode, kind string, atMs int64) {
+func (e *Engine) journalChatter(in *instance, ep chatterEpisode, kind string, atMs int64, reason string) {
 	e.appendSystem(Event{TS: atMs, ID: in.def.ID, Name: in.displayName(), Kind: kind, By: "system",
 		Priority: in.def.Priority, Site: in.def.Site, State: in.state.String(), Occurrence: in.occ,
-		Count: ep.acts, WindowMs: e.chatWindow, SinceMs: ep.since})
+		Count: ep.acts, WindowMs: e.chatWindow, SinceMs: ep.since, Reason: reason})
+}
+
+// carriedReason is an end row's reason for an episode a restart or a
+// takeover carried at carried (ms; 0: none) that ended at end: its
+// numbers before the carry are the carrier's, and one whose window had
+// passed before the carry ended while nobody evaluated.
+func carriedReason(carried, end int64) string {
+	switch {
+	case carried == 0:
+		return ""
+	case end < carried:
+		return "ended while this controller was stopped or taking over"
+	}
+	return "carried over a restart or takeover: counted from then on this controller"
 }
 
 // journalFlood writes a flood's start (or end) row at atMs and tells
@@ -542,6 +569,7 @@ func (e *Engine) journalFlood(atMs int64, start bool) {
 		Count: f.Total, Peak: f.Peak, WindowMs: f.WindowMs, SinceMs: f.SinceMs}
 	ev.Name = fmt.Sprintf("alarm flood ended: %d activations, peak %d in %s (limit %d)",
 		f.Total, f.Peak, windowText(f.WindowMs), f.Threshold)
+	ev.Reason = carriedReason(e.floodCarried, atMs)
 	if start {
 		ev.Kind, ev.Count = KindFlood, f.Count
 		ev.Name = fmt.Sprintf("alarm flood: %d in %s (limit %d)", f.Count, windowText(f.WindowMs), f.Threshold)
@@ -594,7 +622,8 @@ func (e *Engine) appendSystem(ev Event) {
 func (e *Engine) floodBrief() FloodBrief {
 	d := e.flood
 	return FloodBrief{ID: e.floodID, SinceMs: d.since, Count: d.n, Total: d.total,
-		Peak: d.peak, WindowMs: d.window, Threshold: d.threshold, Saturated: d.saturated}
+		Peak: d.peak, WindowMs: d.window, Threshold: d.threshold, Saturated: d.saturated,
+		CarriedMs: e.floodCarried}
 }
 
 // floodState is floodBrief with the flood's first out and groups. Under
@@ -674,6 +703,12 @@ func (e *Engine) rebase(delta int64) {
 			c.since += delta
 			c.last += delta
 		}
+		if c.carried != 0 {
+			c.carried += delta
+		}
+	}
+	if e.floodCarried != 0 {
+		e.floodCarried += delta
 	}
 	f := e.flood
 	for i := range f.n {
@@ -717,7 +752,7 @@ func (e *Engine) chatterOf(i int) *Chatter {
 		return nil
 	}
 	return &Chatter{SinceMs: c.since, LastMs: c.last, Activations: c.acts, Episodes: c.episodes,
-		WindowMs: e.chatWindow, Count: len(c.ring)}
+		WindowMs: e.chatWindow, Count: len(c.ring), CarriedMs: c.carried}
 }
 
 // resetDetect forgets every episode and ring (a takeover's reset: what a
@@ -731,5 +766,122 @@ func (e *Engine) resetDetect() {
 	e.detLast = 0
 	e.chattering = 0
 	e.flood.reset()
+	e.floodCarried = 0
 	e.baseAt = time.Time{}
+}
+
+// Carrying episodes across a restart or a takeover (#1249 slice 1b).
+//
+// A chattering episode rides on its alarm's retain.AlarmRetain (the
+// Chatter* fields), the flood in progress in its own slot
+// (retain.AlarmFlood): a standalone controller's retain store, or a
+// pair's operator-intent log (synced takeovers only). The rings are not
+// carried: the controller that continues an episode counts from the
+// restore. An episode continues until one window after the latest instant
+// the carrier knows it was going (LastMs, OverMs), unless new activations
+// keep it going; one whose window passed before the restore ends on the
+// first scan, journalled at the instant it ended. Either way the end row
+// is written here, with the episode's start and (a flood) its id, and
+// says it was carried. Carried times come from another clock: none is
+// taken as later than the restore, so a carried episode ends no later
+// than one window after the restore unless it is fed again.
+
+// retainChatter puts inst[i]'s chattering episode on r. Under e.mu.
+func (e *Engine) retainChatter(i int, r *retain.AlarmRetain) {
+	c := &e.det[i].chat
+	if !c.on {
+		return
+	}
+	r.ChatterSinceMs, r.ChatterLastMs, r.ChatterActs, r.ChatterEpisodes = c.since, c.last, c.acts, c.episodes
+}
+
+// restoreChatter continues the chattering episode r carries for inst[i],
+// at nowMs. Under e.mu, before the first Evaluate.
+func (e *Engine) restoreChatter(i int, r retain.AlarmRetain, nowMs int64) {
+	if r.ChatterSinceMs <= 0 {
+		return
+	}
+	c := &e.det[i].chat
+	if c.on {
+		e.chattering-- // a second restore replaces the first's
+	}
+	since, last := r.ChatterSinceMs, max(r.ChatterLastMs, r.ChatterSinceMs)
+	if !mutAlarm("carry_detect_unclamped") {
+		since, last = min(since, nowMs), min(last, nowMs)
+	}
+	c.on, c.since, c.last, c.acts, c.episodes, c.carried = true, since, last, max(r.ChatterActs, 0), max(r.ChatterEpisodes, 1), nowMs
+	e.chattering++
+	e.rev++
+}
+
+// RetainedFlood is the flood in progress, as a restart carries it; nil
+// when there is none.
+func (e *Engine) RetainedFlood() *retain.AlarmFlood {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.carriedFlood()
+}
+
+// carriedFlood is RetainedFlood under e.mu.
+func (e *Engine) carriedFlood() *retain.AlarmFlood {
+	d := e.flood
+	if !d.on {
+		return nil
+	}
+	f := &retain.AlarmFlood{ID: e.floodID, SinceMs: d.since, OverMs: d.overUntil, Total: d.total,
+		Peak: d.peak, Saturated: d.saturated}
+	for _, a := range d.first {
+		f.FirstOut = append(f.FirstOut, retain.AlarmFloodAct{ID: e.inst[a.idx].def.ID, Ms: a.ms})
+	}
+	return f
+}
+
+// RestoreFlood continues the flood f carries (nil: none). Call it once,
+// before the first Evaluate, after RestoreAlarms (and, at a takeover,
+// ResetOperatorState): it ends one window after f.OverMs unless the
+// count goes over the threshold again; its first out stays what it was.
+func (e *Engine) RestoreFlood(f *retain.AlarmFlood) {
+	if f == nil || f.ID == "" {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	ms := e.now().UnixMilli()
+	d := e.flood
+	d.reset()
+	since, over := f.SinceMs, max(f.OverMs, f.SinceMs)
+	if !mutAlarm("carry_detect_unclamped") {
+		since, over = min(since, ms), min(over, ms)
+	}
+	d.on, d.since, d.overUntil = true, since, over
+	d.total, d.peak, d.saturated = max(f.Total, 0), max(f.Peak, 0), f.Saturated
+	for _, a := range f.FirstOut {
+		i, ok := e.byID[a.ID]
+		if !ok || len(d.first) == floodFirstOut {
+			continue // a definition gone since: the rest still name the cause
+		}
+		d.first = append(d.first, floodAct{ms: min(a.Ms, ms), idx: int32(i)})
+	}
+	e.floodID, e.floodCarried = f.ID, ms
+	e.rev++
+}
+
+// Episodes is detection's episodes in progress, as a pair's log carries
+// them: each chattering alarm's, by id (the Chatter* fields alone), and
+// the flood (nil: none).
+func (e *Engine) Episodes() (map[string]retain.AlarmRetain, *retain.AlarmFlood) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	var chat map[string]retain.AlarmRetain
+	if e.chattering > 0 {
+		chat = make(map[string]retain.AlarmRetain, e.chattering)
+		for i := range e.det {
+			var r retain.AlarmRetain
+			e.retainChatter(i, &r)
+			if r.ChatterSinceMs != 0 {
+				chat[e.inst[i].def.ID] = r
+			}
+		}
+	}
+	return chat, e.carriedFlood()
 }

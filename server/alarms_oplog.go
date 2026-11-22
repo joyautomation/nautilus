@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"maps"
@@ -145,6 +146,11 @@ type AlarmLog struct {
 	match   atomic.Pointer[func(alarm.Def) bool]
 	occBusy atomic.Bool
 	oosBusy atomic.Bool // an endOutOfService is in flight
+	detBusy atomic.Bool // a syncDetect proposal is in flight
+
+	// flood is the alarm flood the leader's engine is in (#1249,
+	// KindAlarmDetect), nil when none. Under mu.
+	flood *retain.AlarmFlood
 
 	// adopt holds, by alarm, a committed ack of an occurrence the live
 	// engine is not on, until the log is caught up (Reconcile): an entry
@@ -288,6 +294,12 @@ type alarmIntent struct {
 	waitMs   int64
 
 	ackGen uint64 // AlarmLog.ackGen when the view took its ack
+
+	// chatSinceMs, chatActs and chatEpisodes are the chattering episode
+	// the leader's engine is in (#1249, KindAlarmDetect): its start
+	// names it. chatSinceMs 0: none.
+	chatSinceMs            int64
+	chatActs, chatEpisodes int
 }
 
 // adoption is a committed ack waiting to adopt an occurrence (AlarmLog.adopt).
@@ -520,6 +532,8 @@ func (l *AlarmLog) Apply(e oplog.Entry) (bool, error) {
 			}
 		}
 		l.mu.Unlock()
+	case oplog.KindAlarmDetect:
+		l.applyDetect(e)
 	case oplog.KindLapse:
 		// A replica that applied a named ack or shelve before the lapse
 		// reached it (a 3-replica case) drops it from its view; the leader
@@ -740,6 +754,7 @@ func (l *AlarmLog) Reconcile() {
 	}
 	l.endOutOfService(notHeld)
 	l.syncOccurrences()
+	l.syncDetect()
 }
 
 // endOutOfService proposes, in the background, a return to service for
@@ -794,6 +809,7 @@ func (l *AlarmLog) dropView() {
 	clear(l.oos)
 	clear(l.ending)
 	l.adopt = nil
+	l.flood = nil
 }
 
 // EndSuperseded ends what this controller holds of the old history's
@@ -927,6 +943,13 @@ func (l *AlarmLog) Held(synced bool, retained map[string]retain.AlarmRetain) map
 		if v.shelfSet {
 			r.ShelfUntilMs, r.ShelfBy = v.shelfUntilMs, v.shelfBy // the log's shelf, or none
 		}
+		if synced && v.chatSinceMs != 0 && !mutServer("takeover_drops_episodes") {
+			// Going as of now: the log is caught up, and an episode that
+			// ended on the old leader would have been ended in it (one
+			// log tick's residual).
+			r.ChatterSinceMs, r.ChatterLastMs = v.chatSinceMs, time.Now().UnixMilli()
+			r.ChatterActs, r.ChatterEpisodes = v.chatActs, v.chatEpisodes
+		}
 		if r == (retain.AlarmRetain{}) {
 			delete(out, id)
 			continue
@@ -1042,6 +1065,7 @@ func (p PairAlarms) restore(m map[string]retain.AlarmRetain, synced bool) {
 		p.Engine.ResetOperatorState()
 	}
 	p.Engine.RestoreAlarms(p.Log.Held(synced, m))
+	p.Engine.RestoreFlood(p.Log.HeldFlood(synced))
 }
 
 // PairAlarmsTakingOver refuses an alarm write that reaches a leader whose
@@ -1339,6 +1363,144 @@ func (l *AlarmLog) syncOccurrences() {
 				slog.Warn("alarm: occurrences not committed yet; the next log tick tries again", "kind", e.Kind, "alarms", len(e.Occs), "err", err)
 				return
 			}
+		}
+	}()
+}
+
+// Alarm floods and chattering across a takeover (#1249 slice 1b).
+//
+// The leader keeps the view's episodes current at every log tick
+// (syncDetect): one KindAlarmDetect entry names the flood and the
+// chattering episodes that began, and those that ended, since the view
+// last heard. Only an episode beginning or ending is proposed, never its
+// numbers moving: the log is never compacted. A synced takeover continues
+// them (Held, HeldFlood) as going at the takeover, so the new leader ends
+// each one window after it unless its own activations keep it going, and
+// writes the end row under the episode's start and the flood's id. An
+// unsynced takeover carries none (the view can't say which are current):
+// the new leader starts with none, and the next tick ends the view's.
+// Applying an entry never touches the engine: detection is the leader's
+// own.
+
+// detectEntryVersion is detectEntry's version. A replica ignores a body
+// of a later version (its takeover then carries no episode).
+const detectEntryVersion = 1
+
+// detectEntry is a KindAlarmDetect entry's Value. Ends apply before
+// starts.
+type detectEntry struct {
+	V          int                `json:"v"`
+	Flood      *retain.AlarmFlood `json:"flood,omitempty"`    // the flood begun
+	FloodEnd   string             `json:"floodEnd,omitempty"` // the flood ended, by id
+	Chatter    []chatterEpisode   `json:"chatter,omitempty"`  // episodes begun
+	ChatterEnd []chatterEpisode   `json:"chatterEnd,omitempty"`
+}
+
+// chatterEpisode is one alarm's chattering episode in a detectEntry: its
+// start names it.
+type chatterEpisode struct {
+	ID       string `json:"id"`
+	SinceMs  int64  `json:"sinceMs"`
+	Acts     int    `json:"acts,omitempty"`
+	Episodes int    `json:"episodes,omitempty"`
+}
+
+// applyDetect applies a KindAlarmDetect entry to the view.
+func (l *AlarmLog) applyDetect(e oplog.Entry) {
+	var b detectEntry
+	if err := json.Unmarshal(e.Value, &b); err != nil || b.V != detectEntryVersion {
+		slog.Warn("alarm: an alarm-detect entry this build does not read; a takeover carries no flood or chattering episode from it", "seq", e.Seq, "v", b.V, "err", err)
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if b.FloodEnd != "" && l.flood != nil && (l.flood.ID == b.FloodEnd || mutServer("flood_end_any")) {
+		l.flood = nil
+	}
+	for _, c := range b.ChatterEnd {
+		if v, ok := l.view[c.ID]; ok && v.chatSinceMs == c.SinceMs {
+			v.chatSinceMs, v.chatActs, v.chatEpisodes = 0, 0, 0
+			l.view[c.ID] = v
+		}
+	}
+	if b.Flood != nil && b.Flood.ID != "" {
+		f := *b.Flood
+		f.FirstOut = slices.Clone(f.FirstOut)
+		l.flood = &f
+	}
+	for _, c := range b.Chatter {
+		if c.ID == "" || c.SinceMs == 0 {
+			continue
+		}
+		v := l.view[c.ID]
+		v.chatSinceMs, v.chatActs, v.chatEpisodes = c.SinceMs, c.Acts, c.Episodes
+		l.view[c.ID] = v
+	}
+}
+
+// HeldFlood is the flood a takeover continues: the view's, from a synced
+// catch-up only, as going at the takeover.
+func (l *AlarmLog) HeldFlood(synced bool) *retain.AlarmFlood {
+	if !synced || mutServer("takeover_drops_episodes") {
+		return nil
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.flood == nil {
+		return nil
+	}
+	f := *l.flood
+	f.FirstOut = slices.Clone(f.FirstOut)
+	f.OverMs = time.Now().UnixMilli()
+	return &f
+}
+
+// syncDetect brings the view's episodes in line with the live engine (the
+// leader, at each log tick): one KindAlarmDetect naming the flood and the
+// chattering episodes begun or ended since. In the background; a tick
+// that finds the last proposal in flight does nothing (the next one finds
+// what it left).
+func (l *AlarmLog) syncDetect() {
+	if l.node == nil || !l.live() || l.detBusy.Load() || mutServer("episodes_not_synced") {
+		return
+	}
+	chat, flood := l.eng.Episodes()
+	b := detectEntry{V: detectEntryVersion}
+	l.mu.Lock()
+	for id, r := range chat {
+		if l.view[id].chatSinceMs != r.ChatterSinceMs {
+			b.Chatter = append(b.Chatter, chatterEpisode{ID: id, SinceMs: r.ChatterSinceMs, Acts: r.ChatterActs, Episodes: r.ChatterEpisodes})
+		}
+	}
+	for id, v := range l.view {
+		if v.chatSinceMs != 0 && chat[id].ChatterSinceMs != v.chatSinceMs {
+			b.ChatterEnd = append(b.ChatterEnd, chatterEpisode{ID: id, SinceMs: v.chatSinceMs})
+		}
+	}
+	if flood != nil && (l.flood == nil || l.flood.ID != flood.ID) {
+		b.Flood = flood
+	}
+	if l.flood != nil && (flood == nil || flood.ID != l.flood.ID) {
+		b.FloodEnd = l.flood.ID
+	}
+	l.mu.Unlock()
+	if b.Flood == nil && b.FloodEnd == "" && len(b.Chatter) == 0 && len(b.ChatterEnd) == 0 {
+		return
+	}
+	byID := func(a, b chatterEpisode) int { return strings.Compare(a.ID, b.ID) }
+	slices.SortFunc(b.Chatter, byID)
+	slices.SortFunc(b.ChatterEnd, byID)
+	val, err := json.Marshal(b)
+	if err != nil {
+		return
+	}
+	l.detBusy.Store(true)
+	go func() {
+		defer l.detBusy.Store(false)
+		ctx, cancel := context.WithTimeout(context.Background(), substituteProposeWait)
+		defer cancel()
+		if _, err := l.node.Propose(ctx, oplog.Entry{Kind: oplog.KindAlarmDetect, Value: val, By: "system"}); err != nil {
+			slog.Warn("alarm: flood and chatter episodes not committed yet; the next log tick tries again", "err", err)
 		}
 	}()
 }

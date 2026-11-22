@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -285,5 +286,45 @@ func TestPairFieldDropsAtTheTakeover(t *testing.T) {
 	pairWait(t, "Trip active on the new leader", 5*time.Second, func() bool { return r.alarmState(stand) != alarm.Normal })
 	if s, o := r.alarmState(stand), r.occurrence(stand); s != alarm.UnackActive || o == old || o == "" {
 		t.Fatalf("Trip on the new leader is %s on %q; want unack-active on a new occurrence (not %s)", s, o, old)
+	}
+}
+
+// The leader dies mid-flood with Trip chattering (#1249 slice 1b): the
+// standby's view holds both episodes from the log, and the takeover
+// continues them under their start and the flood's id, so the new leader
+// ends what the old one began instead of starting afresh.
+func TestPairEpisodesCarryAcrossTheLeadersDeath(t *testing.T) {
+	r := newPairRig(t)
+	lead := r.leader()
+	stand := other(lead)
+	for i := range 11 { // more than ten activations: a flood, and chatter
+		r.setTrip(t, lead, true)
+		pairWait(t, fmt.Sprintf("activation %d", i+1), 5*time.Second, func() bool { return r.alarmState(lead) == alarm.UnackActive })
+		r.setTrip(t, lead, false)
+		pairWait(t, fmt.Sprintf("return %d", i+1), 5*time.Second, func() bool { return r.alarmState(lead) == alarm.UnackRTN })
+	}
+	f := r.nodes[lead].eng.Flood()
+	trip, _ := r.nodes[lead].eng.Lookup("Trip")
+	if f == nil || trip.Chatter == nil {
+		t.Fatalf("no episodes on the leader: flood %+v chatter %+v", f, trip.Chatter)
+	}
+	pairWait(t, "the standby's view to hold both episodes", 5*time.Second, func() bool {
+		hf := r.nodes[stand].al.HeldFlood(true)
+		return hf != nil && hf.ID == f.ID && r.nodes[stand].al.Held(true, nil)["Trip"].ChatterSinceMs == trip.Chatter.SinceMs
+	})
+	r.nodes[lead].crash()
+	if r.leader() != stand {
+		t.Fatal("the standby did not take over")
+	}
+	nf := r.nodes[stand].eng.Flood()
+	nt, _ := r.nodes[stand].eng.Lookup("Trip")
+	if nf == nil || nf.ID != f.ID || nf.SinceMs != f.SinceMs || nf.CarriedMs == 0 {
+		t.Fatalf("flood on the new leader %+v; want %s carried", nf, f.ID)
+	}
+	if nt.Chatter == nil || nt.Chatter.SinceMs != trip.Chatter.SinceMs || nt.Chatter.CarriedMs == 0 {
+		t.Fatalf("chatter on the new leader %+v; want the episode since %d carried", nt.Chatter, trip.Chatter.SinceMs)
+	}
+	if rows, _ := r.nodes[stand].eng.Journal(time.Time{}, time.Time{}, alarm.Filter{Kinds: []string{alarm.KindFlood, alarm.KindChatter}}); len(rows) != 0 {
+		t.Fatalf("the new leader started the carried episodes again: %+v", rows)
 	}
 }

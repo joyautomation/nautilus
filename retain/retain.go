@@ -42,6 +42,11 @@ type State struct {
 	// return-to-normal are deliberately absent; they re-derive from the
 	// field on the next scan.
 	Alarms map[string]AlarmRetain `json:"alarms,omitempty"`
+	// AlarmFlood is the alarm flood in progress (#1249), so a restart
+	// ends it on this controller, with its id and start, rather than
+	// leaving a flood row with no end. Nil when there is none. A pair
+	// carries it through its operator-intent log, never through this.
+	AlarmFlood *AlarmFlood `json:"alarmFlood,omitempty"`
 	// Locals are the VAR RETAIN variables of each task's program, keyed by
 	// task name, then by variable name, in the plain JSON form Tags uses (a
 	// function-block instance as a mapping of its variables). A store
@@ -185,6 +190,49 @@ type AlarmRetain struct {
 	OOSStartMs   int64  `json:"oosStartMs,omitempty"`
 	OOSBy        string `json:"oosBy,omitempty"`
 	OOSReason    string `json:"oosReason,omitempty"`
+
+	// Chatter* is the alarm's chattering episode (#1249), while it lasts:
+	// when it began, its activations, and the episodes counted. LastMs is
+	// the latest instant the carrier knows the episode was going (a
+	// standalone controller: its last qualifying activation; a pair's
+	// log: the takeover, as the log is current). A restore ends an
+	// episode whose window passed before it, else continues it.
+	ChatterSinceMs  int64 `json:"chatterSinceMs,omitempty"`
+	ChatterLastMs   int64 `json:"chatterLastMs,omitempty"`
+	ChatterActs     int   `json:"chatterActs,omitempty"`
+	ChatterEpisodes int   `json:"chatterEpisodes,omitempty"`
+}
+
+// AlarmFlood is an alarm flood in progress (#1249), as a restart or a
+// takeover carries it. The ring of activations is not carried: the
+// controller that continues it counts from the restore, so Total and
+// Peak read as at least the carried ones.
+type AlarmFlood struct {
+	ID      string `json:"id"`
+	SinceMs int64  `json:"sinceMs"`
+	// OverMs is the latest instant the carrier knows the count was over
+	// the threshold (a standalone controller: as its ring had it; a
+	// pair's log: the takeover). The flood ends one window after it
+	// unless the count goes over again.
+	OverMs    int64           `json:"overMs"`
+	Total     int             `json:"total,omitempty"`
+	Peak      int             `json:"peak,omitempty"`
+	Saturated bool            `json:"saturated,omitempty"`
+	FirstOut  []AlarmFloodAct `json:"firstOut,omitempty"`
+}
+
+// AlarmFloodAct is one of a flood's first alarms: its id, and when it
+// activated.
+type AlarmFloodAct struct {
+	ID string `json:"id"`
+	Ms int64  `json:"ms"`
+}
+
+// AlarmFloodRetainer is an alarm engine whose flood in progress a
+// standalone controller's restart carries (State.AlarmFlood).
+type AlarmFloodRetainer interface {
+	RetainedFlood() *AlarmFlood
+	RestoreFlood(*AlarmFlood)
 }
 
 // AlarmRetainer is the alarm engine, as far as the retain saver and loader
