@@ -325,6 +325,12 @@ type Options struct {
 	// stop at once, leading or not.
 	OnSuperseded func(to Lineage)
 
+	// OnEmptied, when set, is called when this process empties its own log
+	// (Rebind finds the log belongs to another box and moves it aside),
+	// under the node's lock: what was applied from it must be forgotten
+	// in step, before the next entry is applied. It must not call the node.
+	OnEmptied func()
+
 	// ResetInPlace: a replica that hears a higher log history moves its
 	// log aside and starts empty at once, in this process (the witness's
 	// copy: no runtime applies it). Without it (a controller's) the move
@@ -830,6 +836,9 @@ func (n *Node) Rebind(identity, placeholder string) error {
 		}
 		if err := n.setMarkLocked(Mark{Identity: identity}); err != nil {
 			return fmt.Errorf("oplog: the log's mark: %w", err)
+		}
+		if f := n.o.OnEmptied; f != nil {
+			f()
 		}
 		n.log.Warn("oplog: the log belongs to another identity of this replica; kept aside, starting empty and unsynced", "kept", kept, "was", n.mark.Identity, "now", identity)
 	}

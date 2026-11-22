@@ -271,9 +271,11 @@ func (s *Server) handleNoteAdd(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t := notes.Target(req.Target)
+	var orig notes.Note // the note an addendum answers, read once
 	if req.Re != "" {
 		// an addendum is about what the note it answers is about, unless it says otherwise
-		orig, ok := s.notesStore().Get(req.Re)
+		var ok bool
+		orig, ok = s.notesStore().Get(req.Re)
 		if !ok {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": "re: there is no note " + req.Re})
 			return
@@ -307,7 +309,6 @@ func (s *Server) handleNoteAdd(w http.ResponseWriter, r *http.Request) {
 	if req.Re != "" {
 		// an addendum is about its note too: writing on the note's target is
 		// the permission, naming another target does not get around it
-		orig, _ := s.notesStore().Get(req.Re)
 		if code, msg := s.noteScope(r, orig.First().Target); code != 0 {
 			writeJSON(w, code, map[string]string{"error": msg})
 			return
