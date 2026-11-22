@@ -1083,6 +1083,9 @@ func readRefusedBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
 // form body: checkLink answers them itself, with its own target, before
 // the seam's preAuthorize (acklink.go).
 var refusalTargets = map[string]targetFunc{
+	"checkout.begin":       checkoutRefusal("checkout.begin"),
+	"checkout.result":      checkoutRefusal("checkout.result"),
+	"checkout.abandon":     checkoutRefusal("checkout.abandon"),
 	"tag.write":            nameValueTarget,
 	"force.set":            nameValueTarget,
 	"substitute.start":     nameValueTarget,

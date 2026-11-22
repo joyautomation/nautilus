@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/joyautomation/nautilus/checkout"
+	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/runtime"
 )
 
@@ -21,8 +22,13 @@ func (p *Project) CheckCheckout(rt *runtime.Runtime) (errs, warns []string) {
 		if i := strings.IndexAny(root, ".["); i > 0 {
 			root = root[:i]
 		}
-		if _, ok := tags.ReadPath(pt.Tag); !ok {
+		v, ok := tags.ReadPath(pt.Tag)
+		if !ok {
 			errs = append(errs, fmt.Sprintf("checkout point %q: the project has no tag %q", pt.ID, pt.Tag))
+			continue
+		}
+		if !scalarReading(v) {
+			errs = append(errs, fmt.Sprintf("checkout point %q: %q is a struct or an array, not one I/O point: name a member (%s.Member or %s[0])", pt.ID, pt.Tag, pt.Tag, pt.Tag))
 			continue
 		}
 		if _, out := tags.DeclaredOutput(root); !out {
@@ -38,4 +44,22 @@ func (p *Project) CheckCheckout(rt *runtime.Runtime) (errs, warns []string) {
 		warns = append(warns, "checkout.signoff: single: the person who recorded a checkout's results may also seal it; the sealed record says single-person")
 	}
 	return errs, warns
+}
+
+// scalarReading reports whether a tag's value is one number, flag or text:
+// a point is one I/O point, and what a result records fits a line of the
+// file.
+func scalarReading(v any) bool {
+	if iv, ok := v.(ir.Value); ok {
+		switch iv.Kind {
+		case ir.TypeArray, ir.TypeStruct, ir.TypeFB:
+			return false
+		}
+		return true
+	}
+	switch v.(type) {
+	case map[string]any, []any:
+		return false
+	}
+	return true
 }

@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/joyautomation/nautilus/audit"
-	"github.com/joyautomation/nautilus/auth"
 )
 
 // Elevation (#708 PR 5c, docs/design/identity-audit.md §2): a browser
@@ -149,7 +148,7 @@ func (s *Server) handleElevate(w http.ResponseWriter, r *http.Request) {
 // holdsElevated reports whether a's principal holds any elevated
 // permission, anywhere.
 func (s *Server) holdsElevated(a actor) bool {
-	for _, p := range auth.ElevatedPermissions {
+	for _, p := range s.elevatedNames() {
 		if s.policy.Holds(a.pr, p) {
 			return true
 		}

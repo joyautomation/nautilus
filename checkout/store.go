@@ -112,13 +112,39 @@ type Run struct {
 type Store struct {
 	mu   sync.Mutex
 	path string
-	f    *os.File
+	f    appendFile
 	now  func() time.Time
+	// off is the size of the good part of the file: where a failed append is
+	// cut back to, so a short write never has the next entry glued onto it.
+	off int64
+	// broken is why the store stopped taking entries: a write failed and the
+	// file could not be cut back. It is cleared by opening the file again.
+	broken error
 
 	seq  int64
 	prev string
 	runs map[string]*Run
 	ord  []string
+}
+
+// appendFile is the file as the store uses it (a test's can fail).
+type appendFile interface {
+	Write([]byte) (int, error)
+	Sync() error
+	Truncate(int64) error
+	Close() error
+}
+
+// MaxLine bounds one entry's encoded line: a result's reading is shortened
+// to fit, so no entry the store acknowledges is one it cannot read back.
+const MaxLine = 256 << 10
+
+// ErrInvalid marks a refusal that is the caller's (a bad outcome, a missing
+// note, text too long), as opposed to the store failing.
+var ErrInvalid = errors.New("checkout: invalid request")
+
+func invalid(format string, a ...any) error {
+	return fmt.Errorf("%w: "+format, append([]any{ErrInvalid}, a...)...)
 }
 
 // Open reads the file (creating it when absent) and returns the store.
@@ -161,6 +187,9 @@ func Open(path string, now func() time.Time) (*Store, error) {
 		return nil, err
 	}
 	s.f = f
+	if st, err := f.Stat(); err == nil {
+		s.off = st.Size()
+	}
 	syncDir(filepath.Dir(path))
 	return s, nil
 }
@@ -240,27 +269,52 @@ func (s *Store) apply(e entry) error {
 }
 
 // append writes e as the next line, fsyncs the file, and only then folds it
-// into the view.
+// into the view. A write or sync that fails cuts the file back to its last
+// good size, so the entry that failed leaves nothing behind; if that fails
+// too, the store takes no more entries until it is opened again.
 func (s *Store) append(e entry) error {
 	if s.f == nil {
 		return errors.New("checkout: the store is closed")
+	}
+	if s.broken != nil {
+		return fmt.Errorf("checkout: the store stopped after a failed write (%v): restart the controller", s.broken)
 	}
 	e.Seq, e.At, e.Prev = s.seq+1, s.now().UnixMilli(), s.prev
 	line, err := json.Marshal(e)
 	if err != nil {
 		return err
 	}
-	if _, err := s.f.Write(append(line, '\n')); err != nil {
-		return err
+	if len(line) > MaxLine && e.Seen != nil {
+		e.Seen = "(too large to record)"
+		if line, err = json.Marshal(e); err != nil {
+			return err
+		}
+	}
+	if len(line) > MaxLine {
+		return invalid("the entry is larger than %d bytes", MaxLine)
+	}
+	out := append(line, '\n')
+	if _, err := s.f.Write(out); err != nil {
+		return s.undo(err)
 	}
 	if err := s.f.Sync(); err != nil {
-		return err
+		return s.undo(err)
 	}
 	if err := s.apply(e); err != nil {
-		return err
+		return s.undo(err)
 	}
+	s.off += int64(len(out))
 	s.seq, s.prev = e.Seq, lineHash(line)
 	return nil
+}
+
+// undo cuts the file back to its last good size after a failed append and
+// returns err; if it cannot, the store is stopped.
+func (s *Store) undo(err error) error {
+	if terr := s.f.Truncate(s.off); terr != nil {
+		s.broken = fmt.Errorf("%v; and the file could not be cut back: %v", err, terr)
+	}
+	return err
 }
 
 func newID() string {
@@ -303,16 +357,16 @@ func (s *Store) Record(run, point, outcome, note string, seen any, quality, by, 
 	case Pass:
 	case Fail, Note:
 		if note == "" {
-			return Result{}, fmt.Errorf("checkout: a %s says why: write a note", outcome)
+			return Result{}, invalid("a %s says why: write a note", outcome)
 		}
 	default:
-		return Result{}, fmt.Errorf("checkout: outcome %q: want pass, fail or note", outcome)
+		return Result{}, invalid("outcome %q: want pass, fail or note", outcome)
 	}
 	if point == "" || utf8.RuneCountInString(point) > MaxID {
-		return Result{}, errors.New("checkout: a result names a point")
+		return Result{}, invalid("a result names a point")
 	}
 	if utf8.RuneCountInString(note) > MaxNote {
-		return Result{}, fmt.Errorf("checkout: the note is longer than %d characters", MaxNote)
+		return Result{}, invalid("the note is longer than %d characters", MaxNote)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -335,10 +389,10 @@ func (s *Store) Record(run, point, outcome, note string, seen any, quality, by, 
 // and in the view; it can no longer take results.
 func (s *Store) Abandon(run, reason, by, principal string) (Run, error) {
 	if reason == "" {
-		return Run{}, errors.New("checkout: abandoning a run says why: give a reason")
+		return Run{}, invalid("abandoning a run says why: give a reason")
 	}
 	if utf8.RuneCountInString(reason) > MaxReason {
-		return Run{}, fmt.Errorf("checkout: the reason is longer than %d characters", MaxReason)
+		return Run{}, invalid("the reason is longer than %d characters", MaxReason)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

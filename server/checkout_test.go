@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"math"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -9,7 +10,9 @@ import (
 
 	"github.com/joyautomation/nautilus/auth"
 	"github.com/joyautomation/nautilus/checkout"
+	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/leader"
+	"github.com/joyautomation/nautilus/runtime"
 )
 
 func ckSheet() *checkout.Sheet {
@@ -233,5 +236,96 @@ func TestMeListsTheCheckoutPermissionsOnlyWhenEnabled(t *testing.T) {
 	me := call(t, srv, "GET", "/api/me", "", ckAs(t, srv, "akhan")).Body.String()
 	if !strings.Contains(me, `"checkout"`) || !strings.Contains(me, `"signoff"`) || !strings.Contains(me, `"redundancy","signoff"]`) {
 		t.Errorf("/api/me with the checkout on lacks its permissions: %s", me)
+	}
+}
+
+// The controller's reading and its quality are looked up by the driver's own
+// tag whatever the sheet's spelling; a tag the controller cannot read is
+// refused, never recorded as good; the run is tied to its sheet; a NaN reading
+// is recorded as text.
+func TestCheckoutReadingsAreTheControllersOwn(t *testing.T) {
+	drv := nio.NewMemory()
+	rt, err := runtime.New(runtime.Options{Program: testProgram, Driver: drv, Inputs: []string{"Level"}, Outputs: []string{"Out"},
+		Seed: nio.Values{"Level": 40.0, "SP": 65.0, "Out": 0.0}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt.Scan()
+	st, err := checkout.Open(filepath.Join(t.TempDir(), "c.jsonl"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	sheet := &checkout.Sheet{Title: "T", Points: []checkout.Point{
+		{ID: "lvl", Tag: "level", Kind: checkout.AI, Method: checkout.Observe}, // another spelling
+		{ID: "ghost", Tag: "Ghost", Kind: checkout.AI, Method: checkout.Observe},
+	}}
+	srv, _, _ := patServerRT(t, rt, Options{Checkout: &CheckoutOptions{Store: st, Sheet: sheet}})
+	eng := ckAs(t, srv, "akhan")
+	run, _ := st.Begin(false, sheet.Hash(), "T", "akhan", "user:akhan")
+	path := "/api/checkout/runs/" + run.ID + "/results"
+
+	drv.SetQuality("Level", nio.Stale)
+	rec := call(t, srv, "POST", path, `{"point":"lvl","outcome":"pass"}`, eng)
+	var res checkout.Result
+	json.Unmarshal(rec.Body.Bytes(), &res)
+	if rec.Code != http.StatusCreated || res.Quality != "stale" || res.Seen != 40.0 {
+		t.Errorf("a stale input by another spelling: %d %+v, want quality stale and the reading 40", rec.Code, res)
+	}
+	if rec := call(t, srv, "POST", path, `{"point":"ghost","outcome":"pass"}`, eng); rec.Code != http.StatusUnprocessableEntity {
+		t.Errorf("a tag the controller lacks: %d %s, want 422", rec.Code, rec.Body)
+	}
+
+	// a run begun against another sheet takes no results, and the view says so
+	old, _ := func() (checkout.Run, error) {
+		st.Abandon(run.ID, "new sheet", "akhan", "")
+		return st.Begin(false, "an-older-sheet-hash", "T", "akhan", "user:akhan")
+	}()
+	if rec := call(t, srv, "POST", "/api/checkout/runs/"+old.ID+"/results", `{"point":"lvl","outcome":"pass"}`, eng); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "sheet changed") {
+		t.Errorf("a result for a run of another sheet: %d %s, want 409", rec.Code, rec.Body)
+	}
+	var v checkoutView
+	json.Unmarshal(call(t, srv, "GET", "/api/checkout", "", eng).Body.Bytes(), &v)
+	if !v.SheetChanged {
+		t.Errorf("the view does not say the sheet changed: %+v", v)
+	}
+
+	// a failed store is the controller's: 500, not 400
+	st.Close()
+	if rec := call(t, srv, "POST", "/api/checkout/runs/"+old.ID+"/abandon", `{"reason":"x"}`, eng); rec.Code != http.StatusInternalServerError {
+		t.Errorf("a closed store: %d %s, want 500", rec.Code, rec.Body)
+	}
+}
+
+func TestJSONSafeWritesNaNAsText(t *testing.T) {
+	got := jsonSafe(map[string]any{"a": math.NaN(), "b": []any{math.Inf(1), 2.5}})
+	if _, err := json.Marshal(got); err != nil {
+		t.Fatal(err)
+	}
+	m := got.(map[string]any)
+	if m["a"] != "NaN" || m["b"].([]any)[0] != "+Inf" || m["b"].([]any)[1] != 2.5 {
+		t.Errorf("%v", got)
+	}
+}
+
+// A NaN reading (an analog input nobody wired) is the very thing a checkout
+// fails: it is recorded, as text, rather than refused as unencodable.
+func TestCheckoutRecordsANaNReading(t *testing.T) {
+	rt, err := runtime.New(runtime.Options{Program: testProgram, Driver: nio.NewMemory(), Inputs: []string{"Level"}, Outputs: []string{"Out"},
+		Seed: nio.Values{"Level": math.NaN(), "SP": 65.0, "Out": 0.0}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt.Scan()
+	st, _ := checkout.Open(filepath.Join(t.TempDir(), "c.jsonl"), nil)
+	defer st.Close()
+	sheet := &checkout.Sheet{Points: []checkout.Point{{ID: "lvl", Tag: "Level", Kind: checkout.AI, Method: checkout.Observe}}}
+	srv, _, _ := patServerRT(t, rt, Options{Checkout: &CheckoutOptions{Store: st, Sheet: sheet}})
+	run, _ := st.Begin(false, sheet.Hash(), "", "akhan", "user:akhan")
+	rec := call(t, srv, "POST", "/api/checkout/runs/"+run.ID+"/results", `{"point":"lvl","outcome":"fail","note":"reads NaN: not wired"}`, ckAs(t, srv, "akhan"))
+	var res checkout.Result
+	json.Unmarshal(rec.Body.Bytes(), &res)
+	if rec.Code != http.StatusCreated || res.Seen != "NaN" {
+		t.Errorf("a NaN reading: %d %s, want recorded as NaN text", rec.Code, rec.Body)
 	}
 }

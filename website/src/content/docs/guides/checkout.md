@@ -68,8 +68,10 @@ POST /api/checkout/runs/{id}/abandon  {reason}: end a run without sealing it
 
 The results are kept in `checkout.jsonl` in the controller's state directory,
 one line per entry, fsynced, each chained by SHA-256 to the line before. A file
-whose chain is broken (a line edited, removed or moved) is refused at start,
-never repaired. The checkout needs an `auth:` block with users (a result names
+whose chain is broken (a line edited, or removed or moved from the middle) is
+refused at start, never repaired. Lines removed from the end, or the whole file,
+leave nothing to notice: the chain has no anchor outside the file yet, so
+copy the file or export a run as part of signing it off (a later step). The checkout needs an `auth:` block with users (a result names
 a person; a token names nobody) and a state directory, as notes do.
 
 ## Who

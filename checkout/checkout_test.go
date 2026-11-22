@@ -192,3 +192,106 @@ func TestOpenDropsATornLastLine(t *testing.T) {
 		t.Errorf("reopened after a record past the cut: %v", err)
 	}
 }
+
+// failFile is the store's file with writes and syncs that fail on demand.
+type failFile struct {
+	appendFile
+	short, syncErr, truncErr bool
+}
+
+func (f *failFile) Write(b []byte) (int, error) {
+	if f.short {
+		f.short = false
+		f.appendFile.Write(b[:len(b)/2]) // part of the line reaches the disk
+		return len(b) / 2, errors.New("no space left on device")
+	}
+	return f.appendFile.Write(b)
+}
+
+func (f *failFile) Sync() error {
+	if f.syncErr {
+		f.syncErr = false
+		return errors.New("input/output error")
+	}
+	return f.appendFile.Sync()
+}
+
+func (f *failFile) Truncate(n int64) error {
+	if f.truncErr {
+		return errors.New("read-only file system")
+	}
+	return f.appendFile.Truncate(n)
+}
+
+// A write or sync that fails leaves nothing behind: the next entry is not
+// glued onto half a line, nor does it reuse a sequence number, and the file
+// still opens.
+func TestAFailedAppendLeavesNothingBehind(t *testing.T) {
+	for _, mode := range []string{"short write", "failed sync"} {
+		s, p := openStore(t)
+		ff := &failFile{appendFile: s.f}
+		s.f = ff
+		run, err := s.Begin(false, "h", "", "alice", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		ff.short, ff.syncErr = mode == "short write", mode == "failed sync"
+		if _, err := s.Record(run.ID, "A", Pass, "", nil, "", "alice", ""); err == nil {
+			t.Fatalf("%s: the record was acknowledged", mode)
+		}
+		if _, err := s.Record(run.ID, "B", Pass, "", nil, "", "alice", ""); err != nil {
+			t.Fatalf("%s: the next record: %v", mode, err)
+		}
+		s.Close()
+		s2, err := Open(p, nil)
+		if err != nil {
+			t.Fatalf("%s: the file no longer opens: %v", mode, err)
+		}
+		if got := s2.Latest(run.ID); len(got) != 1 || got["B"].Outcome != Pass {
+			t.Errorf("%s: after reopening, results %+v, want only B", mode, got)
+		}
+		s2.Close()
+	}
+}
+
+// If the file cannot be cut back after a failed write, the store takes no
+// more entries rather than write after a half line.
+func TestTheStoreStopsWhenItCannotCutBack(t *testing.T) {
+	s, _ := openStore(t)
+	ff := &failFile{appendFile: s.f}
+	s.f = ff
+	run, _ := s.Begin(false, "h", "", "alice", "")
+	ff.short, ff.truncErr = true, true
+	s.Record(run.ID, "A", Pass, "", nil, "", "alice", "")
+	ff.truncErr = false
+	if _, err := s.Record(run.ID, "B", Pass, "", nil, "", "alice", ""); err == nil || !strings.Contains(err.Error(), "stopped") {
+		t.Errorf("a record after an uncut failure: %v", err)
+	}
+}
+
+// A reading too large to read back is shortened, never acknowledged and then
+// refused at the next start.
+func TestAHugeReadingIsShortened(t *testing.T) {
+	s, p := openStore(t)
+	run, _ := s.Begin(false, "h", "", "alice", "")
+	big := make([]float64, 200_000)
+	r, err := s.Record(run.ID, "A", Pass, "", big, "good", "alice", "")
+	if err != nil || r.Seen != "(too large to record)" {
+		t.Fatalf("record: seen %T, %v", r.Seen, err)
+	}
+	s.Close()
+	if _, err := Open(p, nil); err != nil {
+		t.Errorf("reopen: %v", err)
+	}
+}
+
+func TestValidationErrorsAreMarked(t *testing.T) {
+	s, _ := openStore(t)
+	run, _ := s.Begin(false, "h", "", "alice", "")
+	if _, err := s.Record(run.ID, "A", Fail, "", nil, "", "alice", ""); !errors.Is(err, ErrInvalid) {
+		t.Errorf("a fail with no note: %v", err)
+	}
+	if _, err := s.Abandon(run.ID, "", "alice", ""); !errors.Is(err, ErrInvalid) {
+		t.Errorf("an abandon with no reason: %v", err)
+	}
+}

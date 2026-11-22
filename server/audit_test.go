@@ -284,7 +284,7 @@ func auditRows() []auditRow {
 		return srv
 	}
 	ckRun := func(t *testing.T, s *Server) {
-		if _, err := s.checkout.Store.Begin(false, "h", "T", "akhan", "user:akhan"); err != nil {
+		if _, err := s.checkout.Store.Begin(false, s.checkout.Sheet.Hash(), "T", "akhan", "user:akhan"); err != nil {
 			t.Fatal(err)
 		}
 	}

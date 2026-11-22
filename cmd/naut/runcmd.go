@@ -604,6 +604,7 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		if pair == nil && proj.Auth != nil && (proj.Auth.HasUsers() || proj.Auth.OIDC()) {
 			if st, err := openCheckout(proj, dir, os.Getenv); err != nil {
 				fmt.Fprintf(os.Stderr, "naut run: the I/O checkout is off: %v\n", err)
+				co.OpenErr = err.Error()
 			} else {
 				co.Store = st
 				defer st.Close()

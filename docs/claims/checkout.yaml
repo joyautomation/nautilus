@@ -42,6 +42,8 @@ claims:
     source: "#runs-and-results"
     tests:
       - go ./server TestCheckoutRunAndResults
+      - go ./server TestCheckoutReadingsAreTheControllersOwn
+      - go ./server TestJSONSafeWritesNaNAsText
       - go ./checkout TestRunsAndResults
 
   - id: CHK-005
@@ -58,18 +60,23 @@ claims:
   - id: CHK-006
     claim: >-
       The results file is chained by SHA-256 line to line and fsynced per
-      entry: a line edited, removed or moved is refused at start and never
-      repaired, and a last line cut short before it was acknowledged is cut
-      off.
+      entry: a line edited, or removed or moved from the middle, is refused at
+      start and never repaired, and a last line cut short before it was
+      acknowledged is cut off; a failed write is cut back so the next entry is
+      never glued onto half a line.
     source: "#runs-and-results"
     tests:
       - go ./checkout TestOpenRefusesATamperedFile
       - go ./checkout TestOpenDropsATornLastLine
+      - go ./checkout TestAFailedAppendLeavesNothingBehind
+      - go ./checkout TestTheStoreStopsWhenItCannotCutBack
+      - go ./checkout TestAHugeReadingIsShortened
     partial: true
     note: >-
       The file is fsynced per entry and its directory once at creation; a power
       cut between a write and its sync is not simulated (the torn line is a
-      hand-made one).
+      hand-made one). Lines removed from the end of the file, or the whole file,
+      are not noticed: nothing outside the file anchors the chain yet.
 
   - id: CHK-007
     claim: >-

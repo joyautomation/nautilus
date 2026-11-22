@@ -1351,7 +1351,7 @@ func ReadManifest(fsys fs.FS, name string) (*Manifest, error) {
 }
 
 // ReadManifestForCheckoutInit is ReadManifest without reading the checkout
-// sheet: `naut checkout init` writes the sheet a manifest's checkout: section
+// sheet (its settings are still checked): `naut checkout init` writes the sheet a manifest's checkout: section
 // asks for, so it must read a manifest whose sheet is not there yet.
 func ReadManifestForCheckoutInit(fsys fs.FS) (*Manifest, error) {
 	return readManifest(fsys, "", true)
@@ -1396,10 +1396,8 @@ func readManifest(fsys fs.FS, name string, noSheet bool) (*Manifest, error) {
 	if err := m.readPWA(fsys); err != nil {
 		return nil, fmt.Errorf("%s: %w", name, err)
 	}
-	if !noSheet {
-		if err := m.readCheckout(fsys); err != nil {
-			return nil, fmt.Errorf("%s: %w", name, err)
-		}
+	if err := m.readCheckout(fsys, !noSheet); err != nil {
+		return nil, fmt.Errorf("%s: %w", name, err)
 	}
 	if m.Parameters != nil {
 		switch m.Parameters.WriteBack {
@@ -1487,7 +1485,10 @@ func (c *CheckoutConfig) SignoffRule() string {
 // DefaultCheckoutFile is the sheet's name when the manifest names none.
 const DefaultCheckoutFile = "checkout.yaml"
 
-func (m *Manifest) readCheckout(fsys fs.FS) error {
+// readCheckout validates the checkout: section (the sign-off rule, the sheet's
+// path, which stays inside the project) and, when readSheet, reads and
+// validates the sheet.
+func (m *Manifest) readCheckout(fsys fs.FS, readSheet bool) error {
 	c := m.Checkout
 	if c == nil {
 		return nil
@@ -1504,6 +1505,9 @@ func (m *Manifest) readCheckout(fsys fs.FS) error {
 	fp, err := projectPath(file)
 	if err != nil {
 		return fmt.Errorf("checkout.file: %w", err)
+	}
+	if !readSheet {
+		return nil
 	}
 	raw, err := fs.ReadFile(fsys, fp)
 	if err != nil {

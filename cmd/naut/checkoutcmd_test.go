@@ -21,6 +21,7 @@ tags:
   - { name: SP_Speed, role: output, init: 0.0 }
   - { name: Pump1, role: input, type: Motor }
   - { name: Mode, role: setpoint, init: 1 }
+  - { name: Motor1, role: setpoint, type: Motor }
 alarms:
   defs:
     - { id: HiFlow, tag: FIT201, equipment: FT-201 }
@@ -37,7 +38,7 @@ func ckProject(t *testing.T, manifest string, extra map[string]string) string {
 	dir := t.TempDir()
 	files := map[string]string{
 		"nautilus.yaml": manifest,
-		"main.st":       "TYPE Motor : STRUCT Speed : REAL; END_STRUCT END_TYPE\nPROGRAM Main\nVAR_EXTERNAL XV101_Cmd : BOOL; LSH101 : BOOL; FIT201 : REAL; SP_Speed : REAL; Pump1 : Motor; Mode : INT; END_VAR\nXV101_Cmd := LSH101;\nSP_Speed := FIT201;\nEND_PROGRAM\n",
+		"main.st":       "TYPE Motor : STRUCT Speed : REAL; END_STRUCT END_TYPE\nPROGRAM Main\nVAR_EXTERNAL XV101_Cmd : BOOL; LSH101 : BOOL; FIT201 : REAL; SP_Speed : REAL; Pump1 : Motor; Mode : INT; Motor1 : Motor; END_VAR\nXV101_Cmd := LSH101;\nSP_Speed := FIT201;\nEND_PROGRAM\n",
 	}
 	for k, v := range extra {
 		files[k] = v
@@ -133,6 +134,7 @@ func TestCheckHoldsTheCheckoutSheetToTheProject(t *testing.T) {
 		{"a tag the project lacks", ckManifest + "checkout: {}\n", good + "  - {id: X, tag: Nope, kind: DI, method: observe}\n", 1, `the project has no tag "Nope"`},
 		{"a force on an input", ckManifest + "checkout: {}\n", "  - {id: F, tag: FIT201, kind: AO, method: force}\n", 1, "is not an output the controller drives"},
 		{"a single-person sign-off", ckManifest + "checkout: {signoff: single}\n", good, 0, "warning: checkout.signoff: single"},
+		{"a struct is not a point", ckManifest + "checkout: {}\n", "  - {id: P, tag: Motor1, kind: AI, method: observe}\n", 1, "is a struct or an array"},
 		{"a sheet with a bad row", ckManifest + "checkout: {}\n", "  - {id: A, tag: LSH101, kind: ZZ, method: observe}\n", 1, `kind "ZZ"`},
 	} {
 		dir := ckProject(t, c.manifest, sheet(c.points))
@@ -145,5 +147,18 @@ func TestCheckHoldsTheCheckoutSheetToTheProject(t *testing.T) {
 	dir := ckProject(t, ckManifest, nil)
 	if out, code := capture(t, func() int { return runCheck([]string{dir}) }); code != 0 || strings.Contains(out, "checkout") {
 		t.Errorf("a project without a checkout: naut check = %d\n%s", code, out)
+	}
+}
+
+// naut checkout init writes only inside the project: a checkout.file that
+// climbs out of it is refused, with --force as with none.
+func TestCheckoutInitStaysInsideTheProject(t *testing.T) {
+	dir := ckProject(t, ckManifest+"checkout: {file: ../escape.yaml}\n", nil)
+	var out, errb bytes.Buffer
+	if code := checkoutMain([]string{"init", "--project", dir, "--force"}, &out, &errb); code == 0 || !strings.Contains(errb.String(), "outside the project") {
+		t.Errorf("init with a file outside the project: %d %s", code, errb.String())
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(dir), "escape.yaml")); err == nil {
+		t.Error("a file was written outside the project")
 	}
 }
