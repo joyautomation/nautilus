@@ -162,8 +162,8 @@ func inboundAuditTarget(r *http.Request, _ []byte) auditTarget {
 	return t
 }
 
-// readInboundForm reads a provider's form, bounded, and puts the body
-// back for the seam.
+// readInboundForm reads a provider's form, bounded. The body is spent:
+// the seam reads nothing after a preStep that read it.
 func readInboundForm(r *http.Request) (url.Values, bool) {
 	if mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); mt != "application/x-www-form-urlencoded" {
 		return nil, false

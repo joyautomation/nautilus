@@ -610,6 +610,13 @@ alarms:
 - **The provider always hears 200** with a TwiML answer, a refusal too
   (otherwise it sends no reply and plays the caller an error); the audit
   entry keeps the refusal's own status and reason.
+- **Refusals are journalled** as any refused write is: the first five a
+  minute from one address for one person in full, the rest folded into
+  one summary entry (the provider calls from a few addresses, so a flood
+  of forged requests costs the trail a summary, not a row each).
+- **While no controller leads** (an election), a reply gets no answer
+  (the standby has not checked who sent it) and a keypress hears "not
+  acknowledged"; try again in a minute.
 - **Not with `ack-from-notification: sign-in`:** a reply cannot sign in,
   so the manifest is refused with both.
 

@@ -364,7 +364,11 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	// stopping a controller that pages people.
 	ackLinks, err := ackLinkKeyring(proj, alarmStateDir, os.Getenv("NAUTILUS_PEER_TOKEN"), os.Stderr)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "naut run: warning: pages carry no ack link: %v\n", err)
+		what := "pages carry no ack link"
+		if proj.Alarms != nil && proj.Alarms.Oncall.Inbound != nil {
+			what += ", and SMS replies and keypresses are refused (alarms.oncall.inbound)"
+		}
+		fmt.Fprintf(os.Stderr, "naut run: warning: %s: %v\n", what, err)
 	}
 	if ackLinks != nil {
 		proj.AckLink, proj.AckCode = ackLinkHook(&srvRef), ackCodeHook(&srvRef)
@@ -557,6 +561,9 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		sopts.AckLinks, sopts.AckURL = ackLinks, proj.Alarms.Oncall.AckURL
 		sopts.AckLinkSignIn = proj.Alarms.Oncall.AckFrom() == escalate.AckBySignIn
 		sopts.Inbound = inboundOptions(proj)
+	}
+	if proj.Alarms != nil && proj.Alarms.Oncall.Inbound != nil && sopts.Inbound == nil && ackLinks != nil {
+		fmt.Fprintln(os.Stderr, "naut run: warning: alarms.oncall.inbound: this controller has no contacts store (no state directory), so SMS replies and keypresses are refused")
 	}
 	// Operator notes (#720): a pair's are an index of its log; alone, a file
 	// in the state directory, when anyone can sign in to write one.

@@ -4,7 +4,6 @@ import (
 	"crypto/hmac"
 	"crypto/sha1"
 	"encoding/base64"
-	"net"
 	"net/url"
 	"slices"
 	"strings"
@@ -52,8 +51,8 @@ func signedParams(form url.Values) string {
 // rawURL is the URL the controller is configured to be called at
 // (alarms.oncall.inbound.url plus the path and query), never the request's
 // Host: a proxy or a forged header cannot choose what is checked. The
-// provider signs some requests with the URL's port and some without, so
-// both spellings of the default port are tried.
+// provider signs some requests with the URL's port and some without
+// (urlSpellings), so each is tried.
 func CheckSignature(token, rawURL string, form url.Values, sig string) bool {
 	if token == "" || sig == "" {
 		return false
@@ -73,29 +72,32 @@ func CheckSignature(token, rawURL string, form url.Values, sig string) bool {
 	return ok
 }
 
-// urlSpellings is rawURL as given, and with its scheme's default port
-// added or removed.
+// urlSpellings is rawURL as given, without its port, and with its
+// scheme's default port when it names none: the spellings the provider's
+// own validator accepts (a voice request over https is signed with the
+// port dropped, any port; others keep it).
 func urlSpellings(rawURL string) []string {
 	out := []string{rawURL}
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Host == "" {
 		return out
 	}
-	def := map[string]string{"https": "443", "http": "80"}[u.Scheme]
-	if def == "" {
-		return out
-	}
-	alt := *u
-	if host, port, err := net.SplitHostPort(u.Host); err == nil {
-		if port != def {
-			return out
-		}
+	add := func(host string) {
+		alt := *u
 		alt.Host = host
-		if strings.Contains(host, ":") {
-			alt.Host = "[" + host + "]"
+		if s := alt.String(); !slices.Contains(out, s) {
+			out = append(out, s)
 		}
-	} else {
-		alt.Host = u.Host + ":" + def
 	}
-	return append(out, alt.String())
+	host := u.Hostname()
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	add(host)
+	if u.Port() == "" {
+		if def := map[string]string{"https": "443", "http": "80"}[u.Scheme]; def != "" {
+			add(host + ":" + def)
+		}
+	}
+	return out
 }

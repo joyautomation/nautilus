@@ -1,9 +1,6 @@
 package server
 
 import (
-	"crypto/hmac"
-	"crypto/sha1"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -18,6 +15,7 @@ import (
 
 	"github.com/joyautomation/nautilus/alarm"
 	"github.com/joyautomation/nautilus/alarm/acklink"
+	"github.com/joyautomation/nautilus/alarm/channel"
 	"github.com/joyautomation/nautilus/audit"
 	"github.com/joyautomation/nautilus/leader"
 )
@@ -34,27 +32,9 @@ const (
 	sharedPhone = "+15550199"
 )
 
-// twilioSign is the provider's signature of a form POST to u (the scheme
-// alarm/channel checks against the provider's published vectors).
-func twilioSign(token, u string, form url.Values) string {
-	var b strings.Builder
-	b.WriteString(u)
-	names := make([]string, 0, len(form))
-	for k := range form {
-		names = append(names, k)
-	}
-	slices.Sort(names)
-	for _, k := range names {
-		vs := slices.Clone(form[k])
-		slices.Sort(vs)
-		for _, v := range slices.Compact(vs) {
-			b.WriteString(k + v)
-		}
-	}
-	m := hmac.New(sha1.New, []byte(token))
-	m.Write([]byte(b.String()))
-	return base64.StdEncoding.EncodeToString(m.Sum(nil))
-}
+// twilioSign is the provider's signature (alarm/channel, checked there
+// against the provider's published vectors).
+func twilioSign(token, u string, form url.Values) string { return channel.Signature(token, u, form) }
 
 // testInbound is a provider setup: alice and bob have numbers, two people
 // share one; the tokens are smsToken and voiceToken.
@@ -67,7 +47,7 @@ func testInbound() *Inbound {
 		URL: inboundBase, SMS: true, Voice: true,
 		Verify: func(kind, u string, form url.Values, sig string) bool {
 			tok := map[string]string{"sms": smsToken, "voice": voiceToken}[kind]
-			return tok != "" && hmac.Equal([]byte(sig), []byte(twilioSign(tok, u, form)))
+			return channel.CheckSignature(tok, u, form, sig)
 		},
 		Callers: func(kind, number string) []string {
 			var out []string
@@ -300,7 +280,9 @@ func TestInboundWrongCodesAreLimited(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "too many wrong codes") || state(s.alarms, "HiTemp") != alarm.UnackActive {
 		t.Fatalf("after %d wrong codes the right one: %s", InboundTries, rec.Body)
 	}
-	// (Repeated refusals of one person are coalesced by the audit seam.)
+	// (That sixth refusal of one person from one address within a minute
+	// is folded into the audit trail's summary entry: its usual limit on
+	// refusals, refuseFull a minute in full.)
 	// bob is not alice: his code still works.
 	if rec := reply(t, s, bobPhone, "ACK "+codeFor(t, s, "HiTemp", "bob")); !strings.Contains(rec.Body.String(), "Acknowledged") {
 		t.Fatalf("bob: %s", rec.Body)
@@ -451,7 +433,8 @@ func TestInboundIsSpentThroughTheLog(t *testing.T) {
 func TestInboundOnAStandby(t *testing.T) {
 	var seen []string
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		seen = append(seen, r.URL.Path+" "+r.Header.Get("X-Twilio-Signature"))
+		b, _ := io.ReadAll(r.Body)
+		seen = append(seen, r.URL.Path+" "+r.Header.Get("X-Twilio-Signature")+" "+string(b))
 		w.Write([]byte("from-leader"))
 	}))
 	defer backend.Close()
@@ -459,18 +442,56 @@ func TestInboundOnAStandby(t *testing.T) {
 		Mode: "quorum", Pod: "b", Leader: "a", LeaderAddr: standbyAddr(backend)}}})
 	withInbound(t, s)
 	rec := reply(t, s, alicePhone, "ACK 12345678")
-	if !strings.Contains(rec.Body.String(), "from-leader") || len(seen) != 1 || !strings.HasPrefix(seen[0], InboundSMSPath+" ") || strings.HasSuffix(seen[0], " ") {
+	if !strings.Contains(rec.Body.String(), "from-leader") || len(seen) != 1 || !strings.HasPrefix(seen[0], InboundSMSPath+" ") ||
+		strings.Contains(seen[0], "  ") || !strings.Contains(seen[0], "Body=ACK+12345678") {
 		t.Fatalf("forwarded %v: %s", seen, rec.Body)
 	}
 
 	s = auditServer(t, Options{Cluster: fakeCluster{status: leader.Status{Mode: "quorum", Pod: "b"}}})
 	withInbound(t, s)
+	// No SMS goes back (the standby cannot tell a person from a forged
+	// sender); a call hears why.
 	rec = reply(t, s, alicePhone, "ACK 12345678")
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "<Message>Not acknowledged: no controller is leading") {
+	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "<Message>") || !strings.Contains(rec.Body.String(), "<Response>") {
 		t.Fatalf("no leader: %d %s", rec.Code, rec.Body)
 	}
 	if e := lastAudit(t, s); e.Result == audit.ResultOK || e.Detail["status"] != http.StatusServiceUnavailable {
 		t.Fatalf("no leader journalled %+v", e)
+	}
+	if rec := press(t, s, inboundBase+InboundVoicePath+"tok", alicePhone, "1"); !strings.Contains(rec.Body.String(), "<Say>Not acknowledged: no controller is leading") {
+		t.Fatalf("no leader, voice: %s", rec.Body)
+	}
+	// Only the provider's POST is an inbound request: a GET is not
+	// answered as one, and no seam header leaks.
+	rec = call(t, s, "GET", InboundSMSPath, "")
+	if rec.Header().Get(providerAnswerHeader) != "" || rec.Header().Get(linkReasonHeader) != "" || strings.Contains(rec.Body.String(), "<Response>") {
+		t.Fatalf("GET with no leader: %d %v %s", rec.Code, rec.Header(), rec.Body)
+	}
+}
+
+// The provider signs a keypress over https with the port dropped: a
+// controller configured at :8443 takes it.
+func TestInboundVoiceSignedWithoutThePort(t *testing.T) {
+	s := inboundServer(t)
+	u := s.VoiceAckURL("HiTemp", occOf(t, s.alarms, "HiTemp").Occurrence, "alice", 1)
+	path := strings.TrimPrefix(u, inboundBase)
+	form := url.Values{"To": {alicePhone}, "Digits": {"1"}}
+	rec := call(t, s, "POST", path, "", signed(voiceToken, path, form), func(r *http.Request) {
+		r.Header.Set("X-Twilio-Signature", twilioSign(voiceToken, "https://hmi.example"+path, form))
+	})
+	if !strings.Contains(rec.Body.String(), "<Say>Acknowledged.") {
+		t.Fatalf("portless signature: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// The provider holds no NAUTILUS_TOKEN and sends no Origin: its signed
+// POST is not refused by the write rule.
+func TestInboundNeedsNoOtherCredential(t *testing.T) {
+	s := auditServer(t, Options{AuthToken: "tok"})
+	withInbound(t, s)
+	rec := reply(t, s, alicePhone, "ACK "+codeFor(t, s, "HiTemp", "alice"))
+	if !strings.Contains(rec.Body.String(), "Acknowledged") {
+		t.Fatalf("with a write token configured: %d %s", rec.Code, rec.Body)
 	}
 }
 

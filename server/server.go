@@ -1103,15 +1103,21 @@ func (s *Server) proxyStandby(routes *http.ServeMux, mux http.Handler) http.Hand
 			// Nobody here can act on the alarm: say so on the page, for a
 			// GET too (this store's engine does not scan).
 			const msg = "No controller is leading right now, so the alarm cannot be acknowledged from here. Try the link again in a minute, or open the HMI."
-			if inbound {
+			if inbound && r.Method == http.MethodPost {
 				auditedAnswer(routes, w, r, func(w http.ResponseWriter, _ *http.Request) {
-					kind := "sms"
+					// A call hears why; an SMS gets nothing back: this
+					// replica has not checked the sender, and a reply would
+					// go to whatever number the request names.
+					kind, reply := "sms", ""
 					if strings.HasPrefix(r.URL.Path, InboundVoicePath) {
-						kind = "voice"
+						kind, reply = "voice", "Not acknowledged: no controller is leading right now. Try again in a minute, or open the HMI."
 					}
-					s.inboundRefused(w, kind, http.StatusServiceUnavailable, "no controller is leading",
-						"Not acknowledged: no controller is leading right now. Try again in a minute, or open the HMI.", true)
+					s.inboundRefused(w, kind, http.StatusServiceUnavailable, "no controller is leading", reply, true)
 				})
+				return
+			}
+			if inbound {
+				http.Error(w, "no controller is leading", http.StatusServiceUnavailable)
 				return
 			}
 			if r.Method == http.MethodPost {
