@@ -452,7 +452,8 @@ namespace Tiad
             // loggedOn is whether this download logged on to the CPU as
             // "nautilus" and nothing was refused since (LoginUse.LoggedOn);
             // credentialsAsked whether TIA asked credentials in it at all,
-            // answered or not (LoginUse.CredentialsAsked). The logon route
+            // answered or not, or anything was answered no
+            // (LoginUse.MayHaveAskedCredentials). The logon route
             // needs the logon; the others rest on the CPU's access control
             // being off, which a CPU that asked credentials contradicts,
             // whatever tiad answered.

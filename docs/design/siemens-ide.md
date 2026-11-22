@@ -1035,7 +1035,11 @@ behaviour. So, until then:
         `fullAccessRecordOnly`, failed or not, is refused too: its record
         shows only what tiad was told, not what TIA holds, and a wrong one
         would turn the CPU's access control on with a password tiad cannot
-        log on with.
+        log on with. The refusal lasts for the session only: the record
+        stays in the project, and a later session that reopens it and
+        applies the same password finds it "unchanged". Marking
+        record-only records themselves is a follow-up (#616); until then,
+        never reset to a project a record-only apply touched.
       - Every case needs `by` and `text` in the attestation, and
         `cpuAccessControl` one of the two words. Nothing attested is
         refused, naming both.
@@ -1056,7 +1060,9 @@ behaviour. So, until then:
       or attest `disabled`. The other routes rest on the CPU's access
       control being off, so a CPU that asked credentials in the download,
       whatever tiad answered (TIA may go on after a no), refuses them the
-      same way. That guard is best effort: a TIA instance that logged on
+      same way, as does a download in which tiad answered any question
+      going online no (a credentials question may be refused before tiad
+      can tell what it is). That guard is best effort: a TIA instance that logged on
       to the CPU earlier may ask no credentials at all (§3.9). A refusal
       at TIA's check after an
       acting answer (`stop-cpu` on the bench's order) is

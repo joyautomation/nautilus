@@ -1038,9 +1038,9 @@ namespace Tiad.Test
         {
             var offered = new List<string> { "AnonymousUser", LoginUse.ProjectUser };
             var u = new LoginUse(OnlineLogin.For("Full-access-1", null), "download", "192.0.2.10");
-            True(!u.LoggedOn && !u.CredentialsAsked, "nothing asked");
+            True(!u.LoggedOn && !u.MayHaveAskedCredentials, "nothing asked");
             Eq(u.Decide(true, offered), null, "answered");
-            True(u.LoggedOn && u.CredentialsAsked, "logged on");
+            True(u.LoggedOn && u.MayHaveAskedCredentials, "logged on");
             True(u.Decide(true, offered) != null, "asked again, refused");
             u.Refused();
             True(!u.LoggedOn, "a refusal since: no longer logged on");
@@ -1049,10 +1049,10 @@ namespace Tiad.Test
             True(!v.LoggedOn, "refused, never answered");
             var w = new LoginUse(null, "download", "192.0.2.10");
             True(w.Decide(true, offered) != null && !w.LoggedOn, "no password: never logged on");
-            True(w.CredentialsAsked, "but asked");
+            True(w.MayHaveAskedCredentials, "but asked");
             var x = new LoginUse(OnlineLogin.For("Full-access-1", null), "download", "192.0.2.10");
             x.Refused();
-            True(!x.CredentialsAsked, "another question refused is no credentials asked");
+            True(x.MayHaveAskedCredentials, "any question refused: a credentials question may have been refused before Decide");
         }
 
         // UserManagementKeepOrReset: the keep x reset table, through

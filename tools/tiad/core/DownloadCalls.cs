@@ -449,7 +449,7 @@ namespace Tiad
                 UserManagementRule.Gate now = reset;
                 if (q.Id == QuestionIds.UserManagement && reset.Allowed)
                 {
-                    now = reset.At(use != null && use.LoggedOn, use != null && use.CredentialsAsked);
+                    now = reset.At(use != null && use.LoggedOn, use != null && use.MayHaveAskedCredentials);
                     if (!now.Allowed) atWhy = now.Why;
                     if (!now.Allowed) Log.Line("audit user-management-reset address={0} route={1} refused when TIA asked: {2}", Json.Quote(req.Address), reset.Route, Json.Quote(now.Why));
                 }

@@ -1026,12 +1026,16 @@ namespace Tiad
             get { lock (mu) return answered && !refused; }
         }
 
-        // CredentialsAsked is true once TIA asked credentials in this
-        // operation, answered or not: the CPU's access control is on
-        // (UserManagementRule's off routes refuse then).
-        public bool CredentialsAsked
+        // MayHaveAskedCredentials is true once TIA asked credentials in
+        // this operation, answered or not, or the operation answered any
+        // question no: a credentials question can be refused before it
+        // reaches Decide (a handler stopped, a configuration that cannot
+        // be read), and such an operation ends in doubt anyway.
+        // UserManagementRule's off routes refuse then: the CPU's access
+        // control may be on.
+        public bool MayHaveAskedCredentials
         {
-            get { lock (mu) return asked; }
+            get { lock (mu) return asked || refused; }
         }
 
         // Trusted records that a handler of this operation answered a
