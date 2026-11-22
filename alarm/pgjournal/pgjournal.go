@@ -1,4 +1,9 @@
-package alarm
+// Package pgjournal keeps the alarm journal in Postgres (alarms.journal.sink:
+// postgres). It is its own package so that only the controller links
+// database/sql and the driver: cmd/naut registers it with the manifest
+// (project.RegisterAlarmJournal), and the playground's wasm never sees it
+// (docs/design/context-map.md §2).
+package pgjournal
 
 import (
 	"context"
@@ -12,9 +17,11 @@ import (
 	// driver registers itself via init() either way. Same import, same
 	// reason, as hist.
 	"github.com/lib/pq"
+
+	"github.com/joyautomation/nautilus/alarm"
 )
 
-// PGJournal is a Postgres-backed Journal.
+// Journal is a Postgres-backed alarm.Journal.
 //
 // It reuses hist's migration idiom exactly — one idempotent DDL string at
 // open, no version table, no migration files — because an alarm journal
@@ -25,10 +32,10 @@ import (
 // scan goroutine, and a scan that waits on a database round trip is a
 // controller that stops controlling. A full queue drops with a counter,
 // which the ring journal in front of this makes survivable.
-type PGJournal struct {
+type Journal struct {
 	db      *sql.DB
 	ownsDB  bool
-	ch      chan Event
+	ch      chan alarm.Event
 	flushCh chan chan struct{}
 	done    chan struct{}
 	wg      sync.WaitGroup
@@ -65,9 +72,9 @@ ALTER TABLE alarm_events ADD COLUMN IF NOT EXISTS occurrence text;
 CREATE INDEX IF NOT EXISTS alarm_events_site_ts ON alarm_events (site, ts DESC);
 CREATE INDEX IF NOT EXISTS alarm_events_ts ON alarm_events (ts DESC);`
 
-// NewPostgres connects, migrates and starts the writer. dsn is a standard
+// New connects, migrates and starts the writer. dsn is a standard
 // postgres DSN.
-func NewPostgres(dsn string) (*PGJournal, error) {
+func New(dsn string) (*Journal, error) {
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		return nil, err
@@ -82,7 +89,7 @@ func NewPostgres(dsn string) (*PGJournal, error) {
 		db.Close()
 		return nil, err
 	}
-	j, err := NewPostgresDB(db)
+	j, err := NewDB(db)
 	if err != nil {
 		db.Close()
 		return nil, err
@@ -91,18 +98,18 @@ func NewPostgres(dsn string) (*PGJournal, error) {
 	return j, nil
 }
 
-// NewPostgresDB is NewPostgres over a database handle the caller already
+// NewDB is New over a database handle the caller already
 // has — the historian's, normally, since alarm_events and samples belong in
 // the same place. Close does not close a handle it was handed.
-func NewPostgresDB(db *sql.DB) (*PGJournal, error) {
+func NewDB(db *sql.DB) (*Journal, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if _, err := db.ExecContext(ctx, alarmEventsDDL); err != nil {
 		return nil, fmt.Errorf("alarm_events migration: %w", err)
 	}
-	j := &PGJournal{
+	j := &Journal{
 		db:      db,
-		ch:      make(chan Event, pgQueue),
+		ch:      make(chan alarm.Event, pgQueue),
 		flushCh: make(chan chan struct{}),
 		done:    make(chan struct{}),
 	}
@@ -115,7 +122,7 @@ func NewPostgresDB(db *sql.DB) (*PGJournal, error) {
 // error — the error surfaces through Err, and the drop through Dropped.
 // Appending after Close is a no-op rather than a panic; shutdown ordering
 // between the scan loop and its sinks is not worth a crash.
-func (j *PGJournal) Append(e Event) error {
+func (j *Journal) Append(e alarm.Event) error {
 	select {
 	case <-j.done:
 		return nil
@@ -133,7 +140,7 @@ func (j *PGJournal) Append(e Event) error {
 }
 
 // Dropped counts events the write queue could not accept.
-func (j *PGJournal) Dropped() uint64 {
+func (j *Journal) Dropped() uint64 {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	return j.dropped
@@ -141,7 +148,7 @@ func (j *PGJournal) Dropped() uint64 {
 
 // Err is the last write error, or nil. Reading it is how a caller notices
 // that a database has gone away without Append having lied about it.
-func (j *PGJournal) Err() error {
+func (j *Journal) Err() error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	return j.lastErr
@@ -149,7 +156,7 @@ func (j *PGJournal) Err() error {
 
 // Flush blocks until everything enqueued so far has been written. Tests
 // need it; so does a clean shutdown.
-func (j *PGJournal) Flush() error {
+func (j *Journal) Flush() error {
 	ack := make(chan struct{})
 	select {
 	case j.flushCh <- ack:
@@ -159,9 +166,9 @@ func (j *PGJournal) Flush() error {
 	return j.Err()
 }
 
-func (j *PGJournal) writer() {
+func (j *Journal) writer() {
 	defer j.wg.Done()
-	batch := make([]Event, 0, pgBatch)
+	batch := make([]alarm.Event, 0, pgBatch)
 	t := time.NewTicker(pgInterval)
 	defer t.Stop()
 
@@ -213,7 +220,7 @@ func (j *PGJournal) writer() {
 
 // insert writes a batch as one multi-row INSERT, so a storm costs one round
 // trip per few hundred events rather than one per event.
-func (j *PGJournal) insert(batch []Event) error {
+func (j *Journal) insert(batch []alarm.Event) error {
 	var b strings.Builder
 	b.WriteString(`INSERT INTO alarm_events (ts, id, name, kind, priority, site, state, "by", level, "to", via, result, reason, occurrence) VALUES `)
 	const cols = 14
@@ -240,7 +247,7 @@ func (j *PGJournal) insert(batch []Event) error {
 	return err
 }
 
-func (j *PGJournal) Query(from, to time.Time, f Filter) ([]Event, error) {
+func (j *Journal) Query(from, to time.Time, f alarm.Filter) ([]alarm.Event, error) {
 	q := `SELECT ts, id, name, kind, priority, site, state, "by", level, "to", via, result, reason, occurrence FROM alarm_events WHERE true`
 	args := []any{}
 	add := func(clause string, v any) {
@@ -270,7 +277,7 @@ func (j *PGJournal) Query(from, to time.Time, f Filter) ([]Event, error) {
 	if len(f.ExceptKinds) > 0 {
 		add(" AND kind <> ALL($%d)", pq.Array(f.ExceptKinds))
 	}
-	add(" ORDER BY ts DESC LIMIT $%d", f.limit())
+	add(" ORDER BY ts DESC LIMIT $%d", limit(f))
 
 	rows, err := j.db.Query(q, args...)
 	if err != nil {
@@ -278,7 +285,7 @@ func (j *PGJournal) Query(from, to time.Time, f Filter) ([]Event, error) {
 	}
 	defer rows.Close()
 
-	out := make([]Event, 0, 64)
+	out := make([]alarm.Event, 0, 64)
 	for rows.Next() {
 		var (
 			ts                                  time.Time
@@ -291,13 +298,13 @@ func (j *PGJournal) Query(from, to time.Time, f Filter) ([]Event, error) {
 			&level, &to, &via, &result, &reason, &occurrence); err != nil {
 			return nil, err
 		}
-		e := Event{
+		e := alarm.Event{
 			TS: ts.UnixMilli(), ID: id, Kind: kind,
 			Name: name.String, Site: site.String, State: state.String, By: byUser.String,
 			Level: int(level.Int64), To: to.String, Via: via.String, Result: result.String, Reason: reason.String,
 			Occurrence: occurrence.String,
 		}
-		if p, err := ParsePriority(priority.String); err == nil {
+		if p, err := alarm.ParsePriority(priority.String); err == nil {
 			e.Priority = p
 		}
 		out = append(out, e)
@@ -309,13 +316,13 @@ func (j *PGJournal) Query(from, to time.Time, f Filter) ([]Event, error) {
 // across a couple of thousand alarms writes thousands of rows a minute, so
 // this is not optional the way it might be for a hand-fed table — call it
 // on a ticker beside hist.Prune.
-func (j *PGJournal) Prune(olderThan time.Duration) error {
+func (j *Journal) Prune(olderThan time.Duration) error {
 	_, err := j.db.Exec(`DELETE FROM alarm_events WHERE ts < $1`, time.Now().Add(-olderThan))
 	return err
 }
 
 // Span reports the range and count of what is stored, for a status line.
-func (j *PGJournal) Span() (first, last time.Time, count int64, err error) {
+func (j *Journal) Span() (first, last time.Time, count int64, err error) {
 	err = j.db.QueryRow(`SELECT min(ts), max(ts), count(*) FROM alarm_events`).
 		Scan(&nullTime{&first}, &nullTime{&last}, &count)
 	return
@@ -323,7 +330,7 @@ func (j *PGJournal) Span() (first, last time.Time, count int64, err error) {
 
 // Close stops the writer, flushing what is queued, and closes the database
 // handle only if this journal opened it.
-func (j *PGJournal) Close() error {
+func (j *Journal) Close() error {
 	var err error
 	j.closeOnce.Do(func() {
 		close(j.done)
@@ -362,4 +369,12 @@ func nullInt(n int) any {
 		return nil
 	}
 	return n
+}
+
+// limit is the query's row cap: the filter's, or the alarm package's default.
+func limit(f alarm.Filter) int {
+	if f.Limit <= 0 {
+		return alarm.DefaultQueryLimit
+	}
+	return f.Limit
 }

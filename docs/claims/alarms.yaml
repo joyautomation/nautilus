@@ -391,7 +391,7 @@ claims:
     claim: The postgres journal sink creates its table idempotently at startup.
     source: "#the-journal"
     tests:
-      - go ./alarm TestPGJournal
+      - go ./alarm/pgjournal TestPGJournal
     partial: true
     note: >-
       Skips unless NAUTILUS_TEST_DATABASE_URL points at a real Postgres (no CI

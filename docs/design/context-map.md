@@ -49,7 +49,7 @@ into another's.
 | **Field drivers** | `modbus/…` `eip/…` (`cip`, `logix`, `codegen`) `optommp/…` `plcnext/…` `profinet/…` `sparkplug/host/…` `replay` (and the pending `opcua` client) | each protocol's own: register, coil, holding; CIP path, symbol, UDT; AR, IOCR, IOPS, station name; metric, NBIRTH. | nothing above the seam | **Anti-corruption layer.** The protocol's names stop at the package. What crosses is `io.Driver` upward and `internal/tagfile.Tag` into the tag file. |
 | **IT drivers** | `hw` `snmp/…` `redfish/…` `prom/…` | source, scan class, the shared UDT set (SwitchPort, PSU, …), counter→rate. `hw` is to these what `runtime` is to the languages. | nothing above the seam | Same ACL rule as field drivers; `hw` owns the shared UDTs so a port is one struct whether it came from IF-MIB or REST |
 | **Sparkplug edge** | `sparkplug` `sparkplug/spb` | node, device, metric, birth, rebirth, NCMD, RBE. | Sparkplug host (payload codec) | The one adapter that imports `runtime` directly: it publishes a runtime's store, so it is downstream of Runtime, not a driver |
-| **Alarms** | `alarm` `alarm/escalate` `alarm/oncall` `alarm/channel` `alarm/rationalize` `alarm/acklink` | ISA-18.2: definition, rule, active, unacked, shelved, journal, notifier; escalation policy, level, step, roster, on call, channel, contact; ack link, link id, spent, reply code, inbound, provider signature (#715); consequence, response, rationalization, master, flood, chattering, bad actor, stale (#715). | Operator surface | Imports only `lang/ir` and `retain`; the manifest hands it a tag store. It does not import `runtime`, and that is the point. `alarm/escalate` reads the engine's records and is gated by the write gate the manifest hands it. `alarm/oncall` keeps the contacts and channel secrets on the box; `alarm/channel` turns a principal into an address there and sends (email, SMS, voice, webhook) |
+| **Alarms** | `alarm` `alarm/escalate` `alarm/oncall` `alarm/channel` `alarm/channel/send` `alarm/pgjournal` `alarm/rationalize` `alarm/acklink` | ISA-18.2: definition, rule, active, unacked, shelved, journal, notifier; escalation policy, level, step, roster, on call, channel, contact; ack link, link id, spent, reply code, inbound, provider signature (#715); consequence, response, rationalization, master, flood, chattering, bad actor, stale (#715). | Operator surface | Imports only `lang/ir` and `retain`; the manifest hands it a tag store. It does not import `runtime`, and that is the point. `alarm/escalate` reads the engine's records and is gated by the write gate the manifest hands it. `alarm/oncall` keeps the contacts and channel secrets on the box; `alarm/channel/send` turns a principal into an address there and sends (email, SMS, voice, webhook) |
 | **Operator surface** | `server` `oplog` `hist` `notes` `internal/webpush`, `audit` and `auth` ([identity-audit.md](identity-audit.md)) | tag API, snapshot, SSE stream, write, program history, operator intent, sink; principal, role, area, permission, elevation, session, audit entry, chain; push subscription, VAPID key, push service (#722); note, revision, target, addendum, retraction, shift log (#720). | HMI 2D, HMI 3D, external clients | Serves Runtime and Alarms; knows no protocol |
 | **Manifest** | `internal/project` `internal/dialect` `cmd/naut` | `nautilus.yaml` nouns: tags, tasks, drivers, alarms, scene, dialect. | nothing; it is the composition root | Every context's manifest form lives here (`project.TagConfig` ↔ `runtime.TagDef`). It is the only package allowed to import everything |
 | **Verification** | `acceptance` `lang/conformance` `internal/vcs` | suite, case, expect, virtual time, corpus. | CLI, Authoring | Composes whatever it tests; held to no import rule |
@@ -128,9 +128,15 @@ break one changes this section first and says why.
   manifest hands it (the same lease check as the write gate), never from
   `leader` or `runtime`. `alarm/oncall` (the contacts and secrets files on
   the box) imports only `internal/securefile`: addresses and credentials
-  never learn about alarms. `alarm/channel` (the senders) imports only `alarm`,
-  `alarm/escalate` and `alarm/oncall`: the manifest composes it, and it
-  knows no server, runtime or auth. `alarm/rationalize` (the master alarm
+  never learn about alarms. `alarm/channel` (the channels' manifest form,
+  their secret names and the inbound signature check) and
+  `alarm/channel/send` (the senders: SMTP, the SMS and voice provider, the
+  webhook) import only `alarm`, `alarm/escalate`, `alarm/oncall` and each
+  other: the manifest composes them, and they know no server, runtime or
+  auth. `alarm/pgjournal` (the journal in Postgres) imports only `alarm`.
+  The manifest never imports the senders or the Postgres journal: `cmd/naut`
+  registers them with it, so the playground's wasm links neither `net/smtp`
+  nor `database/sql`. `alarm/rationalize` (the master alarm
   database and the ISA-18.2 performance reports, #715) imports only `alarm`:
   it reads definitions and journal events it is handed, offline.
   `alarm/acklink` (the signed, single-use acknowledgement links a page
