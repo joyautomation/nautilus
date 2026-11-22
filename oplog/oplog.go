@@ -780,6 +780,20 @@ func (n *Node) supersede(m Mark) (Mark, error) {
 	return nm, nil
 }
 
+// SupersededInMark is SupersededLog for a stopped controller: the replaced
+// history the log mark file names, and who accepted the loss. "" when the
+// mark is absent or names none; the file must still exist.
+func SupersededInMark(markPath string) (file, by string) {
+	m, err := readMark(markPath)
+	if err != nil || m.Superseded == "" || m.Superseded == "(empty)" {
+		return "", ""
+	}
+	if _, err := os.Stat(m.Superseded); err != nil {
+		return "", m.HistoryBy
+	}
+	return m.Superseded, m.HistoryBy
+}
+
 // NewestSuperseded is the newest File+".superseded-<unix>" there is, "" if
 // none: a tool reading a stopped controller's directory finds the history
 // that was replaced beside the log.

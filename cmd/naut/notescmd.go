@@ -87,7 +87,12 @@ func loadNotes(sd string, stderr io.Writer) (all []exportNote, source string, er
 		// the history a vouch replaced, kept aside: a record of what was
 		// written then, flagged, never merged into the live notes. A note
 		// the live history holds too is not repeated.
-		if old := oplog.NewestSuperseded(logf); old != "" {
+		// the one the log's mark names (as the server shows it), else the newest by name
+		old, acceptedBy := oplog.SupersededInMark(filepath.Join(sd, pairLogMark))
+		if old == "" {
+			old = oplog.NewestSuperseded(logf)
+		}
+		if old != "" {
 			if oes, err := oplog.ReadCommitted(old); err == nil {
 				os, _ := notes.Replay(oes)
 				moved := ""
@@ -98,7 +103,7 @@ func loadNotes(sd string, stderr io.Writer) (all []exportNote, source string, er
 				}
 				for _, n := range os.All() {
 					if _, ok := s.Get(n.ID); !ok {
-						out = append(out, exportNote{Note: n, Superseded: true, MovedAside: moved})
+						out = append(out, exportNote{Note: n, Superseded: true, MovedAside: moved, AcceptedBy: acceptedBy})
 					}
 				}
 			} else {
@@ -117,6 +122,7 @@ type exportNote struct {
 	notes.Note
 	Superseded bool   `json:"superseded,omitempty"`
 	MovedAside string `json:"movedAside,omitempty"`
+	AcceptedBy string `json:"acceptedBy,omitempty"`
 }
 
 func live(ns []notes.Note) []exportNote {
@@ -233,6 +239,9 @@ func notesMain(args []string, load func(dir string) (*project.Manifest, string, 
 			history := "live"
 			if n.Superseded {
 				history = "superseded " + n.MovedAside
+				if n.AcceptedBy != "" {
+					history += " (accepted by " + n.AcceptedBy + ")"
+				}
 			}
 			_ = w.Write([]string{
 				r.Note, strconv.Itoa(r.Rev), time.UnixMilli(r.At).UTC().Format(time.RFC3339), csvSafe(r.By), csvSafe(r.Principal),

@@ -273,6 +273,22 @@ func TestSupersededHistoryNotesAreShownReadOnlyAndNeverApplied(t *testing.T) {
 	if rec := call(t, srv, "POST", "/api/notes/only-old/revise", string(b), bearer("tok"), asJSON); rec.Code == http.StatusOK {
 		t.Error("a superseded note was revised")
 	}
+	// a file with no unix time in its name has no "moved aside" time to show: it is left out, not year 1
+	odd := filepath.Join(dir, "oplog.jsonl.old")
+	os.WriteFile(odd, []byte(strings.Join(lines, "\n")+"\n"), 0o600)
+	nl3 := NewNotesLog()
+	nl3.supersededAt = func() (string, string) { return odd, "" }
+	srv3 := New(newTestRuntime(t), Options{AuthToken: "tok", NotesLog: nl3})
+	if body := call(t, srv3, "GET", "/api/notes?superseded=1", "", bearer("tok")).Body.String(); strings.Contains(body, "movedAt") {
+		t.Errorf("an unknown move time is shown: %s", body)
+	}
+	// the limit counts the notes shown: a note the live history holds does not use one up
+	lim := call(t, srv, "GET", "/api/notes?superseded=1&limit=1", "", bearer("tok"))
+	var limited supersededAnswer
+	json.Unmarshal(lim.Body.Bytes(), &limited)
+	if len(limited.Notes) != 1 || limited.Notes[0].ID != "only-old" {
+		t.Errorf("limit 1: %s", lim.Body)
+	}
 	// a controller with no replaced history says so: an empty list, no history
 	nl2 := NewNotesLog()
 	srv2 := New(newTestRuntime(t), Options{AuthToken: "tok", NotesLog: nl2})

@@ -6,6 +6,7 @@ import { describe, it, expect } from './harness.js';
 import {
 	NotesClient,
 	DraftKeeper,
+	principalChanged,
 	classifyFailure,
 	notKeptText,
 	canChange,
@@ -67,6 +68,18 @@ describe('NotesClient', () => {
 		const c = await client.counts('tag');
 		expect(c.ok && c.value.SP).toBe(2);
 	});
+	it('a write whose answer never came, or came from a proxy, may have been kept', async () => {
+		const { client } = fake([new Error('reset'), text('Bad Gateway', 502), text('', 503), new Error('reset')]);
+		const a = await client.add({ text: 'x' });
+		expect(!a.ok && a.outcome).toBe('unknown');
+		const b = await client.revise('n1', 'x');
+		expect(!b.ok && b.outcome).toBe('unknown');
+		const c = await client.retract('n1', 'x');
+		expect(!c.ok && c.outcome).toBe('unknown');
+		expect(!c.ok && notKeptText(c).includes('nothing is waiting')).toBe(false);
+		const d = await client.list(); // a read that fails is simply down
+		expect(!d.ok && d.outcome).toBe('down');
+	});
 	it('an answer it does not understand is not a success; a dead controller is down', async () => {
 		const { client } = fake([json({}), json({ nope: 1 }), new Error('down'), text('not json', 200)]);
 		expect((await client.list()).ok).toBe(false);
@@ -103,7 +116,16 @@ describe('a write that did not keep the note says why', () => {
 		expect(o(422)).toBe('invalid');
 		expect(o(404)).toBe('invalid');
 		expect(o(500)).toBe('down');
-		expect(o(503)).toBe('refused'); // without the unknown mark
+		// without the controller's mark a 503 is nobody's promise: not "nothing is waiting"
+		expect(o(503)).toBe('down');
+		expect(classifyFailure(503, null, '', 'failed', true).outcome).toBe('unknown');
+		expect(classifyFailure(502, null, 'Bad Gateway', 'failed', true).outcome).toBe('unknown');
+		expect(classifyFailure(500, null, '', 'failed', true).outcome).toBe('unknown');
+		expect(classifyFailure(503, 'refused', 'no majority', 'failed', true).outcome).toBe('refused');
+		// the controller marks its role and sign-in refusals "refused" too: they are a sign-in and a permission, not a pair without a majority
+		expect(classifyFailure(401, 'refused', 'anonymous has no role here', 'failed', true).outcome).toBe('signin');
+		expect(classifyFailure(403, 'refused', 'may not note', 'failed', true).outcome).toBe('forbidden');
+		expect(classifyFailure(400, 'refused', 'no text', 'failed', true).outcome).toBe('invalid');
 		expect(o(503, 'unknown')).toBe('unknown');
 	});
 	it('says the controller\'s own words, and the draft is always still there', () => {
@@ -260,5 +282,43 @@ describe('DraftKeeper: one person\'s unsent text is theirs', () => {
 		const none = new DraftKeeper(null);
 		none.save('user:alice', log, 'x');
 		expect(none.load('user:alice', log)).toBe('x');
+	});
+});
+
+describe('principalChanged: whose text is in the box', () => {
+	const log = { kind: 'log' as const };
+	it('a person known late keeps what they already typed, and it is kept for them', () => {
+		const s = memoryStorage();
+		const d = new DraftKeeper(s);
+		const text = principalChanged(d, undefined, 'user:alice', log, 'typed before /api/me answered');
+		expect(text).toBe('typed before /api/me answered');
+		expect(d.load('user:alice', log)).toBe('typed before /api/me answered');
+	});
+	it('a person known late with nothing typed gets their stored draft', () => {
+		const d = new DraftKeeper(memoryStorage());
+		d.save('user:alice', log, 'from before the reload');
+		expect(principalChanged(d, undefined, 'user:alice', log, '')).toBe('from before the reload');
+	});
+	it('a session that ends or a refresh that finds nobody takes nothing away', () => {
+		const s = memoryStorage();
+		const d = new DraftKeeper(s);
+		d.save('user:alice', log, 'mid-note when the session expired');
+		expect(principalChanged(d, 'user:alice', undefined, log, 'mid-note when the session expired')).toBe('mid-note when the session expired');
+		expect(d.load('user:alice', log)).toBe('mid-note when the session expired');
+		// and she signs in again: her text is still the box's, and kept
+		expect(principalChanged(d, undefined, 'user:alice', log, 'mid-note when the session expired')).toBe('mid-note when the session expired');
+	});
+	it('a different person gets their own draft and the last one is gone from storage', () => {
+		const s = memoryStorage();
+		const d = new DraftKeeper(s);
+		d.save('user:alice', log, "alice's unsent");
+		d.save('user:bob', log, "bob's own");
+		expect(principalChanged(d, 'user:alice', 'user:bob', log, "alice's unsent")).toBe("bob's own");
+		expect([...s.data.values()].some((v) => v.includes('alice'))).toBe(false);
+		expect(principalChanged(d, 'user:bob', 'user:carol', log, "bob's own")).toBe('');
+	});
+	it('the same person again changes nothing', () => {
+		const d = new DraftKeeper(memoryStorage());
+		expect(principalChanged(d, 'user:alice', 'user:alice', log, 'x')).toBe('x');
 	});
 });

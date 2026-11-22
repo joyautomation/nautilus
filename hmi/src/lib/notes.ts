@@ -126,14 +126,16 @@ export class NotesClient {
 	}
 
 	async #do<T>(path: string, init: RequestInit, pick: (j: any) => T | undefined, failed: string): Promise<NoteAnswer<T>> {
+		const write = init.method === 'POST';
 		let res: Response;
 		try {
 			res = await this.#fetch(this.#url + path, init);
 		} catch {
-			return { ok: false, status: 0, message: UNREACHABLE, outcome: 'down' };
+			// a write whose answer never came may have been kept: only a read is simply down
+			return write ? { ok: false, status: 0, message: UNREACHABLE, outcome: 'unknown' } : { ok: false, status: 0, message: UNREACHABLE, outcome: 'down' };
 		}
 		const text = await res.text();
-		if (!res.ok) return classifyFailure(res.status, res.headers.get('X-Nautilus-Outcome'), text, failed);
+		if (!res.ok) return classifyFailure(res.status, res.headers.get('X-Nautilus-Outcome'), text, failed, write);
 		let j: unknown;
 		try {
 			j = text ? JSON.parse(text) : undefined;
@@ -203,7 +205,7 @@ function queryString(q: NoteQuery, superseded = false): string {
  * page must do about it. A 503 marked `refused` was stopped before anything
  * was proposed (nothing is queued); one marked `unknown` may have been kept.
  */
-export function classifyFailure(status: number, outcomeHeader: string | null, body: string, failed: string): Extract<NoteAnswer<never>, { ok: false }> {
+export function classifyFailure(status: number, outcomeHeader: string | null, body: string, failed: string, write = false): Extract<NoteAnswer<never>, { ok: false }> {
 	let j: { error?: unknown; note?: unknown } | undefined;
 	try {
 		j = JSON.parse(body);
@@ -212,13 +214,17 @@ export function classifyFailure(status: number, outcomeHeader: string | null, bo
 	}
 	const message = refusalMessage(status, body, failed);
 	const noteId = typeof j?.note === 'string' ? j.note : undefined;
+	// Only an answer the controller marked "refused" is certain: it stopped
+	// before anything was proposed. A 503 or a 5xx without the mark (a proxy's,
+	// a crash) may have come after the proposal, so a write is "unknown", never
+	// "nothing is waiting".
+	if (status >= 500 && outcomeHeader === 'refused') return { ok: false, status, message, outcome: 'refused' };
 	if (status === 503 && outcomeHeader === 'unknown') return { ok: false, status, message, outcome: 'unknown', noteId };
-	if (status === 503) return { ok: false, status, message, outcome: 'refused' };
 	if (status === 409) return { ok: false, status, message, outcome: 'conflict' };
 	if (status === 401) return { ok: false, status, message, outcome: 'signin' };
 	if (status === 403) return { ok: false, status, message, outcome: 'forbidden' };
 	if (status >= 400 && status < 500) return { ok: false, status, message, outcome: 'invalid' };
-	return { ok: false, status, message, outcome: 'down' };
+	return { ok: false, status, message, outcome: write ? 'unknown' : 'down', noteId };
 }
 
 /** What to tell a person about a note that was not kept. */
@@ -227,13 +233,11 @@ export function notKeptText(a: Extract<NoteAnswer<never>, { ok: false }>): strin
 		case 'refused':
 			return `Not kept, and nothing is waiting to be kept: ${a.message}. Your text is still here; try again when the controllers can agree.`;
 		case 'unknown':
-			return `It may have been kept: the controller could not confirm it.${a.noteId ? ' Check the list before sending it again.' : ''} Your text is still here.`;
+			return `It may have been kept: ${a.message}.${a.noteId ? ' Check the list before sending it again.' : ' Look at the list before sending it again.'} Your text is still here.`;
 		case 'conflict':
 			return `${a.message}. Your text is still here.`;
 		case 'signin':
-			return `Sign in to write a note. Your text is still here.`;
-		case 'down':
-			return `${a.message}. Your text is still here.`;
+			return `Sign in to write a note (${a.message}). Your text is still here.`;
 		default:
 			return `${a.message}. Your text is still here.`;
 	}
@@ -417,6 +421,25 @@ export class DraftKeeper {
 			/* nothing more to do */
 		}
 	}
+}
+
+/**
+ * What the box holds when the person signed in changes, and what is kept.
+ * A session that ends (or a refresh of who is signed in that finds nobody)
+ * takes nothing away: the text stays where it is, for the same person to
+ * come back to; the explicit sign-out button clears their drafts
+ * (`clearFor`, from the kit's sign-out). A person who is only known after
+ * the page started keeps what they already typed. A different person gets
+ * their own draft, and the previous person's are gone from storage.
+ */
+export function principalChanged(drafts: DraftKeeper, prev: string | undefined, next: string | undefined, target: NoteTarget, text: string): string {
+	if (next === prev || next === undefined) return text;
+	drafts.clearOthers(next);
+	if (prev === undefined && text.trim() !== '') {
+		drafts.save(next, target, text); // typed before it was known who: theirs now
+		return text;
+	}
+	return drafts.load(next, target);
 }
 
 function browserStorage(): DraftStorage | null {

@@ -17,6 +17,8 @@
 		notKeptText,
 		canChange,
 		groupByDay,
+		principalChanged,
+		targetKey,
 		targetLabel,
 		type Note,
 		type NoteTarget,
@@ -74,6 +76,7 @@
 	let busy = $state(false);
 	let message = $state('');
 	let unknownId = $state('');
+	let unknownText = ''; // what the unconfirmed send held
 	let editing = $state<string | null>(null);
 	let editText = $state('');
 	let retracting = $state<string | null>(null);
@@ -101,31 +104,39 @@
 		}
 	}
 
-	// the draft follows the person: another principal gets their own (or none),
-	// and the one who signed out loses theirs
+	// The draft follows the person (see principalChanged): another person gets
+	// their own, a person known late keeps what they typed, and a session that
+	// ends takes nothing away (the explicit sign-out clears the drafts, in the
+	// kit's sign-out). Drafts need a person: with no auth: block there is
+	// nobody to keep one for, and the controller refuses a note then anyway.
 	let lastPrincipal: string | undefined;
+	let lastTarget: string | undefined;
 	$effect(() => {
 		const p = principal;
+		const tk = targetKey(target);
 		untrack(() => {
-			if (lastPrincipal !== undefined && lastPrincipal !== p) {
-				drafts.clearFor(lastPrincipal);
-				text = '';
-				message = '';
-				unknownId = '';
-			}
-			if (p !== lastPrincipal) {
-				drafts.clearOthers(p); // a different person's unsent text is not left in this browser
+			if (lastTarget !== undefined && tk !== lastTarget) {
+				// the host pointed this panel at another target: its own draft, its own list
+				re = null;
 				text = drafts.load(p, target);
+				void load();
+			} else if (p !== lastPrincipal) {
+				text = principalChanged(drafts, lastPrincipal, p, target, text);
 			}
+			lastTarget = tk;
 			lastPrincipal = p;
 		});
 	});
 
-	// every keystroke is kept
+	// every keystroke is kept, except an addendum's (its text would come back
+	// as a plain note on this target once the page forgot what it answers)
 	$effect(() => {
 		const t = text;
 		const p = principal;
-		untrack(() => drafts.save(p, target, t));
+		const addendum = re !== null;
+		untrack(() => {
+			if (!addendum) drafts.save(p, target, t);
+		});
 	});
 
 	onMount(() => {
@@ -140,10 +151,12 @@
 			}
 			await load();
 		})();
-		if (pollMs > 0) {
-			const t = setInterval(() => void load(), pollMs);
-			return () => clearInterval(t);
-		}
+		const tick = setInterval(() => (now = Date.now()), 30000); // the author's hour ends on the screen too
+		const poll = pollMs > 0 ? setInterval(() => void load(), pollMs) : undefined;
+		return () => {
+			clearInterval(tick);
+			if (poll) clearInterval(poll);
+		};
 	});
 
 	async function add() {
@@ -151,26 +164,33 @@
 		busy = true;
 		message = '';
 		unknownId = '';
-		const body = { target: re ? undefined : target, text, kind: target.kind === 'log' && !re ? kind : undefined, re: re?.id };
+		const sent = text;
+		const body = { target: re ? undefined : target, text: sent, kind: target.kind === 'log' && !re ? kind : undefined, re: re?.id };
 		const r = await client.add(body);
 		busy = false;
 		if (r.ok) {
-			text = '';
-			drafts.clear(principal, target);
+			// what was typed while the request was in flight is the next note, not this one
+			if (text === sent) {
+				text = '';
+				drafts.clear(principal, target);
+			}
 			re = null;
 			kind = 'note';
 			await load();
 			return;
 		}
 		message = notKeptText(r);
+		unknownText = sent;
 		if (r.outcome === 'unknown' && r.noteId) unknownId = r.noteId;
 	}
 
 	async function check() {
 		const r = await client.get(unknownId);
 		if (r.ok) {
-			text = '';
-			drafts.clear(principal, target);
+			if (text === unknownText) {
+				text = '';
+				drafts.clear(principal, target);
+			}
 			unknownId = '';
 			message = 'It was kept.';
 			await load();

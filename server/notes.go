@@ -660,18 +660,29 @@ func (s *Server) handleNotesSuperseded(w http.ResponseWriter, q map[string][]str
 	out := supersededAnswer{Notes: []noteView{}}
 	if s.notesLog != nil {
 		if sup, ok := s.notesLog.Superseded(); ok {
+			var moved int64
+			if !sup.MovedAt.IsZero() {
+				moved = sup.MovedAt.UnixMilli()
+			}
 			out.History = &struct {
 				By      string `json:"by,omitempty"`
 				MovedAt int64  `json:"movedAt,omitempty"`
-			}{sup.By, sup.MovedAt.UnixMilli()}
+			}{sup.By, moved}
+			if lim <= 0 || lim > 1000 {
+				lim = 200
+			}
+			// the limit counts what is shown: the notes the live history also
+			// holds are left out first
 			for _, n := range sup.Store.List(notes.Query{
 				TargetKind: get("target"), TargetID: get("id"), Occurrence: get("occurrence"), Kind: get("kind"), Author: get("author"),
-				Since: ms("since"), Until: ms("until"), Retracted: get("retracted") == "1", Limit: lim,
+				Since: ms("since"), Until: ms("until"), Retracted: get("retracted") == "1", Limit: 1000,
 			}) {
 				if _, live := s.notesStore().Get(n.ID); live {
 					continue
 				}
-				out.Notes = append(out.Notes, viewOf(n))
+				if len(out.Notes) < lim {
+					out.Notes = append(out.Notes, viewOf(n))
+				}
 			}
 		}
 	}
