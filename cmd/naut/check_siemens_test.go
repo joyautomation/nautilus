@@ -76,7 +76,7 @@ func TestCheckSiemensTargetRunsTheWritersRules(t *testing.T) {
 // (the first subset writes one task) is reported against the manifest
 // check reads, here one named with -m.
 func TestCheckSiemensTargetReportsProjectRules(t *testing.T) {
-	m := strings.Replace(goodSiemensManifest, "tasks:\n", "tasks:\n  - program: other.st\n    scan: 50ms\n", 1)
+	m := strings.Replace(goodSiemensManifest, "    scan: 100ms\n", "    scan: 100ms\n  - program: other.st\n    scan: 50ms\n", 1)
 	dir := writeProject(t, map[string]string{
 		"s7.yaml":  m,
 		"main.st":  siemensCheckProgram,
@@ -125,7 +125,7 @@ func TestSiemensWriterInput(t *testing.T) {
 	m := `name: s7
 retain: {}
 tasks:
-  - program: pump.st
+  - program: main.st
   - program: pump.st
 tags:
   - {name: Level, role: input, type: REAL}
@@ -133,19 +133,25 @@ tags:
   - {name: Starts, role: state, type: DINT, retain: true}
   - {name: Run, role: state, init: true}
   - {name: Count, role: state, type: DINT, init: 3}
+  - {name: Delay, role: state, type: TIME, init: 5000}
+  - {name: Label, role: state, type: STRING, init: "a$N'b"}
 `
-	dir := writeProject(t, map[string]string{"nautilus.yaml": m, "pump.st": siemensCheckProgram})
+	dir := writeProject(t, map[string]string{
+		"nautilus.yaml": m,
+		"main.st":       siemensCheckProgram,
+		"pump.st":       "PROGRAM pump\nVAR y : REAL; END_VAR\ny := Level;\nEND_PROGRAM\n",
+	})
 	in, err := siemensWriterInput(dir, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(in.Programs) != 1 || in.Programs[0].Path != filepath.Join(dir, "pump.st") {
+	if len(in.Programs) != 2 || in.Programs[1].Path != filepath.Join(dir, "pump.st") {
 		t.Fatalf("programs: %+v", in.Programs)
 	}
 	// The first task is always runtime.MainTaskName; a later unnamed one
 	// takes its file's base name, as project.Load names it.
 	if len(in.Tasks) != 2 || in.Tasks[0].Name != "main" || in.Tasks[1].Name != "pump" ||
-		in.Tasks[0].Program != "main" || in.Tasks[0].Interval != 100*time.Millisecond {
+		in.Tasks[0].Program != "main" || in.Tasks[1].Program != "pump" || in.Tasks[0].Interval != 100*time.Millisecond {
 		t.Fatalf("tasks: %+v", in.Tasks)
 	}
 	got := map[string]swriter.Global{}
@@ -158,6 +164,8 @@ tags:
 		"Starts": {Name: "Starts", Type: "DINT", Retain: true},
 		"Run":    {Name: "Run", Type: "BOOL", Init: "TRUE"},
 		"Count":  {Name: "Count", Type: "DINT", Init: "3"},
+		"Delay":  {Name: "Delay", Type: "TIME", Init: "T#5000ms"},
+		"Label":  {Name: "Label", Type: "STRING", Init: "'a$$N$'b'"},
 	}
 	for name, w := range want {
 		if got[name] != w {
@@ -190,5 +198,28 @@ tags:
 	dir3 := writeProject(t, map[string]string{"nautilus.yaml": m3, "main.st": siemensCheckProgram})
 	if _, err := siemensWriterInput(dir3, ""); err == nil || !strings.Contains(err.Error(), "tag N: init 2.5 is not a whole number") {
 		t.Errorf("DINT init 2.5: err %v", err)
+	}
+}
+
+// TestSiemensWriterInputRefusesWhatTheRuntimeRefuses: two tasks running
+// one PROGRAM, and a later task named like the main task, are refused
+// with the runtime's own words, so check never passes a project naut run
+// would not start.
+func TestSiemensWriterInputRefusesWhatTheRuntimeRefuses(t *testing.T) {
+	head := "name: s7\ntags:\n  - {name: Level, role: input, type: REAL}\ntasks:\n  - program: main.st\n"
+	for name, tc := range map[string]struct{ tasks, want string }{
+		"same program": {"  - program: main.st\n    name: second\n", "task second: PROGRAM main collides with task main"},
+		"main name":    {"  - program: pump.st\n    name: main\n", `task name "main" is reserved for the main task`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := writeProject(t, map[string]string{
+				"nautilus.yaml": head + tc.tasks,
+				"main.st":       siemensCheckProgram,
+				"pump.st":       "PROGRAM pump\nVAR y : REAL; END_VAR\ny := Level;\nEND_PROGRAM\n",
+			})
+			if _, err := siemensWriterInput(dir, ""); err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err %v, want %q", err, tc.want)
+			}
+		})
 	}
 }
