@@ -343,8 +343,8 @@ type DownloadResult struct {
 	Attestation *AttestationRecord `json:"attestation,omitempty"`
 	// UserManagementReset is set when tiad answered TIA's user-management
 	// check by resetting it to the project's: the route that let it,
-	// ResetRouteUpload, ResetRouteAttestation or ResetRouteLogon. Keep it
-	// in the deploy record.
+	// ResetRouteUpload, ResetRouteAttestation, ResetRouteLogon or
+	// ResetRouteInstanceLogon. Keep it in the deploy record.
 	UserManagementReset string `json:"userManagementReset,omitempty"`
 	// Messages is TIA's download result's messages, when it has any.
 	Messages string `json:"messages,omitempty"`
