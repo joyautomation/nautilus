@@ -383,6 +383,9 @@ func TestInboundPrincipalCase(t *testing.T) {
 	if rec := press(t, s, u, alicePhone, "1"); !strings.Contains(rec.Body.String(), "<Say>Acknowledged.") {
 		t.Fatalf("ALICE's call: %s", rec.Body)
 	}
+	if r := occOf(t, s.alarms, "HiTemp"); r.AckBy != "alice" {
+		t.Fatalf("acknowledged by %q, want the contacts spelling alice", r.AckBy)
+	}
 }
 
 // An expired call token is refused (410 in the journal), and a keypress
