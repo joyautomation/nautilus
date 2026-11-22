@@ -276,3 +276,74 @@ func TestParameterImportNothingToDo(t *testing.T) {
 		t.Fatalf("%d %s", code, body)
 	}
 }
+
+// expectFrom (#718): a value that moved since the caller looked refuses the
+// whole set with 409 and writes nothing; one that has not moved is applied.
+func TestParameterImportExpectFromRefusesAMovedValue(t *testing.T) {
+	srv := New(importRuntime(t))
+	// Someone edits SP after the dry run saw 65.
+	if rec := call(t, srv, "POST", "/api/tags", `{"name":"SP","value":70}`); rec.Code != http.StatusNoContent {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	code, a, body := importCall(t, srv, `{"version":1,"parameters":{"SP":80,"On":false},"expectFrom":{"sp":65,"On":true}}`)
+	if code != http.StatusConflict || a.Applied {
+		t.Fatalf("%d %s", code, body)
+	}
+	got := map[string]string{}
+	for _, r := range a.Results {
+		got[r.Name] = r.Status
+	}
+	if got["SP"] != "moved" || !strings.Contains(body, "it holds 70") {
+		t.Fatalf("results %s", body)
+	}
+	// Nothing was written, not even the tag that had not moved.
+	if liveParam(t, srv, "SP") != 70.0 || liveParam(t, srv, "On") != true {
+		t.Fatal("a value was written despite the moved one")
+	}
+}
+
+func TestParameterImportExpectFromAppliesWhenNothingMoved(t *testing.T) {
+	srv := New(importRuntime(t))
+	code, a, body := importCall(t, srv, `{"version":1,"parameters":{"SP":80},"expectFrom":{"SP":65}}`)
+	if code != http.StatusOK || !a.Applied || liveParam(t, srv, "SP") != 80.0 {
+		t.Fatalf("%d %s", code, body)
+	}
+	// Without expectFrom nothing is guarded (the old behaviour).
+	if code, _, body := importCall(t, srv, `{"version":1,"parameters":{"SP":81}}`); code != http.StatusOK {
+		t.Fatalf("%d %s", code, body)
+	}
+}
+
+// Another refusal in the set is the set's own fault: 422, not 409.
+func TestParameterImportExpectFromOtherRefusalStays422(t *testing.T) {
+	srv := New(importRuntime(t))
+	call(t, srv, "POST", "/api/tags", `{"name":"SP","value":70}`)
+	code, _, body := importCall(t, srv, `{"version":1,"parameters":{"SP":80,"Fan":99},"expectFrom":{"SP":65}}`)
+	if code != http.StatusUnprocessableEntity {
+		t.Fatalf("%d %s", code, body)
+	}
+}
+
+func TestParameterImportExpectFromBodyRules(t *testing.T) {
+	srv := New(importRuntime(t))
+	for name, body := range map[string]string{
+		"not in set": `{"version":1,"parameters":{"SP":80},"expectFrom":{"Fan":20}}`,
+		"composite":  `{"version":1,"parameters":{"SP":80},"expectFrom":{"SP":[1]}}`,
+	} {
+		if code, _, b := importCall(t, srv, body); code != http.StatusBadRequest {
+			t.Errorf("%s: %d %s", name, code, b)
+		}
+	}
+	if liveParam(t, srv, "SP") != 65.0 {
+		t.Fatal("a bad body wrote")
+	}
+}
+
+// The guard also holds on a dry run, so the kit's preview sees a move too.
+func TestParameterImportExpectFromDryRun(t *testing.T) {
+	srv := New(importRuntime(t))
+	call(t, srv, "POST", "/api/tags", `{"name":"SP","value":70}`)
+	if code, _, b := importCall(t, srv, `{"version":1,"parameters":{"SP":80},"dryRun":true,"expectFrom":{"SP":65}}`); code != http.StatusConflict {
+		t.Fatalf("%d %s", code, b)
+	}
+}
