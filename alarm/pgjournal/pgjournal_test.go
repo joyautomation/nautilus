@@ -134,6 +134,46 @@ func TestPGJournal(t *testing.T) {
 	if len(rest) != 2 || rest[0].Level != 0 || rest[0].To != "" {
 		t.Fatalf("ExceptKinds notify = %+v, want the 2 state changes with empty notify fields", rest)
 	}
+
+	// An activation seen on a return keeps what came back (#1249).
+	seen := alarm.Event{TS: base.Add(5 * time.Minute).UnixMilli(), ID: "RTU12_SEEN", Kind: alarm.KindActive,
+		Priority: alarm.Critical, SeenWhen: "site RTU12 came back"}
+	standing := alarm.Event{TS: base.Add(6 * time.Minute).UnixMilli(), ID: "RTU12_STANDING", Kind: alarm.KindActive,
+		Priority: alarm.Critical, Standing: true}
+	for _, ev := range []alarm.Event{seen, standing} {
+		if err := j.Append(ev); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := j.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []alarm.Event{seen, standing} {
+		got, err := j.Query(time.Time{}, time.Time{}, alarm.Filter{IDs: []string{want.ID}, Kinds: []string{alarm.KindActive}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 1 || got[0] != want {
+			t.Fatalf("row = %+v, want %+v", got, want)
+		}
+	}
+
+	// A detection row (#1249) keeps its numbers and episode.
+	flood := alarm.Event{TS: base.Add(4 * time.Minute).UnixMilli(), ID: alarm.FloodJournalID, Name: "alarm flood ended", Kind: alarm.KindFloodEnd,
+		By: "system", Count: 23, Peak: 14, WindowMs: 600000, SinceMs: base.UnixMilli(), Episode: "flood-x-1"}
+	if err := j.Append(flood); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	floods, err := j.Query(time.Time{}, time.Time{}, alarm.Filter{Kinds: []string{alarm.KindFloodEnd}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(floods) != 1 || floods[0] != flood {
+		t.Fatalf("flood row = %+v, want %+v", floods, flood)
+	}
 }
 
 // A table an older nautilus created (no notify columns) is migrated in

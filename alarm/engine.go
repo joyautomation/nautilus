@@ -73,6 +73,11 @@ type Options struct {
 	// be cheap and must not allocate while nothing is substituted.
 	Substituted func(path string) (addr string, ok bool)
 
+	// Chatter and Flood configure live detection (#1249): zero fields
+	// take the ISA-18.2 defaults. New refuses what Validate refuses.
+	Chatter ChatterConfig
+	Flood   FloodConfig
+
 	Log *slog.Logger
 }
 
@@ -125,6 +130,20 @@ type Engine struct {
 	// the last pass — the "how much of the fleet is dark" number, which
 	// deserves to be visible rather than inferred from a log.
 	missing int
+
+	// Live chattering and flood detection (detect.go): det parallels inst;
+	// chattering counts the alarms in an episode; baseAt is the first
+	// Evaluate since New or ResetOperatorState (the start grace runs from
+	// it). onFlood is OnFlood's hook.
+	det        []detect
+	chatWindow int64
+	chattering int
+	flood      *FloodDetector
+	floodID    string
+	floodSeq   uint64
+	baseAt     time.Time
+	detLast    int64 // the last scan's time (ms), to see the clock step back
+	onFlood    func(FloodEvent)
 }
 
 // New validates the definitions and builds the engine. Ids must be unique
@@ -151,7 +170,16 @@ func New(o Options) (*Engine, error) {
 		jrn = NewRing(keep)
 	}
 
+	if err := o.Chatter.Validate(); err != nil {
+		return nil, err
+	}
+	if err := o.Flood.Validate(); err != nil {
+		return nil, err
+	}
+	chat := o.Chatter.Resolved()
 	e := &Engine{
+		chatWindow: time.Duration(chat.Window).Milliseconds(),
+		flood:      NewFloodDetector(o.Flood),
 		inst:       make([]instance, 0, len(o.Defs)),
 		byID:       make(map[string]int, len(o.Defs)),
 		read:       o.Read,
@@ -190,6 +218,12 @@ func New(o Options) (*Engine, error) {
 		e.inst = append(e.inst, instance{def: d})
 		e.inst[len(e.inst)-1].derive()
 	}
+	// Every ring up front, in one array: the scan never allocates one.
+	e.det = make([]detect, len(e.inst))
+	rings := make([]int64, len(e.inst)*chat.Count)
+	for i := range e.det {
+		e.det[i].chat.ring = rings[i*chat.Count : (i+1)*chat.Count : (i+1)*chat.Count]
+	}
 
 	if len(e.notifiers) > 0 {
 		e.notifyCh = make(chan Event, notifyQueue)
@@ -227,13 +261,20 @@ func (e *Engine) Evaluate() {
 	now := e.now()
 	e.evals++
 	e.missing = 0
+	if e.baseAt.IsZero() {
+		e.baseAt = now
+	}
 	e.expireOutOfService(now)
+	// Episodes end by time, before any alarm's early return: a shelved or
+	// suppressed alarm never steps.
+	e.detectTick(now)
 	for i := range e.inst {
-		e.evalOne(&e.inst[i], now)
+		e.evalOne(i, now)
 	}
 }
 
-func (e *Engine) evalOne(in *instance, now time.Time) {
+func (e *Engine) evalOne(i int, now time.Time) {
+	in, d := &e.inst[i], &e.det[i]
 	in.warn = warnNone
 	// An operator's out of service first: it holds whatever the field says.
 	if o, ok := e.oos[in.eqKey]; ok {
@@ -296,8 +337,20 @@ func (e *Engine) evalOne(in *instance, now time.Time) {
 	}
 
 	if in.state == Suppressed {
+		// A condition that read true before the suppression and reads true
+		// now has stood: re-baseline it. One that read false (or was
+		// never read) and reads true now is a new activation, which a
+		// flapping input on a flaky link is; but it began sometime while
+		// the alarm could not be seen, so its activation says when it
+		// was seen (seenWhen), not only when.
+		if !d.read || d.lastRaw || mutAlarm("unsuppress_always_rebaselines") {
+			d.baselined = false
+		} else {
+			d.returned = in.seenWhen()
+		}
 		e.unsuppress(in, now)
 	}
+	e.baseline(d, raw, now)
 	if !in.judged {
 		in.judged, in.adoptable = true, raw && in.carry == nil
 	} else if !raw {
@@ -322,7 +375,20 @@ func (e *Engine) evalOne(in *instance, now time.Time) {
 	}
 
 	for _, kind := range in.step(now) {
-		e.emit(in, now, kind, "")
+		// Decided before the row is written, so the row says whether it
+		// counts (Event.Standing): a report reads the journal by the same
+		// rule as the live detector.
+		counted := kind == KindActive && e.counted(d, now)
+		if kind == KindActive {
+			in.seen, d.returned = d.returned, ""
+			if mutAlarm("seen_when_unmarked") {
+				in.seen = ""
+			}
+		}
+		e.emitMarked(in, now, kind, "", kind == KindActive && !counted && !mutAlarm("standing_unmarked"))
+		if counted {
+			e.activated(i, now)
+		}
 	}
 }
 
@@ -374,6 +440,12 @@ func (e *Engine) unsuppress(in *instance, now time.Time) {
 // here and in Rename, so "Rev changed" means exactly "an alarm moved or
 // now reads differently".
 func (e *Engine) emit(in *instance, now time.Time, kind, by string) {
+	e.emitMarked(in, now, kind, by, false)
+}
+
+// emitMarked is emit with Event.Standing set on the row: an activation of
+// a condition that stood through a re-baseline (detect.go).
+func (e *Engine) emitMarked(in *instance, now time.Time, kind, by string, standing bool) {
 	e.rev++
 	if in.state == Normal {
 		in.adoptable = false // the occurrence that stood has ended
@@ -393,6 +465,10 @@ func (e *Engine) emit(in *instance, now time.Time, kind, by string) {
 		State:      in.state.String(),
 		By:         by,
 		Occurrence: in.occ,
+		Standing:   standing,
+	}
+	if kind == KindActive {
+		ev.SeenWhen = in.seen
 	}
 	if err := e.jrn.Append(ev); err != nil {
 		e.log.Warn("alarm journal append failed", "id", ev.ID, "kind", ev.Kind, "err", err)
@@ -464,6 +540,14 @@ type Record struct {
 	// Warning says why the alarm is shown although its definition may
 	// have meant it hidden: its suppress-when could not be read.
 	Warning string `json:"warning,omitempty"`
+
+	// Chatter is the alarm's chattering episode while it lasts (#1249).
+	Chatter *Chatter `json:"chatter,omitempty"`
+	// SeenWhen, on an alarm whose last activation was seen as something
+	// came back ("site RTU9 came back"), says so: it began sometime while
+	// it could not be seen, so ActiveMs is when it was seen, not when the
+	// fault began (#1249).
+	SeenWhen string `json:"seenWhen,omitempty"`
 }
 
 func (in *instance) record() Record {
@@ -478,6 +562,8 @@ func (in *instance) record() Record {
 		Warning: in.warning(),
 
 		Occurrence: in.occ,
+
+		SeenWhen: in.seen,
 	}
 	r.Name = in.displayName() // the record is a view: the lent name, if any
 	if !in.activeAt.IsZero() {
@@ -506,6 +592,7 @@ func (in *instance) record() Record {
 // that suppresses it. Under e.mu.
 func (e *Engine) recordOf(in *instance) Record {
 	r := in.record()
+	r.Chatter = e.chatterOf(e.byID[in.def.ID])
 	if r.Suppression == SuppressOutOfService {
 		if o, ok := e.oos[in.eqKey]; ok {
 			left, _ := o.remaining(e.now())
@@ -592,13 +679,22 @@ type Summary struct {
 	Worst      Priority       `json:"worst"`
 	Newest     *Brief         `json:"newest,omitempty"`
 	Rev        uint64         `json:"rev"`
+
+	// Chattering counts the alarms in a chattering episode; Flood is the
+	// flood in progress, nil when there is none (#1249).
+	Chattering int         `json:"chattering,omitempty"`
+	Flood      *FloodBrief `json:"flood,omitempty"`
 }
 
 // Summary computes the banner's numbers in one pass.
 func (e *Engine) Summary() Summary {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	s := Summary{ByPriority: map[string]int{}, Rev: e.rev}
+	s := Summary{ByPriority: map[string]int{}, Rev: e.rev, Chattering: e.chattering}
+	if e.flood.on {
+		f := e.floodBrief()
+		s.Flood = &f
+	}
 	var newest, newestUnacked *instance
 	for i := range e.inst {
 		in := &e.inst[i]
@@ -972,6 +1068,7 @@ func (e *Engine) ResetOperatorState() {
 		*in = instance{def: def, lent: lent}
 		in.derive()
 	}
+	e.resetDetect()
 	e.oos = nil
 	e.rev++
 }

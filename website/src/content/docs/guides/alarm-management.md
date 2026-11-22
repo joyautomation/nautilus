@@ -484,6 +484,88 @@ flag, so a token never sits in the shell history; a refusal (401 or
 A signal on a [substitute value](/guides/substitutes/) suppresses the
 alarm on it too, as `signal substituted`.
 
+## Chattering and floods, live
+
+The controller watches for the two problems that bury operators, with
+nothing to configure: the ISA-18.2 numbers are the defaults.
+
+- **An alarm chatters** when it activates 3 or more times within 60
+  seconds. A flap from unack-rtn back to active counts. Bursts whose
+  windows overlap are one episode, which ends 60 seconds after its last
+  burst.
+- **The plant is in a flood** when more than 10 alarms activate within
+  10 minutes. The flood ends once the rate has stayed at or under 10 for
+  a full 10 minutes, so it does not flicker at its edge.
+
+Change either rule in `alarms:` (both are optional):
+
+```yaml
+alarms:
+  chatter: { window: 60s, count: 3 }
+  flood:   { window: 10m, threshold: 10 }
+```
+
+`naut check` refuses settings the detector cannot use: a window under a
+second, a chatter count under 2, or a flood threshold under 1 or of 1024
+and over.
+
+What counts is a new activation. These do not count:
+
+- an alarm whose condition stood through a restart or a takeover and
+  then activates again;
+- an alarm whose condition read true before a suppression (out of
+  service, an enable, a dark site) and reads true again after it. One
+  that read false before and true after is new, and counts;
+- an activation inside a standalone controller's first minute, while its
+  drivers may still read defaults.
+
+Chatter detection measures an alarm's own transitions, not the
+equipment around it. A low-flow alarm that stays true while its pump's
+enable cycles off and on has not bounced, so it is not chattering; the
+pump's start/stop cycling is a different problem, which this does not
+detect.
+
+A controller coming back with fifty alarms standing is not a flood. The
+journal marks those `active` rows `standing`, and the reports leave them
+out as well.
+
+A site that comes back with a dozen alarms that were clear before it
+went dark is a flood: those are new to the operator. Each of them began
+sometime while the site was dark, not when the controller saw it, so its
+record and its `active` row say what came back (`seenWhen`: "site RTU9
+came back", "equipment P101 returned to service"), and the time reads as
+when it was seen.
+
+**What you see.** While an alarm chatters, its row in `/api/alarms`
+carries `chatter` (since when, how many activations, how many episodes),
+and the summary counts `chattering`. During a flood the summary carries
+`flood` (activations in the window, since the flood began, and the peak).
+The list also carries the flood's first three alarms in time order and
+the equipment the activations came from. The first alarm of a flood is
+the best free guess at its cause.
+
+**The journal.** Each episode writes a start row and an end row: `chatter`
+and `chatter-end` for an alarm, `flood` and `flood-end` (id
+`__nautilus.flood`) for the plant. Each row carries its counts, its
+window and when the episode began. The journal view leaves them out
+unless you ask for them (`?kind=chatter,flood`), as it does notify rows.
+
+Detection only marks and journals. Nothing is shelved, suppressed or
+paged because an alarm chatters or the plant floods.
+
+`naut alarms report flood -sliding` finds floods in the journal by the
+same rule, so the report matches the controller. Without `-sliding`, the
+report counts fixed 10-minute windows from the start of its range, and
+its floods can differ at the edges. Give `-window` and `-threshold` (or
+`-count` and `-window` for chatter) when `alarms:` changes the defaults.
+
+A `chatter` or `flood` row with no end row means the controller stopped
+or handed over while the episode lasted. If the controller's clock steps back
+during an episode, detection reads the step as no time passing, and the
+episode's end row gives its start in the new clock's time; a `-sliding`
+report over a range that spans the step can differ from the controller
+there.
+
 ## Measuring the alarm system
 
 The ISA-18.2 performance numbers come from the alarm journal, either a

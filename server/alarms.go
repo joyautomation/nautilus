@@ -65,6 +65,9 @@ type alarmsResponse struct {
 	// alarms belong to (not the controller's own), so an HMI can offer to
 	// take one out of service while all its alarms are quiet.
 	Equipment []string `json:"equipment,omitempty"`
+	// Flood is the alarm flood in progress, with its first alarms and
+	// the equipment they came from; absent when there is none (#1249).
+	Flood *alarm.Flood `json:"flood,omitempty"`
 }
 
 func (s *Server) handleAlarms(w http.ResponseWriter, r *http.Request) {
@@ -103,6 +106,7 @@ func (s *Server) handleAlarms(w http.ResponseWriter, r *http.Request) {
 		Summary:   s.alarms.Summary(),
 		Alarms:    list,
 		Equipment: equipment,
+		Flood:     s.alarms.Flood(),
 	})
 }
 
@@ -151,8 +155,10 @@ func (s *Server) handleAlarmJournal(w http.ResponseWriter, r *http.Request) {
 		// A notify row (#715) is not a state change, and an HMI that
 		// predates it keys its journal rows on ts:id:kind and labels them
 		// by kind: several notifications in one millisecond would collide.
-		// It is shown only to a client that asks for it (kind=notify).
-		f.ExceptKinds = []string{alarm.KindNotify}
+		// It is shown only to a client that asks for it (kind=notify), and
+		// so are the detection rows (#1249: chatter, flood), for the same
+		// reason.
+		f.ExceptKinds = []string{alarm.KindNotify, alarm.KindChatter, alarm.KindChatterEnd, alarm.KindFlood, alarm.KindFloodEnd}
 	}
 	if limit <= 0 {
 		limit = alarm.DefaultQueryLimit

@@ -65,6 +65,14 @@ type AlarmsConfig struct {
 	// file, both on the box (`naut alarms secrets|contacts`).
 	Channels *channel.Config `yaml:"channels"`
 
+	// Chatter and Flood tune live detection (#1249): an alarm chatters at
+	// count activations within window (default 3 in 60 s), the plant is
+	// in a flood at MORE than threshold activations of all alarms within
+	// window (default 10 in 10 min). Detection marks and journals only:
+	// it shelves, suppresses and pages nothing by itself.
+	Chatter alarm.ChatterConfig `yaml:"chatter"`
+	Flood   alarm.FloodConfig   `yaml:"flood"`
+
 	Rules []alarm.Rule `yaml:"rules"`
 	Defs  []alarm.Def  `yaml:"defs"`
 
@@ -386,6 +394,11 @@ func (p *Project) CheckAlarms(rt *runtime.Runtime) (defs []alarm.Def, errs, warn
 	if defs, err = p.Alarms.alarmConfig().Compose(p.deviceAlarmFiles(), tags); err != nil {
 		return nil, nil, nil, err
 	}
+	for _, err := range []error{p.Alarms.Chatter.Validate(), p.Alarms.Flood.Validate()} {
+		if err != nil {
+			errs = append(errs, err.Error())
+		}
+	}
 
 	byName := make(map[string]alarm.TagInfo, len(tags))
 	for _, t := range tags {
@@ -638,6 +651,8 @@ func (p *Project) alarms(rt *runtime.Runtime, durable bool, log *slog.Logger, sy
 		CarryGrace: carryGrace(p.WriteGate == nil),
 		// An alarm on a substituted signal is suppressed (#715 PR 5, #707).
 		Substituted: substitutedCache(tags),
+		Chatter:     p.Alarms.Chatter,
+		Flood:       p.Alarms.Flood,
 	})
 	if err != nil {
 		out.Close()

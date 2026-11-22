@@ -167,6 +167,33 @@ tests:
 `))
 }
 
+// A journal assertion lists state changes only: an alarm that chatters
+// journals detection rows (#1249) the assertion does not see, so a test
+// written before them keeps passing.
+func TestAlarmJournalLeavesOutDetectionRows(t *testing.T) {
+	mustPass(t, runAlarmSuite(t, `
+tests:
+  - name: three bounces in a minute chatter, and the journal is unchanged
+    steps:
+      - given: { FIT_001.PV: 50.0 }
+        scans: 1
+      - advance: 2m
+      - given: { FIT_001.PV: 5.0 }
+        scans: 1
+      - given: { FIT_001.PV: 50.0 }
+        scans: 1
+      - given: { FIT_001.PV: 5.0 }
+        scans: 1
+      - given: { FIT_001.PV: 50.0 }
+        scans: 1
+      - given: { FIT_001.PV: 5.0 }
+        scans: 1
+      - advance: 5m
+        alarms:
+          journal: [active, rtn, active, rtn, active]
+`))
+}
+
 // Each test gets a fresh engine, the way each gets a fresh runtime. An ack
 // leaking into the next test would be the exact failure the harness's "no
 // shared state" contract exists to prevent.

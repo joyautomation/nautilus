@@ -467,3 +467,52 @@ alarms:
 		t.Errorf("an undeclared suppress-when tag should warn: %v", warns)
 	}
 }
+
+// alarms.chatter and alarms.flood reach the engine, and naut check
+// refuses settings the detector cannot honour (#1249).
+func TestAlarmDetectionConfig(t *testing.T) {
+	proj, rt := loadAlarms(t, alarmFS(alarmTags+`
+alarms:
+  chatter: { window: 30s, count: 4 }
+  flood: { window: 5m, threshold: 20 }
+  defs:
+    - { id: a, tag: RTU7_PMP01_FAULT }
+`, nil))
+	if _, errs, _, err := proj.CheckAlarms(rt); err != nil || len(errs) != 0 {
+		t.Fatalf("CheckAlarms: %v %v", errs, err)
+	}
+	eng, err := proj.AlarmEngine(rt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { eng.Close() })
+	if got := proj.Alarms.Flood.Resolved(); got.Threshold != 20 || time.Duration(got.Window) != 5*time.Minute {
+		t.Fatalf("flood config = %+v", got)
+	}
+	if got := proj.Alarms.Chatter.Resolved(); got.Count != 4 || time.Duration(got.Window) != 30*time.Second {
+		t.Fatalf("chatter config = %+v", got)
+	}
+
+	// Each setting reaches the engine: one it cannot honour stops it.
+	for _, yml := range []string{"chatter: { count: 1 }", "flood: { threshold: 5000 }"} {
+		p, r := loadAlarms(t, alarmFS(alarmTags+"\nalarms:\n  "+yml+"\n  defs:\n    - { id: a, tag: RTU7_PMP01_FAULT }\n", nil))
+		if _, err := p.AlarmEngine(r); err == nil {
+			t.Errorf("the engine took %s", yml)
+		}
+	}
+
+	bad, rt2 := loadAlarms(t, alarmFS(alarmTags+`
+alarms:
+  chatter: { count: 1 }
+  flood: { threshold: 5000 }
+  defs:
+    - { id: a, tag: RTU7_PMP01_FAULT }
+`, nil))
+	_, errs, _, err := bad.CheckAlarms(rt2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(errs) != 2 || !strings.Contains(errs[0], "alarms.chatter.count") || !strings.Contains(errs[1], "alarms.flood.threshold") {
+		t.Fatalf("errs = %v", errs)
+	}
+}

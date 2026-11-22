@@ -157,6 +157,27 @@ func TestAlarmsReportFromAJournalFile(t *testing.T) {
 		t.Errorf("chatter report:\n%s", raw)
 	}
 
+	// -sliding: the controller's live rule (#1249), with its own window
+	// and threshold flags; a flag for another report is refused.
+	doc, raw = reportJSON(t, "flood", "-journal", path, "-sliding")
+	if rep := doc["report"].(map[string]any); rep["sliding"] != true || len(rep["floods"].([]any)) != 1 {
+		t.Errorf("sliding flood report:\n%s", raw)
+	}
+	doc, raw = reportJSON(t, "flood", "-journal", path, "-sliding", "-threshold", "50")
+	if rep := doc["report"].(map[string]any); len(rep["floods"].([]any)) != 0 {
+		t.Errorf("-threshold 50 still found a flood:\n%s", raw)
+	}
+	doc, raw = reportJSON(t, "chatter", "-journal", path, "-count", "4")
+	if cs := doc["report"].([]any); len(cs) != 0 {
+		t.Errorf("-count 4 still found CH chattering (three activations):\n%s", raw)
+	}
+	for _, args := range [][]string{{"chatter", "-sliding"}, {"chatter", "-threshold", "5"}, {"flood", "-count", "5"}, {"stale", "-window", "1m"}, {"flood", "-threshold", "0"}, {"chatter", "-count", "0"}} {
+		var out, errb bytes.Buffer
+		if code := alarmsReport(append(args, "-journal", path), reportNow, &out, &errb); code != 2 {
+			t.Errorf("%v: exit %d, want 2", args, code)
+		}
+	}
+
 	doc, raw = reportJSON(t, "stale", "-journal", path)
 	ss := doc["report"].([]any)
 	if len(ss) != 1 || ss[0].(map[string]any)["id"] != "STUCK" {

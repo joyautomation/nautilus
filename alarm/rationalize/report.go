@@ -45,7 +45,7 @@ func Activations(events []alarm.Event) []alarm.Event {
 	for _, e := range events {
 		switch e.Kind {
 		case alarm.KindActive:
-			if e.Occurrence != "" || !open[e.ID] {
+			if !e.Standing && (e.Occurrence != "" || !open[e.ID]) {
 				out = append(out, e)
 			}
 			open[e.ID] = true
@@ -122,6 +122,9 @@ type FloodReport struct {
 	FloodWindows int     `json:"floodWindows"`
 	FloodPercent float64 `json:"floodPercent"`
 	Floods       []Flood `json:"floods"`
+	// Sliding says Floods are the live rule's (SlidingFloods), not the
+	// windows': the rate and window numbers above are still bucketed.
+	Sliding bool `json:"sliding,omitempty"`
 }
 
 // Floods buckets activations into consecutive windows starting at from
@@ -183,6 +186,52 @@ func Floods(acts []alarm.Event, from, to time.Time, window time.Duration, thresh
 	}
 	closeFlood()
 	rep.FloodPercent = 100 * float64(rep.FloodWindows) / float64(rep.Windows)
+	return rep
+}
+
+// SlidingFloods is Floods with the floods the live rule finds
+// (alarm.FloodDetector, the engine's own): more than threshold
+// activations within any window, ending once the count has stayed at or
+// under it for a full window. It reproduces the controller's flood
+// banner and rows from the journal; the bucketed report can differ at the
+// edges, because its windows start at from. A flood still on at to ends
+// there. The activations must be oldest first.
+func SlidingFloods(acts []alarm.Event, from, to time.Time, window time.Duration, threshold int) FloodReport {
+	rep := Floods(acts, from, to, window, threshold)
+	rep.Sliding, rep.Floods = true, []Flood{}
+	if window <= 0 || !to.After(from) {
+		return rep
+	}
+	var in []alarm.Event
+	for _, e := range acts {
+		if e.TS >= from.UnixMilli() && e.TS < to.UnixMilli() {
+			in = append(in, e)
+		}
+	}
+	d := alarm.NewFloodDetector(alarm.FloodConfig{Window: alarm.Duration(window), Threshold: threshold})
+	var cur []alarm.Event
+	closeAt := func(endMs int64) {
+		ep := d.Episode()
+		rep.Floods = append(rep.Floods, Flood{Start: time.UnixMilli(ep.Start), End: time.UnixMilli(endMs),
+			Count: ep.Total, Peak: ep.Peak, Top: top(counts(cur), 3)})
+		cur = nil
+	}
+	for i, e := range in {
+		if ended, at := d.Tick(e.TS); ended {
+			closeAt(at)
+		}
+		was := d.On()
+		if d.Add(e.TS, int32(i)) {
+			d.EachInWindow(func(_ int64, idx int32) { cur = append(cur, in[idx]) })
+		} else if was {
+			cur = append(cur, e)
+		}
+	}
+	if ended, at := d.Tick(to.UnixMilli()); ended {
+		closeAt(at)
+	} else if d.On() {
+		closeAt(to.UnixMilli())
+	}
 	return rep
 }
 

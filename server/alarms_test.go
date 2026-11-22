@@ -359,6 +359,66 @@ func TestJournalHidesNotifyUnlessAsked(t *testing.T) {
 	}
 }
 
+// Detection rows (#1249) are left out of the journal view as notify rows
+// are, unless a client names them; /api/alarms carries the flood in
+// progress with its first alarms, and each chattering alarm's episode.
+func TestJournalHidesDetectionUnlessAsked(t *testing.T) {
+	now := time.Now().Add(-time.Minute)
+	cond := map[string]any{"HiTempAlm": false, "LoFlowAlm": false}
+	eng, err := alarm.New(alarm.Options{
+		Defs: []alarm.Def{
+			{ID: "HiTemp", Tag: "HiTempAlm", Priority: alarm.High, AckRequired: true, AutoClear: true, Equipment: "Boiler"},
+			{ID: "LoFlow", Tag: "LoFlowAlm", Priority: alarm.Medium, AckRequired: true, AutoClear: true, Equipment: "P101"},
+		},
+		Read:    func(p string) (any, bool) { v, ok := cond[p]; return v, ok },
+		Now:     func() time.Time { return now },
+		Chatter: alarm.ChatterConfig{Count: 2},
+		Flood:   alarm.FloodConfig{Threshold: 2},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { eng.Close() })
+	srv := New(newTestRuntime(t), Options{Alarms: eng})
+	eng.Evaluate()
+	for _, tag := range []string{"HiTempAlm", "HiTempAlm", "LoFlowAlm"} {
+		now = now.Add(time.Second)
+		cond[tag] = true
+		eng.Evaluate()
+		now = now.Add(time.Second)
+		cond[tag] = false
+		eng.Evaluate()
+	}
+
+	var out journalResponse
+	json.Unmarshal(do(t, srv, "GET", "/api/alarms/journal", "").Body.Bytes(), &out)
+	for _, e := range out.Events {
+		if e.Kind != alarm.KindActive && e.Kind != alarm.KindRTN {
+			t.Fatalf("default journal has a %q row: %+v", e.Kind, e)
+		}
+	}
+	json.Unmarshal(do(t, srv, "GET", "/api/alarms/journal?kind=chatter,flood", "").Body.Bytes(), &out)
+	if len(out.Events) != 2 || out.Events[0].Kind != alarm.KindFlood || out.Events[0].Count != 3 || out.Events[1].Kind != alarm.KindChatter || out.Events[1].ID != "HiTemp" {
+		t.Fatalf("kind=chatter,flood = %+v", out.Events)
+	}
+
+	var list alarmsResponse
+	json.Unmarshal(do(t, srv, "GET", "/api/alarms", "").Body.Bytes(), &list)
+	if list.Flood == nil || list.Flood.Count != 3 || len(list.Flood.FirstOut) != 2 || list.Flood.FirstOut[1].ID != "LoFlow" ||
+		len(list.Flood.Groups) != 2 || list.Flood.Groups[0].Equipment != "Boiler" || list.Summary.Flood == nil || list.Summary.Chattering != 1 {
+		t.Fatalf("alarms flood = %+v summary = %+v", list.Flood, list.Summary)
+	}
+	var chat *alarm.Chatter
+	for _, r := range list.Alarms {
+		if r.ID == "HiTemp" {
+			chat = r.Chatter
+		}
+	}
+	if chat == nil || chat.Activations != 2 {
+		t.Fatalf("HiTemp's chatter = %+v", chat)
+	}
+}
+
 func TestParseTimeAcceptsBothForms(t *testing.T) {
 	want := time.UnixMilli(1700000000000)
 	for _, s := range []string{"1700000000000", want.UTC().Format(time.RFC3339)} {

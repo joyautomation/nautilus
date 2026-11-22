@@ -58,6 +58,17 @@ type Event struct {
 	// Empty on rows written before occurrences, and on an alarm that has
 	// had none since the engine started.
 	Occurrence string `json:"occurrence,omitempty"`
+	// Standing marks an `active` row that is not a new activation (#1249):
+	// its condition stood through a re-baseline (the engine's start, a
+	// takeover's reset, a return from suppression) or it fell inside a
+	// standalone start's grace. Live detection did not count it, and
+	// neither do the reports (rationalize.Activations).
+	Standing bool `json:"standing,omitempty"`
+	// SeenWhen, on an `active` row, says the activation was seen as
+	// something came back ("site RTU9 came back", "equipment P101
+	// returned to service"): its condition read false before it could not
+	// be seen and true after, so it began sometime in between, not at TS.
+	SeenWhen string `json:"seenWhen,omitempty"`
 
 	// The rest are set only on a KindNotify row (#715): the escalation
 	// level (1 is the first), who was notified (a principal: a user name
@@ -69,6 +80,21 @@ type Event struct {
 	Via    string `json:"via,omitempty"`
 	Result string `json:"result,omitempty"`
 	Reason string `json:"reason,omitempty"`
+
+	// The rest are set only on a detection row (#1249: KindChatter,
+	// KindChatterEnd, KindFlood, KindFloodEnd): Count is the activations
+	// (a chatter row: in the episode so far; a flood start: in its
+	// window; a flood end: in the whole flood), Peak the most in any
+	// window of a flood, WindowMs the detection window, SinceMs when the
+	// episode began (an end row's TS minus it is its duration), Episode
+	// the flood's ID. A flood's start row names its first alarms in
+	// Reason ("first out: …"): the row stays comparable (no slice), and
+	// FloodEvent carries them as a list.
+	Count    int    `json:"count,omitempty"`
+	Peak     int    `json:"peak,omitempty"`
+	WindowMs int64  `json:"windowMs,omitempty"`
+	SinceMs  int64  `json:"sinceMs,omitempty"`
+	Episode  string `json:"episode,omitempty"`
 }
 
 // Time is the event's timestamp as a time.Time.

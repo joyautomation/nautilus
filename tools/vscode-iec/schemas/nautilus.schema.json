@@ -1791,6 +1791,12 @@
         "channels": {
           "$ref": "#/definitions/alarm-channels"
         },
+        "chatter": {
+          "$ref": "#/definitions/alarm-chatter"
+        },
+        "flood": {
+          "$ref": "#/definitions/alarm-flood"
+        },
         "rules": {
           "type": "array",
           "items": {
@@ -1864,6 +1870,40 @@
         "enable": {
           "type": "string",
           "description": "A BOOL that must be true or the definition is Suppressed. Pointing it at a site's online flag is what stops a dead edge node from freezing four alarms on."
+        }
+      }
+    },
+    "alarm-chatter": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Live chattering detection: an alarm chatters when it activates `count` times within `window` (ISA-18.2: 3 in 60 s, the defaults). Detection marks and journals only; it shelves, suppresses and pages nothing.",
+      "properties": {
+        "window": {
+          "$ref": "#/definitions/duration",
+          "description": "The window. Default 60s; at least 1s."
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 2,
+          "maximum": 100,
+          "description": "Activations within the window that make an alarm chatter. Default 3."
+        }
+      }
+    },
+    "alarm-flood": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Live flood detection: the plant is in a flood at MORE than `threshold` activations of all alarms within `window` (ISA-18.2: 10 in 10 min, the defaults), until the rate has stayed at or under it for a full window. Detection marks and journals only.",
+      "properties": {
+        "window": {
+          "$ref": "#/definitions/duration",
+          "description": "The window. Default 10m; at least 1s."
+        },
+        "threshold": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1023,
+          "description": "A flood is more than this many activations within the window. Default 10."
         }
       }
     },

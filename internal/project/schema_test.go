@@ -141,6 +141,8 @@ func TestSchemaMatchesLoader(t *testing.T) {
 		{"alarms", goKeys(AlarmsConfig{}), schemaKeys(s.Definitions["alarms"].Properties)},
 		{"alarm defaults", goKeys(alarm.Defaults{}), schemaKeys(s.Definitions["alarm-defaults"].Properties)},
 		{"the alarm journal", goKeys(AlarmJournalConfig{}), schemaKeys(s.Definitions["alarm-journal"].Properties)},
+		{"alarm chatter", goKeys(alarm.ChatterConfig{}), schemaKeys(s.Definitions["alarm-chatter"].Properties)},
+		{"alarm flood", goKeys(alarm.FloodConfig{}), schemaKeys(s.Definitions["alarm-flood"].Properties)},
 		{"an alarm notifier", goKeys(AlarmNotifyConfig{}), schemaKeys(s.Definitions["alarm-notify"].Properties)},
 		{"alarm on-call", goKeys(escalate.Oncall{}), schemaKeys(s.Definitions["alarm-oncall"].Properties)},
 		{"an on-call roster", goKeys(escalate.Roster{}), schemaKeys(s.Definitions["alarm-roster"].Properties)},
