@@ -357,6 +357,8 @@ alarms:
     webhook:                         # one POST per page, JSON, to a paging service
       url: https://hooks.example.com/page
       header: Authorization          # value: the secret webhook.header
+    push:                            # a phone's own subscription is its address
+      subject: mailto:ops@example.com
 ```
 
 Nothing in it is secret, and none of it is anyone's address. Those live
@@ -414,6 +416,32 @@ browser playground has no state directory, so a project there with
   start, never its credentials. Through an `https://` proxy, a channel's
   `ca-file:` must also hold the proxy's CA, and `insecure: true` skips
   verifying the proxy too.
+- **Push pages a person's phones.** `via: [push]` sends a Web Push to each
+  phone the person subscribed through the HMI (an installable HMI,
+  [guides/installable-hmi](/guides/installable-hmi/)); there is nothing to
+  put in the contacts file, the subscription is the address, and a person
+  with none fails `no-contact` like a missing number. `subject:` is the
+  `mailto:` or `https:` address you give the push services (Google, Apple,
+  Mozilla), who may use it to reach you: it is required and never
+  defaulted. The controller signs each push with a VAPID key, the secret
+  `push.vapid-key`, made at the first start of a controller that is not
+  half of a pair (`naut alarms secrets generate push.vapid-key` makes it
+  by hand). **On a pair the key must be the same on both boxes**: a
+  phone's subscription is bound to it, so make it on one and copy
+  `alarm-secrets.json` to the other (`scp -p`); `naut alarms secrets list`
+  shows whether it is set, and `GET /api/push/health` (the config
+  permission) counts the subscriptions the key cannot open (sealed under
+  another key: kept, never sent). A subscription ends when its person
+  does: a changed password, a removed or disabled user or a revoked role
+  stops the pages, with no session needed; signing out does not. A push
+  is sent only by the leader, directly (no `HTTPS_PROXY`: the controller
+  checks what the push service's name resolves to, and refuses a private
+  address unless `allow-hosts:` names it, for a site's own relay).
+  `allow-hosts:` also narrows where it may send at all.
+  Subscriptions are kept in the retain store with their endpoint and keys
+  sealed (AES-GCM under a key derived from the VAPID key): the file is not
+  secret, and a ConfigMap is not a Secret, so what is in them is useless
+  without the box's secrets file.
 - **Each channel kind has its own sender,** so a mail server that hangs
   delays only email, never an SMS.
 

@@ -8,6 +8,7 @@
 package project
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -25,6 +26,7 @@ import (
 	"time"
 
 	"github.com/joyautomation/nautilus/alarm/channel"
+	"github.com/joyautomation/nautilus/alarm/escalate"
 	"github.com/joyautomation/nautilus/auth"
 	"github.com/joyautomation/nautilus/devbind"
 	"github.com/joyautomation/nautilus/devprofile"
@@ -1196,6 +1198,11 @@ type Project struct {
 	// sets it before NewAlarms when alarms.channels names a channel; nil
 	// with one configured is an error there.
 	AlarmDirectory channel.Directory
+
+	// PushSend pages a person's phones for alarms.channels.push (#722).
+	// `naut run` sets it before NewAlarms: it forwards to the server's
+	// sender, which does not exist yet when the alarms are built.
+	PushSend func(ctx context.Context, m escalate.Message) error
 }
 
 // RetainNames resolves the retain section's defaults against the project

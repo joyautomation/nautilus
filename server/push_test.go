@@ -485,7 +485,7 @@ func TestPushSendPagesThePersonAndPrunesAGoneSubscription(t *testing.T) {
 	f := newFakeService(t)
 	rig, ep := pagedRig(t, f)
 	srv := rig.srv
-	res, err := srv.PushSend(context.Background(), "user:JSmith", PushMessage{Target: "SP", Topic: "HiTemp", Payload: []byte(`{"alarm":"HiTemp"}`)})
+	res, err := srv.PushSend(context.Background(), "JSmith", PushMessage{Target: "SP", Topic: "HiTemp", Payload: []byte(`{"alarm":"HiTemp"}`)})
 	if err != nil || res.Sent != 1 || res.Failed != 0 || res.NoSubscription {
 		t.Fatalf("%+v %v", res, err)
 	}

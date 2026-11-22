@@ -19,6 +19,11 @@ type Options struct {
 	// per Send: the dispatcher retries (escalate.Options.Retries), asking
 	// the write gate and the engine again before each.
 	Timeout time.Duration
+	// Push pages a person's subscribed phones (#722): the manifest hands in
+	// the server's sender, because this package knows no server. It returns
+	// an *escalate.SendError (FailNoContact when the person has no phone
+	// subscribed). Nil with alarms.channels.push set is an error.
+	Push func(ctx context.Context, m escalate.Message) error
 }
 
 func (o Options) norm() Options {
@@ -77,6 +82,12 @@ func Build(c *Config, dir Directory, o Options) (map[string]escalate.Channel, er
 		}
 		s := newWebhookSender(*w, dir, p)
 		out[KindWebhook] = &attempt{send: s.attempt, o: o}
+	}
+	if c.Push != nil {
+		if o.Push == nil {
+			return nil, errors.New("alarms.channels.push: this controller has no push service to send through")
+		}
+		out[KindPush] = &attempt{send: o.Push, o: o}
 	}
 	return out, nil
 }

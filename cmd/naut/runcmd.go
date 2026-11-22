@@ -347,7 +347,9 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	if proj.Auth != nil && (proj.Auth.HasUsers() || proj.Auth.OIDC()) {
 		sysAlarms = append(sysAlarms, usersAlarm(&srvRef))
 	}
-	if err := openAlarmContacts(proj, dir, os.Getenv, os.Stderr); err != nil {
+	proj.PushSend = pushChannel(&srvRef)
+	alarmStateDir, err := openAlarmContacts(proj, dir, os.Getenv, os.Stderr, proj.Runtime.Coordinator != nil)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "naut run: alarms:", err)
 		return 1
 	}
@@ -607,6 +609,7 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 			fmt.Fprintln(os.Stderr, "naut run: parameters.writeBack is commit, but this controller does not run from a git checkout: tuned values are offered as a patch at GET /api/parameters/patch")
 		}
 	}
+	sopts.Push = pushOptions(proj, alarmStateDir, proj.Runtime.Coordinator != nil, os.Stderr)
 	srv := server.New(rt, sopts)
 	srvRef.Store(srv)
 	if j != nil {
@@ -856,13 +859,18 @@ func usersAlarm(srv *atomic.Pointer[server.Server]) project.SystemAlarm {
 // to stop a controller: it is said here, and each send that needs it
 // fails (journalled, class config) until it is fixed. No state directory
 // at all leaves the project without one, and NewAlarms refuses.
-func openAlarmContacts(proj *project.Project, dir string, getenv func(string) string, stderr io.Writer) error {
+func openAlarmContacts(proj *project.Project, dir string, getenv func(string) string, stderr io.Writer, paired bool) (string, error) {
 	if proj.Alarms == nil || len(proj.Alarms.Channels.Kinds()) == 0 {
-		return nil
+		return "", nil
 	}
 	sd, err := controllerStateDir("the alarm contacts", proj.AuthStateDir, proj.Name, dir, dir != "", getenv)
 	if err != nil {
-		return err
+		return "", err
+	}
+	// The push key before the contacts are checked: a controller that is
+	// not half of a pair makes it here, and a pair is told to copy one.
+	if c := proj.Alarms.Channels; c != nil && c.Push != nil {
+		_, _ = loadPushKey(sd, "naut run", !paired, stderr) // a failure is said by pushOptions
 	}
 	st, err := oncall.Open(sd)
 	if err != nil {
@@ -877,7 +885,7 @@ func openAlarmContacts(proj *project.Project, dir string, getenv func(string) st
 	for _, e := range errs {
 		fmt.Fprintf(stderr, "naut run: warning: %s\n", e)
 	}
-	return nil
+	return sd, nil
 }
 
 // journalInsecureChannels journals, once at start, each alarm channel

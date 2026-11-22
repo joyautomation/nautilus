@@ -445,7 +445,7 @@ var (
 	ErrPushNotLeading = errors.New("this replica does not lead: only the leader pages")
 )
 
-// PushSend pages principal ("user:ann", "oidc:ann") on every phone they
+// PushSend pages principal ("ann", "user:ann", "oidc:ann") on every phone they
 // subscribed, and only on a leader. It is the seam the alarm channel
 // calls: the person must still stand and still be allowed to read target,
 // both checked now, not when they subscribed.
@@ -457,8 +457,10 @@ func (s *Server) PushSend(ctx context.Context, principal string, m PushMessage) 
 	if !s.rt.Leading() {
 		return PushResult{}, ErrPushNotLeading
 	}
-	if n, ok := strings.CutPrefix(principal, "user:"); ok {
-		principal = "user:" + strings.ToLower(n)
+	// A level names a person as the manifest does: a local user's bare
+	// name (alice, any case), or oidc:<name>.
+	if !strings.HasPrefix(principal, "oidc:") {
+		principal = "user:" + strings.ToLower(strings.TrimPrefix(principal, "user:"))
 	}
 	rows := p.reg.Of(principal)
 	res := PushResult{NoSubscription: len(rows) == 0}
