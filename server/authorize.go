@@ -653,7 +653,8 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, meResponse{Secure: s.secure(r), Now: now, Me: auth.Me{Principal: a.pr.String(), Roles: []string{}, Permissions: map[string][]string{}}})
 		return
 	}
-	me := meResponse{Auth: true, Secure: s.secure(r), Me: s.policy.Describe(a.pr), Elevated: auth.ElevatedPermissions, SignIn: s.sessions != nil, Now: now}
+	me := meResponse{Auth: true, Secure: s.secure(r), Me: s.policy.Describe(a.pr), Elevated: s.elevatedNames(), SignIn: s.sessions != nil, Now: now}
+	me.Permissions = s.visiblePermissions(me.Permissions)
 	if s.sessions != nil {
 		if s.policy.HasUsers() {
 			me.SignInMethods = append(me.SignInMethods, "password")
@@ -693,3 +694,47 @@ func (s *Server) journalUsersHealth(err error) {
 // read: no local user can authenticate (the nautilus.users-file system
 // alarm).
 func (s *Server) UsersFileDown() bool { return s.users != nil && s.users.Err() != nil }
+
+// checkoutEnabled reports whether the project turned the I/O checkout on
+// (#719): without it nothing about it is shown anywhere.
+func (s *Server) checkoutEnabled() bool { return s.checkout != nil && s.checkout.Sheet != nil }
+
+// checkoutPermission is a permission that exists only for a project that
+// uses the checkout.
+func checkoutPermission(p string) bool { return p == auth.Checkout || p == auth.Signoff }
+
+// elevatedNames is auth.ElevatedPermissions as this project shows them.
+func (s *Server) elevatedNames() []string {
+	if s.checkoutEnabled() {
+		return auth.ElevatedPermissions
+	}
+	out := make([]string, 0, len(auth.ElevatedPermissions))
+	for _, p := range auth.ElevatedPermissions {
+		if !checkoutPermission(p) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// visiblePermissions is a principal's permissions as /api/me shows them: the
+// checkout's two are left out of a project that does not use it (the roles
+// still define them, so turning it on needs no role edit).
+func (s *Server) visiblePermissions(in map[string][]string) map[string][]string {
+	if s.checkoutEnabled() {
+		return in
+	}
+	out := make(map[string][]string, len(in))
+	for scope, perms := range in {
+		kept := make([]string, 0, len(perms))
+		for _, p := range perms {
+			if !checkoutPermission(p) {
+				kept = append(kept, p)
+			}
+		}
+		if len(kept) > 0 {
+			out[scope] = kept
+		}
+	}
+	return out
+}

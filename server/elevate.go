@@ -74,7 +74,7 @@ func (s *Server) handleElevate(w http.ResponseWriter, r *http.Request) {
 	// refused before any hashing, so a viewer's sessions cannot keep the
 	// password-hash slots busy (#1088 review).
 	if !s.holdsElevated(a) {
-		refuse(http.StatusForbidden, "nothing to confirm: "+se.user+" holds none of the elevated permissions ("+strings.Join(auth.ElevatedPermissions, ", ")+")", "no elevated permission", nil)
+		refuse(http.StatusForbidden, "nothing to confirm: "+se.user+" holds none of the elevated permissions ("+strings.Join(s.elevatedNames(), ", ")+")", "no elevated permission", nil)
 		return
 	}
 	if se.oidc {

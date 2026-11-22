@@ -56,6 +56,12 @@ func TestCheckoutIsOffUnlessTheProjectEnablesIt(t *testing.T) {
 			t.Errorf("%s %s: %d %s, want 404 not enabled for this project", c.method, c.path, rec.Code, rec.Body)
 		}
 	}
+	// /api/me shows nothing new: the two permissions are not listed, and not
+	// among the elevated ones
+	me := call(t, srv, "GET", "/api/me", "", as).Body.String()
+	if strings.Contains(me, `"checkout"`) || strings.Contains(me, `"signoff"`) {
+		t.Errorf("/api/me for a project without the checkout names its permissions: %s", me)
+	}
 	// and an ordinary write still works as before
 	if rec := call(t, srv, "POST", "/api/tags", `{"name":"SP","value":71}`, as); rec.Code != http.StatusNoContent {
 		t.Errorf("a tag write: %d %s", rec.Code, rec.Body)
@@ -218,5 +224,14 @@ func TestCheckoutRecordingIsScopedToThePointsArea(t *testing.T) {
 	}
 	if n := len(st.Results(run.ID)); n != 1 {
 		t.Errorf("%d results kept", n)
+	}
+}
+
+// With the checkout on, /api/me lists the permissions a person holds for it.
+func TestMeListsTheCheckoutPermissionsOnlyWhenEnabled(t *testing.T) {
+	srv, _ := ckServer(t)
+	me := call(t, srv, "GET", "/api/me", "", ckAs(t, srv, "akhan")).Body.String()
+	if !strings.Contains(me, `"checkout"`) || !strings.Contains(me, `"signoff"`) || !strings.Contains(me, `"redundancy","signoff"]`) {
+		t.Errorf("/api/me with the checkout on lacks its permissions: %s", me)
 	}
 }
