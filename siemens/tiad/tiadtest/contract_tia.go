@@ -199,6 +199,8 @@ func contractTIA(t *testing.T, start Starter) {
 	t.Run("Software", func(t *testing.T) { contractSoftware(t, start) })
 	t.Run("SoftwareOwnership", func(t *testing.T) { contractSoftwareOwnership(t, start) })
 	t.Run("SoftwareReplacedForeign", func(t *testing.T) { contractSoftwareReplacedForeign(t, start) })
+	t.Run("SoftwareCyclicOBs", func(t *testing.T) { contractSoftwareCyclicOBs(t, start) })
+	t.Run("SoftwareCyclicOBNotAsAsked", func(t *testing.T) { contractSoftwareCyclicOBNotAsAsked(t, start) })
 	t.Run("Compile", func(t *testing.T) { contractCompile(t, start) })
 	t.Run("Gates", func(t *testing.T) { contractGates(t, start) })
 	t.Run("Precedence", func(t *testing.T) { contractPrecedence(t, start) })
@@ -702,10 +704,10 @@ func contractSoftwareOwnership(t *testing.T, start Starter) {
 		!strings.Contains(err.Error(), `"naut_Main" [FB1] in group "nautilus"`) {
 		t.Fatalf("a block of another group: %v", err)
 	}
-	r, err = s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{"src/OB.scl"}})
-	if err != nil || len(r.Results) != 1 || r.Results[0].OK || len(r.Results[0].Messages) != 1 ||
-		!strings.Contains(r.Results[0].Messages[0], `Type conflict: Object "OB_main" cannot be overwritten`) {
-		t.Fatalf("an OB source while Main holds OB1: %+v %v", r, err)
+	// An OB source with no obs entry would be a program cycle OB.
+	if _, err := s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{"src/OB.scl"}}); tiad.Kind(err) != tiad.KindBadRequest ||
+		!strings.Contains(err.Error(), `src/OB.scl declares OB "OB_main", which obs does not name`) {
+		t.Fatalf("an OB source with no obs entry: %v", err)
 	}
 }
 
@@ -743,6 +745,136 @@ func contractSoftwareReplacedForeign(t *testing.T, start Starter) {
 	}
 	if err := s.Close(ctx); err != nil {
 		t.Fatalf("close: %v", err)
+	}
+}
+
+// obSCL is a writer-shaped cyclic interrupt OB source calling the
+// program's instance DB.
+func obSCL(name string) string {
+	return "ORGANIZATION_BLOCK \"" + name + "\"\nTITLE = \"Cyclic interrupt\"\n{ S7_Optimized_Access := 'TRUE' }\nVERSION : 0.1\n\nBEGIN\n\t\"naut_Main_DB\"();\nEND_ORGANIZATION_BLOCK\n"
+}
+
+func obSteps(l []tiad.OBStep) string {
+	var s []string
+	for _, st := range l {
+		x := st.Name + " " + st.Action
+		if st.Was != "" {
+			x += " was " + st.Was
+		}
+		if st.Now != "" {
+			x += " now " + st.Now
+		}
+		s = append(s, x)
+	}
+	return strings.Join(s, "; ")
+}
+
+// contractSoftwareCyclicOBs: the agent makes each cyclic interrupt OB
+// (obs) before the sources, and reports what it did: created, kept,
+// recreated with the cycle it had and the one it has, removed with prune.
+// It refuses an entry out of range, an OB source with no entry, an entry
+// with no source, a number another OB of the group holds without prune,
+// and a block named like TIA's system constant OB_<name> of an OB.
+func contractSoftwareCyclicOBs(t *testing.T, start Starter) {
+	c := start(t, Config{}).Client()
+	installGSD(t, c)
+	s, err := c.CreateProject(ctx, "obs", BenchStation(), BenchSecrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	put := func(p, body string) {
+		t.Helper()
+		if _, err := c.PutFile(ctx, p, []byte(body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put("src/Main.scl", programSCL)
+	put("src/OB_main.scl", obSCL("naut_OB_main"))
+	put("src/OB_fast.scl", obSCL("naut_OB_fast"))
+	put("src/Clash.scl", "FUNCTION_BLOCK \"OB_main\"\nBEGIN\nEND_FUNCTION_BLOCK\n")
+	src := []string{"src/Main.scl", "src/OB_main.scl"}
+	main100 := []tiad.CyclicOB{{Name: "naut_OB_main", Number: 30, CycleMS: 100}}
+
+	r, err := s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: src, OBs: main100, Prune: true})
+	if err != nil || obSteps(r.OBs) != "naut_OB_main created now OB30, cyclic interrupt, 100 ms" {
+		t.Fatalf("first import: %s %v", obSteps(r.OBs), err)
+	}
+	if got := blockNames(r.Blocks); got != "FB:naut_Main,DB:naut_Main_DB,OB:naut_OB_main" {
+		t.Fatalf("blocks = %s", got)
+	}
+	if _, err := s.Compile(ctx, true, true); err != nil {
+		t.Fatal(err)
+	}
+	r, err = s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: src, OBs: main100, Prune: true})
+	if err != nil || obSteps(r.OBs) != "naut_OB_main kept now OB30, cyclic interrupt, 100 ms" {
+		t.Fatalf("the same again: %s %v", obSteps(r.OBs), err)
+	}
+	r, err = s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: src, OBs: []tiad.CyclicOB{{Name: "naut_OB_main", Number: 30, CycleMS: 50}}, Prune: true})
+	if err != nil || obSteps(r.OBs) != "naut_OB_main recreated was OB30, cyclic interrupt, 100 ms now OB30, cyclic interrupt, 50 ms" {
+		t.Fatalf("a new cycle: %s %v", obSteps(r.OBs), err)
+	}
+
+	refused := []struct {
+		why, kind, want string
+		req             tiad.SoftwareRequest
+	}{
+		{"a number out of range", tiad.KindBadRequest, "number 39 is no cyclic interrupt OB number",
+			tiad.SoftwareRequest{Group: "nautilus", Sources: src, OBs: []tiad.CyclicOB{{Name: "naut_OB_main", Number: 39, CycleMS: 100}}}},
+		{"a cycle over 60 s", tiad.KindBadRequest, "outside 1 ms to 60 s",
+			tiad.SoftwareRequest{Group: "nautilus", Sources: src, OBs: []tiad.CyclicOB{{Name: "naut_OB_main", Number: 30, CycleMS: 60001}}}},
+		{"an OB source with no entry", tiad.KindBadRequest, `src/OB_main.scl declares OB "naut_OB_main", which obs does not name`,
+			tiad.SoftwareRequest{Group: "nautilus", Sources: src}},
+		{"an entry with no source", tiad.KindBadRequest, `obs names "naut_OB_fast", which no source declares`,
+			tiad.SoftwareRequest{Group: "nautilus", Sources: src, OBs: append(append([]tiad.CyclicOB{}, main100...), tiad.CyclicOB{Name: "naut_OB_fast", Number: 31, CycleMS: 10})}},
+		{"OB30 held by another OB of the group, no prune", tiad.KindBadRequest, `"naut_OB_main" [OB30] in the group holds it`,
+			tiad.SoftwareRequest{Group: "nautilus", Sources: []string{"src/Main.scl", "src/OB_fast.scl"}, OBs: []tiad.CyclicOB{{Name: "naut_OB_fast", Number: 30, CycleMS: 10}}}},
+		{"a block named like Main's system constant", tiad.KindBadRequest, `src/Clash.scl declares "OB_main", the name of TIA's system constant for OB "main"`,
+			tiad.SoftwareRequest{Group: "nautilus", Sources: []string{"src/Clash.scl"}}},
+	}
+	for _, x := range refused {
+		if _, err := s.Software(ctx, x.req); tiad.Kind(err) != x.kind || !strings.Contains(err.Error(), x.want) {
+			t.Fatalf("%s: %v, want %s naming %q", x.why, err, x.kind, x.want)
+		}
+	}
+	// The refusals changed nothing.
+	r, err = s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: src, OBs: []tiad.CyclicOB{{Name: "naut_OB_main", Number: 30, CycleMS: 50}}, Prune: true})
+	if err != nil || obSteps(r.OBs) != "naut_OB_main kept now OB30, cyclic interrupt, 50 ms" {
+		t.Fatalf("after the refusals: %s %v", obSteps(r.OBs), err)
+	}
+	// With prune, an OB of the group that holds the number goes first.
+	r, err = s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{"src/Main.scl", "src/OB_fast.scl"}, OBs: []tiad.CyclicOB{{Name: "naut_OB_fast", Number: 30, CycleMS: 10}}, Prune: true})
+	if err != nil || obSteps(r.OBs) != "naut_OB_main removed was OB30, cyclic interrupt, 50 ms; naut_OB_fast created now OB30, cyclic interrupt, 10 ms" ||
+		blockNames(r.Blocks) != "FB:naut_Main,DB:naut_Main_DB,OB:naut_OB_fast" {
+		t.Fatalf("prune: %s %s %v", obSteps(r.OBs), blockNames(r.Blocks), err)
+	}
+}
+
+// contractSoftwareCyclicOBNotAsAsked: when TIA's OB import does not keep
+// the class asked, the check after the import fails the call, and the
+// session is never saved or downloaded.
+func contractSoftwareCyclicOBNotAsAsked(t *testing.T, start Starter) {
+	a, s := compiledBench(t, start)
+	c := a.Client()
+	if _, err := c.PutFile(ctx, "src/OB_main.scl", []byte(obSCL("naut_OB_main"))); err != nil {
+		t.Fatal(err)
+	}
+	a.SetOBImportIgnoresClass(t, true)
+	_, err := s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{"src/Main.scl", "src/OB_main.scl"}, OBs: []tiad.CyclicOB{{Name: "naut_OB_main", Number: 30, CycleMS: 100}}, Prune: true})
+	if tiad.Kind(err) != tiad.KindOperationFailed || !strings.Contains(err.Error(), `"naut_OB_main" is OB30, ProgramCycle, not OB30, cyclic interrupt, 100 ms`) {
+		t.Fatalf("an OB TIA made as a program cycle OB: %v", err)
+	}
+	a.SetOBImportIgnoresClass(t, false)
+	if _, err := s.Save(ctx, false); tiad.Kind(err) != tiad.KindUncleanSession {
+		t.Fatalf("a save after it: %v", err)
+	}
+	if _, err := s.Compile(ctx, true, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Download(ctx, benchSoftwareLoad); tiad.Kind(err) != tiad.KindUncleanSession {
+		t.Fatalf("a download after it: %v", err)
+	}
+	if l := a.Loaded(t); len(l) != 0 {
+		t.Fatalf("loaded %+v", l)
 	}
 }
 

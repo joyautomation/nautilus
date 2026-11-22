@@ -728,7 +728,41 @@ type SoftwareRequest struct {
 	// Prune deletes blocks in Group that no source produced, so a block
 	// removed from the nautilus project disappears from the CPU too.
 	Prune bool `json:"prune"`
+	// OBs are the cyclic interrupt OBs the import makes, one per
+	// ORGANIZATION_BLOCK source (siemens/writer Output.OBs). SCL source
+	// cannot make one: the agent makes each first (class, number, cycle)
+	// and the source replaces its body. An OB source with no entry is
+	// refused.
+	OBs []CyclicOB `json:"obs,omitempty"`
 }
+
+// CyclicOB is one cyclic interrupt OB: its number (30-38 or 123-32767)
+// and its cycle in whole milliseconds (1 to 60000).
+type CyclicOB struct {
+	Name    string `json:"name"`
+	Number  int    `json:"number"`
+	CycleMS int    `json:"cycleMs"`
+}
+
+// OBStep is what an import did for one cyclic interrupt OB.
+type OBStep struct {
+	Name string `json:"name"`
+	// Action is OBKept, OBCreated, OBRecreated or OBRemoved.
+	Action string `json:"action"`
+	// Was is the OB before a recreation or a removal ("OB30, cyclic
+	// interrupt, 50 ms"); Now what the import made.
+	Was string `json:"was,omitempty"`
+	Now string `json:"now,omitempty"`
+}
+
+// OBStep actions. A recreation (a new cycle or number) deletes the OB and
+// makes it again: a deploy shows it before it asks to download.
+const (
+	OBKept      = "kept"
+	OBCreated   = "created"
+	OBRecreated = "recreated"
+	OBRemoved   = "removed"
+)
 
 // SourceResult is the import outcome for one source file.
 type SourceResult struct {
@@ -747,6 +781,8 @@ type Block struct {
 type SoftwareResult struct {
 	Results []SourceResult `json:"results"`
 	Blocks  []Block        `json:"blocks"`
+	// OBs is what the import did for each cyclic interrupt OB asked for.
+	OBs []OBStep `json:"obs,omitempty"`
 }
 
 func (s *Session) Software(ctx context.Context, req SoftwareRequest) (SoftwareResult, error) {

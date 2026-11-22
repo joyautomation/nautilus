@@ -704,7 +704,7 @@ The client checks each path and the agent checks again.
 | `GET /v1/sessions` | → `{sessions: [{session, project, idleSeconds}]}` |
 | `DELETE /v1/sessions/{id}` | → `{}`. Closes without saving |
 | `PUT /v1/sessions/{id}/station` | `{station, secrets}` → `{changes: [string], notes?: [string], keptDevices?: [{name, profinetName, address}]}` (P2, P5). Keeps the project's CPU or makes one (§3.3, "Which CPU an apply uses"). `notes` is what the caller should know besides the changes (a protected CPU kept its password, the Full access user made or found, devices kept as found) |
-| `POST /v1/sessions/{id}/software` | `{group, sources, tagTables, prune}` → `{results: [{path, ok, messages}], blocks: [{name, kind}]}`. Generates blocks into the group named `group`; `blocks` lists that group's. With `prune`, blocks in that group that no source produced are deleted. An import never touches a block outside the group: see "Blocks outside the group" below |
+| `POST /v1/sessions/{id}/software` | `{group, sources, tagTables, prune, obs?: [{name, number, cycleMs}]}` → `{results: [{path, ok, messages}], blocks: [{name, kind}], obs?: [{name, action, was?, now?}]}`. Generates blocks into the group named `group`; `blocks` lists that group's. `obs` are the cyclic interrupt OBs the agent makes first (see "Cyclic interrupt OBs" below). With `prune`, blocks in that group that no source produced are deleted. An import never touches a block outside the group: see "Blocks outside the group" below |
 | `POST /v1/sessions/{id}/compile` | `{hardware, software}` → `{result: "success" or "warning" or "error", errors, warnings, messages: [{object, severity, text}]}` |
 | `POST /v1/sessions/{id}/download` | §3.5 (P3) |
 | `POST /v1/sessions/{id}/compare` | `{secrets?: {fullAccessPassword}}` (§3.9) → `{equal, differences: [{object, state}], blindTrust}`. An online compare. `blindTrust` is the TIA instance's (§3.8), or `null` |
@@ -739,12 +739,48 @@ blocks is carried through untouched. So:
 - Not covered yet: data types (`TYPE`). Where TIA puts a type that a
   source generates is unproven, so no rule is guessed.
 
-Also seen on the VM: an `ORGANIZATION_BLOCK` source becomes a program
-cycle OB. While another OB holds number 1, its generation fails with
-`Type conflict: Object "<name>" cannot be overwritten`. That number 1 is
-the cause is inferred, not proven. A cyclic interrupt OB with its cycle
-therefore cannot come from an SCL source alone; tiad has to create it
-(§7).
+**Cyclic interrupt OBs (#789).** A nautilus task runs in a cyclic
+interrupt OB at the task's cycle, and SCL source cannot make one. Proven on
+the VM:
+- An `ORGANIZATION_BLOCK` source with no OB of its name becomes a program
+  cycle OB numbered from 123.
+- Openness has no `CreateOB`, and an OB's class (`SecondaryType`) is
+  read-only.
+- A SimaticML import of an empty LAD OB (`CyclicInterrupt`, its number,
+  `CyclicTime` in µs) lands as asked. An empty SCL one is refused, since SCL
+  needs a compile unit.
+- An SCL source of the same name then replaces the body and keeps the
+  class, number and cycle, again on a second load.
+- `CyclicTime` cannot be written afterwards.
+
+So `/software` takes `obs: [{name, number, cycleMs}]` (the writer's
+`Output.OBs`), and before the sources the agent:
+- keeps an OB of the group that is already as asked;
+- creates a missing one by that import;
+- recreates one with another cycle, number or class (deletes it and
+  imports it again);
+- with `prune`, removes another OB of the group that holds the number.
+
+The reply's `obs` lists each step (`created`, `kept`, `recreated` with
+`was` and `now`, `removed`). A deploy shows them before it asks to
+download, so a cycle change is seen before it is confirmed.
+
+Refused before anything is imported:
+- a number outside 30-38 and 123-32767, or a cycle outside 1 ms-60 s;
+- an `ORGANIZATION_BLOCK` source with no entry (it would silently be a
+  program cycle OB), and an entry no source declares;
+- a number held by a block outside the group (`foreign_block`), or by an
+  OB of the group without `prune`;
+- a block named `OB_<x>` while an OB `x` exists or is asked for. TIA
+  keeps a system constant `OB_<name>` for every OB (`OB_Main` for Main),
+  block names are case-insensitive, and TIA refuses the clash with `Type
+  conflict: Object "OB_x" cannot be overwritten`. The VM's first golden
+  run hit this (the writer's `OB_main` against Main), not an OB number,
+  as an earlier note here guessed.
+
+After the import each asked OB must be a cyclic interrupt OB in the group
+with its number and cycle. Anything else fails the call and leaves the
+session unusable, as a change outside the group does.
 
 `secrets` is `{"webUsers": {"naut": "<password>"}, "protection": "<password>", "configurationPassword": "<password>", "fullAccessPassword": "<password>"}`.
 Each password answers only its own question: the protection password

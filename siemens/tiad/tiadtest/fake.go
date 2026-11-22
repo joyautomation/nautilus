@@ -25,6 +25,7 @@ import (
 	"path"
 	"reflect"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -106,9 +107,11 @@ type Fake struct {
 	keepsLogon, credentialsAfterChecks bool
 	// importReplacesForeign: SetImportReplacesForeign.
 	importReplacesForeign bool
-	keptLogons            map[string]bool
-	instanceLogons        map[string]string
-	answered              map[string]bool
+	// obImportIgnoresClass: SetOBImportIgnoresClass.
+	obImportIgnoresClass bool
+	keptLogons           map[string]bool
+	instanceLogons       map[string]string
+	answered             map[string]bool
 
 	// deployRecs is the deploy record, oldest first, each intent with its
 	// outcome once written; archives the archived projects by sha256;
@@ -192,6 +195,9 @@ type session struct {
 	groups         map[string]string
 	mainReplaced   bool
 	foreignChanged bool
+	// obInfo is each imported OB's class, number and cycle, by lower-cased
+	// name, as TIA keeps them across a source that replaces its body.
+	obInfo map[string]projectBlock
 	// archive is the sha256 of the deploy archive made for the download
 	// running, "" for none.
 	archive string
@@ -1244,12 +1250,49 @@ func (f *Fake) software(r *http.Request) (any, *failure) {
 	if fl := typesRefused(ds); fl != nil {
 		return nil, fl
 	}
+	if fl := readOBs(req.OBs); fl != nil {
+		return nil, fl
+	}
+	if fl := obSourcesRefused(ds, req.OBs); fl != nil {
+		return nil, fl
+	}
 	before := s.projectBlocks()
 	if fl := foreignConflicts(ds, before, req.Group); fl != nil {
 		return nil, fl
 	}
+	if fl := obConstantClash(ds, before, req.OBs); fl != nil {
+		return nil, fl
+	}
+	steps, fl := planOBs(req.OBs, before, req.Group, req.Prune)
+	if fl != nil {
+		return nil, fl
+	}
 	if s.groups == nil {
 		s.groups = map[string]string{}
+	}
+	if s.obInfo == nil {
+		s.obInfo = map[string]projectBlock{}
+	}
+	// The cyclic interrupt OBs first, as the agent makes them.
+	for _, st := range steps {
+		k := strings.ToLower(st.Name)
+		if st.Action == tiad.OBRemoved || st.Action == tiad.OBRecreated {
+			s.blocks = slices.DeleteFunc(s.blocks, func(b tiad.Block) bool { return strings.EqualFold(b.Name, st.Name) })
+			delete(s.groups, k)
+			delete(s.obInfo, k)
+		}
+		if st.Action == tiad.OBCreated || st.Action == tiad.OBRecreated {
+			for _, ob := range req.OBs {
+				if strings.EqualFold(ob.Name, st.Name) {
+					s.blocks = append(s.blocks, tiad.Block{Name: ob.Name, Kind: "OB"})
+					s.groups[k] = req.Group
+					s.obInfo[k] = projectBlock{kind: "OB", number: ob.Number, class: cyclicClass, cycle: int64(ob.CycleMS) * 1000}
+					if f.obImportIgnoresClass {
+						s.obInfo[k] = projectBlock{kind: "OB", number: ob.Number, class: "ProgramCycle"}
+					}
+				}
+			}
+		}
 	}
 	res := tiad.SoftwareResult{Results: []tiad.SourceResult{}}
 	var made []tiad.Block
@@ -1274,7 +1317,7 @@ func (f *Fake) software(r *http.Request) (any, *failure) {
 				heads = append(heads, tiad.Block{Name: m[2], Kind: blockKind[m[1]]})
 			}
 		}
-		switch conflict := obConflict(s.projectBlocks(), heads); {
+		switch conflict := constantClash(s.projectBlocks(), heads); {
 		case len(heads) == 0:
 			sr.OK = false
 			sr.Messages = []string{"no block found in source"}
@@ -1282,14 +1325,28 @@ func (f *Fake) software(r *http.Request) (any, *failure) {
 			sr.OK = false
 			sr.Messages = []string{fmt.Sprintf("An error occurred during code generation. The block generation has been stopped. Row 000000: Type conflict: Object %q cannot be overwritten.", conflict)}
 		default:
+			// An OB source keeps an OB of its name; with none it makes a
+			// program cycle OB, numbered from 123 (TIA VM, 2026-11-22).
+			for _, h := range heads {
+				if _, ok := s.obInfo[strings.ToLower(h.Name)]; h.Kind == "OB" && !ok {
+					s.obInfo[strings.ToLower(h.Name)] = projectBlock{kind: "OB", number: freeOB(s.projectBlocks(), 123), class: "ProgramCycle"}
+				}
+			}
 			made = append(made, heads...)
 		}
 		res.Results = append(res.Results, sr)
 	}
 	byName := map[string]tiad.Block{}
+	madeNow := map[string]bool{}
+	for _, b := range made {
+		madeNow[strings.ToLower(b.Name)] = true
+	}
 	for _, b := range s.blocks {
 		// Prune deletes only in the import's group.
 		if req.Prune && owned(s.groups[strings.ToLower(b.Name)], req.Group) {
+			if !madeNow[strings.ToLower(b.Name)] {
+				delete(s.obInfo, strings.ToLower(b.Name))
+			}
 			continue
 		}
 		byName[strings.ToLower(b.Name)] = b
@@ -1314,6 +1371,12 @@ func (f *Fake) software(r *http.Request) (any, *failure) {
 			"the import changed program blocks outside group %q (%s): this session can no longer be saved, archived for a deploy or downloaded. Close it without saving",
 			req.Group, strings.Join(changed, "; "))
 	}
+	if bad := verifyOBs(req.OBs, s.projectBlocks(), req.Group); len(bad) > 0 {
+		s.foreignChanged = true
+		return nil, fail(http.StatusInternalServerError, tiad.KindOperationFailed,
+			"after the import, %s: this session can no longer be saved, archived for a deploy or downloaded. Close it without saving", strings.Join(bad, "; "))
+	}
+	res.OBs = steps
 	res.Blocks = []tiad.Block{}
 	for _, b := range s.blocks {
 		if owned(s.groups[strings.ToLower(b.Name)], req.Group) {
