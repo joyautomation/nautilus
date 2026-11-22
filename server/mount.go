@@ -2,9 +2,10 @@ package server
 
 import "net/http"
 
-// A Mount adds one group of controller-only routes to the server. cmd/naut
-// lists the groups it wants in Options.Mounts; the browser playground
-// (cmd/naut-wasm) lists none, so the linker drops each group and everything
+// A Mount adds one group of controller-only routes to the server. New
+// installs the controller's groups (mounts_controller.go) and any a caller
+// lists in Options.Mounts; the browser playground (NewPlayground,
+// cmd/naut-wasm) installs none, so the linker drops each group and everything
 // reachable only from it. Handlers stay methods in package server and use
 // s.audited, s.authorize, s.actorOf and writeJSON as the core routes do.
 //

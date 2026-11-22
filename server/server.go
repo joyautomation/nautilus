@@ -429,8 +429,9 @@ type Options struct {
 	// Push turns Web Push on (#722); nil leaves /api/push/* answering 404.
 	Push *PushOptions
 
-	// Mounts are groups of controller-only routes (mount.go), added after the
-	// core routes. cmd/naut lists them; the browser playground lists none.
+	// Mounts are extra groups of routes (mount.go), added after the core routes
+	// and after the controller's own (mounts_controller.go), which New installs
+	// itself; NewPlayground installs none of those.
 	Mounts []Mount
 
 	// Notes is the operator notes and shift log (#720) of a controller on
@@ -710,14 +711,15 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 	return s
 }
 
-// NewPlayground is New without the HTML pages, for the browser playground
-// (cmd/naut-wasm) only: a page answers its message as plain text instead.
-// Not for a controller: there the sign-in page would show no form and an
-// ack link no button, so nobody could sign in or acknowledge from a
-// browser. The playground has no users, OIDC, ack links or redundant pair,
-// so it shows at most the sign-in page's "not set up" notice, and leaving
-// the pages out keeps the template engine, and with it about 900 KB, out
-// of its download (pages.go).
+// NewPlayground is New without the HTML pages and without the controller-only
+// route groups (mounts_controller.go: sign-in and OIDC, push, ack links, the
+// pair's commands, the disk-facing I/O and config routes, IO-Link, the
+// historian), for the browser playground (cmd/naut-wasm) only. Not for a
+// controller: there nobody could sign in, acknowledge from a link or stage a
+// change. The playground has no users, OIDC, ack links, files or redundant
+// pair, and leaving these out keeps the template engine (about 900 KB) and
+// their handlers out of its download (pages.go, mounts_controller.go); a
+// request for one is the API's JSON 404.
 func NewPlayground(rt *runtime.Runtime, opts ...Options) *Server {
 	return newServer(rt, opts...)
 }
