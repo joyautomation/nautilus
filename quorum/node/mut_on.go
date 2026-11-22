@@ -77,6 +77,7 @@ var mutations = []string{
 	"fence_any_name",                 // node: a member takes a fence on any name, the witness's or its own included
 	"dup_answered_before_write",      // node: a clear or fence is answered before its write is durable: a crash then loses what the command reported done
 	"lower_history_peer_synced",      // node: a peer's log at a lower or forked history is one to defer and yield to (#1029 3c-3c-2a)
+	"contacts_part_users",            // node: the alarm contacts' credMAC uses the users part's label, so a users MAC verifies as contacts (#715)
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")

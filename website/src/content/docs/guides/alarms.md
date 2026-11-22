@@ -163,9 +163,37 @@ birth.
 They persist through [retain](/guides/redundancy/) instead, beside the
 operator setpoints, which buys redundancy correctness for free: a standby
 re-reads the retain store on the leadership edge, so a failover cannot
-resurrect four hundred acked alarms as unacked. Only ack and shelf
-persist — active and RTN re-derive from the field, because a retained
-"active" would be a claim about the plant made by a file.
+resurrect four hundred acked alarms as unacked. Ack and shelf persist,
+and so does the **occurrence** of an alarm whose condition is present:
+its ID, when it activated, and when it began waiting on a person. The
+state itself re-derives from the field, because a retained "active"
+would be a claim about the plant made by a file. A kept occurrence
+continues only if the field asserts the condition again; it then keeps
+its activation time and its escalation level, and its ack applies to it
+alone. A false reading ends it (a standalone controller allows a minute
+for drivers that have not read yet, but no ack carries through it), as
+does `enable` going false, and a condition that stays unreadable for two
+minutes (a remote site not yet birthed). A pair carries occurrences
+through its operator-intent log rather than retain; see
+[Redundancy](/guides/redundancy/).
+
+### Occurrences
+
+An occurrence runs from an activation out of normal to the next return
+to normal. A flap between unack-active and unack-rtn is the same
+occurrence: it is one wait on a person, discharged by one ack. Every
+alarm row (`occurrence` on `GET /api/alarms`) and every journal row names
+its occurrence, a 16-character random hex ID that is never reused. An
+ack may name the occurrence the person saw:
+
+```
+POST /api/alarms/ack  {"ids":["TT101_HI"],"by":"op","occurrences":{"TT101_HI":"5f2c09d1e7a4b366"}}
+```
+
+If the alarm returned to normal and activated again since, the ack is
+refused (`409`, "a new occurrence since; open the HMI to see it") and
+nothing is acknowledged. An id the map does not name is acked on
+whatever occurrence it is on, as before.
 
 An edge-side latch reset (`M.FAILRST`, a horn acknowledge) is a different
 thing and stays an ordinary tag write. It is not the same button as
@@ -295,9 +323,14 @@ alarms:
   that loses its lease sends nothing more. A controller that wins the
   lease again with an escalation already under way sends the level now
   due, once, never a burst of the earlier ones; the journal says
-  `joined late`. The escalation clock does not survive a restart or a
-  takeover yet: an alarm still waiting there is a new wait, and starts
-  again at level 1.
+  `joined late`. The escalation clock survives a restart and a takeover
+  for an occurrence the field still asserts: the new leader (or the
+  restarted controller) sends the current level once more, journalled
+  `resend after restart` or `resend after takeover`, and the next level
+  falls due on the original clock. An occurrence that began within one
+  log tick (half a lease) of a leader's death is not carried: the new
+  leader starts it afresh at level 1, which re-pages rather than missing
+  a page.
 - **A roster is read once per level,** when that level falls due. A
   handover after it pages the new person at the next level, never with
   the levels already sent.
@@ -543,10 +576,13 @@ earliest and latest of them: a journal that holds only the last few
 hours (the in-memory ring, or a file that rotated) says so instead of
 reading as a quiet week.
 
-A controller keeps only an alarm's acknowledgement and shelf across a
-restart, so a standing alarm is journalled `active` again when it starts.
-The reports count that as the same occurrence, not a new alarm, so a
-restart neither looks like a flood nor resets a stale alarm's age. To
+Every journal row names its occurrence, and a restart that continues an
+occurrence journals no new `active`, so the reports count each `active`
+row as it comes (a flap through unack-rtn included: that is chattering).
+Rows written before occurrences, by an engine that journalled `active`
+again for a standing alarm at every start, are read the old way: an
+`active` with no `rtn` before it is the same occurrence, so a restart
+neither looks like a flood nor resets a stale alarm's age. To
 recognise an alarm that was already standing when the range began, a
 report also reads the 7 days before `-from`. Flood windows start at
 `-from`. A report exits 0 whatever it finds; use `-o json` to act on

@@ -541,11 +541,124 @@ func TestGateClosedSendsNothing(t *testing.T) {
 	r.gate.Store(true)
 	r.term.Store(2) // it won the lease: a new leadership
 	r.run(time.Second)
-	// It joined 15 minutes in: only the latest due level, not a burst.
+	// It joined 15 minutes in: only the latest due level, not a burst,
+	// journalled as a takeover's resend (its first look as leader).
 	r.wantSent("TT1:2:erin:sms")
 	evs, _ := r.ring.Query(time.Time{}, time.Time{}, alarm.Filter{Kinds: []string{alarm.KindNotify}})
-	if len(evs) != 1 || !strings.HasPrefix(evs[0].Reason, "joined late") {
-		t.Fatalf("journal %+v, want one row with reason joined late", evs)
+	if len(evs) != 1 || evs[0].Reason != ResendTakeover {
+		t.Fatalf("journal %+v, want one row with reason %q", evs, ResendTakeover)
+	}
+}
+
+// restartRig is r's controller restarted after down: a fresh engine that
+// restores r's retained alarms, and a fresh dispatcher, on r's clock.
+func restartRig(t *testing.T, r *rig, down time.Duration, gated bool) *rig {
+	t.Helper()
+	snap := r.eng.Snapshot()
+	n := &rig{t: t, tags: map[string]any{}}
+	n.setNow(r.now.Add(down))
+	for k, v := range r.tags {
+		n.tags[k] = v
+	}
+	n.ring = alarm.NewRing(1000)
+	defs := make([]alarm.Def, 0, 3)
+	for _, rec := range r.eng.Records() {
+		defs = append(defs, rec.Def)
+	}
+	var err error
+	n.eng, err = alarm.New(alarm.Options{Defs: defs, Now: func() time.Time { return *n.clock.Load() },
+		Read: func(p string) (any, bool) { v, ok := n.tags[p]; return v, ok }, Journal: n.ring})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { n.eng.Close() })
+	n.eng.Restore(snap)
+	n.email, n.sms = &Recorder{}, &Recorder{}
+	n.gate.Store(true)
+	n.term.Store(r.term.Load() + 1)
+	o := Options{Config: prepare(t, policy), Engine: n.eng,
+		Channels: map[string]Channel{"email": n.email, "sms": n.sms, "log": LogChannel{}}}
+	if gated {
+		o.Gate, o.Term = n.gate.Load, n.term.Load
+	}
+	n.d, err = New(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(n.d.Close)
+	n.eng.Evaluate()
+	n.d.Tick(n.now)
+	n.d.Drain()
+	return n
+}
+
+// A restart no longer restarts escalation at level 1 (#715 PR 1): the
+// carried occurrence keeps its wait, the current level goes once more,
+// journalled "resend after restart" on that occurrence, and the next
+// level falls due on the original clock.
+func TestRestartResendsTheCurrentLevelOnce(t *testing.T) {
+	r := newRig(t, false)
+	r.set("TT1", true)
+	r.run(15 * time.Minute) // levels 1 (alice, dave) and 2 (erin) sent
+	rec, _ := r.eng.Lookup("TT1")
+	occ := rec.Occurrence
+	if occ == "" {
+		t.Fatal("no occurrence")
+	}
+
+	n := restartRig(t, r, time.Minute, false) // back at 06:16
+	n.run(5 * time.Second)
+	n.wantSent("TT1:2:erin:sms")
+	evs, _ := n.ring.Query(time.Time{}, time.Time{}, alarm.Filter{Kinds: []string{alarm.KindNotify}})
+	if len(evs) != 1 || evs[0].Reason != ResendRestart || evs[0].Occurrence != occ {
+		t.Fatalf("journal %+v, want one row %q on occurrence %s", evs, ResendRestart, occ)
+	}
+	n.run(14 * time.Minute) // past 06:30: level 3 on the original clock, not 15 minutes later
+	n.wantSent("TT1:2:erin:sms", "TT1:3:carol:sms", "TT1:3:carol:email")
+}
+
+// A restart whose clock went back (an RTC with a dead battery, no NTP
+// yet) still pages: the carried wait is never later than now.
+func TestRestartWithTheClockBackStillPages(t *testing.T) {
+	r := newRig(t, false)
+	r.set("TT1", true)
+	r.run(time.Minute)
+	n := restartRig(t, r, -2*time.Hour, false)
+	n.run(5 * time.Second)
+	if got := n.sent(); len(got) == 0 {
+		t.Fatal("a restart with the clock set back paged nobody")
+	}
+}
+
+// After a takeover the same, labelled as a takeover.
+func TestTakeoverResendLabel(t *testing.T) {
+	r := newRig(t, true)
+	r.set("TT1", true)
+	r.run(15 * time.Minute)
+	n := restartRig(t, r, 2*time.Second, true)
+	n.run(2 * time.Second)
+	n.wantSent("TT1:2:erin:sms")
+	evs, _ := n.ring.Query(time.Time{}, time.Time{}, alarm.Filter{Kinds: []string{alarm.KindNotify}})
+	if len(evs) != 1 || evs[0].Reason != ResendTakeover {
+		t.Fatalf("journal %+v, want one row %q", evs, ResendTakeover)
+	}
+}
+
+// A late join that is not a leadership's first look keeps its own reason:
+// the gate closes and opens again within one leadership (the same term),
+// and an alarm that began waiting meanwhile joins late, not as a resend.
+func TestLateJoinOutsideTheFirstLook(t *testing.T) {
+	r := newRig(t, true)
+	r.run(time.Second)
+	r.gate.Store(false)
+	r.set("TT1", true)
+	r.run(15 * time.Minute)
+	r.gate.Store(true) // same term: not a new leadership
+	r.run(2 * time.Second)
+	r.wantSent("TT1:2:erin:sms")
+	evs, _ := r.ring.Query(time.Time{}, time.Time{}, alarm.Filter{Kinds: []string{alarm.KindNotify}})
+	if len(evs) != 1 || evs[0].Reason != joinedLate {
+		t.Fatalf("journal %+v, want one row %q", evs, joinedLate)
 	}
 }
 

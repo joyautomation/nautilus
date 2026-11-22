@@ -61,6 +61,7 @@ ALTER TABLE alarm_events ADD COLUMN IF NOT EXISTS "to" text;
 ALTER TABLE alarm_events ADD COLUMN IF NOT EXISTS via text;
 ALTER TABLE alarm_events ADD COLUMN IF NOT EXISTS result text;
 ALTER TABLE alarm_events ADD COLUMN IF NOT EXISTS reason text;
+ALTER TABLE alarm_events ADD COLUMN IF NOT EXISTS occurrence text;
 CREATE INDEX IF NOT EXISTS alarm_events_site_ts ON alarm_events (site, ts DESC);
 CREATE INDEX IF NOT EXISTS alarm_events_ts ON alarm_events (ts DESC);`
 
@@ -214,8 +215,8 @@ func (j *PGJournal) writer() {
 // trip per few hundred events rather than one per event.
 func (j *PGJournal) insert(batch []Event) error {
 	var b strings.Builder
-	b.WriteString(`INSERT INTO alarm_events (ts, id, name, kind, priority, site, state, "by", level, "to", via, result, reason) VALUES `)
-	const cols = 13
+	b.WriteString(`INSERT INTO alarm_events (ts, id, name, kind, priority, site, state, "by", level, "to", via, result, reason, occurrence) VALUES `)
+	const cols = 14
 	args := make([]any, 0, len(batch)*cols)
 	for i, e := range batch {
 		if i > 0 {
@@ -233,14 +234,14 @@ func (j *PGJournal) insert(batch []Event) error {
 		// state changes reads the table it always did.
 		args = append(args, e.Time().UTC(), e.ID, e.Name, e.Kind,
 			e.Priority.String(), e.Site, e.State, e.By,
-			nullInt(e.Level), nullStr(e.To), nullStr(e.Via), nullStr(e.Result), nullStr(e.Reason))
+			nullInt(e.Level), nullStr(e.To), nullStr(e.Via), nullStr(e.Result), nullStr(e.Reason), nullStr(e.Occurrence))
 	}
 	_, err := j.db.Exec(b.String(), args...)
 	return err
 }
 
 func (j *PGJournal) Query(from, to time.Time, f Filter) ([]Event, error) {
-	q := `SELECT ts, id, name, kind, priority, site, state, "by", level, "to", via, result, reason FROM alarm_events WHERE true`
+	q := `SELECT ts, id, name, kind, priority, site, state, "by", level, "to", via, result, reason, occurrence FROM alarm_events WHERE true`
 	args := []any{}
 	add := func(clause string, v any) {
 		args = append(args, v)
@@ -284,16 +285,17 @@ func (j *PGJournal) Query(from, to time.Time, f Filter) ([]Event, error) {
 			id, kind                            string
 			name, priority, site, state, byUser sql.NullString
 			level                               sql.NullInt64
-			to, via, result, reason             sql.NullString
+			to, via, result, reason, occurrence sql.NullString
 		)
 		if err := rows.Scan(&ts, &id, &name, &kind, &priority, &site, &state, &byUser,
-			&level, &to, &via, &result, &reason); err != nil {
+			&level, &to, &via, &result, &reason, &occurrence); err != nil {
 			return nil, err
 		}
 		e := Event{
 			TS: ts.UnixMilli(), ID: id, Kind: kind,
 			Name: name.String, Site: site.String, State: state.String, By: byUser.String,
 			Level: int(level.Int64), To: to.String, Via: via.String, Result: result.String, Reason: reason.String,
+			Occurrence: occurrence.String,
 		}
 		if p, err := ParsePriority(priority.String); err == nil {
 			e.Priority = p

@@ -10,6 +10,7 @@ import (
 	"testing/fstest"
 	"time"
 
+	"github.com/joyautomation/nautilus/alarm/oncall"
 	"github.com/joyautomation/nautilus/auth/users"
 	"github.com/joyautomation/nautilus/internal/project"
 	"github.com/joyautomation/nautilus/quorum/node"
@@ -83,4 +84,83 @@ func TestPairReportsDifferentUsersFiles(t *testing.T) {
 	dig["b"] = dig["a"]
 	mu.Unlock()
 	pairWait(t, "the condition to clear", 30*time.Second, func() bool { return !strings.Contains(cluster(lead), "users files differ") })
+}
+
+// #715 end to end: a pair whose standby has no alarm contacts file (its
+// digest is zero, the leader's is not) shows "alarm contacts differ from
+// the peer" on /api/cluster, naming the copy; and it is report only: the
+// pair keeps its leader and takes writes meanwhile. Copied, it clears.
+func TestPairReportsDifferentAlarmContacts(t *testing.T) {
+	var mu sync.Mutex
+	dig := map[string][32]byte{"a": {7}, "b": {7}}
+	r := newPairRigFull(t, nil, func(n string, d *pairDeps) {
+		d.creds = func() node.Credentials { mu.Lock(); defer mu.Unlock(); return node.Credentials{Contacts: dig[n]} }
+	})
+	lead := r.leader()
+	stand := "a"
+	if lead == "a" {
+		stand = "b"
+	}
+	mu.Lock()
+	dig[stand] = [32]byte{} // the standby's file is missing
+	mu.Unlock()
+	cluster := func(n string) string { _, body, _ := r.call(n, http.MethodGet, "/api/cluster", ""); return body }
+	pairWait(t, "the contacts condition on /api/cluster", 15*time.Second, func() bool {
+		b := cluster(lead)
+		return strings.Contains(b, "alarm contacts differ from the peer") && strings.Contains(b, "alarm-contacts.json")
+	})
+	if r.leader() != lead {
+		t.Fatal("the leader changed over a contacts mismatch; the check is report only")
+	}
+	r.setTrip(t, lead, true) // a write still goes through
+	mu.Lock()
+	dig[stand] = dig[lead]
+	mu.Unlock()
+	pairWait(t, "the condition to clear", 30*time.Second, func() bool { return !strings.Contains(cluster(lead), "alarm contacts differ") })
+}
+
+// The digest pairCredentials reads for the alarm contacts: none without a
+// paging channel; the files' content under the peer token once there is
+// one, read anew at each hello.
+func TestPairCredentialsDigestAlarmContacts(t *testing.T) {
+	dir := t.TempDir()
+	state := filepath.Join(t.TempDir(), "state")
+	if err := os.MkdirAll(state, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	manifest := "name: contacts\nauth:\n  state-dir: " + state + "\nalarms:\n  defs:\n    - { id: Trip, tag: Trip }\n  channels:\n    email: { smtp: \"mail.example.test:465\", from: n@example.test }\ntags:\n  - { name: Trip, role: state, type: BOOL }\ntasks:\n  - program: main.st\n    scan: 100ms\n"
+	if err := os.WriteFile(filepath.Join(dir, "nautilus.yaml"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "main.st"), []byte("PROGRAM Main\nEND_PROGRAM\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	proj, err := project.Load(os.DirFS(dir), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := func(k string) string {
+		if k == "NAUTILUS_PEER_TOKEN" {
+			return "peer-secret"
+		}
+		return ""
+	}
+	creds := pairCredentials(proj, dir, nil, env)
+	if c := creds(); c.Contacts != ([32]byte{}) || c.ContactsErr != "" {
+		t.Fatalf("no contacts yet: %+v", c)
+	}
+	if err := oncall.UpdateContacts(oncall.ContactsPath(state), "test", func(c *oncall.Contacts) error {
+		c.Contacts["alice"] = &oncall.Contact{Email: "alice@example.test"}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	c := creds()
+	want, _ := oncall.Digest(state, []byte("peer-secret"))
+	if c.ContactsErr != "" || c.Contacts == ([32]byte{}) || c.Contacts != want {
+		t.Fatalf("with a contact: %+v; want the keyed digest", c)
+	}
+	if other, _ := oncall.Digest(state, []byte("another token")); other == want {
+		t.Fatal("the digest does not depend on the peer token")
+	}
 }

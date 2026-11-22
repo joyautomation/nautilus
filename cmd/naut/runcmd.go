@@ -384,6 +384,11 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 			fmt.Fprintln(os.Stderr, "naut run: redundancy:", err)
 			return 1
 		}
+		if alarmLog != nil && alarms.Escalation != nil {
+			// The occurrences a takeover continues (#715): those an
+			// escalation policy covers, so a page goes on at its level.
+			alarmLog.SetOccurrenceMatch(alarms.Escalation.Covers)
+		}
 	}
 
 	// Live I/O configuration (#706): registered before the first scan, so

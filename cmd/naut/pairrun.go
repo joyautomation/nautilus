@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/joyautomation/nautilus/alarm"
+	"github.com/joyautomation/nautilus/alarm/oncall"
 	"github.com/joyautomation/nautilus/audit"
 	"github.com/joyautomation/nautilus/auth/users"
 	"github.com/joyautomation/nautilus/internal/project"
@@ -365,6 +366,8 @@ func (m *pairMember) onEvent(ev node.Event) {
 		m.q.SetCondition("credentials-users", ev.Detail) // "" clears it
 	case node.EventTLSDiffers:
 		m.q.SetCondition("credentials-tls", ev.Detail)
+	case node.EventContactsDiffer:
+		m.q.SetCondition("alarm-contacts", ev.Detail) // report only (#715)
 	case node.EventVouchRefused:
 		m.q.SetCondition("oplog-vouch-refused", ev.Detail)
 	case node.EventYielded:
@@ -397,6 +400,15 @@ func pairCredentials(proj *project.Project, dir string, tlsSrc *server.CertSourc
 	if proj.Auth != nil && proj.Auth.HasUsers() {
 		path, pathErr = usersFile(proj.AuthStateDir, proj.Name, dir, dir != "", getenv)
 	}
+	// The alarm contacts and channel secrets (#715), when a channel pages
+	// people: digested under the peer token (oncall.Digest), so the digest
+	// says nothing about a weak password to anyone without it.
+	var contactsDir string
+	var contactsErr error
+	if proj.Alarms != nil && len(proj.Alarms.Channels.Kinds()) > 0 {
+		contactsDir, contactsErr = controllerStateDir("the alarm contacts", proj.AuthStateDir, proj.Name, dir, dir != "", getenv)
+	}
+	peerKey := []byte(getenv("NAUTILUS_PEER_TOKEN"))
 	return func() node.Credentials {
 		var c node.Credentials
 		switch {
@@ -412,6 +424,17 @@ func pairCredentials(proj *project.Project, dir string, tlsSrc *server.CertSourc
 		}
 		if tlsSrc != nil {
 			c.TLS = tlsSrc.Pin()
+		}
+		switch {
+		case contactsErr != nil:
+			c.ContactsErr = contactsErr.Error()
+		case contactsDir != "":
+			d, err := oncall.Digest(contactsDir, peerKey)
+			if err != nil {
+				c.ContactsErr = err.Error()
+			} else {
+				c.Contacts = d
+			}
 		}
 		return c
 	}
