@@ -891,9 +891,13 @@ func (m *pairMember) rebindLog() {
 	if box == "" {
 		return
 	}
+	before := m.log.LastSeq()
 	if err := m.log.Rebind(m.logPrefix()+box, m.logPlaceholder()); err != nil {
 		slog.Error("redundancy: the operator-intent log can't take this box's identity", "error", err)
 		return
+	}
+	if m.nl != nil && m.log.LastSeq() < before {
+		m.nl.EndSuperseded() // the log started empty in this process: so do its notes
 	}
 	m.logPending.Store(false)
 }

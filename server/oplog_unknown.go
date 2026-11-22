@@ -31,7 +31,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"net/http"
-	"reflect"
 	"slices"
 	"sync"
 	"time"
@@ -211,7 +210,7 @@ func sameProposal(p, c oplog.Entry) bool {
 	return p.Kind == c.Kind && p.Req == c.Req && p.ID == c.ID && p.Tag == c.Tag && p.By == c.By &&
 		p.Until == c.Until && p.GrantedMs == c.GrantedMs && p.AckOnStart == c.AckOnStart &&
 		p.Ref == c.Ref && p.Reason == c.Reason && bytes.Equal(p.Value, c.Value) &&
-		slices.Equal(p.IDs, c.IDs) && slices.Equal(p.Refs, c.Refs) && reflect.DeepEqual(p.Note, c.Note)
+		slices.Equal(p.IDs, c.IDs) && slices.Equal(p.Refs, c.Refs)
 }
 
 // resolution is the journal entry for t's outcome.

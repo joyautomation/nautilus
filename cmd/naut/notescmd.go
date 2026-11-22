@@ -47,25 +47,36 @@ func runNotes(args []string) int {
 // loadNotes reads the notes a state directory holds: the file of a
 // controller on its own, else a pair's log replayed. none says there is
 // neither (a controller that never wrote one).
-func loadNotes(sd string) (all []notes.Note, source string, err error) {
-	file := filepath.Join(sd, NotesFile)
-	if _, serr := os.Stat(file); serr == nil {
-		s, err := notes.Open(file)
+func loadNotes(sd string, stderr io.Writer) (all []notes.Note, source string, err error) {
+	file, logf := filepath.Join(sd, NotesFile), filepath.Join(sd, pairLogFile)
+	fi, ferr := os.Stat(file)
+	li, lerr := os.Stat(logf)
+	// a controller moved from standing alone to a pair has both: the one
+	// written last is the one in use
+	if ferr == nil && lerr == nil {
+		if li.ModTime().After(fi.ModTime()) {
+			ferr = os.ErrNotExist
+			fmt.Fprintf(stderr, "naut notes: %s and %s are both in %s; reading the pair's log, written last (a note written before the move is in the file: export it too)\n", NotesFile, pairLogFile, sd)
+		} else {
+			lerr = os.ErrNotExist
+			fmt.Fprintf(stderr, "naut notes: %s and %s are both in %s; reading the file, written last\n", NotesFile, pairLogFile, sd)
+		}
+	}
+	if ferr == nil {
+		s, err := notes.ReadFile(file) // read-only: a running controller holds the file
 		if err != nil {
 			return nil, "", err
 		}
-		defer s.Close()
 		return s.All(), file, nil
 	}
-	logf := filepath.Join(sd, pairLogFile)
-	if _, serr := os.Stat(logf); serr == nil {
+	if lerr == nil {
 		es, err := oplog.ReadCommitted(logf)
 		if err != nil {
 			return nil, "", err
 		}
 		s, bad := notes.Replay(es)
 		if bad > 0 {
-			fmt.Fprintf(os.Stderr, "naut notes: %d note entries in %s could not be applied (a gap); the rest are shown\n", bad, logf)
+			fmt.Fprintf(stderr, "naut notes: %d note entries in %s could not be applied (a revision that lost a race, a gap, or an entry with no readable body); the rest are shown\n", bad, logf)
 		}
 		return s.All(), logf, nil
 	}
@@ -131,12 +142,18 @@ func notesMain(args []string, load func(dir string) (*project.Manifest, string, 
 		name = m.Name
 		if sd == "" {
 			sd = m.AuthStateDir()
+			// a pair keeps its log where it keeps its voter state
+			if m.Redundancy != nil && m.Redundancy.StateDir != "" {
+				if _, serr := os.Stat(filepath.Join(m.Redundancy.StateDir, pairLogFile)); serr == nil {
+					sd = m.Redundancy.StateDir
+				}
+			}
 		}
 	}
 	if sd, err = controllerStateDir("the operator notes", sd, name, dir, devFallback, getenv); err != nil {
 		return fail(err)
 	}
-	all, source, err := loadNotes(sd)
+	all, source, err := loadNotes(sd, stderr)
 	if err != nil {
 		return fail(err)
 	}
@@ -170,8 +187,8 @@ func notesMain(args []string, load func(dir string) (*project.Manifest, string, 
 				kind = notes.NoteNote
 			}
 			_ = w.Write([]string{
-				r.Note, strconv.Itoa(r.Rev), time.UnixMilli(r.At).UTC().Format(time.RFC3339), r.By, r.Principal,
-				r.Target.Kind, r.Target.ID, r.Target.Occurrence, kind, r.Re, strconv.FormatBool(r.Retract), r.Reason, csvSafe(r.Text),
+				r.Note, strconv.Itoa(r.Rev), time.UnixMilli(r.At).UTC().Format(time.RFC3339), csvSafe(r.By), csvSafe(r.Principal),
+				csvSafe(r.Target.Kind), csvSafe(r.Target.ID), csvSafe(r.Target.Occurrence), kind, csvSafe(r.Re), strconv.FormatBool(r.Retract), csvSafe(r.Reason), csvSafe(r.Text),
 			})
 		}
 	}

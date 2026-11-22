@@ -239,3 +239,83 @@ func TestNewIDIsRandom(t *testing.T) {
 		t.Errorf("%q %q", a, b)
 	}
 }
+
+func TestReasonCheck(t *testing.T) {
+	for _, bad := range []string{"", "  ", strings.Repeat("x", MaxReason+1), "two\nlines", "bell\a", "bad\xff"} {
+		if CheckReason(bad) == nil {
+			t.Errorf("reason %q accepted", bad)
+		}
+	}
+	if CheckReason(strings.Repeat("é", MaxReason)) != nil || CheckReason("wrong plant") != nil {
+		t.Error("a good reason refused")
+	}
+}
+
+// A last line that parsed but has no newline must not share its line with
+// the next append (both would be lost at the next open); a line too long to
+// read is an error, never silently the end of the file.
+func TestFileEndsAreSafe(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "notes.jsonl")
+	line := `{"note":"n1","rev":1,"at":100,"by":"alice","target":{"kind":"log"},"text":"no newline"}`
+	os.WriteFile(path, []byte(line), 0o600)
+	s, err := Open(path)
+	if err != nil || s.Count() != 1 {
+		t.Fatalf("%v %d", err, s.Count())
+	}
+	s.Apply(rev("n2", 1, 200, "after it"))
+	s.Close()
+	s2, err := Open(path)
+	if err != nil || s2.Count() != 2 {
+		t.Fatalf("both notes must survive a reopen: %v, %d notes", err, s2.Count())
+	}
+	s2.Close()
+
+	huge := filepath.Join(t.TempDir(), "huge.jsonl")
+	os.WriteFile(huge, []byte(strings.Repeat("x", 2<<20)+"\n"+line+"\n"), 0o600)
+	if _, err := Open(huge); !errors.Is(err, ErrCorrupt) {
+		t.Errorf("a line too long to read: %v", err)
+	}
+	if _, err := ReadFile(huge); !errors.Is(err, ErrCorrupt) {
+		t.Errorf("ReadFile, a line too long: %v", err)
+	}
+}
+
+// ReadFile never changes a file a running controller holds: not created,
+// not truncated, not rewritten.
+func TestReadFileChangesNothing(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := ReadFile(filepath.Join(dir, "absent.jsonl")); err == nil {
+		t.Error("an absent file was read")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "absent.jsonl")); err == nil {
+		t.Error("ReadFile created the file")
+	}
+	path := filepath.Join(dir, "notes.jsonl")
+	body := `{"note":"n1","rev":1,"at":100,"by":"alice","target":{"kind":"log"},"text":"kept"}` + "\n" + `{"note":"n2","rev":1,"at":2`
+	os.WriteFile(path, []byte(body), 0o600)
+	s, err := ReadFile(path)
+	if err != nil || s.Count() != 1 {
+		t.Fatalf("%v", err)
+	}
+	if b, _ := os.ReadFile(path); string(b) != body {
+		t.Errorf("ReadFile changed the file: %q", b)
+	}
+	// and it is not writable: it keeps nothing
+	if _, err := s.Apply(rev("n3", 1, 300, "x")); err == nil || s.Count() != 1 {
+		// a read-only store has no file handle
+		t.Errorf("a read-only store took a revision: %v, %d notes", err, s.Count())
+	}
+}
+
+func TestBodilessNoteEntryIsLoudInReplay(t *testing.T) {
+	good := Entry(rev("n1", 1, 1, "x"))
+	good.TS = 1
+	bodiless := oplog.Entry{Kind: oplog.KindNote, Seq: 2}
+	if !Missing(bodiless) || Missing(good) || Missing(oplog.Entry{Kind: oplog.KindAck}) {
+		t.Error("Missing")
+	}
+	s, bad := Replay([]oplog.Entry{good, bodiless})
+	if bad != 1 || s.Count() != 1 {
+		t.Errorf("bad %d count %d", bad, s.Count())
+	}
+}

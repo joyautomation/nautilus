@@ -105,12 +105,6 @@ type Entry struct {
 	// runtime applies only the first entry that names it.
 	Req string `json:"req,omitempty"`
 
-	// Note is an operator note's revision (#720): a KindNote entry carries
-	// it and no other kind does. The log only carries it; the notes package
-	// applies it. A replica that predates it drops the field when it
-	// re-marshals the entry, and ignores the kind.
-	Note *NoteEntry `json:"note,omitempty"`
-
 	// Lapsed is set by the node, never stored: this entry is one a
 	// KindLapse entry committed with it names (see KindLapse). Apply sees
 	// it on the entry and records it instead of carrying it out.
@@ -119,9 +113,12 @@ type Entry struct {
 
 // NoteEntry is one revision of an operator note (#720). It is data the log
 // carries for the notes package (docs/design/context-map.md §2): the log
-// decides nothing about it, and a note applied on a copy is never undone
-// by the log. ID and Rev name the revision; the leader's entry TS is its
-// time; the author is the entry's Principal and By.
+// decides nothing about it. The entry carries it as JSON in Value, the one
+// field every build keeps and replicates verbatim, so a replica from before
+// notes stores and sends the body intact (a new field would be dropped by
+// its typed re-marshal) and indexes the notes when it is upgraded and
+// replays. ID and Rev name the revision; the leader's entry TS is its time;
+// the author is the entry's Principal and By.
 type NoteEntry struct {
 	ID  string `json:"id"`  // the note, chosen by the proposer (random)
 	Rev int    `json:"rev"` // 1 is the note itself, 2... its revisions
@@ -144,6 +141,24 @@ type NoteEntry struct {
 	// proposer checked (a label, like Principal: apply decides nothing
 	// from it).
 	Override bool `json:"override,omitempty"`
+}
+
+// NoteEntryOf is the log entry that carries n, by the person named by.
+func NoteEntryOf(by string, n NoteEntry) Entry {
+	b, _ := json.Marshal(n)
+	return Entry{Kind: KindNote, By: by, Value: b}
+}
+
+// NoteBody is the note a KindNote entry carries. ok is false for another
+// kind and for an entry whose body is missing or is not a note.
+func (e Entry) NoteBody() (n NoteEntry, ok bool) {
+	if e.Kind != KindNote || len(e.Value) == 0 {
+		return NoteEntry{}, false
+	}
+	if json.Unmarshal(e.Value, &n) != nil || n.ID == "" || n.Rev < 1 {
+		return NoteEntry{}, false
+	}
+	return n, true
 }
 
 func (e Entry) same(o Entry) bool {

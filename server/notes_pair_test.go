@@ -97,7 +97,7 @@ func TestNotesOnAPairAreOnBothControllers(t *testing.T) {
 	// the witness (the third replica) holds the text too: it stores whole entries
 	var held bool
 	for _, e := range np.nodes[2].After(0) {
-		if e.Kind == oplog.KindNote && e.Note != nil && e.Note.Text == "bearing noise" {
+		if b, ok := e.NoteBody(); ok && b.Text == "bearing noise" {
 			held = true
 		}
 	}
@@ -183,5 +183,40 @@ func TestNotesLogHandsOtherKindsOn(t *testing.T) {
 	// a malformed note entry (no body) is taken and ignored, not passed on
 	if done, _ := nl.Apply(oplog.Entry{Kind: oplog.KindNote}); !done {
 		t.Error("a bodiless note entry was handed on")
+	}
+}
+
+// Two changes to one note proposed together both commit in the log, and the
+// second applies nowhere (its revision number is taken). The loser is told
+// so: not 200, and not journalled as done.
+func TestAConcurrentRevisionThatLostIsNotAnswered200(t *testing.T) {
+	np := newNotesPair(t)
+	rec := tokPost(t, np.srvs[0], "/api/notes", `{"target":{"kind":"log"},"text":"original"}`)
+	var v noteView
+	json.Unmarshal(rec.Body.Bytes(), &v)
+	propose := func(text string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("POST", "http://localhost/api/notes/x/revise", nil)
+		r.Header.Set("Authorization", "Bearer tok")
+		// both writers read revision 1 and propose revision 2
+		np.srvs[0].writeNote(w, r, notes.Revision{Note: v.ID, Rev: 2, By: "token", Principal: "token",
+			Target: notes.Target{Kind: notes.KindLog}, Text: text}, http.StatusOK)
+		return w
+	}
+	first, second := propose("first writer"), propose("second writer")
+	if first.Code != http.StatusOK {
+		t.Fatalf("the first: %d %s", first.Code, first.Body)
+	}
+	if second.Code != http.StatusConflict {
+		t.Fatalf("the loser got %d %s, want 409", second.Code, second.Body)
+	}
+	n, _ := np.nls[0].Store().Get(v.ID)
+	if len(n.Revisions) != 2 || n.Latest().Text != "first writer" {
+		t.Errorf("%+v", n.Revisions)
+	}
+	// replay agrees: the same entries applied in order give the same note
+	rs, bad := notes.Replay(np.nodes[0].After(0))
+	if got, _ := rs.Get(v.ID); bad != 1 || len(got.Revisions) != 2 || got.Latest().Text != "first writer" {
+		t.Errorf("replay: bad %d, %+v", bad, got.Revisions)
 	}
 }

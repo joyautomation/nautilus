@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -65,8 +66,9 @@ func (l *NotesLog) tell(e oplog.Entry) {
 
 // Apply takes a committed entry if it is a note, and reports whether it was
 // (an Applier composed of several hands the others on). A build from before
-// notes falls through on the kind and keeps the entry in its log, so it
-// indexes them when it is upgraded and replays.
+// notes falls through on the kind and keeps the entry whole in its log (the
+// body travels in Value, which it preserves), so it indexes the notes when
+// it is upgraded and replays.
 func (l *NotesLog) Apply(e oplog.Entry) (bool, error) {
 	if e.Kind != oplog.KindNote {
 		return false, nil
@@ -74,7 +76,8 @@ func (l *NotesLog) Apply(e oplog.Entry) (bool, error) {
 	defer l.tell(e)
 	r, ok := notes.FromEntry(e)
 	if !ok {
-		return true, nil
+		// a note entry with no readable note is loud, not skipped
+		return true, fmt.Errorf("note entry %d carries no readable note (written by a build that dropped its body?)", e.Seq)
 	}
 	_, err := l.store.Apply(r)
 	return true, err
@@ -146,6 +149,10 @@ type notesAnswer struct {
 	Notes []noteView `json:"notes"`
 }
 
+// noteClockSkewMs is how far ahead of this controller's clock a note's
+// stamp may be and still count as just written.
+const noteClockSkewMs = 5 * 60 * 1000
+
 // notesStore is the store this server reads and writes: the pair's index,
 // else the file's; nil when notes are not on.
 func (s *Server) notesStore() *notes.Store {
@@ -204,8 +211,9 @@ func (s *Server) noteScope(r *http.Request, t notes.Target) (int, string) {
 	case notes.KindTag:
 		scope = t.ID
 	case notes.KindAlarm:
+		scope = auth.All // an alarm with no tag, or one since removed, is whole-controller (as acknowledging it is)
 		if s.alarms != nil {
-			if rec, ok := s.alarms.Lookup(t.ID); ok {
+			if rec, ok := s.alarms.Lookup(t.ID); ok && rec.Tag != "" {
 				scope = rec.Tag
 			}
 		}
@@ -296,6 +304,15 @@ func (s *Server) handleNoteAdd(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, code, map[string]string{"error": msg})
 		return
 	}
+	if req.Re != "" {
+		// an addendum is about its note too: writing on the note's target is
+		// the permission, naming another target does not get around it
+		orig, _ := s.notesStore().Get(req.Re)
+		if code, msg := s.noteScope(r, orig.First().Target); code != 0 {
+			writeJSON(w, code, map[string]string{"error": msg})
+			return
+		}
+	}
 	rev := notes.Revision{
 		Note: notes.NewID(), Rev: 1, By: noteAuthor(pr.String()), Principal: pr.String(),
 		Target: t, Kind: req.Kind, Re: req.Re, Text: req.Text,
@@ -347,7 +364,12 @@ func (s *Server) reviseOrRetract(w http.ResponseWriter, r *http.Request, retract
 		return
 	}
 	author := f.Principal == pr.String()
-	within := s.notesNow().UnixMilli()-f.At <= notes.EditWindowMs
+	// An hour from the first revision, by the clock that stamped it: a stamp
+	// ahead of this controller's clock by more than a little (a bad clock,
+	// a failover between controllers whose clocks differ) is not inside it,
+	// so a window never stretches to hours.
+	age := s.notesNow().UnixMilli() - f.At
+	within := age <= notes.EditWindowMs && age >= -noteClockSkewMs
 	override := false
 	switch {
 	case author && within:
@@ -370,8 +392,8 @@ func (s *Server) reviseOrRetract(w http.ResponseWriter, r *http.Request, retract
 		Target: f.Target, Kind: f.Kind, Re: f.Re,
 	}
 	if retract {
-		if strings.TrimSpace(req.Reason) == "" || len(req.Reason) > notes.MaxReason {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "a retraction needs a reason (at most " + strconv.Itoa(notes.MaxReason) + " characters)"})
+		if err := notes.CheckReason(req.Reason); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
 		rev.Retract, rev.Reason, rev.Override = true, req.Reason, override
@@ -409,6 +431,16 @@ func (s *Server) writeNote(w http.ResponseWriter, r *http.Request, rev notes.Rev
 	defer cancel()
 	if _, err := s.proposeFor(ctx, r, notes.Entry(rev), true, s.notesLog.node.Propose); err != nil {
 		noteUnknown(w, err, rev.Note)
+		return
+	}
+	// The log ordered this proposal and every copy applies it, unless an
+	// earlier one took its revision number (two changes to one note proposed
+	// together: both commit, the second applies nowhere). Say so: it was not
+	// kept.
+	if n, ok := s.notesStore().Get(rev.Note); !ok || len(n.Revisions) < rev.Rev ||
+		n.Revisions[rev.Rev-1].Principal != s.principal(r) || n.Revisions[rev.Rev-1].Text != rev.Text ||
+		n.Revisions[rev.Rev-1].Retract != rev.Retract {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "the note changed while you were saving: your change was not applied; reload it and try again"})
 		return
 	}
 	s.noteAnswer(w, rev.Note, okCode)
@@ -513,6 +545,9 @@ func noteAddTarget(_ *http.Request, body []byte) auditTarget {
 	t := req.Target.Kind
 	if req.Target.ID != "" {
 		t += ":" + req.Target.ID
+	}
+	if t == "" && req.Re != "" {
+		t = "re:" + req.Re // an addendum that names no target of its own
 	}
 	return auditTarget{target: t, answered: noteAfter}
 }

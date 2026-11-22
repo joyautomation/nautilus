@@ -336,3 +336,96 @@ func TestNoteReadNeedsReadWriteNeedsNote(t *testing.T) {
 
 // mustNoteStore is a store for the audit table's token server.
 func mustNoteStore() *notes.Store { return notes.New() }
+
+// Naming another target does not get around the permission: an addendum is
+// about its note too, so an operator over one area cannot attach one to a
+// note about another area's tag by naming the shift log.
+func TestNoteAddendumNeedsTheNotesTargetToo(t *testing.T) {
+	rig := newNoteRig(t)
+	other := rig.add(t, "akhan", `{"target":{"kind":"tag","id":"Out"},"text":"outside jsmith's area"}`)
+	for name, body := range map[string]string{
+		"no target of its own":    `{"re":"` + other.ID + `","text":"x"}`,
+		"naming the shift log":    `{"re":"` + other.ID + `","target":{"kind":"log"},"text":"x"}`,
+		"naming his own area tag": `{"re":"` + other.ID + `","target":{"kind":"tag","id":"SP"},"text":"x"}`,
+	} {
+		if rec := rig.post(t, "jsmith", "/api/notes", body); rec.Code != http.StatusForbidden {
+			t.Errorf("%s: %d %s, want 403", name, rec.Code, rec.Body)
+		}
+	}
+	if rig.store.Count() != 1 {
+		t.Errorf("%d notes", rig.store.Count())
+	}
+}
+
+// An alarm since removed (or with no tag) is whole-controller, as
+// acknowledging it is: an area-limited operator does not get the any-area
+// branch.
+func TestNoteOnAnAlarmThatIsGoneNeedsAWholeControllerGrant(t *testing.T) {
+	rig := newNoteRig(t)
+	seed := func(by string) {
+		rig.store.Apply(notes.Revision{Note: "gone-" + by, Rev: 1, At: rig.now.UnixMilli(), By: by, Principal: "user:" + by,
+			Target: notes.Target{Kind: notes.KindAlarm, ID: "Removed"}, Text: "about an alarm since removed"})
+	}
+	seed("jsmith")
+	b, _ := json.Marshal(map[string]string{"text": "revised"})
+	if rec := rig.post(t, "jsmith", "/api/notes/gone-jsmith/revise", string(b)); rec.Code != http.StatusForbidden {
+		t.Errorf("an area-limited author: %d %s", rec.Code, rec.Body)
+	}
+	seed("akhan")
+	if rec := rig.post(t, "akhan", "/api/notes/gone-akhan/revise", string(b)); rec.Code != http.StatusOK {
+		t.Errorf("a whole-controller author: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// The hour is an hour from the stamp by the clock that made it: a stamp
+// ahead of this controller's clock by more than a few minutes (a bad clock,
+// a failover between controllers whose clocks differ) is outside it, not
+// open for ever.
+func TestNoteWindowDoesNotStretchWithAFutureStamp(t *testing.T) {
+	rig := newNoteRig(t)
+	at := func(d time.Duration) string {
+		id := notes.NewID()
+		rig.store.Apply(notes.Revision{Note: id, Rev: 1, At: rig.now.Add(d).UnixMilli(), By: "jsmith", Principal: "user:jsmith",
+			Target: notes.Target{Kind: notes.KindLog}, Text: "stamped by another clock"})
+		return id
+	}
+	b, _ := json.Marshal(map[string]string{"text": "revised"})
+	for d, want := range map[time.Duration]int{
+		-30 * time.Minute: http.StatusOK,        // half an hour ago
+		2 * time.Minute:   http.StatusOK,        // a little ahead: skew
+		2 * time.Hour:     http.StatusForbidden, // two hours ahead
+		24 * time.Hour:    http.StatusForbidden,
+		-2 * time.Hour:    http.StatusForbidden, // two hours ago
+	} {
+		if rec := rig.post(t, "jsmith", "/api/notes/"+at(d)+"/revise", string(b)); rec.Code != want {
+			t.Errorf("stamped %v from now: %d %s, want %d", d, rec.Code, rec.Body, want)
+		}
+	}
+}
+
+func TestNoteRetractReasonIsOneLine(t *testing.T) {
+	rig := newNoteRig(t)
+	v := rig.add(t, "jsmith", logNote)
+	for _, reason := range []string{"two\nlines", strings.Repeat("x", notes.MaxReason+1), "bell\a"} {
+		b, _ := json.Marshal(map[string]string{"reason": reason})
+		if rec := rig.post(t, "jsmith", "/api/notes/"+v.ID+"/retract", string(b)); rec.Code != http.StatusBadRequest {
+			t.Errorf("reason %q: %d", reason[:min(len(reason), 12)], rec.Code)
+		}
+	}
+}
+
+// An addendum that names no target is journalled by the note it answers.
+func TestNoteAddendumIsJournalledByItsNote(t *testing.T) {
+	rig := newNoteRig(t)
+	v := rig.add(t, "jsmith", logNote)
+	rig.add(t, "akhan", `{"re":"`+v.ID+`","text":"maintenance replaced it"}`)
+	var found bool
+	for _, e := range rig.srv.audit.ring.Recent() {
+		if e.Action == "note.add" && e.Result == audit.ResultOK && e.Target == "re:"+v.ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no note.add entry targeting re:%s: %s", v.ID, journalText(rig.srv))
+	}
+}

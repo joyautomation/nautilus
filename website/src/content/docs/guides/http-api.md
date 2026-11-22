@@ -1446,6 +1446,25 @@ the push service's host, never the endpoint or the keys, and no route
 returns them. A subscribe answers only once the retain store holds the
 row; on a standby it is refused (use the leader's address).
 
+## Operator notes
+
+Notes about an asset, a tag, an alarm, an area or the plant, and the shift
+log: see [Operator notes and the shift log](/guides/notes/). Writes need the
+`note` permission and are journalled (`note.add`, `note.revise`,
+`note.retract`, with the text); reads need `read`.
+
+| Route | Does |
+|---|---|
+| `POST /api/notes` | `{target:{kind,id,occurrence?,activeMs?}, text, kind?, re?}`: 201 with the note |
+| `POST /api/notes/{id}/revise` | `{text}`: its author, within an hour |
+| `POST /api/notes/{id}/retract` | `{reason}`: its author within the hour, or a holder of `audit` any time |
+| `GET /api/notes` | `?target=&id=&occurrence=&kind=&author=&since=&until=&limit=&retracted=1` |
+| `GET /api/notes/{id}` | the note, with `history` (every revision) |
+
+A pair refuses a write when it cannot count a majority (503, `X-Nautilus-Outcome:
+refused`, the log's reason) and says `unknown` (503, with the note's id) when a
+proposal is not confirmed; a lost race is 409.
+
 ## Audit journal
 
 Every request to a route above that changes something (`POST /api/tags`,

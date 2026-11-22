@@ -46,11 +46,13 @@ The permission is `note` (the `operator` role and everything above it hold it;
 `viewer` does not). Reading notes is `read`. Like `write` and `ack`, `note` is
 limited by **areas**: a note about a tag, or about an alarm, needs the permission
 for that tag (an alarm's tag, for an alarm). A note on the shift log, an asset or an
-area needs it anywhere.
+area needs it anywhere. An alarm that has no tag, or that was removed since, needs a
+grant that covers the whole controller (as acknowledging it does), and an addendum needs
+the permission for the note's target as well as for the one it names.
 
 The author is the person signed in, never a field of the request. A
 **service token may add** a note (an integration posting *batch 7 started*)
-and may not revise or retract one.
+and may not revise or retract one. A personal access token acts as its person.
 
 ## Changing a note
 
@@ -65,6 +67,11 @@ and may not revise or retract one.
   and that it was not the author's.
 - A retracted note is hidden from the list unless you ask (`?retracted=1`), and
   cannot be changed again. Its text is in the history.
+- **Two changes at once**: if two people change one note at the same moment, the
+  first is kept and the second is answered **409** ("the note changed while you
+  were saving"), so nobody is told a change was made that was not. On a pair
+  the log commits both and applies only the first; `naut notes export` counts the
+  other as an entry that could not be applied.
 
 A note of at most 4096 characters, plain text (a newline and a tab are the only
 control characters): nothing renders it as markup.
@@ -111,5 +118,10 @@ starts with `=`, `+`, `-` or `@` is quoted so a spreadsheet does not run it.
   the notes only it held leave the live view with the rest of that history: the
   notes on a pair are exactly its log's. `naut redundancy vouch` prints what
   would be lost before it does.
+- **Upgrading a pair**: a controller or witness from before notes stores and
+  replicates a note entry whole (the note travels in a field it keeps), so a
+  rolling upgrade loses no note text, and the notes appear on a copy once it is
+  upgraded and replays. It shows none until then, and cannot be asked to
+  revise one.
 - **From a controller on its own to a pair**: the notes file is not carried over
   by the pair's log. Export it first (`naut notes export`).

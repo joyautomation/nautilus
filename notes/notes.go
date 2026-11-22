@@ -154,6 +154,21 @@ func CheckText(t string) error {
 	return nil
 }
 
+// CheckReason refuses a retraction's reason that is empty, over MaxReason
+// characters or holds a control character.
+func CheckReason(t string) error {
+	if strings.TrimSpace(t) == "" {
+		return errors.New("a retraction needs a reason")
+	}
+	if utf8.RuneCountInString(t) > MaxReason {
+		return fmt.Errorf("a reason is at most %d characters", MaxReason)
+	}
+	if !utf8.ValidString(t) || strings.ContainsFunc(t, func(r rune) bool { return r < ' ' || r == 0x7f }) {
+		return errors.New("a reason is one line of plain text")
+	}
+	return nil
+}
+
 // CheckTarget refuses a malformed target (not whether it exists: the
 // manifest decides that).
 func CheckTarget(t Target) error {
@@ -186,6 +201,7 @@ func CheckTarget(t Target) error {
 // for keeping.
 type Store struct {
 	path string // "": the pair's index, kept by the log
+	off  int64  // the file's length after the last whole revision
 
 	mu    sync.Mutex
 	f     *os.File
@@ -220,6 +236,12 @@ func Open(path string) (*Store, error) {
 			return nil, fmt.Errorf("%w: %s: %v", ErrCorrupt, path, err)
 		}
 	}
+	if err := sc.Err(); err != nil {
+		return nil, fmt.Errorf("%w: %s: %v", ErrCorrupt, path, err) // never silently drop what follows a line it cannot read
+	}
+	if good > len(data) {
+		good = len(data) // the last line had no newline to count
+	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
@@ -230,11 +252,54 @@ func Open(path string) (*Store, error) {
 			return nil, err
 		}
 	}
-	if _, err := f.Seek(0, io.SeekEnd); err != nil {
+	end, err := f.Seek(0, io.SeekEnd)
+	if err != nil {
 		f.Close()
 		return nil, err
 	}
-	s.f = f
+	// a last line that parsed but has no newline would share its line with
+	// the next append, and both would be lost at the next open
+	if end > 0 && (good == 0 || data[good-1] != '\n') {
+		if _, err := f.Write([]byte{'\n'}); err != nil {
+			f.Close()
+			return nil, err
+		}
+		end++
+	}
+	s.f, s.off = f, end
+	return s, nil
+}
+
+// ReadFile reads a notes file without changing it: not created, not
+// truncated, not held open. A tool that reads a controller's file while it
+// runs (naut notes export) uses it, never Open.
+func ReadFile(path string) (*Store, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	s := &Store{path: path, notes: map[string]*Note{}}
+	sc := bufio.NewScanner(bytes.NewReader(data))
+	sc.Buffer(make([]byte, 1<<20), 1<<20)
+	good := 0
+	for sc.Scan() {
+		line := sc.Bytes()
+		var r Revision
+		if err := json.Unmarshal(line, &r); err != nil {
+			rest := data[good:]
+			if i := bytes.IndexByte(rest, '\n'); i >= 0 && len(bytes.TrimSpace(rest[i+1:])) > 0 {
+				return nil, fmt.Errorf("%w: %s: line %q is not a revision, and more follows it", ErrCorrupt, path, trunc(string(line), 60))
+			}
+			break
+		}
+		good += len(line) + 1
+		if _, err := s.insertLocked(r); err != nil && !errors.Is(err, errSeen) {
+			return nil, fmt.Errorf("%w: %s: %v", ErrCorrupt, path, err)
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return nil, fmt.Errorf("%w: %s: %v", ErrCorrupt, path, err)
+	}
 	return s, nil
 }
 
@@ -340,12 +405,24 @@ func (s *Store) Apply(r Revision) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		if _, err := s.f.Write(append(line, '\n')); err != nil {
+		line = append(line, '\n')
+		// a write that fails part way (a full disk) or a sync that fails must
+		// not leave half a line, or a line that was answered "not kept", for
+		// the next append to glue onto or contradict: back to the last whole
+		// revision, then the error
+		rollback := func() {
+			_ = s.f.Truncate(s.off)
+			_, _ = s.f.Seek(s.off, io.SeekStart)
+		}
+		if _, err := s.f.Write(line); err != nil {
+			rollback()
 			return false, err
 		}
 		if err := s.f.Sync(); err != nil {
+			rollback()
 			return false, err
 		}
+		s.off += int64(len(line))
 	}
 	if _, err := s.insertLocked(r); err != nil {
 		return false, err // unreachable after the checks above

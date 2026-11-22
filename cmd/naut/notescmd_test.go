@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/joyautomation/nautilus/internal/project"
 	"github.com/joyautomation/nautilus/notes"
@@ -102,5 +103,69 @@ func TestNotesExportWithNothingWritten(t *testing.T) {
 	}
 	if _, _, code := notesExport(t, t.TempDir(), "list"); code != 2 {
 		t.Errorf("an unknown subcommand: %d", code)
+	}
+}
+
+// Every free-text column is quoted, not only the text: a reason or an
+// asset id that starts with = would otherwise run in a spreadsheet.
+func TestNotesCSVQuotesEveryFreeTextColumn(t *testing.T) {
+	sd := t.TempDir()
+	s, _ := notes.Open(filepath.Join(sd, NotesFile))
+	r := rv("n1", 1, 1700000000000, "text")
+	r.Target = notes.Target{Kind: notes.KindAsset, ID: "=cmd|' /C calc'!A0"}
+	r.By = "+evil"
+	s.Apply(r)
+	r2 := rv("n1", 2, 1700000100000, "text")
+	r2.Target, r2.Retract, r2.Reason = r.Target, true, "@SUM(1+1)"
+	r2.By = "-evil"
+	s.Apply(r2)
+	s.Close()
+	out, _, _ := notesExport(t, sd, "--format", "csv")
+	rows, _ := csv.NewReader(strings.NewReader(out)).ReadAll()
+	for _, row := range rows[1:] {
+		for i, cell := range row {
+			if cell != "" && strings.ContainsRune("=+-@", rune(cell[0])) {
+				t.Errorf("column %s starts with %q: %q", rows[0][i], cell[0], cell)
+			}
+		}
+	}
+	if rows[1][6] != "'=cmd|' /C calc'!A0" || rows[2][11] != "'@SUM(1+1)" || rows[2][3] != "'-evil" {
+		t.Errorf("%v / %v", rows[1], rows[2])
+	}
+}
+
+// With a file and a pair's log both in the directory (a controller moved
+// from alone to a pair), the one written last is read, and it is said.
+func TestNotesExportReadsTheOneWrittenLast(t *testing.T) {
+	sd := t.TempDir()
+	s, _ := notes.Open(filepath.Join(sd, NotesFile))
+	s.Apply(rv("old", 1, 1000, "from before the pair"))
+	s.Close()
+	e := notes.Entry(rv("new", 1, 2000, "from the pair"))
+	e.Seq, e.Term, e.TS = 1, 1, 2000
+	b, _ := json.Marshal(map[string]any{"e": e})
+	c, _ := json.Marshal(map[string]any{"c": 1})
+	logf := filepath.Join(sd, pairLogFile)
+	os.WriteFile(logf, []byte(string(b)+"\n"+string(c)+"\n"), 0o600)
+	future := time.Now().Add(time.Hour)
+	os.Chtimes(logf, future, future)
+	out, errs, code := notesExport(t, sd)
+	if code != 0 || !strings.Contains(out, "from the pair") || strings.Contains(out, "from before the pair") || !strings.Contains(errs, "both") {
+		t.Errorf("%d %s / %s", code, out, errs)
+	}
+}
+
+// Exporting a file a running controller holds changes nothing in it (a torn
+// last line is not cut, nothing is created or rewritten).
+func TestNotesExportIsReadOnly(t *testing.T) {
+	sd := t.TempDir()
+	path := filepath.Join(sd, NotesFile)
+	body := `{"note":"n1","rev":1,"at":100,"by":"alice","target":{"kind":"log"},"text":"kept"}` + "\n" + `{"note":"n2","rev":1,"at":2`
+	os.WriteFile(path, []byte(body), 0o600)
+	before, _ := os.Stat(path)
+	out, _, code := notesExport(t, sd)
+	after, _ := os.Stat(path)
+	if b, _ := os.ReadFile(path); code != 0 || string(b) != body || !after.ModTime().Equal(before.ModTime()) || !strings.Contains(out, "kept") {
+		t.Errorf("code %d, file %q", code, b)
 	}
 }

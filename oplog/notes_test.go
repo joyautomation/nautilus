@@ -1,6 +1,7 @@
 package oplog
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -23,13 +24,11 @@ func TestEveryNoteComesBackToAWipedReplica(t *testing.T) {
 		if i%10 == 0 {
 			text = long
 		}
-		if _, err := tr.nodes[0].Propose(tr.ctx(), Entry{Kind: KindNote, By: "alice", Principal: "user:alice",
-			Note: &NoteEntry{ID: id, Rev: 1, TargetKind: "log", Text: text}}); err != nil {
+		if _, err := tr.nodes[0].Propose(tr.ctx(), withPrincipal(NoteEntryOf("alice", NoteEntry{ID: id, Rev: 1, TargetKind: "log", Text: text}))); err != nil {
 			t.Fatalf("note %d: %v", i, err)
 		}
 		if i%3 == 0 { // a revision and an acknowledgement between
-			if _, err := tr.nodes[0].Propose(tr.ctx(), Entry{Kind: KindNote, By: "alice", Principal: "user:alice",
-				Note: &NoteEntry{ID: id, Rev: 2, TargetKind: "log", Text: text + " (edited)"}}); err != nil {
+			if _, err := tr.nodes[0].Propose(tr.ctx(), withPrincipal(NoteEntryOf("alice", NoteEntry{ID: id, Rev: 2, TargetKind: "log", Text: text + " (edited)"}))); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := tr.propose(0, fmt.Sprintf("ack-%d", i)); err != nil {
@@ -59,8 +58,10 @@ func TestEveryNoteComesBackToAWipedReplica(t *testing.T) {
 			t.Fatalf("replica %d holds %d note entries after rejoining, want %d (the whole history, not a tail)", i, len(got), len(want))
 		}
 		for k := range want {
-			if *got[k].Note != *want[k].Note || got[k].Principal != want[k].Principal {
-				t.Fatalf("replica %d entry %d differs: %+v vs %+v", i, k, got[k].Note, want[k].Note)
+			g, _ := got[k].NoteBody()
+			w, _ := want[k].NoteBody()
+			if g != w || got[k].Principal != want[k].Principal {
+				t.Fatalf("replica %d entry %d differs: %+v vs %+v", i, k, g, w)
 			}
 		}
 		if n := len(noteEntries(tr.applied[i])); n != len(want) {
@@ -77,9 +78,70 @@ func TestEveryNoteComesBackToAWipedReplica(t *testing.T) {
 func noteEntries(es []Entry) []Entry {
 	var out []Entry
 	for _, e := range es {
-		if e.Kind == KindNote && e.Note != nil {
+		if _, ok := e.NoteBody(); ok {
 			out = append(out, e)
 		}
 	}
 	return out
+}
+
+func withPrincipal(e Entry) Entry {
+	e.Principal = "user:alice"
+	return e
+}
+
+// legacyEntry is Entry as a build from before notes had it: it knows the
+// substitute fields, among them Value, and not a note's. A replica of that
+// build decodes the replicated entries into it and writes them back out.
+type legacyEntry struct {
+	Seq       uint64          `json:"seq"`
+	Term      uint64          `json:"term"`
+	TS        int64           `json:"ts"`
+	Kind      string          `json:"kind"`
+	IDs       []string        `json:"ids,omitempty"`
+	ID        string          `json:"id,omitempty"`
+	Until     int64           `json:"until,omitempty"`
+	By        string          `json:"by"`
+	Origin    string          `json:"origin,omitempty"`
+	Principal string          `json:"principal,omitempty"`
+	Tag       string          `json:"tag,omitempty"`
+	Value     json.RawMessage `json:"value,omitempty"`
+	GrantedMs int64           `json:"grantedMs,omitempty"`
+	Ref       uint64          `json:"ref,omitempty"`
+	Refs      []uint64        `json:"refs,omitempty"`
+	Reason    string          `json:"reason,omitempty"`
+	Req       string          `json:"req,omitempty"`
+}
+
+// A replica from before notes stores and sends a note entry whole: the
+// body travels in Value, a field it preserves, so a rolling upgrade, a
+// failover to an old controller, or a witness not yet upgraded loses no
+// note text (a field it did not know would be dropped by its typed
+// re-marshal, for good).
+func TestAnOlderReplicaKeepsANoteEntryWhole(t *testing.T) {
+	e := withPrincipal(NoteEntryOf("alice", NoteEntry{ID: "n1", Rev: 2, TargetKind: "alarm", TargetID: "HiTemp", Occurrence: "00ff", Text: "bearing, \"checked\"", Re: "n0"}))
+	e.Seq, e.Term, e.TS, e.Origin = 7, 1, 1700000000000, "http://a"
+	wire, _ := json.Marshal(e)
+	var old legacyEntry
+	if err := json.Unmarshal(wire, &old); err != nil {
+		t.Fatal(err)
+	}
+	stored, _ := json.Marshal(old) // what the old replica writes and sends on
+	var back Entry
+	if err := json.Unmarshal(stored, &back); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := back.NoteBody()
+	want, _ := e.NoteBody()
+	if !ok || got != want {
+		t.Fatalf("the body came back as %+v (ok %v), want %+v", got, ok, want)
+	}
+	if back.Principal != "user:alice" || back.Seq != 7 {
+		t.Errorf("%+v", back)
+	}
+	// and an entry that lost its body is not a note: the notes say so loudly
+	back.Value = nil
+	if _, ok := back.NoteBody(); ok {
+		t.Error("a bodiless note entry reads as a note")
+	}
 }
