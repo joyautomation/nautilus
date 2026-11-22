@@ -425,6 +425,88 @@ naut alarms escalation .                            # alarms covered, per policy
 naut alarms escalation -id LSHH101 -at "2026-11-23 06:55" .   # the steps one alarm would page
 ```
 
+## Rationalization and performance
+
+ISA-18.2 asks for every alarm to be **rationalized**: someone decides
+what happens if nobody responds (the consequence), what the operator does
+about it (the response), and whether its priority is right, and the
+answers are kept in a *master alarm database*. In nautilus those columns
+live on the definition itself, so they are reviewed in Git with the rest
+of the project:
+
+```yaml
+defs:
+  - tag: LSHH101
+    name: Wet-well high-high (LSHH-101)
+    priority: critical
+    consequence: Wet well overflows to the street within about 20 minutes
+    response: Confirm both pumps are running; call out the on-call technician
+    rationalization: { state: approved, by: alice, at: 2026-11-20 }
+```
+
+`state:` is `pending` (the default, so an alarm that says nothing is
+pending), `reviewed` or `approved`; a reviewed or approved alarm needs
+`by:` and `at:` (the day, `YYYY-MM-DD`), and `naut check` refuses one
+without them. A rule takes the same three keys and copies them to every
+alarm it generates, so rationalizing a UDT's high-high once covers each
+instance. `consequence:` and `response:` are plain text, not templates.
+
+The master itself is a flat table a rationalization team can review in a
+spreadsheet, exported from the manifest and checked back against it:
+
+```sh
+naut alarms master export . -f master.csv     # one row per alarm, sorted by id
+naut alarms master check  . -f master.csv     # exit 1 if anything differs
+```
+
+Each row carries the alarm's id, name, condition, priority, class, site,
+area, consequence, response and review state, and a `source` column that
+says where the alarm is declared (the manifest, an alarm file, or the
+rule that generated it), which is where a change has to go. `check` lists
+every alarm only one side has and every column that differs, so a master
+the team signed off cannot drift from what the controller runs without
+someone seeing it. Both commands print how many alarms are pending,
+reviewed and approved, and name the high and critical ones still
+pending. A YAML master (`-f master.yaml`) holds the same columns. When a
+spreadsheet opens the CSV, keep the `at` column as text: a spreadsheet
+that turns `2026-11-20` into its own date format makes `check` report a
+difference.
+
+How the alarm system performs is measured from the [journal](#the-journal):
+
+```sh
+naut alarms report flood      -journal /var/lib/nautilus/alarms.jsonl
+naut alarms report chatter    -host plc1
+naut alarms report bad-actors -host plc1 -since 30d
+naut alarms report stale      -host plc1
+```
+
+| report | what it measures (ISA-18.2) |
+| --- | --- |
+| `flood` | alarms per 10-minute window and per hour; every flood: more than 10 alarms in a window, with consecutive windows counted as one flood and the alarms that contributed most |
+| `chatter` | alarms that activate 3 or more times within 60 seconds, and how many separate bursts |
+| `bad-actors` | the 10 most frequent alarms (`-top N`) and their share of all alarms |
+| `stale` | alarms continuously active for more than 24 hours |
+
+`-journal` reads a file journal (and its rotated `.1`) without writing
+anything; `-host` reads a running controller's journal API, whatever its
+sink. The range is `-from` up to (not including) `-to`, or the last
+`-since` (7 days by default, 90 for `stale`); `-site`
+and `-priority` narrow it, and `-o json` prints the numbers for a
+dashboard. Each report first says how many events it read and the
+earliest and latest of them: a journal that holds only the last few
+hours (the in-memory ring, or a file that rotated) says so instead of
+reading as a quiet week.
+
+A controller keeps only an alarm's acknowledgement and shelf across a
+restart, so a standing alarm is journalled `active` again when it starts.
+The reports count that as the same occurrence, not a new alarm, so a
+restart neither looks like a flood nor resets a stale alarm's age. To
+recognise an alarm that was already standing when the range began, a
+report also reads the 7 days before `-from`. Flood windows start at
+`-from`. A report exits 0 whatever it finds; use `-o json` to act on
+the numbers in a script.
+
 ## On the HMI
 
 The kit ships three components and a client. Props in, callbacks out, no
