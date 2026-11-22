@@ -659,3 +659,25 @@ claims:
       token and a shelve and unshelve by a browser sign-in are (an ack by a
       browser sign-in is not separately). A shared (service) token under an
       auth: block keeping the typed name is not.
+
+  - id: ALM-058
+    claim: >-
+      The ack link's page says, above the button, as whom it acknowledges
+      (the person it was sent to), naming anyone else signed in on that
+      browser, and is laid out for a phone.
+    source: "#acknowledging-from-the-page"
+    tests:
+      - go ./server TestAckLinkPageSaysWhoItAcknowledgesAs
+      - go ./server TestAckLinkPageIsReadableOnAPhone
+    partial: true
+    note: The HTML and CSS are asserted; no test renders the page on a phone.
+
+  - id: ALM-059
+    claim: >-
+      A report whose journal's first event comes more than an hour, and more
+      than a tenth of the range, after the range begins notes that its rates
+      are over the whole range and prints the -from that reads the journal's
+      span alone.
+    source: "#rationalization-and-performance"
+    tests:
+      - go ./cmd/naut TestAlarmsReportSaysWhenTheJournalIsYoungerThanTheRange

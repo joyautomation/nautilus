@@ -298,6 +298,21 @@ claims:
       - go ./alarm/channel TestPagesCarryTheAckLink
       - go ./cmd/naut TestAckLinkHookKinds
 
+  - id: AMG-049
+    claim: >-
+      The confirm page says, before the button, that pressing it
+      acknowledges as the person the page was sent to, and names anyone else
+      signed in on that browser; it is laid out for a phone (device-width
+      viewport, no text below the browser's own size, a thumb-sized
+      button).
+    source: "#acknowledging-from-a-page"
+    tests:
+      - go ./server TestAckLinkPageSaysWhoItAcknowledgesAs
+      - go ./server TestAckLinkPageIsReadableOnAPhone
+    partial: true
+    note: >-
+      The page's HTML and CSS are asserted; no test renders it on a phone.
+
   - id: AMG-024
     claim: >-
       A link is spent once, names one occurrence, and lasts 24 hours at
@@ -521,7 +536,10 @@ claims:
       chatter finds 3 or more activations within 60 seconds, bad-actors the
       10 most frequent and their share, stale alarms active for more than 24
       hours; each reads a journal file or a running controller and first
-      says how many events it read.
+      says how many events it read. A journal whose first event comes more
+      than an hour, and more than a tenth of the range, after the range
+      begins gets a note saying the rates are over the whole range and the
+      -from that reads its span alone.
     source: "#measuring-the-alarm-system"
     tests:
       - go ./alarm/rationalize TestFloods
@@ -530,6 +548,7 @@ claims:
       - go ./alarm/rationalize TestStaleAlarms
       - go ./cmd/naut TestAlarmsReportFromAJournalFile
       - go ./cmd/naut TestAlarmsReportFromAControllerSplitsATruncatedRange
+      - go ./cmd/naut TestAlarmsReportSaysWhenTheJournalIsYoungerThanTheRange
 
   - id: AMG-042
     claim: >-
