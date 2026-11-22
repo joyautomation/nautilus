@@ -21,19 +21,20 @@ import (
 // its action needs, naming the tag (or other target) it acts on when it
 // has one, so that areas can scope it.
 const (
-	PermWrite      = auth.Write      // tag writes
-	PermAck        = auth.Ack        // alarm acknowledgement
-	PermShelve     = auth.Shelve     // alarm shelving
-	PermNote       = auth.Note       // operator notes (#720)
-	PermSubstitute = auth.Substitute // #707's substitutes
-	PermForce      = auth.Force      // forces, set and cleared
-	PermSFC        = auth.SFC        // SFC step and transition commands
-	PermEdit       = auth.Edit       // online edits and rollbacks
-	PermActivate   = auth.Activate   // activating a commit
-	PermDeploy     = auth.Deploy     // a Logix or Siemens download
-	PermConfig     = auth.Config     // live I/O configuration (#706, #711)
-	PermAudit      = auth.Audit      // reading the audit journal
-	PermRedundancy = auth.Redundancy // the redundant pair's operator commands (#1029 3c-3)
+	PermWrite      = auth.Write        // tag writes
+	PermAck        = auth.Ack          // alarm acknowledgement
+	PermShelve     = auth.Shelve       // alarm shelving
+	PermOOS        = auth.OutOfService // equipment out of service (#715)
+	PermNote       = auth.Note         // operator notes (#720)
+	PermSubstitute = auth.Substitute   // #707's substitutes
+	PermForce      = auth.Force        // forces, set and cleared
+	PermSFC        = auth.SFC          // SFC step and transition commands
+	PermEdit       = auth.Edit         // online edits and rollbacks
+	PermActivate   = auth.Activate     // activating a commit
+	PermDeploy     = auth.Deploy       // a Logix or Siemens download
+	PermConfig     = auth.Config       // live I/O configuration (#706, #711)
+	PermAudit      = auth.Audit        // reading the audit journal
+	PermRedundancy = auth.Redundancy   // the redundant pair's operator commands (#1029 3c-3)
 )
 
 // actionPerm is the permission each journalled action needs. It is kept
@@ -42,12 +43,15 @@ const (
 // one missing here. With an auth: block, an action missing here is
 // refused.
 var actionPerm = map[string]string{
-	"tag.write":                PermWrite,
-	"push.subscribe":           auth.Read, // any person who may read may be paged; read-gated per alarm at send
-	"push.unsubscribe":         auth.Read,
-	"alarm.ack":                PermAck,
-	"alarm.shelve":             PermShelve,
-	"alarm.unshelve":           PermShelve,
+	"tag.write":            PermWrite,
+	"push.subscribe":       auth.Read, // any person who may read may be paged; read-gated per alarm at send
+	"push.unsubscribe":     auth.Read,
+	"alarm.ack":            PermAck,
+	"alarm.shelve":         PermShelve,
+	"alarm.unshelve":       PermShelve,
+	"alarm.out-of-service": PermOOS,
+	// Back in service shows alarms again: whoever may acknowledge them.
+	"alarm.in-service":         PermAck,
 	"sfc.step":                 PermSFC,
 	"sfc.transition":           PermSFC,
 	"force.set":                PermForce,

@@ -550,6 +550,19 @@ func auditRows() []auditRow {
 		{name: "unshelve no alarm", pattern: "POST /api/alarms/unshelve", server: none,
 			method: "POST", path: "/api/alarms/unshelve", body: `{"id":"Nope"}`,
 			action: "alarm.unshelve", target: "Nope", user: "anonymous", source: "api", result: "refused"},
+		{name: "out of service", pattern: "POST /api/alarms/out-of-service", server: none,
+			method: "POST", path: "/api/alarms/out-of-service", body: `{"equipment":"HiTempAlm","seconds":3600,"reason":"seal change"}`,
+			action: "alarm.out-of-service", target: "HiTempAlm", user: "anonymous", source: "api", result: "ok",
+			after: map[string]any{"seconds": 3600.0, "reason": "seal change"}},
+		{name: "out of service with no reason", pattern: "POST /api/alarms/out-of-service", server: none,
+			method: "POST", path: "/api/alarms/out-of-service", body: `{"equipment":"HiTempAlm","seconds":3600}`,
+			action: "alarm.out-of-service", target: "HiTempAlm", user: "anonymous", source: "api", result: "refused"},
+		{name: "in service", pattern: "POST /api/alarms/in-service", server: none, prep: outOfService("HiTempAlm"),
+			method: "POST", path: "/api/alarms/in-service", body: `{"equipment":"HiTempAlm"}`,
+			action: "alarm.in-service", target: "HiTempAlm", user: "anonymous", source: "api", result: "ok"},
+		{name: "in service, not out", pattern: "POST /api/alarms/in-service", server: none,
+			method: "POST", path: "/api/alarms/in-service", body: `{"equipment":"HiTempAlm"}`,
+			action: "alarm.in-service", target: "HiTempAlm", user: "anonymous", source: "api", result: "refused"},
 
 		{name: "online edit", pattern: "PUT /api/program", server: none,
 			method: "PUT", path: "/api/program", body: `{"source":` + jsonString(editedProgram) + `}`,
@@ -796,6 +809,14 @@ func force(name string, v any) func(*testing.T, *Server) {
 func shelve(id string) func(*testing.T, *Server) {
 	return func(t *testing.T, s *Server) {
 		if err := s.alarms.Shelve(id, time.Now().Add(time.Minute), "op1"); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func outOfService(eq string) func(*testing.T, *Server) {
+	return func(t *testing.T, s *Server) {
+		if err := s.alarms.TakeOutOfService(eq, time.Now().Add(time.Hour), "op1", "seal change"); err != nil {
 			t.Fatal(err)
 		}
 	}

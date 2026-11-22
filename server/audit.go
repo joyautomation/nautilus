@@ -25,6 +25,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/joyautomation/nautilus/alarm"
 	"github.com/joyautomation/nautilus/audit"
 	"github.com/joyautomation/nautilus/auth"
 	"github.com/joyautomation/nautilus/lang/ir"
@@ -97,6 +98,8 @@ var actionClass = map[string]string{
 	"alarm.shelve":     operator,
 	"alarm.unshelve":   operator,
 	"sfc.step":         operator,
+	// Back in service shows alarms again: a way back, as a force's clear.
+	"alarm.in-service": recovery,
 	"sfc.transition":   operator,
 
 	"force.clear":      recovery,
@@ -106,9 +109,11 @@ var actionClass = map[string]string{
 
 	"force.set":        strict,
 	"substitute.start": strict,
-	"substitute.ack":   strict,
-	"program.edit":     strict,
-	"program.activate": strict,
+	// Hides a piece of equipment's alarms for up to a week: never unrecorded.
+	"alarm.out-of-service": strict,
+	"substitute.ack":       strict,
+	"program.edit":         strict,
+	"program.activate":     strict,
 	// Ending the subscriptions a mass revocation held (#722): phones stop
 	// being paged on a person's word.
 	"push.confirm-revocations": strict,
@@ -1074,16 +1079,18 @@ func readRefusedBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
 // form body: checkLink answers them itself, with its own target, before
 // the seam's preAuthorize (acklink.go).
 var refusalTargets = map[string]targetFunc{
-	"tag.write":        nameValueTarget,
-	"force.set":        nameValueTarget,
-	"substitute.start": nameValueTarget,
-	"force.clear":      pathTarget("name"),
-	"param.import":     paramImportRefusal,
-	"alarm.ack":        ackTarget,
-	"alarm.shelve":     shelveTarget,
-	"alarm.unshelve":   unshelveTarget,
-	"sfc.step":         sfcTarget(true),
-	"sfc.transition":   sfcTarget(false),
+	"tag.write":            nameValueTarget,
+	"force.set":            nameValueTarget,
+	"substitute.start":     nameValueTarget,
+	"force.clear":          pathTarget("name"),
+	"param.import":         paramImportRefusal,
+	"alarm.ack":            ackTarget,
+	"alarm.shelve":         shelveTarget,
+	"alarm.unshelve":       unshelveTarget,
+	"alarm.out-of-service": oosTarget,
+	"alarm.in-service":     inServiceTarget,
+	"sfc.step":             sfcTarget(true),
+	"sfc.transition":       sfcTarget(false),
 	"param.write": func(r *http.Request, body []byte) auditTarget {
 		t := auditTarget{target: r.PathValue("port") + "/" + r.PathValue("ref")}
 		if v, ok := decodeParamBody(body); ok {
@@ -1180,6 +1187,24 @@ func unshelveTarget(_ *http.Request, body []byte) auditTarget {
 	var req unshelveRequest
 	decodeBody(body, &req)
 	return auditTarget{target: req.ID, detail: byDetail(req.By)}
+}
+
+func oosTarget(_ *http.Request, body []byte) auditTarget {
+	var req oosRequest
+	decodeBody(body, &req)
+	after := map[string]any{"reason": capText(req.Reason, alarm.MaxOutOfServiceReason)}
+	if req.Until != "" {
+		after["until"] = req.Until
+	} else if req.Seconds != 0 {
+		after["seconds"] = req.Seconds
+	}
+	return auditTarget{target: req.Equipment, after: after}
+}
+
+func inServiceTarget(_ *http.Request, body []byte) auditTarget {
+	var req inServiceRequest
+	decodeBody(body, &req)
+	return auditTarget{target: req.Equipment}
 }
 
 // programTarget names the task an edit goes to, as handlePutProgram

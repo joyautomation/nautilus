@@ -135,6 +135,22 @@ type Def struct {
 	// is what stops a dead edge node from freezing four alarms on.
 	Enable string `yaml:"enable" json:"enable,omitempty"`
 
+	// SuppressWhen names a BOOL whose TRUE suppresses the alarm by design
+	// (#715): a pump's low-flow alarm while the pump is stopped. Unlike
+	// Enable it fails toward showing the alarm: a SuppressWhen that cannot
+	// be read (no such tag, not a BOOL) suppresses nothing, and the
+	// record says so (Record.Warning). SuppressReason is the text an
+	// operator sees on the suppressed row; "" says "<path> is true".
+	SuppressWhen   string `yaml:"suppress-when" json:"suppressWhen,omitempty"`
+	SuppressReason string `yaml:"suppress-reason" json:"suppressReason,omitempty"`
+
+	// Equipment names the piece of plant the alarm belongs to, the unit
+	// an operator takes out of service (Engine.TakeOutOfService). "" is
+	// filled in by New: the root of the condition path, so a struct
+	// tag's alarms (Pump_101.Fault, Pump_101.Overload) share it and a
+	// flat alarm is its own. A rule's default is "{tag}".
+	Equipment string `yaml:"equipment" json:"equipment,omitempty"`
+
 	// Consequence, Response and Rationalization are the master alarm
 	// database's columns (ISA-18.2 rationalization, #715): what happens if
 	// nobody responds, what the operator does, and whether the alarm has
@@ -190,6 +206,10 @@ type defWire struct {
 	Shelve   *bool     `yaml:"shelve"`
 	Enable   string    `yaml:"enable"`
 
+	SuppressWhen   string `yaml:"suppress-when,omitempty"`
+	SuppressReason string `yaml:"suppress-reason,omitempty"`
+	Equipment      string `yaml:"equipment,omitempty"`
+
 	Consequence     string           `yaml:"consequence,omitempty"`
 	Response        string           `yaml:"response,omitempty"`
 	Rationalization *Rationalization `yaml:"rationalization,omitempty"`
@@ -210,6 +230,8 @@ func (d *Def) UnmarshalYAML(node *yaml.Node) error {
 		AckRequired: true, AutoClear: true, Shelvable: true,
 		Enable:      w.Enable,
 		Consequence: w.Consequence, Response: w.Response,
+
+		SuppressWhen: w.SuppressWhen, SuppressReason: w.SuppressReason, Equipment: w.Equipment,
 	}
 	if w.Rationalization != nil {
 		d.Rationalization = *w.Rationalization
@@ -257,6 +279,8 @@ func (d Def) MarshalYAML() (any, error) {
 		Class: d.Class, Site: d.Site, Area: d.Area,
 		Display: d.Display, Notes: d.Notes, Enable: d.Enable,
 		Consequence: d.Consequence, Response: d.Response,
+
+		SuppressWhen: d.SuppressWhen, SuppressReason: d.SuppressReason, Equipment: d.Equipment,
 	}
 	if !d.Rationalization.IsZero() {
 		r := d.Rationalization
@@ -370,7 +394,8 @@ func glob(pattern, s string) bool {
 // names the (type, member) pair once and Expand materializes an instance
 // per tag.
 //
-// ID, Name and Enable are templates over {tag} {member} {site} {area}
+// ID, Name, Enable, SuppressWhen, SuppressReason and Equipment are
+// templates over {tag} {member} {site} {area}
 // {desc} {type} {path}; an unknown placeholder is an error, so a typo in a
 // name template fails the load instead of shipping "{sight}" to an
 // operator screen.
@@ -399,6 +424,10 @@ type Rule struct {
 	Shelve      *bool `yaml:"shelve"`
 
 	Enable string `yaml:"enable"` // template, e.g. "{site}__Online"
+
+	SuppressWhen   string `yaml:"suppress-when"`   // template, e.g. "{tag}.Stopped"
+	SuppressReason string `yaml:"suppress-reason"` // template, e.g. "{desc} is stopped"
+	Equipment      string `yaml:"equipment"`       // template; default "{tag}"
 
 	// The master columns, copied to every definition the rule generates:
 	// rationalizing a UDT's alarm once covers each instance of it. They
@@ -614,6 +643,15 @@ func (r Rule) def(c candidate) (Def, error) {
 		return Def{}, err
 	}
 	if d.Enable, err = tmpl("enable", r.Enable, ""); err != nil {
+		return Def{}, err
+	}
+	if d.SuppressWhen, err = tmpl("suppress-when", r.SuppressWhen, ""); err != nil {
+		return Def{}, err
+	}
+	if d.SuppressReason, err = tmpl("suppress-reason", r.SuppressReason, ""); err != nil {
+		return Def{}, err
+	}
+	if d.Equipment, err = tmpl("equipment", r.Equipment, "{tag}"); err != nil {
 		return Def{}, err
 	}
 	d.Name = strings.TrimSpace(d.Name)

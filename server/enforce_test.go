@@ -100,14 +100,17 @@ func enforceExactly(t *testing.T, srv *Server) {
 	set := auth.Settings{Roles: map[string]auth.RoleDef{}, ServiceTokens: map[string][]auth.Grant{}}
 	srv.services = map[string]string{}
 	for _, perm := range auth.Permissions {
+		// A token's name is letters, digits and '_' (NAUTILUS_TOKEN_<NAME>);
+		// its secret is the role it holds, which the cases send.
+		tok := strings.ReplaceAll(perm, "-", "_")
 		set.Roles["only-"+perm] = auth.RoleDef{Inherits: auth.Viewer, Allow: []string{perm}}
 		set.Roles["but-"+perm] = auth.RoleDef{Inherits: auth.Administrator, Deny: []string{perm}}
 		set.Roles["pair-"+perm] = auth.RoleDef{Inherits: auth.Viewer, Allow: []string{perm, auth.Write}}
-		set.ServiceTokens["pair_"+perm] = []auth.Grant{{Role: "pair-" + perm}}
-		srv.services["pair_"+perm] = "pair-" + perm
-		set.ServiceTokens["only_"+perm] = []auth.Grant{{Role: "only-" + perm}}
-		set.ServiceTokens["but_"+perm] = []auth.Grant{{Role: "but-" + perm}}
-		srv.services["only_"+perm], srv.services["but_"+perm] = "only-"+perm, "but-"+perm
+		set.ServiceTokens["pair_"+tok] = []auth.Grant{{Role: "pair-" + perm}}
+		srv.services["pair_"+tok] = "pair-" + perm
+		set.ServiceTokens["only_"+tok] = []auth.Grant{{Role: "only-" + perm}}
+		set.ServiceTokens["but_"+tok] = []auth.Grant{{Role: "but-" + perm}}
+		srv.services["only_"+tok], srv.services["but_"+tok] = "only-"+perm, "but-"+perm
 	}
 	p, err := auth.Compile(set)
 	if err != nil {
@@ -376,7 +379,7 @@ func TestMe(t *testing.T) {
 		// The areas a caller's permissions name carry their tag patterns
 		// (the HMI kit greys out a control by them, #708 PR 7b); a caller
 		// holding none gets no areas field.
-		"f-secret": `"principal":"token:fenced","roles":["administrator"],"permissions":{"*":["read","sfc","edit","activate","deploy","config","audit","users","override","redundancy"],"nowhere":["write","ack","shelve","note","substitute","force"]},"areas":{"nowhere":["zzz_*"]}`,
+		"f-secret": `"principal":"token:fenced","roles":["administrator"],"permissions":{"*":["read","sfc","edit","activate","deploy","config","audit","users","override","redundancy"],"nowhere":["write","ack","shelve","out-of-service","note","substitute","force"]},"areas":{"nowhere":["zzz_*"]}`,
 		"v-secret": `"principal":"token:viewer","roles":["viewer"],"permissions":{"*":["read"]},"elevated"`,
 		"guess":    `"principal":"anonymous","roles":[],"permissions":{}`,
 	} {

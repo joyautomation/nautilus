@@ -972,6 +972,11 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /alarm-inbound/voice/{token}", s.audited("alarm.ack", inboundAuditTarget, s.handleInboundAck, s.checkInbound("voice")))
 	mux.Handle("POST /api/alarms/shelve", s.audited("alarm.shelve", shelveTarget, s.handleAlarmShelve))
 	mux.Handle("POST /api/alarms/unshelve", s.audited("alarm.unshelve", unshelveTarget, s.handleAlarmUnshelve))
+	// Equipment out of service (#715 PR 5): its alarms suppressed until a
+	// deadline, a week at most, with a reason; back in service ends it.
+	mux.HandleFunc("GET /api/alarms/out-of-service", s.handleOutOfServiceList)
+	mux.Handle("POST /api/alarms/out-of-service", s.audited("alarm.out-of-service", oosTarget, s.handleOutOfService))
+	mux.Handle("POST /api/alarms/in-service", s.audited("alarm.in-service", inServiceTarget, s.handleInService))
 	mux.HandleFunc("GET /api/stream", s.handleStream)
 	mux.Handle("POST /api/tags", s.audited("tag.write", s.tagTarget, s.handleWriteTag))
 	mux.HandleFunc("GET /api/program", s.handleGetProgram)

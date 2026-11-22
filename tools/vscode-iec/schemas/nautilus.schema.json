@@ -2421,6 +2421,18 @@
           "type": "string",
           "description": "A BOOL that must be true, else Suppressed. Template over {tag} {member} {site} {area} {desc} {type} {path}; an unknown placeholder is an error, so a typo fails the load instead of reaching an operator screen as literal braces. e.g. \"{site}__Online\"."
         },
+        "suppress-when": {
+          "type": "string",
+          "description": "A BOOL whose TRUE suppresses the alarm by design (a low-flow alarm while its pump is stopped). Only a readable TRUE suppresses: a path that cannot be read shows the alarm, with a warning, and naut check refuses it. Template, e.g. \"{tag}.Stopped\"."
+        },
+        "suppress-reason": {
+          "type": "string",
+          "description": "The reason a suppress-when suppression shows on the alarm's row; default \"<path> is true\". Template."
+        },
+        "equipment": {
+          "type": "string",
+          "description": "The piece of plant the alarm belongs to: the unit an operator takes out of service (naut alarms out-of-service). Template; default \"{tag}\", the struct the rule matched."
+        },
         "consequence": {
           "type": "string",
           "description": "What happens if nobody responds: the master alarm database's consequence column, read by naut alarms master. Copied to every alarm the rule generates; plain text, not a template."
@@ -2525,6 +2537,18 @@
         "enable": {
           "type": "string",
           "description": "A BOOL that must be true, else Suppressed."
+        },
+        "suppress-when": {
+          "type": "string",
+          "description": "A BOOL whose TRUE suppresses the alarm by design. Only a readable TRUE suppresses: a path that cannot be read shows the alarm, with a warning, and naut check refuses it."
+        },
+        "suppress-reason": {
+          "type": "string",
+          "description": "The reason a suppress-when suppression shows; default \"<path> is true\"."
+        },
+        "equipment": {
+          "type": "string",
+          "description": "The piece of plant the alarm belongs to, the unit an operator takes out of service. Default: the tag its condition is in."
         },
         "consequence": {
           "type": "string",

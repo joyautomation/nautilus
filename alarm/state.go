@@ -120,6 +120,13 @@ type instance struct {
 
 	count  int    // activations since start, for flood detection
 	reason string // why suppressed
+	// suppKind is the kind of suppression (SuppressOutOfService, …) while
+	// suppressed; suppBy who suppressed it, for an operator's action.
+	suppKind, suppBy string
+	// warn says why the alarm is shown although a suppression may have
+	// been meant: its suppress-when could not be read (warnMissing,
+	// warnNotBool). A code, not text, so a scan allocates nothing.
+	warn uint8
 
 	// retainedAck carries an acknowledgement recovered from the retain
 	// store across the FIRST activation only. On a restart or a standby

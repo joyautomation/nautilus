@@ -407,7 +407,7 @@ func (s *Server) alarmTag(id string) string {
 // deadline in the past, not shelved) is a request the alarm refused, a 400;
 // an ack of an occurrence that has ended is a 409.
 func alarmErrStatus(err error) int {
-	if errors.Is(err, alarm.ErrNoAlarm) {
+	if errors.Is(err, alarm.ErrNoAlarm) || errors.Is(err, alarm.ErrNoEquipment) {
 		return http.StatusNotFound
 	}
 	if errors.Is(err, alarm.ErrOtherOccurrence) {

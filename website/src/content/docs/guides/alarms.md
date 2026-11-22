@@ -133,6 +133,7 @@ end of an alarm's life.
 | Unack-RTN | condition true again | Unack-Active |
 | any | shelve *until* | **Shelved** — prior state restored on expiry |
 | any | `enable` false, or the tag is missing | **Suppressed** |
+| any | `suppress-when` true, its equipment out of service, or its signal substituted | **Suppressed** |
 
 `ack-required: false` collapses Unack-Active → Ack-Active and Unack-RTN →
 Normal on arrival: the annunciate-only contacts that have no operator
@@ -151,6 +152,77 @@ a rule — and the whole site moves to Suppressed instead. A definition
 whose tag does not resolve at all (a site that has never birthed) is
 Suppressed with a reason, never an error: one dark site must not fault the
 engine.
+
+## Suppression by state
+
+An alarm that means nothing in the plant's present state should not
+sound: a pump's low-flow alarm while the pump is stopped, every alarm of a
+pump being rebuilt. Three things suppress an alarm beside `enable:`, and
+each one fails toward showing it, because a suppression hides alarms.
+
+```yaml
+alarms:
+  rules:
+    - match: { type: Pump, member: LowFlow }
+      suppress-when: "{tag}.Stopped"        # designed suppression
+      suppress-reason: "{desc} is stopped"  # shown on the row; default "<path> is true"
+  defs:
+    - { id: P101_SEAL, tag: P101_SealLeak, equipment: P101 }
+```
+
+**`suppress-when: <BOOL>`** is designed suppression: while the BOOL reads
+true the alarm is Suppressed with the reason shown, and its occurrence
+ends (an ack does not survive it; a condition still present afterwards is
+a new, unacknowledged occurrence). Only a readable true suppresses. A
+path that is not in the project, or not a BOOL, suppresses nothing: the
+alarm is evaluated anyway and its row says why (`warning`). `naut check`
+refuses a member the type does not have or one that is not a BOOL, and
+warns on a tag the manifest does not declare, as it does for a condition.
+It is the opposite of `enable:`, which suppresses when it cannot be read
+(a dark site).
+
+**Out of service** is an operator's action on a piece of **equipment**:
+every alarm of it is suppressed until a deadline, with a reason on each
+row. An alarm's equipment is its `equipment:`; by default the tag its
+condition is in, so `P101.Fault` and `P101.Overload` are `P101`'s and a
+flat BOOL is its own (a rule's default is `{tag}`, and it may template
+one: `equipment: "{site}_skid"`).
+
+```sh
+naut alarms out-of-service P101 --host plc1 --for 8h --reason "seal change, WO 4471"
+naut alarms oos-list --host plc1        # who, why, until when; soonest to end first
+naut alarms in-service P101 --host plc1 # early
+```
+
+- **Time-boxed.** A window ends, a week at most, never permanent. Take
+  the equipment out again to renew it. When it ends (journalled
+  `returned to service: expired`) the alarms are evaluated in the same
+  scan, and a condition still present annunciates, unacknowledged.
+- **Who.** Taking equipment out of service needs the `out-of-service`
+  permission (a supervisor's) over **every** alarm it hides, and a fresh
+  password ([elevation](/guides/auth/#elevation)): it hides more than a
+  shelf. Putting it back needs only `ack`. Both are in the audit journal
+  (`alarm.out-of-service`, `alarm.in-service`), and the alarm journal has
+  a system row for each and a `suppress` row per alarm, by the person.
+- **Never the controller's own alarms** (the audit journal down,
+  notifications failing): they exist to make a lockout visible.
+- **Kept** across a restart (retain), never longer than was granted, so a
+  clock set back cannot lengthen it. A redundant pair carries it through
+  its operator-intent log; a takeover that could not catch the log up
+  does not carry it, says so in the alarm journal, and ends it in the log
+  (the alarms show).
+
+**A substituted signal** ([substitute values](/guides/substitutes/)): an
+alarm whose condition is a substituted input, or a member of one, is
+Suppressed `signal substituted: <address>` while the substitute runs. Its
+state would be about a value a person chose. The link sees the condition
+path only: an alarm on a BOOL the program computes from a substituted
+input is not caught. Give it `suppress-when: <input>__Substituted` (the
+runtime's flag for that input).
+
+A suppressed row says which kind (`suppression`: `out-of-service`,
+`designed`, `substituted`, `unreadable`), and for out of service who did
+it (`suppressedBy`) and when it ends (`suppressUntilMs`).
 
 ## Ack is host state
 
@@ -208,6 +280,9 @@ POST /api/alarms/ack       {"ids":["RTU9_ZONE15_FIT_001.HH"],"by":"operator1"}
                            {"all":true,"by":"operator1"}
 POST /api/alarms/shelve    {"id":"…","seconds":1800,"by":"operator1"}
 POST /api/alarms/unshelve  {"id":"…","by":"operator1"}
+GET  /api/alarms/out-of-service
+POST /api/alarms/out-of-service  {"equipment":"P101","seconds":28800,"reason":"seal change"}
+POST /api/alarms/in-service      {"equipment":"P101"}
 ```
 
 Responses and status codes are in the

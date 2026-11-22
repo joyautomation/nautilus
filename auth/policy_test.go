@@ -40,8 +40,8 @@ func TestBuiltInRoles(t *testing.T) {
 	want := map[string]string{
 		Viewer:        "read",
 		Operator:      "read write ack note sfc",
-		Supervisor:    "read write ack shelve note substitute sfc audit",
-		Engineer:      "read write ack shelve note substitute force sfc edit activate deploy config audit",
+		Supervisor:    "read write ack shelve out-of-service note substitute sfc audit",
+		Engineer:      "read write ack shelve out-of-service note substitute force sfc edit activate deploy config audit",
 		Administrator: strings.Join(Permissions, " "),
 	}
 	for role, perms := range want {
@@ -267,9 +267,10 @@ func TestAreaEdges(t *testing.T) {
 // I/O, a forced value, who may do what (#708 PR 5c), or which process a
 // redundant pair counts as its member (#1029 3c-3a): an operator's
 // writes, acks and SFC commands, and a supervisor's shelving and
-// substitutes, never ask for the password again.
+// substitutes, never ask for the password again. Taking equipment out of
+// service (#715) does: it hides a week of alarms.
 func TestElevatedPermissions(t *testing.T) {
-	want := map[string]bool{Force: true, Edit: true, Activate: true, Deploy: true, Config: true, Users: true, Override: true, Redundancy: true}
+	want := map[string]bool{OutOfService: true, Force: true, Edit: true, Activate: true, Deploy: true, Config: true, Users: true, Override: true, Redundancy: true}
 	for _, p := range Permissions {
 		if Elevated(p) != want[p] {
 			t.Errorf("Elevated(%q) = %v, want %v", p, Elevated(p), want[p])

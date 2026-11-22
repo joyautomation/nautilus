@@ -1034,6 +1034,16 @@ only to that one: an acknowledgement committed after its occurrence
 ended acknowledges nothing (the journal notes it), and one made just
 before a controller died and committed more than 60 s later is dropped.
 
+**Equipment out of service** ([suppression by state](/guides/alarms/#suppression-by-state))
+goes through the log too, and a synced takeover keeps it until its own
+end. One made just before a controller died and committed more than 60 s
+later is dropped; a return to service never is. A takeover that could
+not catch the log up does **not** carry it: a window the log cannot vouch
+for would hide alarms. The alarm journal says "out of service not
+carried", the alarms show, and the new leader ends the window in the log
+so a later takeover does not bring it back. Take the equipment out again
+if the work goes on.
+
 **Escalation goes on at its level.** For the alarms an escalation policy
 covers, the leader records each occurrence (its activation, and when it
 began waiting on a person) in the log at every log tick, and its end. A

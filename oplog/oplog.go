@@ -259,6 +259,15 @@ const (
 	KindOccurrenceStart = "occurrence-start"
 	KindOccurrenceEnd   = "occurrence-end"
 
+	// KindOutOfService takes a piece of equipment's alarms out of service
+	// until Until (#715 PR 5): ID is the equipment, Reason why, By who.
+	// Lapses as a shelve does: late, it would hide alarms nobody meant
+	// to. KindInService returns it to service (ID) and never lapses. A
+	// replica that predates them ignores them, and its takeover shows
+	// the alarms (the safe side). Only fields every build keeps are used.
+	KindOutOfService = "out-of-service"
+	KindInService    = "in-service"
+
 	// Substitute values (#707): see Entry.
 	KindSubstitute   = "substitute"
 	KindUnsubstitute = "unsubstitute"

@@ -66,6 +66,13 @@ type Options struct {
 	CarryGrace time.Duration
 	CarryHold  time.Duration
 
+	// Substituted, when set, reports whether a condition path reads a
+	// substituted signal (#707), and the substituted address that covers
+	// it: such an alarm is suppressed, reason "signal substituted". Called
+	// once per definition per Evaluate, under the scan, like Read: it must
+	// be cheap and must not allocate while nothing is substituted.
+	Substituted func(path string) (addr string, ok bool)
+
 	Log *slog.Logger
 }
 
@@ -109,6 +116,11 @@ type Engine struct {
 
 	carryGrace, carryHold time.Duration
 
+	// oos is each piece of equipment out of service (TakeOutOfService),
+	// by equipment name; substituted is Options.Substituted.
+	oos         map[string]outOfService
+	substituted func(path string) (string, bool)
+
 	// missing counts definitions whose condition path did not resolve on
 	// the last pass — the "how much of the fleet is dark" number, which
 	// deserves to be visible rather than inferred from a log.
@@ -149,6 +161,8 @@ func New(o Options) (*Engine, error) {
 		notifiers:  o.Notify,
 		carryGrace: o.CarryGrace,
 		carryHold:  o.CarryHold,
+
+		substituted: o.Substituted,
 	}
 	if e.carryHold <= 0 {
 		e.carryHold = DefaultCarryHold
@@ -168,6 +182,9 @@ func New(o Options) (*Engine, error) {
 		}
 		if d.Name == "" {
 			d.Name = d.ID
+		}
+		if d.Equipment == "" {
+			d.Equipment = defaultEquipment(d)
 		}
 		e.byID[d.ID] = len(e.inst)
 		e.inst = append(e.inst, instance{def: d})
@@ -209,13 +226,20 @@ func (e *Engine) Evaluate() {
 	now := e.now()
 	e.evals++
 	e.missing = 0
+	e.expireOutOfService(now)
 	for i := range e.inst {
 		e.evalOne(&e.inst[i], now)
 	}
 }
 
 func (e *Engine) evalOne(in *instance, now time.Time) {
-	// Enable first, and only then the condition: a whole dark site costs
+	in.warn = warnNone
+	// An operator's out of service first: it holds whatever the field says.
+	if o, ok := e.oos[in.def.Equipment]; ok {
+		e.suppressOOS(in, now, o)
+		return
+	}
+	// Enable next, and only then the condition: a whole dark site costs
 	// one map hit per definition rather than two.
 	if in.def.Enable != "" {
 		v, ok := e.read(in.def.Enable)
@@ -233,7 +257,19 @@ func (e *Engine) evalOne(in *instance, now time.Time) {
 			if !mutAlarm("carry_through_enable") {
 				e.endCarry(in, "enable "+in.def.Enable+" is false") // designed suppression ends it, as it does live
 			}
-			e.suppress(in, now, in.def.Enable+" is false")
+			e.suppressBy(in, now, SuppressDesigned, in.def.Enable+" is false", "")
+			return
+		}
+	}
+	if e.suppressWhen(in) {
+		e.endCarry(in, "suppress-when "+in.def.SuppressWhen+" is true")
+		e.suppressBy(in, now, SuppressDesigned, in.suppressWhenReason(), "")
+		return
+	}
+	if e.substituted != nil {
+		if addr, ok := e.substituted(in.def.Tag); ok {
+			e.holdCarry(in, now)
+			e.suppressBy(in, now, SuppressSubstituted, "signal substituted: "+addr, "")
 			return
 		}
 	}
@@ -284,6 +320,13 @@ func (e *Engine) evalOne(in *instance, now time.Time) {
 }
 
 func (e *Engine) suppress(in *instance, now time.Time, reason string) {
+	e.suppressBy(in, now, SuppressUnreadable, reason, "")
+}
+
+// suppressBy suppresses in with a kind and a reason; by names who did it
+// (an operator's out of service), journalled on the suppress row.
+func (e *Engine) suppressBy(in *instance, now time.Time, kind, reason, by string) {
+	in.suppKind, in.suppBy = kind, by
 	// Suppressed, unreadable or disabled: whatever reads true later has not
 	// stood throughout, as a carry would judge it (#1198 review).
 	if !mutAlarm("adopt_after_suppress") {
@@ -299,7 +342,7 @@ func (e *Engine) suppress(in *instance, now time.Time, reason string) {
 	in.reason = reason
 	in.cond = false
 	in.started = false // the delay re-baselines when the site comes back
-	e.emit(in, now, KindSuppress, "")
+	e.emit(in, now, KindSuppress, by)
 }
 
 func (e *Engine) unsuppress(in *instance, now time.Time) {
@@ -396,6 +439,18 @@ type Record struct {
 
 	Count  int    `json:"count"`            // activations since start, for flood detection
 	Reason string `json:"reason,omitempty"` // why suppressed
+
+	// Suppression is the kind of suppression while suppressed
+	// (SuppressOutOfService, SuppressDesigned, SuppressSubstituted,
+	// SuppressUnreadable); SuppressedBy who did it, for an operator's out
+	// of service, and SuppressUntilMs when that ends.
+	Suppression     string `json:"suppression,omitempty"`
+	SuppressedBy    string `json:"suppressedBy,omitempty"`
+	SuppressUntilMs int64  `json:"suppressUntilMs,omitempty"`
+
+	// Warning says why the alarm is shown although its definition may
+	// have meant it hidden: its suppress-when could not be read.
+	Warning string `json:"warning,omitempty"`
 }
 
 func (in *instance) record() Record {
@@ -406,6 +461,8 @@ func (in *instance) record() Record {
 		AckBy:  in.ackBy,
 		Count:  in.count,
 		Reason: in.reason,
+
+		Warning: in.warning(),
 
 		Occurrence: in.occ,
 	}
@@ -426,6 +483,21 @@ func (in *instance) record() Record {
 		r.ShelfUntilMs = in.shelfUntil.UnixMilli()
 		r.ShelfBy = in.shelfBy
 	}
+	if in.state == Suppressed {
+		r.Suppression, r.SuppressedBy = in.suppKind, in.suppBy
+	}
+	return r
+}
+
+// recordOf is in's record, with its equipment's out-of-service end while
+// that suppresses it. Under e.mu.
+func (e *Engine) recordOf(in *instance) Record {
+	r := in.record()
+	if r.Suppression == SuppressOutOfService {
+		if o, ok := e.oos[in.def.Equipment]; ok {
+			r.SuppressUntilMs = o.until.UnixMilli()
+		}
+	}
 	return r
 }
 
@@ -437,7 +509,7 @@ func (e *Engine) Lookup(id string) (Record, bool) {
 	if !ok {
 		return Record{}, false
 	}
-	return e.inst[i].record(), true
+	return e.recordOf(&e.inst[i]), true
 }
 
 // Active returns everything annunciating — active, unack-RTN and shelved —
@@ -449,7 +521,7 @@ func (e *Engine) Active() []Record {
 	out := make([]Record, 0, 32)
 	for i := range e.inst {
 		if e.inst[i].state.Annunciating() {
-			out = append(out, e.inst[i].record())
+			out = append(out, e.recordOf(&e.inst[i]))
 		}
 	}
 	sortRecords(out)
@@ -464,7 +536,7 @@ func (e *Engine) Records() []Record {
 	defer e.mu.Unlock()
 	out := make([]Record, len(e.inst))
 	for i := range e.inst {
-		out[i] = e.inst[i].record()
+		out[i] = e.recordOf(&e.inst[i])
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
@@ -858,6 +930,10 @@ func (e *Engine) RetainedAlarms() map[string]retain.AlarmRetain {
 				r.WaitMs = in.waitAt.UnixMilli()
 			}
 		}
+		if o, ok := e.oos[in.def.Equipment]; ok {
+			r.OOSEquipment, r.OOSUntilMs, r.OOSGrantedMs = in.def.Equipment, o.until.UnixMilli(), o.granted.Milliseconds()
+			r.OOSStartMs, r.OOSBy, r.OOSReason = o.startAt.UnixMilli(), o.by, o.reason
+		}
 		if r == (retain.AlarmRetain{}) {
 			continue // omit the overwhelming majority that are simply normal
 		}
@@ -881,6 +957,7 @@ func (e *Engine) ResetOperatorState() {
 		lent, def := in.lent, in.def
 		*in = instance{def: def, lent: lent}
 	}
+	e.oos = nil
 	e.rev++
 }
 
@@ -919,6 +996,9 @@ func (e *Engine) RestoreAlarms(m map[string]retain.AlarmRetain) {
 			// as it always was.
 			in.retainedAck, in.retainedAckBy = true, r.AckBy
 			in.retainedAckAt = time.UnixMilli(r.AckMs)
+		}
+		if r.OOSEquipment != "" {
+			e.restoreOutOfService(r, now)
 		}
 		if r.ShelfUntilMs > 0 {
 			until := time.UnixMilli(r.ShelfUntilMs)
