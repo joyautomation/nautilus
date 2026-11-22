@@ -232,6 +232,7 @@
                     "write",
                     "ack",
                     "shelve",
+                    "out-of-service",
                     "note",
                     "substitute",
                     "force",
@@ -242,7 +243,10 @@
                     "config",
                     "audit",
                     "users",
-                    "override"
+                    "override",
+                    "redundancy",
+                    "checkout",
+                    "signoff"
                   ]
                 }
               },
@@ -255,6 +259,7 @@
                     "write",
                     "ack",
                     "shelve",
+                    "out-of-service",
                     "note",
                     "substitute",
                     "force",
@@ -265,7 +270,10 @@
                     "config",
                     "audit",
                     "users",
-                    "override"
+                    "override",
+                    "redundancy",
+                    "checkout",
+                    "signoff"
                   ]
                 }
               }
@@ -600,6 +608,22 @@
         "lease": {
           "type": "string",
           "description": "coordination.k8s.io Lease name (default: the project name)."
+        }
+      }
+    },
+    "checkout": {
+      "type": "object",
+      "description": "The I/O checkout and commissioning sign-off (#719): the sheet of points, and who may seal a run.",
+      "additionalProperties": false,
+      "properties": {
+        "file": {
+          "type": "string",
+          "description": "The sheet, relative to the project. Default checkout.yaml (naut checkout init writes one)."
+        },
+        "signoff": {
+          "type": "string",
+          "enum": ["two-person", "single"],
+          "description": "Who may seal a run: two-person (the default) needs a signer who recorded none of its results; single lets the person who recorded them sign, naut check warns and the sealed record says single-person."
         }
       }
     },

@@ -181,8 +181,12 @@ func runAs(t *testing.T, row auditRow, tok string) (int, string, string, map[str
 		row.prep(t, srv)
 	}
 	enforce(t, srv)
+	path := row.path
+	if row.pathOf != nil {
+		path = row.pathOf(srv)
+	}
 	before, n := writeState(srv), len(srv.audit.ring.Recent())
-	rec := call(t, srv, row.method, row.path, row.body, func(r *http.Request) {
+	rec := call(t, srv, row.method, path, row.body, func(r *http.Request) {
 		for k, v := range row.header {
 			r.Header.Set(k, v)
 		}

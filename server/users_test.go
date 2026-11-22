@@ -34,16 +34,23 @@ func patServerWith(t *testing.T, o Options) (*Server, map[string]string, string)
 // patServerRT is patServerWith over a runtime the test made (a retain store).
 func patServerRT(t *testing.T, rt *runtime.Runtime, o Options) (*Server, map[string]string, string) {
 	t.Helper()
-	old := users.Default
-	users.Default = users.Params{Memory: 64, Time: 1, Threads: 1}
-	t.Cleanup(func() { users.Default = old })
-	p, err := auth.Compile(auth.Settings{
+	return patServerSettings(t, rt, o, auth.Settings{
 		Areas: map[string][]string{"sp": {"SP"}},
 		Users: map[string][]auth.Grant{
 			"akhan":  {{Role: auth.Engineer}},
 			"jsmith": {{Role: auth.Operator, Areas: []string{"sp"}}},
 		},
 	})
+}
+
+// patServerSettings is patServerRT with the auth: settings the test gives
+// (the three users akhan, jsmith and ghost have passwords and tokens).
+func patServerSettings(t *testing.T, rt *runtime.Runtime, o Options, settings auth.Settings) (*Server, map[string]string, string) {
+	t.Helper()
+	old := users.Default
+	users.Default = users.Params{Memory: 64, Time: 1, Threads: 1}
+	t.Cleanup(func() { users.Default = old })
+	p, err := auth.Compile(settings)
 	if err != nil {
 		t.Fatal(err)
 	}

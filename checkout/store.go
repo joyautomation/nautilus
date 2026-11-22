@@ -1,0 +1,483 @@
+package checkout
+
+import (
+	"bufio"
+	"bytes"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"sort"
+	"sync"
+	"time"
+	"unicode/utf8"
+)
+
+// Outcomes of checking a point.
+const (
+	Pass = "pass"
+	Fail = "fail"
+	Note = "note" // a remark with no verdict: "wired, not yet powered"
+)
+
+// States of a run.
+const (
+	StateOpen      = "open"
+	StateAbandoned = "abandoned"
+)
+
+// Errors the store answers with.
+var (
+	ErrNoRun   = errors.New("checkout: no such run")
+	ErrNotOpen = errors.New("checkout: that run is not open")
+	ErrRunOpen = errors.New("checkout: a run is already open: finish or abandon it first")
+	ErrCorrupt = errors.New("checkout: the checkout file is damaged")
+)
+
+// Kinds of entry in the file.
+const (
+	kindRun     = "run"
+	kindResult  = "result"
+	kindAbandon = "abandon"
+)
+
+// entry is one line of the file.
+type entry struct {
+	Seq  int64  `json:"seq"`
+	At   int64  `json:"at"` // epoch ms, this controller's wall clock: informational
+	Prev string `json:"prev,omitempty"`
+	Kind string `json:"kind"`
+	Run  string `json:"run"`
+
+	// kind run
+	Rehearsal bool   `json:"rehearsal,omitempty"`
+	SheetHash string `json:"sheet,omitempty"`
+	Title     string `json:"title,omitempty"`
+
+	// kind result
+	Point   string `json:"point,omitempty"`
+	Outcome string `json:"outcome,omitempty"`
+	Seen    any    `json:"seen,omitempty"`
+	Quality string `json:"quality,omitempty"`
+
+	// kinds result and abandon
+	Note   string `json:"note,omitempty"`
+	Reason string `json:"reason,omitempty"`
+
+	By        string `json:"by"`
+	Principal string `json:"principal,omitempty"`
+}
+
+// Result is one recorded result.
+type Result struct {
+	Run     string `json:"run"`
+	Seq     int64  `json:"seq"`
+	At      int64  `json:"at"`
+	Point   string `json:"point"`
+	Outcome string `json:"outcome"`
+	Note    string `json:"note,omitempty"`
+	// Seen is what the controller read at the point's tag when the result
+	// was recorded, and Quality its quality: written by the controller, never
+	// by the client.
+	Seen      any    `json:"seen,omitempty"`
+	Quality   string `json:"quality,omitempty"`
+	By        string `json:"by"`
+	Principal string `json:"principal,omitempty"`
+}
+
+// Run is one checkout against a sheet.
+type Run struct {
+	ID        string `json:"id"`
+	State     string `json:"state"`
+	Rehearsal bool   `json:"rehearsal,omitempty"`
+	SheetHash string `json:"sheet"`
+	Title     string `json:"title,omitempty"`
+	At        int64  `json:"at"`
+	By        string `json:"by"`
+	Principal string `json:"principal,omitempty"`
+	// Reason is why an abandoned run was abandoned, by whom and when.
+	Reason      string `json:"reason,omitempty"`
+	EndedAt     int64  `json:"endedAt,omitempty"`
+	EndedBy     string `json:"endedBy,omitempty"`
+	Results     int    `json:"results"`
+	lastResults map[string][]Result
+}
+
+// Store is the runs and their results, kept in one append-only file.
+type Store struct {
+	mu   sync.Mutex
+	path string
+	f    appendFile
+	now  func() time.Time
+	// off is the size of the good part of the file: where a failed append is
+	// cut back to, so a short write never has the next entry glued onto it.
+	off int64
+	// broken is why the store stopped taking entries: a write failed and the
+	// file could not be cut back. It is cleared by opening the file again.
+	broken error
+
+	seq  int64
+	prev string
+	runs map[string]*Run
+	ord  []string
+}
+
+// appendFile is the file as the store uses it (a test's can fail).
+type appendFile interface {
+	Write([]byte) (int, error)
+	Sync() error
+	Truncate(int64) error
+	Close() error
+}
+
+// MaxLine bounds one entry's encoded line: a result's reading is shortened
+// to fit, so no entry the store acknowledges is one it cannot read back.
+const MaxLine = 256 << 10
+
+// ErrInvalid marks a refusal that is the caller's (a bad outcome, a missing
+// note, text too long), as opposed to the store failing.
+var ErrInvalid = errors.New("checkout: invalid request")
+
+func invalid(format string, a ...any) error {
+	return fmt.Errorf("%w: "+format, append([]any{ErrInvalid}, a...)...)
+}
+
+// Open reads the file (creating it when absent) and returns the store.
+// A line that is not the next in the chain, or does not parse, is
+// ErrCorrupt: the file is never repaired or rewritten. A final line with no
+// newline is a write that was cut short before it was acknowledged, and is
+// cut off.
+func Open(path string, now func() time.Time) (*Store, error) {
+	if now == nil {
+		now = time.Now
+	}
+	s := &Store{path: path, now: now, runs: map[string]*Run{}}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(path)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+	case err != nil:
+		return nil, err
+	default:
+		good := len(data)
+		if i := bytes.LastIndexByte(data, '\n'); i != len(data)-1 {
+			good = i + 1 // a torn last line: drop it
+			if i < 0 {
+				good = 0
+			}
+		}
+		if err := s.replay(bytes.NewReader(data[:good])); err != nil {
+			return nil, err
+		}
+		if good != len(data) {
+			if err := os.Truncate(path, int64(good)); err != nil {
+				return nil, err
+			}
+		}
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	s.f = f
+	st, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	s.off = st.Size()
+	syncDir(filepath.Dir(path))
+	return s, nil
+}
+
+// Close closes the file.
+func (s *Store) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.f == nil {
+		return nil
+	}
+	err := s.f.Close()
+	s.f = nil
+	return err
+}
+
+func syncDir(dir string) {
+	if d, err := os.Open(dir); err == nil {
+		d.Sync()
+		d.Close()
+	}
+}
+
+func (s *Store) replay(r io.Reader) error {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 64*1024), 1<<20)
+	for sc.Scan() {
+		line := sc.Bytes()
+		var e entry
+		if err := json.Unmarshal(line, &e); err != nil {
+			return fmt.Errorf("%w: line %d: %v", ErrCorrupt, s.seq+1, err)
+		}
+		if e.Seq != s.seq+1 || e.Prev != s.prev {
+			return fmt.Errorf("%w: line %d is not the next entry of the chain", ErrCorrupt, s.seq+1)
+		}
+		if err := s.apply(e); err != nil {
+			return fmt.Errorf("%w: line %d: %v", ErrCorrupt, e.Seq, err)
+		}
+		s.seq, s.prev = e.Seq, lineHash(line)
+	}
+	return sc.Err()
+}
+
+func lineHash(b []byte) string {
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
+
+// apply folds an entry into the in-memory view.
+func (s *Store) apply(e entry) error {
+	switch e.Kind {
+	case kindRun:
+		if e.Run == "" || s.runs[e.Run] != nil {
+			return errors.New("a run that is empty or already begun")
+		}
+		s.runs[e.Run] = &Run{ID: e.Run, State: StateOpen, Rehearsal: e.Rehearsal, SheetHash: e.SheetHash, Title: e.Title,
+			At: e.At, By: e.By, Principal: e.Principal, lastResults: map[string][]Result{}}
+		s.ord = append(s.ord, e.Run)
+	case kindResult:
+		r := s.runs[e.Run]
+		if r == nil || r.State != StateOpen {
+			return errors.New("a result for a run that is not open")
+		}
+		r.lastResults[e.Point] = append(r.lastResults[e.Point], Result{Run: e.Run, Seq: e.Seq, At: e.At, Point: e.Point,
+			Outcome: e.Outcome, Note: e.Note, Seen: e.Seen, Quality: e.Quality, By: e.By, Principal: e.Principal})
+		r.Results++
+	case kindAbandon:
+		r := s.runs[e.Run]
+		if r == nil || r.State != StateOpen {
+			return errors.New("an abandon of a run that is not open")
+		}
+		r.State, r.Reason, r.EndedAt, r.EndedBy = StateAbandoned, e.Reason, e.At, e.By
+	default:
+		return fmt.Errorf("unknown entry kind %q", e.Kind)
+	}
+	return nil
+}
+
+// append writes e as the next line, fsyncs the file, and only then folds it
+// into the view. A write or sync that fails cuts the file back to its last
+// good size, so the entry that failed leaves nothing behind; if that fails
+// too, the store takes no more entries until it is opened again.
+func (s *Store) append(e entry) error {
+	if s.f == nil {
+		return errors.New("checkout: the store is closed")
+	}
+	if s.broken != nil {
+		return fmt.Errorf("checkout: the store stopped after a failed write (%v): restart the controller", s.broken)
+	}
+	e.Seq, e.At, e.Prev = s.seq+1, s.now().UnixMilli(), s.prev
+	line, err := json.Marshal(e)
+	if err != nil {
+		return err
+	}
+	if len(line) > MaxLine && e.Seen != nil {
+		e.Seen = "(too large to record)"
+		if line, err = json.Marshal(e); err != nil {
+			return err
+		}
+	}
+	if len(line) > MaxLine {
+		return invalid("the entry is larger than %d bytes", MaxLine)
+	}
+	out := append(line, '\n')
+	if _, err := s.f.Write(out); err != nil {
+		return s.undo(err)
+	}
+	if err := s.f.Sync(); err != nil {
+		return s.undo(err)
+	}
+	if err := s.apply(e); err != nil {
+		return s.undo(err)
+	}
+	s.off += int64(len(out))
+	s.seq, s.prev = e.Seq, lineHash(line)
+	return nil
+}
+
+// undo cuts the file back to its last good size after a failed append and
+// returns err; if it cannot, the store is stopped.
+func (s *Store) undo(err error) error {
+	if terr := s.f.Truncate(s.off); terr != nil {
+		s.broken = fmt.Errorf("%v; and the file could not be cut back: %v", err, terr)
+	}
+	return err
+}
+
+func newID() string {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		panic(err)
+	}
+	return hex.EncodeToString(b)
+}
+
+func (s *Store) openRun() *Run {
+	for _, id := range s.ord {
+		if r := s.runs[id]; r.State == StateOpen {
+			return r
+		}
+	}
+	return nil
+}
+
+// Begin starts a run against the sheet with the hash. There is one open run
+// at a time. A rehearsal run (against virtual devices) is marked so for good:
+// a run's kind is never changed afterwards.
+func (s *Store) Begin(rehearsal bool, sheetHash, title, by, principal string) (Run, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.openRun() != nil {
+		return Run{}, ErrRunOpen
+	}
+	e := entry{Kind: kindRun, Run: newID(), Rehearsal: rehearsal, SheetHash: sheetHash, Title: title, By: by, Principal: principal}
+	if err := s.append(e); err != nil {
+		return Run{}, err
+	}
+	return s.runs[e.Run].view(), nil
+}
+
+// Record adds a result for a point of an open run. A fail and a note say
+// why: a pass may have no words.
+func (s *Store) Record(run, point, outcome, note string, seen any, quality, by, principal string) (Result, error) {
+	switch outcome {
+	case Pass:
+	case Fail, Note:
+		if note == "" {
+			return Result{}, invalid("a %s says why: write a note", outcome)
+		}
+	default:
+		return Result{}, invalid("outcome %q: want pass, fail or note", outcome)
+	}
+	if point == "" || utf8.RuneCountInString(point) > MaxID {
+		return Result{}, invalid("a result names a point")
+	}
+	if utf8.RuneCountInString(note) > MaxNote {
+		return Result{}, invalid("the note is longer than %d characters", MaxNote)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r := s.runs[run]
+	if r == nil {
+		return Result{}, ErrNoRun
+	}
+	if r.State != StateOpen {
+		return Result{}, ErrNotOpen
+	}
+	e := entry{Kind: kindResult, Run: run, Point: point, Outcome: outcome, Note: note, Seen: seen, Quality: quality, By: by, Principal: principal}
+	if err := s.append(e); err != nil {
+		return Result{}, err
+	}
+	rs := r.lastResults[point]
+	return rs[len(rs)-1], nil
+}
+
+// Abandon ends an open run without sealing it. Its results stay in the file
+// and in the view; it can no longer take results.
+func (s *Store) Abandon(run, reason, by, principal string) (Run, error) {
+	if reason == "" {
+		return Run{}, invalid("abandoning a run says why: give a reason")
+	}
+	if utf8.RuneCountInString(reason) > MaxReason {
+		return Run{}, invalid("the reason is longer than %d characters", MaxReason)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r := s.runs[run]
+	if r == nil {
+		return Run{}, ErrNoRun
+	}
+	if r.State != StateOpen {
+		return Run{}, ErrNotOpen
+	}
+	if err := s.append(entry{Kind: kindAbandon, Run: run, Reason: reason, By: by, Principal: principal}); err != nil {
+		return Run{}, err
+	}
+	return r.view(), nil
+}
+
+func (r *Run) view() Run { v := *r; v.lastResults = nil; return v }
+
+// Current is the open run, if there is one.
+func (s *Store) Current() (Run, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if r := s.openRun(); r != nil {
+		return r.view(), true
+	}
+	return Run{}, false
+}
+
+// Get returns a run.
+func (s *Store) Get(id string) (Run, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if r := s.runs[id]; r != nil {
+		return r.view(), true
+	}
+	return Run{}, false
+}
+
+// List returns every run, oldest first.
+func (s *Store) List() []Run {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]Run, 0, len(s.ord))
+	for _, id := range s.ord {
+		out = append(out, s.runs[id].view())
+	}
+	return out
+}
+
+// Latest is each point's newest result in a run.
+func (s *Store) Latest(run string) map[string]Result {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := map[string]Result{}
+	if r := s.runs[run]; r != nil {
+		for p, rs := range r.lastResults {
+			out[p] = rs[len(rs)-1]
+		}
+	}
+	return out
+}
+
+// History is every result recorded for a point of a run, oldest first.
+func (s *Store) History(run, point string) []Result {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if r := s.runs[run]; r != nil {
+		return append([]Result(nil), r.lastResults[point]...)
+	}
+	return nil
+}
+
+// Results is every result of a run in the order recorded.
+func (s *Store) Results(run string) []Result {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []Result
+	if r := s.runs[run]; r != nil {
+		for _, rs := range r.lastResults {
+			out = append(out, rs...)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Seq < out[j].Seq })
+	return out
+}
