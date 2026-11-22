@@ -74,10 +74,19 @@ func (f *Fake) login(address, password string, bt *tiad.BlindTrust) (string, boo
 	case bt != nil:
 		why = loginBlocked(bt)
 	case password != want:
+		// tiad answered once (OnlineLogin.Took), then refused TIA asking
+		// again.
+		f.answered[address] = true
 		why = LoginAskedAgain
 	default:
 		if f.keepsLogon {
 			f.keptLogons[address] = true
+		}
+		// The agent's OnlineLogin.Took: logged on here, and evidence of
+		// another password goes.
+		f.answered[address] = true
+		if held, ok := f.instanceLogons[address]; ok && held != password {
+			delete(f.instanceLogons, address)
 		}
 		return "", true
 	}

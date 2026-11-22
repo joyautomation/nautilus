@@ -572,7 +572,12 @@ type ResetGate struct {
 // TIA's download. It stands in for the download's own logon only when the
 // download asked no credentials and refused nothing before the check; the
 // gate it lets says route instance-logon.
-func (g ResetGate) At(loggedOn, credentialsAsked, instanceLogon bool) ResetGate {
+//
+// answeredBefore is whether tiad answered credentials for the download's
+// address earlier in the same TIA instance (the agent's
+// InstanceLogons.AnsweredBefore): TIA may keep that logon and ask nothing
+// in this download, so the off routes are refused then too.
+func (g ResetGate) At(loggedOn, credentialsAsked, instanceLogon, answeredBefore bool) ResetGate {
 	switch {
 	case !g.Allowed:
 		return g
@@ -582,8 +587,16 @@ func (g ResetGate) At(loggedOn, credentialsAsked, instanceLogon bool) ResetGate 
 		return ResetGate{Why: resetRefused + ResetNoLogon}
 	case g.Route != ResetRouteLogon && (loggedOn || credentialsAsked):
 		return ResetGate{Why: resetRefused + "the CPU asked credentials in this download, so its access control is on, but the " + g.Route + " route rests on it being off: if it is on, attest \"enabled\" (the logon route)"}
+	case g.Route != ResetRouteLogon && answeredBefore:
+		return ResetGate{Why: resetRefused + ResetLoggedOnBefore(g.Route)}
 	}
 	return g
+}
+
+// ResetLoggedOnBefore is the refusal of an off route over a CPU tiad
+// logged on to earlier in the same TIA instance.
+func ResetLoggedOnBefore(route string) string {
+	return "tiad logged on to this CPU earlier in this agent's TIA instance, so its access control was on then, and TIA may have kept that logon and asked this download nothing, but the " + route + " route rests on it being off: if it is on, attest \"enabled\" (the logon route); if it is off, restart the agent for a TIA instance that holds no logon"
 }
 
 // UploadRouteEnabled turns CheckReset's upload route on. It is off
@@ -599,7 +612,7 @@ const (
 	uploadRouteWhy = "the upload route is not yet available: that an upload brings a CPU's access control into the project is unproven until a bench upload of a CPU with access control on shows it"
 	// ResetNoLogon, ResetNoPassword and ResetPasswordNotRecorded are the
 	// agent's refusals of the logon route and of tiad's user.
-	ResetNoLogon             = `the logon route (attestation.cpuAccessControl "enabled") needs tiad logged on to the CPU as "nautilus" before TIA asked: in this download, or (the instance-logon route, when the download asked no credentials) by a compare to this CPU in this agent's TIA instance with the same secrets.fullAccessPassword that came back equal, with no download to the CPU, blind trust or refused credentials since; neither holds (the CPU asked no credentials and the instance holds no such compare, or tiad's answer was refused), so nothing shows tiad holds the CPU's Full access: compare first, then download again; if the compare asks no credentials either (TIA kept an earlier logon), restart the agent for a TIA instance that holds none; if the CPU's access control is off, attest "disabled"`
+	ResetNoLogon             = `the logon route (attestation.cpuAccessControl "enabled") needs tiad logged on to the CPU as "nautilus" before TIA asked: in this download, or (the instance-logon route, when the download asked no credentials) by a compare to this CPU in this agent's TIA instance with the same secrets.fullAccessPassword that came back equal, with no download to the CPU, blind trust or refused credentials since; neither holds (the CPU asked no credentials and the instance holds no such compare, or tiad's answer was refused), so nothing shows tiad holds the CPU's Full access: compare (or verify the last deploy, whose archived project compares equal) first, then download again; if the compare asks no credentials either (TIA kept an earlier logon), restart the agent for a TIA instance that holds none; if the CPU's access control is off, attest "disabled"`
 	ResetNoPassword          = `the logon route (attestation.cpuAccessControl "enabled") logs on to the CPU as "nautilus", and the request carries no secrets.fullAccessPassword`
 	ResetRecordOnly          = `an apply on this session recorded secrets.fullAccessPassword as the user "nautilus"'s password without setting it (fullAccessRecordOnly), so tiad cannot show the project's user holds it: a reset to it could leave the CPU with a password this download cannot log on with, locking tiad out; apply on a session that sets the password`
 	ResetPasswordNotRecorded = `the request's secrets.fullAccessPassword is not the password tiad set or recorded for the project's user "nautilus": after the reset the CPU's Full access user would have a password this download cannot log on with`

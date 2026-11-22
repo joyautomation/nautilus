@@ -467,43 +467,54 @@ func TestResetMatrix(t *testing.T) {
 func TestResetAt(t *testing.T) {
 	logon := ResetGate{Allowed: true, Route: ResetRouteLogon}
 	for _, inst := range []bool{false, true} {
-		if g := logon.At(true, true, inst); g != logon {
+		if g := logon.At(true, true, inst, false); g != logon {
 			t.Errorf("logon, logged on (instance %v): %+v", inst, g)
 		}
 	}
 	for _, asked := range []bool{false, true} {
-		if g := logon.At(false, asked, false); g.Allowed || g.Why != resetRefused+ResetNoLogon {
+		if g := logon.At(false, asked, false, false); g.Allowed || g.Why != resetRefused+ResetNoLogon {
 			t.Errorf("logon, not logged on (asked %v): %+v", asked, g)
 		}
 	}
 	// The instance-logon route: the instance's evidence stands in for the
 	// download's logon only when the download asked no credentials.
-	if g := logon.At(false, false, true); !g.Allowed || g.Route != ResetRouteInstanceLogon {
+	if g := logon.At(false, false, true, false); !g.Allowed || g.Route != ResetRouteInstanceLogon {
 		t.Errorf("logon, nothing asked, instance evidence: %+v", g)
 	}
-	if g := logon.At(false, true, true); g.Allowed || g.Why != resetRefused+ResetNoLogon {
+	if g := logon.At(false, true, true, false); g.Allowed || g.Why != resetRefused+ResetNoLogon {
 		t.Errorf("logon, asked and not logged on, instance evidence: %+v", g)
 	}
-	if strings.Contains(ResetNoLogon, "close every session") || !strings.Contains(ResetNoLogon, "compare first, then download again") {
+	if strings.Contains(ResetNoLogon, "close every session") || !strings.Contains(ResetNoLogon, "first, then download again") {
 		t.Errorf("ResetNoLogon names a fix that does nothing on an instance with no blind trust, or not the compare: %s", ResetNoLogon)
 	}
 	for _, route := range []string{ResetRouteAttestation, ResetRouteUpload} {
 		off := ResetGate{Allowed: true, Route: route}
 		for _, inst := range []bool{false, true} {
-			if g := off.At(false, false, inst); g != off {
+			if g := off.At(false, false, inst, false); g != off {
 				t.Errorf("%s, no credentials asked (instance %v): %+v", route, inst, g)
 			}
 			// Asked and answered, or asked and refused (TIA may go on
 			// after a no): either shows the CPU's access control on.
 			for _, loggedOn := range []bool{true, false} {
-				if g := off.At(loggedOn, true, inst); g.Allowed || !strings.Contains(g.Why, "so its access control is on, but the "+route+" route rests on it being off") {
+				if g := off.At(loggedOn, true, inst, false); g.Allowed || !strings.Contains(g.Why, "so its access control is on, but the "+route+" route rests on it being off") {
 					t.Errorf("%s, the CPU asked credentials (logged on %v, instance %v): %+v", route, loggedOn, inst, g)
 				}
 			}
 		}
 	}
+	// A logon earlier in the instance refuses the off routes: TIA may
+	// ride on it and ask nothing.
+	for _, route := range []string{ResetRouteAttestation, ResetRouteUpload} {
+		off := ResetGate{Allowed: true, Route: route}
+		if g := off.At(false, false, false, true); g.Allowed || g.Why != resetRefused+ResetLoggedOnBefore(route) {
+			t.Errorf("%s, logged on earlier in the instance: %+v", route, g)
+		}
+	}
+	if g := logon.At(false, false, true, true); g.Route != ResetRouteInstanceLogon || logon.At(true, true, false, true) != logon {
+		t.Errorf("the logon routes do not care about an earlier logon: %+v", g)
+	}
 	for _, g := range []ResetGate{{Why: "no"}, {Route: ResetRouteLogon}} {
-		if g.At(true, true, true).Allowed || g.At(false, false, true).Allowed {
+		if g.At(true, true, true, false).Allowed || g.At(false, false, true, false).Allowed {
 			t.Errorf("a refused gate let: %+v", g)
 		}
 	}

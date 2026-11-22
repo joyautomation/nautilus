@@ -38,6 +38,44 @@ namespace Tiad
 
         readonly object mu = new object();
         readonly Dictionary<string, Entry> byAddress = new Dictionary<string, Entry>(StringComparer.Ordinal);
+        // answered is, per address, the TIA instance in which tiad last
+        // answered TIA's credentials question for it (any operation, any
+        // password): TIA may keep that logon, so a later operation there
+        // may ride on it without being asked (AnsweredBefore).
+        readonly Dictionary<string, object> answered = new Dictionary<string, object>(StringComparer.Ordinal);
+
+        // MarkAnswered notes that an operation in instance answered TIA's
+        // credentials question for address with password. A record of
+        // another password goes: the CPU may now hold this one.
+        public void MarkAnswered(object instance, string address, string password)
+        {
+            if (instance == null || string.IsNullOrEmpty(address)) return;
+            lock (mu) answered[address] = instance;
+            bool other;
+            lock (mu) other = byAddress.ContainsKey(address);
+            if (other && !Holds(instance, address, password)) Forget(address, "tiad answered credentials for it with another password, or in another TIA instance");
+        }
+
+        // AnsweredBefore is whether tiad answered credentials for address
+        // in instance before (MarkAnswered): TIA may have kept that logon,
+        // and the CPU's access control was on then.
+        public bool AnsweredBefore(object instance, string address)
+        {
+            object at;
+            lock (mu)
+            {
+                if (!answered.TryGetValue(address ?? "", out at)) return false;
+            }
+            return ReferenceEquals(at, instance);
+        }
+
+        // NewInstance drops everything: the TIA instance was retired or a
+        // new one started, which keeps no logon.
+        public void NewInstance(string why)
+        {
+            lock (mu) answered.Clear();
+            ForgetAll(why);
+        }
 
         // Record notes that call (on session) compared address in
         // instance, logged on as "nautilus" with password and came back

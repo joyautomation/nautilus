@@ -552,6 +552,64 @@ func contractUserManagementReset(t *testing.T, start Starter) {
 		}
 	})
 
+	t.Run("OffRouteAfterAnEarlierLogon", func(t *testing.T) {
+		// TIA keeps the logon of the compare after A and asks the next
+		// download nothing: an attestation of "disabled" is refused at
+		// TIA's check all the same, since tiad logged on to the CPU in
+		// this instance.
+		a, s := compiledBench(t, start)
+		a.SetQuestions(t, benchHardwareChecks)
+		a.SetLogon(t, LogonScript{KeepsLogon: true})
+		if _, err := s.Download(ctx, accessLoad(tiad.AttestCPUAccessDisabled, BenchDownloadSecrets())); err != nil {
+			t.Fatalf("A: %v", err)
+		}
+		_, err := s.Download(ctx, accessLoad(tiad.AttestCPUAccessDisabled, BenchDownloadSecrets()))
+		if tiad.Kind(err) != tiad.KindOutcomeUnknown || !strings.Contains(err.Error(), tiad.ResetLoggedOnBefore(tiad.ResetRouteAttestation)) ||
+			slices.Contains(tiad.ActingAnswers(err), tiad.QuestionUserManagement) {
+			t.Fatalf("attested disabled over a kept logon: %v (acting %v)", err, tiad.ActingAnswers(err))
+		}
+		if l := a.Loaded(t); len(l) != 1 {
+			t.Fatalf("loaded %d, want A only", len(l))
+		}
+	})
+
+	t.Run("InstanceLogonGoesWithTheInstance", func(t *testing.T) {
+		// The evidence of the compare after A goes with a blind trust and
+		// the instance it retires; an unequal compare that logs on in the
+		// next instance earns nothing.
+		a, s := compiledBench(t, start)
+		a.SetQuestions(t, benchHardwareChecks)
+		a.SetLogon(t, LogonScript{CredentialsAfterChecks: true})
+		if _, err := s.Download(ctx, accessLoad(tiad.AttestCPUAccessDisabled, BenchDownloadSecrets())); err != nil {
+			t.Fatalf("A: %v", err)
+		}
+		a.SetFingerprint(t, FingerprintScript{AsksTLS: true})
+		if fp, err := s.Fingerprint(ctx, tiad.FingerprintRequest{Secrets: BenchLogin, TrustUnverifiedCertificate: true}); err != nil || len(fp.TrustedBlindly) != 1 {
+			t.Fatalf("a read that trusts blindly: %+v %v", fp, err)
+		}
+		a.SetFingerprint(t, FingerprintScript{})
+		// Closing every session retires the instance that trusted.
+		closeFirst(t, s)
+		r := RestoreSession(t, a)
+		restore := ResetLoad(benchCPU)
+		restore.Attestation.CPUAccessControl = tiad.AttestCPUAccessEnabled
+		wantNoLogon := func(name string) {
+			t.Helper()
+			_, err := r.Download(ctx, restore)
+			if tiad.Kind(err) != tiad.KindOutcomeUnknown || !strings.Contains(err.Error(), tiad.ResetNoLogon) || slices.Contains(tiad.ActingAnswers(err), tiad.QuestionUserManagement) {
+				t.Fatalf("the restore after %s: %v (acting %v)", name, err, tiad.ActingAnswers(err))
+			}
+		}
+		wantNoLogon("a blind trust and the retired instance")
+		if cmp, err := r.CompareWith(ctx, tiad.CompareRequest{Secrets: BenchLogin}); err != nil || cmp.Equal {
+			t.Fatalf("an unequal compare that logs on: %+v %v", cmp, err)
+		}
+		wantNoLogon("an unequal compare")
+		if l := a.Loaded(t); len(l) != 1 {
+			t.Fatalf("loaded %d, want A only", len(l))
+		}
+	})
+
 	t.Run("ProjectNotDisabled", func(t *testing.T) {
 		// An upload of a CPU whose access control is not Disabled (one
 		// that compiles without a Full access user): neither route lets a

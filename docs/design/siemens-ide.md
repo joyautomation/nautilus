@@ -1098,11 +1098,22 @@ behaviour. So, until then:
       a new or retired instance, a download to the address that may have
       acted (one TIA ended cleanly, loading nothing, with no acting
       answer, keeps it; the compare after a load may record it again),
-      any credentials question tiad answered no on the address (upload,
-      fingerprint, compare, download), and a compare that failed after TIA
-      asked credentials. The audit says `given:instance-logon`, with a
-      line naming the evidence (when, which call, which session). It is a
-      second loosening, on #616 with the first.
+      a credentials question on the address that tiad answered no with a
+      password, or answered with another password (upload, fingerprint,
+      compare, download), and a compare that failed after TIA asked
+      credentials. Otherwise it lasts the instance's life, with no age
+      limit. A practical way to earn it is to verify the last deploy (its
+      archived project compares equal). The audit says
+      `given:instance-logon`, with a line naming the evidence (when,
+      which call, which session). It is a second loosening, on #616 with
+      the first.
+
+      The same knowledge tightens the off routes: once tiad answered
+      credentials for an address in a TIA instance, `attestation` and
+      `upload` resets to it are refused at TIA's check for the rest of
+      that instance, since TIA may ride on the kept logon and ask the
+      download nothing. If the CPU's access control really is off, restart
+      the agent.
 
       Openness V21 offers no online "Reset to factory settings" or memory
       reset for tiad to fall back on (reflection over its assemblies,
@@ -1684,12 +1695,14 @@ the bench window has to show five things before relying on it:
   logged on to the CPU earlier, and whether it asks them before the
   download's checks. If it does not, the `logon` route gives way to
   `instance-logon` (§3.5), which needs an equal compare that logged on
-  in the same instance; the guard that refuses the off routes on a CPU
-  that asked credentials sees nothing, so an attestation of `disabled`
-  over a CPU whose access control is on would then reset it. The window
-  restarts the agent before every load (tiad retires an instance by
-  itself only after a blind trust), so a load never rides on an earlier
-  logon unless it falls back to `instance-logon` on purpose.
+  in the same instance. The guard that refuses the off routes on a CPU
+  that asked credentials in the download sees nothing then, so tiad also
+  refuses them on any CPU it answered credentials for earlier in the
+  instance. A logon kept from outside tiad's knowledge (another tool on
+  the same TIA, which the agent does not share) stays out of reach. The
+  window restarts the agent before every load (tiad retires an instance
+  by itself only after a blind trust), so a load never rides on an
+  earlier logon unless it falls back to `instance-logon` on purpose.
 
 The window's stop criteria cover each: an `outcome_unknown` naming
 credentials or `user-management` stops it.

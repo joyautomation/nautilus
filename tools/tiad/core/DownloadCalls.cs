@@ -426,6 +426,11 @@ namespace Tiad
             // before TIA's user-management check (UserManagementRule.Gate.At).
             bool held = false;
             string heldWhat = "none";
+            // answeredBefore is whether tiad answered credentials for the
+            // address earlier in this TIA instance, read with held: TIA
+            // may have kept that logon, so the off routes, which rest on
+            // the CPU's access control being off, are refused.
+            bool answeredBefore = false;
             bool haveProtection = req.Secrets.Protection != "";
             bool haveConfigurationPassword = req.Secrets.ConfigurationPassword != "";
             string given = "";
@@ -456,13 +461,9 @@ namespace Tiad
                 UserManagementRule.Gate now = reset;
                 if (q.Id == QuestionIds.UserManagement && reset.Allowed)
                 {
-                    now = reset.At(use != null && use.LoggedOn, use != null && use.MayHaveAskedCredentials, use != null && held);
+                    now = reset.At(use != null && use.LoggedOn, use != null && use.MayHaveAskedCredentials, use != null && held, answeredBefore);
                     if (!now.Allowed) atWhy = now.Why;
                     if (!now.Allowed) Log.Line("audit user-management-reset address={0} route={1} refused when TIA asked: {2}", Json.Quote(req.Address), reset.Route, Json.Quote(now.Why));
-                    if (now.Allowed && now.Route == UserManagementRule.RouteInstanceLogon)
-                    {
-                        Log.Line("audit user-management-reset address={0} route={1}: the download asked no credentials before TIA's check, and this TIA instance holds an equal compare that logged on with the request's password ({2})", Json.Quote(req.Address), now.Route, heldWhat);
-                    }
                 }
                 DownloadRule.Resolve(one, req.Decisions, haveProtection, haveConfigurationPassword, accessControlKept, now, unanswered, declined);
                 if (unanswered.Count > u || declined.Count > d)
@@ -476,7 +477,14 @@ namespace Tiad
                 // Acting by what the answer writes (start-after no and
                 // user-management keep change nothing).
                 if (DownloadChecks.ActingAnswer(q.Id, a.Yes, a.Choice)) acting.Add(q.Id);
-                if (q.Id == QuestionIds.UserManagement && a.Choice == Answer.ChoiceReset) given = now.Route;
+                if (q.Id == QuestionIds.UserManagement && a.Choice == Answer.ChoiceReset)
+                {
+                    given = now.Route;
+                    if (given == UserManagementRule.RouteInstanceLogon)
+                    {
+                        Log.Line("audit user-management-reset address={0} route={1}: the download asked no credentials before TIA's check, and this TIA instance holds an equal compare that logged on with the request's password ({2})", Json.Quote(req.Address), given, heldWhat);
+                    }
+                }
                 return a;
             };
 
@@ -524,10 +532,11 @@ namespace Tiad
                         // start-after is NoAction.
                         // Its logon answers by the blind trust read here,
                         // on the TIA thread.
-                        use = new LoginUse(LoginFor(req.Secrets.FullAccessPassword, ranWith, req.Address, "download"), "download", req.Address);
+                        use = new LoginUse(LoginFor(t, req.Secrets.FullAccessPassword, ranWith, req.Address, "download"), "download", req.Address);
                         // The evidence as it stands now, in this instance,
                         // before anything of this download reaches TIA.
                         held = ranWith == null && blindTrust == null && instanceLogons.Holds(t, req.Address, req.Secrets.FullAccessPassword);
+                        answeredBefore = instanceLogons.AnsweredBefore(t, req.Address);
                         if (held) heldWhat = instanceLogons.Describe(req.Address);
                         DownloadOutcome got = null;
                         try
@@ -876,7 +885,7 @@ namespace Tiad
                         removed = t.RemoveAccess(s.Handle, s.Made);
                         s.Made = new AccessMade();
                     }
-                    List<string> tr = TrustingCall("upload", s, address, trust, delegate { return t.Upload(s.Handle, address, trust, LoginFor(password, blindTrust, address, "upload")); });
+                    List<string> tr = TrustingCall("upload", s, address, trust, delegate { return t.Upload(s.Handle, address, trust, LoginFor(t, password, blindTrust, address, "upload")); });
                     RecordBlindTrust("upload", s, address, tr);
                     upTrust = blindTrust;
                     // The project is replaced now: a failed identity read

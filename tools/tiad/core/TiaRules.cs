@@ -945,12 +945,17 @@ namespace Tiad
         // the password, or its access control changed, so the agent's
         // instance-logon evidence for the address goes (InstanceLogons).
         public readonly Action Lost;
+        // Took, when set, runs once tiad answered a credentials question
+        // with this login (LoginUse.Decide): the agent notes the logon for
+        // the address (InstanceLogons.MarkAnswered).
+        public readonly Action Took;
 
-        OnlineLogin(string password, string blocked, Action lost)
+        OnlineLogin(string password, string blocked, Action lost, Action took)
         {
             Password = password;
             Blocked = blocked;
             Lost = lost;
+            Took = took;
         }
 
         // For is the login a call answers with: null without a password;
@@ -958,14 +963,15 @@ namespace Tiad
         // TIA thread just before the call).
         public static OnlineLogin For(string password, BlindTrust bt)
         {
-            return For(password, bt, null);
+            return For(password, bt, null, null);
         }
 
-        // For with lost, run when a credentials question is answered no.
-        public static OnlineLogin For(string password, BlindTrust bt, Action lost)
+        // For with lost, run when a credentials question is answered no,
+        // and took, run when one is answered with the login.
+        public static OnlineLogin For(string password, BlindTrust bt, Action lost, Action took)
         {
             if (string.IsNullOrEmpty(password)) return null;
-            return new OnlineLogin(password, bt == null ? null : BlockedBy(bt), lost);
+            return new OnlineLogin(password, bt == null ? null : BlockedBy(bt), lost, took);
         }
 
         // BlockedBy is the refusal while the instance trusts blindly.
@@ -1076,6 +1082,7 @@ namespace Tiad
             if (why == null)
             {
                 Log.Line("audit online-login call={0} address={1} user={2}: answering TIA's credentials question", call, Json.Quote(address), Json.Quote(OnlineLogin.User));
+                if (login != null && login.Took != null) login.Took();
             }
             else
             {

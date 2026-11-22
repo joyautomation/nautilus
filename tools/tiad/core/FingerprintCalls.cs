@@ -155,14 +155,19 @@ namespace Tiad
         // "nautilus", which tiad answers when TIA asks credentials going
         // online (OnlineLogin). "" when the request carries none. The root's
         // Done refuses any other secret.
-        // LoginFor is the login an online call to address answers with
-        // (OnlineLogin.For): a credentials question tiad answers no
-        // forgets the instance-logon evidence for address.
-        OnlineLogin LoginFor(string password, BlindTrust bt, string address, string call)
+        // LoginFor is the login an online call in TIA instance t to
+        // address answers with (OnlineLogin.For): a credentials question
+        // tiad answers no forgets the instance-logon evidence for address;
+        // one it answers marks the address logged on in t (and forgets
+        // evidence of another password).
+        OnlineLogin LoginFor(ITia t, string password, BlindTrust bt, string address, string call)
         {
             return OnlineLogin.For(password, bt, delegate
             {
                 instanceLogons.Forget(address, call + ": tiad answered TIA's credentials question no");
+            }, delegate
+            {
+                instanceLogons.MarkAnswered(t, address, password);
             });
         }
 
@@ -176,7 +181,7 @@ namespace Tiad
         // asked any, forgets it.
         OnlineCompare CompareOnline(ITia t, Session s, string address, string password, BlindTrust bt, string call, List<Difference> diffs, out bool equal)
         {
-            var use = new LoginUse(LoginFor(password, bt, address, call), call, address);
+            var use = new LoginUse(LoginFor(t, password, bt, address, call), call, address);
             OnlineCompare cmp;
             try
             {
@@ -305,7 +310,7 @@ namespace Tiad
                 {
                     try
                     {
-                        FingerprintRead fr = TrustingCall("fingerprint read", s, address, trust, delegate { return t.ReadFingerprint(s.Handle, address, trust, LoginFor(password, blindTrust, address, "fingerprint read")); });
+                        FingerprintRead fr = TrustingCall("fingerprint read", s, address, trust, delegate { return t.ReadFingerprint(s.Handle, address, trust, LoginFor(t, password, blindTrust, address, "fingerprint read")); });
                         if (fr != null) RecordBlindTrust("fingerprint read", s, address, fr.TrustedBlindly);
                         return fr;
                     }

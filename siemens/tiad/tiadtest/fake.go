@@ -101,9 +101,12 @@ type Fake struct {
 	// credentials. instanceLogons is the agent's InstanceLogons: the
 	// password of the last equal compare that logged on to each CPU in
 	// this instance (the agent keeps only an HMAC of it).
+	// answered is the agent's InstanceLogons.AnsweredBefore: the CPUs
+	// tiad answered credentials for in this instance.
 	keepsLogon, credentialsAfterChecks bool
 	keptLogons                         map[string]bool
 	instanceLogons                     map[string]string
+	answered                           map[string]bool
 
 	// deployRecs is the deploy record, oldest first, each intent with its
 	// outcome once written; archives the archived projects by sha256;
@@ -511,6 +514,7 @@ func (f *Fake) init() {
 		f.logins = map[string]string{}
 		f.keptLogons = map[string]bool{}
 		f.instanceLogons = map[string]string{}
+		f.answered = map[string]bool{}
 		f.archives = map[string][]byte{}
 		f.archived = map[string]archivedProject{}
 		f.loadedArchive = map[string]string{}
@@ -1071,6 +1075,7 @@ func (f *Fake) retireIfTrusted() {
 	// A new instance keeps no logon, and the agent's evidence goes.
 	clear(f.keptLogons)
 	clear(f.instanceLogons)
+	clear(f.answered)
 }
 
 func (f *Fake) applyStation(r *http.Request) (any, *failure) {
@@ -1470,6 +1475,7 @@ func (f *Fake) downloadTIA(s *session, req tiad.DownloadRequest, attested *tiad.
 	// The agent's instance-logon evidence for this CPU and password, as
 	// it stands before anything of this download reaches TIA.
 	held := f.blindTrust == nil && pw != "" && f.instanceLogons[req.Address] == pw
+	answeredBefore := f.answered[req.Address]
 	var asked []tiad.Question
 	var acting []string
 	// The acting answers given, and a reset's route, for the deploy
@@ -1515,7 +1521,7 @@ func (f *Fake) downloadTIA(s *session, req tiad.DownloadRequest, attested *tiad.
 		}
 		now := reset
 		if q.ID == tiad.QuestionUserManagement {
-			now = reset.At(loggedOn, credentialsAsked, held)
+			now = reset.At(loggedOn, credentialsAsked, held, answeredBefore)
 		}
 		unanswered, declined := tiad.Resolve([]tiad.Question{q}, req.Decisions, haveProtection, haveConfigurationPassword, accessControlKept, now)
 		if len(unanswered) == 0 && len(declined) == 0 {
