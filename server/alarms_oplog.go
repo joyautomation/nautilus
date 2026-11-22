@@ -159,6 +159,12 @@ type AlarmLog struct {
 	// ackGen counts the acks the view has taken; each view ack keeps the
 	// count it was taken at, and each hand-off the count when its event
 	// fired, so a late judgement clears only an ack that existed then.
+	// It rests on one invariant: every path that acks the engine from the
+	// log (Apply's KindAck through applyAck, adoptPending through
+	// AckCommitted, a takeover's restore) writes the view, bumping
+	// ackGen, BEFORE the engine is acked, so an event that ends an ack
+	// always carries a count at or above that ack's. Break it and a real
+	// end goes unjudged until Reconcile.
 	ackGen atomic.Uint64
 
 	// seen hears every committed alarm entry this replica proposed, once
@@ -477,6 +483,10 @@ func (l *AlarmLog) engineEvent(ev alarm.Event) {
 	}
 	if mutServer("engine_event_waits") {
 		l.clearIfAcked(endedOcc{ev.ID, ev.Occurrence, l.ackGen.Load()})
+		return
+	}
+	if mutServer("engine_event_blocks") {
+		l.ended <- endedOcc{ev.ID, ev.Occurrence, l.ackGen.Load()}
 		return
 	}
 	select {

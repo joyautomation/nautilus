@@ -302,6 +302,7 @@ var Mutations = []string{
 	"engine_event_waits",                // server: the engine's hook takes AlarmLog.mu on the scan instead of handing off (#715, #1053)
 	"clear_any_later_ack",               // server: a late hand-off clears an ack of a later occurrence (#715)
 	"clear_ack_taken_after",             // server: a late hand-off clears an ack the view took after its event (#715)
+	"engine_event_blocks",               // server: the engine's hook blocks when the hand-off is full (#715, #1053)
 	"occurrences_not_synced",            // server: the leader proposes no occurrence-start or -end (#715)
 }
 

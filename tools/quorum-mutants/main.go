@@ -442,6 +442,7 @@ var table = []mutation{
 	{"engine_event_waits", []string{"TestScanNeverWaitsOnTheAlarmLog"}},
 	{"clear_any_later_ack", []string{"TestLateHandOffKeepsALaterAck"}},
 	{"clear_ack_taken_after", []string{"TestHandOffNeverClearsAnAckTakenAfterTheEvent"}},
+	{"engine_event_blocks", []string{"TestAFullHandOffDropsAndReconcileClears"}},
 	{"occurrences_not_synced", []string{"TestLeaderSyncsOccurrences"}},
 }
 
@@ -536,6 +537,7 @@ var rowPkgs = map[string][]string{
 	"engine_event_waits":                {"./server"},
 	"clear_any_later_ack":               {"./server"},
 	"clear_ack_taken_after":             {"./server"},
+	"engine_event_blocks":               {"./server"},
 	"occurrences_not_synced":            {"./server"},
 	"reconcile_before_restore":          {"./server"},
 	"cluster_ops_proxied":               {"./server"},

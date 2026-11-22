@@ -33,6 +33,8 @@ import "os"
 //     occurrence;
 //   - clear_ack_taken_after: a late hand-off clears an ack the view took
 //     after its event fired;
+//   - engine_event_blocks: the engine's hook blocks when the hand-off
+//     is full;
 //   - superseded_alarms_kept: a superseded log's acks and shelves are
 //     carried by a takeover, and kept by a leader that learns it.
 var mutOn = os.Getenv("QUORUM_MUT")

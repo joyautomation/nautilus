@@ -648,3 +648,45 @@ func TestHandOffNeverClearsAnAckTakenAfterTheEvent(t *testing.T) {
 		t.Fatalf("the activation's hand-off cleared the ack taken after it: %v", queued)
 	}
 }
+
+// A flood that fills the hand-off still never holds the scan: the
+// evaluation returns, the end it could not hand off is dropped, and
+// Reconcile, at the next log tick, clears the ack the engine no longer
+// holds.
+func TestAFullHandOffDropsAndReconcileClears(t *testing.T) {
+	var lead atomic.Bool
+	lead.Store(true)
+	cond := map[string]any{"HiTempAlm": true, "LoFlowAlm": false}
+	s, eng, al, _ := loggedAlarms(t, cond, &lead)
+	PairAlarms{Engine: eng, Log: al}.RestoreAlarmsSynced(nil, true)
+	eng.Evaluate()
+	if rec := do(t, s, "POST", "/api/alarms/ack", `{"ids":["HiTemp"],"by":"op"}`); rec.Code != http.StatusOK {
+		t.Fatalf("ack: %d %s", rec.Code, rec.Body)
+	}
+	al.mu.Lock() // the consumer blocks on its next judgement
+	for full := false; !full; {
+		select {
+		case al.ended <- endedOcc{id: "LoFlow"}:
+		default:
+			full = true
+		}
+	}
+	cond["HiTempAlm"] = false
+	done := make(chan struct{})
+	go func() { eng.Evaluate(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		al.mu.Unlock()
+		t.Fatal("the scan's evaluation waited on a full hand-off")
+	}
+	al.mu.Unlock()
+	al.Reconcile()
+	deadline := time.Now().Add(3 * time.Second)
+	for al.Held(true, nil)["HiTemp"].Acked {
+		if time.Now().After(deadline) {
+			t.Fatal("Reconcile did not clear the ack whose end the full hand-off dropped")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
