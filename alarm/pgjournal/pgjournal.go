@@ -74,6 +74,7 @@ ALTER TABLE alarm_events ADD COLUMN IF NOT EXISTS peak integer;
 ALTER TABLE alarm_events ADD COLUMN IF NOT EXISTS window_ms bigint;
 ALTER TABLE alarm_events ADD COLUMN IF NOT EXISTS since_ms bigint;
 ALTER TABLE alarm_events ADD COLUMN IF NOT EXISTS episode text;
+ALTER TABLE alarm_events ADD COLUMN IF NOT EXISTS standing boolean;
 CREATE INDEX IF NOT EXISTS alarm_events_site_ts ON alarm_events (site, ts DESC);
 CREATE INDEX IF NOT EXISTS alarm_events_ts ON alarm_events (ts DESC);`
 
@@ -227,8 +228,8 @@ func (j *Journal) writer() {
 // trip per few hundred events rather than one per event.
 func (j *Journal) insert(batch []alarm.Event) error {
 	var b strings.Builder
-	b.WriteString(`INSERT INTO alarm_events (ts, id, name, kind, priority, site, state, "by", level, "to", via, result, reason, occurrence, count, peak, window_ms, since_ms, episode) VALUES `)
-	const cols = 19
+	b.WriteString(`INSERT INTO alarm_events (ts, id, name, kind, priority, site, state, "by", level, "to", via, result, reason, occurrence, count, peak, window_ms, since_ms, episode, standing) VALUES `)
+	const cols = 20
 	args := make([]any, 0, len(batch)*cols)
 	for i, e := range batch {
 		if i > 0 {
@@ -247,14 +248,14 @@ func (j *Journal) insert(batch []alarm.Event) error {
 		args = append(args, e.Time().UTC(), e.ID, e.Name, e.Kind,
 			e.Priority.String(), e.Site, e.State, e.By,
 			nullInt(e.Level), nullStr(e.To), nullStr(e.Via), nullStr(e.Result), nullStr(e.Reason), nullStr(e.Occurrence),
-			nullInt(e.Count), nullInt(e.Peak), nullInt64(e.WindowMs), nullInt64(e.SinceMs), nullStr(e.Episode))
+			nullInt(e.Count), nullInt(e.Peak), nullInt64(e.WindowMs), nullInt64(e.SinceMs), nullStr(e.Episode), nullBool(e.Standing))
 	}
 	_, err := j.db.Exec(b.String(), args...)
 	return err
 }
 
 func (j *Journal) Query(from, to time.Time, f alarm.Filter) ([]alarm.Event, error) {
-	q := `SELECT ts, id, name, kind, priority, site, state, "by", level, "to", via, result, reason, occurrence, count, peak, window_ms, since_ms, episode FROM alarm_events WHERE true`
+	q := `SELECT ts, id, name, kind, priority, site, state, "by", level, "to", via, result, reason, occurrence, count, peak, window_ms, since_ms, episode, standing FROM alarm_events WHERE true`
 	args := []any{}
 	add := func(clause string, v any) {
 		args = append(args, v)
@@ -301,9 +302,10 @@ func (j *Journal) Query(from, to time.Time, f alarm.Filter) ([]alarm.Event, erro
 			to, via, result, reason, occurrence sql.NullString
 			count, peak, windowMs, sinceMs      sql.NullInt64
 			episode                             sql.NullString
+			standing                            sql.NullBool
 		)
 		if err := rows.Scan(&ts, &id, &name, &kind, &priority, &site, &state, &byUser,
-			&level, &to, &via, &result, &reason, &occurrence, &count, &peak, &windowMs, &sinceMs, &episode); err != nil {
+			&level, &to, &via, &result, &reason, &occurrence, &count, &peak, &windowMs, &sinceMs, &episode, &standing); err != nil {
 			return nil, err
 		}
 		e := alarm.Event{
@@ -312,6 +314,7 @@ func (j *Journal) Query(from, to time.Time, f alarm.Filter) ([]alarm.Event, erro
 			Level: int(level.Int64), To: to.String, Via: via.String, Result: result.String, Reason: reason.String,
 			Occurrence: occurrence.String,
 			Count:      int(count.Int64), Peak: int(peak.Int64), WindowMs: windowMs.Int64, SinceMs: sinceMs.Int64, Episode: episode.String,
+			Standing: standing.Bool,
 		}
 		if p, err := alarm.ParsePriority(priority.String); err == nil {
 			e.Priority = p
@@ -393,4 +396,11 @@ func nullInt64(n int64) any {
 		return nil
 	}
 	return n
+}
+
+func nullBool(b bool) any {
+	if !b {
+		return nil
+	}
+	return b
 }

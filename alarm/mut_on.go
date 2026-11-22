@@ -42,7 +42,14 @@ import "os"
 //   - restart_counts: a condition that stood through a re-baseline
 //     counts when it activates;
 //   - first_out_repeats: a flood's first out names one alarm as often as
-//     it activated.
+//     it activated;
+//   - clock_step_unhandled: a clock stepped back leaves detection times in
+//     the future;
+//   - standing_sticks: a false reading does not end a standing condition;
+//   - unsuppress_always_rebaselines: a return from suppression
+//     re-baselines a condition that read false before it;
+//   - standing_unmarked: an uncounted activation's row is not marked
+//     Standing.
 var mutOn = os.Getenv("QUORUM_MUT")
 
 func mutAlarm(name string) bool { return name == mutOn }

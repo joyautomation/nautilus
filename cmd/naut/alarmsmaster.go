@@ -325,8 +325,22 @@ func alarmsReport(args []string, now time.Time, stdout, stderr io.Writer) int {
 	if *topN < 1 {
 		return fail(fmt.Errorf("-top %d: want 1 or more", *topN))
 	}
-	if *sliding && kind != "flood" {
-		return fail(errors.New("-sliding is for the flood report"))
+	set := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
+	for name, report := range map[string]string{"sliding": "flood", "threshold": "flood", "count": "chatter"} {
+		if set[name] && kind != report {
+			return fail(fmt.Errorf("-%s is for the %s report", name, report))
+		}
+	}
+	if set["window"] && kind != "flood" && kind != "chatter" {
+		return fail(errors.New("-window is for the flood and chatter reports"))
+	}
+	// Zero means "the default" in the config, never on the command line.
+	if set["threshold"] && *threshold < 1 {
+		return fail(fmt.Errorf("-threshold %d: want 1 or more", *threshold))
+	}
+	if set["window"] && *window <= 0 {
+		return fail(fmt.Errorf("-window %s: want a positive duration", *window))
 	}
 	floodCfg := alarm.FloodConfig{Window: alarm.Duration(*window), Threshold: *threshold}
 	chatCfg := alarm.ChatterConfig{Window: alarm.Duration(*window), Count: *count}

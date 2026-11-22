@@ -652,6 +652,9 @@ claims:
     tests:
       - go ./alarm TestFloodStartsOverTheThreshold
       - go ./alarm TestFloodHysteresis
+      - go ./alarm TestFloodDetectorEdgeAndSaturation
+      - go ./alarm TestDetectionSurvivesAClockStepBack
+      - go ./cmd/naut TestAlarmsReportFromAJournalFile
       - go ./alarm/rationalize TestSlidingFloodsMatchLive
       - go ./server TestJournalHidesDetectionUnlessAsked
 
@@ -659,11 +662,16 @@ claims:
     claim: >-
       A condition that stood through a restart, a takeover or a return from
       suppression, and an activation inside a standalone start's grace, do
-      not count toward chattering or a flood.
+      not count toward chattering or a flood; a condition that read false
+      before a suppression and true after does; the journal marks the rows
+      that do not count, and the reports leave them out.
     source: "#chattering-and-floods-live"
     tests:
       - go ./alarm TestReactivationsAfterARebaselineDoNotCount
+      - go ./alarm TestReturnFromSuppressionCountsWhatIsNew
       - go ./alarm TestResetForgetsEpisodes
+      - go ./alarm TestStartGraceSurvivesAClockStepBack
+      - go ./alarm/rationalize TestReportsSkipStandingActivations
 
   - id: AMG-053
     claim: >-
@@ -676,6 +684,7 @@ claims:
       - go ./internal/project TestAlarmDetectionConfig
       - go ./alarm TestDetectConfigValidate
       - go ./alarm TestDetectionRowsReachNoNotifier
+      - go ./acceptance TestAlarmJournalLeavesOutDetectionRows
       - go ./server TestJournalHidesDetectionUnlessAsked
       - go ./alarm/pgjournal TestPGJournal
     partial: true

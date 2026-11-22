@@ -511,12 +511,17 @@ and over.
 
 What counts is a new activation. These do not count:
 
-- an alarm whose condition stood through a restart, a takeover or a
-  return from suppression and then activates again;
+- an alarm whose condition stood through a restart or a takeover and
+  then activates again;
+- an alarm whose condition read true before a suppression (out of
+  service, an enable, a dark site) and reads true again after it. One
+  that read false before and true after is new, and counts;
 - an activation inside a standalone controller's first minute, while its
   drivers may still read defaults.
 
-A controller coming back with fifty alarms standing is not a flood.
+A controller coming back with fifty alarms standing is not a flood. The
+journal marks those `active` rows `standing`, and the reports leave them
+out as well.
 
 **What you see.** While an alarm chatters, its row in `/api/alarms`
 carries `chatter` (since when, how many activations, how many episodes),
@@ -539,9 +544,10 @@ paged because an alarm chatters or the plant floods.
 same rule, so the report matches the controller. Without `-sliding`, the
 report counts fixed 10-minute windows from the start of its range, and
 its floods can differ at the edges. Give `-window` and `-threshold` (or
-`-count` for chatter) when `alarms:` changes the defaults. The live rule
-leaves restart re-activations out, and the journal does not mark them, so
-around a restart the report may count a burst the controller did not.
+`-count` and `-window` for chatter) when `alarms:` changes the defaults.
+
+A `chatter` or `flood` row with no end row means the controller stopped
+or handed over while the episode lasted.
 
 ## Measuring the alarm system
 

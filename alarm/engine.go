@@ -142,6 +142,7 @@ type Engine struct {
 	floodID    string
 	floodSeq   uint64
 	baseAt     time.Time
+	detLast    int64 // the last scan's time (ms), to see the clock step back
 	onFlood    func(FloodEvent)
 }
 
@@ -337,7 +338,13 @@ func (e *Engine) evalOne(i int, now time.Time) {
 
 	if in.state == Suppressed {
 		e.unsuppress(in, now)
-		d.baselined = false // what reads true now has not activated anew
+		// A condition that read true before the suppression and reads true
+		// now has stood: re-baseline it. One that read false (or was
+		// never read) and reads true now is a new activation, which a
+		// flapping input on a flaky link or behind a cycling enable is.
+		if !d.read || d.lastRaw || mutAlarm("unsuppress_always_rebaselines") {
+			d.baselined = false
+		}
 	}
 	e.baseline(d, raw, now)
 	if !in.judged {
@@ -364,8 +371,12 @@ func (e *Engine) evalOne(i int, now time.Time) {
 	}
 
 	for _, kind := range in.step(now) {
-		e.emit(in, now, kind, "")
-		if kind == KindActive && e.counted(d, now) {
+		// Decided before the row is written, so the row says whether it
+		// counts (Event.Standing): a report reads the journal by the same
+		// rule as the live detector.
+		counted := kind == KindActive && e.counted(d, now)
+		e.emitMarked(in, now, kind, "", kind == KindActive && !counted && !mutAlarm("standing_unmarked"))
+		if counted {
 			e.activated(i, now)
 		}
 	}
@@ -419,6 +430,12 @@ func (e *Engine) unsuppress(in *instance, now time.Time) {
 // here and in Rename, so "Rev changed" means exactly "an alarm moved or
 // now reads differently".
 func (e *Engine) emit(in *instance, now time.Time, kind, by string) {
+	e.emitMarked(in, now, kind, by, false)
+}
+
+// emitMarked is emit with Event.Standing set on the row: an activation of
+// a condition that stood through a re-baseline (detect.go).
+func (e *Engine) emitMarked(in *instance, now time.Time, kind, by string, standing bool) {
 	e.rev++
 	if in.state == Normal {
 		in.adoptable = false // the occurrence that stood has ended
@@ -438,6 +455,7 @@ func (e *Engine) emit(in *instance, now time.Time, kind, by string) {
 		State:      in.state.String(),
 		By:         by,
 		Occurrence: in.occ,
+		Standing:   standing,
 	}
 	if err := e.jrn.Append(ev); err != nil {
 		e.log.Warn("alarm journal append failed", "id", ev.ID, "kind", ev.Kind, "err", err)

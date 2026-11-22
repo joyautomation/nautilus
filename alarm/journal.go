@@ -58,6 +58,12 @@ type Event struct {
 	// Empty on rows written before occurrences, and on an alarm that has
 	// had none since the engine started.
 	Occurrence string `json:"occurrence,omitempty"`
+	// Standing marks an `active` row that is not a new activation (#1249):
+	// its condition stood through a re-baseline (the engine's start, a
+	// takeover's reset, a return from suppression) or it fell inside a
+	// standalone start's grace. Live detection did not count it, and
+	// neither do the reports (rationalize.Activations).
+	Standing bool `json:"standing,omitempty"`
 
 	// The rest are set only on a KindNotify row (#715): the escalation
 	// level (1 is the first), who was notified (a principal: a user name

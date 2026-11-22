@@ -237,7 +237,7 @@ func TestFloodStartsOverTheThreshold(t *testing.T) {
 	}
 	rows := r.rows(t, KindFlood, KindFloodEnd)
 	if len(rows) != 1 || rows[0].ID != FloodJournalID || rows[0].Count != 11 || rows[0].Episode != f.ID ||
-		rows[0].Reason != "first out: a0, a1, a2" || !strings.Contains(rows[0].Name, "11 in 10m0s (limit 10)") {
+		rows[0].Reason != "first out: a0, a1, a2" || !strings.Contains(rows[0].Name, "11 in 10 min (limit 10)") {
 		t.Fatalf("rows = %+v", rows)
 	}
 }
@@ -264,8 +264,12 @@ func TestFloodHysteresis(t *testing.T) {
 	// The first activation (t0+1s) leaves the window at t0+10m+1s: the
 	// count is ten, at the threshold. A new one 5 minutes later is over
 	// again: still the same flood.
+	rev := r.Rev()
 	r.clk.t = t0.Add(15 * time.Minute)
 	r.Evaluate()
+	if r.Rev() == rev {
+		t.Error("the flood's count fell and Rev did not move: a banner would show a stale count")
+	}
 	f := r.Flood()
 	if f == nil || f.Count != 0 {
 		t.Fatalf("under the threshold for less than a window: flood %+v", f)
@@ -346,14 +350,38 @@ func TestReactivationsAfterARebaselineDoNotCount(t *testing.T) {
 				ds[i].Enable = "en"
 			}
 		}, run: func(r *rig) {
-			setAll(r, n, false)
 			r.tags["en"] = true
-			r.Evaluate()
+			staggerOn(r, n)
 			r.tags["en"] = false
-			setAll(r, n, true)
 			r.Evaluate()
 			r.clk.advance(time.Second)
 			r.tags["en"] = true
+			r.Evaluate()
+		}},
+		{name: "out-of-service", run: func(r *rig) {
+			staggerOn(r, n)
+			for _, eq := range []string{"P101", "P102", "Skid2"} {
+				if err := r.TakeOutOfService(eq, r.clk.at(time.Hour), "op", "test"); err != nil {
+					panic(err)
+				}
+			}
+			r.Evaluate()
+			r.clk.advance(time.Second)
+			for _, eq := range []string{"P101", "P102", "Skid2"} {
+				if err := r.ReturnToService(eq, "op"); err != nil {
+					panic(err)
+				}
+			}
+			r.Evaluate()
+		}},
+		{name: "substituted", shape: func(o *Options) {
+			o.Substituted = func(p string) (string, bool) { return p, substituting }
+		}, run: func(r *rig) {
+			staggerOn(r, n)
+			substituting = true
+			r.Evaluate()
+			r.clk.advance(time.Second)
+			substituting = false
 			r.Evaluate()
 		}},
 		{name: "grace", shape: func(o *Options) { o.CarryGrace = time.Minute }, run: func(r *rig) {
@@ -378,6 +406,12 @@ func TestReactivationsAfterARebaselineDoNotCount(t *testing.T) {
 			if f := r.Flood(); f != nil {
 				t.Fatalf("a re-baseline read as a flood: %+v", f.FloodBrief)
 			}
+			// The rows say so, and a report reading them agrees.
+			acts := r.rows(t, KindActive)
+			last := acts[len(acts)-1]
+			if !last.Standing {
+				t.Fatalf("the re-baselined activation is not marked standing: %+v", last)
+			}
 			// After the grace (and with the conditions gone), real
 			// activations count.
 			r.clk.advance(2 * time.Minute)
@@ -392,6 +426,52 @@ func TestReactivationsAfterARebaselineDoNotCount(t *testing.T) {
 				t.Fatalf("real activations after the re-baseline: flood %+v", f)
 			}
 		})
+	}
+}
+
+// substituting drives the "substituted" case's Options.Substituted.
+var substituting bool
+
+// staggerOn activates alarms t0..t(n-1) one a minute and a second apart
+// (counted: no flood, at most 10 in a window), then lets two windows
+// pass, so the conditions stand without an episode.
+func staggerOn(r *rig, n int) {
+	setAll(r, n, false)
+	r.Evaluate()
+	for i := range n {
+		r.clk.advance(61 * time.Second)
+		r.tags[fmt.Sprintf("t%d", i)] = true
+		r.Evaluate()
+	}
+	r.clk.advance(21 * time.Minute)
+	r.Evaluate()
+}
+
+// A return from suppression counts what is new: a condition that read
+// false before it and true after (a flapping input on a flaky link, here
+// one unreadable scan between each bounce) is an activation each time.
+func TestReturnFromSuppressionCountsWhatIsNew(t *testing.T) {
+	r := detectRig(t, nil, def("A", "a"))
+	r.tags["a"] = false
+	r.Evaluate()
+	for range 3 {
+		r.clk.advance(5 * time.Second)
+		delete(r.tags, "a") // unreadable: suppressed
+		r.Evaluate()
+		r.clk.advance(time.Second)
+		r.tags["a"] = true
+		r.Evaluate()
+		r.clk.advance(time.Second)
+		r.tags["a"] = false
+		r.Evaluate()
+	}
+	if c := r.chatter(t, "A"); c == nil || c.Activations != 3 {
+		t.Fatalf("a flapping input behind an unreadable blip: chatter = %+v", c)
+	}
+	for _, e := range r.rows(t, KindActive) {
+		if e.Standing {
+			t.Fatalf("an activation after a false reading is marked standing: %+v", e)
+		}
 	}
 }
 
@@ -493,5 +573,90 @@ func TestDetectConfigValidate(t *testing.T) {
 	r.bounce("a", 10*time.Second)
 	if c := r.chatter(t, "A"); c == nil || c.Count != 2 || c.WindowMs != 10000 {
 		t.Fatalf("configured chatter = %+v", c)
+	}
+}
+
+// A clock stepped back (an RTC set ahead, corrected by NTP) reads as no
+// time passing: it neither makes a lone activation chatter nor keeps
+// activations "from the future" in a flood window forever.
+func TestDetectionSurvivesAClockStepBack(t *testing.T) {
+	r := detectRig(t, nil, floodDefs(12)...)
+	setAll(r, 12, false)
+	r.Evaluate()
+	r.bounce("t0", time.Second)
+	r.bounce("t0", 10*time.Minute)
+	r.clk.advance(-30 * time.Minute)
+	r.Evaluate()
+	r.bounce("t0", time.Second)
+	if c := r.chatter(t, "a0"); c != nil {
+		t.Fatalf("a step back made three activations ten minutes apart chatter: %+v", c)
+	}
+	// Five alarms, the clock back an hour, eleven minutes, then six
+	// more: the five have left the window.
+	r.clk.advance(15 * time.Minute)
+	r.Evaluate()
+	for i := 1; i <= 5; i++ {
+		r.bounce(fmt.Sprintf("t%d", i), time.Second)
+	}
+	r.clk.advance(-time.Hour)
+	r.Evaluate()
+	r.clk.advance(11 * time.Minute)
+	r.Evaluate()
+	for i := 6; i <= 11; i++ {
+		r.bounce(fmt.Sprintf("t%d", i), time.Second)
+	}
+	if f := r.Flood(); f != nil {
+		t.Fatalf("a step back kept activations in the window: flood %+v", f.FloodBrief)
+	}
+}
+
+// After a step back to before the engine's start, activations past the
+// start grace still count: the grace moved with the clock.
+func TestStartGraceSurvivesAClockStepBack(t *testing.T) {
+	r := detectRig(t, func(o *Options) { o.CarryGrace = time.Minute }, floodDefs(12)...)
+	setAll(r, 12, false)
+	r.Evaluate()
+	r.clk.advance(2 * time.Minute)
+	r.Evaluate()
+	r.clk.advance(-time.Hour)
+	r.Evaluate()
+	for i := range 12 {
+		r.bounce(fmt.Sprintf("t%d", i), time.Second)
+	}
+	if f := r.Flood(); f == nil {
+		t.Fatal("twelve activations in twelve seconds after a step back: no flood")
+	}
+}
+
+// The flood window is inclusive at its edge, and the ring saturates at
+// FloodRing: the count and the peak read as at least that many.
+func TestFloodDetectorEdgeAndSaturation(t *testing.T) {
+	d := NewFloodDetector(FloodConfig{Window: Duration(time.Second), Threshold: 1})
+	d.Tick(0)
+	d.Add(0, 0)
+	d.Tick(1000)
+	if !d.Add(1000, 1) {
+		t.Fatal("two activations exactly a window apart: no flood (the window is inclusive)")
+	}
+	d = NewFloodDetector(FloodConfig{Window: Duration(time.Second), Threshold: 1})
+	d.Add(0, 0)
+	d.Tick(1001)
+	if d.Add(1001, 1) {
+		t.Fatal("two activations a window and a millisecond apart: flood")
+	}
+
+	d = NewFloodDetector(FloodConfig{})
+	for i := range FloodRing + 100 {
+		ms := int64(i)
+		d.Tick(ms)
+		d.Add(ms, int32(i%7))
+	}
+	ep := d.Episode()
+	if d.Count() != FloodRing || ep.Peak != FloodRing || !ep.Saturated || ep.Total != FloodRing+100 {
+		t.Fatalf("saturated: count %d peak %d saturated %v total %d", d.Count(), ep.Peak, ep.Saturated, ep.Total)
+	}
+	// The newest activations still hold it over the threshold a window on.
+	if ended, _ := d.Tick(int64(FloodRing+99) + DefaultFloodWindow.Milliseconds()); ended {
+		t.Fatal("ended while the newest activations were still over the threshold")
 	}
 }

@@ -45,7 +45,7 @@ func Activations(events []alarm.Event) []alarm.Event {
 	for _, e := range events {
 		switch e.Kind {
 		case alarm.KindActive:
-			if e.Occurrence != "" || !open[e.ID] {
+			if !e.Standing && (e.Occurrence != "" || !open[e.ID]) {
 				out = append(out, e)
 			}
 			open[e.ID] = true

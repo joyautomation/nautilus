@@ -124,3 +124,59 @@ func TestSlidingFloodsMatchLive(t *testing.T) {
 		t.Fatal("no seed made a flood: the test proves nothing")
 	}
 }
+
+// Activations the live detector did not count (a condition that stood
+// through a restart, a takeover's reset or a return from suppression) are
+// marked on their rows, and the reports leave them out too: the journal
+// of a controller that re-baselined twelve standing alarms holds no flood
+// for either.
+func TestReportsSkipStandingActivations(t *testing.T) {
+	now := t0
+	vals := map[string]any{"en": true}
+	defs := make([]alarm.Def, 12)
+	for i := range defs {
+		id := fmt.Sprintf("A%d", i)
+		defs[i] = alarm.Def{ID: id, Tag: id, Name: id, Priority: alarm.Medium, AckRequired: true, AutoClear: true, Enable: "en"}
+		vals[id] = true
+	}
+	j := alarm.NewRing(1000)
+	e, err := alarm.New(alarm.Options{Defs: defs, Journal: j, Now: func() time.Time { return now },
+		Read: func(p string) (any, bool) { v, ok := vals[p]; return v, ok }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer e.Close()
+	step := func() { now = now.Add(time.Second); e.Evaluate() }
+	step() // a start with twelve standing
+	vals["en"] = false
+	step()
+	vals["en"] = true
+	step() // a return from suppression
+	e.ResetOperatorState()
+	step() // a takeover
+	evs, _ := j.Query(time.Time{}, time.Time{}, alarm.Filter{Limit: 1000})
+	for i, k := 0, len(evs)-1; i < k; i, k = i+1, k-1 {
+		evs[i], evs[k] = evs[k], evs[i]
+	}
+	actives := 0
+	for _, ev := range evs {
+		if ev.Kind == alarm.KindActive {
+			actives++
+			if !ev.Standing {
+				t.Fatalf("an activation of a standing condition is not marked: %+v", ev)
+			}
+		}
+	}
+	if actives != 36 {
+		t.Fatalf("%d active rows, want 36 (three re-baselines of twelve)", actives)
+	}
+	if acts := Activations(evs); len(acts) != 0 {
+		t.Fatalf("Activations counted %d standing rows", len(acts))
+	}
+	if rep := SlidingFloods(Activations(evs), t0, now.Add(time.Second), FloodWindow, FloodThreshold); len(rep.Floods) != 0 {
+		t.Fatalf("sliding floods = %+v", rep.Floods)
+	}
+	if e.Flood() != nil {
+		t.Fatal("the engine flooded")
+	}
+}

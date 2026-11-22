@@ -199,6 +199,10 @@ type detect struct {
 	// start grace, any true reading makes it standing). An activation of
 	// a standing condition is no new activation.
 	baselined, standing bool
+	// read and lastRaw: the alarm's condition has been read since the
+	// engine started (or was reset), and what it read last. A return from
+	// suppression re-baselines only a condition that read true before it.
+	read, lastRaw bool
 	// floodActs counts the alarm's activations in the current flood, for
 	// the flood's equipment groups.
 	floodActs int
@@ -366,7 +370,7 @@ type FloodBrief struct {
 	ID        string `json:"id"`
 	SinceMs   int64  `json:"sinceMs"`
 	Count     int    `json:"count"` // activations in the current window
-	Total     int    `json:"total"` // since the flood began
+	Total     int    `json:"total"` // in the flood, counting the window that started it
 	Peak      int    `json:"peak"`
 	WindowMs  int64  `json:"windowMs"`
 	Threshold int    `json:"threshold"`
@@ -433,19 +437,20 @@ func (e *Engine) OnFlood(fn func(FloodEvent)) {
 
 // inGrace reports whether now is inside the start grace.
 func (e *Engine) inGrace(now time.Time) bool {
-	return !e.baseAt.IsZero() && now.Before(e.baseAt.Add(e.carryGrace)) && !mutAlarm("grace_counts")
+	return e.carryGrace > 0 && !e.baseAt.IsZero() && now.Before(e.baseAt.Add(e.carryGrace)) && !mutAlarm("grace_counts")
 }
 
 // baseline tracks whether in's condition has stood since it was last
 // re-baselined, on a reading raw. Called on every reading, before the
 // transition table.
 func (e *Engine) baseline(d *detect, raw bool, now time.Time) {
+	d.read, d.lastRaw = true, raw
 	switch {
 	case !d.baselined:
 		d.baselined, d.standing = true, raw
 	case e.inGrace(now):
 		d.standing = d.standing || raw
-	case !raw:
+	case !raw && !mutAlarm("standing_sticks"):
 		d.standing = false
 	}
 }
@@ -492,8 +497,15 @@ func floodID(now time.Time, seq uint64) string {
 // allocates nothing unless one ends. Under e.mu.
 func (e *Engine) detectTick(now time.Time) {
 	ms := now.UnixMilli()
+	if ms < e.detLast && !mutAlarm("clock_step_unhandled") {
+		e.rebase(ms - e.detLast)
+	}
+	e.detLast = ms
+	n := e.flood.n
 	if ended, at := e.flood.Tick(ms); ended {
 		e.journalFlood(at, false)
+	} else if e.flood.on && e.flood.n != n {
+		e.rev++ // the banner's count moved: an HMI refetches it
 	}
 	if e.chattering == 0 {
 		return
@@ -522,10 +534,10 @@ func (e *Engine) journalFlood(atMs int64, start bool) {
 	ev := Event{TS: atMs, ID: FloodJournalID, Kind: KindFloodEnd, By: "system", Episode: e.floodID,
 		Count: f.Total, Peak: f.Peak, WindowMs: f.WindowMs, SinceMs: f.SinceMs}
 	ev.Name = fmt.Sprintf("alarm flood ended: %d activations, peak %d in %s (limit %d)",
-		f.Total, f.Peak, time.Duration(f.WindowMs)*time.Millisecond, f.Threshold)
+		f.Total, f.Peak, windowText(f.WindowMs), f.Threshold)
 	if start {
 		ev.Kind, ev.Count = KindFlood, f.Count
-		ev.Name = fmt.Sprintf("alarm flood: %d in %s (limit %d)", f.Count, time.Duration(f.WindowMs)*time.Millisecond, f.Threshold)
+		ev.Name = fmt.Sprintf("alarm flood: %d in %s (limit %d)", f.Count, windowText(f.WindowMs), f.Threshold)
 		ids := make([]string, len(f.FirstOut))
 		for i, b := range f.FirstOut {
 			ids[i] = b.ID
@@ -547,6 +559,17 @@ func (e *Engine) journalFlood(atMs int64, start bool) {
 		fe.Activations = append(fe.Activations, FloodActivation{ID: e.inst[idx].def.ID, Ms: ms})
 	})
 	e.onFlood(fe)
+}
+
+// windowText is a window as a row's name reads it: "10 min", "60 s".
+func windowText(ms int64) string {
+	switch {
+	case ms%60000 == 0:
+		return strconv.FormatInt(ms/60000, 10) + " min"
+	case ms%1000 == 0:
+		return strconv.FormatInt(ms/1000, 10) + " s"
+	}
+	return (time.Duration(ms) * time.Millisecond).String()
 }
 
 // appendSystem journals a detection row. Not a state change: no
@@ -628,6 +651,36 @@ func (e *Engine) Flood() *Flood {
 	return &f
 }
 
+// rebase moves every time detection holds by delta (negative: the clock
+// stepped back), so a step back reads as no time passing rather than as
+// activations from the future: those would fill a window forever and
+// make a lone activation chatter. A step forward needs nothing: windows
+// simply pass. Under e.mu.
+func (e *Engine) rebase(delta int64) {
+	e.baseAt = e.baseAt.Add(time.Duration(delta) * time.Millisecond) // the grace, too
+	for i := range e.det {
+		c := &e.det[i].chat
+		for k := range min(c.n, len(c.ring)) {
+			c.ring[k] += delta
+		}
+		if c.on {
+			c.since += delta
+			c.last += delta
+		}
+	}
+	f := e.flood
+	for i := range f.n {
+		f.ring[(f.head+i)%len(f.ring)].ms += delta
+	}
+	for i := range f.first {
+		f.first[i].ms += delta
+	}
+	if f.on {
+		f.since += delta
+		f.overUntil += delta
+	}
+}
+
 // chatterOf is in's chatter episode for its record, nil when it is not
 // chattering.
 func (e *Engine) chatterOf(i int) *Chatter {
@@ -645,7 +698,9 @@ func (e *Engine) resetDetect() {
 	for i := range e.det {
 		e.det[i].chat.reset()
 		e.det[i].baselined, e.det[i].standing, e.det[i].floodActs = false, false, 0
+		e.det[i].read, e.det[i].lastRaw = false, false
 	}
+	e.detLast = 0
 	e.chattering = 0
 	e.flood.reset()
 	e.baseAt = time.Time{}
