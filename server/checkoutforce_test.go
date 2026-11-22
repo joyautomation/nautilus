@@ -188,7 +188,7 @@ func TestCheckoutForceDoesNotRemoveAnotherForce(t *testing.T) {
 	tags := r.srv.rt.Tags()
 	tags.Unforce("Out")
 	time.Sleep(5 * time.Millisecond)
-	if err := tags.Force("Out", 9.0); err != nil { // someone else's, at another value
+	if err := tags.Force("Out", 5.5); err != nil { // someone else's, at the SAME value: only the generation tells it from ours
 		t.Fatal(err)
 	}
 	time.Sleep(1300 * time.Millisecond)
@@ -257,7 +257,7 @@ func TestCheckoutForceNeedsBothPermissions(t *testing.T) {
 const ckTypesLib = `TYPE Mode : (Off, Run, Fault) := Off; Pump : STRUCT Run : BOOL; Speed : REAL; END_STRUCT; END_TYPE`
 const ckTypesProg = `PROGRAM Test
 VAR_EXTERNAL
-  Level : REAL; SP : REAL; Out : REAL; M : Mode; T : TIME; P101 : Pump;
+  Level : REAL; SP : REAL; Out : REAL; M : Mode; T : TIME; P101 : Pump; Arr : ARRAY[0..2] OF REAL;
 END_VAR
 Out := SP - Level;
 END_PROGRAM
@@ -268,7 +268,8 @@ func newCkTypesRig(t *testing.T) *ckForceRig {
 	rt, err := runtime.New(runtime.Options{Program: ckTypesProg, Libraries: []string{ckTypesLib}, Driver: nio.NewMemory(),
 		Tags: []runtime.TagDef{runtime.Typed("Level", runtime.RoleState, "REAL"), runtime.Typed("SP", runtime.RoleState, "REAL"),
 			runtime.Typed("Out", runtime.RoleState, "REAL"), runtime.Typed("M", runtime.RoleState, "Mode"),
-			runtime.Typed("T", runtime.RoleState, "TIME"), runtime.Typed("P101", runtime.RoleState, "Pump")}})
+			runtime.Typed("T", runtime.RoleState, "TIME"), runtime.Typed("P101", runtime.RoleState, "Pump"),
+			runtime.Typed("Arr", runtime.RoleState, "ARRAY[0..2] OF REAL")}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,6 +280,7 @@ func newCkTypesRig(t *testing.T) *ckForceRig {
 		{ID: "MODE", Tag: "M", Kind: checkout.DO, Method: checkout.Force},
 		{ID: "TMR", Tag: "T", Kind: checkout.AO, Method: checkout.Force},
 		{ID: "PSPD", Tag: "p101.speed", Kind: checkout.AO, Method: checkout.Force},
+		{ID: "ARR", Tag: "Arr[ 1]", Kind: checkout.AO, Method: checkout.Force}, // an element, spelled as the table does not
 	} {
 		p.Equipment, p.Device, p.Area = "HiTempAlm", "rio1", "RCV"
 		sh.Points = append(sh.Points, p)
@@ -296,7 +298,7 @@ func newCkTypesRig(t *testing.T) *ckForceRig {
 func TestCheckoutForceReleasesTypedOutputs(t *testing.T) {
 	for _, c := range []struct{ point, tag, value string }{
 		{"MODE", "M", `1`}, {"MODE", "M", `"run"`}, {"MODE", "M", `"Mode#Run"`},
-		{"TMR", "T", `"T#5s"`}, {"PSPD", "P101.Speed", `7`},
+		{"TMR", "T", `"T#5s"`}, {"PSPD", "P101.Speed", `7`}, {"ARR", "Arr[1]", `7`},
 	} {
 		r := newCkTypesRig(t)
 		r.oos(t)
@@ -468,5 +470,95 @@ func TestCheckoutForceStateIsRaceFree(t *testing.T) {
 	wg.Wait()
 	if r.forced("Out") {
 		t.Error("the output is still forced")
+	}
+}
+
+// A force the table spells another way is still found: an element typed
+// "Arr[ 1]" is let go, and an operator's force on that element is not taken
+// over.
+func TestCheckoutForceCanonicalSpellings(t *testing.T) {
+	r := newCkTypesRig(t)
+	r.oos(t)
+	if err := r.srv.rt.Tags().Force("Arr[1]", 1.0); err != nil {
+		t.Fatal(err)
+	}
+	if rec := r.force(t, `{"point":"ARR","value":7,"seconds":5,"confirm":"ARR"}`); rec.Code != http.StatusConflict {
+		t.Errorf("an operator's force under another spelling: %d %s, want 409", rec.Code, rec.Body)
+	}
+	if g, _ := r.srv.rt.Tags().ForceGen("Arr[1]"); g == 0 {
+		t.Error("the operator's force was taken over")
+	}
+}
+
+// A record that says a force stands when the controller holds none (a failed
+// end) does not lock the checkout: the next force closes the stale one.
+func TestCheckoutForceReconcilesAStaleRecord(t *testing.T) {
+	r := newCkForceRig(t)
+	r.oos(t)
+	if _, err := r.st.StartForce(r.run.ID, "OUT", 1.0, 30, "akhan", "user:akhan"); err != nil { // as if its end was never written
+		t.Fatal(err)
+	}
+	rec := r.force(t, goodForce)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("force over a stale record: %d %s", rec.Code, rec.Body)
+	}
+	if !r.forced("Out") {
+		t.Error("not forced")
+	}
+	// and a second one while it stands is a 409, not a 500
+	if rec := r.force(t, goodForce); rec.Code != http.StatusConflict {
+		t.Errorf("a second force: %d, want 409", rec.Code)
+	}
+}
+
+// Frames read the standing force while forces start, are released and expire:
+// under -race this is the path every frame takes.
+func TestCheckoutForceFramesRaceStartsAndEnds(t *testing.T) {
+	r := newCkForceRig(t)
+	r.oos(t)
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				call(t, r.srv, "GET", "/api/state", "", r.eng)
+				ckOf(r.srv).forceView(r.srv.rt.Tags())
+			}
+		}()
+	}
+	for i := 0; i < 15; i++ {
+		if rec := r.force(t, `{"point":"OUT","value":5.5,"seconds":30,"confirm":"OUT"}`); rec.Code != http.StatusCreated {
+			t.Fatalf("cycle %d: force %d %s", i, rec.Code, rec.Body)
+		}
+		call(t, r.srv, "POST", r.path+"/force/release", `{}`, r.eng)
+	}
+	close(stop)
+	wg.Wait()
+	if r.forced("Out") {
+		t.Error("the output is still forced")
+	}
+}
+
+// Abandoning with a reason too long to record is refused before anything is
+// released.
+func TestCheckoutAbandonRefusesALongReasonBeforeReleasing(t *testing.T) {
+	r := newCkForceRig(t)
+	r.oos(t)
+	if rec := r.force(t, goodForce); rec.Code != http.StatusCreated {
+		t.Fatalf("force: %d %s", rec.Code, rec.Body)
+	}
+	long := strings.Repeat("x", checkout.MaxReason+1)
+	if rec := call(t, r.srv, "POST", r.path+"/abandon", `{"reason":"`+long+`"}`, r.eng); rec.Code != http.StatusBadRequest {
+		t.Errorf("a long reason: %d, want 400", rec.Code)
+	}
+	if !r.forced("Out") {
+		t.Error("a refused abandon released the force")
 	}
 }

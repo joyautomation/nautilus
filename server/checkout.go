@@ -11,6 +11,7 @@ import (
 	"math"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/joyautomation/nautilus/auth"
 	"github.com/joyautomation/nautilus/checkout"
@@ -258,6 +259,12 @@ func jsonSafe(v any) any {
 
 func (a *checkoutAPI) checkoutAbandon(w http.ResponseWriter, r *http.Request) {
 	a.checkoutWrite(w, r, "", func(pr auth.Principal, req checkoutRequest) (any, int, error) {
+		if a.pendingForce(r.PathValue("id")) {
+			return nil, http.StatusConflict, fmt.Errorf("a force is starting on this run: try again in a moment")
+		}
+		if utf8.RuneCountInString(req.Reason) > checkout.MaxReason {
+			return nil, http.StatusBadRequest, fmt.Errorf("%w: the reason is longer than %d characters", checkout.ErrInvalid, checkout.MaxReason)
+		}
 		// an output forced for this run is let go before the run ends
 		if f := a.standingForce(r.PathValue("id")); f != nil && req.Reason != "" {
 			a.endCheckoutForce(f, checkout.ForceAbandoned, noteAuthor(pr.String()))
@@ -321,7 +328,7 @@ func (a *checkoutAPI) checkoutWrite(w http.ResponseWriter, r *http.Request, scop
 		writeJSON(w, status, out)
 	case errors.Is(err, checkout.ErrNoRun):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such run"})
-	case errors.Is(err, checkout.ErrNotOpen), errors.Is(err, checkout.ErrRunOpen), errors.Is(err, errSheetChanged):
+	case errors.Is(err, checkout.ErrNotOpen), errors.Is(err, checkout.ErrRunOpen), errors.Is(err, errSheetChanged), errors.Is(err, checkout.ErrForceActive), errors.Is(err, checkout.ErrNoForce):
 		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 	case status == http.StatusConflict:
 		writeJSON(w, status, map[string]string{"error": err.Error()})

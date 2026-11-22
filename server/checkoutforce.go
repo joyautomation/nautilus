@@ -83,14 +83,26 @@ type ckState struct {
 func (co *CheckoutOptions) forceView(tags *runtime.Tags) *CheckoutForceView {
 	co.ck.mu.Lock()
 	f := co.ck.force
+	var v CheckoutForceView
+	var gen uint64
+	ok := f != nil && f.ready
+	if ok {
+		// copied under the lock the start writes them under
+		v = CheckoutForceView{Run: f.run, Point: f.point, Tag: f.pt.Tag, By: f.by, RemainingMs: max(time.Until(f.until).Milliseconds(), 0)}
+		gen = f.gen
+	}
+	tag := ""
+	if f != nil {
+		tag = f.tag
+	}
 	co.ck.mu.Unlock()
-	if f == nil || !f.ready {
+	if !ok {
 		return nil
 	}
-	if g, ok := tags.ForceGen(f.tag); !ok || g != f.gen {
+	if g, found := tags.ForceGen(tag); !found || g != gen {
 		return nil
 	}
-	return &CheckoutForceView{Run: f.run, Point: f.point, Tag: f.tag, By: f.by, RemainingMs: max(time.Until(f.until).Milliseconds(), 0)}
+	return &v
 }
 
 // checkoutInterlock is nil when the point's equipment is out of service now
@@ -157,31 +169,47 @@ func (a *checkoutAPI) checkoutForceStart(w http.ResponseWriter, r *http.Request)
 		}
 		a.co.ck.force = f
 		a.co.ck.mu.Unlock()
-		fail := func() {
+		started := false
+		defer func() { // however this ends, a start that did not finish gives the slot back
+			if started {
+				return
+			}
 			a.co.ck.mu.Lock()
 			if a.co.ck.force == f {
 				a.co.ck.force = nil
 			}
 			a.co.ck.mu.Unlock()
-		}
+		}()
 
 		// recorded first: a force that stands is always in the record
 		rec, err := a.co.Store.StartForce(run.ID, pt.ID, req.Value, int(d/time.Second), by, pr.String())
+		if errors.Is(err, checkout.ErrForceActive) {
+			// the controller holds no force (it owns the slot), so the record's
+			// standing one is stale (a failed end): close it, and begin again
+			_ = a.co.Store.EndForce(run.ID, checkout.ForceInterrupted, "controller")
+			rec, err = a.co.Store.StartForce(run.ID, pt.ID, req.Value, int(d/time.Second), by, pr.String())
+		}
 		if err != nil {
-			fail()
 			return nil, http.StatusInternalServerError, err
 		}
-		gen, err := a.s.rt.Tags().ForceIfFree(pt.Tag, req.Value)
+		gen, name, err := a.s.rt.Tags().ForceIfFree(pt.Tag, req.Value)
 		if err != nil {
 			_ = a.co.Store.EndForce(run.ID, checkout.ForceRefused, by)
-			fail()
 			if errors.Is(err, runtime.ErrAlreadyForced) {
 				return nil, http.StatusConflict, fmt.Errorf("%s is already forced (by a force that is not this checkout's): clear that force first", pt.Tag)
 			}
 			return nil, http.StatusBadRequest, fmt.Errorf("%w: %v", checkout.ErrInvalid, err)
 		}
 		a.co.ck.mu.Lock()
-		f.gen, f.until, f.ready = gen, time.Now().Add(d), true
+		// the run was abandoned while this was starting: let the force go again
+		cur, _ := a.co.Store.Get(run.ID)
+		if cur.State != checkout.StateOpen || a.co.ck.force != f {
+			a.co.ck.mu.Unlock()
+			a.s.rt.Tags().UnforceIf(name, gen)
+			return nil, http.StatusConflict, checkout.ErrNotOpen
+		}
+		f.tag, f.gen, f.until, f.ready = name, gen, time.Now().Add(d), true
+		started = true
 		// a timer's duration runs on the monotonic clock
 		f.timer = time.AfterFunc(d, func() { a.endCheckoutForce(f, checkout.ForceExpired, "controller") })
 		a.co.ck.mu.Unlock()
@@ -236,6 +264,9 @@ func (a *checkoutAPI) checkoutForceRelease(w http.ResponseWriter, r *http.Reques
 			return nil, http.StatusForbidden, fmt.Errorf("%s", msg)
 		}
 		how := a.endCheckoutForce(f, checkout.ForceReleased, noteAuthor(pr.String()))
+		if how == "" {
+			return nil, http.StatusConflict, checkout.ErrNoForce
+		}
 		return map[string]any{"released": f.point, "how": how}, http.StatusOK, nil
 	})
 }
@@ -248,7 +279,7 @@ func (a *checkoutAPI) endCheckoutForce(f *ckForce, how, by string) string {
 	a.co.ck.mu.Lock()
 	if a.co.ck.force != f {
 		a.co.ck.mu.Unlock()
-		return how
+		return "" // it ended another way first
 	}
 	a.co.ck.force = nil
 	if f.timer != nil {
@@ -275,3 +306,12 @@ func (a *checkoutAPI) endCheckoutForce(f *ckForce, how, by string) string {
 }
 
 func sameTag(a, b string) bool { return strings.EqualFold(a, b) }
+
+// pendingForce reports whether a force of the run is starting (reserved, not
+// yet in the force table).
+func (a *checkoutAPI) pendingForce(run string) bool {
+	a.co.ck.mu.Lock()
+	defer a.co.ck.mu.Unlock()
+	f := a.co.ck.force
+	return f != nil && !f.ready && f.run == run
+}

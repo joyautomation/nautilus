@@ -173,7 +173,7 @@ func (t *Tags) ForceLenient(addr string, v any) error {
 }
 
 func (t *Tags) force(addr string, v any, strict bool) error {
-	_, err := t.forceGen(addr, v, strict, false)
+	_, _, err := t.forceGen(addr, v, strict, false)
 	return err
 }
 
@@ -183,8 +183,10 @@ var ErrAlreadyForced = fmt.Errorf("already forced")
 
 // ForceIfFree is Force that refuses, atomically, an address already forced
 // (by itself, a member of it or the tag around it), and returns the force's
-// generation for UnforceIf. Nothing about Force changes.
-func (t *Tags) ForceIfFree(addr string, v any) (uint64, error) {
+// generation for UnforceIf and the name the table keeps it under (the address
+// as the table spells it: "M[1][2]" for "M[1,2]", the struct's own member
+// names): ForceGen and UnforceIf take that name. Nothing about Force changes.
+func (t *Tags) ForceIfFree(addr string, v any) (uint64, string, error) {
 	return t.forceGen(addr, v, true, true)
 }
 
@@ -222,25 +224,26 @@ func (t *Tags) UnforceIf(addr string, gen uint64) bool {
 	return false
 }
 
-func (t *Tags) forceGen(addr string, v any, strict, ifFree bool) (uint64, error) {
+func (t *Tags) forceGen(addr string, v any, strict, ifFree bool) (uint64, string, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if ifFree {
-		if f := t.forcedOverlapLocked(addr); f != "" {
-			return 0, fmt.Errorf("%s: %w (as %s)", addr, ErrAlreadyForced, f)
-		}
-	}
 	root, path, tv, err := t.resolveForceAddr(addr)
 	if err != nil {
-		return 0, err
+		return 0, "", err
+	}
+	if ifFree {
+		// by the name the table keeps the force under, not as typed
+		if f := t.forcedOverlapLocked(ir.JoinPath(root, path)); f != "" {
+			return 0, "", fmt.Errorf("%s: %w (as %s)", addr, ErrAlreadyForced, f)
+		}
 	}
 	if tv.v.Kind == ir.TypeFB {
-		return 0, fmt.Errorf("tag %s is a function-block instance — force one of its pins' tags instead", root)
+		return 0, "", fmt.Errorf("tag %s is a function-block instance — force one of its pins' tags instead", root)
 	}
 	if tv.owned {
 		// The runtime stores a companion past the force layer: a force on
 		// one would show in the table and hold nothing.
-		return 0, fmt.Errorf("tag %s is set by the runtime from the substitute table and cannot be forced: %w", root, ErrReadOnly)
+		return 0, "", fmt.Errorf("tag %s is set by the runtime from the substitute table and cannot be forced: %w", root, ErrReadOnly)
 	}
 	fs := t.forces[root]
 	base := tv.v
@@ -256,14 +259,14 @@ func (t *Tags) forceGen(addr string, v any, strict, ifFree bool) (uint64, error)
 	}
 	nv, err := set(base, rootT, path, v, "tag "+root)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	fv, _, err := ir.FieldAt(nv, rootT, path, root)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	if fv.Kind == ir.TypeFB {
-		return 0, fmt.Errorf("%s is a function-block instance — it has no value to force", addr)
+		return 0, "", fmt.Errorf("%s is a function-block instance — it has no value to force", addr)
 	}
 	if fs == nil {
 		fs = &forceSet{actual: tv.v, typ: rootT}
@@ -293,7 +296,7 @@ func (t *Tags) forceGen(addr string, v any, strict, ifFree bool) (uint64, error)
 	}
 	t.storeLocked(root, tv, fs.apply(fs.actual))
 	t.forceRev++
-	return e.gen, nil
+	return e.gen, name, nil
 }
 
 // Unforce removes the force on one address and reports whether there was

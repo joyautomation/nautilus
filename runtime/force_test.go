@@ -523,14 +523,14 @@ func TestForceBeforeFirstScanHolds(t *testing.T) {
 func TestForceGenerationsAreOwnership(t *testing.T) {
 	tags := NewTags()
 	tags.Set("Out", 0.0)
-	gen, err := tags.ForceIfFree("Out", 5.0)
-	if err != nil || gen == 0 {
-		t.Fatalf("ForceIfFree: %d %v", gen, err)
+	gen, name, err := tags.ForceIfFree("Out", 5.0)
+	if err != nil || gen == 0 || name != "Out" {
+		t.Fatalf("ForceIfFree: %d %q %v", gen, name, err)
 	}
 	if g, ok := tags.ForceGen("out"); !ok || g != gen {
 		t.Errorf("ForceGen = %d %v, want %d", g, ok, gen)
 	}
-	if _, err := tags.ForceIfFree("Out", 6.0); err == nil || !strings.Contains(err.Error(), "already forced") {
+	if _, _, err := tags.ForceIfFree("Out", 6.0); err == nil || !strings.Contains(err.Error(), "already forced") {
 		t.Errorf("a second ForceIfFree on a forced address: %v", err)
 	}
 	// someone else changes the force: another generation, so UnforceIf leaves it
@@ -566,10 +566,44 @@ func TestForceIfFreeSeesOverlaps(t *testing.T) {
 	if err := tags.Force("P1.Run", true); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tags.ForceIfFree("P1", ir.Value{}); err == nil || !strings.Contains(err.Error(), "already forced") {
+	if _, _, err := tags.ForceIfFree("P1", ir.Value{}); err == nil || !strings.Contains(err.Error(), "already forced") {
 		t.Errorf("the whole tag over a forced member: %v", err)
 	}
-	if _, err := tags.ForceIfFree("P1.Speed", 5.0); err != nil {
+	if _, _, err := tags.ForceIfFree("P1.Speed", 5.0); err != nil {
 		t.Errorf("another member is free: %v", err)
+	}
+}
+
+// The table keeps a force under its own spelling of the address (member names
+// as the struct declares them, one index per bracket); ForceIfFree returns that
+// name, so ForceGen and UnforceIf find the force however the caller typed it,
+// and the overlap check sees a force set under another spelling.
+func TestForceIfFreeNamesTheForceTheWayTheTableDoes(t *testing.T) {
+	sd := &ir.StructDef{Name: "Pump", Fields: []ir.StructField{{Name: "Run"}, {Name: "Speed"}}, FieldIndex: map[string]int{"Run": 0, "Speed": 1}}
+	tags := NewTags()
+	tags.Set("P1", ir.Value{Kind: ir.TypeStruct, Struct: sd, Fld: []ir.Value{ir.BoolVal(false), ir.RealVal(1)}})
+	arr := ir.Value{Kind: ir.TypeArray, Arr: []ir.Value{ir.RealVal(0), ir.RealVal(0), ir.RealVal(0)}}
+	tags.Set("A", arr)
+	for _, c := range []struct{ typed, table string }{{"p1.speed", "P1.Speed"}, {"A[ 1]", "A[1]"}} {
+		gen, name, err := tags.ForceIfFree(c.typed, 5.0)
+		if err != nil {
+			t.Fatalf("%q: %v", c.typed, err)
+		}
+		if name != c.table {
+			t.Errorf("%q is kept as %q, want %q", c.typed, name, c.table)
+		}
+		if g, ok := tags.ForceGen(name); !ok || g != gen {
+			t.Errorf("%q: ForceGen(%q) = %d %v, want %d", c.typed, name, g, ok, gen)
+		}
+		// another spelling of the same address is forced already
+		if _, _, err := tags.ForceIfFree(c.typed, 6.0); err == nil || !strings.Contains(err.Error(), "already forced") {
+			t.Errorf("%q forced twice: %v", c.typed, err)
+		}
+		if !tags.UnforceIf(name, gen) {
+			t.Errorf("%q: UnforceIf(%q) did not remove it", c.typed, name)
+		}
+	}
+	if len(tags.Forces()) != 0 {
+		t.Errorf("forces left: %v", tags.Forces())
 	}
 }

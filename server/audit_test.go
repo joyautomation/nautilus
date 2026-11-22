@@ -303,7 +303,7 @@ func auditRows() []auditRow {
 		if _, err := ckOf(s).Store.StartForce(run.ID, "OUT", 5.5, 60, "akhan", "user:akhan"); err != nil {
 			t.Fatal(err)
 		}
-		gen, err := s.rt.Tags().ForceIfFree("Out", 5.5)
+		gen, _, err := s.rt.Tags().ForceIfFree("Out", 5.5)
 		if err != nil {
 			t.Fatal(err)
 		}
