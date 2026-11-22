@@ -76,6 +76,8 @@ func TestThePlantsOwnRules(t *testing.T) {
 		"flow wrong nozzle":   {"equipment: [{id: A, type: Pump, tag: A, nozzles: [N1]}, {id: B, type: Pump, tag: B}]\nflows: [{from: A.N9, to: B}]", `has no nozzle "N9"`},
 		"flow skips nozzle":   {"equipment: [{id: A, type: Pump, tag: A, nozzles: [N1]}, {id: B, type: Pump, tag: B}]\nflows: [{from: A, to: B}]", "say which"},
 		"area twice":          {"areas: [{id: X}, {id: x}]", "declared twice"},
+		"one page":            {"equipment: [{id: P_1, type: Pump, tag: A}, {id: P__1, type: Pump, tag: B}]", "would share the page /assets/p-1"},
+		"feeds itself":        {"equipment: [{id: A, type: Pump, tag: A}]\nflows: [{from: A, to: a}]", "feeds itself"},
 	} {
 		p, err := Read(plantFS(map[string]string{"plant.yaml": tc.yaml, "asset-types/Pump.asset.yaml": pumpType}), "plant.yaml")
 		if err != nil {
@@ -128,5 +130,19 @@ func TestTemplatesAndRefs(t *testing.T) {
 	}
 	if r := ParseRef(" TK1 "); r.Equipment != "TK1" || r.Nozzle != "" {
 		t.Errorf("ref %+v", r)
+	}
+}
+
+func TestAssetTypeFiles(t *testing.T) {
+	_, err := Read(plantFS(map[string]string{"plant.yaml": "areas: []", "asset-types/Pump.asset.yaml": "type: Pump\n", "asset-types/pump.asset.yaml": "type: pump\n"}), "plant.yaml")
+	if err == nil || !strings.Contains(err.Error(), "compare without case") {
+		t.Errorf("two files for one type: %v", err)
+	}
+	_, err = Read(plantFS(map[string]string{"plant.yaml": "areas: []", "asset-types/Pump.asset.yaml": "# nothing yet\n"}), "plant.yaml")
+	if err == nil || !strings.Contains(err.Error(), "the file is empty") {
+		t.Errorf("an empty asset type file says EOF: %v", err)
+	}
+	if Slug(" P_1 / x ") != "p-1-x" {
+		t.Errorf("slug %q", Slug(" P_1 / x "))
 	}
 }

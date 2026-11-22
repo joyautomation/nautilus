@@ -90,7 +90,10 @@ func TestDeviceAssetsFromARow(t *testing.T) {
 	}
 }
 
-func plantTestProject(t *testing.T) *project.Project {
+func plantTestProject(t *testing.T) *project.Project { return plantTestProjectWith(t, "") }
+
+// plantTestProjectWith is the same project with more equipment in its plant.yaml.
+func plantTestProjectWith(t *testing.T, moreEquipment string) *project.Project {
 	t.Helper()
 	raw, err := os.ReadFile("../../devprofile/profiles/abb-acs355-fmbt21.yaml")
 	if err != nil {
@@ -118,7 +121,7 @@ areas: [{ id: Receiving, label: "Receiving dock" }]
 equipment:
   - { id: P101, type: Pump, area: Receiving, label: "Transfer pump", tag: P101 }
   - { id: Belt1, class: ConveyorBelt, area: Receiving, device: CONV }
-`),
+` + moreEquipment),
 		"asset-types/Pump.asset.yaml": file(`type: Pump
 class: CentrifugalPump
 readings:
@@ -205,5 +208,47 @@ func TestNoPlantNoPlantAssets(t *testing.T) {
 	p := &project.Project{}
 	if got := plantAssets(p); got != nil {
 		t.Errorf("a project with no plant makes %d", len(got))
+	}
+}
+
+func TestTagRootIsTheAlarmEnginesDefaultEquipment(t *testing.T) {
+	for in, want := range map[string]string{"P101": "P101", "Plant.Pump1": "Plant", "Tags[3].Run": "Tags"} {
+		if got := tagRoot(in); got != want {
+			t.Errorf("tagRoot(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// A plant id whose page is the page of a device no plant equipment names is
+// refused: the two would be one page (#714).
+func TestPlantIDAgainstAnUnnamedDevicesPage(t *testing.T) {
+	p := plantTestProjectWith(t, "  - { id: conv2, type: Pump, tag: P101 }\n")
+	_, errs, _ := p.CheckPlant(fstest.MapFS{}, nil)
+	if all := strings.Join(errs, "\n"); !strings.Contains(all, "equipment conv2 and device CONV2 would share the page /assets/conv2") {
+		t.Errorf("errors %q", all)
+	}
+	p = plantTestProject(t)
+	if _, errs, _ := p.CheckPlant(fstest.MapFS{}, nil); len(errs) != 0 {
+		t.Errorf("the plain test plant: %v", errs)
+	}
+}
+
+// A dotted tag's page keys its alarms on the tag's root, as the engine
+// defaults an alarm's equipment.
+func TestPlantAssetKeysAlarmsOnTheTagRoot(t *testing.T) {
+	p := plantTestProjectWith(t, "  - { id: Dot1, type: Pump, tag: P101.Inner }\n")
+	var found bool
+	for _, raw := range plantAssets(p) {
+		var a struct{ ID, Equipment string }
+		_ = json.Unmarshal(raw, &a)
+		if a.ID == "Dot1" {
+			found = true
+			if a.Equipment != "P101" {
+				t.Errorf("equipment key %q, want the tag's root P101", a.Equipment)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("no page for Dot1")
 	}
 }

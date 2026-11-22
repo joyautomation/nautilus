@@ -131,6 +131,14 @@ type Toggle struct {
 
 var identRe = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*$`)
 
+var slugRe = regexp.MustCompile(`[^a-z0-9]+`)
+
+// Slug is an id's page name: lowercase words and digits joined by dashes
+// (the HMI kit's assetSlug). Two ids with one slug would be one page.
+func Slug(id string) string {
+	return strings.Trim(slugRe.ReplaceAllString(strings.ToLower(strings.TrimSpace(id)), "-"), "-")
+}
+
 // Parse reads a plant.yaml: unknown keys are errors, so a misspelt one is
 // not silently a missing equipment.
 func Parse(data []byte, src string) (*Plant, error) {
@@ -150,6 +158,9 @@ func ParseAssetType(data []byte, src string) (*AssetType, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
 	if err := dec.Decode(&t); err != nil {
+		if err.Error() == "EOF" {
+			return nil, fmt.Errorf("%s: the file is empty: an asset type needs at least its readings, setpoints, commands or toggles", src)
+		}
 		return nil, fmt.Errorf("%s: %w", src, err)
 	}
 	return &t, nil
@@ -191,6 +202,9 @@ func Read(fsys fs.FS, name string) (*Plant, error) {
 		if t.Type != want {
 			return nil, fmt.Errorf("%s: type %q does not match the file name (%s.asset.yaml)", file, t.Type, t.Type)
 		}
+		if prev, dup := p.Types[strings.ToLower(t.Type)]; dup {
+			return nil, fmt.Errorf("%s: asset type %s is also %s: type names compare without case", file, t.Type, prev.Type)
+		}
 		p.Types[strings.ToLower(t.Type)] = t
 	}
 	return p, nil
@@ -226,6 +240,7 @@ func (p *Plant) Check() []string {
 		areas[strings.ToLower(a.ID)] = true
 	}
 	ids := map[string]bool{}
+	slugs := map[string]string{}
 	for _, e := range p.Equipment {
 		switch {
 		case !identRe.MatchString(e.ID):
@@ -236,6 +251,10 @@ func (p *Plant) Check() []string {
 			continue
 		}
 		ids[strings.ToLower(e.ID)] = true
+		if other, dup := slugs[Slug(e.ID)]; dup {
+			out = append(out, fmt.Sprintf("plant: equipment %s and %s would share the page /assets/%s", other, e.ID, Slug(e.ID)))
+		}
+		slugs[Slug(e.ID)] = e.ID
 		if (e.Tag == "") == (e.Device == "") {
 			out = append(out, fmt.Sprintf("plant: equipment %s: name exactly one of tag (a declared tag) or device (a devices: row)", e.ID))
 		}
@@ -269,7 +288,7 @@ func (p *Plant) Check() []string {
 				out = append(out, fmt.Sprintf("plant: flow %d %s: %s names its nozzles (%s): say which", i+1, end.role, e.ID, strings.Join(e.Nozzles, ", ")))
 			}
 		}
-		if strings.EqualFold(ParseRef(f.From).Equipment, ParseRef(f.To).Equipment) && f.From == f.To {
+		if strings.EqualFold(strings.TrimSpace(f.From), strings.TrimSpace(f.To)) {
 			out = append(out, fmt.Sprintf("plant: flow %d: %s feeds itself", i+1, f.From))
 		}
 	}

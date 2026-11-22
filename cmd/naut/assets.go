@@ -145,7 +145,7 @@ func plantAssets(proj *project.Project) []json.RawMessage {
 	var out []json.RawMessage
 	for _, e := range pl.Equipment {
 		var a map[string]any
-		key := e.Tag
+		key := tagRoot(e.Tag)
 		if e.Device != "" {
 			d, ok := devices[strings.ToLower(e.Device)]
 			if !ok {
@@ -234,4 +234,13 @@ func typePanel(t *plant.AssetType, tag string) map[string]any {
 		panel["toggles"] = ts
 	}
 	return panel
+}
+
+// tagRoot is a tag path's first element: the alarm engine's default
+// equipment for an alarm on Plant.Pump1.Fault is "Plant".
+func tagRoot(tag string) string {
+	if i := strings.IndexAny(tag, ".["); i > 0 {
+		return tag[:i]
+	}
+	return tag
 }

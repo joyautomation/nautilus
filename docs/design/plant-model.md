@@ -117,3 +117,9 @@ mimic equipment that names a `plant:` makes no page of its own; a device
 that a plant equipment names makes no page of its own. Not yet: flows draw
 nothing (slice 3), a drawing does not take its tag, label or kind from the
 plant (slice 3), and the plant is not exported to the master alarm database.
+
+Checked only to the root: a tag `Plant.Pump1` is checked as `Plant`, and an
+asset type's `{tag}.Level` is checked as the tag's root, not against the
+struct's members, so a misspelt member shows a blank reading (the member
+check is a follow-up). Two ids whose page slug is the same (`P_1`, `P__1`),
+or a plant id whose slug is a device's that no equipment names, are errors.

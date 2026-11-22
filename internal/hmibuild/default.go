@@ -94,6 +94,17 @@ func defaultApp(project, title string, extra []json.RawMessage) (*appSource, err
 	used := map[string]bool{}
 	takenSlug := map[string]bool{}
 	var assets []json.RawMessage
+	// the ids the caller's descriptors make pages for: a mimic piece that
+	// names one of them (plant:) leaves its page to it
+	fromPlant := map[string]bool{}
+	for _, d := range extra {
+		var h struct {
+			ID string `json:"id"`
+		}
+		if json.Unmarshal(d, &h) == nil && h.ID != "" {
+			fromPlant[assetSlug(h.ID)] = true
+		}
+	}
 	for i, m := range mimics {
 		raw, err := os.ReadFile(filepath.Join(project, filepath.FromSlash(m)))
 		if err != nil {
@@ -111,7 +122,7 @@ func defaultApp(project, title string, extra []json.RawMessage) (*appSource, err
 			problems = append(problems, fmt.Sprintf("%s: not a mimic: %v", m, err))
 			continue
 		}
-		assets = append(assets, assetsOf(raw)...)
+		assets = append(assets, assetsOf(raw, fromPlant)...)
 		var imports, registry []string
 		seen := map[string]bool{}
 		for _, eq := range doc.Equipment {
@@ -758,7 +769,7 @@ const componentsPageText = `<script>
 // assetsOf is the asset descriptors a mimic's equipment make: each piece
 // with a panel (its own, or the one it shares, followed once) is an asset
 // of the same id, titled as its panel is.
-func assetsOf(raw []byte) []json.RawMessage {
+func assetsOf(raw []byte, fromPlant map[string]bool) []json.RawMessage {
 	var doc struct {
 		Equipment []struct {
 			ID    string          `json:"id"`
@@ -778,7 +789,7 @@ func assetsOf(raw []byte) []json.RawMessage {
 	}
 	var out []json.RawMessage
 	for _, e := range doc.Equipment {
-		if e.Plant != "" {
+		if e.Plant != "" && fromPlant[assetSlug(e.Plant)] {
 			continue // a piece of the plant model: its page comes from the plant
 		}
 		panel := e.Panel

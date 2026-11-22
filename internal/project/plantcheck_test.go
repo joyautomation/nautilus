@@ -132,3 +132,30 @@ func TestAlarmEquipmentMayBeTheTagNotTheID(t *testing.T) {
 		t.Errorf("warnings %v: P101 is Feed's tag", warns)
 	}
 }
+
+// With no plant: a drawing's plant: names nothing: an error, not silence.
+func TestADrawingNamesAPlantTheManifestDoesNotHave(t *testing.T) {
+	file := func(x string) *fstest.MapFile { return &fstest.MapFile{Data: []byte(x)} }
+	fsys := fstest.MapFS{
+		"nautilus.yaml": file("name: p\ntasks:\n  - program: main.st\n    scan: 100ms\n"),
+		"main.st":       file("PROGRAM main\nEND_PROGRAM\n"),
+		"a.mimic.json":  file(`{"equipment":[{"id":"P1","component":"Pump","plant":"P101","panel":{}}]}`),
+	}
+	p, err := Load(fsys, ManifestName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, errs, _ := p.CheckPlant(fsys, nil)
+	if all := strings.Join(errs, "\n"); !strings.Contains(all, "the manifest has no plant:") {
+		t.Errorf("errors %q", all)
+	}
+}
+
+// A dotted tag's alarms key on its root, as the engine defaults them.
+func TestAlarmEquipmentKeysOnTheTagRoot(t *testing.T) {
+	p, fsys := plantProject(t, "equipment:\n  - { id: Feed, type: Tank, tag: TK101.Inner }\n", nil)
+	_, _, warns := p.CheckPlant(fsys, []string{"TK101"})
+	if len(warns) != 0 {
+		t.Errorf("warnings %v: the alarm key is the tag's root TK101", warns)
+	}
+}
