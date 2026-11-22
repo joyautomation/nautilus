@@ -161,6 +161,51 @@ func (e Entry) NoteBody() (n NoteEntry, ok bool) {
 	return n, true
 }
 
+// SessionEntry is one change to a browser sign-in (#716): a session opened
+// on the leader, or ended. It is data the log carries for the server's
+// session store, which decides what it means; like a note it travels in
+// Value, the one field every build keeps. It holds the session id's
+// SHA-256 (Hash), never the id: a log reader cannot sign in with it. The
+// elevation time is not carried: after a takeover a person re-enters the
+// password for an elevated action.
+type SessionEntry struct {
+	Op      string   `json:"op"`   // "open" or "end"
+	Hash    string   `json:"hash"` // hex SHA-256 of the session id
+	User    string   `json:"user,omitempty"`
+	OIDC    bool     `json:"oidc,omitempty"`
+	Issuer  string   `json:"iss,omitempty"`
+	Sub     string   `json:"sub,omitempty"`
+	Groups  []string `json:"groups,omitempty"`
+	Created int64    `json:"created,omitempty"` // epoch ms
+	Expires int64    `json:"expires"`           // epoch ms: after it the entry means nothing
+	Cred    string   `json:"cred,omitempty"`    // fingerprint of the password it was proved against
+}
+
+// Session entry ops.
+const (
+	SessionOpen = "open"
+	SessionEnd  = "end"
+)
+
+// SessionEntryOf is the log entry that carries s, proposed for the person or
+// system named by.
+func SessionEntryOf(by string, s SessionEntry) Entry {
+	b, _ := json.Marshal(s)
+	return Entry{Kind: KindSession, By: by, Value: b}
+}
+
+// SessionBody is the session change a KindSession entry carries; ok is
+// false for another kind and for a body that is missing or unreadable.
+func (e Entry) SessionBody() (s SessionEntry, ok bool) {
+	if e.Kind != KindSession || len(e.Value) == 0 {
+		return SessionEntry{}, false
+	}
+	if json.Unmarshal(e.Value, &s) != nil || s.Hash == "" || (s.Op != SessionOpen && s.Op != SessionEnd) {
+		return SessionEntry{}, false
+	}
+	return s, true
+}
+
 func (e Entry) same(o Entry) bool {
 	a, _ := json.Marshal(e)
 	b, _ := json.Marshal(o)
@@ -186,6 +231,12 @@ const (
 	// log is never compacted, so a copy that was wiped is brought every
 	// note back by catch-up, as it is every acknowledgement.
 	KindNote = "note"
+
+	// KindSession is a browser session opening or ending on the leader
+	// (#716): see SessionEntry. It lets a session survive a takeover, and
+	// an end (a sign-out, a revoked password) reach the other controller
+	// before it can lead.
+	KindSession = "session"
 
 	// KindNoop is a new leader's empty entry of its own term (SyncLeader):
 	// committing it commits everything before it, which is how a leader

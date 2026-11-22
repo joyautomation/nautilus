@@ -538,6 +538,9 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	switch {
 	case notesLog != nil:
 		sopts.NotesLog = notesLog
+		if pair != nil {
+			sopts.SessionLog = pair.sess
+		}
 	case proj.Auth != nil && (proj.Auth.HasUsers() || proj.Auth.OIDC()):
 		if ns, err := openNotes(proj, dir, os.Getenv); err != nil {
 			fmt.Fprintf(os.Stderr, "naut run: notes are off: %v\n", err)

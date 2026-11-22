@@ -41,6 +41,12 @@ export interface MeSession {
 	/** When its password stops counting for the elevated permissions. */
 	elevatedUntil: string;
 	/**
+	 * The operator log has not carried this sign-in to the other controller
+	 * (#716): it works here only, and a takeover before it replicates signs
+	 * the person out.
+	 */
+	local?: boolean;
+	/**
 	 * How it was proved, and so confirmed again: `password` (POST
 	 * /api/elevate) or `oidc` (at the provider). Absent from older
 	 * controllers: a password.

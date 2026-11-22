@@ -617,6 +617,10 @@ type meResponse struct {
 // appears: the cookie is HttpOnly.
 type meSession struct {
 	Expires time.Time `json:"expires"`
+	// Local: the operator log has not committed this sign-in, so it is
+	// valid on this controller only and is lost if the other one leads
+	// first (#716). The account chip says so.
+	Local bool `json:"local,omitempty"`
 	// ElevatedUntil is when its password stops counting for the elevated
 	// permissions (auth.elevation): past it the HMI asks for the password
 	// before an elevated action.
@@ -653,7 +657,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		me.Provider = s.oidc.Provider()
 	}
 	if a.session != nil {
-		me.Session = &meSession{Expires: a.session.expires.UTC(), ElevatedUntil: s.elevatedUntil(*a.session).UTC(), Method: "password"}
+		me.Session = &meSession{Expires: a.session.expires.UTC(), ElevatedUntil: s.elevatedUntil(*a.session).UTC(), Method: "password", Local: a.session.local}
 		if a.session.oidc {
 			me.Session.Method = "oidc"
 		}
