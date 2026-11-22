@@ -72,8 +72,8 @@ func TestSuggestNothingWhenItDoesNotChatterOrNothingHelps(t *testing.T) {
 	}
 	// 100 s true, 1 s false: every delay on the ladder (max 60 s) still leaves
 	// the alarm active through each 1 s drop-out? an off-delay of 1 s merges them: so this one helps
-	if s, ok := Suggest(bounces(5, 100*time.Second, time.Second, Delays{}), Delays{}, 5*time.Minute, 3); !ok || time.Duration(s.Off) != 2*time.Second {
-		t.Errorf("a 1 s drop-out is bridged by the next off-delay step above it: %+v %v", s, ok)
+	if s, ok := Suggest(bounces(5, 100*time.Second, time.Second, Delays{}), Delays{}, 5*time.Minute, 3); !ok || time.Duration(s.Off) != time.Second {
+		t.Errorf("a 1 s drop-out is bridged by a 1 s off-delay (the rise is seen before the return): %+v %v", s, ok)
 	}
 	// long true, long false, fast cycle in a short window: 20 s true, 20 s false inside a 100 s window, count 3:
 	// no on-delay under 20 s... 30 s on-delay filters them; so it helps. A bounce of 120 s true / 120 s false cannot be fixed by the ladder.
@@ -106,14 +106,43 @@ func TestSuggestLeavesOutShelvedAndSuppressedSpansAndStartsAfterTheLastTuning(t 
 	}
 }
 
-// The engine's on-delay is inclusive (a condition held exactly the delay
-// qualifies), so 5 s bounces are not filtered by a 5 s on-delay.
-func TestSuggestOnDelayIsInclusiveLikeTheEngine(t *testing.T) {
+// The engine samples, so a condition held exactly the on-delay is never seen
+// true for it: 5 s bounces are filtered by a 5 s on-delay (and a 4 s drop-out
+// is bridged by a 5 s off-delay, the same total: the on-delay wins the tie).
+func TestSuggestDelayBoundariesAreExclusiveLikeTheSampledEngine(t *testing.T) {
 	s, ok := Suggest(bounces(7, 5*time.Second, 4*time.Second, Delays{}), Delays{}, time.Minute, 3)
 	if !ok {
 		t.Fatal("no suggestion")
 	}
-	if s.On != 0 || time.Duration(s.Off) != 5*time.Second {
-		t.Errorf("on %s off %s: a 5 s on-delay would still activate on 5 s bounces; the 4 s drop-outs are bridged by a 5 s off-delay", s.On, s.Off)
+	if time.Duration(s.On) != 5*time.Second || s.Off != 0 {
+		t.Errorf("on %s off %s: a 5 s on-delay filters 5 s bounces", s.On, s.Off)
+	}
+	// a drop-out exactly the off-delay long is still bridged: 3 s drop-outs, off-delay 3s is not on the
+	// ladder, so 5 s; but 5 s drop-outs are bridged by 5 s (the rise is seen before the return)
+	s, ok = Suggest(bounces(7, 20*time.Second, 5*time.Second, Delays{}), Delays{}, time.Minute, 3)
+	if !ok || s.On != 0 || time.Duration(s.Off) != 5*time.Second {
+		t.Errorf("%+v %v: a 5 s drop-out is bridged by a 5 s off-delay", s, ok)
+	}
+}
+
+// A row from before occurrences that repeats a standing activation (a
+// restart) is not another bounce and must not hide the history after it.
+func TestSuggestIgnoresARepeatedStandingActivation(t *testing.T) {
+	ev := []alarm.Event{
+		{TS: 1_000, ID: "A", Kind: alarm.KindActive},
+		{TS: 31_000, ID: "A", Kind: alarm.KindActive}, // a restart, no occurrence
+	}
+	for _, e := range bounces(7, 3*time.Second, 4*time.Second, Delays{}) {
+		e.TS += 100_000_000
+		ev = append(ev, e)
+	}
+	// the alarm is still standing (no rtn) when the first bounce's active arrives: it carries an
+	// occurrence-less row too, so only the rtn-closed rows after it count
+	s, ok := Suggest(ev, Delays{}, time.Minute, 3)
+	if !ok {
+		t.Fatal("the repeated row swallowed the history after it")
+	}
+	if s.Bounces != 7 {
+		t.Errorf("%d bounces: the restart's repeated rows are not bounces", s.Bounces)
 	}
 }

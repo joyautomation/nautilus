@@ -108,6 +108,11 @@ func Suggest(events []alarm.Event, cur Delays, window time.Duration, count int) 
 			if cut(e) {
 				continue
 			}
+			// a row from before occurrences that repeats a standing activation
+			// (a restart) is not a new one
+			if n := len(spans); n > 0 && spans[n-1].end == 0 && e.Occurrence == "" {
+				continue
+			}
 			spans = append(spans, span{start: e.TS - cur.On.Milliseconds()})
 		case alarm.KindRTN:
 			if n := len(spans); n > 0 && spans[n-1].end == 0 {
@@ -164,6 +169,11 @@ func ladderFrom(cur time.Duration) []time.Duration {
 	return out
 }
 
+// Both edges are exclusive because the engine samples: the raw signal is
+// seen true on the scans from the rise to the one before it falls, so a
+// condition held exactly the on-delay is never seen true for it, and a
+// drop-out of exactly the off-delay is still seen true again before it.
+//
 // activationTimes simulates the condition's spans through an on-delay and
 // an off-delay: a span of at least `on` in the normal state activates after
 // it, and the alarm returns after the condition has been false for `off`.
@@ -181,7 +191,7 @@ func activationTimes(spans []span, d Delays) []int64 {
 		}
 		if active {
 			// a gap shorter than the off-delay never returned the alarm
-			if s.start-lastEnd < off {
+			if s.start-lastEnd <= off {
 				lastEnd = s.end
 				if s.end == 0 {
 					lastEnd = 1 << 60
@@ -190,7 +200,7 @@ func activationTimes(spans []span, d Delays) []int64 {
 			}
 			active = false
 		}
-		if length >= on {
+		if length > on {
 			out = append(out, s.start+on)
 			active = true
 			lastEnd = s.end

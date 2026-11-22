@@ -518,7 +518,7 @@ func suggestAll(ch []rationalize.Chatter, events []alarm.Event, cur map[string]r
 func printSuggestions(w io.Writer, r chatterSuggestions) {
 	fmt.Fprintln(w)
 	if len(r.Suggestions) == 0 {
-		fmt.Fprintln(w, "no delay on the ladder would have stopped these: a longer delay is not the fix (look at the signal)")
+		fmt.Fprintln(w, "no suggestion: either no longer delay on the ladder would have stopped these (look at the signal), or the history since the last tuning no longer chatters")
 		return
 	}
 	for _, s := range r.Suggestions {
