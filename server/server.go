@@ -80,6 +80,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -1629,7 +1630,40 @@ func (s *Server) handleCluster(w http.ResponseWriter, r *http.Request) {
 		st = s.cluster.Status()
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(st)
+	json.NewEncoder(w).Encode(clusterBody{Status: st, Peers: s.clusterPeers(st)})
+}
+
+// clusterBody is GET /api/cluster: the replica's own status plus, for a
+// pair with redundancy.public-urls, the controllers as a browser opens them.
+type clusterBody struct {
+	leader.Status
+	Peers []clusterPeer `json:"peers,omitempty"`
+}
+
+// clusterPeer is one controller of the pair as a browser reaches it. URL is
+// the operator-named public URL, never a pod or peer-link address (#716);
+// Leader is this replica's own view and may disagree with the other's
+// during a takeover, so a client confirms with the peer it picks.
+type clusterPeer struct {
+	Name   string `json:"name"`
+	URL    string `json:"url"`
+	Leader bool   `json:"leader"`
+}
+
+func (s *Server) clusterPeers(st leader.Status) []clusterPeer {
+	if len(s.leaderURLs) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(s.leaderURLs))
+	for n := range s.leaderURLs {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	out := make([]clusterPeer, 0, len(names))
+	for _, n := range names {
+		out = append(out, clusterPeer{Name: n, URL: s.leaderURLs[n], Leader: st.Leader == n})
+	}
+	return out
 }
 
 // handleHistory forwards /api/history* to the historian daemon, trimming

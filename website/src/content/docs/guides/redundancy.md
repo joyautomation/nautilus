@@ -255,6 +255,12 @@ never computes.
   request's Host when it proxies, so the leader checks the same name.
   `GET /api/cluster` reports each replica's own view — mode, leader,
   transitions.
+  On a redundant pair with `redundancy.public-urls`, it also lists
+  `peers` (`name`, `url`, `leader`): the controllers as a browser opens
+  them, never their peer-link addresses. The HMI kit remembers them, and
+  when its own controller stops answering it goes to the one that does,
+  the leader first (once per 30 s at most, so two dead boxes cannot make
+  it bounce). Without `public-urls` the page stays where it is.
 - The identity shown in `/api/cluster` comes from `POD_NAME`, and the
   proxy target from `POD_IP` — both from the downward API:
 

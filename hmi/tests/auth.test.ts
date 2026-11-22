@@ -8,7 +8,10 @@ import {
 	AuthSession,
 	FOLLOW_GUARD_MS,
 	FOLLOW_KEY,
+	PEERS_KEY,
 	PROBE_MIN_MS,
+	failoverTargets,
+	parsePeers,
 	clockSkew,
 	leaderTarget,
 	markFollowed,
@@ -861,5 +864,89 @@ describe('elevation at the OIDC provider (6b)', () => {
 		});
 		expect(signInLink(anonymous({ signInMethods: ['password', 'oidc'], provider: 'Keycloak' }), here).label).toBe('Sign in');
 		expect(signInLink(anonymous(), here).href).toBe(SIGNIN);
+	});
+});
+
+describe("a pair's controller that is gone (#716)", () => {
+	const PEERS = { peers: [{ name: 'a', url: 'https://plc-a.example', leader: false }, { name: 'b', url: 'https://plc-b.example', leader: true }] };
+	const down = () => {
+		throw new TypeError('Failed to fetch');
+	};
+	const settle = () => new Promise((r) => setTimeout(r, 0));
+
+	it('parsePeers keeps well-formed entries only', () => {
+		expect(parsePeers(PEERS).length).toBe(2);
+		expect(parsePeers({ peers: [{ name: 'a' }, null, 7, { name: 'b', url: 'https://b.example' }] }).length).toBe(1);
+		expect(parsePeers({})).toEqual([]);
+		expect(parsePeers(null)).toEqual([]);
+	});
+	it('targets: the leader first, never this origin, never a downgrade or credentialed URL', () => {
+		const peers = [
+			{ name: 'a', url: 'https://plc-a.example', leader: false },
+			{ name: 'b', url: 'https://plc-b.example', leader: true },
+			{ name: 'c', url: 'http://plc-c.example', leader: false },
+			{ name: 'd', url: 'https://u:p@plc-d.example', leader: false }
+		];
+		expect(failoverTargets(peers, PAGE)).toEqual(['https://plc-b.example/']);
+	});
+	it('a dead controller sends the page to the peer that answers, leader first', async () => {
+		const w = world({
+			'/api/me': down,
+			'/api/cluster': (_u, _i, n) => (n === 0 ? json(PEERS) : down()),
+			'https://plc-b.example/api/cluster': () => new Response(null, { status: 200 })
+		});
+		await w.s.learnPeers();
+		w.s.streamTrouble();
+		await settle();
+		await settle();
+		expect(w.nav).toEqual(['https://plc-b.example/']);
+	});
+	it('falls to the next peer when the leader does not answer either', async () => {
+		const peers = { peers: [...PEERS.peers, { name: 'c', url: 'https://plc-c.example', leader: false }] };
+		const w = world({
+			'/api/me': down,
+			'/api/cluster': (_u, _i, n) => (n === 0 ? json(peers) : down()),
+			'https://plc-b.example/api/cluster': down,
+			'https://plc-c.example/api/cluster': () => new Response(null, { status: 200 })
+		});
+		await w.s.learnPeers();
+		w.s.streamTrouble();
+		await settle();
+		await settle();
+		expect(w.nav).toEqual(['https://plc-c.example/']);
+	});
+	it('a controller that still answers is not left: a stream error alone moves nothing', async () => {
+		const w = world({ '/api/me': () => json(signedIn()), '/api/cluster': () => json(PEERS) });
+		await w.s.learnPeers();
+		w.s.streamTrouble();
+		await settle();
+		await settle();
+		expect(w.nav).toEqual([]);
+	});
+	it('the loop guard holds: no second move within the guard', async () => {
+		const storage = new Map<string, string>([[FOLLOW_KEY, String(1_000_000 - 5_000)]]);
+		const w = world(
+			{ '/api/me': down, '/api/cluster': (_u, _i, n) => (n === 0 ? json(PEERS) : down()), 'https://plc-b.example/api/cluster': () => new Response(null, { status: 200 }) },
+			[],
+			{ storage }
+		);
+		await w.s.learnPeers();
+		w.s.streamTrouble();
+		await settle();
+		await settle();
+		expect(w.nav).toEqual([]);
+	});
+	it('with no peers learned (not a pair) nothing happens, and no peer is asked', async () => {
+		const w = world({ '/api/me': down, '/api/cluster': () => json({ mode: 'standalone' }) });
+		await w.s.learnPeers();
+		w.s.streamTrouble();
+		await settle();
+		expect(w.nav).toEqual([]);
+		expect(w.sent.filter((x) => x.url.startsWith('https://')).length).toBe(0);
+	});
+	it('the peers are kept for a reload while the controller is down', async () => {
+		const w = world({ '/api/me': down, '/api/cluster': () => json(PEERS) });
+		await w.s.learnPeers();
+		expect(JSON.parse(w.store.get(PEERS_KEY) ?? 'null').length).toBe(2);
 	});
 });
