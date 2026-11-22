@@ -13,7 +13,8 @@
 		area,
 		assets,
 		alarms = null,
-		href
+		href,
+		schemeHref
 	}: {
 		area: AreaDescriptor;
 		/** Every asset (the area's are picked by id). */
@@ -21,6 +22,8 @@
 		alarms?: AlarmClient | null;
 		/** Where an asset's page is. */
 		href: (asset: AssetDescriptor) => string;
+		/** Where the scheme is, as the host resolves it (base path, query); default `area.scheme`. */
+		schemeHref?: string;
 	} = $props();
 
 	const rows = $derived(areaRows(area, assets, alarms?.instances ?? []));
@@ -29,7 +32,7 @@
 <article class="area" aria-label={area.label ?? area.id}>
 	<header>
 		<h1>{area.label ?? area.id}</h1>
-		{#if area.scheme}<a class="scheme" href={area.scheme}>Process scheme</a>{/if}
+		{#if area.scheme}<a class="scheme" href={schemeHref ?? area.scheme}>Process scheme</a>{/if}
 	</header>
 	{#if rows.length}
 		<table>

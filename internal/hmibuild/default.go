@@ -82,6 +82,7 @@ type galleryComp struct {
 // bound label carries a sparkline.
 func defaultApp(project, title string, extra, areas []json.RawMessage) (*appSource, error) {
 	mimics := Mimics(project)
+	mimics = schemesLast(mimics, areas)
 	if len(mimics) == 0 {
 		return nil, &Error{Messages: []string{"nothing to build: the project has no hmi/ app (src/routes) and no *.mimic.json"}}
 	}
@@ -163,7 +164,9 @@ func defaultApp(project, title string, extra, areas []json.RawMessage) (*appSour
 		pageMod := fmt.Sprintf("nx:default/page%d.svelte", i)
 		a.virtual[pageMod] = vmod{kind: component, text: fmt.Sprintf(defaultPage,
 			jsq(filepath.Join(project, filepath.FromSlash(m))), strings.Join(imports, "\n"), strings.Join(registry, ", "))}
-		routeOf[slugOf(m)] = id
+		if _, ok := routeOf[slugOf(m)]; !ok {
+			routeOf[slugOf(m)] = id
+		}
 		r, _ := routeFor(strings.TrimPrefix(id, "/"))
 		r.Page = pageMod
 		r.Layouts = []int{0}
@@ -970,8 +973,36 @@ const defaultArea = `<script>
 		{assets}
 		alarms={alarms.supported ? alarms : null}
 		href={(a) => resolve('/assets/' + assetSlug(a.id)) + page.url.search}
+		schemeHref={area.scheme ? resolve(area.scheme) + page.url.search : undefined}
 	/>
 {:else}
 	<p>No area by that name. <a href={resolve('/assets') + page.url.search}>All assets</a></p>
 {/if}
 `
+
+// schemesLast puts the mimics named for an area (the process schemes
+// `naut hmi scheme` writes) after the others, so writing one never takes
+// the home page from a screen that was there: the first mimic is "/".
+func schemesLast(mimics []string, areas []json.RawMessage) []string {
+	named := map[string]bool{}
+	for _, d := range areas {
+		var a struct {
+			ID string `json:"id"`
+		}
+		if json.Unmarshal(d, &a) == nil && assetSlug(a.ID) != "" {
+			named[assetSlug(a.ID)] = true
+		}
+	}
+	if len(named) == 0 {
+		return mimics
+	}
+	var first, last []string
+	for _, m := range mimics {
+		if named[slugOf(m)] {
+			last = append(last, m)
+		} else {
+			first = append(first, m)
+		}
+	}
+	return append(first, last...)
+}

@@ -127,5 +127,8 @@ describe('an area page\'s rows', () => {
 		expect([t1.unacked, t1.active, t1.worst].join()).toBe('1,1,medium');
 		expect([p1.unacked, p1.active, p1.suppressed, p1.worst].join()).toBe('1,2,1,high');
 		expect([p2.active, p2.worst === '' ? 'none' : p2.worst].join()).toBe('0,none');
+		// a priority the kit does not know never outranks a known one
+		const odd = areaRows({ id: 'A', assets: ['P1'] }, assets, [al('x', 'P1', 'weird', 'unack-active'), al('y', 'P1', 'low', 'unack-active')]);
+		expect(odd[0].worst).toBe('low');
 	});
 });

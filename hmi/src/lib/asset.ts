@@ -175,7 +175,8 @@ export function areaRows(area: AreaDescriptor, assets: AssetDescriptor[], instan
 		if (!asset) continue;
 		const mine = assetAlarms(instances, asset);
 		const standing = mine.filter((a) => a.state !== 'suppressed' && a.state !== 'normal');
-		const worst = standing.reduce<string>((w, a) => (PRIORITIES.indexOf(a.priority) < (w ? PRIORITIES.indexOf(w) : 99) ? a.priority : w), '');
+		const rank = (p: string) => (PRIORITIES.includes(p) ? PRIORITIES.indexOf(p) : 98);
+		const worst = standing.reduce<string>((w, a) => (rank(a.priority) < (w ? rank(w) : 99) ? a.priority : w), '');
 		rows.push({
 			asset,
 			unacked: standing.filter((a) => a.state === 'unack-active' || a.state === 'unack-rtn').length,

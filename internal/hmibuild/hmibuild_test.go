@@ -445,3 +445,30 @@ func TestBuildsAreaPages(t *testing.T) {
 		t.Error("no areas, or none with a slug, is no page")
 	}
 }
+
+// A scheme written for an area never takes the home page from a screen that
+// was there: the mimics named for an area come after the others.
+func TestSchemesLastKeepsTheHomePage(t *testing.T) {
+	areas := []json.RawMessage{json.RawMessage(`{"id":"Alpha"}`), json.RawMessage(`{"id":"Zed"}`)}
+	got := schemesLast([]string{"alpha.mimic.json", "main.mimic.json", "zed.mimic.json", "other.mimic.json"}, areas)
+	if strings.Join(got, ",") != "main.mimic.json,other.mimic.json,alpha.mimic.json,zed.mimic.json" {
+		t.Errorf("order %v: the screens first, then the schemes, each in their order", got)
+	}
+	in := []string{"b.mimic.json", "a.mimic.json"}
+	if got := schemesLast(in, nil); strings.Join(got, ",") != "b.mimic.json,a.mimic.json" {
+		t.Errorf("no areas: unchanged, got %v", got)
+	}
+}
+
+func TestASchemeSortingFirstDoesNotTakeTheHomePage(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "main.mimic.json", `{"name":"Main","equipment":[]}`)
+	write(t, dir, "alpha.mimic.json", `{"name":"Alpha","equipment":[]}`)
+	res, err := Build(Options{Project: dir, Title: "t", Areas: []json.RawMessage{json.RawMessage(`{"id":"Alpha","assets":[]}`)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(res.Pages, " "); !strings.HasPrefix(got, "/ /alpha ") {
+		t.Errorf("pages %q: main stays the home page, the scheme is /alpha", got)
+	}
+}

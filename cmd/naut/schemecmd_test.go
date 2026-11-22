@@ -266,3 +266,69 @@ func TestSchemeCommandLeavesAFileAlone(t *testing.T) {
 		t.Errorf("-update keeps the name and adds TK1: %s", b)
 	}
 }
+
+// -update keeps a person's work whole: a renamed piece's pipes end on its new
+// name, a pipe drawn by hand is not drawn twice, the canvas only grows and
+// keeps its keys, a file it cannot safely edit is refused.
+func TestSchemeUpdateAfterAPersonEdited(t *testing.T) {
+	p := schemePlantModel(t, schemePlant)
+	first, _, _ := planScheme(p, p.Areas[0], nil)
+	var top map[string]json.RawMessage
+	_ = json.Unmarshal(first, &top)
+	var eqs []map[string]any
+	_ = json.Unmarshal(top["equipment"], &eqs)
+	var kept []map[string]any
+	for _, e := range eqs {
+		if e["id"] == "P1" {
+			e["id"] = "pump-a" // renamed by hand, plant: P1 kept
+		}
+		if e["id"] != "P2" {
+			kept = append(kept, e)
+		}
+	}
+	top["equipment"], _ = json.Marshal(kept)
+	// the TK1 -> P1 pipe drawn by hand under another name between the same ports
+	top["pipes"] = json.RawMessage(`[{"id":"my-feed","routing":"auto","points":[],"from":{"equip":"TK1","port":"right"},"to":{"equip":"pump-a","port":"in"}}]`)
+	top["canvas"] = json.RawMessage(`{"width":5000,"height":3000,"grid":true}`)
+	edited, _ := json.Marshal(top)
+	out, _, err := planScheme(p, p.Areas[0], edited)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := readScheme(t, out)
+	ends := map[string]string{}
+	for _, pp := range d.Pipes {
+		ends[pp.ID] = pp.From.Equip + ">" + pp.To.Equip
+	}
+	if len(d.Pipes) != 2 || ends["my-feed"] != "TK1>pump-a" || ends["flow_P1_P2"] != "pump-a>P2" {
+		t.Errorf("pipes %v: the hand-drawn feed stays alone, the new P1 -> P2 pipe starts on pump-a (the piece's name in the file)", ends)
+	}
+	if d.Canvas.Width != 5000 || d.Canvas.Height != 3000 || !strings.Contains(string(out), `"grid": true`) {
+		t.Errorf("canvas %+v: it only grows and keeps what a person put in it\n%s", d.Canvas, out)
+	}
+	// a file with units, or a list that is not a list, is refused, not rewritten
+	for name, doc := range map[string]string{
+		"units":    `{"units":[{"id":"u"}],"equipment":[],"pipes":[]}`,
+		"not list": `{"equipment":{"a":1},"pipes":[]}`,
+	} {
+		if got, _, err := planScheme(p, p.Areas[0], []byte(doc)); err == nil || got != nil {
+			t.Errorf("%s: %q %v, want a refusal", name, got, err)
+		}
+	}
+}
+
+func TestSchemeWritesLabelsAsAPersonWould(t *testing.T) {
+	p := schemePlantModel(t, "areas: [{ id: A }]\nequipment:\n  - { id: T, type: Tank, area: A, tag: T, label: \"Tank & Heater <1>\" }\n")
+	out, _, _ := planScheme(p, p.Areas[0], nil)
+	if !strings.Contains(string(out), `"Tank & Heater <1>"`) {
+		t.Errorf("label escaped:\n%s", out)
+	}
+}
+
+func TestSchemeSaysWhyAFlowEndIsMissing(t *testing.T) {
+	p := schemePlantModel(t, "areas: [{ id: A }]\nequipment:\n  - { id: T, type: Tank, area: A, tag: T }\n  - { id: B, area: A, device: CONV }\nflows: [{ from: T, to: B }]\n")
+	_, notes, _ := planScheme(p, p.Areas[0], nil)
+	if all := strings.Join(notes, "\n"); !strings.Contains(all, "one end is a piece with no component") || strings.Contains(all, "leaves the area") {
+		t.Errorf("notes %q", all)
+	}
+}

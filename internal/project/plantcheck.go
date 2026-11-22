@@ -250,6 +250,9 @@ func (p *Project) pathProblem(rt *runtime.Runtime, path string) string {
 			at += "[" + s.name + "]"
 		default:
 			if t.Kind != ir.TypeStruct || t.Struct == nil {
+				if isDigits(s.name) {
+					return "" // a bit of a value (Status.3): not claimed either way
+				}
 				return fmt.Sprintf("%s is not a struct, so it has no member %s", at, s.name)
 			}
 			f := memberOf(t.Struct, s.name)
@@ -352,4 +355,16 @@ func elementary(name string) *ir.Type {
 		return &ir.Type{Kind: ir.TypeInt}
 	}
 	return nil
+}
+
+func isDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }

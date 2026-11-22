@@ -192,6 +192,17 @@ readings:
 	if strings.Contains(all, "FIT1 (type Meter): {tag}.PV expands") || strings.Contains(all, "FIT1 (type Meter): {tag}.pv expands") {
 		t.Errorf("PV is a member (member names compare as names do):\n%s", all)
 	}
+	// a bit of a value (Duty.3) is not claimed either way
+	if _, errs, _ := (func() (PlantReport, []string, []string) {
+		fs2 := alarmFS("name: p\nplant: plant.yaml\n"+alarmTags, map[string]string{
+			"plant.yaml":                  "equipment:\n  - { id: D, type: Bits, tag: Duty }\n",
+			"asset-types/Bits.asset.yaml": "type: Bits\nreadings:\n  - { tag: \"{tag}.3\" }\n",
+		})
+		pr, rt2 := loadAlarms(t, fs2)
+		return pr.CheckPlant(fs2, rt2, nil)
+	})(); strings.Contains(strings.Join(errs, "\n"), "no member 3") {
+		t.Errorf("Duty.3 is a bit, not a member: %v", errs)
+	}
 	// without types (nil rt) nothing past the tag is claimed
 	if _, errs, _ := proj.CheckPlant(fsys, nil, nil); strings.Contains(strings.Join(errs, "\n"), "no member") {
 		t.Errorf("no runtime, no member claims: %v", errs)

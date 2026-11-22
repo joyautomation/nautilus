@@ -85,7 +85,7 @@ func runHMIScheme(args []string) int {
 			fmt.Printf("%s: nothing to add\n", path)
 			continue
 		}
-		if err := os.WriteFile(path, out, 0o644); err != nil {
+		if err := writeFileAtomic(path, out); err != nil {
 			fmt.Fprintln(os.Stderr, "naut hmi scheme:", err)
 			return 1
 		}
@@ -183,13 +183,31 @@ func planScheme(pl *plant.Plant, area plant.Area, existing []byte) ([]byte, []st
 	eqs, pipes := []json.RawMessage{}, []json.RawMessage{}
 	have := map[string]bool{}
 	havePipe := map[string]bool{}
+	// the id a plant piece goes by in the file: its own, or the name a person
+	// gave the drawn piece that names it with plant:
+	eqOf := map[string]string{}
+	pipeEnds := map[string]bool{}
 	maxX, maxY := 0.0, 0.0
 	if len(bytes.TrimSpace(existing)) > 0 {
 		if err := json.Unmarshal(existing, &top); err != nil {
 			return nil, nil, fmt.Errorf("not a mimic: %w", err)
 		}
-		_ = json.Unmarshal(top["equipment"], &eqs)
-		_ = json.Unmarshal(top["pipes"], &pipes)
+		if _, ok := top["units"]; ok {
+			return nil, nil, fmt.Errorf("the file draws units (its numbers are not all pixels): edit it by hand, or move the units out of it")
+		}
+		for _, k := range []string{"equipment", "pipes"} {
+			if raw, ok := top[k]; ok && string(raw) != "null" {
+				var list []json.RawMessage
+				if err := json.Unmarshal(raw, &list); err != nil {
+					return nil, nil, fmt.Errorf("%q is not a list: %w", k, err)
+				}
+				if k == "equipment" {
+					eqs = list
+				} else {
+					pipes = list
+				}
+			}
+		}
 		for _, r := range eqs {
 			var e struct {
 				ID, Plant string
@@ -199,19 +217,32 @@ func planScheme(pl *plant.Plant, area plant.Area, existing []byte) ([]byte, []st
 			}
 			_ = json.Unmarshal(r, &e)
 			have[strings.ToLower(e.ID)] = true
+			eqOf[strings.ToLower(e.ID)] = e.ID
 			if e.Plant != "" {
 				have[strings.ToLower(e.Plant)] = true
+				eqOf[strings.ToLower(e.Plant)] = e.ID
 				if _, ok := pl.Find(e.Plant); !ok {
 					notes = append(notes, fmt.Sprintf("equipment %s names plant %q, which the plant no longer has: left as it is", e.ID, e.Plant))
 				}
 			}
-			maxX = max(maxX, e.X+e.Width)
-			maxY = max(maxY, e.Y+e.Height)
+			w, h := e.Width, e.Height
+			if w == 0 {
+				w = 100
+			}
+			if h == 0 {
+				h = 80
+			}
+			maxX = max(maxX, e.X+w)
+			maxY = max(maxY, e.Y+h)
 		}
 		for _, r := range pipes {
-			var p struct{ ID string }
+			var p struct {
+				ID       string
+				From, To struct{ Equip, Port string }
+			}
 			_ = json.Unmarshal(r, &p)
 			havePipe[strings.ToLower(p.ID)] = true
+			pipeEnds[strings.ToLower(p.From.Equip+"."+p.From.Port+">"+p.To.Equip+"."+p.To.Port)] = true
 		}
 	}
 
@@ -234,6 +265,15 @@ func planScheme(pl *plant.Plant, area plant.Area, existing []byte) ([]byte, []st
 			s.w, s.h = sz[0], sz[1]
 		}
 		all = append(all, s)
+	}
+	notDrawn := map[string]bool{} // plant pieces of this area with no component
+	for _, e := range pl.Equipment {
+		if strings.EqualFold(e.Area, area.ID) {
+			notDrawn[strings.ToLower(e.ID)] = true
+		}
+	}
+	for i := range all {
+		delete(notDrawn, strings.ToLower(all[i].eq.ID))
 	}
 	byID := map[string]*schemeEq{}
 	for i := range all {
@@ -311,7 +351,7 @@ func planScheme(pl *plant.Plant, area plant.Area, existing []byte) ([]byte, []st
 			panel["title"] = label
 			e.Panel = panel
 		}
-		raw, err := json.Marshal(e)
+		raw, err := marshalPlain(e)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -328,6 +368,10 @@ func planScheme(pl *plant.Plant, area plant.Area, existing []byte) ([]byte, []st
 		if a == nil && b == nil {
 			continue
 		}
+		if (a == nil && notDrawn[strings.ToLower(from.Equipment)]) || (b == nil && notDrawn[strings.ToLower(to.Equipment)]) {
+			notes = append(notes, fmt.Sprintf("flow %s -> %s is not drawn: one end is a piece with no component", f.From, f.To))
+			continue
+		}
 		if a == nil || b == nil {
 			notes = append(notes, fmt.Sprintf("flow %s -> %s leaves the area: not drawn", f.From, f.To))
 			continue
@@ -339,6 +383,7 @@ func planScheme(pl *plant.Plant, area plant.Area, existing []byte) ([]byte, []st
 			id = fmt.Sprintf("%s_%d", base, n[base])
 		}
 		if havePipe[strings.ToLower(id)] {
+			notes = append(notes, fmt.Sprintf("flow %s -> %s: a pipe named %s is already there: left as it is", f.From, f.To, id))
 			continue
 		}
 		fp, tp := a.port(from.Nozzle, true), b.port(to.Nozzle, false)
@@ -346,8 +391,18 @@ func planScheme(pl *plant.Plant, area plant.Area, existing []byte) ([]byte, []st
 			notes = append(notes, fmt.Sprintf("flow %s -> %s is not drawn: no port for %s (name the nozzle's port in the asset type's ports:)", f.From, f.To, map[bool]string{true: from.Equipment, false: to.Equipment}[fp == ""]))
 			continue
 		}
-		pipe := schemePipe{ID: id, Routing: "auto", Points: [][2]float64{}, From: schemeEnd{a.eq.ID, fp}, To: schemeEnd{b.eq.ID, tp}}
-		raw, err := json.Marshal(pipe)
+		fromEq, toEq := a.eq.ID, b.eq.ID
+		if x := eqOf[strings.ToLower(a.eq.ID)]; x != "" {
+			fromEq = x
+		}
+		if x := eqOf[strings.ToLower(b.eq.ID)]; x != "" {
+			toEq = x
+		}
+		if pipeEnds[strings.ToLower(fromEq+"."+fp+">"+toEq+"."+tp)] {
+			continue // a pipe between those two ports is already drawn, whatever it is called
+		}
+		pipe := schemePipe{ID: id, Routing: "auto", Points: [][2]float64{}, From: schemeEnd{fromEq, fp}, To: schemeEnd{toEq, tp}}
+		raw, err := marshalPlain(pipe)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -362,7 +417,7 @@ func planScheme(pl *plant.Plant, area plant.Area, existing []byte) ([]byte, []st
 		return nil, append(notes, "nothing to draw: no equipment of this area has a component"), nil
 	}
 	set := func(k string, v any) error {
-		b, err := json.Marshal(v)
+		b, err := marshalPlain(v)
 		if err != nil {
 			return err
 		}
@@ -376,7 +431,16 @@ func planScheme(pl *plant.Plant, area plant.Area, existing []byte) ([]byte, []st
 		}
 		_ = set("name", label)
 	}
-	canvas := map[string]float64{"width": max(maxX+40, 400), "height": max(maxY+40, 240)}
+	// the canvas only ever grows, and keeps any key a person gave it
+	canvas := map[string]any{}
+	_ = json.Unmarshal(top["canvas"], &canvas)
+	grow := func(k string, need float64) {
+		if cur, ok := canvas[k].(float64); !ok || cur < need {
+			canvas[k] = need
+		}
+	}
+	grow("width", max(maxX+40, 400))
+	grow("height", max(maxY+40, 240))
 	_ = set("canvas", canvas)
 	_ = set("equipment", eqs)
 	_ = set("pipes", pipes)
@@ -425,4 +489,40 @@ func marshalOrdered(top map[string]json.RawMessage) ([]byte, error) {
 	}
 	buf.WriteString("\n}\n")
 	return buf.Bytes(), nil
+}
+
+// writeFileAtomic writes beside the file and renames over it, so a crash
+// leaves the old file or the new one, never half of either.
+func writeFileAtomic(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".scheme-*.tmp")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(name)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(name)
+		return err
+	}
+	if err := os.Chmod(name, 0o644); err != nil {
+		os.Remove(name)
+		return err
+	}
+	return os.Rename(name, path)
+}
+
+// marshalPlain is json.Marshal that leaves &, < and > as they are: a label
+// like "Tank & Heater" is written as a person would.
+func marshalPlain(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimRight(buf.Bytes(), "\n"), nil
 }
