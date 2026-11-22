@@ -55,11 +55,35 @@ func setServerObjectValues(s *Server) {
 		}
 		return ns
 	})
-	set(id.Server_ServiceLevel, func() any {
-		if s.Status().State == ua.ServerStateRunning {
-			return byte(255)
+	red := func() *Redundancy {
+		if s.cfg.redundancy == nil {
+			return nil
 		}
-		return byte(0)
+		return s.cfg.redundancy()
+	}
+	set(id.Server_ServiceLevel, func() any {
+		if s.Status().State != ua.ServerStateRunning {
+			return byte(0)
+		}
+		if r := red(); r != nil && r.ServiceLevel != nil {
+			return r.ServiceLevel()
+		}
+		return byte(255)
+	})
+	// A member of a redundant set says so (Part 5 §6.3.7, Part 4 §6.6.2.4.5):
+	// the support kind and the whole set's ApplicationUris. A server that is
+	// not in a set keeps the standard's default, None and no array.
+	set(id.Server_ServerRedundancy_RedundancySupport, func() any {
+		if r := red(); r != nil {
+			return r.Support
+		}
+		return int32(0)
+	})
+	set(id.Server_ServerRedundancy_ServerURIArray, func() any {
+		if r := red(); r != nil {
+			return append([]string{}, r.ServerURIs...)
+		}
+		return []string{}
 	})
 	set(id.Server_Auditing, func() any { return false })
 
