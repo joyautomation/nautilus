@@ -327,15 +327,18 @@ func alarmsReport(args []string, now time.Time, stdout, stderr io.Writer) int {
 	}
 	set := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { set[f.Name] = true })
-	for name, report := range map[string]string{"sliding": "flood", "threshold": "flood", "count": "chatter"} {
-		if set[name] && kind != report {
-			return fail(fmt.Errorf("-%s is for the %s report", name, report))
+	for _, f := range []struct{ name, report string }{{"count", "chatter"}, {"sliding", "flood"}, {"threshold", "flood"}} {
+		if set[f.name] && kind != f.report {
+			return fail(fmt.Errorf("-%s is for the %s report", f.name, f.report))
 		}
 	}
 	if set["window"] && kind != "flood" && kind != "chatter" {
 		return fail(errors.New("-window is for the flood and chatter reports"))
 	}
 	// Zero means "the default" in the config, never on the command line.
+	if set["count"] && *count < 2 {
+		return fail(fmt.Errorf("-count %d: want 2 or more", *count))
+	}
 	if set["threshold"] && *threshold < 1 {
 		return fail(fmt.Errorf("-threshold %d: want 1 or more", *threshold))
 	}

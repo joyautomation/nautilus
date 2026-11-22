@@ -64,6 +64,11 @@ type Event struct {
 	// standalone start's grace. Live detection did not count it, and
 	// neither do the reports (rationalize.Activations).
 	Standing bool `json:"standing,omitempty"`
+	// SeenWhen, on an `active` row, says the activation was seen as
+	// something came back ("site RTU9 came back", "equipment P101
+	// returned to service"): its condition read false before it could not
+	// be seen and true after, so it began sometime in between, not at TS.
+	SeenWhen string `json:"seenWhen,omitempty"`
 
 	// The rest are set only on a KindNotify row (#715): the escalation
 	// level (1 is the first), who was notified (a principal: a user name

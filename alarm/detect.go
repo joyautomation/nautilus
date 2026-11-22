@@ -203,6 +203,10 @@ type detect struct {
 	// engine started (or was reset), and what it read last. A return from
 	// suppression re-baselines only a condition that read true before it.
 	read, lastRaw bool
+	// returned is what came back (instance.seenWhen) when a return from
+	// suppression found the condition false before it: the next
+	// activation is marked with it, unless a false reading comes first.
+	returned string
 	// floodActs counts the alarm's activations in the current flood, for
 	// the flood's equipment groups.
 	floodActs int
@@ -445,6 +449,9 @@ func (e *Engine) inGrace(now time.Time) bool {
 // transition table.
 func (e *Engine) baseline(d *detect, raw bool, now time.Time) {
 	d.read, d.lastRaw = true, raw
+	if !raw {
+		d.returned = "" // false after the return: what activates now, did so now
+	}
 	switch {
 	case !d.baselined:
 		d.baselined, d.standing = true, raw
@@ -681,6 +688,27 @@ func (e *Engine) rebase(delta int64) {
 	}
 }
 
+// seenWhen says what is coming back as in leaves its suppression, for an
+// activation it finds (Record.SeenWhen). Called once per return, before
+// unsuppress clears the reason.
+func (in *instance) seenWhen() string {
+	switch in.suppKind {
+	case SuppressOutOfService:
+		return "equipment " + in.def.Equipment + " returned to service"
+	case SuppressSubstituted:
+		return "the substitute on " + in.subAddr + " ended"
+	case SuppressDesigned:
+		if in.def.SuppressWhen != "" && in.reason == in.swReason {
+			return "suppress-when " + in.def.SuppressWhen + " cleared"
+		}
+		return "enable " + in.def.Enable + " came back"
+	}
+	if in.def.Site != "" {
+		return "site " + in.def.Site + " came back"
+	}
+	return "tag " + in.def.Tag + " became readable"
+}
+
 // chatterOf is in's chatter episode for its record, nil when it is not
 // chattering.
 func (e *Engine) chatterOf(i int) *Chatter {
@@ -698,7 +726,7 @@ func (e *Engine) resetDetect() {
 	for i := range e.det {
 		e.det[i].chat.reset()
 		e.det[i].baselined, e.det[i].standing, e.det[i].floodActs = false, false, 0
-		e.det[i].read, e.det[i].lastRaw = false, false
+		e.det[i].read, e.det[i].lastRaw, e.det[i].returned = false, false, ""
 	}
 	e.detLast = 0
 	e.chattering = 0

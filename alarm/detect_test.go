@@ -660,3 +660,61 @@ func TestFloodDetectorEdgeAndSaturation(t *testing.T) {
 		t.Fatal("ended while the newest activations were still over the threshold")
 	}
 }
+
+// An alarm that read false before it could not be seen, and reads true as
+// it comes back, activated sometime in between: its row and record say
+// what came back, so nobody reads the time as when the fault began. One
+// that reads false first and activates later is seen as it happens.
+func TestActivationOnAReturnSaysWhatCameBack(t *testing.T) {
+	site := def("A", "a")
+	site.Site = "RTU9"
+	oos := def("B", "b")
+	oos.Equipment = "P101"
+	r := detectRig(t, nil, site, oos, def("C", "c"))
+	r.tags["a"], r.tags["b"], r.tags["c"] = false, false, false
+	r.Evaluate()
+	r.clk.advance(time.Minute)
+	delete(r.tags, "a")
+	if err := r.TakeOutOfService("P101", r.clk.at(time.Hour), "op", "work"); err != nil {
+		t.Fatal(err)
+	}
+	r.Evaluate()
+	r.clk.advance(time.Minute)
+	r.tags["a"], r.tags["b"], r.tags["c"] = true, true, true
+	if err := r.ReturnToService("P101", "op"); err != nil {
+		t.Fatal(err)
+	}
+	r.Evaluate()
+	want := map[string]string{"A": "site RTU9 came back", "B": "equipment P101 returned to service", "C": ""}
+	for _, e := range r.rows(t, KindActive) {
+		if e.SeenWhen != want[e.ID] {
+			t.Errorf("%s row seenWhen = %q, want %q", e.ID, e.SeenWhen, want[e.ID])
+		}
+	}
+	for id, w := range want {
+		if rec, _ := r.Lookup(id); rec.SeenWhen != w {
+			t.Errorf("%s record seenWhen = %q, want %q", id, rec.SeenWhen, w)
+		}
+	}
+	// Its next activation is seen as it happens.
+	r.bounce("a", time.Second)
+	r.tags["a"] = false
+	r.Evaluate()
+	r.bounce("a", time.Second)
+	if rec, _ := r.Lookup("A"); rec.SeenWhen != "" {
+		t.Errorf("a later activation keeps seenWhen %q", rec.SeenWhen)
+	}
+	// A false reading after the return: what activates later, did so then.
+	r.tags["a"] = false
+	r.Evaluate()
+	delete(r.tags, "a")
+	r.Evaluate()
+	r.Evaluate()
+	r.tags["a"] = false
+	r.Evaluate()
+	r.tags["a"] = true
+	r.Evaluate()
+	if rec, _ := r.Lookup("A"); rec.SeenWhen != "" {
+		t.Errorf("an activation after a false reading on the return says %q", rec.SeenWhen)
+	}
+}

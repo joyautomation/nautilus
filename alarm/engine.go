@@ -337,14 +337,18 @@ func (e *Engine) evalOne(i int, now time.Time) {
 	}
 
 	if in.state == Suppressed {
-		e.unsuppress(in, now)
 		// A condition that read true before the suppression and reads true
 		// now has stood: re-baseline it. One that read false (or was
 		// never read) and reads true now is a new activation, which a
-		// flapping input on a flaky link or behind a cycling enable is.
+		// flapping input on a flaky link is; but it began sometime while
+		// the alarm could not be seen, so its activation says when it
+		// was seen (seenWhen), not only when.
 		if !d.read || d.lastRaw || mutAlarm("unsuppress_always_rebaselines") {
 			d.baselined = false
+		} else {
+			d.returned = in.seenWhen()
 		}
+		e.unsuppress(in, now)
 	}
 	e.baseline(d, raw, now)
 	if !in.judged {
@@ -375,6 +379,12 @@ func (e *Engine) evalOne(i int, now time.Time) {
 		// counts (Event.Standing): a report reads the journal by the same
 		// rule as the live detector.
 		counted := kind == KindActive && e.counted(d, now)
+		if kind == KindActive {
+			in.seen, d.returned = d.returned, ""
+			if mutAlarm("seen_when_unmarked") {
+				in.seen = ""
+			}
+		}
 		e.emitMarked(in, now, kind, "", kind == KindActive && !counted && !mutAlarm("standing_unmarked"))
 		if counted {
 			e.activated(i, now)
@@ -457,6 +467,9 @@ func (e *Engine) emitMarked(in *instance, now time.Time, kind, by string, standi
 		Occurrence: in.occ,
 		Standing:   standing,
 	}
+	if kind == KindActive {
+		ev.SeenWhen = in.seen
+	}
 	if err := e.jrn.Append(ev); err != nil {
 		e.log.Warn("alarm journal append failed", "id", ev.ID, "kind", ev.Kind, "err", err)
 	}
@@ -530,6 +543,11 @@ type Record struct {
 
 	// Chatter is the alarm's chattering episode while it lasts (#1249).
 	Chatter *Chatter `json:"chatter,omitempty"`
+	// SeenWhen, on an alarm whose last activation was seen as something
+	// came back ("site RTU9 came back"), says so: it began sometime while
+	// it could not be seen, so ActiveMs is when it was seen, not when the
+	// fault began (#1249).
+	SeenWhen string `json:"seenWhen,omitempty"`
 }
 
 func (in *instance) record() Record {
@@ -544,6 +562,8 @@ func (in *instance) record() Record {
 		Warning: in.warning(),
 
 		Occurrence: in.occ,
+
+		SeenWhen: in.seen,
 	}
 	r.Name = in.displayName() // the record is a view: the lent name, if any
 	if !in.activeAt.IsZero() {

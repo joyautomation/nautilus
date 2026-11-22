@@ -298,6 +298,7 @@ var Mutations = []string{
 	"standing_sticks",                   // alarm: a false reading does not end a standing condition, so its next activation is not counted (#1249)
 	"unsuppress_always_rebaselines",     // alarm: a return from suppression re-baselines a condition that read false before it (#1249)
 	"standing_unmarked",                 // alarm: an activation detection did not count is journalled unmarked, so the reports count it (#1249)
+	"seen_when_unmarked",                // alarm: an activation found as a site or equipment came back reads as if it began then (#1249)
 	"ack_clear_keeps_occurrence",        // server: an ack-clear leaves the ended occurrence in the view (#715)
 	"takeover_drops_occurrences",        // server: a synced takeover continues no occurrence (#715)
 	"ack_entry_unbound",                 // server: a pair's ack entry names no occurrence (#715)

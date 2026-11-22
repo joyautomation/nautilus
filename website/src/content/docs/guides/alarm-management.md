@@ -519,9 +519,22 @@ What counts is a new activation. These do not count:
 - an activation inside a standalone controller's first minute, while its
   drivers may still read defaults.
 
+Chatter detection measures an alarm's own transitions, not the
+equipment around it. A low-flow alarm that stays true while its pump's
+enable cycles off and on has not bounced, so it is not chattering; the
+pump's start/stop cycling is a different problem, which this does not
+detect.
+
 A controller coming back with fifty alarms standing is not a flood. The
 journal marks those `active` rows `standing`, and the reports leave them
 out as well.
+
+A site that comes back with a dozen alarms that were clear before it
+went dark is a flood: those are new to the operator. Each of them began
+sometime while the site was dark, not when the controller saw it, so its
+record and its `active` row say what came back (`seenWhen`: "site RTU9
+came back", "equipment P101 returned to service"), and the time reads as
+when it was seen.
 
 **What you see.** While an alarm chatters, its row in `/api/alarms`
 carries `chatter` (since when, how many activations, how many episodes),
@@ -547,7 +560,11 @@ its floods can differ at the edges. Give `-window` and `-threshold` (or
 `-count` and `-window` for chatter) when `alarms:` changes the defaults.
 
 A `chatter` or `flood` row with no end row means the controller stopped
-or handed over while the episode lasted.
+or handed over while the episode lasted. If the controller's clock steps back
+during an episode, detection reads the step as no time passing, and the
+episode's end row gives its start in the new clock's time; a `-sliding`
+report over a range that spans the step can differ from the controller
+there.
 
 ## Measuring the alarm system
 

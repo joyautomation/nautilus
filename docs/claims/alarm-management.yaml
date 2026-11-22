@@ -663,12 +663,14 @@ claims:
       A condition that stood through a restart, a takeover or a return from
       suppression, and an activation inside a standalone start's grace, do
       not count toward chattering or a flood; a condition that read false
-      before a suppression and true after does; the journal marks the rows
-      that do not count, and the reports leave them out.
+      before a suppression and true after does, its record and row saying
+      what came back; the journal marks the rows that do not count, and the
+      reports leave them out.
     source: "#chattering-and-floods-live"
     tests:
       - go ./alarm TestReactivationsAfterARebaselineDoNotCount
       - go ./alarm TestReturnFromSuppressionCountsWhatIsNew
+      - go ./alarm TestActivationOnAReturnSaysWhatCameBack
       - go ./alarm TestResetForgetsEpisodes
       - go ./alarm TestStartGraceSurvivesAClockStepBack
       - go ./alarm/rationalize TestReportsSkipStandingActivations

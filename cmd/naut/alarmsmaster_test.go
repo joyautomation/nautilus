@@ -171,7 +171,7 @@ func TestAlarmsReportFromAJournalFile(t *testing.T) {
 	if cs := doc["report"].([]any); len(cs) != 0 {
 		t.Errorf("-count 4 still found CH chattering (three activations):\n%s", raw)
 	}
-	for _, args := range [][]string{{"chatter", "-sliding"}, {"chatter", "-threshold", "5"}, {"flood", "-count", "5"}, {"stale", "-window", "1m"}, {"flood", "-threshold", "0"}} {
+	for _, args := range [][]string{{"chatter", "-sliding"}, {"chatter", "-threshold", "5"}, {"flood", "-count", "5"}, {"stale", "-window", "1m"}, {"flood", "-threshold", "0"}, {"chatter", "-count", "0"}} {
 		var out, errb bytes.Buffer
 		if code := alarmsReport(append(args, "-journal", path), reportNow, &out, &errb); code != 2 {
 			t.Errorf("%v: exit %d, want 2", args, code)

@@ -49,7 +49,9 @@ import "os"
 //   - unsuppress_always_rebaselines: a return from suppression
 //     re-baselines a condition that read false before it;
 //   - standing_unmarked: an uncounted activation's row is not marked
-//     Standing.
+//     Standing;
+//   - seen_when_unmarked: an activation found as something came back
+//     does not say so (SeenWhen).
 var mutOn = os.Getenv("QUORUM_MUT")
 
 func mutAlarm(name string) bool { return name == mutOn }

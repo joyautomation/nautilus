@@ -177,6 +177,10 @@ type instance struct {
 	// still the same wait), cleared by an ack, a shelf or a suppression.
 	// Escalation (#715) runs from it. Maintained by emit.
 	waitAt time.Time
+
+	// seen is what came back as the alarm's last activation was seen
+	// (Record.SeenWhen); "" for an activation seen as it happened.
+	seen string
 }
 
 // qualify folds the raw bit into the qualified condition, applying the
