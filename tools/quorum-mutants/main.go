@@ -447,6 +447,7 @@ var table = []mutation{
 	{"clear_without_livemu", []string{"TestJudgementWaitsOutAnInFlightApply"}},
 	{"reconcile_without_livemu", []string{"TestReconcileNeverClearsAnAckAppliedBetweenItsReads"}},
 	{"ack_clear_any_occurrence", []string{"TestAckClearOfAnotherOccurrenceLeavesTheAck"}},
+	{"engine_event_takes_livemu", []string{"TestScanNeverWaitsOnTheAlarmLog"}},
 	{"occurrences_not_synced", []string{"TestLeaderSyncsOccurrences"}},
 }
 
@@ -546,6 +547,7 @@ var rowPkgs = map[string][]string{
 	"clear_without_livemu":              {"./server"},
 	"reconcile_without_livemu":          {"./server"},
 	"ack_clear_any_occurrence":          {"./server"},
+	"engine_event_takes_livemu":         {"./server"},
 	"occurrences_not_synced":            {"./server"},
 	"reconcile_before_restore":          {"./server"},
 	"cluster_ops_proxied":               {"./server"},

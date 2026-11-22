@@ -492,6 +492,10 @@ func (l *AlarmLog) engineEvent(ev alarm.Event) {
 		l.clearIfAcked(endedOcc{ev.ID, ev.Occurrence, l.ackGen.Load(), l.term()})
 		return
 	}
+	if mutServer("engine_event_takes_livemu") {
+		l.liveMu.Lock()
+		l.liveMu.Unlock() //nolint:staticcheck // the mutation: the hook waits on liveMu
+	}
 	if mutServer("engine_event_blocks") {
 		l.ended <- endedOcc{ev.ID, ev.Occurrence, l.ackGen.Load(), l.term()}
 		return

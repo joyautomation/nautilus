@@ -307,6 +307,7 @@ var Mutations = []string{
 	"clear_without_livemu",              // server: a late hand-off is judged without waiting out an in-flight Apply (#715)
 	"reconcile_without_livemu",          // server: Reconcile reads the engine's acks and the view's without liveMu (#715)
 	"ack_clear_any_occurrence",          // server: an ack-clear naming one occurrence removes another occurrence's ack (#715)
+	"engine_event_takes_livemu",         // server: the engine's hook waits on liveMu on the scan (#715, #1053)
 	"occurrences_not_synced",            // server: the leader proposes no occurrence-start or -end (#715)
 }
 
