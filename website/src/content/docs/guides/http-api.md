@@ -1430,10 +1430,11 @@ in the manifest; without it each route answers 404 and says so.
 | `GET /api/push/subscriptions` | your own: `{"subscriptions": [{id, host, at}]}` |
 | `GET /api/push/health` | the config permission: `{keyFingerprint, subscriptions, people, sealed}` |
 
-A subscription belongs to the person the session names, never one in the
-body, and only a person (a local user or OIDC) may hold one: a service
-token or `NAUTILUS_TOKEN` is refused with the fix. The endpoint must be an
-`https` URL on a public host (and on `allow-hosts` when that is set); an
+A subscription belongs to the person the signed-in browser session names,
+never one in the body, and only a person (a local user or OIDC) may hold
+one: a service token, `NAUTILUS_TOKEN` or a personal access token (a
+credential for scripts, which has no phone) is refused with the fix. The endpoint must be an
+`https` URL on port 443 of a public host (and on `allow-hosts` when that is set; a host that list names may also be private and use another port); an
 endpoint a person re-subscribes is replaced, one another person
 subscribes is taken by the newest, and a ninth device ends the oldest.
 Each of these is journalled (`push.subscribe`, `push.unsubscribe`, by the

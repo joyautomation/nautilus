@@ -110,7 +110,7 @@ func TestSendRoundTrip(t *testing.T) {
 		t.Errorf("decrypted %q", got)
 	}
 	h := f.hdr
-	if h.Get("Content-Encoding") != "aes128gcm" || h.Get("TTL") != "90" || h.Get("Urgency") != "high" || h.Get("Topic") != "HiTemp" {
+	if h.Get("Content-Encoding") != "aes128gcm" || h.Get("TTL") != "90" || h.Get("Urgency") != "high" || h.Get("Topic") != s.topicFor("HiTemp") || h.Get("Topic") == "HiTemp" {
 		t.Errorf("headers %v", h)
 	}
 	rest, _ := strings.CutPrefix(h.Get("Authorization"), "vapid t=")
@@ -201,14 +201,28 @@ func TestSendPolicyRefusalSendsNothing(t *testing.T) {
 	}
 }
 
-func TestTopic(t *testing.T) {
-	if safeTopic("HiTemp_1") != "HiTemp_1" {
-		t.Error("a safe topic is kept")
+// The topic names an alarm to the push service by a keyed hash: stable,
+// opaque and valid (22 characters of base64url), never the alarm's id.
+func TestTopicIsKeyedAndOpaque(t *testing.T) {
+	k1, _ := NewKey()
+	k2, _ := NewKey()
+	a, b := &Sender{Key: k1}, &Sender{Key: k2}
+	got := a.topicFor("HiTemp")
+	if got == "HiTemp" || len(got) != 22 || got != a.topicFor("HiTemp") || got == a.topicFor("LoTemp") || got == b.topicFor("HiTemp") {
+		t.Errorf("topic %q", got)
 	}
-	for _, in := range []string{"", "has space", strings.Repeat("a", 33), "Tank 1/High"} {
-		got := safeTopic(in)
-		if got == in || len(got) > 32 || got == "" {
-			t.Errorf("safeTopic(%q) = %q", in, got)
-		}
+}
+
+// A body the service would refuse (over 4096 octets) is refused here, and
+// the largest message that fits is exactly 4096.
+func TestEncryptStaysUnderTheServiceLimit(t *testing.T) {
+	ua, _ := ecdh.P256().GenerateKey(rand.Reader)
+	au := make([]byte, 16)
+	body, err := Encrypt(make([]byte, MaxPayload), ua.PublicKey().Bytes(), au)
+	if err != nil || len(body) != 4096 {
+		t.Fatalf("largest: %d, %v", len(body), err)
+	}
+	if _, err := Encrypt(make([]byte, MaxPayload+1), ua.PublicKey().Bytes(), au); err == nil {
+		t.Error("one over was accepted")
 	}
 }

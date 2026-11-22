@@ -707,6 +707,10 @@ func (r *Runtime) retainState() retain.State {
 	// Web Push subscriptions, sealed: nothing secret in the store (#722).
 	if k := r.pushKeeper(); k != nil {
 		st.Push = k.RetainedPush()
+	} else {
+		// No keeper (push is off here, or has no key): what the store
+		// holds is another replica's, and a save must not erase it.
+		st.Push = r.pushHeld()
 	}
 	// Substitutes (substitute_retain.go): their own block, last.
 	st.Substitutes = r.retainedSubstitutes()

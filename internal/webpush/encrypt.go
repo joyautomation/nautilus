@@ -21,9 +21,10 @@ import (
 // does not fit in one record is refused (a push service takes 4096 bytes).
 const RecordSize = 4096
 
-// MaxPayload is the longest plaintext Encrypt takes: one record, less the
-// delimiter octet and the AEAD tag.
-const MaxPayload = RecordSize - 1 - 16
+// MaxPayload is the longest plaintext Encrypt takes. A push service
+// refuses a body over 4096 octets (RFC 8030 §7.2), and the body is the
+// 86-octet header, the plaintext, the delimiter octet and the 16-octet tag.
+const MaxPayload = 4096 - 86 - 1 - 16
 
 // Encrypt encrypts payload for the user agent whose subscription carries
 // uaPublic (65-byte uncompressed P-256 point) and authSecret (16 bytes),

@@ -88,7 +88,7 @@ func (k *Key) Authorization(endpoint, subject string, exp time.Time) (string, er
 	if err != nil || u.Scheme == "" || u.Host == "" {
 		return "", errors.New("webpush: not a push endpoint URL")
 	}
-	jwt, err := k.jwt(u.Scheme+"://"+u.Host, subject, exp)
+	jwt, err := k.jwt(strings.ToLower(u.Scheme+"://"+u.Host), subject, exp)
 	if err != nil {
 		return "", err
 	}

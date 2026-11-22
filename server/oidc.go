@@ -458,6 +458,7 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 		authAt = time.Time{}
 	}
 	sid, se := s.sessions.start(session{user: name, oidc: true, issuer: id.Issuer, sub: id.Subject, groups: pr.Groups(), authAt: authAt})
+	s.pushOIDCSignIn(se)
 	s.clearOIDCCookie(w, r, state)
 	http.SetCookie(w, &http.Cookie{
 		Name:     cookie,

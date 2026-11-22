@@ -433,7 +433,14 @@ browser playground has no state directory, so a project there with
   permission) counts the subscriptions the key cannot open (sealed under
   another key: kept, never sent). A subscription ends when its person
   does: a changed password, a removed or disabled user or a revoked role
-  stops the pages, with no session needed; signing out does not. A push
+  stops the pages, with no session needed; signing out does not. (A
+  users file that cannot be read ends nothing: nobody is paged, and
+  nothing is dropped, until it can be read. A pair needs the same
+  `users.json` on both boxes, as [auth](/guides/auth/) says, or a
+  takeover finds every password changed.) An OIDC person's groups are
+  those of their last sign-in on the controller: a sign-in refreshes
+  them, and a subscription not refreshed within 14 days stops, so
+  someone removed from a group at the provider is not paged for ever. A push
   is sent only by the leader, directly (no `HTTPS_PROXY`: the controller
   checks what the push service's name resolves to, and refuses a private
   address unless `allow-hosts:` names it, for a site's own relay).

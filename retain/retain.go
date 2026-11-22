@@ -96,6 +96,7 @@ type PushRow struct {
 	Host      string    `json:"host"`
 	At        time.Time `json:"at"`
 	Groups    []string  `json:"groups,omitempty"`
+	Seen      time.Time `json:"seen,omitzero"`
 	// Key fingerprints the VAPID key the row is sealed under (not the
 	// key): a replica holding another key keeps the row and sends none.
 	Key    string `json:"key"`

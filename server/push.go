@@ -55,7 +55,15 @@ const (
 	pushSaveWait  = 10 * time.Second
 	pushBodyMax   = 8 << 10
 	pushSweepEach = 30 * time.Second
+	// pushOIDCWindow is how long an OIDC person's subscription stands
+	// without a sign-in here to refresh their groups.
+	pushOIDCWindow = 14 * 24 * time.Hour
 )
+
+// usersReadable reports whether the users file can be trusted as it is
+// now: a file that cannot be read is an empty one to stands, which would
+// end every subscription. Nothing is revoked or pruned on its word.
+func (p *pushService) usersReadable() bool { return p.s.users != nil && p.s.users.Err() == nil }
 
 type pushService struct {
 	s      *Server
@@ -102,22 +110,22 @@ func (p *pushService) RestorePush(st *retain.PushState) {
 	p.reg.Load(rows)
 }
 
-// pushPrincipal is who a push request acts as: a person only, with what
-// their sign-in was proved by and the groups their grants came from.
+// pushPrincipal is who a push request acts as: a person signed in at the
+// HMI (a session; a personal access token is a credential for scripts, not
+// a phone), with what that sign-in was proved by, as the session recorded
+// it, and the groups their grants came from.
 func (s *Server) pushPrincipal(r *http.Request) (pr auth.Principal, cred string, code int, msg string) {
 	a := s.actorOf(r)
-	switch a.pr.Kind {
-	case auth.KindUser:
-		if s.users == nil {
-			break
-		}
-		if rec, ok := s.users.Current().Users[a.pr.Name]; ok {
-			return a.pr, credPrint(rec.Password), 0, ""
-		}
-	case auth.KindOIDC:
-		if a.session != nil {
+	if a.session != nil {
+		switch a.pr.Kind {
+		case auth.KindUser:
+			return a.pr, a.session.cred, 0, ""
+		case auth.KindOIDC:
 			return a.pr, oidcCred(a.session.issuer, a.session.sub), 0, ""
 		}
+	}
+	if a.pr.Kind == auth.KindUser || a.pr.Kind == auth.KindOIDC {
+		return a.pr, "", http.StatusForbidden, "push pages a phone signed in at the HMI: subscribe from the HMI's own page (a personal access token is for scripts and has no phone)"
 	}
 	return a.pr, "", http.StatusForbidden, "push pages a person: sign in as a user (naut users add, an auth: block that grants them a role) or through OIDC; a service token, NAUTILUS_TOKEN or an anonymous request has no phone to page"
 }
@@ -142,6 +150,12 @@ func (p *pushService) stands(r webpush.Row) bool {
 	}
 	pin, ok, err := s.users.Pin(name)
 	if err != nil || !ok || oidcCred(pin.Issuer, pin.Subject) != r.Cred {
+		return false
+	}
+	// An OIDC person's groups are those of their last sign-in here: a row
+	// not refreshed by one within pushOIDCWindow no longer stands (a person
+	// removed from a group at the provider is not paged for ever).
+	if s.sessions.clock().Sub(r.Seen) > pushOIDCWindow {
 		return false
 	}
 	return s.policy.HasGrants(auth.OIDC(name, r.Groups))
@@ -173,7 +187,7 @@ func (p *pushService) save(ctx context.Context) error {
 
 // sweep ends every subscription whose person no longer stands.
 func (p *pushService) sweep(ctx context.Context) {
-	if !p.s.rt.Leading() {
+	if !p.s.rt.Leading() || !p.usersReadable() {
 		return
 	}
 	p.add.Lock()
@@ -213,7 +227,10 @@ func (s *Server) pushOff(w http.ResponseWriter) bool {
 
 type pushSubscribeBody struct {
 	Endpoint string `json:"endpoint"`
-	Keys     struct {
+	// ExpirationTime is in a browser's PushSubscription.toJSON() (null, or
+	// a time the push service may end it by): accepted and not used.
+	ExpirationTime any `json:"expirationTime"`
+	Keys           struct {
 		P256dh string `json:"p256dh"`
 		Auth   string `json:"auth"`
 	} `json:"keys"`
@@ -274,7 +291,7 @@ func (s *Server) handlePushSubscribe(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, code, map[string]string{"error": msg})
 		return
 	}
-	if s.rt != nil && !s.rt.Leading() {
+	if !s.rt.Leading() {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "this replica does not lead: subscribe on the leader"})
 		return
 	}
@@ -289,21 +306,21 @@ func (s *Server) handlePushSubscribe(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "the push endpoint is refused: it must be an https URL on a public host (and on one of alarms.channels.push.allow-hosts when that list is set)"})
 		return
 	}
-	if err := webpush.Validate(sub); err != nil {
+	sub, err = webpush.Normalize(sub)
+	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
 	p := s.push
 	p.add.Lock()
 	defer p.add.Unlock()
-	before := p.reg.Rows()
-	row, ch, err := p.reg.Add(pr.String(), pr.Groups(), cred, host, sub, time.Now())
+	row, ch, err := p.reg.Add(pr.String(), pr.Groups(), cred, host, sub, s.sessions.clock())
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "the subscription could not be kept"})
 		return
 	}
 	if err := p.save(r.Context()); err != nil {
-		p.reg.Load(before)
+		p.reg.Undo(row, ch) // not Load(before): a takeover's load may have landed meanwhile
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "the subscription could not be saved to the retain store, so it was not kept: try again"})
 		return
 	}
@@ -344,13 +361,13 @@ func (s *Server) handlePushUnsubscribe(w http.ResponseWriter, r *http.Request) {
 	p := s.push
 	p.add.Lock()
 	defer p.add.Unlock()
-	before := p.reg.Rows()
-	if !p.reg.Remove(pr.String(), id) {
+	removed, ok := p.reg.Remove(pr.String(), id)
+	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "you have no such subscription (GET /api/push/subscriptions lists yours)"})
 		return
 	}
 	if err := p.save(r.Context()); err != nil {
-		p.reg.Load(before)
+		p.reg.Restore(removed)
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "the change could not be saved to the retain store, so it was not made: try again"})
 		return
 	}
@@ -435,7 +452,7 @@ type PushResult struct {
 	// NoSubscription is true when the person has none at all: reported in
 	// the escalation like a missing address.
 	NoSubscription bool
-	// Class is the worst failure's class, "" when none failed.
+	// Class is the last failure's class, "" when none failed.
 	Class string
 }
 
@@ -443,6 +460,8 @@ type PushResult struct {
 var (
 	ErrPushOff        = errors.New("push is not set up on this controller")
 	ErrPushNotLeading = errors.New("this replica does not lead: only the leader pages")
+	// ErrPushUsers: the users file cannot be read, so who still stands is unknown.
+	ErrPushUsers = errors.New("the users file cannot be read, so nobody is paged until it can")
 )
 
 // PushSend pages principal ("ann", "user:ann", "oidc:ann") on every phone they
@@ -457,9 +476,14 @@ func (s *Server) PushSend(ctx context.Context, principal string, m PushMessage) 
 	if !s.rt.Leading() {
 		return PushResult{}, ErrPushNotLeading
 	}
+	if !p.usersReadable() {
+		return PushResult{}, ErrPushUsers // nothing is judged, or pruned, on an unreadable users file
+	}
 	// A level names a person as the manifest does: a local user's bare
 	// name (alice, any case), or oidc:<name>.
-	if !strings.HasPrefix(principal, "oidc:") {
+	if n, ok := strings.CutPrefix(principal, "oidc:"); ok {
+		principal = "oidc:" + strings.ToLower(n)
+	} else {
 		principal = "user:" + strings.ToLower(strings.TrimPrefix(principal, "user:"))
 	}
 	rows := p.reg.Of(principal)
@@ -497,11 +521,7 @@ func (s *Server) PushSend(ctx context.Context, principal string, m PushMessage) 
 	}
 	if len(drop) > 0 {
 		p.add.Lock()
-		ids := map[string]bool{}
-		for _, d := range drop {
-			ids[d.Principal+"\x00"+d.ID] = true
-		}
-		p.reg.RemoveWhere(func(r webpush.Row) bool { return ids[r.Principal+"\x00"+r.ID] })
+		p.reg.RemoveRows(drop) // exactly these: a row re-made since (same endpoint) is not theirs
 		if err := p.save(ctx); err != nil {
 			slog.Warn("push: pruned subscriptions could not be saved; they are ended here and will be again at the next save", "count", len(drop), "error", err)
 		}
@@ -535,4 +555,25 @@ func pushClass(err error) string {
 		return "unreachable"
 	}
 	return "error"
+}
+
+// pushOIDCSignIn is told of an OIDC sign-in: what the person proved and the
+// groups they hold now are recorded on their subscriptions (re-sealed), so
+// a phone is paged for as long as they keep signing in here, and with the
+// groups they have, not the ones they had.
+func (s *Server) pushOIDCSignIn(se session) {
+	p := s.push
+	if p == nil || !s.rt.Leading() {
+		return
+	}
+	p.add.Lock()
+	n := p.reg.Rebind(se.principal().String(), oidcCred(se.issuer, se.sub), se.principal().Groups(), s.sessions.clock())
+	p.add.Unlock()
+	if n > 0 {
+		go func() {
+			if err := p.save(context.Background()); err != nil {
+				slog.Warn("push: a sign-in's refresh of subscriptions could not be saved; it is kept here", "error", err)
+			}
+		}()
+	}
 }

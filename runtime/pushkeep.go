@@ -54,3 +54,11 @@ func (r *Runtime) pushKeeper() PushKeeper {
 	defer r.pushk.mu.Unlock()
 	return r.pushk.k
 }
+
+// pushHeld is the subscriptions of the last load, for a save made while no
+// keeper is registered: written back unchanged.
+func (r *Runtime) pushHeld() *retain.PushState {
+	r.pushk.mu.Lock()
+	defer r.pushk.mu.Unlock()
+	return r.pushk.loaded
+}

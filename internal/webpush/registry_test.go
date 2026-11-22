@@ -1,6 +1,9 @@
 package webpush
 
 import (
+	"crypto/ecdh"
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"strings"
 	"testing"
@@ -97,27 +100,42 @@ func TestRegistryEndpointTakeoverAndCap(t *testing.T) {
 func TestRegistryRemove(t *testing.T) {
 	g, _ := newReg(t)
 	r, _, _ := g.Add("user:ann", nil, "c", "h", testSub(1), t0)
-	if g.Remove("user:bob", r.ID) {
+	if _, ok := g.Remove("user:bob", r.ID); ok {
 		t.Error("bob removed ann's subscription")
 	}
-	if !g.Remove("user:ann", r.ID) || g.Remove("user:ann", r.ID) {
+	_, first := g.Remove("user:ann", r.ID)
+	_, second := g.Remove("user:ann", r.ID)
+	if !first || second {
 		t.Error("remove is once, by its owner")
 	}
 }
 
-func TestValidateKeys(t *testing.T) {
-	if err := Validate(testSub(1)); err != nil {
-		t.Fatal(err)
+func TestNormalizeKeys(t *testing.T) {
+	if _, err := Normalize(testSub(1)); err == nil {
+		t.Fatal("an all-zero point is not on the curve")
+	}
+	ua, _ := ecdh.P256().GenerateKey(rand.Reader)
+	au := make([]byte, 16)
+	rand.Read(au)
+	good := Subscription{Endpoint: "https://x", P256dh: b64.EncodeToString(ua.PublicKey().Bytes()), Auth: b64.EncodeToString(au)}
+	// A browser's padded form is made the one form Send decodes.
+	padded := good
+	padded.Auth = base64.URLEncoding.EncodeToString(au)
+	padded.P256dh = base64.URLEncoding.EncodeToString(ua.PublicKey().Bytes())
+	got, err := Normalize(padded)
+	if err != nil || got != good {
+		t.Fatalf("padded keys: %v %+v", err, got)
 	}
 	for name, mut := range map[string]func(*Subscription){
-		"short p256dh": func(s *Subscription) { s.P256dh = b64.EncodeToString(make([]byte, 64)) },
-		"compressed":   func(s *Subscription) { s.P256dh = b64.EncodeToString(append([]byte{2}, make([]byte, 64)...)) },
-		"short auth":   func(s *Subscription) { s.Auth = b64.EncodeToString(make([]byte, 15)) },
-		"not base64":   func(s *Subscription) { s.Auth = "!!!" },
+		"short p256dh":  func(s *Subscription) { s.P256dh = b64.EncodeToString(make([]byte, 64)) },
+		"off the curve": func(s *Subscription) { s.P256dh = b64.EncodeToString(append([]byte{4}, make([]byte, 64)...)) },
+		"compressed":    func(s *Subscription) { s.P256dh = b64.EncodeToString(append([]byte{2}, make([]byte, 64)...)) },
+		"short auth":    func(s *Subscription) { s.Auth = b64.EncodeToString(make([]byte, 15)) },
+		"not base64":    func(s *Subscription) { s.Auth = "!!!" },
 	} {
-		s := testSub(1)
+		s := good
 		mut(&s)
-		if Validate(s) == nil {
+		if _, err := Normalize(s); err == nil {
 			t.Errorf("%s accepted", name)
 		}
 	}
@@ -131,6 +149,8 @@ func TestPolicyCheckEndpoint(t *testing.T) {
 		}
 	}
 	for _, bad := range []string{
+		"https://fcm.googleapis.com:8443/x", "https://[64:ff9b::a00:1]/p", "https://[2002:a00:1::1]/p", "https://[::ffff:10.0.0.1]/p",
+		"https://0.0.0.0/p", "https://198.18.0.1/p", "https://240.0.0.1/p", "https://[fec0::1]/p",
 		"http://fcm.googleapis.com/x", "https://user:pw@fcm.googleapis.com/x", "https:///x", "https://x/#f", "ftp://x/y", "",
 		"https://127.0.0.1/p", "https://10.0.0.5/p", "https://192.168.1.2/p", "https://169.254.169.254/latest", "https://[::1]/p",
 		"https://[fe80::1]/p", "https://100.64.0.1/p", "https://localhost/p", "https://printer.local/p", "https://svc.internal/p",
@@ -151,11 +171,75 @@ func TestPolicyCheckEndpoint(t *testing.T) {
 			t.Errorf("%q accepted by an allow list that does not name it", bad)
 		}
 	}
-	// Naming a private host allows it (a site's own relay).
+	// Naming a private host allows it (a site's own relay), on any port.
 	own := Policy{AllowHosts: []string{"10.1.2.3", "relay.lan.internal"}}
-	for _, ok := range []string{"https://10.1.2.3/p", "https://relay.lan.internal/p"} {
+	for _, ok := range []string{"https://10.1.2.3/p", "https://relay.lan.internal/p", "https://relay.lan.internal:8443/p"} {
 		if _, err := own.CheckEndpoint(ok); err != nil {
 			t.Errorf("%s refused though named: %v", ok, err)
 		}
+	}
+}
+
+// Exactly the row Add made goes when its save fails, and what it displaced
+// comes back; a row a load put there meanwhile is left alone.
+func TestUndo(t *testing.T) {
+	g, _ := newReg(t)
+	old, _, _ := g.Add("user:ann", nil, "c", "h", testSub(1), t0)
+	row, ch, _ := g.Add("user:ann", nil, "c", "h", testSub(1), t0.Add(time.Second)) // replaces
+	g.Undo(row, ch)
+	if got := g.Of("user:ann"); len(got) != 1 || got[0].Sealed != old.Sealed {
+		t.Fatalf("undo of a replace: %+v", got)
+	}
+	taken, _, _ := g.Add("user:ann", nil, "c", "h", testSub(2), t0)
+	row, ch, _ = g.Add("user:bob", nil, "c", "h", testSub(2), t0.Add(time.Second)) // takes it
+	g.Undo(row, ch)
+	if len(g.Of("user:bob")) != 0 || len(g.Of("user:ann")) != 2 {
+		t.Fatalf("undo of a takeover: bob %d ann %d", len(g.Of("user:bob")), len(g.Of("user:ann")))
+	}
+	_ = taken
+	// A store load landed meanwhile: the undo does not put the old set back over it.
+	row, ch, _ = g.Add("user:cy", nil, "c", "h", testSub(3), t0)
+	g.Load([]Row{{ID: "loaded", Principal: "user:dee", Sealed: "x", Key: g.KeyFingerprint()}})
+	g.Undo(row, ch)
+	if rows := g.Rows(); len(rows) != 1 || rows[0].ID != "loaded" {
+		t.Errorf("undo disturbed a load: %+v", rows)
+	}
+}
+
+// Cred and groups are bound into the seal: editing them beside it makes
+// the row fail to open, not stand under someone else's credential.
+func TestSealBindsCredAndGroups(t *testing.T) {
+	g, _ := newReg(t)
+	row, _, _ := g.Add("oidc:ann", []string{"ops"}, "pin1", "h", testSub(1), t0)
+	for name, mut := range map[string]func(*Row){
+		"cred":   func(r *Row) { r.Cred = "pin2" },
+		"groups": func(r *Row) { r.Groups = []string{"ops", "admins"} },
+	} {
+		r := row
+		mut(&r)
+		if _, err := g.Open(r); err != ErrSealed {
+			t.Errorf("%s edited: %v", name, err)
+		}
+	}
+	if _, err := g.Open(row); err != nil {
+		t.Error(err)
+	}
+}
+
+func TestRowIDIs128Bits(t *testing.T) {
+	if n := len(EndpointID("https://push.example.net/p/1")); n != 32 {
+		t.Errorf("id has %d hex digits", n)
+	}
+}
+
+// A prune takes exactly the rows it judged: one re-made since (the same
+// endpoint subscribed again) is not its.
+func TestRemoveRowsIsExact(t *testing.T) {
+	g, _ := newReg(t)
+	old, _, _ := g.Add("user:ann", nil, "c", "h", testSub(1), t0)
+	fresh, _, _ := g.Add("user:ann", nil, "c2", "h", testSub(1), t0.Add(time.Second)) // same endpoint, re-made
+	g.RemoveRows([]Row{old})
+	if rows := g.Of("user:ann"); len(rows) != 1 || rows[0].Sealed != fresh.Sealed {
+		t.Fatalf("the prune took the re-made row: %+v", rows)
 	}
 }

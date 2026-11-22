@@ -3,12 +3,14 @@ package webpush
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"sync"
@@ -59,13 +61,39 @@ func (s *Sender) client() *http.Client {
 	return s.cli
 }
 
-// publicIP is an address a push service can have: not loopback, private,
-// link-local, multicast, unspecified or carrier-grade NAT.
-func publicIP(ip net.IP) bool {
-	if ip4 := ip.To4(); ip4 != nil && ip4[0] == 100 && ip4[1]&0xc0 == 64 {
-		return false // 100.64.0.0/10
+// notPublic are the ranges a push service cannot have beyond what the
+// standard library calls private, loopback, link-local or multicast:
+// "this network", carrier-grade NAT, benchmarking, protocol assignments,
+// documentation, reserved, the translation prefixes that reach IPv4 hosts
+// (NAT64, 6to4, Teredo) and site-local IPv6.
+var notPublic = func() []netip.Prefix {
+	var out []netip.Prefix
+	for _, c := range []string{
+		"0.0.0.0/8", "100.64.0.0/10", "192.0.0.0/24", "192.0.2.0/24", "198.18.0.0/15",
+		"198.51.100.0/24", "203.0.113.0/24", "240.0.0.0/4",
+		"::/96", "64:ff9b::/96", "64:ff9b:1::/48", "2001::/32", "2001:db8::/32", "2002::/16", "fec0::/10",
+	} {
+		out = append(out, netip.MustParsePrefix(c))
 	}
-	return ip.IsGlobalUnicast() && !ip.IsPrivate() && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() && !ip.IsMulticast() && !ip.IsUnspecified()
+	return out
+}()
+
+// publicIP is an address a push service can have.
+func publicIP(ip net.IP) bool {
+	a, ok := netip.AddrFromSlice(ip)
+	if !ok {
+		return false
+	}
+	a = a.Unmap()
+	if !(a.IsGlobalUnicast() && !a.IsPrivate() && !a.IsLoopback() && !a.IsLinkLocalUnicast() && !a.IsMulticast() && !a.IsUnspecified()) {
+		return false
+	}
+	for _, p := range notPublic {
+		if p.Contains(a) {
+			return false
+		}
+	}
+	return true
 }
 
 func newClient(p Policy, tc *tls.Config) *http.Client {
@@ -118,14 +146,12 @@ func (s *Sender) Send(ctx context.Context, sub Subscription, payload []byte, o O
 	if _, err := s.Policy.CheckEndpoint(sub.Endpoint); err != nil {
 		return &SendError{Why: "endpoint refused by policy"}
 	}
-	pk, err := b64.DecodeString(sub.P256dh)
+	sub, err := Normalize(sub)
 	if err != nil {
 		return &SendError{Why: "bad keys"}
 	}
-	au, err := b64.DecodeString(sub.Auth)
-	if err != nil {
-		return &SendError{Why: "bad keys"}
-	}
+	pk, _ := b64.DecodeString(sub.P256dh)
+	au, _ := b64.DecodeString(sub.Auth)
 	body, err := Encrypt(payload, pk, au)
 	if err != nil {
 		return &SendError{Why: "not encrypted"}
@@ -157,7 +183,7 @@ func (s *Sender) Send(ctx context.Context, sub Subscription, payload []byte, o O
 	}
 	h.Set("Urgency", urg)
 	if o.Topic != "" {
-		h.Set("Topic", safeTopic(o.Topic))
+		h.Set("Topic", s.topicFor(o.Topic))
 	}
 	resp, err := s.client().Do(req)
 	if err != nil {
@@ -178,17 +204,13 @@ func (s *Sender) Send(ctx context.Context, sub Subscription, payload []byte, o O
 	return &SendError{Status: resp.StatusCode, Gone: resp.StatusCode == 404 || resp.StatusCode == 410, Why: http.StatusText(resp.StatusCode)}
 }
 
-// safeTopic is a Topic header value: at most 32 characters of the URL-safe
-// base64 alphabet (RFC 8030 §5.4); anything else is hashed into it.
-func safeTopic(t string) string {
-	ok := len(t) <= 32 && len(t) > 0
-	for _, c := range t {
-		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
-			ok = false
-		}
-	}
-	if ok {
-		return t
-	}
-	return rowID(t) + "00"
+// topicFor is the Topic header for an alarm: a keyed hash, so the push
+// service (Google, Apple, Mozilla) sees a stable opaque value that replaces
+// an earlier page of the same alarm, never the alarm's id.
+// Topic is topicFor, for the server's tests.
+func (s *Sender) Topic(t string) string { return s.topicFor(t) }
+
+func (s *Sender) topicFor(t string) string {
+	h := sha256.Sum256([]byte("nautilus push topic\x00" + s.Key.Private() + "\x00" + t))
+	return b64.EncodeToString(h[:16]) // 22 characters of the base64url alphabet
 }

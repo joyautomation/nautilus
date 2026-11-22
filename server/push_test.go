@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -40,7 +41,8 @@ func subJSON(n int, extra ...string) (body string, marks []string) {
 	rand.Read(au)
 	p256, auth := pb64.EncodeToString(ua.PublicKey().Bytes()), pb64.EncodeToString(au)
 	ep := fmt.Sprintf("https://push.example.net/%s/%d", markEndpointPath, n)
-	b, _ := json.Marshal(map[string]any{"endpoint": ep, "keys": map[string]string{"p256dh": p256, "auth": auth}})
+	// As a browser's PushSubscription.toJSON() shapes it.
+	b, _ := json.Marshal(map[string]any{"endpoint": ep, "expirationTime": nil, "keys": map[string]string{"p256dh": p256, "auth": auth}})
 	return string(b), []string{markEndpointPath, p256, auth}
 }
 
@@ -244,18 +246,12 @@ func TestPushIsForPeopleOnly(t *testing.T) {
 			t.Errorf("%s: %d %s", name, rec.Code, rec.Body)
 		}
 	}
-	// A person's personal access token is the person: it may subscribe.
+	// A personal access token is a credential for scripts, not a phone: the
+	// subscription is bound to a sign-in, and revoking the token must not
+	// leave a phone paging.
 	rec := call(t, srv, "POST", "/api/push/subscribe", good, asJSON, bearer(rig.toks["jsmith"]))
-	if rec.Code != http.StatusCreated || len(srv.push.reg.Of("user:jsmith")) != 1 {
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "signed in at the HMI") || len(srv.push.reg.Rows()) != 0 {
 		t.Errorf("jsmith's token: %d %s", rec.Code, rec.Body)
-	}
-	// A user the auth: block grants nothing has no standing to be paged.
-	rec = call(t, srv, "POST", "/api/push/subscribe", good, asJSON, bearer(rig.toks["ghost"]))
-	if rec.Code == http.StatusCreated && len(srv.push.reg.Of("user:ghost")) == 1 {
-		srv.push.sweep(context.Background())
-		if len(srv.push.reg.Of("user:ghost")) != 0 {
-			t.Error("a user with no grants keeps a subscription")
-		}
 	}
 }
 
@@ -466,6 +462,7 @@ type fakeService struct {
 	status int
 	got    [][]byte
 	hdrs   []http.Header
+	onHit  func() // runs inside the request, before the answer
 }
 
 func newFakeService(t *testing.T) *fakeService {
@@ -476,6 +473,11 @@ func newFakeService(t *testing.T) *fakeService {
 		b := make([]byte, 8192)
 		n, _ := r.Body.Read(b)
 		f.got, f.hdrs = append(f.got, b[:n]), append(f.hdrs, r.Header.Clone())
+		if f.onHit != nil {
+			f.mu.Unlock()
+			f.onHit()
+			f.mu.Lock()
+		}
 		w.WriteHeader(f.status)
 	}))
 	t.Cleanup(f.Close)
@@ -508,7 +510,7 @@ func TestPushSendPagesThePersonAndPrunesAGoneSubscription(t *testing.T) {
 		t.Fatalf("%+v %v", res, err)
 	}
 	f.mu.Lock()
-	if len(f.got) != 1 || f.hdrs[0].Get("Topic") != "HiTemp" || f.hdrs[0].Get("Content-Encoding") != "aes128gcm" {
+	if len(f.got) != 1 || f.hdrs[0].Get("Topic") != srv.push.sender.Topic("HiTemp") || f.hdrs[0].Get("Topic") == "HiTemp" || f.hdrs[0].Get("Content-Encoding") != "aes128gcm" {
 		t.Errorf("service saw %d messages, headers %v", len(f.got), f.hdrs)
 	}
 	f.mu.Unlock()
@@ -623,5 +625,204 @@ func TestPushStandbyDoesNothing(t *testing.T) {
 	srv.push.sweep(context.Background())
 	if len(srv.push.reg.Rows()) != 1 {
 		t.Error("a standby revoked a subscription")
+	}
+}
+
+// A browser's own JSON has expirationTime and may pad its keys: both are
+// accepted, and the row is kept in the form Send decodes.
+func TestPushAcceptsABrowsersBody(t *testing.T) {
+	f := newFakeService(t)
+	rig := newPushRig(t, &subStore{}, nil, "127.0.0.1")
+	pool := x509.NewCertPool()
+	pool.AddCert(f.Certificate())
+	rig.srv.push.sender.TLS = &tls.Config{RootCAs: pool}
+	ua, _ := ecdh.P256().GenerateKey(rand.Reader)
+	au := make([]byte, 16)
+	rand.Read(au)
+	body, _ := json.Marshal(map[string]any{"endpoint": f.URL + "/p/1", "expirationTime": 1893456000000.0,
+		"keys": map[string]string{"p256dh": base64.URLEncoding.EncodeToString(ua.PublicKey().Bytes()), "auth": base64.URLEncoding.EncodeToString(au)}})
+	if rec := rig.subscribe(t, "jsmith", string(body)); rec.Code != http.StatusCreated {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	res, _ := rig.srv.PushSend(context.Background(), "jsmith", PushMessage{Target: "SP", Payload: []byte("x")})
+	if res.Sent != 1 || res.Failed != 0 {
+		t.Errorf("a padded key was subscribed and cannot be paged: %+v", res)
+	}
+	// A point off the curve is refused when it arrives, not paged to for ever.
+	bad, _ := json.Marshal(map[string]any{"endpoint": f.URL + "/p/2",
+		"keys": map[string]string{"p256dh": pb64.EncodeToString(append([]byte{4}, make([]byte, 64)...)), "auth": pb64.EncodeToString(au)}})
+	if rec := rig.subscribe(t, "jsmith", string(bad)); rec.Code != http.StatusBadRequest {
+		t.Errorf("off-curve key: %d", rec.Code)
+	}
+}
+
+// A users file that cannot be read says nothing about who stands: nobody
+// is revoked or pruned on its word, and nobody is paged until it is read.
+func TestPushUnreadableUsersFileRevokesNothing(t *testing.T) {
+	store := &subStore{}
+	rig := newPushRig(t, store, nil)
+	srv := rig.srv
+	body, _ := subJSON(1)
+	rig.subscribe(t, "jsmith", body)
+	good, err := os.ReadFile(rig.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(rig.path, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	srv.users.Reload()
+	if srv.users.Err() == nil {
+		t.Fatal("the users file was read")
+	}
+	srv.push.sweep(context.Background())
+	if _, err := srv.PushSend(context.Background(), "jsmith", PushMessage{Target: "SP", Payload: []byte("x")}); err != ErrPushUsers {
+		t.Errorf("PushSend: %v", err)
+	}
+	if len(srv.push.reg.Of("user:jsmith")) != 1 || !strings.Contains(storeText(store), `"sealed"`) {
+		t.Fatal("an unreadable users file ended a subscription")
+	}
+	if err := os.WriteFile(rig.path, good, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	srv.users.Reload()
+	srv.push.sweep(context.Background())
+	if len(srv.push.reg.Of("user:jsmith")) != 1 {
+		t.Error("the subscription did not survive the file coming back")
+	}
+}
+
+// A replica that cannot run push (no key) must not erase what the store
+// holds from one that can.
+func TestPushRowsSurviveAReplicaWithPushOff(t *testing.T) {
+	store := &subStore{}
+	rig := newPushRig(t, store, nil)
+	body, _ := subJSON(1)
+	rig.subscribe(t, "jsmith", body)
+	want := storeText(store)
+	if !strings.Contains(want, `"sealed"`) {
+		t.Fatal("no row in the store")
+	}
+	rt, err := runtime.New(runtime.Options{Program: testProgram, Driver: nio.NewMemory(), Retain: store,
+		Inputs: []string{"Level"}, Outputs: []string{"Out"}, Seed: nio.Values{"Level": 40.0, "SP": 65.0, "Out": 0.0}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt.LoadRetained()
+	_ = New(rt, Options{}) // no push options: no keeper
+	rt.Scan()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { rt.Run(ctx); close(done) }()
+	defer func() { cancel(); <-done }()
+	store.mu.Lock()
+	store.st.Tags = map[string]any{"x": 1.0} // make the saver write
+	store.mu.Unlock()
+	if err := rt.SaveRetained(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := storeText(store); !strings.Contains(got, `"sealed"`) {
+		t.Errorf("the push rows are gone from the store: %s", got)
+	}
+}
+
+// An OIDC person's groups are those of their last sign-in here: signing in
+// again refreshes them (and a person who lost their group stops standing),
+// and a row nobody refreshes ends after the window.
+func TestPushOIDCGroupsAreRefreshedAndAge(t *testing.T) {
+	key, _ := webpush.NewKey()
+	srv, fake, _ := oidcServer(t, Options{Push: &PushOptions{Key: key, Subject: "mailto:ops@example.com"}})
+	now := time.Date(2026, 11, 22, 8, 0, 0, 0, time.UTC)
+	srv.sessions.now = func() time.Time { return now }
+	fake.as("carol", "sub-carol", "g-ops", "g-eng")
+	_, c := oidcSignIn(t, srv, fake, "/")
+	if c == nil {
+		t.Fatal("no session")
+	}
+	body, _ := subJSON(1)
+	if rec := call(t, srv, "POST", "/api/push/subscribe", body, withCookie(c.Value), ownOrigin, asJSON); rec.Code != http.StatusCreated {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	srv.push.sweep(context.Background())
+	if len(srv.push.reg.Of("oidc:carol")) != 1 {
+		t.Fatal("a person with grants does not stand")
+	}
+	// The provider no longer lists one of her groups: her next sign-in here
+	// says so, and what she may read follows it.
+	fake.as("carol", "sub-carol", "g-ops")
+	oidcSignIn(t, srv, fake, "/")
+	if rows := srv.push.reg.Of("oidc:carol"); len(rows) != 1 || strings.Join(rows[0].Groups, ",") != "g-ops" {
+		t.Fatalf("the sign-in did not refresh the groups: %+v", rows)
+	}
+	srv.push.sweep(context.Background())
+	if len(srv.push.reg.Of("oidc:carol")) != 1 {
+		t.Fatal("a refreshed person with a group stopped standing")
+	}
+	// Losing every group means no sign-in is granted at all; the row then
+	// ages out with the window rather than being paged for ever.
+	now = now.Add(pushOIDCWindow + time.Hour)
+	srv.push.sweep(context.Background())
+	if len(srv.push.reg.Of("oidc:carol")) != 0 {
+		t.Fatal("an OIDC row nobody refreshed outlived the window")
+	}
+
+	// Aging: a row nobody refreshes stops standing after the window; a
+	// sign-in inside it keeps it.
+	fake.as("carol", "sub-carol", "g-ops")
+	_, c = oidcSignIn(t, srv, fake, "/")
+	body2, _ := subJSON(2)
+	call(t, srv, "POST", "/api/push/subscribe", body2, withCookie(c.Value), ownOrigin, asJSON)
+	now = now.Add(pushOIDCWindow - time.Hour)
+	fake.as("carol", "sub-carol", "g-ops")
+	oidcSignIn(t, srv, fake, "/")
+	now = now.Add(pushOIDCWindow - time.Hour) // 13 days after the refresh
+	srv.push.sweep(context.Background())
+	if len(srv.push.reg.Of("oidc:carol")) != 1 {
+		t.Fatal("a refreshed row ended inside its window")
+	}
+	now = now.Add(2 * time.Hour)
+	srv.push.sweep(context.Background())
+	if len(srv.push.reg.Of("oidc:carol")) != 0 {
+		t.Error("an unrefreshed OIDC row outlived the window")
+	}
+}
+
+// A prune takes the row it judged: a person who subscribed the same endpoint
+// again while the push was in flight keeps the new row.
+func TestPushPruneSparesAReSubscribedRow(t *testing.T) {
+	f := newFakeService(t)
+	rig, ep := pagedRig(t, f)
+	ua, _ := ecdh.P256().GenerateKey(rand.Reader)
+	au := make([]byte, 16)
+	rand.Read(au)
+	again, _ := json.Marshal(map[string]any{"endpoint": ep, "keys": map[string]string{"p256dh": pb64.EncodeToString(ua.PublicKey().Bytes()), "auth": pb64.EncodeToString(au)}})
+	f.mu.Lock()
+	f.status = 410
+	f.onHit = func() {
+		if rec := rig.subscribe(t, "jsmith", string(again)); rec.Code != http.StatusCreated {
+			t.Errorf("re-subscribe: %d", rec.Code)
+		}
+	}
+	f.mu.Unlock()
+	rig.srv.PushSend(context.Background(), "jsmith", PushMessage{Target: "SP", Payload: []byte("x")})
+	if n := len(rig.srv.push.reg.Of("user:jsmith")); n != 1 {
+		t.Errorf("the prune took the re-subscribed row: %d rows", n)
+	}
+}
+
+// An unsubscribe the store cannot take is not made: the row is back.
+func TestPushUnsubscribeNotSavedIsNotMade(t *testing.T) {
+	store := &subStore{}
+	rig := newPushRig(t, store, nil)
+	body, _ := subJSON(1)
+	var made pushRowView
+	json.Unmarshal(rig.subscribe(t, "jsmith", body).Body.Bytes(), &made)
+	store.mu.Lock()
+	store.fail = true
+	store.mu.Unlock()
+	c := rig.cs["jsmith"]
+	rec := call(t, rig.srv, "DELETE", "/api/push/subscribe", `{"id":"`+made.ID+`"}`, withCookie(c.Value), ownOrigin, asJSON)
+	if rec.Code != http.StatusServiceUnavailable || len(rig.srv.push.reg.Of("user:jsmith")) != 1 {
+		t.Errorf("%d, rows %d", rec.Code, len(rig.srv.push.reg.Of("user:jsmith")))
 	}
 }
