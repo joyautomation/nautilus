@@ -47,7 +47,9 @@ refusal exit 1. A failure to reach or read the controller is exit 2.
 import writes a parameter set to the live setpoints: all or nothing. One
 refusal (a value outside min/max, a forced tag, a name that is no parameter,
 a value of the wrong kind) stops the whole set and nothing is written; the
-refused lines say why. It needs the config permission and, for a browser
+refused lines say why. It needs the config permission and, for every tag
+in the set, the write permission you would need to write it alone (any tag
+you may not write refuses the whole set), and, for a browser
 sign-in, a fresh password: from here, set NAUTILUS_TOKEN. --dry-run asks the
 controller what it would do and writes nothing. Each value lands as written
 by you, so a controller with parameters.writeBack commits it as yours. A
@@ -462,6 +464,8 @@ func runParamsImport(args []string) int {
 		switch r.Status {
 		case "refused":
 			fmt.Printf("REFUSED  %s: %s\n", r.Name, r.Reason)
+		case "failed":
+			fmt.Printf("FAILED   %s: %s (not written)\n", r.Name, r.Reason)
 		case "unchanged":
 		default:
 			fmt.Printf("%-8s %s: %s -> %s\n", r.Status, r.Name, fmtParam(r.From), fmtParam(r.To))

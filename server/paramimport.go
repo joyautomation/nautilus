@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/runtime"
@@ -16,7 +17,9 @@ import (
 //	{"version": 1, "parameters": {"Tank.SP": 42.5}, "dryRun": true}
 //
 // It is a bulk write, so it asks for the config permission (controller-wide,
-// with a fresh password for a browser sign-in), not the per-tag write one.
+// with a fresh password for a browser sign-in) AND, for every tag in the set,
+// the write authorization POST /api/tags applies (area-scoped under auth:
+// areas); one tag that fails refuses the whole set with a 403 naming it.
 // Every value goes through the
 // same front door as POST /api/tags (runtime.Tags.WriteAs): a force, a
 // read-only tag and a tag's min/max refuse it exactly as they refuse a
@@ -29,6 +32,12 @@ import (
 // Each value lands attributed to the importing principal, so the write-back
 // of #718 slice 2 commits it as theirs. One journal entry (param.import)
 // records every name with its old and new value.
+
+// paramWrite applies the checked set; a var so a test can make one write fail
+// after validation.
+var paramWrite = func(t *runtime.Tags, ops []runtime.WriteOp, by string) []error {
+	return t.WriteAs(ops, by)
+}
 
 // paramImportMax bounds one set.
 const paramImportMax = 10000
@@ -97,6 +106,33 @@ func (s *Server) handleParametersImport(w http.ResponseWriter, r *http.Request) 
 	for _, p := range s.rt.Parameters() {
 		live[ir.NameKey(p.Name)] = p
 	}
+	// An import is many tag writes: each tag must pass the authorization
+	// POST /api/tags applies (the write permission over that tag, by area).
+	// Any tag that fails refuses the whole set, before anything else is
+	// looked at, so a refusal never says more about a tag than the 403.
+	var denied []string
+	var deniedCode int
+	var deniedMsg string
+	for n := range req.Parameters {
+		target := n
+		if p, ok := live[ir.NameKey(n)]; ok {
+			target = p.Name
+		}
+		if code, msg := s.authorize(r, PermWrite, target); code != 0 {
+			denied = append(denied, target)
+			deniedCode, deniedMsg = code, msg
+		}
+	}
+	if len(denied) > 0 {
+		sort.Strings(denied)
+		w.Header().Set(outcomeHeader, "refused")
+		if deniedCode == http.StatusUnauthorized {
+			WriteRefusal(w, deniedCode, deniedMsg)
+			return
+		}
+		writeJSON(w, http.StatusForbidden, map[string]any{"error": fmt.Sprintf("you may not write %s: %s. Nothing was written (an import writes only tags you could write one at a time)", strings.Join(denied, ", "), deniedMsg), "denied": denied})
+		return
+	}
 	names := make([]string, 0, len(req.Parameters))
 	for n := range req.Parameters {
 		names = append(names, n)
@@ -151,6 +187,7 @@ func (s *Server) handleParametersImport(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 	if refused {
+		w.Header().Set(outcomeHeader, "refused")
 		writeJSON(w, http.StatusUnprocessableEntity, answer)
 		return
 	}
@@ -158,22 +195,22 @@ func (s *Server) handleParametersImport(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusOK, answer)
 		return
 	}
-	for i, err := range s.rt.Tags().WriteAs(ops, s.principalOf(r)) {
+	for i, err := range paramWrite(s.rt.Tags(), ops, s.principalOf(r)) {
 		if err != nil {
 			// Only a race with a force or a range change lands here: the
-			// set was whole when checked. Say which values are in.
+			// set was whole when checked. Each result says whether it is in.
 			res := &answer.Results[opAt[i]]
-			res.Status, res.Reason = "refused", err.Error()
+			res.Status, res.Reason = "failed", err.Error()
 			refused = true
 		}
 	}
-	if refused {
-		for i := range answer.Results {
-			if answer.Results[i].Status == "change" {
-				answer.Results[i].Status = "applied"
-			}
+	for i := range answer.Results {
+		if answer.Results[i].Status == "change" {
+			answer.Results[i].Status = "applied"
 		}
-		writeJSON(w, http.StatusConflict, map[string]any{"error": "the set changed while it was applied: the values marked applied are in, the ones refused are not", "answer": answer})
+	}
+	if refused {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "the set was only partly written: the results marked applied are in the controller, the ones marked failed are not", "answer": answer})
 		return
 	}
 	answer.Applied = true
@@ -193,5 +230,41 @@ func (s *Server) paramImportTarget(_ *http.Request, body []byte) auditTarget {
 		target: fmt.Sprintf("%d parameters", len(req.Parameters)),
 		before: before, after: req.Parameters,
 		detail: map[string]any{"dryRun": req.DryRun},
+		// What the controller holds now: only the values that landed.
+		answered: func(b []byte) any {
+			var a ParamImportAnswer
+			if json.Unmarshal(b, &a) != nil || !a.Applied {
+				return nil
+			}
+			return paramImportWritten(a.Results)
+		},
+		// A set that was only partly written says which values are in and
+		// which are not.
+		failed: func(b []byte) map[string]any {
+			var f struct {
+				Answer *ParamImportAnswer `json:"answer"`
+			}
+			if json.Unmarshal(b, &f) != nil || f.Answer == nil {
+				return nil
+			}
+			notWritten := map[string]string{}
+			for _, r := range f.Answer.Results {
+				if r.Status == "failed" {
+					notWritten[r.Name] = r.Reason
+				}
+			}
+			return map[string]any{"written": paramImportWritten(f.Answer.Results), "notWritten": notWritten}
+		},
 	}
+}
+
+// paramImportWritten is name -> value for the results that landed.
+func paramImportWritten(rs []ParamImportResult) map[string]any {
+	out := map[string]any{}
+	for _, r := range rs {
+		if r.Status == "applied" {
+			out[r.Name] = r.To
+		}
+	}
+	return out
 }

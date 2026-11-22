@@ -166,6 +166,9 @@ type auditRow struct {
 	path    string
 	body    string
 	header  map[string]string
+	// also is a second permission the action needs on top of its own (an
+	// import writes tags, so it needs the write permission too).
+	also string
 	// The one entry the request must leave.
 	action, target, user, source, result string
 	before, after                        any // checked when non-nil
@@ -479,7 +482,7 @@ func auditRows() []auditRow {
 			action: "config.commit", target: "1", user: "anonymous", source: "api", result: "refused"},
 		{name: "parameter import", pattern: "POST /api/parameters/import", server: paramImportSrv,
 			method: "POST", path: "/api/parameters/import", body: `{"version":1,"parameters":{"SP":70}}`,
-			action: "param.import", target: "1 parameters", user: "anonymous", source: "api", result: "ok",
+			also: "write", action: "param.import", target: "1 parameters", user: "anonymous", source: "api", result: "ok",
 			before: map[string]any{"SP": 65.0}, after: map[string]any{"SP": 70.0}},
 		{name: "parameter import out of range", pattern: "POST /api/parameters/import", server: paramImportSrv,
 			method: "POST", path: "/api/parameters/import", body: `{"version":1,"parameters":{"SP":95}}`,

@@ -495,13 +495,20 @@ naut params import --host plc1 --file set.yaml
 
 The body is `{"version": 1, "parameters": {"Tank.SP": 42.5}, "dryRun": false}`.
 It needs the `config` permission (a browser sign-in with a password older than
-`auth.elevation` is asked again; a token is not). Every value goes through the
+`auth.elevation` is asked again; a token is not) **and**, for every tag in the
+set, the write permission `POST /api/tags` would ask for (by area, when `auth:`
+has areas). A tag you may not write refuses the whole set: `403` naming the
+tags, nothing written. Every value goes through the
 same front door as `POST /api/tags`: a `min`/`max`, a forced tag or a read-only
 tag refuses it exactly as it refuses a single write, and nothing here goes past
 them. A name that is not a parameter, a value of another kind, and a name that
 repeats another (tag names ignore case) are refused too. **One refusal stops the
 whole set**: the answer is `422` with every result and nothing was written.
-`dryRun` answers `200` or `422` the same way and writes nothing. Each value
+`dryRun` answers `200` or `422` the same way and writes nothing. The set is
+validated whole before the first write. If a write then fails anyway, the
+answer is `409` with every result marked `applied` (it is in the controller) or
+`failed` (it is not), and the journal entry carries the same two lists
+(`written`, `notWritten`): there is no silent partial import. Each value
 lands attributed to the principal that imported it, so `parameters.writeBack`
 commits it as theirs. One `param.import` journal entry records every name with
 its old and new value. A standby forwards the request to the leader and a

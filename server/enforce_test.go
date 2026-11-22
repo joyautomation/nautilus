@@ -102,6 +102,9 @@ func enforceExactly(t *testing.T, srv *Server) {
 	for _, perm := range auth.Permissions {
 		set.Roles["only-"+perm] = auth.RoleDef{Inherits: auth.Viewer, Allow: []string{perm}}
 		set.Roles["but-"+perm] = auth.RoleDef{Inherits: auth.Administrator, Deny: []string{perm}}
+		set.Roles["pair-"+perm] = auth.RoleDef{Inherits: auth.Viewer, Allow: []string{perm, auth.Write}}
+		set.ServiceTokens["pair_"+perm] = []auth.Grant{{Role: "pair-" + perm}}
+		srv.services["pair_"+perm] = "pair-" + perm
 		set.ServiceTokens["only_"+perm] = []auth.Grant{{Role: "only-" + perm}}
 		set.ServiceTokens["but_"+perm] = []auth.Grant{{Role: "but-" + perm}}
 		srv.services["only_"+perm], srv.services["but_"+perm] = "only-"+perm, "but-"+perm
@@ -123,10 +126,19 @@ func TestEachActionNeedsExactlyItsPermission(t *testing.T) {
 			continue
 		}
 		perm := actionPerm[row.action]
-		for _, c := range []struct {
+		cases := []struct {
 			tok string
 			ok  bool
-		}{{"only-" + perm, true}, {"but-" + perm, false}} {
+		}{{"only-" + perm, true}, {"but-" + perm, false}}
+		if row.also != "" {
+			// Needs its permission AND the second: the permission alone is
+			// refused, the pair accepted.
+			cases = []struct {
+				tok string
+				ok  bool
+			}{{"pair-" + perm, true}, {"only-" + perm, false}, {"but-" + perm, false}}
+		}
+		for _, c := range cases {
 			srv := row.server(t)
 			if row.prep != nil {
 				row.prep(t, srv)
