@@ -246,6 +246,14 @@ func TestPushIsForPeopleOnly(t *testing.T) {
 			t.Errorf("%s: %d %s", name, rec.Code, rec.Body)
 		}
 	}
+	// Anonymous, and a named service token: refused too.
+	if rec := call(t, srv, "POST", "/api/push/subscribe", good, asJSON); rec.Code != http.StatusUnauthorized {
+		t.Errorf("anonymous: %d", rec.Code)
+	}
+	srv.services = map[string]string{"ci": "svc-secret"}
+	if rec := call(t, srv, "POST", "/api/push/subscribe", good, asJSON, bearer("svc-secret")); rec.Code != http.StatusForbidden || len(srv.push.reg.Rows()) != 0 {
+		t.Errorf("a service token: %d %s", rec.Code, rec.Body)
+	}
 	// A personal access token is a credential for scripts, not a phone: the
 	// subscription is bound to a sign-in, and revoking the token must not
 	// leave a phone paging.
@@ -502,6 +510,7 @@ func pagedRig(t *testing.T, f *fakeService) (*pushRig, string) {
 }
 
 func TestPushSendPagesThePersonAndPrunesAGoneSubscription(t *testing.T) {
+	logs := captureLog(t)
 	f := newFakeService(t)
 	rig, ep := pagedRig(t, f)
 	srv := rig.srv
@@ -541,8 +550,12 @@ func TestPushSendPagesThePersonAndPrunesAGoneSubscription(t *testing.T) {
 	if strings.Contains(storeText(rig.store), `"sealed"`) {
 		t.Error("the pruned row is still retained")
 	}
-	if text := journalText(srv); strings.Contains(text, ep) || !strings.Contains(text, "HTTP 410") {
+	if text := journalText(srv); strings.Contains(text, ep) || strings.Contains(text, "/p/1") || !strings.Contains(text, "HTTP 410") {
 		t.Errorf("journal: endpoint present or the prune not named")
+	}
+	// Through a send, a failure and a prune, the log never carries the endpoint's path.
+	if strings.Contains(logs.String(), "/p/1") || strings.Contains(logs.String(), ep) {
+		t.Errorf("the log names the endpoint:\n%s", logs.String())
 	}
 }
 

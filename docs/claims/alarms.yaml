@@ -504,3 +504,119 @@ claims:
     source: "#the-shape"
     tests: []
     note: No test found for the naut alarms list command.
+
+  - id: ALM-046
+    claim: >-
+      A Web Push subscription belongs to the person the signed-in browser
+      session names, never one in the request body, and only a person (a
+      local user or OIDC) may hold one: an anonymous request, a service
+      token, NAUTILUS_TOKEN and a personal access token are all refused.
+    source: "#channels"
+    tests:
+      - go ./server TestPushSubscribeBindsToTheSessionAndKeepsNoSecretAnywhere
+      - go ./server TestPushIsForPeopleOnly
+
+  - id: ALM-047
+    claim: >-
+      A subscription's endpoint path and keys are never in a response, the
+      journal, the log or the retain store in the clear (only the push
+      service's host is shown): retain holds them sealed under a key derived
+      from the push key.
+    source: "#channels"
+    tests:
+      - go ./server TestPushSubscribeBindsToTheSessionAndKeepsNoSecretAnywhere
+      - go ./server TestPushSendPagesThePersonAndPrunesAGoneSubscription
+      - go ./internal/webpush TestSendGoneAndErrorsNeverNameTheEndpoint
+      - go ./internal/webpush TestRegistrySealsAndOpens
+      - go ./internal/webpush TestSealBindsCredAndGroups
+
+  - id: ALM-048
+    claim: >-
+      A subscription ends when its person does (a changed password, a
+      removed or disabled user) with no live session needed, and signing out
+      does not end it.
+    source: "#channels"
+    tests:
+      - go ./server TestPushEndsWithThePersonNotTheSession
+      - go ./server TestPushStaysWhenSomeoneElseChanges
+      - go ./server TestPushSendChecksStandingNow
+
+  - id: ALM-049
+    claim: >-
+      A users file that cannot be read ends nothing: nobody is paged, and no
+      subscription is dropped, until it can be read.
+    source: "#channels"
+    tests:
+      - go ./server TestPushUnreadableUsersFileRevokesNothing
+
+  - id: ALM-050
+    claim: >-
+      When a pass would end more than half the subscriptions across two or
+      more people, the sweep holds them (kept, not sent, a system alarm
+      raised) instead of deleting them, and they end only when they stand
+      again or a person confirms (POST /api/push/confirm-revocations, which
+      naut alarms push confirm-revocations calls).
+    source: "#channels"
+    tests:
+      - go ./server TestPushSweepHoldsAMassRevocation
+    partial: true
+    note: >-
+      The test drives the HTTP route, not the CLI, and does not pin the
+      "more than half" boundary (exactly half versus just over).
+
+  - id: ALM-051
+    claim: >-
+      Only the leader pages, takes a subscription or revokes one; a standby
+      does none of them.
+    source: "#channels"
+    tests:
+      - go ./server TestPushStandbyDoesNothing
+
+  - id: ALM-052
+    claim: >-
+      The controller sends a push only to an https push service on port 443
+      of a public address, follows no redirect, and refuses a name that
+      resolves to loopback unless alarms.channels.push.allow-hosts names it.
+    source: "#channels"
+    tests:
+      - go ./internal/webpush TestPolicyCheckEndpoint
+      - go ./internal/webpush TestDialRefusesPrivateResolution
+      - go ./internal/webpush TestSendFollowsNoRedirect
+    partial: true
+    note: >-
+      The dial check is shown with one name (localhost, which resolves to
+      loopback), not with arbitrary DNS answers; the address ranges are
+      tested on literal addresses. "Sends directly, not through
+      HTTPS_PROXY" (the guide) has no test.
+
+  - id: ALM-053
+    claim: >-
+      A push is encrypted as RFC 8291 specifies and identified as RFC 8292
+      (VAPID) specifies.
+    source: "#channels"
+    tests:
+      - go ./internal/webpush TestEncryptRFC8291AppendixA
+      - go ./internal/webpush TestVAPIDRFC8292ExampleVerifies
+      - go ./internal/webpush TestSendRoundTrip
+
+  - id: ALM-054
+    claim: >-
+      The push key is made on first use when the controller is not half of a
+      pair; asked as a pair member it makes none and says how to copy the
+      file; generating never replaces an existing key.
+    source: "#channels"
+    tests:
+      - go ./cmd/naut TestPushKeyIsMadeOnceAndNeverOnAPair
+    partial: true
+    note: >-
+      The test calls loadPushKey with both values of its pair flag; that naut
+      run passes "paired" when it has an elector is not tested.
+
+  - id: ALM-055
+    claim: >-
+      A subscription sealed under another push key is kept, never sent, and
+      counted.
+    source: "#channels"
+    tests:
+      - go ./server TestPushSendSkipsSealedRows
+      - go ./server TestPushSurvivesARestartAndAnotherKeyKeepsTheRows

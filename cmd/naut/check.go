@@ -791,6 +791,11 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 		// error here, a failed send (no-contact) on a running controller.
 		sd, _ := controllerStateDir("the alarm contacts", proj.AuthStateDir, proj.Name, dir, true, os.Getenv)
 		cerrs, cwarns := checkContacts(proj.Alarms, sd, false)
+		// Web Push pages a person's phone: with no one able to sign in, no
+		// phone can be subscribed and every page fails no-contact.
+		if proj.Alarms.Channels != nil && proj.Alarms.Channels.Push != nil && (proj.Auth == nil || !(proj.Auth.HasUsers() || proj.Auth.OIDC())) {
+			cwarns = append(cwarns, "alarms.channels.push: nobody can sign in (no auth: users or auth.oidc), and a push subscription belongs to a signed-in person, so every page would fail no-contact: add an auth: block with users (naut users add)")
+		}
 		for _, m := range cwarns {
 			warns++
 			fmt.Printf("%s: warning: %s\n", loc.file, m)

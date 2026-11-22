@@ -629,6 +629,10 @@ func TestPWAWorkerClickOpensTheAlarmsAndActsOnNothing(t *testing.T) {
 		if !h.run(t, `note.closed`).ToBoolean() {
 			t.Error("the notification stays after a tap")
 		}
+		// a tap never calls the controller, in any of the window situations
+		if n := h.run(t, `fetched.length`).ToInteger(); n != 0 {
+			t.Errorf("a tap fetched %d times", n)
+		}
 	}
 	// No window: one is opened on the alarms.
 	h := pushHarness(t)
