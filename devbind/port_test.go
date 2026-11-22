@@ -502,3 +502,30 @@ func TestPortDevicePowerUpNoDeviceThenOkIsArmed(t *testing.T) {
 		t.Errorf("no device, wrong, Ok: identity %v, want AwaitingRearm", v["LEVEL1__Identity"])
 	}
 }
+
+// A screen generated from a device's points never offers to write what has
+// no command tag: the master's own process data out (#714).
+func TestDevicePointsDoNotOfferWhatHasNoCommandTag(t *testing.T) {
+	s := pfMaster(t, nil)
+	cmd := map[string]bool{}
+	for _, tg := range s.Tags() {
+		cmd[tg.Name] = true
+	}
+	for _, d := range s.DevicePoints() {
+		if d.Device != "M" {
+			continue
+		}
+		for _, pt := range d.Points {
+			if pt.Writable && !cmd[CommandTag("M", pt.Name)] {
+				t.Errorf("point %s is writable here but has no command tag %s", pt.Name, CommandTag("M", pt.Name))
+			}
+		}
+		for _, name := range []string{"Port1_PdoBytes", "Port1_PdoValid"} {
+			for _, pt := range d.Points {
+				if pt.Name == name && pt.Writable {
+					t.Errorf("owned point %s is offered as writable", name)
+				}
+			}
+		}
+	}
+}

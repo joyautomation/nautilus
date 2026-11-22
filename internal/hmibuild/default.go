@@ -735,8 +735,15 @@ func assetsOf(raw []byte) []json.RawMessage {
 	return out
 }
 
+// assetSlug is the kit's assetSlug (hmi/src/lib/asset.ts): lowercase words
+// and digits joined by dashes.
+func assetSlug(id string) string {
+	return strings.Trim(slugRe.ReplaceAllString(strings.ToLower(strings.TrimSpace(id)), "-"), "-")
+}
+
 // dedupeAssets is the descriptors as one JSON array, the first of two with
-// one id (case aside) kept and any without an id dropped.
+// one page slug kept ("P-1", "P_1" and "p 1" are one page), and any whose id
+// makes no slug dropped.
 func dedupeAssets(list []json.RawMessage) json.RawMessage {
 	seen := map[string]bool{}
 	kept := []json.RawMessage{}
@@ -744,10 +751,14 @@ func dedupeAssets(list []json.RawMessage) json.RawMessage {
 		var h struct {
 			ID string `json:"id"`
 		}
-		if json.Unmarshal(d, &h) != nil || h.ID == "" || seen[strings.ToLower(h.ID)] {
+		if json.Unmarshal(d, &h) != nil {
 			continue
 		}
-		seen[strings.ToLower(h.ID)] = true
+		slug := assetSlug(h.ID)
+		if slug == "" || seen[slug] {
+			continue
+		}
+		seen[slug] = true
 		kept = append(kept, d)
 	}
 	if len(kept) == 0 {
@@ -793,7 +804,9 @@ const defaultAsset = `<script>
 </script>
 
 {#if asset}
+	{#key asset.id}
 	<AssetPage {asset} tags={rt.frame?.tags ?? {}} write={(name, value) => rt.writeTag(name, value)} alarms={alarms.supported ? alarms : null} />
+	{/key}
 {:else}
 	<p>No asset by that name. <a href={resolve('/assets') + page.url.search}>All assets</a></p>
 {/if}

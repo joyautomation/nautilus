@@ -320,10 +320,10 @@ func TestAssetsOfMimicEquipment(t *testing.T) {
 	}
 }
 
-func TestDedupeAssetsKeepsTheFirstOfAnId(t *testing.T) {
-	list := []json.RawMessage{json.RawMessage(`{"id":"P1","title":"first"}`), json.RawMessage(`{"id":"p1","title":"second"}`), json.RawMessage(`{"title":"no id"}`), json.RawMessage(`{"id":"T1"}`)}
+func TestDedupeAssetsKeepsTheFirstOfAPageSlug(t *testing.T) {
+	list := []json.RawMessage{json.RawMessage(`{"id":"P-1","title":"first"}`), json.RawMessage(`{"id":"p 1","title":"second"}`), json.RawMessage(`{"title":"no id"}`), json.RawMessage(`{"id":"T1"}`), json.RawMessage(`{"id":"P_1","title":"same page"}`), json.RawMessage(`{"id":"---"}`)}
 	got := string(dedupeAssets(list))
-	if got != `[{"id":"P1","title":"first"},{"id":"T1"}]` {
+	if got != `[{"id":"P-1","title":"first"},{"id":"T1"}]` {
 		t.Errorf("deduped %s", got)
 	}
 	if dedupeAssets(nil) != nil {

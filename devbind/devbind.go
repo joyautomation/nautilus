@@ -511,14 +511,23 @@ type DevicePoints struct {
 }
 
 // DevicePoints is each device with the points it exposes, in declaration
-// order: what a screen is generated from (#714).
+// order: what a screen is generated from (#714). A point the master owns
+// (its process data out) is not writable here: it has no command tag.
 func (s *Set) DevicePoints() []DevicePoints {
 	if s == nil {
 		return nil
 	}
 	out := make([]DevicePoints, 0, len(s.devices))
 	for _, d := range s.devices {
-		out = append(out, DevicePoints{Device: d.Name, Title: d.prof.Title, Desc: d.Desc, Points: append([]devprofile.Point(nil), d.points...)})
+		pts := append([]devprofile.Point(nil), d.points...)
+		for i := range pts {
+			// the master's own process data out has no command tag: it is
+			// shown, not offered to write
+			if pts[i].Writable && d.owned(pts[i].Name) {
+				pts[i].Writable = false
+			}
+		}
+		out = append(out, DevicePoints{Device: d.Name, Title: d.prof.Title, Desc: d.Desc, Points: pts})
 	}
 	return out
 }

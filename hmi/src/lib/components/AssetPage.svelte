@@ -7,6 +7,7 @@
 	// draws nothing the descriptor did not ask for.
 	//
 	//   <AssetPage {asset} {tags} {write} alarms={alarms} />
+	import { untrack } from 'svelte';
 	import type { AlarmClient, AlarmEvent } from '../alarms.svelte.js';
 	import { STATE_META, PRIORITY_META } from '../alarms.svelte.js';
 	import { assetAlarms, assetTitle, hasTag, tagValue, trendTags, writableTags, type AssetDescriptor } from '../asset.js';
@@ -82,20 +83,25 @@
 	let from = $state(Date.now() - 24 * 3600 * 1000);
 	let events = $state<AlarmEvent[]>([]);
 	let loading = $state(false);
-	async function loadHistory(f = from, t = to) {
+	// Reads land in order: a slower, older answer never replaces a newer one.
+	let seq = 0;
+	async function loadHistory(f: number, t: number) {
 		if (!alarms) return;
+		const mine = ++seq;
 		const ids = assetAlarms(alarms.instances, asset).map((a) => a.id);
+		from = f;
+		to = t;
 		if (!ids.length) {
 			events = [];
+			loading = false;
 			return;
 		}
 		loading = true;
-		from = f;
-		to = t;
 		try {
-			events = (await alarms.journal(f, t, { ids })).events;
+			const got = (await alarms.journal(f, t, { ids })).events;
+			if (mine === seq) events = got;
 		} finally {
-			loading = false;
+			if (mine === seq) loading = false;
 		}
 	}
 	// A rolling window (the last day, as picked) follows the clock and reloads
@@ -107,9 +113,11 @@
 	$effect(() => {
 		void idsKey;
 		void rev;
-		const span = to - from;
-		if (custom) void loadHistory();
-		else void loadHistory(Date.now() - span, Date.now());
+		// only these re-run it: the load writes the range it reads
+		untrack(() => {
+			if (custom) void loadHistory(from, to);
+			else void loadHistory(Date.now() - (to - from), Date.now());
+		});
 	});
 	function pickRange(f: number, t: number) {
 		custom = true;
