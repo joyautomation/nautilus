@@ -187,9 +187,12 @@ func Open(path string, now func() time.Time) (*Store, error) {
 		return nil, err
 	}
 	s.f = f
-	if st, err := f.Stat(); err == nil {
-		s.off = st.Size()
+	st, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, err
 	}
+	s.off = st.Size()
 	syncDir(filepath.Dir(path))
 	return s, nil
 }

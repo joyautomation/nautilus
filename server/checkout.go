@@ -176,11 +176,7 @@ func (s *Server) checkoutReading(pt checkout.Point) (any, string, error) {
 	if _, ok := tags.ReadPath(pt.Tag); !ok {
 		return nil, "", fmt.Errorf("the controller cannot read %q", pt.Tag)
 	}
-	quality := "good"
-	if q, bad := qualityJSON(s.rt.Quality())[canon]; bad {
-		quality = q
-	}
-	return jsonSafe(s.valueOf(pt.Tag)), quality, nil
+	return jsonSafe(s.valueOf(pt.Tag)), s.rt.TagQuality(canon).String(), nil
 }
 
 // jsonSafe is v as JSON can hold it: a NaN or an infinity (an unwired
