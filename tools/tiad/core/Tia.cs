@@ -265,6 +265,14 @@ namespace Tiad
         // null when the project holds no CPU.
         ProjectCpu ReadCpu(object project);
 
+        // ProjectCpuAddress is the address the project's CPU has on its
+        // first network interface with a node (the one a fingerprint read
+        // checks), or "" when the project holds no CPU; it fails when the
+        // CPU has no network node. A deploy's verify
+        // checks it against the deploy record's address before it goes
+        // online (#789 D1b).
+        string ProjectCpuAddress(object project);
+
         // Identify reads the identity of the CPU at address online, or
         // returns null when this TIA side cannot: tiad.Openness, until an
         // online read is proven (section 3.8). The agent then refuses an

@@ -766,7 +766,16 @@ namespace Tiad.Fake
         // Cpu is the project's CPU (name, order, firmware), or null, and
         // Others the devices besides its station.
         public ProjectCpu Cpu;
+        // CpuAddress is the CPU node's address while Cpu is set: the spec's
+        // after an apply, the CPU's after an upload.
+        public string CpuAddress = "";
         public List<KeptDevice> Others = new List<KeptDevice>();
+        // ArchiveKey names the project as its last deploy archive holds it
+        // (FakeTia.Archive), "" before one; RestoredKey is the key of the
+        // archive this project was retrieved from, "" for none. The world
+        // keeps the key each CPU was loaded with, so a retrieved archive
+        // compares equal while its CPU still holds that load.
+        public string ArchiveKey = "", RestoredKey = "";
         // AccessControl is the CPU's PLC access control (AccessRule's
         // states): a new CPU is EnabledWithAccessControl, as TIA makes one;
         // an upload brings the bench CPU's Disabled. Users and Roles are
@@ -958,6 +967,7 @@ namespace Tiad.Fake
         public void RemoveCpu()
         {
             p.Cpu = null;
+            p.CpuAddress = "";
             p.Protection = ConfigProtection.Absent;
             p.ProtectedWith = "";
             p.AccessControl = AccessRule.Absent;
@@ -974,6 +984,8 @@ namespace Tiad.Fake
     {
         public readonly HashSet<string> Gsd = new HashSet<string>(StringComparer.Ordinal);
         public readonly Dictionary<string, FakeProject> Loaded = new Dictionary<string, FakeProject>(StringComparer.Ordinal);
+        // LoadedKey is the archive key of each CPU's last load.
+        public readonly Dictionary<string, string> LoadedKey = new Dictionary<string, string>(StringComparer.Ordinal);
         public readonly Dictionary<string, FakeProject> Saved = new Dictionary<string, FakeProject>(StringComparer.OrdinalIgnoreCase);
         public readonly Dictionary<string, int> Loads = new Dictionary<string, int>(StringComparer.Ordinal);
         public readonly Dictionary<string, int> HardwareLoads = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -988,6 +1000,7 @@ namespace Tiad.Fake
         // saved is the hardware each saved project file holds, restored
         // when it is opened: its CPU, the devices besides it, protection.
         readonly Dictionary<string, FakeProject> saved;
+        readonly Dictionary<string, string> loadedKey;
 
         // died is set once a scripted TIA died (tiaDies): for good, as a
         // real TIA that exited stays gone.
@@ -1012,6 +1025,7 @@ namespace Tiad.Fake
             this.script = script;
             gsd = world.Gsd;
             loaded = world.Loaded;
+            loadedKey = world.LoadedKey;
             saved = world.Saved;
             loads = world.Loads;
             hardwareLoads = world.HardwareLoads;
@@ -1074,6 +1088,19 @@ namespace Tiad.Fake
         {
             script.Enter("OpenProject");
             OneOpen(fullPath);
+            if (fullPath.EndsWith(".zap21", StringComparison.OrdinalIgnoreCase))
+            {
+                // As tiad.Openness: retrieved next to itself, into a
+                // directory named after it, which must not exist.
+                string target = fullPath.Substring(0, fullPath.Length - ".zap21".Length);
+                if (Directory.Exists(target) || File.Exists(target)) throw new TiaException(target + " exists: retrieve the archive elsewhere");
+                Directory.CreateDirectory(target);
+                string ap = Path.Combine(target, Path.GetFileName(target) + ".ap21");
+                File.WriteAllText(ap, "fake TIA project");
+                FakeProject r = Restore(fullPath, ap) ?? new FakeProject { Full = ap };
+                openProjects++;
+                return r;
+            }
             var p = new FakeProject { Full = fullPath };
             FakeProject sp;
             if (saved.TryGetValue(fullPath, out sp))
@@ -1130,6 +1157,7 @@ namespace Tiad.Fake
             {
                 throw new TiaException("the project's CPU went missing between the agent's read and the apply");
             }
+            p.CpuAddress = next.Cpu.Address;
             // A failure part-way counts as a change.
             bool was = p.Changed;
             p.Changed = true;
@@ -1356,6 +1384,10 @@ namespace Tiad.Fake
                     loads[address] = Count(loads, address) + 1;
                     if (hardware) hardwareLoads[address] = Count(hardwareLoads, address) + 1;
                     loaded[address] = p;
+                    // The archive this load was archived as, once: a later
+                    // load without one (a dry run TIA ran) holds none.
+                    loadedKey[address] = p.ArchiveKey;
+                    p.ArchiveKey = "";
                     p.Changed = false;
                     return new DownloadCall { State = resultState, MessageList = said, Messages = string.Join("; ", said.ToArray()), Cpu = cpu };
                 },
@@ -1445,7 +1477,10 @@ namespace Tiad.Fake
                     break;
             }
             FakeProject there;
-            bool equal = !script.CompareDiffers && loaded.TryGetValue(address, out there) && there == p && !p.Changed;
+            string key;
+            bool equal = !script.CompareDiffers &&
+                ((loaded.TryGetValue(address, out there) && there == p && !p.Changed) ||
+                 (p.RestoredKey != "" && loadedKey.TryGetValue(address, out key) && key == p.RestoredKey));
             var kids = new List<CompareNode>
             {
                 Program(leaves),
@@ -1538,6 +1573,7 @@ namespace Tiad.Fake
             up.DropGrants();
             DeviceIdentity d = script.Device;
             up.Cpu = new ProjectCpu { Name = UploadedCpuName, Order = d.Order, Firmware = d.Firmware };
+            up.CpuAddress = address;
             up.Others = new List<KeptDevice> { UploadedIoDevice() };
             return trusted;
         }
@@ -1556,6 +1592,13 @@ namespace Tiad.Fake
         public static KeptDevice UploadedIoDevice()
         {
             return new KeptDevice { Name = "io-device-up", ProfinetName = "io-device-up", Address = "192.0.2.30" };
+        }
+
+        public string ProjectCpuAddress(object project)
+        {
+            script.Enter("ProjectCpuAddress");
+            var p = (FakeProject)project;
+            return p.Cpu == null ? "" : p.CpuAddress;
         }
 
         public ProjectCpu ReadCpu(object project)
@@ -1602,9 +1645,10 @@ namespace Tiad.Fake
             var p = (FakeProject)project;
             // As the glue: no CPU, or one at another address, is refused.
             if (p.Station == null && p.Cpu == null) throw new TiaException("fingerprint read: the project has no CPU");
-            if (p.Station != null && p.Station.Cpu.Address != address)
+            string at = p.Station != null ? p.Station.Cpu.Address : p.CpuAddress;
+            if (at != address)
             {
-                throw new TiaException("fingerprint read: the project's CPU is at " + p.Station.Cpu.Address + ", not " + address);
+                throw new TiaException("fingerprint read: the project's CPU is at " + at + ", not " + address);
             }
             var r = new FingerprintRead();
             if (script.FingerprintAsksTls) AskTls(address, trustUnverifiedCertificate, r.TrustedBlindly);
@@ -1643,8 +1687,93 @@ namespace Tiad.Fake
             var p = (FakeProject)project;
             string f = Path.Combine(dir, Path.GetFileNameWithoutExtension(p.Full) + ".zap21");
             int n = System.Threading.Interlocked.Increment(ref archives);
-            File.WriteAllText(f, script.ArchiveSame ? "fake TIA project archive" : "fake TIA project archive " + n + " of " + p.Full);
+            if (script.ArchiveSame)
+            {
+                File.WriteAllText(f, "fake TIA project archive");
+                return f;
+            }
+            // The project as an archive holds it, so a retrieve restores it
+            // in any process, after an agent restart too; each archive's
+            // bytes differ, as a real one's do (time stamps).
+            p.ArchiveKey = Guid.NewGuid().ToString("N");
+            var o = new Obj();
+            o["fakeArchive"] = n;
+            o["of"] = p.Full;
+            o["key"] = p.ArchiveKey;
+            if (p.Cpu != null)
+            {
+                var cpu = new Obj();
+                cpu["name"] = p.Cpu.Name;
+                cpu["order"] = p.Cpu.Order;
+                cpu["firmware"] = p.Cpu.Firmware;
+                cpu["address"] = p.CpuAddress;
+                o["cpu"] = cpu;
+            }
+            var blocks = new List<object>();
+            foreach (var b in p.Blocks) blocks.Add(b.ToJson());
+            o["blocks"] = blocks;
+            o["protection"] = p.Protection;
+            o["accessControl"] = p.AccessControl;
+            File.WriteAllText(f, Json.Write(o));
             return f;
+        }
+
+        // LoadOutside is POST /fake/load {address, archive}: the CPU at
+        // address holds a load the agent did not make (another engineering
+        // station's): what the archive file at archive holds, or, with no
+        // archive, something no archive holds. Its fingerprint shows the
+        // load. Tests call it while no TIA call runs.
+        public static object LoadOutside(FakeWorld world, Call c)
+        {
+            var r = c.Json();
+            string address = r.Str("address");
+            string archive = r.Str("archive");
+            r.Done();
+            string key = "outside";
+            if (archive != "")
+            {
+                FakeProject p = Restore(archive, archive);
+                if (p == null) throw TiadException.BadRequest("{0} is no archive of the fake's", archive);
+                key = p.RestoredKey;
+            }
+            world.Loaded.Remove(address);
+            world.LoadedKey[address] = key;
+            int n;
+            world.Loads.TryGetValue(address, out n);
+            world.Loads[address] = n + 1;
+            return new Obj();
+        }
+
+        // Restore is the project an archive written by Archive holds, or
+        // null for any other file.
+        static FakeProject Restore(string archive, string full)
+        {
+            IDictionary<string, object> o;
+            try
+            {
+                o = Json.Parse(File.ReadAllText(archive)) as IDictionary<string, object>;
+            }
+            catch (TiadException)
+            {
+                return null;
+            }
+            if (o == null || !o.ContainsKey("fakeArchive")) return null;
+            var p = new FakeProject { Full = full, RestoredKey = (string)o["key"], Changed = false };
+            object v;
+            if (o.TryGetValue("cpu", out v) && v != null)
+            {
+                var cpu = (IDictionary<string, object>)v;
+                p.Cpu = new ProjectCpu { Name = (string)cpu["name"], Order = (string)cpu["order"], Firmware = (string)cpu["firmware"] };
+                p.CpuAddress = (string)cpu["address"];
+            }
+            foreach (object x in (System.Collections.IList)o["blocks"])
+            {
+                var b = (IDictionary<string, object>)x;
+                p.Blocks.Add(new Block { Name = (string)b["name"], Kind = (string)b["kind"] });
+            }
+            p.Protection = (string)o["protection"];
+            p.AccessControl = (string)o["accessControl"];
+            return p;
         }
 
         public string Save(object project, bool archive)
@@ -1729,6 +1858,7 @@ namespace Tiad.Fake
             router.Add("PUT", "/fake/script", script.Set);
             router.Add("GET", "/fake/calls", script.Calls);
             router.Add("GET", "/fake/downloads", script.Downloads);
+            router.Add("POST", "/fake/load", delegate(Call c) { return FakeTia.LoadOutside(world, c); });
 
             var server = new Server(cfg, router);
             server.Start();

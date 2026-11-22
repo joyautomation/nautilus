@@ -45,6 +45,16 @@ type Target interface {
 	// SetArchiveFails makes the archive a download makes for its deploy
 	// record fail inside TIA's side with msg ("" archives again).
 	SetArchiveFails(t testing.TB, msg string)
+	// LoadOutside makes the CPU at address hold a load the agent did not
+	// make: what the archive file (DeployArchive.File) holds, or, with
+	// file "", something no archive holds. Its fingerprint shows a load.
+	LoadOutside(t testing.TB, address, file string)
+	// SwapArchive replaces the bytes of the archive at file with those of
+	// the archive at with (a swapped archive).
+	SwapArchive(t testing.TB, file, with string)
+	// SetDeployAddress rewrites the address of deploy id's record (a
+	// mixed-up journal line).
+	SetDeployAddress(t testing.TB, id, address string)
 }
 
 // Loaded is one download that loaded a CPU.
@@ -104,6 +114,17 @@ func (g goFake) SetFingerprint(_ testing.TB, fs FingerprintScript) {
 	g.f.SetFingerprint(fs)
 }
 func (g goFake) SetArchiveFails(_ testing.TB, msg string) { g.f.SetArchiveFails(msg) }
+func (g goFake) LoadOutside(_ testing.TB, address, file string) {
+	if file == "" {
+		g.f.LoadOutside(address)
+		return
+	}
+	g.f.LoadArchive(address, file)
+}
+func (g goFake) SwapArchive(_ testing.TB, file, with string) { g.f.SwapArchive(file, with) }
+func (g goFake) SetDeployAddress(_ testing.TB, id, address string) {
+	g.f.SetDeployAddress(id, address)
+}
 func (g goFake) Loaded(testing.TB) []Loaded {
 	var out []Loaded
 	for _, d := range g.f.Downloads() {
@@ -128,6 +149,7 @@ func Contract(t *testing.T, start Starter) {
 	t.Run("UserManagementReset", func(t *testing.T) { contractUserManagementReset(t, start) })
 	t.Run("Fingerprint", func(t *testing.T) { contractFingerprint(t, start) })
 	t.Run("Deploys", func(t *testing.T) { contractDeploys(t, start) })
+	t.Run("Verify", func(t *testing.T) { contractVerify(t, start) })
 }
 
 // ContractNoTIA is the part of the contract that never needs TIA and

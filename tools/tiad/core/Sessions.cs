@@ -57,6 +57,10 @@ namespace Tiad
         // Guard is a directory the session owns ("projects/<name>/" for a
         // project tiad created): an export never writes into it.
         public string Guard = "";
+        // Staging is a directory outside the work dir that only this
+        // session uses (a deploy verify's copy of the archive and the
+        // project TIA retrieved from it): removed once its close ends.
+        public string Staging = "";
         public int InFlight;
         public DateTime LastUsed = DateTime.UtcNow;
     }

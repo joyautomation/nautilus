@@ -50,3 +50,34 @@ func TestDeploySourceValidate(t *testing.T) {
 		t.Fatalf("a download with a bad source: %v", err)
 	}
 }
+
+// TestVerifyMismatchOf reads both addresses of a verify's cpu_mismatch,
+// and nothing from an apply's (which carries the project's cpu) or any
+// other error.
+func TestVerifyMismatchOf(t *testing.T) {
+	ok := &Error{Kind: KindCPUMismatch, Data: []byte(`{"recordAddress":"192.0.2.99","projectAddress":""}`)}
+	if r, p, got := VerifyMismatchOf(ok); !got || r != "192.0.2.99" || p != "" {
+		t.Fatalf("VerifyMismatchOf: %q %q %v", r, p, got)
+	}
+	for _, e := range []error{
+		&Error{Kind: KindCPUMismatch, Data: []byte(`{"cpu":{"name":"PLC_1"}}`)},
+		&Error{Kind: KindBusy, Data: []byte(`{"recordAddress":"a","projectAddress":"b"}`)},
+		&Error{Kind: KindCPUMismatch},
+		&Error{Kind: KindCPUMismatch, Data: []byte(`{"recordAddress":"192.0.2.99"}`)},
+		&Error{Kind: KindCPUMismatch, Data: []byte(`{"projectAddress":"192.0.2.10"}`)},
+		nil,
+	} {
+		if _, _, got := VerifyMismatchOf(e); got {
+			t.Errorf("VerifyMismatchOf(%v) read addresses", e)
+		}
+	}
+}
+
+// TestVerifyDeployNeedsADeploy: the client refuses an empty deploy id
+// before it sends anything.
+func TestVerifyDeployNeedsADeploy(t *testing.T) {
+	c := New("http://127.0.0.1:1", "t")
+	if _, err := c.VerifyDeploy(t.Context(), VerifyRequest{}); Kind(err) != KindBadRequest || !strings.Contains(err.Error(), "deploy is required") {
+		t.Fatalf("an empty deploy: %v", err)
+	}
+}

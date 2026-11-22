@@ -256,7 +256,7 @@ closes forgotten sessions. `fatal: true` means the session is gone.
 | `operation_failed` | 500 | Openness threw (the message carries its text), or a device pin file is unreadable (§3.8) |
 | `device_changed` | 409 | The CPU's identity differs from its device pin (§3.8). The message names both; nothing was loaded and the pin stands |
 | `device_unverified` | 409 | The CPU has a device pin, but its identity could not be read, so the pin could not be checked (§3.8) |
-| `cpu_mismatch` | 409 | An apply's spec does not name the project's CPU (name, order, firmware), or a device of the spec's shares a name or an address with one the project keeps (§3.3). `data.cpu` is the project's CPU; nothing was changed |
+| `cpu_mismatch` | 409 | An apply's spec does not name the project's CPU (name, order, firmware), or a device of the spec's shares a name or an address with one the project keeps (§3.3). `data.cpu` is the project's CPU; nothing was changed. A deploy verify whose archived project's CPU is not at the record's address (§3.5, "Verifying a deploy"): `data.recordAddress`, `data.projectAddress`; nothing went online |
 | `unclean_session` | 409 | An apply or an upload failed part-way on this session, so its project matches no spec: a later apply or save refuses. Close the session without saving (§3.3) |
 | `outcome_unknown` | 500 | A download may have loaded the CPU, or not: TIA failed once it asked a check, tiad cancelled after an answer that can change the CPU (`data.actingAnswers` names them), the compare right after a load failed or differs, or TIA's side broke its contract. Not fatal: compare on the same session before anything else. The exception: when TIA Portal itself died in the download, it is fatal and names the fix (restart the agent, then compare in a fresh session), since every project open on that TIA is gone. The client's `OutcomeUnknown` covers this and `unreachable` |
 
@@ -589,6 +589,7 @@ The client checks each path and the agent checks again.
 | `POST /v1/sessions/{id}/save` | `{archive?}` → `{path}`. Refused (`unclean_session`) after an apply or upload failed part-way |
 | `GET /v1/pins`, `POST /v1/pins/{address}` | The device pins (§3.8). An upload pins the CPU on first use and must match after; compare and download check the pin first |
 | `GET /v1/deploys[?address=]` | → `{deploys: [{id, at, session, project, address, hardware, software, source, tia, archive, attestation, keptDevices, blindTrust, outcome, status}], unreadableLines}`. The deploy record, newest first (§3.5, "The deploy record"). Never starts TIA |
+| `POST /v1/deploys/verify` | `{deploy, fingerprint?: {trustUnverifiedCertificate?}}` → `{deploy, address, status, latest, unreadableLines, verdict, broken?, session?, differences?, blocks?, blindTrust?, changedOutside, fingerprint?, fingerprintError?, closeError?}` (a `broken` verdict has no session, differences, blocks or blind trust). Whether the CPU still runs a deploy: its archive opened in a session of its own and compared online (§3.5, "Verifying a deploy"). `verdict` is `equal`, `different` or `broken` |
 
 `secrets` is `{"webUsers": {"naut": "<password>"}, "protection": "<password>", "configurationPassword": "<password>", "fullAccessPassword": "<password>"}`.
 Each password answers only its own question: the protection password
@@ -1076,6 +1077,59 @@ get a record too, just as it must get the hardware opt-in (#1180 review).
   source, fingerprint, fingerprintError?, downloadId?, blindTrustAfter,
   recorded, recordError?}`. `GET /v1/deploys` lists the records.
 
+**Verifying a deploy (D1b).** `POST /v1/deploys/verify {deploy}` answers
+whether the CPU still runs a deploy. It changes nothing on the CPU, in the
+archive or in the journal (the compare touches only the verify's own copy);
+an `audit verify ...` line says what it found or why it failed.
+1. **The record.** The verify's session is reserved first (TIA V21 opens
+   one project per instance), so a verify while another session is open is
+   `busy`, naming it, before anything is read or copied. tiad then finds
+   the deploy by id (`not_found` otherwise). Its address must be a target
+   (`target_refused`); a record whose address is not an IPv4 address is
+   **`broken`**.
+2. **The archive.** tiad copies the archive into a staging directory of
+   the verify's own under `TIAD_DEPLOYS_DIR` (`staging/v-*`, never the work
+   dir) and hashes the copy. A copy whose sha256 is not the record's, an
+   archive that is gone, or an archive entry tiad does not write makes the
+   verdict **`broken`**, never `equal`. A broken archive is never opened,
+   and `changedOutside` is `null`.
+3. **The session.** The copy is opened (retrieved) as the verify's
+   session, project `deploy:<id>`.
+4. **The address.** tiad reads the address of the archived project's CPU,
+   as the fingerprint read checks it. If it is not the record's address,
+   the verify is refused (`cpu_mismatch`, `data: {recordAddress,
+   projectAddress}`) before anything goes online: a record and an archive
+   that disagree name no CPU to compare. The record's address is used,
+   never a station the caller puts: a PUT would change the project under
+   verification. What this cannot catch: a journal line edited to carry
+   another record's whole archive entry for the same CPU verifies that
+   archive, under the wrong id.
+5. **The compare.** The device pin is checked, then the compare runs as a
+   session's compare does: `equal` or `different`, with the differences
+   and the blocks.
+6. **The fingerprint, when asked.** With `fingerprint`, tiad reads the
+   CPU's fingerprint after the compare, through the fingerprint call's
+   trust path. `downloadIdSame` and `hardwareSame` say whether those items
+   are the record's (`null` when either side has none). A `DownloadId`
+   that differs means the CPU was loaded since, whatever the compare says.
+   A failed read is `fingerprintError` and leaves the verdict as it is.
+7. **The close.** The session is closed, as a `DELETE` closes one (a
+   blindly trusting instance is then retired), and then its staging is
+   removed. A close that fails keeps the session, broken, with its staging;
+   the verdict is still answered, with `closeError` naming the session to
+   close again (a failed verify's error says so too). A `DELETE`, or the
+   idle reaper, closes it later and removes the staging.
+
+`latest` is the newest record for the address that may have loaded it
+(`loaded` or `in-doubt`). `changedOutside` is set only for a `loaded`
+record that compared: `true` when it is `latest` and compared `different`,
+since the CPU then changed without a deploy of this agent; `false`
+otherwise (a superseded record is expected to differ). It is `null` for a
+record that is not `loaded` (an in-doubt one that differs may simply not
+have loaded), and while the journal has lines tiad cannot read
+(`unreadableLines`), since one of them may be a newer deploy. A changed
+`DownloadId` is reported beside it, not folded in.
+
 ### 3.6 PROFINET's requirements (#723)
 
 | | Need | Call |
@@ -1456,19 +1510,22 @@ So:
 **Built (D1a):** the archive per deploy, the journal, the fingerprint
 after the load and `GET /v1/deploys` (§3.5, "The deploy record").
 
-**Not built yet (D1b):** `POST /v1/deploys/verify`. It opens a deploy's
-archive and runs `CompareToOnline`. An archive whose sha256 differs from
-its journal line is *broken*, never equal. A last deploy that compares
-different, or whose `DownloadId` or `Hardware` changed, raises
-`changedOutside`. It waits for the one-project rule, because TIA V21 holds
-one open project per instance and verify opens one.
+**Built (D1b):** `POST /v1/deploys/verify` (§3.5, "Verifying a deploy").
+It opens a copy of a deploy's archive and compares it online. An archive
+whose sha256 differs from its journal line is *broken*, never equal. A
+record whose archived CPU is at another address is refused before going
+online. The latest loaded deploy that compares different is
+`changedOutside`; a changed `DownloadId` or `Hardware` is reported beside
+it.
 
-**Unproven:** whether a pre-download archive, retrieved later, compares
-equal to the CPU it was loaded into. The #789 probes covered block copies
-and rebuilds, not this. It needs a bench window (archive, load, close,
-retrieve, compare) before D7 can be called proven. Openness compares
-hardware only in-project, so the hardware question on #789 still stands
-beside it.
+**Partly proven:** the #789 D7 bench window (2026-11-22 UTC) archived a
+deploy, loaded it, closed the session, retrieved the archive and compared
+it: equal, with the CPU's fingerprint unchanged since the load. That run
+retrieved the archive into the work dir and had to PUT a station before the
+compare, which the verify route does neither of. A read-only bench run of
+the verify route on that deploy is still owed before D7 is called proven.
+Openness compares hardware only in-project, so the hardware question on
+#789 still stands beside it.
 
 **Code that doesn't need the image,** in order:
 1. the Web API client;
