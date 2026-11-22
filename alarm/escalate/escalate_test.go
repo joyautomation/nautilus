@@ -617,6 +617,19 @@ func TestRestartResendsTheCurrentLevelOnce(t *testing.T) {
 	n.wantSent("TT1:2:erin:sms", "TT1:3:carol:sms", "TT1:3:carol:email")
 }
 
+// A restart whose clock went back (an RTC with a dead battery, no NTP
+// yet) still pages: the carried wait is never later than now.
+func TestRestartWithTheClockBackStillPages(t *testing.T) {
+	r := newRig(t, false)
+	r.set("TT1", true)
+	r.run(time.Minute)
+	n := restartRig(t, r, -2*time.Hour, false)
+	n.run(5 * time.Second)
+	if got := n.sent(); len(got) == 0 {
+		t.Fatal("a restart with the clock set back paged nobody")
+	}
+}
+
 // After a takeover the same, labelled as a takeover.
 func TestTakeoverResendLabel(t *testing.T) {
 	r := newRig(t, true)

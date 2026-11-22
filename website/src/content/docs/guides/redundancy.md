@@ -1031,7 +1031,11 @@ carry. Once its log syncs, an acknowledgement the log committed still
 applies to an alarm that has stood since the takeover (its condition
 read true at every scan): the alarm takes the acknowledged occurrence. An
 alarm whose condition dropped in between is a new occurrence, and the
-journal says the old acknowledgement was not carried. Substitutes it held stay, marked "catch-up failed" until the log
+journal says the old acknowledgement was not carried. Binding an
+acknowledgement to its occurrence needs all three copies of the log on a
+build that has it (both controllers and the witness): an older copy
+stores entries without their occurrences, and an acknowledgement that
+passed through it applies to whatever occurrence is on, as before. Substitutes it held stay, marked "catch-up failed" until the log
 confirms them.
 
 **One set of credentials on both.** The pair is one controller to its

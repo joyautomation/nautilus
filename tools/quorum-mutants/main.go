@@ -435,6 +435,10 @@ var table = []mutation{
 	{"carry_end_silent", []string{"TestRestartFalseEndsTheOccurrence", "TestPairFieldDropsAtTheTakeover"}},
 	{"adopt_off", []string{"TestCommittedAckAdoptsTheStandingOccurrence", "TestPairUnsyncedTakeoverCarriesNoAcks"}},
 	{"adopt_ignores_log", []string{"TestLateAckAdoptsOnlyWhatTheLogLeavesStanding"}},
+	{"carry_unclamped", []string{"TestCarriedTimesNeverAheadOfTheClock", "TestRestartWithTheClockBackStillPages"}},
+	{"adopt_after_suppress", []string{"TestSuppressedSinceTheRestoreIsNotAdopted"}},
+	{"carry_ack_resaved_after_false", []string{"TestSecondRestartInsideTheGraceKeepsTheAckDropped"}},
+	{"adopt_under_mu", []string{"TestReconcileDuringACommitWithAnAdoptionPending"}},
 	{"occurrences_not_synced", []string{"TestLeaderSyncsOccurrences"}},
 }
 
@@ -522,6 +526,10 @@ var rowPkgs = map[string][]string{
 	"carry_end_silent":                  {"./alarm", "./cmd/naut"},
 	"adopt_off":                         {"./alarm", "./cmd/naut"},
 	"adopt_ignores_log":                 {"./server"},
+	"carry_unclamped":                   {"./alarm/..."},
+	"adopt_after_suppress":              {"./alarm"},
+	"carry_ack_resaved_after_false":     {"./alarm"},
+	"adopt_under_mu":                    {"./server"},
 	"occurrences_not_synced":            {"./server"},
 	"reconcile_before_restore":          {"./server"},
 	"cluster_ops_proxied":               {"./server"},

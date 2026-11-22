@@ -22,6 +22,12 @@ import "os"
 //     leaves no journal note;
 //   - adopt_off: a committed ack never adopts the occurrence that stood
 //     through an unsynced takeover;
+//   - carry_unclamped: a carried or adopted time ahead of the clock is
+//     kept (a wait in the future pages nobody);
+//   - adopt_after_suppress: suppression since the restore does not stop
+//     an adoption;
+//   - carry_ack_resaved_after_false: a held carry re-saves its ack after
+//     a false reading;
 //   - carry_wait_reset: a carried unacknowledged occurrence starts its
 //     wait afresh, so escalation restarts at level 1.
 var mutOn = os.Getenv("QUORUM_MUT")

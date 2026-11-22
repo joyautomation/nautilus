@@ -25,6 +25,8 @@ import "os"
 //     retained substitutes (#1029 3c-3c-2a);
 //   - adopt_ignores_log: a late committed ack adopts the standing
 //     occurrence though the log shows its own ended (#715);
+//   - adopt_under_mu: Reconcile asks the oplog node under AlarmLog.mu
+//     (the inverse of the apply's lock order);
 //   - superseded_alarms_kept: a superseded log's acks and shelves are
 //     carried by a takeover, and kept by a leader that learns it.
 var mutOn = os.Getenv("QUORUM_MUT")

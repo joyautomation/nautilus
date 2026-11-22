@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"slices"
@@ -427,5 +428,69 @@ func TestHeldBackOccurrenceIsProposedOnceDecided(t *testing.T) {
 	}
 	if cur.State != alarm.UnackActive {
 		t.Fatalf("HiTemp %s; want unack-active (the adoption was refused)", cur.State)
+	}
+}
+
+// Reconcile with an adoption pending, while the log applies a commit
+// (#1198 review): Reconcile asks the node whether the log is caught up,
+// and the node applies the commit (AlarmLog.Apply) under its own lock;
+// asking it under AlarmLog.mu deadlocked both. The commit must go through.
+func TestReconcileDuringACommitWithAnAdoptionPending(t *testing.T) {
+	var lead atomic.Bool
+	lead.Store(true)
+	cond := map[string]any{"HiTempAlm": true, "LoFlowAlm": false}
+	eng := newTestAlarms(t, cond)
+	al := NewAlarmLog(eng, lead.Load, noTerm)
+	reconciling := make(chan struct{})
+	n, err := oplog.New(oplog.Options{Self: "a", Apply: func(e oplog.Entry) error {
+		if e.Kind == oplog.KindUnshelve {
+			go func() { close(reconciling); al.Reconcile() }()
+			<-reconciling
+			time.Sleep(200 * time.Millisecond) // Reconcile reaches the node meanwhile
+		}
+		_, err := al.Apply(e)
+		return err
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	al.Attach(n)
+	PairAlarms{Engine: eng, Log: al}.RestoreAlarmsSynced(nil, true)
+	eng.Evaluate()
+	al.mu.Lock()
+	al.adopt = map[string]adoption{"HiTemp": {occ: "5656565656565656", activeMs: 1, by: "op"}}
+	al.mu.Unlock()
+	done := make(chan error, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, err := n.Propose(ctx, oplog.Entry{Kind: oplog.KindUnshelve, ID: "LoFlow", By: "op"})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("propose: %v", err)
+		}
+	case <-time.After(4 * time.Second):
+		t.Fatal("a commit applied while Reconcile ran with an adoption pending never finished: the log and AlarmLog deadlocked")
+	}
+}
+
+// A pending adoption belongs to the leadership that held it: the next
+// takeover's restore drops it, so it never acks anything there.
+func TestPendingAdoptionClearedAtTheNextTakeover(t *testing.T) {
+	var lead atomic.Bool
+	lead.Store(true)
+	cond := map[string]any{"HiTempAlm": true, "LoFlowAlm": false}
+	_, eng, al, _ := loggedAlarms(t, cond, &lead)
+	al.mu.Lock()
+	al.adopt = map[string]adoption{"HiTemp": {occ: "7878787878787878", activeMs: 1, by: "op"}}
+	al.mu.Unlock()
+	PairAlarms{Engine: eng, Log: al}.RestoreAlarmsSynced(nil, false) // a new leadership
+	eng.Evaluate()
+	al.Reconcile()
+	if st := state(eng, "HiTemp"); st != alarm.UnackActive {
+		t.Fatalf("HiTemp %s; want unack-active (an earlier leadership's adoption is not this one's)", st)
 	}
 }

@@ -295,6 +295,10 @@ var Mutations = []string{
 	"carry_end_silent",                  // alarm: an acknowledged carried occurrence that ends leaves no journal note (#715)
 	"adopt_off",                         // alarm: a committed ack never adopts the occurrence that stood through an unsynced takeover (#715)
 	"adopt_ignores_log",                 // server: a late ack adopts the standing occurrence though the log shows its own ended (#715)
+	"carry_unclamped",                   // alarm: a carried or adopted time ahead of the clock is kept, so a wait in the future pages nobody (#715)
+	"adopt_after_suppress",              // alarm: an alarm suppressed since the restore may still adopt a late committed ack (#715)
+	"carry_ack_resaved_after_false",     // alarm: a held carry re-saves its ack after a false reading (#715)
+	"adopt_under_mu",                    // server: Reconcile asks the oplog node under AlarmLog.mu, inverting the apply's lock order (#715)
 	"occurrences_not_synced",            // server: the leader proposes no occurrence-start or -end (#715)
 }
 

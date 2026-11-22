@@ -369,3 +369,85 @@ func TestCommittedAckAdoptsTheStandingOccurrence(t *testing.T) {
 		}
 	}
 }
+
+// A carried occurrence whose times are ahead of this clock (an RTC set
+// back across the restart, or an old leader's clock ahead) comes back with
+// them at now, never in the future, where they would page nobody.
+func TestCarriedTimesNeverAheadOfTheClock(t *testing.T) {
+	r := newRig(t, def("A", "A"))
+	r.tags["A"] = true
+	r.Evaluate()
+	r.clk.advance(time.Minute)
+	snap := r.Snapshot()
+	r.clk.advance(-2 * time.Hour) // the clock went back
+	r2 := restart(t, r, snap, 0, def("A", "A"))
+	r2.tags["A"] = true
+	r2.Evaluate()
+	a := r2.rec(t, "A")
+	now := r2.clk.t.UnixMilli()
+	if a.ActiveMs > now || a.WaitMs > now || a.WaitMs == 0 {
+		t.Fatalf("carried active %d, wait %d; want neither after now %d", a.ActiveMs, a.WaitMs, now)
+	}
+	// An adoption takes the committed activation, likewise never later.
+	r3 := newRig(t, def("B", "B"))
+	r3.tags["B"] = true
+	r3.Evaluate()
+	now = r3.clk.t.UnixMilli()
+	if ok, err := r3.AckCommitted("B", "1212121212121212", now+3600_000, "op"); err != nil || !ok {
+		t.Fatalf("adoption: %v %v", ok, err)
+	}
+	if b := r3.rec(t, "B"); b.ActiveMs > now {
+		t.Fatalf("adopted activation %d after now %d", b.ActiveMs, now)
+	}
+}
+
+// Suppression since the restore (enable false, or the tag unreadable)
+// means the alarm did not stand: a late committed ack is not adopted.
+func TestSuppressedSinceTheRestoreIsNotAdopted(t *testing.T) {
+	en := def("E", "E")
+	en.Enable = "en"
+	for _, tc := range []struct {
+		name  string
+		first map[string]any
+	}{
+		{"enable false first", map[string]any{"en": false, "E": true}},
+		{"unreadable first", map[string]any{"en": true}},
+	} {
+		r := newRig(t, en)
+		for k, v := range tc.first {
+			r.tags[k] = v
+		}
+		r.Evaluate()
+		r.clk.advance(10 * time.Minute)
+		r.tags["en"], r.tags["E"] = true, true
+		r.Evaluate()
+		if _, err := r.AckCommitted("E", "3434343434343434", r.clk.t.Add(-time.Hour).UnixMilli(), "op"); !errors.Is(err, ErrOtherOccurrence) {
+			t.Errorf("%s: %v; want refused", tc.name, err)
+		}
+		if st := r.state(t, "E"); st != UnackActive {
+			t.Errorf("%s: %s; want unack-active", tc.name, st)
+		}
+	}
+}
+
+// Standalone, two restarts inside the grace: a false reading after the
+// first means the ack does not carry, and the second restart does not
+// forget that.
+func TestSecondRestartInsideTheGraceKeepsTheAckDropped(t *testing.T) {
+	r := newRig(t, def("A", "A"))
+	r.tags["A"] = true
+	r.Evaluate()
+	if _, err := r.Ack([]string{"A"}, "op"); err != nil {
+		t.Fatal(err)
+	}
+	r2 := restart(t, r, r.Snapshot(), time.Minute, def("A", "A"))
+	r2.tags["A"] = false
+	r2.Evaluate() // false inside the grace: still held, no longer acked
+	r2.clk.advance(10 * time.Second)
+	r3 := restart(t, r2, r2.Snapshot(), time.Minute, def("A", "A"))
+	r3.tags["A"] = true
+	r3.Evaluate()
+	if st := r3.state(t, "A"); st != UnackActive {
+		t.Fatalf("after two restarts, a false reading between: %s; want unack-active", st)
+	}
+}

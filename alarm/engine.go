@@ -284,7 +284,13 @@ func (e *Engine) evalOne(in *instance, now time.Time) {
 }
 
 func (e *Engine) suppress(in *instance, now time.Time, reason string) {
-	in.adoptable = false
+	// Suppressed, unreadable or disabled: whatever reads true later has not
+	// stood throughout, as a carry would judge it (#1198 review).
+	if !mutAlarm("adopt_after_suppress") {
+		in.judged, in.adoptable = true, false
+	} else {
+		in.adoptable = false
+	}
 	if in.state == Suppressed {
 		in.reason = reason // the reason can change (enable false → tag gone)
 		return
@@ -658,7 +664,7 @@ func (e *Engine) AckCommitted(id, occ string, activeMs int64, by string) (bool, 
 		if !in.adoptable || in.occ == "" || st != UnackActive || occ == "" || activeMs <= 0 || mutAlarm("adopt_off") {
 			return false, fmt.Errorf("alarm %q: %w", id, ErrOtherOccurrence)
 		}
-		in.occ, in.activeAt, in.adoptable = occ, time.UnixMilli(activeMs), false
+		in.occ, in.activeAt, in.adoptable = occ, notAfter(time.UnixMilli(activeMs), e.now()), false
 	}
 	now := e.now()
 	if !in.ack(now, by) {
@@ -841,7 +847,9 @@ func (e *Engine) RetainedAlarms() map[string]retain.AlarmRetain {
 			if !c.waitAt.IsZero() {
 				r.WaitMs = c.waitAt.UnixMilli()
 			}
-			if c.acked && !r.Acked {
+			// Its ack only while no false reading came first: the next
+			// restore would not know one had (#1198 review).
+			if c.acked && !r.Acked && (!c.sawFalse || mutAlarm("carry_ack_resaved_after_false")) {
 				r.Acked, r.AckBy, r.AckMs = true, c.ackBy, c.ackAt.UnixMilli()
 			}
 		} else if st := in.underShelf(); in.occ != "" && (st == UnackActive || st == AckActive) {
@@ -964,7 +972,7 @@ func (e *Engine) endCarry(in *instance, why string) {
 	if c == nil || !c.acked || mutAlarm("carry_end_silent") {
 		return
 	}
-	ev := Event{TS: e.now().UnixMilli(), ID: "__nautilus.redundancy", Kind: "system", By: "system",
+	ev := Event{TS: e.now().UnixMilli(), ID: "__nautilus.alarms", Kind: "system", By: "system",
 		Name:       "ack of " + in.def.ID + " by " + c.ackBy + " not carried: its occurrence ended while this controller was stopped or taking over (" + why + ")",
 		Occurrence: c.occ}
 	if err := e.jrn.Append(ev); err != nil {
@@ -987,7 +995,10 @@ func (e *Engine) carryOn(in *instance, c *carried, now time.Time) {
 		return // already on an occurrence (cannot happen before the first activation)
 	}
 	in.raw, in.rawSince, in.started, in.cond = true, now, true, true
-	in.occ, in.activeAt, in.rtnAt = c.occ, c.activeAt, time.Time{}
+	// Times from another clock (the last run's, or the old leader's) are
+	// never later than now: a wait in the future pages nobody until the
+	// clock reaches it (#1198 review: an RTC set back at a restart).
+	in.occ, in.activeAt, in.rtnAt = c.occ, notAfter(c.activeAt, now), time.Time{}
 	in.ackAt, in.ackBy = time.Time{}, ""
 	in.retainedAck = false
 	if c.acked && (!c.sawFalse || mutAlarm("carry_ack_after_false")) && in.def.AckRequired {
@@ -1000,10 +1011,18 @@ func (e *Engine) carryOn(in *instance, c *carried, now time.Time) {
 	if in.state.Unacked() {
 		in.waitAt = now
 		if !c.waitAt.IsZero() && !mutAlarm("carry_wait_reset") {
-			in.waitAt = c.waitAt
+			in.waitAt = notAfter(c.waitAt, now)
 		}
 	}
 	e.rev++
+}
+
+// notAfter is t, or now if t is later: a time carried from another clock.
+func notAfter(t, now time.Time) time.Time {
+	if t.After(now) && !mutAlarm("carry_unclamped") {
+		return now
+	}
+	return t
 }
 
 // Snapshot and Restore are RetainedAlarms and RestoreAlarms under the names

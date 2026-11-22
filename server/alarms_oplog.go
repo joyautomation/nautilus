@@ -236,6 +236,9 @@ func (l *AlarmLog) restoring(restore func()) {
 	term := l.term()
 	l.liveMu.Lock()
 	defer l.liveMu.Unlock()
+	l.mu.Lock()
+	l.adopt = nil // an earlier leadership's pending adoptions are not this one's
+	l.mu.Unlock()
 	restore()
 	l.restored.Store(term)
 }
@@ -265,8 +268,10 @@ func (l *AlarmLog) Apply(e oplog.Entry) (bool, error) {
 	}
 	var notes []string // cancelled adoptions, journalled once mu is released
 	defer func() {
-		for _, n := range notes {
-			l.eng.Note("system", n)
+		if live { // a standby's engine journals nothing of the leader's
+			for _, n := range notes {
+				l.eng.Note("system", n)
+			}
 		}
 		if e.Kind == oplog.KindAck || e.Kind == oplog.KindShelve || e.Kind == oplog.KindUnshelve {
 			l.tell(e)
@@ -492,6 +497,7 @@ func (l *AlarmLog) dropView() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	clear(l.view)
+	l.adopt = nil
 }
 
 // EndSuperseded ends what this controller holds of the old history's
@@ -866,12 +872,21 @@ func (l *AlarmLog) cancelAdopt(id, why string) string {
 // left adopts its alarm's occurrence if the alarm has stood since this
 // replica's restore, else it is refused and journalled.
 func (l *AlarmLog) adoptPending() {
+	// The node is asked before mu is taken, never under it: the node
+	// applies commits (Apply, which takes mu) under its own lock (#1198
+	// review: the inverse order froze the log, then the scan).
+	caughtUp := l.node == nil || (l.node.Synced() && l.node.Commit() >= l.node.LastSeq())
+	if mutServer("adopt_under_mu") {
+		l.mu.Lock()
+		caughtUp = l.node == nil || (l.node.Synced() && l.node.Commit() >= l.node.LastSeq())
+		l.mu.Unlock()
+	}
 	l.mu.Lock()
 	if len(l.adopt) == 0 {
 		l.mu.Unlock()
 		return
 	}
-	if l.node != nil && (!l.node.Synced() || l.node.Commit() < l.node.LastSeq()) {
+	if !caughtUp {
 		l.mu.Unlock()
 		return // entries may still come that end the acked occurrence
 	}
