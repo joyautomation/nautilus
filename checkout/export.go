@@ -53,6 +53,8 @@ const NotChecked = "not checked"
 // StatusOf says what the export of a run is.
 func StatusOf(r Run) string {
 	switch {
+	case r.State == StateSealed:
+		return "SEALED by " + r.SealedBy + ": this export is not the signed bytes; the signed record is the run's sealed record"
 	case r.Rehearsal:
 		return "REHEARSAL, UNSEALED: a rehearsal run can never be signed"
 	default:
@@ -63,7 +65,7 @@ func StatusOf(r Run) string {
 // BuildExport builds the export of a run against the sheet the controller
 // holds. results is every result of the run (Store.Results).
 func BuildExport(run Run, sh *Sheet, results []Result) Export {
-	ex := Export{Format: ExportFormat, Status: StatusOf(run), Rehearsal: run.Rehearsal, Run: run,
+	ex := Export{Format: ExportFormat, Sealed: run.State == StateSealed, Status: StatusOf(run), Rehearsal: run.Rehearsal, Run: run,
 		Sheet: run.SheetHash, SheetChanged: run.SheetHash != sh.Hash(), Title: run.Title, Points: []ExportPoint{}}
 	if ex.Title == "" {
 		ex.Title = sh.Title

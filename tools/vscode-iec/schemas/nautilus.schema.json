@@ -620,6 +620,11 @@
           "type": "string",
           "description": "The sheet, relative to the project. Default checkout.yaml (naut checkout init writes one)."
         },
+        "real-io": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Names of drivers and devices that reach real field I/O although the controller cannot tell from the endpoint (a local gateway on a loopback address, a driver whose hosts are in a manifest file). Without them the controller refuses to sign off a run against loopback, virtual or unreadable endpoints."
+        },
         "signoff": {
           "type": "string",
           "enum": ["two-person", "single"],

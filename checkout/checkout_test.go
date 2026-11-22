@@ -10,6 +10,17 @@ import (
 	"time"
 )
 
+// tmpDir is a temp directory only its owner can write, as a state directory
+// is: the store refuses a signing key in a directory others may write.
+func tmpDir(t *testing.T) string {
+	t.Helper()
+	d := t.TempDir()
+	if err := os.Chmod(d, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
 func sheet() *Sheet {
 	return &Sheet{Title: "Test", Points: []Point{
 		{ID: "XV101", Tag: "XV101_Cmd", Kind: DO, Method: Force, Device: "rio1", Area: "RCV"},
@@ -64,7 +75,7 @@ func TestProgressByDevice(t *testing.T) {
 
 func openStore(t *testing.T) (*Store, string) {
 	t.Helper()
-	p := filepath.Join(t.TempDir(), "checkout.jsonl")
+	p := filepath.Join(tmpDir(t), "checkout.jsonl")
 	n := int64(0)
 	s, err := Open(p, func() time.Time { n++; return time.UnixMilli(1_000_000 + n) })
 	if err != nil {

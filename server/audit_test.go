@@ -289,6 +289,19 @@ func auditRows() []auditRow {
 			t.Fatal(err)
 		}
 	}
+	// a run another person passed in full, for the seal row (akhan signs it off)
+	ckRunSealable := func(t *testing.T, s *Server) {
+		ckOf(s).Evidence = realDevices
+		run, err := ckOf(s).Store.Begin(false, ckOf(s).Sheet.Hash(), "T", "carol", "user:carol")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range ckOf(s).Sheet.Points {
+			if _, err := ckOf(s).Store.Record(run.ID, p.ID, checkout.Pass, "", 1, "good", "carol", "user:carol"); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
 	// a run with the equipment out of service, for the force row; and one with
 	// a force standing, for the release row
 	ckRunOOS := func(t *testing.T, s *Server) {
@@ -351,6 +364,23 @@ func auditRows() []auditRow {
 		{name: "checkout abandon with no credential", pattern: "POST /api/checkout/runs/{id}/abandon", server: ckSrv, person: true, prep: ckRun,
 			method: "POST", pathOf: ckPath("/abandon"), body: `{"reason":"wrong sheet"}`,
 			action: "checkout.abandon", target: "", user: "anonymous", source: "api", result: "refused"},
+		{name: "checkout seal", pattern: "POST /api/checkout/runs/{id}/seal", server: ckSrv, person: true, header: ckHdr, prep: ckRunSealable,
+			method: "POST", pathOf: ckPath("/seal"), body: `{"note":"all points walked"}`,
+			action: "checkout.seal", target: "*", user: "user:akhan", source: "hmi", result: "ok",
+			check: func(t *testing.T, e audit.Entry) {
+				m, _ := e.After.(map[string]any)
+				for _, k := range []string{"sealSha256", "exportSha256", "keyFingerprint"} {
+					if v, _ := m[k].(string); len(v) < 16 {
+						t.Errorf("the seal's audit entry has no %s: %v", k, e.After)
+					}
+				}
+				if m["note"] != "all points walked" {
+					t.Errorf("after.note = %v", m["note"])
+				}
+			}},
+		{name: "checkout seal with no credential", pattern: "POST /api/checkout/runs/{id}/seal", server: ckSrv, person: true, prep: ckRunSealable,
+			method: "POST", pathOf: ckPath("/seal"), body: `{}`,
+			action: "checkout.seal", target: "", user: "anonymous", source: "api", result: "refused"},
 		{name: "tag write", pattern: "POST /api/tags", server: none,
 			method: "POST", path: "/api/tags", body: `{"name":"SP","value":70}`,
 			action: "tag.write", target: "SP", user: "anonymous", source: "api", result: "ok", before: 65.0, after: 70.0},

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"math"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -29,7 +30,7 @@ func ckSheet() *checkout.Sheet {
 // operator in one area) and a checkout.
 func ckServer(t *testing.T) (*Server, *checkout.Store) {
 	t.Helper()
-	st, err := checkout.Open(filepath.Join(t.TempDir(), "checkout.jsonl"), nil)
+	st, err := checkout.Open(filepath.Join(ckDir(t), "checkout.jsonl"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,9 +51,17 @@ func ckOf(s *Server) *CheckoutOptions { v, _ := ckOfServer.Load(s); return v.(*C
 func ckOpts(o Options, co *CheckoutOptions) Options { co.Install(&o); return o }
 func ckReg(s *Server, co *CheckoutOptions) *Server  { ckOfServer.Store(s, co); return s }
 
+// ckDir is a state directory only its owner can write: the signing key is made there.
+func ckDir(t *testing.T) string {
+	t.Helper()
+	d := t.TempDir()
+	os.Chmod(d, 0o700)
+	return d
+}
+
 func newCkStore(t *testing.T) *checkout.Store {
 	t.Helper()
-	st, err := checkout.Open(filepath.Join(t.TempDir(), "checkout.jsonl"), nil)
+	st, err := checkout.Open(filepath.Join(ckDir(t), "checkout.jsonl"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,6 +86,8 @@ func TestCheckoutIsOffUnlessTheProjectEnablesIt(t *testing.T) {
 		{"GET", "/api/checkout", ""},
 		{"GET", "/api/checkout/runs/x", ""},
 		{"GET", "/api/checkout/runs/x/export", ""},
+		{"GET", "/api/checkout/runs/x/sealed", ""},
+		{"POST", "/api/checkout/runs/x/seal", `{}`},
 		{"POST", "/api/checkout/runs", `{}`},
 		{"POST", "/api/checkout/runs/x/results", `{"point":"SP","outcome":"pass"}`},
 		{"POST", "/api/checkout/runs/x/abandon", `{"reason":"no"}`},
@@ -217,7 +228,7 @@ func TestCheckoutWhoMayRecord(t *testing.T) {
 // A redundant pair refuses the whole surface until the results travel
 // through the log.
 func TestCheckoutRefusedOnAPair(t *testing.T) {
-	st, _ := checkout.Open(filepath.Join(t.TempDir(), "c.jsonl"), nil)
+	st, _ := checkout.Open(filepath.Join(ckDir(t), "c.jsonl"), nil)
 	defer st.Close()
 	co := &CheckoutOptions{Store: st, Sheet: ckSheet()}
 	srv, _, _ := patServerWith(t, ckOpts(Options{Cluster: fakeCluster{status: leader.Status{Mode: "quorum", IsLeader: true}}}, co))
@@ -234,7 +245,7 @@ func TestCheckoutRefusedOnAPair(t *testing.T) {
 // point records that point and not another, and cannot begin a run (that
 // needs the whole controller).
 func TestCheckoutRecordingIsScopedToThePointsArea(t *testing.T) {
-	st, err := checkout.Open(filepath.Join(t.TempDir(), "c.jsonl"), nil)
+	st, err := checkout.Open(filepath.Join(ckDir(t), "c.jsonl"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -285,7 +296,7 @@ func TestCheckoutReadingsAreTheControllersOwn(t *testing.T) {
 		t.Fatal(err)
 	}
 	rt.Scan()
-	st, err := checkout.Open(filepath.Join(t.TempDir(), "c.jsonl"), nil)
+	st, err := checkout.Open(filepath.Join(ckDir(t), "c.jsonl"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -353,7 +364,7 @@ func TestCheckoutRecordsANaNReading(t *testing.T) {
 		t.Fatal(err)
 	}
 	rt.Scan()
-	st, _ := checkout.Open(filepath.Join(t.TempDir(), "c.jsonl"), nil)
+	st, _ := checkout.Open(filepath.Join(ckDir(t), "c.jsonl"), nil)
 	defer st.Close()
 	sheet := &checkout.Sheet{Points: []checkout.Point{{ID: "lvl", Tag: "Level", Kind: checkout.AI, Method: checkout.Observe}}}
 	co := &CheckoutOptions{Store: st, Sheet: sheet}

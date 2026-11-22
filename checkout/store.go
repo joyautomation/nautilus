@@ -29,6 +29,7 @@ const (
 const (
 	StateOpen      = "open"
 	StateAbandoned = "abandoned"
+	StateSealed    = "sealed"
 )
 
 // Errors the store answers with.
@@ -61,6 +62,7 @@ const (
 	kindAbandon  = "abandon"
 	kindForce    = "force"    // a checkout force began on a point
 	kindForceEnd = "forceend" // and ended
+	kindSeal     = "seal"     // the run was signed off (seal.go)
 )
 
 // entry is one line of the file.
@@ -76,6 +78,16 @@ type entry struct {
 	SheetHash string `json:"sheet,omitempty"`
 	Title     string `json:"title,omitempty"`
 
+	// kind run, from the controller: a hash of the devices it was begun
+	// against, and why the run could never be signed off (virtual devices)
+	EvSha  string `json:"evsha,omitempty"`
+	Unreal string `json:"unreal,omitempty"`
+
+	// kind result: what the controller saw standing on the point's tag when it
+	// recorded ("forced: X", "substituted: X"), and a hash of the devices it
+	// was connected to then, from the controller
+	Override string `json:"override,omitempty"`
+
 	// kind result
 	Point   string `json:"point,omitempty"`
 	Outcome string `json:"outcome,omitempty"`
@@ -87,7 +99,11 @@ type entry struct {
 	Forced  any `json:"forced,omitempty"`
 	Seconds int `json:"seconds,omitempty"`
 
-	// kinds result and abandon
+	// kind seal: the SHA-256 of the signed payload, and the signature (seal.go)
+	SealSha string `json:"sealsha,omitempty"`
+	Sig     string `json:"sig,omitempty"`
+
+	// kinds result, abandon and seal
 	Note   string `json:"note,omitempty"`
 	Reason string `json:"reason,omitempty"`
 
@@ -106,8 +122,16 @@ type Result struct {
 	// Seen is what the controller read at the point's tag when the result
 	// was recorded, and Quality its quality: written by the controller, never
 	// by the client.
-	Seen      any    `json:"seen,omitempty"`
-	Quality   string `json:"quality,omitempty"`
+	Seen    any    `json:"seen,omitempty"`
+	Quality string `json:"quality,omitempty"`
+	// Override says a force or a substitute (other than this checkout's own
+	// force on the point) stood on the point's tag when the result was
+	// recorded: what the reading then says is not the wiring's. Only a fail or
+	// a note is recorded so; the controller refuses a pass.
+	Override string `json:"override,omitempty"`
+	// EvSha is a hash of the devices the controller was connected to when the
+	// result was recorded (the seal compares it with the run's).
+	EvSha     string `json:"evsha,omitempty"`
 	By        string `json:"by"`
 	Principal string `json:"principal,omitempty"`
 	// Force is the checkout force the point last had in the run, when it had
@@ -149,9 +173,20 @@ type Run struct {
 	By        string `json:"by"`
 	Principal string `json:"principal,omitempty"`
 	// Reason is why an abandoned run was abandoned, by whom and when.
-	Reason      string `json:"reason,omitempty"`
-	EndedAt     int64  `json:"endedAt,omitempty"`
-	EndedBy     string `json:"endedBy,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+	EndedAt int64  `json:"endedAt,omitempty"`
+	EndedBy string `json:"endedBy,omitempty"`
+	// EvidenceSha is a hash of the devices the controller was connected to when
+	// the run began, and Unreal why the run can never be signed off (the
+	// controller found virtual devices or no field driver then): both are the
+	// controller's, never the client's.
+	EvidenceSha string `json:"evidenceSha,omitempty"`
+	Unreal      string `json:"unreal,omitempty"`
+	// SealedAt, SealedBy and SealSeq say a sealed run was signed off: when,
+	// by whom, and the sequence number of the seal entry.
+	SealedAt    int64  `json:"sealedAt,omitempty"`
+	SealedBy    string `json:"sealedBy,omitempty"`
+	SealSeq     int64  `json:"sealSeq,omitempty"`
 	Results     int    `json:"results"`
 	lastResults map[string][]Result
 	// forces is each point's checkout forces in the run, oldest first.
@@ -182,6 +217,11 @@ type Store struct {
 	prev string
 	runs map[string]*Run
 	ord  []string
+
+	// key signs sealed runs (seal.go): created beside the file at Open.
+	key         *signKey
+	keyReplaced bool
+	keyErr      error
 }
 
 // appendFile is the file as the store uses it (a test's can fail).
@@ -251,6 +291,19 @@ func Open(path string, now func() time.Time) (*Store, error) {
 	}
 	s.off = st.Size()
 	syncDir(filepath.Dir(path))
+	// a key that cannot be used (others can read it, its directory is writable by
+	// others, it is damaged) turns sealing off with the reason, not the whole
+	// checkout: results keep being recorded
+	var created bool
+	if s.key, created, err = loadOrCreateKey(filepath.Join(filepath.Dir(path), KeyFile)); err != nil {
+		s.key, s.keyErr = nil, err
+	}
+	for _, r := range s.runs {
+		if r.State == StateSealed && created {
+			s.keyReplaced = true
+		}
+	}
+	s.sweepSealed()
 	return s, nil
 }
 
@@ -306,7 +359,7 @@ func (s *Store) apply(e entry) error {
 			return errors.New("a run that is empty or already begun")
 		}
 		s.runs[e.Run] = &Run{ID: e.Run, State: StateOpen, Rehearsal: e.Rehearsal, SheetHash: e.SheetHash, Title: e.Title,
-			At: e.At, By: e.By, Principal: e.Principal, lastResults: map[string][]Result{}, forces: map[string][]*forceState{}}
+			EvidenceSha: e.EvSha, Unreal: e.Unreal, At: e.At, By: e.By, Principal: e.Principal, lastResults: map[string][]Result{}, forces: map[string][]*forceState{}}
 		s.ord = append(s.ord, e.Run)
 	case kindResult:
 		r := s.runs[e.Run]
@@ -314,7 +367,7 @@ func (s *Store) apply(e entry) error {
 			return errors.New("a result for a run that is not open")
 		}
 		res := Result{Run: e.Run, Seq: e.Seq, At: e.At, Point: e.Point,
-			Outcome: e.Outcome, Note: e.Note, Seen: e.Seen, Quality: e.Quality, By: e.By, Principal: e.Principal}
+			Outcome: e.Outcome, Note: e.Note, Seen: e.Seen, Quality: e.Quality, Override: e.Override, EvSha: e.EvSha, By: e.By, Principal: e.Principal}
 		if fs := r.forces[e.Point]; len(fs) > 0 {
 			last := fs[len(fs)-1]
 			res.Force = &ForceRef{Seq: last.rec.Seq, Value: last.rec.Value, Seconds: last.rec.Seconds, Ended: last.ended}
@@ -348,6 +401,18 @@ func (s *Store) apply(e entry) error {
 			return errors.New("an abandon while a force stands")
 		}
 		r.State, r.Reason, r.EndedAt, r.EndedBy = StateAbandoned, e.Reason, e.At, e.By
+	case kindSeal:
+		r := s.runs[e.Run]
+		if r == nil || r.State != StateOpen {
+			return errors.New("a seal of a run that is not open")
+		}
+		if r.standing != nil {
+			return errors.New("a seal while a force stands")
+		}
+		if r.Rehearsal {
+			return errors.New("a seal of a rehearsal run")
+		}
+		r.State, r.SealedAt, r.SealedBy, r.SealSeq = StateSealed, e.At, e.By, e.Seq
 	default:
 		return fmt.Errorf("unknown entry kind %q", e.Kind)
 	}
@@ -424,12 +489,20 @@ func (s *Store) openRun() *Run {
 // at a time. A rehearsal run (against virtual devices) is marked so for good:
 // a run's kind is never changed afterwards.
 func (s *Store) Begin(rehearsal bool, sheetHash, title, by, principal string) (Run, error) {
+	return s.BeginWith(rehearsal, sheetHash, title, by, principal, "", "")
+}
+
+// BeginWith is Begin with what the controller found out about its own devices:
+// a hash of the evidence (the run is sealed only against the same devices) and,
+// when the controller can already tell the run is not against real field I/O,
+// why (such a run can never be sealed).
+func (s *Store) BeginWith(rehearsal bool, sheetHash, title, by, principal, evidenceSha, unreal string) (Run, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.openRun() != nil {
 		return Run{}, ErrRunOpen
 	}
-	e := entry{Kind: kindRun, Run: newID(), Rehearsal: rehearsal, SheetHash: sheetHash, Title: title, By: by, Principal: principal}
+	e := entry{Kind: kindRun, Run: newID(), Rehearsal: rehearsal, SheetHash: sheetHash, Title: title, By: by, Principal: principal, EvSha: evidenceSha, Unreal: unreal}
 	if err := s.append(e); err != nil {
 		return Run{}, err
 	}
@@ -439,6 +512,17 @@ func (s *Store) Begin(rehearsal bool, sheetHash, title, by, principal string) (R
 // Record adds a result for a point of an open run. A fail and a note say
 // why: a pass may have no words.
 func (s *Store) Record(run, point, outcome, note string, seen any, quality, by, principal string) (Result, error) {
+	return s.RecordWith(run, point, outcome, note, seen, quality, "", "", by, principal)
+}
+
+// RecordWith is Record with what the controller saw standing on the point's
+// tag: a force or a substitute that is not this checkout's own. A pass is
+// refused while one stands (a reading through an override proves nothing about
+// the wiring); a fail or a note is recorded with it.
+func (s *Store) RecordWith(run, point, outcome, note string, seen any, quality, override, evidenceSha, by, principal string) (Result, error) {
+	if override != "" && outcome == Pass {
+		return Result{}, invalid("a pass is not recorded while %s: the reading is not the wiring's. Clear it and record the pass again; a fail or a note may be recorded now", override)
+	}
 	switch outcome {
 	case Pass:
 	case Fail, Note:
@@ -463,7 +547,7 @@ func (s *Store) Record(run, point, outcome, note string, seen any, quality, by, 
 	if r.State != StateOpen {
 		return Result{}, ErrNotOpen
 	}
-	e := entry{Kind: kindResult, Run: run, Point: point, Outcome: outcome, Note: note, Seen: seen, Quality: quality, By: by, Principal: principal}
+	e := entry{Kind: kindResult, Run: run, Point: point, Outcome: outcome, Note: note, Seen: seen, Quality: quality, Override: override, EvSha: evidenceSha, By: by, Principal: principal}
 	if err := s.append(e); err != nil {
 		return Result{}, err
 	}
@@ -636,6 +720,10 @@ func (s *Store) History(run, point string) []Result {
 func (s *Store) Results(run string) []Result {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.resultsLocked(run)
+}
+
+func (s *Store) resultsLocked(run string) []Result {
 	var out []Result
 	if r := s.runs[run]; r != nil {
 		for _, rs := range r.lastResults {

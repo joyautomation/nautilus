@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -21,6 +23,7 @@ const checkoutUsage = `naut checkout — the I/O checkout and commissioning sign
 
 Usage:
   naut checkout init [--project dir] [--force]
+  naut checkout verify <sealed.json> [--chain checkout.jsonl] [--audit audit.jsonl|dir] [--fingerprint <key fingerprint>]
 
 init writes checkout.yaml: one row for each scalar input and output tag the
 project declares, with the device, address, equipment and area the project
@@ -30,6 +33,26 @@ the method (observe an input; force an output). Edit the rows (the device
 and equipment the project cannot know, what a pass looks like) and commit
 the file. Struct and array tags are not listed: add their member rows by
 hand ("P101.Speed").
+
+verify checks a sealed record (the file GET /api/checkout/runs/{id}/sealed
+gives): the signature is the payload's, the payload names the key the record
+carries, and the export is the one the payload hashes. With --chain (the
+controller's checkout.jsonl, or a copy of it) it also checks the results file's
+own chain, that the seal is in it where the record says, and that the export
+holds exactly the results the file holds for the run. With --fingerprint (the
+key's fingerprint, written down from the controller's Checkout page or
+GET /api/checkout earlier) it checks the key is that one. With --audit (the
+controller's audit journal, or a copy kept off the box) it finds the
+checkout.seal entry that carries this record's hash: the audit journal is a
+second, independently kept place the seal is written, so a record that matches
+a copy of the journal made elsewhere was sealed when it says. It exits 1 on any
+failure. The record is tamper-evident and signed by the controller's key: it
+proves the record came from the holder of that key and was not altered since
+(whoever holds the controller's state directory, the results file and the key,
+can forge both: keep copies elsewhere, and give --chain and --audit copies made
+elsewhere). The
+people it names were identified by the controller's sign-in, not by a personal
+certificate; it is not an electronic signature in a legal or regulatory sense.
 
 The checkout is off until the manifest has a checkout: section:
 
@@ -59,6 +82,8 @@ func checkoutMain(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 		return checkoutInit(*dir, *force, stdout, stderr)
+	case "verify":
+		return checkoutVerify(args[1:], stdout, stderr)
 	}
 	fmt.Fprintf(stderr, "naut checkout: unknown command %q (try naut checkout --help)\n", args[0])
 	return 2
@@ -177,4 +202,138 @@ func deriveSheet(m *project.Manifest) (*checkout.Sheet, []string) {
 			Area: areaOf(t.Name), Kind: kind, Method: method, Desc: t.Desc})
 	}
 	return sh, skipped
+}
+
+// checkoutVerify is naut checkout verify.
+func checkoutVerify(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("naut checkout verify", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	chain := fs.String("chain", "", "the controller's checkout.jsonl (or a copy of it)")
+	fp := fs.String("fingerprint", "", "the signing key's fingerprint, to compare")
+	auditPath := fs.String("audit", "", "the controller's audit journal (a .jsonl file, or its directory, or a copy of either)")
+	// the file may come before or after the flags
+	var files []string
+	rest := args
+	for len(rest) > 0 {
+		if err := fs.Parse(rest); err != nil {
+			return 2
+		}
+		rest = fs.Args()
+		if len(rest) > 0 {
+			files = append(files, rest[0])
+			rest = rest[1:]
+		}
+	}
+	if len(files) != 1 {
+		fmt.Fprintln(stderr, "naut checkout verify: one sealed record file (try naut checkout --help)")
+		return 2
+	}
+	rec, err := os.ReadFile(files[0])
+	if err != nil {
+		fmt.Fprintln(stderr, "naut checkout verify:", err)
+		return 1
+	}
+	var cdata []byte
+	if *chain != "" {
+		if cdata, err = os.ReadFile(*chain); err != nil {
+			fmt.Fprintln(stderr, "naut checkout verify:", err)
+			return 1
+		}
+		if cdata == nil {
+			cdata = []byte{}
+		}
+	}
+	rep, err := checkout.Verify(rec, cdata)
+	if err != nil {
+		fmt.Fprintln(stderr, "naut checkout verify: FAILED:", err)
+		return 1
+	}
+	if *fp != "" && *fp != rep.Fingerprint {
+		fmt.Fprintf(stderr, "naut checkout verify: FAILED: the record is signed by key %s, not %s\n", rep.Fingerprint, *fp)
+		return 1
+	}
+	fmt.Fprintf(stdout, "OK: run %s, signed off by %s (%s), %d result(s), signed by key %s\n", rep.Run, rep.Signer, rep.Mode, rep.Results, rep.Fingerprint)
+	if rep.Statement != "" {
+		fmt.Fprintln(stdout, "note:", rep.Statement)
+	}
+	switch {
+	case rep.ChainChecked:
+		fmt.Fprintln(stdout, "checked: the signature, the export's hash, the results file's chain, the seal's place in it, and that the export holds the file's results for the run")
+	default:
+		fmt.Fprintln(stdout, "checked: the signature and the export's hash (give --chain checkout.jsonl to check the results file too)")
+	}
+	if *auditPath != "" {
+		sha, err := sealedPayloadSha(rec)
+		if err != nil {
+			fmt.Fprintln(stderr, "naut checkout verify: FAILED:", err)
+			return 1
+		}
+		hit, err := findSealAudit(*auditPath, sha)
+		if err != nil {
+			fmt.Fprintln(stderr, "naut checkout verify: FAILED:", err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "audit: matches the controller's audit entry %s (seq %d, %s, %s)\n", hit.ID, hit.Seq, hit.User, hit.TS)
+	}
+	if *fp == "" {
+		fmt.Fprintln(stdout, "not checked: that this key is the controller's: compare the fingerprint with one you recorded from the controller (--fingerprint)")
+	}
+	fmt.Fprintln(stdout, checkout.SealNotice)
+	return 0
+}
+
+// sealedPayloadSha is the hash of a record's payload, as the seal entry and the
+// audit entry carry it.
+func sealedPayloadSha(record []byte) (string, error) {
+	var sr checkout.SealedRecord
+	if err := json.Unmarshal(record, &sr); err != nil || len(sr.Payload) == 0 {
+		return "", errors.New("not a sealed record")
+	}
+	return checkout.PayloadSha256(sr.Payload), nil
+}
+
+// sealAuditHit is the audit entry that anchors a seal.
+type sealAuditHit struct {
+	ID   string `json:"id"`
+	Seq  uint64 `json:"seq"`
+	TS   string `json:"ts"`
+	User string `json:"user"`
+}
+
+// findSealAudit reads an audit journal (a .jsonl file, or a directory of them)
+// for the accepted checkout.seal entry whose after.sealSha256 is sha.
+func findSealAudit(where, sha string) (sealAuditHit, error) {
+	var files []string
+	if fi, err := os.Stat(where); err != nil {
+		return sealAuditHit{}, err
+	} else if fi.IsDir() {
+		m, _ := filepath.Glob(filepath.Join(where, "*.jsonl"))
+		sort.Strings(m)
+		files = m
+	} else {
+		files = []string{where}
+	}
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			return sealAuditHit{}, err
+		}
+		for _, line := range bytes.Split(b, []byte("\n")) {
+			var e struct {
+				sealAuditHit
+				Action string `json:"action"`
+				Result string `json:"result"`
+				After  struct {
+					SealSha string `json:"sealSha256"`
+				} `json:"after"`
+			}
+			if len(line) == 0 || json.Unmarshal(line, &e) != nil {
+				continue
+			}
+			if e.Action == "checkout.seal" && e.Result == "ok" && e.After.SealSha == sha {
+				return e.sealAuditHit, nil
+			}
+		}
+	}
+	return sealAuditHit{}, errors.New("the audit journal has no accepted checkout.seal entry for this record: it is another controller's journal, an older copy that ends before the seal, or the seal was never recorded there")
 }

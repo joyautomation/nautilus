@@ -40,6 +40,12 @@ type CheckoutOptions struct {
 	Store   *checkout.Store
 	Sheet   *checkout.Sheet
 	Signoff string
+	// Evidence is the controller's own account of what it is connected to,
+	// for a seal: it returns what to record, and a reason to refuse when the
+	// controller cannot tell the points are real field I/O (virtual devices, a
+	// loopback, no field driver). Nil: a seal is refused, since nothing says
+	// the devices are real.
+	Evidence func(*checkout.Sheet) (checkout.Evidence, string)
 	// OpenErr says why Store is nil when it could not be opened (a damaged
 	// file), so the answer names it.
 	OpenErr string
@@ -76,13 +82,15 @@ func (co *CheckoutOptions) mount(s *Server, mux *http.ServeMux) {
 	mux.Handle("POST /api/checkout/runs/{id}/results", s.audited("checkout.result", a.checkoutTarget("checkout.result"), a.checkoutResult))
 	mux.Handle("POST /api/checkout/runs/{id}/force", s.audited("checkout.force", a.checkoutTarget("checkout.force"), a.checkoutForceStart))
 	mux.Handle("POST /api/checkout/runs/{id}/force/release", s.audited("checkout.release", a.checkoutTarget("checkout.release"), a.checkoutForceRelease))
+	mux.Handle("POST /api/checkout/runs/{id}/seal", s.audited("checkout.seal", a.checkoutTarget("checkout.seal"), a.checkoutSeal))
+	mux.HandleFunc("GET /api/checkout/runs/{id}/sealed", a.handleCheckoutSealed)
 	mux.Handle("POST /api/checkout/runs/{id}/abandon", s.audited("checkout.abandon", a.checkoutTarget("checkout.abandon"), a.checkoutAbandon))
 }
 
 func init() {
 	// what a refused checkout write tried to change, by parsing it alone (the
 	// core's refusalTargets, audit.go)
-	for _, act := range []string{"checkout.begin", "checkout.result", "checkout.abandon", "checkout.force", "checkout.release"} {
+	for _, act := range []string{"checkout.begin", "checkout.result", "checkout.abandon", "checkout.force", "checkout.release", "checkout.seal"} {
 		refusalTargets[act] = checkoutRefusal(act)
 	}
 }
@@ -105,11 +113,14 @@ func (a *checkoutAPI) checkoutOff(w http.ResponseWriter) bool {
 }
 
 type checkoutView struct {
-	Title   string           `json:"title,omitempty"`
-	Hash    string           `json:"hash"`
-	Signoff string           `json:"signoff"`
-	Points  []checkout.Point `json:"points"`
-	Run     *checkout.Run    `json:"run,omitempty"` // SheetChanged says the open run was begun against another sheet: it
+	Title   string `json:"title,omitempty"`
+	Hash    string `json:"hash"`
+	Signoff string `json:"signoff"`
+	// KeyFingerprint names the key that signs a sealed run: written down from
+	// here ahead of time, it is what a sealed record is compared with.
+	KeyFingerprint string           `json:"keyFingerprint,omitempty"`
+	Points         []checkout.Point `json:"points"`
+	Run            *checkout.Run    `json:"run,omitempty"` // SheetChanged says the open run was begun against another sheet: it
 	// takes no more results (abandon it and begin again).
 	SheetChanged bool `json:"sheetChanged,omitempty"`
 
@@ -120,7 +131,7 @@ func (a *checkoutAPI) handleCheckout(w http.ResponseWriter, r *http.Request) {
 	if a.checkoutOff(w) {
 		return
 	}
-	v := checkoutView{Title: a.co.Sheet.Title, Hash: a.co.Sheet.Hash(), Signoff: a.co.Signoff,
+	v := checkoutView{Title: a.co.Sheet.Title, Hash: a.co.Sheet.Hash(), Signoff: a.co.Signoff, KeyFingerprint: a.co.Store.KeyFingerprint(),
 		Points: a.co.Sheet.Points, Runs: a.co.Store.List()}
 	if run, ok := a.co.Store.Current(); ok {
 		v.Run = &run
@@ -216,7 +227,16 @@ type checkoutRequest struct {
 
 func (a *checkoutAPI) checkoutBegin(w http.ResponseWriter, r *http.Request) {
 	a.checkoutWrite(w, r, "", func(pr auth.Principal, req checkoutRequest) (any, int, error) {
-		run, err := a.co.Store.Begin(req.Rehearsal, a.co.Sheet.Hash(), a.co.Sheet.Title, noteAuthor(pr.String()), pr.String())
+		// what the controller is connected to, found out by the controller: a
+		// run against virtual devices or no field driver can never be sealed,
+		// whatever the client's rehearsal flag says, and is sealed only against
+		// the same devices
+		evSha, unreal := "", "this controller cannot say its devices are real (no evidence of its drivers)"
+		if a.co.Evidence != nil {
+			ev, why := a.co.Evidence(a.co.Sheet)
+			evSha, unreal = checkout.EvidenceDigest(ev), why
+		}
+		run, err := a.co.Store.BeginWith(req.Rehearsal, a.co.Sheet.Hash(), a.co.Sheet.Title, noteAuthor(pr.String()), pr.String(), evSha, unreal)
 		return run, http.StatusCreated, err
 	})
 }
@@ -242,9 +262,37 @@ func (a *checkoutAPI) checkoutResult(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return nil, http.StatusUnprocessableEntity, err
 		}
-		res, err := a.co.Store.Record(run.ID, pt.ID, req.Outcome, req.Note, seen, quality, noteAuthor(pr.String()), pr.String())
+		// the devices the controller is connected to as this is recorded, so a
+		// result made while other devices were deployed does not pass a seal
+		evSha := ""
+		if a.co.Evidence != nil {
+			ev, _ := a.co.Evidence(a.co.Sheet)
+			evSha = checkout.EvidenceDigest(ev)
+		}
+		res, err := a.co.Store.RecordWith(run.ID, pt.ID, req.Outcome, req.Note, seen, quality, a.overridden(pt), evSha, noteAuthor(pr.String()), pr.String())
 		return res, http.StatusCreated, err
 	})
+}
+
+// overridden says what stands on the point's tag that makes its reading not the
+// wiring's: a force or a substitute (#707) on the tag or its root or a member
+// of it, other than this checkout's own force on this very point (that one is
+// the test). "" when nothing does. A force is checked against the force
+// table's own overlap rule, a substitute against the tag and its ancestors.
+func (a *checkoutAPI) overridden(pt checkout.Point) string {
+	tags := a.s.rt.Tags()
+	if f := tags.ForcedOverlap(pt.Tag); f != "" {
+		a.co.ck.mu.Lock()
+		own := a.co.ck.force != nil && a.co.ck.force.point == pt.ID
+		a.co.ck.mu.Unlock()
+		if !own {
+			return "forced (" + f + ")"
+		}
+	}
+	if sub, ok := tags.SubstituteCovering(pt.Tag); ok {
+		return "substituted (" + sub + ")"
+	}
+	return ""
 }
 
 // checkoutReading is what the controller reads at the point's tag now and
@@ -335,6 +383,12 @@ func (a *checkoutAPI) checkoutAbandon(w http.ResponseWriter, r *http.Request) {
 // parses, the permission is held for the point's tag (scopeBy "point") or the
 // whole controller, and then do runs and answers.
 func (a *checkoutAPI) checkoutWrite(w http.ResponseWriter, r *http.Request, scopeBy string, do func(auth.Principal, checkoutRequest) (any, int, error)) {
+	a.checkoutWriteAs(w, r, PermCheckout, scopeBy, do)
+}
+
+// checkoutWriteAs is checkoutWrite for a write that needs another permission
+// than checkout (a seal needs signoff).
+func (a *checkoutAPI) checkoutWriteAs(w http.ResponseWriter, r *http.Request, perm, scopeBy string, do func(auth.Principal, checkoutRequest) (any, int, error)) {
 	if a.checkoutOff(w) {
 		return
 	}
@@ -369,7 +423,7 @@ func (a *checkoutAPI) checkoutWrite(w http.ResponseWriter, r *http.Request, scop
 	}
 	// The area first: a principal fenced to another area is told so (403)
 	// whoever they are; only then is a person asked for.
-	if code, msg := a.s.authorize(r, PermCheckout, scope); code != 0 {
+	if code, msg := a.s.authorize(r, perm, scope); code != 0 {
 		writeJSON(w, code, map[string]string{"error": msg})
 		return
 	}
@@ -384,7 +438,7 @@ func (a *checkoutAPI) checkoutWrite(w http.ResponseWriter, r *http.Request, scop
 		writeJSON(w, status, out)
 	case errors.Is(err, checkout.ErrNoRun):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such run"})
-	case errors.Is(err, checkout.ErrNotOpen), errors.Is(err, checkout.ErrRunOpen), errors.Is(err, errSheetChanged), errors.Is(err, checkout.ErrForceActive), errors.Is(err, checkout.ErrNoForce):
+	case errors.Is(err, checkout.ErrNotOpen), errors.Is(err, checkout.ErrRunOpen), errors.Is(err, checkout.ErrSealRefused), errors.Is(err, errSheetChanged), errors.Is(err, checkout.ErrForceActive), errors.Is(err, checkout.ErrNoForce):
 		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 	case status == http.StatusConflict:
 		writeJSON(w, status, map[string]string{"error": err.Error()})
@@ -429,6 +483,22 @@ func (a *checkoutAPI) checkoutTarget(action string) targetFunc {
 			}
 		case "checkout.abandon":
 			t.after = map[string]any{"reason": req.Reason}
+		case "checkout.seal":
+			t.after = map[string]any{"note": req.Note}
+			// an accepted seal is anchored in the audit journal too: its hash
+			// chain, and a copy of it kept off the box (the audit copy), give a
+			// site a second place the record's hash is written (naut checkout
+			// verify --audit finds it)
+			t.answered = func(body []byte) any {
+				var v sealedView
+				if json.Unmarshal(body, &v) != nil || len(v.Record.Payload) == 0 {
+					return t.after
+				}
+				var pl checkout.SealPayload
+				_ = json.Unmarshal(v.Record.Payload, &pl)
+				return map[string]any{"note": req.Note, "sealSha256": checkout.PayloadSha256(v.Record.Payload), "exportSha256": pl.ExportSha256,
+					"keyFingerprint": v.Fingerprint, "prevSeq": pl.PrevSeq}
+			}
 		case "checkout.release":
 			a.co.ck.mu.Lock()
 			if f := a.co.ck.force; f != nil {

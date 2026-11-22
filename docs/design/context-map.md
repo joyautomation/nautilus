@@ -157,9 +157,11 @@ break one changes this section first and says why.
   entries. It knows no principal's permissions, no alarm, no tag and no
   server: the server decides who may write what before a revision exists.
 - `checkout` (the I/O checkout sheet and its runs, #719) imports only the
-  standard library: a sheet of points and an append-only, hash-chained file of
-  results. It knows no permission, tag store, alarm or server: `server`
-  decides who may record, force or seal before an entry exists.
+  standard library and `internal/securefile` (the signing key's mode check):
+  a sheet of points, an append-only, hash-chained file of results, and the
+  record the controller signs when a run is sealed. It knows no permission, tag
+  store, alarm or server: `server` decides who may record, force or seal before
+  an entry exists, and `cmd/naut` tells it what the controller is connected to.
 - `internal/webpush` (Web Push: RFC 8291 payload encryption, VAPID, the
   sealed subscription registry and the sender that dials only what its
   endpoint policy allows, #722) imports only the standard library. It

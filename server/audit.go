@@ -123,6 +123,7 @@ var actionClass = map[string]string{
 	"checkout.begin":   strict,
 	"checkout.result":  strict,
 	"checkout.abandon": strict,
+	"checkout.seal":    strict,
 	"checkout.force":   strict,
 	// A note is operator intent with words (#720): never unrecorded.
 	"note.add":        strict,

@@ -66,6 +66,7 @@ var actionPerm = map[string]string{
 	"checkout.begin":           PermCheckout,
 	"checkout.result":          PermCheckout,
 	"checkout.abandon":         PermCheckout,
+	"checkout.seal":            PermSignoff,
 	// Forcing an output is a force: its permission, elevation included, and
 	// the checkout permission besides (the handler asks for both).
 	"checkout.force":       PermForce,
