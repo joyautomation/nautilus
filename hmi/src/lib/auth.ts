@@ -360,6 +360,10 @@ export interface PeerLink {
 	leader: boolean;
 }
 
+/** How long a failover probe may take, and the least time between failover attempts. */
+export const FAILOVER_PROBE_MS = 3_000;
+export const FAILOVER_WAIT_MS = 5_000;
+
 /** Where the pair's controllers are kept (per origin, per tab), to find the other when this one is gone. */
 export const PEERS_KEY = 'nautilus.peers';
 
@@ -419,6 +423,7 @@ export class AuthSession {
 	#peers: PeerLink[] = [];
 	#peersAt = 0;
 	#failingOver = false;
+	#nextFailover = 0;
 
 	constructor(deps: AuthDeps) {
 		this.#d = deps;
@@ -736,7 +741,12 @@ export class AuthSession {
 			const res = await this.#d.fetch('/api/cluster', { headers: { Accept: 'application/json' }, cache: 'no-store' });
 			if (!res.ok || !sameOriginResponse(res, this.#d.location().href)) return;
 			const peers = parsePeers(await res.json());
-			if (peers.length === 0) return;
+			if (peers.length === 0) {
+				// No longer a pair here: a stale list must not send the page away.
+				this.#peers = [];
+				this.#d.storage?.setItem(PEERS_KEY, '[]');
+				return;
+			}
 			this.#peers = peers;
 			try {
 				this.#d.storage?.setItem(PEERS_KEY, JSON.stringify(peers));
@@ -758,7 +768,7 @@ export class AuthSession {
 	 * must; the data is live at once, as a standby proxies reads.
 	 */
 	async #failover(): Promise<void> {
-		if (this.#failingOver || this.#leaving) return;
+		if (this.#failingOver || this.#leaving || this.#now() < this.#nextFailover) return;
 		if (this.#peers.length === 0) {
 			try {
 				this.#peers = parsePeers({ peers: JSON.parse(this.#d.storage?.getItem(PEERS_KEY) ?? 'null') });
@@ -769,17 +779,19 @@ export class AuthSession {
 		const targets = failoverTargets(this.#peers, this.#d.location().href);
 		if (targets.length === 0 || !mayFollow(this.#d.storage, this.#now())) return;
 		this.#failingOver = true;
+		this.#nextFailover = this.#now() + FAILOVER_WAIT_MS;
 		try {
 			try {
-				const here = await this.#d.fetch('/api/cluster', { cache: 'no-store' });
+				const here = await this.#d.fetch('/api/cluster', { cache: 'no-store', signal: AbortSignal.timeout(FAILOVER_PROBE_MS) });
 				void here.body?.cancel();
-				return; // it answers: the stream's trouble is not a dead controller
+				// A proxy's 502-504 in front of a dead controller is not an answer.
+				if (here.status < 502 || here.status > 504) return; // it answers: the trouble is not a dead controller
 			} catch {
 				/* unreachable: go on */
 			}
 			for (const t of targets) {
 				try {
-					await this.#d.fetch(new URL('/api/cluster', t).href, { mode: 'no-cors', cache: 'no-store' });
+					await this.#d.fetch(new URL('/api/cluster', t).href, { mode: 'no-cors', cache: 'no-store', signal: AbortSignal.timeout(FAILOVER_PROBE_MS) });
 				} catch {
 					continue;
 				}
