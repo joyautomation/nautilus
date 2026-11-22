@@ -76,6 +76,7 @@ func TestCheckoutIsOffUnlessTheProjectEnablesIt(t *testing.T) {
 	for _, c := range []struct{ method, path, body string }{
 		{"GET", "/api/checkout", ""},
 		{"GET", "/api/checkout/runs/x", ""},
+		{"GET", "/api/checkout/runs/x/export", ""},
 		{"POST", "/api/checkout/runs", `{}`},
 		{"POST", "/api/checkout/runs/x/results", `{"point":"SP","outcome":"pass"}`},
 		{"POST", "/api/checkout/runs/x/abandon", `{"reason":"no"}`},
