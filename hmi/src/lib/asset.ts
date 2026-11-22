@@ -142,3 +142,48 @@ export function assetGroups(list: AssetDescriptor[]): { area: string; assets: As
 	const none = groups.get('');
 	return [...named, ...(none ? ([['', none]] as [string, AssetDescriptor[]][]) : [])].map(([area, assets]) => ({ area, assets }));
 }
+
+/** A piece of the plant model's area, for the area page. */
+export interface AreaDescriptor {
+	id: string;
+	label?: string;
+	/** The asset ids in the area, in the plant's order. */
+	assets: string[];
+	/** The route of the area's process scheme, when it has one. */
+	scheme?: string;
+}
+
+/** One row of an area page. */
+export interface AreaRow {
+	asset: AssetDescriptor;
+	/** Alarms standing on it: unacknowledged, active in all, and hidden by suppression. */
+	unacked: number;
+	active: number;
+	suppressed: number;
+	/** The worst priority standing (not counting suppressed ones), or ''. */
+	worst: string;
+}
+
+const PRIORITIES = ['critical', 'high', 'medium', 'low', 'diagnostic'];
+
+/** The area's rows: its assets in order, each with the alarms standing on it. Unknown asset ids are left out. */
+export function areaRows(area: AreaDescriptor, assets: AssetDescriptor[], instances: AlarmInstance[]): AreaRow[] {
+	const byId = new Map(assets.map((a) => [key(a.id), a]));
+	const rows: AreaRow[] = [];
+	for (const id of area.assets) {
+		const asset = byId.get(key(id));
+		if (!asset) continue;
+		const mine = assetAlarms(instances, asset);
+		const standing = mine.filter((a) => a.state !== 'suppressed' && a.state !== 'normal');
+		const rank = (p: string) => (PRIORITIES.includes(p) ? PRIORITIES.indexOf(p) : 98);
+		const worst = standing.reduce<string>((w, a) => (rank(a.priority) < (w ? rank(w) : 99) ? a.priority : w), '');
+		rows.push({
+			asset,
+			unacked: standing.filter((a) => a.state === 'unack-active' || a.state === 'unack-rtn').length,
+			active: standing.length,
+			suppressed: mine.filter((a) => a.state === 'suppressed').length,
+			worst
+		});
+	}
+	return rows;
+}

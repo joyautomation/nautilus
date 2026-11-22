@@ -4,6 +4,11 @@
 
 ### Added
 
+- **`<AreaPage {area} {assets}/>`** (#714 slice 3): an area of the plant model, its equipment each with the alarms
+  standing on it (out of service counted apart) and a link to its process scheme. New exports: `AreaPage`,
+  `areaRows`, `AreaDescriptor`, `AreaRow`. The built-in app has `/areas/<id>`, and `naut hmi scheme` writes the
+  schemes it links to.
+
 - **The plant model feeds the asset pages** (#714 slice 2): `plant.yaml` (areas, equipment with a tag or a
   `devices:` row and an asset type, flows) names every piece of the plant once, and `naut hmi build` writes an
   asset page for each, grouped by area on `/assets`. A mimic's equipment may carry `plant: <id>` (the drawing

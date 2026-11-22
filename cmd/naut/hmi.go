@@ -45,6 +45,7 @@ func buildHMI(proj *project.Project, dir string) (*hmibuild.Result, error) {
 		return nil, err
 	}
 	opts := hmibuild.Options{Project: abs, Title: proj.Name, Minify: true, Assets: append(plantAssets(proj), deviceAssets(proj)...)}
+	opts.Areas = plantAreas(proj, opts.Assets)
 	if proj.PWA != nil || proj.PWAIcon != nil {
 		opts.PWA = &hmibuild.PWA{Icon: proj.PWAIcon}
 		if c := proj.PWA; c != nil {
@@ -102,6 +103,7 @@ func printBuildWarnings(w io.Writer, prefix string, warnings []string) {
 }
 
 const hmiUsage = `usage: naut hmi build [-o dir] [project]
+       naut hmi scheme [-update] [-area id] [project]   (a process scheme from plant.yaml)
 
 Build the project's operator screen the way naut run serves it, with no
 Node and no npm, and say what's wrong with it: the app server.hmi names (a
@@ -114,6 +116,9 @@ carries: ` + "svelte, @joyautomation/nautilus-hmi, @joyautomation/nautilus-hmi-3
 
 // runHMI is `naut hmi`.
 func runHMI(args []string) int {
+	if len(args) > 0 && args[0] == "scheme" {
+		return runHMIScheme(args[1:])
+	}
 	if len(args) == 0 || args[0] != "build" {
 		fmt.Fprint(os.Stderr, hmiUsage)
 		return 2

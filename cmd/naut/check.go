@@ -931,7 +931,7 @@ func checkManifest(paths []string, manifestName, target string) (errs, warns int
 	for _, d := range defs {
 		eqKeys = append(eqKeys, alarm.EquipmentOf(d))
 	}
-	if prep, perrs, pwarns := proj.CheckPlant(os.DirFS(dir), eqKeys); proj.Plant != nil {
+	if prep, perrs, pwarns := proj.CheckPlant(os.DirFS(dir), rt, eqKeys); proj.Plant != nil {
 		for _, m := range perrs {
 			errs++
 			fmt.Printf("%s: error: %s\n", loc.file, m)

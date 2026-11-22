@@ -431,3 +431,69 @@ func TestAuditPageNeedsTheAuditPermission(t *testing.T) {
 		}
 	}
 }
+
+// An area page for each area the caller passes, linking to the mimic named
+// for the area; none when the caller passes none (#714 slice 3).
+func TestBuildsAreaPages(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "p.mimic.json", `{"name":"P","equipment":[{"id":"P1","component":"Pump","x":1,"y":1,"panel":{"title":"Pump_qq","readings":[{"tag":"A"}]}}]}`)
+	write(t, dir, "receiving.mimic.json", `{"name":"Rec","equipment":[]}`)
+	res, err := Build(Options{Project: dir, Title: "t", Areas: []json.RawMessage{
+		json.RawMessage(`{"id":"Receiving","label":"Receiving_qq","assets":["P1"]}`),
+		json.RawMessage(`{"id":"Roasting","label":"Roasting_qq","assets":[]}`),
+		json.RawMessage(`{"id":"receiving","label":"dup_qq"}`)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var js strings.Builder
+	for n, b := range res.Files {
+		if strings.HasSuffix(n, ".js") {
+			js.Write(b)
+		}
+	}
+	for _, want := range []string{"Receiving_qq", "Roasting_qq", `"/receiving"`} {
+		if !strings.Contains(js.String(), want) {
+			t.Errorf("the built app lacks %q", want)
+		}
+	}
+	if strings.Contains(js.String(), "dup_qq") {
+		t.Error("two areas with one slug are one page: the first")
+	}
+	if got := string(areaList([]json.RawMessage{json.RawMessage(`{"id":"A"}`)}, map[string]string{"a": "/"})); got != `[{"id":"A","scheme":"/"}]` {
+		t.Errorf("areaList %s: the route of the mimic named for the area, even the home page", got)
+	}
+	two := string(areaList([]json.RawMessage{json.RawMessage(`{"id":"Receiving","label":"one"}`), json.RawMessage(`{"id":"receiving","label":"two"}`)}, nil))
+	if two != `[{"id":"Receiving","label":"one"}]` {
+		t.Errorf("areaList %s: two areas with one slug are one page, the first", two)
+	}
+	if areaList(nil, nil) != nil || areaList([]json.RawMessage{json.RawMessage(`{"id":"---"}`)}, nil) != nil {
+		t.Error("no areas, or none with a slug, is no page")
+	}
+}
+
+// A scheme written for an area never takes the home page from a screen that
+// was there: the mimics named for an area come after the others.
+func TestSchemesLastKeepsTheHomePage(t *testing.T) {
+	areas := []json.RawMessage{json.RawMessage(`{"id":"Alpha"}`), json.RawMessage(`{"id":"Zed"}`)}
+	got := schemesLast([]string{"alpha.mimic.json", "main.mimic.json", "zed.mimic.json", "other.mimic.json"}, areas)
+	if strings.Join(got, ",") != "main.mimic.json,other.mimic.json,alpha.mimic.json,zed.mimic.json" {
+		t.Errorf("order %v: the screens first, then the schemes, each in their order", got)
+	}
+	in := []string{"b.mimic.json", "a.mimic.json"}
+	if got := schemesLast(in, nil); strings.Join(got, ",") != "b.mimic.json,a.mimic.json" {
+		t.Errorf("no areas: unchanged, got %v", got)
+	}
+}
+
+func TestASchemeSortingFirstDoesNotTakeTheHomePage(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "main.mimic.json", `{"name":"Main","equipment":[]}`)
+	write(t, dir, "alpha.mimic.json", `{"name":"Alpha","equipment":[]}`)
+	res, err := Build(Options{Project: dir, Title: "t", Areas: []json.RawMessage{json.RawMessage(`{"id":"Alpha","assets":[]}`)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(res.Pages, " "); !strings.HasPrefix(got, "/ /alpha ") {
+		t.Errorf("pages %q: main stays the home page, the scheme is /alpha", got)
+	}
+}
