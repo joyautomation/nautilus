@@ -188,14 +188,14 @@ claims:
       journals it at start.
     source: "#channels-email-sms-voice-webhook-push"
     tests:
-      - go ./alarm/channel TestEmailSTARTTLSWithAuth
-      - go ./alarm/channel TestEmailImplicitTLS
-      - go ./alarm/channel TestEmailUntrustedCert
-      - go ./alarm/channel TestEmailNoSTARTTLSWithUsername
-      - go ./alarm/channel TestEmailNoSTARTTLSNoUsername
-      - go ./alarm/channel TestProviderUntrustedCert
-      - go ./alarm/channel TestProviderRedirectNotFollowed
-      - go ./alarm/channel TestWebhookPlaintextWithHeaderRefused
+      - go ./alarm/channel/send TestEmailSTARTTLSWithAuth
+      - go ./alarm/channel/send TestEmailImplicitTLS
+      - go ./alarm/channel/send TestEmailUntrustedCert
+      - go ./alarm/channel/send TestEmailNoSTARTTLSWithUsername
+      - go ./alarm/channel/send TestEmailNoSTARTTLSNoUsername
+      - go ./alarm/channel/send TestProviderUntrustedCert
+      - go ./alarm/channel/send TestProviderRedirectNotFollowed
+      - go ./alarm/channel/send TestWebhookPlaintextWithHeaderRefused
       - go ./alarm/channel TestValidate
       - go ./cmd/naut TestRunJournalsInsecureChannels
       - go ./cmd/naut TestCheckContacts
@@ -214,8 +214,8 @@ claims:
     tests:
       - go ./alarm/escalate TestDispatcherRetriesTransientOnly
       - go ./alarm/escalate TestRetryAsksAgainBeforeEachAttempt
-      - go ./alarm/channel TestProviderAuthNotRetried
-      - go ./alarm/channel TestProviderServerErrorIsTransient
+      - go ./alarm/channel/send TestProviderAuthNotRetried
+      - go ./alarm/channel/send TestProviderServerErrorIsTransient
 
   - id: AMG-018
     claim: >-
@@ -277,7 +277,7 @@ claims:
       - go ./cmd/naut TestRunNeedsAStateDirForChannels
       - go ./internal/project TestChannelsNeedADirectory
       - go ./cmd/naut TestContactsCheckOnTheBox
-      - go ./alarm/channel TestNoContactDoesNotDial
+      - go ./alarm/channel/send TestNoContactDoesNotDial
       - go ./internal/project TestEscalationFailuresNeverCarryAnAddress
     partial: true
     note: >-
@@ -295,7 +295,7 @@ claims:
     tests:
       - go ./internal/project TestEscalationAckByLinkStopsLevelThree
       - go ./server TestAckLinkConfirmsThenAcks
-      - go ./alarm/channel TestPagesCarryTheAckLink
+      - go ./alarm/channel/send TestPagesCarryTheAckLink
       - go ./cmd/naut TestAckLinkHookKinds
 
   - id: AMG-049
@@ -367,7 +367,7 @@ claims:
     tests:
       - go ./internal/project TestEscalationAckBySMSReplyStopsLevelThree
       - go ./server TestInboundSMSAcks
-      - go ./alarm/channel TestSMSCarriesTheReplyCodeWhole
+      - go ./alarm/channel/send TestSMSCarriesTheReplyCodeWhole
     partial: true
     note: Against a fake provider in the test, not a real SMS account.
 
@@ -378,7 +378,7 @@ claims:
       acknowledges as the person called, and another key does nothing.
     source: "#by-sms-reply-or-a-keypress"
     tests:
-      - go ./alarm/channel TestVoiceGathersAKeypress
+      - go ./alarm/channel/send TestVoiceGathersAKeypress
       - go ./server TestInboundVoiceKeypress
     partial: true
     note: Against a fake provider; no real call has been placed by a test.

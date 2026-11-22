@@ -1,4 +1,4 @@
-package channel
+package send
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/joyautomation/nautilus/alarm/channel"
 	"github.com/joyautomation/nautilus/alarm/escalate"
 )
 
@@ -36,7 +37,7 @@ func (o Options) norm() Options {
 // Build makes one escalate.Channel per configured kind. It reads each
 // ca-file now, so a missing bundle fails at start and not at the first
 // page; addresses and secrets are read from dir on every send.
-func Build(c *Config, dir Directory, o Options) (map[string]escalate.Channel, error) {
+func Build(c *channel.Config, dir channel.Directory, o Options) (map[string]escalate.Channel, error) {
 	out := map[string]escalate.Channel{}
 	if c == nil {
 		return out, nil
@@ -48,23 +49,23 @@ func Build(c *Config, dir Directory, o Options) (map[string]escalate.Channel, er
 		return nil, err
 	}
 	o = o.norm()
-	pool := func(kind string, t TLS) (*x509.CertPool, error) {
+	pool := func(kind string, t channel.TLS) (*x509.CertPool, error) {
 		return loadPool("alarms.channels."+kind+".ca-file", t.CAFile)
 	}
 	if e := c.Email; e != nil {
-		p, err := pool(KindEmail, e.TLSConf)
+		p, err := pool(channel.KindEmail, e.TLSConf)
 		if err != nil {
 			return nil, err
 		}
 		host, _, _ := net.SplitHostPort(e.SMTP)
 		em := &emailSender{cfg: *e, dir: dir, host: host, tls: tlsConfig(host, e.TLSConf, p), timeout: o.Timeout}
-		out[KindEmail] = &attempt{send: em.attempt, o: o}
+		out[channel.KindEmail] = &attempt{send: em.attempt, o: o}
 	}
 	for _, pr := range []struct {
 		kind string
-		p    *Provider
+		p    *channel.Provider
 		sec  string
-	}{{KindSMS, c.SMS, SecretSMSToken}, {KindVoice, c.Voice, SecretVoiceToken}} {
+	}{{channel.KindSMS, c.SMS, channel.SecretSMSToken}, {channel.KindVoice, c.Voice, channel.SecretVoiceToken}} {
 		if pr.p == nil {
 			continue
 		}
@@ -76,18 +77,18 @@ func Build(c *Config, dir Directory, o Options) (map[string]escalate.Channel, er
 		out[pr.kind] = &attempt{send: s.attempt, o: o}
 	}
 	if w := c.Webhook; w != nil {
-		p, err := pool(KindWebhook, w.TLSConf)
+		p, err := pool(channel.KindWebhook, w.TLSConf)
 		if err != nil {
 			return nil, err
 		}
 		s := newWebhookSender(*w, dir, p)
-		out[KindWebhook] = &attempt{send: s.attempt, o: o}
+		out[channel.KindWebhook] = &attempt{send: s.attempt, o: o}
 	}
 	if c.Push != nil {
 		if o.Push == nil {
 			return nil, errors.New("alarms.channels.push: this controller has no push service to send through")
 		}
-		out[KindPush] = &attempt{send: o.Push, o: o}
+		out[channel.KindPush] = &attempt{send: o.Push, o: o}
 	}
 	return out, nil
 }
@@ -109,7 +110,7 @@ func loadPool(key, file string) (*x509.CertPool, error) {
 
 // tlsConfig is every channel's TLS: verified against pool (or the system
 // roots when nil) unless insecure, never below TLS 1.2.
-func tlsConfig(host string, t TLS, pool *x509.CertPool) *tls.Config {
+func tlsConfig(host string, t channel.TLS, pool *x509.CertPool) *tls.Config {
 	return &tls.Config{
 		ServerName:         host,
 		RootCAs:            pool,
@@ -176,7 +177,7 @@ func isTLSError(err error) bool {
 }
 
 // address looks up a principal's address for kind.
-func address(dir Directory, to, kind string) (string, error) {
+func address(dir channel.Directory, to, kind string) (string, error) {
 	a, err := dir.Address(to, kind)
 	if err != nil {
 		return "", escalate.Failed(escalate.FailConfig)
@@ -188,7 +189,7 @@ func address(dir Directory, to, kind string) (string, error) {
 }
 
 // secret reads a required credential.
-func secret(dir Directory, key string) (string, error) {
+func secret(dir channel.Directory, key string) (string, error) {
 	s, err := dir.Secret(key)
 	if err != nil || s == "" {
 		return "", escalate.Failed(escalate.FailConfig)
