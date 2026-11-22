@@ -71,6 +71,9 @@ func TestParamSetRefusals(t *testing.T) {
 		"future":      {"version: 2\nparameters: {}\n", "version 2 is not supported"},
 		"unknown key": {"version: 1\nparametres: {}\n", "parametres"},
 		"nested":      {"version: 1\nparameters: {a: [1]}\n", `parameter "a"`},
+		"no params":   {"version: 1\n", "no parameters"},
+		"empty map":   {"version: 1\nparameters: {}\n", "no parameters"},
+		"dup":         {"version: 1\nparameters: {a: 1, a: 2}\n", "appears twice"},
 	} {
 		if _, err := decodeParamSet([]byte(tc.in)); err == nil || !strings.Contains(err.Error(), tc.want) {
 			t.Errorf("%s: err = %v, want %q", name, err, tc.want)
@@ -169,5 +172,19 @@ func TestParamsCommands(t *testing.T) {
 	}
 	if c := runParams([]string{"export", "--host", "127.0.0.1", "--port", "1"}); c != 2 {
 		t.Fatalf("unreachable = %d", c)
+	}
+}
+
+func TestDiffSetCaseInsensitiveAndNullNames(t *testing.T) {
+	lines, d := diffSet(testParams(), map[string]any{"tank.sp": 50})
+	if !d || len(lines) != 1 || lines[0] != "change   Tank.SP: 42.5 -> 50" {
+		t.Fatalf("case: %v", lines)
+	}
+	set, err := decodeParamSet([]byte("version: 1\nparameters: {null: 1, \"~\": 2}\n"))
+	if err != nil || set["null"] != 1 || set["~"] != 2 {
+		t.Fatalf("null names: %v %v", set, err)
+	}
+	if lines, _ := diffSet(testParams(), set); len(lines) != 2 {
+		t.Fatalf("null names not reported: %v", lines)
 	}
 }

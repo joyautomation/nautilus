@@ -14,6 +14,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/joyautomation/nautilus/internal/apiclient"
+	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/runtime"
 )
 
@@ -47,10 +48,11 @@ server.tls. A controller with a token: set NAUTILUS_TOKEN.
 
 func runParams(args []string) int {
 	if len(args) < 1 || args[0] == "-h" || args[0] == "--help" {
-		fmt.Fprint(os.Stderr, paramsUsage)
 		if len(args) < 1 {
+			fmt.Fprint(os.Stderr, paramsUsage)
 			return 2
 		}
+		fmt.Print(paramsUsage)
 		return 0
 	}
 	switch args[0] {
@@ -240,8 +242,8 @@ func encodeParamSet(ps []runtime.Parameter) ([]byte, error) {
 // key, a wrong version or a non-scalar value is an error that names it.
 func decodeParamSet(raw []byte) (map[string]any, error) {
 	var doc struct {
-		Version    int            `yaml:"version"`
-		Parameters map[string]any `yaml:"parameters"`
+		Version    int       `yaml:"version"`
+		Parameters yaml.Node `yaml:"parameters"`
 	}
 	dec := yaml.NewDecoder(strings.NewReader(string(raw)))
 	dec.KnownFields(true)
@@ -254,14 +256,29 @@ func decodeParamSet(raw []byte) (map[string]any, error) {
 	if doc.Version != paramSetVersion {
 		return nil, fmt.Errorf("version %d is not supported (this naut reads version %d): add \"version: %d\" at the top", doc.Version, paramSetVersion, paramSetVersion)
 	}
-	for k, v := range doc.Parameters {
+	if doc.Parameters.Kind != yaml.MappingNode || len(doc.Parameters.Content) == 0 {
+		return nil, fmt.Errorf("no parameters: add a \"parameters:\" map of tag name to value (an empty set would compare as no differences)")
+	}
+	out := map[string]any{}
+	c := doc.Parameters.Content
+	for i := 0; i+1 < len(c); i += 2 {
+		// The key's text, so a tag named null or ~ is not read as YAML null.
+		name := c[i].Value
+		var v any
+		if err := c[i+1].Decode(&v); err != nil {
+			return nil, fmt.Errorf("parameter %q: %w", name, err)
+		}
 		switch v.(type) {
 		case bool, int, int64, uint64, float64, string:
 		default:
-			return nil, fmt.Errorf("parameter %q: a value must be a number, a bool or a string, not %T", k, v)
+			return nil, fmt.Errorf("parameter %q: a value must be a number, a bool or a string, not %T", name, v)
 		}
+		if _, dup := out[name]; dup {
+			return nil, fmt.Errorf("parameter %q appears twice", name)
+		}
+		out[name] = v
 	}
-	return doc.Parameters, nil
+	return out, nil
 }
 
 // normalizeParamValue turns a JSON number into something YAML prints
@@ -328,7 +345,7 @@ func diffAgainstRepo(ps []runtime.Parameter) (lines []string, differs bool) {
 func diffSet(ps []runtime.Parameter, set map[string]any) (lines []string, differs bool) {
 	live := map[string]runtime.Parameter{}
 	for _, p := range ps {
-		live[p.Name] = p
+		live[ir.NameKey(p.Name)] = p
 	}
 	names := make([]string, 0, len(set))
 	for n := range set {
@@ -337,7 +354,7 @@ func diffSet(ps []runtime.Parameter, set map[string]any) (lines []string, differ
 	sort.Strings(names)
 	for _, n := range names {
 		want := set[n]
-		p, ok := live[n]
+		p, ok := live[ir.NameKey(n)]
 		if !ok {
 			lines = append(lines, fmt.Sprintf("REFUSED  %s: not a parameter on this controller (a scalar tag with a literal init: in the manifest)", n))
 			differs = true
@@ -346,6 +363,9 @@ func diffSet(ps []runtime.Parameter, set map[string]any) (lines []string, differ
 		if runtime.ParamValuesEqual(p.Value, want) {
 			continue
 		}
+		n = p.Name // the declared spelling (tag names are case-insensitive)
+		// Stricter than the controller for an unranged tag (it may coerce a
+		// number to a bool tag): conservative, never "change" for a refusal.
 		if valueKind(p.Value) != valueKind(want) {
 			lines = append(lines, fmt.Sprintf("REFUSED  %s: %s is a %s, the file has a %s (%s)", n, fmtParam(p.Value), valueKind(p.Value), valueKind(want), fmtParam(want)))
 			differs = true
