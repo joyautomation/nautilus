@@ -533,8 +533,8 @@ func pushHarness(t *testing.T) *swHarness {
 		self.registration = { showNotification: function (title, options) { shown.push({ title: title, options: options }); return Promise.resolve(); } };
 		self.clients.matchAll = function () {
 			return Promise.resolve(windows.map(function (w) {
-				var o = { url: w.url, focus: function () { focused.push(w.url); return Promise.resolve(o); } };
-				if (w.canNavigate) o.navigate = function (u) { navigated.push(u); return Promise.resolve(o); };
+				var o = { url: w.url, visibilityState: w.visibility || 'hidden', focus: function () { focused.push(w.url); return Promise.resolve(o); } };
+				if (w.canNavigate) o.navigate = function (u) { if (w.navigateFails) return Promise.reject(new TypeError('not controlled')); navigated.push(u); return Promise.resolve(o); };
 				return o;
 			}));
 		};
@@ -603,6 +603,19 @@ func TestPWAWorkerPushSaysTheAlarm(t *testing.T) {
 	if n := len(h.run(t, `shown[1].title`).String()); n > 200 {
 		t.Errorf("a %d-character title", n)
 	}
+	// Cut between a surrogate pair's halves would show a broken character.
+	h.run(t, `handlers.push(pushOf({alarm:'A', name: new Array(120).join('x') + '\ud83d\ude00\ud83d\ude00'}))`)
+	h.run(t, `0`)
+	if h.run(t, `(function (t) {
+		for (var i = 0; i < t.length; i++) {
+			var c = t.charCodeAt(i), n = i + 1 < t.length ? t.charCodeAt(i + 1) : 0;
+			if (c >= 0xd800 && c <= 0xdbff) { if (!(n >= 0xdc00 && n <= 0xdfff)) return true; i++; }
+			else if (c >= 0xdc00 && c <= 0xdfff) return true;
+		}
+		return false;
+	})(shown[2].title)`).ToBoolean() {
+		t.Error("a title was cut through a surrogate pair")
+	}
 }
 
 func TestPWAWorkerClickOpensTheAlarmsAndActsOnNothing(t *testing.T) {
@@ -629,6 +642,20 @@ func TestPWAWorkerClickOpensTheAlarmsAndActsOnNothing(t *testing.T) {
 	click(h)
 	if h.run(t, `focused.join(',')`).String() != "https://box/trends" || h.run(t, `navigated.join(',')`).String() != "/alarms" || h.run(t, `opened.length`).ToInteger() != 0 {
 		t.Errorf("focused %v navigated %v opened %v", h.run(t, `focused`), h.run(t, `navigated`), h.run(t, `opened`))
+	}
+	// A window this worker does not control: navigate() rejects, so one is opened.
+	h = pushHarness(t)
+	h.run(t, `windows.push({ url: 'https://box/trends', canNavigate: true, navigateFails: true })`)
+	click(h)
+	if h.run(t, `opened.join(',')`).String() != "/alarms" {
+		t.Errorf("a rejected navigate left the person on the wrong page: opened %v", h.run(t, `opened`))
+	}
+	// Two windows: the one being looked at is the one brought forward.
+	h = pushHarness(t)
+	h.run(t, `windows.push({ url: 'https://box/a', canNavigate: true }); windows.push({ url: 'https://box/b', canNavigate: true, visibility: 'visible' })`)
+	click(h)
+	if h.run(t, `focused.join(',')`).String() != "https://box/b" {
+		t.Errorf("focused %v, want the visible window", h.run(t, `focused`))
 	}
 	// A window of another origin is not touched.
 	h = pushHarness(t)

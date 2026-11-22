@@ -289,7 +289,7 @@ self.addEventListener('activate', (e) => {
 // malformed falls back to a plain one. The tag is the alarm, so a repeat
 // replaces rather than piles up.
 function describe(d) {
-	const str = (v) => (typeof v === 'string' ? v.slice(0, 120) : '');
+	const str = (v) => (typeof v === 'string' ? Array.from(v).slice(0, 120).join('') : '');
 	const name = str(d.name) || str(d.alarm) || 'Alarm';
 	const pri = str(d.priority);
 	const state = str(d.state).replace(/-/g, ' ');
@@ -328,12 +328,12 @@ self.addEventListener('notificationclick', (e) => {
 	const url = (e.notification.data && e.notification.data.url) || '/alarms';
 	e.waitUntil(
 		self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((ws) => {
-			for (const w of ws) {
-				if (new URL(w.url).origin === self.location.origin && 'focus' in w) {
-					return w.focus().then((f) => (f && 'navigate' in f ? f.navigate(url) : undefined));
-				}
-			}
-			return self.clients.openWindow(url);
+			const mine = ws.filter((w) => new URL(w.url).origin === self.location.origin && 'focus' in w);
+			// the one the person is looking at, else any
+			const w = mine.find((c) => c.visibilityState === 'visible') || mine[0];
+			if (!w) return self.clients.openWindow(url);
+			// navigate() rejects for a window this worker does not control: open one then
+			return w.focus().then((f) => (f && 'navigate' in f ? f.navigate(url) : undefined)).catch(() => self.clients.openWindow(url));
 		})
 	);
 });

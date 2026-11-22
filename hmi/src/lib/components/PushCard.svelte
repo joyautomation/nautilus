@@ -10,7 +10,7 @@
 	// controller with no push never causes a permission prompt. A sign-in is
 	// the kit's (createAuth); the controller never returns an endpoint or a
 	// key, so the list below names a push service's host only.
-	import { onMount } from 'svelte';
+	import { onMount, untrack } from 'svelte';
 	import {
 		PushClient,
 		pushState,
@@ -55,7 +55,8 @@
 	let install = $state<{ prompt(): Promise<unknown> } | null>(null);
 
 	const subscribed = $derived(mine !== '' && devices.some((d) => d.id === mine));
-	const view = $derived(pushState(seen, { configured, signedIn: signedIn ?? (unauthorized ? false : undefined), subscribed }));
+	// a 401 from the controller (a session that ended) overrides what the page believes
+	const view = $derived(pushState(seen, { configured, signedIn: unauthorized ? false : signedIn, hasAuth: auth ? !!auth.me?.auth : undefined, subscribed }));
 	const signin = $derived(signInLink(auth?.me, seen.secure ? globalThis.location : { pathname: '/', search: '' }));
 	const others = $derived(devices.filter((d) => d.id !== mine));
 
@@ -63,9 +64,28 @@
 		return browser ?? realPushBrowser();
 	}
 
+	// one load at a time: a second call while one runs asks for another pass
+	let running = false;
+	let again = false;
 	export async function load() {
+		if (running) {
+			again = true;
+			return;
+		}
+		running = true;
+		try {
+			do {
+				again = false;
+				await pass();
+			} while (again);
+		} finally {
+			running = false;
+		}
+	}
+
+	async function pass() {
 		seen = env ?? readPushEnv();
-		if (!seen.secure || signedIn === false) return;
+		if (!seen.secure || signedIn === false || view.kind === 'no-auth') return;
 		unauthorized = false;
 		const k = await client.key();
 		unauthorized = !k.ok && k.status === 401;
@@ -91,13 +111,18 @@
 			e.preventDefault();
 			install = e as unknown as { prompt(): Promise<unknown> };
 		};
+		const done = () => (install = null);
 		globalThis.addEventListener?.('beforeinstallprompt', before);
-		return () => globalThis.removeEventListener?.('beforeinstallprompt', before);
+		globalThis.addEventListener?.('appinstalled', done);
+		return () => {
+			globalThis.removeEventListener?.('beforeinstallprompt', before);
+			globalThis.removeEventListener?.('appinstalled', done);
+		};
 	});
 
 	// the sign-in may arrive after the card
 	$effect(() => {
-		if (signedIn) load();
+		if (signedIn) untrack(() => void load());
 	});
 
 	async function enable() {
@@ -136,7 +161,7 @@
 
 <section class="push" aria-label="Notifications">
 	<h3>Notifications on this device</h3>
-	<p class="state" data-state={view.kind}>{view.message}</p>
+	<p class="state" data-state={view.kind} role="status" aria-live="polite">{view.message}</p>
 	<div class="row">
 		{#if view.kind === 'signed-out'}
 			<a class="signin" href={signin.href}>{signin.label}</a>
@@ -149,10 +174,6 @@
 			<Button size="sm" variant="ghost" onclick={installApp}>Install this app</Button>
 		{/if}
 	</div>
-	{#if !seen.secure}
-		<!-- always said, never a dead button: the install and the worker need a secure context -->
-		<p class="note">Install needs https.</p>
-	{/if}
 	{#if error}
 		<p class="err" role="alert">{error}</p>
 	{/if}
@@ -163,7 +184,7 @@
 				<li>
 					<span class="host">{d.host}</span>
 					<span class="at">{new Date(d.at).toLocaleDateString()}</span>
-					<Button size="sm" variant="ghost" disabled={busy} onclick={() => remove(d.id)}>Remove</Button>
+					<Button size="sm" variant="ghost" disabled={busy} onclick={() => remove(d.id)} aria-label={`Remove the device paged through ${d.host}`}>Remove</Button>
 				</li>
 			{/each}
 		</ul>
@@ -194,9 +215,6 @@
 		display: flex;
 		flex-wrap: wrap;
 		gap: 8px;
-	}
-	.note {
-		color: var(--muted);
 	}
 	.signin {
 		color: var(--accent, var(--ink));

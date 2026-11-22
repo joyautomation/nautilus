@@ -10,6 +10,7 @@ import {
 	disablePush,
 	keyBytes,
 	endpointId,
+	realPushBrowser,
 	type PushEnv,
 	type PushBrowser,
 	type PushSub
@@ -73,6 +74,11 @@ describe('pushState — the first cause a person can fix', () => {
 	});
 	it('a subscription whose permission was since withdrawn is not "on"', () => {
 		expect(pushState({ ...goodEnv, permission: 'denied' }, { ...on, subscribed: true }).kind).toBe('denied');
+	});
+	it('a controller with no sign-in at all says so, not "sign in"', () => {
+		const s = pushState(goodEnv, { ...on, hasAuth: false, signedIn: false });
+		expect(s.kind).toBe('no-auth');
+		expect(s.canEnable).toBe(false);
 	});
 	it('unknown server facts do not block enabling', () => {
 		expect(pushState(goodEnv, { subscribed: false }).canEnable).toBe(true);
@@ -144,7 +150,7 @@ describe('PushClient', () => {
 });
 
 // a browser that records what it was asked, in order
-function browser(opts: { permission?: NotificationPermission; existing?: boolean; subscribeFails?: boolean; permissionThrows?: boolean } = {}) {
+function browser(opts: { permission?: NotificationPermission; existing?: boolean; otherKey?: boolean; subscribeFails?: boolean; permissionThrows?: boolean } = {}) {
 	const log: string[] = [];
 	const sub: PushSub & { dropped: boolean } = {
 		endpoint: 'https://push.example.net/p/1',
@@ -156,7 +162,7 @@ function browser(opts: { permission?: NotificationPermission; existing?: boolean
 			return true;
 		}
 	};
-	const old: PushSub = { endpoint: 'https://old/e', toJSON: () => ({}), unsubscribe: async () => { log.push('unsubscribe-old'); return true; } };
+	const old: PushSub = { endpoint: 'https://old/e', toJSON: () => ({}), unsubscribe: async () => { log.push('unsubscribe-old'); current = null; return true; } };
 	let current: PushSub | null = opts.existing ? old : null;
 	const b: PushBrowser = {
 		requestPermission: async () => {
@@ -170,6 +176,12 @@ function browser(opts: { permission?: NotificationPermission; existing?: boolean
 				subscribe: async (o) => {
 					log.push('subscribe:' + o.applicationServerKey.length);
 					if (opts.subscribeFails) throw new Error('push service error');
+					// a subscription under another key refuses a new one until it is dropped
+					if (opts.existing && opts.otherKey && current === old) {
+						const e = new Error('different key');
+						e.name = 'InvalidStateError';
+						throw e;
+					}
 					current = sub;
 					return sub;
 				}
@@ -206,11 +218,32 @@ describe('enablePush', () => {
 			expect(sent.length).toBe(1);
 		}
 	});
-	it('drops a subscription made under another key before subscribing', async () => {
+	it('drops a subscription made under another key, once, and subscribes again', async () => {
+		const { client } = fake([json({ publicKey: 'AQID' }), json({ id: 'x', host: 'h', at: 't' }, 201)]);
+		const { b, log } = browser({ existing: true, otherKey: true });
+		const r = await enablePush(client, b);
+		expect(r.ok).toBe(true);
+		expect(log.join(',')).toBe('permission,subscribe:3,unsubscribe-old,subscribe:3');
+	});
+	it('keeps a subscription made under the same key (no orphaned endpoint)', async () => {
 		const { client } = fake([json({ publicKey: 'AQID' }), json({ id: 'x', host: 'h', at: 't' }, 201)]);
 		const { b, log } = browser({ existing: true });
 		await enablePush(client, b);
-		expect(log.join(',')).toBe('permission,unsubscribe-old,subscribe:3');
+		expect(log.join(',')).toBe('permission,subscribe:3');
+	});
+	it('a subscribe that fails for another reason never costs the working subscription', async () => {
+		const { client } = fake([json({ publicKey: 'AQID' })]);
+		const { b, log } = browser({ existing: true, subscribeFails: true });
+		const r = await enablePush(client, b);
+		expect(!r.ok && r.why).toBe('browser');
+		expect(log.join(',')).toBe('permission,subscribe:3');
+	});
+	it('a malformed key from the controller is refused before any prompt', async () => {
+		const { client } = fake([json({ publicKey: 'A' })]);
+		const { b, log } = browser();
+		const r = await enablePush(client, b);
+		expect(!r.ok && r.why).toBe('controller');
+		expect(log.length).toBe(0);
 	});
 	it('a subscription the controller refuses is dropped from the browser again', async () => {
 		const { client } = fake([json({ publicKey: 'AQID' }), json({ error: 'the subscription could not be saved' }, 503)]);
@@ -269,5 +302,28 @@ describe('keys and ids', () => {
 	});
 	it("endpointId is the controller's id for an endpoint", async () => {
 		expect(await endpointId('https://push.example.net/p/1')).toBe('d3083df850d73ce85f2c9efde024ca85');
+	});
+});
+
+describe('realPushBrowser', () => {
+	it('a page with no service worker is told so instead of waiting for ever', async () => {
+		const never = new Promise(() => {});
+		const b = realPushBrowser({ navigator: { serviceWorker: { ready: never } }, Notification: { requestPermission: async () => 'granted' } }, () => Promise.reject(new Error('timeout')));
+		let msg = '';
+		try {
+			await b.registration();
+		} catch (e) {
+			msg = (e as Error).message;
+		}
+		expect(msg.includes('no service worker')).toBe(true);
+	});
+	it('a worker that is ready is used', async () => {
+		const reg = { pushManager: {} };
+		const b = realPushBrowser({ navigator: { serviceWorker: { ready: Promise.resolve(reg) } } }, () => new Promise<never>(() => {}));
+		expect(await b.registration()).toBe(reg as never);
+	});
+	it('asks the real Notification for the permission', async () => {
+		const b = realPushBrowser({ navigator: {}, Notification: { requestPermission: async () => 'granted' } });
+		expect(await b.requestPermission()).toBe('granted');
 	});
 });

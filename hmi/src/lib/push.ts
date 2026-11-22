@@ -148,6 +148,7 @@ export type PushStateKind =
 	| 'insecure'
 	| 'unsupported'
 	| 'ios-install'
+	| 'no-auth'
 	| 'signed-out'
 	| 'not-set-up'
 	| 'denied'
@@ -167,6 +168,8 @@ export interface PushServerFacts {
 	configured?: boolean;
 	/** A person is signed in (a subscription belongs to one); undefined: not known yet. */
 	signedIn?: boolean;
+	/** The controller has an auth: block, so there is a sign-in at all; undefined: not known. */
+	hasAuth?: boolean;
 	/** This browser holds a subscription the controller knows. */
 	subscribed: boolean;
 }
@@ -187,6 +190,9 @@ export function pushState(env: PushEnv, server: PushServerFacts): PushState {
 	}
 	if (!env.serviceWorker || !env.pushManager || !env.notification) {
 		return no('unsupported', 'This browser cannot receive push notifications.');
+	}
+	if (server.hasAuth === false) {
+		return no('no-auth', 'This controller has no sign-in, and a push subscription belongs to a person: add an auth: block and users (naut users add) to page phones.');
 	}
 	if (server.signedIn === false) {
 		return no('signed-out', 'Sign in to be paged on this device: a subscription belongs to a person.');
@@ -222,11 +228,28 @@ export interface PushSub {
 	unsubscribe(): Promise<boolean>;
 }
 
-/** The real browser. Throws where there is no service worker. */
-export function realPushBrowser(g: Record<string, any> = globalThis as Record<string, any>): PushBrowser {
+/** How long to wait for a service worker before saying there is none. */
+export const WORKER_WAIT_MS = 8000;
+
+/**
+ * The real browser. `navigator.serviceWorker.ready` never settles on a page
+ * with no worker (an HMI not built by naut, a failed registration, a dev
+ * server), which would leave the card's button disabled for ever: so it is
+ * raced against `wait` and the person is told. `wait` is for a test.
+ */
+export function realPushBrowser(
+	g: Record<string, any> = globalThis as Record<string, any>,
+	wait: (ms: number) => Promise<never> = (ms) => new Promise((_, no) => setTimeout(() => no(new Error('timeout')), ms))
+): PushBrowser {
 	return {
 		requestPermission: () => Promise.resolve(g.Notification.requestPermission()),
-		registration: () => g.navigator.serviceWorker.ready
+		registration: () =>
+			Promise.race([
+				g.navigator.serviceWorker.ready,
+				wait(WORKER_WAIT_MS).catch(() => {
+					throw new Error('This page has no service worker, so it cannot receive pushes. The HMI must be built by naut (or register its own sw.js).');
+				})
+			])
 	};
 }
 
@@ -253,6 +276,12 @@ export type EnableResult =
 export async function enablePush(client: PushClient, browser: PushBrowser): Promise<EnableResult> {
 	const key = await client.key();
 	if (!key.ok) return { ok: false, why: 'controller', message: key.status === 404 ? 'This controller does not send push notifications.' : key.message };
+	let appKey: Uint8Array;
+	try {
+		appKey = keyBytes(key.value);
+	} catch {
+		return { ok: false, why: 'controller', message: "The controller's push key is malformed." };
+	}
 	let perm: NotificationPermission;
 	try {
 		perm = await browser.requestPermission();
@@ -263,21 +292,31 @@ export async function enablePush(client: PushClient, browser: PushBrowser): Prom
 	if (perm !== 'granted') return { ok: false, why: 'dismissed', message: 'Permission was not given.' };
 	let sub: PushSub;
 	try {
-		const reg = await browser.registration();
-		// a subscription made under another key (a controller whose push key
-		// changed) would be refused by every push: start from none
-		const old = await reg.pushManager.getSubscription();
-		if (old) await old.unsubscribe();
-		sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(key.value) });
+		const pm = (await browser.registration()).pushManager;
+		try {
+			// the same key returns the subscription this browser already has
+			sub = await pm.subscribe({ userVisibleOnly: true, applicationServerKey: appKey });
+		} catch (e) {
+			// one made under another key (the controller's push key changed)
+			// refuses a new one: drop it, once, and ask again
+			if ((e as { name?: string } | null)?.name !== 'InvalidStateError') throw e;
+			const old = await pm.getSubscription();
+			if (!old) throw e;
+			await old.unsubscribe();
+			sub = await pm.subscribe({ userVisibleOnly: true, applicationServerKey: appKey });
+		}
 	} catch (e) {
 		return { ok: false, why: 'browser', message: errText(e, 'the browser could not subscribe') };
 	}
 	const made = await client.subscribe(sub.toJSON());
 	if (!made.ok) {
+		// not kept: a browser must not stay subscribed to a pager that does not
+		// know it. If even that fails, the controller has no row, and the next
+		// Turn on finds this subscription and offers it again.
 		try {
 			await sub.unsubscribe();
 		} catch {
-			/* said below */
+			/* nothing more to do from here */
 		}
 		return { ok: false, why: 'controller', message: made.message };
 	}
