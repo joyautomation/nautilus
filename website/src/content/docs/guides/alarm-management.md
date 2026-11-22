@@ -339,7 +339,10 @@ Every email, SMS and push page then carries a link:
 - **Opening the link changes nothing.** It shows the alarm and an
   **Acknowledge** button, so a mail scanner that opens every link
   acknowledges nothing. The button acknowledges, as the person the page
-  was sent to, and the journal and audit trail say so (`via: link`).
+  was sent to, and the journal and audit trail say so (`via: link`). The
+  page says so above the button, and names anyone else signed in on that
+  browser, so a shared screen holds no surprise. It is laid out for a
+  phone.
 - **A link is for one occurrence, once, for 24 hours at most.** Pressed
   again, or after the alarm returned to normal and came back, it
   acknowledges nothing and says why.
@@ -500,11 +503,13 @@ naut alarms report stale      -host localhost
 | `bad-actors` | the 10 most frequent alarms and their share of all alarms |
 | `stale` | alarms continuously active for more than 24 hours |
 
-Each report first says how much journal it read:
+Each report first says how much journal it read: the range, the number
+of events, the earliest and the latest. On the station you started a few
+minutes ago, the default week gets a note:
 
 ```
-journal http://localhost:8080: 2 events from 2026-11-15 06:14 to 2026-11-22 06:14 (earliest 2026-11-22 06:13, latest 2026-11-22 06:14)
-note: nothing is journalled before 2026-11-22 06:13: a quiet system, or a journal that starts there
+note: the first event is at 2026-11-22 06:54, 6d 23h into the range: the system was quiet before it, or the journal starts there (a new or ring-only journal).
+      Rates and window counts below are over the whole range; for the journal's span alone, add -from "2026-11-22 06:54".
 ```
 
 The in-memory journal holds only the latest rows; for reports over weeks,
