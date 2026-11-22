@@ -128,9 +128,12 @@ type Script struct {
 	// upload brings ("": Disabled, as the S2a upload found the bench CPU).
 	PasswordPolicy      *PasswordPolicy `json:"passwordPolicy,omitempty"`
 	UploadAccessControl string          `json:"uploadAccessControl,omitempty"`
-	AccessRecords       string          `json:"accessRecords,omitempty"`
-	Delays              []ScriptedCall  `json:"delays,omitempty"`
-	Failures            []ScriptedCall  `json:"failures,omitempty"`
+	// UploadWebServer makes an upload bring a CPU whose web server is
+	// on (the bench CPU's is off).
+	UploadWebServer bool           `json:"uploadWebServer,omitempty"`
+	AccessRecords   string         `json:"accessRecords,omitempty"`
+	Delays          []ScriptedCall `json:"delays,omitempty"`
+	Failures        []ScriptedCall `json:"failures,omitempty"`
 }
 
 // ScriptedCall names an ITia call ("Compile", "OpenProject", ...).
@@ -333,6 +336,7 @@ func (p *Process) SetAccess(t testing.TB, a AccessScript) {
 	p.mu.Lock()
 	p.script.PasswordPolicy = a.Policy
 	p.script.UploadAccessControl = a.UploadAccessControl
+	p.script.UploadWebServer = a.UploadWebServer
 	p.script.AccessRecords = a.Records
 	s := p.script
 	p.mu.Unlock()

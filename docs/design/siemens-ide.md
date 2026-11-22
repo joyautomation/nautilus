@@ -315,6 +315,50 @@ The rules for applying a spec:
 - **Every device's GSDML must already be installed** (`gsd/install`).
 - **Every web user needs a password** in `secrets.webUsers`. Its rights are
   any of `read`, `write`, `mode` (change RUN/STOP) and `diagnostics`.
+- **The web server comes on only over access control on** (#789 stage 5
+  (A) step 2). With access control off, a FW 3.1 CPU's web server knows
+  one user, "Anonymous", with full rights over the CPU (S7-1500 Web server
+  manual, 11/2023): anyone who reaches it could write tags and stop the
+  CPU.
+  - `webServer.enabled: true` sets the CPU's `WebserverActivate`, then
+    `WebserverHttpsOnly` (every such CPU has a user with a password, so
+    never plain HTTP), then `UseWebServerForInterface` on the PROFINET
+    interface that carries the CPU's address (a device item attribute, not
+    the node's), writing only what differs, and reads all three back.
+  - It needs the CPU's access control to read exactly
+    `EnabledWithAccessControl`. `Disabled`, a CPU without the setting and
+    any other state refuse, naming the fix. One rule, checked twice:
+    before any write for a kept CPU (beside the `cpu.accessControl`
+    check), and in the station step after access control is applied,
+    before the server is switched on, for any CPU.
+  - `enabled: false` turns both off. It is never refused.
+  - `webServer` left out keeps a kept CPU's web server as found and turns
+    a new CPU's off. An adopted CPU with access control off is applied
+    without `webServer`. As found is never silent: a kept CPU whose server
+    is on over access control off gets a WARNING note (and log line)
+    naming `enabled: false` as the fix, since a download would load it.
+  - Web users are not made yet (step 2B): the TIA side refuses a spec
+    with `webServer.users`, and the fakes ignore them. The agent logs
+    every runtime right the CPU offers and the project's users with their
+    roles, once a run.
+  - Proven offline on the TIA machine (2026-11-22, through the agent, no
+    CPU contact): a new 1510SP FW 3.1 station with `fullAccessUser` and
+    the server on compiles with 0 errors and 0 warnings, and so do off and
+    on again. Only once the server is on does TIA offer
+    `WebserverHttpsOnly`, `WebserverCertificate`,
+    `WebserverDataAccessViaWebApiOnly` and the other `Webserver*`
+    attributes. The CPU's web runtime rights include `WebReadTags`,
+    `WebWriteTags`, `WebChangeOperatingMode`, `WebAllowDiagnostics`,
+    `WebReadSyslog` and `WebDownloadServiceData` (step 2B maps the spec's
+    rights onto them). A new project's users hold only `nautilus`: no
+    "Anonymous" appears among the project users. A second run proved
+    the final shape: a create without `webServer` writes nothing and
+    reads back off; on (with HTTPS only), off and on again each read back
+    and compile with 0 errors.
+  - Unproven: whether a kept project can give "Anonymous" a role (it is
+    not among Openness's project users); that a hardware download of a
+    station with the server on serves the Web API (the first
+    access-control bench window).
 - **`cpu.configurationProtection` is required on the wire**: the FW 3.1
   protection of the CPU's confidential configuration data (#789, decision
   of 2026-11-19). A FW 3.1 CPU does not compile until it is set up.

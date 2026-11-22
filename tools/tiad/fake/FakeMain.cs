@@ -267,6 +267,7 @@ namespace Tiad.Fake
         bool noIdentify;
         PasswordPolicy policy = new PasswordPolicy();
         string uploadAccess = UploadedAccessControl;
+        bool uploadWeb;
         string accessRecords = "";
 
         // AccessRecords is what an open does to tiad's records in a saved
@@ -298,6 +299,19 @@ namespace Tiad.Fake
                 lock (mu)
                 {
                     return new PasswordPolicy { MinLength = policy.MinLength, MinDigits = policy.MinDigits, MinSpecial = policy.MinSpecial, UpperAndLower = policy.UpperAndLower };
+                }
+            }
+        }
+
+        // UploadWebServer is whether an upload brings a CPU whose web
+        // server is on (the bench CPU's is off).
+        public bool UploadWebServer
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return uploadWeb;
                 }
             }
         }
@@ -697,6 +711,7 @@ namespace Tiad.Fake
                 pol.UpperAndLower = pr.Bool("upperAndLower");
             }
             string upAccess = r.Str("uploadAccessControl");
+            bool upWeb = r.Bool("uploadWebServer");
             string records = r.Str("accessRecords");
             if (upAccess == "") upAccess = UploadedAccessControl;
             var qs = new List<Question>();
@@ -734,6 +749,7 @@ namespace Tiad.Fake
                 noIdentify = noId;
                 policy = pol;
                 uploadAccess = upAccess;
+                uploadWeb = upWeb;
                 accessRecords = records;
             }
             return new Obj();
@@ -776,6 +792,10 @@ namespace Tiad.Fake
         // keeps the key each CPU was loaded with, so a retrieved archive
         // compares equal while its CPU still holds that load.
         public string ArchiveKey = "", RestoredKey = "";
+        // WebServer and WebInterface are the CPU's WebserverActivate and
+        // its interface's UseWebServerForInterface: off on a new CPU, as on
+        // the bench CPU an upload brings.
+        public bool WebServer, WebInterface, WebHttpsOnly;
         // AccessControl is the CPU's PLC access control (AccessRule's
         // states): a new CPU is EnabledWithAccessControl, as TIA makes one;
         // an upload brings the bench CPU's Disabled. Users and Roles are
@@ -834,6 +854,9 @@ namespace Tiad.Fake
         public void CopyAccess(FakeProject from)
         {
             AccessControl = from.AccessControl;
+            WebServer = from.WebServer;
+            WebInterface = from.WebInterface;
+            WebHttpsOnly = from.WebHttpsOnly;
             Users = new Dictionary<string, FakeUser>(StringComparer.Ordinal);
             foreach (var kv in from.Users) Users[kv.Key] = new FakeUser { Password = kv.Value.Password, Comment = kv.Value.Comment, History = new List<string>(kv.Value.History), Roles = new HashSet<string>(kv.Value.Roles) };
             Roles = new Dictionary<string, bool>(from.Roles, StringComparer.Ordinal);
@@ -854,6 +877,40 @@ namespace Tiad.Fake
     // the TIA machine showed them: a new CPU has access control on, users
     // are the project's, and a user's password must meet the project's
     // password policy.
+    // FakeWeb is the CPU's web server as TIA keeps it: the server and the
+    // interface's switch.
+    sealed class FakeWeb : IWebServer
+    {
+        readonly FakeProject p;
+
+        public FakeWeb(FakeProject p)
+        {
+            this.p = p;
+        }
+
+        public bool Server()
+        {
+            return p.WebServer;
+        }
+
+        public bool Interface()
+        {
+            return p.WebInterface;
+        }
+
+        public bool HttpsOnly()
+        {
+            return p.WebHttpsOnly;
+        }
+
+        public void Set(bool on)
+        {
+            p.WebServer = on;
+            if (on) p.WebHttpsOnly = true;
+            p.WebInterface = on;
+        }
+    }
+
     sealed class FakeAccess : IAccessControl
     {
         readonly FakeProject p;
@@ -985,6 +1042,8 @@ namespace Tiad.Fake
             p.Protection = ConfigProtection.Absent;
             p.ProtectedWith = "";
             p.AccessControl = AccessRule.Absent;
+            p.WebServer = false;
+            p.WebInterface = false;
             p.DropGrants();
         }
     }
@@ -1183,7 +1242,9 @@ namespace Tiad.Fake
             p.Changed = true;
             p.Station = null;
             ProtectionSteps.Run(new FakeMasterSecret(p), next.Cpu.ConfigurationProtection, secrets.ConfigurationPassword, notes);
-            AccessSteps.Run(new FakeAccess(p, script.Policy), next.Cpu.AccessControl, secrets.FullAccessPassword, secrets.Records, decision == CpuReuse.Create, made, notes);
+            var access = new FakeAccess(p, script.Policy);
+            AccessSteps.Run(access, next.Cpu.AccessControl, secrets.FullAccessPassword, secrets.Records, decision == CpuReuse.Create, made, notes);
+            WebSteps.Run(new FakeWeb(p), access, next.WebServer, decision == CpuReuse.Create, notes);
             p.Station = next;
             p.Changed = was || CpuReuse.Changes(decision, prev, next).Count > 0;
         }
@@ -1606,6 +1667,9 @@ namespace Tiad.Fake
             up.Protection = ConfigProtection.None;
             up.ProtectedWith = "";
             up.AccessControl = script.UploadAccessControl;
+            up.WebServer = script.UploadWebServer;
+            up.WebInterface = script.UploadWebServer;
+            up.WebHttpsOnly = false;
             up.DropGrants();
             DeviceIdentity d = script.Device;
             up.Cpu = new ProjectCpu { Name = UploadedCpuName, Order = d.Order, Firmware = d.Firmware };
@@ -1796,6 +1860,8 @@ namespace Tiad.Fake
             o["blocks"] = blocks;
             o["protection"] = p.Protection;
             o["accessControl"] = p.AccessControl;
+            o["webServer"] = p.WebServer;
+            o["webInterface"] = p.WebInterface;
             File.WriteAllText(f, Json.Write(o));
             return f;
         }
@@ -1855,6 +1921,10 @@ namespace Tiad.Fake
             }
             p.Protection = (string)o["protection"];
             p.AccessControl = (string)o["accessControl"];
+            // An archive made before the fake kept the web server holds
+            // none: off.
+            p.WebServer = o.ContainsKey("webServer") && (bool)o["webServer"];
+            p.WebInterface = o.ContainsKey("webInterface") && (bool)o["webInterface"];
             return p;
         }
 

@@ -1310,9 +1310,11 @@ func TestAgentForgetsACompileWhenAChangeFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	notDownloadable("after an upload", "no station spec")
-	// The uploaded CPU has no access control (the S2a upload): keep it.
+	// The uploaded CPU has no access control (the S2a upload): keep it,
+	// and leave its web server as found.
 	uploaded := tiadtest.BenchStation()
 	uploaded.CPU.AccessControl = tiad.AccessKeep
+	uploaded.WebServer = nil
 	if _, err := s.ApplyStation(ctx, uploaded, tiadtest.BenchSecrets); err != nil {
 		t.Fatal(err)
 	}
@@ -1382,6 +1384,7 @@ func TestAgentTrustsACertificateOnlyOnTheUploadsOptIn(t *testing.T) {
 	st.Profinet = nil
 	st.CPU.ConfigurationProtection = tiad.ProtectKeep
 	st.CPU.AccessControl = tiad.AccessKeep
+	st.WebServer = nil
 	if _, err := s.ApplyStation(ctx, st, tiadtest.BenchSecrets); err != nil {
 		t.Fatal(err)
 	}

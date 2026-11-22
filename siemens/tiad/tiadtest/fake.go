@@ -76,6 +76,7 @@ type Fake struct {
 	// ("": Disabled). Set them with SetAccess.
 	policy        *PasswordPolicy
 	uploadAccess  string
+	uploadWeb     bool
 	accessRecords string
 
 	// fingerprint scripts the fingerprint reads (SetFingerprint).
@@ -150,6 +151,9 @@ type session struct {
 	accessControl string
 	access        access
 	made          accessMade
+	// webServer is the CPU's web server: off on a new CPU and after an
+	// upload (the bench CPU's), on only over access control on.
+	webServer bool
 	// accessSet is set once an apply on this session asked for
 	// fullAccessUser: user-management keep is refused from then on.
 	accessSet bool
@@ -172,6 +176,7 @@ type savedProject struct {
 	protection, protectedWith string
 	accessControl             string
 	access                    access
+	webServer                 bool
 }
 
 // UploadedCPUName and UploadedIODevice are what the fake's upload brings
@@ -965,6 +970,11 @@ func (f *Fake) createProject(r *http.Request) (any, *failure) {
 		f.retireIfTrusted()
 		return nil, fl
 	}
+	if fl := s.applyWeb(req.Station.WebServer, true, &notes); fl != nil {
+		delete(f.sessions, s.id)
+		f.retireIfTrusted()
+		return nil, fl
+	}
 	st := req.Station
 	s.station = &st
 	f.files[project] = []byte("fake TIA project")
@@ -992,7 +1002,7 @@ func (f *Fake) openSession(r *http.Request) (any, *failure) {
 	// The project as it was saved: its CPU and its devices.
 	if sp, ok := f.saved[p]; ok {
 		s.cpu, s.others, s.protection, s.protectedWith = sp.cpu, sp.others, sp.protection, sp.protectedWith
-		s.accessControl, s.access = sp.accessControl, sp.access.clone()
+		s.accessControl, s.access, s.webServer = sp.accessControl, sp.access.clone(), sp.webServer
 		f.openRecords(s.access)
 	}
 	return tiad.Session{ID: s.id, Project: p}, nil
@@ -1084,6 +1094,9 @@ func (f *Fake) applyStation(r *http.Request) (any, *failure) {
 		if fl := planAccess(&current, req.Station.CPU.AccessControl, req.Secrets.FullAccessPassword != ""); fl != nil {
 			return nil, fl
 		}
+		if fl := planWeb(&current, req.Station.WebServer); fl != nil {
+			return nil, fl
+		}
 		kept = s.others
 	}
 	if fl := f.checkPolicy(req.Station, req.Secrets); fl != nil {
@@ -1120,6 +1133,9 @@ func (f *Fake) applyStation(r *http.Request) (any, *failure) {
 		return nil, fl
 	}
 	if fl := s.applyAccess(req.Station.CPU.AccessControl, req.Secrets.FullAccessPassword, !reuse, &notes); fl != nil {
+		return nil, fl
+	}
+	if fl := s.applyWeb(req.Station.WebServer, !reuse, &notes); fl != nil {
 		return nil, fl
 	}
 	s.unclean = false
@@ -1712,6 +1728,7 @@ func (f *Fake) upload(r *http.Request) (any, *failure) {
 	// its IO device, which the CPU's station does not hold.
 	s.protection, s.protectedWith = ProtectionNone, ""
 	s.accessControl = f.uploadAccessControl()
+	s.webServer = f.uploadWeb
 	s.access.dropGrants()
 	// What this session made in the users and roles belongs to the
 	// station the upload replaces.
@@ -2039,7 +2056,7 @@ func (f *Fake) save(r *http.Request) (any, *failure) {
 		cpu = &c
 	}
 	f.saved[p] = savedProject{cpu: cpu, others: append([]tiad.KeptDevice(nil), s.others...), protection: s.protection, protectedWith: s.protectedWith,
-		accessControl: s.accessControl, access: s.access.clone()}
+		accessControl: s.accessControl, access: s.access.clone(), webServer: s.webServer}
 	return map[string]string{"path": p}, nil
 }
 

@@ -52,7 +52,10 @@ const (
 )
 
 // WebServer turns on the CPU's web server, which carries the Web API the
-// online plane uses. Passwords travel in Secrets, never here.
+// online plane uses, or (Enabled false) turns it off; a station without one
+// keeps a kept CPU's web server as found and a new CPU's off. tiad turns it
+// on only over access control EnabledWithAccessControl. Passwords travel in
+// Secrets, never here.
 type WebServer struct {
 	Enabled bool      `json:"enabled"`
 	Users   []WebUser `json:"users,omitempty"`

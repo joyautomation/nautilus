@@ -660,6 +660,7 @@ namespace Tiad
                         CpuReuse.Collides(pc, st);
                         ConfigProtection.Plan(pc.Protection, st.Cpu.ConfigurationProtection, sec.ConfigurationPassword != "");
                         AccessRule.Plan(pc.AccessControl, st.Cpu.AccessControl, sec.FullAccessPassword != "");
+                        WebRule.Plan(pc.AccessControl, st.WebServer);
                         kept = pc.Others;
                     }
                     if (st.Cpu.AccessControl == StationRules.AccessFullAccessUser)

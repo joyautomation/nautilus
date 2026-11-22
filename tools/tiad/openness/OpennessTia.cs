@@ -708,7 +708,7 @@ namespace Tiad.Openness
         {
             if (next.Modules.Count > 0) return "tiad cannot place rack modules yet: the first TIA start (S2a) learns the rack";
             if (next.Profinet != null) return "tiad cannot configure a PROFINET IO system yet: the IO-device attribute names are learned at the first TIA start (S2a)";
-            if (next.WebServer != null && next.WebServer.Enabled) return "tiad cannot configure the web server yet: its attribute names are learned at the first TIA start (S2a)";
+            if (next.WebServer != null && next.WebServer.Users.Count > 0) return "tiad cannot make web server users yet (#789 stage 5 (A) step 2B): leave webServer.users out";
             return null;
         }
 
@@ -742,7 +742,10 @@ namespace Tiad.Openness
                     "PnDeviceNameAutoGeneration", false,
                     "PnDeviceName", next.Cpu.ProfinetName);
                 ProtectionSteps.Run(new MasterSecret(station, cpu), next.Cpu.ConfigurationProtection, secrets.ConfigurationPassword, notes);
-                AccessSteps.Run(new Access(p, station, cpu), next.Cpu.AccessControl, secrets.FullAccessPassword, secrets.Records, decision == CpuReuse.Create, made, notes);
+                var access = new Access(p, station, cpu);
+                AccessSteps.Run(access, next.Cpu.AccessControl, secrets.FullAccessPassword, secrets.Records, decision == CpuReuse.Create, made, notes);
+                access.LogRights();
+                WebSteps.Run(new Web(this, cpu), access, next.WebServer, decision == CpuReuse.Create, notes);
                 return true;
             });
         }
@@ -980,6 +983,44 @@ namespace Tiad.Openness
                 return false;
             }
 
+            // LogRights logs, once per agent run, every runtime right the
+            // CPU offers and the project's users with their roles (names
+            // only): the web users of step 2B need the web server rights'
+            // identifiers, and an "Anonymous" user holding a role would
+            // matter to the web server.
+            // It never fails an apply: a read it cannot make is logged.
+            public void LogRights()
+            {
+                if (rightsLogged) return;
+                try
+                {
+                    if (State() != AccessRule.Enabled) return;
+                    LogRightsNow();
+                    rightsLogged = true;
+                }
+                catch (Exception e)
+                {
+                    Log.Line("access control: reading the runtime rights and users for the log failed: {0}", TiaNames.Message(e));
+                }
+            }
+
+            void LogRightsNow()
+            {
+                var all = new List<string>();
+                foreach (DeviceFunctionRight r in Device().AvailableDeviceFunctionRights) all.Add(Json.Quote(r.Identifier) + " (" + Json.Quote(r.Name) + ")");
+                Log.Line("access control: the CPU offers the runtime rights {0}", string.Join(", ", all.ToArray()));
+                var users = new List<string>();
+                foreach (ProjectUser pu in Umac(p).ProjectUsers)
+                {
+                    var roles = new List<string>();
+                    foreach (Role r in pu.Roles) roles.Add(Json.Quote(r.Name));
+                    users.Add(Json.Quote(pu.Name) + " [" + string.Join(", ", roles.ToArray()) + "]");
+                }
+                Log.Line("access control: the project's users {0}", string.Join(", ", users.ToArray()));
+            }
+
+            static bool rightsLogged;
+
             public string Check(string user, string role)
             {
                 UmacConfigurator u = Umac(p);
@@ -989,6 +1030,71 @@ namespace Tiad.Openness
                 if (r == null || !pu.Roles.Contains(r)) return "the user " + Json.Quote(user) + " lacks the role " + Json.Quote(role);
                 if (!Has(r, FullAccess())) return "the role " + Json.Quote(role) + " lacks the runtime right Full access on the CPU";
                 return null;
+            }
+        }
+
+        // Web is the CPU's web server for WebSteps: the CPU's
+        // WebserverActivate and UseWebServerForInterface on the PROFINET
+        // interface that carries the CPU's node (both seen on the bench
+        // CPU's upload, 2026-11-21: the interface's attribute is on its
+        // device item, not on the node).
+        sealed class Web : IWebServer
+        {
+            readonly OpennessTia tia;
+            readonly DeviceItem cpu;
+
+            public Web(OpennessTia tia, DeviceItem cpu)
+            {
+                this.tia = tia;
+                this.cpu = cpu;
+            }
+
+            DeviceItem Interface()
+            {
+                foreach (DeviceItem i in Items(cpu.DeviceItems))
+                {
+                    NetworkInterface ni = i.GetService<NetworkInterface>();
+                    if (ni != null && ni.Nodes.Count > 0) return i;
+                }
+                throw new TiaException("the CPU " + cpu.Name + " has no network interface with a node");
+            }
+
+            bool IWebServer.Server()
+            {
+                return (bool)cpu.GetAttribute("WebserverActivate");
+            }
+
+            bool IWebServer.Interface()
+            {
+                return (bool)Interface().GetAttribute("UseWebServerForInterface");
+            }
+
+            // WebserverHttpsOnly shows only while the server is on (seen on
+            // the TIA machine, 2026-11-22).
+            public bool HttpsOnly()
+            {
+                return (bool)cpu.GetAttribute("WebserverHttpsOnly");
+            }
+
+            // Set reads each switch first and writes only one that differs,
+            // so an apply that leaves a server off writes nothing.
+            public void Set(bool on)
+            {
+                DeviceItem i = Interface();
+                IWebServer self = this;
+                if (on)
+                {
+                    if (!self.Server()) tia.Set("DeviceItem", cpu, "WebserverActivate", true);
+                    // WebserverHttpsOnly shows only once the server is on;
+                    // Set checks it is offered.
+                    if (!HttpsOnly()) tia.Set("DeviceItem (web server on)", cpu, "WebserverHttpsOnly", true);
+                    if (!self.Interface()) tia.Set("Interface", i, "UseWebServerForInterface", true);
+                }
+                else
+                {
+                    if (self.Interface()) tia.Set("Interface", i, "UseWebServerForInterface", false);
+                    if (self.Server()) tia.Set("DeviceItem", cpu, "WebserverActivate", false);
+                }
             }
         }
 
