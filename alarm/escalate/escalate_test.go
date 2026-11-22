@@ -242,8 +242,12 @@ func TestEscalating(t *testing.T) {
 // ---- the dispatcher, over a real engine on a stopped clock ----
 
 type rig struct {
-	t      *testing.T
+	t *testing.T
+	// now is the test goroutine's clock; advance moves it. The engine
+	// reads clock instead, because Engine.Notified runs on a channel's
+	// sender goroutine while the test advances time.
 	now    time.Time
+	clock  atomic.Pointer[time.Time]
 	tags   map[string]any
 	eng    *alarm.Engine
 	ring   *alarm.RingJournal
@@ -286,7 +290,8 @@ escalation:
 // until 07:00, bob's after.
 func newRig(t *testing.T, gated bool, defs ...alarm.Def) *rig {
 	t.Helper()
-	r := &rig{t: t, now: chicago(t, "2026-11-20 06:00"), tags: map[string]any{}}
+	r := &rig{t: t, tags: map[string]any{}}
+	r.setNow(chicago(t, "2026-11-20 06:00"))
 	if len(defs) == 0 {
 		defs = []alarm.Def{
 			{ID: "TT1", Tag: "TT1", Name: "Roaster temp high", Area: "roast", Priority: alarm.High, AckRequired: true, AutoClear: true, Shelvable: true},
@@ -299,7 +304,7 @@ func newRig(t *testing.T, gated bool, defs ...alarm.Def) *rig {
 	}
 	r.ring = alarm.NewRing(1000)
 	var err error
-	r.eng, err = alarm.New(alarm.Options{Defs: defs, Now: func() time.Time { return r.now },
+	r.eng, err = alarm.New(alarm.Options{Defs: defs, Now: func() time.Time { return *r.clock.Load() },
 		Read: func(p string) (any, bool) { v, ok := r.tags[p]; return v, ok }, Journal: r.ring})
 	if err != nil {
 		t.Fatal(err)
@@ -332,7 +337,7 @@ func newRig(t *testing.T, gated bool, defs ...alarm.Def) *rig {
 // second, as naut run does.
 func (r *rig) run(d time.Duration) {
 	for end := r.now.Add(d); r.now.Before(end); {
-		r.now = r.now.Add(time.Second)
+		r.advance(time.Second)
 		r.eng.Evaluate()
 		r.d.Tick(r.now)
 		r.d.Drain()
@@ -340,6 +345,15 @@ func (r *rig) run(d time.Duration) {
 }
 
 func (r *rig) set(tag string, v bool) { r.tags[tag] = v }
+
+// setNow and advance move the rig's clock: the test goroutine's copy and
+// the one the engine reads.
+func (r *rig) setNow(t time.Time) {
+	r.now = t
+	r.clock.Store(&t)
+}
+
+func (r *rig) advance(d time.Duration) { r.setNow(r.now.Add(d)) }
 
 // sent lists what reached the channels as "level:to:via", in order per
 // channel kind (email first, then sms).
@@ -453,7 +467,7 @@ func TestAckAndBackIsANewWait(t *testing.T) {
 	r.set("TT1", true)
 	r.run(9 * time.Minute)
 	// Ack, return to normal and come back within one scan, no look between.
-	r.now = r.now.Add(100 * time.Millisecond)
+	r.advance(100 * time.Millisecond)
 	r.eng.Ack([]string{"TT1"}, "alice")
 	r.set("TT1", false)
 	r.eng.Evaluate()
@@ -562,7 +576,7 @@ func TestStaleRoleSendsNothing(t *testing.T) {
 			h := &holdChannel{rec: r.email, started: make(chan struct{}), release: make(chan struct{})}
 			r.d.channels["email"] = h
 			r.set("TT1", true)
-			r.now = r.now.Add(time.Second)
+			r.advance(time.Second)
 			r.eng.Evaluate()
 			r.d.Tick(r.now) // queues alice and dave by email
 			<-h.started     // the first is in flight, the second queued
@@ -679,7 +693,7 @@ func TestGateReopensSameTerm(t *testing.T) {
 	h := &holdChannel{rec: r.email, started: make(chan struct{}), release: make(chan struct{})}
 	r.d.channels["email"] = h
 	r.set("TT1", true)
-	r.now = r.now.Add(time.Second)
+	r.advance(time.Second)
 	r.eng.Evaluate()
 	r.d.Tick(r.now)
 	<-h.started
@@ -750,12 +764,12 @@ func TestTermChangeNoDuplicate(t *testing.T) {
 	h := &holdChannel{rec: r.email, started: make(chan struct{}), release: make(chan struct{})}
 	r.d.channels["email"] = h
 	r.set("TT1", true)
-	r.now = r.now.Add(time.Second)
+	r.advance(time.Second)
 	r.eng.Evaluate()
 	r.d.Tick(r.now) // term 1 queues alice and dave
 	<-h.started     // alice in flight, dave queued
 	r.term.Store(2)
-	r.now = r.now.Add(time.Second)
+	r.advance(time.Second)
 	r.eng.Evaluate()
 	r.d.Tick(r.now) // term 2 queues both again
 	close(h.release)
@@ -820,7 +834,7 @@ func TestAnnunciateOnlyRTNBeforeSend(t *testing.T) {
 	h := &holdChannel{rec: r.email, started: make(chan struct{}), release: make(chan struct{})}
 	r.d.channels["email"] = h
 	r.set("TT9", true)
-	r.now = r.now.Add(time.Second)
+	r.advance(time.Second)
 	r.eng.Evaluate()
 	r.d.Tick(r.now) // queues alice and dave
 	<-h.started     // alice in flight, dave queued behind her
@@ -839,7 +853,7 @@ func TestHungChannelDelaysOnlyItsOwnKind(t *testing.T) {
 	r.d.channels["email"] = h
 	r.set("TT1", true)
 	for i := 0; i < 11*60; i++ {
-		r.now = r.now.Add(time.Second)
+		r.advance(time.Second)
 		r.eng.Evaluate()
 		r.d.Tick(r.now)
 	}
@@ -904,7 +918,7 @@ func TestCloseCancelsInFlight(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.set("TT1", true)
-	r.now = r.now.Add(time.Second)
+	r.advance(time.Second)
 	r.eng.Evaluate()
 	d.Tick(r.now)
 	<-ch.entered
@@ -1116,7 +1130,7 @@ func TestRetryAsksAgainBeforeEachAttempt(t *testing.T) {
 			once := sync.Once{}
 			ch.between = func() { once.Do(func() { c.stop(r) }) }
 			r.set("TT1", true)
-			r.now = r.now.Add(time.Second)
+			r.advance(time.Second)
 			r.eng.Evaluate()
 			r.d.Tick(r.now)
 			r.d.Drain()
