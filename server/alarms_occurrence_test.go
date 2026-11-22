@@ -578,7 +578,12 @@ func TestLateHandOffKeepsALaterAck(t *testing.T) {
 	var lead atomic.Bool
 	lead.Store(true)
 	_, _, al, _ := loggedAlarms(t, map[string]any{"HiTempAlm": true, "LoFlowAlm": false}, &lead)
-	al.clrRetry = time.Hour
+	// The queue is what this test reads: the proposer would commit it on
+	// this one-replica log at once and empty it first (#1120). Marking it
+	// running keeps queueClear from starting one.
+	al.clrMu.Lock()
+	al.clrRunning = true
+	al.clrMu.Unlock()
 	al.mu.Lock()
 	al.view["HiTemp"] = alarmIntent{acked: true, ackBy: "op", occ: "bbbbbbbbbbbbbbbb", activeMs: 2}
 	al.mu.Unlock()
