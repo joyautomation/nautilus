@@ -752,8 +752,8 @@ func TestAnEventBetweenTheViewsAckAndTheEnginesLeavesTheAck(t *testing.T) {
 	al.clrMu.Lock()
 	queued := slices.Clone(al.clr)
 	al.clrMu.Unlock()
-	if len(queued) != 0 {
-		t.Fatalf("a clear of the ack the engine holds was queued: %v", queued)
+	if len(queued) != 0 || !al.Held(true, nil)["HiTemp"].Acked {
+		t.Fatalf("a clear of the ack the engine holds: queued %v, view acked %v", queued, al.Held(true, nil)["HiTemp"].Acked)
 	}
 }
 
@@ -847,5 +847,37 @@ func TestOnlyKindAckSetsAViewAck(t *testing.T) {
 	}
 	if v := al.view["HiTemp"]; al.ackGen.Load() != before+1 || v.ackGen != before+1 {
 		t.Fatalf("ackGen %d, view stamp %d; want both %d", al.ackGen.Load(), v.ackGen, before+1)
+	}
+}
+
+// A judgement waits out an Apply that wrote the view's ack and has not
+// acked the engine yet (liveMu): an event judged in that gap would find
+// the engine not holding the ack and clear it.
+func TestJudgementWaitsOutAnInFlightApply(t *testing.T) {
+	var lead atomic.Bool
+	lead.Store(true)
+	cond := map[string]any{"HiTempAlm": true, "LoFlowAlm": false}
+	_, eng, al, _ := loggedAlarms(t, cond, &lead)
+	al.clrRetry = time.Hour
+	PairAlarms{Engine: eng, Log: al}.RestoreAlarmsSynced(nil, true)
+	eng.Evaluate()
+	o := occOf(t, eng, "HiTemp")
+	applyAckGap = func() {
+		al.ended <- endedOcc{id: "HiTemp", occ: o.Occurrence, gen: al.ackGen.Load(), term: noTerm()}
+		time.Sleep(100 * time.Millisecond) // the hand-off is judged in the gap, unless it waits
+	}
+	t.Cleanup(func() { applyAckGap = nil })
+	if _, err := al.Apply(oplog.Entry{Kind: oplog.KindAck, IDs: []string{"HiTemp"},
+		Occs: []oplog.Occ{{ID: "HiTemp", Occ: o.Occurrence, ActiveMs: o.ActiveMs}}, By: "op"}); err != nil {
+		t.Fatal(err)
+	}
+	applyAckGap = nil
+	time.Sleep(100 * time.Millisecond)
+	al.clrMu.Lock()
+	queued := slices.Clone(al.clr)
+	al.clrMu.Unlock()
+	if len(queued) != 0 || state(eng, "HiTemp") != alarm.AckActive || !al.Held(true, nil)["HiTemp"].Acked {
+		t.Fatalf("queued %v, HiTemp %s, view acked %v; want the ack kept in the view and the engine",
+			queued, state(eng, "HiTemp"), al.Held(true, nil)["HiTemp"].Acked)
 	}
 }

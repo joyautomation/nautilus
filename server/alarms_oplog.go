@@ -547,6 +547,10 @@ func (l *AlarmLog) clearIfAcked(e endedOcc) {
 	}
 }
 
+// applyAckGap, when set (tests), runs inside Apply between the view's ack
+// and the engine's.
+var applyAckGap func()
+
 // reconcileGap, when set (tests), runs inside Reconcile between its read
 // of the engine's acks and its read of the view.
 var reconcileGap func()
@@ -939,6 +943,9 @@ func occsByID(occs []oplog.Occ) map[string]oplog.Occ {
 // occurrence ended since the ack was checked is not acknowledged: the
 // person saw another one.
 func (l *AlarmLog) applyAck(e oplog.Entry, occ map[string]oplog.Occ) {
+	if applyAckGap != nil {
+		applyAckGap()
+	}
 	for _, id := range e.IDs {
 		o, named := occ[id]
 		if !named || mutServer("apply_ack_any_occurrence") {

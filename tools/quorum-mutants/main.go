@@ -444,7 +444,7 @@ var table = []mutation{
 	{"clear_ack_taken_after", []string{"TestHandOffNeverClearsAnAckTakenAfterTheEvent"}},
 	{"engine_event_blocks", []string{"TestAFullHandOffDropsAndReconcileClears"}},
 	{"clear_while_engine_holds", []string{"TestAnEventBetweenTheViewsAckAndTheEnginesLeavesTheAck"}},
-	{"clear_without_livemu", []string{"TestAnEventBetweenTheViewsAckAndTheEnginesLeavesTheAck"}},
+	{"clear_without_livemu", []string{"TestJudgementWaitsOutAnInFlightApply"}},
 	{"reconcile_without_livemu", []string{"TestReconcileNeverClearsAnAckAppliedBetweenItsReads"}},
 	{"ack_clear_any_occurrence", []string{"TestAckClearOfAnotherOccurrenceLeavesTheAck"}},
 	{"occurrences_not_synced", []string{"TestLeaderSyncsOccurrences"}},
