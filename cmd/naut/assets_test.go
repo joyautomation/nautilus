@@ -252,3 +252,28 @@ func TestPlantAssetKeysAlarmsOnTheTagRoot(t *testing.T) {
 		t.Fatal("no page for Dot1")
 	}
 }
+
+func TestPlantAreasListTheEquipmentThatHasAPage(t *testing.T) {
+	p := plantTestProject(t)
+	assets := plantAssets(p)
+	areas := plantAreas(p, assets)
+	if len(areas) != 1 {
+		t.Fatalf("%d areas", len(areas))
+	}
+	var a struct {
+		ID, Label string
+		Assets    []string
+	}
+	if err := json.Unmarshal(areas[0], &a); err != nil {
+		t.Fatal(err)
+	}
+	if a.ID != "Receiving" || a.Label != "Receiving dock" || strings.Join(a.Assets, ",") != "P101,Belt1" {
+		t.Errorf("area %+v: the equipment with a page, in the plant's order", a)
+	}
+	if got := plantAreas(p, nil); len(got) != 1 || strings.Contains(string(got[0]), "P101") {
+		t.Errorf("with no pages the area lists none: %s", got)
+	}
+	if plantAreas(&project.Project{}, nil) != nil {
+		t.Error("no plant, no areas")
+	}
+}

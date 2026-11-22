@@ -58,6 +58,16 @@ toggles:   [{ tag: "{tag}_Auto", label: Auto }]
 trend: ["{tag}.Flow"]
 ```
 
+For a process scheme an asset type may also name the HMI `component` that
+draws it, a `ports:` map (nozzle name to the component's port) and a `bind:`
+map (the component's props to tags, `{tag}` as above):
+
+```yaml
+component: Pump
+ports: { N1: in, N2: out }
+bind: { running: "{tag}.Running" }
+```
+
 Equipment with a `device:` gets its page from the device's profile points
 (as slice 1 does), titled and placed by the plant; an asset type is optional
 for it.
@@ -120,3 +130,27 @@ plant (slice 3), and the plant is not exported to the master alarm database.
 
 Tag paths are checked down to the struct member (`A.B[3].C`): a member the type does not have is an error that names the members there are, and a member of a value that is not a struct is one too. Without types (no runtime) only the tag is checked. Two ids whose page slug is the same (`P_1`, `P__1`),
 or a plant id whose slug is a device's that no equipment names, are errors.
+
+## 7. Built (slice 3)
+
+- **`naut hmi scheme [-update] [-area id]`** writes `<area>.mimic.json` for
+  each area: the area's pieces that have a component, laid out left to right
+  by the longest run of flows into each, each with its component, label,
+  `plant:`, `bind` and a panel from its asset type, and each flow between two
+  drawn pieces as an auto-routed pipe between the ports the asset type's
+  `ports:` names (the kit's own `out`/`right` and `in`/`left` when it names
+  none; a flow it cannot find ports for is said, not drawn; a flow that leaves
+  the area is said, not drawn). Without `-update` an existing file is left alone.
+  With it, equipment and flows the plant has gained are added (new pieces in a
+  band below what is drawn); nothing already in the file moves, changes or
+  goes away, a key the generator does not write is kept, and a piece naming a
+  plant id the plant no longer has is said and left. Run twice it changes nothing.
+- **Area pages**: `/areas/<id>` for each area (the equipment with a page, the
+  alarms standing on each, out of service counted apart, and a link to the
+  area's scheme when a mimic is named for it); the `/assets` index headings link
+  to them.
+- Tag paths are checked down to the struct member (`naut check`).
+- Not yet: a drawing does not re-read its label or tag from `plant:` after it
+  is written (the scheme writes them once, as written-once files do), flows
+  carry no `medium` colour, and a device-backed equipment is not drawn on a
+  scheme (it has no component).

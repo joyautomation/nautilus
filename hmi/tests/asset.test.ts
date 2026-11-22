@@ -1,7 +1,7 @@
 // The asset page's choices (#714 slice 1): what it trends, which alarms are
 // its own, what it offers to audit, and its slug.
 import { describe, it, expect } from './harness.js';
-import { assetGroups, hasTag, tagValue, assetAlarms, assetFromEquipment, assetSlug, assetTags, assetTitle, indexAssets, trendTags, writableTags, type AssetDescriptor } from '../src/lib/asset.js';
+import { areaRows, assetGroups, hasTag, tagValue, assetAlarms, assetFromEquipment, assetSlug, assetTags, assetTitle, indexAssets, trendTags, writableTags, type AssetDescriptor } from '../src/lib/asset.js';
 import type { AlarmInstance } from '../src/lib/alarms.svelte.js';
 
 const pump: AssetDescriptor = {
@@ -105,5 +105,27 @@ describe('the index by area', () => {
 		const g = assetGroups([a('A'), a('B', 'Roast'), a('C', 'Receiving'), a('D', 'Roast')]);
 		expect(g.map((x) => x.area + ':' + x.assets.map((y) => y.id).join('')).join('|')).toBe('Roast:BD|Receiving:C|:A');
 		expect(assetGroups([]).length).toBe(0);
+	});
+});
+
+describe('an area page\'s rows', () => {
+	const mk = (id: string, equipment: string): AssetDescriptor => ({ id, equipment, panel: {} });
+	const al = (id: string, equipment: string, priority: string, state: string): AlarmInstance =>
+		({ id, name: id, tag: id, priority, equipment, state, cond: true }) as unknown as AlarmInstance;
+	it('lists the area\'s assets in its order with the alarms standing on each, the worst first, suppressed ones counted apart', () => {
+		const assets = [mk('P1', 'P1'), mk('P2', 'P2'), mk('T1', 'T1')];
+		const inst = [
+			al('a', 'P1', 'low', 'unack-active'),
+			al('b', 'P1', 'high', 'ack-active'),
+			al('c', 'P1', 'critical', 'suppressed'),
+			al('d', 'T1', 'medium', 'unack-rtn'),
+			al('e', 'P2', 'high', 'normal')
+		];
+		const rows = areaRows({ id: 'A', assets: ['T1', 'Gone', 'p1', 'P2'] }, assets, inst);
+		expect(rows.map((r) => r.asset.id).join()).toBe('T1,P1,P2');
+		const [t1, p1, p2] = rows;
+		expect([t1.unacked, t1.active, t1.worst].join()).toBe('1,1,medium');
+		expect([p1.unacked, p1.active, p1.suppressed, p1.worst].join()).toBe('1,2,1,high');
+		expect([p2.active, p2.worst === '' ? 'none' : p2.worst].join()).toBe('0,none');
 	});
 });

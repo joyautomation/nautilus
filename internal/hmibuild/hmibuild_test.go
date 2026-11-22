@@ -406,3 +406,42 @@ func TestAssetsOfKeepsAPlantPieceTheCallerDoesNotMake(t *testing.T) {
 		t.Errorf("no plant makes it: the drawing's panel keeps its page, got %d", len(got))
 	}
 }
+
+// An area page for each area the caller passes, linking to the mimic named
+// for the area; none when the caller passes none (#714 slice 3).
+func TestBuildsAreaPages(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "p.mimic.json", `{"name":"P","equipment":[{"id":"P1","component":"Pump","x":1,"y":1,"panel":{"title":"Pump_qq","readings":[{"tag":"A"}]}}]}`)
+	write(t, dir, "receiving.mimic.json", `{"name":"Rec","equipment":[]}`)
+	res, err := Build(Options{Project: dir, Title: "t", Areas: []json.RawMessage{
+		json.RawMessage(`{"id":"Receiving","label":"Receiving_qq","assets":["P1"]}`),
+		json.RawMessage(`{"id":"Roasting","label":"Roasting_qq","assets":[]}`),
+		json.RawMessage(`{"id":"receiving","label":"dup_qq"}`)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var js strings.Builder
+	for n, b := range res.Files {
+		if strings.HasSuffix(n, ".js") {
+			js.Write(b)
+		}
+	}
+	for _, want := range []string{"Receiving_qq", "Roasting_qq", `"/receiving"`} {
+		if !strings.Contains(js.String(), want) {
+			t.Errorf("the built app lacks %q", want)
+		}
+	}
+	if strings.Contains(js.String(), "dup_qq") {
+		t.Error("two areas with one slug are one page: the first")
+	}
+	if got := string(areaList([]json.RawMessage{json.RawMessage(`{"id":"A"}`)}, map[string]string{"a": "/"})); got != `[{"id":"A","scheme":"/"}]` {
+		t.Errorf("areaList %s: the route of the mimic named for the area, even the home page", got)
+	}
+	two := string(areaList([]json.RawMessage{json.RawMessage(`{"id":"Receiving","label":"one"}`), json.RawMessage(`{"id":"receiving","label":"two"}`)}, nil))
+	if two != `[{"id":"Receiving","label":"one"}]` {
+		t.Errorf("areaList %s: two areas with one slug are one page, the first", two)
+	}
+	if areaList(nil, nil) != nil || areaList([]json.RawMessage{json.RawMessage(`{"id":"---"}`)}, nil) != nil {
+		t.Error("no areas, or none with a slug, is no page")
+	}
+}
