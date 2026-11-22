@@ -646,7 +646,7 @@ func (p *Project) alarms(rt *runtime.Runtime, durable bool, log *slog.Logger, sy
 				chans[k] = ch
 			}
 		}
-		o := escalate.Options{Config: esc, Engine: eng, Log: log, Channels: chans}
+		o := escalate.Options{Config: esc, Engine: eng, Log: log, Channels: chans, AckLink: p.AckLink}
 		// The write gate itself (leader.Election.IsLeader on a pair or a
 		// Kubernetes lease), asked by the sender before every send: never
 		// a cached role, so a standby whose role is stale pages nobody.

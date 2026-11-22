@@ -26,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/joyautomation/nautilus/alarm/acklink"
 	"github.com/joyautomation/nautilus/audit"
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/leader"
@@ -175,6 +176,9 @@ type auditRow struct {
 	// that put service tokens in the principal's place skip it, and
 	// push_test.go holds its own.
 	person bool
+	// pathOf, when set, is the path for the server the row made (an ack
+	// link's token is minted per server).
+	pathOf func(*Server) string
 	// The one entry the request must leave.
 	action, target, user, source, result string
 	before, after                        any // checked when non-nil
@@ -186,6 +190,20 @@ func ackAll(t *testing.T, s *Server) {
 	if _, err := s.alarms.Ack(nil, "prep"); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// linkServer is an audit server that sends ack links (#715).
+func linkServer(t *testing.T) *Server {
+	s := auditServer(t, Options{})
+	withLinks(t, s)
+	return s
+}
+
+// mintFor is a link's token for alarm id's current occurrence.
+func mintFor(s *Server, id, principal string) string {
+	r, _ := s.alarms.Lookup(id)
+	tok, _ := s.ackLinks.Mint(id, r.Occurrence, principal, "email", 1, time.Hour)
+	return tok
 }
 
 func plain(o Options) func(*testing.T) *Server {
@@ -461,6 +479,21 @@ func auditRows() []auditRow {
 			after: []string{}},
 		{name: "ack nothing", pattern: "POST /api/alarms/ack", server: none,
 			method: "POST", path: "/api/alarms/ack", body: `{"ids":[],"by":"op1"}`,
+			action: "alarm.ack", user: "anonymous", source: "api", result: "refused"},
+		// An ack link (#715): the person it names, via: link; a link that
+		// does not check is refused and journalled anonymously.
+		{name: "ack by link", pattern: "POST /alarm-ack/{token}", server: linkServer, person: true,
+			method: "POST", pathOf: func(s *Server) string {
+				return acklink.Path + mintFor(s, "HiTemp", "alice")
+			},
+			action: "alarm.ack", target: "HiTemp", user: "user:alice", source: "api", result: "ok",
+			check: func(t *testing.T, e audit.Entry) {
+				if e.Detail["via"] != "link" || e.Detail["link"] == "" {
+					t.Errorf("detail %v, want via: link and the link's id", e.Detail)
+				}
+			}},
+		{name: "ack by a forged link", pattern: "POST /alarm-ack/{token}", server: linkServer, person: true,
+			method: "POST", path: acklink.Path + "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
 			action: "alarm.ack", user: "anonymous", source: "api", result: "refused"},
 		{name: "shelve", pattern: "POST /api/alarms/shelve", server: none,
 			method: "POST", path: "/api/alarms/shelve", body: `{"id":"HiTemp","seconds":300}`,
@@ -750,7 +783,11 @@ func TestEveryWritePathJournalsExactlyOneEntry(t *testing.T) {
 				row.prep(t, srv)
 			}
 			before := len(srv.audit.ring.Recent())
-			rec := call(t, srv, row.method, row.path, row.body, func(r *http.Request) {
+			path := row.path
+			if row.pathOf != nil {
+				path = row.pathOf(srv)
+			}
+			rec := call(t, srv, row.method, path, row.body, func(r *http.Request) {
 				for k, v := range row.header {
 					r.Header.Set(k, v)
 				}

@@ -309,6 +309,11 @@ var Mutations = []string{
 	"ack_clear_any_occurrence",          // server: an ack-clear naming one occurrence removes another occurrence's ack (#715)
 	"engine_event_takes_livemu",         // server: the engine's hook waits on liveMu on the scan (#715, #1053)
 	"occurrences_not_synced",            // server: the leader proposes no occurrence-start or -end (#715)
+	"link_replay_applied",               // server: a committed ack naming a spent ack link is applied again (#715)
+	"link_spent_unchecked",              // server: an ack link already used is not refused before it is proposed or applied (#715)
+	"link_ignores_standing",             // server: an ack link acts for a user who is not enabled or not in the users file (#715)
+	"link_sign_in_ignored",              // server: ack-from-notification: sign-in lets the link alone acknowledge (#715)
+	"link_needs_write_rule",             // server: an ack link without an auth: block needs NAUTILUS_TOKEN too (#715)
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")

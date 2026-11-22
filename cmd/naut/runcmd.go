@@ -36,6 +36,7 @@ import (
 
 	"github.com/joyautomation/nautilus/acceptance"
 	"github.com/joyautomation/nautilus/alarm"
+	"github.com/joyautomation/nautilus/alarm/escalate"
 	"github.com/joyautomation/nautilus/alarm/oncall"
 	"github.com/joyautomation/nautilus/audit"
 	"github.com/joyautomation/nautilus/auth"
@@ -357,6 +358,16 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		fmt.Fprintln(os.Stderr, "naut run: alarms:", err)
 		return 1
 	}
+	// Ack links (#715): the server mints them and answers them; a key
+	// that cannot be had leaves pages without one, said here, rather than
+	// stopping a controller that pages people.
+	ackLinks, err := ackLinkKeyring(proj, alarmStateDir, os.Getenv("NAUTILUS_PEER_TOKEN"), os.Stderr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "naut run: warning: pages carry no ack link: %v\n", err)
+	}
+	if ackLinks != nil {
+		proj.AckLink = ackLinkHook(&srvRef)
+	}
 	alarms, err := startAlarms(proj, rt, sysAlarms...)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "naut run: alarms:", err)
@@ -537,6 +548,10 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	}
 	if alarmLog != nil {
 		sopts.AlarmLog = alarmLog
+	}
+	if ackLinks != nil {
+		sopts.AckLinks, sopts.AckURL = ackLinks, proj.Alarms.Oncall.AckURL
+		sopts.AckLinkSignIn = proj.Alarms.Oncall.AckFrom() == escalate.AckBySignIn
 	}
 	// Operator notes (#720): a pair's are an index of its log; alone, a file
 	// in the state directory, when anyone can sign in to write one.
@@ -963,6 +978,12 @@ func journalInsecureChannels(proj *project.Project, srv interface {
 	for _, p := range proj.Alarms.Channels.Proxied() {
 		fmt.Fprintf(os.Stderr, "naut run: alarms.channels.%s goes through the proxy %s\n", p.Kind, p.Host)
 		srv.RecordSystem("alarm.channel-proxy", p.Kind, map[string]any{"proxy": p.Host})
+	}
+	if o := proj.Alarms.Oncall; o.AckURL != "" && o.AckURLInsecure {
+		fmt.Fprintf(os.Stderr, "naut run: warning: alarms.oncall.ack-url-insecure: true: ack links cross the network in plaintext (%s)\n", o.AckURL)
+		srv.RecordSystem("alarm.ack-url-insecure", o.AckURL, map[string]any{
+			"reason": "alarms.oncall.ack-url-insecure: true: an ack link acknowledges as the person paged, and it is sent over http",
+		})
 	}
 	for _, k := range proj.Alarms.Channels.Insecure() {
 		fmt.Fprintf(os.Stderr, "naut run: warning: alarms.channels.%s has insecure: true: its server's certificate is not verified\n", k)

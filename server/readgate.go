@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/joyautomation/nautilus/alarm/acklink"
 	"github.com/joyautomation/nautilus/auth"
 )
 
@@ -196,5 +197,8 @@ func (s *Server) endSessionStreams(se session) {
 // the sign-in page and the OIDC sign-in's hops (and a confirmation's
 // second step, which judges its own session).
 func signInPath(p string) bool {
-	return p == "/signin" || p == oidcStartPath || p == oidcCallbackPath || p == oidcElevatedPath
+	return p == "/signin" || p == oidcStartPath || p == oidcCallbackPath || p == oidcElevatedPath ||
+		// An ack link's confirm page (#715): the link is the credential,
+		// and the page sends a browser that must sign in to /signin itself.
+		strings.HasPrefix(p, acklink.Path)
 }

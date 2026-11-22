@@ -1884,6 +1884,20 @@
           "type": "string",
           "description": "IANA time zone rosters and `when:` windows are read in, e.g. America/Chicago. Default UTC."
         },
+        "ack-url": {
+          "type": "string",
+          "pattern": "^https?://",
+          "description": "The HMI as a person paged reaches it, e.g. https://hmi.plant.example:8443. Email and SMS pages then carry a link that acknowledges that alarm's occurrence: single use, at most 24 h. Empty: no link. Must be https unless ack-url-insecure: true."
+        },
+        "ack-url-insecure": {
+          "type": "boolean",
+          "description": "Allow an http:// ack-url. The link acknowledges as the person paged, so plaintext is an explicit choice: naut check warns, and naut run journals it at start."
+        },
+        "ack-from-notification": {
+          "type": "string",
+          "enum": ["link", "sign-in"],
+          "description": "What an ack link needs. link (default): the link alone acknowledges, as the person it was sent to, if they still hold ack. sign-in: only a browser signed in as that person may use it."
+        },
         "rosters": {
           "type": "array",
           "items": {

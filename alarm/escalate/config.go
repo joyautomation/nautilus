@@ -30,6 +30,7 @@ package escalate
 
 import (
 	"fmt"
+	"net/url"
 	"slices"
 	"strings"
 	"time"
@@ -44,7 +45,68 @@ type Oncall struct {
 	Timezone string   `yaml:"timezone" json:"timezone,omitempty"`
 	Rosters  []Roster `yaml:"rosters" json:"rosters,omitempty"`
 
+	// AckURL is the HMI as a person paged reaches it (https://host:port):
+	// an email or SMS page then carries a link that acknowledges the
+	// alarm's occurrence from the page (#715). "" sends no link.
+	AckURL string `yaml:"ack-url" json:"ackUrl,omitempty"`
+	// AckURLInsecure allows an http:// AckURL. The link is a credential,
+	// so plaintext is an explicit choice, warned by naut check and
+	// journalled at start.
+	AckURLInsecure bool `yaml:"ack-url-insecure" json:"ackUrlInsecure,omitempty"`
+	// AckFromNotification says what a link needs to acknowledge: "link"
+	// (the link alone, as the person it was sent to; DefaultAckFrom) or
+	// "sign-in" (the person signs in as themselves first). "" is the
+	// default.
+	AckFromNotification string `yaml:"ack-from-notification" json:"ackFromNotification,omitempty"`
+
 	loc *time.Location
+}
+
+// What an ack link needs (Oncall.AckFromNotification).
+const (
+	AckByLink   = "link"
+	AckBySignIn = "sign-in"
+	// DefaultAckFrom is the default: the link alone acknowledges (James,
+	// #715): a technician on a phone at 2 a.m. acks without a password,
+	// as the person paged, for that one occurrence, once, within a day.
+	DefaultAckFrom = AckByLink
+)
+
+// AckFrom is what an ack link needs, the default filled in.
+func (o *Oncall) AckFrom() string {
+	if o.AckFromNotification == "" {
+		return DefaultAckFrom
+	}
+	return o.AckFromNotification
+}
+
+// prepareAck checks ack-url and ack-from-notification.
+func (o *Oncall) prepareAck() error {
+	switch o.AckFromNotification {
+	case "", AckByLink, AckBySignIn:
+	default:
+		return fmt.Errorf("alarms.oncall.ack-from-notification: %q is not %s or %s", o.AckFromNotification, AckByLink, AckBySignIn)
+	}
+	if o.AckURL == "" {
+		if o.AckURLInsecure {
+			return fmt.Errorf("alarms.oncall.ack-url-insecure: set without an ack-url")
+		}
+		return nil
+	}
+	u, err := url.Parse(o.AckURL)
+	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" {
+		return fmt.Errorf("alarms.oncall.ack-url: %q is not a plain URL of the HMI (want e.g. https://hmi.plant.example:8443, no query, no user)", o.AckURL)
+	}
+	switch u.Scheme {
+	case "https":
+	case "http":
+		if !o.AckURLInsecure {
+			return fmt.Errorf("alarms.oncall.ack-url: %q is http: a link acknowledges as the person paged, so it must not cross the network in plaintext; use https, or set ack-url-insecure: true to accept that", o.AckURL)
+		}
+	default:
+		return fmt.Errorf("alarms.oncall.ack-url: %q must be https://", o.AckURL)
+	}
+	return nil
 }
 
 // Roster is one on-call roster. Exactly one form:
@@ -160,6 +222,9 @@ func (c *Config) Prepare(channels []string) error {
 			return fmt.Errorf("alarms.oncall.timezone: %q is not an IANA time zone (want e.g. America/Chicago)", o.Timezone)
 		}
 		o.loc = loc
+	}
+	if err := o.prepareAck(); err != nil {
+		return err
 	}
 	ids := map[string]bool{}
 	for i := range o.Rosters {

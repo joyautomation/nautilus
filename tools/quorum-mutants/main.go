@@ -449,6 +449,11 @@ var table = []mutation{
 	{"ack_clear_any_occurrence", []string{"TestAckClearOfAnotherOccurrenceLeavesTheAck"}},
 	{"engine_event_takes_livemu", []string{"TestScanNeverWaitsOnTheAlarmLog"}},
 	{"occurrences_not_synced", []string{"TestLeaderSyncsOccurrences"}},
+	{"link_replay_applied", []string{"TestAckLinkIsSpentThroughTheLog"}},
+	{"link_spent_unchecked", []string{"TestAckLinkIsSpentOnce", "TestAckLinkSurvivesATakeover"}},
+	{"link_ignores_standing", []string{"TestAckLinkStopsWithItsPerson"}},
+	{"link_sign_in_ignored", []string{"TestAckLinkSignInMode"}},
+	{"link_needs_write_rule", []string{"TestAckLinkNeedsNoOtherCredential"}},
 }
 
 // rowPkgs are the packages a row runs instead of ./quorum/..., filtered
@@ -549,6 +554,11 @@ var rowPkgs = map[string][]string{
 	"ack_clear_any_occurrence":          {"./server"},
 	"engine_event_takes_livemu":         {"./server"},
 	"occurrences_not_synced":            {"./server"},
+	"link_replay_applied":               {"./server"},
+	"link_spent_unchecked":              {"./server"},
+	"link_ignores_standing":             {"./server"},
+	"link_sign_in_ignored":              {"./server"},
+	"link_needs_write_rule":             {"./server"},
 	"reconcile_before_restore":          {"./server"},
 	"cluster_ops_proxied":               {"./server"},
 	"redundancy_same_origin":            {"./server"},

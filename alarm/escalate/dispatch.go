@@ -21,6 +21,10 @@ type Message struct {
 	Repeat int    // 0 is the level's own send, 1… its repeats
 	To     string // a principal; the Channel resolves the address
 	Reason string // optional, e.g. "joined late: …"
+	// AckURL is the link that acknowledges this alarm's occurrence as To
+	// from the page (Options.AckLink); "" for none. It is a credential:
+	// a channel puts it in the page and nowhere else (no log, no row).
+	AckURL string
 }
 
 // Channel delivers a Message by one means. Send may block up to its own
@@ -77,6 +81,13 @@ type Options struct {
 	// Backoff is the wait before the first retry; it doubles. Default 500ms.
 	Backoff time.Duration
 
+	// AckLink mints the link a page by channel kind via carries to
+	// acknowledge m's occurrence as m.To (#715), or "" for none (a kind
+	// that shows no link, or no alarms.oncall.ack-url). Asked once per
+	// send, just before its first attempt, after the gate: a link is
+	// minted only for a page that leaves. Nil: no links.
+	AckLink func(m Message, via string) string
+
 	Log *slog.Logger
 }
 
@@ -132,6 +143,7 @@ type Dispatcher struct {
 	channels map[string]Channel
 	gate     func() bool
 	term     func() uint64
+	ackLink  func(Message, string) string
 	every    time.Duration
 	failN    int
 	log      *slog.Logger
@@ -183,7 +195,7 @@ func New(o Options) (*Dispatcher, error) {
 	}
 	d := &Dispatcher{
 		cfg: o.Config, eng: o.Engine, channels: o.Channels,
-		gate: o.Gate, term: o.Term,
+		gate: o.Gate, term: o.Term, ackLink: o.AckLink,
 		every: o.Every, failN: o.FailAfter, log: o.Log,
 		episodes: map[string]*episode{},
 		sends:    map[sendKey]sendState{},
@@ -523,6 +535,9 @@ func (d *Dispatcher) deliver(q queued) {
 		// due for whoever looks next.
 		d.release(q)
 		return
+	}
+	if d.ackLink != nil && q.msg.Alarm.Occurrence != "" {
+		q.msg.AckURL = d.ackLink(q.msg, q.key.via)
 	}
 	ctx, cancel := context.WithTimeout(d.ctx, d.sendTimeout)
 	err := d.channels[q.key.via].Send(ctx, q.msg)

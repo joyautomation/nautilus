@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/joyautomation/nautilus/alarm"
+	"github.com/joyautomation/nautilus/alarm/acklink"
 	"github.com/joyautomation/nautilus/audit"
 	"github.com/joyautomation/nautilus/oplog"
 	"github.com/joyautomation/nautilus/retain"
@@ -178,6 +179,52 @@ type AlarmLog struct {
 	// lapsed holds the lapsed acks and shelves by seq until the KindLapse
 	// naming them is applied (under mu, bounded by maxLapsedAlarms).
 	lapsed map[uint64]oplog.Entry
+
+	// spent holds the ack links (#715) the log's acks were made by, by
+	// link ID, with the TS of the entry that spent each, on every replica
+	// (live or not): a link is spent once, so a later ack naming one is
+	// not applied. Built from the log alone (an entry's TS, never this
+	// replica's clock), so every replica holds the same set, and the node
+	// replays its file into Apply at start, so it survives a restart. Kept
+	// when the view is dropped (a superseded history): a link refused once
+	// too often costs a visit to the HMI, one honoured twice an ack nobody
+	// gave. Under mu.
+	spent map[string]int64
+}
+
+// linkSpentFor is how long the log remembers a spent link: past it no
+// link minted when it was spent can still check (acklink.MaxTTL, and the
+// clock skew acklink.Verify allows, with room).
+const linkSpentFor = acklink.MaxTTL + time.Hour
+
+// LinkSpent reports whether the log has an ack made by link id.
+func (l *AlarmLog) LinkSpent(id string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	_, ok := l.spent[id]
+	return ok
+}
+
+// spend records e's link as spent, and reports false when it already
+// was: e is then not applied. It prunes the links spent longer ago than
+// any could still check, by e's TS. Under mu.
+func (l *AlarmLog) spend(e oplog.Entry) bool {
+	if e.Link == "" {
+		return true
+	}
+	if _, ok := l.spent[e.Link]; ok && !mutServer("link_replay_applied") {
+		return false
+	}
+	if l.spent == nil {
+		l.spent = map[string]int64{}
+	}
+	for id, ts := range l.spent {
+		if e.TS-ts > linkSpentFor.Milliseconds() {
+			delete(l.spent, id)
+		}
+	}
+	l.spent[e.Link] = e.TS
+	return true
 }
 
 // maxLapsedAlarms bounds the lapsed entries waiting for their KindLapse.
@@ -317,6 +364,13 @@ func (l *AlarmLog) Apply(e oplog.Entry) (bool, error) {
 	case oplog.KindAck:
 		occ := occsByID(e.Occs)
 		l.mu.Lock()
+		if !l.spend(e) {
+			// The link was used already (two people pressing at once, or
+			// the same press on both controllers): the first ack stands.
+			l.mu.Unlock()
+			notes = append(notes, "ack of "+strings.Join(e.IDs, ",")+" by "+e.By+" not applied: its link was already used")
+			return true, nil
+		}
 		for _, id := range e.IDs {
 			delete(l.adopt, id) // a later ack decides for itself
 			v := l.view[id]
@@ -854,7 +908,10 @@ func (s *Server) refuseAlarmWithoutMajority(w http.ResponseWriter) bool {
 
 // alarmAckThroughLog proposes an acknowledgement: "all" becomes the leader's
 // unacknowledged alarms by id, since a standby can't know them.
-func (s *Server) alarmAckThroughLog(w http.ResponseWriter, r *http.Request, ids []string, occ map[string]string, by string) {
+//
+// link is the ack link's ID when the ack is made by one (#715, acklink.go):
+// the entry carries it, and every replica refuses a second ack naming it.
+func (s *Server) alarmAckThroughLog(w http.ResponseWriter, r *http.Request, ids []string, occ map[string]string, by, link string) {
 	if s.refuseAlarmBeforeRestore(w) {
 		return
 	}
@@ -893,7 +950,11 @@ func (s *Server) alarmAckThroughLog(w http.ResponseWriter, r *http.Request, ids 
 	if mutServer("ack_entry_unbound") {
 		occs = nil
 	}
-	if _, err := s.proposeFor(ctx, r, oplog.Entry{Kind: oplog.KindAck, IDs: ids, Occs: occs, By: by}, true, s.alarmLog.node.Propose); err != nil {
+	propose := s.alarmLog.node.Propose
+	if f := alarmProposeSeam.Load(); f != nil {
+		propose = *f // tests: a proposal the log never confirms
+	}
+	if _, err := s.proposeFor(ctx, r, oplog.Entry{Kind: oplog.KindAck, IDs: ids, Occs: occs, By: by, Link: link}, true, propose); err != nil {
 		unknownOutcome(w, err)
 		return
 	}
@@ -928,6 +989,10 @@ func (s *Server) shelveThroughLog(w http.ResponseWriter, r *http.Request, id str
 	}
 	s.writeAlarmRecord(w, id)
 }
+
+// alarmProposeSeam, set only by tests, replaces the oplog node's Propose
+// for an acknowledgement (an outcome the log never confirms).
+var alarmProposeSeam atomic.Pointer[func(context.Context, oplog.Entry) (oplog.Entry, error)]
 
 // occsByID indexes an entry's occurrences by alarm.
 func occsByID(occs []oplog.Occ) map[string]oplog.Occ {

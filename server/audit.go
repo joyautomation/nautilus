@@ -621,7 +621,14 @@ type auditedRoute struct {
 	action string
 	tf     targetFunc
 	h      http.HandlerFunc
+	pre    preStep
 }
+
+// preStep runs before the seam decides anything: it may fix who the
+// request acts as (an ack link's person, acklink.go) and return the
+// request to go on with, or answer it itself (through a.answer, so the
+// refusal is journalled) and return false.
+type preStep func(a *auditedRoute, w http.ResponseWriter, r *http.Request) (*http.Request, bool)
 
 // audited wraps a write route's handler: it reads the target, runs the
 // handler into a buffer, records one entry from the outcome, and only then
@@ -633,11 +640,24 @@ type auditedRoute struct {
 // apply authorizeWrite (or a stricter check that includes it) before it
 // reads its body: given an empty one, a handler that did not would
 // answer 400 where it should have said 401.
-func (s *Server) audited(action string, tf targetFunc, h http.HandlerFunc) *auditedRoute {
-	return &auditedRoute{s: s, action: action, tf: tf, h: h}
+//
+// pre, at most one, is a preStep for a route whose credential is not the
+// request's own (an ack link).
+func (s *Server) audited(action string, tf targetFunc, h http.HandlerFunc, pre ...preStep) *auditedRoute {
+	a := &auditedRoute{s: s, action: action, tf: tf, h: h}
+	if len(pre) > 0 {
+		a.pre = pre[0]
+	}
+	return a
 }
 
 func (a *auditedRoute) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if a.pre != nil {
+		var ok bool
+		if r, ok = a.pre(a, w, r); !ok {
+			return
+		}
+	}
 	r = a.s.withActor(r)
 	if code, msg, known := a.s.preAuthorize(r, a.action); code != 0 {
 		// A known person refused by role (or for a fresh password) is

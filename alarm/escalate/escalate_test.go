@@ -2,6 +2,7 @@ package escalate
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -163,6 +164,13 @@ func TestPrepareErrors(t *testing.T) {
 		{`escalation: [{id: p, match: {priority: [urgent]}, levels: [{after: 0s, notify: [alice], via: [email]}]}]`, "match.priority[0]"},
 		{`escalation: [{id: p, levels: [{after: 0s, notify: ["svc:x"], via: [email]}]}]`, "not a person"},
 		{`escalation: [{levels: [{after: 0s, notify: [alice], via: [email]}]}]`, "id is required"},
+		{`oncall: {ack-url: "http://hmi.example"}`, "plaintext"},
+		{`oncall: {ack-url: "ftp://hmi.example"}`, "must be https"},
+		{`oncall: {ack-url: "https://u:p@hmi.example"}`, "no user"},
+		{`oncall: {ack-url: "https://hmi.example/?a=b"}`, "no query"},
+		{`oncall: {ack-url: "hmi.example"}`, "plain URL"},
+		{`oncall: {ack-url-insecure: true}`, "without an ack-url"},
+		{`oncall: {ack-url: "https://hmi.example", ack-from-notification: email}`, "ack-from-notification"},
 	}
 	for _, tc := range cases {
 		err := prepareErr(tc.src)
@@ -290,6 +298,12 @@ escalation:
 // until 07:00, bob's after.
 func newRig(t *testing.T, gated bool, defs ...alarm.Def) *rig {
 	t.Helper()
+	return newRigWith(t, gated, nil, defs...)
+}
+
+// newRigWith is newRig with more dispatcher options (opt changes them).
+func newRigWith(t *testing.T, gated bool, opt func(*Options), defs ...alarm.Def) *rig {
+	t.Helper()
 	r := &rig{t: t, tags: map[string]any{}}
 	r.setNow(chicago(t, "2026-11-20 06:00"))
 	if len(defs) == 0 {
@@ -322,6 +336,9 @@ func newRig(t *testing.T, gated bool, defs ...alarm.Def) *rig {
 		Channels: map[string]Channel{"email": r.email, "sms": r.sms, "log": LogChannel{}}}
 	if gated {
 		o.Gate, o.Term = r.gate.Load, r.term.Load
+	}
+	if opt != nil {
+		opt(&o)
 	}
 	r.d, err = New(o)
 	if err != nil {
@@ -1251,5 +1268,63 @@ func TestRetryAsksAgainBeforeEachAttempt(t *testing.T) {
 				t.Fatalf("%d attempts after the alarm stopped waiting or the leadership ended, want 1", n)
 			}
 		})
+	}
+}
+
+// A page carries the ack link (#715) the hook mints for its alarm's
+// occurrence, person and channel, minted only for a page that leaves
+// (after the gate), never journalled.
+func TestPagesCarryTheAckLink(t *testing.T) {
+	var mu sync.Mutex
+	var minted []string
+	r := newRigWith(t, true, func(o *Options) {
+		o.AckLink = func(m Message, via string) string {
+			mu.Lock()
+			defer mu.Unlock()
+			if m.Alarm.Occurrence == "" {
+				t.Errorf("a link asked for with no occurrence: %+v", m)
+			}
+			minted = append(minted, fmt.Sprintf("%s:%d:%s:%s", m.Alarm.ID, m.Level, m.To, via))
+			return "https://hmi.example/alarm-ack/" + m.To + "-" + via
+		}
+	})
+	r.gate.Store(false)
+	r.set("TT1", true)
+	r.run(time.Second)
+	mu.Lock()
+	if len(minted) != 0 {
+		t.Fatalf("minted %v behind a closed gate", minted)
+	}
+	mu.Unlock()
+	r.gate.Store(true)
+	r.term.Store(2)
+	r.run(time.Second)
+	for _, m := range r.email.Messages() {
+		if m.AckURL != "https://hmi.example/alarm-ack/"+m.To+"-email" {
+			t.Fatalf("email to %s carries %q", m.To, m.AckURL)
+		}
+	}
+	if len(r.email.Messages()) == 0 {
+		t.Fatal("nothing sent")
+	}
+	evs, _ := r.ring.Query(time.Time{}, time.Time{}, alarm.Filter{})
+	for _, e := range evs {
+		b, _ := json.Marshal(e)
+		if strings.Contains(string(b), "alarm-ack") {
+			t.Fatalf("a link reached the journal: %s", b)
+		}
+	}
+}
+
+// An ack-url is https, or http only by an explicit ack-url-insecure; the
+// default is that the link alone acknowledges (James, #715).
+func TestAckURLAccepted(t *testing.T) {
+	c := prepare(t, `oncall: {ack-url: "https://hmi.example:8443/plant"}`)
+	if c.Oncall.AckFrom() != AckByLink || DefaultAckFrom != AckByLink {
+		t.Fatalf("default %q", c.Oncall.AckFrom())
+	}
+	c = prepare(t, `oncall: {ack-url: "http://10.0.0.5:8080", ack-url-insecure: true, ack-from-notification: sign-in}`)
+	if c.Oncall.AckFrom() != AckBySignIn {
+		t.Fatalf("sign-in %q", c.Oncall.AckFrom())
 	}
 }

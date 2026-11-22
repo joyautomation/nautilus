@@ -319,7 +319,9 @@ func TestRefusalBodyIsBounded(t *testing.T) {
 func TestEveryAreaScopedActionChecksItsTarget(t *testing.T) {
 	covered := map[string]bool{}
 	for _, row := range auditRows() {
-		if row.result != "ok" || !auth.AreaScoped(actionPerm[row.action]) {
+		// An ack link acts as the person it names, never the request's
+		// token: its area check is TestAckLinkActsOnlyAsAPersonWhoMayAck.
+		if row.result != "ok" || !auth.AreaScoped(actionPerm[row.action]) || row.pattern == "POST /alarm-ack/{token}" {
 			continue
 		}
 		covered[row.action] = true

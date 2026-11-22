@@ -86,6 +86,7 @@ import (
 	"time"
 
 	"github.com/joyautomation/nautilus/alarm"
+	"github.com/joyautomation/nautilus/alarm/acklink"
 	"github.com/joyautomation/nautilus/audit"
 	"github.com/joyautomation/nautilus/auth"
 	"github.com/joyautomation/nautilus/auth/users"
@@ -288,6 +289,20 @@ type Options struct {
 	// and unshelves through the replicated log of operator intent (#710
 	// PR 3b-2c, alarms_oplog.go). Nil: they apply here.
 	AlarmLog *AlarmLog
+
+	// AckLinks mints and checks the links a page carries to acknowledge an
+	// alarm from the notification (#715, acklink.go): on a pair, under a
+	// key both members derive from the peer token (internal/pairkey), so
+	// a link minted by one acks on the other. Nil: no links are minted,
+	// and /alarm-ack/ answers that this controller sends none.
+	AckLinks *acklink.Keyring
+	// AckURL is alarms.oncall.ack-url, the HMI as a person paged reaches
+	// it: the base of every link. "" mints none.
+	AckURL string
+	// AckLinkSignIn is alarms.oncall.ack-from-notification: sign-in: a
+	// link acknowledges only for a browser signed in as the person it was
+	// sent to. False (the default): the link alone acknowledges.
+	AckLinkSignIn bool
 
 	// Audit is the runtime audit journal (#709): every write route records
 	// one entry per request to it, accepted or refused, before the client
@@ -589,8 +604,13 @@ type Server struct {
 	subRules    []SubstituteRule // Options.Substitutes
 	subLog      *SubstituteLog   // Options.SubstituteLog
 	alarmLog    *AlarmLog        // Options.AlarmLog
-	unknowns    *unknowns        // proposals answered "outcome unknown", for their resolution (oplog_unknown.go)
-	audit       *auditor
+	// ack links (#715, acklink.go): Options.AckLinks, AckURL, AckLinkSignIn
+	ackLinks      *acklink.Keyring
+	ackURL        string
+	ackLinkSignIn bool
+	links         linkBook
+	unknowns      *unknowns // proposals answered "outcome unknown", for their resolution (oplog_unknown.go)
+	audit         *auditor
 
 	resync time.Duration
 	diag   time.Duration
@@ -715,6 +735,7 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 		s.subRules = opts[0].Substitutes
 		s.subLog = opts[0].SubstituteLog
 		s.alarmLog = opts[0].AlarmLog
+		s.ackLinks, s.ackURL, s.ackLinkSignIn = opts[0].AckLinks, opts[0].AckURL, opts[0].AckLinkSignIn
 		s.notes, s.notesLog = opts[0].Notes, opts[0].NotesLog
 	}
 	var rec audit.Recorder
@@ -919,6 +940,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/alarms", s.handleAlarms)
 	mux.HandleFunc("GET /api/alarms/journal", s.handleAlarmJournal)
 	mux.Handle("POST /api/alarms/ack", s.audited("alarm.ack", ackTarget, s.handleAlarmAck))
+	// Ack links (#715): GET is the confirm page and changes nothing (a
+	// mail scanner that opens links acks nothing); POST acknowledges.
+	// The paths are acklink.Path (TestAckLinkRoutesAreAcklinkPath).
+	mux.HandleFunc("GET /alarm-ack/{token}", s.handleAckLinkPage)
+	mux.Handle("POST /alarm-ack/{token}", s.audited("alarm.ack", linkAuditTarget, s.handleAckLink, s.checkLink))
 	mux.Handle("POST /api/alarms/shelve", s.audited("alarm.shelve", shelveTarget, s.handleAlarmShelve))
 	mux.Handle("POST /api/alarms/unshelve", s.audited("alarm.unshelve", unshelveTarget, s.handleAlarmUnshelve))
 	mux.HandleFunc("GET /api/stream", s.handleStream)
@@ -1901,6 +1927,13 @@ func (s *Server) authorizeWrite(r *http.Request) (int, string) {
 			return 0, ""
 		}
 		return s.authorize(r, PermWrite, auth.All)
+	}
+	if _, ok := linkOf(r); ok && !mutServer("link_needs_write_rule") {
+		// An ack link (#715, acklink.go) is its own credential: checked
+		// (signature, expiry) before the request got here, and good for one
+		// occurrence of one alarm. The token-or-same-origin rule would
+		// refuse a phone that holds no NAUTILUS_TOKEN.
+		return 0, ""
 	}
 	if s.authToken != "" {
 		if tokenMatches(r, s.authToken) {

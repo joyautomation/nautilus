@@ -6,12 +6,16 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/joyautomation/nautilus/alarm"
+	"github.com/joyautomation/nautilus/alarm/acklink"
 	"github.com/joyautomation/nautilus/alarm/channel/channeltest"
+	"github.com/joyautomation/nautilus/alarm/escalate"
 	"github.com/joyautomation/nautilus/alarm/oncall"
+	"github.com/joyautomation/nautilus/internal/pairkey"
 	"github.com/joyautomation/nautilus/server"
 )
 
@@ -30,6 +34,14 @@ type channelsRig struct {
 
 func newChannelsRig(t *testing.T, smtpOpts channeltest.SMTPOptions, contacts map[string]oncall.Contact) *channelsRig {
 	t.Helper()
+	return newChannelsRigLinks(t, smtpOpts, contacts, false)
+}
+
+// newChannelsRigLinks is newChannelsRig whose pages carry ack links
+// (#715) when links is set, wired as naut run wires them: the server
+// mints, under a key from the pair token, for email and SMS.
+func newChannelsRigLinks(t *testing.T, smtpOpts channeltest.SMTPOptions, contacts map[string]oncall.Contact, links bool) *channelsRig {
+	t.Helper()
 	smtpOpts.User, smtpOpts.Pass = "alarms", "mail-pass-1"
 	r := &channelsRig{smtp: channeltest.NewSMTP(t, smtpOpts), sms: channeltest.NewProvider(t)}
 	manifest := alarmTags + fmt.Sprintf(`
@@ -40,6 +52,7 @@ alarms:
     email: { smtp: "%s", from: alarms@example.com, username: alarms, ca-file: "%s" }
     sms: { provider: "%s", account: AC0001, from: "+15550100", ca-file: "%s" }
   oncall:
+    ack-url: https://hmi.example
     rosters:
       - { id: ops, members: [alice] }
       - { id: maint, members: [bob] }
@@ -80,12 +93,29 @@ alarms:
 	proj.AlarmDirectory = st
 	r.clk = &stepClock{t: time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)}
 	proj.Runtime.Clock = r.clk
+	var srv atomic.Pointer[server.Server]
+	var ring *acklink.Keyring
+	if links {
+		k, _ := pairkey.Derive([]byte("peer-token"), pairkey.AckLink)
+		ring, _ = acklink.New(k)
+		proj.AckLink = func(m escalate.Message, via string) string {
+			if via != "email" && via != "sms" {
+				return ""
+			}
+			return srv.Load().AckLinkURL(m.Alarm.ID, m.Alarm.Occurrence, m.To, via, m.Level)
+		}
+	}
 	_, rt := loadAlarmsWith(t, proj)
 	if r.a, err = proj.NewAlarms(rt); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { r.a.Close() })
-	r.srv = server.New(rt, server.Options{Alarms: r.a.Engine})
+	o := server.Options{Alarms: r.a.Engine}
+	if links {
+		o.AckLinks, o.AckURL = ring, proj.Alarms.Oncall.AckURL
+	}
+	r.srv = server.New(rt, o)
+	srv.Store(r.srv)
 	r.scan = func() {
 		rt.Scan()
 		r.a.Escalation.Drain()
@@ -161,6 +191,57 @@ func TestEscalationTwoChannelsAckStopsLevelThree(t *testing.T) {
 	want := []string{"1:alice:email:sent", "2:bob:sms:sent"}
 	if strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Fatalf("notify rows %v, want %v", got, want)
+	}
+}
+
+// The done-when with ack links (#715 PR 3b-1): each page carries a link;
+// bob opens the one in his SMS (the page changes nothing), presses
+// Acknowledge, and level 3 never goes. The alarm journal names bob, not
+// a typed name. Without links the pages say to use the HMI.
+func TestEscalationAckByLinkStopsLevelThree(t *testing.T) {
+	r := newChannelsRigLinks(t, channeltest.SMTPOptions{}, map[string]oncall.Contact{
+		"alice": {Email: "alice@example.com"},
+		"bob":   {SMS: "+15550101"},
+		"carol": {Email: "carol@example.com"},
+	}, true)
+	r.run(10*time.Minute + 10*time.Second)
+	mails, reqs := r.smtp.Mails(), r.sms.Requests()
+	if len(mails) != 1 || len(reqs) != 1 {
+		t.Fatalf("%d mails, %d SMS", len(mails), len(reqs))
+	}
+	if !strings.Contains(strings.ReplaceAll(mails[0].Data, "=\r\n", ""), "https://hmi.example"+acklink.Path) {
+		t.Fatalf("alice's mail carries no link:\n%s", mails[0].Data)
+	}
+	body := reqs[0].Body
+	i := strings.Index(body, "https://hmi.example"+acklink.Path)
+	if i < 0 {
+		t.Fatalf("bob's SMS carries no link: %s", body)
+	}
+	path := strings.TrimPrefix(strings.Fields(body[i:])[0], "https://hmi.example")
+	if rec := r.api(t, "GET", path, ""); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "<form") {
+		t.Fatalf("confirm page: %d %s", rec.Code, rec.Body)
+	}
+	if rec := r.api(t, "POST", path, ""); rec.Code != http.StatusOK {
+		t.Fatalf("ack by link = %d %s", rec.Code, rec.Body)
+	}
+	if rec, _ := r.a.Engine.Lookup("intrusion"); rec.AckBy != "bob" {
+		t.Fatalf("acknowledged by %q, want bob", rec.AckBy)
+	}
+	r.run(30 * time.Minute)
+	if mails := r.smtp.Mails(); len(mails) != 1 {
+		t.Fatalf("the link's ack did not stop level 3: %d mails", len(mails))
+	}
+	got := notifySummary(notifyRows(t, r.a.Engine))
+	if want := []string{"1:alice:email:sent", "2:bob:sms:sent"}; strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("notify rows %v, want %v", got, want)
+	}
+	// alice's link, for the same occurrence, is still unspent but the
+	// alarm waits on nobody now: it acknowledges nothing.
+	am := strings.ReplaceAll(mails[0].Data, "=\r\n", "")
+	j := strings.Index(am, acklink.Path)
+	apath := strings.Fields(am[j:])[0]
+	if rec := r.api(t, "POST", apath, ""); rec.Code != http.StatusConflict {
+		t.Fatalf("alice's link after bob's ack: %d %s", rec.Code, rec.Body)
 	}
 }
 

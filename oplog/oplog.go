@@ -113,6 +113,17 @@ type Entry struct {
 	// before them loads unchanged.
 	Occs []Occ `json:"occs,omitempty"`
 
+	// Link is, on an ack made from a notification's link (#715), the
+	// link's ID (alarm/acklink Claim.ID: not a secret, never the token).
+	// A link is spent once: every replica records it when the ack is
+	// applied, and a later ack naming it is not applied, so a link used on
+	// one controller is refused on the other after a takeover. omitempty:
+	// a log written before it loads unchanged; a replica on an older
+	// binary drops it when it re-marshals the entry, and then cannot
+	// refuse that link's second use (the occurrence it names is already
+	// acknowledged, so the replay acknowledges nothing).
+	Link string `json:"link,omitempty"`
+
 	// Lapsed is set by the node, never stored: this entry is one a
 	// KindLapse entry committed with it names (see KindLapse). Apply sees
 	// it on the entry and records it instead of carrying it out.
