@@ -112,6 +112,28 @@ func (t *Tags) WriteAs(ops []WriteOp, by string) []error {
 	return errs
 }
 
+// CheckWrites runs the front door's refusals (a force, a read-only tag, a
+// range) over ops without writing anything, one error per op. An import
+// uses it to refuse the whole set before the first write; WriteAs still
+// applies every refusal again, so the check can never let one through.
+func (t *Tags) CheckWrites(ops []WriteOp) []error {
+	errs := make([]error, len(ops))
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for i, op := range ops {
+		if f := t.forcedOverlapLocked(op.Path); f != "" {
+			errs[i] = &ForcedError{Path: op.Path, Force: f}
+			continue
+		}
+		if err := t.readOnlyLocked(op.Path); err != nil {
+			errs[i] = err
+			continue
+		}
+		errs[i] = t.rangeCheck(op)
+	}
+	return errs
+}
+
 // TagRange is the bound a setpoint's external writes must stay inside
 // (#718). A nil side is open.
 type TagRange struct {
