@@ -25,14 +25,20 @@ package server
 //     of the same session, whatever order they arrive in: every local end
 //     leaves a tombstone until the session's expiry.
 //   - A copy of the log that is not known complete honours no session that
-//     came through it (it may lack the end), only local ones.
+//     came through it (it may lack the end), only local ones: not synced
+//     (the mark), and not a leader whose takeover has not caught up (the
+//     predecessor's last end may be on the other copy only). An operator
+//     who finds a session refused then signs in again, and gets a local one.
 //   - Elevation is not carried: after a takeover, an elevated action asks for
 //     the password again.
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -44,8 +50,16 @@ import (
 // one.
 type sessionBus interface {
 	Propose(ctx context.Context, e oplog.Entry) (oplog.Entry, error)
+	// Synced: this copy is known to hold every committed entry (the mark).
 	Synced() bool
+	// TermSynced: this replica leads and has caught up for its term. A
+	// leader that has not (a takeover whose catch-up failed or is still
+	// running) may lack an end its predecessor committed elsewhere.
+	TermSynced() bool
 }
+
+// ownedEndMargin is how long past a session's expiry an owed end is kept.
+const ownedEndMargin = 10 * time.Minute
 
 // Timings of the session log's proposals, variables so a test shortens them.
 var (
@@ -103,13 +117,20 @@ func (l *SessionLog) SetFile(path string) {
 	l.file = path
 	if b, err := os.ReadFile(path); err == nil {
 		var list []oplog.SessionEntry
-		if json.Unmarshal(b, &list) == nil {
-			for _, e := range list {
-				if time.Now().Before(time.UnixMilli(e.Expires)) {
-					l.ends[e.Hash] = e
-				}
+		if err := json.Unmarshal(b, &list); err != nil {
+			// Not silent: an end lost here is a signed-out cookie that may
+			// work again until it expires, on this controller's replay.
+			slog.Error("session log: the file of sign-outs not yet carried to the other controller is unreadable; they are lost, and those sessions may be honoured again until they expire", "file", path, "err", err)
+		}
+		for _, e := range list {
+			// kept past its expiry by a margin: a clock set forward at boot
+			// must not drop an end the other controller still needs
+			if time.Now().Before(time.UnixMilli(e.Expires).Add(ownedEndMargin)) {
+				l.ends[e.Hash] = e
 			}
 		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		slog.Error("session log: cannot read the file of sign-outs not yet carried to the other controller", "file", path, "err", err)
 	}
 	ss := l.ss.Load()
 	owed := make([]oplog.SessionEntry, 0, len(l.ends))
@@ -167,7 +188,7 @@ func (l *SessionLog) hookStore(ss *sessions) {
 	ss.mu.Lock()
 	ss.synced = func() bool {
 		b := l.bus.Load()
-		return b != nil && (*b).Synced()
+		return b != nil && (*b).Synced() && (*b).TermSynced()
 	}
 	ss.mu.Unlock()
 }
@@ -248,8 +269,16 @@ func (l *SessionLog) persistLocked() {
 		werr = cerr
 	}
 	if werr == nil {
-		_ = os.Rename(tmp, l.file)
+		werr = os.Rename(tmp, l.file)
 	}
+	if werr == nil {
+		if d, err := os.Open(filepath.Dir(l.file)); err == nil {
+			_ = d.Sync() // the rename itself must survive a power cut
+			d.Close()
+		}
+		return
+	}
+	slog.Error("session log: cannot keep the sign-outs not yet carried to the other controller; if this controller restarts first they are lost", "file", l.file, "err", werr)
 }
 
 // kick starts the worker if there is something owed and none is running.
@@ -324,7 +353,7 @@ func (l *SessionLog) sweep() {
 	l.mu.Unlock()
 	now := time.Now()
 	for _, e := range ends {
-		if !now.Before(time.UnixMilli(e.Expires)) || l.propose(e) {
+		if !now.Before(time.UnixMilli(e.Expires).Add(ownedEndMargin)) || l.propose(e) {
 			l.committed(func() { delete(l.ends, e.Hash); l.persistLocked() })
 		}
 	}

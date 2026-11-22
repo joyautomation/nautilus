@@ -25,8 +25,10 @@ type fakeBus struct {
 	mu       sync.Mutex
 	readOnly bool
 	synced   bool
-	log      []oplog.Entry
-	members  []*SessionLog
+	// termBehind: this replica leads but its takeover has not caught up.
+	termBehind bool
+	log        []oplog.Entry
+	members    []*SessionLog
 }
 
 type busEnd struct{ b *fakeBus }
@@ -44,6 +46,11 @@ func (e busEnd) Propose(_ context.Context, en oplog.Entry) (oplog.Entry, error) 
 	return en, nil
 }
 func (e busEnd) Synced() bool { e.b.mu.Lock(); defer e.b.mu.Unlock(); return e.b.synced }
+func (e busEnd) TermSynced() bool {
+	e.b.mu.Lock()
+	defer e.b.mu.Unlock()
+	return e.b.synced && !e.b.termBehind
+}
 
 // pairOfStores is two controllers' session stores joined by one log.
 func pairOfStores(t *testing.T) (a, b *sessions, la, lb *SessionLog, bus *fakeBus) {
@@ -54,7 +61,9 @@ func pairOfStores(t *testing.T) (a, b *sessions, la, lb *SessionLog, bus *fakeBu
 		l := NewSessionLog()
 		l.bind(ss)
 		l.Attach(busEnd{bus})
+		bus.mu.Lock()
 		bus.members = append(bus.members, l)
+		bus.mu.Unlock()
 		return ss, l
 	}
 	a, la = mk()
@@ -220,16 +229,21 @@ func TestSessionsOverTheRealLog(t *testing.T) {
 
 	// alice signs in at the leader a(0); the log carries it to b(1).
 	id, _ := stores[0].open("alice", "c")
-	eventually(t, "b to honour alice's cookie", func() bool { _, ok := stores[1].lookup(id); return ok })
+	// b is a standby: it holds the record but honours no cookie until it leads
+	// and has caught up for its term
+	eventually(t, "b to hold alice's record", func() bool { return stores[1].has(sessionHash(id)) })
 
 	// the leader dies: b leads. alice's cookie works, she signs out there, and
 	// a (when it returns) does not honour it.
 	p.lead(1, 2)
+	if err := p.nodes[1].SyncLeader(t.Context()); err != nil { // the takeover's catch-up, as the runtime does it
+		t.Fatal(err)
+	}
 	if _, ok := stores[1].lookup(id); !ok {
 		t.Fatal("alice's cookie does not work at the new leader")
 	}
 	stores[1].end(id)
-	eventually(t, "a to drop the signed-out session", func() bool { _, ok := stores[0].lookup(id); return !ok })
+	eventually(t, "a to drop the signed-out session", func() bool { return !stores[0].has(sessionHash(id)) })
 
 	// no majority: bob still signs in at b, his session is local and a does
 	// not honour it; the peers return, it replicates.
@@ -245,13 +259,13 @@ func TestSessionsOverTheRealLog(t *testing.T) {
 	if _, ok := stores[1].lookup(bid); !ok {
 		t.Fatal("bob cannot use his session where he signed in")
 	}
-	if _, ok := stores[0].lookup(bid); ok {
-		t.Error("a controller honours a session the log never carried")
+	if stores[0].has(sessionHash(bid)) {
+		t.Error("a controller holds a session the log never carried")
 	}
 	p.gates[0].down.Store(false)
 	p.gates[2].down.Store(false)
 	p.nodes[1].Heartbeat(t.Context())
-	eventually(t, "bob's session to replicate", func() bool { _, ok := stores[0].lookup(bid); return ok })
+	eventually(t, "bob's session to replicate", func() bool { return stores[0].has(sessionHash(bid)) })
 }
 
 // Reading a cookie while the log commits session entries must not deadlock:
@@ -336,7 +350,9 @@ func TestOwedEndsSurviveARestart(t *testing.T) {
 	l.SetFile(file)
 	l.bind(ss)
 	l.Attach(busEnd{bus})
+	bus.mu.Lock()
 	bus.members = append(bus.members, l)
+	bus.mu.Unlock()
 	id, _ := ss.open("alice", "c")
 	ss.end(id)
 	time.Sleep(60 * time.Millisecond)
@@ -350,7 +366,9 @@ func TestOwedEndsSurviveARestart(t *testing.T) {
 	l2.SetFile(file)
 	l2.bind(ss2)
 	l2.Attach(busEnd{bus})
+	bus.mu.Lock()
 	bus.members = append(bus.members, l2)
+	bus.mu.Unlock()
 	waitFor(t, "the owed end to be sent", func() bool {
 		bus.mu.Lock()
 		defer bus.mu.Unlock()
@@ -419,5 +437,26 @@ func TestAnEndQueuedDuringASweepIsNotDelayed(t *testing.T) {
 	}
 	if d := time.Since(start); d > sessionRetryEvery*3 {
 		t.Errorf("took %v: the worker was not poked", d)
+	}
+}
+
+// A takeover whose catch-up has not finished may lack an end its predecessor
+// committed elsewhere: it honours no replicated session until it has (the
+// operator signs in again and gets a local one).
+func TestAnUncaughtUpLeaderHonoursNoReplicatedSession(t *testing.T) {
+	a, b, _, _, bus := pairOfStores(t)
+	id, _ := a.open("alice", "c")
+	waitFor(t, "the open to reach b", func() bool { _, ok := b.lookup(id); return ok })
+	bus.mu.Lock()
+	bus.termBehind = true
+	bus.mu.Unlock()
+	if _, ok := b.lookup(id); ok {
+		t.Error("a leader that has not caught up for its term honoured a replicated session")
+	}
+	bus.mu.Lock()
+	bus.termBehind = false
+	bus.mu.Unlock()
+	if _, ok := b.lookup(id); !ok {
+		t.Error("the session is not honoured once the term is caught up")
 	}
 }
