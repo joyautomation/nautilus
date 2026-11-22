@@ -129,8 +129,18 @@ func TestAckLinkChecks(t *testing.T) {
 	}
 	// A name the manifest does not allow: the controller would refuse
 	// the link's request by its Host.
-	if _, warns := ackLinkChecks(linkProject(t, "    ack-url: https://hmi.example\n")); len(warns) != 1 || !strings.Contains(warns[0], "server.allowed-hosts") {
+	// The warning names the setting that exists (the environment), never
+	// a manifest key the manifest would refuse.
+	t.Setenv("NAUTILUS_ALLOWED_HOSTS", "")
+	if _, warns := ackLinkChecks(linkProject(t, "    ack-url: https://hmi.example\n")); len(warns) != 1 ||
+		!strings.Contains(warns[0], "NAUTILUS_ALLOWED_HOSTS") || strings.Contains(warns[0], "server.allowed-hosts") {
 		t.Fatalf("a name not allowed: %v", warns)
+	}
+	// Where naut check runs with the controller's environment, a name it
+	// allows clears the warning.
+	t.Setenv("NAUTILUS_ALLOWED_HOSTS", "plc1, HMI.example")
+	if _, warns := ackLinkChecks(linkProject(t, "    ack-url: https://hmi.example\n")); len(warns) != 0 {
+		t.Fatalf("a name NAUTILUS_ALLOWED_HOSTS allows: %v", warns)
 	}
 }
 
@@ -339,7 +349,9 @@ func TestInboundOptions(t *testing.T) {
 // naut check warns when the inbound URL's host is not one the controller
 // answers.
 func TestInboundChecks(t *testing.T) {
-	if _, warns := ackLinkChecks(inboundProject(t, "")); len(warns) != 1 || !strings.Contains(warns[0], "alarms.oncall.inbound.url") || !strings.Contains(warns[0], "server.allowed-hosts") {
+	t.Setenv("NAUTILUS_ALLOWED_HOSTS", "")
+	if _, warns := ackLinkChecks(inboundProject(t, "")); len(warns) != 1 || !strings.Contains(warns[0], "alarms.oncall.inbound.url") ||
+		!strings.Contains(warns[0], "NAUTILUS_ALLOWED_HOSTS") || strings.Contains(warns[0], "server.allowed-hosts") {
 		t.Fatalf("warns %v", warns)
 	}
 	p := linkProject(t, "    inbound: { url: \"https://10.0.0.5:8443\", channels: [sms] }\n")

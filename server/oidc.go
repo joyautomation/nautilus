@@ -272,7 +272,7 @@ func (s *Server) handleOIDCStart(w http.ResponseWriter, r *http.Request) {
 	}
 	redirect, ok := s.oidcRedirectURI(r)
 	if !ok {
-		refuse(http.StatusForbidden, "OIDC sign-in from this address needs a host name the controller trusts: add it to NAUTILUS_ALLOWED_HOSTS (or server.allowed-hosts), or set auth.oidc.redirect-url", "untrusted host")
+		refuse(http.StatusForbidden, "OIDC sign-in from this address needs a host name the controller trusts: add it to NAUTILUS_ALLOWED_HOSTS, or set auth.oidc.redirect-url", "untrusted host")
 		return
 	}
 	// With redirect-url set, the sign-in must start at that origin: the

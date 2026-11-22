@@ -67,6 +67,9 @@ func TestAlarmRoutes404WithoutAnEngine(t *testing.T) {
 		{"POST", "/api/alarms/ack", `{"all":true}`},
 		{"POST", "/api/alarms/shelve", `{"id":"HiTemp","seconds":60}`},
 		{"POST", "/api/alarms/unshelve", `{"id":"HiTemp"}`},
+		{"GET", "/api/alarms/out-of-service", ""},
+		{"POST", "/api/alarms/out-of-service", `{"equipment":"HiTempAlm","seconds":60,"reason":"x"}`},
+		{"POST", "/api/alarms/in-service", `{"equipment":"HiTempAlm"}`},
 	} {
 		rec := do(t, srv, tc.method, tc.path, tc.body)
 		if rec.Code != http.StatusNotFound {
