@@ -1,4 +1,4 @@
-package channel
+package send
 
 import (
 	"bytes"
@@ -16,28 +16,29 @@ import (
 	"strings"
 	"time"
 
+	"github.com/joyautomation/nautilus/alarm/channel"
 	"github.com/joyautomation/nautilus/alarm/escalate"
 )
 
 type emailSender struct {
-	cfg     Email
-	dir     Directory
+	cfg     channel.Email
+	dir     channel.Directory
 	host    string
 	tls     *tls.Config
 	timeout time.Duration
 }
 
 func (e *emailSender) attempt(ctx context.Context, m escalate.Message) error {
-	to, err := address(e.dir, m.To, KindEmail)
+	to, err := address(e.dir, m.To, channel.KindEmail)
 	if err != nil {
 		return err
 	}
-	if ValidEmail(to) != nil {
+	if channel.ValidEmail(to) != nil {
 		return escalate.Failed(escalate.FailNoContact)
 	}
 	var pass string
 	if e.cfg.Username != "" {
-		if pass, err = secret(e.dir, SecretEmailPassword); err != nil {
+		if pass, err = secret(e.dir, channel.SecretEmailPassword); err != nil {
 			return err
 		}
 	}
@@ -110,7 +111,7 @@ func (e *emailSender) deliver(ctx context.Context, to, pass string, msg []byte) 
 	}()
 	defer conn.Close()
 
-	implicit := e.cfg.TLS == SMTPImplicit
+	implicit := e.cfg.TLS == channel.SMTPImplicit
 	var nc net.Conn = conn
 	if implicit {
 		tc := tls.Client(conn, e.tls)

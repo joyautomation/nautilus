@@ -1,5 +1,6 @@
 # The most bytes cmd/naut-wasm may weigh, stripped and gzipped (gzip -9, as the
 # docs image serves it). A PR that grows it past this fails ci-ok; one that
 # shrinks it lowers the number in the same diff (a ratchet). 59a564af: 9,239,028;
-# after cutting image/png: 9,169,323. v0.22.0 was 7.27 MB; the target is that plus ~5%.
-9220000
+# after cutting image/png: 9,169,323; after the alarm seams (#1239 D): 8,888,537.
+# v0.22.0 was 7.27 MB; the target is that plus ~5%.
+8977422

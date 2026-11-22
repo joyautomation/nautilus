@@ -1,9 +1,11 @@
-package alarm
+package pgjournal
 
 import (
 	"os"
 	"testing"
 	"time"
+
+	"github.com/joyautomation/nautilus/alarm"
 )
 
 // TestPGJournal is an integration test covering the full open / migrate /
@@ -13,16 +15,16 @@ import (
 //
 //	docker run --rm -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:16
 //	NAUTILUS_TEST_DATABASE_URL="postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable" \
-//	  go test ./alarm/ -run TestPGJournal -v
+//	  go test ./alarm/pgjournal/ -run TestPGJournal -v
 func TestPGJournal(t *testing.T) {
 	url := os.Getenv("NAUTILUS_TEST_DATABASE_URL")
 	if url == "" {
 		t.Skip("set NAUTILUS_TEST_DATABASE_URL to run this test against a real Postgres")
 	}
 
-	j, err := NewPostgres(url)
+	j, err := New(url)
 	if err != nil {
-		t.Fatalf("NewPostgres: %v", err)
+		t.Fatalf("New: %v", err)
 	}
 	defer j.Close()
 
@@ -34,10 +36,10 @@ func TestPGJournal(t *testing.T) {
 	}
 
 	base := time.Now().Add(-time.Hour).Truncate(time.Millisecond)
-	events := []Event{
-		{TS: base.UnixMilli(), ID: "RTU9_FIT.HH", Name: "Flow High High", Kind: KindActive, Priority: High, Site: "RTU9", State: "unack-active"},
-		{TS: base.Add(time.Minute).UnixMilli(), ID: "RTU9_FIT.HH", Name: "Flow High High", Kind: KindAck, Priority: High, Site: "RTU9", State: "ack-active", By: "operator1"},
-		{TS: base.Add(2 * time.Minute).UnixMilli(), ID: "RTU12_INT_YA", Name: "Intrusion", Kind: KindActive, Priority: Critical, Site: "RTU12", State: "unack-active"},
+	events := []alarm.Event{
+		{TS: base.UnixMilli(), ID: "RTU9_FIT.HH", Name: "Flow High High", Kind: alarm.KindActive, Priority: alarm.High, Site: "RTU9", State: "unack-active"},
+		{TS: base.Add(time.Minute).UnixMilli(), ID: "RTU9_FIT.HH", Name: "Flow High High", Kind: alarm.KindAck, Priority: alarm.High, Site: "RTU9", State: "ack-active", By: "operator1"},
+		{TS: base.Add(2 * time.Minute).UnixMilli(), ID: "RTU12_INT_YA", Name: "Intrusion", Kind: alarm.KindActive, Priority: alarm.Critical, Site: "RTU12", State: "unack-active"},
 	}
 	for _, e := range events {
 		if err := j.Append(e); err != nil {
@@ -48,7 +50,7 @@ func TestPGJournal(t *testing.T) {
 		t.Fatalf("Flush: %v", err)
 	}
 
-	got, err := j.Query(time.Time{}, time.Time{}, Filter{})
+	got, err := j.Query(time.Time{}, time.Time{}, alarm.Filter{})
 	if err != nil {
 		t.Fatalf("Query: %v", err)
 	}
@@ -58,25 +60,25 @@ func TestPGJournal(t *testing.T) {
 	if got[0].ID != "RTU12_INT_YA" {
 		t.Errorf("Query is not newest-first: %+v", got[0])
 	}
-	if got[0].Priority != Critical {
+	if got[0].Priority != alarm.Critical {
 		t.Errorf("priority did not round-trip: %+v", got[0])
 	}
 
-	bySite, err := j.Query(time.Time{}, time.Time{}, Filter{Sites: []string{"RTU9"}})
+	bySite, err := j.Query(time.Time{}, time.Time{}, alarm.Filter{Sites: []string{"RTU9"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(bySite) != 2 {
 		t.Fatalf("site filter returned %d, want 2", len(bySite))
 	}
-	byKind, err := j.Query(time.Time{}, time.Time{}, Filter{Kinds: []string{KindAck}})
+	byKind, err := j.Query(time.Time{}, time.Time{}, alarm.Filter{Kinds: []string{alarm.KindAck}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(byKind) != 1 || byKind[0].By != "operator1" {
 		t.Fatalf("kind filter returned %+v", byKind)
 	}
-	inRange, err := j.Query(base.Add(90*time.Second), time.Now(), Filter{})
+	inRange, err := j.Query(base.Add(90*time.Second), time.Now(), alarm.Filter{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +101,7 @@ func TestPGJournal(t *testing.T) {
 	if err := j.Prune(59*time.Minute + 30*time.Second); err != nil {
 		t.Fatalf("Prune: %v", err)
 	}
-	after, err := j.Query(time.Time{}, time.Time{}, Filter{})
+	after, err := j.Query(time.Time{}, time.Time{}, alarm.Filter{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,23 +111,23 @@ func TestPGJournal(t *testing.T) {
 
 	// A notify row (#715) keeps its own columns; a state change leaves
 	// them NULL and reads back zero; ExceptKinds drops the kind.
-	note := Event{TS: base.Add(3 * time.Minute).UnixMilli(), ID: "RTU12_INT_YA", Name: "Intrusion", Kind: KindNotify,
-		Priority: Critical, Site: "RTU12", State: "unack-active", By: "system",
-		Level: 2, To: "oidc:carol", Via: "log", Result: NotifySent, Reason: "joined late: x", Occurrence: "0123456789abcdef"}
+	note := alarm.Event{TS: base.Add(3 * time.Minute).UnixMilli(), ID: "RTU12_INT_YA", Name: "Intrusion", Kind: alarm.KindNotify,
+		Priority: alarm.Critical, Site: "RTU12", State: "unack-active", By: "system",
+		Level: 2, To: "oidc:carol", Via: "log", Result: alarm.NotifySent, Reason: "joined late: x", Occurrence: "0123456789abcdef"}
 	if err := j.Append(note); err != nil {
 		t.Fatal(err)
 	}
 	if err := j.Flush(); err != nil {
 		t.Fatal(err)
 	}
-	notes, err := j.Query(time.Time{}, time.Time{}, Filter{Kinds: []string{KindNotify}})
+	notes, err := j.Query(time.Time{}, time.Time{}, alarm.Filter{Kinds: []string{alarm.KindNotify}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(notes) != 1 || notes[0] != note {
 		t.Fatalf("notify row = %+v, want %+v", notes, note)
 	}
-	rest, err := j.Query(time.Time{}, time.Time{}, Filter{ExceptKinds: []string{KindNotify}})
+	rest, err := j.Query(time.Time{}, time.Time{}, alarm.Filter{ExceptKinds: []string{alarm.KindNotify}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +143,7 @@ func TestPGJournalMigratesOldTable(t *testing.T) {
 	if url == "" {
 		t.Skip("set NAUTILUS_TEST_DATABASE_URL to run this test against a real Postgres")
 	}
-	j, err := NewPostgres(url)
+	j, err := New(url)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,12 +159,12 @@ func TestPGJournalMigratesOldTable(t *testing.T) {
 	}
 	j.Close()
 
-	j, err = NewPostgres(url)
+	j, err = New(url)
 	if err != nil {
 		t.Fatalf("open over an old table: %v", err)
 	}
 	defer j.Close()
-	got, err := j.Query(time.Time{}, time.Time{}, Filter{})
+	got, err := j.Query(time.Time{}, time.Time{}, alarm.Filter{})
 	if err != nil || len(got) != 1 || got[0].ID != "OLD" {
 		t.Fatalf("old row after migration = %+v, %v", got, err)
 	}

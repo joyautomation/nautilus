@@ -1,4 +1,4 @@
-package channel
+package send
 
 import (
 	"strings"
