@@ -25,6 +25,7 @@ const siemensUsage = `naut siemens — a Siemens S7-1500 as a nautilus target (e
 Usage:
   naut siemens serve --host <cpu> [flags]   serve the CPU on the nautilus runtime API
   naut siemens cert  --host <cpu>           print the CPU's certificate SHA-256, to pin
+  naut siemens diag  --host <cpu> [flags]   read the CPU's diagnostic buffer
 
 See docs/design/siemens-ide.md.
 `
@@ -39,6 +40,8 @@ func runSiemens(args []string) int {
 		return runSiemensServe(args[1:])
 	case "cert":
 		return runSiemensCert(args[1:])
+	case "diag":
+		return runSiemensDiag(args[1:])
 	case "-h", "--help", "help":
 		fmt.Print(siemensUsage)
 		return 0
@@ -171,19 +174,8 @@ func resolveSiemensServe(host, user, pin, projectDir string, roots []facade.Root
 		if err == nil {
 			tlsCfg, tlsState, tlsName = m.Server.TLS, m.AuthStateDir(), m.Name
 		}
-		if err == nil && m.Target != nil && m.Target.Siemens != nil {
-			t := m.Target.Siemens
-			if c.host == "" {
-				c.host = t.Station.CPU.Address
-			}
-			if o := t.Online; o != nil {
-				if c.user == "" {
-					c.user = o.User
-				}
-				if c.pin == "" {
-					c.pin = o.CertSHA256
-				}
-			}
+		if err == nil {
+			siemensOnlineDefaults(m, &c.host, &c.user, &c.pin)
 		}
 	}
 	// HTTPS: the project's server.tls, or NAUTILUS_TLS_CERT and _KEY with
@@ -194,15 +186,10 @@ func resolveSiemensServe(host, user, pin, projectDir string, roots []facade.Root
 		return c, err
 	}
 	c.tls = src
+	if err := checkSiemensOnline(c.host, c.user, c.password, c.pin); err != nil {
+		return c, err
+	}
 	switch {
-	case c.host == "":
-		return c, errors.New("--host is required (or a project whose target.siemens names the CPU's address)")
-	case c.user == "":
-		return c, errors.New("--user is required: the Web API serves nothing anonymously here")
-	case c.password == "":
-		return c, errors.New("set NAUTILUS_SIEMENS_PASSWORD to the web user's password (it is never a flag)")
-	case c.pin == "":
-		return c, fmt.Errorf("--cert-sha256 is required to trust the CPU's self-signed certificate: run naut siemens cert --host %s and compare it with the CPU's", c.host)
 	case !isLoopback(c.listen) && c.token == "":
 		return c, fmt.Errorf("--listen %s accepts connections from other machines: set NAUTILUS_TOKEN first, since a write here changes a running PLC", c.listen)
 	}
@@ -210,6 +197,42 @@ func resolveSiemensServe(host, user, pin, projectDir string, roots []facade.Root
 		c.roots = []facade.Root{{DB: "Tags"}}
 	}
 	return c, nil
+}
+
+// siemensOnlineDefaults fills what the flags left empty from the project's
+// target.siemens: the CPU's address, the web user and the certificate pin.
+func siemensOnlineDefaults(m *project.Manifest, host, user, pin *string) {
+	if m == nil || m.Target == nil || m.Target.Siemens == nil {
+		return
+	}
+	t := m.Target.Siemens
+	if *host == "" {
+		*host = t.Station.CPU.Address
+	}
+	if o := t.Online; o != nil {
+		if *user == "" {
+			*user = o.User
+		}
+		if *pin == "" {
+			*pin = o.CertSHA256
+		}
+	}
+}
+
+// checkSiemensOnline refuses a Web API connection that is missing a piece,
+// naming where each comes from.
+func checkSiemensOnline(host, user, password, pin string) error {
+	switch {
+	case host == "":
+		return errors.New("--host is required (or a project whose target.siemens names the CPU's address)")
+	case user == "":
+		return errors.New("--user is required: the Web API serves nothing anonymously here")
+	case password == "":
+		return errors.New("set NAUTILUS_SIEMENS_PASSWORD to the web user's password (it is never a flag)")
+	case pin == "":
+		return fmt.Errorf("--cert-sha256 is required to trust the CPU's self-signed certificate: run naut siemens cert --host %s and compare it with the CPU's", host)
+	}
+	return nil
 }
 
 // siemensServeFlags are serve's flags, built in one place so a test can

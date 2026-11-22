@@ -1578,7 +1578,7 @@ the new password. A rotation needs a request that carries both.
 | Optimized DBs, by symbol | yes | yes | no |
 | Push | no; polling | subscriptions | no |
 | Force | no | no | no |
-| Bench FW 3.1 | Browse/Read/Write (≥ 2.8), operating mode (≥ 2.9). Diagnostics, modules and alarms vary by method from 3.1 to 4.1, so `Api.GetMethods` on the bench settles it | with a licence | yes |
+| Bench FW 3.1 | Browse/Read/Write (≥ 2.8), operating mode (≥ 2.9). Per the 11/2023 manual: `DiagnosticBuffer.Browse` and `Alarms.Browse` from 3.1, of `Modules.*` only `DownloadServiceData`; `Api.GetMethods` on the bench settles it | with a licence | yes |
 | Role | **primary** | where the licence already exists; reuse the `opcua-client` driver | S7-300/400 and classic S7-1200, later |
 
 Web API limits to design for:
@@ -1602,6 +1602,24 @@ Every cycle, the generated bench program also:
 
 Web API writes therefore never touch `%Q` directly. The CPU's operating
 mode (RUN/STOP) comes from `Plc.ReadOperatingMode`.
+
+**The diagnostic buffer** (#789 stage 5 (A) step 3) is read with
+`DiagnosticBuffer.Browse` (FW ≥ 3.1 per the manual, not on R/H CPUs),
+which needs `read_diagnostics`, the spec's `diagnostics` right.
+`naut siemens diag` prints it (`--status` for the entry count and last
+change only, `--json`, `--long`), and logs its session out on every path.
+A refusal for a missing right or an older firmware names the fix.
+- The client sends `language` and `count` only. `count: 0` is sent as it
+  is, since it means "status only" and leaving it out means 50. No
+  `filters`: the manual's table names it `filters` and its example
+  `entries`, so every read takes all three texts until the bench settles
+  the key.
+- Entries are kept in the CPU's order and time stamps as the CPU's text
+  (`Time()` parses one), so one odd entry does not lose the read.
+- Per manual, fake-verified only. The first access-control bench window
+  checks: that `WebAllowDiagnostics` grants `read_diagnostics`, the
+  `filters` key, the entry order, and the answer for a language the
+  project does not hold.
 
 **The station spec sets the CPU-side config:** the web server, a web user
 with read/write rights, the protection level, and Web API visibility on
@@ -1641,7 +1659,7 @@ Copied from [logix-authoring.md](logix-authoring.md) §5 and §7a.
 | `siemens/writer` | nautilus → SCL, tag tables, station spec |
 | `siemens/facade` | `naut siemens serve` |
 | `tools/tiad` | The C# agent and its installer |
-| `cmd/naut/siemens*.go` | `naut siemens agent probe`, `deploy`, `serve` |
+| `cmd/naut/siemens*.go` | `naut siemens agent probe`, `deploy`, `serve`, `diag` |
 
 `siemens/*` follows the driver rule on the map, enforced by
 `internal/contextmap`: `siemens/tiad`, `siemens/webapi`, `siemens/writer`
