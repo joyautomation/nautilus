@@ -11,13 +11,18 @@
 //   - before anything is imported, the agent reads the names every source
 //     declares and refuses the whole call (409 foreign_block) when one
 //     names a program block outside the group;
-//   - after the import, it compares every block outside the group with
-//     what was there before. A change (a header the reading missed) makes
-//     the session unusable: no save, no deploy archive, so no download,
-//     and no further import. Only closing it without saving is left.
+//   - the session is marked unusable before the import starts, and the
+//     mark is cleared only when every block outside the group compares
+//     the same afterwards (kind, number, group, modified date), whether
+//     the import returned or threw. An unusable session is never saved,
+//     archived for a deploy (so never downloaded) or imported into again:
+//     only closed without saving;
+//   - the glue fails the import when TIA generates a block outside the
+//     group.
 //
-// Data types (TYPE ... END_TYPE) are not checked yet: where TIA puts a
-// type a source generates is unproven, so no rule is guessed for them.
+// A source that declares a data type (TYPE ... END_TYPE) is refused: TIA
+// puts a generated type in the PLC data types' root, beside the project's
+// own, so nothing yet tells nautilus's types from a customer's.
 
 using System;
 using System.Collections.Generic;
@@ -30,6 +35,8 @@ namespace Tiad
     public sealed class Declared
     {
         public string Kind = "", Name = "";
+        // Source is the request's path of the source that declares it.
+        public string Source = "";
     }
 
     public static class Ownership
@@ -37,100 +44,140 @@ namespace Tiad
         static readonly string[] Heads = { "ORGANIZATION_BLOCK", "FUNCTION_BLOCK", "FUNCTION", "DATA_BLOCK", "TYPE" };
         static readonly string[] HeadKinds = { "OB", "FB", "FC", "DB", "UDT" };
 
-        // Sources reads the blocks every header in an SCL source declares:
-        // a line that starts (after blanks and comments) with a block
-        // keyword in any case, then a name, "quoted" or bare. It errs on
-        // the side of finding too much: a header inside a comment that
-        // spans lines is still read, which can only refuse more.
-        public static List<Declared> Sources(string text)
+        // Sources reads every block a source may declare, from its raw
+        // bytes. It errs on the side of finding too much, since a missed
+        // header is a customer's block replaced:
+        //   - the bytes are read in every encoding they could be (a BOM's;
+        //     UTF-8 when valid; Windows-1252; UTF-16 either way round when
+        //     they hold NULs), and the names of all readings are taken;
+        //   - a block keyword counts anywhere in the text, in any case, as
+        //     a whole word (END_FUNCTION_BLOCK is none), comments and
+        //     strings included, followed by any white space, line breaks
+        //     too, then a name, "quoted" or bare.
+        // A keyword with no name after it is skipped: the check after the
+        // import (Changed) and the glue's own check of what TIA generated
+        // stand behind this reading.
+        public static List<Declared> Sources(byte[] raw)
         {
             var found = new List<Declared>();
-            if (text == null) return found;
-            string clean = StripComments(text);
-            foreach (string raw in clean.Split('\n'))
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (string text in Readings(raw))
             {
-                string line = raw.TrimEnd('\r');
-                int i = 0;
-                while (i < line.Length && Blank(line[i])) i++;
-                for (int k = 0; k < Heads.Length; k++)
+                foreach (var d in Sources(text))
                 {
-                    string h = Heads[k];
-                    if (line.Length - i < h.Length) continue;
-                    if (string.Compare(line, i, h, 0, h.Length, StringComparison.OrdinalIgnoreCase) != 0) continue;
-                    int j = i + h.Length;
-                    if (j >= line.Length || !Blank(line[j])) continue;
-                    while (j < line.Length && Blank(line[j])) j++;
-                    string name = Name(line, j);
-                    if (name == null) continue;
-                    found.Add(new Declared { Kind = HeadKinds[k], Name = name });
-                    break;
+                    if (seen.Add(d.Kind + "\u0000" + d.Name)) found.Add(d);
                 }
             }
             return found;
         }
 
-        // StripComments blanks // line comments and (* *) and /* */ block
-        // comments, keeping line breaks so lines stay lines. Text inside
-        // "quoted" names and 'strings' is kept as it is.
-        static string StripComments(string s)
+        // Sources reads the blocks a source's text declares (see above): it
+        // reads the text a whole word at a time, and a word that is a block
+        // keyword takes the name after it.
+        public static List<Declared> Sources(string text)
         {
-            var b = new StringBuilder(s.Length);
+            var found = new List<Declared>();
+            if (text == null) return found;
             int i = 0;
-            while (i < s.Length)
+            while (i < text.Length)
             {
-                char c = s[i];
-                if (c == '"' || c == '\'')
+                if (!Word(text[i]))
                 {
-                    int end = s.IndexOf(c, i + 1);
-                    int nl = s.IndexOf('\n', i + 1);
-                    if (end < 0 || (nl >= 0 && nl < end)) end = nl < 0 ? s.Length - 1 : nl - 1;
-                    b.Append(s, i, end - i + 1);
-                    i = end + 1;
+                    i++;
                     continue;
                 }
-                if (c == '/' && i + 1 < s.Length && s[i + 1] == '/')
+                int e = i;
+                while (e < text.Length && Word(text[e])) e++;
+                int k = Keyword(text, i, e - i);
+                if (k >= 0)
                 {
-                    while (i < s.Length && s[i] != '\n') i++;
-                    continue;
+                    int n = e;
+                    while (n < text.Length && Space(text[n])) n++;
+                    string name = n > e ? Name(text, n) : null;
+                    // A bare keyword is the next header, not a name.
+                    if (name != null && text[n] != '"' && Keyword(text, n, name.Length) >= 0) name = null;
+                    if (name != null) found.Add(new Declared { Kind = HeadKinds[k], Name = name });
                 }
-                string close = null;
-                if (c == '(' && i + 1 < s.Length && s[i + 1] == '*') close = "*)";
-                else if (c == '/' && i + 1 < s.Length && s[i + 1] == '*') close = "*/";
-                if (close != null)
-                {
-                    int end = s.IndexOf(close, i + 2, StringComparison.Ordinal);
-                    int stop = end < 0 ? s.Length : end + 2;
-                    for (int k = i; k < stop; k++) if (s[k] == '\n') b.Append('\n');
-                    b.Append(' ');
-                    i = stop;
-                    continue;
-                }
-                b.Append(c);
-                i++;
+                i = e;
             }
+            return found;
+        }
+
+        // Keyword is the index of the block keyword that the word of
+        // length len at text[i] is, in any case, or -1.
+        static int Keyword(string text, int i, int len)
+        {
+            for (int k = 0; k < Heads.Length; k++)
+            {
+                if (Heads[k].Length == len && string.Compare(text, i, Heads[k], 0, len, StringComparison.OrdinalIgnoreCase) == 0) return k;
+            }
+            return -1;
+        }
+
+        static bool Word(char c)
+        {
+            return char.IsLetterOrDigit(c) || c == '_';
+        }
+
+        static bool Space(char c)
+        {
+            return char.IsWhiteSpace(c) || c == '\u00a0' || c == '\ufeff';
+        }
+
+        // Readings is every text the bytes could be.
+        static List<string> Readings(byte[] raw)
+        {
+            var l = new List<string>();
+            if (raw == null) return l;
+            if (raw.Length >= 3 && raw[0] == 0xEF && raw[1] == 0xBB && raw[2] == 0xBF) l.Add(Encoding.UTF8.GetString(raw, 3, raw.Length - 3));
+            if (raw.Length >= 2 && raw[0] == 0xFF && raw[1] == 0xFE) l.Add(Encoding.Unicode.GetString(raw, 2, raw.Length - 2));
+            if (raw.Length >= 2 && raw[0] == 0xFE && raw[1] == 0xFF) l.Add(Encoding.BigEndianUnicode.GetString(raw, 2, raw.Length - 2));
+            try
+            {
+                l.Add(new UTF8Encoding(false, true).GetString(raw));
+            }
+            catch (ArgumentException)
+            {
+                // Not UTF-8: the readings below stand.
+            }
+            l.Add(Windows1252(raw));
+            if (Array.IndexOf(raw, (byte)0) >= 0)
+            {
+                l.Add(Encoding.Unicode.GetString(raw));
+                l.Add(Encoding.BigEndianUnicode.GetString(raw));
+            }
+            return l;
+        }
+
+        // Cp1252High is Windows-1252's 0x80-0x9F (U+FFFD where undefined);
+        // every other byte is its Latin-1 character. Decoded by hand: Mono
+        // may lack the code page.
+        static readonly string Cp1252High =
+            "\u20ac\ufffd\u201a\u0192\u201e\u2026\u2020\u2021\u02c6\u2030\u0160\u2039\u0152\ufffd\u017d\ufffd" +
+            "\ufffd\u2018\u2019\u201c\u201d\u2022\u2013\u2014\u02dc\u2122\u0161\u203a\u0153\ufffd\u017e\u0178";
+
+        static string Windows1252(byte[] raw)
+        {
+            var b = new StringBuilder(raw.Length);
+            foreach (byte x in raw) b.Append(x >= 0x80 && x <= 0x9F ? Cp1252High[x - 0x80] : (char)x);
             return b.ToString();
         }
 
-        static bool Blank(char c)
-        {
-            return c == ' ' || c == '\t';
-        }
-
-        // Name is the block name at line[j]: "quoted", or a bare
+        // Name is the block name at text[j]: "quoted", or a bare
         // identifier; null when there is none.
-        static string Name(string line, int j)
+        static string Name(string text, int j)
         {
-            if (j >= line.Length) return null;
-            if (line[j] == '"')
+            if (j >= text.Length) return null;
+            if (text[j] == '"')
             {
-                int end = line.IndexOf('"', j + 1);
+                int end = text.IndexOf('"', j + 1);
                 if (end <= j + 1) return null;
-                return line.Substring(j + 1, end - j - 1);
+                return text.Substring(j + 1, end - j - 1);
             }
             int e = j;
-            while (e < line.Length && (char.IsLetterOrDigit(line[e]) || line[e] == '_')) e++;
-            if (e == j || char.IsDigit(line[j])) return null;
-            return line.Substring(j, e - j);
+            while (e < text.Length && Word(text[e])) e++;
+            if (e == j || char.IsDigit(text[j])) return null;
+            return text.Substring(j, e - j);
         }
 
         // Owned is whether a block in blockGroup (its path from the program
@@ -146,29 +193,57 @@ namespace Tiad
 
         // Conflicts is every program block outside group that a declared
         // block (not a data type) names, in TIA's case-insensitive block
-        // names, each once.
-        public static List<ProjectBlock> Conflicts(List<Declared> declared, List<ProjectBlock> blocks, string group)
+        // names (OrdinalIgnoreCase: assumed to be TIA's rule, not proven),
+        // each with the sources that declare it: "<source>: <block> in
+        // <group>".
+        public static List<string> Conflicts(List<Declared> declared, List<ProjectBlock> blocks, string group)
         {
-            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var d in declared) if (d.Kind != "UDT") names.Add(d.Name);
-            var out_ = new List<ProjectBlock>();
+            var by = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+            foreach (var d in declared)
+            {
+                if (d.Kind == "UDT") continue;
+                List<string> l;
+                if (!by.TryGetValue(d.Name, out l)) by[d.Name] = l = new List<string>();
+                if (!l.Contains(d.Source)) l.Add(d.Source);
+            }
+            var out_ = new List<string>();
             foreach (var b in blocks)
             {
                 if (Owned(b.Group, group)) continue;
-                if (names.Contains(b.Name)) out_.Add(b);
+                List<string> srcs;
+                if (by.TryGetValue(b.Name, out srcs)) out_.Add(string.Join(", ", srcs.ToArray()) + " declares " + Label(b) + " in " + GroupName(b.Group));
             }
             return out_;
         }
 
-        // Refusal is the 409 for conflicts: each block by its label and
-        // group, and the fix.
-        public static TiadException Refusal(List<ProjectBlock> conflicts, string group)
+        // Refusal is the 409 for conflicts: each block by the source that
+        // declares it, its label and group, and the fix.
+        public static TiadException Refusal(List<string> conflicts, string group)
+        {
+            return new TiadException(409, Kinds.ForeignBlock,
+                string.Join("; ", conflicts.ToArray()) + ", outside group \"" + group +
+                "\": importing it would replace that block. Nothing was imported. Rename the block in the source (a prefix the project does not use)");
+        }
+
+        // TypesRefused is the refusal of a source that declares a data type:
+        // TIA puts a generated type in the PLC data types' root (the TIA VM,
+        // 2026-11-22), beside the project's own, so nothing yet tells
+        // nautilus's types from a customer's. Nothing was imported.
+        public static TiadException TypesRefused(List<Declared> declared)
         {
             var named = new List<string>();
-            foreach (var b in conflicts) named.Add(Label(b) + " in " + GroupName(b.Group));
-            return new TiadException(409, Kinds.ForeignBlock,
-                "a source declares " + string.Join(", ", named.ToArray()) + ", outside group \"" + group +
-                "\": importing it would replace that block. Nothing was imported. Rename the block in the source (a prefix the project does not use)");
+            foreach (var d in declared) if (d.Kind == "UDT") named.Add(d.Source + " declares data type \"" + d.Name + "\"");
+            if (named.Count == 0) return null;
+            return new TiadException(400, Kinds.BadRequest,
+                string.Join("; ", named.ToArray()) + ": data types are not imported yet (TIA puts them beside the project's own, so tiad cannot keep a customer's apart). Nothing was imported");
+        }
+
+        // GroupRefused refuses a group name with a path separator: a group
+        // is one user group under the program blocks' root.
+        public static TiadException GroupRefused(string group)
+        {
+            if (group.IndexOf('/') < 0 && group.IndexOf('\\') < 0) return null;
+            return TiadException.BadRequest("group " + Json.Quote(group) + " holds a path separator: name one user group under the program blocks' root");
         }
 
         // Changed lists every block outside group that the import changed:
@@ -187,6 +262,8 @@ namespace Tiad
                 if (!now.TryGetValue(kv.Key, out n)) changed.Add(Label(kv.Value) + " in " + GroupName(kv.Value.Group) + " is gone");
                 else if (n.Type != kv.Value.Type || n.Number != kv.Value.Number || !string.Equals(n.Group ?? "", kv.Value.Group ?? "", StringComparison.OrdinalIgnoreCase))
                     changed.Add(Label(kv.Value) + " in " + GroupName(kv.Value.Group) + " is now " + Label(n) + " in " + GroupName(n.Group));
+                else if (n.Modified != kv.Value.Modified)
+                    changed.Add(Label(kv.Value) + " in " + GroupName(kv.Value.Group) + " was modified");
             }
             foreach (var kv in now)
             {

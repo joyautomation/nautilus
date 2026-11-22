@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -23,28 +24,22 @@ type projectBlock struct {
 	group      string
 }
 
-var (
-	headLine = regexp.MustCompile(`(?i)^[ \t]*(ORGANIZATION_BLOCK|FUNCTION_BLOCK|FUNCTION|DATA_BLOCK|TYPE)[ \t]+("([^"]+)"|([A-Za-z_][A-Za-z0-9_]*))`)
-	comments = regexp.MustCompile(`(?s)\(\*.*?\*\)|/\*.*?\*/`)
-	lineNote = regexp.MustCompile(`//[^\n]*`)
-)
+var headWord = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9_])(ORGANIZATION_BLOCK|FUNCTION_BLOCK|FUNCTION|DATA_BLOCK|TYPE)[\s\x{a0}\x{feff}]+("([^"]+)"|([A-Za-z_][A-Za-z0-9_]*))`)
 
-// declaredBlocks is Ownership.Sources: every header's kind and name, any
-// case, quoted or bare, comments blanked first (line breaks kept).
+// declaredBlocks is Ownership.Sources on text: a block keyword anywhere,
+// any case, as a whole word, then any white space (line breaks too) and a
+// name, quoted or bare (a bare keyword is the next header, not a name).
+// The agent also reads every encoding the bytes could be; the fake's
+// sources are UTF-8.
 func declaredBlocks(text string) []tiad.Block {
-	text = comments.ReplaceAllStringFunc(text, func(c string) string { return strings.Repeat("\n", strings.Count(c, "\n")) + " " })
 	var out []tiad.Block
-	for _, line := range strings.Split(text, "\n") {
-		if !strings.Contains(line, `"`) {
-			line = lineNote.ReplaceAllString(line, "")
-		}
-		m := headLine.FindStringSubmatch(strings.TrimRight(line, "\r"))
-		if m == nil {
-			continue
-		}
+	for _, m := range headWord.FindAllStringSubmatch(text, -1) {
 		name := m[3]
 		if name == "" {
 			name = m[4]
+			if _, kw := blockKind[strings.ToUpper(name)]; kw {
+				continue
+			}
 		}
 		out = append(out, tiad.Block{Name: name, Kind: blockKind[strings.ToUpper(m[1])]})
 	}
@@ -91,27 +86,49 @@ func groupName(g string) string {
 	return fmt.Sprintf("group %q", g)
 }
 
+// declared is one block a source declares, with the source's path.
+type declared struct {
+	tiad.Block
+	source string
+}
+
 // foreignConflicts is Ownership.Conflicts plus its Refusal: nil when no
 // declared block (data types aside) names a block outside group.
-func foreignConflicts(declared []tiad.Block, blocks []projectBlock, group string) *failure {
-	names := map[string]bool{}
-	for _, d := range declared {
-		if d.Kind != "UDT" {
-			names[strings.ToLower(d.Name)] = true
+func foreignConflicts(ds []declared, blocks []projectBlock, group string) *failure {
+	by := map[string][]string{}
+	for _, d := range ds {
+		k := strings.ToLower(d.Name)
+		if d.Kind != "UDT" && !slices.Contains(by[k], d.source) {
+			by[k] = append(by[k], d.source)
 		}
 	}
 	var named []string
 	for _, b := range blocks {
-		if !owned(b.group, group) && names[strings.ToLower(b.name)] {
-			named = append(named, b.label()+" in "+groupName(b.group))
+		if srcs, ok := by[strings.ToLower(b.name)]; ok && !owned(b.group, group) {
+			named = append(named, strings.Join(srcs, ", ")+" declares "+b.label()+" in "+groupName(b.group))
 		}
 	}
 	if len(named) == 0 {
 		return nil
 	}
 	return fail(http.StatusConflict, tiad.KindForeignBlock,
-		"a source declares %s, outside group %q: importing it would replace that block. Nothing was imported. Rename the block in the source (a prefix the project does not use)",
-		strings.Join(named, ", "), group)
+		"%s, outside group %q: importing it would replace that block. Nothing was imported. Rename the block in the source (a prefix the project does not use)",
+		strings.Join(named, "; "), group)
+}
+
+// typesRefused is Ownership.TypesRefused.
+func typesRefused(ds []declared) *failure {
+	var named []string
+	for _, d := range ds {
+		if d.Kind == "UDT" {
+			named = append(named, fmt.Sprintf("%s declares data type %q", d.source, d.Name))
+		}
+	}
+	if len(named) == 0 {
+		return nil
+	}
+	return fail(http.StatusBadRequest, tiad.KindBadRequest,
+		"%s: data types are not imported yet (TIA puts them beside the project's own, so tiad cannot keep a customer's apart). Nothing was imported", strings.Join(named, "; "))
 }
 
 // foreignChanges is Ownership.Changed.

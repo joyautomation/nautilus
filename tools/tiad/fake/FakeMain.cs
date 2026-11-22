@@ -1474,8 +1474,11 @@ namespace Tiad.Fake
 
         public SoftwareResult ImportSoftware(object project, string group, List<SourceFile> sources, List<SourceFile> tagTables, bool prune)
         {
-            script.Enter("ImportSoftware");
             var p = (FakeProject)project;
+            // The knob's replacement comes first, so a failure scripted for
+            // this call (Enter) is a failure after TIA replaced Main.
+            if (script.ImportReplacesForeign) p.MainReplaced = true;
+            script.Enter("ImportSoftware");
             p.Changed = true;
             var res = new SoftwareResult();
             var made = new List<Block>();
@@ -1529,7 +1532,6 @@ namespace Tiad.Fake
                 string g;
                 if (p.GroupOf.TryGetValue(b.Name, out g) && Ownership.Owned(g, group)) res.Blocks.Add(b);
             }
-            if (script.ImportReplacesForeign) p.MainReplaced = true;
             return res;
         }
 
@@ -1817,7 +1819,7 @@ namespace Tiad.Fake
             var l = new List<ProjectBlock>();
             var next = new Dictionary<string, int> { { "OB", 1 }, { "FB", 1 }, { "FC", 1 }, { "DB", 1 } };
             string mainKind = p.MainReplaced ? "FB" : "OB";
-            l.Add(new ProjectBlock { Name = "Main", Type = mainKind, Number = next[mainKind]++ });
+            l.Add(new ProjectBlock { Name = "Main", Type = mainKind, Number = next[mainKind]++, Modified = p.MainReplaced ? "replaced" : "made with the CPU" });
             foreach (var b in p.Blocks)
             {
                 if (!next.ContainsKey(b.Kind)) continue;

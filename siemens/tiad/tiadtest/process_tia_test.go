@@ -2098,3 +2098,47 @@ func TestAgentForgetsTheInstanceLogonAfterACancelThatActed(t *testing.T) {
 		t.Fatalf("the restore after a cancel that acted: %v", err)
 	}
 }
+
+// TestAgentKeepsASessionUnusableWhenAnImportFailsAfterReplacing: TIA
+// replaced a block outside the group and then the import failed. The
+// agent still compares the blocks outside the group, so the session is
+// never saved or downloaded; a failure that changed nothing outside the
+// group leaves it usable (Fable review on the ownership PR, #789).
+func TestAgentKeepsASessionUnusableWhenAnImportFailsAfterReplacing(t *testing.T) {
+	p, s := downloadReady(t)
+	c := p.Client()
+	if _, err := c.PutFile(ctx, "src/Main.scl", []byte("FUNCTION_BLOCK \"naut_Main\"\nBEGIN\nEND_FUNCTION_BLOCK\n")); err != nil {
+		t.Fatal(err)
+	}
+	// A failure that changed nothing: the session stays usable.
+	p.SetScript(t, tiadtest.Script{Failures: []tiadtest.ScriptedCall{{Call: "ImportSoftware", Message: "ImportSoftware failed part-way"}}})
+	if _, err := s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{"src/Main.scl"}}); tiad.Kind(err) != tiad.KindOperationFailed {
+		t.Fatalf("a failed import: %v", err)
+	}
+	p.SetScript(t, tiadtest.Script{})
+	if _, err := s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{"src/Main.scl"}}); err != nil {
+		t.Fatalf("an import after a failure that changed nothing: %v", err)
+	}
+	// A failure after TIA replaced Main: unusable.
+	p.SetScript(t, tiadtest.Script{ImportReplacesForeign: true, Failures: []tiadtest.ScriptedCall{{Call: "ImportSoftware", Message: "ImportSoftware failed part-way"}}})
+	if _, err := s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{"src/Main.scl"}}); tiad.Kind(err) != tiad.KindOperationFailed || !strings.Contains(err.Error(), "failed part-way") {
+		t.Fatalf("a failed import that replaced Main: %v", err)
+	}
+	p.SetScript(t, tiadtest.Script{})
+	if _, err := s.Save(ctx, false); tiad.Kind(err) != tiad.KindUncleanSession {
+		t.Fatalf("a save after it: %v, want unclean_session", err)
+	}
+	if _, err := s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{"src/Main.scl"}}); tiad.Kind(err) != tiad.KindUncleanSession {
+		t.Fatalf("an import after it: %v, want unclean_session", err)
+	}
+	if _, err := s.Compile(ctx, true, true); err != nil {
+		t.Fatal(err)
+	}
+	dl := tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.Yes()}}
+	if _, err := s.Download(ctx, dl); tiad.Kind(err) != tiad.KindUncleanSession {
+		t.Fatalf("a download after it: %v, want unclean_session", err)
+	}
+	if l := p.Loaded(t); len(l) != 0 {
+		t.Fatalf("loaded %+v", l)
+	}
+}

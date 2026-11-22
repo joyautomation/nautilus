@@ -1217,9 +1217,12 @@ func (f *Fake) software(r *http.Request) (any, *failure) {
 	if req.Group == "" {
 		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "group is empty")
 	}
+	if strings.ContainsAny(req.Group, `/\`) {
+		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "group %q holds a path separator: name one user group under the program blocks' root", req.Group)
+	}
 	// Every file first: a missing one or a bad path refuses the call
 	// before anything is read.
-	var declared []tiad.Block
+	var ds []declared
 	for _, src := range append(append([]string{}, req.Sources...), req.TagTables...) {
 		p, fl := cleanPath(src)
 		if fl != nil {
@@ -1230,14 +1233,19 @@ func (f *Fake) software(r *http.Request) (any, *failure) {
 			return nil, fail(http.StatusNotFound, tiad.KindNotFound, "no file %s", p)
 		}
 		if !isTagTable(p, req.TagTables) {
-			declared = append(declared, declaredBlocks(string(b))...)
+			for _, d := range declaredBlocks(string(b)) {
+				ds = append(ds, declared{d, p})
+			}
 		}
 	}
 	if s.foreignChanged {
 		return nil, foreignUnusable("another import")
 	}
+	if fl := typesRefused(ds); fl != nil {
+		return nil, fl
+	}
 	before := s.projectBlocks()
-	if fl := foreignConflicts(declared, before, req.Group); fl != nil {
+	if fl := foreignConflicts(ds, before, req.Group); fl != nil {
 		return nil, fl
 	}
 	if s.groups == nil {

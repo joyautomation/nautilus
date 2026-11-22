@@ -668,15 +668,28 @@ func contractSoftwareOwnership(t *testing.T, start Starter) {
 	put("src/Clash.scl", "FUNCTION_BLOCK \"Main\"\nVERSION : 0.1\nBEGIN\nEND_FUNCTION_BLOCK\n")
 	put("src/Bare.scl", "(* a comment *)\nfunction_block MAIN\nBEGIN\nEND_FUNCTION_BLOCK\n")
 	put("src/OB.scl", "ORGANIZATION_BLOCK \"OB_main\"\nTITLE = \"Cyclic interrupt, 100ms\"\nBEGIN\nEND_ORGANIZATION_BLOCK\n")
+	put("src/NextLine.scl", "END_FUNCTION FUNCTION_BLOCK\r\n  \"Main\"\r\nBEGIN\r\nEND_FUNCTION_BLOCK\r\n")
+	put("src/Recipe.udt", "TYPE \"naut_Recipe\"\nVERSION : 0.1\n   STRUCT\n      speed : Real;\n   END_STRUCT;\nEND_TYPE\n")
 	if _, err := s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{"src/Main.scl"}}); err != nil {
 		t.Fatal(err)
 	}
-	for _, src := range []string{"src/Clash.scl", "src/Bare.scl"} {
+	for _, src := range []string{"src/Clash.scl", "src/Bare.scl", "src/NextLine.scl"} {
 		// With an owned source beside it: nothing of the call is imported.
 		_, err := s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{src, "src/Main.scl"}, Prune: true})
-		if tiad.Kind(err) != tiad.KindForeignBlock || !strings.Contains(err.Error(), `"Main" [OB1] in the program blocks' root`) ||
+		if tiad.Kind(err) != tiad.KindForeignBlock || !strings.Contains(err.Error(), src+` declares "Main" [OB1] in the program blocks' root`) ||
 			!strings.Contains(err.Error(), "Nothing was imported") || !strings.Contains(err.Error(), "Rename the block") {
 			t.Fatalf("%s: %v, want foreign_block naming Main [OB1]", src, err)
+		}
+	}
+	// A data type: TIA puts it beside the project's own, so it is refused.
+	if _, err := s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{"src/Main.scl", "src/Recipe.udt"}}); tiad.Kind(err) != tiad.KindBadRequest ||
+		!strings.Contains(err.Error(), `src/Recipe.udt declares data type "naut_Recipe"`) || !strings.Contains(err.Error(), "Nothing was imported") {
+		t.Fatalf("a data type: %v", err)
+	}
+	// A group is one user group under the root.
+	for _, g := range []string{"nautilus/sub", `a\b`} {
+		if _, err := s.Software(ctx, tiad.SoftwareRequest{Group: g, Sources: []string{"src/Main.scl"}}); tiad.Kind(err) != tiad.KindBadRequest || !strings.Contains(err.Error(), "path separator") {
+			t.Fatalf("group %q: %v", g, err)
 		}
 	}
 	// The refused calls changed nothing: the owned blocks are as before.
@@ -747,7 +760,7 @@ func contractSoftware(t *testing.T, start Starter) {
 		}
 	}
 	put("src/Main.scl", programSCL)
-	put("src/Helpers.scl", "\t FUNCTION \"Helper\" : Void\r\nBEGIN\r\nEND_FUNCTION\r\n  TYPE \"Recipe\"\nEND_TYPE\n")
+	put("src/Helpers.scl", "\t FUNCTION \"Helper\" : Void\r\nBEGIN\r\nEND_FUNCTION\r\n")
 	put("src/none.scl", "// nothing here\nFUNCTION_BLOCKX \"No\"\n")
 	put("tags/Tags.xml", "<TagTable/>")
 
@@ -755,7 +768,7 @@ func contractSoftware(t *testing.T, start Starter) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := blockNames(r.Blocks); got != "FC:Helper,UDT:Recipe,FB:naut_Main,DB:naut_Main_DB" {
+	if got := blockNames(r.Blocks); got != "FC:Helper,FB:naut_Main,DB:naut_Main_DB" {
 		t.Fatalf("blocks = %s", got)
 	}
 	if len(r.Results) != 3 || !r.Results[0].OK || r.Results[2].Path != "tags/Tags.xml" {
@@ -764,7 +777,7 @@ func contractSoftware(t *testing.T, start Starter) {
 	// Without prune, blocks from earlier imports stay; with it, only what
 	// the sources produced is left.
 	r, err = s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{"src/Main.scl"}})
-	if err != nil || blockNames(r.Blocks) != "FC:Helper,UDT:Recipe,FB:naut_Main,DB:naut_Main_DB" {
+	if err != nil || blockNames(r.Blocks) != "FC:Helper,FB:naut_Main,DB:naut_Main_DB" {
 		t.Fatalf("no prune: %s %v", blockNames(r.Blocks), err)
 	}
 	r, err = s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{"src/Main.scl"}, Prune: true})
