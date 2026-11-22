@@ -972,8 +972,10 @@ func journalValue(v ir.Value) any {
 
 // forcedValue is the value name is forced to, or nil.
 func (s *Server) forcedValue(name string) any {
-	for k, v := range s.rt.Tags().ForcedValues() {
-		if strings.EqualFold(k, name) {
+	tags := s.rt.Tags()
+	key := ir.NameKey(tags.ForceKey(name)) // by the table's own spelling of the address
+	for k, v := range tags.ForcedValues() {
+		if ir.NameKey(k) == key {
 			return v
 		}
 	}

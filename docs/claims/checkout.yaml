@@ -129,6 +129,7 @@ claims:
       - go ./server TestCheckoutForceNoticesItsForceBeingCleared
       - go ./server TestCheckoutForceStateIsRaceFree
       - go ./runtime TestForceGenerationsAreOwnership
+      - go ./runtime TestForceSpellingsOfOneElementAreOneEntry
       - go ./runtime TestForceIfFreeNamesTheForceTheWayTheTableDoes
       - go ./runtime TestForceIndexSpellingsAreOneAddress
       - go ./server TestCheckoutForceCanonicalSpellings

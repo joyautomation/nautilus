@@ -1,6 +1,8 @@
 package runtime
 
 import (
+	"fmt"
+	"math/rand"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -621,5 +623,137 @@ func TestForceIndexSpellingsAreOneAddress(t *testing.T) {
 	}
 	if v, _ := tags.ReadPath("A[1]"); v != 1.0 {
 		t.Errorf("A[1] = %v, want the operator's 1", v)
+	}
+}
+
+// The force table keys every entry by one canonical address, whichever way it
+// was typed. This generates spellings of the same element (spaces, a sign,
+// leading zeros, "[i,j]" or "[i][j]", the case of the tag and of members) and
+// checks, for every pair of them: one entry, never two or one with two names;
+// the generation found through any spelling is the one the force was given;
+// another spelling cannot force it again (ForceIfFree is refused) and removes it
+// (Unforce, UnforceIf); and elements that differ stay different.
+func TestForceSpellingsOfOneElementAreOneEntry(t *testing.T) {
+	for seed := int64(1); seed <= 25; seed++ {
+		forceSpellings(t, seed)
+	}
+}
+
+func forceSpellings(t *testing.T, seed int64) {
+	sd := &ir.StructDef{Name: "Pump", Fields: []ir.StructField{{Name: "Run"}, {Name: "Speed"}}, FieldIndex: map[string]int{"Run": 0, "Speed": 1}}
+	row := func(n int) ir.Value {
+		a := make([]ir.Value, n)
+		for i := range a {
+			a[i] = ir.RealVal(0)
+		}
+		return ir.Value{Kind: ir.TypeArray, Arr: a}
+	}
+	grid := ir.Value{Kind: ir.TypeArray, Arr: []ir.Value{row(4), row(4), row(4)}}
+	fresh := func() *Tags {
+		tags := NewTags()
+		tags.Set("A", row(5))
+		tags.Set("Gridtag", grid)
+		tags.Set("P1", ir.Value{Kind: ir.TypeStruct, Struct: sd, Fld: []ir.Value{ir.BoolVal(false), ir.RealVal(1)}})
+		return tags
+	}
+	rng := rand.New(rand.NewSource(seed))
+	idx := func(n int) string {
+		forms := []string{"%d", "+%d", "0%d", "00%d", " %d", "%d ", " %d ", "+0%d"}
+		return fmt.Sprintf(forms[rng.Intn(len(forms))], n)
+	}
+	caseOf := func(s string) string {
+		switch rng.Intn(3) {
+		case 0:
+			return strings.ToLower(s)
+		case 1:
+			return strings.ToUpper(s)
+		}
+		return s
+	}
+	// a generator of spellings of one element, by shape
+	spell := map[string]func() string{
+		"A[2]": func() string { return caseOf("A") + "[" + idx(2) + "]" },
+		"Gridtag[1][2]": func() string {
+			if rng.Intn(2) == 0 {
+				return caseOf("Gridtag") + "[" + idx(1) + "," + idx(2) + "]"
+			}
+			return caseOf("Gridtag") + "[" + idx(1) + "][" + idx(2) + "]"
+		},
+		"P1.Speed": func() string { return caseOf("P1") + "." + caseOf("Speed") },
+	}
+	for canon, gen := range spell {
+		spellings := map[string]bool{}
+		for i := 0; i < 400 && len(spellings) < 25; i++ { // some shapes have few spellings
+			spellings[gen()] = true
+		}
+		for x := range spellings {
+			tags := fresh()
+			g1, name, err := tags.ForceIfFree(x, 5.0)
+			if err != nil {
+				continue // a spelling the table refuses is no spelling of an entry
+			}
+			if name != canon {
+				t.Errorf("%q is kept as %q, want %q", x, name, canon)
+			}
+			if n := len(tags.Forces()); n != 1 {
+				t.Fatalf("%q: %d entries after one force", x, n)
+			}
+			for y := range spellings {
+				if g, ok := tags.ForceGen(y); ok != (tags.ForceKey(y) == canon) || (ok && g != g1) {
+					// y resolved to the element: it must find the force by the same generation
+					if tags.ForceKey(y) == canon {
+						t.Errorf("force typed %q, looked up as %q: gen %d %v, want %d", x, y, g, ok, g1)
+					}
+				}
+				if tags.ForceKey(y) != canon {
+					continue // refused as an address: nothing to compare
+				}
+				if got := tags.ForcedOverlap(y); got != canon {
+					t.Fatalf("force typed %q: ForcedOverlap(%q) = %q, want %q", x, y, got, canon)
+				}
+				if _, _, err := tags.ForceIfFree(y, 6.0); err == nil || !strings.Contains(err.Error(), "already forced") {
+					t.Fatalf("force typed %q then ForceIfFree(%q): %v, want already forced", x, y, err)
+				}
+				if n := len(tags.Forces()); n != 1 {
+					t.Fatalf("force typed %q then %q: %d entries", x, y, n)
+				}
+				if tags.UnforceIf(y, g1+1000) {
+					t.Fatalf("UnforceIf(%q) with the wrong generation removed the force typed %q", y, x)
+				}
+			}
+			// any one spelling removes it; plain Unforce too
+			var ys []string
+			for y := range spellings {
+				if tags.ForceKey(y) == canon {
+					ys = append(ys, y)
+				}
+			}
+			y := ys[rng.Intn(len(ys))]
+			if rng.Intn(2) == 0 {
+				if !tags.UnforceIf(y, g1) {
+					t.Fatalf("UnforceIf(%q, %d) did not remove the force typed %q", y, g1, x)
+				}
+			} else if !tags.Unforce(y) {
+				t.Fatalf("Unforce(%q) did not remove the force typed %q", y, x)
+			}
+			if n := len(tags.Forces()); n != 0 {
+				t.Fatalf("%d entries left after removing the force typed %q via %q", n, x, y)
+			}
+		}
+	}
+	// elements that differ stay different, however typed
+	for _, other := range []string{"A[2]", "A[ 02]", "A[+3]", "A[4]", "A[0]"} {
+		tags := fresh()
+		if _, _, err := tags.ForceIfFree("A[1]", 1.0); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := tags.ForceIfFree(other, 1.0); err != nil {
+			t.Errorf("%q wrongly taken as the forced A[1]: %v", other, err)
+		}
+	}
+	tags2 := fresh()
+	tags2.ForceIfFree("Gridtag[1,2]", 1.0)
+	if _, _, err := tags2.ForceIfFree("Gridtag[2,1]", 1.0); err != nil {
+		t.Errorf("Gridtag[2,1] taken as Gridtag[1,2]: %v", err)
 	}
 }

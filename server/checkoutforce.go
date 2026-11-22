@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -319,7 +318,6 @@ func (a *checkoutAPI) endCheckoutForce(f *ckForce, how, by string) string {
 	return how
 }
 
-func sameTag(a, b string) bool { return strings.EqualFold(a, b) }
 
 // ckHook is a test's seam: called at named points of a start and an end, so a
 // test can hold one there and run another request against it.

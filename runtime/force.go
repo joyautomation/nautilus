@@ -184,6 +184,27 @@ func (t *Tags) force(addr string, v any, strict bool) error {
 	return err
 }
 
+// forceKeyLocked is addr as the force table keys it: the root tag in the
+// store's spelling, members as the struct declares them, one "[n]" per index
+// (spaces, a sign, leading zeros and "[i,j]" all reduced to it). It is the
+// one place an address becomes a key: every function of the table that takes
+// an address (set, remove, look up, overlap) goes through it, so two spellings
+// of one element are one entry, never two and never one with two names. An
+// address that resolves to no tag is its own key. The caller holds t.mu.
+func (t *Tags) forceKeyLocked(addr string) string {
+	if root, path, _, err := t.resolveForceAddr(addr); err == nil {
+		return ir.JoinPath(root, path)
+	}
+	return addr
+}
+
+// ForceKey is the name the table keeps a force on addr under (forceKeyLocked).
+func (t *Tags) ForceKey(addr string) string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.forceKeyLocked(addr)
+}
+
 // ErrAlreadyForced is what ForceIfFree answers for an address (or a member
 // or the whole tag around it) that is forced already.
 var ErrAlreadyForced = fmt.Errorf("already forced")
@@ -201,9 +222,10 @@ func (t *Tags) ForceIfFree(addr string, v any) (uint64, string, error) {
 func (t *Tags) ForceGen(addr string) (uint64, bool) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
+	key := ir.NameKey(t.forceKeyLocked(addr))
 	for _, fs := range t.forces {
 		for i := range fs.entries {
-			if strings.EqualFold(fs.entries[i].name, addr) {
+			if ir.NameKey(fs.entries[i].name) == key {
 				return fs.entries[i].gen, fs.entries[i].gen != 0
 			}
 		}
@@ -217,9 +239,10 @@ func (t *Tags) ForceGen(addr string) (uint64, bool) {
 func (t *Tags) UnforceIf(addr string, gen uint64) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	key := ir.NameKey(t.forceKeyLocked(addr))
 	for root, fs := range t.forces {
 		for i := range fs.entries {
-			if !strings.EqualFold(fs.entries[i].name, addr) || fs.entries[i].gen != gen {
+			if ir.NameKey(fs.entries[i].name) != key || fs.entries[i].gen != gen {
 				continue
 			}
 			fs.entries = append(fs.entries[:i], fs.entries[i+1:]...)
@@ -313,9 +336,10 @@ func (t *Tags) forceGen(addr string, v any, strict, ifFree bool) (uint64, string
 func (t *Tags) Unforce(addr string) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	key := ir.NameKey(t.forceKeyLocked(addr))
 	for root, fs := range t.forces {
 		for i := range fs.entries {
-			if !strings.EqualFold(fs.entries[i].name, addr) {
+			if ir.NameKey(fs.entries[i].name) != key {
 				continue
 			}
 			fs.entries = append(fs.entries[:i], fs.entries[i+1:]...)
@@ -434,6 +458,7 @@ func (t *Tags) forcedOverlapLocked(addr string) string {
 	if len(t.forces) == 0 {
 		return ""
 	}
+	addr = t.forceKeyLocked(addr)
 	root := addr
 	if _, _, ok := t.lookupLocked(addr); !ok {
 		root, _ = ir.SplitAddress(addr)
