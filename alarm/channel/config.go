@@ -1,26 +1,13 @@
-// Package channel sends escalation pages outside the box (#715 PR 3):
-// email over SMTP, SMS and voice through a Twilio-compatible REST
-// provider, and a webhook. Each is an escalate.Channel: it turns the
-// message's principal into an address through a Directory (the contacts
-// file on the box, package alarm/oncall), reads its credential from the
-// same Directory (the secrets file beside it, never the manifest, never
-// the environment), and sends.
+// Package channel is the manifest form of the channels that send
+// escalation pages outside the box (#715 PR 3): `alarms.channels:` for
+// email, SMS, voice, webhook and push, the names of their secrets in the
+// secrets file, and the check of an inbound provider's signature. The
+// senders themselves are package alarm/channel/send, which only the
+// controller links: cmd/naut registers them with the manifest, so the
+// playground's wasm reads and checks this config without net/smtp.
 //
-// Transport security is on by default: SMTP runs over TLS (STARTTLS or
-// implicit) with the certificate verified, and the provider and the
-// webhook are https. `insecure: true` on a channel relaxes only two
-// things: the certificate is not verified, and a channel that sends no
-// credential (email with no username, a webhook with no header) may run
-// in plaintext. A password or a token never crosses a connection that is
-// not TLS, insecure or not. `ca-file:` names a PEM bundle on the box to
-// verify against instead of the system roots: how a site with its own CA
-// keeps verification on.
-//
-// A failed send is an *escalate.SendError: a class and a numeric code,
-// never the server's or the provider's text, which may echo an address.
-//
-// It imports only alarm, alarm/escalate and alarm/oncall (for the address
-// checks the contacts file shares) (docs/design/context-map.md §2).
+// It imports only alarm/oncall (for the address checks the contacts file
+// shares) (docs/design/context-map.md §2).
 package channel
 
 import (

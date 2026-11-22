@@ -100,6 +100,11 @@ func rules(u universe) []rule {
 			why:  "the senders resolve a principal to an address and send; the manifest composes them, and they know no server, runtime or auth",
 		},
 		{
+			from: u.allBut("cmd"),
+			to:   []string{"alarm/channel/send", "alarm/pgjournal"},
+			why:  "the CLI registers the senders and the Postgres journal with the manifest, which never imports them, so the playground's wasm links neither net/smtp nor database/sql",
+		},
+		{
 			from: []string{"notes"},
 			to:   u.allBut("oplog"),
 			why:  "operator notes are a revision chain kept in a file or an index of the log's note entries; they know no permission, alarm, tag or server, which decide before a revision exists",
@@ -348,12 +353,12 @@ func TestOIDCModulesStayInAuthOIDC(t *testing.T) {
 // way). An entry matches the package and everything below it.
 var (
 	wasmForbidden = []string{
-		module + "/quorum/node",      // redundancy: only leader's election needs it
-		module + "/alarm/channel",    // paging channels (net/smtp)
-		"net/smtp",                   // ... and its standard-library half
-		module + "/internal/floatip", // OS networking for the floating IP
-		module + "/internal/webpush", // push delivery
-		module + "/auth/users",       // the user store (argon2, blake2b)
+		module + "/quorum/node",        // redundancy: only leader's election needs it
+		module + "/alarm/channel/send", // paging senders (net/smtp); their config in alarm/channel is fine
+		"net/smtp",                     // ... and its standard-library half
+		module + "/alarm/pgjournal",    // the alarm journal in Postgres
+		module + "/internal/webpush",   // push delivery
+		module + "/auth/users",         // the user store (argon2, blake2b)
 		"golang.org/x/crypto/argon2",
 		"golang.org/x/crypto/blake2b",
 		module + "/notes",    // operator notes store
@@ -361,23 +366,17 @@ var (
 		"html/template",
 		"github.com/lib/pq", // the Postgres driver
 		"database/sql",
-		"image/png", // hmibuild's PWA icons
+		"image/png", // hmibuild's PWA icons (cut: pwa_icons.go is !js)
 	}
 	// wasmLeaks: today's leaks and who removes them. Keep it shrinking.
 	wasmLeaks = map[string]string{
 		module + "/quorum/node":       "leader/election.go (redundancy split)",
-		module + "/alarm/channel":     "internal/project/{project,alarms}.go (alarm seam)",
-		"net/smtp":                    "via alarm/channel",
-		module + "/internal/floatip":  "internal/project/project.go (floating_ip parse)",
 		module + "/internal/webpush":  "server/push.go (server seams)",
 		module + "/auth/users":        "server/{authorize,signin,server}.go (server seams)",
 		"golang.org/x/crypto/argon2":  "via auth/users",
 		"golang.org/x/crypto/blake2b": "via auth/users",
 		module + "/notes":             "server/notes.go (server seams)",
 		"html/template":               "server (server seams)",
-		"github.com/lib/pq":           "alarm (alarm seam)",
-		"database/sql":                "via lib/pq",
-		"image/png":                   "internal/hmibuild (PWA icons)",
 	}
 )
 

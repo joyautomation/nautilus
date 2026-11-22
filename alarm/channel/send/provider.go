@@ -1,4 +1,4 @@
-package channel
+package send
 
 import (
 	"bytes"
@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/joyautomation/nautilus/alarm/channel"
 	"github.com/joyautomation/nautilus/alarm/escalate"
 )
 
@@ -72,13 +73,13 @@ func statusError(code int) error {
 
 type providerSender struct {
 	kind   string
-	cfg    Provider
+	cfg    channel.Provider
 	secret string
-	dir    Directory
+	dir    channel.Directory
 	client *http.Client
 }
 
-func newProviderSender(kind string, p Provider, secretKey string, dir Directory, pool *x509.CertPool) *providerSender {
+func newProviderSender(kind string, p channel.Provider, secretKey string, dir channel.Directory, pool *x509.CertPool) *providerSender {
 	// No ServerName: the transport sets it per connection, to the
 	// provider's host, or to the proxy's for an https proxy hop.
 	return &providerSender{kind: kind, cfg: p, secret: secretKey, dir: dir,
@@ -90,7 +91,7 @@ func (p *providerSender) attempt(ctx context.Context, m escalate.Message) error 
 	if err != nil {
 		return err
 	}
-	if ValidPhone(to) != nil {
+	if channel.ValidPhone(to) != nil {
 		return escalate.Failed(escalate.FailNoContact)
 	}
 	token, err := secret(p.dir, p.secret)
@@ -101,7 +102,7 @@ func (p *providerSender) attempt(ctx context.Context, m escalate.Message) error 
 		return escalate.Failed(escalate.FailTLS) // the token never rides plaintext
 	}
 	endpoint, form := "Messages.json", url.Values{"To": {to}, "From": {p.cfg.From}}
-	if p.kind == KindVoice {
+	if p.kind == channel.KindVoice {
 		endpoint = "Calls.json"
 		form.Set("Twiml", voiceTwiml(m))
 	} else {

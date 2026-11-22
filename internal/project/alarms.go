@@ -652,7 +652,12 @@ func (p *Project) alarms(rt *runtime.Runtime, durable bool, log *slog.Logger, sy
 				return nil, fmt.Errorf("alarms.channels: %s need the contacts and secrets files in the controller's state directory, "+
 					"and this controller has none: set auth.state-dir, or run under systemd with StateDirectory=", strings.Join(kinds, ", "))
 			}
-			built, err := channel.Build(p.Alarms.Channels, p.AlarmDirectory, channel.Options{Push: p.PushSend})
+			if alarmSenders == nil {
+				out.Close()
+				return nil, fmt.Errorf("alarms.channels: %s cannot send from this build of nautilus (the playground pages nobody); "+
+					"run the controller (naut run) to page people", strings.Join(kinds, ", "))
+			}
+			built, err := alarmSenders(p.Alarms.Channels, p.AlarmDirectory, p.PushSend)
 			if err != nil {
 				out.Close()
 				return nil, err
@@ -726,11 +731,15 @@ func (p *Project) alarmSink() (alarm.Journal, io.Closer, error) {
 			return nil, nil, fmt.Errorf("alarms.journal: sink: postgres, but %s is empty — "+
 				"the connection string is an environment variable, never the manifest", env)
 		}
-		pg, err := alarm.NewPostgres(dsn)
+		if alarmPostgres == nil {
+			return nil, nil, errors.New("alarms.journal: sink: postgres is not in this build of nautilus (the playground keeps " +
+				"the journal in memory); use sink: ring, or run the controller (naut run)")
+		}
+		pg, closer, err := alarmPostgres(dsn)
 		if err != nil {
 			return nil, nil, fmt.Errorf("alarms.journal: %w", err)
 		}
-		return pg, pg, nil
+		return pg, closer, nil
 	}
 	return nil, nil, fmt.Errorf("alarms.journal.sink %q is not one of file, postgres", j.Sink)
 }

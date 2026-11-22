@@ -1,4 +1,4 @@
-package channel
+package send
 
 import (
 	"context"
@@ -8,16 +8,17 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/joyautomation/nautilus/alarm/channel"
 	"github.com/joyautomation/nautilus/alarm/escalate"
 )
 
 type webhookSender struct {
-	cfg    Webhook
-	dir    Directory
+	cfg    channel.Webhook
+	dir    channel.Directory
 	client *http.Client
 }
 
-func newWebhookSender(w Webhook, dir Directory, pool *x509.CertPool) *webhookSender {
+func newWebhookSender(w channel.Webhook, dir channel.Directory, pool *x509.CertPool) *webhookSender {
 	// No ServerName: the transport sets it per connection (target or proxy).
 	return &webhookSender{cfg: w, dir: dir, client: newHTTPClient(tlsConfig("", w.TLSConf, pool))}
 }
@@ -58,7 +59,7 @@ func (w *webhookSender) attempt(ctx context.Context, m escalate.Message) error {
 	}
 	hdr := http.Header{"Content-Type": {"application/json"}}
 	if w.cfg.Header != "" {
-		v, err := secret(w.dir, SecretWebhookHeader)
+		v, err := secret(w.dir, channel.SecretWebhookHeader)
 		if err != nil {
 			return err
 		}
