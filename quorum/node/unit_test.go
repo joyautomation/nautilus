@@ -372,7 +372,10 @@ func TestWitnessRefusesUnreadableStateWithoutRebuild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if inc := p.v.State().Incarnation; inc != 88 {
+	p.mu.Lock()
+	inc := p.v.State().Incarnation
+	p.mu.Unlock()
+	if inc != 88 {
 		t.Fatalf("incarnation %d after a rebuild, want a new one (88)", inc)
 	}
 }
@@ -396,6 +399,8 @@ func TestWitnessKeepsItsIncarnation(t *testing.T) {
 			_, err := (&State{Path: filepath.Join(dir, testCluster+stateSuffix)}).Load()
 			return err == nil
 		})
+		p.mu.Lock()
+		defer p.mu.Unlock()
 		return p.v.State().Incarnation
 	}
 	if a, b := start(1), start(2); a != 1 || b != 1 {
