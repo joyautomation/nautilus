@@ -763,6 +763,7 @@ func assetsOf(raw []byte) []json.RawMessage {
 		Equipment []struct {
 			ID    string          `json:"id"`
 			Label string          `json:"label"`
+			Plant string          `json:"plant"`
 			Panel json.RawMessage `json:"panel"`
 		} `json:"equipment"`
 	}
@@ -777,6 +778,9 @@ func assetsOf(raw []byte) []json.RawMessage {
 	}
 	var out []json.RawMessage
 	for _, e := range doc.Equipment {
+		if e.Plant != "" {
+			continue // a piece of the plant model: its page comes from the plant
+		}
 		panel := e.Panel
 		if len(panel) > 0 && panel[0] == '"' {
 			var other string
@@ -843,7 +847,7 @@ func dedupeAssets(list []json.RawMessage) json.RawMessage {
 
 // defaultAssetsIndex lists the project's assets, each a link to its page.
 const defaultAssetsIndex = `<script>
-	import { assetTitle, assetSlug } from '@joyautomation/nautilus-hmi';
+	import { assetTitle, assetSlug, assetGroups } from '@joyautomation/nautilus-hmi';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { assets } from 'nx:default/assets';
@@ -851,18 +855,23 @@ const defaultAssetsIndex = `<script>
 
 <div class="nx-page">
 	<h1>Assets</h1>
-	<ul>
-		{#each assets as a (a.id)}
-			<li><a href={resolve('/assets/' + assetSlug(a.id)) + page.url.search}>{assetTitle(a)}</a></li>
-		{/each}
-	</ul>
+	{#each assetGroups(assets) as g (g.area)}
+		{#if g.area}<h2>{g.area}</h2>{/if}
+		<ul>
+			{#each g.assets as a (a.id)}
+				<li><a href={resolve('/assets/' + assetSlug(a.id)) + page.url.search}>{assetTitle(a)}</a>{#if a.subtitle}<span class="sub"> {a.subtitle}</span>{/if}</li>
+			{/each}
+		</ul>
+	{/each}
 </div>
 
 <style>
 	.nx-page { max-width: 900px; margin: 0 auto; display: grid; gap: 12px; }
 	h1 { margin: 0; font-size: var(--font-lg); }
+	h2 { margin: 8px 0 0; font-size: var(--font-md, 1rem); color: var(--muted); }
 	ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
 	a { color: var(--ink); }
+	.sub { color: var(--muted); font-size: var(--font-xs); }
 </style>
 `
 

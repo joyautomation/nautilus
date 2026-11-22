@@ -42,7 +42,7 @@ var builtinProps = map[string][]string{
 
 // equipmentKeys are the keys a piece of equipment has; anything else in
 // it is ignored when the screen runs.
-var equipmentKeys = []string{"id", "component", "x", "y", "width", "height", "behind", "label", "props", "bind", "ports", "panel"}
+var equipmentKeys = []string{"id", "component", "x", "y", "width", "height", "behind", "label", "props", "bind", "ports", "panel", "plant"}
 
 // labelKeys are the keys a label has (hmi mimic.ts MimicLabel).
 var labelKeys = []string{"text", "x", "y", "bind", "unit", "decimals", "trend", "min", "max", "at", "state", "values", "as", "align", "width"}
@@ -60,6 +60,7 @@ type mimicFile struct {
 	} `json:"canvas"`
 	Equipment []struct {
 		ID        string            `json:"id"`
+		Plant     string            `json:"plant"`
 		Component string            `json:"component"`
 		Bind      map[string]string `json:"bind"`
 		Props     map[string]any    `json:"props"`

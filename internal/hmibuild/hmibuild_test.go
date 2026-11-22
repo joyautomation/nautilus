@@ -327,7 +327,8 @@ func TestAssetsOfMimicEquipment(t *testing.T) {
 		{"id":"FS","label":"Float switch","panel":"P1"},
 		{"id":"V1","label":"Valve"},
 		{"id":"X","panel":"Nowhere"},
-		{"id":"N","panel":5}]}`)
+		{"id":"N","panel":5},
+		{"id":"PL","plant":"P101","panel":{"title":"drawn plant piece"}}]}`)
 	got := assetsOf(raw)
 	var ids []string
 	for _, d := range got {
@@ -344,7 +345,7 @@ func TestAssetsOfMimicEquipment(t *testing.T) {
 		ids = append(ids, a.ID+"="+a.Title+"/"+a.Panel.Title)
 	}
 	if strings.Join(ids, ",") != "P1=P-1 pump/P-1 pump,FS=P-1 pump/P-1 pump" {
-		t.Errorf("assets %v: want the pump and the float switch that shares its panel, titled as the panel is, not the valve or the dangling one", ids)
+		t.Errorf("assets %v: want the pump and the float switch that shares its panel, titled as the panel is, not the valve, the dangling one or a piece that names the plant (its page comes from the plant)", ids)
 	}
 }
 
