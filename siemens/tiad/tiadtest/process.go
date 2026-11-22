@@ -55,6 +55,8 @@ type Script struct {
 	// KeepsLogon and CredentialsAfterChecks are LogonScript (SetLogon).
 	KeepsLogon             bool `json:"keepsLogon,omitempty"`
 	CredentialsAfterChecks bool `json:"credentialsAfterChecks,omitempty"`
+	// ImportReplacesForeign is SetImportReplacesForeign.
+	ImportReplacesForeign bool `json:"importReplacesForeign,omitempty"`
 	// AskFirst is how many times the fake's TIA asks its first check
 	// (nil: once, as TIA does; 0 asks nothing at all and loads; 2 asks
 	// the same configuration twice).
@@ -321,6 +323,17 @@ func (p *Process) SetLogon(t testing.TB, l LogonScript) {
 	t.Helper()
 	p.mu.Lock()
 	p.script.KeepsLogon, p.script.CredentialsAfterChecks = l.KeepsLogon, l.CredentialsAfterChecks
+	s := p.script
+	p.mu.Unlock()
+	p.SetScript(t, s)
+}
+
+// SetImportReplacesForeign makes tiad-fake's TIA replace Main [OB1] on
+// every later import (Target.SetImportReplacesForeign).
+func (p *Process) SetImportReplacesForeign(t testing.TB, on bool) {
+	t.Helper()
+	p.mu.Lock()
+	p.script.ImportReplacesForeign = on
 	s := p.script
 	p.mu.Unlock()
 	p.SetScript(t, s)

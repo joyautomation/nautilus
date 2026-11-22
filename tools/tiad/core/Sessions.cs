@@ -54,6 +54,11 @@ namespace Tiad
         // project's users part-way (AccessWrites.Dirty): an upload, which
         // replaces devices but not users, refuses too.
         public bool UsersUnclean;
+        // ForeignChanged is set when a software import changed program
+        // blocks outside its group (Ownership.Changed). Nothing clears it:
+        // the session is never saved, archived for a deploy or imported
+        // into again, only closed.
+        public bool ForeignChanged;
         public bool Closed;
         // Broken is set when closing the project failed: TIA may still
         // hold it. Every call but another close refuses.

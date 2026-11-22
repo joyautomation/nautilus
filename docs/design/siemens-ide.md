@@ -269,7 +269,8 @@ closes forgotten sessions. `fatal: true` means the session is gone.
 | `device_changed` | 409 | The CPU's identity differs from its device pin (§3.8). The message names both; nothing was loaded and the pin stands |
 | `device_unverified` | 409 | The CPU has a device pin, but its identity could not be read, so the pin could not be checked (§3.8) |
 | `cpu_mismatch` | 409 | An apply's spec does not name the project's CPU (name, order, firmware), or a device of the spec's shares a name or an address with one the project keeps (§3.3). `data.cpu` is the project's CPU; nothing was changed. A deploy verify whose archived project's CPU is not at the record's address (§3.5, "Verifying a deploy"): `data.recordAddress`, `data.projectAddress`; nothing went online |
-| `unclean_session` | 409 | An apply or an upload failed part-way on this session, so its project matches no spec: a later apply or save refuses. Close the session without saving (§3.3) |
+| `unclean_session` | 409 | An apply or an upload failed part-way on this session, so its project matches no spec: a later apply or save refuses. Close the session without saving (§3.3). Also every save, deploy archive (so every download) and import after a software import changed blocks outside its group (§3.4) |
+| `foreign_block` | 409 | A software import's sources declare a program block that exists outside the import's group, which TIA would replace (§3.4). The message names each block, its number and its group. Nothing was imported |
 | `outcome_unknown` | 500 | A download may have loaded the CPU, or not: TIA failed once it asked a check, tiad cancelled after an answer that can change the CPU (`data.actingAnswers` names them), the compare right after a load failed or differs, or TIA's side broke its contract. Not fatal: compare on the same session before anything else. The exception: when TIA Portal itself died in the download, it is fatal and names the fix (restart the agent, then compare in a fresh session), since every project open on that TIA is gone. The client's `OutcomeUnknown` covers this and `unreachable` |
 
 ### 3.3 The station spec
@@ -703,7 +704,7 @@ The client checks each path and the agent checks again.
 | `GET /v1/sessions` | → `{sessions: [{session, project, idleSeconds}]}` |
 | `DELETE /v1/sessions/{id}` | → `{}`. Closes without saving |
 | `PUT /v1/sessions/{id}/station` | `{station, secrets}` → `{changes: [string], notes?: [string], keptDevices?: [{name, profinetName, address}]}` (P2, P5). Keeps the project's CPU or makes one (§3.3, "Which CPU an apply uses"). `notes` is what the caller should know besides the changes (a protected CPU kept its password, the Full access user made or found, devices kept as found) |
-| `POST /v1/sessions/{id}/software` | `{group, sources, tagTables, prune}` → `{results: [{path, ok, messages}], blocks: [{name, kind}]}`. Generates blocks into the group named `group`. With `prune`, blocks in that group that no source produced are deleted |
+| `POST /v1/sessions/{id}/software` | `{group, sources, tagTables, prune}` → `{results: [{path, ok, messages}], blocks: [{name, kind}]}`. Generates blocks into the group named `group`; `blocks` lists that group's. With `prune`, blocks in that group that no source produced are deleted. An import never touches a block outside the group: see "Blocks outside the group" below |
 | `POST /v1/sessions/{id}/compile` | `{hardware, software}` → `{result: "success" or "warning" or "error", errors, warnings, messages: [{object, severity, text}]}` |
 | `POST /v1/sessions/{id}/download` | §3.5 (P3) |
 | `POST /v1/sessions/{id}/compare` | `{secrets?: {fullAccessPassword}}` (§3.9) → `{equal, differences: [{object, state}], blindTrust}`. An online compare. `blindTrust` is the TIA instance's (§3.8), or `null` |
@@ -714,6 +715,36 @@ The client checks each path and the agent checks again.
 | `GET /v1/pins`, `POST /v1/pins/{address}` | The device pins (§3.8). An upload pins the CPU on first use and must match after; compare and download check the pin first |
 | `GET /v1/deploys[?address=]` | → `{deploys: [{id, at, session, project, address, hardware, software, source, tia, archive, attestation, keptDevices, blindTrust, outcome, status}], unreadableLines}`. The deploy record, newest first (§3.5, "The deploy record"). Never starts TIA |
 | `POST /v1/deploys/verify` | `{deploy, fingerprint?: {trustUnverifiedCertificate?}, secrets?: {fullAccessPassword}}` → `{deploy, address, status, latest, unreadableLines, verdict, broken?, session?, differences?, blocks?, blindTrust?, changedOutside, fingerprint?, fingerprintError?, closeError?}` (a `broken` verdict has no session, differences, blocks or blind trust). Whether the CPU still runs a deploy: its archive opened in a session of its own and compared online (§3.5, "Verifying a deploy"). `verdict` is `equal`, `different` or `broken` |
+
+**Blocks outside the group (#789).** TIA's generate-from-source does not
+stop at the group it is given. On the TIA VM a source declaring
+`FUNCTION_BLOCK "Main"` silently replaced the project's own `Main` [OB1],
+outside the group, with an FB. On an adopted project that is the
+customer's program gone, and §2a promises everything outside the owned
+blocks is carried through untouched. So:
+
+- Before anything is imported, tiad reads the block every source header
+  declares (`ORGANIZATION_BLOCK`, `FUNCTION_BLOCK`, `FUNCTION`,
+  `DATA_BLOCK`; any case, quoted or bare, after comments). A name that
+  matches a program block outside the group, in TIA's case-insensitive
+  names, refuses the whole call with `foreign_block`, before anything is
+  imported. The fix is a name the project does not use: the writer's
+  block prefix.
+- After the import, tiad compares every block outside the group with the
+  blocks before it. Any change (a block gone, or there with another kind,
+  number or group, or a new one) fails the call with `operation_failed`
+  naming it. That session is then never saved, archived for a deploy (so
+  never downloaded) or imported into again (`unclean_session`); it can
+  only be closed without saving.
+- Not covered yet: data types (`TYPE`). Where TIA puts a type that a
+  source generates is unproven, so no rule is guessed.
+
+Also seen on the VM: an `ORGANIZATION_BLOCK` source becomes a program
+cycle OB. While another OB holds number 1, its generation fails with
+`Type conflict: Object "<name>" cannot be overwritten`. That number 1 is
+the cause is inferred, not proven. A cyclic interrupt OB with its cycle
+therefore cannot come from an SCL source alone; tiad has to create it
+(§7).
 
 `secrets` is `{"webUsers": {"naut": "<password>"}, "protection": "<password>", "configurationPassword": "<password>", "fullAccessPassword": "<password>"}`.
 Each password answers only its own question: the protection password

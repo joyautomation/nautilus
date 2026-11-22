@@ -24,6 +24,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Security;
 using Siemens.Engineering;
@@ -1252,16 +1253,22 @@ namespace Tiad.Openness
                 foreach (var src in sources)
                 {
                     var sr = new SourceResult { Path = src.Path };
-                    string name = Path.GetFileName(src.FullPath);
-                    PlcExternalSource old = sw.ExternalSourceGroup.ExternalSources.Find(name);
-                    if (old != null) old.Delete();
+                    // A name of tiad's own, so a source the project keeps
+                    // under the file's name is never replaced or deleted.
+                    string name = "tiad-" + Guid.NewGuid().ToString("N") + "-" + Path.GetFileName(src.FullPath);
                     PlcExternalSource es = sw.ExternalSourceGroup.ExternalSources.CreateFromFile(name, src.FullPath);
                     try
                     {
                         foreach (IEngineeringObject b in es.GenerateBlocksFromSource(ug, GenerateBlockOption.None))
                         {
                             PlcBlock pb = b as PlcBlock;
-                            if (pb != null) made.Add(pb.Name);
+                            if (pb == null) continue;
+                            // TIA replaces a same-named block where it is:
+                            // one generated outside the group fails the
+                            // import (the agent then compares and keeps the
+                            // session unusable).
+                            if (!InGroup(pb, ug)) throw new TiaException(src.Path + ": TIA generated \"" + pb.Name + "\" outside group \"" + group + "\", replacing the project's block of that name");
+                            made.Add(pb.Name);
                         }
                         sr.Ok = true;
                     }
@@ -1526,7 +1533,7 @@ namespace Tiad.Openness
                 DeviceItem cpu = CpuOf(d);
                 PlcSoftware sw = (PlcSoftware)cpu.GetService<SoftwareContainer>().Software;
                 var blocks = new List<ProjectBlock>();
-                ProjectBlocks(sw.BlockGroup, blocks);
+                ProjectBlocks(sw.BlockGroup, "", blocks);
                 OnlineProvider op = cpu.GetService<OnlineProvider>();
                 ConfigurationPcInterface pc = PcInterface(op.Configuration);
                 ConfigurationAddress at = TargetInterface(pc).Addresses.Create(address);
@@ -1579,14 +1586,46 @@ namespace Tiad.Openness
 
         // ProjectBlocks adds every block in g and in its user groups, at
         // any depth, as Openness reports it: no block is left out for its
-        // type, so the agent names one it cannot label.
-        static void ProjectBlocks(PlcBlockGroup g, List<ProjectBlock> into)
+        // type, so the agent names one it cannot label. path is g's group
+        // path ("" for the root).
+        static void ProjectBlocks(PlcBlockGroup g, string path, List<ProjectBlock> into)
         {
             foreach (PlcBlock b in g.Blocks)
             {
-                into.Add(new ProjectBlock { Name = b.Name, Type = b.GetType().Name, Number = b.Number });
+                into.Add(new ProjectBlock
+                {
+                    Name = b.Name,
+                    Type = b.GetType().Name,
+                    Number = b.Number,
+                    Group = path,
+                    Modified = b.ModifiedDate.ToUniversalTime().Ticks.ToString(CultureInfo.InvariantCulture),
+                });
             }
-            foreach (PlcBlockUserGroup u in g.Groups) ProjectBlocks(u, into);
+            foreach (PlcBlockUserGroup u in g.Groups) ProjectBlocks(u, path == "" ? u.Name : path + "/" + u.Name, into);
+        }
+
+        // InGroup is whether b sits in g or one of its user groups.
+        static bool InGroup(PlcBlock b, PlcBlockUserGroup g)
+        {
+            IEngineeringObject p = b.Parent;
+            while (p != null)
+            {
+                if (ReferenceEquals(p, g) || p.Equals(g)) return true;
+                if (!(p is PlcBlockUserGroup)) return false;
+                p = p.Parent;
+            }
+            return false;
+        }
+
+        // Blocks is every program block the project holds, with its group.
+        public List<ProjectBlock> Blocks(object project)
+        {
+            return Tia(delegate
+            {
+                var blocks = new List<ProjectBlock>();
+                ProjectBlocks(Software(Of(project).Project).BlockGroup, "", blocks);
+                return blocks;
+            });
         }
 
         // Node copies one element of TIA's compare tree, and its children,

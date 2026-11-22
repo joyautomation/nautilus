@@ -86,6 +86,10 @@ const (
 	// KindUncleanSession refuses an apply or a save after an apply or an
 	// upload failed part-way on the session: close it without saving.
 	KindUncleanSession = "unclean_session"
+	// KindForeignBlock refuses a software import whose sources declare a
+	// program block that exists outside the import's group: TIA would
+	// replace it. Nothing was imported; rename the block (a prefix).
+	KindForeignBlock = "foreign_block"
 
 	KindUnreachable = "unreachable"
 	KindBadReply    = "bad_reply"

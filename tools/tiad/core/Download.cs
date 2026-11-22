@@ -877,6 +877,13 @@ namespace Tiad
     {
         public string Name = "", Type = "";
         public int Number;
+        // Group is the block's group, as a path from the program blocks'
+        // root: "" for the root, "a/b" for user group b in user group a.
+        public string Group = "";
+        // Modified is the block's last-modified time as TIA keeps it, in
+        // a form that compares as text ("" when not read): a block
+        // replaced with one of the same kind and number changes it.
+        public string Modified = "";
     }
 
     // OnlineCompare is one online compare: TIA's compare tree, and every

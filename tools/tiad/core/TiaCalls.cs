@@ -6,6 +6,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text;
 using System.Threading;
 using System.Xml;
 
@@ -734,14 +735,52 @@ namespace Tiad
                 bool prune = r.Bool("prune");
                 r.Done();
                 if (group == "") throw TiadException.BadRequest("group is empty");
+                TiadException badGroup = Ownership.GroupRefused(group);
+                if (badGroup != null) throw badGroup;
                 var sources = new List<SourceFile>();
                 foreach (string p in srcs) sources.Add(new SourceFile { Path = Paths.CleanPath(p), FullPath = ExistingFile(p) });
                 var tagTables = new List<SourceFile>();
                 foreach (string p in tables) tagTables.Add(new SourceFile { Path = Paths.CleanPath(p), FullPath = ExistingFile(p) });
                 SoftwareResult res = OnSession(s, delegate(ITia t)
                 {
+                    if (s.ForeignChanged) throw Ownership.Unusable("another import");
+                    // Every block the sources declare, read on the TIA
+                    // thread right before TIA reads the same files: a name
+                    // outside the group, or a data type, refuses the whole
+                    // call before anything is imported (Ownership).
+                    var declared = new List<Declared>();
+                    foreach (var src in sources)
+                    {
+                        foreach (var d in Ownership.Sources(File.ReadAllBytes(src.FullPath)))
+                        {
+                            d.Source = src.Path;
+                            declared.Add(d);
+                        }
+                    }
+                    TiadException types = Ownership.TypesRefused(declared);
+                    if (types != null) throw types;
+                    List<ProjectBlock> before = t.Blocks(s.Handle);
+                    List<string> conflicts = Ownership.Conflicts(declared, before, group);
+                    if (conflicts.Count > 0) throw Ownership.Refusal(conflicts, group);
                     s.Compiled = false;
-                    return t.ImportSoftware(s.Handle, group, sources, tagTables, prune);
+                    // Unusable until the blocks outside the group compare
+                    // the same afterwards, whether the import returns or
+                    // throws: a failure part-way may have replaced one.
+                    s.ForeignChanged = true;
+                    SoftwareResult sr;
+                    try
+                    {
+                        sr = t.ImportSoftware(s.Handle, group, sources, tagTables, prune);
+                    }
+                    catch
+                    {
+                        if (Ownership.Changed(before, t.Blocks(s.Handle), group).Count == 0) s.ForeignChanged = false;
+                        throw;
+                    }
+                    List<string> changed = Ownership.Changed(before, t.Blocks(s.Handle), group);
+                    if (changed.Count > 0) throw Ownership.ForeignChangedError(changed, group);
+                    s.ForeignChanged = false;
+                    return sr;
                 });
                 return res.ToJson();
             });
