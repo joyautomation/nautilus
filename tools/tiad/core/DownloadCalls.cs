@@ -387,6 +387,16 @@ namespace Tiad
                 return a;
             };
 
+#if TIAD_TEST_SEAMS
+            if (TestSeams.TrustBeforeDownloadDispatch)
+            {
+                OnSession(s, delegate(ITia t)
+                {
+                    RecordBlindTrust("test seam", s, req.Address, new List<string> { "test seam: trust given between the download's check and its dispatch" });
+                    return true;
+                });
+            }
+#endif
             DownloadOutcome result;
             BlindTrust ranWith = rode;
             bool lateRefused = false;

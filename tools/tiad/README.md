@@ -22,8 +22,8 @@ a queue. The agent makes the `ITia` on that thread with the first call that
 needs it. Health, probe, the files and the session list never need it, so
 they cost no trial time. Before any `ITia` call the agent checks every gate
 (412 `gate`) and applies its own rules: the sandbox, the station rules, the
-project name, one writer per project (compared case-insensitively, as
-Windows compares paths). A failure TIA reports answers `operation_failed`
+project name, one project open at a time (TIA V21 opens one per
+instance: a second create or open is `busy`, naming the open session). A failure TIA reports answers `operation_failed`
 with TIA's text, and the thread carries on.
 
 ## Layout

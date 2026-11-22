@@ -151,6 +151,7 @@ func contractReuse(t *testing.T, start Starter) {
 
 	// A created project keeps nothing besides its CPU, and its second
 	// apply of the same spec reuses the CPU and changes nothing.
+	closeFirst(t, s)
 	n, err := c.CreateProject(ctx, "fresh", adopted(), BenchSecrets)
 	if tiad.Kind(err) != tiad.KindBadRequest {
 		t.Fatalf("keep on a new CPU still has nothing to keep: %v %v", n, err)

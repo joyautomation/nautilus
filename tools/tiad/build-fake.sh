@@ -36,7 +36,19 @@ mcs="${MCS:-mcs}"
 common=(-langversion:5 -sdk:4.8 -warnaserror+ -nologo -debug -r:System.Web.Extensions.dll -r:System.Xml.dll)
 
 "$mcs" "${common[@]}" -target:library -out:"$out/tiad-core.dll" "$here"/core/*.cs
-"$mcs" "${common[@]}" -target:exe -out:"$out/tiad-fake.exe" -r:"$out/tiad-core.dll" "$here"/fake/*.cs
+# tiad-fake's own core has the test seams (core/TestSeams.cs); the release
+# core above, and every core install-tiad.ps1 builds, never does.
+"$mcs" "${common[@]}" -define:TIAD_TEST_SEAMS -target:library -out:"$out/tiad-core-seams.dll" "$here"/core/*.cs
+"$mcs" "${common[@]}" -target:exe -out:"$out/tiad-fake.exe" -r:"$out/tiad-core-seams.dll" "$here"/fake/*.cs
+# The release core must not hold the seams.
+if LC_ALL=C grep -aq TestSeams "$out/tiad-core.dll"; then
+  echo "build-fake.sh: the release core holds the test seams (TIAD_TEST_SEAMS leaked)" >&2
+  exit 1
+fi
+if ! LC_ALL=C grep -aq TestSeams "$out/tiad-core-seams.dll"; then
+  echo "build-fake.sh: tiad-fake's core lacks the test seams" >&2
+  exit 1
+fi
 # tiad.exe, the real agent, only to hold its sources to C# 5 and
 # -warnaserror here too: it runs on Windows only (install-tiad.ps1 builds
 # it there with the stock csc).

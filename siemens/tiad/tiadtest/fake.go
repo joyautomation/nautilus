@@ -62,6 +62,10 @@ type Fake struct {
 	// Device is the CPU's identity, as an upload and an online read
 	// report it. Zero means BenchDevice.
 	Device tiad.DeviceIdentity
+	// SeamReserveBeforeRetire is the agent's test seam: a session is
+	// reserved between a close and its retire check, so the retire's
+	// "no session left" guard holds.
+	SeamReserveBeforeRetire bool
 	// NoIdentify makes the fake's TIA side one that cannot read a CPU's
 	// identity online, as tiad.Openness cannot yet: online calls to a
 	// pinned CPU then fail with device_unverified.
@@ -880,22 +884,17 @@ func (f *Fake) newSession(project string) *session {
 	return s
 }
 
-// projectOpen compares paths case-insensitively: the work dir is on
-// Windows, where projects/P/P.ap21 and projects/p/p.ap21 are one file. A
-// created project owns its directory (guard): nothing in it opens while
-// it is open, and it is not created again while anything in it is open.
-func (f *Fake) projectOpen(project, guard string) bool {
-	hasPrefix := func(s, prefix string) bool {
-		return len(s) >= len(prefix) && strings.EqualFold(s[:len(prefix)], prefix)
+// oneProject is the agent's one-project rule (Sessions.Reserve): TIA V21
+// opens one project per instance (#616), so a second create or open is
+// refused before anything is touched, naming the open session.
+func (f *Fake) oneProject() *failure {
+	for _, open := range f.sessions {
+		return &failure{status: http.StatusConflict, kind: tiad.KindBusy,
+			msg: fmt.Sprintf("TIA opens one project at a time, and session %s has %s open: close it first (DELETE /v1/sessions/%s); nothing was touched",
+				open.id, open.project, open.id),
+			data: map[string]any{"openSession": open.id, "openProject": open.project}}
 	}
-	for _, s := range f.sessions {
-		if strings.EqualFold(s.project, project) ||
-			guard != "" && hasPrefix(s.project, guard) ||
-			s.guard != "" && hasPrefix(project, s.guard) {
-			return true
-		}
-	}
-	return false
+	return nil
 }
 
 func (f *Fake) createProject(r *http.Request) (any, *failure) {
@@ -915,8 +914,8 @@ func (f *Fake) createProject(r *http.Request) (any, *failure) {
 	}
 	project := "projects/" + req.Name + "/" + req.Name + ".ap21"
 	guard := "projects/" + req.Name + "/"
-	if f.projectOpen(project, guard) {
-		return nil, fail(http.StatusConflict, tiad.KindBusy, "project %s, or something in %s, is open", project, guard)
+	if fl := f.oneProject(); fl != nil {
+		return nil, fl
 	}
 	s := f.newSession(project)
 	s.guard = guard
@@ -969,8 +968,8 @@ func (f *Fake) openSession(r *http.Request) (any, *failure) {
 	if _, ok := f.files[p]; !ok {
 		return nil, fail(http.StatusNotFound, tiad.KindNotFound, "no project %s", p)
 	}
-	if f.projectOpen(p, "") {
-		return nil, fail(http.StatusConflict, tiad.KindBusy, "project %s is already open", p)
+	if fl := f.oneProject(); fl != nil {
+		return nil, fl
 	}
 	s := f.newSession(p)
 	// The project as it was saved: its CPU and its devices.
@@ -1009,6 +1008,14 @@ func (f *Fake) closeSession(r *http.Request) (any, *failure) {
 		if id == s.id {
 			delete(f.claims, addr)
 		}
+	}
+	// The agent's test seam: a session reserved between the close and
+	// the retire check, as a create racing the close could.
+	if f.SeamReserveBeforeRetire {
+		seam := f.newSession("projects/seam/seam.ap21")
+		f.retireIfTrusted()
+		delete(f.sessions, seam.id)
+		return struct{}{}, nil
 	}
 	f.retireIfTrusted()
 	return struct{}{}, nil

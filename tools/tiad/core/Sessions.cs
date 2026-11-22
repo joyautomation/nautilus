@@ -1,6 +1,7 @@
 // Sessions.cs: open projects (siemens-ide.md section 3.2). A session is an open
-// project; each project has one session at a time (one writer), and an
-// idle reaper closes the ones a caller forgot.
+// project; TIA V21 opens one project per instance, so the agent holds one
+// session at a time (#616), and an idle reaper closes the one a caller
+// forgot.
 
 using System;
 using System.Collections.Generic;
@@ -54,8 +55,7 @@ namespace Tiad
         // hold it. Every call but another close refuses.
         public bool Broken;
         // Guard is a directory the session owns ("projects/<name>/" for a
-        // project tiad created): no other session may open anything in
-        // it, and it may not be created while anything in it is open.
+        // project tiad created): an export never writes into it.
         public string Guard = "";
         public int InFlight;
         public DateTime LastUsed = DateTime.UtcNow;
@@ -131,27 +131,35 @@ namespace Tiad
         // projects/p/p.ap21 are one file: one project, one writer.
         static readonly StringComparison ProjectCmp = StringComparison.OrdinalIgnoreCase;
 
-        // Reserve claims a project for a new session before it is opened,
-        // so two opens of one project cannot both get through. guard, when
-        // set, is the directory the new session owns (see Session.Guard).
+        public const string OneProject = "TIA opens one project at a time";
+
+        // Reserve claims a project for a new session before it is opened.
+        // TIA V21 opens one project per instance (#616, #789) and refuses
+        // a second only after a create has replaced its directory, so the
+        // agent holds one session at a time: a second is refused here,
+        // before anything is touched, naming the session to close; so is
+        // one while a closed session's project may still be open in TIA
+        // (closing). guard, when set, is the directory the new session
+        // owns (see Session.Guard).
         public Session Reserve(string project, string projectFull, string guard)
         {
             lock (mu)
             {
-                foreach (var s in byId.Values)
+                foreach (var open in byId.Values)
                 {
-                    if (string.Equals(s.Project, project, ProjectCmp))
-                    {
-                        throw new TiadException(409, Kinds.Busy, "project " + project + " is already open");
-                    }
-                    if (guard != "" && s.Project.StartsWith(guard, ProjectCmp))
-                    {
-                        throw new TiadException(409, Kinds.Busy, s.Project + " is open, and " + guard + " would be replaced");
-                    }
-                    if (s.Guard != "" && project.StartsWith(s.Guard, ProjectCmp))
-                    {
-                        throw new TiadException(409, Kinds.Busy, s.Guard + " belongs to the open project " + s.Project);
-                    }
+                    var data = new Obj();
+                    data["openSession"] = open.Id;
+                    data["openProject"] = open.Project;
+                    string why;
+                    // A session still opening has no id a close takes yet.
+                    if (open.Handle == null) why = ", and session " + open.Id + " is still opening " + open.Project + ": try again once it is open, then close it first";
+                    else if (open.Broken) why = ", and session " + open.Id + " has " + open.Project + " open, and closing it failed: close it again (DELETE /v1/sessions/" + open.Id + "), or restart the agent";
+                    else why = ", and session " + open.Id + " has " + open.Project + " open: close it first (DELETE /v1/sessions/" + open.Id + ")";
+                    throw new TiadException(409, Kinds.Busy, OneProject + why + "; nothing was touched", data, false);
+                }
+                if (closing > 0)
+                {
+                    throw new TiadException(409, Kinds.Busy, OneProject + ", and a session is still closing: try again once it is closed; nothing was touched");
                 }
                 next++;
                 var n = new Session

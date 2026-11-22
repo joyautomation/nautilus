@@ -159,8 +159,8 @@ func contractFingerprintBlindTrust(t *testing.T, start Starter) {
 // contractFingerprintRetired (#789 D1): the TIA instance that trusted
 // blindly is retired once no session is left on it, and the next one
 // trusts nothing, so a deploy's own download never rides on an earlier
-// read's trust. While another session is open the instance stays, and
-// the download gate holds there.
+// read's trust. (TIA opens one project at a time, so no other session can
+// keep the instance up: closing the reading session retires it.)
 func contractFingerprintRetired(t *testing.T, start Starter) {
 	a, s := compiledBench(t, start)
 	c := a.Client()
@@ -168,24 +168,11 @@ func contractFingerprintRetired(t *testing.T, start Starter) {
 	if r, err := s.Fingerprint(ctx, tiad.FingerprintRequest{TrustUnverifiedCertificate: true}); err != nil || r.BlindTrust == nil {
 		t.Fatalf("a read with the opt-in: %+v %v", r, err)
 	}
-	other, err := c.CreateProject(ctx, "other", BenchStation(), BenchSecrets)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := other.Compile(ctx, true, true); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Close(ctx); err != nil {
-		t.Fatal(err)
-	}
-	// Another session is left: the instance, and its trust, stay.
-	if cmp, err := other.Compare(ctx); err != nil || cmp.BlindTrust == nil {
-		t.Fatalf("a compare in the session left open: %+v %v, want the trust still reported", cmp, err)
-	}
-	if _, err := other.Download(ctx, benchSoftwareLoad); tiad.Kind(err) != tiad.KindDecisionRequired || !strings.Contains(err.Error(), "close every session") {
+	// The gate holds while the reading session is open.
+	if _, err := s.Download(ctx, benchSoftwareLoad); tiad.Kind(err) != tiad.KindDecisionRequired || !strings.Contains(err.Error(), "close every session") {
 		t.Fatalf("a download while the trusting instance is still up: %v, want decision_required naming the fix", err)
 	}
-	if err := other.Close(ctx); err != nil {
+	if err := s.Close(ctx); err != nil {
 		t.Fatal(err)
 	}
 	// No session left: the next instance trusts nothing.

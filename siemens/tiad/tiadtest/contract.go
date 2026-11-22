@@ -62,6 +62,15 @@ type Config struct {
 	Targets []string
 }
 
+// closeFirst closes s, so the next project can open: TIA opens one project
+// at a time (#616).
+func closeFirst(t testing.TB, s *tiad.Session) {
+	t.Helper()
+	if err := s.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // Starter starts a fresh agent for one test.
 type Starter func(t *testing.T, cfg Config) Target
 
