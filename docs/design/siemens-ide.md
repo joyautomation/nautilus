@@ -315,6 +315,33 @@ The rules for applying a spec:
 - **Every device's GSDML must already be installed** (`gsd/install`).
 - **Every web user needs a password** in `secrets.webUsers`. Its rights are
   any of `read`, `write`, `mode` (change RUN/STOP) and `diagnostics`.
+- **The web server comes on only over access control on** (#789 stage 5
+  (A) step 2). With access control off, a FW 3.1 CPU's web server knows
+  one user, "Anonymous", with full rights over the CPU (S7-1500 Web server
+  manual, 11/2023): anyone who reaches it could write tags and stop the
+  CPU.
+  - `webServer.enabled: true` sets the CPU's `WebserverActivate` and
+    `UseWebServerForInterface` on the PROFINET interface that carries the
+    CPU's address (a device item attribute, not the node's), and reads
+    both back.
+  - It needs the CPU's access control to read exactly
+    `EnabledWithAccessControl`. `Disabled`, a CPU without the setting and
+    any other state refuse, naming the fix. One rule, checked twice:
+    before any write for a kept CPU (beside the `cpu.accessControl`
+    check), and in the station step after access control is applied,
+    before the server is switched on, for any CPU.
+  - `enabled: false` turns both off. It is never refused.
+  - `webServer` left out keeps a kept CPU's web server as found and turns
+    a new CPU's off. An adopted CPU with access control off is applied
+    without `webServer`.
+  - Web users are not made yet (step 2B): the TIA side refuses a spec
+    with `webServer.users`, and the fakes ignore them. Their runtime
+    rights' identifiers are not known yet; the agent logs every right the
+    CPU offers, once a run, to learn them.
+  - Unproven: that TIA compiles a FW 3.1 station with the web server on;
+    whether it exposes more attributes once the server is on (an
+    HTTPS-only switch, a certificate); whether a kept project's
+    "Anonymous" user can hold roles.
 - **`cpu.configurationProtection` is required on the wire**: the FW 3.1
   protection of the CPU's confidential configuration data (#789, decision
   of 2026-11-19). A FW 3.1 CPU does not compile until it is set up.

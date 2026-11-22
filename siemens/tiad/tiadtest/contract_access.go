@@ -124,6 +124,9 @@ func adoptedStation() tiad.Station {
 	st.Profinet = nil
 	st.CPU.ConfigurationProtection = tiad.ProtectKeep
 	st.CPU.AccessControl = tiad.AccessKeep
+	// The uploaded CPU's access control is off, so its web server is left
+	// as found: tiad refuses to turn it on there.
+	st.WebServer = nil
 	return st
 }
 

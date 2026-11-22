@@ -52,7 +52,9 @@ type CPU struct {
 	AccessControl string `yaml:"access-control"`
 }
 
-// WebServer turns on the CPU's web server. Passwords are never here.
+// WebServer turns on the CPU's web server, or (enabled false) turns it off;
+// left out, a kept CPU's stays as found. tiad turns it on only over access
+// control on. Passwords are never here.
 type WebServer struct {
 	Enabled bool      `yaml:"enabled"`
 	Users   []WebUser `yaml:"users"`

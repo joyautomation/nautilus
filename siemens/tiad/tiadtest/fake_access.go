@@ -389,3 +389,53 @@ func (f *Fake) checkPolicy(st tiad.Station, sec tiad.Secrets) *failure {
 }
 
 func utf16Units(s string) []uint16 { return utf16.Encode([]rune(s)) }
+
+// WebOnNote is WebSteps.OnNote: an apply that turns the web server on
+// says so.
+const WebOnNote = `the web server is on, over access control EnabledWithAccessControl: a web client may do what the runtime rights of its user's roles on this CPU allow`
+
+// webRefusal is WebRule.Refusal: only EnabledWithAccessControl lets the
+// web server be on (with access control off, a FW 3.1 CPU's web server
+// lets anyone in as "Anonymous" with full rights).
+func webRefusal(state string) string {
+	if state == AccessEnabled {
+		return ""
+	}
+	what := "set to " + strconv.Quote(state)
+	if state == AccessAbsent {
+		what = "not available (no such setting)"
+	}
+	return "webServer.enabled is true, and the CPU's access control is " + what +
+		`: with access control off, a FW 3.1 CPU's web server lets anyone in as "Anonymous" with full rights;` +
+		" turn access control on (a CPU tiad makes has it on), or set webServer.enabled to false"
+}
+
+// planWeb is WebRule.Plan: before any write, a web server turned on over
+// a kept CPU's access control (current nil: a CPU the apply makes).
+func planWeb(current *string, want *tiad.WebServer) *failure {
+	if want == nil || !want.Enabled || current == nil {
+		return nil
+	}
+	if why := webRefusal(*current); why != "" {
+		return fail(http.StatusBadRequest, tiad.KindBadRequest, "%s", why)
+	}
+	return nil
+}
+
+// applyWeb is WebSteps.Run, after applyAccess: the web server on reads
+// the access control first; want nil leaves a kept CPU's as found and
+// turns a new CPU's off.
+func (s *session) applyWeb(want *tiad.WebServer, madeCPU bool, notes *[]string) *failure {
+	if want == nil && !madeCPU {
+		return nil
+	}
+	on := want != nil && want.Enabled
+	if on {
+		if why := webRefusal(s.accessControl); why != "" {
+			return fail(http.StatusInternalServerError, tiad.KindOperationFailed, "TIA: %s", why)
+		}
+		*notes = append(*notes, WebOnNote)
+	}
+	s.webServer = on
+	return nil
+}

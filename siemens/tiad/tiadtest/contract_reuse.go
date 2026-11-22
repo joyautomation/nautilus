@@ -24,6 +24,9 @@ func contractReuse(t *testing.T, start Starter) {
 		st.Profinet = nil
 		st.CPU.ConfigurationProtection = tiad.ProtectKeep
 		st.CPU.AccessControl = tiad.AccessKeep
+		// The uploaded CPU's access control is off: its web server is
+		// left as found.
+		st.WebServer = nil
 		return st
 	}
 
@@ -214,6 +217,7 @@ func contractReuseAfterARefusedUpload(t *testing.T, start Starter) {
 	adopted.Profinet = nil
 	adopted.CPU.ConfigurationProtection = tiad.ProtectKeep
 	adopted.CPU.AccessControl = tiad.AccessKeep
+	adopted.WebServer = nil
 	swapped := BenchDevice()
 	swapped.Order = "6ES7 510-1SK03-0AB0"
 	a.SetDevice(t, swapped, false)

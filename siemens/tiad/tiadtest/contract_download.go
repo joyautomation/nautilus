@@ -657,9 +657,11 @@ func contractS2aSequence(t *testing.T, start Starter) {
 	if _, err := s.Download(ctx, dl); tiad.Kind(err) != tiad.KindBadRequest || !strings.Contains(err.Error(), "no station spec") {
 		t.Fatalf("download straight after the upload: %v", err)
 	}
-	// The uploaded CPU has no access control (the S2a upload): keep it.
+	// The uploaded CPU has no access control (the S2a upload): keep it,
+	// and leave its web server as found.
 	uploaded := BenchStation()
 	uploaded.CPU.AccessControl = tiad.AccessKeep
+	uploaded.WebServer = nil
 	if _, err := s.ApplyStation(ctx, uploaded, BenchSecrets); err != nil {
 		t.Fatal(err)
 	}

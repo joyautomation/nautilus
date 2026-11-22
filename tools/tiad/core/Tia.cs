@@ -181,7 +181,8 @@ namespace Tiad
         // the CPU anew; Reuse keeps the project's CPU and the devices
         // besides it, as found. Either way it then applies next's CPU
         // settings, cpu.configurationProtection (ProtectionSteps.Run) and
-        // cpu.accessControl (AccessSteps.Run). notes gets what the caller
+        // cpu.accessControl (AccessSteps.Run), then webServer
+        // (WebSteps.Run, after access control). notes gets what the caller
         // should know besides the changes; made collects what it made in
         // the project's users and roles, as soon as it is made.
         void ApplyStation(object project, Station next, string decision, Secrets secrets, List<string> notes, AccessMade made);
