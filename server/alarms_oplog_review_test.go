@@ -240,7 +240,20 @@ func TestReviewAckClearsBatched(t *testing.T) {
 	al.clrRunning = true // hold the proposer while both are queued
 	al.clrMu.Unlock()
 	cond["HiTempAlm"], cond["LoFlowAlm"] = false, false
-	eng.Evaluate() // both return to normal: two clears queued
+	eng.Evaluate() // both return to normal: two clears handed off, then queued
+	queued := time.Now().Add(2 * time.Second)
+	for {
+		al.clrMu.Lock()
+		n := len(al.clr)
+		al.clrMu.Unlock()
+		if n == 2 {
+			break
+		}
+		if time.Now().After(queued) {
+			t.Fatalf("%d ack-clears queued; want both", n)
+		}
+		time.Sleep(time.Millisecond)
+	}
 	al.clrMu.Lock()
 	al.clrRunning = false
 	al.clrMu.Unlock()
