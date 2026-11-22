@@ -544,7 +544,16 @@ alarms:
   acknowledgement's entry in the operator-intent log names the link. A
   controller that is not half of a pair keeps its key in the state
   directory (`alarm-link.key`, 0600, made at the first start that needs
-  it; deleting it ends every link already sent).
+  it; deleting it ends every link already sent). `ack-url` may name
+  either controller of a pair, or an address in front of both: a standby
+  passes the link to the leader. Make `NAUTILUS_PEER_TOKEN` long and
+  random (`naut redundancy new-pair` does): each link is signed under a
+  key derived from it, and `naut run` warns about one shorter than 32
+  characters.
+- **The token is in the link's path,** so a reverse proxy in front of the
+  controller writes it to its access log, where it stays usable until it
+  is used or its 24 hours run out. Keep such logs as private as the
+  pages.
 
 Check a policy offline:
 

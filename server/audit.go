@@ -1063,6 +1063,9 @@ func readRefusedBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
 // four (alarm ack and shelving, SFC) are the routes' own targetFuncs,
 // which are parses too; the rest are separate because the routes' read
 // state. An action not listed is journalled without a target.
+// An ack link's refusals never reach the "alarm.ack" entry below with a
+// form body: checkLink answers them itself, with its own target, before
+// the seam's preAuthorize (acklink.go).
 var refusalTargets = map[string]targetFunc{
 	"tag.write":        nameValueTarget,
 	"force.set":        nameValueTarget,
