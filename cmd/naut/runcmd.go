@@ -85,6 +85,7 @@ func electorWith(proj *project.Project, addr, dir string, deps pairDeps) (leader
 		// /api/cluster and the dashboard say it until state streaming.
 		m.q.Warn(project.PairRetainNotReplicated)
 		wireRedundancy(proj, m.q)
+		proj.Member = string(m.o.Self)
 		return m.q, m, nil
 	}
 	el, err := leader.New(proj.LeaseName(), os.Getenv("POD_NAME"), selfAddr(addr))
@@ -461,6 +462,15 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	if opc != nil {
 		// BuildInfo.SoftwareVersion is the version `naut version` prints.
 		opc.SetSoftwareVersion(lsp.Version)
+		if uris := proj.OPCUAMemberURIs(); uris != nil && el != nil {
+			opc.SetRedundancy(&opcuaserver.Redundancy{
+				// Cold: a takeover starts from the new leader's own retained
+				// values (PairRetainNotReplicated), not a running image.
+				Support:      1,
+				ServerURIs:   uris,
+				ServiceLevel: func() byte { return pairServiceLevel(el.Status()) },
+			})
+		}
 		// Started once the tag API's server exists (below): it signs OPC UA
 		// users in and journals their writes.
 	}
@@ -1909,4 +1919,27 @@ func schedBannerSuffix(s runtime.ScanStats) string {
 		out += fmt.Sprintf(" — GOMAXPROCS %d (raised from %d: a task requests a real-time priority)", s.Procs.Value, s.Procs.RaisedFrom)
 	}
 	return out
+}
+
+// pairServiceLevel is the OPC UA ServiceLevel (Part 4 §6.6.2.4.5.2) a pair
+// member reports, read by a client that holds a session to each and keeps
+// the higher: 250 a leader with nothing standing against it, 200 a leader
+// with a warning (the pair is degraded, but it is the one driving), 100 a
+// standby that knows the leader and holds a synced operator log, 1 any
+// other standby (no leader known, or its log not synced: it could not take
+// over cleanly), 0 a controller that is a spare or held by a duplicate mark
+// (it does not take part). A leader is always at 200 or more, a standby
+// always less (#716).
+func pairServiceLevel(st leader.Status) byte {
+	switch {
+	case st.Spare || st.Held:
+		return 0
+	case st.IsLeader && len(st.Warnings) == 0:
+		return 250
+	case st.IsLeader:
+		return 200
+	case st.Leader != "" && (st.Log == nil || st.Log.Synced):
+		return 100
+	}
+	return 1
 }

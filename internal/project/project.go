@@ -1191,6 +1191,11 @@ type Project struct {
 	// `naut run` sets it with the elector (wireRedundancy); OPCUAServer
 	// hands it to the OPC UA server. Nil: always writable (no redundancy).
 	WriteGate func() bool
+	// Member names this controller within a redundant pair (a or b), set
+	// by `naut run`; "" outside a pair. The OPC UA server's ApplicationUri
+	// carries it, so the two controllers are two servers to a client
+	// (#716).
+	Member string
 
 	// AlarmDirectory is where escalation's channels find each person's
 	// address and their own credentials (#715): the contacts and secrets

@@ -255,6 +255,14 @@ never computes.
   request's Host when it proxies, so the leader checks the same name.
   `GET /api/cluster` reports each replica's own view — mode, leader,
   transitions.
+- **OPC UA clients of a pair.** With an `opcua:` section, each controller is its
+  own OPC UA server: its ApplicationUri is the configured (or default) one with
+  `-a` or `-b` appended. Each reports `RedundancySupport` (Cold), `ServerUriArray`
+  (both URIs) and a live `ServiceLevel`: 250 for the leader, 200 for a leader
+  with a standing warning (a pair always has one until state streaming), 100 for a
+  standby that knows the leader and has a synced log, 1 for any other standby, and
+  0 for a spare or a copy held by a duplicate mark. A client that holds a session
+  to each keeps the higher. A write to a standby stays refused (`Bad_InvalidState`).
 - The identity shown in `/api/cluster` comes from `POD_NAME`, and the
   proxy target from `POD_IP` — both from the downward API:
 

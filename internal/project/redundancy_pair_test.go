@@ -175,3 +175,23 @@ func TestPairKeepsTimeoutsAndReportsOnlyExplicitOnes(t *testing.T) {
 		t.Errorf("WriteTimeouts %v; want only X's explicit 3s", wt)
 	}
 }
+
+// A pair's controllers are two OPC UA servers: each member's ApplicationUri
+// carries its name, and ServerUriArray lists both (#716). Outside a pair the
+// configured URI is untouched.
+func TestOPCUAApplicationURIPerMember(t *testing.T) {
+	p, err := Load(pairFS(pairOK+"opcua:\n  endpoint: 0.0.0.0:4840\n"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, b := p.OPCUAApplicationURI("a"), p.OPCUAApplicationURI("b")
+	if a == b || !strings.HasSuffix(a, "-a") || !strings.HasSuffix(b, "-b") {
+		t.Errorf("member URIs: %q %q", a, b)
+	}
+	if got := p.OPCUAMemberURIs(); len(got) != 2 || got[0] != a || got[1] != b {
+		t.Errorf("OPCUAMemberURIs = %v", got)
+	}
+	if got := p.OPCUAApplicationURI(""); got != "" {
+		t.Errorf("no member: %q, want the configured (empty) URI", got)
+	}
+}

@@ -38,6 +38,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -150,6 +151,7 @@ type Server struct {
 	host string
 	port int
 
+	red     atomic.Pointer[opcserver.Redundancy]
 	mu      sync.Mutex
 	srv     *opcserver.Server
 	ns      *namespace
@@ -317,6 +319,7 @@ func (s *Server) startOn(ctx context.Context, port int) error {
 		opcserver.ProductName(product),
 		opcserver.ProductURI(productURI),
 		opcserver.SoftwareVersion(build.version),
+		opcserver.RedundancyFunc(func() *opcserver.Redundancy { return s.red.Load() }),
 		opcserver.BuildNumber(build.number),
 		opcserver.BuildDate(build.date),
 		opcserver.EnableSecurity("None", ua.MessageSecurityModeNone),
@@ -490,6 +493,17 @@ func loopbackHost(host string) bool {
 	ip := net.ParseIP(strings.TrimSuffix(strings.TrimPrefix(host, "["), "]"))
 	return ip != nil && ip.IsLoopback()
 }
+
+// Redundancy is the server's part in a redundant set (see
+// uaserver.Redundancy): Support, every member's ApplicationUri, and this
+// member's ServiceLevel.
+type Redundancy = opcserver.Redundancy
+
+// SetRedundancy makes the server a member of a non-transparent redundant
+// set: RedundancySupport, ServerUriArray and a ServiceLevel that follows
+// r.ServiceLevel, which `naut run` takes from the elector. It takes effect
+// at once, running or not; nil leaves the set.
+func (s *Server) SetRedundancy(r *Redundancy) { s.red.Store(r) }
 
 // SetSoftwareVersion sets the version the server reports as
 // ServerStatus.BuildInfo.SoftwareVersion: the CLI passes its own, the one

@@ -14,6 +14,7 @@ import (
 	"net"
 	"os"
 	"path"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -709,7 +710,7 @@ func (p *Project) OPCUAServer(rt *runtime.Runtime) (*opcuaserver.Server, error) 
 	if pki == "" {
 		pki = opcuaserver.DefaultPKI
 	}
-	srv, err := opcuaserver.New(rt, opcuaserver.Options{Endpoint: c.Endpoint, Name: p.Name, ApplicationURI: c.ApplicationURI, PKI: pki, Writable: c.Writable, AnonymousWrites: c.AnonymousWrites})
+	srv, err := opcuaserver.New(rt, opcuaserver.Options{Endpoint: c.Endpoint, Name: p.Name, ApplicationURI: p.OPCUAApplicationURI(p.Member), PKI: pki, Writable: c.Writable, AnonymousWrites: c.AnonymousWrites})
 	if err != nil {
 		return nil, err
 	}
@@ -717,6 +718,44 @@ func (p *Project) OPCUAServer(rt *runtime.Runtime) (*opcuaserver.Server, error) 
 		srv.SetWriteGate(p.WriteGate)
 	}
 	return srv, nil
+}
+
+// OPCUAApplicationURI is the ApplicationUri of the OPC UA server run by
+// pair member `member`: the configured (or default) one, and for a pair the
+// member name appended, so the two controllers are two servers with their
+// own certificates and a client can tell them apart (OPC UA Part 4 §7.1:
+// an ApplicationUri names one server instance). Outside a pair, or with no
+// member, it is the configured one unchanged ("" means the default).
+func (p *Project) OPCUAApplicationURI(member string) string {
+	var base string
+	if p.OPCUA != nil {
+		base = p.OPCUA.ApplicationURI
+	}
+	if member == "" || !p.Redundancy.Pair() {
+		return base
+	}
+	if base == "" {
+		base = opcuaserver.ApplicationURI(p.Name)
+	}
+	return base + "-" + member
+}
+
+// OPCUAMemberURIs are both pair members' ApplicationUris (a, then b): the
+// ServerUriArray each reports. Nil outside a pair.
+func (p *Project) OPCUAMemberURIs() []string {
+	if p.OPCUA == nil || !p.Redundancy.Pair() {
+		return nil
+	}
+	names := make([]string, 0, len(p.Redundancy.Peers))
+	for n := range p.Redundancy.Peers {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	out := make([]string, len(names))
+	for i, n := range names {
+		out[i] = p.OPCUAApplicationURI(n)
+	}
+	return out
 }
 
 // simulateDrivers and platformNotices are the browser playground's
