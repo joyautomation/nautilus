@@ -1332,8 +1332,7 @@ func TestPagesCarryTheAckLink(t *testing.T) {
 	}
 }
 
-// An ack-url is https, or http only by an explicit ack-url-insecure; the
-// default is that the link alone acknowledges (James, #715).
+// inbound: takes the channels it names, and only those.
 func TestInboundAccepted(t *testing.T) {
 	c := prepare(t, `oncall: {inbound: {url: "https://hmi.example:8443", channels: [sms, voice]}}`, "sms", "voice")
 	if !c.Oncall.Inbound.Takes("sms") || !c.Oncall.Inbound.Takes("voice") || c.Oncall.Inbound.Takes("email") {
@@ -1344,6 +1343,8 @@ func TestInboundAccepted(t *testing.T) {
 	}
 }
 
+// An ack-url is https, or http only by an explicit ack-url-insecure; the
+// default is that the link alone acknowledges (James, #715).
 func TestAckURLAccepted(t *testing.T) {
 	c := prepare(t, `oncall: {ack-url: "https://hmi.example:8443/plant"}`)
 	if c.Oncall.AckFrom() != AckByLink || DefaultAckFrom != AckByLink {

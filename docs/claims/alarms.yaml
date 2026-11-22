@@ -5,7 +5,8 @@ claims:
   - id: ALM-001
     claim: >-
       A project with no alarms section behaves exactly as before: there is no
-      alarm engine, all five /api/alarms routes answer 404, /api/meta reports
+      alarm engine, every /api/alarms route (out-of-service ones included)
+      answers 404, /api/meta reports
       alarms false, and stream frames carry no alarms field.
     source: "#the-shape"
     tests:
@@ -641,3 +642,20 @@ claims:
       for "acts as an email's does" it guards rather than goes red without
       this change (its HMI-link assertions do). No page has been delivered
       through a real push service to a phone.
+
+  - id: ALM-057
+    claim: >-
+      Under an auth: block, an acknowledgement or shelve by a signed-in person
+      (or their personal access token) is recorded as that person, whatever
+      name the client sends; with a shared token, or no auth: block, the name
+      the client sends is the record.
+    source: "#the-api"
+    tests:
+      - go ./server TestAckAndShelveRecordTheSignedInUser
+      - go ./server TestAckByTokenKeepsTheTypedName
+    partial: true
+    note: >-
+      The no-auth: case is asserted; under auth:, an ack by a personal access
+      token and a shelve and unshelve by a browser sign-in are (an ack by a
+      browser sign-in is not separately). A shared (service) token under an
+      auth: block keeping the typed name is not.
