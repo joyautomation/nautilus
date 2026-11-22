@@ -80,7 +80,7 @@ func (s *session) fullAccessPassword() (string, bool) {
 		return "", false
 	}
 	for r := range u.roles {
-		if s.access.roles[r] {
+		if s.access.roles[r][fullAccessRight] {
 			return u.password, true
 		}
 	}

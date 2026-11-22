@@ -41,8 +41,12 @@ func BenchStation(modules ...tiad.DeviceModule) tiad.Station {
 	}
 }
 
+// BenchWebPassword is the bench station's web user's password: it is set,
+// so it meets TIA's password rules, and it is its own secret.
+const BenchWebPassword = "Bench-web-2026"
+
 // BenchSecrets carries the bench station's web user password.
-var BenchSecrets = tiad.Secrets{WebUsers: map[string]string{"naut": "pw"}, FullAccessPassword: BenchFullAccessPassword}
+var BenchSecrets = tiad.Secrets{WebUsers: map[string]string{"naut": BenchWebPassword}, FullAccessPassword: BenchFullAccessPassword}
 
 // BenchAttestation is a test operator's attestation for a download that
 // loads hardware (#789 hardware gate).
@@ -444,7 +448,7 @@ func contractStrictJSON(t *testing.T, start Starter) {
 	path := "/v1/sessions/" + s.ID + "/station"
 	body := func(edit func(st map[string]any, root map[string]any)) map[string]any {
 		st := stationBody(t, BenchStation())
-		root := map[string]any{"station": st, "secrets": map[string]any{"webUsers": map[string]any{"naut": "pw"}, "fullAccessPassword": BenchFullAccessPassword}}
+		root := map[string]any{"station": st, "secrets": map[string]any{"webUsers": map[string]any{"naut": BenchWebPassword}, "fullAccessPassword": BenchFullAccessPassword}}
 		edit(st, root)
 		return root
 	}
@@ -475,7 +479,7 @@ func contractStrictJSON(t *testing.T, start Starter) {
 		}),
 		"password as a number": body(func(_, r map[string]any) { r["secrets"].(map[string]any)["webUsers"] = map[string]any{"naut": 5} }),
 		"another password as a number": body(func(_, r map[string]any) {
-			r["secrets"].(map[string]any)["webUsers"] = map[string]any{"naut": "pw", "other": 5}
+			r["secrets"].(map[string]any)["webUsers"] = map[string]any{"naut": BenchWebPassword, "other": 5}
 		}),
 		"station as an array":  body(func(_, r map[string]any) { r["station"] = []any{} }),
 		"modules as an object": body(func(st, _ map[string]any) { st["modules"] = map[string]any{} }),
@@ -502,9 +506,9 @@ func contractStrictJSON(t *testing.T, start Starter) {
 		"a trailing point":       {`"slot":2`, `"slot":2.`},
 		"a bare point":           {`"inputStart":0`, `"inputStart":.0`},
 		"undefined":              {`"inputStart":0`, `"inputStart":undefined`},
-		"a raw tab in a string":  {`"pw"`, "\"p\tw\""},
-		"a bad escape":           {`"pw"`, `"p\qw"`},
-		"a single-quoted string": {`"pw"`, `'pw'`},
+		"a raw tab in a string":  {`"` + BenchWebPassword + `"`, "\"Bench\tweb\""},
+		"a bad escape":           {`"` + BenchWebPassword + `"`, `"Bench\qweb"`},
+		"a single-quoted string": {`"` + BenchWebPassword + `"`, `'` + BenchWebPassword + `'`},
 		"a key twice":            {`"slot":2`, `"slot":1,"slot":2`},
 		"a key twice, escaped":   {`"slot":2`, `"slot":1,"sl\u006ft":2`},
 	}

@@ -313,8 +313,15 @@ The rules for applying a spec:
   devices besides its station as found, and lists them ("Which CPU an
   apply uses" below).
 - **Every device's GSDML must already be installed** (`gsd/install`).
-- **Every web user needs a password** in `secrets.webUsers`. Its rights are
-  any of `read`, `write`, `mode` (change RUN/STOP) and `diagnostics`.
+- **Every web user needs a password** in `secrets.webUsers` when the server
+  is on. It meets TIA's password rules and then the project's own policy
+  for local users, and it is its own secret: never the protection,
+  configuration or Full access password, never another web user's. Its
+  rights are any of `read`, `write`, `mode` (change RUN/STOP) and
+  `diagnostics`. A name is 1 to 32 letters, digits, `_`, `-` and `.`,
+  starting with a letter; `nautilus` and `Anonymous` are reserved in any
+  case, and names are compared ignoring case. `webServer.users` with
+  `enabled: false` is refused: a server that is off has no users.
 - **The web server comes on only over access control on** (#789 stage 5
   (A) step 2). With access control off, a FW 3.1 CPU's web server knows
   one user, "Anonymous", with full rights over the CPU (S7-1500 Web server
@@ -337,10 +344,64 @@ The rules for applying a spec:
     without `webServer`. As found is never silent: a kept CPU whose server
     is on over access control off gets a WARNING note (and log line)
     naming `enabled: false` as the fix, since a download would load it.
-  - Web users are not made yet (step 2B): the TIA side refuses a spec
-    with `webServer.users`, and the fakes ignore them. The agent logs
-    every runtime right the CPU offers and the project's users with their
-    roles, once a run.
+  - **Web users** (step 2B). Each is a local user of the project with
+    its password from `secrets.webUsers` and tiad's password record in its
+    comment (as `nautilus`), holding one role, `nautilus web <name>`,
+    which tiad makes and marks by its comment. That role holds exactly
+    the user's rights on the CPU: `read` = `WebReadTags`, `write` =
+    `WebWriteTags`, `mode` = `WebChangeOperatingMode`, `diagnostics` =
+    `WebAllowDiagnostics`. Nothing is implied (`write` does not give
+    `read`; a user with `write` or `mode` and no `read` gets a note).
+    Exact means: missing rights granted, any other right revoked (Full
+    access too), the user holds that role alone (system roles too), no
+    other user holds it, the user is active; all read back. Every right is
+    resolved against what the CPU offers before the first user or role is
+    written.
+  - Refused before any write: a user or role of that name tiad did not
+    make (never taken over, no record-only route), and an active
+    anonymous user (Openness `UmacConfigurator.AnonymousUser`; anyone who
+    reaches the server would get its roles' rights) while the server is
+    to be on. tiad never activates or deactivates the anonymous user.
+  - A found web user's password is settled before the station step, as
+    the Full access user's: unchanged when the record matches, else the
+    record first, then the password, the record put back when TIA refuses
+    it. A refusal after an earlier user's password was set leaves that one
+    set (its record matches it) and the session uncompiled.
+    Web users have no record-only route: under another agent key's record
+    (the agent's key lost), an unchanged web password is refused as one
+    the user had, so it must change.
+  - The limit of "exact": tiad sees a user's roles through Openness's
+    `ProjectUser.Roles` and the project's local users. A role reaching a
+    web user through a user group, a UMC user or group holding a tiad web
+    role, and the role's rights on other devices or its engineering
+    rights are not checked; each needs someone to edit a tiad-marked user
+    or role in TIA by hand.
+  - Stale web users: a role tiad marked for a user no longer in
+    `webServer.users` is deleted, and so is that user when it carries a
+    tiad record. Only the role's marker finds them, so `nautilus` and
+    users or roles tiad did not make are never removed. `enabled: false`
+    removes them all; `webServer` left out keeps them on a kept CPU and
+    removes them on a new one (whose server goes off). An upload removes
+    the web users and roles its session made, as it does `nautilus`.
+  - Left out on a kept CPU whose server is on over access control on,
+    two more WARNING notes: plain HTTP allowed (web passwords in clear),
+    and an active anonymous user. A read that fails is logged and said,
+    never failing the apply.
+  - The agent logs every runtime right the CPU offers, the project's
+    users with their roles and the anonymous user's state, once a run.
+  - Proven offline on the TIA machine (2026-11-22, through the agent, no
+    CPU contact): a new 1510SP FW 3.1 station with `fullAccessUser`, the
+    server on and two web users (`read`; all four rights) compiles with 0
+    errors and 0 warnings. Applying it again leaves both passwords
+    unchanged; a rotated password is set; a dropped user goes with its
+    role; a 32-character name is taken; `enabled: false` removes the last
+    one and compiles. A new project has no anonymous user (Openness reads
+    `AnonymousUser` as none). A compile after a users-only change
+    reported the hardware "up-to-date" and compiled the PKI container.
+  - Compiled offline, not proven on a CPU: that these rights let a web
+    user log on to the Web API and read, write, change the mode and read
+    the diagnostic buffer, and that a download after a users-only change
+    carries the new users (the first access-control bench window).
   - Proven offline on the TIA machine (2026-11-22, through the agent, no
     CPU contact): a new 1510SP FW 3.1 station with `fullAccessUser` and
     the server on compiles with 0 errors and 0 warnings, and so do off and
@@ -356,7 +417,8 @@ The rules for applying a spec:
     reads back off; on (with HTTPS only), off and on again each read back
     and compile with 0 errors.
   - Unproven: whether a kept project can give "Anonymous" a role (it is
-    not among Openness's project users); that a hardware download of a
+    not among Openness's project users, but `UmacConfigurator` offers it
+    as `AnonymousUser`); that a hardware download of a
     station with the server on serves the Web API (the first
     access-control bench window).
 - **`cpu.configurationProtection` is required on the wire**: the FW 3.1

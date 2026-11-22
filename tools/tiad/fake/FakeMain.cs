@@ -268,7 +268,21 @@ namespace Tiad.Fake
         PasswordPolicy policy = new PasswordPolicy();
         string uploadAccess = UploadedAccessControl;
         bool uploadWeb;
+        bool uploadAnonymous;
         string accessRecords = "";
+
+        // UploadAnonymous is whether an upload brings a project whose
+        // anonymous user is active.
+        public bool UploadAnonymous
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return uploadAnonymous;
+                }
+            }
+        }
 
         // AccessRecords is what an open does to tiad's records in a saved
         // project: "" keeps them; "strip-users" opens the users without
@@ -712,6 +726,7 @@ namespace Tiad.Fake
             }
             string upAccess = r.Str("uploadAccessControl");
             bool upWeb = r.Bool("uploadWebServer");
+            bool upAnon = r.Bool("uploadAnonymous");
             string records = r.Str("accessRecords");
             if (upAccess == "") upAccess = UploadedAccessControl;
             var qs = new List<Question>();
@@ -750,6 +765,7 @@ namespace Tiad.Fake
                 policy = pol;
                 uploadAccess = upAccess;
                 uploadWeb = upWeb;
+                uploadAnonymous = upAnon;
                 accessRecords = records;
             }
             return new Obj();
@@ -800,12 +816,14 @@ namespace Tiad.Fake
         // states): a new CPU is EnabledWithAccessControl, as TIA makes one;
         // an upload brings the bench CPU's Disabled. Users and Roles are
         // the project's, not the CPU's: they outlive any device delete. A
-        // role maps to whether it holds Full access on the project's CPU:
+        // role maps to the runtime rights it holds on the project's CPU:
         // replacing the CPU (a create, an upload) clears every grant, as
-        // deleting the device drops its rights.
+        // deleting the device drops its rights. AnonymousActive is the
+        // project's anonymous user's IsActive.
         public string AccessControl = AccessRule.Absent;
         public Dictionary<string, FakeUser> Users = new Dictionary<string, FakeUser>(StringComparer.Ordinal);
-        public Dictionary<string, bool> Roles = new Dictionary<string, bool>(StringComparer.Ordinal);
+        public Dictionary<string, HashSet<string>> Roles = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        public bool AnonymousActive;
         public Dictionary<string, string> RoleComments = new Dictionary<string, string>(StringComparer.Ordinal);
 
         // CompileError is what a hardware compile of this project fails
@@ -823,11 +841,16 @@ namespace Tiad.Fake
             {
                 foreach (string r in u.Roles)
                 {
-                    bool on;
-                    if (Roles.TryGetValue(r, out on) && on) return true;
+                    if (HasFullAccess(r)) return true;
                 }
             }
             return false;
+        }
+
+        public bool HasFullAccess(string role)
+        {
+            HashSet<string> rights;
+            return Roles.TryGetValue(role, out rights) && rights.Contains(FakeAccess.FullAccessId);
         }
 
         // FullAccessPassword is the password of user when access control is
@@ -838,16 +861,15 @@ namespace Tiad.Fake
             if (AccessControl != AccessRule.Enabled || !Users.TryGetValue(user, out u)) return null;
             foreach (string r in u.Roles)
             {
-                bool on;
-                if (Roles.TryGetValue(r, out on) && on) return u.Password;
+                if (HasFullAccess(r)) return u.Password;
             }
             return null;
         }
 
-        // DropGrants clears every role's Full access: its CPU is gone.
+        // DropGrants clears every role's runtime rights: its CPU is gone.
         public void DropGrants()
         {
-            foreach (string r in new List<string>(Roles.Keys)) Roles[r] = false;
+            foreach (var rights in Roles.Values) rights.Clear();
         }
 
         // CopyAccess copies the access control, users and roles of from.
@@ -858,8 +880,10 @@ namespace Tiad.Fake
             WebInterface = from.WebInterface;
             WebHttpsOnly = from.WebHttpsOnly;
             Users = new Dictionary<string, FakeUser>(StringComparer.Ordinal);
-            foreach (var kv in from.Users) Users[kv.Key] = new FakeUser { Password = kv.Value.Password, Comment = kv.Value.Comment, History = new List<string>(kv.Value.History), Roles = new HashSet<string>(kv.Value.Roles) };
-            Roles = new Dictionary<string, bool>(from.Roles, StringComparer.Ordinal);
+            foreach (var kv in from.Users) Users[kv.Key] = new FakeUser { Password = kv.Value.Password, Comment = kv.Value.Comment, History = new List<string>(kv.Value.History), Roles = new HashSet<string>(kv.Value.Roles), Active = kv.Value.Active };
+            Roles = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+            foreach (var kv in from.Roles) Roles[kv.Key] = new HashSet<string>(kv.Value, StringComparer.Ordinal);
+            AnonymousActive = from.AnonymousActive;
             RoleComments = new Dictionary<string, string>(from.RoleComments, StringComparer.Ordinal);
         }
     }
@@ -871,6 +895,7 @@ namespace Tiad.Fake
         // refuses any of them as a new one (5 by default policy).
         public List<string> History = new List<string>();
         public HashSet<string> Roles = new HashSet<string>(StringComparer.Ordinal);
+        public bool Active = true;
     }
 
     // FakeAccess behaves like TIA's access control and users and roles as
@@ -913,6 +938,16 @@ namespace Tiad.Fake
 
     sealed class FakeAccess : IAccessControl
     {
+        // FullAccessId and Offered are the runtime rights' identifiers as
+        // the TIA machine listed a FW 3.1 CPU's (2026-11-22), in part.
+        public const string FullAccessId = "ProtectionLevelFullAccess";
+        static readonly string[] Offered =
+        {
+            FullAccessId, "ProtectionLevelReadAccess", "ProtectionLevelHMIAccess",
+            "WebReadTags", "WebWriteTags", "WebChangeOperatingMode", "WebAllowDiagnostics",
+            "WebReadSyslog", "WebReadWatchTables", "WebWriteWatchTables",
+        };
+
         readonly FakeProject p;
         readonly PasswordPolicy policy;
 
@@ -947,13 +982,83 @@ namespace Tiad.Fake
         public void MakeRole(string role, string comment)
         {
             if (p.Roles.ContainsKey(role)) throw new TiaException("A role with the name " + role + " already exists.");
-            p.Roles[role] = false;
+            p.Roles[role] = new HashSet<string>(StringComparer.Ordinal);
             p.RoleComments[role] = comment;
         }
 
         public void GrantFullAccess(string role)
         {
-            p.Roles[role] = true;
+            p.Roles[role].Add(FullAccessId);
+        }
+
+        public List<string> OfferedRights()
+        {
+            return new List<string>(Offered);
+        }
+
+        public List<string> RoleRights(string role)
+        {
+            var l = new List<string>(p.Roles[role]);
+            l.Sort(StringComparer.Ordinal);
+            return l;
+        }
+
+        public void Grant(string role, string right)
+        {
+            if (Array.IndexOf(Offered, right) < 0) throw new TiaException("The device function right " + right + " does not exist.");
+            p.Roles[role].Add(right);
+        }
+
+        public void Revoke(string role, string right)
+        {
+            p.Roles[role].Remove(right);
+        }
+
+        public List<string> UserNames()
+        {
+            return new List<string>(p.Users.Keys);
+        }
+
+        public List<string> RoleNames()
+        {
+            return new List<string>(p.Roles.Keys);
+        }
+
+        public List<string> UserRoles(string user)
+        {
+            return new List<string>(p.Users[user].Roles);
+        }
+
+        public void RemoveRole(string user, string role)
+        {
+            p.Users[user].Roles.Remove(role);
+        }
+
+        public void DeleteUser(string user)
+        {
+            p.Users.Remove(user);
+        }
+
+        public void DeleteRole(string role)
+        {
+            foreach (var u in p.Users.Values) u.Roles.Remove(role);
+            p.Roles.Remove(role);
+            p.RoleComments.Remove(role);
+        }
+
+        public bool UserActive(string user)
+        {
+            return p.Users[user].Active;
+        }
+
+        public void ActivateUser(string user)
+        {
+            p.Users[user].Active = true;
+        }
+
+        public bool AnonymousActive()
+        {
+            return p.AnonymousActive;
         }
 
         public bool HasUser(string user)
@@ -996,10 +1101,9 @@ namespace Tiad.Fake
         public string Check(string user, string role)
         {
             FakeUser u;
-            bool on;
             if (!p.Users.TryGetValue(user, out u)) return "the user " + Json.Quote(user) + " is not in the project";
             if (!u.Roles.Contains(role)) return "the user " + Json.Quote(user) + " lacks the role " + Json.Quote(role);
-            if (!p.Roles.TryGetValue(role, out on) || !on) return "the role " + Json.Quote(role) + " lacks the runtime right Full access on the CPU";
+            if (!p.HasFullAccess(role)) return "the role " + Json.Quote(role) + " lacks the runtime right Full access on the CPU";
             return null;
         }
     }
@@ -1244,7 +1348,7 @@ namespace Tiad.Fake
             ProtectionSteps.Run(new FakeMasterSecret(p), next.Cpu.ConfigurationProtection, secrets.ConfigurationPassword, notes);
             var access = new FakeAccess(p, script.Policy);
             AccessSteps.Run(access, next.Cpu.AccessControl, secrets.FullAccessPassword, secrets.Records, decision == CpuReuse.Create, made, notes);
-            WebSteps.Run(new FakeWeb(p), access, next.WebServer, decision == CpuReuse.Create, notes);
+            WebSteps.Run(new FakeWeb(p), access, next.WebServer, secrets, decision == CpuReuse.Create, made, notes);
             p.Station = next;
             p.Changed = was || CpuReuse.Changes(decision, prev, next).Count > 0;
         }
@@ -1258,22 +1362,23 @@ namespace Tiad.Fake
         public void PrepareAccess(object project, Station next, Secrets secrets, bool recordOnly, AccessWrites w, List<string> notes)
         {
             script.Enter("PrepareAccess");
-            AccessSteps.Prepare(new FakeAccess((FakeProject)project, script.Policy), next.Cpu.AccessControl, secrets.FullAccessPassword, secrets.Records, recordOnly, w, notes);
+            var p = (FakeProject)project;
+            try
+            {
+                AccessSteps.PrepareAll(new FakeAccess(p, script.Policy), next, secrets, recordOnly, w, notes);
+            }
+            finally
+            {
+                // A password set or recorded is a change the CPU does not
+                // hold, refused later or not.
+                if (w.Wrote) p.Changed = true;
+            }
         }
 
         public List<string> RemoveAccess(object project, AccessMade made)
         {
             script.Enter("RemoveAccess");
-            var p = (FakeProject)project;
-            var removed = new List<string>();
-            if (made.User && p.Users.Remove(AccessSteps.UserName)) removed.Add("user " + Json.Quote(AccessSteps.UserName));
-            if (made.Role && p.Roles.Remove(AccessSteps.RoleName))
-            {
-                p.RoleComments.Remove(AccessSteps.RoleName);
-                foreach (var u in p.Users.Values) u.Roles.Remove(AccessSteps.RoleName);
-                removed.Add("role " + Json.Quote(AccessSteps.RoleName));
-            }
-            return removed;
+            return AccessSteps.Remove(new FakeAccess((FakeProject)project, script.Policy), made);
         }
 
         public string CannotApply(Station next)
@@ -1670,6 +1775,7 @@ namespace Tiad.Fake
             up.WebServer = script.UploadWebServer;
             up.WebInterface = script.UploadWebServer;
             up.WebHttpsOnly = false;
+            up.AnonymousActive = script.UploadAnonymous;
             up.DropGrants();
             DeviceIdentity d = script.Device;
             up.Cpu = new ProjectCpu { Name = UploadedCpuName, Order = d.Order, Firmware = d.Firmware };

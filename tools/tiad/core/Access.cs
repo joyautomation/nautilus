@@ -65,8 +65,11 @@ namespace Tiad
     public sealed class AccessMade
     {
         public bool User, Role;
+        // WebUsers and WebRoles are the web users and their roles
+        // (WebUsers.Run) made on this session.
+        public List<string> WebUsers = new List<string>(), WebRoles = new List<string>();
 
-        public bool Any { get { return User || Role; } }
+        public bool Any { get { return User || Role || WebUsers.Count > 0 || WebRoles.Count > 0; } }
     }
 
     // PasswordReusedException is TIA refusing a password the user has had
@@ -231,6 +234,25 @@ namespace Tiad
         void MakeRole(string role, string comment);
         // AddRole assigns role to user, unless it has it.
         void AddRole(string user, string role);
+        // UserNames and RoleNames are the project's local users and its
+        // custom roles.
+        List<string> UserNames();
+        List<string> RoleNames();
+        // UserRoles is every role user holds, system roles included.
+        List<string> UserRoles(string user);
+        // RemoveRole takes role off user.
+        void RemoveRole(string user, string role);
+        // DeleteUser deletes a user; DeleteRole takes a custom role off
+        // every user, then deletes it.
+        void DeleteUser(string user);
+        void DeleteRole(string role);
+        // UserActive and ActivateUser are the user's IsActive.
+        bool UserActive(string user);
+        void ActivateUser(string user);
+        // AnonymousActive reports whether the project's anonymous user
+        // (UmacConfigurator.AnonymousUser) is active: then anyone who
+        // reaches the web server gets its roles' rights.
+        bool AnonymousActive();
     }
 
     // IAccessControl is a CPU's access control besides the project's users
@@ -250,6 +272,16 @@ namespace Tiad
         // Check returns why user does not hold the runtime right Full access
         // on this CPU through role, or null.
         string Check(string user, string role);
+        // OfferedRights is the identifier of every runtime right the CPU
+        // offers.
+        List<string> OfferedRights();
+        // RoleRights is the identifier of every runtime right role holds
+        // on this CPU.
+        List<string> RoleRights(string role);
+        // Grant and Revoke give role a runtime right on this CPU, or take
+        // it away.
+        void Grant(string role, string right);
+        void Revoke(string role, string right);
     }
 
     // AccessRule decides what an apply does about cpu.accessControl.
@@ -356,29 +388,73 @@ namespace Tiad
             }
             catch (PasswordReusedException e)
             {
-                PutBack(u, had, w);
+                PutBack(u, UserName, had, w);
                 if (w.Dirty) throw new TiaException((ours ? Reused : ReusedOtherKey) + "; putting the user's record back failed too: close this session without saving", e);
                 throw TiadException.BadRequest("{0}", ours ? Reused : ReusedOtherKey);
             }
             catch (Exception)
             {
-                PutBack(u, had, w);
+                PutBack(u, UserName, had, w);
                 throw;
             }
             w.Wrote = true;
             notes.Add(SetNote);
         }
 
-        static void PutBack(IProjectUsers u, string had, AccessWrites w)
+        // PutBack puts user's record back after TIA refused a password;
+        // w.Dirty says when that failed too.
+        internal static void PutBack(IProjectUsers u, string user, string had, AccessWrites w)
         {
             try
             {
-                u.SetComment(UserName, had);
+                u.SetComment(user, had);
             }
             catch (Exception)
             {
                 w.Dirty = true;
             }
+        }
+
+        // PrepareAll is ITia.PrepareAccess: before any write of the
+        // apply, every refusal it can make without writing
+        // (WebUsers.Check), then the Full access user's password, then the
+        // web users'.
+        public static void PrepareAll(IProjectUsers u, Station next, Secrets sec, bool recordOnly, AccessWrites w, List<string> notes)
+        {
+            WebUsers.Check(u, next.WebServer);
+            Prepare(u, next.Cpu.AccessControl, sec.FullAccessPassword, sec.Records, recordOnly, w, notes);
+            WebUsers.Passwords(u, next.WebServer, sec, w, notes);
+        }
+
+        // Remove is ITia.RemoveAccess: it removes from the project's users
+        // and roles what made names, and nothing else; it returns what it
+        // removed, as an upload reports it.
+        public static List<string> Remove(IProjectUsers u, AccessMade made)
+        {
+            var removed = new List<string>();
+            if (made.User && u.HasUser(UserName))
+            {
+                u.DeleteUser(UserName);
+                removed.Add("user " + Json.Quote(UserName));
+            }
+            if (made.Role && u.HasRole(RoleName))
+            {
+                u.DeleteRole(RoleName);
+                removed.Add("role " + Json.Quote(RoleName));
+            }
+            foreach (string n in made.WebUsers)
+            {
+                if (!u.HasUser(n)) continue;
+                u.DeleteUser(n);
+                removed.Add("user " + Json.Quote(n));
+            }
+            foreach (string r in made.WebRoles)
+            {
+                if (!u.HasRole(r)) continue;
+                u.DeleteRole(r);
+                removed.Add("role " + Json.Quote(r));
+            }
+            return removed;
         }
 
         // Run does the rest of what want asks, in the station step. madeCpu
