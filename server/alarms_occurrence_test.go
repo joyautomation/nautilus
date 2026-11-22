@@ -494,3 +494,112 @@ func TestPendingAdoptionClearedAtTheNextTakeover(t *testing.T) {
 		t.Fatalf("HiTemp %s; want unack-active (an earlier leadership's adoption is not this one's)", st)
 	}
 }
+
+// The scan never waits on the pair's alarm log (#1053: control never
+// waits on operator data). The engine's hook runs under the engine's lock
+// on the scan; with AlarmLog.mu held, or the oplog node's lock held by a
+// commit being applied, an evaluation that ends an acknowledged
+// occurrence still returns at once, and the ack-clear follows once they
+// are released.
+func TestScanNeverWaitsOnTheAlarmLog(t *testing.T) {
+	var lead atomic.Bool
+	lead.Store(true)
+	cond := map[string]any{"HiTempAlm": true, "LoFlowAlm": true}
+	eng := newTestAlarms(t, cond)
+	al := NewAlarmLog(eng, lead.Load, noTerm)
+	hold := make(chan struct{})
+	held := make(chan struct{})
+	n, err := oplog.New(oplog.Options{Self: "a", Apply: func(e oplog.Entry) error {
+		if e.Kind == oplog.KindUnshelve && e.By == "hold" {
+			close(held)
+			<-hold // the node's lock stays held while this commit applies
+		}
+		_, err := al.Apply(e)
+		return err
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	al.Attach(n)
+	PairAlarms{Engine: eng, Log: al}.RestoreAlarmsSynced(nil, true)
+	eng.Evaluate()
+	for _, id := range []string{"HiTemp", "LoFlow"} {
+		occ := occOf(t, eng, id)
+		if _, err := n.Propose(context.Background(), oplog.Entry{Kind: oplog.KindAck, IDs: []string{id},
+			Occs: []oplog.Occ{{ID: id, Occ: occ.Occurrence, ActiveMs: occ.ActiveMs}}, By: "op"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	scan := func(what string) {
+		t.Helper()
+		done := make(chan struct{})
+		go func() { eng.Evaluate(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("the scan's evaluation waited on %s", what)
+		}
+	}
+
+	al.mu.Lock()
+	cond["HiTempAlm"] = false // ack-active to normal: its ack is to be cleared
+	scan("AlarmLog.mu")
+	al.mu.Unlock()
+
+	go func() { _, _ = n.Propose(context.Background(), oplog.Entry{Kind: oplog.KindUnshelve, ID: "LoFlow", By: "hold"}) }()
+	<-held
+	cond["LoFlowAlm"] = false
+	scan("the oplog node's lock")
+	close(hold)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for al.Held(true, nil)["HiTemp"].Acked || al.Held(true, nil)["LoFlow"].Acked {
+		if time.Now().After(deadline) {
+			t.Fatalf("the acks were not cleared once released: %+v", al.Held(true, nil))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// An alarm's end handed off from the scan, judged after the view took an
+// ack of a later occurrence, does not clear that later ack.
+func TestLateHandOffKeepsALaterAck(t *testing.T) {
+	var lead atomic.Bool
+	lead.Store(true)
+	_, _, al, _ := loggedAlarms(t, map[string]any{"HiTempAlm": true, "LoFlowAlm": false}, &lead)
+	al.clrRetry = time.Hour
+	al.mu.Lock()
+	al.view["HiTemp"] = alarmIntent{acked: true, ackBy: "op", occ: "bbbbbbbbbbbbbbbb", activeMs: 2}
+	al.mu.Unlock()
+	al.clearIfAcked(endedOcc{id: "HiTemp", occ: "aaaaaaaaaaaaaaaa"})
+	al.clrMu.Lock()
+	queued := slices.Clone(al.clr)
+	al.clrMu.Unlock()
+	if len(queued) != 0 {
+		t.Fatalf("an end of occurrence a queued a clear of the ack of b: %v", queued)
+	}
+	al.clearIfAcked(endedOcc{id: "HiTemp", occ: "bbbbbbbbbbbbbbbb"})
+	al.clrMu.Lock()
+	queued = slices.Clone(al.clr)
+	al.clrMu.Unlock()
+	if !slices.Equal(queued, []string{"HiTemp"}) {
+		t.Fatalf("an end of the acked occurrence queued %v; want HiTemp", queued)
+	}
+}
+
+// A superseded log's view goes, and its pending adoptions with it.
+func TestDropViewDropsPendingAdoptions(t *testing.T) {
+	var lead atomic.Bool
+	lead.Store(true)
+	_, _, al, _ := loggedAlarms(t, map[string]any{"HiTempAlm": true, "LoFlowAlm": false}, &lead)
+	al.mu.Lock()
+	al.adopt = map[string]adoption{"HiTemp": {occ: "dededededededede", activeMs: 1, by: "op"}}
+	al.mu.Unlock()
+	al.dropView()
+	al.mu.Lock()
+	n := len(al.adopt)
+	al.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("%d pending adoptions outlived the dropped view", n)
+	}
+}

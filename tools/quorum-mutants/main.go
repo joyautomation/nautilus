@@ -439,6 +439,8 @@ var table = []mutation{
 	{"adopt_after_suppress", []string{"TestSuppressedSinceTheRestoreIsNotAdopted"}},
 	{"carry_ack_resaved_after_false", []string{"TestSecondRestartInsideTheGraceKeepsTheAckDropped"}},
 	{"adopt_under_mu", []string{"TestReconcileDuringACommitWithAnAdoptionPending"}},
+	{"engine_event_waits", []string{"TestScanNeverWaitsOnTheAlarmLog"}},
+	{"clear_any_later_ack", []string{"TestLateHandOffKeepsALaterAck"}},
 	{"occurrences_not_synced", []string{"TestLeaderSyncsOccurrences"}},
 }
 
@@ -530,6 +532,8 @@ var rowPkgs = map[string][]string{
 	"adopt_after_suppress":              {"./alarm"},
 	"carry_ack_resaved_after_false":     {"./alarm"},
 	"adopt_under_mu":                    {"./server"},
+	"engine_event_waits":                {"./server"},
+	"clear_any_later_ack":               {"./server"},
 	"occurrences_not_synced":            {"./server"},
 	"reconcile_before_restore":          {"./server"},
 	"cluster_ops_proxied":               {"./server"},

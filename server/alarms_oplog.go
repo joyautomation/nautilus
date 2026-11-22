@@ -151,6 +151,12 @@ type AlarmLog struct {
 	// Under mu.
 	adopt map[string]adoption
 
+	// ended hands the ids of alarms that left ack-active on the live
+	// leader from the engine's hook (under the engine's lock, on the scan)
+	// to clearEnded, which judges them against the view: the scan never
+	// waits on mu (#1053: control never waits on operator data).
+	ended chan endedOcc
+
 	// seen hears every committed alarm entry this replica proposed, once
 	// applied (observe: the server's unknown-outcome resolutions).
 	seen atomic.Pointer[func(oplog.Entry)]
@@ -216,10 +222,21 @@ func (v *alarmIntent) clearOcc() { v.occ, v.activeMs, v.waitMs = "", 0, 0 }
 // ack-clears. Attach the node once it exists (its Apply must already
 // reach Apply).
 func NewAlarmLog(eng *alarm.Engine, leading func() bool, term func() uint64) *AlarmLog {
-	l := &AlarmLog{eng: eng, leading: leading, term: term, view: map[string]alarmIntent{}, refusal: PairNoMajorityAlarms, clrRetry: 2 * time.Second}
+	l := &AlarmLog{eng: eng, leading: leading, term: term, view: map[string]alarmIntent{}, refusal: PairNoMajorityAlarms, clrRetry: 2 * time.Second,
+		ended: make(chan endedOcc, endedQueue)}
 	eng.OnEvent(l.engineEvent)
+	go l.clearEnded()
 	return l
 }
+
+// endedOcc is one alarm that left ack-active, with the occurrence it was
+// on then.
+type endedOcc struct{ id, occ string }
+
+// endedQueue is the hand-off from the engine's hook to clearEnded: deep
+// enough for an alarm flood; past it, the next log tick's Reconcile finds
+// the acks left behind.
+const endedQueue = 4096
 
 // live reports whether this replica's engine is the live one: it leads,
 // and its takeover restored the view under the term it leads in.
@@ -433,11 +450,14 @@ func (l *AlarmLog) journalLapse(e oplog.Entry) {
 	go (*f)(out)
 }
 
-// engineEvent hears the leader's engine (under its lock: no blocking, no
-// engine calls). Any transition that leaves an alarm not ack-active ends
-// the acknowledged occurrence: its ack is cleared in the log. A shelve
-// keeps it (shelved over ack-active still holds the ack); its unshelve
-// lands on the state the shelf interrupted, judged like any other.
+// engineEvent hears the leader's engine, under its lock, on the scan: it
+// must neither block nor call the engine, so it takes no lock at all
+// (live reads atomics) and hands the alarm to clearEnded. Any transition
+// that leaves an alarm not ack-active ends the acknowledged occurrence:
+// its ack is cleared in the log. A shelve keeps it (shelved over
+// ack-active still holds the ack); its unshelve lands on the state the
+// shelf interrupted, judged like any other. A full hand-off drops the id:
+// Reconcile, at the next log tick, clears an ack the engine doesn't hold.
 func (l *AlarmLog) engineEvent(ev alarm.Event) {
 	if ev.State == "ack-active" || ev.Kind == alarm.KindShelve || ev.State == "shelved" || mutServer("ack_clear_off") {
 		return
@@ -445,13 +465,36 @@ func (l *AlarmLog) engineEvent(ev alarm.Event) {
 	if !l.live() {
 		return
 	}
+	if mutServer("engine_event_waits") {
+		l.clearIfAcked(endedOcc{ev.ID, ev.Occurrence})
+		return
+	}
+	select {
+	case l.ended <- endedOcc{ev.ID, ev.Occurrence}:
+	default:
+	}
+}
+
+// clearEnded clears the view's ack of each alarm the engine's hook handed
+// over, off the scan.
+func (l *AlarmLog) clearEnded() {
+	for e := range l.ended {
+		l.clearIfAcked(e)
+	}
+}
+
+// clearIfAcked queues an ack-clear for e's alarm when the view's ack is
+// for the occurrence that left ack-active (or names none, from an older
+// replica, or waits to adopt one: its alarm did not stand), naming the
+// occurrence the view's ack is for. An ack the view took since, for a
+// later occurrence, is not cleared.
+func (l *AlarmLog) clearIfAcked(e endedOcc) {
 	l.mu.Lock()
-	v := l.view[ev.ID]
+	v := l.view[e.id]
+	_, adopting := l.adopt[e.id]
 	l.mu.Unlock()
-	if v.acked {
-		// The ack-clear names the occurrence the view's ack is for, which
-		// is the engine's own except while a late ack waits to adopt one.
-		l.queueClear(ev.ID, v.occ)
+	if v.acked && (v.occ == "" || v.occ == e.occ || adopting || mutServer("clear_any_later_ack")) {
+		l.queueClear(e.id, v.occ)
 	}
 }
 

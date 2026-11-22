@@ -27,6 +27,10 @@ import "os"
 //     occurrence though the log shows its own ended (#715);
 //   - adopt_under_mu: Reconcile asks the oplog node under AlarmLog.mu
 //     (the inverse of the apply's lock order);
+//   - engine_event_waits: the engine's hook takes AlarmLog.mu on the
+//     scan instead of handing off (#1053);
+//   - clear_any_later_ack: a late hand-off clears an ack of a later
+//     occurrence;
 //   - superseded_alarms_kept: a superseded log's acks and shelves are
 //     carried by a takeover, and kept by a leader that learns it.
 var mutOn = os.Getenv("QUORUM_MUT")

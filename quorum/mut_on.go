@@ -299,6 +299,8 @@ var Mutations = []string{
 	"adopt_after_suppress",              // alarm: an alarm suppressed since the restore may still adopt a late committed ack (#715)
 	"carry_ack_resaved_after_false",     // alarm: a held carry re-saves its ack after a false reading (#715)
 	"adopt_under_mu",                    // server: Reconcile asks the oplog node under AlarmLog.mu, inverting the apply's lock order (#715)
+	"engine_event_waits",                // server: the engine's hook takes AlarmLog.mu on the scan instead of handing off (#715, #1053)
+	"clear_any_later_ack",               // server: a late hand-off clears an ack of a later occurrence (#715)
 	"occurrences_not_synced",            // server: the leader proposes no occurrence-start or -end (#715)
 }
 
