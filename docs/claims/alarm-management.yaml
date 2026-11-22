@@ -324,6 +324,10 @@ claims:
       - go ./alarm/escalate TestInboundAccepted
       - go ./alarm/escalate TestAckURLAccepted
       - go ./cmd/naut TestAckLinkChecks
+    partial: true
+    note: >-
+      naut check's warnings and the audit entry are tested; naut run printing
+      the warning as it starts is not.
 
   - id: AMG-027
     claim: >-
@@ -479,6 +483,24 @@ claims:
     tests:
       - go ./alarm TestOutOfServiceRefusals
       - go ./alarm TestASubstitutedSignalSuppressesItsAlarm
+
+  - id: AMG-048
+    claim: >-
+      naut alarms out-of-service, in-service, oos-list, push
+      confirm-revocations and report -host send NAUTILUS_TOKEN as a bearer
+      token, and a controller's 401 or 403 is reported with whether a token
+      was sent and how to set one.
+    source: "#hiding-alarms-that-mean-nothing-now"
+    tests:
+      - go ./cmd/naut TestAlarmsOutOfServiceCLI
+      - go ./cmd/naut TestAlarmsPushConfirmRevocationsCLI
+      - go ./cmd/naut TestAlarmsControllerCommandsNameTheTokenOnARefusal
+      - go ./internal/apiclient TestRefusalHint
+    partial: true
+    note: >-
+      The bearer header is asserted for out-of-service, in-service, oos-list
+      and push confirm-revocations; for report -host only the refusal hint
+      is.
 
   - id: AMG-041
     claim: >-

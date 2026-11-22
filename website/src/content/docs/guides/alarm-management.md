@@ -335,7 +335,10 @@ Every email, SMS and push page then carries a link:
   [`auth:`](/guides/auth/) block the link works only while the person is
   an enabled user who holds `ack` for that alarm. A site that wants a
   sign-in as well sets `ack-from-notification: sign-in`.
-- **https only,** unless `ack-url-insecure: true` (warned and journalled).
+- **https only,** unless `ack-url-insecure: true`. `naut check` warns about
+  that, and so does `naut run` as it starts (in its output, so in the log
+  of a box's service), which also records `alarm.ack-url-insecure` in the
+  audit trail at every start.
 - **The host must be one the controller answers by.** An IP address or
   `localhost` always is; a name must be in `NAUTILUS_ALLOWED_HOSTS` in the
   controller's environment (`/etc/nautilus/env` on a box `naut deploy`
@@ -450,6 +453,13 @@ P101 back in service: 5 alarm(s) evaluated again
   more than was left.
 - **The controller's own alarms** (audit journal down, notifications
   failing) are never taken out of service.
+
+These commands, and `naut alarms report -host` below, talk to the
+controller's API. Under an [`auth:`](/guides/auth/) block they need a
+credential: set `NAUTILUS_TOKEN` to your personal access token (`naut
+users token <you>` on the box) or a service token. There is no `--token`
+flag, so a token never sits in the shell history; a refusal (401 or
+403) says whether a token was sent.
 
 A signal on a [substitute value](/guides/substitutes/) suppresses the
 alarm on it too, as `signal substituted`.

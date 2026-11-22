@@ -207,7 +207,9 @@ alarm nautilus.push-held stays up. Put users.json right and they stand
 again by themselves. If the removal is real (you deliberately removed
 those users), this command ends the held subscriptions. It needs the
 config permission and a fresh password (NAUTILUS_TOKEN or a token is
-always fresh), and is journalled with the count.
+always fresh), and is journalled with the count. The credential is
+NAUTILUS_TOKEN, sent as a bearer token (a personal access token from naut
+users token <you>, or a service token with config).
 `
 
 // runAlarmsPush is naut alarms push: today, confirming a held mass revocation.
@@ -261,7 +263,7 @@ func runAlarmsPush(args []string) int {
 		if msg == "" {
 			msg = strings.TrimSpace(string(out))
 		}
-		fmt.Fprintf(os.Stderr, "naut alarms push: %s returned %s: %s\n", url, resp.Status, msg)
+		fmt.Fprintf(os.Stderr, "naut alarms push: %s returned %s: %s%s\n", url, resp.Status, msg, apiclient.RefusalHint(resp.StatusCode))
 		return 1
 	}
 	fmt.Printf("ended %d held subscription(s); %d still held\n", a.Ended, a.StillHeld)

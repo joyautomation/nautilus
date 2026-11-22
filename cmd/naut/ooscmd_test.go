@@ -211,3 +211,29 @@ func TestAlarmsPushConfirmRevocationsCLI(t *testing.T) {
 		t.Fatalf("no host: exit %d, stderr %s", code, errOut)
 	}
 }
+
+// A controller's 401 or 403 tells the person to set NAUTILUS_TOKEN, the
+// one credential these commands send (report -host, out-of-service and
+// push confirm-revocations alike).
+func TestAlarmsControllerCommandsNameTheTokenOnARefusal(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		io.WriteString(w, `{"error":"unauthorized"}`)
+	}))
+	defer srv.Close()
+	u, _ := url.Parse(srv.URL)
+	h, p := u.Hostname(), u.Port()
+	t.Setenv("NAUTILUS_TOKEN", "")
+	for _, args := range [][]string{
+		{"report", "flood", "-host", h, "-port", p},
+		{"oos-list", "--host", h, "--port", p},
+		{"out-of-service", "P101", "--host", h, "--port", p, "--for", "1h", "--reason", "x"},
+		{"push", "confirm-revocations", "--host", h, "--port", p},
+	} {
+		_, errOut, code := captureOutErr(t, func() int { return runAlarms(args) })
+		if code == 0 || !strings.Contains(errOut, "401") || !strings.Contains(errOut, "set NAUTILUS_TOKEN") {
+			t.Errorf("%v: exit %d, stderr %q", args, code, errOut)
+		}
+	}
+}
+
