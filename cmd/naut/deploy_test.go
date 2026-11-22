@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/joyautomation/nautilus/internal/lsp"
 )
@@ -38,6 +39,12 @@ n=$(ls "$FAKE_SSH_LOG" | grep -c '\.cmd$')
 printf '%s' "$last" >"$FAKE_SSH_LOG/$n.cmd"
 cat >"$FAKE_SSH_LOG/$n.in"
 case $last in
+*"cat >> "*.part*|*"naut-deploy-box append "*) cat "$FAKE_SSH_LOG/$n.in" >>"$FAKE_SSH_LOG/part" ;;
+esac
+case $last in
+*"-- partsize "*|*"naut-deploy-box partsize "*) if [ -f "$FAKE_SSH_LOG/part" ]; then wc -c <"$FAKE_SSH_LOG/part"; else echo 0; fi ;;
+*"-- base"*|*"naut-deploy-box base"*) printf '%b' "${FAKE_BASE:-}" ;;
+*"-- assemble "*|*"naut-deploy-box assemble "*) exit ${FAKE_ASSEMBLE_EXIT:-0} ;;
 "uname -sm") echo "Linux $FAKE_UNAME_M" ;;
 *naut-deploy*) printf '%b' "${FAKE_MODE:-}" ;;
 *"sh -s -- update "*) exit $FAKE_UPDATE_EXIT ;;
@@ -52,10 +59,33 @@ esac
 	t.Setenv("FAKE_UNAME_M", m)
 	t.Setenv("FAKE_UPDATE_EXIT", strconv.Itoa(updateExit))
 	t.Setenv("NAUT_SSH_OPTS", "")
+	old, oldLevel := deployRetryWait, gzipLevel
+	deployRetryWait, gzipLevel = time.Millisecond, gzip.BestSpeed
+	t.Cleanup(func() { deployRetryWait, gzipLevel = old, oldLevel })
 	return log
 }
 
 type sshCall struct{ cmd, in string }
+
+// uploadedController is the controller the box was sent, from the wire file
+// the fake box collected (gzip of the whole controller, as no base was
+// offered).
+func uploadedController(t *testing.T, log string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(log, "part"))
+	if err != nil {
+		t.Fatalf("nothing was uploaded: %v", err)
+	}
+	zr, err := gzip.NewReader(bytes.NewReader(b))
+	if err != nil {
+		t.Fatalf("the upload is not gzip: %v", err)
+	}
+	ctl, err := io.ReadAll(zr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ctl
+}
 
 func sshCalls(t *testing.T, log string) []sshCall {
 	t.Helper()
@@ -135,8 +165,8 @@ func TestDeployUpdateBuildsForTheBox(t *testing.T) {
 		t.Fatalf("exit %d", code)
 	}
 	calls := sshCalls(t, log)
-	if len(calls) != 5 {
-		t.Fatalf("want 5 ssh calls (uname, mode, controller, unit, update), got %d: %+v", len(calls), calls)
+	if len(calls) != 9 {
+		t.Fatalf("want 9 ssh calls (uname, mode, base, partsize, append, partsize, assemble, unit, update), got %d: %+v", len(calls), calls)
 	}
 	if calls[0].cmd != "uname -sm" {
 		t.Errorf("first call should ask the box its architecture: %q", calls[0].cmd)
@@ -144,24 +174,29 @@ func TestDeployUpdateBuildsForTheBox(t *testing.T) {
 	if !strings.Contains(calls[1].cmd, ".config/naut-deploy") {
 		t.Errorf("second call should ask the box its mode (#768): %q", calls[1].cmd)
 	}
-	calls = calls[1:]
-	ctl := calls[1].in
+	if !strings.Contains(calls[2].cmd, "sh -s -- base") {
+		t.Errorf("an update asks the box what it already has: %q", calls[2].cmd)
+	}
+	ctl := string(uploadedController(t, log))
 	if !strings.HasPrefix(ctl, string(runner)) {
 		t.Errorf("the controller was not built on the fetched arm64 naut")
 	}
 	sum := sha256.Sum256([]byte(ctl))
 	id := "plant-" + hex.EncodeToString(sum[:])[:8] // not in git: no revision
-	if !strings.Contains(calls[1].cmd, "/opt/nautilus/incoming/"+id+".part") {
-		t.Errorf("controller upload goes to incoming/%s: %q", id, calls[1].cmd)
+	if !strings.Contains(calls[4].cmd, "/opt/nautilus/incoming/"+id+".") || !strings.Contains(calls[4].cmd, ".wire.part") {
+		t.Errorf("the controller upload is appended to incoming/%s.<hash>.wire.part: %q", id, calls[4].cmd)
 	}
-	if !strings.Contains(calls[2].cmd, "/opt/nautilus/incoming/nautilus.service") || calls[2].in != string(deployUnit) {
-		t.Errorf("second upload should be the unit: %q", calls[2].cmd)
+	if !strings.Contains(calls[6].cmd, "sh -s -- assemble "+id+".") || !strings.Contains(calls[6].cmd, " "+id+" 0 "+hex.EncodeToString(sum[:])) {
+		t.Errorf("the box rebuilds %s from the upload and checks its hash: %q", id, calls[6].cmd)
 	}
-	if !strings.Contains(calls[3].cmd, "sh -s -- update "+id) || calls[3].in != deployBoxSh {
-		t.Errorf("last call should feed box.sh `update %s`: %q", id, calls[3].cmd)
+	if !strings.Contains(calls[7].cmd, "/opt/nautilus/incoming/nautilus.service") || calls[7].in != string(deployUnit) {
+		t.Errorf("then the unit: %q", calls[7].cmd)
 	}
-	if !strings.Contains(calls[3].cmd, "sudo -n sh -s") {
-		t.Errorf("a non-root user runs box.sh under sudo -n: %q", calls[3].cmd)
+	if !strings.Contains(calls[8].cmd, "sh -s -- update "+id) || calls[8].in != deployBoxSh {
+		t.Errorf("last call should feed box.sh `update %s`: %q", id, calls[8].cmd)
+	}
+	if !strings.Contains(calls[8].cmd, "sudo -n sh -s") {
+		t.Errorf("a non-root user runs box.sh under sudo -n: %q", calls[8].cmd)
 	}
 
 	// The second deploy uses the cached runtime: the server is not asked.
@@ -241,12 +276,7 @@ func TestDeployFetchesItsOwnReleaseForTheBox(t *testing.T) {
 	if code := runDeploy([]string{"install", "root@ipc", deployProject(t)}); code != 0 {
 		t.Fatalf("exit %d", code)
 	}
-	var ctl string
-	for _, c := range sshCalls(t, log) {
-		if strings.Contains(c.cmd, "/incoming/plant-") {
-			ctl = c.in
-		}
-	}
+	ctl := string(uploadedController(t, log))
 	if !strings.HasPrefix(ctl, string(runner)) {
 		t.Errorf("the controller was not built on naut v7.7.7 for linux/%s", arch)
 	}

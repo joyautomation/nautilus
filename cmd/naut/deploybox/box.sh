@@ -55,9 +55,16 @@ fi
 # keeps for itself in incoming/.
 okid() {
 	case $1 in
-	'' | .* | -* | *.part | nautilus.service | restore.tgz) return 1 ;;
+	'' | .* | -* | *.part | *.build | nautilus.service | restore.tgz) return 1 ;;
 	*[!A-Za-z0-9._+-]*) return 1 ;;
 	esac
+}
+
+# isnum <s>: only digits. ishex64 <s>: a SHA-256 in lower-case hex.
+isnum() { case $1 in '' | *[!0-9]*) return 1 ;; esac; }
+ishex64() {
+	[ "${#1}" -eq 64 ] || return 1
+	case $1 in *[!0-9a-f]*) return 1 ;; esac
 }
 
 # stateread <name> <copy>: STATE/<name> copied to <copy>, outside STATE,
@@ -401,6 +408,10 @@ if [ -n "$HELPER" ]; then
 	case $cmd in
 	install | update) [ $# -eq 1 ] && okid "$1" ;;
 	receive) [ $# -eq 1 ] && { okid "$1" || [ "$1" = restore.tgz ]; } ;;
+	base) [ $# -eq 0 ] ;;
+	partsize | partreset) [ $# -eq 1 ] && okid "$1" ;;
+	append) [ $# -eq 2 ] && okid "$1" && isnum "$2" ;;
+	assemble) [ $# -eq 5 ] && okid "$1" && okid "$3" && ishex64 "$2" && isnum "$4" && ishex64 "$5" ;;
 	rollback | status | backup | restore | helper-version) [ $# -eq 0 ] ;;
 	uninstall) [ $# -eq 0 ] || { [ $# -eq 1 ] && [ "$1" = -purge ]; } ;;
 	*) false ;;
@@ -600,6 +611,87 @@ receive)
 	mkdir -p "$ROOT/incoming"
 	cat >"$ROOT/incoming/$1.part"
 	mv -f "$ROOT/incoming/$1.part" "$ROOT/incoming/$1"
+	;;
+base)
+	# What the box could rebuild a controller from (the slow-link upload):
+	# the current release's runtime part (a controller is its runtime, a project
+	# zip and a footer holding the zip's offset), its size and its SHA-256.
+	# Nothing is printed when there is no current release or it has no footer,
+	# and the caller sends the whole controller then.
+	cur=$(target current)
+	[ -n "$cur" ] || exit 0
+	f=$ROOT/releases/$cur/controller
+	[ -f "$f" ] || exit 0
+	size=$(wc -c <"$f")
+	set -- $(tail -c 16 "$f" | od -An -v -tu1)
+	[ $# -eq 16 ] || exit 0
+	[ "$8" -eq 0 ] || exit 0
+	off=$(($1 + $2 * 256 + $3 * 65536 + $4 * 16777216 + $5 * 4294967296 + $6 * 1099511627776 + $7 * 281474976710656))
+	[ "$off" -gt 0 ] && [ "$off" -lt "$size" ] || exit 0
+	rsha=$(head -c "$off" "$f" | sha256sum | cut -d' ' -f1)
+	csha=$(sha256sum <"$f" | cut -d' ' -f1)
+	echo "release=$cur"
+	echo "runtime-size=$off"
+	echo "runtime-sha256=$rsha"
+	echo "controller-sha256=$csha"
+	;;
+partsize)
+	# How much of an upload the box already holds, so a dropped link resumes.
+	if [ -f "$ROOT/incoming/$1.part" ]; then wc -c <"$ROOT/incoming/$1.part"; else echo 0; fi
+	;;
+partreset)
+	rm -f "$ROOT/incoming/$1.part"
+	;;
+append)
+	# append <name> <offset>: stdin onto the end of the upload, only if the box
+	# holds exactly <offset> bytes of it (exit 6 otherwise: a cut-off earlier
+	# send may still be writing, and the caller asks again how much is there).
+	# The helper's way in; others do the same with sh -c, as upload does.
+	mkdir -p "$ROOT/incoming"
+	[ "$(if [ -f "$ROOT/incoming/$1.part" ]; then wc -c <"$ROOT/incoming/$1.part"; else echo 0; fi)" -eq "$2" ] || exit 6
+	cat >>"$ROOT/incoming/$1.part"
+	;;
+assemble)
+	# assemble <name> <wire-sha256> <id> <runtime-size> <controller-sha256>
+	# (needs room in incoming/ for the controller beside the upload):
+	# the upload <name> (gzip) becomes the controller <id>: the first
+	# <runtime-size> bytes of the current release's controller (0: none) then
+	# the upload, unzipped. The upload's hash and the whole controller's are
+	# both checked before the file is named <id>, so a damaged or cut transfer
+	# never becomes a release (exit 4: the upload is damaged and has been
+	# thrown away; exit 5: it did not rebuild the controller the caller built).
+	name=$1 wire=$2 id=$3 rsize=$4 whole=$5
+	in=$ROOT/incoming
+	# what an abandoned deploy left (a day old): never left to fill the disk
+	find "$in" -maxdepth 1 \( -name '*.wire.part' -o -name '*.build' \) -mmin +1440 -exec rm -f {} + 2>/dev/null || true
+	[ -f "$in/$name.part" ] || fail "nothing uploaded as $name"
+	got=$(sha256sum <"$in/$name.part" | cut -d' ' -f1)
+	if [ "$got" != "$wire" ]; then
+		rm -f "$in/$name.part"
+		say "the upload $name does not match its hash (a damaged transfer); it was discarded"
+		exit 4
+	fi
+	# a build name of its own, so two deploys of one id cannot write one file;
+	# gone however this ends
+	build=$in/$id.$$.build
+	trap 'rm -f "$build"' EXIT
+	if [ "$rsize" -gt 0 ]; then
+		cur=$(target current)
+		[ -n "$cur" ] || fail "no current release to take the runtime from"
+		head -c "$rsize" "$ROOT/releases/$cur/controller" >"$build" || fail "could not read the current controller's runtime (disk full?)"
+		gunzip -c "$in/$name.part" >>"$build" || fail "could not unzip the upload $name (damaged, or the disk is full)"
+	else
+		gunzip -c "$in/$name.part" >"$build" || fail "could not unzip the upload $name (damaged, or the disk is full)"
+	fi
+	got=$(sha256sum <"$build" | cut -d' ' -f1)
+	if [ "$got" != "$whole" ]; then
+		rm -f "$in/$name.part"
+		say "the controller rebuilt on the box does not match the one sent (its runtime is not the one assumed)"
+		exit 5
+	fi
+	sync
+	mv -f "$build" "$in/$id"
+	rm -f "$in/$name.part"
 	;;
 helper-version)
 	echo "${NAUT_HELPER_VERSION:-}"

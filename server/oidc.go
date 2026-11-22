@@ -6,7 +6,6 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
-	"html/template"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -478,19 +477,18 @@ func (s *Server) handleOIDCCallback(w http.ResponseWriter, r *http.Request) {
 	detail["expires"] = se.expires.UTC().Format(time.RFC3339)
 	e.User, e.Target, e.Session, e.Result, e.Detail = "oidc:"+name, "", se.hash, audit.ResultOK, detail
 	s.audit.record(e)
-	oidcHop(w, "Signed in as "+name+".", fl.next)
+	s.oidcHop(w, "Signed in as "+name+".", fl.next)
 }
 
 // oidcHop answers a callback with a page of this origin that moves the
 // browser on to next: a same-site navigation, which carries the
 // SameSite=Strict session cookie a redirect would not.
-func oidcHop(w http.ResponseWriter, msg, next string) {
+func (s *Server) oidcHop(w http.ResponseWriter, msg, next string) {
 	h := w.Header()
 	h.Set("Content-Type", "text/html; charset=utf-8")
 	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'")
 	h.Set("X-Frame-Options", "DENY")
-	w.WriteHeader(http.StatusOK)
-	oidcHopTemplate.Execute(w, struct{ Msg, Next string }{msg, next})
+	s.writePage(w, http.StatusOK, pageOIDCHop, struct{ Msg, Next string }{msg, next}, msg)
 }
 
 // pinnable reports an issuer or subject the pins file can hold (and naut
@@ -538,13 +536,13 @@ func cleanCode(code string) string {
 	return b.String()
 }
 
-// oidcHopTemplate is the callback's answer: a page of this origin that
+// oidcHopPageHTML is the callback's answer: a page of this origin that
 // moves the browser on (a same-site navigation, which carries the session
 // cookie), without script.
-var oidcHopTemplate = template.Must(template.New("hop").Parse(`<!doctype html>
+const oidcHopPageHTML = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="refresh" content="0;url={{.Next}}">
 <title>Continuing · nautilus</title>
 <style>:root{color-scheme:light dark;font-family:system-ui,sans-serif}body{margin:0;min-height:100vh;display:grid;place-items:center;background:Canvas;color:CanvasText}</style>
 </head><body><main><p>{{.Msg}} <a href="{{.Next}}">Continue</a></p></main></body></html>
-`))
+`

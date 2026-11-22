@@ -267,9 +267,11 @@ func TestDeployUsesTheHelper(t *testing.T) {
 	for _, tc := range []struct {
 		name, version string
 		wantCode      int
+		legacy        bool
 	}{
-		{"same version", helperVersion(), 0},
-		{"stale helper", "0123456789abcdef", 1},
+		{"same version", helperVersion(), 0, false},
+		{"a helper from before the slow-link upload", "177ab940e0359f6e", 0, true},
+		{"stale helper", "0123456789abcdef", 1, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			log := fakeHelperSSH(t, tc.version)
@@ -292,19 +294,40 @@ func TestDeployUsesTheHelper(t *testing.T) {
 			}
 			if tc.wantCode != 0 {
 				for _, c := range cmds {
-					if strings.Contains(c, " receive ") || strings.Contains(c, " update ") {
+					if strings.Contains(c, " receive ") || strings.Contains(c, " update ") || strings.Contains(c, " append ") {
 						t.Errorf("a stale helper still got %q", c)
 					}
 				}
 				return
 			}
-			want := []string{"sudo -n " + helperPath + " receive rel1", "sudo -n " + helperPath + " update rel1"}
-			got := cmds[len(cmds)-2:]
-			if strings.Join(got, "|") != strings.Join(want, "|") {
-				t.Errorf("last calls %q, want %q", got, want)
+			if tc.legacy {
+				// as before: the whole controller, uncompressed, by receive; the
+				// box can rebuild nothing, so it is never asked to
+				want := []string{"sudo -n " + helperPath + " receive rel1", "sudo -n " + helperPath + " update rel1"}
+				got := cmds[len(cmds)-2:]
+				if strings.Join(got, "|") != strings.Join(want, "|") {
+					t.Errorf("last calls %q, want %q", got, want)
+				}
+				if calls[len(calls)-2].in != "#!/bin/sh\n" {
+					t.Errorf("receive's stdin %q, want the controller", calls[len(calls)-2].in)
+				}
+				for _, c := range cmds {
+					if strings.Contains(c, " base") || strings.Contains(c, " assemble ") || strings.Contains(c, " append ") {
+						t.Errorf("a legacy helper was asked %q", c)
+					}
+				}
+				return
 			}
-			if calls[len(calls)-2].in != "#!/bin/sh\n" {
-				t.Errorf("receive's stdin %q, want the controller", calls[len(calls)-2].in)
+			// the helper takes the new verbs and nothing else: a root path of
+			// its own for each
+			var verbs []string
+			for _, c := range cmds {
+				if f := strings.Fields(c); len(f) > 3 && f[0] == "sudo" && f[2] == helperPath {
+					verbs = append(verbs, f[3])
+				}
+			}
+			if got := strings.Join(verbs, " "); got != "helper-version base partsize append partsize assemble update" {
+				t.Errorf("helper verbs %q, want helper-version base partsize append partsize assemble update", got)
 			}
 		})
 	}
@@ -323,6 +346,11 @@ n=$(ls "$FAKE_SSH_LOG" | grep -c '\.cmd$')
 printf '%s' "$last" >"$FAKE_SSH_LOG/$n.cmd"
 cat >"$FAKE_SSH_LOG/$n.in"
 case $last in
+*"naut-deploy-box append "*) cat "$FAKE_SSH_LOG/$n.in" >>"$FAKE_SSH_LOG/part" ;;
+esac
+case $last in
+*"naut-deploy-box partsize "*) if [ -f "$FAKE_SSH_LOG/part" ]; then wc -c <"$FAKE_SSH_LOG/part"; else echo 0; fi ;;
+*"naut-deploy-box base"*|*"naut-deploy-box assemble "*) ;;
 "uname -sm") echo "Linux armv7l" ;;
 *"helper-version") echo "$FAKE_HELPER_VERSION" ;;
 *naut-deploy*) printf '\nhelper=1\n' ;;

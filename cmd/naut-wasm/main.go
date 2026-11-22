@@ -174,7 +174,7 @@ func load(root string) ([]string, error) {
 		sopts.Alarms = alarms.Engine
 		sopts.AlarmShelveTimes = alarms.ShelveTimes
 	}
-	srv := server.New(rt, sopts)
+	srv := server.NewPlayground(rt, sopts)
 
 	stop()
 	ctx, cancel := context.WithCancel(context.Background())

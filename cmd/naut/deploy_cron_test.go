@@ -22,8 +22,8 @@ func TestDeployCronInstallRunsAsTheUser(t *testing.T) {
 		t.Fatalf("exit %d", code)
 	}
 	calls := sshCalls(t, log)
-	if len(calls) != 4 || !strings.Contains(calls[0].cmd, ".config/naut-deploy") || calls[1].cmd != "uname -sm" {
-		t.Fatalf("want 4 ssh calls (mode, uname, controller, install), got %d: %+v", len(calls), calls)
+	if len(calls) != 7 || !strings.Contains(calls[0].cmd, ".config/naut-deploy") || calls[1].cmd != "uname -sm" {
+		t.Fatalf("want 7 ssh calls (mode, uname, partsize, append, partsize, assemble, install), got %d: %+v", len(calls), calls)
 	}
 	calls = calls[2:]
 	for _, c := range calls {
@@ -31,11 +31,14 @@ func TestDeployCronInstallRunsAsTheUser(t *testing.T) {
 			t.Errorf("cron mode must not use sudo: %q", c.cmd)
 		}
 	}
-	if !strings.Contains(calls[0].cmd, "/opt/apps/nautilus/incoming/plant-") {
-		t.Errorf("the controller goes to <root>/incoming: %q", calls[0].cmd)
+	if !strings.Contains(calls[1].cmd, "/opt/apps/nautilus/incoming/plant-") || !strings.Contains(calls[1].cmd, ".wire.part") {
+		t.Errorf("the controller is appended under <root>/incoming: %q", calls[1].cmd)
 	}
-	if !strings.Contains(calls[1].cmd, "NAUT_SUPERVISOR=cron NAUT_ROOT=/opt/apps/nautilus sh -s -- install plant-") {
-		t.Errorf("box.sh runs install in cron mode: %q", calls[1].cmd)
+	if !strings.Contains(calls[3].cmd, "NAUT_SUPERVISOR=cron NAUT_ROOT=/opt/apps/nautilus sh -s -- assemble plant-") {
+		t.Errorf("box.sh rebuilds the controller in cron mode: %q", calls[3].cmd)
+	}
+	if !strings.Contains(calls[4].cmd, "NAUT_SUPERVISOR=cron NAUT_ROOT=/opt/apps/nautilus sh -s -- install plant-") {
+		t.Errorf("box.sh runs install in cron mode: %q", calls[4].cmd)
 	}
 }
 
