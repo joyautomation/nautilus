@@ -93,7 +93,7 @@ describe('flood focus', () => {
 	});
 	it('puts a chattering alarm and one acknowledged before the flood under also standing', () => {
 		const alarms = [
-			al('chatty', { priority: 'critical', chatter: chat() }),
+			al('chatty', { priority: 'high', chatter: chat() }),
 			al('old-acked', { state: 'ack-active', activeMs: 500 }),
 			al('new-acked', { state: 'ack-active', activeMs: 1500 }),
 			al('fresh', { priority: 'high', activeMs: 1200 })
@@ -101,6 +101,15 @@ describe('flood focus', () => {
 		const { first, also } = focusSplit(alarms, flood);
 		expect(first.map((a) => a.name)).toEqual(['fresh', 'new-acked']);
 		expect(also.map((a) => a.name)).toEqual(['chatty', 'old-acked']);
+	});
+	it('keeps an unacknowledged critical alarm in the main list even when it chatters, and collapses it once acknowledged', () => {
+		const unack = al('crit-unack', { priority: 'critical', state: 'unack-active', chatter: chat() });
+		const rtn = al('crit-rtn', { priority: 'critical', state: 'unack-rtn', chatter: chat() });
+		const acked = al('crit-acked', { priority: 'critical', state: 'ack-active', chatter: chat() });
+		const highUnack = al('high-unack', { priority: 'high', state: 'unack-active', chatter: chat() });
+		const { first, also } = focusSplit([unack, rtn, acked, highUnack], flood);
+		expect(first.map((a) => a.name)).toEqual(['crit-rtn', 'crit-unack']);
+		expect(also.map((a) => a.name)).toEqual(['crit-acked', 'high-unack']);
 	});
 	it('never drops an alarm, and treats nothing as stale with no flood', () => {
 		const alarms = [al('a', { state: 'ack-active', activeMs: 1 }), al('b', { chatter: chat() }), al('c')];

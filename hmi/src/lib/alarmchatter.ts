@@ -52,7 +52,7 @@ export function chatteringIds(alarms: Pick<AlarmInstance, 'id' | 'chatter'>[]): 
  * Flood focus: the alarms that need a person first, highest priority first
  * and oldest first within a priority, and those that can wait under "also
  * standing": a chattering alarm, and one acknowledged before the flood
- * began. Every alarm is in exactly one list; none is dropped.
+ * began. An unacknowledged critical alarm always stays in the first list. Every alarm is in exactly one list; none is dropped.
  */
 export function focusSplit<T extends Pick<AlarmInstance, 'priority' | 'activeMs' | 'chatter' | 'state' | 'name'>>(
 	alarms: T[],
@@ -66,7 +66,10 @@ export function focusSplit<T extends Pick<AlarmInstance, 'priority' | 'activeMs'
 	const also: T[] = [];
 	for (const a of alarms) {
 		const stale = a.state === 'ack-active' && flood !== null && (a.activeMs ?? 0) < flood.sinceMs;
-		(a.chatter || stale ? also : first).push(a);
+		// An unacknowledged critical alarm is never buried, chattering or not:
+		// during a flood is when it matters most (naut-lead, #1249).
+		const unackedCritical = a.priority === 'critical' && (a.state === 'unack-active' || a.state === 'unack-rtn');
+		(!unackedCritical && (a.chatter || stale) ? also : first).push(a);
 	}
 	return { first: first.sort(order), also: also.sort(order) };
 }
