@@ -1289,6 +1289,9 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 	if s.station.CPU.AccessControl == tiad.AccessFullAccessUser && (req.Secrets == nil || req.Secrets.FullAccessPassword == "") {
 		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "%s", LoginDownloadNeedsPassword)
 	}
+	if req.Hardware && s.station.CPU.AccessControl == tiad.AccessFullAccessUser && f.blindTrust != nil {
+		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "%s; a hardware load of a fullAccessUser station has to log on for the compare after it, so nothing was sent to the CPU", loginBlocked(f.blindTrust))
+	}
 	call := "download"
 	if req.DryRun {
 		call = "dry run"
@@ -1407,7 +1410,7 @@ func (f *Fake) downloadTIA(s *session, req tiad.DownloadRequest, attested *tiad.
 	if req.Secrets != nil {
 		pw = req.Secrets.FullAccessPassword
 	}
-	if why := f.askLogin(req.Address, pw, f.blindTrust, false); why != "" {
+	if why := f.askLogin(req.Address, pw, f.blindTrust); why != "" {
 		return nil, outcomeUnknown("TIA: "+why, nil)
 	}
 	var asked []tiad.Question
@@ -1513,7 +1516,7 @@ func (f *Fake) downloadTIA(s *session, req tiad.DownloadRequest, attested *tiad.
 	// tests, knobs downloadState, compareDiffers and compareTree).
 	// The compare goes online again, after the load: a CPU the load
 	// turned access control on for asks credentials now.
-	if why := f.askLogin(req.Address, pw, f.blindTrust, false); why != "" {
+	if why := f.askLogin(req.Address, pw, f.blindTrust); why != "" {
 		return nil, outcomeUnknown("TIA reported the download loaded, but the compare right after it failed (TIA: "+why+")", acting)
 	}
 	if f.CompareResult != nil && !f.CompareResult.Equal {
@@ -1621,7 +1624,7 @@ func (f *Fake) compare(r *http.Request) (any, *failure) {
 	if fl := f.checkDevicePin(s.station.CPU.Address, "compare"); fl != nil {
 		return nil, fl
 	}
-	if why := f.askLogin(s.station.CPU.Address, onlinePassword(req.Secrets), f.blindTrust, false); why != "" {
+	if why := f.askLogin(s.station.CPU.Address, onlinePassword(req.Secrets), f.blindTrust); why != "" {
 		return nil, fail(http.StatusInternalServerError, tiad.KindOperationFailed, "TIA: %s", why)
 	}
 	if f.loaded[s.station.CPU.Address] == s.id && !s.changed {
@@ -1697,7 +1700,7 @@ func (f *Fake) upload(r *http.Request) (any, *failure) {
 	}
 	// The fake's CPU asks no TLS question for an upload, so nothing in
 	// this call trusted blindly.
-	if why := f.askLogin(s.station.CPU.Address, onlinePassword(req.Secrets), f.blindTrust, false); why != "" {
+	if why := f.askLogin(s.station.CPU.Address, onlinePassword(req.Secrets), f.blindTrust); why != "" {
 		return nil, fail(http.StatusInternalServerError, tiad.KindOperationFailed, "TIA: %s", why)
 	}
 	s.compiled = false
@@ -1844,11 +1847,12 @@ func (f *Fake) fingerprintOf(s *session, address string, trust bool, password, f
 		}
 		return tiad.FingerprintResult{}, fail(http.StatusInternalServerError, tiad.KindOperationFailed, "TIA: %s", f.fingerprint.Fails)
 	}
-	// Going online first (the project's connection), then TIA's
-	// fingerprint service: TLS trust, then credentials on its own
-	// connection. The instance's trust is read before the call.
-	before := f.blindTrust
-	if why := f.askLogin(address, password, before, false); why != "" {
+	// Going online first (the project's connection, which asks
+	// credentials), then TIA's fingerprint service, which asks TLS trust.
+	// Whether the service asks credentials of its own is for the bench to
+	// show; the fake's does not. The instance's trust is read before the
+	// call.
+	if why := f.askLogin(address, password, f.blindTrust); why != "" {
 		return tiad.FingerprintResult{}, fail(http.StatusInternalServerError, tiad.KindOperationFailed, "TIA: %s", why)
 	}
 	trusted := []string{}
@@ -1860,10 +1864,6 @@ func (f *Fake) fingerprintOf(s *session, address string, trust bool, password, f
 		}
 		f.tlsTrusted = true
 		trusted = append(trusted, ask)
-	}
-	if why := f.askLogin(address, password, before, len(trusted) > 0); why != "" {
-		f.recordBlindTrust(call, s.id, address, trusted)
-		return tiad.FingerprintResult{}, fail(http.StatusInternalServerError, tiad.KindOperationFailed, "TIA: %s", why)
 	}
 	f.recordBlindTrust(call, s.id, address, trusted)
 	items := f.fingerprintItems(address)

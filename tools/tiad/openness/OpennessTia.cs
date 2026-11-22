@@ -104,6 +104,8 @@ namespace Tiad.Openness
             answers = new OnlineAnswers(trustUnverifiedCertificate);
             this.address = address;
             this.use = use;
+            // Every question answered no tells the operation's login.
+            record.Use = use;
             if (cc != null) cc.OnlineLegitimation += Handle;
         }
 
@@ -155,6 +157,9 @@ namespace Tiad.Openness
             if ((answer == OnlineChecks.NotTrusted || answer == OnlineChecks.Trusted) && tls != null)
             {
                 bool trust = answer == OnlineChecks.Trusted;
+                // No password follows a trust, even if what comes after
+                // this write fails: recorded before the write.
+                if (trust) use.Trusted();
                 tls.CurrentSelection = trust ? TlsVerificationConfigurationSelection.Trusted : TlsVerificationConfigurationSelection.NonTrusted;
                 string plc = "", info = "";
                 var fps = new List<string>();
@@ -182,12 +187,7 @@ namespace Tiad.Openness
                     Log.Line("online: reading a TLS question failed ({0}); answered {1}", e.GetType().Name, trust ? "TRUSTED BLINDLY" : "not trusted");
                 }
                 string question = OnlineChecks.Ask(type, plc, info, fps);
-                if (trust)
-                {
-                    call.Trust(question);
-                    // No password goes over a connection trusted blindly.
-                    use.Trusted();
-                }
+                if (trust) call.Trust(question);
                 else call.Refuse(question);
                 return;
             }
@@ -227,7 +227,7 @@ namespace Tiad.Openness
             }
             Log.Line("online: {0} asks credentials ({1}): secure communication {2}, user types [{3}]", TiaNames.LogSafe(address), type,
                 secure == null ? "unreadable" : secure.Value ? "yes" : "no", types == null ? "unreadable" : string.Join(", ", types.ToArray()));
-            use.Answer(call, type, this, secure, types, delegate(string password)
+            use.Answer(call, type, secure, types, delegate(string password)
             {
                 OnlineCredentials cr = auth.OnlineCredentials;
                 if (cr == null) throw new TiaException("TIA's credentials question holds no OnlineCredentials");
@@ -1245,7 +1245,8 @@ namespace Tiad.Openness
                 delegate
                 {
                     return online == null ? new List<string>() : online.Asked;
-                });
+                },
+                delegate { return use.Answered; });
         }
 
         // Write writes one step into a configuration and reports it. A

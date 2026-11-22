@@ -41,6 +41,19 @@ namespace Tiad
         // acting is the acting answers tiad gave TIA before it ended
         // (question ids): the answer names them, says plainly what they
         // may have done to the CPU, and lists them (data.actingAnswers).
+        // LoginBlocked refuses a hardware load of a fullAccessUser station
+        // while the instance trusts blindly (bt): the load turns the CPU's
+        // access control on, so the compare after it has to log on, and no
+        // password follows a blind trust: it could only end in doubt. A
+        // software load is not refused: whether its CPU asks credentials
+        // is not known before it goes online (section 3.9). Null when it
+        // may go on.
+        static TiadException LoginBlocked(Session s, DownloadRequest req, BlindTrust bt)
+        {
+            if (bt == null || !req.Hardware || s.Station == null || s.Station.Cpu.AccessControl != StationRules.AccessFullAccessUser) return null;
+            return TiadException.BadRequest("{0}", OnlineLogin.BlockedBy(bt) + "; a hardware load of a fullAccessUser station has to log on for the compare after it, so nothing was sent to the CPU");
+        }
+
         static TiadException Unknown(string why, List<string> acting)
         {
             return Unknown(why, acting, false);
@@ -253,6 +266,10 @@ namespace Tiad
             {
                 throw TiadException.BadRequest("{0}", LoginUse.DownloadNeedsPassword);
             }
+            // Nor can it log on while the instance trusts blindly: checked
+            // here, and again on the TIA thread before anything is recorded.
+            TiadException noLogin = LoginBlocked(s, req, blindTrust);
+            if (noLogin != null) throw noLogin;
             // The hardware configuration loads unverified (#789 hardware
             // gate): a real download that loads it needs the opt-in and
             // the operator's attestation, checked before anything reaches
@@ -417,6 +434,8 @@ namespace Tiad
                     // call queued ahead of this one may have given it. What
                     // it reads here is what the download rides on.
                     ranWith = blindTrust;
+                    TiadException blocked = LoginBlocked(s, req, ranWith);
+                    if (blocked != null) throw blocked;
                     TiadException late = BlindTrustRefusal(ranWith, req, s, "TIA's download was not called");
                     if (late != null)
                     {

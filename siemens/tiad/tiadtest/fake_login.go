@@ -10,8 +10,8 @@ import (
 // (LoginUse in tools/tiad/core/TiaRules.cs, #789 stage 5 (A)).
 const (
 	LoginNoPassword  = `the request carries no secrets.fullAccessPassword (the password of the CPU's user "nautilus", which cpu.accessControl fullAccessUser makes), so tiad has no credentials to answer`
-	LoginTrustedHere = "this operation trusted the CPU's certificate blindly, and tiad sends no password to a CPU it cannot verify"
-	LoginAskedAgain  = `TIA asked credentials again after tiad answered them as the user "nautilus": the CPU refused secrets.fullAccessPassword, and tiad never tries a password twice`
+	LoginTrustedHere = "password not sent: this operation trusted the CPU's unverified certificate, and tiad sends no password to a CPU it cannot verify"
+	LoginAskedAgain  = `password not sent again: TIA asked credentials again in this operation after tiad answered them as the user "nautilus" (the CPU may have refused secrets.fullAccessPassword), and tiad never sends a password twice`
 	// LoginDownloadNeedsPassword is the agent's refusal of a download of
 	// a fullAccessUser station without the password.
 	LoginDownloadNeedsPassword = `the session's station has cpu.accessControl fullAccessUser, so its CPU asks credentials going online once a hardware load put them there, and the compare after this download would: secrets.fullAccessPassword (the password of the CPU's user "nautilus") is required; nothing was sent to the CPU`
@@ -22,8 +22,8 @@ const (
 // loginBlocked is the agent's reason while its TIA instance trusts a
 // certificate blindly (OnlineLogin.For).
 func loginBlocked(bt *tiad.BlindTrust) string {
-	return "this agent's TIA instance trusts a CPU certificate blindly (" + bt.Describe() +
-		"), and tiad sends no password over a connection that may reach a CPU it cannot verify: close every session (the instance is retired) or restart the agent, then call again"
+	return "password not sent: this agent's TIA instance trusted an unverified CPU certificate (" + bt.Describe() +
+		"), and tiad sends no password over a connection that may reach a CPU it cannot verify: close every session (the agent then retires the instance) or restart the agent, then call again"
 }
 
 // onlineRefused is the agent's TiaNames.OnlineRefused for one question.
@@ -45,10 +45,11 @@ func onlinePassword(s *tiad.OnlineSecrets) string {
 // over secure communication, offering project users, as the C# fake's
 // CPU does. It answers as the agent's LoginUse does, and returns "" when
 // it logged on (or nothing was asked), else the refusal. bt is the
-// instance's blind trust as the agent read it before the call; trustedHere
-// is whether this call trusted a certificate blindly. A wrong password is
-// asked again, as TIA does when a CPU refuses one, and refused.
-func (f *Fake) askLogin(address, password string, bt *tiad.BlindTrust, trustedHere bool) string {
+// instance's blind trust as the agent read it before the call (the fake's
+// CPU asks no TLS question before credentials, so no call of its trusts
+// first; tiad-fake's upload models that). A wrong password is asked again,
+// as TIA does when a CPU refuses one, and refused.
+func (f *Fake) askLogin(address, password string, bt *tiad.BlindTrust) string {
 	want, ok := f.logins[address]
 	if !ok {
 		return ""
@@ -59,8 +60,6 @@ func (f *Fake) askLogin(address, password string, bt *tiad.BlindTrust, trustedHe
 		why = LoginNoPassword
 	case bt != nil:
 		why = loginBlocked(bt)
-	case trustedHere:
-		why = LoginTrustedHere
 	case password != want:
 		why = LoginAskedAgain
 	default:

@@ -120,21 +120,43 @@ func contractCredentials(t *testing.T, start Starter) {
 		t.Fatalf("loaded %d, want the four loads with the password", n)
 	}
 
-	// No password goes over a connection trusted blindly: a read that
-	// trusts the certificate logs on to the project's connection first,
-	// then trusts, and refuses the fingerprint service's credentials.
+	closeFirst(t, s2)
+
+	// No password follows a blind trust. A read that trusts the
+	// certificate logs on to the project's connection first, then trusts
+	// TIA's fingerprint service, and goes through; from then on the
+	// instance sends no password, so a compare is refused, and a download
+	// of a fullAccessUser station, which would have to log on, is refused
+	// before anything reaches the CPU.
+	s3, err := c.CreateProject(ctx, "trust", BenchStation(), BenchSecrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s3.Compile(ctx, true, true); err != nil {
+		t.Fatal(err)
+	}
 	a.SetFingerprint(t, FingerprintScript{AsksTLS: true})
-	_, err = s2.Fingerprint(ctx, tiad.FingerprintRequest{Secrets: BenchLogin, TrustUnverifiedCertificate: true})
-	refused("a read that trusted blindly", err, tiad.KindOperationFailed, LoginTrustedHere)
-	// The instance keeps the trust: every later login is refused, until
-	// the last session closes and the instance is retired.
-	_, err = s2.CompareWith(ctx, BenchCompare)
-	if tiad.Kind(err) != tiad.KindOperationFailed || !strings.Contains(err.Error(), "this agent's TIA instance trusts a CPU certificate blindly (") ||
-		!strings.Contains(err.Error(), "close every session") {
-		t.Fatalf("compare on an instance that trusts blindly: %v", err)
+	if r, err := s3.Fingerprint(ctx, tiad.FingerprintRequest{Secrets: BenchLogin, TrustUnverifiedCertificate: true}); err != nil || len(r.TrustedBlindly) != 1 {
+		t.Fatalf("a read that logs on, then trusts blindly: %+v %v", r, err)
+	}
+	blocked := func(what string, err error, kind string) {
+		t.Helper()
+		if tiad.Kind(err) != kind || !strings.Contains(err.Error(), "password not sent: this agent's TIA instance trusted an unverified CPU certificate (") ||
+			!strings.Contains(err.Error(), "close every session") {
+			t.Fatalf("%s on an instance that trusts blindly: %v", what, err)
+		}
+	}
+	_, err = s3.CompareWith(ctx, BenchCompare)
+	blocked("a compare", err, tiad.KindOperationFailed)
+	_, err = s3.Download(ctx, AcceptHardware(tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: benchCPU, Hardware: true, Software: true, Announced: true,
+		Decisions: tiad.Decisions{StartAfter: tiad.No(), AcceptBlindTrust: tiad.Yes()}}))
+	blocked("a download of a fullAccessUser station", err, tiad.KindBadRequest)
+	if n := len(a.Loaded(t)); n != 4 {
+		t.Fatalf("loaded %d after the refused download, want 4", n)
 	}
 	a.SetFingerprint(t, FingerprintScript{})
-	closeFirst(t, s2)
+	// The last session closing retires the instance and its trust.
+	closeFirst(t, s3)
 	if v, err := c.VerifyDeploy(ctx, tiad.VerifyRequest{Deploy: id, Secrets: BenchLogin}); err != nil || v.Verdict != tiad.VerifyEqual {
 		t.Fatalf("a verify once the trusting instance was retired: %+v %v", v, err)
 	}

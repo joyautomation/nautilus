@@ -164,7 +164,7 @@ func (f *Fake) verifyDeploy(r *http.Request) (any, *failure) {
 		return nil, fl
 	}
 	password := onlinePassword(req.Secrets)
-	if why := f.askLogin(address, password, f.blindTrust, false); why != "" {
+	if why := f.askLogin(address, password, f.blindTrust); why != "" {
 		return nil, fail(http.StatusInternalServerError, tiad.KindOperationFailed, "TIA: %s", why)
 	}
 	equal := f.loadedArchive[address] == sha

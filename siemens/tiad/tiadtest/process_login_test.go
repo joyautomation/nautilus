@@ -81,7 +81,7 @@ func TestAgentLogsOnWithoutLoggingThePassword(t *testing.T) {
 		if !strings.Contains(log, "audit online-login call="+call+` address="192.0.2.10" user="nautilus": answering TIA's credentials question`) {
 			t.Errorf("no logon audit line for the %s", call)
 		}
-		if !strings.Contains(log, "audit online-login call="+call+` address="192.0.2.10" user="nautilus" refused: "TIA asked credentials again`) {
+		if !strings.Contains(log, "audit online-login call="+call+` address="192.0.2.10" user="nautilus" refused: "password not sent again: TIA asked credentials again`) {
 			t.Errorf("no refusal audit line for the %s with a wrong password", call)
 		}
 	}
@@ -111,26 +111,41 @@ func TestAgentLogsOnWithoutLoggingThePassword(t *testing.T) {
 }
 
 // TestAgentSendsNoPasswordAfterABlindTrust pins what a blind trust costs
-// on a CPU that asks credentials: an upload whose CPU asks TLS trust, with
-// the opt-in, is refused at the logon; a deploy whose fingerprint read
-// trusts blindly loads and compares equal (the compare's connection asks no
-// TLS), but the read's own logon is refused, and every later logon in that
-// TIA instance is refused until the instance is retired.
+// on a CPU that asks credentials. A deploy whose fingerprint read trusts
+// blindly logs on first (the project's connection) and goes through, but
+// from then on the TIA instance sends no password until it is retired: a
+// compare is refused, and so is a download of a fullAccessUser station,
+// before anything reaches the CPU. An upload whose CPU asks TLS trust
+// before credentials, with the opt-in, is refused at the logon.
 func TestAgentSendsNoPasswordAfterABlindTrust(t *testing.T) {
 	p, s := loggedOnBench(t)
 	p.SetScript(t, tiadtest.Script{FingerprintAsksTLS: true})
 	sw := tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: "192.0.2.10", Software: true, Announced: true,
 		Decisions: tiad.Decisions{StartAfter: tiad.No()}, Fingerprint: &tiad.FingerprintRequest{TrustUnverifiedCertificate: true}}
 	r, err := s.Download(ctx, sw)
-	if err != nil || !r.Downloaded || !r.CompareEqual || r.Deploy == nil {
+	if err != nil || !r.Downloaded || !r.CompareEqual || r.Deploy == nil || r.Deploy.Fingerprint == nil {
 		t.Fatalf("a download whose read trusts blindly: %+v %v", r, err)
 	}
-	if r.Deploy.Fingerprint != nil || !strings.Contains(r.Deploy.FingerprintError, tiadtest.LoginQuestion+": "+tiadtest.LoginTrustedHere) {
-		t.Fatalf("the deploy's read: %+v, want its logon refused after the trust", r.Deploy)
-	}
-	if _, err := s.CompareWith(ctx, tiadtest.BenchCompare); tiad.Kind(err) != tiad.KindOperationFailed ||
-		!strings.Contains(err.Error(), "this agent's TIA instance trusts a CPU certificate blindly (") {
+	const blocked = "password not sent: this agent's TIA instance trusted an unverified CPU certificate ("
+	if _, err := s.CompareWith(ctx, tiadtest.BenchCompare); tiad.Kind(err) != tiad.KindOperationFailed || !strings.Contains(err.Error(), blocked) {
 		t.Fatalf("a compare on the trusting instance: %v", err)
+	}
+	loads := len(p.Loaded(t))
+	hw := tiadtest.AcceptHardware(sw)
+	hw.Hardware, hw.Fingerprint = true, nil
+	hw.Decisions.AcceptBlindTrust = tiad.Yes()
+	if _, err := s.Download(ctx, hw); tiad.Kind(err) != tiad.KindBadRequest || !strings.Contains(err.Error(), blocked) {
+		t.Fatalf("a hardware load of a fullAccessUser station on the trusting instance: %v", err)
+	}
+	// A software load cannot know whether its CPU asks: it goes on, and
+	// the logon is refused inside TIA's call (in doubt).
+	sw.Fingerprint = nil
+	sw.Decisions.AcceptBlindTrust = tiad.Yes()
+	if _, err := s.Download(ctx, sw); tiad.Kind(err) != tiad.KindOutcomeUnknown || !strings.Contains(err.Error(), blocked) {
+		t.Fatalf("a software load on the trusting instance, to a CPU that asks credentials: %v", err)
+	}
+	if n := countCalls(p.Calls(t), "Archive"); len(p.Loaded(t)) != loads || n != 3 {
+		t.Fatalf("the refused downloads loaded: loads %d (want %d), archives %d", len(p.Loaded(t)), loads, n)
 	}
 	// Closing the last session retires the instance; the next logs on.
 	if err := s.Close(ctx); err != nil {

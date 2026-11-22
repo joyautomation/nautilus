@@ -1393,16 +1393,19 @@ glue and tiad-fake run). It answers no, naming why, when:
 
 - the request carries no password;
 - the agent's TIA instance trusts a certificate blindly (§3.8), or this
-  call trusted one: no password goes to a CPU tiad cannot verify. Closing
-  every session retires the instance (#789 D1), and the next one logs on;
+  call trusted one: no password goes to a CPU tiad cannot verify. The
+  refusal says "password not sent" and names the fix: closing every
+  session retires the instance (#789 D1), and the next one logs on;
+- this call answered any question no before (a certificate it does not
+  trust, credentials, a question it does not know): TIA may go on after a
+  no, and no password follows one;
 - the connection is not secure communication, or tiad cannot read whether
   it is;
 - the CPU offers no project-user legitimation, or tiad cannot read what it
   offers;
-- this connection was answered before: TIA asking again means the CPU
-  refused the password. tiad never tries one twice, since a CPU may lock a
-  user out after failed logons, and no other connection of the same call
-  answers either.
+- this call answered credentials already, on any of its connections: TIA
+  asking again may mean the CPU refused the password, and tiad never sends
+  one twice, since a CPU may lock a user out after failed logons.
 
 Legacy access-level passwords (`OnlinePasswordConfiguration`,
 `OnlineReadAccessPassword`) and anything tiad does not know still cancel.
@@ -1414,18 +1417,24 @@ does: `operation_failed` for a compare, upload, read or verify, and
 `outcome_unknown` inside a download, where TIA's call had begun. A download
 of a station whose spec is `fullAccessUser` without the password is refused
 up front (`bad_request`, nothing sent), a dry run too: the compare after it
-would ask.
+would ask. So is a hardware load of such a station while the instance trusts
+blindly, checked again on the TIA thread before the deploy record: the load
+turns access control on, and the compare after it could not log on. A
+software load then is not refused, since whether its CPU asks is not known
+before it goes online: if it asks, the logon is refused inside TIA's call
+(`outcome_unknown`). A download TIA fails after tiad logged on says the CPU
+may have refused the password.
 
 **What a blind trust costs.** The refusal after a blind trust is the safe
 side, and it has a price on a CPU that asks credentials. TIA's fingerprint
 service asks TLS trust on the bench ("certificate not matching"), and an
-upload may: such a read or upload can trust the certificate or log on, not
-both. So a deploy's fingerprint read with
-`fingerprint.trustUnverifiedCertificate` reports its logon refused (the
-load and its compare stand, since the project's own connection asks no TLS
-question), and the instance then refuses every logon until it is retired.
-Whether a separate, explicit opt-in should let the password follow a blind
-trust is open (naut-lead, #789).
+upload may. A read logs on through the project's connection first, then
+trusts the service: it goes through, if the service asks no credentials of
+its own, but from then on the instance sends no password until it is
+retired. An upload asked TLS before credentials cannot do both and is
+refused. There is no opt-in to send a password after a blind trust, by
+decision (naut-lead, 2026-11-22): a customer who needs one is a security
+call for James.
 
 **What the fakes prove, and what they do not.** Both fakes model a CPU
 that asks credentials once a hardware load of a fullAccessUser station
@@ -1436,8 +1445,11 @@ password, and with a blind trust. tiad-fake answers through the core rule,
 so a mutant of it fails the suite. What only the bench can show: which
 configuration type the real CPU asks, whether an upload asks through the
 connection or through its own callback (`UploadPasswordConfiguration`,
-which tiad still refuses), whether TIA keeps a logon for later calls in
-the same instance, and how a refused password shows (the fakes ask again;
+which tiad still refuses), whether TIA's fingerprint service asks
+credentials of its own after the project's connection logged on (tiad
+answers once per call, so it would refuse that read), whether TIA keeps a
+logon for later calls in the same instance, and how a refused password
+shows (the fakes ask again;
 TIA may fail going online instead, which tiad reports as a logon TIA
 failed after). The glue's log lines answer these in the first window on a
 CPU with access control on.
