@@ -75,6 +75,90 @@ VS Code ── edit .st/.ld ──▶ naut check --target siemens   (one rule ta
 | Field drivers (Modbus, OPC UA client, EtherNet/IP, MQTT, IT) | **Do not map**: they run in `naut`. `naut check --target siemens` refuses them. The CPU's I/O comes from its local modules and its PROFINET devices |
 | Tests | `naut test` runs on nautilus in virtual time. `naut test --target siemens` replays the same scenarios on the CPU in real time |
 
+**Built (deploy, #789):** `naut siemens deploy [dir]` (`cmd/naut/siemens_deploy.go`).
+Without a flag it builds and compiles only: nothing reaches the CPU and
+the TIA project is not saved. The steps:
+
+1. **Check.** The writer runs on `siemensWriterInput` (the same input
+   `naut check --target siemens` uses), and the station's problems are
+   reported too. Any diagnostic stops the deploy before tiad hears of it.
+2. **Station and secrets.** The station comes from `target.siemens.station`,
+   with PROFINET references expanded (`expandProfinet`). The GSDML date is
+   a constant (`siemensGSDMLDate`): a deploy never reads the clock,
+   because a new date is a new GSD to TIA. Secrets come from the
+   environment, or `NAME_FILE`, and a refusal names the variable:
+   `NAUTILUS_SIEMENS_CONFIG_PASSWORD`, `NAUTILUS_SIEMENS_FULL_ACCESS_PASSWORD`,
+   `NAUTILUS_SIEMENS_PROTECTION_PASSWORD`, and
+   `NAUTILUS_SIEMENS_WEB_PASSWORD_<USER>` for each web user
+   (`NAUTILUS_SIEMENS_PASSWORD` for `online.user`).
+3. **With `--download`, the CPU's deploy record first.** The newest record
+   that may have loaded is verified (`POST /v1/deploys/verify`) before the
+   deploy opens its own session. A CPU that compares different, or a
+   broken archive, means the CPU was changed outside nautilus. The deploy
+   is then refused without `--accept-outside-changes`, which the plan names.
+   A CPU with no record is no refusal: the plan says plainly that what it
+   runs is replaced.
+4. **The project.** The deploy opens `projects/<name>/<name>.ap21` as last
+   saved and PUTs the station. With none, it creates the project from the
+   spec. The project is saved only after a successful download, so the
+   next deploy builds on what the CPU runs. Its OB steps then show `kept`,
+   or `recreated` with the old and new cycle, and prune finds blocks that
+   are gone. tiad's PUT on a saved project reports only "cpu taken over".
+   So a download that loaded hardware leaves the spec it loaded in the
+   work dir (`naut-src/<name>/station.json`). The next plan says from it
+   whether the spec changed, and so whether the hardware may differ from
+   the CPU's. It is a hint for the plan, not a check.
+5. **Software.** The sources go into the group (`target.siemens.group`) with
+   the writer's OBs as `obs` and `prune`. Each OB step is printed.
+6. **Compile.** Hardware and software are compiled. Each message is printed
+   against the nautilus file and line it came from: `CompileMessage.Block`
+   reads the block and body line, and `writer.Output.Locate` maps them
+   through the writer's line map, including the LD/FBD lowering. A
+   message with no line is reported against the block's file.
+7. **Plan and confirmation.** Nothing has reached the CPU before it but
+   the verify's read-only compare. The plan lists the last-deploy verdict,
+   the station (new, changed since the last hardware load, or the same)
+   and whether hardware is loaded, the OB steps, that the download is
+   announced, and every answer the download will give, in words. A "no"
+   says what follows when TIA asks it: cancelled with nothing loaded, or,
+   after a stop, in doubt with the CPU possibly left in STOP. The operator
+   types `yes`, or passes `--yes`, which answers exactly what was printed.
+   Acting answers each have a flag and are never implied:
+   - `--allow-stop` (otherwise `stopCpu: false`);
+   - `--reinit DB,...` (otherwise none);
+   - `--start` or `--no-start`, one of them always (TIA's start-after
+     acts, also on a CPU that was in STOP before);
+   - `--hardware` with `--attest-hardware "<statement>"`, plus
+     `--cpu-access-control disabled|enabled` for a user-management reset;
+   - `--trust-certificate`.
+
+   `consistentDownload`, `alarmTexts`, `allBlocks` and
+   `identificationDataLoadNothing` are answered up front (§3.5), and
+   `userManagementKeepOnline` for a `keep` CPU; otherwise user management
+   is unanswered, and the plan says so.
+8. **Dry run, only with `--dry-run`, after the confirmation.** It reaches
+   the CPU too, and a TIA that asks no check loads during it, so it never
+   runs unasked or before the yes. `tiad.Openness` refuses every dry run
+   until S2b, and the deploy prints the refusal. A stop or reinitialize
+   the dry run shows, and the flags do not allow, stops the deploy there.
+   A dry run that may have loaded is compared on the session, reported,
+   and the deploy stops.
+9. **Download.** It carries `source {commit, hash}` (the project's git
+   commit, left out when the project has uncommitted changes, and the
+   sha256 of the sources sent). Only the agent's refusals before the CPU
+   (`bad_request`, `decision_required`, `declined`, `not_compiled`, `gate`,
+   `busy` and the like, never fatal) count as nothing loaded; any other
+   failure, a reply the client cannot read included, is in doubt. Success
+   needs `downloaded` and `compareEqual`. Afterwards the deploy
+   checks that every block it generated is among the compare's `blocks`.
+   It prints the deploy record (archive, DownloadId, source) and the CPU's
+   state, plus the hardware warning when hardware was loaded, and then
+   saves the project. An `outcome_unknown` compares again on the same
+   session, prints `actingAnswers` and the state, and never says done.
+
+The NDJSON route for the extension's Download button comes later. It will
+call the same steps.
+
 ## 2. Codegen
 
 **Everything is emitted as SCL source, LD and FBD included.** Nobody opens
@@ -717,7 +801,7 @@ The client checks each path and the agent checks again.
 | `DELETE /v1/sessions/{id}` | → `{}`. Closes without saving |
 | `PUT /v1/sessions/{id}/station` | `{station, secrets}` → `{changes: [string], notes?: [string], keptDevices?: [{name, profinetName, address}]}` (P2, P5). Keeps the project's CPU or makes one (§3.3, "Which CPU an apply uses"). `notes` is what the caller should know besides the changes (a protected CPU kept its password, the Full access user made or found, devices kept as found) |
 | `POST /v1/sessions/{id}/software` | `{group, sources, tagTables, prune, obs?: [{name, number, cycleMs}]}` → `{results: [{path, ok, messages}], blocks: [{name, kind}], obs?: [{name, action, was?, now?}]}`. Generates blocks into the group named `group`; `blocks` lists that group's. `obs` are the cyclic interrupt OBs the agent makes first (see "Cyclic interrupt OBs" below). With `prune`, blocks in that group that no source produced are deleted. An import never touches a block outside the group: see "Blocks outside the group" below |
-| `POST /v1/sessions/{id}/compile` | `{hardware, software}` → `{result: "success" or "warning" or "error", errors, warnings, messages: [{object, severity, text}]}` |
+| `POST /v1/sessions/{id}/compile` | `{hardware, software}` → `{result: "success" or "warning" or "error", errors, warnings, messages: [{object, severity, text, path?}]}`. Each message is a leaf of TIA's message tree; `path` is its parents, outermost first. For an error in an SCL block, `object` is the line in the block's body (1 is the `BEGIN` line) and the block is the last parent: `{object: "4", path: ["PLC_1", "Program blocks", "nautilus", "naut_Main (FB1)"]}` (measured on TIA V21, #789) |
 | `POST /v1/sessions/{id}/download` | §3.5 (P3) |
 | `POST /v1/sessions/{id}/compare` | `{secrets?: {fullAccessPassword}}` (§3.9) → `{equal, differences: [{object, state}], blindTrust}`. An online compare. `blindTrust` is the TIA instance's (§3.8), or `null` |
 | `POST /v1/sessions/{id}/fingerprint` | `{trustUnverifiedCertificate?, secrets?: {fullAccessPassword}}` → `{address, items: [{identifier, value}], trustedBlindly, blindTrust}`. TIA's fingerprint of the session's CPU, read online and read-only (§3.8) |

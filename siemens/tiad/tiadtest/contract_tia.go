@@ -993,7 +993,11 @@ func contractCompile(t *testing.T, start Starter) {
 	if r, err := s.Compile(ctx, true, false); err != nil || !reflect.DeepEqual(r, warn) {
 		t.Fatalf("warnings: %+v %v", r, err)
 	}
-	bad := tiad.CompileResult{Result: "error", Errors: 1, Messages: []tiad.CompileMessage{{Object: "PLC_1/Program blocks/Main", Severity: "error", Text: "Tag #x not defined"}}}
+	// As TIA V21 gives an SCL error (#789): the leaf's object is the line
+	// in the block's body, and its parents, the block last, ride along.
+	bad := tiad.CompileResult{Result: "error", Errors: 1, Messages: []tiad.CompileMessage{
+		{Object: "4", Severity: "error", Text: "Tag #x not defined", Path: []string{"PLC_1", "Program blocks", "nautilus", "naut_Main (FB1)"}},
+		{Object: "", Severity: "error", Text: "Compiling finished (errors: 1; warnings: 0)"}}}
 	a.SetCompileResult(t, bad)
 	_, err = s.Compile(ctx, true, true)
 	var te *tiad.Error

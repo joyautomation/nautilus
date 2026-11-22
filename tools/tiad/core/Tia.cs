@@ -116,6 +116,11 @@ namespace Tiad
     public sealed class CompileMessage
     {
         public string Object = "", Severity = "", Text = "";
+        // Path is the message's parents in TIA's message tree, outermost
+        // first, the leaf's own Object not included: for an SCL error the
+        // leaf's Object is only the line in the block's body ("4"), and
+        // the block it is in ("naut_Main (FB1)") is a parent.
+        public List<string> Path = new List<string>();
     }
 
     public sealed class CompileResult
@@ -133,6 +138,7 @@ namespace Tiad
                 x["object"] = m.Object;
                 x["severity"] = m.Severity;
                 x["text"] = m.Text;
+                if (m.Path.Count > 0) x["path"] = new List<object>(m.Path.ToArray());
                 ms.Add(x);
             }
             var o = new Obj();

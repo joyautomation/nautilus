@@ -118,6 +118,9 @@ type Output struct {
 	// (`"naut_Tags"`); the names carry Input.BlockPrefix.
 	// Symbol uses it to turn a nautilus tag path into a Web API symbol.
 	Roots map[string]string
+	// Sources says where each generated file came from, by its Path:
+	// Locate reads a TIA compile message back through it.
+	Sources map[string]Source
 	// names are the readable names under each root, lower-cased: the
 	// manifest tags under "", a program's statics under its name. The
 	// value says whether the name has members (an FB instance).
@@ -154,6 +157,33 @@ func (o Output) Symbol(path string) (string, bool) {
 	return "", false
 }
 
+// Source is where one generated file came from: the nautilus file, and
+// for an FB the nautilus line of each line after its BEGIN (0: none).
+type Source struct {
+	Path string
+	Body []int
+}
+
+// Locate maps a TIA compile message back to nautilus: block is the
+// block's name as TIA names it ("naut_Main"), line the line TIA's
+// compiler gives in the block's body, where 1 is the BEGIN line itself
+// (measured on TIA V21, #789: an error on the line after BEGIN is line
+// 2). It answers the nautilus file and its line, 0 when the message has
+// no line or the line has none (a declaration, the OB, a DB); ok is false
+// for a block the writer did not generate.
+func (o Output) Locate(block string, line int) (file string, srcLine int, ok bool) {
+	for name, src := range o.Sources {
+		if !strings.EqualFold(strings.TrimSuffix(name, path.Ext(name)), block) {
+			continue
+		}
+		if i := line - 2; i >= 0 && i < len(src.Body) {
+			srcLine = src.Body[i]
+		}
+		return src.Path, srcLine, true
+	}
+	return "", 0, false
+}
+
 // Diag is one reason the writer refused, tied to a source line.
 type Diag struct {
 	Rule    string // "siemens/<rule>"
@@ -179,7 +209,7 @@ func Write(in Input) (Output, []Diag, error) {
 	for _, g := range in.Globals {
 		w.globals[strings.ToLower(g.Name)] = g
 	}
-	out := Output{Roots: map[string]string{"": quote(tagsDB)}, names: map[string]map[string]bool{"": {}}}
+	out := Output{Roots: map[string]string{"": quote(tagsDB)}, names: map[string]map[string]bool{"": {}}, Sources: map[string]Source{}}
 	for _, g := range in.Globals {
 		out.names[""][strings.ToLower(g.Name)] = false
 	}
@@ -227,6 +257,12 @@ func Write(in Input) (Output, []Diag, error) {
 		out.Files = append(out.Files,
 			File{Path: fbName + ".scl", Data: pw.fb},
 			File{Path: dbName + ".db", Data: instanceDB(fbName, dbName)})
+		body := make([]int, len(pw.lines))
+		for i, l := range pw.lines {
+			body[i] = mapLine(lines, l)
+		}
+		out.Sources[fbName+".scl"] = Source{Path: p.Path, Body: body}
+		out.Sources[dbName+".db"] = Source{Path: p.Path}
 		out.Roots[prog.Name] = quote(dbName)
 	}
 
@@ -263,12 +299,14 @@ func Write(in Input) (Output, []Diag, error) {
 		}
 		out.OBs = append(out.OBs, ob)
 		out.Files = append(out.Files, File{Path: ob.Name + ".scl", Data: obSource(ob, prefix+t.Program+"_DB")})
+		out.Sources[ob.Name+".scl"] = Source{Path: "nautilus.yaml"}
 	}
 
 	if len(in.Globals) > 0 {
 		db, ok := w.globalDB()
 		if ok {
 			out.Files = append(out.Files, File{Path: tagsDB + ".db", Data: db})
+			out.Sources[tagsDB+".db"] = Source{Path: "nautilus.yaml"}
 		}
 	}
 
@@ -416,9 +454,15 @@ func toST(p Program) (string, []int, error) {
 	return p.Source, nil, nil
 }
 
+// mapLine is the original line of lowered line l: l itself for ST (no
+// map), and 0 (no line) for a line outside the map, never the lowered
+// line, which would name a wrong line of the ladder.
 func mapLine(lines []int, l int) int {
-	if lines == nil || l < 1 || l > len(lines) {
+	if lines == nil {
 		return l
+	}
+	if l < 1 || l > len(lines) {
+		return 0
 	}
 	return lines[l-1]
 }

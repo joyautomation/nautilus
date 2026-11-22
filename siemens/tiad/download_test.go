@@ -628,3 +628,30 @@ func TestActingAnswer(t *testing.T) {
 		}
 	}
 }
+
+// TestCompileMessageBlock reads the block and body line from a message as
+// TIA V21 gave it (#789), and refuses what is not a block.
+func TestCompileMessageBlock(t *testing.T) {
+	path := []string{"PLC_1", "Program blocks", "nautilus", "naut_Main (FB1)"}
+	for _, c := range []struct {
+		m    CompileMessage
+		name string
+		line int
+		ok   bool
+	}{
+		{CompileMessage{Object: "4", Path: path}, "naut_Main", 4, true},
+		{CompileMessage{Object: "", Path: path}, "naut_Main", 0, true},
+		{CompileMessage{Object: "x", Path: path}, "naut_Main", 0, true},
+		{CompileMessage{Object: "7", Path: []string{"PLC_1", "Program blocks", "naut OB (x) (OB30)"}}, "naut OB (x)", 7, true},
+		{CompileMessage{Object: "naut_Tags (DB2)", Path: []string{"PLC_1", "Program blocks"}}, "", 0, false},
+		{CompileMessage{Object: "3", Path: []string{"PLC_1", "naut_Main (FB1)", "Network (x)"}}, "naut_Main", 0, true},
+		{CompileMessage{Object: "3", Path: []string{"PLC_1", "Program blocks"}}, "", 0, false},
+		{CompileMessage{Object: "3", Path: []string{"Tags (FBX)"}}, "", 0, false},
+		{CompileMessage{Object: "3"}, "", 0, false},
+	} {
+		name, line, ok := c.m.Block()
+		if name != c.name || line != c.line || ok != c.ok {
+			t.Errorf("%+v: got %q %d %v, want %q %d %v", c.m, name, line, ok, c.name, c.line, c.ok)
+		}
+	}
+}

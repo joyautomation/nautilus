@@ -23,6 +23,7 @@ import (
 const siemensUsage = `naut siemens — a Siemens S7-1500 as a nautilus target (experimental)
 
 Usage:
+  naut siemens deploy [flags] [dir]         compile the project through tiad and download it
   naut siemens serve --host <cpu> [flags]   serve the CPU on the nautilus runtime API
   naut siemens cert  --host <cpu>           print the CPU's certificate SHA-256, to pin
   naut siemens diag  --host <cpu> [flags]   read the CPU's diagnostic buffer
@@ -36,6 +37,8 @@ func runSiemens(args []string) int {
 		return 2
 	}
 	switch args[0] {
+	case "deploy":
+		return runSiemensDeploy(args[1:])
 	case "serve":
 		return runSiemensServe(args[1:])
 	case "cert":

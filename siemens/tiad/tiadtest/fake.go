@@ -19,6 +19,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"maps"
 	"mime"
 	"net/http"
 	"net/http/httptest"
@@ -211,6 +212,12 @@ type savedProject struct {
 	accessControl             string
 	access                    access
 	webServer, webHTTPS       bool
+	// blocks, groups and obInfo are its program blocks, as TIA keeps
+	// them in the project: a deploy that opens it again sees its cyclic
+	// interrupt OBs kept or recreated, and prune finds the blocks.
+	blocks []tiad.Block
+	groups map[string]string
+	obInfo map[string]projectBlock
 }
 
 // UploadedCPUName and UploadedIODevice are what the fake's upload brings
@@ -1034,6 +1041,7 @@ func (f *Fake) openSession(r *http.Request) (any, *failure) {
 	if sp, ok := f.saved[p]; ok {
 		s.cpu, s.others, s.protection, s.protectedWith = sp.cpu, sp.others, sp.protection, sp.protectedWith
 		s.accessControl, s.access, s.webServer, s.webHTTPS = sp.accessControl, sp.access.clone(), sp.webServer, sp.webHTTPS
+		s.blocks, s.groups, s.obInfo = slices.Clone(sp.blocks), maps.Clone(sp.groups), maps.Clone(sp.obInfo)
 		f.openRecords(s.access)
 	}
 	return tiad.Session{ID: s.id, Project: p}, nil
@@ -1783,6 +1791,11 @@ func (f *Fake) downloadTIA(s *session, req tiad.DownloadRequest, attested *tiad.
 		return nil, fl
 	}
 	res := tiad.DownloadResult{Downloaded: true, Questions: asked, State: said, StateSource: source, KeptDevices: keptList(s.kept), CompareEqual: true, BlindTrust: f.blindTrust}
+	// As the agent's equal compare names them: every program block the
+	// project holds, each seen identical ("Main [OB1]").
+	for _, b := range s.projectBlocks() {
+		res.Blocks = append(res.Blocks, fmt.Sprintf("%s [%s%d]", b.name, b.kind, b.number))
+	}
 	if req.Hardware {
 		res.HardwareVerified = new(bool)
 		res.Warning = "the hardware configuration is not verified: Openness has no online hardware compare, so only the PLC software was compared after loading"
@@ -2298,7 +2311,8 @@ func (f *Fake) save(r *http.Request) (any, *failure) {
 		cpu = &c
 	}
 	f.saved[p] = savedProject{cpu: cpu, others: append([]tiad.KeptDevice(nil), s.others...), protection: s.protection, protectedWith: s.protectedWith,
-		accessControl: s.accessControl, access: s.access.clone(), webServer: s.webServer, webHTTPS: s.webHTTPS}
+		accessControl: s.accessControl, access: s.access.clone(), webServer: s.webServer, webHTTPS: s.webHTTPS,
+		blocks: slices.Clone(s.blocks), groups: maps.Clone(s.groups), obInfo: maps.Clone(s.obInfo)}
 	return map[string]string{"path": p}, nil
 }
 
