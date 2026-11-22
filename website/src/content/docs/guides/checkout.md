@@ -214,7 +214,12 @@ naut checkout verify checkout-<run id>-sealed.json \
 carries, and that the export is the one the payload hashes. With `--chain` it
 also checks the results file's own chain, that the seal is in it where the
 record says, and that the export holds exactly the results the file holds for
-the run. With `--fingerprint` it checks the key is the one you recorded.
+the run. With `--fingerprint` it checks the key is the one you recorded. With
+`--audit` (the controller's audit journal, a `.jsonl` file or its directory, or
+a copy kept off the box) it finds the accepted `checkout.seal` entry that
+carries this record's hash: the journal is a second, hash-chained place the
+seal is written, and a site that copies it off the box (`audit.copy`) has an
+anchor the state directory's owner cannot rewrite.
 
 **What this is, and is not.** It is a tamper-evident record signed by the
 controller: the signature proves the record came from that controller's key and
@@ -224,7 +229,10 @@ personal certificate. It is **not** an electronic signature in a legal or
 regulatory sense, and nothing here claims it satisfies one. Anyone who holds the
 controller's state directory (the results file and the key) can forge both, so
 keep a copy of the sealed record and the results file somewhere else when a run
-is signed off: a copy made elsewhere is what makes an edit show.
+is signed off: a copy made elsewhere is what makes an edit show. The seal's
+hash is also written in the audit journal (the `checkout.seal` entry's `after`),
+so a site that copies the audit journal off the box has an independent anchor
+for `verify --audit`.
 
 ## Not yet
 

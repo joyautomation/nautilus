@@ -184,6 +184,18 @@ func compact(raw []byte) ([]byte, error) {
 	return b.Bytes(), nil
 }
 
+// PayloadSha256 is the SHA-256 of a sealed payload (its compact JSON), as hex:
+// what the seal entry in the results file and the controller's audit entry for
+// the seal both carry, so the three can be matched.
+func PayloadSha256(payload []byte) string {
+	c, err := compact(payload)
+	if err != nil {
+		c = payload
+	}
+	sum := sha256.Sum256(c)
+	return hex.EncodeToString(sum[:])
+}
+
 // SealedPath is where a run's sealed record is kept, beside the results file.
 func (s *Store) SealedPath(run string) string {
 	return filepath.Join(filepath.Dir(s.path), "checkout-sealed-"+FileStem(run)[len("checkout-"):]+".json")

@@ -448,6 +448,20 @@ func (a *checkoutAPI) checkoutTarget(action string) targetFunc {
 			t.after = map[string]any{"reason": req.Reason}
 		case "checkout.seal":
 			t.after = map[string]any{"note": req.Note}
+			// an accepted seal is anchored in the audit journal too: its hash
+			// chain, and a copy of it kept off the box (the audit copy), give a
+			// site a second place the record's hash is written (naut checkout
+			// verify --audit finds it)
+			t.answered = func(body []byte) any {
+				var v sealedView
+				if json.Unmarshal(body, &v) != nil || len(v.Record.Payload) == 0 {
+					return t.after
+				}
+				var pl checkout.SealPayload
+				_ = json.Unmarshal(v.Record.Payload, &pl)
+				return map[string]any{"note": req.Note, "sealSha256": checkout.PayloadSha256(v.Record.Payload), "exportSha256": pl.ExportSha256,
+					"keyFingerprint": v.Fingerprint, "prevSeq": pl.PrevSeq}
+			}
 		case "checkout.release":
 			a.co.ck.mu.Lock()
 			if f := a.co.ck.force; f != nil {

@@ -196,7 +196,7 @@ claims:
       controller's Ed25519 signature, and `naut checkout verify` fails on an
       edited result, payload, signature or key, and with the controller's
       results file on an edited or removed line, a removed seal entry, or another
-      controller's file; it says plainly that this is not an electronic
+      controller's file; the seal's hash is also written in the audit journal, and `verify --audit` finds it there; it says plainly that this is not an electronic
       signature in a legal or regulatory sense and that the person's identity is
       the controller's sign-in.
     source: "#signing-off"
@@ -204,3 +204,4 @@ claims:
       - go ./checkout TestVerifyCatchesTampering
       - go ./checkout TestTheSigningKey
       - go ./cmd/naut TestCheckoutVerifyCommand
+      - go ./server TestEveryWritePathJournalsExactlyOneEntry

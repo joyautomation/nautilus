@@ -99,6 +99,29 @@ func TestCheckoutVerifyCommand(t *testing.T) {
 	if code := checkoutMain([]string{"verify", "--chain", chain, rec}, &out, &errb); code != 0 || !strings.Contains(out.String(), "not checked: that this key is the controller's") {
 		t.Errorf("no fingerprint: %d %s", code, out.String())
 	}
+	// --audit: the journal's seal entry carries this record's hash
+	sha, _ := sealedPayloadSha(mustReadFile(t, rec))
+	aud := filepath.Join(dir, "audit-20261122.jsonl")
+	os.WriteFile(aud, []byte(`{"id":"01X","seq":1,"action":"tag.write","result":"ok","user":"anonymous"}
+{"id":"01SEAL","seq":7,"ts":"2026-11-22T10:00:00Z","user":"user:bob","action":"checkout.seal","result":"ok","after":{"sealSha256":"`+sha+`"}}
+`), 0o600)
+	out.Reset()
+	if code := checkoutMain([]string{"verify", rec, "--audit", aud}, &out, &errb); code != 0 || !strings.Contains(out.String(), "matches the controller's audit entry 01SEAL (seq 7, user:bob") {
+		t.Errorf("--audit: %d %s", code, out.String())
+	}
+	out.Reset()
+	if code := checkoutMain([]string{"verify", rec, "--audit", dir}, &out, &errb); code != 0 || !strings.Contains(out.String(), "01SEAL") {
+		t.Errorf("--audit with a directory: %d %s", code, out.String())
+	}
+	// a refused seal, another record's hash, or an older copy: not a match
+	os.WriteFile(aud, []byte(`{"id":"01R","action":"checkout.seal","result":"refused","after":{"sealSha256":"`+sha+`"}}
+{"id":"01O","action":"checkout.seal","result":"ok","after":{"sealSha256":"deadbeef"}}
+`), 0o600)
+	out.Reset()
+	errb.Reset()
+	if code := checkoutMain([]string{"verify", rec, "--audit", aud}, &out, &errb); code != 1 || !strings.Contains(errb.String(), "no accepted checkout.seal entry") {
+		t.Errorf("--audit without the entry: %d %s%s", code, out.String(), errb.String())
+	}
 	// failures
 	for name, args := range map[string][]string{
 		"another fingerprint": {"verify", rec, "--fingerprint", "00000000-00000000-00000000-00000000"},
@@ -119,4 +142,13 @@ func TestCheckoutVerifyCommand(t *testing.T) {
 	if code := checkoutMain([]string{"verify", edited}, &out, &errb); code != 1 || !strings.Contains(errb.String(), "FAILED") {
 		t.Errorf("an edited record: %d %s%s", code, out.String(), errb.String())
 	}
+}
+
+func mustReadFile(t *testing.T, p string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }
