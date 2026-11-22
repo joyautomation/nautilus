@@ -875,18 +875,21 @@ func (l *AlarmLog) adoptPending() {
 	// The node is asked before mu is taken, never under it: the node
 	// applies commits (Apply, which takes mu) under its own lock (#1198
 	// review: the inverse order froze the log, then the scan).
-	caughtUp := l.node == nil || (l.node.Synced() && l.node.Commit() >= l.node.LastSeq())
+	caughtUp := func() bool { return l.node == nil || (l.node.Synced() && l.node.Commit() >= l.node.LastSeq()) }
+	var up bool
 	if mutServer("adopt_under_mu") {
 		l.mu.Lock()
-		caughtUp = l.node == nil || (l.node.Synced() && l.node.Commit() >= l.node.LastSeq())
+		up = caughtUp()
 		l.mu.Unlock()
+	} else {
+		up = caughtUp()
 	}
 	l.mu.Lock()
 	if len(l.adopt) == 0 {
 		l.mu.Unlock()
 		return
 	}
-	if !caughtUp {
+	if !up {
 		l.mu.Unlock()
 		return // entries may still come that end the acked occurrence
 	}
