@@ -75,6 +75,9 @@ Flags:
                  90d for stale, which needs to see when alarms began)
   -site, -priority   only these alarms
   -top N         how many alarms bad-actors names (default 10)
+  -suggest       chatter only: for each chattering alarm the smallest longer
+                 on-/off-delay that would have stopped it; -project DIR gives
+                 the current delays (shelved/suppressed spans are left out)
   -o table|json
 
 The range runs from -from up to, not including, -to. An alarm is counted
@@ -280,6 +283,9 @@ func alarmsReport(args []string, now time.Time, stdout, stderr io.Writer) int {
 	site := fs.String("site", "", "only alarms at these sites (comma-separated)")
 	priority := fs.String("priority", "", "only alarms at these priorities (comma-separated)")
 	topN := fs.Int("top", rationalize.BadActorTop, "how many alarms bad-actors names")
+	suggest := fs.Bool("suggest", false, "chatter only: for each chattering alarm, the smallest longer on-/off-delay that would have stopped it")
+	projDir := fs.String("project", "", "with -suggest: the project whose alarm delays are the current ones (default: none set)")
+	projManifest := fs.String("m", "", manifestFlagUsage)
 	format := fs.String("o", "table", "table or json")
 	pos, err := parseInterspersed(fs, args[1:])
 	if errors.Is(err, flag.ErrHelp) {
@@ -300,6 +306,9 @@ func alarmsReport(args []string, now time.Time, stdout, stderr io.Writer) int {
 	}
 	if *format != "table" && *format != "json" {
 		return fail(fmt.Errorf("-o %q: want table or json", *format))
+	}
+	if *suggest && kind != "chatter" {
+		return fail(errors.New("-suggest is for the chatter report"))
 	}
 	if *topN < 1 {
 		return fail(fmt.Errorf("-top %d: want 1 or more", *topN))
@@ -331,8 +340,12 @@ func alarmsReport(args []string, now time.Time, stdout, stderr io.Writer) int {
 	// journalled as active again, must be recognised as the same
 	// occurrence and not counted as new; and a stale alarm's age runs
 	// from its first activation, not from the restart.
+	kinds := reportKinds
+	if *suggest {
+		kinds = append(append([]string{}, reportKinds...), suggestKinds...)
+	}
 	filter := alarm.Filter{Sites: splitList(*site), Priorities: splitList(*priority),
-		Kinds: reportKinds}
+		Kinds: kinds}
 	readFrom := from.Add(-leadIn)
 	var events []alarm.Event // readFrom .. to, oldest first
 	read := reportRead{From: from, To: to}
@@ -380,7 +393,21 @@ func alarmsReport(args []string, now time.Time, stdout, stderr io.Writer) int {
 	case "flood":
 		rep = rationalize.Floods(acts, from, to, rationalize.FloodWindow, rationalize.FloodThreshold)
 	case "chatter":
-		rep = rationalize.Chattering(acts, rationalize.ChatterWindow, rationalize.ChatterCount)
+		ch := rationalize.Chattering(acts, rationalize.ChatterWindow, rationalize.ChatterCount)
+		rep = ch
+		if *suggest {
+			cur := map[string]rationalize.Delays{}
+			if *projDir != "" {
+				defs, err := loadAlarmDefs(*projDir, *projManifest)
+				if err != nil {
+					return fail(err)
+				}
+				for _, d := range defs {
+					cur[d.ID] = rationalize.Delays{On: d.OnDelay, Off: d.OffDelay}
+				}
+			}
+			rep = chatterSuggestions{Chattering: ch, Suggestions: suggestAll(ch, inRange, cur), Known: *projDir != ""}
+		}
 	case "bad-actors":
 		rep = struct {
 			Activations int                    `json:"activations"`
@@ -408,6 +435,9 @@ func alarmsReport(args []string, now time.Time, stdout, stderr io.Writer) int {
 		printFloods(stdout, r)
 	case []rationalize.Chatter:
 		printChatter(stdout, r)
+	case chatterSuggestions:
+		printChatter(stdout, r.Chattering)
+		printSuggestions(stdout, r)
 	case []rationalize.Stale:
 		printStale(stdout, r, to)
 	default:
@@ -453,6 +483,51 @@ func parseSince(s string) (time.Duration, error) {
 		return 0, fmt.Errorf("%q: want e.g. 7d or 12h", s)
 	}
 	return d, nil
+}
+
+// suggestKinds are the rows a delay suggestion reads besides the
+// activations: the spans it leaves out and where the last tuning was.
+var suggestKinds = []string{alarm.KindShelve, alarm.KindUnshelve, alarm.KindUnsuppress, rationalize.KindTuned}
+
+// chatterSuggestions is the chatter report with a delay suggestion for each
+// alarm that has one.
+type chatterSuggestions struct {
+	Chattering  []rationalize.Chatter    `json:"chattering"`
+	Suggestions []rationalize.Suggestion `json:"suggestions"`
+	// Known is whether the current delays came from the project; false
+	// means every alarm was taken to have none.
+	Known bool `json:"currentDelaysKnown"`
+}
+
+// suggestAll is a suggestion for each chattering alarm that has one, in the
+// report's order.
+func suggestAll(ch []rationalize.Chatter, events []alarm.Event, cur map[string]rationalize.Delays) []rationalize.Suggestion {
+	byID := map[string][]alarm.Event{}
+	for _, e := range events {
+		byID[e.ID] = append(byID[e.ID], e)
+	}
+	out := []rationalize.Suggestion{}
+	for _, c := range ch {
+		if s, ok := rationalize.Suggest(byID[c.ID], cur[c.ID], rationalize.ChatterWindow, rationalize.ChatterCount); ok {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func printSuggestions(w io.Writer, r chatterSuggestions) {
+	fmt.Fprintln(w)
+	if len(r.Suggestions) == 0 {
+		fmt.Fprintln(w, "no suggestion: either no longer delay on the ladder would have stopped these (look at the signal), or the history since the last tuning no longer chatters")
+		return
+	}
+	for _, s := range r.Suggestions {
+		fmt.Fprintf(w, "%s: %s\n", s.ID, s.Why)
+	}
+	fmt.Fprintln(w, "\nOnly longer delays can be judged: bounces the current delays already filter are not in the journal.")
+	if !r.Known {
+		fmt.Fprintln(w, "No -project given: every alarm was taken to run with no on- or off-delay.")
+	}
 }
 
 // reportKinds are the journal rows the reports read: what starts an
