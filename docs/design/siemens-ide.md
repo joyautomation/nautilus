@@ -94,6 +94,7 @@ Native LAD (SimaticML FlgNet) is D3.
 | SR RS | Written inline as set/reset logic on a static, since they are believed to be LAD/FBD boxes that SCL cannot call *(verify)* |
 | Elementary types, arrays, structs | Direct. DT becomes one of DT, LDT or DTL, chosen and documented *(verify each on FW 3.1)* |
 | `VAR RETAIN` | Retentive members *(verify the SCL source syntax for per-member retain)* |
+| `dialect: siemens` (reserved) | Siemens-semantics blocks, only where no IEC form exists |
 
 **The block prefix (#789).** `target.siemens.block-prefix` (default
 `naut_`) is put in front of every block, DB and tag table the writer
@@ -106,7 +107,6 @@ customer's blocks on adoption (§2a). The Web API symbols follow
 tags DB by default. The prefix must be an SCL identifier start (letters,
 digits and `_`, not beginning with a digit). An empty prefix is refused by
 `naut check` for now; leaving it out gives the default.
-| `dialect: siemens` (reserved) | Siemens-semantics blocks, only where no IEC form exists |
 
 The rules:
 

@@ -43,7 +43,7 @@ import (
 
 // Root is one place in the CPU to bind tags from.
 type Root struct {
-	// DB is the data block's name, unquoted: "Tags", "Main_DB".
+	// DB is the data block's name, unquoted: "naut_Tags", "naut_Main_DB".
 	DB string
 	// Prefix is the nautilus scope its members appear under: "" for the
 	// global tags DB, "Main" for the instance DB of program Main.
@@ -57,7 +57,7 @@ type Options struct {
 	Client *webapi.Client
 	// Host names the CPU in the driver status; it is not dialled here.
 	Host string
-	// Roots are browsed for tags. Default: the global DB "Tags".
+	// Roots are browsed for tags. Default: the global DB "naut_Tags".
 	Roots []Root
 	// Poll is the poll period. Default 250 ms.
 	Poll   time.Duration
@@ -69,7 +69,7 @@ type Options struct {
 // Binding is one nautilus tag bound to a CPU symbol.
 type Binding struct {
 	Name   string // nautilus name: "Level", "Main.count", "Main.dwell.Q"
-	Symbol string // Web API symbol: "\"Tags\".Level"
+	Symbol string // Web API symbol: "\"naut_Tags\".Level"
 	Type   string // IEC type: BOOL, INT, REAL, …
 }
 
