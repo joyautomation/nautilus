@@ -13,6 +13,11 @@
       "minLength": 1,
       "description": "The controller's name. Defaults to \"nautilus\"; also the default Sparkplug edge-node id and the default output name for `naut build`."
     },
+    "plant": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The plant model file (plant.yaml): areas, equipment (a declared tag or a devices: row each, with an asset type) and the flows between them, with asset types in asset-types/*.asset.yaml beside it. Mimics and scenes name a piece of equipment with `plant:`; `naut hmi build` writes an asset page for each. Absent, nothing changes. See docs/design/plant-model.md."
+    },
     "dialect": {
       "type": "string",
       "enum": ["nautilus", "logix", "siemens", "codesys"],

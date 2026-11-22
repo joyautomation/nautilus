@@ -135,6 +135,11 @@ func rules(u universe) []rule {
 			why:  "the device profile format is a published language: the manifest, virtual devices and the CLI read it, and it reads none of them",
 		},
 		{
+			from: []string{"internal/plant"},
+			to:   u.allBut(),
+			why:  "the plant model is a published language like the profile format: the manifest, the HMI build and the CLI read it, and it reads none of them (a row's tag or device is resolved by the manifest)",
+		},
+		{
 			from: []string{"iolink/iodd"},
 			to:   u.allBut(),
 			why:  "the IODD model and process data codec are a published language like the profile format: the device library, the IO-Link adapter and the CLI read it, and it reads none of them",

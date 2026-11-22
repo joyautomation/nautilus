@@ -408,3 +408,21 @@ func TestCheckMimicsRoutedPipes(t *testing.T) {
 		t.Errorf("%d errors, want 4:\n%s", len(errs), all)
 	}
 }
+
+// A mimic's equipment may name its piece of the plant model (#714).
+func TestMimicEquipmentMayNameItsPlant(t *testing.T) {
+	file := func(s string) *fstest.MapFile { return &fstest.MapFile{Data: []byte(s)} }
+	fsys := fstest.MapFS{
+		"nautilus.yaml": file("name: p\ntasks:\n  - program: main.st\n    scan: 100ms\n"),
+		"main.st":       file("PROGRAM main\nEND_PROGRAM\n"),
+		"a.mimic.json":  file(`{"equipment":[{"id":"P1","component":"Pump","x":0,"y":0,"plant":"Pump1"}]}`),
+	}
+	p, err := Load(fsys, ManifestName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, errs, warns := p.CheckMimics(fsys, true)
+	if all := strings.Join(append(errs, warns...), "\n"); strings.Contains(all, "plant") {
+		t.Errorf("plant is an equipment key: %s", all)
+	}
+}

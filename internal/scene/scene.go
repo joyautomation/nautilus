@@ -363,10 +363,13 @@ type Grid struct {
 }
 
 type Node struct {
-	ID    string            `json:"id"`
-	Kind  string            `json:"kind"`
-	Tag   string            `json:"tag,omitempty"`
-	Label string            `json:"label,omitempty"`
+	ID    string `json:"id"`
+	Kind  string `json:"kind"`
+	Tag   string `json:"tag,omitempty"`
+	Label string `json:"label,omitempty"`
+	// Plant is the plant model equipment this node draws (plant.yaml): the
+	// node keeps the layout, the plant keeps the identity.
+	Plant string            `json:"plant,omitempty"`
 	Pos   Vec               `json:"pos"`
 	Rot   Vec               `json:"rot,omitempty"`
 	Scale float64           `json:"scale,omitempty"`

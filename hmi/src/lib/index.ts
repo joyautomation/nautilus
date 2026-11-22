@@ -388,6 +388,7 @@ export {
 	assetTags,
 	assetAlarms,
 	assetSlug,
+	assetGroups,
 	indexAssets,
 	assetFromEquipment,
 	trendTags,
