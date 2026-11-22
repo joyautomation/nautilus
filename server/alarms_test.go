@@ -142,6 +142,13 @@ func TestAlarmsListSuppressedOnRequest(t *testing.T) {
 	if len(got) != 1 || got[0].ID != "HiTemp" || got[0].State != alarm.Suppressed {
 		t.Fatalf("with ?suppressed=1: %+v", got)
 	}
+	var all alarmsResponse
+	if err := json.Unmarshal(do(t, srv, "GET", "/api/alarms?suppressed=1", "").Body.Bytes(), &all); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(all.Equipment, ",") != "HiTempAlm,LoFlowAlm" {
+		t.Errorf("equipment %v: every piece of equipment, quiet ones too, so one can be taken out before maintenance", all.Equipment)
+	}
 	if r := got[0]; r.Suppression != alarm.SuppressOutOfService || !strings.Contains(r.Reason, "probe swap") || r.SuppressedBy != "alice" || r.SuppressUntilMs == 0 {
 		t.Errorf("record %+v lacks the kind, why, who or until", r)
 	}

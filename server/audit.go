@@ -1150,6 +1150,11 @@ func ackTarget(_ *http.Request, body []byte) auditTarget {
 			if json.Unmarshal(body, &a) != nil {
 				return nil
 			}
+			if len(a.Skipped) > 0 {
+				// An area-limited acknowledge-all: what was acknowledged,
+				// and what was left alone and why.
+				return map[string]any{"acked": a.IDs, "skipped": a.Skipped, "why": capText(a.SkippedWhy, 200)}
+			}
 			return a.IDs
 		}
 	}

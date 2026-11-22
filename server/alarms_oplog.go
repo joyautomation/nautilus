@@ -1086,10 +1086,17 @@ func (s *Server) refuseAlarmWithoutMajority(w http.ResponseWriter) bool {
 // link is the ack link's ID when the ack is made by one (#715, acklink.go):
 // the entry carries it, and every replica refuses a second ack naming it.
 func (s *Server) alarmAckThroughLog(w http.ResponseWriter, r *http.Request, ids []string, occ map[string]string, by, link string) {
+	s.alarmAckThroughLogAs(w, r, ids, occ, by, link, ids == nil, nil, "")
+}
+
+// alarmAckThroughLogAs is alarmAckThroughLog where all says the request was
+// an acknowledge-all (so nothing to acknowledge is not a refusal), also when
+// ids lists only the alarms the person may acknowledge; skipped and why are
+// what an area-limited acknowledge-all left alone, for the answer.
+func (s *Server) alarmAckThroughLogAs(w http.ResponseWriter, r *http.Request, ids []string, occ map[string]string, by, link string, all bool, skipped []string, why string) {
 	if s.refuseAlarmBeforeRestore(w) {
 		return
 	}
-	all := ids == nil
 	// One read of the leader's engine: which alarms the ack changes, and
 	// the occurrence each is on, so the entry binds the ack to it.
 	targets, err := s.alarms.AckTargets(ids, occ)
@@ -1106,7 +1113,7 @@ func (s *Server) alarmAckThroughLog(w http.ResponseWriter, r *http.Request, ids 
 		}
 	}
 	if all && len(ids) == 0 {
-		writeJSON(w, http.StatusOK, ackAnswer{IDs: []string{}})
+		writeJSON(w, http.StatusOK, ackAnswer{IDs: []string{}, Skipped: skipped, SkippedWhy: why})
 		return
 	}
 	if len(ids) == 0 {
@@ -1132,7 +1139,7 @@ func (s *Server) alarmAckThroughLog(w http.ResponseWriter, r *http.Request, ids 
 		unknownOutcome(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, ackAnswer{Acked: n, IDs: ids})
+	writeJSON(w, http.StatusOK, ackAnswer{Acked: n, IDs: ids, Skipped: skipped, SkippedWhy: why})
 }
 
 // shelveThroughLog proposes a shelve, or an unshelve when until is zero.

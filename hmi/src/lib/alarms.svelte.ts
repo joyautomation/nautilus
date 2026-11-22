@@ -228,6 +228,8 @@ export interface AlarmJournalResult {
 
 interface AlarmsGetResponse {
 	ts: number;
+	/** Every piece of equipment, quiet ones too (with ?suppressed=1). */
+	equipment?: string[];
 	summary: AlarmSummary;
 	alarms: AlarmInstance[];
 }
@@ -294,6 +296,8 @@ export class AlarmClient {
 	supported = $state(true);
 	/** Equipment out of service, the soonest to end first (`GET /api/alarms/out-of-service`). */
 	outOfService = $state<OutOfService[]>([]);
+	/** Every piece of equipment the alarms belong to, quiet ones too: what can be taken out of service. */
+	equipment = $state<string[]>([]);
 	/** True while a fetch of the full list is in flight. */
 	loading = $state(false);
 	/** Last fetch/ack/shelve error message, if any. Cleared on the next
@@ -351,6 +355,7 @@ export class AlarmClient {
 			}
 			const body = (await res.json()) as AlarmsGetResponse;
 			this.instances = body.alarms ?? [];
+			this.equipment = body.equipment ?? [];
 			this.summary = body.summary ?? this.summary;
 			this.supported = true;
 			this.error = null;

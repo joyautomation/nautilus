@@ -171,17 +171,20 @@
 
 	function toggleOne(id: string, ev: Event) {
 		ev.stopPropagation();
+		if (alarms.find((a) => a.id === id)?.state === 'suppressed') return;
 		const next = new Set(selected);
 		if (next.has(id)) next.delete(id);
 		else next.add(id);
 		selected = next;
 	}
 
-	const pageAllSelected = $derived(pageRows.length > 0 && pageRows.every((r) => selected.has(r.id)));
+	// A suppressed alarm is answered by returning its equipment to service, not by ack or shelve.
+	const pickable = $derived(pageRows.filter((r) => r.state !== 'suppressed'));
+	const pageAllSelected = $derived(pickable.length > 0 && pickable.every((r) => selected.has(r.id)));
 	function togglePage() {
 		const next = new Set(selected);
-		if (pageAllSelected) for (const r of pageRows) next.delete(r.id);
-		else for (const r of pageRows) next.add(r.id);
+		if (pageAllSelected) for (const r of pickable) next.delete(r.id);
+		else for (const r of pickable) next.add(r.id);
 		selected = next;
 	}
 
@@ -385,7 +388,7 @@
 							: undefined}
 					>
 						<td class="sel" onclick={(e) => toggleOne(a.id, e)}>
-							<input type="checkbox" checked={selected.has(a.id)} onclick={(e) => toggleOne(a.id, e)} />
+							<input type="checkbox" checked={selected.has(a.id)} disabled={a.state === 'suppressed'} onclick={(e) => toggleOne(a.id, e)} />
 						</td>
 						<td class="col-priority">
 							<span class="prio" style="--c: {PRIORITY_META[a.priority].color}" title={PRIORITY_META[a.priority].label}>

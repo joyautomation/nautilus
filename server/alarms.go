@@ -32,12 +32,14 @@ import (
 	"errors"
 	"net/http"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/joyautomation/nautilus/alarm"
 	"github.com/joyautomation/nautilus/auth"
+	"github.com/joyautomation/nautilus/lang/ir"
 )
 
 // noAlarms is the 404 body. It names the manifest key, because "404" on a
@@ -59,6 +61,10 @@ type alarmsResponse struct {
 	TS      int64          `json:"ts"`
 	Summary alarm.Summary  `json:"summary"`
 	Alarms  []alarm.Record `json:"alarms"`
+	// Equipment, with ?suppressed=1, names every piece of equipment the
+	// alarms belong to (not the controller's own), so an HMI can offer to
+	// take one out of service while all its alarms are quiet.
+	Equipment []string `json:"equipment,omitempty"`
 }
 
 func (s *Server) handleAlarms(w http.ResponseWriter, r *http.Request) {
@@ -72,17 +78,31 @@ func (s *Server) handleAlarms(w http.ResponseWriter, r *http.Request) {
 	// ?suppressed=1 adds the alarms that are suppressed, each with its kind,
 	// reason, who and until, so an HMI can show what is hidden and why
 	// (out of service, #715). Without it the list is as it always was.
+	var equipment []string
 	if r.URL.Query().Get("suppressed") == "1" {
+		// One snapshot of every alarm, so none is listed twice when its
+		// state changes between two reads.
+		listed := map[string]bool{}
+		for _, rec := range list {
+			listed[rec.ID] = true
+		}
+		seen := map[string]bool{}
 		for _, rec := range s.alarms.Records() {
-			if rec.State == alarm.Suppressed {
+			if rec.State == alarm.Suppressed && !listed[rec.ID] {
 				list = append(list, rec)
 			}
+			if k := ir.NameKey(rec.Equipment); rec.Equipment != "" && !seen[k] && !strings.HasPrefix(rec.Tag, "__nautilus.") && !strings.HasPrefix(rec.ID, "nautilus.") {
+				seen[k] = true
+				equipment = append(equipment, rec.Equipment)
+			}
 		}
+		sort.Strings(equipment)
 	}
 	writeJSON(w, http.StatusOK, alarmsResponse{
-		TS:      time.Now().UnixMilli(),
-		Summary: s.alarms.Summary(),
-		Alarms:  list,
+		TS:        time.Now().UnixMilli(),
+		Summary:   s.alarms.Summary(),
+		Alarms:    list,
+		Equipment: equipment,
 	})
 }
 
@@ -272,6 +292,11 @@ func (r ackRequest) everything() bool {
 type ackAnswer struct {
 	Acked int      `json:"acked"`
 	IDs   []string `json:"ids"`
+	// Skipped names the unacknowledged alarms an acknowledge-all left alone
+	// because the person may not acknowledge them (another area's), and
+	// SkippedWhy says why in one line. Empty when nothing was skipped.
+	Skipped    []string `json:"skipped,omitempty"`
+	SkippedWhy string   `json:"skippedWhy,omitempty"`
 }
 
 func (s *Server) handleAlarmAck(w http.ResponseWriter, r *http.Request) {
@@ -290,11 +315,33 @@ func (s *Server) handleAlarmAck(w http.ResponseWriter, r *http.Request) {
 	ids := req.IDs
 	// The HMI's Ack All sends ids ["*"]: the same request as {"all": true},
 	// needing ack on the whole controller, not on an alarm named "*".
+	var skipped []string
+	scoped := false
+	var skippedWhy string
 	if req.everything() {
 		ids = nil // nil means everything, per Engine.Ack
 		if code, msg := s.authorize(r, PermAck, auth.All); code != 0 {
-			http.Error(w, msg, code)
-			return
+			// Not allowed on the whole controller. A person who may ack
+			// some areas acks the alarms of those and no others (Ack All
+			// is not refused outright); one who may ack none is refused.
+			if code != http.StatusForbidden {
+				http.Error(w, msg, code)
+				return
+			}
+			var may []string
+			for _, rec := range s.alarms.Records() {
+				if c, why := s.authorize(r, PermAck, rec.Tag); c == 0 {
+					may = append(may, rec.ID)
+				} else if rec.State == alarm.UnackActive || rec.State == alarm.UnackRTN {
+					skipped = append(skipped, rec.ID)
+					skippedWhy = why
+				}
+			}
+			if len(may) == 0 {
+				http.Error(w, msg, code)
+				return
+			}
+			ids, scoped = may, true
 		}
 	} else if len(ids) == 0 {
 		http.Error(w, `ack needs "ids" or "all": true — an empty ids list would silently ack nothing`,
@@ -307,8 +354,13 @@ func (s *Server) handleAlarmAck(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if scoped {
+		// Every alarm named is one the person may ack; the occurrences a
+		// client named are for the explicit form, not this one.
+		req.Occurrences = nil
+	}
 	if s.alarmLog != nil {
-		s.alarmAckThroughLog(w, r, ids, req.Occurrences, s.recordBy(r, req.By), "")
+		s.alarmAckThroughLogAs(w, r, ids, req.Occurrences, s.recordBy(r, req.By), "", scoped, skipped, skippedWhy)
 		return
 	}
 	acked, err := s.alarms.AckIDsAt(ids, req.Occurrences, s.recordBy(r, req.By))
@@ -316,7 +368,7 @@ func (s *Server) handleAlarmAck(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), alarmErrStatus(err))
 		return
 	}
-	writeJSON(w, http.StatusOK, ackAnswer{Acked: len(acked), IDs: acked})
+	writeJSON(w, http.StatusOK, ackAnswer{Acked: len(acked), IDs: acked, Skipped: skipped, SkippedWhy: skippedWhy})
 }
 
 // shelveRequest is POST /api/alarms/shelve. Until is an RFC3339 timestamp

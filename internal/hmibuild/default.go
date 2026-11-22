@@ -419,6 +419,7 @@ const defaultAlarms = `<script>
 		/>
 		<OutOfServicePanel
 			alarms={alarms.instances}
+			equipmentList={alarms.equipment}
 			windows={alarms.outOfService}
 			{now}
 			ontake={(equipment, seconds, reason, by) => alarms.takeOutOfService(equipment, seconds, reason, by)}

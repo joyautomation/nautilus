@@ -21,6 +21,7 @@
 
 	let {
 		alarms,
+		equipmentList = undefined,
 		windows,
 		now = Date.now(),
 		ontake,
@@ -29,6 +30,8 @@
 	}: {
 		/** The instance list: the equipment to choose from comes from it. */
 		alarms: AlarmInstance[];
+		/** `alarmClient.equipment`: every piece of equipment, quiet ones too. Defaults to the alarms' own. */
+		equipmentList?: string[];
 		/** `alarmClient.outOfService`. */
 		windows: OutOfService[];
 		now?: number;
@@ -38,7 +41,7 @@
 		operator?: string;
 	} = $props();
 
-	const choices = $derived(equipmentChoices(alarms));
+	const choices = $derived(equipmentList?.length ? equipmentList : equipmentChoices(alarms));
 	const rows = $derived(soonestFirst(windows));
 	const free = $derived(choices.filter((e) => !rows.some((w) => w.equipment.toLowerCase() === e.toLowerCase())));
 	const by = (typed: string) => recordedAs(currentAuth()?.user).by(typed || getOperator() || operator);
