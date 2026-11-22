@@ -436,12 +436,15 @@ export function replaceState(url, state) { history.replaceState(state, '', url);
 
 // html is the app's index.html: its own src/app.html with SvelteKit's
 // placeholders filled, or naut's.
-func (a *appSource) html(css bool) string {
+func (a *appSource) html(css bool, extraHead string) string {
 	head := `<meta name="nx-base" content="">`
 	if css {
 		head += "\n\t\t" + `<link rel="stylesheet" href="/app.css">`
 	}
 	head += "\n\t\t" + `<script type="module" src="/app.js"></script>`
+	if extraHead != "" {
+		head += "\n\t\t" + extraHead
+	}
 	body := `<div id="nx-app" style="display: contents"></div>`
 	page := a.appHTML
 	if page == "" {

@@ -19,6 +19,7 @@ import (
 	"path"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -56,6 +57,11 @@ type Manifest struct {
 	// "codesys" are reserved.
 	Dialect string       `yaml:"dialect"`
 	Server  ServerConfig `yaml:"server"`
+	// PWA names and themes the installed HMI (#722); every field is
+	// optional, and an HMI is installable without the section.
+	PWA *PWAConfig `yaml:"pwa"`
+	// pwaIcon is PWA.Icon's bytes, read by ReadManifest.
+	pwaIcon []byte
 	Tasks   []TaskConfig `yaml:"tasks"`
 	// TagFiles names files holding additional tags — each a bare YAML
 	// sequence of the same tag entries as Tags. This is how a GENERATED
@@ -1140,6 +1146,12 @@ type Project struct {
 	// the caller builds the default app, a page per mimic.
 	HMIScreens bool
 
+	// PWA and PWAIcon are the manifest's pwa: section and its icon file's
+	// bytes (nil without one); the caller that builds the HMI gives them
+	// to the build.
+	PWA     *PWAConfig
+	PWAIcon []byte
+
 	// Retain/Redundancy carry the manifest's sections for `naut run`
 	// to wire; Load itself constructs nothing — check, build, and the LSP
 	// load projects too, and must not touch a cluster to do it.
@@ -1307,6 +1319,9 @@ func ReadManifest(fsys fs.FS, name string) (*Manifest, error) {
 		}
 		m.devices = set
 	}
+	if err := m.readPWA(fsys); err != nil {
+		return nil, fmt.Errorf("%s: %w", name, err)
+	}
 	if m.Parameters != nil {
 		switch m.Parameters.WriteBack {
 		case "", WriteBackOff, WriteBackPatch, WriteBackCommit:
@@ -1349,6 +1364,49 @@ func (m *Manifest) DeviceSet() *devbind.Set { return m.devices }
 // it has none: what a command serving the project without Load (naut
 // logix serve --project) enforces.
 func (m *Manifest) AuthPolicy() *auth.Policy { return m.authPolicy }
+
+// PWAConfig is the manifest's pwa: section (#722).
+type PWAConfig struct {
+	// Name is the installed app's name; "" is the project's name.
+	Name string `yaml:"name"`
+	// ShortName is the label under the icon; "" is Name.
+	ShortName string `yaml:"short-name"`
+	// ThemeColor is "#rrggbb": the browser chrome and splash color.
+	ThemeColor string `yaml:"theme-color"`
+	// Icon is a square PNG of 512 pixels or more, in the project.
+	Icon string `yaml:"icon"`
+}
+
+var pwaColor = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
+
+// maxPWAIcon bounds the icon file read at load.
+const maxPWAIcon = 4 << 20
+
+func (m *Manifest) readPWA(fsys fs.FS) error {
+	p := m.PWA
+	if p == nil {
+		return nil
+	}
+	if p.ThemeColor != "" && !pwaColor.MatchString(p.ThemeColor) {
+		return fmt.Errorf("pwa.theme-color %q is not a color like \"#0f1419\"", p.ThemeColor)
+	}
+	if p.Icon == "" {
+		return nil
+	}
+	ip, err := projectPath(p.Icon)
+	if err != nil {
+		return fmt.Errorf("pwa.icon: %w", err)
+	}
+	b, err := fs.ReadFile(fsys, ip)
+	if err != nil {
+		return fmt.Errorf("pwa.icon: no %s in the project (a square PNG of 512 pixels or more), or remove pwa.icon to get a drawn one", ip)
+	}
+	if len(b) > maxPWAIcon {
+		return fmt.Errorf("pwa.icon: %s is over %d MB: use a 512 or 1024 pixel PNG", ip, maxPWAIcon>>20)
+	}
+	m.pwaIcon = b
+	return nil
+}
 
 // projectPath keeps a manifest-referenced file inside the project. The
 // deployable artifact is the directory (or the archive built from it), so a
@@ -1700,6 +1758,8 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 		HMIMissing:  hmiMissing,
 		HMIApp:      hmiApp,
 		HMIScreens:  screens,
+		PWA:         m.PWA,
+		PWAIcon:     m.pwaIcon,
 
 		AuthStateDir: m.authStateDir(),
 		AuthOIDC:     m.authOIDC(),

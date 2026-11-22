@@ -45,6 +45,12 @@ func buildHMI(proj *project.Project, dir string) (*hmibuild.Result, error) {
 		return nil, err
 	}
 	opts := hmibuild.Options{Project: abs, Title: proj.Name, Minify: true}
+	if proj.PWA != nil || proj.PWAIcon != nil {
+		opts.PWA = &hmibuild.PWA{Icon: proj.PWAIcon}
+		if c := proj.PWA; c != nil {
+			opts.PWA.Name, opts.PWA.ShortName, opts.PWA.ThemeColor = c.Name, c.ShortName, c.ThemeColor
+		}
+	}
 	if proj.HMIApp != "" {
 		opts.App = filepath.Join(abs, filepath.FromSlash(proj.HMIApp))
 	}

@@ -596,6 +596,17 @@
         }
       }
     },
+    "pwa": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Names and themes the installed HMI (progressive web app). Every field is optional: an HMI naut builds is installable without this section. Installing and the offline shell need HTTPS (or localhost): a controller on plain LAN HTTP cannot be installed from a phone.",
+      "properties": {
+        "name": { "type": "string", "description": "The installed app's name. Default: the project's name." },
+        "short-name": { "type": "string", "description": "The label under the icon (about 12 characters). Default: name." },
+        "theme-color": { "type": "string", "pattern": "^#[0-9a-fA-F]{6}$", "description": "Browser chrome and splash color, \"#rrggbb\". Default: the kit's dark background." },
+        "icon": { "type": "string", "description": "A square PNG of 512 pixels or more, in the project. Default: a drawn icon in the theme color." }
+      }
+    },
     "alarms": {
       "$ref": "#/definitions/alarms"
     },

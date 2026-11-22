@@ -53,6 +53,14 @@ type Options struct {
 	Title string
 	// Minify the output (on for serving; off reads better when debugging).
 	Minify bool
+	// PWA names and themes the installed app (#722). nil still builds an
+	// installable HMI, named by Title; an app with its own
+	// static/manifest.webmanifest or static/sw.js keeps its own.
+	PWA *PWA
+	// NoPWA builds the HMI without the manifest and worker: for a build
+	// that is not served from the root of its own origin (the browser
+	// playground).
+	NoPWA bool
 }
 
 // Result is a built app: its files, by slash path from the app's root.
@@ -385,9 +393,30 @@ func (b *builder) bundle() (*Result, error) {
 	res.Warnings = append(res.Warnings, b.warnings...)
 	sort.Strings(res.Warnings)
 	_, css := res.Files["app.css"]
-	res.Files["index.html"] = []byte(b.app.html(css))
 	if err := b.app.copyStatic(res.Files); err != nil {
 		return nil, err
+	}
+	_, ownManifest := res.Files["manifest.webmanifest"]
+	_, ownWorker := res.Files["sw.js"]
+	installable := !ownManifest && !ownWorker && !b.opts.NoPWA
+	head := ""
+	if installable {
+		theme := DefaultTheme
+		if b.opts.PWA != nil && b.opts.PWA.ThemeColor != "" {
+			theme = strings.ToLower(b.opts.PWA.ThemeColor)
+		}
+		head = pwaHead(theme)
+	}
+	res.Files["index.html"] = []byte(b.app.html(css, head))
+	if installable {
+		title := b.opts.Title
+		if title == "" {
+			title = filepath.Base(b.app.dir)
+		}
+		// after index.html: the worker's version covers it
+		if err := pwaFiles(res.Files, title, b.opts.PWA); err != nil {
+			return nil, err
+		}
 	}
 	return res, nil
 }

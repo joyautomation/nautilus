@@ -297,3 +297,23 @@ func TestHMICachePolicy(t *testing.T) {
 		t.Fatalf("immutable asset Cache-Control = %q", cc)
 	}
 }
+
+// An installable HMI's manifest is served as a web manifest, and its worker
+// and manifest are revalidated on every load (no-cache + ETag), so a
+// redeployed HMI is never held back by a stale worker (#722).
+func TestHMIServesManifestAndWorker(t *testing.T) {
+	hmi := testHMI()
+	hmi["manifest.webmanifest"] = &fstest.MapFile{Data: []byte(`{"name":"x"}`)}
+	hmi["sw.js"] = &fstest.MapFile{Data: []byte("// worker")}
+	h := New(newTestRuntime(t), Options{HMI: hmi}).Handler()
+	for p, ct := range map[string]string{"/manifest.webmanifest": "application/manifest+json", "/sw.js": "javascript"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest("GET", "http://localhost"+p, nil))
+		if rec.Code != 200 || !strings.Contains(rec.Header().Get("Content-Type"), ct) {
+			t.Errorf("GET %s = %d %q, want 200 %s", p, rec.Code, rec.Header().Get("Content-Type"), ct)
+		}
+		if rec.Header().Get("Cache-Control") != "no-cache" || rec.Header().Get("Etag") == "" {
+			t.Errorf("GET %s Cache-Control %q Etag %q: must revalidate", p, rec.Header().Get("Cache-Control"), rec.Header().Get("Etag"))
+		}
+	}
+}

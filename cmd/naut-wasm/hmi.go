@@ -49,7 +49,7 @@ func startHMI(proj *project.Project, root string) *hmiBuild {
 	b := &hmiBuild{done: make(chan struct{}), src: src}
 	go func() {
 		defer close(b.done)
-		opts := hmibuild.Options{Project: root, Title: proj.Name, Minify: true}
+		opts := hmibuild.Options{Project: root, Title: proj.Name, Minify: true, NoPWA: true}
 		if proj.HMIApp != "" {
 			opts.App = path.Join(root, proj.HMIApp)
 		}
