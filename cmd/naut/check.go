@@ -24,6 +24,7 @@ import (
 	"github.com/joyautomation/nautilus/logix/writer"
 	opcuaserver "github.com/joyautomation/nautilus/opcua/server"
 	"github.com/joyautomation/nautilus/runtime"
+	swriter "github.com/joyautomation/nautilus/siemens/writer"
 	"github.com/joyautomation/nautilus/sparkplug"
 	"github.com/joyautomation/nautilus/virtdev"
 )
@@ -38,13 +39,13 @@ func runCheck(args []string) int {
 	fset := flag.NewFlagSet("check", flag.ContinueOnError)
 	manifest := fset.String("m", "", manifestFlagUsage)
 	render := fset.Bool("render", true, "render the operator screen in the browser on this machine (Chrome, Chromium or Edge; NAUT_BROWSER names one) and report a page that throws or is blank, a pipe that draws nothing, a drawing far outside its box, sideways scroll on a phone")
-	target := fset.String("target", "", "also check the sources against a deploy target (experimental): \"logix\" runs the Allen-Bradley writer's rules, so a construct the L5X writer cannot express is a diagnostic here, not a download failure")
+	target := fset.String("target", "", "also check the sources against a deploy target (experimental): \"logix\" runs the Allen-Bradley writer's rules and \"siemens\" the S7-1500 SCL writer's, so a construct the target's writer cannot express is a diagnostic here, not a download failure")
 	if err := fset.Parse(args); err != nil {
 		return 2
 	}
 	renderScreens = *render
-	if *target != "" && *target != "logix" {
-		fmt.Fprintf(os.Stderr, "naut check: unknown target %q (the targets are: logix)\n", *target)
+	if *target != "" && *target != "logix" && *target != "siemens" {
+		fmt.Fprintf(os.Stderr, "naut check: unknown target %q (the targets are: logix, siemens)\n", *target)
 		return 2
 	}
 	paths0 := fset.Args()
@@ -56,14 +57,27 @@ func runCheck(args []string) int {
 	// the keystroke, not on the flag.
 	if *target == "" {
 		if dir, ok := manifestDir(paths0, *manifest); ok {
-			if m, err := project.ReadManifest(os.DirFS(dir), *manifest); err == nil && m.Target != nil && m.Target.Logix != nil {
-				*target = "logix"
+			if m, err := project.ReadManifest(os.DirFS(dir), *manifest); err == nil && m.Target != nil {
+				switch {
+				case m.Target.Logix != nil:
+					*target = "logix"
+				case m.Target.Siemens != nil:
+					*target = "siemens"
+				}
 			}
 		}
 	}
 	paths := fset.Args()
 	if len(paths) == 0 {
 		paths = []string{"."}
+	}
+	// The Siemens writer works on a whole project (its tags DB, its tasks'
+	// OBs), so its rules need the manifest.
+	if *target == "siemens" {
+		if _, ok := manifestDir(paths, *manifest); !ok {
+			fmt.Fprintf(os.Stderr, "naut check: --target siemens checks a project: run it on the directory that holds %s\n", manifestLabel(*manifest))
+			return 2
+		}
 	}
 
 	var files []string
@@ -429,7 +443,7 @@ func runCheck(args []string) int {
 	// (tag-files) and verification landed together.
 	manifestErrs, manifestWarns := 0, 0
 	if bad == 0 {
-		manifestErrs, manifestWarns = checkManifest(paths, *manifest)
+		manifestErrs, manifestWarns = checkManifest(paths, *manifest, *target)
 		bad += manifestErrs
 	}
 	manifestWarns += blankWarns
@@ -472,6 +486,36 @@ func checkLogixTarget(f, source string, libs []string) bool {
 	return len(diags) > 0
 }
 
+// checkSiemensTarget reports every construct the S7-1500 SCL writer
+// (siemens/writer) refuses in the project in dir, in check's gcc-style
+// lines: the writer itself runs, so check and the deploy share one rule
+// table. A diagnostic with no line (a task, a block name) is reported
+// against the manifest. Returns the number of errors.
+func checkSiemensTarget(dir, manifestName, manifestFile string) int {
+	in, err := siemensWriterInput(dir, manifestName)
+	if err != nil {
+		fmt.Printf("%s: siemens target: %s\n", manifestFile, err)
+		return 1
+	}
+	_, diags, err := swriter.Write(in)
+	if err != nil {
+		fmt.Printf("%s: siemens target: %s\n", manifestFile, err)
+		return 1
+	}
+	for _, d := range diags {
+		where := d.Path
+		if where == "" || where == project.ManifestName {
+			where = manifestFile
+		}
+		if d.Line > 0 {
+			fmt.Printf("%s:%d:1: siemens target: %s [%s]\n", where, d.Line, d.Message, d.Rule)
+		} else {
+			fmt.Printf("%s: siemens target: %s [%s]\n", where, d.Message, d.Rule)
+		}
+	}
+	return len(diags)
+}
+
 // checkManifest cross-checks a manifest project's declared tags against the
 // tags its programs actually bind, in both directions. Returns (errors,
 // warnings).
@@ -486,7 +530,7 @@ func checkLogixTarget(f, source string, libs []string) bool {
 //   - the manifest declares a tag no program binds → warning. Often correct
 //     (driver- or HMI-only tags are real), so it cannot be an error — but it
 //     is also what a stale generated tag file looks like.
-func checkManifest(paths []string, manifestName string) (errs, warns int) {
+func checkManifest(paths []string, manifestName, target string) (errs, warns int) {
 	dir, ok := manifestDir(paths, manifestName)
 	if !ok {
 		return 0, 0 // not a manifest project; compiling the files was the whole job
@@ -536,6 +580,11 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 			errs++
 			fmt.Printf("%s: error: %s\n", loc.file, p)
 		}
+	}
+
+	// The Siemens writer's rules, on the project it would write.
+	if target == "siemens" {
+		errs += checkSiemensTarget(dir, manifestName, loc.file)
 	}
 
 	// The first task's name: key is a footgun, not a choice: Load (like
