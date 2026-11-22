@@ -111,6 +111,56 @@ type Entry struct {
 	Lapsed bool `json:"-"`
 }
 
+// NoteEntry is one revision of an operator note (#720). It is data the log
+// carries for the notes package (docs/design/context-map.md §2): the log
+// decides nothing about it. The entry carries it as JSON in Value, the one
+// field every build keeps and replicates verbatim, so a replica from before
+// notes stores and sends the body intact (a new field would be dropped by
+// its typed re-marshal) and indexes the notes when it is upgraded and
+// replays. ID and Rev name the revision; the leader's entry TS is its time;
+// the author is the entry's Principal and By.
+type NoteEntry struct {
+	ID  string `json:"id"`  // the note, chosen by the proposer (random)
+	Rev int    `json:"rev"` // 1 is the note itself, 2... its revisions
+	// Target is what the note is about: Kind is asset, tag, alarm, area or
+	// log; Occurrence and ActiveMs link an alarm note to one occurrence.
+	TargetKind string `json:"tk,omitempty"`
+	TargetID   string `json:"ti,omitempty"`
+	Occurrence string `json:"occ,omitempty"`
+	ActiveMs   int64  `json:"act,omitempty"`
+	// Kind is "note" (the default) or "handover", on revision 1.
+	Kind string `json:"nk,omitempty"`
+	Text string `json:"text"`
+	// Re names the note this one is an addendum to (revision 1 only).
+	Re string `json:"re,omitempty"`
+	// Retract: this revision withdraws the note, Reason says why. The text
+	// of every earlier revision stays.
+	Retract bool   `json:"retract,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+	// Override: a retraction by someone other than the author, which the
+	// proposer checked (a label, like Principal: apply decides nothing
+	// from it).
+	Override bool `json:"override,omitempty"`
+}
+
+// NoteEntryOf is the log entry that carries n, by the person named by.
+func NoteEntryOf(by string, n NoteEntry) Entry {
+	b, _ := json.Marshal(n)
+	return Entry{Kind: KindNote, By: by, Value: b}
+}
+
+// NoteBody is the note a KindNote entry carries. ok is false for another
+// kind and for an entry whose body is missing or is not a note.
+func (e Entry) NoteBody() (n NoteEntry, ok bool) {
+	if e.Kind != KindNote || len(e.Value) == 0 {
+		return NoteEntry{}, false
+	}
+	if json.Unmarshal(e.Value, &n) != nil || n.ID == "" || n.Rev < 1 {
+		return NoteEntry{}, false
+	}
+	return n, true
+}
+
 func (e Entry) same(o Entry) bool {
 	a, _ := json.Marshal(e)
 	b, _ := json.Marshal(o)
@@ -131,6 +181,11 @@ const (
 	KindSubstitute   = "substitute"
 	KindUnsubstitute = "unsubstitute"
 	KindSuback       = "suback"
+
+	// KindNote is an operator note's revision (#720): see NoteEntry. The
+	// log is never compacted, so a copy that was wiped is brought every
+	// note back by catch-up, as it is every acknowledgement.
+	KindNote = "note"
 
 	// KindNoop is a new leader's empty entry of its own term (SyncLeader):
 	// committing it commits everything before it, which is how a leader
@@ -269,6 +324,12 @@ type Options struct {
 	// (Mark.SupersedeTo): what the runtime applied of the old history must
 	// stop at once, leading or not.
 	OnSuperseded func(to Lineage)
+
+	// OnEmptied, when set, is called when this process empties its own log
+	// (Rebind finds the log belongs to another box and moves it aside),
+	// under the node's lock: what was applied from it must be forgotten
+	// in step, before the next entry is applied. It must not call the node.
+	OnEmptied func()
 
 	// ResetInPlace: a replica that hears a higher log history moves its
 	// log aside and starts empty at once, in this process (the witness's
@@ -776,6 +837,9 @@ func (n *Node) Rebind(identity, placeholder string) error {
 		if err := n.setMarkLocked(Mark{Identity: identity}); err != nil {
 			return fmt.Errorf("oplog: the log's mark: %w", err)
 		}
+		if f := n.o.OnEmptied; f != nil {
+			f()
+		}
 		n.log.Warn("oplog: the log belongs to another identity of this replica; kept aside, starting empty and unsynced", "kept", kept, "was", n.mark.Identity, "now", identity)
 	}
 	n.pending = false
@@ -1210,6 +1274,52 @@ func (n *Node) open() (damaged bool, err error) {
 	n.file = f
 	n.applyRange(n.entries, n.commit)
 	return damaged, nil
+}
+
+// ReadCommitted reads a log file without opening a node: the entries it
+// holds that are committed, in order. A tool that reads a stopped
+// controller's log (naut notes export) uses it. A torn final line is
+// ignored; a file that does not parse before its end is an error.
+func ReadCommitted(path string) ([]Entry, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var es []Entry
+	var commit uint64
+	sc := bufio.NewScanner(bytes.NewReader(data))
+	sc.Buffer(make([]byte, 1<<20), 1<<20)
+	good := 0
+	for sc.Scan() {
+		line := sc.Bytes()
+		var l fileLine
+		if err := json.Unmarshal(line, &l); err != nil {
+			if rest := data[good:]; bytes.IndexByte(rest, '\n') >= 0 && len(bytes.TrimSpace(rest[bytes.IndexByte(rest, '\n')+1:])) > 0 {
+				return nil, fmt.Errorf("oplog: %s: unrecognised line %q", path, truncateStr(string(line), 80))
+			}
+			break
+		}
+		good += len(line) + 1
+		switch {
+		case l.E != nil:
+			es = append(es, *l.E)
+		case l.C != nil:
+			commit = *l.C
+		default:
+			var e Entry
+			if err := json.Unmarshal(line, &e); err == nil && e.Seq > 0 {
+				es = append(es, e)
+				commit = e.Seq
+			}
+		}
+	}
+	out := es[:0]
+	for _, e := range es {
+		if e.Seq <= commit {
+			out = append(out, e)
+		}
+	}
+	return out, nil
 }
 
 // Close releases the file.

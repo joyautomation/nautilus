@@ -378,6 +378,25 @@ func TestRebindAPendingReplica(t *testing.T) {
 			t.Fatalf("mark %+v", m)
 		}
 	})
+	t.Run("another box tells whoever applied the old log", func(t *testing.T) {
+		dir := t.TempDir()
+		seed(t, dir)
+		n := open(t, dir, "c/a/box1", true, false)
+		emptied := 0
+		n.o.OnEmptied = func() { emptied++ }
+		if err := n.Rebind("c/a/box2", "c/a/?"); err != nil || emptied != 1 {
+			t.Fatalf("rebind to another box: %v, told %d times", err, emptied)
+		}
+		// the same box, and the placeholder, empty nothing: nobody is told
+		dir2 := t.TempDir()
+		seed(t, dir2)
+		n2 := open(t, dir2, "c/a/box1", true, false)
+		n2.o.OnEmptied = func() { emptied++ }
+		n2.Rebind("c/a/box1", "c/a/?")
+		if emptied != 1 {
+			t.Errorf("a rebind to the same box told %d times", emptied-1)
+		}
+	})
 	t.Run("placeholder", func(t *testing.T) {
 		dir := t.TempDir()
 		n := open(t, dir, "c/a/?", true, true)

@@ -46,6 +46,7 @@ import (
 	"github.com/joyautomation/nautilus/internal/vcs"
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/leader"
+	"github.com/joyautomation/nautilus/notes"
 	opcuaserver "github.com/joyautomation/nautilus/opcua/server"
 	"github.com/joyautomation/nautilus/retain"
 	"github.com/joyautomation/nautilus/runtime"
@@ -372,12 +373,13 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	// election and the scans run.
 	var subLog *server.SubstituteLog
 	var alarmLog *server.AlarmLog
+	var notesLog *server.NotesLog
 	if pair != nil {
 		var eng *alarm.Engine
 		if alarms != nil {
 			eng = alarms.Engine
 		}
-		if subLog, alarmLog, err = pair.startLog(rt, 0, eng); err != nil {
+		if subLog, alarmLog, notesLog, err = pair.startLog(rt, 0, eng); err != nil {
 			fmt.Fprintln(os.Stderr, "naut run: redundancy:", err)
 			return 1
 		}
@@ -530,6 +532,19 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	}
 	if alarmLog != nil {
 		sopts.AlarmLog = alarmLog
+	}
+	// Operator notes (#720): a pair's are an index of its log; alone, a file
+	// in the state directory, when anyone can sign in to write one.
+	switch {
+	case notesLog != nil:
+		sopts.NotesLog = notesLog
+	case proj.Auth != nil && (proj.Auth.HasUsers() || proj.Auth.OIDC()):
+		if ns, err := openNotes(proj, dir, os.Getenv); err != nil {
+			fmt.Fprintf(os.Stderr, "naut run: notes are off: %v\n", err)
+		} else {
+			sopts.Notes = ns
+			defer ns.Close()
+		}
 	}
 	// Program provenance: a built binary decodes the history its archive
 	// carries; a checkout captures live from git. Lazy (first request pays,
@@ -838,6 +853,22 @@ func auditAlarm(srv *atomic.Pointer[server.Server]) project.SystemAlarm {
 // UsersAlarmID is the system alarm raised while the controller's users
 // file cannot be read (#708): no local user can authenticate.
 const UsersAlarmID = "nautilus.users-file"
+
+// openNotes opens the notes file of a controller on its own, in its state
+// directory (#720).
+func openNotes(proj *project.Project, dir string, getenv func(string) string) (*notes.Store, error) {
+	sd, err := controllerStateDir("the operator notes", proj.AuthStateDir, proj.Name, dir, dir != "", getenv)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(sd, 0o700); err != nil {
+		return nil, err
+	}
+	return notes.Open(filepath.Join(sd, NotesFile))
+}
+
+// NotesFile is the name of the notes file in the state directory.
+const NotesFile = "notes.jsonl"
 
 // usersAlarm is the users file's system alarm, read from the server srv
 // will hold.
