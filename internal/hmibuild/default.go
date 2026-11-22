@@ -169,6 +169,9 @@ func defaultApp(project, title string, extra []json.RawMessage) (*appSource, err
 		// session without the config permission (the controller refuses the
 		// rest in any case).
 		{"configuration", "Configuration", defaultConfiguration, "config"},
+		// the audit journal, for whoever may read it (who acknowledged what,
+		// by link or by hand, who wrote which tag)
+		{"audit", "Audit", defaultAudit, "audit"},
 		{"alarms", "", defaultAlarms, ""},
 	} {
 		if takenSlug[pg.slug] {
@@ -455,6 +458,33 @@ const defaultConfiguration = `<script>
 
 <style>
 	.nx-page { max-width: 1100px; margin: 0 auto; display: grid; gap: 16px; }
+	section { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius, 10px); padding: 16px; }
+	h2 { font-size: 0.78rem; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); margin: 0 0 0.7rem; }
+	p { color: var(--muted); margin: 0; }
+</style>
+`
+
+// defaultAudit is the audit journal (#709) as a page: the engineer's and the
+// administrator's, hidden from a session without the audit permission.
+const defaultAudit = `<script>
+	import { AuditTable, currentAuth } from '@joyautomation/nautilus-hmi';
+	const auth = $derived(currentAuth());
+	const allowed = $derived(!auth || auth.holds('audit'));
+</script>
+
+<div class="nx-page">
+	<section>
+		<h2>Audit</h2>
+		{#if allowed}
+			<AuditTable />
+		{:else}
+			<p>This page needs the audit permission. Sign in as an engineer.</p>
+		{/if}
+	</section>
+</div>
+
+<style>
+	.nx-page { max-width: 1400px; margin: 0 auto; display: grid; gap: 16px; }
 	section { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius, 10px); padding: 16px; }
 	h2 { font-size: 0.78rem; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); margin: 0 0 0.7rem; }
 	p { color: var(--muted); margin: 0; }
