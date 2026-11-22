@@ -1,6 +1,7 @@
 package tiadtest
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -83,13 +84,25 @@ func benchSecrets(configurationPassword string) map[string]any {
 func contractPasswords(t *testing.T, start Starter) {
 	a, s := compiledBench(t, start)
 	c := a.Client()
+	// One project at a time: each case's project is closed before the
+	// next, and the bench one is made again after.
+	closeFirst(t, s)
 	for i, pc := range PasswordCases {
 		name := "pw" + string(rune('a'+i))
 		status, b := rawJSON(t, c, "POST", "/v1/projects", map[string]any{"name": name,
 			"station": protectedStation(tiad.ProtectPassword), "secrets": benchSecrets(pc.Password)})
 		if pc.Want == "" {
-			if status != http.StatusOK {
+			var made struct {
+				Data struct {
+					Session string `json:"session"`
+				} `json:"data"`
+			}
+			if status != http.StatusOK || json.Unmarshal(b, &made) != nil || made.Data.Session == "" {
 				t.Errorf("%s: HTTP %d %s, want a project", pc.Name, status, b)
+				continue
+			}
+			if st, b := raw(t, c, "DELETE", "/v1/sessions/"+made.Data.Session, nil); st != http.StatusOK {
+				t.Fatalf("%s: closing its project: HTTP %d %s", pc.Name, st, b)
 			}
 			continue
 		}
@@ -101,6 +114,10 @@ func contractPasswords(t *testing.T, start Starter) {
 		if len(pc.Password) >= 8 && strings.Contains(msg, pc.Password) {
 			t.Errorf("%s: the refusal echoes the password: %s", pc.Name, b)
 		}
+	}
+	s, err := c.CreateProject(ctx, "bench", BenchStation(), BenchSecrets)
+	if err != nil {
+		t.Fatal(err)
 	}
 	// Unlock-only passwords are not TIA's rules' business.
 	old := "old pw"
@@ -219,6 +236,7 @@ func contractProtectionModes(t *testing.T, start Starter) {
 	}
 	wrong := BenchSecrets
 	wrong.ConfigurationPassword = "Wrong-pass-2026"
+	closeFirst(t, nopw)
 	w := protected("wrong")
 	if _, err := w.ApplyStation(ctx, none, wrong); err == nil {
 		t.Fatal("none with the wrong password went through")
@@ -230,6 +248,7 @@ func contractProtectionModes(t *testing.T, start Starter) {
 	if _, err := w.Save(ctx, false); tiad.Kind(err) != tiad.KindUncleanSession {
 		t.Fatalf("a save after a failed apply: %v", err)
 	}
+	closeFirst(t, w)
 	s := protected("modes")
 	if r, err := s.ApplyStation(ctx, none, sec); err != nil || len(r.Changes) == 0 {
 		t.Fatalf("none with the password: %+v %v", r, err)

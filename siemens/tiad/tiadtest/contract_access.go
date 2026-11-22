@@ -287,6 +287,7 @@ func contractAccessAdopted(t *testing.T, start Starter) {
 	}
 
 	a.SetAccess(t, AccessScript{UploadAccessControl: AccessEnabled})
+	closeFirst(t, s)
 	s2, err := c.CreateProject(ctx, "adopt2", BenchStation(), BenchSecrets)
 	if err != nil {
 		t.Fatal(err)
@@ -352,6 +353,7 @@ func contractAccessUpload(t *testing.T, start Starter) {
 
 	// A project saved with its user, opened again: the user is the
 	// project's, not this session's.
+	closeFirst(t, s)
 	s3, err := c.CreateProject(ctx, "kept", BenchStation(), BenchSecrets)
 	if err != nil {
 		t.Fatal(err)

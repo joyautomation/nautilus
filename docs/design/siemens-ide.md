@@ -223,9 +223,22 @@ Calls are synchronous. The envelope is logixd's:
 {"ok": false, "error": {"kind": "decision_required", "message": "...", "fatal": false}, "data": {}, "events": []}
 ```
 
-A session is an open project. Opens are serialized, each project has one
-writer, and an idle reaper closes forgotten sessions. `fatal: true` means
-the session is gone.
+A session is an open project. The agent holds one at a time. TIA V21
+opens one project per instance (#616), and refuses a second only after a
+create has replaced its directory. So tiad refuses up front, with `busy`,
+and nothing is touched. It refuses:
+- a create or an open while a session is open. The refusal names it
+  (`data.openSession`, `data.openProject`). If that session is still
+  opening, try again once it is open. If its close failed, close it again,
+  or restart the agent;
+- a create or an open while a closed session's project is still closing
+  in TIA. This refusal names no session.
+
+Close the open session first. A create whose cleanup close fails (after
+TIA refused the station) keeps its session, broken, because TIA may still
+hold the project. A failed create or open retires a TIA instance that
+trusted blindly once no session is left (§3.8). Opens are serialized, and an idle reaper
+closes forgotten sessions. `fatal: true` means the session is gone.
 
 | `error.kind` | HTTP | Meaning |
 |---|---|---|
@@ -233,7 +246,7 @@ the session is gone.
 | `unauthorized` | 401 | Missing or wrong token. 403: the request carries an `Origin` header (a browser) |
 | `unreachable` | — | Client-side: no reply (agent down, or the context was cancelled; the cause unwraps). After a download, the outcome is **unknown**, so compare before retrying |
 | `not_found` | 404 | No such session or file |
-| `busy` | 409 | The project has a writer, the session has a call in flight, or the CPU belongs to another session's project |
+| `busy` | 409 | Another session is open or still closing (one project at a time: `data.openSession` names it), the session has a call in flight, or the CPU belongs to another session's project |
 | `gate` | 412 | A probe gate failed (TIA, group, licence). The message names it. Once TIA Portal has died the `tia` gate fails for good: restart the agent |
 | `target_refused` | 403 | The CPU address is not in `TIAD_TARGETS` |
 | `decision_required` | 409 | A download question has no answer in the request. `data.questions` lists them |
@@ -974,7 +987,9 @@ behaviour. So, until then:
 - **One project per CPU.** The first download from a session, a dry run
   included, claims the CPU for that session until it is closed (a broken
   session keeps the claim). Another session's download to that CPU is
-  `busy`.
+  `busy`. Since tiad holds one session at a time (§3.2), a second session
+  cannot open while the first is open, so the claim stays only as a
+  backstop.
 - **An upload replaces the project with the CPU's program**: the
   project no longer matches its spec, so a download needs a spec applied
   and a compile again. Compare and export still know the CPU.
@@ -1260,8 +1275,8 @@ Nor is it kept in a saved project: a project saved after the trusting
 read, reopened in a new instance, was asked the TLS question again.
 The first create after a retire took 31 s (a warm one about 6 s): a
 deploy after a trusting read pays about half a minute. TIA V21 opens
-one project per instance ("Another project is already open"), so on
-real TIA the last session is the only one.
+one project per instance ("Another project is already open"), and tiad
+holds one session at a time (§3.2), so the last session is the only one.
 
 **Calls (no TIA):**
 

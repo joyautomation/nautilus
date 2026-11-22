@@ -668,6 +668,8 @@ namespace Tiad.Fake
             if (dies != "" && dies != "preparing" && dies != "downloading") throw new TiadException(400, Kinds.BadRequest, "tiaDies is preparing or downloading");
             bool noDry = r.Bool("noDryRun");
             bool same = r.Bool("archiveSame");
+            bool seamTrust = r.Bool("seamTrustBeforeDownload");
+            bool seamReserve = r.Bool("seamReserveBeforeRetire");
             bool clean = r.Bool("cleanCancel");
             bool differs = r.Bool("compareDiffers");
             string tree = r.Str("compareTree");
@@ -717,6 +719,8 @@ namespace Tiad.Fake
                 tiaDies = dies;
                 noDryRun = noDry;
                 archiveSame = same;
+                TestSeams.TrustBeforeDownloadDispatch = seamTrust;
+                TestSeams.ReserveBeforeRetire = seamReserve;
                 cleanCancel = clean;
                 compareDiffers = differs;
                 compareTree = tree;
@@ -1039,9 +1043,21 @@ namespace Tiad.Fake
             return !gsd.Add(Path.GetFileName(fullPath));
         }
 
+        // openProjects counts the projects open on this instance: TIA V21
+        // opens one at a time and refuses a second ("Another project is
+        // already open", #616), so a path that bypasses the agent's rule
+        // or leaks a project fails here as on TIA.
+        int openProjects;
+
+        void OneOpen(string fullPath)
+        {
+            if (openProjects > 0) throw new TiaException("Unable to open project " + fullPath + ". Another project is already open.");
+        }
+
         public object CreateProject(string fullPath, string name)
         {
             script.Enter("CreateProject");
+            OneOpen(fullPath);
             // As TIA does, refuse to create a project over an existing one.
             if (File.Exists(fullPath) || Directory.GetFileSystemEntries(Path.GetDirectoryName(fullPath)).Length > 0)
             {
@@ -1050,12 +1066,14 @@ namespace Tiad.Fake
             File.WriteAllText(fullPath, "fake TIA project");
             saved.Remove(fullPath);
             saved.Remove(Path.ChangeExtension(fullPath, ".zap21"));
+            openProjects++;
             return new FakeProject { Full = fullPath };
         }
 
         public object OpenProject(string fullPath)
         {
             script.Enter("OpenProject");
+            OneOpen(fullPath);
             var p = new FakeProject { Full = fullPath };
             FakeProject sp;
             if (saved.TryGetValue(fullPath, out sp))
@@ -1077,12 +1095,14 @@ namespace Tiad.Fake
                     }
                 }
             }
+            openProjects++;
             return p;
         }
 
         public void CloseProject(object project)
         {
             script.Enter("CloseProject");
+            openProjects--;
         }
 
         public const string NotConfigured = "Password for confidential PLC configuration data is not configured in the PLC.";

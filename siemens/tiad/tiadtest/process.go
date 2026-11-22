@@ -68,6 +68,12 @@ type Script struct {
 	// fails too: "preparing" before TIA's download call, "downloading"
 	// inside it, before anything is asked.
 	TiaDies string `json:"tiaDies,omitempty"`
+	// SeamTrustBeforeDownload and SeamReserveBeforeRetire turn on tiad-fake's
+	// test seams (tools/tiad/core/TestSeams.cs, never in a release build):
+	// a blind trust recorded between a download's check and its dispatch,
+	// and a session reserved between a close and its retire check.
+	SeamTrustBeforeDownload bool `json:"seamTrustBeforeDownload,omitempty"`
+	SeamReserveBeforeRetire bool `json:"seamReserveBeforeRetire,omitempty"`
 	// ArchiveSame makes every archive for a deploy record the same bytes,
 	// so two deploys share one content address.
 	ArchiveSame bool `json:"archiveSame,omitempty"`

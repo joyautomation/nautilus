@@ -473,9 +473,12 @@ namespace Tiad
             sec.Records = records;
             string project = "projects/" + name + "/" + name + ".ap21";
             string full = work.Resolve(project);
-            // The session owns projects/<name>/: it is replaced only while
-            // nothing in it is open, and nothing in it opens while it is.
+            // One project at a time (Sessions.Reserve): projects/<name>/ is
+            // replaced only once no other project is open.
             Session s = sessions.Reserve(project, full, "projects/" + name + "/");
+            // kept: the project could not be closed after a failed create,
+            // so TIA may still hold it.
+            bool kept = false;
             try
             {
                 s.Handle = OnTia(delegate(ITia t)
@@ -497,7 +500,21 @@ namespace Tiad
                     }
                     catch
                     {
-                        t.CloseProject(h);
+                        try
+                        {
+                            t.CloseProject(h);
+                        }
+                        catch (Exception ce)
+                        {
+                            // TIA may still hold the project: the session
+                            // stays, broken, so nothing else opens over it
+                            // and a close can be tried again (#1186 review).
+                            s.Handle = h;
+                            s.Broken = true;
+                            kept = true;
+                            Log.Line("create {0}: closing the project after the failed create failed too ({1}); session {2} is kept, broken: close it again",
+                                Json.Quote(project), Json.Quote(TiaNames.Message(ce)), s.Id);
+                        }
                         throw;
                     }
                     s.Station = st;
@@ -507,7 +524,17 @@ namespace Tiad
             }
             catch
             {
-                sessions.Drop(s);
+                if (kept)
+                {
+                    sessions.End(s);
+                }
+                else
+                {
+                    sessions.Drop(s);
+                    // A create that raced a close may have kept a trusting
+                    // instance up (RetireIfTrusted): with it gone, retire.
+                    RetireIfTrusted();
+                }
                 throw;
             }
             sessions.End(s);
@@ -530,6 +557,7 @@ namespace Tiad
             catch
             {
                 sessions.Drop(s);
+                RetireIfTrusted();
                 throw;
             }
             sessions.End(s);
@@ -570,7 +598,19 @@ namespace Tiad
             }
             sessions.ReleaseCpus(s);
             sessions.Closed(s);
+#if TIAD_TEST_SEAMS
+            Session seam = TestSeams.ReserveBeforeRetire ? sessions.Reserve("projects/seam/seam.ap21", "", "projects/seam/") : null;
+            try
+            {
+                RetireIfTrusted();
+            }
+            finally
+            {
+                if (seam != null) sessions.Drop(seam);
+            }
+#else
             RetireIfTrusted();
+#endif
             return new Obj();
         }
 

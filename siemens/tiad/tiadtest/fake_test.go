@@ -136,3 +136,44 @@ func TestFakeCarriesTheModeOfADoubtfulDownload(t *testing.T) {
 		t.Fatalf("%v (state %q %q)", err, state, source)
 	}
 }
+
+// TestFakeKeepsATrustingInstanceWhileASessionIsReserved is the agent's
+// retire guard on the Go fake, through its test seam: a session reserved
+// between a close and the retire check keeps the trusting instance.
+func TestFakeKeepsATrustingInstanceWhileASessionIsReserved(t *testing.T) {
+	f := tiadtest.New()
+	f.Targets = []string{"192.0.2.10"}
+	_, c := f.Serve(t)
+	f.SetFingerprint(tiadtest.FingerprintScript{AsksTLS: true})
+	if _, err := c.PutFile(context.Background(), "gsd/GSDML-V2.4-Example-Device-20261117.xml", []byte("<ISO15745Profile/>")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.InstallGSD(context.Background(), "gsd/GSDML-V2.4-Example-Device-20261117.xml"); err != nil {
+		t.Fatal(err)
+	}
+	s, err := c.CreateProject(context.Background(), "bench", tiadtest.BenchStation(), tiadtest.BenchSecrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Fingerprint(context.Background(), tiad.FingerprintRequest{TrustUnverifiedCertificate: true}); err != nil {
+		t.Fatal(err)
+	}
+	f.SeamReserveBeforeRetire = true
+	if err := s.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if f.BlindTrust() == nil {
+		t.Fatal("the trusting instance was retired with a session reserved")
+	}
+	f.SeamReserveBeforeRetire = false
+	s2, err := c.CreateProject(context.Background(), "bench", tiadtest.BenchStation(), tiadtest.BenchSecrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s2.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if f.BlindTrust() != nil {
+		t.Fatal("not retired once no session was left")
+	}
+}

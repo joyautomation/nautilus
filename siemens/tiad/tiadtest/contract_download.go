@@ -699,22 +699,15 @@ func contractOneCPU(t *testing.T, start Starter) {
 		}
 		return s
 	}
-	one, two := mk("one"), mk("two")
-	// The dry run cancels at TIA's first check.
-	a.SetQuestions(t, []tiad.Question{qStop})
-	dl := tiad.DownloadRequest{Address: benchCPU, Software: true, Announced: true, Decisions: tiad.Decisions{StopCPU: tiad.Yes(), StartAfter: tiad.No()}}
-	dry := dl
-	dry.DryRun = true
-	if _, err := one.Download(ctx, dry); err != nil {
-		t.Fatalf("the first project's dry run: %v", err)
-	}
-	for _, r := range []tiad.DownloadRequest{dry, dl} {
-		if _, err := two.Download(ctx, r); tiad.Kind(err) != tiad.KindBusy {
-			t.Fatalf("the second project's download (dry %v) to a claimed CPU: %v, want busy", r.DryRun, err)
-		}
-	}
+	// TIA opens one project at a time (#616), so a second project for the
+	// CPU cannot even open while the first is open: one CPU, one project.
+	one := mk("one")
+	dl := tiad.DownloadRequest{Address: benchCPU, Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}}
 	if _, err := one.Download(ctx, dl); err != nil {
-		t.Fatalf("the claiming project's download: %v", err)
+		t.Fatalf("the first project's download: %v", err)
+	}
+	if _, err := c.CreateProject(ctx, "two", BenchStation(), BenchSecrets); tiad.Kind(err) != tiad.KindBusy || !strings.Contains(err.Error(), "session "+one.ID) {
+		t.Fatalf("a second project while the first is open: %v, want busy naming %s", err, one.ID)
 	}
 	if n := len(a.Loaded(t)); n != 1 {
 		t.Fatalf("loaded %d times, want 1", n)
@@ -722,7 +715,7 @@ func contractOneCPU(t *testing.T, start Starter) {
 	if err := one.Close(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := two.Download(ctx, dl); err != nil {
+	if _, err := mk("two").Download(ctx, dl); err != nil {
 		t.Fatalf("the second project once the first is closed: %v", err)
 	}
 }

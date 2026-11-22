@@ -119,6 +119,7 @@ namespace Tiad.Test
                 T("DeployStatusOf", DeployStatusOf),
                 T("DeploySourceShape", DeploySourceShape),
                 T("SessionsLeftCountsClosing", SessionsLeftCountsClosing),
+                T("ReserveOneProject", ReserveOneProject),
                 T("Settings", SettingsForAnswers),
                 T("PasswordsNeverCross", PasswordsNeverCross),
                 T("ProtectionPlan", ProtectionPlan),
@@ -327,20 +328,14 @@ namespace Tiad.Test
             True(t.Any, "a session still opening");
             a.Handle = new object();
             t.End(a);
-            Session b = t.Reserve("b.ap21", "/w/b.ap21", "");
-            b.Handle = new object();
-            t.End(b);
             True(t.Remove(a), "remove a");
+            True(t.Any, "a out of the table, its close not ended");
+            t.Restore(a);
+            True(t.Any, "a back, broken");
+            True(t.Remove(a), "remove a again");
             t.Closed(a);
-            True(t.Any, "b left");
-            True(t.Remove(b), "remove b");
-            True(t.Any, "b out of the table, its close not ended");
-            t.Restore(b);
-            True(t.Any, "b back, broken");
-            True(t.Remove(b), "remove b again");
-            t.Closed(b);
             True(!t.Any, "every close ended");
-            True(!t.Remove(b), "remove b twice");
+            True(!t.Remove(a), "remove a twice");
             True(!t.Any, "a second remove counts nothing");
             Session c = t.Reserve("c.ap21", "/w/c.ap21", "");
             c.Handle = new object();
@@ -350,6 +345,42 @@ namespace Tiad.Test
             True(t.Any, "c taken by the reaper, its close not ended");
             t.Closed(c);
             True(!t.Any, "the reaper's close ended");
+        }
+
+        // ReserveOneProject: TIA opens one project at a time (#616), so the
+        // table holds one session: a second is refused while one is open,
+        // opening, closing, or back broken, naming the open one, and taken
+        // once it is closed or dropped.
+        static void ReserveOneProject()
+        {
+            var t = new SessionTable();
+            Session a = t.Reserve("projects/a/a.ap21", "/w/projects/a/a.ap21", "projects/a/");
+            var e = Throws<TiadException>(delegate { t.Reserve("projects/b/b.ap21", "/w/projects/b/b.ap21", "projects/b/"); }, "a second while the first opens");
+            if (e != null)
+            {
+                Eq(e.Status, 409, "status");
+                Eq(e.Kind, Kinds.Busy, "kind");
+                Contains(e.Message, "TIA opens one project at a time, and session " + a.Id + " is still opening projects/a/a.ap21: try again once it is open, then close it first; nothing was touched", "message while opening");
+                True(e.Message.IndexOf("DELETE", StringComparison.Ordinal) < 0, "no close offered for a session still opening");
+                var d = e.Payload as Obj;
+                True(d != null && (string)d["openSession"] == a.Id && (string)d["openProject"] == "projects/a/a.ap21", "data names the open session");
+            }
+            a.Handle = new object();
+            t.End(a);
+            e = Throws<TiadException>(delegate { t.Reserve("projects/a/a.ap21", "/w/projects/a/a.ap21", "projects/a/"); }, "the same project again");
+            if (e != null) Contains(e.Message, "TIA opens one project at a time, and session " + a.Id + " has projects/a/a.ap21 open: close it first (DELETE /v1/sessions/" + a.Id + "); nothing was touched", "message while open");
+            True(t.Remove(a), "remove a");
+            e = Throws<TiadException>(delegate { t.Reserve("projects/b/b.ap21", "/w/projects/b/b.ap21", ""); }, "a second while the first closes");
+            if (e != null) Contains(e.Message, "a session is still closing", "closing message");
+            t.Restore(a);
+            e = Throws<TiadException>(delegate { t.Reserve("projects/b/b.ap21", "/w/projects/b/b.ap21", ""); }, "a second while the first is back, broken");
+            if (e != null) Contains(e.Message, "has projects/a/a.ap21 open, and closing it failed: close it again (DELETE /v1/sessions/" + a.Id + "), or restart the agent", "message while broken");
+            True(t.Remove(a), "remove a again");
+            t.Closed(a);
+            Session b = t.Reserve("projects/b/b.ap21", "/w/projects/b/b.ap21", "");
+            t.Drop(b);
+            Session c = t.Reserve("projects/c/c.ap21", "/w/projects/c/c.ap21", "");
+            True(c != null && c.Id != b.Id, "taken after a drop");
         }
 
         static void TrustFixOnlyForCertificates()

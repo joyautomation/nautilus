@@ -316,36 +316,46 @@ func contractProjects(t *testing.T, start Starter) {
 		t.Fatalf("re-create: %+v %v", s2, err)
 	}
 
-	// A created project owns projects/<name>/: it is not created again
-	// while anything in that directory is open, and nothing in it opens
-	// while it is.
+	// TIA opens one project at a time (#616): with bench open, a create of
+	// an existing project that is not open is refused before anything is
+	// touched, naming the open session, and so is an open; the project's
+	// files stay, and it opens once bench is closed.
 	if _, err := c.PutFile(ctx, "projects/foo/other.ap21", []byte("another project")); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"foo", "FOO"} {
+		status, b := rawJSON(t, c, "POST", "/v1/projects", map[string]any{"name": name, "station": BenchStation(), "secrets": BenchSecrets})
+		var e struct {
+			Data struct {
+				OpenSession string `json:"openSession"`
+				OpenProject string `json:"openProject"`
+			} `json:"data"`
+		}
+		if status != http.StatusConflict || envelopeKind(b) != tiad.KindBusy || json.Unmarshal(b, &e) != nil ||
+			e.Data.OpenSession != s2.ID || e.Data.OpenProject != "projects/bench/bench.ap21" ||
+			!strings.Contains(errMessage(b), "TIA opens one project at a time, and session "+s2.ID+" has projects/bench/bench.ap21 open: close it first (DELETE /v1/sessions/"+s2.ID+"); nothing was touched") {
+			t.Errorf("create %q while bench is open: HTTP %d %s, want 409 busy naming %s", name, status, b, s2.ID)
+		}
+	}
+	if b, err := c.GetFile(ctx, "projects/foo/other.ap21"); err != nil || string(b) != "another project" {
+		t.Fatalf("a refused create touched projects/foo/: %q %v", b, err)
+	}
+	if _, err := c.Open(ctx, "projects/foo/other.ap21"); tiad.Kind(err) != tiad.KindBusy || !strings.Contains(err.Error(), "session "+s2.ID) {
+		t.Fatalf("open while bench is open: %v, want busy naming %s", err, s2.ID)
+	}
+	if err := s2.Close(ctx); err != nil {
 		t.Fatal(err)
 	}
 	other, err := c.Open(ctx, "projects/foo/other.ap21")
 	if err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{"foo", "FOO"} {
-		if _, err := c.CreateProject(ctx, name, BenchStation(), BenchSecrets); tiad.Kind(err) != tiad.KindBusy {
-			t.Errorf("create %q while projects/foo/other.ap21 is open: %v, want busy", name, err)
-		}
-	}
-	if b, err := c.GetFile(ctx, "projects/foo/other.ap21"); err != nil || len(b) == 0 {
-		t.Fatalf("the open project was removed: %q %v", b, err)
+		t.Fatalf("open once bench is closed: %v", err)
 	}
 	if err := other.Close(ctx); err != nil {
 		t.Fatal(err)
 	}
 	foo, err := c.CreateProject(ctx, "foo", BenchStation(), BenchSecrets)
 	if err != nil {
-		t.Fatalf("create foo once nothing in it is open: %v", err)
-	}
-	if _, err := c.PutFile(ctx, "projects/foo/other.ap21", []byte("another project")); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := c.Open(ctx, "projects/foo/other.ap21"); tiad.Kind(err) != tiad.KindBusy {
-		t.Fatalf("open inside a created project's directory: %v, want busy", err)
+		t.Fatalf("create foo once nothing is open: %v", err)
 	}
 	_ = foo.Close(ctx)
 }
