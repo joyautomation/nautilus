@@ -263,3 +263,48 @@ func TestAlarmsReportFromAControllerSplitsATruncatedRange(t *testing.T) {
 		t.Errorf("activations %v, want 17:\n%s", rep["activations"], raw)
 	}
 }
+
+// A journal minutes old, read over the default week, is not a quiet week:
+// the header says where the journal starts, that the rates are over the
+// whole range, and the -from that reads the journal's span alone. A
+// journal that covers the range, or a gap under an hour, says nothing.
+func TestAlarmsReportSaysWhenTheJournalIsYoungerThanTheRange(t *testing.T) {
+	table := func(path string, extra ...string) string {
+		t.Helper()
+		var out, errb bytes.Buffer
+		if code := alarmsReport(append([]string{"flood", "-journal", path}, extra...), reportNow, &out, &errb); code != 0 {
+			t.Fatalf("exit %d: %s", code, errb.String())
+		}
+		return out.String()
+	}
+	first := reportNow.Add(-5 * time.Minute)
+	young := writeJournal(t, []alarm.Event{
+		{TS: first.UnixMilli(), ID: "A", Kind: alarm.KindActive},
+		{TS: reportNow.Add(-time.Minute).UnixMilli(), ID: "A", Kind: alarm.KindRTN},
+	})
+	out := table(young)
+	at := first.Local().Format(reportTime)
+	for _, want := range []string{
+		"the first event is at " + at + ", 6d 23h into the range",
+		"Rates and window counts below are over the whole range",
+		`add -from "` + at + `"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("young journal over a week: want %q in\n%s", want, out)
+		}
+	}
+	// A day's range on the same journal: 23h55m in, which is no quiet day.
+	if out := table(young, "-since", "1d"); !strings.Contains(out, "the first event is at "+at+", 23h55m into the range") {
+		t.Errorf("young journal over a day: not noted\n%s", out)
+	}
+	if out := table(young, "-since", "1h"); strings.Contains(out, "first event is at") {
+		t.Errorf("a 55-minute gap in an hour's range is noted:\n%s", out)
+	}
+	covers := writeJournal(t, []alarm.Event{
+		{TS: reportNow.Add(-7*24*time.Hour + 2*time.Hour).UnixMilli(), ID: "A", Kind: alarm.KindActive}, // 2h of 7d
+		{TS: reportNow.Add(-time.Minute).UnixMilli(), ID: "A", Kind: alarm.KindRTN},
+	})
+	if out := table(covers); strings.Contains(out, "first event is at") {
+		t.Errorf("a journal that covers the range is noted:\n%s", out)
+	}
+}

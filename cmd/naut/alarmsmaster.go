@@ -546,14 +546,35 @@ func printRead(w io.Writer, r reportRead) {
 		fmt.Fprintf(w, " (earliest %s, latest %s)", r.Earliest.Format(reportTime), r.Latest.Format(reportTime))
 	}
 	fmt.Fprintln(w)
-	if r.Earliest != nil && r.Earliest.Sub(r.From) > 24*time.Hour {
-		fmt.Fprintf(w, "note: nothing is journalled before %s: a quiet system, or a journal that starts there\n",
-			r.Earliest.Format(reportTime))
+	if r.Earliest != nil && youngJournal(r) {
+		fmt.Fprintf(w, "note: the first event is at %s, %s into the range: the system was quiet before it, or the journal starts there (a new or ring-only journal).\n"+
+			"      Rates and window counts below are over the whole range; for the journal's span alone, add -from \"%s\".\n",
+			r.Earliest.Format(reportTime), humanSpan(r.Earliest.Sub(r.From)), r.Earliest.Format(reportTime))
 	}
 	if r.Events == 0 {
 		fmt.Fprintln(w, "note: no events in this range; check the journal (a ring-only journal keeps only recent events)")
 	}
 	fmt.Fprintln(w)
+}
+
+// youngJournal reports whether the first event read comes so late in the
+// range that the range's rates would read low: more than an hour in, and
+// more than a tenth of the range.
+func youngJournal(r reportRead) bool {
+	gap := r.Earliest.Sub(r.From)
+	return gap > time.Hour && gap > r.To.Sub(r.From)/10
+}
+
+// humanSpan is a gap for a person: days and hours, or hours and minutes.
+func humanSpan(d time.Duration) string {
+	if d >= 24*time.Hour {
+		return humanAge(d)
+	}
+	h, m := int(d/time.Hour), int(d%time.Hour/time.Minute)
+	if h == 0 {
+		return fmt.Sprintf("%dm", m)
+	}
+	return fmt.Sprintf("%dh%02dm", h, m)
 }
 
 func printFloods(w io.Writer, r rationalize.FloodReport) {
