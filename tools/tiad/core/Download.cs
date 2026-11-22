@@ -877,6 +877,9 @@ namespace Tiad
     {
         public string Name = "", Type = "";
         public int Number;
+        // Group is the block's group, as a path from the program blocks'
+        // root: "" for the root, "a/b" for user group b in user group a.
+        public string Group = "";
     }
 
     // OnlineCompare is one online compare: TIA's compare tree, and every

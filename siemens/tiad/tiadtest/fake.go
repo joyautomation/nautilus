@@ -104,9 +104,11 @@ type Fake struct {
 	// answered is the agent's InstanceLogons.AnsweredBefore: the CPUs
 	// tiad answered credentials for in this instance.
 	keepsLogon, credentialsAfterChecks bool
-	keptLogons                         map[string]bool
-	instanceLogons                     map[string]string
-	answered                           map[string]bool
+	// importReplacesForeign: SetImportReplacesForeign.
+	importReplacesForeign bool
+	keptLogons            map[string]bool
+	instanceLogons        map[string]string
+	answered              map[string]bool
 
 	// deployRecs is the deploy record, oldest first, each intent with its
 	// outcome once written; archives the archived projects by sha256;
@@ -182,6 +184,14 @@ type session struct {
 	// unclean is set while an apply or upload runs and stays set when it
 	// fails part-way: a later apply or save refuses.
 	unclean bool
+	// groups is each imported block's group, by lower-cased name;
+	// mainReplaced is set once an import replaced Main [OB1]
+	// (SetImportReplacesForeign); foreignChanged once an import changed a
+	// block outside its group: nothing clears it, and save, the deploy
+	// archive and another import refuse (the agent's ForeignChanged).
+	groups         map[string]string
+	mainReplaced   bool
+	foreignChanged bool
 	// archive is the sha256 of the deploy archive made for the download
 	// running, "" for none.
 	archive string
@@ -1207,6 +1217,32 @@ func (f *Fake) software(r *http.Request) (any, *failure) {
 	if req.Group == "" {
 		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "group is empty")
 	}
+	// Every file first: a missing one or a bad path refuses the call
+	// before anything is read.
+	var declared []tiad.Block
+	for _, src := range append(append([]string{}, req.Sources...), req.TagTables...) {
+		p, fl := cleanPath(src)
+		if fl != nil {
+			return nil, fl
+		}
+		b, ok := f.files[p]
+		if !ok {
+			return nil, fail(http.StatusNotFound, tiad.KindNotFound, "no file %s", p)
+		}
+		if !isTagTable(p, req.TagTables) {
+			declared = append(declared, declaredBlocks(string(b))...)
+		}
+	}
+	if s.foreignChanged {
+		return nil, foreignUnusable("another import")
+	}
+	before := s.projectBlocks()
+	if fl := foreignConflicts(declared, before, req.Group); fl != nil {
+		return nil, fl
+	}
+	if s.groups == nil {
+		s.groups = map[string]string{}
+	}
 	res := tiad.SoftwareResult{Results: []tiad.SourceResult{}}
 	var made []tiad.Block
 	for _, src := range append(append([]string{}, req.Sources...), req.TagTables...) {
@@ -1223,28 +1259,36 @@ func (f *Fake) software(r *http.Request) (any, *failure) {
 			res.Results = append(res.Results, sr)
 			continue
 		}
-		found := 0
+		var heads []tiad.Block
 		sc := bufio.NewScanner(bytes.NewReader(b))
 		for sc.Scan() {
 			if m := blockHead.FindStringSubmatch(sc.Text()); m != nil {
-				made = append(made, tiad.Block{Name: m[2], Kind: blockKind[m[1]]})
-				found++
+				heads = append(heads, tiad.Block{Name: m[2], Kind: blockKind[m[1]]})
 			}
 		}
-		if found == 0 {
+		switch conflict := obConflict(s.projectBlocks(), heads); {
+		case len(heads) == 0:
 			sr.OK = false
 			sr.Messages = []string{"no block found in source"}
+		case conflict != "":
+			sr.OK = false
+			sr.Messages = []string{fmt.Sprintf("An error occurred during code generation. The block generation has been stopped. Row 000000: Type conflict: Object %q cannot be overwritten.", conflict)}
+		default:
+			made = append(made, heads...)
 		}
 		res.Results = append(res.Results, sr)
 	}
 	byName := map[string]tiad.Block{}
-	if !req.Prune {
-		for _, b := range s.blocks {
-			byName[strings.ToLower(b.Name)] = b
+	for _, b := range s.blocks {
+		// Prune deletes only in the import's group.
+		if req.Prune && owned(s.groups[strings.ToLower(b.Name)], req.Group) {
+			continue
 		}
+		byName[strings.ToLower(b.Name)] = b
 	}
 	for _, b := range made {
 		byName[strings.ToLower(b.Name)] = b
+		s.groups[strings.ToLower(b.Name)] = req.Group
 	}
 	s.blocks = s.blocks[:0]
 	for _, b := range byName {
@@ -1253,7 +1297,21 @@ func (f *Fake) software(r *http.Request) (any, *failure) {
 	sort.Slice(s.blocks, func(i, j int) bool { return s.blocks[i].Name < s.blocks[j].Name })
 	s.compiled = false
 	s.changed = true
-	res.Blocks = append([]tiad.Block{}, s.blocks...)
+	if f.importReplacesForeign {
+		s.mainReplaced = true
+	}
+	if changed := foreignChanges(before, s.projectBlocks(), req.Group); len(changed) > 0 {
+		s.foreignChanged = true
+		return nil, fail(http.StatusInternalServerError, tiad.KindOperationFailed,
+			"the import changed program blocks outside group %q (%s): this session can no longer be saved, archived for a deploy or downloaded. Close it without saving",
+			req.Group, strings.Join(changed, "; "))
+	}
+	res.Blocks = []tiad.Block{}
+	for _, b := range s.blocks {
+		if owned(s.groups[strings.ToLower(b.Name)], req.Group) {
+			res.Blocks = append(res.Blocks, b)
+		}
+	}
 	return res, nil
 }
 
@@ -2139,6 +2197,9 @@ func (f *Fake) save(r *http.Request) (any, *failure) {
 	}
 	if s.unclean {
 		return nil, uncleanFailure("saving it")
+	}
+	if s.foreignChanged {
+		return nil, foreignUnusable("saving it")
 	}
 	p := s.project
 	if req.Archive {

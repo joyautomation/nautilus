@@ -963,6 +963,7 @@ namespace Tiad
                 string full = OnSession(s, delegate(ITia t)
                 {
                     if (s.Unclean) throw CpuReuse.Unclean("saving it");
+                    if (s.ForeignChanged) throw Ownership.Unusable("saving it");
                     return t.Save(s.Handle, archive);
                 });
                 var o = new Obj();

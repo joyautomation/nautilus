@@ -250,6 +250,11 @@ namespace Tiad.Fake
         // #789 P1 fallback). credentialsAfterChecks makes a download ask
         // its checks before credentials.
         bool keepsLogon, credentialsAfterChecks;
+        // importReplacesForeign makes an import replace Main [OB1], at the
+        // root, with an FB, whatever the sources say: TIA replacing a
+        // block outside the group that the agent's reading of the sources
+        // missed, so the agent's check after the import must catch it.
+        bool importReplacesForeign;
         int askFirst = 1;
         string failAfterDecide = "";
         string failInDoubt = "";
@@ -611,6 +616,17 @@ namespace Tiad.Fake
             }
         }
 
+        public bool ImportReplacesForeign
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return importReplacesForeign;
+                }
+            }
+        }
+
         public bool KeepsLogon
         {
             get
@@ -735,6 +751,7 @@ namespace Tiad.Fake
             bool goesOn = r.Bool("onlineGoesOn");
             bool keeps = r.Bool("keepsLogon");
             bool credsAfter = r.Bool("credentialsAfterChecks");
+            bool replaces = r.Bool("importReplacesForeign");
             int? first = r.OptInt("askFirst");
             string after = r.Str("failAfterDecide");
             string inDoubt = r.Str("failInDoubt");
@@ -792,6 +809,7 @@ namespace Tiad.Fake
                 onlineGoesOn = goesOn;
                 keepsLogon = keeps;
                 credentialsAfterChecks = credsAfter;
+                importReplacesForeign = replaces;
                 askFirst = first.HasValue ? first.Value : 1;
                 failAfterDecide = after;
                 failInDoubt = inDoubt;
@@ -837,6 +855,13 @@ namespace Tiad.Fake
         public string Full = "";
         public Station Station;
         public List<Block> Blocks = new List<Block>();
+        // GroupOf is each imported block's group (lower-cased name to the
+        // group path); Main [OB1], which TIA makes with the CPU, sits at
+        // the root. MainReplaced is set once an import replaced it (the
+        // importReplacesForeign knob: TIA replacing a block the agent's
+        // check missed). Main is then an FB, still at the root.
+        public Dictionary<string, string> GroupOf = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        public bool MainReplaced;
         // Changed is true until a download loads the project as it is.
         public bool Changed = true;
         // Protection is the CPU's configuration protection as the project
@@ -1457,34 +1482,54 @@ namespace Tiad.Fake
             foreach (var src in sources)
             {
                 var sr = new SourceResult { Path = src.Path, Ok = true };
-                int found = 0;
+                var heads = new List<Block>();
                 foreach (string line in File.ReadAllText(src.FullPath, Encoding.UTF8).Split('\n'))
                 {
                     Block b = BlockHead(line.TrimEnd('\r'));
-                    if (b != null)
-                    {
-                        made.Add(b);
-                        found++;
-                    }
+                    if (b != null) heads.Add(b);
                 }
-                if (found == 0)
+                string conflict = ObConflict(p, heads);
+                if (heads.Count == 0)
                 {
                     sr.Ok = false;
                     sr.Messages.Add("no block found in source");
                 }
+                else if (conflict != null)
+                {
+                    // As on the TIA VM (2026-11-22): an ORGANIZATION_BLOCK
+                    // source while another OB holds number 1 stops that
+                    // source's block generation. Why (an OB source is a
+                    // program cycle OB, numbered 1) is inferred, not proven.
+                    sr.Ok = false;
+                    sr.Messages.Add("An error occurred during code generation. The block generation has been stopped. Row 000000: Type conflict: Object \"" + conflict + "\" cannot be overwritten.");
+                }
+                else made.AddRange(heads);
                 res.Results.Add(sr);
             }
             foreach (var t in tagTables) res.Results.Add(new SourceResult { Path = t.Path, Ok = true });
 
             var byName = new Dictionary<string, Block>(StringComparer.Ordinal);
-            if (!prune)
+            foreach (var b in p.Blocks)
             {
-                foreach (var b in p.Blocks) byName[b.Name.ToLowerInvariant()] = b;
+                string g;
+                p.GroupOf.TryGetValue(b.Name, out g);
+                // Prune deletes only in the import's group.
+                if (prune && Ownership.Owned(g ?? "", group)) continue;
+                byName[b.Name.ToLowerInvariant()] = b;
             }
-            foreach (var b in made) byName[b.Name.ToLowerInvariant()] = b;
+            foreach (var b in made)
+            {
+                byName[b.Name.ToLowerInvariant()] = b;
+                p.GroupOf[b.Name] = group;
+            }
             p.Blocks = new List<Block>(byName.Values);
             p.Blocks.Sort(delegate(Block a, Block b) { return string.CompareOrdinal(a.Name, b.Name); });
-            res.Blocks.AddRange(p.Blocks);
+            foreach (var b in p.Blocks)
+            {
+                string g;
+                if (p.GroupOf.TryGetValue(b.Name, out g) && Ownership.Owned(g, group)) res.Blocks.Add(b);
+            }
+            if (script.ImportReplacesForeign) p.MainReplaced = true;
             return res;
         }
 
@@ -1763,22 +1808,45 @@ namespace Tiad.Fake
         }
 
         // ProjectBlocks is the fake project's program blocks as Openness
-        // would list them: Main OB1, as TIA makes a CPU (unless a source
-        // made a block of that name), then every block a source made but
-        // data types, numbered from 1 per kind in name order.
+        // would list them: Main at the root, OB1 as TIA makes a CPU (an FB
+        // once an import replaced it), then every block a source made but
+        // data types, in its group, numbered from 1 per kind in name order
+        // after Main's.
         static List<ProjectBlock> ProjectBlocks(FakeProject p)
         {
             var l = new List<ProjectBlock>();
-            bool main = true;
-            foreach (var b in p.Blocks) if (string.Equals(b.Name, "Main", StringComparison.OrdinalIgnoreCase)) main = false;
-            if (main) l.Add(new ProjectBlock { Name = "Main", Type = "OB", Number = 1 });
-            var next = new Dictionary<string, int> { { "OB", main ? 2 : 1 }, { "FB", 1 }, { "FC", 1 }, { "DB", 1 } };
+            var next = new Dictionary<string, int> { { "OB", 1 }, { "FB", 1 }, { "FC", 1 }, { "DB", 1 } };
+            string mainKind = p.MainReplaced ? "FB" : "OB";
+            l.Add(new ProjectBlock { Name = "Main", Type = mainKind, Number = next[mainKind]++ });
             foreach (var b in p.Blocks)
             {
                 if (!next.ContainsKey(b.Kind)) continue;
-                l.Add(new ProjectBlock { Name = b.Name, Type = b.Kind == "DB" ? "GlobalDB" : b.Kind, Number = next[b.Kind]++ });
+                string g;
+                p.GroupOf.TryGetValue(b.Name, out g);
+                l.Add(new ProjectBlock { Name = b.Name, Type = b.Kind == "DB" ? "GlobalDB" : b.Kind, Number = next[b.Kind]++, Group = g ?? "" });
             }
             return l;
+        }
+
+        // ObConflict is the OB that holds number 1, when heads declare an
+        // OB of another name and some OB already holds it; else null.
+        static string ObConflict(FakeProject p, List<Block> heads)
+        {
+            foreach (var h in heads)
+            {
+                if (h.Kind != "OB") continue;
+                foreach (var b in ProjectBlocks(p))
+                {
+                    if (b.Type == "OB" && b.Number == 1 && !string.Equals(b.Name, h.Name, StringComparison.OrdinalIgnoreCase)) return h.Name;
+                }
+            }
+            return null;
+        }
+
+        public List<ProjectBlock> Blocks(object project)
+        {
+            script.Enter("Blocks");
+            return ProjectBlocks((FakeProject)project);
         }
 
         static CompareNode[] EmptyFolders()
@@ -2036,8 +2104,15 @@ namespace Tiad.Fake
                 o["cpu"] = cpu;
             }
             var blocks = new List<object>();
-            foreach (var b in p.Blocks) blocks.Add(b.ToJson());
+            foreach (var b in p.Blocks)
+            {
+                Obj bo = b.ToJson();
+                string g;
+                if (p.GroupOf.TryGetValue(b.Name, out g)) bo["group"] = g;
+                blocks.Add(bo);
+            }
             o["blocks"] = blocks;
+            o["mainReplaced"] = p.MainReplaced;
             o["protection"] = p.Protection;
             o["accessControl"] = p.AccessControl;
             o["webServer"] = p.WebServer;
@@ -2098,7 +2173,11 @@ namespace Tiad.Fake
             {
                 var b = (IDictionary<string, object>)x;
                 p.Blocks.Add(new Block { Name = (string)b["name"], Kind = (string)b["kind"] });
+                object g;
+                if (b.TryGetValue("group", out g) && g != null) p.GroupOf[(string)b["name"]] = (string)g;
             }
+            object mr;
+            p.MainReplaced = o.TryGetValue("mainReplaced", out mr) && mr is bool && (bool)mr;
             p.Protection = (string)o["protection"];
             p.AccessControl = (string)o["accessControl"];
             // An archive made before the fake kept the web server holds

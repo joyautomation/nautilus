@@ -59,6 +59,11 @@ type Target interface {
 	// whether it keeps a logon for its instance's life, and whether a
 	// download asks its checks before credentials.
 	SetLogon(t testing.TB, l LogonScript)
+	// SetImportReplacesForeign makes every later software import replace
+	// the project's Main [OB1] with an FB, whatever the sources declare:
+	// TIA replacing a block outside the group that the agent's reading of
+	// the sources missed, which its check after the import must catch.
+	SetImportReplacesForeign(t testing.TB, on bool)
 }
 
 // Loaded is one download that loaded a CPU.
@@ -119,6 +124,9 @@ func (g goFake) SetFingerprint(_ testing.TB, fs FingerprintScript) {
 }
 func (g goFake) SetArchiveFails(_ testing.TB, msg string) { g.f.SetArchiveFails(msg) }
 func (g goFake) SetLogon(_ testing.TB, l LogonScript)     { g.f.SetLogon(l) }
+func (g goFake) SetImportReplacesForeign(_ testing.TB, on bool) {
+	g.f.SetImportReplacesForeign(on)
+}
 func (g goFake) LoadOutside(_ testing.TB, address, file string) {
 	if file == "" {
 		g.f.LoadOutside(address)

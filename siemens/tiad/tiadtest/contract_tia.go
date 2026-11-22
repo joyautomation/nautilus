@@ -197,6 +197,8 @@ func contractTIA(t *testing.T, start Starter) {
 	t.Run("Sessions", func(t *testing.T) { contractSessions(t, start) })
 	t.Run("StationChanges", func(t *testing.T) { contractStationChanges(t, start) })
 	t.Run("Software", func(t *testing.T) { contractSoftware(t, start) })
+	t.Run("SoftwareOwnership", func(t *testing.T) { contractSoftwareOwnership(t, start) })
+	t.Run("SoftwareReplacedForeign", func(t *testing.T) { contractSoftwareReplacedForeign(t, start) })
 	t.Run("Compile", func(t *testing.T) { contractCompile(t, start) })
 	t.Run("Gates", func(t *testing.T) { contractGates(t, start) })
 	t.Run("Precedence", func(t *testing.T) { contractPrecedence(t, start) })
@@ -620,7 +622,7 @@ func contractStationChanges(t *testing.T, start Starter) {
 	apply(st, "device io-device-1 removed")
 }
 
-const programSCL = `FUNCTION_BLOCK "Main"
+const programSCL = `FUNCTION_BLOCK "naut_Main"
 VERSION : 0.1
    VAR
       count : Int;
@@ -629,8 +631,8 @@ BEGIN
    #count := #count + 1;
 END_FUNCTION_BLOCK
 
-DATA_BLOCK "Main_DB"
-"Main"
+DATA_BLOCK "naut_Main_DB"
+"naut_Main"
 BEGIN
 END_DATA_BLOCK
 `
@@ -641,6 +643,94 @@ func blockNames(bs []tiad.Block) string {
 		n = append(n, b.Kind+":"+b.Name)
 	}
 	return strings.Join(n, ",")
+}
+
+// contractSoftwareOwnership: an import never touches a program block
+// outside its group (#789, Ownership.cs). A source that declares one (TIA
+// would replace it: the TIA VM replaced the project's Main [OB1] with an
+// FB) refuses the whole call with foreign_block, naming the block, before
+// anything is imported: quoted or bare, any case. An OB source while
+// another OB holds number 1 fails as TIA fails it.
+func contractSoftwareOwnership(t *testing.T, start Starter) {
+	c := start(t, Config{}).Client()
+	installGSD(t, c)
+	s, err := c.CreateProject(ctx, "own", BenchStation(), BenchSecrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	put := func(p, body string) {
+		t.Helper()
+		if _, err := c.PutFile(ctx, p, []byte(body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put("src/Main.scl", programSCL)
+	put("src/Clash.scl", "FUNCTION_BLOCK \"Main\"\nVERSION : 0.1\nBEGIN\nEND_FUNCTION_BLOCK\n")
+	put("src/Bare.scl", "(* a comment *)\nfunction_block MAIN\nBEGIN\nEND_FUNCTION_BLOCK\n")
+	put("src/OB.scl", "ORGANIZATION_BLOCK \"OB_main\"\nTITLE = \"Cyclic interrupt, 100ms\"\nBEGIN\nEND_ORGANIZATION_BLOCK\n")
+	if _, err := s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{"src/Main.scl"}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, src := range []string{"src/Clash.scl", "src/Bare.scl"} {
+		// With an owned source beside it: nothing of the call is imported.
+		_, err := s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{src, "src/Main.scl"}, Prune: true})
+		if tiad.Kind(err) != tiad.KindForeignBlock || !strings.Contains(err.Error(), `"Main" [OB1] in the program blocks' root`) ||
+			!strings.Contains(err.Error(), "Nothing was imported") || !strings.Contains(err.Error(), "Rename the block") {
+			t.Fatalf("%s: %v, want foreign_block naming Main [OB1]", src, err)
+		}
+	}
+	// The refused calls changed nothing: the owned blocks are as before.
+	r, err := s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{"src/Main.scl"}})
+	if err != nil || blockNames(r.Blocks) != "FB:naut_Main,DB:naut_Main_DB" {
+		t.Fatalf("after the refusals: %s %v", blockNames(r.Blocks), err)
+	}
+	// Into another group, the blocks nautilus imported are foreign too.
+	if _, err := s.Software(ctx, tiad.SoftwareRequest{Group: "other", Sources: []string{"src/Main.scl"}}); tiad.Kind(err) != tiad.KindForeignBlock ||
+		!strings.Contains(err.Error(), `"naut_Main" [FB1] in group "nautilus"`) {
+		t.Fatalf("a block of another group: %v", err)
+	}
+	r, err = s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{"src/OB.scl"}})
+	if err != nil || len(r.Results) != 1 || r.Results[0].OK || len(r.Results[0].Messages) != 1 ||
+		!strings.Contains(r.Results[0].Messages[0], `Type conflict: Object "OB_main" cannot be overwritten`) {
+		t.Fatalf("an OB source while Main holds OB1: %+v %v", r, err)
+	}
+}
+
+// contractSoftwareReplacedForeign: when TIA changes a block outside the
+// group anyway (a header the agent's reading missed), the import fails
+// naming the change, and the session is never saved, archived for a
+// deploy, downloaded or imported into again: only closed.
+func contractSoftwareReplacedForeign(t *testing.T, start Starter) {
+	a, s := compiledBench(t, start)
+	a.SetImportReplacesForeign(t, true)
+	_, err := s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{"src/Main.scl"}, Prune: true})
+	if tiad.Kind(err) != tiad.KindOperationFailed ||
+		!strings.Contains(err.Error(), `"Main" [OB1] in the program blocks' root is now "Main" [FB1] in the program blocks' root`) ||
+		!strings.Contains(err.Error(), "Close it without saving") {
+		t.Fatalf("an import that replaced Main: %v", err)
+	}
+	a.SetImportReplacesForeign(t, false)
+	if _, err := s.Compile(ctx, true, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Download(ctx, benchSoftwareLoad); tiad.Kind(err) != tiad.KindUncleanSession || tiad.DeployIDOf(err) != "" {
+		t.Fatalf("a download after it: %v, want unclean_session", err)
+	}
+	if l := a.Loaded(t); len(l) != 0 {
+		t.Fatalf("a download after it loaded %+v", l)
+	}
+	if l := deploys(t, a.Client(), ""); len(l.Deploys) != 0 {
+		t.Fatalf("a download after it left a record: %+v", l)
+	}
+	if _, err := s.Save(ctx, false); tiad.Kind(err) != tiad.KindUncleanSession {
+		t.Fatalf("a save after it: %v, want unclean_session", err)
+	}
+	if _, err := s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{"src/Main.scl"}}); tiad.Kind(err) != tiad.KindUncleanSession {
+		t.Fatalf("another import after it: %v, want unclean_session", err)
+	}
+	if err := s.Close(ctx); err != nil {
+		t.Fatalf("close: %v", err)
+	}
 }
 
 func contractSoftware(t *testing.T, start Starter) {
@@ -665,7 +755,7 @@ func contractSoftware(t *testing.T, start Starter) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := blockNames(r.Blocks); got != "FC:Helper,FB:Main,DB:Main_DB,UDT:Recipe" {
+	if got := blockNames(r.Blocks); got != "FC:Helper,UDT:Recipe,FB:naut_Main,DB:naut_Main_DB" {
 		t.Fatalf("blocks = %s", got)
 	}
 	if len(r.Results) != 3 || !r.Results[0].OK || r.Results[2].Path != "tags/Tags.xml" {
@@ -674,11 +764,11 @@ func contractSoftware(t *testing.T, start Starter) {
 	// Without prune, blocks from earlier imports stay; with it, only what
 	// the sources produced is left.
 	r, err = s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{"src/Main.scl"}})
-	if err != nil || blockNames(r.Blocks) != "FC:Helper,FB:Main,DB:Main_DB,UDT:Recipe" {
+	if err != nil || blockNames(r.Blocks) != "FC:Helper,UDT:Recipe,FB:naut_Main,DB:naut_Main_DB" {
 		t.Fatalf("no prune: %s %v", blockNames(r.Blocks), err)
 	}
 	r, err = s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{"src/Main.scl"}, Prune: true})
-	if err != nil || blockNames(r.Blocks) != "FB:Main,DB:Main_DB" {
+	if err != nil || blockNames(r.Blocks) != "FB:naut_Main,DB:naut_Main_DB" {
 		t.Fatalf("prune: %s %v", blockNames(r.Blocks), err)
 	}
 	r, err = s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{"src/none.scl"}})

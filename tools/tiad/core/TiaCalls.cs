@@ -6,6 +6,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text;
 using System.Threading;
 using System.Xml;
 
@@ -738,10 +739,28 @@ namespace Tiad
                 foreach (string p in srcs) sources.Add(new SourceFile { Path = Paths.CleanPath(p), FullPath = ExistingFile(p) });
                 var tagTables = new List<SourceFile>();
                 foreach (string p in tables) tagTables.Add(new SourceFile { Path = Paths.CleanPath(p), FullPath = ExistingFile(p) });
+                // Every block the sources declare, read before TIA sees them:
+                // a name outside the group refuses the whole call, before
+                // anything is imported (Ownership).
+                var declared = new List<Declared>();
+                foreach (var src in sources) declared.AddRange(Ownership.Sources(File.ReadAllText(src.FullPath, Encoding.UTF8)));
                 SoftwareResult res = OnSession(s, delegate(ITia t)
                 {
+                    if (s.ForeignChanged) throw Ownership.Unusable("another import");
+                    List<ProjectBlock> before = t.Blocks(s.Handle);
+                    List<ProjectBlock> conflicts = Ownership.Conflicts(declared, before, group);
+                    if (conflicts.Count > 0) throw Ownership.Refusal(conflicts, group);
                     s.Compiled = false;
-                    return t.ImportSoftware(s.Handle, group, sources, tagTables, prune);
+                    SoftwareResult sr = t.ImportSoftware(s.Handle, group, sources, tagTables, prune);
+                    // A header the reading missed: whatever the import did
+                    // outside the group leaves the session unusable.
+                    List<string> changed = Ownership.Changed(before, t.Blocks(s.Handle), group);
+                    if (changed.Count > 0)
+                    {
+                        s.ForeignChanged = true;
+                        throw Ownership.ForeignChangedError(changed, group);
+                    }
+                    return sr;
                 });
                 return res.ToJson();
             });

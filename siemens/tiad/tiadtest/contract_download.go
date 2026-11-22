@@ -303,7 +303,7 @@ func contractDownloadFlow(t *testing.T, start Starter) {
 
 func contractDownloadRules(t *testing.T, start Starter) {
 	a, s := compiledBench(t, start, benchCPU, otherCPU)
-	a.SetQuestions(t, []tiad.Question{qStop, {ID: tiad.QuestionReinitialize, Message: "reinit", Objects: []string{"Main_DB"}}})
+	a.SetQuestions(t, []tiad.Question{qStop, {ID: tiad.QuestionReinitialize, Message: "reinit", Objects: []string{"naut_Main_DB"}}})
 	base := tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: benchCPU, Software: true, Announced: true}
 
 	// Whether the CPU starts after loading is decided before TIA is
@@ -327,7 +327,7 @@ func contractDownloadRules(t *testing.T, start Starter) {
 		t.Fatalf("a cancel after an acting answer: %v, want outcome_unknown naming stop-cpu", err)
 	}
 	no := base
-	no.Decisions = tiad.Decisions{StopCPU: tiad.No(), Reinitialize: []string{"Main_DB"}, StartAfter: tiad.No()}
+	no.Decisions = tiad.Decisions{StopCPU: tiad.No(), Reinitialize: []string{"naut_Main_DB"}, StartAfter: tiad.No()}
 	if _, err := s.Download(ctx, no); tiad.Kind(err) != tiad.KindDeclined || questionIDs(tiad.Questions(err)) != "stop-cpu" {
 		t.Fatalf("declined stop: %v", err)
 	}
@@ -349,7 +349,7 @@ func contractDownloadRules(t *testing.T, start Starter) {
 	// Whether the CPU starts after loading is always decided before
 	// loading, even when TIA would not ask.
 	yes := base
-	yes.Decisions = tiad.Decisions{StopCPU: tiad.Yes(), Reinitialize: []string{"main_db"}}
+	yes.Decisions = tiad.Decisions{StopCPU: tiad.Yes(), Reinitialize: []string{"naut_main_db"}}
 	if _, err := s.Download(ctx, yes); tiad.Kind(err) != tiad.KindDecisionRequired || questionIDs(tiad.Questions(err)) != "start-after" {
 		t.Fatalf("no startAfter decision: %v, want decision_required start-after", err)
 	}
@@ -549,7 +549,7 @@ func contractExportUploadSave(t *testing.T, start Starter) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"out/Main.scl", "out/Main_DB.scl", "out/tagtables.xml", "out/station.json", "out/GSDML-V2.4-fake-PLC_1.xml"}
+	want := []string{"out/naut_Main.scl", "out/naut_Main_DB.scl", "out/tagtables.xml", "out/station.json", "out/GSDML-V2.4-fake-PLC_1.xml"}
 	if !reflect.DeepEqual(ex.Files, want) {
 		t.Fatalf("export = %v, want %v", ex.Files, want)
 	}

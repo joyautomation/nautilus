@@ -56,6 +56,9 @@ func (f *Fake) recordIntent(s *session, req tiad.DownloadRequest, attested *tiad
 	if s.unclean {
 		return nil, uncleanFailure("archiving it for the deploy record")
 	}
+	if s.foreignChanged {
+		return nil, foreignUnusable("archiving it for the deploy record")
+	}
 	if f.archiveFails != "" {
 		return nil, fail(http.StatusInternalServerError, tiad.KindOperationFailed,
 			"archiving the project for the deploy record failed (TIA: %s); nothing was sent to the CPU", f.archiveFails)

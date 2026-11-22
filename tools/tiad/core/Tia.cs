@@ -211,8 +211,14 @@ namespace Tiad
         string CannotApply(Station next);
 
         // ImportSoftware generates blocks from sources into group; with
-        // prune, it deletes blocks in group that no source produced.
+        // prune, it deletes blocks in group that no source produced. TIA
+        // replaces a same-named block outside group too: the agent checks
+        // first (Ownership), with Blocks.
         SoftwareResult ImportSoftware(object project, string group, List<SourceFile> sources, List<SourceFile> tagTables, bool prune);
+
+        // Blocks is every program block the project holds, in every block
+        // group, each with its group (ProjectBlock.Group). It reads only.
+        List<ProjectBlock> Blocks(object project);
 
         CompileResult Compile(object project, bool hardware, bool software);
 

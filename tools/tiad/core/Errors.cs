@@ -41,6 +41,10 @@ namespace Tiad
         // UncleanSession refuses an apply or a save after an apply or an
         // upload failed part-way on the session: close it without saving.
         public const string UncleanSession = "unclean_session";
+        // ForeignBlock refuses a software import whose sources declare a
+        // program block that exists outside the import's group: TIA would
+        // replace it (Ownership.cs). Nothing was imported.
+        public const string ForeignBlock = "foreign_block";
     }
 
     // TiadException is a failure that becomes an error envelope: its HTTP

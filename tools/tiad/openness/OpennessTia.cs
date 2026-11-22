@@ -1526,7 +1526,7 @@ namespace Tiad.Openness
                 DeviceItem cpu = CpuOf(d);
                 PlcSoftware sw = (PlcSoftware)cpu.GetService<SoftwareContainer>().Software;
                 var blocks = new List<ProjectBlock>();
-                ProjectBlocks(sw.BlockGroup, blocks);
+                ProjectBlocks(sw.BlockGroup, "", blocks);
                 OnlineProvider op = cpu.GetService<OnlineProvider>();
                 ConfigurationPcInterface pc = PcInterface(op.Configuration);
                 ConfigurationAddress at = TargetInterface(pc).Addresses.Create(address);
@@ -1579,14 +1579,26 @@ namespace Tiad.Openness
 
         // ProjectBlocks adds every block in g and in its user groups, at
         // any depth, as Openness reports it: no block is left out for its
-        // type, so the agent names one it cannot label.
-        static void ProjectBlocks(PlcBlockGroup g, List<ProjectBlock> into)
+        // type, so the agent names one it cannot label. path is g's group
+        // path ("" for the root).
+        static void ProjectBlocks(PlcBlockGroup g, string path, List<ProjectBlock> into)
         {
             foreach (PlcBlock b in g.Blocks)
             {
-                into.Add(new ProjectBlock { Name = b.Name, Type = b.GetType().Name, Number = b.Number });
+                into.Add(new ProjectBlock { Name = b.Name, Type = b.GetType().Name, Number = b.Number, Group = path });
             }
-            foreach (PlcBlockUserGroup u in g.Groups) ProjectBlocks(u, into);
+            foreach (PlcBlockUserGroup u in g.Groups) ProjectBlocks(u, path == "" ? u.Name : path + "/" + u.Name, into);
+        }
+
+        // Blocks is every program block the project holds, with its group.
+        public List<ProjectBlock> Blocks(object project)
+        {
+            return Tia(delegate
+            {
+                var blocks = new List<ProjectBlock>();
+                ProjectBlocks(Software(Of(project).Project).BlockGroup, "", blocks);
+                return blocks;
+            });
         }
 
         // Node copies one element of TIA's compare tree, and its children,

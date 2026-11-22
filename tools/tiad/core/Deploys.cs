@@ -537,6 +537,7 @@ namespace Tiad
         {
             // A project left part-way is never archived as a deploy.
             if (s.Unclean) throw CpuReuse.Unclean("archiving it for the deploy record");
+            if (s.ForeignChanged) throw Ownership.Unusable("archiving it for the deploy record");
             string id = DeployStore.NewId();
             DeployArchive a;
             try
