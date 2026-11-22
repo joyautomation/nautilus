@@ -4,6 +4,13 @@
 
 ### Added
 
+- **`<CheckoutPage {force}/>` and `<CheckoutBanner {frame}/>`** (#719 slice 3): the I/O checkout, as the kit shows
+  it: progress by area and device, Pass/Fail/Note per point, a forced output with typed confirmation, and a banner on
+  every screen while a checkout force stands (the controller's countdown; "state unknown" on a quiet stream, never
+  "released" from a client timer). New exports: `CheckoutPage`, `CheckoutBanner`, `CheckoutClient`, `forceValue`,
+  `countdown`, `canIn` and friends; `NautilusFrame.checkoutForce`. The built-in app has them only when the project has
+  a `checkout:` section.
+
 - **`<AreaPage {area} {assets}/>`** (#714 slice 3): an area of the plant model, its equipment each with the alarms
   standing on it (out of service counted apart) and a link to its process scheme. New exports: `AreaPage`,
   `areaRows`, `AreaDescriptor`, `AreaRow`. The built-in app has `/areas/<id>`, and `naut hmi scheme` writes the

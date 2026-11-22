@@ -44,7 +44,7 @@ func buildHMI(proj *project.Project, dir string) (*hmibuild.Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	opts := hmibuild.Options{Project: abs, Title: proj.Name, Minify: true, Assets: append(plantAssets(proj), deviceAssets(proj)...)}
+	opts := hmibuild.Options{Project: abs, Title: proj.Name, Minify: true, Checkout: proj.Checkout != nil, Assets: append(plantAssets(proj), deviceAssets(proj)...)}
 	opts.Areas = plantAreas(proj, opts.Assets)
 	if proj.PWA != nil || proj.PWAIcon != nil {
 		opts.PWA = &hmibuild.PWA{Icon: proj.PWAIcon}
