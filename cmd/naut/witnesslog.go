@@ -100,6 +100,9 @@ func (wl *witnessLogs) open(cluster string) (*witnessLog, int, error) {
 		File:       file, Mark: mark, Identity: strconv.FormatUint(inc, 10),
 		Token: wl.token, Timeout: wl.timeout, Log: wl.log.With("cluster", cluster, "log", "operator-intent"),
 		Admit: func(from string, term uint64) error { return wl.admit(cluster, members, from, term) },
+		// No runtime applies the witness's copy: a newer log history
+		// supersedes it in place (#1029 3c-3c-2a).
+		ResetInPlace: !mutNaut("witness_supersede_waits"),
 	})
 	if err != nil {
 		return nil, http.StatusServiceUnavailable, fmt.Errorf("the cluster's operator-intent log: %w", err)

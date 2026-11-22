@@ -18,6 +18,21 @@ import "os"
 //     only by its next write, never by the log's own drive.
 //   - spare_log_runs: a spare's peer listener still answers (votes and the
 //     log's replication), and its log drive still runs (#1029 3c-2).
+//
+// #1029 3c-3c-2a, a superseded operator-intent log:
+//
+//   - hello_history_ignored: a higher history in the other controller's
+//     hello is not learnt;
+//   - restart_while_leading, restart_peer_unchecked, restart_unsupervised,
+//     restart_loops: a superseded controller restarts itself while it
+//     leads, before the other leads synced at the new history, with no
+//     supervisor, or again after a start that superseded (ruling 20d);
+//   - witness_supersede_waits: the witness's copy waits for a restart;
+//   - stale_retained_kept: a restart after a supersede leaves the old
+//     history's substitutes in the retain store;
+//   - superseded_lead_keeps_substitutes: a controller that learns it is
+//     superseded keeps running the old history's substitutes until a
+//     takeover.
 var mutOn = os.Getenv("QUORUM_MUT")
 
 func mutNaut(name string) bool { return name == mutOn }

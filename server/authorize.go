@@ -70,6 +70,7 @@ var actionPerm = map[string]string{
 	"redundancy.clear-duplicate": PermRedundancy,
 	"redundancy.commission":      PermRedundancy,
 	"redundancy.recommission":    PermRedundancy,
+	"redundancy.vouch":           PermRedundancy,
 }
 
 // presentedToken is the credential a request carries, in either

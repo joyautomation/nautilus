@@ -367,6 +367,44 @@ func (l *AlarmLog) Reconcile() {
 
 // dropAcks clears every ack from this replica's view (an unsynced
 // takeover: the log could not say which are current).
+// superseded: this copy's log was superseded by another history (#1029
+// 3c-3c-2a, oplog.Node.RetainedStale): the view, and what the retain
+// store holds of acks and shelves, are that history's.
+func (l *AlarmLog) superseded() bool {
+	return l.node != nil && l.node.RetainedStale() && !mutServer("superseded_alarms_kept")
+}
+
+// dropView forgets every ack and shelf the view holds.
+func (l *AlarmLog) dropView() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	clear(l.view)
+}
+
+// EndSuperseded ends what this controller holds of the old history's
+// alarm intent once its log is superseded (#1029 3c-3c-2a): the view's
+// acks and shelves go, and a live engine (it leads) loses its operator
+// state, so a shelf the person accepted to lose hides no alarm a scan
+// longer. Everything re-annunciates. It reports whether it changed
+// anything.
+func (l *AlarmLog) EndSuperseded() bool {
+	if !l.superseded() {
+		return false
+	}
+	l.liveMu.Lock()
+	defer l.liveMu.Unlock()
+	l.mu.Lock()
+	had := len(l.view) > 0
+	l.mu.Unlock()
+	l.dropView()
+	if l.live() && had {
+		l.eng.Note("system", "acks and shelves ended: this controller's operator-intent log was superseded by another history")
+		l.eng.ResetOperatorState()
+		return true
+	}
+	return had
+}
+
 func (l *AlarmLog) dropAcks() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -493,6 +531,19 @@ func (p PairAlarms) RestoreAlarmsSynced(m map[string]retain.AlarmRetain, synced 
 }
 
 func (p PairAlarms) restore(m map[string]retain.AlarmRetain, synced bool) {
+	if p.Log.superseded() {
+		// This copy's log was superseded by another history (#1029
+		// 3c-3c-2a): its acks and shelves, in the view or the retain
+		// store, are that history's, which a person accepted to lose. A
+		// stale shelf would hide an alarm: none is carried, everything
+		// re-annunciates.
+		p.Log.dropView()
+		p.Engine.Note("system", "acks and shelves not carried: this controller's operator-intent log was superseded by another history")
+		slog.Warn("alarm: acknowledgements and shelves not carried: the operator-intent log was superseded by another history")
+		p.Engine.ResetOperatorState()
+		p.Engine.RestoreAlarms(map[string]retain.AlarmRetain{})
+		return
+	}
 	if !synced {
 		if p.Log.hasAcks(m) {
 			p.Engine.Note("system", "acks not carried: takeover unsynced (the operator-intent log could not be caught up, so acknowledged alarms re-annunciate)")

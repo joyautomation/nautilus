@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/joyautomation/nautilus/quorum"
@@ -49,7 +51,22 @@ type LogState struct {
 	// controller yields only to one that can (naut-lead, #1053): a synced
 	// one whose other copies are all lost would lead read-only too.
 	CanSync bool
+	// History and HistoryID are the log's history (#1029 3c-3c-2a): sent
+	// in the hello so the other controller judges this copy at it from
+	// first contact. A copy at a lower history, or the same number under
+	// another id (a fork), is not one to defer or yield to.
+	History, HistoryID uint64
 }
+
+// LogAccept is what a person accepts at a vouch (oplog.VouchAccept), as
+// the digest of the picture they were shown.
+type LogAccept struct {
+	Loss    string `json:"loss,omitempty"`
+	LostLog string `json:"lostLog,omitempty"`
+}
+
+// Empty: nothing is accepted.
+func (a LogAccept) Empty() bool { return a.Loss == "" && a.LostLog == "" }
 
 // yieldEvery is how seldom one controller yields (naut-lead, #710): at
 // most once per this, so a flapping peer can't bounce the lead.
@@ -68,6 +85,7 @@ const EventVouchRefused EventKind = "redundancy.oplog.vouch-refused"
 // of its log.
 type peerLog struct {
 	synced, canSync, may bool
+	history, historyID   uint64
 	at                   time.Time
 }
 
@@ -79,10 +97,12 @@ func (e *Elector) SetLog(f func() LogState) {
 	e.mu.Unlock()
 }
 
-// SetVouch sets what Recommission runs first: the log's vouch for this
-// controller's copy (by names the person; inc is the witness incarnation
-// being adopted, at which the witness's copy counts). Call it before Run.
-func (e *Elector) SetVouch(f func(ctx context.Context, by string, inc uint64) error) {
+// SetVouch sets what Recommission runs first, and Vouch runs: the log's
+// vouch for this controller's copy (by names the person; inc is the
+// witness incarnation being adopted, at which the witness's copy counts;
+// acc what the person accepted). It returns the picture the vouch saw, as
+// JSON (oplog.Picture), and its refusal. Call it before Run.
+func (e *Elector) SetVouch(f func(ctx context.Context, by string, inc uint64, acc LogAccept) (json.RawMessage, error)) {
 	e.mu.Lock()
 	e.vouchFn = f
 	e.mu.Unlock()
@@ -132,13 +152,29 @@ const (
 
 // logDefers is logHold's judgement without its clock. Under mu.
 func (e *Elector) logDefers(now quorum.Instant, ls LogState, has bool) int {
-	if !has || ls.Synced || !e.peerLogFresh() || !e.peerLog.synced || !e.peerLog.may || mut("campaign_ignores_sync") {
+	if !has || ls.Synced || !e.peerLogFresh() || !e.peerLogSynced(ls) || !e.peerLog.may || mut("campaign_ignores_sync") {
 		return deferNo
 	}
 	if from, until := e.v.LeaderSeen(); from == e.o.Peer && now < until {
 		return deferLeads
 	}
 	return deferWait
+}
+
+// peerLogSynced: the other controller's log, by its last hello, is synced
+// at a history this copy would take from: the same, or a higher number
+// (which supersedes this one). A lower one is a history a person accepted
+// to lose, and the same number under another id a fork: neither is a log
+// to defer or yield to (#1029 3c-3c-2a). Under mu.
+func (e *Elector) peerLogSynced(ls LogState) bool {
+	p := e.peerLog
+	if !p.synced {
+		return false
+	}
+	if mut("lower_history_peer_synced") {
+		return true
+	}
+	return p.history > ls.History || p.history == ls.History && p.historyID == ls.HistoryID
 }
 
 // maybeYield is a leader's look at the log: an unsynced leader whose
@@ -151,7 +187,7 @@ func (e *Elector) maybeYield(now quorum.Instant, ls LogState, has bool) {
 	if !has || !e.c.Leading(now) || ls.Synced || !ls.Stuck || mut("unsynced_leader_keeps_lead") {
 		return
 	}
-	if !e.peerLogFresh() || !e.peerLog.synced || !e.peerLog.canSync && !mut("yield_ignores_can_sync") || !e.peerLog.may && !mut("yield_ignores_may") {
+	if !e.peerLogFresh() || !e.peerLogSynced(ls) || !e.peerLog.canSync && !mut("yield_ignores_can_sync") || !e.peerLog.may && !mut("yield_ignores_may") {
 		return
 	}
 	if e.v.Duplicated(now, e.o.Peer) && !mut("yield_to_marked_peer") {
@@ -206,12 +242,14 @@ func (e *Elector) selfLog() string {
 		(e.holdSince.IsZero() || time.Since(e.holdSince) < 2*e.o.Lease)
 	may := healthy && !e.released && !e.boxPending && e.v.State().Incarnation != 0 &&
 		e.mayCampaign(now) && !hold && (!e.c.Marked() || mut("may_ignores_mark"))
-	return logReport(ls.Synced, ls.Synced && ls.CanSync, may)
+	return logReport(ls.Synced, ls.Synced && ls.CanSync, may, ls.History, ls.HistoryID)
 }
 
 // logReport encodes a log report: "s" or "u" (synced or not), "c" or "x"
-// (can sync the others or not), then "m" or "n" (may campaign or not).
-func logReport(synced, canSync, may bool) string {
+// (can sync the others or not), then "m" or "n" (may campaign or not),
+// then, at a history above 0, "<history>.<id in hex>" (#1029 3c-3c-2a;
+// only then, so a pair at history 0 sends what an older build reads).
+func logReport(synced, canSync, may bool, history, id uint64) string {
 	r := []byte("uxn")
 	if synced {
 		r[0] = 's'
@@ -222,7 +260,26 @@ func logReport(synced, canSync, may bool) string {
 	if may {
 		r[2] = 'm'
 	}
+	if history > 0 {
+		return string(r) + strconv.FormatUint(history, 10) + "." + strconv.FormatUint(id, 16)
+	}
 	return string(r)
+}
+
+// parseLogHistory reads a log report's history suffix; ok is false when
+// it is malformed.
+func parseLogHistory(suffix string) (history, id uint64, ok bool) {
+	if suffix == "" {
+		return 0, 0, true
+	}
+	h, i, found := strings.Cut(suffix, ".")
+	if !found {
+		return 0, 0, false
+	}
+	var err1, err2 error
+	history, err1 = strconv.ParseUint(h, 10, 64)
+	id, err2 = strconv.ParseUint(i, 16, 64)
+	return history, id, err1 == nil && err2 == nil
 }
 
 // probeLog asks the other controller's hello for its log report every
@@ -266,19 +323,45 @@ func (e *Elector) askLog(ctx context.Context) {
 
 // heardLog records the peer's verified log report. Under mu.
 func (e *Elector) heardLog(r string) {
-	if len(r) != 3 {
+	if len(r) < 3 {
 		return
 	}
-	e.peerLog = peerLog{synced: r[0] == 's', canSync: r[1] == 'c', may: r[2] == 'm', at: time.Now()}
+	h, id, ok := parseLogHistory(r[3:])
+	if !ok {
+		return
+	}
+	e.peerLog = peerLog{synced: r[0] == 's', canSync: r[1] == 'c', may: r[2] == 'm', history: h, historyID: id, at: time.Now()}
 }
 
-// vouch runs the log's vouch, outside mu.
-func (e *Elector) vouch(ctx context.Context, by string, inc uint64) error {
+// PeerLog is what the other controller's last hello said of its log
+// (#1029 3c-3c-2a), for the caller that drives the log: whether it is
+// synced, its history, and whether it leads now. ok is false when it was
+// not heard within the last lease.
+type PeerLog struct {
+	Synced             bool
+	History, HistoryID uint64
+	Leads              bool
+}
+
+// PeerLog reports the other controller's log, as its last hello said.
+func (e *Elector) PeerLog() (PeerLog, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if !e.peerLogFresh() {
+		return PeerLog{}, false
+	}
+	from, until := e.v.LeaderSeen()
+	return PeerLog{Synced: e.peerLog.synced, History: e.peerLog.history, HistoryID: e.peerLog.historyID, Leads: from == e.o.Peer && e.now() < until}, true
+}
+
+// vouch runs the log's vouch, outside mu: the picture it saw (JSON) and
+// its refusal.
+func (e *Elector) vouch(ctx context.Context, by string, inc uint64, acc LogAccept) (json.RawMessage, error) {
 	e.mu.Lock()
 	f := e.vouchFn
 	e.mu.Unlock()
 	if f == nil {
-		return nil
+		return nil, nil
 	}
-	return f(ctx, by, inc)
+	return f(ctx, by, inc, acc)
 }

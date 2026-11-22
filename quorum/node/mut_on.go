@@ -76,6 +76,7 @@ var mutations = []string{
 	"recommission_under_fence",       // node: a commission or re-commission adopts below a member's fence, which then refuses the pair
 	"fence_any_name",                 // node: a member takes a fence on any name, the witness's or its own included
 	"dup_answered_before_write",      // node: a clear or fence is answered before its write is durable: a crash then loses what the command reported done
+	"lower_history_peer_synced",      // node: a peer's log at a lower or forked history is one to defer and yield to (#1029 3c-3c-2a)
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")

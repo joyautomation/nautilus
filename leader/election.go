@@ -158,8 +158,8 @@ func (q *Quorum) ClearDuplicate(ctx context.Context, name, by string) (report an
 // Commission commissions a new pair from this controller (#1029 3c-3c,
 // node.Elector.Commission): the report (JSON), the outcome (ClearDone,
 // ClearRefused) and, when refused, why.
-func (q *Quorum) Commission(ctx context.Context, by string) (report any, outcome, reason string) {
-	rep, err := q.n.Commission(ctx, by)
+func (q *Quorum) Commission(ctx context.Context, by, acceptLoss, acceptLostLog string) (report any, outcome, reason string) {
+	rep, err := q.n.Commission(ctx, by, node.LogAccept{Loss: acceptLoss, LostLog: acceptLostLog})
 	if err != nil {
 		return rep, ClearRefused, refusedReason(rep.Refused, err)
 	}
@@ -169,7 +169,7 @@ func (q *Quorum) Commission(ctx context.Context, by string) (report any, outcome
 // Recommission is the operator's re-commission of this controller (#1029
 // 3c-3c, node.Elector.RecommissionChecked), or with fromSpare its
 // recommission --from-spare (node.Elector.FromSpare).
-func (q *Quorum) Recommission(ctx context.Context, by string, incarnation, floor uint64, boxReplaced, fromSpare bool) (report any, outcome, reason string) {
+func (q *Quorum) Recommission(ctx context.Context, by string, incarnation, floor uint64, boxReplaced, fromSpare bool, acceptLoss, acceptLostLog string) (report any, outcome, reason string) {
 	if fromSpare {
 		rep, err := q.n.FromSpare(ctx, by)
 		switch {
@@ -195,7 +195,18 @@ func (q *Quorum) Recommission(ctx context.Context, by string, incarnation, floor
 		}
 		return rep, ClearRefused, refusedReason(rep.Refused, err)
 	}
-	rep, err := q.n.RecommissionChecked(ctx, by, node.RecommissionRequest{Incarnation: incarnation, Floor: floor, BoxReplaced: boxReplaced})
+	rep, err := q.n.RecommissionChecked(ctx, by, node.RecommissionRequest{Incarnation: incarnation, Floor: floor, BoxReplaced: boxReplaced, Accept: node.LogAccept{Loss: acceptLoss, LostLog: acceptLostLog}})
+	if err != nil {
+		return rep, ClearRefused, refusedReason(rep.Refused, err)
+	}
+	return rep, ClearDone, ""
+}
+
+// Vouch is the operator's vouch for this controller's operator-intent
+// log (#1029 3c-3c-2a, node.Elector.Vouch): log only. acceptLoss and
+// acceptLostLog are the digests the person accepts ("" accepts nothing).
+func (q *Quorum) Vouch(ctx context.Context, by, acceptLoss, acceptLostLog string) (report any, outcome, reason string) {
+	rep, err := q.n.Vouch(ctx, by, node.LogAccept{Loss: acceptLoss, LostLog: acceptLostLog})
 	if err != nil {
 		return rep, ClearRefused, refusedReason(rep.Refused, err)
 	}

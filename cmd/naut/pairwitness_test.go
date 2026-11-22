@@ -196,19 +196,6 @@ func TestPairUnsyncedLeaderYieldsToAVouchedPeer(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// The vouch's catch-up not used yet.
-	mark := filepath.Join(r.env[lead]["STATE_DIRECTORY"], pairLogMark)
-	var m oplog.Mark
-	b, err := os.ReadFile(mark)
-	if err != nil || json.Unmarshal(b, &m) != nil || !m.Synced {
-		t.Fatalf("the leader's mark: %s %v", b, err)
-	}
-	m.Alone = true
-	b, _ = json.Marshal(m)
-	if err := os.WriteFile(mark, b, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
 	r.startWitness(r.wit)
 	r.restart(stand)
 	if r.leader() != stand {
@@ -219,7 +206,20 @@ func TestPairUnsyncedLeaderYieldsToAVouchedPeer(t *testing.T) {
 		t.Fatalf("a write on the unsynced leader: %d %s", code, body)
 	}
 
+	// The synced controller comes back, alone among the copies that count:
+	// a person vouches for it (a vouch given before a restart does not
+	// survive one, #1177), and the unsynced leader yields to it.
 	r.restart(lead)
+	pairWait(t, "the synced controller to hear the copies", 10*time.Second, func() bool {
+		return len(r.nodes[lead].m.log.Status().Reached) == 3
+	})
+	_, pic, out := r.vouch(lead, "", "")
+	if !strings.HasPrefix(out, "refused") || pic.Digest == "" {
+		t.Fatalf("a plain vouch on the synced controller: %s %+v", out, pic)
+	}
+	if _, _, out := r.vouch(lead, pic.Digest, ""); !strings.HasPrefix(out, "done") {
+		t.Fatalf("the accepting vouch: %s", out)
+	}
 	yielded := false
 	pairWait(t, "the vouched controller to take the lead", 20*time.Second, func() bool {
 		for _, w := range r.nodes[stand].m.q.Status().Warnings {

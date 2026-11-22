@@ -42,7 +42,7 @@ func TestVouchStartsANewPair(t *testing.T) {
 	if err := tr.nodes[0].SyncLeader(tr.ctx()); !errors.Is(err, ErrReadOnly) {
 		t.Fatalf("three unsynced logs synced without a vouch: %v", err)
 	}
-	v, err := tr.nodes[0].Vouch(tr.ctx(), "op", nil)
+	v, _, err := tr.nodes[0].Vouch(tr.ctx(), "op", nil, VouchAccept{})
 	if err != nil || v.By != "op" || v.At == 0 {
 		t.Fatalf("vouch: %+v, %v", v, err)
 	}
@@ -68,7 +68,7 @@ func TestVouchStartsANewPair(t *testing.T) {
 // One shot: a vouched log that has caught up alone once doesn't again.
 func TestVouchedCatchUpAloneIsOnce(t *testing.T) {
 	tr := unsyncedTrio(t)
-	if _, err := tr.nodes[0].Vouch(tr.ctx(), "op", nil); err != nil {
+	if _, _, err := tr.nodes[0].Vouch(tr.ctx(), "op", nil, VouchAccept{}); err != nil {
 		t.Fatal(err)
 	}
 	mustSync(t, tr, 0) // alone: the others answer, unsynced
@@ -96,7 +96,7 @@ func TestVouchRefuses(t *testing.T) {
 			}
 			tr.start(i)
 		}
-		_, err := tr.nodes[1].Vouch(tr.ctx(), "op", nil)
+		_, _, err := tr.nodes[1].Vouch(tr.ctx(), "op", nil, VouchAccept{})
 		if !errors.Is(err, ErrVouchRefused) || !strings.Contains(err.Error(), tr.urls[0]) || !strings.Contains(err.Error(), "does not count") {
 			t.Fatalf("vouch over a later log that doesn't count: %v", err)
 		}
@@ -107,7 +107,7 @@ func TestVouchRefuses(t *testing.T) {
 	t.Run("a peer silent", func(t *testing.T) {
 		tr := unsyncedTrio(t)
 		tr.setDown(2, true)
-		_, err := tr.nodes[0].Vouch(tr.ctx(), "op", nil)
+		_, _, err := tr.nodes[0].Vouch(tr.ctx(), "op", nil, VouchAccept{})
 		if !errors.Is(err, ErrVouchRefused) || !strings.Contains(err.Error(), tr.urls[2]) || !strings.Contains(err.Error(), "does not answer") {
 			t.Fatalf("vouch with a peer away: %v", err)
 		}
@@ -119,7 +119,7 @@ func TestVouchRefuses(t *testing.T) {
 			t.Fatal(err)
 		}
 		tr.loseLog(1)
-		_, err := tr.nodes[1].Vouch(tr.ctx(), "op", nil)
+		_, _, err := tr.nodes[1].Vouch(tr.ctx(), "op", nil, VouchAccept{})
 		if !errors.Is(err, ErrVouchRefused) || !strings.Contains(err.Error(), "lost") {
 			t.Fatalf("vouch for a lost log: %v", err)
 		}
@@ -131,7 +131,7 @@ func TestVouchRefuses(t *testing.T) {
 			t.Fatal(err)
 		}
 		tr.setDown(2, true) // would refuse, if it checked
-		v, err := tr.nodes[1].Vouch(tr.ctx(), "op", nil)
+		v, _, err := tr.nodes[1].Vouch(tr.ctx(), "op", nil, VouchAccept{})
 		if err != nil || v != (Vouch{}) {
 			t.Fatalf("vouch for a synced log: %+v, %v", v, err)
 		}
@@ -171,7 +171,7 @@ func TestVouchWithASyncedWitnessTakesItsCommit(t *testing.T) {
 	if tr.nodes[0].Synced() {
 		t.Fatal("A synced with an unreadable mark")
 	}
-	if _, err := tr.nodes[0].Vouch(tr.ctx(), "op", nil); err != nil {
+	if _, _, err := tr.nodes[0].Vouch(tr.ctx(), "op", nil, VouchAccept{}); err != nil {
 		t.Fatalf("vouch A, level with W: %v", err)
 	}
 	tr.lead(0)
@@ -416,7 +416,7 @@ func TestCanSync(t *testing.T) {
 	}
 
 	v := unsyncedTrio(t)
-	if _, err := v.nodes[0].Vouch(v.ctx(), "op", nil); err != nil {
+	if _, _, err := v.nodes[0].Vouch(v.ctx(), "op", nil, VouchAccept{}); err != nil {
 		t.Fatal(err)
 	}
 	if !v.nodes[0].CanSync(time.Second) {
@@ -432,7 +432,7 @@ func TestCanSync(t *testing.T) {
 func TestDoubleVouchWithASilentWitnessKeepsTheWrite(t *testing.T) {
 	tr := unsyncedTrio(t)
 	for _, i := range []int{0, 1} {
-		if _, err := tr.nodes[i].Vouch(tr.ctx(), "op", nil); err != nil {
+		if _, _, err := tr.nodes[i].Vouch(tr.ctx(), "op", nil, VouchAccept{}); err != nil {
 			t.Fatalf("vouch n%d: %v", i, err)
 		}
 	}
@@ -475,7 +475,7 @@ func TestVouchOverACountingLongerWitnessRecoversItsEntries(t *testing.T) {
 	}
 	tr.wipe(0)
 	tr.wipe(1)
-	if _, err := tr.nodes[0].Vouch(tr.ctx(), "op", nil); err != nil {
+	if _, _, err := tr.nodes[0].Vouch(tr.ctx(), "op", nil, VouchAccept{}); err != nil {
 		t.Fatalf("vouch A with the witness counting and longer: %v", err)
 	}
 	tr.lead(0)
@@ -521,7 +521,7 @@ func TestVouchSyncedMeanwhileRecordsNothing(t *testing.T) {
 		}
 	})
 	tr.wipe(1)
-	v, err := tr.nodes[1].Vouch(tr.ctx(), "op", nil)
+	v, _, err := tr.nodes[1].Vouch(tr.ctx(), "op", nil, VouchAccept{})
 	if err != nil || v != (Vouch{}) {
 		t.Fatalf("vouch for a log synced meanwhile: %+v, %v", v, err)
 	}
@@ -553,7 +553,7 @@ func TestVouchedCatchUpWaitsForALongerCopyToCount(t *testing.T) {
 	}
 	tr.wipe(0)
 	tr.wipe(1)
-	if _, err := tr.nodes[0].Vouch(tr.ctx(), "op", nil); err != nil {
+	if _, _, err := tr.nodes[0].Vouch(tr.ctx(), "op", nil, VouchAccept{}); err != nil {
 		t.Fatalf("vouch A, the witness counting: %v", err)
 	}
 	wCounts.Lock()

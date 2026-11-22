@@ -573,6 +573,9 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	// and the system alarm say so (#709, design §6 question 5).
 	j, err := openAudit(proj, os.Stderr)
 	sopts.AuditUnavailable = err
+	if pair != nil && j != nil {
+		pair.SetJournal(j)
+	}
 	stopCopy := func() {}
 	if j != nil {
 		sopts.Audit = j
@@ -714,7 +717,11 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	go systemdNotify(ctx, sd, watch, func() bool {
 		return replicaReady(rt.Stats().Count > 0, el, pair != nil, time.Since(started))
 	})
-	<-ctx.Done()
+	var restart <-chan struct{}
+	if pair != nil {
+		restart = pair.RestartRequested()
+	}
+	exit := awaitStop(ctx, restart, stop, os.Stderr)
 	// Give the HTTP port back first. Held through the wait below, a `naut
 	// run` started right after the stop lost the bind and ran without its
 	// tag API while this process finished its last scan (nautilus#599).
@@ -731,7 +738,27 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	case <-time.After(runStopTimeout):
 		fmt.Fprintf(os.Stderr, "naut run: the scan loop did not stop within %s; exiting without its last retain save\n", runStopTimeout)
 	}
-	return 0
+	return exit
+}
+
+// exitRestart is naut run's exit status when it asks its supervisor to
+// start it again (EX_TEMPFAIL): non-zero, so Restart=on-failure does.
+const exitRestart = 75
+
+// awaitStop waits for naut run's stop (the signal's ctx) or the pair's
+// restart request, and returns the exit status: 0, or exitRestart after
+// stopping the run the way a signal would. A superseded operator-intent
+// log moves aside only at a start (#1029 3c-3c-2a), so the supervisor
+// (Restart=on-failure) starts this controller again.
+func awaitStop(ctx context.Context, restart <-chan struct{}, stop func(), stderr io.Writer) int {
+	select {
+	case <-ctx.Done():
+		return 0
+	case <-restart:
+		fmt.Fprintln(stderr, "naut run: restarting to take the operator-intent log's newer history (the supervisor starts naut again)")
+		stop()
+		return exitRestart
+	}
 }
 
 // bindAPI binds the tag API's address before anything else starts (#968).

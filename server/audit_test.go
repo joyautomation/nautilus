@@ -302,6 +302,33 @@ func auditRows() []auditRow {
 			header: map[string]string{"Authorization": "Bearer s3cret"},
 			action: "redundancy.recommission", target: "b", user: "token", source: "api", result: "error",
 			check: wantReason("fake incomplete")},
+		{name: "re-commission accepting a loss", pattern: "POST /api/cluster/recommission", server: pairServer("done"),
+			method: "POST", path: "/api/cluster/recommission", body: `{"floor":5000,"acceptLoss":"0123456789"}`,
+			header: map[string]string{"Authorization": "Bearer s3cret"},
+			action: "redundancy.recommission", target: "b", user: "token", source: "api", result: "ok",
+			check: wantDetail("acceptLoss", "0123456789")},
+		{name: "vouch, the picture printed", pattern: "POST /api/cluster/vouch", server: pairServer("refused"),
+			method: "POST", path: "/api/cluster/vouch", body: `{}`,
+			header: map[string]string{"Authorization": "Bearer s3cret"},
+			action: "redundancy.vouch", target: "b", user: "token", source: "api", result: "refused",
+			check: wantReason("fake refused")},
+		{name: "vouch accepting a loss", pattern: "POST /api/cluster/vouch", server: pairServer("done"),
+			method: "POST", path: "/api/cluster/vouch", body: `{"acceptLoss":"0123456789"}`,
+			header: map[string]string{"Authorization": "Bearer s3cret"},
+			action: "redundancy.vouch", target: "b", user: "token", source: "api", result: "ok",
+			check: func(t *testing.T, e audit.Entry) {
+				wantDetail("acceptLoss", "0123456789")(t, e)
+				wantDetail("attestLoss", acceptLossAttest)(t, e)
+			}},
+		{name: "vouch accepting a lost log, not a digest", pattern: "POST /api/cluster/vouch", server: pairServer("done"),
+			method: "POST", path: "/api/cluster/vouch", body: `{"acceptLostLog":"yes"}`,
+			header: map[string]string{"Authorization": "Bearer s3cret"},
+			action: "redundancy.vouch", target: "b", user: "token", source: "api", result: "refused",
+			check: wantReason("ten hex digits")},
+		{name: "vouch, no credential configured", pattern: "POST /api/cluster/vouch", server: pairServerNoToken("done"),
+			method: "POST", path: "/api/cluster/vouch", body: `{}`,
+			action: "redundancy.vouch", target: "b", user: "anonymous", source: "api", result: "refused",
+			check: wantReason("NAUTILUS_TOKEN")},
 		{name: "re-commission, no credential configured", pattern: "POST /api/cluster/recommission", server: pairServerNoToken("done"),
 			method: "POST", path: "/api/cluster/recommission", body: `{"floor":5000}`,
 			action: "redundancy.recommission", target: "b", user: "anonymous", source: "api", result: "refused",
@@ -553,14 +580,19 @@ func (f *fakePair) ClearDuplicate(_ context.Context, name, by string) (any, stri
 	return map[string]any{"name": name}, f.outcome, "fake " + f.outcome
 }
 
-func (f *fakePair) Commission(_ context.Context, by string) (any, string, string) {
+func (f *fakePair) Commission(_ context.Context, by, acceptLoss, acceptLostLog string) (any, string, string) {
 	f.by = append(f.by, by)
-	return map[string]any{"cluster": "c"}, f.outcome, "fake " + f.outcome
+	return map[string]any{"cluster": "c", "acceptLoss": acceptLoss}, f.outcome, "fake " + f.outcome
 }
 
-func (f *fakePair) Recommission(_ context.Context, by string, inc, floor uint64, boxReplaced, fromSpare bool) (any, string, string) {
+func (f *fakePair) Recommission(_ context.Context, by string, inc, floor uint64, boxReplaced, fromSpare bool, acceptLoss, acceptLostLog string) (any, string, string) {
 	f.by = append(f.by, by)
-	return map[string]any{"floor": floor, "fromSpare": fromSpare}, f.outcome, "fake " + f.outcome
+	return map[string]any{"floor": floor, "fromSpare": fromSpare, "acceptLoss": acceptLoss}, f.outcome, "fake " + f.outcome
+}
+
+func (f *fakePair) Vouch(_ context.Context, by, acceptLoss, acceptLostLog string) (any, string, string) {
+	f.by = append(f.by, by)
+	return map[string]any{"picture": map[string]any{"digest": "0123456789"}, "acceptLoss": acceptLoss, "acceptLostLog": acceptLostLog}, f.outcome, "fake " + f.outcome
 }
 
 func pairServer(outcome string) func(*testing.T) *Server {

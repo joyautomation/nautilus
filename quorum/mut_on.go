@@ -247,6 +247,39 @@ var Mutations = []string{
 	"recommission_under_fence",       // node: a commission or re-commission adopts below a member's fence, which then refuses the pair
 	"fence_any_name",                 // node: a member takes a fence on any name, the witness's or its own included
 	"dup_answered_before_write",      // node: a clear or fence is answered before its write is durable: a crash then loses what the command reported done
+	// #1029 3c-3c-2a: accepting a loss, and the log history.
+	"accept_loss_blanket",               // oplog: a vouched catch-up overrides a copy outside what the person accepted
+	"accept_kept_after_sync",            // oplog: a log synced by the normal path keeps its acceptance
+	"history_not_bumped",                // oplog: an override starts no new history: the overridden copy counts when it returns
+	"history_after_write",               // oplog: the new history is recorded after the copy is synced for its term
+	"history_lower_counted",             // oplog: a copy at a lower history counts
+	"history_fork_counted",              // oplog: a forked copy (same number, another id) counts and is replicated to
+	"fork_resolved_without_bump",        // oplog: a catch-up overriding an accepted fork starts no new history
+	"superseded_not_reset",              // oplog: a superseded copy keeps (and replays) its log at its next start
+	"superseded_takes",                  // oplog: a superseded copy takes and applies replication before its restart
+	"supersede_not_durable",             // oplog: a heard higher history is held in memory only
+	"history_moved_commits",             // oplog: a leader that hears a higher history while replicating commits what it stored
+	"lost_log_vouch_unchecked",          // oplog: a lost log is vouched for without --accept-lost-log
+	"synced_alone_without_accept",       // oplog: a synced copy alone is granted the one-shot without --accept-loss
+	"override_all_silent",               // oplog: a vouched catch-up overrides with every other copy silent, the new history on one copy alone
+	"stale_under_lock",                  // oplog: RetainedStale takes the node's lock: a takeover and a commit's Apply wait on each other (#1177 review)
+	"vouch_keeps_term_synced",           // oplog: #1177 review
+	"spend_failure_keeps_alone",         // oplog: a vouch's one-shot whose spend can't be written stays armed in memory (#1177 CI)
+	"accept_survives_reboot",            // oplog: a vouch's one-shot and acceptance survive a restart (#1177, naut-lead)
+	"stale_retained_alarms_kept",        // runtime: a start after a superseded log keeps the retain store's acks and shelves (#1177 review)
+	"noop_digest_unchecked",             // oplog: #1177 review
+	"vouch_again_noop",                  // oplog: #1177 review
+	"lower_history_peer_synced",         // node: a peer's log at a lower or forked history is one to defer and yield to
+	"hello_history_ignored",             // naut: a higher history in the other controller's hello is not learnt
+	"restart_while_leading",             // naut: a superseded controller restarts itself while it leads
+	"restart_peer_unchecked",            // naut: a superseded controller restarts itself though the other does not lead synced at the new history
+	"restart_unsupervised",              // naut: a superseded controller restarts itself with no supervisor to start it again
+	"restart_loops",                     // naut: a controller restarts itself again for a second superseded log after one at its start
+	"witness_supersede_waits",           // naut: the witness's copy waits for a restart to take a newer history, as a controller's
+	"stale_retained_kept",               // naut: a superseded log's substitutes stay in the retain store after its restart
+	"superseded_lead_keeps_substitutes", // naut: a controller that learns it is superseded keeps running the old history's substitutes until a takeover
+	"retained_stale_ignored",            // server: a takeover restores a superseded log's retained substitutes
+	"superseded_alarms_kept",            // server: a superseded log's acks and shelves are carried by a takeover
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")

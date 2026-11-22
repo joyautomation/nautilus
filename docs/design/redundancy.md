@@ -117,9 +117,62 @@ bumpless, and the measured takeover time is published instead.
       log report for this (synced, can sync, may campaign), bound in its MAC
       (`node/logpref.go`).
     - **A synced leader alone among the copies is read-only too** (`oplog-read-only`:
-      "operator log read-only: no second counting copy — recommission (3c)"): entries
-      committed while it lagged may be on the lost copies, so only a person can decide (3c's
-      vouch or `--accept-loss` for a synced controller).
+      "operator log read-only: no second counting copy"): entries committed while it lagged
+      may be on the lost copies, so only a person can decide (`naut redundancy vouch`, below).
+    - **A person accepts a loss (#1029 3c-3c-2a).** `naut redundancy vouch` (log only, on a
+      commissioned controller; `POST /api/cluster/vouch`, journalled `redundancy.vouch`)
+      prints the picture of the copies (`oplog.Picture`: each copy's answer, whether it
+      counts, its last entry, its history) and a 10-hex digest (sha256, error texts left
+      out), and refuses what would lose entries unless the run names that digest:
+      `--accept-loss` (a silent copy, a later one that does not count, a forked one, or a
+      synced copy with no other copy counting: that grants the one-shot), `--accept-lost-log`
+      (this copy lost). A different digest refuses and reprints. What was accepted is kept per
+      peer (`Mark.Accept`: silent, forked, or later up to (term, seq)); the one-shot catch-up
+      overrides a copy only within it ("not what was accepted: naut redundancy vouch
+      again"), always takes a counting answer, and is spent with `Alone`; a normal sync drops
+      it. An override with EVERY other copy silent is refused (naut-lead (i),
+      `override_all_silent`): the new history would sit on one copy, and the other two,
+      back at the old one, could commit there and lose it at first contact; alone it commits
+      nothing anyway. Stated window: the override answered by the witness, then dead before
+      its first heartbeat moved the witness (half a lease).
+    - **The log history.** A catch-up that actually overrides a copy starts history N+1
+      under a random id (`Mark.Lineage`: number, id, who accepted), in the same mark write
+      that spends the vouch, durable before the copy is synced for its term or takes
+      anything. Every authenticated answer (catch-up reads, replication) and the hello
+      (`<synced><can-sync><may><N>.<id hex>`, only above 0) carry it; `/api/quorum` only
+      notes it (no token there). A copy at a lower history does not count, refuses
+      replication from it (409 "history") and does not defer or yield to it. One that hears
+      a higher history is superseded: a controller's records `SupersedeTo` durably, counts
+      for nothing, takes and applies nothing, and at its next start moves the log aside
+      (`.superseded-<unix>`, one kept, newest) BEFORE replay and drops the retain store's
+      substitutes, acks and shelves (`Mark.DropRetained`, owed until done;
+      `Runtime.DropRetainedIntent`). The superseded verdict the runtime and the alarm log ask
+      under their own locks is an atomic kept with the mark: a commit's Apply takes those locks
+      under the node's (#1177 review). "Vouch again" judges the picture anew (a pending one-shot
+      is no reason for a no-op), and a vouch that grants the one-shot makes a leader catch up
+      again for its term, so a fork chosen there is resolved at once. A vouch's one-shot and
+      acceptance hold for the boot they were given in: a start drops them (the copy stays
+      synced), so a spend a crash lost never re-arms an acceptance of a picture that may no
+      longer be true; a spend that can't be written is spent in memory and retried. At the learn, leading or not
+      (`Options.OnSuperseded`, and every half lease after), the runtime ends every substitute
+      it holds (`log-superseded`, `Runtime.EndSupersededSubstitutes`) and the alarm view's
+      acks and shelves go, a live engine's too (`AlarmLog.EndSuperseded`): a leader at N that
+      learns N+1 (the window above) leads on read-only for control, running none of N, and
+      hands over by the yield rule (a synced peer at a higher history counts). A takeover
+      before the restart ends them too, restores none from the retain store
+      (`runtime.StaleRetained`) and carries no acks or shelves. It restarts itself (exit 75 for `Restart=on-failure`) only
+      when it is standby, the other leads synced at that history (its hello), a supervisor
+      runs it (`INVOCATION_ID` or `NOTIFY_SOCKET`), and its start did not already move a
+      superseded log aside (no loop); else the condition `oplog-superseded` says why. The
+      witness's copy supersedes in place (`Options.ResetInPlace`). The same number under
+      another id is a **fork** (two overrides, each with the other controller silent, the first never reaching the witness: the window above): neither
+      counts the other or supersedes, both raise `oplog-forked`, and a vouch on the chosen
+      side treats the forked copies as needing `--accept-loss`, even on a synced copy a
+      majority counts (the only such case); its catch-up then starts N+1. Mixed versions: a
+      build from before reads as history 0, so at N >= 1 it never counts (fail closed); at 0
+      nothing changes. Stated: a replaced or wiped controller joining a pair at N >= 1
+      restarts once; after an override with the witness silent, a new leadership before
+      the witness synced is alone again (vouch again; no bump).
     - **The leader retries its catch-up** every half lease while its term is unsynced, once
       the runtime's takeover is done: the witness never pulls, and nothing leaves an unsynced
       leader.

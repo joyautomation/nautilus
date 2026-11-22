@@ -845,10 +845,9 @@ sync the others` in `GET /api/cluster`), at most once every 10 minutes.
 **A synced controller alone among the copies can't decide either.** If
 both other copies were lost (the other controller's and the witness's),
 changes committed while it lagged may have been on them, so it leads
-read-only and says "operator log read-only: no second counting copy —
-recommission (3c)". Bringing back a copy that still holds its log ends
-it; otherwise the way past is a person's decision (a re-commission that
-accepts the loss: `--accept-loss`, coming in the next release, #1029).
+read-only and says "operator log read-only: no second counting copy".
+Bringing back a copy that still holds its log ends it; otherwise the way
+past is a person's decision: `naut redundancy vouch` (below).
 
 **A new pair's logs are vouched for at commissioning.** All three copies
 start empty, so none is synced yet: `naut redundancy commission` vouches
@@ -858,12 +857,111 @@ refused while any other copy doesn't answer (it may hold entries the
 vouched one lacks: bring it back, or rebuild it), when a copy that
 doesn't count holds a later log (its entries would be lost; named in the
 refusal), and for a copy that was lost (re-commission the other
-controller instead). **A refused vouch never stops the re-commission:**
-the pair is commissioned and controls the plant, its log stays read-only,
-and `GET /api/cluster` says why. A later log on a copy that counts is no
+controller instead, or accept it: below). **A refused vouch never stops
+the re-commission:** the pair is commissioned and controls the plant, its
+log stays read-only, and `GET /api/cluster` says why. A later log on a copy that counts is no
 refusal: it is taken. So if both controllers lose their disks while the
 witness's copy is whole, re-commissioning one brings the witness's
 entries back. Logs from before this release need no vouch.
+
+#### Accepting a lost operator log: `naut redundancy vouch`
+
+When the log stays read-only and the copies that would end it can't come
+back (a box dead for good, a witness rebuilt, a disk lost on both
+controllers), a person decides what is lost. Run on the controller
+whose copy you keep:
+
+```sh
+naut redundancy vouch
+```
+
+It changes nothing in the election. It prints each copy (does it
+answer, does it count, its last entry), what accepting would lose, a
+short digest of that picture, and the exact command that accepts it,
+for example:
+
+```
+operator-intent log copies:
+  this controller  counts; last entry term 7, seq 41
+  controller b     DOES NOT ANSWER: connection refused
+  the witness      not synced (does not count); last entry term 0, seq 0
+would be lost: controller b does not answer: it may hold entries this log lacks; ...
+picture digest 3f9c0a17be. If that loss is acceptable, run on this controller:
+  naut redundancy vouch --accept-loss=3f9c0a17be
+```
+
+- `--accept-loss=<digest>` accepts what the other copies may hold: a
+  copy that doesn't answer, a later log that doesn't count, or every
+  other copy lost.
+- An override needs one other copy answering. With both the other
+  controller and the witness silent, the catch-up refuses ("a loss
+  accepted with every other copy silent would leave the new history on
+  this copy alone"): bring one back or rebuild it (a rebuilt witness
+  answers), then vouch again. Alone, the controller could commit nothing
+  anyway.
+- `--accept-lost-log=<digest>` accepts that this controller's own log was
+  lost (`oplog-lost`). With the witness's copy whole it gets the
+  witness's entries back.
+- The acceptance is for that picture only. If the copies changed since
+  it was printed, the command refuses and prints the new one. If, when
+  this controller next catches up as leader, a copy that answered is now
+  silent (or holds more than was shown), the catch-up waits and says "not
+  what was accepted: naut redundancy vouch again". Running `vouch` again
+  prints the new picture to accept.
+- A vouch holds until naut next restarts on that controller. If it
+  restarts before the vouch was used, the copy stays synced, but you
+  vouch again against the picture as it is then.
+- `commission` and `recommission` take the same two flags for the vouch
+  they run. A refused vouch there prints the picture and the `vouch`
+  command to run next.
+- Each run is journalled as `redundancy.vouch`, accepted or refused, with
+  the digest and what you accepted.
+
+**A copy whose loss was accepted never counts again.** When the catch-up
+actually overrides a copy (one that didn't answer, or a later one that
+doesn't count), the log starts a new history (`history 1` in `naut
+redundancy status`). A copy at an older history counts for nothing. When
+it comes back (the dead box repaired, say), it is told so on first
+contact and the banner says "superseded". At its next start naut moves its
+log aside, before replaying anything, to `oplog.jsonl.superseded-<time>`
+(the newest one is kept), drops what its retain store keeps of the old
+history (substitutes, acknowledgements, shelves), and syncs the
+new history. It also stops running the old history's substitutes at once,
+and its acknowledgements and shelves go (its alarms re-annunciate), even
+while it leads: it then leads read-only for control and hands over to the
+other controller once that one can take it. Under systemd (with
+`Restart=on-failure`, as `naut deploy`'s unit has) it restarts itself
+once, as soon as it is the
+standby and the other controller leads synced at the new history
+(journalled as `redundancy.oplog-superseded-restart`). Otherwise the banner
+says why it waits, and you restart naut on it. If it has to take over
+before that restart, it runs none of the old history's substitutes.
+
+- Once a pair has a history above 0, a controller whose state was wiped or
+  whose box was replaced also restarts once when it first joins. This is
+  automatic under systemd.
+- Right after such an override, if the leadership moves before the
+  witness has synced (it normally syncs within half a lease), the new
+  leader is alone again. Run `vouch --accept-loss` once more; it
+  overrides nothing.
+- The same half lease is the one window left: if the controller that
+  accepted the loss dies before its first heartbeat reaches the witness,
+  the other controller and the witness can go on at the old history, and
+  what they commit then is superseded when it returns. Keep it running
+  until `naut redundancy status` shows the witness synced.
+- **A fork.** If people accepted losses on both controllers, each seeing
+  the other controller silent and the witness not yet moved (the window
+  above), both logs start the same history number with different
+  contents. Neither counts the other,
+  neither moves aside, and both say "operator log forked at history N
+  (accepted by ...)". Choose one: run `naut redundancy vouch` on the
+  controller whose log you keep and accept with `--accept-loss`. Its next
+  catch-up as leader starts history N+1 (if the other controller leads,
+  hand the lead over first), and the other side is superseded as above.
+  A fork is the only case where the vouch acts on a synced copy that
+  another copy counts beside.
+- At a history above 0, a copy on an older naut build counts for nothing:
+  upgrade all three members together. At history 0 nothing changes.
 
 :::caution[The witness holds plant operator data]
 The witness's state directory keeps a copy of the operator-intent log:

@@ -125,6 +125,9 @@ var actionClass = map[string]string{
 	"redundancy.clear-duplicate": strict,
 	"redundancy.commission":      strict,
 	"redundancy.recommission":    strict,
+	// A person's word for the operator-intent log, which may accept losing
+	// what other copies hold (#1029 3c-3c-2a).
+	"redundancy.vouch": strict,
 }
 
 const (
