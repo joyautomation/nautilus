@@ -780,6 +780,25 @@ func (n *Node) supersede(m Mark) (Mark, error) {
 	return nm, nil
 }
 
+// SupersededInMark is SupersededLog for a stopped controller: the replaced
+// history the log mark file names, and who accepted the loss. "" when the
+// mark is absent or names none; the file must still exist.
+func SupersededInMark(markPath string) (file, by string) {
+	m, err := readMark(markPath)
+	if err != nil || m.Superseded == "" || m.Superseded == "(empty)" {
+		return "", ""
+	}
+	if _, err := os.Stat(m.Superseded); err != nil {
+		return "", m.HistoryBy
+	}
+	return m.Superseded, m.HistoryBy
+}
+
+// NewestSuperseded is the newest File+".superseded-<unix>" there is, "" if
+// none: a tool reading a stopped controller's directory finds the history
+// that was replaced beside the log.
+func NewestSuperseded(file string) string { return newestSuperseded(file) }
+
 // newestSuperseded is the newest File+".superseded-<unix>" there is, "" if
 // none.
 func newestSuperseded(file string) string {
@@ -1017,6 +1036,23 @@ func (n *Node) History() (own, to Lineage) {
 		to = Lineage{History: n.mark.SupersedeTo, HistoryID: n.mark.SupersedeID, HistoryBy: n.mark.SupersedeBy}
 	}
 	return n.mark.Lineage, to
+}
+
+// SupersededLog is the older history this copy's log was replaced by: the
+// file it was moved aside to (Mark.Superseded; "" when there is none or it
+// is gone) and who accepted the loss (the history's HistoryBy). Read it only
+// with ReadCommitted: it is a record, never applied.
+func (n *Node) SupersededLog() (file, by string) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	file, by = n.mark.Superseded, n.mark.HistoryBy
+	if file == "" || file == "(empty)" {
+		return "", by
+	}
+	if _, err := os.Stat(file); err != nil {
+		return "", by
+	}
+	return file, by
 }
 
 // RetainedStale: what the runtime retained of this log's entries (its

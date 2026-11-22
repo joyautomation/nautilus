@@ -111,3 +111,51 @@ claims:
     tests:
       - go ./cmd/naut TestNotesExportFromAControllerOnItsOwn
       - go ./cmd/naut TestNotesExportFromAPairsLog
+
+  - id: NOTE-013
+    claim: >-
+      The notes of a replaced log history are shown read-only, labelled with
+      who accepted the loss and when the log was moved aside, are never in the
+      live notes and cannot be changed, and a note the live history also holds
+      is not repeated.
+    source: "#what-to-know-on-a-pair"
+    tests:
+      - go ./server TestSupersededHistoryNotesAreShownReadOnlyAndNeverApplied
+    partial: true
+    note: >-
+      The reading of the kept-aside file is tested with the log's answer
+      faked; a real vouch that supersedes a copy, then the page, is not run
+      end to end.
+
+  - id: NOTE-014
+    claim: >-
+      naut notes export includes the replaced history's notes, flagged
+      superseded (a history column in CSV), without repeating a note the live
+      history holds.
+    source: "#what-to-know-on-a-pair"
+    tests:
+      - go ./cmd/naut TestNotesExportIncludesTheSupersededHistoryFlagged
+
+  - id: NOTE-015
+    claim: >-
+      A person's unsent note is kept as a draft per person and per target,
+      survives a reload, and is taken away at sign-out and when someone else
+      is signed in, so it is never shown to or left for the next person at a
+      shared terminal.
+    source: "#on-the-screen"
+    tests: []
+    note: >-
+      Tested in the kit (hmi/tests/notes.test.ts, run by npm test, not by go
+      test) and in a Chromium run recorded in the pull request; the claims
+      tool lists only Go tests.
+
+  - id: NOTE-016
+    claim: >-
+      A note the controller did not keep says why in its own words and leaves
+      the person's text in place; an unconfirmed one says it may have been
+      kept and offers to check.
+    source: "#on-the-screen"
+    tests: []
+    note: >-
+      Tested in the kit (hmi/tests/notes.test.ts) and in a Chromium run with
+      the controller's refusals simulated; not a Go test.

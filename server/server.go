@@ -899,6 +899,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/parameters", s.handleParameters)
 	mux.HandleFunc("GET /api/parameters/patch", s.handleParametersPatch)
 	mux.HandleFunc("GET /api/notes", s.handleNotesList)
+	mux.HandleFunc("GET /api/notes/counts", s.handleNotesCounts)
 	mux.HandleFunc("GET /api/notes/{id}", s.handleNoteGet)
 	mux.Handle("POST /api/notes", s.audited("note.add", noteAddTarget, s.handleNoteAdd))
 	mux.Handle("POST /api/notes/{id}/revise", s.audited("note.revise", noteChangeTarget, s.handleNoteRevise))

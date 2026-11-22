@@ -12,6 +12,7 @@
 // Nothing here grants anything: the controller decides every request. A
 // control the kit greys out for a role is a convenience; the server's
 // refusal is the answer.
+import { DraftKeeper } from './notes.js';
 import { askPassword, confirm } from './confirm.svelte.js';
 import { setKitFetch, setStreamHooks, type Fetch } from './kitfetch.js';
 import { AuthSession, clockSkew, confirmsAtProvider, holdsAnywhere, needsPassword, signedInName, type AuthDeps, type Me, type Referral } from './auth.js';
@@ -176,8 +177,13 @@ export class AuthClient {
 	}
 
 	/** Sign out, then the sign-in page. Resolves null, or the reason it could not. */
-	signOut(): Promise<string | null> {
-		return this.session.signOut();
+	async signOut(): Promise<string | null> {
+		const who = this.me?.principal;
+		const r = await this.session.signOut();
+		// a terminal several people share: the unsent notes of the person who
+		// signed out go with them (a session that merely expires keeps them)
+		if (r === null && who) new DraftKeeper().clearFor(who);
+		return r;
 	}
 }
 

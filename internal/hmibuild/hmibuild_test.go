@@ -63,8 +63,8 @@ func TestBuildsTheDefaultAppFromMimics(t *testing.T) {
 	}
 	// naut's diagnostics and alarms pages, and the project's own
 	// FilterCell on the components page
-	if got := strings.Join(res.Pages, " "); got != "/ /pumps /diagnostics /alarms /components" {
-		t.Errorf("pages = %q, want / /pumps /diagnostics /alarms /components", got)
+	if got := strings.Join(res.Pages, " "); got != "/ /pumps /diagnostics /log /alarms /components" {
+		t.Errorf("pages = %q, want / /pumps /diagnostics /log /alarms /components", got)
 	}
 	if !strings.Contains(string(res.Files["index.html"]), "<title>Filter gallery</title>") {
 		t.Errorf("index.html: %s", res.Files["index.html"])
@@ -202,8 +202,8 @@ func TestComponentsPageDrawsEachExample(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strings.Join(res.Pages, " "); got != "/ /diagnostics /alarms /components" {
-		t.Errorf("pages = %q, want / /diagnostics /alarms /components", got)
+	if got := strings.Join(res.Pages, " "); got != "/ /diagnostics /log /alarms /components" {
+		t.Errorf("pages = %q, want / /diagnostics /log /alarms /components", got)
 	}
 	var all strings.Builder
 	for name, b := range res.Files {

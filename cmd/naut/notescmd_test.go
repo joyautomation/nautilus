@@ -169,3 +169,61 @@ func TestNotesExportIsReadOnly(t *testing.T) {
 		t.Errorf("code %d, file %q", code, b)
 	}
 }
+
+// A pair whose log was replaced keeps the old one aside: its notes are in
+// the export, flagged, and a note the live history also holds is not
+// repeated.
+func TestNotesExportIncludesTheSupersededHistoryFlagged(t *testing.T) {
+	sd := t.TempDir()
+	write := func(path string, rs ...notes.Revision) {
+		var lines []string
+		for i, r := range rs {
+			e := notes.Entry(r)
+			e.Seq, e.Term, e.TS = uint64(i+1), 1, r.At
+			b, _ := json.Marshal(map[string]any{"e": e})
+			lines = append(lines, string(b))
+		}
+		c, _ := json.Marshal(map[string]any{"c": len(rs)})
+		os.WriteFile(path, []byte(strings.Join(append(lines, string(c)), "\n")+"\n"), 0o600)
+	}
+	write(filepath.Join(sd, pairLogFile), rv("both", 1, 3000, "in both"), rv("live", 1, 4000, "live only"))
+	oldFile := filepath.Join(sd, pairLogFile+".superseded-1700000000")
+	write(oldFile, rv("both", 1, 3000, "in both"), rv("old", 1, 1000, "handover from the old history"))
+	// a newer file by name that the mark does NOT name: the mark's is the history the server shows
+	write(filepath.Join(sd, pairLogFile+".superseded-1800000000"), rv("other", 1, 500, "from a different history"))
+	mark, _ := json.Marshal(map[string]any{"identity": "c/a/box1", "superseded": oldFile, "historyBy": "akhan"})
+	os.WriteFile(filepath.Join(sd, pairLogMark), mark, 0o600)
+	out, _, code := notesExport(t, sd)
+	var got []struct {
+		ID         string `json:"id"`
+		Superseded bool   `json:"superseded"`
+		MovedAside string `json:"movedAside"`
+		AcceptedBy string `json:"acceptedBy"`
+	}
+	if code != 0 || json.Unmarshal([]byte(out), &got) != nil || len(got) != 3 {
+		t.Fatalf("%d %s", code, out)
+	}
+	for _, n := range got {
+		switch n.ID {
+		case "old":
+			if !n.Superseded || n.MovedAside != "2023-11-14T22:13:20Z" || n.AcceptedBy != "akhan" {
+				t.Errorf("the old note: %+v", n)
+			}
+		case "both", "live":
+			if n.Superseded {
+				t.Errorf("%s is flagged superseded", n.ID)
+			}
+		default:
+			t.Errorf("unexpected %s", n.ID)
+		}
+	}
+	csvOut, _, _ := notesExport(t, sd, "--format", "csv")
+	rows, _ := csv.NewReader(strings.NewReader(csvOut)).ReadAll()
+	var hist []string
+	for _, r := range rows[1:] {
+		hist = append(hist, r[0]+"="+r[13])
+	}
+	if !strings.Contains(strings.Join(hist, ","), "old=superseded 2023-11-14T22:13:20Z (accepted by akhan)") || !strings.Contains(strings.Join(hist, ","), "live=live") {
+		t.Errorf("%v", hist)
+	}
+}

@@ -14,9 +14,10 @@ text is still there. The audit journal records every write with its text as
 well (`note.add`, `note.revise`, `note.retract`), so the audit export holds
 them.
 
-> The notes API and `naut notes export` are described here. The panel in the
-> operator screens and the shift-log page come with the next part of
-> [#720](https://github.com/joyautomation/nautilus/issues/720).
+The built-in HMI has a **Log** page (the shift log): write a note, mark it a
+handover, edit your own within the hour, add an addendum to anyone's. In your own
+`hmi/` app, put `<ShiftLog />` on a page, or `<NotesPanel target={{ kind: 'tag', id: 'P101' }} />`
+on a faceplate (the kit exports both, and `NotesClient`).
 
 ## Turn it on
 
@@ -123,5 +124,28 @@ starts with `=`, `+`, `-` or `@` is quoted so a spreadsheet does not run it.
   rolling upgrade loses no note text, and the notes appear on a copy once it is
   upgraded and replays. It shows none until then, and cannot be asked to
   revise one.
+- **A replaced history's notes are still shown**, apart. The control state of a
+  superseded history (acknowledgements, substitutes) is lost on purpose, but a
+  shift log is a record, so the Log page and `GET /api/notes?superseded=1` show the
+  notes of the old log kept aside, read-only, under "From a superseded history
+  (accepted by <who>, moved aside <when>)". They are never part of the live notes
+  and cannot be changed, and `naut notes export` includes them, flagged
+  `superseded`. Only the newest replaced log is kept, and a note the live history
+  also holds is not repeated.
 - **From a controller on its own to a pair**: the notes file is not carried over
   by the pair's log. Export it first (`naut notes export`).
+
+## On the screen
+
+- **What you type is never lost.** It is kept as a draft in the browser, for you
+  and for that target, until the controller has kept the note, so a reload does
+  not lose it. A write the controller did not keep says why in its words and
+  leaves your text where it is: *not kept, and nothing is waiting to be kept*
+  (a pair with no majority), *it may have been kept* with a button to check
+  (an unconfirmed write), or the race and permission refusals.
+- **A shared terminal is safe.** Drafts belong to the person signed in: signing out
+  takes yours away, and another person signing in does not see them or leave them
+  in the browser's storage. (A page opened while nobody is signed in keeps them:
+  the same person may be signing in again.)
+- **Only what the controller will take is offered.** Edit and Retract show on your
+  own notes inside the hour; the controller decides every request.

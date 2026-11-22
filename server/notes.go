@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -45,6 +47,11 @@ type NotesLog struct {
 	store *notes.Store
 	node  *oplog.Node
 	seen  atomic.Pointer[func(oplog.Entry)]
+
+	supMu sync.Mutex
+	sup   *supersededCache
+	// supersededAt, when set, says where the replaced history is (a test's).
+	supersededAt func() (file, by string)
 }
 
 // NewNotesLog is the pair's notes: an index the log fills.
@@ -81,6 +88,61 @@ func (l *NotesLog) Apply(e oplog.Entry) (bool, error) {
 	}
 	_, err := l.store.Apply(r)
 	return true, err
+}
+
+// SupersededNotes are the notes a copy's replaced log history held: a
+// record, shown read-only and never applied to the live index.
+type SupersededNotes struct {
+	Store   *notes.Store
+	By      string    // who accepted the loss (naut redundancy vouch)
+	MovedAt time.Time // when the old log was moved aside
+}
+
+type supersededCache struct {
+	file string
+	mod  time.Time
+	size int64
+	val  SupersededNotes
+}
+
+// Superseded reads the newest replaced history of this copy's log, if one
+// was kept: its committed note entries, replayed into a store of their own.
+// ok is false when there is none. It is read on demand and cached by the
+// file's size and time.
+func (l *NotesLog) Superseded() (SupersededNotes, bool) {
+	var file, by string
+	switch {
+	case l.supersededAt != nil: // a test's
+		file, by = l.supersededAt()
+	case l.node != nil:
+		file, by = l.node.SupersededLog()
+	}
+	if file == "" {
+		return SupersededNotes{}, false
+	}
+	fi, err := os.Stat(file)
+	if err != nil {
+		return SupersededNotes{}, false
+	}
+	l.supMu.Lock()
+	defer l.supMu.Unlock()
+	if c := l.sup; c != nil && c.file == file && c.mod.Equal(fi.ModTime()) && c.size == fi.Size() && c.val.By == by {
+		return c.val, true
+	}
+	es, err := oplog.ReadCommitted(file)
+	if err != nil {
+		return SupersededNotes{}, false
+	}
+	st, _ := notes.Replay(es)
+	moved := time.Time{}
+	if i := strings.LastIndex(file, ".superseded-"); i >= 0 {
+		if u, err := strconv.ParseInt(file[i+len(".superseded-"):], 10, 64); err == nil {
+			moved = time.Unix(u, 0).UTC()
+		}
+	}
+	v := SupersededNotes{Store: st, By: by, MovedAt: moved}
+	l.sup = &supersededCache{file: file, mod: fi.ModTime(), size: fi.Size(), val: v}
+	return v, true
 }
 
 // EndSuperseded empties the index when this copy's log history is replaced
@@ -523,6 +585,10 @@ func (s *Server) handleNotesList(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	ms := func(k string) int64 { v, _ := strconv.ParseInt(q.Get(k), 10, 64); return v }
 	lim, _ := strconv.Atoi(q.Get("limit"))
+	if q.Get("superseded") == "1" {
+		s.handleNotesSuperseded(w, q, ms, lim)
+		return
+	}
 	found := s.notesStore().List(notes.Query{
 		TargetKind: q.Get("target"), TargetID: q.Get("id"), Occurrence: q.Get("occurrence"),
 		Kind: q.Get("kind"), Author: q.Get("author"), Since: ms("since"), Until: ms("until"),
@@ -565,4 +631,74 @@ func noteAfter(body []byte) any {
 		return nil
 	}
 	return map[string]any{"note": v.ID, "revision": v.Revisions, "text": v.Text, "by": v.By, "retracted": v.Retracted}
+}
+
+// supersededAnswer is the notes of a replaced log history: labelled, and
+// never mixed with the live ones.
+type supersededAnswer struct {
+	Notes []noteView `json:"notes"`
+	// History says what it is: who accepted the loss of that history
+	// (naut redundancy vouch) and when its log was moved aside.
+	History *struct {
+		By      string `json:"by,omitempty"`
+		MovedAt int64  `json:"movedAt,omitempty"`
+	} `json:"history,omitempty"`
+}
+
+// handleNotesSuperseded answers GET /api/notes?superseded=1: the notes the
+// copy's replaced history held (a record: a person accepted losing that
+// history's operator state, not its shift log), read from the log file kept
+// aside, never applied, never editable (they are not in the live index).
+// A note the live history also holds is not repeated.
+func (s *Server) handleNotesSuperseded(w http.ResponseWriter, q map[string][]string, ms func(string) int64, lim int) {
+	get := func(k string) string {
+		if v := q[k]; len(v) > 0 {
+			return v[0]
+		}
+		return ""
+	}
+	out := supersededAnswer{Notes: []noteView{}}
+	if s.notesLog != nil {
+		if sup, ok := s.notesLog.Superseded(); ok {
+			var moved int64
+			if !sup.MovedAt.IsZero() {
+				moved = sup.MovedAt.UnixMilli()
+			}
+			out.History = &struct {
+				By      string `json:"by,omitempty"`
+				MovedAt int64  `json:"movedAt,omitempty"`
+			}{sup.By, moved}
+			if lim <= 0 || lim > 1000 {
+				lim = 200
+			}
+			// the limit counts what is shown: the notes the live history also
+			// holds are left out first
+			for _, n := range sup.Store.List(notes.Query{
+				TargetKind: get("target"), TargetID: get("id"), Occurrence: get("occurrence"), Kind: get("kind"), Author: get("author"),
+				Since: ms("since"), Until: ms("until"), Retracted: get("retracted") == "1", Limit: 1000,
+			}) {
+				if _, live := s.notesStore().Get(n.ID); live {
+					continue
+				}
+				if len(out.Notes) < lim {
+					out.Notes = append(out.Notes, viewOf(n))
+				}
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handleNotesCounts answers GET /api/notes/counts?target=alarm: how many
+// live notes each target of that kind has, for an "N notes" beside it.
+func (s *Server) handleNotesCounts(w http.ResponseWriter, r *http.Request) {
+	if s.notesOff(w) {
+		return
+	}
+	kind := r.URL.Query().Get("target")
+	if err := notes.CheckTarget(notes.Target{Kind: kind, ID: "x"}); err != nil && kind != notes.KindLog {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "target is asset, tag, alarm or area"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"target": kind, "counts": s.notesStore().Counts(kind)})
 }
