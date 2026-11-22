@@ -584,7 +584,7 @@ func TestForceIfFreeNamesTheForceTheWayTheTableDoes(t *testing.T) {
 	tags.Set("P1", ir.Value{Kind: ir.TypeStruct, Struct: sd, Fld: []ir.Value{ir.BoolVal(false), ir.RealVal(1)}})
 	arr := ir.Value{Kind: ir.TypeArray, Arr: []ir.Value{ir.RealVal(0), ir.RealVal(0), ir.RealVal(0)}}
 	tags.Set("A", arr)
-	for _, c := range []struct{ typed, table string }{{"p1.speed", "P1.Speed"}, {"A[ 1]", "A[1]"}} {
+	for _, c := range []struct{ typed, table string }{{"p1.speed", "P1.Speed"}, {"A[ 1]", "A[1]"}, {"A[01]", "A[1]"}, {"A[+1]", "A[1]"}} {
 		gen, name, err := tags.ForceIfFree(c.typed, 5.0)
 		if err != nil {
 			t.Fatalf("%q: %v", c.typed, err)
@@ -605,5 +605,21 @@ func TestForceIfFreeNamesTheForceTheWayTheTableDoes(t *testing.T) {
 	}
 	if len(tags.Forces()) != 0 {
 		t.Errorf("forces left: %v", tags.Forces())
+	}
+}
+
+// An operator's force typed with an odd index ("A[01]") is seen by a force
+// typed the plain way, and the other way round: one spelling of an element.
+func TestForceIndexSpellingsAreOneAddress(t *testing.T) {
+	tags := NewTags()
+	tags.Set("A", ir.Value{Kind: ir.TypeArray, Arr: []ir.Value{ir.RealVal(0), ir.RealVal(0), ir.RealVal(0)}})
+	if err := tags.Force("A[01]", 1.0); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := tags.ForceIfFree("A[1]", 7.0); err == nil || !strings.Contains(err.Error(), "already forced") {
+		t.Errorf("a plain A[1] over an operator's A[01]: %v", err)
+	}
+	if v, _ := tags.ReadPath("A[1]"); v != 1.0 {
+		t.Errorf("A[1] = %v, want the operator's 1", v)
 	}
 }

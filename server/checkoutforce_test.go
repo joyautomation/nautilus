@@ -562,3 +562,81 @@ func TestCheckoutAbandonRefusesALongReasonBeforeReleasing(t *testing.T) {
 		t.Error("a refused abandon released the force")
 	}
 }
+
+// holdAt makes the checkout's hook wait at the named stage until released, and
+// says when a request has reached it.
+func holdAt(t *testing.T, stage string) (reached <-chan struct{}, release func()) {
+	t.Helper()
+	r, gate := make(chan struct{}, 4), make(chan struct{})
+	old := ckHook
+	ckHook = func(s string) {
+		if s == stage {
+			r <- struct{}{}
+			<-gate
+		}
+	}
+	var once sync.Once
+	rel := func() { once.Do(func() { close(gate) }) }
+	t.Cleanup(func() { rel(); ckHook = old })
+	return r, rel
+}
+
+// A run abandoned while a force is starting does not keep the force: the start
+// finds out when it is applied, and lets go.
+func TestCheckoutAbandonDuringAStartLetsTheForceGo(t *testing.T) {
+	r := newCkForceRig(t)
+	r.oos(t)
+	reached, release := holdAt(t, "applied")
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- r.force(t, goodForce) }()
+	<-reached
+	if rec := call(t, r.srv, "POST", r.path+"/abandon", `{"reason":"wrong sheet"}`, r.eng); rec.Code != http.StatusOK {
+		t.Fatalf("abandon: %d %s", rec.Code, rec.Body)
+	}
+	release()
+	rec := <-done
+	if rec.Code != http.StatusConflict {
+		t.Errorf("the start of a force on an abandoned run: %d %s, want 409", rec.Code, rec.Body)
+	}
+	if r.forced("Out") {
+		t.Error("the output stays forced on an abandoned run")
+	}
+	if _, ok := r.st.Standing(); ok {
+		t.Error("the record says a force stands on an abandoned run")
+	}
+	if ckOf(r.srv).forceView(r.srv.rt.Tags()) != nil {
+		t.Error("a frame says a force stands")
+	}
+}
+
+// While a force is being let go, another cannot start in the gap: the slot is
+// held until the end is recorded, so the new force's record is not closed by
+// the old force's end.
+func TestCheckoutNoForceStartsWhileAnotherIsEnding(t *testing.T) {
+	r := newCkForceRig(t)
+	r.oos(t)
+	if rec := r.force(t, goodForce); rec.Code != http.StatusCreated {
+		t.Fatalf("force: %d %s", rec.Code, rec.Body)
+	}
+	reached, release := holdAt(t, "ending")
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() { done <- call(t, r.srv, "POST", r.path+"/force/release", `{}`, r.eng) }()
+	<-reached
+	if rec := r.force(t, goodForce); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "already stands") {
+		t.Errorf("a start while the last force is ending: %d %s, want 409 (a checkout force already stands), not a trip over the table or the record", rec.Code, rec.Body)
+	}
+	release()
+	if rec := <-done; rec.Code != http.StatusOK {
+		t.Fatalf("release: %d %s", rec.Code, rec.Body)
+	}
+	if rec := r.force(t, goodForce); rec.Code != http.StatusCreated {
+		t.Fatalf("a start after it ended: %d %s", rec.Code, rec.Body)
+	}
+	// the new force's record stands, and the old one's says it was released
+	if f, ok := r.st.Standing(); !ok || f.Seq == 0 {
+		t.Error("the new force's record does not stand")
+	}
+	if !r.forced("Out") {
+		t.Error("the new force is not applied")
+	}
+}

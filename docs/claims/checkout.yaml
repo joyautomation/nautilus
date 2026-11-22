@@ -129,6 +129,12 @@ claims:
       - go ./server TestCheckoutForceNoticesItsForceBeingCleared
       - go ./server TestCheckoutForceStateIsRaceFree
       - go ./runtime TestForceGenerationsAreOwnership
+      - go ./runtime TestForceIfFreeNamesTheForceTheWayTheTableDoes
+      - go ./runtime TestForceIndexSpellingsAreOneAddress
+      - go ./server TestCheckoutForceCanonicalSpellings
+      - go ./server TestCheckoutAbandonDuringAStartLetsTheForceGo
+      - go ./server TestCheckoutNoForceStartsWhileAnotherIsEnding
+      - go ./server TestCheckoutForceReconcilesAStaleRecord
       - go ./checkout TestForcesInTheRecord
     partial: true
     note: >-

@@ -68,6 +68,8 @@ type ckForce struct {
 	pt                  checkout.Point
 	gen                 uint64 // the force table's generation of it
 	ready               bool
+	ending              bool      // its end is in progress: the slot stays taken until it is done
+	abandoned           bool      // its run was abandoned while it was starting
 	until               time.Time // monotonic
 	timer               *time.Timer
 	done                chan struct{} // closed when it ends
@@ -85,7 +87,7 @@ func (co *CheckoutOptions) forceView(tags *runtime.Tags) *CheckoutForceView {
 	f := co.ck.force
 	var v CheckoutForceView
 	var gen uint64
-	ok := f != nil && f.ready
+	ok := f != nil && f.ready && !f.ending
 	if ok {
 		// copied under the lock the start writes them under
 		v = CheckoutForceView{Run: f.run, Point: f.point, Tag: f.pt.Tag, By: f.by, RemainingMs: max(time.Until(f.until).Milliseconds(), 0)}
@@ -169,6 +171,7 @@ func (a *checkoutAPI) checkoutForceStart(w http.ResponseWriter, r *http.Request)
 		}
 		a.co.ck.force = f
 		a.co.ck.mu.Unlock()
+		ckHook("reserved")
 		started := false
 		defer func() { // however this ends, a start that did not finish gives the slot back
 			if started {
@@ -184,8 +187,9 @@ func (a *checkoutAPI) checkoutForceStart(w http.ResponseWriter, r *http.Request)
 		// recorded first: a force that stands is always in the record
 		rec, err := a.co.Store.StartForce(run.ID, pt.ID, req.Value, int(d/time.Second), by, pr.String())
 		if errors.Is(err, checkout.ErrForceActive) {
-			// the controller holds no force (it owns the slot), so the record's
-			// standing one is stale (a failed end): close it, and begin again
+			// the slot was free (no force standing, none ending, none starting),
+			// so the record's standing one is stale (a failed end): close it,
+			// and begin again
 			_ = a.co.Store.EndForce(run.ID, checkout.ForceInterrupted, "controller")
 			rec, err = a.co.Store.StartForce(run.ID, pt.ID, req.Value, int(d/time.Second), by, pr.String())
 		}
@@ -200,10 +204,10 @@ func (a *checkoutAPI) checkoutForceStart(w http.ResponseWriter, r *http.Request)
 			}
 			return nil, http.StatusBadRequest, fmt.Errorf("%w: %v", checkout.ErrInvalid, err)
 		}
+		ckHook("applied")
 		a.co.ck.mu.Lock()
 		// the run was abandoned while this was starting: let the force go again
-		cur, _ := a.co.Store.Get(run.ID)
-		if cur.State != checkout.StateOpen || a.co.ck.force != f {
+		if f.abandoned || a.co.ck.force != f {
 			a.co.ck.mu.Unlock()
 			a.s.rt.Tags().UnforceIf(name, gen)
 			return nil, http.StatusConflict, checkout.ErrNotOpen
@@ -246,7 +250,7 @@ func (a *checkoutAPI) watchCheckoutForce(f *ckForce) {
 func (a *checkoutAPI) standingForce(run string) *ckForce {
 	a.co.ck.mu.Lock()
 	defer a.co.ck.mu.Unlock()
-	if f := a.co.ck.force; f != nil && f.ready && f.run == run {
+	if f := a.co.ck.force; f != nil && f.ready && !f.ending && f.run == run {
 		return f
 	}
 	return nil
@@ -277,21 +281,31 @@ func (a *checkoutAPI) checkoutForceRelease(w http.ResponseWriter, r *http.Reques
 // is not touched, and the record says it was replaced.
 func (a *checkoutAPI) endCheckoutForce(f *ckForce, how, by string) string {
 	a.co.ck.mu.Lock()
-	if a.co.ck.force != f {
+	if a.co.ck.force != f || f.ending {
 		a.co.ck.mu.Unlock()
 		return "" // it ended another way first
 	}
-	a.co.ck.force = nil
+	// the slot stays taken until the end is done: no force starts in the gap
+	// between letting go and recording it
+	f.ending = true
 	if f.timer != nil {
 		f.timer.Stop()
 	}
 	close(f.done)
 	a.co.ck.mu.Unlock()
+	defer func() {
+		a.co.ck.mu.Lock()
+		if a.co.ck.force == f {
+			a.co.ck.force = nil
+		}
+		a.co.ck.mu.Unlock()
+	}()
+	ckHook("ending")
 
 	if !a.s.rt.Tags().UnforceIf(f.tag, f.gen) {
 		how = checkout.ForceReplaced // not ours any more: left as it is
 	}
-	if err := a.co.Store.EndForce(f.run, how, by); err != nil {
+	if err := a.co.Store.EndForce(f.run, how, by); err != nil && !errors.Is(err, checkout.ErrNoForce) {
 		slog.Error("checkout: could not record the end of a force", "err", err, "point", f.point)
 	}
 	slog.Warn("checkout: force ended", "tag", f.tag, "point", f.point, "how", how)
@@ -299,7 +313,7 @@ func (a *checkoutAPI) endCheckoutForce(f *ckForce, how, by string) string {
 	// controller's own end of it (expiry, the interlock, a replaced force) has
 	// no request, so it is journalled here
 	if a.s.audit != nil && by == "controller" {
-		a.s.audit.record(audit.Entry{Action: "checkout.force-end", Target: f.tag, User: "system", Source: audit.SourceSystem, Result: audit.ResultOK,
+		a.s.audit.record(audit.Entry{Action: "checkout.force-end", Target: f.pt.Tag, User: "system", Source: audit.SourceSystem, Result: audit.ResultOK,
 			Detail: map[string]any{"run": f.run, "point": f.point, "how": how, "by": by}})
 	}
 	return how
@@ -307,11 +321,6 @@ func (a *checkoutAPI) endCheckoutForce(f *ckForce, how, by string) string {
 
 func sameTag(a, b string) bool { return strings.EqualFold(a, b) }
 
-// pendingForce reports whether a force of the run is starting (reserved, not
-// yet in the force table).
-func (a *checkoutAPI) pendingForce(run string) bool {
-	a.co.ck.mu.Lock()
-	defer a.co.ck.mu.Unlock()
-	f := a.co.ck.force
-	return f != nil && !f.ready && f.run == run
-}
+// ckHook is a test's seam: called at named points of a start and an end, so a
+// test can hold one there and run another request against it.
+var ckHook = func(string) {}

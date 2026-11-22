@@ -3,6 +3,7 @@ package runtime
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/joyautomation/nautilus/lang/ir"
@@ -134,6 +135,12 @@ func declaredPath(v ir.Value, path []string) []string {
 	copy(out, path)
 	for i, seg := range out {
 		if strings.HasPrefix(seg, "[") {
+			// one spelling of an index: "[01]" and "[+1]" name element 1, kept
+			// as "[1]", so the force is found (and its overlaps seen) however
+			// it was typed
+			if n, err := strconv.Atoi(strings.TrimSpace(strings.Trim(seg, "[]"))); err == nil {
+				out[i] = "[" + strconv.Itoa(n) + "]"
+			}
 			if v.Kind != ir.TypeArray || len(v.Arr) == 0 {
 				break
 			}

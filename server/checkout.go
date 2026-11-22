@@ -259,9 +259,6 @@ func jsonSafe(v any) any {
 
 func (a *checkoutAPI) checkoutAbandon(w http.ResponseWriter, r *http.Request) {
 	a.checkoutWrite(w, r, "", func(pr auth.Principal, req checkoutRequest) (any, int, error) {
-		if a.pendingForce(r.PathValue("id")) {
-			return nil, http.StatusConflict, fmt.Errorf("a force is starting on this run: try again in a moment")
-		}
 		if utf8.RuneCountInString(req.Reason) > checkout.MaxReason {
 			return nil, http.StatusBadRequest, fmt.Errorf("%w: the reason is longer than %d characters", checkout.ErrInvalid, checkout.MaxReason)
 		}
@@ -270,6 +267,25 @@ func (a *checkoutAPI) checkoutAbandon(w http.ResponseWriter, r *http.Request) {
 			a.endCheckoutForce(f, checkout.ForceAbandoned, noteAuthor(pr.String()))
 		}
 		run, err := a.co.Store.Abandon(r.PathValue("id"), req.Reason, noteAuthor(pr.String()), pr.String())
+		if err == nil {
+			// a force that was starting while the run ended is let go (a ready one
+			// is ended; a pending one is told, and undoes itself)
+			a.co.ck.mu.Lock()
+			f := a.co.ck.force
+			var ready bool
+			if f != nil && f.run == r.PathValue("id") {
+				ready = f.ready && !f.ending
+				if !ready {
+					f.abandoned = true
+				}
+			} else {
+				f = nil
+			}
+			a.co.ck.mu.Unlock()
+			if f != nil && ready {
+				a.endCheckoutForce(f, checkout.ForceAbandoned, noteAuthor(pr.String()))
+			}
+		}
 		return run, http.StatusOK, err
 	})
 }
@@ -376,7 +392,7 @@ func (a *checkoutAPI) checkoutTarget(action string) targetFunc {
 		case "checkout.release":
 			a.co.ck.mu.Lock()
 			if f := a.co.ck.force; f != nil {
-				t.target = f.tag
+				t.target = f.pt.Tag
 			}
 			a.co.ck.mu.Unlock()
 		}
