@@ -63,7 +63,7 @@ Each built-in role adds to the one before:
 |---|---|
 | `viewer` | `read` |
 | `operator` | `write` (tag writes), `ack` (alarms), `sfc` (step and transition commands), `note` ([operator notes and the shift log](/guides/notes/)) |
-| `supervisor` | `shelve`, `substitute`, `audit` (reading the journal) |
+| `supervisor` | `shelve`, `out-of-service` (taking equipment's alarms out of service), `substitute`, `audit` (reading the journal) |
 | `engineer` | `force`, `edit` (online edits, rollbacks), `activate`, `deploy` (a Logix or Siemens download), `config` (live I/O configuration, and [IO-Link](/guides/io-link/) parameter writes, journalled as `param.write` on `<port device>/<variable>`) |
 | `administrator` | `users`, `override`, `redundancy` (the redundant pair's operator commands: [clearing a duplicate mark](/guides/redundancy/)) |
 
@@ -71,7 +71,7 @@ A custom role `inherits` one role (built-in or custom), then can `allow` more pe
 
 ### Areas
 
-An area is a set of tag patterns. A grant with `areas:` limits `write`, `ack`, `shelve`, `note`, `substitute` and `force` to those tags (a note about a tag or an alarm, to those tags; a note on the shift log, an asset or an area needs the permission anywhere). Its other permissions still apply to the whole controller. A grant with no `areas:` covers the whole controller. An `areas:` that is empty is refused: it would cover nothing.
+An area is a set of tag patterns. A grant with `areas:` limits `write`, `ack`, `shelve`, `out-of-service`, `note`, `substitute` and `force` to those tags (a note about a tag or an alarm, to those tags; a note on the shift log, an asset or an area needs the permission anywhere). Its other permissions still apply to the whole controller. A grant with no `areas:` covers the whole controller. An `areas:` that is empty is refused: it would cover nothing.
 
 ### Who a request is
 
@@ -208,7 +208,7 @@ The hops, for a proxy or firewall rule:
 
 ## Elevation
 
-Some permissions change what the plant runs, so a signed-in browser holds them only while its password is fresh: **`force`, `edit`, `activate`, `deploy`, `config`, `users` and `override`**. Those are the elevated permissions. That includes clearing a force and rolling an edit back: clearing a force can start a motor.
+Some permissions change what the plant runs, so a signed-in browser holds them only while its password is fresh: **`out-of-service`, `force`, `edit`, `activate`, `deploy`, `config`, `users` and `override`**. Those are the elevated permissions. That includes clearing a force and rolling an edit back: clearing a force can start a motor. Taking equipment out of service hides its alarms for up to a week; putting it back needs only `ack` (over any one of its alarms) and no fresh password.
 
 - **The window.** The password counts for `auth.elevation` (15 minutes by default, 1m to 12h) after the user last entered it, at sign-in or at re-authentication. Use doesn't extend it. It never outlasts the session; an `elevation` as long as `session` means the sign-in counts for the whole session.
 - **Past it**, an elevated action is refused with `401` and `{"error": …, "elevate": true}`, and nothing is done. The error tells the user to confirm their password. An HMI asks for it (`POST /api/elevate`) and sends the action again.

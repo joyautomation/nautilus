@@ -204,7 +204,7 @@ func (t *Tags) substituteLocked(addr string, v any, e subEntry) (Substitution, *
 		ss.entries = append(ss.entries, e)
 	}
 	t.restackLocked(root, tv, ss)
-	t.subRev++
+	t.subRev.Add(1)
 	t.syncSubLocked()
 	return e.Substitution, replaced, nil
 }
@@ -231,7 +231,7 @@ func (t *Tags) unsubstituteLocked(id uint64) (Substitution, bool) {
 			if tv != nil {
 				t.restackLocked(root, tv, ss)
 			}
-			t.subRev++
+			t.subRev.Add(1)
 			t.syncSubLocked()
 			return t.reportLocked(ss, &e), true
 		}
@@ -305,9 +305,7 @@ func (t *Tags) SubstituteCount() int {
 // SubstituteRevision changes whenever the substitute table does, and at
 // no other time.
 func (t *Tags) SubstituteRevision() uint64 {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	return t.subRev
+	return t.subRev.Load()
 }
 
 // subState is how a root tag is substituted, for its quality.
@@ -546,4 +544,47 @@ func (r *Runtime) CheckSubstituteValue(addr string, v any) error {
 		return fmt.Errorf("%s is a function-block instance: it has no value to substitute", addr)
 	}
 	return nil
+}
+
+// SubstituteCovering reports whether path (a tag, or a member path into
+// one) reads a substituted signal: a substitute on the tag itself, or on
+// a member the path is in (#715: an alarm on it is suppressed). addr is
+// the covering substitute's address. Segments compare as names do
+// (ir.NameKey), never as a string prefix: TT_10 does not cover TT_101. A
+// substitute on another member of the same tag does not cover path.
+func (t *Tags) SubstituteCovering(path string) (addr string, ok bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if len(t.subs) == 0 {
+		return "", false
+	}
+	root, segs := ir.SplitAddress(path)
+	tv, key, found := t.lookupLocked(root)
+	if !found || !tv.substituted {
+		return "", false
+	}
+	ss := t.subs[key]
+	if ss == nil {
+		return "", false
+	}
+	for i := range ss.entries {
+		if pathCovers(ss.entries[i].path, segs) {
+			return ss.entries[i].Name, true
+		}
+	}
+	return "", false
+}
+
+// pathCovers reports whether the member path sub (nil: the whole tag) is
+// segs or one of its ancestors.
+func pathCovers(sub, segs []string) bool {
+	if len(sub) > len(segs) {
+		return false
+	}
+	for i := range sub {
+		if ir.NameKey(sub[i]) != ir.NameKey(segs[i]) {
+			return false
+		}
+	}
+	return true
 }

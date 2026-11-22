@@ -441,3 +441,29 @@ alarms:
 		t.Errorf("project alarms %v, want the manifest's and the identity fault", ids)
 	}
 }
+
+// suppress-when is checked like enable (#715 PR 5): a member the type
+// does not have, or one that is not a BOOL, is an error (at run time it
+// would suppress nothing, silently against the author's intent); a tag
+// the manifest does not declare is a warning, as a condition is.
+func TestCheckAlarmsChecksSuppressWhen(t *testing.T) {
+	proj, rt := loadAlarms(t, alarmFS(alarmTags+`
+alarms:
+  defs:
+    - { id: a, tag: RTU9_ZONE15_FIT_001.HH, suppress-when: RTU9_ZONE15_FIT_001.STOP }
+    - { id: b, tag: RTU9_ZONE15_FIT_001.L, suppress-when: RTU9_ZONE15_FIT_001.PV }
+    - { id: c, tag: RTU9_ZONE15_FIT_001.HH, equipment: Skid, suppress-when: RTU7_PMP01_STOPPED }
+    - { id: d, tag: RTU9_ZONE15_FIT_001.HH, suppress-when: Duty }
+`, nil))
+	_, errs, warns, err := proj.CheckAlarms(rt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(errs, "\n")
+	if len(errs) != 3 || !strings.Contains(joined, "alarm a's suppress-when") || !strings.Contains(joined, "alarm b's suppress-when") || !strings.Contains(joined, `alarm d's suppress-when "Duty" is not a BOOL`) {
+		t.Fatalf("want 3 suppress-when errors (unknown member, non-BOOL member, non-BOOL flat tag), got %v", errs)
+	}
+	if !strings.Contains(strings.Join(warns, "\n"), "RTU7_PMP01_STOPPED") {
+		t.Errorf("an undeclared suppress-when tag should warn: %v", warns)
+	}
+}

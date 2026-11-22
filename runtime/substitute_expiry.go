@@ -449,7 +449,7 @@ func (r *Runtime) ackSubstitutes(ids []uint64, by string, replicated bool) []Sub
 		}
 	}
 	if len(acked) > 0 {
-		t.subRev++
+		t.subRev.Add(1)
 		t.syncSubLocked()
 	}
 	t.mu.Unlock()

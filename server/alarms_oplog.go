@@ -15,6 +15,7 @@ import (
 	"github.com/joyautomation/nautilus/alarm"
 	"github.com/joyautomation/nautilus/alarm/acklink"
 	"github.com/joyautomation/nautilus/audit"
+	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/oplog"
 	"github.com/joyautomation/nautilus/retain"
 	"github.com/joyautomation/nautilus/runtime"
@@ -143,6 +144,7 @@ type AlarmLog struct {
 	// while an occurrence proposal is in flight.
 	match   atomic.Pointer[func(alarm.Def) bool]
 	occBusy atomic.Bool
+	oosBusy atomic.Bool // an endOutOfService is in flight
 
 	// adopt holds, by alarm, a committed ack of an occurrence the live
 	// engine is not on, until the log is caught up (Reconcile): an entry
@@ -190,6 +192,27 @@ type AlarmLog struct {
 	// too often costs a visit to the HMI, one honoured twice an ack nobody
 	// gave. Under mu.
 	spent map[string]int64
+
+	// oos is the log's out-of-service windows (#715 PR 5), by equipment;
+	// equip each equipment's alarm IDs (the definitions are fixed for the
+	// engine's life). A synced takeover restores the windows on every
+	// alarm of their equipment; an unsynced one carries none (a stale
+	// window would hide alarms). Under mu.
+	oos   map[string]oosIntent
+	equip map[string][]string
+	// ending holds the windows an unsynced takeover did not carry, by
+	// equipment, until the in-service Reconcile proposes for each
+	// commits: Held never carries them (a later synced takeover must not
+	// bring back a hide this one showed and journalled as ended). Under mu.
+	ending map[string]oosIntent
+}
+
+// oosIntent is one equipment's out-of-service window, as the log has it.
+type oosIntent struct {
+	name                        string // the equipment as the entry named it
+	untilMs, grantedMs, startMs int64
+	by, reason                  string
+	seq                         uint64 // the entry it came from (a KindLapse may name it)
 }
 
 // linkSpentFor is how long the log remembers a spent link: past it no
@@ -285,7 +308,11 @@ func (v *alarmIntent) clearOcc() { v.occ, v.activeMs, v.waitMs = "", 0, 0 }
 // reach Apply).
 func NewAlarmLog(eng *alarm.Engine, leading func() bool, term func() uint64) *AlarmLog {
 	l := &AlarmLog{eng: eng, leading: leading, term: term, view: map[string]alarmIntent{}, refusal: PairNoMajorityAlarms, clrRetry: 2 * time.Second,
-		ended: make(chan endedOcc, endedQueue)}
+		ended: make(chan endedOcc, endedQueue), oos: map[string]oosIntent{}, equip: map[string][]string{}, ending: map[string]oosIntent{}}
+	for _, r := range eng.Records() {
+		k := ir.NameKey(r.Equipment)
+		l.equip[k] = append(l.equip[k], r.ID)
+	}
 	eng.OnEvent(l.engineEvent)
 	go l.clearEnded()
 	return l
@@ -335,7 +362,7 @@ func (l *AlarmLog) Apply(e oplog.Entry) (bool, error) {
 	l.liveMu.Lock()
 	defer l.liveMu.Unlock()
 	live := l.live()
-	if e.Lapsed && (e.Kind == oplog.KindAck || e.Kind == oplog.KindShelve) {
+	if e.Lapsed && (e.Kind == oplog.KindAck || e.Kind == oplog.KindShelve || e.Kind == oplog.KindOutOfService) {
 		slog.Warn("alarm: an operator's ack or shelve lapsed: it was committed too late to apply to the occurrence it was for", "kind", e.Kind, "ids", e.IDs, "id", e.ID, "by", e.By)
 		l.mu.Lock()
 		if l.lapsed == nil {
@@ -356,7 +383,8 @@ func (l *AlarmLog) Apply(e oplog.Entry) (bool, error) {
 				l.eng.Note("system", n)
 			}
 		}
-		if e.Kind == oplog.KindAck || e.Kind == oplog.KindShelve || e.Kind == oplog.KindUnshelve {
+		switch e.Kind {
+		case oplog.KindAck, oplog.KindShelve, oplog.KindUnshelve, oplog.KindOutOfService, oplog.KindInService:
 			l.tell(e)
 		}
 	}()
@@ -405,6 +433,37 @@ func (l *AlarmLog) Apply(e oplog.Entry) (bool, error) {
 		if live {
 			if err := l.eng.Unshelve(e.ID, e.By); err != nil {
 				slog.Warn("alarm: a committed unshelve did not apply", "id", e.ID, "err", err)
+			}
+		}
+	case oplog.KindOutOfService:
+		l.mu.Lock()
+		k := ir.NameKey(e.ID)
+		l.oos[k] = oosIntent{name: e.ID, untilMs: e.Until, grantedMs: e.Until - e.TS, startMs: e.TS, by: e.By, reason: e.Reason, seq: e.Seq}
+		delete(l.ending, k) // a new window: what ends now is this one
+		l.mu.Unlock()
+		if live {
+			if err := l.eng.TakeOutOfService(e.ID, time.UnixMilli(e.Until), e.By, e.Reason); err != nil {
+				slog.Warn("alarm: a committed out of service did not apply", "equipment", e.ID, "err", err)
+			}
+		}
+	case oplog.KindInService:
+		// Ref names the window a system in-service (Reconcile) ends: one
+		// an operator replaced since is not ended by it. A person's names
+		// none and ends whatever window stands.
+		l.mu.Lock()
+		k := ir.NameKey(e.ID)
+		if o, ok := l.ending[k]; ok && (e.Ref == 0 || o.seq == e.Ref) {
+			delete(l.ending, k)
+		}
+		o, ok := l.oos[k]
+		stands := ok && (e.Ref == 0 || o.seq == e.Ref)
+		if stands {
+			delete(l.oos, k)
+		}
+		l.mu.Unlock()
+		if live && stands {
+			if err := l.eng.ReturnToService(e.ID, e.By); err != nil {
+				slog.Warn("alarm: a committed return to service did not apply", "equipment", e.ID, "err", err)
 			}
 		}
 	case oplog.KindAckClear:
@@ -476,6 +535,16 @@ func (l *AlarmLog) Apply(e oplog.Entry) (bool, error) {
 			}
 			l.view[id] = v
 		}
+		for eq, o := range l.oos {
+			if slices.Contains(e.Refs, o.seq) {
+				delete(l.oos, eq)
+			}
+		}
+		for eq, o := range l.ending {
+			if slices.Contains(e.Refs, o.seq) {
+				delete(l.ending, eq)
+			}
+		}
 		l.mu.Unlock()
 		return false, nil // the substitutes' Apply sees it too
 	default:
@@ -507,17 +576,20 @@ func (l *AlarmLog) journalLapse(e oplog.Entry) {
 	var out []audit.Entry
 	for _, le := range named {
 		ids := le.IDs
-		if le.Kind == oplog.KindShelve {
+		if le.Kind == oplog.KindShelve || le.Kind == oplog.KindOutOfService {
 			ids = []string{le.ID}
 		}
 		action := "alarm.ack"
-		if le.Kind == oplog.KindShelve {
+		switch le.Kind {
+		case oplog.KindShelve:
 			action = "alarm.shelve"
+		case oplog.KindOutOfService:
+			action = "alarm.out-of-service"
 		}
 		for _, id := range ids {
 			d := map[string]any{"action": action, "seq": le.Seq, "by": le.By, "ts": le.TS,
 				"note": "committed too late to apply to the occurrence it was for: it never took effect"}
-			if le.Kind == oplog.KindShelve {
+			if le.Kind == oplog.KindShelve || le.Kind == oplog.KindOutOfService {
 				d["untilMs"] = le.Until
 			}
 			out = append(out, audit.Entry{User: principalOfEntryIn(le, d), Source: audit.SourceSystem, Action: "alarm.lapse",
@@ -629,6 +701,10 @@ func (l *AlarmLog) Reconcile() {
 		l.liveMu.Lock()
 	}
 	held := l.eng.AckHeldIDs()
+	oosHeld := map[string]bool{}
+	for _, w := range l.eng.OutOfServiceList() {
+		oosHeld[ir.NameKey(w.Equipment)] = true
+	}
 	if f := reconcileGap.Load(); f != nil {
 		(*f)()
 	}
@@ -642,6 +718,19 @@ func (l *AlarmLog) Reconcile() {
 			stale = append(stale, id)
 		}
 	}
+	// A window the log holds and the engine doesn't (an unsynced takeover
+	// did not carry it; it expired on this clock; the engine refused it)
+	// is ended in the log too, so a later takeover, on a clock behind
+	// this one, never brings back a hide nobody sees now.
+	var notHeld []oplog.Entry
+	for eq, o := range l.oos {
+		if !oosHeld[eq] {
+			notHeld = append(notHeld, oplog.Entry{Kind: oplog.KindInService, ID: o.name, Ref: o.seq, By: "system", Reason: "ended on the leader"})
+		}
+	}
+	for _, o := range l.ending {
+		notHeld = append(notHeld, oplog.Entry{Kind: oplog.KindInService, ID: o.name, Ref: o.seq, By: "system", Reason: "not carried by a takeover"})
+	}
 	l.mu.Unlock()
 	if !mutServer("reconcile_without_livemu") {
 		l.liveMu.Unlock()
@@ -649,7 +738,43 @@ func (l *AlarmLog) Reconcile() {
 	for _, id := range stale {
 		l.queueClear(id, "")
 	}
+	l.endOutOfService(notHeld)
 	l.syncOccurrences()
+}
+
+// endOutOfService proposes, in the background, a return to service for
+// each equipment the log holds out of service and the live engine does
+// not; what does not commit is found again at the next log tick.
+// Each entry names its window (Ref, the window's seq), so one an operator
+// took out again meanwhile is not ended by it.
+func (l *AlarmLog) endOutOfService(ends []oplog.Entry) {
+	if len(ends) == 0 || l.node == nil || !l.oosBusy.CompareAndSwap(false, true) {
+		return
+	}
+	slices.SortFunc(ends, func(a, b oplog.Entry) int { return strings.Compare(a.ID, b.ID) })
+	go func() {
+		defer l.oosBusy.Store(false)
+		for _, e := range ends {
+			ctx, cancel := context.WithTimeout(context.Background(), substituteProposeWait)
+			_, err := l.node.Propose(ctx, e)
+			cancel()
+			if err != nil {
+				slog.Warn("alarm: return to service not committed yet; the next log tick tries again", "equipment", e.ID, "err", err)
+				return
+			}
+		}
+	}()
+}
+
+// endUncarried moves the log's windows to ending: an unsynced takeover
+// did not carry them, and no later takeover may.
+func (l *AlarmLog) endUncarried() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for k, o := range l.oos {
+		l.ending[k] = o
+	}
+	clear(l.oos)
 }
 
 // dropAcks clears every ack from this replica's view (an unsynced
@@ -666,6 +791,8 @@ func (l *AlarmLog) dropView() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	clear(l.view)
+	clear(l.oos)
+	clear(l.ending)
 	l.adopt = nil
 }
 
@@ -682,7 +809,7 @@ func (l *AlarmLog) EndSuperseded() bool {
 	l.liveMu.Lock()
 	defer l.liveMu.Unlock()
 	l.mu.Lock()
-	had := len(l.view) > 0
+	had := len(l.view) > 0 || len(l.oos) > 0
 	l.mu.Unlock()
 	l.dropView()
 	if l.live() && had {
@@ -706,7 +833,11 @@ func (l *AlarmLog) dropAcks() {
 // a new leader commits from an earlier term lapses when it was proposed
 // more than AlarmIntentCommitBound before now, on that leader's clock.
 func (l *AlarmLog) Lapse(e oplog.Entry, now time.Time) bool {
-	return (e.Kind == oplog.KindAck || e.Kind == oplog.KindShelve) && now.Sub(time.UnixMilli(e.TS)) > AlarmIntentCommitBound
+	switch e.Kind {
+	case oplog.KindAck, oplog.KindShelve, oplog.KindOutOfService:
+		return now.Sub(time.UnixMilli(e.TS)) > AlarmIntentCommitBound
+	}
+	return false
 }
 
 // queueClear proposes an ack-clear in the background, retrying what the
@@ -802,7 +933,45 @@ func (l *AlarmLog) Held(synced bool, retained map[string]retain.AlarmRetain) map
 		}
 		out[id] = r
 	}
+	if synced {
+		// The log's windows, on every alarm of their equipment. Never
+		// unsynced: the view can't say a window is still current, and a
+		// stale one would hide alarms (fails toward showing them). What
+		// is left is the least of what was granted and what this clock
+		// says remains: one behind the leader's lengthens a window by its
+		// lag at most, within the grant (Reconcile ends expired ones in
+		// the log, so a replica far behind finds none to restore).
+		now := time.Now().UnixMilli()
+		for eq, o := range l.oos {
+			left := min(o.grantedMs, o.untilMs-now)
+			if left <= 0 {
+				continue
+			}
+			for _, id := range l.equip[eq] {
+				r := out[id]
+				r.OOSEquipment, r.OOSUntilMs, r.OOSLeftMs = o.name, o.untilMs, left
+				r.OOSStartMs, r.OOSBy, r.OOSReason = o.startMs, o.by, o.reason
+				out[id] = r
+			}
+		}
+	}
 	return out
+}
+
+// hasOutOfService reports whether an unsynced restore leaves out an
+// out-of-service window the log or the retain store held (for its note).
+func (l *AlarmLog) hasOutOfService(retained map[string]retain.AlarmRetain) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.oos) > 0 {
+		return true
+	}
+	for _, r := range retained {
+		if r.OOSEquipment != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // hasAcks reports whether a restore without the log would have carried an
@@ -861,6 +1030,11 @@ func (p PairAlarms) restore(m map[string]retain.AlarmRetain, synced bool) {
 			slog.Warn("alarm: acknowledgements not carried: the takeover's log catch-up failed; acknowledged alarms re-annunciate")
 		}
 		p.Log.dropAcks() // the view can't say which acks are current: none are
+		if p.Log.hasOutOfService(m) {
+			p.Engine.Note("system", "out of service not carried: takeover unsynced (the operator-intent log could not be caught up, so equipment taken out of service shows its alarms again)")
+			slog.Warn("alarm: out of service not carried: the takeover's log catch-up failed; its alarms show")
+		}
+		p.Log.endUncarried()
 	}
 	// A frozen engine from an earlier leadership forgets what it held;
 	// the view (or, unsynced, the shelves alone) is what applies now.

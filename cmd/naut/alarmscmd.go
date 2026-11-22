@@ -52,6 +52,12 @@ Usage:
   naut alarms report flood|chatter|bad-actors|stale
                                ISA-18.2 alarm performance from the
                                journal (naut alarms report help).
+  naut alarms out-of-service <equipment> --host H --for 4h --reason "…"
+  naut alarms in-service <equipment> --host H
+  naut alarms oos-list --host H
+                               Hide a piece of equipment's alarms while
+                               it is worked on (a week at most), put it
+                               back, list what is out (soonest first).
 `
 
 func runAlarms(args []string) int {
@@ -74,6 +80,8 @@ func runAlarms(args []string) int {
 		return runAlarmsMaster(args[1:])
 	case "report":
 		return runAlarmsReport(args[1:])
+	case "out-of-service", "in-service", "oos-list":
+		return runAlarmsOOS(args[0], args[1:])
 	case "help", "--help", "-h":
 		fmt.Print(alarmsUsage)
 		return 0

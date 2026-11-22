@@ -426,6 +426,19 @@ func (p *Project) CheckAlarms(rt *runtime.Runtime) (defs []alarm.Def, errs, warn
 		if d.Enable != "" {
 			check("alarm "+d.ID+"'s enable", d.Enable)
 		}
+		if d.SuppressWhen != "" {
+			// Refused here rather than left to fail toward showing at run
+			// time: a typo would mean the suppression never happens.
+			check("alarm "+d.ID+"'s suppress-when", d.SuppressWhen)
+			// A flat tag too: a condition may be a number (nonzero is in
+			// alarm), a suppress-when may not (a speed named by mistake
+			// would hide the alarm whenever it is nonzero).
+			if !strings.ContainsAny(d.SuppressWhen, ".[") {
+				if v, err := rt.Tags().ReadGlobal(d.SuppressWhen); err == nil && v.Kind != ir.TypeBool {
+					errs = append(errs, fmt.Sprintf("alarm %s's suppress-when %q is not a BOOL: only a BOOL's TRUE suppresses", d.ID, d.SuppressWhen))
+				}
+			}
+		}
 	}
 
 	// A rule claiming nothing: count what each one produced by re-running
@@ -623,6 +636,8 @@ func (p *Project) alarms(rt *runtime.Runtime, durable bool, log *slog.Logger, sy
 		// first, so its first false reading ends one; a standalone start
 		// does not, and may read a driver's defaults for its first scans.
 		CarryGrace: carryGrace(p.WriteGate == nil),
+		// An alarm on a substituted signal is suppressed (#715 PR 5, #707).
+		Substituted: substitutedCache(tags),
 	})
 	if err != nil {
 		out.Close()
@@ -756,4 +771,31 @@ func carryGrace(standalone bool) time.Duration {
 		return StandaloneCarryGrace
 	}
 	return 0
+}
+
+// substitutedCache is alarm.Options.Substituted over the tag store: the
+// answer for each condition path, kept until the substitute table changes
+// (Tags.SubstituteRevision), so a scan allocates nothing while it does
+// not. Called only from Evaluate, under the scan: no lock of its own.
+func substitutedCache(tags *runtime.Tags) func(string) (string, bool) {
+	type answer struct {
+		addr string
+		ok   bool
+	}
+	var (
+		rev   uint64
+		cache = map[string]answer{}
+	)
+	return func(path string) (string, bool) {
+		if r := tags.SubstituteRevision(); r != rev {
+			rev = r
+			clear(cache)
+		}
+		if a, ok := cache[path]; ok {
+			return a.addr, a.ok
+		}
+		addr, ok := tags.SubstituteCovering(path)
+		cache[path] = answer{addr, ok}
+		return addr, ok
+	}
 }

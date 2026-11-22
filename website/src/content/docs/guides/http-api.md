@@ -99,7 +99,7 @@ carries the token (below). Every endpoint that changes something is a
 | `POST /api/forces`, `DELETE /api/forces/{name}`, `POST /api/forces/clear` |
 | `POST /api/substitutes`, `DELETE /api/substitutes/{id}`, `POST /api/substitutes/ack` |
 | `POST /api/sfc/step`, `POST /api/sfc/transition` |
-| `POST /api/alarms/ack`, `POST /api/alarms/shelve`, `POST /api/alarms/unshelve` |
+| `POST /api/alarms/ack`, `POST /api/alarms/shelve`, `POST /api/alarms/unshelve`, `POST /api/alarms/out-of-service`, `POST /api/alarms/in-service` |
 | `PUT /api/program`, `POST /api/program/rollback`, `POST /api/program/activate` |
 | `POST /api/io/staged`, `POST /api/io/staged/{id}/validate`, `POST /api/io/staged/{id}/apply` |
 
@@ -224,6 +224,9 @@ check comes before the token check. See [Online edits](/guides/online-edits/).
 | `POST` | [`/api/alarms/ack`](#alarms) | Acknowledge |
 | `POST` | [`/api/alarms/shelve`](#alarms) | Shelve until a time |
 | `POST` | [`/api/alarms/unshelve`](#alarms) | Unshelve |
+| `GET` | [`/api/alarms/out-of-service`](#alarms) | Equipment out of service, soonest to end first |
+| `POST` | [`/api/alarms/out-of-service`](#alarms) | Take a piece of equipment's alarms out of service |
+| `POST` | [`/api/alarms/in-service`](#alarms) | Put it back |
 | `GET`, `POST` | [`/alarm-ack/{token}`](#alarms) | An ack link from a page: confirm, then acknowledge |
 | `POST` | [`/alarm-inbound/sms`, `/alarm-inbound/voice/{token}`](#alarms) | The SMS and voice provider's reply or keypress, signed |
 | `GET` | [`/api/program`](#programs) | The running program source and status |
@@ -1024,6 +1027,34 @@ Both answer the alarm's record.
 | `400` | Shelve of an alarm whose definition says `shelve: false` | `alarm "…" is not shelvable` |
 | `400` | Unshelve of an alarm that is not shelved | `alarm "HighLevel" is not shelved` |
 | `404` | The id is not an alarm | `no alarm "NoSuch"` |
+
+### `POST /api/alarms/out-of-service` and `/in-service`
+
+```sh
+curl -s -X POST localhost:8080/api/alarms/out-of-service \
+  -d '{"equipment": "P101", "seconds": 28800, "reason": "seal change, WO 4471"}'
+```
+```json
+{"equipment":"P101","outOfService":true,"untilMs":1793715288774,"by":"operator1","reason":"seal change, WO 4471","alarms":["P101.Fault","P101.Overload"]}
+```
+
+Every alarm of the equipment is suppressed until the window ends
+(`seconds`, or `until` as epoch milliseconds or RFC 3339; a week at most;
+never permanent), with the reason on each row. It needs `out-of-service`
+over every alarm it hides and a fresh password (`401` with `"elevate"`
+past it). `POST /api/alarms/in-service {"equipment": "P101"}` ends it
+early and needs only `ack`, over any one of its alarms; it answers with `"outOfService": false`.
+`GET /api/alarms/out-of-service` lists every window (`equipment`, `by`,
+`reason`, `startMs`, `untilMs`, `alarms`), the soonest to end first. See
+[Suppression by state](/guides/alarms/#suppression-by-state).
+
+| Status | When |
+| --- | --- |
+| `200` | The equipment's window now, and its alarms |
+| `400` | No `equipment`; neither `until` nor `seconds`; not in the future, or over a week; no reason, or more than one line or 200 characters; equipment holding one of the controller's own alarms; in service of equipment that is not out |
+| `401` | Out of service past the password's window (`"elevate": true`) |
+| `403` | The principal lacks the permission over one of the alarms |
+| `404` | No alarm belongs to the equipment |
 
 ### `GET /api/alarms/journal`
 

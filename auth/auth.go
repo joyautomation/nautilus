@@ -21,21 +21,26 @@ import (
 
 // The permissions (design §2).
 const (
-	Read       = "read"
-	Write      = "write"      // tag writes
-	Ack        = "ack"        // alarm acknowledgement
-	Shelve     = "shelve"     // alarm shelving
-	Substitute = "substitute" // #707's substitutes
-	Note       = "note"       // operator notes and the shift log (#720)
-	Force      = "force"      // forces, set and cleared
-	SFC        = "sfc"        // SFC step and transition commands
-	Edit       = "edit"       // online edits and rollbacks
-	Activate   = "activate"   // activating a commit
-	Deploy     = "deploy"     // a Logix or Siemens download
-	Config     = "config"     // live I/O configuration (#706, #711)
-	Audit      = "audit"      // reading the audit journal
-	Users      = "users"      // managing users and tokens
-	Override   = "override"   // #787's engineer override
+	Read   = "read"
+	Write  = "write"  // tag writes
+	Ack    = "ack"    // alarm acknowledgement
+	Shelve = "shelve" // alarm shelving
+	// OutOfService takes a piece of equipment's alarms out of service
+	// for up to a week (#715): heavier than a shelf, so it needs a fresh
+	// password. Returning to service needs only Ack: showing alarms
+	// again must be easy.
+	OutOfService = "out-of-service"
+	Substitute   = "substitute" // #707's substitutes
+	Note         = "note"       // operator notes and the shift log (#720)
+	Force        = "force"      // forces, set and cleared
+	SFC          = "sfc"        // SFC step and transition commands
+	Edit         = "edit"       // online edits and rollbacks
+	Activate     = "activate"   // activating a commit
+	Deploy       = "deploy"     // a Logix or Siemens download
+	Config       = "config"     // live I/O configuration (#706, #711)
+	Audit        = "audit"      // reading the audit journal
+	Users        = "users"      // managing users and tokens
+	Override     = "override"   // #787's engineer override
 	// Redundancy is the redundant pair's operator commands: clearing a
 	// duplicate mark, commissioning and re-commissioning (#710, #1029
 	// 3c-3). Safety-critical: who may tell the pair which process is the
@@ -44,11 +49,11 @@ const (
 )
 
 // Permissions lists every permission, in the order /api/me reports them.
-var Permissions = []string{Read, Write, Ack, Shelve, Note, Substitute, Force, SFC, Edit, Activate, Deploy, Config, Audit, Users, Override, Redundancy}
+var Permissions = []string{Read, Write, Ack, Shelve, OutOfService, Note, Substitute, Force, SFC, Edit, Activate, Deploy, Config, Audit, Users, Override, Redundancy}
 
 // areaScoped are the permissions an area limits to its tags. The rest
 // apply to the whole controller, whatever areas a grant names.
-var areaScoped = map[string]bool{Write: true, Ack: true, Shelve: true, Note: true, Substitute: true, Force: true}
+var areaScoped = map[string]bool{Write: true, Ack: true, Shelve: true, OutOfService: true, Note: true, Substitute: true, Force: true}
 
 // AreaScoped reports whether perm is limited by areas.
 func AreaScoped(perm string) bool { return areaScoped[perm] }
@@ -58,7 +63,7 @@ func AreaScoped(perm string) bool { return areaScoped[perm] }
 // the program, the I/O, a forced value, who may do what, or which process
 // a redundant pair counts as its member. A token always
 // counts as fresh. In /api/me's order.
-var ElevatedPermissions = []string{Force, Edit, Activate, Deploy, Config, Users, Override, Redundancy}
+var ElevatedPermissions = []string{OutOfService, Force, Edit, Activate, Deploy, Config, Users, Override, Redundancy}
 
 // Elevated reports whether perm is one of the ElevatedPermissions.
 func Elevated(perm string) bool { return slices.Contains(ElevatedPermissions, perm) }
@@ -86,7 +91,7 @@ var builtins = []struct {
 }{
 	{Viewer, []string{Read}},
 	{Operator, []string{Write, Ack, SFC, Note}},
-	{Supervisor, []string{Shelve, Substitute, Audit}},
+	{Supervisor, []string{Shelve, OutOfService, Substitute, Audit}},
 	{Engineer, []string{Force, Edit, Activate, Deploy, Config}},
 	{Administrator, []string{Users, Override, Redundancy}},
 }

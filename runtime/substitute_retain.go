@@ -357,7 +357,7 @@ func (t *Tags) markAckedLocked(id uint64) {
 		for i := range ss.entries {
 			if ss.entries[i].ID == id {
 				ss.entries[i].Acked = true
-				t.subRev++
+				t.subRev.Add(1)
 			}
 		}
 	}
