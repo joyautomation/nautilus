@@ -200,3 +200,27 @@ func TestOPCUAApplicationURIPerMember(t *testing.T) {
 		t.Errorf("no member: %q, want the configured (empty) URI", got)
 	}
 }
+
+// redundancy.floating-ip: a pair's, parsed at load, and refused where it
+// would be ignored (#716).
+func TestFloatingIPConfig(t *testing.T) {
+	p, err := Load(pairFS(pairOK+"  floating-ip: {address: 10.0.0.50/24, interface: eth0}\n"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f := p.Redundancy.FloatingIP; f == nil || f.Address != "10.0.0.50/24" || f.Interface != "eth0" {
+		t.Errorf("FloatingIP = %+v", f)
+	}
+	for _, c := range []struct{ name, extra, want string }{
+		{"no prefix length", "  floating-ip: {address: 10.0.0.50, interface: eth0}\n", "prefix length"},
+		{"IPv6", "  floating-ip: {address: 'fe80::1/64', interface: eth0}\n", "IPv4"},
+		{"no interface", "  floating-ip: {address: 10.0.0.50/24}\n", "interface"},
+	} {
+		if _, err := Load(pairFS(pairOK+c.extra), ""); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v, want %q", c.name, err, c.want)
+		}
+	}
+	if _, err := Load(pairFS("redundancy:\n  floating-ip: {address: 10.0.0.50/24, interface: eth0}\n"), ""); err == nil || !strings.Contains(err.Error(), "applies to a redundant pair") {
+		t.Errorf("floating-ip without peers: %v", err)
+	}
+}

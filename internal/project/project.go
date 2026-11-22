@@ -31,6 +31,7 @@ import (
 	"github.com/joyautomation/nautilus/devbind"
 	"github.com/joyautomation/nautilus/devprofile"
 	"github.com/joyautomation/nautilus/internal/dialect"
+	"github.com/joyautomation/nautilus/internal/floatip"
 
 	"gopkg.in/yaml.v3"
 
@@ -480,6 +481,20 @@ type RedundancyConfig struct {
 	// refers a signed-in browser (#708). Without them it names no
 	// address: the peer addresses are the pair's, never a browser's.
 	PublicURLs map[string]string `yaml:"public-urls"`
+	// FloatingIP is an address the leader holds (#716, design §8): added
+	// after its write gate opens, with gratuitous ARP, and dropped when the
+	// gate closes. Optional for clients (they follow public-urls and the
+	// OPC UA ServiceLevel); a PROFINET device will need it. Pair only.
+	FloatingIP *FloatingIPConfig `yaml:"floating-ip"`
+}
+
+// FloatingIPConfig is redundancy.floating-ip. The process needs
+// CAP_NET_ADMIN and CAP_NET_RAW to add the address and announce it.
+type FloatingIPConfig struct {
+	// Address is the address with its prefix length, e.g. 10.0.0.50/24.
+	Address string `yaml:"address"`
+	// Interface is the network interface that carries it, e.g. eth0.
+	Interface string `yaml:"interface"`
 }
 
 // LeaderURLs is public-urls with no trailing slash, for the server.
@@ -562,6 +577,8 @@ func checkRedundancy(r *RedundancyConfig) error {
 			return errors.New("redundancy.net-delay and send-margin apply to a redundant pair (peers:): they set its write gate's fence margin")
 		case r.PublicURLs != nil:
 			return errors.New("redundancy.public-urls applies to a redundant pair (peers:): the pair's controllers as a browser reaches them")
+		case r.FloatingIP != nil:
+			return errors.New("redundancy.floating-ip applies to a redundant pair (peers:): the address the leader holds")
 		}
 		return nil
 	}
@@ -594,6 +611,11 @@ func checkRedundancy(r *RedundancyConfig) error {
 			return fmt.Errorf("redundancy.lease %q: with peers: the lease is a time (e.g. 2s), not a name; a Lease name belongs to the Kubernetes mode, which has no peers:", r.Lease)
 		case d < minPairLease || d > maxPairLease:
 			return fmt.Errorf("redundancy.lease %s: want between %s and %s", d, minPairLease, maxPairLease)
+		}
+	}
+	if r.FloatingIP != nil {
+		if _, err := floatip.Parse(r.FloatingIP.Address, r.FloatingIP.Interface); err != nil {
+			return fmt.Errorf("redundancy.floating-ip: %w", err)
 		}
 	}
 	if err := checkFence(r); err != nil {

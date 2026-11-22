@@ -290,6 +290,36 @@ never computes.
   takeover without that sign-in only when operators use one address that
   moves with the leader: the floating IP, or a proxy or load balancer in
   front of the pair.
+- **A floating address (optional).** Clients that follow `public-urls` or the OPC UA
+  `ServiceLevel` do not need one; a client that knows one address does.
+  It is also what keeps a browser on one origin, so an operator's sign-in
+  survives a takeover without signing in again (see browser sign-ins above).
+
+  ```yaml
+  redundancy:
+    floating-ip: {address: 10.0.0.50/24, interface: eth0}
+  ```
+
+  The leader adds the address after its write gate opens, and announces it with three
+  gratuitous ARPs. It drops the address within a few milliseconds of the gate closing,
+  and on an orderly stop before it hands the lease over. A spare or a copy held by a
+  duplicate mark never has it, because its gate stays closed. After a kill, hang or
+  pause the kernel keeps the address on the old box until the unit's `ExecStopPost`
+  (or the watchdog's kill) removes it, so for that time two boxes may answer ARP for
+  it. That is client routing only: field writes are fenced by the gate, and the fenced
+  box's API refuses writes. IPv4 only. The process needs `CAP_NET_ADMIN` and
+  `CAP_NET_RAW`; with systemd, a drop-in adds them and removes the address when the
+  process is gone:
+
+  ```ini
+  [Service]
+  AmbientCapabilities=CAP_SYS_NICE CAP_NET_BIND_SERVICE CAP_NET_ADMIN CAP_NET_RAW
+  CapabilityBoundingSet=CAP_SYS_NICE CAP_NET_BIND_SERVICE CAP_NET_ADMIN CAP_NET_RAW
+  ExecStopPost=+/usr/sbin/ip addr del 10.0.0.50/24 dev eth0
+  ```
+
+  keepalived is the alternative if the site already runs it. A PROFINET device under
+  `redundancy:` stays refused until its takeover tests (F32-F34) pass.
 - The identity shown in `/api/cluster` comes from `POD_NAME`, and the
   proxy target from `POD_IP` — both from the downward API:
 
