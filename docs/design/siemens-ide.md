@@ -1518,14 +1518,18 @@ online. The latest loaded deploy that compares different is
 `changedOutside`; a changed `DownloadId` or `Hardware` is reported beside
 it.
 
-**Partly proven:** the #789 D7 bench window (2026-11-22 UTC) archived a
-deploy, loaded it, closed the session, retrieved the archive and compared
-it: equal, with the CPU's fingerprint unchanged since the load. That run
-retrieved the archive into the work dir and had to PUT a station before the
-compare, which the verify route does neither of. A read-only bench run of
-the verify route on that deploy is still owed before D7 is called proven.
-Openness compares hardware only in-project, so the hardware question on
-#789 still stands beside it.
+**Proven (D7):** on the bench 1510SP, a deploy's archive, retrieved
+later, compares equal to the CPU it was loaded into. The #789 D7 window
+(2026-11-22 UTC) archived and loaded a deploy, retrieved the archive into
+the work dir and compared it equal after a station PUT. A read-only run of
+`POST /v1/deploys/verify` on that deploy, with tiad at #1191, then
+answered `equal` from the deploys dir, with no station PUT and no compile:
+`latest` was that deploy, `changedOutside` false, and with the fingerprint
+read `downloadIdSame` and `hardwareSame` true. The blind trust of that read
+was retired when the verify's session closed. Openness compares hardware
+only in-project, so the hardware question on #789 still stands beside it:
+the fingerprint's `Hardware` item is the only hardware evidence a verify
+gives.
 
 **Code that doesn't need the image,** in order:
 1. the Web API client;
