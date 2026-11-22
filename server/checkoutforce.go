@@ -97,10 +97,11 @@ func (co *CheckoutOptions) forceView(tags *runtime.Tags) *CheckoutForceView {
 		tag = f.tag
 	}
 	co.ck.mu.Unlock()
+	_ = tag
 	if !ok {
 		return nil
 	}
-	if g, found := tags.ForceGen(tag); !found || g != gen {
+	if !tags.ForceHolds(gen) {
 		return nil
 	}
 	return &v
@@ -214,7 +215,7 @@ func (a *checkoutAPI) checkoutForceStart(w http.ResponseWriter, r *http.Request)
 		f.tag, f.gen, f.until, f.ready = name, gen, time.Now().Add(d), true
 		started = true
 		// a timer's duration runs on the monotonic clock
-		f.timer = time.AfterFunc(d, func() { a.endCheckoutForce(f, checkout.ForceExpired, "controller") })
+		f.timer = time.AfterFunc(d, func() { a.guarded(func() { a.endCheckoutForce(f, checkout.ForceExpired, "controller") }) })
 		a.co.ck.mu.Unlock()
 		go a.watchCheckoutForce(f)
 		slog.Warn("checkout: forcing an output", "tag", pt.Tag, "point", pt.ID, "by", by, "seconds", rec.Seconds, "run", run.ID)
@@ -226,6 +227,10 @@ func (a *checkoutAPI) checkoutForceStart(w http.ResponseWriter, r *http.Request)
 // (the equipment is back in service, its window ran out) or the force is no
 // longer the table's own (someone cleared or replaced it).
 func (a *checkoutAPI) watchCheckoutForce(f *ckForce) {
+	a.guarded(func() { a.watchLoop(f) })
+}
+
+func (a *checkoutAPI) watchLoop(f *ckForce) {
 	t := time.NewTicker(checkoutForceWatch)
 	defer t.Stop()
 	for {
@@ -237,7 +242,7 @@ func (a *checkoutAPI) watchCheckoutForce(f *ckForce) {
 				a.endCheckoutForce(f, checkout.ForceInterlock, "controller")
 				return
 			}
-			if g, ok := a.s.rt.Tags().ForceGen(f.tag); !ok || g != f.gen {
+			if !a.s.rt.Tags().ForceHolds(f.gen) {
 				a.endCheckoutForce(f, checkout.ForceReplaced, "controller")
 				return
 			}
@@ -318,7 +323,20 @@ func (a *checkoutAPI) endCheckoutForce(f *ckForce, how, by string) string {
 	return how
 }
 
-
 // ckHook is a test's seam: called at named points of a start and an end, so a
 // test can hold one there and run another request against it.
 var ckHook = func(string) {}
+
+// guarded runs fn, and if it panics logs it and keeps the controller up: a
+// timer or watch goroutine that dies must not take the controller (which would
+// have to be restarted by hand while its output was forced) with it. The force
+// itself is let go before anything that can fail (endCheckoutForce unforces
+// first).
+func (a *checkoutAPI) guarded(fn func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("checkout: a force's timer or watch panicked", "panic", r)
+		}
+	}()
+	fn()
+}

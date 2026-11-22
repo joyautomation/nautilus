@@ -130,6 +130,8 @@ claims:
       - go ./server TestCheckoutForceStateIsRaceFree
       - go ./runtime TestForceGenerationsAreOwnership
       - go ./runtime TestForceSpellingsOfOneElementAreOneEntry
+      - go ./runtime TestForceSurvivesALiterallyNamedTagBesideTheArray
+      - go ./runtime TestForceRefusesMalformedIndexes
       - go ./runtime TestForceIfFreeNamesTheForceTheWayTheTableDoes
       - go ./runtime TestForceIndexSpellingsAreOneAddress
       - go ./server TestCheckoutForceCanonicalSpellings

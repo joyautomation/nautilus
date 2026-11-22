@@ -757,3 +757,53 @@ func forceSpellings(t *testing.T, seed int64) {
 		t.Errorf("Gridtag[2,1] taken as Gridtag[1,2]: %v", err)
 	}
 }
+
+// A tag literally named like an element ("A[1]", which a driver may deliver)
+// beside the array "A" must not hide the element's force: the overlap is read
+// under the root the address resolved to, and a force is found by its
+// generation, however its name resolves.
+func TestForceSurvivesALiterallyNamedTagBesideTheArray(t *testing.T) {
+	tags := NewTags()
+	tags.Set("A", ir.Value{Kind: ir.TypeArray, Arr: []ir.Value{ir.RealVal(0), ir.RealVal(0), ir.RealVal(0)}})
+	tags.mu.Lock()
+	tags.writeLocked("A[1]", ir.RealVal(0)) // as setMany stores a name a driver delivers
+	tags.mu.Unlock()
+	if err := tags.Force("A[01]", 3.0); err != nil { // an operator's
+		t.Fatal(err)
+	}
+	if _, _, err := tags.ForceIfFree("A[01]", 9.0); err == nil || !strings.Contains(err.Error(), "already forced") {
+		t.Fatalf("an operator's force on the element was overwritten: %v", err)
+	}
+	if got := tags.ForcedOverlap("A[01]"); got == "" { // ("A[1]" is the literal tag, by the dotted-name rule)
+		t.Error("the write path does not see the element's force")
+	}
+	// a checkout force on another element is held and removed by generation
+	gen, name, err := tags.ForceIfFree("A[2]", 5.0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !tags.ForceHolds(gen) {
+		t.Error("ForceHolds does not find the force it was given")
+	}
+	if !tags.UnforceIf(name, gen) || tags.ForceHolds(gen) {
+		t.Error("UnforceIf did not remove exactly its force")
+	}
+	if len(tags.Forces()) != 1 {
+		t.Errorf("the operator's force is gone: %v", tags.Forces())
+	}
+}
+
+// Force refuses a malformed index as the write path does: nothing repairs
+// "A[1" or "A[[1]" into an element.
+func TestForceRefusesMalformedIndexes(t *testing.T) {
+	tags := NewTags()
+	tags.Set("A", ir.Value{Kind: ir.TypeArray, Arr: []ir.Value{ir.RealVal(0), ir.RealVal(0)}})
+	for _, bad := range []string{"A[1", "A[[1]", "A[1]]"} {
+		if err := tags.Force(bad, 1.0); err == nil {
+			t.Errorf("Force(%q) was accepted", bad)
+		}
+	}
+	if len(tags.Forces()) != 0 {
+		t.Errorf("forces: %v", tags.Forces())
+	}
+}
