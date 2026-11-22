@@ -9,6 +9,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"net/url"
 	"regexp"
 	"sort"
 	"strings"
@@ -33,6 +34,9 @@ type PWA struct {
 // DefaultTheme is the kit's dark background (theme.css --bg).
 const DefaultTheme = "#0f1419"
 
+// maxIconSide bounds an icon's width and height before it is decoded.
+const maxIconSide = 4096
+
 var hexColor = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
 
 // Validate says what is wrong with p, in words that name the fix.
@@ -41,13 +45,16 @@ func (p *PWA) Validate() error {
 		return fmt.Errorf("pwa.theme-color %q is not a color like \"#0f1419\"", p.ThemeColor)
 	}
 	if len(p.Icon) > 0 {
-		img, err := png.Decode(bytes.NewReader(p.Icon))
+		// the header first: a small file can claim a huge picture
+		cfg, err := png.DecodeConfig(bytes.NewReader(p.Icon))
 		if err != nil {
 			return fmt.Errorf("pwa.icon is not a PNG: %v", err)
 		}
-		b := img.Bounds()
-		if b.Dx() != b.Dy() || b.Dx() < 512 {
-			return fmt.Errorf("pwa.icon is %dx%d: it must be a square PNG of 512 pixels or more", b.Dx(), b.Dy())
+		if cfg.Width != cfg.Height || cfg.Width < 512 {
+			return fmt.Errorf("pwa.icon is %dx%d: it must be a square PNG of 512 pixels or more", cfg.Width, cfg.Height)
+		}
+		if cfg.Width > maxIconSide {
+			return fmt.Errorf("pwa.icon is %dx%d: use a 512 or 1024 pixel PNG (at most %d)", cfg.Width, cfg.Height, maxIconSide)
 		}
 	}
 	return nil
@@ -79,7 +86,9 @@ func pwaFiles(files map[string][]byte, title string, p *PWA) error {
 		if err := png.Encode(&buf, scale(src, size)); err != nil {
 			return err
 		}
-		files[f] = buf.Bytes()
+		if _, own := files[f]; !own { // the app's own static file wins
+			files[f] = buf.Bytes()
+		}
 	}
 
 	manifest, _ := json.MarshalIndent(map[string]any{
@@ -96,7 +105,9 @@ func pwaFiles(files map[string][]byte, title string, p *PWA) error {
 		},
 	}, "", "\t")
 	files["manifest.webmanifest"] = append(manifest, '\n')
-	files["pwa.js"] = []byte(pwaRegister)
+	if _, own := files["pwa.js"]; !own {
+		files["pwa.js"] = []byte(pwaRegister)
+	}
 
 	// the shell: everything small the build wrote, but not the worker
 	var shell []string
@@ -111,7 +122,7 @@ func pwaFiles(files map[string][]byte, title string, p *PWA) error {
 		if f == "sw.js" || len(files[f]) > shellMaxFile || strings.HasSuffix(f, ".woff") {
 			continue
 		}
-		shell = append(shell, f)
+		shell = append(shell, escapePath(f))
 		h.Write([]byte(f))
 		h.Write(files[f])
 	}
@@ -124,6 +135,16 @@ func pwaFiles(files map[string][]byte, title string, p *PWA) error {
 // shellMaxFile is the largest file the worker holds ahead of time (3D
 // models and the like are fetched when used).
 const shellMaxFile = 1 << 20
+
+// escapePath is a file's path as a URL path: a name with %, # or ? asks for
+// itself, not for something else.
+func escapePath(f string) string {
+	parts := strings.Split(f, "/")
+	for i, p := range parts {
+		parts[i] = url.PathEscape(p)
+	}
+	return strings.Join(parts, "/")
+}
 
 func firstNonEmpty(s ...string) string {
 	for _, v := range s {
@@ -201,14 +222,29 @@ func scale(src image.Image, n int) *image.NRGBA {
 }
 
 const pwaRegister = `if ('serviceWorker' in navigator && window.isSecureContext) {
-	navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(function () {});
+	// a new worker takes over a page the old one was serving: reload once,
+	// so the page and the chunks it loads are one build (not on the first
+	// install, when there was no old page to replace)
+	var had = !!navigator.serviceWorker.controller;
+	var reloaded = false;
+	navigator.serviceWorker.addEventListener('controllerchange', function () {
+		if (!had || reloaded) { had = true; return; }
+		reloaded = true;
+		location.reload();
+	});
+	navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(function (e) {
+		console.error('the HMI cannot be installed: its service worker did not register', e);
+	});
 }
 `
 
 // pwaWorker holds the app shell and answers nothing else. The controller's
 // data (/api, the live stream, /_nautilus) is never stored and never
 // answered by the worker, so an offline HMI can show its shell and the kit
-// shows "not connected", never an old value as a live one.
+// shows "not connected", never an old value as a live one. Files under
+// _app/ carry a content hash in their name and are answered from the shell;
+// the files without one (the page, app.js, app.css) ask the network first,
+// so a redeployed HMI is never run from an old copy.
 const pwaWorker = `// nautilus HMI service worker (version %VERSION%)
 const CACHE = 'nautilus-hmi-%VERSION%';
 const SHELL = %SHELL%;
@@ -216,8 +252,25 @@ const SHELL = %SHELL%;
 // one and the shell was stored without, so a match must not compare it
 const MATCH = { cacheName: CACHE, ignoreVary: true };
 
+// A file the controller cannot give, or that it answers with the page (its
+// answer to a path it has no file for), is not stored: the install fails and
+// the old shell stays, with the reason in the console.
+async function store(cache, file) {
+	const res = await fetch('/' + file, { cache: 'reload' });
+	const type = res.headers.get('content-type') || '';
+	if (!res.ok || (type.indexOf('text/html') >= 0 && file !== 'index.html')) {
+		throw new Error('the HMI shell cannot hold ' + file + ' (' + res.status + ' ' + type + ')');
+	}
+	await cache.put('/' + file, res);
+}
+
 self.addEventListener('install', (e) => {
-	e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL.map((f) => '/' + f))).then(() => self.skipWaiting()));
+	e.waitUntil(
+		caches.open(CACHE)
+			.then((c) => Promise.all(SHELL.map((f) => store(c, f))))
+			.then(() => self.skipWaiting())
+			.catch((err) => { console.error(err); throw err; })
+	);
 });
 
 self.addEventListener('activate', (e) => {
@@ -242,6 +295,11 @@ self.addEventListener('fetch', (e) => {
 		e.respondWith(fetch(req).catch(() => caches.match('/index.html', MATCH)));
 		return;
 	}
-	e.respondWith(caches.match(req, MATCH).then((hit) => hit || fetch(req)));
+	if (url.pathname.startsWith('/_app/')) {
+		e.respondWith(caches.match(req, MATCH).then((hit) => hit || fetch(req)));
+		return;
+	}
+	// no hash in the name: the network's copy when there is one
+	e.respondWith(fetch(req).catch(() => caches.match(req, MATCH)));
 });
 `

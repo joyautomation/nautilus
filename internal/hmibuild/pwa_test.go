@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"hash/crc32"
 	"image"
 	"image/color"
 	"image/png"
@@ -176,64 +177,100 @@ func TestPWAWorkerShellAndVersion(t *testing.T) {
 }
 
 // swHarness runs the built worker in goja with the few browser parts it
-// touches, and reports what it does with a request.
+// touches, and reports what it does.
 type swHarness struct {
 	vm *goja.Runtime
 }
 
-func newSW(t *testing.T) *swHarness {
+func newSWWith(t *testing.T, files map[string][]byte) *swHarness {
 	t.Helper()
-	f := shellFiles()
-	if err := pwaFiles(f, "x", nil); err != nil {
+	if err := pwaFiles(files, "x", nil); err != nil {
 		t.Fatal(err)
 	}
 	vm := goja.New()
 	if _, err := vm.RunString(`
 		var handlers = {};
-		var self = { location: { origin: 'https://box' }, clients: { claim: function () {} },
+		var self = { location: { origin: 'https://box' }, clients: { claim: function () { claimed = true; } },
 			skipWaiting: function () { return Promise.resolve(); },
 			addEventListener: function (n, f) { handlers[n] = f; } };
+		var claimed = false;
 		function URL(u) {
 			var m = /^(https?:\/\/[^\/]+)(\/[^?#]*)?/.exec(u);
 			this.origin = m[1]; this.pathname = m[2] || '/';
 		}
-		var cached = { '/index.html': 'SHELL' };
+		var console = { error: function () { errors.push(Array.prototype.join.call(arguments, ' ')); } };
+		var errors = [];
+		// what the controller answers per path: {status, type}; default 200 text/javascript
+		var served = {};
 		var networkDown = false, fetched = [];
+		var stores = {}, deleted = [], existing = ['nautilus-hmi-old', 'other-app'];
+		var held = {};   // cached path -> body
+		function res(path, body) {
+			var o = served[path] || {};
+			var type = o.type || 'text/javascript', status = o.status || 200;
+			return { ok: status < 400, status: status, headers: { get: function () { return type; } }, body: body };
+		}
+		function fetch(r) {
+			var u = typeof r === 'string' ? r : r.url;
+			var path = u.replace('https://box', '');
+			fetched.push(path);
+			return networkDown ? Promise.reject(new Error('offline')) : Promise.resolve(res(path, 'NET:' + path));
+		}
 		var caches = {
-			match: function (r, o) { if (!o || o.ignoreVary !== true || !o.cacheName) return Promise.resolve(undefined); var k = typeof r === 'string' ? r : new URL(r.url).pathname; return Promise.resolve(cached[k]); },
-			open: function () { return Promise.resolve({ addAll: function () { return Promise.resolve(); } }); },
-			keys: function () { return Promise.resolve([]); },
-			delete: function () { return Promise.resolve(); }
+			match: function (r, o) {
+				if (!o || o.ignoreVary !== true || !o.cacheName) return Promise.resolve(undefined);
+				var k = typeof r === 'string' ? r : new URL(r.url).pathname;
+				return Promise.resolve(held[k] === undefined ? undefined : { body: 'CACHE:' + k });
+			},
+			open: function () { return Promise.resolve({ put: function (k, r) { held[k] = r.body; return Promise.resolve(); } }); },
+			keys: function () { return Promise.resolve(existing.concat([CACHE])); },
+			delete: function (k) { deleted.push(k); return Promise.resolve(); }
 		};
-		function fetch(r) { fetched.push(r.url); return networkDown ? Promise.reject(new Error('offline')) : Promise.resolve('NET'); }
-		function Response() {}
 	`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := vm.RunString(string(f["sw.js"])); err != nil {
+	if _, err := vm.RunString(string(files["sw.js"])); err != nil {
 		t.Fatalf("sw.js: %v", err)
 	}
 	return &swHarness{vm: vm}
+}
+
+func newSW(t *testing.T) *swHarness { return newSWWith(t, shellFiles()) }
+
+func (h *swHarness) run(t *testing.T, js string) goja.Value {
+	t.Helper()
+	v, err := h.vm.RunString(js)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+// lifecycle sends install or activate and says whether it settled, and how.
+func (h *swHarness) lifecycle(t *testing.T, name string) (ok bool, err string) {
+	t.Helper()
+	h.run(t, `var life = { done: false, err: null };
+		handlers['`+name+`']({ waitUntil: function (p) { p.then(function () { life.done = true; }, function (e) { life.err = String(e); }); } });`)
+	h.run(t, `0`) // let the promise jobs run
+	o := h.run(t, `life`).ToObject(h.vm)
+	if e := o.Get("err"); e != nil && !goja.IsNull(e) {
+		return false, e.String()
+	}
+	return o.Get("done").ToBoolean(), ""
 }
 
 // fetchEvent sends a request and says whether the worker answered it, and
 // with what.
 func (h *swHarness) fetchEvent(t *testing.T, method, url, mode string) (answered bool, body string) {
 	t.Helper()
-	v, err := h.vm.RunString(`(function () {
+	v := h.run(t, `(function () {
 		var res = { answered: false, body: null };
-		var e = { request: { method: '` + method + `', url: '` + url + `', mode: '` + mode + `' },
-			respondWith: function (p) { res.answered = true; Promise.resolve(p).then(function (b) { res.body = b; }); } };
+		var e = { request: { method: '`+method+`', url: '`+url+`', mode: '`+mode+`' },
+			respondWith: function (p) { res.answered = true; Promise.resolve(p).then(function (b) { res.body = b && b.body; }); } };
 		handlers.fetch(e);
 		return res;
 	})()`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// let the promise jobs run
-	if _, err := h.vm.RunString(`0`); err != nil {
-		t.Fatal(err)
-	}
+	h.run(t, `0`)
 	o := v.ToObject(h.vm)
 	if s := o.Get("body"); s != nil && !goja.IsNull(s) && !goja.IsUndefined(s) {
 		body = s.String()
@@ -264,14 +301,151 @@ func TestPWAWorkerNeverAnswersData(t *testing.T) {
 // A screen opens offline from the shell; online, the network answers.
 func TestPWAWorkerOpensTheShellOffline(t *testing.T) {
 	h := newSW(t)
-	if ans, body := h.fetchEvent(t, "GET", "https://box/pumps", "navigate"); !ans || body != "NET" {
+	h.run(t, `held['/index.html'] = 'x'`)
+	if ans, body := h.fetchEvent(t, "GET", "https://box/pumps", "navigate"); !ans || body != "NET:/pumps" {
 		t.Errorf("online navigate = %v %q, want the network's answer", ans, body)
 	}
-	if _, err := h.vm.RunString(`networkDown = true`); err != nil {
+	h.run(t, `networkDown = true`)
+	if ans, body := h.fetchEvent(t, "GET", "https://box/pumps", "navigate"); !ans || body != "CACHE:/index.html" {
+		t.Errorf("offline navigate = %v %q, want the cached shell", ans, body)
+	}
+}
+
+// A redeployed HMI is never run from an old copy: the files with no hash in
+// their name (app.js, app.css) ask the network first and fall back to the
+// shell only offline; the hashed ones under _app/ come from the shell.
+func TestPWAWorkerNeverRunsAnOldAppJS(t *testing.T) {
+	h := newSW(t)
+	h.run(t, `held['/app.js'] = 'old'; held['/_app/chunk-AB12.js'] = 'chunk'`)
+	if _, body := h.fetchEvent(t, "GET", "https://box/app.js", "cors"); body != "NET:/app.js" {
+		t.Errorf("online app.js = %q, want the network's, not the shell's old copy", body)
+	}
+	h.run(t, `fetched.length = 0`)
+	if _, body := h.fetchEvent(t, "GET", "https://box/_app/chunk-AB12.js", "cors"); body != "CACHE:/_app/chunk-AB12.js" {
+		t.Errorf("hashed chunk = %q, want the shell's", body)
+	}
+	if n := h.run(t, `fetched.length`).ToInteger(); n != 0 {
+		t.Errorf("a hashed chunk in the shell went to the network (%d fetches)", n)
+	}
+	h.run(t, `networkDown = true`)
+	if _, body := h.fetchEvent(t, "GET", "https://box/app.js", "cors"); body != "CACHE:/app.js" {
+		t.Errorf("offline app.js = %q, want the shell's", body)
+	}
+}
+
+// Install holds every file of the shell, under its escaped URL, then takes
+// over; activate drops the older versions' caches and no one else's.
+func TestPWAWorkerInstallAndActivate(t *testing.T) {
+	files := shellFiles()
+	files["static/100%.png"] = []byte("p")
+	h := newSWWith(t, files)
+	if ok, err := h.lifecycle(t, "install"); !ok {
+		t.Fatalf("install: %v", err)
+	}
+	if got := h.run(t, `held['/app.js']`).String(); got != "NET:/app.js" {
+		t.Errorf("app.js held as %q", got)
+	}
+	// a name with % asks for itself: the fetch is for the escaped path
+	if !h.run(t, `fetched.indexOf('/static/100%25.png') >= 0`).ToBoolean() {
+		t.Errorf("the shell fetched %v, not the escaped /static/100%%25.png", h.run(t, `fetched`).Export())
+	}
+	if ok, err := h.lifecycle(t, "activate"); !ok {
+		t.Fatalf("activate: %v", err)
+	}
+	if got := h.run(t, `deleted.join(',')`).String(); got != "nautilus-hmi-old" {
+		t.Errorf("deleted caches = %q, want only the older HMI shell", got)
+	}
+	if !h.run(t, `claimed`).ToBoolean() {
+		t.Error("the new worker did not take over the open pages")
+	}
+}
+
+// A file the controller cannot give, or gives as the page (its answer to a
+// path with no file), fails the install, and the reason is in the console:
+// not a shell holding HTML as a script, not a silent old shell.
+func TestPWAWorkerInstallRefusesWhatItCannotHold(t *testing.T) {
+	for name, served := range map[string]string{
+		"404":          `served['/app.js'] = { status: 404 }`,
+		"html as a js": `served['/app.js'] = { type: 'text/html; charset=utf-8' }`,
+	} {
+		h := newSW(t)
+		h.run(t, served)
+		ok, err := h.lifecycle(t, "install")
+		if ok || !strings.Contains(err, "cannot hold app.js") {
+			t.Errorf("%s: install ok=%v err=%q, want it to fail naming app.js", name, ok, err)
+		}
+		if n := h.run(t, `errors.length`).ToInteger(); n == 0 {
+			t.Errorf("%s: nothing in the console", name)
+		}
+	}
+	// index.html itself is HTML
+	h := newSW(t)
+	h.run(t, `served['/index.html'] = { type: 'text/html' }`)
+	if ok, err := h.lifecycle(t, "install"); !ok {
+		t.Errorf("index.html as HTML refused: %v", err)
+	}
+}
+
+// pwa.js reloads a page once when a new worker takes it over (the page and
+// its chunks must be one build), and not on the first install.
+func TestPWARegisterReloadsOnTakeover(t *testing.T) {
+	run := func(controlled bool) (reloads int) {
+		vm := goja.New()
+		ctrl := "null"
+		if controlled {
+			ctrl = "{}"
+		}
+		if _, err := vm.RunString(`
+			var reloads = 0, listener = null, registered = null;
+			var window = { isSecureContext: true };
+			var location = { reload: function () { reloads++; } };
+			var navigator = { serviceWorker: { controller: ` + ctrl + `,
+				addEventListener: function (n, f) { if (n === 'controllerchange') listener = f; },
+				register: function (u, o) { registered = u + '|' + o.scope; return Promise.resolve(); } } };
+			var console = { error: function () {} };
+		`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := vm.RunString(pwaRegister); err != nil {
+			t.Fatal(err)
+		}
+		if got := vm.Get("registered").String(); got != "/sw.js|/" {
+			t.Errorf("registered %q", got)
+		}
+		_, _ = vm.RunString(`listener(); if (` + ctrl + ` !== null) listener();`)
+		return int(vm.Get("reloads").ToInteger())
+	}
+	if n := run(true); n != 1 {
+		t.Errorf("a takeover of a controlled page reloaded %d times, want once", n)
+	}
+	if n := run(false); n != 0 {
+		t.Errorf("the first install reloaded the page (%d)", n)
+	}
+}
+
+// A PNG that claims a huge picture is refused from its header, not decoded.
+func TestPWAIconBombRefused(t *testing.T) {
+	// 8-bit grayscale IHDR claiming 40000 x 40000, then nothing
+	hdr := []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 'I', 'H', 'D', 'R',
+		0, 0, 0x9c, 0x40, 0, 0, 0x9c, 0x40, 8, 0, 0, 0, 0}
+	crc := crc32IEEE(hdr[12:])
+	hdr = append(hdr, byte(crc>>24), byte(crc>>16), byte(crc>>8), byte(crc))
+	err := (&PWA{Icon: hdr}).Validate()
+	if err == nil || !strings.Contains(err.Error(), "at most 4096") {
+		t.Errorf("err = %v, want the size refused from the header", err)
+	}
+}
+
+// What the app ships itself under a name naut would write is kept.
+func TestPWAKeepsTheAppsOwnIconAndRegisterScript(t *testing.T) {
+	files := shellFiles()
+	files["icon-192.png"] = []byte("mine")
+	files["pwa.js"] = []byte("// mine")
+	if err := pwaFiles(files, "x", nil); err != nil {
 		t.Fatal(err)
 	}
-	if ans, body := h.fetchEvent(t, "GET", "https://box/pumps", "navigate"); !ans || body != "SHELL" {
-		t.Errorf("offline navigate = %v %q, want the cached shell", ans, body)
+	if string(files["icon-192.png"]) != "mine" || string(files["pwa.js"]) != "// mine" {
+		t.Error("naut overwrote a file the app ships")
 	}
 }
 
@@ -326,5 +500,26 @@ func TestAnAppWithItsOwnManifestKeepsIt(t *testing.T) {
 	}
 	if strings.Contains(string(res.Files["index.html"]), "manifest.webmanifest") {
 		t.Error("naut linked a manifest the app did not ask for")
+	}
+}
+
+func crc32IEEE(b []byte) uint32 { return crc32.ChecksumIEEE(b) }
+
+// The playground builds without the manifest and worker (it is not served
+// from the root of its own origin).
+func TestNoPWABuild(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "hmi/src/routes/+page.svelte", "<p>hi</p>\n")
+	res, err := Build(Options{Project: dir, App: filepath.Join(dir, "hmi"), NoPWA: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"manifest.webmanifest", "sw.js", "pwa.js", "icon-192.png"} {
+		if _, ok := res.Files[f]; ok {
+			t.Errorf("%s in a NoPWA build", f)
+		}
+	}
+	if strings.Contains(string(res.Files["index.html"]), "manifest") {
+		t.Error("index.html links a manifest in a NoPWA build")
 	}
 }

@@ -57,6 +57,10 @@ type Options struct {
 	// installable HMI, named by Title; an app with its own
 	// static/manifest.webmanifest or static/sw.js keeps its own.
 	PWA *PWA
+	// NoPWA builds the HMI without the manifest and worker: for a build
+	// that is not served from the root of its own origin (the browser
+	// playground).
+	NoPWA bool
 }
 
 // Result is a built app: its files, by slash path from the app's root.
@@ -394,7 +398,7 @@ func (b *builder) bundle() (*Result, error) {
 	}
 	_, ownManifest := res.Files["manifest.webmanifest"]
 	_, ownWorker := res.Files["sw.js"]
-	installable := !ownManifest && !ownWorker
+	installable := !ownManifest && !ownWorker && !b.opts.NoPWA
 	head := ""
 	if installable {
 		theme := DefaultTheme
