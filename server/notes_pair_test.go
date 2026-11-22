@@ -124,8 +124,9 @@ func TestNoteIsRefusedWithoutAMajorityAndNeverQueued(t *testing.T) {
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("%d %s, want 503", rec.Code, rec.Body)
 	}
-	if rec.Header().Get(outcomeHeader) == "" {
-		t.Errorf("the refusal carries no %s header", outcomeHeader)
+	// refused before anything was proposed (not "outcome unknown"), with the log's own reason
+	if rec.Header().Get(outcomeHeader) != "refused" || !strings.Contains(rec.Body.String(), "majority") && !strings.Contains(rec.Body.String(), "synced") {
+		t.Errorf("not the acknowledgements' refusal: %s %q", rec.Header().Get(outcomeHeader), rec.Body)
 	}
 	if np.nls[0].Store().Count() != 0 {
 		t.Error("a refused note was kept in memory")
