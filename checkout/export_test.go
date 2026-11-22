@@ -34,8 +34,11 @@ func TestExportKeepsResultsForPointsTheSheetNoLongerHas(t *testing.T) {
 	if !ex.SheetChanged || len(ex.Orphans) != 1 || ex.Orphans[0].Point != "GONE" {
 		t.Errorf("export %+v: want the sheet marked changed and the orphan kept", ex)
 	}
+	if !strings.Contains(ex.Status, "SHEET CHANGED") || !strings.Contains(ex.Status, "UNSEALED") {
+		t.Errorf("status %q: a changed sheet is not said in the content", ex.Status)
+	}
 	csv, err := ex.CSV()
-	if err != nil || !strings.Contains(string(csv), "GONE") || !strings.Contains(string(csv), "(not on the sheet now)") {
+	if err != nil || !strings.Contains(string(csv), "SHEET CHANGED") || !strings.Contains(string(csv), "GONE") || !strings.Contains(string(csv), "(not on the sheet now)") {
 		t.Errorf("csv %v: %s", err, csv)
 	}
 }

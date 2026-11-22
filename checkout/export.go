@@ -68,6 +68,10 @@ func BuildExport(run Run, sh *Sheet, results []Result) Export {
 	if ex.Title == "" {
 		ex.Title = sh.Title
 	}
+	if ex.SheetChanged {
+		// a run keeps its sheet's hash, not the sheet: say so where it is read
+		ex.Status += "; SHEET CHANGED since this run began: the points are described by the current sheet, the results are the run's own"
+	}
 	by := map[string][]Result{}
 	for _, r := range results {
 		by[r.Point] = append(by[r.Point], r)
@@ -204,7 +208,8 @@ func resultCells(n int, r Result) []string {
 }
 
 // FileStem is a name for the export's file, built from the run's id alone
-// (never a title or a note): letters, digits, dot, dash and underscore.
+// (never a title or a note): letters, digits, dash and underscore; any other
+// character becomes an underscore.
 func FileStem(run string) string {
 	var b strings.Builder
 	for _, c := range run {
