@@ -498,10 +498,10 @@ func TestPendingAdoptionClearedAtTheNextTakeover(t *testing.T) {
 
 // The scan never waits on the pair's alarm log (#1053: control never
 // waits on operator data). The engine's hook runs under the engine's lock
-// on the scan; with AlarmLog.mu held, or the oplog node's lock held by a
-// commit being applied, an evaluation that ends an acknowledged
-// occurrence still returns at once, and the ack-clear follows once they
-// are released.
+// on the scan; with AlarmLog.mu held, the oplog node's lock held by a
+// commit being applied, or liveMu held, an evaluation that ends an
+// acknowledged occurrence (or begins one) still returns at once, and the
+// ack-clear follows once they are released.
 func TestScanNeverWaitsOnTheAlarmLog(t *testing.T) {
 	var lead atomic.Bool
 	lead.Store(true)
@@ -562,6 +562,14 @@ func TestScanNeverWaitsOnTheAlarmLog(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+
+	// liveMu too: the hand-off's judgement takes it (to wait out an
+	// in-flight Apply), and a takeover's restore holds it; the scan's
+	// evaluation still never waits on it.
+	al.liveMu.Lock()
+	cond["HiTempAlm"] = true // a new activation: handed off
+	scan("liveMu")
+	al.liveMu.Unlock()
 }
 
 // An alarm's end handed off from the scan, judged after the view took an
@@ -769,8 +777,8 @@ func TestReconcileNeverClearsAnAckAppliedBetweenItsReads(t *testing.T) {
 	PairAlarms{Engine: eng, Log: al}.RestoreAlarmsSynced(nil, true)
 	eng.Evaluate()
 	o := occOf(t, eng, "HiTemp")
-	reconcileGap = func() {
-		done := make(chan struct{})
+	done := make(chan struct{})
+	gap := func() {
 		go func() {
 			_, _ = al.Apply(oplog.Entry{Kind: oplog.KindAck, IDs: []string{"HiTemp"},
 				Occs: []oplog.Occ{{ID: "HiTemp", Occ: o.Occurrence, ActiveMs: o.ActiveMs}}, By: "op"})
@@ -781,9 +789,11 @@ func TestReconcileNeverClearsAnAckAppliedBetweenItsReads(t *testing.T) {
 		case <-time.After(200 * time.Millisecond):
 		}
 	}
-	t.Cleanup(func() { reconcileGap = nil })
+	reconcileGap.Store(&gap)
+	t.Cleanup(func() { reconcileGap.Store(nil) })
 	al.Reconcile()
-	reconcileGap = nil
+	reconcileGap.Store(nil)
+	<-done // the Apply finishes once Reconcile let go: nothing outlives the test
 	al.clrMu.Lock()
 	queued := slices.Clone(al.clr)
 	al.clrMu.Unlock()
@@ -862,16 +872,17 @@ func TestJudgementWaitsOutAnInFlightApply(t *testing.T) {
 	PairAlarms{Engine: eng, Log: al}.RestoreAlarmsSynced(nil, true)
 	eng.Evaluate()
 	o := occOf(t, eng, "HiTemp")
-	applyAckGap = func() {
+	gap := func() {
 		al.ended <- endedOcc{id: "HiTemp", occ: o.Occurrence, gen: al.ackGen.Load(), term: noTerm()}
 		time.Sleep(100 * time.Millisecond) // the hand-off is judged in the gap, unless it waits
 	}
-	t.Cleanup(func() { applyAckGap = nil })
+	applyAckGap.Store(&gap)
+	t.Cleanup(func() { applyAckGap.Store(nil) })
 	if _, err := al.Apply(oplog.Entry{Kind: oplog.KindAck, IDs: []string{"HiTemp"},
 		Occs: []oplog.Occ{{ID: "HiTemp", Occ: o.Occurrence, ActiveMs: o.ActiveMs}}, By: "op"}); err != nil {
 		t.Fatal(err)
 	}
-	applyAckGap = nil
+	applyAckGap.Store(nil)
 	time.Sleep(100 * time.Millisecond)
 	al.clrMu.Lock()
 	queued := slices.Clone(al.clr)

@@ -549,11 +549,11 @@ func (l *AlarmLog) clearIfAcked(e endedOcc) {
 
 // applyAckGap, when set (tests), runs inside Apply between the view's ack
 // and the engine's.
-var applyAckGap func()
+var applyAckGap atomic.Pointer[func()]
 
 // reconcileGap, when set (tests), runs inside Reconcile between its read
 // of the engine's acks and its read of the view.
-var reconcileGap func()
+var reconcileGap atomic.Pointer[func()]
 
 // Reconcile clears from the log any ack the leader's engine doesn't hold
 // (an occurrence that ended by a path no event caught, or a view left
@@ -571,8 +571,8 @@ func (l *AlarmLog) Reconcile() {
 		l.liveMu.Lock()
 	}
 	held := l.eng.AckHeldIDs()
-	if reconcileGap != nil {
-		reconcileGap()
+	if f := reconcileGap.Load(); f != nil {
+		(*f)()
 	}
 	l.mu.Lock()
 	var stale []string
@@ -943,8 +943,8 @@ func occsByID(occs []oplog.Occ) map[string]oplog.Occ {
 // occurrence ended since the ack was checked is not acknowledged: the
 // person saw another one.
 func (l *AlarmLog) applyAck(e oplog.Entry, occ map[string]oplog.Occ) {
-	if applyAckGap != nil {
-		applyAckGap()
+	if f := applyAckGap.Load(); f != nil {
+		(*f)()
 	}
 	for _, id := range e.IDs {
 		o, named := occ[id]
