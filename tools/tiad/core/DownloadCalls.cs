@@ -346,6 +346,7 @@ namespace Tiad
                     // apply on this session set it: the project's user
                     // "nautilus" is tiad's.
                     FullAccessUserSet = s.Station != null && s.Station.Cpu != null && s.Station.Cpu.AccessControl == StationRules.AccessFullAccessUser && s.AccessControlSet,
+                    RecordOnly = s.AccessRecordOnly,
                     UploadedFrom = s.UploadedFrom,
                     UploadRoute = UserManagementRule.UploadRouteEnabled,
                     ProjectAccessControl = delegate
@@ -448,7 +449,7 @@ namespace Tiad
                 UserManagementRule.Gate now = reset;
                 if (q.Id == QuestionIds.UserManagement && reset.Allowed)
                 {
-                    now = reset.At(use != null && use.LoggedOn);
+                    now = reset.At(use != null && use.LoggedOn, use != null && use.CredentialsAsked);
                     if (!now.Allowed) atWhy = now.Why;
                     if (!now.Allowed) Log.Line("audit user-management-reset address={0} route={1} refused when TIA asked: {2}", Json.Quote(req.Address), reset.Route, Json.Quote(now.Why));
                 }
@@ -559,8 +560,13 @@ namespace Tiad
             }
             finally
             {
-                // A reset is journalled given only once tiad answered it.
+                // A reset is journalled given only once tiad answered it,
+                // and refused at TIA's check when Gate.At refused it there.
+                // The deploy record carries a given reset's route whatever
+                // the end.
                 if (given != "") resetAudit = "given:" + given;
+                else if (atWhy != "") resetAudit = "refused-at-check:" + reset.Route;
+                if (run != null) run.UserManagementReset = given;
                 rode = ranWith;
             }
             asked = Ids(askedQs);
@@ -604,7 +610,7 @@ namespace Tiad
             {
                 outcome = Kinds.OutcomeUnknown;
                 var at = unanswered.Count > 0 ? unanswered[0] : declined[0];
-                throw Unknown("tiad cancelled the download at TIA's " + at.Id + " check, which the request does not answer yes", acting);
+                throw WithReason(Unknown("tiad cancelled the download at TIA's " + at.Id + " check, which the request does not answer yes", acting), at.Id == QuestionIds.UserManagement ? atWhy : "");
             }
             if (unanswered.Count > 0)
             {

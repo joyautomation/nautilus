@@ -59,12 +59,12 @@ func UploadedKeep(t *testing.T, a Target, address string) *tiad.Session {
 	return s
 }
 
-// restoreSession is a session holding the bench CPU's as-found project:
+// RestoreSession is a session holding the bench CPU's as-found project:
 // created with a keep spec, uploaded from the CPU (whose access control may
 // be on: the upload logs on), the spec kept, compiled. The project's
 // access control is Disabled and it holds no users (the fakes' upload, as
 // the bench's as-found archive).
-func restoreSession(t *testing.T, a Target) *tiad.Session {
+func RestoreSession(t *testing.T, a Target) *tiad.Session {
 	t.Helper()
 	c := a.Client()
 	create := BenchStation()
@@ -233,6 +233,12 @@ func contractUserManagementReset(t *testing.T, start Starter) {
 			!strings.Contains(err.Error(), "may already have reset the CPU's user management to the project's") {
 			t.Fatalf("reset, then overwrite unanswered: %v (acting %v), want outcome_unknown naming user-management", err, tiad.ActingAnswers(err))
 		}
+		// The deploy record names the reset's route although the download
+		// ended in doubt: it may have deleted the CPU's users.
+		if list, err := a.Client().Deploys(ctx, benchCPU); err != nil || len(list.Deploys) == 0 || list.Deploys[0].Outcome == nil ||
+			list.Deploys[0].Outcome.Outcome != tiad.KindOutcomeUnknown || list.Deploys[0].Outcome.UserManagementReset != tiad.ResetRouteAttestation {
+			t.Fatalf("the in-doubt reset's deploy record: %+v %v", list, err)
+		}
 	})
 
 	t.Run("AttestationRoute", func(t *testing.T) {
@@ -343,7 +349,7 @@ func contractUserManagementReset(t *testing.T, start Starter) {
 		closeFirst(t, s)
 
 		// C. Refused before TIA: no password; a blind trust.
-		r := restoreSession(t, a)
+		r := RestoreSession(t, a)
 		a.SetQuestions(t, benchHardwareChecks)
 		restore := ResetLoad(benchCPU)
 		restore.Attestation.CPUAccessControl = tiad.AttestCPUAccessEnabled
@@ -361,7 +367,7 @@ func contractUserManagementReset(t *testing.T, start Starter) {
 		}
 		// Closing every session retires the instance.
 		closeFirst(t, r)
-		r = restoreSession(t, a)
+		r = RestoreSession(t, a)
 		a.SetQuestions(t, benchHardwareChecks)
 		// A wrong password: refused going online, in doubt, no reset
 		// given, nothing loaded, and the deploy record says no reset.
@@ -387,6 +393,23 @@ func contractUserManagementReset(t *testing.T, start Starter) {
 		if cmp, err := r.Compare(ctx); err != nil || !cmp.Equal {
 			t.Fatalf("a compare without a password after the restore: %+v %v", cmp, err)
 		}
+		// Back where it started (access control off): a session that
+		// applied fullAccessRecordOnly gets no reset to its user, its
+		// record showing only what tiad was told.
+		closeFirst(t, r)
+		ro, err := c.CreateProject(ctx, "ro", BenchStation(), BenchSecrets)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ro.ApplyStationWith(ctx, BenchStation(), BenchSecrets, tiad.ApplyOptions{FullAccessRecordOnly: true}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ro.Compile(ctx, true, true); err != nil {
+			t.Fatal(err)
+		}
+		_, err = ro.Download(ctx, load(tiad.AttestCPUAccessDisabled, BenchDownloadSecrets()))
+		wantResetRefused(t, "turning it on after a record-only apply", err, tiad.ResetRecordOnly)
+		closeFirst(t, ro)
 	})
 
 	t.Run("ProjectNotDisabled", func(t *testing.T) {

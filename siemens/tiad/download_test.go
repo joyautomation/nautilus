@@ -439,6 +439,21 @@ func TestResetMatrix(t *testing.T) {
 			t.Errorf("attested %s, no record reader: %+v", cpu, g)
 		}
 	}
+	// A session that applied fullAccessRecordOnly: refused for tiad's
+	// user before any read; keep is not concerned.
+	for _, cpu := range []string{AttestCPUAccessDisabled, AttestCPUAccessEnabled} {
+		ro := newFacts(false)
+		rf := ro.make(false, true)
+		rf.RecordOnly = true
+		if g := CheckReset(attested(cpu, pw), rf); g.Why != resetRefused+ResetRecordOnly || ro.projectReads+ro.recordReads != 0 {
+			t.Errorf("attested %s, record only: %+v (reads %d)", cpu, g, ro.projectReads+ro.recordReads)
+		}
+		kf := newFacts(true).make(true, false)
+		kf.RecordOnly = true
+		if g := CheckReset(attested(cpu, pw), kf); !g.Allowed {
+			t.Errorf("attested %s, keep, record only elsewhere: %+v", cpu, g)
+		}
+	}
 	up := newFacts(false).make(false, true)
 	up.UploadRoute, up.UploadedFrom = true, "192.0.2.10"
 	if g := CheckReset(attested("", pw), up); g.Allowed {
@@ -451,23 +466,29 @@ func TestResetMatrix(t *testing.T) {
 // refused gate stays refused.
 func TestResetAt(t *testing.T) {
 	logon := ResetGate{Allowed: true, Route: ResetRouteLogon}
-	if g := logon.At(true); g != logon {
+	if g := logon.At(true, true); g != logon {
 		t.Errorf("logon, logged on: %+v", g)
 	}
-	if g := logon.At(false); g.Allowed || g.Why != resetRefused+ResetNoLogon {
-		t.Errorf("logon, not logged on: %+v", g)
+	for _, asked := range []bool{false, true} {
+		if g := logon.At(false, asked); g.Allowed || g.Why != resetRefused+ResetNoLogon {
+			t.Errorf("logon, not logged on (asked %v): %+v", asked, g)
+		}
 	}
 	for _, route := range []string{ResetRouteAttestation, ResetRouteUpload} {
 		off := ResetGate{Allowed: true, Route: route}
-		if g := off.At(false); g != off {
-			t.Errorf("%s, no logon: %+v", route, g)
+		if g := off.At(false, false); g != off {
+			t.Errorf("%s, no credentials asked: %+v", route, g)
 		}
-		if g := off.At(true); g.Allowed || !strings.Contains(g.Why, "so its access control is on, but the "+route+" route rests on it being off") {
-			t.Errorf("%s, the CPU asked credentials: %+v", route, g)
+		// Asked and answered, or asked and refused (TIA may go on after a
+		// no): either shows the CPU's access control on.
+		for _, loggedOn := range []bool{true, false} {
+			if g := off.At(loggedOn, true); g.Allowed || !strings.Contains(g.Why, "so its access control is on, but the "+route+" route rests on it being off") {
+				t.Errorf("%s, the CPU asked credentials (logged on %v): %+v", route, loggedOn, g)
+			}
 		}
 	}
 	for _, g := range []ResetGate{{Why: "no"}, {Route: ResetRouteLogon}} {
-		if g.At(true).Allowed || g.At(false).Allowed {
+		if g.At(true, true).Allowed || g.At(false, false).Allowed {
 			t.Errorf("a refused gate let: %+v", g)
 		}
 	}

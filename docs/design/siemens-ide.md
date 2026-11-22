@@ -1031,9 +1031,11 @@ behaviour. So, until then:
         user is the one tiad logs on as, with the password tiad set, so
         the compare after the load can log on. A password the record does
         not hold is refused: the CPU would end with a password the
-        request lacks. A record `fullAccessRecordOnly` made shows only
-        what tiad was told, not what TIA holds; a wrong one ends at the
-        compare after the load, `outcome_unknown` naming credentials.
+        request lacks. A session on which an apply asked for
+        `fullAccessRecordOnly`, failed or not, is refused too: its record
+        shows only what tiad was told, not what TIA holds, and a wrong one
+        would turn the CPU's access control on with a password tiad cannot
+        log on with.
       - Every case needs `by` and `text` in the attestation, and
         `cpuAccessControl` one of the two words. Nothing attested is
         refused, naming both.
@@ -1052,8 +1054,11 @@ behaviour. So, until then:
       CPU asked no credentials, tiad refuses the reset there, naming why
       and the fix: retire the instance, in case it went online before,
       or attest `disabled`. The other routes rest on the CPU's access
-      control being off, so a CPU that asked credentials in the download
-      refuses them the same way. A refusal at TIA's check after an
+      control being off, so a CPU that asked credentials in the download,
+      whatever tiad answered (TIA may go on after a no), refuses them the
+      same way. That guard is best effort: a TIA instance that logged on
+      to the CPU earlier may ask no credentials at all (§3.9). A refusal
+      at TIA's check after an
       acting answer (`stop-cpu` on the bench's order) is
       `outcome_unknown`, carrying the reason. The CPU's logon checks the
       CPU's users, not the project's, so the restore of an as-found
@@ -1082,10 +1087,13 @@ behaviour. So, until then:
       (`userManagementReset=unset|refused|allowed:<route>|given:<route>`:
       `unset` when no reset was asked or the download ended before tiad
       checked it; `given` once tiad answered TIA's check reset, even if
-      TIA then refused the write, the safe side; a refusal at TIA's check
-      has its own `audit user-management-reset` line), and a successful
-      download returns the route (`userManagementReset`) for the deploy
-      record.
+      TIA then refused the write, the safe side; `refused-at-check:<route>`
+      when one let before TIA was refused at TIA's check, which also has
+      its own `audit user-management-reset` line). A successful download
+      returns the route (`userManagementReset`), and the deploy record's
+      outcome line carries the route of a reset tiad gave whatever the
+      end, so a download in doubt after one says by which route the CPU's
+      users may have been deleted.
     Updating the CPU's users (`UpdateUserManagementDataButKeepOnlinePassword`)
     is never tiad's choice.
   - `identification-data` (`LoadIdentificationData`): answered only by
@@ -1616,7 +1624,7 @@ CPU with access control on.
 **The download's logon carries a reset.** A download's logon is made by
 the agent itself, so its answer to TIA's user-management check can read
 whether the download logged on (§3.5, the `logon` route). For that route
-the bench window has to show four things before relying on it:
+the bench window has to show five things before relying on it:
 - that TIA asks credentials going online before it asks the download's
   checks;
 - that TIA does not ask credentials again within the same download after
@@ -1626,7 +1634,14 @@ the bench window has to show four things before relying on it:
   user, as in the restore of the as-found project;
 - that TIA reaching the download's checks after tiad's logon means the CPU
   took it (a refused password asks again or fails going online, on the
-  fakes and, by TIA's dialogs, on a real CPU).
+  fakes and, by TIA's dialogs, on a real CPU);
+- whether TIA asks credentials in every download on an instance that
+  logged on to the CPU earlier. If it does not, the `logon` route refuses
+  (retire the instance and retry), and the guard that refuses the off
+  routes on a CPU that asked credentials sees nothing: an attestation of
+  `disabled` over a CPU whose access control is on would then reset it.
+  The window retires the instance before every load, so it never rides
+  on an earlier logon.
 
 The window's stop criteria cover each: an `outcome_unknown` naming
 credentials or `user-management` stops it.

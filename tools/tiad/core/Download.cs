@@ -450,15 +450,17 @@ namespace Tiad
 
             // At is the verdict when TIA asks its user-management check:
             // loggedOn is whether this download logged on to the CPU as
-            // "nautilus" and nothing was refused since (LoginUse.LoggedOn).
-            // The logon route needs it; the others rest on the CPU's
-            // access control being off, which a CPU that asked
-            // credentials contradicts.
-            public Gate At(bool loggedOn)
+            // "nautilus" and nothing was refused since (LoginUse.LoggedOn);
+            // credentialsAsked whether TIA asked credentials in it at all,
+            // answered or not (LoginUse.CredentialsAsked). The logon route
+            // needs the logon; the others rest on the CPU's access control
+            // being off, which a CPU that asked credentials contradicts,
+            // whatever tiad answered.
+            public Gate At(bool loggedOn, bool credentialsAsked)
             {
                 if (!Allowed) return this;
-                if (Route == RouteLogon && !loggedOn) return new Gate { Why = Refused + NoLogon };
-                if (Route != RouteLogon && loggedOn) return new Gate { Why = Refused + Contradicted(Route) };
+                if (Route == RouteLogon && !loggedOn) return new Gate { Why = Refused + NoLogon, Route = "" };
+                if (Route != RouteLogon && (loggedOn || credentialsAsked)) return new Gate { Why = Refused + Contradicted(Route) };
                 return this;
             }
         }
@@ -474,9 +476,13 @@ namespace Tiad
         // project's record of the user "nautilus" is of the request's
         // password (null: unreadable); each is asked only once everything
         // cheaper holds, PasswordRecorded only for tiad's user.
+        // RecordOnly is whether an apply on the session recorded the Full
+        // access password without setting it (fullAccessRecordOnly): the
+        // record then shows what tiad was told, not what TIA holds, so a
+        // reset to tiad's user is refused.
         public sealed class Facts
         {
-            public bool AccessControlKept, FullAccessUserSet, UploadRoute;
+            public bool AccessControlKept, FullAccessUserSet, UploadRoute, RecordOnly;
             public string UploadedFrom = "";
             public Func<string> ProjectAccessControl;
             public Func<bool?> PasswordRecorded;
@@ -485,11 +491,12 @@ namespace Tiad
         const string Refused = "decisions.userManagementResetToProject (delete the CPU's user management data and set its access control as the project has it) is refused: ";
         public const string NoLogon = "the logon route (attestation.cpuAccessControl \"enabled\") needs tiad logged on to the CPU as \"nautilus\" in this download before TIA asked, and it was not (the CPU asked no credentials, or tiad's answer was refused), so nothing shows tiad holds the CPU's Full access: if this agent's TIA instance went online to the CPU before, close every session (the agent then retires the instance) and download again; if the CPU's access control is off, attest \"disabled\"";
         public const string NoPassword = "the logon route (attestation.cpuAccessControl \"enabled\") logs on to the CPU as \"nautilus\", and the request carries no secrets.fullAccessPassword";
+        public const string RecordOnlyRefused = "an apply on this session recorded secrets.fullAccessPassword as the user \"nautilus\"'s password without setting it (fullAccessRecordOnly), so tiad cannot show the project's user holds it: a reset to it could leave the CPU with a password this download cannot log on with, locking tiad out; apply on a session that sets the password";
         public const string PasswordNotRecorded = "the request's secrets.fullAccessPassword is not the password tiad set or recorded for the project's user \"nautilus\": after the reset the CPU's Full access user would have a password this download cannot log on with";
 
         static string Contradicted(string route)
         {
-            return "the CPU asked credentials in this download and tiad logged on as \"nautilus\", so its access control is on, but the " + route + " route rests on it being off: if it is on, attest \"enabled\" (the logon route)";
+            return "the CPU asked credentials in this download, so its access control is on, but the " + route + " route rests on it being off: if it is on, attest \"enabled\" (the logon route)";
         }
 
         static string Routes(bool uploadRoute)
@@ -538,6 +545,11 @@ namespace Tiad
             if (!keep && !f.FullAccessUserSet)
             {
                 g.Why = Refused + "the session's spec does not keep access control as found (cpu.accessControl keep on a session that never applied fullAccessUser), nor is it fullAccessUser applied on this session; " + Routes(f.UploadRoute);
+                return g;
+            }
+            if (!keep && f.RecordOnly)
+            {
+                g.Why = Refused + RecordOnlyRefused;
                 return g;
             }
             bool enabled = req.Attestation.CpuAccessControl == Attestation.CpuAccessEnabled;

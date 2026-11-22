@@ -978,6 +978,20 @@ namespace Tiad.Test
                 }
                 True(fatal, "a fatal record read is not swallowed");
             }
+            // A session that applied fullAccessRecordOnly: refused for tiad's
+            // user, before any read; keep is not concerned.
+            foreach (string cpu in new[] { Attestation.CpuAccessDisabled, Attestation.CpuAccessEnabled })
+            {
+                var ro = new ResetFacts { Project = AccessRule.Enabled };
+                UserManagementRule.Facts rf = ro.Make(false, true);
+                rf.RecordOnly = true;
+                Eq(UserManagementRule.Check(Attested(cpu, pw), rf).Why, pre + UserManagementRule.RecordOnlyRefused, "attested " + cpu + ": record only");
+                Eq(ro.ProjectReads + ro.RecordReads, 0, "before any read");
+                var rk = new ResetFacts();
+                UserManagementRule.Facts kf = rk.Make(true, false);
+                kf.RecordOnly = true;
+                True(UserManagementRule.Check(Attested(cpu, pw), kf).Allowed, "attested " + cpu + ": keep, record only elsewhere");
+            }
             // The upload route never lets a reset to tiad's user.
             var up = new ResetFacts { Project = AccessRule.Enabled }.Make(false, true);
             up.UploadRoute = true;
@@ -992,22 +1006,30 @@ namespace Tiad.Test
         {
             string pre = "decisions.userManagementResetToProject (delete the CPU's user management data and set its access control as the project has it) is refused: ";
             var logon = new UserManagementRule.Gate { Allowed = true, Route = UserManagementRule.RouteLogon };
-            True(logon.At(true).Allowed && logon.At(true).Route == UserManagementRule.RouteLogon, "logon, logged on");
-            UserManagementRule.Gate g = logon.At(false);
-            True(!g.Allowed, "logon, not logged on");
-            Eq(g.Why, pre + UserManagementRule.NoLogon, "names why");
-            Contains(g.Why, "close every session", "and the fix");
+            True(logon.At(true, true).Allowed && logon.At(true, true).Route == UserManagementRule.RouteLogon, "logon, logged on");
+            foreach (bool asked in new[] { false, true })
+            {
+                UserManagementRule.Gate g = logon.At(false, asked);
+                True(!g.Allowed, "logon, not logged on, credentials asked " + asked);
+                Eq(g.Why, pre + UserManagementRule.NoLogon, "names why");
+                Contains(g.Why, "close every session", "and the fix");
+            }
             foreach (string route in new[] { UserManagementRule.RouteAttestation, UserManagementRule.RouteUpload })
             {
                 var off = new UserManagementRule.Gate { Allowed = true, Route = route };
-                True(off.At(false).Allowed && off.At(false).Route == route, route + ", no logon");
-                g = off.At(true);
-                True(!g.Allowed, route + ", the CPU asked credentials");
-                Contains(g.Why, "so its access control is on, but the " + route + " route rests on it being off", "names why");
+                True(off.At(false, false).Allowed && off.At(false, false).Route == route, route + ", no credentials asked");
+                // Asked and answered, or asked and refused (TIA may go on
+                // after a no): either shows the CPU's access control on.
+                foreach (bool loggedOn in new[] { true, false })
+                {
+                    UserManagementRule.Gate g = off.At(loggedOn, true);
+                    True(!g.Allowed, route + ", the CPU asked credentials, logged on " + loggedOn);
+                    Contains(g.Why, "so its access control is on, but the " + route + " route rests on it being off", "names why");
+                }
             }
             var refused = new UserManagementRule.Gate { Why = "no" };
-            True(!refused.At(true).Allowed && !refused.At(false).Allowed, "a refused gate stays refused");
-            True(!new UserManagementRule.Gate { Route = UserManagementRule.RouteLogon }.At(true).Allowed, "a gate not let stays refused, logged on too");
+            True(!refused.At(true, true).Allowed && !refused.At(false, false).Allowed, "a refused gate stays refused");
+            True(!new UserManagementRule.Gate { Route = UserManagementRule.RouteLogon }.At(true, true).Allowed, "a gate not let stays refused, logged on too");
         }
 
         // LoginLoggedOn: logged on once credentials are answered, and no
@@ -1016,9 +1038,9 @@ namespace Tiad.Test
         {
             var offered = new List<string> { "AnonymousUser", LoginUse.ProjectUser };
             var u = new LoginUse(OnlineLogin.For("Full-access-1", null), "download", "192.0.2.10");
-            True(!u.LoggedOn, "nothing asked");
+            True(!u.LoggedOn && !u.CredentialsAsked, "nothing asked");
             Eq(u.Decide(true, offered), null, "answered");
-            True(u.LoggedOn, "logged on");
+            True(u.LoggedOn && u.CredentialsAsked, "logged on");
             True(u.Decide(true, offered) != null, "asked again, refused");
             u.Refused();
             True(!u.LoggedOn, "a refusal since: no longer logged on");
@@ -1027,6 +1049,10 @@ namespace Tiad.Test
             True(!v.LoggedOn, "refused, never answered");
             var w = new LoginUse(null, "download", "192.0.2.10");
             True(w.Decide(true, offered) != null && !w.LoggedOn, "no password: never logged on");
+            True(w.CredentialsAsked, "but asked");
+            var x = new LoginUse(OnlineLogin.For("Full-access-1", null), "download", "192.0.2.10");
+            x.Refused();
+            True(!x.CredentialsAsked, "another question refused is no credentials asked");
         }
 
         // UserManagementKeepOrReset: the keep x reset table, through

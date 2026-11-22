@@ -995,7 +995,7 @@ namespace Tiad
         readonly object mu = new object();
         readonly OnlineLogin login;
         readonly string call, address;
-        bool answered, refused, trusted;
+        bool answered, refused, trusted, asked;
 
         public LoginUse(OnlineLogin login, string call, string address)
         {
@@ -1024,6 +1024,14 @@ namespace Tiad
         public bool LoggedOn
         {
             get { lock (mu) return answered && !refused; }
+        }
+
+        // CredentialsAsked is true once TIA asked credentials in this
+        // operation, answered or not: the CPU's access control is on
+        // (UserManagementRule's off routes refuse then).
+        public bool CredentialsAsked
+        {
+            get { lock (mu) return asked; }
         }
 
         // Trusted records that a handler of this operation answered a
@@ -1082,6 +1090,7 @@ namespace Tiad
         {
             lock (mu)
             {
+                asked = true;
                 if (answered) return AskedAgain;
                 if (refused) return RefusedBefore;
                 if (login == null) return NoPassword;

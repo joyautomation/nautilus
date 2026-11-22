@@ -556,17 +556,19 @@ type ResetGate struct {
 
 // At is the verdict when TIA asks its user-management check: loggedOn is
 // whether this download logged on to the CPU as "nautilus" and nothing was
-// refused since (the agent's LoginUse.LoggedOn). The logon route needs it;
-// the others rest on the CPU's access control being off, which a CPU that
-// asked credentials contradicts.
-func (g ResetGate) At(loggedOn bool) ResetGate {
+// refused since (the agent's LoginUse.LoggedOn); credentialsAsked whether
+// TIA asked credentials in it at all, answered or not
+// (LoginUse.CredentialsAsked). The logon route needs the logon; the others
+// rest on the CPU's access control being off, which a CPU that asked
+// credentials contradicts, whatever tiad answered.
+func (g ResetGate) At(loggedOn, credentialsAsked bool) ResetGate {
 	switch {
 	case !g.Allowed:
 		return g
 	case g.Route == ResetRouteLogon && !loggedOn:
 		return ResetGate{Why: resetRefused + ResetNoLogon}
-	case g.Route != ResetRouteLogon && loggedOn:
-		return ResetGate{Why: resetRefused + "the CPU asked credentials in this download and tiad logged on as \"nautilus\", so its access control is on, but the " + g.Route + " route rests on it being off: if it is on, attest \"enabled\" (the logon route)"}
+	case g.Route != ResetRouteLogon && (loggedOn || credentialsAsked):
+		return ResetGate{Why: resetRefused + "the CPU asked credentials in this download, so its access control is on, but the " + g.Route + " route rests on it being off: if it is on, attest \"enabled\" (the logon route)"}
 	}
 	return g
 }
@@ -586,6 +588,7 @@ const (
 	// agent's refusals of the logon route and of tiad's user.
 	ResetNoLogon             = `the logon route (attestation.cpuAccessControl "enabled") needs tiad logged on to the CPU as "nautilus" in this download before TIA asked, and it was not (the CPU asked no credentials, or tiad's answer was refused), so nothing shows tiad holds the CPU's Full access: if this agent's TIA instance went online to the CPU before, close every session (the agent then retires the instance) and download again; if the CPU's access control is off, attest "disabled"`
 	ResetNoPassword          = `the logon route (attestation.cpuAccessControl "enabled") logs on to the CPU as "nautilus", and the request carries no secrets.fullAccessPassword`
+	ResetRecordOnly          = `an apply on this session recorded secrets.fullAccessPassword as the user "nautilus"'s password without setting it (fullAccessRecordOnly), so tiad cannot show the project's user holds it: a reset to it could leave the CPU with a password this download cannot log on with, locking tiad out; apply on a session that sets the password`
 	ResetPasswordNotRecorded = `the request's secrets.fullAccessPassword is not the password tiad set or recorded for the project's user "nautilus": after the reset the CPU's Full access user would have a password this download cannot log on with`
 )
 
@@ -622,8 +625,11 @@ type ResetFacts struct {
 	FullAccessUserSet bool
 	UploadedFrom      string
 	UploadRoute       bool
-	ProjectAccess     func() (string, bool)
-	PasswordRecorded  func() (recorded, ok bool)
+	// RecordOnly is whether an apply on the session asked for
+	// fullAccessRecordOnly: a reset to tiad's user is then refused.
+	RecordOnly       bool
+	ProjectAccess    func() (string, bool)
+	PasswordRecorded func() (recorded, ok bool)
 }
 
 // CheckUserManagementReset is CheckReset for a session that keeps access
@@ -660,6 +666,9 @@ func CheckReset(r DownloadRequest, f ResetFacts) ResetGate {
 		return ResetGate{Why: resetRefused + "this download loads no hardware; " + resetRoutes(f.UploadRoute)}
 	case !keep && !f.FullAccessUserSet:
 		return ResetGate{Why: resetRefused + "the session's spec does not keep access control as found (cpu.accessControl keep on a session that never applied fullAccessUser), nor is it fullAccessUser applied on this session; " + resetRoutes(f.UploadRoute)}
+	}
+	if !keep && f.RecordOnly {
+		return ResetGate{Why: resetRefused + ResetRecordOnly}
 	}
 	enabled := r.Attestation != nil && r.Attestation.CPUAccessControl == AttestCPUAccessEnabled
 	if enabled && (r.Secrets == nil || r.Secrets.FullAccessPassword == "") {

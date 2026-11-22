@@ -160,6 +160,9 @@ type session struct {
 	// accessSet is set once an apply on this session asked for
 	// fullAccessUser: user-management keep is refused from then on.
 	accessSet bool
+	// recordOnly is set once an apply on this session asked for
+	// fullAccessRecordOnly (the agent's Session.AccessRecordOnly).
+	recordOnly bool
 	// uploadedFrom is the address this session last uploaded from
 	// successfully, "" for none (the agent's Session.UploadedFrom): a
 	// later apply keeps it, a new upload clears it when it starts.
@@ -1096,6 +1099,11 @@ func (f *Fake) applyStation(r *http.Request) (any, *failure) {
 		}
 		kept = s.others
 	}
+	// As the agent: once asked on this session, failed or not, a reset to
+	// tiad's user is refused (its record shows what tiad was told).
+	if req.FullAccessRecordOnly {
+		s.recordOnly = true
+	}
 	if fl := f.checkPolicy(req.Station, req.Secrets); fl != nil {
 		return nil, fl
 	}
@@ -1352,6 +1360,7 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 		reset = tiad.CheckReset(req, tiad.ResetFacts{
 			AccessControlKept: accessControlKept,
 			FullAccessUserSet: s.station != nil && s.station.CPU.AccessControl == tiad.AccessFullAccessUser && s.accessSet,
+			RecordOnly:        s.recordOnly,
 			UploadedFrom:      s.uploadedFrom,
 			UploadRoute:       tiad.UploadRouteEnabled,
 			ProjectAccess:     func() (string, bool) { return s.accessControl, true },
@@ -1408,16 +1417,17 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 		}
 	}
 	var acting []string
-	res, fl := f.downloadTIA(s, req, attested, accessControlKept, reset, &acting)
+	var given string
+	res, fl := f.downloadTIA(s, req, attested, accessControlKept, reset, &acting, &given)
 	if run == nil {
 		return res, fl
 	}
-	return f.recordOutcome(run, s, req, res, fl, acting)
+	return f.recordOutcome(run, s, req, res, fl, acting, given)
 }
 
 // downloadTIA is the part of a download after every refusal the agent
 // makes itself: TIA's checks, the load and the compare right after it.
-func (f *Fake) downloadTIA(s *session, req tiad.DownloadRequest, attested *tiad.AttestationRecord, accessControlKept bool, reset tiad.ResetGate, actingOut *[]string) (any, *failure) {
+func (f *Fake) downloadTIA(s *session, req tiad.DownloadRequest, attested *tiad.AttestationRecord, accessControlKept bool, reset tiad.ResetGate, actingOut *[]string, givenOut *string) (any, *failure) {
 	var qs []tiad.Question
 	if f.PreDownload != nil {
 		qs = f.PreDownload(req)
@@ -1449,12 +1459,13 @@ func (f *Fake) downloadTIA(s *session, req tiad.DownloadRequest, attested *tiad.
 	if why := f.askLogin(req.Address, pw, f.blindTrust); why != "" {
 		return nil, outcomeUnknown("TIA: "+why, nil)
 	}
-	loggedOn := asks
+	loggedOn, credentialsAsked := asks, asks
 	var asked []tiad.Question
 	var acting []string
-	// The acting answers given, for the deploy record, on every end.
-	defer func() { *actingOut = acting }()
+	// The acting answers given, and a reset's route, for the deploy
+	// record, on every end.
 	given := ""
+	defer func() { *actingOut, *givenOut = acting, given }()
 	for _, q := range qs {
 		if !knownQuestion(q.ID) {
 			q.ID = tiad.QuestionOther
@@ -1472,7 +1483,7 @@ func (f *Fake) downloadTIA(s *session, req tiad.DownloadRequest, attested *tiad.
 		}
 		now := reset
 		if q.ID == tiad.QuestionUserManagement {
-			now = reset.At(loggedOn)
+			now = reset.At(loggedOn, credentialsAsked)
 		}
 		unanswered, declined := tiad.Resolve([]tiad.Question{q}, req.Decisions, haveProtection, haveConfigurationPassword, accessControlKept, now)
 		if len(unanswered) == 0 && len(declined) == 0 {
