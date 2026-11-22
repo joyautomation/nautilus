@@ -24,6 +24,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -200,11 +201,18 @@ func ackAll(t *testing.T, s *Server) {
 // loggedAuditServer is an audit server whose alarm writes go through a
 // pair's operator-intent log (#710), the path "ack all" takes on a
 // redundant pair: it answers with the ids it resolved.
+// loggedAuditApplied counts the entries the log committed for the last
+// loggedAuditServer, so a row can prove the request went through the log
+// and not the engine directly.
+var loggedAuditApplied atomic.Int32
+
 func loggedAuditServer(t *testing.T) *Server {
 	t.Helper()
+	loggedAuditApplied.Store(0)
 	s := auditServer(t, Options{})
 	al := NewAlarmLog(s.alarms, func() bool { return true }, noTerm)
 	n, err := oplog.New(oplog.Options{Self: "a", Apply: func(e oplog.Entry) error {
+		loggedAuditApplied.Add(1)
 		_, err := al.Apply(e)
 		return err
 	}})
@@ -502,7 +510,12 @@ func auditRows() []auditRow {
 		{name: "ack all through the log", pattern: "POST /api/alarms/ack", server: loggedAuditServer,
 			method: "POST", path: "/api/alarms/ack", body: `{"all":true,"by":"op1"}`,
 			action: "alarm.ack", target: "*", user: "anonymous", source: "api", result: "ok",
-			after: []string{"HiTemp"}},
+			after: []string{"HiTemp"},
+			check: func(t *testing.T, _ audit.Entry) {
+				if n := loggedAuditApplied.Load(); n != 1 {
+					t.Errorf("the log committed %d entries, want 1: the ack did not go through the log", n)
+				}
+			}},
 		{name: "ack all, a second time", pattern: "POST /api/alarms/ack", server: none, prep: ackAll,
 			method: "POST", path: "/api/alarms/ack", body: `{"all":true,"by":"op1"}`,
 			action: "alarm.ack", target: "*", user: "anonymous", source: "api", result: "ok",
