@@ -464,6 +464,34 @@ func contractUserManagementReset(t *testing.T, start Starter) {
 		closeFirst(t, r)
 	})
 
+	t.Run("InstanceLogonForgottenInDoubt", func(t *testing.T) {
+		// A restore that ends in doubt after an acting answer, loading
+		// nothing, may have changed the CPU: the evidence goes, and the
+		// next restore, asked no credentials, is refused.
+		a, s := compiledBench(t, start)
+		a.SetQuestions(t, benchHardwareChecks)
+		a.SetLogon(t, LogonScript{KeepsLogon: true})
+		if _, err := s.Download(ctx, accessLoad(tiad.AttestCPUAccessDisabled, BenchDownloadSecrets())); err != nil {
+			t.Fatalf("A: %v", err)
+		}
+		closeFirst(t, s)
+		r := RestoreSession(t, a)
+		restore := ResetLoad(benchCPU)
+		restore.Attestation.CPUAccessControl = tiad.AttestCPUAccessEnabled
+		a.SetQuestions(t, []tiad.Question{qStop, {ID: tiad.QuestionAlarmTexts}})
+		if _, err := r.Download(ctx, restore); tiad.Kind(err) != tiad.KindOutcomeUnknown || !slices.Contains(tiad.ActingAnswers(err), tiad.QuestionStopCPU) {
+			t.Fatalf("a restore cancelled after stop-cpu: %v (acting %v)", err, tiad.ActingAnswers(err))
+		}
+		a.SetQuestions(t, benchHardwareChecks)
+		_, err := r.Download(ctx, restore)
+		if tiad.Kind(err) != tiad.KindOutcomeUnknown || !strings.Contains(err.Error(), tiad.ResetNoLogon) || slices.Contains(tiad.ActingAnswers(err), tiad.QuestionUserManagement) {
+			t.Fatalf("the restore after one in doubt: %v (acting %v)", err, tiad.ActingAnswers(err))
+		}
+		if l := a.Loaded(t); len(l) != 1 {
+			t.Fatalf("loaded %d, want A only", len(l))
+		}
+	})
+
 	t.Run("InstanceLogonForgotten", func(t *testing.T) {
 		// The evidence goes with a load: B resets on it, and the compare
 		// after B asks no credentials (TIA kept the logon), so nothing
