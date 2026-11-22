@@ -67,6 +67,10 @@ jobs:
       # (website-only) PR runs it too; the real-Chrome one is in the playground job.
       - name: the error reporter's scrubber passes its own test
         run: node --test website/src/errors/scrub.test.mjs
+      - name: the rig-test list is sound (naut-rig-tests.txt)
+        run: .github/scripts/naut-rig.test.sh
+      - name: merge-cover passes its own table test
+        run: .github/scripts/merge-cover.test.sh
       - name: scope
         id: scope
         env:
@@ -129,13 +133,16 @@ jobs:
       # prints the stream as the usual go test output.
       # TestReleaseTargetsBuildWithoutCgo cross-compiles the CLI seven times
       # (about 4 minutes, most of cmd/naut's time): the go-crossbuild job runs
-      # it in parallel instead (#752). -timeout 20m: cmd/naut alone runs
-      # about 580 s here, against go test's default 10 m per package.
+      # it in parallel instead (#752). The redundancy rig and pair tests
+      # (about 313 s of cmd/naut's 580 s, which had reached its 600 s package
+      # timeout) run in go-naut-rig the same way.
       - name: go test ./...
         shell: bash
         run: |
           mkdir -p evidence
-          go test -json -count=1 -timeout 20m -coverprofile=evidence/cover.out -skip '^TestReleaseTargetsBuildWithoutCgo$' ./... | tee evidence/go-test.json | go run ./tools/evidence cat
+          # The rig tests (cmd/naut, .github/scripts/naut-rig-tests.txt) run in
+          # their own job: the same list is its -run, so each runs exactly once.
+          go test -json -count=1 -coverprofile=evidence/cover.out -skip "^TestReleaseTargetsBuildWithoutCgo\$|$(.github/scripts/naut-rig.sh regex)" ./... | tee evidence/go-test.json | go run ./tools/evidence cat
       # Test plan §3.4 (#710 PR 3b-3a): the quorumtest build's pause hooks
       # between a write's gate check and its send, swept on a real socket
       # (a few seconds). The tag adds the hooks, so it runs apart from ./...
@@ -471,6 +478,65 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: evidence-crossbuild
+          path: evidence/
+          retention-days: 14
+
+  # The cmd/naut redundancy rig and pair tests (naut-rig-tests.txt): each starts
+  # real `naut run` processes and takes 5-30 s, 313 s together. Beside the main
+  # Go job, which skips exactly these names, so cmd/naut's package time stays
+  # well under its 600 s timeout and every test still runs on every PR. Its
+  # own results and coverage profile are runtime evidence like the Go job's
+  # (runtime-evidence merges the two profiles).
+  go-naut-rig:
+    needs: changes
+    if: needs.changes.outputs.full != 'false'
+    name: Go — naut rig tests (redundancy pairs and clones)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: {go-version: '1.25', cache: false}
+      # Its own build cache (#752), as go-crossbuild's.
+      - id: key
+        run: |
+          echo "day=$(date -u +%F)" >> "$GITHUB_OUTPUT"
+          echo "go=$(go env GOVERSION)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v4
+        id: gocache
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-rig-${{ runner.os }}-${{ steps.key.outputs.go }}-${{ hashFiles('go.sum') }}-${{ steps.key.outputs.day }}
+          restore-keys: |
+            go-rig-${{ runner.os }}-${{ steps.key.outputs.go }}-${{ hashFiles('go.sum') }}-
+            go-rig-${{ runner.os }}-${{ steps.key.outputs.go }}-
+      # Every listed name must be a test in the built package: a rename that
+      # left the list behind fails here instead of quietly running fewer.
+      - name: go test cmd/naut -run (the rig list)
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p evidence
+          go test -c -o "$RUNNER_TEMP/naut.test" ./cmd/naut
+          "$RUNNER_TEMP/naut.test" -test.list '.*' > "$RUNNER_TEMP/all-tests.txt"
+          for n in $(.github/scripts/naut-rig.sh names); do
+            grep -qx "$n" "$RUNNER_TEMP/all-tests.txt" || { echo "::error::naut-rig-tests.txt lists $n, which is not a test in cmd/naut"; exit 1; }
+          done
+          go test -json -count=1 -timeout 20m -coverprofile=evidence/cover.out -run "$(.github/scripts/naut-rig.sh regex)" ./cmd/naut | tee evidence/go-test.json | go run ./tools/evidence cat
+      - name: Save the Go build cache (main, once a day)
+        if: always() && steps.gocache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-rig-${{ runner.os }}-${{ steps.key.outputs.go }}-${{ hashFiles('go.sum') }}-${{ steps.key.outputs.day }}
+      - name: Keep the results as runtime evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-go-naut-rig
           path: evidence/
           retention-days: 14
 
@@ -1220,7 +1286,7 @@ jobs:
     # problem opens or updates the rolling "claims out of date" issue,
     # which a clean run closes.
     name: Runtime evidence — claims × test results
-    needs: [changes, go, examples, go-crossbuild, sparkplug-tck, modbus-sim, opcua-foreign, opcua-client-matrix, snmp-sim, redfish-sim, prom-sim, postgres, blackbox-gate]
+    needs: [changes, go, examples, go-crossbuild, go-naut-rig, sparkplug-tck, modbus-sim, opcua-foreign, opcua-client-matrix, snmp-sim, redfish-sim, prom-sim, postgres, blackbox-gate]
     if: needs.changes.outputs.full != 'false'
     runs-on: ubuntu-latest
     continue-on-error: true
@@ -1275,7 +1341,9 @@ jobs:
           mkdir -p runtime-evidence
           base=()
           [ -f "$RUNNER_TEMP/base/evidence.json" ] && base=(-baseline "$RUNNER_TEMP/base/evidence.json")
-          go run ./tools/evidence build -in evidence -cover evidence/evidence-go/cover.out -release "$RUNNER_TEMP/release" \
+          # cmd/naut's coverage is in two profiles (the Go job and the rig job).
+          .github/scripts/merge-cover.sh "$RUNNER_TEMP/cover.out" evidence/evidence-go/cover.out evidence/evidence-go-naut-rig/cover.out
+          go run ./tools/evidence build -in evidence -cover "$RUNNER_TEMP/cover.out" -release "$RUNNER_TEMP/release" \
             -o runtime-evidence/evidence.json "${base[@]}" -summary "$RUNNER_TEMP/claims.md"
           cat "$RUNNER_TEMP/claims.md" >> "$GITHUB_STEP_SUMMARY"
       - name: Upload runtime evidence
@@ -1399,7 +1467,7 @@ jobs:
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [changes, go, go-race, siemens-tiad, examples, go-crossbuild, go-windows, profinet-veth, profinet-fuzz, sparkplug-tck, hmi-3d, hmi-packs, vscode-iec, playground, vscode-iec-gestures, vscode-iec-e2e, version-sync, release-config, postgres, modbus-sim, opcua-foreign, opcua-client-matrix, snmp-sim, redfish-sim, prom-sim, blackbox-gate, sourcing, l5x-reader]
+    needs: [changes, go, go-race, siemens-tiad, examples, go-crossbuild, go-naut-rig, go-windows, profinet-veth, profinet-fuzz, sparkplug-tck, hmi-3d, hmi-packs, vscode-iec, playground, vscode-iec-gestures, vscode-iec-e2e, version-sync, release-config, postgres, modbus-sim, opcua-foreign, opcua-client-matrix, snmp-sim, redfish-sim, prom-sim, blackbox-gate, sourcing, l5x-reader]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
