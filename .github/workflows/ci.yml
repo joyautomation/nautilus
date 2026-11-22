@@ -71,6 +71,8 @@ jobs:
         run: .github/scripts/naut-rig.test.sh
       - name: merge-cover passes its own table test
         run: .github/scripts/merge-cover.test.sh
+      - name: wasm-budget passes its own table test
+        run: .github/scripts/wasm-budget.test.sh
       - name: scope
         id: scope
         env:
@@ -178,6 +180,12 @@ jobs:
       # pulls a field driver or a socket into the shared path breaks here.
       - name: playground wasm build
         run: GOOS=js GOARCH=wasm go vet ./cmd/naut-wasm && GOOS=js GOARCH=wasm go build -o /dev/null ./cmd/naut-wasm
+      # The browser downloads this file, so its size is a budget: the stripped,
+      # gzipped wasm may not pass .github/wasm-budget.txt, and the number is
+      # printed (and put in the run summary) on every PR. Controller-only code
+      # that leaks into the shared path shows up here, not in review.
+      - name: playground wasm size budget
+        run: .github/scripts/wasm-budget.sh
       # Its own tests run under Node (the runner has it): a controller's
       # streams end when naut run replaces it or naut stop stops it.
       - name: playground wasm tests

@@ -329,6 +329,88 @@ func TestOIDCModulesStayInAuthOIDC(t *testing.T) {
 	}
 }
 
+// wasmForbidden are the packages the browser playground (cmd/naut-wasm) must
+// not link: controller-only code that made the download a third bigger
+// (29.9 MB at v0.22.0, 39.7 MB at 59a564af, stripped; gzip 7.27 -> 9.24).
+// wasmLeaks lists the ones that still do, each with the PR that cuts it:
+// the test fails on a new leak, and also on a listed one that is gone, so a
+// PR that removes an edge must delete its line (the ratchet only turns one
+// way). An entry matches the package and everything below it.
+var (
+	wasmForbidden = []string{
+		module + "/quorum/node",      // redundancy: only leader's election needs it
+		module + "/alarm/channel",    // paging channels (net/smtp)
+		"net/smtp",                   // ... and its standard-library half
+		module + "/internal/floatip", // OS networking for the floating IP
+		module + "/internal/webpush", // push delivery
+		module + "/auth/users",       // the user store (argon2, blake2b)
+		"golang.org/x/crypto/argon2",
+		"golang.org/x/crypto/blake2b",
+		module + "/notes", // operator notes store
+		"html/template",
+		"github.com/lib/pq", // the Postgres driver
+		"database/sql",
+		"image/png", // hmibuild's PWA icons
+	}
+	// wasmLeaks: today's leaks and who removes them. Keep it shrinking.
+	wasmLeaks = map[string]string{
+		module + "/quorum/node":       "leader/election.go (redundancy split)",
+		module + "/alarm/channel":     "internal/project/{project,alarms}.go (alarm seam)",
+		"net/smtp":                    "via alarm/channel",
+		module + "/internal/floatip":  "internal/project/project.go (floating_ip parse)",
+		module + "/internal/webpush":  "server/push.go (server seams)",
+		module + "/auth/users":        "server/{authorize,signin,server}.go (server seams)",
+		"golang.org/x/crypto/argon2":  "via auth/users",
+		"golang.org/x/crypto/blake2b": "via auth/users",
+		module + "/notes":             "server/notes.go (server seams)",
+		"html/template":               "server (server seams)",
+		"github.com/lib/pq":           "alarm (alarm seam)",
+		"database/sql":                "via lib/pq",
+		"image/png":                   "internal/hmibuild (PWA icons)",
+	}
+)
+
+func TestWasmStaysFreeOfControllerCode(t *testing.T) {
+	out, err := exec.Command("go", "env", "GOMOD").Output()
+	if err != nil {
+		t.Fatalf("go env GOMOD: %v", err)
+	}
+	root := filepath.Dir(strings.TrimSpace(string(out)))
+	cmd := exec.Command("go", "list", "-deps", "-f", "{{.ImportPath}}", "./cmd/naut-wasm")
+	cmd.Dir = root
+	cmd.Env = append(os.Environ(), "GOOS=js", "GOARCH=wasm")
+	listed, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("go list -deps ./cmd/naut-wasm: %v", err)
+	}
+	deps := strings.Split(strings.TrimSpace(string(listed)), "\n")
+	for _, f := range wasmForbidden {
+		var by string
+		for _, imp := range deps {
+			if imp == f || strings.HasPrefix(imp, f+"/") {
+				by = imp
+				break
+			}
+		}
+		_, listedLeak := wasmLeaks[f]
+		switch {
+		case by != "" && !listedLeak:
+			t.Errorf("cmd/naut-wasm now links %s: controller-only code does not belong in the playground download. Cut the import (a seam only cmd/naut wires, or a !js file); see GOOS=js GOARCH=wasm go list -deps ./cmd/naut-wasm", by)
+		case by == "" && listedLeak:
+			t.Errorf("cmd/naut-wasm no longer links %s: delete it from wasmLeaks (and lower .github/wasm-budget.txt)", f)
+		}
+	}
+	for f := range wasmLeaks {
+		found := false
+		for _, g := range wasmForbidden {
+			found = found || f == g
+		}
+		if !found {
+			t.Errorf("wasmLeaks lists %s, which is not in wasmForbidden", f)
+		}
+	}
+}
+
 func TestModuleAllowedPackages(t *testing.T) {
 	out, err := exec.Command("go", "env", "GOMOD").Output()
 	if err != nil {
