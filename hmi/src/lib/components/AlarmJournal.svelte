@@ -12,6 +12,7 @@
 	import type { AlarmEvent, AlarmEventKind, Priority } from '../alarms.svelte.js';
 	import { PRIORITY_META } from '../alarms.svelte.js';
 	import Button from './Button.svelte';
+	import { pagingEvent, pagingOutcome, visibleKind } from '../alarmjournal.js';
 
 	const EVENT_LABEL: Record<AlarmEventKind, string> = {
 		active: 'Activated',
@@ -20,7 +21,8 @@
 		shelve: 'Shelved',
 		unshelve: 'Unshelved',
 		suppress: 'Suppressed',
-		unsuppress: 'Unsuppressed'
+		unsuppress: 'Unsuppressed',
+		notify: 'Paged'
 	};
 
 	// The state an event kind leaves the alarm in — for the "State After"
@@ -32,8 +34,15 @@
 		shelve: 'shelved',
 		unshelve: 'restored',
 		suppress: 'suppressed',
-		unsuppress: 'restored'
+		unsuppress: 'restored',
+		notify: ''
 	};
+
+	// The event and state-after text of a row: a paging row says who was paged.
+	// Several pages in one millisecond share ts, id and kind: tell them apart.
+	const rowKey = (e: AlarmEvent) => `${e.ts}:${e.id}:${e.kind}:${e.level ?? ''}:${e.to ?? ''}:${e.via ?? ''}`;
+	const eventText = (e: AlarmEvent) => (e.kind === 'notify' ? pagingEvent(e) : EVENT_LABEL[e.kind]);
+	const afterText = (e: AlarmEvent) => (e.kind === 'notify' ? pagingOutcome(e) : STATE_AFTER[e.kind]);
 
 	type Preset = '1h' | '24h' | '7d' | 'custom';
 
@@ -63,6 +72,10 @@
 	let customTo = $state(untrack(() => toLocalInput(to)));
 
 	let filterKind = $state<AlarmEventKind | ''>('');
+	// Paging rows are their own row kind and hidden until asked for, so a
+	// screen that never paged looks as it did. Choosing Paged as the event
+	// filter shows them too. The host must fetch them (journalKinds(true)).
+	let showPaging = $state(false);
 	let filterPriority = $state<Priority | ''>('');
 	let filterSite = $state('');
 	let filterText = $state('');
@@ -98,7 +111,7 @@
 		const text = filterText.trim().toLowerCase();
 		return events
 			.filter((e) => {
-				if (filterKind && e.kind !== filterKind) return false;
+				if (!visibleKind(e, filterKind, showPaging)) return false;
 				if (filterPriority && e.priority !== filterPriority) return false;
 				if (filterSite && e.site !== filterSite) return false;
 				if (text && !`${e.name} ${e.id}`.toLowerCase().includes(text)) return false;
@@ -126,7 +139,7 @@
 	function exportCsv() {
 		const header = ['time', 'alarm', 'id', 'event', 'priority', 'site', 'state_after', 'operator'];
 		const rows = filtered.map((e) =>
-			[fmtTime(e.ts), e.name, e.id, EVENT_LABEL[e.kind], e.priority ?? '', e.site ?? '', STATE_AFTER[e.kind], e.by ?? '']
+			[fmtTime(e.ts), e.name, e.id, eventText(e), e.priority ?? '', e.site ?? '', afterText(e), e.by ?? '']
 				.map(csvCell)
 				.join(',')
 		);
@@ -183,6 +196,9 @@
 					{/each}
 				</select>
 			{/if}
+			<label class="paging">
+				<input type="checkbox" bind:checked={showPaging} /> Paging
+			</label>
 			<input type="search" placeholder="Search…" bind:value={filterText} aria-label="Search events" />
 			<Button size="sm" variant="secondary" icon="document" onclick={exportCsv} disabled={!filtered.length}>
 				Export CSV
@@ -205,12 +221,12 @@
 				{#if loading}
 					<tr class="empty"><td colspan="5">Loading…</td></tr>
 				{:else}
-					{#each filtered as e (e.ts + ':' + e.id + ':' + e.kind)}
+					{#each filtered as e (rowKey(e))}
 						<tr>
 							<td class="col-time num">{fmtTime(e.ts)}</td>
 							<td class="col-alarm" title={e.id}>{e.name}</td>
-							<td class="col-event">{EVENT_LABEL[e.kind]}</td>
-							<td class="col-state" data-label="now">{STATE_AFTER[e.kind]}</td>
+							<td class="col-event">{eventText(e)}</td>
+							<td class="col-state" data-label="now">{afterText(e)}</td>
 							<td class="col-who" class:blank={!e.by} data-label="by">{e.by ?? '—'}</td>
 						</tr>
 					{:else}
@@ -295,6 +311,13 @@
 	.filters > select {
 		min-width: 0;
 		flex: 1 1 7.5rem;
+	}
+	.paging {
+		display: inline-flex;
+		align-items: center;
+		gap: 4px;
+		font-size: var(--font-xs);
+		color: var(--ink-2);
 	}
 	.filters > input[type='search'] {
 		min-width: 0;

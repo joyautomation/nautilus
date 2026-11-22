@@ -138,7 +138,7 @@ func contactsCheck(alarms *project.AlarmsConfig, sd string, stdout, stderr io.Wr
 	if len(errs) > 0 {
 		return 1
 	}
-	fmt.Fprintf(stdout, "%s: every person the escalation levels page has an address for the channel, and every channel its secret\n", sd)
+	fmt.Fprintf(stdout, "ok: every person the escalation levels page has an address for the channel, and every channel its secret (%s)\n", sd)
 	return 0
 }
 

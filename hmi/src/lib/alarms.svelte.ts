@@ -175,7 +175,9 @@ export type AlarmEventKind =
 	| 'shelve'
 	| 'unshelve'
 	| 'suppress'
-	| 'unsuppress';
+	| 'unsuppress'
+	/** One notification an escalation policy sent or tried (#715); not a state change. */
+	| 'notify';
 
 export interface AlarmEvent {
 	/** Epoch ms, from the runtime Clock — so acceptance tests replay deterministically. */
@@ -187,6 +189,14 @@ export interface AlarmEvent {
 	site?: string;
 	state?: AlarmState;
 	by?: string;
+	/** Notify rows only (#715): the escalation level (1 first), who was
+	 * paged (a principal, never an address), the channel kind, the result
+	 * (`sent`, `failed`, `nobody-on-call`) and why when there is more to say. */
+	level?: number;
+	to?: string;
+	via?: string;
+	result?: string;
+	reason?: string;
 }
 
 /** Query filters for `journal()` — mirrors `alarm.Filter` / the

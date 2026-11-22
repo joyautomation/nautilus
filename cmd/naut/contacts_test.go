@@ -289,6 +289,16 @@ func TestContactsCheckFreshBoxAndCase(t *testing.T) {
 	}
 
 	hook := &project.AlarmsConfig{}
+	// A passing check says so with a verb (#616): "ok: every person ...".
+	pass := &project.AlarmsConfig{}
+	if err := yamlInto("channels: {}\nescalation: []\n", pass); err != nil {
+		t.Fatal(err)
+	}
+	out.Reset()
+	errb.Reset()
+	if code := contactsCheck(pass, fresh, &out, &errb); code != 0 || !strings.HasPrefix(out.String(), "ok: every person the escalation levels page has an address") || !strings.Contains(out.String(), fresh) {
+		t.Errorf("a passing contacts check: exit %d, stdout %q, stderr %q", code, out.String(), errb.String())
+	}
 	if err := yamlInto(`
 channels:
   webhook: { url: "https://hooks.example.com/page", header: Authorization }
