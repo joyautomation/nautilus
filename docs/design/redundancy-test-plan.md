@@ -212,6 +212,11 @@ case caught it. A mutation joins the nightly run in the PR that builds the rule 
 | no fence margin (the gate closes at lease expiry) | design §3.4 | 3b-3a (`no_fence_margin`) |
 | sockets closed with FIN, not RST, on fence | design §3.4, RST on fence | 3b-3a (`fence_fin`) |
 | the peer listener trusts a Host instead of requiring the peer token | design §6.1 | 3a (`peer_host_trusted`) |
+| a peer token under 32 characters keys peer TLS (`peer_tls_short_token`); a peer listener asks for no client certificate (`peer_tls_server_any_client`); a peer call accepts any server key (`peer_tls_client_any_server`) | design §6.1, peer TLS | peer TLS PR 1 (#710) |
+| a pair and a witness run plain HTTP unless peer TLS is asked for (`peer_tls_default_off`); the log's calls ignore peer TLS (`peer_tls_log_plain`) | design §6.1, peer TLS | peer TLS PR 1 (#710) |
+| a voter that speaks the other protocol, or holds another key, raises nothing (`peer_tls_mismatch_unnamed`) | design §6.1, mismatches are named | peer TLS PR 1 (#710) |
+| a member's peer listener binds every interface (`peer_bind_wildcard`); a peer port whose address is not up yet refuses the start (`peer_bind_gives_up`); a `peers:` name that binds to loopback is served (`peer_bind_loopback_taken`) | design §6.2, in `naut run` | peer TLS PR 1 (#1230 review) |
+| a peer TLS handshake has no bound of its own, so a silent peer holds a connection per call (`peer_tls_handshake_unbounded`) | design §6.1, bounded handshakes | peer TLS PR 1 (#1230 review) |
 | the standby's proxy drops or rewrites the client's Host or token | design §6.1 | 3 |
 | no back-off after a lease lapses unconfirmed | design §3.1, one-way partitions | 2 |
 | grants accepted from any witness incarnation | design §3.1, the witness incarnation | 2 |

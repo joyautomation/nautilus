@@ -210,7 +210,7 @@ func (c *cluster) startSpare(id quorum.NodeID) *Elector {
 	}
 	peer := c.other(id)
 	e, err := New(Options{Cluster: c.pair, Self: id, Peer: peer, PeerAddr: c.addr[peer], WitnessAddr: c.addr[WitnessID],
-		Lease: loopLease, StatePath: path, Token: c.tok[id], ClientToken: c.ctok[id],
+		Lease: loopLease, StatePath: path, Token: c.tok[id], ClientToken: c.ctok[id], TLS: c.clientTLS(id),
 		// Its own links: a cut of the original's leaves the copy's.
 		client: &http.Client{Transport: &faultRT{c: c, from: "copy", base: c.transport()}}})
 	if err != nil {
@@ -485,7 +485,7 @@ func (c *cluster) spareWithFile(rt http.RoundTripper) *Elector {
 		c.t.Fatal(err)
 	}
 	e, err := New(Options{Cluster: c.pair, Self: "a", Peer: "b", PeerAddr: c.addr["b"], WitnessAddr: c.addr[WitnessID],
-		Lease: loopLease, StatePath: c.ctl["a"].state, Token: c.tok["a"], ClientToken: c.ctok["a"], client: &http.Client{Transport: rt}})
+		Lease: loopLease, StatePath: c.ctl["a"].state, Token: c.tok["a"], ClientToken: c.ctok["a"], TLS: c.clientTLS("a"), client: &http.Client{Transport: rt}})
 	if err != nil {
 		c.t.Fatal(err)
 	}

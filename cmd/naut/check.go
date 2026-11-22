@@ -554,6 +554,10 @@ func checkManifest(paths []string, manifestName, target string) (errs, warns int
 		warns++
 		fmt.Printf("%s: warning: %s\n", loc.file, w)
 	}
+	for _, w := range peerTLSWarnings(proj, os.Getenv) {
+		warns++
+		fmt.Printf("%s: warning: %s\n", loc.file, w)
+	}
 
 	// The project's guidance for AI assistants is older than this naut's,
 	// conflicted, or not imported by CLAUDE.md (agents.go; a missing or

@@ -29,6 +29,8 @@ const info = "nautilus pairkey v1 "
 const (
 	// AckLink keys the alarm acknowledgement links (alarm/acklink).
 	AckLink = "alarm-ack-link"
+	// PeerTLS seeds the pair's peer TLS key (internal/peertls, #710).
+	PeerTLS = "peer-tls"
 )
 
 // ErrNoToken is Derive's answer for an empty peer token.

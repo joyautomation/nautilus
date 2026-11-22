@@ -49,6 +49,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"crypto/tls"
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
@@ -56,6 +57,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -361,6 +363,12 @@ type Options struct {
 	// Token must accompany every replica-to-replica request. Required with
 	// more than one peer.
 	Token string
+	// TLS, when set, is the pair's peer TLS client configuration (#710):
+	// every call to a peer then runs https, though Peers still name them
+	// as given. A peer's URL is its identity in the log's files (an
+	// operator's acceptance names peers by it), so peer TLS changes the
+	// wire, never the names. Nil: as the URLs say.
+	TLS *tls.Config
 	// Timeout bounds one replica call (default 2s).
 	Timeout time.Duration
 	Now     func() time.Time
@@ -737,7 +745,15 @@ func New(o Options) (*Node, error) {
 	if o.lim.resp <= 0 {
 		o.lim.resp = maxResp
 	}
-	n := &Node{o: o, client: &http.Client{Timeout: o.Timeout, Transport: o.transport}, log: o.Log,
+	rt := o.transport
+	if rt == nil && o.TLS != nil && !mutOplog("peer_tls_log_plain") {
+		rt = tlsWire{&http.Transport{Proxy: nil, TLSClientConfig: o.TLS, MaxIdleConnsPerHost: 4, IdleConnTimeout: 90 * time.Second,
+			// Bounded, so a peer that accepts and never speaks holds no
+			// connection past them (#1230 review).
+			DialContext:         (&net.Dialer{Timeout: 2 * time.Second, KeepAlive: 15 * time.Second}).DialContext,
+			TLSHandshakeTimeout: 2 * time.Second}}
+	}
+	n := &Node{o: o, client: &http.Client{Timeout: o.Timeout, Transport: rt}, log: o.Log,
 		lastContact: map[string]time.Time{}, peers: map[string]peerInfo{}, pending: o.Pending}
 	if o.Mark != "" {
 		if err := n.openMarked(); err != nil {
@@ -3319,4 +3335,16 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// tlsWire sends a peer's http:// URL as https (Options.TLS): the URL stays
+// the peer's name, the wire is TLS.
+type tlsWire struct{ rt http.RoundTripper }
+
+func (w tlsWire) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.URL.Scheme == "http" {
+		r = r.Clone(r.Context())
+		r.URL.Scheme = "https"
+	}
+	return w.rt.RoundTrip(r)
 }

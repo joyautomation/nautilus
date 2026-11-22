@@ -19,7 +19,7 @@ import (
 	"github.com/joyautomation/nautilus/quorum"
 )
 
-const testToken = "peer-secret-0123456789"
+const testToken = "peer-secret-0123456789abcdef0123456789abcdef"
 
 // testCluster is a cluster ID for tests.
 const testCluster = "0123456789abcdef0123456789abcdef"
