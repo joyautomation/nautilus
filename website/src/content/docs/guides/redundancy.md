@@ -255,6 +255,17 @@ never computes.
   request's Host when it proxies, so the leader checks the same name.
   `GET /api/cluster` reports each replica's own view — mode, leader,
   transitions.
+- **Browser sign-ins across a takeover.** A signed-in operator stays signed in when
+  the other controller takes over, because the sign-in's record (a hash of the
+  cookie, who it is, when it ends; never the cookie itself) goes through the
+  operator log. Elevation is not carried: an elevated action asks for the password
+  again. A sign-out, a changed password or a removed user reach the other controller
+  through the log too, and a sign-out waits briefly for that, so a takeover right
+  after cannot bring the session back. Signing in never waits for the log: with
+  the log read-only or without a majority the session works on that controller only
+  (the account chip says "local session", and the journal records it), and is
+  replicated once the log returns. A copy of the log that is not known complete
+  honours only local sessions.
 - The identity shown in `/api/cluster` comes from `POD_NAME`, and the
   proxy target from `POD_IP` — both from the downward API:
 
