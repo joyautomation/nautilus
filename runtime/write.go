@@ -130,6 +130,10 @@ type SetOutcome struct {
 // checks and reports and writes nothing. From and To are read inside the
 // lock, as the store holds them (To after conversion), so they cannot
 // disagree with what the controller holds.
+//
+// Ops must name distinct whole scalar tags (a parameter): two members of one
+// tag would both be planned from the pre-write value, and a composite value
+// is not compared. The import route guarantees this.
 func (t *Tags) WriteSet(ops []WriteOp, by string, dry bool) []SetOutcome {
 	out := make([]SetOutcome, len(ops))
 	type plan struct {

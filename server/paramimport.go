@@ -21,7 +21,7 @@ import (
 // the write authorization POST /api/tags applies (area-scoped under auth:
 // areas); one tag that fails refuses the whole set with a 403 naming it.
 // Every value goes through the
-// same front door as POST /api/tags (runtime.Tags.WriteAs): a force, a
+// same front door as POST /api/tags (runtime.Tags.WriteSet, the WriteAs rules: a force, a
 // read-only tag and a tag's min/max refuse it exactly as they refuse a
 // single write, and there is no way past them here. Only a parameter (a
 // scalar setpoint with a literal init:) is named; anything else is refused.
@@ -207,9 +207,9 @@ func (s *Server) handleParametersImport(w http.ResponseWriter, r *http.Request) 
 	for i := range answer.Results {
 		if answer.Results[i].Status == "change" {
 			answer.Results[i].Status = "applied"
+			answer.Applied = true // only when something was written
 		}
 	}
-	answer.Applied = true
 	writeJSON(w, http.StatusOK, answer)
 }
 

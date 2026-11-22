@@ -267,3 +267,12 @@ func TestParameterImportSizeCap(t *testing.T) {
 		t.Fatalf("%d %s", code, body)
 	}
 }
+
+// A set where nothing differs writes nothing and does not claim it applied.
+func TestParameterImportNothingToDo(t *testing.T) {
+	srv := New(importRuntime(t))
+	code, a, body := importCall(t, srv, `{"version":1,"parameters":{"SP":65,"Fan":20}}`)
+	if code != 200 || a.Applied {
+		t.Fatalf("%d %s", code, body)
+	}
+}
