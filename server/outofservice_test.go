@@ -413,3 +413,39 @@ func waitWindowsEnded(t *testing.T, al *AlarmLog) {
 	}
 	t.Fatal("Reconcile's in-service was not applied within 5 s")
 }
+
+// An acknowledge-all by someone who may ack only one area is not refused
+// and never acks another area's alarms: it acks what they may, leaves the
+// rest, and says how many and why (in the answer and the audit entry).
+func TestAckAllActsOnlyOnTheAreasThePersonMayAck(t *testing.T) {
+	for _, body := range []string{`{"ids":["*"]}`, `{"all":true}`} {
+		eng := oosEngine(t, map[string]any{"ZZZ_A.Fault": true, "AAA_B.Fault": true, "ZZZ_Z.Fault": true})
+		s := New(newTestRuntime(t), Options{Alarms: eng})
+		eng.Evaluate()
+		enforce(t, s) // fenced: an administrator over ZZZ_* only
+		fenced := func(r *http.Request) { r.Header.Set("Authorization", "Bearer f-secret") }
+		rec := call(t, s, "POST", "/api/alarms/ack", body, fenced)
+		var a ackAnswer
+		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &a) != nil {
+			t.Fatalf("%s: %d %s, want the area's alarms acked", body, rec.Code, rec.Body)
+		}
+		if a.Acked != 2 || !slices.Equal(a.Skipped, []string{"B.Fault"}) || a.SkippedWhy == "" {
+			t.Errorf("%s: answer %+v, want 2 acked and B.Fault skipped with a reason", body, a)
+		}
+		for _, r := range eng.Records() {
+			unacked := r.State == alarm.UnackActive
+			if (r.ID == "B.Fault") != unacked {
+				t.Errorf("%s: %s is %s: another area's alarm must stay unacknowledged, this area's acknowledged", body, r.ID, r.State)
+			}
+		}
+		// The audit entry says what was left alone.
+		after, _ := ackTarget(nil, []byte(body)).answered(rec.Body.Bytes()).(map[string]any)
+		if after["skipped"] == nil || after["acked"] == nil || after["why"] == "" {
+			t.Errorf("%s: audit after %v lacks acked, skipped or why", body, after)
+		}
+		// Someone who may ack nowhere is still refused.
+		if rec := call(t, s, "POST", "/api/alarms/ack", body, func(r *http.Request) { r.Header.Set("Authorization", "Bearer v-secret") }); rec.Code != http.StatusForbidden {
+			t.Errorf("%s by a viewer: %d, want 403", body, rec.Code)
+		}
+	}
+}

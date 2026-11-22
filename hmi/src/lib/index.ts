@@ -364,3 +364,20 @@ export type { Parameter, DriftState, WriteBack, ImportResult, ImportAnswer, Para
 
 // What the alarm history shows for a paging (notify) row, and the kinds that fetch them (#616).
 export { STATE_KINDS, journalKinds, visibleKind, pagingEvent, pagingOutcome } from './alarmjournal.js';
+export {
+	OOS_MAX_SECONDS,
+	OOS_DURATIONS_S,
+	suppressionBadge,
+	badgeText,
+	soonestFirst,
+	timeLeft,
+	equipmentChoices,
+	checkOutOfService,
+	takeOutOfService,
+	returnToService,
+	listOutOfService,
+	type OutOfService,
+	type SuppressionBadge
+} from './outofservice.js';
+export { default as OutOfServiceBadge } from './components/OutOfServiceBadge.svelte';
+export { default as OutOfServicePanel } from './components/OutOfServicePanel.svelte';

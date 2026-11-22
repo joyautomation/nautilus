@@ -526,6 +526,22 @@ func auditRows() []auditRow {
 					t.Errorf("the log committed %d entries, want 1: the ack did not go through the log", n)
 				}
 			}},
+		// The HMI's Ack All sends ids ["*"], not "all": the same acknowledge-all,
+		// on one controller and through a pair's log (it was a 404 `no alarm "*"`
+		// on a pair).
+		{name: "ack all as ids *", pattern: "POST /api/alarms/ack", server: none,
+			method: "POST", path: "/api/alarms/ack", body: `{"ids":["*"],"by":"op1"}`,
+			action: "alarm.ack", target: "*", user: "anonymous", source: "api", result: "ok",
+			after: []string{"HiTemp"}},
+		{name: "ack all as ids * through the log", pattern: "POST /api/alarms/ack", server: loggedAuditServer,
+			method: "POST", path: "/api/alarms/ack", body: `{"ids":["*"],"by":"op1"}`,
+			action: "alarm.ack", target: "*", user: "anonymous", source: "api", result: "ok",
+			after: []string{"HiTemp"},
+			check: func(t *testing.T, _ audit.Entry) {
+				if n := loggedAuditApplied.Load(); n != 1 {
+					t.Errorf("the log committed %d entries, want 1: the ack did not go through the log", n)
+				}
+			}},
 		{name: "ack all, a second time", pattern: "POST /api/alarms/ack", server: none, prep: ackAll,
 			method: "POST", path: "/api/alarms/ack", body: `{"all":true,"by":"op1"}`,
 			action: "alarm.ack", target: "*", user: "anonymous", source: "api", result: "ok",

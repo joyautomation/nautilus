@@ -119,6 +119,41 @@ func TestAlarmsListAndSummary(t *testing.T) {
 	}
 }
 
+// A suppressed alarm is not in the list unless asked for (?suppressed=1), and
+// then it comes with why, who and until: the HMI's out-of-service badge.
+func TestAlarmsListSuppressedOnRequest(t *testing.T) {
+	srv, eng := alarmServer(t, map[string]any{"HiTempAlm": true, "LoFlowAlm": false})
+	eng.Evaluate()
+	if err := eng.TakeOutOfService("HiTempAlm", time.Now().Add(time.Hour), "alice", "probe swap"); err != nil {
+		t.Fatal(err)
+	}
+	list := func(path string) []alarm.Record {
+		var got alarmsResponse
+		rec := do(t, srv, "GET", path, "")
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		return got.Alarms
+	}
+	if got := list("/api/alarms"); len(got) != 0 {
+		t.Fatalf("the plain list shows %+v for a suppressed alarm", got)
+	}
+	got := list("/api/alarms?suppressed=1")
+	if len(got) != 1 || got[0].ID != "HiTemp" || got[0].State != alarm.Suppressed {
+		t.Fatalf("with ?suppressed=1: %+v", got)
+	}
+	var all alarmsResponse
+	if err := json.Unmarshal(do(t, srv, "GET", "/api/alarms?suppressed=1", "").Body.Bytes(), &all); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(all.Equipment, ",") != "HiTempAlm,LoFlowAlm" {
+		t.Errorf("equipment %v: every piece of equipment, quiet ones too, so one can be taken out before maintenance", all.Equipment)
+	}
+	if r := got[0]; r.Suppression != alarm.SuppressOutOfService || !strings.Contains(r.Reason, "probe swap") || r.SuppressedBy != "alice" || r.SuppressUntilMs == 0 {
+		t.Errorf("record %+v lacks the kind, why, who or until", r)
+	}
+}
+
 // The frame carries counts, never rows — and carries nothing at all when
 // there is no engine, so an older HMI sees exactly the frame it saw before.
 func TestFrameCarriesAlarmSummary(t *testing.T) {

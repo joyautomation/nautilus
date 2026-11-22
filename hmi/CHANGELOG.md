@@ -4,6 +4,15 @@
 
 ### Added
 
+- **Equipment out of service in the HMI** (#616, #715 PR 5): `<OutOfServicePanel/>` lists the windows
+  standing, soonest to end first (why, who, until, time left), with "Return to service" and "Take out of
+  service" (equipment, up to 7 days, a one-line reason; the controller asks for the password). A suppressed
+  alarm in `<AlarmTable/>` carries `<OutOfServiceBadge/>`: the kind of suppression, why, and for out of
+  service who and until. `AlarmClient` gains `outOfService`, `suppressed`, `refreshOutOfService()`,
+  `takeOutOfService()` and `returnToService()`, and asks for suppressed alarms (`?suppressed=1`, which an
+  older controller ignores). `AlarmClient.active` no longer includes suppressed alarms. The built-in HMI's
+  alarms page has both.
+
 - **`<AlarmJournal/>` shows paging rows** (#616, #715): each notification an escalation sent, or tried to
   send, is its own row kind ("Paged, level 2", "sent to bob by sms", "nobody on call (joined late)"),
   filterable (Paged in the event filter) and hidden until the Paging box is ticked, so a screen that never

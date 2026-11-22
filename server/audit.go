@@ -1140,7 +1140,7 @@ func ackTarget(_ *http.Request, body []byte) auditTarget {
 		}
 		t.detail["occurrences"] = occ
 	}
-	if req.All {
+	if req.everything() {
 		// One entry for the one request, target "*"; what it acknowledged
 		// goes in after (the alarm ids the answer lists), since "*" alone
 		// would not say which alarms an operator accepted.
@@ -1149,6 +1149,11 @@ func ackTarget(_ *http.Request, body []byte) auditTarget {
 			var a ackAnswer
 			if json.Unmarshal(body, &a) != nil {
 				return nil
+			}
+			if len(a.Skipped) > 0 {
+				// An area-limited acknowledge-all: what was acknowledged,
+				// and what was left alone and why.
+				return map[string]any{"acked": a.IDs, "skipped": a.Skipped, "why": capText(a.SkippedWhy, 200)}
 			}
 			return a.IDs
 		}
@@ -1159,7 +1164,7 @@ func ackTarget(_ *http.Request, body []byte) auditTarget {
 // namedOccurrences is the occurrences an ack names for its own ids (#715),
 // bounded: never the whole of a map a client may have padded.
 func namedOccurrences(req ackRequest) map[string]string {
-	if req.All || len(req.Occurrences) == 0 {
+	if req.everything() || len(req.Occurrences) == 0 {
 		return nil
 	}
 	out := map[string]string{}
