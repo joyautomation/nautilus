@@ -589,3 +589,41 @@ func TestReadGateExemptsOnlyTheLinkPage(t *testing.T) {
 		}
 	}
 }
+
+// A browser signed in as the paged person whose request did not come from
+// this controller's own page (a TLS proxy not in server.trusted-proxies):
+// by default its sign-in is ignored and the link alone acknowledges, as
+// for a browser not signed in, journalled with why; under sign-in it is
+// refused with the proxy fix named.
+func TestAckLinkIgnoresASessionFromAnotherOrigin(t *testing.T) {
+	proxied := func(r *http.Request) { r.Header.Set("Origin", "https://hmi.example") }
+	s, _, _ := patServer(t)
+	withLinks(t, s)
+	c := signIn(t, s, "akhan")
+	path, _ := linkPath(t, s, "HiTemp", "akhan")
+	rec := call(t, s, "POST", path, "", withCookie(c.Value), proxied)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("link mode, proxied sign-in: %d %s", rec.Code, rec.Body)
+	}
+	e := lastAudit(t, s)
+	if e.User != "user:akhan" || e.Session != "" || !strings.Contains(fmt.Sprint(e.Detail["session"]), "ignored") {
+		t.Fatalf("audit %+v: want akhan by the link, the sign-in noted as ignored", e)
+	}
+
+	s2, _, _ := patServer(t)
+	withLinks(t, s2)
+	s2.ackLinkSignIn = true
+	c2 := signIn(t, s2, "akhan")
+	path2, _ := linkPath(t, s2, "HiTemp", "akhan")
+	rec = call(t, s2, "POST", path2, "", withCookie(c2.Value), proxied)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), "server.trusted-proxies") {
+		t.Fatalf("sign-in mode, proxied: %d %s", rec.Code, rec.Body)
+	}
+	if st := state(s2.alarms, "HiTemp"); st != alarm.UnackActive {
+		t.Fatalf("acked %s", st)
+	}
+	// The same browser from the controller's own page acks with its session.
+	if rec := call(t, s2, "POST", path2, "", withCookie(c2.Value), ownOrigin); rec.Code != http.StatusOK {
+		t.Fatalf("sign-in mode, own page: %d %s", rec.Code, rec.Body)
+	}
+}

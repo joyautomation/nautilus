@@ -457,6 +457,7 @@ var table = []mutation{
 	{"link_not_forwarded", []string{"TestAckLinkIsForwardedByAStandby"}},
 	{"link_reason_html", []string{"TestAckLinkRefusalReasonIsWords", "TestAckLinkWithNoLeaderSaysSo"}},
 	{"link_acks_on_standby", []string{"TestAckLinkNotLeadingNeverAcksItsEngine"}},
+	{"link_session_cookie_refused", []string{"TestAckLinkIgnoresASessionFromAnotherOrigin"}},
 }
 
 // rowPkgs are the packages a row runs instead of ./quorum/..., filtered
@@ -565,6 +566,7 @@ var rowPkgs = map[string][]string{
 	"link_not_forwarded":                {"./server"},
 	"link_reason_html":                  {"./server"},
 	"link_acks_on_standby":              {"./server"},
+	"link_session_cookie_refused":       {"./server"},
 	"reconcile_before_restore":          {"./server"},
 	"cluster_ops_proxied":               {"./server"},
 	"redundancy_same_origin":            {"./server"},

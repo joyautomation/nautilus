@@ -521,10 +521,15 @@ alarms:
   that alarm (an OIDC person: has signed in on the controller, and holds
   it by name, since their groups are known only from a sign-in; a browser
   signed in as them acts with its session). Otherwise the page says why
-  and acknowledges nothing.
+  and acknowledges nothing. A browser signed in as them whose request
+  did not come from the controller's own page (a TLS proxy not in
+  `server.trusted-proxies`) has its sign-in ignored: the link alone
+  acts, and the audit entry says so.
 - **`ack-from-notification: sign-in`** makes a site require a sign-in:
   the page asks the person to sign in as themselves, and only then
-  acknowledges. It needs someone able to sign in (`auth:` users or OIDC).
+  acknowledges. Behind a TLS proxy, list it in
+  `server.trusted-proxies`, or the press is refused (the refusal says
+  so). It needs someone able to sign in (`auth:` users or OIDC).
 - **The link stops working** once it has been used, once the alarm
   returned to normal and activated again (a new occurrence), or after 24
   hours. The page then says to open the HMI.

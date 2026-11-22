@@ -179,18 +179,47 @@ func (s *Server) linkStands(pr auth.Principal) (ok bool, why string) {
 //     session (an OIDC person's groups count);
 //   - with ack-from-notification: sign-in, nobody else;
 //   - else the person the link names, if they still stand here.
-func (s *Server) linkActor(r *http.Request, c acklink.Claim) (actor, int, string) {
+//
+// A matching session that fails the own-origin rule (cookieRefused: a TLS
+// proxy not in server.trusted-proxies, a press forwarded by a standby over
+// another scheme) is, by default, ignored: the link alone acts, as for a
+// browser not signed in, and ignored says why for the journal. Under
+// sign-in it is refused with the fix.
+func (s *Server) linkActor(r *http.Request, c acklink.Claim) (a actor, code int, msg, ignored string) {
 	pr := linkPrincipal(c.Principal)
-	if a := s.resolveActor(r); a.session != nil && a.pr.Kind == pr.Kind && strings.EqualFold(a.pr.Name, pr.Name) {
-		return a, 0, ""
+	if se := s.resolveActor(r); se.session != nil && se.pr.Kind == pr.Kind && strings.EqualFold(se.pr.Name, pr.Name) {
+		refused, why := s.cookieRefused(r, se)
+		switch {
+		case refused == 0:
+			return se, 0, "", ""
+		case s.ackLinkSignIn:
+			return se, refused, "your browser is signed in as " + c.Principal + ", but this request did not come from this controller's own page: " +
+				"if the HMI is reached through a TLS proxy, add the proxy to server.trusted-proxies (" + why + ")", ""
+		case mutServer("link_session_cookie_refused"):
+			return se, refused, why, ""
+		}
+		ignored = "the browser's sign-in was ignored: the request did not come from this controller's own page (a proxy not in server.trusted-proxies?), so the link alone acted"
 	}
 	if s.ackLinkSignIn && !mutServer("link_sign_in_ignored") {
-		return actor{pr: auth.Anonymous}, http.StatusUnauthorized, "this controller acknowledges from a link only for a browser signed in as the person it was sent to: sign in as " + c.Principal + ", then open the link again"
+		return actor{pr: auth.Anonymous}, http.StatusUnauthorized, "this controller acknowledges from a link only for a browser signed in as the person it was sent to: sign in as " + c.Principal + ", then open the link again", ""
 	}
 	if ok, why := s.linkStands(pr); !ok {
-		return actor{pr: pr}, http.StatusForbidden, why
+		return actor{pr: pr}, http.StatusForbidden, why, ignored
 	}
-	return actor{pr: pr, at: time.Now()}, 0, ""
+	return actor{pr: pr, at: time.Now()}, 0, "", ignored
+}
+
+// sessionIgnoredKey carries, on a link's request, why the browser's
+// sign-in was ignored (linkActor), for the journal.
+type sessionIgnoredKey struct{}
+
+// linkTargetFor is linkTarget for r: it notes a sign-in linkActor ignored.
+func linkTargetFor(r *http.Request, c acklink.Claim) auditTarget {
+	t := linkTarget(c)
+	if why, ok := r.Context().Value(sessionIgnoredKey{}).(string); ok && why != "" {
+		t.detail["session"] = why
+	}
+	return t
 }
 
 // linkTarget is an ack link's audit target: the alarm, and how it was
@@ -206,7 +235,7 @@ func linkTarget(c acklink.Claim) auditTarget {
 // checked (none: the seam is answering a refusal checkLink made itself).
 func linkAuditTarget(r *http.Request, _ []byte) auditTarget {
 	c, _ := linkOf(r)
-	return linkTarget(c)
+	return linkTargetFor(r, c)
 }
 
 // checkLink is POST /alarm-ack/{token}'s preStep: it checks the link and
@@ -234,13 +263,13 @@ func (s *Server) checkLink(route *auditedRoute, w http.ResponseWriter, r *http.R
 		return refuseWith(r, t, code, msg)
 	}
 	r = withLink(r, c)
-	a, code, msg := s.linkActor(r, c)
-	r = r.WithContext(context.WithValue(r.Context(), actorKey{}, a))
+	a, code, msg, ignored := s.linkActor(r, c)
+	r = r.WithContext(context.WithValue(context.WithValue(r.Context(), actorKey{}, a), sessionIgnoredKey{}, ignored))
 	if code != 0 {
-		return refuseWith(r, linkTarget(c), code, msg)
+		return refuseWith(r, linkTargetFor(r, c), code, msg)
 	}
 	if s.policy != nil && !s.policy.Holds(a.pr, PermAck) {
-		return refuseWith(r, linkTarget(c), http.StatusForbidden, a.pr.String()+" may not acknowledge alarms on this controller now")
+		return refuseWith(r, linkTargetFor(r, c), http.StatusForbidden, a.pr.String()+" may not acknowledge alarms on this controller now")
 	}
 	return r, true
 }

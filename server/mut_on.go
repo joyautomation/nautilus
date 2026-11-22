@@ -51,6 +51,7 @@ import "os"
 //   - link_not_forwarded: a standby answers an ack link itself instead of forwarding it to the leader (#715);
 //   - link_reason_html: a refused ack link is journalled with its page's HTML as the reason (#715);
 //   - link_acks_on_standby: a replica that does not lead acknowledges an ack link on its own engine (#715);
+//   - link_session_cookie_refused: a signed-in browser from another origin is refused on a link in link mode instead of the link alone acting (#715);
 var mutOn = os.Getenv("QUORUM_MUT")
 
 func mutServer(name string) bool { return name == mutOn }
