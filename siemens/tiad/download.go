@@ -202,6 +202,10 @@ type DownloadRequest struct {
 	// Source is the caller's claim of what the project was built from,
 	// kept in the deploy record as the caller's claim.
 	Source *DeploySource `json:"source,omitempty"`
+	// OutsideChanges is the operator's accept of a download onto a CPU
+	// changed outside nautilus (OutsideChanges), journalled with the
+	// deploy record as the caller's claim.
+	OutsideChanges *OutsideChanges `json:"outsideChanges,omitempty"`
 	// Fingerprint is the options of the fingerprint read the agent makes
 	// after a load that compared equal, for the deploy record: its own
 	// opt-in to trust the CPU's certificate blindly, which the agent's
@@ -516,6 +520,11 @@ func (r DownloadRequest) Validate() error {
 	}
 	if r.Source != nil {
 		if err := r.Source.Validate(); err != nil {
+			return fmt.Errorf("download: %w", err)
+		}
+	}
+	if r.OutsideChanges != nil {
+		if err := r.OutsideChanges.Validate(); err != nil {
 			return fmt.Errorf("download: %w", err)
 		}
 	}

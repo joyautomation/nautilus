@@ -149,11 +149,25 @@ func notesMain(args []string, load func(dir string) (*project.Manifest, string, 
 		}
 		return 2
 	}
-	if fs.NArg() == 1 && fs.Arg(0) == "help" {
+	// Flags after the subcommand too, as the guide writes them
+	// (`naut notes export --format csv`): the set parses what follows
+	// `export` with the same flags, and a stray word after them is still a
+	// usage error.
+	words := fs.Args()
+	if len(words) > 1 && words[0] == "export" {
+		if err := fs.Parse(words[1:]); err != nil {
+			if errors.Is(err, flag.ErrHelp) {
+				return 0
+			}
+			return 2
+		}
+		words = append([]string{"export"}, fs.Args()...)
+	}
+	if len(words) == 1 && words[0] == "help" {
 		fmt.Fprint(stdout, notesUsage)
 		return 0
 	}
-	if fs.NArg() != 1 || fs.Arg(0) != "export" {
+	if len(words) != 1 || words[0] != "export" {
 		fmt.Fprint(stderr, notesUsage)
 		return 2
 	}

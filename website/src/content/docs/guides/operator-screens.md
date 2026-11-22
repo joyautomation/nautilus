@@ -384,10 +384,14 @@ serves them at `/`, with the engineering dashboard moved to `/_nautilus/`:
 - **With no `server.hmi`**, a project with `*.mimic.json` files gets a page
   for each: the first at `/`, the others by file name
   (`screens/pumps.mimic.json` is `/pumps`), under a bar with the project's
-  name and the first screen's `description`, the pages and Diagnostics
-  (the controller's scan timing and field drivers), the active alarms
-  (the banner opens `/alarms`, to acknowledge and shelve them) and Ack
-  all, the connection and a theme switch. The pages are live and their
+  name and the first screen's `description`, the pages, Diagnostics
+  (the controller's scan timing and field drivers), Parameters (the
+  setpoints against the manifest's `init:`), the shift Log (with every
+  note on equipment, tags and alarms listed under it), and Configuration
+  (the drivers and devices as forms; shown only to a session that holds the
+  `config` permission), and the active alarms
+  (the banner opens `/alarms`, to acknowledge and shelve them). The bar also
+  has Ack all, who is signed in with Sign out, the connection and a theme switch. The pages are live and their
   controls write, as in the editor; a click on equipment with a `panel`
   opens it. Each page shows its whole
   drawing at once, fitted to the window's width and height and centred,

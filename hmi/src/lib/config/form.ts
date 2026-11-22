@@ -5,7 +5,7 @@
 
 import { parse } from 'yaml';
 import { patch, type Op, type Path } from './yamlpatch.js';
-import type { Json } from './schema.js';
+import type { Field, Json } from './schema.js';
 
 export type Row = { [k: string]: Json };
 
@@ -78,4 +78,36 @@ export function overlay(files: Record<string, string>, edits: Record<string, Op[
 		if (now !== was) out[path] = now;
 	}
 	return { files: out, changed: Object.keys(out).sort() };
+}
+
+/**
+ * The driver types a setting applies to, read from its description, which by
+ * the schema's convention opens with them: `eip: …`, `eip / modbus: …`, and
+ * further sentences `… opcua-client: …`. null for a setting no description
+ * names (`type`, `name`): it applies to every type. `known` is the type enum,
+ * so a sentence that merely contains a colon is not read as a type list.
+ */
+export function appliesTo(f: Field, known: string[]): string[] | null {
+	const d = f.description ?? '';
+	const out = new Set<string>();
+	for (const m of d.matchAll(/(?:^|[.;]\s+)([a-z][a-z0-9-]*(?:\s*\/\s*[a-z][a-z0-9-]*)*):\s/g)) {
+		for (const t of m[1].split('/').map((x) => x.trim())) if (known.includes(t)) out.add(t);
+	}
+	return out.size ? [...out] : null;
+}
+
+/**
+ * The settings of a driver row worth showing: those of its type, those no
+ * type owns, and any the row already sets (a stray one stays visible so it
+ * can be seen and removed). A modbus row does not offer host, slot, broker.
+ */
+export function fieldsForType(driver: Field, type: string | undefined, value: Row | undefined): Field[] {
+	const all = driver.fields ?? [];
+	const known = all.find((f) => f.key === 'type')?.enum ?? [];
+	if (!type || !known.includes(type)) return all;
+	return all.filter((f) => {
+		if (value?.[f.key] !== undefined) return true;
+		const t = appliesTo(f, known);
+		return t === null || t.includes(type);
+	});
 }

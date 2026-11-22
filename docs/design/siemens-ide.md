@@ -95,7 +95,8 @@ the TIA project is not saved. The steps:
    that may have loaded is verified (`POST /v1/deploys/verify`) before the
    deploy opens its own session. A CPU that compares different, or a
    broken archive, means the CPU was changed outside nautilus. The deploy
-   is then refused without `--accept-outside-changes`, which the plan names.
+   is then refused without `--accept-outside-changes`, which the plan names
+   and the download journals in the deploy record (`outsideChanges`, §3.5).
    A CPU with no record is no refusal: the plan says plainly that what it
    runs is replaced.
 4. **The project.** The deploy opens `projects/<name>/<name>.ap21` as last
@@ -809,7 +810,7 @@ The client checks each path and the agent checks again.
 | `POST /v1/sessions/{id}/upload` | `{trustUnverifiedCertificate?, secrets?: {fullAccessPassword}}` → `{trustedBlindly, blindTrust, device, pin, cpu: {name, order, firmware}, removedAccess?: [string]}`. CPU into the session's project, for bringing a legacy CPU's program into nautilus (S2a: works). Pins the CPU's identity on first use, or checks it (§3.8). `cpu` is what a spec must name to keep the uploaded CPU. `removedAccess` names the user and role this session had made, removed first (§3.3, `cpu.accessControl`) |
 | `POST /v1/sessions/{id}/save` | `{archive?}` → `{path}`. Refused (`unclean_session`) after an apply or upload failed part-way |
 | `GET /v1/pins`, `POST /v1/pins/{address}` | The device pins (§3.8). An upload pins the CPU on first use and must match after; compare and download check the pin first |
-| `GET /v1/deploys[?address=]` | → `{deploys: [{id, at, session, project, address, hardware, software, source, tia, archive, attestation, keptDevices, blindTrust, outcome, status}], unreadableLines}`. The deploy record, newest first (§3.5, "The deploy record"). Never starts TIA |
+| `GET /v1/deploys[?address=]` | → `{deploys: [{id, at, session, project, address, hardware, software, source, outsideChanges?, tia, archive, attestation, keptDevices, blindTrust, outcome, status}], unreadableLines}`. The deploy record, newest first (§3.5, "The deploy record"). Never starts TIA |
 | `POST /v1/deploys/verify` | `{deploy, fingerprint?: {trustUnverifiedCertificate?}, secrets?: {fullAccessPassword}}` → `{deploy, address, status, latest, unreadableLines, verdict, broken?, session?, differences?, blocks?, blindTrust?, changedOutside, fingerprint?, fingerprintError?, closeError?}` (a `broken` verdict has no session, differences, blocks or blind trust). Whether the CPU still runs a deploy: its archive opened in a session of its own and compared online (§3.5, "Verifying a deploy"). `verdict` is `equal`, `different` or `broken` |
 
 **Blocks outside the group (#789).** TIA's generate-from-source does not
@@ -906,6 +907,7 @@ Request:
   "attestation": { "by": "<who>", "text": "<the CPU's hardware configuration is what I intend to load>" },
   "secrets": { "protection": "<password>", "configurationPassword": "<password>" },
   "source": { "commit": "<git commit id>", "hash": "sha256:<hash of the sources sent>" },
+  "outsideChanges": { "by": "<who>", "verdict": "different", "deploy": "<the verified deploy's id>" },
   "fingerprint": { "trustUnverifiedCertificate": true }
 }
 ```
@@ -1432,6 +1434,22 @@ get a record too, just as it must get the hardware opt-in (#1180 review).
     claim; tiad checks only its shape. A commit is 40 or 64 lower-case hex
     digits, and a hash is `sha256:` and 64 more. Any other shape is a
     `bad_request`;
+  - `outsideChanges`, `{by, verdict, deploy, claimedBy: "caller"}`, only on
+    a download that carries it (#789). It is the operator's accept of a
+    download onto a CPU whose deploy record says it was changed outside
+    nautilus, or cannot say:
+    - `by`: who accepts, not blank, at most 200 bytes;
+    - `verdict`: what the caller's verify of the last deploy found,
+      `different`, `broken` or `unreadable`;
+    - `deploy`: that record's id, at most 100 bytes, required unless
+      `unreadable`.
+
+    `naut siemens deploy --accept-outside-changes` sends it, so an
+    overwrite of someone's change is on the record. tiad checks only its
+    shape; any other shape is a `bad_request`. Both audit lines (the
+    intent's and the download's) carry it, quoted, as
+    `outsideChanges={by=... verdict=... deploy=...}` or `unset`; on a
+    refusal a part over its limit is written by its size only;
   - `tia`, `{version, openness, agent}`;
   - `archive`, `{file, sha256, bytes}`;
   - the attestation of a hardware load, the kept devices, and the blind
@@ -1475,7 +1493,7 @@ get a record too, just as it must get the hardware opt-in (#1180 review).
   refuses every download, which is safe but is an outage. Pruning is a
   follow-up (#616).
 - **The response.** A successful download returns `deploy: {id, archive,
-  source, fingerprint, fingerprintError?, downloadId?, blindTrustAfter,
+  source, outsideChanges?, fingerprint, fingerprintError?, downloadId?, blindTrustAfter,
   recorded, recordError?}`. `GET /v1/deploys` lists the records.
 
 **Verifying a deploy (D1b).** `POST /v1/deploys/verify {deploy}` answers

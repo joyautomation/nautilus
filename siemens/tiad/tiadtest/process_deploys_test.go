@@ -2,9 +2,12 @@ package tiadtest_test
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -101,7 +104,7 @@ func TestAgentJournalsADeploy(t *testing.T) {
 		t.Fatalf("calls %v (archive on the TIA thread: %v), want the archive first, on the TIA thread, and the read last", order, archiveSTA)
 	}
 	l := p.Log()
-	for _, want := range []string{"audit deploy intent deploy=" + d.ID, "source={commit=\"" + strings.Repeat("ab", 20) + "\" hash=unset} deploy=" + d.ID + " kept=", "outcome=ok deploy=" + d.ID} {
+	for _, want := range []string{"audit deploy intent deploy=" + d.ID, "source={commit=\"" + strings.Repeat("ab", 20) + "\" hash=unset} outsideChanges=unset deploy=" + d.ID + " kept=", "outcome=ok deploy=" + d.ID} {
 		if !strings.Contains(l, want) {
 			t.Errorf("the log has no %q:\n%s", want, l)
 		}
@@ -298,5 +301,73 @@ func TestAgentRecordsHowADownloadFailed(t *testing.T) {
 				t.Fatalf("journal: %+v, want an outcome line %s/%s", lines, c.status, c.kind)
 			}
 		})
+	}
+}
+
+// TestAgentJournalsAnOutsideChangesAccept: the operator's accept of a
+// download onto a CPU changed outside nautilus is on the intent line, as
+// the caller's claim, and in both audit lines, quoted; one that is too
+// long is sized, never written out, on a refusal.
+func TestAgentJournalsAnOutsideChangesAccept(t *testing.T) {
+	p, s := downloadReady(t)
+	req := deployLoad
+	req.OutsideChanges = &tiad.OutsideChanges{By: "op \"x\"", Verdict: tiad.OutsideDifferent, Deploy: "d-1"}
+	r, err := s.Download(ctx, req)
+	if err != nil || r.Deploy == nil || r.Deploy.OutsideChanges == nil || r.Deploy.OutsideChanges.ClaimedBy != "caller" {
+		t.Fatalf("download: %+v %v", r, err)
+	}
+	lines := journalLines(t, p.DeploysDir)
+	oc, _ := lines[0]["outsideChanges"].(map[string]any)
+	if oc["by"] != "op \"x\"" || oc["verdict"] != "different" || oc["deploy"] != "d-1" || oc["claimedBy"] != "caller" {
+		t.Fatalf("the intent's outsideChanges: %+v", lines[0])
+	}
+	want := `outsideChanges={by="op \"x\"" verdict="different" deploy="d-1"}`
+	if l := p.Log(); strings.Count(l, want) != 2 {
+		t.Fatalf("want %s in the intent and the download audit lines:\n%s", want, l)
+	}
+	long := deployLoad
+	long.OutsideChanges = &tiad.OutsideChanges{By: strings.Repeat("y", tiad.MaxOutsideBy+1), Verdict: tiad.OutsideBroken, Deploy: "d-1"}
+	// Past the client's own check, as another caller would send it.
+	body, _ := json.Marshal(long)
+	c := p.Client()
+	hr, _ := http.NewRequest(http.MethodPost, c.BaseURL+"/v1/sessions/"+s.ID+"/download", bytes.NewReader(body))
+	hr.Header.Set("Authorization", "Bearer "+c.Token)
+	hr.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(hr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest || !strings.Contains(string(b), "outsideChanges.by is longer") {
+		t.Fatalf("HTTP %d %s", resp.StatusCode, b)
+	}
+	if l := p.Log(); strings.Contains(l, strings.Repeat("y", tiad.MaxOutsideBy+1)) || !strings.Contains(l, "outsideChanges={by=<201 bytes, over the limit>") {
+		t.Fatalf("the refused accept's by is not sized in the audit line:\n%s", l)
+	}
+	// Each part is sized over its limit, and a missing deploy is unset.
+	c2 := c
+	for _, c := range []struct {
+		oc   tiad.OutsideChanges
+		want string
+	}{
+		{tiad.OutsideChanges{By: "op", Verdict: tiad.OutsideBroken, Deploy: strings.Repeat("z", tiad.MaxOutsideDeploy+1)}, `outsideChanges={by="op" verdict="broken" deploy=<101 bytes, over the limit>}`},
+		{tiad.OutsideChanges{By: "op", Verdict: strings.Repeat("v", 21), Deploy: "d-1"}, `outsideChanges={by="op" verdict=<21 bytes, over the limit> deploy="d-1"}`},
+		{tiad.OutsideChanges{By: "op", Verdict: tiad.OutsideDifferent}, `outsideChanges={by="op" verdict="different" deploy=unset}`},
+	} {
+		bad := deployLoad
+		bad.OutsideChanges = &c.oc
+		body, _ := json.Marshal(bad)
+		hr, _ := http.NewRequest(http.MethodPost, c2.BaseURL+"/v1/sessions/"+s.ID+"/download", bytes.NewReader(body))
+		hr.Header.Set("Authorization", "Bearer "+c2.Token)
+		hr.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(hr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest || !strings.Contains(p.Log(), c.want) {
+			t.Errorf("HTTP %d, want 400 and %s in the log", resp.StatusCode, c.want)
+		}
 	}
 }

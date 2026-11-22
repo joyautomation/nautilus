@@ -20,6 +20,7 @@ func contractDeploys(t *testing.T, start Starter) {
 	t.Run("NoRecord", func(t *testing.T) { contractDeployNoRecord(t, start) })
 	t.Run("Cancelled", func(t *testing.T) { contractDeployCancelled(t, start) })
 	t.Run("Source", func(t *testing.T) { contractDeploySource(t, start) })
+	t.Run("OutsideChanges", func(t *testing.T) { contractDeployOutsideChanges(t, start) })
 	t.Run("FingerprintTrust", func(t *testing.T) { contractDeployFingerprintTrust(t, start) })
 	t.Run("FingerprintFails", func(t *testing.T) { contractDeployFingerprintFails(t, start) })
 	t.Run("ListQuery", func(t *testing.T) { contractDeployListQuery(t, start) })
@@ -231,6 +232,60 @@ func contractDeploySource(t *testing.T, start Starter) {
 	}
 	if l := a.Loaded(t); len(l) != 1 {
 		t.Fatalf("loads %+v, want the good one only", l)
+	}
+}
+
+// contractDeployOutsideChanges: the operator's accept of a download onto a
+// CPU changed outside nautilus is in the record, in the response and the
+// list, as the caller's claim; a deploy without one has none; one of the
+// wrong shape is a bad request over the wire and loads nothing.
+func contractDeployOutsideChanges(t *testing.T, start Starter) {
+	a, s := compiledBench(t, start)
+	c := a.Client()
+	req := benchSoftwareLoad
+	if r, err := s.Download(ctx, req); err != nil || r.Deploy == nil || r.Deploy.OutsideChanges != nil {
+		t.Fatalf("a deploy without an accept: %+v %v", r, err)
+	}
+	req.OutsideChanges = &tiad.OutsideChanges{By: "bench operator", Verdict: tiad.OutsideDifferent, Deploy: "d-20261122T000000000Z-00000000"}
+	r, err := s.Download(ctx, req)
+	want := tiad.OutsideChangesRecord{By: "bench operator", Verdict: "different", Deploy: "d-20261122T000000000Z-00000000", ClaimedBy: "caller"}
+	if err != nil || r.Deploy == nil || r.Deploy.OutsideChanges == nil || *r.Deploy.OutsideChanges != want {
+		t.Fatalf("download: %+v %v", r.Deploy, err)
+	}
+	l := deploys(t, c, benchCPU)
+	if len(l.Deploys) != 2 || l.Deploys[0].OutsideChanges == nil || *l.Deploys[0].OutsideChanges != want || l.Deploys[1].OutsideChanges != nil {
+		t.Fatalf("the list: %+v", l.Deploys)
+	}
+	// Unreadable journal lines name no record to verify.
+	req.OutsideChanges = &tiad.OutsideChanges{By: "bench operator", Verdict: tiad.OutsideUnreadable}
+	if r, err := s.Download(ctx, req); err != nil || r.Deploy.OutsideChanges == nil || r.Deploy.OutsideChanges.Deploy != "" {
+		t.Fatalf("unreadable: %+v %v", r.Deploy, err)
+	}
+
+	path := "/v1/sessions/" + s.ID + "/download"
+	for _, rc := range []struct {
+		name string
+		oc   map[string]any
+		want string
+	}{
+		{"no by", map[string]any{"verdict": "different", "deploy": "d-1"}, "outsideChanges.by is empty"},
+		{"a blank by", map[string]any{"by": " \t", "verdict": "different", "deploy": "d-1"}, "outsideChanges.by is empty"},
+		{"a no-break space by", map[string]any{"by": "\u00a0\u2003", "verdict": "different", "deploy": "d-1"}, "outsideChanges.by is empty"},
+		{"a long by", map[string]any{"by": strings.Repeat("x", tiad.MaxOutsideBy+1), "verdict": "different", "deploy": "d-1"}, "outsideChanges.by is longer"},
+		{"another verdict", map[string]any{"by": "op", "verdict": "equal", "deploy": "d-1"}, "outsideChanges.verdict"},
+		{"no deploy for different", map[string]any{"by": "op", "verdict": "different"}, "outsideChanges.deploy is empty"},
+		{"no deploy for broken", map[string]any{"by": "op", "verdict": "broken"}, "outsideChanges.deploy is empty"},
+		{"a long deploy", map[string]any{"by": "op", "verdict": "broken", "deploy": strings.Repeat("d", tiad.MaxOutsideDeploy+1)}, "outsideChanges.deploy is longer"},
+		{"an unknown field", map[string]any{"by": "op", "verdict": "broken", "deploy": "d-1", "reason": "x"}, "unknown field"},
+	} {
+		body := map[string]any{"address": benchCPU, "software": true, "announced": true, "decisions": map[string]any{"startAfter": false}, "outsideChanges": rc.oc}
+		status, b := rawJSON(t, c, "POST", path, body)
+		if status != http.StatusBadRequest || envelopeKind(b) != tiad.KindBadRequest || !strings.Contains(errMessage(b), rc.want) {
+			t.Errorf("%s: HTTP %d %s, want 400 %q", rc.name, status, b, rc.want)
+		}
+	}
+	if l := a.Loaded(t); len(l) != 3 {
+		t.Fatalf("loads %+v, want the three good ones only", l)
 	}
 }
 

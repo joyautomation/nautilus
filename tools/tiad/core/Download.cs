@@ -149,6 +149,10 @@ namespace Tiad
         // Source is the caller's claim of what the project was built from,
         // for the deploy record (null: none); tiad checks only its shape.
         public DeploySource Source;
+        // OutsideChanges is the operator's accept of a download onto a CPU
+        // changed outside nautilus (null: none), journalled as the caller's
+        // claim.
+        public OutsideChanges OutsideChanges;
         // FingerprintTrust is the post-load fingerprint read's own opt-in
         // (fingerprint.trustUnverifiedCertificate), as a fingerprint
         // call's: TIA's TLS question answered trusted, blindly.
@@ -166,6 +170,7 @@ namespace Tiad
             d.Secrets = Secrets.Read(r.Child("secrets"));
             d.Attestation = Attestation.Read(r.Child("attestation"));
             d.Source = DeploySource.Read(r.Child("source"));
+            d.OutsideChanges = OutsideChanges.Read(r.Child("outsideChanges"));
             Reader fp = r.Child("fingerprint");
             if (fp != null) d.FingerprintTrust = fp.Bool("trustUnverifiedCertificate");
             return d;
@@ -190,6 +195,11 @@ namespace Tiad
             if (Source != null)
             {
                 string bad = Source.Validate();
+                if (bad != null) return "download: " + bad;
+            }
+            if (OutsideChanges != null)
+            {
+                string bad = OutsideChanges.Validate();
                 if (bad != null) return "download: " + bad;
             }
             return null;
