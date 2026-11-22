@@ -7,7 +7,7 @@
 	import { untrack } from 'svelte';
 	import { ConfigClient, type ConfigFiles } from '../config/client.js';
 	import { sectionField, validate, type Field, type Json, type Issue, type Schema } from '../config/schema.js';
-	import { driverRows, deviceRows, setField, addDriver, addDevice, removeRow, type Overlay, type Row, type RowRef } from '../config/form.js';
+	import { driverRows, deviceRows, setField, addDriver, addDevice, removeRow, fieldsForType, type Overlay, type Row, type RowRef } from '../config/form.js';
 	import { patch, type Op } from '../config/yamlpatch.js';
 	import SchemaForm from './SchemaForm.svelte';
 	import ModbusPoints from './ModbusPoints.svelte';
@@ -115,7 +115,7 @@
 						<strong>{label(r)}</strong>
 						<Button size="sm" variant="ghost" onclick={() => run(() => removeRow(manifest, r))}>Remove</Button>
 					</header>
-					<SchemaForm field={fields.drivers} value={r.value} issues={issuesOf(fields.drivers, r.value)} onedit={(p, v) => run(() => setField(r.path, p[p.length - 1], v))} />
+					<SchemaForm field={{ ...fields.drivers, fields: fieldsForType(fields.drivers, typeof r.value?.type === 'string' ? r.value.type : undefined, r.value) }} value={r.value} issues={issuesOf(fields.drivers, r.value)} onedit={(p, v) => run(() => setField(r.path, p[p.length - 1], v))} />
 				</article>
 			{/each}
 			<Button size="sm" onclick={() => run(() => addDriver(manifest, { type: 'memory' }))}>Add a driver</Button>

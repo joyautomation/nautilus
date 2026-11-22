@@ -227,3 +227,30 @@ func TestNotesExportIncludesTheSupersededHistoryFlagged(t *testing.T) {
 		t.Errorf("%v", hist)
 	}
 }
+
+// The guide writes the flags after the subcommand (`naut notes export
+// --format csv --since ...`): they parse there as they do before it, and a
+// stray word is still a usage error (#720 demo: it printed usage and exited 2).
+func TestNotesExportFlagsAfterTheSubcommand(t *testing.T) {
+	sd := t.TempDir()
+	s, _ := notes.Open(filepath.Join(sd, NotesFile))
+	s.Apply(rv("n1", 1, 1700000000000, "pump 2 vibrating"))
+	s.Close()
+	run := func(args ...string) (string, int) {
+		var out, errb bytes.Buffer
+		code := notesMain(args, func(string) (*project.Manifest, string, error) { return nil, "", os.ErrNotExist },
+			false, func(string) string { return "" }, &out, &errb)
+		return out.String(), code
+	}
+	out, code := run("export", "--format", "csv", "--state-dir", sd)
+	rows, err := csv.NewReader(strings.NewReader(out)).ReadAll()
+	if code != 0 || err != nil || len(rows) != 2 {
+		t.Fatalf("flags after export: exit %d, %v, rows %d\n%s", code, err, len(rows), out)
+	}
+	if out, code := run("--state-dir", sd, "export", "--since", "2030-01-01"); code != 0 || strings.TrimSpace(out) != "[]" && strings.TrimSpace(out) != "null" {
+		t.Errorf("--since after export did not filter: exit %d %q", code, out)
+	}
+	if _, code := run("export", "--state-dir", sd, "stray"); code != 2 {
+		t.Errorf("a stray word after the flags: exit %d, want 2", code)
+	}
+}

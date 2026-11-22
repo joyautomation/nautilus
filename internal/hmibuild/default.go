@@ -159,10 +159,15 @@ func defaultApp(project, title string) (*appSource, error) {
 	}
 	// the pages every project gets, unless a screen has the name
 	alarmsHref := "undefined"
-	for _, pg := range []struct{ slug, label, text string }{
-		{"diagnostics", "Diagnostics", defaultDiagnostics},
-		{"log", "Log", defaultLog},
-		{"alarms", "", defaultAlarms},
+	for _, pg := range []struct{ slug, label, text, needs string }{
+		{"diagnostics", "Diagnostics", defaultDiagnostics, ""},
+		{"parameters", "Parameters", defaultParameters, ""},
+		{"log", "Log", defaultLog, ""},
+		// Configuration is the engineer's: the link is not shown to a
+		// session without the config permission (the controller refuses the
+		// rest in any case).
+		{"configuration", "Configuration", defaultConfiguration, "config"},
+		{"alarms", "", defaultAlarms, ""},
 	} {
 		if takenSlug[pg.slug] {
 			continue
@@ -174,7 +179,11 @@ func defaultApp(project, title string) (*appSource, error) {
 		r.Layouts = []int{0}
 		a.routes = append(a.routes, r)
 		if pg.label != "" {
-			screens = append(screens, fmt.Sprintf("{ id: %s, href: %s, label: %s }", jsq("/"+pg.slug), jsq("/"+pg.slug), jsq(pg.label)))
+			needs := ""
+			if pg.needs != "" {
+				needs = ", needs: " + jsq(pg.needs)
+			}
+			screens = append(screens, fmt.Sprintf("{ id: %s, href: %s, label: %s%s }", jsq("/"+pg.slug), jsq("/"+pg.slug), jsq(pg.label), needs))
 		}
 		if pg.slug == "alarms" {
 			alarmsHref = jsq("/alarms")
@@ -269,36 +278,44 @@ const defaultLayout = `<script>
 	import '@joyautomation/nautilus-hmi/theme.css';
 	import '@joyautomation/nautilus-hmi/fonts.css';
 	import { onMount } from 'svelte';
-	import { theme, ConfirmDialog, AlarmBanner, AckButton, StatusPill, ThemeSwitch } from '@joyautomation/nautilus-hmi';
+	import { theme, ConfirmDialog, AlarmBanner, AckButton, StatusPill, ThemeSwitch, AccountChip, ReferralBanner, createAuth } from '@joyautomation/nautilus-hmi';
 	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
 	import { rt, alarms } from 'nx:default/client';
 	let { children } = $props();
+	// Sign-in (#708): who this screen is signed in as, Sign out, the password
+	// prompt for an elevated action, a standby's referral to the leader.
+	const auth = createAuth();
 	onMount(() => {
 		theme.init();
+		void auth.start();
 		rt.start();
 		void alarms.start();
 		return () => {
 			rt.stop();
 			alarms.stop();
+			auth.stop();
 		};
 	});
 	const title = %s;
 	const description = %s;
 	const screens = [%s];
 	const alarmsHref = %s;
+	// a screen with needs: is listed only to a session that holds it
+	const visible = $derived(screens.filter((s) => !s.needs || auth.holds(s.needs)));
 </script>
 
 <ConfirmDialog />
+<ReferralBanner />
 <div class="nx-shell">
 	<header>
 		<div class="nx-title">
 			<b>{title}</b>
 			{#if description}<span>{description}</span>{/if}
 		</div>
-		{#if screens.length > 1}
+		{#if visible.length > 1}
 			<nav aria-label="Screens">
-				{#each screens as s (s.id)}
+				{#each visible as s (s.id)}
 					<a href={resolve(s.href) + page.url.search} aria-current={page.route.id === s.id ? 'page' : undefined}>{s.label}</a>
 				{/each}
 			</nav>
@@ -309,6 +326,7 @@ const defaultLayout = `<script>
 				<AckButton alarms={alarms.active} ids={['*']} label="Ack all" size="md" onack={(ids, by) => alarms.ack(ids, by)} />
 			{/if}
 			<StatusPill kind={rt.connected ? 'good' : 'critical'} label={rt.connected ? 'Connected' : 'Offline'} />
+			<AccountChip />
 			<ThemeSwitch />
 		</div>
 	</header>
@@ -373,22 +391,77 @@ const defaultDiagnostics = `<script>
 </style>
 `
 
+// defaultParameters is the setpoint parameters (#718): what the plant runs
+// against what the manifest's init: says. Read-only here except "Use repo
+// value", which asks for the password like any elevated action.
+const defaultParameters = `<script>
+	import { ParameterList } from '@joyautomation/nautilus-hmi';
+</script>
+
+<div class="nx-page">
+	<section>
+		<h2>Parameters</h2>
+		<ParameterList />
+	</section>
+</div>
+
+<style>
+	.nx-page { max-width: 1100px; margin: 0 auto; display: grid; gap: 16px; }
+	section { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius, 10px); padding: 16px; }
+	h2 { font-size: 0.78rem; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); margin: 0 0 0.7rem; }
+</style>
+`
+
+// defaultConfiguration is the drivers and devices as forms (#711), for a
+// session with the config permission. The editor stages and applies through
+// the controller's own checks; this page only mounts it.
+const defaultConfiguration = `<script>
+	import { currentAuth } from '@joyautomation/nautilus-hmi';
+	import { ConfigEditor } from '@joyautomation/nautilus-hmi/config';
+	const auth = $derived(currentAuth());
+	const allowed = $derived(!auth || auth.holds('config'));
+</script>
+
+<div class="nx-page">
+	<section>
+		<h2>Configuration</h2>
+		{#if allowed}
+			<ConfigEditor />
+		{:else}
+			<p>This page needs the config permission. Sign in as an engineer.</p>
+		{/if}
+	</section>
+</div>
+
+<style>
+	.nx-page { max-width: 1100px; margin: 0 auto; display: grid; gap: 16px; }
+	section { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius, 10px); padding: 16px; }
+	h2 { font-size: 0.78rem; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); margin: 0 0 0.7rem; }
+	p { color: var(--muted); margin: 0; }
+</style>
+`
+
 // defaultLog is the shift log (#720): the notes for whoever works next,
 // written and read here. A controller with no auth: users keeps none and
 // the page says so.
 const defaultLog = `<script>
-	import { ShiftLog } from '@joyautomation/nautilus-hmi';
+	import { ShiftLog, NotesIndex } from '@joyautomation/nautilus-hmi';
 </script>
 
 <div class="nx-page">
 	<section>
 		<ShiftLog />
 	</section>
+	<section>
+		<h2>Notes on equipment, tags and alarms</h2>
+		<NotesIndex />
+	</section>
 </div>
 
 <style>
 	.nx-page { max-width: 900px; margin: 0 auto; display: grid; gap: 16px; }
 	section { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius, 10px); padding: 16px; }
+	h2 { font-size: 0.78rem; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); margin: 0 0 0.7rem; }
 </style>
 `
 

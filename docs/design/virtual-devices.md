@@ -33,7 +33,7 @@ gives it behaviour. The store has two faces:
    `modbus/slave` (or the OPC UA server, PR 2) on a listen address. This is
    for commissioning practice, for black-box tests of any controller (a
    CODESYS program today, its nautilus replacement later) and for the OPC UA
-   client's test matrix (#704). `naut devices up`, `naut run --devices`.
+   client's test matrix (#704). `naut devices up`; `naut run --devices` is planned (§7), not built.
 2. **In-process face**, virtual time, no sockets (PR 3). `naut test` keeps
    its rule that it never opens a socket (testing.md §4.3). A suite that
    opts in (`devices: true`) gets, instead of the bare memory driver, one
@@ -174,7 +174,7 @@ declare (a hand-mapped one).
 
 `endpoint` is matched against the project's own driver configuration, so
 `nautilus.yaml` is never edited to test: the in-process face answers there,
-and `naut run --devices` redirects that address to the wire face in memory.
+and `naut run --devices` (planned, not built: §7) will redirect that address to the wire face in memory.
 Modbus devices that share an endpoint (unit ids behind one gateway) share
 one listener, as in the field.
 
@@ -231,7 +231,7 @@ which fails.
 | `naut devices check [dir]` | load and compile the plant; no sockets |
 | `naut devices profiles` | the built-in profiles |
 | `naut devices show <profile>` | a profile's points, with the document each row came from |
-| `naut run --devices` (PR 3) | the devices, plus the project with its drivers redirected to them |
+| `naut run --devices` (planned, not built; §7) | the devices, plus the project with its drivers redirected to them |
 | `naut test` | suites with `devices: true` run against the in-process face |
 
 ## 5a. OPC UA wire face
