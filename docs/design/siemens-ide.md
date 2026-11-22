@@ -1028,10 +1028,12 @@ behaviour. So, until then:
         `EnabledWithAccessControl`, and the request's
         `secrets.fullAccessPassword` is the one tiad's record of the user
         `nautilus` holds (§3.3). After the reset the CPU's Full access
-        user is the one tiad logs on as, with this password, so the
-        compare after the load can log on. A password the record does not
-        hold is refused: the CPU would end with a password the request
-        lacks.
+        user is the one tiad logs on as, with the password tiad set, so
+        the compare after the load can log on. A password the record does
+        not hold is refused: the CPU would end with a password the
+        request lacks. A record `fullAccessRecordOnly` made shows only
+        what tiad was told, not what TIA holds; a wrong one ends at the
+        compare after the load, `outcome_unknown` naming credentials.
       - Every case needs `by` and `text` in the attestation, and
         `cpuAccessControl` one of the two words. Nothing attested is
         refused, naming both.
@@ -1045,7 +1047,8 @@ behaviour. So, until then:
       `bad_request` or `decision_required`, "nothing was sent to the
       CPU"). When TIA asks the check, tiad answers reset only if this
       download logged on as `nautilus` (§3.9) and answered nothing no
-      since. TIA asking the check means the CPU took the logon. If the
+      since. tiad reads TIA asking the check as the CPU having taken the
+      logon (an inference the bench window checks, §3.9). If the
       CPU asked no credentials, tiad refuses the reset there, naming why
       and the fix: retire the instance, in case it went online before,
       or attest `disabled`. The other routes rest on the CPU's access
@@ -1613,14 +1616,17 @@ CPU with access control on.
 **The download's logon carries a reset.** A download's logon is made by
 the agent itself, so its answer to TIA's user-management check can read
 whether the download logged on (§3.5, the `logon` route). For that route
-the bench window has to show three things before relying on it:
+the bench window has to show four things before relying on it:
 - that TIA asks credentials going online before it asks the download's
   checks;
 - that TIA does not ask credentials again within the same download after
   a hardware load restarts the CPU, which tiad would refuse as
   `AskedAgain`;
 - that the logon works when the project being loaded does not hold the
-  user, as in the restore of the as-found project.
+  user, as in the restore of the as-found project;
+- that TIA reaching the download's checks after tiad's logon means the CPU
+  took it (a refused password asks again or fails going online, on the
+  fakes and, by TIA's dialogs, on a real CPU).
 
 The window's stop criteria cover each: an `outcome_unknown` naming
 credentials or `user-management` stops it.
