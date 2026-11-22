@@ -1,0 +1,28 @@
+page: website/src/content/docs/guides/installable-hmi.md
+title: Install an HMI on a phone or desktop
+prefix: PWA
+claims:
+  - id: PWA-001
+    claim: >-
+      An alarm page always shows exactly one notification, even when its
+      payload is empty, not JSON or the wrong shape.
+    source: "#notifications-alarms-on-a-phone"
+    tests:
+      - go ./internal/hmibuild TestPWAWorkerPushAlwaysShows
+      - go ./internal/hmibuild TestPWAWorkerPushSaysTheAlarm
+
+  - id: PWA-002
+    claim: >-
+      Tapping a notification opens the alarms page and does nothing else:
+      the worker never calls the controller from a tap.
+    source: "#notifications-alarms-on-a-phone"
+    tests:
+      - go ./internal/hmibuild TestPWAWorkerClickOpensTheAlarmsAndActsOnNothing
+
+  - id: PWA-003
+    claim: >-
+      The worker never answers the controller's data (/api, the live stream,
+      /_nautilus): an offline HMI shows no old value as live.
+    source: "#what-installing-gets-you"
+    tests:
+      - go ./internal/hmibuild TestPWAWorkerNeverAnswersData

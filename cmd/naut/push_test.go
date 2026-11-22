@@ -93,3 +93,29 @@ func TestPushOutcomeSaysClassNeverTheEndpoint(t *testing.T) {
 		}
 	}
 }
+
+// naut check says so when alarms.channels.push has no one who could ever
+// subscribe: a phone belongs to a signed-in person.
+func TestCheckWarnsOfPushWithNoSignIn(t *testing.T) {
+	manifest := func(auth string) string {
+		return "name: p\ntasks:\n  - program: main.st\ntags:\n  - { name: Hi, type: BOOL, role: state }\n" + auth +
+			"alarms:\n  defs:\n    - { id: Hi, tag: Hi, priority: high }\n  channels:\n    push: { subject: \"mailto:ops@example.com\" }\n"
+	}
+	for _, c := range []struct {
+		name, auth string
+		warns      bool
+	}{
+		{"no auth block", "", true},
+		{"auth with no users", "auth:\n  anonymous: viewer\n", true},
+		{"auth with a user", "auth:\n  users:\n    alice: [engineer]\n", false},
+		{"auth with OIDC", "auth:\n  oidc:\n    issuer: https://login.example/v2.0\n    client-id: abc\n    users:\n      jsmith@corp.example: engineer\n", false},
+	} {
+		dir := t.TempDir()
+		os.WriteFile(filepath.Join(dir, "main.st"), []byte("PROGRAM Main\nVAR_EXTERNAL\n  Hi : BOOL;\nEND_VAR\nEND_PROGRAM\n"), 0o644)
+		os.WriteFile(filepath.Join(dir, "nautilus.yaml"), []byte(manifest(c.auth)), 0o644)
+		out, _ := checkInDir(t, dir)
+		if got := strings.Contains(out, "alarms.channels.push: nobody can sign in"); got != c.warns {
+			t.Errorf("%s: warned %v, want %v\n%s", c.name, got, c.warns, out)
+		}
+	}
+}

@@ -504,3 +504,100 @@ claims:
     source: "#the-shape"
     tests: []
     note: No test found for the naut alarms list command.
+
+  - id: ALM-046
+    claim: >-
+      A Web Push subscription belongs to the person the signed-in browser
+      session names, never one in the request body, and only a person (a
+      local user or OIDC) may hold one: a service token, NAUTILUS_TOKEN or a
+      personal access token is refused.
+    source: "#channels"
+    tests:
+      - go ./server TestPushSubscribeBindsToTheSessionAndKeepsNoSecretAnywhere
+      - go ./server TestPushIsForPeopleOnly
+
+  - id: ALM-047
+    claim: >-
+      A subscription's endpoint and keys are never in a response, the
+      journal, the log or the retain store in the clear: retain holds them
+      sealed under a key derived from the push key.
+    source: "#channels"
+    tests:
+      - go ./server TestPushSubscribeBindsToTheSessionAndKeepsNoSecretAnywhere
+      - go ./internal/webpush TestRegistrySealsAndOpens
+      - go ./internal/webpush TestSealBindsCredAndGroups
+
+  - id: ALM-048
+    claim: >-
+      A subscription ends when its person does (a changed password, a
+      removed or disabled user) with no live session needed, and signing out
+      does not end it.
+    source: "#channels"
+    tests:
+      - go ./server TestPushEndsWithThePersonNotTheSession
+      - go ./server TestPushStaysWhenSomeoneElseChanges
+      - go ./server TestPushSendChecksStandingNow
+
+  - id: ALM-049
+    claim: >-
+      A users file that cannot be read ends nothing: nobody is paged, and no
+      subscription is dropped, until it can be read.
+    source: "#channels"
+    tests:
+      - go ./server TestPushUnreadableUsersFileRevokesNothing
+
+  - id: ALM-050
+    claim: >-
+      When a pass would end more than half the subscriptions across two or
+      more people, the sweep holds them (kept, not sent, a system alarm
+      raised) instead of deleting them, and they end only when they stand
+      again or a person runs naut alarms push confirm-revocations.
+    source: "#channels"
+    tests:
+      - go ./server TestPushSweepHoldsAMassRevocation
+
+  - id: ALM-051
+    claim: >-
+      Only the leader pages, takes a subscription or revokes one; a standby
+      does none of them.
+    source: "#channels"
+    tests:
+      - go ./server TestPushStandbyDoesNothing
+
+  - id: ALM-052
+    claim: >-
+      The controller sends a push only to an https push service on a public
+      address, follows no redirect, and refuses a name that resolves to a
+      private address unless alarms.channels.push.allow-hosts names it.
+    source: "#channels"
+    tests:
+      - go ./internal/webpush TestPolicyCheckEndpoint
+      - go ./internal/webpush TestDialRefusesPrivateResolution
+      - go ./internal/webpush TestSendFollowsNoRedirect
+
+  - id: ALM-053
+    claim: >-
+      A push is encrypted as RFC 8291 specifies and identified as RFC 8292
+      (VAPID) specifies.
+    source: "#channels"
+    tests:
+      - go ./internal/webpush TestEncryptRFC8291AppendixA
+      - go ./internal/webpush TestVAPIDRFC8292ExampleVerifies
+      - go ./internal/webpush TestSendRoundTrip
+
+  - id: ALM-054
+    claim: >-
+      The first naut run makes the push key on a controller that is not half
+      of a pair; a pair member makes none and says how to copy the file.
+    source: "#channels"
+    tests:
+      - go ./cmd/naut TestPushKeyIsMadeOnceAndNeverOnAPair
+
+  - id: ALM-055
+    claim: >-
+      A subscription sealed under another push key is kept, never sent, and
+      counted.
+    source: "#channels"
+    tests:
+      - go ./server TestPushSendSkipsSealedRows
+      - go ./server TestPushSurvivesARestartAndAnotherKeyKeepsTheRows
