@@ -35,6 +35,11 @@
 			<span class="who" title={`Roles: ${me.roles.join(', ') || 'none'}`}>
 				<Icon name="user" size={14} />{auth.user}
 			</span>
+			{#if me.session?.local}
+				<span class="pw" title="This sign-in is not shared with the other controller yet: if it takes over first, you will be asked to sign in again">
+					<Icon name="exclamation-triangle" size={12} />local session
+				</span>
+			{/if}
 			{#if pw?.held}
 				<span
 					class="pw"

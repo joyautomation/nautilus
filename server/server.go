@@ -415,6 +415,9 @@ type Options struct {
 	// log's index and takes its place. Neither: /api/notes answers 404.
 	Notes    *notes.Store
 	NotesLog *NotesLog
+	// SessionLog, on a redundant pair, carries browser sessions through the
+	// pair's operator log so they survive a takeover (#716).
+	SessionLog *SessionLog
 
 	// HMI, when set, serves a built HMI — a SvelteKit `adapter-static`
 	// build, or any other static SPA bundle — at "/", so the controller is
@@ -769,6 +772,10 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 			if s.policy != nil {
 				s.sessions = newSessions(s.policy.Session())
 				s.sessions.OnEnd(s.endSessionStreams)
+				if sl := opts[0].SessionLog; sl != nil {
+					sl.bind(s.sessions)
+					sl.OnLocal(s.journalLocalSession)
+				}
 				s.signin = newSignInGate()
 				if opts[0].OIDC != nil && s.policy.OIDC() {
 					s.oidc, s.oidcFlows, s.oidcTickets, s.oidcRedirect = opts[0].OIDC, newOIDCFlows(), newOIDCTickets(), opts[0].OIDCRedirectURL
@@ -1174,6 +1181,15 @@ func (s *Server) endSessionsAsStandby() {
 			Detail: map[string]any{"reason": "this controller is now a standby: browser sessions live on the leader", "sessions": n},
 			Result: audit.ResultOK})
 	}
+}
+
+// journalLocalSession records a sign-in the operator log did not commit: it
+// is valid on this controller only until the log comes back (#716).
+func (s *Server) journalLocalSession(se session) {
+	slog.Warn("auth: a session stays local to this controller: the operator log did not commit it; it is replicated when the log returns", "user", se.key())
+	s.audit.record(audit.Entry{User: se.key(), Source: audit.SourceSystem, Action: "auth.session-local",
+		Detail: map[string]any{"session": se.hash, "reason": "the operator log did not commit the sign-in: the session is valid on this controller only until it does"},
+		Result: audit.ResultOK})
 }
 
 // standbyLeader reports whether this controller is a standby that

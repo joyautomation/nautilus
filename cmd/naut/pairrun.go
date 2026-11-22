@@ -71,8 +71,9 @@ type pairMember struct {
 	// once the runtime exists (startLog); 503 until then.
 	logH       swapHandler
 	log        *oplog.Node
-	al         *server.AlarmLog // nil without alarms
-	nl         *server.NotesLog // the pair's operator notes (#720)
+	al         *server.AlarmLog   // nil without alarms
+	nl         *server.NotesLog   // the pair's operator notes (#720)
+	sess       *server.SessionLog // the pair's browser sessions (#716)
 	rt         *runtime.Runtime
 	logStop    context.CancelFunc
 	logDone    chan struct{}
@@ -483,6 +484,9 @@ func (m *pairMember) Close() {
 		m.logStop()
 		<-m.logDone
 		m.log.Close()
+		if m.sess != nil {
+			m.sess.Close()
+		}
 	}
 	m.q.Node().Close()
 }
@@ -534,8 +538,14 @@ func (m *pairMember) startLog(rt *runtime.Runtime, wait time.Duration, eng *alar
 	// from it by replay, here, and emptied when a history is superseded.
 	nl := server.NewNotesLog()
 	m.nl = nl
+	sess := server.NewSessionLog()
+	m.sess = sess
+	sess.SetFile(filepath.Join(filepath.Dir(m.o.StatePath), "session-ends.json"))
 	apply := func(e oplog.Entry) error {
 		if done, err := nl.Apply(e); done {
+			return err
+		}
+		if done, err := sess.Apply(e); done {
 			return err
 		}
 		if e.Kind == oplog.KindLapse && al != nil {
@@ -614,6 +624,7 @@ func (m *pairMember) startLog(rt *runtime.Runtime, wait time.Duration, eng *alar
 	m.q.SetLogStatus(func() *leader.LogStatus { return m.logStatus() })
 	sl.Attach(n)
 	nl.Attach(n)
+	sess.Attach(n)
 	if al != nil {
 		al.Attach(n)
 	}

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/joyautomation/nautilus/auth"
+	"github.com/joyautomation/nautilus/oplog"
 )
 
 // The browser sign-in's cookie (#708 PR 5b): HttpOnly, SameSite=Strict,
@@ -61,6 +62,11 @@ type session struct {
 	// that raced the sign-in, before its revocation could see the
 	// session) acts no more.
 	cred string
+	// local marks a session issued here that the operator log has not
+	// committed (the log is read-only, or has not answered yet): it is valid
+	// on this controller only, and becomes replicated if the log commits it
+	// (#716). A session adopted from the log, or committed, is not local.
+	local bool
 }
 
 // principal is who the session acts as: user:<name>, or oidc:<name> with
@@ -94,10 +100,32 @@ type sessions struct {
 	mu     sync.Mutex
 	byHash map[string]*session
 	onEnd  []func(session)
+
+	// rep, when set, carries sessions to the other controller of a pair
+	// through the operator log (#716); nil on a lone controller.
+	rep sessionReplicator
+	// synced says whether the log's copy here is known complete (ask it through
+	// syncedNow, never with mu held). Without it
+	// a session that came through the log is not honoured: the end of it may
+	// be in a part of the log this copy lacks.
+	synced func() bool
+	// ended remembers the hashes the log ended, until they would have
+	// expired, so an open that arrives after its end (a replay, a late
+	// retry) does not bring the session back.
+	ended map[string]time.Time
+}
+
+// sessionReplicator is what the store tells the log about.
+type sessionReplicator interface {
+	opened(session)
+	// endedSessions proposes the ends; with wait it gives them a moment to
+	// commit (a sign-out), without it never blocks (a sign-in that replaces a
+	// cookie, an eviction).
+	endedSessions(ended []session, wait bool)
 }
 
 func newSessions(life time.Duration) *sessions {
-	return &sessions{now: time.Now, life: life, byHash: map[string]*session{}}
+	return &sessions{now: time.Now, life: life, byHash: map[string]*session{}, ended: map[string]time.Time{}}
 }
 
 // clock is the store's time now, its clock read under the lock (a test
@@ -134,10 +162,74 @@ func (ss *sessions) OnEnd(fn func(session)) {
 	ss.mu.Unlock()
 }
 
-func (ss *sessions) told(ended []session) {
+func (ss *sessions) told(ended []session) { ss.toldWait(ended, false) }
+
+func (ss *sessions) toldWait(ended []session, wait bool) {
 	if len(ended) == 0 {
 		return
 	}
+	ss.mu.Lock()
+	fns := append([]func(session){}, ss.onEnd...)
+	rep := ss.rep
+	ss.mu.Unlock()
+	for _, se := range ended {
+		for _, fn := range fns {
+			fn(se)
+		}
+	}
+	if rep != nil {
+		rep.endedSessions(ended, wait)
+	}
+}
+
+// tombLocked remembers that se ended, until it would have expired, so an
+// open of it that reaches the log late (a retry that was in flight, a replay)
+// does not bring it back. ss.mu held.
+func (ss *sessions) tombLocked(se *session) {
+	if ss.rep != nil && ss.now().Before(se.expires) {
+		ss.ended[se.hash] = se.expires
+	}
+}
+
+// tomb remembers an end the log owes: the session is not honoured, and an
+// open of it is refused, until it would have expired.
+func (ss *sessions) tomb(hash string, until time.Time) {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	if ss.now().Before(until) {
+		ss.ended[hash] = until
+		delete(ss.byHash, hash)
+	}
+}
+
+// pruneLocked drops what has expired: ended hashes and sessions. ss.mu held.
+func (ss *sessions) pruneLocked() {
+	now := ss.now()
+	for h, until := range ss.ended {
+		if !now.Before(until) {
+			delete(ss.ended, h)
+		}
+	}
+	for h, se := range ss.byHash {
+		if !now.Before(se.expires) {
+			delete(ss.byHash, h)
+		}
+	}
+}
+
+// syncedNow asks the log whether this copy is complete. It must be called
+// without ss.mu held: the log applies entries under its own lock and then
+// takes ss.mu, so asking it while holding ss.mu is a lock-order deadlock.
+func (ss *sessions) syncedNow() bool {
+	ss.mu.Lock()
+	f, rep := ss.synced, ss.rep
+	ss.mu.Unlock()
+	return rep == nil || f == nil || f()
+}
+
+// toldReplicated is told for sessions the log ended: the streams close, and
+// nothing is proposed back.
+func (ss *sessions) toldReplicated(ended []session) {
 	ss.mu.Lock()
 	fns := append([]func(session){}, ss.onEnd...)
 	ss.mu.Unlock()
@@ -172,6 +264,8 @@ func (ss *sessions) start(se session) (string, session) {
 	key := se.key()
 
 	ss.mu.Lock()
+	se.local = ss.rep != nil
+	ss.pruneLocked()
 	var mine []*session
 	for h, o := range ss.byHash {
 		if !now.Before(o.expires) {
@@ -186,13 +280,19 @@ func (ss *sessions) start(se session) (string, session) {
 	if len(mine) >= maxUserSessions {
 		sort.Slice(mine, func(i, j int) bool { return mine[i].created.Before(mine[j].created) })
 		for _, o := range mine[:len(mine)-maxUserSessions+1] {
+			ss.tombLocked(o)
 			delete(ss.byHash, o.hash)
 			ended = append(ended, *o)
 		}
 	}
-	ss.byHash[se.hash] = &se
+	held := se // the store's own copy: the log may change it while the caller reads se
+	ss.byHash[se.hash] = &held
+	rep := ss.rep
 	ss.mu.Unlock()
 	ss.told(ended)
+	if rep != nil {
+		rep.opened(se)
+	}
 	return id, se
 }
 
@@ -203,6 +303,7 @@ func (ss *sessions) lookup(id string) (session, bool) {
 		return session{}, false
 	}
 	h := sessionHash(id)
+	syn := ss.syncedNow() // before the lock: see syncedNow
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 	se, ok := ss.byHash[h]
@@ -213,33 +314,51 @@ func (ss *sessions) lookup(id string) (session, bool) {
 		delete(ss.byHash, h)
 		return session{}, false
 	}
+	if ss.rep != nil && !se.local && !syn {
+		return session{}, false // came through the log, and this copy may lack its end
+	}
 	return *se, true
 }
 
-// end ends the session whose id this is (a sign-out).
-func (ss *sessions) end(id string) (session, bool) {
+// end ends the session whose id this is, without waiting for the pair's log
+// to carry the end (a sign-in replacing its cookie).
+func (ss *sessions) end(id string) (session, bool) { return ss.endID(id, false) }
+
+// signOut ends the session whose id this is (a sign-out) and gives the log a
+// moment to carry the end, so a takeover right after cannot bring it back.
+func (ss *sessions) signOut(id string) (session, bool) { return ss.endID(id, true) }
+
+func (ss *sessions) endID(id string, wait bool) (session, bool) {
 	h := sessionHash(id)
 	ss.mu.Lock()
 	se, ok := ss.byHash[h]
 	if ok {
+		ss.tombLocked(se)
 		delete(ss.byHash, h)
 	}
 	ss.mu.Unlock()
 	if !ok {
 		return session{}, false
 	}
-	ss.told([]session{*se})
+	ss.toldWait([]session{*se}, wait)
 	return *se, true
 }
 
-// endAll ends every session and says how many there were.
+// endAll ends every session and says how many there were. In a pair
+// (rep set) only the local ones, which the log never carried: the others
+// are the pair's, valid on whichever controller leads, and are ended by
+// the log's own end entries (#716).
 func (ss *sessions) endAll() int {
 	ss.mu.Lock()
 	var ended []session
-	for _, se := range ss.byHash {
+	for h, se := range ss.byHash {
+		if ss.rep != nil && !se.local {
+			continue
+		}
+		ss.tombLocked(se)
 		ended = append(ended, *se)
+		delete(ss.byHash, h)
 	}
-	ss.byHash = map[string]*session{}
 	ss.mu.Unlock()
 	ss.told(ended)
 	return len(ended)
@@ -253,6 +372,7 @@ func (ss *sessions) endPrincipal(key string) int {
 	var ended []session
 	for h, se := range ss.byHash {
 		if se.key() == key {
+			ss.tombLocked(se)
 			delete(ss.byHash, h)
 			ended = append(ended, *se)
 		}
@@ -280,6 +400,7 @@ func (ss *sessions) elevated(hash, cred string) (session, bool) {
 
 // byHashLive is the live session hash names. An expired one is dropped.
 func (ss *sessions) byHashLive(hash string) (session, bool) {
+	syn := ss.syncedNow()
 	ss.mu.Lock()
 	defer ss.mu.Unlock()
 	se, ok := ss.byHash[hash]
@@ -288,6 +409,9 @@ func (ss *sessions) byHashLive(hash string) (session, bool) {
 	}
 	if !ss.now().Before(se.expires) {
 		delete(ss.byHash, hash)
+		return session{}, false
+	}
+	if ss.rep != nil && !se.local && !syn {
 		return session{}, false
 	}
 	return *se, true
@@ -328,6 +452,7 @@ func (ss *sessions) elevateFailed(hash string) (fails int, ended bool) {
 	se.fails++
 	fails = se.fails
 	if fails >= maxElevateFails {
+		ss.tombLocked(se)
 		delete(ss.byHash, hash)
 	}
 	cp := *se
@@ -337,4 +462,62 @@ func (ss *sessions) elevateFailed(hash string) (fails int, ended bool) {
 		return fails, true
 	}
 	return fails, false
+}
+
+// adopt takes a session the log opened (on the other controller, or
+// replayed): its hash, who it is, when it ends. Never an elevation:
+// authAt stays zero, so an elevated action asks for the password again.
+// An end the log has already carried, or an expiry, wins.
+func (ss *sessions) adopt(e oplog.SessionEntry) {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	ss.pruneLocked()
+	expires := time.UnixMilli(e.Expires)
+	if !ss.now().Before(expires) {
+		return
+	}
+	if _, gone := ss.ended[e.Hash]; gone {
+		return
+	}
+	if se, ok := ss.byHash[e.Hash]; ok {
+		se.local = false // the log has it now
+		return
+	}
+	ss.byHash[e.Hash] = &session{hash: e.Hash, user: e.User, oidc: e.OIDC, issuer: e.Issuer, sub: e.Sub, groups: e.Groups,
+		created: time.UnixMilli(e.Created), expires: expires, cred: e.Cred}
+}
+
+// endByLog ends the session the log ended and remembers its hash until it
+// would have expired.
+func (ss *sessions) endByLog(e oplog.SessionEntry) {
+	ss.mu.Lock()
+	ss.pruneLocked()
+	until := time.UnixMilli(e.Expires)
+	if ss.now().Before(until) {
+		ss.ended[e.Hash] = until
+	}
+	se, ok := ss.byHash[e.Hash]
+	if ok {
+		delete(ss.byHash, e.Hash)
+	}
+	ss.mu.Unlock()
+	if ok {
+		ss.toldReplicated([]session{*se})
+	}
+}
+
+// has says whether the session is still held (not expired, not ended).
+func (ss *sessions) has(hash string) bool {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	se, ok := ss.byHash[hash]
+	return ok && ss.now().Before(se.expires)
+}
+
+// isLocal says whether the session is held and still local.
+func (ss *sessions) isLocal(hash string) bool {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	se, ok := ss.byHash[hash]
+	return ok && se.local
 }
