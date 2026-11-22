@@ -155,7 +155,7 @@ func TestExpandedStationThroughTiad(t *testing.T) {
 	if r, err := s.Compile(ctx, true, true); err != nil || r.Result != "success" { // P3
 		t.Fatalf("compile: %+v %v", r, err)
 	}
-	dr, err := s.Download(ctx, tiad.DownloadRequest{Address: cpu.Address, Hardware: true, Announced: true, DryRun: true})
+	dr, err := s.Download(ctx, tiad.DownloadRequest{Address: cpu.Address, Hardware: true, Announced: true, DryRun: true, Secrets: &sec})
 	if err != nil || !dr.DryRun || dr.Downloaded || len(f.Downloads()) != 0 {
 		t.Fatalf("dry run: %+v %v, downloads %d", dr, err, len(f.Downloads()))
 	}
