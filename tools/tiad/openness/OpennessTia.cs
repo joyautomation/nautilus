@@ -1592,14 +1592,35 @@ namespace Tiad.Openness
         {
             foreach (PlcBlock b in g.Blocks)
             {
-                into.Add(new ProjectBlock
+                var pb = new ProjectBlock
                 {
                     Name = b.Name,
                     Type = b.GetType().Name,
                     Number = b.Number,
                     Group = path,
                     Modified = b.ModifiedDate.ToUniversalTime().Ticks.ToString(CultureInfo.InvariantCulture),
-                });
+                };
+                OB ob = b as OB;
+                if (ob != null)
+                {
+                    pb.Class = ob.SecondaryType ?? "";
+                    // CyclicTime (microseconds) exists on a cyclic
+                    // interrupt OB only (TIA VM, 2026-11-22).
+                    // A cycle it cannot read (-1) never matches an asked
+                    // one, and fails no import of a block it does not own.
+                    if (pb.Class == CyclicObs.Cyclic)
+                    {
+                        try
+                        {
+                            pb.CycleMicros = Convert.ToInt64(b.GetAttribute("CyclicTime"), CultureInfo.InvariantCulture);
+                        }
+                        catch (EngineeringException)
+                        {
+                            pb.CycleMicros = -1;
+                        }
+                    }
+                }
+                into.Add(pb);
             }
             foreach (PlcBlockUserGroup u in g.Groups) ProjectBlocks(u, path == "" ? u.Name : path + "/" + u.Name, into);
         }
@@ -1615,6 +1636,55 @@ namespace Tiad.Openness
                 p = p.Parent;
             }
             return false;
+        }
+
+        // ImportBlock imports one block's SimaticML into group (made when it
+        // is not there), from a file of its own that is deleted after.
+        public void ImportBlock(object project, string group, string xml)
+        {
+            Tia<bool>(delegate
+            {
+                PlcSoftware sw = Software(Of(project).Project);
+                PlcBlockUserGroup ug = sw.BlockGroup.Groups.Find(group);
+                if (ug == null) ug = sw.BlockGroup.Groups.Create(group);
+                string f = Path.Combine(Path.GetTempPath(), "tiad-" + Guid.NewGuid().ToString("N") + ".xml");
+                File.WriteAllText(f, xml, new System.Text.UTF8Encoding(false));
+                try
+                {
+                    ug.Blocks.Import(new FileInfo(f), ImportOptions.None);
+                }
+                finally
+                {
+                    File.Delete(f);
+                }
+                return true;
+            });
+        }
+
+        // DeleteBlock deletes the block named name in group or its user
+        // groups, and nothing outside group.
+        public void DeleteBlock(object project, string group, string name)
+        {
+            Tia<bool>(delegate
+            {
+                PlcSoftware sw = Software(Of(project).Project);
+                PlcBlockUserGroup ug = sw.BlockGroup.Groups.Find(group);
+                PlcBlock b = ug == null ? null : FindIn(ug, name);
+                if (b == null) throw new TiaException("no block \"" + name + "\" in group \"" + group + "\" to delete");
+                b.Delete();
+                return true;
+            });
+        }
+
+        static PlcBlock FindIn(PlcBlockGroup g, string name)
+        {
+            foreach (PlcBlock b in g.Blocks) if (string.Equals(b.Name, name, StringComparison.OrdinalIgnoreCase)) return b;
+            foreach (PlcBlockUserGroup u in g.Groups)
+            {
+                PlcBlock f = FindIn(u, name);
+                if (f != null) return f;
+            }
+            return null;
         }
 
         // Blocks is every program block the project holds, with its group.

@@ -733,6 +733,7 @@ namespace Tiad
                 List<string> srcs = r.Strs("sources");
                 List<string> tables = r.Strs("tagTables");
                 bool prune = r.Bool("prune");
+                List<CyclicOB> obs = CyclicObs.Read(r.Children("obs"));
                 r.Done();
                 if (group == "") throw TiadException.BadRequest("group is empty");
                 TiadException badGroup = Ownership.GroupRefused(group);
@@ -759,27 +760,60 @@ namespace Tiad
                     }
                     TiadException types = Ownership.TypesRefused(declared);
                     if (types != null) throw types;
+                    TiadException obSources = CyclicObs.SourcesRefused(declared, obs);
+                    if (obSources != null) throw obSources;
                     List<ProjectBlock> before = t.Blocks(s.Handle);
                     List<string> conflicts = Ownership.Conflicts(declared, before, group);
                     if (conflicts.Count > 0) throw Ownership.Refusal(conflicts, group);
+                    TiadException clash = CyclicObs.ConstantClash(declared, before, obs);
+                    if (clash != null) throw clash;
+                    List<OBStep> steps = CyclicObs.Plan(obs, before, group, prune);
                     s.Compiled = false;
                     // Unusable until the blocks outside the group compare
                     // the same afterwards, whether the import returns or
                     // throws: a failure part-way may have replaced one.
                     s.ForeignChanged = true;
+                    // touched: an OB was deleted or imported. A failure after
+                    // that may leave an OB gone or an empty stub, so the
+                    // session then stays unusable whatever else compares.
+                    bool touched = false;
                     SoftwareResult sr;
                     try
                     {
+                        // The cyclic interrupt OBs first (an OB source with
+                        // no OB of its name would make a program cycle OB):
+                        // every delete before any import, so OBs may trade
+                        // numbers.
+                        foreach (var st in steps)
+                        {
+                            if (st.Action != "removed" && st.Action != "recreated") continue;
+                            touched = true;
+                            t.DeleteBlock(s.Handle, group, st.Name);
+                        }
+                        foreach (var st in steps)
+                        {
+                            if (st.Action != "created" && st.Action != "recreated") continue;
+                            touched = true;
+                            t.ImportBlock(s.Handle, group, CyclicObs.Xml(st.Want));
+                        }
                         sr = t.ImportSoftware(s.Handle, group, sources, tagTables, prune);
                     }
                     catch
                     {
-                        if (Ownership.Changed(before, t.Blocks(s.Handle), group).Count == 0) s.ForeignChanged = false;
+                        if (!touched && Ownership.Changed(before, t.Blocks(s.Handle), group).Count == 0) s.ForeignChanged = false;
                         throw;
                     }
-                    List<string> changed = Ownership.Changed(before, t.Blocks(s.Handle), group);
+                    List<ProjectBlock> after = t.Blocks(s.Handle);
+                    List<string> changed = Ownership.Changed(before, after, group);
                     if (changed.Count > 0) throw Ownership.ForeignChangedError(changed, group);
+                    // A source that declares an asked OB must have made its
+                    // body: else the OB is an empty stub (or gone, with prune).
+                    List<string> failedObs = CyclicObs.FailedSources(declared, sr.Results);
+                    if (failedObs.Count > 0) throw CyclicObs.VerifyFailed(failedObs);
+                    List<string> bad = CyclicObs.Verify(obs, after, group);
+                    if (bad.Count > 0) throw CyclicObs.VerifyFailed(bad);
                     s.ForeignChanged = false;
+                    sr.Obs = steps;
                     return sr;
                 });
                 return res.ToJson();

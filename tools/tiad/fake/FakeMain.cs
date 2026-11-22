@@ -31,6 +31,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Threading;
@@ -255,6 +256,10 @@ namespace Tiad.Fake
         // block outside the group that the agent's reading of the sources
         // missed, so the agent's check after the import must catch it.
         bool importReplacesForeign;
+        // obImportIgnoresClass makes ImportBlock make a program cycle OB,
+        // whatever the SimaticML asks: a TIA that does not keep what the
+        // agent asked, which its check after the import must catch.
+        bool obImportIgnoresClass;
         int askFirst = 1;
         string failAfterDecide = "";
         string failInDoubt = "";
@@ -616,6 +621,17 @@ namespace Tiad.Fake
             }
         }
 
+        public bool ObImportIgnoresClass
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return obImportIgnoresClass;
+                }
+            }
+        }
+
         public bool ImportReplacesForeign
         {
             get
@@ -752,6 +768,7 @@ namespace Tiad.Fake
             bool keeps = r.Bool("keepsLogon");
             bool credsAfter = r.Bool("credentialsAfterChecks");
             bool replaces = r.Bool("importReplacesForeign");
+            bool ignoresClass = r.Bool("obImportIgnoresClass");
             int? first = r.OptInt("askFirst");
             string after = r.Str("failAfterDecide");
             string inDoubt = r.Str("failInDoubt");
@@ -810,6 +827,7 @@ namespace Tiad.Fake
                 keepsLogon = keeps;
                 credentialsAfterChecks = credsAfter;
                 importReplacesForeign = replaces;
+                obImportIgnoresClass = ignoresClass;
                 askFirst = first.HasValue ? first.Value : 1;
                 failAfterDecide = after;
                 failInDoubt = inDoubt;
@@ -862,6 +880,10 @@ namespace Tiad.Fake
         // check missed). Main is then an FB, still at the root.
         public Dictionary<string, string> GroupOf = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         public bool MainReplaced;
+        // ObInfo is each imported OB's class, number and cycle (Class,
+        // Number, CycleMicros), as TIA keeps them across a source that
+        // replaces the OB's body.
+        public Dictionary<string, ProjectBlock> ObInfo = new Dictionary<string, ProjectBlock>(StringComparer.OrdinalIgnoreCase);
         // Changed is true until a download loads the project as it is.
         public bool Changed = true;
         // Protection is the CPU's configuration protection as the project
@@ -1491,22 +1513,40 @@ namespace Tiad.Fake
                     Block b = BlockHead(line.TrimEnd('\r'));
                     if (b != null) heads.Add(b);
                 }
-                string conflict = ObConflict(p, heads);
-                if (heads.Count == 0)
+                string conflict = ConstantClash(p, heads);
+                // FAKE_SOURCE_ERROR in a source is an SCL error TIA reports
+                // as the source not importing.
+                bool broken = File.ReadAllText(src.FullPath, Encoding.UTF8).Contains("FAKE_SOURCE_ERROR");
+                if (broken)
+                {
+                    sr.Ok = false;
+                    sr.Messages.Add("An error occurred during code generation. The block generation has been stopped. Row 000003: syntax error.");
+                }
+                else if (heads.Count == 0)
                 {
                     sr.Ok = false;
                     sr.Messages.Add("no block found in source");
                 }
                 else if (conflict != null)
                 {
-                    // As on the TIA VM (2026-11-22): an ORGANIZATION_BLOCK
-                    // source while another OB holds number 1 stops that
-                    // source's block generation. Why (an OB source is a
-                    // program cycle OB, numbered 1) is inferred, not proven.
+                    // As on the TIA VM (2026-11-22): a block named OB_<x>
+                    // while an OB x exists clashes with TIA's system
+                    // constant OB_<x>, and the source's generation stops.
                     sr.Ok = false;
                     sr.Messages.Add("An error occurred during code generation. The block generation has been stopped. Row 000000: Type conflict: Object \"" + conflict + "\" cannot be overwritten.");
                 }
-                else made.AddRange(heads);
+                else
+                {
+                    // An OB source keeps an OB of its name as it is (class,
+                    // number, cycle); with none it makes a program cycle
+                    // OB, numbered from 123 (TIA VM, 2026-11-22).
+                    foreach (var h in heads)
+                    {
+                        if (h.Kind == "OB" && !p.ObInfo.ContainsKey(h.Name))
+                            p.ObInfo[h.Name] = new ProjectBlock { Name = h.Name, Type = "OB", Class = "ProgramCycle", Number = FreeOb(p, 123) };
+                    }
+                    made.AddRange(heads);
+                }
                 res.Results.Add(sr);
             }
             foreach (var t in tagTables) res.Results.Add(new SourceResult { Path = t.Path, Ok = true });
@@ -1517,7 +1557,11 @@ namespace Tiad.Fake
                 string g;
                 p.GroupOf.TryGetValue(b.Name, out g);
                 // Prune deletes only in the import's group.
-                if (prune && Ownership.Owned(g ?? "", group)) continue;
+                if (prune && Ownership.Owned(g ?? "", group))
+                {
+                    if (!made.Exists(delegate(Block m) { return string.Equals(m.Name, b.Name, StringComparison.OrdinalIgnoreCase); })) p.ObInfo.Remove(b.Name);
+                    continue;
+                }
                 byName[b.Name.ToLowerInvariant()] = b;
             }
             foreach (var b in made)
@@ -1817,32 +1861,92 @@ namespace Tiad.Fake
         static List<ProjectBlock> ProjectBlocks(FakeProject p)
         {
             var l = new List<ProjectBlock>();
-            var next = new Dictionary<string, int> { { "OB", 1 }, { "FB", 1 }, { "FC", 1 }, { "DB", 1 } };
-            string mainKind = p.MainReplaced ? "FB" : "OB";
-            l.Add(new ProjectBlock { Name = "Main", Type = mainKind, Number = next[mainKind]++, Modified = p.MainReplaced ? "replaced" : "made with the CPU" });
+            var next = new Dictionary<string, int> { { "FB", 1 }, { "FC", 1 }, { "DB", 1 } };
+            if (p.MainReplaced) l.Add(new ProjectBlock { Name = "Main", Type = "FB", Number = next["FB"]++, Modified = "replaced" });
+            else l.Add(new ProjectBlock { Name = "Main", Type = "OB", Number = 1, Class = "ProgramCycle", Modified = "made with the CPU" });
             foreach (var b in p.Blocks)
             {
-                if (!next.ContainsKey(b.Kind)) continue;
                 string g;
                 p.GroupOf.TryGetValue(b.Name, out g);
+                ProjectBlock ob;
+                if (b.Kind == "OB" && p.ObInfo.TryGetValue(b.Name, out ob))
+                {
+                    l.Add(new ProjectBlock { Name = b.Name, Type = "OB", Number = ob.Number, Class = ob.Class, CycleMicros = ob.CycleMicros, Group = g ?? "" });
+                    continue;
+                }
+                if (!next.ContainsKey(b.Kind)) continue;
                 l.Add(new ProjectBlock { Name = b.Name, Type = b.Kind == "DB" ? "GlobalDB" : b.Kind, Number = next[b.Kind]++, Group = g ?? "" });
             }
             return l;
         }
 
-        // ObConflict is the OB that holds number 1, when heads declare an
-        // OB of another name and some OB already holds it; else null.
-        static string ObConflict(FakeProject p, List<Block> heads)
+        // FreeOb is the first OB number from from that no OB holds.
+        static int FreeOb(FakeProject p, int from)
         {
+            var used = new HashSet<int>();
+            foreach (var b in ProjectBlocks(p)) if (b.Type == "OB") used.Add(b.Number);
+            int n = from;
+            while (used.Contains(n)) n++;
+            return n;
+        }
+
+        // ConstantClash is a head named OB_<x> while an OB x exists: TIA's
+        // system constant for x has that name; else null.
+        static string ConstantClash(FakeProject p, List<Block> heads)
+        {
+            var obs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var b in ProjectBlocks(p)) if (b.Type == "OB") obs.Add(b.Name);
             foreach (var h in heads)
             {
-                if (h.Kind != "OB") continue;
-                foreach (var b in ProjectBlocks(p))
-                {
-                    if (b.Type == "OB" && b.Number == 1 && !string.Equals(b.Name, h.Name, StringComparison.OrdinalIgnoreCase)) return h.Name;
-                }
+                if (h.Name.Length > 3 && h.Name.StartsWith("OB_", StringComparison.OrdinalIgnoreCase) && obs.Contains(h.Name.Substring(3))) return h.Name;
             }
             return null;
+        }
+
+        static readonly System.Text.RegularExpressions.Regex XmlName = new System.Text.RegularExpressions.Regex("<Name>([^<]*)</Name>");
+        static readonly System.Text.RegularExpressions.Regex XmlNumber = new System.Text.RegularExpressions.Regex("<Number>([0-9]+)</Number>");
+        static readonly System.Text.RegularExpressions.Regex XmlCycle = new System.Text.RegularExpressions.Regex("<CyclicTime>([0-9]+)</CyclicTime>");
+        static readonly System.Text.RegularExpressions.Regex XmlClass = new System.Text.RegularExpressions.Regex("<SecondaryType>([^<]*)</SecondaryType>");
+
+        // ImportBlock is TIA's SimaticML import of one OB into group: it
+        // fails when another OB holds the number.
+        public void ImportBlock(object project, string group, string xml)
+        {
+            script.Enter("ImportBlock");
+            var p = (FakeProject)project;
+            string name = System.Security.SecurityElement.FromString("<x>" + XmlName.Match(xml).Groups[1].Value + "</x>").Text;
+            int number = int.Parse(XmlNumber.Match(xml).Groups[1].Value, CultureInfo.InvariantCulture);
+            foreach (var b in ProjectBlocks(p))
+            {
+                if (b.Type == "OB" && b.Number == number) throw new TiaException("Error when calling method 'Import': the number " + number + " is already used by \"" + b.Name + "\"");
+                if (string.Equals(b.Name, name, StringComparison.OrdinalIgnoreCase)) throw new TiaException("Error when calling method 'Import': \"" + name + "\" already exists");
+            }
+            p.Changed = true;
+            p.Blocks.Add(new Block { Name = name, Kind = "OB" });
+            p.Blocks.Sort(delegate(Block a, Block b) { return string.CompareOrdinal(a.Name, b.Name); });
+            p.GroupOf[name] = group;
+            p.ObInfo[name] = new ProjectBlock
+            {
+                Name = name, Type = "OB", Number = number, Class = XmlClass.Match(xml).Groups[1].Value,
+                CycleMicros = long.Parse(XmlCycle.Match(xml).Groups[1].Value, CultureInfo.InvariantCulture),
+            };
+            if (script.ObImportIgnoresClass)
+            {
+                p.ObInfo[name].Class = "ProgramCycle";
+                p.ObInfo[name].CycleMicros = 0;
+            }
+        }
+
+        public void DeleteBlock(object project, string group, string name)
+        {
+            script.Enter("DeleteBlock");
+            var p = (FakeProject)project;
+            string g;
+            if (!p.GroupOf.TryGetValue(name, out g) || !Ownership.Owned(g, group) || p.Blocks.RemoveAll(delegate(Block b) { return string.Equals(b.Name, name, StringComparison.OrdinalIgnoreCase); }) == 0)
+                throw new TiaException("no block \"" + name + "\" in group \"" + group + "\" to delete");
+            p.Changed = true;
+            p.GroupOf.Remove(name);
+            p.ObInfo.Remove(name);
         }
 
         public List<ProjectBlock> Blocks(object project)
@@ -2111,6 +2215,13 @@ namespace Tiad.Fake
                 Obj bo = b.ToJson();
                 string g;
                 if (p.GroupOf.TryGetValue(b.Name, out g)) bo["group"] = g;
+                ProjectBlock oi;
+                if (p.ObInfo.TryGetValue(b.Name, out oi))
+                {
+                    bo["obClass"] = oi.Class;
+                    bo["obNumber"] = oi.Number;
+                    bo["obCycle"] = oi.CycleMicros.ToString(CultureInfo.InvariantCulture);
+                }
                 blocks.Add(bo);
             }
             o["blocks"] = blocks;
@@ -2177,6 +2288,13 @@ namespace Tiad.Fake
                 p.Blocks.Add(new Block { Name = (string)b["name"], Kind = (string)b["kind"] });
                 object g;
                 if (b.TryGetValue("group", out g) && g != null) p.GroupOf[(string)b["name"]] = (string)g;
+                object oc;
+                if (b.TryGetValue("obClass", out oc) && oc != null)
+                    p.ObInfo[(string)b["name"]] = new ProjectBlock
+                    {
+                        Name = (string)b["name"], Type = "OB", Class = (string)oc, Number = Convert.ToInt32(b["obNumber"], CultureInfo.InvariantCulture),
+                        CycleMicros = long.Parse((string)b["obCycle"], CultureInfo.InvariantCulture),
+                    };
             }
             object mr;
             p.MainReplaced = o.TryGetValue("mainReplaced", out mr) && mr is bool && (bool)mr;

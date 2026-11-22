@@ -334,7 +334,7 @@ namespace Tiad
         public static TiadException Unusable(string what)
         {
             return new TiadException(409, Kinds.UncleanSession,
-                "refusing " + what + ": an import on this session changed program blocks outside its group. Close it without saving");
+                "refusing " + what + ": an import on this session left the project as tiad did not ask (blocks outside its group changed, or a cyclic interrupt OB is not as asked). Close it without saving");
         }
 
         static string Label(ProjectBlock b)

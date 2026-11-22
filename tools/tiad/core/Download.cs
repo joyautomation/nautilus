@@ -884,6 +884,11 @@ namespace Tiad
         // a form that compares as text ("" when not read): a block
         // replaced with one of the same kind and number changes it.
         public string Modified = "";
+        // Class is an OB's SecondaryType ("ProgramCycle", "CyclicInterrupt",
+        // ...), "" for other blocks; CycleMicros a cyclic interrupt OB's
+        // CyclicTime in microseconds, 0 for any other block.
+        public string Class = "";
+        public long CycleMicros;
     }
 
     // OnlineCompare is one online compare: TIA's compare tree, and every

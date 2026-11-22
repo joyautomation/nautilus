@@ -2142,3 +2142,44 @@ func TestAgentKeepsASessionUnusableWhenAnImportFailsAfterReplacing(t *testing.T)
 		t.Fatalf("loaded %+v", l)
 	}
 }
+
+// TestAgentKeepsASessionUnusableWhenAnOBStepFails: once the agent deleted
+// or imported a cyclic interrupt OB, a failure after it (the OB's import,
+// or the sources' import) leaves the session unusable, even with nothing
+// outside the group changed: the OB may be gone or an empty stub (Fable
+// review on #1219).
+func TestAgentKeepsASessionUnusableWhenAnOBStepFails(t *testing.T) {
+	ob := "ORGANIZATION_BLOCK \"naut_OB_main\"\nVERSION : 0.1\nBEGIN\nEND_ORGANIZATION_BLOCK\n"
+	srcs := []string{"src/Main.scl", "src/OB.scl"}
+	for _, tc := range []struct {
+		why, call string
+		first     int // the cycle of a first, clean import (0: none)
+	}{
+		{"the OB's import fails after its delete", "ImportBlock", 100},
+		{"the sources' import fails after the OB's", "ImportSoftware", 0},
+	} {
+		t.Run(tc.call, func(t *testing.T) {
+			p, s := downloadReady(t)
+			c := p.Client()
+			for path, body := range map[string]string{"src/Main.scl": "FUNCTION_BLOCK \"naut_Main\"\nBEGIN\nEND_FUNCTION_BLOCK\n", "src/OB.scl": ob} {
+				if _, err := c.PutFile(ctx, path, []byte(body)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.first > 0 {
+				if _, err := s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: srcs, OBs: []tiad.CyclicOB{{Name: "naut_OB_main", Number: 30, CycleMS: tc.first}}}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			p.SetScript(t, tiadtest.Script{Failures: []tiadtest.ScriptedCall{{Call: tc.call, Message: tc.call + " failed part-way"}}})
+			_, err := s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: srcs, OBs: []tiad.CyclicOB{{Name: "naut_OB_main", Number: 30, CycleMS: 50}}})
+			if tiad.Kind(err) != tiad.KindOperationFailed || !strings.Contains(err.Error(), "failed part-way") {
+				t.Fatalf("%s: %v", tc.why, err)
+			}
+			p.SetScript(t, tiadtest.Script{})
+			if _, err := s.Save(ctx, false); tiad.Kind(err) != tiad.KindUncleanSession {
+				t.Fatalf("%s: a save after it = %v, want unclean_session", tc.why, err)
+			}
+		})
+	}
+}

@@ -64,6 +64,11 @@ type Target interface {
 	// TIA replacing a block outside the group that the agent's reading of
 	// the sources missed, which its check after the import must catch.
 	SetImportReplacesForeign(t testing.TB, on bool)
+	// SetOBImportIgnoresClass makes the fake TIA's OB import make a
+	// program cycle OB, whatever the SimaticML says: a TIA that does not
+	// keep what the agent asked, which its check after the import must
+	// catch.
+	SetOBImportIgnoresClass(t testing.TB, on bool)
 }
 
 // Loaded is one download that loaded a CPU.
@@ -127,6 +132,7 @@ func (g goFake) SetLogon(_ testing.TB, l LogonScript)     { g.f.SetLogon(l) }
 func (g goFake) SetImportReplacesForeign(_ testing.TB, on bool) {
 	g.f.SetImportReplacesForeign(on)
 }
+func (g goFake) SetOBImportIgnoresClass(_ testing.TB, on bool) { g.f.SetOBImportIgnoresClass(on) }
 func (g goFake) LoadOutside(_ testing.TB, address, file string) {
 	if file == "" {
 		g.f.LoadOutside(address)

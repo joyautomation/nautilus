@@ -57,6 +57,8 @@ type Script struct {
 	CredentialsAfterChecks bool `json:"credentialsAfterChecks,omitempty"`
 	// ImportReplacesForeign is SetImportReplacesForeign.
 	ImportReplacesForeign bool `json:"importReplacesForeign,omitempty"`
+	// OBImportIgnoresClass is SetOBImportIgnoresClass.
+	OBImportIgnoresClass bool `json:"obImportIgnoresClass,omitempty"`
 	// AskFirst is how many times the fake's TIA asks its first check
 	// (nil: once, as TIA does; 0 asks nothing at all and loads; 2 asks
 	// the same configuration twice).
@@ -334,6 +336,17 @@ func (p *Process) SetImportReplacesForeign(t testing.TB, on bool) {
 	t.Helper()
 	p.mu.Lock()
 	p.script.ImportReplacesForeign = on
+	s := p.script
+	p.mu.Unlock()
+	p.SetScript(t, s)
+}
+
+// SetOBImportIgnoresClass makes tiad-fake's OB import make program cycle
+// OBs (Target.SetOBImportIgnoresClass).
+func (p *Process) SetOBImportIgnoresClass(t testing.TB, on bool) {
+	t.Helper()
+	p.mu.Lock()
+	p.script.OBImportIgnoresClass = on
 	s := p.script
 	p.mu.Unlock()
 	p.SetScript(t, s)

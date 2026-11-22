@@ -90,6 +90,9 @@ namespace Tiad
     {
         public List<SourceResult> Results = new List<SourceResult>();
         public List<Block> Blocks = new List<Block>();
+        // Obs is what the import did for each cyclic interrupt OB the
+        // request asked for (CyclicObs.Plan), the agent's own.
+        public List<OBStep> Obs = new List<OBStep>();
 
         public Obj ToJson()
         {
@@ -100,6 +103,12 @@ namespace Tiad
             var o = new Obj();
             o["results"] = rs;
             o["blocks"] = bs;
+            if (Obs.Count > 0)
+            {
+                var os = new List<object>();
+                foreach (var s in Obs) os.Add(s.ToJson());
+                o["obs"] = os;
+            }
             return o;
         }
     }
@@ -219,6 +228,14 @@ namespace Tiad
         // Blocks is every program block the project holds, in every block
         // group, each with its group (ProjectBlock.Group). It reads only.
         List<ProjectBlock> Blocks(object project);
+
+        // ImportBlock imports one block's SimaticML (CyclicObs.Xml) into
+        // group, making the group when it is not there.
+        void ImportBlock(object project, string group, string xml);
+
+        // DeleteBlock deletes the block named name in group or one of its
+        // user groups; it never touches a block outside group.
+        void DeleteBlock(object project, string group, string name);
 
         CompileResult Compile(object project, bool hardware, bool software);
 

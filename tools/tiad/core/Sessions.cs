@@ -55,7 +55,8 @@ namespace Tiad
         // replaces devices but not users, refuses too.
         public bool UsersUnclean;
         // ForeignChanged is set when a software import changed program
-        // blocks outside its group (Ownership.Changed). Nothing clears it:
+        // blocks outside its group (Ownership.Changed), or left a cyclic
+        // interrupt OB not as asked (CyclicObs.Verify). Nothing clears it:
         // the session is never saved, archived for a deploy or imported
         // into again, only closed.
         public bool ForeignChanged;
