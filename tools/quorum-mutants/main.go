@@ -405,7 +405,7 @@ var table = []mutation{
 	{"restart_unsupervised", []string{"TestASupersededControllerRestartsItselfOnlyUnderTheRule"}},
 	{"restart_loops", []string{"TestASupersededControllerRestartsItselfOnlyUnderTheRule"}},
 	{"witness_supersede_waits", []string{"TestPairAnAcceptedSilentBoxComesBackSuperseded"}},
-	{"retained_stale_ignored", []string{"TestPairAnAcceptedSilentBoxComesBackSuperseded"}},
+	{"retained_stale_ignored", []string{"TestASupersededStandbysTakeoverRestoresNoneOfItsRetainedSubstitutes"}},
 	{"stale_retained_kept", []string{"TestAStartAfterASupersedeDropsTheRetainedSubstitutes"}},
 	{"override_all_silent", []string{"TestAnOverrideWithEveryOtherCopySilentIsRefused"}},
 	// #1177 review.
@@ -472,7 +472,7 @@ var rowPkgs = map[string][]string{
 	"restart_unsupervised":              {"./cmd/naut"},
 	"restart_loops":                     {"./cmd/naut"},
 	"witness_supersede_waits":           {"./cmd/naut"},
-	"retained_stale_ignored":            {"./cmd/naut"},
+	"retained_stale_ignored":            {"./server"},
 	"stale_retained_kept":               {"./cmd/naut"},
 	"override_all_silent":               {"./oplog"},
 	"stale_under_lock":                  {"./server"},
