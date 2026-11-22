@@ -188,6 +188,7 @@ func New(o Options) (*Engine, error) {
 		}
 		e.byID[d.ID] = len(e.inst)
 		e.inst = append(e.inst, instance{def: d})
+		e.inst[len(e.inst)-1].derive()
 	}
 
 	if len(e.notifiers) > 0 {
@@ -235,7 +236,7 @@ func (e *Engine) Evaluate() {
 func (e *Engine) evalOne(in *instance, now time.Time) {
 	in.warn = warnNone
 	// An operator's out of service first: it holds whatever the field says.
-	if o, ok := e.oos[in.def.Equipment]; ok {
+	if o, ok := e.oos[in.eqKey]; ok {
 		e.suppressOOS(in, now, o)
 		return
 	}
@@ -262,14 +263,20 @@ func (e *Engine) evalOne(in *instance, now time.Time) {
 		}
 	}
 	if e.suppressWhen(in) {
-		e.endCarry(in, "suppress-when "+in.def.SuppressWhen+" is true")
-		e.suppressBy(in, now, SuppressDesigned, in.suppressWhenReason(), "")
+		if in.carry != nil {
+			e.endCarry(in, "suppress-when "+in.def.SuppressWhen+" is true")
+		}
+		e.suppressBy(in, now, SuppressDesigned, in.swReason, "")
 		return
 	}
 	if e.substituted != nil {
 		if addr, ok := e.substituted(in.def.Tag); ok {
 			e.holdCarry(in, now)
-			e.suppressBy(in, now, SuppressSubstituted, "signal substituted: "+addr, "")
+			reason := in.reason
+			if in.state != Suppressed || in.suppKind != SuppressSubstituted || in.subAddr != addr {
+				reason, in.subAddr = "signal substituted: "+addr, addr
+			}
+			e.suppressBy(in, now, SuppressSubstituted, reason, "")
 			return
 		}
 	}
@@ -327,6 +334,12 @@ func (e *Engine) suppress(in *instance, now time.Time, reason string) {
 // (an operator's out of service), journalled on the suppress row.
 func (e *Engine) suppressBy(in *instance, now time.Time, kind, reason, by string) {
 	in.suppKind, in.suppBy = kind, by
+	if kind == SuppressOutOfService || kind == SuppressDesigned {
+		// Designed or an operator's: whatever activates afterwards is a
+		// new occurrence, which an ack retained from before the restart
+		// was never about (Fable review of #1222).
+		in.retainedAck = false
+	}
 	// Suppressed, unreadable or disabled: whatever reads true later has not
 	// stood throughout, as a carry would judge it (#1198 review).
 	if !mutAlarm("adopt_after_suppress") {
@@ -494,8 +507,9 @@ func (in *instance) record() Record {
 func (e *Engine) recordOf(in *instance) Record {
 	r := in.record()
 	if r.Suppression == SuppressOutOfService {
-		if o, ok := e.oos[in.def.Equipment]; ok {
-			r.SuppressUntilMs = o.until.UnixMilli()
+		if o, ok := e.oos[in.eqKey]; ok {
+			left, _ := o.remaining(e.now())
+			r.SuppressUntilMs = e.now().Add(left).UnixMilli()
 		}
 	}
 	return r
@@ -900,6 +914,7 @@ func (e *Engine) Journal(from, to time.Time, f Filter) ([]Event, error) {
 func (e *Engine) RetainedAlarms() map[string]retain.AlarmRetain {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	now := e.now()
 	out := make(map[string]retain.AlarmRetain, 8)
 	for i := range e.inst {
 		in := &e.inst[i]
@@ -930,9 +945,8 @@ func (e *Engine) RetainedAlarms() map[string]retain.AlarmRetain {
 				r.WaitMs = in.waitAt.UnixMilli()
 			}
 		}
-		if o, ok := e.oos[in.def.Equipment]; ok {
-			r.OOSEquipment, r.OOSUntilMs, r.OOSGrantedMs = in.def.Equipment, o.until.UnixMilli(), o.granted.Milliseconds()
-			r.OOSStartMs, r.OOSBy, r.OOSReason = o.startAt.UnixMilli(), o.by, o.reason
+		if o, ok := e.oos[in.eqKey]; ok {
+			o.retained(&r, now)
 		}
 		if r == (retain.AlarmRetain{}) {
 			continue // omit the overwhelming majority that are simply normal
@@ -956,6 +970,7 @@ func (e *Engine) ResetOperatorState() {
 		in := &e.inst[i]
 		lent, def := in.lent, in.def
 		*in = instance{def: def, lent: lent}
+		in.derive()
 	}
 	e.oos = nil
 	e.rev++

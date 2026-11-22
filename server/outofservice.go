@@ -11,7 +11,7 @@ package server
 // each. It needs the out-of-service permission over EVERY covered alarm's
 // tag (one action hides each, so an area-limited principal never hides
 // another area's alarm) and a fresh password. Back in service needs only
-// ack over each: showing alarms again must be easy. In a redundant pair
+// ack over one of them: showing alarms again must be easy. In a redundant pair
 // both go through the operator-intent log, as a shelve does.
 
 import (
@@ -20,6 +20,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/oplog"
 )
 
@@ -46,24 +47,53 @@ func (s *Server) handleOutOfServiceList(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, s.alarms.OutOfServiceList())
 }
 
-// authorizeEquipment authorizes perm over every alarm of equipment eq.
-// An equipment no alarm belongs to is a 404 (after the permission check
-// with eq as its own target, as an unknown alarm id is).
-func (s *Server) authorizeEquipment(w http.ResponseWriter, r *http.Request, perm, eq string) bool {
+// authorizeEquipment authorizes perm over every alarm of equipment eq
+// (anyOf: over at least one of them, for putting it back in service: a
+// person who may acknowledge one of its alarms may show them all). An
+// equipment no alarm belongs to is a 404 (after the permission check with
+// eq as its own target, as an unknown alarm id is).
+//
+// For anyOf it also says which alarms the principal holds perm over and
+// which not (the answer and the audit entry carry both, so a person who
+// showed another area's alarms is visible).
+func (s *Server) authorizeEquipment(w http.ResponseWriter, r *http.Request, perm, eq string, anyOf bool) (may, mayNot []string, ok bool) {
 	tags, err := s.alarms.EquipmentTags(eq)
 	if err != nil {
 		if code, msg := s.authorize(r, perm, eq); code != 0 {
 			http.Error(w, msg, code)
-			return false
+			return nil, nil, false
 		}
 		http.Error(w, err.Error(), alarmErrStatus(err))
-		return false
+		return nil, nil, false
+	}
+	if anyOf {
+		code, msg := 0, ""
+		key := ir.NameKey(eq)
+		for _, rec := range s.alarms.Records() {
+			if ir.NameKey(rec.Equipment) != key {
+				continue
+			}
+			c, m := s.authorize(r, perm, rec.Tag)
+			if c == 0 {
+				may = append(may, rec.ID)
+				continue
+			}
+			mayNot = append(mayNot, rec.ID)
+			if code == 0 {
+				code, msg = c, m
+			}
+		}
+		if len(may) == 0 {
+			http.Error(w, msg, code)
+			return nil, nil, false
+		}
+		return may, mayNot, true
 	}
 	if code, msg := s.authorizeEach(r, perm, tags); code != 0 {
 		http.Error(w, msg, code)
-		return false
+		return nil, nil, false
 	}
-	return true
+	return nil, nil, true
 }
 
 func (s *Server) handleOutOfService(w http.ResponseWriter, r *http.Request) {
@@ -79,7 +109,7 @@ func (s *Server) handleOutOfService(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `expected {"equipment": "...", "until"|"seconds": ..., "reason": "..."}`, http.StatusBadRequest)
 		return
 	}
-	if !s.authorizeEquipment(w, r, PermOOS, req.Equipment) {
+	if _, _, ok := s.authorizeEquipment(w, r, PermOOS, req.Equipment, false); !ok {
 		return
 	}
 	var until time.Time
@@ -130,9 +160,13 @@ func (s *Server) handleInService(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `expected {"equipment": "..."}`, http.StatusBadRequest)
 		return
 	}
-	if !s.authorizeEquipment(w, r, PermAck, req.Equipment) {
+	may, mayNot, ok := s.authorizeEquipment(w, r, PermAck, req.Equipment, true)
+	if !ok {
 		return
 	}
+	// The answer (and so the audit entry) says which of its alarms the
+	// person may acknowledge and which they showed without that right.
+	w = ackScope{w, may, mayNot}
 	by := s.recordBy(r, req.By)
 	if s.alarmLog != nil {
 		if s.refuseAlarmBeforeRestore(w) {
@@ -177,10 +211,25 @@ type oosAnswer struct {
 	By           string   `json:"by,omitempty"`
 	Reason       string   `json:"reason,omitempty"`
 	Alarms       []string `json:"alarms"`
+	// MayAck and MayNotAck, on an in-service answer, are the alarms of the
+	// equipment the person may acknowledge and those they may not (back
+	// in service needs ack over one of them).
+	MayAck    []string `json:"mayAck,omitempty"`
+	MayNotAck []string `json:"mayNotAck,omitempty"`
+}
+
+// ackScope carries an in-service request's per-alarm ack scope to its
+// answer.
+type ackScope struct {
+	http.ResponseWriter
+	may, mayNot []string
 }
 
 func (s *Server) writeOutOfService(w http.ResponseWriter, eq string) {
 	a := oosAnswer{Equipment: eq, Alarms: []string{}}
+	if sc, ok := w.(ackScope); ok {
+		a.MayAck, a.MayNotAck = sc.may, sc.mayNot
+	}
 	for _, o := range s.alarms.OutOfServiceList() {
 		if o.Equipment == eq {
 			a.OutOfService, a.UntilMs, a.By, a.Reason, a.Alarms = true, o.UntilMs, o.By, o.Reason, o.Alarms

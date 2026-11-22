@@ -123,6 +123,12 @@ type instance struct {
 	// suppKind is the kind of suppression (SuppressOutOfService, …) while
 	// suppressed; suppBy who suppressed it, for an operator's action.
 	suppKind, suppBy string
+	// eqKey is the NameKey of def.Equipment (equipment names compare as
+	// tag names do); swReason the designed suppression's reason and
+	// subAddr the substitute it was last suppressed for, kept so a scan
+	// that finds the same suppression builds no string.
+	eqKey, swReason, subAddr string
+
 	// warn says why the alarm is shown although a suppression may have
 	// been meant: its suppress-when could not be read (warnMissing,
 	// warnNotBool). A code, not text, so a scan allocates nothing.

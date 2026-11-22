@@ -430,6 +430,14 @@ func (p *Project) CheckAlarms(rt *runtime.Runtime) (defs []alarm.Def, errs, warn
 			// Refused here rather than left to fail toward showing at run
 			// time: a typo would mean the suppression never happens.
 			check("alarm "+d.ID+"'s suppress-when", d.SuppressWhen)
+			// A flat tag too: a condition may be a number (nonzero is in
+			// alarm), a suppress-when may not (a speed named by mistake
+			// would hide the alarm whenever it is nonzero).
+			if !strings.ContainsAny(d.SuppressWhen, ".[") {
+				if v, err := rt.Tags().ReadGlobal(d.SuppressWhen); err == nil && v.Kind != ir.TypeBool {
+					errs = append(errs, fmt.Sprintf("alarm %s's suppress-when %q is not a BOOL: only a BOOL's TRUE suppresses", d.ID, d.SuppressWhen))
+				}
+			}
 		}
 	}
 

@@ -1201,10 +1201,18 @@ func oosTarget(_ *http.Request, body []byte) auditTarget {
 	return auditTarget{target: req.Equipment, after: after}
 }
 
+// inServiceTarget's after is which of the equipment's alarms the person
+// may acknowledge and which not (back in service needs ack over one).
 func inServiceTarget(_ *http.Request, body []byte) auditTarget {
 	var req inServiceRequest
 	decodeBody(body, &req)
-	return auditTarget{target: req.Equipment}
+	return auditTarget{target: req.Equipment, answered: func(b []byte) any {
+		var a oosAnswer
+		if json.Unmarshal(b, &a) != nil {
+			return nil
+		}
+		return map[string]any{"mayAck": a.MayAck, "mayNotAck": a.MayNotAck}
+	}}
 }
 
 // programTarget names the task an edit goes to, as handlePutProgram

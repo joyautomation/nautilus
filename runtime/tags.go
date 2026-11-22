@@ -112,9 +112,10 @@ type Tags struct {
 	forceRev uint64
 	// subs is the substitute table, keyed by ROOT tag (see substitute.go),
 	// with tagVal.substituted beside it as for forces. subRev bumps on
-	// every change to the table.
+	// every change to the table (under mu; atomic so SubstituteRevision,
+	// read once per alarm per scan, takes no lock).
 	subs   map[string]*subSet
-	subRev uint64
+	subRev atomic.Uint64
 	// The substitute companions and the expiry pulse (substitute_expiry.go):
 	// each substitutable root's __Substituted flag, the resource-wide
 	// flags' stored names ("" when undeclared), the pulse, and subBusy,

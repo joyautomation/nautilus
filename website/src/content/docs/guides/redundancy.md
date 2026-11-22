@@ -1041,7 +1041,10 @@ later is dropped; a return to service never is. A takeover that could
 not catch the log up does **not** carry it: a window the log cannot vouch
 for would hide alarms. The alarm journal says "out of service not
 carried", the alarms show, and the new leader ends the window in the log
-so a later takeover does not bring it back. Take the equipment out again
+(no later takeover carries it back, even before that commits). The leader
+also ends in the log a window that expired on its clock, so a controller
+whose clock is behind finds none to restore; one that takes over while a
+window runs restores no more than was granted. Take the equipment out again
 if the work goes on.
 
 **Escalation goes on at its level.** For the alarms an escalation policy

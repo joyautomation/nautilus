@@ -204,7 +204,7 @@ func (t *Tags) substituteLocked(addr string, v any, e subEntry) (Substitution, *
 		ss.entries = append(ss.entries, e)
 	}
 	t.restackLocked(root, tv, ss)
-	t.subRev++
+	t.subRev.Add(1)
 	t.syncSubLocked()
 	return e.Substitution, replaced, nil
 }
@@ -231,7 +231,7 @@ func (t *Tags) unsubstituteLocked(id uint64) (Substitution, bool) {
 			if tv != nil {
 				t.restackLocked(root, tv, ss)
 			}
-			t.subRev++
+			t.subRev.Add(1)
 			t.syncSubLocked()
 			return t.reportLocked(ss, &e), true
 		}
@@ -305,9 +305,7 @@ func (t *Tags) SubstituteCount() int {
 // SubstituteRevision changes whenever the substitute table does, and at
 // no other time.
 func (t *Tags) SubstituteRevision() uint64 {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	return t.subRev
+	return t.subRev.Load()
 }
 
 // subState is how a root tag is substituted, for its quality.

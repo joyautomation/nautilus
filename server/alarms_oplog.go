@@ -15,6 +15,7 @@ import (
 	"github.com/joyautomation/nautilus/alarm"
 	"github.com/joyautomation/nautilus/alarm/acklink"
 	"github.com/joyautomation/nautilus/audit"
+	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/oplog"
 	"github.com/joyautomation/nautilus/retain"
 	"github.com/joyautomation/nautilus/runtime"
@@ -199,10 +200,16 @@ type AlarmLog struct {
 	// window would hide alarms). Under mu.
 	oos   map[string]oosIntent
 	equip map[string][]string
+	// ending holds the windows an unsynced takeover did not carry, by
+	// equipment, until the in-service Reconcile proposes for each
+	// commits: Held never carries them (a later synced takeover must not
+	// bring back a hide this one showed and journalled as ended). Under mu.
+	ending map[string]oosIntent
 }
 
 // oosIntent is one equipment's out-of-service window, as the log has it.
 type oosIntent struct {
+	name                        string // the equipment as the entry named it
 	untilMs, grantedMs, startMs int64
 	by, reason                  string
 	seq                         uint64 // the entry it came from (a KindLapse may name it)
@@ -301,9 +308,10 @@ func (v *alarmIntent) clearOcc() { v.occ, v.activeMs, v.waitMs = "", 0, 0 }
 // reach Apply).
 func NewAlarmLog(eng *alarm.Engine, leading func() bool, term func() uint64) *AlarmLog {
 	l := &AlarmLog{eng: eng, leading: leading, term: term, view: map[string]alarmIntent{}, refusal: PairNoMajorityAlarms, clrRetry: 2 * time.Second,
-		ended: make(chan endedOcc, endedQueue), oos: map[string]oosIntent{}, equip: map[string][]string{}}
+		ended: make(chan endedOcc, endedQueue), oos: map[string]oosIntent{}, equip: map[string][]string{}, ending: map[string]oosIntent{}}
 	for _, r := range eng.Records() {
-		l.equip[r.Equipment] = append(l.equip[r.Equipment], r.ID)
+		k := ir.NameKey(r.Equipment)
+		l.equip[k] = append(l.equip[k], r.ID)
 	}
 	eng.OnEvent(l.engineEvent)
 	go l.clearEnded()
@@ -429,7 +437,9 @@ func (l *AlarmLog) Apply(e oplog.Entry) (bool, error) {
 		}
 	case oplog.KindOutOfService:
 		l.mu.Lock()
-		l.oos[e.ID] = oosIntent{untilMs: e.Until, grantedMs: e.Until - e.TS, startMs: e.TS, by: e.By, reason: e.Reason, seq: e.Seq}
+		k := ir.NameKey(e.ID)
+		l.oos[k] = oosIntent{name: e.ID, untilMs: e.Until, grantedMs: e.Until - e.TS, startMs: e.TS, by: e.By, reason: e.Reason, seq: e.Seq}
+		delete(l.ending, k) // a new window: what ends now is this one
 		l.mu.Unlock()
 		if live {
 			if err := l.eng.TakeOutOfService(e.ID, time.UnixMilli(e.Until), e.By, e.Reason); err != nil {
@@ -437,10 +447,21 @@ func (l *AlarmLog) Apply(e oplog.Entry) (bool, error) {
 			}
 		}
 	case oplog.KindInService:
+		// Ref names the window a system in-service (Reconcile) ends: one
+		// an operator replaced since is not ended by it. A person's names
+		// none and ends whatever window stands.
 		l.mu.Lock()
-		delete(l.oos, e.ID)
+		k := ir.NameKey(e.ID)
+		if o, ok := l.ending[k]; ok && (e.Ref == 0 || o.seq == e.Ref) {
+			delete(l.ending, k)
+		}
+		o, ok := l.oos[k]
+		stands := ok && (e.Ref == 0 || o.seq == e.Ref)
+		if stands {
+			delete(l.oos, k)
+		}
 		l.mu.Unlock()
-		if live {
+		if live && stands {
 			if err := l.eng.ReturnToService(e.ID, e.By); err != nil {
 				slog.Warn("alarm: a committed return to service did not apply", "equipment", e.ID, "err", err)
 			}
@@ -517,6 +538,11 @@ func (l *AlarmLog) Apply(e oplog.Entry) (bool, error) {
 		for eq, o := range l.oos {
 			if slices.Contains(e.Refs, o.seq) {
 				delete(l.oos, eq)
+			}
+		}
+		for eq, o := range l.ending {
+			if slices.Contains(e.Refs, o.seq) {
+				delete(l.ending, eq)
 			}
 		}
 		l.mu.Unlock()
@@ -677,7 +703,7 @@ func (l *AlarmLog) Reconcile() {
 	held := l.eng.AckHeldIDs()
 	oosHeld := map[string]bool{}
 	for _, w := range l.eng.OutOfServiceList() {
-		oosHeld[w.Equipment] = true
+		oosHeld[ir.NameKey(w.Equipment)] = true
 	}
 	if f := reconcileGap.Load(); f != nil {
 		(*f)()
@@ -693,14 +719,17 @@ func (l *AlarmLog) Reconcile() {
 		}
 	}
 	// A window the log holds and the engine doesn't (an unsynced takeover
-	// did not carry it) is ended in the log too, so a later takeover never
-	// brings back a hide nobody sees now.
-	var notHeld []string
-	soon := time.Now().Add(time.Second).UnixMilli()
+	// did not carry it; it expired on this clock; the engine refused it)
+	// is ended in the log too, so a later takeover, on a clock behind
+	// this one, never brings back a hide nobody sees now.
+	var notHeld []oplog.Entry
 	for eq, o := range l.oos {
-		if !oosHeld[eq] && o.untilMs > soon {
-			notHeld = append(notHeld, eq)
+		if !oosHeld[eq] {
+			notHeld = append(notHeld, oplog.Entry{Kind: oplog.KindInService, ID: o.name, Ref: o.seq, By: "system", Reason: "ended on the leader"})
 		}
+	}
+	for _, o := range l.ending {
+		notHeld = append(notHeld, oplog.Entry{Kind: oplog.KindInService, ID: o.name, Ref: o.seq, By: "system", Reason: "not carried by a takeover"})
 	}
 	l.mu.Unlock()
 	if !mutServer("reconcile_without_livemu") {
@@ -716,23 +745,36 @@ func (l *AlarmLog) Reconcile() {
 // endOutOfService proposes, in the background, a return to service for
 // each equipment the log holds out of service and the live engine does
 // not; what does not commit is found again at the next log tick.
-func (l *AlarmLog) endOutOfService(eqs []string) {
-	if len(eqs) == 0 || l.node == nil || mutServer("oos_view_not_reconciled") || !l.oosBusy.CompareAndSwap(false, true) {
+// Each entry names its window (Ref, the window's seq), so one an operator
+// took out again meanwhile is not ended by it.
+func (l *AlarmLog) endOutOfService(ends []oplog.Entry) {
+	if len(ends) == 0 || l.node == nil || !l.oosBusy.CompareAndSwap(false, true) {
 		return
 	}
-	slices.Sort(eqs)
+	slices.SortFunc(ends, func(a, b oplog.Entry) int { return strings.Compare(a.ID, b.ID) })
 	go func() {
 		defer l.oosBusy.Store(false)
-		for _, eq := range eqs {
+		for _, e := range ends {
 			ctx, cancel := context.WithTimeout(context.Background(), substituteProposeWait)
-			_, err := l.node.Propose(ctx, oplog.Entry{Kind: oplog.KindInService, ID: eq, By: "system", Reason: "not carried by a takeover"})
+			_, err := l.node.Propose(ctx, e)
 			cancel()
 			if err != nil {
-				slog.Warn("alarm: return to service not committed yet; the next log tick tries again", "equipment", eq, "err", err)
+				slog.Warn("alarm: return to service not committed yet; the next log tick tries again", "equipment", e.ID, "err", err)
 				return
 			}
 		}
 	}()
+}
+
+// endUncarried moves the log's windows to ending: an unsynced takeover
+// did not carry them, and no later takeover may.
+func (l *AlarmLog) endUncarried() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for k, o := range l.oos {
+		l.ending[k] = o
+	}
+	clear(l.oos)
 }
 
 // dropAcks clears every ack from this replica's view (an unsynced
@@ -750,6 +792,7 @@ func (l *AlarmLog) dropView() {
 	defer l.mu.Unlock()
 	clear(l.view)
 	clear(l.oos)
+	clear(l.ending)
 	l.adopt = nil
 }
 
@@ -890,14 +933,23 @@ func (l *AlarmLog) Held(synced bool, retained map[string]retain.AlarmRetain) map
 		}
 		out[id] = r
 	}
-	if synced && !mutServer("oos_not_carried") {
+	if synced {
 		// The log's windows, on every alarm of their equipment. Never
 		// unsynced: the view can't say a window is still current, and a
-		// stale one would hide alarms (fails toward showing them).
+		// stale one would hide alarms (fails toward showing them). What
+		// is left is the least of what was granted and what this clock
+		// says remains: one behind the leader's lengthens a window by its
+		// lag at most, within the grant (Reconcile ends expired ones in
+		// the log, so a replica far behind finds none to restore).
+		now := time.Now().UnixMilli()
 		for eq, o := range l.oos {
+			left := min(o.grantedMs, o.untilMs-now)
+			if left <= 0 {
+				continue
+			}
 			for _, id := range l.equip[eq] {
 				r := out[id]
-				r.OOSEquipment, r.OOSUntilMs, r.OOSGrantedMs = eq, o.untilMs, o.grantedMs
+				r.OOSEquipment, r.OOSUntilMs, r.OOSLeftMs = o.name, o.untilMs, left
 				r.OOSStartMs, r.OOSBy, r.OOSReason = o.startMs, o.by, o.reason
 				out[id] = r
 			}
@@ -982,6 +1034,7 @@ func (p PairAlarms) restore(m map[string]retain.AlarmRetain, synced bool) {
 			p.Engine.Note("system", "out of service not carried: takeover unsynced (the operator-intent log could not be caught up, so equipment taken out of service shows its alarms again)")
 			slog.Warn("alarm: out of service not carried: the takeover's log catch-up failed; its alarms show")
 		}
+		p.Log.endUncarried()
 	}
 	// A frozen engine from an earlier leadership forgets what it held;
 	// the view (or, unsynced, the shelves alone) is what applies now.

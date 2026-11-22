@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -129,8 +130,20 @@ func TestOutOfServiceChecksEveryCoveredAlarmsArea(t *testing.T) {
 	if err := eng.TakeOutOfService("Skid", time.Now().Add(time.Hour), "admin", "work"); err != nil {
 		t.Fatal(err)
 	}
-	if rec := call(t, s, "POST", "/api/alarms/in-service", `{"equipment":"Skid"}`, fenced); rec.Code != http.StatusForbidden {
-		t.Errorf("in service of Skid fenced: %d, want 403", rec.Code)
+	// Back in service needs ack over ONE of its alarms: showing them is
+	// the safe direction, so a principal fenced to one area may.
+	rec := call(t, s, "POST", "/api/alarms/in-service", `{"equipment":"Skid"}`, fenced)
+	var a oosAnswer
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &a) != nil ||
+		!slices.Equal(a.MayAck, []string{"A.Fault"}) || !slices.Equal(a.MayNotAck, []string{"B.Fault"}) {
+		t.Errorf("in service of Skid by a principal over one of its alarms: %d %s, want 200 naming what it may and may not ack", rec.Code, rec.Body)
+	}
+	// The audit entry says so too.
+	if e := s.audit.ring.Recent()[0]; e.Action != "alarm.in-service" || fmt.Sprint(e.After) != "map[mayAck:[A.Fault] mayNotAck:[B.Fault]]" {
+		t.Errorf("audit entry %+v, want after naming mayAck A.Fault, mayNotAck B.Fault", e)
+	}
+	if err := eng.TakeOutOfService("Skid", time.Now().Add(time.Hour), "admin", "work"); err != nil {
+		t.Fatal(err)
 	}
 	viewer := func(r *http.Request) { r.Header.Set("Authorization", "Bearer v-secret") }
 	if rec := call(t, s, "POST", "/api/alarms/in-service", `{"equipment":"Skid"}`, viewer); rec.Code != http.StatusForbidden {
@@ -161,6 +174,9 @@ func TestOutOfServiceThroughTheLog(t *testing.T) {
 	}
 	if h := al.Held(true, nil)["HiTemp"]; h.OOSEquipment != "HiTempAlm" || h.OOSReason != "probe swap" || h.OOSUntilMs != e.Until {
 		t.Fatalf("view %+v", h)
+	}
+	if h := al.Held(false, nil)["HiTemp"]; h.OOSEquipment != "" {
+		t.Fatalf("an unsynced Held carries the window: %+v", h)
 	}
 	if rec := do(t, s, "POST", "/api/alarms/in-service", `{"equipment":"HiTempAlm","by":"op"}`); rec.Code != http.StatusOK {
 		t.Fatalf("in service: %d %s", rec.Code, rec.Body)
@@ -219,8 +235,8 @@ func TestReconcileEndsAWindowTheEngineDoesNotHold(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	i := slices.IndexFunc(*got, func(e oplog.Entry) bool { return e.Kind == oplog.KindInService })
-	if i < 0 || (*got)[i].ID != "HiTempAlm" || (*got)[i].By != "system" {
-		t.Fatalf("proposed %+v; want an in-service for HiTempAlm by system", *got)
+	if i < 0 || (*got)[i].ID != "HiTempAlm" || (*got)[i].By != "system" || (*got)[i].Ref != 3 {
+		t.Fatalf("proposed %+v; want an in-service for HiTempAlm by system naming window 3", *got)
 	}
 	if h := al.Held(true, nil)["HiTemp"]; h.OOSEquipment != "" {
 		t.Fatalf("the view kept the window: %+v", h)
@@ -284,5 +300,97 @@ func TestASupersededViewDropsItsWindows(t *testing.T) {
 	al.dropView()
 	if h := al.Held(true, nil)["HiTemp"]; h.OOSEquipment != "" {
 		t.Fatalf("a dropped view kept its window: %+v", h)
+	}
+}
+
+// An unsynced takeover's windows are ending: a later synced takeover
+// (before the in-service commits, say with no majority) does not carry
+// them back (Fable review of #1222).
+func TestAnUncarriedWindowNeverComesBack(t *testing.T) {
+	var lead atomic.Bool
+	_, eng, al, _ := loggedAlarms(t, map[string]any{"HiTempAlm": true, "LoFlowAlm": false}, &lead)
+	eng.Evaluate()
+	if _, err := al.Apply(oplog.Entry{Kind: oplog.KindOutOfService, ID: "HiTempAlm", Until: time.Now().Add(time.Hour).UnixMilli(), TS: time.Now().UnixMilli(), By: "op", Reason: "x", Seq: 3}); err != nil {
+		t.Fatal(err)
+	}
+	lead.Store(true)
+	PairAlarms{Engine: eng, Log: al}.RestoreAlarmsSynced(nil, false)
+	PairAlarms{Engine: eng, Log: al}.RestoreAlarmsSynced(nil, true)
+	eng.Evaluate()
+	if st := state(eng, "HiTemp"); st == alarm.Suppressed {
+		t.Fatal("a window an unsynced takeover did not carry came back at a synced one")
+	}
+	// Its in-service (Ref 3) clears it from ending.
+	if _, err := al.Apply(oplog.Entry{Kind: oplog.KindInService, ID: "HiTempAlm", Ref: 3, By: "system"}); err != nil {
+		t.Fatal(err)
+	}
+	al.mu.Lock()
+	n := len(al.ending)
+	al.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("ending still holds %d", n)
+	}
+}
+
+// A system in-service names the window it ends: one an operator took out
+// again since is not ended by it; a person's in-service ends any window.
+func TestASystemInServiceEndsOnlyItsWindow(t *testing.T) {
+	var lead atomic.Bool
+	lead.Store(true)
+	_, eng, al, _ := loggedAlarms(t, map[string]any{"HiTempAlm": true, "LoFlowAlm": false}, &lead)
+	eng.Evaluate()
+	until := time.Now().Add(time.Hour).UnixMilli()
+	if _, err := al.Apply(oplog.Entry{Kind: oplog.KindOutOfService, ID: "HiTempAlm", Until: until, TS: time.Now().UnixMilli(), By: "op", Reason: "again", Seq: 9}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := al.Apply(oplog.Entry{Kind: oplog.KindInService, ID: "HiTempAlm", Ref: 3, By: "system"}); err != nil {
+		t.Fatal(err)
+	}
+	eng.Evaluate()
+	if st := state(eng, "HiTemp"); st != alarm.Suppressed || al.Held(true, nil)["HiTemp"].OOSEquipment == "" {
+		t.Fatalf("a stale system in-service ended the new window: %s", st)
+	}
+	if _, err := al.Apply(oplog.Entry{Kind: oplog.KindInService, ID: "hitempalm", By: "op"}); err != nil {
+		t.Fatal(err)
+	}
+	eng.Evaluate()
+	if st := state(eng, "HiTemp"); st != alarm.UnackActive {
+		t.Fatalf("a person's in-service (another case): %s, want unack-active", st)
+	}
+}
+
+// A window that expired on the leader is ended in the log, so a replica
+// whose clock is behind finds none to restore.
+func TestReconcileEndsAnExpiredWindow(t *testing.T) {
+	var lead atomic.Bool
+	lead.Store(true)
+	_, eng, al, got := loggedAlarms(t, map[string]any{"HiTempAlm": true, "LoFlowAlm": false}, &lead)
+	eng.Evaluate()
+	// Committed already expired on this clock: the engine refuses it, the view holds it.
+	if _, err := al.Apply(oplog.Entry{Kind: oplog.KindOutOfService, ID: "HiTempAlm", Until: time.Now().Add(-time.Minute).UnixMilli(), TS: time.Now().Add(-time.Hour).UnixMilli(), By: "op", Reason: "x", Seq: 4}); err != nil {
+		t.Fatal(err)
+	}
+	al.Reconcile()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) && !slices.ContainsFunc(*got, func(e oplog.Entry) bool { return e.Kind == oplog.KindInService }) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !slices.ContainsFunc(*got, func(e oplog.Entry) bool { return e.Kind == oplog.KindInService && e.Ref == 4 }) {
+		t.Fatalf("proposed %+v; want an in-service ending window 4", *got)
+	}
+}
+
+// A replica whose clock is behind restores no more than was granted.
+func TestHeldCapsAWindowAtItsGrant(t *testing.T) {
+	var lead atomic.Bool
+	_, eng, al, _ := loggedAlarms(t, map[string]any{"HiTempAlm": true, "LoFlowAlm": false}, &lead)
+	eng.Evaluate()
+	now := time.Now()
+	// The leader's clock is 3 h ahead of this one: a 1 h window.
+	if _, err := al.Apply(oplog.Entry{Kind: oplog.KindOutOfService, ID: "HiTempAlm", Until: now.Add(4 * time.Hour).UnixMilli(), TS: now.Add(3 * time.Hour).UnixMilli(), By: "op", Reason: "x", Seq: 5}); err != nil {
+		t.Fatal(err)
+	}
+	if h := al.Held(true, nil)["HiTemp"]; h.OOSLeftMs > time.Hour.Milliseconds() || h.OOSLeftMs <= 0 {
+		t.Fatalf("held %d ms left, want at most the 1 h granted", h.OOSLeftMs)
 	}
 }

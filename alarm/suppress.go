@@ -58,13 +58,39 @@ const MaxOutOfServiceReason = 200
 var ErrNoEquipment = fmt.Errorf("no alarm belongs to equipment")
 
 // outOfService is one piece of equipment's out-of-service window.
+//
+// It ends at until, or once left has run since setAt on the engine's
+// clock, whichever comes first, and at once if that clock goes back more
+// than ClockSlack past setAt: a clock set back never lengthens a window
+// by more than ClockSlack (Fable review of #1222).
 type outOfService struct {
+	name    string // the equipment as it was named (the map key is its NameKey)
 	text    string // the reason each covered alarm shows, built once
 	until   time.Time
-	granted time.Duration // until - the start, for a restore's cap
+	setAt   time.Time     // the engine's clock when it was set or restored
+	left    time.Duration // what was left of it at setAt
 	by      string
 	reason  string
 	startAt time.Time
+}
+
+// ClockSlack is how far the engine's clock may step back under a window
+// before the window ends (a time sync's small corrections do not end
+// every window; a clock set back by hours does).
+const ClockSlack = time.Minute
+
+// remaining is what is left of o at now, and whether it has ended (and
+// why: "" when it has not).
+func (o outOfService) remaining(now time.Time) (time.Duration, string) {
+	if now.Before(o.setAt.Add(-ClockSlack)) {
+		return 0, "clock set back"
+	}
+	// The deadline, or the time left run out, whichever comes first.
+	left := min(o.until.Sub(now), o.left-now.Sub(o.setAt))
+	if left <= 0 {
+		return 0, "expired"
+	}
+	return left, ""
 }
 
 // OutOfService is one out-of-service window, as the API and the CLI list it.
@@ -109,13 +135,15 @@ func checkReason(reason string) error {
 	return nil
 }
 
-// covered is the instances of equipment eq, or an error naming why it
-// cannot be taken out of service. Under e.mu.
+// covered is the instances of equipment eq (named as names are, case
+// aside), or an error naming why it cannot be taken out of service.
+// Under e.mu.
 func (e *Engine) covered(eq string) ([]*instance, error) {
+	key := ir.NameKey(eq)
 	var out []*instance
 	for i := range e.inst {
 		in := &e.inst[i]
-		if in.def.Equipment != eq {
+		if in.eqKey != key {
 			continue
 		}
 		if systemAlarm(in.def) {
@@ -130,8 +158,7 @@ func (e *Engine) covered(eq string) ([]*instance, error) {
 }
 
 // EquipmentTags is the condition paths of every alarm equipment eq
-// holds: the targets an area-scoped permission is checked against, all of
-// them, since one action hides each.
+// holds: the targets an area-scoped permission is checked against.
 func (e *Engine) EquipmentTags(eq string) ([]string, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -177,66 +204,67 @@ func (e *Engine) TakeOutOfService(eq string, until time.Time, by, reason string)
 	if err := e.checkOutOfService(eq, until, reason, now); err != nil {
 		return err
 	}
-	e.setOutOfService(eq, newOutOfService(until, until.Sub(now), by, reason, now), now)
+	ins, _ := e.covered(eq)
+	o := newOutOfService(ins[0].def.Equipment, until, until.Sub(now), by, reason, now, now)
+	if e.oos == nil {
+		e.oos = map[string]outOfService{}
+	}
+	e.oos[ins[0].eqKey] = o
+	e.rev++
+	e.system(now, KindOutOfService, o.by,
+		"equipment "+o.name+" out of service until "+o.until.UTC().Format(time.RFC3339)+": "+o.reason)
+	for _, in := range ins {
+		e.suppressOOS(in, now, o)
+	}
 	return nil
 }
 
 // newOutOfService is a window, its shown text built once.
-func newOutOfService(until time.Time, granted time.Duration, by, reason string, start time.Time) outOfService {
+func newOutOfService(name string, until time.Time, left time.Duration, by, reason string, start, now time.Time) outOfService {
 	reason = strings.TrimSpace(reason)
-	return outOfService{until: until, granted: granted, by: by, reason: reason, startAt: start,
+	return outOfService{name: name, until: until, setAt: now, left: left, by: by, reason: reason, startAt: start,
 		text: "out of service until " + until.UTC().Format(time.RFC3339) + " by " + by + ": " + reason}
 }
 
-// setOutOfService records o for eq, journals it and suppresses its alarms
-// now. Under e.mu.
-func (e *Engine) setOutOfService(eq string, o outOfService, now time.Time) {
-	if e.oos == nil {
-		e.oos = map[string]outOfService{}
+// retained writes o, as it stands at now, onto r: the time left (never
+// what was granted: a restore caps the window at it).
+func (o outOfService) retained(r *retain.AlarmRetain, now time.Time) {
+	left, ended := o.remaining(now)
+	if ended != "" {
+		return
 	}
-	e.oos[eq] = o
-	e.rev++
-	e.system(now, KindOutOfService, o.by,
-		"equipment "+eq+" out of service until "+o.until.UTC().Format(time.RFC3339)+": "+o.reason)
-	for i := range e.inst {
-		in := &e.inst[i]
-		if in.def.Equipment == eq {
-			e.suppressOOS(in, now, o)
-		}
-	}
+	r.OOSEquipment, r.OOSUntilMs, r.OOSLeftMs = o.name, o.until.UnixMilli(), left.Milliseconds()
+	r.OOSStartMs, r.OOSBy, r.OOSReason = o.startAt.UnixMilli(), o.by, o.reason
 }
 
 // restoreOutOfService takes r's out-of-service window back, from the
-// retain store or a pair's log, if its equipment still has alarms (an
-// alarm that moved to other equipment since restores its old one's
-// window, which its old fellows restore anyway), it holds no system
-// alarm, and it has not ended. What remains is never
-// more than was granted: a clock set back at a restart must not lengthen
-// it. Each covered alarm carries the same window; the first restored
-// wins. Under e.mu, before the first Evaluate (which suppresses).
+// retain store or a pair's log, if its equipment still has alarms and
+// holds no system alarm, and it has not ended. It runs for no longer than
+// was left when it was saved (OOSLeftMs), whatever the clock says now: a
+// clock set back at a restart does not lengthen it. Each covered alarm
+// carries the same window; the first restored wins. Under e.mu, before
+// the first Evaluate (which suppresses).
 func (e *Engine) restoreOutOfService(r retain.AlarmRetain, now time.Time) {
-	eq := r.OOSEquipment
-	if _, done := e.oos[eq]; done {
+	ins, err := e.covered(r.OOSEquipment)
+	if err != nil {
 		return
 	}
-	if _, err := e.covered(eq); err != nil {
+	key := ins[0].eqKey
+	if _, done := e.oos[key]; done {
 		return
 	}
 	until := time.UnixMilli(r.OOSUntilMs)
-	granted := time.Duration(r.OOSGrantedMs) * time.Millisecond
-	if granted <= 0 || granted > MaxOutOfService {
-		granted = MaxOutOfService
-	}
-	if limit := now.Add(granted); until.After(limit) {
+	left := min(time.Duration(r.OOSLeftMs)*time.Millisecond, MaxOutOfService)
+	if limit := now.Add(left); until.After(limit) {
 		until = limit
 	}
-	if !until.After(now) {
+	if left <= 0 || !until.After(now) {
 		return
 	}
 	if e.oos == nil {
 		e.oos = map[string]outOfService{}
 	}
-	e.oos[eq] = newOutOfService(until, granted, r.OOSBy, r.OOSReason, time.UnixMilli(r.OOSStartMs))
+	e.oos[key] = newOutOfService(ins[0].def.Equipment, until, until.Sub(now), r.OOSBy, r.OOSReason, time.UnixMilli(r.OOSStartMs), now)
 	e.rev++
 }
 
@@ -244,7 +272,7 @@ func (e *Engine) restoreOutOfService(r retain.AlarmRetain, now time.Time) {
 func (e *Engine) CheckInService(eq string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if _, ok := e.oos[eq]; !ok {
+	if _, ok := e.oos[ir.NameKey(eq)]; !ok {
 		return fmt.Errorf("equipment %q is not out of service", eq)
 	}
 	return nil
@@ -256,12 +284,14 @@ func (e *Engine) CheckInService(eq string) error {
 func (e *Engine) ReturnToService(eq, by string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if _, ok := e.oos[eq]; !ok {
+	key := ir.NameKey(eq)
+	o, ok := e.oos[key]
+	if !ok {
 		return fmt.Errorf("equipment %q is not out of service", eq)
 	}
-	delete(e.oos, eq)
+	delete(e.oos, key)
 	e.rev++
-	e.system(e.now(), KindInService, by, "equipment "+eq+" returned to service")
+	e.system(e.now(), KindInService, by, "equipment "+o.name+" returned to service")
 	return nil
 }
 
@@ -269,12 +299,14 @@ func (e *Engine) ReturnToService(eq, by string) error {
 func (e *Engine) OutOfServiceList() []OutOfService {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	now := e.now()
 	out := make([]OutOfService, 0, len(e.oos))
-	for eq, o := range e.oos {
-		w := OutOfService{Equipment: eq, By: o.by, Reason: o.reason,
-			StartMs: o.startAt.UnixMilli(), UntilMs: o.until.UnixMilli(), Alarms: []string{}}
+	for key, o := range e.oos {
+		left, _ := o.remaining(now)
+		w := OutOfService{Equipment: o.name, By: o.by, Reason: o.reason,
+			StartMs: o.startAt.UnixMilli(), UntilMs: now.Add(left).UnixMilli(), Alarms: []string{}}
 		for i := range e.inst {
-			if e.inst[i].def.Equipment == eq {
+			if e.inst[i].eqKey == key {
 				w.Alarms = append(w.Alarms, e.inst[i].def.ID)
 			}
 		}
@@ -289,24 +321,28 @@ func (e *Engine) OutOfServiceList() []OutOfService {
 	return out
 }
 
-// expireOutOfService ends every window whose time has come, journalling
-// each, before the pass evaluates: an alarm whose condition stands
-// re-annunciates in the same pass. Under e.mu.
+// expireOutOfService ends every window whose time has come (or whose
+// clock went back), journalling each, before the pass evaluates: an
+// alarm whose condition stands re-annunciates in the same pass. Under
+// e.mu.
 func (e *Engine) expireOutOfService(now time.Time) {
-	for eq, o := range e.oos {
-		if now.Before(o.until) {
+	for key, o := range e.oos {
+		_, ended := o.remaining(now)
+		if ended == "" {
 			continue
 		}
-		delete(e.oos, eq)
+		delete(e.oos, key)
 		e.rev++
-		e.system(now, KindInService, "system", "equipment "+eq+" returned to service: expired")
+		e.system(now, KindInService, "system", "equipment "+o.name+" returned to service: "+ended)
 	}
 }
 
 // suppressOOS suppresses in for its equipment's window o: the occurrence
 // it was on ends, as with any designed suppression. Under e.mu.
 func (e *Engine) suppressOOS(in *instance, now time.Time, o outOfService) {
-	e.endCarry(in, "its equipment was taken out of service")
+	if in.carry != nil {
+		e.endCarry(in, "its equipment was taken out of service")
+	}
 	e.suppressBy(in, now, SuppressOutOfService, o.text, o.by)
 }
 
@@ -320,23 +356,45 @@ func (e *Engine) system(now time.Time, kind, by, name string) {
 }
 
 // suppressWhen reads in's suppress-when. suppressed is true only for a
-// readable TRUE; a path that cannot be read (absent, not a BOOL) sets the
+// readable BOOL TRUE: a path that cannot be read (absent), is not a BOOL
+// (a number is not: a speed or a status word named by mistake would hide
+// the alarm whenever it is nonzero), or is itself substituted (a person
+// chose its value: a substitute is not a way to hide alarms) sets the
 // record's warning and suppresses nothing. Under e.mu.
 func (e *Engine) suppressWhen(in *instance) (suppressed bool) {
 	if in.def.SuppressWhen == "" {
 		return false
 	}
 	v, ok := e.read(in.def.SuppressWhen)
-	b, isBool := truth(v)
+	b, isBool := strictBool(v)
 	switch {
 	case !ok:
 		in.warn = warnMissing
 	case !isBool:
 		in.warn = warnNotBool
+	case b && e.substituted != nil:
+		if _, sub := e.substituted(in.def.SuppressWhen); sub {
+			in.warn = warnSubstituted
+			return false
+		}
+		return true
 	default:
 		return b
 	}
 	return false
+}
+
+// strictBool is v as a BOOL: a Go bool or a BOOL ir.Value, nothing else.
+func strictBool(v any) (val, ok bool) {
+	switch x := v.(type) {
+	case bool:
+		return x, true
+	case ir.Value:
+		if x.Kind == ir.TypeBool {
+			return x.B, true
+		}
+	}
+	return false, false
 }
 
 // Record.Warning codes (instance.warn).
@@ -344,6 +402,7 @@ const (
 	warnNone uint8 = iota
 	warnMissing
 	warnNotBool
+	warnSubstituted
 )
 
 // warning is in.warn as text.
@@ -353,14 +412,17 @@ func (in *instance) warning() string {
 		return "suppress-when " + in.def.SuppressWhen + " is not in this project: the alarm is evaluated anyway"
 	case warnNotBool:
 		return "suppress-when " + in.def.SuppressWhen + " is not a BOOL: the alarm is evaluated anyway"
+	case warnSubstituted:
+		return "suppress-when " + in.def.SuppressWhen + " is substituted: the alarm is evaluated anyway"
 	}
 	return ""
 }
 
-// suppressWhenReason is the reason a designed suppression shows.
-func (in *instance) suppressWhenReason() string {
-	if in.def.SuppressReason != "" {
-		return in.def.SuppressReason
+// derive fills in's fields that follow from its definition alone.
+func (in *instance) derive() {
+	in.eqKey = ir.NameKey(in.def.Equipment)
+	in.swReason = in.def.SuppressReason
+	if in.swReason == "" && in.def.SuppressWhen != "" {
+		in.swReason = in.def.SuppressWhen + " is true"
 	}
-	return in.def.SuppressWhen + " is true"
 }

@@ -173,11 +173,18 @@ alarms:
 **`suppress-when: <BOOL>`** is designed suppression: while the BOOL reads
 true the alarm is Suppressed with the reason shown, and its occurrence
 ends (an ack does not survive it; a condition still present afterwards is
-a new, unacknowledged occurrence). Only a readable true suppresses. A
-path that is not in the project, or not a BOOL, suppresses nothing: the
-alarm is evaluated anyway and its row says why (`warning`). `naut check`
-refuses a member the type does not have or one that is not a BOOL, and
+a new, unacknowledged occurrence). Only a readable BOOL true suppresses.
+A path that is not in the project, is not a BOOL (a number is not, even
+nonzero: a speed named by mistake must not hide the alarm), or is itself
+[substituted](/guides/substitutes/) suppresses nothing: the alarm is
+evaluated anyway and its row says why (`warning`). `naut check` refuses a
+member the type does not have and a tag or member that is not a BOOL, and
 warns on a tag the manifest does not declare, as it does for a condition.
+The BOOL is the plant's word for its state, so whoever can write it can
+hide the alarm: point it at something the program or the field sets, not
+at a setpoint an operator writes, and know that a dead device's last
+TRUE keeps hiding until the device comes back (pair it with `enable:` on
+the device's online flag, which suppresses visibly as "unreadable").
 It is the opposite of `enable:`, which suppresses when it cannot be read
 (a dark site).
 
@@ -201,13 +208,20 @@ naut alarms in-service P101 --host plc1 # early
 - **Who.** Taking equipment out of service needs the `out-of-service`
   permission (a supervisor's) over **every** alarm it hides, and a fresh
   password ([elevation](/guides/auth/#elevation)): it hides more than a
-  shelf. Putting it back needs only `ack`. Both are in the audit journal
+  shelf. Putting it back needs only `ack`, over any one of its alarms;
+  the answer and the audit entry name the alarms the person may and may
+  not acknowledge. Both are in the audit journal
   (`alarm.out-of-service`, `alarm.in-service`), and the alarm journal has
   a system row for each and a `suppress` row per alarm, by the person.
 - **Never the controller's own alarms** (the audit journal down,
   notifications failing): they exist to make a lockout visible.
-- **Kept** across a restart (retain), never longer than was granted, so a
-  clock set back cannot lengthen it. A redundant pair carries it through
+- **Timed on what is left, not only on the clock.** A window ends at its
+  deadline or once its time has run, whichever is first, and at once if
+  the controller's clock goes back by more than a minute ("returned to
+  service: clock set back"): a clock set back lengthens it by a minute
+  at most. It is kept across a restart (retain) for no longer than was
+  left when it was last saved.
+- **Names** of equipment compare as tag names do, case aside. A redundant pair carries it through
   its operator-intent log; a takeover that could not catch the log up
   does not carry it, says so in the alarm journal, and ends it in the log
   (the alarms show).

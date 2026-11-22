@@ -174,13 +174,14 @@ type AlarmRetain struct {
 
 	// OOS* is the out-of-service window of the alarm's equipment (#715
 	// PR 5), on each alarm it covers, so the alarm funnel carries it
-	// without a shape of its own: the equipment, when it ends, how long
-	// was granted (a restore never leaves more than that: a clock set
-	// back must not lengthen it), when and by whom it began, and why.
+	// without a shape of its own: the equipment, when it ends, how much
+	// of it was left when saved (a restore never leaves more than that: a
+	// clock set back must not lengthen it), when and by whom it began, and
+	// why.
 	// An older binary drops these and shows the alarms (the safe side).
 	OOSEquipment string `json:"oosEquipment,omitempty"`
 	OOSUntilMs   int64  `json:"oosUntilMs,omitempty"`
-	OOSGrantedMs int64  `json:"oosGrantedMs,omitempty"`
+	OOSLeftMs    int64  `json:"oosLeftMs,omitempty"`
 	OOSStartMs   int64  `json:"oosStartMs,omitempty"`
 	OOSBy        string `json:"oosBy,omitempty"`
 	OOSReason    string `json:"oosReason,omitempty"`

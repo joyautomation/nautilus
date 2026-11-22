@@ -1043,7 +1043,7 @@ Every alarm of the equipment is suppressed until the window ends
 never permanent), with the reason on each row. It needs `out-of-service`
 over every alarm it hides and a fresh password (`401` with `"elevate"`
 past it). `POST /api/alarms/in-service {"equipment": "P101"}` ends it
-early and needs only `ack`; it answers with `"outOfService": false`.
+early and needs only `ack`, over any one of its alarms; it answers with `"outOfService": false`.
 `GET /api/alarms/out-of-service` lists every window (`equipment`, `by`,
 `reason`, `startMs`, `untilMs`, `alarms`), the soonest to end first. See
 [Suppression by state](/guides/alarms/#suppression-by-state).

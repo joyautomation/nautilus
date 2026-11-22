@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/retain"
 )
 
@@ -215,7 +216,7 @@ func TestOutOfServiceSurvivesARestartAndNeverGrows(t *testing.T) {
 		t.Fatal(err)
 	}
 	saved := r.RetainedAlarms()
-	if got := saved["P1.Fault"]; got.OOSEquipment != "Pump_1" || got.OOSBy != "alice" || got.OOSReason != "seal change" || got.OOSGrantedMs != (2*time.Hour).Milliseconds() {
+	if got := saved["P1.Fault"]; got.OOSEquipment != "Pump_1" || got.OOSBy != "alice" || got.OOSReason != "seal change" || got.OOSLeftMs != (2*time.Hour).Milliseconds() {
 		t.Fatalf("retained %+v", got)
 	}
 	restart := func(at time.Time, defs ...Def) *rig {
@@ -448,6 +449,20 @@ func TestEvaluateWithSuppressionAllocatesNothing(t *testing.T) {
 	if n := testing.AllocsPerRun(100, e.Evaluate); n != 0 {
 		t.Errorf("Evaluate allocates %v per run, want 0", n)
 	}
+	// And with the suppressions standing: suppress-when true, a substitute.
+	sw := def("LowFlow", "P1.LowFlow")
+	sw.SuppressWhen = "P1.Stopped"
+	tg2 := tags{"P1.LowFlow": true, "P1.Stopped": true, "LSH": true}
+	e2, err := New(Options{Defs: []Def{sw, def("LSH", "LSH")}, Read: tg2.read, Now: clk.now, Journal: NewRing(16),
+		Substituted: func(p string) (string, bool) { return p, p == "LSH" }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { e2.Close() })
+	e2.Evaluate()
+	if n := testing.AllocsPerRun(100, e2.Evaluate); n != 0 {
+		t.Errorf("Evaluate with suppressions standing allocates %v per run, want 0", n)
+	}
 }
 
 // An occurrence carried across a restart that is suppressed before its
@@ -488,12 +503,139 @@ func TestSuppressionEndsACarriedOccurrence(t *testing.T) {
 func TestARetainedWindowForGoneEquipmentIsDropped(t *testing.T) {
 	r := pumpRig(t)
 	r.RestoreAlarms(map[string]retain.AlarmRetain{"P1.Fault": {OOSEquipment: "Pump_9", OOSUntilMs: r.clk.at(time.Hour).UnixMilli(),
-		OOSGrantedMs: time.Hour.Milliseconds(), OOSBy: "alice", OOSReason: "gone"}})
+		OOSLeftMs: time.Hour.Milliseconds(), OOSBy: "alice", OOSReason: "gone"}})
 	r.Evaluate()
 	if l := r.OutOfServiceList(); len(l) != 0 {
 		t.Errorf("list %+v, want nothing", l)
 	}
 	if st := r.state(t, "P1.Fault"); st == Suppressed {
 		t.Error("P1.Fault suppressed by another equipment's window")
+	}
+}
+
+// Only a BOOL's TRUE suppresses: a number (a speed, a status word) named
+// as suppress-when never hides the alarm, nor does a suppress-when that is
+// itself substituted (Fable review of #1222).
+func TestSuppressWhenNeedsABoolThatIsNotSubstituted(t *testing.T) {
+	d := def("LowFlow", "P1.LowFlow")
+	d.SuppressWhen = "P1.Speed"
+	subs := map[string]bool{}
+	clk, tg := newClock(), tags{"P1.LowFlow": true}
+	e, err := New(Options{Defs: []Def{d}, Read: tg.read, Now: clk.now,
+		Substituted: func(p string) (string, bool) { return p, subs[p] }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { e.Close() })
+	r := &rig{Engine: e, clk: clk, tags: tg}
+	for _, v := range []any{int64(3), 1.5, int(1), ir.Value{Kind: ir.TypeInt, I: 7}, ir.Value{Kind: ir.TypeReal, F: 2}} {
+		tg["P1.Speed"] = v
+		r.Evaluate()
+		if rec := r.rec(t, "LowFlow"); rec.State == Suppressed || !strings.Contains(rec.Warning, "is not a BOOL") {
+			t.Errorf("suppress-when reading %#v: %+v, want shown with a not-a-BOOL warning", v, rec)
+		}
+	}
+	tg["P1.Speed"] = ir.Value{Kind: ir.TypeBool, B: true}
+	r.Evaluate()
+	if st := r.state(t, "LowFlow"); st != Suppressed {
+		t.Errorf("a BOOL ir.Value TRUE: %v, want suppressed", st)
+	}
+	subs["P1.Speed"] = true
+	r.Evaluate()
+	if rec := r.rec(t, "LowFlow"); rec.State == Suppressed || !strings.Contains(rec.Warning, "is substituted") {
+		t.Errorf("a substituted suppress-when: %+v, want shown with a warning", rec)
+	}
+}
+
+// A clock set back while a window runs ends it (beyond ClockSlack), and
+// a small step back keeps it; a window never outlasts what was left of it.
+func TestAClockSetBackNeverLengthensAWindow(t *testing.T) {
+	r := pumpRig(t)
+	if err := r.TakeOutOfService("Pump_1", r.clk.at(time.Hour), "alice", "seal change"); err != nil {
+		t.Fatal(err)
+	}
+	r.clk.advance(-30 * time.Second)
+	r.Evaluate()
+	if len(r.OutOfServiceList()) != 1 {
+		t.Fatal("a 30 s step back ended the window")
+	}
+	r.clk.advance(30*time.Second + 40*time.Minute) // 40 min on
+	r.Evaluate()
+	r.clk.advance(-2 * time.Hour) // set back two hours
+	r.Evaluate()
+	if len(r.OutOfServiceList()) != 0 {
+		t.Fatalf("a clock set back two hours left %+v", r.OutOfServiceList())
+	}
+	rows := r.systemRows(t, KindInService)
+	if len(rows) != 1 || !strings.Contains(rows[0].Name, "clock set back") {
+		t.Errorf("journal %+v, want returned to service: clock set back", rows)
+	}
+}
+
+// A restart restores no more than was left when the window was saved,
+// whatever the clock says (Fable review: the full grant was restored).
+func TestARestartRestoresWhatWasLeft(t *testing.T) {
+	r := pumpRig(t)
+	if err := r.TakeOutOfService("Pump_1", r.clk.at(time.Hour), "alice", "seal change"); err != nil {
+		t.Fatal(err)
+	}
+	r.clk.advance(50 * time.Minute)
+	saved := r.RetainedAlarms()
+	if got := saved["P1.Fault"].OOSLeftMs; got != (10 * time.Minute).Milliseconds() {
+		t.Fatalf("saved %d ms left, want 10 min", got)
+	}
+	n := newRig(t, def("P1.Fault", "Pump_1.Fault"), def("P1.Overload", "Pump_1.Overload"))
+	n.clk.t = r.clk.at(-50 * time.Minute) // the clock set back 50 minutes
+	n.tags["Pump_1.Fault"], n.tags["Pump_1.Overload"] = true, true
+	n.RestoreAlarms(saved)
+	n.Evaluate()
+	if l := n.OutOfServiceList(); len(l) != 1 || l[0].UntilMs != n.clk.at(10*time.Minute).UnixMilli() {
+		t.Fatalf("restored %+v, want it to end 10 min from now", l)
+	}
+}
+
+// An ack retained from before a restart (no occurrence: an old store)
+// does not ride an out-of-service window or a designed suppression to the
+// next activation.
+func TestARetainedAckDoesNotSurviveASuppression(t *testing.T) {
+	for _, how := range []string{"out-of-service", "suppress-when"} {
+		d := def("P1.Fault", "Pump_1.Fault")
+		d.SuppressWhen = "Pump_1.Stopped"
+		r := newRig(t, d)
+		r.RestoreAlarms(map[string]retain.AlarmRetain{"P1.Fault": {Acked: true, AckBy: "op", AckMs: r.clk.now().UnixMilli()}})
+		r.tags["Pump_1.Fault"], r.tags["Pump_1.Stopped"] = true, false
+		if how == "out-of-service" {
+			if err := r.TakeOutOfService("Pump_1", r.clk.at(time.Minute), "alice", "work"); err != nil {
+				t.Fatal(err)
+			}
+			r.Evaluate()
+			r.clk.advance(time.Minute)
+		} else {
+			r.tags["Pump_1.Stopped"] = true
+			r.Evaluate()
+			r.tags["Pump_1.Stopped"] = false
+		}
+		r.Evaluate()
+		if rec := r.rec(t, "P1.Fault"); rec.State != UnackActive || rec.AckBy != "" {
+			t.Errorf("%s: %+v, want unack-active, no ack", how, rec)
+		}
+	}
+}
+
+// Equipment names compare as tag names do: case aside.
+func TestEquipmentNamesIgnoreCase(t *testing.T) {
+	r := newRig(t, def("A", "p101.Fault"), def("B", "P101.Overload"))
+	r.tags["p101.Fault"], r.tags["P101.Overload"] = true, true
+	if err := r.TakeOutOfService("P101", r.clk.at(time.Hour), "alice", "work"); err != nil {
+		t.Fatal(err)
+	}
+	r.Evaluate()
+	for _, id := range []string{"A", "B"} {
+		if st := r.state(t, id); st != Suppressed {
+			t.Errorf("%s: %v, want suppressed", id, st)
+		}
+	}
+	if err := r.ReturnToService("p101", "bob"); err != nil {
+		t.Errorf("in service by another case: %v", err)
 	}
 }

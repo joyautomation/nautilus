@@ -208,7 +208,7 @@ The hops, for a proxy or firewall rule:
 
 ## Elevation
 
-Some permissions change what the plant runs, so a signed-in browser holds them only while its password is fresh: **`out-of-service`, `force`, `edit`, `activate`, `deploy`, `config`, `users` and `override`**. Those are the elevated permissions. That includes clearing a force and rolling an edit back: clearing a force can start a motor. Taking equipment out of service hides its alarms for up to a week; putting it back needs only `ack` and no fresh password.
+Some permissions change what the plant runs, so a signed-in browser holds them only while its password is fresh: **`out-of-service`, `force`, `edit`, `activate`, `deploy`, `config`, `users` and `override`**. Those are the elevated permissions. That includes clearing a force and rolling an edit back: clearing a force can start a motor. Taking equipment out of service hides its alarms for up to a week; putting it back needs only `ack` (over any one of its alarms) and no fresh password.
 
 - **The window.** The password counts for `auth.elevation` (15 minutes by default, 1m to 12h) after the user last entered it, at sign-in or at re-authentication. Use doesn't extend it. It never outlasts the session; an `elevation` as long as `session` means the sign-in counts for the whole session.
 - **Past it**, an elevated action is refused with `401` and `{"error": …, "elevate": true}`, and nothing is done. The error tells the user to confirm their password. An HMI asks for it (`POST /api/elevate`) and sends the action again.
