@@ -674,3 +674,37 @@ claims:
       keeps the sign-in, and no test drives a browser through that. The log
       tests run the real three-replica log in `TestSessionsOverTheRealLog`;
       the others use a fake bus.
+
+  - id: RED-044
+    claim: >-
+      With `redundancy.floating-ip`, the leader adds the address after its
+      write gate opens and announces it, looking at the gate again before each
+      announcement; it drops the address when the gate closes and on an orderly
+      stop before it hands the lease over; a spare or a copy held by a
+      duplicate mark never holds it. An add whose outcome is unknown is undone
+      when the gate shuts, a shut gate keeps removing the address, an open
+      gate puts it back and announces again, and a failing add backs off. An
+      address that is the network or broadcast address, loopback, multicast,
+      or one of `peers:` is refused at load.
+    source: "#redundancy"
+    tests:
+      - go ./internal/floatip TestHoldAddsThenAnnounces
+      - go ./internal/floatip TestWatchFollowsTheGate
+      - go ./internal/floatip TestAnAddWhoseOutcomeIsUnknownIsUndoneWhenTheGateShuts
+      - go ./internal/floatip TestTheGateIsLookedAtBetweenTheAddAndEachAnnouncement
+      - go ./internal/floatip TestAShutGateKeepsRemovingTheAddress
+      - go ./internal/floatip TestAnOpenGateRestoresAndReannounces
+      - go ./internal/floatip TestAFailingAddBacksOff
+      - go ./internal/floatip TestParse
+      - go ./cmd/naut TestFloatingIPFollowsTheGateOfARealPair
+      - go ./cmd/naut TestStartFloatingIPStopDropsTheAddress
+      - go ./internal/project TestFloatingIPConfig
+    partial: true
+    note: >-
+      The kernel side (netlink, the ARP frame) runs against a real kernel only
+      where the test can make a namespace (`unshare -Urn`); it skips
+      otherwise. After a kill, hang or pause the kernel keeps the address
+      until the unit's ExecStopPost or the restarted process removes it, and
+      two boxes may answer ARP for it meanwhile; that window is documented
+      and not measured here (it needs the container tier). Field writes stay
+      fenced by the gate in that window.
