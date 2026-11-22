@@ -213,3 +213,52 @@ func TestRunJournalsInsecureChannels(t *testing.T) {
 		t.Fatalf("journalled %v %v, want alarm.channel-insecure for sms", r.actions, r.targets)
 	}
 }
+
+// On a deployed box there is no auth.state-dir in the manifest and no
+// checkout: naut alarms contacts check, given the state directory (as the
+// built controller is), makes naut check's findings there and exits 1 on
+// a gap. naut run says the same gaps at start, as warnings.
+func TestContactsCheckOnTheBox(t *testing.T) {
+	dir, _ := contactsProject(t)
+	os.WriteFile(filepath.Join(dir, "nautilus.yaml"), []byte(strings.ReplaceAll(contactsManifest, "auth:\n  state-dir: STATEDIR\n", "")), 0o644)
+	sd := filepath.Join(t.TempDir(), "var-lib-nautilus")
+	cli := func(stdin string, args ...string) (string, int) {
+		var out, errb bytes.Buffer
+		code := contactsMain(args[0], append([]string{"--project", dir, "--state-dir", sd}, args[1:]...), func(d string) (*project.Manifest, string, error) {
+			m, err := project.ReadManifest(os.DirFS(d), "")
+			return m, "", err // the built controller: no checkout
+		}, false, func(k string) string {
+			if k == "INVOCATION_ID" {
+				return "x"
+			}
+			return ""
+		}, strings.NewReader(stdin), &out, &errb)
+		return out.String() + errb.String(), code
+	}
+	cli("", "contacts", "set", "alice", "--email", "alice@example.com")
+	cli("", "contacts", "set", "bob", "--sms", "+15550101")
+	out, code := cli("", "contacts", "check")
+	if code != 1 || !strings.Contains(out, "erin has no sms address") || !strings.Contains(out, "sms.token") {
+		t.Fatalf("check with gaps: exit %d\n%s", code, out)
+	}
+
+	proj, err := project.Load(os.DirFS(dir), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	proj.AuthStateDir = sd
+	var errb bytes.Buffer
+	if err := openAlarmContacts(proj, "", func(string) string { return "" }, &errb); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(errb.String(), "naut run: warning:") || !strings.Contains(errb.String(), "erin has no sms address") {
+		t.Errorf("naut run did not say the gaps at start:\n%s", errb.String())
+	}
+
+	cli("", "contacts", "set", "erin", "--sms", "+15550102")
+	cli("tok-1\n", "secrets", "set", "sms.token")
+	cli("pw-1\n", "secrets", "set", "email.password")
+	if out, code := cli("", "contacts", "check"); code != 0 {
+		t.Fatalf("check with none: exit %d\n%s", code, out)
+	}
+}

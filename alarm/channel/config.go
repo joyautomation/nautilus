@@ -26,6 +26,7 @@ package channel
 import (
 	"fmt"
 	"net"
+	"net/http"
 	"net/url"
 	"strings"
 
@@ -160,6 +161,52 @@ func (c *Config) tls(kind string) TLS {
 		return c.Webhook.TLSConf
 	}
 	return TLS{}
+}
+
+// Proxy is a channel whose requests go through an HTTP proxy.
+type Proxy struct {
+	Kind string
+	Host string // host:port, never credentials
+}
+
+// Proxied lists the HTTP channels (sms, voice, webhook) that the
+// environment sends through a proxy (HTTPS_PROXY, HTTP_PROXY, NO_PROXY, as
+// http.ProxyFromEnvironment reads them).
+func (c *Config) Proxied() []Proxy {
+	if c == nil {
+		return nil
+	}
+	var out []Proxy
+	for _, x := range []struct {
+		kind, url string
+	}{{KindSMS, c.urlOf(KindSMS)}, {KindVoice, c.urlOf(KindVoice)}, {KindWebhook, c.urlOf(KindWebhook)}} {
+		if x.url == "" {
+			continue
+		}
+		req, err := http.NewRequest(http.MethodPost, x.url, nil)
+		if err != nil {
+			continue
+		}
+		if u, err := proxyFor(req); err == nil && u != nil {
+			out = append(out, Proxy{Kind: x.kind, Host: u.Host})
+		}
+	}
+	return out
+}
+
+// proxyFor is http.ProxyFromEnvironment, a variable for a test.
+var proxyFor = http.ProxyFromEnvironment
+
+func (c *Config) urlOf(kind string) string {
+	switch {
+	case kind == KindSMS && c.SMS != nil:
+		return c.SMS.URL
+	case kind == KindVoice && c.Voice != nil:
+		return c.Voice.URL
+	case kind == KindWebhook && c.Webhook != nil:
+		return c.Webhook.URL
+	}
+	return ""
 }
 
 // Secrets lists the secret keys the configured channels need.

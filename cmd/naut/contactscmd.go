@@ -23,6 +23,9 @@ Usage:
   naut alarms contacts [flags] set <person> [--email <a>] [--sms <+number>] [--voice <+number>]
                                                   set addresses; "-" clears one
   naut alarms contacts [flags] rm <person>        remove a person
+  naut alarms contacts [flags] check              every person the manifest's levels page has an
+                                                  address for the channel, and every channel its
+                                                  secret (exit 1 if not)
   naut alarms secrets [flags] list                which credentials are set (never their values)
   naut alarms secrets [flags] set <key>           set one, read from stdin (a terminal: no echo)
   naut alarms secrets [flags] rm <key>
@@ -101,10 +104,35 @@ func contactsMain(which string, args []string, load func(dir string) (*project.M
 	}
 	by := osUser(getenv, os.Geteuid())
 	cmd, rest := fs.Arg(0), fs.Args()[1:]
+	if which == "contacts" && cmd == "check" {
+		if m == nil {
+			return fail(errors.New("check needs the manifest (--project)"))
+		}
+		return contactsCheck(m.Alarms, sd, stdout, stderr)
+	}
 	if which == "secrets" {
 		return secretsCmd(cmd, rest, oncall.SecretsPath(sd), by, stdin, stdout, stderr, fail)
 	}
 	return contactsCmd(cmd, rest, oncall.ContactsPath(sd), by, stdout, stderr, fail)
+}
+
+// contactsCheck is naut alarms contacts check: the findings naut check
+// makes about the contacts and secrets, against this state directory. It
+// is how they are checked on the box, where the built controller answers
+// it and naut check (in a checkout) cannot see the files.
+func contactsCheck(alarms *project.AlarmsConfig, sd string, stdout, stderr io.Writer) int {
+	errs, warns := checkContacts(alarms, sd)
+	for _, w := range warns {
+		fmt.Fprintln(stderr, "warning:", w)
+	}
+	for _, e := range errs {
+		fmt.Fprintln(stderr, "error:", e)
+	}
+	if len(errs) > 0 {
+		return 1
+	}
+	fmt.Fprintf(stdout, "%s: every person the escalation levels page has an address for the channel, and every channel its secret\n", sd)
+	return 0
 }
 
 func contactsCmd(cmd string, rest []string, path, by string, stdout, stderr io.Writer, fail func(error) int) int {
@@ -193,6 +221,9 @@ func contactsCmd(cmd string, rest []string, path, by string, stdout, stderr io.W
 			return 2
 		}
 		who := rest[0]
+		if !strings.HasPrefix(who, "oidc:") {
+			who = strings.ToLower(who)
+		}
 		err := oncall.UpdateContacts(path, by, func(c *oncall.Contacts) error {
 			if c.Contacts[who] == nil {
 				return fmt.Errorf("%s has no contact here (naut alarms contacts list)", who)

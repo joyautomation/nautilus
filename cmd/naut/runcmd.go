@@ -827,6 +827,14 @@ func openAlarmContacts(proj *project.Project, dir string, getenv func(string) st
 		fmt.Fprintf(stderr, "naut run: alarms: %v: pages that need it fail until it is fixed\n", err)
 	}
 	proj.AlarmDirectory = st
+	// What naut alarms contacts check finds, said at every start: each
+	// controller of a pair keeps its own files, and a standby's gaps show
+	// only when it leads. Warnings: a missing number fails that one page
+	// (no-contact), it does not stop a controller.
+	errs, _ := checkContacts(proj.Alarms, sd)
+	for _, e := range errs {
+		fmt.Fprintf(stderr, "naut run: warning: %s\n", e)
+	}
 	return nil
 }
 
@@ -838,6 +846,13 @@ func journalInsecureChannels(proj *project.Project, srv interface {
 }) {
 	if proj.Alarms == nil {
 		return
+	}
+	// A channel whose requests go through a proxy (HTTPS_PROXY, honouring
+	// NO_PROXY): TLS stays end to end through CONNECT, but an auditor
+	// should know the path. Its presence and host only, never credentials.
+	for _, p := range proj.Alarms.Channels.Proxied() {
+		fmt.Fprintf(os.Stderr, "naut run: alarms.channels.%s goes through the proxy %s\n", p.Kind, p.Host)
+		srv.RecordSystem("alarm.channel-proxy", p.Kind, map[string]any{"proxy": p.Host})
 	}
 	for _, k := range proj.Alarms.Channels.Insecure() {
 		fmt.Fprintf(os.Stderr, "naut run: warning: alarms.channels.%s has insecure: true: its server's certificate is not verified\n", k)

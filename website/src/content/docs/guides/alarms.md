@@ -386,13 +386,23 @@ a change on its next page. The webhook names the person as a principal
   crosses plaintext either way. `naut check` warns about it, and `naut
   run` journals it in the audit trail (`alarm.channel-insecure`) at
   every start.
-- **`naut check` on the box** refuses a level that pages someone by email,
-  SMS or voice who has no address for it (roster members included), and
-  a channel whose secret is not set, each with the command that fixes it.
-  Where there is no contacts file (a laptop, CI) it warns once instead. A
-  running controller never refuses to start over a missing number: that
-  send fails `no-contact`, is journalled, and counts toward the
-  `nautilus.alarm-notify` system alarm.
+- **Check them on the box** with `sudo naut alarms contacts check` (the
+  built controller: `controller alarms contacts --state-dir
+  /var/lib/nautilus check`): it fails when a level pages someone by
+  email, SMS or voice who has no address for it (roster members
+  included), or a channel's secret is not set, each with the command that
+  fixes it. `naut check` makes the same findings where it can see the
+  files, and warns once where it cannot (a laptop, CI). `naut run` prints
+  them as warnings at every start, but never refuses to start over a
+  missing number: that send fails `no-contact`, is journalled, and counts
+  toward the `nautilus.alarm-notify` system alarm.
+- **On a redundant pair each controller keeps its own files:** set the
+  contacts and secrets on both, or the standby pages nobody the day it
+  leads. Each one's start warnings say what it lacks.
+- **A proxy:** the SMS, voice and webhook channels honour `HTTPS_PROXY`
+  and `NO_PROXY`. TLS stays end to end through it; `naut run` journals
+  which channels go through which proxy host (`alarm.channel-proxy`) at
+  start, never its credentials.
 - **Each channel kind has its own sender,** so a mail server that hangs
   delays only email, never an SMS.
 

@@ -83,12 +83,12 @@ func checkContacts(alarms *project.AlarmsConfig, stateDir string) (errs, warns [
 	}
 	if stateDir == "" {
 		return errs, append(warns, "alarms.escalation: no state directory here, so the contacts and secrets files were not checked; "+
-			"on the controller, naut check (or naut alarms contacts list) checks them")
+			"on the controller: naut alarms contacts check (the built controller answers it: controller alarms contacts --state-dir /var/lib/nautilus check)")
 	}
 	cpath, spath := oncall.ContactsPath(stateDir), oncall.SecretsPath(stateDir)
 	if _, err := os.Stat(cpath); errors.Is(err, fs.ErrNotExist) {
 		return errs, append(warns, fmt.Sprintf("alarms.escalation pages people by %s, and this machine has no contacts file (%s): "+
-			"they are checked where it exists; on the controller, naut alarms contacts set <name> --email … --sms …",
+			"they are checked where it exists; on the controller: naut alarms contacts check, and naut alarms contacts set <name> --email … --sms …",
 			strings.Join(kindsOf(needs), ", "), cpath))
 	}
 	contacts, err := oncall.ReadContacts(cpath)

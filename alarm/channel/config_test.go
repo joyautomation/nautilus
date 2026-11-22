@@ -1,6 +1,8 @@
 package channel
 
 import (
+	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -53,5 +55,26 @@ func TestValidate(t *testing.T) {
 	all := ok()
 	if got := strings.Join(all.Secrets(), ","); got != "email.password,sms.token,voice.token,webhook.header" {
 		t.Errorf("Secrets() = %q", got)
+	}
+}
+
+// Proxied names each HTTP channel the environment sends through a proxy,
+// by host only: a proxy's credentials never reach the journal.
+func TestProxied(t *testing.T) {
+	defer func(f func(*http.Request) (*url.URL, error)) { proxyFor = f }(proxyFor)
+	proxyFor = func(r *http.Request) (*url.URL, error) {
+		if r.URL.Host == "hooks.example.com" {
+			return nil, nil // NO_PROXY
+		}
+		return url.Parse("http://user:pw@proxy.example.com:3128")
+	}
+	c := Config{
+		Email:   &Email{SMTP: "mail.example.com:587", From: "alarms@example.com"},
+		SMS:     &Provider{URL: "https://sms.example.com", Account: "AC0001", From: "+15550100"},
+		Webhook: &Webhook{URL: "https://hooks.example.com/page"},
+	}
+	got := c.Proxied()
+	if len(got) != 1 || got[0].Kind != "sms" || got[0].Host != "proxy.example.com:3128" {
+		t.Fatalf("Proxied() = %+v, want sms via proxy.example.com:3128 without credentials", got)
 	}
 }
