@@ -118,6 +118,7 @@ export default defineConfig({
           label: 'Operator screens and alarms',
           items: [
             { slug: 'guides/operator-screens' },
+            { slug: 'guides/installable-hmi' },
             { slug: 'guides/streaming' },
             { slug: 'guides/alarms' },
             { slug: 'guides/historian' },

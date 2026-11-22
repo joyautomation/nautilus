@@ -1479,6 +1479,10 @@ func (s *Server) handleHMI() http.Handler {
 			return
 		}
 		w.Header().Set("Cache-Control", "no-cache")
+		if strings.HasSuffix(lookup, ".webmanifest") {
+			// the standard sniffing would call it text/plain
+			w.Header().Set("Content-Type", "application/manifest+json")
+		}
 		if e := etagFor(lookup); e != "" {
 			w.Header().Set("Etag", e)
 		}
