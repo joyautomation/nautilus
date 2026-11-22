@@ -18,7 +18,10 @@
 // An escalation runs from when the alarm began waiting on a person, not
 // from its last activation: a latched alarm that flaps between
 // unack-active and unack-rtn keeps climbing. An acknowledgement, a shelf,
-// a suppression or (with stop: ack-or-rtn) a return to normal ends it.
+// a suppression or (with stop: ack-or-rtn) a return to normal ends it. An
+// alarm with ack-required: false never waits on a person: it escalates
+// from its activation while it is active, and a return to normal, a
+// shelf or a suppression ends it.
 //
 // Addresses (an email, a phone number) never reach this package's
 // journal rows: a recipient is a principal (a user name or oidc:<name>),

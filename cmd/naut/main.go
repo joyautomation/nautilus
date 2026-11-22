@@ -164,6 +164,14 @@ func main() {
 				return m, "", err
 			}, false, os.Getenv, os.Stdin, os.Stdout, os.Stderr))
 		}
+		// naut alarms contacts|secrets, likewise (#715): who is paged and
+		// the channels' credentials live on the box.
+		if len(os.Args) > 2 && os.Args[1] == "alarms" && (os.Args[2] == "contacts" || os.Args[2] == "secrets") {
+			os.Exit(contactsMain(os.Args[2], os.Args[3:], func(string) (*project.Manifest, string, error) {
+				m, err := project.ReadManifest(fsys, embeddedManifest(fsys))
+				return m, "", err
+			}, false, os.Getenv, os.Stdin, os.Stdout, os.Stderr))
+		}
 		if code, done := builtArgs(os.Args[1:], filepath.Base(os.Args[0]), os.Stdout, os.Stderr); done {
 			os.Exit(code)
 		}

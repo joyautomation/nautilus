@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/joyautomation/nautilus/alarm/channel"
 	"github.com/joyautomation/nautilus/auth"
 	"github.com/joyautomation/nautilus/devbind"
 	"github.com/joyautomation/nautilus/devprofile"
@@ -1176,6 +1177,13 @@ type Project struct {
 	// `naut run` sets it with the elector (wireRedundancy); OPCUAServer
 	// hands it to the OPC UA server. Nil: always writable (no redundancy).
 	WriteGate func() bool
+
+	// AlarmDirectory is where escalation's channels find each person's
+	// address and their own credentials (#715): the contacts and secrets
+	// files in the controller's state directory (alarm/oncall). `naut run`
+	// sets it before NewAlarms when alarms.channels names a channel; nil
+	// with one configured is an error there.
+	AlarmDirectory channel.Directory
 }
 
 // RetainNames resolves the retain section's defaults against the project

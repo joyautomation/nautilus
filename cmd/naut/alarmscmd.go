@@ -37,6 +37,10 @@ Usage:
                                covers; -id <alarm> prints the steps it
                                would send (who, when, by which channel)
                                if it began waiting -at a moment.
+  naut alarms contacts ...       Each person's email and phone numbers,
+                               on the box (naut alarms contacts help).
+  naut alarms secrets ...        The channels' credentials, on the box,
+                               read from stdin.
 `
 
 func runAlarms(args []string) int {
@@ -51,6 +55,8 @@ func runAlarms(args []string) int {
 		return runAlarmsOncall(args[1:])
 	case "escalation":
 		return runAlarmsEscalation(args[1:])
+	case "contacts", "secrets":
+		return runAlarmsContacts(args[0], args[1:])
 	case "help", "--help", "-h":
 		fmt.Print(alarmsUsage)
 		return 0

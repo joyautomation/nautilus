@@ -30,9 +30,14 @@ type rule struct {
 func rules(u universe) []rule {
 	return []rule{
 		{
-			from: []string{"io", "lang/ir", "hist", "oplog", "audit", "auth"},
+			from: []string{"io", "lang/ir", "hist", "oplog", "audit", "internal/securefile"},
 			to:   u.allBut(),
 			why:  "substrates and seams import no other nautilus package",
+		},
+		{
+			from: []string{"auth"},
+			to:   u.allBut("internal/securefile"),
+			why:  "auth is a seam: it imports no other nautilus package but the private-file helpers its users file shares with the alarm contacts",
 		},
 		{
 			from: []string{"quorum"},
@@ -66,13 +71,23 @@ func rules(u universe) []rule {
 		},
 		{
 			from: []string{"alarm"},
-			to:   u.allBut("alarm", "lang/ir", "retain"),
+			to:   u.allBut("alarm", "lang/ir", "retain", "internal/securefile"),
 			why:  "alarms are a context of their own, wired to a tag store by the manifest, not by importing one",
 		},
 		{
 			from: []string{"alarm/escalate"},
 			to:   u.allBut("alarm"),
 			why:  "escalation reads the alarm engine and is handed its gate by the manifest; it never learns the runtime, the elector or the server",
+		},
+		{
+			from: []string{"alarm/oncall"},
+			to:   u.allBut("internal/securefile"),
+			why:  "the contacts and channel secrets on the box know nothing of alarms: an address or a credential is data the senders look up",
+		},
+		{
+			from: []string{"alarm/channel"},
+			to:   u.allBut("alarm", "alarm/escalate", "alarm/oncall"),
+			why:  "the senders resolve a principal to an address and send; the manifest composes them, and they know no server, runtime or auth",
 		},
 		{
 			from: []string{"modbus", "eip", "optommp", "plcnext", "profinet", "hw", "snmp", "redfish", "prom", "replay", "sparkplug/host"},
@@ -244,7 +259,7 @@ var stdlibOnly = []string{"audit", "internal/oidcseam"}
 // library, only the named module path prefixes: auth/users takes argon2id
 // from golang.org/x/crypto (docs/design/identity-audit.md §2, question 4).
 var moduleAllowed = map[string][]string{
-	"auth/users": {"golang.org/x/crypto/", "golang.org/x/sys/cpu"},
+	"auth/users": {"golang.org/x/crypto/", "golang.org/x/sys/cpu", module + "/internal/securefile/"},
 	// auth/oidc: sign-in at an OpenID Connect provider (#708 PR 6,
 	// identity-audit.md §3, question 4).
 	"auth/oidc": {"github.com/coreos/go-oidc/v3/", "golang.org/x/oauth2", "github.com/go-jose/go-jose/v4"},

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"net"
 	"slices"
 	"strings"
 	"sync"
@@ -766,12 +768,91 @@ func TestTermChangeNoDuplicate(t *testing.T) {
 }
 
 // An annunciate-only alarm (ack-required false) never waits on a person,
-// so no policy pages for it.
-func TestAnnunciateOnlyNeverPages(t *testing.T) {
+// yet it pages while it is active (#715 PR 3, deviation 6): its levels
+// run from its activation, and a return to normal stops them.
+func TestAnnunciateOnlyPagesWhileActive(t *testing.T) {
 	r := newRig(t, false, alarm.Def{ID: "TT9", Tag: "TT9", Area: "roast", Priority: alarm.High, AckRequired: false, AutoClear: true})
 	r.set("TT9", true)
+	r.run(11 * time.Minute)
+	r.wantSent("TT9:1:alice:email", "TT9:1:dave:email", "TT9:2:erin:sms")
+	r.set("TT9", false)
 	r.run(time.Hour)
-	r.wantSent()
+	r.wantSent("TT9:1:alice:email", "TT9:1:dave:email", "TT9:2:erin:sms")
+	// Active again: a new escalation, from level 1.
+	r.set("TT9", true)
+	r.run(2 * time.Second)
+	if n := strings.Count(strings.Join(r.sent(), " "), "TT9:1:alice:email"); n != 2 {
+		t.Fatalf("a new activation did not page level 1 again: %v", r.sent())
+	}
+}
+
+// A shelved annunciate-only alarm pages nobody, and its escalation ends.
+func TestAnnunciateOnlyShelvedIsSilent(t *testing.T) {
+	r := newRig(t, false, alarm.Def{ID: "TT9", Tag: "TT9", Area: "roast", Priority: alarm.High, AckRequired: false, AutoClear: true, Shelvable: true})
+	r.set("TT9", true)
+	r.run(time.Second)
+	r.wantSent("TT9:1:alice:email", "TT9:1:dave:email")
+	if err := r.eng.Shelve("TT9", r.now.Add(2*time.Hour), "alice"); err != nil {
+		t.Fatal(err)
+	}
+	r.run(time.Hour)
+	r.wantSent("TT9:1:alice:email", "TT9:1:dave:email")
+}
+
+// An acknowledged alarm that needs an ack sits in ack-active too, and
+// pages nobody: only ack-required: false makes ack-active page.
+func TestAckedActiveIsSilent(t *testing.T) {
+	r := newRig(t, false)
+	r.set("TT1", true)
+	r.run(time.Second)
+	if _, err := r.eng.Ack([]string{"TT1"}, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	r.run(time.Hour)
+	r.wantSent("TT1:1:alice:email", "TT1:1:dave:email")
+}
+
+// An annunciate-only alarm that returns to normal between the look that
+// queued a send and the send itself is not paged for: the sender asks the
+// engine again, keyed on the activation, not on a wait it never had.
+func TestAnnunciateOnlyRTNBeforeSend(t *testing.T) {
+	r := newRig(t, false, alarm.Def{ID: "TT9", Tag: "TT9", Area: "roast", Priority: alarm.High, AckRequired: false, AutoClear: true})
+	h := &holdChannel{rec: r.email, started: make(chan struct{}), release: make(chan struct{})}
+	r.d.channels["email"] = h
+	r.set("TT9", true)
+	r.now = r.now.Add(time.Second)
+	r.eng.Evaluate()
+	r.d.Tick(r.now) // queues alice and dave
+	<-h.started     // alice in flight, dave queued behind her
+	r.set("TT9", false)
+	r.eng.Evaluate()
+	close(h.release)
+	r.d.Drain()
+	r.wantSent("TT9:1:alice:email")
+}
+
+// Each channel kind has its own sender: a mail server that hangs does not
+// hold up an SMS queued behind it.
+func TestHungChannelDelaysOnlyItsOwnKind(t *testing.T) {
+	r := newRig(t, false)
+	h := &holdChannel{rec: r.email, started: make(chan struct{}), release: make(chan struct{})}
+	r.d.channels["email"] = h
+	r.set("TT1", true)
+	for i := 0; i < 11*60; i++ {
+		r.now = r.now.Add(time.Second)
+		r.eng.Evaluate()
+		r.d.Tick(r.now)
+	}
+	<-h.started
+	deadline := time.Now().Add(5 * time.Second)
+	for len(r.sms.Messages()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := r.sms.Messages(); len(got) != 1 || got[0].To != "erin" {
+		t.Fatalf("level 2's SMS waited behind a hung email: %v", got)
+	}
+	close(h.release)
+	r.d.Drain()
 }
 
 // stuck is a Channel that never answers on its own: it returns only when
@@ -893,5 +974,155 @@ oncall:
 	}
 	if got := r.OnCall(after, loc); !slices.Equal(got, []string{"y"}) {
 		t.Errorf("03:00 CDT: %v, want y (the skipped 02:30 handover lands at 03:00)", got)
+	}
+}
+
+// A failed send's notify row and log line carry its class (and a numeric
+// code), never the error's text, which may echo an address or account.
+func TestFailureReasonIsClassOnly(t *testing.T) {
+	var logs strings.Builder
+	r := newRig(t, false)
+	r.d.log = slog.New(slog.NewTextHandler(&logs, nil))
+	r.email.SetErr(fmt.Errorf("550 5.1.1 <alice@example.com>: mailbox unavailable: %w",
+		&SendError{Class: FailRejected, Code: 550, Proto: "smtp"}))
+	r.set("TT1", true)
+	r.run(time.Second)
+	r.email.SetErr(errors.New("dial tcp: lookup +15550100.example.com: no such host"))
+	r.set("TT1", false)
+	r.run(time.Second)
+	if _, err := r.eng.Ack([]string{"TT1"}, "alice"); err != nil {
+		t.Fatal(err)
+	}
+	r.run(time.Second)
+	r.set("TT1", true)
+	r.run(time.Second)
+	evs, err := r.ring.Query(time.Time{}, time.Time{}, alarm.Filter{Kinds: []string{alarm.KindNotify}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reasons := map[string]bool{}
+	for _, e := range evs {
+		reasons[e.Reason] = true
+	}
+	if !reasons["rejected (smtp 550)"] || !reasons["error"] {
+		t.Fatalf("reasons %v, want the classes rejected (smtp 550) and error", reasons)
+	}
+	all := fmt.Sprint(evs) + logs.String()
+	for _, leak := range []string{"example.com", "15550100", "mailbox"} {
+		if strings.Contains(all, leak) {
+			t.Errorf("%q reached the journal or the log:\n%s", leak, all)
+		}
+	}
+}
+
+func TestFailureClasses(t *testing.T) {
+	for _, c := range []struct {
+		err  error
+		want string
+	}{
+		{nil, ""},
+		{&SendError{Class: FailAuth, Code: 401, Proto: "http"}, "auth (http 401)"},
+		{fmt.Errorf("wrapped: %w", Failed(FailNoContact)), "no-contact"},
+		{context.DeadlineExceeded, "timeout"},
+		{&net.OpError{Op: "dial", Err: errors.New("connection refused to 192.0.2.1")}, "unreachable"},
+		{errors.New("anything at all +15550100"), "error"},
+	} {
+		if got := Failure(c.err); got != c.want {
+			t.Errorf("Failure(%v) = %q, want %q", c.err, got, c.want)
+		}
+	}
+}
+
+// scripted is a Channel whose Sends fail as errs says, in order (nil
+// after the list), running between after each attempt.
+type scripted struct {
+	mu      sync.Mutex
+	errs    []error
+	calls   int
+	between func()
+}
+
+func (c *scripted) Send(context.Context, Message) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.calls++
+	var err error
+	if len(c.errs) > 0 {
+		err, c.errs = c.errs[0], c.errs[1:]
+	}
+	if c.between != nil {
+		c.between()
+	}
+	return err
+}
+
+func (c *scripted) n() int { c.mu.Lock(); defer c.mu.Unlock(); return c.calls }
+
+func retryRig(t *testing.T, ch *scripted) *rig {
+	t.Helper()
+	r := newRig(t, true)
+	r.d.channels["email"] = ch
+	r.d.backoff = time.Millisecond
+	return r
+}
+
+func lastNotify(t *testing.T, r *rig, to string) alarm.Event {
+	t.Helper()
+	evs, _ := r.ring.Query(time.Time{}, time.Time{}, alarm.Filter{Kinds: []string{alarm.KindNotify}})
+	for _, e := range evs {
+		if e.To == to {
+			return e
+		}
+	}
+	t.Fatalf("no notify row for %s", to)
+	return alarm.Event{}
+}
+
+// A transient failure (a timeout) is tried again by the dispatcher; an
+// auth failure is not.
+func TestDispatcherRetriesTransientOnly(t *testing.T) {
+	ch := &scripted{errs: []error{Failed(FailTimeout), Failed(FailProvider)}}
+	r := retryRig(t, ch)
+	r.set("TT1", true)
+	r.run(time.Second)
+	if e := lastNotify(t, r, "alice"); e.Result != alarm.NotifySent {
+		t.Fatalf("alice after a timeout and a 5xx: %+v, want sent on the third attempt", e)
+	}
+
+	ch2 := &scripted{errs: []error{Failed(FailAuth), Failed(FailAuth), Failed(FailAuth), Failed(FailAuth)}}
+	r2 := retryRig(t, ch2)
+	r2.set("TT1", true)
+	r2.run(time.Second)
+	if n := ch2.n(); n != 2 { // alice and dave, once each
+		t.Fatalf("an auth failure was retried: %d sends for two people", n)
+	}
+}
+
+// An acknowledgement, or the end of this leadership, during a failed
+// attempt stops the retry: the dispatcher asks the engine and the gate
+// again before every attempt, not only the first.
+func TestRetryAsksAgainBeforeEachAttempt(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		stop func(r *rig)
+	}{
+		{"acknowledged", func(r *rig) { r.eng.Ack([]string{"TT1"}, "alice") }},
+		{"gate closed", func(r *rig) { r.gate.Store(false) }},
+		{"term changed", func(r *rig) { r.term.Store(9) }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ch := &scripted{errs: []error{Failed(FailTimeout), Failed(FailTimeout), Failed(FailTimeout)}}
+			r := retryRig(t, ch)
+			once := sync.Once{}
+			ch.between = func() { once.Do(func() { c.stop(r) }) }
+			r.set("TT1", true)
+			r.now = r.now.Add(time.Second)
+			r.eng.Evaluate()
+			r.d.Tick(r.now)
+			r.d.Drain()
+			if n := ch.n(); n != 1 {
+				t.Fatalf("%d attempts after the alarm stopped waiting or the leadership ended, want 1", n)
+			}
+		})
 	}
 }

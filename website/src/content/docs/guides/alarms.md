@@ -271,9 +271,9 @@ alarms:
       match: { class: process, priority: [high, critical] }  # also id, site, area
       # when: { days: [mon-fri], from: "06:00", to: "18:00" }  # optional
       levels:
-        - { after: 0s,  notify: [roster:operators], via: [log] }
-        - { after: 10m, notify: [roster:standby],   via: [log] }
-        - { after: 30m, notify: [carol],            via: [log] }
+        - { after: 0s,  notify: [roster:operators], via: [email] }
+        - { after: 10m, notify: [roster:standby],   via: [sms] }
+        - { after: 30m, notify: [carol],            via: [voice, email] }
       repeat: { every: 15m, times: 2 }   # the last level again
       stop: ack                          # or ack-or-rtn
 ```
@@ -301,12 +301,18 @@ alarms:
 - **A roster is read once per level,** when that level falls due. A
   handover after it pages the new person at the next level, never with
   the levels already sent.
-- **A failed send is not retried.** The channel's own retries apart, the
-  next level, or a repeat, comes on its own timer: escalation never waits
-  on delivery.
-- **An alarm with `ack-required: false` never pages:** it never waits on a
-  person, so nothing could stop the escalation. `naut alarms escalation`
-  counts these apart, and `naut check` warns when a policy matches one.
+- **A failed send is tried at most twice more,** and only for a reason
+  that can pass (a timeout, no connection, the provider's own error),
+  asking the write gate and the alarm again before each try: a retry
+  never leaves for an alarm acknowledged meanwhile, nor from a controller
+  that lost its lease. Escalation never waits on delivery: the next level,
+  or a repeat, comes on its own timer. A timeout after the provider took
+  the message can mean a page arrives twice; a duplicate beats a missed
+  one.
+- **An alarm with `ack-required: false` pages while it is active.** It
+  never waits on an acknowledgement, so its levels run from its
+  activation, and a return to normal (or a shelf, or a suppression) stops
+  them.
 - **Only `naut run` pages.** `naut test` and the acceptance harness build
   no escalation at all.
 - **The browser playground has no time-zone database,** so there a
@@ -321,10 +327,95 @@ other row. A channel whose last three sends all failed raises the system
 alarm `nautilus.alarm-notify`, until a send on it succeeds (or this
 controller stops leading).
 
-This release has one channel, `log`, which writes each page to the log
-stream: it is how a policy is tried before people are paged. Email, SMS,
-voice and webhook channels, and acknowledging from a notification, come
-next.
+A failed send's row says why by class only (`no-contact`, `config`,
+`timeout`, `unreachable`, `tls`, `auth`, `rejected`, `provider-error`),
+with the server's numeric code where there is one (`rejected (smtp
+550)`): never the server's own text, which can echo an address.
+
+### Channels
+
+`log` is always there: it writes each page to the log stream, which is
+how a policy is tried before people are paged. `alarms.channels:` adds
+the ones that leave the box:
+
+```yaml
+alarms:
+  channels:
+    email:
+      smtp: mail.example.com:587     # host:port
+      tls: starttls                  # or implicit (465)
+      from: alarms@example.com
+      username: alarms               # password: the secret email.password
+    sms:                             # a Twilio-compatible REST API
+      provider: https://api.twilio.com
+      account: AC0001                # token: the secret sms.token
+      from: "+15550100"
+    voice:                           # the same API, a call that reads the alarm out
+      provider: https://api.twilio.com
+      account: AC0001                # token: the secret voice.token
+      from: "+15550100"
+    webhook:                         # one POST per page, JSON, to a paging service
+      url: https://hooks.example.com/page
+      header: Authorization          # value: the secret webhook.header
+```
+
+Nothing in it is secret, and none of it is anyone's address. Those live
+on the controller, in its state directory beside the users file
+(`auth.state-dir`, else `/var/lib/nautilus` under systemd), mode 0600,
+never in the project or Git:
+
+```sh
+sudo naut alarms contacts set alice --email alice@example.com --sms +15550101
+sudo naut alarms contacts set oidc:carol --voice +15550102 --email carol@example.com
+sudo naut alarms contacts list                 # masked; --show prints them
+sudo naut alarms secrets set sms.token         # read from stdin, never an argument
+sudo naut alarms secrets list                  # which are set, never their values
+```
+
+On a box with a built controller, the controller answers the same
+commands without starting: `sudo /opt/nautilus/current/controller alarms
+contacts --state-dir /var/lib/nautilus list`. A running controller reads
+a change on its next page. The webhook names the person as a principal
+(`"to": "alice"`) and needs no contact. A webhook URL that carries its own
+token in the path or query puts that token in Git; prefer a service that
+takes it in a header (`header:` and the secret `webhook.header`). The
+browser playground has no state directory, so a project there with
+`alarms.channels` and escalation is refused: try policies with `log`.
+
+- **Transport security is on.** Email runs over TLS (STARTTLS, or
+  implicit) with the server's certificate verified; a server that offers
+  no STARTTLS is refused, and the password is sent only once TLS is up.
+  The SMS and voice provider and the webhook are https, verified, and a
+  redirect is never followed.
+- **A site CA:** `ca-file: /etc/ssl/site-ca.pem` on a channel verifies
+  against that bundle instead of the system roots.
+- **`insecure: true`** on a channel skips certificate verification, and,
+  for a channel that sends no credential (email with no `username`, a
+  webhook with no `header`), allows plaintext. A password or a token never
+  crosses plaintext either way. `naut check` warns about it, and `naut
+  run` journals it in the audit trail (`alarm.channel-insecure`) at
+  every start.
+- **Check them on the box** with `sudo naut alarms contacts check` (the
+  built controller: `controller alarms contacts --state-dir
+  /var/lib/nautilus check`): it fails when a level pages someone by
+  email, SMS or voice who has no address for it (roster members
+  included), or a channel's secret is not set, each with the command that
+  fixes it. `naut check` makes the same findings where it can see the
+  files, and warns once where it cannot (a laptop, CI). `naut run` prints
+  them as warnings at every start, but never refuses to start over a
+  missing number: that send fails `no-contact`, is journalled, and counts
+  toward the `nautilus.alarm-notify` system alarm.
+- **On a redundant pair each controller keeps its own files:** set the
+  contacts and secrets on both, or the standby pages nobody the day it
+  leads. Each one's start warnings say what it lacks.
+- **A proxy:** the SMS, voice and webhook channels honour `HTTPS_PROXY`
+  and `NO_PROXY`. TLS stays end to end through it; `naut run` journals
+  which channels go through which proxy host (`alarm.channel-proxy`) at
+  start, never its credentials. Through an `https://` proxy, a channel's
+  `ca-file:` must also hold the proxy's CA, and `insecure: true` skips
+  verifying the proxy too.
+- **Each channel kind has its own sender,** so a mail server that hangs
+  delays only email, never an SMS.
 
 Check a policy offline:
 

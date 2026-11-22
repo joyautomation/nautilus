@@ -1553,3 +1553,15 @@ func TestAuditUserFilterTakesTheBareName(t *testing.T) {
 		}
 	}
 }
+
+// RecordSystem journals a start-time fact as the system, with its target
+// and detail (#715: an alarm channel that does not verify its server).
+func TestRecordSystem(t *testing.T) {
+	srv := New(newTestRuntime(t), Options{Audit: &flaky{}})
+	srv.RecordSystem("alarm.channel-insecure", "email", map[string]any{"reason": "insecure: true"})
+	es := srv.audit.ring.Recent()
+	if len(es) != 1 || es[0].User != "system" || es[0].Source != audit.SourceSystem ||
+		es[0].Action != "alarm.channel-insecure" || es[0].Target != "email" || es[0].Result != audit.ResultOK {
+		t.Fatalf("ring = %+v", es)
+	}
+}

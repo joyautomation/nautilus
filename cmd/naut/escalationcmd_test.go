@@ -69,19 +69,18 @@ alarms:
 	b.Reset()
 	printCoverage(&b, c, defs, at)
 	cov := b.String()
-	if !strings.Contains(cov, "wet ") || !regexp.MustCompile(`wet\s+1\s`).MatchString(cov) ||
-		!regexp.MustCompile(`\(ack not required: never pages\)\s+1`).MatchString(cov) {
-		t.Errorf("coverage (one paging alarm, one annunciate-only):\n%s", cov)
+	if !regexp.MustCompile(`wet\s+2\s`).MatchString(cov) || strings.Contains(cov, "never pages") {
+		t.Errorf("coverage (both alarms page, the annunciate-only one too):\n%s", cov)
 	}
 
-	// An annunciate-only alarm never waits on a person: it never pages.
+	// An annunciate-only alarm pages while it is active (#715 PR 3).
 	b.Reset()
 	for _, d := range defs {
 		if d.ID == "Note" {
 			printSteps(&b, c, d, at)
 		}
 	}
-	if !strings.Contains(b.String(), "pages nobody") || strings.Contains(b.String(), "alice") {
+	if !strings.Contains(b.String(), "pages while active") || !strings.Contains(b.String(), "alice") {
 		t.Errorf("steps for an annunciate-only alarm:\n%s", b.String())
 	}
 }
@@ -110,42 +109,4 @@ func defsOrFail(t *testing.T, dir string) (*project.Project, []alarm.Def) {
 		t.Fatal(err)
 	}
 	return proj, defs
-}
-
-// naut check warns when a policy matches an alarm with ack-required: false:
-// such an alarm never waits on an ack, so the policy silently never pages
-// for it. A policy that matches only alarms that wait is quiet.
-func TestCheckWarnsOnEscalationOfNoAckAlarms(t *testing.T) {
-	files := func(area string) map[string]string {
-		return map[string]string{
-			"main.st": "PROGRAM Main\nVAR_EXTERNAL\n  Hi : BOOL;\nEND_VAR\nEND_PROGRAM\n",
-			"nautilus.yaml": `
-tasks:
-  - program: main.st
-tags:
-  - { name: Hi, role: state, init: false }
-alarms:
-  defs:
-    - { id: Hi, tag: Hi, priority: high, area: wetwell }
-    - { id: Note, tag: Hi, priority: high, area: drywell, ack-required: false }
-  escalation:
-    - id: wet
-      match: { area: ` + area + ` }
-      levels:
-        - { after: 0s, notify: [alice], via: [log] }
-`,
-		}
-	}
-	out, code := checkIn(t, files("wetwell"))
-	if code != 0 || strings.Contains(out, "ack-required: false") {
-		t.Errorf("a policy matching only alarms that wait warned (%d):\n%s", code, out)
-	}
-	out, code = checkIn(t, files(`"*"`))
-	if code != 0 {
-		t.Fatalf("a warning must not fail the check (%d):\n%s", code, out)
-	}
-	want := `warning: alarms.escalation "wet" matches 1 alarm(s) with ack-required: false (Note): they never wait on an ack, so this policy never pages for them`
-	if !strings.Contains(out, want) {
-		t.Errorf("want %q:\n%s", want, out)
-	}
 }

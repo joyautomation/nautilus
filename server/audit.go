@@ -343,6 +343,15 @@ func (a *auditor) down() bool {
 	return a.unavailable != "" || a.health.Load() != nil
 }
 
+// RecordSystem journals, as the system, a fact the composition root
+// learned while starting that an auditor must be able to find: an alarm
+// channel configured not to verify its server's certificate (#715),
+// for one. User and Source are the system's; Result is ok.
+func (s *Server) RecordSystem(action, target string, detail map[string]any) {
+	s.audit.record(audit.Entry{User: "system", Source: audit.SourceSystem, Action: action,
+		Target: target, Detail: detail, Result: audit.ResultOK})
+}
+
 // AuditJournalDown reports whether the audit journal could not be opened
 // or cannot be written. While it is, strict actions (forces, program
 // edits) are refused; naut run raises the system alarm from it.

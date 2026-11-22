@@ -147,43 +147,12 @@ func runAlarmsEscalation(args []string) int {
 	return 1
 }
 
-// escalationNoAckWarnings names, per policy, the alarms its match covers
-// that have ack-required: false. Such an alarm never waits on a person, so
-// today it never pages, which surprises whoever wrote the policy for it.
-func escalationNoAckWarnings(c *escalate.Config, defs []alarm.Def) []string {
-	var out []string
-	for i := range c.Policies {
-		p := &c.Policies[i]
-		var ids []string
-		for _, d := range defs {
-			if !d.AckRequired && p.Match.Covers(d) {
-				ids = append(ids, d.ID)
-			}
-		}
-		if len(ids) == 0 {
-			continue
-		}
-		shown := ids
-		if len(shown) > 3 {
-			shown = append(shown[:3:3], fmt.Sprintf("and %d more", len(ids)-3))
-		}
-		out = append(out, fmt.Sprintf("alarms.escalation %q matches %d alarm(s) with ack-required: false (%s): "+
-			"they never wait on an ack, so this policy never pages for them; set ack-required: true on them, "+
-			"or narrow the policy's match", p.ID, len(ids), strings.Join(shown, ", ")))
-	}
-	return out
-}
-
 // printCoverage counts the alarms each policy would run, and the ones no
 // policy covers, for an alarm that began waiting at t.
 func printCoverage(w io.Writer, c *escalate.Config, defs []alarm.Def, t time.Time) {
 	count := map[string]int{}
-	none, noAck := 0, 0
+	none := 0
 	for _, d := range defs {
-		if !d.AckRequired {
-			noAck++ // never waits on a person, so never pages
-			continue
-		}
 		if p := c.Select(d, t); p != nil {
 			count[p.ID]++
 		} else {
@@ -198,7 +167,6 @@ func printCoverage(w io.Writer, c *escalate.Config, defs []alarm.Def, t time.Tim
 		fmt.Fprintf(tw, "%s\t%d\t%d\n", p.ID, count[p.ID], len(p.Levels))
 	}
 	fmt.Fprintf(tw, "(none: pages nobody)\t%d\t\n", none)
-	fmt.Fprintf(tw, "(ack not required: never pages)\t%d\t\n", noAck)
 	tw.Flush()
 }
 
@@ -208,16 +176,19 @@ func printCoverage(w io.Writer, c *escalate.Config, defs []alarm.Def, t time.Tim
 func printSteps(w io.Writer, c *escalate.Config, d alarm.Def, t time.Time) {
 	p := c.Select(d, t)
 	loc := c.Oncall.Location()
-	if !d.AckRequired {
-		fmt.Fprintf(w, "%s: ack-required is false, so it never waits on a person: it pages nobody\n", d.ID)
-		return
-	}
 	if p == nil {
 		fmt.Fprintf(w, "%s: no policy covers it at %s: it pages nobody\n", d.ID, t.In(loc).Format("Mon 2006-01-02 15:04"))
 		return
 	}
-	fmt.Fprintf(w, "%s: policy %s (stop: %s), if it begins waiting at %s (%s) and nobody acknowledges it\n\n",
-		d.ID, p.ID, p.Stop, t.In(loc).Format("Mon 2006-01-02 15:04"), loc)
+	if !d.AckRequired {
+		// ack-required: false never waits on a person: it pages while it
+		// is active and stops when it returns to normal (#715 PR 3).
+		fmt.Fprintf(w, "%s: policy %s (ack not required: pages while active, stops on return to normal), if it becomes active at %s (%s) and stays active\n\n",
+			d.ID, p.ID, t.In(loc).Format("Mon 2006-01-02 15:04"), loc)
+	} else {
+		fmt.Fprintf(w, "%s: policy %s (stop: %s), if it begins waiting at %s (%s) and nobody acknowledges it\n\n",
+			d.ID, p.ID, p.Stop, t.In(loc).Format("Mon 2006-01-02 15:04"), loc)
+	}
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "AFTER\tAT\tLEVEL\tWHO\tVIA")
 	for _, s := range p.Steps() {
