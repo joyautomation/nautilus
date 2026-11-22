@@ -560,6 +560,8 @@ func TestSchemaAlarmKeysAreAccepted(t *testing.T) {
 		"display": "Zones/15", "notes": "n", "on-delay": "5m",
 		"off-delay": "2s", "ack-required": "false", "auto-clear": "false",
 		"shelve": "false", "enable": "RTU9__Online",
+		"consequence": "Line over-pressure", "response": "Stop P101",
+		"rationalization": "{state: approved, by: alice, at: 2026-11-20}",
 	}
 	for _, key := range schemaKeys(props) {
 		v, ok := sample[key]

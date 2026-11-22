@@ -90,6 +90,11 @@ func rules(u universe) []rule {
 			why:  "the senders resolve a principal to an address and send; the manifest composes them, and they know no server, runtime or auth",
 		},
 		{
+			from: []string{"alarm/rationalize"},
+			to:   u.allBut("alarm"),
+			why:  "the master alarm database and the performance reports read definitions and journal events they are handed; they open nothing and know no server or runtime",
+		},
+		{
 			from: []string{"modbus", "eip", "optommp", "plcnext", "profinet", "hw", "snmp", "redfish", "prom", "replay", "sparkplug/host"},
 			to:   []string{"runtime", "server", "alarm", "acceptance", "internal/project", "internal/lsp", "cmd", "devbind", "devprofile", "iolink"},
 			why:  "drivers sit behind io.Driver and the tag file; the protocol side of the map never reaches back into the runtime side, nor knows the device library or the IO-Link layer above it",

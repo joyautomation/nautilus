@@ -95,6 +95,10 @@ func (f Filter) limit() int {
 	return f.Limit
 }
 
+// Match reports whether e passes the filter (the limit aside): what an
+// offline reader applies to a journal it read whole.
+func (f Filter) Match(e Event) bool { return f.match(e) }
+
 func (f Filter) match(e Event) bool {
 	return inSet(f.Sites, e.Site) && inSet(f.IDs, e.ID) &&
 		inSet(f.Kinds, e.Kind) && inSet(f.Priorities, e.Priority.String()) &&
@@ -302,6 +306,25 @@ func (j *FileJournal) Query(from, to time.Time, f Filter) ([]Event, error) {
 		events = append(events, got...)
 	}
 	return selectEvents(events, from, to, f), nil
+}
+
+// ReadFileJournal reads a FileJournal's events read-only, oldest first:
+// the rotated generation (<path>.1), if any, then the live file. Unlike
+// NewFile it never creates anything, so a mistyped path is an error and
+// not an empty journal. It is what the offline reports read.
+func ReadFileJournal(path string) ([]Event, error) {
+	if _, err := os.Stat(path); err != nil {
+		return nil, fmt.Errorf("no alarm journal at %s: %w", path, err)
+	}
+	var events []Event
+	for _, p := range []string{path + ".1", path} {
+		got, err := readJSONL(p)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, got...)
+	}
+	return events, nil
 }
 
 func readJSONL(path string) ([]Event, error) {

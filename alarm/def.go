@@ -101,8 +101,10 @@ func (d Duration) MarshalYAML() (any, error) { return time.Duration(d).String(),
 // BOOL; true means in alarm.
 type Def struct {
 	// Source names where the definition was declared ("manifest" or an
-	// alarm file's path), so a duplicate-id error can point at it. Stamped
-	// at compose time, never read from YAML.
+	// alarm file's path; for one a rule generated, that rule, as
+	// "manifest rule 2 (match type=AnalogInput member=HH)"), so a
+	// duplicate-id error and `naut alarms master` can point at it.
+	// Stamped at compose time, never read from YAML.
 	Source string `yaml:"-" json:"-"`
 
 	ID   string `yaml:"id" json:"id"`     // defaults to Tag
@@ -132,6 +134,16 @@ type Def struct {
 	// evaluated; "" means always enabled. Pointing it at "<site>__Online"
 	// is what stops a dead edge node from freezing four alarms on.
 	Enable string `yaml:"enable" json:"enable,omitempty"`
+
+	// Consequence, Response and Rationalization are the master alarm
+	// database's columns (ISA-18.2 rationalization, #715): what happens if
+	// nobody responds, what the operator does, and whether the alarm has
+	// been through review. They are documentation that travels with the
+	// definition and is read by `naut alarms master`; nothing at run time
+	// reads them, so they stay off the wire.
+	Consequence     string          `yaml:"-" json:"-"`
+	Response        string          `yaml:"-" json:"-"`
+	Rationalization Rationalization `yaml:"-" json:"-"`
 
 	// set records which fields the YAML actually spelled, so ApplyDefaults
 	// can fill only the rest. Unexported: it is load-time bookkeeping, not
@@ -177,6 +189,10 @@ type defWire struct {
 	Clear    *bool     `yaml:"auto-clear"`
 	Shelve   *bool     `yaml:"shelve"`
 	Enable   string    `yaml:"enable"`
+
+	Consequence     string           `yaml:"consequence,omitempty"`
+	Response        string           `yaml:"response,omitempty"`
+	Rationalization *Rationalization `yaml:"rationalization,omitempty"`
 }
 
 // UnmarshalYAML applies the package defaults (medium, ack-required,
@@ -192,7 +208,11 @@ func (d *Def) UnmarshalYAML(node *yaml.Node) error {
 		Class:    w.Class, Site: w.Site, Area: w.Area,
 		Display: w.Display, Notes: w.Notes,
 		AckRequired: true, AutoClear: true, Shelvable: true,
-		Enable: w.Enable,
+		Enable:      w.Enable,
+		Consequence: w.Consequence, Response: w.Response,
+	}
+	if w.Rationalization != nil {
+		d.Rationalization = *w.Rationalization
 	}
 	if w.Priority != nil {
 		d.Priority, d.set = *w.Priority, d.set|setPriority
@@ -236,6 +256,11 @@ func (d Def) MarshalYAML() (any, error) {
 		ID: d.ID, Tag: d.Tag, Name: d.Name,
 		Class: d.Class, Site: d.Site, Area: d.Area,
 		Display: d.Display, Notes: d.Notes, Enable: d.Enable,
+		Consequence: d.Consequence, Response: d.Response,
+	}
+	if !d.Rationalization.IsZero() {
+		r := d.Rationalization
+		w.Rationalization = &r
 	}
 	p := d.Priority
 	w.Priority = &p
@@ -374,6 +399,14 @@ type Rule struct {
 	Shelve      *bool `yaml:"shelve"`
 
 	Enable string `yaml:"enable"` // template, e.g. "{site}__Online"
+
+	// The master columns, copied to every definition the rule generates:
+	// rationalizing a UDT's alarm once covers each instance of it. They
+	// are plain text, like Notes, not templates, so an operator procedure
+	// may contain braces.
+	Consequence     string           `yaml:"consequence"`
+	Response        string           `yaml:"response"`
+	Rationalization *Rationalization `yaml:"rationalization"`
 }
 
 // TagInfo is everything Expand needs to know about one tag in the store.
@@ -470,7 +503,8 @@ func Expand(rules []Rule, defs []Def, tags []TagInfo) ([]Def, error) {
 				if err != nil {
 					return nil, fmt.Errorf("rule %d (%s): %w", i, c.path(), err)
 				}
-				if err := add(d, ruleSrc(i)); err != nil {
+				d.Source = ruleSrc(i)
+				if err := add(d, d.Source); err != nil {
 					return nil, err
 				}
 				break // first match wins
@@ -555,6 +589,12 @@ func (r Rule) def(c candidate) (Def, error) {
 		Notes:    r.Notes,
 
 		AckRequired: true, AutoClear: true, Shelvable: true,
+
+		Consequence: r.Consequence,
+		Response:    r.Response,
+	}
+	if r.Rationalization != nil {
+		d.Rationalization = *r.Rationalization
 	}
 	var err error
 	if d.ID, err = tmpl("id", r.ID, "{path}"); err != nil {

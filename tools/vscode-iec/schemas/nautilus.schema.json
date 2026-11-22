@@ -2348,6 +2348,42 @@
         "enable": {
           "type": "string",
           "description": "A BOOL that must be true, else Suppressed. Template over {tag} {member} {site} {area} {desc} {type} {path}; an unknown placeholder is an error, so a typo fails the load instead of reaching an operator screen as literal braces. e.g. \"{site}__Online\"."
+        },
+        "consequence": {
+          "type": "string",
+          "description": "What happens if nobody responds: the master alarm database's consequence column, read by naut alarms master. Copied to every alarm the rule generates; plain text, not a template."
+        },
+        "response": {
+          "type": "string",
+          "description": "What the operator does when it sounds (the corrective action). Copied to every alarm the rule generates; plain text, not a template."
+        },
+        "rationalization": {
+          "$ref": "#/definitions/alarm-rationalization"
+        }
+      }
+    },
+    "alarm-rationalization": {
+      "type": "object",
+      "description": "Where the alarm stands in ISA-18.2 rationalization. A reviewed or approved alarm names who reviewed it and the day.",
+      "additionalProperties": false,
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "reviewed",
+            "approved"
+          ],
+          "description": "pending (the default), reviewed by the team, or approved under management of change."
+        },
+        "by": {
+          "type": "string",
+          "description": "Who reviewed or approved it. Required unless pending."
+        },
+        "at": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+          "description": "The day, YYYY-MM-DD. Required unless pending."
         }
       }
     },
@@ -2417,6 +2453,17 @@
         "enable": {
           "type": "string",
           "description": "A BOOL that must be true, else Suppressed."
+        },
+        "consequence": {
+          "type": "string",
+          "description": "What happens if nobody responds: the master alarm database's consequence column, read by naut alarms master."
+        },
+        "response": {
+          "type": "string",
+          "description": "What the operator does when it sounds (the corrective action)."
+        },
+        "rationalization": {
+          "$ref": "#/definitions/alarm-rationalization"
         }
       }
     },

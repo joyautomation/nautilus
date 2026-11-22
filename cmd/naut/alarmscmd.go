@@ -41,6 +41,14 @@ Usage:
                                on the box (naut alarms contacts help).
   naut alarms secrets ...        The channels' credentials, on the box,
                                read from stdin.
+  naut alarms master export|check [dir]
+                               The master alarm database: one row per
+                               alarm (priority, consequence, response,
+                               review state), exported to CSV or YAML
+                               and checked back against the manifest.
+  naut alarms report flood|chatter|bad-actors|stale
+                               ISA-18.2 alarm performance from the
+                               journal (naut alarms report help).
 `
 
 func runAlarms(args []string) int {
@@ -57,6 +65,10 @@ func runAlarms(args []string) int {
 		return runAlarmsEscalation(args[1:])
 	case "contacts", "secrets":
 		return runAlarmsContacts(args[0], args[1:])
+	case "master":
+		return runAlarmsMaster(args[1:])
+	case "report":
+		return runAlarmsReport(args[1:])
 	case "help", "--help", "-h":
 		fmt.Print(alarmsUsage)
 		return 0
