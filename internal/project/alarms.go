@@ -744,31 +744,6 @@ func (p *Project) alarmSink() (alarm.Journal, io.Closer, error) {
 	return nil, nil, fmt.Errorf("alarms.journal.sink %q is not one of file, postgres", j.Sink)
 }
 
-func (p *Project) alarmNotifiers(log *slog.Logger) ([]alarm.Notifier, error) {
-	var out []alarm.Notifier
-	for i, n := range p.Alarms.Notify {
-		switch {
-		case n.Log:
-			out = append(out, alarm.NewLogNotifier(log))
-		case n.Webhook != "":
-			o := alarm.WebhookOptions{}
-			if n.HeaderEnv != "" {
-				name := n.Header
-				if name == "" {
-					name = "Authorization"
-				}
-				v := os.Getenv(n.HeaderEnv)
-				if v == "" {
-					return nil, fmt.Errorf("alarms.notify[%d]: header-env %s is empty", i, n.HeaderEnv)
-				}
-				o.Headers = map[string]string{name: v}
-			}
-			out = append(out, alarm.NewWebhook(n.Webhook, o))
-		}
-	}
-	return out, nil
-}
-
 // StandaloneCarryGrace is how long a standalone controller's engine waits
 // past a false reading for a restored occurrence's condition (alarm.
 // Options.CarryGrace): its first scans may read inputs no driver has read

@@ -497,7 +497,7 @@ func pagedRig(t *testing.T, f *fakeService) (*pushRig, string) {
 	rig := newPushRig(t, &subStore{}, nil, "127.0.0.1")
 	pool := x509.NewCertPool()
 	pool.AddCert(f.Certificate())
-	rig.srv.push.sender.TLS = &tls.Config{RootCAs: pool}
+	rig.srv.push.sender.(*webpush.Sender).TLS = &tls.Config{RootCAs: pool}
 	ua, _ := ecdh.P256().GenerateKey(rand.Reader)
 	au := make([]byte, 16)
 	rand.Read(au)
@@ -652,7 +652,7 @@ func TestPushAcceptsABrowsersBody(t *testing.T) {
 	rig := newPushRig(t, &subStore{}, nil, "127.0.0.1")
 	pool := x509.NewCertPool()
 	pool.AddCert(f.Certificate())
-	rig.srv.push.sender.TLS = &tls.Config{RootCAs: pool}
+	rig.srv.push.sender.(*webpush.Sender).TLS = &tls.Config{RootCAs: pool}
 	ua, _ := ecdh.P256().GenerateKey(rand.Reader)
 	au := make([]byte, 16)
 	rand.Read(au)

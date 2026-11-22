@@ -112,14 +112,24 @@ type LogVouch struct {
 	LastSeq  uint64    `json:"lastSeq"`
 }
 
+// apiClient is the one call the elector makes of the Kubernetes API.
+type apiClient interface {
+	Do(method, path string, body []byte) (*http.Response, error)
+}
+
 type Elector struct {
 	mu       sync.RWMutex
 	identity string // display name (pod name)
 	holderID string // what we write into the lease: "name|host:port"
 	name     string
 	duration time.Duration
-	client   *k8sapi.Client
-	mode     string
+	// client reaches the Kubernetes API in cluster mode; an interface, so a
+	// standalone elector (NewLocal, the browser playground's) never makes
+	// the concrete client reachable: it would keep net/http's client, TLS and
+	// HTTP/2 in the wasm. Only newWithClient stores one.
+	client    apiClient
+	namespace string
+	mode      string
 
 	isLeader    bool
 	holder      string // current lease holderIdentity, verbatim
@@ -309,10 +319,11 @@ func newWithClient(c *k8sapi.Client, leaseName, identity, selfAddr string) *Elec
 		// this bounds worst-case failover. 4s renews every 1s — snappy
 		// without risking false failover on a brief GC/network hiccup. A
 		// gracefully deleted leader (Release on SIGTERM) fails over faster.
-		duration: 4 * time.Second,
-		client:   c,
-		mode:     "cluster",
-		decided:  make(chan struct{}),
+		duration:  4 * time.Second,
+		client:    c,
+		namespace: c.Namespace,
+		mode:      "cluster",
+		decided:   make(chan struct{}),
 	}
 }
 
@@ -609,13 +620,13 @@ func (e *Elector) Status() Status {
 // ---- Lease API plumbing ----
 
 func (e *Elector) leasePath() string {
-	return "/apis/coordination.k8s.io/v1/namespaces/" + e.client.Namespace + "/leases/" + e.name
+	return "/apis/coordination.k8s.io/v1/namespaces/" + e.namespace + "/leases/" + e.name
 }
 
 func (e *Elector) newLease(now time.Time, transitions int) *lease {
 	l := &lease{APIVersion: "coordination.k8s.io/v1", Kind: "Lease"}
 	l.Metadata.Name = e.name
-	l.Metadata.Namespace = e.client.Namespace
+	l.Metadata.Namespace = e.namespace
 	l.Spec = leaseSpec{
 		HolderIdentity:       e.holderID,
 		LeaseDurationSeconds: e.leaseSeconds(),
@@ -646,7 +657,7 @@ func (e *Elector) get() (*lease, int, error) {
 }
 
 func (e *Elector) post(l *lease) error {
-	collection := "/apis/coordination.k8s.io/v1/namespaces/" + e.client.Namespace + "/leases"
+	collection := "/apis/coordination.k8s.io/v1/namespaces/" + e.namespace + "/leases"
 	return e.send(http.MethodPost, collection, l, http.StatusCreated)
 }
 

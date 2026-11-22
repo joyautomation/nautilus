@@ -613,8 +613,12 @@ var ErrTooLarge = errors.New("oplog: entry too large")
 
 // Node is one instance's view of the log.
 type Node struct {
-	o      Options
-	client *http.Client
+	o Options
+	// client sends to a peer. An interface, so code that holds a Node without
+	// ever building one (the browser playground's server, which has no peers)
+	// does not keep net/http's client, TLS and HTTP/2 linked: only New names
+	// the concrete *http.Client.
+	client peerClient
 	log    *slog.Logger
 
 	// seqMu serializes sequencing on the leader: number, store, replicate,
@@ -3087,6 +3091,11 @@ type httpError struct {
 }
 
 func (e *httpError) Error() string { return fmt.Sprintf("HTTP %d: %s", e.code, e.body) }
+
+// peerClient is the one call the node makes of its HTTP client.
+type peerClient interface {
+	Do(*http.Request) (*http.Response, error)
+}
 
 // call is one replica-to-replica request: POST with a body, GET without.
 func (n *Node) call(ctx context.Context, base, path string, body any, out any) error {

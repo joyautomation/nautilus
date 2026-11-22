@@ -65,10 +65,21 @@ const (
 // end every subscription. Nothing is revoked or pruned on its word.
 func (p *pushService) usersReadable() bool { return p.s.users != nil && p.s.users.Err() == nil }
 
+// pushSender is what the service asks of the sender.
+type pushSender interface {
+	Send(ctx context.Context, sub webpush.Subscription, payload []byte, o webpush.Options) error
+	Topic(t string) string
+}
+
 type pushService struct {
-	s      *Server
-	reg    *webpush.Registry
-	sender *webpush.Sender
+	s   *Server
+	reg *webpush.Registry
+	// sender is an interface so Server's type graph does not reach
+	// webpush.Sender's *http.Client: the linker keeps a type's fields' methods
+	// alive, and the browser playground's wasm would link net/http's client,
+	// crypto/tls and HTTP/2 for a push it never sends. Only newPushService
+	// names *webpush.Sender, and only New reaches it (wirePush).
+	sender pushSender
 	policy webpush.Policy
 
 	heldMu sync.Mutex
