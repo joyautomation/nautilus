@@ -129,6 +129,10 @@ func (s *Server) handleParametersImport(w http.ResponseWriter, r *http.Request) 
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("expectFrom %q must be a number, a bool or text", n)})
 			return
 		}
+		if _, dup := expect[ir.NameKey(n)]; dup {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("expectFrom names %q twice (tag names ignore case)", n)})
+			return
+		}
 		expect[ir.NameKey(n)] = v
 	}
 	// An import is many tag writes: each tag must pass the authorization

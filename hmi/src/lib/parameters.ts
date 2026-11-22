@@ -219,7 +219,7 @@ export type TakeOutcome =
  * shows it (return false to decline, and nothing is sent), then the set is
  * applied all or nothing, sent with the values the dry run saw: a value that
  * moved while the question was open refuses the whole set (409), so it is
- * never overwritten unseen.
+ * not overwritten unseen.
  */
 export async function takeRepo(
 	client: { importSet(values: Record<string, unknown>, dryRun?: boolean, expectFrom?: Record<string, unknown>): Promise<ImportAnswer> },
@@ -236,6 +236,8 @@ export async function takeRepo(
 	if (!ok) return { kind: 'declined' };
 	// Send what the dry run saw: if anything moved while the question was
 	// open the controller refuses the whole set (409) instead of overwriting it.
+	// (A live NaN or infinity reads as null, which cannot be sent, so such a tag
+	// is not guarded; a ranged setpoint refuses those anyway.)
 	const expectFrom: Record<string, unknown> = {};
 	for (const x of changes) if (x.from !== undefined && x.from !== null) expectFrom[x.name] = x.from;
 	const done = await client.importSet(set, false, expectFrom);

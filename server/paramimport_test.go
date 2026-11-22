@@ -347,3 +347,38 @@ func TestParameterImportExpectFromDryRun(t *testing.T) {
 		t.Fatalf("%d %s", code, b)
 	}
 }
+
+func TestParameterImportExpectFromDuplicateKeysAre400(t *testing.T) {
+	srv := New(importRuntime(t))
+	if code, _, b := importCall(t, srv, `{"version":1,"parameters":{"SP":80},"expectFrom":{"SP":65,"sp":70}}`); code != http.StatusBadRequest {
+		t.Fatalf("%d %s", code, b)
+	}
+}
+
+// A moved value beside a real refusal: 422, both statuses in the answer.
+func TestParameterImportExpectFromMixedIs422WithBothStatuses(t *testing.T) {
+	srv := New(importRuntime(t))
+	call(t, srv, "POST", "/api/tags", `{"name":"SP","value":70}`)
+	code, a, body := importCall(t, srv, `{"version":1,"parameters":{"SP":80,"Fan":99},"expectFrom":{"SP":65,"Fan":20}}`)
+	got := map[string]string{}
+	for _, r := range a.Results {
+		got[r.Name] = r.Status
+	}
+	if code != http.StatusUnprocessableEntity || got["SP"] != "moved" || got["Fan"] != "refused" {
+		t.Fatalf("%d %s", code, body)
+	}
+}
+
+// The guard compares every kind of parameter, and a guarded zero/false counts.
+func TestParameterImportExpectFromKinds(t *testing.T) {
+	srv := New(importRuntime(t))
+	if code, _, b := importCall(t, srv, `{"version":1,"parameters":{"N":6,"On":false},"expectFrom":{"N":5,"On":true}}`); code != http.StatusOK {
+		t.Fatalf("exact guards should pass: %d %s", code, b)
+	}
+	if code, _, b := importCall(t, srv, `{"version":1,"parameters":{"N":7},"expectFrom":{"N":5}}`); code != http.StatusConflict {
+		t.Fatalf("int moved: %d %s", code, b)
+	}
+	if code, _, b := importCall(t, srv, `{"version":1,"parameters":{"On":true},"expectFrom":{"On":true}}`); code != http.StatusConflict {
+		t.Fatalf("bool moved: %d %s", code, b)
+	}
+}
