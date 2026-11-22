@@ -40,6 +40,12 @@ namespace Tiad.Test
             }
         }
 
+        // WebSec is the secrets of an apply without web users.
+        static Secrets WebSec()
+        {
+            return new Secrets { Records = AccessRecords.Random() };
+        }
+
         static readonly string[] NotEnabled = { "Disabled", AccessRule.Absent, "EnabledWithAccessControlViaAccessLevel", "enabledwithaccesscontrol" };
 
         // WebPlan: a kept CPU's access control must read exactly
@@ -75,7 +81,7 @@ namespace Tiad.Test
             var on = new WebServer { Enabled = true };
             var w = new ScriptedWeb();
             var notes = new List<string>();
-            WebSteps.Run(w, new ScriptedAccess(), on, false, notes);
+            WebSteps.Run(w, new ScriptedAccess(), on, WebSec(), false, new AccessMade(), notes);
             True(w.On && w.Iface && w.Https, "on over access control on, HTTPS only");
             Eq(string.Join(",", w.Calls.ToArray()), "on", "one write");
             Eq(string.Join("|", notes.ToArray()), WebSteps.OnNote, "the note");
@@ -86,13 +92,13 @@ namespace Tiad.Test
                 {
                     w = new ScriptedWeb();
                     notes = new List<string>();
-                    var e = Throws<TiaException>(delegate { WebSteps.Run(w, new ScriptedAccess { State_ = st }, on, made, notes); }, "on over " + Show(st));
+                    var e = Throws<TiaException>(delegate { WebSteps.Run(w, new ScriptedAccess { State_ = st }, on, WebSec(), made, new AccessMade(), notes); }, "on over " + Show(st));
                     if (e != null) Eq(e.Message, WebRule.Refusal(st), st + " message");
                     Eq(w.Calls.Count, 0, st + ": nothing written");
                     Eq(notes.Count, 0, st + ": no note");
 
                     w = new ScriptedWeb { On = true, Iface = true };
-                    WebSteps.Run(w, new ScriptedAccess { State_ = st }, new WebServer { Enabled = false }, made, notes);
+                    WebSteps.Run(w, new ScriptedAccess { State_ = st }, new WebServer { Enabled = false }, WebSec(), made, new AccessMade(), notes);
                     True(!w.On && !w.Iface, st + ": off is never refused");
                 }
             }
@@ -101,20 +107,20 @@ namespace Tiad.Test
             {
                 w = new ScriptedWeb { On = true, Iface = true };
                 notes = new List<string>();
-                WebSteps.Run(w, new ScriptedAccess { State_ = st }, null, false, notes);
+                WebSteps.Run(w, new ScriptedAccess { State_ = st }, null, WebSec(), false, new AccessMade(), notes);
                 Eq(w.Calls.Count, 0, st + ": absent leaves a kept CPU's server as found");
                 True(w.On, st + ": still on");
                 Eq(string.Join("|", notes.ToArray()), WebSteps.AnonymousNote, st + ": but says it serves Anonymous");
             }
             w = new ScriptedWeb { On = true, Iface = true, Https = true };
             notes = new List<string>();
-            WebSteps.Run(w, new ScriptedAccess(), null, false, notes);
+            WebSteps.Run(w, new ScriptedAccess(), null, WebSec(), false, new AccessMade(), notes);
             Eq(notes.Count, 0, "on over access control on, left out: nothing to say");
             w = new ScriptedWeb();
-            WebSteps.Run(w, new ScriptedAccess { State_ = "Disabled" }, null, false, notes);
+            WebSteps.Run(w, new ScriptedAccess { State_ = "Disabled" }, null, WebSec(), false, new AccessMade(), notes);
             Eq(notes.Count + w.Calls.Count, 0, "off over access control off, left out: nothing");
             w = new ScriptedWeb { On = true, Iface = true };
-            WebSteps.Run(w, new ScriptedAccess { State_ = "Disabled" }, null, true, new List<string>());
+            WebSteps.Run(w, new ScriptedAccess { State_ = "Disabled" }, null, WebSec(), true, new AccessMade(), new List<string>());
             True(!w.On && !w.Iface, "absent turns a new CPU's server off");
         }
 
@@ -122,17 +128,17 @@ namespace Tiad.Test
         static void WebStepsReadBack()
         {
             var w = new ScriptedWeb { IgnoreInterface = true };
-            var e = Throws<TiaException>(delegate { WebSteps.Run(w, new ScriptedAccess(), new WebServer { Enabled = true }, true, new List<string>()); }, "interface ignored");
+            var e = Throws<TiaException>(delegate { WebSteps.Run(w, new ScriptedAccess(), new WebServer { Enabled = true }, WebSec(), true, new AccessMade(), new List<string>()); }, "interface ignored");
             if (e != null) Eq(e.Message, "after turning the web server on the CPU reads WebserverActivate true and UseWebServerForInterface false", "interface ignored");
             w = new ScriptedWeb { On = true, Iface = true, IgnoreServer = true };
-            e = Throws<TiaException>(delegate { WebSteps.Run(w, new ScriptedAccess(), new WebServer { Enabled = false }, false, new List<string>()); }, "server ignored");
+            e = Throws<TiaException>(delegate { WebSteps.Run(w, new ScriptedAccess(), new WebServer { Enabled = false }, WebSec(), false, new AccessMade(), new List<string>()); }, "server ignored");
             if (e != null) Eq(e.Message, "after turning the web server off the CPU reads WebserverActivate true and UseWebServerForInterface false", "server ignored");
             w = new ScriptedWeb { IgnoreHttps = true };
-            e = Throws<TiaException>(delegate { WebSteps.Run(w, new ScriptedAccess(), new WebServer { Enabled = true }, true, new List<string>()); }, "HTTPS only ignored");
+            e = Throws<TiaException>(delegate { WebSteps.Run(w, new ScriptedAccess(), new WebServer { Enabled = true }, WebSec(), true, new AccessMade(), new List<string>()); }, "HTTPS only ignored");
             if (e != null) Eq(e.Message, "after turning the web server on the CPU reads WebserverHttpsOnly false", "HTTPS only ignored");
             // Off does not need HTTPS only.
             w = new ScriptedWeb { On = true, Iface = true, IgnoreHttps = true };
-            WebSteps.Run(w, new ScriptedAccess(), new WebServer { Enabled = false }, false, new List<string>());
+            WebSteps.Run(w, new ScriptedAccess(), new WebServer { Enabled = false }, WebSec(), false, new AccessMade(), new List<string>());
         }
     }
 }

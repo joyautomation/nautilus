@@ -708,7 +708,6 @@ namespace Tiad.Openness
         {
             if (next.Modules.Count > 0) return "tiad cannot place rack modules yet: the first TIA start (S2a) learns the rack";
             if (next.Profinet != null) return "tiad cannot configure a PROFINET IO system yet: the IO-device attribute names are learned at the first TIA start (S2a)";
-            if (next.WebServer != null && next.WebServer.Users.Count > 0) return "tiad cannot make web server users yet (#789 stage 5 (A) step 2B): leave webServer.users out";
             return null;
         }
 
@@ -745,7 +744,7 @@ namespace Tiad.Openness
                 var access = new Access(p, station, cpu);
                 AccessSteps.Run(access, next.Cpu.AccessControl, secrets.FullAccessPassword, secrets.Records, decision == CpuReuse.Create, made, notes);
                 access.LogRights();
-                WebSteps.Run(new Web(this, cpu), access, next.WebServer, decision == CpuReuse.Create, notes);
+                WebSteps.Run(new Web(this, cpu), access, next.WebServer, secrets, decision == CpuReuse.Create, made, notes);
                 return true;
             });
         }
@@ -772,41 +771,19 @@ namespace Tiad.Openness
         {
             Tia(delegate
             {
-                AccessSteps.Prepare(new Users(Of(project).Project), next.Cpu.AccessControl, secrets.FullAccessPassword, secrets.Records, recordOnly, w, notes);
+                AccessSteps.PrepareAll(new Users(Of(project).Project), next, secrets, recordOnly, w, notes);
                 return true;
             });
         }
 
-        // RemoveAccess takes the role off every user before deleting it, so
-        // a user the project held, holding the role, is never in the way.
+        // RemoveAccess is AccessSteps.Remove: DeleteRole takes a role off
+        // every user before deleting it, so a user the project held,
+        // holding the role, is never in the way.
         public List<string> RemoveAccess(object project, AccessMade made)
         {
             return Tia(delegate
             {
-                var removed = new List<string>();
-                UmacConfigurator u = Users.Umac(Of(project).Project);
-                if (made.User)
-                {
-                    ProjectUser user = u.ProjectUsers.Find(AccessSteps.UserName);
-                    if (user != null)
-                    {
-                        user.Delete();
-                        removed.Add("user " + Json.Quote(AccessSteps.UserName));
-                    }
-                }
-                if (made.Role)
-                {
-                    CustomRole role = u.CustomRoles.Find(AccessSteps.RoleName);
-                    if (role != null)
-                    {
-                        foreach (ProjectUser pu in u.ProjectUsers)
-                        {
-                            if (pu.Roles.Contains(role)) pu.Roles.Remove(role);
-                        }
-                        role.Delete();
-                        removed.Add("role " + Json.Quote(AccessSteps.RoleName));
-                    }
-                }
+                List<string> removed = AccessSteps.Remove(new Users(Of(project).Project), made);
                 Log.Line("access control: removed what this session made: {0}", removed.Count == 0 ? "nothing left" : string.Join(", ", removed.ToArray()));
                 return removed;
             });
@@ -908,6 +885,72 @@ namespace Tiad.Openness
                 CustomRole r = Role(role);
                 if (!pu.Roles.Contains(r)) pu.Roles.Add(r);
             }
+
+            public List<string> UserNames()
+            {
+                var l = new List<string>();
+                foreach (ProjectUser pu in Umac(p).ProjectUsers) l.Add(pu.Name);
+                return l;
+            }
+
+            public List<string> RoleNames()
+            {
+                var l = new List<string>();
+                foreach (CustomRole r in Umac(p).CustomRoles) l.Add(r.Name);
+                return l;
+            }
+
+            // UserRoles names every role the user holds, system roles too
+            // (ProjectUser.Roles holds both).
+            public List<string> UserRoles(string user)
+            {
+                var l = new List<string>();
+                foreach (Role r in User(user).Roles) l.Add(r.Name);
+                return l;
+            }
+
+            public void RemoveRole(string user, string role)
+            {
+                ProjectUser pu = User(user);
+                foreach (Role r in new List<Role>(pu.Roles))
+                {
+                    if (r.Name == role) pu.Roles.Remove(r);
+                }
+            }
+
+            public void DeleteUser(string user)
+            {
+                User(user).Delete();
+            }
+
+            public void DeleteRole(string role)
+            {
+                UmacConfigurator u = Umac(p);
+                CustomRole r = Role(role);
+                foreach (ProjectUser pu in u.ProjectUsers)
+                {
+                    if (pu.Roles.Contains(r)) pu.Roles.Remove(r);
+                }
+                r.Delete();
+            }
+
+            public bool UserActive(string user)
+            {
+                return User(user).IsActive;
+            }
+
+            public void ActivateUser(string user)
+            {
+                User(user).Activate();
+            }
+
+            // AnonymousActive reads UmacConfigurator.AnonymousUser: none is
+            // read as not active.
+            public bool AnonymousActive()
+            {
+                ProjectUser a = Umac(p).AnonymousUser;
+                return a != null && a.IsActive;
+            }
         }
 
         // Access is the CPU's access control besides the project's users and
@@ -974,6 +1017,44 @@ namespace Tiad.Openness
                 r.AssignDeviceFunctionRight(Device(), full);
             }
 
+            DeviceFunctionRight Offered(string id)
+            {
+                foreach (DeviceFunctionRight r in Device().AvailableDeviceFunctionRights)
+                {
+                    if (r.Identifier == id) return r;
+                }
+                throw new TiaException("the CPU " + cpu.Name + " offers no runtime right " + Json.Quote(id));
+            }
+
+            public List<string> OfferedRights()
+            {
+                var l = new List<string>();
+                foreach (DeviceFunctionRight r in Device().AvailableDeviceFunctionRights) l.Add(r.Identifier);
+                return l;
+            }
+
+            public List<string> RoleRights(string role)
+            {
+                var l = new List<string>();
+                foreach (DeviceFunctionRight x in Role(role).GetAssignedDeviceFunctionRights(Device())) l.Add(x.Identifier);
+                l.Sort(StringComparer.Ordinal);
+                return l;
+            }
+
+            public void Grant(string role, string right)
+            {
+                Role(role).AssignDeviceFunctionRight(Device(), Offered(right));
+            }
+
+            public void Revoke(string role, string right)
+            {
+                CustomRole r = Role(role);
+                foreach (DeviceFunctionRight x in new List<DeviceFunctionRight>(r.GetAssignedDeviceFunctionRights(Device())))
+                {
+                    if (x.Identifier == right) r.UnAssignDeviceFunctionRight(Device(), x);
+                }
+            }
+
             bool Has(CustomRole r, DeviceFunctionRight full)
             {
                 foreach (DeviceFunctionRight x in r.GetAssignedDeviceFunctionRights(Device()))
@@ -1017,6 +1098,14 @@ namespace Tiad.Openness
                     users.Add(Json.Quote(pu.Name) + " [" + string.Join(", ", roles.ToArray()) + "]");
                 }
                 Log.Line("access control: the project's users {0}", string.Join(", ", users.ToArray()));
+                ProjectUser anon = Umac(p).AnonymousUser;
+                if (anon == null) Log.Line("access control: the project offers no anonymous user");
+                else
+                {
+                    var roles = new List<string>();
+                    foreach (Role r in anon.Roles) roles.Add(Json.Quote(r.Name));
+                    Log.Line("access control: the anonymous user {0} is {1}, roles [{2}]", Json.Quote(anon.Name), anon.IsActive ? "active" : "not active", string.Join(", ", roles.ToArray()));
+                }
             }
 
             static bool rightsLogged;

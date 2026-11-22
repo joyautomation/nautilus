@@ -68,7 +68,7 @@ func uploadedStation(mode string) tiad.Station {
 func protectionNotes(notes []string) []string {
 	var out []string
 	for _, n := range notes {
-		if !strings.Contains(n, `"nautilus"`) && n != WebOnNote {
+		if !strings.Contains(n, `"nautilus"`) && !strings.Contains(n, "the web user ") && n != WebOnNote {
 			out = append(out, n)
 		}
 	}

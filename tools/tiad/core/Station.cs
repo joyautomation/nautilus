@@ -194,8 +194,10 @@ namespace Tiad
         // password rules, since it may be set; when it has a Full access
         // user, that user's password, by the same rules (TIA's default
         // policy for local users; the agent checks the project's own before
-        // any write). A password that only unlocks is never checked. It
-        // never echoes a password.
+        // any write); when its web server is on, every web user's password,
+        // by the same rules. Each password set is its own secret. A
+        // password that only unlocks is never checked. It never echoes a
+        // password.
         public string CheckFor(Station st)
         {
             var errs = new List<string>();
@@ -233,6 +235,37 @@ namespace Tiad
                         }
                     }
                     if (same != null) errs.Add("secrets.fullAccessPassword is the same as " + same + ": each password is its own secret");
+                }
+            }
+            if (st.WebServer != null && st.WebServer.Enabled)
+            {
+                // Each web user's password, as the Full access user's: it
+                // is set (WebUsers.Passwords).
+                var earlier = new List<string>();
+                foreach (var u in st.WebServer.Users)
+                {
+                    string pw;
+                    if (!WebUsers.TryGetValue(u.Name, out pw) || pw == "")
+                    {
+                        errs.Add("web user " + u.Name + " has no password in secrets.webUsers");
+                        continue;
+                    }
+                    string at = "secrets.webUsers[" + Json.Quote(u.Name) + "]";
+                    string e = StationRules.CheckTiaPassword(pw);
+                    if (e != null) errs.Add(at + " " + e);
+                    string same = pw == ConfigurationPassword ? "secrets.configurationPassword"
+                        : pw == Protection ? "secrets.protection"
+                        // The Full access user's block above names that pair.
+                        : pw == FullAccessPassword && st.Cpu.AccessControl != StationRules.AccessFullAccessUser ? "secrets.fullAccessPassword" : null;
+                    if (same == null)
+                    {
+                        foreach (string n in earlier)
+                        {
+                            if (WebUsers[n] == pw) { same = "secrets.webUsers[" + Json.Quote(n) + "]"; break; }
+                        }
+                    }
+                    if (same != null) errs.Add(at + " is the same as " + same + ": each password is its own secret");
+                    earlier.Add(u.Name);
                 }
             }
             return errs.Count == 0 ? null : string.Join("; ", errs.ToArray());
@@ -344,12 +377,22 @@ namespace Tiad
 
             if (WebServer != null)
             {
-                var seen = new HashSet<string>(StringComparer.Ordinal);
+                if (!WebServer.Enabled && WebServer.Users.Count > 0)
+                {
+                    errs.Add("webServer.users is set and webServer.enabled is false: a web server that is off has no users");
+                }
+                // TIA's user names may ignore case: so do duplicates.
+                var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
                 for (int i = 0; i < WebServer.Users.Count; i++)
                 {
                     var u = WebServer.Users[i];
                     if (u.Name == "") errs.Add("webServer.users[" + I(i) + "].name is empty");
-                    if (seen.Contains(u.Name)) errs.Add("webServer.users: " + Json.Quote(u.Name) + " twice");
+                    else
+                    {
+                        e = StationRules.CheckWebUserName(u.Name);
+                        if (e != null) errs.Add("webServer.users[" + I(i) + "].name: " + e);
+                        else if (seen.Contains(u.Name)) errs.Add("webServer.users: " + Json.Quote(u.Name) + " twice (names are compared ignoring case)");
+                    }
                     seen.Add(u.Name);
                     foreach (var r in u.Rights)
                     {
@@ -503,6 +546,28 @@ namespace Tiad
         };
 
         public const long MinUpdateTime = 16000000L; // 16ms in nanoseconds
+
+        public const int MaxWebUserName = 32;
+
+        // CheckWebUserName is station.CheckWebUserName: a web user's name
+        // is 1 to 32 ASCII letters, digits, '_', '-' and '.', starting with
+        // a letter (narrower than TIA's, so TIA never refuses one part-way
+        // through an apply), and never a name tiad or TIA keeps for
+        // itself, in any case.
+        public static string CheckWebUserName(string n)
+        {
+            bool ok = n.Length >= 1 && n.Length <= MaxWebUserName && (n[0] >= 'A' && n[0] <= 'Z' || n[0] >= 'a' && n[0] <= 'z');
+            foreach (char r in n)
+            {
+                ok = ok && (r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '_' || r == '-' || r == '.');
+            }
+            if (!ok) return Json.Quote(n) + ": a web user name is 1 to 32 characters: letters, digits, '_', '-' and '.', starting with a letter";
+            if (string.Equals(n, AccessSteps.UserName, StringComparison.OrdinalIgnoreCase) || string.Equals(n, "Anonymous", StringComparison.OrdinalIgnoreCase))
+            {
+                return Json.Quote(n) + " is reserved (tiad's Full access user is \"nautilus\", TIA's anonymous user is \"Anonymous\")";
+            }
+            return null;
+        }
 
         public const string ProtectPassword = "password", ProtectNone = "none", ProtectKeep = "keep";
 

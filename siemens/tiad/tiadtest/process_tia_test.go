@@ -259,7 +259,7 @@ func TestAgentKeepsSecretsOut(t *testing.T) {
 	p := tiadtest.StartProcess(t, fakeBin(t), tiadtest.Config{})
 	c := p.Client()
 	installBench(t, c)
-	sec := tiad.Secrets{WebUsers: map[string]string{"naut": "web-password-must-not-leak"}, Protection: "protection-must-not-leak",
+	sec := tiad.Secrets{WebUsers: map[string]string{"naut": "Web-password-must-not-leak-1"}, Protection: "protection-must-not-leak",
 		FullAccessPassword: "Full-access-must-not-leak-1"}
 	s, err := c.CreateProject(ctx, "p", tiadtest.BenchStation(), sec)
 	if err != nil {
@@ -267,6 +267,22 @@ func TestAgentKeepsSecretsOut(t *testing.T) {
 	}
 	if _, err := s.ApplyStation(ctx, tiadtest.BenchStation(), sec); err != nil {
 		t.Fatal(err)
+	}
+	// A web user's password set, then one it had refused: neither shows.
+	sec2 := sec
+	sec2.WebUsers = map[string]string{"naut": "Web-password-must-not-leak-2"}
+	if _, err := s.ApplyStation(ctx, tiadtest.BenchStation(), sec2); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ApplyStation(ctx, tiadtest.BenchStation(), sec); tiad.Kind(err) != tiad.KindBadRequest {
+		t.Fatalf("a web password the user had: %v, want bad_request", err)
+	} else if strings.Contains(err.Error(), "must-not-leak") {
+		t.Fatalf("an error carries a secret: %v", err)
+	}
+	weak := sec
+	weak.WebUsers = map[string]string{"naut": "weak-must-not-leak"}
+	if _, err := s.ApplyStation(ctx, tiadtest.BenchStation(), weak); err == nil || strings.Contains(err.Error(), "must-not-leak") {
+		t.Fatalf("a weak web password: %v", err)
 	}
 	bad := tiadtest.BenchStation()
 	bad.CPU.Address = "x"

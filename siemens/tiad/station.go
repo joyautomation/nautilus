@@ -125,9 +125,10 @@ type Secrets struct {
 // meets TIA's password rules, since it may be set; when st has a Full
 // access user, that user's password, by the same rules (TIA's default
 // policy for local users; tiad checks the project's own before any
-// write). A password that only unlocks (none, or a download) is never
-// checked: it was set under whatever rules TIA had then. The error never
-// echoes a password.
+// write); when st's web server is on, every web user's password, by the
+// same rules. Each password set is its own secret. A password that only
+// unlocks (none, or a download) is never checked: it was set under
+// whatever rules TIA had then. The error never echoes a password.
 func (s Secrets) CheckFor(st Station) error {
 	var errs []string
 	if st.CPU.ConfigurationProtection == ProtectPassword {
@@ -166,6 +167,42 @@ func (s Secrets) CheckFor(st Station) error {
 			if same != "" {
 				errs = append(errs, "secrets.fullAccessPassword is the same as "+same+": each password is its own secret")
 			}
+		}
+	}
+	if w := st.WebServer; w != nil && w.Enabled {
+		// Each web user's password, as the Full access user's: it is set.
+		var earlier []string
+		for _, u := range w.Users {
+			pw := s.WebUsers[u.Name]
+			if pw == "" {
+				errs = append(errs, fmt.Sprintf("web user %s has no password in secrets.webUsers", u.Name))
+				continue
+			}
+			at := fmt.Sprintf("secrets.webUsers[%q]", u.Name)
+			if err := checkTiaPassword(pw); err != nil {
+				errs = append(errs, fmt.Sprintf("%s %v", at, err))
+			}
+			same := ""
+			switch {
+			case pw == s.ConfigurationPassword:
+				same = "secrets.configurationPassword"
+			case pw == s.Protection:
+				same = "secrets.protection"
+			// The Full access user's block above names that pair.
+			case pw == s.FullAccessPassword && st.CPU.AccessControl != AccessFullAccessUser:
+				same = "secrets.fullAccessPassword"
+			default:
+				for _, n := range earlier {
+					if s.WebUsers[n] == pw {
+						same = fmt.Sprintf("secrets.webUsers[%q]", n)
+						break
+					}
+				}
+			}
+			if same != "" {
+				errs = append(errs, at+" is the same as "+same+": each password is its own secret")
+			}
+			earlier = append(earlier, u.Name)
 		}
 	}
 	if len(errs) == 0 {
@@ -215,15 +252,20 @@ func (s Station) Validate() error {
 	}
 
 	if w := s.WebServer; w != nil {
+		if !w.Enabled && len(w.Users) > 0 {
+			bad("webServer.users is set and webServer.enabled is false: a web server that is off has no users")
+		}
+		// TIA's user names may ignore case: so do duplicates.
 		seen := map[string]bool{}
 		for i, u := range w.Users {
 			if u.Name == "" {
 				bad("webServer.users[%d].name is empty", i)
+			} else if err := checkWebUserName(u.Name); err != nil {
+				bad("webServer.users[%d].name: %v", i, err)
+			} else if seen[strings.ToLower(u.Name)] {
+				bad("webServer.users: %q twice (names are compared ignoring case)", u.Name)
 			}
-			if seen[u.Name] {
-				bad("webServer.users: %q twice", u.Name)
-			}
-			seen[u.Name] = true
+			seen[strings.ToLower(u.Name)] = true
 			for _, r := range u.Rights {
 				if !knownRight[r] {
 					bad("webServer.users[%d]: unknown right %q (one of read, write, mode, diagnostics)", i, r)
@@ -320,6 +362,7 @@ func checkStart(bad func(string, ...any), at string, in, out *int) {
 // form obey one set of rules.
 var (
 	knownRight       = station.KnownRights
+	checkWebUserName = station.CheckWebUserName
 	checkUpdateTime  = station.CheckUpdateTime
 	isIPv4           = station.IsIPv4
 	checkStationName = station.CheckStationName

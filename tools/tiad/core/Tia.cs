@@ -181,8 +181,8 @@ namespace Tiad
         // the CPU anew; Reuse keeps the project's CPU and the devices
         // besides it, as found. Either way it then applies next's CPU
         // settings, cpu.configurationProtection (ProtectionSteps.Run) and
-        // cpu.accessControl (AccessSteps.Run), then webServer
-        // (WebSteps.Run, after access control). notes gets what the caller
+        // cpu.accessControl (AccessSteps.Run), then webServer and its
+        // users (WebSteps.Run, after access control). notes gets what the caller
         // should know besides the changes; made collects what it made in
         // the project's users and roles, as soon as it is made.
         void ApplyStation(object project, Station next, string decision, Secrets secrets, List<string> notes, AccessMade made);
@@ -190,13 +190,14 @@ namespace Tiad
         // ReadPolicy is the project's password policy for local users.
         PasswordPolicy ReadPolicy(object project);
 
-        // PrepareAccess runs AccessSteps.Prepare on the project's users,
+        // PrepareAccess runs AccessSteps.PrepareAll on the project's users,
         // before any write of an apply.
         void PrepareAccess(object project, Station next, Secrets secrets, bool recordOnly, AccessWrites w, List<string> notes);
 
-        // RemoveAccess removes from the project's users and roles what made
-        // names (AccessSteps' user and role), and nothing else; it returns
-        // what it removed ("user \"nautilus\"", "role \"...\"").
+        // RemoveAccess is AccessSteps.Remove: it removes from the project's
+        // users and roles what made names (AccessSteps' user and role, the
+        // web users and roles), and nothing else; it returns what it
+        // removed ("user \"nautilus\"", "role \"...\"").
         List<string> RemoveAccess(object project, AccessMade made);
 
         // CannotApply is why this side cannot apply next at all yet (a

@@ -130,7 +130,9 @@ type Script struct {
 	UploadAccessControl string          `json:"uploadAccessControl,omitempty"`
 	// UploadWebServer makes an upload bring a CPU whose web server is
 	// on (the bench CPU's is off).
-	UploadWebServer bool           `json:"uploadWebServer,omitempty"`
+	UploadWebServer bool `json:"uploadWebServer,omitempty"`
+	// UploadAnonymous makes an upload bring an active anonymous user.
+	UploadAnonymous bool           `json:"uploadAnonymous,omitempty"`
 	AccessRecords   string         `json:"accessRecords,omitempty"`
 	Delays          []ScriptedCall `json:"delays,omitempty"`
 	Failures        []ScriptedCall `json:"failures,omitempty"`
@@ -337,6 +339,7 @@ func (p *Process) SetAccess(t testing.TB, a AccessScript) {
 	p.script.PasswordPolicy = a.Policy
 	p.script.UploadAccessControl = a.UploadAccessControl
 	p.script.UploadWebServer = a.UploadWebServer
+	p.script.UploadAnonymous = a.UploadAnonymous
 	p.script.AccessRecords = a.Records
 	s := p.script
 	p.mu.Unlock()
