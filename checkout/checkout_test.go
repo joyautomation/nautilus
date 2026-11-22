@@ -295,3 +295,69 @@ func TestValidationErrorsAreMarked(t *testing.T) {
 		t.Errorf("an abandon with no reason: %v", err)
 	}
 }
+
+func TestForcesInTheRecord(t *testing.T) {
+	s, p := openStore(t)
+	run, _ := s.Begin(false, "h", "", "alice", "user:alice")
+	if _, err := s.StartForce(run.ID, "XV101", true, 0, "alice", ""); !errors.Is(err, ErrInvalid) {
+		t.Errorf("a force of no seconds: %v", err)
+	}
+	f, err := s.StartForce(run.ID, "XV101", true, 30, "alice", "user:alice")
+	if err != nil || f.Seq == 0 || f.Seconds != 30 {
+		t.Fatalf("start: %+v %v", f, err)
+	}
+	if _, err := s.StartForce(run.ID, "XV102", true, 30, "alice", ""); !errors.Is(err, ErrForceActive) {
+		t.Errorf("a second force: %v", err)
+	}
+	if got, ok := s.Standing(); !ok || got.Point != "XV101" {
+		t.Errorf("standing %+v %v", got, ok)
+	}
+	// a result while forced carries the force; one after it ended says how
+	r1, _ := s.Record(run.ID, "XV101", Pass, "", true, "good", "alice", "")
+	if r1.Force == nil || r1.Force.Seq != f.Seq || r1.Force.Ended != "" || r1.Force.Value != true {
+		t.Errorf("result while forced: %+v", r1.Force)
+	}
+	if err := s.EndForce(run.ID, ForceExpired, "controller"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.EndForce(run.ID, ForceExpired, "controller"); !errors.Is(err, ErrNoForce) {
+		t.Errorf("ending a force that is not standing: %v", err)
+	}
+	r2, _ := s.Record(run.ID, "XV101", Pass, "retest", true, "good", "alice", "")
+	if r2.Force == nil || r2.Force.Ended != ForceExpired {
+		t.Errorf("result after expiry: %+v", r2.Force)
+	}
+	// a point never forced has no force
+	if r3, _ := s.Record(run.ID, "LSH101", Pass, "", false, "good", "alice", ""); r3.Force != nil {
+		t.Errorf("an unforced point carries a force: %+v", r3.Force)
+	}
+
+	// a standing force is interrupted when the file is opened by a new
+	// process, and abandoning a run ends one first
+	s.StartForce(run.ID, "XV101", false, 10, "alice", "")
+	s.Close()
+	s2, err := Open(p, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s2.Standing(); !ok {
+		t.Fatal("the standing force was lost on reopen")
+	}
+	if n, err := s2.InterruptStanding(); err != nil || n != 1 {
+		t.Fatalf("interrupt: %d %v", n, err)
+	}
+	if _, ok := s2.Standing(); ok {
+		t.Error("a force still stands after it was interrupted")
+	}
+	s2.StartForce(run.ID, "XV101", true, 10, "alice", "")
+	if _, err := s2.Abandon(run.ID, "wrong sheet", "alice", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s2.Standing(); ok {
+		t.Error("an abandoned run still has a standing force")
+	}
+	s2.Close()
+	if _, err := Open(p, nil); err != nil {
+		t.Errorf("the file with forces does not reopen: %v", err)
+	}
+}

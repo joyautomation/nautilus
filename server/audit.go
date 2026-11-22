@@ -102,7 +102,9 @@ var actionClass = map[string]string{
 	"alarm.in-service": recovery,
 	"sfc.transition":   operator,
 
-	"force.clear":      recovery,
+	"force.clear": recovery,
+	// letting a checkout force go is a way back, like a force's clear
+	"checkout.release": recovery,
 	"substitute.stop":  recovery, // a way back to the real reading
 	"force.clear-all":  recovery,
 	"program.rollback": recovery,
@@ -121,6 +123,7 @@ var actionClass = map[string]string{
 	"checkout.begin":   strict,
 	"checkout.result":  strict,
 	"checkout.abandon": strict,
+	"checkout.force":   strict,
 	// A note is operator intent with words (#720): never unrecorded.
 	"note.add":        strict,
 	"note.revise":     strict,
@@ -1083,9 +1086,6 @@ func readRefusedBody(w http.ResponseWriter, r *http.Request) ([]byte, bool) {
 // form body: checkLink answers them itself, with its own target, before
 // the seam's preAuthorize (acklink.go).
 var refusalTargets = map[string]targetFunc{
-	"checkout.begin":       checkoutRefusal("checkout.begin"),
-	"checkout.result":      checkoutRefusal("checkout.result"),
-	"checkout.abandon":     checkoutRefusal("checkout.abandon"),
 	"tag.write":            nameValueTarget,
 	"force.set":            nameValueTarget,
 	"substitute.start":     nameValueTarget,

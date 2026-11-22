@@ -29,7 +29,6 @@ import (
 	"github.com/joyautomation/nautilus/alarm/channel"
 	"github.com/joyautomation/nautilus/alarm/escalate"
 	"github.com/joyautomation/nautilus/auth"
-	"github.com/joyautomation/nautilus/checkout"
 	"github.com/joyautomation/nautilus/devbind"
 	"github.com/joyautomation/nautilus/devprofile"
 	"github.com/joyautomation/nautilus/internal/dialect"
@@ -71,8 +70,8 @@ type Manifest struct {
 	// Checkout is the I/O checkout (#719): the sheet's file and the
 	// sign-off rule. checkoutSheet is the sheet, read by ReadManifest.
 	Checkout      *CheckoutConfig `yaml:"checkout"`
-	checkoutSheet *checkout.Sheet
-	Tasks         []TaskConfig `yaml:"tasks"`
+	checkoutSheet any             // the sheet (*checkout.Sheet), read by checkout.go: not in the browser build
+	Tasks         []TaskConfig    `yaml:"tasks"`
 	// TagFiles names files holding additional tags — each a bare YAML
 	// sequence of the same tag entries as Tags. This is how a GENERATED
 	// tag set stays a separate reviewable artifact instead of a 500-line
@@ -1204,7 +1203,7 @@ type Project struct {
 	// Checkout is the manifest's checkout: section (#719), nil without one;
 	// CheckoutSheet is the sheet it names.
 	Checkout *CheckoutConfig
-	checkout *checkout.Sheet
+	checkout any // the sheet, see CheckoutSheet
 
 	// Retain/Redundancy carry the manifest's sections for `naut run`
 	// to wire; Load itself constructs nothing — check, build, and the LSP
@@ -1528,25 +1527,13 @@ func (m *Manifest) readCheckout(fsys fs.FS, readSheet bool) error {
 	if !readSheet {
 		return nil
 	}
-	raw, err := fs.ReadFile(fsys, fp)
+	sh, err := loadCheckoutSheet(fsys, fp)
 	if err != nil {
-		return fmt.Errorf("checkout: no %s in the project: `naut checkout init` writes one from the project's I/O tags", fp)
+		return err
 	}
-	var sh checkout.Sheet
-	dec := yaml.NewDecoder(strings.NewReader(string(raw)))
-	dec.KnownFields(true)
-	if err := dec.Decode(&sh); err != nil {
-		return fmt.Errorf("%s: %w", fp, err)
-	}
-	if err := sh.Validate(); err != nil {
-		return fmt.Errorf("%s: %w", fp, err)
-	}
-	m.checkoutSheet = &sh
+	m.checkoutSheet = sh
 	return nil
 }
-
-// CheckoutSheet is the checkout sheet, nil without a checkout: section.
-func (p *Project) CheckoutSheet() *checkout.Sheet { return p.checkout }
 
 // maxPWAIcon bounds the icon file read at load.
 const maxPWAIcon = 4 << 20

@@ -356,7 +356,8 @@ var (
 		module + "/auth/users",       // the user store (argon2, blake2b)
 		"golang.org/x/crypto/argon2",
 		"golang.org/x/crypto/blake2b",
-		module + "/notes", // operator notes store
+		module + "/notes",    // operator notes store
+		module + "/checkout", // the I/O checkout (#719): controller-only, mounted by cmd/naut
 		"html/template",
 		"github.com/lib/pq", // the Postgres driver
 		"database/sql",

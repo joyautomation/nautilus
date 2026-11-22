@@ -608,9 +608,16 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 			} else {
 				co.Store = st
 				defer st.Close()
+				// a force does not survive the controller: one the file still
+				// says stands belonged to the process before
+				if n, err := st.InterruptStanding(); err != nil {
+					fmt.Fprintf(os.Stderr, "naut run: checkout: %v\n", err)
+				} else if n > 0 {
+					fmt.Fprintf(os.Stderr, "naut run: checkout: %d force(s) the last run left standing were recorded as interrupted\n", n)
+				}
 			}
 		}
-		sopts.Checkout = co
+		co.Install(&sopts)
 	}
 	// Program provenance: a built binary decodes the history its archive
 	// carries; a checkout captures live from git. Lazy (first request pays,

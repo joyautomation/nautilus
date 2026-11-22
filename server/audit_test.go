@@ -284,13 +284,38 @@ func auditRows() []auditRow {
 		return srv
 	}
 	ckRun := func(t *testing.T, s *Server) {
-		if _, err := s.checkout.Store.Begin(false, s.checkout.Sheet.Hash(), "T", "akhan", "user:akhan"); err != nil {
+		if _, err := ckOf(s).Store.Begin(false, ckOf(s).Sheet.Hash(), "T", "akhan", "user:akhan"); err != nil {
 			t.Fatal(err)
 		}
 	}
+	// a run with the equipment out of service, for the force row; and one with
+	// a force standing, for the release row
+	ckRunOOS := func(t *testing.T, s *Server) {
+		ckRun(t, s)
+		if err := s.alarms.TakeOutOfService("HiTempAlm", time.Now().Add(time.Hour), "akhan", "I/O checkout"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ckRunForced := func(t *testing.T, s *Server) {
+		ckRunOOS(t, s)
+		run, _ := ckOf(s).Store.Current()
+		if _, err := ckOf(s).Store.StartForce(run.ID, "OUT", 5.5, 60, "akhan", "user:akhan"); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.rt.Tags().Force("Out", 5.5); err != nil {
+			t.Fatal(err)
+		}
+		since := int64(0)
+		for _, f := range s.rt.Tags().Forces() {
+			since = f.SinceMs
+		}
+		ckOf(s).ck.mu.Lock()
+		ckOf(s).ck.force = &ckForce{run: run.ID, point: "OUT", tag: "Out", by: "akhan", value: 5.5, sinceMs: since, until: time.Now().Add(time.Minute), timer: time.AfterFunc(time.Hour, func() {})}
+		ckOf(s).ck.mu.Unlock()
+	}
 	ckPath := func(tail string) func(*Server) string {
 		return func(s *Server) string {
-			r, _ := s.checkout.Store.Current()
+			r, _ := ckOf(s).Store.Current()
 			return "/api/checkout/runs/" + r.ID + tail
 		}
 	}
@@ -309,6 +334,18 @@ func auditRows() []auditRow {
 		{name: "checkout result with no credential", pattern: "POST /api/checkout/runs/{id}/results", server: ckSrv, person: true, prep: ckRun,
 			method: "POST", pathOf: ckPath("/results"), body: `{"point":"SP","outcome":"pass"}`,
 			action: "checkout.result", target: "", user: "anonymous", source: "api", result: "refused"},
+		{name: "checkout force", pattern: "POST /api/checkout/runs/{id}/force", server: ckSrv, person: true, header: ckHdr, prep: ckRunOOS,
+			method: "POST", pathOf: ckPath("/force"), body: `{"point":"OUT","value":5.5,"seconds":30,"confirm":"OUT"}`,
+			action: "checkout.force", target: "Out", user: "user:akhan", source: "hmi", result: "ok"},
+		{name: "checkout force with no credential", pattern: "POST /api/checkout/runs/{id}/force", server: ckSrv, person: true, prep: ckRunOOS,
+			method: "POST", pathOf: ckPath("/force"), body: `{"point":"OUT","value":5.5,"seconds":30,"confirm":"OUT"}`,
+			action: "checkout.force", target: "", user: "anonymous", source: "api", result: "refused"},
+		{name: "checkout release", pattern: "POST /api/checkout/runs/{id}/force/release", server: ckSrv, person: true, header: ckHdr, prep: ckRunForced,
+			method: "POST", pathOf: ckPath("/force/release"), body: `{}`,
+			action: "checkout.release", target: "Out", user: "user:akhan", source: "hmi", result: "ok"},
+		{name: "checkout release with no credential", pattern: "POST /api/checkout/runs/{id}/force/release", server: ckSrv, person: true, prep: ckRunForced,
+			method: "POST", pathOf: ckPath("/force/release"), body: `{}`,
+			action: "checkout.release", target: "", user: "anonymous", source: "api", result: "refused"},
 		{name: "checkout abandon", pattern: "POST /api/checkout/runs/{id}/abandon", server: ckSrv, person: true, header: ckHdr, prep: ckRun,
 			method: "POST", pathOf: ckPath("/abandon"), body: `{"reason":"wrong sheet"}`,
 			action: "checkout.abandon", target: "*", user: "user:akhan", source: "hmi", result: "ok"},
