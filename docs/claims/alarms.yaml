@@ -655,6 +655,7 @@ claims:
       - go ./server TestAckByTokenKeepsTheTypedName
     partial: true
     note: >-
-      The no-auth: case and a personal access token and browser sign-in under
-      auth: are asserted; a shared (service) token under an auth: block
-      keeping the typed name is not.
+      The no-auth: case is asserted; under auth:, an ack by a personal access
+      token and a shelve and unshelve by a browser sign-in are (an ack by a
+      browser sign-in is not separately). A shared (service) token under an
+      auth: block keeping the typed name is not.

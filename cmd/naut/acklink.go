@@ -278,7 +278,7 @@ func ackLinkChecks(proj *project.Project) (errs, warns []string) {
 func hostAllowed(proj *project.Project, host string) bool {
 	eq := func(h string) bool { return strings.EqualFold(h, host) }
 	return host == "" || net.ParseIP(host) != nil || host == "localhost" ||
-		slices.ContainsFunc(proj.Server.AllowedHosts, eq) || slices.ContainsFunc(server.EnvAllowedHosts(), eq)
+		slices.ContainsFunc(server.EnvAllowedHosts(), eq)
 }
 
 // signInPossible reports whether anyone can sign in to the project's

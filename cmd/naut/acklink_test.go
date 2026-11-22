@@ -127,6 +127,9 @@ func TestAckLinkChecks(t *testing.T) {
 	if errs, warns := ackLinkChecks(linkProject(t, "    ack-url: https://10.0.0.5:8443\n")); len(errs)+len(warns) != 0 {
 		t.Fatalf("a plain https ack-url by IP: %v %v", errs, warns)
 	}
+	if errs, warns := ackLinkChecks(linkProject(t, "    ack-url: https://localhost:8443\n")); len(errs)+len(warns) != 0 {
+		t.Fatalf("a plain https ack-url on localhost: %v %v", errs, warns)
+	}
 	// A name the manifest does not allow: the controller would refuse
 	// the link's request by its Host.
 	// The warning names the setting that exists (the environment), never

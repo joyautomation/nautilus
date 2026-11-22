@@ -592,7 +592,11 @@ func TestAckAndShelveRecordTheSignedInUser(t *testing.T) {
 		}
 	}
 	// The audit journal keeps the typed name as said, beside the principal.
-	if es := srv.audit.ring.Recent(); len(es) == 0 || es[0].User != "user:akhan" || es[0].Detail["by"] != "someone-else" {
+	es := srv.audit.ring.Recent()
+	if len(es) == 0 {
+		t.Fatal("no audit entry")
+	}
+	if es[0].User != "user:akhan" || es[0].Detail["by"] != "someone-else" {
 		t.Errorf("audit entry: %+v", es[0])
 	}
 }

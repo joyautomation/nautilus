@@ -19,7 +19,7 @@ go.
 
 ## Before you start
 
-You need `naut` and a project with alarms. This page uses
+You need `naut` on your `PATH` and a project with alarms. This page uses
 `examples/lift-station` from the [nautilus
 repository](https://github.com/joyautomation/nautilus): a duplex sewage
 lift station with fourteen alarms and a simulated plant, so alarms really
@@ -31,9 +31,11 @@ cd my-station
 naut check .
 ```
 
-`naut check` ends with `naut check: 9 file(s), 0 with errors`. Every
-change below goes in `nautilus.yaml`, under its `alarms:` section, unless
-it says otherwise.
+`naut check` ends with `naut check: 9 file(s), 0 with errors` (it may
+add warnings). Every change below goes in `nautilus.yaml`, under its
+`alarms:` section, unless it says otherwise. `alarms:` has one `oncall:`,
+one `channels:` and one `escalation:`: when a later step shows one of
+them again, add its keys to the block you already have.
 
 ## Rationalize first
 
@@ -109,25 +111,11 @@ address. Add to `alarms:`:
 ```
 
 A roster can also follow shifts (`shifts:` with `days`, `from`, `to`);
-see [the reference](/guides/alarms/#escalation-and-on-call). Ask who is
-on call at any moment, offline:
-
-```sh
-naut alarms oncall -at "2026-11-23 06:55" .
-```
-
-```
-on call at Mon 2026-11-23 06:55 (America/Chicago)
-
-ROSTER     KIND      ON CALL
-operators  everyone  alice
-standby    weekly    bob
-```
-
-At `07:05` the same command says `erin`: the handover is at 07:00.
-Handovers on the nights clocks change are handled as instants, so a
-handover in the repeated hour happens once and one in the skipped hour
-happens just after the gap.
+see [the reference](/guides/alarms/#escalation-and-on-call). Handovers
+on the nights clocks change are handled as instants, so a handover in
+the repeated hour happens once and one in the skipped hour happens just
+after the gap. A roster pages nobody until a policy uses it: that is the
+next step, and the step where you can ask who is on call.
 
 ## An escalation policy, tried on the log
 
@@ -163,7 +151,22 @@ policy is tried this way before anyone's phone is involved.
 - **An alarm with `ack-required: false` pages while it is active** and
   stops when it returns to normal.
 
-See what the policy covers, and what one alarm would page:
+Ask who is on call at a given moment, offline:
+
+```sh
+naut alarms oncall -at "2026-11-23 06:55" .
+```
+
+```
+on call at Mon 2026-11-23 06:55 (America/Chicago)
+
+ROSTER     KIND      ON CALL
+operators  everyone  alice
+standby    weekly    bob
+```
+
+At `07:05` the same command says `erin`: the handover is at 07:00. Then
+see what the policy covers, and what one alarm would page:
 
 ```sh
 naut alarms escalation .
@@ -171,6 +174,8 @@ naut alarms escalation -id LSHH101 -at "2026-11-23 06:55" .
 ```
 
 ```
+for an alarm that begins waiting at …
+
 POLICY                ALARMS  LEVELS
 wet-well              2       3
 (none: pages nobody)  12
@@ -191,7 +196,7 @@ Now see a page leave. Run the station, trip the high-high float (the
 example has a bench-only tag for it), and read the journal:
 
 ```sh
-naut run .
+naut run .            # writes retain.json and audit/ beside the project
 # in a second terminal:
 curl -s -X POST localhost:8080/api/tags -H 'Content-Type: application/json' \
   -d '{"name":"ForceLSHH","value":true}'
@@ -208,7 +213,7 @@ journal has a `notify` row for it:
 Every page is a `notify` row naming the level, the person, the channel
 and the result (`sent`, `failed` with a reason class, or
 `nobody-on-call`), never an address. The journal leaves these rows out
-unless you ask for `kind=notify`. Acknowledge, and level 2 never comes:
+unless you ask for `kind=notify`. Acknowledge, and level 2, due 10 minutes after level 1, never comes:
 
 ```sh
 curl -s -X POST localhost:8080/api/alarms/ack -H 'Content-Type: application/json' \
@@ -236,8 +241,15 @@ nothing in them is a secret or anyone's address:
       from: "+15550100"
 ```
 
-and in the policy, `via: [email]` at level 1, `via: [sms]` at level 2 and
-`via: [sms, email]` at level 3. `voice:` takes the same keys as `sms:`
+and in the policy's levels:
+
+```yaml
+      levels:
+        - { after: 0s,  notify: [roster:operators], via: [email] }
+        - { after: 10m, notify: [roster:standby],   via: [sms] }
+        - { after: 30m, notify: [carol],            via: [sms, email] }
+```
+ `voice:` takes the same keys as `sms:`
 (a call that reads the alarm out), `webhook:` posts JSON to a paging
 service, and `push:` pages the phones people subscribed through the
 [installable HMI](/guides/installable-hmi/). The
@@ -318,7 +330,7 @@ A page is more useful if the person can acknowledge it where they read
 it. Give the controller the HMI's address as a paged person reaches it:
 
 ```yaml
-  oncall:
+  oncall:                                 # the same block as the rosters
     ack-url: https://hmi.plant.example:8443
 ```
 
@@ -360,7 +372,7 @@ The SMS and voice provider can bring an acknowledgement back. It is off
 until you turn it on:
 
 ```yaml
-  oncall:
+  oncall:                                   # the same block again
     inbound:
       url: https://hmi.plant.example:8443   # the controller as the provider reaches it
       channels: [sms]                       # and/or voice
@@ -370,7 +382,8 @@ Set the number's messaging webhook at the provider to
 `<url>/alarm-inbound/sms`. Each SMS page then ends "Reply ACK 12345678 to
 acknowledge." A reply with that code, from the number in that person's
 contacts, acknowledges as them; the provider texts back "Acknowledged …".
-A call says "Press 1 to acknowledge." and needs no setup at the provider.
+A call says "Press 1 to acknowledge."; the call itself tells the provider
+where to post the key, so it needs no setup at the provider.
 
 - **Only the provider is believed.** Every request must carry the
   provider's signature, under the channel's token, over the configured
@@ -378,8 +391,8 @@ A call says "Press 1 to acknowledge." and needs no setup at the provider.
 - **Guessing is limited.** Five wrong codes from one person in an hour
   and their codes are refused for the hour; ten wrong codes in a day and
   the controller suspends SMS acknowledgements (system alarm
-  `nautilus.sms-ack-suspended`) until the oldest is a day old. Links and
-  the HMI still work.
+  `nautilus.sms-ack-suspended`) until the oldest is a day old; SMS pages
+  carry no code meanwhile.
 - Neither the number nor the message text is ever journalled.
 
 The [reference](/guides/alarms/#replying-to-an-sms-pressing-1-on-a-call)
@@ -426,8 +439,13 @@ carry past it.
 alarm of it is hidden until a deadline. An alarm's equipment defaults to
 the tag its condition is in; in the lift station each alarm is a flat
 BOOL, so group a pump's alarms by adding `equipment: P101` to each of
-P-101's five definitions (and `P102` to P-102's). Then, on the running
-controller:
+P-101's five definitions (and `P102` to P-102's):
+
+```yaml
+    - { id: P101_FailToRun, tag: P101_FailToRun, equipment: P101, name: "P-101 failed to run", priority: high, class: equipment }
+```
+
+Then, with `naut run .` going again:
 
 ```sh
 naut alarms out-of-service P101 --host localhost --for 8h --reason "VFD swap, WO 4471"
@@ -447,8 +465,7 @@ P101 back in service: 5 alarm(s) evaluated again
   unacknowledged.
 - **Who:** taking equipment out needs the `out-of-service` permission over
   every alarm it hides and a fresh password; putting it back needs only
-  `ack`. Both are in the audit trail. (With no `auth:` block, as here,
-  `BY` is empty and writes need only the token, if one is set.)
+  `ack`. Both are in the audit trail.
 - **A clock set back does not lengthen it,** and a restart restores no
   more than was left.
 - **The controller's own alarms** (audit journal down, notifications
@@ -505,8 +522,7 @@ count as a new activation, and does not reset a stale alarm's age.
   next level falls due on the original clock.
 - **Each controller keeps its own contacts and secrets files.** Set them on
   both; a pair whose members' contacts differ says so on the cluster
-  status ("alarm contacts differ from the peer") and in each one's start
-  warnings.
+  status ("alarm contacts differ from the peer").
 - **An ack link sent before a takeover works after it,** and a link used on
   one controller is refused on the other. A link that lands on the
   standby is passed to the leader.

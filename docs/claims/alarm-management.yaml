@@ -139,6 +139,11 @@ claims:
     source: "#an-escalation-policy-tried-on-the-log"
     tests:
       - go ./cmd/naut TestAlarmsEscalationCommands
+    partial: true
+    note: >-
+      A policy's alarm count, step times and who are asserted (through the
+      print functions, not -at parsing); the uncovered-alarms row, the VIA
+      column and repeat rows are not.
 
   - id: AMG-013
     claim: >-
@@ -166,7 +171,9 @@ claims:
       The sent row by log is asserted; the log line itself is not.
 
   - id: AMG-015
-    claim: The acceptance harness and naut test never page anyone.
+    claim: >-
+      An engine built for a test run (naut test, the acceptance harness) has
+      no escalation dispatcher, so it pages nobody.
     source: "#an-escalation-policy-tried-on-the-log"
     tests:
       - go ./internal/project TestEscalationOnlyUnderNautRun
@@ -191,7 +198,7 @@ claims:
       - go ./alarm/channel TestWebhookPlaintextWithHeaderRefused
       - go ./alarm/channel TestValidate
       - go ./cmd/naut TestRunJournalsInsecureChannels
-      - go ./cmd/naut TestCheckChannels
+      - go ./cmd/naut TestCheckContacts
     partial: true
     note: >-
       Against a test SMTP server and test https servers, not a real mail
@@ -280,14 +287,16 @@ claims:
 
   - id: AMG-023
     claim: >-
-      With ack-url set, email and SMS pages carry an ack link; opening it
-      changes nothing, and pressing Acknowledge acknowledges that occurrence
-      as the person paged, journalled via link, and stops the escalation.
+      With ack-url set, email, SMS and push pages carry an ack link (a voice
+      call and a webhook never do); opening it changes nothing, and pressing
+      Acknowledge acknowledges that occurrence as the person paged,
+      journalled via link, and stops the escalation.
     source: "#acknowledging-from-a-page"
     tests:
       - go ./internal/project TestEscalationAckByLinkStopsLevelThree
       - go ./server TestAckLinkConfirmsThenAcks
       - go ./alarm/channel TestPagesCarryTheAckLink
+      - go ./cmd/naut TestAckLinkHookKinds
 
   - id: AMG-024
     claim: >-
@@ -321,7 +330,7 @@ claims:
       where naut check runs, clears the warning.
     source: "#acknowledging-from-a-page"
     tests:
-      - go ./alarm/escalate TestInboundAccepted
+      - go ./alarm/escalate TestPrepareErrors
       - go ./alarm/escalate TestAckURLAccepted
       - go ./cmd/naut TestAckLinkChecks
     partial: true
@@ -346,7 +355,8 @@ claims:
 
   - id: AMG-028
     claim: >-
-      A call says "Press 1 to acknowledge."; 1 from the number called
+      A call says "Press 1 to acknowledge." and names, in the call itself,
+      the URL the provider posts the key to; 1 from the number called
       acknowledges as the person called, and another key does nothing.
     source: "#by-sms-reply-or-a-keypress"
     tests:
@@ -368,12 +378,14 @@ claims:
       - go ./alarm/channel TestCheckSignatureVectors
       - go ./alarm/channel TestCheckSignatureRefuses
       - go ./server TestInboundOff
+      - go ./server TestInboundRoutesAreTheirPaths
 
   - id: AMG-030
     claim: >-
       Five wrong codes from one person in an hour refuse their codes for the
       hour; ten wrong codes in a day suspend SMS acknowledgements, with a
-      system alarm, until the oldest is a day old.
+      system alarm and SMS pages carrying no code, until the oldest is a day
+      old.
     source: "#by-sms-reply-or-a-keypress"
     tests:
       - go ./server TestInboundWrongCodesAreLimited
@@ -458,12 +470,13 @@ claims:
     claim: >-
       Taking equipment out of service needs the out-of-service permission
       over every alarm it hides and a fresh password; back in service needs
-      only ack.
+      only ack. Both are recorded in the audit trail.
     source: "#hiding-alarms-that-mean-nothing-now"
     tests:
       - go ./server TestOutOfServiceNeedsAFreshPasswordAndInServiceDoesNot
       - go ./server TestOutOfServicePermission
       - go ./server TestOutOfServiceChecksEveryCoveredAlarmsArea
+      - go ./server TestEveryWriteRouteIsAudited
 
   - id: AMG-039
     claim: >-
