@@ -301,6 +301,7 @@ var Mutations = []string{
 	"adopt_under_mu",                    // server: Reconcile asks the oplog node under AlarmLog.mu, inverting the apply's lock order (#715)
 	"engine_event_waits",                // server: the engine's hook takes AlarmLog.mu on the scan instead of handing off (#715, #1053)
 	"clear_any_later_ack",               // server: a late hand-off clears an ack of a later occurrence (#715)
+	"clear_ack_taken_after",             // server: a late hand-off clears an ack the view took after its event (#715)
 	"occurrences_not_synced",            // server: the leader proposes no occurrence-start or -end (#715)
 }
 

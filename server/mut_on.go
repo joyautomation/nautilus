@@ -31,6 +31,8 @@ import "os"
 //     scan instead of handing off (#1053);
 //   - clear_any_later_ack: a late hand-off clears an ack of a later
 //     occurrence;
+//   - clear_ack_taken_after: a late hand-off clears an ack the view took
+//     after its event fired;
 //   - superseded_alarms_kept: a superseded log's acks and shelves are
 //     carried by a takeover, and kept by a leader that learns it.
 var mutOn = os.Getenv("QUORUM_MUT")

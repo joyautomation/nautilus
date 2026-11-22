@@ -546,7 +546,9 @@ func TestScanNeverWaitsOnTheAlarmLog(t *testing.T) {
 	scan("AlarmLog.mu")
 	al.mu.Unlock()
 
-	go func() { _, _ = n.Propose(context.Background(), oplog.Entry{Kind: oplog.KindUnshelve, ID: "LoFlow", By: "hold"}) }()
+	go func() {
+		_, _ = n.Propose(context.Background(), oplog.Entry{Kind: oplog.KindUnshelve, ID: "LoFlow", By: "hold"})
+	}()
 	<-held
 	cond["LoFlowAlm"] = false
 	scan("the oplog node's lock")
@@ -571,14 +573,14 @@ func TestLateHandOffKeepsALaterAck(t *testing.T) {
 	al.mu.Lock()
 	al.view["HiTemp"] = alarmIntent{acked: true, ackBy: "op", occ: "bbbbbbbbbbbbbbbb", activeMs: 2}
 	al.mu.Unlock()
-	al.clearIfAcked(endedOcc{id: "HiTemp", occ: "aaaaaaaaaaaaaaaa"})
+	al.clearIfAcked(endedOcc{id: "HiTemp", occ: "aaaaaaaaaaaaaaaa", gen: 1})
 	al.clrMu.Lock()
 	queued := slices.Clone(al.clr)
 	al.clrMu.Unlock()
 	if len(queued) != 0 {
 		t.Fatalf("an end of occurrence a queued a clear of the ack of b: %v", queued)
 	}
-	al.clearIfAcked(endedOcc{id: "HiTemp", occ: "bbbbbbbbbbbbbbbb"})
+	al.clearIfAcked(endedOcc{id: "HiTemp", occ: "bbbbbbbbbbbbbbbb", gen: 1})
 	al.clrMu.Lock()
 	queued = slices.Clone(al.clr)
 	al.clrMu.Unlock()
@@ -597,7 +599,7 @@ func TestLateHandOffKeepsALaterAck(t *testing.T) {
 	al.view["LoFlow"] = alarmIntent{acked: true, ackBy: "op", occ: "cccccccccccccccc", activeMs: 2}
 	al.adopt = map[string]adoption{"LoFlow": {occ: "cccccccccccccccc", activeMs: 2, by: "op"}}
 	al.mu.Unlock()
-	al.clearIfAcked(endedOcc{id: "LoFlow", occ: "dddddddddddddddd"})
+	al.clearIfAcked(endedOcc{id: "LoFlow", occ: "dddddddddddddddd", gen: 1})
 	al.clrMu.Lock()
 	named := al.clrOcc["LoFlow"]
 	al.clrMu.Unlock()
@@ -620,5 +622,29 @@ func TestDropViewDropsPendingAdoptions(t *testing.T) {
 	al.mu.Unlock()
 	if n != 0 {
 		t.Fatalf("%d pending adoptions outlived the dropped view", n)
+	}
+}
+
+// An event handed off from the scan before the view took an ack (an
+// alarm's activation, judged only after the operator's ack committed)
+// never clears that ack: the late judgement goes by when the event fired
+// (#1198 CI: TestAlarmAckThroughTheLog saw the ack of the alarm's own
+// activation cleared).
+func TestHandOffNeverClearsAnAckTakenAfterTheEvent(t *testing.T) {
+	var lead atomic.Bool
+	lead.Store(true)
+	_, _, al, _ := loggedAlarms(t, map[string]any{"HiTempAlm": true, "LoFlowAlm": false}, &lead)
+	al.clrRetry = time.Hour
+	ev := endedOcc{id: "HiTemp", occ: "efefefefefefefef", gen: al.ackGen.Load()} // the activation fires
+	if _, err := al.Apply(oplog.Entry{Kind: oplog.KindAck, IDs: []string{"HiTemp"},
+		Occs: []oplog.Occ{{ID: "HiTemp", Occ: "efefefefefefefef", ActiveMs: 1}}, By: "op"}); err != nil {
+		t.Fatal(err)
+	}
+	al.clearIfAcked(ev) // judged after the ack
+	al.clrMu.Lock()
+	queued := slices.Clone(al.clr)
+	al.clrMu.Unlock()
+	if len(queued) != 0 {
+		t.Fatalf("the activation's hand-off cleared the ack taken after it: %v", queued)
 	}
 }

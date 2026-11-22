@@ -441,6 +441,7 @@ var table = []mutation{
 	{"adopt_under_mu", []string{"TestReconcileDuringACommitWithAnAdoptionPending"}},
 	{"engine_event_waits", []string{"TestScanNeverWaitsOnTheAlarmLog"}},
 	{"clear_any_later_ack", []string{"TestLateHandOffKeepsALaterAck"}},
+	{"clear_ack_taken_after", []string{"TestHandOffNeverClearsAnAckTakenAfterTheEvent"}},
 	{"occurrences_not_synced", []string{"TestLeaderSyncsOccurrences"}},
 }
 
@@ -534,6 +535,7 @@ var rowPkgs = map[string][]string{
 	"adopt_under_mu":                    {"./server"},
 	"engine_event_waits":                {"./server"},
 	"clear_any_later_ack":               {"./server"},
+	"clear_ack_taken_after":             {"./server"},
 	"occurrences_not_synced":            {"./server"},
 	"reconcile_before_restore":          {"./server"},
 	"cluster_ops_proxied":               {"./server"},

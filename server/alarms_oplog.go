@@ -156,6 +156,10 @@ type AlarmLog struct {
 	// to clearEnded, which judges them against the view: the scan never
 	// waits on mu (#1053: control never waits on operator data).
 	ended chan endedOcc
+	// ackGen counts the acks the view has taken; each view ack keeps the
+	// count it was taken at, and each hand-off the count when its event
+	// fired, so a late judgement clears only an ack that existed then.
+	ackGen atomic.Uint64
 
 	// seen hears every committed alarm entry this replica proposed, once
 	// applied (observe: the server's unknown-outcome resolutions).
@@ -203,6 +207,8 @@ type alarmIntent struct {
 	occ      string
 	activeMs int64
 	waitMs   int64
+
+	ackGen uint64 // AlarmLog.ackGen when the view took its ack
 }
 
 // adoption is a committed ack waiting to adopt an occurrence (AlarmLog.adopt).
@@ -231,7 +237,10 @@ func NewAlarmLog(eng *alarm.Engine, leading func() bool, term func() uint64) *Al
 
 // endedOcc is one alarm that left ack-active, with the occurrence it was
 // on then.
-type endedOcc struct{ id, occ string }
+type endedOcc struct {
+	id, occ string
+	gen     uint64 // AlarmLog.ackGen when the event fired
+}
 
 // endedQueue is the hand-off from the engine's hook to clearEnded: deep
 // enough for an alarm flood; past it, the next log tick's Reconcile finds
@@ -302,6 +311,7 @@ func (l *AlarmLog) Apply(e oplog.Entry) (bool, error) {
 			delete(l.adopt, id) // a later ack decides for itself
 			v := l.view[id]
 			v.acked, v.ackBy, v.ackMs, v.ackSeq = true, e.By, e.TS, e.Seq
+			v.ackGen = l.ackGen.Add(1)
 			if o, ok := occ[id]; ok {
 				v.occ, v.activeMs, v.waitMs = o.Occ, o.ActiveMs, 0
 			}
@@ -466,11 +476,11 @@ func (l *AlarmLog) engineEvent(ev alarm.Event) {
 		return
 	}
 	if mutServer("engine_event_waits") {
-		l.clearIfAcked(endedOcc{ev.ID, ev.Occurrence})
+		l.clearIfAcked(endedOcc{ev.ID, ev.Occurrence, l.ackGen.Load()})
 		return
 	}
 	select {
-	case l.ended <- endedOcc{ev.ID, ev.Occurrence}:
+	case l.ended <- endedOcc{ev.ID, ev.Occurrence, l.ackGen.Load()}:
 	default:
 	}
 }
@@ -483,8 +493,9 @@ func (l *AlarmLog) clearEnded() {
 	}
 }
 
-// clearIfAcked queues an ack-clear for e's alarm when the view's ack is
-// for the occurrence that left ack-active (or names none, from an older
+// clearIfAcked queues an ack-clear for e's alarm when the view's ack
+// existed when the event fired, and is for the occurrence that left
+// ack-active (or names none, from an older
 // replica, or waits to adopt one: its alarm did not stand), naming the
 // occurrence the view's ack is for. An ack the view took since, for a
 // later occurrence, is not cleared.
@@ -493,6 +504,9 @@ func (l *AlarmLog) clearIfAcked(e endedOcc) {
 	v := l.view[e.id]
 	_, adopting := l.adopt[e.id]
 	l.mu.Unlock()
+	if v.ackGen > e.gen && !mutServer("clear_ack_taken_after") {
+		return // the view took this ack after the event: the event is not its end
+	}
 	if v.acked && (v.occ == "" || v.occ == e.occ || adopting || mutServer("clear_any_later_ack")) {
 		l.queueClear(e.id, v.occ)
 	}
