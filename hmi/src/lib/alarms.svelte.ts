@@ -506,9 +506,14 @@ export class AlarmClient {
 	/** `POST /api/alarms/shelve` — `seconds` from now, converted to the ISO
 	 * `until` the server expects. Pick one of `DEFAULT_SHELVE_TIMES_S` (or the
 	 * project's own `shelveTimes` prop) for the duration picker. */
-	async shelve(id: string, seconds: number, by: string): Promise<AlarmInstance | null> {
+	async shelve(
+		id: string,
+		seconds: number,
+		by: string,
+		why?: { reason: string; via?: 'chatter' }
+	): Promise<AlarmInstance | null> {
 		const until = new Date(Date.now() + seconds * 1000).toISOString();
-		return this.#writeOne('shelve', { id, until, by });
+		return this.#writeOne('shelve', { id, until, by, ...(why ? { reason: why.reason, via: why.via } : {}) });
 	}
 
 	/** `POST /api/alarms/unshelve`. */

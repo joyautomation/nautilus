@@ -615,6 +615,7 @@ const defaultAlarms = `<script>
 			{now}
 			flood={alarms.flood}
 			{focus}
+			onchattershelve={(id, seconds, reason, by) => alarms.shelve(id, seconds, by, { reason, via: 'chatter' })}
 			onack={(ids, by) => alarms.ack(ids, by)}
 			onshelve={(id, until, by) => alarms.shelve(id, Math.max(1, Math.round((until - Date.now()) / 1000)), by)}
 			onunshelve={(id, by) => alarms.unshelve(id, by)}

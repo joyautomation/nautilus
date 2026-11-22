@@ -10,6 +10,8 @@ import {
 	detectionOutcome,
 	floodText,
 	focusSplit,
+	reasonProblem,
+	SHELVE_REASON_MAX,
 	groupsText,
 	seenWhenText,
 	spanText
@@ -159,5 +161,16 @@ describe('detection rows in the history', () => {
 		expect(detectionOutcome(row({ kind: 'flood', count: 11, windowMs: 600_000, reason: 'first out: A, B, C' }))).toBe(
 			'11 activations in 10 min; first out: A, B, C'
 		);
+	});
+});
+
+describe('the chatter shelve reason', () => {
+	it('is required, one line, and at most the controller limit in characters', () => {
+		expect(reasonProblem('')).toBe('Say why: what you saw, or what you will do about it.');
+		expect(reasonProblem('   ')).toBe('Say why: what you saw, or what you will do about it.');
+		expect(reasonProblem('seal weeping')).toBe('');
+		expect(reasonProblem('a\nb')).toBe('One line, please.');
+		expect(reasonProblem('é'.repeat(SHELVE_REASON_MAX))).toBe('');
+		expect(reasonProblem('é'.repeat(SHELVE_REASON_MAX + 1))).toBe('At most 200 characters.');
 	});
 });

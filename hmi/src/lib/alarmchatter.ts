@@ -112,3 +112,18 @@ export function detectionOutcome(e: AlarmEvent): string {
 			return '';
 	}
 }
+
+/** The longest shelve reason, in characters: the controller's limit. */
+export const SHELVE_REASON_MAX = 200;
+
+/** What is wrong with a chatter shelve's reason, or "" when it can go. One line, 1 to 200 characters. */
+export function reasonProblem(reason: string): string {
+	const r = reason.trim();
+	if (!r) return 'Say why: what you saw, or what you will do about it.';
+	if (/[\r\n]/.test(r)) return 'One line, please.';
+	if ([...r].length > SHELVE_REASON_MAX) return `At most ${SHELVE_REASON_MAX} characters.`;
+	return '';
+}
+
+/** The default shelve length of the chatter dialog, in seconds (`shelve-suggest`, 15 min). */
+export const SHELVE_SUGGEST_S = 15 * 60;

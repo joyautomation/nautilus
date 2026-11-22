@@ -710,6 +710,18 @@ func auditRows() []auditRow {
 			method: "POST", path: "/api/alarms/shelve", body: `{"id":"HiTemp","seconds":300}`,
 			action: "alarm.shelve", target: "HiTemp", user: "anonymous", source: "api", result: "ok",
 			after: map[string]any{"seconds": 300.0}},
+		{name: "shelve from a chatter badge keeps its reason", pattern: "POST /api/alarms/shelve", server: none,
+			method: "POST", path: "/api/alarms/shelve", body: `{"id":"HiTemp","seconds":900,"reason":"seal weeping, check Friday","via":"chatter"}`,
+			action: "alarm.shelve", target: "HiTemp", user: "anonymous", source: "api", result: "ok",
+			after: map[string]any{"seconds": 900.0},
+			check: func(t *testing.T, e audit.Entry) {
+				if e.Detail["reason"] != "seal weeping, check Friday" || e.Detail["via"] != "chatter" {
+					t.Errorf("detail %v, want the reason and via: chatter", e.Detail)
+				}
+			}},
+		{name: "shelve from a chatter badge with no reason", pattern: "POST /api/alarms/shelve", server: none,
+			method: "POST", path: "/api/alarms/shelve", body: `{"id":"HiTemp","seconds":900,"reason":"  ","via":"chatter"}`,
+			action: "alarm.shelve", target: "HiTemp", user: "anonymous", source: "api", result: "refused"},
 		{name: "shelve with no time", pattern: "POST /api/alarms/shelve", server: none,
 			method: "POST", path: "/api/alarms/shelve", body: `{"id":"HiTemp"}`,
 			action: "alarm.shelve", target: "HiTemp", user: "anonymous", source: "api", result: "refused"},

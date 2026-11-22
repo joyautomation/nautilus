@@ -14,6 +14,7 @@
 	import { DEFAULT_SHELVE_TIMES_S, PRIORITY_META, PRIORITY_ORDER, STATE_META } from '../alarms.svelte.js';
 	import AlarmSign from './AlarmSign.svelte';
 	import ChatterBadge from './ChatterBadge.svelte';
+	import ChatterShelveDialog from './ChatterShelveDialog.svelte';
 	import { focusSplit, seenWhenText } from '../alarmchatter.js';
 	import type { AlarmFloodBrief } from '../alarms.svelte.js';
 	import OutOfServiceBadge from './OutOfServiceBadge.svelte';
@@ -40,7 +41,9 @@
 		pageSize = 100,
 		confirmAck = false,
 		flood = null,
-		focus = false
+		focus = false,
+		onchattershelve,
+		suggestShelve
 	}: {
 		/** Full instance list — active, unack-RTN, and shelved together (e.g.
 		 * `alarmClient.instances`). Shelved rows are hidden by default; toggle
@@ -77,6 +80,11 @@
 		 *  chattering or long-acknowledged alarms under "also standing". Nothing
 		 *  is hidden for good or acknowledged; it only applies during a flood. */
 		focus?: boolean;
+		/** Set it and a chattering alarm's badge opens the shelve-with-a-reason
+		 *  dialog; `by` is the name to record. Unset, the badge is only a label. */
+		onchattershelve?: (id: string, seconds: number, reason: string, by: string) => void;
+		/** Seconds the chatter dialog opens on (the project's `shelve-suggest`). */
+		suggestShelve?: number;
 	} = $props();
 
 	let sortKey = $state<SortKey>('activeTime');
@@ -87,6 +95,11 @@
 	let filterText = $state('');
 	let showShelved = $state(false);
 	let filterChatter = $state(false);
+	let chatterOpen = $state(false);
+	// The alarm the dialog was opened on, kept as it was: a chattering alarm
+	// leaves the list each time it returns to normal, and the dialog must not
+	// lose it mid-sentence.
+	let chatterAlarm = $state<AlarmInstance | null>(null);
 	let alsoOpen = $state(false);
 	let page = $state(0);
 	let selected = $state<Set<string>>(new Set());
@@ -444,7 +457,7 @@
 						</td>
 						<td class="col-label" title={a.tag}>
 							{a.name}
-							{#if a.chatter}<ChatterBadge chatter={a.chatter} {now} />{/if}
+							{#if a.chatter}<ChatterBadge chatter={a.chatter} {now} onclick={onchattershelve ? () => ((chatterAlarm = a), (chatterOpen = true)) : undefined} />{/if}
 							{#if a.seenWhen}<span class="seen">{seenWhenText(a)}</span>{/if}
 						</td>
 						<td class="col-pipeline">{a.class ?? ([a.site, a.area].filter(Boolean).join(' / ') || '—')}</td>
@@ -474,6 +487,18 @@
 		</div>
 	{/if}
 </div>
+
+{#if onchattershelve}
+	<ChatterShelveDialog
+		bind:open={chatterOpen}
+		alarm={chatterAlarm}
+		{now}
+		{shelveTimes}
+		suggest={suggestShelve}
+		operator={operator}
+		onconfirm={onchattershelve}
+	/>
+{/if}
 
 <Modal bind:open={shelveOpen} title="Shelve {selected.size} alarm(s)" size="sm">
 	{#snippet children()}

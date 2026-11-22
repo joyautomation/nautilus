@@ -1195,7 +1195,19 @@ func shelveTarget(_ *http.Request, body []byte) auditTarget {
 	} else if req.Seconds != 0 {
 		after = map[string]any{"seconds": req.Seconds}
 	}
-	return auditTarget{target: req.ID, after: after, detail: byDetail(req.By)}
+	detail := byDetail(req.By)
+	if reason := strings.TrimSpace(req.Reason); reason != "" || req.Via != "" {
+		if detail == nil {
+			detail = map[string]any{}
+		}
+		if reason != "" {
+			detail["reason"] = capText(reason, shelveReasonMax)
+		}
+		if req.Via != "" {
+			detail["via"] = capText(req.Via, byMax)
+		}
+	}
+	return auditTarget{target: req.ID, after: after, detail: detail}
 }
 
 func unshelveTarget(_ *http.Request, body []byte) auditTarget {
