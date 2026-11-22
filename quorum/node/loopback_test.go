@@ -494,10 +494,13 @@ func (c *cluster) steady(id quorum.NodeID, n int) {
 		case lapsed.IsZero():
 			// Under -race a renewal can come late on a loaded runner
 			// (#1120): its gate closes until the renewal lands, at the same
-			// term. Allowed for half a lease; a yield or a lost lease
-			// changes the term, and that still fails.
+			// term. Allowed for up to a lease. Half a lease was not enough:
+			// a CI race job saw 255 ms. A yield or a lost lease still fails
+			// under -race: the gate stays shut past a lease, or opens again
+			// at a new term (a new lease after any gap gets one). Without
+			// -race, and in the mutation runner, any lapse fails.
 			lapsed = time.Now()
-		case time.Since(lapsed) > loopLease/2:
+		case time.Since(lapsed) > loopLease:
 			c.t.Fatalf("%s did not hold its lease steadily: not leading for %v at term %d", id, time.Since(lapsed), term)
 		}
 		time.Sleep(10 * time.Millisecond)
