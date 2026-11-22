@@ -351,10 +351,14 @@ The rules for applying a spec:
     `WebWriteTags`, `WebChangeOperatingMode`, `WebAllowDiagnostics`,
     `WebReadSyslog` and `WebDownloadServiceData` (step 2B maps the spec's
     rights onto them). A new project's users hold only `nautilus`: no
-    "Anonymous" appears among the project users.
+    "Anonymous" appears among the project users. A second run proved
+    the final shape: a create without `webServer` writes nothing and
+    reads back off; on (with HTTPS only), off and on again each read back
+    and compile with 0 errors.
   - Unproven: whether a kept project can give "Anonymous" a role (it is
-    not among Openness's project users); the HTTPS-only write on the TIA
-    machine (step 2A's second run).
+    not among Openness's project users); that a hardware download of a
+    station with the server on serves the Web API (the first
+    access-control bench window).
 - **`cpu.configurationProtection` is required on the wire**: the FW 3.1
   protection of the CPU's confidential configuration data (#789, decision
   of 2026-11-19). A FW 3.1 CPU does not compile until it is set up.
