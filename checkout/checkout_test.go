@@ -1,6 +1,7 @@
 package checkout
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -359,5 +360,42 @@ func TestForcesInTheRecord(t *testing.T) {
 	s2.Close()
 	if _, err := Open(p, nil); err != nil {
 		t.Errorf("the file with forces does not reopen: %v", err)
+	}
+}
+
+// The HMI's CheckoutPage reads these field names (hmi/src/lib/checkout.ts):
+// a renamed one would leave the page showing blanks, not an error.
+func TestWireFieldNamesTheHMIReads(t *testing.T) {
+	keys := func(v any) map[string]bool {
+		b, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var m map[string]any
+		if err := json.Unmarshal(b, &m); err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]bool{}
+		for k := range m {
+			out[k] = true
+		}
+		return out
+	}
+	for _, c := range []struct {
+		name string
+		v    any
+		want []string
+	}{
+		{"Progress", Progress{Total: 1}, []string{"total", "pass", "fail", "noted", "pending"}},
+		{"Run", Run{ID: "r"}, []string{"id", "state", "sheet", "at", "by", "results"}},
+		{"Result", Result{Run: "r"}, []string{"run", "seq", "at", "point", "outcome", "by"}},
+		{"Point", Point{ID: "p", Kind: DO, Method: Force}, []string{"id", "tag", "kind", "method"}},
+	} {
+		got := keys(c.v)
+		for _, w := range c.want {
+			if !got[w] {
+				t.Errorf("%s has no JSON field %q (the HMI reads it): has %v", c.name, w, got)
+			}
+		}
 	}
 }

@@ -67,8 +67,8 @@ export interface Progress {
 	total: number;
 	pass: number;
 	fail: number;
-	note: number;
-	todo: number;
+	noted: number;
+	pending: number;
 }
 
 /** GET /api/checkout. */

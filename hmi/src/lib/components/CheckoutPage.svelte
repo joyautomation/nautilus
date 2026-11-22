@@ -36,6 +36,7 @@
 	let busy = $state(false);
 	let noteFor = $state<{ id: string; outcome: 'fail' | 'note' } | null>(null);
 	let noteText = $state('');
+	let noteProblem = $state('');
 
 	const me = $derived(currentAuth()?.me ?? null);
 	const mayCheck = (pt: CheckoutPoint) => canIn(me, 'checkout', pt.area);
@@ -58,14 +59,18 @@
 	}
 	onMount(() => void load());
 
-	async function act<T>(p: Promise<{ ok: boolean; message?: string }>): Promise<boolean> {
+	// The answer's own words come back with it, so a dialog can show them (the
+	// page behind an open dialog cannot be read) and an unknown outcome keeps
+	// its "may have been recorded" text instead of becoming "did not work".
+	async function act(p: Promise<{ ok: boolean; message?: string }>): Promise<{ ok: boolean; message: string }> {
 		busy = true;
 		message = '';
 		try {
 			const a = await p;
-			if (!a.ok) message = a.message ?? 'did not work';
+			const said = a.ok ? '' : (a.message ?? 'did not work');
+			message = said;
 			await load();
-			return a.ok;
+			return { ok: a.ok, message: said };
 		} finally {
 			busy = false;
 		}
@@ -83,6 +88,7 @@
 		if (needsNote(outcome)) {
 			noteFor = { id: pt.id, outcome: outcome as 'fail' | 'note' };
 			noteText = '';
+			noteProblem = '';
 			return;
 		}
 		void act(client.record(run.id, pt.id, outcome));
@@ -90,10 +96,12 @@
 	async function saveNote() {
 		if (!run || !noteFor) return;
 		if (!noteText.trim()) {
-			message = 'say why: a fail or a note needs words';
+			noteProblem = 'say why: a fail or a note needs words';
 			return;
 		}
-		if (await act(client.record(run.id, noteFor.id, noteFor.outcome, noteText.trim()))) noteFor = null;
+		const a = await act(client.record(run.id, noteFor.id, noteFor.outcome, noteText.trim()));
+		if (a.ok) noteFor = null;
+		else noteProblem = a.message;
 	}
 
 	// --- force ---
@@ -121,8 +129,9 @@
 			problem = `type ${forcing.id} to confirm`;
 			return;
 		}
-		if (await act(client.force(run.id, forcing.id, v.value, seconds, typed))) forcing = null;
-		else problem = 'the controller did not start it: see the message above the sheet';
+		const a = await act(client.force(run.id, forcing.id, v.value, seconds, typed));
+		if (a.ok) forcing = null;
+		else problem = a.message;
 	}
 	const release = () => run && act(client.release(run.id));
 
@@ -137,7 +146,7 @@
 		return () => clearInterval(id);
 	});
 	const standing = $derived(countdown(force, frameAt, now));
-	const heldBy = (pt: CheckoutPoint) => !!force && force.point === pt.id && standing.state !== 'none';
+	const heldBy = (pt: CheckoutPoint) => !!force && !!run && force.run === run.id && force.point === pt.id && standing.state !== 'none';
 
 	const pct = (p: Progress) => (p.total ? Math.round((100 * p.pass) / p.total) : 0);
 	const entries = (m: Record<string, Progress> | undefined) => Object.entries(m ?? {}).sort(([a], [b]) => a.localeCompare(b));
@@ -174,7 +183,7 @@
 						<tbody>
 							{#each g.rows as [name, p] (name)}
 								<tr>
-									<td>{name || '(none)'}</td><td>{p.pass}</td><td>{p.fail}</td><td>{p.note}</td><td>{p.todo}</td>
+									<td>{name || '(none)'}</td><td>{p.pass}</td><td>{p.fail}</td><td>{p.noted}</td><td>{p.pending}</td>
 									<td><progress max="100" value={pct(p)}></progress></td>
 								</tr>
 							{/each}
@@ -183,7 +192,7 @@
 				{/each}
 			</div>
 
-			<table class="points">
+			<div class="scroll"><table class="points">
 				<thead><tr><th>Point</th><th>Tag</th><th>Kind</th><th>Where</th><th>Expect</th><th>Latest</th><th></th></tr></thead>
 				<tbody>
 					{#each view.points as pt (pt.id)}
@@ -200,7 +209,7 @@
 									<Button size="sm" disabled={busy} onclick={() => mark(pt, 'pass')}>Pass</Button>
 									<Button size="sm" variant="secondary" disabled={busy} onclick={() => mark(pt, 'fail')}>Fail</Button>
 									<Button size="sm" variant="ghost" disabled={busy} onclick={() => mark(pt, 'note')}>Note</Button>
-									{#if offersForce(pt)}
+									{#if offersForce(pt) && canIn(me, 'force', pt.area)}
 										{#if heldBy(pt)}
 											<Button size="sm" variant="secondary" disabled={busy} onclick={release}>
 												Release{standing.state === 'standing' ? ` (${clock(standing.remainingMs)})` : ''}
@@ -214,7 +223,7 @@
 						</tr>
 					{/each}
 				</tbody>
-			</table>
+			</table></div>
 		{:else}
 			<p class="none">No run is open. Begin one to check the sheet's {view.points.length} points.</p>
 		{/if}
@@ -224,6 +233,7 @@
 <Modal open={!!noteFor} title={noteFor ? `${noteFor.outcome === 'fail' ? 'Fail' : 'Note'}: ${noteFor.id}` : ''} size="sm" onclose={() => (noteFor = null)}>
 	{#snippet children()}
 		<label class="field"><span>Why (required)</span><input type="text" bind:value={noteText} /></label>
+		{#if noteProblem}<p class="problem" role="alert">{noteProblem}</p>{/if}
 	{/snippet}
 	{#snippet footer()}
 		<Button variant="ghost" onclick={() => (noteFor = null)}>Cancel</Button>
@@ -268,6 +278,7 @@
 	.progress { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: var(--space-2); }
 	table { width: 100%; border-collapse: collapse; font-size: var(--font-xs); }
 	th, td { text-align: left; padding: var(--space-1) var(--space-2); border-bottom: 1px solid var(--border); }
+	.scroll { overflow-x: auto; }
 	.acts { white-space: nowrap; display: flex; gap: 4px; flex-wrap: wrap; }
 	.pass { color: var(--good, #2a7); }
 	.fail { color: var(--danger, #c33); }
