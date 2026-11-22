@@ -22,7 +22,7 @@ claims:
   - id: PWA-003
     claim: >-
       The worker never answers the controller's data (/api, the live stream,
-      /_nautilus): an offline HMI shows no old value as live.
+      /_nautilus), a write, or another origin.
     source: "#what-installing-gets-you"
     tests:
       - go ./internal/hmibuild TestPWAWorkerNeverAnswersData

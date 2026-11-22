@@ -113,8 +113,12 @@ opens the alarms page** (`/alarms`) and does nothing else: it never
 acknowledges. Turn it off from the same card; the list below it removes your
 other devices.
 
-What it will not do: it does not page a phone nobody is signed in on, it
-does not survive a password change (sign in and turn it on again), and it
-needs the push service to be reachable from the controller. The controller
+What it will not do: it ends with a password change, a removed or disabled
+user or a revoked role (sign in and turn it on again), not when you sign out,
+and it needs the push service to be reachable from the controller.
+
+**What has been verified:** the controller's half against a fake push service
+that decrypts, and the worker and the card in Chromium. Not yet on a real
+phone, a real push service, or iOS, Android and Windows. The controller
 sends directly (not through `HTTPS_PROXY`) and refuses a push service that
 resolves to a private address unless `allow-hosts:` names it.
