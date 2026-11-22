@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/joyautomation/nautilus/audit"
 	"github.com/joyautomation/nautilus/auth/users"
@@ -578,4 +579,32 @@ func auditSubscription() (body, id string) {
 	var b struct{ Endpoint string }
 	json.Unmarshal([]byte(body), &b)
 	return body, webpush.EndpointID(b.Endpoint)
+}
+
+// A standby pages nobody, takes no subscription and revokes nothing: its
+// copy of the rows is the leader's to change.
+func TestPushStandbyDoesNothing(t *testing.T) {
+	key, _ := webpush.NewKey()
+	rt, err := runtime.New(runtime.Options{Program: testProgram, Driver: nio.NewMemory(), Coordinator: standbyCoord{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, _, path := patServerRT(t, rt, Options{Push: &PushOptions{Key: key, Subject: "mailto:ops@example.com"}})
+	if _, err := srv.PushSend(context.Background(), "jsmith", PushMessage{Target: "SP", Payload: []byte("x")}); err != ErrPushNotLeading {
+		t.Errorf("PushSend on a standby: %v", err)
+	}
+	body, _ := subJSON(1)
+	c := signIn(t, srv, "jsmith")
+	if rec := call(t, srv, "POST", "/api/push/subscribe", body, withCookie(c.Value), ownOrigin, asJSON); rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("subscribe on a standby: %d", rec.Code)
+	}
+	// Rows the leader kept (loaded here at a takeover) are not swept by a standby.
+	row, _, _ := srv.push.reg.Add("user:jsmith", nil, "stale-cred", "push.example.net", webpush.Subscription{}, time.Now())
+	_ = row
+	users.Update(path, "opsadmin", func(f *users.File) error { return f.SetPassword("jsmith", "new-password") })
+	srv.users.Reload()
+	srv.push.sweep(context.Background())
+	if len(srv.push.reg.Rows()) != 1 {
+		t.Error("a standby revoked a subscription")
+	}
 }
