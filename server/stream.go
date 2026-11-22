@@ -293,7 +293,7 @@ func (s *Server) broadcast() {
 	// a controller-only feature's block (the I/O checkout's standing force,
 	// #719), never gated
 	for _, h := range s.frameHooks {
-		h(&base)
+		h(s, &base)
 	}
 	quality := qualityJSON(s.rt.Quality())
 

@@ -5,11 +5,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/joyautomation/nautilus/auth"
 	"github.com/joyautomation/nautilus/checkout"
+	nio "github.com/joyautomation/nautilus/io"
+	"github.com/joyautomation/nautilus/runtime"
 )
 
 // ckForceRig is a checkout server with a run begun and an engineer signed in.
@@ -91,7 +94,7 @@ func TestCheckoutForceIsHeldToItsInterlock(t *testing.T) {
 	if rec := r.force(t, `{"point":"OUT","value":"high","confirm":"OUT"}`); rec.Code != http.StatusBadRequest {
 		t.Errorf("a text value for a number: %d %s", rec.Code, rec.Body)
 	}
-	if _, ok := r.st.Standing(); ok || ckOf(r.srv).forceView() != nil {
+	if _, ok := r.st.Standing(); ok || ckOf(r.srv).forceView(r.srv.rt.Tags()) != nil {
 		t.Error("a force stands after a refused value")
 	}
 }
@@ -169,7 +172,7 @@ func TestCheckoutForceReleaseAndAbandon(t *testing.T) {
 	if rec := call(t, r.srv, "POST", r.path+"/abandon", `{"reason":"wrong sheet"}`, r.eng); rec.Code != http.StatusOK {
 		t.Fatalf("abandon: %d %s", rec.Code, rec.Body)
 	}
-	if r.forced("Out") || ckOf(r.srv).forceView() != nil {
+	if r.forced("Out") || ckOf(r.srv).forceView(r.srv.rt.Tags()) != nil {
 		t.Error("abandoning the run left the output forced")
 	}
 }
@@ -244,5 +247,226 @@ func TestCheckoutForceNeedsBothPermissions(t *testing.T) {
 	}
 	if rec := call(t, srv, "POST", path, goodForce, ckAs(t, srv, "akhan")); rec.Code != http.StatusCreated {
 		t.Errorf("an engineer: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// A checkout force on a typed output (an enumeration, a TIME, a member of a
+// struct) is let go like any other: the force is identified by the table's
+// generation, never by comparing the value it was sent with the value the
+// table holds after coercion, which differ for these.
+const ckTypesLib = `TYPE Mode : (Off, Run, Fault) := Off; Pump : STRUCT Run : BOOL; Speed : REAL; END_STRUCT; END_TYPE`
+const ckTypesProg = `PROGRAM Test
+VAR_EXTERNAL
+  Level : REAL; SP : REAL; Out : REAL; M : Mode; T : TIME; P101 : Pump;
+END_VAR
+Out := SP - Level;
+END_PROGRAM
+`
+
+func newCkTypesRig(t *testing.T) *ckForceRig {
+	t.Helper()
+	rt, err := runtime.New(runtime.Options{Program: ckTypesProg, Libraries: []string{ckTypesLib}, Driver: nio.NewMemory(),
+		Tags: []runtime.TagDef{runtime.Typed("Level", runtime.RoleState, "REAL"), runtime.Typed("SP", runtime.RoleState, "REAL"),
+			runtime.Typed("Out", runtime.RoleState, "REAL"), runtime.Typed("M", runtime.RoleState, "Mode"),
+			runtime.Typed("T", runtime.RoleState, "TIME"), runtime.Typed("P101", runtime.RoleState, "Pump")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt.Scan()
+	st := newCkStore(t)
+	sh := ckSheet()
+	for _, p := range []checkout.Point{
+		{ID: "MODE", Tag: "M", Kind: checkout.DO, Method: checkout.Force},
+		{ID: "TMR", Tag: "T", Kind: checkout.AO, Method: checkout.Force},
+		{ID: "PSPD", Tag: "p101.speed", Kind: checkout.AO, Method: checkout.Force},
+	} {
+		p.Equipment, p.Device, p.Area = "HiTempAlm", "rio1", "RCV"
+		sh.Points = append(sh.Points, p)
+	}
+	co := &CheckoutOptions{Store: st, Sheet: sh}
+	srv, _, _ := patServerRT(t, rt, ckOpts(Options{}, co))
+	ckReg(srv, co)
+	run, err := st.Begin(false, sh.Hash(), "T", "akhan", "user:akhan")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &ckForceRig{srv: srv, st: st, run: run, eng: ckAs(t, srv, "akhan"), path: "/api/checkout/runs/" + run.ID}
+}
+
+func TestCheckoutForceReleasesTypedOutputs(t *testing.T) {
+	for _, c := range []struct{ point, tag, value string }{
+		{"MODE", "M", `1`}, {"MODE", "M", `"run"`}, {"MODE", "M", `"Mode#Run"`},
+		{"TMR", "T", `"T#5s"`}, {"PSPD", "P101.Speed", `7`},
+	} {
+		r := newCkTypesRig(t)
+		r.oos(t)
+		rec := r.force(t, `{"point":"`+c.point+`","value":`+c.value+`,"seconds":1,"confirm":"`+c.point+`"}`)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("%s <- %s: %d %s", c.tag, c.value, rec.Code, rec.Body)
+		}
+		if !r.forced(c.tag) {
+			t.Fatalf("%s <- %s: not forced", c.tag, c.value)
+		}
+		deadline := time.Now().Add(5 * time.Second)
+		for r.forced(c.tag) && time.Now().Before(deadline) {
+			time.Sleep(20 * time.Millisecond)
+		}
+		if r.forced(c.tag) {
+			t.Errorf("%s <- %s: still forced after its time: the expiry did not recognise its own force", c.tag, c.value)
+		}
+		if _, ok := r.st.Standing(); ok {
+			t.Errorf("%s <- %s: the record still says it stands", c.tag, c.value)
+		}
+	}
+}
+
+// A force on the tag a member point sits in (or on the member, for a point on
+// the tag) is somebody else's: not taken over.
+func TestCheckoutForceRefusesAnOverlappingForce(t *testing.T) {
+	r := newCkTypesRig(t)
+	r.oos(t)
+	if err := r.srv.rt.Tags().Force("P101.Run", true); err != nil { // another member of the struct
+		t.Fatal(err)
+	}
+	if err := r.srv.rt.Tags().Force("P101", map[string]any{"Run": true, "Speed": 1.0}); err != nil {
+		t.Skip("a whole-struct force is not accepted here:", err)
+	}
+	rec := r.force(t, `{"point":"PSPD","value":7,"seconds":5,"confirm":"PSPD"}`)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "already forced") {
+		t.Errorf("a member point under a whole-tag force: %d %s, want 409", rec.Code, rec.Body)
+	}
+}
+
+// The force ends the moment its equipment is back in service: it must not
+// keep driving an output past its permissives while the alarms ring again.
+func TestCheckoutForceEndsWhenTheEquipmentIsBackInService(t *testing.T) {
+	r := newCkForceRig(t)
+	r.oos(t)
+	if rec := r.force(t, `{"point":"OUT","value":5.5,"seconds":300,"confirm":"OUT"}`); rec.Code != http.StatusCreated {
+		t.Fatalf("force: %d %s", rec.Code, rec.Body)
+	}
+	if err := r.srv.alarms.ReturnToService("HiTempAlm", "akhan"); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for r.forced("Out") && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if r.forced("Out") {
+		t.Fatal("the output is still forced after its equipment returned to service")
+	}
+	rec := call(t, r.srv, "POST", r.path+"/results", `{"point":"OUT","outcome":"note","note":"x"}`, r.eng)
+	var res checkout.Result
+	json.Unmarshal(rec.Body.Bytes(), &res)
+	if res.Force == nil || res.Force.Ended != checkout.ForceInterlock {
+		t.Errorf("result: %+v, want the force ended by its interlock", res.Force)
+	}
+}
+
+// A window that has run out counts as ended even before the next scan sweeps
+// it: no force is started on it.
+func TestCheckoutForceRefusesAnExpiredWindow(t *testing.T) {
+	r := newCkForceRig(t)
+	if err := r.srv.alarms.TakeOutOfService("HiTempAlm", time.Now().Add(80*time.Millisecond), "akhan", "brief"); err != nil {
+		t.Skip("a window this short is not accepted:", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if rec := r.force(t, goodForce); rec.Code != http.StatusConflict {
+		t.Errorf("a force on an expired window: %d %s, want 409", rec.Code, rec.Body)
+	}
+	if r.forced("Out") {
+		t.Error("the output was forced")
+	}
+}
+
+// Someone clearing the force the plain way takes the checkout's claim with it:
+// the frame stops saying it stands, and the record is closed.
+func TestCheckoutForceNoticesItsForceBeingCleared(t *testing.T) {
+	r := newCkForceRig(t)
+	r.oos(t)
+	if rec := r.force(t, goodForce); rec.Code != http.StatusCreated {
+		t.Fatalf("force: %d %s", rec.Code, rec.Body)
+	}
+	r.srv.rt.Tags().Unforce("Out")
+	var f Frame
+	json.Unmarshal(call(t, r.srv, "GET", "/api/state", "", r.eng).Body.Bytes(), &f)
+	if f.CheckoutForce != nil {
+		t.Errorf("the frame says a checkout force stands over a cleared output: %+v", f.CheckoutForce)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, ok := r.st.Standing(); !ok {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Error("the record still says the force stands after someone cleared it")
+}
+
+func TestCheckoutForceDefaultsAndConfirmation(t *testing.T) {
+	r := newCkTypesRig(t)
+	r.oos(t)
+	if rec := r.force(t, `{"point":"MODE","value":1,"confirm":"yes"}`); rec.Code != http.StatusUnprocessableEntity {
+		t.Errorf("a confirmation that is not the point's id: %d %s", rec.Code, rec.Body)
+	}
+	rec := r.force(t, `{"point":"MODE","value":1,"confirm":"MODE"}`)
+	var fr checkout.ForceRec
+	json.Unmarshal(rec.Body.Bytes(), &fr)
+	if rec.Code != http.StatusCreated || fr.Seconds != 30 {
+		t.Errorf("a force with no seconds: %d %+v, want 30 s", rec.Code, fr)
+	}
+	// one at a time: another point is refused while this one stands
+	if rec := r.force(t, `{"point":"TMR","value":"T#5s","confirm":"TMR"}`); rec.Code != http.StatusConflict {
+		t.Errorf("a second point while one stands: %d %s, want 409", rec.Code, rec.Body)
+	}
+	if r.forced("T") {
+		t.Error("the second output was forced")
+	}
+}
+
+// A token names nobody: it cannot force.
+func TestCheckoutForceRefusesAToken(t *testing.T) {
+	st := newCkStore(t)
+	co := &CheckoutOptions{Store: st, Sheet: ckSheet()}
+	srv, _, _ := patServerWith(t, ckOpts(Options{AuthToken: "s3cret"}, co))
+	ckReg(srv, co)
+	run, _ := st.Begin(false, ckSheet().Hash(), "T", "akhan", "user:akhan")
+	srv.alarms.TakeOutOfService("HiTempAlm", time.Now().Add(time.Hour), "akhan", "x")
+	rec := call(t, srv, "POST", "/api/checkout/runs/"+run.ID+"/force", goodForce, func(r *http.Request) { r.Header.Set("Authorization", "Bearer s3cret") })
+	if rec.Code == http.StatusCreated || len(srv.rt.Tags().Forces()) != 0 {
+		t.Errorf("a token forced an output: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// The standing force's state is read by every frame and written by release,
+// expiry and the watch: run them against each other under -race.
+func TestCheckoutForceStateIsRaceFree(t *testing.T) {
+	r := newCkForceRig(t)
+	r.oos(t)
+	if rec := r.force(t, `{"point":"OUT","value":5.5,"seconds":1,"confirm":"OUT"}`); rec.Code != http.StatusCreated {
+		t.Fatalf("force: %d %s", rec.Code, rec.Body)
+	}
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				call(t, r.srv, "GET", "/api/state", "", r.eng)
+				call(t, r.srv, "POST", r.path+"/force/release", `{}`, r.eng)
+			}
+		}()
+	}
+	time.Sleep(1500 * time.Millisecond)
+	close(stop)
+	wg.Wait()
+	if r.forced("Out") {
+		t.Error("the output is still forced")
 	}
 }

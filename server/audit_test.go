@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/joyautomation/nautilus/checkout"
 	"github.com/joyautomation/nautilus/notes"
 	"go/ast"
 	"go/parser"
@@ -302,15 +303,13 @@ func auditRows() []auditRow {
 		if _, err := ckOf(s).Store.StartForce(run.ID, "OUT", 5.5, 60, "akhan", "user:akhan"); err != nil {
 			t.Fatal(err)
 		}
-		if err := s.rt.Tags().Force("Out", 5.5); err != nil {
+		gen, err := s.rt.Tags().ForceIfFree("Out", 5.5)
+		if err != nil {
 			t.Fatal(err)
 		}
-		since := int64(0)
-		for _, f := range s.rt.Tags().Forces() {
-			since = f.SinceMs
-		}
 		ckOf(s).ck.mu.Lock()
-		ckOf(s).ck.force = &ckForce{run: run.ID, point: "OUT", tag: "Out", by: "akhan", value: 5.5, sinceMs: since, until: time.Now().Add(time.Minute), timer: time.AfterFunc(time.Hour, func() {})}
+		ckOf(s).ck.force = &ckForce{run: run.ID, point: "OUT", tag: "Out", by: "akhan", gen: gen, ready: true, until: time.Now().Add(time.Minute),
+			pt: checkout.Point{ID: "OUT", Tag: "Out"}, timer: time.AfterFunc(time.Hour, func() {}), done: make(chan struct{})}
 		ckOf(s).ck.mu.Unlock()
 	}
 	ckPath := func(tail string) func(*Server) string {

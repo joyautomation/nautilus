@@ -11,7 +11,7 @@ import "net/http"
 type Mount func(s *Server, mux *http.ServeMux)
 
 // FrameHook adds a block to a frame (a controller-only feature's state).
-type FrameHook func(f *Frame)
+type FrameHook func(s *Server, f *Frame)
 
 // CheckoutForceView is what every frame says while a checkout force stands.
 type CheckoutForceView struct {

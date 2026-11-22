@@ -45,12 +45,13 @@ var (
 
 // How a checkout force ended.
 const (
-	ForceReleased    = "released"      // by a person
-	ForceExpired     = "expired"       // its time ran out
-	ForceAbandoned   = "run abandoned" // its run was abandoned
-	ForceInterrupted = "interrupted"   // the controller restarted, or lost the force
-	ForceReplaced    = "replaced"      // someone else changed or cleared it
-	ForceRefused     = "not applied"   // the force table refused the value
+	ForceReleased    = "released"                  // by a person
+	ForceExpired     = "expired"                   // its time ran out
+	ForceAbandoned   = "run abandoned"             // its run was abandoned
+	ForceInterrupted = "interrupted"               // the controller restarted, or lost the force
+	ForceReplaced    = "replaced"                  // someone else changed or cleared it
+	ForceRefused     = "not applied"               // the force table refused the value
+	ForceInterlock   = "equipment back in service" // its interlock stopped holding
 )
 
 // Kinds of entry in the file.

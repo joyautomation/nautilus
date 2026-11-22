@@ -88,8 +88,9 @@ Nothing is forced unless all of these hold:
   out-of-service <equipment>`), so its alarms are quiet and the plant can see
   it is being worked on. A point with no `equipment:`, or equipment the alarms
   do not know, cannot be forced from a checkout;
-- nothing else is forced at that address (a force someone else holds is left
-  alone) and no other checkout force stands (one at a time).
+- nothing is forced at that address, in it or around it (a member of a struct
+  tag, or the tag a member is in): a force someone else holds is never taken
+  over; and no other checkout force stands (one at a time).
 
 ```
 POST /api/checkout/runs/{id}/force          {point, value, seconds?, confirm}
@@ -99,10 +100,14 @@ POST /api/checkout/runs/{id}/force/release  {}
 The force stands for `seconds` (30 by default, at most 300), counted by the
 controller's own monotonic clock, and then **the controller lets it go
 itself**: closing the browser, signing out or losing the link cannot leave an
-output forced. It also ends when released, when its run is abandoned, and when
+output forced. It also ends when released, when its run is abandoned, **when
+the equipment is back in service or its window runs out** (the interlock is
+checked every second while a force stands; the record says `equipment back in
+service`), when someone clears or replaces the force (`replaced`), and when
 the controller restarts (a force does not survive one; the record says
-`interrupted`). A force someone else put on the output meanwhile is not
-removed by the expiry: the record says `replaced`. While a checkout force
+`interrupted`). The force is the one the controller put there, told apart by
+a number the force table gives it, never by its value: a force someone else set
+or changed on the output meanwhile is not removed. While a checkout force
 stands, every frame carries `checkoutForce` (the point, who, the milliseconds
 left) so any screen can say an output is being driven.
 

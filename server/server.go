@@ -923,7 +923,7 @@ func (s *Server) frame(pats []string) Frame {
 		Forces:  s.rt.Tags().ForcedValues(),
 	}
 	for _, h := range s.frameHooks {
-		h(&f)
+		h(s, &f)
 	}
 	f.Alarms = s.alarmSummary()
 	f.Config = s.ioConfigState()

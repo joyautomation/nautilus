@@ -55,7 +55,7 @@ type CheckoutOptions struct {
 // then lists (ShownPermissions). Without it the server has no checkout at all.
 func (co *CheckoutOptions) Install(o *Options) {
 	o.Mounts = append(o.Mounts, co.mount)
-	o.FrameHooks = append(o.FrameHooks, func(f *Frame) { f.CheckoutForce = co.forceView() })
+	o.FrameHooks = append(o.FrameHooks, func(s *Server, f *Frame) { f.CheckoutForce = co.forceView(s.rt.Tags()) })
 	o.ShownPermissions = append(o.ShownPermissions, auth.Checkout, auth.Signoff)
 }
 
@@ -259,13 +259,8 @@ func jsonSafe(v any) any {
 func (a *checkoutAPI) checkoutAbandon(w http.ResponseWriter, r *http.Request) {
 	a.checkoutWrite(w, r, "", func(pr auth.Principal, req checkoutRequest) (any, int, error) {
 		// an output forced for this run is let go before the run ends
-		if req.Reason != "" {
-			a.co.ck.mu.Lock()
-			standing := a.co.ck.force != nil && a.co.ck.force.run == r.PathValue("id")
-			a.co.ck.mu.Unlock()
-			if standing {
-				a.endCheckoutForce(checkout.ForceAbandoned, noteAuthor(pr.String()))
-			}
+		if f := a.standingForce(r.PathValue("id")); f != nil && req.Reason != "" {
+			a.endCheckoutForce(f, checkout.ForceAbandoned, noteAuthor(pr.String()))
 		}
 		run, err := a.co.Store.Abandon(r.PathValue("id"), req.Reason, noteAuthor(pr.String()), pr.String())
 		return run, http.StatusOK, err
@@ -366,12 +361,17 @@ func (a *checkoutAPI) checkoutTarget(action string) targetFunc {
 				}
 			}
 			t.after = map[string]any{"outcome": req.Outcome, "note": req.Note}
+			if action == "checkout.force" {
+				t.after = map[string]any{"value": req.Value, "seconds": req.Seconds}
+			}
 		case "checkout.abandon":
 			t.after = map[string]any{"reason": req.Reason}
 		case "checkout.release":
-			if a.co.ck.force != nil {
-				t.target = a.co.ck.force.tag
+			a.co.ck.mu.Lock()
+			if f := a.co.ck.force; f != nil {
+				t.target = f.tag
 			}
+			a.co.ck.mu.Unlock()
 		}
 		return t
 	}

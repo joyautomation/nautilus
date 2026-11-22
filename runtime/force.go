@@ -86,6 +86,11 @@ type forceEntry struct {
 	path    []string // member path below the root; nil = the whole tag
 	val     ir.Value // the forced value, already coerced to the member's type
 	sinceMs int64
+	// gen is which force this is: a number nothing else has, stamped each time
+	// the entry is set. A caller that must remove only the force it put there
+	// (an I/O checkout, #719) keeps it and asks UnforceIf, so a force someone
+	// else set or changed since is left alone.
+	gen uint64
 }
 
 // apply lays every force of the set over v and returns the result. Forces
@@ -168,19 +173,74 @@ func (t *Tags) ForceLenient(addr string, v any) error {
 }
 
 func (t *Tags) force(addr string, v any, strict bool) error {
+	_, err := t.forceGen(addr, v, strict, false)
+	return err
+}
+
+// ErrAlreadyForced is what ForceIfFree answers for an address (or a member
+// or the whole tag around it) that is forced already.
+var ErrAlreadyForced = fmt.Errorf("already forced")
+
+// ForceIfFree is Force that refuses, atomically, an address already forced
+// (by itself, a member of it or the tag around it), and returns the force's
+// generation for UnforceIf. Nothing about Force changes.
+func (t *Tags) ForceIfFree(addr string, v any) (uint64, error) {
+	return t.forceGen(addr, v, true, true)
+}
+
+// ForceGen is the generation of the force on exactly addr, if there is one.
+func (t *Tags) ForceGen(addr string) (uint64, bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	for _, fs := range t.forces {
+		for i := range fs.entries {
+			if strings.EqualFold(fs.entries[i].name, addr) {
+				return fs.entries[i].gen, fs.entries[i].gen != 0
+			}
+		}
+	}
+	return 0, false
+}
+
+// UnforceIf removes the force on addr only if it is still the one with that
+// generation, atomically, and reports whether it did. A force set or changed
+// meanwhile has another generation and is left alone.
+func (t *Tags) UnforceIf(addr string, gen uint64) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	for root, fs := range t.forces {
+		for i := range fs.entries {
+			if !strings.EqualFold(fs.entries[i].name, addr) || fs.entries[i].gen != gen {
+				continue
+			}
+			fs.entries = append(fs.entries[:i], fs.entries[i+1:]...)
+			t.releaseLocked(root, fs)
+			t.forceRev++
+			return true
+		}
+	}
+	return false
+}
+
+func (t *Tags) forceGen(addr string, v any, strict, ifFree bool) (uint64, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if ifFree {
+		if f := t.forcedOverlapLocked(addr); f != "" {
+			return 0, fmt.Errorf("%s: %w (as %s)", addr, ErrAlreadyForced, f)
+		}
+	}
 	root, path, tv, err := t.resolveForceAddr(addr)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if tv.v.Kind == ir.TypeFB {
-		return fmt.Errorf("tag %s is a function-block instance — force one of its pins' tags instead", root)
+		return 0, fmt.Errorf("tag %s is a function-block instance — force one of its pins' tags instead", root)
 	}
 	if tv.owned {
 		// The runtime stores a companion past the force layer: a force on
 		// one would show in the table and hold nothing.
-		return fmt.Errorf("tag %s is set by the runtime from the substitute table and cannot be forced: %w", root, ErrReadOnly)
+		return 0, fmt.Errorf("tag %s is set by the runtime from the substitute table and cannot be forced: %w", root, ErrReadOnly)
 	}
 	fs := t.forces[root]
 	base := tv.v
@@ -196,14 +256,14 @@ func (t *Tags) force(addr string, v any, strict bool) error {
 	}
 	nv, err := set(base, rootT, path, v, "tag "+root)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	fv, _, err := ir.FieldAt(nv, rootT, path, root)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if fv.Kind == ir.TypeFB {
-		return fmt.Errorf("%s is a function-block instance — it has no value to force", addr)
+		return 0, fmt.Errorf("%s is a function-block instance — it has no value to force", addr)
 	}
 	if fs == nil {
 		fs = &forceSet{actual: tv.v, typ: rootT}
@@ -214,7 +274,8 @@ func (t *Tags) force(addr string, v any, strict bool) error {
 		tv.forced = true
 	}
 	name := ir.JoinPath(root, path)
-	e := forceEntry{name: name, path: path, val: ir.CopyValue(fv), sinceMs: t.NowMs()}
+	t.forceSeq++
+	e := forceEntry{name: name, path: path, val: ir.CopyValue(fv), sinceMs: t.NowMs(), gen: t.forceSeq}
 	replaced := false
 	for i := range fs.entries {
 		if fs.entries[i].name == name {
@@ -232,7 +293,7 @@ func (t *Tags) force(addr string, v any, strict bool) error {
 	}
 	t.storeLocked(root, tv, fs.apply(fs.actual))
 	t.forceRev++
-	return nil
+	return e.gen, nil
 }
 
 // Unforce removes the force on one address and reports whether there was

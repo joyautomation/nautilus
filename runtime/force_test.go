@@ -514,3 +514,62 @@ func TestForceBeforeFirstScanHolds(t *testing.T) {
 		t.Fatal("the forced StartPB never reached the logic")
 	}
 }
+
+// A caller that must remove only the force it put there (an I/O checkout,
+// #719) takes its generation from ForceIfFree and removes it with UnforceIf:
+// a force set or changed since has another generation and stays; an address
+// already forced (itself, a member, the tag around it) is refused; plain Force
+// and Unforce are as they were.
+func TestForceGenerationsAreOwnership(t *testing.T) {
+	tags := NewTags()
+	tags.Set("Out", 0.0)
+	gen, err := tags.ForceIfFree("Out", 5.0)
+	if err != nil || gen == 0 {
+		t.Fatalf("ForceIfFree: %d %v", gen, err)
+	}
+	if g, ok := tags.ForceGen("out"); !ok || g != gen {
+		t.Errorf("ForceGen = %d %v, want %d", g, ok, gen)
+	}
+	if _, err := tags.ForceIfFree("Out", 6.0); err == nil || !strings.Contains(err.Error(), "already forced") {
+		t.Errorf("a second ForceIfFree on a forced address: %v", err)
+	}
+	// someone else changes the force: another generation, so UnforceIf leaves it
+	if err := tags.Force("Out", 9.0); err != nil {
+		t.Fatal(err)
+	}
+	if tags.UnforceIf("Out", gen) {
+		t.Fatal("UnforceIf removed a force that was set again since")
+	}
+	if g, _ := tags.ForceGen("Out"); g == gen {
+		t.Error("a changed force kept its generation")
+	}
+	g2, _ := tags.ForceGen("Out")
+	if !tags.UnforceIf("Out", g2) {
+		t.Error("UnforceIf did not remove the force it was given the generation of")
+	}
+	if tags.UnforceIf("Out", g2) || len(tags.Forces()) != 0 {
+		t.Errorf("a second UnforceIf, or leftovers: %v", tags.Forces())
+	}
+	// plain Force and Unforce are unchanged
+	tags.Force("Out", 1.0)
+	if !tags.Unforce("Out") {
+		t.Error("Unforce")
+	}
+}
+
+// ForceIfFree sees a force on a member when the whole tag is asked for and on
+// the tag when a member is.
+func TestForceIfFreeSeesOverlaps(t *testing.T) {
+	sd := &ir.StructDef{Name: "Pump", Fields: []ir.StructField{{Name: "Run"}, {Name: "Speed"}}, FieldIndex: map[string]int{"Run": 0, "Speed": 1}}
+	tags := NewTags()
+	tags.Set("P1", ir.Value{Kind: ir.TypeStruct, Struct: sd, Fld: []ir.Value{ir.BoolVal(false), ir.RealVal(1)}})
+	if err := tags.Force("P1.Run", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tags.ForceIfFree("P1", ir.Value{}); err == nil || !strings.Contains(err.Error(), "already forced") {
+		t.Errorf("the whole tag over a forced member: %v", err)
+	}
+	if _, err := tags.ForceIfFree("P1.Speed", 5.0); err != nil {
+		t.Errorf("another member is free: %v", err)
+	}
+}

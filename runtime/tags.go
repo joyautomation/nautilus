@@ -110,6 +110,8 @@ type Tags struct {
 	// the feature. forceRev bumps on every change to the table.
 	forces   map[string]*forceSet
 	forceRev uint64
+	// forceSeq numbers each force set, so one can be told from another (UnforceIf).
+	forceSeq uint64
 	// subs is the substitute table, keyed by ROOT tag (see substitute.go),
 	// with tagVal.substituted beside it as for forces. subRev bumps on
 	// every change to the table (under mu; atomic so SubstituteRevision,
