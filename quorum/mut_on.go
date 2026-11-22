@@ -325,6 +325,10 @@ var Mutations = []string{
 	"inbound_status_on_wire",            // server: a refused reply or keypress answers the provider with its status instead of 200 TwiML (#715)
 	"inbound_not_forwarded",             // server: a standby answers a provider's reply itself instead of forwarding it to the leader (#715)
 	"voice_link_acks_here",              // server: a call's keypress URL acknowledges as an ack link (#715)
+	"inbound_replies_unlimited",         // server: a person is texted every refusal of their replies, without limit (#715)
+	"inbound_no_global_budget",          // server: the controller-wide budget of wrong reply codes is not enforced (#715)
+	"inbound_any_alarm",                 // server: a reply code is tried against every standing occurrence, not only those whose escalation can page the person by SMS (#715)
+	"inbound_unknown_as_refused",        // server: an inbound ack the pair's log did not confirm is journalled as refused (#715)
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")

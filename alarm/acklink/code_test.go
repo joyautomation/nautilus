@@ -74,10 +74,15 @@ func TestCodeWindow(t *testing.T) {
 	if err := at(MaxTTL+bucket, t0); !errors.Is(err, ErrNoMatch) {
 		t.Fatalf("a code past MaxTTL matched: %v", err)
 	}
-	// Made before the occurrence activated (an hour before): not this
-	// occurrence's code.
-	if err := at(2*time.Hour, t0.Add(time.Hour)); !errors.Is(err, ErrNoMatch) {
+	// Made an hour before the occurrence activated (past the skew): not
+	// this occurrence's code.
+	if err := at(2*time.Hour, t0.Add(time.Hour+skew+time.Second)); !errors.Is(err, ErrNoMatch) {
 		t.Fatalf("a code from before the activation matched: %v", err)
+	}
+	// Activation stamped at 01:00:01 by a member whose clock is ahead; the
+	// page minted at 00:59:59 on the other: within the skew, it counts.
+	if err := at(2*time.Hour, t0.Add(time.Hour+time.Second)); err != nil {
+		t.Fatalf("a code minted a second before a skewed activation refused: %v", err)
 	}
 	// Made by a member whose clock runs a little ahead (next hour, within
 	// skew).

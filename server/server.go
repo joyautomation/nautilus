@@ -619,8 +619,12 @@ type Server struct {
 	// inbound SMS and voice acknowledgements (#715, inbound.go)
 	inbound      *Inbound
 	inboundTries tries
-	unknowns     *unknowns // proposals answered "outcome unknown", for their resolution (oplog_unknown.go)
-	audit        *auditor
+	// inboundReplies counts the refusals texted to each person;
+	// inboundAll the wrong codes from anyone, over a day.
+	inboundReplies tries
+	inboundAll     tries
+	unknowns       *unknowns // proposals answered "outcome unknown", for their resolution (oplog_unknown.go)
+	audit          *auditor
 
 	resync time.Duration
 	diag   time.Duration
@@ -703,6 +707,7 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 		onlineEdits = opts[0].OnlineEdits
 	}
 	s := &Server{
+		inboundAll:  tries{window: inboundAllWindow},
 		rt:          rt,
 		interval:    interval,
 		resync:      resync,
@@ -1087,6 +1092,10 @@ func (s *Server) proxyStandby(routes *http.ServeMux, mux http.Handler) http.Hand
 		// signature, which the leader checks against the same configured
 		// URL.
 		inbound := strings.HasPrefix(r.URL.Path, InboundPath) && !mutServer("inbound_not_forwarded")
+		// Answered as the provider's only on its two routes; anything else
+		// under the prefix is a plain answer.
+		inboundRoute := r.Method == http.MethodPost && (r.URL.Path == InboundSMSPath ||
+			(strings.HasPrefix(r.URL.Path, InboundVoicePath) && len(r.URL.Path) > len(InboundVoicePath) && !strings.Contains(r.URL.Path[len(InboundVoicePath):], "/")))
 		link = link || inbound
 		if (!strings.HasPrefix(r.URL.Path, "/api/") && !link) ||
 			r.URL.Path == "/api/cluster" ||
@@ -1103,7 +1112,7 @@ func (s *Server) proxyStandby(routes *http.ServeMux, mux http.Handler) http.Hand
 			// Nobody here can act on the alarm: say so on the page, for a
 			// GET too (this store's engine does not scan).
 			const msg = "No controller is leading right now, so the alarm cannot be acknowledged from here. Try the link again in a minute, or open the HMI."
-			if inbound && r.Method == http.MethodPost {
+			if inbound && inboundRoute {
 				auditedAnswer(routes, w, r, func(w http.ResponseWriter, _ *http.Request) {
 					// A call hears why; an SMS gets nothing back: this
 					// replica has not checked the sender, and a reply would

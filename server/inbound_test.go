@@ -1,8 +1,10 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/joyautomation/nautilus/oplog"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -171,7 +173,7 @@ func TestInboundSMSAcks(t *testing.T) {
 func TestInboundCodeIsSpentOnce(t *testing.T) {
 	s := inboundServer(t)
 	code := codeFor(t, s, "HiTemp", "alice")
-	c, err := s.ackLinks.MatchCode(code, "alice", s.standing())
+	c, err := s.ackLinks.MatchCode(code, "alice", s.standing("alice"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,6 +217,9 @@ func TestInboundSMSRefusals(t *testing.T) {
 		e := lastAudit(t, s)
 		if e.Result == audit.ResultOK || e.Detail["status"] != tc.status || !strings.Contains(fmt.Sprint(e.Detail["reason"]), tc.reason) || e.Detail["via"] != "sms" {
 			t.Fatalf("%s: journalled %+v", tc.name, e)
+		}
+		if _, marked := e.Detail["sender"]; marked != (e.User != "anonymous") {
+			t.Fatalf("%s: a person named only by the number is not marked so: %+v", tc.name, e)
 		}
 		noSecrets(t, e, code, tc.body)
 	}
@@ -273,19 +278,166 @@ func TestInboundWrongCodesAreLimited(t *testing.T) {
 	s := inboundServer(t)
 	code := codeFor(t, s, "HiTemp", "alice")
 	wrong := fmt.Sprintf("%08d", (atoi(code)+1)%100000000)
+	// One short of the limit, the right code still acknowledges.
+	for range InboundTries - 1 {
+		reply(t, s, alicePhone, "ACK "+wrong)
+	}
+	if rec := reply(t, s, alicePhone, "ACK "+code); !strings.Contains(rec.Body.String(), "Acknowledged") {
+		t.Fatalf("after %d wrong codes the right one: %s", InboundTries-1, rec.Body)
+	}
+
+	s = inboundServer(t)
+	code = codeFor(t, s, "HiTemp", "alice")
 	for range InboundTries {
 		reply(t, s, alicePhone, "ACK "+wrong)
 	}
-	rec := reply(t, s, alicePhone, "ACK "+code)
-	if !strings.Contains(rec.Body.String(), "too many wrong codes") || state(s.alarms, "HiTemp") != alarm.UnackActive {
-		t.Fatalf("after %d wrong codes the right one: %s", InboundTries, rec.Body)
+	reply(t, s, alicePhone, "ACK "+code)
+	if state(s.alarms, "HiTemp") != alarm.UnackActive {
+		t.Fatalf("after %d wrong codes the right one acknowledged", InboundTries)
 	}
-	// (That sixth refusal of one person from one address within a minute
-	// is folded into the audit trail's summary entry: its usual limit on
-	// refusals, refuseFull a minute in full.)
+	// (Those refusals past five a minute from one address for one person
+	// are folded into the audit trail's summary entry, refuseFull.)
 	// bob is not alice: his code still works.
 	if rec := reply(t, s, bobPhone, "ACK "+codeFor(t, s, "HiTemp", "bob")); !strings.Contains(rec.Body.String(), "Acknowledged") {
 		t.Fatalf("bob: %s", rec.Body)
+	}
+
+	// The controller-wide budget: InboundTriesAll wrong codes from anyone,
+	// then nobody's code is taken for a day.
+	s = inboundServer(t)
+	people := []string{"alice", "bob", "akhan", "jsmith"}
+	phones := map[string]string{"alice": alicePhone, "bob": bobPhone, "akhan": "+15550110", "jsmith": "+15550111"}
+	for i := range InboundTriesAll {
+		reply(t, s, phones[people[i%len(people)]], "ACK "+wrong)
+	}
+	for _, p := range people {
+		if !s.inboundTries.blocked(p, InboundTries, time.Now()) {
+			reply(t, s, phones[p], "ACK "+codeFor(t, s, "HiTemp", p))
+			if state(s.alarms, "HiTemp") != alarm.UnackActive {
+				t.Fatalf("%s acknowledged past the controller's budget", p)
+			}
+		}
+	}
+}
+
+// A person is texted a refusal at most inboundReplies times an hour; past
+// that, nothing (a forged sender cannot make the controller text them
+// without limit; an auto-responder cannot loop). An ack is always answered.
+func TestInboundRepliesAreCapped(t *testing.T) {
+	s := inboundServer(t)
+	for i := range inboundReplies + 2 {
+		rec := reply(t, s, alicePhone, "I am driving")
+		if got := strings.Contains(rec.Body.String(), "<Message>"); got != (i < inboundReplies) {
+			t.Fatalf("refusal %d: %s", i+1, rec.Body)
+		}
+	}
+	if rec := reply(t, s, alicePhone, "ACK "+codeFor(t, s, "HiTemp", "alice")); !strings.Contains(rec.Body.String(), "<Message>Acknowledged") {
+		t.Fatalf("the ack past the cap: %s", rec.Body)
+	}
+}
+
+// A code is tried only against occurrences whose escalation can page the
+// person by SMS: a code for an alarm that never pages them matches nothing.
+func TestInboundCodesOnlyForAlarmsThatPageThePerson(t *testing.T) {
+	s := inboundServer(t)
+	s.inbound.MayPage = func(rec alarm.Record, p, kind string) bool { return kind == "sms" && p == "alice" }
+	if rec := reply(t, s, bobPhone, "ACK "+codeFor(t, s, "HiTemp", "bob")); !strings.Contains(rec.Body.String(), "matches no alarm") {
+		t.Fatalf("bob, never paged: %s", rec.Body)
+	}
+	if rec := reply(t, s, alicePhone, "ACK "+codeFor(t, s, "HiTemp", "alice")); !strings.Contains(rec.Body.String(), "Acknowledged") {
+		t.Fatalf("alice: %s", rec.Body)
+	}
+}
+
+// An ack the pair's log took but did not confirm in time may still take
+// effect: journalled unknown, never refused, and the person is told to
+// check the HMI.
+func TestInboundUnknownOutcome(t *testing.T) {
+	var lead atomic.Bool
+	lead.Store(true)
+	s, eng, _, _ := loggedAlarms(t, map[string]any{"HiTempAlm": true}, &lead)
+	eng.Evaluate()
+	withInbound(t, s)
+	f := func(context.Context, oplog.Entry) (oplog.Entry, error) { return oplog.Entry{}, oplog.ErrUnconfirmed }
+	alarmProposeSeam.Store(&f)
+	t.Cleanup(func() { alarmProposeSeam.Store(nil) })
+	rec := reply(t, s, alicePhone, "ACK "+codeFor(t, s, "HiTemp", "alice"))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "may still take effect") || strings.Contains(rec.Body.String(), "Not acknowledged") {
+		t.Fatalf("unknown outcome: %d %s", rec.Code, rec.Body)
+	}
+	if e := lastAudit(t, s); e.Result != audit.ResultUnknown || e.Detail["via"] != "sms" {
+		t.Fatalf("audit %+v", e)
+	}
+}
+
+// A manifest may spell a person "Alice"; the contacts file keys "alice".
+// The code and the call token are minted over the contacts spelling.
+func TestInboundPrincipalCase(t *testing.T) {
+	s := inboundServer(t)
+	occ := occOf(t, s.alarms, "HiTemp").Occurrence
+	if rec := reply(t, s, alicePhone, "ACK "+s.AckCode("HiTemp", occ, "Alice")); !strings.Contains(rec.Body.String(), "Acknowledged High temperature as alice") {
+		t.Fatalf("Alice's code: %s", rec.Body)
+	}
+	s = inboundServer(t)
+	u := s.VoiceAckURL("HiTemp", occOf(t, s.alarms, "HiTemp").Occurrence, "user:ALICE", 1)
+	if rec := press(t, s, u, alicePhone, "1"); !strings.Contains(rec.Body.String(), "<Say>Acknowledged.") {
+		t.Fatalf("ALICE's call: %s", rec.Body)
+	}
+}
+
+// An expired call token is refused (410 in the journal), and a keypress
+// acts as the person only while they may: under auth, akhan acks, jsmith
+// (fenced to another area) does not.
+func TestInboundVoiceExpiryAndAuth(t *testing.T) {
+	s := inboundServer(t)
+	s.ackLinks.SetClock(func() time.Time { return time.Now().Add(-acklink.MaxTTL - time.Minute) })
+	u := s.VoiceAckURL("HiTemp", occOf(t, s.alarms, "HiTemp").Occurrence, "alice", 1)
+	s.ackLinks.SetClock(time.Now)
+	if rec := press(t, s, u, alicePhone, "1"); !strings.Contains(rec.Body.String(), "Not acknowledged") || state(s.alarms, "HiTemp") != alarm.UnackActive {
+		t.Fatalf("expired: %s", rec.Body)
+	}
+	if e := lastAudit(t, s); e.Detail["status"] != http.StatusGone {
+		t.Fatalf("expired journalled %+v", e)
+	}
+
+	s, _, _ = patServer(t)
+	withInbound(t, s)
+	occ := occOf(t, s.alarms, "HiTemp").Occurrence
+	if rec := press(t, s, s.VoiceAckURL("HiTemp", occ, "jsmith", 1), "+15550111", "1"); !strings.Contains(rec.Body.String(), "Not acknowledged") || state(s.alarms, "HiTemp") != alarm.UnackActive {
+		t.Fatalf("jsmith: %s", rec.Body)
+	}
+	if rec := press(t, s, s.VoiceAckURL("HiTemp", occ, "akhan", 1), "+15550110", "1"); !strings.Contains(rec.Body.String(), "Acknowledged") {
+		t.Fatalf("akhan: %s", rec.Body)
+	}
+}
+
+// Neither the number, the text, the code nor the token reaches the alarm
+// journal, the log entry or the process log.
+func TestInboundSecretsStayOut(t *testing.T) {
+	var lead atomic.Bool
+	lead.Store(true)
+	s, eng, _, got := loggedAlarms(t, map[string]any{"HiTempAlm": true}, &lead)
+	eng.Evaluate()
+	withInbound(t, s)
+	logs := captureLog(t)
+	code := codeFor(t, s, "HiTemp", "alice")
+	reply(t, s, alicePhone, "ACK 00000000 please")
+	reply(t, s, bobPhone, "ACK "+code)
+	if rec := reply(t, s, alicePhone, "ACK "+code); !strings.Contains(rec.Body.String(), "Acknowledged") {
+		t.Fatalf("reply: %s", rec.Body)
+	}
+	evs, _ := eng.Journal(time.Now().Add(-time.Hour), time.Now().Add(time.Hour), alarm.Filter{})
+	ej, _ := json.Marshal(evs)
+	oj, _ := json.Marshal(*got)
+	for _, x := range []string{alicePhone, bobPhone, code, "please"} {
+		for where, b := range map[string]string{"alarm journal": string(ej), "log entries": string(oj), "process log": logs.String()} {
+			if strings.Contains(b, x) {
+				t.Fatalf("%s holds %q", where, x)
+			}
+		}
+	}
+	for _, e := range s.audit.ring.Recent() {
+		noSecrets(t, e, code, "please")
 	}
 }
 
@@ -301,17 +453,24 @@ func TestTriesWindow(t *testing.T) {
 	var tr tries
 	t0 := time.Unix(1_800_000_000, 0)
 	for i := range InboundTries {
-		if tr.blocked("alice", t0.Add(time.Duration(i)*time.Minute)) {
+		if tr.blocked("alice", InboundTries, t0.Add(time.Duration(i)*time.Minute)) {
 			t.Fatalf("blocked after %d", i)
 		}
 		tr.fail("alice", t0.Add(time.Duration(i)*time.Minute))
 	}
-	if !tr.blocked("alice", t0.Add(10*time.Minute)) || tr.blocked("bob", t0.Add(10*time.Minute)) {
+	if !tr.blocked("alice", InboundTries, t0.Add(10*time.Minute)) || tr.blocked("bob", InboundTries, t0.Add(10*time.Minute)) {
 		t.Fatal("limit not per person")
 	}
 	// The first wrong code leaves the window an hour after it was sent.
-	if tr.blocked("alice", t0.Add(inboundTriesWindow)) != false {
+	if tr.blocked("alice", InboundTries, t0.Add(inboundTriesWindow)) != false {
 		t.Fatal("still blocked once the first wrong code is an hour old")
+	}
+	all := tries{window: inboundAllWindow}
+	for range InboundTriesAll {
+		all.fail(everyoneKey, t0)
+	}
+	if !all.blocked(everyoneKey, InboundTriesAll, t0.Add(23*time.Hour)) || all.blocked(everyoneKey, InboundTriesAll, t0.Add(inboundAllWindow)) {
+		t.Fatal("the controller-wide budget is not a day")
 	}
 	tr.fail("bob", t0.Add(3*time.Hour)) // prunes alice
 	if _, ok := tr.wrong["alice"]; ok {
@@ -461,11 +620,14 @@ func TestInboundOnAStandby(t *testing.T) {
 	if rec := press(t, s, inboundBase+InboundVoicePath+"tok", alicePhone, "1"); !strings.Contains(rec.Body.String(), "<Say>Not acknowledged: no controller is leading") {
 		t.Fatalf("no leader, voice: %s", rec.Body)
 	}
-	// Only the provider's POST is an inbound request: a GET is not
-	// answered as one, and no seam header leaks.
-	rec = call(t, s, "GET", InboundSMSPath, "")
-	if rec.Header().Get(providerAnswerHeader) != "" || rec.Header().Get(linkReasonHeader) != "" || strings.Contains(rec.Body.String(), "<Response>") {
-		t.Fatalf("GET with no leader: %d %v %s", rec.Code, rec.Header(), rec.Body)
+	// Only the provider's POST to its routes is an inbound request: a GET
+	// or a POST elsewhere under the prefix is not answered as one, and no
+	// seam header leaks.
+	for _, mp := range [][2]string{{"GET", InboundSMSPath}, {"POST", InboundPath + "x"}, {"POST", InboundVoicePath + "a/b"}} {
+		rec = call(t, s, mp[0], mp[1], "")
+		if rec.Header().Get(providerAnswerHeader) != "" || rec.Header().Get(linkReasonHeader) != "" || strings.Contains(rec.Body.String(), "<Response>") {
+			t.Fatalf("%s %s with no leader: %d %v %s", mp[0], mp[1], rec.Code, rec.Header(), rec.Body)
+		}
 	}
 }
 
@@ -492,6 +654,24 @@ func TestInboundNeedsNoOtherCredential(t *testing.T) {
 	rec := reply(t, s, alicePhone, "ACK "+codeFor(t, s, "HiTemp", "alice"))
 	if !strings.Contains(rec.Body.String(), "Acknowledged") {
 		t.Fatalf("with a write token configured: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// A standby's forward reaches a real leader that checks the signature
+// over its own configured URL and acknowledges.
+func TestInboundForwardedReplyVerifiesAtTheLeader(t *testing.T) {
+	lead := inboundServer(t)
+	backend := httptest.NewServer(lead.Handler())
+	defer backend.Close()
+	s := auditServer(t, Options{Cluster: fakeCluster{status: leader.Status{
+		Mode: "quorum", Pod: "b", Leader: "a", LeaderAddr: standbyAddr(backend)}}})
+	withInbound(t, s)
+	rec := reply(t, s, alicePhone, "ACK "+codeFor(t, lead, "HiTemp", "alice"))
+	if !strings.Contains(rec.Body.String(), "Acknowledged") || state(lead.alarms, "HiTemp") != alarm.AckActive {
+		t.Fatalf("forwarded reply: %d %s", rec.Code, rec.Body)
+	}
+	if state(s.alarms, "HiTemp") != alarm.UnackActive {
+		t.Fatal("the standby's engine was acked")
 	}
 }
 

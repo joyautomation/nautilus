@@ -600,8 +600,16 @@ alarms:
 - **Who replied.** The sender's number must be the SMS contact of exactly
   one person in the contacts file. A number nobody has gets no answer at
   all; a number two people share is told to use the link or the HMI.
-  Five wrong codes from one person in an hour, and their codes are
-  refused until the hour has passed.
+  A code is tried only against the alarms whose escalation can page that
+  person by SMS. Five wrong codes from one person in an hour, and their
+  codes are refused until the hour has passed; ten from anyone in a day,
+  and the controller takes no code until the oldest is a day old (links
+  and the HMI still acknowledge). So a guess hits with probability (those
+  alarms' standing occurrences × 26) / 10⁸, and there are at most ten a
+  day per controller: with 100 standing, about one in 4 000 per day of
+  sustained guessing. The counts live in memory: a restart or a takeover
+  starts them again. A person is texted at most three refusals an hour,
+  then nothing (an auto-responder cannot loop with the controller).
 - **Then it is a link.** The person must still stand here and hold `ack`
   for the alarm; the acknowledgement takes the same path as a link (the
   pair's operator-intent log, spent once, across a takeover), and the
@@ -609,7 +617,13 @@ alarms:
   number nor the message's text is ever journalled or logged.
 - **The provider always hears 200** with a TwiML answer, a refusal too
   (otherwise it sends no reply and plays the caller an error); the audit
-  entry keeps the refusal's own status and reason.
+  entry keeps the refusal's own status and reason. Two answers are not
+  TwiML: a controller whose audit journal cannot be written refuses the
+  acknowledgement as it refuses any, and the caller hears the provider's
+  error. An acknowledgement the pair's log took but did not confirm in
+  time is journalled as unknown, and the reply says to check the HMI.
+  A refusal before the code matched is journalled under the person the
+  number names, marked as named by the number only.
 - **Refusals are journalled** as any refused write is: the first five a
   minute from one address for one person in full, the rest folded into
   one summary entry (the provider calls from a few addresses, so a flood

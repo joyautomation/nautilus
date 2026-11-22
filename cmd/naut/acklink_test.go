@@ -319,6 +319,12 @@ func TestInboundOptions(t *testing.T) {
 	if got := in.Callers("sms", "+15550103"); len(got) != 1 || got[0] != "erin" {
 		t.Fatalf("callers %v", got)
 	}
+	// The wet-well policy pages the standby roster (bob, erin) by SMS and
+	// alice by email only.
+	rec := alarm.Record{Def: proj.Alarms.Defs[0], WaitMs: time.Now().UnixMilli()}
+	if in.MayPage == nil || !in.MayPage(rec, "bob", "sms") || !in.MayPage(rec, "Erin", "sms") || in.MayPage(rec, "alice", "sms") || !in.MayPage(rec, "alice", "email") {
+		t.Fatal("MayPage does not follow the escalation policy")
+	}
 	// The provider's published vector, under the token in the secrets file.
 	form := url.Values{"CallSid": {"CA1234567890ABCDE"}, "Digits": {"1234"}, "From": {"+14158675309"}, "To": {"+18005551212"}, "Caller": {"+14158675309"}}
 	const u, sig = "https://mycompany.com/myapp.php?foo=1&bar=2", "RSOYDt4T1cUTdK1PDd93/VVr8B8="

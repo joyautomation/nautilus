@@ -13,7 +13,9 @@ import (
 	"slices"
 	"strings"
 	"sync/atomic"
+	"time"
 
+	"github.com/joyautomation/nautilus/alarm"
 	"github.com/joyautomation/nautilus/alarm/acklink"
 	"github.com/joyautomation/nautilus/alarm/channel"
 	"github.com/joyautomation/nautilus/alarm/escalate"
@@ -215,6 +217,25 @@ func inboundOptions(proj *project.Project) *server.Inbound {
 			return channel.CheckSignature(tok, u, form, sig)
 		},
 		Callers: st.Callers,
+		MayPage: mayPage(proj),
+	}
+}
+
+// mayPage is the server's Inbound.MayPage: whether an alarm's escalation
+// policy can page the person by the kind. Nil (every standing occurrence)
+// only when the escalation config cannot be had, which naut run has
+// already refused.
+func mayPage(proj *project.Project) func(alarm.Record, string, string) bool {
+	ec, err := proj.Alarms.EscalationConfig()
+	if err != nil || ec == nil {
+		return func(alarm.Record, string, string) bool { return false }
+	}
+	return func(rec alarm.Record, principal, kind string) bool {
+		since := time.UnixMilli(rec.WaitMs)
+		if rec.WaitMs == 0 {
+			since = time.UnixMilli(rec.ActiveMs)
+		}
+		return ec.MayPage(rec.Def, since, principal, kind)
 	}
 }
 

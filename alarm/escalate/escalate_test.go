@@ -1379,3 +1379,37 @@ func TestPagesCarryTheAckCode(t *testing.T) {
 		}
 	}
 }
+
+// MayPage: a policy pages a person by a kind when a level names them, or a
+// roster they are in (any shift), with that kind; names as principals.
+func TestMayPage(t *testing.T) {
+	c := prepare(t, `
+oncall:
+  rosters:
+    - { id: ops, members: [bob] }
+    - id: shifts
+      shifts:
+        - { days: [mon-fri], from: "07:00", to: "19:00", members: [Erin] }
+escalation:
+  - id: p
+    match: { area: north }
+    levels:
+      - { after: 0s, notify: [Alice, oidc:carol], via: [email, sms] }
+      - { after: 10m, notify: ["roster:ops", "roster:shifts"], via: [sms] }
+      - { after: 20m, notify: [dave], via: [email] }
+`)
+	d := alarm.Def{ID: "a1", Area: "north"}
+	now := time.Date(2026, 11, 22, 3, 0, 0, 0, time.UTC) // a Sunday night: erin is off shift
+	for who, want := range map[string]bool{"alice": true, "user:ALICE": true, "oidc:carol": true, "oidc:Carol": false,
+		"bob": true, "erin": true, "dave": false, "mallory": false} {
+		if got := c.MayPage(d, now, who, "sms"); got != want {
+			t.Errorf("MayPage(%s, sms) = %v", who, got)
+		}
+	}
+	if c.MayPage(d, now, "dave", "voice") || !c.MayPage(d, now, "dave", "email") {
+		t.Error("kinds not told apart")
+	}
+	if c.MayPage(alarm.Def{ID: "a2", Area: "south"}, now, "alice", "sms") {
+		t.Error("an alarm no policy covers")
+	}
+}

@@ -74,30 +74,31 @@ func (k *Keyring) Code(alarmID, occ, principal string) string {
 	if alarmID == "" || occ == "" || principal == "" {
 		return ""
 	}
-	code, _ := k.codeAt(alarmID, occ, principal, bucketOf(k.now()))
-	return code
+	return k.codeAt(alarmID, occ, principal, bucketOf(k.now()))
 }
 
 func bucketOf(t time.Time) int64 { return t.Unix() / int64(bucket/time.Second) }
 
 func bucketStart(b int64) time.Time { return time.Unix(b*int64(bucket/time.Second), 0) }
 
-// codeAt is the code for (alarm, occ, principal) in hour b, and the ID of
-// that code: a second MAC, so the ID (journalled, in the log) never
-// reveals the code.
-func (k *Keyring) codeAt(alarmID, occ, principal string, b int64) (code, id string) {
-	in := codeInput(alarmID, occ, principal, b)
+// codeAt is the code for (alarm, occ, principal) in hour b.
+func (k *Keyring) codeAt(alarmID, occ, principal string, b int64) string {
 	m := hmac.New(sha256.New, k.code)
 	m.Write([]byte(codeDomain))
-	m.Write(in)
+	m.Write(codeInput(alarmID, occ, principal, b))
 	sum := m.Sum(nil)
 	// 64 bits mod 10^8: the bias is below 10^-11.
 	n := binary.BigEndian.Uint64(sum[:8]) % pow10(CodeDigits)
-	code = fmt.Sprintf("%0*d", CodeDigits, n)
-	m = hmac.New(sha256.New, k.code)
+	return fmt.Sprintf("%0*d", CodeDigits, n)
+}
+
+// codeID is the ID of that code: a second MAC, so the ID (journalled, in
+// the log) never reveals the code.
+func (k *Keyring) codeID(alarmID, occ, principal string, b int64) string {
+	m := hmac.New(sha256.New, k.code)
 	m.Write([]byte(codeIDDom))
-	m.Write(in)
-	return code, CodeIDPrefix + hex.EncodeToString(m.Sum(nil)[:idLen])
+	m.Write(codeInput(alarmID, occ, principal, b))
+	return CodeIDPrefix + hex.EncodeToString(m.Sum(nil)[:idLen])
 }
 
 func codeInput(alarmID, occ, principal string, b int64) []byte {
@@ -164,7 +165,9 @@ func (k *Keyring) MatchCode(code, principal string, standing []Standing) (Claim,
 			continue
 		}
 		from := oldest
-		if s := bucketOf(st.Since); !st.Since.IsZero() && s > from {
+		// The activation, less the skew between a pair's clocks: a page
+		// minted on a member a little behind the one that stamped it.
+		if s := bucketOf(st.Since.Add(-skew)); !st.Since.IsZero() && s > from {
 			from = s
 		}
 		for b := newest; b >= from; b-- {
@@ -172,12 +175,11 @@ func (k *Keyring) MatchCode(code, principal string, standing []Standing) (Claim,
 			if !now.Before(exp) {
 				break
 			}
-			c, id := k.codeAt(st.Alarm, st.Occ, principal, b)
-			if subtle.ConstantTimeCompare([]byte(c), []byte(code)) != 1 {
+			if subtle.ConstantTimeCompare([]byte(k.codeAt(st.Alarm, st.Occ, principal, b)), []byte(code)) != 1 {
 				continue
 			}
 			if n++; n == 1 {
-				found = Claim{ID: id, Alarm: st.Alarm, Occ: st.Occ, Principal: principal, Kind: codeKind, Expires: exp}
+				found = Claim{ID: k.codeID(st.Alarm, st.Occ, principal, b), Alarm: st.Alarm, Occ: st.Occ, Principal: principal, Kind: codeKind, Expires: exp}
 			}
 			break // one hour is enough for this occurrence
 		}

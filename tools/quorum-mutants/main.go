@@ -465,6 +465,10 @@ var table = []mutation{
 	{"inbound_status_on_wire", []string{"TestInboundSMSRefusals"}},
 	{"inbound_not_forwarded", []string{"TestInboundOnAStandby"}},
 	{"voice_link_acks_here", []string{"TestInboundVoiceKeypress"}},
+	{"inbound_replies_unlimited", []string{"TestInboundRepliesAreCapped"}},
+	{"inbound_no_global_budget", []string{"TestInboundWrongCodesAreLimited"}},
+	{"inbound_any_alarm", []string{"TestInboundCodesOnlyForAlarmsThatPageThePerson"}},
+	{"inbound_unknown_as_refused", []string{"TestInboundUnknownOutcome"}},
 }
 
 // rowPkgs are the packages a row runs instead of ./quorum/..., filtered
@@ -581,6 +585,10 @@ var rowPkgs = map[string][]string{
 	"inbound_status_on_wire":            {"./server"},
 	"inbound_not_forwarded":             {"./server"},
 	"voice_link_acks_here":              {"./server"},
+	"inbound_replies_unlimited":         {"./server"},
+	"inbound_no_global_budget":          {"./server"},
+	"inbound_any_alarm":                 {"./server"},
+	"inbound_unknown_as_refused":        {"./server"},
 	"reconcile_before_restore":          {"./server"},
 	"cluster_ops_proxied":               {"./server"},
 	"redundancy_same_origin":            {"./server"},

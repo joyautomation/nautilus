@@ -62,6 +62,10 @@ type Inbound struct {
 	Verify func(kind, url string, form url.Values, sig string) bool
 	// Callers lists the principals whose contact for kind is number.
 	Callers func(kind, number string) []string
+	// MayPage reports whether the escalation of rec can page principal by
+	// kind (any level, any shift): a reply's code is tried only against
+	// those occurrences. Nil: every standing occurrence.
+	MayPage func(rec alarm.Record, principal, kind string) bool
 }
 
 // Inbound paths.
@@ -77,6 +81,19 @@ const (
 	// the window has passed.
 	InboundTries       = 5
 	inboundTriesWindow = time.Hour
+	// InboundTriesAll is how many wrong codes, from anyone, a controller
+	// takes in inboundAllWindow before it refuses every code until the
+	// oldest leaves it (links and the HMI still acknowledge): the bound on
+	// guessing however many numbers are forged.
+	InboundTriesAll  = 10
+	inboundAllWindow = 24 * time.Hour
+	// inboundReplies is how many refusals a person is texted back in
+	// inboundTriesWindow; past it they get no reply (a forged sender cannot
+	// make the controller text someone without limit, and an auto-responder
+	// cannot loop with it).
+	inboundReplies = 3
+	// everyoneKey is inboundAll's one key (never a principal).
+	everyoneKey = "*"
 	// inboundFormMax bounds a provider's form (a few hundred bytes).
 	inboundFormMax = 16 << 10
 	// providerAnswerHeader asks the audit seam to journal the handler's
@@ -91,7 +108,17 @@ func (s *Server) AckCode(alarmID, occ, principal string) string {
 	if s.inbound == nil || !s.inbound.SMS || s.ackLinks == nil {
 		return ""
 	}
-	return s.ackLinks.Code(alarmID, occ, principal)
+	return s.ackLinks.Code(alarmID, occ, canonPrincipal(principal))
+}
+
+// canonPrincipal is principal as the contacts file keys it: a local user
+// name lowercase without user:, an oidc: name as it is. Codes and call
+// tokens are minted over it, so a manifest's "Alice" matches "alice".
+func canonPrincipal(p string) string {
+	if strings.HasPrefix(p, "oidc:") {
+		return p
+	}
+	return strings.ToLower(strings.TrimPrefix(p, "user:"))
 }
 
 // VoiceAckURL is the URL a call to principal about alarmID's occurrence
@@ -102,7 +129,7 @@ func (s *Server) VoiceAckURL(alarmID, occ, principal string, level int) string {
 	if s.inbound == nil || !s.inbound.Voice || s.ackLinks == nil || occ == "" {
 		return ""
 	}
-	tok, err := s.ackLinks.Mint(alarmID, occ, principal, "voice", level, acklink.MaxTTL)
+	tok, err := s.ackLinks.Mint(alarmID, occ, canonPrincipal(principal), "voice", level, acklink.MaxTTL)
 	if err != nil {
 		slog.Warn("alarm: no keypress URL for a call", "id", alarmID, "to", principal, "err", err)
 		return ""
@@ -110,17 +137,26 @@ func (s *Server) VoiceAckURL(alarmID, occ, principal string, level int) string {
 	return strings.TrimRight(s.inbound.URL, "/") + InboundVoicePath + tok
 }
 
-// tries counts each person's wrong codes.
+// tries counts events per key (a person's wrong codes, everyone's, the
+// refusals texted to a person) in a sliding window.
 type tries struct {
-	mu    sync.Mutex
-	wrong map[string][]time.Time
+	mu     sync.Mutex
+	wrong  map[string][]time.Time
+	window time.Duration // 0: inboundTriesWindow
 }
 
-// blocked reports whether p sent InboundTries wrong codes in the window.
-func (t *tries) blocked(p string, now time.Time) bool {
+func (t *tries) span() time.Duration {
+	if t.window == 0 {
+		return inboundTriesWindow
+	}
+	return t.window
+}
+
+// blocked reports whether key had limit events in the window.
+func (t *tries) blocked(key string, limit int, now time.Time) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return len(t.recent(p, now)) >= InboundTries && !mutServer("inbound_tries_unlimited")
+	return len(t.recent(key, now)) >= limit && !mutServer("inbound_tries_unlimited")
 }
 
 func (t *tries) fail(p string, now time.Time) {
@@ -141,7 +177,7 @@ func (t *tries) fail(p string, now time.Time) {
 func (t *tries) recent(p string, now time.Time) []time.Time {
 	w := t.wrong[p]
 	i := 0
-	for i < len(w) && now.Sub(w[i]) >= inboundTriesWindow {
+	for i < len(w) && now.Sub(w[i]) >= t.span() {
 		i++
 	}
 	return w[i:]
@@ -231,27 +267,46 @@ func (s *Server) checkInbound(kind string) preStep {
 				return refuseWith(r, auditTarget{}, http.StatusForbidden, "the sender's number is the SMS contact of more than one person here",
 					"Not acknowledged: this number belongs to more than one person on the controller. Acknowledge from the link or the HMI.", true)
 			}
-			p := callers[0]
+			p := canonPrincipal(callers[0])
 			who := r.WithContext(context.WithValue(r.Context(), actorKey{}, actor{pr: linkPrincipal(p)}))
+			// Until a code matches, only the (forgeable) number says who:
+			// the entry says so, and the person is texted a refusal at most
+			// inboundReplies times an hour.
+			byNumber := func() auditTarget {
+				return auditTarget{detail: map[string]any{"sender": "named by the sender's number only"}}
+			}
 			now := time.Now()
-			if s.inboundTries.blocked(p, now) {
-				return refuseWith(who, auditTarget{}, http.StatusTooManyRequests, "too many wrong codes from this person in the last hour",
-					"Not acknowledged: too many wrong codes. Acknowledge from the link or the HMI.", true)
+			refuseSender := func(code int, reason, reply string) (*http.Request, bool) {
+				if s.inboundReplies.blocked(p, inboundReplies, now) && !mutServer("inbound_replies_unlimited") {
+					reply = ""
+				} else {
+					s.inboundReplies.fail(p, now)
+				}
+				return refuseWith(who, byNumber(), code, reason, reply, true)
+			}
+			if s.inboundTries.blocked(p, InboundTries, now) {
+				return refuseSender(http.StatusTooManyRequests, "too many wrong codes from this person in the last hour",
+					"Not acknowledged: too many wrong codes. Acknowledge from the link or the HMI.")
+			}
+			if s.inboundAll.blocked(everyoneKey, InboundTriesAll, now) && !mutServer("inbound_no_global_budget") {
+				return refuseSender(http.StatusTooManyRequests, "too many wrong codes to this controller in the last day",
+					"Not acknowledged: replies are paused after too many wrong codes. Acknowledge from the link or the HMI.")
 			}
 			code, err := acklink.ParseReply(form.Get("Body"))
 			if err != nil {
-				return refuseWith(who, auditTarget{}, http.StatusBadRequest, "the reply holds no code",
-					"Not acknowledged. Reply ACK and the "+strconv.Itoa(acklink.CodeDigits)+"-digit code from the page.", true)
+				return refuseSender(http.StatusBadRequest, "the reply holds no code",
+					"Not acknowledged. Reply ACK and the "+strconv.Itoa(acklink.CodeDigits)+"-digit code from the page.")
 			}
-			c, err = s.ackLinks.MatchCode(code, p, s.standing())
+			c, err = s.ackLinks.MatchCode(code, p, s.standing(p))
 			if err != nil {
 				reason, reply := "the code matches no alarm waiting on this person", "Not acknowledged: that code matches no alarm waiting on you."
 				if errors.Is(err, acklink.ErrAmbiguous) {
 					reason, reply = "the code matches more than one alarm", "Not acknowledged: that code matches more than one alarm. Acknowledge from the link or the HMI."
 				} else {
 					s.inboundTries.fail(p, now)
+					s.inboundAll.fail(everyoneKey, now)
 				}
-				return refuseWith(who, auditTarget{}, http.StatusForbidden, reason, reply, true)
+				return refuseSender(http.StatusForbidden, reason, reply)
 			}
 		} else {
 			var err error
@@ -264,7 +319,8 @@ func (s *Server) checkInbound(kind string) preStep {
 				return refuseWith(r, auditTarget{}, code, reason, "Not acknowledged. Acknowledge it in the HMI.", true)
 			}
 			who := r.WithContext(context.WithValue(r.Context(), actorKey{}, actor{pr: linkPrincipal(c.Principal)}))
-			if !slices.Contains(s.inbound.Callers("voice", form.Get("To")), c.Principal) && !mutServer("inbound_callee_unchecked") {
+			callee := slices.ContainsFunc(s.inbound.Callers("voice", form.Get("To")), func(p string) bool { return canonPrincipal(p) == canonPrincipal(c.Principal) })
+			if !callee && !mutServer("inbound_callee_unchecked") {
 				return refuseWith(who, linkTarget(c), http.StatusForbidden, "the call's number is not the voice contact of "+c.Principal,
 					"Not acknowledged. Acknowledge it in the HMI.", true)
 			}
@@ -288,14 +344,18 @@ func (s *Server) checkInbound(kind string) preStep {
 	}
 }
 
-// standing is every occurrence waiting on a person now, for a code.
-func (s *Server) standing() []acklink.Standing {
+// standing is every occurrence waiting on a person now whose escalation
+// can page p by SMS: what p's code is tried against.
+func (s *Server) standing(p string) []acklink.Standing {
 	if s.alarms == nil {
 		return nil
 	}
 	var out []acklink.Standing
 	for _, rec := range s.alarms.Records() {
 		if rec.Occurrence == "" || (rec.State != alarm.UnackActive && rec.State != alarm.UnackRTN) {
+			continue
+		}
+		if s.inbound != nil && s.inbound.MayPage != nil && !s.inbound.MayPage(rec, p, "sms") && !mutServer("inbound_any_alarm") {
 			continue
 		}
 		st := acklink.Standing{Alarm: rec.ID, Occ: rec.Occurrence}
@@ -317,6 +377,13 @@ func (s *Server) handleInboundAck(w http.ResponseWriter, r *http.Request) {
 		noun = "call"
 	}
 	if status, msg := s.ackByClaim(w.Header(), r, c, noun); status != http.StatusOK {
+		if w.Header().Get(outcomeHeader) == "unknown" && !mutServer("inbound_unknown_as_refused") {
+			// Passed to the pair's log, not confirmed: it may still take
+			// effect, so it is journalled as unknown, not refused.
+			w.Header().Set(linkReasonHeader, msg)
+			s.twiml(w, status, s.say(kind, "Could not confirm the acknowledgement in time: it may still take effect. Check the HMI."), true)
+			return
+		}
 		s.inboundRefused(w, kind, status, msg, "Not acknowledged: "+msg, true)
 		return
 	}
@@ -344,15 +411,19 @@ func (s *Server) inboundRefused(w http.ResponseWriter, kind string, code int, re
 		io.WriteString(w, http.StatusText(code)+"\n")
 		return
 	}
-	body := ""
-	if reply != "" {
-		if kind == "voice" {
-			body = "<Say>" + xmlEscape(truncateText(reply, 300)) + "</Say>"
-		} else {
-			body = "<Message>" + xmlEscape(truncateText(reply, 300)) + "</Message>"
-		}
+	s.twiml(w, code, s.say(kind, reply), true)
+}
+
+// say is reply as TwiML for kind: spoken on a call, texted for an SMS;
+// nothing for "".
+func (s *Server) say(kind, reply string) string {
+	switch {
+	case reply == "":
+		return ""
+	case kind == "voice":
+		return "<Say>" + xmlEscape(truncateText(reply, 300)) + "</Say>"
 	}
-	s.twiml(w, code, body, true)
+	return "<Message>" + xmlEscape(truncateText(reply, 300)) + "</Message>"
 }
 
 // twiml answers with a TwiML document. provider marks it for the seam to
