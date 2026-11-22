@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"errors"
+	"math"
 	"strings"
 	"testing"
 
@@ -330,5 +331,33 @@ func TestParameterProgramWriteTakesTheAttribution(t *testing.T) {
 	}
 	if p := param(t, rt, "SP"); p.EditedBy != "user:bchen" {
 		t.Fatalf("operator after program: %+v", p)
+	}
+}
+
+// NaN compares false against both bounds and an infinity passes a range with
+// an open side, so a ranged tag refuses both explicitly, on every external
+// write path (they all go through WriteAs), and the value stays.
+func TestRangedTagRefusesNaNAndInfinity(t *testing.T) {
+	rt := paramRT(t, nil, 65) // SP is ranged [10, 90]
+	rt.Scan()
+	for _, v := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		if err := rt.Tags().Write([]WriteOp{{Path: "SP", Value: v}})[0]; !errors.Is(err, ir.ErrOutOfRange) {
+			t.Errorf("WriteAs %v: err = %v, want ErrOutOfRange", v, err)
+		}
+	}
+	if got := rt.Tags().Real("SP"); got != 65 {
+		t.Errorf("SP = %v after refused NaN/Inf writes, want 65", got)
+	}
+	// An open side does not let an infinity through either.
+	rt2, err := New(Options{
+		Program: "PROGRAM P\nVAR_EXTERNAL Fan : REAL; END_VAR\nEND_PROGRAM",
+		Tags:    []TagDef{Setpoint("Fan", 20.0, Range(nil, fp(50)))},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt2.Scan()
+	if err := rt2.Tags().Write([]WriteOp{{Path: "Fan", Value: math.Inf(-1)}})[0]; !errors.Is(err, ir.ErrOutOfRange) {
+		t.Errorf("-Inf on an open-min range: err = %v", err)
 	}
 }
