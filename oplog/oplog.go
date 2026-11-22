@@ -3092,12 +3092,12 @@ type httpError struct {
 
 func (e *httpError) Error() string { return fmt.Sprintf("HTTP %d: %s", e.code, e.body) }
 
-// call is one replica-to-replica request: POST with a body, GET without.
 // peerClient is the one call the node makes of its HTTP client.
 type peerClient interface {
 	Do(*http.Request) (*http.Response, error)
 }
 
+// call is one replica-to-replica request: POST with a body, GET without.
 func (n *Node) call(ctx context.Context, base, path string, body any, out any) error {
 	var req *http.Request
 	var err error

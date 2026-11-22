@@ -3,17 +3,13 @@
 package project
 
 import (
-	"errors"
 	"log/slog"
 
 	"github.com/joyautomation/nautilus/alarm"
 )
 
-// The browser build sends no alarm notifications (alarms_notify.go): the
-// playground runs alarms without a durable journal or notifiers.
-func (p *Project) alarmNotifiers(*slog.Logger) ([]alarm.Notifier, error) {
-	if len(p.Alarms.Notify) > 0 {
-		return nil, errors.New("alarms.notify is not available in the browser playground")
-	}
-	return nil, nil
+// The browser build sends no webhooks (alarms_notify.go): it keeps the log
+// notifier, which needs no HTTP client, and skips a webhook with a warning.
+func (p *Project) alarmNotifiers(log *slog.Logger) ([]alarm.Notifier, error) {
+	return logOnlyNotifiers(p.Alarms.Notify, log), nil
 }
