@@ -134,7 +134,7 @@ func newBoxRigBare(t *testing.T, api bool) *boxRig {
 		}
 		r.lns[i] = ln
 	}
-	cluster, token := node.NewClusterID(), "peer-secret"
+	cluster, token := node.NewClusterID(), testPeerToken
 	r.wdir, r.wtoken = t.TempDir(), token
 	r.wit = r.startWitness("127.0.0.1:0")
 	t.Cleanup(func() { r.wstop(); <-r.wdone })

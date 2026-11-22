@@ -5,6 +5,7 @@ package node
 import (
 	"os"
 	"slices"
+	"strings"
 )
 
 // Mutations of the driver (test plan §3.3), switched on like package
@@ -80,6 +81,8 @@ var mutations = []string{
 	"contacts_part_users",            // node: the alarm contacts' credMAC uses the users part's label, so a users MAC verifies as contacts (#715)
 	"recommission_beside_live",       // node: recommission goes ahead while a voter hears another live boot of this controller's name (#1029 3c-3c-2b)
 	"live_check_witness_skipped",     // node: recommission's live-copy check skips a witness that does not answer it (#1207 review)
+	"peer_tls_handshake_unbounded",   // node: a peer TLS handshake has no bound of its own, so a silent peer holds a connection per call (#1230 review)
+	"peer_tls_mismatch_unnamed",      // node: a voter that speaks the other protocol, or holds another key, raises nothing (#710)
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")
@@ -92,7 +95,8 @@ func mut(name string) bool { return name == mutOn }
 // whole tree once per mutation.
 //
 // QUORUM_LOOPBACK=1 runs them anyway, to check by hand that a loopback
-// case catches a core mutation too.
+// case catches a core mutation too. Peer TLS's mutations (package
+// peertls) are the loopback tests' own: the wire is what they break.
 func coreMutation() bool {
-	return mutOn != "" && !slices.Contains(mutations, mutOn) && os.Getenv("QUORUM_LOOPBACK") == ""
+	return mutOn != "" && !slices.Contains(mutations, mutOn) && !strings.HasPrefix(mutOn, "peer_tls_") && os.Getenv("QUORUM_LOOPBACK") == ""
 }

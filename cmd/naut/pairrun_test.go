@@ -59,7 +59,7 @@ func pairEnv(m map[string]string) func(string) string { return func(k string) st
 
 func pairGoodEnv(t *testing.T) map[string]string {
 	return map[string]string{
-		"NAUTILUS_NODE": "a", "NAUTILUS_PEER_TOKEN": "peer-secret",
+		"NAUTILUS_NODE": "a", "NAUTILUS_PEER_TOKEN": testPeerToken,
 		"NAUTILUS_CLUSTER": node.NewClusterID(), "STATE_DIRECTORY": t.TempDir(),
 	}
 }
@@ -79,7 +79,7 @@ func loadPair(t *testing.T, files fstest.MapFS) *project.Project {
 // quietly). Each refusal names what to set.
 func TestPairMemberRefusesToStart(t *testing.T) {
 	r := loadPair(t, pairProject("127.0.0.1:9450", "127.0.0.2:9450", "127.0.0.3:9460")).Redundancy
-	if _, _, err := pairOptions(r, "127.0.0.1:8080", "", pairEnv(pairGoodEnv(t))); err != nil {
+	if _, _, _, err := pairOptions(r, "127.0.0.1:8080", "", pairEnv(pairGoodEnv(t))); err != nil {
 		t.Fatalf("a complete environment: %v", err)
 	}
 	projDir := t.TempDir()
@@ -98,7 +98,7 @@ func TestPairMemberRefusesToStart(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			env := pairGoodEnv(t)
 			env[c.key] = c.val
-			_, _, err := pairOptions(r, "127.0.0.1:8080", c.dir, pairEnv(env))
+			_, _, _, err := pairOptions(r, "127.0.0.1:8080", c.dir, pairEnv(env))
 			if err == nil || !strings.Contains(err.Error(), c.want) {
 				t.Fatalf("got %v, want an error containing %q", err, c.want)
 			}
@@ -108,7 +108,7 @@ func TestPairMemberRefusesToStart(t *testing.T) {
 	// project's, is not inside it.
 	env := pairGoodEnv(t)
 	env["STATE_DIRECTORY"] = projDir + "-state"
-	if _, _, err := pairOptions(r, "127.0.0.1:8080", projDir, pairEnv(env)); err != nil {
+	if _, _, _, err := pairOptions(r, "127.0.0.1:8080", projDir, pairEnv(env)); err != nil {
 		t.Errorf("a state directory beside the project: %v", err)
 	}
 }
@@ -123,11 +123,11 @@ func TestPairMemberOptions(t *testing.T) {
 	env := pairGoodEnv(t)
 	env["NAUTILUS_NODE"] = "B"
 	env["NAUTILUS_TOKEN"] = "client"
-	o, listen, err := pairOptions(r, "0.0.0.0:8080", "", pairEnv(env))
+	o, listen, _, err := pairOptions(r, "0.0.0.0:8080", "", pairEnv(env))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if o.Self != "b" || o.Peer != "a" || o.PeerAddr != "127.0.0.1:9450" || o.WitnessAddr != "127.0.0.3:9460" || listen != ":9451" {
+	if o.Self != "b" || o.Peer != "a" || o.PeerAddr != "127.0.0.1:9450" || o.WitnessAddr != "127.0.0.3:9460" || listen != "127.0.0.2:9451" {
 		t.Errorf("self %s peer %s at %s, witness %s, listen %s", o.Self, o.Peer, o.PeerAddr, o.WitnessAddr, listen)
 	}
 	if o.SelfAPI != "127.0.0.2:8080" || o.PeerAPI != "127.0.0.1:8080" {
@@ -138,7 +138,7 @@ func TestPairMemberOptions(t *testing.T) {
 	}
 	r.StateDir = "/srv/naut-state"
 	want, _ := filepath.Abs("/srv/naut-state")
-	if o, _, _ := pairOptions(r, "0.0.0.0:8080", "", pairEnv(env)); o.StatePath != filepath.Join(want, pairStateFile) {
+	if o, _, _, _ := pairOptions(r, "0.0.0.0:8080", "", pairEnv(env)); o.StatePath != filepath.Join(want, pairStateFile) {
 		t.Errorf("state-dir: does not override $STATE_DIRECTORY: %s", o.StatePath)
 	}
 }
@@ -345,7 +345,7 @@ func TestPairElectsAndTakesOverThroughNautRun(t *testing.T) {
 		apiA.Close()
 		t.Skip("127.0.0.2 does not take the same API port:", err)
 	}
-	cluster, token := node.NewClusterID(), "peer-secret"
+	cluster, token := node.NewClusterID(), testPeerToken
 	wctx, wstop := context.WithCancel(context.Background())
 	wready, wdone := make(chan string, 1), make(chan int, 1)
 	go func() {
@@ -505,9 +505,20 @@ func TestRedundancyWithPeersIsThePair(t *testing.T) {
 	if w := el.Status().Warnings; len(w) != 1 || !strings.Contains(w[0], "retained state not replicated") {
 		t.Errorf("status warnings %q, want the retain warning", w)
 	}
+	// The peer port speaks TLS by default (#710): plain HTTP gets Go's
+	// 400 for it, and nothing behind it.
 	resp, err := http.Get("http://" + ln.Addr().String() + "/quorum/v1/x/hello")
 	if err != nil {
 		t.Fatalf("the peer listener does not answer: %v", err)
+	}
+	b, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest || !strings.Contains(string(b), "HTTP request to an HTTPS server") {
+		t.Errorf("plain HTTP to the peer port got %d %q, want TLS (peer TLS is on by default)", resp.StatusCode, b)
+	}
+	resp, err = peerClient(t, testPeerToken).Get("https://" + ln.Addr().String() + "/quorum/v1/x/hello")
+	if err != nil {
+		t.Fatalf("the peer listener does not answer TLS: %v", err)
 	}
 	resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized && resp.StatusCode != http.StatusForbidden {
@@ -560,7 +571,7 @@ func newDupRig(t *testing.T) *dupRig {
 		}
 		r.lns[i] = ln
 	}
-	cluster, token := node.NewClusterID(), "peer-secret"
+	cluster, token := node.NewClusterID(), testPeerToken
 	wctx, wstop := context.WithCancel(context.Background())
 	wready, wdone := make(chan string, 1), make(chan int, 1)
 	go func() {
@@ -726,7 +737,38 @@ func TestPairAPIOnLoopbackRefused(t *testing.T) {
 		}
 	}
 	r := loadPair(t, pairProject("ctl-a:9450", "ctl-b:9450", "wit:9460")).Redundancy
-	if _, _, err := pairOptions(r, "localhost:8080", "", pairEnv(pairGoodEnv(t))); err == nil {
+	if _, _, _, err := pairOptions(r, "localhost:8080", "", pairEnv(pairGoodEnv(t))); err == nil {
 		t.Error("pairOptions took a loopback tag API with peers on the network")
 	}
 }
+
+// peerClient is an HTTP client with the pair's peer TLS for token, as a
+// member's calls have: the tests that call a peer port directly use it,
+// with https.
+func peerClient(t *testing.T, token string) *http.Client {
+	t.Helper()
+	pt, err := buildPeerTLS(token, false, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &http.Client{Transport: &http.Transport{TLSClientConfig: pt.Client}}
+}
+
+// peerScheme and peerHTTP are how the rig's own calls reach a peer port.
+func (r *pairRig) peerScheme() string {
+	if r.plain {
+		return "http://"
+	}
+	return "https://"
+}
+
+func (r *pairRig) peerHTTP() *http.Client {
+	if r.plain {
+		return http.DefaultClient
+	}
+	return peerClient(r.t, r.token)
+}
+
+// testPeerToken is a pair's peer token in these tests: long enough for
+// peer TLS (#710), as `naut redundancy new-pair` draws one.
+const testPeerToken = "peer-secret-0123456789abcdef0123456789abcdef"

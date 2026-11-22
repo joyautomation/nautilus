@@ -146,6 +146,11 @@ break one changes this section first and says why.
 - `internal/pairkey` (keys a redundant pair's members share, derived from
   the peer token, #715) imports only the standard library: one HKDF per
   purpose, so no two uses ever share a key.
+- `internal/peertls` (a redundant pair's peer TLS, #710) imports only the
+  standard library and `internal/pairkey`: it derives the pair's TLS key
+  from the peer token and builds both ends' TLS configurations. `cmd/naut`
+  hands them to `quorum/node` and `oplog` as standard-library types, since
+  both are substrates that import neither.
 - `notes` (operator notes and the shift log, #720) imports only the standard
   library and `oplog` (for the one entry the log carries): a note is a
   revision chain kept in a file, or, on a pair, an index of the log's note

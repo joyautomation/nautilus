@@ -35,6 +35,10 @@ type pairRig struct {
 	// (stopWitness, startWitness).
 	wit, witDir, token string
 	wstop              func()
+	// witArgs are more flags for naut witness (--peer-tls=off); plain:
+	// the rig's own calls to a peer port go as plain HTTP.
+	witArgs []string
+	plain   bool
 }
 
 func newPairRig(t *testing.T) *pairRig {
@@ -53,6 +57,22 @@ func newPairRigWith(t *testing.T, pmod func(n string, p *project.Project)) *pair
 // pairDeps too (its credentials, #708).
 func newPairRigFull(t *testing.T, pmod func(n string, p *project.Project), dmod func(n string, d *pairDeps)) *pairRig {
 	t.Helper()
+	return newPairRigPlain(t, pmod, dmod, false)
+}
+
+// newPairRigPlain is newPairRigFull, with peer TLS off on all three when
+// plain (redundancy.peer-tls: off, naut witness --peer-tls=off).
+func newPairRigPlain(t *testing.T, pmod func(n string, p *project.Project), dmod func(n string, d *pairDeps), plain bool) *pairRig {
+	t.Helper()
+	if plain {
+		inner := pmod
+		pmod = func(n string, p *project.Project) {
+			p.Redundancy.PeerTLS = "off"
+			if inner != nil {
+				inner(n, p)
+			}
+		}
+	}
 	if testing.Short() {
 		t.Skip("runs a pair and a witness on loopback for several leases")
 	}
@@ -60,7 +80,10 @@ func newPairRigFull(t *testing.T, pmod func(n string, p *project.Project), dmod 
 		t.Skip("a pair member needs CLOCK_BOOTTIME (Linux)")
 	}
 	r := &pairRig{t: t, host: map[string]string{"a": "127.0.0.1", "b": "127.0.0.2"}, peer: map[string]string{},
-		env: map[string]map[string]string{}, nodes: map[string]*pairNode{}, pmod: pmod, dmod: dmod}
+		env: map[string]map[string]string{}, nodes: map[string]*pairNode{}, pmod: pmod, dmod: dmod, plain: plain}
+	if plain {
+		r.witArgs = []string{"--peer-tls=off"}
+	}
 	lnA, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -80,7 +103,7 @@ func newPairRigFull(t *testing.T, pmod func(n string, p *project.Project), dmod 
 		apiA.Close()
 		t.Skip("127.0.0.2 does not take the same API port:", err)
 	}
-	cluster, token := node.NewClusterID(), "peer-secret"
+	cluster, token := node.NewClusterID(), testPeerToken
 	r.token, r.witDir = token, t.TempDir()
 	r.startWitness("127.0.0.1:0")
 	t.Cleanup(r.stopWitness)
@@ -147,7 +170,7 @@ func (r *pairRig) startWitness(addr string) {
 	wctx, stop := context.WithCancel(context.Background())
 	wready, wdone := make(chan string, 1), make(chan int, 1)
 	go func() {
-		wdone <- witnessMain(wctx, []string{"--listen", addr, "--state", r.witDir, "--lease", "500ms"},
+		wdone <- witnessMain(wctx, append([]string{"--listen", addr, "--state", r.witDir, "--lease", "500ms"}, r.witArgs...),
 			pairEnv(map[string]string{"NAUTILUS_PEER_TOKEN": r.token}), io.Discard, io.Discard, wready)
 	}()
 	select {
@@ -422,7 +445,7 @@ func TestPairLogRoutesAreNotOnTheTagAPI(t *testing.T) {
 		if code, body, _ := r.call("a", "GET", p, ""); code != http.StatusNotFound {
 			t.Errorf("tag API GET %s: %d %s, want 404", p, code, body)
 		}
-		resp, err := http.Get("http://" + r.peer["a"] + p)
+		resp, err := peerClient(t, testPeerToken).Get("https://" + r.peer["a"] + p)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -430,9 +453,9 @@ func TestPairLogRoutesAreNotOnTheTagAPI(t *testing.T) {
 		if resp.StatusCode != http.StatusUnauthorized {
 			t.Errorf("peer listener GET %s without the token: %d, want 401", p, resp.StatusCode)
 		}
-		req, _ := http.NewRequest("GET", "http://"+r.peer["a"]+p, nil)
-		req.Header.Set(node.TokenHeader, "peer-secret")
-		resp, err = http.DefaultClient.Do(req)
+		req, _ := http.NewRequest("GET", "https://"+r.peer["a"]+p, nil)
+		req.Header.Set(node.TokenHeader, testPeerToken)
+		resp, err = peerClient(t, testPeerToken).Do(req)
 		if err != nil {
 			t.Fatal(err)
 		}

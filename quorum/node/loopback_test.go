@@ -3,6 +3,7 @@ package node
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -16,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/joyautomation/nautilus/internal/peertls"
 	"github.com/joyautomation/nautilus/quorum"
 )
 
@@ -53,6 +55,11 @@ type cluster struct {
 	evMu    sync.Mutex
 	evs     []Event
 	bytes   map[quorum.NodeID]*tap
+	// plain: the node runs with peer TLS off (its listener and its calls
+	// plain HTTP). Every other node runs the pair's peer TLS, keyed by its
+	// peer token (#710), as naut run does by default.
+	plain map[quorum.NodeID]bool
+	pairs map[string]*peertls.Pair // by token
 	// fail reports an oracle breach: t.Errorf, or a recorder in the
 	// monitor's own test.
 	fail func(format string, args ...any)
@@ -94,11 +101,18 @@ func newCluster(t *testing.T) *cluster {
 		t.Skip("a core mutation: package quorum's suite and the simulator catch it")
 	}
 	t.Parallel()
+	return newClusterHere(t)
+}
+
+// newClusterHere is newCluster without t.Parallel: a measurement that
+// times one cluster at a time.
+func newClusterHere(t *testing.T) *cluster {
 	c := &cluster{t: t, pair: NewClusterID(), cut: map[[2]quorum.NodeID]bool{}, addr: map[quorum.NodeID]string{},
 		byHP: map[string]quorum.NodeID{}, real: map[string]string{}, ctl: map[quorum.NodeID]*member{},
 		tok:  map[quorum.NodeID]string{"a": testToken, "b": testToken, WitnessID: testToken},
 		ctok: map[quorum.NodeID]string{"a": "client", "b": "client"}, led: map[uint64]quorum.NodeID{},
-		stop: make(chan struct{}), done: make(chan struct{}), bytes: map[quorum.NodeID]*tap{}, fail: t.Errorf}
+		stop: make(chan struct{}), done: make(chan struct{}), bytes: map[quorum.NodeID]*tap{}, fail: t.Errorf,
+		plain: map[quorum.NodeID]bool{}, pairs: map[string]*peertls.Pair{}}
 	// Peers address each other by name (test plan §8.2 case 2): the
 	// dialer maps each name to wherever its node listens now, so a
 	// restarted node binds a fresh port.
@@ -116,7 +130,8 @@ func newCluster(t *testing.T) *cluster {
 	return c
 }
 
-// listen binds a fresh port for id and points its name at it.
+// listen binds a fresh port for id and points its name at it: TLS unless
+// id is plain. A tap records the bytes on the wire, under the TLS.
 func (c *cluster) listen(id quorum.NodeID) net.Listener {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -125,11 +140,42 @@ func (c *cluster) listen(id quorum.NodeID) net.Listener {
 	c.mu.Lock()
 	c.real[c.addr[id]] = ln.Addr().String()
 	tp := c.bytes[id]
+	plain := c.plain[id]
 	c.mu.Unlock()
 	if tp != nil {
-		return &tapListener{Listener: ln, tap: tp}
+		ln = &tapListener{Listener: ln, tap: tp}
 	}
-	return ln
+	if plain {
+		return ln
+	}
+	return tls.NewListener(ln, c.peerTLS(id).Server)
+}
+
+// peerTLS is id's peer TLS, from its peer token.
+func (c *cluster) peerTLS(id quorum.NodeID) *peertls.Pair {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	tok := c.tok[id]
+	if p := c.pairs[tok]; p != nil {
+		return p
+	}
+	p, err := peertls.New(tok)
+	if err != nil {
+		c.t.Fatal(err)
+	}
+	c.pairs[tok] = p
+	return p
+}
+
+// clientTLS is the TLS id's calls dial with: nil when id is plain.
+func (c *cluster) clientTLS(id quorum.NodeID) *tls.Config {
+	c.mu.Lock()
+	plain := c.plain[id]
+	c.mu.Unlock()
+	if plain {
+		return nil
+	}
+	return c.peerTLS(id).Client
 }
 
 func (c *cluster) startWitness() {
@@ -167,8 +213,8 @@ func (c *cluster) start(id quorum.NodeID) *Elector {
 	}
 	e, err := New(Options{Cluster: c.pair, Self: id, Peer: peer, PeerAddr: c.addr[peer], WitnessAddr: c.addr[WitnessID],
 		Lease: loopLease, StatePath: m.state, Token: c.tok[id], ClientToken: c.ctok[id],
-		SelfAPI: apiAddr(id), PeerAPI: apiAddr(peer),
-		client: &http.Client{Transport: &faultRT{c: c, from: id, base: c.transport()}},
+		SelfAPI: apiAddr(id), PeerAPI: apiAddr(peer), TLS: c.clientTLS(id),
+		client: &http.Client{Transport: &faultRT{c: c, from: id, base: c.transportFor(id)}},
 		OnEvent: func(ev Event) {
 			c.evMu.Lock()
 			c.evs = append(c.evs, ev)
@@ -236,9 +282,13 @@ func (c *cluster) isCut(from, to quorum.NodeID) bool {
 }
 
 // transport is the production peer transport, dialing names through the
-// cluster's map.
-func (c *cluster) transport() http.RoundTripper {
-	tr := newClient(nil).Transport.(*http.Transport).Clone()
+// cluster's map, with controller a's peer TLS (a second process under a
+// name holds the same token).
+func (c *cluster) transport() http.RoundTripper { return c.transportFor("a") }
+
+// transportFor is the production peer transport with id's peer TLS.
+func (c *cluster) transportFor(id quorum.NodeID) http.RoundTripper {
+	tr := newClient(nil, c.clientTLS(id)).Transport.(*http.Transport).Clone()
 	var d net.Dialer
 	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 		c.mu.Lock()
@@ -738,7 +788,7 @@ func TestLoopbackWrongPeerTokenRefused(t *testing.T) {
 	sb := c.other(who)
 	c.kill(sb)
 	c.mu.Lock()
-	c.tok[sb] = "not-the-peer-token"
+	c.tok[sb] = "not-the-peer-token-but-just-as-long-0123456789abcdef"
 	c.mu.Unlock()
 	c.start(sb)
 	c.steady(who, 12)

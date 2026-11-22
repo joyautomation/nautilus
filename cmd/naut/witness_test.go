@@ -31,7 +31,7 @@ func TestWitnessRefusesToStart(t *testing.T) {
 		t.Fatalf("no token: exit %d, %q", code, errb.String())
 	}
 	errb.Reset()
-	env := witnessEnv(map[string]string{"NAUTILUS_PEER_TOKEN": "tok"})
+	env := witnessEnv(map[string]string{"NAUTILUS_PEER_TOKEN": testPeerToken})
 	if code := witnessMain(context.Background(), []string{"--listen", "127.0.0.1:0"}, env, &bytes.Buffer{}, &errb, nil); code != 1 || !strings.Contains(errb.String(), "state directory") {
 		t.Fatalf("no state dir: exit %d, %q", code, errb.String())
 	}
@@ -49,7 +49,7 @@ func TestWitnessRefusesToStart(t *testing.T) {
 // without it; $STATE_DIRECTORY is its default state directory.
 func TestWitnessServesVotes(t *testing.T) {
 	dir := t.TempDir()
-	env := witnessEnv(map[string]string{"NAUTILUS_PEER_TOKEN": "tok", "STATE_DIRECTORY": dir})
+	env := witnessEnv(map[string]string{"NAUTILUS_PEER_TOKEN": testPeerToken, "STATE_DIRECTORY": dir})
 	ctx, cancel := context.WithCancel(context.Background())
 	ready := make(chan string, 1)
 	exited := make(chan int, 1)
@@ -66,23 +66,29 @@ func TestWitnessServesVotes(t *testing.T) {
 	}
 	body, _ := quorum.Request{From: "a", Nonce: 3, ID: 1}.MarshalBinary()
 	post := func(token string) *http.Response {
-		req, _ := http.NewRequest(http.MethodPost, "http://"+addr+node.Prefix+cluster+"/vote", bytes.NewReader(body))
+		req, _ := http.NewRequest(http.MethodPost, "https://"+addr+node.Prefix+cluster+"/vote", bytes.NewReader(body))
 		if token != "" {
 			req.Header.Set(node.TokenHeader, token)
 		}
 		req.Header.Set(node.LeaseHeader, strconv.FormatInt(int64(time.Second), 10))
 		req.Header.Set(node.MembersHeader, "a,b")
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := peerClient(t, testPeerToken).Do(req)
 		if err != nil {
 			t.Fatal(err)
 		}
 		resp.Body.Close()
 		return resp
 	}
+	// TLS by default (#710): plain HTTP gets Go's 400 for it.
+	if resp, err := http.Get("http://" + addr + node.Prefix + cluster + "/hello"); err != nil || resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("plain HTTP to the witness: %v %v, want 400 (peer TLS is on by default)", resp, err)
+	} else {
+		resp.Body.Close()
+	}
 	if r := post(""); r.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("without the token: %s", r.Status)
 	}
-	if r := post("tok"); r.StatusCode != http.StatusOK {
+	if r := post(testPeerToken); r.StatusCode != http.StatusOK {
 		t.Fatalf("with the token: %s", r.Status)
 	}
 	cancel()
