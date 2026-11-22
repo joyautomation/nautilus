@@ -604,7 +604,10 @@ alarms:
 
 - **Opening the link changes nothing.** It shows a page with the alarm
   and an **Acknowledge** button; the button acknowledges. A mail scanner
-  that opens every link in a message acknowledges nothing.
+  that opens every link in a message acknowledges nothing. The page says,
+  above the button, as whom it acknowledges: the person it was sent to,
+  also when someone else is signed in on that browser (it names them, so
+  a shared screen is not a surprise). It is laid out for a phone.
 - **The link acts as the person it was sent to,** for that one
   occurrence of that one alarm, once, for at most 24 hours. The alarm
   journal records them as the one who acknowledged it, and the audit
@@ -825,9 +828,11 @@ sink. The range is `-from` up to (not including) `-to`, or the last
 `-since` (7 days by default, 90 for `stale`); `-site`
 and `-priority` narrow it, and `-o json` prints the numbers for a
 dashboard. Each report first says how many events it read and the
-earliest and latest of them: a journal that holds only the last few
-hours (the in-memory ring, or a file that rotated) says so instead of
-reading as a quiet week.
+earliest and latest of them. A journal whose first event comes more than
+an hour, and more than a tenth of the range, after the range begins (the
+in-memory ring, a new journal, a file that rotated) gets a note: the
+rates are over the whole range, so they read low, and it prints the
+`-from` that reads the journal's span alone.
 
 Every journal row names its occurrence, and a restart that continues an
 occurrence journals no new `active`, so the reports count each `active`
