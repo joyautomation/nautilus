@@ -289,7 +289,7 @@ func obConstantClash(ds []declared, blocks []projectBlock, obs []tiad.CyclicOB) 
 	for _, ob := range obs {
 		for _, b := range blocks {
 			if strings.EqualFold(b.name, "OB_"+ob.Name) {
-				problems = append(problems, fmt.Sprintf("obs asks OB %q, whose system constant OB_%s would take the name of the project's block %q", ob.Name, ob.Name, b.name))
+				problems = append(problems, fmt.Sprintf("obs asks OB %q, whose system constant OB_%s would take the name of the project's block %q: rename the task's OB", ob.Name, ob.Name, b.name))
 			}
 		}
 	}

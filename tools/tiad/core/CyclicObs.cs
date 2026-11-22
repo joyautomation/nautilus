@@ -134,7 +134,7 @@ namespace Tiad
                 foreach (var b in blocks)
                 {
                     if (string.Equals(b.Name, "OB_" + ob.Name, StringComparison.OrdinalIgnoreCase))
-                        problems.Add("obs asks OB \"" + ob.Name + "\", whose system constant OB_" + ob.Name + " would take the name of the project's block \"" + b.Name + "\"");
+                        problems.Add("obs asks OB \"" + ob.Name + "\", whose system constant OB_" + ob.Name + " would take the name of the project's block \"" + b.Name + "\": rename the task's OB");
                 }
             }
             if (problems.Count == 0) return null;
@@ -236,6 +236,7 @@ namespace Tiad
 
         static string Ms(long micros)
         {
+            if (micros < 0) return "cycle unreadable";
             if (micros % 1000 == 0) return (micros / 1000).ToString(CultureInfo.InvariantCulture) + " ms";
             return micros.ToString(CultureInfo.InvariantCulture) + " \u00b5s";
         }

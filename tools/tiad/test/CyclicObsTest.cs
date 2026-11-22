@@ -79,7 +79,7 @@ namespace Tiad.Test
             // block's name
             var held = new List<ProjectBlock> { PB("Main", "OB", 1, ""), PB("OB_naut_OB_main", "FB", 7, "Customer") };
             TiadException r = CyclicObs.ConstantClash(new List<Declared>(), held, obs);
-            True(r != null && r.Message.Contains("obs asks OB \"naut_OB_main\", whose system constant OB_naut_OB_main would take the name of the project's block \"OB_naut_OB_main\""),
+            True(r != null && r.Message.Contains("obs asks OB \"naut_OB_main\", whose system constant OB_naut_OB_main would take the name of the project's block \"OB_naut_OB_main\": rename the task's OB"),
                 "an asked OB against a block named like its constant");
         }
 
@@ -163,6 +163,10 @@ namespace Tiad.Test
             ob.CycleMicros = 99999;
             Contains(string.Join("; ", CyclicObs.Verify(want, new List<ProjectBlock> { ob }, "nautilus").ToArray()), "99999 \u00b5s", "an odd cycle in microseconds");
             Eq(CyclicObs.VerifyFailed(new List<string> { "x" }).Kind, Kinds.OperationFailed, "the failure's kind");
+            var unread = PB("naut_OB_main", "OB", 30, "nautilus");
+            unread.Class = CyclicObs.Cyclic;
+            unread.CycleMicros = -1;
+            Eq(CyclicObs.Describe(unread), "OB30, cyclic interrupt, cycle unreadable", "a cycle that could not be read");
             var decl = new List<Declared> { new Declared { Kind = "OB", Name = "naut_OB_main", Source = "ob.scl" }, new Declared { Kind = "FB", Name = "F", Source = "fb.scl" } };
             var results = new List<SourceResult> { new SourceResult { Path = "ob.scl", Ok = false, Messages = new List<string> { "syntax error" } }, new SourceResult { Path = "fb.scl", Ok = false } };
             Eq(string.Join("; ", CyclicObs.FailedSources(decl, results).ToArray()), "the source of OB \"naut_OB_main\" (ob.scl) did not import: syntax error",
