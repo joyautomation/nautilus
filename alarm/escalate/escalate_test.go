@@ -172,6 +172,13 @@ func TestPrepareErrors(t *testing.T) {
 		{`oncall: {ack-url-insecure: true}`, "without an ack-url"},
 		{`oncall: {ack-url: "https://hmi.example", ack-url-insecure: true}`, "only for an http"},
 		{`oncall: {ack-url: "https://hmi.example", ack-from-notification: email}`, "ack-from-notification"},
+		{`oncall: {inbound: {url: "https://hmi.example", channels: [sms]}, ack-from-notification: sign-in}`, "cannot sign in"},
+		{`oncall: {inbound: {url: "http://hmi.example", channels: [sms]}}`, "not an https URL"},
+		{`oncall: {inbound: {url: "https://hmi.example/?a=1", channels: [sms]}}`, "not an https URL"},
+		{`oncall: {inbound: {url: "https://hmi.example"}}`, "name sms, voice"},
+		{`oncall: {inbound: {url: "https://hmi.example", channels: [email]}}`, "not sms or voice"},
+		{`oncall: {inbound: {url: "https://hmi.example", channels: [sms, sms]}}`, "twice"},
+		{`oncall: {inbound: {url: "https://hmi.example", channels: [voice]}}`, "has no voice"},
 	}
 	for _, tc := range cases {
 		err := prepareErr(tc.src)
@@ -1319,6 +1326,16 @@ func TestPagesCarryTheAckLink(t *testing.T) {
 
 // An ack-url is https, or http only by an explicit ack-url-insecure; the
 // default is that the link alone acknowledges (James, #715).
+func TestInboundAccepted(t *testing.T) {
+	c := prepare(t, `oncall: {inbound: {url: "https://hmi.example:8443", channels: [sms, voice]}}`, "sms", "voice")
+	if !c.Oncall.Inbound.Takes("sms") || !c.Oncall.Inbound.Takes("voice") || c.Oncall.Inbound.Takes("email") {
+		t.Fatalf("inbound %+v", c.Oncall.Inbound)
+	}
+	if (*Inbound)(nil).Takes("sms") {
+		t.Fatal("no inbound: block takes replies")
+	}
+}
+
 func TestAckURLAccepted(t *testing.T) {
 	c := prepare(t, `oncall: {ack-url: "https://hmi.example:8443/plant"}`)
 	if c.Oncall.AckFrom() != AckByLink || DefaultAckFrom != AckByLink {
@@ -1327,5 +1344,38 @@ func TestAckURLAccepted(t *testing.T) {
 	c = prepare(t, `oncall: {ack-url: "http://10.0.0.5:8080", ack-url-insecure: true, ack-from-notification: sign-in}`)
 	if c.Oncall.AckFrom() != AckBySignIn {
 		t.Fatalf("sign-in %q", c.Oncall.AckFrom())
+	}
+}
+
+// A page carries the reply code (#715 inbound SMS) the hook makes for its
+// occurrence, person and channel; never journalled.
+func TestPagesCarryTheAckCode(t *testing.T) {
+	r := newRigWith(t, true, func(o *Options) {
+		o.AckCode = func(m Message, via string) string {
+			if m.Alarm.Occurrence == "" {
+				t.Errorf("a code asked for with no occurrence: %+v", m)
+			}
+			return "8642" + m.To + via
+		}
+	})
+	r.gate.Store(true)
+	r.term.Store(2)
+	r.set("TT1", true)
+	r.run(time.Second)
+	msgs := r.email.Messages()
+	if len(msgs) == 0 {
+		t.Fatal("nothing sent")
+	}
+	for _, m := range msgs {
+		if m.AckCode != "8642"+m.To+"email" {
+			t.Fatalf("email to %s carries code %q", m.To, m.AckCode)
+		}
+	}
+	evs, _ := r.ring.Query(time.Time{}, time.Time{}, alarm.Filter{})
+	for _, e := range evs {
+		b, _ := json.Marshal(e)
+		if strings.Contains(string(b), "8642") {
+			t.Fatalf("a code reached the journal: %s", b)
+		}
 	}
 }

@@ -319,9 +319,12 @@ func TestRefusalBodyIsBounded(t *testing.T) {
 func TestEveryAreaScopedActionChecksItsTarget(t *testing.T) {
 	covered := map[string]bool{}
 	for _, row := range auditRows() {
-		// An ack link acts as the person it names, never the request's
-		// token: its area check is TestAckLinkActsOnlyAsAPersonWhoMayAck.
-		if row.result != "ok" || !auth.AreaScoped(actionPerm[row.action]) || row.pattern == "POST /alarm-ack/{token}" {
+		// An ack link, an SMS reply and a keypress act as the person they
+		// name, never the request's token: their area checks are
+		// TestAckLinkActsOnlyAsAPersonWhoMayAck and
+		// TestInboundActsOnlyAsAPersonWhoMayAck.
+		if row.result != "ok" || !auth.AreaScoped(actionPerm[row.action]) || row.pattern == "POST /alarm-ack/{token}" ||
+			strings.HasPrefix(row.pattern, "POST "+InboundPath) {
 			continue
 		}
 		covered[row.action] = true

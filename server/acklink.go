@@ -253,6 +253,11 @@ func (s *Server) checkLink(route *auditedRoute, w http.ResponseWriter, r *http.R
 		return refuseWith(r, auditTarget{}, http.StatusNotFound, "This controller sends no acknowledgement links. Open the HMI to acknowledge.")
 	}
 	c, err := s.ackLinks.Verify(r.PathValue("token"))
+	if err == nil && c.Kind == "voice" && !mutServer("voice_link_acks_here") {
+		// A call's keypress URL (inbound.go): it acts only on the
+		// provider's signed keypress, never as a link.
+		err = acklink.ErrSignature
+	}
 	if err != nil {
 		code, msg, t := linkRefusal(err)
 		if errors.Is(err, acklink.ErrExpired) {
@@ -285,34 +290,48 @@ func linkRefusal(err error) (int, string, auditTarget) {
 // handleAckLink acknowledges by a checked link, behind the audit seam.
 func (s *Server) handleAckLink(w http.ResponseWriter, r *http.Request) {
 	c, _ := linkOf(r)
-	fail := func(code int, msg string) { s.linkRefused(w, code, msg) }
-	if s.alarms == nil {
-		fail(http.StatusNotFound, noAlarms)
+	if status, msg := s.ackByClaim(w.Header(), r, c, "link"); status != http.StatusOK {
+		w.Header().Set(linkReasonHeader, msg)
+		s.linkPage(w, status, linkPageData{Title: "Not acknowledged", Error: msg})
 		return
+	}
+	d := s.linkPageFor(c)
+	d.Title, d.Done = "Acknowledged", "Acknowledged as "+c.Principal+". The escalation for this alarm stops."
+	s.linkPage(w, http.StatusOK, d)
+}
+
+// ackByClaim acknowledges c's occurrence as r's actor, by the path an
+// HMI acknowledgement takes (authorize, the pair's log or the engine, the
+// journal), spending c's ID once. It answers nothing: it reports 200, or
+// the status and a message for the person ("this <noun> was already
+// used"). The outcome headers it sets on h are the audit seam's.
+func (s *Server) ackByClaim(h http.Header, r *http.Request, c acklink.Claim, noun string) (int, string) {
+	refused := func(code int, msg string) (int, string) {
+		h.Set(outcomeHeader, "refused")
+		return code, msg
+	}
+	if s.alarms == nil {
+		return refused(http.StatusNotFound, noAlarms)
 	}
 	if s.cluster != nil && !s.cluster.Status().IsLeader && !mutServer("link_acks_on_standby") {
 		// A replica that does not lead never acts on its own engine (the
 		// standby proxy forwards a link; this is a replica with no
 		// leader's address to forward to).
-		fail(http.StatusServiceUnavailable, "This controller is not leading, so it cannot acknowledge the alarm. Try the link again in a minute, or open the HMI.")
-		return
+		return refused(http.StatusServiceUnavailable, "This controller is not leading, so it cannot acknowledge the alarm. Try again in a minute, or open the HMI.")
 	}
 	if code, msg := s.authorize(r, PermAck, s.alarmTag(c.Alarm)); code != 0 {
-		fail(code, msg)
-		return
+		return refused(code, msg)
 	}
 	if !s.links.begin(c.ID) {
-		fail(http.StatusConflict, "This link is being used right now.")
-		return
+		return refused(http.StatusConflict, "This "+noun+" is being used right now.")
 	}
 	defer s.links.end(c.ID)
 	if s.linkSpent(c.ID) {
-		fail(http.StatusConflict, "This link was already used. Open the HMI to see the alarm.")
-		return
+		return refused(http.StatusConflict, "This "+noun+" was already used. Open the HMI to see the alarm.")
 	}
 	by := s.recordBy(r, c.Principal)
 	ids, occ := []string{c.Alarm}, map[string]string{c.Alarm: c.Occ}
-	buf := &bufferedResponse{header: w.Header()}
+	buf := &bufferedResponse{header: h}
 	if s.alarmLog != nil {
 		s.alarmAckThroughLog(buf, r, ids, occ, by, c.ID)
 	} else {
@@ -331,23 +350,19 @@ func (s *Server) handleAckLink(w http.ResponseWriter, r *http.Request) {
 	if status == 0 {
 		status = http.StatusOK
 	}
-	if status != http.StatusOK {
-		msg := reasonOf(buf.body.Bytes())
-		if buf.header.Get(outcomeHeader) == "unknown" {
-			// Passed to the pair's log but not confirmed: it may still
-			// take effect. The API's text names an API; a person needs this.
-			msg = "The controller could not confirm the acknowledgement in time: it may still take effect. Open the HMI to see whether the alarm is acknowledged."
-		}
-		if strings.Contains(msg, alarm.ErrOtherOccurrence.Error()) {
-			msg = "The alarm returned to normal and activated again since this page was sent, so this link no longer applies. Open the HMI to see it."
-		}
-		w.Header().Set(linkReasonHeader, msg)
-		s.linkPage(w, status, linkPageData{Title: "Not acknowledged", Error: msg})
-		return
+	if status == http.StatusOK {
+		return status, ""
 	}
-	d := s.linkPageFor(c)
-	d.Title, d.Done = "Acknowledged", "Acknowledged as "+c.Principal+". The escalation for this alarm stops."
-	s.linkPage(w, http.StatusOK, d)
+	msg := reasonOf(buf.body.Bytes())
+	if h.Get(outcomeHeader) == "unknown" {
+		// Passed to the pair's log but not confirmed: it may still take
+		// effect. The API's text names an API; a person needs this.
+		msg = "The controller could not confirm the acknowledgement in time: it may still take effect. Open the HMI to see whether the alarm is acknowledged."
+	}
+	if strings.Contains(msg, alarm.ErrOtherOccurrence.Error()) {
+		msg = "The alarm returned to normal and activated again since this page was sent, so this " + noun + " no longer applies. Open the HMI to see it."
+	}
+	return status, msg
 }
 
 // handleAckLinkPage is GET /alarm-ack/{token}: the confirm page. It
@@ -358,6 +373,9 @@ func (s *Server) handleAckLinkPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c, err := s.ackLinks.Verify(r.PathValue("token"))
+	if err == nil && c.Kind == "voice" {
+		err = acklink.ErrSignature // a call's keypress URL, not a link
+	}
 	if err != nil {
 		code, msg, _ := linkRefusal(err)
 		s.linkPage(w, code, linkPageData{Title: "Not acknowledged", Error: msg})

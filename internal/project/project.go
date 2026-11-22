@@ -1212,6 +1212,9 @@ type Project struct {
 	// escalate.Options.AckLink): naut run hands in the server's, since the
 	// server holds the key and answers the link. Nil: pages carry none.
 	AckLink func(m escalate.Message, via string) string
+	// AckCode makes an SMS page's reply code (#715 inbound,
+	// escalate.Options.AckCode), handed in by naut run as AckLink is.
+	AckCode func(m escalate.Message, via string) string
 }
 
 // RetainNames resolves the retain section's defaults against the project

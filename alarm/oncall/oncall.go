@@ -26,6 +26,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -412,6 +413,33 @@ func (c *Contacts) Lookup(principal string) *Contact {
 		ct = c.Contacts[strings.ToLower(principal)]
 	}
 	return ct
+}
+
+// Callers lists the principals whose address for kind is exactly
+// address (an SMS reply's sender, a call's callee; #715 inbound), sorted.
+// None when the contacts file cannot be read.
+func (s *Store) Callers(kind, address string) []string {
+	c, err := s.Contacts()
+	if err != nil || address == "" {
+		return nil
+	}
+	return c.Callers(kind, address)
+}
+
+// Callers lists the principals whose address for kind is exactly address,
+// sorted.
+func (c *Contacts) Callers(kind, address string) []string {
+	if c == nil || address == "" {
+		return nil
+	}
+	var out []string
+	for p, ct := range c.Contacts {
+		if ct != nil && ct.Address(kind) == address {
+			out = append(out, p)
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 // Secret is the credential under key: "" when the file holds none.

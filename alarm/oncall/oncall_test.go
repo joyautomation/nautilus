@@ -125,3 +125,29 @@ func TestStoreLooksUpUserNamesIgnoringCase(t *testing.T) {
 		t.Errorf("oidc:carol matched oidc:Carol: %q", a)
 	}
 }
+
+// Callers is the reverse lookup an inbound reply needs (#715): every
+// principal with that exact address for that kind, none for a stranger.
+func TestCallers(t *testing.T) {
+	c := &Contacts{Contacts: map[string]*Contact{
+		"bob":        {SMS: "+15550102", Voice: "+15550109"},
+		"alice":      {SMS: "+15550102"},
+		"oidc:carol": {SMS: "+15550103", Voice: "+15550103"},
+		"dave":       nil,
+	}}
+	if got := c.Callers(SMS, "+15550102"); len(got) != 2 || got[0] != "alice" || got[1] != "bob" {
+		t.Fatalf("shared number: %v", got)
+	}
+	if got := c.Callers(Voice, "+15550103"); len(got) != 1 || got[0] != "oidc:carol" {
+		t.Fatalf("voice: %v", got)
+	}
+	if got := c.Callers(Voice, "+15550102"); len(got) != 0 {
+		t.Fatalf("an sms number matched a voice lookup: %v", got)
+	}
+	if got := c.Callers(SMS, ""); len(got) != 0 {
+		t.Fatalf("empty address: %v", got)
+	}
+	if got := (*Contacts)(nil).Callers(SMS, "+15550102"); got != nil {
+		t.Fatalf("nil: %v", got)
+	}
+}

@@ -103,13 +103,30 @@ func (p *providerSender) attempt(ctx context.Context, m escalate.Message) error 
 	endpoint, form := "Messages.json", url.Values{"To": {to}, "From": {p.cfg.From}}
 	if p.kind == KindVoice {
 		endpoint = "Calls.json"
-		var esc bytes.Buffer
-		_ = xml.EscapeText(&esc, []byte(voiceText(m)))
-		form.Set("Twiml", `<Response><Say loop="2">`+esc.String()+`</Say></Response>`)
+		form.Set("Twiml", voiceTwiml(m))
 	} else {
 		form.Set("Body", smsText(m))
 	}
 	u := strings.TrimRight(p.cfg.URL, "/") + "/2010-04-01/Accounts/" + url.PathEscape(p.cfg.Account) + "/" + endpoint
 	hdr := http.Header{"Content-Type": {"application/x-www-form-urlencoded"}}
 	return post(ctx, p.client, u, hdr, p.cfg.Account, token, []byte(form.Encode()))
+}
+
+// voiceTwiml is the call's instructions to the provider. With a keypress
+// URL (m.AckURL, inbound #715) the message is said inside a one-digit
+// Gather whose action is that URL: the provider posts the key pressed
+// there, signed. The URL is a credential; it goes only to the provider.
+func voiceTwiml(m escalate.Message) string {
+	say := `<Say loop="2">` + xmlText(voiceText(m)) + `</Say>`
+	if m.AckURL == "" {
+		return `<Response>` + say + `</Response>`
+	}
+	return `<Response><Gather numDigits="1" timeout="10" method="POST" action="` + xmlText(m.AckURL) + `">` + say +
+		`</Gather><Say>Not acknowledged. Acknowledge it in the HMI.</Say></Response>`
+}
+
+func xmlText(s string) string {
+	var b bytes.Buffer
+	_ = xml.EscapeText(&b, []byte(s))
+	return b.String()
 }

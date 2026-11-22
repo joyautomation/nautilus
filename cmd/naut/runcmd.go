@@ -367,7 +367,7 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		fmt.Fprintf(os.Stderr, "naut run: warning: pages carry no ack link: %v\n", err)
 	}
 	if ackLinks != nil {
-		proj.AckLink = ackLinkHook(&srvRef)
+		proj.AckLink, proj.AckCode = ackLinkHook(&srvRef), ackCodeHook(&srvRef)
 	}
 	alarms, err := startAlarms(proj, rt, sysAlarms...)
 	if err != nil {
@@ -556,6 +556,7 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	if ackLinks != nil {
 		sopts.AckLinks, sopts.AckURL = ackLinks, proj.Alarms.Oncall.AckURL
 		sopts.AckLinkSignIn = proj.Alarms.Oncall.AckFrom() == escalate.AckBySignIn
+		sopts.Inbound = inboundOptions(proj)
 	}
 	// Operator notes (#720): a pair's are an index of its log; alone, a file
 	// in the state directory, when anyone can sign in to write one.

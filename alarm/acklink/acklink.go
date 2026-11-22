@@ -78,6 +78,7 @@ type Claim struct {
 // Keyring mints and checks tokens under one key.
 type Keyring struct {
 	key  []byte
+	code []byte // the reply codes' key (code.go), derived from key
 	now  func() time.Time
 	rand io.Reader
 }
@@ -87,7 +88,9 @@ func New(key []byte) (*Keyring, error) {
 	if len(key) < MinKey {
 		return nil, fmt.Errorf("acklink: key is %d bytes, need at least %d", len(key), MinKey)
 	}
-	return &Keyring{key: append([]byte(nil), key...), now: time.Now, rand: rand.Reader}, nil
+	k := &Keyring{key: append([]byte(nil), key...), now: time.Now, rand: rand.Reader}
+	k.code = k.subkey(codeKeyInfo)
+	return k, nil
 }
 
 // SetClock replaces the keyring's clock (tests, and a server whose clock

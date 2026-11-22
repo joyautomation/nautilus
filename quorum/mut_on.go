@@ -318,6 +318,13 @@ var Mutations = []string{
 	"link_reason_html",                  // server: a refused ack link is journalled with its page's HTML as the reason (#715)
 	"link_acks_on_standby",              // server: a replica that does not lead acknowledges an ack link on its own engine (#715)
 	"link_session_cookie_refused",       // server: a signed-in browser from another origin is refused on a link in link mode instead of the link alone acting (#715)
+	"inbound_unsigned",                  // server: a provider's reply or keypress is taken without its signature checking (#715)
+	"inbound_tries_unlimited",           // server: a person who sent too many wrong reply codes is not refused (#715)
+	"inbound_callee_unchecked",          // server: a keypress acknowledges though the call's number is not the person's (#715)
+	"inbound_any_key",                   // server: a keypress other than 1 acknowledges (#715)
+	"inbound_status_on_wire",            // server: a refused reply or keypress answers the provider with its status instead of 200 TwiML (#715)
+	"inbound_not_forwarded",             // server: a standby answers a provider's reply itself instead of forwarding it to the leader (#715)
+	"voice_link_acks_here",              // server: a call's keypress URL acknowledges as an ack link (#715)
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")
