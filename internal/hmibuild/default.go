@@ -80,7 +80,7 @@ type galleryComp struct {
 // all, the connection and the theme. A click on equipment with a panel
 // opens it beside the drawing (the kit's EquipmentPanel), and every
 // bound label carries a sparkline.
-func defaultApp(project, title string) (*appSource, error) {
+func defaultApp(project, title string, extra []json.RawMessage) (*appSource, error) {
 	mimics := Mimics(project)
 	if len(mimics) == 0 {
 		return nil, &Error{Messages: []string{"nothing to build: the project has no hmi/ app (src/routes) and no *.mimic.json"}}
@@ -93,6 +93,7 @@ func defaultApp(project, title string) (*appSource, error) {
 	description := ""
 	used := map[string]bool{}
 	takenSlug := map[string]bool{}
+	var assets []json.RawMessage
 	for i, m := range mimics {
 		raw, err := os.ReadFile(filepath.Join(project, filepath.FromSlash(m)))
 		if err != nil {
@@ -110,6 +111,7 @@ func defaultApp(project, title string) (*appSource, error) {
 			problems = append(problems, fmt.Sprintf("%s: not a mimic: %v", m, err))
 			continue
 		}
+		assets = append(assets, assetsOf(raw)...)
 		var imports, registry []string
 		seen := map[string]bool{}
 		for _, eq := range doc.Equipment {
@@ -188,6 +190,24 @@ func defaultApp(project, title string) (*appSource, error) {
 		if pg.slug == "alarms" {
 			alarmsHref = jsq("/alarms")
 		}
+	}
+	// an asset page for each piece of equipment that has a panel, and for
+	// each descriptor the caller passed (a device row's), unless a screen
+	// is named "assets"
+	assets = append(assets, extra...)
+	if list := dedupeAssets(assets); len(list) > 0 && !takenSlug["assets"] {
+		a.virtual["nx:default/assets"] = vmod{kind: plain, text: "export const assets = " + string(list) + ";\n"}
+		for _, pg := range []struct{ dir, mod, text string }{
+			{"assets", "nx:default/assets-index.svelte", defaultAssetsIndex},
+			{"assets/[id]", "nx:default/asset.svelte", defaultAsset},
+		} {
+			a.virtual[pg.mod] = vmod{kind: component, text: pg.text}
+			r, _ := routeFor(pg.dir)
+			r.Page = pg.mod
+			r.Layouts = []int{0}
+			a.routes = append(a.routes, r)
+		}
+		screens = append(screens, fmt.Sprintf("{ id: %s, href: %s, label: %s }", jsq("/assets"), jsq("/assets"), jsq("Assets")))
 	}
 	if !takenSlug["components"] {
 		a.addComponentsPage(project, []int{0})
@@ -733,4 +753,134 @@ const componentsPageText = `<script>
 	.nx-box { position: relative; }
 	figcaption { color: var(--ink-2); font-size: var(--font-sm); }
 </style>
+`
+
+// assetsOf is the asset descriptors a mimic's equipment make: each piece
+// with a panel (its own, or the one it shares, followed once) is an asset
+// of the same id, titled as its panel is.
+func assetsOf(raw []byte) []json.RawMessage {
+	var doc struct {
+		Equipment []struct {
+			ID    string          `json:"id"`
+			Label string          `json:"label"`
+			Panel json.RawMessage `json:"panel"`
+		} `json:"equipment"`
+	}
+	if json.Unmarshal(raw, &doc) != nil {
+		return nil
+	}
+	panels := map[string]json.RawMessage{}
+	for _, e := range doc.Equipment {
+		if len(e.Panel) > 0 && e.Panel[0] == '{' {
+			panels[e.ID] = e.Panel
+		}
+	}
+	var out []json.RawMessage
+	for _, e := range doc.Equipment {
+		panel := e.Panel
+		if len(panel) > 0 && panel[0] == '"' {
+			var other string
+			if json.Unmarshal(panel, &other) != nil {
+				continue
+			}
+			panel = panels[other]
+		}
+		if len(panel) == 0 || panel[0] != '{' {
+			continue
+		}
+		// titled as the panel is (what a click on it shows), else by its label
+		var head struct {
+			Title string `json:"title"`
+		}
+		_ = json.Unmarshal(panel, &head)
+		title := head.Title
+		if title == "" {
+			title = e.Label
+		}
+		if title == "" {
+			title = e.ID
+		}
+		d, err := json.Marshal(map[string]any{"id": e.ID, "title": title, "panel": panel})
+		if err == nil {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// assetSlug is the kit's assetSlug (hmi/src/lib/asset.ts): lowercase words
+// and digits joined by dashes.
+func assetSlug(id string) string {
+	return strings.Trim(slugRe.ReplaceAllString(strings.ToLower(strings.TrimSpace(id)), "-"), "-")
+}
+
+// dedupeAssets is the descriptors as one JSON array, the first of two with
+// one page slug kept ("P-1", "P_1" and "p 1" are one page), and any whose id
+// makes no slug dropped.
+func dedupeAssets(list []json.RawMessage) json.RawMessage {
+	seen := map[string]bool{}
+	kept := []json.RawMessage{}
+	for _, d := range list {
+		var h struct {
+			ID string `json:"id"`
+		}
+		if json.Unmarshal(d, &h) != nil {
+			continue
+		}
+		slug := assetSlug(h.ID)
+		if slug == "" || seen[slug] {
+			continue
+		}
+		seen[slug] = true
+		kept = append(kept, d)
+	}
+	if len(kept) == 0 {
+		return nil
+	}
+	b, _ := json.Marshal(kept)
+	return b
+}
+
+// defaultAssetsIndex lists the project's assets, each a link to its page.
+const defaultAssetsIndex = `<script>
+	import { assetTitle, assetSlug } from '@joyautomation/nautilus-hmi';
+	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
+	import { assets } from 'nx:default/assets';
+</script>
+
+<div class="nx-page">
+	<h1>Assets</h1>
+	<ul>
+		{#each assets as a (a.id)}
+			<li><a href={resolve('/assets/' + assetSlug(a.id)) + page.url.search}>{assetTitle(a)}</a></li>
+		{/each}
+	</ul>
+</div>
+
+<style>
+	.nx-page { max-width: 900px; margin: 0 auto; display: grid; gap: 12px; }
+	h1 { margin: 0; font-size: var(--font-lg); }
+	ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; }
+	a { color: var(--ink); }
+</style>
+`
+
+// defaultAsset is one asset's page: the kit's AssetPage on a descriptor.
+const defaultAsset = `<script>
+	import { AssetPage, assetSlug } from '@joyautomation/nautilus-hmi';
+	import { page } from '$app/state';
+	import { resolve } from '$app/paths';
+	import { assets } from 'nx:default/assets';
+	import { rt, alarms } from 'nx:default/client';
+	const asset = $derived(assets.find((a) => assetSlug(a.id) === page.params.id));
+</script>
+
+{#if asset}
+	{#key asset.id}
+	<AssetPage {asset} tags={rt.frame?.tags ?? {}} write={(name, value) => rt.writeTag(name, value)} alarms={alarms.supported ? alarms : null} />
+	{/key}
+{:else}
+	<p>No asset by that name. <a href={resolve('/assets') + page.url.search}>All assets</a></p>
+{/if}
 `

@@ -318,3 +318,78 @@ func write(t *testing.T, dir, rel, text string) {
 		t.Fatal(err)
 	}
 }
+
+// An asset page for each piece of equipment that has a panel (#714): its
+// own, or the one it shares; none for equipment with no panel.
+func TestAssetsOfMimicEquipment(t *testing.T) {
+	raw := []byte(`{"equipment":[
+		{"id":"P1","label":"Pump 1","panel":{"title":"P-1 pump","readings":[{"tag":"P1_Flow"}]}},
+		{"id":"FS","label":"Float switch","panel":"P1"},
+		{"id":"V1","label":"Valve"},
+		{"id":"X","panel":"Nowhere"},
+		{"id":"N","panel":5}]}`)
+	got := assetsOf(raw)
+	var ids []string
+	for _, d := range got {
+		var a struct {
+			ID    string
+			Title string
+			Panel struct {
+				Title string
+			}
+		}
+		if err := json.Unmarshal(d, &a); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, a.ID+"="+a.Title+"/"+a.Panel.Title)
+	}
+	if strings.Join(ids, ",") != "P1=P-1 pump/P-1 pump,FS=P-1 pump/P-1 pump" {
+		t.Errorf("assets %v: want the pump and the float switch that shares its panel, titled as the panel is, not the valve or the dangling one", ids)
+	}
+}
+
+func TestDedupeAssetsKeepsTheFirstOfAPageSlug(t *testing.T) {
+	list := []json.RawMessage{json.RawMessage(`{"id":"P-1","title":"first"}`), json.RawMessage(`{"id":"p 1","title":"second"}`), json.RawMessage(`{"title":"no id"}`), json.RawMessage(`{"id":"T1"}`), json.RawMessage(`{"id":"P_1","title":"same page"}`), json.RawMessage(`{"id":"---"}`)}
+	got := string(dedupeAssets(list))
+	if got != `[{"id":"P-1","title":"first"},{"id":"T1"}]` {
+		t.Errorf("deduped %s", got)
+	}
+	if dedupeAssets(nil) != nil {
+		t.Error("no assets must give no page")
+	}
+}
+
+// Equipment with a panel, and a descriptor the caller passes, each get an
+// asset page under /assets (#714); a project with neither gets none.
+func TestBuildsAssetPages(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "p.mimic.json", `{"name":"P","equipment":[{"id":"P1","component":"Pump","x":1,"y":1,"panel":{"title":"Pump one_qq","readings":[{"tag":"P1_Flow","unit":"gpm"}]}}]}`)
+	res, err := Build(Options{Project: dir, Title: "t", Assets: []json.RawMessage{json.RawMessage(`{"id":"CONV","title":"Conveyor_qq","panel":{"readings":[{"tag":"CONV.Speed"}]}}`)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pages := strings.Join(res.Pages, " ")
+	if !strings.Contains(pages, "/assets") {
+		t.Errorf("pages = %q, want the assets pages", pages)
+	}
+	var js strings.Builder
+	for n, b := range res.Files {
+		if strings.HasSuffix(n, ".js") {
+			js.Write(b)
+		}
+	}
+	for _, want := range []string{"Pump one_qq", "Conveyor_qq"} {
+		if !strings.Contains(js.String(), want) {
+			t.Errorf("the built app lacks %q: both assets must be in it", want)
+		}
+	}
+	none := t.TempDir()
+	write(t, none, "p.mimic.json", `{"name":"P","equipment":[{"id":"P1","component":"Pump","x":1,"y":1}]}`)
+	res, err = Build(Options{Project: none, Title: "t"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(res.Pages, " "), "/assets") {
+		t.Errorf("pages = %v: a project with no panels has no asset pages", res.Pages)
+	}
+}
