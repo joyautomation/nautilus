@@ -3,6 +3,7 @@ package project
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/joyautomation/nautilus/siemens/station"
 )
@@ -69,6 +70,9 @@ func CheckBlockPrefix(p string) error {
 		if !letter && !(i > 0 && r >= '0' && r <= '9') {
 			return fmt.Errorf("%q is not a valid SCL identifier start: use letters, digits and _, not starting with a digit", p)
 		}
+	}
+	if len(p) >= 3 && strings.EqualFold(p[:3], "OB_") {
+		return fmt.Errorf("%q would make block names that clash with TIA's system constants (OB_<name> for each OB); choose another prefix", p)
 	}
 	return nil
 }
