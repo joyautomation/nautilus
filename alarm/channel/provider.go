@@ -57,6 +57,9 @@ func statusError(code int) error {
 		return nil
 	case code == 401 || code == 403:
 		se.Class = escalate.FailAuth
+	case code == 408 || code == 429:
+		// A timeout or a rate limit at the provider: worth another try.
+		se.Class = escalate.FailProvider
 	case code >= 300 && code < 500:
 		se.Class = escalate.FailRejected
 	case code >= 500:
@@ -76,12 +79,10 @@ type providerSender struct {
 }
 
 func newProviderSender(kind string, p Provider, secretKey string, dir Directory, pool *x509.CertPool) *providerSender {
-	host := ""
-	if u, err := url.Parse(p.URL); err == nil {
-		host = u.Hostname()
-	}
+	// No ServerName: the transport sets it per connection, to the
+	// provider's host, or to the proxy's for an https proxy hop.
 	return &providerSender{kind: kind, cfg: p, secret: secretKey, dir: dir,
-		client: newHTTPClient(tlsConfig(host, p.TLSConf, pool))}
+		client: newHTTPClient(tlsConfig("", p.TLSConf, pool))}
 }
 
 func (p *providerSender) attempt(ctx context.Context, m escalate.Message) error {
@@ -96,8 +97,8 @@ func (p *providerSender) attempt(ctx context.Context, m escalate.Message) error 
 	if err != nil {
 		return err
 	}
-	if !strings.HasPrefix(p.cfg.URL, "https://") {
-		return escalate.Failed(escalate.FailTLS)
+	if u, err := url.Parse(p.cfg.URL); err != nil || u.Scheme != "https" {
+		return escalate.Failed(escalate.FailTLS) // the token never rides plaintext
 	}
 	endpoint, form := "Messages.json", url.Values{"To": {to}, "From": {p.cfg.From}}
 	if p.kind == KindVoice {

@@ -831,7 +831,7 @@ func openAlarmContacts(proj *project.Project, dir string, getenv func(string) st
 	// controller of a pair keeps its own files, and a standby's gaps show
 	// only when it leads. Warnings: a missing number fails that one page
 	// (no-contact), it does not stop a controller.
-	errs, _ := checkContacts(proj.Alarms, sd)
+	errs, _ := checkContacts(proj.Alarms, sd, true)
 	for _, e := range errs {
 		fmt.Fprintf(stderr, "naut run: warning: %s\n", e)
 	}
@@ -1691,6 +1691,10 @@ file. It refuses to start while another process holds its tag API address
   ` + name + ` version    print the naut version it was built with
   ` + name + ` users …    the local users of its auth: block (naut users --help);
                      it does not start the controller
+  ` + name + ` alarms contacts|secrets …
+                     who escalation pages and the channels' credentials, on
+                     this box (naut alarms contacts help); it does not
+                     start the controller
   ` + name + ` --help     this
 
 Environment:

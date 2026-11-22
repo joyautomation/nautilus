@@ -9,20 +9,11 @@ import (
 )
 
 // The file-safety helpers live in internal/securefile, shared with the
-// alarm contacts (#715); these keep the users package's names and its
-// geteuid hook.
-
-// keepOwner gives the new file at tmp the owner of the file it replaces
-// when run as root (securefile.KeepOwner).
-func keepOwner(tmp *os.File, path, dir string) error {
-	return securefile.KeepOwner(tmp, path, dir, geteuid() == 0)
-}
+// alarm contacts (#715); these keep the users package's names for the
+// two its tests call, and its geteuid hook.
 
 // geteuid is os.Geteuid, a variable so a test can be another user.
 var geteuid = os.Geteuid
-
-func othersMayRead(m os.FileMode) bool  { return securefile.OthersMayRead(m) }
-func othersMayWrite(m os.FileMode) bool { return securefile.OthersMayWrite(m) }
 
 // checkOwner refuses a file this process does not own.
 func checkOwner(path string, st os.FileInfo) error {

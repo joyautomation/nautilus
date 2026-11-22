@@ -2,6 +2,7 @@ package escalate
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -63,8 +64,18 @@ type Options struct {
 	// FailAfter is how many sends in a row must fail on one channel kind
 	// before Failing reports it. Default 3.
 	FailAfter int
-	// SendTimeout bounds one Send, retries included. Default 30s.
+	// SendTimeout bounds one send, every attempt and wait included.
+	// Default 30s.
 	SendTimeout time.Duration
+	// Retries is how many more attempts a send gets after a transient
+	// failure (timeout, unreachable, provider-error). Default 2; negative
+	// means none. The dispatcher, not the channel, retries, so the gate,
+	// the term and the engine are asked again before every attempt: a
+	// leader deposed, or an alarm acknowledged, during a slow first try
+	// sends no second one.
+	Retries int
+	// Backoff is the wait before the first retry; it doubles. Default 500ms.
+	Backoff time.Duration
 
 	Log *slog.Logger
 }
@@ -135,6 +146,8 @@ type Dispatcher struct {
 	failing atomic.Bool // some kind has failed FailAfter times in a row
 
 	sendTimeout time.Duration
+	retries     int
+	backoff     time.Duration
 	ctx         context.Context
 	cancel      context.CancelFunc
 
@@ -184,6 +197,15 @@ func New(o Options) (*Dispatcher, error) {
 	d.sendTimeout = o.SendTimeout
 	if d.sendTimeout <= 0 {
 		d.sendTimeout = 30 * time.Second
+	}
+	switch d.retries, d.backoff = o.Retries, o.Backoff; {
+	case d.retries < 0:
+		d.retries = 0
+	case d.retries == 0:
+		d.retries = 2
+	}
+	if d.backoff <= 0 {
+		d.backoff = 500 * time.Millisecond
 	}
 	d.ctx, d.cancel = context.WithCancel(context.Background())
 	n := o.Queue
@@ -464,6 +486,19 @@ func (d *Dispatcher) deliver(q queued) {
 	}
 	ctx, cancel := context.WithTimeout(d.ctx, d.sendTimeout)
 	err := d.channels[q.key.via].Send(ctx, q.msg)
+	for attempt, wait := 0, d.backoff; err != nil && attempt < d.retries && transient(err); attempt, wait = attempt+1, wait*2 {
+		select {
+		case <-ctx.Done():
+		case <-time.After(wait):
+		}
+		// Asked again before every attempt, as before the first: a retry
+		// never leaves for an alarm acknowledged meanwhile, nor from a
+		// leadership that ended. What failed is journalled as failed.
+		if ctx.Err() != nil || !d.waiting(q.key) || !d.mayAct(q.term) {
+			break
+		}
+		err = d.channels[q.key.via].Send(ctx, q.msg)
+	}
 	cancel()
 	if err != nil && d.ctx.Err() != nil {
 		// Cut off by Close: shutting down, not a failed channel, and the
@@ -505,6 +540,22 @@ func (d *Dispatcher) deliver(q queued) {
 	d.mu.Unlock()
 	d.eng.Notified(q.msg.Alarm.ID, alarm.Notice{Level: q.msg.Level, To: q.key.to, Via: q.key.via,
 		Result: result, Reason: reason})
+}
+
+// transient reports a failure worth another attempt: no answer, no
+// connection, or the provider's own error. Never an auth failure, a
+// refusal, a TLS failure or a missing contact: those fail again.
+func transient(err error) bool {
+	class := Failure(err)
+	var se *SendError
+	if errors.As(err, &se) {
+		class = se.Class
+	}
+	switch class {
+	case FailTimeout, FailUnreachable, FailProvider:
+		return true
+	}
+	return false
 }
 
 // release forgets a queued send that did not leave, so a later look may

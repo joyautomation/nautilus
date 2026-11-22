@@ -121,7 +121,7 @@ func contactsMain(which string, args []string, load func(dir string) (*project.M
 // is how they are checked on the box, where the built controller answers
 // it and naut check (in a checkout) cannot see the files.
 func contactsCheck(alarms *project.AlarmsConfig, sd string, stdout, stderr io.Writer) int {
-	errs, warns := checkContacts(alarms, sd)
+	errs, warns := checkContacts(alarms, sd, true)
 	for _, w := range warns {
 		fmt.Fprintln(stderr, "warning:", w)
 	}

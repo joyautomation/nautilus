@@ -156,7 +156,7 @@ func (f *File) Save(path, by string) error {
 }
 
 // writeAtomic writes b to path: a temporary file, mode 0600, owned as
-// keepOwner says, fsynced, renamed over the old one, the directory
+// securefile.KeepOwner says, fsynced, renamed over the old one, the directory
 // fsynced. A path that is a symbolic link is refused.
 func writeAtomic(path string, b []byte) error {
 	return securefile.WriteAtomic(path, ".users-*.json", b, geteuid() == 0)

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/joyautomation/nautilus/alarm/oncall"
 	"github.com/joyautomation/nautilus/internal/project"
 )
@@ -64,7 +66,7 @@ func contactsCLI(t *testing.T, dir, which, stdin string, args ...string) (string
 func TestCheckContacts(t *testing.T) {
 	dir, sd := contactsProject(t)
 	out, code := checkInDir(t, dir)
-	if code != 0 || !strings.Contains(out, "this machine has no contacts file") ||
+	if code != 0 || !strings.Contains(out, "this machine has no contacts or secrets file") ||
 		!strings.Contains(out, "alarms.channels.sms: insecure: true") {
 		t.Fatalf("no contacts file: code %d\n%s", code, out)
 	}
@@ -262,3 +264,68 @@ func TestContactsCheckOnTheBox(t *testing.T) {
 		t.Fatalf("check with none: exit %d\n%s", code, out)
 	}
 }
+
+// On the box an absent contacts or secrets file is an empty one: naut
+// alarms contacts check fails on a fresh state directory (it does not
+// pass with a warning), and a webhook-only manifest's missing secret is
+// still found. A user name is looked up ignoring case, as a send does.
+func TestContactsCheckFreshBoxAndCase(t *testing.T) {
+	dir, _ := contactsProject(t)
+	m, err := project.ReadManifest(os.DirFS(dir), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh := filepath.Join(t.TempDir(), "fresh")
+	errs, _ := checkContacts(m.Alarms, fresh, true)
+	all := strings.Join(errs, "\n")
+	for _, want := range []string{"pages alice by email", "pages bob by sms", "needs the secret sms.token", "needs the secret email.password"} {
+		if !strings.Contains(all, want) {
+			t.Errorf("fresh box: want %q in\n%s", want, all)
+		}
+	}
+	var out, errb bytes.Buffer
+	if code := contactsCheck(m.Alarms, fresh, &out, &errb); code != 1 {
+		t.Errorf("contacts check on a fresh box exited %d:\n%s%s", code, out.String(), errb.String())
+	}
+
+	hook := &project.AlarmsConfig{}
+	if err := yamlInto(`
+channels:
+  webhook: { url: "https://hooks.example.com/page", header: Authorization }
+escalation:
+  - id: w
+    match: { area: wetwell }
+    levels:
+      - { after: 0s, notify: [Alice], via: [webhook] }
+`, hook); err != nil {
+		t.Fatal(err)
+	}
+	if errs, _ := checkContacts(hook, fresh, true); len(errs) != 1 || !strings.Contains(errs[0], "webhook.header") {
+		t.Errorf("webhook only, no secrets file: %v", errs)
+	}
+
+	sd := t.TempDir()
+	os.Chmod(sd, 0o700)
+	oncall.UpdateContacts(oncall.ContactsPath(sd), "x", func(c *oncall.Contacts) error {
+		c.Contacts["alice"] = &oncall.Contact{Email: "alice@example.com"}
+		return nil
+	})
+	mixed := &project.AlarmsConfig{}
+	if err := yamlInto(`
+escalation:
+  - id: w
+    match: { area: wetwell }
+    levels:
+      - { after: 0s, notify: [Alice], via: [log] }
+channels:
+  email: { smtp: "mail.example.com:587", from: alarms@example.com }
+`, mixed); err != nil {
+		t.Fatal(err)
+	}
+	mixed.Escalation[0].Levels[0].Via = []string{"email"}
+	if errs, _ := checkContacts(mixed, sd, true); len(errs) != 0 {
+		t.Errorf("Alice in the manifest, alice in the contacts: %v", errs)
+	}
+}
+
+func yamlInto(src string, v any) error { return yaml.Unmarshal([]byte(src), v) }

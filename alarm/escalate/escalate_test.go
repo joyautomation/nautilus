@@ -1032,3 +1032,97 @@ func TestFailureClasses(t *testing.T) {
 		}
 	}
 }
+
+// scripted is a Channel whose Sends fail as errs says, in order (nil
+// after the list), running between after each attempt.
+type scripted struct {
+	mu      sync.Mutex
+	errs    []error
+	calls   int
+	between func()
+}
+
+func (c *scripted) Send(context.Context, Message) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.calls++
+	var err error
+	if len(c.errs) > 0 {
+		err, c.errs = c.errs[0], c.errs[1:]
+	}
+	if c.between != nil {
+		c.between()
+	}
+	return err
+}
+
+func (c *scripted) n() int { c.mu.Lock(); defer c.mu.Unlock(); return c.calls }
+
+func retryRig(t *testing.T, ch *scripted) *rig {
+	t.Helper()
+	r := newRig(t, true)
+	r.d.channels["email"] = ch
+	r.d.backoff = time.Millisecond
+	return r
+}
+
+func lastNotify(t *testing.T, r *rig, to string) alarm.Event {
+	t.Helper()
+	evs, _ := r.ring.Query(time.Time{}, time.Time{}, alarm.Filter{Kinds: []string{alarm.KindNotify}})
+	for _, e := range evs {
+		if e.To == to {
+			return e
+		}
+	}
+	t.Fatalf("no notify row for %s", to)
+	return alarm.Event{}
+}
+
+// A transient failure (a timeout) is tried again by the dispatcher; an
+// auth failure is not.
+func TestDispatcherRetriesTransientOnly(t *testing.T) {
+	ch := &scripted{errs: []error{Failed(FailTimeout), Failed(FailProvider)}}
+	r := retryRig(t, ch)
+	r.set("TT1", true)
+	r.run(time.Second)
+	if e := lastNotify(t, r, "alice"); e.Result != alarm.NotifySent {
+		t.Fatalf("alice after a timeout and a 5xx: %+v, want sent on the third attempt", e)
+	}
+
+	ch2 := &scripted{errs: []error{Failed(FailAuth), Failed(FailAuth), Failed(FailAuth), Failed(FailAuth)}}
+	r2 := retryRig(t, ch2)
+	r2.set("TT1", true)
+	r2.run(time.Second)
+	if n := ch2.n(); n != 2 { // alice and dave, once each
+		t.Fatalf("an auth failure was retried: %d sends for two people", n)
+	}
+}
+
+// An acknowledgement, or the end of this leadership, during a failed
+// attempt stops the retry: the dispatcher asks the engine and the gate
+// again before every attempt, not only the first.
+func TestRetryAsksAgainBeforeEachAttempt(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		stop func(r *rig)
+	}{
+		{"acknowledged", func(r *rig) { r.eng.Ack([]string{"TT1"}, "alice") }},
+		{"gate closed", func(r *rig) { r.gate.Store(false) }},
+		{"term changed", func(r *rig) { r.term.Store(9) }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			ch := &scripted{errs: []error{Failed(FailTimeout), Failed(FailTimeout), Failed(FailTimeout)}}
+			r := retryRig(t, ch)
+			once := sync.Once{}
+			ch.between = func() { once.Do(func() { c.stop(r) }) }
+			r.set("TT1", true)
+			r.now = r.now.Add(time.Second)
+			r.eng.Evaluate()
+			r.d.Tick(r.now)
+			r.d.Drain()
+			if n := ch.n(); n != 1 {
+				t.Fatalf("%d attempts after the alarm stopped waiting or the leadership ended, want 1", n)
+			}
+		})
+	}
+}

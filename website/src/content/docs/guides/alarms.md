@@ -301,9 +301,14 @@ alarms:
 - **A roster is read once per level,** when that level falls due. A
   handover after it pages the new person at the next level, never with
   the levels already sent.
-- **A failed send is not retried.** The channel's own retries apart, the
-  next level, or a repeat, comes on its own timer: escalation never waits
-  on delivery.
+- **A failed send is tried at most twice more,** and only for a reason
+  that can pass (a timeout, no connection, the provider's own error),
+  asking the write gate and the alarm again before each try: a retry
+  never leaves for an alarm acknowledged meanwhile, nor from a controller
+  that lost its lease. Escalation never waits on delivery: the next level,
+  or a repeat, comes on its own timer. A timeout after the provider took
+  the message can mean a page arrives twice; a duplicate beats a missed
+  one.
 - **An alarm with `ack-required: false` pages while it is active.** It
   never waits on an acknowledgement, so its levels run from its
   activation, and a return to normal (or a shelf, or a suppression) stops
@@ -371,7 +376,11 @@ On a box with a built controller, the controller answers the same
 commands without starting: `sudo /opt/nautilus/current/controller alarms
 contacts --state-dir /var/lib/nautilus list`. A running controller reads
 a change on its next page. The webhook names the person as a principal
-(`"to": "alice"`) and needs no contact.
+(`"to": "alice"`) and needs no contact. A webhook URL that carries its own
+token in the path or query puts that token in Git; prefer a service that
+takes it in a header (`header:` and the secret `webhook.header`). The
+browser playground has no state directory, so a project there with
+`alarms.channels` and escalation is refused: try policies with `log`.
 
 - **Transport security is on.** Email runs over TLS (STARTTLS, or
   implicit) with the server's certificate verified; a server that offers

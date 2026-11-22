@@ -790,7 +790,7 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 		// person a level pages with no address for the channel is an
 		// error here, a failed send (no-contact) on a running controller.
 		sd, _ := controllerStateDir("the alarm contacts", proj.AuthStateDir, proj.Name, dir, true, os.Getenv)
-		cerrs, cwarns := checkContacts(proj.Alarms, sd)
+		cerrs, cwarns := checkContacts(proj.Alarms, sd, false)
 		for _, m := range cwarns {
 			warns++
 			fmt.Printf("%s: warning: %s\n", loc.file, m)

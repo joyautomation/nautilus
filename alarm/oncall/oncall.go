@@ -390,13 +390,22 @@ func (s *Store) Address(principal, kind string) (string, error) {
 	if s.cerr != nil {
 		return "", s.cerr
 	}
-	ct := s.c.Contacts[principal]
-	if ct == nil && !strings.HasPrefix(principal, "oidc:") {
-		// A local user name is stored lowercase (naut users, naut alarms
-		// contacts set); a manifest may spell it otherwise.
-		ct = s.c.Contacts[strings.ToLower(principal)]
+	return s.c.Lookup(principal).Address(kind), nil
+}
+
+// Lookup is principal's contact, nil for none. A local user name is
+// stored lowercase (naut users, naut alarms contacts set) and a manifest
+// may spell it otherwise, so it is looked up ignoring case; an oidc: name
+// is exact.
+func (c *Contacts) Lookup(principal string) *Contact {
+	if c == nil {
+		return nil
 	}
-	return ct.Address(kind), nil
+	ct := c.Contacts[principal]
+	if ct == nil && !strings.HasPrefix(principal, "oidc:") {
+		ct = c.Contacts[strings.ToLower(principal)]
+	}
+	return ct
 }
 
 // Secret is the credential under key: "" when the file holds none.

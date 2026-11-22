@@ -277,7 +277,7 @@ func (c *Config) Validate() error {
 		if u.Scheme != "https" {
 			return fmt.Errorf("%s.%s.provider: %q is not https: the provider's token never crosses plaintext, insecure or not", at, p.kind, p.p.URL)
 		}
-		if p.p.Account == "" || strings.ContainsAny(p.p.Account, "/?#%\r\n ") {
+		if p.p.Account == "" || strings.ContainsAny(p.p.Account, "/?#%:@\r\n ") {
 			return fmt.Errorf("%s.%s.account: the provider's account id is required (letters and digits)", at, p.kind)
 		}
 		if err := ValidPhone(p.p.From); err != nil {
@@ -286,14 +286,16 @@ func (c *Config) Validate() error {
 	}
 	if w := c.Webhook; w != nil {
 		u, err := url.Parse(w.URL)
+		// A webhook URL may carry its own token (in the path or query), so
+		// a refusal names its host only.
 		if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") || u.User != nil {
-			return fmt.Errorf("%s.webhook.url: %q is not an https URL", at, w.URL)
+			return fmt.Errorf("%s.webhook.url: not an https URL", at)
 		}
 		if u.Scheme == "http" && !w.TLSConf.Insecure {
-			return fmt.Errorf("%s.webhook.url: %q is plaintext: use https, or set insecure: true (allowed only with no header)", at, w.URL)
+			return fmt.Errorf("%s.webhook.url: the URL to %s is plaintext: use https, or set insecure: true (allowed only with no header)", at, u.Host)
 		}
 		if u.Scheme == "http" && w.Header != "" {
-			return fmt.Errorf("%s.webhook.url: %q is plaintext and header: would send the secret in the clear; use https", at, w.URL)
+			return fmt.Errorf("%s.webhook.url: the URL to %s is plaintext and header: would send the secret in the clear; use https", at, u.Host)
 		}
 		if w.Header != "" && !validHeaderName(w.Header) {
 			return fmt.Errorf("%s.webhook.header: %q is not a header name", at, w.Header)

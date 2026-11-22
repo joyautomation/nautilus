@@ -26,7 +26,7 @@ const (
 )
 
 func opts() channel.Options {
-	return channel.Options{Timeout: 2 * time.Second, Retries: -1, Backoff: 5 * time.Millisecond}
+	return channel.Options{Timeout: 2 * time.Second}
 }
 
 func dir() channeltest.Dir {
@@ -187,7 +187,7 @@ func TestEmailTransientRetried(t *testing.T) {
 func TestEmailHungServerEndsWithContext(t *testing.T) {
 	s := channeltest.NewSMTP(t, channeltest.SMTPOptions{Hang: true, Implicit: false})
 	ch, err := channel.Build(&channel.Config{Email: &channel.Email{SMTP: s.Addr, From: "alerts@example.com",
-		TLSConf: channel.TLS{CAFile: s.CAFile}}}, dir(), channel.Options{Timeout: 30 * time.Second, Retries: 5})
+		TLSConf: channel.TLS{CAFile: s.CAFile}}}, dir(), channel.Options{Timeout: 30 * time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,7 +340,7 @@ func TestProviderUntrustedCert(t *testing.T) {
 }
 
 func TestProviderAuthNotRetried(t *testing.T) {
-	ch, p := provider(t, channel.Options{Timeout: time.Second, Retries: 3, Backoff: time.Millisecond}, nil)
+	ch, p := provider(t, channel.Options{Timeout: time.Second}, nil)
 	p.SetStatus(401, "bad creds")
 	se := class(t, ch["sms"].Send(context.Background(), message("x")), escalate.FailAuth)
 	if se.Code != 401 || se.Proto != "http" {
@@ -352,7 +352,7 @@ func TestProviderAuthNotRetried(t *testing.T) {
 }
 
 func TestProviderRejectedNoLeak(t *testing.T) {
-	ch, p := provider(t, channel.Options{Timeout: time.Second, Retries: 3, Backoff: time.Millisecond}, nil)
+	ch, p := provider(t, channel.Options{Timeout: time.Second}, nil)
 	p.SetStatus(400, `{"message":"The number `+alicePhone+` is not valid","account":"AC0000example"}`)
 	err := ch["sms"].Send(context.Background(), message("x"))
 	class(t, err, escalate.FailRejected)
@@ -362,14 +362,16 @@ func TestProviderRejectedNoLeak(t *testing.T) {
 	}
 }
 
-func TestProviderServerErrorRetried(t *testing.T) {
-	ch, p := provider(t, channel.Options{Timeout: time.Second, Retries: 2, Backoff: time.Millisecond}, nil)
+// A provider's 5xx is transient (the dispatcher retries it, asking the
+// gate again first); the channel itself makes one attempt.
+func TestProviderServerErrorIsTransient(t *testing.T) {
+	ch, p := provider(t, channel.Options{Timeout: time.Second}, nil)
 	p.SetStatus(500, alicePhone)
 	err := ch["voice"].Send(context.Background(), message("x"))
 	class(t, err, escalate.FailProvider)
 	noLeak(t, err, alicePhone)
-	if p.Hits() != 3 {
-		t.Fatalf("hits = %d, want 1 + 2 retries", p.Hits())
+	if p.Hits() != 1 {
+		t.Fatalf("hits = %d, want one attempt: the dispatcher retries", p.Hits())
 	}
 }
 
@@ -377,7 +379,7 @@ func TestProviderRedirectNotFollowed(t *testing.T) {
 	var other atomic.Int32
 	evil := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { other.Add(1) }))
 	defer evil.Close()
-	ch, p := provider(t, channel.Options{Timeout: time.Second, Retries: 2, Backoff: time.Millisecond}, nil)
+	ch, p := provider(t, channel.Options{Timeout: time.Second}, nil)
 	p.SetRedirect(evil.URL)
 	err := ch["sms"].Send(context.Background(), message("x"))
 	se := class(t, err, escalate.FailRejected)
@@ -533,7 +535,7 @@ func TestBuildKinds(t *testing.T) {
 }
 
 func TestUnreachableAndRetry(t *testing.T) {
-	// A closed port: unreachable, retried (three attempts, quick).
+	// A closed port: unreachable (the dispatcher retries it).
 	h := channeltest.NewWebhook(t)
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -542,11 +544,25 @@ func TestUnreachableAndRetry(t *testing.T) {
 	addr := ln.Addr().String()
 	ln.Close()
 	c := &channel.Config{Webhook: &channel.Webhook{URL: "https://" + addr, TLSConf: channel.TLS{CAFile: h.CAFile}}}
-	ch, err := channel.Build(c, dir(), channel.Options{Timeout: time.Second, Retries: 2, Backoff: time.Millisecond})
+	ch, err := channel.Build(c, dir(), channel.Options{Timeout: time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
 	e := ch["webhook"].Send(context.Background(), message("x"))
 	class(t, e, escalate.FailUnreachable)
 	noLeak(t, e, "127.0.0.1", "https")
+}
+
+// A scheme in capitals is still https: Validate parses the URL, and so
+// does the sender, so a manifest that checks clean also pages.
+func TestProviderSchemeCase(t *testing.T) {
+	ch, p := provider(t, opts(), func(c *channel.Config) {
+		c.SMS.URL = "HTTPS://" + strings.TrimPrefix(c.SMS.URL, "https://")
+	})
+	if err := ch["sms"].Send(context.Background(), message("x")); err != nil {
+		t.Fatalf("HTTPS:// provider: %v", err)
+	}
+	if p.Hits() != 1 {
+		t.Fatalf("hits = %d", p.Hits())
+	}
 }

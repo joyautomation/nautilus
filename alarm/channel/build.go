@@ -15,26 +15,15 @@ import (
 
 // Options tunes every channel Build returns.
 type Options struct {
-	// Timeout bounds one attempt. Default 10s.
+	// Timeout bounds one attempt. Default 10s. A channel makes one attempt
+	// per Send: the dispatcher retries (escalate.Options.Retries), asking
+	// the write gate and the engine again before each.
 	Timeout time.Duration
-	// Retries is how many times a transient failure is tried again. Zero
-	// means the default, 2; negative means none.
-	Retries int
-	// Backoff is the first retry delay; it doubles. Default 500ms.
-	Backoff time.Duration
 }
 
 func (o Options) norm() Options {
 	if o.Timeout <= 0 {
 		o.Timeout = 10 * time.Second
-	}
-	if o.Retries < 0 {
-		o.Retries = 0
-	} else if o.Retries == 0 {
-		o.Retries = 2
-	}
-	if o.Backoff <= 0 {
-		o.Backoff = 500 * time.Millisecond
 	}
 	return o
 }
@@ -64,7 +53,7 @@ func Build(c *Config, dir Directory, o Options) (map[string]escalate.Channel, er
 		}
 		host, _, _ := net.SplitHostPort(e.SMTP)
 		em := &emailSender{cfg: *e, dir: dir, host: host, tls: tlsConfig(host, e.TLSConf, p), timeout: o.Timeout}
-		out[KindEmail] = &retrying{send: em.attempt, o: o}
+		out[KindEmail] = &attempt{send: em.attempt, o: o}
 	}
 	for _, pr := range []struct {
 		kind string
@@ -79,7 +68,7 @@ func Build(c *Config, dir Directory, o Options) (map[string]escalate.Channel, er
 			return nil, err
 		}
 		s := newProviderSender(pr.kind, *pr.p, pr.sec, dir, p)
-		out[pr.kind] = &retrying{send: s.attempt, o: o}
+		out[pr.kind] = &attempt{send: s.attempt, o: o}
 	}
 	if w := c.Webhook; w != nil {
 		p, err := pool(KindWebhook, w.TLSConf)
@@ -87,7 +76,7 @@ func Build(c *Config, dir Directory, o Options) (map[string]escalate.Channel, er
 			return nil, err
 		}
 		s := newWebhookSender(*w, dir, p)
-		out[KindWebhook] = &retrying{send: s.attempt, o: o}
+		out[KindWebhook] = &attempt{send: s.attempt, o: o}
 	}
 	return out, nil
 }
@@ -118,41 +107,20 @@ func tlsConfig(host string, t TLS, pool *x509.CertPool) *tls.Config {
 	}
 }
 
-// retrying runs one attempt at a time under its own timeout and tries
-// again on transient failures only. It always returns a *escalate.SendError.
-type retrying struct {
+// attempt runs one try under its own timeout and always returns a
+// *escalate.SendError on failure.
+type attempt struct {
 	send func(ctx context.Context, m escalate.Message) error
 	o    Options
 }
 
-func (r *retrying) Send(ctx context.Context, m escalate.Message) error {
-	wait := r.o.Backoff
-	for attempt := 0; ; attempt++ {
-		actx, cancel := context.WithTimeout(ctx, r.o.Timeout)
-		err := r.send(actx, m)
-		cancel()
-		if err == nil {
-			return nil
-		}
-		se := toSendError(ctx, err)
-		if attempt >= r.o.Retries || !transient(se.Class) || ctx.Err() != nil {
-			return se
-		}
-		select {
-		case <-ctx.Done():
-			return se
-		case <-time.After(wait):
-		}
-		wait *= 2
+func (r *attempt) Send(ctx context.Context, m escalate.Message) error {
+	actx, cancel := context.WithTimeout(ctx, r.o.Timeout)
+	defer cancel()
+	if err := r.send(actx, m); err != nil {
+		return toSendError(actx, err)
 	}
-}
-
-func transient(class string) bool {
-	switch class {
-	case escalate.FailTimeout, escalate.FailUnreachable, escalate.FailProvider:
-		return true
-	}
-	return false
+	return nil
 }
 
 // toSendError reduces any error to a SendError: its class from its type,

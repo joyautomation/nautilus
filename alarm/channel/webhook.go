@@ -18,11 +18,8 @@ type webhookSender struct {
 }
 
 func newWebhookSender(w Webhook, dir Directory, pool *x509.CertPool) *webhookSender {
-	host := ""
-	if u, err := url.Parse(w.URL); err == nil {
-		host = u.Hostname()
-	}
-	return &webhookSender{cfg: w, dir: dir, client: newHTTPClient(tlsConfig(host, w.TLSConf, pool))}
+	// No ServerName: the transport sets it per connection (target or proxy).
+	return &webhookSender{cfg: w, dir: dir, client: newHTTPClient(tlsConfig("", w.TLSConf, pool))}
 }
 
 type webhookAlarm struct {
@@ -46,13 +43,17 @@ type webhookBody struct {
 }
 
 func (w *webhookSender) attempt(ctx context.Context, m escalate.Message) error {
-	plain := strings.HasPrefix(w.cfg.URL, "http://")
+	u, err := url.Parse(w.cfg.URL)
+	if err != nil {
+		return escalate.Failed(escalate.FailConfig)
+	}
+	plain := u.Scheme == "http"
 	// Validate enforces these; a secret never rides plaintext, whatever
 	// reached here.
 	if plain && (w.cfg.Header != "" || !w.cfg.TLSConf.Insecure) {
 		return escalate.Failed(escalate.FailTLS)
 	}
-	if !plain && !strings.HasPrefix(w.cfg.URL, "https://") {
+	if !plain && u.Scheme != "https" {
 		return escalate.Failed(escalate.FailConfig)
 	}
 	hdr := http.Header{"Content-Type": {"application/json"}}

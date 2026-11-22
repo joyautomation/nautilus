@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"sort"
 	"strings"
 
 	"github.com/joyautomation/nautilus/alarm/channel"
@@ -58,13 +57,16 @@ func contactNeeds(c *escalate.Config) []contactNeed {
 	return out
 }
 
-// checkContacts is naut check's look at the contacts and secrets files on
-// this machine (#715): with a contacts file here (on the box), a person a
-// level pages by email, sms or voice with no address for it is an error,
-// and so is a channel whose credential the secrets file lacks; with none
-// (a checkout, CI), one warning says where they are checked. stateDir is
-// "" when this machine has no state directory.
-func checkContacts(alarms *project.AlarmsConfig, stateDir string) (errs, warns []string) {
+// checkContacts looks at the contacts and secrets files in stateDir
+// (#715): a person a level pages by email, sms or voice with no address
+// for it is an error, and so is a channel whose credential the secrets
+// file lacks. onBox says stateDir is the controller's own (naut alarms
+// contacts check, naut run): an absent file there is an empty one, so its
+// gaps are errors. Off the box (naut check in a checkout, CI) neither file
+// existing only means they live elsewhere: one warning says where they
+// are checked; if either exists, this machine holds them, and both are
+// checked. stateDir is "" when this machine has none.
+func checkContacts(alarms *project.AlarmsConfig, stateDir string, onBox bool) (errs, warns []string) {
 	if alarms == nil {
 		return nil, nil
 	}
@@ -81,49 +83,43 @@ func checkContacts(alarms *project.AlarmsConfig, stateDir string) (errs, warns [
 	if len(needs) == 0 && len(secrets) == 0 {
 		return errs, warns
 	}
+	const where = "on the controller: naut alarms contacts check (the built controller answers it: controller alarms contacts --state-dir /var/lib/nautilus check)"
 	if stateDir == "" {
-		return errs, append(warns, "alarms.escalation: no state directory here, so the contacts and secrets files were not checked; "+
-			"on the controller: naut alarms contacts check (the built controller answers it: controller alarms contacts --state-dir /var/lib/nautilus check)")
+		return errs, append(warns, "alarms.escalation: no state directory here, so the contacts and secrets files were not checked; "+where)
 	}
 	cpath, spath := oncall.ContactsPath(stateDir), oncall.SecretsPath(stateDir)
-	if _, err := os.Stat(cpath); errors.Is(err, fs.ErrNotExist) {
-		return errs, append(warns, fmt.Sprintf("alarms.escalation pages people by %s, and this machine has no contacts file (%s): "+
-			"they are checked where it exists; on the controller: naut alarms contacts check, and naut alarms contacts set <name> --email … --sms …",
-			strings.Join(kindsOf(needs), ", "), cpath))
+	if !onBox && absent(cpath) && absent(spath) {
+		return errs, append(warns, fmt.Sprintf("alarms.escalation: this machine has no contacts or secrets file in %s, so they were not checked; %s",
+			stateDir, where))
 	}
-	contacts, err := oncall.ReadContacts(cpath)
-	if err != nil {
-		return append(errs, fmt.Sprintf("alarms contacts: %v", err)), warns
-	}
-	for _, n := range needs {
-		if contacts.Contacts[n.who].Address(n.kind) == "" {
-			flag := "--" + n.kind
-			errs = append(errs, fmt.Sprintf("%s pages %s by %s, but %s has no %s address in %s: "+
-				"naut alarms contacts set %s %s <address>", n.where, n.who, n.kind, n.who, n.kind, cpath, n.who, flag))
+	if len(needs) > 0 {
+		contacts, err := oncall.ReadContacts(cpath) // absent: empty
+		if err != nil {
+			return append(errs, fmt.Sprintf("alarms contacts: %v", err)), warns
+		}
+		for _, n := range needs {
+			if contacts.Lookup(n.who).Address(n.kind) == "" {
+				errs = append(errs, fmt.Sprintf("%s pages %s by %s, but %s has no %s address in %s: "+
+					"naut alarms contacts set %s --%s <address>", n.where, n.who, n.kind, n.who, n.kind, cpath, n.who, n.kind))
+			}
 		}
 	}
-	s, err := oncall.ReadSecrets(spath)
-	if err != nil {
-		return append(errs, fmt.Sprintf("alarms secrets: %v", err)), warns
-	}
-	for _, k := range secrets {
-		if s.Secrets[k] == "" {
-			errs = append(errs, fmt.Sprintf("alarms.channels.%s needs the secret %s, which %s does not hold: "+
-				"naut alarms secrets set %s (reads it from stdin)", strings.Split(k, ".")[0], k, spath, k))
+	if len(secrets) > 0 {
+		s, err := oncall.ReadSecrets(spath) // absent: empty
+		if err != nil {
+			return append(errs, fmt.Sprintf("alarms secrets: %v", err)), warns
+		}
+		for _, k := range secrets {
+			if s.Secrets[k] == "" {
+				errs = append(errs, fmt.Sprintf("alarms.channels.%s needs the secret %s, which %s does not hold: "+
+					"naut alarms secrets set %s (reads it from stdin)", strings.Split(k, ".")[0], k, spath, k))
+			}
 		}
 	}
 	return errs, warns
 }
 
-func kindsOf(needs []contactNeed) []string {
-	set := map[string]bool{}
-	for _, n := range needs {
-		set[n.kind] = true
-	}
-	out := make([]string, 0, len(set))
-	for k := range set {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
+func absent(path string) bool {
+	_, err := os.Stat(path)
+	return errors.Is(err, fs.ErrNotExist)
 }

@@ -78,3 +78,16 @@ func TestProxied(t *testing.T) {
 		t.Fatalf("Proxied() = %+v, want sms via proxy.example.com:3128 without credentials", got)
 	}
 }
+
+// A webhook URL may hold its own token: a refusal names its host only.
+func TestValidateWebhookURLNotEchoed(t *testing.T) {
+	c := Config{Webhook: &Webhook{URL: "http://hooks.example.com/T0000/B0000/secret-path-token"}}
+	err := c.Validate()
+	if err == nil || strings.Contains(err.Error(), "secret-path-token") || !strings.Contains(err.Error(), "hooks.example.com") {
+		t.Fatalf("err = %v", err)
+	}
+	c = Config{SMS: &Provider{URL: "https://sms.example.com", Account: "AC1:x", From: "+15550100"}}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "account") {
+		t.Errorf("an account with ':' (splits basic auth): %v", err)
+	}
+}
