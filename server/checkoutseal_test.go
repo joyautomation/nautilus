@@ -201,6 +201,37 @@ func TestCheckoutSealedForAnUnsealedRunIs404(t *testing.T) {
 	}
 }
 
+func TestCheckoutReport(t *testing.T) {
+	srv, st, _ := ckSealServer(t, "two-person", realDevices)
+	id, eng := passAll(t, srv, false)
+	// a run not yet sealed prints as a draft
+	rec := call(t, srv, "GET", "/api/checkout/runs/"+id+"/report", "", eng)
+	if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Header().Get("Content-Type"), "text/html") || !strings.Contains(rec.Body.String(), "DRAFT, NOT SIGNED OFF") {
+		t.Fatalf("draft: %d %v %.200s", rec.Code, rec.Header(), rec.Body)
+	}
+	if csp := rec.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "default-src 'none'") || rec.Header().Get("X-Content-Type-Options") != "nosniff" {
+		t.Errorf("headers %v", rec.Header())
+	}
+	sup := ckAs(t, srv, "jsmith")
+	if r := call(t, srv, "POST", "/api/checkout/runs/"+id+"/seal", `{"note":"ok"}`, sup); r.Code != http.StatusCreated {
+		t.Fatalf("seal: %d %s", r.Code, r.Body)
+	}
+	rec = call(t, srv, "GET", "/api/checkout/runs/"+id+"/report", "", sup)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "SEALED: signed off by jsmith") {
+		t.Fatalf("sealed: %d %.300s", rec.Code, rec.Body)
+	}
+	if rec := call(t, srv, "GET", "/api/checkout/runs/none/report", "", sup); rec.Code != http.StatusNotFound {
+		t.Errorf("no such run: %d", rec.Code)
+	}
+	// a sealed record that no longer verifies is not printed as signed
+	p := st.SealedPath(id)
+	b, _ := os.ReadFile(p)
+	os.WriteFile(p, []byte(strings.Replace(string(b), `"signer": "jsmith"`, `"signer": "eve"`, 1)), 0o600)
+	if rec := call(t, srv, "GET", "/api/checkout/runs/"+id+"/report", "", sup); rec.Code != http.StatusInternalServerError || !strings.Contains(rec.Body.String(), "does not verify") {
+		t.Errorf("an altered record: %d %.200s", rec.Code, rec.Body)
+	}
+}
+
 // The rehearsal flag is the client's, so the controller works out for itself
 // when a run began whether real field devices were behind the points: a run
 // begun against virtual devices says so, and no later change makes it signable.

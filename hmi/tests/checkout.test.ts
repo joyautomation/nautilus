@@ -3,7 +3,7 @@
 // controller did not announce, a write whose answer never came is "unknown",
 // and the page offers only what the point and the person allow.
 import { describe, it, expect } from './harness.js';
-import { CheckoutClient, forceValue, canIn, offersForce, countdown, clock, forceBanner, resultLine, needsNote, type CheckoutForce, type CheckoutPoint } from '../src/lib/checkout.js';
+import { CheckoutClient, forceValue, canIn, offersForce, countdown, clock, forceBanner, resultLine, needsNote, runLinks, offersSeal, SEAL_NOTICE, type CheckoutForce, type CheckoutPoint } from '../src/lib/checkout.js';
 import type { Me } from '../src/lib/auth.js';
 
 type Sent = { url: string; method: string; body: any };
@@ -169,5 +169,52 @@ describe('CheckoutClient', () => {
 		const { sent, client } = fake([json({ ok: true })]);
 		await client.release('r1');
 		expect(sent[0]).toEqual({ url: '/api/checkout/runs/r1/force/release', method: 'POST', body: {} });
+	});
+});
+
+describe('sealing', () => {
+	it('posts the note to the run\'s seal route', async () => {
+		const { sent, client } = fake([json({ run: 'r1' }, 201)]);
+		const a = await client.seal('r1', 'walked it down');
+		expect(a.ok).toBe(true);
+		expect(sent[0]).toEqual({ url: '/api/checkout/runs/r1/seal', method: 'POST', body: { note: 'walked it down' } });
+	});
+	it('carries the controller\'s reason for a refusal and does not call it unknown', async () => {
+		const { client } = fake([json({ error: 'the sheet changed since this run began' }, 409)]);
+		const a = await client.seal('r1');
+		if (a.ok) throw new Error('should fail');
+		expect(a.outcome).toBe('refused');
+		expect(a.message.includes('sheet changed')).toBe(true);
+	});
+	it('a seal whose answer never came may have been recorded', async () => {
+		const { client } = fake([new Error('network')]);
+		const a = await client.seal('r1');
+		if (a.ok) throw new Error('should fail');
+		expect(a.outcome).toBe('unknown');
+	});
+	it('offers Seal to a signer on an open live run only', () => {
+		const sup = { auth: true, secure: true, principal: 'user:b', roles: [], permissions: { '*': ['signoff'] } } as any;
+		const area = { ...sup, permissions: { RCV: ['signoff'] } } as any;
+		const open = { state: 'open' as const };
+		expect(offersSeal(sup, open)).toBe(true);
+		expect(offersSeal(sup, { state: 'open', rehearsal: true })).toBe(false);
+		expect(offersSeal(sup, { state: 'open', unreal: 'device rio1 is at a loopback address' })).toBe(false);
+		expect(offersSeal(sup, { state: 'sealed' })).toBe(false);
+		expect(offersSeal(sup, { state: 'abandoned' })).toBe(false);
+		expect(offersSeal(area, open)).toBe(false);
+		expect(offersSeal(null, open)).toBe(false);
+		expect(offersSeal(sup, null)).toBe(false);
+	});
+	it('links a run\'s files, the sealed record only for a sealed run', () => {
+		const open = runLinks({ id: 'a b', state: 'open' }).map((l) => l.label);
+		expect(open.join()).toBe('Report,CSV,JSON');
+		const sealed = runLinks({ id: 'r1', state: 'sealed' });
+		expect(sealed[3]).toEqual({ label: 'Sealed record', href: '/api/checkout/runs/r1/sealed' });
+		expect(runLinks({ id: 'a b', state: 'open' })[0].href).toBe('/api/checkout/runs/a%20b/report');
+	});
+	it('says what a seal is, and never claims a legal standing', () => {
+		expect(SEAL_NOTICE.includes('tamper-evident')).toBe(true);
+		expect(SEAL_NOTICE.includes('not an electronic signature in a legal or regulatory sense')).toBe(true);
+		for (const bad of ['legally binding', 'compliant', '21 CFR', 'eIDAS']) expect(SEAL_NOTICE.includes(bad)).toBe(false);
 	});
 });

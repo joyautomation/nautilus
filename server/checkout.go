@@ -84,6 +84,7 @@ func (co *CheckoutOptions) mount(s *Server, mux *http.ServeMux) {
 	mux.Handle("POST /api/checkout/runs/{id}/force/release", s.audited("checkout.release", a.checkoutTarget("checkout.release"), a.checkoutForceRelease))
 	mux.Handle("POST /api/checkout/runs/{id}/seal", s.audited("checkout.seal", a.checkoutTarget("checkout.seal"), a.checkoutSeal))
 	mux.HandleFunc("GET /api/checkout/runs/{id}/sealed", a.handleCheckoutSealed)
+	mux.HandleFunc("GET /api/checkout/runs/{id}/report", a.handleCheckoutReport)
 	mux.Handle("POST /api/checkout/runs/{id}/abandon", s.audited("checkout.abandon", a.checkoutTarget("checkout.abandon"), a.checkoutAbandon))
 }
 
