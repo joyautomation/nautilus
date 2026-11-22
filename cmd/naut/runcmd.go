@@ -600,7 +600,7 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	// A pair refuses it (the server says so) until the results go through
 	// the log.
 	if sh := proj.CheckoutSheet(); sh != nil {
-		co := &server.CheckoutOptions{Sheet: sh, Signoff: proj.Checkout.SignoffRule()}
+		co := &server.CheckoutOptions{Sheet: sh, Signoff: proj.Checkout.SignoffRule(), Evidence: checkoutEvidence(fsys, manifest, dir)}
 		if pair == nil && proj.Auth != nil && (proj.Auth.HasUsers() || proj.Auth.OIDC()) {
 			if st, err := openCheckout(proj, dir, os.Getenv); err != nil {
 				fmt.Fprintf(os.Stderr, "naut run: the I/O checkout is off: %v\n", err)

@@ -40,6 +40,12 @@ type CheckoutOptions struct {
 	Store   *checkout.Store
 	Sheet   *checkout.Sheet
 	Signoff string
+	// Evidence is the controller's own account of what it is connected to,
+	// for a seal: it returns what to record, and a reason to refuse when the
+	// controller cannot tell the points are real field I/O (virtual devices, a
+	// loopback, no field driver). Nil: a seal is refused, since nothing says
+	// the devices are real.
+	Evidence func(*checkout.Sheet) (checkout.Evidence, string)
 	// OpenErr says why Store is nil when it could not be opened (a damaged
 	// file), so the answer names it.
 	OpenErr string
@@ -76,13 +82,15 @@ func (co *CheckoutOptions) mount(s *Server, mux *http.ServeMux) {
 	mux.Handle("POST /api/checkout/runs/{id}/results", s.audited("checkout.result", a.checkoutTarget("checkout.result"), a.checkoutResult))
 	mux.Handle("POST /api/checkout/runs/{id}/force", s.audited("checkout.force", a.checkoutTarget("checkout.force"), a.checkoutForceStart))
 	mux.Handle("POST /api/checkout/runs/{id}/force/release", s.audited("checkout.release", a.checkoutTarget("checkout.release"), a.checkoutForceRelease))
+	mux.Handle("POST /api/checkout/runs/{id}/seal", s.audited("checkout.seal", a.checkoutTarget("checkout.seal"), a.checkoutSeal))
+	mux.HandleFunc("GET /api/checkout/runs/{id}/sealed", a.handleCheckoutSealed)
 	mux.Handle("POST /api/checkout/runs/{id}/abandon", s.audited("checkout.abandon", a.checkoutTarget("checkout.abandon"), a.checkoutAbandon))
 }
 
 func init() {
 	// what a refused checkout write tried to change, by parsing it alone (the
 	// core's refusalTargets, audit.go)
-	for _, act := range []string{"checkout.begin", "checkout.result", "checkout.abandon", "checkout.force", "checkout.release"} {
+	for _, act := range []string{"checkout.begin", "checkout.result", "checkout.abandon", "checkout.force", "checkout.release", "checkout.seal"} {
 		refusalTargets[act] = checkoutRefusal(act)
 	}
 }
@@ -105,11 +113,14 @@ func (a *checkoutAPI) checkoutOff(w http.ResponseWriter) bool {
 }
 
 type checkoutView struct {
-	Title   string           `json:"title,omitempty"`
-	Hash    string           `json:"hash"`
-	Signoff string           `json:"signoff"`
-	Points  []checkout.Point `json:"points"`
-	Run     *checkout.Run    `json:"run,omitempty"` // SheetChanged says the open run was begun against another sheet: it
+	Title   string `json:"title,omitempty"`
+	Hash    string `json:"hash"`
+	Signoff string `json:"signoff"`
+	// KeyFingerprint names the key that signs a sealed run: written down from
+	// here ahead of time, it is what a sealed record is compared with.
+	KeyFingerprint string           `json:"keyFingerprint,omitempty"`
+	Points         []checkout.Point `json:"points"`
+	Run            *checkout.Run    `json:"run,omitempty"` // SheetChanged says the open run was begun against another sheet: it
 	// takes no more results (abandon it and begin again).
 	SheetChanged bool `json:"sheetChanged,omitempty"`
 
@@ -120,7 +131,7 @@ func (a *checkoutAPI) handleCheckout(w http.ResponseWriter, r *http.Request) {
 	if a.checkoutOff(w) {
 		return
 	}
-	v := checkoutView{Title: a.co.Sheet.Title, Hash: a.co.Sheet.Hash(), Signoff: a.co.Signoff,
+	v := checkoutView{Title: a.co.Sheet.Title, Hash: a.co.Sheet.Hash(), Signoff: a.co.Signoff, KeyFingerprint: a.co.Store.KeyFingerprint(),
 		Points: a.co.Sheet.Points, Runs: a.co.Store.List()}
 	if run, ok := a.co.Store.Current(); ok {
 		v.Run = &run
@@ -335,6 +346,12 @@ func (a *checkoutAPI) checkoutAbandon(w http.ResponseWriter, r *http.Request) {
 // parses, the permission is held for the point's tag (scopeBy "point") or the
 // whole controller, and then do runs and answers.
 func (a *checkoutAPI) checkoutWrite(w http.ResponseWriter, r *http.Request, scopeBy string, do func(auth.Principal, checkoutRequest) (any, int, error)) {
+	a.checkoutWriteAs(w, r, PermCheckout, scopeBy, do)
+}
+
+// checkoutWriteAs is checkoutWrite for a write that needs another permission
+// than checkout (a seal needs signoff).
+func (a *checkoutAPI) checkoutWriteAs(w http.ResponseWriter, r *http.Request, perm, scopeBy string, do func(auth.Principal, checkoutRequest) (any, int, error)) {
 	if a.checkoutOff(w) {
 		return
 	}
@@ -369,7 +386,7 @@ func (a *checkoutAPI) checkoutWrite(w http.ResponseWriter, r *http.Request, scop
 	}
 	// The area first: a principal fenced to another area is told so (403)
 	// whoever they are; only then is a person asked for.
-	if code, msg := a.s.authorize(r, PermCheckout, scope); code != 0 {
+	if code, msg := a.s.authorize(r, perm, scope); code != 0 {
 		writeJSON(w, code, map[string]string{"error": msg})
 		return
 	}
@@ -384,7 +401,7 @@ func (a *checkoutAPI) checkoutWrite(w http.ResponseWriter, r *http.Request, scop
 		writeJSON(w, status, out)
 	case errors.Is(err, checkout.ErrNoRun):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such run"})
-	case errors.Is(err, checkout.ErrNotOpen), errors.Is(err, checkout.ErrRunOpen), errors.Is(err, errSheetChanged), errors.Is(err, checkout.ErrForceActive), errors.Is(err, checkout.ErrNoForce):
+	case errors.Is(err, checkout.ErrNotOpen), errors.Is(err, checkout.ErrRunOpen), errors.Is(err, checkout.ErrSealRefused), errors.Is(err, errSheetChanged), errors.Is(err, checkout.ErrForceActive), errors.Is(err, checkout.ErrNoForce):
 		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 	case status == http.StatusConflict:
 		writeJSON(w, status, map[string]string{"error": err.Error()})
@@ -429,6 +446,8 @@ func (a *checkoutAPI) checkoutTarget(action string) targetFunc {
 			}
 		case "checkout.abandon":
 			t.after = map[string]any{"reason": req.Reason}
+		case "checkout.seal":
+			t.after = map[string]any{"note": req.Note}
 		case "checkout.release":
 			a.co.ck.mu.Lock()
 			if f := a.co.ck.force; f != nil {

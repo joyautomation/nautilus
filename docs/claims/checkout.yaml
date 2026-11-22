@@ -164,3 +164,43 @@ claims:
       - go ./checkout TestFileStemIsBuiltFromTheIDAlone
       - go ./checkout TestExportKeepsResultsForPointsTheSheetNoLongerHas
       - go ./checkout TestExportIsDeterministic
+
+  - id: CHK-011
+    claim: >-
+      A person with the signoff permission seals a run, asking for a fresh
+      password, and the controller decides every condition under the store's
+      lock: it refuses a rehearsal run, a controller that cannot say its devices
+      are real (no field driver, loopback or virtual endpoints, whatever the
+      client's flag says), a sheet that changed since the run began, a standing
+      checkout force, a point with no result or a failing latest result, and (by
+      default) a signer who recorded results; a refused seal writes nothing; a
+      sealed run takes no more results; single-person sign-off is said in the
+      record.
+    source: "#signing-off"
+    tests:
+      - go ./checkout TestSealSignsAndVerifies
+      - go ./checkout TestSealRefusals
+      - go ./checkout TestSealRefusesARehearsal
+      - go ./checkout TestSealKeepsTheFailThatAPassSuperseded
+      - go ./checkout TestSingleModeSaysSoInTheRecord
+      - go ./checkout TestAFailedSealLeavesNothingSealed
+      - go ./server TestCheckoutSealSignsAndTheRecordVerifies
+      - go ./server TestCheckoutSealRefusals
+      - go ./server TestCheckoutSealSinglePersonSaysSo
+      - go ./cmd/naut TestSealEvidenceRefusesWhatIsNotRealFieldIO
+      - go ./cmd/naut TestClassifyEndpoints
+
+  - id: CHK-012
+    claim: >-
+      A sealed record is tamper-evident: it carries the export, a payload and the
+      controller's Ed25519 signature, and `naut checkout verify` fails on an
+      edited result, payload, signature or key, and with the controller's
+      results file on an edited or removed line, a removed seal entry, or another
+      controller's file; it says plainly that this is not an electronic
+      signature in a legal or regulatory sense and that the person's identity is
+      the controller's sign-in.
+    source: "#signing-off"
+    tests:
+      - go ./checkout TestVerifyCatchesTampering
+      - go ./checkout TestTheSigningKey
+      - go ./cmd/naut TestCheckoutVerifyCommand

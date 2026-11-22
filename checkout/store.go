@@ -29,6 +29,7 @@ const (
 const (
 	StateOpen      = "open"
 	StateAbandoned = "abandoned"
+	StateSealed    = "sealed"
 )
 
 // Errors the store answers with.
@@ -61,6 +62,7 @@ const (
 	kindAbandon  = "abandon"
 	kindForce    = "force"    // a checkout force began on a point
 	kindForceEnd = "forceend" // and ended
+	kindSeal     = "seal"     // the run was signed off (seal.go)
 )
 
 // entry is one line of the file.
@@ -87,7 +89,11 @@ type entry struct {
 	Forced  any `json:"forced,omitempty"`
 	Seconds int `json:"seconds,omitempty"`
 
-	// kinds result and abandon
+	// kind seal: the SHA-256 of the signed payload, and the signature (seal.go)
+	SealSha string `json:"sealsha,omitempty"`
+	Sig     string `json:"sig,omitempty"`
+
+	// kinds result, abandon and seal
 	Note   string `json:"note,omitempty"`
 	Reason string `json:"reason,omitempty"`
 
@@ -149,9 +155,14 @@ type Run struct {
 	By        string `json:"by"`
 	Principal string `json:"principal,omitempty"`
 	// Reason is why an abandoned run was abandoned, by whom and when.
-	Reason      string `json:"reason,omitempty"`
-	EndedAt     int64  `json:"endedAt,omitempty"`
-	EndedBy     string `json:"endedBy,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+	EndedAt int64  `json:"endedAt,omitempty"`
+	EndedBy string `json:"endedBy,omitempty"`
+	// SealedAt, SealedBy and SealSeq say a sealed run was signed off: when,
+	// by whom, and the sequence number of the seal entry.
+	SealedAt    int64  `json:"sealedAt,omitempty"`
+	SealedBy    string `json:"sealedBy,omitempty"`
+	SealSeq     int64  `json:"sealSeq,omitempty"`
 	Results     int    `json:"results"`
 	lastResults map[string][]Result
 	// forces is each point's checkout forces in the run, oldest first.
@@ -182,6 +193,9 @@ type Store struct {
 	prev string
 	runs map[string]*Run
 	ord  []string
+
+	// key signs sealed runs (seal.go): created beside the file at Open.
+	key *signKey
 }
 
 // appendFile is the file as the store uses it (a test's can fail).
@@ -251,6 +265,10 @@ func Open(path string, now func() time.Time) (*Store, error) {
 	}
 	s.off = st.Size()
 	syncDir(filepath.Dir(path))
+	if s.key, err = loadOrCreateKey(filepath.Join(filepath.Dir(path), KeyFile)); err != nil {
+		f.Close()
+		return nil, fmt.Errorf("checkout: the signing key: %w", err)
+	}
 	return s, nil
 }
 
@@ -348,6 +366,18 @@ func (s *Store) apply(e entry) error {
 			return errors.New("an abandon while a force stands")
 		}
 		r.State, r.Reason, r.EndedAt, r.EndedBy = StateAbandoned, e.Reason, e.At, e.By
+	case kindSeal:
+		r := s.runs[e.Run]
+		if r == nil || r.State != StateOpen {
+			return errors.New("a seal of a run that is not open")
+		}
+		if r.standing != nil {
+			return errors.New("a seal while a force stands")
+		}
+		if r.Rehearsal {
+			return errors.New("a seal of a rehearsal run")
+		}
+		r.State, r.SealedAt, r.SealedBy, r.SealSeq = StateSealed, e.At, e.By, e.Seq
 	default:
 		return fmt.Errorf("unknown entry kind %q", e.Kind)
 	}
@@ -636,6 +666,10 @@ func (s *Store) History(run, point string) []Result {
 func (s *Store) Results(run string) []Result {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.resultsLocked(run)
+}
+
+func (s *Store) resultsLocked(run string) []Result {
 	var out []Result
 	if r := s.runs[run]; r != nil {
 		for _, rs := range r.lastResults {

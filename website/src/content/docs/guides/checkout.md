@@ -122,7 +122,7 @@ and the controller's own expiry are audit entries.
 | Permission | Held by | For |
 |---|---|---|
 | `checkout` | `engineer` | recording results, per area; beginning and abandoning a run needs it for the whole controller. Forcing an output in a checkout needs `force` too. |
-| `signoff` | `supervisor` | sealing a run (a later step): a fresh password, and by default someone who recorded none of its results (`signoff: two-person`). `signoff: single` lets the recorder sign; `naut check` warns and the sealed record says so. |
+| `signoff` | `supervisor` | sealing a run: a fresh password, and by default someone who recorded none of its results (`signoff: two-person`). `signoff: single` lets the recorder sign; `naut check` warns and the sealed record says so. |
 
 Every begin, result and abandon is an audit entry, accepted or refused.
 
@@ -164,8 +164,70 @@ curl -H "Authorization: Bearer $TOKEN" -o run.csv \
 
 The Checkout page has the same two links for the open run.
 
+## Signing off
+
+A person with the `signoff` permission (the `supervisor` role) seals a run:
+
+```
+POST /api/checkout/runs/{id}/seal     {note?}: sign the run off
+GET  /api/checkout/runs/{id}/sealed   the sealed record, as a file
+```
+
+Sealing asks for a fresh password, as any elevated action does, and the
+controller decides every condition itself, under the lock that takes results.
+It refuses when
+
+- the run is a **rehearsal**, or the controller cannot say its devices are
+  real: it has no field driver configured (it runs the in-memory loopback),
+  every endpoint it dials is a loopback or one of the project's own virtual
+  devices, or a point is on a device at such an address. A run's rehearsal flag
+  is the client's, so the controller derives this itself and records what it saw
+  (the drivers and device endpoints) in the seal;
+- the **sheet changed** since the run began (`checkout.yaml` was edited and
+  deployed): a seal signs the results against one sheet, so abandon the run and
+  begin again;
+- a **checkout force** is standing or being started or ended;
+- a point has **no result yet**, or its latest result is a **fail** (a later
+  pass supersedes a fail; both stay in the file and in the record);
+- under the default `signoff: two-person`, the signer **recorded results** in
+  the run. `signoff: single` lets the recorder sign; `naut check` warns, and the
+  sealed record says "single-person sign-off".
+
+A sealed run takes no more results, forces or abandon; a new run may begin.
+
+The sealed record is a file: the run's export (every result, with `sealed:
+true`), a payload (who signed off and under which rule, who recorded, the
+signer's note, the controller's evidence about its devices, where the seal sits
+in the results file, and the hash of the export) and the controller's
+signature over the payload, with the public key. The key is an Ed25519 key the
+controller makes in its state directory (`checkout.key`, mode 0600) when the
+checkout first opens; `GET /api/checkout` shows its fingerprint, so write it
+down from the controller ahead of time.
+
+```sh
+naut checkout verify checkout-<run id>-sealed.json \
+  --chain /var/lib/nautilus/checkout.jsonl \
+  --fingerprint <the key's fingerprint>
+```
+
+`verify` checks the signature, that the payload names the key the record
+carries, and that the export is the one the payload hashes. With `--chain` it
+also checks the results file's own chain, that the seal is in it where the
+record says, and that the export holds exactly the results the file holds for
+the run. With `--fingerprint` it checks the key is the one you recorded.
+
+**What this is, and is not.** It is a tamper-evident record signed by the
+controller: the signature proves the record came from that controller's key and
+was not altered since. The people it names were identified by the controller's
+sign-in (a user name and password, and a fresh password to sign off), not by a
+personal certificate. It is **not** an electronic signature in a legal or
+regulatory sense, and nothing here claims it satisfies one. Anyone who holds the
+controller's state directory (the results file and the key) can forge both, so
+keep a copy of the sealed record and the results file somewhere else when a run
+is signed off: a copy made elsewhere is what makes an edit show.
+
 ## Not yet
 
-- Sealing a run (the signed JSON), the printable report and `naut checkout verify`.
+- The printable report and a Seal button on the Checkout page (sealing is the API and the command line for now).
 - A redundant pair: its controllers answer that the checkout is not available
   yet, rather than keep results on one box.
