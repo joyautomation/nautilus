@@ -2045,9 +2045,11 @@ func cachedServiceLevel(f func() byte, ttl time.Duration, now func() time.Time) 
 }
 
 // floatingIPTick is how often the holder looks at the gate. The gate closes
-// the fence margin (d_net + m_send, 70 ms at the default lease) before the
-// lease ends, and the other controller cannot lead before that, so a few
-// ms is well inside it.
+// the fence margin (d_net + m_send, 70 ms at the default lease; checkFence
+// allows as little as a couple of ms) before the lease ends and the other
+// controller cannot lead before that; the address goes within a tick of the
+// gate (plus a drop in flight), and anything the kernel keeps after a kill
+// is client routing only, because field writes are fenced by the gate.
 const floatingIPTick = 5 * time.Millisecond
 
 // startFloatingIP holds redundancy.floating-ip on this controller while the
@@ -2071,7 +2073,14 @@ func startFloatingIP(proj *project.Project, g interface{ IsLeader() bool }, ops 
 	return func() {
 		cancel()
 		<-done
-		if err := h.Drop(); err != nil {
+		var err error
+		for i := 0; i < 3; i++ {
+			if err = h.Drop(); err == nil {
+				break
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		if err != nil {
 			slog.Error("redundancy: the floating IP could not be dropped before the lease was released; remove it by hand (ip addr del) or let the unit's ExecStopPost do it", "err", err)
 		} else {
 			slog.Info("redundancy: floating IP dropped", "address", fc.Address)

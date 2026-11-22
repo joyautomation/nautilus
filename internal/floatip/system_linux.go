@@ -14,8 +14,9 @@ import (
 )
 
 // System is the kernel's side on Linux: rtnetlink for the address and a raw
-// packet socket for the gratuitous ARP. Both need CAP_NET_ADMIN / CAP_NET_RAW
-// (naut deploy's unit grants them when redundancy.floating-ip is set).
+// packet socket for the gratuitous ARP. Both need CAP_NET_ADMIN / CAP_NET_RAW,
+// which the stock unit does not grant: the redundancy guide gives the drop-in
+// that adds them (and the ExecStopPost that removes the address).
 type System struct{}
 
 func (System) Add(c Config) error {

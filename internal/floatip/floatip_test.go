@@ -13,6 +13,10 @@ type fakeOps struct {
 	mu     sync.Mutex
 	calls  []string
 	addErr error
+	// applyErr: Add puts the address on and still reports an error (a lost reply)
+	applyErr error
+	// onArp runs on each announcement
+	onArp  func()
 	delErr error
 	on     bool
 }
@@ -24,6 +28,10 @@ func (f *fakeOps) Add(Config) error {
 	f.rec("add")
 	if f.addErr != nil {
 		return f.addErr
+	}
+	if f.applyErr != nil {
+		f.on = true
+		return f.applyErr
 	}
 	f.on = true
 	return nil
@@ -38,9 +46,18 @@ func (f *fakeOps) Del(Config) error {
 	f.on = false
 	return nil
 }
-func (f *fakeOps) Announce(Config) error { f.mu.Lock(); defer f.mu.Unlock(); f.rec("arp"); return nil }
-func (f *fakeOps) log() []string         { f.mu.Lock(); defer f.mu.Unlock(); return slices.Clone(f.calls) }
-func (f *fakeOps) present() bool         { f.mu.Lock(); defer f.mu.Unlock(); return f.on }
+func (f *fakeOps) Announce(Config) error {
+	f.mu.Lock()
+	f.rec("arp")
+	fn := f.onArp
+	f.mu.Unlock()
+	if fn != nil {
+		fn()
+	}
+	return nil
+}
+func (f *fakeOps) log() []string { f.mu.Lock(); defer f.mu.Unlock(); return slices.Clone(f.calls) }
+func (f *fakeOps) present() bool { f.mu.Lock(); defer f.mu.Unlock(); return f.on }
 
 func cfg(t *testing.T) Config {
 	c, err := Parse("10.0.0.50/24", "eth0")
@@ -51,7 +68,8 @@ func cfg(t *testing.T) Config {
 }
 
 func TestParse(t *testing.T) {
-	for _, bad := range [][2]string{{"10.0.0.50", "eth0"}, {"fe80::1/64", "eth0"}, {"nonsense", "eth0"}, {"10.0.0.50/24", ""}, {"10.0.0.50/24", "an-interface-name-too-long"}} {
+	for _, bad := range [][2]string{{"10.0.0.50", "eth0"}, {"fe80::1/64", "eth0"}, {"nonsense", "eth0"}, {"10.0.0.50/24", ""}, {"10.0.0.50/24", "an-interface-name-too-long"},
+		{"0.0.0.0/0", "eth0"}, {"127.0.0.1/8", "eth0"}, {"224.0.0.1/24", "eth0"}, {"10.0.0.0/24", "eth0"}, {"10.0.0.255/24", "eth0"}, {"169.254.1.1/16", "eth0"}} {
 		if _, err := Parse(bad[0], bad[1]); err == nil {
 			t.Errorf("Parse(%q, %q) accepted", bad[0], bad[1])
 		}
@@ -143,4 +161,102 @@ func waitUntil(t *testing.T, what string, f func() bool) {
 		time.Sleep(2 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s", what)
+}
+
+func fast(h *Holder) *Holder {
+	h.Backoff, h.Refresh, h.Reconcile = 4*time.Millisecond, 20*time.Millisecond, 10*time.Millisecond
+	return h
+}
+
+// An add whose reply was lost may still have put the address on: it is not
+// "held", yet a shut gate must take it off (the leak a stalled kernel reply
+// would leave on a live process).
+func TestAnAddWhoseOutcomeIsUnknownIsUndoneWhenTheGateShuts(t *testing.T) {
+	ops := &fakeOps{applyErr: errors.New("no acknowledgement")}
+	h := fast(New(cfg(t), ops))
+	var mu sync.Mutex
+	open := true
+	gate := func() bool { mu.Lock(); defer mu.Unlock(); return open }
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { h.Watch(ctx, gate, time.Millisecond); close(done) }()
+	defer func() { cancel(); <-done }()
+	waitUntil(t, "the address (applied despite the error)", ops.present)
+	if h.Held() {
+		t.Fatal("an add that reported an error is held")
+	}
+	mu.Lock()
+	open = false
+	mu.Unlock()
+	waitUntil(t, "the unknown-outcome address to be removed", func() bool { return !ops.present() })
+}
+
+// A gate that shuts while Hold is announcing (a stall between the add and
+// the announcements) takes the address back before it announces: a fenced
+// controller must not announce after the new leader.
+func TestTheGateIsLookedAtBetweenTheAddAndEachAnnouncement(t *testing.T) {
+	ops := &fakeOps{}
+	h := New(cfg(t), ops)
+	var mu sync.Mutex
+	open := true
+	h.gate = func() bool { mu.Lock(); defer mu.Unlock(); return open }
+	ops.onArp = func() { mu.Lock(); open = false; mu.Unlock() } // shuts after the first
+	if err := h.Hold(); err != nil {
+		t.Fatal(err)
+	}
+	if got := ops.log(); !slices.Equal(got, []string{"add", "arp", "del"}) {
+		t.Errorf("calls %v, want add, one announcement, then del", got)
+	}
+	if h.Held() || ops.present() {
+		t.Errorf("held %v present %v after the gate shut mid-announce", h.Held(), ops.present())
+	}
+}
+
+// A shut gate keeps removing the address, even when nothing is believed held.
+func TestAShutGateKeepsRemovingTheAddress(t *testing.T) {
+	ops := &fakeOps{}
+	h := fast(New(cfg(t), ops))
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { h.Watch(ctx, func() bool { return false }, time.Millisecond); close(done) }()
+	defer func() { cancel(); <-done }()
+	waitUntil(t, "the startup clear", func() bool { return len(ops.log()) >= 1 })
+	ops.mu.Lock()
+	ops.on = true // something put it back behind the holder's back
+	ops.mu.Unlock()
+	waitUntil(t, "the periodic reconcile to remove it", func() bool { return !ops.present() })
+}
+
+// An open gate puts the address back if something removed it, and announces
+// again.
+func TestAnOpenGateRestoresAndReannounces(t *testing.T) {
+	ops := &fakeOps{}
+	h := fast(New(cfg(t), ops))
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { h.Watch(ctx, func() bool { return true }, time.Millisecond); close(done) }()
+	defer func() { cancel(); <-done }()
+	waitUntil(t, "the address", ops.present)
+	ops.mu.Lock()
+	ops.on = false // removed from under the leader
+	n := len(ops.calls)
+	ops.mu.Unlock()
+	waitUntil(t, "the refresh to put it back", ops.present)
+	waitUntil(t, "a fresh announcement", func() bool { return len(ops.log()) > n+1 && slices.Contains(ops.log()[n:], "arp") })
+}
+
+// A failing add backs off instead of retrying every tick.
+func TestAFailingAddBacksOff(t *testing.T) {
+	ops := &fakeOps{addErr: errors.New("operation not permitted")}
+	h := New(cfg(t), ops)
+	h.Backoff = 200 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { h.Watch(ctx, func() bool { return true }, time.Millisecond); close(done) }()
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	<-done
+	if n := len(ops.log()); n > 2 {
+		t.Errorf("%d add attempts in 100 ms with a 200 ms backoff", n)
+	}
 }

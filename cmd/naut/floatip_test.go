@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/joyautomation/nautilus/internal/floatip"
+	"github.com/joyautomation/nautilus/internal/project"
 )
 
 // countingOps is a kernel that only counts who holds the address.
@@ -83,5 +84,74 @@ func TestFloatingIPFollowsTheGateOfARealPair(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 	if spareOps.on.Load() || spareHold.Held() {
 		t.Error("a spare holds the floating address")
+	}
+}
+
+// recordingOps is a kernel that records the order of what it was asked.
+type recordingOps struct {
+	mu    sync.Mutex
+	calls []string
+	on    bool
+}
+
+func (o *recordingOps) rec(s string, on bool) {
+	o.mu.Lock()
+	o.calls = append(o.calls, s)
+	o.on = on
+	o.mu.Unlock()
+}
+func (o *recordingOps) Add(floatip.Config) error { o.rec("add", true); return nil }
+func (o *recordingOps) Del(floatip.Config) error { o.rec("del", false); return nil }
+func (o *recordingOps) Announce(floatip.Config) error {
+	o.mu.Lock()
+	o.calls = append(o.calls, "arp")
+	o.mu.Unlock()
+	return nil
+}
+func (o *recordingOps) state() (bool, []string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.on, append([]string(nil), o.calls...)
+}
+
+type gateFunc func() bool
+
+func (g gateFunc) IsLeader() bool { return g() }
+
+// startFloatingIP's stop ends the watcher and then drops the address: a
+// leader that is stopping in order does not hand the lease over still holding
+// it, and no tick can add it again behind the drop. Without the key, or
+// outside a pair, nothing starts.
+func TestStartFloatingIPStopDropsTheAddress(t *testing.T) {
+	proj := &project.Project{Redundancy: &project.RedundancyConfig{
+		Peers:      map[string]string{"a": "127.0.0.1:1", "b": "127.0.0.1:2"},
+		FloatingIP: &project.FloatingIPConfig{Address: "10.0.0.50/24", Interface: "eth0"},
+	}}
+	ops := &recordingOps{}
+	stop := startFloatingIP(proj, gateFunc(func() bool { return true }), ops)
+	if stop == nil {
+		t.Fatal("no floating IP started")
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if on, _ := ops.state(); on {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the leader never took the address")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	stop()
+	on, calls := ops.state()
+	if on || calls[len(calls)-1] != "del" {
+		t.Errorf("after stop: present %v, calls %v: the address must be dropped last", on, calls)
+	}
+	time.Sleep(30 * time.Millisecond) // no tick may add it back behind the drop
+	if on, _ := ops.state(); on {
+		t.Error("the address came back after stop")
+	}
+	if startFloatingIP(&project.Project{}, gateFunc(func() bool { return true }), ops) != nil {
+		t.Error("a floating IP started without redundancy")
 	}
 }

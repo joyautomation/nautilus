@@ -301,21 +301,31 @@ never computes.
   ```
 
   The leader adds the address after its write gate opens, and announces it with three
-  gratuitous ARPs. It drops the address within a few milliseconds of the gate closing,
-  and on an orderly stop before it hands the lease over. A spare or a copy held by a
-  duplicate mark never has it, because its gate stays closed. After a kill, hang or
-  pause the kernel keeps the address on the old box until the unit's `ExecStopPost`
-  (or the watchdog's kill) removes it, so for that time two boxes may answer ARP for
-  it. That is client routing only: field writes are fenced by the gate, and the fenced
-  box's API refuses writes. IPv4 only. The process needs `CAP_NET_ADMIN` and
+  gratuitous ARPs, looking at the gate again before each one. It announces again every
+  few seconds while it leads, and puts the address back if something removed it. It
+  drops the address within a few milliseconds of the gate closing (a drop in flight
+  can add up to the kernel's own timeout), keeps removing it every second while the
+  gate is shut, and drops it on an orderly stop before it hands the lease over. A
+  spare or a copy held by a duplicate mark never has it, because its gate stays
+  closed. After a kill, hang or pause the kernel keeps the address on the old box.
+  Only the unit's `ExecStopPost` (below, required) or the restarted process, which
+  clears it at start, removes it, so for that time two boxes may answer ARP for it
+  and a client may learn the old box's address. That is client routing only: field
+  writes are fenced by the gate, and the fenced box's API refuses writes. IPv4 only,
+  a host address of the interface's network (not the network or broadcast address,
+  and not an address the box itself uses). After you change the address or its
+  prefix length, or remove `floating-ip`, remove the old address from the box by
+  hand. The browser's certificate must cover the floating address if you use
+  HTTPS. The process needs `CAP_NET_ADMIN` and
   `CAP_NET_RAW`; with systemd, a drop-in adds them and removes the address when the
-  process is gone:
+  process is gone (the `-` keeps an orderly stop, which has already dropped the
+  address, from marking the unit failed; check the path of `ip` on your distribution):
 
   ```ini
   [Service]
   AmbientCapabilities=CAP_SYS_NICE CAP_NET_BIND_SERVICE CAP_NET_ADMIN CAP_NET_RAW
   CapabilityBoundingSet=CAP_SYS_NICE CAP_NET_BIND_SERVICE CAP_NET_ADMIN CAP_NET_RAW
-  ExecStopPost=+/usr/sbin/ip addr del 10.0.0.50/24 dev eth0
+  ExecStopPost=-+/usr/sbin/ip addr del 10.0.0.50/24 dev eth0
   ```
 
   keepalived is the alternative if the site already runs it. A PROFINET device under
@@ -1082,8 +1092,9 @@ controller sees a witness from before this release as an unreachable
 copy, which is safe, but leaves the log on the two controllers until the
 witness is upgraded.
 
-**Sign-in is not on the log.** Sessions are kept by the leader, so a
-takeover signs everyone out, as before.
+**Sign-ins go through the log too** (see browser sign-ins across a
+takeover above): an operator stays signed in across a takeover on one
+address. Elevation is not carried.
 
 Alarm acknowledgements and shelves go through the same log. When the
 other controller takes over and catches the log up (from the old leader,
