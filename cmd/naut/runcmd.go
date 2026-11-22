@@ -600,7 +600,7 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	// A pair refuses it (the server says so) until the results go through
 	// the log.
 	if sh := proj.CheckoutSheet(); sh != nil {
-		co := &server.CheckoutOptions{Sheet: sh, Signoff: proj.Checkout.SignoffRule(), Evidence: checkoutEvidence(fsys, manifest, dir)}
+		co := &server.CheckoutOptions{Sheet: sh, Signoff: proj.Checkout.SignoffRule(), Evidence: checkoutEvidence(fsys, manifest, dir, proj.Checkout.Attested())}
 		if pair == nil && proj.Auth != nil && (proj.Auth.HasUsers() || proj.Auth.OIDC()) {
 			if st, err := openCheckout(proj, dir, os.Getenv); err != nil {
 				fmt.Fprintf(os.Stderr, "naut run: the I/O checkout is off: %v\n", err)
@@ -608,6 +608,9 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 			} else {
 				co.Store = st
 				defer st.Close()
+				if st.KeyReplaced() {
+					fmt.Fprintln(os.Stderr, "naut run: checkout: the signing key was made new although sealed runs exist (checkout.key was deleted or lost): records sealed before still verify against their own key, but a key fingerprint written down earlier is no longer the controller's")
+				}
 				// a force does not survive the controller: one the file still
 				// says stands belonged to the process before
 				if n, err := st.InterruptStanding(); err != nil {

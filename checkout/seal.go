@@ -15,6 +15,8 @@ import (
 	"sort"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/joyautomation/nautilus/internal/securefile"
 )
 
 // A sealed run is a record the controller signs: the run's export, who signed
@@ -60,30 +62,31 @@ func Fingerprint(pub []byte) string {
 // loadOrCreateKey reads the key (its seed, as hex) or makes one: written to a
 // new file, synced, then renamed in, with mode 0600. A key readable by other
 // users is refused.
-func loadOrCreateKey(path string) (*signKey, error) {
+func loadOrCreateKey(path string) (*signKey, bool, error) {
 	b, err := os.ReadFile(path)
 	switch {
 	case err == nil:
-		if fi, serr := os.Stat(path); serr == nil && fi.Mode().Perm()&0o077 != 0 {
-			return nil, fmt.Errorf("%s is mode %o: other users can read the key; chmod 600 it", path, fi.Mode().Perm())
+		if merr := securefile.CheckMode(path, "the checkout signing key", "the key"); merr != nil {
+			return nil, false, merr
 		}
 		seed, derr := hex.DecodeString(strings.TrimSpace(string(b)))
 		if derr != nil || len(seed) != ed25519.SeedSize {
-			return nil, fmt.Errorf("%s is not a signing key (a %d-byte seed as hex)", path, ed25519.SeedSize)
+			return nil, false, fmt.Errorf("%s is not a signing key (a %d-byte seed as hex)", path, ed25519.SeedSize)
 		}
 		priv := ed25519.NewKeyFromSeed(seed)
-		return &signKey{priv: priv, pub: priv.Public().(ed25519.PublicKey)}, nil
+		return &signKey{priv: priv, pub: priv.Public().(ed25519.PublicKey)}, false, nil
 	case !errors.Is(err, os.ErrNotExist):
-		return nil, err
+		return nil, false, err
 	}
 	seed := make([]byte, ed25519.SeedSize)
 	if _, err := rand.Read(seed); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	tmp := path + ".new"
+	os.Remove(tmp) // a crash between create and rename left one: it holds a key nothing used
 	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	_, werr := f.WriteString(hex.EncodeToString(seed) + "\n")
 	if werr == nil {
@@ -94,15 +97,42 @@ func loadOrCreateKey(path string) (*signKey, error) {
 	}
 	if werr != nil {
 		os.Remove(tmp)
-		return nil, werr
+		return nil, false, werr
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		os.Remove(tmp)
-		return nil, err
+		return nil, false, err
 	}
 	syncDir(filepath.Dir(path))
 	priv := ed25519.NewKeyFromSeed(seed)
-	return &signKey{priv: priv, pub: priv.Public().(ed25519.PublicKey)}, nil
+	return &signKey{priv: priv, pub: priv.Public().(ed25519.PublicKey)}, true, nil
+}
+
+// KeyReplaced says the signing key was made new at Open although the results
+// file already holds sealed runs: the key file was deleted or lost. Records
+// sealed before carry their own public key and still verify, but a fingerprint
+// written down earlier no longer names the controller's key; the controller
+// says so at start.
+func (s *Store) KeyReplaced() bool { return s.keyReplaced }
+
+// sweepSealed removes sealed-record files for runs the results file does not
+// say are sealed (a crash after the record was written and before the seal
+// entry was), and temp files a crash left: a record that says SEALED for a run
+// that was not must not outlive the crash.
+func (s *Store) sweepSealed() {
+	dir := filepath.Dir(s.path)
+	files, _ := filepath.Glob(filepath.Join(dir, "checkout-sealed-*.json*"))
+	for _, f := range files {
+		keep := false
+		for id, r := range s.runs {
+			if r.State == StateSealed && f == s.SealedPath(id) {
+				keep = true
+			}
+		}
+		if !keep {
+			os.Remove(f)
+		}
+	}
 }
 
 // KeyFingerprint is the fingerprint of the store's signing key ("" with none).
@@ -131,6 +161,11 @@ type DeviceEvidence struct {
 type Evidence struct {
 	Drivers []DriverEvidence `json:"drivers"`
 	Devices []DeviceEvidence `json:"devices"`
+	// Attested says the manifest states (checkout: real-io) that the
+	// controller reaches real field I/O, for what the controller cannot read
+	// off an endpoint (a driver that keeps its hosts in a manifest file, a
+	// local gateway). The controller still refuses a project with no driver.
+	Attested bool `json:"attested,omitempty"`
 }
 
 // SealInput is what a seal asks: who signs, under which rule, and the
@@ -147,23 +182,39 @@ type SealInput struct {
 	Evidence Evidence
 }
 
+// EvidenceDigest is a hash of the evidence, so the devices a run began against
+// can be compared with the devices it is sealed against.
+func EvidenceDigest(ev Evidence) string {
+	if ev.Drivers == nil {
+		ev.Drivers = []DriverEvidence{}
+	}
+	if ev.Devices == nil {
+		ev.Devices = []DeviceEvidence{}
+	}
+	b, _ := json.Marshal(ev)
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
+
 // SealPayload is what the controller signs (compact JSON, field order fixed).
 type SealPayload struct {
-	Format          string   `json:"format"`
-	Notice          string   `json:"notice"`
-	Run             string   `json:"run"`
-	ExportSha256    string   `json:"exportSha256"`
-	Mode            string   `json:"mode"`
-	Statement       string   `json:"statement,omitempty"`
-	Signer          string   `json:"signer"`
-	SignerPrincipal string   `json:"signerPrincipal"`
-	Recorders       []string `json:"recorders"`
-	Note            string   `json:"note,omitempty"`
-	Evidence        Evidence `json:"evidence"`
-	SealedAt        int64    `json:"sealedAt"`
-	PrevSeq         int64    `json:"prevSeq"`
-	PrevHash        string   `json:"prevHash"`
-	KeyFingerprint  string   `json:"keyFingerprint"`
+	Format          string `json:"format"`
+	Notice          string `json:"notice"`
+	Run             string `json:"run"`
+	ExportSha256    string `json:"exportSha256"`
+	Mode            string `json:"mode"`
+	Statement       string `json:"statement,omitempty"`
+	Signer          string `json:"signer"`
+	SignerPrincipal string `json:"signerPrincipal"`
+	// Recorders are the principals who took part in the run: recorded a
+	// result, began it or forced an output.
+	Recorders      []string `json:"recorders"`
+	Note           string   `json:"note,omitempty"`
+	Evidence       Evidence `json:"evidence"`
+	SealedAt       int64    `json:"sealedAt"`
+	PrevSeq        int64    `json:"prevSeq"`
+	PrevHash       string   `json:"prevHash"`
+	KeyFingerprint string   `json:"keyFingerprint"`
 }
 
 // SealedRecord is the file a seal makes: the payload as it was signed, the
@@ -264,13 +315,17 @@ func (s *Store) Seal(in SealInput) (SealedRecord, error) {
 		}
 		recorders[who] = true
 	}
-	var todo, failing []string
+	// every point's latest result is a pass: a note says something but is no
+	// verdict, so it does not stand in for one, and a fail is not signed over
+	var todo, failing, noted []string
 	for _, p := range in.Sheet.Points {
 		switch l, ok := latest[p.ID]; {
 		case !ok:
 			todo = append(todo, p.ID)
 		case l.Outcome == Fail:
 			failing = append(failing, p.ID)
+		case l.Outcome != Pass:
+			noted = append(noted, p.ID)
 		}
 	}
 	if len(todo) > 0 {
@@ -279,12 +334,34 @@ func (s *Store) Seal(in SealInput) (SealedRecord, error) {
 	if len(failing) > 0 {
 		return SealedRecord{}, refuse("%d point(s) are failing: %s (a later pass supersedes a fail; both stay in the file)", len(failing), listIDs(failing))
 	}
+	if len(noted) > 0 {
+		return SealedRecord{}, refuse("%d point(s) have only a note, no pass: %s (a note is no verdict: record a pass once the point is checked)", len(noted), listIDs(noted))
+	}
+	// who took part in the run: recorded a result, began it, or drove an
+	// output in it; under two-person the signer is none of them
+	for _, fs := range r.forces {
+		for _, f := range fs {
+			if f.rec.Principal != "" {
+				recorders[f.rec.Principal] = true
+			}
+		}
+	}
+	if r.Principal != "" {
+		recorders[r.Principal] = true
+	}
+	// the devices the run began against are the devices it is sealed against
+	if r.Unreal != "" {
+		return SealedRecord{}, refuse("this run was begun against devices that are not real field I/O (%s)", r.Unreal)
+	}
+	if r.EvidenceSha != "" && r.EvidenceSha != EvidenceDigest(in.Evidence) {
+		return SealedRecord{}, refuse("what the controller is connected to changed since this run began (its drivers or device endpoints): abandon the run and begin again, so every result is against the same devices")
+	}
 	statement := ""
 	if recorders[in.Principal] {
 		if in.Mode == "two-person" {
-			return SealedRecord{}, refuse("%s recorded results in this run, and the sign-off rule is two-person: someone who recorded none of them signs it off", in.By)
+			return SealedRecord{}, refuse("%s took part in this run (began it, recorded results or forced an output), and the sign-off rule is two-person: someone who did none of that signs it off", in.By)
 		}
-		statement = "single-person sign-off: the signer also recorded results in this run"
+		statement = "single-person sign-off: the signer also took part in this run"
 	}
 	var rec []string
 	for p := range recorders {
@@ -295,11 +372,10 @@ func (s *Store) Seal(in SealInput) (SealedRecord, error) {
 	ex := BuildExport(r.view(), in.Sheet, results)
 	ex.Sealed = true
 	ex.Status = "SEALED: signed off by " + in.By + ", see the signature of this record"
-	exb, err := ex.JSON()
-	if err != nil {
-		return SealedRecord{}, err
-	}
-	exc, err := compact(exb)
+	// the bytes the signature covers: encoded with Go's default escaping of <, >
+	// and &, which is stable through the indented file the record is written as
+	// (an encoder that escaped differently would hash one way and verify another)
+	exc, err := json.Marshal(ex)
 	if err != nil {
 		return SealedRecord{}, err
 	}

@@ -227,7 +227,16 @@ type checkoutRequest struct {
 
 func (a *checkoutAPI) checkoutBegin(w http.ResponseWriter, r *http.Request) {
 	a.checkoutWrite(w, r, "", func(pr auth.Principal, req checkoutRequest) (any, int, error) {
-		run, err := a.co.Store.Begin(req.Rehearsal, a.co.Sheet.Hash(), a.co.Sheet.Title, noteAuthor(pr.String()), pr.String())
+		// what the controller is connected to, found out by the controller: a
+		// run against virtual devices or no field driver can never be sealed,
+		// whatever the client's rehearsal flag says, and is sealed only against
+		// the same devices
+		evSha, unreal := "", "this controller cannot say its devices are real (no evidence of its drivers)"
+		if a.co.Evidence != nil {
+			ev, why := a.co.Evidence(a.co.Sheet)
+			evSha, unreal = checkout.EvidenceDigest(ev), why
+		}
+		run, err := a.co.Store.BeginWith(req.Rehearsal, a.co.Sheet.Hash(), a.co.Sheet.Title, noteAuthor(pr.String()), pr.String(), evSha, unreal)
 		return run, http.StatusCreated, err
 	})
 }

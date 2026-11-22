@@ -170,10 +170,13 @@ claims:
       A person with the signoff permission seals a run, asking for a fresh
       password, and the controller decides every condition under the store's
       lock: it refuses a rehearsal run, a controller that cannot say its devices
-      are real (no field driver, loopback or virtual endpoints, whatever the
-      client's flag says), a sheet that changed since the run began, a standing
-      checkout force, a point with no result or a failing latest result, and (by
-      default) a signer who recorded results; a refused seal writes nothing; a
+      are real (decided from its own manifest when the run begins and again at
+      the seal, failing closed: no field driver, any loopback, own-box or
+      virtual endpoint, any endpoint it cannot read, unless the manifest says
+      real-io; whatever the client's flag says), a sheet that changed since the
+      run began, a standing checkout force, a point whose latest result is not
+      a pass (none, a fail or only a note), and (by default) a signer who took
+      part in the run (began it, recorded results or forced an output); a refused seal writes nothing; a
       sealed run takes no more results; single-person sign-off is said in the
       record.
     source: "#signing-off"
@@ -187,7 +190,12 @@ claims:
       - go ./server TestCheckoutSealSignsAndTheRecordVerifies
       - go ./server TestCheckoutSealRefusals
       - go ./server TestCheckoutSealSinglePersonSaysSo
-      - go ./cmd/naut TestSealEvidenceRefusesWhatIsNotRealFieldIO
+      - go ./cmd/naut TestSealEvidenceFailsClosed
+      - go ./checkout TestSealNeedsAPassOnEveryPoint
+      - go ./checkout TestTwoPersonCountsEveryoneWhoTookPart
+      - go ./checkout TestSealIsBoundToTheDevicesTheRunBeganAgainst
+      - go ./server TestCheckoutRunBegunAgainstVirtualDevicesCanNeverBeSealed
+      - go ./server TestCheckoutSealRefusesDevicesThatChangedSinceTheRunBegan
       - go ./cmd/naut TestClassifyEndpoints
 
   - id: CHK-012
@@ -202,6 +210,9 @@ claims:
     source: "#signing-off"
     tests:
       - go ./checkout TestVerifyCatchesTampering
+      - go ./checkout TestVerifyChecksWhereTheSealSits
+      - go ./checkout TestSealVerifiesNotesThatHTMLWouldEscape
+      - go ./checkout TestOpenSweepsASealedRecordTheFileDoesNotKnow
       - go ./checkout TestTheSigningKey
       - go ./cmd/naut TestCheckoutVerifyCommand
       - go ./server TestEveryWritePathJournalsExactlyOneEntry

@@ -47,7 +47,10 @@ checkout.seal entry that carries this record's hash: the audit journal is a
 second, independently kept place the seal is written, so a record that matches
 a copy of the journal made elsewhere was sealed when it says. It exits 1 on any
 failure. The record is tamper-evident and signed by the controller's key: it
-proves the record came from that controller and was not altered since. The
+proves the record came from the holder of that key and was not altered since
+(whoever holds the controller's state directory, the results file and the key,
+can forge both: keep copies elsewhere, and give --chain and --audit copies made
+elsewhere). The
 people it names were identified by the controller's sign-in, not by a personal
 certificate; it is not an electronic signature in a legal or regulatory sense.
 
@@ -246,7 +249,7 @@ func checkoutVerify(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	if *fp != "" && *fp != rep.Fingerprint {
-		fmt.Fprintf(stdout, "naut checkout verify: FAILED: the record is signed by key %s, not %s\n", rep.Fingerprint, *fp)
+		fmt.Fprintf(stderr, "naut checkout verify: FAILED: the record is signed by key %s, not %s\n", rep.Fingerprint, *fp)
 		return 1
 	}
 	fmt.Fprintf(stdout, "OK: run %s, signed off by %s (%s), %d result(s), signed by key %s\n", rep.Run, rep.Signer, rep.Mode, rep.Results, rep.Fingerprint)

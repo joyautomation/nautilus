@@ -271,7 +271,7 @@ func dropLast(b []byte) []byte {
 
 // The signing key: made at Open, kept, mode 0600, refused when others can read it.
 func TestTheSigningKey(t *testing.T) {
-	dir := t.TempDir()
+	dir := tmpDir(t)
 	p := filepath.Join(dir, "checkout.jsonl")
 	s, err := Open(p, nil)
 	if err != nil {
@@ -354,3 +354,159 @@ func TestVerifyChecksWhereTheSealSits(t *testing.T) {
 
 func ed25519Sign(k *signKey, b []byte) []byte { return ed25519.Sign(k.priv, b) }
 func sha256hex(b []byte) string               { s := sha256.Sum256(b); return hex.EncodeToString(s[:]) }
+
+// A note with <, > or & is the person's words: the record still verifies (the
+// signed bytes are the ones the file holds, whatever an encoder escapes).
+func TestSealVerifiesNotesThatHTMLWouldEscape(t *testing.T) {
+	s, p, run := sealedStore(t)
+	defer s.Close()
+	s.Record(run, "FIT201", Pass, `reads <5 & stable > 3 "ok" \ ' é 日本 `+" ", 1.5, "good", "alice", "user:alice")
+	in := sealIn(run, "bob")
+	in.Note = "temp < 5 & ok </script>"
+	if _, err := s.Seal(in); err != nil {
+		t.Fatal(err)
+	}
+	file, _ := s.ReadSealed(run)
+	chain, _ := os.ReadFile(p)
+	if _, err := Verify(file, chain); err != nil {
+		t.Fatalf("a note with <, > and & does not verify: %v", err)
+	}
+}
+
+// A note is no verdict: a point whose latest result is a note, or a note after
+// a fail, is not signed over.
+func TestSealNeedsAPassOnEveryPoint(t *testing.T) {
+	s, _, run := sealedStore(t)
+	defer s.Close()
+	s.Record(run, "LSH101", Fail, "stuck", nil, "", "alice", "user:alice")
+	s.Record(run, "LSH101", Note, "wired, not yet powered", nil, "", "alice", "user:alice")
+	s.Record(run, "FIT201", Note, "not powered", nil, "", "alice", "user:alice")
+	_, err := s.Seal(sealIn(run, "bob"))
+	if err == nil || !strings.Contains(err.Error(), "only a note, no pass: LSH101, FIT201") {
+		t.Fatalf("notes standing in for passes: %v", err)
+	}
+	s.Record(run, "LSH101", Pass, "", nil, "", "alice", "user:alice")
+	s.Record(run, "FIT201", Pass, "", nil, "", "alice", "user:alice")
+	if _, err := s.Seal(sealIn(run, "bob")); err != nil {
+		t.Errorf("after the passes: %v", err)
+	}
+}
+
+// Two-person: whoever took part (began the run, recorded a result, or drove an
+// output) does not sign it off.
+func TestTwoPersonCountsEveryoneWhoTookPart(t *testing.T) {
+	s, _ := openStore(t)
+	defer s.Close()
+	run, _ := s.Begin(false, sheet().Hash(), "T", "carol", "user:carol") // carol began it, alice recorded
+	for _, pt := range sheet().Points {
+		s.Record(run.ID, pt.ID, Pass, "", nil, "", "alice", "user:alice")
+	}
+	if _, err := s.Seal(sealIn(run.ID, "carol")); err == nil || !strings.Contains(err.Error(), "took part") {
+		t.Errorf("the person who began the run signs: %v", err)
+	}
+	// a person who only forced an output
+	s2, _ := openStore(t)
+	defer s2.Close()
+	run2, _ := s2.Begin(false, sheet().Hash(), "T", "alice", "user:alice")
+	for _, pt := range sheet().Points {
+		s2.Record(run2.ID, pt.ID, Pass, "", nil, "", "alice", "user:alice")
+	}
+	if _, err := s2.StartForce(run2.ID, "XV101", true, 30, "dave", "user:dave"); err != nil {
+		t.Fatal(err)
+	}
+	s2.EndForce(run2.ID, ForceReleased, "dave")
+	if _, err := s2.Seal(sealIn(run2.ID, "dave")); err == nil || !strings.Contains(err.Error(), "took part") {
+		t.Errorf("the person who forced an output signs: %v", err)
+	}
+	if _, err := s2.Seal(sealIn(run2.ID, "bob")); err != nil {
+		t.Errorf("someone else: %v", err)
+	}
+}
+
+// What the controller found about its devices when the run began binds the
+// seal: a run begun against virtual devices can never be sealed, and devices
+// that changed since are refused.
+func TestSealIsBoundToTheDevicesTheRunBeganAgainst(t *testing.T) {
+	ev := Evidence{Drivers: []DriverEvidence{{Name: "plc", Kind: "modbus"}}}
+	s, _ := openStore(t)
+	defer s.Close()
+	run, _ := s.BeginWith(false, sheet().Hash(), "T", "alice", "user:alice", EvidenceDigest(ev), "")
+	for _, pt := range sheet().Points {
+		s.Record(run.ID, pt.ID, Pass, "", nil, "", "alice", "user:alice")
+	}
+	in := sealIn(run.ID, "bob")
+	in.Evidence = Evidence{Drivers: []DriverEvidence{{Name: "plc", Kind: "modbus"}, {Name: "sim", Kind: "modbus"}}}
+	if _, err := s.Seal(in); err == nil || !strings.Contains(err.Error(), "changed since this run began") {
+		t.Errorf("devices that changed: %v", err)
+	}
+	in.Evidence = ev
+	if _, err := s.Seal(in); err != nil {
+		t.Errorf("the same devices: %v", err)
+	}
+	s2, _ := openStore(t)
+	defer s2.Close()
+	run2, _ := s2.BeginWith(false, sheet().Hash(), "T", "alice", "user:alice", EvidenceDigest(ev), "every device this controller dials is a loopback")
+	for _, pt := range sheet().Points {
+		s2.Record(run2.ID, pt.ID, Pass, "", nil, "", "alice", "user:alice")
+	}
+	in2 := sealIn(run2.ID, "bob")
+	in2.Evidence = ev
+	if _, err := s2.Seal(in2); err == nil || !strings.Contains(err.Error(), "not real field I/O") {
+		t.Errorf("a run begun against a loopback: %v", err)
+	}
+	// it survives a restart: the file says so
+	p := s2.path
+	s2.Close()
+	s3, err := Open(p, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s3.Close()
+	if g, _ := s3.Get(run2.ID); g.Unreal == "" || g.EvidenceSha == "" {
+		t.Errorf("after reopening: %+v", g)
+	}
+}
+
+// A crash left a signed record for a run the file does not say is sealed: it is
+// removed at Open, and a key's leftover temp file does not stop a later start.
+func TestOpenSweepsASealedRecordTheFileDoesNotKnow(t *testing.T) {
+	s, p, run := sealedStore(t)
+	if _, err := s.Seal(sealIn(run, "bob")); err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := os.ReadFile(s.SealedPath(run))
+	s.Close()
+	dir := filepath.Dir(p)
+	orphan := filepath.Join(dir, "checkout-sealed-deadbeefdeadbeef.json")
+	os.WriteFile(orphan, rec, 0o600)
+	os.WriteFile(filepath.Join(dir, KeyFile+".new"), []byte("junk"), 0o600)
+	s2, err := Open(p, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+	if _, err := os.Stat(orphan); err == nil {
+		t.Errorf("a signed record for a run the file does not seal survived Open")
+	}
+	if _, err := s2.ReadSealed(run); err != nil {
+		t.Errorf("the real sealed record was swept: %v", err)
+	}
+	// a missing key with the .new left behind: a new key, and the store says so
+	s2.Close()
+	os.Remove(filepath.Join(dir, KeyFile))
+	os.WriteFile(filepath.Join(dir, KeyFile+".new"), []byte("junk"), 0o600)
+	s3, err := Open(p, nil)
+	if err != nil {
+		t.Fatalf("a leftover key temp file stops the store: %v", err)
+	}
+	defer s3.Close()
+	if !s3.KeyReplaced() {
+		t.Errorf("a key made new beside sealed runs is not said")
+	}
+	// and the old record still verifies: it carries its own key
+	b, _ := s3.ReadSealed(run)
+	chain, _ := os.ReadFile(p)
+	if _, err := Verify(b, chain); err != nil {
+		t.Errorf("an older record after the key changed: %v", err)
+	}
+}

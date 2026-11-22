@@ -111,7 +111,7 @@ func rules(u universe) []rule {
 		},
 		{
 			from: []string{"checkout"},
-			to:   u.allBut(),
+			to:   u.allBut("internal/securefile"),
 			why:  "the checkout record is a sheet of points and a chained file of results; it knows no permission, tag store, alarm or server, which decide before an entry exists",
 		},
 		{

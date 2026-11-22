@@ -197,3 +197,33 @@ func TestCheckoutSealedForAnUnsealedRunIs404(t *testing.T) {
 		t.Errorf("an unsealed run: %d %s", rec.Code, rec.Body)
 	}
 }
+
+// The rehearsal flag is the client's, so the controller works out for itself
+// when a run began whether real field devices were behind the points: a run
+// begun against virtual devices says so, and no later change makes it signable.
+func TestCheckoutRunBegunAgainstVirtualDevicesCanNeverBeSealed(t *testing.T) {
+	virtual := func(*checkout.Sheet) (checkout.Evidence, string) {
+		return checkout.Evidence{Devices: []checkout.DeviceEvidence{{Name: "rio1", Endpoint: "127.0.0.1:15020", Class: "loopback"}}}, "device rio1 is at a loopback address"
+	}
+	srv, _, co := ckSealServer(t, "two-person", virtual)
+	id, _ := passAll(t, srv, false)
+	sup := ckAs(t, srv, "jsmith")
+	if run := call(t, srv, "GET", "/api/checkout/runs/"+id, "", sup).Body.String(); !strings.Contains(run, `"unreal":"device rio1 is at a loopback address"`) {
+		t.Errorf("the run does not say why it cannot be signed: %s", run)
+	}
+	co.Evidence = realDevices // the project is repointed and restarted; the run stays unsignable
+	if rec := call(t, srv, "POST", "/api/checkout/runs/"+id+"/seal", `{}`, sup); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "not real field I/O") {
+		t.Errorf("seal after repointing: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestCheckoutSealRefusesDevicesThatChangedSinceTheRunBegan(t *testing.T) {
+	srv, _, co := ckSealServer(t, "two-person", realDevices)
+	id, _ := passAll(t, srv, false)
+	co.Evidence = func(*checkout.Sheet) (checkout.Evidence, string) {
+		return checkout.Evidence{Drivers: []checkout.DriverEvidence{{Name: "other", Kind: "eip"}}}, ""
+	}
+	if rec := call(t, srv, "POST", "/api/checkout/runs/"+id+"/seal", `{}`, ckAs(t, srv, "jsmith")); rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), "changed since this run began") {
+		t.Errorf("seal after the devices changed: %d %s", rec.Code, rec.Body)
+	}
+}

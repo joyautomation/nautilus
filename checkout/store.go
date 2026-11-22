@@ -78,6 +78,11 @@ type entry struct {
 	SheetHash string `json:"sheet,omitempty"`
 	Title     string `json:"title,omitempty"`
 
+	// kind run, from the controller: a hash of the devices it was begun
+	// against, and why the run could never be signed off (virtual devices)
+	EvSha  string `json:"evsha,omitempty"`
+	Unreal string `json:"unreal,omitempty"`
+
 	// kind result
 	Point   string `json:"point,omitempty"`
 	Outcome string `json:"outcome,omitempty"`
@@ -158,6 +163,12 @@ type Run struct {
 	Reason  string `json:"reason,omitempty"`
 	EndedAt int64  `json:"endedAt,omitempty"`
 	EndedBy string `json:"endedBy,omitempty"`
+	// EvidenceSha is a hash of the devices the controller was connected to when
+	// the run began, and Unreal why the run can never be signed off (the
+	// controller found virtual devices or no field driver then): both are the
+	// controller's, never the client's.
+	EvidenceSha string `json:"evidenceSha,omitempty"`
+	Unreal      string `json:"unreal,omitempty"`
 	// SealedAt, SealedBy and SealSeq say a sealed run was signed off: when,
 	// by whom, and the sequence number of the seal entry.
 	SealedAt    int64  `json:"sealedAt,omitempty"`
@@ -195,7 +206,8 @@ type Store struct {
 	ord  []string
 
 	// key signs sealed runs (seal.go): created beside the file at Open.
-	key *signKey
+	key         *signKey
+	keyReplaced bool
 }
 
 // appendFile is the file as the store uses it (a test's can fail).
@@ -265,10 +277,17 @@ func Open(path string, now func() time.Time) (*Store, error) {
 	}
 	s.off = st.Size()
 	syncDir(filepath.Dir(path))
-	if s.key, err = loadOrCreateKey(filepath.Join(filepath.Dir(path), KeyFile)); err != nil {
+	var created bool
+	if s.key, created, err = loadOrCreateKey(filepath.Join(filepath.Dir(path), KeyFile)); err != nil {
 		f.Close()
 		return nil, fmt.Errorf("checkout: the signing key: %w", err)
 	}
+	for _, r := range s.runs {
+		if r.State == StateSealed && created {
+			s.keyReplaced = true
+		}
+	}
+	s.sweepSealed()
 	return s, nil
 }
 
@@ -324,7 +343,7 @@ func (s *Store) apply(e entry) error {
 			return errors.New("a run that is empty or already begun")
 		}
 		s.runs[e.Run] = &Run{ID: e.Run, State: StateOpen, Rehearsal: e.Rehearsal, SheetHash: e.SheetHash, Title: e.Title,
-			At: e.At, By: e.By, Principal: e.Principal, lastResults: map[string][]Result{}, forces: map[string][]*forceState{}}
+			EvidenceSha: e.EvSha, Unreal: e.Unreal, At: e.At, By: e.By, Principal: e.Principal, lastResults: map[string][]Result{}, forces: map[string][]*forceState{}}
 		s.ord = append(s.ord, e.Run)
 	case kindResult:
 		r := s.runs[e.Run]
@@ -454,12 +473,20 @@ func (s *Store) openRun() *Run {
 // at a time. A rehearsal run (against virtual devices) is marked so for good:
 // a run's kind is never changed afterwards.
 func (s *Store) Begin(rehearsal bool, sheetHash, title, by, principal string) (Run, error) {
+	return s.BeginWith(rehearsal, sheetHash, title, by, principal, "", "")
+}
+
+// BeginWith is Begin with what the controller found out about its own devices:
+// a hash of the evidence (the run is sealed only against the same devices) and,
+// when the controller can already tell the run is not against real field I/O,
+// why (such a run can never be sealed).
+func (s *Store) BeginWith(rehearsal bool, sheetHash, title, by, principal, evidenceSha, unreal string) (Run, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.openRun() != nil {
 		return Run{}, ErrRunOpen
 	}
-	e := entry{Kind: kindRun, Run: newID(), Rehearsal: rehearsal, SheetHash: sheetHash, Title: title, By: by, Principal: principal}
+	e := entry{Kind: kindRun, Run: newID(), Rehearsal: rehearsal, SheetHash: sheetHash, Title: title, By: by, Principal: principal, EvSha: evidenceSha, Unreal: unreal}
 	if err := s.append(e); err != nil {
 		return Run{}, err
 	}

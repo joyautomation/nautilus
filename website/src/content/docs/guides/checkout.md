@@ -178,30 +178,48 @@ controller decides every condition itself, under the lock that takes results.
 It refuses when
 
 - the run is a **rehearsal**, or the controller cannot say its devices are
-  real: it has no field driver configured (it runs the in-memory loopback),
-  every endpoint it dials is a loopback or one of the project's own virtual
-  devices, or a point is on a device at such an address. A run's rehearsal flag
-  is the client's, so the controller derives this itself and records what it saw
-  (the drivers and device endpoints) in the seal;
+  real. A run's rehearsal flag is the client's, so the controller works this out
+  itself, from its manifest, **when the run begins** (a run begun against what
+  it refuses can never be sealed, and says why) and **again at the seal** (the
+  devices must be the same). It fails closed: no field driver configured (the
+  in-memory loopback), **any** endpoint it can read that is a loopback, an
+  address of the box itself or one of the project's own virtual devices (one
+  simulator among real devices is enough), **any** driver whose endpoint it
+  cannot read (a driver that keeps its hosts in a manifest file), or a point on
+  a `devices:` row at such an address. A controller that does reach real
+  devices that way (a local gateway, a driver whose hosts are in a file) says so
+  with `checkout: {real-io: true}` in the manifest: the controller then records
+  that the manifest attested it, `naut check` warns, and a project with no
+  driver is still refused. The drivers and endpoints it saw are in the sealed
+  record;
 - the **sheet changed** since the run began (`checkout.yaml` was edited and
   deployed): a seal signs the results against one sheet, so abandon the run and
   begin again;
 - a **checkout force** is standing or being started or ended;
-- a point has **no result yet**, or its latest result is a **fail** (a later
-  pass supersedes a fail; both stay in the file and in the record);
-- under the default `signoff: two-person`, the signer **recorded results** in
-  the run. `signoff: single` lets the recorder sign; `naut check` warns, and the
-  sealed record says "single-person sign-off".
+- a point has **no result yet**, or its latest result is a **fail** or only a
+  **note** (a note is no verdict: record a pass once the point is checked; a
+  later pass supersedes a fail or a note, and both stay in the file and in the
+  record);
+- under the default `signoff: two-person`, the signer **took part in the run**:
+  began it, recorded a result or forced an output. `signoff: single` lets them;
+  `naut check` warns, and the sealed record says "single-person sign-off". The
+  rule compares sign-in names, so it cannot tell one human with two accounts
+  from two people.
 
-A sealed run takes no more results, forces or abandon; a new run may begin.
+A sealed run takes no more results, forces or abandon; a new run may begin. A
+signed record left by a crash for a run the results file does not call sealed
+is removed when the controller starts.
 
 The sealed record is a file: the run's export (every result, with `sealed:
 true`), a payload (who signed off and under which rule, who recorded, the
 signer's note, the controller's evidence about its devices, where the seal sits
 in the results file, and the hash of the export) and the controller's
 signature over the payload, with the public key. The key is an Ed25519 key the
-controller makes in its state directory (`checkout.key`, mode 0600) when the
-checkout first opens; `GET /api/checkout` shows its fingerprint, so write it
+controller makes in its state directory (`checkout.key`, mode 0600; a key others
+can read is refused) when the checkout first opens. If the key file is deleted
+the controller makes a new one and says so at start; records sealed before
+still verify against their own key, but a fingerprint you wrote down no longer
+names the controller's key; `GET /api/checkout` shows its fingerprint, so write it
 down from the controller ahead of time.
 
 ```sh
