@@ -361,3 +361,6 @@ export type {
 export { default as ParameterList } from './components/ParameterList.svelte';
 export { ParametersClient, driftBadge, drifted, rangeText, takeRepoSet, takeRepo, valueText, refusedText } from './parameters.js';
 export type { Parameter, DriftState, WriteBack, ImportResult, ImportAnswer, ParametersAnswer, ParametersClientOptions, TakeOutcome } from './parameters.js';
+
+// What the alarm history shows for a paging (notify) row, and the kinds that fetch them (#616).
+export { STATE_KINDS, journalKinds, visibleKind, pagingEvent, pagingOutcome } from './alarmjournal.js';

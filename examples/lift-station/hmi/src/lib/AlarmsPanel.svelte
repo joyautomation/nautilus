@@ -6,7 +6,7 @@
 	// on the right over whichever view is showing; × or Escape closes it.
 	import { fly } from 'svelte/transition';
 	import { cubicOut } from 'svelte/easing';
-	import { AlarmTable, AlarmJournal, type AlarmEvent } from '@joyautomation/nautilus-hmi';
+	import { AlarmTable, AlarmJournal, journalKinds, type AlarmEvent } from '@joyautomation/nautilus-hmi';
 	import { alarms } from '$lib/client.svelte';
 
 	let { open = $bindable(false) }: { open?: boolean } = $props();
@@ -20,7 +20,7 @@
 	async function load(from: number, to: number) {
 		range = { from, to };
 		loading = true;
-		events = (await alarms.journal(from, to)).events;
+		events = (await alarms.journal(from, to, { kinds: journalKinds(true) })).events;
 		loading = false;
 	}
 

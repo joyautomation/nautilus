@@ -201,7 +201,9 @@ high triangle, medium diamond, low circle, diagnostic square), same convention a
 `AlarmJournal` takes a `from`/`to` (epoch ms) range plus an `onrange` callback so the host re-fetches
 via `alarms.journal(...)` and hands back fresh `events`; its CSV export is a client-side
 `Blob`/`URL.createObjectURL` download — this is an ordinary web app, not a sandboxed artifact, so
-`<a download>` works fine here.
+`<a download>` works fine here. Paging (notify) rows are their own row kind, hidden until the Paging
+box is ticked or Paged is the event filter; fetch them with
+`alarms.journal(from, to, { kinds: journalKinds(true) })` (the controller leaves them out of an unnamed query).
 
 ## Porting a legacy HMI
 

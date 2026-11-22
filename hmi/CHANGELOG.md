@@ -4,6 +4,13 @@
 
 ### Added
 
+- **`<AlarmJournal/>` shows paging rows** (#616, #715): each notification an escalation sent, or tried to
+  send, is its own row kind ("Paged, level 2", "sent to bob by sms", "nobody on call (joined late)"),
+  filterable (Paged in the event filter) and hidden until the Paging box is ticked, so a screen that never
+  paged looks as before. A host fetches them with `alarms.journal(from, to, { kinds: journalKinds(true) })`;
+  the controller leaves them out of an unnamed query. New exports: `journalKinds`, `visibleKind`,
+  `pagingEvent`, `pagingOutcome`, `STATE_KINDS`; `AlarmEventKind` gains `'notify'`.
+
 - **`<NotesPanel/>`, `<ShiftLog/>` and `NotesClient`** (#720): operator notes about a tag, an asset, an
   alarm (and its occurrence), an area or the plant. Write a note, mark a handover, edit or retract your
   own within the hour, add an addendum to anyone's; the shift log groups by day with handovers on top. A
