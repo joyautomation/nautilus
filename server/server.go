@@ -868,6 +868,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/meta", s.handleMeta)
 	mux.HandleFunc("GET /api/parameters", s.handleParameters)
 	mux.HandleFunc("GET /api/parameters/patch", s.handleParametersPatch)
+	mux.Handle("POST /api/parameters/import", s.audited("param.import", s.paramImportTarget, s.handleParametersImport))
 	mux.HandleFunc("GET /api/drivers", s.handleDrivers)
 	// Alarms: always registered, 404 when no engine — see server/alarms.go.
 	// Registering them unconditionally is what makes "this controller has

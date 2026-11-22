@@ -204,6 +204,7 @@ check comes before the token check. See [Online edits](/guides/online-edits/).
 | `GET` | [`/api/meta`](#get-apimeta) | Tag types, units and descriptions, the I/O lists, capability flags |
 | `GET` | [`/api/parameters`](#get-apiparameters) | The setpoint parameters: value, manifest `init:`, range, whether the plant and the repo agree, who edited |
 | `GET` | [`/api/parameters/patch`](#get-apiparameterspatch) | The plant-ahead values as a patch to the manifest (needs `parameters.writeBack`) |
+| `POST` | [`/api/parameters/import`](#post-apiparametersimport) | Apply a parameter set to the live setpoints, all or nothing (needs `config`) |
 | `GET` | [`/api/drivers`](#get-apidrivers) | Field driver and publisher status |
 | `GET` | [`/api/cluster`](#get-apicluster) | This replica's redundancy status |
 | `POST` | [`/api/tags`](#post-apitags) | Write one tag or one member |
@@ -481,6 +482,39 @@ applying a set would change, and marks a line `REFUSED` for a name the
 controller does not know, a value of another kind, or one outside the tag's
 `min`/`max`. `--check` exits 1 on a difference or a refusal, 2 when the
 controller cannot be reached or the file cannot be read.
+
+### `POST /api/parameters/import`
+
+Applies a parameter set (the file `naut params export` writes) to the live
+setpoints, all or nothing:
+
+```sh
+naut params import --host plc1 --file set.yaml --dry-run
+naut params import --host plc1 --file set.yaml
+```
+
+The body is `{"version": 1, "parameters": {"Tank.SP": 42.5}, "dryRun": false}`.
+It needs the `config` permission (a browser sign-in with a password older than
+`auth.elevation` is asked again; a token is not) **and**, for every tag in the
+set, the write permission `POST /api/tags` would ask for (by area, when `auth:`
+has areas). A tag you may not write refuses the whole set: `403` naming the
+tags, nothing written. Every value goes through the
+same front door as `POST /api/tags`: a `min`/`max`, a forced tag or a read-only
+tag refuses it exactly as it refuses a single write, and nothing here goes past
+them. A name that is not a parameter, a value of another kind, and a name that
+repeats another (tag names ignore case) are refused too. **One refusal stops the
+whole set**: the answer is `422` with every result and nothing was written.
+`dryRun` answers `200` or `422` the same way and writes nothing. The check and
+the write are one step under the store's lock, including the conversion to the
+tag's declared type (an `INT` refuses `70000` and `7.5`), so a set is never
+half in: it is all written or none is. Each result's `from` and `to` are the
+values the store held and holds. A set is at most 500 names (one journal entry
+holds every old and new value); split a bigger one. A server that mirrors a
+controller it does not run answers `501`. Each value
+lands attributed to the principal that imported it, so `parameters.writeBack`
+commits it as theirs. One `param.import` journal entry records every name with
+its old and new value. A standby forwards the request to the leader and a
+controller that is not leading refuses it (`503`).
 
 ### `GET /api/drivers`
 

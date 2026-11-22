@@ -112,6 +112,78 @@ func (t *Tags) WriteAs(ops []WriteOp, by string) []error {
 	return errs
 }
 
+// SetOutcome is one op of WriteSet: what the tag held, what it holds (or,
+// on a dry run, would hold) after, and the refusal if there was one.
+type SetOutcome struct {
+	Path      string
+	From, To  any
+	Unchanged bool // the write would not change the value; it is not made
+	Err       error
+}
+
+// WriteSet applies ops all or nothing, under one hold of the store's lock:
+// every op is checked first (a force, a read-only tag, a range, and the
+// strict conversion to the tag's declared type, which is what a write
+// answers 400 or 422 for), and if any is refused NOTHING is written and the
+// refusals are in the outcomes. An op that would not change the value is
+// reported Unchanged and not written, so it takes no attribution. dry
+// checks and reports and writes nothing. From and To are read inside the
+// lock, as the store holds them (To after conversion), so they cannot
+// disagree with what the controller holds.
+//
+// Ops must name distinct whole scalar tags (a parameter): two members of one
+// tag would both be planned from the pre-write value, and a composite value
+// is not compared. The import route guarantees this.
+func (t *Tags) WriteSet(ops []WriteOp, by string, dry bool) []SetOutcome {
+	out := make([]SetOutcome, len(ops))
+	type plan struct {
+		key string
+		nv  ir.Value
+	}
+	plans := make([]plan, len(ops))
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	refused := false
+	for i, op := range ops {
+		out[i].Path = op.Path
+		if cur, key, ok := t.lookupLocked(op.Path); ok {
+			out[i].From = plainNumeric(t.liveLocked(key, cur))
+		}
+		if f := t.forcedOverlapLocked(op.Path); f != "" {
+			out[i].Err = &ForcedError{Path: op.Path, Force: f}
+		} else if err := t.readOnlyLocked(op.Path); err != nil {
+			out[i].Err = err
+		} else if err := t.rangeCheck(op); err != nil {
+			out[i].Err = err
+		} else if key, nv, err := t.planPathLocked(op.Path, op.Value, true); err != nil {
+			out[i].Err = err
+		} else {
+			plans[i] = plan{key, nv}
+			out[i].To = plainNumeric(nv)
+			out[i].Unchanged = paramEq(out[i].From, out[i].To)
+		}
+		if out[i].Err != nil {
+			refused = true
+		}
+	}
+	if refused || dry {
+		return out
+	}
+	for i, op := range ops {
+		if out[i].Unchanged {
+			continue
+		}
+		t.writeLocked(plans[i].key, plans[i].nv)
+		if t.paramNote != nil {
+			if tv, name, ok := t.lookupLocked(op.Path); ok {
+				out[i].To = plainNumeric(t.liveLocked(name, tv))
+				t.paramNote(op.Path, by, out[i].To)
+			}
+		}
+	}
+	return out
+}
+
 // TagRange is the bound a setpoint's external writes must stay inside
 // (#718). A nil side is open.
 type TagRange struct {

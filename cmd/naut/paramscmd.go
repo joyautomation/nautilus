@@ -16,17 +16,19 @@ import (
 	"github.com/joyautomation/nautilus/internal/apiclient"
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/runtime"
+	"github.com/joyautomation/nautilus/server"
 )
 
-const paramsUsage = `naut params — a controller's tuned setpoints as a file (read-only)
+const paramsUsage = `naut params — a controller's tuned setpoints as a file
 
 A parameter is a scalar setpoint tag with a literal init: in the manifest.
 Operators tune it live; the repo keeps the init. These commands read the
-live values; nothing here writes to the controller.
+live values; export and diff only read, import writes.
 
 Usage:
   naut params export --host <controller> [--port 8080] [--drift] [-o <file>]
   naut params diff   --host <controller> [--port 8080] [--file <set.yaml>] [--check]
+  naut params import --host <controller> [--port 8080] --file <set.yaml> [--dry-run]
 
 export writes a parameter set: a YAML file with "version: 1" and a
 "parameters:" map of tag name to live value (the unit and the drift state
@@ -41,6 +43,17 @@ controller does not know, a value of the wrong kind, or one outside the
 tag's min/max is marked REFUSED (a controller never takes such a value from
 outside). Exit 0 when nothing differs; --check makes a difference or a
 refusal exit 1. A failure to reach or read the controller is exit 2.
+
+import writes a parameter set to the live setpoints: all or nothing. One
+refusal (a value outside min/max, a forced tag, a name that is no parameter,
+a value of the wrong kind) stops the whole set and nothing is written; the
+refused lines say why. It needs the config permission and, for every tag
+in the set, the write permission you would need to write it alone (any tag
+you may not write refuses the whole set), and, for a browser
+sign-in, a fresh password: from here, set NAUTILUS_TOKEN. --dry-run asks the
+controller what it would do and writes nothing. Each value lands as written
+by you, so a controller with parameters.writeBack commits it as yours. A
+standby forwards to the leader. Exit 1 when refused, 2 on a failure.
 
 --host may be a URL (https://plc.example:8443) for a controller with
 server.tls. A controller with a token: set NAUTILUS_TOKEN.
@@ -60,6 +73,8 @@ func runParams(args []string) int {
 		return runParamsExport(args[1:])
 	case "diff":
 		return runParamsDiff(args[1:])
+	case "import":
+		return runParamsImport(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "naut params: unknown subcommand %q\n\n%s", args[0], paramsUsage)
 		return 2
@@ -387,4 +402,96 @@ func diffSet(ps []runtime.Parameter, set map[string]any) (lines []string, differ
 		differs = true
 	}
 	return lines, differs
+}
+
+func runParamsImport(args []string) int {
+	fs := flag.NewFlagSet("params import", flag.ContinueOnError)
+	host := fs.String("host", "", "controller hostname or IP")
+	port := fs.Int("port", 8080, "tag API port")
+	file := fs.String("file", "", "parameter set to apply")
+	dry := fs.Bool("dry-run", false, "ask what would change, write nothing")
+	fs.Usage = func() { fmt.Fprint(os.Stderr, paramsUsage) }
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if *host == "" || *file == "" {
+		fmt.Fprintln(os.Stderr, "naut params import: --host and --file are required")
+		return 2
+	}
+	raw, err := os.ReadFile(*file)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "naut params import:", err)
+		return 2
+	}
+	set, err := decodeParamSet(raw)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "naut params import: %s: %v\n", *file, err)
+		return 2
+	}
+	base, err := apiclient.BaseURL(*host, *port)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "naut params import:", err)
+		return 2
+	}
+	body, _ := json.Marshal(map[string]any{"version": paramSetVersion, "parameters": set, "dryRun": *dry})
+	url := base + "/api/parameters/import"
+	req, err := http.NewRequest(http.MethodPost, url, strings.NewReader(string(body)))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "naut params import:", err)
+		return 2
+	}
+	req.Header.Set("Content-Type", "application/json")
+	apiclient.Authorize(req)
+	client := http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "naut params import: no controller at %s: %v\n", url, err)
+		return 2
+	}
+	defer resp.Body.Close()
+	out, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	var a struct {
+		server.ParamImportAnswer
+		Answer *server.ParamImportAnswer `json:"answer"`
+		Error  string                    `json:"error"`
+	}
+	_ = json.Unmarshal(out, &a)
+	ans := a.ParamImportAnswer
+	if a.Answer != nil {
+		ans = *a.Answer
+	}
+	for _, r := range ans.Results {
+		switch r.Status {
+		case "refused":
+			fmt.Printf("REFUSED  %s: %s\n", r.Name, r.Reason)
+		case "failed":
+			fmt.Printf("FAILED   %s: %s (not written)\n", r.Name, r.Reason)
+		case "unchanged":
+		default:
+			fmt.Printf("%-8s %s: %s -> %s\n", r.Status, r.Name, fmtParam(r.From), fmtParam(r.To))
+		}
+	}
+	switch {
+	case resp.StatusCode == http.StatusOK && ans.DryRun:
+		fmt.Println("dry run: nothing written")
+		return 0
+	case resp.StatusCode == http.StatusOK && ans.Applied:
+		fmt.Println("applied")
+		return 0
+	case resp.StatusCode == http.StatusOK:
+		fmt.Println("no differences")
+		return 0
+	case resp.StatusCode == http.StatusUnprocessableEntity:
+		fmt.Fprintln(os.Stderr, "naut params import: refused: nothing was written")
+		return 1
+	}
+	msg := a.Error
+	if msg == "" {
+		msg = strings.TrimSpace(string(out))
+	}
+	fmt.Fprintf(os.Stderr, "naut params import: %s returned %s: %s\n", url, resp.Status, msg)
+	if resp.StatusCode == http.StatusConflict {
+		return 1
+	}
+	return 2
 }

@@ -681,8 +681,20 @@ func (t *Tags) SetPath(path string, v any) error {
 // every leaf to its declared type's range and an enumeration to its
 // members (ir.SetFieldTypedStrict): the front door's rule, not SetPath's.
 func (t *Tags) setPathLocked(path string, v any, strict bool) error {
+	key, nv, err := t.planPathLocked(path, v, strict)
+	if err != nil {
+		return err
+	}
+	t.writeLocked(key, nv)
+	return nil
+}
+
+// planPathLocked is setPathLocked without the store: the tag a write would
+// set and the value it would give it, or the error the write would answer.
+// Caller holds t.mu.
+func (t *Tags) planPathLocked(path string, v any, strict bool) (string, ir.Value, error) {
 	if path == "" {
-		return fmt.Errorf("no tag name")
+		return "", ir.Value{}, fmt.Errorf("no tag name")
 	}
 	// A tag whose own NAME contains a dot wins over member resolution.
 	// Nothing in nautilus creates one today, but a driver is free to name a
@@ -694,22 +706,23 @@ func (t *Tags) setPathLocked(path string, v any, strict bool) error {
 				err = ir.EnumMemberOnly(t.types[ir.NameKey(key)], v, "tag "+key)
 			}
 			if err != nil {
-				return err
+				return "", ir.Value{}, err
 			}
-			t.writeLocked(key, ev)
-			return nil
+			return key, ev, nil
 		}
-		return t.setFieldLocked(key, t.writeBase(key, cur), nil, v, strict)
+		nv, err := t.planFieldLocked(key, t.writeBase(key, cur), nil, v, strict)
+		return key, nv, err
 	}
 	root, segs := ir.SplitAddress(path)
 	if len(segs) == 0 {
-		return &UndefinedTagError{root}
+		return "", ir.Value{}, &UndefinedTagError{root}
 	}
 	cur, root, ok := t.lookupLocked(root)
 	if !ok {
-		return &UndefinedTagError{root}
+		return "", ir.Value{}, &UndefinedTagError{root}
 	}
-	return t.setFieldLocked(root, t.writeBase(root, cur), segs, v, strict)
+	nv, err := t.planFieldLocked(root, t.writeBase(root, cur), segs, v, strict)
+	return root, nv, err
 }
 
 // writeBase is the value a member write edits: the stored value, or for a
@@ -723,16 +736,21 @@ func (t *Tags) writeBase(root string, cur *tagVal) ir.Value {
 // setFieldLocked applies one member write to a tag already read under the
 // lock, and stores the result. Caller holds t.mu.
 func (t *Tags) setFieldLocked(root string, cur ir.Value, path []string, v any, strict bool) error {
-	set := ir.SetFieldTyped
-	if strict {
-		set = ir.SetFieldTypedStrict
-	}
-	nv, err := set(cur, t.types[ir.NameKey(root)], path, v, "tag "+root)
+	nv, err := t.planFieldLocked(root, cur, path, v, strict)
 	if err != nil {
 		return err
 	}
 	t.writeLocked(root, nv)
 	return nil
+}
+
+// planFieldLocked is setFieldLocked without the store.
+func (t *Tags) planFieldLocked(root string, cur ir.Value, path []string, v any, strict bool) (ir.Value, error) {
+	set := ir.SetFieldTyped
+	if strict {
+		set = ir.SetFieldTypedStrict
+	}
+	return set(cur, t.types[ir.NameKey(root)], path, v, "tag "+root)
 }
 
 // ReadPath resolves a tag or a member path — "Tag" or "Tag.Member.Sub" — the

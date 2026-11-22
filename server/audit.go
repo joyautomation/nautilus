@@ -116,6 +116,8 @@ var actionClass = map[string]string{
 	"param.write": strict,
 	// A tuned setpoint put back in the repo by the controller itself.
 	"param.commit": strict,
+	// A set of tuned setpoints written at once (#718): a bulk write.
+	"param.import": strict,
 	// Cancelling a pending revert keeps a change its device has not
 	// answered: it overrides a safeguard the apply asked for.
 	"config.revert.cancel": strict,
@@ -1018,6 +1020,7 @@ var refusalTargets = map[string]targetFunc{
 	"force.set":        nameValueTarget,
 	"substitute.start": nameValueTarget,
 	"force.clear":      pathTarget("name"),
+	"param.import":     paramImportRefusal,
 	"alarm.ack":        ackTarget,
 	"alarm.shelve":     shelveTarget,
 	"alarm.unshelve":   unshelveTarget,

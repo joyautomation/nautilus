@@ -131,6 +131,11 @@ func TestEveryWriteRouteIsAudited(t *testing.T) {
 // runtime.
 func auditServer(t *testing.T, o Options) *Server {
 	t.Helper()
+	return auditServerRT(t, newTestRuntime(t), o)
+}
+
+func auditServerRT(t *testing.T, rt *runtime.Runtime, o Options) *Server {
+	t.Helper()
 	eng := newTestAlarms(t, map[string]any{"HiTempAlm": true})
 	eng.Evaluate()
 	o.Alarms = eng
@@ -139,7 +144,7 @@ func auditServer(t *testing.T, o Options) *Server {
 	h := testHistory()
 	o.History = func() *ProgramHistory { return h }
 	o.SourcesAt = sourcesFromHistory(h)
-	return New(newTestRuntime(t), o)
+	return New(rt, o)
 }
 
 func sfcServer(t *testing.T) *Server {
@@ -161,6 +166,9 @@ type auditRow struct {
 	path    string
 	body    string
 	header  map[string]string
+	// also is a second permission the action needs on top of its own (an
+	// import writes tags, so it needs the write permission too).
+	also string
 	// The one entry the request must leave.
 	action, target, user, source, result string
 	before, after                        any // checked when non-nil
@@ -472,6 +480,13 @@ func auditRows() []auditRow {
 		{name: "io commit what was not applied", pattern: "POST /api/config/commit", server: ioCommitSrv, prep: ioStaged(true),
 			method: "POST", path: "/api/config/commit", body: `{"id":"1"}`,
 			action: "config.commit", target: "1", user: "anonymous", source: "api", result: "refused"},
+		{name: "parameter import", pattern: "POST /api/parameters/import", server: paramImportSrv,
+			method: "POST", path: "/api/parameters/import", body: `{"version":1,"parameters":{"SP":70}}`,
+			also: "write", action: "param.import", target: "1 parameters", user: "anonymous", source: "api", result: "ok",
+			before: map[string]any{"SP": 65.0}, after: map[string]any{"SP": 70.0}},
+		{name: "parameter import out of range", pattern: "POST /api/parameters/import", server: paramImportSrv,
+			method: "POST", path: "/api/parameters/import", body: `{"version":1,"parameters":{"SP":95}}`,
+			action: "param.import", target: "1 parameters", user: "anonymous", source: "api", result: "refused"},
 		{name: "io cancel a pending revert", pattern: "POST /api/io/revert/cancel", server: ioRevertSrv,
 			method: "POST", path: "/api/io/revert/cancel",
 			action: "config.revert.cancel", target: "", user: "anonymous", source: "api", result: "ok"},

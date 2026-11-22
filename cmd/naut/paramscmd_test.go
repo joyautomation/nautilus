@@ -188,3 +188,47 @@ func TestDiffSetCaseInsensitiveAndNullNames(t *testing.T) {
 		t.Fatalf("null names not reported: %v", lines)
 	}
 }
+
+func TestParamsImportCommand(t *testing.T) {
+	var got map[string]any
+	status := http.StatusOK
+	reply := `{"dryRun":false,"applied":true,"results":[{"name":"Tank.SP","from":42.5,"to":50,"status":"change"}]}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/parameters/import" {
+			http.NotFound(w, r)
+			return
+		}
+		json.NewDecoder(r.Body).Decode(&got)
+		w.WriteHeader(status)
+		w.Write([]byte(reply))
+	}))
+	defer srv.Close()
+	dir := t.TempDir()
+	file := filepath.Join(dir, "set.yaml")
+	os.WriteFile(file, []byte("version: 1\nparameters: {Tank.SP: 50}\n"), 0o644)
+
+	if c := runParams([]string{"import", "--host", srv.URL, "--file", file, "--dry-run"}); c != 0 {
+		t.Fatalf("dry run = %d", c)
+	}
+	if got["dryRun"] != true || got["version"] != 1.0 || got["parameters"].(map[string]any)["Tank.SP"] != 50.0 {
+		t.Fatalf("sent %v", got)
+	}
+	if c := runParams([]string{"import", "--host", srv.URL, "--file", file}); c != 0 || got["dryRun"] != false {
+		t.Fatalf("apply = %d %v", c, got)
+	}
+	status, reply = http.StatusUnprocessableEntity, `{"results":[{"name":"Tank.SP","status":"refused","reason":"above max"}]}`
+	if c := runParams([]string{"import", "--host", srv.URL, "--file", file}); c != 1 {
+		t.Fatalf("refused = %d", c)
+	}
+	status, reply = http.StatusConflict, `{"error":"the set changed","answer":{"results":[{"name":"Tank.SP","status":"applied"}]}}`
+	if c := runParams([]string{"import", "--host", srv.URL, "--file", file}); c != 1 {
+		t.Fatalf("409 = %d", c)
+	}
+	status, reply = http.StatusUnauthorized, `{"error":"sign in"}`
+	if c := runParams([]string{"import", "--host", srv.URL, "--file", file}); c != 2 {
+		t.Fatalf("401 = %d", c)
+	}
+	if c := runParams([]string{"import", "--host", srv.URL}); c != 2 {
+		t.Fatalf("no file = %d", c)
+	}
+}
