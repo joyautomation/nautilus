@@ -202,3 +202,43 @@ export function takeRepoSet(ps: Parameter[]): Record<string, unknown> {
 	}
 	return out;
 }
+
+/** What `takeRepo` did. */
+export type TakeOutcome =
+	| { kind: 'nothing'; message: string }
+	| { kind: 'declined' }
+	| { kind: 'error'; message: string }
+	| { kind: 'applied'; count: number; message: string };
+
+/**
+ * Take the repo's value for `which`: a dry run says what would change, `ask`
+ * shows it (return false to decline, and nothing is sent), then the set is
+ * applied all or nothing. A value that moved between the dry run and the
+ * apply (someone edited it while the question was open) is overwritten by the
+ * server, which has no expected-from guard; this says so, with the value that
+ * was replaced, rather than reporting a clean apply.
+ */
+export async function takeRepo(
+	client: Pick<ParametersClient, 'importSet'>,
+	which: Parameter[],
+	ask: (lines: string[]) => Promise<boolean>
+): Promise<TakeOutcome> {
+	const set = takeRepoSet(which);
+	if (!Object.keys(set).length) return { kind: 'nothing', message: 'Nothing here has a repo value to take.' };
+	const dry = await client.importSet(set, true);
+	if (!dry.ok) return { kind: 'error', message: dry.message };
+	const changes = dry.results.filter((x) => x.status === 'change');
+	if (!changes.length) return { kind: 'nothing', message: 'The plant already runs the repo values.' };
+	const ok = await ask(changes.map((x) => `${x.name}: ${valueText(x.from)} → ${valueText(x.to)}`));
+	if (!ok) return { kind: 'declined' };
+	const done = await client.importSet(set, false);
+	if (!done.ok) return { kind: 'error', message: done.message };
+	const applied = done.results.filter((x) => x.status === 'applied');
+	const seen = new Map(changes.map((x) => [x.name, x.from]));
+	const moved = applied.filter((x) => seen.has(x.name) && JSON.stringify(seen.get(x.name)) !== JSON.stringify(x.from));
+	let message = `Applied ${applied.length} parameter(s).`;
+	if (moved.length) {
+		message += ` These changed while you were confirming, and their newer value was replaced: ${moved.map((x) => `${x.name} (was ${valueText(x.from)})`).join(', ')}.`;
+	}
+	return { kind: 'applied', count: applied.length, message };
+}

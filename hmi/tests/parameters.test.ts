@@ -1,7 +1,7 @@
 // The parameter client (#718 slice 5): what it asks, and what it says for each
 // answer. A refused set carries its results; nothing is ever "empty" by error.
 import { describe, it, expect } from './harness.js';
-import { ParametersClient, driftBadge, drifted, rangeText, refusedText, takeRepoSet, valueText, type Parameter } from '../src/lib/parameters.js';
+import { ParametersClient, driftBadge, drifted, rangeText, refusedText, takeRepo, takeRepoSet, valueText, type ImportAnswer, type Parameter } from '../src/lib/parameters.js';
 
 const json = (b: unknown, status = 200) => new Response(JSON.stringify(b), { status });
 
@@ -103,5 +103,65 @@ describe('helpers', () => {
 		expect(rangeText({ min: 0 })).toBe('0 – …');
 		expect(rangeText({ min: 0, max: 90 })).toBe('0 – 90');
 		expect(String(refusedText([{ name: 'A', status: 'change' }])).includes('nothing was written')).toBe(true);
+	});
+});
+
+describe('takeRepo (the flow behind "Use repo value")', () => {
+	type Call = { values: Record<string, unknown>; dryRun: boolean };
+	function fake(answers: ImportAnswer[]) {
+		const calls: Call[] = [];
+		return {
+			calls,
+			importSet: async (values: Record<string, unknown>, dryRun = false) => {
+				calls.push({ values, dryRun });
+				return answers[calls.length - 1];
+			}
+		};
+	}
+	const dry = (from: unknown, to: unknown): ImportAnswer => ({ ok: true, applied: false, results: [{ name: 'A', status: 'change', from, to }] });
+	const done = (from: unknown, to: unknown): ImportAnswer => ({ ok: true, applied: true, results: [{ name: 'A', status: 'applied', from, to }] });
+	const row = P('A', 'repo-ahead', { value: 1, init: 2 });
+
+	it('dry run, then ask with what changes, then apply the same set', async () => {
+		const f = fake([dry(1, 2), done(1, 2)]);
+		let shown: string[] = [];
+		const r = await takeRepo(f, [row], async (l) => ((shown = l), true));
+		expect(shown).toEqual(['A: 1 → 2']);
+		expect(f.calls.map((c) => c.dryRun)).toEqual([true, false]);
+		expect(f.calls[1].values).toEqual({ A: 2 });
+		expect(r).toEqual({ kind: 'applied', count: 1, message: 'Applied 1 parameter(s).' });
+	});
+	it('declining sends no apply', async () => {
+		const f = fake([dry(1, 2)]);
+		expect(await takeRepo(f, [row], async () => false)).toEqual({ kind: 'declined' });
+		expect(f.calls.length).toBe(1);
+	});
+	it('a refused dry run says why and asks nothing', async () => {
+		const f = fake([{ ok: false, status: 422, message: 'refused, nothing written: A (above max)' }]);
+		let asked = false;
+		const r = await takeRepo(f, [row], async () => ((asked = true), true));
+		expect(r).toEqual({ kind: 'error', message: 'refused, nothing written: A (above max)' });
+		expect(asked).toBe(false);
+	});
+	it('never sends an operator edit (plant ahead) or an empty set', async () => {
+		const f = fake([]);
+		const r = await takeRepo(f, [P('A', 'plant-ahead')], async () => true);
+		expect(r.kind).toBe('nothing');
+		expect(f.calls.length).toBe(0);
+	});
+	it('already in step on the controller is "nothing", no question', async () => {
+		const f = fake([{ ok: true, applied: false, results: [{ name: 'A', status: 'unchanged' }] }]);
+		let asked = false;
+		expect((await takeRepo(f, [row], async () => ((asked = true), true))).kind).toBe('nothing');
+		expect(asked).toBe(false);
+	});
+	it('says so when a value moved while the question was open', async () => {
+		const f = fake([dry(1, 2), done(1.5, 2)]);
+		const r = await takeRepo(f, [row], async () => true);
+		expect(r.kind === 'applied' && r.message.includes('A (was 1.5)')).toBe(true);
+	});
+	it('a failed apply is an error, not an applied count', async () => {
+		const f = fake([dry(1, 2), { ok: false, status: 403, message: 'not permitted to write: A' }]);
+		expect(await takeRepo(f, [row], async () => true)).toEqual({ kind: 'error', message: 'not permitted to write: A' });
 	});
 });

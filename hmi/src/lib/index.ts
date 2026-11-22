@@ -352,5 +352,5 @@ export type {
 // Setpoint parameters kept in step with Git (#718): GET /api/parameters with a
 // drift badge, and "use the repo value" through POST /api/parameters/import.
 export { default as ParameterList } from './components/ParameterList.svelte';
-export { ParametersClient, driftBadge, drifted, rangeText, takeRepoSet, valueText, refusedText } from './parameters.js';
-export type { Parameter, DriftState, WriteBack, ImportResult, ImportAnswer, ParametersAnswer, ParametersClientOptions } from './parameters.js';
+export { ParametersClient, driftBadge, drifted, rangeText, takeRepoSet, takeRepo, valueText, refusedText } from './parameters.js';
+export type { Parameter, DriftState, WriteBack, ImportResult, ImportAnswer, ParametersAnswer, ParametersClientOptions, TakeOutcome } from './parameters.js';

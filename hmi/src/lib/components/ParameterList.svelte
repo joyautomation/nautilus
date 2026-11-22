@@ -17,7 +17,7 @@
 		driftBadge,
 		drifted,
 		rangeText,
-		takeRepoSet,
+		takeRepo,
 		valueText,
 		type Parameter,
 		type WriteBack
@@ -49,17 +49,19 @@
 	const shown = $derived(driftOnly ? drifted(rows) : rows);
 	const driftCount = $derived(drifted(rows).length);
 
+	let seq = 0;
 	export async function load() {
+		const mine = ++seq;
 		loading = true;
 		const r = await client.list();
+		if (mine !== seq) return; // a newer read is under way; this one is stale
 		loading = false;
 		if (r.ok) {
 			rows = r.parameters;
 			writeBack = r.writeBack;
 			error = '';
 		} else {
-			rows = [];
-			error = r.message;
+			error = r.message; // keep what was shown; a failed read is not "no parameters"
 		}
 	}
 
@@ -68,47 +70,34 @@
 	});
 
 	/** Take the repo's value for `which`: dry run, confirm what changes, apply. */
-	async function takeRepo(which: Parameter[]) {
-		const set = takeRepoSet(which);
-		const names = Object.keys(set);
-		if (!names.length || busy) return;
+	async function doTake(which: Parameter[]) {
+		if (busy) return;
 		busy = true;
 		note = '';
 		error = '';
 		try {
-			const dry = await client.importSet(set, true);
-			if (!dry.ok) {
-				error = dry.message;
-				return;
-			}
-			const changes = dry.results.filter((x) => x.status === 'change');
-			if (!changes.length) {
-				note = 'The plant already runs the repo values.';
-				await load();
-				return;
-			}
-			const ok = await confirm({
-				title: `Use the repo value for ${changes.length} parameter${changes.length === 1 ? '' : 's'}?`,
-				body: 'The plant value is replaced by the manifest init:.',
-				items: changes.map((x) => `${x.name}: ${valueText(x.from)} → ${valueText(x.to)}`),
-				confirmLabel: 'Use repo value',
-				danger: true
-			});
-			if (!ok) return;
-			const done = await client.importSet(set, false);
-			if (!done.ok) {
-				error = done.message;
-				return;
-			}
-			note = `Applied ${done.results.filter((x) => x.status === 'applied').length} parameter(s).`;
-			await load();
+			const r = await takeRepo(client, which, (lines) =>
+				confirm({
+					title: `Use the repo value for ${lines.length} parameter${lines.length === 1 ? '' : 's'}?`,
+					body: 'The plant value is replaced by the manifest init:.',
+					items: lines,
+					maxItems: 0,
+					confirmLabel: 'Use repo value',
+					danger: true
+				})
+			);
+			if (r.kind === 'error') error = r.message;
+			else if (r.kind !== 'declined') note = r.message;
+			if (r.kind === 'applied' || r.kind === 'nothing') await load();
 		} finally {
 			busy = false;
 		}
 	}
 
 	const canTake = (p: Parameter) => p.state === 'repo-ahead' || p.state === 'conflict';
-	const takeable = $derived(rows.filter(canTake));
+	// A conflict holds an operator's edit, so a person decides it row by row;
+	// only a repo-ahead row (nobody edited it) goes in the bulk button.
+	const takeable = $derived(rows.filter((p) => p.state === 'repo-ahead'));
 
 	function who(p: Parameter): string {
 		if (!p.editedBy) return '';
@@ -126,13 +115,13 @@
 		<span class="wb" title="The manifest's parameters.writeBack">write-back: {writeBack}</span>
 		<span class="grow"></span>
 		{#if takeable.length > 1}
-			<Button size="sm" variant="danger" disabled={busy} onclick={() => takeRepo(takeable)}>Use all repo values ({takeable.length})</Button>
+			<Button size="sm" variant="danger" disabled={busy} onclick={() => doTake(takeable)}>Use all repo-ahead values ({takeable.length})</Button>
 		{/if}
 		<Button size="sm" icon="arrow-path" loading={loading} onclick={() => load()}>Read</Button>
 	</div>
 
-	{#if error}<p class="msg err" role="alert">{error}</p>{/if}
-	{#if note}<p class="msg" role="status">{note}</p>{/if}
+	<p class="msg err" role="alert">{error}</p>
+	<p class="msg" role="status">{note}</p>
 
 	<div class="tablescroll">
 		<!-- svelte-ignore a11y_no_redundant_roles -->
@@ -147,7 +136,7 @@
 					<th role="columnheader">Range</th>
 					<th role="columnheader">State</th>
 					<th role="columnheader">Last edit</th>
-					<th role="columnheader"></th>
+					<th role="columnheader"><span class="sr">Action</span></th>
 				</tr>
 			</thead>
 			<!-- svelte-ignore a11y_no_redundant_roles -->
@@ -166,12 +155,12 @@
 						<td role="cell" class="detail" class:none={!who(p)} data-label="Last edit">{who(p)}</td>
 						<td role="cell" class="act" class:none={!canTake(p)} data-label="">
 							{#if canTake(p)}
-								<Button size="sm" variant="secondary" disabled={busy} onclick={() => takeRepo([p])}>Use repo value</Button>
+								<Button size="sm" variant="secondary" aria-label={`Use repo value for ${p.name}`} disabled={busy} onclick={() => doTake([p])}>Use repo value</Button>
 							{/if}
 						</td>
 					</tr>
 				{:else}
-					<tr class="empty">
+					<tr role="row" class="empty">
 						<td role="cell" colspan="7">
 							{loading ? 'Reading…' : rows.length && driftOnly ? 'Every parameter is in step.' : 'No parameters.'}
 						</td>
@@ -195,6 +184,13 @@
 		gap: 10px;
 		font-size: var(--font-xs);
 		color: var(--ink-2);
+	}
+	.sr {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+		clip-path: inset(50%);
 	}
 	.grow {
 		flex: 1 1 0;
@@ -259,6 +255,9 @@
 		text-align: center;
 		color: var(--muted);
 		padding: 16px;
+	}
+	.msg:empty {
+		display: none;
 	}
 	.msg {
 		margin: 0;
