@@ -67,3 +67,33 @@ func TestLoadFindsTheHMINautBuilds(t *testing.T) {
 		})
 	}
 }
+
+// A plant.yaml with equipment is enough for the built-in HMI's asset and
+// area pages; an empty plant, a mimic, or an app of its own is not it.
+func TestPlantAloneMakesTheBuiltInHMI(t *testing.T) {
+	file := func(s string) *fstest.MapFile { return &fstest.MapFile{Data: []byte(s)} }
+	const prog = "PROGRAM main\nEND_PROGRAM\n"
+	man := func(extra string) *fstest.MapFile {
+		return file("name: p\nplant: plant.yaml\ntasks:\n  - program: main.st\n    scan: 100ms\ntags:\n  - { name: P1, type: BOOL, role: state }\n" + extra)
+	}
+	const plantEq = "areas: [{ id: A }]\nequipment:\n  - { id: P1, type: Pump, area: A, tag: P1 }\n"
+	for name, c := range map[string]struct {
+		fs      fstest.MapFS
+		plant   bool
+		screens bool
+	}{
+		"equipment, no mimic":    {fs: fstest.MapFS{"nautilus.yaml": man(""), "main.st": file(prog), "plant.yaml": file(plantEq)}, plant: true},
+		"no equipment":           {fs: fstest.MapFS{"nautilus.yaml": man(""), "main.st": file(prog), "plant.yaml": file("areas: [{ id: A }]\n")}},
+		"a mimic is its screens": {fs: fstest.MapFS{"nautilus.yaml": man(""), "main.st": file(prog), "plant.yaml": file(plantEq), "a.mimic.json": file("{}")}, screens: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p, err := Load(c.fs, ManifestName)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if p.HMIPlant != c.plant || p.HMIScreens != c.screens {
+				t.Errorf("HMIPlant=%v HMIScreens=%v, want %v %v", p.HMIPlant, p.HMIScreens, c.plant, c.screens)
+			}
+		})
+	}
+}

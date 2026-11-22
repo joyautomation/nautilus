@@ -308,3 +308,34 @@ func TestAlarmsReportSaysWhenTheJournalIsYoungerThanTheRange(t *testing.T) {
 		t.Errorf("a journal that covers the range is noted:\n%s", out)
 	}
 }
+
+// `report chatter -suggest` names, for each chattering alarm, the smallest
+// longer delay that would have stopped it, and says what it could not see.
+func TestAlarmsReportChatterSuggest(t *testing.T) {
+	path := writeJournal(t, journalFixture())
+	doc, _ := reportJSON(t, "chatter", "-journal", path, "-suggest")
+	rep := doc["report"].(map[string]any)
+	sugg := rep["suggestions"].([]any)
+	if len(sugg) != 1 {
+		t.Fatalf("suggestions %v, want one for CH", sugg)
+	}
+	s := sugg[0].(map[string]any)
+	if s["id"] != "CH" || s["onDelayMs"].(float64) != 1000 || s["offDelayMs"].(float64) != 0 || s["before"].(float64) != 3 || s["after"].(float64) != 1 {
+		t.Errorf("suggestion %v: want CH on-delay 1s (1 s bounces), the third (still standing, never returned) is the one activation left", s)
+	}
+	if rep["currentDelaysKnown"] != false {
+		t.Errorf("no -project: the delays are not known: %v", rep["currentDelaysKnown"])
+	}
+	var out, errb bytes.Buffer
+	if code := alarmsReport([]string{"chatter", "-journal", path, "-suggest"}, reportNow, &out, &errb); code != 0 {
+		t.Fatalf("table: %d %s", code, errb.String())
+	}
+	for _, want := range []string{"CH: on-delay 1s: 3 activations in 1 min", "Only longer delays can be judged", "No -project given"} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("table lacks %q:\n%s", want, out.String())
+		}
+	}
+	if code := alarmsReport([]string{"flood", "-journal", path, "-suggest"}, reportNow, &out, &errb); code != 2 {
+		t.Errorf("-suggest on the flood report: exit %d, want 2", code)
+	}
+}

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -330,5 +331,58 @@ func TestSchemeSaysWhyAFlowEndIsMissing(t *testing.T) {
 	_, notes, _ := planScheme(p, p.Areas[0], nil)
 	if all := strings.Join(notes, "\n"); !strings.Contains(all, "one end is a piece with no component") || strings.Contains(all, "leaves the area") {
 		t.Errorf("notes %q", all)
+	}
+}
+
+// -update on a scheme that already has its pipes says so once ("N already
+// drawn, unchanged"), not one "left as it is" line a pipe, and says when it
+// grew the canvas.
+func TestSchemeUpdateSummarisesWhatIsAlreadyThere(t *testing.T) {
+	p := schemePlantModel(t, schemePlant)
+	first, _, _ := planScheme(p, p.Areas[0], nil)
+	// a person shrinks the canvas below what the drawing needs; the update grows it back
+	var top map[string]json.RawMessage
+	_ = json.Unmarshal(first, &top)
+	top["canvas"] = json.RawMessage(`{"width":100,"height":100}`)
+	top["pipes"] = json.RawMessage(`[]`) // so the update has something to add
+	old, _ := json.Marshal(top)
+	_, notes, err := planScheme(p, p.Areas[0], old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	all := strings.Join(notes, "\n")
+	if !strings.Contains(all, "canvas height grew from 100 to") {
+		t.Errorf("no note on the canvas growing: %q", all)
+	}
+	dir := t.TempDir()
+	for name, s := range map[string]string{
+		"nautilus.yaml":               "name: p\nplant: plant.yaml\ntasks:\n  - program: main.st\n    scan: 100ms\ntags:\n  - { name: TK1, type: REAL, role: input }\n  - { name: P1, type: BOOL, role: state }\n",
+		"main.st":                     "PROGRAM main\nEND_PROGRAM\n",
+		"plant.yaml":                  "areas: [{ id: Receiving }]\nequipment:\n  - { id: TK1, type: Tank, area: Receiving, tag: TK1 }\n  - { id: P1, type: Pump, area: Receiving, tag: P1, nozzles: [N1, N2] }\nflows:\n  - { from: TK1, to: P1.N1 }\n",
+		"asset-types/Tank.asset.yaml": "type: Tank\ncomponent: Tank\nreadings: [{ tag: \"{tag}\" }]\n",
+		"asset-types/Pump.asset.yaml": "type: Pump\ncomponent: Pump\nreadings: [{ tag: \"{tag}\" }]\n",
+	} {
+		_ = os.MkdirAll(filepath.Dir(filepath.Join(dir, name)), 0o755)
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(s), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runHMIScheme([]string{dir})
+	// the second run: the id of the pipe is already there
+	r, w, _ := os.Pipe()
+	saved := os.Stdout
+	os.Stdout = w
+	code := runHMIScheme([]string{"-update", dir})
+	os.Stdout = saved
+	w.Close()
+	out, _ := io.ReadAll(r)
+	if code != 0 {
+		t.Fatalf("update: %d", code)
+	}
+	if strings.Contains(string(out), "left as it is") {
+		t.Errorf("a pipe already drawn reads like a problem:\n%s", out)
+	}
+	if !strings.Contains(string(out), "already drawn, unchanged") && !strings.Contains(string(out), "nothing to add") {
+		t.Errorf("no summary:\n%s", out)
 	}
 }

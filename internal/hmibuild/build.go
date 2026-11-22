@@ -68,6 +68,10 @@ type Options struct {
 	// that is not served from the root of its own origin (the browser
 	// playground).
 	NoPWA bool
+	// Checkout adds the I/O checkout page, its screen entry and the standing
+	// force banner to the default app (#719): the project has a checkout:
+	// section. Off, nothing of it is built.
+	Checkout bool
 }
 
 // Result is a built app: its files, by slash path from the app's root.
@@ -129,7 +133,7 @@ func Build(o Options) (*Result, error) {
 			app.addComponentsPage(proj, root)
 		}
 	} else {
-		app, err = defaultApp(o.Project, o.Title, o.Assets, o.Areas)
+		app, err = defaultApp(o.Project, o.Title, o.Assets, o.Areas, o.Checkout)
 	}
 	if err != nil {
 		return nil, err

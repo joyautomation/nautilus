@@ -2,6 +2,7 @@
 // generic over the frame shape, so nothing here is tied to any specific
 // runtime snapshot — only the primitives the visual components consume.
 import type { AlarmSummary } from './alarms.svelte.js';
+import type { CheckoutForce } from './checkout.js';
 
 /** A single timestamped sample. `t` is epoch milliseconds, `v` the value. */
 export interface TrendPoint {
@@ -189,6 +190,12 @@ export interface NautilusFrame {
 	 * way `mergeDelta` does rather than assume every frame is complete.
 	 */
 	scan: ScanStats;
+	/**
+	 * A standing I/O checkout force (#719): present on every frame while one
+	 * stands, absent otherwise. `remainingMs` is the controller's own figure at
+	 * the moment it built the frame; read it through `countdown()`.
+	 */
+	checkoutForce?: CheckoutForce;
 	/**
 	 * Tags whose value is NOT to be trusted — only the non-good ones, so a
 	 * healthy controller omits the field entirely and an absent name means

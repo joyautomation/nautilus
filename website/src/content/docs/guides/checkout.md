@@ -126,6 +126,27 @@ and the controller's own expiry are audit entries.
 
 Every begin, result and abandon is an audit entry, accepted or refused.
 
+## The Checkout page
+
+A project with a `checkout:` section gets a **Checkout** screen in the built-in
+HMI (a project with none gets no screen, no route and no banner). It shows the
+progress by area and by device, the points with their latest result (the
+reading and quality are the controller's, written into the result), and
+Pass, Fail and Note buttons where you hold `checkout` for the point's area.
+A fail or a note asks why. An output the sheet forces has a **Force…** button:
+the value (on or off, or a number), how long, the point's id typed to confirm,
+then your password.
+
+While a checkout force stands, every screen shows a banner with the point, who
+forced it and the time left. The time is the controller's figure from the last
+frame, counted down in the browser. It never says the output was released on
+its own: at zero it says "ending now", and only a frame without the force says
+there is none. If the stream goes quiet, the banner says whether the force
+still stands is not known.
+
+A custom HMI app can mount `CheckoutPage` and `CheckoutBanner` from the kit
+itself.
+
 ## Export
 
 `GET /api/checkout/runs/{id}/export` gives a run as a file: `?format=json`
@@ -145,8 +166,6 @@ The Checkout page has the same two links for the open run.
 
 ## Not yet
 
-
-- The HMI checkout page (progress by device and area).
 - Sealing a run (the signed JSON), the printable report and `naut checkout verify`.
 - A redundant pair: its controllers answer that the checkout is not available
   yet, rather than keep results on one box.
