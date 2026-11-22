@@ -193,7 +193,7 @@ func (w *writer) program(path string, prog *st.Program) *progWriter {
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "FUNCTION_BLOCK %s\n", quote(prog.Name))
+	fmt.Fprintf(&b, "FUNCTION_BLOCK %s\n", quote(w.prefix+prog.Name))
 	b.WriteString("{ S7_Optimized_Access := 'TRUE' }\n")
 	b.WriteString("VERSION : 0.1\n")
 	b.WriteString(decls.String())

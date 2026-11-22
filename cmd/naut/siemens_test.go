@@ -62,7 +62,7 @@ target:
 	if c.host != "192.0.2.10" || c.user != "naut" || c.pin != strings.Repeat("ab", 32) || c.password != "pw" {
 		t.Fatalf("%+v", c)
 	}
-	if len(c.roots) != 1 || c.roots[0] != (facade.Root{DB: "Tags"}) {
+	if len(c.roots) != 1 || c.roots[0] != (facade.Root{DB: "naut_Tags"}) {
 		t.Fatalf("default roots: %+v", c.roots)
 	}
 	// Flags win over the project.

@@ -223,3 +223,36 @@ func TestSiemensWriterInputRefusesWhatTheRuntimeRefuses(t *testing.T) {
 		})
 	}
 }
+
+// TestSiemensBlockPrefix: block-prefix defaults to "naut_" (so the
+// generated FB "main" never takes TIA's own OB1 name), an explicit value
+// reaches the writer, and check refuses an empty or non-identifier one
+// with its YAML path (#789).
+func TestSiemensBlockPrefix(t *testing.T) {
+	files := func(extra string) map[string]string {
+		return map[string]string{
+			"nautilus.yaml": strings.Replace(goodSiemensManifest, "    agent:", extra+"    agent:", 1),
+			"main.st":       siemensCheckProgram,
+		}
+	}
+	for _, c := range []struct{ name, extra, want string }{
+		{"default", "", "naut_"},
+		{"explicit", "    block-prefix: plant_\n", "plant_"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			in, err := siemensWriterInput(writeProject(t, files(c.extra)), "")
+			if err != nil || in.BlockPrefix != c.want {
+				t.Fatalf("prefix %q, %v; want %q", in.BlockPrefix, err, c.want)
+			}
+			if _, code := checkIn(t, files(c.extra)); code != 0 {
+				t.Fatalf("check exit %d", code)
+			}
+		})
+	}
+	for _, extra := range []string{"    block-prefix: \"\"\n", "    block-prefix: 1abc\n", "    block-prefix: \"a b\"\n"} {
+		out, code := checkIn(t, files(extra))
+		if code != 1 || !strings.Contains(out, "error: target.siemens.block-prefix:") {
+			t.Errorf("%q: exit %d:\n%s", extra, code, out)
+		}
+	}
+}

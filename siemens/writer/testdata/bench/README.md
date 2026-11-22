@@ -2,6 +2,9 @@
 
 `Main.st` is written with the bench's manifest tags (`writer_test.go`'s
 `benchGlobals`) and one 100 ms task. `golden/` holds what the writer emits.
+The goldens are written with the default block prefix `naut_` (#789): the
+program `Main` becomes FB `"naut_Main"`, so it never takes TIA's `"Main"` [OB1].
+They have not been through a TIA compile with the prefix yet.
 
 These files encode what TIA Portal's exported SCL sources look like, as far
 as public knowledge goes. **They are not yet verified against a TIA compile.**

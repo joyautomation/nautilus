@@ -86,11 +86,18 @@ type Input struct {
 	Tasks    []Task
 	// TagsDB names the global DB. Default "Tags".
 	TagsDB string
+	// BlockPrefix is put in front of every generated block name: the
+	// program FBs, their instance DBs, the tags DB and the OBs, and every
+	// reference to them in the SCL. It keeps a generated block clear of
+	// TIA's own ("Main" [OB1]) and of a customer's. The writer applies it
+	// as given; the CLI supplies the default ("naut_") and refuses an
+	// empty one.
+	BlockPrefix string
 }
 
 // File is one generated source, named as tiad imports it.
 type File struct {
-	Path string // e.g. "Main.scl", "Main_DB.db", "Tags.db", "OB_main.scl"
+	Path string // e.g. "naut_Main.scl", "naut_Main_DB.db", "naut_Tags.db", "naut_OB_main.scl"
 	Data []byte
 }
 
@@ -107,7 +114,8 @@ type Output struct {
 	Files []File
 	OBs   []OB
 	// Roots maps a nautilus scope to its Siemens symbol: a program name to
-	// its instance DB (`"Main_DB"`), and "" to the global DB (`"Tags"`).
+	// its instance DB (`"naut_Main_DB"`), and "" to the global DB
+	// (`"naut_Tags"`); the names carry Input.BlockPrefix.
 	// Symbol uses it to turn a nautilus tag path into a Web API symbol.
 	Roots map[string]string
 	// names are the readable names under each root, lower-cased: the
@@ -117,8 +125,8 @@ type Output struct {
 }
 
 // Symbol maps a nautilus tag path to the Web API symbol of the same value:
-// a manifest tag "Level" to `"Tags".Level`, a program variable
-// "Main.count" to `"Main_DB".count`.
+// a manifest tag "Level" to `"naut_Tags".Level`, a program variable
+// "Main.count" to `"naut_Main_DB".count` (with the default block prefix).
 //
 // It answers only for what the CPU holds where the Web API can read it: a
 // manifest tag, or a program's static (not a temp), and members below
@@ -165,7 +173,9 @@ func Write(in Input) (Output, []Diag, error) {
 	if tagsDB == "" {
 		tagsDB = "Tags"
 	}
-	w := &writer{globals: map[string]Global{}, tagsDB: tagsDB}
+	tagsDB = in.BlockPrefix + tagsDB
+	prefix := in.BlockPrefix
+	w := &writer{globals: map[string]Global{}, tagsDB: tagsDB, prefix: prefix}
 	for _, g := range in.Globals {
 		w.globals[strings.ToLower(g.Name)] = g
 	}
@@ -208,15 +218,16 @@ func Write(in Input) (Output, []Diag, error) {
 		if pw == nil {
 			continue
 		}
-		if !claim(prog.Name, "program "+prog.Name) || !claim(prog.Name+"_DB", "the instance DB of "+prog.Name) {
+		fbName, dbName := prefix+prog.Name, prefix+prog.Name+"_DB"
+		if !claim(fbName, "program "+prog.Name) || !claim(dbName, "the instance DB of "+prog.Name) {
 			continue
 		}
 		progs[strings.ToLower(prog.Name)] = true
 		out.names[strings.ToLower(prog.Name)] = pw.statics
 		out.Files = append(out.Files,
-			File{Path: prog.Name + ".scl", Data: pw.fb},
-			File{Path: prog.Name + "_DB.db", Data: instanceDB(prog.Name)})
-		out.Roots[prog.Name] = quote(prog.Name + "_DB")
+			File{Path: fbName + ".scl", Data: pw.fb},
+			File{Path: dbName + ".db", Data: instanceDB(fbName, dbName)})
+		out.Roots[prog.Name] = quote(dbName)
 	}
 
 	// One task in v1. nautilus copies shared tags in at a task's scan
@@ -246,12 +257,12 @@ func Write(in Input) (Output, []Diag, error) {
 			w.diag("siemens/task", "nautilus.yaml", 0, fmt.Sprintf("task %s: interval %s is over the 60 s an S7-1500 cyclic interrupt allows", t.Name, t.Interval))
 			continue
 		}
-		ob := OB{Name: "OB_" + t.Name, Number: 30, Cycle: t.Interval}
+		ob := OB{Name: prefix + "OB_" + t.Name, Number: 30, Cycle: t.Interval}
 		if !claim(ob.Name, "the OB of task "+t.Name) {
 			continue
 		}
 		out.OBs = append(out.OBs, ob)
-		out.Files = append(out.Files, File{Path: ob.Name + ".scl", Data: obSource(ob, t.Program)})
+		out.Files = append(out.Files, File{Path: ob.Name + ".scl", Data: obSource(ob, prefix+t.Program+"_DB")})
 	}
 
 	if len(in.Globals) > 0 {
@@ -270,7 +281,8 @@ func Write(in Input) (Output, []Diag, error) {
 
 type writer struct {
 	globals map[string]Global
-	tagsDB  string
+	tagsDB  string // with the prefix
+	prefix  string
 	diags   []Diag
 }
 
@@ -280,27 +292,27 @@ func (w *writer) diag(rule, path string, line int, msg string) {
 
 func quote(name string) string { return `"` + name + `"` }
 
-func instanceDB(prog string) []byte {
+func instanceDB(fb, db string) []byte {
 	var b strings.Builder
-	fmt.Fprintf(&b, "DATA_BLOCK %s\n", quote(prog+"_DB"))
+	fmt.Fprintf(&b, "DATA_BLOCK %s\n", quote(db))
 	b.WriteString("{ S7_Optimized_Access := 'TRUE' }\n")
 	b.WriteString("VERSION : 0.1\n")
 	// No NON_RETAIN here: which members are retained is the FB's own
 	// declaration (VAR RETAIN), and a block-level NON_RETAIN would
 	// override it.
-	fmt.Fprintf(&b, "%s\n", quote(prog))
+	fmt.Fprintf(&b, "%s\n", quote(fb))
 	b.WriteString("\nBEGIN\n\nEND_DATA_BLOCK\n")
 	return []byte(b.String())
 }
 
-func obSource(ob OB, prog string) []byte {
+func obSource(ob OB, instDB string) []byte {
 	var b strings.Builder
 	fmt.Fprintf(&b, "ORGANIZATION_BLOCK %s\n", quote(ob.Name))
 	fmt.Fprintf(&b, "TITLE = \"Cyclic interrupt, %s\"\n", ob.Cycle)
 	b.WriteString("{ S7_Optimized_Access := 'TRUE' }\n")
 	b.WriteString("VERSION : 0.1\n")
 	b.WriteString("\nBEGIN\n")
-	fmt.Fprintf(&b, "\t%s();\n", quote(prog+"_DB"))
+	fmt.Fprintf(&b, "\t%s();\n", quote(instDB))
 	b.WriteString("END_ORGANIZATION_BLOCK\n")
 	return []byte(b.String())
 }

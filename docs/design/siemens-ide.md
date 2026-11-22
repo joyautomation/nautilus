@@ -83,9 +83,9 @@ Native LAD (SimaticML FlgNet) is D3.
 
 | nautilus | SCL / TIA |
 |---|---|
-| Program | FB with an instance DB, called from its task's OB |
+| Program | FB `"naut_Main"` with an instance DB `"naut_Main_DB"`, called from its task's OB `"naut_OB_main"`. Every generated block name carries the block prefix (below) |
 | The task (`scan:`) | Cyclic interrupt OB30 at that cycle, 1 ms to 60 s. **One task in v1**: nautilus copies shared tags in at a task's scan start and commits them at its end, while cyclic interrupt OBs preempt each other and touch the tags DB in place. Copy-in/copy-out for several tasks is its own later item. nautilus has no free-running task, so there is no OB1 |
-| Manifest tags | Global DB `"Tags"` (optimized). Members are visible and writable to Web API/HMI/OPC UA *(verify the attribute spelling in SCL source)* |
+| Manifest tags | Global DB `"naut_Tags"` (optimized), the Web API symbol `"naut_Tags".Level`. Members are visible and writable to Web API/HMI/OPC UA *(verify the attribute spelling in SCL source)* |
 | I/O-bound tags | PLC tag table, `%I`/`%Q` addresses from the station spec |
 | UDT | PLC data type (`.udt`) |
 | User FB / function | FB / FC |
@@ -94,6 +94,18 @@ Native LAD (SimaticML FlgNet) is D3.
 | SR RS | Written inline as set/reset logic on a static, since they are believed to be LAD/FBD boxes that SCL cannot call *(verify)* |
 | Elementary types, arrays, structs | Direct. DT becomes one of DT, LDT or DTL, chosen and documented *(verify each on FW 3.1)* |
 | `VAR RETAIN` | Retentive members *(verify the SCL source syntax for per-member retain)* |
+
+**The block prefix (#789).** `target.siemens.block-prefix` (default
+`naut_`) is put in front of every block, DB and tag table the writer
+generates: the program FB, its instance DB, the tags DB and the OBs, and
+every reference to them inside the SCL (`"naut_Tags".x`, the
+`"naut_Main_DB"()` call). Without it, `PROGRAM Main` became FB `"Main"`,
+which collides with the `"Main"` [OB1] TIA gives every CPU and with a
+customer's blocks on adoption (§2a). The Web API symbols follow
+(`"naut_Main_DB".count`), and `naut siemens serve` browses the prefixed
+tags DB by default. The prefix must be an SCL identifier start (letters,
+digits and `_`, not beginning with a digit). An empty prefix is refused by
+`naut check` for now; leaving it out gives the default.
 | `dialect: siemens` (reserved) | Siemens-semantics blocks, only where no IEC form exists |
 
 The rules:

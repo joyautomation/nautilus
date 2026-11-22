@@ -101,7 +101,7 @@ func New(ctx context.Context, o Options) (*Facade, error) {
 		o.Log = slog.Default()
 	}
 	if len(o.Roots) == 0 {
-		o.Roots = []Root{{DB: "Tags"}}
+		o.Roots = []Root{{DB: "naut_Tags"}} // the writer's default block prefix
 	}
 	if o.Poll <= 0 {
 		o.Poll = 250 * time.Millisecond
@@ -133,7 +133,7 @@ func New(ctx context.Context, o Options) (*Facade, error) {
 }
 
 // RootsFromWriter turns siemens/writer's Output.Roots (a nautilus scope →
-// a quoted DB name: "" → `"Tags"`, "Main" → `"Main_DB"`) into the roots to
+// a quoted DB name: "" → `"naut_Tags"`, "Main" → `"naut_Main_DB"`) into the roots to
 // browse, so serve binds exactly the names the writer generated. The order
 // is stable: the tags DB first, then the programs by name.
 func RootsFromWriter(roots map[string]string) []Root {

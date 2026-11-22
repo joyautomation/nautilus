@@ -49,6 +49,13 @@ func siemensWriterInput(dir, manifestName string) (swriter.Input, error) {
 		return swriter.Input{}, err
 	}
 	var in swriter.Input
+	var st *project.SiemensTarget
+	if m.Target != nil {
+		st = m.Target.Siemens
+	}
+	// An invalid prefix is check's problem (Problems reports it); the
+	// writer still gets the value as written.
+	in.BlockPrefix = st.Prefix()
 
 	defs, err := project.TagDefs(m)
 	if err != nil {
