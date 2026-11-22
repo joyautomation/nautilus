@@ -283,6 +283,13 @@ never computes.
   When a controller briefly refuses a request for that reason (the browser sees
   a transient refusal), the operator is asked to sign in again and gets a local
   session, so nobody is locked out.
+  A session cookie belongs to one address. A browser that is sent from one
+  controller's own address to the other's (what a built-in screen does when
+  its controller stops answering) is on a different origin, so it does not
+  send the cookie and the operator signs in again. Sessions survive a
+  takeover without that sign-in only when operators use one address that
+  moves with the leader: the floating IP, or a proxy or load balancer in
+  front of the pair.
 - The identity shown in `/api/cluster` comes from `POD_NAME`, and the
   proxy target from `POD_IP` — both from the downward API:
 
