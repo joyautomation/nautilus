@@ -24,6 +24,7 @@ const (
 	PermWrite      = auth.Write      // tag writes
 	PermAck        = auth.Ack        // alarm acknowledgement
 	PermShelve     = auth.Shelve     // alarm shelving
+	PermNote       = auth.Note       // operator notes (#720)
 	PermSubstitute = auth.Substitute // #707's substitutes
 	PermForce      = auth.Force      // forces, set and cleared
 	PermSFC        = auth.SFC        // SFC step and transition commands
@@ -56,6 +57,9 @@ var actionPerm = map[string]string{
 	"program.rollback":         PermEdit,
 	"program.activate":         PermActivate,
 	"push.confirm-revocations": PermConfig,
+	"note.add":                 PermNote,
+	"note.revise":              PermNote,
+	"note.retract":             PermNote,
 	"config.stage":             PermConfig,
 	"config.validate":          PermConfig,
 	"config.apply":             PermConfig,

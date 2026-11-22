@@ -39,9 +39,9 @@ func mustCompile(t *testing.T, c Settings) *Policy {
 func TestBuiltInRoles(t *testing.T) {
 	want := map[string]string{
 		Viewer:        "read",
-		Operator:      "read write ack sfc",
-		Supervisor:    "read write ack shelve substitute sfc audit",
-		Engineer:      "read write ack shelve substitute force sfc edit activate deploy config audit",
+		Operator:      "read write ack note sfc",
+		Supervisor:    "read write ack shelve note substitute sfc audit",
+		Engineer:      "read write ack shelve note substitute force sfc edit activate deploy config audit",
 		Administrator: strings.Join(Permissions, " "),
 	}
 	for role, perms := range want {
@@ -214,7 +214,7 @@ func TestCanNormalisesTheTarget(t *testing.T) {
 func TestDescribe(t *testing.T) {
 	p := mustCompile(t, plant)
 	got := fmt.Sprint(p.Describe(User("pat")))
-	want := "{user:pat [lead-operator viewer] map[*:[read sfc] roasting:[write ack shelve]] map[roasting:[rst_* burner_*]]}"
+	want := "{user:pat [lead-operator viewer] map[*:[read sfc] roasting:[write ack shelve note]] map[roasting:[rst_* burner_*]]}"
 	if got != want {
 		t.Errorf("Describe(pat) = %s, want %s", got, want)
 	}

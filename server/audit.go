@@ -112,9 +112,13 @@ var actionClass = map[string]string{
 	// Ending the subscriptions a mass revocation held (#722): phones stop
 	// being paged on a person's word.
 	"push.confirm-revocations": strict,
-	"config.stage":             strict,
-	"config.validate":          strict,
-	"config.apply":             strict,
+	// A note is operator intent with words (#720): never unrecorded.
+	"note.add":        strict,
+	"note.revise":     strict,
+	"note.retract":    strict,
+	"config.stage":    strict,
+	"config.validate": strict,
+	"config.apply":    strict,
 	// Saving an applied configuration as a commit (#711) writes to the
 	// repo the controller runs from, in the principal's name.
 	"config.commit": strict,

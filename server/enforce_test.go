@@ -371,7 +371,7 @@ func TestMe(t *testing.T) {
 		// The areas a caller's permissions name carry their tag patterns
 		// (the HMI kit greys out a control by them, #708 PR 7b); a caller
 		// holding none gets no areas field.
-		"f-secret": `"principal":"token:fenced","roles":["administrator"],"permissions":{"*":["read","sfc","edit","activate","deploy","config","audit","users","override","redundancy"],"nowhere":["write","ack","shelve","substitute","force"]},"areas":{"nowhere":["zzz_*"]}`,
+		"f-secret": `"principal":"token:fenced","roles":["administrator"],"permissions":{"*":["read","sfc","edit","activate","deploy","config","audit","users","override","redundancy"],"nowhere":["write","ack","shelve","note","substitute","force"]},"areas":{"nowhere":["zzz_*"]}`,
 		"v-secret": `"principal":"token:viewer","roles":["viewer"],"permissions":{"*":["read"]},"elevated"`,
 		"guess":    `"principal":"anonymous","roles":[],"permissions":{}`,
 	} {

@@ -105,10 +105,45 @@ type Entry struct {
 	// runtime applies only the first entry that names it.
 	Req string `json:"req,omitempty"`
 
+	// Note is an operator note's revision (#720): a KindNote entry carries
+	// it and no other kind does. The log only carries it; the notes package
+	// applies it. A replica that predates it drops the field when it
+	// re-marshals the entry, and ignores the kind.
+	Note *NoteEntry `json:"note,omitempty"`
+
 	// Lapsed is set by the node, never stored: this entry is one a
 	// KindLapse entry committed with it names (see KindLapse). Apply sees
 	// it on the entry and records it instead of carrying it out.
 	Lapsed bool `json:"-"`
+}
+
+// NoteEntry is one revision of an operator note (#720). It is data the log
+// carries for the notes package (docs/design/context-map.md §2): the log
+// decides nothing about it, and a note applied on a copy is never undone
+// by the log. ID and Rev name the revision; the leader's entry TS is its
+// time; the author is the entry's Principal and By.
+type NoteEntry struct {
+	ID  string `json:"id"`  // the note, chosen by the proposer (random)
+	Rev int    `json:"rev"` // 1 is the note itself, 2... its revisions
+	// Target is what the note is about: Kind is asset, tag, alarm, area or
+	// log; Occurrence and ActiveMs link an alarm note to one occurrence.
+	TargetKind string `json:"tk,omitempty"`
+	TargetID   string `json:"ti,omitempty"`
+	Occurrence string `json:"occ,omitempty"`
+	ActiveMs   int64  `json:"act,omitempty"`
+	// Kind is "note" (the default) or "handover", on revision 1.
+	Kind string `json:"nk,omitempty"`
+	Text string `json:"text"`
+	// Re names the note this one is an addendum to (revision 1 only).
+	Re string `json:"re,omitempty"`
+	// Retract: this revision withdraws the note, Reason says why. The text
+	// of every earlier revision stays.
+	Retract bool   `json:"retract,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+	// Override: a retraction by someone other than the author, which the
+	// proposer checked (a label, like Principal: apply decides nothing
+	// from it).
+	Override bool `json:"override,omitempty"`
 }
 
 func (e Entry) same(o Entry) bool {
@@ -131,6 +166,11 @@ const (
 	KindSubstitute   = "substitute"
 	KindUnsubstitute = "unsubstitute"
 	KindSuback       = "suback"
+
+	// KindNote is an operator note's revision (#720): see NoteEntry. The
+	// log is never compacted, so a copy that was wiped is brought every
+	// note back by catch-up, as it is every acknowledgement.
+	KindNote = "note"
 
 	// KindNoop is a new leader's empty entry of its own term (SyncLeader):
 	// committing it commits everything before it, which is how a leader
@@ -1210,6 +1250,52 @@ func (n *Node) open() (damaged bool, err error) {
 	n.file = f
 	n.applyRange(n.entries, n.commit)
 	return damaged, nil
+}
+
+// ReadCommitted reads a log file without opening a node: the entries it
+// holds that are committed, in order. A tool that reads a stopped
+// controller's log (naut notes export) uses it. A torn final line is
+// ignored; a file that does not parse before its end is an error.
+func ReadCommitted(path string) ([]Entry, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var es []Entry
+	var commit uint64
+	sc := bufio.NewScanner(bytes.NewReader(data))
+	sc.Buffer(make([]byte, 1<<20), 1<<20)
+	good := 0
+	for sc.Scan() {
+		line := sc.Bytes()
+		var l fileLine
+		if err := json.Unmarshal(line, &l); err != nil {
+			if rest := data[good:]; bytes.IndexByte(rest, '\n') >= 0 && len(bytes.TrimSpace(rest[bytes.IndexByte(rest, '\n')+1:])) > 0 {
+				return nil, fmt.Errorf("oplog: %s: unrecognised line %q", path, truncateStr(string(line), 80))
+			}
+			break
+		}
+		good += len(line) + 1
+		switch {
+		case l.E != nil:
+			es = append(es, *l.E)
+		case l.C != nil:
+			commit = *l.C
+		default:
+			var e Entry
+			if err := json.Unmarshal(line, &e); err == nil && e.Seq > 0 {
+				es = append(es, e)
+				commit = e.Seq
+			}
+		}
+	}
+	out := es[:0]
+	for _, e := range es {
+		if e.Seq <= commit {
+			out = append(out, e)
+		}
+	}
+	return out, nil
 }
 
 // Close releases the file.

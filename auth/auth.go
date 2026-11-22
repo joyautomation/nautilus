@@ -26,6 +26,7 @@ const (
 	Ack        = "ack"        // alarm acknowledgement
 	Shelve     = "shelve"     // alarm shelving
 	Substitute = "substitute" // #707's substitutes
+	Note       = "note"       // operator notes and the shift log (#720)
 	Force      = "force"      // forces, set and cleared
 	SFC        = "sfc"        // SFC step and transition commands
 	Edit       = "edit"       // online edits and rollbacks
@@ -43,11 +44,11 @@ const (
 )
 
 // Permissions lists every permission, in the order /api/me reports them.
-var Permissions = []string{Read, Write, Ack, Shelve, Substitute, Force, SFC, Edit, Activate, Deploy, Config, Audit, Users, Override, Redundancy}
+var Permissions = []string{Read, Write, Ack, Shelve, Note, Substitute, Force, SFC, Edit, Activate, Deploy, Config, Audit, Users, Override, Redundancy}
 
 // areaScoped are the permissions an area limits to its tags. The rest
 // apply to the whole controller, whatever areas a grant names.
-var areaScoped = map[string]bool{Write: true, Ack: true, Shelve: true, Substitute: true, Force: true}
+var areaScoped = map[string]bool{Write: true, Ack: true, Shelve: true, Note: true, Substitute: true, Force: true}
 
 // AreaScoped reports whether perm is limited by areas.
 func AreaScoped(perm string) bool { return areaScoped[perm] }
@@ -84,7 +85,7 @@ var builtins = []struct {
 	adds []string
 }{
 	{Viewer, []string{Read}},
-	{Operator, []string{Write, Ack, SFC}},
+	{Operator, []string{Write, Ack, SFC, Note}},
 	{Supervisor, []string{Shelve, Substitute, Audit}},
 	{Engineer, []string{Force, Edit, Activate, Deploy, Config}},
 	{Administrator, []string{Users, Override, Redundancy}},
