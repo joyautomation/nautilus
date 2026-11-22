@@ -1,0 +1,130 @@
+// The asset page (#714 slice 1): one page for one piece of equipment, from a
+// descriptor. The descriptor is the equipment's panel (what a mimic's click
+// already opens: readings, setpoints, commands, toggles) plus what a page has
+// room for: the readings to trend, the equipment key its alarms carry, notes,
+// audit and an optional camera. A host (or `naut hmi build`, from a device
+// row) writes it as data; `<AssetPage/>` draws it.
+//
+// Plain TS (no runes, no DOM), so the choices a page makes are tested on node.
+
+import type { AlarmInstance } from './alarms.svelte.js';
+import type { MimicPanel, MimicPanelReading } from './mimic.js';
+
+/** What `<AssetPage/>` draws. */
+export interface AssetDescriptor {
+	/** The asset's id: its page's slug, and the note target (`{kind: 'asset', id}`). */
+	id: string;
+	/** Heading. Default: the id. */
+	title?: string;
+	/** A line under it (the device or type, the area). */
+	subtitle?: string;
+	/** The equipment key its alarms carry (`equipment:` on an alarm). Default: the id. */
+	equipment?: string;
+	/** Readings, setpoints, commands and toggles, as the equipment panel has them. */
+	panel: MimicPanel;
+	/** Tags to trend together. Default: the first few numeric readings. */
+	trend?: string[];
+	/** An optional live picture: a URL the page shows beside the readings. Left out, no slot. */
+	camera?: { url: string; label?: string };
+	/** False leaves the notes section out. */
+	notes?: boolean;
+}
+
+/** How many numeric readings a page trends when it is not told which. */
+export const DEFAULT_TREND_MAX = 4;
+
+/** The asset's title. */
+export function assetTitle(a: AssetDescriptor): string {
+	return a.title || a.panel.title || a.id;
+}
+
+/** The numeric-looking readings: those with a unit or a range, or not a true/false (`on`/`off`/`alarm`). */
+function numeric(r: MimicPanelReading): boolean {
+	if (r.on !== undefined || r.off !== undefined || r.alarm) return false;
+	return r.unit !== undefined || r.min !== undefined || r.max !== undefined || r.decimals !== undefined;
+}
+
+/** The tags the trend shows: the descriptor's own, else the first numeric readings. */
+export function trendTags(a: AssetDescriptor): string[] {
+	if (a.trend) return [...new Set(a.trend)];
+	return (a.panel.readings ?? []).filter(numeric).map((r) => r.tag).slice(0, DEFAULT_TREND_MAX);
+}
+
+/** Every tag the page reads or writes, once each, in panel order. */
+export function assetTags(a: AssetDescriptor): string[] {
+	const p = a.panel;
+	const all = [
+		...(p.readings ?? []).map((r) => r.tag),
+		...(p.setpoints ?? []).map((s) => s.tag),
+		...(p.commands ?? []).flatMap((c) => (c.held ? [c.tag, c.held] : [c.tag])),
+		...(p.toggles ?? []).map((t) => t.tag),
+		...trendTags(a)
+	];
+	return [...new Set(all.filter(Boolean))];
+}
+
+/** The tags an operator can write from the page: what the audit picker offers. */
+export function writableTags(a: AssetDescriptor): string[] {
+	const p = a.panel;
+	return [...new Set([...(p.setpoints ?? []).map((s) => s.tag), ...(p.commands ?? []).map((c) => c.tag), ...(p.toggles ?? []).map((t) => t.tag)])];
+}
+
+const key = (s: string) => s.trim().toLowerCase();
+
+/** The alarms of this equipment, suppressed ones too (they carry why), worst first. */
+export function assetAlarms(instances: AlarmInstance[], a: AssetDescriptor): AlarmInstance[] {
+	const eq = key(a.equipment ?? a.id);
+	const order = ['critical', 'high', 'medium', 'low', 'diagnostic'];
+	return instances
+		.filter((i) => key(i.equipment ?? '') === eq)
+		.sort((x, y) => order.indexOf(x.priority) - order.indexOf(y.priority) || x.name.localeCompare(y.name));
+}
+
+/** A page slug for an asset id: lowercase letters, digits and dashes. */
+export function assetSlug(id: string): string {
+	return id
+		.trim()
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, '-')
+		.replace(/^-+|-+$/g, '');
+}
+
+/** The descriptors a page set can be indexed by: unique slugs, in the order given (a later duplicate is dropped). */
+export function indexAssets(list: AssetDescriptor[]): { slug: string; asset: AssetDescriptor }[] {
+	const seen = new Set<string>();
+	const out: { slug: string; asset: AssetDescriptor }[] = [];
+	for (const asset of list) {
+		const slug = assetSlug(asset.id);
+		if (!slug || seen.has(slug)) continue;
+		seen.add(slug);
+		out.push({ slug, asset });
+	}
+	return out;
+}
+
+/** A descriptor from a mimic's equipment: what its click opens, as a page. */
+export function assetFromEquipment(eq: { id: string; label?: string; panel?: MimicPanel | string }, panels: (id: string) => MimicPanel | undefined): AssetDescriptor | null {
+	const panel = typeof eq.panel === 'object' ? eq.panel : typeof eq.panel === 'string' ? panels(eq.panel) : undefined;
+	if (!panel) return null;
+	return { id: eq.id, title: panel.title || eq.label || eq.id, panel };
+}
+
+/**
+ * A tag's value by path: the tag by that name if the frame has one, else the
+ * member of a struct tag (`CONV.Speed` is `Speed` of `CONV`, as a device's
+ * tag carries its points). Undefined when there is none: nothing made up.
+ */
+export function tagValue(tags: Record<string, unknown>, path: string): unknown {
+	if (path in tags) return tags[path];
+	let cur: unknown = tags;
+	for (const part of path.split('.')) {
+		if (cur === null || typeof cur !== 'object' || !(part in (cur as Record<string, unknown>))) return undefined;
+		cur = (cur as Record<string, unknown>)[part];
+	}
+	return cur;
+}
+
+/** Whether the frame carries the tag or the member at all. */
+export function hasTag(tags: Record<string, unknown>, path: string): boolean {
+	return tagValue(tags, path) !== undefined;
+}

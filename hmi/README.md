@@ -210,6 +210,12 @@ windows (soonest to end first) and takes equipment out of service (a reason, a w
 asks for the password) or returns it. Suppressed rows in `<AlarmTable/>` show `<OutOfServiceBadge/>`. The
 client calls are `alarms.takeOutOfService(equipment, seconds, reason, by)` and `alarms.returnToService(equipment, by)`.
 
+Asset page (#714): `<AssetPage {asset} {tags} {write} alarms={alarms}/>` draws one piece of equipment from an
+`AssetDescriptor` (its `MimicPanel` plus `trend`, `equipment`, `camera`, `notes`): live values with a trend, role-gated
+settings and commands, its alarms and their history, notes, the audit of writes to it. `naut hmi build` writes one
+page per mimic equipment with a `panel` and per `devices:` row, under `/assets/<id>`; a screen named `assets` of your
+own replaces them.
+
 ## Porting a legacy HMI
 
 The components above assume you are drawing a new screen. Porting an existing Ignition,

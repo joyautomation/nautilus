@@ -499,3 +499,26 @@ func memberName(dev, point string) string { return dev + "." + point }
 func CommandTag(dev, point string) string { return dev + "_" + point }
 
 func errorsIsNotExist(err error) bool { return errors.Is(err, fs.ErrNotExist) }
+
+// DevicePoints are one device's selected points, as its struct has them.
+type DevicePoints struct {
+	Device string
+	// Title is the profile's one line for a person.
+	Title string
+	// Desc is the row's own line, "" when it gave none.
+	Desc   string
+	Points []devprofile.Point
+}
+
+// DevicePoints is each device with the points it exposes, in declaration
+// order: what a screen is generated from (#714).
+func (s *Set) DevicePoints() []DevicePoints {
+	if s == nil {
+		return nil
+	}
+	out := make([]DevicePoints, 0, len(s.devices))
+	for _, d := range s.devices {
+		out = append(out, DevicePoints{Device: d.Name, Title: d.prof.Title, Desc: d.Desc, Points: append([]devprofile.Point(nil), d.points...)})
+	}
+	return out
+}

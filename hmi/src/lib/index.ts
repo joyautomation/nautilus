@@ -381,3 +381,18 @@ export {
 } from './outofservice.js';
 export { default as OutOfServiceBadge } from './components/OutOfServiceBadge.svelte';
 export { default as OutOfServicePanel } from './components/OutOfServicePanel.svelte';
+export {
+	DEFAULT_TREND_MAX,
+	assetTitle,
+	assetTags,
+	assetAlarms,
+	assetSlug,
+	indexAssets,
+	assetFromEquipment,
+	trendTags,
+	writableTags,
+	tagValue,
+	hasTag,
+	type AssetDescriptor
+} from './asset.js';
+export { default as AssetPage } from './components/AssetPage.svelte';

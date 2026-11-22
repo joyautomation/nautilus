@@ -4,6 +4,16 @@
 
 ### Added
 
+- **`<AssetPage {asset}/>`: one page for one piece of equipment** (#714): live values with a trend of the
+  chosen ones, settings and commands (greyed by the signed-in role), the equipment's alarms (by their
+  `equipment:` key) with an out-of-service badge and their history, the equipment's notes, the audit of
+  writes to its tags, and an optional camera URL. An `AssetDescriptor` is the equipment's `MimicPanel` plus
+  `trend`, `equipment`, `camera` and `notes`. New exports: `AssetPage`, `assetTitle`, `assetTags`,
+  `assetAlarms`, `assetSlug`, `indexAssets`, `assetFromEquipment`, `trendTags`, `writableTags`, `tagValue`
+  (a struct member by path: `CONV.Speed`), `hasTag`. The built-in app gets `/assets` and `/assets/<id>` for each
+  mimic equipment that has a `panel`, and for each `devices:` row (its readings, commands and setpoints
+  from the profile's points).
+
 - **Equipment out of service in the HMI** (#616, #715 PR 5): `<OutOfServicePanel/>` lists the windows
   standing, soonest to end first (why, who, until, time left), with "Return to service" and "Take out of
   service" (equipment, up to 7 days, a one-line reason; the controller asks for the password). A suppressed

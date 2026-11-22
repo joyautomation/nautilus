@@ -51,6 +51,10 @@ type Options struct {
 	App string
 	// Title names the default app (the project's name).
 	Title string
+	// Assets are asset descriptors (the kit's AssetDescriptor, as JSON) for
+	// the default app's asset pages, beside those its mimics' equipment make:
+	// a device row's, from the caller.
+	Assets []json.RawMessage
 	// Minify the output (on for serving; off reads better when debugging).
 	Minify bool
 	// PWA names and themes the installed app (#722). nil still builds an
@@ -122,7 +126,7 @@ func Build(o Options) (*Result, error) {
 			app.addComponentsPage(proj, root)
 		}
 	} else {
-		app, err = defaultApp(o.Project, o.Title)
+		app, err = defaultApp(o.Project, o.Title, o.Assets)
 	}
 	if err != nil {
 		return nil, err
