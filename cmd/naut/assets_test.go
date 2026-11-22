@@ -223,12 +223,12 @@ func TestTagRootIsTheAlarmEnginesDefaultEquipment(t *testing.T) {
 // refused: the two would be one page (#714).
 func TestPlantIDAgainstAnUnnamedDevicesPage(t *testing.T) {
 	p := plantTestProjectWith(t, "  - { id: conv2, type: Pump, tag: P101 }\n")
-	_, errs, _ := p.CheckPlant(fstest.MapFS{}, nil)
+	_, errs, _ := p.CheckPlant(fstest.MapFS{}, nil, nil)
 	if all := strings.Join(errs, "\n"); !strings.Contains(all, "equipment conv2 and device CONV2 would share the page /assets/conv2") {
 		t.Errorf("errors %q", all)
 	}
 	p = plantTestProject(t)
-	if _, errs, _ := p.CheckPlant(fstest.MapFS{}, nil); len(errs) != 0 {
+	if _, errs, _ := p.CheckPlant(fstest.MapFS{}, nil, nil); len(errs) != 0 {
 		t.Errorf("the plain test plant: %v", errs)
 	}
 }

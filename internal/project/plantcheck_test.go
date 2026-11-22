@@ -52,7 +52,7 @@ func TestNoPlantNoCheck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rep, errs, warns := p.CheckPlant(fsys, []string{"Whatever"})
+	rep, errs, warns := p.CheckPlant(fsys, nil, []string{"Whatever"})
 	if p.Plant != nil || len(errs)+len(warns) != 0 || rep.Equipment != 0 {
 		t.Errorf("a project with no plant: got %+v %v %v", rep, errs, warns)
 	}
@@ -60,7 +60,7 @@ func TestNoPlantNoCheck(t *testing.T) {
 
 func TestAGoodPlantChecksClean(t *testing.T) {
 	p, fsys := plantProject(t, okPlant, nil)
-	rep, errs, warns := p.CheckPlant(fsys, []string{"P101", "TK101"})
+	rep, errs, warns := p.CheckPlant(fsys, nil, []string{"P101", "TK101"})
 	if len(errs)+len(warns) != 0 {
 		t.Fatalf("errors %v warnings %v", errs, warns)
 	}
@@ -77,7 +77,7 @@ equipment:
   - { id: TK101, type: Tank, tag: tk101 }
   - { id: CONV1, device: CONV1 }
 `, nil)
-	_, errs, _ := p.CheckPlant(fsys, nil)
+	_, errs, _ := p.CheckPlant(fsys, nil, nil)
 	all := strings.Join(errs, "\n")
 	for _, want := range []string{
 		"equipment P102: tag P102 is not declared",
@@ -103,7 +103,7 @@ func TestAlarmEquipmentAndDrawingsAgreeWithThePlant(t *testing.T) {
 			{"id":"V","component":"Valve"}]}`,
 		"a.scene.json": `{"nodes":[{"id":"n1","kind":"tank","plant":"Ghost","pos":[0,0,0]}]}`,
 	})
-	_, errs, warns := p.CheckPlant(fsys, []string{"P101", "Skid", "p101", "__nautilus"})
+	_, errs, warns := p.CheckPlant(fsys, nil, []string{"P101", "Skid", "p101", "__nautilus"})
 	all, w := strings.Join(errs, "\n"), strings.Join(warns, "\n")
 	for _, want := range []string{`equipment X: plant "Nope" is not in the plant model`, `node n1: plant "Ghost" is not in the plant model`} {
 		if !strings.Contains(all, want) {
@@ -127,7 +127,7 @@ func TestAlarmEquipmentAndDrawingsAgreeWithThePlant(t *testing.T) {
 // plant id (a rule defaults it to the tag), and none of them is a stray.
 func TestAlarmEquipmentMayBeTheTagNotTheID(t *testing.T) {
 	p, fsys := plantProject(t, "equipment:\n  - { id: Feed, type: Pump, tag: P101 }\n", nil)
-	_, _, warns := p.CheckPlant(fsys, []string{"P101", "Feed"})
+	_, _, warns := p.CheckPlant(fsys, nil, []string{"P101", "Feed"})
 	if len(warns) != 0 {
 		t.Errorf("warnings %v: P101 is Feed's tag", warns)
 	}
@@ -145,7 +145,7 @@ func TestADrawingNamesAPlantTheManifestDoesNotHave(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, errs, _ := p.CheckPlant(fsys, nil)
+	_, errs, _ := p.CheckPlant(fsys, nil, nil)
 	if all := strings.Join(errs, "\n"); !strings.Contains(all, "the manifest has no plant:") {
 		t.Errorf("errors %q", all)
 	}
@@ -154,8 +154,68 @@ func TestADrawingNamesAPlantTheManifestDoesNotHave(t *testing.T) {
 // A dotted tag's alarms key on its root, as the engine defaults them.
 func TestAlarmEquipmentKeysOnTheTagRoot(t *testing.T) {
 	p, fsys := plantProject(t, "equipment:\n  - { id: Feed, type: Tank, tag: TK101.Inner }\n", nil)
-	_, _, warns := p.CheckPlant(fsys, []string{"TK101"})
+	_, _, warns := p.CheckPlant(fsys, nil, []string{"TK101"})
 	if len(warns) != 0 {
 		t.Errorf("warnings %v: the alarm key is the tag's root TK101", warns)
+	}
+}
+
+// A path is checked down to the struct member (#714): a misspelt member is
+// an error that names the members there are, not a blank reading.
+func TestPlantPathsAreCheckedToTheMember(t *testing.T) {
+	fsys := alarmFS("name: p\nplant: plant.yaml\n"+alarmTags, map[string]string{
+		"plant.yaml": `
+equipment:
+  - { id: FIT1, type: Meter, tag: RTU9_ZONE15_FIT_001 }
+  - { id: Bad, type: Meter, tag: RTU9_ZONE15_FIT_001.Nope }
+  - { id: Flat, type: Meter, tag: Duty }
+`,
+		"asset-types/Meter.asset.yaml": `type: Meter
+readings:
+  - { tag: "{tag}.PV", unit: m3 }
+  - { tag: "{tag}.pv" }
+  - { tag: "{tag}.HHH", label: Wrong }
+`,
+	})
+	proj, rt := loadAlarms(t, fsys)
+	_, errs, _ := proj.CheckPlant(fsys, rt, nil)
+	all := strings.Join(errs, "\n")
+	for _, want := range []string{
+		"equipment FIT1 (type Meter): {tag}.HHH expands to RTU9_ZONE15_FIT_001.HHH: RTU9_ZONE15_FIT_001 has no member HHH (it has PV, HH, L)",
+		"equipment Bad: tag RTU9_ZONE15_FIT_001.Nope: RTU9_ZONE15_FIT_001 has no member Nope",
+		"equipment Flat (type Meter): {tag}.PV expands to Duty.PV: Duty is not a struct, so it has no member PV",
+	} {
+		if !strings.Contains(all, want) {
+			t.Errorf("errors lack %q:\n%s", want, all)
+		}
+	}
+	if strings.Contains(all, "FIT1 (type Meter): {tag}.PV expands") || strings.Contains(all, "FIT1 (type Meter): {tag}.pv expands") {
+		t.Errorf("PV is a member (member names compare as names do):\n%s", all)
+	}
+	// without types (nil rt) nothing past the tag is claimed
+	if _, errs, _ := proj.CheckPlant(fsys, nil, nil); strings.Contains(strings.Join(errs, "\n"), "no member") {
+		t.Errorf("no runtime, no member claims: %v", errs)
+	}
+}
+
+func TestPathSegments(t *testing.T) {
+	for in, want := range map[string]string{
+		"A":           "A",
+		"A.B":         "A,B",
+		"A[3].B.C":    "A,[3],B,C",
+		"Tags[0]":     "Tags,[0]",
+		"A.B[1][2].C": "A,B,[1],[2],C",
+	} {
+		var got []string
+		for _, s := range pathSegments(in) {
+			if s.index {
+				got = append(got, "["+s.name+"]")
+			} else {
+				got = append(got, s.name)
+			}
+		}
+		if strings.Join(got, ",") != want {
+			t.Errorf("%s -> %v, want %s", in, got, want)
+		}
 	}
 }
