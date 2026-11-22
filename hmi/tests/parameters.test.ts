@@ -72,6 +72,20 @@ describe('importSet', () => {
 	});
 });
 
+describe('importSet expectFrom', () => {
+	it('sends expectFrom only when given, and keeps a 409 with its results', async () => {
+		const results = [{ name: 'A', status: 'moved', reason: 'A changed since you looked: you saw 1, it holds 1.5' }];
+		const { c, asked } = client(json({ dryRun: false, applied: false, results }, 409));
+		const r = await c.importSet({ A: 2 }, false, { A: 1 });
+		expect(JSON.parse(String(asked[0].init?.body)).expectFrom).toEqual({ A: 1 });
+		expect(!r.ok && r.status).toBe(409);
+		expect(!r.ok && r.message.startsWith('a value changed since you looked, nothing written')).toBe(true);
+		const { c: c2, asked: a2 } = client(json({ applied: true, results: [] }));
+		await c2.importSet({ A: 2 });
+		expect('expectFrom' in JSON.parse(String(a2[0].init?.body))).toBe(false);
+	});
+});
+
 describe('helpers', () => {
 	it('takeRepoSet takes only repo-ahead and conflict rows, never an operator edit', () => {
 		const set = takeRepoSet([
@@ -107,13 +121,13 @@ describe('helpers', () => {
 });
 
 describe('takeRepo (the flow behind "Use repo value")', () => {
-	type Call = { values: Record<string, unknown>; dryRun: boolean };
+	type Call = { values: Record<string, unknown>; dryRun: boolean; expect?: Record<string, unknown> };
 	function fake(answers: ImportAnswer[]) {
 		const calls: Call[] = [];
 		return {
 			calls,
-			importSet: async (values: Record<string, unknown>, dryRun = false) => {
-				calls.push({ values, dryRun });
+			importSet: async (values: Record<string, unknown>, dryRun = false, expect?: Record<string, unknown>) => {
+				calls.push({ values, dryRun, expect });
 				return answers[calls.length - 1];
 			}
 		};
@@ -155,10 +169,12 @@ describe('takeRepo (the flow behind "Use repo value")', () => {
 		expect((await takeRepo(f, [row], async () => ((asked = true), true))).kind).toBe('nothing');
 		expect(asked).toBe(false);
 	});
-	it('says so when a value moved while the question was open', async () => {
-		const f = fake([dry(1, 2), done(1.5, 2)]);
+	it('the apply carries what the dry run saw, so a moved value is refused, not overwritten', async () => {
+		const f = fake([dry(1, 2), { ok: false, status: 409, message: 'a value changed since you looked, nothing written: A changed since you looked: you saw 1, it holds 1.5. Read again.' }]);
 		const r = await takeRepo(f, [row], async () => true);
-		expect(r.kind === 'applied' && r.message.includes('A (was 1.5)')).toBe(true);
+		expect(f.calls[0].expect).toBe(undefined);
+		expect(f.calls[1].expect).toEqual({ A: 1 });
+		expect(r.kind === 'error' && r.message.includes('it holds 1.5')).toBe(true);
 	});
 	it('a failed apply is an error, not an applied count', async () => {
 		const f = fake([dry(1, 2), { ok: false, status: 403, message: 'not permitted to write: A' }]);

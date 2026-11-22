@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -46,6 +47,10 @@ type paramImportRequest struct {
 	Version    int            `json:"version"`
 	Parameters map[string]any `json:"parameters"`
 	DryRun     bool           `json:"dryRun"`
+	// ExpectFrom, optional: name -> the value the caller last saw. If any
+	// tag holds something else when the set is applied, the whole set is
+	// refused (409) and nothing is written.
+	ExpectFrom map[string]any `json:"expectFrom,omitempty"`
 }
 
 // ParamImportResult is one parameter's outcome in the answer.
@@ -53,7 +58,7 @@ type ParamImportResult struct {
 	Name   string `json:"name"`
 	From   any    `json:"from,omitempty"`
 	To     any    `json:"to,omitempty"`
-	Status string `json:"status"` // change (dry run) | applied | unchanged | refused
+	Status string `json:"status"` // change (dry run) | applied | unchanged | refused | moved
 	Reason string `json:"reason,omitempty"`
 }
 
@@ -110,6 +115,26 @@ func (s *Server) handleParametersImport(w http.ResponseWriter, r *http.Request) 
 	for _, p := range s.rt.Parameters() {
 		live[ir.NameKey(p.Name)] = p
 	}
+	expect := map[string]any{}
+	for n, v := range req.ExpectFrom {
+		if _, in := req.Parameters[n]; !in {
+			if !hasKeyFold(req.Parameters, n) {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("expectFrom names %q, which is not in parameters", n)})
+				return
+			}
+		}
+		switch v.(type) {
+		case float64, bool, string:
+		default:
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("expectFrom %q must be a number, a bool or text", n)})
+			return
+		}
+		if _, dup := expect[ir.NameKey(n)]; dup {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("expectFrom names %q twice (tag names ignore case)", n)})
+			return
+		}
+		expect[ir.NameKey(n)] = v
+	}
 	// An import is many tag writes: each tag must pass the authorization
 	// POST /api/tags applies (the write permission over that tag, by area).
 	// Any tag that fails refuses the whole set, before anything else is
@@ -146,10 +171,10 @@ func (s *Server) handleParametersImport(w http.ResponseWriter, r *http.Request) 
 	answer := ParamImportAnswer{DryRun: req.DryRun}
 	var ops []runtime.WriteOp
 	var opAt []int // index into answer.Results for each op
-	refused := false
+	refused, moved, otherRefusal := false, false, false
 	refuse := func(name, why string) {
 		answer.Results = append(answer.Results, ParamImportResult{Name: name, Status: "refused", Reason: why})
-		refused = true
+		refused, otherRefusal = true, true
 	}
 	seen := map[string]string{}
 	for _, n := range names {
@@ -183,21 +208,30 @@ func (s *Server) handleParametersImport(w http.ResponseWriter, r *http.Request) 
 	// strict conversion to the tag's type) and, only if all pass and this is
 	// not a dry run, written, so a set is never half in. From, To and
 	// "unchanged" are read inside that lock, not from the earlier snapshot.
-	outcomes := s.rt.Tags().WriteSet(ops, s.principalOf(r), refused || req.DryRun)
+	outcomes := s.rt.Tags().WriteSetGuarded(ops, expect, s.principalOf(r), refused || req.DryRun)
 	for i, o := range outcomes {
 		res := &answer.Results[opAt[i]]
 		res.From, res.To = o.From, o.To
 		switch {
+		case errors.Is(o.Err, runtime.ErrMoved):
+			res.Status, res.Reason = "moved", o.Err.Error()
+			refused, moved = true, true
 		case o.Err != nil:
 			res.Status, res.Reason = "refused", o.Err.Error()
-			refused = true
+			refused, otherRefusal = true, true
 		case o.Unchanged:
 			res.Status = "unchanged"
 		}
 	}
 	if refused {
 		w.Header().Set(outcomeHeader, "refused")
-		writeJSON(w, http.StatusUnprocessableEntity, answer)
+		// Only a moved value: 409, so a client knows to look again. Any
+		// other refusal is the set's own fault and stays 422.
+		code := http.StatusUnprocessableEntity
+		if moved && !otherRefusal {
+			code = http.StatusConflict
+		}
+		writeJSON(w, code, answer)
 		return
 	}
 	if req.DryRun {
@@ -258,4 +292,14 @@ func paramImportRefusal(_ *http.Request, body []byte) auditTarget {
 	var req paramImportRequest
 	decodeBody(body, &req)
 	return auditTarget{target: fmt.Sprintf("%d parameters", len(req.Parameters)), detail: map[string]any{"dryRun": req.DryRun}}
+}
+
+// hasKeyFold reports whether m has a key that names the same tag as n.
+func hasKeyFold(m map[string]any, n string) bool {
+	for k := range m {
+		if ir.NameKey(k) == ir.NameKey(n) {
+			return true
+		}
+	}
+	return false
 }

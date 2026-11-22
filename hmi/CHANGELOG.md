@@ -14,6 +14,7 @@
 
 ### Added
 
+- **`<ParameterList/>` cannot overwrite a value edited while its confirm was open** (#718): "Use repo value" sends the values its dry run saw as `expectFrom`; a value that moved makes the controller refuse the set (409, nothing written) and the list says to read again.
 - **`<ParameterList/>`** (#718): the setpoint parameters (`GET /api/parameters`) as a table of the
   plant's value, the manifest's `init:`, the range and a drift badge (`in step`, `plant ahead`,
   `committed`, `repo ahead`, `conflict`), with who last edited it, a filter for only where plant and

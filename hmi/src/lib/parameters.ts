@@ -42,13 +42,13 @@ export interface ImportResult {
 	name: string;
 	from?: unknown;
 	to?: unknown;
-	status: 'change' | 'applied' | 'unchanged' | 'refused';
+	status: 'change' | 'applied' | 'unchanged' | 'refused' | 'moved';
 	reason?: string;
 }
 
 export type ImportAnswer =
 	| { ok: true; applied: boolean; results: ImportResult[] }
-	/** `results` is set when the controller refused the set (422): nothing was written. */
+	/** `results` is set when the controller refused the set (422, or 409 when a value moved): nothing was written. */
 	| { ok: false; status: number; message: string; results?: ImportResult[] };
 
 export interface ParametersClientOptions {
@@ -107,13 +107,13 @@ export class ParametersClient {
 	 * what would change. A refused set (422) comes back with its results and
 	 * nothing written.
 	 */
-	async importSet(values: Record<string, unknown>, dryRun = false): Promise<ImportAnswer> {
+	async importSet(values: Record<string, unknown>, dryRun = false, expectFrom?: Record<string, unknown>): Promise<ImportAnswer> {
 		let res: Response;
 		try {
 			res = await this.#fetch(`${this.#url}/import`, {
 				method: 'POST',
 				headers: this.#headers(true),
-				body: JSON.stringify({ version: 1, parameters: values, dryRun })
+				body: JSON.stringify({ version: 1, parameters: values, dryRun, ...(expectFrom && Object.keys(expectFrom).length ? { expectFrom } : {}) })
 			});
 		} catch {
 			return { ok: false, status: 0, message: UNREACHABLE };
@@ -125,8 +125,8 @@ export class ParametersClient {
 		} catch {
 			/* not JSON: said below */
 		}
-		if (res.status === 422 && j?.results) {
-			return { ok: false, status: 422, message: refusedText(j.results), results: j.results };
+		if ((res.status === 422 || res.status === 409) && j?.results) {
+			return { ok: false, status: res.status, message: refusedText(j.results), results: j.results };
 		}
 		if (!res.ok) {
 			if (res.status === 501) return { ok: false, status: 501, message: 'this server mirrors a controller it does not run, so it cannot import' };
@@ -139,7 +139,11 @@ export class ParametersClient {
 
 /** A refused set in one line: every refused name with its reason. */
 export function refusedText(results: ImportResult[]): string {
-	const bad = results.filter((r) => r.status === 'refused');
+	const moved = results.filter((r) => r.status === 'moved');
+	if (moved.length && moved.length === results.filter((r) => r.status === 'refused' || r.status === 'moved').length) {
+		return `a value changed since you looked, nothing written: ${moved.map((r) => r.reason ?? r.name).join('; ')}. Read again.`;
+	}
+	const bad = results.filter((r) => r.status === 'refused' || r.status === 'moved');
 	if (!bad.length) return 'the controller refused the set; nothing was written';
 	return `refused, nothing written: ${bad.map((r) => `${r.name} (${r.reason ?? 'refused'})`).join('; ')}`;
 }
@@ -213,13 +217,12 @@ export type TakeOutcome =
 /**
  * Take the repo's value for `which`: a dry run says what would change, `ask`
  * shows it (return false to decline, and nothing is sent), then the set is
- * applied all or nothing. A value that moved between the dry run and the
- * apply (someone edited it while the question was open) is overwritten by the
- * server, which has no expected-from guard; this says so, with the value that
- * was replaced, rather than reporting a clean apply.
+ * applied all or nothing, sent with the values the dry run saw: a value that
+ * moved while the question was open refuses the whole set (409), so it is
+ * not overwritten unseen.
  */
 export async function takeRepo(
-	client: Pick<ParametersClient, 'importSet'>,
+	client: { importSet(values: Record<string, unknown>, dryRun?: boolean, expectFrom?: Record<string, unknown>): Promise<ImportAnswer> },
 	which: Parameter[],
 	ask: (lines: string[]) => Promise<boolean>
 ): Promise<TakeOutcome> {
@@ -231,14 +234,15 @@ export async function takeRepo(
 	if (!changes.length) return { kind: 'nothing', message: 'The plant already runs the repo values.' };
 	const ok = await ask(changes.map((x) => `${x.name}: ${valueText(x.from)} → ${valueText(x.to)}`));
 	if (!ok) return { kind: 'declined' };
-	const done = await client.importSet(set, false);
+	// Send what the dry run saw: if anything moved while the question was
+	// open the controller refuses the whole set (409) instead of overwriting it.
+	// (A live NaN or infinity reads as null, which cannot be sent, so such a tag
+	// is not guarded; a ranged setpoint refuses those anyway.)
+	const expectFrom: Record<string, unknown> = {};
+	for (const x of changes) if (x.from !== undefined && x.from !== null) expectFrom[x.name] = x.from;
+	const done = await client.importSet(set, false, expectFrom);
 	if (!done.ok) return { kind: 'error', message: done.message };
 	const applied = done.results.filter((x) => x.status === 'applied');
-	const seen = new Map(changes.map((x) => [x.name, x.from]));
-	const moved = applied.filter((x) => seen.has(x.name) && JSON.stringify(seen.get(x.name)) !== JSON.stringify(x.from));
-	let message = `Applied ${applied.length} parameter(s).`;
-	if (moved.length) {
-		message += ` These changed while you were confirming, and their newer value was replaced: ${moved.map((x) => `${x.name} (was ${valueText(x.from)})`).join(', ')}.`;
-	}
+	const message = `Applied ${applied.length} parameter(s).`;
 	return { kind: 'applied', count: applied.length, message };
 }

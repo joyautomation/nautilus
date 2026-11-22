@@ -47,7 +47,23 @@ var (
 	// ErrReadOnly: the tag is one only the runtime sets (a substitute
 	// companion, such as LS_1__Substituted).
 	ErrReadOnly = errors.New("read-only")
+	// ErrMoved: the tag no longer holds the value the caller expected.
+	ErrMoved = errors.New("moved")
 )
+
+// MovedError says what a guarded write expected and what the tag holds.
+type MovedError struct {
+	Path     string
+	Expected any
+	Actual   any
+}
+
+func (e *MovedError) Error() string {
+	return fmt.Sprintf("%s changed since you looked: you saw %v, it holds %v", e.Path, e.Expected, e.Actual)
+}
+
+// Is makes errors.Is(err, ErrMoved) true.
+func (e *MovedError) Is(target error) bool { return target == ErrMoved }
 
 // readOnlyLocked returns ErrReadOnly, named, when path is (in) a tag only
 // the runtime sets. Caller holds t.mu.
@@ -135,6 +151,16 @@ type SetOutcome struct {
 // tag would both be planned from the pre-write value, and a composite value
 // is not compared. The import route guarantees this.
 func (t *Tags) WriteSet(ops []WriteOp, by string, dry bool) []SetOutcome {
+	return t.WriteSetGuarded(ops, nil, by, dry)
+}
+
+// WriteSetGuarded is WriteSet with an expected value per tag (expect is keyed
+// by ir.NameKey of the op's path; a tag with no entry is not guarded). A tag
+// that no longer holds its expected value is refused with ErrMoved, which
+// refuses the whole set, so a change made since the caller looked is never
+// overwritten unseen (#718). The comparison is made inside the store's lock,
+// in the same step as the write.
+func (t *Tags) WriteSetGuarded(ops []WriteOp, expect map[string]any, by string, dry bool) []SetOutcome {
 	out := make([]SetOutcome, len(ops))
 	type plan struct {
 		key string
@@ -149,7 +175,9 @@ func (t *Tags) WriteSet(ops []WriteOp, by string, dry bool) []SetOutcome {
 		if cur, key, ok := t.lookupLocked(op.Path); ok {
 			out[i].From = plainNumeric(t.liveLocked(key, cur))
 		}
-		if f := t.forcedOverlapLocked(op.Path); f != "" {
+		if want, guarded := expect[ir.NameKey(op.Path)]; guarded && !paramEq(out[i].From, want) {
+			out[i].Err = &MovedError{Path: op.Path, Expected: want, Actual: out[i].From}
+		} else if f := t.forcedOverlapLocked(op.Path); f != "" {
 			out[i].Err = &ForcedError{Path: op.Path, Force: f}
 		} else if err := t.readOnlyLocked(op.Path); err != nil {
 			out[i].Err = err

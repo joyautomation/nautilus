@@ -493,7 +493,14 @@ naut params import --host plc1 --file set.yaml --dry-run
 naut params import --host plc1 --file set.yaml
 ```
 
-The body is `{"version": 1, "parameters": {"Tank.SP": 42.5}, "dryRun": false}`.
+The body is `{"version": 1, "parameters": {"Tank.SP": 42.5}, "dryRun": false}`,
+plus an optional `"expectFrom": {"Tank.SP": 40}`: the value you last saw for a
+tag. If any tag holds something else when the set is applied (someone edited it
+after your dry run), the whole set is refused with `409`, nothing is written,
+and the result for that tag says `moved` with what it holds now. The check is
+made in the same step as the write. The HMI kit always sends it; the `naut
+params import` command does not (it applies a file you chose). A set with a
+moved value and another refusal answers `422`.
 It needs the `config` permission (a browser sign-in with a password older than
 `auth.elevation` is asked again; a token is not) **and**, for every tag in the
 set, the write permission `POST /api/tags` would ask for (by area, when `auth:`
