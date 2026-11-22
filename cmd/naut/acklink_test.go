@@ -134,8 +134,8 @@ func TestAckLinkChecks(t *testing.T) {
 	}
 }
 
-// The hook mints through the server for email and SMS pages only: a
-// voice call cannot be tapped, a webhook goes to a system that must not
+// The hook mints through the server for email, SMS and push pages only:
+// a voice call cannot be tapped, a webhook goes to a system that must not
 // act as the person, and before the server exists there is none.
 func TestAckLinkHookKinds(t *testing.T) {
 	proj := linkProject(t, "    ack-url: https://hmi.example\n")
@@ -156,7 +156,7 @@ func TestAckLinkHookKinds(t *testing.T) {
 	if hook(noAck, "email") != "" {
 		t.Fatal("a link for an alarm that needs no acknowledgement")
 	}
-	for via, want := range map[string]bool{"email": true, "sms": true, "voice": false, "webhook": false, "log": false} {
+	for via, want := range map[string]bool{"email": true, "sms": true, "push": true, "voice": false, "webhook": false, "log": false} {
 		u := hook(m, via)
 		if (u != "") != want {
 			t.Errorf("%s: %q", via, u)

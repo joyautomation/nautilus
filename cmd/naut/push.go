@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/joyautomation/nautilus/alarm/channel"
 	"github.com/joyautomation/nautilus/alarm/escalate"
@@ -94,6 +96,8 @@ func pushOptions(proj *project.Project, stateDir string, paired bool, stderr io.
 
 // pushPayload is what the phone's worker shows: the alarm and its state,
 // nothing the push service could use (it sees only ciphertext anyway).
+// Ack is the page's ack link (#715 PR 6), a credential: it rides only
+// inside the encrypted payload, and the worker opens it on a tap.
 type pushPayload struct {
 	Alarm    string `json:"alarm"`
 	Name     string `json:"name,omitempty"`
@@ -102,15 +106,58 @@ type pushPayload struct {
 	Area     string `json:"area,omitempty"`
 	AtMs     int64  `json:"atMs,omitempty"`
 	Level    int    `json:"level,omitempty"`
+	Ack      string `json:"ack,omitempty"`
 }
+
+// pageFieldMax bounds a shown field in bytes: the worker shows 120
+// characters of it, and the page must fit one push with its link.
+const pageFieldMax = 480
 
 func pageBody(m escalate.Message) []byte {
 	r := m.Alarm
-	b, _ := json.Marshal(pushPayload{
-		Alarm: r.ID, Name: r.Name, State: string(r.State), Priority: fmt.Sprint(r.Priority),
-		Area: r.Area, AtMs: r.ActiveMs, Level: m.Level,
-	})
+	p := pushPayload{
+		Alarm: r.ID, Name: cutUTF8(r.Name, pageFieldMax), State: string(r.State), Priority: fmt.Sprint(r.Priority),
+		Area: cutUTF8(r.Area, pageFieldMax), AtMs: r.ActiveMs, Level: m.Level, Ack: m.AckURL,
+	}
+	b := pageJSON(p)
+	// What a push cannot carry is dropped, least useful first: the words,
+	// then the link, then most of an id that alone is too long. The page
+	// itself always goes (a person who cannot tap to acknowledge can still
+	// open the HMI).
+	if len(b) > webpush.MaxPayload {
+		p.Name, p.Area = "", ""
+		b = pageJSON(p)
+	}
+	if len(b) > webpush.MaxPayload {
+		p.Ack = ""
+		b = pageJSON(p)
+	}
+	if len(b) > webpush.MaxPayload {
+		p.Alarm = cutUTF8(p.Alarm, pageFieldMax)
+		b = pageJSON(p)
+	}
 	return b
+}
+
+// pageJSON is p as JSON without HTML escaping: a < in a name is one byte
+// of the page, not six.
+func pageJSON(p pushPayload) []byte {
+	var buf bytes.Buffer
+	e := json.NewEncoder(&buf)
+	e.SetEscapeHTML(false)
+	_ = e.Encode(p)
+	return bytes.TrimSuffix(buf.Bytes(), []byte("\n"))
+}
+
+// cutUTF8 is s cut to at most n bytes on a character boundary.
+func cutUTF8(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
 }
 
 // pushChannel pages through srv: Sent is success; no subscription is a

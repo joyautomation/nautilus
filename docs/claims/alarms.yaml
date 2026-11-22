@@ -620,3 +620,24 @@ claims:
     tests:
       - go ./server TestPushSendSkipsSealedRows
       - go ./server TestPushSurvivesARestartAndAnotherKeyKeepsTheRows
+
+  - id: ALM-056
+    claim: >-
+      A push page carries an ack link like an email or SMS page, inside its
+      encrypted payload; the link acts as an email's does and is journalled
+      with channel push, and its page links back to the HMI. A page always
+      fits one push: a long name or area is cut, then the words are left
+      out, then the link, never the page.
+    source: "#acknowledging-from-the-page"
+    tests:
+      - go ./cmd/naut TestAckLinkHookKinds
+      - go ./cmd/naut TestPushPageCarriesItsLinkAndFits
+      - go ./server TestAckLinkFromAPush
+    partial: true
+    note: >-
+      "Inside its encrypted payload" is not asserted by these tests: they
+      check the payload builder's plaintext, and encryption of any payload
+      is ALM-053's. TestAckLinkFromAPush mints a push-kind link directly, so
+      for "acts as an email's does" it guards rather than goes red without
+      this change (its HMI-link assertions do). No page has been delivered
+      through a real push service to a phone.

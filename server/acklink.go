@@ -424,6 +424,9 @@ type linkPageData struct {
 	Title, Error, Done            string
 	Alarm, Priority, Where, State string
 	For, Expires, Action, SignIn  string
+	// Home is the HMI (alarms.oncall.ack-url): a page opened from a phone's
+	// notification may sit in a window with no way back (#715 PR 6).
+	Home string
 }
 
 func (s *Server) linkPageFor(c acklink.Claim) linkPageData {
@@ -468,6 +471,9 @@ func (s *Server) linkPage(w http.ResponseWriter, status int, d linkPageData) {
 	h.Set("Referrer-Policy", "same-origin")
 	h.Set("X-Robots-Tag", "noindex, nofollow")
 	w.WriteHeader(status)
+	if d.Home == "" {
+		d.Home = s.ackURL
+	}
 	if err := linkTemplate.Execute(w, d); err != nil {
 		slog.Debug("ack link page", "err", err)
 	}
@@ -505,5 +511,6 @@ p{margin:.75rem 0;font-size:.9rem}
 <button type="submit">Acknowledge</button>
 </form>
 <p>The link works once, until {{.Expires}}.</p>{{end}}{{end}}
+{{if .Home}}<p><a href="{{.Home}}" rel="noreferrer">Open the HMI</a></p>{{end}}
 </main></body></html>
 `))

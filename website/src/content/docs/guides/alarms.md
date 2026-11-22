@@ -588,7 +588,8 @@ browser playground has no state directory, so a project there with
 ### Acknowledging from the page
 
 Give the controller the address of the HMI as a person paged reaches it,
-and every email and SMS page carries a link that acknowledges the alarm:
+and every email, SMS and push page carries a link that acknowledges the
+alarm:
 
 ```yaml
 alarms:
@@ -631,6 +632,20 @@ alarms:
   (`server.allowed-hosts`, or `NAUTILUS_ALLOWED_HOSTS` on the box; an IP
   address always is): `naut check` warns when the manifest does not list
   it.
+- **A push carries its link inside the encrypted page:** the push service
+  never sees it. Tapping the notification asks the browser for a new
+  window on the link's page (the worker does not send the HMI you had
+  open there), and you press **Acknowledge** there, so a tap on a lock
+  screen by mistake acknowledges nothing. Where the phone shows actions,
+  **Open alarms** goes to the HMI's alarms instead. With no `ack-url`, or
+  for an alarm that needs no acknowledgement, a tap opens the alarms. The
+  page has a link back to the HMI. A push page always fits one push: a
+  long name or area is cut, and if the page is still too big the words
+  are left out, then the link, never the page. **A phone's subscription
+  outlives signing out,** so on a shared device whoever taps the page can
+  press Acknowledge as the person paged, as with an email on a shared
+  inbox: turn notifications off there, or use
+  `ack-from-notification: sign-in`.
 - **A voice call carries no link,** and neither does a webhook: it goes
   to a system, which must not act as the person. A call can take a
   keypress instead (below).

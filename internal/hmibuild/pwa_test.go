@@ -194,9 +194,13 @@ func newSWWith(t *testing.T, files map[string][]byte) *swHarness {
 			skipWaiting: function () { return Promise.resolve(); },
 			addEventListener: function (n, f) { handlers[n] = f; } };
 		var claimed = false;
+		// as a browser's: any scheme parses; one with no scheme throws
 		function URL(u) {
-			var m = /^(https?:\/\/[^\/]+)(\/[^?#]*)?/.exec(u);
-			this.origin = m[1]; this.pathname = m[2] || '/';
+			var m = /^([A-Za-z][A-Za-z0-9+.-]*):(\/\/([^\/?#]*))?([^?#]*)/.exec(u);
+			if (!m) throw new TypeError('Invalid URL: ' + u);
+			this.protocol = m[1].toLowerCase() + ':';
+			this.origin = m[2] ? this.protocol + '//' + m[3] : 'null';
+			this.pathname = m[4] || '/';
 		}
 		var console = { error: function () { errors.push(Array.prototype.join.call(arguments, ' ')); } };
 		var errors = [];
@@ -291,6 +295,9 @@ func TestPWAWorkerNeverAnswersData(t *testing.T) {
 		{"POST", "https://box/api/alarms/ack"},
 		{"POST", "https://box/form"},
 		{"GET", "https://elsewhere/app.js"},
+		// an ack link's confirm page (#715), also under an ack-url's path
+		{"GET", "https://box/alarm-ack/tok"},
+		{"GET", "https://box/plant1/alarm-ack/tok"},
 	} {
 		if ans, _ := h.fetchEvent(t, c.method, c.url, "cors"); ans {
 			t.Errorf("%s %s: the worker answered it", c.method, c.url)
@@ -671,5 +678,128 @@ func TestPWAWorkerClickOpensTheAlarmsAndActsOnNothing(t *testing.T) {
 	// The worker never calls the controller from a tap (no ack, no fetch).
 	if n := h.run(t, `fetched.length`).ToInteger(); n != 0 {
 		t.Errorf("a tap fetched %d times", n)
+	}
+}
+
+// A page's ack link (#715 PR 6) is taken only as the controller's
+// /alarm-ack/<token>, under an ack-url that may carry a path; anything
+// else in it is ignored and the page shows as one without a link.
+func TestPWAWorkerTakesOnlyAnAckLink(t *testing.T) {
+	for link, ok := range map[string]bool{
+		"https://hmi.example/alarm-ack/AbC_-09":         true,
+		"https://hmi.example:8443/plant1/alarm-ack/AbC": true,
+		"http://10.0.0.5:8080/alarm-ack/AbC":            true, // ack-url-insecure
+		// every other shape alarms.oncall.ack-url accepts (prepareAck)
+		"https://[fd00::1]:8443/alarm-ack/AbC":                       true,
+		"https://hmi.example/a/b-c_d.e/alarm-ack/AbC":                true,
+		"https://hmi.example/plant%201/alarm-ack/AbC":                true,
+		"javascript:alert(1)//alarm-ack/x":                           false,
+		"https://evil.example/login":                                 false,
+		"https://hmi.example/alarm-ack/":                             false,
+		"https://hmi.example/alarm-ack/a/b":                          false,
+		"https://hmi.example/alarm-ack/a?next=https://x":             false,
+		"https://hmi.example/alarm-ack/a#x":                          false,
+		"https://user@evil.example/alarm-ack/a":                      false,
+		"https://hmi.example/alarm-ack/a b":                          false,
+		"/alarm-ack/a":                                               false,
+		"data:text/html,<p>/alarm-ack/a":                             false,
+		"https://hmi.example/alarm-ack/" + strings.Repeat("a", 5000): false,
+		// anchored at both ends, http(s) only, nothing between the
+		// host and /alarm-ack/ but a path (Fable review on #1229)
+		"ftp://h/alarm-ack/a":                    false,
+		"javascript:void//https://h/alarm-ack/a": false,
+		"web+x:https://h/alarm-ack/a":            false,
+		"intent://h/alarm-ack/a":                 false,
+		"x https://h/alarm-ack/a":                false,
+		"javascript:'https://h/alarm-ack/a'":     false,
+		"https://h/?u=/alarm-ack/a":              false,
+		"https://h#/alarm-ack/a":                 false,
+		"https://h/p@q/alarm-ack/a":              false,
+		"HTTPS://h/alarm-ack/a":                  false,
+		"https://h\\evil/alarm-ack/a":            false,
+		"https://h\u0001x/alarm-ack/a":           false,
+		"https://h/p\u007f/alarm-ack/a":          false,
+	} {
+		h := pushHarness(t)
+		h.vm.Set("link", link)
+		h.run(t, `handlers.push(pushOf({alarm:'HiTemp', state:'unack-active', ack: link}))`)
+		h.run(t, `0`)
+		got := h.run(t, `shown[0].options.data.ack`).String()
+		if (got == link) != ok || (!ok && got != "") {
+			t.Errorf("%.60q: data.ack %.60q, want taken %v", link, got, ok)
+		}
+		hasAction := h.run(t, `!!shown[0].options.actions`).ToBoolean()
+		says := strings.Contains(h.run(t, `shown[0].options.body`).String(), "Tap to acknowledge")
+		if hasAction != ok || says != ok {
+			t.Errorf("%.60q: actions %v, says tap to acknowledge %v; want %v", link, hasAction, says, ok)
+		}
+	}
+	// a link that is not a string is no link
+	h := pushHarness(t)
+	h.run(t, `handlers.push(pushOf({alarm:'HiTemp', ack: {toString: function () { return 'https://hmi.example/alarm-ack/a'; }}}))`)
+	h.run(t, `0`)
+	if h.run(t, `shown[0].options.data.ack`).String() != "" {
+		t.Error("an object was taken as a link")
+	}
+}
+
+// A tap on a page with a link opens its confirm page in a window of its
+// own: the HMI window the person had open is not sent away, and the
+// worker never calls the controller (the person presses Acknowledge on
+// the page). The Open alarms action, and a page without a link, open the
+// alarms as before.
+func TestPWAWorkerTapOpensTheAckPage(t *testing.T) {
+	const link = "https://hmi.example/plant1/alarm-ack/AbC"
+	tap := func(h *swHarness, action string) {
+		h.vm.Set("action", action)
+		h.vm.Set("link", link)
+		h.run(t, `handlers.push(pushOf({alarm:'HiTemp', state:'unack-active', ack: link}))`)
+		h.run(t, `0`)
+		h.run(t, `var note = { closed: false, data: shown[0].options.data, close: function () { this.closed = true; } };
+			pending = null;
+			handlers.notificationclick({ notification: note, action: action, waitUntil: function (p) { pending = p; } })`)
+		h.run(t, `0`)
+		if h.run(t, `pending === null`).ToBoolean() || !h.run(t, `note.closed`).ToBoolean() {
+			t.Error("the worker did not hold itself open for the tap, or the notification stayed")
+		}
+		if n := h.run(t, `fetched.length`).ToInteger(); n != 0 {
+			t.Errorf("a tap fetched %d times: the worker acted itself", n)
+		}
+	}
+	for _, w := range []string{"", `windows.push({ url: 'https://box/trends', canNavigate: true, visibility: 'visible' })`} {
+		h := pushHarness(t)
+		if w != "" {
+			h.run(t, w)
+		}
+		tap(h, "")
+		if got := h.run(t, `opened.join(',')`).String(); got != link {
+			t.Errorf("windows %q: opened %q, want the link", w, got)
+		}
+		if h.run(t, `navigated.length + focused.length`).ToInteger() != 0 {
+			t.Errorf("windows %q: the HMI window was sent away (focused %v navigated %v)", w, h.run(t, `focused`), h.run(t, `navigated`))
+		}
+	}
+	// The action: the alarms, in the HMI window as before.
+	h := pushHarness(t)
+	h.run(t, `windows.push({ url: 'https://box/trends', canNavigate: true })`)
+	tap(h, "alarms")
+	if h.run(t, `navigated.join(',')`).String() != "/alarms" || h.run(t, `opened.length`).ToInteger() != 0 {
+		t.Errorf("Open alarms: navigated %v opened %v", h.run(t, `navigated`), h.run(t, `opened`))
+	}
+	// A window the platform refuses: the notification is gone, so the
+	// alarms open instead of nothing.
+	h = pushHarness(t)
+	h.run(t, `var tries = 0; self.clients.openWindow = function (u) { tries++; if (tries === 1) return Promise.reject(new TypeError('refused')); opened.push(u); return Promise.resolve({}); }`)
+	tap(h, "")
+	if got := h.run(t, `opened.join(',')`).String(); got != "/alarms" {
+		t.Errorf("a refused window: opened %q, want the alarms", got)
+	}
+	// Data that names a link describe() would not take is not opened.
+	h = pushHarness(t)
+	h.run(t, `var note = { close: function () {}, data: { url: '/alarms', ack: 'https://evil.example/x' } };
+		handlers.notificationclick({ notification: note, waitUntil: function (p) { pending = p; } })`)
+	h.run(t, `0`)
+	if got := h.run(t, `opened.join(',')`).String(); got != "/alarms" {
+		t.Errorf("a foreign link in the data: opened %q", got)
 	}
 }

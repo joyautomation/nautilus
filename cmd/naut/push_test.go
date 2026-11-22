@@ -2,12 +2,15 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
+	"github.com/joyautomation/nautilus/alarm"
 	"github.com/joyautomation/nautilus/alarm/escalate"
 	"github.com/joyautomation/nautilus/alarm/oncall"
 	"github.com/joyautomation/nautilus/internal/webpush"
@@ -117,5 +120,63 @@ func TestCheckWarnsOfPushWithNoSignIn(t *testing.T) {
 		if got := strings.Contains(out, "alarms.channels.push: nobody can sign in"); got != c.warns {
 			t.Errorf("%s: warned %v, want %v\n%s", c.name, got, c.warns, out)
 		}
+	}
+}
+
+// A page carries its ack link inside the payload (#715 PR 6), and always
+// fits one push: long words are cut on a character boundary, then
+// dropped, then the link; the page itself is never dropped.
+func TestPushPageCarriesItsLinkAndFits(t *testing.T) {
+	link := "https://hmi.example/alarm-ack/" + strings.Repeat("t", 200)
+	m := escalate.Message{Alarm: alarm.Record{Def: alarm.Def{ID: "Hi", Name: "Wet well high", Area: "wetwell"}, State: alarm.UnackActive}, Level: 1, AckURL: link}
+	var p pushPayload
+	if err := json.Unmarshal(pageBody(m), &p); err != nil || p.Ack != link || p.Name != "Wet well high" {
+		t.Fatalf("page %+v %v", p, err)
+	}
+	m.AckURL = ""
+	if b := pageBody(m); strings.Contains(string(b), `"ack"`) {
+		t.Fatalf("a page with no link names one: %s", b)
+	}
+
+	// Long words: cut, never through a character, and the link stays.
+	m.AckURL = link
+	m.Alarm.Name = "x" + strings.Repeat("é", 2000) // 2 bytes each, off by one: a byte cut lands mid-character
+	m.Alarm.Area = strings.Repeat("x", 5000)
+	b := pageBody(m)
+	p = pushPayload{} // a field the page omits must not keep the last one's
+	if len(b) > webpush.MaxPayload {
+		t.Fatalf("a page of %d bytes; a push takes %d", len(b), webpush.MaxPayload)
+	}
+	if err := json.Unmarshal(b, &p); err != nil || p.Ack != link || p.Name == "" || strings.ContainsRune(p.Name, utf8.RuneError) || len(p.Area) > pageFieldMax {
+		t.Fatalf("long words: ack %q name %d bytes (broken character %v) area %d: %v", p.Ack, len(p.Name), strings.ContainsRune(p.Name, utf8.RuneError), len(p.Area), err)
+	}
+
+	// A link too long to fit beside the words: the words go first.
+	m.AckURL = "https://hmi.example/alarm-ack/" + strings.Repeat("t", webpush.MaxPayload-400)
+	p = pushPayload{}
+	if err := json.Unmarshal(pageBody(m), &p); err != nil || p.Ack != m.AckURL || p.Name != "" {
+		t.Fatalf("a long link: kept %v, name %q: %v", p.Ack == m.AckURL, p.Name, err)
+	}
+	// A name of characters JSON would escape for HTML is not six times
+	// its length: it is cut, not dropped.
+	m.AckURL = link
+	m.Alarm.Name, m.Alarm.Area = strings.Repeat("<", 2000), strings.Repeat("&", 2000)
+	p = pushPayload{}
+	if err := json.Unmarshal(pageBody(m), &p); err != nil || len(p.Name) != pageFieldMax || len(p.Area) != pageFieldMax || p.Ack != link {
+		t.Fatalf("escaped words: name %d area %d bytes, link kept %v: %v", len(p.Name), len(p.Area), p.Ack == link, err)
+	}
+	// One that cannot fit at all: the page goes without it.
+	m.AckURL = "https://hmi.example/alarm-ack/" + strings.Repeat("t", webpush.MaxPayload)
+	b = pageBody(m)
+	p = pushPayload{}
+	if err := json.Unmarshal(b, &p); err != nil || len(b) > webpush.MaxPayload || p.Ack != "" || p.Alarm != "Hi" {
+		t.Fatalf("an oversize link: %d bytes, ack kept %v: %v", len(b), p.Ack != "", err)
+	}
+	// An id that alone is too long: the page still goes, its id cut.
+	m.Alarm.ID = strings.Repeat("<", webpush.MaxPayload)
+	b = pageBody(m)
+	p = pushPayload{}
+	if err := json.Unmarshal(b, &p); err != nil || len(b) > webpush.MaxPayload || p.Alarm == "" {
+		t.Fatalf("an oversize id: %d bytes, id %d: %v", len(b), len(p.Alarm), err)
 	}
 }
