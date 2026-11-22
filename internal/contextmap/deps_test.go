@@ -90,6 +90,16 @@ func rules(u universe) []rule {
 			why:  "the senders resolve a principal to an address and send; the manifest composes them, and they know no server, runtime or auth",
 		},
 		{
+			from: []string{"notes"},
+			to:   u.allBut("oplog"),
+			why:  "operator notes are a revision chain kept in a file or an index of the log's note entries; they know no permission, alarm, tag or server, which decide before a revision exists",
+		},
+		{
+			from: []string{"internal/webpush"},
+			to:   u.allBut(),
+			why:  "Web Push is a seam: it encrypts, signs and sends, and knows no principal, session, alarm or store; the server hands it strings and keeps its rows in retain",
+		},
+		{
 			from: []string{"alarm/rationalize"},
 			to:   u.allBut("alarm"),
 			why:  "the master alarm database and the performance reports read definitions and journal events they are handed; they open nothing and know no server or runtime",

@@ -11,7 +11,14 @@
 //   - an expired token answers PermissionDenied (2);
 //   - an oversized body is answered with HTTP 413;
 //   - a write of the wrong type or out of range answers InvalidParams
-//     (-32602).
+//     (-32602);
+//   - DiagnosticBuffer.Browse answers InvalidParams for a missing or empty
+//     language, a negative count or any parameter besides language and
+//     count (the filters object is not modelled); it accepts any language
+//     (a real CPU answers only in its project's languages, error
+//     unmeasured); entries come newest first; the buffer holds DiagMax
+//     entries (default 3200, the manual's example; a 1510SP's size is
+//     unmeasured).
 //
 // Values: BOOL takes a JSON boolean; the integer types (SINT…ULINT, BYTE…
 // LWORD) take a whole number in the type's range; REAL and LREAL any
@@ -51,14 +58,34 @@ type Var struct {
 	MaxLength int // STRING/WSTRING; default 254
 }
 
+// DiagEntry is one diagnostic buffer entry in the fake.
+type DiagEntry struct {
+	Time     time.Time
+	Incoming bool // "incoming", else "outgoing"
+	TextList int
+	Text     int
+	Short    string
+	Long     string
+	Help     string
+}
+
 // Server is one fake CPU.
 type Server struct {
 	Users map[string]User
 	Vars  map[string]*Var
 	Mode  string // "run" or "stop"; default "run"
 	// Methods is what Api.GetMethods returns. Default: every method the
-	// fake implements.
+	// fake implements. When set, a method left out answers MethodNotFound
+	// (-32601), as on firmware that lacks it.
 	Methods []string
+	// Diag is the diagnostic buffer, newest first. AddDiag adds to it
+	// while the server runs.
+	Diag []DiagEntry
+	// DiagMax is the buffer's size; default 3200.
+	DiagMax int
+	// DiagModified is when the buffer last changed; default the newest
+	// entry's time.
+	DiagModified time.Time
 	// MaxBody is the body limit; default 64 kB. A larger body is answered
 	// with HTTP 413 (the real CPU's answer is unmeasured).
 	MaxBody int
@@ -179,6 +206,19 @@ func (s *Server) LoginAttempts() int {
 	return s.loginAttempts
 }
 
+// AddDiag puts an entry at the head of the diagnostic buffer, as a CPU
+// event would, dropping the oldest beyond DiagMax.
+func (s *Server) AddDiag(e DiagEntry) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.defaults()
+	s.Diag = append([]DiagEntry{e}, s.Diag...)
+	if len(s.Diag) > s.DiagMax {
+		s.Diag = s.Diag[:s.DiagMax]
+	}
+	s.DiagModified = e.Time
+}
+
 // Value returns a variable's current value.
 func (s *Server) Value(sym string) any {
 	s.mu.Lock()
@@ -211,6 +251,9 @@ func (s *Server) defaults() {
 	}
 	if s.MaxSessions == 0 {
 		s.MaxSessions = 50
+	}
+	if s.DiagMax == 0 {
+		s.DiagMax = 3200
 	}
 	if s.pingID == "" {
 		s.pingGen++
@@ -296,6 +339,7 @@ var implemented = []string{
 	"Api.GetPermissions", "Api.Login", "Api.Logout", "Api.Ping", "Api.Version", "Api.GetMethods",
 	"PlcProgram.Browse", "PlcProgram.Read", "PlcProgram.Write",
 	"Plc.ReadOperatingMode", "Plc.RequestChangeOperatingMode",
+	"DiagnosticBuffer.Browse",
 }
 
 func (s *Server) dispatch(q rpcReq, token string) rpcResp {
@@ -348,7 +392,7 @@ func (s *Server) dispatch(q rpcReq, token string) rpcResp {
 		return ok(map[string]string{"token": t})
 	}
 
-	if !q.known() {
+	if !s.offers(q.Method) {
 		return fail(-32601, "Method not found")
 	}
 	// Everything below needs a live token.
@@ -449,18 +493,88 @@ func (s *Server) dispatch(q rpcReq, token string) rpcResp {
 			return fail(-32602, "Invalid params")
 		}
 		return s.browse(resp, p.Var, p.Mode)
+	case "DiagnosticBuffer.Browse":
+		if !can("read_diagnostics") {
+			return fail(2, "Permission denied")
+		}
+		return s.diagBrowse(resp, q.Params)
 	}
 	return fail(-32601, "Method not found")
 }
 
-// known reports whether the fake implements the method.
-func (q rpcReq) known() bool {
-	for _, m := range implemented {
-		if m == q.Method {
-			return true
+// offers reports whether the fake implements the method and, when Methods
+// is set, lists it.
+func (s *Server) offers(method string) bool {
+	ms := implemented
+	if s.Methods != nil {
+		ms = s.Methods
+	}
+	for _, m := range ms {
+		if m == method {
+			for _, i := range implemented {
+				if i == method {
+					return true
+				}
+			}
 		}
 	}
 	return false
+}
+
+// diagStamp is the CPU's time stamp format: UTC, nanoseconds, "Z".
+const diagStamp = "2006-01-02T15:04:05.000000000Z"
+
+func (s *Server) diagBrowse(resp rpcResp, raw json.RawMessage) rpcResp {
+	var p struct {
+		Language *string `json:"language"`
+		Count    *int    `json:"count"`
+	}
+	dec := json.NewDecoder(strings.NewReader(string(raw)))
+	dec.DisallowUnknownFields()
+	if len(raw) == 0 || dec.Decode(&p) != nil || p.Language == nil || *p.Language == "" ||
+		p.Count != nil && *p.Count < 0 {
+		resp.Error = &rpcErr{-32602, "Invalid params"}
+		return resp
+	}
+	n := 50
+	if p.Count != nil {
+		n = *p.Count
+	}
+	mod := s.DiagModified
+	if mod.IsZero() && len(s.Diag) > 0 {
+		mod = s.Diag[0].Time
+	}
+	out := map[string]any{
+		"last_modified": mod.UTC().Format(diagStamp),
+		"count_current": len(s.Diag),
+		"count_max":     s.DiagMax,
+	}
+	if n == 0 {
+		resp.Result = out
+		return resp
+	}
+	if n > len(s.Diag) {
+		n = len(s.Diag)
+	}
+	entries := make([]map[string]any, n)
+	for i, e := range s.Diag[:n] {
+		status := "outgoing"
+		if e.Incoming {
+			status = "incoming"
+		}
+		entries[i] = map[string]any{
+			"timestamp":  e.Time.UTC().Format(diagStamp),
+			"status":     status,
+			"event":      map[string]int{"textlist_id": e.TextList, "text_id": e.Text},
+			"short_text": e.Short,
+			"long_text":  e.Long,
+			"help_text":  e.Help,
+		}
+	}
+	out["entries"] = entries
+	out["language"] = *p.Language
+	resp.Result = out
+	return resp
 }
 
 func (s *Server) browse(resp rpcResp, v, mode string) rpcResp {

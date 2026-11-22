@@ -185,7 +185,7 @@
         },
         "areas": {
           "type": "object",
-          "description": "Named sets of tags that scope a grant's write, ack, shelve, substitute and force.",
+          "description": "Named sets of tags that scope a grant's write, ack, shelve, note, substitute and force.",
           "additionalProperties": {
             "type": "object",
             "additionalProperties": false,
@@ -227,6 +227,7 @@
                     "write",
                     "ack",
                     "shelve",
+                    "note",
                     "substitute",
                     "force",
                     "sfc",
@@ -249,6 +250,7 @@
                     "write",
                     "ack",
                     "shelve",
+                    "note",
                     "substitute",
                     "force",
                     "sfc",
@@ -2087,6 +2089,30 @@
         },
         "webhook": {
           "$ref": "#/definitions/alarm-channel-webhook"
+        },
+        "push": {
+          "$ref": "#/definitions/alarm-channel-push"
+        }
+      }
+    },
+    "alarm-channel-push": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "subject"
+      ],
+      "description": "Web Push to the phones people subscribed through the HMI (#722). The VAPID key is the secret push.vapid-key in alarm-secrets.json (made at first start on a controller that is not half of a pair; naut alarms secrets generate push.vapid-key otherwise). A pair needs the same file on both boxes.",
+      "properties": {
+        "subject": {
+          "type": "string",
+          "description": "A mailto: address or an https: URL the site owns. Push services (Google, Apple, Mozilla) may use it to reach you, and it is sent with every page, so it is never defaulted."
+        },
+        "allow-hosts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The push services the controller may send to: host names (fcm.googleapis.com) or wildcards under one (*.push.apple.com). Empty: any public host. A private address is refused unless named here (a site's own push relay)."
         }
       }
     },
@@ -2216,10 +2242,11 @@
               "email",
               "sms",
               "voice",
-              "webhook"
+              "webhook",
+              "push"
             ]
           },
-          "description": "Channel kinds; each person gets one send per kind. log is always there; email, sms, voice and webhook when alarms.channels configures them. email, sms and voice need the person's address in the contacts file on the box (naut alarms contacts set)."
+          "description": "Channel kinds; each person gets one send per kind. log is always there; email, sms, voice, webhook and push when alarms.channels configures them. email, sms and voice need the person's address in the contacts file on the box (naut alarms contacts set); push needs the person to have subscribed a phone in the HMI."
         }
       }
     },

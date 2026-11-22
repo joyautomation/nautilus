@@ -24,6 +24,7 @@ const (
 	PermWrite      = auth.Write      // tag writes
 	PermAck        = auth.Ack        // alarm acknowledgement
 	PermShelve     = auth.Shelve     // alarm shelving
+	PermNote       = auth.Note       // operator notes (#720)
 	PermSubstitute = auth.Substitute // #707's substitutes
 	PermForce      = auth.Force      // forces, set and cleared
 	PermSFC        = auth.SFC        // SFC step and transition commands
@@ -41,25 +42,31 @@ const (
 // one missing here. With an auth: block, an action missing here is
 // refused.
 var actionPerm = map[string]string{
-	"tag.write":            PermWrite,
-	"alarm.ack":            PermAck,
-	"alarm.shelve":         PermShelve,
-	"alarm.unshelve":       PermShelve,
-	"sfc.step":             PermSFC,
-	"sfc.transition":       PermSFC,
-	"force.set":            PermForce,
-	"force.clear":          PermForce,
-	"force.clear-all":      PermForce,
-	"program.edit":         PermEdit,
-	"program.rollback":     PermEdit,
-	"program.activate":     PermActivate,
-	"config.stage":         PermConfig,
-	"config.validate":      PermConfig,
-	"config.apply":         PermConfig,
-	"config.commit":        PermConfig,
-	"param.commit":         PermConfig,
-	"param.import":         PermConfig,
-	"config.revert.cancel": PermConfig,
+	"tag.write":                PermWrite,
+	"push.subscribe":           auth.Read, // any person who may read may be paged; read-gated per alarm at send
+	"push.unsubscribe":         auth.Read,
+	"alarm.ack":                PermAck,
+	"alarm.shelve":             PermShelve,
+	"alarm.unshelve":           PermShelve,
+	"sfc.step":                 PermSFC,
+	"sfc.transition":           PermSFC,
+	"force.set":                PermForce,
+	"force.clear":              PermForce,
+	"force.clear-all":          PermForce,
+	"program.edit":             PermEdit,
+	"program.rollback":         PermEdit,
+	"program.activate":         PermActivate,
+	"push.confirm-revocations": PermConfig,
+	"note.add":                 PermNote,
+	"note.revise":              PermNote,
+	"note.retract":             PermNote,
+	"config.stage":             PermConfig,
+	"config.validate":          PermConfig,
+	"config.apply":             PermConfig,
+	"config.commit":            PermConfig,
+	"param.commit":             PermConfig,
+	"param.import":             PermConfig,
+	"config.revert.cancel":     PermConfig,
 	// A parameter written to a device on an IO-Link port is a change to a
 	// device, like a configuration apply (#705): the config permission.
 	"param.write":      PermConfig,

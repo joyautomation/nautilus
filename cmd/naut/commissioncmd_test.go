@@ -129,8 +129,13 @@ var floorAbove = regexp.MustCompile(`a floor above it: (\d+)`)
 // that floor it re-commissions, and the pair leads again.
 func TestRecommissionThroughTheCLIPrintsTheEvidence(t *testing.T) {
 	r := newBoxRigAPI(t)
-	for i, n := range []string{"a", "b"} {
+	// Both down before either comes back: a wiped a restarted while b
+	// still runs re-adopts b's incarnation (#976) within milliseconds, so
+	// the disks are not both lost (a CI flake, #1199's run).
+	for _, n := range []string{"a", "b"} {
 		r.nodes[n].crash()
+	}
+	for i, n := range []string{"a", "b"} {
 		r.wipeBox(n)
 		r.restartOn(n, "box-"+n, r.env[n], i)
 	}

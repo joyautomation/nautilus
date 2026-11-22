@@ -41,8 +41,12 @@ func BenchStation(modules ...tiad.DeviceModule) tiad.Station {
 	}
 }
 
+// BenchWebPassword is the bench station's web user's password: it is set,
+// so it meets TIA's password rules, and it is its own secret.
+const BenchWebPassword = "Bench-web-2026"
+
 // BenchSecrets carries the bench station's web user password.
-var BenchSecrets = tiad.Secrets{WebUsers: map[string]string{"naut": "pw"}, FullAccessPassword: BenchFullAccessPassword}
+var BenchSecrets = tiad.Secrets{WebUsers: map[string]string{"naut": BenchWebPassword}, FullAccessPassword: BenchFullAccessPassword}
 
 // BenchAttestation is a test operator's attestation for a download that
 // loads hardware (#789 hardware gate).
@@ -60,6 +64,24 @@ func AcceptHardware(r tiad.DownloadRequest) tiad.DownloadRequest {
 // BenchFullAccessPassword meets TIA's password rules. It is a test value,
 // never a real CPU's.
 const BenchFullAccessPassword = "Bench-access-2026"
+
+// BenchLogin answers TIA's credentials question going online to a CPU a
+// bench station's hardware load turned access control on for: its user
+// "nautilus" holds BenchFullAccessPassword (#789 stage 5 (A)).
+var BenchLogin = &tiad.OnlineSecrets{FullAccessPassword: BenchFullAccessPassword}
+
+// benchLoginJSON is BenchLogin as a raw request's secrets.
+var benchLoginJSON = map[string]string{"fullAccessPassword": BenchFullAccessPassword}
+
+// BenchCompare is a compare with BenchLogin.
+var BenchCompare = tiad.CompareRequest{Secrets: BenchLogin}
+
+// BenchDownloadSecrets are the secrets a download to a bench CPU carries
+// when it names none of its own: the Full access password, so the
+// download and the compare after it can log on.
+func BenchDownloadSecrets() *tiad.Secrets {
+	return &tiad.Secrets{FullAccessPassword: BenchFullAccessPassword}
+}
 
 // BenchConfigurationPassword meets TIA's password rules. It is a test
 // value, never a real CPU's.
@@ -426,7 +448,7 @@ func contractStrictJSON(t *testing.T, start Starter) {
 	path := "/v1/sessions/" + s.ID + "/station"
 	body := func(edit func(st map[string]any, root map[string]any)) map[string]any {
 		st := stationBody(t, BenchStation())
-		root := map[string]any{"station": st, "secrets": map[string]any{"webUsers": map[string]any{"naut": "pw"}, "fullAccessPassword": BenchFullAccessPassword}}
+		root := map[string]any{"station": st, "secrets": map[string]any{"webUsers": map[string]any{"naut": BenchWebPassword}, "fullAccessPassword": BenchFullAccessPassword}}
 		edit(st, root)
 		return root
 	}
@@ -457,7 +479,7 @@ func contractStrictJSON(t *testing.T, start Starter) {
 		}),
 		"password as a number": body(func(_, r map[string]any) { r["secrets"].(map[string]any)["webUsers"] = map[string]any{"naut": 5} }),
 		"another password as a number": body(func(_, r map[string]any) {
-			r["secrets"].(map[string]any)["webUsers"] = map[string]any{"naut": "pw", "other": 5}
+			r["secrets"].(map[string]any)["webUsers"] = map[string]any{"naut": BenchWebPassword, "other": 5}
 		}),
 		"station as an array":  body(func(_, r map[string]any) { r["station"] = []any{} }),
 		"modules as an object": body(func(st, _ map[string]any) { st["modules"] = map[string]any{} }),
@@ -484,9 +506,9 @@ func contractStrictJSON(t *testing.T, start Starter) {
 		"a trailing point":       {`"slot":2`, `"slot":2.`},
 		"a bare point":           {`"inputStart":0`, `"inputStart":.0`},
 		"undefined":              {`"inputStart":0`, `"inputStart":undefined`},
-		"a raw tab in a string":  {`"pw"`, "\"p\tw\""},
-		"a bad escape":           {`"pw"`, `"p\qw"`},
-		"a single-quoted string": {`"pw"`, `'pw'`},
+		"a raw tab in a string":  {`"` + BenchWebPassword + `"`, "\"Bench\tweb\""},
+		"a bad escape":           {`"` + BenchWebPassword + `"`, `"Bench\qweb"`},
+		"a single-quoted string": {`"` + BenchWebPassword + `"`, `'` + BenchWebPassword + `'`},
 		"a key twice":            {`"slot":2`, `"slot":1,"slot":2`},
 		"a key twice, escaped":   {`"slot":2`, `"slot":1,"sl\u006ft":2`},
 	}

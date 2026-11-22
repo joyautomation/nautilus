@@ -46,6 +46,7 @@ import (
 	"github.com/joyautomation/nautilus/internal/vcs"
 	nio "github.com/joyautomation/nautilus/io"
 	"github.com/joyautomation/nautilus/leader"
+	"github.com/joyautomation/nautilus/notes"
 	opcuaserver "github.com/joyautomation/nautilus/opcua/server"
 	"github.com/joyautomation/nautilus/retain"
 	"github.com/joyautomation/nautilus/runtime"
@@ -347,7 +348,12 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	if proj.Auth != nil && (proj.Auth.HasUsers() || proj.Auth.OIDC()) {
 		sysAlarms = append(sysAlarms, usersAlarm(&srvRef))
 	}
-	if err := openAlarmContacts(proj, dir, os.Getenv, os.Stderr); err != nil {
+	if proj.Alarms != nil && proj.Alarms.Channels != nil && proj.Alarms.Channels.Push != nil {
+		sysAlarms = append(sysAlarms, pushHeldAlarm(&srvRef))
+	}
+	proj.PushSend = pushChannel(&srvRef)
+	alarmStateDir, err := openAlarmContacts(proj, dir, os.Getenv, os.Stderr, proj.Runtime.Coordinator != nil)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "naut run: alarms:", err)
 		return 1
 	}
@@ -367,12 +373,13 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	// election and the scans run.
 	var subLog *server.SubstituteLog
 	var alarmLog *server.AlarmLog
+	var notesLog *server.NotesLog
 	if pair != nil {
 		var eng *alarm.Engine
 		if alarms != nil {
 			eng = alarms.Engine
 		}
-		if subLog, alarmLog, err = pair.startLog(rt, 0, eng); err != nil {
+		if subLog, alarmLog, notesLog, err = pair.startLog(rt, 0, eng); err != nil {
 			fmt.Fprintln(os.Stderr, "naut run: redundancy:", err)
 			return 1
 		}
@@ -531,6 +538,19 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	if alarmLog != nil {
 		sopts.AlarmLog = alarmLog
 	}
+	// Operator notes (#720): a pair's are an index of its log; alone, a file
+	// in the state directory, when anyone can sign in to write one.
+	switch {
+	case notesLog != nil:
+		sopts.NotesLog = notesLog
+	case proj.Auth != nil && (proj.Auth.HasUsers() || proj.Auth.OIDC()):
+		if ns, err := openNotes(proj, dir, os.Getenv); err != nil {
+			fmt.Fprintf(os.Stderr, "naut run: notes are off: %v\n", err)
+		} else {
+			sopts.Notes = ns
+			defer ns.Close()
+		}
+	}
 	// Program provenance: a built binary decodes the history its archive
 	// carries; a checkout captures live from git. Lazy (first request pays,
 	// not startup) and nil-safe — no repo just means an empty history.
@@ -612,6 +632,7 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 			fmt.Fprintln(os.Stderr, "naut run: parameters.writeBack is commit, but this controller does not run from a git checkout: tuned values are offered as a patch at GET /api/parameters/patch")
 		}
 	}
+	sopts.Push = pushOptions(proj, alarmStateDir, proj.Runtime.Coordinator != nil, os.Stderr)
 	srv := server.New(rt, sopts)
 	srvRef.Store(srv)
 	if j != nil {
@@ -838,6 +859,22 @@ func auditAlarm(srv *atomic.Pointer[server.Server]) project.SystemAlarm {
 // file cannot be read (#708): no local user can authenticate.
 const UsersAlarmID = "nautilus.users-file"
 
+// openNotes opens the notes file of a controller on its own, in its state
+// directory (#720).
+func openNotes(proj *project.Project, dir string, getenv func(string) string) (*notes.Store, error) {
+	sd, err := controllerStateDir("the operator notes", proj.AuthStateDir, proj.Name, dir, dir != "", getenv)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(sd, 0o700); err != nil {
+		return nil, err
+	}
+	return notes.Open(filepath.Join(sd, NotesFile))
+}
+
+// NotesFile is the name of the notes file in the state directory.
+const NotesFile = "notes.jsonl"
+
 // usersAlarm is the users file's system alarm, read from the server srv
 // will hold.
 func usersAlarm(srv *atomic.Pointer[server.Server]) project.SystemAlarm {
@@ -855,19 +892,45 @@ func usersAlarm(srv *atomic.Pointer[server.Server]) project.SystemAlarm {
 	}
 }
 
+// PushHeldAlarmID is the system alarm raised while the push subscriptions'
+// standing sweep is holding a mass revocation instead of deleting it.
+const PushHeldAlarmID = "nautilus.push-held"
+
+// pushHeldAlarm is raised while subscriptions are held: many people failed
+// standing at once, which a wrong users.json does.
+func pushHeldAlarm(srv *atomic.Pointer[server.Server]) project.SystemAlarm {
+	return project.SystemAlarm{
+		Def: alarm.Def{
+			ID: PushHeldAlarmID, Tag: "__nautilus.push-held",
+			Name:     "Push subscriptions held, not sent: many people stopped standing at once (check users.json, and the pair's users check)",
+			Priority: alarm.High, Class: "system",
+			AckRequired: true, AutoClear: true,
+		},
+		Active: func() bool {
+			s := srv.Load()
+			return s != nil && s.PushHeld() > 0
+		},
+	}
+}
+
 // openAlarmContacts gives the project the contacts and secrets files in
 // the controller's state directory (#715) when alarms.channels configures
 // a channel that pages people. A file that cannot be read is not a reason
 // to stop a controller: it is said here, and each send that needs it
 // fails (journalled, class config) until it is fixed. No state directory
 // at all leaves the project without one, and NewAlarms refuses.
-func openAlarmContacts(proj *project.Project, dir string, getenv func(string) string, stderr io.Writer) error {
+func openAlarmContacts(proj *project.Project, dir string, getenv func(string) string, stderr io.Writer, paired bool) (string, error) {
 	if proj.Alarms == nil || len(proj.Alarms.Channels.Kinds()) == 0 {
-		return nil
+		return "", nil
 	}
 	sd, err := controllerStateDir("the alarm contacts", proj.AuthStateDir, proj.Name, dir, dir != "", getenv)
 	if err != nil {
-		return err
+		return "", err
+	}
+	// The push key before the contacts are checked: a controller that is
+	// not half of a pair makes it here, and a pair is told to copy one.
+	if c := proj.Alarms.Channels; c != nil && c.Push != nil {
+		_, _ = loadPushKey(sd, "naut run", !paired, stderr) // a failure is said by pushOptions
 	}
 	st, err := oncall.Open(sd)
 	if err != nil {
@@ -882,7 +945,7 @@ func openAlarmContacts(proj *project.Project, dir string, getenv func(string) st
 	for _, e := range errs {
 		fmt.Fprintf(stderr, "naut run: warning: %s\n", e)
 	}
-	return nil
+	return sd, nil
 }
 
 // journalInsecureChannels journals, once at start, each alarm channel

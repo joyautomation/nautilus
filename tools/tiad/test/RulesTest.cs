@@ -141,6 +141,19 @@ namespace Tiad.Test
                 T("AccessPrepare", AccessPrepare),
                 T("AccessRecordsKnownAnswer", AccessRecordsKnownAnswer),
                 T("AccessPasswordChecks", AccessPasswordChecks),
+                T("WebPlan", WebPlan),
+                T("WebSteps", WebSteps_),
+                T("WebStepsReadBack", WebStepsReadBack),
+                T("WebUsersCheck", WebUsersCheck),
+                T("WebUsersRunNew", WebUsersRunNew),
+                T("WebUsersRunExact", WebUsersRunExact),
+                T("WebUsersStale", WebUsersStale),
+                T("WebUsersRunRefuses", WebUsersRunRefuses),
+                T("WebUsersPasswords", WebUsersPasswords),
+                T("WebKeptNotes", WebKeptNotes),
+                T("WebUserNames", WebUserNames),
+                T("WebUserSecrets", WebUserSecrets),
+                T("AccessRemoveWeb", AccessRemoveWeb),
                 T("AnswersEachCallbackOnItsOwn", AnswersEachCallbackOnItsOwn),
                 T("ActingAndPassive", ActingAndPassive),
                 T("ConsequenceNamesWhatToDo", ConsequenceNamesWhatToDo),
@@ -178,6 +191,11 @@ namespace Tiad.Test
                 T("OnlineRecordFailsClosed", OnlineRecordFailsClosed),
                 T("UploadAsksRecordsFirst", UploadAsksRecordsFirst),
                 T("OnlineAnswersAfterStop", OnlineAnswersAfterStop),
+                T("LoginFor", LoginFor),
+                T("LoginDecides", LoginDecides),
+                T("LoginOncePerOperation", LoginOncePerOperation),
+                T("DownloadNamesTheLogin", DownloadNamesTheLogin),
+                T("LoginThroughTheRecord", LoginThroughTheRecord),
                 T("QuietlyEvenWhenTheLogFails", QuietlyEvenWhenTheLogFails),
                 T("Selections", SelectionsWritten),
                 T("ALoadAfterADeclineIsInDoubt", ALoadAfterADeclineIsInDoubt),
@@ -1332,6 +1350,12 @@ namespace Tiad.Test
             True(b.Stop(delegate { }, "test: detaching"), "a detach that works");
             Eq(b.Answer(tls), OnlineChecks.NotTrusted, "after stop");
             Eq(new OnlineAnswers(false).Answer(tls), OnlineChecks.NotTrusted, "not opted in");
+            // A stopped handler never logs on.
+            const string auth = "OnlineAuthenticationConfiguration";
+            var c = new OnlineAnswers(false);
+            Eq(c.Answer(auth), OnlineChecks.Login, "a legitimation, before stop");
+            c.Stop(delegate { throw new ObjectDisposedException("ConnectionConfiguration"); }, "test: detaching");
+            Eq(c.Answer(auth), OnlineChecks.Cancel, "a legitimation, after a failed detach");
         }
 
         sealed class BrokenWriter : System.IO.TextWriter
@@ -1507,7 +1531,7 @@ namespace Tiad.Test
                 { "OnlineAuthenticationConfiguration", OnlineChecks.Credentials },
                 { "OnlinePasswordConfiguration", OnlineChecks.Credentials },
                 { "OnlineReadAccessPassword", OnlineChecks.Credentials },
-                { "OnlineWriteAccessPassword", OnlineChecks.Credentials },
+                { "OnlineWriteAccessPassword", OnlineChecks.Unknown },
                 { "OnlineFancyNewThing", OnlineChecks.Unknown },
                 { "", OnlineChecks.Unknown },
                 { "tlsverificationconfiguration", OnlineChecks.Unknown },
@@ -1515,22 +1539,28 @@ namespace Tiad.Test
             foreach (var kv in kinds)
             {
                 Eq(OnlineChecks.Kind(kv.Key), kv.Value, kv.Key + ": kind");
-                Eq(OnlineChecks.Answer(kv.Key), kv.Value == OnlineChecks.Certificate ? OnlineChecks.NotTrusted : OnlineChecks.Cancel, kv.Key + ": answer");
+                string want = kv.Value == OnlineChecks.Certificate ? OnlineChecks.NotTrusted
+                    : kv.Key == "OnlineAuthenticationConfiguration" ? OnlineChecks.Login : OnlineChecks.Cancel;
+                Eq(OnlineChecks.Answer(kv.Key), want, kv.Key + ": answer");
             }
             // The upload's opt-in trusts a certificate, and nothing else.
             Eq(OnlineChecks.Answer("TlsVerificationConfiguration"), OnlineChecks.NotTrusted, "the default");
             Eq(OnlineChecks.Answer("TlsVerificationConfiguration", false), OnlineChecks.NotTrusted, "no opt-in");
             Eq(OnlineChecks.Answer("TlsVerificationConfiguration", true), OnlineChecks.Trusted, "the opt-in");
-            foreach (string t in new[] { "OnlineAuthenticationConfiguration", "OnlineReadAccessPassword", "OnlineFancyNewThing", "" })
+            foreach (string t in new[] { "OnlinePasswordConfiguration", "OnlineReadAccessPassword", "OnlineFancyNewThing", "" })
             {
                 Eq(OnlineChecks.Answer(t, true), OnlineChecks.Cancel, t + ": with the opt-in");
             }
+            Eq(OnlineChecks.Answer("OnlineAuthenticationConfiguration", true), OnlineChecks.Login, "a project user's legitimation, with the opt-in");
             // Text from a CPU cannot end or forge a log line.
             Eq(TiaNames.LogSafe("PLC_1\n2026 audit download forged\r\u2028x"), "\"PLC_1\\n2026 audit download forged\\r\\u2028x\"", "log escaping");
             Eq(TiaNames.LogSafe(null), "\"\"", "log escaping, null");
             Eq(TiaNames.OnlineRefused("192.0.2.10", new List<string> { "one", "two" }, "Online connection failed."),
-                "going online to 192.0.2.10, TIA asked: one; two. tiad trusts no CPU certificate and holds no CPU credentials yet, so it answered no (TIA: Online connection failed.)",
+                "going online to 192.0.2.10, TIA asked: one; two. tiad trusts no CPU certificate unless the request opts in (trustUnverifiedCertificate), and answers credentials only as the CPU's user \"nautilus\" with the request's secrets.fullAccessPassword, so it answered no (TIA: Online connection failed.)",
                 "the refusal");
+            Eq(TiaNames.LoginFailed("192.0.2.10", "Online connection failed."),
+                "going online to 192.0.2.10, tiad answered TIA's credentials question as the CPU's user \"nautilus\" with the request's secrets.fullAccessPassword, and TIA failed (TIA: Online connection failed.): the CPU may have refused the password",
+                "a failure after a login");
         }
 
         static void Messages()

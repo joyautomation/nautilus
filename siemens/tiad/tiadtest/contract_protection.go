@@ -57,15 +57,18 @@ func protectedStation(mode string) tiad.Station {
 func uploadedStation(mode string) tiad.Station {
 	st := protectedStation(mode)
 	st.CPU.AccessControl = tiad.AccessKeep
+	// The uploaded CPU's access control is off, so its web server is left
+	// as found: tiad refuses to turn it on there.
+	st.WebServer = nil
 	return st
 }
 
 // protectionNotes are the notes about the configuration protection: the
-// Full access user's are another field's.
+// Full access user's and the web server's are other fields'.
 func protectionNotes(notes []string) []string {
 	var out []string
 	for _, n := range notes {
-		if !strings.Contains(n, `"nautilus"`) {
+		if !strings.Contains(n, `"nautilus"`) && !strings.Contains(n, "the web user ") && n != WebOnNote {
 			out = append(out, n)
 		}
 	}
@@ -129,7 +132,7 @@ func contractPasswords(t *testing.T, start Starter) {
 	}
 	status, b := rawJSON(t, c, "POST", "/v1/sessions/"+s.ID+"/download", map[string]any{"address": benchCPU,
 		"software": true, "announced": true, "decisions": map[string]any{"startAfter": false},
-		"secrets": map[string]string{"configurationPassword": old}})
+		"secrets": map[string]string{"configurationPassword": old, "fullAccessPassword": BenchFullAccessPassword}})
 	if status != http.StatusOK {
 		t.Errorf("a download carrying an old-rules password: HTTP %d %s", status, b)
 	}
@@ -181,7 +184,7 @@ func contractProtected(t *testing.T, start Starter) {
 			"decisions": map[string]any{"startAfter": true, "acceptUnverifiedHardware": true}, "secrets": secrets,
 			"attestation": map[string]string{"by": BenchAttestation.By, "text": BenchAttestation.Text}}
 	}
-	for _, sec := range []map[string]string{{}, {"protection": BenchConfigurationPassword}} {
+	for _, sec := range []map[string]string{benchLoginJSON, {"protection": BenchConfigurationPassword, "fullAccessPassword": BenchFullAccessPassword}} {
 		status, b := rawJSON(t, c, "POST", path, body(sec))
 		if status != http.StatusConflict || envelopeKind(b) != tiad.KindDecisionRequired || !strings.Contains(string(b), `"id":"configuration-password"`) {
 			t.Errorf("secrets %v: HTTP %d %s, want decision_required configuration-password", sec, status, b)
@@ -190,7 +193,7 @@ func contractProtected(t *testing.T, start Starter) {
 	if n := len(a.Loaded(t)); n != 0 {
 		t.Fatalf("loaded %d without the configuration password", n)
 	}
-	status, b = rawJSON(t, c, "POST", path, body(map[string]string{"configurationPassword": BenchConfigurationPassword}))
+	status, b = rawJSON(t, c, "POST", path, body(map[string]string{"configurationPassword": BenchConfigurationPassword, "fullAccessPassword": BenchFullAccessPassword}))
 	if status != http.StatusOK || len(a.Loaded(t)) != 1 {
 		t.Fatalf("with the configuration password: HTTP %d %s", status, b)
 	}

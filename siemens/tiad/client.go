@@ -820,8 +820,32 @@ type CompareResult struct {
 
 // Compare compares the project with the CPU it was downloaded to.
 func (s *Session) Compare(ctx context.Context) (CompareResult, error) {
+	return s.CompareWith(ctx, CompareRequest{})
+}
+
+// OnlineSecrets is the one secret an online call (compare, upload,
+// fingerprint read, verify) takes: the password of the CPU's user
+// "nautilus", which cpu.accessControl fullAccessUser makes. When TIA asks
+// credentials going online to the CPU, the agent logs on as that project
+// user with it, once per connection: TIA asking again means the CPU
+// refused it, and the call fails without trying it twice. The agent
+// answers only over secure communication, only when the CPU offers
+// project users, and never while its TIA instance trusts a certificate
+// blindly. A download carries it in Secrets.FullAccessPassword. It comes
+// from the secret store; the agent neither logs nor stores it.
+type OnlineSecrets struct {
+	FullAccessPassword string `json:"fullAccessPassword,omitempty"`
+}
+
+// CompareRequest is a compare's options.
+type CompareRequest struct {
+	Secrets *OnlineSecrets `json:"secrets,omitempty"`
+}
+
+// CompareWith is Compare with options.
+func (s *Session) CompareWith(ctx context.Context, req CompareRequest) (CompareResult, error) {
 	var r CompareResult
-	_, err := s.c.doJSON(ctx, http.MethodPost, s.path("compare"), struct{}{}, &r)
+	_, err := s.c.doJSON(ctx, http.MethodPost, s.path("compare"), req, &r)
 	return r, err
 }
 
@@ -860,10 +884,15 @@ type UploadRequest struct {
 	// TrustUnverifiedCertificate answers TIA's TLS question going online
 	// to the CPU "trusted", blindly: TIA shows no certificate to check. An
 	// explicit, per-call opt-in for a read-only upload from a CPU in
-	// TIAD_TARGETS; credentials and other questions still cancel. TIA
-	// keeps the trust for the rest of its instance (BlindTrust). Only an
-	// upload and a fingerprint read take this option.
+	// TIAD_TARGETS; no password goes over it (OnlineSecrets), and other
+	// questions still cancel. TIA keeps the trust for the rest of its
+	// instance (BlindTrust). Only an upload and a fingerprint read take
+	// this option.
 	TrustUnverifiedCertificate bool `json:"trustUnverifiedCertificate,omitempty"`
+	// Secrets answer TIA's credentials question (OnlineSecrets). Never
+	// with TrustUnverifiedCertificate: no password goes to a CPU trusted
+	// blindly.
+	Secrets *OnlineSecrets `json:"secrets,omitempty"`
 }
 
 // UploadResult is what an upload did.
@@ -928,6 +957,9 @@ type FingerprintRequest struct {
 	// fingerprint service asks "trusted", blindly, as an upload's does.
 	// The bench CPU's read asks it (#789 stage 1b).
 	TrustUnverifiedCertificate bool `json:"trustUnverifiedCertificate,omitempty"`
+	// Secrets answer TIA's credentials question (OnlineSecrets). In a
+	// VerifyRequest they go in VerifyRequest.Secrets instead.
+	Secrets *OnlineSecrets `json:"secrets,omitempty"`
 }
 
 // FingerprintItem is one item of TIA's fingerprint of a CPU, as TIA names

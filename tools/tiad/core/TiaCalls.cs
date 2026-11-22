@@ -409,17 +409,36 @@ namespace Tiad
             }
         }
 
-        // CheckPolicy refuses, before any write, a Full access password the
-        // project's own password policy for local users would refuse.
-        static void CheckPolicy(ITia t, object project, Secrets sec)
+        // SetsUsers reports whether applying st sets local users'
+        // passwords: the Full access user's, or a web user's.
+        static bool SetsUsers(Station st)
         {
-            string e = t.ReadPolicy(project).Check(sec.FullAccessPassword);
-            if (e != null) throw TiadException.BadRequest("secrets.fullAccessPassword {0}", e);
+            return st.Cpu.AccessControl == StationRules.AccessFullAccessUser || st.WebServer != null && st.WebServer.Enabled && st.WebServer.Users.Count > 0;
+        }
+
+        // CheckPolicy refuses, before any write, a Full access or web
+        // user's password the project's own password policy for local
+        // users would refuse.
+        static void CheckPolicy(ITia t, object project, Station st, Secrets sec)
+        {
+            if (!SetsUsers(st)) return;
+            PasswordPolicy pol = t.ReadPolicy(project);
+            if (st.Cpu.AccessControl == StationRules.AccessFullAccessUser)
+            {
+                string e = pol.Check(sec.FullAccessPassword);
+                if (e != null) throw TiadException.BadRequest("secrets.fullAccessPassword {0}", e);
+            }
+            if (st.WebServer == null || !st.WebServer.Enabled) return;
+            foreach (var u in st.WebServer.Users)
+            {
+                string e = pol.Check(sec.WebUsers[u.Name]);
+                if (e != null) throw TiadException.BadRequest("secrets.webUsers[{0}] {1}", Json.Quote(u.Name), e);
+            }
         }
 
         // CheckStation applies the agent-side station rules: the spec's
-        // own, an installed GSDML for every device, a password for every
-        // web user.
+        // own, the secrets it needs (a password for every web user among
+        // them), an installed GSDML for every device.
         void CheckStation(Station st, Secrets sec)
         {
             string err = st.Validate();
@@ -434,17 +453,6 @@ namespace Tiad
                     if (!OnTia(delegate(ITia t) { return t.GsdInstalled(dev.Gsdml); }))
                     {
                         throw TiadException.BadRequest("device {0}: GSDML {1} is not installed (POST /v1/gsd/install first)", d.Name, d.Gsdml);
-                    }
-                }
-            }
-            if (st.WebServer != null && st.WebServer.Enabled)
-            {
-                foreach (var u in st.WebServer.Users)
-                {
-                    string pw;
-                    if (!sec.WebUsers.TryGetValue(u.Name, out pw) || pw == "")
-                    {
-                        throw TiadException.BadRequest("web user {0} has no password in secrets.webUsers", u.Name);
                     }
                 }
             }
@@ -492,11 +500,8 @@ namespace Tiad
                     object h = t.CreateProject(full, name);
                     try
                     {
-                        if (st.Cpu.AccessControl == StationRules.AccessFullAccessUser)
-                        {
-                            s.AccessControlSet = true;
-                            CheckPolicy(t, h, sec);
-                        }
+                        if (st.Cpu.AccessControl == StationRules.AccessFullAccessUser) s.AccessControlSet = true;
+                        CheckPolicy(t, h, st, sec);
                         t.ApplyStation(h, st, CpuReuse.Create, sec, new List<string>(), s.Made);
                     }
                     catch
@@ -660,13 +665,11 @@ namespace Tiad
                         CpuReuse.Collides(pc, st);
                         ConfigProtection.Plan(pc.Protection, st.Cpu.ConfigurationProtection, sec.ConfigurationPassword != "");
                         AccessRule.Plan(pc.AccessControl, st.Cpu.AccessControl, sec.FullAccessPassword != "");
+                        WebRule.Plan(pc.AccessControl, st.WebServer);
                         kept = pc.Others;
                     }
-                    if (st.Cpu.AccessControl == StationRules.AccessFullAccessUser)
-                    {
-                        s.AccessControlSet = true;
-                        CheckPolicy(t, s.Handle, sec);
-                    }
+                    if (st.Cpu.AccessControl == StationRules.AccessFullAccessUser) s.AccessControlSet = true;
+                    CheckPolicy(t, s.Handle, st, sec);
                     string cannot = t.CannotApply(st);
                     if (cannot != null) throw new TiaException(cannot);
                     // A found user's password, before any write: a refusal
@@ -684,6 +687,10 @@ namespace Tiad
                             s.Unclean = true;
                             s.UsersUnclean = true;
                         }
+                        // A password set before a later user's was refused
+                        // is a change to the project: its users match their
+                        // records, and it needs compiling again.
+                        if (w.Wrote) s.Compiled = false;
                         throw;
                     }
                     // A password set or recorded is a change to the project.

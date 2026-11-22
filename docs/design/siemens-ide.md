@@ -313,8 +313,116 @@ The rules for applying a spec:
   devices besides its station as found, and lists them ("Which CPU an
   apply uses" below).
 - **Every device's GSDML must already be installed** (`gsd/install`).
-- **Every web user needs a password** in `secrets.webUsers`. Its rights are
-  any of `read`, `write`, `mode` (change RUN/STOP) and `diagnostics`.
+- **Every web user needs a password** in `secrets.webUsers` when the server
+  is on. It meets TIA's password rules and then the project's own policy
+  for local users, and it is its own secret: never the protection,
+  configuration or Full access password, never another web user's. Its
+  rights are any of `read`, `write`, `mode` (change RUN/STOP) and
+  `diagnostics`. A name is 1 to 32 letters, digits, `_`, `-` and `.`,
+  starting with a letter; `nautilus` and `Anonymous` are reserved in any
+  case, and names are compared ignoring case. `webServer.users` with
+  `enabled: false` is refused: a server that is off has no users.
+- **The web server comes on only over access control on** (#789 stage 5
+  (A) step 2). With access control off, a FW 3.1 CPU's web server knows
+  one user, "Anonymous", with full rights over the CPU (S7-1500 Web server
+  manual, 11/2023): anyone who reaches it could write tags and stop the
+  CPU.
+  - `webServer.enabled: true` sets the CPU's `WebserverActivate`, then
+    `WebserverHttpsOnly` (every such CPU has a user with a password, so
+    never plain HTTP), then `UseWebServerForInterface` on the PROFINET
+    interface that carries the CPU's address (a device item attribute, not
+    the node's), writing only what differs, and reads all three back.
+  - It needs the CPU's access control to read exactly
+    `EnabledWithAccessControl`. `Disabled`, a CPU without the setting and
+    any other state refuse, naming the fix. One rule, checked twice:
+    before any write for a kept CPU (beside the `cpu.accessControl`
+    check), and in the station step after access control is applied,
+    before the server is switched on, for any CPU.
+  - `enabled: false` turns both off. It is never refused.
+  - `webServer` left out keeps a kept CPU's web server as found and turns
+    a new CPU's off. An adopted CPU with access control off is applied
+    without `webServer`. As found is never silent: a kept CPU whose server
+    is on over access control off gets a WARNING note (and log line)
+    naming `enabled: false` as the fix, since a download would load it.
+  - **Web users** (step 2B). Each is a local user of the project with
+    its password from `secrets.webUsers` and tiad's password record in its
+    comment (as `nautilus`), holding one role, `nautilus web <name>`,
+    which tiad makes and marks by its comment. That role holds exactly
+    the user's rights on the CPU: `read` = `WebReadTags`, `write` =
+    `WebWriteTags`, `mode` = `WebChangeOperatingMode`, `diagnostics` =
+    `WebAllowDiagnostics`. Nothing is implied (`write` does not give
+    `read`; a user with `write` or `mode` and no `read` gets a note).
+    Exact means: missing rights granted, any other right revoked (Full
+    access too), the user holds that role alone (system roles too), no
+    other user holds it, the user is active; all read back. Every right is
+    resolved against what the CPU offers before the first user or role is
+    written.
+  - Refused before any write: a user or role of that name tiad did not
+    make (never taken over, no record-only route), and an active
+    anonymous user (Openness `UmacConfigurator.AnonymousUser`; anyone who
+    reaches the server would get its roles' rights) while the server is
+    to be on. tiad never activates or deactivates the anonymous user.
+  - A found web user's password is settled before the station step, as
+    the Full access user's: unchanged when the record matches, else the
+    record first, then the password, the record put back when TIA refuses
+    it. A refusal after an earlier user's password was set leaves that one
+    set (its record matches it) and the session uncompiled.
+    Web users have no record-only route: under another agent key's record
+    (the agent's key lost), an unchanged web password is refused as one
+    the user had, so it must change: the refusal says so and names
+    `secrets.webUsers[<name>]`. Rotating a web password is cheap and
+    fails closed.
+  - The limit of "exact": tiad sees a user's roles through Openness's
+    `ProjectUser.Roles` and the project's local users. A role reaching a
+    web user through a user group, a UMC user or group holding a tiad web
+    role, and the role's rights on other devices or its engineering
+    rights are not checked; each needs someone to edit a tiad-marked user
+    or role in TIA by hand.
+  - Stale web users: a role tiad marked for a user no longer in
+    `webServer.users` is deleted, and so is that user when it carries a
+    tiad record. Only the role's marker finds them, so `nautilus` and
+    users or roles tiad did not make are never removed. `enabled: false`
+    removes them all; `webServer` left out keeps them on a kept CPU and
+    removes them on a new one (whose server goes off). An upload removes
+    the web users and roles its session made, as it does `nautilus`.
+  - Left out on a kept CPU whose server is on over access control on,
+    two more WARNING notes: plain HTTP allowed (web passwords in clear),
+    and an active anonymous user. A read that fails is logged and said,
+    never failing the apply.
+  - The agent logs every runtime right the CPU offers, the project's
+    users with their roles and the anonymous user's state, once a run.
+  - Proven offline on the TIA machine (2026-11-22, through the agent, no
+    CPU contact): a new 1510SP FW 3.1 station with `fullAccessUser`, the
+    server on and two web users (`read`; all four rights) compiles with 0
+    errors and 0 warnings. Applying it again leaves both passwords
+    unchanged; a rotated password is set; a dropped user goes with its
+    role; a 32-character name is taken; `enabled: false` removes the last
+    one and compiles. A new project has no anonymous user (Openness reads
+    `AnonymousUser` as none). A compile after a users-only change
+    reported the hardware "up-to-date" and compiled the PKI container.
+  - Compiled offline, not proven on a CPU: that these rights let a web
+    user log on to the Web API and read, write, change the mode and read
+    the diagnostic buffer, and that a download after a users-only change
+    carries the new users (the first access-control bench window).
+  - Proven offline on the TIA machine (2026-11-22, through the agent, no
+    CPU contact): a new 1510SP FW 3.1 station with `fullAccessUser` and
+    the server on compiles with 0 errors and 0 warnings, and so do off and
+    on again. Only once the server is on does TIA offer
+    `WebserverHttpsOnly`, `WebserverCertificate`,
+    `WebserverDataAccessViaWebApiOnly` and the other `Webserver*`
+    attributes. The CPU's web runtime rights include `WebReadTags`,
+    `WebWriteTags`, `WebChangeOperatingMode`, `WebAllowDiagnostics`,
+    `WebReadSyslog` and `WebDownloadServiceData` (step 2B maps the spec's
+    rights onto them). A new project's users hold only `nautilus`: no
+    "Anonymous" appears among the project users. A second run proved
+    the final shape: a create without `webServer` writes nothing and
+    reads back off; on (with HTTPS only), off and on again each read back
+    and compile with 0 errors.
+  - Unproven: whether a kept project can give "Anonymous" a role (it is
+    not among Openness's project users, but `UmacConfigurator` offers it
+    as `AnonymousUser`); that a hardware download of a
+    station with the server on serves the Web API (the first
+    access-control bench window).
 - **`cpu.configurationProtection` is required on the wire**: the FW 3.1
   protection of the CPU's confidential configuration data (#789, decision
   of 2026-11-19). A FW 3.1 CPU does not compile until it is set up.
@@ -582,19 +690,21 @@ The client checks each path and the agent checks again.
 | `POST /v1/sessions/{id}/software` | `{group, sources, tagTables, prune}` → `{results: [{path, ok, messages}], blocks: [{name, kind}]}`. Generates blocks into the group named `group`. With `prune`, blocks in that group that no source produced are deleted |
 | `POST /v1/sessions/{id}/compile` | `{hardware, software}` → `{result: "success" or "warning" or "error", errors, warnings, messages: [{object, severity, text}]}` |
 | `POST /v1/sessions/{id}/download` | §3.5 (P3) |
-| `POST /v1/sessions/{id}/compare` | → `{equal, differences: [{object, state}], blindTrust}`. An online compare. `blindTrust` is the TIA instance's (§3.8), or `null` |
-| `POST /v1/sessions/{id}/fingerprint` | `{trustUnverifiedCertificate?}` → `{address, items: [{identifier, value}], trustedBlindly, blindTrust}`. TIA's fingerprint of the session's CPU, read online and read-only (§3.8) |
+| `POST /v1/sessions/{id}/compare` | `{secrets?: {fullAccessPassword}}` (§3.9) → `{equal, differences: [{object, state}], blindTrust}`. An online compare. `blindTrust` is the TIA instance's (§3.8), or `null` |
+| `POST /v1/sessions/{id}/fingerprint` | `{trustUnverifiedCertificate?, secrets?: {fullAccessPassword}}` → `{address, items: [{identifier, value}], trustedBlindly, blindTrust}`. TIA's fingerprint of the session's CPU, read online and read-only (§3.8) |
 | `POST /v1/sessions/{id}/export` | `{dir, blocks: "scl" or "xml" or "", tagTables, hardware, gsdml}` → `{files: [path]}` (P6 for `gsdml`) |
-| `POST /v1/sessions/{id}/upload` | `{trustUnverifiedCertificate?}` → `{trustedBlindly, blindTrust, device, pin, cpu: {name, order, firmware}, removedAccess?: [string]}`. CPU into the session's project, for bringing a legacy CPU's program into nautilus (S2a: works). Pins the CPU's identity on first use, or checks it (§3.8). `cpu` is what a spec must name to keep the uploaded CPU. `removedAccess` names the user and role this session had made, removed first (§3.3, `cpu.accessControl`) |
+| `POST /v1/sessions/{id}/upload` | `{trustUnverifiedCertificate?, secrets?: {fullAccessPassword}}` → `{trustedBlindly, blindTrust, device, pin, cpu: {name, order, firmware}, removedAccess?: [string]}`. CPU into the session's project, for bringing a legacy CPU's program into nautilus (S2a: works). Pins the CPU's identity on first use, or checks it (§3.8). `cpu` is what a spec must name to keep the uploaded CPU. `removedAccess` names the user and role this session had made, removed first (§3.3, `cpu.accessControl`) |
 | `POST /v1/sessions/{id}/save` | `{archive?}` → `{path}`. Refused (`unclean_session`) after an apply or upload failed part-way |
 | `GET /v1/pins`, `POST /v1/pins/{address}` | The device pins (§3.8). An upload pins the CPU on first use and must match after; compare and download check the pin first |
 | `GET /v1/deploys[?address=]` | → `{deploys: [{id, at, session, project, address, hardware, software, source, tia, archive, attestation, keptDevices, blindTrust, outcome, status}], unreadableLines}`. The deploy record, newest first (§3.5, "The deploy record"). Never starts TIA |
-| `POST /v1/deploys/verify` | `{deploy, fingerprint?: {trustUnverifiedCertificate?}}` → `{deploy, address, status, latest, unreadableLines, verdict, broken?, session?, differences?, blocks?, blindTrust?, changedOutside, fingerprint?, fingerprintError?, closeError?}` (a `broken` verdict has no session, differences, blocks or blind trust). Whether the CPU still runs a deploy: its archive opened in a session of its own and compared online (§3.5, "Verifying a deploy"). `verdict` is `equal`, `different` or `broken` |
+| `POST /v1/deploys/verify` | `{deploy, fingerprint?: {trustUnverifiedCertificate?}, secrets?: {fullAccessPassword}}` → `{deploy, address, status, latest, unreadableLines, verdict, broken?, session?, differences?, blocks?, blindTrust?, changedOutside, fingerprint?, fingerprintError?, closeError?}` (a `broken` verdict has no session, differences, blocks or blind trust). Whether the CPU still runs a deploy: its archive opened in a session of its own and compared online (§3.5, "Verifying a deploy"). `verdict` is `equal`, `different` or `broken` |
 
 `secrets` is `{"webUsers": {"naut": "<password>"}, "protection": "<password>", "configurationPassword": "<password>", "fullAccessPassword": "<password>"}`.
 Each password answers only its own question: the protection password
 never answers `configuration-password`, and the other way round. The Full
-access user's password answers no download question.
+access user's password answers no download question: it answers only TIA's
+credentials question going online (§3.9), and it is the only secret
+compare, fingerprint, upload and verify take.
 tiad never logs it and never writes it to the work dir. Run tiad on
 loopback or across the tailnet, because the requests are plain HTTP.
 
@@ -727,7 +837,8 @@ behaviour. So, until then:
   failing, or the compare differing (with the differing objects). This
   holds whether TIA asked no check or many. It fails closed, by design,
   where the compare cannot be equal: a CPU whose online access asks for
-  credentials (tiad answers no, so the compare fails), a hardware-only
+  credentials the request does not carry, or refuses them (§3.9: the
+  compare fails), a hardware-only
   download onto software that already differs, a kept device or system
   block that compares different. Equal is the agent's call on TIA's
   compare tree, never TIA's tree alone: its root says identical, at
@@ -1365,6 +1476,100 @@ closed, and online calls to that address are refused.
 Editing or deleting a pin file by hand is unaudited and not a supported
 path.
 
+### 3.9 Credentials going online (#789 stage 5 (A))
+
+A station naut makes has access control on, with the project user
+`nautilus` holding the runtime right Full access (`cpu.accessControl:
+fullAccessUser`, its password `secrets.fullAccessPassword`). Once a
+hardware load puts that on a CPU, TIA asks credentials every time it goes
+online to it. Before this, tiad answered no, so a CPU it made locked it out
+of its own compare, upload, download and verify: the lockout James's stage
+5 go was conditional on.
+
+**What tiad answers.** Each online call takes the password of the CPU's
+user `nautilus`:
+
+| Call | Where the password goes |
+|---|---|
+| `POST …/compare`, `…/upload`, `…/fingerprint`, `POST /v1/deploys/verify` | `secrets.fullAccessPassword` (the only secret they take) |
+| `POST …/download` | its `secrets.fullAccessPassword`, also for the compare and fingerprint read after the load |
+
+When TIA asks a project user's legitimation
+(`OnlineAuthenticationConfiguration`), tiad logs on as the project user
+`nautilus` with that password (`LoginUse` in core, the one rule both the
+glue and tiad-fake run). It answers no, naming why, when:
+
+- the request carries no password;
+- the agent's TIA instance trusts a certificate blindly (§3.8), or this
+  call trusted one: no password goes to a CPU tiad cannot verify. The
+  refusal says "password not sent" and names the fix: closing every
+  session retires the instance (#789 D1), and the next one logs on;
+- this call answered any question no before (a certificate it does not
+  trust, credentials, a question it does not know): TIA may go on after a
+  no, and no password follows one;
+- the connection is not secure communication, or tiad cannot read whether
+  it is;
+- the CPU offers no project-user legitimation, or tiad cannot read what it
+  offers;
+- this call answered credentials already, on any of its connections: TIA
+  asking again may mean the CPU refused the password, and tiad never sends
+  one twice, since a CPU may lock a user out after failed logons.
+
+Legacy access-level passwords (`OnlinePasswordConfiguration`,
+`OnlineReadAccessPassword`) and anything tiad does not know still cancel.
+Every answer and refusal is an audit line (`audit online-login`) naming the
+call, address and user, never the password; the glue logs whether the
+connection is secure and which user types the CPU offers, never the
+configuration itself. A refusal fails the call as any question answered no
+does: `operation_failed` for a compare, upload, read or verify, and
+`outcome_unknown` inside a download, where TIA's call had begun. A download
+of a station whose spec is `fullAccessUser` without the password is refused
+up front (`bad_request`, nothing sent), a dry run too: the compare after it
+would ask. So is a hardware load of such a station while the instance trusts
+blindly, checked again on the TIA thread before the deploy record: the load
+turns access control on, and the compare after it could not log on. A
+software load then is not refused, since whether its CPU asks is not known
+before it goes online: if it asks, the logon is refused inside TIA's call
+(`outcome_unknown`). A download TIA fails after tiad logged on says the CPU
+may have refused the password.
+
+**What a blind trust costs.** The refusal after a blind trust is the safe
+side, and it has a price on a CPU that asks credentials. TIA's fingerprint
+service asks TLS trust on the bench ("certificate not matching"), and an
+upload may. A read logs on through the project's connection first, then
+trusts the service: it goes through, if the service asks no credentials of
+its own, but from then on the instance sends no password until it is
+retired. An upload asked TLS before credentials cannot do both and is
+refused. There is no opt-in to send a password after a blind trust, by
+decision (naut-lead, 2026-11-22): a customer who needs one is a security
+call for James.
+
+**What the fakes prove, and what they do not.** Both fakes model a CPU
+that asks credentials once a hardware load of a fullAccessUser station
+turned its access control on, as that load left its password, and asks
+again when the password is wrong. The contract suite (`Credentials`)
+drives every online call through it with, without, and with a wrong
+password, and with a blind trust. tiad-fake answers through the core rule,
+so a mutant of it fails the suite. What only the bench can show: which
+configuration type the real CPU asks, whether an upload asks through the
+connection or through its own callback (`UploadPasswordConfiguration`,
+which tiad still refuses), whether TIA's fingerprint service asks
+credentials of its own after the project's connection logged on (tiad
+answers once per call, so it would refuse that read), whether TIA keeps a
+logon for later calls in the same instance, and how a refused password
+shows (the fakes ask again;
+TIA may fail going online instead, which tiad reports as a logon TIA
+failed after). The glue's log lines answer these in the first window on a
+CPU with access control on.
+
+**Not covered yet.** Changing the user's password (rotation): the
+download that loads a new password needs the old one to go online and the
+new one for the compare after it, and a request carries one. With the new
+password, as the apply that set it was given, the download is refused going
+online (`outcome_unknown`, nothing loaded by TIA's account); with the old
+one it loads and then ends `outcome_unknown` at the compare, the CPU holding
+the new password. A rotation needs a request that carries both.
+
 ## 4. Online plane
 
 | | Web API | OPC UA | Classic S7 (PUT/GET) |
@@ -1373,7 +1578,7 @@ path.
 | Optimized DBs, by symbol | yes | yes | no |
 | Push | no; polling | subscriptions | no |
 | Force | no | no | no |
-| Bench FW 3.1 | Browse/Read/Write (≥ 2.8), operating mode (≥ 2.9). Diagnostics, modules and alarms vary by method from 3.1 to 4.1, so `Api.GetMethods` on the bench settles it | with a licence | yes |
+| Bench FW 3.1 | Browse/Read/Write (≥ 2.8), operating mode (≥ 2.9). Per the 11/2023 manual: `DiagnosticBuffer.Browse` and `Alarms.Browse` from 3.1, of `Modules.*` only `DownloadServiceData`; `Api.GetMethods` on the bench settles it | with a licence | yes |
 | Role | **primary** | where the licence already exists; reuse the `opcua-client` driver | S7-300/400 and classic S7-1200, later |
 
 Web API limits to design for:
@@ -1397,6 +1602,24 @@ Every cycle, the generated bench program also:
 
 Web API writes therefore never touch `%Q` directly. The CPU's operating
 mode (RUN/STOP) comes from `Plc.ReadOperatingMode`.
+
+**The diagnostic buffer** (#789 stage 5 (A) step 3) is read with
+`DiagnosticBuffer.Browse` (FW ≥ 3.1 per the manual, not on R/H CPUs),
+which needs `read_diagnostics`, the spec's `diagnostics` right.
+`naut siemens diag` prints it (`--status` for the entry count and last
+change only, `--json`, `--long`), and logs its session out on every path.
+A refusal for a missing right or an older firmware names the fix.
+- The client sends `language` and `count` only. `count: 0` is sent as it
+  is, since it means "status only" and leaving it out means 50. No
+  `filters`: the manual's table names it `filters` and its example
+  `entries`, so every read takes all three texts until the bench settles
+  the key.
+- Entries are kept in the CPU's order and time stamps as the CPU's text
+  (`Time()` parses one), so one odd entry does not lose the read.
+- Per manual, fake-verified only. The first access-control bench window
+  checks: that `WebAllowDiagnostics` grants `read_diagnostics`, the
+  `filters` key, the entry order, and the answer for a language the
+  project does not hold.
 
 **The station spec sets the CPU-side config:** the web server, a web user
 with read/write rights, the protection level, and Web API visibility on
@@ -1436,7 +1659,7 @@ Copied from [logix-authoring.md](logix-authoring.md) §5 and §7a.
 | `siemens/writer` | nautilus → SCL, tag tables, station spec |
 | `siemens/facade` | `naut siemens serve` |
 | `tools/tiad` | The C# agent and its installer |
-| `cmd/naut/siemens*.go` | `naut siemens agent probe`, `deploy`, `serve` |
+| `cmd/naut/siemens*.go` | `naut siemens agent probe`, `deploy`, `serve`, `diag` |
 
 `siemens/*` follows the driver rule on the map, enforced by
 `internal/contextmap`: `siemens/tiad`, `siemens/webapi`, `siemens/writer`

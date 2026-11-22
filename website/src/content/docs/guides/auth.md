@@ -62,7 +62,7 @@ Each built-in role adds to the one before:
 | Role | Adds |
 |---|---|
 | `viewer` | `read` |
-| `operator` | `write` (tag writes), `ack` (alarms), `sfc` (step and transition commands) |
+| `operator` | `write` (tag writes), `ack` (alarms), `sfc` (step and transition commands), `note` ([operator notes and the shift log](/guides/notes/)) |
 | `supervisor` | `shelve`, `substitute`, `audit` (reading the journal) |
 | `engineer` | `force`, `edit` (online edits, rollbacks), `activate`, `deploy` (a Logix or Siemens download), `config` (live I/O configuration, and [IO-Link](/guides/io-link/) parameter writes, journalled as `param.write` on `<port device>/<variable>`) |
 | `administrator` | `users`, `override`, `redundancy` (the redundant pair's operator commands: [clearing a duplicate mark](/guides/redundancy/)) |
@@ -71,7 +71,7 @@ A custom role `inherits` one role (built-in or custom), then can `allow` more pe
 
 ### Areas
 
-An area is a set of tag patterns. A grant with `areas:` limits `write`, `ack`, `shelve`, `substitute` and `force` to those tags. Its other permissions still apply to the whole controller. A grant with no `areas:` covers the whole controller. An `areas:` that is empty is refused: it would cover nothing.
+An area is a set of tag patterns. A grant with `areas:` limits `write`, `ack`, `shelve`, `note`, `substitute` and `force` to those tags (a note about a tag or an alarm, to those tags; a note on the shift log, an asset or an area needs the permission anywhere). Its other permissions still apply to the whole controller. A grant with no `areas:` covers the whole controller. An `areas:` that is empty is refused: it would cover nothing.
 
 ### Who a request is
 

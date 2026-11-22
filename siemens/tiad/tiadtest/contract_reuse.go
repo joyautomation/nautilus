@@ -24,6 +24,9 @@ func contractReuse(t *testing.T, start Starter) {
 		st.Profinet = nil
 		st.CPU.ConfigurationProtection = tiad.ProtectKeep
 		st.CPU.AccessControl = tiad.AccessKeep
+		// The uploaded CPU's access control is off: its web server is
+		// left as found.
+		st.WebServer = nil
 		return st
 	}
 
@@ -31,7 +34,7 @@ func contractReuse(t *testing.T, start Starter) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	up, err := s.UploadWith(ctx, tiad.UploadRequest{})
+	up, err := s.UploadWith(ctx, tiad.UploadRequest{Secrets: BenchLogin})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +113,7 @@ func contractReuse(t *testing.T, start Starter) {
 	// A dry run cancels at TIA's first check (a dry run TIA asks nothing
 	// about cannot be cancelled).
 	a.SetQuestions(t, []tiad.Question{{ID: tiad.QuestionStopCPU, Message: "Stop the CPU"}})
-	dl := tiad.DownloadRequest{Address: benchCPU, Hardware: true, Software: true, Announced: true, DryRun: true}
+	dl := tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: benchCPU, Hardware: true, Software: true, Announced: true, DryRun: true}
 	if res, err := s.Download(ctx, dl); err != nil || !res.DryRun || !reflect.DeepEqual(res.KeptDevices, kept) || !keptQ(res.Questions) {
 		t.Fatalf("a dry run: %+v %v", res, err)
 	}
@@ -214,6 +217,7 @@ func contractReuseAfterARefusedUpload(t *testing.T, start Starter) {
 	adopted.Profinet = nil
 	adopted.CPU.ConfigurationProtection = tiad.ProtectKeep
 	adopted.CPU.AccessControl = tiad.AccessKeep
+	adopted.WebServer = nil
 	swapped := BenchDevice()
 	swapped.Order = "6ES7 510-1SK03-0AB0"
 	a.SetDevice(t, swapped, false)

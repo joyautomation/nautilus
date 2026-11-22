@@ -1419,6 +1419,56 @@ on the same nautilus version with the same files report the same hashes.
 | `503` | No live I/O configuration on this server (an embedded Go server); or, on a project with `redundancy:`, the retain store could not keep the apply, so it was put back |
 | `401`, `403` | Authorization |
 
+## Web Push
+
+A signed-in person subscribes a phone to the controller's pager, and
+`via: push` in an escalation level pages it (see
+[alarms](/guides/alarms/)). Everything here needs `alarms.channels.push`
+in the manifest; without it each route answers 404 and says so.
+
+| Route | Does |
+|---|---|
+| `GET /api/push/key` | `{"publicKey": "…"}`: the VAPID key a browser subscribes with (`applicationServerKey`) |
+| `POST /api/push/subscribe` | `{"endpoint": "https://…", "keys": {"p256dh": "…", "auth": "…"}}` (a browser's `PushSubscription.toJSON()`): 201 `{id, host, at}` |
+| `DELETE /api/push/subscribe` | `{"id": "…"}` or `{"endpoint": "…"}`: 204 |
+| `GET /api/push/subscriptions` | your own: `{"subscriptions": [{id, host, at}]}` |
+| `POST /api/push/confirm-revocations` | the config permission, journalled `push.confirm-revocations` with the count: ends the subscriptions a mass revocation is holding that still do not stand (`{ended, stillHeld}`); `naut alarms push confirm-revocations` |
+| `GET /api/push/health` | the config permission: `{keyFingerprint, subscriptions, people, sealed, held}` (`held`: rows a mass revocation is holding, see the alarms guide) |
+
+A subscription belongs to the person the signed-in browser session names,
+never one in the body, and only a person (a local user or OIDC) may hold
+one: a service token, `NAUTILUS_TOKEN` or a personal access token (a
+credential for scripts, which has no phone) is refused with the fix. The endpoint must be an
+`https` URL on port 443 of a public host (and on `allow-hosts` when that is set; a host that list names may also be private and use another port); an
+endpoint a person re-subscribes is replaced, one another person
+subscribes is taken by the newest, and a ninth device ends the oldest.
+Each of these is journalled (`push.subscribe`, `push.unsubscribe`, by the
+person, or by `system` for a takeover, an eviction, a push service that
+says the subscription is gone and a person who no longer stands). The
+journal names the subscription by its `id` (a hash of the endpoint) and
+the push service's host, never the endpoint or the keys, and no route
+returns them. A subscribe answers only once the retain store holds the
+row; on a standby it is refused (use the leader's address).
+
+## Operator notes
+
+Notes about an asset, a tag, an alarm, an area or the plant, and the shift
+log: see [Operator notes and the shift log](/guides/notes/). Writes need the
+`note` permission and are journalled (`note.add`, `note.revise`,
+`note.retract`, with the text); reads need `read`.
+
+| Route | Does |
+|---|---|
+| `POST /api/notes` | `{target:{kind,id,occurrence?,activeMs?}, text, kind?, re?}`: 201 with the note |
+| `POST /api/notes/{id}/revise` | `{text}`: its author, within an hour |
+| `POST /api/notes/{id}/retract` | `{reason}`: its author within the hour, or a holder of `audit` any time |
+| `GET /api/notes` | `?target=&id=&occurrence=&kind=&author=&since=&until=&limit=&retracted=1` |
+| `GET /api/notes/{id}` | the note, with `history` (every revision) |
+
+A pair refuses a write when it cannot count a majority (503, `X-Nautilus-Outcome:
+refused`, the log's reason) and says `unknown` (503, with the note's id) when a
+proposal is not confirmed; a lost race is 409.
+
 ## Audit journal
 
 Every request to a route above that changes something (`POST /api/tags`,

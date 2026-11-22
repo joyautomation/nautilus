@@ -92,7 +92,7 @@ func contractDeployRecord(t *testing.T, start Starter) {
 
 	// A hardware load: its own record and archive, first in the list,
 	// with the attestation, unverified hardware and the new Hardware item.
-	r2, err := s.Download(ctx, AcceptHardware(tiad.DownloadRequest{Address: benchCPU, Hardware: true, Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}}))
+	r2, err := s.Download(ctx, AcceptHardware(tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: benchCPU, Hardware: true, Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,11 +144,11 @@ func contractDeployArchiveFails(t *testing.T, start Starter) {
 func contractDeployNoRecord(t *testing.T, start Starter) {
 	a, s := compiledBench(t, start)
 	a.SetQuestions(t, []tiad.Question{qStop})
-	dry := tiad.DownloadRequest{Address: benchCPU, Software: true, Announced: true, DryRun: true, Source: &tiad.DeploySource{Commit: benchCommit}}
+	dry := tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: benchCPU, Software: true, Announced: true, DryRun: true, Source: &tiad.DeploySource{Commit: benchCommit}}
 	if r, err := s.Download(ctx, dry); err != nil || r.Deploy != nil {
 		t.Fatalf("dry run: %+v %v", r, err)
 	}
-	noStart := tiad.DownloadRequest{Address: benchCPU, Software: true, Announced: true}
+	noStart := tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: benchCPU, Software: true, Announced: true}
 	if _, err := s.Download(ctx, noStart); tiad.Kind(err) != tiad.KindDecisionRequired || tiad.DeployIDOf(err) != "" {
 		t.Fatalf("no start-after: %v", err)
 	}

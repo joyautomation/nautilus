@@ -91,6 +91,7 @@ import (
 	"github.com/joyautomation/nautilus/internal/oidcseam"
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/leader"
+	"github.com/joyautomation/nautilus/notes"
 	"github.com/joyautomation/nautilus/runtime"
 )
 
@@ -405,6 +406,15 @@ type Options struct {
 	// (#718 slice 2); nil is mode off.
 	ParamWriteBack *ParamWriteBack
 
+	// Push turns Web Push on (#722); nil leaves /api/push/* answering 404.
+	Push *PushOptions
+
+	// Notes is the operator notes and shift log (#720) of a controller on
+	// its own: a file. NotesLog, on a redundant pair, is the replicated
+	// log's index and takes its place. Neither: /api/notes answers 404.
+	Notes    *notes.Store
+	NotesLog *NotesLog
+
 	// HMI, when set, serves a built HMI — a SvelteKit `adapter-static`
 	// build, or any other static SPA bundle — at "/", so the controller is
 	// a one-process deploy: no separate web server for the operator screen.
@@ -562,10 +572,15 @@ type Server struct {
 	historian   string
 	historyFn   func() *ProgramHistory
 	sourcesAt   func(sha string) (map[string]string, error)
-	paramWB     *ParamWriteBack // parameter write-back (#718); nil: off
-	io          *IOHook         // live I/O configuration (ioconfig.go); nil: none
-	params      *ParamHook      // IO-Link device parameters (params.go); nil: none
-	staging     ioStaging       // its staged candidates
+	paramWB     *ParamWriteBack  // parameter write-back (#718); nil: off
+	push        *pushService     // Web Push subscriptions (push.go); nil: off
+	notes       *notes.Store     // operator notes, standing alone (notes.go)
+	notesLog    *NotesLog        // a pair's notes (notes.go)
+	noteClock   func() time.Time // tests
+	pushKey     string           // its VAPID public key
+	io          *IOHook          // live I/O configuration (ioconfig.go); nil: none
+	params      *ParamHook       // IO-Link device parameters (params.go); nil: none
+	staging     ioStaging        // its staged candidates
 	hmi         fs.FS
 	alarms      *alarm.Engine
 	shelveTimes []time.Duration
@@ -683,6 +698,14 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 		s.sourcesAt = opts[0].SourcesAt
 		s.io = opts[0].IO
 		s.paramWB = opts[0].ParamWriteBack
+		if po := opts[0].Push; po != nil && po.Key != nil {
+			if ps, err := newPushService(s, po); err == nil {
+				s.push, s.pushKey = ps, po.Key.Public()
+				rt.SetPush(ps)
+			} else {
+				slog.Error("push: not started", "error", err)
+			}
+		}
 		s.params = opts[0].Params
 		s.hmi = opts[0].HMI
 		s.alarms = opts[0].Alarms
@@ -691,6 +714,7 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 		s.subRules = opts[0].Substitutes
 		s.subLog = opts[0].SubstituteLog
 		s.alarmLog = opts[0].AlarmLog
+		s.notes, s.notesLog = opts[0].Notes, opts[0].NotesLog
 	}
 	var rec audit.Recorder
 	var unavailable error
@@ -710,6 +734,9 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 	}
 	if s.alarmLog != nil {
 		s.alarmLog.observe(s.unknowns.applied, s.audit.recordBatch)
+	}
+	if s.notesLog != nil {
+		s.notesLog.observe(s.unknowns.applied)
 	}
 	if len(opts) > 0 {
 		s.policy = opts[0].Auth
@@ -781,6 +808,9 @@ func (s *Server) Run(ctx context.Context) {
 	}()
 	if s.users != nil {
 		go s.users.Run(ctx)
+	}
+	if s.push != nil {
+		go s.push.run(ctx)
 	}
 	defer func() { <-upkept }()
 	for {
@@ -868,6 +898,18 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/meta", s.handleMeta)
 	mux.HandleFunc("GET /api/parameters", s.handleParameters)
 	mux.HandleFunc("GET /api/parameters/patch", s.handleParametersPatch)
+	mux.HandleFunc("GET /api/notes", s.handleNotesList)
+	mux.HandleFunc("GET /api/notes/counts", s.handleNotesCounts)
+	mux.HandleFunc("GET /api/notes/{id}", s.handleNoteGet)
+	mux.Handle("POST /api/notes", s.audited("note.add", noteAddTarget, s.handleNoteAdd))
+	mux.Handle("POST /api/notes/{id}/revise", s.audited("note.revise", noteChangeTarget, s.handleNoteRevise))
+	mux.Handle("POST /api/notes/{id}/retract", s.audited("note.retract", noteChangeTarget, s.handleNoteRetract))
+	mux.HandleFunc("GET /api/push/key", s.handlePushKey)
+	mux.HandleFunc("GET /api/push/subscriptions", s.handlePushList)
+	mux.HandleFunc("GET /api/push/health", s.handlePushHealth)
+	mux.Handle("POST /api/push/subscribe", s.audited("push.subscribe", pushTarget, s.handlePushSubscribe))
+	mux.Handle("POST /api/push/confirm-revocations", s.audited("push.confirm-revocations", pushConfirmTarget, s.handlePushConfirm))
+	mux.Handle("DELETE /api/push/subscribe", s.audited("push.unsubscribe", pushTarget, s.handlePushUnsubscribe))
 	mux.Handle("POST /api/parameters/import", s.audited("param.import", s.paramImportTarget, s.handleParametersImport))
 	mux.HandleFunc("GET /api/drivers", s.handleDrivers)
 	// Alarms: always registered, 404 when no engine — see server/alarms.go.

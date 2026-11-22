@@ -24,8 +24,117 @@ namespace Tiad.Test
             public Dictionary<string, HashSet<string>> UserRoles = new Dictionary<string, HashSet<string>>();
             public Dictionary<string, string> Comments = new Dictionary<string, string>();
             public Dictionary<string, List<string>> History = new Dictionary<string, List<string>>();
+            // Rights are the runtime rights each role holds besides Full
+            // access (Granted); Inactive the users not active.
+            public Dictionary<string, SortedSet<string>> Rights = new Dictionary<string, SortedSet<string>>();
+            public HashSet<string> Inactive = new HashSet<string>();
+            public bool Anonymous;
+            public bool GrantIgnoredWeb;          // Grant does nothing
+            public bool RevokeIgnored;            // Revoke does nothing
+            public bool RemoveRoleIgnored;        // RemoveRole does nothing
+            public string AnonymousFails;         // AnonymousActive throws this
+            public List<string> Offered = new List<string>
+            {
+                "ProtectionLevelFullAccess", "ProtectionLevelReadAccess", "WebReadTags", "WebWriteTags", "WebChangeOperatingMode", "WebAllowDiagnostics", "WebReadSyslog",
+            };
             public List<string> Calls = new List<string>();
             int comments;
+
+            SortedSet<string> R(string role)
+            {
+                SortedSet<string> r;
+                if (!Rights.TryGetValue(role, out r)) r = Rights[role] = new SortedSet<string>(StringComparer.Ordinal);
+                return r;
+            }
+
+            public List<string> OfferedRights()
+            {
+                return new List<string>(Offered);
+            }
+
+            public List<string> RoleRights(string role)
+            {
+                var l = new List<string>(R(role));
+                if (Granted.Contains(role)) l.Add("ProtectionLevelFullAccess");
+                l.Sort(StringComparer.Ordinal);
+                return l;
+            }
+
+            public void Grant(string role, string right)
+            {
+                Calls.Add("grant " + role + " " + right);
+                if (!GrantIgnoredWeb) R(role).Add(right);
+            }
+
+            public void Revoke(string role, string right)
+            {
+                Calls.Add("revoke " + role + " " + right);
+                if (RevokeIgnored) return;
+                if (right == "ProtectionLevelFullAccess") Granted.Remove(role);
+                R(role).Remove(right);
+            }
+
+            public List<string> UserNames()
+            {
+                return new List<string>(Users.Keys);
+            }
+
+            public List<string> RoleNames()
+            {
+                return new List<string>(RoleComments.Keys);
+            }
+
+            List<string> IProjectUsers.UserRoles(string user)
+            {
+                return new List<string>(UserRoles_(user));
+            }
+
+            HashSet<string> UserRoles_(string user)
+            {
+                HashSet<string> r;
+                if (!UserRoles.TryGetValue(user, out r)) r = UserRoles[user] = new HashSet<string>();
+                return r;
+            }
+
+            public void RemoveRole(string user, string role)
+            {
+                Calls.Add("remove-role " + user + " " + role);
+                if (!RemoveRoleIgnored) UserRoles_(user).Remove(role);
+            }
+
+            public void DeleteUser(string user)
+            {
+                Calls.Add("delete-user " + user);
+                Users.Remove(user);
+                UserRoles.Remove(user);
+                Comments.Remove(user);
+            }
+
+            public void DeleteRole(string role)
+            {
+                Calls.Add("delete-role " + role);
+                foreach (var r in UserRoles.Values) r.Remove(role);
+                RoleComments.Remove(role);
+                Rights.Remove(role);
+                Granted.Remove(role);
+            }
+
+            public bool UserActive(string user)
+            {
+                return !Inactive.Contains(user);
+            }
+
+            public void ActivateUser(string user)
+            {
+                Calls.Add("activate " + user);
+                Inactive.Remove(user);
+            }
+
+            public bool AnonymousActive()
+            {
+                if (AnonymousFails != null) throw new InvalidOperationException(AnonymousFails);
+                return Anonymous;
+            }
 
             public string State()
             {

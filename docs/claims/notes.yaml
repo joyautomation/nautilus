@@ -1,0 +1,161 @@
+page: website/src/content/docs/guides/notes.md
+title: Operator notes and the shift log
+prefix: NOTE
+claims:
+  - id: NOTE-001
+    claim: >-
+      The author of a note is the signed-in person, never a field of the
+      request; a request body that names one is refused.
+    source: "#who-may-write"
+    tests:
+      - go ./server TestNoteAddTakesTheAuthorFromTheSession
+
+  - id: NOTE-002
+    claim: >-
+      A note about a tag or an alarm is limited to the writer's areas (an
+      alarm's tag counts); a note on the shift log, an asset or an area needs
+      the permission anywhere.
+    source: "#who-may-write"
+    tests:
+      - go ./server TestNoteAreasLimitTagAndAlarmNotes
+
+  - id: NOTE-003
+    claim: A service token may add a note and may not revise or retract one.
+    source: "#who-may-write"
+    tests:
+      - go ./server TestNoteTokensAddOnly
+
+  - id: NOTE-004
+    claim: >-
+      The author may revise a note within an hour of writing it, no one else
+      may, and every revision is kept; after the hour a correction is an
+      addendum, which leaves the first note untouched.
+    source: "#changing-a-note"
+    tests:
+      - go ./server TestNoteReviseWithinTheHourOnlyByTheAuthor
+      - go ./notes TestApplyIsIdempotentAndOrdered
+
+  - id: NOTE-005
+    claim: >-
+      A retraction keeps the text and the history, is hidden from the list
+      unless asked for, and a retracted note cannot be changed again; a holder
+      of audit may retract anyone's note at any time, marked as not the
+      author's.
+    source: "#changing-a-note"
+    tests:
+      - go ./server TestNoteRetractKeepsTheText
+      - go ./notes TestRetractionKeepsHistory
+
+  - id: NOTE-006
+    claim: >-
+      A note is checked before it is kept: at most 4096 characters of plain
+      text, a well-formed target, a tag or alarm that exists.
+    source: "#changing-a-note"
+    tests:
+      - go ./server TestNoteRefusals
+      - go ./notes TestTextAndTargetChecks
+
+  - id: NOTE-007
+    claim: >-
+      A controller on its own keeps its notes in notes.jsonl, fsynced, and
+      reads them back at start; a torn last line is dropped and damage before
+      it is refused with the file left as it was.
+    source: "#turn-it-on"
+    tests:
+      - go ./notes TestFileKeepsWhatWasAnsweredAndReopens
+      - go ./notes TestATornLastLineIsDroppedDamageIsRefused
+
+  - id: NOTE-008
+    claim: >-
+      On a pair a note is written through the replicated log and shown on both
+      controllers, and the witness holds its text.
+    source: "#what-to-know-on-a-pair"
+    tests:
+      - go ./server TestNotesOnAPairAreOnBothControllers
+
+  - id: NOTE-009
+    claim: >-
+      A copy that cannot count a majority refuses a note and keeps nothing,
+      never queueing it.
+    source: "#the-api"
+    tests:
+      - go ./server TestNoteIsRefusedWithoutAMajorityAndNeverQueued
+    partial: true
+    note: >-
+      The "outcome unknown" 503 for an unconfirmed proposal has no test of its
+      own here (the acknowledgements' tests cover the same path).
+
+  - id: NOTE-010
+    claim: >-
+      A controller or witness that was wiped and rejoins is brought every
+      note back, the whole history and not a tail, and a restart replays them
+      all.
+    source: "#what-to-know-on-a-pair"
+    tests:
+      - go ./oplog TestEveryNoteComesBackToAWipedReplica
+
+  - id: NOTE-011
+    claim: >-
+      When a copy's log history is superseded its notes leave the live view
+      with the rest of that history.
+    source: "#what-to-know-on-a-pair"
+    tests:
+      - go ./server TestSupersededHistoryTakesItsNotesFromTheLiveView
+
+  - id: NOTE-012
+    claim: >-
+      naut notes export writes every note with every revision, as JSON or one
+      CSV row per revision, from a controller's file or a pair's committed log
+      entries, and quotes a text a spreadsheet would run.
+    source: "#export"
+    tests:
+      - go ./cmd/naut TestNotesExportFromAControllerOnItsOwn
+      - go ./cmd/naut TestNotesExportFromAPairsLog
+
+  - id: NOTE-013
+    claim: >-
+      The notes of a replaced log history are shown read-only, labelled with
+      who accepted the loss and when the log was moved aside, are never in the
+      live notes and cannot be changed, and a note the live history also holds
+      is not repeated.
+    source: "#what-to-know-on-a-pair"
+    tests:
+      - go ./server TestSupersededHistoryNotesAreShownReadOnlyAndNeverApplied
+    partial: true
+    note: >-
+      The reading of the kept-aside file is tested with the log's answer
+      faked; a real vouch that supersedes a copy, then the page, is not run
+      end to end.
+
+  - id: NOTE-014
+    claim: >-
+      naut notes export includes the replaced history's notes, flagged
+      superseded (a history column in CSV), without repeating a note the live
+      history holds.
+    source: "#what-to-know-on-a-pair"
+    tests:
+      - go ./cmd/naut TestNotesExportIncludesTheSupersededHistoryFlagged
+
+  - id: NOTE-015
+    claim: >-
+      A person's unsent note is kept as a draft per person and per target,
+      survives a reload, and is taken away at sign-out and when someone else
+      is signed in, so it is never shown to or left for the next person at a
+      shared terminal.
+    source: "#on-the-screen"
+    tests: []
+    note: >-
+      Tested in the kit (hmi/tests/notes.test.ts, run by npm test, not by go
+      test) and in a Chromium run recorded in the pull request; the claims
+      tool lists only Go tests.
+
+  - id: NOTE-016
+    claim: >-
+      A note the controller did not keep says why in its own words and leaves
+      the person's text in place; an unconfirmed one says it may have been
+      kept and offers to check.
+    source: "#on-the-screen"
+    tests: []
+    note: >-
+      Tested in the kit (hmi/tests/notes.test.ts) and in a Chromium run with
+      the controller's refusals simulated; not a Go test.

@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### Added
+
+- **`<NotesPanel/>`, `<ShiftLog/>` and `NotesClient`** (#720): operator notes about a tag, an asset, an
+  alarm (and its occurrence), an area or the plant. Write a note, mark a handover, edit or retract your
+  own within the hour, add an addendum to anyone's; the shift log groups by day with handovers on top. A
+  note is never overwritten or deleted: "edited" notes show their history. What a person types is kept as
+  a draft per person and target, and a write the controller did not keep (no majority on a pair, an
+  unconfirmed proposal, a lost race) says why and leaves the text, never "failed" for an outcome that is
+  unknown. Signing out, or someone else signing in, takes away the previous person's drafts (shared
+  kiosks). Notes of a replaced log history are shown apart and read-only. The built-in HMI has a Log page.
+
+- **`<PushCard/>` and `PushClient`** (#722): notifications and install for this device. Turn on
+  asks the browser's permission (it must be a tap, and only after the controller has said it can
+  page: a controller with no push never causes a prompt), subscribes, and hands the controller the
+  subscription, which belongs to the signed-in person. It says why it cannot instead of showing a
+  dead button: plain http ("install needs https"), an iPhone not yet on the Home Screen, a browser
+  with no push, signed out, a controller with no push, a blocked permission. The controller never
+  returns an endpoint or a key, so the list of other devices names a push service's host only. A
+  subscription the controller refuses is dropped from the browser again. The built-in HMI shows it
+  on Diagnostics. Pure parts (`pushState`, `readPushEnv`, `enablePush`, `disablePush`,
+  `keyBytes`, `endpointId`) are exported.
+
 ### Changed
 
 - **`<AuditTable/>` reads at a glance** (#709): the Change column says the substitute actions in a

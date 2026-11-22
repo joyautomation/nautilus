@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/joyautomation/nautilus/notes"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -17,6 +18,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -169,6 +171,10 @@ type auditRow struct {
 	// also is a second permission the action needs on top of its own (an
 	// import writes tags, so it needs the write permission too).
 	also string
+	// person marks a route only a person may use (push, #722): the tests
+	// that put service tokens in the principal's place skip it, and
+	// push_test.go holds its own.
+	person bool
 	// The one entry the request must leave.
 	action, target, user, source, result string
 	before, after                        any // checked when non-nil
@@ -189,6 +195,35 @@ func plain(o Options) func(*testing.T) *Server {
 // auditRows drives every write route, accepted and refused, through the
 // real handler.
 func auditRows() []auditRow {
+	pushAs := map[string]string{} // the person's sign-in, set by the server factory
+	pushSrv := func(t *testing.T) *Server {
+		rig := newPushRig(t, &subStore{}, nil)
+		c := signIn(t, rig.srv, "jsmith")
+		pushAs["Cookie"], pushAs["Origin"] = c.Name+"="+c.Value, "http://localhost"
+		return rig.srv
+	}
+	pushAdmin := map[string]string{}
+	pushAdminSrv := func(t *testing.T) *Server {
+		rig := newPushRig(t, &subStore{}, nil)
+		c := signIn(t, rig.srv, "akhan")
+		pushAdmin["Cookie"], pushAdmin["Origin"] = c.Name+"="+c.Value, "http://localhost"
+		return rig.srv
+	}
+	pushBody, pushID := auditSubscription()
+	noteTok := plain(Options{AuthToken: "s3cret", Notes: mustNoteStore()})
+	noteAs := map[string]string{} // jsmith's sign-in, for the rows that need a person
+	noteSrv := func(t *testing.T) *Server {
+		rig := newNoteRig(t)
+		rig.srv.noteClock = nil // the rows run on the real clock
+		c := signIn(t, rig.srv, "jsmith")
+		noteAs["Cookie"], noteAs["Origin"] = c.Name+"="+c.Value, "http://localhost"
+		return rig.srv
+	}
+	seedNote := func(t *testing.T, s *Server) {
+		if _, err := s.notes.Apply(notes.Revision{Note: "n-audit-1", Rev: 1, At: time.Now().UnixMilli(), By: "jsmith", Principal: "user:jsmith", Target: notes.Target{Kind: notes.KindLog}, Text: "seeded"}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	none := plain(Options{})
 	tok := plain(Options{AuthToken: "s3cret"})
 	return []auditRow{
@@ -530,6 +565,52 @@ func auditRows() []auditRow {
 		{name: "io cancel with none pending", pattern: "POST /api/io/revert/cancel", server: ioSrv,
 			method: "POST", path: "/api/io/revert/cancel",
 			action: "config.revert.cancel", target: "", user: "anonymous", source: "api", result: "refused"},
+		{name: "push confirm revocations", pattern: "POST /api/push/confirm-revocations", server: pushAdminSrv, person: true, header: pushAdmin,
+			method: "POST", path: "/api/push/confirm-revocations",
+			action: "push.confirm-revocations", target: "push", user: "user:akhan", source: "hmi", result: "ok", after: map[string]any{"ended": 0}},
+		{name: "push confirm revocations with no credential", pattern: "POST /api/push/confirm-revocations", server: pushAdminSrv, person: true,
+			method: "POST", path: "/api/push/confirm-revocations",
+			action: "push.confirm-revocations", target: "", user: "anonymous", source: "api", result: "refused"},
+		{name: "note add", pattern: "POST /api/notes", server: noteTok,
+			method: "POST", path: "/api/notes", body: `{"target":{"kind":"tag","id":"SP"},"text":"setpoint raised"}`,
+			header: map[string]string{"Authorization": "Bearer s3cret"},
+			action: "note.add", target: "tag:SP", user: "token", source: "api", result: "ok"},
+		{name: "note add with no credential", pattern: "POST /api/notes", server: noteTok,
+			method: "POST", path: "/api/notes", body: `{"target":{"kind":"tag","id":"SP"},"text":"setpoint raised"}`,
+			action: "note.add", target: "", user: "anonymous", source: "api", result: "refused"},
+		{name: "note revise", pattern: "POST /api/notes/{id}/revise", server: noteSrv, person: true, header: noteAs, prep: seedNote,
+			method: "POST", path: "/api/notes/n-audit-1/revise", body: `{"text":"seeded, corrected"}`,
+			action: "note.revise", target: "note:n-audit-1", user: "user:jsmith", source: "hmi", result: "ok"},
+		{name: "note revise with no credential", pattern: "POST /api/notes/{id}/revise", server: noteSrv, person: true, prep: seedNote,
+			method: "POST", path: "/api/notes/n-audit-1/revise", body: `{"text":"seeded, corrected"}`,
+			action: "note.revise", target: "", user: "anonymous", source: "api", result: "refused"},
+		{name: "note retract", pattern: "POST /api/notes/{id}/retract", server: noteSrv, person: true, header: noteAs, prep: seedNote,
+			method: "POST", path: "/api/notes/n-audit-1/retract", body: `{"reason":"typo"}`,
+			action: "note.retract", target: "note:n-audit-1", user: "user:jsmith", source: "hmi", result: "ok"},
+		{name: "note retract with no credential", pattern: "POST /api/notes/{id}/retract", server: noteSrv, person: true, prep: seedNote,
+			method: "POST", path: "/api/notes/n-audit-1/retract", body: `{"reason":"typo"}`,
+			action: "note.retract", target: "", user: "anonymous", source: "api", result: "refused"},
+		{name: "push subscribe", pattern: "POST /api/push/subscribe", server: pushSrv, person: true, header: pushAs,
+			method: "POST", path: "/api/push/subscribe", body: pushBody,
+			action: "push.subscribe", target: "push:" + pushID, user: "user:jsmith", source: "hmi", result: "ok"},
+		{name: "push subscribe with no credential", pattern: "POST /api/push/subscribe", server: pushSrv, person: true,
+			method: "POST", path: "/api/push/subscribe", body: pushBody,
+			action: "push.subscribe", target: "", user: "anonymous", source: "api", result: "refused"},
+		{name: "push unsubscribe", pattern: "DELETE /api/push/subscribe", server: pushSrv, person: true, header: pushAs,
+			prep: func(t *testing.T, s *Server) {
+				if rec := call(t, s, "POST", "/api/push/subscribe", pushBody, func(r *http.Request) {
+					for k, v := range pushAs {
+						r.Header.Set(k, v)
+					}
+				}); rec.Code != http.StatusCreated {
+					t.Fatalf("prep: %d %s", rec.Code, rec.Body)
+				}
+			},
+			method: "DELETE", path: "/api/push/subscribe", body: `{"id":"` + pushID + `"}`,
+			action: "push.unsubscribe", target: "push:" + pushID, user: "user:jsmith", source: "hmi", result: "ok"},
+		{name: "push unsubscribe with no credential", pattern: "DELETE /api/push/subscribe", server: pushSrv, person: true,
+			method: "DELETE", path: "/api/push/subscribe", body: `{"id":"` + pushID + `"}`,
+			action: "push.unsubscribe", target: "", user: "anonymous", source: "api", result: "refused"},
 	}
 }
 
@@ -1495,7 +1576,12 @@ func TestTrailingBytesKeepTheTarget(t *testing.T) {
 			return srv.audit.ring.Recent()[0]
 		}
 		clean, trailing := entry(row.body), entry(row.body+" x")
-		if trailing.Result != clean.Result || trailing.Target != clean.Target || fmt.Sprint(trailing.After) != fmt.Sprint(clean.After) {
+		// a note's id is random per request: the rest of what it names is compared
+		ids := regexp.MustCompile(`[0-9a-f]{32}`)
+		same := func(a, b any) bool {
+			return ids.ReplaceAllString(fmt.Sprint(a), "<id>") == ids.ReplaceAllString(fmt.Sprint(b), "<id>")
+		}
+		if trailing.Result != clean.Result || trailing.Target != clean.Target || !same(trailing.After, clean.After) {
 			t.Errorf("%s: with trailing bytes the entry is %s %q %v, without %s %q %v",
 				row.name, trailing.Result, trailing.Target, trailing.After, clean.Result, clean.Target, clean.After)
 		}

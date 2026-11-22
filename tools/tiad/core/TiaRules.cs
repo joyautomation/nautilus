@@ -756,17 +756,22 @@ namespace Tiad
 
     // OnlineChecks decides how tiad answers what TIA asks when it goes
     // online to a CPU (ConnectionConfiguration.OnlineLegitimation), by the
-    // question's Openness type name. tiad holds no CPU credentials and, by
-    // default, trusts no CPU certificate: a certificate is answered not
-    // trusted, and anything else cancels. The one exception is an upload
-    // whose request opts in (trustUnverifiedCertificate): then a certificate
-    // question is answered Trusted, blindly, since TIA shows no certificate
-    // to check. Any question not answered Trusted fails the operation, even
-    // one TIA then carried on with.
+    // question's Openness type name. By default tiad trusts no CPU
+    // certificate: a certificate is answered not trusted. The exception is
+    // an upload or fingerprint read whose request opts in
+    // (trustUnverifiedCertificate): then a certificate question is answered
+    // Trusted, blindly, since TIA shows no certificate to check. A project
+    // user's legitimation (OnlineAuthenticationConfiguration) is answered
+    // Login: LoginUse decides whether tiad logs on as the CPU's user
+    // "nautilus" or refuses, and says why. Anything else cancels: a legacy
+    // access-level password, a question tiad does not know. Any question
+    // answered no fails the operation, even one TIA then carried on with.
     public static class OnlineChecks
     {
         public const string Certificate = "certificate", Credentials = "credentials", Unknown = "unknown";
-        public const string NotTrusted = "not-trusted", Trusted = "trusted", Cancel = "cancel";
+        public const string NotTrusted = "not-trusted", Trusted = "trusted", Cancel = "cancel", Login = "login";
+        // Authentication is the one credentials question tiad answers.
+        public const string Authentication = "OnlineAuthenticationConfiguration";
 
         public static string Kind(string type)
         {
@@ -774,10 +779,9 @@ namespace Tiad
             {
                 case "TlsVerificationConfiguration":
                     return Certificate;
-                case "OnlineAuthenticationConfiguration":
+                case Authentication:
                 case "OnlinePasswordConfiguration":
                 case "OnlineReadAccessPassword":
-                case "OnlineWriteAccessPassword":
                     return Credentials;
                 default:
                     return Unknown;
@@ -785,7 +789,8 @@ namespace Tiad
         }
 
         // Answer is how a question of type is answered: NotTrusted (the
-        // selection NonTrusted) for a certificate, Cancel for the rest.
+        // selection NonTrusted) for a certificate, Login for a project
+        // user's legitimation, Cancel for the rest.
         public static string Answer(string type)
         {
             return Answer(type, false);
@@ -795,6 +800,7 @@ namespace Tiad
         // opt-in: a certificate is answered Trusted; nothing else changes.
         public static string Answer(string type, bool trustUnverifiedCertificate)
         {
+            if (type == Authentication) return Login;
             if (Kind(type) != Certificate) return Cancel;
             return trustUnverifiedCertificate ? Trusted : NotTrusted;
         }
@@ -835,9 +841,12 @@ namespace Tiad
         }
 
         // Answer is how a question of type is answered now (OnlineChecks).
+        // A stopped handler answers no: NotTrusted, never Trusted, and
+        // Cancel, never Login.
         public string Answer(string type)
         {
-            return OnlineChecks.Answer(type, trustUnverifiedCertificate && !stopped);
+            string a = OnlineChecks.Answer(type, trustUnverifiedCertificate && !stopped);
+            return a == OnlineChecks.Login && stopped ? OnlineChecks.Cancel : a;
         }
 
         // Stop marks the handler stopped, then detaches it with detach,
@@ -861,6 +870,13 @@ namespace Tiad
         readonly object mu = new object();
         public readonly List<string> Asked = new List<string>();
         public readonly List<string> TrustedBlindly = new List<string>();
+        // LoggedIn are the credentials questions answered as the CPU's
+        // user "nautilus" (LoginUse): a failure after one names it.
+        public readonly List<string> LoggedIn = new List<string>();
+        // Use, when set, is the operation's LoginUse: every question this
+        // record answers no tells it (LoginUse.Refused), so no password
+        // follows a no in the same operation.
+        public LoginUse Use;
 
         // Call is one question being answered: answer records it with
         // Refuse or Trust.
@@ -876,6 +892,7 @@ namespace Tiad
 
             public void Refuse(string question)
             {
+                if (r.Use != null) r.Use.Refused();
                 lock (r.mu) r.Asked.Add(question);
                 Refused = question;
             }
@@ -883,6 +900,11 @@ namespace Tiad
             public void Trust(string question)
             {
                 lock (r.mu) r.TrustedBlindly.Add(question);
+            }
+
+            public void Login(string question)
+            {
+                lock (r.mu) r.LoggedIn.Add(question);
             }
         }
 
@@ -903,6 +925,169 @@ namespace Tiad
             });
         }
 
+    }
+
+    // OnlineLogin is what tiad answers when TIA asks credentials going
+    // online to a CPU (#789 stage 5 (A)): a legitimation as the project
+    // user "nautilus", the user cpu.accessControl fullAccessUser makes,
+    // with the password the request carries in secrets.fullAccessPassword.
+    // tiad stores it nowhere: it lives for one call. Blocked, when not
+    // null, is why it is never sent: the TIA instance trusts a CPU
+    // certificate blindly, so the connection may reach a CPU tiad cannot
+    // verify. A password is never logged; ToString names the user only.
+    public sealed class OnlineLogin
+    {
+        public const string User = AccessSteps.UserName;
+        public readonly string Password;
+        public readonly string Blocked;
+
+        OnlineLogin(string password, string blocked)
+        {
+            Password = password;
+            Blocked = blocked;
+        }
+
+        // For is the login a call answers with: null without a password;
+        // blocked while the instance holds a blind trust (bt, read on the
+        // TIA thread just before the call).
+        public static OnlineLogin For(string password, BlindTrust bt)
+        {
+            if (string.IsNullOrEmpty(password)) return null;
+            return new OnlineLogin(password, bt == null ? null : BlockedBy(bt));
+        }
+
+        // BlockedBy is the refusal while the instance trusts blindly.
+        public static string BlockedBy(BlindTrust bt)
+        {
+            return "password not sent: this agent's TIA instance trusted an unverified CPU certificate (" + bt.Describe() +
+                "), and tiad sends no password over a connection that may reach a CPU it cannot verify: close every session (the agent then retires the instance) or restart the agent, then call again";
+        }
+
+        public override string ToString()
+        {
+            return "OnlineLogin(" + User + ")";
+        }
+    }
+
+    // LoginUse is one operation's use of its OnlineLogin, shared by every
+    // online handler of that operation (a fingerprint read has two). Decide
+    // says whether TIA's credentials question may be answered with it, and
+    // why not: tiad answers as the project user "nautilus" only, only with
+    // the request's password, only over secure communication, never after
+    // the operation trusted a certificate blindly or answered any question
+    // no, and at most once per operation. TIA asking again, on any of the
+    // operation's connections, may mean the CPU refused the password: tiad
+    // never tries it twice (a CPU may lock a user out after failed logons).
+    // Whether a second connection asks after a logon that worked (TIA's
+    // fingerprint service) is for the bench to show (#789 stage 5).
+    public sealed class LoginUse
+    {
+        public const string ProjectUser = "ProjectUser";
+        public const string NoPassword = "the request carries no secrets.fullAccessPassword (the password of the CPU's user \"nautilus\", which cpu.accessControl fullAccessUser makes), so tiad has no credentials to answer";
+        public const string TrustedHere = "password not sent: this operation trusted the CPU's unverified certificate, and tiad sends no password to a CPU it cannot verify";
+        public const string AskedAgain = "password not sent again: TIA asked credentials again in this operation after tiad answered them as the user \"nautilus\" (the CPU may have refused secrets.fullAccessPassword), and tiad never sends a password twice";
+        public const string RefusedBefore = "password not sent: tiad answered another question of this operation no (a certificate it does not trust, credentials, or a question it does not know), and sends no password after a no";
+        public const string NotSecure = "the connection is not secure communication, and tiad sends no password over it";
+        public const string SecureUnread = "tiad could not read whether the connection is secure communication, so it sends no password over it";
+        public const string TypesUnread = "tiad could not read which legitimations the CPU offers, so it sends no password";
+        public const string DownloadNeedsPassword = "the session's station has cpu.accessControl fullAccessUser, so its CPU asks credentials going online once a hardware load put them there, and the compare after this download would: secrets.fullAccessPassword (the password of the CPU's user \"nautilus\") is required; nothing was sent to the CPU";
+
+        readonly object mu = new object();
+        readonly OnlineLogin login;
+        readonly string call, address;
+        bool answered, refused, trusted;
+
+        public LoginUse(OnlineLogin login, string call, string address)
+        {
+            this.login = login;
+            this.call = call ?? "";
+            this.address = address ?? "";
+        }
+
+        // Password is the password to write, once Decide returned null.
+        public string Password
+        {
+            get { return login == null ? "" : login.Password; }
+        }
+
+        // Answered is true once the operation answered credentials.
+        public bool Answered
+        {
+            get { lock (mu) return answered; }
+        }
+
+        // Trusted records that a handler of this operation answered a
+        // certificate question Trusted, blindly. Call it as soon as the
+        // trust is written, before anything that may fail.
+        public void Trusted()
+        {
+            lock (mu) trusted = true;
+        }
+
+        // Refused records that a handler of this operation answered a
+        // question no (OnlineRecord calls it on every Refuse): no password
+        // follows a no, since TIA may go on after one.
+        public void Refused()
+        {
+            lock (mu) refused = true;
+        }
+
+        // Decide is null when TIA's credentials question is answered with
+        // the login, or why it is answered no. secure is the connection's
+        // IsSecureCommunication (null: unreadable); userTypes the user
+        // types the CPU offers, by name (null: unreadable).
+        public string Decide(bool? secure, List<string> userTypes)
+        {
+            string why = DecideLocked(secure, userTypes);
+            if (why == null)
+            {
+                Log.Line("audit online-login call={0} address={1} user={2}: answering TIA's credentials question", call, Json.Quote(address), Json.Quote(OnlineLogin.User));
+            }
+            else
+            {
+                Log.Line("audit online-login call={0} address={1} user={2} refused: {3}", call, Json.Quote(address), Json.Quote(OnlineLogin.User), Json.Quote(why));
+            }
+            return why;
+        }
+
+        // Answer answers one credentials question of type, as tiad.Openness
+        // does inside OnlineRecord.Handle: Decide, then write the login
+        // (write gets the password; the caller sets the user "nautilus" as
+        // a project user) and record it, or record the refusal and throw
+        // to cancel.
+        public void Answer(OnlineRecord.Call call, string type, bool? secure, List<string> userTypes, Action<string> write)
+        {
+            string ask = OnlineChecks.Ask(type, "", "", new List<string>());
+            string why = Decide(secure, userTypes);
+            if (why != null)
+            {
+                call.Refuse(ask + ": " + why);
+                throw new TiaException("tiad cancels going online: TIA asked " + ask + ": " + why);
+            }
+            write(Password);
+            call.Login(ask);
+        }
+
+        string DecideLocked(bool? secure, List<string> userTypes)
+        {
+            lock (mu)
+            {
+                if (answered) return AskedAgain;
+                if (refused) return RefusedBefore;
+                if (login == null) return NoPassword;
+                if (login.Blocked != null) return login.Blocked;
+                if (trusted) return TrustedHere;
+                if (secure == null) return SecureUnread;
+                if (secure != true) return NotSecure;
+                if (userTypes == null) return TypesUnread;
+                if (!userTypes.Contains(ProjectUser))
+                {
+                    return "the CPU offers no legitimation as a project user (it offers " + (userTypes.Count == 0 ? "none" : string.Join(", ", userTypes.ToArray())) + "), and tiad logs on only as the project user \"nautilus\"";
+                }
+                answered = true;
+                return null;
+            }
+        }
     }
 
     // UploadAsks answers the upload's callback (StationUpload), which tiad
@@ -961,6 +1146,19 @@ namespace Tiad
         public static DownloadOutcome Run(DownloadDecider decider, string address, Action prepare,
             Func<DownloadCall> download, Action stop, Func<List<string>> asked)
         {
+            return Run(decider, address, prepare, download, stop, asked, null);
+        }
+
+        // LoginNote is added to a download TIA failed after tiad answered
+        // its credentials question.
+        public const string LoginNote = "tiad had answered TIA's credentials question as the CPU's user \"nautilus\": the CPU may have refused the password";
+
+        // Run with loggedIn, whether tiad answered TIA's credentials
+        // question going online (LoginUse.Answered): a download TIA failed
+        // after it says so (LoginNote).
+        public static DownloadOutcome Run(DownloadDecider decider, string address, Action prepare,
+            Func<DownloadCall> download, Action stop, Func<List<string>> asked, Func<bool> loggedIn)
+        {
             bool entered = false;
             DownloadCall call = null;
             Exception error = null;
@@ -1008,7 +1206,12 @@ namespace Tiad
             {
                 throw new TiaException(TiaNames.OnlineRefused(address, refused, end.Failure ?? "TIA went on with the download"), error, entered);
             }
-            if (end.Failure != null) throw new TiaException(end.Failure, error, end.InDoubt);
+            if (end.Failure != null)
+            {
+                string failure = end.Failure;
+                if (error != null && loggedIn != null && loggedIn()) failure += " (" + LoginNote + ")";
+                throw new TiaException(failure, error, end.InDoubt);
+            }
             // The CPU's mode afterwards is only what TIA's own messages
             // say (#789): evidence, labelled as such, never a proof.
             string mode = call == null ? "" : TiaNames.ModeFromMessages(call.Cpu, call.MessageList);
@@ -1196,13 +1399,22 @@ namespace Tiad
             return false;
         }
 
-        // OnlineRefused is the failure when TIA asked questions going online:
-        // tiad answered no (it trusts no certificate and holds no CPU
-        // credentials yet), and the operation fails even if TIA went on.
+        // LoginFailed is the failure when TIA failed going online after
+        // tiad answered its credentials question (and answered nothing no):
+        // the CPU may have refused the password without asking again.
+        public static string LoginFailed(string address, string tiaMessage)
+        {
+            return "going online to " + address + ", tiad answered TIA's credentials question as the CPU's user \"nautilus\" with the request's secrets.fullAccessPassword, and TIA failed (TIA: " + tiaMessage +
+                "): the CPU may have refused the password";
+        }
+
+        // OnlineRefused is the failure when TIA asked questions going online
+        // that tiad answered no (OnlineChecks, LoginUse), and the operation
+        // fails even if TIA went on.
         public static string OnlineRefused(string address, List<string> asked, string tiaMessage)
         {
             return "going online to " + address + ", TIA asked: " + string.Join("; ", asked.ToArray()) +
-                ". tiad trusts no CPU certificate and holds no CPU credentials yet, so it answered no (TIA: " + tiaMessage + ")";
+                ". tiad trusts no CPU certificate unless the request opts in (trustUnverifiedCertificate), and answers credentials only as the CPU's user \"nautilus\" with the request's secrets.fullAccessPassword, so it answered no (TIA: " + tiaMessage + ")";
         }
 
         // Message is an exception's text with the inner ones it wraps, each

@@ -81,6 +81,7 @@ namespace Tiad
             Reader fpr = r.Child("fingerprint");
             bool readFp = fpr != null;
             bool trust = readFp && fpr.Bool("trustUnverifiedCertificate");
+            string password = OnlinePassword(r);
             r.Done();
             if (id == "") throw TiadException.BadRequest("verify: deploy is required");
             if (!DeployIdShape(id)) throw TiadException.NotFound("no deploy {0}", Json.Quote(id));
@@ -146,7 +147,7 @@ namespace Tiad
             Exception failed = null;
             try
             {
-                result = VerifyOpen(s, id, address, record, trust, readFp, o);
+                result = VerifyOpen(s, id, address, record, trust, readFp, password, o);
             }
             catch (Exception e)
             {
@@ -243,7 +244,7 @@ namespace Tiad
 
         // VerifyOpen is the verify's part on its open session: the address
         // check, the device pin, the compare, the optional fingerprint read.
-        Obj VerifyOpen(Session s, string id, string address, IDictionary<string, object> record, bool trust, bool readFp, Obj o)
+        Obj VerifyOpen(Session s, string id, string address, IDictionary<string, object> record, bool trust, bool readFp, string password, Obj o)
         {
             o["session"] = s.Id;
             string at = OnSession(s, delegate(ITia t) { return t.ProjectCpuAddress(s.Handle); }) ?? "";
@@ -269,7 +270,7 @@ namespace Tiad
                 {
                     Log.Line("audit compare session={0} project={1} address={2} blindTrust={3}", s.Id, Json.Quote(s.Project), Json.Quote(address), BlindTrust.Audit(bt));
                 }
-                return t.Compare(s.Handle, address);
+                return t.Compare(s.Handle, address, OnlineLogin.For(password, bt));
             });
             bool equal = TiaNames.CompareEqual(cmp == null ? null : cmp.Tree, cmp == null ? null : cmp.Blocks, diffs);
             var list = new List<object>();
@@ -302,6 +303,7 @@ namespace Tiad
                     {
                         run.Trust = trust;
                         run.Address = address;
+                        run.Password = password;
                     });
                 }
                 catch (TiadException e)

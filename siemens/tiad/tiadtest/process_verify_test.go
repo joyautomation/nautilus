@@ -53,7 +53,7 @@ func TestAgentVerifiesFromACopy(t *testing.T) {
 	p, d := deployedProcess(t)
 	before := len(journalLines(t, p.DeploysDir))
 	n := len(p.Calls(t))
-	r, err := p.Client().VerifyDeploy(ctx, tiad.VerifyRequest{Deploy: d.ID})
+	r, err := p.Client().VerifyDeploy(ctx, tiad.VerifyRequest{Secrets: tiadtest.BenchLogin, Deploy: d.ID})
 	if err != nil || r.Verdict != tiad.VerifyEqual || len(r.Blocks) == 0 {
 		t.Fatalf("verify: %+v %v", r, err)
 	}
@@ -95,7 +95,7 @@ func TestAgentVerifyRefusesAMismatchOffline(t *testing.T) {
 	p, d := deployedProcess(t)
 	p.SetDeployAddress(t, d.ID, "192.0.2.99")
 	n := len(p.Calls(t))
-	_, err := p.Client().VerifyDeploy(ctx, tiad.VerifyRequest{Deploy: d.ID, Fingerprint: &tiad.FingerprintRequest{}})
+	_, err := p.Client().VerifyDeploy(ctx, tiad.VerifyRequest{Secrets: tiadtest.BenchLogin, Deploy: d.ID, Fingerprint: &tiad.FingerprintRequest{}})
 	if tiad.Kind(err) != tiad.KindCPUMismatch {
 		t.Fatalf("verify: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestAgentVerifySwappedArchive(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(p.DeploysDir, filepath.FromSlash(d.Archive.File)), []byte("another archive"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	r, err := p.Client().VerifyDeploy(ctx, tiad.VerifyRequest{Deploy: d.ID})
+	r, err := p.Client().VerifyDeploy(ctx, tiad.VerifyRequest{Secrets: tiadtest.BenchLogin, Deploy: d.ID})
 	if err != nil || r.Verdict != tiad.VerifyBroken || !strings.Contains(r.Broken, "not the record's") {
 		t.Fatalf("verify: %+v %v", r, err)
 	}
@@ -137,7 +137,7 @@ func TestAgentVerifyArchiveGone(t *testing.T) {
 		t.Fatal(err)
 	}
 	n := len(p.Calls(t))
-	r, err := p.Client().VerifyDeploy(ctx, tiad.VerifyRequest{Deploy: d.ID})
+	r, err := p.Client().VerifyDeploy(ctx, tiad.VerifyRequest{Secrets: tiadtest.BenchLogin, Deploy: d.ID})
 	if err != nil || r.Verdict != tiad.VerifyBroken || !strings.Contains(r.Broken, "is gone") || r.ChangedOutside != nil {
 		t.Fatalf("verify: %+v %v", r, err)
 	}
@@ -169,12 +169,12 @@ func TestAgentVerifiesAfterARestart(t *testing.T) {
 		t.Fatalf("verify staging left by an earlier run: %v", err)
 	}
 	c := p2.Client()
-	r, err := c.VerifyDeploy(ctx, tiad.VerifyRequest{Deploy: d.ID})
+	r, err := c.VerifyDeploy(ctx, tiad.VerifyRequest{Secrets: tiadtest.BenchLogin, Deploy: d.ID})
 	if err != nil || r.Verdict != tiad.VerifyDifferent || !isTrue(r.ChangedOutside) {
 		t.Fatalf("verify after a restart: %+v %v", r, err)
 	}
 	p2.LoadOutside(t, "192.0.2.10", d.Archive.File)
-	if r, err := c.VerifyDeploy(ctx, tiad.VerifyRequest{Deploy: d.ID}); err != nil || r.Verdict != tiad.VerifyEqual {
+	if r, err := c.VerifyDeploy(ctx, tiad.VerifyRequest{Secrets: tiadtest.BenchLogin, Deploy: d.ID}); err != nil || r.Verdict != tiad.VerifyEqual {
 		t.Fatalf("verify once the CPU holds the archive's load: %+v %v", r, err)
 	}
 }
@@ -186,7 +186,7 @@ func TestAgentVerifyCloseFails(t *testing.T) {
 	p, d := deployedProcess(t)
 	c := p.Client()
 	p.SetScript(t, tiadtest.Script{Failures: []tiadtest.ScriptedCall{{Call: "CloseProject", Message: "TIA is busy"}}})
-	r, err := c.VerifyDeploy(ctx, tiad.VerifyRequest{Deploy: d.ID})
+	r, err := c.VerifyDeploy(ctx, tiad.VerifyRequest{Secrets: tiadtest.BenchLogin, Deploy: d.ID})
 	if err != nil || r.Verdict != tiad.VerifyEqual || !strings.Contains(r.CloseError, "TIA is busy") || !strings.Contains(r.CloseError, "DELETE /v1/sessions/"+r.Session) {
 		t.Fatalf("a verify whose close fails: %+v %v", r, err)
 	}
@@ -199,7 +199,7 @@ func TestAgentVerifyCloseFails(t *testing.T) {
 	}
 	// A project of the agent's is busy meanwhile: the verify's session
 	// holds TIA's one project.
-	if _, err := c.VerifyDeploy(ctx, tiad.VerifyRequest{Deploy: d.ID}); tiad.Kind(err) != tiad.KindBusy {
+	if _, err := c.VerifyDeploy(ctx, tiad.VerifyRequest{Secrets: tiadtest.BenchLogin, Deploy: d.ID}); tiad.Kind(err) != tiad.KindBusy {
 		t.Fatalf("a second verify while the first's session is kept: %v", err)
 	}
 	p.SetScript(t, tiadtest.Script{})
@@ -253,7 +253,7 @@ func TestAgentVerifyRefusesAnArchiveWithNoCPUAddress(t *testing.T) {
 	}
 	setDeployArchive(t, p.DeploysDir, d.ID, map[string]any{"file": file, "sha256": sha, "bytes": len(b)})
 	p.LoadOutside(t, "192.0.2.10", file)
-	_, err := p.Client().VerifyDeploy(ctx, tiad.VerifyRequest{Deploy: d.ID})
+	_, err := p.Client().VerifyDeploy(ctx, tiad.VerifyRequest{Secrets: tiadtest.BenchLogin, Deploy: d.ID})
 	rec, proj, ok := tiad.VerifyMismatchOf(err)
 	if tiad.Kind(err) != tiad.KindCPUMismatch || !ok || rec != "192.0.2.10" || proj != "" || !strings.Contains(err.Error(), "at no address") {
 		t.Fatalf("an archive with no CPU address: %v", err)
@@ -266,12 +266,12 @@ func TestAgentVerifyRefusesAnArchiveWithNoCPUAddress(t *testing.T) {
 func TestAgentVerifyArchiveEntryShape(t *testing.T) {
 	p, d := deployedProcess(t)
 	setDeployArchive(t, p.DeploysDir, d.ID, map[string]any{"file": "archives/../" + d.Archive.SHA256 + ".zap21", "sha256": d.Archive.SHA256, "bytes": d.Archive.Bytes})
-	r, err := p.Client().VerifyDeploy(ctx, tiad.VerifyRequest{Deploy: d.ID})
+	r, err := p.Client().VerifyDeploy(ctx, tiad.VerifyRequest{Secrets: tiadtest.BenchLogin, Deploy: d.ID})
 	if err != nil || r.Verdict != tiad.VerifyBroken || !strings.Contains(r.Broken, "not one tiad writes") {
 		t.Fatalf("a record with another archive file: %+v %v", r, err)
 	}
 	setDeployArchive(t, p.DeploysDir, d.ID, map[string]any{"file": d.Archive.File, "sha256": strings.ToUpper(d.Archive.SHA256), "bytes": d.Archive.Bytes})
-	if r, err := p.Client().VerifyDeploy(ctx, tiad.VerifyRequest{Deploy: d.ID}); err != nil || r.Verdict != tiad.VerifyBroken {
+	if r, err := p.Client().VerifyDeploy(ctx, tiad.VerifyRequest{Secrets: tiadtest.BenchLogin, Deploy: d.ID}); err != nil || r.Verdict != tiad.VerifyBroken {
 		t.Fatalf("a record with an upper-case sha256: %+v %v", r, err)
 	}
 }
@@ -297,14 +297,14 @@ func TestAgentVerifyLatestAndDoubt(t *testing.T) {
 		t.Fatalf("a not-loaded record: %v %+v", err, l)
 	}
 	p.LoadOutside(t, "192.0.2.10", "")
-	r, err := c.VerifyDeploy(ctx, tiad.VerifyRequest{Deploy: d.ID})
+	r, err := c.VerifyDeploy(ctx, tiad.VerifyRequest{Secrets: tiadtest.BenchLogin, Deploy: d.ID})
 	if tiad.Kind(err) != tiad.KindBusy {
 		t.Fatalf("verify while the project is open: %+v %v", r, err)
 	}
 	if err := s.Close(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if r, err = c.VerifyDeploy(ctx, tiad.VerifyRequest{Deploy: d.ID}); err != nil || r.Latest != d.ID || !isTrue(r.ChangedOutside) {
+	if r, err = c.VerifyDeploy(ctx, tiad.VerifyRequest{Secrets: tiadtest.BenchLogin, Deploy: d.ID}); err != nil || r.Latest != d.ID || !isTrue(r.ChangedOutside) {
 		t.Fatalf("past a not-loaded record: %+v %v", r, err)
 	}
 	s, err = c.CreateProject(ctx, "bench", tiadtest.BenchStation(), tiadtest.BenchSecrets)
@@ -321,10 +321,10 @@ func TestAgentVerifyLatestAndDoubt(t *testing.T) {
 	if err := s.Close(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if r, err = c.VerifyDeploy(ctx, tiad.VerifyRequest{Deploy: d.ID}); err != nil || r.Latest != doubt || !isFalse(r.ChangedOutside) {
+	if r, err = c.VerifyDeploy(ctx, tiad.VerifyRequest{Secrets: tiadtest.BenchLogin, Deploy: d.ID}); err != nil || r.Latest != doubt || !isFalse(r.ChangedOutside) {
 		t.Fatalf("under a newer in-doubt record: %+v %v", r, err)
 	}
-	if r, err = c.VerifyDeploy(ctx, tiad.VerifyRequest{Deploy: doubt}); err != nil || r.Status != tiad.DeployInDoubt || r.ChangedOutside != nil {
+	if r, err = c.VerifyDeploy(ctx, tiad.VerifyRequest{Secrets: tiadtest.BenchLogin, Deploy: doubt}); err != nil || r.Status != tiad.DeployInDoubt || r.ChangedOutside != nil {
 		t.Fatalf("the in-doubt record: %+v %v", r, err)
 	}
 }
@@ -335,7 +335,7 @@ func TestAgentVerifyOpenFails(t *testing.T) {
 	p, d := deployedProcess(t)
 	c := p.Client()
 	p.SetScript(t, tiadtest.Script{Failures: []tiadtest.ScriptedCall{{Call: "OpenProject", Message: "the archive is from a newer TIA"}}})
-	if _, err := c.VerifyDeploy(ctx, tiad.VerifyRequest{Deploy: d.ID}); tiad.Kind(err) != tiad.KindOperationFailed || !strings.Contains(err.Error(), "newer TIA") {
+	if _, err := c.VerifyDeploy(ctx, tiad.VerifyRequest{Secrets: tiadtest.BenchLogin, Deploy: d.ID}); tiad.Kind(err) != tiad.KindOperationFailed || !strings.Contains(err.Error(), "newer TIA") {
 		t.Fatalf("verify: %v", err)
 	}
 	if ss, _ := c.Sessions(ctx); len(ss) != 0 {
@@ -345,7 +345,7 @@ func TestAgentVerifyOpenFails(t *testing.T) {
 		t.Fatalf("staging after a failed open: %v", es)
 	}
 	p.SetScript(t, tiadtest.Script{})
-	if r, err := c.VerifyDeploy(ctx, tiad.VerifyRequest{Deploy: d.ID}); err != nil || r.Verdict != tiad.VerifyEqual {
+	if r, err := c.VerifyDeploy(ctx, tiad.VerifyRequest{Secrets: tiadtest.BenchLogin, Deploy: d.ID}); err != nil || r.Verdict != tiad.VerifyEqual {
 		t.Fatalf("the next verify: %+v %v", r, err)
 	}
 }
@@ -360,7 +360,7 @@ func TestAgentVerifyReaperRemovesStaging(t *testing.T) {
 	p, d := deployedProcess(t, "TIAD_SESSION_IDLE=5s")
 	c := p.Client()
 	p.SetScript(t, tiadtest.Script{Failures: []tiadtest.ScriptedCall{{Call: "CloseProject", Message: "TIA is busy"}}})
-	r, err := c.VerifyDeploy(ctx, tiad.VerifyRequest{Deploy: d.ID})
+	r, err := c.VerifyDeploy(ctx, tiad.VerifyRequest{Secrets: tiadtest.BenchLogin, Deploy: d.ID})
 	if err != nil || r.CloseError == "" {
 		t.Fatalf("verify: %+v %v", r, err)
 	}
@@ -388,7 +388,7 @@ func TestAgentVerifyRecordShapes(t *testing.T) {
 	p, d := deployedProcess(t)
 	c := p.Client()
 	p.SetDeployAddress(t, d.ID, "plc-1")
-	r, err := c.VerifyDeploy(ctx, tiad.VerifyRequest{Deploy: d.ID})
+	r, err := c.VerifyDeploy(ctx, tiad.VerifyRequest{Secrets: tiadtest.BenchLogin, Deploy: d.ID})
 	if err != nil || r.Verdict != tiad.VerifyBroken || !strings.Contains(r.Broken, "not an IPv4 address") {
 		t.Fatalf("a record naming no IPv4 address: %+v %v", r, err)
 	}
@@ -402,7 +402,7 @@ func TestAgentVerifyRecordShapes(t *testing.T) {
 	}
 	f.Close()
 	p.LoadOutside(t, "192.0.2.10", "")
-	r, err = c.VerifyDeploy(ctx, tiad.VerifyRequest{Deploy: d.ID})
+	r, err = c.VerifyDeploy(ctx, tiad.VerifyRequest{Secrets: tiadtest.BenchLogin, Deploy: d.ID})
 	if err != nil || r.Verdict != tiad.VerifyDifferent || r.UnreadableLines != 1 || r.ChangedOutside != nil {
 		t.Fatalf("a difference beside an unreadable line: %+v %v", r, err)
 	}
@@ -417,7 +417,7 @@ func TestAgentVerifyFailsAndCannotClose(t *testing.T) {
 	p, d := deployedProcess(t)
 	p.SetDeployAddress(t, d.ID, "192.0.2.99")
 	p.SetScript(t, tiadtest.Script{Failures: []tiadtest.ScriptedCall{{Call: "CloseProject", Message: "TIA is busy"}}})
-	_, err := p.Client().VerifyDeploy(ctx, tiad.VerifyRequest{Deploy: d.ID})
+	_, err := p.Client().VerifyDeploy(ctx, tiad.VerifyRequest{Secrets: tiadtest.BenchLogin, Deploy: d.ID})
 	if tiad.Kind(err) != tiad.KindCPUMismatch || !strings.Contains(err.Error(), "closing the verify's session") || !strings.Contains(err.Error(), "TIA is busy") {
 		t.Fatalf("verify: %v", err)
 	}

@@ -121,6 +121,7 @@ export default defineConfig({
             { slug: 'guides/installable-hmi' },
             { slug: 'guides/streaming' },
             { slug: 'guides/alarms' },
+            { slug: 'guides/notes' },
             { slug: 'guides/historian' },
           ],
         },

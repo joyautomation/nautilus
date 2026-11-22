@@ -397,6 +397,8 @@ type Runtime struct {
 	// iok is the live I/O configuration kept in the retain store (#706):
 	// SetIO, SaveRetained, and the leadership edge's re-apply (iokeep.go).
 	iok ioKeep
+	// pushk keeps the Web Push subscriptions in the retain store (#722).
+	pushk pushKeep
 
 	// live is what Liveness reads: Run's loops' scan edges and lifecycle.
 	live liveness

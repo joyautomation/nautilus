@@ -113,3 +113,51 @@ func TestCheckTiaPassword(t *testing.T) {
 		t.Errorf("s3cretpass: %v", err)
 	}
 }
+
+// TestWebUserProblems: the web user name rule (shared with the wire and
+// tiad), duplicates ignoring case, and users only with the server on.
+func TestWebUserProblems(t *testing.T) {
+	cpu := CPU{Name: "PLC_1", Order: "6ES7 510-1DK03-0AB0", Firmware: "V3.1",
+		Address: "192.0.2.10", SubnetMask: "255.255.255.0", ProfinetName: "plc-1"}
+	for _, ok := range []string{"op", "op.1_a-b", strings.Repeat("a", 32)} {
+		if err := CheckWebUserName(ok); err != nil {
+			t.Errorf("%q: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"", "1op", "_op", "op name", "op\n", strings.Repeat("a", 33), "été"} {
+		if err := CheckWebUserName(bad); err == nil || !strings.Contains(err.Error(), "a web user name is 1 to 32 characters") {
+			t.Errorf("%q: %v", bad, err)
+		}
+	}
+	for _, r := range []string{"nautilus", "NAUTILUS", "Anonymous", "anonymous"} {
+		if err := CheckWebUserName(r); err == nil || !strings.Contains(err.Error(), "is reserved") {
+			t.Errorf("%q: %v", r, err)
+		}
+	}
+	ws := func(on bool, names ...string) *WebServer {
+		w := &WebServer{Enabled: on}
+		for _, n := range names {
+			w.Users = append(w.Users, WebUser{Name: n, Rights: []string{"read"}})
+		}
+		return w
+	}
+	got := func(w *WebServer) string {
+		var out []string
+		for _, p := range (Station{CPU: cpu, WebServer: w}).Problems() {
+			out = append(out, p.String())
+		}
+		return strings.Join(out, "; ")
+	}
+	if g := got(ws(true, "op", "OP")); g != `web-server.users[1].name: "OP" twice (names are compared ignoring case)` {
+		t.Errorf("case: %s", g)
+	}
+	if g := got(ws(true, "Anonymous")); !strings.HasPrefix(g, `web-server.users[0].name: "Anonymous" is reserved`) {
+		t.Errorf("reserved: %s", g)
+	}
+	if g := got(ws(false, "op")); g != "web-server.users: is set and web-server.enabled is false: a web server that is off has no users" {
+		t.Errorf("off with users: %s", g)
+	}
+	if g := got(ws(true, "op")); g != "" {
+		t.Errorf("fine: %s", g)
+	}
+}

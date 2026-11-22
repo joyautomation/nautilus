@@ -163,6 +163,10 @@ func (f *Fake) verifyDeploy(r *http.Request) (any, *failure) {
 	if fl := f.checkDevicePin(address, "verify"); fl != nil {
 		return nil, fl
 	}
+	password := onlinePassword(req.Secrets)
+	if why := f.askLogin(address, password, f.blindTrust); why != "" {
+		return nil, fail(http.StatusInternalServerError, tiad.KindOperationFailed, "TIA: %s", why)
+	}
 	equal := f.loadedArchive[address] == sha
 	res.BlindTrust = f.blindTrust
 	res.Differences = []tiad.Difference{}
@@ -175,7 +179,7 @@ func (f *Fake) verifyDeploy(r *http.Request) (any, *failure) {
 		res.ChangedOutside = boolp(!equal && res.Latest == d.ID)
 	}
 	if req.Fingerprint != nil {
-		fp, fl := f.fingerprintOf(s, address, req.Fingerprint.TrustUnverifiedCertificate, verifyTrustFix)
+		fp, fl := f.fingerprintOf(s, address, req.Fingerprint.TrustUnverifiedCertificate, password, verifyTrustFix)
 		if fl != nil {
 			res.FingerprintError = fl.msg
 		} else {

@@ -108,7 +108,11 @@ type Secrets struct {
 }
 
 // SecretKeys are the keys the secrets file may hold.
-var SecretKeys = []string{"email.password", "sms.token", "voice.token", "webhook.header"}
+//
+// push.vapid-key is the Web Push application server key (#722): the private
+// half of the VAPID pair, 32 octets as unpadded base64url. The same key
+// must be in both members' files: a phone's subscription is bound to it.
+var SecretKeys = []string{"email.password", "sms.token", "voice.token", "webhook.header", "push.vapid-key"}
 
 var e164 = regexp.MustCompile(`^\+[1-9][0-9]{6,14}$`)
 

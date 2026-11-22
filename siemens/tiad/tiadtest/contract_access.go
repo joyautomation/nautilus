@@ -30,10 +30,12 @@ func contractAccessControl(t *testing.T, start Starter) {
 // fullAccessRecordOnly records the secret without setting it, or takes a
 // foreign user over; a foreign role is never taken over.
 func contractAccessNoRecord(t *testing.T, start Starter) {
+	// The Full access user alone: web users have no record-only route
+	// (contractWebUsers covers another key's record for them).
 	a := start(t, Config{Targets: []string{benchCPU}})
 	c := a.Client()
 	installGSD(t, c)
-	s, err := c.CreateProject(ctx, "norec", BenchStation(), BenchSecrets)
+	s, err := c.CreateProject(ctx, "norec", accessOnly(), BenchSecrets)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,24 +58,24 @@ func contractAccessNoRecord(t *testing.T, start Starter) {
 
 	// Another agent key's record and the unchanged secret: ambiguous.
 	s = open("rekey")
-	if _, err := s.ApplyStation(ctx, BenchStation(), BenchSecrets); tiad.Kind(err) != tiad.KindBadRequest || !strings.Contains(err.Error(), ReusedOtherKey) {
+	if _, err := s.ApplyStation(ctx, accessOnly(), BenchSecrets); tiad.Kind(err) != tiad.KindBadRequest || !strings.Contains(err.Error(), ReusedOtherKey) {
 		t.Fatalf("the unchanged secret under another key's record: %v", err)
 	}
-	keep := BenchStation()
+	keep := accessOnly()
 	keep.CPU.AccessControl = tiad.AccessKeep
 	if _, err := s.ApplyStationWith(ctx, keep, BenchSecrets, recordOnly); tiad.Kind(err) != tiad.KindBadRequest ||
 		!strings.Contains(err.Error(), "fullAccessRecordOnly goes with cpu.accessControl fullAccessUser") {
 		t.Fatalf("fullAccessRecordOnly with keep: %v", err)
 	}
-	if r, err := s.ApplyStationWith(ctx, BenchStation(), BenchSecrets, recordOnly); err != nil || !noteWith(r.Notes, RecordedUserNote) {
+	if r, err := s.ApplyStationWith(ctx, accessOnly(), BenchSecrets, recordOnly); err != nil || !noteWith(r.Notes, RecordedUserNote) {
 		t.Fatalf("fullAccessRecordOnly on the same session after the refusal: %+v %v", r, err)
 	}
-	if r, err := s.ApplyStation(ctx, BenchStation(), BenchSecrets); err != nil || !noteWith(r.Notes, UnchangedUserNote) {
+	if r, err := s.ApplyStation(ctx, accessOnly(), BenchSecrets); err != nil || !noteWith(r.Notes, UnchangedUserNote) {
 		t.Fatalf("the secret after it was recorded: %+v %v", r, err)
 	}
 	rotated := BenchSecrets
 	rotated.FullAccessPassword = "Rotated-access-2027"
-	if r, err := s.ApplyStation(ctx, BenchStation(), rotated); err != nil || !noteWith(r.Notes, SetUserNote) {
+	if r, err := s.ApplyStation(ctx, accessOnly(), rotated); err != nil || !noteWith(r.Notes, SetUserNote) {
 		t.Fatalf("a rotated secret after the record: %+v %v", r, err)
 	}
 	if _, err := s.Compile(ctx, true, true); err != nil {
@@ -86,13 +88,13 @@ func contractAccessNoRecord(t *testing.T, start Starter) {
 	// A user that carries no tiad record: refused, then taken over only
 	// when asked.
 	s = open("strip-users")
-	if _, err := s.ApplyStation(ctx, BenchStation(), BenchSecrets); tiad.Kind(err) != tiad.KindBadRequest || !strings.Contains(err.Error(), ForeignUser) {
+	if _, err := s.ApplyStation(ctx, accessOnly(), BenchSecrets); tiad.Kind(err) != tiad.KindBadRequest || !strings.Contains(err.Error(), ForeignUser) {
 		t.Fatalf("a user tiad did not make: %v", err)
 	}
-	if r, err := s.ApplyStationWith(ctx, BenchStation(), BenchSecrets, recordOnly); err != nil || !noteWith(r.Notes, TakenOverNote) {
+	if r, err := s.ApplyStationWith(ctx, accessOnly(), BenchSecrets, recordOnly); err != nil || !noteWith(r.Notes, TakenOverNote) {
 		t.Fatalf("taking a foreign user over: %+v %v", r, err)
 	}
-	if r, err := s.ApplyStation(ctx, BenchStation(), BenchSecrets); err != nil || !noteWith(r.Notes, UnchangedUserNote) {
+	if r, err := s.ApplyStation(ctx, accessOnly(), BenchSecrets); err != nil || !noteWith(r.Notes, UnchangedUserNote) {
 		t.Fatalf("after the take-over: %+v %v", r, err)
 	}
 	if err := s.Close(ctx); err != nil {
@@ -102,7 +104,7 @@ func contractAccessNoRecord(t *testing.T, start Starter) {
 	// A role tiad did not make: never granted Full access.
 	s = open("strip-roles")
 	for _, o := range []tiad.ApplyOptions{{}, recordOnly} {
-		if _, err := s.ApplyStationWith(ctx, BenchStation(), BenchSecrets, o); tiad.Kind(err) != tiad.KindBadRequest || !strings.Contains(err.Error(), ForeignRole) {
+		if _, err := s.ApplyStationWith(ctx, accessOnly(), BenchSecrets, o); tiad.Kind(err) != tiad.KindBadRequest || !strings.Contains(err.Error(), ForeignRole) {
 			t.Fatalf("a role tiad did not make (%+v): %v", o, err)
 		}
 	}
@@ -119,11 +121,22 @@ func accessStation(mode string) tiad.Station {
 
 // adoptedStation is the spec an adopted station takes after an upload:
 // the uploaded CPU, keeping its protection and its access control.
+// accessOnly is the bench station with its web server on and no web
+// users.
+func accessOnly() tiad.Station {
+	st := BenchStation()
+	st.WebServer = &tiad.WebServer{Enabled: true}
+	return st
+}
+
 func adoptedStation() tiad.Station {
 	st := BenchStation()
 	st.Profinet = nil
 	st.CPU.ConfigurationProtection = tiad.ProtectKeep
 	st.CPU.AccessControl = tiad.AccessKeep
+	// The uploaded CPU's access control is off, so its web server is left
+	// as found: tiad refuses to turn it on there.
+	st.WebServer = nil
 	return st
 }
 
@@ -191,7 +204,7 @@ func contractAccessPassword(t *testing.T, start Starter) {
 		strings.Contains(msg, BenchFullAccessPassword) {
 		t.Fatalf("a password the project's policy refuses: HTTP %d %s", status, b)
 	}
-	if _, err := c.CreateProject(ctx, "strict", BenchStation(), tiad.Secrets{WebUsers: BenchSecrets.WebUsers, FullAccessPassword: "Bench-access-2026!"}); err != nil {
+	if _, err := c.CreateProject(ctx, "strict", BenchStation(), tiad.Secrets{WebUsers: map[string]string{"naut": "Bench-web-2026!"}, FullAccessPassword: "Bench-access-2026!"}); err != nil {
 		t.Fatalf("a password the project's policy takes: %v", err)
 	}
 }
@@ -234,7 +247,7 @@ func contractAccessNewStation(t *testing.T, start Starter) {
 		t.Fatalf("a rotated secret: %+v %v", r, err)
 	}
 	// A password set is a change to the project: compile again first.
-	dl := AcceptHardware(tiad.DownloadRequest{Address: benchCPU, Hardware: true, Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}})
+	dl := AcceptHardware(tiad.DownloadRequest{Secrets: BenchDownloadSecrets(), Address: benchCPU, Hardware: true, Software: true, Announced: true, Decisions: tiad.Decisions{StartAfter: tiad.No()}})
 	if _, err := s.Download(ctx, dl); tiad.Kind(err) != tiad.KindNotCompiled {
 		t.Fatalf("a download after a password was set, before a compile: %v", err)
 	}
@@ -269,7 +282,7 @@ func contractAccessAdopted(t *testing.T, start Starter) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.UploadWith(ctx, tiad.UploadRequest{}); err != nil {
+	if _, err := s.UploadWith(ctx, tiad.UploadRequest{Secrets: BenchLogin}); err != nil {
 		t.Fatal(err)
 	}
 	full := adoptedStation()
@@ -292,7 +305,7 @@ func contractAccessAdopted(t *testing.T, start Starter) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s2.UploadWith(ctx, tiad.UploadRequest{}); err != nil {
+	if _, err := s2.UploadWith(ctx, tiad.UploadRequest{Secrets: BenchLogin}); err != nil {
 		t.Fatal(err)
 	}
 	// The project's own policy is checked before any write on an apply too.
@@ -328,8 +341,9 @@ func contractAccessUpload(t *testing.T, start Starter) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	up, err := s.UploadWith(ctx, tiad.UploadRequest{})
-	if want := []string{`user "nautilus"`, `role "nautilus full access"`}; err != nil || !reflect.DeepEqual(up.RemovedAccess, want) {
+	up, err := s.UploadWith(ctx, tiad.UploadRequest{Secrets: BenchLogin})
+	// The bench station's web user too (#789 step 2B).
+	if want := []string{`user "nautilus"`, `role "nautilus full access"`, `user "naut"`, `role "nautilus web naut"`}; err != nil || !reflect.DeepEqual(up.RemovedAccess, want) {
 		t.Fatalf("an upload on the session that made the user: %+v %v, want removedAccess %q", up, err, want)
 	}
 	// An upload made nothing to remove the next time, unless an apply
@@ -337,14 +351,14 @@ func contractAccessUpload(t *testing.T, start Starter) {
 	if _, err := s.ApplyStation(ctx, adoptedStation(), BenchSecrets); err != nil {
 		t.Fatal(err)
 	}
-	if up, err := s.UploadWith(ctx, tiad.UploadRequest{}); err != nil || len(up.RemovedAccess) != 0 {
+	if up, err := s.UploadWith(ctx, tiad.UploadRequest{Secrets: BenchLogin}); err != nil || len(up.RemovedAccess) != 0 {
 		t.Fatalf("an upload after one that removed what the session made: %+v %v", up, err)
 	}
 	if r, err := s.ApplyStation(ctx, full, BenchSecrets); err != nil || !noteWith(r.Notes, madeUser) {
 		t.Fatalf("the user after the upload removed it: %+v %v", r, err)
 	}
 	// Made on this session again, so the next upload removes it again.
-	if up, err := s.UploadWith(ctx, tiad.UploadRequest{}); err != nil || len(up.RemovedAccess) != 2 {
+	if up, err := s.UploadWith(ctx, tiad.UploadRequest{Secrets: BenchLogin}); err != nil || len(up.RemovedAccess) != 2 {
 		t.Fatalf("a second upload: %+v %v", up, err)
 	}
 	if _, err := s.Save(ctx, false); err != nil {
@@ -373,10 +387,10 @@ func contractAccessUpload(t *testing.T, start Starter) {
 	keep := BenchStation()
 	keep.Profinet = nil
 	keep.CPU.AccessControl = tiad.AccessKeep
-	if r, err := s4.ApplyStation(ctx, keep, BenchSecrets); err != nil || noteWith(r.Notes, "nautilus") {
+	if r, err := s4.ApplyStation(ctx, keep, BenchSecrets); err != nil || noteWith(r.Notes, `"nautilus"`) {
 		t.Fatalf("keep on the opened project: %+v %v", r, err)
 	}
-	up, err = s4.UploadWith(ctx, tiad.UploadRequest{})
+	up, err = s4.UploadWith(ctx, tiad.UploadRequest{Secrets: BenchLogin})
 	if err != nil || len(up.RemovedAccess) != 0 {
 		t.Fatalf("an upload on a session that made nothing: %+v %v", up, err)
 	}

@@ -7,7 +7,11 @@
 // standalone it's a JSON file next to the project.
 package retain
 
-import "github.com/joyautomation/nautilus/internal/k8sapi"
+import (
+	"time"
+
+	"github.com/joyautomation/nautilus/internal/k8sapi"
+)
 
 // State is everything a controller retains across power cycles.
 type State struct {
@@ -70,6 +74,34 @@ type State struct {
 	// Nil until the first substitute; a store written before substitutes
 	// existed loads unchanged.
 	Substitutes *SubstituteState `json:"substitutes,omitempty"`
+	// Push is the Web Push subscriptions (#722): a person's phones, so a
+	// takeover pages the same ones. Each row's endpoint and keys are
+	// sealed (AES-GCM under a key derived from the VAPID key, which is not
+	// in the store): this file is mode 0644 and a ConfigMap is not a
+	// Secret, so what it holds must be useless without the box's secrets
+	// file. Nil until the first subscription.
+	Push *PushState `json:"push,omitempty"`
+}
+
+// PushState is the retained Web Push subscriptions.
+type PushState struct {
+	Rows []PushRow `json:"rows,omitempty"`
+}
+
+// PushRow is one subscription: its owner and where it points in the
+// clear (nothing secret), the secrets sealed.
+type PushRow struct {
+	ID        string    `json:"id"`
+	Principal string    `json:"principal"`
+	Host      string    `json:"host"`
+	At        time.Time `json:"at"`
+	Groups    []string  `json:"groups,omitempty"`
+	Seen      time.Time `json:"seen,omitzero"`
+	// Key fingerprints the VAPID key the row is sealed under (not the
+	// key): a replica holding another key keeps the row and sends none.
+	Key    string `json:"key"`
+	Cred   string `json:"cred,omitempty"`
+	Sealed string `json:"sealed"`
 }
 
 // ParamEdit is one parameter's last external write.

@@ -181,7 +181,8 @@ namespace Tiad
         // the CPU anew; Reuse keeps the project's CPU and the devices
         // besides it, as found. Either way it then applies next's CPU
         // settings, cpu.configurationProtection (ProtectionSteps.Run) and
-        // cpu.accessControl (AccessSteps.Run). notes gets what the caller
+        // cpu.accessControl (AccessSteps.Run), then webServer and its
+        // users (WebSteps.Run, after access control). notes gets what the caller
         // should know besides the changes; made collects what it made in
         // the project's users and roles, as soon as it is made.
         void ApplyStation(object project, Station next, string decision, Secrets secrets, List<string> notes, AccessMade made);
@@ -189,13 +190,14 @@ namespace Tiad
         // ReadPolicy is the project's password policy for local users.
         PasswordPolicy ReadPolicy(object project);
 
-        // PrepareAccess runs AccessSteps.Prepare on the project's users,
+        // PrepareAccess runs AccessSteps.PrepareAll on the project's users,
         // before any write of an apply.
         void PrepareAccess(object project, Station next, Secrets secrets, bool recordOnly, AccessWrites w, List<string> notes);
 
-        // RemoveAccess removes from the project's users and roles what made
-        // names (AccessSteps' user and role), and nothing else; it returns
-        // what it removed ("user \"nautilus\"", "role \"...\"").
+        // RemoveAccess is AccessSteps.Remove: it removes from the project's
+        // users and roles what made names (AccessSteps' user and role, the
+        // web users and roles), and nothing else; it returns what it
+        // removed ("user \"nautilus\"", "role \"...\"").
         List<string> RemoveAccess(object project, AccessMade made);
 
         // CannotApply is why this side cannot apply next at all yet (a
@@ -220,8 +222,13 @@ namespace Tiad
         // without asking anything. startAfter is whether the CPU starts
         // after loading (null: it stays as it is). secrets carries the
         // protection password a password question needs.
+        //
+        // login, in Download, Compare, Upload and ReadFingerprint, is what
+        // the call answers when TIA asks credentials going online (null:
+        // none). Each operation makes its own LoginUse of it, which decides
+        // every answer (OnlineLogin, LoginUse).
         DownloadOutcome Download(object project, string address, bool hardware, bool software,
-            Secrets secrets, bool? startAfter, Func<Question, Answer> answer);
+            Secrets secrets, bool? startAfter, Func<Question, Answer> answer, OnlineLogin login);
 
         // Compare compares the project's PLC software with the CPU at
         // address and returns TIA's compare tree as TIA reports it (null
@@ -231,7 +238,7 @@ namespace Tiad
         // empty tree, one with an element skipped or differing, or one
         // that leaves out a block the project holds, never passes as
         // equal (#789).
-        OnlineCompare Compare(object project, string address);
+        OnlineCompare Compare(object project, string address, OnlineLogin login);
 
         // Export writes what o asks for under dir and returns the full
         // paths it wrote.
@@ -241,7 +248,7 @@ namespace Tiad
         // trustUnverifiedCertificate, the request's explicit opt-in, a TLS
         // certificate question is answered trusted, blindly; Upload returns
         // the questions it so answered (empty when none was asked).
-        List<string> Upload(object project, string address, bool trustUnverifiedCertificate);
+        List<string> Upload(object project, string address, bool trustUnverifiedCertificate, OnlineLogin login);
 
         // ReadFingerprint goes online, read-only, from the project's CPU
         // to address, reads what TIA's fingerprint service reports for it,
@@ -252,7 +259,7 @@ namespace Tiad
         // read, when the CPU is not reached online or any step fails. It
         // refuses before going online when address is not the project
         // CPU's address.
-        FingerprintRead ReadFingerprint(object project, string address, bool trustUnverifiedCertificate);
+        FingerprintRead ReadFingerprint(object project, string address, bool trustUnverifiedCertificate, OnlineLogin login);
 
         // ProjectCpu is the identity of the project's CPU as the project
         // holds it: after an upload, what the CPU reported. Serial and Mac

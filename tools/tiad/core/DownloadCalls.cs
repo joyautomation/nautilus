@@ -41,6 +41,19 @@ namespace Tiad
         // acting is the acting answers tiad gave TIA before it ended
         // (question ids): the answer names them, says plainly what they
         // may have done to the CPU, and lists them (data.actingAnswers).
+        // LoginBlocked refuses a hardware load of a fullAccessUser station
+        // while the instance trusts blindly (bt): the load turns the CPU's
+        // access control on, so the compare after it has to log on, and no
+        // password follows a blind trust: it could only end in doubt. A
+        // software load is not refused: whether its CPU asks credentials
+        // is not known before it goes online (section 3.9). Null when it
+        // may go on.
+        static TiadException LoginBlocked(Session s, DownloadRequest req, BlindTrust bt)
+        {
+            if (bt == null || !req.Hardware || s.Station == null || s.Station.Cpu.AccessControl != StationRules.AccessFullAccessUser) return null;
+            return TiadException.BadRequest("{0}", OnlineLogin.BlockedBy(bt) + "; a hardware load of a fullAccessUser station has to log on for the compare after it, so nothing was sent to the CPU");
+        }
+
         static TiadException Unknown(string why, List<string> acting)
         {
             return Unknown(why, acting, false);
@@ -244,6 +257,19 @@ namespace Tiad
             {
                 throw new TiadException(409, Kinds.NotCompiled, "the project changed since the last full compile; compile hardware and software first");
             }
+            // A station with a Full access user turns the CPU's access
+            // control on at its hardware load, and from then on going
+            // online to it asks credentials (section 3.9): the compare
+            // after this download would, so without the password it could
+            // only end in doubt. Refused before anything reaches the CPU.
+            if (s.Station.Cpu.AccessControl == StationRules.AccessFullAccessUser && req.Secrets.FullAccessPassword == "")
+            {
+                throw TiadException.BadRequest("{0}", LoginUse.DownloadNeedsPassword);
+            }
+            // Nor can it log on while the instance trusts blindly: checked
+            // here, and again on the TIA thread before anything is recorded.
+            TiadException noLogin = LoginBlocked(s, req, blindTrust);
+            if (noLogin != null) throw noLogin;
             // The hardware configuration loads unverified (#789 hardware
             // gate): a real download that loads it needs the opt-in and
             // the operator's attestation, checked before anything reaches
@@ -408,6 +434,8 @@ namespace Tiad
                     // call queued ahead of this one may have given it. What
                     // it reads here is what the download rides on.
                     ranWith = blindTrust;
+                    TiadException blocked = LoginBlocked(s, req, ranWith);
+                    if (blocked != null) throw blocked;
                     TiadException late = BlindTrustRefusal(ranWith, req, s, "TIA's download was not called");
                     if (late != null)
                     {
@@ -427,7 +455,8 @@ namespace Tiad
                         // A dry run never starts the CPU, whatever the request
                         // says (#1154 review): if TIA loads it without asking,
                         // start-after is NoAction.
-                        return t.Download(s.Handle, req.Address, req.Hardware, req.Software, req.Secrets, req.DryRun ? (bool?)null : req.Decisions.StartAfter, answer);
+                        return t.Download(s.Handle, req.Address, req.Hardware, req.Software, req.Secrets, req.DryRun ? (bool?)null : req.Decisions.StartAfter, answer,
+                            OnlineLogin.For(req.Secrets.FullAccessPassword, ranWith));
                     }
                     catch (Exception e)
                     {
@@ -553,7 +582,7 @@ namespace Tiad
             OnlineCompare cmp;
             try
             {
-                cmp = OnSession(s, delegate(ITia t) { return t.Compare(s.Handle, req.Address); });
+                cmp = OnSession(s, delegate(ITia t) { return t.Compare(s.Handle, req.Address, OnlineLogin.For(req.Secrets.FullAccessPassword, blindTrust)); });
                 equal = TiaNames.CompareEqual(cmp == null ? null : cmp.Tree, cmp == null ? null : cmp.Blocks, diffs);
             }
             catch (TiadException e)
@@ -633,6 +662,7 @@ namespace Tiad
             return WithSession(c, delegate(Session s)
             {
                 var r = c.Json();
+                string password = OnlinePassword(r);
                 r.Done();
                 string address = CpuOf(s);
                 if (!Target(address)) throw new TiadException(403, Kinds.TargetRefused, address + " is not in TIAD_TARGETS");
@@ -651,7 +681,7 @@ namespace Tiad
                     {
                         Log.Line("audit compare session={0} project={1} address={2} blindTrust={3}", s.Id, Json.Quote(s.Project), Json.Quote(address), BlindTrust.Audit(bt));
                     }
-                    return t.Compare(s.Handle, address);
+                    return t.Compare(s.Handle, address, OnlineLogin.For(password, bt));
                 });
                 bool equal = TiaNames.CompareEqual(cmp == null ? null : cmp.Tree, cmp == null ? null : cmp.Blocks, diffs);
                 var list = new List<object>();
@@ -718,6 +748,7 @@ namespace Tiad
                 // An explicit, per-call opt-in, only here: trust the CPU's
                 // TLS certificate blindly for this read-only upload.
                 bool trust = r.Bool("trustUnverifiedCertificate");
+                string password = OnlinePassword(r);
                 r.Done();
                 string address = s.Address;
                 if (address == "" || !Target(address))
@@ -752,7 +783,7 @@ namespace Tiad
                         removed = t.RemoveAccess(s.Handle, s.Made);
                         s.Made = new AccessMade();
                     }
-                    List<string> tr = TrustingCall("upload", s, address, trust, delegate { return t.Upload(s.Handle, address, trust); });
+                    List<string> tr = TrustingCall("upload", s, address, trust, delegate { return t.Upload(s.Handle, address, trust, OnlineLogin.For(password, blindTrust)); });
                     RecordBlindTrust("upload", s, address, tr);
                     upTrust = blindTrust;
                     // The project is replaced now: a failed identity read

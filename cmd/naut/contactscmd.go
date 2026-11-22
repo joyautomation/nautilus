@@ -29,10 +29,13 @@ Usage:
   naut alarms secrets [flags] list                which credentials are set (never their values)
   naut alarms secrets [flags] set <key>           set one, read from stdin (a terminal: no echo)
   naut alarms secrets [flags] rm <key>
+  naut alarms secrets [flags] generate push.vapid-key
+                                                  make the Web Push key (once; copy the file to the
+                                                  other box of a pair)
 
 A person is a principal as the manifest's levels name one: a local user
 name (alice) or oidc:<name>. Numbers are E.164 (+15550100). Secret keys:
-email.password, sms.token, voice.token, webhook.header.
+email.password, sms.token, voice.token, webhook.header, push.vapid-key.
 
 Flags:
   --project <dir>    the project whose nautilus.yaml says where the state
@@ -264,6 +267,17 @@ func secretsCmd(cmd string, rest []string, path, by string, stdin io.Reader, std
 			}
 			fmt.Fprintf(stdout, "  %-16s %s\n", k, state)
 		}
+		return 0
+	case "generate":
+		if len(rest) != 1 || rest[0] != "push.vapid-key" {
+			fmt.Fprint(stderr, contactsUsage)
+			return 2
+		}
+		k, err := generatePushKey(path, by)
+		if err != nil {
+			return fail(err)
+		}
+		fmt.Fprintf(stderr, "%s: made push.vapid-key (%s). A pair needs the same file on both boxes: scp -p it to the other.\n", path, k.Fingerprint())
 		return 0
 	case "set", "rm":
 		if len(rest) != 1 {

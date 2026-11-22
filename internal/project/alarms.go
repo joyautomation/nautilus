@@ -637,7 +637,7 @@ func (p *Project) alarms(rt *runtime.Runtime, durable bool, log *slog.Logger, sy
 				return nil, fmt.Errorf("alarms.channels: %s need the contacts and secrets files in the controller's state directory, "+
 					"and this controller has none: set auth.state-dir, or run under systemd with StateDirectory=", strings.Join(kinds, ", "))
 			}
-			built, err := channel.Build(p.Alarms.Channels, p.AlarmDirectory, channel.Options{})
+			built, err := channel.Build(p.Alarms.Channels, p.AlarmDirectory, channel.Options{Push: p.PushSend})
 			if err != nil {
 				out.Close()
 				return nil, err

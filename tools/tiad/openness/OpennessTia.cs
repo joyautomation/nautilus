@@ -60,8 +60,10 @@ namespace Tiad.Openness
 
     // OnlineAsks answers what TIA asks when it goes online to a CPU
     // (ConnectionConfiguration.OnlineLegitimation): a TLS certificate to
-    // trust, or credentials. tiad trusts no CPU certificate and holds no CPU
-    // credentials yet, so every answer is no, and each question is recorded
+    // trust, or credentials. A certificate is answered not trusted unless
+    // the request opts in; a project user's legitimation is answered as the
+    // CPU's user "nautilus" when the operation's LoginUse (core) says so;
+    // anything else is answered no. Each question answered no is recorded
     // so the failure names it: the certificate's fingerprint is what a
     // later, explicit trust decision has to match.
     sealed class OnlineAsks
@@ -70,6 +72,8 @@ namespace Tiad.Openness
         readonly OnlineAnswers answers;
         readonly Action gone;
         readonly string address;
+        // use is the operation's login, shared by its handlers.
+        readonly LoginUse use;
         readonly OnlineRecord record = new OnlineRecord();
         public List<string> Asked
         {
@@ -81,19 +85,27 @@ namespace Tiad.Openness
         {
             get { return record.TrustedBlindly; }
         }
+        // LoggedIn is true once this handler answered credentials.
+        public bool LoggedIn
+        {
+            get { return record.LoggedIn.Count > 0; }
+        }
 
         // gone is called when the handler cannot be detached: TIA's
         // objects are disposed, so TIA is taken to be gone.
-        public OnlineAsks(ConnectionConfiguration cc, Action gone) : this(cc, gone, false, "")
+        public OnlineAsks(ConnectionConfiguration cc, Action gone, LoginUse use, string address) : this(cc, gone, false, address, use)
         {
         }
 
-        public OnlineAsks(ConnectionConfiguration cc, Action gone, bool trustUnverifiedCertificate, string address)
+        public OnlineAsks(ConnectionConfiguration cc, Action gone, bool trustUnverifiedCertificate, string address, LoginUse use)
         {
             this.cc = cc;
             this.gone = gone;
             answers = new OnlineAnswers(trustUnverifiedCertificate);
             this.address = address;
+            this.use = use;
+            // Every question answered no tells the operation's login.
+            record.Use = use;
             if (cc != null) cc.OnlineLegitimation += Handle;
         }
 
@@ -102,9 +114,9 @@ namespace Tiad.Openness
         // connection's OnlineLegitimation event: pass Handle to it. It
         // answers through the same OnlineRecord.Handle path, so TIA gets
         // only Boundary.Fail's exception from it (#1145).
-        public static OnlineAsks ForCallback(Action gone, bool trustUnverifiedCertificate, string address)
+        public static OnlineAsks ForCallback(Action gone, bool trustUnverifiedCertificate, string address, LoginUse use)
         {
-            return new OnlineAsks(null, gone, trustUnverifiedCertificate, address);
+            return new OnlineAsks(null, gone, trustUnverifiedCertificate, address, use);
         }
 
         // Stop detaches the handler and never throws: TIA may be gone
@@ -136,9 +148,18 @@ namespace Tiad.Openness
         {
             var tls = c as TlsVerificationConfiguration;
             string answer = answers.Answer(type);
+            var auth = c as OnlineAuthenticationConfiguration;
+            if (answer == OnlineChecks.Login && auth != null)
+            {
+                Login(auth, type, call);
+                return;
+            }
             if ((answer == OnlineChecks.NotTrusted || answer == OnlineChecks.Trusted) && tls != null)
             {
                 bool trust = answer == OnlineChecks.Trusted;
+                // No password follows a trust, even if what comes after
+                // this write fails: recorded before the write.
+                if (trust) use.Trusted();
                 tls.CurrentSelection = trust ? TlsVerificationConfigurationSelection.Trusted : TlsVerificationConfigurationSelection.NonTrusted;
                 string plc = "", info = "";
                 var fps = new List<string>();
@@ -175,6 +196,47 @@ namespace Tiad.Openness
             throw new TiaException("tiad cancels going online: TIA asked " + ask);
         }
 
+        // Login answers a project user's legitimation as LoginUse decides:
+        // what TIA offers is read first (whether the connection is secure,
+        // the user types the CPU supports: an unreadable one refuses), then
+        // the user "nautilus", as a project user, and the password are
+        // written. The configuration is never described: it holds the
+        // credentials. The log names the user types only, so the next
+        // window shows what a CPU with access control offers.
+        void Login(OnlineAuthenticationConfiguration auth, string type, OnlineRecord.Call call)
+        {
+            bool? secure = null;
+            List<string> types = null;
+            try
+            {
+                secure = auth.IsSecureCommunication;
+            }
+            catch (Exception e)
+            {
+                Log.Line("online: reading IsSecureCommunication failed ({0})", e.GetType().Name);
+            }
+            try
+            {
+                var t = new List<string>();
+                foreach (Siemens.Engineering.Online.Configurations.AuthenticationType a in auth.GetSupportedAuthenticationTypes()) t.Add(a.CurrentUserType.ToString());
+                types = t;
+            }
+            catch (Exception e)
+            {
+                Log.Line("online: reading the supported user types failed ({0})", e.GetType().Name);
+            }
+            Log.Line("online: {0} asks credentials ({1}): secure communication {2}, user types [{3}]", TiaNames.LogSafe(address), type,
+                secure == null ? "unreadable" : secure.Value ? "yes" : "no", types == null ? "unreadable" : string.Join(", ", types.ToArray()));
+            use.Answer(call, type, secure, types, delegate(string password)
+            {
+                OnlineCredentials cr = auth.OnlineCredentials;
+                if (cr == null) throw new TiaException("TIA's credentials question holds no OnlineCredentials");
+                cr.Type = UserType.ProjectUser;
+                cr.Name = OnlineLogin.User;
+                using (SecureString pw = OpennessTia.Secure(password)) cr.SetPassword(pw);
+            });
+        }
+
         // Describe lists an online question's attributes and their values,
         // for the log: what TIA offers beyond its typed properties.
         static string Describe(IEngineeringObject o)
@@ -201,7 +263,10 @@ namespace Tiad.Openness
         // something going online, what it asked.
         public TiaException Explain(string address, Exception e)
         {
-            if (Asked.Count == 0) return null;
+            if (Asked.Count == 0)
+            {
+                return LoggedIn ? new TiaException(TiaNames.LoginFailed(address, TiaNames.Message(e)), e) : null;
+            }
             return new TiaException(TiaNames.OnlineRefused(address, Asked, TiaNames.Message(e)), e);
         }
 
@@ -643,7 +708,6 @@ namespace Tiad.Openness
         {
             if (next.Modules.Count > 0) return "tiad cannot place rack modules yet: the first TIA start (S2a) learns the rack";
             if (next.Profinet != null) return "tiad cannot configure a PROFINET IO system yet: the IO-device attribute names are learned at the first TIA start (S2a)";
-            if (next.WebServer != null && next.WebServer.Enabled) return "tiad cannot configure the web server yet: its attribute names are learned at the first TIA start (S2a)";
             return null;
         }
 
@@ -677,7 +741,10 @@ namespace Tiad.Openness
                     "PnDeviceNameAutoGeneration", false,
                     "PnDeviceName", next.Cpu.ProfinetName);
                 ProtectionSteps.Run(new MasterSecret(station, cpu), next.Cpu.ConfigurationProtection, secrets.ConfigurationPassword, notes);
-                AccessSteps.Run(new Access(p, station, cpu), next.Cpu.AccessControl, secrets.FullAccessPassword, secrets.Records, decision == CpuReuse.Create, made, notes);
+                var access = new Access(p, station, cpu);
+                AccessSteps.Run(access, next.Cpu.AccessControl, secrets.FullAccessPassword, secrets.Records, decision == CpuReuse.Create, made, notes);
+                access.LogRights();
+                WebSteps.Run(new Web(this, cpu), access, next.WebServer, secrets, decision == CpuReuse.Create, made, notes);
                 return true;
             });
         }
@@ -704,41 +771,19 @@ namespace Tiad.Openness
         {
             Tia(delegate
             {
-                AccessSteps.Prepare(new Users(Of(project).Project), next.Cpu.AccessControl, secrets.FullAccessPassword, secrets.Records, recordOnly, w, notes);
+                AccessSteps.PrepareAll(new Users(Of(project).Project), next, secrets, recordOnly, w, notes);
                 return true;
             });
         }
 
-        // RemoveAccess takes the role off every user before deleting it, so
-        // a user the project held, holding the role, is never in the way.
+        // RemoveAccess is AccessSteps.Remove: DeleteRole takes a role off
+        // every user before deleting it, so a user the project held,
+        // holding the role, is never in the way.
         public List<string> RemoveAccess(object project, AccessMade made)
         {
             return Tia(delegate
             {
-                var removed = new List<string>();
-                UmacConfigurator u = Users.Umac(Of(project).Project);
-                if (made.User)
-                {
-                    ProjectUser user = u.ProjectUsers.Find(AccessSteps.UserName);
-                    if (user != null)
-                    {
-                        user.Delete();
-                        removed.Add("user " + Json.Quote(AccessSteps.UserName));
-                    }
-                }
-                if (made.Role)
-                {
-                    CustomRole role = u.CustomRoles.Find(AccessSteps.RoleName);
-                    if (role != null)
-                    {
-                        foreach (ProjectUser pu in u.ProjectUsers)
-                        {
-                            if (pu.Roles.Contains(role)) pu.Roles.Remove(role);
-                        }
-                        role.Delete();
-                        removed.Add("role " + Json.Quote(AccessSteps.RoleName));
-                    }
-                }
+                List<string> removed = AccessSteps.Remove(new Users(Of(project).Project), made);
                 Log.Line("access control: removed what this session made: {0}", removed.Count == 0 ? "nothing left" : string.Join(", ", removed.ToArray()));
                 return removed;
             });
@@ -840,6 +885,72 @@ namespace Tiad.Openness
                 CustomRole r = Role(role);
                 if (!pu.Roles.Contains(r)) pu.Roles.Add(r);
             }
+
+            public List<string> UserNames()
+            {
+                var l = new List<string>();
+                foreach (ProjectUser pu in Umac(p).ProjectUsers) l.Add(pu.Name);
+                return l;
+            }
+
+            public List<string> RoleNames()
+            {
+                var l = new List<string>();
+                foreach (CustomRole r in Umac(p).CustomRoles) l.Add(r.Name);
+                return l;
+            }
+
+            // UserRoles names every role the user holds, system roles too
+            // (ProjectUser.Roles holds both).
+            public List<string> UserRoles(string user)
+            {
+                var l = new List<string>();
+                foreach (Role r in User(user).Roles) l.Add(r.Name);
+                return l;
+            }
+
+            public void RemoveRole(string user, string role)
+            {
+                ProjectUser pu = User(user);
+                foreach (Role r in new List<Role>(pu.Roles))
+                {
+                    if (r.Name == role) pu.Roles.Remove(r);
+                }
+            }
+
+            public void DeleteUser(string user)
+            {
+                User(user).Delete();
+            }
+
+            public void DeleteRole(string role)
+            {
+                UmacConfigurator u = Umac(p);
+                CustomRole r = Role(role);
+                foreach (ProjectUser pu in u.ProjectUsers)
+                {
+                    if (pu.Roles.Contains(r)) pu.Roles.Remove(r);
+                }
+                r.Delete();
+            }
+
+            public bool UserActive(string user)
+            {
+                return User(user).IsActive;
+            }
+
+            public void ActivateUser(string user)
+            {
+                User(user).Activate();
+            }
+
+            // AnonymousActive reads UmacConfigurator.AnonymousUser: none is
+            // read as not active.
+            public bool AnonymousActive()
+            {
+                ProjectUser a = Umac(p).AnonymousUser;
+                return a != null && a.IsActive;
+            }
         }
 
         // Access is the CPU's access control besides the project's users and
@@ -906,6 +1017,44 @@ namespace Tiad.Openness
                 r.AssignDeviceFunctionRight(Device(), full);
             }
 
+            DeviceFunctionRight Offered(string id)
+            {
+                foreach (DeviceFunctionRight r in Device().AvailableDeviceFunctionRights)
+                {
+                    if (r.Identifier == id) return r;
+                }
+                throw new TiaException("the CPU " + cpu.Name + " offers no runtime right " + Json.Quote(id));
+            }
+
+            public List<string> OfferedRights()
+            {
+                var l = new List<string>();
+                foreach (DeviceFunctionRight r in Device().AvailableDeviceFunctionRights) l.Add(r.Identifier);
+                return l;
+            }
+
+            public List<string> RoleRights(string role)
+            {
+                var l = new List<string>();
+                foreach (DeviceFunctionRight x in Role(role).GetAssignedDeviceFunctionRights(Device())) l.Add(x.Identifier);
+                l.Sort(StringComparer.Ordinal);
+                return l;
+            }
+
+            public void Grant(string role, string right)
+            {
+                Role(role).AssignDeviceFunctionRight(Device(), Offered(right));
+            }
+
+            public void Revoke(string role, string right)
+            {
+                CustomRole r = Role(role);
+                foreach (DeviceFunctionRight x in new List<DeviceFunctionRight>(r.GetAssignedDeviceFunctionRights(Device())))
+                {
+                    if (x.Identifier == right) r.UnAssignDeviceFunctionRight(Device(), x);
+                }
+            }
+
             bool Has(CustomRole r, DeviceFunctionRight full)
             {
                 foreach (DeviceFunctionRight x in r.GetAssignedDeviceFunctionRights(Device()))
@@ -914,6 +1063,52 @@ namespace Tiad.Openness
                 }
                 return false;
             }
+
+            // LogRights logs, once per agent run, every runtime right the
+            // CPU offers and the project's users with their roles (names
+            // only): the web users of step 2B need the web server rights'
+            // identifiers, and an "Anonymous" user holding a role would
+            // matter to the web server.
+            // It never fails an apply: a read it cannot make is logged.
+            public void LogRights()
+            {
+                if (rightsLogged) return;
+                try
+                {
+                    if (State() != AccessRule.Enabled) return;
+                    LogRightsNow();
+                    rightsLogged = true;
+                }
+                catch (Exception e)
+                {
+                    Log.Line("access control: reading the runtime rights and users for the log failed: {0}", TiaNames.Message(e));
+                }
+            }
+
+            void LogRightsNow()
+            {
+                var all = new List<string>();
+                foreach (DeviceFunctionRight r in Device().AvailableDeviceFunctionRights) all.Add(Json.Quote(r.Identifier) + " (" + Json.Quote(r.Name) + ")");
+                Log.Line("access control: the CPU offers the runtime rights {0}", string.Join(", ", all.ToArray()));
+                var users = new List<string>();
+                foreach (ProjectUser pu in Umac(p).ProjectUsers)
+                {
+                    var roles = new List<string>();
+                    foreach (Role r in pu.Roles) roles.Add(Json.Quote(r.Name));
+                    users.Add(Json.Quote(pu.Name) + " [" + string.Join(", ", roles.ToArray()) + "]");
+                }
+                Log.Line("access control: the project's users {0}", string.Join(", ", users.ToArray()));
+                ProjectUser anon = Umac(p).AnonymousUser;
+                if (anon == null) Log.Line("access control: the project offers no anonymous user");
+                else
+                {
+                    var roles = new List<string>();
+                    foreach (Role r in anon.Roles) roles.Add(Json.Quote(r.Name));
+                    Log.Line("access control: the anonymous user {0} is {1}, roles [{2}]", Json.Quote(anon.Name), anon.IsActive ? "active" : "not active", string.Join(", ", roles.ToArray()));
+                }
+            }
+
+            static bool rightsLogged;
 
             public string Check(string user, string role)
             {
@@ -924,6 +1119,71 @@ namespace Tiad.Openness
                 if (r == null || !pu.Roles.Contains(r)) return "the user " + Json.Quote(user) + " lacks the role " + Json.Quote(role);
                 if (!Has(r, FullAccess())) return "the role " + Json.Quote(role) + " lacks the runtime right Full access on the CPU";
                 return null;
+            }
+        }
+
+        // Web is the CPU's web server for WebSteps: the CPU's
+        // WebserverActivate and UseWebServerForInterface on the PROFINET
+        // interface that carries the CPU's node (both seen on the bench
+        // CPU's upload, 2026-11-21: the interface's attribute is on its
+        // device item, not on the node).
+        sealed class Web : IWebServer
+        {
+            readonly OpennessTia tia;
+            readonly DeviceItem cpu;
+
+            public Web(OpennessTia tia, DeviceItem cpu)
+            {
+                this.tia = tia;
+                this.cpu = cpu;
+            }
+
+            DeviceItem Interface()
+            {
+                foreach (DeviceItem i in Items(cpu.DeviceItems))
+                {
+                    NetworkInterface ni = i.GetService<NetworkInterface>();
+                    if (ni != null && ni.Nodes.Count > 0) return i;
+                }
+                throw new TiaException("the CPU " + cpu.Name + " has no network interface with a node");
+            }
+
+            bool IWebServer.Server()
+            {
+                return (bool)cpu.GetAttribute("WebserverActivate");
+            }
+
+            bool IWebServer.Interface()
+            {
+                return (bool)Interface().GetAttribute("UseWebServerForInterface");
+            }
+
+            // WebserverHttpsOnly shows only while the server is on (seen on
+            // the TIA machine, 2026-11-22).
+            public bool HttpsOnly()
+            {
+                return (bool)cpu.GetAttribute("WebserverHttpsOnly");
+            }
+
+            // Set reads each switch first and writes only one that differs,
+            // so an apply that leaves a server off writes nothing.
+            public void Set(bool on)
+            {
+                DeviceItem i = Interface();
+                IWebServer self = this;
+                if (on)
+                {
+                    if (!self.Server()) tia.Set("DeviceItem", cpu, "WebserverActivate", true);
+                    // WebserverHttpsOnly shows only once the server is on;
+                    // Set checks it is offered.
+                    if (!HttpsOnly()) tia.Set("DeviceItem (web server on)", cpu, "WebserverHttpsOnly", true);
+                    if (!self.Interface()) tia.Set("Interface", i, "UseWebServerForInterface", true);
+                }
+                else
+                {
+                    if (self.Interface()) tia.Set("Interface", i, "UseWebServerForInterface", false);
+                    if (self.Server()) tia.Set("DeviceItem", cpu, "WebserverActivate", false);
+                }
             }
         }
 
@@ -961,7 +1221,7 @@ namespace Tiad.Openness
             }
         }
 
-        static SecureString Secure(string s)
+        internal static SecureString Secure(string s)
         {
             var ss = new SecureString();
             foreach (char ch in s) ss.AppendChar(ch);
@@ -1103,9 +1363,10 @@ namespace Tiad.Openness
         // ---- download ----
 
         public DownloadOutcome Download(object project, string address, bool hardware, bool software,
-            Secrets secrets, bool? startAfter, Func<Question, Answer> answer)
+            Secrets secrets, bool? startAfter, Func<Question, Answer> answer, OnlineLogin login)
         {
             var decider = new DownloadDecider(answer, startAfter);
+            var use = new LoginUse(login, "download", address);
             int checks = 0;
             OnlineAsks online = null;
             DownloadProvider dp = null;
@@ -1126,7 +1387,7 @@ namespace Tiad.Openness
                     // reads the CPU's mode from them).
                     cpuName = cpu.Name ?? "";
                     dp = cpu.GetService<DownloadProvider>();
-                    online = new OnlineAsks(dp.Configuration, Detached);
+                    online = new OnlineAsks(dp.Configuration, Detached, use, address);
                     ConfigurationPcInterface pc = PcInterface(dp.Configuration);
                     target = TargetInterface(pc);
                     // Provisional until S2b: the address on the target
@@ -1179,7 +1440,8 @@ namespace Tiad.Openness
                 delegate
                 {
                     return online == null ? new List<string>() : online.Asked;
-                });
+                },
+                delegate { return use.Answered; });
         }
 
         // Write writes one step into a configuration and reports it. A
@@ -1246,7 +1508,7 @@ namespace Tiad.Openness
         // online to the CPU at address, compares the PLC software with it
         // and returns TIA's compare tree as is, with those blocks; the
         // agent decides what they prove (TiaNames.CompareEqual).
-        public OnlineCompare Compare(object project, string address)
+        public OnlineCompare Compare(object project, string address, OnlineLogin login)
         {
             return Tia(delegate
             {
@@ -1262,7 +1524,7 @@ namespace Tiad.Openness
                 ConfigurationAddress at = TargetInterface(pc).Addresses.Create(address);
                 // The handler stays attached until offline: TIA may ask while
                 // it compares, too.
-                var online = new OnlineAsks(op.Configuration, Detached);
+                var online = new OnlineAsks(op.Configuration, Detached, new LoginUse(login, "compare", address), address);
                 CompareNode tree = null;
                 try
                 {
@@ -1273,6 +1535,7 @@ namespace Tiad.Openness
                         if (st != OnlineState.Online)
                         {
                             if (online.Asked.Count > 0) throw new TiaException(TiaNames.OnlineRefused(address, online.Asked, "online state " + st));
+                            if (online.LoggedIn) throw new TiaException(TiaNames.LoginFailed(address, "online state " + st));
                             throw new TiaException("TIA could not go online to " + address + ": " + st);
                         }
                         CompareResult cr = sw.CompareToOnline();
@@ -1555,7 +1818,7 @@ namespace Tiad.Openness
         // stage 1b). The portal's service alone, with no project online,
         // never reached the bench CPU (stage 1), so the read goes online
         // first. Every step fails the read; offline always.
-        public FingerprintRead ReadFingerprint(object project, string address, bool trustUnverifiedCertificate)
+        public FingerprintRead ReadFingerprint(object project, string address, bool trustUnverifiedCertificate, OnlineLogin login)
         {
             return Tia(delegate
             {
@@ -1571,8 +1834,9 @@ namespace Tiad.Openness
                 ConfigurationAddress at = TargetInterface(PcInterface(op.Configuration)).Addresses.Create(address);
                 ConfigurationPcInterface fpc = PcInterface(fp.Configuration);
                 ConfigurationAddress fat = fpc.TargetInterfaces.Count > 0 ? TargetInterface(fpc).Addresses.Create(address) : fpc.Addresses.Create(address);
-                var online = new OnlineAsks(op.Configuration, Detached, trustUnverifiedCertificate, address);
-                var asks = OnlineAsks.ForCallback(Detached, trustUnverifiedCertificate, address);
+                var use = new LoginUse(login, "fingerprint read", address);
+                var online = new OnlineAsks(op.Configuration, Detached, trustUnverifiedCertificate, address, use);
+                var asks = OnlineAsks.ForCallback(Detached, trustUnverifiedCertificate, address, use);
                 var r = new FingerprintRead();
                 try
                 {
@@ -1583,6 +1847,7 @@ namespace Tiad.Openness
                         if (st != OnlineState.Online)
                         {
                             if (online.Asked.Count > 0) throw new TiaException(TiaNames.OnlineRefused(address, online.Asked, "online state " + st));
+                            if (online.LoggedIn) throw new TiaException(TiaNames.LoginFailed(address, "online state " + st));
                             throw new TiaException("fingerprint read: TIA could not go online to " + address + ": " + st);
                         }
                         FingerprintDataResult res = fp.GetFingerprintData(fat, asks.Handle);
@@ -1626,7 +1891,7 @@ namespace Tiad.Openness
             });
         }
 
-        public List<string> Upload(object project, string address, bool trustUnverifiedCertificate)
+        public List<string> Upload(object project, string address, bool trustUnverifiedCertificate, OnlineLogin login)
         {
             return Tia(delegate
             {
@@ -1640,7 +1905,7 @@ namespace Tiad.Openness
                 foreach (HwDevice d in AllDevices(p)) d.Delete();
                 var ups = new UploadAsks();
                 UploadResult r;
-                var online = new OnlineAsks(sup.Configuration, Detached, trustUnverifiedCertificate, address);
+                var online = new OnlineAsks(sup.Configuration, Detached, trustUnverifiedCertificate, address, new LoginUse(login, "upload", address));
                 try
                 {
                     // TIA calls it from its own process: UploadAsks (core)

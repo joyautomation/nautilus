@@ -267,7 +267,22 @@ namespace Tiad.Fake
         bool noIdentify;
         PasswordPolicy policy = new PasswordPolicy();
         string uploadAccess = UploadedAccessControl;
+        bool uploadWeb;
+        bool uploadAnonymous;
         string accessRecords = "";
+
+        // UploadAnonymous is whether an upload brings a project whose
+        // anonymous user is active.
+        public bool UploadAnonymous
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return uploadAnonymous;
+                }
+            }
+        }
 
         // AccessRecords is what an open does to tiad's records in a saved
         // project: "" keeps them; "strip-users" opens the users without
@@ -298,6 +313,19 @@ namespace Tiad.Fake
                 lock (mu)
                 {
                     return new PasswordPolicy { MinLength = policy.MinLength, MinDigits = policy.MinDigits, MinSpecial = policy.MinSpecial, UpperAndLower = policy.UpperAndLower };
+                }
+            }
+        }
+
+        // UploadWebServer is whether an upload brings a CPU whose web
+        // server is on (the bench CPU's is off).
+        public bool UploadWebServer
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return uploadWeb;
                 }
             }
         }
@@ -697,6 +725,8 @@ namespace Tiad.Fake
                 pol.UpperAndLower = pr.Bool("upperAndLower");
             }
             string upAccess = r.Str("uploadAccessControl");
+            bool upWeb = r.Bool("uploadWebServer");
+            bool upAnon = r.Bool("uploadAnonymous");
             string records = r.Str("accessRecords");
             if (upAccess == "") upAccess = UploadedAccessControl;
             var qs = new List<Question>();
@@ -734,6 +764,8 @@ namespace Tiad.Fake
                 noIdentify = noId;
                 policy = pol;
                 uploadAccess = upAccess;
+                uploadWeb = upWeb;
+                uploadAnonymous = upAnon;
                 accessRecords = records;
             }
             return new Obj();
@@ -776,16 +808,22 @@ namespace Tiad.Fake
         // keeps the key each CPU was loaded with, so a retrieved archive
         // compares equal while its CPU still holds that load.
         public string ArchiveKey = "", RestoredKey = "";
+        // WebServer and WebInterface are the CPU's WebserverActivate and
+        // its interface's UseWebServerForInterface: off on a new CPU, as on
+        // the bench CPU an upload brings.
+        public bool WebServer, WebInterface, WebHttpsOnly;
         // AccessControl is the CPU's PLC access control (AccessRule's
         // states): a new CPU is EnabledWithAccessControl, as TIA makes one;
         // an upload brings the bench CPU's Disabled. Users and Roles are
         // the project's, not the CPU's: they outlive any device delete. A
-        // role maps to whether it holds Full access on the project's CPU:
+        // role maps to the runtime rights it holds on the project's CPU:
         // replacing the CPU (a create, an upload) clears every grant, as
-        // deleting the device drops its rights.
+        // deleting the device drops its rights. AnonymousActive is the
+        // project's anonymous user's IsActive.
         public string AccessControl = AccessRule.Absent;
         public Dictionary<string, FakeUser> Users = new Dictionary<string, FakeUser>(StringComparer.Ordinal);
-        public Dictionary<string, bool> Roles = new Dictionary<string, bool>(StringComparer.Ordinal);
+        public Dictionary<string, HashSet<string>> Roles = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+        public bool AnonymousActive;
         public Dictionary<string, string> RoleComments = new Dictionary<string, string>(StringComparer.Ordinal);
 
         // CompileError is what a hardware compile of this project fails
@@ -803,26 +841,49 @@ namespace Tiad.Fake
             {
                 foreach (string r in u.Roles)
                 {
-                    bool on;
-                    if (Roles.TryGetValue(r, out on) && on) return true;
+                    if (HasFullAccess(r)) return true;
                 }
             }
             return false;
         }
 
-        // DropGrants clears every role's Full access: its CPU is gone.
+        public bool HasFullAccess(string role)
+        {
+            HashSet<string> rights;
+            return Roles.TryGetValue(role, out rights) && rights.Contains(FakeAccess.FullAccessId);
+        }
+
+        // FullAccessPassword is the password of user when access control is
+        // on and the user holds Full access, else null.
+        public string FullAccessPassword(string user)
+        {
+            FakeUser u;
+            if (AccessControl != AccessRule.Enabled || !Users.TryGetValue(user, out u)) return null;
+            foreach (string r in u.Roles)
+            {
+                if (HasFullAccess(r)) return u.Password;
+            }
+            return null;
+        }
+
+        // DropGrants clears every role's runtime rights: its CPU is gone.
         public void DropGrants()
         {
-            foreach (string r in new List<string>(Roles.Keys)) Roles[r] = false;
+            foreach (var rights in Roles.Values) rights.Clear();
         }
 
         // CopyAccess copies the access control, users and roles of from.
         public void CopyAccess(FakeProject from)
         {
             AccessControl = from.AccessControl;
+            WebServer = from.WebServer;
+            WebInterface = from.WebInterface;
+            WebHttpsOnly = from.WebHttpsOnly;
             Users = new Dictionary<string, FakeUser>(StringComparer.Ordinal);
-            foreach (var kv in from.Users) Users[kv.Key] = new FakeUser { Password = kv.Value.Password, Comment = kv.Value.Comment, History = new List<string>(kv.Value.History), Roles = new HashSet<string>(kv.Value.Roles) };
-            Roles = new Dictionary<string, bool>(from.Roles, StringComparer.Ordinal);
+            foreach (var kv in from.Users) Users[kv.Key] = new FakeUser { Password = kv.Value.Password, Comment = kv.Value.Comment, History = new List<string>(kv.Value.History), Roles = new HashSet<string>(kv.Value.Roles), Active = kv.Value.Active };
+            Roles = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
+            foreach (var kv in from.Roles) Roles[kv.Key] = new HashSet<string>(kv.Value, StringComparer.Ordinal);
+            AnonymousActive = from.AnonymousActive;
             RoleComments = new Dictionary<string, string>(from.RoleComments, StringComparer.Ordinal);
         }
     }
@@ -834,14 +895,59 @@ namespace Tiad.Fake
         // refuses any of them as a new one (5 by default policy).
         public List<string> History = new List<string>();
         public HashSet<string> Roles = new HashSet<string>(StringComparer.Ordinal);
+        public bool Active = true;
     }
 
     // FakeAccess behaves like TIA's access control and users and roles as
     // the TIA machine showed them: a new CPU has access control on, users
     // are the project's, and a user's password must meet the project's
     // password policy.
+    // FakeWeb is the CPU's web server as TIA keeps it: the server and the
+    // interface's switch.
+    sealed class FakeWeb : IWebServer
+    {
+        readonly FakeProject p;
+
+        public FakeWeb(FakeProject p)
+        {
+            this.p = p;
+        }
+
+        public bool Server()
+        {
+            return p.WebServer;
+        }
+
+        public bool Interface()
+        {
+            return p.WebInterface;
+        }
+
+        public bool HttpsOnly()
+        {
+            return p.WebHttpsOnly;
+        }
+
+        public void Set(bool on)
+        {
+            p.WebServer = on;
+            if (on) p.WebHttpsOnly = true;
+            p.WebInterface = on;
+        }
+    }
+
     sealed class FakeAccess : IAccessControl
     {
+        // FullAccessId and Offered are the runtime rights' identifiers as
+        // the TIA machine listed a FW 3.1 CPU's (2026-11-22), in part.
+        public const string FullAccessId = "ProtectionLevelFullAccess";
+        static readonly string[] Offered =
+        {
+            FullAccessId, "ProtectionLevelReadAccess", "ProtectionLevelHMIAccess",
+            "WebReadTags", "WebWriteTags", "WebChangeOperatingMode", "WebAllowDiagnostics",
+            "WebReadSyslog", "WebReadWatchTables", "WebWriteWatchTables",
+        };
+
         readonly FakeProject p;
         readonly PasswordPolicy policy;
 
@@ -876,13 +982,83 @@ namespace Tiad.Fake
         public void MakeRole(string role, string comment)
         {
             if (p.Roles.ContainsKey(role)) throw new TiaException("A role with the name " + role + " already exists.");
-            p.Roles[role] = false;
+            p.Roles[role] = new HashSet<string>(StringComparer.Ordinal);
             p.RoleComments[role] = comment;
         }
 
         public void GrantFullAccess(string role)
         {
-            p.Roles[role] = true;
+            p.Roles[role].Add(FullAccessId);
+        }
+
+        public List<string> OfferedRights()
+        {
+            return new List<string>(Offered);
+        }
+
+        public List<string> RoleRights(string role)
+        {
+            var l = new List<string>(p.Roles[role]);
+            l.Sort(StringComparer.Ordinal);
+            return l;
+        }
+
+        public void Grant(string role, string right)
+        {
+            if (Array.IndexOf(Offered, right) < 0) throw new TiaException("The device function right " + right + " does not exist.");
+            p.Roles[role].Add(right);
+        }
+
+        public void Revoke(string role, string right)
+        {
+            p.Roles[role].Remove(right);
+        }
+
+        public List<string> UserNames()
+        {
+            return new List<string>(p.Users.Keys);
+        }
+
+        public List<string> RoleNames()
+        {
+            return new List<string>(p.Roles.Keys);
+        }
+
+        public List<string> UserRoles(string user)
+        {
+            return new List<string>(p.Users[user].Roles);
+        }
+
+        public void RemoveRole(string user, string role)
+        {
+            p.Users[user].Roles.Remove(role);
+        }
+
+        public void DeleteUser(string user)
+        {
+            p.Users.Remove(user);
+        }
+
+        public void DeleteRole(string role)
+        {
+            foreach (var u in p.Users.Values) u.Roles.Remove(role);
+            p.Roles.Remove(role);
+            p.RoleComments.Remove(role);
+        }
+
+        public bool UserActive(string user)
+        {
+            return p.Users[user].Active;
+        }
+
+        public void ActivateUser(string user)
+        {
+            p.Users[user].Active = true;
+        }
+
+        public bool AnonymousActive()
+        {
+            return p.AnonymousActive;
         }
 
         public bool HasUser(string user)
@@ -925,10 +1101,9 @@ namespace Tiad.Fake
         public string Check(string user, string role)
         {
             FakeUser u;
-            bool on;
             if (!p.Users.TryGetValue(user, out u)) return "the user " + Json.Quote(user) + " is not in the project";
             if (!u.Roles.Contains(role)) return "the user " + Json.Quote(user) + " lacks the role " + Json.Quote(role);
-            if (!p.Roles.TryGetValue(role, out on) || !on) return "the role " + Json.Quote(role) + " lacks the runtime right Full access on the CPU";
+            if (!p.HasFullAccess(role)) return "the role " + Json.Quote(role) + " lacks the runtime right Full access on the CPU";
             return null;
         }
     }
@@ -971,6 +1146,8 @@ namespace Tiad.Fake
             p.Protection = ConfigProtection.Absent;
             p.ProtectedWith = "";
             p.AccessControl = AccessRule.Absent;
+            p.WebServer = false;
+            p.WebInterface = false;
             p.DropGrants();
         }
     }
@@ -989,6 +1166,10 @@ namespace Tiad.Fake
         public readonly Dictionary<string, FakeProject> Saved = new Dictionary<string, FakeProject>(StringComparer.OrdinalIgnoreCase);
         public readonly Dictionary<string, int> Loads = new Dictionary<string, int>(StringComparer.Ordinal);
         public readonly Dictionary<string, int> HardwareLoads = new Dictionary<string, int>(StringComparer.Ordinal);
+        // Logins is the password of the user "nautilus" on each CPU whose
+        // access control a hardware load turned on, as that load left it:
+        // going online to such a CPU asks credentials (FakeTia.AskLogin).
+        public readonly Dictionary<string, string> Logins = new Dictionary<string, string>(StringComparer.Ordinal);
     }
 
     sealed class FakeTia : ITia
@@ -1014,6 +1195,7 @@ namespace Tiad.Fake
         bool tlsTrusted;
         readonly Dictionary<string, int> loads;
         readonly Dictionary<string, int> hardwareLoads;
+        readonly Dictionary<string, string> logins;
 
         public bool Gone
         {
@@ -1029,6 +1211,7 @@ namespace Tiad.Fake
             saved = world.Saved;
             loads = world.Loads;
             hardwareLoads = world.HardwareLoads;
+            logins = world.Logins;
             script.Enter("start");
         }
 
@@ -1163,7 +1346,9 @@ namespace Tiad.Fake
             p.Changed = true;
             p.Station = null;
             ProtectionSteps.Run(new FakeMasterSecret(p), next.Cpu.ConfigurationProtection, secrets.ConfigurationPassword, notes);
-            AccessSteps.Run(new FakeAccess(p, script.Policy), next.Cpu.AccessControl, secrets.FullAccessPassword, secrets.Records, decision == CpuReuse.Create, made, notes);
+            var access = new FakeAccess(p, script.Policy);
+            AccessSteps.Run(access, next.Cpu.AccessControl, secrets.FullAccessPassword, secrets.Records, decision == CpuReuse.Create, made, notes);
+            WebSteps.Run(new FakeWeb(p), access, next.WebServer, secrets, decision == CpuReuse.Create, made, notes);
             p.Station = next;
             p.Changed = was || CpuReuse.Changes(decision, prev, next).Count > 0;
         }
@@ -1177,22 +1362,23 @@ namespace Tiad.Fake
         public void PrepareAccess(object project, Station next, Secrets secrets, bool recordOnly, AccessWrites w, List<string> notes)
         {
             script.Enter("PrepareAccess");
-            AccessSteps.Prepare(new FakeAccess((FakeProject)project, script.Policy), next.Cpu.AccessControl, secrets.FullAccessPassword, secrets.Records, recordOnly, w, notes);
+            var p = (FakeProject)project;
+            try
+            {
+                AccessSteps.PrepareAll(new FakeAccess(p, script.Policy), next, secrets, recordOnly, w, notes);
+            }
+            finally
+            {
+                // A password set or recorded is a change the CPU does not
+                // hold, refused later or not.
+                if (w.Wrote) p.Changed = true;
+            }
         }
 
         public List<string> RemoveAccess(object project, AccessMade made)
         {
             script.Enter("RemoveAccess");
-            var p = (FakeProject)project;
-            var removed = new List<string>();
-            if (made.User && p.Users.Remove(AccessSteps.UserName)) removed.Add("user " + Json.Quote(AccessSteps.UserName));
-            if (made.Role && p.Roles.Remove(AccessSteps.RoleName))
-            {
-                p.RoleComments.Remove(AccessSteps.RoleName);
-                foreach (var u in p.Users.Values) u.Roles.Remove(AccessSteps.RoleName);
-                removed.Add("role " + Json.Quote(AccessSteps.RoleName));
-            }
-            return removed;
+            return AccessSteps.Remove(new FakeAccess((FakeProject)project, script.Policy), made);
         }
 
         public string CannotApply(Station next)
@@ -1254,7 +1440,7 @@ namespace Tiad.Fake
         }
 
         public DownloadOutcome Download(object project, string address, bool hardware, bool software,
-            Secrets secrets, bool? startAfter, Func<Question, Answer> answer)
+            Secrets secrets, bool? startAfter, Func<Question, Answer> answer, OnlineLogin login)
         {
             script.Enter("Download");
             var p = (FakeProject)project;
@@ -1319,10 +1505,14 @@ namespace Tiad.Fake
             // As tiad.Openness runs it: through DownloadSteps, the decider
             // answering TIA's pre-download callback once per check, in
             // order, as TIA calls it (#789 S2b: one at a time, no list).
+            var use = new LoginUse(login, "download", address);
+            var refusedOnline = new List<string>();
             DownloadOutcome outcome = DownloadSteps.Run(decider, address,
                 delegate { },
                 delegate
                 {
+                    // Going online for the download asks credentials first.
+                    AskLogin(address, use, refusedOnline);
                     bool stopped = false;
                     try
                     {
@@ -1382,7 +1572,15 @@ namespace Tiad.Fake
                     rec["state"] = state;
                     script.Loaded(rec);
                     loads[address] = Count(loads, address) + 1;
-                    if (hardware) hardwareLoads[address] = Count(hardwareLoads, address) + 1;
+                    if (hardware)
+                    {
+                        hardwareLoads[address] = Count(hardwareLoads, address) + 1;
+                        // A hardware load sets the CPU's access control and
+                        // users as the project holds them.
+                        string pw = p.FullAccessPassword(AccessSteps.UserName);
+                        if (pw != null) logins[address] = pw;
+                        else logins.Remove(address);
+                    }
                     loaded[address] = p;
                     // The archive this load was archived as, once: a later
                     // load without one (a dry run TIA ran) holds none.
@@ -1392,7 +1590,8 @@ namespace Tiad.Fake
                     return new DownloadCall { State = resultState, MessageList = said, Messages = string.Join("; ", said.ToArray()), Cpu = cpu };
                 },
                 delegate { },
-                delegate { return new List<string>(); });
+                delegate { return refusedOnline; },
+                delegate { return use.Answered; });
             return outcome;
         }
 
@@ -1442,9 +1641,10 @@ namespace Tiad.Fake
         // not hold the project reports the CPU's own element as different.
         // The fake labels blocks with the agent's own TiaNames.BlockLabel,
         // so it cannot prove TIA's labels: only the bench can.
-        public OnlineCompare Compare(object project, string address)
+        public OnlineCompare Compare(object project, string address, OnlineLogin login)
         {
             script.Enter("Compare");
+            AskLogin(address, new LoginUse(login, "compare", address), new List<string>());
             var p = (FakeProject)project;
             string cpu = p.Station == null ? "" : p.Station.Cpu.Name;
             List<ProjectBlock> blocks = ProjectBlocks(p);
@@ -1557,12 +1757,14 @@ namespace Tiad.Fake
             return outp;
         }
 
-        public List<string> Upload(object project, string address, bool trustUnverifiedCertificate)
+        public List<string> Upload(object project, string address, bool trustUnverifiedCertificate, OnlineLogin login)
         {
             script.Enter("Upload");
             var trusted = new List<string>();
+            var use = new LoginUse(login, "upload", address);
             // As tiad.Openness answers TIA's TLS question going online.
-            if (script.UploadAsksTls) AskTls(address, trustUnverifiedCertificate, trusted);
+            if (script.UploadAsksTls) AskTls(address, trustUnverifiedCertificate, trusted, use);
+            AskLogin(address, use, new List<string>());
             var up = (FakeProject)project;
             up.Changed = true;
             // The bench CPU's setting, as the S2a upload found it, and its
@@ -1570,6 +1772,10 @@ namespace Tiad.Fake
             up.Protection = ConfigProtection.None;
             up.ProtectedWith = "";
             up.AccessControl = script.UploadAccessControl;
+            up.WebServer = script.UploadWebServer;
+            up.WebInterface = script.UploadWebServer;
+            up.WebHttpsOnly = false;
+            up.AnonymousActive = script.UploadAnonymous;
             up.DropGrants();
             DeviceIdentity d = script.Device;
             up.Cpu = new ProjectCpu { Name = UploadedCpuName, Order = d.Order, Firmware = d.Firmware };
@@ -1616,7 +1822,7 @@ namespace Tiad.Fake
         // AskTls asks TLS trust as TIA does going online to a CPU whose
         // certificate it does not know, unless this instance trusted one
         // already, and answers as tiad.Openness does.
-        void AskTls(string address, bool trustUnverifiedCertificate, List<string> trusted)
+        void AskTls(string address, bool trustUnverifiedCertificate, List<string> trusted, LoginUse use)
         {
             if (tlsTrusted) return;
             const string type = "TlsVerificationConfiguration";
@@ -1627,6 +1833,46 @@ namespace Tiad.Fake
             }
             tlsTrusted = true;
             trusted.Add(ask);
+            use.Trusted();
+        }
+
+        // AskLogin asks credentials as TIA does going online to a CPU whose
+        // access control a hardware load turned on (logins), and answers
+        // as tiad.Openness does:
+        // through OnlineRecord and the operation's LoginUse (core), over a
+        // secure connection that offers project users. A wrong password is
+        // asked again, as TIA does when a CPU refuses it; tiad refuses the
+        // second ask. Refusals are added to refused, and fail the call.
+        void AskLogin(string address, LoginUse use, List<string> refused)
+        {
+            string want;
+            if (!logins.TryGetValue(address, out want)) return;
+            var rec = new OnlineRecord { Use = use };
+            var offered = new List<string> { "AnonymousUser", LoginUse.ProjectUser };
+            for (int i = 0; i < 2; i++)
+            {
+                string wrote = null;
+                try
+                {
+                    rec.Handle(delegate { return OnlineChecks.Authentication; }, delegate(string type, OnlineRecord.Call call)
+                    {
+                        if (OnlineChecks.Answer(type) != OnlineChecks.Login) throw new TiaException("the fake asks only a project user's legitimation");
+                        use.Answer(call, type, true, offered, delegate(string pw) { wrote = pw; });
+                    });
+                }
+                catch (OperationCanceledException)
+                {
+                    // Boundary.Fail's cancel, which TIA gets: it fails the
+                    // connection.
+                }
+                if (rec.Asked.Count > 0)
+                {
+                    refused.AddRange(rec.Asked);
+                    throw new TiaException(TiaNames.OnlineRefused(address, rec.Asked, "Online connection failed."));
+                }
+                if (wrote == want) return;
+            }
+            throw new TiaException("the fake asked credentials twice and tiad answered both");
         }
 
         static int Count(Dictionary<string, int> d, string address)
@@ -1639,7 +1885,7 @@ namespace Tiad.Fake
         // eight identifiers, with synthetic values that change as TIA's do
         // (#789 stage (C)): DownloadId and the change counters on every
         // load, Hardware on a hardware load.
-        public FingerprintRead ReadFingerprint(object project, string address, bool trustUnverifiedCertificate)
+        public FingerprintRead ReadFingerprint(object project, string address, bool trustUnverifiedCertificate, OnlineLogin login)
         {
             script.Enter("ReadFingerprint");
             var p = (FakeProject)project;
@@ -1651,7 +1897,13 @@ namespace Tiad.Fake
                 throw new TiaException("fingerprint read: the project's CPU is at " + at + ", not " + address);
             }
             var r = new FingerprintRead();
-            if (script.FingerprintAsksTls) AskTls(address, trustUnverifiedCertificate, r.TrustedBlindly);
+            var use = new LoginUse(login, "fingerprint read", address);
+            // Going online first (the project's connection, which asks
+            // credentials), then TIA's fingerprint service, which asks TLS
+            // trust. Whether the service asks credentials of its own is for
+            // the bench to show; the fake's does not.
+            AskLogin(address, use, new List<string>());
+            if (script.FingerprintAsksTls) AskTls(address, trustUnverifiedCertificate, r.TrustedBlindly, use);
             if (script.FingerprintNoItems) return r;
             List<KeyValuePair<string, string>> scripted = script.FingerprintItems;
             if (scripted.Count > 0)
@@ -1714,6 +1966,8 @@ namespace Tiad.Fake
             o["blocks"] = blocks;
             o["protection"] = p.Protection;
             o["accessControl"] = p.AccessControl;
+            o["webServer"] = p.WebServer;
+            o["webInterface"] = p.WebInterface;
             File.WriteAllText(f, Json.Write(o));
             return f;
         }
@@ -1773,6 +2027,10 @@ namespace Tiad.Fake
             }
             p.Protection = (string)o["protection"];
             p.AccessControl = (string)o["accessControl"];
+            // An archive made before the fake kept the web server holds
+            // none: off.
+            p.WebServer = o.ContainsKey("webServer") && (bool)o["webServer"];
+            p.WebInterface = o.ContainsKey("webInterface") && (bool)o["webInterface"];
             return p;
         }
 

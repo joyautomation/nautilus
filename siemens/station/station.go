@@ -52,7 +52,9 @@ type CPU struct {
 	AccessControl string `yaml:"access-control"`
 }
 
-// WebServer turns on the CPU's web server. Passwords are never here.
+// WebServer turns on the CPU's web server, or (enabled false) turns it off;
+// left out, a kept CPU's stays as found. tiad turns it on only over access
+// control on. Passwords are never here.
 type WebServer struct {
 	Enabled bool      `yaml:"enabled"`
 	Users   []WebUser `yaml:"users"`
@@ -149,15 +151,21 @@ func (s Station) Problems() []Problem {
 	}
 
 	if w := s.WebServer; w != nil {
+		if !w.Enabled && len(w.Users) > 0 {
+			bad("web-server.users", "is set and web-server.enabled is false: a web server that is off has no users")
+		}
+		// TIA's user names may ignore case: so do duplicates.
 		seen := map[string]bool{}
 		for i, u := range w.Users {
 			at := fmt.Sprintf("web-server.users[%d]", i)
 			if u.Name == "" {
 				bad(at+".name", "is empty")
-			} else if seen[u.Name] {
-				bad(at+".name", "%q twice", u.Name)
+			} else if err := CheckWebUserName(u.Name); err != nil {
+				bad(at+".name", "%v", err)
+			} else if seen[strings.ToLower(u.Name)] {
+				bad(at+".name", "%q twice (names are compared ignoring case)", u.Name)
 			}
-			seen[u.Name] = true
+			seen[strings.ToLower(u.Name)] = true
 			for _, r := range u.Rights {
 				if !KnownRights[r] {
 					bad(at+".rights", "unknown right %q (one of read, write, mode, diagnostics)", r)
@@ -252,6 +260,30 @@ func starts(bad func(string, string, ...any), at string, in, out *int) {
 	if out != nil && *out < 0 {
 		bad(at+".output-start", "%d is negative", *out)
 	}
+}
+
+// MaxWebUserName is the longest web user name.
+const MaxWebUserName = 32
+
+// CheckWebUserName applies the web user name rule: 1 to 32 ASCII letters,
+// digits, '_', '-' and '.', starting with a letter (narrower than TIA's,
+// so TIA never refuses one part-way through an apply), and never a name
+// tiad or TIA keeps for itself, in any case: "nautilus" (tiad's Full
+// access user) or "Anonymous" (TIA's anonymous user).
+func CheckWebUserName(n string) error {
+	letter := func(r byte) bool { return r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' }
+	ok := len(n) >= 1 && len(n) <= MaxWebUserName && letter(n[0])
+	for i := 0; ok && i < len(n); i++ {
+		r := n[i]
+		ok = letter(r) || r >= '0' && r <= '9' || r == '_' || r == '-' || r == '.'
+	}
+	if !ok {
+		return fmt.Errorf("%q: a web user name is 1 to 32 characters: letters, digits, '_', '-' and '.', starting with a letter", n)
+	}
+	if strings.EqualFold(n, "nautilus") || strings.EqualFold(n, "Anonymous") {
+		return fmt.Errorf(`%q is reserved (tiad's Full access user is "nautilus", TIA's anonymous user is "Anonymous")`, n)
+	}
+	return nil
 }
 
 // KnownRights are the web server rights a user may hold.
