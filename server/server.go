@@ -429,6 +429,10 @@ type Options struct {
 	// Push turns Web Push on (#722); nil leaves /api/push/* answering 404.
 	Push *PushOptions
 
+	// Mounts are groups of controller-only routes (mount.go), added after the
+	// core routes. cmd/naut lists them; the browser playground lists none.
+	Mounts []Mount
+
 	// Notes is the operator notes and shift log (#720) of a controller on
 	// its own: a file. NotesLog, on a redundant pair, is the replicated
 	// log's index and takes its place. Neither: /api/notes answers 404.
@@ -595,10 +599,11 @@ type Server struct {
 	historian   string
 	historyFn   func() *ProgramHistory
 	sourcesAt   func(sha string) (map[string]string, error)
-	paramWB     *ParamWriteBack  // parameter write-back (#718); nil: off
-	push        *pushService     // Web Push subscriptions (push.go); nil: off
-	notes       *notes.Store     // operator notes, standing alone (notes.go)
-	notesLog    *NotesLog        // a pair's notes (notes.go)
+	paramWB     *ParamWriteBack // parameter write-back (#718); nil: off
+	push        *pushService    // Web Push subscriptions (push.go); nil: off
+	notes       *notes.Store    // operator notes, standing alone (notes.go)
+	notesLog    *NotesLog       // a pair's notes (notes.go)
+	mounts      []Mount
 	noteClock   func() time.Time // tests
 	pushKey     string           // its VAPID public key
 	io          *IOHook          // live I/O configuration (ioconfig.go); nil: none
@@ -753,6 +758,7 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 		s.ackLinks, s.ackURL, s.ackLinkSignIn = opts[0].AckLinks, opts[0].AckURL, opts[0].AckLinkSignIn
 		s.inbound = opts[0].Inbound
 		s.notes, s.notesLog = opts[0].Notes, opts[0].NotesLog
+		s.mounts = opts[0].Mounts
 	}
 	var rec audit.Recorder
 	var unavailable error
@@ -1038,6 +1044,9 @@ func (s *Server) Handler() http.Handler {
 	} else {
 		mux.HandleFunc("GET /assets/", handleAsset)
 		mux.HandleFunc("GET /", s.handleIndex)
+	}
+	for _, m := range s.mounts {
+		m(s, mux)
 	}
 	return s.GuardHost(s.withCORS(s.proxyStandby(mux, apiNotFound(mux))))
 }
