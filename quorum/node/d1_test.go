@@ -46,7 +46,7 @@ func (c *cluster) startOldBoxOn(id quorum.NodeID, rt http.RoundTripper) *Elector
 	c.t.Helper()
 	peer := c.other(id)
 	e, err := New(Options{Cluster: c.pair, Self: id, Peer: peer, PeerAddr: c.addr[peer], WitnessAddr: c.addr[WitnessID],
-		Lease: loopLease, StatePath: c.ctl[id].state + ".old", Token: c.tok[id], ClientToken: c.ctok[id],
+		Lease: loopLease, StatePath: c.ctl[id].state + ".old", Token: c.tok[id], ClientToken: c.ctok[id], TLS: c.clientTLS(id),
 		client: &http.Client{Transport: rt}})
 	if err != nil {
 		c.t.Fatal(err)

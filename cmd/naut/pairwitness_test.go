@@ -30,13 +30,13 @@ func (r *pairRig) cluster() string { return r.env["a"]["NAUTILUS_CLUSTER"] }
 // witnessLog sends one request to the witness's copy of the pair's log.
 func (r *pairRig) witnessLog(method, path, body string) (int, string) {
 	r.t.Helper()
-	req, err := http.NewRequest(method, "http://"+r.wit+node.Prefix+r.cluster()+"/log"+path, strings.NewReader(body))
+	req, err := http.NewRequest(method, r.peerScheme()+r.wit+node.Prefix+r.cluster()+"/log"+path, strings.NewReader(body))
 	if err != nil {
 		r.t.Fatal(err)
 	}
 	req.Header.Set(node.TokenHeader, r.token)
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := r.peerHTTP().Do(req)
 	if err != nil {
 		return 0, err.Error()
 	}
@@ -117,9 +117,9 @@ func TestPairWitnessLogAdmitsOnlyItsGrantedLeader(t *testing.T) {
 		t.Errorf("a propose to the witness's copy: %d %s, want 409", code, body)
 	}
 	// A cluster the witness has never voted for has no log there.
-	req, _ := http.NewRequest("GET", "http://"+r.wit+node.Prefix+node.NewClusterID()+"/log/api/quorum", nil)
+	req, _ := http.NewRequest("GET", "https://"+r.wit+node.Prefix+node.NewClusterID()+"/log/api/quorum", nil)
 	req.Header.Set(node.TokenHeader, r.token)
-	if resp, err := http.DefaultClient.Do(req); err != nil || resp.StatusCode != http.StatusNotFound {
+	if resp, err := peerClient(t, r.token).Do(req); err != nil || resp.StatusCode != http.StatusNotFound {
 		t.Errorf("an unbound cluster's log: %v %v, want 404", resp, err)
 	} else {
 		resp.Body.Close()

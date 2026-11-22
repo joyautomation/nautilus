@@ -498,6 +498,13 @@ type RedundancyConfig struct {
 	// gate closes. Optional for clients (they follow public-urls and the
 	// OPC UA ServiceLevel); a PROFINET device will need it. Pair only.
 	FloatingIP *FloatingIPConfig `yaml:"floating-ip"`
+	// PeerTLS is the pair's peer TLS (#710): on (the default, "" too) or
+	// off. On, every call on a peer port runs TLS 1.3, both ends keyed by
+	// the peer token. Off is for a lab bench: votes, the operator-intent
+	// log and the peer token cross the network in the clear, and the pair
+	// says so at every start and on /api/cluster. The witness takes the
+	// same setting as `naut witness --peer-tls`.
+	PeerTLS string `yaml:"peer-tls"`
 }
 
 // FloatingIPConfig is redundancy.floating-ip. The process needs
@@ -591,6 +598,8 @@ func checkRedundancy(r *RedundancyConfig) error {
 			return errors.New("redundancy.public-urls applies to a redundant pair (peers:): the pair's controllers as a browser reaches them")
 		case r.FloatingIP != nil:
 			return errors.New("redundancy.floating-ip applies to a redundant pair (peers:): the address the leader holds")
+		case r.PeerTLS != "":
+			return errors.New("redundancy.peer-tls applies to a redundant pair (peers:): the TLS of its controllers' and witness's peer ports")
 		}
 		return nil
 	}
@@ -609,6 +618,11 @@ func checkRedundancy(r *RedundancyConfig) error {
 	}
 	if r.Peers["a"] == r.Peers["b"] {
 		return fmt.Errorf("redundancy.peers: a and b are both %s: each controller has its own peer listener", r.Peers["a"])
+	}
+	switch r.PeerTLS {
+	case "", "on", "off":
+	default:
+		return fmt.Errorf("redundancy.peer-tls %q: want on (the default) or off (a lab bench only: peer traffic in the clear)", r.PeerTLS)
 	}
 	if r.Witness == "" {
 		return errors.New("redundancy.witness is required with peers:: the pair's third voter (host:port of `naut witness`)")
