@@ -225,6 +225,8 @@ export interface MimicEquipment {
 	 * with <EquipmentPanel> (see panelFor()). Equipment with no panel isn't
 	 * clickable there. */
 	panel?: MimicPanel | string;
+	/** The plant model equipment (plant.yaml) this piece draws: the drawing keeps the layout, the plant the identity (#714). */
+	plant?: string;
 	/** Set by expandUnits({ mark: true }) on a unit's copies: "<unit id>#<value>". Never written to a file. */
 	fromUnit?: string;
 }

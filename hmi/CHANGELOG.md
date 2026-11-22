@@ -4,6 +4,12 @@
 
 ### Added
 
+- **The plant model feeds the asset pages** (#714 slice 2): `plant.yaml` (areas, equipment with a tag or a
+  `devices:` row and an asset type, flows) names every piece of the plant once, and `naut hmi build` writes an
+  asset page for each, grouped by area on `/assets`. A mimic's equipment may carry `plant: <id>` (the drawing
+  keeps the layout, the plant the identity) and then makes no page of its own. `AssetDescriptor` gains `area`;
+  new `assetGroups`; an asset's alarms match its id too; `MimicEquipment` gains `plant`.
+
 - **`<AssetPage {asset}/>`: one page for one piece of equipment** (#714): live values with a trend of the
   chosen ones, settings and commands (greyed by the signed-in role), the equipment's alarms (by their
   `equipment:` key) with an out-of-service badge and their history, the equipment's notes, the audit of

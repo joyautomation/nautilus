@@ -18,8 +18,10 @@ export interface AssetDescriptor {
 	title?: string;
 	/** A line under it (the device or type, the area). */
 	subtitle?: string;
-	/** The equipment key its alarms carry (`equipment:` on an alarm). Default: the id. */
+	/** The equipment key its alarms carry (`equipment:` on an alarm). Default: the id; the id matches too. */
 	equipment?: string;
+	/** The area it is in (the plant model's): the index groups by it. */
+	area?: string;
 	/** Readings, setpoints, commands and toggles, as the equipment panel has them. */
 	panel: MimicPanel;
 	/** Tags to trend together. Default: the first few numeric readings. */
@@ -73,10 +75,10 @@ const key = (s: string) => s.trim().toLowerCase();
 
 /** The alarms of this equipment, suppressed ones too (they carry why), worst first. */
 export function assetAlarms(instances: AlarmInstance[], a: AssetDescriptor): AlarmInstance[] {
-	const eq = key(a.equipment ?? a.id);
+	const keys = new Set([key(a.equipment ?? a.id), key(a.id)]);
 	const order = ['critical', 'high', 'medium', 'low', 'diagnostic'];
 	return instances
-		.filter((i) => key(i.equipment ?? '') === eq)
+		.filter((i) => keys.has(key(i.equipment ?? '')))
 		.sort((x, y) => order.indexOf(x.priority) - order.indexOf(y.priority) || x.name.localeCompare(y.name));
 }
 
@@ -127,4 +129,16 @@ export function tagValue(tags: Record<string, unknown>, path: string): unknown {
 /** Whether the frame carries the tag or the member at all. */
 export function hasTag(tags: Record<string, unknown>, path: string): boolean {
 	return tagValue(tags, path) !== undefined;
+}
+
+/** The assets by area, areas in the order first seen and the unplaced last; each group in the order given. */
+export function assetGroups(list: AssetDescriptor[]): { area: string; assets: AssetDescriptor[] }[] {
+	const groups = new Map<string, AssetDescriptor[]>();
+	for (const a of list) {
+		const k = a.area ?? '';
+		groups.set(k, [...(groups.get(k) ?? []), a]);
+	}
+	const named = [...groups].filter(([k]) => k !== '');
+	const none = groups.get('');
+	return [...named, ...(none ? ([['', none]] as [string, AssetDescriptor[]][]) : [])].map(([area, assets]) => ({ area, assets }));
 }

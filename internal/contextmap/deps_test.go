@@ -135,6 +135,11 @@ func rules(u universe) []rule {
 			why:  "the device profile format is a published language: the manifest, virtual devices and the CLI read it, and it reads none of them",
 		},
 		{
+			from: []string{"internal/plant"},
+			to:   u.allBut(),
+			why:  "the plant model is a published language like the profile format: the manifest, the HMI build and the CLI read it, and it reads none of them (a row's tag or device is resolved by the manifest)",
+		},
+		{
 			from: []string{"iolink/iodd"},
 			to:   u.allBut(),
 			why:  "the IODD model and process data codec are a published language like the profile format: the device library, the IO-Link adapter and the CLI read it, and it reads none of them",
@@ -341,7 +346,6 @@ var (
 		module + "/quorum/node",      // redundancy: only leader's election needs it
 		module + "/alarm/channel",    // paging channels (net/smtp)
 		"net/smtp",                   // ... and its standard-library half
-		module + "/internal/floatip", // OS networking for the floating IP
 		module + "/internal/webpush", // push delivery
 		module + "/auth/users",       // the user store (argon2, blake2b)
 		"golang.org/x/crypto/argon2",
@@ -350,14 +354,13 @@ var (
 		"html/template",
 		"github.com/lib/pq", // the Postgres driver
 		"database/sql",
-		"image/png", // hmibuild's PWA icons
+		"image/png", // hmibuild's PWA icons (cut: pwa_icons.go is !js)
 	}
 	// wasmLeaks: today's leaks and who removes them. Keep it shrinking.
 	wasmLeaks = map[string]string{
 		module + "/quorum/node":       "leader/election.go (redundancy split)",
 		module + "/alarm/channel":     "internal/project/{project,alarms}.go (alarm seam)",
 		"net/smtp":                    "via alarm/channel",
-		module + "/internal/floatip":  "internal/project/project.go (floating_ip parse)",
 		module + "/internal/webpush":  "server/push.go (server seams)",
 		module + "/auth/users":        "server/{authorize,signin,server}.go (server seams)",
 		"golang.org/x/crypto/argon2":  "via auth/users",
@@ -366,7 +369,6 @@ var (
 		"html/template":               "server (server seams)",
 		"github.com/lib/pq":           "alarm (alarm seam)",
 		"database/sql":                "via lib/pq",
-		"image/png":                   "internal/hmibuild (PWA icons)",
 	}
 )
 
