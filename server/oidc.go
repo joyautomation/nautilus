@@ -536,7 +536,7 @@ func cleanCode(code string) string {
 	return b.String()
 }
 
-// oidcHopTemplate is the callback's answer: a page of this origin that
+// oidcHopPageHTML is the callback's answer: a page of this origin that
 // moves the browser on (a same-site navigation, which carries the session
 // cookie), without script.
 const oidcHopPageHTML = `<!doctype html>

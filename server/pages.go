@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 )
 
 // The four HTML pages a controller sends a browser to (sign-in, the OIDC
@@ -34,8 +35,22 @@ type pageSet interface {
 	render(w io.Writer, p pageName, data any) error
 }
 
-// htmlPages is the controller's pageSet: the templates parsed once, at New.
+// htmlPages is the controller's pageSet: the templates, parsed once per
+// process by the first New (controllerPages).
 type htmlPages [pageCount]*template.Template
+
+// Not sync.OnceValue(newHTMLPages) in a package-level var: that runs at
+// package init, which every binary links, and would pull the template
+// engine back into the playground. Only New calls controllerPages.
+var (
+	pagesOnce   sync.Once
+	pagesParsed *htmlPages
+)
+
+func controllerPages() *htmlPages {
+	pagesOnce.Do(func() { pagesParsed = newHTMLPages() })
+	return pagesParsed
+}
 
 func newHTMLPages() *htmlPages {
 	return &htmlPages{

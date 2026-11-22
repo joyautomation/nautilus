@@ -55,10 +55,20 @@ func TestWasmLinksNoTemplateEngine(t *testing.T) {
 	if len(names) < 1000 {
 		t.Fatalf("only %d function names: not the name section this test expects", len(names))
 	}
+	// The name section spells a package path with _ for /
+	// (html_template.init). server imports html/template, so its
+	// initialiser is always there: if it is not found, the spelling has
+	// changed and the checks below would pass without matching anything.
+	sentinel := false
+	for _, f := range names {
+		sentinel = sentinel || f == "html_template.init"
+	}
+	if !sentinel {
+		t.Fatal("no html_template.init in the wasm's names: the name section's spelling changed; fix the matching below")
+	}
 	for _, pkg := range wasmUnlinked {
-		// The name section spells a package path with _ for /
-		// (text_template.(*state).walk). A package's initialisers are
-		// linked whenever it is imported, and are not the engine.
+		// A package's initialisers are linked whenever it is imported,
+		// and are not the engine.
 		prefix := strings.ReplaceAll(pkg, "/", "_")
 		n, first := 0, ""
 		for _, f := range names {
