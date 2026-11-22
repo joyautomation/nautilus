@@ -57,6 +57,65 @@ func (s DeploySource) Validate() error {
 	return nil
 }
 
+// OutsideChanges is the operator's accept of a download onto a CPU whose
+// deploy record says it was changed outside nautilus, or cannot say: By
+// is who accepts, Verdict what the caller's check of the last deploy
+// found (OutsideDifferent, OutsideBroken or OutsideUnreadable), Deploy
+// that record's id ("" only for OutsideUnreadable, which found none to
+// verify). The agent checks only its shape and journals it with the
+// deploy, as the caller's claim, so an overwrite of someone's change is
+// on the record (#789).
+type OutsideChanges struct {
+	By      string `json:"by"`
+	Verdict string `json:"verdict"`
+	Deploy  string `json:"deploy,omitempty"`
+}
+
+// OutsideChanges.Verdict's words.
+const (
+	// OutsideDifferent: the CPU compared different from the last deploy
+	// that may have loaded it.
+	OutsideDifferent = "different"
+	// OutsideBroken: that deploy's archive is broken, so nothing says
+	// what the CPU runs.
+	OutsideBroken = "broken"
+	// OutsideUnreadable: journal lines the agent cannot read may hide a
+	// newer deploy.
+	OutsideUnreadable = "unreadable"
+)
+
+// MaxOutsideBy and MaxOutsideDeploy bound OutsideChanges, in bytes.
+const (
+	MaxOutsideBy     = 200
+	MaxOutsideDeploy = 100
+)
+
+// Validate is the agent's OutsideChanges.Validate.
+func (o OutsideChanges) Validate() error {
+	switch {
+	case strings.TrimSpace(o.By) == "":
+		return errors.New("outsideChanges.by is empty: who accepts replacing the CPU's outside change")
+	case len(o.By) > MaxOutsideBy:
+		return fmt.Errorf("outsideChanges.by is longer than %d bytes", MaxOutsideBy)
+	case o.Verdict != OutsideDifferent && o.Verdict != OutsideBroken && o.Verdict != OutsideUnreadable:
+		return errors.New("outsideChanges.verdict is not one of different, broken, unreadable")
+	case len(o.Deploy) > MaxOutsideDeploy:
+		return fmt.Errorf("outsideChanges.deploy is longer than %d bytes", MaxOutsideDeploy)
+	case o.Deploy == "" && o.Verdict != OutsideUnreadable:
+		return errors.New("outsideChanges.deploy is empty: name the deploy record whose verify found " + o.Verdict)
+	}
+	return nil
+}
+
+// OutsideChangesRecord is an accept as the agent journalled it: ClaimedBy
+// is always "caller".
+type OutsideChangesRecord struct {
+	By        string `json:"by"`
+	Verdict   string `json:"verdict"`
+	Deploy    string `json:"deploy,omitempty"`
+	ClaimedBy string `json:"claimedBy"`
+}
+
 // DeploySourceRecord is a source as the agent recorded it: ClaimedBy is
 // always "caller", since the agent checked only its shape.
 type DeploySourceRecord struct {
@@ -91,6 +150,9 @@ type DeployResult struct {
 	ID      string              `json:"id"`
 	Archive DeployArchive       `json:"archive"`
 	Source  *DeploySourceRecord `json:"source"`
+	// OutsideChanges is the request's accept of an outside change, as
+	// journalled; nil without one.
+	OutsideChanges *OutsideChangesRecord `json:"outsideChanges,omitempty"`
 	// Fingerprint is the read after the load, or nil with
 	// FingerprintError saying why: a failed read leaves the load as it
 	// is. DownloadID is its DownloadId item.
@@ -166,21 +228,24 @@ type DeployOutcome struct {
 // when the agent wrote none). Status is the outcome's, or DeployInDoubt
 // without one.
 type Deploy struct {
-	ID          string              `json:"id"`
-	At          string              `json:"at"`
-	Session     string              `json:"session"`
-	Project     string              `json:"project"`
-	Address     string              `json:"address"`
-	Hardware    bool                `json:"hardware"`
-	Software    bool                `json:"software"`
-	Source      *DeploySourceRecord `json:"source"`
-	TIA         DeployTIA           `json:"tia"`
-	Archive     DeployArchive       `json:"archive"`
-	Attestation *AttestationRecord  `json:"attestation"`
-	KeptDevices []KeptDevice        `json:"keptDevices"`
-	BlindTrust  *BlindTrust         `json:"blindTrust"`
-	Outcome     *DeployOutcome      `json:"outcome"`
-	Status      string              `json:"status"`
+	ID       string              `json:"id"`
+	At       string              `json:"at"`
+	Session  string              `json:"session"`
+	Project  string              `json:"project"`
+	Address  string              `json:"address"`
+	Hardware bool                `json:"hardware"`
+	Software bool                `json:"software"`
+	Source   *DeploySourceRecord `json:"source"`
+	// OutsideChanges is the download's accept of an outside change; nil
+	// without one.
+	OutsideChanges *OutsideChangesRecord `json:"outsideChanges,omitempty"`
+	TIA            DeployTIA             `json:"tia"`
+	Archive        DeployArchive         `json:"archive"`
+	Attestation    *AttestationRecord    `json:"attestation"`
+	KeptDevices    []KeptDevice          `json:"keptDevices"`
+	BlindTrust     *BlindTrust           `json:"blindTrust"`
+	Outcome        *DeployOutcome        `json:"outcome"`
+	Status         string                `json:"status"`
 }
 
 // DeployList is GET /v1/deploys: the records, newest first, and how many

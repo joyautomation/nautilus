@@ -127,6 +127,8 @@ type Fake struct {
 	loadedArchive map[string]string
 	archiveFails  string
 	archiveN      int
+	// unreadableLines is what the deploy list reports (SetUnreadableLines).
+	unreadableLines int
 
 	mu        sync.Mutex
 	pins      map[string]tiad.DeviceIdentity // CPU address → device pin

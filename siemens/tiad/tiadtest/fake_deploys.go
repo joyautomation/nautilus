@@ -82,6 +82,9 @@ func (f *Fake) recordIntent(s *session, req tiad.DownloadRequest, attested *tiad
 	if req.Source != nil {
 		d.Source = &tiad.DeploySourceRecord{Commit: req.Source.Commit, Hash: req.Source.Hash, ClaimedBy: "caller"}
 	}
+	if o := req.OutsideChanges; o != nil {
+		d.OutsideChanges = &tiad.OutsideChangesRecord{By: o.By, Verdict: o.Verdict, Deploy: o.Deploy, ClaimedBy: "caller"}
+	}
 	f.deployRecs = append(f.deployRecs, d)
 	return d, nil
 }
@@ -120,7 +123,7 @@ func (f *Fake) recordOutcome(d *tiad.Deploy, s *session, req tiad.DownloadReques
 	o.Blocks = slices.Clone(r.Blocks)
 	o.HardwareVerified = r.HardwareVerified
 	o.UserManagementReset = r.UserManagementReset
-	dr := &tiad.DeployResult{ID: d.ID, Archive: d.Archive, Source: d.Source}
+	dr := &tiad.DeployResult{ID: d.ID, Archive: d.Archive, Source: d.Source, OutsideChanges: d.OutsideChanges}
 	trust := req.Fingerprint != nil && req.Fingerprint.TrustUnverifiedCertificate
 	pw := ""
 	if req.Secrets != nil {
@@ -169,5 +172,14 @@ func (f *Fake) listDeploys(r *http.Request) (any, *failure) {
 		}
 		out.Deploys = append(out.Deploys, *d)
 	}
+	out.UnreadableLines = f.unreadableLines
 	return out, nil
+}
+
+// SetUnreadableLines makes the deploy list report n journal lines the
+// agent cannot read, as a damaged journal would.
+func (f *Fake) SetUnreadableLines(n int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.unreadableLines = n
 }

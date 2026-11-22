@@ -95,6 +95,66 @@ namespace Tiad
         }
     }
 
+    // OutsideChanges is the operator's accept of a download onto a CPU whose
+    // deploy record says it was changed outside nautilus, or cannot say
+    // (#789): who accepts, what the caller's verify found, and the record
+    // it verified. Recorded as the caller's claim on the intent line and
+    // in the audit line, so an overwrite of someone's change is on the
+    // record. A second copy of tiad.OutsideChanges.Validate. Change both or
+    // neither.
+    public sealed class OutsideChanges
+    {
+        public string By = "", Verdict = "", Deploy = "";
+
+        public const int MaxBy = 200, MaxDeploy = 100;
+        public const string Different = "different", Broken = "broken", Unreadable = "unreadable";
+
+        public static OutsideChanges Read(Reader r)
+        {
+            if (r == null) return null;
+            var o = new OutsideChanges();
+            o.By = r.Str("by");
+            o.Verdict = r.Str("verdict");
+            o.Deploy = r.Str("deploy");
+            return o;
+        }
+
+        public string Validate()
+        {
+            if (By.Trim() == "") return "outsideChanges.by is empty: who accepts replacing the CPU's outside change";
+            if (Encoding.UTF8.GetByteCount(By) > MaxBy) return "outsideChanges.by is longer than " + MaxBy + " bytes";
+            if (Verdict != Different && Verdict != Broken && Verdict != Unreadable) return "outsideChanges.verdict is not one of different, broken, unreadable";
+            if (Encoding.UTF8.GetByteCount(Deploy) > MaxDeploy) return "outsideChanges.deploy is longer than " + MaxDeploy + " bytes";
+            if (Deploy == "" && Verdict != Unreadable) return "outsideChanges.deploy is empty: name the deploy record whose verify found " + Verdict;
+            return null;
+        }
+
+        public Obj ToJson()
+        {
+            var o = new Obj();
+            o["by"] = By;
+            o["verdict"] = Verdict;
+            if (Deploy != "") o["deploy"] = Deploy;
+            o["claimedBy"] = "caller";
+            return o;
+        }
+
+        // Audit is the accept for the audit line: "unset", or its parts
+        // quoted (a refused request's sized, so none can flood a line).
+        public static string Audit(OutsideChanges o)
+        {
+            if (o == null) return "unset";
+            return "{by=" + Part(o.By, MaxBy) + " verdict=" + Part(o.Verdict, 20) + " deploy=" + (o.Deploy == "" ? "unset" : Part(o.Deploy, MaxDeploy)) + "}";
+        }
+
+        static string Part(string v, int max)
+        {
+            int n = Encoding.UTF8.GetByteCount(v);
+            if (n > max) return "<" + n + " bytes, over the limit>";
+            return Json.Quote(v);
+        }
+    }
+
     // DeployArchive is a deploy's archived project.
     public sealed class DeployArchive
     {
@@ -562,6 +622,7 @@ namespace Tiad
             line["hardware"] = req.Hardware;
             line["software"] = req.Software;
             line["source"] = req.Source == null ? null : req.Source.ToJson();
+            if (req.OutsideChanges != null) line["outsideChanges"] = req.OutsideChanges.ToJson();
             var tia = new Obj();
             tia["version"] = host.TiaVersion;
             tia["openness"] = host.OpennessVersion;
@@ -584,7 +645,7 @@ namespace Tiad
             run.Id = id;
             run.Archive = a;
             run.IntentWritten = true;
-            Log.Line("audit deploy intent deploy={0} session={1} address={2} archive={3} bytes={4} source={5}", id, s.Id, Json.Quote(req.Address), a.File, a.Bytes, DeploySource.Audit(req.Source));
+            Log.Line("audit deploy intent deploy={0} session={1} address={2} archive={3} bytes={4} source={5} outsideChanges={6}", id, s.Id, Json.Quote(req.Address), a.File, a.Bytes, DeploySource.Audit(req.Source), OutsideChanges.Audit(req.OutsideChanges));
         }
 
         // WriteOutcome writes the outcome line of a download whose intent
@@ -685,6 +746,7 @@ namespace Tiad
             d["id"] = run.Id;
             d["archive"] = run.Archive.ToJson();
             d["source"] = req.Source == null ? null : req.Source.ToJson();
+            if (req.OutsideChanges != null) d["outsideChanges"] = req.OutsideChanges.ToJson();
             d["fingerprint"] = fp == null ? null : fp.ToJson();
             if (fp == null) d["fingerprintError"] = run.FingerprintError;
             string dl = fp == null ? null : fp.Value("DownloadId");
