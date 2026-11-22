@@ -141,6 +141,8 @@ Usage:
                           auth: block (--user <name>:<role>).
   naut users          Local users and personal access tokens of a
                           controller with an auth: block (on the box).
+  naut notes export   The operator notes and shift log, as JSON or CSV
+                          (on the box; naut notes help).
   naut fbd graph <f>  Emit a .fbd file's diagram render model as JSON
                           (used by the VS Code FBD preview).
   naut sfc check <f>  Parse a .sfc file and run its structural checks
@@ -171,6 +173,13 @@ func main() {
 				m, err := project.ReadManifest(fsys, embeddedManifest(fsys))
 				return m, "", err
 			}, false, os.Getenv, os.Stdin, os.Stdout, os.Stderr))
+		}
+		// naut notes export, likewise (#720): the notes are on the box.
+		if len(os.Args) > 1 && os.Args[1] == "notes" {
+			os.Exit(notesMain(os.Args[2:], func(string) (*project.Manifest, string, error) {
+				m, err := project.ReadManifest(fsys, embeddedManifest(fsys))
+				return m, "", err
+			}, false, os.Getenv, os.Stdout, os.Stderr))
 		}
 		if code, done := builtArgs(os.Args[1:], filepath.Base(os.Args[0]), os.Stdout, os.Stderr); done {
 			os.Exit(code)
@@ -235,6 +244,8 @@ func main() {
 		os.Exit(runTags(os.Args[2:]))
 	case "scene":
 		os.Exit(runScene(os.Args[2:]))
+	case "notes":
+		os.Exit(runNotes(os.Args[2:]))
 	case "alarms":
 		os.Exit(runAlarms(os.Args[2:]))
 	case "pull":

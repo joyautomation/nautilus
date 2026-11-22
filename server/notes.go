@@ -159,7 +159,7 @@ func (s *Server) notesOff(w http.ResponseWriter) bool {
 	if s.notesStore() != nil {
 		return false
 	}
-	writeJSON(w, http.StatusNotFound, map[string]string{"error": "this controller keeps no notes: it has no state directory to keep them in (set auth.state-dir, or run under systemd with StateDirectory=)"})
+	writeJSON(w, http.StatusNotFound, map[string]string{"error": "this controller keeps no notes: notes belong to people, so it needs an auth: block with users (naut users add) and a state directory to keep them in (auth.state-dir, or systemd StateDirectory=)"})
 	return true
 }
 

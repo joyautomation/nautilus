@@ -247,7 +247,7 @@ func startPairNodeFull(t *testing.T, files fstest.MapFS, env map[string]string, 
 		eng = alarms.Engine
 		t.Cleanup(func() { alarms.Close() })
 	}
-	sl, al, err := m.startLog(rt, 0, eng)
+	sl, al, _, err := m.startLog(rt, 0, eng)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -71,6 +71,7 @@ type pairMember struct {
 	logH       swapHandler
 	log        *oplog.Node
 	al         *server.AlarmLog // nil without alarms
+	nl         *server.NotesLog // the pair's operator notes (#720)
 	rt         *runtime.Runtime
 	logStop    context.CancelFunc
 	logDone    chan struct{}
@@ -490,7 +491,7 @@ const OplogReadOnly = "operator log read-only: no second counting copy; if the o
 // catches the log up before its first scan, waiting up to wait). The
 // returned log goes to the server's Options.SubstituteLog. Call it before
 // the election's Run and the runtime's Run.
-func (m *pairMember) startLog(rt *runtime.Runtime, wait time.Duration, eng *alarm.Engine) (*server.SubstituteLog, *server.AlarmLog, error) {
+func (m *pairMember) startLog(rt *runtime.Runtime, wait time.Duration, eng *alarm.Engine) (*server.SubstituteLog, *server.AlarmLog, *server.NotesLog, error) {
 	sl := server.NewSubstituteLog(rt)
 	sl.SetNoMajority(PairNoMajority)
 	// Alarm acknowledgements and shelves (#710 PR 3b-2c): applied to the
@@ -506,7 +507,14 @@ func (m *pairMember) startLog(rt *runtime.Runtime, wait time.Duration, eng *alar
 		rt.SetAlarms(server.PairAlarms{Engine: eng, Log: al})
 	}
 	m.al = al
+	// Operator notes (#720): the log is their store; the index is rebuilt
+	// from it by replay, here, and emptied when a history is superseded.
+	nl := server.NewNotesLog()
+	m.nl = nl
 	apply := func(e oplog.Entry) error {
+		if done, err := nl.Apply(e); done {
+			return err
+		}
 		if e.Kind == oplog.KindLapse && al != nil {
 			_, _ = al.Apply(e) // its view drops a lapsed ack or shelf; the substitutes' below
 		}
@@ -553,11 +561,11 @@ func (m *pairMember) startLog(rt *runtime.Runtime, wait time.Duration, eng *alar
 		OnSuperseded: func(oplog.Lineage) { m.endSuperseded() },
 	})
 	if err != nil {
-		return nil, nil, fmt.Errorf("operator-intent log: %w", err)
+		return nil, nil, nil, fmt.Errorf("operator-intent log: %w", err)
 	}
 	if err := dropStaleRetained(n, rt); err != nil {
 		n.Close()
-		return nil, nil, fmt.Errorf("operator-intent log: %w", err)
+		return nil, nil, nil, fmt.Errorf("operator-intent log: %w", err)
 	}
 	m.logPending.Store(pending)
 	m.rt = rt
@@ -580,6 +588,7 @@ func (m *pairMember) startLog(rt *runtime.Runtime, wait time.Duration, eng *alar
 	})
 	m.q.SetLogStatus(func() *leader.LogStatus { return m.logStatus() })
 	sl.Attach(n)
+	nl.Attach(n)
 	if al != nil {
 		al.Attach(n)
 	}
@@ -595,7 +604,7 @@ func (m *pairMember) startLog(rt *runtime.Runtime, wait time.Duration, eng *alar
 	n.Ping(pctx)
 	pcancel()
 	go m.driveLog(ctx)
-	return sl, al, nil
+	return sl, al, nl, nil
 }
 
 // dropStaleRetained drops what the retain store keeps of a superseded
@@ -665,6 +674,9 @@ func (m *pairMember) endSuperseded() {
 		m.rt.EndSupersededSubstitutes()
 		if m.al != nil {
 			m.al.EndSuperseded()
+		}
+		if m.nl != nil {
+			m.nl.EndSuperseded() // its notes are now the new history's
 		}
 	}
 }

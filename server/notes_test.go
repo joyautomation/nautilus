@@ -315,7 +315,7 @@ func TestNotesOffAnswers404(t *testing.T) {
 	srv, _, _ := patServer(t)
 	c := signIn(t, srv, "jsmith")
 	for _, p := range []string{"/api/notes", "/api/notes/x"} {
-		if rec := call(t, srv, "GET", p, "", withCookie(c.Value)); rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "state directory") {
+		if rec := call(t, srv, "GET", p, "", withCookie(c.Value)); rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "auth: block") {
 			t.Errorf("%s: %d %s", p, rec.Code, rec.Body)
 		}
 	}

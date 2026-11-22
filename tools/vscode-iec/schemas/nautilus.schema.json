@@ -185,7 +185,7 @@
         },
         "areas": {
           "type": "object",
-          "description": "Named sets of tags that scope a grant's write, ack, shelve, substitute and force.",
+          "description": "Named sets of tags that scope a grant's write, ack, shelve, note, substitute and force.",
           "additionalProperties": {
             "type": "object",
             "additionalProperties": false,
@@ -227,6 +227,7 @@
                     "write",
                     "ack",
                     "shelve",
+                    "note",
                     "substitute",
                     "force",
                     "sfc",
@@ -249,6 +250,7 @@
                     "write",
                     "ack",
                     "shelve",
+                    "note",
                     "substitute",
                     "force",
                     "sfc",
