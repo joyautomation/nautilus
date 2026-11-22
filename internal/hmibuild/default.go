@@ -83,7 +83,7 @@ type galleryComp struct {
 func defaultApp(project, title string, extra, areas []json.RawMessage) (*appSource, error) {
 	mimics := Mimics(project)
 	mimics = schemesLast(mimics, areas)
-	if len(mimics) == 0 {
+	if len(mimics) == 0 && len(extra) == 0 {
 		return nil, &Error{Messages: []string{"nothing to build: the project has no hmi/ app (src/routes) and no *.mimic.json"}}
 	}
 	sources := componentSources(project)
@@ -227,6 +227,13 @@ func defaultApp(project, title string, extra, areas []json.RawMessage) (*appSour
 			a.routes = append(a.routes, r)
 		}
 		screens = append(screens, fmt.Sprintf("{ id: %s, href: %s, label: %s }", jsq("/assets"), jsq("/assets"), jsq("Assets")))
+		// with no mimic nothing is the home page: the assets are
+		if len(mimics) == 0 {
+			r, _ := routeFor("")
+			r.Page = "nx:default/assets-index.svelte"
+			r.Layouts = []int{0}
+			a.routes = append(a.routes, r)
+		}
 		// an area page for each area the caller passed (the plant model's),
 		// linking to its process scheme when a mimic is named for it
 		al := areaList(areas, routeOf)
@@ -407,8 +414,8 @@ const defaultLayout = `<script>
 	@media (max-width: 600px) {
 		header { padding: 8px 12px; }
 		.nx-title { flex-basis: 100%%; }
-		nav { flex: 1 1 auto; }
-		nav a { flex: 1; text-align: center; }
+		nav { flex: 1 1 100%%; flex-wrap: wrap; min-width: 0; }
+		nav a { flex: 1 1 auto; text-align: center; }
 		.nx-status { flex: 1 1 100%%; min-width: 0; flex-wrap: wrap; justify-content: flex-start; }
 	}
 </style>

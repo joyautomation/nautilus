@@ -30,6 +30,8 @@ func hmiSource(proj *project.Project) string {
 		return proj.HMIApp + "/"
 	case proj.HMIScreens:
 		return "the project's mimics"
+	case proj.HMIPlant:
+		return "the plant model's pages"
 	}
 	return ""
 }
@@ -145,7 +147,7 @@ func runHMI(args []string) int {
 		case proj.HMIDir != "":
 			fmt.Fprintf(os.Stderr, "naut hmi build: server.hmi (%s) is an HMI built elsewhere (no src/routes beside it); naut serves it as it is\n", proj.HMIDir)
 		default:
-			fmt.Fprintln(os.Stderr, "naut hmi build: nothing to build: no server.hmi app and no *.mimic.json in the project")
+			fmt.Fprintln(os.Stderr, "naut hmi build: nothing to build: no server.hmi app, no *.mimic.json and no plant model equipment in the project")
 		}
 		return 1
 	}

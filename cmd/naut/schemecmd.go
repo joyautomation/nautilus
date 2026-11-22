@@ -70,8 +70,16 @@ func runHMIScheme(args []string) int {
 			continue
 		}
 		out, notes, err := planScheme(proj.Plant, a, old)
+		unchanged := 0
 		for _, n := range notes {
+			if strings.HasSuffix(n, unchangedNote) {
+				unchanged++ // each is fine: a pipe already drawn is left as it is
+				continue
+			}
 			fmt.Printf("%s: %s\n", path, n)
+		}
+		if unchanged > 0 {
+			fmt.Printf("%s: %d pipe(s) already drawn, unchanged\n", path, unchanged)
 		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "naut hmi scheme: %s: %s\n", path, err)
@@ -97,6 +105,9 @@ func runHMIScheme(args []string) int {
 	}
 	return exit
 }
+
+// unchangedNote ends the planScheme note for a pipe that is already drawn.
+const unchangedNote = " is already there: left as it is"
 
 // schemeSize is the box a component is drawn in on a scheme when the asset
 // type says nothing else: the kit's own components' proportions.
@@ -383,7 +394,7 @@ func planScheme(pl *plant.Plant, area plant.Area, existing []byte) ([]byte, []st
 			id = fmt.Sprintf("%s_%d", base, n[base])
 		}
 		if havePipe[strings.ToLower(id)] {
-			notes = append(notes, fmt.Sprintf("flow %s -> %s: a pipe named %s is already there: left as it is", f.From, f.To, id))
+			notes = append(notes, fmt.Sprintf("flow %s -> %s: a pipe named %s%s", f.From, f.To, id, unchangedNote))
 			continue
 		}
 		fp, tp := a.port(from.Nozzle, true), b.port(to.Nozzle, false)
@@ -436,6 +447,9 @@ func planScheme(pl *plant.Plant, area plant.Area, existing []byte) ([]byte, []st
 	_ = json.Unmarshal(top["canvas"], &canvas)
 	grow := func(k string, need float64) {
 		if cur, ok := canvas[k].(float64); !ok || cur < need {
+			if ok {
+				notes = append(notes, fmt.Sprintf("canvas %s grew from %g to %g to fit what was added (it never shrinks)", k, cur, need))
+			}
 			canvas[k] = need
 		}
 	}

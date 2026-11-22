@@ -20,6 +20,7 @@
 		principalChanged,
 		targetKey,
 		targetLabel,
+		noteTime,
 		type Note,
 		type NoteTarget,
 		type NoteRevision,
@@ -235,7 +236,7 @@
 	}
 
 	function when(ms: number): string {
-		return new Date(ms).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short', timeZoneName: 'short' });
+		return noteTime(ms);
 	}
 	function excerpt(t: string): string {
 		return t.length > 60 ? t.slice(0, 60) + '…' : t;

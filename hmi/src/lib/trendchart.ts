@@ -37,3 +37,29 @@ export function resolveYLabel(
 	if (axisMode === 'percent') return '% of range';
 	return yLabel ?? commonUnit;
 }
+
+/** A step of 1, 2 or 5 times a power of ten that is at least `raw`. */
+function niceStep(raw: number): number {
+	const e = Math.pow(10, Math.floor(Math.log10(raw)));
+	const f = raw / e;
+	return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * e;
+}
+
+/**
+ * The y-axis range for data between `min` and `max` when the page fixes
+ * neither end: padded, rounded outward to a round step so the four gridline
+ * intervals read as round numbers, and never past zero for data that does not
+ * go past it (a flow that falls to 0 has an axis starting at 0, not -18.5).
+ */
+export function niceDomain(min: number, max: number): { lo: number; hi: number } {
+	if (!isFinite(min)) min = 0;
+	if (!isFinite(max)) max = min + 1;
+	const span = max - min || Math.max(Math.abs(max) * 0.1, 1);
+	const step = niceStep((span * 1.24) / 4);
+	let lo = Math.floor((min - span * 0.12) / step) * step;
+	let hi = Math.ceil((max + span * 0.12) / step) * step;
+	if (min >= 0 && lo < 0) lo = 0;
+	if (max <= 0 && hi > 0) hi = 0;
+	if (hi <= lo) hi = lo + step; // data flat at zero: room above it
+	return { lo, hi };
+}
