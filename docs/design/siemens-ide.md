@@ -1578,7 +1578,7 @@ the new password. A rotation needs a request that carries both.
 | Optimized DBs, by symbol | yes | yes | no |
 | Push | no; polling | subscriptions | no |
 | Force | no | no | no |
-| Bench FW 3.1 | Browse/Read/Write (≥ 2.8), operating mode (≥ 2.9). Diagnostics, modules and alarms vary by method from 3.1 to 4.1, so `Api.GetMethods` on the bench settles it | with a licence | yes |
+| Bench FW 3.1 | Browse/Read/Write (≥ 2.8), operating mode (≥ 2.9). Per the 11/2023 manual: `DiagnosticBuffer.Browse` and `Alarms.Browse` from 3.1, of `Modules.*` only `DownloadServiceData`; `Api.GetMethods` on the bench settles it | with a licence | yes |
 | Role | **primary** | where the licence already exists; reuse the `opcua-client` driver | S7-300/400 and classic S7-1200, later |
 
 Web API limits to design for:
