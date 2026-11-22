@@ -72,26 +72,34 @@ func TestClearDuplicateAllClearsEveryMember(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), leases(10))
 	defer cancel()
 	rep, err := c.elector("b").ClearDuplicateAll(ctx, "a", "user:op")
+	again := false
 	if err != nil && raceOn && slowWrite(rep) {
 		// Under -race a member's state write can miss its half-lease
 		// deadline on a loaded runner (#1120): the command ends
 		// INCOMPLETE, as it must, and its own advice is to run it again.
+		again = true
 		rep, err = c.elector("b").ClearDuplicateAll(ctx, "a", "user:op")
 	}
-	if err != nil {
+	switch {
+	case err != nil && again && nothingToClear(rep):
+		// The late write landed after all: the first run cleared every
+		// member, so the second finds nothing left to clear. The state
+		// checks below still hold it to the result.
+	case err != nil:
 		t.Fatalf("clear: %v (report %+v)", err, rep)
-	}
-	if !rep.Done() || len(rep.Clear) != 3 {
-		t.Fatalf("report %+v: want every member asked and none marking a lease later", rep)
-	}
-	cleared := 0
-	for _, a := range rep.Clear {
-		if a.Cleared {
-			cleared++
+	default:
+		if !rep.Done() || len(rep.Clear) != 3 {
+			t.Fatalf("report %+v: want every member asked and none marking a lease later", rep)
 		}
-	}
-	if cleared != 2 {
-		t.Fatalf("cleared at %d members, want 2 (b and the witness): %+v", cleared, rep.Clear)
+		cleared := 0
+		for _, a := range rep.Clear {
+			if a.Cleared {
+				cleared++
+			}
+		}
+		if cleared != 2 {
+			t.Fatalf("cleared at %d members, want 2 (b and the witness): %+v", cleared, rep.Clear)
+		}
 	}
 	if m := c.status("b").Marked; len(m) != 0 {
 		t.Fatalf("b still marks %v", m)
@@ -465,6 +473,21 @@ func TestAClearIsNotDoneWhileTheControllerIsHeld(t *testing.T) {
 }
 
 // slowWrite: a member answered the clear but its write missed the deadline.
+// nothingToClear reports a clear refused because no member marks the
+// name and every member has retired the boots it knew: a rerun after a
+// first run that cleared everywhere but answered late.
+func nothingToClear(rep ClearReport) bool {
+	if !strings.Contains(rep.Refused, "nothing to clear") {
+		return false
+	}
+	for _, a := range rep.Check {
+		if a.Marked || a.Err != "" || a.Refused != "" {
+			return false
+		}
+	}
+	return len(rep.Check) == 3
+}
+
 func slowWrite(rep ClearReport) bool {
 	for _, a := range rep.Clear {
 		if strings.Contains(a.Err, "did not finish in time") {
