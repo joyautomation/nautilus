@@ -244,11 +244,11 @@ namespace Tiad
                     // was written: a record with no outcome means the agent
                     // died during the download.
                     if (run.IntentWritten) WriteOutcome(run, rode, acting);
-                    Log.Line("audit download session={0} project={1} address={2} hardware={3} software={4} dryRun={5} announced={6} {7} protection={8} configurationPassword={9} attestation={10} userManagementReset={11} blindTrust={12} source={13} deploy={14} kept=[{15}] asked=[{16}] acting=[{17}] outcome={18}",
+                    Log.Line("audit download session={0} project={1} address={2} hardware={3} software={4} dryRun={5} announced={6} {7} protection={8} configurationPassword={9} attestation={10} userManagementReset={11} blindTrust={12} source={13} outsideChanges={14} deploy={15} kept=[{16}] asked=[{17}] acting=[{18}] outcome={19}",
                         s.Id, Json.Quote(s.Project), Json.Quote(req.Address), req.Hardware, req.Software, req.DryRun, req.Announced,
                         AuditDecisions(req.Decisions), req.Secrets.Protection == "" ? "unset" : "set",
                         req.Secrets.ConfigurationPassword == "" ? "unset" : "set", req.Attestation.Audit(), reset, BlindTrust.Audit(rode),
-                        DeploySource.Audit(req.Source), run.IntentWritten ? run.Id + (run.Recorded ? "" : "(outcome-not-recorded)") : "unset",
+                        DeploySource.Audit(req.Source), OutsideChanges.Audit(req.OutsideChanges), run.IntentWritten ? run.Id + (run.Recorded ? "" : "(outcome-not-recorded)") : "unset",
                         AuditKept(s.Kept), asked, string.Join(",", Quoted(acting).ToArray()), outcome);
                 }
             });
@@ -523,7 +523,9 @@ namespace Tiad
                     // A dry run leaves no record: before CanDryRun is ever
                     // true for tiad.Openness, a dry run TIA loads without
                     // asking (outcome_unknown below) must get a record too
-                    // (#1180 review), as it must get the hardware opt-in.
+                    // (#1180 review), as it must get the hardware opt-in,
+                    // and with it any outsideChanges accept the request
+                    // carries: an overwrite must be on the record (#789).
                     if (!req.DryRun) Record(t, s, req, ranWith, run);
                     try
                     {

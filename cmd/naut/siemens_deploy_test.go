@@ -270,7 +270,7 @@ func TestSiemensDeployEndToEnd(t *testing.T) {
 		}
 	}
 	dl := r.fake.Downloads()
-	if len(dl) != 1 || dl[0].Request.Hardware || !dl[0].Request.Software || !dl[0].Request.Announced ||
+	if len(dl) != 1 || dl[0].Request.Hardware || !dl[0].Request.Software || !dl[0].Request.Announced || dl[0].Request.OutsideChanges != nil ||
 		dl[0].Request.Decisions.StopCPU == nil || !*dl[0].Request.Decisions.StopCPU || len(dl[0].Request.Decisions.Reinitialize) != 0 ||
 		dl[0].Request.Decisions.ConsistentDownload == nil || !*dl[0].Request.Decisions.ConsistentDownload {
 		t.Fatalf("downloads: %+v", dl)
@@ -315,8 +315,20 @@ func TestSiemensDeployRefusesACPUChangedOutside(t *testing.T) {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
 	out, code = r.run("", false, "--download", "--yes", "--allow-stop", "--accept-outside-changes")
-	if code != 0 || !strings.Contains(out, "replacing it anyway (--accept-outside-changes)") || len(r.fake.Downloads()) != 2 {
+	if code != 0 || !strings.Contains(out, "replacing it anyway (--accept-outside-changes): the deploy record journals your accept, by test operator") ||
+		len(r.fake.Downloads()) != 2 {
 		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	// The accept is on the record, naming the deploy whose verify found
+	// the change.
+	list, err := tiad.New(r.url, r.fake.Token).Deploys(context.Background(), deployCPU)
+	if err != nil || len(list.Deploys) != 2 {
+		t.Fatalf("%+v %v", list, err)
+	}
+	want := tiad.OutsideChangesRecord{By: "test operator", Verdict: tiad.OutsideDifferent, Deploy: list.Deploys[1].ID, ClaimedBy: "caller"}
+	if oc := list.Deploys[0].OutsideChanges; oc == nil || *oc != want || list.Deploys[1].OutsideChanges != nil ||
+		!strings.Contains(out, "outside change replaced, accepted by test operator (verdict different, deploy "+want.Deploy+")") {
+		t.Fatalf("the record's accept: %+v, want %+v\n%s", list.Deploys[0].OutsideChanges, want, out)
 	}
 }
 
@@ -460,15 +472,18 @@ func TestSiemensDeployFlagsGoTogether(t *testing.T) {
 		{dl(siemensDeployOptions{cpuAccess: "disabled"}), "go with --hardware"},
 		{dl(siemensDeployOptions{hardware: true}), "--hardware needs --attest-hardware"},
 		{dl(siemensDeployOptions{hardware: true, attest: "  "}), "--hardware needs --attest-hardware"},
-		{dl(siemensDeployOptions{hardware: true, attest: "x", cpuAccess: "off"}), `--cpu-access-control "off"`},
-		{dl(siemensDeployOptions{hardware: true, attest: strings.Repeat("x", tiad.MaxAttestationText+1)}), "over 2000"},
+		{dl(siemensDeployOptions{hardware: true, attest: "x", cpuAccess: "off", by: "op"}), `--cpu-access-control "off"`},
+		{dl(siemensDeployOptions{hardware: true, attest: strings.Repeat("x", tiad.MaxAttestationText+1), by: "op"}), "over 2000"},
+		{dl(siemensDeployOptions{acceptOutside: true, by: " "}), "the operator's name"},
+		{dl(siemensDeployOptions{hardware: true, attest: "x"}), "the operator's name"},
 	} {
 		if err := c.o.flagsError(); err == nil || !strings.Contains(err.Error(), c.says) {
 			t.Errorf("case %d: %v, want %q", i, err, c.says)
 		}
 	}
 	for i, o := range []siemensDeployOptions{{}, dl(siemensDeployOptions{yes: true, dryRun: true, allowStop: true}),
-		{download: true, noStart: true}, dl(siemensDeployOptions{hardware: true, attest: "x", cpuAccess: "enabled"})} {
+		{download: true, noStart: true}, dl(siemensDeployOptions{hardware: true, attest: "x", cpuAccess: "enabled", by: "op"}),
+		dl(siemensDeployOptions{acceptOutside: true, by: "op"})} {
 		if err := o.flagsError(); err != nil {
 			t.Errorf("ok case %d: %v", i, err)
 		}
@@ -562,6 +577,12 @@ func TestSiemensDeployRefusesABrokenRecord(t *testing.T) {
 	if code != 1 || !strings.Contains(out, "its archive is broken") || !strings.Contains(out, "--accept-outside-changes") || len(r.fake.Downloads()) != 2 {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
+	out, code = r.run("", false, "--download", "--yes", "--allow-stop", "--accept-outside-changes")
+	dl := r.fake.Downloads()
+	if code != 0 || len(dl) != 3 || dl[2].Request.OutsideChanges == nil ||
+		*dl[2].Request.OutsideChanges != (tiad.OutsideChanges{By: "test operator", Verdict: tiad.OutsideBroken, Deploy: list.Deploys[0].ID}) {
+		t.Fatalf("exit %d, request %+v:\n%s", code, dl[len(dl)-1].Request.OutsideChanges, out)
+	}
 }
 
 // TestSiemensDeployPrintsNoSecret: no password reaches the output, the
@@ -614,6 +635,24 @@ func TestSiemensDeploySaysWhetherTheStationChanged(t *testing.T) {
 	out, code = r.run("", false, "--download", "--allow-stop")
 	if code != 1 || !strings.Contains(out, "station: the spec CHANGED since the last hardware load") ||
 		!strings.Contains(out, "hardware: NOT loaded, although it may differ from the CPU's (the station spec changed since the last hardware load)") {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+}
+
+// TestSiemensDeployAcceptsAnUnreadableJournalOnlyOnRecord: journal lines
+// the agent cannot read may hide a newer deploy: refused without the
+// accept, and the accept goes out as verdict unreadable, naming no deploy.
+func TestSiemensDeployAcceptsAnUnreadableJournalOnlyOnRecord(t *testing.T) {
+	r := newDeployRig(t)
+	r.fake.SetUnreadableLines(1)
+	out, code := r.run("", false, "--download", "--yes", "--allow-stop")
+	if code != 1 || !strings.Contains(out, "1 journal line(s) the agent cannot read") || len(r.fake.Downloads()) != 0 {
+		t.Fatalf("exit %d:\n%s", code, out)
+	}
+	out, code = r.run("", false, "--download", "--yes", "--allow-stop", "--accept-outside-changes")
+	dl := r.fake.Downloads()
+	if code != 0 || len(dl) != 1 || dl[0].Request.OutsideChanges == nil ||
+		*dl[0].Request.OutsideChanges != (tiad.OutsideChanges{By: "test operator", Verdict: tiad.OutsideUnreadable}) {
 		t.Fatalf("exit %d:\n%s", code, out)
 	}
 }

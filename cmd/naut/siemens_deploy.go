@@ -236,6 +236,8 @@ func (o siemensDeployOptions) flagsError() error {
 		return errors.New("--attest-hardware and --cpu-access-control go with --hardware")
 	case o.hardware && strings.TrimSpace(o.attest) == "":
 		return errors.New("--hardware needs --attest-hardware \"<your statement that the CPU's hardware configuration is what you intend to load>\": tiad cannot verify hardware online")
+	case o.download && (o.hardware || o.acceptOutside) && strings.TrimSpace(o.by) == "":
+		return errors.New("the operator's name (the local user) could not be read, and an attestation or an accept of outside changes must name who gives it")
 	case o.cpuAccess != "" && o.cpuAccess != tiad.AttestCPUAccessDisabled && o.cpuAccess != tiad.AttestCPUAccessEnabled:
 		return fmt.Errorf("--cpu-access-control %q: want disabled or enabled, as you observed the CPU", o.cpuAccess)
 	case len(o.attest) > tiad.MaxAttestationText:
@@ -433,6 +435,9 @@ type lastDeploy struct {
 	verdict    string // tiad.Verify*, "" without a record
 	outside    bool   // the CPU changed outside nautilus, or the record cannot say
 	why        string
+	// accept is what a download with --accept-outside-changes journals:
+	// tiad.OutsideDifferent, OutsideBroken or OutsideUnreadable.
+	accept string
 }
 
 func (d *siemensDeployer) checkLastDeploy(ctx context.Context, address string, online *tiad.OnlineSecrets) (lastDeploy, error) {
@@ -450,7 +455,7 @@ func (d *siemensDeployer) checkLastDeploy(ctx context.Context, address string, o
 	if latest == nil {
 		why := "no deploy record for this CPU: whatever it runs now is replaced"
 		if list.UnreadableLines > 0 {
-			return lastDeploy{outside: true, why: fmt.Sprintf("no readable deploy record for this CPU, and %d journal line(s) the agent cannot read", list.UnreadableLines)}, nil
+			return lastDeploy{outside: true, accept: tiad.OutsideUnreadable, why: fmt.Sprintf("no readable deploy record for this CPU, and %d journal line(s) the agent cannot read", list.UnreadableLines)}, nil
 		}
 		return lastDeploy{why: why}, nil
 	}
@@ -469,12 +474,13 @@ func (d *siemensDeployer) checkLastDeploy(ctx context.Context, address string, o
 	case r.Verdict == tiad.VerifyEqual:
 		ld.why = fmt.Sprintf("last deploy %s (%s): the CPU compares equal to it", latest.ID, latest.Status)
 	case r.Verdict == tiad.VerifyBroken:
-		ld.outside, ld.why = true, fmt.Sprintf("last deploy %s: its archive is broken (%s), so nothing says what the CPU runs", latest.ID, r.Broken)
+		ld.outside, ld.accept, ld.why = true, tiad.OutsideBroken, fmt.Sprintf("last deploy %s: its archive is broken (%s), so nothing says what the CPU runs", latest.ID, r.Broken)
 	default:
 		var diffs []string
 		for _, x := range r.Differences {
 			diffs = append(diffs, x.Object+" ("+x.State+")")
 		}
+		ld.accept = tiad.OutsideDifferent
 		if latest.Status == tiad.DeployLoaded {
 			ld.outside, ld.why = true, fmt.Sprintf("last deploy %s (loaded): the CPU compares DIFFERENT, so it was changed outside nautilus: %s", latest.ID, strings.Join(diffs, ", "))
 		} else {
@@ -876,6 +882,11 @@ func (d *siemensDeployer) download(ctx context.Context, s *tiad.Session, st tiad
 	if o.hardware {
 		req.Attestation = &tiad.Attestation{By: o.by, Text: o.attest, CPUAccessControl: o.cpuAccess}
 	}
+	if last.outside {
+		// Only reached with --accept-outside-changes: the overwrite of an
+		// outside change is journalled with the deploy (#789).
+		req.OutsideChanges = &tiad.OutsideChanges{By: o.by, Verdict: last.accept, Deploy: last.id}
+	}
 
 	// 7. The plan, and the operator's yes: nothing has reached the CPU
 	// yet but the verify's read-only compare.
@@ -995,6 +1006,9 @@ func (d *siemensDeployer) download(ctx context.Context, s *tiad.Session, st tiad
 		if dep.Source != nil {
 			d.say("  source %s %s (the caller's claim)", dep.Source.Commit, dep.Source.Hash)
 		}
+		if oc := dep.OutsideChanges; oc != nil {
+			d.say("  outside change replaced, accepted by %s (verdict %s, deploy %s)", oc.By, oc.Verdict, oc.Deploy)
+		}
 		if !dep.Recorded {
 			d.say("WARNING: the agent could not write the outcome line (%s): the record lists this deploy as in doubt", dep.RecordError)
 		}
@@ -1026,7 +1040,7 @@ func (d *siemensDeployer) printPlan(address string, last lastDeploy, sw tiad.Sof
 	d.say("PLAN for the CPU at %s:", address)
 	d.say("  %s", last.why)
 	if last.outside {
-		d.say("  replacing it anyway (--accept-outside-changes)")
+		d.say("  replacing it anyway (--accept-outside-changes): the deploy record journals your accept, by %s", d.o.by)
 	}
 	for _, c := range d.changes {
 		d.say("  station: %s", c)
