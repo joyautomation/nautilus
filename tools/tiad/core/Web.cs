@@ -234,7 +234,7 @@ namespace Tiad
 
         public static string ReusedOtherKey(string user)
         {
-            return "TIA refuses " + Secret(user) + " for the web user " + Json.Quote(user) + " as a password the user has now or had recently, and the project's record of it was made under another agent key, so tiad cannot tell which: choose another password, or make the project again (POST /v1/projects)";
+            return "TIA refuses " + Secret(user) + " for the web user " + Json.Quote(user) + " as a password the user has now or had recently, and the project's record of it was made under another agent key, so tiad cannot tell which; web users have no record-only route, so the password must change: set a new one in " + Secret(user) + " and apply again (or make the project again, POST /v1/projects)";
         }
 
         public static string MadeNote(WebUser u)

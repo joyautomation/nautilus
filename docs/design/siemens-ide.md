@@ -369,7 +369,9 @@ The rules for applying a spec:
     set (its record matches it) and the session uncompiled.
     Web users have no record-only route: under another agent key's record
     (the agent's key lost), an unchanged web password is refused as one
-    the user had, so it must change.
+    the user had, so it must change: the refusal says so and names
+    `secrets.webUsers[<name>]`. Rotating a web password is cheap and
+    fails closed.
   - The limit of "exact": tiad sees a user's roles through Openness's
     `ProjectUser.Roles` and the project's local users. A role reaching a
     web user through a user group, a UMC user or group holding a tiad web

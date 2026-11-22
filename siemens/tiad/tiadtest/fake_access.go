@@ -539,7 +539,7 @@ func WebReused(user string) string {
 }
 
 func WebReusedOtherKey(user string) string {
-	return fmt.Sprintf("TIA refuses %s for the web user %q as a password the user has now or had recently, and the project's record of it was made under another agent key, so tiad cannot tell which: choose another password, or make the project again (POST /v1/projects)", webSecret(user), user)
+	return fmt.Sprintf("TIA refuses %s for the web user %q as a password the user has now or had recently, and the project's record of it was made under another agent key, so tiad cannot tell which; web users have no record-only route, so the password must change: set a new one in %s and apply again (or make the project again, POST /v1/projects)", webSecret(user), user, webSecret(user))
 }
 
 func WebMadeNote(u tiad.WebUser) string {

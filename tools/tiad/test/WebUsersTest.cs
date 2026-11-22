@@ -257,6 +257,18 @@ namespace Tiad.Test
             Eq(c.Comments["b"], hadB, "b's record put back");
             True(w.Wrote && !w.Dirty, "wrote, not dirty");
 
+            // Another agent key's record: no record-only route; the
+            // refusal names the field to change.
+            var other = new ScriptedAccess();
+            WebFound(other, "k", "Kk-password-1");
+            other.Comments["k"] = OtherRecords.Make("k", "Kk-password-1");
+            e = Throws<TiadException>(delegate { WebUsers.Passwords(other, WebOn(WU("k")), WebSecrets("k", "Kk-password-1"), new AccessWrites(), new List<string>()); }, "another key's record");
+            if (e != null)
+            {
+                Eq(e.Message, WebUsers.ReusedOtherKey("k"), "other key");
+                Contains(e.Message, "web users have no record-only route, so the password must change: set a new one in secrets.webUsers[\"k\"]", "names the field");
+            }
+
             WebUsers.Passwords(c, null, WebSecrets(), w, notes);
             WebUsers.Passwords(c, new WebServer { Enabled = false }, WebSecrets(), w, notes);
         }
