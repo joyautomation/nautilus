@@ -375,7 +375,7 @@ var (
 		"golang.org/x/crypto/argon2":  "via auth/users",
 		"golang.org/x/crypto/blake2b": "via auth/users",
 		module + "/notes":             "server/notes.go (server seams)",
-		"html/template":               "server (server seams)",
+		"html/template":               "server, for server.New's pages; the playground calls NewPlayground and links none of it (TestWasmLinksNoTemplateEngine)",
 	}
 )
 
