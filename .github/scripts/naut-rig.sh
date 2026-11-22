@@ -28,7 +28,7 @@ problems)
   names | sort | uniq -d | sed 's/^/listed twice: /'
   while IFS= read -r n; do
     grep -qE "^func $n\(" cmd/naut/*_test.go 2>/dev/null || echo "not a test in cmd/naut: $n"
-    other=$(grep -rlE "^func $n\(" --include='*_test.go' . 2>/dev/null | grep -v '^\./cmd/naut/' || true)
+    other=$(grep -rlE "^func $n\(" --include='*_test.go' . 2>/dev/null | grep -vE '^\./cmd/naut/[^/]*_test\.go$' || true)
     [ -z "$other" ] || echo "also a test elsewhere ($(echo $other | tr '\n' ' ')): $n"
   done < <(names) ;;
 *) echo "usage: naut-rig.sh regex|names|problems" >&2; exit 2 ;;

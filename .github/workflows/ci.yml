@@ -142,7 +142,11 @@ jobs:
           mkdir -p evidence
           # The rig tests (cmd/naut, .github/scripts/naut-rig-tests.txt) run in
           # their own job: the same list is its -run, so each runs exactly once.
-          go test -json -count=1 -coverprofile=evidence/cover.out -skip "^TestReleaseTargetsBuildWithoutCgo\$|$(.github/scripts/naut-rig.sh regex)" ./... | tee evidence/go-test.json | go run ./tools/evidence cat
+          # On its own line so a failing script aborts the step: inside the -skip
+          # argument it would leave an empty alternative, which matches every test.
+          rig=$(.github/scripts/naut-rig.sh regex)
+          [ -n "$rig" ] || { echo "::error::naut-rig.sh gave no regex"; exit 1; }
+          go test -json -count=1 -coverprofile=evidence/cover.out -skip "^TestReleaseTargetsBuildWithoutCgo\$|$rig" ./... | tee evidence/go-test.json | go run ./tools/evidence cat
       # Test plan §3.4 (#710 PR 3b-3a): the quorumtest build's pause hooks
       # between a write's gate check and its send, swept on a real socket
       # (a few seconds). The tag adds the hooks, so it runs apart from ./...
@@ -524,7 +528,9 @@ jobs:
           for n in $(.github/scripts/naut-rig.sh names); do
             grep -qx "$n" "$RUNNER_TEMP/all-tests.txt" || { echo "::error::naut-rig-tests.txt lists $n, which is not a test in cmd/naut"; exit 1; }
           done
-          go test -json -count=1 -timeout 20m -coverprofile=evidence/cover.out -run "$(.github/scripts/naut-rig.sh regex)" ./cmd/naut | tee evidence/go-test.json | go run ./tools/evidence cat
+          rig=$(.github/scripts/naut-rig.sh regex)
+          [ -n "$rig" ] || { echo "::error::naut-rig.sh gave no regex"; exit 1; }
+          go test -json -count=1 -timeout 20m -coverprofile=evidence/cover.out -run "$rig" ./cmd/naut | tee evidence/go-test.json | go run ./tools/evidence cat
       - name: Save the Go build cache (main, once a day)
         if: always() && steps.gocache.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' && github.event_name == 'push'
         uses: actions/cache/save@v4
