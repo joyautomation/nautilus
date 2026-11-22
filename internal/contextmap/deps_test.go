@@ -351,7 +351,6 @@ var (
 		module + "/quorum/node",      // redundancy: only leader's election needs it
 		module + "/alarm/channel",    // paging channels (net/smtp)
 		"net/smtp",                   // ... and its standard-library half
-		module + "/internal/floatip", // OS networking for the floating IP
 		module + "/internal/webpush", // push delivery
 		module + "/auth/users",       // the user store (argon2, blake2b)
 		"golang.org/x/crypto/argon2",
@@ -360,14 +359,13 @@ var (
 		"html/template",
 		"github.com/lib/pq", // the Postgres driver
 		"database/sql",
-		"image/png", // hmibuild's PWA icons
+		"image/png", // hmibuild's PWA icons (cut: pwa_icons.go is !js)
 	}
 	// wasmLeaks: today's leaks and who removes them. Keep it shrinking.
 	wasmLeaks = map[string]string{
 		module + "/quorum/node":       "leader/election.go (redundancy split)",
 		module + "/alarm/channel":     "internal/project/{project,alarms}.go (alarm seam)",
 		"net/smtp":                    "via alarm/channel",
-		module + "/internal/floatip":  "internal/project/project.go (floating_ip parse)",
 		module + "/internal/webpush":  "server/push.go (server seams)",
 		module + "/auth/users":        "server/{authorize,signin,server}.go (server seams)",
 		"golang.org/x/crypto/argon2":  "via auth/users",
@@ -376,7 +374,6 @@ var (
 		"html/template":               "server (server seams)",
 		"github.com/lib/pq":           "alarm (alarm seam)",
 		"database/sql":                "via lib/pq",
-		"image/png":                   "internal/hmibuild (PWA icons)",
 	}
 )
 
