@@ -15,6 +15,7 @@ import (
 	"io/fs"
 	"math"
 	"net"
+	"net/netip"
 	"net/url"
 	"os"
 	"path"
@@ -614,8 +615,19 @@ func checkRedundancy(r *RedundancyConfig) error {
 		}
 	}
 	if r.FloatingIP != nil {
-		if _, err := floatip.Parse(r.FloatingIP.Address, r.FloatingIP.Interface); err != nil {
+		if fc, err := floatip.Parse(r.FloatingIP.Address, r.FloatingIP.Interface); err != nil {
 			return fmt.Errorf("redundancy.floating-ip: %w", err)
+		} else {
+			// peers: names each box's own address; the floating one moves
+			for name, ep := range r.Peers {
+				host := ep
+				if h, _, err := net.SplitHostPort(ep); err == nil {
+					host = h
+				}
+				if ip, err := netip.ParseAddr(host); err == nil && ip == fc.Address.Addr() {
+					return fmt.Errorf("redundancy.floating-ip %s is peers.%s: peers: names each box's own address, never the floating one (the standby could not bind it, and the leader's peer socket would go dark when it drops the address)", ip, name)
+				}
+			}
 		}
 	}
 	if err := checkFence(r); err != nil {

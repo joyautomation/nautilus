@@ -315,7 +315,7 @@ never computes.
   and not an address the box itself uses). After you change the address or its
   prefix length, or remove `floating-ip`, remove the old address from the box by
   hand. The browser's certificate must cover the floating address if you use
-  HTTPS. The process needs `CAP_NET_ADMIN` and
+  HTTPS. `peers:` names each box's own address, never the floating one. The process needs `CAP_NET_ADMIN` and
   `CAP_NET_RAW`; with systemd, a drop-in adds them and removes the address when the
   process is gone (the `-` keeps an orderly stop, which has already dropped the
   address, from marking the unit failed; check the path of `ip` on your distribution):

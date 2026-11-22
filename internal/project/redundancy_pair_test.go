@@ -215,8 +215,13 @@ func TestFloatingIPConfig(t *testing.T) {
 		{"no prefix length", "  floating-ip: {address: 10.0.0.50, interface: eth0}\n", "prefix length"},
 		{"IPv6", "  floating-ip: {address: 'fe80::1/64', interface: eth0}\n", "IPv4"},
 		{"no interface", "  floating-ip: {address: 10.0.0.50/24}\n", "interface"},
+		{"a peer's own address", "  floating-ip: {address: 10.0.0.50/24, interface: eth0}\n", "never the floating one"},
 	} {
-		if _, err := Load(pairFS(pairOK+c.extra), ""); err == nil || !strings.Contains(err.Error(), c.want) {
+		src := pairOK + c.extra
+		if c.name == "a peer's own address" {
+			src = strings.Replace(pairOK, "ctl-a:9450", "10.0.0.50:9450", 1) + c.extra
+		}
+		if _, err := Load(pairFS(src), ""); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: %v, want %q", c.name, err, c.want)
 		}
 	}
