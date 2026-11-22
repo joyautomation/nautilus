@@ -61,13 +61,17 @@ var ErrNoEquipment = fmt.Errorf("no alarm belongs to equipment")
 //
 // It ends at until, or once left has run since setAt on the engine's
 // clock, whichever comes first, and at once if that clock goes back more
-// than ClockSlack past setAt: a clock set back never lengthens a window
-// by more than ClockSlack (Fable review of #1222).
+// than ClockSlack behind the latest it has read under the window (seen,
+// kept by every Evaluate): a clock set back, at any point in the window
+// and however often, never lengthens it by more than ClockSlack (Fable
+// review of #1222; the engine's clock is wall time, with no monotonic
+// reading).
 type outOfService struct {
 	name    string // the equipment as it was named (the map key is its NameKey)
 	text    string // the reason each covered alarm shows, built once
 	until   time.Time
 	setAt   time.Time     // the engine's clock when it was set or restored
+	seen    time.Time     // the latest the engine's clock has read since
 	left    time.Duration // what was left of it at setAt
 	by      string
 	reason  string
@@ -82,7 +86,7 @@ const ClockSlack = time.Minute
 // remaining is what is left of o at now, and whether it has ended (and
 // why: "" when it has not).
 func (o outOfService) remaining(now time.Time) (time.Duration, string) {
-	if now.Before(o.setAt.Add(-ClockSlack)) {
+	if now.Before(o.seen.Add(-ClockSlack)) {
 		return 0, "clock set back"
 	}
 	// The deadline, or the time left run out, whichever comes first.
@@ -222,7 +226,7 @@ func (e *Engine) TakeOutOfService(eq string, until time.Time, by, reason string)
 // newOutOfService is a window, its shown text built once.
 func newOutOfService(name string, until time.Time, left time.Duration, by, reason string, start, now time.Time) outOfService {
 	reason = strings.TrimSpace(reason)
-	return outOfService{name: name, until: until, setAt: now, left: left, by: by, reason: reason, startAt: start,
+	return outOfService{name: name, until: until, setAt: now, seen: now, left: left, by: by, reason: reason, startAt: start,
 		text: "out of service until " + until.UTC().Format(time.RFC3339) + " by " + by + ": " + reason}
 }
 
@@ -329,6 +333,10 @@ func (e *Engine) expireOutOfService(now time.Time) {
 	for key, o := range e.oos {
 		_, ended := o.remaining(now)
 		if ended == "" {
+			if now.After(o.seen) {
+				o.seen = now
+				e.oos[key] = o // an existing key: no allocation
+			}
 			continue
 		}
 		delete(e.oos, key)

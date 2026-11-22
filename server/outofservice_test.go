@@ -43,6 +43,11 @@ func TestOutOfServiceRoutes(t *testing.T) {
 	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &a) != nil || !a.OutOfService || a.Reason != "probe swap" || !slices.Equal(a.Alarms, []string{"HiTemp"}) {
 		t.Fatalf("out of service: %d %s", rec.Code, rec.Body)
 	}
+	// Named in another case, the answer still says what happened.
+	rec = do(t, s, "POST", "/api/alarms/out-of-service", `{"equipment":"hitempalm","seconds":3600,"reason":"probe swap","by":"op"}`)
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &a) != nil || !a.OutOfService || !slices.Equal(a.Alarms, []string{"HiTemp"}) {
+		t.Fatalf("out of service by another case: %d %s, want it said out of service", rec.Code, rec.Body)
+	}
 	if st := state(eng, "HiTemp"); st != alarm.Suppressed {
 		t.Fatalf("HiTemp %s, want suppressed", st)
 	}

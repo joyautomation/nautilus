@@ -217,9 +217,10 @@ naut alarms in-service P101 --host plc1 # early
   notifications failing): they exist to make a lockout visible.
 - **Timed on what is left, not only on the clock.** A window ends at its
   deadline or once its time has run, whichever is first, and at once if
-  the controller's clock goes back by more than a minute ("returned to
-  service: clock set back"): a clock set back lengthens it by a minute
-  at most. It is kept across a restart (retain) for no longer than was
+  the controller's clock goes back by more than a minute behind the
+  latest it read while the window ran ("returned to service: clock set
+  back"): a clock set back, however often, lengthens it by a minute at
+  most. It is kept across a restart (retain) for no longer than was
   left when it was last saved.
 - **Names** of equipment compare as tag names do, case aside. A redundant pair carries it through
   its operator-intent log; a takeover that could not catch the log up

@@ -230,14 +230,15 @@ func (s *Server) writeOutOfService(w http.ResponseWriter, eq string) {
 	if sc, ok := w.(ackScope); ok {
 		a.MayAck, a.MayNotAck = sc.may, sc.mayNot
 	}
+	key := ir.NameKey(eq)
 	for _, o := range s.alarms.OutOfServiceList() {
-		if o.Equipment == eq {
+		if ir.NameKey(o.Equipment) == key {
 			a.OutOfService, a.UntilMs, a.By, a.Reason, a.Alarms = true, o.UntilMs, o.By, o.Reason, o.Alarms
 		}
 	}
 	if !a.OutOfService {
 		for _, rec := range s.alarms.Records() {
-			if rec.Equipment == eq {
+			if ir.NameKey(rec.Equipment) == key {
 				a.Alarms = append(a.Alarms, rec.ID)
 			}
 		}

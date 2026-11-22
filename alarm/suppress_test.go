@@ -570,6 +570,32 @@ func TestAClockSetBackNeverLengthensAWindow(t *testing.T) {
 	if len(rows) != 1 || !strings.Contains(rows[0].Name, "clock set back") {
 		t.Errorf("journal %+v, want returned to service: clock set back", rows)
 	}
+
+	// A step back that still lands after the window began (Fable
+	// re-check): 6 h window, 5 h run, the clock set back 4 h.
+	r2 := pumpRig(t)
+	if err := r2.TakeOutOfService("Pump_1", r2.clk.at(6*time.Hour), "alice", "rebuild"); err != nil {
+		t.Fatal(err)
+	}
+	r2.clk.advance(5 * time.Hour)
+	r2.Evaluate()
+	r2.clk.advance(-4 * time.Hour)
+	r2.Evaluate()
+	if l := r2.OutOfServiceList(); len(l) != 0 {
+		t.Errorf("a clock set back 4 h into a 6 h window left %+v", l)
+	}
+	// Steps under the slack, repeated, add up and end it too.
+	r3 := pumpRig(t)
+	if err := r3.TakeOutOfService("Pump_1", r3.clk.at(time.Hour), "alice", "rebuild"); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		r3.clk.advance(-40 * time.Second)
+		r3.Evaluate()
+	}
+	if l := r3.OutOfServiceList(); len(l) != 0 {
+		t.Errorf("three 40 s steps back left %+v", l)
+	}
 }
 
 // A restart restores no more than was left when the window was saved,
