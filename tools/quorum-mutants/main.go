@@ -698,6 +698,32 @@ type result struct {
 	broken   string   // a build or setup failure, or a package that failed with no test failing
 	anyFails bool
 	panicked bool // a test panicked: the tests after it in that package never ran
+	// said holds each top-level test's report lines (its t.Error/t.Fatal
+	// lines, "--- FAIL", a panic), the last tailLines of them, so a red
+	// baseline says why, not only which test (#1120).
+	said map[string][]string
+}
+
+// tailLines is how many of a failing test's report lines are kept.
+const tailLines = 12
+
+// reportLine is a line a test reports with, not a log line it printed
+// along the way.
+func reportLine(s string) bool {
+	t := strings.TrimSpace(s)
+	return strings.Contains(t, "_test.go:") || strings.HasPrefix(t, "--- FAIL") || strings.HasPrefix(t, "panic:")
+}
+
+// why gives the failing tests' report lines, indented under the table
+// row, in the order the tests failed.
+func (r result) why() string {
+	var b strings.Builder
+	for _, t := range r.failed {
+		for _, l := range r.said[t] {
+			b.WriteString("    " + strings.TrimSpace(l) + "\n")
+		}
+	}
+	return b.String()
 }
 
 // parse reads a `go test -json` stream.
@@ -717,6 +743,16 @@ func parse(out []byte) result {
 		}
 		if strings.HasPrefix(e.Output, "panic: ") {
 			r.panicked = true
+		}
+		if e.Action == "output" && e.Test != "" && reportLine(e.Output) {
+			top, _, _ := strings.Cut(e.Test, "/")
+			if r.said == nil {
+				r.said = map[string][]string{}
+			}
+			r.said[top] = append(r.said[top], e.Output)
+			if n := len(r.said[top]); n > tailLines {
+				r.said[top] = r.said[top][n-tailLines:]
+			}
 		}
 		if strings.Contains(e.Output, "[build failed]") || strings.Contains(e.Output, "[setup failed]") {
 			r.broken = strings.TrimSpace(e.Output)
@@ -787,14 +823,17 @@ func main() {
 	flag.Parse()
 	ok := true
 	fmt.Println("| mutation | result |\n|---|---|")
-	b, why := baseline(parse(run("", mutation{}.args())))
+	r := parse(run("", mutation{}.args()))
+	b, why := baseline(r)
 	for _, m := range table {
 		if _, out := rowPkgs[m.name]; out && b {
-			b, why = baseline(parse(run("", m.args()))) // the rows outside the tree, green first
+			r = parse(run("", m.args())) // the rows outside the tree, green first
+			b, why = baseline(r)
 		}
 	}
 	fmt.Printf("| (baseline: the tag on, no mutation) | %s |\n", why)
 	if !b {
+		fmt.Print(r.why())
 		os.Exit(1)
 	}
 	found := false
