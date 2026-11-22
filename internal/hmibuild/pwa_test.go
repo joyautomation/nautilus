@@ -523,3 +523,122 @@ func TestNoPWABuild(t *testing.T) {
 		t.Error("index.html links a manifest in a NoPWA build")
 	}
 }
+
+// pushHarness adds what the push and click handlers touch.
+func pushHarness(t *testing.T) *swHarness {
+	h := newSW(t)
+	h.run(t, `
+		var shown = [], opened = [], focused = [], navigated = [], closed = 0;
+		var windows = [];   // {url, canNavigate}
+		self.registration = { showNotification: function (title, options) { shown.push({ title: title, options: options }); return Promise.resolve(); } };
+		self.clients.matchAll = function () {
+			return Promise.resolve(windows.map(function (w) {
+				var o = { url: w.url, focus: function () { focused.push(w.url); return Promise.resolve(o); } };
+				if (w.canNavigate) o.navigate = function (u) { navigated.push(u); return Promise.resolve(o); };
+				return o;
+			}));
+		};
+		self.clients.openWindow = function (u) { opened.push(u); return Promise.resolve({}); };
+		function pushOf(data) {
+			return { data: data === undefined ? null : { json: function () { if (data instanceof Error) throw data; return data; } },
+				waitUntil: function (p) { pending = p; } };
+		}
+		var pending = null;
+	`)
+	return h
+}
+
+// A page shows one notification whatever it holds: a push the browser is
+// told of and shows nothing for may cost the subscription, and an alarm
+// that could not be read must still reach the person.
+func TestPWAWorkerPushAlwaysShows(t *testing.T) {
+	for name, data := range map[string]string{
+		"full":        `{alarm:'HiTemp', name:'Wet well high', state:'unack-active', priority:'high', area:'wetwell', atMs: 1700000000000, level:1}`,
+		"no name":     `{alarm:'HiTemp', state:'unack-active'}`,
+		"empty":       `{}`,
+		"null":        `null`,
+		"a string":    `'boom'`,
+		"a number":    `42`,
+		"no data":     `undefined`,
+		"bad json":    `new Error('not json')`,
+		"wrong types": `{alarm: 7, name: {x:1}, state: [], priority: 3, area: true, atMs: 'soon'}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := pushHarness(t)
+			h.run(t, `handlers.push(pushOf(`+data+`)); pending`)
+			h.run(t, `0`)
+			if h.run(t, `pending === null`).ToBoolean() {
+				t.Fatal("the worker did not hold itself open (waitUntil) while it showed the notification")
+			}
+			if n := h.run(t, `shown.length`).ToInteger(); n != 1 {
+				t.Fatalf("%d notifications shown, want exactly 1", n)
+			}
+			if title := h.run(t, `shown[0].title`).String(); title == "" || title == "undefined" {
+				t.Errorf("title %q", title)
+			}
+			if tag := h.run(t, `shown[0].options.tag`).String(); !strings.HasPrefix(tag, "alarm-") {
+				t.Errorf("tag %q", tag)
+			}
+		})
+	}
+}
+
+func TestPWAWorkerPushSaysTheAlarm(t *testing.T) {
+	h := pushHarness(t)
+	h.run(t, `handlers.push(pushOf({alarm:'HiTemp', name:'Wet well high', state:'unack-active', priority:'high', area:'wetwell', atMs: 0}))`)
+	h.run(t, `0`)
+	if got := h.run(t, `shown[0].title`).String(); got != "HIGH: Wet well high" {
+		t.Errorf("title %q", got)
+	}
+	if got := h.run(t, `shown[0].options.body`).String(); got != "unack active · wetwell" {
+		t.Errorf("body %q", got)
+	}
+	// A repeat of the same alarm replaces: one tag per alarm, renotify.
+	if h.run(t, `shown[0].options.tag`).String() != "alarm-HiTemp" || !h.run(t, `shown[0].options.renotify`).ToBoolean() {
+		t.Error("a repeat of an alarm does not replace its notification")
+	}
+	// A hostile name is cut, not shown at any length.
+	h.run(t, `handlers.push(pushOf({alarm:'A', name: new Array(5000).join('x')}))`)
+	h.run(t, `0`)
+	if n := len(h.run(t, `shown[1].title`).String()); n > 200 {
+		t.Errorf("a %d-character title", n)
+	}
+}
+
+func TestPWAWorkerClickOpensTheAlarmsAndActsOnNothing(t *testing.T) {
+	click := func(h *swHarness) {
+		h.run(t, `var note = { closed: false, data: { url: '/alarms' }, close: function () { this.closed = true; } };
+			handlers.notificationclick({ notification: note, waitUntil: function (p) { pending = p; } })`)
+		h.run(t, `0`)
+		if h.run(t, `pending === null`).ToBoolean() {
+			t.Error("the worker did not hold itself open (waitUntil) for the tap")
+		}
+		if !h.run(t, `note.closed`).ToBoolean() {
+			t.Error("the notification stays after a tap")
+		}
+	}
+	// No window: one is opened on the alarms.
+	h := pushHarness(t)
+	click(h)
+	if got := h.run(t, `opened.join(',')`).String(); got != "/alarms" {
+		t.Errorf("opened %q", got)
+	}
+	// A window of the HMI: brought forward and sent to the alarms, none opened.
+	h = pushHarness(t)
+	h.run(t, `windows.push({ url: 'https://box/trends', canNavigate: true })`)
+	click(h)
+	if h.run(t, `focused.join(',')`).String() != "https://box/trends" || h.run(t, `navigated.join(',')`).String() != "/alarms" || h.run(t, `opened.length`).ToInteger() != 0 {
+		t.Errorf("focused %v navigated %v opened %v", h.run(t, `focused`), h.run(t, `navigated`), h.run(t, `opened`))
+	}
+	// A window of another origin is not touched.
+	h = pushHarness(t)
+	h.run(t, `windows.push({ url: 'https://elsewhere/x', canNavigate: true })`)
+	click(h)
+	if h.run(t, `focused.length`).ToInteger() != 0 || h.run(t, `opened.join(',')`).String() != "/alarms" {
+		t.Error("another origin's window was focused")
+	}
+	// The worker never calls the controller from a tap (no ack, no fetch).
+	if n := h.run(t, `fetched.length`).ToInteger(); n != 0 {
+		t.Errorf("a tap fetched %d times", n)
+	}
+}

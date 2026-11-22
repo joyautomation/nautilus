@@ -228,8 +228,10 @@ func TestSealBindsCredAndGroups(t *testing.T) {
 }
 
 func TestRowIDIs128Bits(t *testing.T) {
-	if n := len(EndpointID("https://push.example.net/p/1")); n != 32 {
-		t.Errorf("id has %d hex digits", n)
+	// The kit computes the same id in the browser (hmi/tests/push.test.ts pins
+	// the same constant) to mark which listed phone is this one.
+	if got := EndpointID("https://push.example.net/p/1"); got != "d3083df850d73ce85f2c9efde024ca85" {
+		t.Errorf("id %q", got)
 	}
 }
 

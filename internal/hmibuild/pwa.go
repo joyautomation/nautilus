@@ -281,6 +281,63 @@ self.addEventListener('activate', (e) => {
 	);
 });
 
+// A page from the controller (Web Push, #722). Every push shows a
+// notification: a browser that is told of a push and shows nothing may take
+// the subscription away, and an alarm that could not be read must still
+// reach the person. The payload is the controller's own page for one alarm
+// ({alarm, name, state, priority, area, atMs, level}); anything missing or
+// malformed falls back to a plain one. The tag is the alarm, so a repeat
+// replaces rather than piles up.
+function describe(d) {
+	const str = (v) => (typeof v === 'string' ? v.slice(0, 120) : '');
+	const name = str(d.name) || str(d.alarm) || 'Alarm';
+	const pri = str(d.priority);
+	const state = str(d.state).replace(/-/g, ' ');
+	const parts = [];
+	if (state) parts.push(state);
+	if (str(d.area)) parts.push(str(d.area));
+	if (typeof d.atMs === 'number' && d.atMs > 0) {
+		parts.push(new Date(d.atMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+	}
+	return {
+		title: (pri ? pri.toUpperCase() + ': ' : '') + name,
+		options: {
+			body: parts.join(' · '),
+			tag: 'alarm-' + (str(d.alarm) || 'page'),
+			renotify: true,
+			data: { url: '/alarms' },
+		},
+	};
+}
+
+self.addEventListener('push', (e) => {
+	let d = {};
+	try {
+		d = (e.data && e.data.json()) || {};
+	} catch (_) {
+		d = {};
+	}
+	const n = describe(d);
+	e.waitUntil(self.registration.showNotification(n.title, n.options));
+});
+
+// A tap opens the alarms: an open window of this HMI is brought forward
+// and sent there, otherwise one is opened. It never acts on an alarm.
+self.addEventListener('notificationclick', (e) => {
+	e.notification.close();
+	const url = (e.notification.data && e.notification.data.url) || '/alarms';
+	e.waitUntil(
+		self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((ws) => {
+			for (const w of ws) {
+				if (new URL(w.url).origin === self.location.origin && 'focus' in w) {
+					return w.focus().then((f) => (f && 'navigate' in f ? f.navigate(url) : undefined));
+				}
+			}
+			return self.clients.openWindow(url);
+		})
+	);
+});
+
 function isData(url) {
 	return url.pathname.startsWith('/api/') || url.pathname.startsWith('/_nautilus/') || url.pathname === '/sw.js';
 }
