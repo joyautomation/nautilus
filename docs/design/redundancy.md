@@ -279,7 +279,16 @@ redundancy:
   the witness keys each pair by it as the controllers first vote, and needs only the peer
   token. A member started without it is refused, with a message that names new-pair.
 - **The tag API addresses** that `/api/cluster` and the standby's proxy use are each
-  controller's `peers:` host with this controller's API port: both run one manifest.
+  controller's `peers:` host with its own API port. A controller knows its own; the peer's is
+  the address the peer announces in its hello answer (`api`, bound by the answer's InfoMAC),
+  never this controller's port on the peer's host, since the two ports may differ (#710 demo
+  finding 1). Until a verified answer names it, or when it names this controller's own API (a
+  standby would proxy to itself), or from a build that announces none, the standby knows no
+  leader address: it serves reads and refuses writes, rather than guess. A forward has
+  deadlines: dial 2 s (a dial failure is replayed to the next leader), TLS handshake 2 s,
+  response headers 2 min (a 502, never replayed). The header deadline stays above the leader's
+  own waits (10-15 s per handler; an I/O apply that fails adds up its put-backs), so a write
+  the leader commits late is never reported as failed.
 - **Misconfiguration is refused at start, never resolved quietly.** A peer list that differs
   between A and B is refused at the peer handshake (#710 PR 3b-2b). Each hello carries a hash of
   the pair's members (peers and witness) both ways.

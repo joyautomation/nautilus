@@ -360,7 +360,16 @@ redundancy:
     b: ctl-b:9450
   witness: witness-host:9460
   lease: 2s
+  state-dir: /var/lib/nautilus   # optional: default $STATE_DIRECTORY (systemd)
 ```
+
+`state-dir` is where each controller keeps its voter state
+(`quorum.state`) and the pair's operator-intent log. Leave it unset
+under systemd and `naut deploy`, which set `STATE_DIRECTORY`
+(`/var/lib/nautilus`). Set it, as an absolute path outside the project,
+when you run `naut run` some other way: without either a member refuses
+to start. The voter state must outlive every deploy, so never point it
+into the project directory.
 
 Each controller's peer listener binds exactly the address its own
 `peers:` entry names, so the peer port is not open on the box's other
@@ -457,6 +466,21 @@ under `naut deploy`):
 - `NAUTILUS_PEER_LISTEN` (optional, per box): the address its peer port
   binds, when its `peers:` entry is not an address it has (NAT, mapped
   container ports). Unset, it binds its `peers:` entry.
+
+Each controller's tag API is reached on its `peers:` host, at its own
+API port; the two ports may differ. The leader announces its port to
+the standby in the peer handshake, and the standby forwards API writes
+there. Until the standby has heard it (the first second or so after a
+start, or from a peer running an older release), it answers reads
+itself and refuses writes, saying no leader is known.
+
+A forwarded request has deadlines: 2 s to connect to the leader (then
+the standby waits for the next leader and sends it there, since the
+leader never saw it), 2 s for a TLS handshake, and 2 minutes for the leader
+to start its answer. A leader that takes a request and never answers
+gives the client a `502 leader unavailable` after 2 minutes; the request is
+not sent again, because the leader may have applied it. A live stream
+is not cut: the deadline covers only the start of the answer.
 
 #### Commissioning a new pair
 

@@ -3,6 +3,7 @@
 package node
 
 import (
+	"net"
 	"os"
 	"slices"
 	"strings"
@@ -83,6 +84,21 @@ var mutations = []string{
 	"live_check_witness_skipped",     // node: recommission's live-copy check skips a witness that does not answer it (#1207 review)
 	"peer_tls_handshake_unbounded",   // node: a peer TLS handshake has no bound of its own, so a silent peer holds a connection per call (#1230 review)
 	"peer_tls_mismatch_unnamed",      // node: a voter that speaks the other protocol, or holds another key, raises nothing (#710)
+	"peer_api_guessed",               // node: a standby names the leader's tag API as the peer's host and its OWN API port (#710 demo finding 1)
+	"peer_api_unbound",               // node: the announced tag API is outside the hello's InfoMAC, so whoever answers can name it
+	"peer_api_self",                  // node: a peer that announces this controller's own tag API is proxied to: the standby proxies to itself
+}
+
+// guessPeerAPI is what a standby named before the hello announced the
+// leader's tag API: the peer's host and this controller's own API port
+// (peer_api_guessed brings it back).
+func guessPeerAPI(peerAddr, selfAPI string) string {
+	host, _, err := net.SplitHostPort(peerAddr)
+	_, port, perr := net.SplitHostPort(selfAPI)
+	if err != nil || perr != nil {
+		return ""
+	}
+	return net.JoinHostPort(host, port)
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")

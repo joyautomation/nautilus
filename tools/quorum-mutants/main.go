@@ -455,6 +455,7 @@ var table = []mutation{
 	{"link_sign_in_ignored", []string{"TestAckLinkSignInMode"}},
 	{"link_needs_write_rule", []string{"TestAckLinkNeedsNoOtherCredential", "TestInboundNeedsNoOtherCredential"}},
 	{"link_not_forwarded", []string{"TestAckLinkIsForwardedByAStandby"}},
+	{"leader_headers_unbounded", []string{"TestStandbyForwardToAHungLeaderIs502", "TestLeaderTransportsHaveDeadlines"}},
 	{"link_reason_html", []string{"TestAckLinkRefusalReasonIsWords", "TestAckLinkWithNoLeaderSaysSo"}},
 	{"link_acks_on_standby", []string{"TestAckLinkNotLeadingNeverAcksItsEngine"}},
 	{"link_session_cookie_refused", []string{"TestAckLinkIgnoresASessionFromAnotherOrigin"}},
@@ -497,6 +498,9 @@ var table = []mutation{
 	{"peer_bind_gives_up", []string{"TestPairPeerPortWaitsForItsAddress"}},
 	{"peer_bind_loopback_taken", []string{"TestPairPeerPortNamesANameBoundToLoopback"}},
 	{"peer_tls_handshake_unbounded", []string{"TestStalledHandshakesAreClosed"}},
+	{"peer_api_guessed", []string{"TestLoopbackNewPairCommissionsAndElects", "TestPairStandbyProxiesToTheLeadersOwnAPIPort"}},
+	{"peer_api_unbound", []string{"TestTheAnnouncedAPIIsBoundByTheMAC"}},
+	{"peer_api_self", []string{"TestThePeersAPIIsOnlyWhatItAnnounced"}},
 }
 
 // rowPkgs are the packages a row runs instead of ./quorum/..., filtered
@@ -580,6 +584,9 @@ var rowPkgs = map[string][]string{
 	"peer_bind_gives_up":                {"./cmd/naut"},
 	"peer_bind_loopback_taken":          {"./cmd/naut"},
 	"peer_tls_handshake_unbounded":      {"./quorum/..."},
+	"peer_api_guessed":                  {"./quorum/...", "./cmd/naut"},
+	"peer_api_unbound":                  {"./quorum/..."},
+	"peer_api_self":                     {"./quorum/..."},
 	"alarm_view_ignored":                {"./cmd/naut"},
 	"engine_not_reset":                  {"./server"},
 	"occurrence_per_activation":         {"./alarm"},
@@ -616,6 +623,7 @@ var rowPkgs = map[string][]string{
 	"link_sign_in_ignored":              {"./server"},
 	"link_needs_write_rule":             {"./server"},
 	"link_not_forwarded":                {"./server"},
+	"leader_headers_unbounded":          {"./server"},
 	"link_reason_html":                  {"./server"},
 	"link_acks_on_standby":              {"./server"},
 	"link_session_cookie_refused":       {"./server"},

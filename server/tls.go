@@ -248,7 +248,7 @@ func (c *CertSource) leaderTransport() *http.Transport {
 			return nil
 		},
 	}
-	return t
+	return withLeaderDeadlines(t)
 }
 
 // ParseTrustedProxies reads server.trusted-proxies: addresses ("10.0.0.5")

@@ -410,9 +410,11 @@ func pairOptions(r *project.RedundancyConfig, apiAddr, dir string, getenv func(s
 		ClientToken: getenv("NAUTILUS_TOKEN"),
 		// Compared at the hello: the section both must agree on, and what
 		// this build does that the peer must too (#1013).
-		Config:  node.ConfigHash(r.Peers["a"], r.Peers["b"], r.Witness),
-		Caps:    []string{node.KeepsLiveIO},
-		SelfAPI: apiOn(r.Peers[self], apiAddr), PeerAPI: apiOn(r.Peers[peer], apiAddr),
+		Config: node.ConfigHash(r.Peers["a"], r.Peers["b"], r.Witness),
+		Caps:   []string{node.KeepsLiveIO},
+		// The peer's tag API is the one its hello announces, never this
+		// port on its host: the two need not match (#710 demo finding 1).
+		SelfAPI: apiOn(r.Peers[self], apiAddr),
 	}
 	pt, err := buildPeerTLS(token, peerTLSIsOff(r.PeerTLS), "redundancy.peer-tls: off")
 	if err != nil {
@@ -609,13 +611,15 @@ func (m *pairMember) peersKeepIO() string {
 	return ""
 }
 
-// untrustedAPIs are the tag API addresses the pair advertises (/api/cluster,
-// the standby's proxy) by a name the server won't answer a browser by:
-// not localhost, not an IP, not in allowed (design §6.1). A browser HMI
-// that follows the leader there gets 403.
+// untrustedAPIs are the hosts of the tag APIs the pair advertises
+// (/api/cluster, the standby's proxy) by a name the server won't answer a
+// browser by: not localhost, not an IP, not in allowed (design §6.1). A
+// browser HMI that follows the leader there gets 403. Each controller's tag
+// API is on the host peers: names for it (apiOn); the peer's port is the
+// one its hello announces, but the host is all this check needs.
 func (m *pairMember) untrustedAPIs(allowed []string) []string {
 	var out []string
-	for _, a := range []string{m.o.SelfAPI, m.o.PeerAPI} {
+	for _, a := range []string{m.o.SelfAPI, m.peers[string(m.o.Peer)]} {
 		host, _, err := net.SplitHostPort(a)
 		if err != nil || net.ParseIP(host) != nil || strings.EqualFold(host, "localhost") {
 			continue

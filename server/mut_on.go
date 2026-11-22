@@ -65,6 +65,7 @@ import "os"
 //   - inbound_unknown_as_refused: an inbound ack the pair's log did not confirm is journalled as refused (#715);
 //   - sms_ack_offered_while_suspended: an SMS page offers a reply code while SMS acknowledgements are suspended (#715);
 //   - inbound_stale_code_counted: a good code for an occurrence acknowledged since counts as a wrong code (#715);
+//   - leader_headers_unbounded: a standby's forward waits for the leader's response headers without a deadline (#710);
 var mutOn = os.Getenv("QUORUM_MUT")
 
 func mutServer(name string) bool { return name == mutOn }

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"net/url"
 	"slices"
 	"strconv"
@@ -32,6 +33,9 @@ import (
 //     claiming that name: EventDuplicateMember.
 //   - Caps: what this build does that the other must too. KeepsLiveIO
 //     (#1013): it keeps a live I/O apply across a takeover.
+//   - API: the answerer's own tag API address (Options.SelfAPI), answers
+//     only. A standby proxies to the leader there and /api/cluster names
+//     it: the peer's real port, which need not be this controller's.
 
 // KeepsLiveIO is the capability a build advertises when it keeps a live
 // I/O apply (retain io, #1010) across a takeover.
@@ -45,10 +49,13 @@ type peerInfo struct {
 	// Log is the operator-intent log report (logReport), "" when not
 	// asked or not known (#710 3b-4b): answers only.
 	Log string
+	// API is the answerer's tag API address (Options.SelfAPI), "" from a
+	// build before it: answers only.
+	API string
 }
 
 func (e *Elector) selfInfo() peerInfo {
-	return peerInfo{Config: e.o.Config, Nonce: e.nonce, Caps: e.o.Caps}
+	return peerInfo{Config: e.o.Config, Nonce: e.nonce, Caps: e.o.Caps, API: e.o.SelfAPI}
 }
 
 // query adds pi to a hello's query.
@@ -80,6 +87,10 @@ func infoMAC(peerToken, challenge string, asker, answerer quorum.NodeID, pi peer
 	if pi.Log != "" {
 		// Only when sent, so an answer without it verifies as before.
 		parts = append(parts, "log", pi.Log)
+	}
+	if pi.API != "" && !mut("peer_api_unbound") {
+		// Likewise: a build before it sends none.
+		parts = append(parts, "api", pi.API)
 	}
 	for _, part := range parts {
 		m.Write([]byte(part))
@@ -142,6 +153,31 @@ func (e *Elector) heard(pi peerInfo) {
 		if len(e.peerNonces) > 4 {
 			e.peerNonces = e.peerNonces[1:]
 		}
+	}
+}
+
+// heardAPI records the tag API address the peer announced in an answer
+// that verified (answerVerified): never from an asker's query, which no
+// MAC binds. An announced address that is this controller's own is a
+// misconfiguration (both API listeners on one address) and names nothing:
+// a standby that proxied there would proxy to itself. "" (a build before
+// the announcement) names nothing either: the standby then knows no
+// leader's API, serves reads itself and refuses writes, rather than
+// guessing a port (#710 demo finding 1). So does anything that is not a
+// host and a port: the standby forwards its clients' requests there.
+func (e *Elector) heardAPI(api string) {
+	if api != "" && api == e.o.SelfAPI && !mut("peer_api_self") {
+		api = ""
+	}
+	if host, port, err := net.SplitHostPort(api); api != "" && (err != nil || host == "" || port == "") {
+		e.log.Warn("redundancy: the peer announced a tag API that is not a host and a port; writes are refused here until it names one", "addr", api)
+		api = ""
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if api != e.peerAPI {
+		e.peerAPI = api
+		e.log.Info("redundancy: the peer's tag API", "addr", api)
 	}
 }
 
