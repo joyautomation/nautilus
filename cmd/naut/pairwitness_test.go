@@ -409,6 +409,9 @@ func TestPairSyncedLeaderAloneIsReadOnly(t *testing.T) {
 	r := newPairRig(t)
 	lead := r.leader()
 	stand := other(lead)
+	// An entry on the log: an empty one is a new pair's, whose condition
+	// names the plain vouch (TestPairANewPairsPlainVouchNeedsNoAcceptLoss).
+	r.startedID(lead)
 	r.nodes[lead].crash()
 	r.nodes[stand].crash()
 	r.stopWitness()

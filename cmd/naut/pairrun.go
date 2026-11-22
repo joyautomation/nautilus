@@ -508,6 +508,12 @@ const PairNoMajority = "operator-intent log has no majority: neither the other c
 // pending.
 const OplogReadOnly = "operator log read-only: no second counting copy; if the other controller and the witness can't be brought back, a person accepts what they may hold: naut redundancy vouch (it prints what would be lost), then naut redundancy vouch --accept-loss=<digest>"
 
+// OplogReadOnlyNewPair is OplogReadOnly on a copy whose log is empty at
+// history 0, as a new pair's is when a controller restarted before its
+// first catch-up (#1029 3c-3c-2b, S2): with every copy answering and
+// every log empty, the plain vouch is enough.
+const OplogReadOnlyNewPair = "operator log read-only: no second counting copy; this log is empty, as a new pair's is when a controller restarted before its first catch-up: with the other controller and the witness answering and their logs empty too, a person runs: naut redundancy vouch (no flags: no copy shows anything to lose; if it refuses, it names why)"
+
 // startLog builds the pair's replicated log of operator intent (oplog,
 // design §1) over rt and mounts it on the peer listener: A, B and the
 // witness are its replicas (#710 PR 3b-4b), so a write needs two of them.
@@ -878,6 +884,9 @@ func (m *pairMember) logConditions() {
 		// committed while it lagged may be on the others, so only a person
 		// can decide (#1053).
 		readOnly = OplogReadOnly
+		if st.LastSeq == 0 && st.History == 0 {
+			readOnly = OplogReadOnlyNewPair
+		}
 	}
 	m.q.SetCondition("oplog-read-only", readOnly)
 	if !st.Unsynced {

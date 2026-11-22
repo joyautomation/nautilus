@@ -231,3 +231,17 @@ func TestTheRealBoxMadeASpareComesBackWithFromSpare(t *testing.T) {
 		t.Fatal("the member stopped leading when the copy came back")
 	}
 }
+
+// recommission prints what its live-copy check could not check (a member
+// that did not answer), done or refused (#1029 3c-3c-2b, naut-lead's
+// ruling: tell the person exactly what wasn't checked).
+func TestRecommissionPrintsWhatTheLiveCopyCheckMissed(t *testing.T) {
+	for _, outcome := range []string{"done", "refused"} {
+		body := `{"outcome":"` + outcome + `","error":"x","report":{"members":[{"member":"a"}],"liveUnchecked":["b did not answer: a live copy of a reachable only through b can't be ruled out; check that the old box is off"]}}`
+		var out bytes.Buffer
+		printRecommissionAnswer(&out, 200, []byte(body))
+		if !strings.Contains(out.String(), "not checked: b did not answer") {
+			t.Errorf("%s: the unchecked peer is not printed:\n%s", outcome, out.String())
+		}
+	}
+}

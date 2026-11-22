@@ -432,7 +432,10 @@ operator can commission the pair again.
 #### Re-commissioning a controller by hand
 
 A controller that lost its state normally re-adopts from the other one
-within seconds. When it can't (the alarm says "re-commission by hand":
+within seconds: 1.3 s after it is back, 2.5 s at most, at the default
+2 s lease (the other controller takes it once its previous process has
+gone quiet there for a lease and a quarter, so a wiped old box switched
+on beside its running replacement is not taken). When it can't (the alarm says "re-commission by hand":
 the other controller is down too, or its witness incarnation is gone),
 run on it:
 
@@ -455,6 +458,17 @@ current one, the default. A controller that reports
 `redundancy.box-changed` needs `--box-replaced`: you replaced its box,
 it is not a copy of a running controller. Each flag is named in the
 journal entry (`redundancy.recommission`).
+
+Recommission also refuses while the other controller's voter or the
+witness heard another process of this controller's name in the last
+lease and a quarter: the box that replaced this one is running (an old
+box wiped and switched back on), and re-commissioning would make two.
+If the other box is the member, switch this one off. Right after naut
+restarts on this box, its own previous process counts too: wait a few
+seconds and run it again. A member that doesn't answer can't be asked: the command
+says so ("not checked: b did not answer ..."), and the journal entry
+records which members answered. Then check by hand that the old box is
+off before you go on.
 
 The voter state, `quorum.state`, lives in the systemd state directory
 (`/var/lib/nautilus` under `naut deploy`) or in `redundancy: state-dir:`.
@@ -745,10 +759,10 @@ shapes):
   later loses its own state file. Wipe its state (move its `quorum.state`
   aside) **only with the network whole**: wiped, it starts as a copy of
   the member, is heard beside it and made a spare. Started inside a
-  network split that later moves, where a member hears it beside the
-  member for less than about a lease and a quarter, it is a copy the
-  members can't catch in time (see "What the voters can't catch"
-  below). Or keep it off.
+  network split that later moves, where the witness and the other
+  controller hear it beside the member for less than half a lease, it
+  is a copy the members can't always catch in time (see "What the
+  voters can't catch" below). Or keep it off.
 
 Do not run an older naut release on a spare. A release before the spare
 can't read the spare's `quorum.state`: it sets the file aside and starts
@@ -775,13 +789,18 @@ near the largest delay a 2 s lease allows.
 - **A split within about a second of the clone's start**, before any
   voter has heard both copies running, leaves nothing marked either.
   For a controller's old box switched on again after `recommission
-  --from-spare` with its disk wiped, the window is a lease and a quarter
-  (2.5 s at the default lease): the mark comes in time, but it is made a
-  spare only about a lease later, and a split that moves it to the other
-  controller's side before then gives two leaders. In the simulator that
-  happened in every run from an eighth to three quarters of a lease, 41
-  of 100 at one lease, and none from a lease and a quarter. Keep the old
-  box off, or wipe it only with the network whole. In
+  --from-spare` with its disk wiped, the window is under half a lease
+  (1 s at the default lease), and only in one shape: the replacement
+  leads with the witness while cut from the other controller, the old
+  box reaches both for under that window, then a split leaves it with
+  the other controller alone. In the simulator that gave two leaders in
+  up to 147 and 79 of 1,000 runs at an eighth and a quarter of a lease,
+  and none from half a lease. Every other shape the simulator sweeps is
+  caught (none in 1,000 runs each): the old box heard at the witness
+  alone for an eighth of a lease to two, then moved to the other
+  controller's side of a split, with the replacement leading or not,
+  and the mirror, the replacement cut from the witness. Keep the old box
+  off, or wipe it only with the network whole. In
   the simulator (2 s lease) that gave two leaders in 52, 21 and 1 of
   3,600 runs with the split in the first, second and third half second
   after the clone started, and none later.
@@ -936,6 +955,17 @@ picture digest 3f9c0a17be. If that loss is acceptable, run on this controller:
 - A vouch holds until naut next restarts on that controller. If it
   restarts before the vouch was used, the copy stays synced, but you
   vouch again against the picture as it is then.
+- **A new pair restarted before its first catch-up.** If a controller
+  restarts between commissioning and the first catch-up, its log is
+  read-only and the banner says to run the plain `naut redundancy
+  vouch`. With every other copy answering, none lost or started over
+  another log that held entries, every copy at history 0 and every log
+  empty, no copy shows anything to lose, so the plain vouch goes ahead
+  with no `--accept-loss`. If any condition fails, it refuses and names
+  which (a copy that doesn't answer, a lost log, a log set aside, a
+  history, a log holding entries), with the picture to accept. A copy
+  wiped outright shows nothing: only use the plain vouch on a pair you
+  know never wrote.
 - `commission` and `recommission` take the same two flags for the vouch
   they run. A refused vouch there prints the picture and the `vouch`
   command to run next.

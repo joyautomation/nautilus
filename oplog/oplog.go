@@ -440,6 +440,12 @@ type Mark struct {
 	// when there was no file): kept until the replica is synced again,
 	// across restarts, so the alarm it raises lasts as long as the loss.
 	Lost string `json:"lost,omitempty"`
+	// SetAside is where another identity's log that held entries was
+	// kept when this replica started over it (a box changed, a copy
+	// rebuilt in place): kept until the replica is synced again. Its
+	// entries may be ones the pair committed, so a new pair's plain vouch
+	// refuses beside it (#1029 3c-3c-2b, the #1207 review).
+	SetAside string `json:"setAside,omitempty"`
 	// Term is the highest term this replica has seen, written when it
 	// rises, before the request that raised it is answered: a log lost
 	// under the mark (which starts empty) still refuses a deposed
@@ -764,12 +770,21 @@ func (n *Node) openMarked() error {
 		m, write = Mark{Identity: n.o.Identity, Held: true}, true
 	case m.Identity != n.o.Identity:
 		// Another incarnation's log: kept aside, never counted as ours.
-		if kept, err := n.moveAside(".previous-"); err != nil {
+		kept, err := n.moveAside(".previous-")
+		if err != nil {
 			return err
 		} else if kept != "" {
 			n.log.Warn("oplog: the log belongs to another identity of this replica; kept aside, starting empty and unsynced", "kept", kept, "was", m.Identity, "now", n.o.Identity)
 		}
+		prev := m
 		m, write = Mark{Identity: n.o.Identity}, true
+		if fi, err := os.Stat(kept); kept != "" && err == nil && fi.Size() > 0 {
+			m.SetAside = kept
+		} else if !prev.Synced && !mutOplog("set_aside_forgotten") {
+			// A second change before it synced: the first one's entries
+			// are still set aside (the #1207 re-check).
+			m.SetAside = prev.SetAside
+		}
 	case m.SupersedeTo > m.History && !mutOplog("superseded_not_reset"):
 		// A higher log history was heard (learnHistoryLocked): the log is
 		// moved aside BEFORE it is replayed, so nothing of the old history
@@ -1239,7 +1254,7 @@ func (n *Node) becomeSyncedLocked(why string) {
 		return
 	}
 	m := n.mark
-	m.Synced, m.Lost = true, ""
+	m.Synced, m.Lost, m.SetAside = true, "", ""
 	if err := n.setMarkLocked(m); err != nil {
 		n.log.Error("oplog: can't record that the log is synced; it keeps counting for nothing", "error", err)
 		return
@@ -1786,6 +1801,9 @@ type afterResp struct {
 	// it was lost and not synced since (#1029 3c-3c-2a).
 	Lineage
 	Lost bool `json:"lost,omitempty"`
+	// SetAside: it started over another identity's log that held entries
+	// and has not synced since (Mark.SetAside).
+	SetAside bool `json:"setAside,omitempty"`
 }
 
 // Propose takes an operator event from this instance's client: sequenced
@@ -2210,6 +2228,7 @@ type CopyState struct {
 	Counts   bool   `json:"counts"`
 	Synced   bool   `json:"synced"`
 	Lost     bool   `json:"lost,omitempty"`
+	SetAside bool   `json:"setAside,omitempty"`
 	LastTerm uint64 `json:"lastTerm"`
 	LastSeq  uint64 `json:"lastSeq"`
 	// Lineage is its log history; Forked, the same number under another
@@ -2242,6 +2261,38 @@ func (p Picture) digest() string {
 	return hex.EncodeToString(sum[:])[:10]
 }
 
+// emptyPairRefusal is why the picture is not a new pair's (#1029 3c-3c-2b,
+// S2), "" when it is: every other copy answers, none was lost or set
+// aside another identity's log that held entries, every copy is at
+// history 0, and every log is empty, this one's too. No copy then shows
+// anything the pair committed, so a vouch for its synced copy alone
+// accepts no loss it can see (a copy wiped outright shows nothing: that
+// double loss looks the same as a new pair). The first condition that
+// fails is named.
+func emptyPairRefusal(pic Picture) string {
+	if mutOplog("empty_pair_unchecked") {
+		return ""
+	}
+	for _, c := range pic.Copies {
+		if !c.Answers {
+			return c.Name + " does not answer"
+		}
+	}
+	for _, c := range append([]CopyState{pic.Self}, pic.Copies...) {
+		switch {
+		case c.Lost:
+			return c.Name + "'s log was lost"
+		case c.SetAside:
+			return c.Name + " set aside another identity's log that held entries"
+		case c.Lineage.History != 0:
+			return fmt.Sprintf("%s is at history %d", c.Name, c.Lineage.History)
+		case c.LastSeq != 0:
+			return fmt.Sprintf("%s's log holds entries (to seq %d)", c.Name, c.LastSeq)
+		}
+	}
+	return ""
+}
+
 // Vouch is a person's word that this replica's log holds every committed
 // entry, given when a controller is commissioned or recommissioned (#710
 // 3b-4b), or by itself (naut redundancy vouch, #1029 3c-3c-2a): with only
@@ -2265,7 +2316,9 @@ func (p Picture) digest() string {
 //     on a peer that counts is fine: the catch-up takes it (#1053 review);
 //   - this copy is synced, and no other copy counts (both lost or
 //     rebuilt): entries committed while it lagged may be on them.
-//     --accept-loss grants the one-shot catch-up.
+//     --accept-loss grants the one-shot catch-up. Not on a new pair
+//     (emptyPairRefusal): with nothing committed anywhere a plain vouch
+//     grants it.
 //
 // An accepting run must see the same picture (the digest), else it
 // refuses and returns the new one. A synced log another copy counts
@@ -2286,11 +2339,12 @@ func (n *Node) Vouch(ctx context.Context, by string, counts func(peer, identity 
 		return Vouch{}, Picture{}, fmt.Errorf("%w: %w", ErrVouchRefused, errSuperseded)
 	}
 	synced, alone, lost, last := n.syncedLocked(), n.mark.Alone, n.mark.Lost, n.lastLocked()
+	setAside := n.mark.SetAside != ""
 	lastTerm := n.termAtLocked(last)
 	hist := n.mark.Lineage
 	n.mu.Unlock()
 	check := !mutOplog("vouch_unchecked")
-	pic := Picture{Self: CopyState{Name: n.name(n.o.Self), Answers: true, Counts: synced, Synced: synced, Lost: lost != "", LastTerm: lastTerm, LastSeq: last, Lineage: hist}}
+	pic := Picture{Self: CopyState{Name: n.name(n.o.Self), Answers: true, Counts: synced, Synced: synced, Lost: lost != "", SetAside: setAside, LastTerm: lastTerm, LastSeq: last, Lineage: hist}}
 	type answer struct {
 		got afterResp
 		err error
@@ -2337,7 +2391,7 @@ func (n *Node) Vouch(ctx context.Context, by string, counts func(peer, identity 
 		if g.History > hist.History {
 			return Vouch{}, pic, fmt.Errorf("%w: %s holds a newer log history (%d; this copy %d): %w", ErrVouchRefused, n.name(p), g.History, hist.History, errSuperseded)
 		}
-		c.Synced, c.Lost, c.LastTerm, c.LastSeq, c.Lineage = !g.Unsynced, g.Lost, g.LastTerm, g.LastSeq, g.Lineage
+		c.Synced, c.Lost, c.SetAside, c.LastTerm, c.LastSeq, c.Lineage = !g.Unsynced, g.Lost, g.SetAside, g.LastTerm, g.LastSeq, g.Lineage
 		c.Forked = g.Lineage.forks(hist)
 		c.Counts = g.Lineage.same(hist) && n.vouchCounts(counts, p, g)
 		pic.Copies = append(pic.Copies, c)
@@ -2375,7 +2429,17 @@ func (n *Node) Vouch(ctx context.Context, by string, counts func(peer, identity 
 			}
 			return Vouch{}, pic, nil
 		}
-		need(NeedLoss, "no other copy counts (each was lost or rebuilt): entries committed while this one lagged may have been on them; accept that with --accept-loss")
+		// A new pair restarted before its first catch-up (#1029
+		// 3c-3c-2b, S2): every copy answers, none lost, all at history
+		// 0, every log empty, this one's too. Nothing any copy shows can
+		// be lost, so a plain vouch grants the one-shot.
+		if why := emptyPairRefusal(pic); why != "" || mutOplog("empty_pair_needs_accept") {
+			line := "no other copy counts (each was lost or rebuilt): entries committed while this one lagged may have been on them; accept that with --accept-loss"
+			if why != "" {
+				line += " (a plain vouch serves only a new pair whose every copy answers, none lost, all at history 0, every log empty: " + why + ")"
+			}
+			need(NeedLoss, line)
+		}
 		if mutOplog("synced_alone_without_accept") {
 			needs = slices.DeleteFunc(needs, func(s string) bool { return s == NeedLoss })
 		}
@@ -3072,7 +3136,7 @@ func (n *Node) Handler() http.Handler {
 		n.mu.Lock()
 		last := n.lastLocked()
 		resp := afterResp{Entries: n.afterLocked(after), Commit: n.commit, Term: n.term, LastSeq: last, LastTerm: n.termAtLocked(last),
-			Unsynced: !n.syncedLocked(), Identity: n.mark.Identity, Lineage: n.mark.Lineage, Lost: n.mark.Lost != ""}
+			Unsynced: !n.syncedLocked(), Identity: n.mark.Identity, Lineage: n.mark.Lineage, Lost: n.mark.Lost != "", SetAside: n.mark.SetAside != ""}
 		resp.LeaderSynced = n.isLeader() && n.syncedTerm != 0 && n.syncedTerm == n.currentTerm()
 		n.mu.Unlock()
 		// Pages only for a reader that asks (page=1): one from before

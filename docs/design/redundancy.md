@@ -955,15 +955,34 @@ redundancy:
         `fence_hides_lookalike`; the #1164 re-check's N1: ignored whole, a wiped old box that
         reached the witness alone, then the peer alone, re-adopted at the fence beside the
         peer and led while the replacement led with the witness, 300/300 before, 0 now), so
-        a voter that hears it beside the replacement marks the name (3c-1). What remains is
-        the clone residual of §2, at a lease's scale for this shape: the mark holds the copy
-        only once it is made a spare, about a lease later, so a wiped old box heard beside the
-        replacement at the witness alone for under about a lease and a quarter, that then
-        moves to the peer's side of a split, still leads there (the #1164 final look: two
-        leaders in 100/100 runs from 1/8 to 3/4 lease, 41/100 at one lease, 0 from 1.25
-        leases, 2 s lease; identical with fenced requests not refused at all, so not added by
-        the fence): the alarm and the guide say wipe it only with the network whole,
-        or keep it off. Stated too: a witness restored from an older file at the same
+        a voter that hears it beside the replacement marks the name (3c-1). Since 3c-3c-2b (D1) the old box's adoption probe carries its sequence (a voter notes
+        a boot only from a frame with Seq > 0, so before it no voter ever counted the wiped box
+        as a second boot: `adopt_probe_unseq`) and reaches the peer too, as a standby's probe
+        does (`adopt_probe_witness_only`). A commissioned controller takes an uncommissioned
+        peer boot's re-adoption only while its own voter hears no other live boot of that name
+        (rule P, `peer_takes_beside_live`), and recommission refuses while the peer or the
+        witness hears another live boot of its name (`recommission_beside_live`). The #1164
+        final look's shape (the box at the witness alone, then the peer's side of a split: two
+        leaders in every run from 1/2 to 3/4 lease, 489/1000 at one lease, and 1000/1000 down
+        to 1/8 lease with the split starting as the box moves), with the replacement leading or
+        not, and its mirror (the replacement cut from the witness: up to 1000/1000 at 1/4
+        lease) are 0 in 1000 runs per cell (`TestAWipedOldBoxBesideItsReplacementIsMarked`, 96
+        cells, the real box or the copy as the spare; the simulator's peer link reaches both
+        boxes of the name, `PeerLinkReachesEveryBox`, since the old box may hold the address). P's cost: a controller that
+        lost its file re-adopts only once its previous boot has aged out of the peer's live
+        boots, p50 1.27 s and p99 2.51 s after it is back at a 2 s lease (0.26 s and 0.29 s
+        before), and is never marked (500 runs, `TestALostStateRestartReadoptsWithinTwoLeasesUnmarked`).
+        **Stated D1 boundary (naut-lead's ruling on 3c-3c-2b, in place of "a lease and a
+        quarter"):** the replacement leads on the witness's promise, cut from the peer; the
+        wiped old box reaches the witness and the peer for under half a lease, then a split
+        leaves it with the peer, the peer cut from the witness. Within D a restart and a second
+        boot look alike to a voter (the duplicate rule's delay, the window of a clone whose split
+        follows its start by under D, #1113): the witness marks the name, but the replacement's
+        running promise keeps renewing there, and the box's vote at the peer comes from a voter
+        that heard the replacement too briefly to object. Two leaders in up to 147 and 79 of 1000
+        runs at 1/8 and 1/4 lease (1000 and up to 1000 before), 0 from half a lease (2 s lease;
+        `TestMeasureD1`, the `wLead` cells). The alarm and the guide still say wipe it only with
+        the network whole, or keep it off. Stated too: a witness restored from an older file at the same
         incarnation, which keeps a record of the name but not its newest fence, does not learn
         it (the #1164 re-check's S7): it takes only an earlier `--from-spare`'s fence, and the
         old box of a later one can lead beside it in a split. Restoring a voter's state from an old

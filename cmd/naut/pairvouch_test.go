@@ -387,3 +387,48 @@ func TestPairALeaderThatLearnsANewerHistoryRunsNoneOfTheOld(t *testing.T) {
 		}
 	}
 }
+
+// A pair whose copies are all empty at history 0 (#1029 3c-3c-2b, S2):
+// here a new pair that never wrote, its leader alone among the copies
+// (the other controller's disk wiped, the witness's log rebuilt). That is
+// the picture of a new pair's controller restarted before its first
+// catch-up (the oplog suite runs that sequence itself,
+// TestANewPairsPlainVouchAfterARestartNeedsNoAcceptLoss): nothing can be
+// lost. The read-only condition names the plain vouch, and the plain
+// vouch goes ahead (empty_pair_needs_accept).
+func TestPairANewPairsPlainVouchNeedsNoAcceptLoss(t *testing.T) {
+	r := newPairRig(t)
+	lead := r.leader()
+	stand := other(lead)
+	r.nodes[stand].crash()
+	r.nodes[lead].crash()
+	r.wipeState(stand)
+	r.rebuildWitnessLog()
+	r.restart(lead)
+	if r.leader() != lead {
+		t.Fatal("the synced controller did not lead")
+	}
+	pairWait(t, "the read-only condition naming the plain vouch", 15*time.Second, func() bool {
+		return r.hasWarning(lead, OplogReadOnlyNewPair)
+	})
+	r.restart(stand) // wiped: it re-adopts, its log empty and unsynced
+	var out string
+	var pic oplog.Picture
+	pairWait(t, "the plain vouch to go ahead", 15*time.Second, func() bool {
+		// The wiped standby answers once it is up: until then it is a
+		// silent copy, and the vouch refuses naming it.
+		_, pic, out = r.vouch(lead, "", "")
+		return strings.HasPrefix(out, "done")
+	})
+	if len(pic.Needs) != 0 {
+		t.Fatalf("the plain vouch: %s %+v", out, pic)
+	}
+	r.logReady(lead)
+	if own, _ := r.nodes[lead].m.log.History(); own.History != 0 {
+		t.Fatalf("a catch-up that overrode nothing started history %d", own.History)
+	}
+	r.startedID(lead)
+	pairWait(t, "the other copies to sync", 10*time.Second, func() bool {
+		return r.nodes[stand].m.log.Synced() && r.witnessStatus().Unsynced == false
+	})
+}

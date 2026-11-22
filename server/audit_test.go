@@ -372,6 +372,16 @@ func auditRows() []auditRow {
 			header: map[string]string{"Authorization": "Bearer s3cret"},
 			action: "redundancy.recommission", target: "b", user: "token", source: "api", result: "ok",
 			check: wantDetail("attestBox", boxReplacedAttest)},
+		{name: "re-commission, the live-copy check's members", pattern: "POST /api/cluster/recommission", server: pairServer("done"),
+			method: "POST", path: "/api/cluster/recommission", body: `{"floor":5000}`,
+			header: map[string]string{"Authorization": "Bearer s3cret"},
+			action: "redundancy.recommission", target: "b", user: "token", source: "api", result: "ok",
+			check: wantLiveChecked(func(e audit.Entry) any { return e.After })},
+		{name: "re-commission refused, the live-copy check's members", pattern: "POST /api/cluster/recommission", server: pairServer("refused"),
+			method: "POST", path: "/api/cluster/recommission", body: `{"floor":5000}`,
+			header: map[string]string{"Authorization": "Bearer s3cret"},
+			action: "redundancy.recommission", target: "b", user: "token", source: "api", result: "refused",
+			check: wantLiveChecked(func(e audit.Entry) any { return e.Detail })},
 		{name: "re-commission from a spare", pattern: "POST /api/cluster/recommission", server: pairServer("done"),
 			method: "POST", path: "/api/cluster/recommission", body: `{"fromSpare":true,"copyStopped":true}`,
 			header: map[string]string{"Authorization": "Bearer s3cret"},
@@ -792,7 +802,12 @@ func (f *fakePair) Commission(_ context.Context, by, acceptLoss, acceptLostLog s
 
 func (f *fakePair) Recommission(_ context.Context, by string, inc, floor uint64, boxReplaced, fromSpare bool, acceptLoss, acceptLostLog string) (any, string, string) {
 	f.by = append(f.by, by)
-	return map[string]any{"floor": floor, "fromSpare": fromSpare, "acceptLoss": acceptLoss}, f.outcome, "fake " + f.outcome
+	rep := map[string]any{"floor": floor, "fromSpare": fromSpare, "acceptLoss": acceptLoss}
+	if !fromSpare {
+		rep["live"] = []map[string]any{{"member": "a", "error": "a is not reachable"}, {"member": "witness"}}
+		rep["liveUnchecked"] = []string{"a did not answer: a live copy of b reachable only through a can't be ruled out; check that the old box is off"}
+	}
+	return rep, f.outcome, "fake " + f.outcome
 }
 
 func (f *fakePair) Vouch(_ context.Context, by, acceptLoss, acceptLostLog string) (any, string, string) {
@@ -812,6 +827,18 @@ func wantDetail(key, want string) func(*testing.T, audit.Entry) {
 	return func(t *testing.T, e audit.Entry) {
 		if got, _ := e.Detail[key].(string); got != want {
 			t.Errorf("detail.%s = %q, want %q", key, got, want)
+		}
+	}
+}
+
+// wantLiveChecked: the entry (where says which part) records the
+// recommission's live-copy check: who answered it, and what was not
+// checked (#1029 3c-3c-2b).
+func wantLiveChecked(where func(audit.Entry) any) func(*testing.T, audit.Entry) {
+	return func(t *testing.T, e audit.Entry) {
+		b, _ := json.Marshal(where(e))
+		if !strings.Contains(string(b), `"liveAnswered":["witness"]`) || !strings.Contains(string(b), "a did not answer") {
+			t.Errorf("the entry doesn't record the live-copy check: %s", b)
 		}
 	}
 }

@@ -471,6 +471,20 @@ var table = []mutation{
 	{"inbound_unknown_as_refused", []string{"TestInboundUnknownOutcome"}},
 	{"sms_ack_offered_while_suspended", []string{"TestSMSAckSuspended"}},
 	{"inbound_stale_code_counted", []string{"TestInboundSMSAcks"}},
+	// #1029 3c-3c-2b: D1 (a wiped old box beside its replacement) and a
+	// new pair's plain vouch. Under QUORUM_LOOPBACK=1 (a core mutation
+	// skips the loopback tests here), TestALostStateRestartsProbeReaches
+	// ThePeerUnmarked catches the first as well, and TestAWipedOldBox
+	// BesideItsReplacementIsMarkedOnTheWire the second (the lost-state
+	// test catches it only sometimes: the #1207 review).
+	{"adopt_probe_unseq", []string{"TestAWipedOldBoxBesideItsReplacementIsMarked"}},
+	{"adopt_probe_witness_only", []string{"TestAWipedOldBoxBesideItsReplacementIsMarked"}},
+	{"peer_takes_beside_live", []string{"TestAWipedOldBoxBesideItsReplacementIsMarked"}},
+	{"recommission_beside_live", []string{"TestRecommissionRefusesBesideALiveBootOfItsName", "TestRecommissionRefusesWhileAVoterCantYetSay"}},
+	{"live_check_witness_skipped", []string{"TestRecommissionRefusesWhenTheWitnessMissesTheLiveCheck"}},
+	{"empty_pair_needs_accept", []string{"TestANewPairsPlainVouchAfterARestartNeedsNoAcceptLoss", "TestPairANewPairsPlainVouchNeedsNoAcceptLoss"}},
+	{"empty_pair_unchecked", []string{"TestANewPairsPlainVouchNamesTheConditionThatFails"}},
+	{"set_aside_forgotten", []string{"TestANewPairsPlainVouchNamesTheConditionThatFails"}},
 }
 
 // rowPkgs are the packages a row runs instead of ./quorum/..., filtered
@@ -537,6 +551,9 @@ var rowPkgs = map[string][]string{
 	"accept_survives_reboot":            {"./oplog"},
 	"superseded_lead_keeps_substitutes": {"./cmd/naut"},
 	"superseded_alarms_kept":            {"./cmd/naut"},
+	"empty_pair_needs_accept":           {"./oplog", "./cmd/naut"},
+	"empty_pair_unchecked":              {"./oplog"},
+	"set_aside_forgotten":               {"./oplog"},
 	"witness_not_a_replica":             {"./cmd/naut"},
 	"log_sync_not_retried":              {"./cmd/naut"},
 	"spare_log_runs":                    {"./cmd/naut"},

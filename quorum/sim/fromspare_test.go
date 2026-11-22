@@ -5,6 +5,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -244,6 +245,30 @@ type fromSpareFam struct {
 	// split that moves (#1164 re-check, N1). A fenced voter still hears an
 	// uncommissioned lookalike's boot, so the witness marks the name.
 	moving bool
+	// gap: the moving old box's witness-only phase (default four leases).
+	// D1 (#1164 final look) is the gap under which the witness has not yet
+	// marked the name when the box moves to the peer's side.
+	gap time.Duration
+	// replLeads: the peer restarts four leases before the old box is
+	// back, so the replacement leads (with the witness's promise running)
+	// when the old box reaches the witness.
+	replLeads bool
+	// splitAtMove: the moving family's split starts when the old box
+	// moves (tR+gap), not a lease after it is back.
+	splitAtMove bool
+	// viaPeer: the mirror of moving. The replacement is cut from the
+	// witness a lease before the old box is back, and stays so; the old
+	// box reaches the peer and the witness for gap, then the split puts it
+	// with the witness, the replacement with the peer.
+	viaPeer bool
+	// d1: a D1 cell (#1029 3c-3c-2b): the peer link reaches both boxes of
+	// the name (Options.PeerLinkReachesEveryBox).
+	d1 bool
+	// wLead: the residual shape (the stated D1 boundary, measured only). The replacement leads with the witness,
+	// cut from the peer a lease before the old box is back; the old box
+	// reaches the witness and the peer for gap, then the peer only, the
+	// peer cut from the witness then too.
+	wLead bool
 	// pending: the incumbent lost its file shortly before it was
 	// switched off, and died re-adopting, its proposal durable, the link
 	// to its peer lossy (#1164 review, B3).
@@ -258,6 +283,50 @@ func (f fromSpareFam) run(seed uint64) (Options, Addr, Addr, time.Duration) {
 		o, spare, inc, tf = fromSpareSplit(seed, f.realBox, f.mirror, f.how, f.touch, f.pre)
 	} else {
 		o, spare, inc, tf = fromSpareRun(seed, f.realBox, f.how)
+	}
+	if f.wLead {
+		peer := peerOf(original(spare))
+		var tR time.Duration
+		var fs []Fault
+		for _, x := range o.Faults {
+			if x.Kind == Wipe && x.Node == inc {
+				tR = x.At + x.For
+			}
+			if x.Kind == Cut && tR != 0 && x.At >= tR-2*lease {
+				continue
+			}
+			fs = append(fs, x)
+		}
+		o.Faults = append(fs,
+			Fault{Kind: Crash, At: tR - 4*lease, For: 300 * ms, Node: peer},
+			Fault{Kind: Cut, At: tR - lease, For: 20 * lease, From: spare, To: peer, Both: true},
+			Fault{Kind: Cut, At: tR - lease, For: 20 * lease, From: inc, To: spare, Both: true},
+			Fault{Kind: Cut, At: tR + f.gap, For: 12 * lease, From: inc, To: W, Both: true},
+			Fault{Kind: Cut, At: tR + f.gap, For: 12 * lease, From: peer, To: W, Both: true})
+		o.Until = tR + 24*lease
+	}
+	if f.viaPeer {
+		peer := peerOf(original(spare))
+		var tR time.Duration
+		var fs []Fault
+		for _, x := range o.Faults {
+			if x.Kind == Wipe && x.Node == inc {
+				tR = x.At + x.For
+			}
+			if x.Kind == Cut && tR != 0 && x.At >= tR-2*lease {
+				continue
+			}
+			fs = append(fs, x)
+		}
+		o.Faults = append(fs,
+			Fault{Kind: Cut, At: tR - lease, For: 20 * lease, From: spare, To: W, Both: true},
+			Fault{Kind: Cut, At: tR - lease, For: 20 * lease, From: inc, To: spare, Both: true},
+			Fault{Kind: Cut, At: tR + f.gap, For: 12 * lease, From: inc, To: peer, Both: true},
+			Fault{Kind: Cut, At: tR + f.gap, For: 12 * lease, From: peer, To: W, Both: true})
+		if f.replLeads {
+			o.Faults = append(o.Faults, Fault{Kind: Crash, At: tR - 4*lease, For: 300 * ms, Node: peer})
+		}
+		o.Until = tR + 24*lease
 	}
 	if f.moving {
 		// Fable's N1 schedule: the family's own split is replaced.
@@ -274,14 +343,25 @@ func (f fromSpareFam) run(seed uint64) (Options, Addr, Addr, time.Duration) {
 			fs = append(fs, x)
 		}
 		gap := 4 * lease
+		if f.gap != 0 {
+			gap = f.gap
+		}
+		splitAt := tR + lease
+		if f.splitAtMove {
+			splitAt = tR + gap
+		}
 		o.Faults = append(fs,
 			Fault{Kind: Cut, At: tR - lease, For: lease + gap, From: inc, To: peer, Both: true}, // the old box: the witness only
-			Fault{Kind: Cut, At: tR + lease, For: 12 * lease, From: spare, To: peer, Both: true},
-			Fault{Kind: Cut, At: tR + lease, For: 12 * lease, From: peer, To: W, Both: true},
+			Fault{Kind: Cut, At: splitAt, For: 12 * lease, From: spare, To: peer, Both: true},
+			Fault{Kind: Cut, At: splitAt, For: 12 * lease, From: peer, To: W, Both: true},
 			Fault{Kind: Cut, At: tR + gap, For: 9 * lease, From: inc, To: W, Both: true}, // then the peer only
 			Fault{Kind: Cut, At: tR - lease, For: 14 * lease, From: inc, To: spare, Both: true})
+		if f.replLeads {
+			o.Faults = append(o.Faults, Fault{Kind: Crash, At: tR - 4*lease, For: 300 * ms, Node: peer})
+		}
 		o.Until = tR + 21*lease
 	}
+	o.PeerLinkReachesEveryBox = f.d1
 	for i := range o.Faults {
 		if o.Faults[i].Kind != FromSpare {
 			continue
@@ -424,6 +504,52 @@ func TestMeasureFromSpare(t *testing.T) {
 	}
 }
 
+// d1Gaps are the witness-only phases the D1 cells sweep.
+var d1Gaps = []time.Duration{lease / 8, lease / 4, lease / 2, 3 * lease / 4, lease, 5 * lease / 4, 3 * lease / 2, 2 * lease}
+
+// d1Fams are the D1 cells (#1029 3c-3c-2b): the old box wiped while off,
+// back beside its replacement at the witness alone for gap, then moved to
+// the peer's side of a split.
+func d1Fams() []fromSpareFam {
+	var out []fromSpareFam
+	for _, realBox := range []bool{true, false} {
+		box := map[bool]string{true: "real box spare", false: "copy spare"}[realBox]
+		for _, lead := range []bool{false, true} {
+			who := map[bool]string{false: "", true: ", the replacement leading"}[lead]
+			for _, g := range d1Gaps {
+				out = append(out, fromSpareFam{name: fmt.Sprintf("D1 %s%s, wiped old box at the witness alone %.3g leases, then the peer only", box, who, float64(g)/float64(lease)),
+					d1: true, realBox: realBox, how: "wipe", split: true, moving: true, gap: g, replLeads: lead})
+			}
+			for _, g := range d1Gaps {
+				out = append(out, fromSpareFam{name: fmt.Sprintf("D1 split-at-move %s%s, wiped old box at the witness alone %.3g leases, then the peer only", box, who, float64(g)/float64(lease)),
+					d1: true, realBox: realBox, how: "wipe", split: true, moving: true, gap: g, replLeads: lead, splitAtMove: true})
+			}
+			if lead {
+				for _, g := range d1Gaps {
+					out = append(out, fromSpareFam{name: fmt.Sprintf("D1 residual %s, the replacement leading with the witness, cut from the peer, wiped old box at both %.3g leases, then the peer only", box, float64(g)/float64(lease)),
+						d1: true, realBox: realBox, how: "wipe", split: true, wLead: true, gap: g})
+				}
+			}
+			for _, g := range d1Gaps {
+				out = append(out, fromSpareFam{name: fmt.Sprintf("D1 %s%s, the replacement cut from the witness, wiped old box at both %.3g leases, then the witness only", box, who, float64(g)/float64(lease)),
+					d1: true, realBox: realBox, how: "wipe", split: true, viaPeer: true, gap: g, replLeads: lead})
+			}
+		}
+	}
+	return out
+}
+
+// TestMeasureD1 prints the D1 table: QUORUM_MEASURE_D1=<seeds per cell>.
+func TestMeasureD1(t *testing.T) {
+	n, _ := strconv.ParseUint(os.Getenv("QUORUM_MEASURE_D1"), 10, 64)
+	if n == 0 {
+		t.Skip("set QUORUM_MEASURE_D1=<seeds> to measure")
+	}
+	for _, f := range d1Fams() {
+		t.Logf("%-86s %v", f.name, runFromSpareFam(f, n))
+	}
+}
+
 // --from-spare never makes two leaders, whichever way the operator's
 // "stopped" was wrong (#1029 3c-3c): an incumbent cut off, paused or
 // frozen returns with a boot the clear retired, and is marked before any
@@ -459,6 +585,141 @@ func TestFromSpareNeverMakesTwoLeaders(t *testing.T) {
 		}
 		if f.how == "off" && tl.led < tl.ledOf {
 			t.Errorf("%s: the replacement did not take over in every run: %v", f.name, tl)
+		}
+	}
+}
+
+// TestTraceD1 traces one D1 seed: QUORUM_TRACE_D1=<cell index>,<seed>,
+// written to QUORUM_TRACE_D1_OUT.
+func TestTraceD1(t *testing.T) {
+	var i int
+	var seed uint64
+	if _, err := fmt.Sscanf(os.Getenv("QUORUM_TRACE_D1"), "%d,%d", &i, &seed); err != nil {
+		t.Skip("set QUORUM_TRACE_D1=<cell>,<seed>")
+	}
+	f := d1Fams()[i]
+	o, _, _, _ := f.run(seed)
+	o.Trace = true
+	r := Run(o)
+	os.WriteFile(os.Getenv("QUORUM_TRACE_D1_OUT"), []byte(strings.Join(r.Trace, "\n")), 0o644)
+	t.Logf("%s seed %d: %v", f.name, seed, Check(r, cloneChecks(o)))
+	for _, x := range o.Faults {
+		t.Logf("fault %+v", x)
+	}
+}
+
+// lostStateReadopt runs n lost-state restarts (a controller's file wiped
+// for 100 ms to 2 s, no copy anywhere) and returns how long each took to
+// re-adopt after it was back, sorted, how many never did, and how many
+// marks any voter set (#1029 3c-3c-2b: P's cost).
+func lostStateReadopt(n uint64) (ds []time.Duration, never, marks int) {
+	var mu sync.Mutex
+	seeds := make(chan uint64)
+	var wg sync.WaitGroup
+	for range runtime.GOMAXPROCS(0) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for seed := range seeds {
+				d, ok, m := lostStateRun(seed)
+				mu.Lock()
+				marks += m
+				if ok {
+					ds = append(ds, d)
+				} else {
+					never++
+				}
+				mu.Unlock()
+			}
+		}()
+	}
+	for seed := uint64(1); seed <= n; seed++ {
+		seeds <- seed
+	}
+	close(seeds)
+	wg.Wait()
+	slices.Sort(ds)
+	return ds, never, marks
+}
+
+func lostStateRun(seed uint64) (time.Duration, bool, int) {
+	o := randomRun(seed, profDefault)
+	r := rand.New(rand.NewPCG(seed, 0x4c53))
+	who := []Addr{A, B}[r.IntN(2)]
+	at := 10*sec + time.Duration(r.Int64N(int64(4*lease)))
+	d := 100*ms + time.Duration(r.Int64N(int64(1900*ms)))
+	o.Faults = []Fault{{Kind: Wipe, At: at, For: d, Node: who}}
+	o.Until = at + d + 12*lease
+	o.Trace = true
+	rec := Run(o)
+	back := at + d
+	for _, l := range rec.Trace {
+		f := strings.Fields(l)
+		if len(f) < 3 {
+			continue
+		}
+		ts, err := time.ParseDuration(f[0])
+		if err != nil || ts < back {
+			continue
+		}
+		if f[1] == fmt.Sprint(who) && f[2] == "adopted" {
+			return ts - back, true, len(rec.Marks)
+		}
+	}
+	return 0, false, len(rec.Marks)
+}
+
+func quantile(ds []time.Duration, p float64) time.Duration {
+	if len(ds) == 0 {
+		return 0
+	}
+	return ds[min(len(ds)-1, int(p*float64(len(ds))))]
+}
+
+// TestMeasureLostStateReadopt prints the lost-state re-adopt times (the
+// guide's numbers): QUORUM_MEASURE_READOPT=<seeds>.
+func TestMeasureLostStateReadopt(t *testing.T) {
+	n, _ := strconv.ParseUint(os.Getenv("QUORUM_MEASURE_READOPT"), 10, 64)
+	if n == 0 {
+		t.Skip("set QUORUM_MEASURE_READOPT=<seeds>")
+	}
+	ds, never, marks := lostStateReadopt(n)
+	t.Logf("lost-state re-adopt: runs=%d re-adopted=%d never=%d marks=%d p50=%v p90=%v p99=%v max=%v", n, len(ds), never, marks, quantile(ds, 0.5), quantile(ds, 0.9), quantile(ds, 0.99), quantile(ds, 1))
+}
+
+// A controller that lost its file (no copy anywhere) re-adopts from its
+// peer within two leases of coming back, and no voter marks its name
+// (#1029 3c-3c-2b): the peer takes the new boot's proposal once the old
+// boot has aged out of its live boots (rule P), so the cost of D1's fix
+// on this path is bounded, and its own probes, now carrying their
+// sequence and reaching the peer, are never taken for a second process.
+func TestALostStateRestartReadoptsWithinTwoLeasesUnmarked(t *testing.T) {
+	ds, never, marks := lostStateReadopt(spareSeeds())
+	if never > 0 || marks > 0 {
+		t.Fatalf("lost-state restarts: %d never re-adopted, %d marks (of %d runs)", never, marks, spareSeeds())
+	}
+	if m := quantile(ds, 1); m >= 2*lease {
+		t.Fatalf("a lost-state restart re-adopted %v after it was back, not within two leases (p50 %v)", m, quantile(ds, 0.5))
+	}
+}
+
+// A wiped old box switched back on beside the box that replaced it never
+// leads beside it (#1029 3c-3c-2b, D1), in every D1 cell but the stated
+// residual: at the witness alone for an eighth of a lease to two, then
+// moved to the peer's side of a split (the split a lease after it is back,
+// or at the move), with the replacement leading or not, and the mirror
+// (the replacement cut from the witness, the box at both, then the
+// witness only). The box's probes carry their sequence and reach the
+// peer, so a voter that hears both boots marks the name, and the peer
+// takes no re-adoption from it while the replacement is live.
+func TestAWipedOldBoxBesideItsReplacementIsMarked(t *testing.T) {
+	n := spareSeeds()
+	for _, f := range d1Fams() {
+		if f.wLead {
+			continue // the stated residual, measured only (TestMeasureD1)
+		}
+		if tl := runFromSpareFam(f, n); tl.two > 0 || tl.other > 0 {
+			t.Errorf("%s: %v", f.name, tl)
 		}
 	}
 }

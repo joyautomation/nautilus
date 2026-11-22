@@ -853,12 +853,13 @@ func (e *Elector) look() time.Duration {
 	may := e.mayCampaign(now) && (e.c.Leading(now) || !e.logHold(now, ls, hasLog))
 	req := e.c.Tick(now, from, until, healthy && !e.released && !e.yielding(now) && may)
 	p, msgs, probe := e.a.Tick(now)
-	standby := false
+	peer := false // the probe goes to the peer's voter too
 	if probe == nil {
 		probe = e.c.Probe(now) // the handshake's own probe serves for both
-		standby = probe != nil
+		peer = probe != nil && quorum.ProbesPeer()
 	} else {
 		e.c.Probe(now)
+		peer = quorum.AdoptProbesPeer()
 	}
 	var selfP *quorum.Persist
 	if req != nil {
@@ -884,8 +885,8 @@ func (e *Elector) look() time.Duration {
 	e.adopts(msgs)
 	if probe != nil {
 		e.vote(e.o.Witness, e.wit, *probe)
-		if standby && quorum.ProbesPeer() {
-			e.vote(e.o.Peer, e.peer, *probe) // the peer's voter hears this boot too (#1029 step 1)
+		if peer {
+			e.vote(e.o.Peer, e.peer, *probe) // the peer's voter hears this boot too (#1029 step 1, 3c-3c-2b)
 		}
 	}
 	return min(max(next, 0), e.o.Lease/8)

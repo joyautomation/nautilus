@@ -61,9 +61,9 @@ type cluster struct {
 }
 
 type sentVote struct {
-	from quorum.NodeID
-	at   time.Time
-	req  quorum.Request
+	from, to quorum.NodeID
+	at       time.Time
+	req      quorum.Request
 }
 
 type member struct {
@@ -268,7 +268,7 @@ func (f *faultRT) RoundTrip(r *http.Request) (*http.Response, error) {
 		var q quorum.Request
 		if q.UnmarshalBinary(b) == nil {
 			f.c.mu.Lock()
-			f.c.votes = append(f.c.votes, sentVote{from: f.from, at: time.Now(), req: q})
+			f.c.votes = append(f.c.votes, sentVote{from: f.from, to: to, at: time.Now(), req: q})
 			f.c.mu.Unlock()
 		}
 	}
