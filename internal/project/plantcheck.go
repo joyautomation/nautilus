@@ -10,6 +10,7 @@ import (
 	"github.com/joyautomation/nautilus/internal/mimicdoc"
 	"github.com/joyautomation/nautilus/internal/plant"
 	"github.com/joyautomation/nautilus/internal/scene"
+	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/runtime"
 )
 
@@ -23,9 +24,10 @@ type PlantReport struct {
 // its asset type's tags expands to a declared tag, every drawing's `plant:`
 // names a piece of equipment, and the alarms' `equipment:` keys and the
 // drawn pieces that carry a panel agree with it. nil, nil, nil when the
-// manifest has no plant:. alarmEquipment is every alarm definition's
-// equipment key.
-func (p *Project) CheckPlant(fsys fs.FS, alarmEquipment []string) (rep PlantReport, errs, warns []string) {
+// manifest has no plant:. rt gives the tags' types, so a path is checked down
+// to the struct member (nil: to the tag only); alarmEquipment is every alarm
+// definition's equipment key.
+func (p *Project) CheckPlant(fsys fs.FS, rt *runtime.Runtime, alarmEquipment []string) (rep PlantReport, errs, warns []string) {
 	pl := p.Plant
 	if pl == nil {
 		// no plant: a drawing's plant: names nothing, and its page is its own
@@ -53,6 +55,11 @@ func (p *Project) CheckPlant(fsys fs.FS, alarmEquipment []string) (rep PlantRepo
 		switch {
 		case e.Tag != "" && !declared[strings.ToLower(root(e.Tag))]:
 			errs = append(errs, fmt.Sprintf("plant: equipment %s: tag %s is not declared%s", e.ID, e.Tag, nearestTag(root(e.Tag), p.Runtime.Tags)))
+		case e.Tag != "":
+			if why := p.pathProblem(rt, e.Tag); why != "" {
+				errs = append(errs, fmt.Sprintf("plant: equipment %s: tag %s: %s", e.ID, e.Tag, why))
+				continue // its type's entries would only say it again
+			}
 		case e.Device != "" && !devices[strings.ToLower(e.Device)]:
 			errs = append(errs, fmt.Sprintf("plant: equipment %s: device %s is not a devices: row", e.ID, e.Device))
 		}
@@ -61,6 +68,8 @@ func (p *Project) CheckPlant(fsys fs.FS, alarmEquipment []string) (rep PlantRepo
 				name := plant.Expand(tpl, e.Tag)
 				if !declared[strings.ToLower(root(name))] {
 					errs = append(errs, fmt.Sprintf("plant: equipment %s (type %s): %s expands to %s, which is not a declared tag", e.ID, t.Type, tpl, name))
+				} else if why := p.pathProblem(rt, name); why != "" {
+					errs = append(errs, fmt.Sprintf("plant: equipment %s (type %s): %s expands to %s: %s", e.ID, t.Type, tpl, name, why))
 				}
 			}
 		}
@@ -210,4 +219,152 @@ func (p *Project) drawingWarnings(fsys fs.FS, pl *plant.Plant) []string {
 		}
 	}
 	return warns
+}
+
+// pathProblem walks a tag path (`A.B`, `A[3].B`) down the declared types and
+// says what is wrong with it: a member the struct does not have (naming the
+// ones it has), a member of something that is not a struct. "" when it is
+// fine, or when the types are not known (rt nil, an array whose element is
+// not known): a blank reading is the failure this exists to stop, so it
+// errs toward saying so only when it is sure.
+func (p *Project) pathProblem(rt *runtime.Runtime, path string) string {
+	if rt == nil {
+		return ""
+	}
+	segs := pathSegments(path)
+	if len(segs) < 2 {
+		return ""
+	}
+	t := p.tagType(rt, segs[0].name)
+	at := segs[0].name
+	if t == nil {
+		return ""
+	}
+	for _, s := range segs[1:] {
+		switch {
+		case s.index:
+			if t.Kind != ir.TypeArray || t.Elem == nil {
+				return ""
+			}
+			t = t.Elem
+			at += "[" + s.name + "]"
+		default:
+			if t.Kind != ir.TypeStruct || t.Struct == nil {
+				if isDigits(s.name) {
+					return "" // a bit of a value (Status.3): not claimed either way
+				}
+				return fmt.Sprintf("%s is not a struct, so it has no member %s", at, s.name)
+			}
+			f := memberOf(t.Struct, s.name)
+			if f == nil {
+				var names []string
+				for _, sf := range t.Struct.Fields {
+					names = append(names, sf.Name)
+				}
+				return fmt.Sprintf("%s has no member %s (it has %s)", at, s.name, strings.Join(names, ", "))
+			}
+			t = f.Type
+			at += "." + f.Name
+		}
+		if t == nil {
+			return ""
+		}
+	}
+	return ""
+}
+
+type pathSeg struct {
+	name  string
+	index bool
+}
+
+// pathSegments splits "A.B[3].C" into A, B, [3], C.
+func pathSegments(path string) []pathSeg {
+	var out []pathSeg
+	var cur strings.Builder
+	flush := func() {
+		if cur.Len() > 0 {
+			out = append(out, pathSeg{name: cur.String()})
+			cur.Reset()
+		}
+	}
+	for i := 0; i < len(path); i++ {
+		switch c := path[i]; c {
+		case '.':
+			flush()
+		case '[':
+			flush()
+			j := strings.IndexByte(path[i:], ']')
+			if j < 0 {
+				return append(out, pathSeg{name: path[i:]})
+			}
+			out = append(out, pathSeg{name: path[i+1 : i+j], index: true})
+			i += j
+		default:
+			cur.WriteByte(c)
+		}
+	}
+	flush()
+	return out
+}
+
+func memberOf(sd *ir.StructDef, name string) *ir.StructField {
+	for i := range sd.Fields {
+		if ir.SameName(sd.Fields[i].Name, name) {
+			return &sd.Fields[i]
+		}
+	}
+	return nil
+}
+
+// tagType is a declared tag's type, as the scene check reads it: its live
+// value's struct, else its declared type name.
+func (p *Project) tagType(rt *runtime.Runtime, name string) *ir.Type {
+	for _, d := range p.Runtime.Tags {
+		if !ir.SameName(d.Name, name) {
+			continue
+		}
+		if v, err := rt.Tags().ReadGlobal(d.Name); err == nil {
+			switch v.Kind {
+			case ir.TypeStruct:
+				if v.Struct != nil {
+					return &ir.Type{Kind: ir.TypeStruct, Struct: v.Struct}
+				}
+			case ir.TypeArray:
+				// element type unknown here: nothing past the index is claimed
+			default:
+				return &ir.Type{Kind: v.Kind} // a value, so no members
+			}
+		}
+		if t, ok := rt.Types()[d.Type]; ok && d.Type != "" {
+			return t
+		}
+		if t := elementary(d.Type); t != nil {
+			return t
+		}
+		return nil
+	}
+	return nil
+}
+
+// elementary is the type of a tag declared with an elementary type name
+// (BOOL, REAL, ...), so a member of it is said not to be one.
+func elementary(name string) *ir.Type {
+	switch strings.ToUpper(strings.TrimSpace(name)) {
+	case "BOOL", "BYTE", "WORD", "DWORD", "LWORD", "SINT", "INT", "DINT", "LINT", "USINT", "UINT", "UDINT", "ULINT", "REAL", "LREAL", "STRING", "TIME":
+		return &ir.Type{Kind: ir.TypeInt}
+	}
+	return nil
+}
+
+func isDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }

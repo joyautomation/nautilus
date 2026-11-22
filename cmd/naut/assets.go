@@ -244,3 +244,37 @@ func tagRoot(tag string) string {
 	}
 	return tag
 }
+
+// plantAreas are the plant model's areas for the HMI's area pages: each
+// with the ids of its equipment that have a page, in the plant's order.
+func plantAreas(proj *project.Project, assets []json.RawMessage) []json.RawMessage {
+	pl := proj.Plant
+	if pl == nil {
+		return nil
+	}
+	has := map[string]bool{}
+	for _, raw := range assets {
+		var a struct{ ID string }
+		if json.Unmarshal(raw, &a) == nil {
+			has[strings.ToLower(a.ID)] = true
+		}
+	}
+	var out []json.RawMessage
+	for _, a := range pl.Areas {
+		d := map[string]any{"id": a.ID, "label": a.Label}
+		if a.Label == "" {
+			d["label"] = a.ID
+		}
+		ids := []string{}
+		for _, e := range pl.Equipment {
+			if strings.EqualFold(e.Area, a.ID) && has[strings.ToLower(e.ID)] {
+				ids = append(ids, e.ID)
+			}
+		}
+		d["assets"] = ids
+		if b, err := json.Marshal(d); err == nil {
+			out = append(out, b)
+		}
+	}
+	return out
+}

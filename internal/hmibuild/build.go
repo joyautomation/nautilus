@@ -55,6 +55,9 @@ type Options struct {
 	// the default app's asset pages, beside those its mimics' equipment make:
 	// a device row's, from the caller.
 	Assets []json.RawMessage
+	// Areas are the plant model's areas ({id, label, assets: [ids]}) for the
+	// default app's area pages; one with a mimic named for it links to it.
+	Areas []json.RawMessage
 	// Minify the output (on for serving; off reads better when debugging).
 	Minify bool
 	// PWA names and themes the installed app (#722). nil still builds an
@@ -126,7 +129,7 @@ func Build(o Options) (*Result, error) {
 			app.addComponentsPage(proj, root)
 		}
 	} else {
-		app, err = defaultApp(o.Project, o.Title, o.Assets)
+		app, err = defaultApp(o.Project, o.Title, o.Assets, o.Areas)
 	}
 	if err != nil {
 		return nil, err

@@ -389,12 +389,16 @@ export {
 	assetAlarms,
 	assetSlug,
 	assetGroups,
+	areaRows,
 	indexAssets,
 	assetFromEquipment,
 	trendTags,
 	writableTags,
 	tagValue,
 	hasTag,
-	type AssetDescriptor
+	type AssetDescriptor,
+	type AreaDescriptor,
+	type AreaRow
 } from './asset.js';
 export { default as AssetPage } from './components/AssetPage.svelte';
+export { default as AreaPage } from './components/AreaPage.svelte';

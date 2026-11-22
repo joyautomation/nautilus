@@ -79,12 +79,21 @@ func ParseRef(s string) Ref {
 // AssetType says what a page of one type shows. Each entry's Tag is a
 // template in which {tag} is the equipment's tag.
 type AssetType struct {
-	Type      string     `yaml:"type"`
-	Class     string     `yaml:"class"`
-	Readings  []Reading  `yaml:"readings"`
-	Setpoints []Setpoint `yaml:"setpoints"`
-	Commands  []Command  `yaml:"commands"`
-	Toggles   []Toggle   `yaml:"toggles"`
+	Type  string `yaml:"type"`
+	Class string `yaml:"class"`
+	// Component is the HMI component that draws this type on a process
+	// scheme ("Pump", "Tank": a kit component or the project's own); Ports
+	// maps a nozzle name to the component's port it meets; Bind maps the
+	// component's props to tags (templates with {tag}). A scheme written
+	// from the plant (naut hmi scheme) takes all three; none of it is read
+	// at run time.
+	Component string            `yaml:"component"`
+	Ports     map[string]string `yaml:"ports"`
+	Bind      map[string]string `yaml:"bind"`
+	Readings  []Reading         `yaml:"readings"`
+	Setpoints []Setpoint        `yaml:"setpoints"`
+	Commands  []Command         `yaml:"commands"`
+	Toggles   []Toggle          `yaml:"toggles"`
 	// Trend names the tags (templates) the page trends; empty takes the
 	// first numeric readings.
 	Trend []string `yaml:"trend"`
@@ -343,7 +352,19 @@ func (t *AssetType) Templates() []string {
 	for _, s := range t.Trend {
 		add(s)
 	}
+	for _, k := range sortedKeys(t.Bind) {
+		add(t.Bind[k])
+	}
 	return out
+}
+
+func sortedKeys(m map[string]string) []string {
+	ks := make([]string, 0, len(m))
+	for k := range m {
+		ks = append(ks, k)
+	}
+	sort.Strings(ks)
+	return ks
 }
 
 // Expand fills a template for an equipment's tag.
@@ -373,6 +394,19 @@ func (t *AssetType) check() []string {
 	for _, x := range t.Toggles {
 		if x.Tag == "" || x.Label == "" {
 			out = append(out, where+": a toggle needs a tag and a label")
+		}
+	}
+	if len(t.Ports) > 0 && t.Component == "" {
+		out = append(out, where+": ports name a component's ports: name the component too")
+	}
+	for noz, port := range t.Ports {
+		if !identRe.MatchString(noz) || strings.TrimSpace(port) == "" {
+			out = append(out, fmt.Sprintf("%s: ports: %q -> %q: a nozzle name and a port name", where, noz, port))
+		}
+	}
+	for prop, tpl := range t.Bind {
+		if prop == "" || strings.TrimSpace(tpl) == "" {
+			out = append(out, where+": bind needs a prop and a tag")
 		}
 	}
 	for _, tpl := range t.Templates() {

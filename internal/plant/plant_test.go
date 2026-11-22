@@ -146,3 +146,26 @@ func TestAssetTypeFiles(t *testing.T) {
 		t.Errorf("slug %q", Slug(" P_1 / x "))
 	}
 }
+
+func TestSchemeFieldsOfAnAssetType(t *testing.T) {
+	read := func(y string) []string {
+		p, err := Read(plantFS(map[string]string{"plant.yaml": "areas: []", "asset-types/Pump.asset.yaml": y}), "plant.yaml")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return p.Check()
+	}
+	if m := read("type: Pump\ncomponent: Pump\nports: { N1: in, N2: out }\nbind: { running: \"{tag}.Running\" }\nreadings: [{ tag: \"{tag}.Flow\" }]\n"); len(m) != 0 {
+		t.Errorf("a good scheme block: %v", m)
+	}
+	got := strings.Join(read("type: Pump\nports: { N1: in }\nbind: { running: Running }\n"), "\n")
+	for _, want := range []string{"name the component too", `"Running" does not use {tag}`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("checks %q lack %q", got, want)
+		}
+	}
+	p, _ := Read(plantFS(map[string]string{"plant.yaml": "areas: []", "asset-types/Pump.asset.yaml": "type: Pump\ncomponent: Pump\nbind: { running: \"{tag}.Run\", fault: \"{tag}.Fault\" }\n"}), "plant.yaml")
+	if got := strings.Join(p.Type("Pump").Templates(), ","); got != "{tag}.Fault,{tag}.Run" {
+		t.Errorf("a bind's tags are in the templates the manifest checks, in a fixed order: %s", got)
+	}
+}
