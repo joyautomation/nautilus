@@ -122,6 +122,11 @@ import "os"
 //   - empty_pair_unchecked: the plain vouch for a new pair skips its four
 //     conditions, so a copy silent, lost, at a history or holding entries
 //     is overridden without --accept-loss.
+//
+// Peer TLS (#710):
+//
+//   - peer_tls_log_plain: the log's calls ignore Options.TLS and go out
+//     as plain HTTP, which a pair's TLS peer port refuses.
 var mutOn = os.Getenv("QUORUM_MUT")
 
 func mutOplog(name string) bool { return name == mutOn }

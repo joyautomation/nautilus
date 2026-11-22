@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -41,6 +42,10 @@ Usage: naut witness [flags]
                   is moved aside with it, and the pair's leader fills it
                   again). Without it, such a file stops the start. Never
                   restore --state from a backup: rebuild instead.
+  --peer-tls on|off  TLS on the peer port (default on), keyed by the peer
+                  token: the pairs' redundancy.peer-tls. Off is for a lab
+                  bench only: votes, the log and the token cross the
+                  network in the clear.
 
 NAUTILUS_PEER_TOKEN is required: every peer request must carry it, and
 the witness answers nothing without it.
@@ -68,6 +73,7 @@ func witnessMain(ctx context.Context, args []string, getenv func(string) string,
 	state := fs.String("state", stateDefault, "")
 	lease := fs.Duration("lease", node.DefaultLease, "")
 	rebuild := fs.Bool("rebuild", false, "")
+	peerTLS := fs.String("peer-tls", "", "")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -90,6 +96,20 @@ func witnessMain(ctx context.Context, args []string, getenv func(string) string,
 	if *lease <= 0 {
 		fmt.Fprintln(stderr, "naut witness: --lease must be positive")
 		return 2
+	}
+	switch *peerTLS {
+	case "", "on", "off":
+	default:
+		fmt.Fprintf(stderr, "naut witness: --peer-tls %q: want on (the default) or off\n", *peerTLS)
+		return 2
+	}
+	pt, err := buildPeerTLS(token, peerTLSIsOff(*peerTLS), "--peer-tls=off here and redundancy.peer-tls: off on the pair")
+	if err != nil {
+		fmt.Fprintln(stderr, "naut witness:", err)
+		return 1
+	}
+	if pt == nil {
+		fmt.Fprintln(stderr, "naut witness: warning: "+peerTLSOff)
 	}
 	w, err := node.NewWitness(node.WitnessOptions{Dir: *state, Token: token, Lease: *lease, Rebuild: *rebuild})
 	if err != nil {
@@ -121,8 +141,16 @@ func witnessMain(ctx context.Context, args []string, getenv func(string) string,
 	// most witnessMaxConns connections are served at once.
 	srv := peerServer(h)
 	served := make(chan error, 1)
-	go func() { served <- srv.Serve(node.LimitListener(ln, witnessMaxConns)) }()
-	fmt.Fprintf(stdout, "naut witness — peer port %s — state %s — lease %v — Ctrl+C to stop\n", ln.Addr(), *state, *lease)
+	lim := node.LimitListener(ln, witnessMaxConns)
+	if pt != nil {
+		lim = tls.NewListener(lim, pt.Server)
+	}
+	go func() { served <- srv.Serve(lim) }()
+	wire := "TLS"
+	if pt == nil {
+		wire = "plain HTTP (peer TLS off)"
+	}
+	fmt.Fprintf(stdout, "naut witness — peer port %s, %s — state %s — lease %v — Ctrl+C to stop\n", ln.Addr(), wire, *state, *lease)
 	if ready != nil {
 		ready <- ln.Addr().String()
 	}

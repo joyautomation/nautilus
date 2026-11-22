@@ -57,6 +57,17 @@ func TestPairSectionLoads(t *testing.T) {
 	if p, _ := Load(pairFS(""), ""); p.Redundancy.Pair() {
 		t.Error("no redundancy: section is not a pair")
 	}
+	// peer-tls (#710): YAML 1.1 would read an unquoted off as false; the
+	// field takes it as written.
+	for _, v := range []string{"off", `"off"`, "on"} {
+		p, err = Load(pairFS(pairOK+"  peer-tls: "+v+"\n"), "")
+		if err != nil {
+			t.Fatalf("peer-tls: %s: %v", v, err)
+		}
+		if want := strings.Trim(v, `"`); p.Redundancy.PeerTLS != want {
+			t.Errorf("peer-tls: %s read as %q", v, p.Redundancy.PeerTLS)
+		}
+	}
 }
 
 // Each malformed pair section is refused at load, naming what to fix:
@@ -88,6 +99,8 @@ func TestPairSectionRefusals(t *testing.T) {
 		{"a public URL with a path", pairOK + "  public-urls: {a: https://plc-a.lan/hmi}\n", "no path"},
 		{"a public URL with no scheme", pairOK + "  public-urls: {a: plc-a.lan:8443}\n", "no path"},
 		{"a public URL with credentials", pairOK + "  public-urls: {a: https://u:p@plc-a.lan}\n", "no path"},
+		{"peer-tls neither on nor off", pairOK + "  peer-tls: maybe\n", "want on (the default) or off"},
+		{"peer-tls without peers", "redundancy:\n  peer-tls: off\n", "peer-tls applies to a redundant pair"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			_, err := Load(pairFS(c.red), "")

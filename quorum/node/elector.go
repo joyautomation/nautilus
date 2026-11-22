@@ -3,6 +3,7 @@ package node
 import (
 	"context"
 	crand "crypto/rand"
+	"crypto/tls"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -98,6 +99,10 @@ type Options struct {
 	// Dial, when set, opens the peer connections (default: net.Dialer).
 	// Tests cut links with it.
 	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
+	// TLS, when set, is the pair's peer TLS client configuration
+	// (internal/peertls, #710): every peer call is then https. Nil: plain
+	// HTTP (redundancy.peer-tls: off, and tests).
+	TLS *tls.Config
 	// Log defaults to slog.Default.
 	Log *slog.Logger
 	// OnEvent, when set, gets every Event, in order, from one goroutine.
@@ -192,6 +197,17 @@ const (
 	// disk in it), and it can't vote any more (#1029 3c-3c-1b). It
 	// campaigns no more in this boot. Once per boot.
 	EventSuperseded EventKind = "redundancy.superseded"
+	// EventPeerTLS: a voter speaks the other protocol on its peer port
+	// (TLS where this controller speaks plain HTTP, or the reverse): peer
+	// TLS is off on one side, or it runs a release from before peer TLS
+	// (#710). Event.Voter names it; Detail says which and what to do, ""
+	// once a call to it gets through again. Raised by the side that dials.
+	EventPeerTLS EventKind = "redundancy.peer-tls-mismatch"
+	// EventPeerIdentity: a voter's TLS key is not the pair's, or it
+	// refused this controller's: another NAUTILUS_PEER_TOKEN there, or
+	// something else answers at its address (#710). Event.Voter names
+	// it; Detail "" once a call to it gets through again.
+	EventPeerIdentity EventKind = "redundancy.peer-identity"
 )
 
 // supersededMsg is the old box's alarm (EventSuperseded): self's state is
@@ -273,6 +289,8 @@ type Event struct {
 	Gen, Incarnation uint64
 	Other            uint64 // EventTwoCopies, EventReadoptOverSwitch
 	Detail           string
+	// Voter names the voter an EventPeerTLS or EventPeerIdentity is about.
+	Voter quorum.NodeID
 }
 
 // Status is a snapshot of the elector, for the operator surfaces.
@@ -404,6 +422,7 @@ type Elector struct {
 	contactsMsg string    // the contacts condition last raised
 	writeErr    string
 	mismatch    map[string]string // the last lease-mismatch report per voter, to report each change once
+	links       map[string]string // the standing peer-TLS and identity reports, by kind and voter (noteLink)
 	durable     uint64            // the highest Seq known on disk
 	written     chan struct{}     // closed and replaced at every write report
 	// spareSeq: the write of the spare flag in flight (Voter.MakeSpare),
@@ -489,16 +508,17 @@ func New(o Options) (*Elector, error) {
 	}
 	client := o.client
 	if client == nil {
-		client = newClient(o.Dial)
+		client = newClient(o.Dial, o.TLS)
 	}
 	e := &Elector{
 		o: o, log: o.Log.With("cluster", o.Cluster, "node", string(o.Self)), now: now,
 		file: &State{Path: o.StatePath, Owner: o.Self, Cluster: o.Cluster, Box: o.Box, write: o.write},
 		call: caller{client: client, token: o.Token, lease: o.Lease, members: members(o.Self, o.Peer)},
-		peer: baseURL(o.PeerAddr), wit: baseURL(o.WitnessAddr), nonce: drawNonce(),
-		waiters: map[waitKey]chan quorum.Reply{}, written: make(chan struct{}), mismatch: map[string]string{},
+		peer: baseURL(o.PeerAddr, o.TLS != nil), wit: baseURL(o.WitnessAddr, o.TLS != nil), nonce: drawNonce(),
+		waiters: map[waitKey]chan quorum.Reply{}, written: make(chan struct{}), mismatch: map[string]string{}, links: map[string]string{},
 		wake: make(chan struct{}, 1), events: make(chan Event, 64), decided: make(chan struct{}),
 	}
+	e.call.note, e.call.tls = e.noteLink, o.TLS != nil
 	free := func() {}
 	if !mut("controller_unlocked") {
 		f, err := lock(o.StatePath + ".lock")
@@ -971,11 +991,16 @@ func (e *Elector) publish(now quorum.Instant) {
 }
 
 // event queues ev for OnEvent. Under mu; never blocks.
-func (e *Elector) event(ev Event) {
+func (e *Elector) event(ev Event) { e.tryEvent(ev) }
+
+// tryEvent is event, reporting whether ev was queued.
+func (e *Elector) tryEvent(ev Event) bool {
 	select {
 	case e.events <- ev:
+		return true
 	default:
 		e.log.Warn("redundancy: event dropped (the event handler is behind)", "kind", ev.Kind)
+		return false
 	}
 }
 
@@ -1115,6 +1140,89 @@ func (e *Elector) reply(from quorum.NodeID, r quorum.Reply) {
 	e.after(now)
 	e.mu.Unlock()
 	e.poke()
+}
+
+// noteLink hears every peer call's outcome (caller.note) and keeps the
+// peer-TLS and identity reports about the voter it went to (#710): raised
+// when a call shows the other protocol or a foreign key at that voter,
+// cleared when a call to it gets an answer. An error that says nothing
+// about TLS (a timeout, a refused connection) leaves them as they stand.
+func (e *Elector) noteLink(url string, err error) {
+	if mut("peer_tls_mismatch_unnamed") {
+		return
+	}
+	var voter quorum.NodeID
+	var who string
+	switch {
+	case strings.HasPrefix(url, e.peer+Prefix):
+		voter, who = e.o.Peer, "controller "+string(e.o.Peer)
+	case strings.HasPrefix(url, e.wit+Prefix):
+		voter, who = e.o.Witness, "the witness"
+	default:
+		return
+	}
+	var tlsMsg, idMsg string
+	switch faultOf(err) {
+	case faultNone:
+		if err != nil {
+			return
+		}
+	case faultPeerPlain:
+		tlsMsg = who + " answers plain HTTP on its peer port and this controller speaks TLS: peer TLS is off there (redundancy.peer-tls: off, or naut witness --peer-tls=off), it runs a release from before peer TLS, or something else answers at " + hostOf(e.baseOf(voter)) + ". Turn peer TLS on there, or upgrade it; never turn it off here to clear this, which would send the peer token to whatever answers"
+	case faultPeerTLS:
+		tlsMsg = who + " speaks TLS on its peer port and this controller plain HTTP (redundancy.peer-tls: off here): run one peer TLS setting on both controllers and the witness"
+	case faultForeignKey:
+		idMsg = who + "'s TLS key is not this pair's: it holds another NAUTILUS_PEER_TOKEN, or something else answers at " + hostOf(e.baseOf(voter)) + ". Give the two controllers and the witness the same token"
+	case faultKeyRefused:
+		idMsg = who + " refused this controller's TLS key: it holds another NAUTILUS_PEER_TOKEN. Give the two controllers and the witness the same token"
+	}
+	e.linkState(EventPeerTLS, voter, tlsMsg)
+	e.linkState(EventPeerIdentity, voter, idMsg)
+}
+
+// hostOf is a base URL's host:port.
+func hostOf(base string) string {
+	_, h, ok := strings.Cut(base, "://")
+	if !ok {
+		return base
+	}
+	return h
+}
+
+// baseOf is the base URL of voter's peer port.
+func (e *Elector) baseOf(voter quorum.NodeID) string {
+	if voter == e.o.Witness {
+		return e.wit
+	}
+	return e.peer
+}
+
+// linkState sets the standing report of kind about voter to msg ("" clears
+// it): an event, and a log line, at each change only.
+func (e *Elector) linkState(kind EventKind, voter quorum.NodeID, msg string) {
+	key := string(kind) + "/" + string(voter)
+	e.mu.Lock()
+	changed := e.links[key] != msg
+	// The state moves only with its event: a change whose event is
+	// dropped (the handler behind) is tried again at the next call, so a
+	// raise or a clear is never lost for good (#1230 review).
+	if changed && e.tryEvent(Event{Kind: kind, Voter: voter, Detail: msg}) {
+		if msg == "" {
+			delete(e.links, key)
+		} else {
+			e.links[key] = msg
+		}
+	} else {
+		changed = false
+	}
+	e.mu.Unlock()
+	switch {
+	case !changed:
+	case msg != "":
+		e.log.Error("redundancy: "+msg, "voter", string(voter))
+	default:
+		e.log.Info("redundancy: peer calls get through again", "voter", string(voter), "was", string(kind))
+	}
 }
 
 // mismatched reports a refusal between this controller and voter, sent

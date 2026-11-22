@@ -485,6 +485,18 @@ var table = []mutation{
 	{"empty_pair_needs_accept", []string{"TestANewPairsPlainVouchAfterARestartNeedsNoAcceptLoss", "TestPairANewPairsPlainVouchNeedsNoAcceptLoss"}},
 	{"empty_pair_unchecked", []string{"TestANewPairsPlainVouchNamesTheConditionThatFails"}},
 	{"set_aside_forgotten", []string{"TestANewPairsPlainVouchNamesTheConditionThatFails"}},
+	// Peer TLS (#710 PR 1).
+	{"peer_tls_short_token", []string{"TestShortTokenRefused", "TestPairShortTokenRefusedWithPeerTLS", "TestWitnessPeerTLSFlag"}},
+	{"peer_tls_server_any_client", []string{"TestServerRefusesAnotherTokensClient", "TestServerRefusesAClientWithoutACertificate", "TestServerRefusesASelfMadeClientCertificate", "TestFaultOf"}},
+	{"peer_tls_client_any_server", []string{"TestClientRefusesAnotherTokensServer", "TestLoopbackImpostorAtTheWitnessAddress", "TestFaultOf"}},
+	{"peer_tls_default_off", []string{"TestRedundancyWithPeersIsThePair", "TestWitnessServesVotes", "TestPairShortTokenRefusedWithPeerTLS", "TestWitnessPeerTLSFlag", "TestCheckPeerTLSWarnings"}},
+	{"peer_tls_log_plain", []string{"TestPairWitnessLogCatchesUpAfterItWasDown", "TestPairWitnessLogAdmitsOnlyItsGrantedLeader", "TestPairCommissioningVouchSyncsTheOtherCopies"}},
+	{"peer_tls_mismatch_unnamed", []string{"TestLoopbackPlainWitnessIsNamed", "TestLoopbackPlainControllerIsNamedBothWays", "TestLoopbackImpostorAtTheWitnessAddress", "TestPairPlainWitnessIsNamedOnTheCluster"}},
+	{"peer_bind_wildcard", []string{"TestPairMemberOptions", "TestPairPeerPortBindsTheNamedAddress", "TestPairPeerPortNamesANameBoundToLoopback"}},
+	// The #1230 review.
+	{"peer_bind_gives_up", []string{"TestPairPeerPortWaitsForItsAddress"}},
+	{"peer_bind_loopback_taken", []string{"TestPairPeerPortNamesANameBoundToLoopback"}},
+	{"peer_tls_handshake_unbounded", []string{"TestStalledHandshakesAreClosed"}},
 }
 
 // rowPkgs are the packages a row runs instead of ./quorum/..., filtered
@@ -558,6 +570,16 @@ var rowPkgs = map[string][]string{
 	"log_sync_not_retried":              {"./cmd/naut"},
 	"spare_log_runs":                    {"./cmd/naut"},
 	"ack_clear_off":                     {"./cmd/naut"},
+	"peer_tls_short_token":              {"./internal/peertls", "./cmd/naut"},
+	"peer_tls_server_any_client":        {"./internal/peertls", "./quorum/..."},
+	"peer_tls_client_any_server":        {"./internal/peertls", "./quorum/..."},
+	"peer_tls_default_off":              {"./cmd/naut"},
+	"peer_tls_log_plain":                {"./cmd/naut"},
+	"peer_tls_mismatch_unnamed":         {"./quorum/...", "./cmd/naut"},
+	"peer_bind_wildcard":                {"./cmd/naut"},
+	"peer_bind_gives_up":                {"./cmd/naut"},
+	"peer_bind_loopback_taken":          {"./cmd/naut"},
+	"peer_tls_handshake_unbounded":      {"./quorum/..."},
 	"alarm_view_ignored":                {"./cmd/naut"},
 	"engine_not_reset":                  {"./server"},
 	"occurrence_per_activation":         {"./alarm"},
