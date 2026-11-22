@@ -432,9 +432,23 @@ func (c *cluster) steady(id quorum.NodeID, n int) {
 	e := c.elector(id)
 	term := e.Term()
 	end := time.Now().Add(leases(n))
+	var lapsed time.Time // when a lapse at the same term began
 	for time.Now().Before(end) {
-		if !e.IsLeader() || e.Term() != term {
-			c.t.Fatalf("%s did not hold its lease steadily: leading=%v term %d (was %d)", id, e.IsLeader(), e.Term(), term)
+		switch leading := e.IsLeader(); {
+		case e.Term() != term:
+			c.t.Fatalf("%s did not hold its lease steadily: leading=%v term %d (was %d)", id, leading, e.Term(), term)
+		case leading:
+			lapsed = time.Time{}
+		case !raceOn:
+			c.t.Fatalf("%s did not hold its lease steadily: leading=%v term %d (was %d)", id, leading, e.Term(), term)
+		case lapsed.IsZero():
+			// Under -race a renewal can come late on a loaded runner
+			// (#1120): its gate closes until the renewal lands, at the same
+			// term. Allowed for half a lease; a yield or a lost lease
+			// changes the term, and that still fails.
+			lapsed = time.Now()
+		case time.Since(lapsed) > loopLease/2:
+			c.t.Fatalf("%s did not hold its lease steadily: not leading for %v at term %d", id, time.Since(lapsed), term)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

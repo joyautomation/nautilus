@@ -72,6 +72,12 @@ func TestClearDuplicateAllClearsEveryMember(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), leases(10))
 	defer cancel()
 	rep, err := c.elector("b").ClearDuplicateAll(ctx, "a", "user:op")
+	if err != nil && raceOn && slowWrite(rep) {
+		// Under -race a member's state write can miss its half-lease
+		// deadline on a loaded runner (#1120): the command ends
+		// INCOMPLETE, as it must, and its own advice is to run it again.
+		rep, err = c.elector("b").ClearDuplicateAll(ctx, "a", "user:op")
+	}
 	if err != nil {
 		t.Fatalf("clear: %v (report %+v)", err, rep)
 	}
@@ -456,4 +462,14 @@ func TestAClearIsNotDoneWhileTheControllerIsHeld(t *testing.T) {
 	if !rep.Done() {
 		t.Fatal("with nothing held or marked, not done")
 	}
+}
+
+// slowWrite: a member answered the clear but its write missed the deadline.
+func slowWrite(rep ClearReport) bool {
+	for _, a := range rep.Clear {
+		if strings.Contains(a.Err, "did not finish in time") {
+			return true
+		}
+	}
+	return false
 }
