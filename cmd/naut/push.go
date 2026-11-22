@@ -129,7 +129,7 @@ func pushChannel(ref *atomic.Pointer[server.Server]) func(context.Context, escal
 // has no phone, otherwise a class and never the endpoint.
 func pushOutcome(res server.PushResult, err error) error {
 	switch {
-	case errors.Is(err, server.ErrPushOff), errors.Is(err, server.ErrPushNotLeading):
+	case errors.Is(err, server.ErrPushOff), errors.Is(err, server.ErrPushNotLeading), errors.Is(err, server.ErrPushUsers):
 		return escalate.Failed(escalate.FailConfig)
 	case err != nil:
 		return escalate.Failed(escalate.FailUnknown)

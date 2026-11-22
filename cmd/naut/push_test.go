@@ -81,6 +81,7 @@ func TestPushOutcomeSaysClassNeverTheEndpoint(t *testing.T) {
 		{server.PushResult{Skipped: 1}, nil, escalate.FailConfig},
 		{server.PushResult{}, server.ErrPushOff, escalate.FailConfig},
 		{server.PushResult{}, server.ErrPushNotLeading, escalate.FailConfig},
+		{server.PushResult{}, server.ErrPushUsers, escalate.FailConfig},
 		{server.PushResult{}, errors.New("boom"), escalate.FailUnknown},
 	} {
 		err := pushOutcome(c.res, c.err)

@@ -158,11 +158,11 @@ func rowID(endpoint string) string {
 // aad binds a sealed row to what is kept in the clear beside it: someone
 // who can write the store cannot move it to another person, or change the
 // credential or groups its standing is judged by, without it failing to open.
-func aad(id, principal, cred string, groups []string) []byte {
-	return []byte(id + "\x00" + principal + "\x00" + cred + "\x00" + strings.Join(groups, "\x00"))
+func aad(id, principal, cred string, groups []string, seen time.Time) []byte {
+	return []byte(id + "\x00" + principal + "\x00" + cred + "\x00" + strings.Join(groups, "\x00") + "\x00" + seen.UTC().Format(time.RFC3339))
 }
 
-func (g *Registry) seal(id, principal, cred string, groups []string, s Subscription) (string, error) {
+func (g *Registry) seal(id, principal, cred string, groups []string, seen time.Time, s Subscription) (string, error) {
 	pt, err := json.Marshal(s)
 	if err != nil {
 		return "", err
@@ -171,7 +171,7 @@ func (g *Registry) seal(id, principal, cred string, groups []string, s Subscript
 	if _, err := rand.Read(n); err != nil {
 		return "", err
 	}
-	return b64.EncodeToString(g.aead.Seal(n, n, pt, aad(id, principal, cred, groups))), nil
+	return b64.EncodeToString(g.aead.Seal(n, n, pt, aad(id, principal, cred, groups, seen))), nil
 }
 
 // Open unseals a row. A row sealed under another key, or altered, or moved
@@ -185,7 +185,7 @@ func (g *Registry) Open(r Row) (Subscription, error) {
 		return Subscription{}, ErrSealed
 	}
 	n, ct := raw[:g.aead.NonceSize()], raw[g.aead.NonceSize():]
-	pt, err := g.aead.Open(nil, n, ct, aad(r.ID, r.Principal, r.Cred, r.Groups))
+	pt, err := g.aead.Open(nil, n, ct, aad(r.ID, r.Principal, r.Cred, r.Groups, r.Seen))
 	if err != nil {
 		return Subscription{}, ErrSealed
 	}
@@ -211,7 +211,8 @@ type Change struct {
 // endpoint (Policy.CheckEndpoint) and the keys' shape (Validate).
 func (g *Registry) Add(principal string, groups []string, cred, host string, s Subscription, now time.Time) (Row, Change, error) {
 	id := rowID(s.Endpoint)
-	sealed, err := g.seal(id, principal, cred, groups, s)
+	seen := now.UTC().Truncate(time.Second)
+	sealed, err := g.seal(id, principal, cred, groups, seen, s)
 	if err != nil {
 		return Row{}, Change{}, err
 	}
@@ -397,26 +398,30 @@ func (g *Registry) Sealed() int {
 	return n
 }
 
-// Rebind records a fresh proof for principal's rows: the credential and
-// groups of a sign-in just made, re-sealed so the binding holds. A row
-// that will not open (another key) is left as it is.
+// Rebind records a fresh proof for principal's rows made under the same
+// credential: the groups of a sign-in just made, re-sealed with the time so
+// the binding holds. A row made under another credential (an OIDC name
+// re-pinned to another account) is not carried over: it stays judged by
+// what it was made under, and ends. A row that will not open (another
+// key) is left as it is.
 func (g *Registry) Rebind(principal, cred string, groups []string, now time.Time) int {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	seen := now.UTC().Truncate(time.Second)
 	n := 0
 	for i, r := range g.rows {
-		if r.Principal != principal {
+		if r.Principal != principal || r.Cred != cred {
 			continue
 		}
 		sub, err := g.Open(r)
 		if err != nil {
 			continue
 		}
-		sealed, err := g.seal(r.ID, principal, cred, groups, sub)
+		sealed, err := g.seal(r.ID, principal, cred, groups, seen, sub)
 		if err != nil {
 			continue
 		}
-		g.rows[i].Cred, g.rows[i].Groups, g.rows[i].Sealed, g.rows[i].Seen = cred, groups, sealed, now.UTC().Truncate(time.Second)
+		g.rows[i].Groups, g.rows[i].Sealed, g.rows[i].Seen = groups, sealed, seen
 		n++
 	}
 	return n

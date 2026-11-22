@@ -214,6 +214,7 @@ func TestSealBindsCredAndGroups(t *testing.T) {
 	for name, mut := range map[string]func(*Row){
 		"cred":   func(r *Row) { r.Cred = "pin2" },
 		"groups": func(r *Row) { r.Groups = []string{"ops", "admins"} },
+		"seen":   func(r *Row) { r.Seen = r.Seen.Add(24 * time.Hour) },
 	} {
 		r := row
 		mut(&r)
@@ -241,5 +242,26 @@ func TestRemoveRowsIsExact(t *testing.T) {
 	g.RemoveRows([]Row{old})
 	if rows := g.Of("user:ann"); len(rows) != 1 || rows[0].Sealed != fresh.Sealed {
 		t.Fatalf("the prune took the re-made row: %+v", rows)
+	}
+}
+
+// A sign-in refreshes only rows made under the credential it proved: an
+// OIDC name re-pinned to another account does not inherit the old
+// account's phones.
+func TestRebindKeepsToItsCredential(t *testing.T) {
+	g, _ := newReg(t)
+	g.Add("oidc:ann", []string{"ops"}, "pin-old", "h", testSub(1), t0)
+	if n := g.Rebind("oidc:ann", "pin-new", []string{"ops"}, t0.Add(time.Hour)); n != 0 {
+		t.Fatalf("rebound %d rows made under another credential", n)
+	}
+	if rows := g.Of("oidc:ann"); rows[0].Cred != "pin-old" {
+		t.Errorf("cred %q", rows[0].Cred)
+	}
+	if n := g.Rebind("oidc:ann", "pin-old", []string{"admins"}, t0.Add(time.Hour)); n != 1 {
+		t.Fatalf("same credential: %d", n)
+	}
+	r := g.Of("oidc:ann")[0]
+	if _, err := g.Open(r); err != nil || r.Seen != t0.Add(time.Hour) || r.Groups[0] != "admins" {
+		t.Errorf("%+v %v", r, err)
 	}
 }
