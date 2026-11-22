@@ -62,8 +62,20 @@ target:
 	if c.host != "192.0.2.10" || c.user != "naut" || c.pin != strings.Repeat("ab", 32) || c.password != "pw" {
 		t.Fatalf("%+v", c)
 	}
-	if len(c.roots) != 1 || c.roots[0] != (facade.Root{DB: "Tags"}) {
+	if len(c.roots) != 1 || c.roots[0] != (facade.Root{DB: "naut_Tags"}) {
 		t.Fatalf("default roots: %+v", c.roots)
+	}
+	// A project's block-prefix decides the default root.
+	m2 := strings.Replace(m, "  siemens:\n", "  siemens:\n    block-prefix: plant_\n", 1)
+	if err := os.WriteFile(filepath.Join(dir, "nautilus.yaml"), []byte(m2), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if c, err = resolveSiemensServe("", "", "", dir, nil, time.Second, "127.0.0.1:0", pw); err != nil ||
+		len(c.roots) != 1 || c.roots[0] != (facade.Root{DB: "plant_Tags"}) {
+		t.Fatalf("custom-prefix roots: %+v %v", c.roots, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "nautilus.yaml"), []byte(m), 0o644); err != nil {
+		t.Fatal(err)
 	}
 	// Flags win over the project.
 	c, err = resolveSiemensServe("192.0.2.99", "other", "cd", dir, []facade.Root{{DB: "Main_DB", Prefix: "Main"}}, time.Second, "127.0.0.1:0", pw)

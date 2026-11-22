@@ -158,3 +158,26 @@ func TestSiemensSchemaMatchesLoader(t *testing.T) {
 		}
 	}
 }
+
+func TestSiemensBlockPrefixRules(t *testing.T) {
+	str := func(s string) *string { return &s }
+	if got := (*SiemensTarget)(nil).Prefix(); got != DefaultSiemensBlockPrefix || DefaultSiemensBlockPrefix != "naut_" {
+		t.Fatalf("default %q", got)
+	}
+	if got := (&SiemensTarget{}).Prefix(); got != "naut_" {
+		t.Fatalf("unset %q", got)
+	}
+	for p, ok := range map[string]bool{"naut_": true, "_x1": true, "A": true, "": false, "1a": false, "a b": false, "a-b": false, "OB_": false, "ob_x": false, "OBx": true, "naut_OB_": true, `a"`: false} {
+		if err := CheckBlockPrefix(p); (err == nil) != ok {
+			t.Errorf("CheckBlockPrefix(%q) = %v, want ok=%v", p, err, ok)
+		}
+	}
+	tc := &TargetConfig{Siemens: &SiemensTarget{BlockPrefix: str("")}}
+	found := false
+	for _, p := range tc.Problems() {
+		found = found || p.Path == "target.siemens.block-prefix"
+	}
+	if !found {
+		t.Fatal("empty block-prefix not reported")
+	}
+}

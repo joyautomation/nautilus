@@ -1,6 +1,10 @@
 package project
 
 import (
+	"errors"
+	"fmt"
+	"strings"
+
 	"github.com/joyautomation/nautilus/siemens/station"
 )
 
@@ -20,6 +24,11 @@ type SiemensTarget struct {
 	// Group is the block group nautilus owns in the TIA project. Default
 	// "nautilus".
 	Group string `yaml:"group"`
+	// BlockPrefix goes in front of every block, DB and tag table nautilus
+	// generates ("naut_Main", "naut_Tags"), so a generated block never
+	// collides with TIA's own ("Main" [OB1]) or a customer's. Default
+	// "naut_". An explicit empty prefix is refused by check for now.
+	BlockPrefix *string `yaml:"block-prefix"`
 	// Station is the CPU's whole hardware config. One CPU has exactly one
 	// station spec, because a download replaces the whole config.
 	Station station.Station `yaml:"station"`
@@ -34,6 +43,38 @@ type SiemensOnline struct {
 	User string `yaml:"user"`
 	// CertSHA256 pins the CPU's certificate (CPUs ship self-signed ones).
 	CertSHA256 string `yaml:"cert-sha256"`
+}
+
+// DefaultSiemensBlockPrefix is the block-name prefix when block-prefix is unset.
+const DefaultSiemensBlockPrefix = "naut_"
+
+// Prefix is the block-name prefix in effect: block-prefix, or the default
+// when it is unset (or t is nil). An explicit empty prefix is returned
+// as is; Problems refuses it.
+func (t *SiemensTarget) Prefix() string {
+	if t == nil || t.BlockPrefix == nil {
+		return DefaultSiemensBlockPrefix
+	}
+	return *t.BlockPrefix
+}
+
+// CheckBlockPrefix says why a block-name prefix cannot be used: it must
+// be non-empty and begin an SCL identifier (a letter or underscore, then
+// letters, digits and underscores).
+func CheckBlockPrefix(p string) error {
+	if p == "" {
+		return errors.New("empty: a generated block named like the program (\"Main\") collides with TIA's own OB1; leave block-prefix out for the default " + DefaultSiemensBlockPrefix)
+	}
+	for i, r := range p {
+		letter := r == '_' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z'
+		if !letter && !(i > 0 && r >= '0' && r <= '9') {
+			return fmt.Errorf("%q is not a valid SCL identifier start: use letters, digits and _, not starting with a digit", p)
+		}
+	}
+	if len(p) >= 3 && strings.EqualFold(p[:3], "OB_") {
+		return fmt.Errorf("%q would make block names that clash with TIA's system constants (OB_<name> for each OB); choose another prefix", p)
+	}
+	return nil
 }
 
 // DefaultSiemensGroup is the block group nautilus owns by default.
@@ -56,6 +97,11 @@ func (t *TargetConfig) Problems() []station.Problem {
 	if s.Agent != "" {
 		if err := station.CheckAgentURL(s.Agent); err != nil {
 			ps = append(ps, station.Problem{Path: "target.siemens.agent", Message: err.Error()})
+		}
+	}
+	if s.BlockPrefix != nil {
+		if err := CheckBlockPrefix(*s.BlockPrefix); err != nil {
+			ps = append(ps, station.Problem{Path: "target.siemens.block-prefix", Message: err.Error()})
 		}
 	}
 	if o := s.Online; o != nil && o.CertSHA256 != "" {

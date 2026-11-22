@@ -1,4 +1,4 @@
-DATA_BLOCK "Tags"
+DATA_BLOCK "naut_Tags"
 { S7_Optimized_Access := 'TRUE' }
 VERSION : 0.1
    VAR 

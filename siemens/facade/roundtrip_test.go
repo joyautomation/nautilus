@@ -23,10 +23,14 @@ import (
 func TestWriterAndFacadeAgreeOnNames(t *testing.T) {
 	src := "PROGRAM Main\nVAR count : INT; run : BOOL; dwell : TON; END_VAR\ncount := 1;\nrun := Start;\nEND_PROGRAM\n"
 	out, diags, err := writer.Write(writer.Input{
-		Programs: []writer.Program{{Path: "Main.st", Source: src}},
-		Globals:  []writer.Global{{Name: "Level", Type: "REAL"}, {Name: "Start", Type: "BOOL"}},
-		Tasks:    []writer.Task{{Name: "main", Program: "Main", Interval: time.Second}},
+		Programs:    []writer.Program{{Path: "Main.st", Source: src}},
+		Globals:     []writer.Global{{Name: "Level", Type: "REAL"}, {Name: "Start", Type: "BOOL"}},
+		Tasks:       []writer.Task{{Name: "main", Program: "Main", Interval: time.Second}},
+		BlockPrefix: "naut_",
 	})
+	if out.Roots[""] != `"naut_Tags"` || out.Roots["Main"] != `"naut_Main_DB"` {
+		t.Fatalf("roots %v", out.Roots)
+	}
 	if err != nil || len(diags) > 0 {
 		t.Fatal(err, diags)
 	}

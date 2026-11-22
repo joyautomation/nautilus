@@ -157,6 +157,7 @@ func resolveSiemensServe(host, user, pin, projectDir string, roots []facade.Root
 		password: getenv("NAUTILUS_SIEMENS_PASSWORD"), token: getenv("NAUTILUS_TOKEN")}
 	var tlsCfg *project.TLSConfig // server.tls, when the project has one
 	var tlsState, tlsName string
+	prefix := project.DefaultSiemensBlockPrefix // the project's block-prefix, below
 	if projectDir != "" {
 		m, err := project.ReadManifest(os.DirFS(projectDir), "")
 		if err != nil && !errors.Is(err, os.ErrNotExist) && !strings.Contains(err.Error(), "no nautilus.yaml") {
@@ -175,6 +176,9 @@ func resolveSiemensServe(host, user, pin, projectDir string, roots []facade.Root
 			tlsCfg, tlsState, tlsName = m.Server.TLS, m.AuthStateDir(), m.Name
 		}
 		if err == nil {
+			if m.Target != nil {
+				prefix = m.Target.Siemens.Prefix()
+			}
 			siemensOnlineDefaults(m, &c.host, &c.user, &c.pin)
 		}
 	}
@@ -194,7 +198,7 @@ func resolveSiemensServe(host, user, pin, projectDir string, roots []facade.Root
 		return c, fmt.Errorf("--listen %s accepts connections from other machines: set NAUTILUS_TOKEN first, since a write here changes a running PLC", c.listen)
 	}
 	if len(c.roots) == 0 {
-		c.roots = []facade.Root{{DB: "Tags"}}
+		c.roots = []facade.Root{{DB: prefix + "Tags"}}
 	}
 	return c, nil
 }

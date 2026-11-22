@@ -37,6 +37,9 @@ func TestGolden(t *testing.T) {
 		Programs: []Program{{Path: "Main.st", Source: string(src)}},
 		Globals:  benchGlobals,
 		Tasks:    []Task{{Name: "main", Program: "Main", Interval: 100 * time.Millisecond}},
+		// The default the CLI passes: the FB "Main" would otherwise
+		// collide with TIA's own "Main" [OB1] (#789).
+		BlockPrefix: "naut_",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -74,9 +77,9 @@ func TestGolden(t *testing.T) {
 		t.Errorf("OBs: %+v", out.OBs)
 	}
 	for path, want := range map[string]string{
-		"Level":        `"Tags".Level`,
-		"Main.count":   `"Main_DB".count`,
-		"main.dwell.Q": `"Main_DB".dwell.Q`,
+		"Level":        `"naut_Tags".Level`,
+		"Main.count":   `"naut_Main_DB".count`,
+		"main.dwell.Q": `"naut_Main_DB".dwell.Q`,
 	} {
 		if got, ok := out.Symbol(path); !ok || got != want {
 			t.Errorf("Symbol(%q) = %q, want %q", path, got, want)
@@ -464,5 +467,73 @@ func TestSymbolRefusesMembersOfScalars(t *testing.T) {
 	}
 	if s, ok := out.Symbol("P.t.ET"); !ok || s != `"P_DB".t.ET` {
 		t.Errorf("Symbol(P.t.ET) = %q %v", s, ok)
+	}
+}
+
+// TestBlockPrefixIsEverywhere: the prefix is on every generated block, DB
+// and tag table name, in file names, in every reference inside the SCL,
+// and in the roots Symbol answers from (#789). No block keeps the bare
+// program name, which would collide with TIA's "Main" [OB1].
+func TestBlockPrefixIsEverywhere(t *testing.T) {
+	src := "PROGRAM Main\nVAR count : INT; END_VAR\ncount := count + 1;\nlevel := 1.0;\nEND_PROGRAM\n"
+	out, diags, err := Write(Input{
+		Programs:    []Program{{Path: "Main.st", Source: src}},
+		Globals:     []Global{{Name: "level", Type: "REAL"}},
+		Tasks:       []Task{{Name: "main", Program: "Main", Interval: time.Second}},
+		BlockPrefix: "plant_",
+	})
+	if err != nil || len(diags) > 0 {
+		t.Fatal(err, diags)
+	}
+	files := map[string]string{}
+	for _, f := range out.Files {
+		files[f.Path] = string(f.Data)
+	}
+	for path, want := range map[string]string{
+		"plant_Main.scl":    `FUNCTION_BLOCK "plant_Main"`,
+		"plant_Main_DB.db":  `DATA_BLOCK "plant_Main_DB"`,
+		"plant_Tags.db":     `DATA_BLOCK "plant_Tags"`,
+		"plant_OB_main.scl": `ORGANIZATION_BLOCK "plant_OB_main"`,
+	} {
+		if !strings.Contains(files[path], want) {
+			t.Errorf("%s lacks %s:\n%s", path, want, files[path])
+		}
+	}
+	for path, want := range map[string]string{
+		"plant_Main.scl":    `"plant_Tags".level`,
+		"plant_Main_DB.db":  "\"plant_Main\"\n",
+		"plant_OB_main.scl": `"plant_Main_DB"();`,
+	} {
+		if !strings.Contains(files[path], want) {
+			t.Errorf("%s: reference %q missing:\n%s", path, want, files[path])
+		}
+	}
+	if len(files) != 4 {
+		t.Errorf("files: %v", files)
+	}
+	if out.OBs[0].Name != "plant_OB_main" {
+		t.Errorf("OB name %q", out.OBs[0].Name)
+	}
+	for path, want := range map[string]string{"level": `"plant_Tags".level`, "Main.count": `"plant_Main_DB".count`} {
+		if got, ok := out.Symbol(path); !ok || got != want {
+			t.Errorf("Symbol(%q) = %q, want %q", path, got, want)
+		}
+	}
+	if out.Roots[""] != `"plant_Tags"` || out.Roots["Main"] != `"plant_Main_DB"` {
+		t.Errorf("roots %v", out.Roots)
+	}
+}
+
+// TestPrefixedNamesStillCollide: the collision check works on the
+// prefixed names, so two programs differing only by a prefix-visible
+// clash (a program named Tags next to the tags DB) still refuse.
+func TestPrefixedNamesStillCollide(t *testing.T) {
+	_, diags, err := Write(Input{
+		Programs:    []Program{{Path: "p.st", Source: "PROGRAM Tags\nVAR x : REAL; END_VAR\nx := 1.0;\nEND_PROGRAM\n"}},
+		Globals:     []Global{{Name: "Level", Type: "REAL"}},
+		BlockPrefix: "naut_",
+	})
+	if err != nil || len(diags) != 1 || diags[0].Rule != "siemens/name" {
+		t.Fatalf("%v %v", diags, err)
 	}
 }

@@ -2552,6 +2552,11 @@
           "type": "string",
           "description": "Block group nautilus owns in the TIA project (default nautilus)."
         },
+        "block-prefix": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+          "description": "Prefix for every generated block, DB and tag table name (default naut_), so a generated block never collides with TIA's own (Main [OB1]) or a customer's. Empty is refused."
+        },
         "station": {
           "$ref": "#/definitions/siemens-station"
         },
