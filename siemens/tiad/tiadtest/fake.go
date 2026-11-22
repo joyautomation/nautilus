@@ -92,10 +92,16 @@ type Fake struct {
 	// deployRecs is the deploy record, oldest first, each intent with its
 	// outcome once written; archives the archived projects by sha256;
 	// archiveFails, when set, fails every archive (SetArchiveFails).
-	deployRecs   []*tiad.Deploy
-	archives     map[string][]byte
-	archiveFails string
-	archiveN     int
+	deployRecs []*tiad.Deploy
+	archives   map[string][]byte
+	// archived is what each archive holds, by its sha256 (a retrieve
+	// restores it); loadedArchive the sha256 of the archive each CPU's
+	// last load was archived as, "" for a load with none, "outside" for
+	// one made without the agent (LoadOutside).
+	archived      map[string]archivedProject
+	loadedArchive map[string]string
+	archiveFails  string
+	archiveN      int
 
 	mu        sync.Mutex
 	pins      map[string]tiad.DeviceIdentity // CPU address → device pin
@@ -150,6 +156,9 @@ type session struct {
 	// unclean is set while an apply or upload runs and stays set when it
 	// fails part-way: a later apply or save refuses.
 	unclean bool
+	// archive is the sha256 of the deploy archive made for the download
+	// running, "" for none.
+	archive string
 }
 
 // savedProject is the hardware a saved project holds, as TIA keeps it.
@@ -476,6 +485,8 @@ func (f *Fake) init() {
 		f.loads = map[string]int{}
 		f.hardwareLoads = map[string]int{}
 		f.archives = map[string][]byte{}
+		f.archived = map[string]archivedProject{}
+		f.loadedArchive = map[string]string{}
 		m := http.NewServeMux()
 		m.HandleFunc("GET /v1/health", f.wrap(f.health, false))
 		m.HandleFunc("GET /v1/probe", f.wrap(f.probe, false))
@@ -499,6 +510,7 @@ func (f *Fake) init() {
 		m.HandleFunc("POST /v1/sessions/{id}/fingerprint", f.wrap(f.readFingerprint, true))
 		m.HandleFunc("GET /v1/pins", f.wrap(f.listPins, false))
 		m.HandleFunc("GET /v1/deploys", f.wrap(f.listDeploys, false))
+		m.HandleFunc("POST /v1/deploys/verify", f.wrap(f.verifyDeploy, true))
 		m.HandleFunc("POST /v1/pins/{address}", f.wrap(f.setPin, false))
 		f.mux = m
 	})
@@ -1461,6 +1473,10 @@ func (f *Fake) downloadTIA(s *session, req tiad.DownloadRequest, attested *tiad.
 		said, source = state, tiad.StateFromTIAMessage
 	}
 	f.loaded[req.Address] = s.id
+	// The archive this load was archived as, once: a later load without
+	// one (a dry run TIA ran) holds none.
+	f.loadedArchive[req.Address] = s.archive
+	s.archive = ""
 	s.changed = false
 	// A dry run TIA asks nothing about cannot be cancelled: TIA loads.
 	if req.DryRun {

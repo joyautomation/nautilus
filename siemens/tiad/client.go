@@ -79,7 +79,9 @@ const (
 	// project's CPU (name, order or firmware), or whose devices collide
 	// with ones the project keeps; ProjectCPUOf reads the project's CPU
 	// from it. tiad never replaces a project's CPU on an apply: create the
-	// project again for a new one.
+	// project again for a new one. A deploy verify refuses with it too,
+	// when the archived project's CPU is not at the record's address
+	// (VerifyMismatchOf).
 	KindCPUMismatch = "cpu_mismatch"
 	// KindUncleanSession refuses an apply or a save after an apply or an
 	// upload failed part-way on the session: close it without saving.

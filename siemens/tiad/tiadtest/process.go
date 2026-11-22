@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -461,6 +462,66 @@ func (p *Process) Calls(t testing.TB) []TiaCall {
 	}
 	p.controlInto(t, http.MethodGet, "/fake/calls", nil, &out)
 	return out.Calls
+}
+
+// LoadOutside is the Target's: POST /fake/load.
+func (p *Process) LoadOutside(t testing.TB, address, file string) {
+	t.Helper()
+	body := map[string]string{"address": address, "archive": ""}
+	if file != "" {
+		body["archive"] = filepath.Join(p.DeploysDir, filepath.FromSlash(file))
+	}
+	p.control(t, http.MethodPost, "/fake/load", body)
+}
+
+// SwapArchive is the Target's: the file in TIAD_DEPLOYS_DIR rewritten.
+func (p *Process) SwapArchive(t testing.TB, file, with string) {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(p.DeploysDir, filepath.FromSlash(with)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(p.DeploysDir, filepath.FromSlash(file)), b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// SetDeployAddress is the Target's: the intent line of deploy id in the
+// journal rewritten with another address.
+func (p *Process) SetDeployAddress(t testing.TB, id, address string) {
+	t.Helper()
+	path := filepath.Join(p.DeploysDir, "deploys.jsonl")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(string(b), "\n")
+	found := false
+	for i, l := range lines {
+		if l == "" {
+			continue
+		}
+		var o map[string]any
+		if err := json.Unmarshal([]byte(l), &o); err != nil {
+			t.Fatal(err)
+		}
+		if o["kind"] != "intent" || o["deploy"] != id {
+			continue
+		}
+		o["address"] = address
+		nb, err := json.Marshal(o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines[i] = string(nb)
+		found = true
+	}
+	if !found {
+		t.Fatalf("no intent line for deploy %s", id)
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func (p *Process) control(t testing.TB, method, path string, body any) {

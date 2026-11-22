@@ -66,6 +66,8 @@ func (f *Fake) recordIntent(s *session, req tiad.DownloadRequest, attested *tiad
 	sum := sha256.Sum256(b)
 	sha := hex.EncodeToString(sum[:])
 	f.archives[sha] = b
+	f.archived[sha] = archivedProject{address: s.station.CPU.Address, cpu: s.station.CPU.Name}
+	s.archive = sha
 	d := &tiad.Deploy{
 		ID: newDeployID(), At: fakeNow(), Session: s.id, Project: s.project, Address: req.Address,
 		Hardware: req.Hardware, Software: req.Software,

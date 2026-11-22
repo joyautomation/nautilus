@@ -12,8 +12,8 @@
 //
 // What the caller claims (source.commit, source.hash) is recorded as its
 // claim: tiad checks only its shape. Whether the CPU still runs a deploy
-// (POST /v1/deploys/verify, opening the archive and comparing it online)
-// is a later PR.
+// is POST /v1/deploys/verify (Verify.cs): it opens a copy of the archive
+// and compares it online.
 
 using System;
 using System.Collections.Generic;
@@ -180,12 +180,15 @@ namespace Tiad
                 System.IO.File.WriteAllText(probe, "tiad deploys directory probe\n");
                 if (System.IO.File.ReadAllText(probe) != "tiad deploys directory probe\n") throw new IOException("a probe file read back differently");
                 System.IO.File.Delete(probe);
-                // Only what NewId names: a mis-set TIAD_DEPLOYS_DIR loses
-                // nothing else.
-                foreach (string d in Directory.GetDirectories(st.staging, "d-*"))
+                // Only what NewId and a verify (VerifyStage) name: a
+                // mis-set TIAD_DEPLOYS_DIR loses nothing else.
+                foreach (string pattern in new[] { "d-*", VerifyPrefix + "*" })
                 {
-                    Log.Line("deploys: removing staging left by an earlier run: {0}", Json.Quote(Path.GetFileName(d)));
-                    Directory.Delete(d, true);
+                    foreach (string d in Directory.GetDirectories(st.staging, pattern))
+                    {
+                        Log.Line("deploys: removing staging left by an earlier run: {0}", Json.Quote(Path.GetFileName(d)));
+                        Directory.Delete(d, true);
+                    }
                 }
             }
             catch (Exception e)
@@ -237,6 +240,91 @@ namespace Tiad
             catch (Exception e)
             {
                 Log.Line("deploys: removing staging {0} failed: {1}", Json.Quote(id), Json.Quote(e.Message));
+            }
+        }
+
+        // VerifyPrefix starts a verify's staging directory.
+        public const string VerifyPrefix = "v-";
+
+        // VerifyCopy is the name of a verify's copy of an archive: short,
+        // since TIA retrieves the project into a directory named after it
+        // (VerifyStage), and never taken from the journal.
+        public const string VerifyCopy = "deploy.zap21";
+
+        // VerifyStage copies the archive a deploy record names into a fresh
+        // staging directory of its own (dir), for a verify to open, and
+        // hashes the copy: what TIA opens is what was hashed. It returns
+        // why the archive is broken (the record's archive entry is not one
+        // tiad writes, the file is gone, or the copy's sha256 is not the
+        // record's), or null with copy set. A broken archive never
+        // compares: its directory is removed and dir is "".
+        public string VerifyStage(object archive, out string dir, out string copy)
+        {
+            dir = "";
+            copy = "";
+            var a = archive as IDictionary<string, object>;
+            object f, h;
+            string file = a != null && a.TryGetValue("file", out f) ? f as string : null;
+            string sha = a != null && a.TryGetValue("sha256", out h) ? h as string : null;
+            if (file == null || sha == null || sha.Length != 64 || !LowerHex(sha) || file != "archives/" + sha + ".zap21")
+            {
+                return "the record's archive entry is not one tiad writes (archives/<sha256>.zap21 with its sha256)";
+            }
+            string src = Path.Combine(archives, sha + ".zap21");
+            if (!System.IO.File.Exists(src)) return "the archive " + file + " is gone";
+            var b = new byte[4];
+            using (var rng = RandomNumberGenerator.Create()) rng.GetBytes(b);
+            string d = Path.Combine(staging, VerifyPrefix + Hex(b));
+            // Another verify's, by a 32-bit chance: never shared, never
+            // removed by this one.
+            if (Directory.Exists(d)) throw new IOException("the staging directory " + Path.GetFileName(d) + " is in use");
+            Directory.CreateDirectory(d);
+            string c = Path.Combine(d, VerifyCopy);
+            string got;
+            try
+            {
+                System.IO.File.Copy(src, c);
+                using (var fs = new FileStream(c, FileMode.Open, FileAccess.Read, FileShare.Read))
+                using (var hs = SHA256.Create())
+                {
+                    got = Hex(hs.ComputeHash(fs));
+                }
+            }
+            catch
+            {
+                RemoveStaging(d);
+                throw;
+            }
+            if (got != sha)
+            {
+                RemoveStaging(d);
+                return "the archive " + file + " has sha256 " + got + ", not the record's";
+            }
+            dir = d;
+            copy = c;
+            return null;
+        }
+
+        static bool LowerHex(string s)
+        {
+            foreach (char c in s)
+            {
+                if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
+            }
+            return true;
+        }
+
+        // RemoveStaging removes a verify's staging directory, logging a
+        // failure (the next start removes it).
+        public void RemoveStaging(string d)
+        {
+            try
+            {
+                if (Directory.Exists(d)) Directory.Delete(d, true);
+            }
+            catch (Exception e)
+            {
+                Log.Line("deploys: removing staging {0} failed: {1}", Json.Quote(Path.GetFileName(d)), Json.Quote(e.Message));
             }
         }
 
@@ -611,6 +699,7 @@ namespace Tiad
         void RegisterDeploys(Router r)
         {
             r.Add("GET", "/v1/deploys", ListDeploys);
+            r.Add("POST", "/v1/deploys/verify", VerifyDeploy);
         }
 
         // ListDeploys is GET /v1/deploys[?address=<ipv4>]: the deploy

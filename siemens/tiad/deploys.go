@@ -19,6 +19,8 @@ import (
 // compared equal, the agent reads the CPU's fingerprint in the same
 // session (its DownloadId names the load): through the same trust path as
 // Session.Fingerprint, with its own opt-in (DownloadRequest.Fingerprint).
+// Client.VerifyDeploy opens a copy of a deploy's archive and compares it
+// with the CPU: whether the CPU still runs that deploy.
 
 // DeploySource is the caller's claim of what a deploy was built from: the
 // git commit (40 or 64 lower-case hex digits) and, optionally, a hash of
@@ -218,4 +220,108 @@ func DeployIDOf(err error) string {
 		return ""
 	}
 	return d.Deploy
+}
+
+// Verify verdicts (VerifyResult.Verdict).
+const (
+	// VerifyEqual: the archived project's PLC software compared equal
+	// with the CPU.
+	VerifyEqual = "equal"
+	// VerifyDifferent: it compared different.
+	VerifyDifferent = "different"
+	// VerifyBroken: the archive is not the one the record names (its
+	// sha256 differs, it is gone, or the record's archive entry is not
+	// one the agent writes). It is never opened, never equal.
+	VerifyBroken = "broken"
+)
+
+// VerifyRequest is POST /v1/deploys/verify: the deploy to verify, and
+// optionally a fingerprint read after the compare.
+type VerifyRequest struct {
+	Deploy string `json:"deploy"`
+	// Fingerprint, when set, reads the CPU's fingerprint after the
+	// compare, with its own opt-in to trust the CPU's certificate
+	// blindly; the agent retires that trust when the verify's session
+	// closes.
+	Fingerprint *FingerprintRequest `json:"fingerprint,omitempty"`
+}
+
+// VerifyFingerprint is a verify's fingerprint read, with whether its
+// DownloadId and Hardware items are the deploy record's (nil when the
+// record or the read has no such item): a DownloadId that differs means
+// the CPU was loaded since, whatever the compare says.
+type VerifyFingerprint struct {
+	Items          []FingerprintItem `json:"items"`
+	TrustedBlindly []string          `json:"trustedBlindly"`
+	BlindTrust     *BlindTrust       `json:"blindTrust"`
+	DownloadIDSame *bool             `json:"downloadIdSame"`
+	HardwareSame   *bool             `json:"hardwareSame"`
+}
+
+// VerifyResult is what a verify found. Nothing in the project, on the CPU
+// or in the journal changes.
+type VerifyResult struct {
+	Deploy  string `json:"deploy"`
+	Address string `json:"address"`
+	// Status is the record's (DeployLoaded, ...); Latest the newest
+	// record for the address that may have loaded it (loaded or in
+	// doubt), "" for none.
+	Status string `json:"status"`
+	Latest string `json:"latest"`
+	// UnreadableLines counts the journal lines the agent could not read:
+	// one may be a newer deploy, so ChangedOutside is nil while any is.
+	UnreadableLines int `json:"unreadableLines"`
+	// Verdict is VerifyEqual, VerifyDifferent or VerifyBroken; Broken
+	// says why an archive is broken.
+	Verdict     string       `json:"verdict"`
+	Broken      string       `json:"broken,omitempty"`
+	Session     string       `json:"session,omitempty"`
+	Differences []Difference `json:"differences,omitempty"`
+	Blocks      []string     `json:"blocks,omitempty"`
+	BlindTrust  *BlindTrust  `json:"blindTrust"`
+	// ChangedOutside is set only for a loaded record that compared, with
+	// every journal line read: true when it is Latest and compared
+	// different (the CPU changed without a deploy of this agent), false
+	// otherwise (a superseded record is expected to differ); nil for a
+	// broken archive, a record that is not loaded, or unreadable lines.
+	ChangedOutside *bool `json:"changedOutside"`
+	// Fingerprint is the read when the request asked one (nil with
+	// FingerprintError when it failed: the verdict stands).
+	Fingerprint      *VerifyFingerprint `json:"fingerprint,omitempty"`
+	FingerprintError string             `json:"fingerprintError,omitempty"`
+	// CloseError says the verify's session could not be closed: it is
+	// kept, broken; close it again. The verdict stands.
+	CloseError string `json:"closeError,omitempty"`
+}
+
+// VerifyMismatchOf returns the two addresses a verify refused with
+// (cpu_mismatch): the record's, and the archived project's CPU's.
+func VerifyMismatchOf(err error) (record, project string, ok bool) {
+	var e *Error
+	if !errors.As(err, &e) || e.Kind != KindCPUMismatch || len(e.Data) == 0 {
+		return "", "", false
+	}
+	var d struct {
+		Record  *string `json:"recordAddress"`
+		Project *string `json:"projectAddress"`
+	}
+	if json.Unmarshal(e.Data, &d) != nil || d.Record == nil || d.Project == nil {
+		return "", "", false
+	}
+	return *d.Record, *d.Project, true
+}
+
+// VerifyDeploy asks whether the CPU still runs a deploy: the agent opens
+// a copy of its archive in a session of its own (so no other session may
+// be open), refuses (KindCPUMismatch, VerifyMismatchOf) when the archived
+// project's CPU is not at the record's address, compares it with the CPU
+// online and closes the session. An archive whose sha256 is not the
+// record's is VerifyBroken, never compared.
+func (c *Client) VerifyDeploy(ctx context.Context, req VerifyRequest) (VerifyResult, error) {
+	var r VerifyResult
+	if req.Deploy == "" {
+		return r, &Error{Kind: KindBadRequest, Message: "verify: deploy is required"}
+	}
+	_, err := c.doJSON(ctx, http.MethodPost, "/v1/deploys/verify", req, &r)
+	return r, err
 }

@@ -141,6 +141,7 @@ namespace Tiad
                         sessions.Closed(s);
                         Log.Line("closed idle session {0} ({1})", s.Id, s.Project);
                         RetireIfTrusted();
+                        if (s.Staging != "") deploys.RemoveStaging(s.Staging);
                     }
                 }
             });
@@ -585,8 +586,18 @@ namespace Tiad
         // the session, broken, so it can be closed again.
         object CloseSession(Call c)
         {
-            Session s = sessions.Find(c.Var("id"));
-            if (!sessions.Remove(s)) return new Obj();
+            EndSession(sessions.Find(c.Var("id")));
+            return new Obj();
+        }
+
+        // EndSession closes a session taken from the table, as a DELETE
+        // does: one already taken out (closed meanwhile) is left as it is;
+        // a close that fails puts it back, broken. Once closed, its CPU
+        // claims go, a blindly trusting instance with no session left is
+        // retired, and then its staging is removed.
+        void EndSession(Session s)
+        {
+            if (!sessions.Remove(s)) return;
             try
             {
                 Close(s);
@@ -611,7 +622,8 @@ namespace Tiad
 #else
             RetireIfTrusted();
 #endif
-            return new Obj();
+            // Once retired, so TIA let go of the retrieved project first.
+            if (s.Staging != "") deploys.RemoveStaging(s.Staging);
         }
 
         object ApplyStation(Call c)

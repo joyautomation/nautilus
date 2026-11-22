@@ -1486,6 +1486,24 @@ namespace Tiad.Openness
             });
         }
 
+        // ProjectCpuAddress reads the CPU node's address as ReadFingerprint
+        // checks it: one read, so the two never drift.
+        public string ProjectCpuAddress(object project)
+        {
+            return Tia(delegate
+            {
+                Project p = Of(project).Project;
+                HwDevice d = StationOf(p);
+                if (d == null) return "";
+                return CpuNodeAddress(CpuOf(d));
+            });
+        }
+
+        static string CpuNodeAddress(DeviceItem cpu)
+        {
+            return OptionalAttribute(CpuNode(cpu), "Address");
+        }
+
         // OptionalAttribute is a node attribute's text, or "" when the node
         // has no attribute of that name (a node of another kind).
         static string OptionalAttribute(Node n, string name)
@@ -1545,7 +1563,7 @@ namespace Tiad.Openness
                 HwDevice d = StationOf(p);
                 if (d == null) throw new TiaException("fingerprint read: the project has no CPU");
                 DeviceItem cpu = CpuOf(d);
-                string at0 = OptionalAttribute(CpuNode(cpu), "Address");
+                string at0 = CpuNodeAddress(cpu);
                 if (at0 != address) throw new TiaException("fingerprint read: the project's CPU is at " + at0 + ", not " + address);
                 FingerprintDataProvider fp = portal.GetService<FingerprintDataProvider>();
                 if (fp == null) throw new TiaException("fingerprint read: TIA serves no FingerprintDataProvider");
