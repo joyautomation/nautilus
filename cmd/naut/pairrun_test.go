@@ -258,6 +258,7 @@ func startPairNodeFull(t *testing.T, files fstest.MapFS, env map[string]string, 
 		sopts := proj.Server
 		sopts.AuthToken = env["NAUTILUS_TOKEN"] // as runProject takes it from the environment
 		sopts.Cluster = m.q
+		sopts.LeaderURLs = proj.Redundancy.LeaderURLs() // as runProject does (#716)
 		sopts.SubstituteLog = sl
 		if eng != nil {
 			sopts.Alarms, sopts.AlarmLog = eng, al

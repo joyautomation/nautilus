@@ -1,0 +1,60 @@
+# The cmd/naut tests that run in their own CI job, "Go — naut rig tests"
+# (ci.yml), beside the main Go job, which skips exactly these. They are the
+# redundancy rig and pair tests (each starts real `naut run` processes and
+# takes 5-30 s): about 313 s of cmd/naut's 580 s, which had reached the
+# package's 600 s timeout. One name per line, exact. Rules, checked by
+# naut-rig.test.sh: every name is a test in cmd/naut, and no other package
+# has a test of the same name (the main job's -skip applies to every package).
+# A test not listed here runs in the main job: nothing is ever left out.
+TestASpoofedCloneBesideTheLeaderBecomesASpare
+TestCloneWithACutFromTheWitness
+TestCloneWithAnUnresolvableLinkNeverVotes
+TestCloneWithTheABLinkDown
+TestPairAPIOnLoopbackRefused
+TestPairAckCarriesAcrossASyncedTakeover
+TestPairAckCarriesAcrossATakeoverAfterTheLeaderDied
+TestPairAckCarriesWhileTheTakeoverWaits
+TestPairAckDoesNotCarryToANewOccurrence
+TestPairAnsweredStopSurvivesTheLeaderDyingAtOnce
+TestPairBothControllersLostRecoverFromTheWitness
+TestPairClonedMemberNeverLeadsTwice
+TestPairCommissioningVouchSyncsTheOtherCopies
+TestPairConfigChangeKeepsTheLeader
+TestPairConfigDiffersHoldsCampaigns
+TestPairCopiedEnvWithKeptStateRefused
+TestPairCredentialsAreReadAnew
+TestPairElectsAndTakesOverThroughNautRun
+TestPairEndedAckDoesNotCarryAcrossATakeoverFromTheWitness
+TestPairLogRefusesWithoutAMajority
+TestPairLogRoutesAreNotOnTheTagAPI
+TestPairLogSurvivesALeaderCrash
+TestPairLogWritesWithItsPeerDown
+TestPairLogsFromBeforeMarksCountAsSynced
+TestPairMemberIsReadyWithoutALeader
+TestPairMemberOptions
+TestPairMemberRefusesToStart
+TestPairMemberTwiceIsRefused
+TestPairPeersKeepIOUnknownBeforeTheHello
+TestPairRebuiltWitnessIsRecopiedAndCarriesATakeover
+TestPairRefusedVouchStillCommissions
+TestPairReportsDifferentUsersFiles
+TestPairStartErrorNeverFallsBackToTheLease
+TestPairSubstitutesGoThroughTheLog
+TestPairSyncedLeaderAloneIsReadOnly
+TestPairTwoFaultsStopThePairAndLoseNothing
+TestPairUnsyncedLeaderYieldsToAVouchedPeer
+TestPairUnsyncedTakeoverCarriesNoAcks
+TestPairWarnsAboutUntrustedAdvertisedNames
+TestPairWitnessLogAdmitsOnlyItsGrantedLeader
+TestPairWitnessLogCatchesUpAfterItWasDown
+TestSpoofedCloneBesideTheOriginalIsMarkedUntilCleared
+TestSpoofedCloneBootsWithItsOriginal
+TestSpoofedCloneOfAHealthyLeaderCostsNoTakeover
+TestSpoofedCloneOfTheLeaderCutFromTheWitness
+TestSpoofedCloneOfTheLeaderWithTheABLinkDown
+TestSpoofedCloneOfTheStandbyWithTheLeaderCutFromTheWitness
+TestSpoofedCloneWhileItsPeerRestarts
+TestSpoofedCloneWhileTheLeaderGoesUnhealthy
+TestSpoofedCloneWhileTheOriginalRestarts
+TestTheRealBoxMadeASpareComesBackWithFromSpare
+TestTheRealBoxMadeASpareRecoversWithTheCommand

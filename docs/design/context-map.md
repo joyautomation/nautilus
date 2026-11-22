@@ -113,6 +113,10 @@ break one changes this section first and says why.
   redundancy design §3.4) imports only `io`, so every field and IT driver
   may use it without learning the vote protocol: the pair's gate reaches a
   driver only as `io.SendGate`.
+- `internal/floatip` (the pair's floating address, #716) imports no other
+  nautilus package, and only the manifest (`internal/project`, to check
+  `redundancy.floating-ip`) and the CLI import it: it is given the write gate
+  as a func and knows no election.
 - Languages import only each other and the tag-file shared kernel.
 - Runtime imports only Languages, `io`, `retain`, `internal/stproject` and `internal/fence`
   (its READ/WRITE channels' sends run on a fenced context, redundancy design §3.4; fence

@@ -153,6 +153,13 @@ func newBoxRigBare(t *testing.T, api bool) *boxRig {
 			r.env[n]["NAUTILUS_TOKEN"] = "api-secret"
 		}
 	}
+	if api {
+		// each controller advertises its API address, as a pair with
+		// redundancy.public-urls does (#716): /api/cluster lists both
+		y := string(r.files["nautilus.yaml"].Data)
+		y = strings.Replace(y, "  witness:", "  public-urls:\n    a: "+r.apiURL["a"]+"\n    b: "+r.apiURL["b"]+"\n  witness:", 1)
+		r.files["nautilus.yaml"] = &fstest.MapFile{Data: []byte(y)}
+	}
 	r.start("a", "box-a", r.env["a"], r.lns[0])
 	r.start("b", "box-b", r.env["b"], r.lns[1])
 	ea, eb := r.el("a"), r.el("b")
