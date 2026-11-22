@@ -100,6 +100,16 @@ func ResetLoad(address string) tiad.DownloadRequest {
 			KeptDevices: []string{UploadedIODevice().Name}, UserManagementResetToProject: tiad.Yes()}})
 }
 
+// accessLoad is a hardware load of the bench station (fullAccessUser) at
+// the bench CPU that answers the bench's checks and asks a user-management
+// reset, with the CPU's access control attested cpu.
+func accessLoad(cpu string, secrets *tiad.Secrets) tiad.DownloadRequest {
+	r := AcceptHardware(tiad.DownloadRequest{Secrets: secrets, Address: benchCPU, Hardware: true, Software: true, Announced: true,
+		Decisions: tiad.Decisions{StopCPU: tiad.Yes(), Overwrite: tiad.Yes(), ConsistentDownload: tiad.Yes(), StartAfter: tiad.Yes(), UserManagementResetToProject: tiad.Yes()}})
+	r.Attestation.CPUAccessControl = cpu
+	return r
+}
+
 // benchHardwareChecks are the checks the bench's hardware load asked, in
 // its order (#789 7065368046).
 var benchHardwareChecks = []tiad.Question{qStop, {ID: tiad.QuestionOverwrite}, {ID: tiad.QuestionConsistentDownload}, qUserManagement}
@@ -410,6 +420,222 @@ func contractUserManagementReset(t *testing.T, start Starter) {
 		_, err = ro.Download(ctx, load(tiad.AttestCPUAccessDisabled, BenchDownloadSecrets()))
 		wantResetRefused(t, "turning it on after a record-only apply", err, tiad.ResetRecordOnly)
 		closeFirst(t, ro)
+	})
+
+	t.Run("InstanceLogon", func(t *testing.T) {
+		// #789 P1 fallback: TIA keeps a logon for its instance's life, so
+		// the restore asks no credentials and cannot log on itself. The
+		// compare right after load A logged on and came back equal in
+		// this TIA instance: on that evidence the restore resets (route
+		// instance-logon), after another session's close too.
+		a, s := compiledBench(t, start)
+		c := a.Client()
+		a.SetQuestions(t, benchHardwareChecks)
+		a.SetLogon(t, LogonScript{KeepsLogon: true})
+		res, err := s.Download(ctx, accessLoad(tiad.AttestCPUAccessDisabled, BenchDownloadSecrets()))
+		if err != nil || !res.Downloaded || !res.CompareEqual || res.UserManagementReset != tiad.ResetRouteAttestation {
+			t.Fatalf("A, turning access control on: %+v %v", res, err)
+		}
+		closeFirst(t, s)
+		r := RestoreSession(t, a)
+		restore := ResetLoad(benchCPU)
+		restore.Attestation.CPUAccessControl = tiad.AttestCPUAccessEnabled
+		// User-management asked first, so a refusal there is clean and
+		// leaves the evidence: another password holds none of it.
+		a.SetQuestions(t, []tiad.Question{qUserManagement, qStop, {ID: tiad.QuestionOverwrite}, {ID: tiad.QuestionConsistentDownload}})
+		wrong := restore
+		wrong.Secrets = &tiad.Secrets{FullAccessPassword: "Other-access-2026"}
+		_, err = r.Download(ctx, wrong)
+		if tiad.Kind(err) != tiad.KindDecisionRequired || questionIDs(tiad.Questions(err)) != tiad.QuestionUserManagement ||
+			!strings.Contains(tiad.Questions(err)[0].Message, tiad.ResetNoLogon) {
+			t.Fatalf("the restore with another password, no credentials asked: %v (questions %+v)", err, tiad.Questions(err))
+		}
+		res, err = r.Download(ctx, restore)
+		if err != nil || !res.Downloaded || !res.CompareEqual || res.UserManagementReset != tiad.ResetRouteInstanceLogon {
+			t.Fatalf("the restore on the instance's logon: %+v %v", res, err)
+		}
+		list, err := c.Deploys(ctx, benchCPU)
+		if err != nil || len(list.Deploys) == 0 || list.Deploys[0].Outcome == nil || list.Deploys[0].Outcome.UserManagementReset != tiad.ResetRouteInstanceLogon {
+			t.Fatalf("the deploy record carries the instance-logon route: %+v %v", list, err)
+		}
+		if l := a.Loaded(t); len(l) != 2 {
+			t.Fatalf("loaded %d, want A and the restore", len(l))
+		}
+		closeFirst(t, r)
+	})
+
+	t.Run("InstanceLogonForgottenInDoubt", func(t *testing.T) {
+		// A restore that ends in doubt after an acting answer, loading
+		// nothing, may have changed the CPU: the evidence goes, and the
+		// next restore, asked no credentials, is refused.
+		a, s := compiledBench(t, start)
+		a.SetQuestions(t, benchHardwareChecks)
+		a.SetLogon(t, LogonScript{KeepsLogon: true})
+		if _, err := s.Download(ctx, accessLoad(tiad.AttestCPUAccessDisabled, BenchDownloadSecrets())); err != nil {
+			t.Fatalf("A: %v", err)
+		}
+		closeFirst(t, s)
+		r := RestoreSession(t, a)
+		restore := ResetLoad(benchCPU)
+		restore.Attestation.CPUAccessControl = tiad.AttestCPUAccessEnabled
+		a.SetQuestions(t, []tiad.Question{qStop, {ID: tiad.QuestionAlarmTexts}})
+		if _, err := r.Download(ctx, restore); tiad.Kind(err) != tiad.KindOutcomeUnknown || !slices.Contains(tiad.ActingAnswers(err), tiad.QuestionStopCPU) {
+			t.Fatalf("a restore cancelled after stop-cpu: %v (acting %v)", err, tiad.ActingAnswers(err))
+		}
+		a.SetQuestions(t, benchHardwareChecks)
+		_, err := r.Download(ctx, restore)
+		if tiad.Kind(err) != tiad.KindOutcomeUnknown || !strings.Contains(err.Error(), tiad.ResetNoLogon) || slices.Contains(tiad.ActingAnswers(err), tiad.QuestionUserManagement) {
+			t.Fatalf("the restore after one in doubt: %v (acting %v)", err, tiad.ActingAnswers(err))
+		}
+		if l := a.Loaded(t); len(l) != 1 {
+			t.Fatalf("loaded %d, want A only", len(l))
+		}
+	})
+
+	t.Run("InstanceLogonForgotten", func(t *testing.T) {
+		// The evidence goes with a load: B resets on it, and the compare
+		// after B asks no credentials (TIA kept the logon), so nothing
+		// earns it again; a compare that asks none either earns nothing.
+		a, s := compiledBench(t, start)
+		a.SetQuestions(t, benchHardwareChecks)
+		a.SetLogon(t, LogonScript{KeepsLogon: true})
+		if _, err := s.Download(ctx, accessLoad(tiad.AttestCPUAccessDisabled, BenchDownloadSecrets())); err != nil {
+			t.Fatalf("A: %v", err)
+		}
+		res, err := s.Download(ctx, accessLoad(tiad.AttestCPUAccessEnabled, BenchDownloadSecrets()))
+		if err != nil || !res.Downloaded || res.UserManagementReset != tiad.ResetRouteInstanceLogon {
+			t.Fatalf("B on the instance's logon: %+v %v", res, err)
+		}
+		if cmp, err := s.CompareWith(ctx, tiad.CompareRequest{Secrets: BenchLogin}); err != nil || !cmp.Equal {
+			t.Fatalf("a compare that asks no credentials: %+v %v", cmp, err)
+		}
+		_, err = s.Download(ctx, accessLoad(tiad.AttestCPUAccessEnabled, BenchDownloadSecrets()))
+		if tiad.Kind(err) != tiad.KindOutcomeUnknown || !strings.Contains(err.Error(), tiad.ResetNoLogon) || slices.Contains(tiad.ActingAnswers(err), tiad.QuestionUserManagement) {
+			t.Fatalf("a reload after B, no logon and no evidence: %v (acting %v)", err, tiad.ActingAnswers(err))
+		}
+		if l := a.Loaded(t); len(l) != 2 {
+			t.Fatalf("loaded %d, want A and B", len(l))
+		}
+	})
+
+	t.Run("ChecksBeforeCredentials", func(t *testing.T) {
+		// TIA asks its user-management check before credentials: the
+		// download has not logged on when it answers, and the evidence of
+		// the compare after A lets the reset. A compare whose password the
+		// CPU refuses takes the evidence away.
+		a, s := compiledBench(t, start)
+		a.SetQuestions(t, benchHardwareChecks)
+		a.SetLogon(t, LogonScript{CredentialsAfterChecks: true})
+		if _, err := s.Download(ctx, accessLoad(tiad.AttestCPUAccessDisabled, BenchDownloadSecrets())); err != nil {
+			t.Fatalf("A: %v", err)
+		}
+		res, err := s.Download(ctx, accessLoad(tiad.AttestCPUAccessEnabled, BenchDownloadSecrets()))
+		if err != nil || !res.Downloaded || !res.CompareEqual || res.UserManagementReset != tiad.ResetRouteInstanceLogon {
+			t.Fatalf("B, checks before credentials: %+v %v", res, err)
+		}
+		if _, err := s.CompareWith(ctx, tiad.CompareRequest{Secrets: &tiad.OnlineSecrets{FullAccessPassword: "Wrong-access-2026"}}); tiad.Kind(err) != tiad.KindOperationFailed || !strings.Contains(err.Error(), LoginAskedAgain) {
+			t.Fatalf("a compare with a wrong password: %v", err)
+		}
+		_, err = s.Download(ctx, accessLoad(tiad.AttestCPUAccessEnabled, BenchDownloadSecrets()))
+		if tiad.Kind(err) != tiad.KindOutcomeUnknown || !strings.Contains(err.Error(), tiad.ResetNoLogon) || slices.Contains(tiad.ActingAnswers(err), tiad.QuestionUserManagement) {
+			t.Fatalf("a reload after a refused password: %v (acting %v)", err, tiad.ActingAnswers(err))
+		}
+		if l := a.Loaded(t); len(l) != 2 {
+			t.Fatalf("loaded %d, want A and B", len(l))
+		}
+	})
+
+	t.Run("InstanceLogonForgottenOnRefusals", func(t *testing.T) {
+		// Any credentials question tiad answers no on the CPU takes the
+		// evidence away: a fingerprint read with a wrong password (the
+		// login's Lost), and a compare without one (a compare that failed
+		// after TIA asked). An equal compare that logs on earns it back.
+		a, s := compiledBench(t, start)
+		a.SetQuestions(t, benchHardwareChecks)
+		a.SetLogon(t, LogonScript{CredentialsAfterChecks: true})
+		if _, err := s.Download(ctx, accessLoad(tiad.AttestCPUAccessDisabled, BenchDownloadSecrets())); err != nil {
+			t.Fatalf("A: %v", err)
+		}
+		wrong := &tiad.OnlineSecrets{FullAccessPassword: "Wrong-access-2026"}
+		if _, err := s.Fingerprint(ctx, tiad.FingerprintRequest{Secrets: wrong}); err == nil || !strings.Contains(err.Error(), LoginAskedAgain) {
+			t.Fatalf("a fingerprint read with a wrong password: %v", err)
+		}
+		reload := func(name string) {
+			t.Helper()
+			_, err := s.Download(ctx, accessLoad(tiad.AttestCPUAccessEnabled, BenchDownloadSecrets()))
+			if tiad.Kind(err) != tiad.KindOutcomeUnknown || !strings.Contains(err.Error(), tiad.ResetNoLogon) || slices.Contains(tiad.ActingAnswers(err), tiad.QuestionUserManagement) {
+				t.Fatalf("a reload after %s: %v (acting %v)", name, err, tiad.ActingAnswers(err))
+			}
+		}
+		reload("a refused fingerprint read")
+		if cmp, err := s.CompareWith(ctx, tiad.CompareRequest{Secrets: BenchLogin}); err != nil || !cmp.Equal {
+			t.Fatalf("an equal compare that logs on: %+v %v", cmp, err)
+		}
+		if _, err := s.Compare(ctx); tiad.Kind(err) != tiad.KindOperationFailed || !strings.Contains(err.Error(), LoginNoPassword) {
+			t.Fatalf("a compare without a password: %v", err)
+		}
+		reload("a compare without a password")
+		if l := a.Loaded(t); len(l) != 1 {
+			t.Fatalf("loaded %d, want A only", len(l))
+		}
+	})
+
+	t.Run("OffRouteAfterAnEarlierLogon", func(t *testing.T) {
+		// TIA keeps the logon of the compare after A and asks the next
+		// download nothing: an attestation of "disabled" is refused at
+		// TIA's check all the same, since tiad logged on to the CPU in
+		// this instance.
+		a, s := compiledBench(t, start)
+		a.SetQuestions(t, benchHardwareChecks)
+		a.SetLogon(t, LogonScript{KeepsLogon: true})
+		if _, err := s.Download(ctx, accessLoad(tiad.AttestCPUAccessDisabled, BenchDownloadSecrets())); err != nil {
+			t.Fatalf("A: %v", err)
+		}
+		_, err := s.Download(ctx, accessLoad(tiad.AttestCPUAccessDisabled, BenchDownloadSecrets()))
+		if tiad.Kind(err) != tiad.KindOutcomeUnknown || !strings.Contains(err.Error(), tiad.ResetLoggedOnBefore(tiad.ResetRouteAttestation)) ||
+			slices.Contains(tiad.ActingAnswers(err), tiad.QuestionUserManagement) {
+			t.Fatalf("attested disabled over a kept logon: %v (acting %v)", err, tiad.ActingAnswers(err))
+		}
+		if l := a.Loaded(t); len(l) != 1 {
+			t.Fatalf("loaded %d, want A only", len(l))
+		}
+	})
+
+	t.Run("InstanceLogonGoesWithTheInstance", func(t *testing.T) {
+		// The evidence of the compare after A goes with a blind trust and
+		// the instance it retires; an unequal compare that logs on in the
+		// next instance earns nothing.
+		a, s := compiledBench(t, start)
+		a.SetQuestions(t, benchHardwareChecks)
+		a.SetLogon(t, LogonScript{CredentialsAfterChecks: true})
+		if _, err := s.Download(ctx, accessLoad(tiad.AttestCPUAccessDisabled, BenchDownloadSecrets())); err != nil {
+			t.Fatalf("A: %v", err)
+		}
+		a.SetFingerprint(t, FingerprintScript{AsksTLS: true})
+		if fp, err := s.Fingerprint(ctx, tiad.FingerprintRequest{Secrets: BenchLogin, TrustUnverifiedCertificate: true}); err != nil || len(fp.TrustedBlindly) != 1 {
+			t.Fatalf("a read that trusts blindly: %+v %v", fp, err)
+		}
+		a.SetFingerprint(t, FingerprintScript{})
+		// Closing every session retires the instance that trusted.
+		closeFirst(t, s)
+		r := RestoreSession(t, a)
+		restore := ResetLoad(benchCPU)
+		restore.Attestation.CPUAccessControl = tiad.AttestCPUAccessEnabled
+		wantNoLogon := func(name string) {
+			t.Helper()
+			_, err := r.Download(ctx, restore)
+			if tiad.Kind(err) != tiad.KindOutcomeUnknown || !strings.Contains(err.Error(), tiad.ResetNoLogon) || slices.Contains(tiad.ActingAnswers(err), tiad.QuestionUserManagement) {
+				t.Fatalf("the restore after %s: %v (acting %v)", name, err, tiad.ActingAnswers(err))
+			}
+		}
+		wantNoLogon("a blind trust and the retired instance")
+		if cmp, err := r.CompareWith(ctx, tiad.CompareRequest{Secrets: BenchLogin}); err != nil || cmp.Equal {
+			t.Fatalf("an unequal compare that logs on: %+v %v", cmp, err)
+		}
+		wantNoLogon("an unequal compare")
+		if l := a.Loaded(t); len(l) != 1 {
+			t.Fatalf("loaded %d, want A only", len(l))
+		}
 	})
 
 	t.Run("ProjectNotDisabled", func(t *testing.T) {

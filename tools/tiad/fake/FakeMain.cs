@@ -244,6 +244,12 @@ namespace Tiad.Fake
         List<Question> questions = new List<Question>();
         bool loadDespiteCancel;
         bool onlineGoesOn;
+        // keepsLogon makes the fake's TIA keep a logon for its instance's
+        // life: once tiad logged on to a CPU, no later operation of the
+        // instance asks credentials for it (the bench's open question,
+        // #789 P1 fallback). credentialsAfterChecks makes a download ask
+        // its checks before credentials.
+        bool keepsLogon, credentialsAfterChecks;
         int askFirst = 1;
         string failAfterDecide = "";
         string failInDoubt = "";
@@ -605,6 +611,28 @@ namespace Tiad.Fake
             }
         }
 
+        public bool KeepsLogon
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return keepsLogon;
+                }
+            }
+        }
+
+        public bool CredentialsAfterChecks
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return credentialsAfterChecks;
+                }
+            }
+        }
+
         // OnlineGoesOn makes the download's TIA go on after tiad refused
         // its credentials question going online, as tiad assumes TIA may
         // (DownloadSteps): the agent must still fail the download, and
@@ -705,6 +733,8 @@ namespace Tiad.Fake
             foreach (var x in r.Children("failures")) f[x.Str("call")] = x.Str("message");
             bool despite = r.Bool("loadDespiteCancel");
             bool goesOn = r.Bool("onlineGoesOn");
+            bool keeps = r.Bool("keepsLogon");
+            bool credsAfter = r.Bool("credentialsAfterChecks");
             int? first = r.OptInt("askFirst");
             string after = r.Str("failAfterDecide");
             string inDoubt = r.Str("failInDoubt");
@@ -760,6 +790,8 @@ namespace Tiad.Fake
                 questions = qs;
                 loadDespiteCancel = despite;
                 onlineGoesOn = goesOn;
+                keepsLogon = keeps;
+                credentialsAfterChecks = credsAfter;
                 askFirst = first.HasValue ? first.Value : 1;
                 failAfterDecide = after;
                 failInDoubt = inDoubt;
@@ -1214,6 +1246,9 @@ namespace Tiad.Fake
         readonly Dictionary<string, int> loads;
         readonly Dictionary<string, int> hardwareLoads;
         readonly Dictionary<string, string> logins;
+        // keptLogons are the CPUs this instance logged on to, with
+        // keepsLogon: it asks them no credentials again until it retires.
+        readonly HashSet<string> keptLogons = new HashSet<string>(StringComparer.Ordinal);
 
         public bool Gone
         {
@@ -1535,8 +1570,10 @@ namespace Tiad.Fake
                 delegate { },
                 delegate
                 {
-                    // Going online for the download asks credentials first.
-                    AskLogin(address, use, refusedOnline, script.OnlineGoesOn);
+                    // Going online for the download asks credentials first,
+                    // or, with credentialsAfterChecks, after the checks.
+                    bool credsAfter = script.CredentialsAfterChecks;
+                    if (!credsAfter) AskLogin(address, use, refusedOnline, script.OnlineGoesOn);
                     bool stopped = false;
                     try
                     {
@@ -1570,6 +1607,7 @@ namespace Tiad.Fake
                         if (!despite) throw new InvalidOperationException("Error when executing delegate.", e);
                     }
                     if (failAfter != "") throw new TiaException(failAfter);
+                    if (credsAfter) AskLogin(address, use, refusedOnline, script.OnlineGoesOn);
                     // TIA stopped the CPU to load it when it asked to; it
                     // starts it again only when the after-download
                     // callback's start-after says so. The fake's TIA asks
@@ -1665,10 +1703,10 @@ namespace Tiad.Fake
         // not hold the project reports the CPU's own element as different.
         // The fake labels blocks with the agent's own TiaNames.BlockLabel,
         // so it cannot prove TIA's labels: only the bench can.
-        public OnlineCompare Compare(object project, string address, OnlineLogin login)
+        public OnlineCompare Compare(object project, string address, LoginUse use)
         {
             script.Enter("Compare");
-            AskLogin(address, new LoginUse(login, "compare", address), new List<string>());
+            AskLogin(address, use, new List<string>());
             var p = (FakeProject)project;
             string cpu = p.Station == null ? "" : p.Station.Cpu.Name;
             List<ProjectBlock> blocks = ProjectBlocks(p);
@@ -1877,6 +1915,7 @@ namespace Tiad.Fake
         {
             string want;
             if (!logins.TryGetValue(address, out want)) return;
+            if (script.KeepsLogon && keptLogons.Contains(address)) return;
             var rec = new OnlineRecord { Use = use };
             var offered = new List<string> { "AnonymousUser", LoginUse.ProjectUser };
             for (int i = 0; i < 2; i++)
@@ -1901,7 +1940,11 @@ namespace Tiad.Fake
                     if (goOn) return;
                     throw new TiaException(TiaNames.OnlineRefused(address, rec.Asked, "Online connection failed."));
                 }
-                if (wrote == want) return;
+                if (wrote == want)
+                {
+                    if (script.KeepsLogon) keptLogons.Add(address);
+                    return;
+                }
             }
             throw new TiaException("the fake asked credentials twice and tiad answered both");
         }

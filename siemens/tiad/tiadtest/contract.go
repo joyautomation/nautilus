@@ -55,6 +55,10 @@ type Target interface {
 	// SetDeployAddress rewrites the address of deploy id's record (a
 	// mixed-up journal line).
 	SetDeployAddress(t testing.TB, id, address string)
+	// SetLogon scripts how the fake's TIA asks credentials (LogonScript):
+	// whether it keeps a logon for its instance's life, and whether a
+	// download asks its checks before credentials.
+	SetLogon(t testing.TB, l LogonScript)
 }
 
 // Loaded is one download that loaded a CPU.
@@ -114,6 +118,7 @@ func (g goFake) SetFingerprint(_ testing.TB, fs FingerprintScript) {
 	g.f.SetFingerprint(fs)
 }
 func (g goFake) SetArchiveFails(_ testing.TB, msg string) { g.f.SetArchiveFails(msg) }
+func (g goFake) SetLogon(_ testing.TB, l LogonScript)     { g.f.SetLogon(l) }
 func (g goFake) LoadOutside(_ testing.TB, address, file string) {
 	if file == "" {
 		g.f.LoadOutside(address)

@@ -2008,3 +2008,93 @@ func TestAgentBoundsARetire(t *testing.T) {
 		t.Fatalf("a retire the watch gave up on was journalled as done:\n%s", p.Log())
 	}
 }
+
+// TestAgentJournalsTheInstanceLogon (#789 P1 fallback): what the agent
+// journals for the instance-logon route. The compare after load A logs on
+// and records the evidence; the restore, asked no credentials by a TIA
+// that kept the logon, is given by route instance-logon, naming the
+// evidence; the password reaches neither the log nor any line.
+func TestAgentJournalsTheInstanceLogon(t *testing.T) {
+	const bench = "192.0.2.10"
+	p := tiadtest.StartProcess(t, fakeBin(t), tiadtest.Config{Targets: []string{bench}})
+	c := p.Client()
+	installBench(t, c)
+	um := tiad.Question{ID: tiad.QuestionUserManagement, Message: "Delete user management data and disable access control in runtime", Detail: "UserManagementDownload"}
+	s, err := c.CreateProject(ctx, "bench", tiadtest.BenchStation(), tiadtest.BenchSecrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Compile(ctx, true, true); err != nil {
+		t.Fatal(err)
+	}
+	p.SetScript(t, tiadtest.Script{Questions: []tiad.Question{um}, KeepsLogon: true})
+	on := tiadtest.AcceptHardware(tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: bench, Hardware: true, Software: true, Announced: true,
+		Decisions: tiad.Decisions{StartAfter: tiad.Yes(), UserManagementResetToProject: tiad.Yes()}})
+	on.Attestation.CPUAccessControl = tiad.AttestCPUAccessDisabled
+	if res, err := s.Download(ctx, on); err != nil || res.UserManagementReset != tiad.ResetRouteAttestation {
+		t.Fatalf("turning access control on: %+v %v", res, err)
+	}
+	waitLog(t, p, `audit instance-logon recorded call=download compare session=`+s.ID+` address="192.0.2.10"`)
+	if err := s.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	r := tiadtest.RestoreSession(t, p)
+	restore := tiadtest.ResetLoad(bench)
+	restore.Attestation.CPUAccessControl = tiad.AttestCPUAccessEnabled
+	if res, err := r.Download(ctx, restore); err != nil || res.UserManagementReset != tiad.ResetRouteInstanceLogon {
+		t.Fatalf("the restore on the instance's logon: %+v %v", res, err)
+	}
+	log := waitLog(t, p, "userManagementReset=given:instance-logon")
+	if !strings.Contains(log, `audit user-management-reset address="192.0.2.10" route=instance-logon: the download asked no credentials before TIA's check, and this TIA instance holds an equal compare that logged on with the request's password (since=`) ||
+		!strings.Contains(log, "call=download compare session="+s.ID+")") {
+		t.Errorf("no audit line naming the evidence the reset rested on:\n%s", log)
+	}
+	if !strings.Contains(log, `audit instance-logon forgotten address="192.0.2.10": a download to it ran in TIA`) {
+		t.Errorf("the restore's load did not forget the evidence:\n%s", log)
+	}
+	if strings.Contains(log, tiadtest.BenchFullAccessPassword) {
+		t.Fatalf("the log carries the Full access password:\n%s", log)
+	}
+}
+
+// TestAgentForgetsTheInstanceLogonAfterACancelThatActed: a TIA that ends
+// a cancelled download cleanly, loading nothing, after an acting answer
+// (stop-cpu) leaves the CPU in doubt, so the instance-logon evidence goes
+// and the restore after it is refused at TIA's check.
+func TestAgentForgetsTheInstanceLogonAfterACancelThatActed(t *testing.T) {
+	const bench = "192.0.2.10"
+	p := tiadtest.StartProcess(t, fakeBin(t), tiadtest.Config{Targets: []string{bench}})
+	c := p.Client()
+	installBench(t, c)
+	um := tiad.Question{ID: tiad.QuestionUserManagement, Message: "Delete user management data and disable access control in runtime", Detail: "UserManagementDownload"}
+	stop := tiad.Question{ID: tiad.QuestionStopCPU, Message: "stop the CPU", Detail: "StopModules"}
+	s, err := c.CreateProject(ctx, "bench", tiadtest.BenchStation(), tiadtest.BenchSecrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Compile(ctx, true, true); err != nil {
+		t.Fatal(err)
+	}
+	p.SetScript(t, tiadtest.Script{Questions: []tiad.Question{um}, KeepsLogon: true})
+	on := tiadtest.AcceptHardware(tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: bench, Hardware: true, Software: true, Announced: true,
+		Decisions: tiad.Decisions{StartAfter: tiad.Yes(), UserManagementResetToProject: tiad.Yes()}})
+	on.Attestation.CPUAccessControl = tiad.AttestCPUAccessDisabled
+	if res, err := s.Download(ctx, on); err != nil || res.UserManagementReset != tiad.ResetRouteAttestation {
+		t.Fatalf("turning access control on: %+v %v", res, err)
+	}
+	if err := s.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	r := tiadtest.RestoreSession(t, p)
+	restore := tiadtest.ResetLoad(bench)
+	restore.Attestation.CPUAccessControl = tiad.AttestCPUAccessEnabled
+	p.SetScript(t, tiadtest.Script{Questions: []tiad.Question{stop, {ID: tiad.QuestionAlarmTexts}}, KeepsLogon: true, CleanCancel: true})
+	if _, err := r.Download(ctx, restore); tiad.Kind(err) != tiad.KindOutcomeUnknown || !slices.Contains(tiad.ActingAnswers(err), tiad.QuestionStopCPU) {
+		t.Fatalf("a restore TIA ends cleanly after stop-cpu: %v (acting %v)", err, tiad.ActingAnswers(err))
+	}
+	p.SetScript(t, tiadtest.Script{Questions: []tiad.Question{um}, KeepsLogon: true})
+	_, err = r.Download(ctx, restore)
+	if tiad.Kind(err) != tiad.KindDecisionRequired || !strings.Contains(tiad.Questions(err)[0].Message, tiad.ResetNoLogon) {
+		t.Fatalf("the restore after a cancel that acted: %v", err)
+	}
+}

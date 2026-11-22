@@ -214,6 +214,7 @@ namespace Tiad.Test
                 T("UserManagementResetRule", UserManagementResetRule),
                 T("UserManagementResetMatrix", UserManagementResetMatrix),
                 T("UserManagementResetAt", UserManagementResetAt),
+                T("InstanceLogonsHold", InstanceLogonsHold),
                 T("LoginLoggedOn", LoginLoggedOn),
                 T("UserManagementKeepOrReset", UserManagementKeepOrReset),
                 T("UserManagementChoices", UserManagementChoices),
@@ -1012,8 +1013,39 @@ namespace Tiad.Test
                 UserManagementRule.Gate g = logon.At(false, asked);
                 True(!g.Allowed, "logon, not logged on, credentials asked " + asked);
                 Eq(g.Why, pre + UserManagementRule.NoLogon, "names why");
-                Contains(g.Why, "close every session", "and the fix");
+                Contains(g.Why, "first, then download again", "and the fix");
+                // The plan's old fix (close every session to retire the
+                // instance) retires only an instance that trusted blindly.
+                True(!g.Why.Contains("close every session"), "no fix that does nothing on an instance with no blind trust");
             }
+            // The instance-logon route: the instance's evidence stands in
+            // for the download's logon only when the download asked no
+            // credentials (and refused nothing) before the check.
+            UserManagementRule.Gate inst = logon.At(false, false, true);
+            True(inst.Allowed && inst.Route == UserManagementRule.RouteInstanceLogon, "logon, not logged on, nothing asked, instance evidence: instance-logon");
+            UserManagementRule.Gate contra = logon.At(false, true, true);
+            True(!contra.Allowed, "instance evidence, but the download asked credentials and did not log on");
+            Eq(contra.Why, pre + UserManagementRule.NoLogon, "names why");
+            True(logon.At(true, true, true).Route == UserManagementRule.RouteLogon, "the download's own logon comes first");
+            True(!logon.At(false, false, false).Allowed, "no evidence, nothing asked: refused");
+            foreach (string route in new[] { UserManagementRule.RouteAttestation, UserManagementRule.RouteUpload })
+            {
+                var off = new UserManagementRule.Gate { Allowed = true, Route = route };
+                True(off.At(false, false, true).Route == route, route + ": instance evidence changes nothing");
+                True(!off.At(true, true, true).Allowed, route + ": instance evidence never lets a contradicted off route");
+            }
+            True(!new UserManagementRule.Gate { Why = "no" }.At(false, false, true).Allowed, "a refused gate stays refused, instance evidence too");
+            // A logon earlier in the instance refuses the off routes: TIA
+            // may ride on it and ask nothing.
+            foreach (string route in new[] { UserManagementRule.RouteAttestation, UserManagementRule.RouteUpload })
+            {
+                var off = new UserManagementRule.Gate { Allowed = true, Route = route };
+                UserManagementRule.Gate g = off.At(false, false, false, true);
+                True(!g.Allowed, route + ": logged on earlier in the instance");
+                Eq(g.Why, pre + UserManagementRule.LoggedOnBefore(route), "names why");
+                True(off.At(false, false, false, false).Allowed, route + ": not logged on earlier");
+            }
+            True(logon.At(true, true, false, true).Allowed && logon.At(false, false, true, true).Route == UserManagementRule.RouteInstanceLogon, "the logon routes do not care");
             foreach (string route in new[] { UserManagementRule.RouteAttestation, UserManagementRule.RouteUpload })
             {
                 var off = new UserManagementRule.Gate { Allowed = true, Route = route };
@@ -1030,6 +1062,63 @@ namespace Tiad.Test
             var refused = new UserManagementRule.Gate { Why = "no" };
             True(!refused.At(true, true).Allowed && !refused.At(false, false).Allowed, "a refused gate stays refused");
             True(!new UserManagementRule.Gate { Route = UserManagementRule.RouteLogon }.At(true, true).Allowed, "a gate not let stays refused, logged on too");
+        }
+
+        // InstanceLogonsHold: the evidence holds only for the instance,
+        // address and password it was recorded with, and goes when
+        // forgotten; a credentials question answered no runs the login's
+        // Lost.
+        static void InstanceLogonsHold()
+        {
+            var l = new InstanceLogons();
+            object a = new object(), b = new object();
+            True(!l.Holds(a, "192.0.2.10", "Full-access-1"), "nothing recorded");
+            l.Record(a, "192.0.2.10", "Full-access-1", "compare", "s1");
+            True(l.Holds(a, "192.0.2.10", "Full-access-1"), "same instance, address, password");
+            True(!l.Holds(b, "192.0.2.10", "Full-access-1"), "another instance");
+            True(!l.Holds(a, "192.0.2.11", "Full-access-1"), "another address");
+            True(!l.Holds(a, "192.0.2.10", "Full-access-2"), "another password");
+            True(!l.Holds(a, "192.0.2.10", "Full-access-1x"), "a longer password");
+            True(!l.Holds(a, "192.0.2.10", ""), "no password");
+            True(!l.Describe("192.0.2.10").Contains("Full-access-1"), "the description holds no password");
+            l.Record(a, "192.0.2.11", "Full-access-1", "compare", "s1");
+            l.Forget("192.0.2.10", "test");
+            True(!l.Holds(a, "192.0.2.10", "Full-access-1"), "forgotten");
+            True(l.Holds(a, "192.0.2.11", "Full-access-1"), "only that address");
+            l.ForgetAll("test");
+            True(!l.Holds(a, "192.0.2.11", "Full-access-1"), "all forgotten");
+            l.Record(null, "192.0.2.10", "Full-access-1", "compare", "s1");
+            True(!l.Holds(null, "192.0.2.10", "Full-access-1"), "no instance, no record");
+            var offered = new List<string> { "AnonymousUser", LoginUse.ProjectUser };
+            int lost = 0;
+            var u = new LoginUse(OnlineLogin.For("Full-access-1", null, delegate { lost++; }, null), "compare", "192.0.2.10");
+            Eq(u.Decide(true, offered), null, "answered");
+            Eq(lost, 0, "an answer loses nothing");
+            True(u.Decide(true, offered) != null, "asked again, refused");
+            Eq(lost, 1, "asked again: lost");
+            var v = new LoginUse(OnlineLogin.For("Full-access-1", null, delegate { lost++; }, null), "compare", "192.0.2.10");
+            True(v.Decide(false, offered) != null, "not secure, refused");
+            Eq(lost, 2, "refused: lost");
+            int took = 0;
+            var w = new LoginUse(OnlineLogin.For("Full-access-1", null, null, delegate { took++; }), "compare", "192.0.2.10");
+            Eq(w.Decide(true, offered), null, "answered");
+            Eq(took, 1, "an answer runs Took");
+            True(w.Decide(true, offered) != null && took == 1, "a refusal does not");
+            // MarkAnswered: the instance logged on to the address; a record
+            // of another password, or from another instance, goes.
+            var m = new InstanceLogons();
+            True(!m.AnsweredBefore(a, "192.0.2.10"), "nothing answered");
+            m.Record(a, "192.0.2.10", "Full-access-1", "compare", "s1");
+            m.MarkAnswered(a, "192.0.2.10", "Full-access-1");
+            True(m.AnsweredBefore(a, "192.0.2.10") && !m.AnsweredBefore(b, "192.0.2.10") && !m.AnsweredBefore(a, "192.0.2.11"), "answered, in that instance, for that address");
+            True(m.Holds(a, "192.0.2.10", "Full-access-1"), "the same password keeps the record");
+            m.MarkAnswered(a, "192.0.2.10", "Full-access-2");
+            True(!m.Holds(a, "192.0.2.10", "Full-access-1"), "another password takes it away");
+            m.Record(a, "192.0.2.10", "Full-access-1", "compare", "s1");
+            m.ForgetAll("blind trust");
+            True(m.AnsweredBefore(a, "192.0.2.10"), "a blind trust forgets the evidence, not that tiad logged on");
+            m.NewInstance("retired");
+            True(!m.AnsweredBefore(a, "192.0.2.10"), "a new instance holds no logon");
         }
 
         // LoginLoggedOn: logged on once credentials are answered, and no

@@ -180,6 +180,8 @@ namespace Tiad
                         throw;
                     }
                     host.TiaStarted(null);
+                    // A new instance holds no earlier logon.
+                    instanceLogons.NewInstance("a new TIA instance started");
                     // A new instance after a retire trusts nothing: the
                     // retired one's record goes only now.
                     if (retired != null)
@@ -315,6 +317,7 @@ namespace Tiad
                 // A retire the watch already gave up on stays gone.
                 if (tiaGone != null) return null;
                 retired = bt;
+                instanceLogons.NewInstance("the TIA instance was retired");
                 Log.Line("audit blind-trust retired: no session left on the TIA instance that trusted blindly ({0}); it exited, and the next call starts a new one", BlindTrust.Audit(bt));
                 return null;
             });

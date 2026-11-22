@@ -398,10 +398,14 @@ namespace Tiad
     //   Disabled, spec keep        off: attested "disabled"       attestation
     //   Disabled, spec keep        off: uploaded here (OFF)       upload
     //   Disabled, spec keep        on: tiad logged on             logon
+    //   Disabled, spec keep        on: an equal compare logged    instance-logon
+    //                              on in this TIA instance
     //   tiad's user, spec          off: attested "disabled"       attestation
     //     fullAccessUser
     //   tiad's user, spec          on: tiad logged on             logon
     //     fullAccessUser
+    //   tiad's user, spec          on: an equal compare logged    instance-logon
+    //     fullAccessUser             on in this TIA instance
     //
     // "spec keep" is cpu.accessControl keep on a session that never
     // applied fullAccessUser, with the project's access control exactly
@@ -416,7 +420,14 @@ namespace Tiad
     // then Gate.At when TIA asks the check, which lets it only if this
     // download logged on as "nautilus" before (LoginUse.LoggedOn); the
     // other routes rest on the CPU's access control being off, and Gate.At
-    // refuses them once the CPU asked credentials. The logon route is a
+    // refuses them once the CPU asked credentials. When this download did
+    // not log on and TIA asked no credentials in it before the check (TIA
+    // kept an earlier logon, or asks the check first), Gate.At lets the
+    // logon route as the instance-logon route instead, on earlier evidence
+    // from the same TIA instance (InstanceLogons): a compare to the same
+    // address that logged on as "nautilus" with the same password and came
+    // back equal, nothing since that could change it (a second loosening,
+    // #789 P1 fallback). The logon route is a
     // loosening (#789 option 1, naut-lead 2026-11-22): it deletes every
     // user the CPU holds, on the strength of tiad holding the CPU's Full
     // access user's password. The upload route is off
@@ -438,7 +449,9 @@ namespace Tiad
         public const string ProjectDisabled = "Disabled";
         // The routes that let a reset: the CPU's access control shown off
         // (upload, attestation), or tiad logged on to it (logon).
-        public const string RouteUpload = "upload", RouteAttestation = "attestation", RouteLogon = "logon";
+        // RouteInstanceLogon is the logon route let at TIA's check on the
+        // TIA instance's evidence (Gate.At), not on this download's logon.
+        public const string RouteUpload = "upload", RouteAttestation = "attestation", RouteLogon = "logon", RouteInstanceLogon = "instance-logon";
 
         // Gate is Check's verdict. Its zero value refuses: a download that
         // never checked cannot reset. A gate allowed by the logon route
@@ -459,9 +472,37 @@ namespace Tiad
             // whatever tiad answered.
             public Gate At(bool loggedOn, bool credentialsAsked)
             {
+                return At(loggedOn, credentialsAsked, false);
+            }
+
+            // At with instanceLogon: whether this agent's TIA instance holds
+            // the evidence of an equal compare to the download's address
+            // that logged on with the request's password (InstanceLogons),
+            // as read just before TIA's download. It stands in for the
+            // download's own logon only when the download asked no
+            // credentials and refused nothing before the check: one that
+            // did (a password refused, asked again) contradicts it. The
+            // gate it lets says route instance-logon.
+            public Gate At(bool loggedOn, bool credentialsAsked, bool instanceLogon)
+            {
+                return At(loggedOn, credentialsAsked, instanceLogon, false);
+            }
+
+            // At with answeredBefore: whether tiad answered credentials for
+            // the download's address earlier in this TIA instance
+            // (InstanceLogons.AnsweredBefore). TIA may keep that logon and
+            // ask nothing in this download, so the off routes, which rest
+            // on the CPU's access control being off, are refused then too.
+            public Gate At(bool loggedOn, bool credentialsAsked, bool instanceLogon, bool answeredBefore)
+            {
                 if (!Allowed) return this;
-                if (Route == RouteLogon && !loggedOn) return new Gate { Why = Refused + NoLogon, Route = "" };
+                if (Route == RouteLogon && !loggedOn)
+                {
+                    if (instanceLogon && !credentialsAsked) return new Gate { Allowed = true, Route = RouteInstanceLogon };
+                    return new Gate { Why = Refused + NoLogon, Route = "" };
+                }
                 if (Route != RouteLogon && (loggedOn || credentialsAsked)) return new Gate { Why = Refused + Contradicted(Route) };
+                if (Route != RouteLogon && answeredBefore) return new Gate { Why = Refused + LoggedOnBefore(Route) };
                 return this;
             }
         }
@@ -490,7 +531,7 @@ namespace Tiad
         }
 
         const string Refused = "decisions.userManagementResetToProject (delete the CPU's user management data and set its access control as the project has it) is refused: ";
-        public const string NoLogon = "the logon route (attestation.cpuAccessControl \"enabled\") needs tiad logged on to the CPU as \"nautilus\" in this download before TIA asked, and it was not (the CPU asked no credentials, or tiad's answer was refused), so nothing shows tiad holds the CPU's Full access: if this agent's TIA instance went online to the CPU before, close every session (the agent then retires the instance) and download again; if the CPU's access control is off, attest \"disabled\"";
+        public const string NoLogon = "the logon route (attestation.cpuAccessControl \"enabled\") needs tiad logged on to the CPU as \"nautilus\" before TIA asked: in this download, or (the instance-logon route, when the download asked no credentials) by a compare to this CPU in this agent's TIA instance with the same secrets.fullAccessPassword that came back equal, with no download to the CPU, blind trust or refused credentials since; neither holds (the CPU asked no credentials and the instance holds no such compare, or tiad's answer was refused), so nothing shows tiad holds the CPU's Full access: compare (or verify the last deploy, whose archived project compares equal) first, then download again; if the compare asks no credentials either (TIA kept an earlier logon), restart the agent for a TIA instance that holds none; if the CPU's access control is off, attest \"disabled\"";
         public const string NoPassword = "the logon route (attestation.cpuAccessControl \"enabled\") logs on to the CPU as \"nautilus\", and the request carries no secrets.fullAccessPassword";
         public const string RecordOnlyRefused = "an apply on this session recorded secrets.fullAccessPassword as the user \"nautilus\"'s password without setting it (fullAccessRecordOnly), so tiad cannot show the project's user holds it: a reset to it could leave the CPU with a password this download cannot log on with, locking tiad out; apply on a session that sets the password";
         public const string PasswordNotRecorded = "the request's secrets.fullAccessPassword is not the password tiad set or recorded for the project's user \"nautilus\": after the reset the CPU's Full access user would have a password this download cannot log on with";
@@ -500,11 +541,18 @@ namespace Tiad
             return "the CPU asked credentials in this download, so its access control is on, but the " + route + " route rests on it being off: if it is on, attest \"enabled\" (the logon route)";
         }
 
+        // LoggedOnBefore is the refusal of an off route over a CPU tiad
+        // logged on to earlier in the same TIA instance.
+        public static string LoggedOnBefore(string route)
+        {
+            return "tiad logged on to this CPU earlier in this agent's TIA instance, so its access control was on then, and TIA may have kept that logon and asked this download nothing, but the " + route + " route rests on it being off: if it is on, attest \"enabled\" (the logon route); if it is off, restart the agent for a TIA instance that holds no logon";
+        }
+
         static string Routes(bool uploadRoute)
         {
             string s = "tiad resets it only on a hardware download, to a project whose access control is Disabled under cpu.accessControl keep, or one whose user \"nautilus\" this session made (cpu.accessControl fullAccessUser, secrets.fullAccessPassword its recorded password), with attestation.cpuAccessControl \"disabled\"";
             if (uploadRoute) s += " or an upload from this CPU in this session (to a Disabled project)";
-            s += ", or \"enabled\" with tiad logged on as \"nautilus\" in the download";
+            s += ", or \"enabled\" with tiad logged on as \"nautilus\" in the download (or by an equal compare in this TIA instance)";
             if (!uploadRoute) s += " (" + UploadRouteWhy + ")";
             return s;
         }

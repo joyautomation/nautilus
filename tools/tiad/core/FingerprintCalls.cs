@@ -104,6 +104,11 @@ namespace Tiad
         // the call that gave it returns; read anywhere.
         volatile BlindTrust blindTrust;
 
+        // instanceLogons is the evidence the instance-logon route rests on
+        // (InstanceLogons, UserManagementRule.Gate.At): equal compares that
+        // logged on, per address, in the current TIA instance.
+        readonly InstanceLogons instanceLogons = new InstanceLogons();
+
         // UnknownTrust stands for the questions of a call that took the
         // opt-in and then failed inside TIA's side: whether TIA trusted
         // anything before it failed is unknown, so it counts as trusted.
@@ -125,6 +130,9 @@ namespace Tiad
         void RecordBlindTrust(string call, Session s, string address, List<string> trusted)
         {
             if (trusted == null || trusted.Count == 0) return;
+            // A blind trust may reach a CPU tiad cannot verify: no earlier
+            // logon in this instance shows anything about a CPU from now.
+            instanceLogons.ForgetAll(call + " trusted a CPU certificate blindly in this TIA instance");
             var q = new List<string>();
             foreach (string x in trusted) q.Add(Json.Quote(x));
             if (blindTrust == null)
@@ -147,6 +155,55 @@ namespace Tiad
         // "nautilus", which tiad answers when TIA asks credentials going
         // online (OnlineLogin). "" when the request carries none. The root's
         // Done refuses any other secret.
+        // LoginFor is the login an online call in TIA instance t to
+        // address answers with (OnlineLogin.For): a credentials question
+        // tiad answers no forgets the instance-logon evidence for address;
+        // one it answers marks the address logged on in t (and forgets
+        // evidence of another password).
+        OnlineLogin LoginFor(ITia t, string password, BlindTrust bt, string address, string call)
+        {
+            return OnlineLogin.For(password, bt, delegate
+            {
+                instanceLogons.Forget(address, call + ": tiad answered TIA's credentials question no");
+            }, delegate
+            {
+                instanceLogons.MarkAnswered(t, address, password);
+            });
+        }
+
+        // CompareOnline runs ITia.Compare for call on session s to address,
+        // on the TIA thread (t is the instance it runs in), and reports
+        // whether it came back equal (TiaNames.CompareEqual, the
+        // differences into diffs). It keeps the instance-logon evidence
+        // (InstanceLogons): a compare that logged on as "nautilus" with
+        // password, with no blind trust, and came back equal records it; one
+        // that asked credentials and did not log on, or failed after TIA
+        // asked any, forgets it.
+        OnlineCompare CompareOnline(ITia t, Session s, string address, string password, BlindTrust bt, string call, List<Difference> diffs, out bool equal)
+        {
+            var use = new LoginUse(LoginFor(t, password, bt, address, call), call, address);
+            OnlineCompare cmp;
+            try
+            {
+                cmp = t.Compare(s.Handle, address, use);
+            }
+            catch (Exception)
+            {
+                if (use.MayHaveAskedCredentials) instanceLogons.Forget(address, call + " failed after TIA asked credentials");
+                throw;
+            }
+            equal = TiaNames.CompareEqual(cmp == null ? null : cmp.Tree, cmp == null ? null : cmp.Blocks, diffs);
+            if (use.MayHaveAskedCredentials && !use.LoggedOn)
+            {
+                instanceLogons.Forget(address, call + ": TIA asked credentials and tiad did not log on");
+            }
+            else if (equal && use.LoggedOn && bt == null && blindTrust == null)
+            {
+                instanceLogons.Record(t, address, password, call, s.Id);
+            }
+            return cmp;
+        }
+
         static string OnlinePassword(Reader r)
         {
             Reader sec = r.Child("secrets");
@@ -253,7 +310,7 @@ namespace Tiad
                 {
                     try
                     {
-                        FingerprintRead fr = TrustingCall("fingerprint read", s, address, trust, delegate { return t.ReadFingerprint(s.Handle, address, trust, OnlineLogin.For(password, blindTrust)); });
+                        FingerprintRead fr = TrustingCall("fingerprint read", s, address, trust, delegate { return t.ReadFingerprint(s.Handle, address, trust, LoginFor(t, password, blindTrust, address, "fingerprint read")); });
                         if (fr != null) RecordBlindTrust("fingerprint read", s, address, fr.TrustedBlindly);
                         return fr;
                     }

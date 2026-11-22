@@ -739,8 +739,8 @@ Response: `{dryRun, downloaded, questions: [{id, message, detail, objects}], sta
 and on a download that loaded hardware `hardwareVerified: false`, a
 `warning` and the `attestation` as journalled (`{by, at, text,
 cpuAccessControl}`); on a download that reset the CPU's user management,
-`userManagementReset`, the route that let it (`upload`, `attestation` or
-`logon`).
+`userManagementReset`, the route that let it (`upload`, `attestation`,
+`logon` or `instance-logon`).
 The example leaves `user-management` out: a software load answers it
 with `userManagementKeepOnline: true`, while a hardware load, where TIA
 refuses keep, needs `userManagementResetToProject` under its rule
@@ -1016,8 +1016,10 @@ behaviour. So, until then:
       | access control `Disabled`, spec `keep` | off: `attestation.cpuAccessControl: "disabled"` | `attestation` |
       | access control `Disabled`, spec `keep` | off: this session uploaded from it (built, OFF) | `upload` |
       | access control `Disabled`, spec `keep` | on: `"enabled"`, and tiad logged on as `nautilus` in this download | `logon` |
+      | access control `Disabled`, spec `keep` | on: `"enabled"`, the download asked no credentials, and an equal compare in this TIA instance logged on | `instance-logon` |
       | tiad's `nautilus`, spec `fullAccessUser` | off: `"disabled"` | `attestation` |
       | tiad's `nautilus`, spec `fullAccessUser` | on: `"enabled"`, and tiad logged on as `nautilus` in this download | `logon` |
+      | tiad's `nautilus`, spec `fullAccessUser` | on: `"enabled"`, the download asked no credentials, and an equal compare in this TIA instance logged on | `instance-logon` |
 
       - "spec `keep`": the spec's `cpu.accessControl` is `keep`, no
         apply on the session ever asked for `fullAccessUser`, and the
@@ -1055,9 +1057,12 @@ behaviour. So, until then:
       download logged on as `nautilus` (§3.9) and answered nothing no
       since. tiad reads TIA asking the check as the CPU having taken the
       logon (an inference the bench window checks, §3.9). If the
-      CPU asked no credentials, tiad refuses the reset there, naming why
-      and the fix: retire the instance, in case it went online before,
-      or attest `disabled`. The other routes rest on the CPU's access
+      download did not log on, tiad lets the reset there only by the
+      `instance-logon` route (below), and otherwise refuses it, naming why
+      and the fix: compare first, then download again; restart the agent
+      if the compare asks no credentials either (tiad retires a TIA
+      instance only after a blind trust, so closing sessions does not
+      give a fresh one); or attest `disabled`. The other routes rest on the CPU's access
       control being off, so a CPU that asked credentials in the download,
       whatever tiad answered (TIA may go on after a no), refuses them the
       same way, as does a download in which tiad answered any question
@@ -1070,6 +1075,51 @@ behaviour. So, until then:
       CPU's users, not the project's, so the restore of an as-found
       project with no users logs on as `nautilus` all the same (the
       fakes model it; the bench window proves it).
+
+      **The `instance-logon` route (#789 P1 fallback).** TIA may keep a
+      logon for its instance's life and ask no credentials in a later
+      download, or ask its user-management check before credentials.
+      Either way the download has not logged on when TIA asks. The
+      `logon` route, let before TIA, is then let at TIA's check as
+      `instance-logon` when:
+      - the download asked no credentials and answered nothing no before
+        the check (one that asked and did not log on contradicts it);
+      - this agent's TIA instance holds the evidence of a compare (the
+        `compare` and `verify` calls, and the compare right after a
+        download) to the same address that logged on as `nautilus` with
+        the request's `secrets.fullAccessPassword`, with no blind trust,
+        and came back equal.
+
+      The agent keeps that evidence in memory only, per address: the
+      instance it was made in, and the password as an HMAC under a random
+      key made for it, never written or logged. It holds across session
+      closes (the restore runs from another session) and goes when
+      anything could change or contradict what it shows: any blind trust,
+      a new or retired instance, a download to the address that may have
+      acted (one TIA ended cleanly, loading nothing, with no acting
+      answer, keeps it; the compare after a load may record it again),
+      a credentials question on the address that tiad answered no with a
+      password, or answered with another password (upload, fingerprint,
+      compare, download), and a compare that failed after TIA asked
+      credentials. Otherwise it lasts the instance's life, with no age
+      limit. A practical way to earn it is to verify the last deploy (its
+      archived project compares equal). The audit says
+      `given:instance-logon`, with a line naming the evidence (when,
+      which call, which session). It is a second loosening, on #616 with
+      the first.
+
+      The same knowledge tightens the off routes: once tiad answered
+      credentials for an address in a TIA instance, `attestation` and
+      `upload` resets to it are refused at TIA's check for the rest of
+      that instance, since TIA may ride on the kept logon and ask the
+      download nothing. If the CPU's access control really is off, restart
+      the agent.
+
+      Openness V21 offers no online "Reset to factory settings" or memory
+      reset for tiad to fall back on (reflection over its assemblies,
+      2026-11-22): only `ResetModule` (`NoAction`, `DeleteAll`), a check
+      TIA may ask inside a download, which tiad does not answer. Past
+      these two routes, the fallback is physical, at the bench.
 
       **A loosening (#789 option 1, naut-lead 2026-11-22, a tighten-later
       candidate on #616).** Before this, tiad never reset a CPU whose
@@ -1642,12 +1692,17 @@ the bench window has to show five things before relying on it:
   took it (a refused password asks again or fails going online, on the
   fakes and, by TIA's dialogs, on a real CPU);
 - whether TIA asks credentials in every download on an instance that
-  logged on to the CPU earlier. If it does not, the `logon` route refuses
-  (retire the instance and retry), and the guard that refuses the off
-  routes on a CPU that asked credentials sees nothing: an attestation of
-  `disabled` over a CPU whose access control is on would then reset it.
-  The window retires the instance before every load, so it never rides
-  on an earlier logon.
+  logged on to the CPU earlier, and whether it asks them before the
+  download's checks. If it does not, the `logon` route gives way to
+  `instance-logon` (§3.5), which needs an equal compare that logged on
+  in the same instance. The guard that refuses the off routes on a CPU
+  that asked credentials in the download sees nothing then, so tiad also
+  refuses them on any CPU it answered credentials for earlier in the
+  instance. A logon kept from outside tiad's knowledge (another tool on
+  the same TIA, which the agent does not share) stays out of reach. The
+  window restarts the agent before every load (tiad retires an instance
+  by itself only after a blind trust), so a load never rides on an
+  earlier logon unless it falls back to `instance-logon` on purpose.
 
 The window's stop criteria cover each: an `outcome_unknown` naming
 credentials or `user-management` stops it.

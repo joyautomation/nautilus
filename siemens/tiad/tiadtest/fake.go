@@ -95,6 +95,18 @@ type Fake struct {
 	// access control a hardware load turned on, as that load left it:
 	// going online to such a CPU asks credentials (askLogin).
 	logins map[string]string
+	// keepsLogon and credentialsAfterChecks script the fake's TIA
+	// (SetLogon): it keeps a logon for its instance's life (keptLogons,
+	// the CPUs it logged on to), and a download asks its checks before
+	// credentials. instanceLogons is the agent's InstanceLogons: the
+	// password of the last equal compare that logged on to each CPU in
+	// this instance (the agent keeps only an HMAC of it).
+	// answered is the agent's InstanceLogons.AnsweredBefore: the CPUs
+	// tiad answered credentials for in this instance.
+	keepsLogon, credentialsAfterChecks bool
+	keptLogons                         map[string]bool
+	instanceLogons                     map[string]string
+	answered                           map[string]bool
 
 	// deployRecs is the deploy record, oldest first, each intent with its
 	// outcome once written; archives the archived projects by sha256;
@@ -500,6 +512,9 @@ func (f *Fake) init() {
 		f.loads = map[string]int{}
 		f.hardwareLoads = map[string]int{}
 		f.logins = map[string]string{}
+		f.keptLogons = map[string]bool{}
+		f.instanceLogons = map[string]string{}
+		f.answered = map[string]bool{}
 		f.archives = map[string][]byte{}
 		f.archived = map[string]archivedProject{}
 		f.loadedArchive = map[string]string{}
@@ -1057,6 +1072,10 @@ func (f *Fake) retireIfTrusted() {
 	}
 	f.tlsTrusted = false
 	f.blindTrust = nil
+	// A new instance keeps no logon, and the agent's evidence goes.
+	clear(f.keptLogons)
+	clear(f.instanceLogons)
+	clear(f.answered)
 }
 
 func (f *Fake) applyStation(r *http.Request) (any, *failure) {
@@ -1427,7 +1446,7 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 
 // downloadTIA is the part of a download after every refusal the agent
 // makes itself: TIA's checks, the load and the compare right after it.
-func (f *Fake) downloadTIA(s *session, req tiad.DownloadRequest, attested *tiad.AttestationRecord, accessControlKept bool, reset tiad.ResetGate, actingOut *[]string, givenOut *string) (any, *failure) {
+func (f *Fake) downloadTIA(s *session, req tiad.DownloadRequest, attested *tiad.AttestationRecord, accessControlKept bool, reset tiad.ResetGate, actingOut *[]string, givenOut *string) (_ any, fl *failure) {
 	var qs []tiad.Question
 	if f.PreDownload != nil {
 		qs = f.PreDownload(req)
@@ -1453,19 +1472,38 @@ func (f *Fake) downloadTIA(s *session, req tiad.DownloadRequest, attested *tiad.
 	if req.Secrets != nil {
 		pw = req.Secrets.FullAccessPassword
 	}
-	// The CPU asks credentials when its access control is on: answered,
-	// the download is logged on for the user-management check.
-	_, asks := f.logins[req.Address]
-	if why := f.askLogin(req.Address, pw, f.blindTrust); why != "" {
-		return nil, outcomeUnknown("TIA: "+why, nil)
-	}
-	loggedOn, credentialsAsked := asks, asks
+	// The agent's instance-logon evidence for this CPU and password, as
+	// it stands before anything of this download reaches TIA.
+	held := f.blindTrust == nil && pw != "" && f.instanceLogons[req.Address] == pw
+	answeredBefore := f.answered[req.Address]
 	var asked []tiad.Question
 	var acting []string
 	// The acting answers given, and a reset's route, for the deploy
-	// record, on every end.
+	// record, on every end. Only a download that ended cleanly, loading
+	// nothing, with no acting answer, leaves the evidence (a load drops
+	// it where it loads, before the compare after it).
 	given := ""
-	defer func() { *actingOut, *givenOut = acting, given }()
+	loadedNow := false
+	defer func() {
+		*actingOut, *givenOut = acting, given
+		clean := len(acting) == 0 && (fl == nil || fl.kind == tiad.KindDecisionRequired || fl.kind == tiad.KindDeclined)
+		if !loadedNow && !clean {
+			delete(f.instanceLogons, req.Address)
+		}
+	}()
+	// The CPU asks credentials when its access control is on (unless
+	// the fake's TIA kept a logon): answered, the download is logged on
+	// for the user-management check. With credentialsAfterChecks it asks
+	// them only after the checks.
+	loggedOn := false
+	if !f.credentialsAfterChecks {
+		why, lo := f.login(req.Address, pw, f.blindTrust)
+		if why != "" {
+			return nil, outcomeUnknown("TIA: "+why, nil)
+		}
+		loggedOn = lo
+	}
+	credentialsAsked := loggedOn
 	for _, q := range qs {
 		if !knownQuestion(q.ID) {
 			q.ID = tiad.QuestionOther
@@ -1483,7 +1521,7 @@ func (f *Fake) downloadTIA(s *session, req tiad.DownloadRequest, attested *tiad.
 		}
 		now := reset
 		if q.ID == tiad.QuestionUserManagement {
-			now = reset.At(loggedOn, credentialsAsked)
+			now = reset.At(loggedOn, credentialsAsked, held, answeredBefore)
 		}
 		unanswered, declined := tiad.Resolve([]tiad.Question{q}, req.Decisions, haveProtection, haveConfigurationPassword, accessControlKept, now)
 		if len(unanswered) == 0 && len(declined) == 0 {
@@ -1496,7 +1534,7 @@ func (f *Fake) downloadTIA(s *session, req tiad.DownloadRequest, attested *tiad.
 			case tiad.QuestionUserManagement:
 				choice = tiad.UserManagementChoice(req.Decisions)
 				if choice == tiad.AnswerReset {
-					given = reset.Route
+					given = now.Route
 				}
 			}
 			if tiad.ActingAnswer(q.ID, yes, choice) {
@@ -1525,6 +1563,11 @@ func (f *Fake) downloadTIA(s *session, req tiad.DownloadRequest, attested *tiad.
 	if asked == nil {
 		asked = []tiad.Question{}
 	}
+	if f.credentialsAfterChecks {
+		if why, _ := f.login(req.Address, pw, f.blindTrust); why != "" {
+			return nil, outcomeUnknown("TIA: "+why, acting)
+		}
+	}
 	state := "RUN"
 	stopped := false
 	for _, q := range asked {
@@ -1538,6 +1581,10 @@ func (f *Fake) downloadTIA(s *session, req tiad.DownloadRequest, attested *tiad.
 	rec := req
 	rec.Secrets = nil
 	f.downloads = append(f.downloads, Download{Session: s.id, Request: rec, State: state})
+	// A load may change the CPU's users: the evidence goes, and the
+	// compare after it may record it again.
+	loadedNow = true
+	delete(f.instanceLogons, req.Address)
 	f.loads[req.Address]++
 	if req.Hardware {
 		f.hardwareLoads[req.Address]++
@@ -1572,9 +1619,11 @@ func (f *Fake) downloadTIA(s *session, req tiad.DownloadRequest, attested *tiad.
 	// tests, knobs downloadState, compareDiffers and compareTree).
 	// The compare goes online again, after the load: a CPU the load
 	// turned access control on for asks credentials now.
-	if why := f.askLogin(req.Address, pw, f.blindTrust); why != "" {
+	why, cmpLoggedOn := f.login(req.Address, pw, f.blindTrust)
+	if why != "" {
 		return nil, outcomeUnknown("TIA reported the download loaded, but the compare right after it failed (TIA: "+why+")", acting)
 	}
+	f.noteCompare(req.Address, pw, cmpLoggedOn, f.CompareResult == nil || f.CompareResult.Equal)
 	if f.CompareResult != nil && !f.CompareResult.Equal {
 		var names []string
 		for _, d := range f.CompareResult.Differences {
@@ -1680,10 +1729,13 @@ func (f *Fake) compare(r *http.Request) (any, *failure) {
 	if fl := f.checkDevicePin(s.station.CPU.Address, "compare"); fl != nil {
 		return nil, fl
 	}
-	if why := f.askLogin(s.station.CPU.Address, onlinePassword(req.Secrets), f.blindTrust); why != "" {
+	why, loggedOn := f.login(s.station.CPU.Address, onlinePassword(req.Secrets), f.blindTrust)
+	if why != "" {
+		f.forgetFailedCompare(s.station.CPU.Address)
 		return nil, fail(http.StatusInternalServerError, tiad.KindOperationFailed, "TIA: %s", why)
 	}
 	if f.loaded[s.station.CPU.Address] == s.id && !s.changed {
+		f.noteCompare(s.station.CPU.Address, onlinePassword(req.Secrets), loggedOn, true)
 		return tiad.CompareResult{Equal: true, Differences: []tiad.Difference{}, BlindTrust: f.blindTrust}, nil
 	}
 	return tiad.CompareResult{Differences: []tiad.Difference{{Object: s.station.CPU.Name, State: "different"}}, BlindTrust: f.blindTrust}, nil
@@ -1845,7 +1897,11 @@ func (f *Fake) BlindTrust() *tiad.BlindTrust {
 // recordBlindTrust is the agent's RecordBlindTrust: the first trust sets
 // the instance's record.
 func (f *Fake) recordBlindTrust(call, session, address string, trusted []string) {
-	if len(trusted) == 0 || f.blindTrust != nil {
+	if len(trusted) == 0 {
+		return
+	}
+	clear(f.instanceLogons)
+	if f.blindTrust != nil {
 		return
 	}
 	f.blindTrust = &tiad.BlindTrust{Since: time.Now().UTC().Format("2006-01-02T15:04:05.000Z"), Call: call, Session: session, Address: address,

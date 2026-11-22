@@ -262,6 +262,7 @@ namespace Tiad
             CheckDevicePin(s, address, "verify");
             var diffs = new List<Difference>();
             BlindTrust rode = null;
+            bool eq = false;
             OnlineCompare cmp = OnSession(s, delegate(ITia t)
             {
                 BlindTrust bt = blindTrust;
@@ -270,9 +271,9 @@ namespace Tiad
                 {
                     Log.Line("audit compare session={0} project={1} address={2} blindTrust={3}", s.Id, Json.Quote(s.Project), Json.Quote(address), BlindTrust.Audit(bt));
                 }
-                return t.Compare(s.Handle, address, OnlineLogin.For(password, bt));
+                return CompareOnline(t, s, address, password, bt, "verify", diffs, out eq);
             });
-            bool equal = TiaNames.CompareEqual(cmp == null ? null : cmp.Tree, cmp == null ? null : cmp.Blocks, diffs);
+            bool equal = eq;
             var list = new List<object>();
             foreach (var d in diffs)
             {

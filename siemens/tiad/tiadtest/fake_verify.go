@@ -164,10 +164,13 @@ func (f *Fake) verifyDeploy(r *http.Request) (any, *failure) {
 		return nil, fl
 	}
 	password := onlinePassword(req.Secrets)
-	if why := f.askLogin(address, password, f.blindTrust); why != "" {
+	why, loggedOn := f.login(address, password, f.blindTrust)
+	if why != "" {
+		f.forgetFailedCompare(address)
 		return nil, fail(http.StatusInternalServerError, tiad.KindOperationFailed, "TIA: %s", why)
 	}
 	equal := f.loadedArchive[address] == sha
+	f.noteCompare(address, password, loggedOn, equal)
 	res.BlindTrust = f.blindTrust
 	res.Differences = []tiad.Difference{}
 	res.Verdict = tiad.VerifyEqual
