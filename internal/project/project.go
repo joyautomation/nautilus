@@ -1194,6 +1194,9 @@ type Project struct {
 	// HMIScreens is a project with no server.hmi and *.mimic.json in it:
 	// the caller builds the default app, a page per mimic.
 	HMIScreens bool
+	// HMIPlant is a project with no server.hmi and no mimic, whose plant
+	// model has equipment: naut builds the asset and area pages from it.
+	HMIPlant bool
 
 	// PWA and PWAIcon are the manifest's pwa: section and its icon file's
 	// bytes (nil without one); the caller that builds the HMI gives them
@@ -1897,7 +1900,11 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 			hmiFS, hmiApp, hmiMissing = sub, "", false
 		}
 	}
-	screens := m.Server.HMI == "" && hmiFS == nil && hasMimics(fsys)
+	noApp := m.Server.HMI == "" && hmiFS == nil
+	mimics := noApp && hasMimics(fsys)
+	// a plant model with equipment is enough for the asset and area pages
+	plantPages := noApp && !mimics && m.plant != nil && len(m.plant.Equipment) > 0
+	screens := mimics
 	return &Project{
 		Notices: platformNotices(m),
 		Name:    projName,
@@ -1928,6 +1935,7 @@ func Load(fsys fs.FS, name string) (*Project, error) {
 		HMIMissing:  hmiMissing,
 		HMIApp:      hmiApp,
 		HMIScreens:  screens,
+		HMIPlant:    plantPages,
 		PWA:         m.PWA,
 		PWAIcon:     m.pwaIcon,
 		Checkout:    m.Checkout,

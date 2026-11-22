@@ -14,6 +14,7 @@ import {
 	dayKey,
 	targetLabel,
 	targetKey,
+	noteTime,
 	type Note,
 	type DraftStorage
 } from '../src/lib/notes.js';
@@ -320,5 +321,15 @@ describe('principalChanged: whose text is in the box', () => {
 	it('the same person again changes nothing', () => {
 		const d = new DraftKeeper(memoryStorage());
 		expect(principalChanged(d, 'user:alice', 'user:alice', log, 'x')).toBe('x');
+	});
+});
+
+describe('a note\'s time (#714 demo: the asset page stuck on "Reading the notes…")', () => {
+	it('is shown with its zone, and never throws', () => {
+		// dateStyle + timeZoneName made every card throw in the browser
+		const t = noteTime(Date.UTC(2026, 10, 22, 18, 0), 'en-US');
+		expect(t.includes('2026')).toBe(true);
+		expect(t.includes('Nov')).toBe(true);
+		expect(/[A-Z]{2,5}|GMT|UTC/.test(t)).toBe(true);
 	});
 });

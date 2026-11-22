@@ -30,6 +30,8 @@ func hmiSource(proj *project.Project) string {
 		return proj.HMIApp + "/"
 	case proj.HMIScreens:
 		return "the project's mimics"
+	case proj.HMIPlant:
+		return "the plant model's pages"
 	}
 	return ""
 }
