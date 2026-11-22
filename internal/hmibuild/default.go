@@ -80,7 +80,7 @@ type galleryComp struct {
 // all, the connection and the theme. A click on equipment with a panel
 // opens it beside the drawing (the kit's EquipmentPanel), and every
 // bound label carries a sparkline.
-func defaultApp(project, title string, extra, areas []json.RawMessage) (*appSource, error) {
+func defaultApp(project, title string, extra, areas []json.RawMessage, checkout bool) (*appSource, error) {
 	mimics := Mimics(project)
 	mimics = schemesLast(mimics, areas)
 	if len(mimics) == 0 && len(extra) == 0 {
@@ -177,7 +177,7 @@ func defaultApp(project, title string, extra, areas []json.RawMessage) (*appSour
 	}
 	// the pages every project gets, unless a screen has the name
 	alarmsHref := "undefined"
-	for _, pg := range []struct{ slug, label, text, needs string }{
+	pages := []struct{ slug, label, text, needs string }{
 		{"diagnostics", "Diagnostics", defaultDiagnostics, ""},
 		{"parameters", "Parameters", defaultParameters, ""},
 		{"log", "Log", defaultLog, ""},
@@ -189,7 +189,13 @@ func defaultApp(project, title string, extra, areas []json.RawMessage) (*appSour
 		// by link or by hand, who wrote which tag)
 		{"audit", "Audit", defaultAudit, "audit"},
 		{"alarms", "", defaultAlarms, ""},
-	} {
+	}
+	// the I/O checkout (#719) is the project's own choice: no checkout:
+	// section, no route, no module, no screen entry, no banner
+	if checkout {
+		pages = append(pages, struct{ slug, label, text, needs string }{"checkout", "Checkout", defaultCheckout, "checkout"})
+	}
+	for _, pg := range pages {
 		if takenSlug[pg.slug] {
 			continue
 		}
@@ -256,7 +262,11 @@ func defaultApp(project, title string, extra, areas []json.RawMessage) (*appSour
 		title = filepath.Base(project)
 	}
 	a.generate()
-	a.virtual["nx:default/layout.svelte"] = vmod{kind: component, text: fmt.Sprintf(defaultLayout, jsq(title), jsq(description), strings.Join(screens, ", "), alarmsHref)}
+	layoutImport, layoutBanner := "", ""
+	if checkout {
+		layoutImport, layoutBanner = ", CheckoutBanner", "\n<CheckoutBanner frame={rt.frame} />"
+	}
+	a.virtual["nx:default/layout.svelte"] = vmod{kind: component, text: fmt.Sprintf(defaultLayout, layoutImport, jsq(title), jsq(description), strings.Join(screens, ", "), alarmsHref, layoutBanner)}
 	a.virtual["nx:default/client"] = vmod{kind: plain, text: defaultClient}
 	a.appHTML = strings.Replace(defaultHTML, "%title%", htmlEscape(title), 1)
 	return a, nil
@@ -338,7 +348,7 @@ const defaultLayout = `<script>
 	import '@joyautomation/nautilus-hmi/theme.css';
 	import '@joyautomation/nautilus-hmi/fonts.css';
 	import { onMount } from 'svelte';
-	import { theme, ConfirmDialog, AlarmBanner, AckButton, StatusPill, ThemeSwitch, AccountChip, ReferralBanner, createAuth } from '@joyautomation/nautilus-hmi';
+	import { theme, ConfirmDialog, AlarmBanner, AckButton, StatusPill, ThemeSwitch, AccountChip, ReferralBanner, createAuth%s } from '@joyautomation/nautilus-hmi';
 	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
 	import { rt, alarms } from 'nx:default/client';
@@ -366,7 +376,7 @@ const defaultLayout = `<script>
 </script>
 
 <ConfirmDialog />
-<ReferralBanner />
+<ReferralBanner />%s
 <div class="nx-shell">
 	<header>
 		<div class="nx-title">
@@ -525,6 +535,26 @@ const defaultAudit = `<script>
 	section { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius, 10px); padding: 16px; }
 	h2 { font-size: 0.78rem; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; color: var(--muted); margin: 0 0 0.7rem; }
 	p { color: var(--muted); margin: 0; }
+</style>
+`
+
+// defaultCheckout is the I/O checkout (#719): the sheet, the run, the force.
+// Only a project with a checkout: section gets it. The standing force comes
+// from the live frame, so it shows here as on every screen.
+const defaultCheckout = `<script>
+	import { CheckoutPage } from '@joyautomation/nautilus-hmi';
+	import { rt } from 'nx:default/client';
+</script>
+
+<div class="nx-page">
+	<section>
+		<CheckoutPage force={rt.frame?.checkoutForce ?? null} />
+	</section>
+</div>
+
+<style>
+	.nx-page { max-width: 1400px; margin: 0 auto; display: grid; gap: 16px; }
+	section { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius, 10px); padding: 16px; }
 </style>
 `
 

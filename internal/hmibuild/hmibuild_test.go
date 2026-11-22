@@ -498,6 +498,58 @@ func TestASchemeSortingFirstDoesNotTakeTheHomePage(t *testing.T) {
 	}
 }
 
+// The I/O checkout page is the project's own choice (#719): a project with no
+// checkout: section gets no route, no screen entry and no banner; one with the
+// section gets all three, the screen gated on the checkout permission.
+func TestTheCheckoutPageIsOptIn(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "screens/pumps.mimic.json", `{"name":"Pumps","equipment":[{"id":"P1","component":"Pump","x":10,"y":10}]}`)
+	bundle := func(res *Result) string {
+		var js strings.Builder
+		for name, b := range res.Files {
+			if strings.HasSuffix(name, ".js") {
+				js.Write(b)
+			}
+		}
+		return js.String()
+	}
+	off, err := Build(Options{Project: dir, Title: "P"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range off.Pages {
+		if p == "/checkout" {
+			t.Errorf("a project with no checkout section got a /checkout page: %v", off.Pages)
+		}
+	}
+	// nothing of the page's own text is linked in either: no route, no module
+	for _, s := range []string{"/api/checkout", "Begin rehearsal", "I/O checkout"} {
+		if strings.Contains(bundle(off), s) {
+			t.Errorf("a project with no checkout section built %q into its app", s)
+		}
+	}
+	on, err := Build(Options{Project: dir, Title: "P", Checkout: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, p := range on.Pages {
+		found = found || p == "/checkout"
+	}
+	if !found {
+		t.Errorf("a project with a checkout section has no /checkout page: %v", on.Pages)
+	}
+	js := bundle(on)
+	if !regexp.MustCompile(`label:\s*"Checkout",\s*needs:\s*"checkout"`).MatchString(js) {
+		t.Errorf("the Checkout screen is not gated with needs: checkout")
+	}
+	for _, want := range []string{"/api/checkout", "Begin rehearsal", "is forced by"} {
+		if !strings.Contains(js, want) {
+			t.Errorf("the checkout app lacks %q (the page or the banner is not linked)", want)
+		}
+	}
+}
+
 // A project with no mimic builds from the assets it is given (a plant
 // model's): "/" is the assets index, and a project with nothing still errors.
 func TestBuildsFromAssetsAloneWithAHomePage(t *testing.T) {
@@ -520,7 +572,7 @@ func TestBuildsFromAssetsAloneWithAHomePage(t *testing.T) {
 func TestLayoutNavWrapsOnAPhone(t *testing.T) {
 	dir := t.TempDir()
 	write(t, dir, "p.mimic.json", `{"name":"P","equipment":[]}`)
-	a, err := defaultApp(dir, "t", nil, nil)
+	a, err := defaultApp(dir, "t", nil, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
