@@ -549,3 +549,41 @@ func TestTheCheckoutPageIsOptIn(t *testing.T) {
 		}
 	}
 }
+
+// A project with no mimic builds from the assets it is given (a plant
+// model's): "/" is the assets index, and a project with nothing still errors.
+func TestBuildsFromAssetsAloneWithAHomePage(t *testing.T) {
+	dir := t.TempDir()
+	res, err := Build(Options{Project: dir, Title: "t", Assets: []json.RawMessage{json.RawMessage(`{"id":"P1","title":"Pump one_qq","panel":{"readings":[{"tag":"P1_Flow"}]}}`)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pages := " " + strings.Join(res.Pages, " ") + " "
+	if !strings.Contains(pages, " /assets ") || !strings.Contains(pages, " / ") {
+		t.Errorf("pages %q: want /assets and a home page /", pages)
+	}
+	if _, err := Build(Options{Project: t.TempDir(), Title: "t"}); err == nil {
+		t.Error("a project with no mimic and no assets must still say there is nothing to build")
+	}
+}
+
+// The bar's links wrap at phone width, so a long list of pages never makes
+// the page scroll sideways.
+func TestLayoutNavWrapsOnAPhone(t *testing.T) {
+	dir := t.TempDir()
+	write(t, dir, "p.mimic.json", `{"name":"P","equipment":[]}`)
+	a, err := defaultApp(dir, "t", nil, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if l := a.virtual["nx:default/layout.svelte"].text; !strings.Contains(l, "nav { flex: 1 1 100%; flex-wrap: wrap; min-width: 0; }") {
+		t.Error("the nav does not wrap at phone width")
+	}
+}
+
+// Areas with no equipment that makes a page do not make an HMI with no pages.
+func TestAreasAloneAreNothingToBuild(t *testing.T) {
+	if _, err := Build(Options{Project: t.TempDir(), Title: "t", Areas: []json.RawMessage{json.RawMessage(`{"id":"A","label":"A","assets":[]}`)}}); err == nil {
+		t.Error("an area with no assets must say there is nothing to build")
+	}
+}

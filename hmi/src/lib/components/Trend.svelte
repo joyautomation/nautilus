@@ -2,6 +2,7 @@
 	// Realtime trend chart: multi-series line, one y-axis (never dual-axis),
 	// crosshair + tooltip, legend with live values.
 	import type { TrendPoint } from '../types.js';
+	import { niceDomain } from '../trendchart.js';
 
 	interface Series {
 		name: string;
@@ -38,21 +39,15 @@
 	);
 
 	let dom = $derived.by(() => {
-		let lo = yMin ?? Infinity;
-		let hi = yMax ?? -Infinity;
-		if (yMin === undefined || yMax === undefined) {
-			for (const s of visible)
-				for (const p of s.pts) {
-					if (yMin === undefined && p.v < lo) lo = p.v;
-					if (yMax === undefined && p.v > hi) hi = p.v;
-				}
-			if (!isFinite(lo)) lo = 0;
-			if (!isFinite(hi)) hi = 1;
-			const pad = (hi - lo) * 0.12 || 1;
-			if (yMin === undefined) lo -= pad;
-			if (yMax === undefined) hi += pad;
-		}
-		return { lo, hi };
+		let lo = Infinity;
+		let hi = -Infinity;
+		for (const s of visible)
+			for (const p of s.pts) {
+				if (p.v < lo) lo = p.v;
+				if (p.v > hi) hi = p.v;
+			}
+		const n = niceDomain(lo, hi);
+		return { lo: yMin ?? n.lo, hi: yMax ?? n.hi };
 	});
 
 	let px = $derived((t: number) => PAD.l + ((t - t0) / (windowS * 1000)) * (w - PAD.l - PAD.r));

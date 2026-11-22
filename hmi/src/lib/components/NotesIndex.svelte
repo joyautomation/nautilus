@@ -6,7 +6,7 @@
 	// is written with `NotesPanel` on its target. The shift log's own notes
 	// (target `log`) are left out; they are the page above it.
 	import { onMount } from 'svelte';
-	import { NotesClient, targetLabel, type Note } from '../notes.js';
+	import { NotesClient, targetLabel, noteTime, type Note } from '../notes.js';
 
 	let {
 		client = new NotesClient(),
@@ -42,7 +42,7 @@
 	});
 
 	function when(ms: number): string {
-		return new Date(ms).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short', timeZoneName: 'short' });
+		return noteTime(ms);
 	}
 </script>
 
