@@ -27,24 +27,25 @@ const (
 	StaleAfter = 24 * time.Hour
 )
 
-// Activations picks out of a journal the events that begin a new
-// occurrence, in the order given, which must be oldest first (append
+// Activations picks out of a journal the events that begin an
+// activation, in the order given, which must be oldest first (append
 // order).
 //
-// An `active` counts only if the alarm's previous occurrence has ended:
-// by a return to normal, or by suppression (the alarm stops being
-// evaluated, so its next activation is one the operator sees again). The
-// engine keeps only an acknowledgement and a shelf across a restart, so
-// a standing alarm journals `active` again each time the controller
-// starts, with no `rtn` between. Counting those would make every restart
-// look like a flood and reset every stale clock.
+// A row that names its occurrence (#715) is one the engine journalled for
+// a real activation: a restart that continues an occurrence journals no
+// `active`, so every such row counts, a flap through unack-rtn included
+// (chattering is exactly that). A row from before occurrences counts only
+// if the alarm's previous activation has ended, by a return to normal or
+// by suppression: that engine journalled `active` again each time the
+// controller started, with no `rtn` between, and counting those would make
+// every restart look like a flood.
 func Activations(events []alarm.Event) []alarm.Event {
 	open := map[string]bool{}
 	var out []alarm.Event
 	for _, e := range events {
 		switch e.Kind {
 		case alarm.KindActive:
-			if !open[e.ID] {
+			if e.Occurrence != "" || !open[e.ID] {
 				out = append(out, e)
 			}
 			open[e.ID] = true
@@ -298,8 +299,11 @@ type Stale struct {
 // oldest first and should start well before asOf: an alarm whose
 // activation is older than the first event read is not seen.
 //
-// The age runs from the activation that began the occurrence, so a
-// controller restart (which journals `active` again) does not reset it.
+// The age runs from the activation that began the occurrence. A restart
+// that continues it journals nothing (#715); on rows from before
+// occurrences, a restart's repeated `active` does not reset it either. A
+// suppression a fresh engine journals at start (it names no occurrence)
+// does not end one that does.
 func StaleAlarms(events []alarm.Event, asOf time.Time, after time.Duration) []Stale {
 	type occ struct {
 		e    alarm.Event
@@ -319,11 +323,16 @@ func StaleAlarms(events []alarm.Event, asOf time.Time, after time.Duration) []St
 		}
 		switch e.Kind {
 		case alarm.KindActive:
-			if !o.open {
+			// Another occurrence with no end journalled between (a restart
+			// that did not continue it) begins afresh.
+			if !o.open || (e.Occurrence != "" && o.e.Occurrence != "" && e.Occurrence != o.e.Occurrence) {
 				o.e, o.open = e, true
 			}
 			o.e.Name = e.Name
 		case alarm.KindRTN, alarm.KindSuppress:
+			if e.Occurrence == "" && o.e.Occurrence != "" {
+				continue // a fresh engine's start, not this occurrence's end
+			}
 			o.open = false
 		}
 	}

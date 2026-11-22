@@ -2,10 +2,12 @@ package server
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"maps"
 	"net/http"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -47,8 +49,31 @@ import (
 //   - an unsynced takeover clears the view's acks outright.
 // The residual is the leader dying between such a transition and the
 // ack-clear's commit: one log round trip and a scan with the peer up, up
-// to the peer's outage plus a retry (2 s) with it down. Acks bound to an
-// activation proper come with #715.
+// to the peer's outage plus a retry (2 s) with it down.
+//
+// Since #715 an ack is bound to an occurrence (alarm.Engine.AckIDsAt): the
+// entry names the occurrence each alarm was on when the ack was checked,
+// and the leader applies it only to that occurrence, so an ack committed
+// after its occurrence ended (and another began) acknowledges nothing.
+// The view keeps the occurrence with the ack, and a takeover restores the
+// ack only with that occurrence, only if the field re-asserts it
+// (alarm.Engine.RestoreAlarms). The residual above is narrowed, not
+// closed: if the leader dies after an acknowledged occurrence ended and a
+// new one began, but before the ack-clear (which names the ended
+// occurrence) committed, the new leader takes the field's condition for
+// the old occurrence and carries its ack to it.
+//
+// # Occurrences across a takeover
+//
+// For the alarms an escalation policy covers (SetOccurrenceMatch), the
+// leader keeps the view's occurrences current at every log tick
+// (Reconcile): occurrence-start for one that began, or whose wait on a
+// person moved, occurrence-end for one that ended; batched, one entry of
+// each kind at most per tick. A takeover continues them, so escalation
+// goes on at its level (the new leader's dispatcher resends the current
+// level once) instead of starting again at level 1. One that began within
+// a tick of the leader's death is not in the view: it starts afresh,
+// re-paging from level 1 (the safe direction).
 //
 // # Takeovers reset the engine
 //
@@ -108,8 +133,42 @@ type AlarmLog struct {
 
 	clrMu      sync.Mutex
 	clr        []string
+	clrOcc     map[string]string // the occurrence each queued ack-clear ends
 	clrRetry   time.Duration
 	clrRunning bool
+
+	// match says which alarms' occurrences the view keeps for a takeover
+	// (those an escalation policy covers); nil: none. occBusy is set
+	// while an occurrence proposal is in flight.
+	match   atomic.Pointer[func(alarm.Def) bool]
+	occBusy atomic.Bool
+
+	// adopt holds, by alarm, a committed ack of an occurrence the live
+	// engine is not on, until the log is caught up (Reconcile): an entry
+	// after it that ends or replaces that occurrence (an ack-clear, an
+	// occurrence-end or -start, a later ack) cancels it; what is left
+	// adopts the standing alarm's occurrence (alarm.Engine.AckCommitted).
+	// Under mu.
+	adopt map[string]adoption
+
+	// ended hands the ids of alarms that left ack-active on the live
+	// leader from the engine's hook (under the engine's lock, on the scan)
+	// to clearEnded, which judges them against the view: the scan never
+	// waits on mu (#1053: control never waits on operator data).
+	ended chan endedOcc
+	// ackGen counts the acks the view has taken; each view ack keeps the
+	// count it was taken at, and each hand-off the count when its event
+	// fired, so a late judgement never clears an ack taken after its
+	// event. The ONE place the view sets acked is Apply's KindAck, which
+	// bumps it there; any new path that sets acked must bump it too
+	// (TestOnlyKindAckSetsAViewAck). Every engine ack from the log comes
+	// after that write: applyAck in the same Apply, AckCommitted (an
+	// adoption) later, a takeover's restore later (it reads Held under
+	// liveMu, which excludes Apply). The count says only that the ack is
+	// not newer than the event, not that the event ended it: an event can
+	// fire between the view's ack and the engine's, so clearIfAcked also
+	// asks the engine, under liveMu (which waits out that Apply).
+	ackGen atomic.Uint64
 
 	// seen hears every committed alarm entry this replica proposed, once
 	// applied (observe: the server's unknown-outcome resolutions).
@@ -150,7 +209,26 @@ type alarmIntent struct {
 	shelfBy      string
 	shelfSeq     uint64
 	shelfSet     bool // the log shelved or unshelved it: its shelf is the log's
+
+	// occ, activeMs and waitMs are the occurrence the log knows the alarm
+	// is on (#715): from an ack (the occurrence it acknowledged) or an
+	// occurrence-start. "" when none.
+	occ      string
+	activeMs int64
+	waitMs   int64
+
+	ackGen uint64 // AlarmLog.ackGen when the view took its ack
 }
+
+// adoption is a committed ack waiting to adopt an occurrence (AlarmLog.adopt).
+type adoption struct {
+	occ      string
+	activeMs int64
+	by       string
+}
+
+// clearOcc forgets v's occurrence.
+func (v *alarmIntent) clearOcc() { v.occ, v.activeMs, v.waitMs = "", 0, 0 }
 
 // NewAlarmLog is an AlarmLog for eng; leading reports whether this replica
 // holds the lease now, and term the term it holds it under (the elector's
@@ -159,10 +237,25 @@ type alarmIntent struct {
 // ack-clears. Attach the node once it exists (its Apply must already
 // reach Apply).
 func NewAlarmLog(eng *alarm.Engine, leading func() bool, term func() uint64) *AlarmLog {
-	l := &AlarmLog{eng: eng, leading: leading, term: term, view: map[string]alarmIntent{}, refusal: PairNoMajorityAlarms, clrRetry: 2 * time.Second}
+	l := &AlarmLog{eng: eng, leading: leading, term: term, view: map[string]alarmIntent{}, refusal: PairNoMajorityAlarms, clrRetry: 2 * time.Second,
+		ended: make(chan endedOcc, endedQueue)}
 	eng.OnEvent(l.engineEvent)
+	go l.clearEnded()
 	return l
 }
+
+// endedOcc is one alarm that left ack-active, with the occurrence it was
+// on then.
+type endedOcc struct {
+	id, occ string
+	gen     uint64 // AlarmLog.ackGen when the event fired
+	term    uint64 // the leadership it fired in
+}
+
+// endedQueue is the hand-off from the engine's hook to clearEnded: deep
+// enough for an alarm flood; past it, the next log tick's Reconcile finds
+// the acks left behind.
+const endedQueue = 4096
 
 // live reports whether this replica's engine is the live one: it leads,
 // and its takeover restored the view under the term it leads in.
@@ -179,6 +272,9 @@ func (l *AlarmLog) restoring(restore func()) {
 	term := l.term()
 	l.liveMu.Lock()
 	defer l.liveMu.Unlock()
+	l.mu.Lock()
+	l.adopt = nil // an earlier leadership's pending adoptions are not this one's
+	l.mu.Unlock()
 	restore()
 	l.restored.Store(term)
 }
@@ -206,24 +302,34 @@ func (l *AlarmLog) Apply(e oplog.Entry) (bool, error) {
 		l.tell(e)
 		return true, nil
 	}
+	var notes []string // cancelled adoptions, journalled once mu is released
 	defer func() {
+		if live { // a standby's engine journals nothing of the leader's
+			for _, n := range notes {
+				l.eng.Note("system", n)
+			}
+		}
 		if e.Kind == oplog.KindAck || e.Kind == oplog.KindShelve || e.Kind == oplog.KindUnshelve {
 			l.tell(e)
 		}
 	}()
 	switch e.Kind {
 	case oplog.KindAck:
+		occ := occsByID(e.Occs)
 		l.mu.Lock()
 		for _, id := range e.IDs {
+			delete(l.adopt, id) // a later ack decides for itself
 			v := l.view[id]
 			v.acked, v.ackBy, v.ackMs, v.ackSeq = true, e.By, e.TS, e.Seq
+			v.ackGen = l.ackGen.Add(1)
+			if o, ok := occ[id]; ok {
+				v.occ, v.activeMs, v.waitMs = o.Occ, o.ActiveMs, 0
+			}
 			l.view[id] = v
 		}
 		l.mu.Unlock()
 		if live {
-			if _, err := l.eng.Ack(e.IDs, e.By); err != nil {
-				slog.Warn("alarm: a committed acknowledgement did not apply", "ids", e.IDs, "err", err)
-			}
+			l.applyAck(e, occ)
 		}
 	case oplog.KindShelve:
 		l.mu.Lock()
@@ -248,11 +354,56 @@ func (l *AlarmLog) Apply(e oplog.Entry) (bool, error) {
 			}
 		}
 	case oplog.KindAckClear:
+		occ := occsByID(e.Occs)
 		l.mu.Lock()
 		for _, id := range append(slices.Clone(e.IDs), e.ID) {
+			if a, ok := l.adopt[id]; ok && (occ[id].Occ == "" || occ[id].Occ == a.occ) && !mutServer("adopt_ignores_log") {
+				notes = append(notes, l.cancelAdopt(id, "its ack was cleared: the occurrence left ack-active before this takeover"))
+			}
 			if v, ok := l.view[id]; ok && id != "" {
+				if o, named := occ[id]; named && o.Occ != "" && v.occ != "" && o.Occ != v.occ && !mutServer("ack_clear_any_occurrence") {
+					continue // it ends another occurrence's ack: this one is newer
+				}
 				v.acked, v.ackBy, v.ackMs, v.ackSeq = false, "", 0, 0
+				// The acknowledged occurrence left ack-active: it ended, or
+				// it is in unack-rtn, which no takeover continues. Its
+				// occurrence goes with its ack, unless a newer one is in
+				// the view already.
+				if o, ok := occ[id]; ok && o.Occ == v.occ && !mutServer("ack_clear_keeps_occurrence") {
+					v.clearOcc()
+				}
 				l.view[id] = v
+			}
+		}
+		l.mu.Unlock()
+	case oplog.KindOccurrenceStart:
+		l.mu.Lock()
+		for _, o := range e.Occs {
+			if a, ok := l.adopt[o.ID]; ok && a.occ != o.Occ && !mutServer("adopt_ignores_log") {
+				notes = append(notes, l.cancelAdopt(o.ID, "a later occurrence began before this takeover"))
+			}
+			v := l.view[o.ID]
+			if v.acked && v.occ != "" && v.occ != o.Occ {
+				// An ack of an occurrence that has ended (its ack-clear may
+				// still be on its way): never carried to this one.
+				v.acked, v.ackBy, v.ackMs, v.ackSeq = false, "", 0, 0
+			}
+			v.occ, v.activeMs, v.waitMs = o.Occ, o.ActiveMs, o.WaitMs
+			l.view[o.ID] = v
+		}
+		l.mu.Unlock()
+	case oplog.KindOccurrenceEnd:
+		l.mu.Lock()
+		for _, o := range e.Occs {
+			if a, ok := l.adopt[o.ID]; ok && a.occ == o.Occ && !mutServer("adopt_ignores_log") {
+				notes = append(notes, l.cancelAdopt(o.ID, "the occurrence ended before this takeover"))
+			}
+			if v, ok := l.view[o.ID]; ok && v.occ == o.Occ {
+				v.clearOcc()
+				if v.acked {
+					v.acked, v.ackBy, v.ackMs, v.ackSeq = false, "", 0, 0
+				}
+				l.view[o.ID] = v
 			}
 		}
 		l.mu.Unlock()
@@ -322,11 +473,14 @@ func (l *AlarmLog) journalLapse(e oplog.Entry) {
 	go (*f)(out)
 }
 
-// engineEvent hears the leader's engine (under its lock: no blocking, no
-// engine calls). Any transition that leaves an alarm not ack-active ends
-// the acknowledged occurrence: its ack is cleared in the log. A shelve
-// keeps it (shelved over ack-active still holds the ack); its unshelve
-// lands on the state the shelf interrupted, judged like any other.
+// engineEvent hears the leader's engine, under its lock, on the scan: it
+// must neither block nor call the engine, so it takes no lock at all
+// (live reads atomics) and hands the alarm to clearEnded. Any transition
+// that leaves an alarm not ack-active ends the acknowledged occurrence:
+// its ack is cleared in the log. A shelve keeps it (shelved over
+// ack-active still holds the ack); its unshelve lands on the state the
+// shelf interrupted, judged like any other. A full hand-off drops the id:
+// Reconcile, at the next log tick, clears an ack the engine doesn't hold.
 func (l *AlarmLog) engineEvent(ev alarm.Event) {
 	if ev.State == "ack-active" || ev.Kind == alarm.KindShelve || ev.State == "shelved" || mutServer("ack_clear_off") {
 		return
@@ -334,13 +488,76 @@ func (l *AlarmLog) engineEvent(ev alarm.Event) {
 	if !l.live() {
 		return
 	}
-	l.mu.Lock()
-	acked := l.view[ev.ID].acked
-	l.mu.Unlock()
-	if acked {
-		l.queueClear(ev.ID)
+	if mutServer("engine_event_waits") {
+		l.clearIfAcked(endedOcc{ev.ID, ev.Occurrence, l.ackGen.Load(), l.term()})
+		return
+	}
+	if mutServer("engine_event_takes_livemu") {
+		l.liveMu.Lock()
+		l.liveMu.Unlock() //nolint:staticcheck // the mutation: the hook waits on liveMu
+	}
+	if mutServer("engine_event_blocks") {
+		l.ended <- endedOcc{ev.ID, ev.Occurrence, l.ackGen.Load(), l.term()}
+		return
+	}
+	select {
+	case l.ended <- endedOcc{ev.ID, ev.Occurrence, l.ackGen.Load(), l.term()}:
+	default:
 	}
 }
+
+// clearEnded clears the view's ack of each alarm the engine's hook handed
+// over, off the scan.
+func (l *AlarmLog) clearEnded() {
+	for e := range l.ended {
+		l.clearIfAcked(e)
+	}
+}
+
+// clearIfAcked queues an ack-clear for e's alarm when the view's ack
+// existed when the event fired, and is for the occurrence that left
+// ack-active (or names none, from an older
+// replica, or waits to adopt one: its alarm did not stand), naming the
+// occurrence the view's ack is for. An ack the view took since, for a
+// later occurrence, is not cleared.
+func (l *AlarmLog) clearIfAcked(e endedOcc) {
+	if !l.live() || l.term() != e.term {
+		return // fired in another leadership; Reconcile judges this one's
+	}
+	// Under liveMu: an Apply that wrote the view's ack but has not acked
+	// the engine yet finishes first, so the engine is asked after it.
+	if !mutServer("clear_without_livemu") {
+		l.liveMu.Lock()
+	}
+	l.mu.Lock()
+	v := l.view[e.id]
+	_, adopting := l.adopt[e.id]
+	l.mu.Unlock()
+	clear := v.acked && (v.ackGen <= e.gen || mutServer("clear_ack_taken_after")) &&
+		(v.occ == "" || v.occ == e.occ || adopting || mutServer("clear_any_later_ack"))
+	if clear && !mutServer("clear_while_engine_holds") {
+		// The event fired between the view's ack and the engine's (an
+		// unack-rtn alarm re-activating on the same occurrence, a shelf
+		// expiring): the engine holds the ack now, and it stands.
+		if occ, held := l.eng.AckHeld(e.id); held && (v.occ == "" || occ == v.occ) {
+			clear = false
+		}
+	}
+	if !mutServer("clear_without_livemu") {
+		l.liveMu.Unlock()
+	}
+	if clear {
+		l.queueClear(e.id, v.occ)
+	}
+}
+
+// applyAckGap, when set (tests), runs inside Apply between the view's ack
+// and the engine's.
+var applyAckGap atomic.Pointer[func()]
+
+// reconcileGap, when set (tests), runs inside Reconcile between its read
+// of the engine's acks and its read of the view.
+var reconcileGap atomic.Pointer[func()]
 
 // Reconcile clears from the log any ack the leader's engine doesn't hold
 // (an occurrence that ended by a path no event caught, or a view left
@@ -351,18 +568,34 @@ func (l *AlarmLog) Reconcile() {
 	if !l.live() || mutServer("ack_clear_off") {
 		return
 	}
+	l.adoptPending() // first: an ack it applies is held below
+	// The engine's acks and the view's, read together under liveMu: an
+	// Apply between the two reads would make its fresh ack look stale.
+	if !mutServer("reconcile_without_livemu") {
+		l.liveMu.Lock()
+	}
 	held := l.eng.AckHeldIDs()
+	if f := reconcileGap.Load(); f != nil {
+		(*f)()
+	}
 	l.mu.Lock()
 	var stale []string
 	for id, v := range l.view {
+		if _, waits := l.adopt[id]; waits {
+			continue // its ack waits for the log to catch up, not cleared
+		}
 		if v.acked && !held[id] {
 			stale = append(stale, id)
 		}
 	}
 	l.mu.Unlock()
-	for _, id := range stale {
-		l.queueClear(id)
+	if !mutServer("reconcile_without_livemu") {
+		l.liveMu.Unlock()
 	}
+	for _, id := range stale {
+		l.queueClear(id, "")
+	}
+	l.syncOccurrences()
 }
 
 // dropAcks clears every ack from this replica's view (an unsynced
@@ -379,6 +612,7 @@ func (l *AlarmLog) dropView() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	clear(l.view)
+	l.adopt = nil
 }
 
 // EndSuperseded ends what this controller holds of the old history's
@@ -424,11 +658,17 @@ func (l *AlarmLog) Lapse(e oplog.Entry, now time.Time) bool {
 // queueClear proposes an ack-clear in the background, retrying what the
 // log does not take (no majority) until it does; the ids queued meanwhile
 // go in one entry.
-func (l *AlarmLog) queueClear(id string) {
+func (l *AlarmLog) queueClear(id, occ string) {
 	l.clrMu.Lock()
 	defer l.clrMu.Unlock()
 	if !slices.Contains(l.clr, id) {
 		l.clr = append(l.clr, id)
+	}
+	if occ != "" {
+		if l.clrOcc == nil {
+			l.clrOcc = map[string]string{}
+		}
+		l.clrOcc[id] = occ
 	}
 	if !l.clrRunning && l.node != nil {
 		l.clrRunning = true
@@ -445,9 +685,15 @@ func (l *AlarmLog) proposeClears() {
 			return
 		}
 		ids := slices.Clone(l.clr)
+		var occs []oplog.Occ
+		for _, id := range ids {
+			if o := l.clrOcc[id]; o != "" {
+				occs = append(occs, oplog.Occ{ID: id, Occ: o})
+			}
+		}
 		l.clrMu.Unlock()
 		ctx, cancel := context.WithTimeout(context.Background(), substituteProposeWait)
-		_, err := l.node.Propose(ctx, oplog.Entry{Kind: oplog.KindAckClear, IDs: ids, By: "system"})
+		_, err := l.node.Propose(ctx, oplog.Entry{Kind: oplog.KindAckClear, IDs: ids, Occs: occs, By: "system"})
 		cancel()
 		if err != nil {
 			slog.Warn("alarm: ack-clear not committed yet; retrying", "ids", ids, "err", err)
@@ -456,6 +702,11 @@ func (l *AlarmLog) proposeClears() {
 		}
 		l.clrMu.Lock()
 		l.clr = slices.DeleteFunc(l.clr, func(id string) bool { return slices.Contains(ids, id) })
+		for _, o := range occs {
+			if l.clrOcc[o.ID] == o.Occ {
+				delete(l.clrOcc, o.ID)
+			}
+		}
 		l.clrMu.Unlock()
 	}
 }
@@ -481,6 +732,12 @@ func (l *AlarmLog) Held(synced bool, retained map[string]retain.AlarmRetain) map
 		r := out[id]
 		if synced && v.acked {
 			r.Acked, r.AckBy, r.AckMs = true, v.ackBy, v.ackMs
+		}
+		if synced && v.occ != "" && !mutServer("takeover_drops_occurrences") {
+			// Continued only if the field re-asserts it; never from an
+			// unsynced view (it can't say which is current), nor from
+			// this replica's own retain store.
+			r.Occurrence, r.ActiveMs, r.WaitMs = v.occ, v.activeMs, v.waitMs
 		}
 		if v.shelfSet {
 			r.ShelfUntilMs, r.ShelfBy = v.shelfUntilMs, v.shelfBy // the log's shelf, or none
@@ -597,20 +854,28 @@ func (s *Server) refuseAlarmWithoutMajority(w http.ResponseWriter) bool {
 
 // alarmAckThroughLog proposes an acknowledgement: "all" becomes the leader's
 // unacknowledged alarms by id, since a standby can't know them.
-func (s *Server) alarmAckThroughLog(w http.ResponseWriter, r *http.Request, ids []string, by string) {
+func (s *Server) alarmAckThroughLog(w http.ResponseWriter, r *http.Request, ids []string, occ map[string]string, by string) {
 	if s.refuseAlarmBeforeRestore(w) {
 		return
 	}
-	if ids == nil {
-		ids = s.alarms.UnackedIDs()
-		if len(ids) == 0 {
-			writeJSON(w, http.StatusOK, ackAnswer{IDs: []string{}})
-			return
+	all := ids == nil
+	// One read of the leader's engine: which alarms the ack changes, and
+	// the occurrence each is on, so the entry binds the ack to it.
+	targets, err := s.alarms.AckTargets(ids, occ)
+	if err != nil {
+		http.Error(w, err.Error(), alarmErrStatus(err))
+		return
+	}
+	ids = make([]string, 0, len(targets))
+	occs := make([]oplog.Occ, 0, len(targets))
+	for _, t := range targets {
+		ids = append(ids, t.ID)
+		if t.Occurrence != "" {
+			occs = append(occs, oplog.Occ{ID: t.ID, Occ: t.Occurrence, ActiveMs: t.ActiveMs})
 		}
 	}
-	ids, err := s.alarms.AckableIDs(ids)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+	if all && len(ids) == 0 {
+		writeJSON(w, http.StatusOK, ackAnswer{IDs: []string{}})
 		return
 	}
 	if len(ids) == 0 {
@@ -625,7 +890,10 @@ func (s *Server) alarmAckThroughLog(w http.ResponseWriter, r *http.Request, ids 
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), substituteProposeWait)
 	defer cancel()
-	if _, err := s.proposeFor(ctx, r, oplog.Entry{Kind: oplog.KindAck, IDs: ids, By: by}, true, s.alarmLog.node.Propose); err != nil {
+	if mutServer("ack_entry_unbound") {
+		occs = nil
+	}
+	if _, err := s.proposeFor(ctx, r, oplog.Entry{Kind: oplog.KindAck, IDs: ids, Occs: occs, By: by}, true, s.alarmLog.node.Propose); err != nil {
 		unknownOutcome(w, err)
 		return
 	}
@@ -659,4 +927,172 @@ func (s *Server) shelveThroughLog(w http.ResponseWriter, r *http.Request, id str
 		return
 	}
 	s.writeAlarmRecord(w, id)
+}
+
+// occsByID indexes an entry's occurrences by alarm.
+func occsByID(occs []oplog.Occ) map[string]oplog.Occ {
+	if len(occs) == 0 {
+		return nil
+	}
+	out := make(map[string]oplog.Occ, len(occs))
+	for _, o := range occs {
+		out[o.ID] = o
+	}
+	return out
+}
+
+// applyAck applies a committed ack to the live engine: each alarm on the
+// occurrence the entry names for it (an entry from a replica that predates
+// occurrences names none, and acks whatever occurrence is on). One whose
+// occurrence ended since the ack was checked is not acknowledged: the
+// person saw another one.
+func (l *AlarmLog) applyAck(e oplog.Entry, occ map[string]oplog.Occ) {
+	if f := applyAckGap.Load(); f != nil {
+		(*f)()
+	}
+	for _, id := range e.IDs {
+		o, named := occ[id]
+		if !named || mutServer("apply_ack_any_occurrence") {
+			if _, err := l.eng.AckIDsAt([]string{id}, nil, e.By); err != nil {
+				slog.Warn("alarm: a committed acknowledgement did not apply", "id", id, "err", err)
+			}
+			continue
+		}
+		_, err := l.eng.AckIDsAt([]string{id}, map[string]string{id: o.Occ}, e.By)
+		switch {
+		case errors.Is(err, alarm.ErrOtherOccurrence):
+			// Not the occurrence on now. It may be the one that stood
+			// through a takeover that could not continue it; only the
+			// rest of the log can say (Reconcile decides once caught up).
+			l.mu.Lock()
+			if l.adopt == nil {
+				l.adopt = map[string]adoption{}
+			}
+			l.adopt[id] = adoption{occ: o.Occ, activeMs: o.ActiveMs, by: e.By}
+			l.mu.Unlock()
+		case err != nil:
+			slog.Warn("alarm: a committed acknowledgement did not apply", "id", id, "err", err)
+		}
+	}
+}
+
+// cancelAdopt drops id's pending adoption and returns the journal note
+// saying why, for the caller to write once mu is released (the engine's
+// hook takes mu under the engine's lock). Under mu.
+func (l *AlarmLog) cancelAdopt(id, why string) string {
+	a := l.adopt[id]
+	delete(l.adopt, id)
+	return "ack of " + id + " by " + a.by + " not applied: " + why
+}
+
+// adoptPending decides the pending adoptions once the log holds and has
+// applied every committed entry (live leader, at its log tick): each ack
+// left adopts its alarm's occurrence if the alarm has stood since this
+// replica's restore, else it is refused and journalled.
+func (l *AlarmLog) adoptPending() {
+	// The node is asked before mu is taken, never under it: the node
+	// applies commits (Apply, which takes mu) under its own lock (#1198
+	// review: the inverse order froze the log, then the scan).
+	caughtUp := func() bool { return l.node == nil || (l.node.Synced() && l.node.Commit() >= l.node.LastSeq()) }
+	var up bool
+	if mutServer("adopt_under_mu") {
+		l.mu.Lock()
+		up = caughtUp()
+		l.mu.Unlock()
+	} else {
+		up = caughtUp()
+	}
+	l.mu.Lock()
+	if len(l.adopt) == 0 {
+		l.mu.Unlock()
+		return
+	}
+	if !up {
+		l.mu.Unlock()
+		return // entries may still come that end the acked occurrence
+	}
+	pending := l.adopt
+	l.adopt = nil
+	l.mu.Unlock()
+	for id, a := range pending {
+		if _, err := l.eng.AckCommitted(id, a.occ, a.activeMs, a.by); err != nil {
+			why := "committed after the occurrence it was for ended"
+			if !errors.Is(err, alarm.ErrOtherOccurrence) {
+				why = err.Error()
+			}
+			slog.Warn("alarm: a committed acknowledgement was for an occurrence that has ended; not applied", "id", id, "by", a.by)
+			l.eng.Note("system", "ack of "+id+" by "+a.by+" not applied: "+why)
+		}
+	}
+}
+
+// SetOccurrenceMatch names the alarms whose occurrences the view keeps for
+// a takeover: those an escalation policy covers (#715). Call it before the
+// runtime runs; nil keeps none (acks still carry their own).
+func (l *AlarmLog) SetOccurrenceMatch(match func(alarm.Def) bool) {
+	if match == nil {
+		l.match.Store(nil)
+		return
+	}
+	l.match.Store(&match)
+}
+
+// syncOccurrences brings the view's occurrences in line with the live
+// engine (the leader, at each log tick): occurrence-start for each covered
+// alarm waiting on a person whose occurrence or wait the view does not
+// hold, occurrence-end for each occurrence the view holds that the engine
+// is no longer on. At most one entry of each kind, in the background; a
+// tick that finds the last proposal still in flight does nothing (the
+// next one finds what it left).
+func (l *AlarmLog) syncOccurrences() {
+	if l.node == nil || !l.live() || l.occBusy.Load() {
+		return
+	}
+	var match func(alarm.Def) bool
+	if m := l.match.Load(); m != nil {
+		match = *m
+	}
+	cur := l.eng.Occurrences()
+	var starts, ends []oplog.Occ
+	l.mu.Lock()
+	for id, o := range cur {
+		if _, waits := l.adopt[id]; waits || match == nil || !o.Waiting || !match(o.Def) {
+			continue // a pending adoption decides its occurrence first
+		}
+		v := l.view[id]
+		if v.occ != o.Occurrence.Occurrence || v.waitMs != o.WaitMs || v.activeMs != o.ActiveMs {
+			starts = append(starts, oplog.Occ{ID: id, Occ: o.Occurrence.Occurrence, ActiveMs: o.ActiveMs, WaitMs: o.WaitMs})
+		}
+	}
+	for id, v := range l.view {
+		if _, waits := l.adopt[id]; waits || v.occ == "" {
+			continue
+		}
+		if o, ok := cur[id]; !ok || o.Occurrence.Occurrence != v.occ {
+			ends = append(ends, oplog.Occ{ID: id, Occ: v.occ})
+		}
+	}
+	l.mu.Unlock()
+	if mutServer("occurrences_not_synced") || (len(starts) == 0 && len(ends) == 0) {
+		return
+	}
+	slices.SortFunc(starts, func(a, b oplog.Occ) int { return strings.Compare(a.ID, b.ID) })
+	slices.SortFunc(ends, func(a, b oplog.Occ) int { return strings.Compare(a.ID, b.ID) })
+	l.occBusy.Store(true)
+	go func() {
+		defer l.occBusy.Store(false)
+		for _, e := range []oplog.Entry{{Kind: oplog.KindOccurrenceEnd, Occs: ends, By: "system"},
+			{Kind: oplog.KindOccurrenceStart, Occs: starts, By: "system"}} {
+			if len(e.Occs) == 0 {
+				continue
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), substituteProposeWait)
+			_, err := l.node.Propose(ctx, e)
+			cancel()
+			if err != nil {
+				slog.Warn("alarm: occurrences not committed yet; the next log tick tries again", "kind", e.Kind, "alarms", len(e.Occs), "err", err)
+				return
+			}
+		}
+	}()
 }

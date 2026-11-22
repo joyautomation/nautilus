@@ -23,6 +23,24 @@ import "os"
 //     commands take the write rule (same-origin with no credential);
 //   - retained_stale_ignored: a takeover restores a superseded log's
 //     retained substitutes (#1029 3c-3c-2a);
+//   - adopt_ignores_log: a late committed ack adopts the standing
+//     occurrence though the log shows its own ended (#715);
+//   - adopt_under_mu: Reconcile asks the oplog node under AlarmLog.mu
+//     (the inverse of the apply's lock order);
+//   - engine_event_waits: the engine's hook takes AlarmLog.mu on the
+//     scan instead of handing off (#1053);
+//   - clear_any_later_ack: a late hand-off clears an ack of a later
+//     occurrence;
+//   - clear_ack_taken_after: a late hand-off clears an ack the view took
+//     after its event fired;
+//   - engine_event_blocks: the engine's hook blocks when the hand-off
+//     is full;
+//   - clear_while_engine_holds: a late hand-off clears an ack the engine holds;
+//   - clear_without_livemu: a late hand-off is judged without waiting out an in-flight Apply;
+//   - reconcile_without_livemu: Reconcile reads the engine's acks and the view's without liveMu;
+//   - ack_clear_any_occurrence: an ack-clear naming one occurrence removes another occurrence's ack;
+//   - engine_event_takes_livemu: the engine's hook waits on liveMu on the
+//     scan;
 //   - superseded_alarms_kept: a superseded log's acks and shelves are
 //     carried by a takeover, and kept by a leader that learns it.
 var mutOn = os.Getenv("QUORUM_MUT")

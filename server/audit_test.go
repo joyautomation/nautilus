@@ -439,6 +439,16 @@ func auditRows() []auditRow {
 					t.Errorf("detail.by = %v, want the name the client gave", e.Detail["by"])
 				}
 			}},
+		// An ack naming an occurrence that ended is refused; the entry
+		// records the occurrences it named for its own ids, no others (#715).
+		{name: "ack of an ended occurrence", pattern: "POST /api/alarms/ack", server: none,
+			method: "POST", path: "/api/alarms/ack", body: `{"ids":["HiTemp"],"by":"op1","occurrences":{"HiTemp":"00000000deadbeef","Padding":"x"}}`,
+			action: "alarm.ack", target: "HiTemp", user: "anonymous", source: "api", result: "refused",
+			check: func(t *testing.T, e audit.Entry) {
+				if got := fmt.Sprint(e.Detail["occurrences"]); got != "map[HiTemp:00000000deadbeef]" {
+					t.Errorf("detail.occurrences = %s, want HiTemp's alone", got)
+				}
+			}},
 		// An acknowledge-all has the target "*"; the entry says which alarms it
 		// acknowledged (one entry for the one request).
 		{name: "ack all", pattern: "POST /api/alarms/ack", server: none,

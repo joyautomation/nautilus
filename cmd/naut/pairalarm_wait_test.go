@@ -32,6 +32,7 @@ func TestPairAckCarriesWhileTheTakeoverWaits(t *testing.T) {
 	live["a"].Store(true)
 	live["b"].Store(true)
 	r := newPairRigWith(t, func(n string, p *project.Project) {
+		tripOnAtStart(n, p)
 		p.Runtime.Driver = &heldInputs{live: live[n]}
 		p.Runtime.TakeoverInputsWait = time.Minute
 	})
