@@ -308,6 +308,20 @@ func (e *Engine) ReturnToService(eq, by string) error {
 	return nil
 }
 
+// IsOutOfService reports whether equipment eq is out of service now: a window
+// whose time has run out, or whose clock was set back, counts as ended even
+// before the next Evaluate sweeps it.
+func (e *Engine) IsOutOfService(eq string) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	o, ok := e.oos[ir.NameKey(eq)]
+	if !ok {
+		return false
+	}
+	_, ended := o.remaining(e.now())
+	return ended == ""
+}
+
 // OutOfServiceList is every out-of-service window, the soonest to end first.
 func (e *Engine) OutOfServiceList() []OutOfService {
 	e.mu.Lock()

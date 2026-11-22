@@ -665,3 +665,22 @@ func TestEquipmentNamesIgnoreCase(t *testing.T) {
 		t.Errorf("in service by another case: %v", err)
 	}
 }
+
+// A window that has run out is not out of service, even before the next
+// Evaluate sweeps it; a window that stands is.
+func TestIsOutOfServiceHonoursAnEndedWindow(t *testing.T) {
+	r := pumpRig(t)
+	if r.IsOutOfService("Pump_1") {
+		t.Fatal("equipment never taken out of service reads as out of service")
+	}
+	if err := r.TakeOutOfService("Pump_1", r.clk.at(time.Minute), "alice", "work"); err != nil {
+		t.Fatal(err)
+	}
+	if !r.IsOutOfService("pump_1") {
+		t.Error("a standing window (by another spelling) is not out of service")
+	}
+	r.clk.advance(2 * time.Minute) // past the window, no Evaluate in between
+	if r.IsOutOfService("Pump_1") {
+		t.Error("a window past its end still reads as out of service")
+	}
+}

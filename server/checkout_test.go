@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/joyautomation/nautilus/auth"
@@ -19,6 +20,8 @@ func ckSheet() *checkout.Sheet {
 	return &checkout.Sheet{Title: "Test", Points: []checkout.Point{
 		{ID: "SP", Tag: "SP", Kind: checkout.DO, Method: checkout.Observe, Device: "rio1", Area: "RCV"},
 		{ID: "LVL", Tag: "Level", Kind: checkout.AI, Method: checkout.Observe, Device: "rio2", Area: "LOD"},
+		// an output the checkout may force, on equipment the alarms know
+		{ID: "OUT", Tag: "Out", Kind: checkout.AO, Method: checkout.Force, Equipment: "HiTempAlm", Device: "rio1", Area: "RCV"},
 	}}
 }
 
@@ -31,8 +34,30 @@ func ckServer(t *testing.T) (*Server, *checkout.Store) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	srv, _, _ := patServerWith(t, Options{Checkout: &CheckoutOptions{Store: st, Sheet: ckSheet(), Signoff: "two-person"}})
+	co := &CheckoutOptions{Store: st, Sheet: ckSheet(), Signoff: "two-person"}
+	srv, _, _ := patServerWith(t, ckOpts(Options{}, co))
+	ckReg(srv, co)
 	return srv, st
+}
+
+// ckOfServer maps a server to the CheckoutOptions installed on it, for the
+// tests that reach its store and standing force.
+var ckOfServer sync.Map
+
+func ckOf(s *Server) *CheckoutOptions { v, _ := ckOfServer.Load(s); return v.(*CheckoutOptions) }
+
+// ckOpts installs co on o; ckReg then records it for the server made from o.
+func ckOpts(o Options, co *CheckoutOptions) Options { co.Install(&o); return o }
+func ckReg(s *Server, co *CheckoutOptions) *Server  { ckOfServer.Store(s, co); return s }
+
+func newCkStore(t *testing.T) *checkout.Store {
+	t.Helper()
+	st, err := checkout.Open(filepath.Join(t.TempDir(), "checkout.jsonl"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { st.Close() })
+	return st
 }
 
 func ckAs(t *testing.T, s *Server, who string) func(*http.Request) {
@@ -41,9 +66,10 @@ func ckAs(t *testing.T, s *Server, who string) func(*http.Request) {
 	return func(r *http.Request) { withCookie(c.Value)(r); ownOrigin(r); asJSON(r) }
 }
 
-// A project with no checkout: section behaves as before: the routes answer
-// that the checkout is not enabled, nothing is kept, and the other
-// surfaces are untouched.
+// A project with no checkout: section behaves as before: its routes are not
+// mounted (they 404 like any unknown path), nothing is kept, and the other
+// surfaces are untouched. A mounted checkout with no sheet says it is not
+// enabled (TestCheckoutMountedWithoutASheetSaysSo).
 func TestCheckoutIsOffUnlessTheProjectEnablesIt(t *testing.T) {
 	srv, _, _ := patServerWith(t, Options{})
 	as := ckAs(t, srv, "akhan")
@@ -53,10 +79,12 @@ func TestCheckoutIsOffUnlessTheProjectEnablesIt(t *testing.T) {
 		{"POST", "/api/checkout/runs", `{}`},
 		{"POST", "/api/checkout/runs/x/results", `{"point":"SP","outcome":"pass"}`},
 		{"POST", "/api/checkout/runs/x/abandon", `{"reason":"no"}`},
+		{"POST", "/api/checkout/runs/x/force", `{"point":"OUT","value":1,"confirm":"OUT"}`},
+		{"POST", "/api/checkout/runs/x/force/release", `{}`},
 	} {
 		rec := call(t, srv, c.method, c.path, c.body, as)
-		if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "not enabled for this project") {
-			t.Errorf("%s %s: %d %s, want 404 not enabled for this project", c.method, c.path, rec.Code, rec.Body)
+		if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "no such API endpoint") {
+			t.Errorf("%s %s: %d %s, want 404 (the routes are not mounted)", c.method, c.path, rec.Code, rec.Body)
 		}
 	}
 	// /api/me shows nothing new: the two permissions are not listed, and not
@@ -122,13 +150,13 @@ func TestCheckoutRunAndResults(t *testing.T) {
 	rec = call(t, srv, "GET", "/api/checkout", "", eng)
 	var v checkoutView
 	json.Unmarshal(rec.Body.Bytes(), &v)
-	if rec.Code != 200 || v.Run == nil || v.Run.ID != run.ID || len(v.Points) != 2 || v.Signoff != "two-person" || v.Hash != ckSheet().Hash() {
+	if rec.Code != 200 || v.Run == nil || v.Run.ID != run.ID || len(v.Points) != 3 || v.Signoff != "two-person" || v.Hash != ckSheet().Hash() {
 		t.Errorf("view %d %+v", rec.Code, v)
 	}
 	rec = call(t, srv, "GET", "/api/checkout/runs/"+run.ID, "", eng)
 	var rv checkoutRunView
 	json.Unmarshal(rec.Body.Bytes(), &rv)
-	if rv.ByDevice["rio1"].Pass != 1 || rv.ByDevice["rio2"].Pending != 1 || rv.ByArea["RCV"].Total != 1 || rv.Latest["SP"].Outcome != "pass" {
+	if rv.ByDevice["rio1"].Pass != 1 || rv.ByDevice["rio2"].Pending != 1 || rv.ByArea["RCV"].Total != 2 || rv.Latest["SP"].Outcome != "pass" {
 		t.Errorf("run view %+v", rv)
 	}
 
@@ -176,7 +204,9 @@ func TestCheckoutWhoMayRecord(t *testing.T) {
 		t.Errorf("an engineer: %d %s", rec.Code, rec.Body)
 	}
 	// a token names nobody: refused with a pointer to signing in
-	srv2, _, _ := patServerWith(t, Options{AuthToken: "s3cret", Checkout: &CheckoutOptions{Store: st, Sheet: ckSheet()}})
+	co2 := &CheckoutOptions{Store: st, Sheet: ckSheet()}
+	srv2, _, _ := patServerWith(t, ckOpts(Options{AuthToken: "s3cret"}, co2))
+	ckReg(srv2, co2)
 	rec := call(t, srv2, "POST", path, body, func(r *http.Request) { r.Header.Set("Authorization", "Bearer s3cret") })
 	if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), "as a person") {
 		t.Errorf("a token: %d %s, want 401 sign in as a person", rec.Code, rec.Body)
@@ -188,7 +218,9 @@ func TestCheckoutWhoMayRecord(t *testing.T) {
 func TestCheckoutRefusedOnAPair(t *testing.T) {
 	st, _ := checkout.Open(filepath.Join(t.TempDir(), "c.jsonl"), nil)
 	defer st.Close()
-	srv, _, _ := patServerWith(t, Options{Checkout: &CheckoutOptions{Store: st, Sheet: ckSheet()}, Cluster: fakeCluster{status: leader.Status{Mode: "quorum", IsLeader: true}}})
+	co := &CheckoutOptions{Store: st, Sheet: ckSheet()}
+	srv, _, _ := patServerWith(t, ckOpts(Options{Cluster: fakeCluster{status: leader.Status{Mode: "quorum", IsLeader: true}}}, co))
+	ckReg(srv, co)
 	eng := ckAs(t, srv, "akhan")
 	for _, p := range []string{"/api/checkout"} {
 		if r := call(t, srv, "GET", p, "", eng); r.Code != http.StatusServiceUnavailable || !strings.Contains(r.Body.String(), "redundant pair") {
@@ -206,7 +238,8 @@ func TestCheckoutRecordingIsScopedToThePointsArea(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	srv, _, _ := patServerSettings(t, newTestRuntime(t), Options{Checkout: &CheckoutOptions{Store: st, Sheet: ckSheet()}}, auth.Settings{
+	co := &CheckoutOptions{Store: st, Sheet: ckSheet()}
+	srv, _, _ := patServerSettings(t, newTestRuntime(t), ckOpts(Options{}, co), auth.Settings{
 		Areas: map[string][]string{"sp": {"SP"}},
 		Users: map[string][]auth.Grant{
 			"akhan":  {{Role: auth.Engineer}},
@@ -260,7 +293,9 @@ func TestCheckoutReadingsAreTheControllersOwn(t *testing.T) {
 		{ID: "lvl", Tag: "level", Kind: checkout.AI, Method: checkout.Observe}, // another spelling
 		{ID: "ghost", Tag: "Ghost", Kind: checkout.AI, Method: checkout.Observe},
 	}}
-	srv, _, _ := patServerRT(t, rt, Options{Checkout: &CheckoutOptions{Store: st, Sheet: sheet}})
+	co := &CheckoutOptions{Store: st, Sheet: sheet}
+	srv, _, _ := patServerRT(t, rt, ckOpts(Options{}, co))
+	ckReg(srv, co)
 	eng := ckAs(t, srv, "akhan")
 	run, _ := st.Begin(false, sheet.Hash(), "T", "akhan", "user:akhan")
 	path := "/api/checkout/runs/" + run.ID + "/results"
@@ -320,12 +355,23 @@ func TestCheckoutRecordsANaNReading(t *testing.T) {
 	st, _ := checkout.Open(filepath.Join(t.TempDir(), "c.jsonl"), nil)
 	defer st.Close()
 	sheet := &checkout.Sheet{Points: []checkout.Point{{ID: "lvl", Tag: "Level", Kind: checkout.AI, Method: checkout.Observe}}}
-	srv, _, _ := patServerRT(t, rt, Options{Checkout: &CheckoutOptions{Store: st, Sheet: sheet}})
+	co := &CheckoutOptions{Store: st, Sheet: sheet}
+	srv, _, _ := patServerRT(t, rt, ckOpts(Options{}, co))
+	ckReg(srv, co)
 	run, _ := st.Begin(false, sheet.Hash(), "", "akhan", "user:akhan")
 	rec := call(t, srv, "POST", "/api/checkout/runs/"+run.ID+"/results", `{"point":"lvl","outcome":"fail","note":"reads NaN: not wired"}`, ckAs(t, srv, "akhan"))
 	var res checkout.Result
 	json.Unmarshal(rec.Body.Bytes(), &res)
 	if rec.Code != http.StatusCreated || res.Seen != "NaN" {
 		t.Errorf("a NaN reading: %d %s, want recorded as NaN text", rec.Code, rec.Body)
+	}
+}
+
+func TestCheckoutMountedWithoutASheetSaysSo(t *testing.T) {
+	co := &CheckoutOptions{}
+	srv, _, _ := patServerWith(t, ckOpts(Options{}, co))
+	rec := call(t, srv, "GET", "/api/checkout", "", ckAs(t, srv, "akhan"))
+	if rec.Code != http.StatusNotFound || !strings.Contains(rec.Body.String(), "not enabled for this project") {
+		t.Errorf("%d %s, want 404 not enabled for this project", rec.Code, rec.Body)
 	}
 }

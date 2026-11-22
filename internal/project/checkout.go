@@ -1,23 +1,54 @@
+//go:build !js
+
 package project
 
 import (
 	"fmt"
+	"io/fs"
 	"strings"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/joyautomation/nautilus/checkout"
 	"github.com/joyautomation/nautilus/lang/ir"
 	"github.com/joyautomation/nautilus/runtime"
 )
 
+// loadCheckoutSheet reads and validates the sheet at path in the project (the
+// browser build has none: checkout_js.go).
+func loadCheckoutSheet(fsys fs.FS, fp string) (any, error) {
+	raw, err := fs.ReadFile(fsys, fp)
+	if err != nil {
+		return nil, fmt.Errorf("checkout: no %s in the project: `naut checkout init` writes one from the project's I/O tags", fp)
+	}
+	var sh checkout.Sheet
+	dec := yaml.NewDecoder(strings.NewReader(string(raw)))
+	dec.KnownFields(true)
+	if err := dec.Decode(&sh); err != nil {
+		return nil, fmt.Errorf("%s: %w", fp, err)
+	}
+	if err := sh.Validate(); err != nil {
+		return nil, fmt.Errorf("%s: %w", fp, err)
+	}
+	return &sh, nil
+}
+
+// CheckoutSheet is the checkout sheet, nil without a checkout: section.
+func (p *Project) CheckoutSheet() *checkout.Sheet {
+	sh, _ := p.checkout.(*checkout.Sheet)
+	return sh
+}
+
 // CheckCheckout is what `naut check` says about a checkout: every point
 // names a tag the project has, a point that is forced is an output the
 // controller drives, and a single-person sign-off is a warning.
 func (p *Project) CheckCheckout(rt *runtime.Runtime) (errs, warns []string) {
-	if p.checkout == nil {
+	sheet := p.CheckoutSheet()
+	if sheet == nil {
 		return nil, nil
 	}
 	tags := rt.Tags()
-	for _, pt := range p.checkout.Points {
+	for _, pt := range sheet.Points {
 		root := pt.Tag
 		if i := strings.IndexAny(root, ".["); i > 0 {
 			root = root[:i]

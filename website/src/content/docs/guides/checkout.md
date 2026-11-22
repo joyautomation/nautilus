@@ -9,9 +9,9 @@ doing that point by point. It is **optional**: a project with no `checkout:`
 section has no checkout page, no routes and no prompts, and nothing about
 forces or alarms changes.
 
-This page describes what is built so far: the sheet, recording results, and
-the permissions. Forcing an output from the checkout, the HMI page, the sealed
-and exported sheet and a redundant pair come in later steps, and say so below.
+This page describes what is built so far: the sheet, recording results,
+forcing an output, and the permissions. The HMI page, the sealed and exported
+sheet and a redundant pair come in later steps, and say so below.
 
 ## The sheet
 
@@ -74,19 +74,60 @@ leave nothing to notice: the chain has no anchor outside the file yet, so
 copy the file or export a run as part of signing it off (a later step). The checkout needs an `auth:` block with users (a result names
 a person; a token names nobody) and a state directory, as notes do.
 
+## Forcing an output
+
+An output with `method: force` can be driven from a step. A force bypasses
+the program's permissives, so this one is held to more than a plain force.
+Nothing is forced unless all of these hold:
+
+- the run is open and was begun against this sheet;
+- the caller holds `checkout` **and** `force` in the point's area (a fresh
+  password, for a browser sign-in);
+- the caller typed the point's id as `confirm`;
+- the point's **equipment is out of service** (the alarms' window: `naut alarms
+  out-of-service <equipment>`), so its alarms are quiet and the plant can see
+  it is being worked on. A point with no `equipment:`, or equipment the alarms
+  do not know, cannot be forced from a checkout;
+- nothing is forced at that address, in it or around it (a member of a struct
+  tag, or the tag a member is in): a force someone else holds is never taken
+  over; and no other checkout force stands (one at a time).
+
+```
+POST /api/checkout/runs/{id}/force          {point, value, seconds?, confirm}
+POST /api/checkout/runs/{id}/force/release  {}
+```
+
+The force stands for `seconds` (30 by default, at most 300), counted by the
+controller's own monotonic clock, and then **the controller lets it go
+itself**: closing the browser, signing out or losing the link cannot leave an
+output forced. It also ends when released, when its run is abandoned, **when
+the equipment is back in service or its window runs out** (the interlock is
+checked every second while a force stands; the record says `equipment back in
+service`), when someone clears or replaces the force (`replaced`), and when
+the controller restarts (a force does not survive one; the record says
+`interrupted`). The force is the one the controller put there, told apart by
+a number the force table gives it, never by its value: a force someone else set
+or changed on the output meanwhile is not removed. While a checkout force
+stands, every frame carries `checkoutForce` (the point, who, the milliseconds
+left) so any screen can say an output is being driven.
+
+A result recorded on a forced point carries what was forced, for how long it
+was allowed, how it ended (`released`, `expired`, `run abandoned`,
+`interrupted`, `replaced`) and the sequence number of the entry that began it,
+so the sheet can be checked against the audit journal. The force, its release
+and the controller's own expiry are audit entries.
+
 ## Who
 
 | Permission | Held by | For |
 |---|---|---|
-| `checkout` | `engineer` | recording results, per area; beginning and abandoning a run needs it for the whole controller. Forcing an output in a checkout will need `force` too. |
+| `checkout` | `engineer` | recording results, per area; beginning and abandoning a run needs it for the whole controller. Forcing an output in a checkout needs `force` too. |
 | `signoff` | `supervisor` | sealing a run (a later step): a fresh password, and by default someone who recorded none of its results (`signoff: two-person`). `signoff: single` lets the recorder sign; `naut check` warns and the sealed record says so. |
 
 Every begin, result and abandon is an audit entry, accepted or refused.
 
 ## Not yet
 
-- Forcing an output from a checkout step, with the equipment out of service, a
-  typed confirmation and an expiry that the controller keeps.
 - The HMI checkout page (progress by device and area).
 - Sealing a run, the signed JSON and CSV export, the printable report and
   `naut checkout verify`.
