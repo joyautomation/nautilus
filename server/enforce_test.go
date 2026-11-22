@@ -122,7 +122,7 @@ func enforceExactly(t *testing.T, srv *Server) {
 // policy for that permission rather than for anything else.
 func TestEachActionNeedsExactlyItsPermission(t *testing.T) {
 	for _, row := range auditRows() {
-		if row.result != "ok" {
+		if row.result != "ok" || row.person {
 			continue
 		}
 		perm := actionPerm[row.action]
@@ -200,7 +200,7 @@ func runAs(t *testing.T, row auditRow, tok string) (int, string, string, map[str
 func TestAuthBlockDecidesEveryWrite(t *testing.T) {
 	n := 0
 	for _, row := range auditRows() {
-		if row.result != "ok" {
+		if row.result != "ok" || row.person {
 			continue
 		}
 		n++
@@ -225,7 +225,7 @@ func TestAuthBlockDecidesEveryWrite(t *testing.T) {
 func TestRoleRefusalJournalsItsTarget(t *testing.T) {
 	n := 0
 	for _, row := range auditRows() {
-		if row.result != "ok" || row.target == "" {
+		if row.result != "ok" || row.target == "" || row.person {
 			continue
 		}
 		want := ""

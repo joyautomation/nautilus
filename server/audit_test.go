@@ -169,6 +169,10 @@ type auditRow struct {
 	// also is a second permission the action needs on top of its own (an
 	// import writes tags, so it needs the write permission too).
 	also string
+	// person marks a route only a person may use (push, #722): the tests
+	// that put service tokens in the principal's place skip it, and
+	// push_test.go holds its own.
+	person bool
 	// The one entry the request must leave.
 	action, target, user, source, result string
 	before, after                        any // checked when non-nil
@@ -189,6 +193,13 @@ func plain(o Options) func(*testing.T) *Server {
 // auditRows drives every write route, accepted and refused, through the
 // real handler.
 func auditRows() []auditRow {
+	pushAs := map[string]string{} // the person's credential, set by the server factory
+	pushSrv := func(t *testing.T) *Server {
+		rig := newPushRig(t, &subStore{}, nil)
+		pushAs["Authorization"] = "Bearer " + rig.toks["jsmith"]
+		return rig.srv
+	}
+	pushBody, pushID := auditSubscription()
 	none := plain(Options{})
 	tok := plain(Options{AuthToken: "s3cret"})
 	return []auditRow{
@@ -520,6 +531,23 @@ func auditRows() []auditRow {
 		{name: "io cancel with none pending", pattern: "POST /api/io/revert/cancel", server: ioSrv,
 			method: "POST", path: "/api/io/revert/cancel",
 			action: "config.revert.cancel", target: "", user: "anonymous", source: "api", result: "refused"},
+		{name: "push subscribe", pattern: "POST /api/push/subscribe", server: pushSrv, person: true, header: pushAs,
+			method: "POST", path: "/api/push/subscribe", body: pushBody,
+			action: "push.subscribe", target: "push:" + pushID, user: "user:jsmith", source: "api", result: "ok"},
+		{name: "push subscribe with no credential", pattern: "POST /api/push/subscribe", server: pushSrv, person: true,
+			method: "POST", path: "/api/push/subscribe", body: pushBody,
+			action: "push.subscribe", target: "", user: "anonymous", source: "api", result: "refused"},
+		{name: "push unsubscribe", pattern: "DELETE /api/push/subscribe", server: pushSrv, person: true, header: pushAs,
+			prep: func(t *testing.T, s *Server) {
+				if rec := call(t, s, "POST", "/api/push/subscribe", pushBody, func(r *http.Request) { r.Header.Set("Authorization", pushAs["Authorization"]) }); rec.Code != http.StatusCreated {
+					t.Fatalf("prep: %d %s", rec.Code, rec.Body)
+				}
+			},
+			method: "DELETE", path: "/api/push/subscribe", body: `{"id":"` + pushID + `"}`,
+			action: "push.unsubscribe", target: "push:" + pushID, user: "user:jsmith", source: "api", result: "ok"},
+		{name: "push unsubscribe with no credential", pattern: "DELETE /api/push/subscribe", server: pushSrv, person: true,
+			method: "DELETE", path: "/api/push/subscribe", body: `{"id":"` + pushID + `"}`,
+			action: "push.unsubscribe", target: "", user: "anonymous", source: "api", result: "refused"},
 	}
 }
 

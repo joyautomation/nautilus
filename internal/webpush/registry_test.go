@@ -33,7 +33,7 @@ var t0 = time.Date(2026, 11, 22, 8, 0, 0, 0, time.UTC)
 func TestRegistrySealsAndOpens(t *testing.T) {
 	g, _ := newReg(t)
 	s := testSub(1)
-	row, _, err := g.Add("user:ann", "c1", "push.example.net", s, t0)
+	row, _, err := g.Add("user:ann", nil, "c1", "push.example.net", s, t0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,20 +65,20 @@ func TestRegistrySealsAndOpens(t *testing.T) {
 
 func TestRegistryEndpointTakeoverAndCap(t *testing.T) {
 	g, _ := newReg(t)
-	g.Add("user:ann", "c", "h", testSub(1), t0)
-	_, ch, _ := g.Add("user:bob", "c", "h", testSub(1), t0.Add(time.Second))
+	g.Add("user:ann", nil, "c", "h", testSub(1), t0)
+	_, ch, _ := g.Add("user:bob", nil, "c", "h", testSub(1), t0.Add(time.Second))
 	if len(ch.Taken) != 1 || ch.Taken[0].Principal != "user:ann" {
 		t.Fatalf("the newest principal takes the endpoint: %+v", ch)
 	}
 	if len(g.Of("user:ann")) != 0 || len(g.Of("user:bob")) != 1 {
 		t.Error("ann still holds the endpoint")
 	}
-	_, ch, _ = g.Add("user:bob", "c", "h", testSub(1), t0.Add(2*time.Second))
+	_, ch, _ = g.Add("user:bob", nil, "c", "h", testSub(1), t0.Add(2*time.Second))
 	if !ch.Replace || len(g.Of("user:bob")) != 1 {
 		t.Errorf("re-subscribing replaces: %+v", ch)
 	}
 	for i := 2; i <= MaxPerPrincipal+2; i++ {
-		g.Add("user:ann", "c", "h", testSub(i), t0.Add(time.Duration(i)*time.Minute))
+		g.Add("user:ann", nil, "c", "h", testSub(i), t0.Add(time.Duration(i)*time.Minute))
 	}
 	rows := g.Of("user:ann")
 	if len(rows) != MaxPerPrincipal {
@@ -96,7 +96,7 @@ func TestRegistryEndpointTakeoverAndCap(t *testing.T) {
 
 func TestRegistryRemove(t *testing.T) {
 	g, _ := newReg(t)
-	r, _, _ := g.Add("user:ann", "c", "h", testSub(1), t0)
+	r, _, _ := g.Add("user:ann", nil, "c", "h", testSub(1), t0)
 	if g.Remove("user:bob", r.ID) {
 		t.Error("bob removed ann's subscription")
 	}

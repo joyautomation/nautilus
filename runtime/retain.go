@@ -342,6 +342,7 @@ func (r *Runtime) loadRetained() error {
 		allowed[n] = true
 	}
 	r.params.load(st.ParamBases, st.ParamEdits, st.ParamCommitted)
+	r.pushLoaded(st.Push)
 	var errs []error
 	for name, v := range st.Tags {
 		if !allowed[name] {
@@ -702,6 +703,10 @@ func (r *Runtime) retainState() retain.State {
 	// wrote before.
 	if k := r.ioKeeper(); k != nil {
 		st.IO = k.RetainedIO()
+	}
+	// Web Push subscriptions, sealed: nothing secret in the store (#722).
+	if k := r.pushKeeper(); k != nil {
+		st.Push = k.RetainedPush()
 	}
 	// Substitutes (substitute_retain.go): their own block, last.
 	st.Substitutes = r.retainedSubstitutes()

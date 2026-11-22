@@ -40,6 +40,12 @@ type Row struct {
 	Principal string    `json:"principal"`
 	Host      string    `json:"host"` // the push service's host, for the person's list
 	At        time.Time `json:"at"`
+	// Groups are an OIDC principal's group ids when it subscribed: what its
+	// grants were read from, for the standing check and the read gate.
+	Groups []string `json:"groups,omitempty"`
+	// Key fingerprints the VAPID key the row is sealed under: another
+	// key's row is kept, not sent, and counted.
+	Key string `json:"key"`
 	// Cred is what the principal's sign-in was proved with when it
 	// subscribed (a password's fingerprint, or an OIDC account's): the
 	// subscription holds only while the principal still proves the same.
@@ -131,6 +137,9 @@ func NewRegistry(key *Key) (*Registry, error) {
 // KeyFingerprint names the key the registry seals under.
 func (g *Registry) KeyFingerprint() string { return g.fp }
 
+// EndpointID is the ID a subscription to endpoint has in the API.
+func EndpointID(endpoint string) string { return rowID(endpoint) }
+
 func rowID(endpoint string) string {
 	sum := sha256.Sum256([]byte(endpoint))
 	return hex.EncodeToString(sum[:8])
@@ -151,6 +160,9 @@ func (g *Registry) seal(id, principal string, s Subscription) (string, error) {
 // Open unseals a row. A row sealed under another key, or altered, or moved
 // to another principal, is ErrSealed.
 func (g *Registry) Open(r Row) (Subscription, error) {
+	if r.Key != g.fp {
+		return Subscription{}, ErrSealed
+	}
 	raw, err := b64.DecodeString(r.Sealed)
 	if err != nil || len(raw) < g.aead.NonceSize() {
 		return Subscription{}, ErrSealed
@@ -178,13 +190,13 @@ type Change struct {
 // one browser profile, so the newest signed-in principal takes it. Over
 // MaxPerPrincipal the principal's oldest ends. The caller has checked the
 // endpoint (Policy.CheckEndpoint) and the keys' shape (Validate).
-func (g *Registry) Add(principal, cred, host string, s Subscription, now time.Time) (Row, Change, error) {
+func (g *Registry) Add(principal string, groups []string, cred, host string, s Subscription, now time.Time) (Row, Change, error) {
 	id := rowID(s.Endpoint)
 	sealed, err := g.seal(id, principal, s)
 	if err != nil {
 		return Row{}, Change{}, err
 	}
-	row := Row{ID: id, Principal: principal, Host: host, At: now.UTC().Truncate(time.Second), Cred: cred, Sealed: sealed}
+	row := Row{ID: id, Principal: principal, Groups: groups, Key: g.fp, Host: host, At: now.UTC().Truncate(time.Second), Cred: cred, Sealed: sealed}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	var ch Change

@@ -88,12 +88,16 @@ const (
 // differ (a substitute's start is strict and not elevated; clearing a
 // force is elevated and not strict).
 var actionClass = map[string]string{
-	"tag.write":      operator,
-	"alarm.ack":      operator,
-	"alarm.shelve":   operator,
-	"alarm.unshelve": operator,
-	"sfc.step":       operator,
-	"sfc.transition": operator,
+	"tag.write": operator,
+	// A person's own phone on the pager (#722): journalled, and allowed
+	// while the journal is down like the other operator actions.
+	"push.subscribe":   operator,
+	"push.unsubscribe": operator,
+	"alarm.ack":        operator,
+	"alarm.shelve":     operator,
+	"alarm.unshelve":   operator,
+	"sfc.step":         operator,
+	"sfc.transition":   operator,
 
 	"force.clear":      recovery,
 	"substitute.stop":  recovery, // a way back to the real reading

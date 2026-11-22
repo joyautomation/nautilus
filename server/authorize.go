@@ -42,6 +42,8 @@ const (
 // refused.
 var actionPerm = map[string]string{
 	"tag.write":            PermWrite,
+	"push.subscribe":       auth.Read, // any person who may read may be paged; read-gated per alarm at send
+	"push.unsubscribe":     auth.Read,
 	"alarm.ack":            PermAck,
 	"alarm.shelve":         PermShelve,
 	"alarm.unshelve":       PermShelve,
