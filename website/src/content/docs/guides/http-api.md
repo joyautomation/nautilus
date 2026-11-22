@@ -1428,6 +1428,7 @@ in the manifest; without it each route answers 404 and says so.
 | `POST /api/push/subscribe` | `{"endpoint": "https://…", "keys": {"p256dh": "…", "auth": "…"}}` (a browser's `PushSubscription.toJSON()`): 201 `{id, host, at}` |
 | `DELETE /api/push/subscribe` | `{"id": "…"}` or `{"endpoint": "…"}`: 204 |
 | `GET /api/push/subscriptions` | your own: `{"subscriptions": [{id, host, at}]}` |
+| `POST /api/push/confirm-revocations` | the config permission, journalled `push.confirm-revocations` with the count: ends the subscriptions a mass revocation is holding that still do not stand (`{ended, stillHeld}`); `naut alarms push confirm-revocations` |
 | `GET /api/push/health` | the config permission: `{keyFingerprint, subscriptions, people, sealed, held}` (`held`: rows a mass revocation is holding, see the alarms guide) |
 
 A subscription belongs to the person the signed-in browser session names,

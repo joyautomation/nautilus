@@ -109,9 +109,12 @@ var actionClass = map[string]string{
 	"substitute.ack":   strict,
 	"program.edit":     strict,
 	"program.activate": strict,
-	"config.stage":     strict,
-	"config.validate":  strict,
-	"config.apply":     strict,
+	// Ending the subscriptions a mass revocation held (#722): phones stop
+	// being paged on a person's word.
+	"push.confirm-revocations": strict,
+	"config.stage":             strict,
+	"config.validate":          strict,
+	"config.apply":             strict,
 	// Saving an applied configuration as a commit (#711) writes to the
 	// repo the controller runs from, in the principal's name.
 	"config.commit": strict,

@@ -188,10 +188,6 @@ func (p *pushService) save(ctx context.Context) error {
 	return err
 }
 
-// pushHoldFor is how long a mass revocation is held before it is carried
-// out: a variable for tests.
-var pushHoldFor = 10 * time.Minute
-
 func rowKey(r webpush.Row) string { return r.Principal + "\x00" + r.ID + "\x00" + r.Sealed }
 
 // sweep ends the subscriptions whose person no longer stands, except a mass
@@ -201,8 +197,10 @@ func rowKey(r webpush.Row) string { return r.Principal + "\x00" + r.ID + "\x00" 
 // word would silence the pager until each re-subscribes. So a pass that
 // would revoke more than half the rows, or every person's, across two or
 // more people, HOLDS them instead: kept, not sent, a condition raised
-// (PushHeld; the system alarm), and carried out only when a later sweep,
-// pushHoldFor on, still finds that row failing. A row that stands again is
+// (PushHeld; the system alarm), and carried out only when
+// a person confirms (POST /api/push/confirm-revocations, naut alarms push
+// confirm-revocations). There is no timer: a wrong users.json that stays
+// wrong must not delete everyone later. A row that stands again is
 // released. One person's change, or a few among many, ends at once.
 func (p *pushService) sweep(ctx context.Context) {
 	if !p.s.rt.Leading() || !p.usersReadable() {
@@ -235,10 +233,8 @@ func (p *pushService) sweep(ctx context.Context) {
 	newlyHeld := 0
 	for _, r := range failing {
 		k := rowKey(r)
-		t, wasHeld := still[k]
+		_, wasHeld := still[k]
 		switch {
-		case wasHeld && now.Sub(t) >= pushHoldFor:
-			end = append(end, r) // a later sweep agrees, row by row
 		case wasHeld || mass:
 			if !wasHeld {
 				still[k] = now
@@ -664,4 +660,67 @@ func (s *Server) pushOIDCSignIn(se session) {
 			}
 		}()
 	}
+}
+
+// confirmRevocations ends the held rows that still fail standing, as a
+// person decided (by names who): the one way a held row ends besides
+// standing again. A held row that stands now is released, not ended. It
+// returns how many ended.
+func (p *pushService) confirmRevocations(ctx context.Context, who string) (int, error) {
+	p.add.Lock()
+	defer p.add.Unlock()
+	if !p.usersReadable() {
+		return 0, ErrPushUsers
+	}
+	p.heldMu.Lock()
+	heldKeys := p.held
+	p.held = map[string]time.Time{}
+	p.heldMu.Unlock()
+	var end []webpush.Row
+	for _, r := range p.reg.Rows() {
+		if _, ok := heldKeys[rowKey(r)]; ok && !p.stands(r) {
+			end = append(end, r)
+		}
+	}
+	if len(end) == 0 {
+		return 0, nil
+	}
+	p.reg.RemoveRows(end)
+	for _, r := range end {
+		p.pushEntry("push.unsubscribe", r, "held after a mass revocation and confirmed by "+who, nil)
+	}
+	if err := p.save(ctx); err != nil {
+		slog.Warn("push: confirmed revocations could not be saved; they are ended here and will be again at the next save", "count", len(end), "error", err)
+	}
+	return len(end), nil
+}
+
+func (s *Server) handlePushConfirm(w http.ResponseWriter, r *http.Request) {
+	if s.pushOff(w) {
+		return
+	}
+	if code, msg := s.authorize(r, PermConfig, ""); code != 0 {
+		writeJSON(w, code, map[string]string{"error": msg})
+		return
+	}
+	if !s.rt.Leading() {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "this replica does not lead: confirm on the leader"})
+		return
+	}
+	n, err := s.push.confirmRevocations(r.Context(), s.principalOf(r))
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"ended": n, "stillHeld": s.PushHeld()})
+}
+
+func pushConfirmTarget(*http.Request, []byte) auditTarget {
+	return auditTarget{target: "push", answered: func(body []byte) any {
+		var a map[string]int
+		if json.Unmarshal(body, &a) != nil {
+			return nil
+		}
+		return map[string]any{"ended": a["ended"]}
+	}}
 }

@@ -910,17 +910,66 @@ func TestPushSweepHoldsAMassRevocation(t *testing.T) {
 		t.Fatalf("after the fix: held %d rows %d", srv.PushHeld(), len(srv.push.reg.Rows()))
 	}
 
-	// Wrong for good: the first sweep holds, a later one past the hold ends them.
+	// Wrong for good: held, and nothing ends it by itself, however long it lasts.
 	setBoth()
 	srv.push.sweep(context.Background())
-	now = now.Add(pushHoldFor - time.Minute)
-	srv.push.sweep(context.Background())
-	if len(srv.push.reg.Rows()) != 3 {
-		t.Fatal("ended inside the hold")
+	for _, d := range []time.Duration{time.Hour, 48 * time.Hour, 30 * 24 * time.Hour} {
+		now = now.Add(d)
+		srv.push.sweep(context.Background())
+		if len(srv.push.reg.Rows()) != 3 || srv.PushHeld() != 3 {
+			t.Fatalf("after %v: %d rows, %d held; a timer ended a hold", d, len(srv.push.reg.Rows()), srv.PushHeld())
+		}
 	}
-	now = now.Add(2 * time.Minute)
+	// Some are put right and the failures are no longer a mass: what was
+	// held stays held (only standing again or a confirmation ends a hold).
+	os.WriteFile(rig.path, good, 0o600)
+	if err := users.Update(rig.path, "opsadmin", func(f *users.File) error { return f.SetPassword("jsmith", "wrong-deploy-3") }); err != nil {
+		t.Fatal(err)
+	}
+	srv.users.Reload()
 	srv.push.sweep(context.Background())
-	if len(srv.push.reg.Rows()) != 0 || srv.PushHeld() != 0 {
-		t.Errorf("still failing after the hold: %d rows, %d held", len(srv.push.reg.Rows()), srv.PushHeld())
+	if n, h := len(srv.push.reg.Rows()), srv.PushHeld(); n != 3 || h != 2 {
+		t.Fatalf("a partial release: %d rows, %d held; want 3 and jsmith's 2 still held", n, h)
+	}
+	// Only a person's confirmation ends them: the config permission (an
+	// operator is refused), audited with the count.
+	confirm := func(tok string) *httptest.ResponseRecorder {
+		return call(t, srv, "POST", "/api/push/confirm-revocations", "", bearer(tok))
+	}
+	if rec := confirm(rig.toks["jsmith"]); rec.Code != http.StatusForbidden || len(srv.push.reg.Rows()) != 3 {
+		t.Fatalf("an operator confirming: %d, %d rows", rec.Code, len(srv.push.reg.Rows()))
+	}
+	// The file is put right first: confirming then ends nothing, the rows are released.
+	os.WriteFile(rig.path, good, 0o600)
+	srv.users.Reload()
+	if rec := confirm(rig.toks["akhan"]); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"ended":0`) || len(srv.push.reg.Rows()) != 3 || srv.PushHeld() != 0 {
+		t.Fatalf("confirming rows that stand: %d %s, %d rows, %d held", rec.Code, rec.Body, len(srv.push.reg.Rows()), srv.PushHeld())
+	}
+	// Wrong again, and this time it is meant: one deliberate command ends them.
+	setBoth()
+	srv.push.sweep(context.Background())
+	if srv.PushHeld() != 3 {
+		t.Fatalf("held %d", srv.PushHeld())
+	}
+	rec := confirm(rig.toks["akhan"])
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"ended":3`) || len(srv.push.reg.Rows()) != 0 || srv.PushHeld() != 0 {
+		t.Fatalf("confirm: %d %s, %d rows, %d held", rec.Code, rec.Body, len(srv.push.reg.Rows()), srv.PushHeld())
+	}
+	if strings.Contains(storeText(store), `"sealed"`) {
+		t.Error("confirmed rows are still retained")
+	}
+	var conf *audit.Entry
+	ended := 0
+	for _, e := range srv.audit.ring.Recent() {
+		if e.Action == "push.confirm-revocations" && e.Result == audit.ResultOK && e.User == "user:akhan" && fmt.Sprint(e.After) == "map[ended:3]" {
+			e := e
+			conf = &e
+		}
+		if e.Action == "push.unsubscribe" && strings.Contains(fmt.Sprint(e.Detail["reason"]), "confirmed by user:akhan") {
+			ended++
+		}
+	}
+	if conf == nil || conf.User != "user:akhan" || conf.Result != audit.ResultOK || fmt.Sprint(conf.After) != "map[ended:3]" || ended != 3 {
+		t.Errorf("the confirmation is not journalled with its count: %+v, %d row entries", conf, ended)
 	}
 }

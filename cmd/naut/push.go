@@ -4,14 +4,19 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
+	"net/http"
+	"os"
+	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/joyautomation/nautilus/alarm/channel"
 	"github.com/joyautomation/nautilus/alarm/escalate"
 	"github.com/joyautomation/nautilus/alarm/oncall"
+	"github.com/joyautomation/nautilus/internal/apiclient"
 	"github.com/joyautomation/nautilus/internal/project"
 	"github.com/joyautomation/nautilus/internal/webpush"
 	"github.com/joyautomation/nautilus/server"
@@ -141,4 +146,77 @@ func pushOutcome(res server.PushResult, err error) error {
 		return escalate.Failed(res.Class)
 	}
 	return escalate.Failed(escalate.FailConfig) // sealed under another key, or not allowed to read
+}
+
+const alarmsPushUsage = `naut alarms push — Web Push subscriptions (#722)
+
+Usage:
+  naut alarms push confirm-revocations --host <controller> [--port 8080]
+
+When many people stop standing at once (a wrong users.json, a bad deploy,
+a pair member with separately salted passwords), the controller HOLDS
+their phones instead of deleting them: kept, not sent, and the system
+alarm nautilus.push-held stays up. Put users.json right and they stand
+again by themselves. If the removal is real (you deliberately removed
+those users), this command ends the held subscriptions. It needs the
+config permission and a fresh password (NAUTILUS_TOKEN or a token is
+always fresh), and is journalled with the count.
+`
+
+// runAlarmsPush is naut alarms push: today, confirming a held mass revocation.
+func runAlarmsPush(args []string) int {
+	if len(args) > 0 && (args[0] == "help" || args[0] == "--help" || args[0] == "-h") {
+		fmt.Print(alarmsPushUsage)
+		return 0
+	}
+	if len(args) == 0 || args[0] != "confirm-revocations" {
+		fmt.Fprint(os.Stderr, alarmsPushUsage)
+		return 2
+	}
+	fs := flag.NewFlagSet("alarms push confirm-revocations", flag.ContinueOnError)
+	host := fs.String("host", "", "controller hostname or IP")
+	port := fs.Int("port", 8080, "tag API port")
+	fs.Usage = func() { fmt.Fprint(os.Stderr, alarmsPushUsage) }
+	if err := fs.Parse(args[1:]); err != nil {
+		return 2
+	}
+	if *host == "" {
+		fmt.Fprintln(os.Stderr, "naut alarms push confirm-revocations: --host is required")
+		return 2
+	}
+	base, err := apiclient.BaseURL(*host, *port)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "naut alarms push:", err)
+		return 2
+	}
+	url := base + "/api/push/confirm-revocations"
+	req, err := http.NewRequest(http.MethodPost, url, nil)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "naut alarms push:", err)
+		return 2
+	}
+	apiclient.Authorize(req)
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "naut alarms push: no controller at %s: %v\n", url, err)
+		return 2
+	}
+	defer resp.Body.Close()
+	out, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	var a struct {
+		Ended     int    `json:"ended"`
+		StillHeld int    `json:"stillHeld"`
+		Error     string `json:"error"`
+	}
+	_ = json.Unmarshal(out, &a)
+	if resp.StatusCode != http.StatusOK {
+		msg := a.Error
+		if msg == "" {
+			msg = strings.TrimSpace(string(out))
+		}
+		fmt.Fprintf(os.Stderr, "naut alarms push: %s returned %s: %s\n", url, resp.Status, msg)
+		return 1
+	}
+	fmt.Printf("ended %d held subscription(s); %d still held\n", a.Ended, a.StillHeld)
+	return 0
 }

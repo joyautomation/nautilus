@@ -442,8 +442,11 @@ browser playground has no state directory, so a project there with
   subscriptions (across two or more people) instead of deleting them:
   the rows are kept, not sent, the system alarm `nautilus.push-held`
   rises and the journal says `push.hold`. Put the file right and they
-  stand again; only a later sweep, ten minutes on, that still finds them
-  failing ends them. A pair needs the same `users.json` on both boxes,
+  stand again by themselves. Nothing else ends them, no timer: if the
+  removal is real (you removed those users on purpose), `naut alarms push
+  confirm-revocations --host <controller>` ends the held subscriptions. It
+  needs the config permission and a fresh password, and is journalled
+  with the count. The alarm stays up until one or the other. A pair needs the same `users.json` on both boxes,
   as [auth](/guides/auth/) says; its hello check reports a difference.) An OIDC person's groups are
   those of their last sign-in on the controller: a sign-in refreshes
   them, and a subscription not refreshed within 14 days stops, so

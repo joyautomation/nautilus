@@ -888,6 +888,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/push/subscriptions", s.handlePushList)
 	mux.HandleFunc("GET /api/push/health", s.handlePushHealth)
 	mux.Handle("POST /api/push/subscribe", s.audited("push.subscribe", pushTarget, s.handlePushSubscribe))
+	mux.Handle("POST /api/push/confirm-revocations", s.audited("push.confirm-revocations", pushConfirmTarget, s.handlePushConfirm))
 	mux.Handle("DELETE /api/push/subscribe", s.audited("push.unsubscribe", pushTarget, s.handlePushUnsubscribe))
 	mux.Handle("POST /api/parameters/import", s.audited("param.import", s.paramImportTarget, s.handleParametersImport))
 	mux.HandleFunc("GET /api/drivers", s.handleDrivers)

@@ -200,6 +200,13 @@ func auditRows() []auditRow {
 		pushAs["Cookie"], pushAs["Origin"] = c.Name+"="+c.Value, "http://localhost"
 		return rig.srv
 	}
+	pushAdmin := map[string]string{}
+	pushAdminSrv := func(t *testing.T) *Server {
+		rig := newPushRig(t, &subStore{}, nil)
+		c := signIn(t, rig.srv, "akhan")
+		pushAdmin["Cookie"], pushAdmin["Origin"] = c.Name+"="+c.Value, "http://localhost"
+		return rig.srv
+	}
 	pushBody, pushID := auditSubscription()
 	none := plain(Options{})
 	tok := plain(Options{AuthToken: "s3cret"})
@@ -532,6 +539,12 @@ func auditRows() []auditRow {
 		{name: "io cancel with none pending", pattern: "POST /api/io/revert/cancel", server: ioSrv,
 			method: "POST", path: "/api/io/revert/cancel",
 			action: "config.revert.cancel", target: "", user: "anonymous", source: "api", result: "refused"},
+		{name: "push confirm revocations", pattern: "POST /api/push/confirm-revocations", server: pushAdminSrv, person: true, header: pushAdmin,
+			method: "POST", path: "/api/push/confirm-revocations",
+			action: "push.confirm-revocations", target: "push", user: "user:akhan", source: "hmi", result: "ok", after: map[string]any{"ended": 0}},
+		{name: "push confirm revocations with no credential", pattern: "POST /api/push/confirm-revocations", server: pushAdminSrv, person: true,
+			method: "POST", path: "/api/push/confirm-revocations",
+			action: "push.confirm-revocations", target: "", user: "anonymous", source: "api", result: "refused"},
 		{name: "push subscribe", pattern: "POST /api/push/subscribe", server: pushSrv, person: true, header: pushAs,
 			method: "POST", path: "/api/push/subscribe", body: pushBody,
 			action: "push.subscribe", target: "push:" + pushID, user: "user:jsmith", source: "hmi", result: "ok"},
