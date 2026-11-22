@@ -91,16 +91,63 @@ namespace Tiad
                 int k = Keyword(text, i, e - i);
                 if (k >= 0)
                 {
-                    int n = e;
-                    while (n < text.Length && Space(text[n])) n++;
-                    string name = n > e ? Name(text, n) : null;
+                    int n = Gap(text, e);
+                    // A quoted name may follow the keyword directly; a bare
+                    // one needs a gap.
+                    string name = n < text.Length && (n > e || text[n] == '"') ? Name(text, n) : null;
                     // A bare keyword is the next header, not a name.
                     if (name != null && text[n] != '"' && Keyword(text, n, name.Length) >= 0) name = null;
                     if (name != null) found.Add(new Declared { Kind = HeadKinds[k], Name = name });
                 }
                 i = e;
             }
+            // A data type needs its END_TYPE: without one, TYPE was a word
+            // in prose ("the type of pump"), not a header.
+            if (!HasWord(text, "END_TYPE")) found.RemoveAll(delegate(Declared d) { return d.Kind == "UDT"; });
             return found;
+        }
+
+        // Gap skips white space and comments ((* *), /* */, // to the line's
+        // end) from text[i] and returns where the next token starts.
+        static int Gap(string text, int i)
+        {
+            while (i < text.Length)
+            {
+                if (Space(text[i]))
+                {
+                    i++;
+                    continue;
+                }
+                string close = null;
+                if (i + 1 < text.Length && text[i] == '(' && text[i + 1] == '*') close = "*)";
+                else if (i + 1 < text.Length && text[i] == '/' && text[i + 1] == '*') close = "*/";
+                if (close != null)
+                {
+                    int end = text.IndexOf(close, i + 2, StringComparison.Ordinal);
+                    i = end < 0 ? text.Length : end + 2;
+                    continue;
+                }
+                if (i + 1 < text.Length && text[i] == '/' && text[i + 1] == '/')
+                {
+                    while (i < text.Length && text[i] != '\n' && text[i] != '\r') i++;
+                    continue;
+                }
+                break;
+            }
+            return i;
+        }
+
+        // HasWord is whether word stands in text as a whole word, any case.
+        static bool HasWord(string text, string word)
+        {
+            int at = 0;
+            while ((at = text.IndexOf(word, at, StringComparison.OrdinalIgnoreCase)) >= 0)
+            {
+                int end = at + word.Length;
+                if ((at == 0 || !Word(text[at - 1])) && (end >= text.Length || !Word(text[end]))) return true;
+                at = end;
+            }
+            return false;
         }
 
         // Keyword is the index of the block keyword that the word of

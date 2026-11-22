@@ -24,24 +24,33 @@ type projectBlock struct {
 	group      string
 }
 
-var headWord = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9_])(ORGANIZATION_BLOCK|FUNCTION_BLOCK|FUNCTION|DATA_BLOCK|TYPE)[\s\x{a0}\x{feff}]+("([^"]+)"|([A-Za-z_][A-Za-z0-9_]*))`)
+var (
+	headWord = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9_])(ORGANIZATION_BLOCK|FUNCTION_BLOCK|FUNCTION|DATA_BLOCK|TYPE)(?:[\s\x{a0}\x{feff}]+([A-Za-z_][A-Za-z0-9_]*)|[\s\x{a0}\x{feff}]*"([^"]+)")`)
+	endType  = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9_])END_TYPE(?:[^A-Za-z0-9_]|$)`)
+)
 
 // declaredBlocks is Ownership.Sources on text: a block keyword anywhere,
-// any case, as a whole word, then any white space (line breaks too) and a
-// name, quoted or bare (a bare keyword is the next header, not a name).
-// The agent also reads every encoding the bytes could be; the fake's
-// sources are UTF-8.
+// any case, as a whole word, then a name: quoted (white space before it
+// optional) or bare after white space (a bare keyword is the next header,
+// not a name). A data type counts only with an END_TYPE in the source.
+// The agent also reads every encoding the bytes could be and skips
+// comments between keyword and name; the fake's sources are plain UTF-8.
 func declaredBlocks(text string) []tiad.Block {
+	hasEndType := endType.MatchString(text)
 	var out []tiad.Block
 	for _, m := range headWord.FindAllStringSubmatch(text, -1) {
 		name := m[3]
 		if name == "" {
-			name = m[4]
+			name = m[2]
 			if _, kw := blockKind[strings.ToUpper(name)]; kw {
 				continue
 			}
 		}
-		out = append(out, tiad.Block{Name: name, Kind: blockKind[strings.ToUpper(m[1])]})
+		kind := blockKind[strings.ToUpper(m[1])]
+		if kind == "UDT" && !hasEndType {
+			continue
+		}
+		out = append(out, tiad.Block{Name: name, Kind: kind})
 	}
 	return out
 }

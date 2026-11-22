@@ -42,6 +42,10 @@ namespace Tiad.Test
             Eq(Heads("REGION calc (* start\nFUNCTION_BLOCK \"Main\"\n// FUNCTION_BLOCK \"InALineComment\"\n"), "FB:Main,FB:InALineComment", "headers in comments count");
             Eq(Heads("FUNCTION_BLOCKX \"No\"\nFUNCTION_BLOCKFUNCTION_BLOCK \"No\"\nFUNCTION_BLOCK\nFUNCTION_BLOCK 1x\nEND_FUNCTION_BLOCK \"No\"\nMY_FUNCTION \"No\"\n"), "", "no header");
             Eq(Heads("FUNCTION_BLOCK \"Pump // not a comment\"\n"), "FB:Pump // not a comment", "a quoted name is kept whole");
+            Eq(Heads("FUNCTION_BLOCK (* c *) \"A\"\nFUNCTION_BLOCK /* c */ B\nFUNCTION_BLOCK // c\n  \"C\"\nFUNCTION_BLOCK\"D\"\nFUNCTION_BLOCK(*x*)E\n"),
+                "FB:A,FB:B,FB:C,FB:D,FB:E", "comments between keyword and name; a quote right after the keyword");
+            Eq(Heads("// the type of pump\nx := 'Type conflict';\n"), "", "TYPE in prose, with no END_TYPE, is no data type");
+            Eq(Heads("type \"R\"\nSTRUCT\nEND_STRUCT;\nend_type\n"), "UDT:R", "a data type with its END_TYPE, any case");
 
             byte[] cp = new byte[] { (byte)'F', (byte)'B', (byte)' ' };
             var utf8 = System.Text.Encoding.UTF8;
