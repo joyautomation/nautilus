@@ -684,10 +684,31 @@ type Server struct {
 	proxies   []netip.Prefix
 	pinMu     sync.Mutex
 	pinRefuse bool // a pin mismatch is journalled (once, until a forward succeeds)
+
+	// pages renders the HTML pages (pages.go): set by New, nil under
+	// NewPlayground.
+	pages pageSet
 }
 
-// New builds a Server over a runtime.
+// New builds a controller's Server over a runtime: every route, and the
+// HTML pages (sign-in, the OIDC hop, a refused confirmation, an alarm's
+// ack link) a browser is sent to.
 func New(rt *runtime.Runtime, opts ...Options) *Server {
+	s := newServer(rt, opts...)
+	s.pages = newHTMLPages()
+	return s
+}
+
+// NewPlayground is New without the HTML pages, for the browser playground
+// (cmd/naut-wasm): a page answers its message as plain text instead. Those
+// pages are reached only through sign-in, OIDC, an ack link or a redundant
+// pair, none of which the playground has, and leaving them out keeps the
+// template engine, and with it about 900 KB, out of its download (pages.go).
+func NewPlayground(rt *runtime.Runtime, opts ...Options) *Server {
+	return newServer(rt, opts...)
+}
+
+func newServer(rt *runtime.Runtime, opts ...Options) *Server {
 	interval := 250 * time.Millisecond
 	resync := defaultResync
 	diag := defaultDiagnostics

@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"errors"
-	"html/template"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -481,16 +480,15 @@ func (s *Server) linkPage(w http.ResponseWriter, status int, d linkPageData) {
 	h.Set("X-Frame-Options", "DENY")
 	h.Set("Referrer-Policy", "same-origin")
 	h.Set("X-Robots-Tag", "noindex, nofollow")
-	w.WriteHeader(status)
 	if d.Home == "" {
 		d.Home = s.ackURL
 	}
-	if err := linkTemplate.Execute(w, d); err != nil {
+	if err := s.writePage(w, status, pageAckLink, d, strings.TrimSpace(d.Title+": "+d.Error)); err != nil {
 		slog.Debug("ack link page", "err", err)
 	}
 }
 
-var linkTemplate = template.Must(template.New("acklink").Parse(`<!doctype html>
+const ackLinkPageHTML = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="same-origin">
 <title>{{.Title}} · nautilus</title>
@@ -526,4 +524,4 @@ p{margin:.75rem 0}
 <p>The link works once, until {{.Expires}}.</p>{{end}}{{end}}
 {{if .Home}}<p><a href="{{.Home}}" rel="noreferrer">Open the HMI</a></p>{{end}}
 </main></body></html>
-`))
+`

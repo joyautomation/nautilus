@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/subtle"
 	"errors"
-	"html/template"
 	"net/http"
 	"net/url"
 	"sort"
@@ -374,7 +373,7 @@ func (s *Server) oidcElevateCallback(w http.ResponseWriter, r *http.Request, sta
 		return
 	}
 	// The binding cookie stays for the second step.
-	oidcHop(w, "Confirmed at "+s.oidc.Provider()+".", oidcElevatedPath+"?t="+url.QueryEscape(t))
+	s.oidcHop(w, "Confirmed at "+s.oidc.Provider()+".", oidcElevatedPath+"?t="+url.QueryEscape(t))
 }
 
 // handleOIDCElevated is GET /auth/oidc/elevated?t=: a confirmation's
@@ -473,15 +472,14 @@ func (s *Server) elevatePage(w http.ResponseWriter, status int, msg, next string
 	h.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'")
 	h.Set("X-Frame-Options", "DENY")
 	h.Set("Referrer-Policy", "no-referrer")
-	w.WriteHeader(status)
-	elevateTemplate.Execute(w, struct{ Error, Next string }{msg, next})
+	s.writePage(w, status, pageElevate, struct{ Error, Next string }{msg, next}, msg)
 }
 
-var elevateTemplate = template.Must(template.New("elevate").Parse(`<!doctype html>
+const elevatePageHTML = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Not confirmed · nautilus</title>
 <style>:root{color-scheme:light dark;font-family:system-ui,sans-serif}body{margin:0;min-height:100vh;display:grid;place-items:center;background:Canvas;color:CanvasText}main{width:min(28rem,100% - 2rem)}h1{font-size:1.25rem}.err{color:#c62828}</style>
 </head><body><main><h1>Not confirmed</h1>
 <p class="err" role="alert">{{.Error}}</p>
 <p><a href="{{.Next}}">Back</a></p></main></body></html>
-`))
+`

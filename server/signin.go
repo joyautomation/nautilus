@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"html/template"
 	"math"
 	"mime"
 	"net/http"
@@ -462,11 +461,10 @@ func (s *Server) signInPage(w http.ResponseWriter, r *http.Request, status int, 
 	// Not no-referrer: under it a browser sends "Origin: null" with the
 	// form's POST, which sign-in refuses.
 	h.Set("Referrer-Policy", "same-origin")
-	w.WriteHeader(status)
-	signInTemplate.Execute(w, d)
+	s.writePage(w, status, pageSignIn, d, strings.TrimSpace(d.Error+" "+d.Notice))
 }
 
-var signInTemplate = template.Must(template.New("signin").Parse(`<!doctype html>
+const signInPageHTML = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Sign in · nautilus</title>
 <style>
@@ -496,4 +494,4 @@ p{margin:.75rem 0;font-size:.9rem}
 </form>{{end}}
 {{if .OIDCStart}}{{if .Form}}<p class="or">or</p>{{end}}<a class="btn" href="{{.OIDCStart}}">Sign in with {{.Provider}}</a>{{end}}
 </main></body></html>
-`))
+`
