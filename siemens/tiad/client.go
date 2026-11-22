@@ -31,6 +31,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -794,12 +795,51 @@ func (s *Session) Software(ctx context.Context, req SoftwareRequest) (SoftwareRe
 	return r, err
 }
 
-// CompileMessage is one compiler message. Object is TIA's path to the
-// offending object; the writer maps it back to a nautilus source line.
+// CompileMessage is one compiler message: a leaf of TIA's message tree.
+// Object is the leaf's own path, and Path its parents, outermost first.
+// For an error in an SCL block, Object is the line in the block's body
+// and the block is the last parent: {Object: "4", Path: ["PLC_1",
+// "Program blocks", "nautilus", "naut_Main (FB1)"]} (TIA V21, #789).
+// Block reads that; the writer maps it back to a nautilus source line.
 type CompileMessage struct {
-	Object   string `json:"object"`
-	Severity string `json:"severity"` // "error" | "warning" | "info"
-	Text     string `json:"text"`
+	Object   string   `json:"object"`
+	Severity string   `json:"severity"` // "error" | "warning" | "info"
+	Text     string   `json:"text"`
+	Path     []string `json:"path,omitempty"`
+}
+
+// Block is the program block a message is about and the line in its body
+// TIA names (1 is the BEGIN line), 0 when it names none. ok is false when
+// no parent is a block ("name (FB1)": OB, FB, FC or DB and a number).
+func (m CompileMessage) Block() (name string, line int, ok bool) {
+	for i := len(m.Path) - 1; i >= 0; i-- {
+		if n, ok := blockLabel(m.Path[i]); ok {
+			if i == len(m.Path)-1 {
+				line, _ = strconv.Atoi(m.Object)
+				if line < 0 {
+					line = 0
+				}
+			}
+			return n, line, true
+		}
+	}
+	return "", 0, false
+}
+
+// blockLabel reads TIA's "naut_Main (FB1)" as "naut_Main".
+func blockLabel(s string) (string, bool) {
+	i := strings.LastIndex(s, " (")
+	if i <= 0 || !strings.HasSuffix(s, ")") {
+		return "", false
+	}
+	name, kind := s[:i], s[i+2:]
+	kind = strings.TrimSuffix(kind, ")")
+	for _, k := range []string{"OB", "FB", "FC", "DB"} {
+		if n, found := strings.CutPrefix(kind, k); found && n != "" && strings.Trim(n, "0123456789") == "" {
+			return name, true
+		}
+	}
+	return "", false
 }
 
 // CompileResult is a compile's outcome.

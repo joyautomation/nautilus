@@ -25,6 +25,9 @@ type progWriter struct {
 	// VAR_INPUT/OUTPUT), which the Web API can read; temps are not.
 	statics map[string]bool
 	temps   []st.VarDecl
+	// lines is the source line (of the parsed ST) of each line written
+	// after BEGIN, in order.
+	lines []int
 }
 
 // elementary maps the IEC elementary types the subset writes. SCL spells
@@ -185,7 +188,7 @@ func (w *writer) program(path string, prog *st.Program) *progWriter {
 		if v.Initial != nil {
 			init = pw.expr(v.Initial, 0)
 		}
-		fmt.Fprintf(&body, "\t#%s := %s;\n", v.Name, init)
+		pw.emit(&body, v.Pos.Line, "\t#%s := %s;\n", v.Name, init)
 	}
 	pw.stmts(&body, prog.Statements, 1)
 	if len(w.diags) > before {
@@ -225,6 +228,7 @@ func (pw *progWriter) stmts(b *strings.Builder, ss []st.Statement, depth int) {
 
 func (pw *progWriter) stmt(b *strings.Builder, s st.Statement, d int) {
 	in := indent(d)
+	at := lineAt(s)
 	switch s := s.(type) {
 	case *st.AssignStmt:
 		target, tt := s.Target, ""
@@ -234,37 +238,37 @@ func (pw *progWriter) stmt(b *strings.Builder, s st.Statement, d int) {
 			tt = pw.typ(&st.IdentExpr{Name: s.Target, Pos: s.Pos})
 			target = pw.ident(target, s.Pos.Line)
 		}
-		fmt.Fprintf(b, "%s%s := %s;\n", in, target, pw.store(s.Value, tt, s.Pos.Line))
+		pw.emit(b, at, "%s%s := %s;\n", in, target, pw.store(s.Value, tt, s.Pos.Line))
 	case *st.IfStmt:
-		fmt.Fprintf(b, "%sIF %s THEN\n", in, pw.expr(s.Condition, 0))
+		pw.emit(b, at, "%sIF %s THEN\n", in, pw.expr(s.Condition, 0))
 		pw.stmts(b, s.Then, d+1)
 		for _, e := range s.ElsIfs {
-			fmt.Fprintf(b, "%sELSIF %s THEN\n", in, pw.expr(e.Condition, 0))
+			pw.emit(b, lineOr(e.Condition, at), "%sELSIF %s THEN\n", in, pw.expr(e.Condition, 0))
 			pw.stmts(b, e.Body, d+1)
 		}
 		if len(s.Else) > 0 {
-			fmt.Fprintf(b, "%sELSE\n", in)
+			pw.emit(b, at, "%sELSE\n", in)
 			pw.stmts(b, s.Else, d+1)
 		}
-		fmt.Fprintf(b, "%sEND_IF;\n", in)
+		pw.emit(b, at, "%sEND_IF;\n", in)
 	case *st.ForStmt:
 		step := ""
 		if s.Step != nil {
 			step = " BY " + pw.expr(s.Step, 0)
 		}
-		fmt.Fprintf(b, "%sFOR %s := %s TO %s%s DO\n", in, pw.ident(s.Variable, s.Pos.Line), pw.expr(s.Start, 0), pw.expr(s.End, 0), step)
+		pw.emit(b, at, "%sFOR %s := %s TO %s%s DO\n", in, pw.ident(s.Variable, s.Pos.Line), pw.expr(s.Start, 0), pw.expr(s.End, 0), step)
 		pw.stmts(b, s.Body, d+1)
-		fmt.Fprintf(b, "%sEND_FOR;\n", in)
+		pw.emit(b, at, "%sEND_FOR;\n", in)
 	case *st.WhileStmt:
-		fmt.Fprintf(b, "%sWHILE %s DO\n", in, pw.expr(s.Condition, 0))
+		pw.emit(b, at, "%sWHILE %s DO\n", in, pw.expr(s.Condition, 0))
 		pw.stmts(b, s.Body, d+1)
-		fmt.Fprintf(b, "%sEND_WHILE;\n", in)
+		pw.emit(b, at, "%sEND_WHILE;\n", in)
 	case *st.RepeatStmt:
-		fmt.Fprintf(b, "%sREPEAT\n", in)
+		pw.emit(b, at, "%sREPEAT\n", in)
 		pw.stmts(b, s.Body, d+1)
-		fmt.Fprintf(b, "%sUNTIL %s\n%sEND_REPEAT;\n", in, pw.expr(s.Condition, 0), in)
+		pw.emit(b, at, "%sUNTIL %s\n%sEND_REPEAT;\n", in, pw.expr(s.Condition, 0), in)
 	case *st.CaseStmt:
-		fmt.Fprintf(b, "%sCASE %s OF\n", in, pw.expr(s.Expression, 0))
+		pw.emit(b, at, "%sCASE %s OF\n", in, pw.expr(s.Expression, 0))
 		for _, c := range s.Cases {
 			var labels []string
 			for _, v := range c.Values {
@@ -273,25 +277,44 @@ func (pw *progWriter) stmt(b *strings.Builder, s st.Statement, d int) {
 			for _, r := range c.Ranges {
 				labels = append(labels, pw.expr(r.Lo, 0)+".."+pw.expr(r.Hi, 0))
 			}
-			fmt.Fprintf(b, "%s\t%s:\n", in, strings.Join(labels, ", "))
+			pw.emit(b, at, "%s\t%s:\n", in, strings.Join(labels, ", "))
 			pw.stmts(b, c.Body, d+2)
 		}
 		if len(s.Else) > 0 {
-			fmt.Fprintf(b, "%s\tELSE\n", in)
+			pw.emit(b, at, "%s\tELSE\n", in)
 			pw.stmts(b, s.Else, d+2)
 		}
-		fmt.Fprintf(b, "%sEND_CASE;\n", in)
+		pw.emit(b, at, "%sEND_CASE;\n", in)
 	case *st.CallStmt:
-		fmt.Fprintf(b, "%s%s;\n", in, pw.call(s.Call, true))
+		pw.emit(b, at, "%s%s;\n", in, pw.call(s.Call, true))
 	case *st.ExitStmt:
-		fmt.Fprintf(b, "%sEXIT;\n", in)
+		pw.emit(b, at, "%sEXIT;\n", in)
 	case *st.ContinueStmt:
-		fmt.Fprintf(b, "%sCONTINUE;\n", in)
+		pw.emit(b, at, "%sCONTINUE;\n", in)
 	case *st.ReturnStmt:
-		fmt.Fprintf(b, "%sRETURN;\n", in)
+		pw.emit(b, at, "%sRETURN;\n", in)
 	default:
 		pw.diag("siemens/statement", lineAt(s), fmt.Sprintf("statement %T is not in the first subset", s))
 	}
+}
+
+// emit writes one or more body lines, each from source line at (in the
+// ST the writer parsed): the line map a TIA compile message is read back
+// through (Output.Locate).
+func (pw *progWriter) emit(b *strings.Builder, at int, format string, a ...any) {
+	text := fmt.Sprintf(format, a...)
+	b.WriteString(text)
+	for range strings.Count(text, "\n") {
+		pw.lines = append(pw.lines, at)
+	}
+}
+
+// lineOr is n's line, or or when it has none.
+func lineOr(n any, or int) int {
+	if l := lineAt(n); l > 0 {
+		return l
+	}
+	return or
 }
 
 func lineAt(n any) int {

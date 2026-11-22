@@ -1331,22 +1331,26 @@ namespace Tiad.Openness
                     Errors = r.ErrorCount,
                     Warnings = r.WarningCount,
                 };
-                AddMessages(res.Messages, r.Messages);
+                AddMessages(res.Messages, r.Messages, new List<string>());
                 return res;
             });
         }
 
-        // AddMessages collects the leaves of TIA's message tree.
-        static void AddMessages(List<CompileMessage> into, CompilerResultMessageComposition ms)
+        // AddMessages collects the leaves of TIA's message tree, each with
+        // the paths of its parents: an SCL error's leaf names only the line
+        // in the block's body, and the block is a parent.
+        static void AddMessages(List<CompileMessage> into, CompilerResultMessageComposition ms, List<string> parents)
         {
             foreach (CompilerResultMessage m in ms)
             {
                 if (m.Messages.Count > 0)
                 {
-                    AddMessages(into, m.Messages);
+                    var below = new List<string>(parents);
+                    below.Add(m.Path ?? "");
+                    AddMessages(into, m.Messages, below);
                     continue;
                 }
-                into.Add(new CompileMessage { Object = m.Path ?? "", Severity = TiaNames.Severity(m.State.ToString()), Text = m.Description ?? "" });
+                into.Add(new CompileMessage { Object = m.Path ?? "", Severity = TiaNames.Severity(m.State.ToString()), Text = m.Description ?? "", Path = new List<string>(parents) });
             }
         }
 

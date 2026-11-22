@@ -537,3 +537,139 @@ func TestPrefixedNamesStillCollide(t *testing.T) {
 		t.Fatalf("%v %v", diags, err)
 	}
 }
+
+// tiaLine is the line TIA's compiler names for the generated line holding
+// want in file: 1 is the BEGIN line (measured on TIA V21, #789).
+func tiaLine(t *testing.T, out Output, file, want string) int {
+	t.Helper()
+	for _, f := range out.Files {
+		if f.Path != file {
+			continue
+		}
+		begin := 0
+		for i, l := range strings.Split(string(f.Data), "\n") {
+			if l == "BEGIN" {
+				begin = i + 1
+			}
+			if begin > 0 && strings.Contains(l, want) {
+				return i + 1 - begin + 1
+			}
+		}
+	}
+	t.Fatalf("%q not after BEGIN in %s", want, file)
+	return 0
+}
+
+// TestLocateMapsACompileMessageToTheSourceLine: a TIA compile message
+// names a block and a line in its body; Locate answers the nautilus file
+// and line it came from, through nested statements and temps.
+func TestLocateMapsACompileMessageToTheSourceLine(t *testing.T) {
+	src := "PROGRAM Main\nVAR\n  n : DINT;\n  on : BOOL;\nEND_VAR\nVAR_TEMP\n  k : DINT := 3;\nEND_VAR\nn := n + 1;\n\nIF on THEN\n  n := 0;\nELSIF n > 10 THEN\n  on := TRUE;\nEND_IF;\nCASE n OF\n  1: on := FALSE;\nEND_CASE;\n"
+	src += "END_PROGRAM\n"
+	out, diags, err := Write(Input{Programs: []Program{{Path: "/p/main.st", Source: src}}, BlockPrefix: "naut_"})
+	if err != nil || len(diags) > 0 {
+		t.Fatal(err, diags)
+	}
+	for _, c := range []struct {
+		scl  string
+		line int
+	}{
+		{"#k := 3;", 7},
+		{"#n := 0;", 12},
+		{"ELSIF", 13},
+		{"#on := TRUE;", 14},
+		{"END_IF;", 11},
+		{"#on := FALSE;", 17},
+	} {
+		l := tiaLine(t, out, "naut_Main.scl", c.scl)
+		file, got, ok := out.Locate("naut_Main", l)
+		if !ok || file != "/p/main.st" || got != c.line {
+			t.Errorf("%s (TIA line %d): got %s:%d ok=%v, want /p/main.st:%d", c.scl, l, file, got, ok, c.line)
+		}
+	}
+	// TIA's names are case-insensitive; the BEGIN line and a line past
+	// the body have no source line; other blocks map to their file.
+	if f, l, ok := out.Locate("NAUT_MAIN", 1); !ok || f != "/p/main.st" || l != 0 {
+		t.Errorf("BEGIN line: %s:%d %v", f, l, ok)
+	}
+	if _, l, ok := out.Locate("naut_Main", 999); !ok || l != 0 {
+		t.Errorf("past the body: %d %v", l, ok)
+	}
+	if f, _, ok := out.Locate("naut_Main_DB", 2); !ok || f != "/p/main.st" {
+		t.Errorf("instance DB: %s %v", f, ok)
+	}
+	if f, _, ok := out.Locate("naut_OB_main", 2); ok || f != "" {
+		t.Errorf("no task: %s %v", f, ok)
+	}
+	if _, _, ok := out.Locate("Main", 2); ok {
+		t.Error("TIA's own Main [OB1] is not a generated block")
+	}
+}
+
+// TestLocateGoesBackToTheLadderLine: for a ladder program the line is the
+// ladder's, through the LD → FBD → ST lowering.
+func TestLocateGoesBackToTheLadderLine(t *testing.T) {
+	src := "PROGRAM L\nVAR\n    a : REAL;\n    Run : BOOL;\n    Out : BOOL;\nEND_VAR\nLD\n  RUNG first\n    Run ( Out )\n\n  // a note above the rung\n  RUNG second\n    GT(a, 1.0) ( Run )\nEND_LD\nEND_PROGRAM\n"
+	out, diags, err := Write(Input{Programs: []Program{{Path: "l.ld", Source: src}}})
+	if err != nil || len(diags) > 0 {
+		t.Fatal(err, diags)
+	}
+	l := tiaLine(t, out, "L.scl", "#Run := #a > 1.0;")
+	file, got, ok := out.Locate("L", l)
+	if !ok || file != "l.ld" || (got != 12 && got != 13) {
+		t.Fatalf("got %s:%d %v, want l.ld:12-13 (rung second)", file, got, ok)
+	}
+	stSrc, _, _ := toST(Program{Path: "l.ld", Source: src})
+	for i, s := range strings.Split(stSrc, "\n") {
+		if strings.Contains(s, "> 1.0") && i+1 == got {
+			t.Fatalf("the ST line is also %d, so this test cannot tell a mapped line from an unmapped one", got)
+		}
+	}
+}
+
+// TestLineMapCoversTheWholeBody: every line between BEGIN and
+// END_FUNCTION_BLOCK has its entry, so no body write slips past the map
+// and shifts the lines after it.
+func TestLineMapCoversTheWholeBody(t *testing.T) {
+	src, err := os.ReadFile("../../logix/writer/testdata/demoline.ld")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stSrc := "PROGRAM Main\nVAR\n  n : DINT;\n  on : BOOL;\n  t : TON;\nEND_VAR\nVAR_TEMP\n  k : DINT := 3;\nEND_VAR\nt(IN := on, PT := T#1s);\nFOR n := 1 TO 3 DO\n  k := k + n;\nEND_FOR;\nWHILE n > 0 DO\n  n := n - 1;\nEND_WHILE;\nREPEAT\n  n := n + 1;\nUNTIL n > 2\nEND_REPEAT;\nCASE n OF\n  1: on := TRUE;\n  2, 3: on := FALSE;\nELSE\n  on := t.Q;\nEND_CASE;\nEND_PROGRAM\n"
+	for _, p := range []Program{{Path: "demoline.ld", Source: string(src)}, {Path: "main.st", Source: stSrc}} {
+		out, diags, err := Write(Input{Programs: []Program{p}})
+		if err != nil || len(diags) > 0 {
+			t.Fatal(p.Path, err, diags)
+		}
+		for _, f := range out.Files {
+			if !strings.HasSuffix(f.Path, ".scl") || strings.Contains(string(f.Data), "ORGANIZATION_BLOCK") {
+				continue
+			}
+			text := string(f.Data)
+			body := text[strings.Index(text, "\nBEGIN\n")+len("\nBEGIN\n") : strings.Index(text, "END_FUNCTION_BLOCK")]
+			src := out.Sources[f.Path]
+			if n := strings.Count(body, "\n"); n != len(src.Body) {
+				t.Fatalf("%s: %d body lines, %d in the map", f.Path, n, len(src.Body))
+			}
+			for i, l := range src.Body {
+				if l <= 0 {
+					t.Errorf("%s: body line %d has no source line", f.Path, i+2)
+				}
+			}
+		}
+	}
+}
+
+// TestMapLineNeverGuesses: a lowered line outside the map has no
+// original line (0), never itself, which would name a wrong ladder line.
+func TestMapLineNeverGuesses(t *testing.T) {
+	m := []int{3, 3, 7}
+	for _, c := range [][2]int{{1, 3}, {3, 7}, {0, 0}, {4, 0}, {-1, 0}} {
+		if got := mapLine(m, c[0]); got != c[1] {
+			t.Errorf("mapLine(%d) = %d, want %d", c[0], got, c[1])
+		}
+	}
+	if mapLine(nil, 5) != 5 {
+		t.Error("ST has no map: its line is its own")
+	}
+}

@@ -756,7 +756,7 @@ namespace Tiad.Fake
                 res.Warnings = cr.Int("warnings");
                 foreach (var m in cr.Children("messages"))
                 {
-                    res.Messages.Add(new CompileMessage { Object = m.Str("object"), Severity = m.Str("severity"), Text = m.Str("text") });
+                    res.Messages.Add(new CompileMessage { Object = m.Str("object"), Severity = m.Str("severity"), Text = m.Str("text"), Path = m.Strs("path") });
                 }
             }
             var d = new Dictionary<string, int>(StringComparer.Ordinal);
