@@ -50,6 +50,16 @@ func rules(u universe) []rule {
 			why:  "only leader (which adapts it to leader.Elector) and the CLI (naut witness) know the vote protocol",
 		},
 		{
+			from: []string{"internal/floatip"},
+			to:   u.allBut(),
+			why:  "the floating address is a leaf: it is given the write gate as a func and knows no election",
+		},
+		{
+			from: u.allBut("internal/project", "cmd", "internal/floatip"),
+			to:   []string{"internal/floatip"},
+			why:  "only the manifest and the CLI use the floating address",
+		},
+		{
 			from: []string{"internal/fence"},
 			to:   u.allBut("io"),
 			why:  "the send fence is a seam: drivers use it, and it knows only io (the pair's gate arrives as io.SendGate)",

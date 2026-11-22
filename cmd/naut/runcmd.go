@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"net"
 	"os"
 	"os/exec"
@@ -26,6 +27,7 @@ import (
 	"os/user"
 	"path"
 	"path/filepath"
+	goruntime "runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -42,6 +44,7 @@ import (
 	"github.com/joyautomation/nautilus/auth"
 	"github.com/joyautomation/nautilus/auth/users"
 	"github.com/joyautomation/nautilus/devprofile"
+	"github.com/joyautomation/nautilus/internal/floatip"
 	"github.com/joyautomation/nautilus/internal/lsp"
 	"github.com/joyautomation/nautilus/internal/project"
 	"github.com/joyautomation/nautilus/internal/vcs"
@@ -463,6 +466,13 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 		<-elDone
 		gate.Release()
 	}()
+	// The pair's floating address (#716): held while the gate is open. It is
+	// registered after the election's own stop, so on the way out it runs
+	// first: the watcher stops, the address is dropped, and only then does
+	// gate.Release hand the lease to the other controller.
+	if stop := startFloatingIP(proj, gate, floatip.System{}); stop != nil {
+		defer stop()
+	}
 	// Drivers with their own polling loop (eip, sparkplug-host, modbus)
 	// start here, after the elector's first decision.
 	if stop := startDriverWhenDecided(ctx, dec, firstDecisionTimeout, proj.Runtime.Driver); stop != nil {
@@ -2032,5 +2042,53 @@ func cachedServiceLevel(f func() byte, ttl time.Duration, now func() time.Time) 
 			last, at, have = f(), t, true
 		}
 		return last
+	}
+}
+
+// floatingIPTick is how often the holder looks at the gate. The gate closes
+// the fence margin (d_net + m_send, 70 ms at the default lease; checkFence
+// allows as little as a couple of ms) before the lease ends and the other
+// controller cannot lead before that; the address goes within a tick of the
+// gate (plus a drop in flight), and anything the kernel keeps after a kill
+// is client routing only, because field writes are fenced by the gate.
+const floatingIPTick = 5 * time.Millisecond
+
+// startFloatingIP holds redundancy.floating-ip on this controller while the
+// write gate (g, the elector) is open: added after it opens, dropped when it
+// closes. The returned stop ends the watcher and then drops the address, for
+// an orderly stop to call before it releases the lease. Nil without the key.
+func startFloatingIP(proj *project.Project, g interface{ IsLeader() bool }, ops floatip.Ops) (stop func()) {
+	if proj.Redundancy == nil || proj.Redundancy.FloatingIP == nil || !proj.Redundancy.Pair() {
+		return nil
+	}
+	if _, off := ops.(floatip.System); off && goruntime.GOOS != "linux" {
+		fmt.Fprintln(os.Stderr, "naut run: redundancy.floating-ip needs Linux; the address is not held on this system")
+		return nil
+	}
+	fc, err := floatip.Parse(proj.Redundancy.FloatingIP.Address, proj.Redundancy.FloatingIP.Interface)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "naut run: redundancy.floating-ip:", err)
+		return nil
+	}
+	h := floatip.New(fc, ops)
+	h.Log = func(msg string, args ...any) { slog.Warn("redundancy: "+msg, args...) }
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { h.Watch(ctx, g.IsLeader, floatingIPTick); close(done) }()
+	return func() {
+		cancel()
+		<-done
+		var err error
+		for i := 0; i < 3; i++ {
+			if err = h.Drop(); err == nil {
+				break
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+		if err != nil {
+			slog.Error("redundancy: the floating IP could not be dropped before the lease was released; remove it by hand (ip addr del) or let the unit's ExecStopPost do it", "err", err)
+		} else {
+			slog.Info("redundancy: floating IP dropped", "address", fc.Address)
+		}
 	}
 }
