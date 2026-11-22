@@ -7,5 +7,6 @@
 # after the server's pages seam (#1239 C1a): 8,017,522 in CI (7,978,007 on mira1).
 # after the controller route groups move to server.New only (#1239 C1b): 7,860,120 in CI
 # (7,819,191 local; CI reads about 0.5% above a local build).
-# v0.22.0 was 7.27 MB; the target is that plus ~5%.
-7939000
+# after the net/http client, TLS and HTTP/2 leave it (#1239 C3): 6,666,979 local.
+# v0.22.0 was 7.27 MB; the target was that plus ~5%, and this is under it.
+6770000

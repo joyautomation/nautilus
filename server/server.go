@@ -692,8 +692,11 @@ type Server struct {
 	// check of the forced tags and its clearing of them.
 	unforceAllChecked func()
 
-	tls       *CertSource
-	leaderTLS *http.Transport // forwards to the leader over TLS, pinned
+	tls *CertSource
+	// leaderTLS forwards to the leader over TLS, pinned. An interface for the
+	// same reason as pushService.sender: a concrete *http.Transport in Server's
+	// fields keeps its methods, and crypto/tls with them, in the wasm.
+	leaderTLS leaderTransport
 	// tlsPin is the leaf last said served (noteTLSChange).
 	tlsMu     sync.Mutex
 	tlsPin    [32]byte
@@ -704,6 +707,11 @@ type Server struct {
 	// pages renders the HTML pages (pages.go): set by New, nil under
 	// NewPlayground.
 	pages pageSet
+	// standby wraps the routes so a standby replica forwards to the leader
+	// (proxyStandby): set by New, nil under NewPlayground, which has no
+	// cluster, so the forwarding code and its reverse proxy stay out of the
+	// browser build.
+	standby func(routes *http.ServeMux, next http.Handler) http.Handler
 }
 
 // New builds a controller's Server over a runtime: every route, and the
@@ -714,6 +722,13 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 	s.pages = controllerPages()
 	// the controller's routes, then any the caller lists (mounts_controller.go)
 	s.mounts = append(controllerMounts(), s.mounts...)
+	if len(opts) > 0 && opts[0].TLS != nil {
+		s.wireTLS(opts[0].TLS)
+	}
+	if len(opts) > 0 {
+		s.wirePush(rt, opts[0].Push)
+	}
+	s.standby = s.proxyStandby
 	return s
 }
 
@@ -777,14 +792,6 @@ func newServer(rt *runtime.Runtime, opts ...Options) *Server {
 		s.sourcesAt = opts[0].SourcesAt
 		s.io = opts[0].IO
 		s.paramWB = opts[0].ParamWriteBack
-		if po := opts[0].Push; po != nil && po.Key != nil {
-			if ps, err := newPushService(s, po); err == nil {
-				s.push, s.pushKey = ps, po.Key.Public()
-				rt.SetPush(ps)
-			} else {
-				slog.Error("push: not started", "error", err)
-			}
-		}
 		s.params = opts[0].Params
 		s.hmi = opts[0].HMI
 		s.alarms = opts[0].Alarms
@@ -830,18 +837,6 @@ func newServer(rt *runtime.Runtime, opts ...Options) *Server {
 		s.policy = opts[0].Auth
 		s.proxies = opts[0].TrustedProxies
 		s.leaderURLs = opts[0].LeaderURLs
-		if c := opts[0].TLS; c != nil {
-			s.tls, s.leaderTLS = c, c.leaderTransport()
-			c.OnReload(s.journalTLSReload)
-			s.tlsPin, _ = c.current()
-			// A connection to the leader was verified against the leaves
-			// accepted then; when they change, make it again. A change of
-			// the leaf served is said and journalled (tls.changed).
-			c.OnPinsChange(func() {
-				s.leaderTLS.CloseIdleConnections()
-				s.noteTLSChange()
-			})
-		}
 		for name, secret := range opts[0].ServiceTokens {
 			if secret == "" {
 				continue // an empty secret must never match an empty credential
@@ -1048,7 +1043,11 @@ func (s *Server) Handler() http.Handler {
 	for _, m := range s.mounts {
 		m(s, mux)
 	}
-	return s.GuardHost(s.withCORS(s.proxyStandby(mux, apiNotFound(mux))))
+	var h http.Handler = apiNotFound(mux)
+	if s.standby != nil {
+		h = s.standby(mux, h)
+	}
+	return s.GuardHost(s.withCORS(h))
 }
 
 // apiNotFound makes every /api/ path no API route matches a JSON 404,
@@ -1066,6 +1065,46 @@ func apiNotFound(mux *http.ServeMux) http.Handler {
 			}
 		}
 		mux.ServeHTTP(w, r)
+	})
+}
+
+// wirePush starts Web Push when the controller has a VAPID key (#722). Only
+// New calls it, so the sender and its HTTP client stay out of the browser
+// build; the push routes are mounted only by New as well (mountPush).
+func (s *Server) wirePush(rt *runtime.Runtime, po *PushOptions) {
+	if po == nil || po.Key == nil {
+		return
+	}
+	ps, err := newPushService(s, po)
+	if err != nil {
+		slog.Error("push: not started", "error", err)
+		return
+	}
+	s.push, s.pushKey = ps, po.Key.Public()
+	rt.SetPush(ps)
+}
+
+// leaderTransport is the transport a standby forwards with.
+type leaderTransport interface {
+	http.RoundTripper
+	CloseIdleConnections()
+}
+
+// wireTLS puts the controller's certificate source in service: the leader
+// transport a standby dials with, and the journal entries for a reload or a
+// change of the leaf. Only New calls it (NewPlayground serves no TLS and no
+// standby), which keeps crypto/tls, HTTP/2 and the client transport out of
+// the browser build.
+func (s *Server) wireTLS(c *CertSource) {
+	s.tls, s.leaderTLS = c, c.leaderTransport()
+	c.OnReload(s.journalTLSReload)
+	s.tlsPin, _ = c.current()
+	// A connection to the leader was verified against the leaves
+	// accepted then; when they change, make it again. A change of
+	// the leaf served is said and journalled (tls.changed).
+	c.OnPinsChange(func() {
+		s.leaderTLS.CloseIdleConnections()
+		s.noteTLSChange()
 	})
 }
 

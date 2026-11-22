@@ -17,9 +17,9 @@ func TestPeerTLSWireIsBounded(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer n.Close()
-	w, ok := n.client.Transport.(tlsWire)
+	w, ok := n.client.(*http.Client).Transport.(tlsWire)
 	if !ok {
-		t.Fatalf("the log's transport is %T, want tlsWire", n.client.Transport)
+		t.Fatalf("the log's transport is %T, want tlsWire", n.client.(*http.Client).Transport)
 	}
 	tr := w.rt.(*http.Transport)
 	if tr.TLSClientConfig == nil || tr.TLSHandshakeTimeout <= 0 || tr.DialContext == nil || tr.Proxy != nil {

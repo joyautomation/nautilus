@@ -162,6 +162,51 @@ func TestWasmLinksNoControllerRoutes(t *testing.T) {
 	}
 }
 
+// wasmNoClient are function-name prefixes of net/http's client, its transport
+// and TLS, and of the reverse proxy: a browser reaches the network through
+// fetch, and linking them costs over a megabyte gzipped (#1239 C3). Linking is by type, not by call: the linker keeps the
+// methods of a type that is in a struct field of anything converted to an
+// interface, so a concrete *http.Client, *http.Transport or *webpush.Sender
+// field in a type the playground reaches (Server, the oplog Node, the
+// elector, the alarm engine's notifiers) brings the whole stack. Hold such a
+// thing behind an interface (server.pushSender, leaderTransport,
+// oplog.peerClient, leader.apiClient), or in a !js file.
+var wasmNoClient = []string{
+	"net_http.__Client_.",
+	"net_http.__Transport_.",
+	"crypto_tls.__Conn_.",
+	"crypto_tls.__Config_.",
+	"net_http_httputil.__ReverseProxy_.",
+}
+
+func TestWasmLinksNoHTTPClientOrTLS(t *testing.T) {
+	names := builtWasmNames(t)
+	// the spelling check: this prefix must exist, or the ones below would
+	// pass without matching anything
+	sentinel := false
+	for _, f := range names {
+		sentinel = sentinel || strings.HasPrefix(f, "net_http.__ServeMux_.")
+	}
+	if !sentinel {
+		t.Fatal("no net_http.(*ServeMux) method in the wasm's names: the name section's spelling changed; fix the prefixes here")
+	}
+	for _, prefix := range wasmNoClient {
+		n, first := 0, ""
+		for _, f := range names {
+			if strings.HasPrefix(f, prefix) {
+				if n == 0 {
+					first = f
+				}
+				n++
+			}
+		}
+		if n > 0 {
+			t.Errorf("cmd/naut-wasm links %d functions under %s (first %s): net/http's client, TLS or the reverse proxy is reachable from the playground. "+
+				"See wasmNoClient above for how to hold it behind an interface", n, prefix, first)
+		}
+	}
+}
+
 // wasmFuncNames reads the function names of a wasm module's "name" custom
 // section (subsection 1).
 func wasmFuncNames(b []byte) ([]string, error) {
