@@ -31,7 +31,7 @@ const (
 	// (AllBlocksDownload, acting) load; user-management
 	// (UserManagementDownload) keeps the CPU's online users (passive), only
 	// when the spec's accessControl is keep, or, on a hardware load, resets
-	// them to the project's (acting), only under CheckUserManagementReset;
+	// them to the project's (acting), only under CheckReset;
 	// identification-data (LoadIdentificationData) loads nothing (passive).
 	QuestionAlarmTexts         = "alarm-texts"
 	QuestionAllBlocks          = "all-blocks"
@@ -93,8 +93,9 @@ type Decisions struct {
 	// DownloadAllUserManagementDataResetToProject: "Delete user management
 	// data and disable access control in runtime" when the project has
 	// access control off). It acts, and the agent accepts it only under
-	// CheckUserManagementReset. It and UserManagementKeepOnline are never
-	// both yes.
+	// CheckReset, and by the logon route only once the download logged
+	// on (ResetGate.At). It and UserManagementKeepOnline are never both
+	// yes.
 	UserManagementResetToProject *bool `json:"userManagementResetToProject,omitempty"`
 	// IdentificationDataLoadNothing answers QuestionIdentificationData:
 	// load no identification data.
@@ -217,8 +218,9 @@ type DownloadRequest struct {
 //
 // CPUAccessControl is the operator's statement of the CPU's access control
 // as it is now: AttestCPUAccessDisabled, AttestCPUAccessEnabled or ""
-// (unset). A user-management reset can rest on "disabled"
-// (CheckUserManagementReset).
+// (unset). A user-management reset rests on "disabled" (the attestation
+// route) or "enabled" (the logon route, which needs tiad logged on to the
+// CPU in the download); CheckReset.
 type Attestation struct {
 	By               string `json:"by"`
 	Text             string `json:"text"`
@@ -341,8 +343,8 @@ type DownloadResult struct {
 	Attestation *AttestationRecord `json:"attestation,omitempty"`
 	// UserManagementReset is set when tiad answered TIA's user-management
 	// check by resetting it to the project's: the route that let it,
-	// ResetRouteUpload or ResetRouteAttestation. Keep it in the deploy
-	// record.
+	// ResetRouteUpload, ResetRouteAttestation or ResetRouteLogon. Keep it
+	// in the deploy record.
 	UserManagementReset string `json:"userManagementReset,omitempty"`
 	// Messages is TIA's download result's messages, when it has any.
 	Messages string `json:"messages,omitempty"`
@@ -526,43 +528,80 @@ func validCPUAccess(s string) bool {
 
 func isYes(b *bool) bool { return b != nil && *b }
 
-// ProjectAccessDisabled is TIA's PlcAccessControlConfiguration name for
-// access control off, exactly.
-const ProjectAccessDisabled = "Disabled"
+// ProjectAccessDisabled and ProjectAccessEnabled are TIA's
+// PlcAccessControlConfiguration names for access control off, and on with
+// users (what cpu.accessControl fullAccessUser sets), exactly.
+const (
+	ProjectAccessDisabled = "Disabled"
+	ProjectAccessEnabled  = "EnabledWithAccessControl"
+)
 
-// The routes that show a CPU's access control is off
-// (DownloadResult.UserManagementReset).
+// The routes that let a user-management reset
+// (DownloadResult.UserManagementReset): the CPU's access control shown off
+// (upload, attestation), or tiad logged on to it (logon).
 const (
 	ResetRouteUpload      = "upload"
 	ResetRouteAttestation = "attestation"
+	ResetRouteLogon       = "logon"
 )
 
-// ResetGate is CheckUserManagementReset's verdict. Its zero value refuses:
-// a download that never checked cannot reset.
+// ResetGate is CheckReset's verdict. Its zero value refuses: a download
+// that never checked cannot reset. A gate allowed by the logon route still
+// needs At, when TIA asks.
 type ResetGate struct {
 	Allowed bool
 	Why     string
 	Route   string
 }
 
-// UploadRouteEnabled turns CheckUserManagementReset's upload route on. It
-// is off (naut-lead, 2026-11-21): that an upload brings a CPU's access
-// control into the project is proven only for the bench's Disabled CPU.
-// Turn it on, here and in the agent's UserManagementRule.UploadRouteEnabled,
-// only with a bench upload of a CPU with access control on that reads back
-// as not Disabled.
+// At is the verdict when TIA asks its user-management check: loggedOn is
+// whether this download logged on to the CPU as "nautilus" and nothing was
+// refused since (the agent's LoginUse.LoggedOn); credentialsAsked whether
+// TIA asked credentials in it at all, answered or not
+// (LoginUse.CredentialsAsked). The logon route needs the logon; the others
+// rest on the CPU's access control being off, which a CPU that asked
+// credentials contradicts, whatever tiad answered.
+func (g ResetGate) At(loggedOn, credentialsAsked bool) ResetGate {
+	switch {
+	case !g.Allowed:
+		return g
+	case g.Route == ResetRouteLogon && !loggedOn:
+		return ResetGate{Why: resetRefused + ResetNoLogon}
+	case g.Route != ResetRouteLogon && (loggedOn || credentialsAsked):
+		return ResetGate{Why: resetRefused + "the CPU asked credentials in this download, so its access control is on, but the " + g.Route + " route rests on it being off: if it is on, attest \"enabled\" (the logon route)"}
+	}
+	return g
+}
+
+// UploadRouteEnabled turns CheckReset's upload route on. It is off
+// (naut-lead, 2026-11-21): that an upload brings a CPU's access control
+// into the project is proven only for the bench's Disabled CPU. Turn it
+// on, here and in the agent's UserManagementRule.UploadRouteEnabled, only
+// with a bench upload of a CPU with access control on that reads back as
+// not Disabled.
 const UploadRouteEnabled = false
 
 const (
 	resetRefused   = "decisions.userManagementResetToProject (delete the CPU's user management data and set its access control as the project has it) is refused: "
 	uploadRouteWhy = "the upload route is not yet available: that an upload brings a CPU's access control into the project is unproven until a bench upload of a CPU with access control on shows it"
+	// ResetNoLogon, ResetNoPassword and ResetPasswordNotRecorded are the
+	// agent's refusals of the logon route and of tiad's user.
+	ResetNoLogon             = `the logon route (attestation.cpuAccessControl "enabled") needs tiad logged on to the CPU as "nautilus" in this download before TIA asked, and it was not (the CPU asked no credentials, or tiad's answer was refused), so nothing shows tiad holds the CPU's Full access: if this agent's TIA instance went online to the CPU before, close every session (the agent then retires the instance) and download again; if the CPU's access control is off, attest "disabled"`
+	ResetNoPassword          = `the logon route (attestation.cpuAccessControl "enabled") logs on to the CPU as "nautilus", and the request carries no secrets.fullAccessPassword`
+	ResetRecordOnly          = `an apply on this session recorded secrets.fullAccessPassword as the user "nautilus"'s password without setting it (fullAccessRecordOnly), so tiad cannot show the project's user holds it: a reset to it could leave the CPU with a password this download cannot log on with, locking tiad out; apply on a session that sets the password`
+	ResetPasswordNotRecorded = `the request's secrets.fullAccessPassword is not the password tiad set or recorded for the project's user "nautilus": after the reset the CPU's Full access user would have a password this download cannot log on with`
 )
 
 func resetRoutes(uploadRoute bool) string {
+	s := `tiad resets it only on a hardware download, to a project whose access control is Disabled under cpu.accessControl keep, or one whose user "nautilus" this session made (cpu.accessControl fullAccessUser, secrets.fullAccessPassword its recorded password), with attestation.cpuAccessControl "disabled"`
 	if uploadRoute {
-		return `tiad resets it only on a hardware download, with cpu.accessControl keep, a project whose access control is Disabled, and either an upload from this CPU in this session or attestation.cpuAccessControl "disabled"`
+		s += " or an upload from this CPU in this session (to a Disabled project)"
 	}
-	return `tiad resets it only on a hardware download, with cpu.accessControl keep, a project whose access control is Disabled, and attestation.cpuAccessControl "disabled" (` + uploadRouteWhy + ")"
+	s += `, or "enabled" with tiad logged on as "nautilus" in the download`
+	if !uploadRoute {
+		s += " (" + uploadRouteWhy + ")"
+	}
+	return s
 }
 
 // UserManagementResetQuestion is the question a refused reset lists.
@@ -570,35 +609,80 @@ func UserManagementResetQuestion(why string) Question {
 	return Question{ID: QuestionUserManagement, Message: why, Detail: "UserManagementDownload"}
 }
 
-// CheckUserManagementReset is the agent's UserManagementRule.Check: when
-// tiad may answer TIA's user-management check by resetting the CPU's user
-// management to the project's. A hardware load asks it, TIA refuses keep
-// there, and its reset deletes the CPU's users and sets its access
-// control as the project has it (#789 stage 4). It is let only when that
-// changes nothing that protects the CPU: r loads hardware,
-// accessControlKept (the spec keeps access control and no apply on the
-// session set it), the project's access control (projectAccess, read
-// only once the rest holds; ok false when it could not be read) is
-// exactly Disabled, and the CPU's is shown off: this session uploaded
-// from r.Address (uploadedFrom; only when uploadRoute, UploadRouteEnabled
-// for the agent), or the attestation says "disabled". An attestation that
-// says "enabled" refuses whatever else holds.
+// ResetFacts is what a session shows CheckReset (the agent's
+// UserManagementRule.Facts). AccessControlKept is whether the session's
+// spec keeps access control and no apply on it ever set it;
+// FullAccessUserSet whether its spec is fullAccessUser and an apply on
+// this session set it; UploadedFrom the address this session last
+// uploaded from ("" for none); UploadRoute whether the upload route counts
+// (UploadRouteEnabled). ProjectAccess reads the project's access control
+// (ok false when it could not be read) and PasswordRecorded whether the
+// project's record of the user "nautilus" is of the request's password (ok
+// false: unreadable); each is asked only once everything cheaper holds,
+// PasswordRecorded only for tiad's user.
+type ResetFacts struct {
+	AccessControlKept bool
+	FullAccessUserSet bool
+	UploadedFrom      string
+	UploadRoute       bool
+	// RecordOnly is whether an apply on the session asked for
+	// fullAccessRecordOnly: a reset to tiad's user is then refused.
+	RecordOnly       bool
+	ProjectAccess    func() (string, bool)
+	PasswordRecorded func() (recorded, ok bool)
+}
+
+// CheckUserManagementReset is CheckReset for a session that keeps access
+// control (or not), with no user of tiad's to reset to.
 func CheckUserManagementReset(r DownloadRequest, accessControlKept bool, uploadedFrom string, uploadRoute bool, projectAccess func() (string, bool)) ResetGate {
+	return CheckReset(r, ResetFacts{AccessControlKept: accessControlKept, UploadedFrom: uploadedFrom, UploadRoute: uploadRoute, ProjectAccess: projectAccess})
+}
+
+// CheckReset is the agent's UserManagementRule.Check: when tiad may answer
+// TIA's user-management check by resetting the CPU's user management to
+// the project's, decided before anything reaches the CPU. A hardware load
+// asks it, TIA refuses keep there, and its reset deletes the CPU's users
+// and sets its access control and users as the project has them (#789
+// stage 4). Only on a hardware download, and only for a closed set:
+//
+//	project after the reset        CPU now (evidence)            route
+//	Disabled, spec keep            off: attested "disabled"      attestation
+//	Disabled, spec keep            off: uploaded here (OFF)      upload
+//	Disabled, spec keep            on: tiad logged on            logon
+//	tiad's user, fullAccessUser    off: attested "disabled"      attestation
+//	tiad's user, fullAccessUser    on: tiad logged on            logon
+//
+// "tiad's user" is the session's spec fullAccessUser applied on this
+// session, the project's access control exactly EnabledWithAccessControl,
+// and its record of "nautilus" of the request's password. The logon route
+// ("enabled" attested) needs the password, and ResetGate.At when TIA
+// asks. Every other case refuses.
+func CheckReset(r DownloadRequest, f ResetFacts) ResetGate {
+	keep := f.AccessControlKept
 	switch {
 	case !isYes(r.Decisions.UserManagementResetToProject):
 		return ResetGate{Why: resetRefused + "it is not asked"}
 	case !r.Hardware:
-		return ResetGate{Why: resetRefused + "this download loads no hardware; " + resetRoutes(uploadRoute)}
-	case !accessControlKept:
-		return ResetGate{Why: resetRefused + "the session's spec does not keep access control as found (cpu.accessControl keep on a session that never applied fullAccessUser); " + resetRoutes(uploadRoute)}
-	case r.Attestation != nil && r.Attestation.CPUAccessControl == AttestCPUAccessEnabled:
-		return ResetGate{Why: resetRefused + "the attestation says the CPU's access control is enabled, and a reset would turn it off and delete its users; tiad never resets a CPU whose access control is on"}
+		return ResetGate{Why: resetRefused + "this download loads no hardware; " + resetRoutes(f.UploadRoute)}
+	case !keep && !f.FullAccessUserSet:
+		return ResetGate{Why: resetRefused + "the session's spec does not keep access control as found (cpu.accessControl keep on a session that never applied fullAccessUser), nor is it fullAccessUser applied on this session; " + resetRoutes(f.UploadRoute)}
+	}
+	if !keep && f.RecordOnly {
+		return ResetGate{Why: resetRefused + ResetRecordOnly}
+	}
+	enabled := r.Attestation != nil && r.Attestation.CPUAccessControl == AttestCPUAccessEnabled
+	if enabled && (r.Secrets == nil || r.Secrets.FullAccessPassword == "") {
+		return ResetGate{Why: resetRefused + ResetNoPassword}
+	}
+	want := ProjectAccessDisabled
+	if !keep {
+		want = ProjectAccessEnabled
 	}
 	project, ok := "", false
-	if projectAccess != nil {
-		project, ok = projectAccess()
+	if f.ProjectAccess != nil {
+		project, ok = f.ProjectAccess()
 	}
-	if !ok || project != ProjectAccessDisabled {
+	if !ok || project != want {
 		what := "unreadable"
 		switch {
 		case ok && project == "":
@@ -606,18 +690,41 @@ func CheckUserManagementReset(r DownloadRequest, accessControlKept bool, uploade
 		case ok:
 			what = strconv.Quote(project)
 		}
-		return ResetGate{Why: resetRefused + "the project's access control is " + what + ", not Disabled; " + resetRoutes(uploadRoute)}
+		tail := ""
+		if !keep {
+			tail = " (cpu.accessControl fullAccessUser)"
+		}
+		return ResetGate{Why: resetRefused + "the project's access control is " + what + ", not " + want + tail + "; " + resetRoutes(f.UploadRoute)}
 	}
-	if uploadRoute && uploadedFrom != "" && uploadedFrom == r.Address {
+	if !keep {
+		recorded, ok := false, false
+		if f.PasswordRecorded != nil {
+			recorded, ok = f.PasswordRecorded()
+		}
+		switch {
+		case !ok:
+			return ResetGate{Why: resetRefused + `tiad could not read the project's record of the user "nautilus", so nothing shows the CPU's Full access user would have the password this download logs on with`}
+		case !recorded:
+			return ResetGate{Why: resetRefused + ResetPasswordNotRecorded}
+		}
+	}
+	uploaded := keep && f.UploadRoute && f.UploadedFrom != "" && f.UploadedFrom == r.Address
+	switch {
+	case enabled && r.Attestation.given():
+		return ResetGate{Allowed: true, Route: ResetRouteLogon}
+	case !enabled && uploaded:
 		return ResetGate{Allowed: true, Route: ResetRouteUpload}
-	}
-	if r.Attestation.given() && r.Attestation.CPUAccessControl == AttestCPUAccessDisabled {
+	case r.Attestation.given() && r.Attestation.CPUAccessControl == AttestCPUAccessDisabled:
 		return ResetGate{Allowed: true, Route: ResetRouteAttestation}
 	}
-	if !uploadRoute {
-		return ResetGate{Why: resetRefused + `nothing shows the CPU's access control is off: give attestation.cpuAccessControl "disabled" (with attestation.by and attestation.text), the operator's own observation of the CPU, never a value a caller fills in by default; ` + uploadRouteWhy}
+	if keep && f.UploadRoute {
+		return ResetGate{Why: resetRefused + "nothing shows the CPU's access control as it is now: upload from " + r.Address + ` in this session first, or give attestation.cpuAccessControl "disabled" or "enabled" (with attestation.by and attestation.text), the operator's own observation of the CPU, never a value a caller fills in by default`}
 	}
-	return ResetGate{Why: resetRefused + "nothing shows the CPU's access control is off: upload from " + r.Address + ` in this session first, or give attestation.cpuAccessControl "disabled" (with attestation.by and attestation.text), the operator's own observation of the CPU, never a value a caller fills in by default`}
+	why := resetRefused + `nothing shows the CPU's access control as it is now: give attestation.cpuAccessControl "disabled" or "enabled" (with attestation.by and attestation.text), the operator's own observation of the CPU, never a value a caller fills in by default`
+	if keep {
+		why += "; " + uploadRouteWhy
+	}
+	return ResetGate{Why: why}
 }
 
 // Resolve applies the download rule: every question is answered only from

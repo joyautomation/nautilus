@@ -200,6 +200,11 @@ namespace Tiad
         // removed ("user \"nautilus\"", "role \"...\"").
         List<string> RemoveAccess(object project, AccessMade made);
 
+        // UserComment is the comment of the project's local user, where
+        // tiad keeps its record (AccessRecords), or null when the project
+        // holds no such user. It reads only.
+        string UserComment(object project, string user);
+
         // CannotApply is why this side cannot apply next at all yet (a
         // part of the spec it cannot configure), or null. The agent asks
         // before any write, so such a refusal leaves the session as it was.
@@ -223,12 +228,15 @@ namespace Tiad
         // after loading (null: it stays as it is). secrets carries the
         // protection password a password question needs.
         //
-        // login, in Download, Compare, Upload and ReadFingerprint, is what
-        // the call answers when TIA asks credentials going online (null:
-        // none). Each operation makes its own LoginUse of it, which decides
-        // every answer (OnlineLogin, LoginUse).
+        // login, in Compare, Upload and ReadFingerprint, is what the call
+        // answers when TIA asks credentials going online (null: none).
+        // Each operation makes its own LoginUse of it, which decides every
+        // answer (OnlineLogin, LoginUse). Download takes the LoginUse the
+        // agent made (use, never null): the agent reads from it whether
+        // the download logged on before TIA asks its user-management check
+        // (UserManagementRule.Gate.At).
         DownloadOutcome Download(object project, string address, bool hardware, bool software,
-            Secrets secrets, bool? startAfter, Func<Question, Answer> answer, OnlineLogin login);
+            Secrets secrets, bool? startAfter, Func<Question, Answer> answer, LoginUse use);
 
         // Compare compares the project's PLC software with the CPU at
         // address and returns TIA's compare tree as TIA reports it (null

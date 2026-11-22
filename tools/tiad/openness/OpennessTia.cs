@@ -789,6 +789,15 @@ namespace Tiad.Openness
             });
         }
 
+        public string UserComment(object project, string user)
+        {
+            return Tia(delegate
+            {
+                var u = new Users(Of(project).Project);
+                return u.HasUser(user) ? u.Comment(user) : null;
+            });
+        }
+
         // Users is the project's users and roles (TIA's UmacConfigurator)
         // for AccessSteps, with the SecureStrings made here.
         class Users : IProjectUsers
@@ -1363,10 +1372,9 @@ namespace Tiad.Openness
         // ---- download ----
 
         public DownloadOutcome Download(object project, string address, bool hardware, bool software,
-            Secrets secrets, bool? startAfter, Func<Question, Answer> answer, OnlineLogin login)
+            Secrets secrets, bool? startAfter, Func<Question, Answer> answer, LoginUse use)
         {
             var decider = new DownloadDecider(answer, startAfter);
-            var use = new LoginUse(login, "download", address);
             int checks = 0;
             OnlineAsks online = null;
             DownloadProvider dp = null;

@@ -606,7 +606,6 @@ namespace Tiad
                 line["compareEqual"] = true;
                 line["blocks"] = new List<object>(run.Blocks.ToArray());
                 if (run.Hardware) line["hardwareVerified"] = false;
-                if (run.UserManagementReset != "") line["userManagementReset"] = run.UserManagementReset;
                 line["fingerprint"] = run.Fingerprint == null ? null : run.Fingerprint.ToJson();
                 if (run.FingerprintError != "") line["fingerprintError"] = DeployStore.Bound(run.FingerprintError);
                 if (run.DownloadId != "") line["downloadId"] = run.DownloadId;
@@ -622,6 +621,9 @@ namespace Tiad
                     if (run.Payload.TryGetValue("stateSource", out v)) line["stateSource"] = v;
                 }
             }
+            // A reset tiad gave, by its route, whatever the end: a download
+            // in doubt after it may have deleted the CPU's users.
+            if (run.UserManagementReset != "") line["userManagementReset"] = run.UserManagementReset;
             if (acting.Count > 0) line["actingAnswers"] = new List<object>(acting.ToArray());
             line["blindTrust"] = rode == null ? null : rode.ToJson();
             try

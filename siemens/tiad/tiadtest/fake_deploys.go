@@ -86,8 +86,9 @@ func (f *Fake) recordIntent(s *session, req tiad.DownloadRequest, attested *tiad
 // recordOutcome is the agent's WriteOutcome, with the fingerprint read
 // after a load that compared equal (ReadDeployFingerprint): res and fl are
 // how TIA's part of the download ended.
-func (f *Fake) recordOutcome(d *tiad.Deploy, s *session, req tiad.DownloadRequest, res any, fl *failure, acting []string) (any, *failure) {
-	o := &tiad.DeployOutcome{At: fakeNow(), BlindTrust: d.BlindTrust, ActingAnswers: slices.Clone(acting)}
+func (f *Fake) recordOutcome(d *tiad.Deploy, s *session, req tiad.DownloadRequest, res any, fl *failure, acting []string, given string) (any, *failure) {
+	// A reset given carries its route whatever the end, as the agent's.
+	o := &tiad.DeployOutcome{At: fakeNow(), BlindTrust: d.BlindTrust, ActingAnswers: slices.Clone(acting), UserManagementReset: given}
 	if fl != nil {
 		o.Outcome = fl.kind
 		o.Status = tiad.DeployStatusOf(fl.kind)
