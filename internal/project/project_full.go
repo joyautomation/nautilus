@@ -737,7 +737,12 @@ func (p *Project) OPCUAApplicationURI(member string) string {
 	if base == "" {
 		base = opcuaserver.ApplicationURI(p.Name)
 	}
-	return base + "-" + member
+	// The member goes at the end of the path, before any query or fragment.
+	cut := len(base)
+	if i := strings.IndexAny(base, "?#"); i >= 0 {
+		cut = i
+	}
+	return base[:cut] + "-" + member + base[cut:]
 }
 
 // OPCUAMemberURIs are both pair members' ApplicationUris (a, then b): the

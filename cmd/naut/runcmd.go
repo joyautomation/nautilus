@@ -462,14 +462,8 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	if opc != nil {
 		// BuildInfo.SoftwareVersion is the version `naut version` prints.
 		opc.SetSoftwareVersion(lsp.Version)
-		if uris := proj.OPCUAMemberURIs(); uris != nil && el != nil {
-			opc.SetRedundancy(&opcuaserver.Redundancy{
-				// Cold: a takeover starts from the new leader's own retained
-				// values (PairRetainNotReplicated), not a running image.
-				Support:      1,
-				ServerURIs:   uris,
-				ServiceLevel: func() byte { return pairServiceLevel(el.Status()) },
-			})
+		if r := opcuaRedundancy(proj, el); r != nil {
+			opc.SetRedundancy(r)
 		}
 		// Started once the tag API's server exists (below): it signs OPC UA
 		// users in and journals their writes.
@@ -1942,4 +1936,40 @@ func pairServiceLevel(st leader.Status) byte {
 		return 100
 	}
 	return 1
+}
+
+// opcuaRedundancy is a pair member's OPC UA redundancy (nil outside a pair):
+// RedundancySupport Cold (a takeover starts from the new leader's own
+// retained values, PairRetainNotReplicated, not a running image), both
+// members' ApplicationUris, and the ServiceLevel from the elector. A client
+// may sample the level every 100 ms; the elector's status copies several
+// slices under its tick lock, so the level is held for 250 ms.
+func opcuaRedundancy(proj *project.Project, el leader.Election) *opcuaserver.Redundancy {
+	uris := proj.OPCUAMemberURIs()
+	if uris == nil || el == nil {
+		return nil
+	}
+	return &opcuaserver.Redundancy{
+		Support:      1,
+		ServerURIs:   uris,
+		ServiceLevel: cachedServiceLevel(func() byte { return pairServiceLevel(el.Status()) }, 250*time.Millisecond, time.Now),
+	}
+}
+
+// cachedServiceLevel holds f's answer for ttl.
+func cachedServiceLevel(f func() byte, ttl time.Duration, now func() time.Time) func() byte {
+	var (
+		mu   sync.Mutex
+		at   time.Time
+		last byte
+		have bool
+	)
+	return func() byte {
+		mu.Lock()
+		defer mu.Unlock()
+		if t := now(); !have || t.Sub(at) >= ttl {
+			last, at, have = f(), t, true
+		}
+		return last
+	}
 }

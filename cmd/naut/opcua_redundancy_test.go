@@ -2,6 +2,7 @@ package main
 
 import (
 	"testing"
+	"time"
 
 	"github.com/joyautomation/nautilus/leader"
 )
@@ -27,5 +28,25 @@ func TestPairServiceLevel(t *testing.T) {
 		if got := pairServiceLevel(c.st); got != c.want {
 			t.Errorf("%s: %d, want %d", c.name, got, c.want)
 		}
+	}
+}
+
+// The level is held for the ttl, then read again: a takeover shows within it.
+func TestCachedServiceLevel(t *testing.T) {
+	calls, level := 0, byte(250)
+	now := time.Unix(1000, 0)
+	f := cachedServiceLevel(func() byte { calls++; return level }, 250*time.Millisecond, func() time.Time { return now })
+	for i := 0; i < 5; i++ {
+		if f() != 250 {
+			t.Fatal("first level")
+		}
+	}
+	if calls != 1 {
+		t.Errorf("%d reads of the elector within the ttl, want 1", calls)
+	}
+	level = 100
+	now = now.Add(250 * time.Millisecond)
+	if got := f(); got != 100 || calls != 2 {
+		t.Errorf("after the ttl: level %d after %d reads, want 100 after 2", got, calls)
 	}
 }

@@ -191,6 +191,11 @@ func TestOPCUAApplicationURIPerMember(t *testing.T) {
 	if got := p.OPCUAMemberURIs(); len(got) != 2 || got[0] != a || got[1] != b {
 		t.Errorf("OPCUAMemberURIs = %v", got)
 	}
+	p.OPCUA.ApplicationURI = "urn:plant:plc?v=1#frag"
+	if got := p.OPCUAApplicationURI("b"); got != "urn:plant:plc-b?v=1#frag" {
+		t.Errorf("query and fragment: %q", got)
+	}
+	p.OPCUA.ApplicationURI = ""
 	if got := p.OPCUAApplicationURI(""); got != "" {
 		t.Errorf("no member: %q, want the configured (empty) URI", got)
 	}

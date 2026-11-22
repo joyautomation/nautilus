@@ -79,3 +79,26 @@ func TestRedundancyNodesFollowTheMember(t *testing.T) {
 		t.Errorf("left the set: ServiceLevel = %#v, want 255", v)
 	}
 }
+
+// A certificate made before the pair named its members announces another
+// ApplicationUri (Part 4 §7.1): ServerUriArray then names this member by the
+// URI it announces, so a client finds the server it talks to in the array.
+func TestServerURIArrayNamesTheAnnouncedURI(t *testing.T) {
+	rt, _ := newRuntime(t)
+	s, err := New(rt, Options{Endpoint: "localhost:0", Name: "x", ApplicationURI: "urn:x:base-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.SetRedundancy(&Redundancy{ServerURIs: []string{"urn:x:base-a", "urn:x:base-b"}})
+	if got := s.redundancyNow().ServerURIs; !slices.Equal(got, []string{"urn:x:base-a", "urn:x:base-b"}) {
+		t.Errorf("announced = configured: %v", got)
+	}
+	old := "urn:x:base"
+	s.announced.Store(&old)
+	if got := s.redundancyNow().ServerURIs; !slices.Equal(got, []string{"urn:x:base", "urn:x:base-b"}) {
+		t.Errorf("announced = the old certificate's: %v", got)
+	}
+	if got := s.red.Load().ServerURIs; got[0] != "urn:x:base-a" {
+		t.Errorf("the caller's slice was changed: %v", got)
+	}
+}
