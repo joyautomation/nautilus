@@ -56,6 +56,14 @@ type pushRig struct {
 
 func newPushRig(t *testing.T, store *subStore, key *webpush.Key, allow ...string) *pushRig {
 	t.Helper()
+	return buildPushRig(t, store, key, true, allow...)
+}
+
+// buildPushRig is the rig; preload false is a controller whose server
+// exists before the store is read, so the first scan's takeover loads it
+// (a pair's takeover, which finds the keeper already registered).
+func buildPushRig(t *testing.T, store *subStore, key *webpush.Key, preload bool, allow ...string) *pushRig {
+	t.Helper()
 	if key == nil {
 		var err error
 		if key, err = webpush.NewKey(); err != nil {
@@ -70,7 +78,9 @@ func newPushRig(t *testing.T, store *subStore, key *webpush.Key, allow ...string
 	if err != nil {
 		t.Fatal(err)
 	}
-	rt.LoadRetained()
+	if preload {
+		rt.LoadRetained()
+	}
 	srv, toks, path := patServerRT(t, rt, Options{Push: &PushOptions{Key: key, Subject: "mailto:ops@example.com", AllowHosts: allow}})
 	rt.Scan()
 	// The saver (SaveRetained answers from it) runs inside Run.
@@ -360,6 +370,13 @@ func TestPushSurvivesARestartAndAnotherKeyKeepsTheRows(t *testing.T) {
 		t.Errorf("same key: %+v", h)
 	}
 
+	// A takeover (the server already exists when the store is read) loads
+	// the rows too.
+	late := buildPushRig(t, store, rig.key, false)
+	if n := len(late.srv.push.reg.Of("user:jsmith")); n != 1 {
+		t.Fatalf("a takeover loaded %d rows, want 1", n)
+	}
+
 	other := newPushRig(t, store, nil)
 	h := other.srv.pushHealth()
 	if h.Sealed != 1 || h.Subscriptions != 1 {
@@ -556,7 +573,7 @@ func TestPushSendSkipsSealedRows(t *testing.T) {
 	f.mu.Lock()
 	n := len(f.got)
 	f.mu.Unlock()
-	if res.Sealed != 1 || res.Sent != 0 || n != 0 || len(reg2.Rows()) != 1 {
+	if res.Sealed != 1 || res.Sent != 0 || res.Failed != 0 || n != 0 || len(reg2.Rows()) != 1 {
 		t.Errorf("%+v, service saw %d, rows %d", res, n, len(reg2.Rows()))
 	}
 }
