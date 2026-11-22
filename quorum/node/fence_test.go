@@ -82,7 +82,7 @@ func TestTheOldBoxIsFencedAfterFromSpare(t *testing.T) {
 	if witFence != rep.Fence[0].Fence {
 		t.Fatalf("the witness's fence on a is %d, want %d", witFence, rep.Fence[0].Fence)
 	}
-	if g := c.elector("a").v.State().Gen; g < witFence {
+	if g := voterOf(c.elector("a")).Gen; g < witFence {
 		t.Fatalf("the replacement re-adopted at generation %d, below the fence %d", g, witFence)
 	}
 	// The old box returns: the replacement goes, its old disk comes back.
@@ -139,7 +139,7 @@ func TestARecommissionAfterAFromSpareIsNotFenced(t *testing.T) {
 	c.waitFor("the pair to commission again", leases(20), func() bool {
 		return c.status("a").Commissioned && c.status("b").Commissioned
 	})
-	if g := a.v.State().Gen; g < probe.Members[2].Fence {
+	if g := voterOf(a).Gen; g < probe.Members[2].Fence {
 		t.Fatalf("re-commissioned at generation %d, below the witness's fence %d", g, probe.Members[2].Fence)
 	}
 	c.kill("b")
@@ -218,7 +218,15 @@ func TestARecommissionProposesAboveTheFence(t *testing.T) {
 	}
 	// Recommission writes Gen one below the fence; the proposal at its
 	// next look is Gen+1.
-	if st := b.v.State(); max(st.Gen+1, st.PendingGen) < fence {
+	if st := voterOf(b); max(st.Gen+1, st.PendingGen) < fence {
 		t.Fatalf("re-commission proposes generation %d, below the witness's fence %d on a", max(st.Gen+1, st.PendingGen), fence)
 	}
+}
+
+// voterOf reads e's voter state under the elector's lock: its look writes
+// it (a race-detector hit on #1206's CI, logged on #1120).
+func voterOf(e *Elector) quorum.VoterState {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.v.State()
 }
