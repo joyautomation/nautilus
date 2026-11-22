@@ -280,6 +280,7 @@ var Mutations = []string{
 	"superseded_lead_keeps_substitutes", // naut: a controller that learns it is superseded keeps running the old history's substitutes until a takeover
 	"retained_stale_ignored",            // server: a takeover restores a superseded log's retained substitutes
 	"superseded_alarms_kept",            // server: a superseded log's acks and shelves are carried by a takeover
+	"contacts_part_users",               // node: the alarm contacts' credMAC takes the users part's label, so a users MAC verifies as contacts (#715)
 	"occurrence_per_activation",         // alarm: a flap through unack-rtn draws a new occurrence (#715)
 	"ack_any_occurrence",                // alarm: an ack naming another occurrence is applied (#715)
 	"carry_on_false",                    // alarm: a carried occurrence continues after a false reading past the grace (#715)

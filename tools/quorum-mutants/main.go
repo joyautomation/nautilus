@@ -418,7 +418,9 @@ var table = []mutation{
 	{"accept_survives_reboot", []string{"TestAVouchDoesNotSurviveARestart"}},
 	{"superseded_lead_keeps_substitutes", []string{"TestPairALeaderThatLearnsANewerHistoryRunsNoneOfTheOld"}},
 	{"superseded_alarms_kept", []string{"TestPairAnAcceptedSilentBoxComesBackSuperseded", "TestPairALeaderThatLearnsANewerHistoryRunsNoneOfTheOld"}},
-	// #715 PR 1: alarm occurrences and the pair's occurrence-bound acks.
+	// #715 PR 1: alarm occurrences, the pair's occurrence-bound acks, the
+	// alarm contacts' hello part.
+	{"contacts_part_users", []string{"TestContactsCheck"}},
 	{"occurrence_per_activation", []string{"TestOccurrenceRunsNormalToNormal"}},
 	{"ack_any_occurrence", []string{"TestAckNamingAnotherOccurrenceIsRefused", "TestAckNamesItsOccurrence"}},
 	{"carry_on_false", []string{"TestRestartFalseEndsTheOccurrence"}},

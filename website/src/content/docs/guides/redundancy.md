@@ -1049,6 +1049,19 @@ minutes it takes to reach both. "Could not be verified" means the two
 controllers hold different `NAUTILUS_PEER_TOKEN`s (or something else
 answers in the peer's place), not that the files differ.
 
+The same goes for the **alarm contacts** when a channel pages people:
+each controller keeps its own `alarm-contacts.json` and
+`alarm-secrets.json` in its state directory, and a standby that has
+other ones (or none) would page the wrong people, or nobody, after a
+takeover. The controllers compare a digest of their content, keyed with
+the peer token and never sent, at every handshake. When they differ,
+`GET /api/cluster` and the banner say "alarm contacts differ from the
+peer": copy both files from the controller that has the right ones into
+the other's state directory (`scp -p`, keeping them mode 0600 and owned
+by the service user), or set the same entries on both with
+`naut alarms contacts set` and `naut alarms secrets set`. Like the other
+credential checks, it never stops either from leading.
+
 Both controllers must run the same `redundancy:` section (`peers:` and
 `witness:`). If they don't (an edited manifest deployed to one box
 only), both report it in `GET /api/cluster` and on the dashboard's

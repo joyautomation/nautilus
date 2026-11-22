@@ -16,6 +16,8 @@ package oncall
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -481,3 +483,41 @@ func (a stamp) same(b stamp) bool {
 // with sudo on the box, reads a file the service user owns).
 func ReadContacts(path string) (*Contacts, error) { return loadContacts(path, false) }
 func ReadSecrets(path string) (*Secrets, error)   { return loadSecrets(path, false) }
+
+// Digest is a keyed digest of what the contacts and secrets files in
+// stateDir hold, for a redundant pair's comparison (#715): HMAC-SHA256
+// under key (the pair's peer token) over their content, not their bytes,
+// so the same `set` on both boxes (which stamps who and when) still
+// matches, and a digest that leaked could not be checked offline against
+// a guessed SMTP password without the key. Both absent (or empty) is the
+// zero digest: nothing to compare. It never leaves the process: the
+// pair's hello sends a MAC over it.
+func Digest(stateDir string, key []byte) ([32]byte, error) {
+	c, err := LoadContacts(ContactsPath(stateDir))
+	if err != nil {
+		return [32]byte{}, err
+	}
+	s, err := LoadSecrets(SecretsPath(stateDir))
+	if err != nil {
+		return [32]byte{}, err
+	}
+	if len(c.Contacts) == 0 && len(s.Secrets) == 0 {
+		return [32]byte{}, nil
+	}
+	cb, err := json.Marshal(c.Contacts) // map keys sorted: canonical
+	if err != nil {
+		return [32]byte{}, err
+	}
+	sb, err := json.Marshal(s.Secrets)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	m := hmac.New(sha256.New, key)
+	for _, part := range [][]byte{[]byte("nautilus alarm contacts v1"), cb, sb} {
+		m.Write(part)
+		m.Write([]byte{0})
+	}
+	var out [32]byte
+	copy(out[:], m.Sum(nil))
+	return out, nil
+}
