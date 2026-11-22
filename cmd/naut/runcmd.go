@@ -36,6 +36,7 @@ import (
 
 	"github.com/joyautomation/nautilus/acceptance"
 	"github.com/joyautomation/nautilus/alarm"
+	"github.com/joyautomation/nautilus/alarm/oncall"
 	"github.com/joyautomation/nautilus/audit"
 	"github.com/joyautomation/nautilus/auth"
 	"github.com/joyautomation/nautilus/auth/users"
@@ -346,6 +347,10 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	if proj.Auth != nil && (proj.Auth.HasUsers() || proj.Auth.OIDC()) {
 		sysAlarms = append(sysAlarms, usersAlarm(&srvRef))
 	}
+	if err := openAlarmContacts(proj, dir, os.Getenv, os.Stderr); err != nil {
+		fmt.Fprintln(os.Stderr, "naut run: alarms:", err)
+		return 1
+	}
 	alarms, err := startAlarms(proj, rt, sysAlarms...)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "naut run: alarms:", err)
@@ -596,6 +601,7 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 			j.Close()
 		}()
 	}
+	journalInsecureChannels(proj, srv)
 	go srv.Run(ctx)
 	sayOIDC(ctx, oidcClient, srv, tlsSrc != nil, apiLn.Addr().String(), os.Stderr)
 	// naut run alone renews a self-signed certificate, daily while it runs.
@@ -799,6 +805,45 @@ func usersAlarm(srv *atomic.Pointer[server.Server]) project.SystemAlarm {
 			s := srv.Load()
 			return s != nil && s.UsersFileDown()
 		},
+	}
+}
+
+// openAlarmContacts gives the project the contacts and secrets files in
+// the controller's state directory (#715) when alarms.channels configures
+// a channel that pages people. A file that cannot be read is not a reason
+// to stop a controller: it is said here, and each send that needs it
+// fails (journalled, class config) until it is fixed. No state directory
+// at all leaves the project without one, and NewAlarms refuses.
+func openAlarmContacts(proj *project.Project, dir string, getenv func(string) string, stderr io.Writer) error {
+	if proj.Alarms == nil || len(proj.Alarms.Channels.Kinds()) == 0 {
+		return nil
+	}
+	sd, err := controllerStateDir("the alarm contacts", proj.AuthStateDir, proj.Name, dir, dir != "", getenv)
+	if err != nil {
+		return err
+	}
+	st, err := oncall.Open(sd)
+	if err != nil {
+		fmt.Fprintf(stderr, "naut run: alarms: %v: pages that need it fail until it is fixed\n", err)
+	}
+	proj.AlarmDirectory = st
+	return nil
+}
+
+// journalInsecureChannels journals, once at start, each alarm channel
+// configured with insecure: true (#715): it does not verify its server,
+// and an auditor must be able to find that it ran so.
+func journalInsecureChannels(proj *project.Project, srv interface {
+	RecordSystem(action, target string, detail map[string]any)
+}) {
+	if proj.Alarms == nil {
+		return
+	}
+	for _, k := range proj.Alarms.Channels.Insecure() {
+		fmt.Fprintf(os.Stderr, "naut run: warning: alarms.channels.%s has insecure: true: its server's certificate is not verified\n", k)
+		srv.RecordSystem("alarm.channel-insecure", k, map[string]any{
+			"reason": "alarms.channels." + k + ".insecure: true: the server's certificate is not verified, and with no credential to send it may run in plaintext",
+		})
 	}
 }
 

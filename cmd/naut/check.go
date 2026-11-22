@@ -786,11 +786,18 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 		fmt.Printf("%s: warning: %s\n", loc.file, m)
 	}
 	if proj.Alarms != nil {
-		if c, err := proj.Alarms.EscalationConfig(); err == nil && c != nil {
-			for _, m := range escalationNoAckWarnings(c, defs) {
-				warns++
-				fmt.Printf("%s: warning: %s\n", loc.file, m)
-			}
+		// The contacts and secrets on this machine, when it has them: a
+		// person a level pages with no address for the channel is an
+		// error here, a failed send (no-contact) on a running controller.
+		sd, _ := controllerStateDir("the alarm contacts", proj.AuthStateDir, proj.Name, dir, true, os.Getenv)
+		cerrs, cwarns := checkContacts(proj.Alarms, sd)
+		for _, m := range cwarns {
+			warns++
+			fmt.Printf("%s: warning: %s\n", loc.file, m)
+		}
+		for _, m := range cerrs {
+			errs++
+			fmt.Printf("%s: error: %s\n", loc.file, m)
 		}
 		// The count is the auditable half of "a few rules cover thousands
 		// of alarms": `naut alarms list` dumps what they became.

@@ -58,7 +58,7 @@ type Options struct {
 
 	// Every is how often Tick looks, on the engine's clock. Default 1s.
 	Every time.Duration
-	// Queue is the sender's buffer. Default 256.
+	// Queue is each channel kind's send buffer. Default 256.
 	Queue int
 	// FailAfter is how many sends in a row must fail on one channel kind
 	// before Failing reports it. Default 3.
@@ -138,7 +138,9 @@ type Dispatcher struct {
 	ctx         context.Context
 	cancel      context.CancelFunc
 
-	q        chan queued
+	// q has one queue and one sender goroutine per channel kind, so a mail
+	// server that hangs delays only the email behind it, never an SMS.
+	q        map[string]chan queued
 	inflight sync.WaitGroup
 	wg       sync.WaitGroup
 	dropped  atomic.Uint64
@@ -188,9 +190,13 @@ func New(o Options) (*Dispatcher, error) {
 	if n <= 0 {
 		n = 256
 	}
-	d.q = make(chan queued, n)
-	d.wg.Add(1)
-	go d.sender()
+	d.q = make(map[string]chan queued, len(o.Channels))
+	for kind := range o.Channels {
+		q := make(chan queued, n)
+		d.q[kind] = q
+		d.wg.Add(1)
+		go d.sender(q)
+	}
 	return d, nil
 }
 
@@ -204,7 +210,9 @@ func (d *Dispatcher) Close() {
 	}
 	d.closed = true
 	d.cancel()
-	close(d.q)
+	for _, q := range d.q {
+		close(q)
+	}
 	d.mu.Unlock()
 	d.wg.Wait()
 }
@@ -272,17 +280,18 @@ func (d *Dispatcher) Tick(now time.Time) {
 	}
 	seen := make(map[string]bool, 16)
 	for _, r := range d.eng.Active() {
-		if r.WaitMs == 0 || r.WaitMs > now.UnixMilli() {
+		wait := waitKey(r)
+		if wait == 0 || wait > now.UnixMilli() {
 			continue // waits on nobody (or its clock ran ahead of ours)
 		}
 		ep := d.episodes[r.ID]
-		if ep == nil || ep.wait != r.WaitMs {
+		if ep == nil || ep.wait != wait {
 			// A new wait: the first look, or the alarm was acknowledged
 			// (or shelved, or suppressed) and came back between two looks.
 			if ep != nil {
 				d.end(r.ID)
 			}
-			ep = &episode{wait: r.WaitMs, policy: d.cfg.Select(r.Def, time.UnixMilli(r.WaitMs))}
+			ep = &episode{wait: wait, policy: d.cfg.Select(r.Def, time.UnixMilli(wait))}
 			d.episodes[r.ID] = ep
 		}
 		seen[r.ID] = true
@@ -291,12 +300,12 @@ func (d *Dispatcher) Tick(now time.Time) {
 			continue
 		}
 		since := time.UnixMilli(r.WaitMs)
-		if p.Stop == StopAckOrRTN {
+		if p.Stop == StopAckOrRTN || !r.AckRequired {
 			// A return to normal ends it, so each activation is its own
 			// escalation, from that activation.
 			since = time.UnixMilli(r.ActiveMs)
 		}
-		if !Escalating(r.State, p.Stop) || r.ActiveMs == 0 {
+		if !pagesNow(r, p.Stop) {
 			continue // unack-rtn under ack-or-rtn: waits, but pages nobody
 		}
 		if !ep.since.Equal(since) {
@@ -397,7 +406,7 @@ func (d *Dispatcher) due(r alarm.Record, ep *episode, now time.Time, term uint64
 				msg := Message{Alarm: r, Policy: ep.policy.ID, Level: s.Level + 1, Repeat: s.Repeat, To: to, Reason: reason}
 				d.inflight.Add(1)
 				select {
-				case d.q <- queued{key: k, term: term, gen: d.gen, msg: msg}:
+				case d.q[via] <- queued{key: k, term: term, gen: d.gen, msg: msg}:
 					d.sends[k] = pending
 				default:
 					d.inflight.Done()
@@ -426,13 +435,13 @@ func (d *Dispatcher) recipients(notify []string, t time.Time) []string {
 	return out
 }
 
-// sender delivers queued sends one at a time. The gate and the term are
-// read immediately before each send: a send whose leadership ended, or
-// that finds the gate closed, does not leave, and its step stays due for
-// the next leadership's look.
-func (d *Dispatcher) sender() {
+// sender delivers one channel kind's queued sends one at a time. The gate
+// and the term are read immediately before each send: a send whose
+// leadership ended, or that finds the gate closed, does not leave, and its
+// step stays due for the next leadership's look.
+func (d *Dispatcher) sender(in <-chan queued) {
 	defer d.wg.Done()
-	for q := range d.q {
+	for q := range in {
 		d.deliver(q)
 		d.inflight.Done()
 	}
@@ -462,11 +471,18 @@ func (d *Dispatcher) deliver(q queued) {
 		d.release(q)
 		return
 	}
-	result := alarm.NotifySent
+	result, reason := alarm.NotifySent, q.msg.Reason
 	if err != nil {
 		result = alarm.NotifyFailed
-		// The error stays in the log: it may carry an address.
-		d.log.Warn("alarm notification failed", "id", q.msg.Alarm.ID, "to", q.key.to, "via", q.key.via, "level", q.msg.Level, "err", err)
+		// Only the failure's class (and a numeric code) reaches the row
+		// and the log: a provider's text may echo an address or an
+		// account.
+		f := Failure(err)
+		if reason != "" {
+			f += "; " + reason
+		}
+		reason = f
+		d.log.Warn("alarm notification failed", "id", q.msg.Alarm.ID, "to", q.key.to, "via", q.key.via, "level", q.msg.Level, "reason", Failure(err))
 	}
 	d.mu.Lock()
 	if q.gen == d.gen {
@@ -488,7 +504,7 @@ func (d *Dispatcher) deliver(q queued) {
 	}
 	d.mu.Unlock()
 	d.eng.Notified(q.msg.Alarm.ID, alarm.Notice{Level: q.msg.Level, To: q.key.to, Via: q.key.via,
-		Result: result, Reason: q.msg.Reason})
+		Result: result, Reason: reason})
 }
 
 // release forgets a queued send that did not leave, so a later look may
@@ -519,8 +535,32 @@ func (d *Dispatcher) waiting(k sendKey) bool {
 		return false
 	}
 	r, found := d.eng.Lookup(k.id)
-	return found && r.WaitMs == wait && Escalating(r.State, stop) &&
+	return found && waitKey(r) == wait && pagesNow(r, stop) &&
 		(stop != StopAckOrRTN || r.ActiveMs == k.since)
+}
+
+// waitKey is what one escalation of r is keyed on, zero while r pages
+// nobody. An alarm that needs an acknowledgement escalates from when it
+// began waiting on a person (WaitMs). One with ack-required: false never
+// waits on anyone, so it pages while it is active, from its activation
+// (ActiveMs), and its escalation ends when it returns to normal (or is
+// shelved or suppressed): its AckActive is where it arrives, not an
+// operator's acknowledgement.
+func waitKey(r alarm.Record) int64 {
+	if !r.AckRequired {
+		if r.State == alarm.AckActive {
+			return r.ActiveMs
+		}
+		return 0
+	}
+	return r.WaitMs
+}
+
+// pagesNow reports whether r's escalation sends now under stop: an
+// unacknowledged alarm (Escalating), or one with ack-required: false,
+// which waitKey already holds to its active state.
+func pagesNow(r alarm.Record, stop string) bool {
+	return r.ActiveMs != 0 && (!r.AckRequired || Escalating(r.State, stop))
 }
 
 // mayAct is the gate, asked now: open, and still the leadership that

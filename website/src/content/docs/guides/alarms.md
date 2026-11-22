@@ -271,9 +271,9 @@ alarms:
       match: { class: process, priority: [high, critical] }  # also id, site, area
       # when: { days: [mon-fri], from: "06:00", to: "18:00" }  # optional
       levels:
-        - { after: 0s,  notify: [roster:operators], via: [log] }
-        - { after: 10m, notify: [roster:standby],   via: [log] }
-        - { after: 30m, notify: [carol],            via: [log] }
+        - { after: 0s,  notify: [roster:operators], via: [email] }
+        - { after: 10m, notify: [roster:standby],   via: [sms] }
+        - { after: 30m, notify: [carol],            via: [voice, email] }
       repeat: { every: 15m, times: 2 }   # the last level again
       stop: ack                          # or ack-or-rtn
 ```
@@ -304,9 +304,10 @@ alarms:
 - **A failed send is not retried.** The channel's own retries apart, the
   next level, or a repeat, comes on its own timer: escalation never waits
   on delivery.
-- **An alarm with `ack-required: false` never pages:** it never waits on a
-  person, so nothing could stop the escalation. `naut alarms escalation`
-  counts these apart, and `naut check` warns when a policy matches one.
+- **An alarm with `ack-required: false` pages while it is active.** It
+  never waits on an acknowledgement, so its levels run from its
+  activation, and a return to normal (or a shelf, or a suppression) stops
+  them.
 - **Only `naut run` pages.** `naut test` and the acceptance harness build
   no escalation at all.
 - **The browser playground has no time-zone database,** so there a
@@ -321,10 +322,79 @@ other row. A channel whose last three sends all failed raises the system
 alarm `nautilus.alarm-notify`, until a send on it succeeds (or this
 controller stops leading).
 
-This release has one channel, `log`, which writes each page to the log
-stream: it is how a policy is tried before people are paged. Email, SMS,
-voice and webhook channels, and acknowledging from a notification, come
-next.
+A failed send's row says why by class only (`no-contact`, `config`,
+`timeout`, `unreachable`, `tls`, `auth`, `rejected`, `provider-error`),
+with the server's numeric code where there is one (`rejected (smtp
+550)`): never the server's own text, which can echo an address.
+
+### Channels
+
+`log` is always there: it writes each page to the log stream, which is
+how a policy is tried before people are paged. `alarms.channels:` adds
+the ones that leave the box:
+
+```yaml
+alarms:
+  channels:
+    email:
+      smtp: mail.example.com:587     # host:port
+      tls: starttls                  # or implicit (465)
+      from: alarms@example.com
+      username: alarms               # password: the secret email.password
+    sms:                             # a Twilio-compatible REST API
+      provider: https://api.twilio.com
+      account: AC0001                # token: the secret sms.token
+      from: "+15550100"
+    voice:                           # the same API, a call that reads the alarm out
+      provider: https://api.twilio.com
+      account: AC0001                # token: the secret voice.token
+      from: "+15550100"
+    webhook:                         # one POST per page, JSON, to a paging service
+      url: https://hooks.example.com/page
+      header: Authorization          # value: the secret webhook.header
+```
+
+Nothing in it is secret, and none of it is anyone's address. Those live
+on the controller, in its state directory beside the users file
+(`auth.state-dir`, else `/var/lib/nautilus` under systemd), mode 0600,
+never in the project or Git:
+
+```sh
+sudo naut alarms contacts set alice --email alice@example.com --sms +15550101
+sudo naut alarms contacts set oidc:carol --voice +15550102 --email carol@example.com
+sudo naut alarms contacts list                 # masked; --show prints them
+sudo naut alarms secrets set sms.token         # read from stdin, never an argument
+sudo naut alarms secrets list                  # which are set, never their values
+```
+
+On a box with a built controller, the controller answers the same
+commands without starting: `sudo /opt/nautilus/current/controller alarms
+contacts --state-dir /var/lib/nautilus list`. A running controller reads
+a change on its next page. The webhook names the person as a principal
+(`"to": "alice"`) and needs no contact.
+
+- **Transport security is on.** Email runs over TLS (STARTTLS, or
+  implicit) with the server's certificate verified; a server that offers
+  no STARTTLS is refused, and the password is sent only once TLS is up.
+  The SMS and voice provider and the webhook are https, verified, and a
+  redirect is never followed.
+- **A site CA:** `ca-file: /etc/ssl/site-ca.pem` on a channel verifies
+  against that bundle instead of the system roots.
+- **`insecure: true`** on a channel skips certificate verification, and,
+  for a channel that sends no credential (email with no `username`, a
+  webhook with no `header`), allows plaintext. A password or a token never
+  crosses plaintext either way. `naut check` warns about it, and `naut
+  run` journals it in the audit trail (`alarm.channel-insecure`) at
+  every start.
+- **`naut check` on the box** refuses a level that pages someone by email,
+  SMS or voice who has no address for it (roster members included), and
+  a channel whose secret is not set, each with the command that fixes it.
+  Where there is no contacts file (a laptop, CI) it warns once instead. A
+  running controller never refuses to start over a missing number: that
+  send fails `no-contact`, is journalled, and counts toward the
+  `nautilus.alarm-notify` system alarm.
+- **Each channel kind has its own sender,** so a mail server that hangs
+  delays only email, never an SMS.
 
 Check a policy offline:
 

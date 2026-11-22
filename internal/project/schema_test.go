@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/joyautomation/nautilus/alarm"
+	"github.com/joyautomation/nautilus/alarm/channel"
 	"github.com/joyautomation/nautilus/alarm/escalate"
 	"github.com/joyautomation/nautilus/devbind"
 	"gopkg.in/yaml.v3"
@@ -78,6 +79,15 @@ func goKeys(v any) []string {
 			out = append(out, name)
 		}
 	}
+	sort.Strings(out)
+	return out
+}
+
+// withTLS replaces a channel's inlined TLS block (goKeys sees it as one
+// field) with the keys it inlines.
+func withTLS(keys []string) []string {
+	out := slices.DeleteFunc(keys, func(k string) bool { return k == "tlsconf" })
+	out = append(out, goKeys(channel.TLS{})...)
 	sort.Strings(out)
 	return out
 }
@@ -140,6 +150,10 @@ func TestSchemaMatchesLoader(t *testing.T) {
 		{"an escalation match", goKeys(escalate.Match{}), schemaKeys(s.Definitions["alarm-escalation-match"].Properties)},
 		{"an escalation level", goKeys(escalate.Level{}), schemaKeys(s.Definitions["alarm-level"].Properties)},
 		{"an escalation repeat", goKeys(escalate.Repeat{}), schemaKeys(s.Definitions["alarm-repeat"].Properties)},
+		{"alarm channels", goKeys(channel.Config{}), schemaKeys(s.Definitions["alarm-channels"].Properties)},
+		{"the email channel", withTLS(goKeys(channel.Email{})), schemaKeys(s.Definitions["alarm-channel-email"].Properties)},
+		{"an sms or voice channel", withTLS(goKeys(channel.Provider{})), schemaKeys(s.Definitions["alarm-channel-provider"].Properties)},
+		{"the webhook channel", withTLS(goKeys(channel.Webhook{})), schemaKeys(s.Definitions["alarm-channel-webhook"].Properties)},
 		{"an alarm rule", goKeys(alarm.Rule{}), schemaKeys(s.Definitions["alarm-rule"].Properties)},
 		{"an alarm rule's match", goKeys(alarm.Match{}), schemaKeys(s.Definitions["alarm-match"].Properties)},
 		{"substitutes", goKeys(SubstitutesConfig{}), schemaKeys(s.Definitions["substitutes"].Properties)},

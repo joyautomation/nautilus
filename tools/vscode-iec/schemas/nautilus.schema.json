@@ -1734,6 +1734,9 @@
           },
           "description": "Escalation policies: page people about alarms nobody has acknowledged, level by level. The first policy (in order) whose match covers an alarm, and whose `when:` window covers the moment it began waiting, runs it. Only `naut run` pages; tests never do."
         },
+        "channels": {
+          "$ref": "#/definitions/alarm-channels"
+        },
         "rules": {
           "type": "array",
           "items": {
@@ -2045,6 +2048,121 @@
         }
       }
     },
+    "alarm-channels": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The ways a level's via: pages a person beyond the log (#715). Nothing secret here: credentials are in alarm-secrets.json and addresses in alarm-contacts.json, in the controller's state directory (naut alarms secrets|contacts).",
+      "properties": {
+        "email": {
+          "$ref": "#/definitions/alarm-channel-email"
+        },
+        "sms": {
+          "$ref": "#/definitions/alarm-channel-provider"
+        },
+        "voice": {
+          "$ref": "#/definitions/alarm-channel-provider"
+        },
+        "webhook": {
+          "$ref": "#/definitions/alarm-channel-webhook"
+        }
+      }
+    },
+    "alarm-channel-email": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "smtp",
+        "from"
+      ],
+      "description": "Email over SMTP, always over TLS (STARTTLS or implicit) with the certificate verified.",
+      "properties": {
+        "smtp": {
+          "type": "string",
+          "description": "The server, host:port (587 for STARTTLS, 465 implicit)."
+        },
+        "tls": {
+          "enum": [
+            "starttls",
+            "implicit"
+          ],
+          "description": "How TLS starts. Default starttls: a server that does not offer it is refused."
+        },
+        "from": {
+          "type": "string",
+          "description": "The sender address."
+        },
+        "username": {
+          "type": "string",
+          "description": "Signs in with AUTH PLAIN, only once TLS is up. The password is the secret email.password."
+        },
+          "ca-file": {
+            "type": "string",
+            "description": "A PEM bundle on the box to verify the server's certificate against, instead of the system roots: how a site with its own CA keeps verification on."
+          },
+          "insecure": {
+            "type": "boolean",
+            "description": "Do not verify the server's certificate and, for a channel that sends no credential, allow plaintext. A password or token never crosses plaintext either way. naut check warns; naut run journals it at start."
+          }
+      }
+    },
+    "alarm-channel-provider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "account",
+        "from"
+      ],
+      "description": "SMS or voice through a Twilio-compatible REST API, over https. The token is the secret sms.token or voice.token.",
+      "properties": {
+        "provider": {
+          "type": "string",
+          "description": "The API's base URL, https (e.g. https://api.twilio.com)."
+        },
+        "account": {
+          "type": "string",
+          "description": "The account id the API path and basic auth name."
+        },
+        "from": {
+          "type": "string",
+          "description": "The number messages and calls come from, E.164 (+15550100)."
+        },
+          "ca-file": {
+            "type": "string",
+            "description": "A PEM bundle on the box to verify the server's certificate against, instead of the system roots: how a site with its own CA keeps verification on."
+          },
+          "insecure": {
+            "type": "boolean",
+            "description": "Do not verify the server's certificate and, for a channel that sends no credential, allow plaintext. A password or token never crosses plaintext either way. naut check warns; naut run journals it at start."
+          }
+      }
+    },
+    "alarm-channel-webhook": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "url"
+      ],
+      "description": "Each page POSTed as JSON (the person as a principal, never an address), for a paging service or a chat bridge.",
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "An https URL (http only with insecure: true and no header)."
+        },
+        "header": {
+          "type": "string",
+          "description": "The header carrying the secret webhook.header, e.g. Authorization."
+        },
+          "ca-file": {
+            "type": "string",
+            "description": "A PEM bundle on the box to verify the server's certificate against, instead of the system roots: how a site with its own CA keeps verification on."
+          },
+          "insecure": {
+            "type": "boolean",
+            "description": "Do not verify the server's certificate and, for a channel that sends no credential, allow plaintext. A password or token never crosses plaintext either way. naut check warns; naut run journals it at start."
+          }
+      }
+    },
     "alarm-level": {
       "type": "object",
       "additionalProperties": false,
@@ -2071,10 +2189,14 @@
           "minItems": 1,
           "items": {
             "enum": [
-              "log"
+              "log",
+              "email",
+              "sms",
+              "voice",
+              "webhook"
             ]
           },
-          "description": "Channel kinds; each person gets one send per kind. This release has log."
+          "description": "Channel kinds; each person gets one send per kind. log is always there; email, sms, voice and webhook when alarms.channels configures them. email, sms and voice need the person's address in the contacts file on the box (naut alarms contacts set)."
         }
       }
     },

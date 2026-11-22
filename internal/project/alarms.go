@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/joyautomation/nautilus/alarm"
+	"github.com/joyautomation/nautilus/alarm/channel"
 	"github.com/joyautomation/nautilus/alarm/escalate"
 	"github.com/joyautomation/nautilus/devbind"
 	"github.com/joyautomation/nautilus/lang/ir"
@@ -58,6 +59,11 @@ type AlarmsConfig struct {
 	// name, oidc:<name>) or roster:<id>.
 	Oncall     escalate.Oncall   `yaml:"oncall"`
 	Escalation []escalate.Policy `yaml:"escalation"`
+	// Channels configures the ways a level's `via:` pages a person beyond
+	// the log (#715 PR 3): email, sms, voice and webhook. Nothing secret:
+	// credentials sit in the secrets file and addresses in the contacts
+	// file, both on the box (`naut alarms secrets|contacts`).
+	Channels *channel.Config `yaml:"channels"`
 
 	Rules []alarm.Rule `yaml:"rules"`
 	Defs  []alarm.Def  `yaml:"defs"`
@@ -160,6 +166,9 @@ func (c *AlarmsConfig) validate() error {
 	if strings.EqualFold(c.Journal.Sink, "file") && c.Journal.Path == "" {
 		return errors.New("alarms.journal: sink: file needs path: (where the JSONL goes)")
 	}
+	if err := c.Channels.Validate(); err != nil {
+		return err
+	}
 	if _, err := c.escalation(); err != nil {
 		return err
 	}
@@ -178,9 +187,12 @@ func (c *AlarmsConfig) validate() error {
 // channel keeps failing (#715): sends to it fail FailAfter times in a row.
 const EscalationAlarmID = "nautilus.alarm-notify"
 
-// EscalationChannels are the channel kinds a level's `via:` may name on
-// this release. Email, SMS, voice and webhook come with #715 PR 3.
-var EscalationChannels = []string{"log"}
+// EscalationChannels are the channel kinds a level's `via:` may name:
+// log always, and each kind alarms.channels configures (email, sms, voice,
+// webhook).
+func (c *AlarmsConfig) EscalationChannels() []string {
+	return append([]string{"log"}, c.Channels.Kinds()...)
+}
 
 // EscalationConfig is the section's escalation config (#715), validated and
 // prepared: what `naut alarms oncall` and `naut alarms escalation` read.
@@ -195,7 +207,7 @@ func (c *AlarmsConfig) escalation() (*escalate.Config, error) {
 	}
 	ec := &escalate.Config{Oncall: c.Oncall, Policies: slices.Clone(c.Escalation)}
 	ec.Oncall.Rosters = slices.Clone(c.Oncall.Rosters)
-	if err := ec.Prepare(EscalationChannels); err != nil {
+	if err := ec.Prepare(c.EscalationChannels()); err != nil {
 		return nil, err
 	}
 	if len(ec.Policies) == 0 {
@@ -613,8 +625,23 @@ func (p *Project) alarms(rt *runtime.Runtime, durable bool, log *slog.Logger, sy
 	}
 	out.Engine = eng
 	if esc != nil {
-		o := escalate.Options{Config: esc, Engine: eng, Log: log,
-			Channels: map[string]escalate.Channel{"log": escalate.LogChannel{Log: log}}}
+		chans := map[string]escalate.Channel{"log": escalate.LogChannel{Log: log}}
+		if kinds := p.Alarms.Channels.Kinds(); len(kinds) > 0 {
+			if p.AlarmDirectory == nil {
+				out.Close()
+				return nil, fmt.Errorf("alarms.channels: %s need the contacts and secrets files in the controller's state directory, "+
+					"and this controller has none: set auth.state-dir, or run under systemd with StateDirectory=", strings.Join(kinds, ", "))
+			}
+			built, err := channel.Build(p.Alarms.Channels, p.AlarmDirectory, channel.Options{})
+			if err != nil {
+				out.Close()
+				return nil, err
+			}
+			for k, ch := range built {
+				chans[k] = ch
+			}
+		}
+		o := escalate.Options{Config: esc, Engine: eng, Log: log, Channels: chans}
 		// The write gate itself (leader.Election.IsLeader on a pair or a
 		// Kubernetes lease), asked by the sender before every send: never
 		// a cached role, so a standby whose role is stale pages nobody.
