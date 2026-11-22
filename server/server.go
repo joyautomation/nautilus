@@ -203,6 +203,10 @@ type Frame struct {
 	// none is. Never delta-gated (it is a handful of entries at most), so
 	// on any stream "absent" means "nothing is forced". See force.go.
 	Forces map[string]any `json:"forces,omitempty"`
+	// CheckoutForce is present on every frame while an I/O checkout is
+	// driving an output (#719): the point, who, and the seconds left. Set by
+	// the checkout's FrameHook, so only a controller that wires it carries it.
+	CheckoutForce *CheckoutForceView `json:"checkoutForce,omitempty"`
 	// Config is what runs against the manifest the controller booted
 	// from (live I/O configuration, #706): present when the controller
 	// has it, on /api/state and every full frame.
@@ -429,18 +433,19 @@ type Options struct {
 	// Push turns Web Push on (#722); nil leaves /api/push/* answering 404.
 	Push *PushOptions
 
-	// Mounts are groups of controller-only routes (mount.go), added after the
-	// core routes. cmd/naut lists them; the browser playground lists none.
-	Mounts []Mount
-
 	// Notes is the operator notes and shift log (#720) of a controller on
 	// its own: a file. NotesLog, on a redundant pair, is the replicated
 	// log's index and takes its place. Neither: /api/notes answers 404.
 	Notes    *notes.Store
 	NotesLog *NotesLog
-	// Checkout turns the I/O checkout on (#719); nil leaves /api/checkout
-	// answering 404.
-	Checkout *CheckoutOptions
+	// Mounts are groups of controller-only routes (mount.go), added after the
+	// core routes. FrameHooks add blocks to every frame; ShownPermissions are
+	// permissions /api/me lists that it otherwise leaves out (a feature the
+	// project did not turn on shows nothing new anywhere). A feature's own
+	// Install sets all three (CheckoutOptions.Install, #719).
+	Mounts           []Mount
+	FrameHooks       []FrameHook
+	ShownPermissions []string
 	// SessionLog, on a redundant pair, carries browser sessions through the
 	// pair's operator log so they survive a takeover (#716).
 	SessionLog *SessionLog
@@ -602,12 +607,13 @@ type Server struct {
 	historian   string
 	historyFn   func() *ProgramHistory
 	sourcesAt   func(sha string) (map[string]string, error)
-	paramWB     *ParamWriteBack  // parameter write-back (#718); nil: off
-	push        *pushService     // Web Push subscriptions (push.go); nil: off
-	notes       *notes.Store     // operator notes, standing alone (notes.go)
-	notesLog    *NotesLog        // a pair's notes (notes.go)
-	checkout    *CheckoutOptions // the I/O checkout (checkout.go)
+	paramWB     *ParamWriteBack // parameter write-back (#718); nil: off
+	push        *pushService    // Web Push subscriptions (push.go); nil: off
+	notes       *notes.Store    // operator notes, standing alone (notes.go)
+	notesLog    *NotesLog       // a pair's notes (notes.go)
 	mounts      []Mount
+	frameHooks  []FrameHook
+	shown       map[string]bool  // permissions /api/me lists beyond the core's
 	noteClock   func() time.Time // tests
 	pushKey     string           // its VAPID public key
 	io          *IOHook          // live I/O configuration (ioconfig.go); nil: none
@@ -762,8 +768,13 @@ func New(rt *runtime.Runtime, opts ...Options) *Server {
 		s.ackLinks, s.ackURL, s.ackLinkSignIn = opts[0].AckLinks, opts[0].AckURL, opts[0].AckLinkSignIn
 		s.inbound = opts[0].Inbound
 		s.notes, s.notesLog = opts[0].Notes, opts[0].NotesLog
-		s.checkout = opts[0].Checkout
-		s.mounts = opts[0].Mounts
+		s.mounts, s.frameHooks = opts[0].Mounts, opts[0].FrameHooks
+		if len(opts[0].ShownPermissions) > 0 {
+			s.shown = map[string]bool{}
+			for _, p := range opts[0].ShownPermissions {
+				s.shown[p] = true
+			}
+		}
 	}
 	var rec audit.Recorder
 	var unavailable error
@@ -911,6 +922,9 @@ func (s *Server) frame(pats []string) Frame {
 		Drivers: s.driverStatus(now),
 		Forces:  s.rt.Tags().ForcedValues(),
 	}
+	for _, h := range s.frameHooks {
+		h(s, &f)
+	}
 	f.Alarms = s.alarmSummary()
 	f.Config = s.ioConfigState()
 	return f
@@ -951,11 +965,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/meta", s.handleMeta)
 	mux.HandleFunc("GET /api/parameters", s.handleParameters)
 	mux.HandleFunc("GET /api/parameters/patch", s.handleParametersPatch)
-	mux.HandleFunc("GET /api/checkout", s.handleCheckout)
-	mux.HandleFunc("GET /api/checkout/runs/{id}", s.handleCheckoutRun)
-	mux.Handle("POST /api/checkout/runs", s.audited("checkout.begin", s.checkoutTarget("checkout.begin"), s.checkoutBegin))
-	mux.Handle("POST /api/checkout/runs/{id}/results", s.audited("checkout.result", s.checkoutTarget("checkout.result"), s.checkoutResult))
-	mux.Handle("POST /api/checkout/runs/{id}/abandon", s.audited("checkout.abandon", s.checkoutTarget("checkout.abandon"), s.checkoutAbandon))
 	mux.HandleFunc("GET /api/notes", s.handleNotesList)
 	mux.HandleFunc("GET /api/notes/counts", s.handleNotesCounts)
 	mux.HandleFunc("GET /api/notes/{id}", s.handleNoteGet)

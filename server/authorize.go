@@ -66,16 +66,20 @@ var actionPerm = map[string]string{
 	"checkout.begin":           PermCheckout,
 	"checkout.result":          PermCheckout,
 	"checkout.abandon":         PermCheckout,
-	"note.add":                 PermNote,
-	"note.revise":              PermNote,
-	"note.retract":             PermNote,
-	"config.stage":             PermConfig,
-	"config.validate":          PermConfig,
-	"config.apply":             PermConfig,
-	"config.commit":            PermConfig,
-	"param.commit":             PermConfig,
-	"param.import":             PermConfig,
-	"config.revert.cancel":     PermConfig,
+	// Forcing an output is a force: its permission, elevation included, and
+	// the checkout permission besides (the handler asks for both).
+	"checkout.force":       PermForce,
+	"checkout.release":     PermCheckout,
+	"note.add":             PermNote,
+	"note.revise":          PermNote,
+	"note.retract":         PermNote,
+	"config.stage":         PermConfig,
+	"config.validate":      PermConfig,
+	"config.apply":         PermConfig,
+	"config.commit":        PermConfig,
+	"param.commit":         PermConfig,
+	"param.import":         PermConfig,
+	"config.revert.cancel": PermConfig,
 	// A parameter written to a device on an IO-Link port is a change to a
 	// device, like a configuration apply (#705): the config permission.
 	"param.write":      PermConfig,
@@ -697,7 +701,7 @@ func (s *Server) UsersFileDown() bool { return s.users != nil && s.users.Err() !
 
 // checkoutEnabled reports whether the project turned the I/O checkout on
 // (#719): without it nothing about it is shown anywhere.
-func (s *Server) checkoutEnabled() bool { return s.checkout != nil && s.checkout.Sheet != nil }
+func (s *Server) checkoutEnabled() bool { return s.shown[auth.Checkout] }
 
 // checkoutPermission is a permission that exists only for a project that
 // uses the checkout.

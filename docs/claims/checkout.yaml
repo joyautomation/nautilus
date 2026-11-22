@@ -87,3 +87,62 @@ claims:
     tests:
       - go ./server TestEveryWritePathJournalsExactlyOneEntry
       - go ./server TestCheckoutRefusedOnAPair
+
+  - id: CHK-008
+    claim: >-
+      A checkout force is refused unless the run is open on this sheet, the
+      caller holds the checkout and the force permissions in the point's area,
+      the point's id was typed, the point is one the sheet forces, its
+      equipment is out of service now (a window that has run out does not count,
+      swept or not), the seconds are 1 to 300, and nothing at or around the
+      output is forced already; nothing is forced by a refused request.
+    source: "#forcing-an-output"
+    tests:
+      - go ./server TestCheckoutForceIsHeldToItsInterlock
+      - go ./server TestCheckoutForceNeedsBothPermissions
+      - go ./server TestCheckoutForceRefusesAnOutputAlreadyForced
+      - go ./server TestCheckoutForceRefusesAnOverlappingForce
+      - go ./server TestCheckoutForceRefusesAnExpiredWindow
+      - go ./server TestCheckoutForceDefaultsAndConfirmation
+      - go ./server TestCheckoutForceRefusesAToken
+      - go ./runtime TestForceIfFreeSeesOverlaps
+      - go ./alarm TestIsOutOfServiceHonoursAnEndedWindow
+
+  - id: CHK-009
+    claim: >-
+      A checkout force lets go by itself when its seconds are up (a timer, not
+      a wall-clock time), and when it is released or its run is abandoned; every
+      frame says it stands, with the seconds left, until then (and stops saying
+      so if the force is cleared); it also ends when its equipment is back in
+      service or its window runs out; the controller's own end of it is an
+      audit entry; the force is identified by the force table's generation, so
+      an enum, a TIME or a member force is let go like any other and a force
+      someone else set or changed meanwhile is not removed, and the record says
+      so; a result on a forced point carries the force and how it ended.
+    source: "#forcing-an-output"
+    tests:
+      - go ./server TestCheckoutForceStandsThenExpiresByItself
+      - go ./server TestCheckoutForceReleaseAndAbandon
+      - go ./server TestCheckoutForceDoesNotRemoveAnotherForce
+      - go ./server TestCheckoutForceReleasesTypedOutputs
+      - go ./server TestCheckoutForceEndsWhenTheEquipmentIsBackInService
+      - go ./server TestCheckoutForceNoticesItsForceBeingCleared
+      - go ./server TestCheckoutForceStateIsRaceFree
+      - go ./runtime TestForceGenerationsAreOwnership
+      - go ./runtime TestForceSpellingsOfOneElementAreOneEntry
+      - go ./runtime TestForceSurvivesALiterallyNamedTagBesideTheArray
+      - go ./runtime TestForceRefusesMalformedIndexes
+      - go ./runtime TestForceIfFreeNamesTheForceTheWayTheTableDoes
+      - go ./runtime TestForceIndexSpellingsAreOneAddress
+      - go ./server TestCheckoutForceCanonicalSpellings
+      - go ./server TestCheckoutAbandonDuringAStartLetsTheForceGo
+      - go ./server TestCheckoutNoForceStartsWhileAnotherIsEnding
+      - go ./server TestCheckoutForceReconcilesAStaleRecord
+      - go ./checkout TestForcesInTheRecord
+    partial: true
+    note: >-
+      The expiry is a Go timer (the monotonic clock); no test steps the wall
+      clock. A force left standing in the file by a process that is gone is
+      recorded as interrupted when the store is opened (tested on the store);
+      that naut run calls it at start is not itself tested. A takeover is not
+      applicable yet: a redundant pair refuses the checkout.

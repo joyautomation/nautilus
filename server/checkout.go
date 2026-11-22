@@ -1,3 +1,5 @@
+//go:build !js
+
 package server
 
 import (
@@ -9,6 +11,7 @@ import (
 	"math"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/joyautomation/nautilus/auth"
 	"github.com/joyautomation/nautilus/checkout"
@@ -40,18 +43,59 @@ type CheckoutOptions struct {
 	// OpenErr says why Store is nil when it could not be opened (a damaged
 	// file), so the answer names it.
 	OpenErr string
+
+	ck ckState // the standing checkout force (checkoutforce.go)
+}
+
+// The checkout is controller-only and optional: its handlers are in files no
+// browser build compiles (!js), and cmd/naut mounts them with Install, so the
+// playground carries none of it.
+
+// Install adds the checkout to the server's options: its routes (Mounts), the
+// standing force on every frame (FrameHooks), and the two permissions /api/me
+// then lists (ShownPermissions). Without it the server has no checkout at all.
+func (co *CheckoutOptions) Install(o *Options) {
+	o.Mounts = append(o.Mounts, co.mount)
+	o.FrameHooks = append(o.FrameHooks, func(s *Server, f *Frame) { f.CheckoutForce = co.forceView(s.rt.Tags()) })
+	o.ShownPermissions = append(o.ShownPermissions, auth.Checkout, auth.Signoff)
+}
+
+// checkoutAPI is the checkout's handlers: a server, and the options it was
+// mounted with.
+type checkoutAPI struct {
+	s  *Server
+	co *CheckoutOptions
+}
+
+func (co *CheckoutOptions) mount(s *Server, mux *http.ServeMux) {
+	a := &checkoutAPI{s: s, co: co}
+	mux.HandleFunc("GET /api/checkout", a.handleCheckout)
+	mux.HandleFunc("GET /api/checkout/runs/{id}", a.handleCheckoutRun)
+	mux.Handle("POST /api/checkout/runs", s.audited("checkout.begin", a.checkoutTarget("checkout.begin"), a.checkoutBegin))
+	mux.Handle("POST /api/checkout/runs/{id}/results", s.audited("checkout.result", a.checkoutTarget("checkout.result"), a.checkoutResult))
+	mux.Handle("POST /api/checkout/runs/{id}/force", s.audited("checkout.force", a.checkoutTarget("checkout.force"), a.checkoutForceStart))
+	mux.Handle("POST /api/checkout/runs/{id}/force/release", s.audited("checkout.release", a.checkoutTarget("checkout.release"), a.checkoutForceRelease))
+	mux.Handle("POST /api/checkout/runs/{id}/abandon", s.audited("checkout.abandon", a.checkoutTarget("checkout.abandon"), a.checkoutAbandon))
+}
+
+func init() {
+	// what a refused checkout write tried to change, by parsing it alone (the
+	// core's refusalTargets, audit.go)
+	for _, act := range []string{"checkout.begin", "checkout.result", "checkout.abandon", "checkout.force", "checkout.release"} {
+		refusalTargets[act] = checkoutRefusal(act)
+	}
 }
 
 // checkoutOff answers when the checkout is not available here.
-func (s *Server) checkoutOff(w http.ResponseWriter) bool {
+func (a *checkoutAPI) checkoutOff(w http.ResponseWriter) bool {
 	switch {
-	case s.checkout == nil || s.checkout.Sheet == nil:
+	case a.co == nil || a.co.Sheet == nil:
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "the I/O checkout is not enabled for this project: add a checkout: section to the manifest (naut checkout init writes the sheet), with an auth: block with users and a state directory to keep the results in (auth.state-dir, or systemd StateDirectory=)"})
-	case s.cluster != nil:
+	case a.s.cluster != nil:
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "the I/O checkout is not available on a redundant pair yet: its results would be kept on one controller only"})
-	case s.checkout.Store == nil && s.checkout.OpenErr != "":
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "the I/O checkout is off: its results file could not be opened: " + s.checkout.OpenErr})
-	case s.checkout.Store == nil:
+	case a.co.Store == nil && a.co.OpenErr != "":
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "the I/O checkout is off: its results file could not be opened: " + a.co.OpenErr})
+	case a.co.Store == nil:
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "the I/O checkout has nowhere to keep its results: it needs an auth: block with users and a state directory (auth.state-dir, or systemd StateDirectory=)"})
 	default:
 		return false
@@ -71,13 +115,13 @@ type checkoutView struct {
 	Runs []checkout.Run `json:"runs"`
 }
 
-func (s *Server) handleCheckout(w http.ResponseWriter, r *http.Request) {
-	if s.checkoutOff(w) {
+func (a *checkoutAPI) handleCheckout(w http.ResponseWriter, r *http.Request) {
+	if a.checkoutOff(w) {
 		return
 	}
-	v := checkoutView{Title: s.checkout.Sheet.Title, Hash: s.checkout.Sheet.Hash(), Signoff: s.checkout.Signoff,
-		Points: s.checkout.Sheet.Points, Runs: s.checkout.Store.List()}
-	if run, ok := s.checkout.Store.Current(); ok {
+	v := checkoutView{Title: a.co.Sheet.Title, Hash: a.co.Sheet.Hash(), Signoff: a.co.Signoff,
+		Points: a.co.Sheet.Points, Runs: a.co.Store.List()}
+	if run, ok := a.co.Store.Current(); ok {
 		v.Run = &run
 		v.SheetChanged = run.SheetHash != v.Hash
 	}
@@ -91,17 +135,17 @@ type checkoutRunView struct {
 	ByArea   map[string]checkout.Progress `json:"byArea"`
 }
 
-func (s *Server) handleCheckoutRun(w http.ResponseWriter, r *http.Request) {
-	if s.checkoutOff(w) {
+func (a *checkoutAPI) handleCheckoutRun(w http.ResponseWriter, r *http.Request) {
+	if a.checkoutOff(w) {
 		return
 	}
-	run, ok := s.checkout.Store.Get(r.PathValue("id"))
+	run, ok := a.co.Store.Get(r.PathValue("id"))
 	if !ok {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such run"})
 		return
 	}
-	latest := s.checkout.Store.Latest(run.ID)
-	sh := s.checkout.Sheet
+	latest := a.co.Store.Latest(run.ID)
+	sh := a.co.Sheet
 	writeJSON(w, http.StatusOK, checkoutRunView{Run: run, Latest: latest,
 		ByDevice: sh.ProgressBy(func(p checkout.Point) string { return p.Device }, latest),
 		ByArea:   sh.ProgressBy(func(p checkout.Point) string { return p.Area }, latest)})
@@ -109,13 +153,13 @@ func (s *Server) handleCheckoutRun(w http.ResponseWriter, r *http.Request) {
 
 // checkoutPerson is who records: a person, never a token (a token names
 // nobody, and a checkout sheet is signed by names).
-func (s *Server) checkoutPerson(r *http.Request) (auth.Principal, int, string) {
-	a := s.actorOf(r)
-	switch a.pr.Kind {
+func (a *checkoutAPI) checkoutPerson(r *http.Request) (auth.Principal, int, string) {
+	act := a.s.actorOf(r)
+	switch act.pr.Kind {
 	case auth.KindUser, auth.KindOIDC:
-		return a.pr, 0, ""
+		return act.pr, 0, ""
 	}
-	return a.pr, http.StatusUnauthorized, "sign in as a person to record a checkout: a checkout sheet is signed by names" + signInHint
+	return act.pr, http.StatusUnauthorized, "sign in as a person to record a checkout: a checkout sheet is signed by names" + signInHint
 }
 
 type checkoutRequest struct {
@@ -124,11 +168,15 @@ type checkoutRequest struct {
 	Outcome   string `json:"outcome"`
 	Note      string `json:"note"`
 	Reason    string `json:"reason"`
+	// a force step (checkoutforce.go)
+	Value   any    `json:"value"`
+	Seconds int    `json:"seconds"`
+	Confirm string `json:"confirm"`
 }
 
-func (s *Server) checkoutBegin(w http.ResponseWriter, r *http.Request) {
-	s.checkoutWrite(w, r, "", func(pr auth.Principal, req checkoutRequest) (any, int, error) {
-		run, err := s.checkout.Store.Begin(req.Rehearsal, s.checkout.Sheet.Hash(), s.checkout.Sheet.Title, noteAuthor(pr.String()), pr.String())
+func (a *checkoutAPI) checkoutBegin(w http.ResponseWriter, r *http.Request) {
+	a.checkoutWrite(w, r, "", func(pr auth.Principal, req checkoutRequest) (any, int, error) {
+		run, err := a.co.Store.Begin(req.Rehearsal, a.co.Sheet.Hash(), a.co.Sheet.Title, noteAuthor(pr.String()), pr.String())
 		return run, http.StatusCreated, err
 	})
 }
@@ -137,24 +185,24 @@ func (s *Server) checkoutBegin(w http.ResponseWriter, r *http.Request) {
 // controller now holds.
 var errSheetChanged = errors.New("the sheet changed since this run began (checkout.yaml was edited and deployed): abandon the run and begin again, so every result is against one sheet")
 
-func (s *Server) checkoutResult(w http.ResponseWriter, r *http.Request) {
-	s.checkoutWrite(w, r, "point", func(pr auth.Principal, req checkoutRequest) (any, int, error) {
-		pt, ok := s.checkout.Sheet.Point(req.Point)
+func (a *checkoutAPI) checkoutResult(w http.ResponseWriter, r *http.Request) {
+	a.checkoutWrite(w, r, "point", func(pr auth.Principal, req checkoutRequest) (any, int, error) {
+		pt, ok := a.co.Sheet.Point(req.Point)
 		if !ok {
 			return nil, http.StatusUnprocessableEntity, errors.New("the sheet has no point " + req.Point)
 		}
-		run, ok := s.checkout.Store.Get(r.PathValue("id"))
+		run, ok := a.co.Store.Get(r.PathValue("id"))
 		if !ok {
 			return nil, http.StatusNotFound, checkout.ErrNoRun
 		}
-		if run.SheetHash != s.checkout.Sheet.Hash() {
+		if run.SheetHash != a.co.Sheet.Hash() {
 			return nil, http.StatusConflict, errSheetChanged
 		}
-		seen, quality, err := s.checkoutReading(pt)
+		seen, quality, err := a.checkoutReading(pt)
 		if err != nil {
 			return nil, http.StatusUnprocessableEntity, err
 		}
-		res, err := s.checkout.Store.Record(run.ID, pt.ID, req.Outcome, req.Note, seen, quality, noteAuthor(pr.String()), pr.String())
+		res, err := a.co.Store.Record(run.ID, pt.ID, req.Outcome, req.Note, seen, quality, noteAuthor(pr.String()), pr.String())
 		return res, http.StatusCreated, err
 	})
 }
@@ -163,12 +211,12 @@ func (s *Server) checkoutResult(w http.ResponseWriter, r *http.Request) {
 // that tag's quality, for the record: the quality is looked up by the
 // driver's own tag (the root of a member path, in the store's spelling), and
 // a tag the controller cannot read is refused, never recorded as good.
-func (s *Server) checkoutReading(pt checkout.Point) (any, string, error) {
+func (a *checkoutAPI) checkoutReading(pt checkout.Point) (any, string, error) {
 	root := pt.Tag
 	if i := strings.IndexAny(root, ".["); i > 0 {
 		root = root[:i]
 	}
-	tags := s.rt.Tags()
+	tags := a.s.rt.Tags()
 	canon, ok := tags.Canonical(root)
 	if !ok {
 		return nil, "", fmt.Errorf("the controller has no tag %q: the sheet names a tag this project does not have (naut check says so)", pt.Tag)
@@ -176,7 +224,7 @@ func (s *Server) checkoutReading(pt checkout.Point) (any, string, error) {
 	if _, ok := tags.ReadPath(pt.Tag); !ok {
 		return nil, "", fmt.Errorf("the controller cannot read %q", pt.Tag)
 	}
-	return jsonSafe(s.valueOf(pt.Tag)), s.rt.TagQuality(canon).String(), nil
+	return jsonSafe(a.s.valueOf(pt.Tag)), a.s.rt.TagQuality(canon).String(), nil
 }
 
 // jsonSafe is v as JSON can hold it: a NaN or an infinity (an unwired
@@ -209,9 +257,35 @@ func jsonSafe(v any) any {
 	return v
 }
 
-func (s *Server) checkoutAbandon(w http.ResponseWriter, r *http.Request) {
-	s.checkoutWrite(w, r, "", func(pr auth.Principal, req checkoutRequest) (any, int, error) {
-		run, err := s.checkout.Store.Abandon(r.PathValue("id"), req.Reason, noteAuthor(pr.String()), pr.String())
+func (a *checkoutAPI) checkoutAbandon(w http.ResponseWriter, r *http.Request) {
+	a.checkoutWrite(w, r, "", func(pr auth.Principal, req checkoutRequest) (any, int, error) {
+		if utf8.RuneCountInString(req.Reason) > checkout.MaxReason {
+			return nil, http.StatusBadRequest, fmt.Errorf("%w: the reason is longer than %d characters", checkout.ErrInvalid, checkout.MaxReason)
+		}
+		// an output forced for this run is let go before the run ends
+		if f := a.standingForce(r.PathValue("id")); f != nil && req.Reason != "" {
+			a.endCheckoutForce(f, checkout.ForceAbandoned, noteAuthor(pr.String()))
+		}
+		run, err := a.co.Store.Abandon(r.PathValue("id"), req.Reason, noteAuthor(pr.String()), pr.String())
+		if err == nil {
+			// a force that was starting while the run ended is let go (a ready one
+			// is ended; a pending one is told, and undoes itself)
+			a.co.ck.mu.Lock()
+			f := a.co.ck.force
+			var ready bool
+			if f != nil && f.run == r.PathValue("id") {
+				ready = f.ready && !f.ending
+				if !ready {
+					f.abandoned = true
+				}
+			} else {
+				f = nil
+			}
+			a.co.ck.mu.Unlock()
+			if f != nil && ready {
+				a.endCheckoutForce(f, checkout.ForceAbandoned, noteAuthor(pr.String()))
+			}
+		}
 		return run, http.StatusOK, err
 	})
 }
@@ -220,11 +294,11 @@ func (s *Server) checkoutAbandon(w http.ResponseWriter, r *http.Request) {
 // the request is a same-origin or token write, a person is signed in, the body
 // parses, the permission is held for the point's tag (scopeBy "point") or the
 // whole controller, and then do runs and answers.
-func (s *Server) checkoutWrite(w http.ResponseWriter, r *http.Request, scopeBy string, do func(auth.Principal, checkoutRequest) (any, int, error)) {
-	if s.checkoutOff(w) {
+func (a *checkoutAPI) checkoutWrite(w http.ResponseWriter, r *http.Request, scopeBy string, do func(auth.Principal, checkoutRequest) (any, int, error)) {
+	if a.checkoutOff(w) {
 		return
 	}
-	if code, msg := s.authorizeWrite(r); code != 0 {
+	if code, msg := a.s.authorizeWrite(r); code != 0 {
 		writeJSON(w, code, map[string]string{"error": msg})
 		return
 	}
@@ -236,8 +310,17 @@ func (s *Server) checkoutWrite(w http.ResponseWriter, r *http.Request, scopeBy s
 		return
 	}
 	scope := auth.All
+	if scopeBy == "standing" {
+		// letting a force go is asked in the area of the output that is
+		// forced: an engineer fenced to that area can release their own
+		a.co.ck.mu.Lock()
+		if f := a.co.ck.force; f != nil {
+			scope = f.tag
+		}
+		a.co.ck.mu.Unlock()
+	}
 	if scopeBy == "point" {
-		pt, ok := s.checkout.Sheet.Point(req.Point)
+		pt, ok := a.co.Sheet.Point(req.Point)
 		if !ok {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": "the sheet has no point " + req.Point})
 			return
@@ -246,11 +329,11 @@ func (s *Server) checkoutWrite(w http.ResponseWriter, r *http.Request, scopeBy s
 	}
 	// The area first: a principal fenced to another area is told so (403)
 	// whoever they are; only then is a person asked for.
-	if code, msg := s.authorize(r, PermCheckout, scope); code != 0 {
+	if code, msg := a.s.authorize(r, PermCheckout, scope); code != 0 {
 		writeJSON(w, code, map[string]string{"error": msg})
 		return
 	}
-	pr, code, msg := s.checkoutPerson(r)
+	pr, code, msg := a.checkoutPerson(r)
 	if code != 0 {
 		writeJSON(w, code, map[string]string{"error": msg})
 		return
@@ -261,9 +344,11 @@ func (s *Server) checkoutWrite(w http.ResponseWriter, r *http.Request, scopeBy s
 		writeJSON(w, status, out)
 	case errors.Is(err, checkout.ErrNoRun):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such run"})
-	case errors.Is(err, checkout.ErrNotOpen), errors.Is(err, checkout.ErrRunOpen), errors.Is(err, errSheetChanged):
+	case errors.Is(err, checkout.ErrNotOpen), errors.Is(err, checkout.ErrRunOpen), errors.Is(err, errSheetChanged), errors.Is(err, checkout.ErrForceActive), errors.Is(err, checkout.ErrNoForce):
 		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
-	case status == http.StatusUnprocessableEntity:
+	case status == http.StatusConflict:
+		writeJSON(w, status, map[string]string{"error": err.Error()})
+	case status == http.StatusUnprocessableEntity, status == http.StatusForbidden, status == http.StatusNotImplemented:
 		writeJSON(w, status, map[string]string{"error": err.Error()})
 	case errors.Is(err, checkout.ErrInvalid):
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": strings.TrimPrefix(err.Error(), checkout.ErrInvalid.Error()+": ")})
@@ -277,7 +362,7 @@ func (s *Server) checkoutWrite(w http.ResponseWriter, r *http.Request, scopeBy s
 // point (the point's tag, the area it is checked against); begin and abandon
 // name the whole controller. Each action reads only its own fields from the
 // body, so a client cannot shape another action's entry.
-func (s *Server) checkoutTarget(action string) targetFunc {
+func (a *checkoutAPI) checkoutTarget(action string) targetFunc {
 	return func(r *http.Request, body []byte) auditTarget {
 		var req checkoutRequest
 		_ = json.NewDecoder(bytes.NewReader(body)).Decode(&req)
@@ -290,17 +375,26 @@ func (s *Server) checkoutTarget(action string) targetFunc {
 			if req.Rehearsal {
 				t.detail["rehearsal"] = true
 			}
-		case "checkout.result":
+		case "checkout.result", "checkout.force":
 			t.target = ""
 			t.detail["point"] = req.Point
-			if s.checkout != nil && s.checkout.Sheet != nil {
-				if pt, ok := s.checkout.Sheet.Point(req.Point); ok {
+			if a.co != nil && a.co.Sheet != nil {
+				if pt, ok := a.co.Sheet.Point(req.Point); ok {
 					t.target = pt.Tag
 				}
 			}
 			t.after = map[string]any{"outcome": req.Outcome, "note": req.Note}
+			if action == "checkout.force" {
+				t.after = map[string]any{"value": req.Value, "seconds": req.Seconds}
+			}
 		case "checkout.abandon":
 			t.after = map[string]any{"reason": req.Reason}
+		case "checkout.release":
+			a.co.ck.mu.Lock()
+			if f := a.co.ck.force; f != nil {
+				t.target = f.pt.Tag
+			}
+			a.co.ck.mu.Unlock()
 		}
 		return t
 	}
@@ -315,7 +409,7 @@ func checkoutRefusal(action string) targetFunc {
 		if id := r.PathValue("id"); id != "" {
 			t.detail["run"] = id
 		}
-		if action == "checkout.result" {
+		if action == "checkout.result" || action == "checkout.force" {
 			t.target = ""
 			if req.Point != "" {
 				t.target = "checkout:" + req.Point

@@ -1,6 +1,8 @@
 package runtime
 
 import (
+	"fmt"
+	"math/rand"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -512,5 +514,296 @@ func TestForceBeforeFirstScanHolds(t *testing.T) {
 	}
 	if !rt.Tags().Bool("Motor") {
 		t.Fatal("the forced StartPB never reached the logic")
+	}
+}
+
+// A caller that must remove only the force it put there (an I/O checkout,
+// #719) takes its generation from ForceIfFree and removes it with UnforceIf:
+// a force set or changed since has another generation and stays; an address
+// already forced (itself, a member, the tag around it) is refused; plain Force
+// and Unforce are as they were.
+func TestForceGenerationsAreOwnership(t *testing.T) {
+	tags := NewTags()
+	tags.Set("Out", 0.0)
+	gen, name, err := tags.ForceIfFree("Out", 5.0)
+	if err != nil || gen == 0 || name != "Out" {
+		t.Fatalf("ForceIfFree: %d %q %v", gen, name, err)
+	}
+	if g, ok := tags.ForceGen("out"); !ok || g != gen {
+		t.Errorf("ForceGen = %d %v, want %d", g, ok, gen)
+	}
+	if _, _, err := tags.ForceIfFree("Out", 6.0); err == nil || !strings.Contains(err.Error(), "already forced") {
+		t.Errorf("a second ForceIfFree on a forced address: %v", err)
+	}
+	// someone else changes the force: another generation, so UnforceIf leaves it
+	if err := tags.Force("Out", 9.0); err != nil {
+		t.Fatal(err)
+	}
+	if tags.UnforceIf("Out", gen) {
+		t.Fatal("UnforceIf removed a force that was set again since")
+	}
+	if g, _ := tags.ForceGen("Out"); g == gen {
+		t.Error("a changed force kept its generation")
+	}
+	g2, _ := tags.ForceGen("Out")
+	if !tags.UnforceIf("Out", g2) {
+		t.Error("UnforceIf did not remove the force it was given the generation of")
+	}
+	if tags.UnforceIf("Out", g2) || len(tags.Forces()) != 0 {
+		t.Errorf("a second UnforceIf, or leftovers: %v", tags.Forces())
+	}
+	// plain Force and Unforce are unchanged
+	tags.Force("Out", 1.0)
+	if !tags.Unforce("Out") {
+		t.Error("Unforce")
+	}
+}
+
+// ForceIfFree sees a force on a member when the whole tag is asked for and on
+// the tag when a member is.
+func TestForceIfFreeSeesOverlaps(t *testing.T) {
+	sd := &ir.StructDef{Name: "Pump", Fields: []ir.StructField{{Name: "Run"}, {Name: "Speed"}}, FieldIndex: map[string]int{"Run": 0, "Speed": 1}}
+	tags := NewTags()
+	tags.Set("P1", ir.Value{Kind: ir.TypeStruct, Struct: sd, Fld: []ir.Value{ir.BoolVal(false), ir.RealVal(1)}})
+	if err := tags.Force("P1.Run", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := tags.ForceIfFree("P1", ir.Value{}); err == nil || !strings.Contains(err.Error(), "already forced") {
+		t.Errorf("the whole tag over a forced member: %v", err)
+	}
+	if _, _, err := tags.ForceIfFree("P1.Speed", 5.0); err != nil {
+		t.Errorf("another member is free: %v", err)
+	}
+}
+
+// The table keeps a force under its own spelling of the address (member names
+// as the struct declares them, one index per bracket); ForceIfFree returns that
+// name, so ForceGen and UnforceIf find the force however the caller typed it,
+// and the overlap check sees a force set under another spelling.
+func TestForceIfFreeNamesTheForceTheWayTheTableDoes(t *testing.T) {
+	sd := &ir.StructDef{Name: "Pump", Fields: []ir.StructField{{Name: "Run"}, {Name: "Speed"}}, FieldIndex: map[string]int{"Run": 0, "Speed": 1}}
+	tags := NewTags()
+	tags.Set("P1", ir.Value{Kind: ir.TypeStruct, Struct: sd, Fld: []ir.Value{ir.BoolVal(false), ir.RealVal(1)}})
+	arr := ir.Value{Kind: ir.TypeArray, Arr: []ir.Value{ir.RealVal(0), ir.RealVal(0), ir.RealVal(0)}}
+	tags.Set("A", arr)
+	for _, c := range []struct{ typed, table string }{{"p1.speed", "P1.Speed"}, {"A[ 1]", "A[1]"}, {"A[01]", "A[1]"}, {"A[+1]", "A[1]"}} {
+		gen, name, err := tags.ForceIfFree(c.typed, 5.0)
+		if err != nil {
+			t.Fatalf("%q: %v", c.typed, err)
+		}
+		if name != c.table {
+			t.Errorf("%q is kept as %q, want %q", c.typed, name, c.table)
+		}
+		if g, ok := tags.ForceGen(name); !ok || g != gen {
+			t.Errorf("%q: ForceGen(%q) = %d %v, want %d", c.typed, name, g, ok, gen)
+		}
+		// another spelling of the same address is forced already
+		if _, _, err := tags.ForceIfFree(c.typed, 6.0); err == nil || !strings.Contains(err.Error(), "already forced") {
+			t.Errorf("%q forced twice: %v", c.typed, err)
+		}
+		if !tags.UnforceIf(name, gen) {
+			t.Errorf("%q: UnforceIf(%q) did not remove it", c.typed, name)
+		}
+	}
+	if len(tags.Forces()) != 0 {
+		t.Errorf("forces left: %v", tags.Forces())
+	}
+}
+
+// An operator's force typed with an odd index ("A[01]") is seen by a force
+// typed the plain way, and the other way round: one spelling of an element.
+func TestForceIndexSpellingsAreOneAddress(t *testing.T) {
+	tags := NewTags()
+	tags.Set("A", ir.Value{Kind: ir.TypeArray, Arr: []ir.Value{ir.RealVal(0), ir.RealVal(0), ir.RealVal(0)}})
+	if err := tags.Force("A[01]", 1.0); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := tags.ForceIfFree("A[1]", 7.0); err == nil || !strings.Contains(err.Error(), "already forced") {
+		t.Errorf("a plain A[1] over an operator's A[01]: %v", err)
+	}
+	if v, _ := tags.ReadPath("A[1]"); v != 1.0 {
+		t.Errorf("A[1] = %v, want the operator's 1", v)
+	}
+}
+
+// The force table keys every entry by one canonical address, whichever way it
+// was typed. This generates spellings of the same element (spaces, a sign,
+// leading zeros, "[i,j]" or "[i][j]", the case of the tag and of members) and
+// checks, for every pair of them: one entry, never two or one with two names;
+// the generation found through any spelling is the one the force was given;
+// another spelling cannot force it again (ForceIfFree is refused) and removes it
+// (Unforce, UnforceIf); and elements that differ stay different.
+func TestForceSpellingsOfOneElementAreOneEntry(t *testing.T) {
+	for seed := int64(1); seed <= 25; seed++ {
+		forceSpellings(t, seed)
+	}
+}
+
+func forceSpellings(t *testing.T, seed int64) {
+	sd := &ir.StructDef{Name: "Pump", Fields: []ir.StructField{{Name: "Run"}, {Name: "Speed"}}, FieldIndex: map[string]int{"Run": 0, "Speed": 1}}
+	row := func(n int) ir.Value {
+		a := make([]ir.Value, n)
+		for i := range a {
+			a[i] = ir.RealVal(0)
+		}
+		return ir.Value{Kind: ir.TypeArray, Arr: a}
+	}
+	grid := ir.Value{Kind: ir.TypeArray, Arr: []ir.Value{row(4), row(4), row(4)}}
+	fresh := func() *Tags {
+		tags := NewTags()
+		tags.Set("A", row(5))
+		tags.Set("Gridtag", grid)
+		tags.Set("P1", ir.Value{Kind: ir.TypeStruct, Struct: sd, Fld: []ir.Value{ir.BoolVal(false), ir.RealVal(1)}})
+		return tags
+	}
+	rng := rand.New(rand.NewSource(seed))
+	idx := func(n int) string {
+		forms := []string{"%d", "+%d", "0%d", "00%d", " %d", "%d ", " %d ", "+0%d"}
+		return fmt.Sprintf(forms[rng.Intn(len(forms))], n)
+	}
+	caseOf := func(s string) string {
+		switch rng.Intn(3) {
+		case 0:
+			return strings.ToLower(s)
+		case 1:
+			return strings.ToUpper(s)
+		}
+		return s
+	}
+	// a generator of spellings of one element, by shape
+	spell := map[string]func() string{
+		"A[2]": func() string { return caseOf("A") + "[" + idx(2) + "]" },
+		"Gridtag[1][2]": func() string {
+			if rng.Intn(2) == 0 {
+				return caseOf("Gridtag") + "[" + idx(1) + "," + idx(2) + "]"
+			}
+			return caseOf("Gridtag") + "[" + idx(1) + "][" + idx(2) + "]"
+		},
+		"P1.Speed": func() string { return caseOf("P1") + "." + caseOf("Speed") },
+	}
+	for canon, gen := range spell {
+		spellings := map[string]bool{}
+		for i := 0; i < 400 && len(spellings) < 25; i++ { // some shapes have few spellings
+			spellings[gen()] = true
+		}
+		for x := range spellings {
+			tags := fresh()
+			g1, name, err := tags.ForceIfFree(x, 5.0)
+			if err != nil {
+				continue // a spelling the table refuses is no spelling of an entry
+			}
+			if name != canon {
+				t.Errorf("%q is kept as %q, want %q", x, name, canon)
+			}
+			if n := len(tags.Forces()); n != 1 {
+				t.Fatalf("%q: %d entries after one force", x, n)
+			}
+			for y := range spellings {
+				if g, ok := tags.ForceGen(y); ok != (tags.ForceKey(y) == canon) || (ok && g != g1) {
+					// y resolved to the element: it must find the force by the same generation
+					if tags.ForceKey(y) == canon {
+						t.Errorf("force typed %q, looked up as %q: gen %d %v, want %d", x, y, g, ok, g1)
+					}
+				}
+				if tags.ForceKey(y) != canon {
+					continue // refused as an address: nothing to compare
+				}
+				if got := tags.ForcedOverlap(y); got != canon {
+					t.Fatalf("force typed %q: ForcedOverlap(%q) = %q, want %q", x, y, got, canon)
+				}
+				if _, _, err := tags.ForceIfFree(y, 6.0); err == nil || !strings.Contains(err.Error(), "already forced") {
+					t.Fatalf("force typed %q then ForceIfFree(%q): %v, want already forced", x, y, err)
+				}
+				if n := len(tags.Forces()); n != 1 {
+					t.Fatalf("force typed %q then %q: %d entries", x, y, n)
+				}
+				if tags.UnforceIf(y, g1+1000) {
+					t.Fatalf("UnforceIf(%q) with the wrong generation removed the force typed %q", y, x)
+				}
+			}
+			// any one spelling removes it; plain Unforce too
+			var ys []string
+			for y := range spellings {
+				if tags.ForceKey(y) == canon {
+					ys = append(ys, y)
+				}
+			}
+			y := ys[rng.Intn(len(ys))]
+			if rng.Intn(2) == 0 {
+				if !tags.UnforceIf(y, g1) {
+					t.Fatalf("UnforceIf(%q, %d) did not remove the force typed %q", y, g1, x)
+				}
+			} else if !tags.Unforce(y) {
+				t.Fatalf("Unforce(%q) did not remove the force typed %q", y, x)
+			}
+			if n := len(tags.Forces()); n != 0 {
+				t.Fatalf("%d entries left after removing the force typed %q via %q", n, x, y)
+			}
+		}
+	}
+	// elements that differ stay different, however typed
+	for _, other := range []string{"A[2]", "A[ 02]", "A[+3]", "A[4]", "A[0]"} {
+		tags := fresh()
+		if _, _, err := tags.ForceIfFree("A[1]", 1.0); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := tags.ForceIfFree(other, 1.0); err != nil {
+			t.Errorf("%q wrongly taken as the forced A[1]: %v", other, err)
+		}
+	}
+	tags2 := fresh()
+	tags2.ForceIfFree("Gridtag[1,2]", 1.0)
+	if _, _, err := tags2.ForceIfFree("Gridtag[2,1]", 1.0); err != nil {
+		t.Errorf("Gridtag[2,1] taken as Gridtag[1,2]: %v", err)
+	}
+}
+
+// A tag literally named like an element ("A[1]", which a driver may deliver)
+// beside the array "A" must not hide the element's force: the overlap is read
+// under the root the address resolved to, and a force is found by its
+// generation, however its name resolves.
+func TestForceSurvivesALiterallyNamedTagBesideTheArray(t *testing.T) {
+	tags := NewTags()
+	tags.Set("A", ir.Value{Kind: ir.TypeArray, Arr: []ir.Value{ir.RealVal(0), ir.RealVal(0), ir.RealVal(0)}})
+	tags.mu.Lock()
+	tags.writeLocked("A[1]", ir.RealVal(0)) // as setMany stores a name a driver delivers
+	tags.mu.Unlock()
+	if err := tags.Force("A[01]", 3.0); err != nil { // an operator's
+		t.Fatal(err)
+	}
+	if _, _, err := tags.ForceIfFree("A[01]", 9.0); err == nil || !strings.Contains(err.Error(), "already forced") {
+		t.Fatalf("an operator's force on the element was overwritten: %v", err)
+	}
+	if got := tags.ForcedOverlap("A[01]"); got == "" { // ("A[1]" is the literal tag, by the dotted-name rule)
+		t.Error("the write path does not see the element's force")
+	}
+	// a checkout force on another element is held and removed by generation
+	gen, name, err := tags.ForceIfFree("A[2]", 5.0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !tags.ForceHolds(gen) {
+		t.Error("ForceHolds does not find the force it was given")
+	}
+	if !tags.UnforceIf(name, gen) || tags.ForceHolds(gen) {
+		t.Error("UnforceIf did not remove exactly its force")
+	}
+	if len(tags.Forces()) != 1 {
+		t.Errorf("the operator's force is gone: %v", tags.Forces())
+	}
+}
+
+// Force refuses a malformed index as the write path does: nothing repairs
+// "A[1" or "A[[1]" into an element.
+func TestForceRefusesMalformedIndexes(t *testing.T) {
+	tags := NewTags()
+	tags.Set("A", ir.Value{Kind: ir.TypeArray, Arr: []ir.Value{ir.RealVal(0), ir.RealVal(0)}})
+	for _, bad := range []string{"A[1", "A[[1]", "A[1]]"} {
+		if err := tags.Force(bad, 1.0); err == nil {
+			t.Errorf("Force(%q) was accepted", bad)
+		}
+	}
+	if len(tags.Forces()) != 0 {
+		t.Errorf("forces: %v", tags.Forces())
 	}
 }

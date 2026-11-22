@@ -178,4 +178,3 @@ func deriveSheet(m *project.Manifest) (*checkout.Sheet, []string) {
 	}
 	return sh, skipped
 }
-

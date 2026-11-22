@@ -290,6 +290,11 @@ func (s *Server) broadcast() {
 		// not wait for a resync to show (or clear) a drift.
 		Config: s.ioConfigState(),
 	}
+	// a controller-only feature's block (the I/O checkout's standing force,
+	// #719), never gated
+	for _, h := range s.frameHooks {
+		h(s, &base)
+	}
 	quality := qualityJSON(s.rt.Quality())
 
 	// This tick's verdict on each non-tag block. They are the reason a
