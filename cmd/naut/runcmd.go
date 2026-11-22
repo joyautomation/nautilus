@@ -608,6 +608,9 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 			} else {
 				co.Store = st
 				defer st.Close()
+				if why := st.KeyError(); why != "" {
+					fmt.Fprintf(os.Stderr, "naut run: checkout: sealing is off (results are still recorded): the signing key cannot be used: %s\n", why)
+				}
 				if st.KeyReplaced() {
 					fmt.Fprintln(os.Stderr, "naut run: checkout: the signing key was made new although sealed runs exist (checkout.key was deleted or lost): records sealed before still verify against their own key, but a key fingerprint written down earlier is no longer the controller's")
 				}

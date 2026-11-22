@@ -2,6 +2,9 @@ package main
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
+	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -19,6 +22,7 @@ import (
 // manifest that attests real-io lifts all but "no driver"; what it saw goes in
 // the record.
 func TestSealEvidenceFailsClosed(t *testing.T) {
+	defer stubDNS()()
 	sh := &checkout.Sheet{Points: []checkout.Point{{ID: "XV1", Tag: "XV1", Kind: checkout.DO, Method: checkout.Force, Device: "RIO"}}}
 	own := map[netip.Addr]bool{netip.MustParseAddr("192.0.2.7"): true}
 	modbus := func(host string) project.DriverConfig { return project.DriverConfig{Type: "modbus", Host: host} }
@@ -26,28 +30,35 @@ func TestSealEvidenceFailsClosed(t *testing.T) {
 		name     string
 		m        project.Manifest
 		virtual  map[string]bool
-		attested bool
+		attested []string
 		refuse   string
 		devices  int
 	}{
-		{"no driver at all (the implicit memory loopback)", project.Manifest{}, nil, false, "no field driver configured", 0},
-		{"a memory driver", project.Manifest{Driver: project.DriverConfig{Type: "memory"}}, nil, false, "no field driver configured", 0},
-		{"a runtime driver alone has no field I/O", project.Manifest{Driver: project.DriverConfig{Type: "runtime"}}, nil, false, "no field driver configured", 0},
-		{"a modbus driver on localhost", project.Manifest{Driver: modbus("127.0.0.1:5020")}, nil, false, "loopback address", 1},
-		{"a driver on a virtual device's listen port", project.Manifest{Driver: modbus("10.9.9.9:15020")}, map[string]bool{"10.9.9.9|15020": true}, false, "virtual address", 1},
+		{"no driver at all (the implicit memory loopback)", project.Manifest{}, nil, nil, "no field driver configured", 0},
+		{"a memory driver", project.Manifest{Driver: project.DriverConfig{Type: "memory"}}, nil, nil, "no field driver configured", 0},
+		{"a runtime driver alone has no field I/O", project.Manifest{Driver: project.DriverConfig{Type: "runtime"}}, nil, nil, "no field driver configured", 0},
+		{"a modbus driver on localhost", project.Manifest{Driver: modbus("127.0.0.1:5020")}, nil, nil, "loopback address", 1},
+		{"a driver on a virtual device's listen port", project.Manifest{Driver: modbus("10.9.9.9:15020")}, map[string]bool{"10.9.9.9|15020": true}, nil, "virtual address", 1},
 		{"one simulator among real devices", project.Manifest{
-			Drivers: []project.DriverConfig{modbus("plc.example:502"), {Type: "eip", Name: "sim", Host: "localhost"}}}, nil, false, "driver sim connects to a loopback", 2},
-		{"a driver whose hosts are in a manifest file", project.Manifest{Driver: project.DriverConfig{Type: "modbus", Manifest: "m.yaml"}}, nil, false, "cannot read where driver modbus connects", 1},
-		{"a device row with no endpoint", project.Manifest{Driver: modbus("plc.example:502"), Devices: []devbind.Device{{Name: "RIO"}}}, nil, false, "device RIO is at a unknown address", 2},
+			Drivers: []project.DriverConfig{modbus("plc.example:502"), {Type: "eip", Name: "sim", Host: "localhost"}}}, nil, nil, "driver sim connects to a loopback", 2},
+		{"a driver whose hosts are in a manifest file", project.Manifest{Driver: project.DriverConfig{Type: "modbus", Manifest: "m.yaml"}}, nil, nil, "cannot read where driver modbus connects", 1},
+		{"a device row with no endpoint", project.Manifest{Driver: modbus("plc.example:502"), Devices: []devbind.Device{{Name: "RIO"}}}, nil, nil, "device RIO is at a unknown address", 2},
 		{"a point on a device at a loopback", project.Manifest{
 			Driver:  modbus("plc.example:502"),
-			Devices: []devbind.Device{{Name: "RIO", Endpoint: "localhost:15021"}}}, nil, false, "point XV1 is on device RIO", 2},
-		{"this box's own address", project.Manifest{Driver: modbus("192.0.2.7:502")}, nil, false, "loopback address", 1},
-		{"a real network device", project.Manifest{Driver: modbus("plc.example:502"), Devices: []devbind.Device{{Name: "RIO", Endpoint: "10.0.0.11"}}}, nil, false, "", 2},
-		{"a device row alone, on the network", project.Manifest{Devices: []devbind.Device{{Name: "RIO", Endpoint: "opc.tcp://10.0.0.12:4840"}}}, nil, false, "", 1},
-		{"attested: a gateway on a loopback", project.Manifest{Driver: modbus("127.0.0.1:502")}, nil, true, "", 1},
-		{"attested: a driver whose hosts are in a file", project.Manifest{Driver: project.DriverConfig{Type: "modbus", Manifest: "m.yaml"}}, nil, true, "", 1},
-		{"attested does not make a driver up", project.Manifest{}, nil, true, "no field driver configured", 0},
+			Devices: []devbind.Device{{Name: "RIO", Endpoint: "localhost:15021"}}}, nil, nil, "1 point(s) (XV1) are on device RIO", 2},
+		{"this box's own address", project.Manifest{Driver: modbus("192.0.2.7:502")}, nil, nil, "loopback address", 1},
+		{"a real network device", project.Manifest{Driver: modbus("plc.example:502"), Devices: []devbind.Device{{Name: "RIO", Endpoint: "10.0.0.11"}}}, nil, nil, "", 2},
+		{"a device row alone, on the network", project.Manifest{Devices: []devbind.Device{{Name: "RIO", Endpoint: "opc.tcp://10.0.0.12:4840"}}}, nil, nil, "", 1},
+		{"attested: a gateway on a loopback", project.Manifest{Driver: modbus("127.0.0.1:502")}, nil, []string{"modbus"}, "", 1},
+		{"attested: a driver whose hosts are in a file", project.Manifest{Driver: project.DriverConfig{Type: "modbus", Manifest: "m.yaml"}}, nil, []string{"modbus"}, "", 1},
+		{"attested does not make a driver up", project.Manifest{}, nil, []string{"modbus"}, "no field driver configured", 0},
+		{"attesting one driver does not excuse another simulator", project.Manifest{Drivers: []project.DriverConfig{
+			{Type: "modbus", Host: "127.0.0.1:502"}, {Type: "eip", Name: "sim", Host: "localhost"}}}, nil, []string{"modbus"}, "driver sim connects to a loopback", 2},
+		{"a replay alone is not field I/O", project.Manifest{Driver: project.DriverConfig{Type: "replay"}}, nil, []string{"replay"}, "no field driver configured", 0},
+		{"a broker's password stays out of the evidence", project.Manifest{Driver: project.DriverConfig{Type: "sparkplug-host", Broker: "tcp://user:secret@broker.example:1883"}}, nil, nil, "", 1},
+		{"a host list with a loopback in it", project.Manifest{Driver: modbus("10.0.0.5:502,127.0.0.1:502")}, nil, nil, "loopback address", 2},
+		{"a name that resolves to the box", project.Manifest{Driver: modbus("gateway.lan:502")}, nil, nil, "loopback address", 1},
+		{"a name that does not resolve", project.Manifest{Driver: modbus("nowhere.example:502")}, nil, nil, "unknown address", 1},
 	} {
 		ev, why := deriveEvidence(&c.m, sh, c.virtual, own, c.attested)
 		if (why == "") != (c.refuse == "") || !strings.Contains(why, c.refuse) {
@@ -56,18 +67,20 @@ func TestSealEvidenceFailsClosed(t *testing.T) {
 		if len(ev.Devices) != c.devices {
 			t.Errorf("%s: evidence %+v, want %d device(s)", c.name, ev.Devices, c.devices)
 		}
-		if ev.Attested != c.attested {
+		if c.refuse == "" && (len(ev.Attested) > 0) != (len(c.attested) > 0) {
 			t.Errorf("%s: attested %v", c.name, ev.Attested)
 		}
 	}
 }
 
 func TestClassifyEndpoints(t *testing.T) {
+	defer stubDNS()()
 	own := map[netip.Addr]bool{netip.MustParseAddr("192.0.2.7"): true}
 	for ep, want := range map[string]string{
 		"localhost:502": "loopback", "127.0.0.1": "loopback", "[::1]:4840": "loopback", "opc.tcp://localhost:4840": "loopback", "0.0.0.0:502": "loopback",
 		"localhost.": "loopback", "LOCALHOST:502": "loopback", "127.1": "loopback", "0x7f.1": "loopback", "2130706433": "loopback", "[::ffff:127.0.0.1]:502": "loopback",
 		":502": "unknown", "": "unknown", "192.0.2.7:502": "loopback", "tcp://user@127.0.0.1:1883": "loopback", "foo.localhost": "loopback",
+		"localhost.localdomain": "loopback", "ip6-localhost": "loopback", "[fe80::1%lo]:502": "loopback", "gateway.lan:502": "loopback", "nowhere.example": "unknown",
 		"10.0.0.11": "network", "plc.example:502": "network", "opc.tcp://10.0.0.12:4840/x": "network", "tcp://broker.example:1883": "network", "192.0.2.8:502": "network",
 	} {
 		if got := classify(ep, nil, own); got != want {
@@ -88,6 +101,7 @@ func TestClassifyEndpoints(t *testing.T) {
 // 1) for each way of altering it; the wording never claims a legal signature.
 func TestCheckoutVerifyCommand(t *testing.T) {
 	dir := t.TempDir()
+	os.Chmod(dir, 0o700) // a state directory only its owner can write
 	st, err := checkout.Open(filepath.Join(dir, "checkout.jsonl"), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -174,4 +188,46 @@ func mustReadFile(t *testing.T, p string) []byte {
 		t.Fatal(err)
 	}
 	return b
+}
+
+// stubDNS makes the resolver the test's: plc.example and broker.example are
+// real-looking addresses, gateway.lan is this box, nothing else resolves.
+func stubDNS() func() {
+	old := lookupHost
+	lookupHost = func(h string) ([]net.IP, error) {
+		switch h {
+		case "plc.example", "broker.example":
+			return []net.IP{net.ParseIP("203.0.113.10")}, nil
+		case "gateway.lan":
+			return []net.IP{net.ParseIP("127.0.1.1")}, nil
+		}
+		return nil, errors.New("no such host")
+	}
+	return func() { lookupHost = old }
+}
+
+func TestRedactRemovesCredentials(t *testing.T) {
+	for in, want := range map[string]string{
+		"tcp://user:secret@broker.example:1883": "tcp://broker.example:1883", "ssl://u@h:8883/x": "ssl://h:8883/x",
+		"plc.example:502": "plc.example:502", "user:pw@10.0.0.1": "10.0.0.1", "tcp://h/p@th": "tcp://h/p@th",
+	} {
+		if got := redact(in); got != want {
+			t.Errorf("redact(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// A large sheet on a loopback devices: row gives a short reason (one line per
+// device), not one clause per point: a run's entry has a size limit.
+func TestEvidenceReasonStaysShortOnALargeSheet(t *testing.T) {
+	defer stubDNS()()
+	sh := &checkout.Sheet{}
+	for i := 0; i < 3000; i++ {
+		sh.Points = append(sh.Points, checkout.Point{ID: fmt.Sprintf("P%d", i), Tag: fmt.Sprintf("P%d", i), Kind: checkout.DI, Method: checkout.Observe, Device: "RIO"})
+	}
+	m := project.Manifest{Driver: project.DriverConfig{Type: "modbus", Host: "plc.example:502"}, Devices: []devbind.Device{{Name: "RIO", Endpoint: "localhost:15021"}}}
+	_, why := deriveEvidence(&m, sh, nil, nil, nil)
+	if why == "" || len(why) > 2000 || !strings.Contains(why, "3000 point(s) (P0, P1, P2 and 2997 more) are on device RIO") {
+		t.Errorf("reason (%d bytes): %.300s", len(why), why)
+	}
 }

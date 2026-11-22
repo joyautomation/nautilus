@@ -84,7 +84,8 @@ type entry struct {
 	Unreal string `json:"unreal,omitempty"`
 
 	// kind result: what the controller saw standing on the point's tag when it
-	// recorded ("forced: X", "substituted: X"), from the controller
+	// recorded ("forced: X", "substituted: X"), and a hash of the devices it
+	// was connected to then, from the controller
 	Override string `json:"override,omitempty"`
 
 	// kind result
@@ -127,7 +128,10 @@ type Result struct {
 	// force on the point) stood on the point's tag when the result was
 	// recorded: what the reading then says is not the wiring's. Only a fail or
 	// a note is recorded so; the controller refuses a pass.
-	Override  string `json:"override,omitempty"`
+	Override string `json:"override,omitempty"`
+	// EvSha is a hash of the devices the controller was connected to when the
+	// result was recorded (the seal compares it with the run's).
+	EvSha     string `json:"evsha,omitempty"`
 	By        string `json:"by"`
 	Principal string `json:"principal,omitempty"`
 	// Force is the checkout force the point last had in the run, when it had
@@ -217,6 +221,7 @@ type Store struct {
 	// key signs sealed runs (seal.go): created beside the file at Open.
 	key         *signKey
 	keyReplaced bool
+	keyErr      error
 }
 
 // appendFile is the file as the store uses it (a test's can fail).
@@ -286,10 +291,12 @@ func Open(path string, now func() time.Time) (*Store, error) {
 	}
 	s.off = st.Size()
 	syncDir(filepath.Dir(path))
+	// a key that cannot be used (others can read it, its directory is writable by
+	// others, it is damaged) turns sealing off with the reason, not the whole
+	// checkout: results keep being recorded
 	var created bool
 	if s.key, created, err = loadOrCreateKey(filepath.Join(filepath.Dir(path), KeyFile)); err != nil {
-		f.Close()
-		return nil, fmt.Errorf("checkout: the signing key: %w", err)
+		s.key, s.keyErr = nil, err
 	}
 	for _, r := range s.runs {
 		if r.State == StateSealed && created {
@@ -360,7 +367,7 @@ func (s *Store) apply(e entry) error {
 			return errors.New("a result for a run that is not open")
 		}
 		res := Result{Run: e.Run, Seq: e.Seq, At: e.At, Point: e.Point,
-			Outcome: e.Outcome, Note: e.Note, Seen: e.Seen, Quality: e.Quality, Override: e.Override, By: e.By, Principal: e.Principal}
+			Outcome: e.Outcome, Note: e.Note, Seen: e.Seen, Quality: e.Quality, Override: e.Override, EvSha: e.EvSha, By: e.By, Principal: e.Principal}
 		if fs := r.forces[e.Point]; len(fs) > 0 {
 			last := fs[len(fs)-1]
 			res.Force = &ForceRef{Seq: last.rec.Seq, Value: last.rec.Value, Seconds: last.rec.Seconds, Ended: last.ended}
@@ -505,14 +512,14 @@ func (s *Store) BeginWith(rehearsal bool, sheetHash, title, by, principal, evide
 // Record adds a result for a point of an open run. A fail and a note say
 // why: a pass may have no words.
 func (s *Store) Record(run, point, outcome, note string, seen any, quality, by, principal string) (Result, error) {
-	return s.RecordWith(run, point, outcome, note, seen, quality, "", by, principal)
+	return s.RecordWith(run, point, outcome, note, seen, quality, "", "", by, principal)
 }
 
 // RecordWith is Record with what the controller saw standing on the point's
 // tag: a force or a substitute that is not this checkout's own. A pass is
 // refused while one stands (a reading through an override proves nothing about
 // the wiring); a fail or a note is recorded with it.
-func (s *Store) RecordWith(run, point, outcome, note string, seen any, quality, override, by, principal string) (Result, error) {
+func (s *Store) RecordWith(run, point, outcome, note string, seen any, quality, override, evidenceSha, by, principal string) (Result, error) {
 	if override != "" && outcome == Pass {
 		return Result{}, invalid("a pass is not recorded while %s: the reading is not the wiring's. Clear it and record the pass again; a fail or a note may be recorded now", override)
 	}
@@ -540,7 +547,7 @@ func (s *Store) RecordWith(run, point, outcome, note string, seen any, quality, 
 	if r.State != StateOpen {
 		return Result{}, ErrNotOpen
 	}
-	e := entry{Kind: kindResult, Run: run, Point: point, Outcome: outcome, Note: note, Seen: seen, Quality: quality, Override: override, By: by, Principal: principal}
+	e := entry{Kind: kindResult, Run: run, Point: point, Outcome: outcome, Note: note, Seen: seen, Quality: quality, Override: override, EvSha: evidenceSha, By: by, Principal: principal}
 	if err := s.append(e); err != nil {
 		return Result{}, err
 	}

@@ -172,8 +172,9 @@ claims:
       lock: it refuses a rehearsal run, a controller that cannot say its devices
       are real (decided from its own manifest when the run begins and again at
       the seal, failing closed: no field driver, any loopback, own-box or
-      virtual endpoint, any endpoint it cannot read, unless the manifest says
-      real-io; whatever the client's flag says), a sheet that changed since the
+      virtual endpoint, any endpoint it cannot read, waived only for the names
+      the manifest lists in real-io; whatever the client's flag says; a result
+      recorded against other devices than the run began against is refused), a sheet that changed since the
       run began, a standing checkout force, a point whose latest result is not
       a pass (none, a fail or only a note), and (by default) a signer who took
       part in the run (began it, recorded results or forced an output), and
@@ -195,6 +196,9 @@ claims:
       - go ./server TestCheckoutSealSinglePersonSaysSo
       - go ./cmd/naut TestSealEvidenceFailsClosed
       - go ./checkout TestSealNeedsAPassOnEveryPoint
+      - go ./checkout TestSealRefusesResultsRecordedAgainstOtherDevices
+      - go ./cmd/naut TestRedactRemovesCredentials
+      - go ./cmd/naut TestEvidenceReasonStaysShortOnALargeSheet
       - go ./checkout TestPassIsRefusedWhileAnOverrideStands
       - go ./checkout TestSealRefusedWhileAnOverrideStands
       - go ./server TestCheckoutOverridesOnSheetTags
@@ -219,7 +223,7 @@ claims:
       - go ./checkout TestVerifyCatchesTampering
       - go ./checkout TestVerifyChecksWhereTheSealSits
       - go ./checkout TestSealVerifiesNotesThatHTMLWouldEscape
-      - go ./checkout TestOpenSweepsASealedRecordTheFileDoesNotKnow
+      - go ./checkout TestOpenSweepsASealedRecordForARunTheFileCallsOpen
       - go ./checkout TestTheSigningKey
       - go ./cmd/naut TestCheckoutVerifyCommand
       - go ./server TestEveryWritePathJournalsExactlyOneEntry

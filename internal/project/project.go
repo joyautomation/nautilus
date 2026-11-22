@@ -1500,14 +1500,15 @@ type CheckoutConfig struct {
 	// person who recorded them sign. naut check warns on single, and the
 	// sealed record says so.
 	Signoff string `yaml:"signoff"`
-	// RealIO says the controller reaches real field devices where it cannot
-	// read that off the manifest (a driver that keeps its hosts in a manifest
-	// file; a local gateway on a loopback address). The controller refuses to
-	// sign off a run against what looks like virtual devices, or devices it
-	// cannot read, unless this is set; the sealed record then says the
-	// manifest attested it. It never makes up a driver: a project with none is
-	// still refused.
-	RealIO bool `yaml:"real-io"`
+	// RealIO names the drivers and devices (as `naut check` and the sealed
+	// record name them) that reach real field I/O although the controller
+	// cannot tell from the endpoint: a driver that keeps its hosts in a manifest
+	// file, a local gateway on a loopback address. The controller refuses to
+	// sign off a run against what looks like virtual devices, or endpoints it
+	// cannot read, except for these names; the sealed record lists them. It
+	// waives nothing else: a project with no driver, or with another simulator
+	// beside them, is still refused.
+	RealIO []string `yaml:"real-io"`
 }
 
 // Checkout sign-off rules.
@@ -1516,9 +1517,14 @@ const (
 	SignoffSingle    = "single"
 )
 
-// Attested is whether the manifest says the controller reaches real field I/O
+// Attested is the drivers and devices the manifest says reach real field I/O
 // (checkout: real-io).
-func (c *CheckoutConfig) Attested() bool { return c != nil && c.RealIO }
+func (c *CheckoutConfig) Attested() []string {
+	if c == nil {
+		return nil
+	}
+	return c.RealIO
+}
 
 // SignoffRule is the sign-off rule in force: two-person unless the manifest
 // says single.

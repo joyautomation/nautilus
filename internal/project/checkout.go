@@ -74,8 +74,8 @@ func (p *Project) CheckCheckout(rt *runtime.Runtime) (errs, warns []string) {
 	if p.Checkout.SignoffRule() == SignoffSingle {
 		warns = append(warns, "checkout.signoff: single: the person who recorded a checkout's results may also seal it; the sealed record says single-person")
 	}
-	if p.Checkout.Attested() {
-		warns = append(warns, "checkout.real-io: the manifest says this controller reaches real field devices: the controller does not check it for the endpoints it cannot read or that look like virtual devices, and a sealed record says the manifest attested it")
+	if names := p.Checkout.Attested(); len(names) > 0 {
+		warns = append(warns, "checkout.real-io: the manifest says "+strings.Join(names, ", ")+" reach real field devices: the controller does not check that for them (a loopback or unreadable endpoint), and a sealed record lists them as attested")
 	}
 	return errs, warns
 }

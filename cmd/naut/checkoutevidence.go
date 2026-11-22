@@ -1,14 +1,17 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
 	"net"
 	"net/netip"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/joyautomation/nautilus/checkout"
 	"github.com/joyautomation/nautilus/internal/project"
@@ -34,7 +37,7 @@ import (
 // unless the manifest attests checkout: real-io, for a controller that reaches
 // real devices through a local gateway or a driver whose hosts it cannot read;
 // the evidence then says so. What it saw goes in the run and the sealed record.
-func checkoutEvidence(fsys fs.FS, manifest, dir string, attested bool) func(*checkout.Sheet) (checkout.Evidence, string) {
+func checkoutEvidence(fsys fs.FS, manifest, dir string, attested []string) func(*checkout.Sheet) (checkout.Evidence, string) {
 	return func(sh *checkout.Sheet) (checkout.Evidence, string) {
 		m, err := project.ReadManifest(fsys, manifest)
 		if err != nil {
@@ -89,8 +92,13 @@ func ownAddrs() map[netip.Addr]bool {
 	return out
 }
 
-func deriveEvidence(m *project.Manifest, sh *checkout.Sheet, virtual map[string]bool, own map[netip.Addr]bool, attested bool) (checkout.Evidence, string) {
-	ev := checkout.Evidence{Attested: attested}
+func deriveEvidence(m *project.Manifest, sh *checkout.Sheet, virtual map[string]bool, own map[netip.Addr]bool, attested []string) (checkout.Evidence, string) {
+	ev := checkout.Evidence{}
+	ok := map[string]bool{}
+	for _, n := range attested {
+		ok[strings.ToLower(n)] = true
+	}
+	used := map[string]bool{}
 	drivers := append([]project.DriverConfig(nil), m.Drivers...)
 	if m.Driver.Type != "" {
 		drivers = append(drivers, m.Driver)
@@ -104,51 +112,118 @@ func deriveEvidence(m *project.Manifest, sh *checkout.Sheet, virtual map[string]
 		}
 		ev.Drivers = append(ev.Drivers, checkout.DriverEvidence{Name: name, Kind: d.Type})
 		switch strings.ToLower(d.Type) {
-		case "", "memory", "loopback", "runtime":
-			continue // no field I/O behind these
+		case "", "memory", "loopback", "runtime", "replay":
+			continue // no field I/O behind these (a replay plays recorded data)
 		}
 		field++
 		read := 0
-		for _, ep := range []string{d.Host, d.Endpoint, d.Broker} {
-			if ep == "" {
-				continue
-			}
-			read++
-			cls := classify(ep, virtual, own)
-			ev.Devices = append(ev.Devices, checkout.DeviceEvidence{Name: name, Endpoint: ep, Class: cls})
-			if cls != "network" {
-				problems = append(problems, fmt.Sprintf("driver %s connects to a %s address (%s)", name, cls, ep))
+		for _, raw := range []string{d.Host, d.Endpoint, d.Broker} {
+			for _, ep := range splitEndpoints(raw) {
+				read++
+				cls := classify(ep, virtual, own)
+				shown := redact(ep)
+				ev.Devices = append(ev.Devices, checkout.DeviceEvidence{Name: name, Endpoint: shown, Class: cls})
+				if cls != "network" && !ok[strings.ToLower(name)] {
+					problems = append(problems, fmt.Sprintf("driver %s connects to a %s address (%s)", name, cls, shown))
+				} else if cls != "network" {
+					used[strings.ToLower(name)] = true
+				}
 			}
 		}
 		if read == 0 {
 			ev.Devices = append(ev.Devices, checkout.DeviceEvidence{Name: name, Class: "unknown"})
-			problems = append(problems, fmt.Sprintf("the controller cannot read where driver %s connects (its hosts are in a manifest file)", name))
+			if !ok[strings.ToLower(name)] {
+				problems = append(problems, fmt.Sprintf("the controller cannot read where driver %s connects (its hosts are in a manifest file)", name))
+			} else {
+				used[strings.ToLower(name)] = true
+			}
 		}
 	}
 	byName := map[string]string{}
 	for _, d := range m.Devices {
-		cls := classify(d.Endpoint, virtual, own)
-		if strings.TrimSpace(d.Endpoint) == "" {
-			cls = "unknown"
+		cls := "unknown"
+		eps := splitEndpoints(d.Endpoint)
+		for i, ep := range eps {
+			c := classify(ep, virtual, own)
+			if i == 0 || c != "network" {
+				cls = c
+			}
 		}
 		byName[d.Name] = cls
-		ev.Devices = append(ev.Devices, checkout.DeviceEvidence{Name: d.Name, Endpoint: d.Endpoint, Class: cls})
-		if cls != "network" {
-			problems = append(problems, fmt.Sprintf("device %s is at a %s address (%q)", d.Name, cls, d.Endpoint))
+		ev.Devices = append(ev.Devices, checkout.DeviceEvidence{Name: d.Name, Endpoint: redact(d.Endpoint), Class: cls})
+		if cls != "network" && !ok[strings.ToLower(d.Name)] {
+			problems = append(problems, fmt.Sprintf("device %s is at a %s address (%q)", d.Name, cls, redact(d.Endpoint)))
+		} else if cls != "network" {
+			used[strings.ToLower(d.Name)] = true
 		}
 	}
 	if field == 0 && len(m.Devices) == 0 {
-		return ev, "this controller has no field driver configured (it runs the in-memory loopback): nothing physical was checked"
+		return ev, "this controller has no field driver configured (it runs the in-memory loopback or replays recorded data): nothing physical was checked"
 	}
+	// the points on devices at such addresses, by device, so a large sheet gives
+	// a short reason
+	onBad := map[string][]string{}
+	var badDevs []string
 	for _, p := range sh.Points {
-		if cls, ok := byName[p.Device]; ok && cls != "network" {
-			problems = append(problems, fmt.Sprintf("point %s is on device %s, which this controller reaches at a %s address", p.ID, p.Device, cls))
+		if cls, found := byName[p.Device]; found && cls != "network" && !ok[strings.ToLower(p.Device)] {
+			if len(onBad[p.Device]) == 0 {
+				badDevs = append(badDevs, p.Device)
+			}
+			onBad[p.Device] = append(onBad[p.Device], p.ID)
 		}
 	}
-	if len(problems) > 0 && !attested {
-		return ev, strings.Join(problems, "; ") + ": a checkout against these proves nothing about the plant. If this controller does reach real field devices this way (a local gateway, a driver whose hosts are in a manifest file), say so in the manifest with checkout: {real-io: true}"
+	for _, dv := range badDevs {
+		ids := onBad[dv]
+		list := strings.Join(ids[:min(len(ids), 3)], ", ")
+		if len(ids) > 3 {
+			list += fmt.Sprintf(" and %d more", len(ids)-3)
+		}
+		problems = append(problems, fmt.Sprintf("%d point(s) (%s) are on device %s, which this controller reaches at a %s address", len(ids), list, dv, byName[dv]))
+	}
+	for n := range ok {
+		if !used[n] {
+			continue
+		}
+		ev.Attested = append(ev.Attested, n)
+	}
+	sort.Strings(ev.Attested)
+	if len(problems) > 0 {
+		if len(problems) > 6 {
+			problems = append(problems[:6], fmt.Sprintf("and %d more", len(problems)-6))
+		}
+		return ev, strings.Join(problems, "; ") + ": a checkout against these proves nothing about the plant. If a driver or device really does reach field I/O this way (a local gateway, a driver whose hosts are in a manifest file), name it in the manifest: checkout: {real-io: [name]}"
 	}
 	return ev, ""
+}
+
+// splitEndpoints reads an endpoint field that may list several (a comma or
+// space separated list).
+func splitEndpoints(raw string) []string {
+	var out []string
+	for _, p := range strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == ' ' || r == ';' }) {
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// redact removes a user name and password from an endpoint (a broker URL
+// carries them): the evidence goes in the run, the sealed record and the page.
+func redact(ep string) string {
+	i := strings.Index(ep, "://")
+	rest, scheme := ep, ""
+	if i >= 0 {
+		scheme, rest = ep[:i+3], ep[i+3:]
+	}
+	end := strings.IndexAny(rest, "/?")
+	if end < 0 {
+		end = len(rest)
+	}
+	if at := strings.LastIndex(rest[:end], "@"); at >= 0 {
+		rest = rest[at+1:]
+	}
+	return scheme + rest
 }
 
 // classify says what an endpoint is: loopback (localhost, 127.x, ::1, an
@@ -160,10 +235,32 @@ func classify(endpoint string, virtual map[string]bool, own map[netip.Addr]bool)
 	if h == "" {
 		return "unknown"
 	}
-	self := h == "localhost" || strings.HasSuffix(h, ".localhost")
+	zone := ""
+	if i := strings.Index(h, "%"); i >= 0 {
+		h, zone = h[:i], h[i+1:] // an IPv6 zone: fe80::1%lo
+	}
+	self := zone == "lo" || zone == "lo0" || h == "localhost" || strings.HasSuffix(h, ".localhost") || h == "localhost.localdomain" || h == "ip6-localhost" || h == "ip6-loopback"
 	if a, ok := parseHostAddr(h); ok {
 		a = a.Unmap()
 		self = self || a.IsLoopback() || a.IsUnspecified() || own[a]
+	} else if !self {
+		// a name: this box's own name, or one that resolves to this box (a
+		// name in /etc/hosts). A name that does not resolve is unknown: nothing
+		// says where the driver would connect.
+		if hn, err := os.Hostname(); err == nil && strings.EqualFold(strings.TrimSuffix(hn, "."), h) {
+			self = true
+		} else if ips, err := lookupHost(h); err != nil || len(ips) == 0 {
+			return "unknown"
+		} else {
+			for _, ip := range ips {
+				if a, ok := netip.AddrFromSlice(ip); ok {
+					a = a.Unmap()
+					if a.IsLoopback() || a.IsUnspecified() || own[a] {
+						self = true
+					}
+				}
+			}
+		}
 	}
 	if virtual[h+"|"+p] || (self && p != "" && virtualPort(virtual, p)) {
 		return "virtual"
@@ -181,6 +278,19 @@ func virtualPort(virtual map[string]bool, port string) bool {
 		}
 	}
 	return false
+}
+
+// lookupHost resolves a name for classify: the system resolver, a second at
+// most (a test replaces it).
+var lookupHost = func(h string) ([]net.IP, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, h)
+	var out []net.IP
+	for _, a := range addrs {
+		out = append(out, a.IP)
+	}
+	return out, err
 }
 
 // parseHostAddr reads an IP in any spelling a resolver accepts: dotted, IPv6,

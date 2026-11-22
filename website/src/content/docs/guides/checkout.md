@@ -192,11 +192,18 @@ It refuses when
   address of the box itself or one of the project's own virtual devices (one
   simulator among real devices is enough), **any** driver whose endpoint it
   cannot read (a driver that keeps its hosts in a manifest file), or a point on
-  a `devices:` row at such an address. A controller that does reach real
-  devices that way (a local gateway, a driver whose hosts are in a file) says so
-  with `checkout: {real-io: true}` in the manifest: the controller then records
-  that the manifest attested it, `naut check` warns, and a project with no
-  driver is still refused. The drivers and endpoints it saw are in the sealed
+  a `devices:` row at such an address. Names are resolved: this box's own
+  name, `localhost.localdomain` and a name that resolves to the box are
+  loopbacks, and a name that does not resolve is unknown. A run recorded while
+  other devices were connected (a simulator deployed for part of the run) is
+  refused: each result carries a hash of the devices it was recorded against.
+  A driver or device that does reach real field I/O this way (a local gateway,
+  a driver whose hosts are in a manifest file) is named in the manifest with
+  `checkout: {real-io: [gateway, plc1]}`: those names, and only those, are
+  waived, `naut check` warns, and the sealed record lists them as attested. A
+  project with no driver, or a `replay` driver alone, is still refused, and so
+  is another simulator beside the named ones. The drivers and endpoints it saw
+  (with any user name and password in a broker URL removed) are in the sealed
   record;
 - the **sheet changed** since the run began (`checkout.yaml` was edited and
   deployed): a seal signs the results against one sheet, so abandon the run and
@@ -257,7 +264,8 @@ keep a copy of the sealed record and the results file somewhere else when a run
 is signed off: a copy made elsewhere is what makes an edit show. The seal's
 hash is also written in the audit journal (the `checkout.seal` entry's `after`),
 so a site that copies the audit journal off the box has an independent anchor
-for `verify --audit`.
+for `verify --audit`. (`--audit` looks the entry up; it does not check the
+journal's own chain: use `naut audit verify` for that.)
 
 ## Not yet
 

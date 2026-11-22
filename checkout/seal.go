@@ -78,6 +78,9 @@ func loadOrCreateKey(path string) (*signKey, bool, error) {
 	case !errors.Is(err, os.ErrNotExist):
 		return nil, false, err
 	}
+	if merr := securefile.CheckMode(path, "the checkout signing key", "the key"); merr != nil {
+		return nil, false, merr // the directory, before a key is made in it
+	}
 	seed := make([]byte, ed25519.SeedSize)
 	if _, err := rand.Read(seed); err != nil {
 		return nil, false, err
@@ -108,6 +111,15 @@ func loadOrCreateKey(path string) (*signKey, bool, error) {
 	return &signKey{priv: priv, pub: priv.Public().(ed25519.PublicKey)}, true, nil
 }
 
+// KeyError is why sealing is off ("" when the signing key is in use): the key
+// or its directory could not be used. Results are recorded either way.
+func (s *Store) KeyError() string {
+	if s.keyErr == nil {
+		return ""
+	}
+	return s.keyErr.Error()
+}
+
 // KeyReplaced says the signing key was made new at Open although the results
 // file already holds sealed runs: the key file was deleted or lost. Records
 // sealed before carry their own public key and still verify, but a fingerprint
@@ -115,21 +127,24 @@ func loadOrCreateKey(path string) (*signKey, bool, error) {
 // says so at start.
 func (s *Store) KeyReplaced() bool { return s.keyReplaced }
 
-// sweepSealed removes sealed-record files for runs the results file does not
-// say are sealed (a crash after the record was written and before the seal
-// entry was), and temp files a crash left: a record that says SEALED for a run
-// that was not must not outlive the crash.
+// sweepSealed removes a sealed-record file for a run the results file knows
+// and does not call sealed (a crash after the record was written and before
+// the seal entry was), and temp files a crash left: a record that says SEALED
+// for a run that was not must not outlive the crash.
 func (s *Store) sweepSealed() {
 	dir := filepath.Dir(s.path)
 	files, _ := filepath.Glob(filepath.Join(dir, "checkout-sealed-*.json*"))
 	for _, f := range files {
-		keep := false
 		for id, r := range s.runs {
-			if r.State == StateSealed && f == s.SealedPath(id) {
-				keep = true
+			// only a record for a run the file knows and does not call sealed
+			// (a crash between the record and the seal entry); a file that
+			// does not know the run at all (a results file lost or restored
+			// from an older copy) keeps its records: they verify on their own
+			if r.State != StateSealed && f == s.SealedPath(id) {
+				os.Remove(f)
 			}
 		}
-		if !keep {
+		if strings.HasSuffix(f, ".new") {
 			os.Remove(f)
 		}
 	}
@@ -161,11 +176,11 @@ type DeviceEvidence struct {
 type Evidence struct {
 	Drivers []DriverEvidence `json:"drivers"`
 	Devices []DeviceEvidence `json:"devices"`
-	// Attested says the manifest states (checkout: real-io) that the
-	// controller reaches real field I/O, for what the controller cannot read
-	// off an endpoint (a driver that keeps its hosts in a manifest file, a
-	// local gateway). The controller still refuses a project with no driver.
-	Attested bool `json:"attested,omitempty"`
+	// Attested names the drivers and devices the manifest says (checkout:
+	// real-io) reach real field I/O although the controller cannot tell from
+	// the endpoint (a local gateway, a driver whose hosts are in a manifest
+	// file). The controller still refuses everything else it finds.
+	Attested []string `json:"attested,omitempty"`
 }
 
 // SealInput is what a seal asks: who signs, under which rule, and the
@@ -289,7 +304,7 @@ func (s *Store) Seal(in SealInput) (SealedRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.key == nil {
-		return SealedRecord{}, errors.New("checkout: no signing key")
+		return SealedRecord{}, fmt.Errorf("%w: the signing key cannot be used (%s): fix it and restart the controller", ErrSealRefused, s.KeyError())
 	}
 	r := s.runs[in.Run]
 	if r == nil {
@@ -351,6 +366,20 @@ func (s *Store) Seal(in SealInput) (SealedRecord, error) {
 	}
 	if r.Principal != "" {
 		recorders[r.Principal] = true
+	}
+	// every result was recorded while the controller was connected to the
+	// devices the run began against: a simulator deployed for part of the run
+	// and the real devices back for the seal does not pass
+	if r.EvidenceSha != "" {
+		var moved []string
+		for _, p := range in.Sheet.Points {
+			if l, ok := latest[p.ID]; ok && l.EvSha != "" && l.EvSha != r.EvidenceSha {
+				moved = append(moved, p.ID)
+			}
+		}
+		if len(moved) > 0 {
+			return SealedRecord{}, refuse("%d point(s) were recorded while the controller was connected to other devices than the run began against: %s (record them again)", len(moved), listIDs(moved))
+		}
 	}
 	// the devices the run began against are the devices it is sealed against
 	if r.Unreal != "" {

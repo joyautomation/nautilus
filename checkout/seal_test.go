@@ -287,14 +287,39 @@ func TestTheSigningKey(t *testing.T) {
 		t.Fatalf("reopen: %v, fingerprint %q want %q", err, s.KeyFingerprint(), fp)
 	}
 	s.Close()
+	// a key that cannot be used turns sealing off with the reason; results are still recorded
 	os.Chmod(filepath.Join(dir, KeyFile), 0o644)
-	if _, err := Open(p, nil); err == nil || !strings.Contains(err.Error(), "other users can read") {
-		t.Errorf("a world-readable key: %v", err)
+	s, err = Open(p, nil)
+	if err != nil || !strings.Contains(s.KeyError(), "other users can read") || s.KeyFingerprint() != "" {
+		t.Fatalf("a world-readable key: %v / %q", err, s.KeyError())
 	}
+	run, _ := s.Begin(false, sheet().Hash(), "T", "alice", "user:alice")
+	for _, pt := range sheet().Points {
+		if _, err := s.Record(run.ID, pt.ID, Pass, "", nil, "", "alice", "user:alice"); err != nil {
+			t.Fatalf("recording with an unusable key: %v", err)
+		}
+	}
+	if _, err := s.Seal(sealIn(run.ID, "bob")); err == nil || !strings.Contains(err.Error(), "signing key cannot be used") {
+		t.Errorf("a seal with an unusable key: %v", err)
+	}
+	s.Close()
 	os.Chmod(filepath.Join(dir, KeyFile), 0o600)
 	os.WriteFile(filepath.Join(dir, KeyFile), []byte("not a key\n"), 0o600)
-	if _, err := Open(p, nil); err == nil || !strings.Contains(err.Error(), "not a signing key") {
-		t.Errorf("a damaged key: %v", err)
+	s, err = Open(p, nil)
+	if err != nil || !strings.Contains(s.KeyError(), "not a signing key") {
+		t.Errorf("a damaged key: %v / %q", err, s.KeyError())
+	}
+	s.Close()
+	// a group-writable directory: no key is made in it, and the store says why
+	d2 := t.TempDir()
+	os.Chmod(d2, 0o775)
+	s2, err := Open(filepath.Join(d2, "checkout.jsonl"), nil)
+	if err != nil || !strings.Contains(s2.KeyError(), "other users can replace") {
+		t.Errorf("a writable directory: %v / %q", err, s2.KeyError())
+	}
+	s2.Close()
+	if _, err := os.Stat(filepath.Join(d2, KeyFile)); err == nil {
+		t.Errorf("a key was made in a directory others can write")
 	}
 }
 
@@ -469,7 +494,7 @@ func TestSealIsBoundToTheDevicesTheRunBeganAgainst(t *testing.T) {
 
 // A crash left a signed record for a run the file does not say is sealed: it is
 // removed at Open, and a key's leftover temp file does not stop a later start.
-func TestOpenSweepsASealedRecordTheFileDoesNotKnow(t *testing.T) {
+func TestOpenSweepsASealedRecordForARunTheFileCallsOpen(t *testing.T) {
 	s, p, run := sealedStore(t)
 	if _, err := s.Seal(sealIn(run, "bob")); err != nil {
 		t.Fatal(err)
@@ -477,8 +502,15 @@ func TestOpenSweepsASealedRecordTheFileDoesNotKnow(t *testing.T) {
 	rec, _ := os.ReadFile(s.SealedPath(run))
 	s.Close()
 	dir := filepath.Dir(p)
-	orphan := filepath.Join(dir, "checkout-sealed-deadbeefdeadbeef.json")
+	// a record written before the seal entry, for a run the file knows as open (a crash between)
+	s0, _ := Open(p, nil)
+	open2, _ := s0.Begin(false, sheet().Hash(), "T", "alice", "user:alice")
+	orphan := s0.SealedPath(open2.ID)
+	s0.Close()
 	os.WriteFile(orphan, rec, 0o600)
+	// and one for a run the file does not know at all (a results file restored from an older copy): kept
+	stranger := filepath.Join(dir, "checkout-sealed-deadbeefdeadbeef.json")
+	os.WriteFile(stranger, rec, 0o600)
 	os.WriteFile(filepath.Join(dir, KeyFile+".new"), []byte("junk"), 0o600)
 	s2, err := Open(p, nil)
 	if err != nil {
@@ -486,7 +518,10 @@ func TestOpenSweepsASealedRecordTheFileDoesNotKnow(t *testing.T) {
 	}
 	defer s2.Close()
 	if _, err := os.Stat(orphan); err == nil {
-		t.Errorf("a signed record for a run the file does not seal survived Open")
+		t.Errorf("a signed record for a run the file calls open survived Open")
+	}
+	if _, err := os.Stat(stranger); err != nil {
+		t.Errorf("a signed record for a run the file does not know was deleted: %v", err)
 	}
 	if _, err := s2.ReadSealed(run); err != nil {
 		t.Errorf("the real sealed record was swept: %v", err)
@@ -518,10 +553,10 @@ func TestPassIsRefusedWhileAnOverrideStands(t *testing.T) {
 	s, _ := openStore(t)
 	defer s.Close()
 	run, _ := s.Begin(false, sheet().Hash(), "T", "alice", "user:alice")
-	if _, err := s.RecordWith(run.ID, "XV101", Pass, "", 1, "good", "forced (XV101_Cmd)", "alice", "user:alice"); err == nil || !strings.Contains(err.Error(), "not recorded while forced") {
+	if _, err := s.RecordWith(run.ID, "XV101", Pass, "", 1, "good", "forced (XV101_Cmd)", "", "alice", "user:alice"); err == nil || !strings.Contains(err.Error(), "not recorded while forced") {
 		t.Fatalf("a pass over a force: %v", err)
 	}
-	r, err := s.RecordWith(run.ID, "XV101", Fail, "reads forced", 1, "good", "substituted (X)", "alice", "user:alice")
+	r, err := s.RecordWith(run.ID, "XV101", Fail, "reads forced", 1, "good", "substituted (X)", "", "alice", "user:alice")
 	if err != nil || r.Override != "substituted (X)" {
 		t.Fatalf("a fail over an override: %+v %v", r, err)
 	}
@@ -549,5 +584,34 @@ func TestSealRefusedWhileAnOverrideStands(t *testing.T) {
 	in.Overrides = nil
 	if _, err := s.Seal(in); err != nil {
 		t.Errorf("without it: %v", err)
+	}
+}
+
+// Every result was recorded while the controller was connected to the devices
+// the run began against: a simulator deployed for part of the run does not pass.
+func TestSealRefusesResultsRecordedAgainstOtherDevices(t *testing.T) {
+	ev := Evidence{Drivers: []DriverEvidence{{Name: "plc", Kind: "modbus"}}}
+	sim := Evidence{Drivers: []DriverEvidence{{Name: "sim", Kind: "modbus"}}}
+	s, _ := openStore(t)
+	defer s.Close()
+	run, _ := s.BeginWith(false, sheet().Hash(), "T", "alice", "user:alice", EvidenceDigest(ev), "")
+	for i, pt := range sheet().Points {
+		d := EvidenceDigest(ev)
+		if i == 1 {
+			d = EvidenceDigest(sim) // this one recorded while the simulator was deployed
+		}
+		if _, err := s.RecordWith(run.ID, pt.ID, Pass, "", 1, "good", "", d, "alice", "user:alice"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	in := sealIn(run.ID, "bob")
+	in.Evidence = ev
+	if _, err := s.Seal(in); err == nil || !strings.Contains(err.Error(), "other devices than the run began against: LSH101") {
+		t.Fatalf("a result recorded against a simulator: %v", err)
+	}
+	// recorded again against the real devices, it seals
+	s.RecordWith(run.ID, "LSH101", Pass, "", 1, "good", "", EvidenceDigest(ev), "alice", "user:alice")
+	if _, err := s.Seal(in); err != nil {
+		t.Errorf("after recording it again: %v", err)
 	}
 }

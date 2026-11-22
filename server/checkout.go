@@ -262,7 +262,14 @@ func (a *checkoutAPI) checkoutResult(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return nil, http.StatusUnprocessableEntity, err
 		}
-		res, err := a.co.Store.RecordWith(run.ID, pt.ID, req.Outcome, req.Note, seen, quality, a.overridden(pt), noteAuthor(pr.String()), pr.String())
+		// the devices the controller is connected to as this is recorded, so a
+		// result made while other devices were deployed does not pass a seal
+		evSha := ""
+		if a.co.Evidence != nil {
+			ev, _ := a.co.Evidence(a.co.Sheet)
+			evSha = checkout.EvidenceDigest(ev)
+		}
+		res, err := a.co.Store.RecordWith(run.ID, pt.ID, req.Outcome, req.Note, seen, quality, a.overridden(pt), evSha, noteAuthor(pr.String()), pr.String())
 		return res, http.StatusCreated, err
 	})
 }
