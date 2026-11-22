@@ -105,10 +105,27 @@ type Entry struct {
 	// runtime applies only the first entry that names it.
 	Req string `json:"req,omitempty"`
 
+	// Occs names alarm occurrences (#715): on an ack, the occurrence each
+	// acknowledged alarm was on when the ack was checked (IDs stays for a
+	// replica that predates them); on an ack-clear, the occurrence whose
+	// ack ended; on occurrence-start and occurrence-end, the occurrences
+	// begun (or whose wait moved) and ended. omitempty: a log written
+	// before them loads unchanged.
+	Occs []Occ `json:"occs,omitempty"`
+
 	// Lapsed is set by the node, never stored: this entry is one a
 	// KindLapse entry committed with it names (see KindLapse). Apply sees
 	// it on the entry and records it instead of carrying it out.
 	Lapsed bool `json:"-"`
+}
+
+// Occ is one alarm's occurrence (#715): the alarm, the occurrence's ID,
+// its activation and when it began waiting on a person (0: it is not).
+type Occ struct {
+	ID       string `json:"id"`
+	Occ      string `json:"occ"`
+	ActiveMs int64  `json:"activeMs,omitempty"`
+	WaitMs   int64  `json:"waitMs,omitempty"`
 }
 
 // NoteEntry is one revision of an operator note (#720). It is data the log
@@ -221,6 +238,15 @@ const (
 	// applies: a takeover must not carry it to a new occurrence (#710 PR
 	// 3b-2c). Proposed by the leader, retried until committed.
 	KindAckClear = "ack-clear"
+	// KindOccurrenceStart and KindOccurrenceEnd keep, for a takeover, the
+	// occurrences of the alarms an escalation policy covers (#715): a new
+	// leader continues an occurrence the field re-asserts, so escalation
+	// goes on at its level rather than starting again at level 1. Proposed
+	// by the leader in batches, once per log tick; never lapsed (they
+	// describe the leader's engine, not an operator's wish). A replica
+	// that predates them ignores them.
+	KindOccurrenceStart = "occurrence-start"
+	KindOccurrenceEnd   = "occurrence-end"
 
 	// Substitute values (#707): see Entry.
 	KindSubstitute   = "substitute"

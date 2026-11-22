@@ -111,7 +111,7 @@ func TestPGJournal(t *testing.T) {
 	// them NULL and reads back zero; ExceptKinds drops the kind.
 	note := Event{TS: base.Add(3 * time.Minute).UnixMilli(), ID: "RTU12_INT_YA", Name: "Intrusion", Kind: KindNotify,
 		Priority: Critical, Site: "RTU12", State: "unack-active", By: "system",
-		Level: 2, To: "oidc:carol", Via: "log", Result: NotifySent, Reason: "joined late: x"}
+		Level: 2, To: "oidc:carol", Via: "log", Result: NotifySent, Reason: "joined late: x", Occurrence: "0123456789abcdef"}
 	if err := j.Append(note); err != nil {
 		t.Fatal(err)
 	}

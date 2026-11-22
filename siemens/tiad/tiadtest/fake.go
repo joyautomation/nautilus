@@ -160,6 +160,9 @@ type session struct {
 	// accessSet is set once an apply on this session asked for
 	// fullAccessUser: user-management keep is refused from then on.
 	accessSet bool
+	// recordOnly is set once an apply on this session asked for
+	// fullAccessRecordOnly (the agent's Session.AccessRecordOnly).
+	recordOnly bool
 	// uploadedFrom is the address this session last uploaded from
 	// successfully, "" for none (the agent's Session.UploadedFrom): a
 	// later apply keeps it, a new upload clears it when it starts.
@@ -1096,6 +1099,11 @@ func (f *Fake) applyStation(r *http.Request) (any, *failure) {
 		}
 		kept = s.others
 	}
+	// As the agent: once asked on this session, failed or not, a reset to
+	// tiad's user is refused (its record shows what tiad was told).
+	if req.FullAccessRecordOnly {
+		s.recordOnly = true
+	}
 	if fl := f.checkPolicy(req.Station, req.Secrets); fl != nil {
 		return nil, fl
 	}
@@ -1309,6 +1317,10 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 	if req.Hardware && s.station.CPU.AccessControl == tiad.AccessFullAccessUser && f.blindTrust != nil {
 		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "%s; a hardware load of a fullAccessUser station has to log on for the compare after it, so nothing was sent to the CPU", loginBlocked(f.blindTrust))
 	}
+	if req.Hardware && !req.DryRun && f.blindTrust != nil && req.Decisions.UserManagementResetToProject != nil && *req.Decisions.UserManagementResetToProject &&
+		req.Attestation != nil && req.Attestation.CPUAccessControl == tiad.AttestCPUAccessEnabled {
+		return nil, fail(http.StatusBadRequest, tiad.KindBadRequest, "%s; a user-management reset by the logon route (attestation.cpuAccessControl \"enabled\") has to log on to the CPU first, so nothing was sent to the CPU", loginBlocked(f.blindTrust))
+	}
 	call := "download"
 	if req.DryRun {
 		call = "dry run"
@@ -1345,7 +1357,20 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 	accessControlKept := s.station != nil && s.station.CPU.AccessControl == tiad.AccessKeep && !s.accessSet
 	var reset tiad.ResetGate
 	if !req.DryRun && req.Decisions.UserManagementResetToProject != nil && *req.Decisions.UserManagementResetToProject {
-		reset = tiad.CheckUserManagementReset(req, accessControlKept, s.uploadedFrom, tiad.UploadRouteEnabled, func() (string, bool) { return s.accessControl, true })
+		reset = tiad.CheckReset(req, tiad.ResetFacts{
+			AccessControlKept: accessControlKept,
+			FullAccessUserSet: s.station != nil && s.station.CPU.AccessControl == tiad.AccessFullAccessUser && s.accessSet,
+			RecordOnly:        s.recordOnly,
+			UploadedFrom:      s.uploadedFrom,
+			UploadRoute:       tiad.UploadRouteEnabled,
+			ProjectAccess:     func() (string, bool) { return s.accessControl, true },
+			PasswordRecorded: func() (bool, bool) {
+				// As the agent reads it: this agent's record of the
+				// request's password, whatever the user's password is.
+				u, ok := s.access.users[FullAccessUser]
+				return ok && req.Secrets != nil && u.recordKey == "this" && u.recordPassword == req.Secrets.FullAccessPassword, true
+			},
+		})
 		if !reset.Allowed {
 			return nil, &failure{status: http.StatusConflict, kind: tiad.KindDecisionRequired,
 				msg:  reset.Why + "; nothing was sent to the CPU",
@@ -1392,16 +1417,17 @@ func (f *Fake) download(r *http.Request) (any, *failure) {
 		}
 	}
 	var acting []string
-	res, fl := f.downloadTIA(s, req, attested, accessControlKept, reset, &acting)
+	var given string
+	res, fl := f.downloadTIA(s, req, attested, accessControlKept, reset, &acting, &given)
 	if run == nil {
 		return res, fl
 	}
-	return f.recordOutcome(run, s, req, res, fl, acting)
+	return f.recordOutcome(run, s, req, res, fl, acting, given)
 }
 
 // downloadTIA is the part of a download after every refusal the agent
 // makes itself: TIA's checks, the load and the compare right after it.
-func (f *Fake) downloadTIA(s *session, req tiad.DownloadRequest, attested *tiad.AttestationRecord, accessControlKept bool, reset tiad.ResetGate, actingOut *[]string) (any, *failure) {
+func (f *Fake) downloadTIA(s *session, req tiad.DownloadRequest, attested *tiad.AttestationRecord, accessControlKept bool, reset tiad.ResetGate, actingOut *[]string, givenOut *string) (any, *failure) {
 	var qs []tiad.Question
 	if f.PreDownload != nil {
 		qs = f.PreDownload(req)
@@ -1427,14 +1453,19 @@ func (f *Fake) downloadTIA(s *session, req tiad.DownloadRequest, attested *tiad.
 	if req.Secrets != nil {
 		pw = req.Secrets.FullAccessPassword
 	}
+	// The CPU asks credentials when its access control is on: answered,
+	// the download is logged on for the user-management check.
+	_, asks := f.logins[req.Address]
 	if why := f.askLogin(req.Address, pw, f.blindTrust); why != "" {
 		return nil, outcomeUnknown("TIA: "+why, nil)
 	}
+	loggedOn, credentialsAsked := asks, asks
 	var asked []tiad.Question
 	var acting []string
-	// The acting answers given, for the deploy record, on every end.
-	defer func() { *actingOut = acting }()
+	// The acting answers given, and a reset's route, for the deploy
+	// record, on every end.
 	given := ""
+	defer func() { *actingOut, *givenOut = acting, given }()
 	for _, q := range qs {
 		if !knownQuestion(q.ID) {
 			q.ID = tiad.QuestionOther
@@ -1450,7 +1481,11 @@ func (f *Fake) downloadTIA(s *session, req tiad.DownloadRequest, attested *tiad.
 			}
 			return tiad.DownloadResult{DryRun: true, Provisional: true, QuestionsIncomplete: true, Questions: dq, KeptDevices: keptList(s.kept), BlindTrust: f.blindTrust}, nil
 		}
-		unanswered, declined := tiad.Resolve([]tiad.Question{q}, req.Decisions, haveProtection, haveConfigurationPassword, accessControlKept, reset)
+		now := reset
+		if q.ID == tiad.QuestionUserManagement {
+			now = reset.At(loggedOn, credentialsAsked)
+		}
+		unanswered, declined := tiad.Resolve([]tiad.Question{q}, req.Decisions, haveProtection, haveConfigurationPassword, accessControlKept, now)
 		if len(unanswered) == 0 && len(declined) == 0 {
 			// Acting by what the answer writes: start-after no and
 			// user-management keep change nothing.
@@ -1472,7 +1507,11 @@ func (f *Fake) downloadTIA(s *session, req tiad.DownloadRequest, attested *tiad.
 		// A cancel after an acting answer is never a clean refusal: TIA
 		// may have acted on it before it asked this check.
 		if len(acting) > 0 {
-			return nil, outcomeUnknown("tiad cancelled the download at TIA's "+q.ID+" check, which the request does not answer yes", acting)
+			msg := "tiad cancelled the download at TIA's " + q.ID + " check, which the request does not answer yes"
+			if q.ID == tiad.QuestionUserManagement && reset.Allowed && !now.Allowed {
+				msg += "; at TIA's user-management check, " + now.Why
+			}
+			return nil, outcomeUnknown(msg, acting)
 		}
 		if len(unanswered) > 0 {
 			return nil, &failure{status: http.StatusConflict, kind: tiad.KindDecisionRequired,

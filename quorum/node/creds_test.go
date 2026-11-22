@@ -277,3 +277,94 @@ func TestCredMACBindsNamesAndChallenge(t *testing.T) {
 		t.Fatalf("the genuine MAC read as %s", got)
 	}
 }
+
+// #715: the alarm contacts are a credential part of their own, report
+// only. The standby's file missing reads as differs (naming the copy); an
+// older peer that sends no contacts part reads as unknown, raises
+// nothing, and its users and TLS parts still verify; the users part's MAC
+// never verifies as contacts; nothing about contacts holds a campaign.
+func TestContactsCheck(t *testing.T) {
+	p := newCredPair(t)
+	contacts := func() CredState { return p.a.Status().Contacts }
+	users := Credentials{Users: digest("users v1"), TLS: digest("leaf 1")}
+	with := users
+	with.Contacts = digest("contacts v1")
+
+	p.set(users, users)
+	p.hello(t, nil)
+	if c := contacts(); c != CredOff {
+		t.Fatalf("no contacts on either: %s; want off", c)
+	}
+	p.set(with, with)
+	p.hello(t, nil)
+	if c := contacts(); c != CredSame {
+		t.Fatalf("the same contacts: %s; want same", c)
+	}
+
+	// The standby (b) has no contacts file.
+	p.set(with, users)
+	p.hello(t, nil)
+	if c := contacts(); c != CredDiffers {
+		t.Fatalf("the peer's file missing: %s; want differs", c)
+	}
+	ev, ok := p.lastEvent(EventContactsDiffer)
+	if !ok || !strings.Contains(ev.Detail, "alarm contacts differ from the peer") ||
+		!strings.Contains(ev.Detail, "alarm-contacts.json") || !strings.Contains(ev.Detail, "scp -p") {
+		t.Fatalf("event %+v (%v); want the contacts message naming the files and the copy", ev, ok)
+	}
+	if !p.a.mayCampaign(p.a.now()) {
+		t.Fatal("a contacts mismatch held this controller's campaigns; the check is report only")
+	}
+	if s := p.a.Status(); s.Users != CredSame || s.TLS != CredSame {
+		t.Fatalf("a contacts mismatch moved users %s / tls %s", s.Users, s.TLS)
+	}
+
+	// Copied: the condition clears.
+	p.set(with, with)
+	p.hello(t, nil)
+	if ev, _ := p.lastEvent(EventContactsDiffer); ev.Detail != "" || contacts() != CredSame {
+		t.Fatalf("after the copy: %s, condition %q", contacts(), ev.Detail)
+	}
+
+	// b cannot read its own: unreadable, the error stays in b's log.
+	p.set(with, Credentials{Users: digest("users v1"), TLS: digest("leaf 1"), ContactsErr: "/var/lib/x: permission denied"})
+	p.hello(t, nil)
+	if ev, _ := p.lastEvent(EventContactsDiffer); contacts() != CredUnreadable || strings.Contains(ev.Detail, "permission denied") {
+		t.Fatalf("peer unreadable: %s, %q", contacts(), ev.Detail)
+	}
+
+	// The users MAC put in the contacts' place never verifies as contacts
+	// (users and contacts digests made equal, so only the label differs).
+	same := Credentials{Users: digest("x"), TLS: digest("leaf 1"), Contacts: digest("x")}
+	other := Credentials{Users: digest("x"), TLS: digest("leaf 1"), Contacts: digest("y")}
+	p.set(same, other)
+	p.hello(t, func(h *helloAnswer) { h.Contacts, h.ContactsMAC = h.Users, h.UsersMAC })
+	if c := contacts(); c == CredSame {
+		t.Fatal("b's users MAC verified as its contacts")
+	}
+
+	// An older peer: no contacts part. Unknown, nothing raised, the rest
+	// of the answer verifies.
+	p.set(with, with)
+	p.hello(t, nil) // same: clears
+	p.drain()
+	n := len(p.eventsA)
+	p.hello(t, func(h *helloAnswer) { h.Contacts, h.ContactsMAC = "", "" })
+	if s := p.a.Status(); s.Contacts != CredUnknown || s.Users != CredSame || s.TLS != CredSame {
+		t.Fatalf("an older peer: contacts %s, users %s, tls %s; want unknown, same, same", s.Contacts, s.Users, s.TLS)
+	}
+	p.drain()
+	for _, ev := range p.eventsA[n:] {
+		if ev.Detail != "" {
+			t.Fatalf("an older peer raised %+v", ev)
+		}
+	}
+	if !p.a.mayCampaign(p.a.now()) {
+		t.Fatal("contacts unknown held this controller's campaigns")
+	}
+	// The peer unreachable: every part unknown, nothing held.
+	p.a.credentialsUnknown()
+	if s := p.a.Status(); s.Contacts != CredUnknown || !p.a.mayCampaign(p.a.now()) {
+		t.Fatalf("unreachable: contacts %s, may campaign %v", s.Contacts, p.a.mayCampaign(p.a.now()))
+	}
+}

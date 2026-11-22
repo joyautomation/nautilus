@@ -494,6 +494,11 @@ func TestRedundancyWithPeersIsThePair(t *testing.T) {
 	if el.Status().Mode != "quorum" {
 		t.Errorf("mode %q, want quorum", el.Status().Mode)
 	}
+	// The project knows which member it is (the OPC UA ApplicationUri
+	// carries it, #716).
+	if proj.Member == "" || proj.Member != el.Status().Pod {
+		t.Errorf("proj.Member = %q, want this member's name %q", proj.Member, el.Status().Pod)
+	}
 	// Until state streaming, the pair says its retained values are not
 	// replicated, wherever its status is shown.
 	if w := el.Status().Warnings; len(w) != 1 || !strings.Contains(w[0], "retained state not replicated") {

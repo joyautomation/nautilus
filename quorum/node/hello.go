@@ -46,6 +46,13 @@ type Credentials struct {
 	// TLS is the tag API's certificate leaf, server.CertSource.Pin (zero:
 	// no server.tls).
 	TLS [32]byte
+	// Contacts is the alarm contacts' and channel secrets' keyed digest
+	// (oncall.Digest, #715; zero: none); ContactsErr says why they could
+	// not be read. Its own part of the hello, never bound into the peer
+	// info nor into users or TLS: a build before it sends none, which
+	// reads as unknown.
+	Contacts    [32]byte
+	ContactsErr string
 }
 
 // CredState is what the credential check found about one part.
@@ -168,6 +175,12 @@ type helloAnswer struct {
 	UsersMAC string `json:"usersMac,omitempty"`
 	TLS      string `json:"tls,omitempty"`
 	TLSMAC   string `json:"tlsMac,omitempty"`
+	// The alarm contacts (#715), as a credential part of its own: state
+	// and credMAC under the part "contacts". Optional: a build before it
+	// sends none (CredUnknown), and the rest of the answer verifies as
+	// before.
+	Contacts    string `json:"contacts,omitempty"`
+	ContactsMAC string `json:"contactsMac,omitempty"`
 }
 
 // tokenMAC is the client-token proof the answerer sends the asker: an

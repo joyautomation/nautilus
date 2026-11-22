@@ -255,6 +255,20 @@ never computes.
   request's Host when it proxies, so the leader checks the same name.
   `GET /api/cluster` reports each replica's own view — mode, leader,
   transitions.
+  On a redundant pair with `redundancy.public-urls`, it also lists
+  `peers` (`name`, `url`, `leader`): the controllers as a browser opens
+  them, never their peer-link addresses. The HMI kit remembers them, and
+  when its own controller stops answering it goes to the one that does,
+  the leader first (once per 30 s at most, so two dead boxes cannot make
+  it bounce). Without `public-urls` the page stays where it is.
+- **OPC UA clients of a pair.** With an `opcua:` section, each controller is its
+  own OPC UA server: its ApplicationUri is the configured (or default) one with
+  `-a` or `-b` appended. Each reports `RedundancySupport` (Cold), `ServerUriArray`
+  (both URIs) and a live `ServiceLevel`: 250 for the leader, 200 for a leader
+  with a standing warning (a pair always has one until state streaming), 100 for a
+  standby that knows the leader and has a synced log, 1 for any other standby, and
+  0 for a spare or a copy held by a duplicate mark. A client that holds a session
+  to each keeps the higher. A write to a standby stays refused (`Bad_InvalidState`).
 - **Browser sign-ins across a takeover.** A signed-in operator stays signed in when
   the other controller takes over, because the sign-in's record (a hash of the
   cookie, who it is, when it ends; never the cookie itself) goes through the
@@ -1015,9 +1029,19 @@ acknowledgement to the new occurrence. With two copies of the log
 answering that is a few tens of milliseconds; while only the leader's
 answers, the clear waits for another, so the window lasts as long as
 that outage plus about 2 s.
-An acknowledgement or a shelve made just before a controller died and
-committed more than 60 s later is dropped, not applied to whatever
-occurrence is live by then. While a new leader's takeover is still
+Each acknowledgement names the occurrence it was for, and is applied
+only to that one: an acknowledgement committed after its occurrence
+ended acknowledges nothing (the journal notes it), and one made just
+before a controller died and committed more than 60 s later is dropped.
+
+**Escalation goes on at its level.** For the alarms an escalation policy
+covers, the leader records each occurrence (its activation, and when it
+began waiting on a person) in the log at every log tick, and its end. A
+new leader continues an occurrence the field still asserts: it keeps its
+ID (so the links already sent still name it), its activation time and
+its escalation clock, and resends the current level once (`resend after
+takeover`). One that began within a tick of the leader's death is not in
+the log yet: the new leader starts it afresh at level 1. While a new leader's takeover is still
 waiting (for its inputs to come live, or for the log to catch up), an
 acknowledgement or a shelve sent to it is refused with "this controller
 is taking over: its alarm state is not restored yet" (503); retry it a
@@ -1028,7 +1052,15 @@ copy is unsynced and only one other copy answers, or neither does), no
 acknowledgement is carried at all: acknowledged alarms annunciate again
 on the new leader (the safe direction), and the alarm journal says
 "acks not carried: takeover unsynced" when it held any. Shelves still
-carry. Substitutes it held stay, marked "catch-up failed" until the log
+carry. Once its log syncs, an acknowledgement the log committed still
+applies to an alarm that has stood since the takeover (its condition
+read true at every scan): the alarm takes the acknowledged occurrence. An
+alarm whose condition dropped in between is a new occurrence, and the
+journal says the old acknowledgement was not carried. Binding an
+acknowledgement to its occurrence needs all three copies of the log on a
+build that has it (both controllers and the witness): an older copy
+stores entries without their occurrences, and an acknowledgement that
+passed through it applies to whatever occurrence is on, as before. Substitutes it held stay, marked "catch-up failed" until the log
 confirms them.
 
 **One set of credentials on both.** The pair is one controller to its
@@ -1045,6 +1077,19 @@ different file. A certificate renewal shows as a difference for the few
 minutes it takes to reach both. "Could not be verified" means the two
 controllers hold different `NAUTILUS_PEER_TOKEN`s (or something else
 answers in the peer's place), not that the files differ.
+
+The same goes for the **alarm contacts** when a channel pages people:
+each controller keeps its own `alarm-contacts.json` and
+`alarm-secrets.json` in its state directory, and a standby that has
+other ones (or none) would page the wrong people, or nobody, after a
+takeover. The controllers compare a digest of their content, keyed with
+the peer token and never sent, at every handshake. When they differ,
+`GET /api/cluster` and the banner say "alarm contacts differ from the
+peer": copy both files from the controller that has the right ones into
+the other's state directory (`scp -p`, keeping them mode 0600 and owned
+by the service user), or set the same entries on both with
+`naut alarms contacts set` and `naut alarms secrets set`. Like the other
+credential checks, it never stops either from leading.
 
 Both controllers must run the same `redundancy:` section (`peers:` and
 `witness:`). If they don't (an edited manifest deployed to one box

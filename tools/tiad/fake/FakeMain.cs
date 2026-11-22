@@ -243,6 +243,7 @@ namespace Tiad.Fake
         Dictionary<string, string> failures = new Dictionary<string, string>(StringComparer.Ordinal);
         List<Question> questions = new List<Question>();
         bool loadDespiteCancel;
+        bool onlineGoesOn;
         int askFirst = 1;
         string failAfterDecide = "";
         string failInDoubt = "";
@@ -603,6 +604,21 @@ namespace Tiad.Fake
                 }
             }
         }
+
+        // OnlineGoesOn makes the download's TIA go on after tiad refused
+        // its credentials question going online, as tiad assumes TIA may
+        // (DownloadSteps): the agent must still fail the download, and
+        // its answers to the checks after must not rest on the refusal.
+        public bool OnlineGoesOn
+        {
+            get
+            {
+                lock (mu)
+                {
+                    return onlineGoesOn;
+                }
+            }
+        }
         readonly List<object> calls = new List<object>();
         readonly List<object> downloads = new List<object>();
 
@@ -688,6 +704,7 @@ namespace Tiad.Fake
             var f = new Dictionary<string, string>(StringComparer.Ordinal);
             foreach (var x in r.Children("failures")) f[x.Str("call")] = x.Str("message");
             bool despite = r.Bool("loadDespiteCancel");
+            bool goesOn = r.Bool("onlineGoesOn");
             int? first = r.OptInt("askFirst");
             string after = r.Str("failAfterDecide");
             string inDoubt = r.Str("failInDoubt");
@@ -742,6 +759,7 @@ namespace Tiad.Fake
                 failures = f;
                 questions = qs;
                 loadDespiteCancel = despite;
+                onlineGoesOn = goesOn;
                 askFirst = first.HasValue ? first.Value : 1;
                 failAfterDecide = after;
                 failInDoubt = inDoubt;
@@ -1381,6 +1399,13 @@ namespace Tiad.Fake
             return AccessSteps.Remove(new FakeAccess((FakeProject)project, script.Policy), made);
         }
 
+        public string UserComment(object project, string user)
+        {
+            script.Enter("UserComment");
+            var u = new FakeAccess((FakeProject)project, script.Policy);
+            return u.HasUser(user) ? u.Comment(user) : null;
+        }
+
         public string CannotApply(Station next)
         {
             string c = script.CannotApply;
@@ -1440,7 +1465,7 @@ namespace Tiad.Fake
         }
 
         public DownloadOutcome Download(object project, string address, bool hardware, bool software,
-            Secrets secrets, bool? startAfter, Func<Question, Answer> answer, OnlineLogin login)
+            Secrets secrets, bool? startAfter, Func<Question, Answer> answer, LoginUse use)
         {
             script.Enter("Download");
             var p = (FakeProject)project;
@@ -1505,14 +1530,13 @@ namespace Tiad.Fake
             // As tiad.Openness runs it: through DownloadSteps, the decider
             // answering TIA's pre-download callback once per check, in
             // order, as TIA calls it (#789 S2b: one at a time, no list).
-            var use = new LoginUse(login, "download", address);
             var refusedOnline = new List<string>();
             DownloadOutcome outcome = DownloadSteps.Run(decider, address,
                 delegate { },
                 delegate
                 {
                     // Going online for the download asks credentials first.
-                    AskLogin(address, use, refusedOnline);
+                    AskLogin(address, use, refusedOnline, script.OnlineGoesOn);
                     bool stopped = false;
                     try
                     {
@@ -1845,6 +1869,12 @@ namespace Tiad.Fake
         // second ask. Refusals are added to refused, and fail the call.
         void AskLogin(string address, LoginUse use, List<string> refused)
         {
+            AskLogin(address, use, refused, false);
+        }
+
+        // AskLogin with goOn: a refusal is recorded, and TIA goes on.
+        void AskLogin(string address, LoginUse use, List<string> refused, bool goOn)
+        {
             string want;
             if (!logins.TryGetValue(address, out want)) return;
             var rec = new OnlineRecord { Use = use };
@@ -1868,6 +1898,7 @@ namespace Tiad.Fake
                 if (rec.Asked.Count > 0)
                 {
                     refused.AddRange(rec.Asked);
+                    if (goOn) return;
                     throw new TiaException(TiaNames.OnlineRefused(address, rec.Asked, "Online connection failed."));
                 }
                 if (wrote == want) return;

@@ -221,7 +221,13 @@ func TestCheckUserManagementReset(t *testing.T) {
 	}
 	r = resetRequest()
 	r.Attestation.CPUAccessControl = AttestCPUAccessEnabled
-	refuse("attested enabled, the upload route too", CheckUserManagementReset(r, true, addr, true, read), "never resets a CPU whose access control is on")
+	// An attestation that says enabled takes the logon route, the upload
+	// notwithstanding: it needs the password to log on.
+	refuse("attested enabled, no password", CheckUserManagementReset(r, true, addr, true, read), ResetNoPassword)
+	r.Secrets = &Secrets{FullAccessPassword: "Bench-pass-2026"}
+	if g := CheckUserManagementReset(r, true, addr, true, read); !g.Allowed || g.Route != ResetRouteLogon {
+		t.Errorf("attested enabled with a password: %+v, want the logon route over the upload's", g)
+	}
 	for _, st := range []string{"EnabledWithAccessControl", "", "disabled", "Disabled ", "EnabledWithAccessControlViaAccessLevel"} {
 		project = st
 		refuse("project "+strconv.Quote(st), CheckUserManagementReset(resetRequest(), true, addr, true, read), "not Disabled")
@@ -313,6 +319,177 @@ func TestResetFromTheAttestationRoute(t *testing.T) {
 	} {
 		if g.Allowed {
 			t.Errorf("%s: let a reset", name)
+		}
+	}
+}
+
+// resetFacts are a session's facts for CheckReset: keep (spec keep, never
+// set) or tiad's user (fullAccessUser set on the session), with the
+// project's access control and whether its record is of the request's
+// password, each read counted.
+type resetFacts struct {
+	project            string
+	projectOK          bool
+	recorded, recordOK bool
+	projectReads       int
+	recordReads        int
+}
+
+func (f *resetFacts) make(keep, set bool) ResetFacts {
+	return ResetFacts{AccessControlKept: keep, FullAccessUserSet: set,
+		ProjectAccess:    func() (string, bool) { f.projectReads++; return f.project, f.projectOK },
+		PasswordRecorded: func() (bool, bool) { f.recordReads++; return f.recorded, f.recordOK }}
+}
+
+func newFacts(keep bool) *resetFacts {
+	p := ProjectAccessDisabled
+	if !keep {
+		p = ProjectAccessEnabled
+	}
+	return &resetFacts{project: p, projectOK: true, recorded: true, recordOK: true}
+}
+
+func attested(cpu, password string) DownloadRequest {
+	r := resetRequest()
+	r.Attestation.CPUAccessControl = cpu
+	r.Secrets = &Secrets{FullAccessPassword: password}
+	return r
+}
+
+// TestResetMatrix: the closed set of resets CheckReset lets (#789 option
+// 1), each by its own route, and each conjunct flipped on its own
+// refuses; the agent's UserManagementResetMatrix has the same table.
+func TestResetMatrix(t *testing.T) {
+	const pw = "Bench-pass-2026"
+	for _, keep := range []bool{true, false} {
+		for _, cpu := range []string{AttestCPUAccessDisabled, AttestCPUAccessEnabled} {
+			name := fmt.Sprintf("keep %v, attested %s", keep, cpu)
+			f := newFacts(keep)
+			g := CheckReset(attested(cpu, pw), f.make(keep, !keep))
+			want := ResetRouteAttestation
+			if cpu == AttestCPUAccessEnabled {
+				want = ResetRouteLogon
+			}
+			wantRecordReads := 1
+			if keep {
+				wantRecordReads = 0
+			}
+			if !g.Allowed || g.Route != want || f.projectReads != 1 || f.recordReads != wantRecordReads {
+				t.Errorf("%s: %+v (reads %d/%d), want route %s", name, g, f.projectReads, f.recordReads, want)
+			}
+			other := newFacts(!keep)
+			if g := CheckReset(attested(cpu, pw), other.make(keep, !keep)); g.Allowed || !strings.Contains(g.Why, "not ") {
+				t.Errorf("%s: project %s: %+v", name, other.project, g)
+			}
+			for _, st := range []string{"EnabledWithAccessControlViaAccessLevel", "", "enabledwithaccesscontrol"} {
+				odd := newFacts(keep)
+				odd.project = st
+				if g := CheckReset(attested(cpu, pw), odd.make(keep, !keep)); g.Allowed {
+					t.Errorf("%s: project %q let a reset", name, st)
+				}
+			}
+			unread := newFacts(keep)
+			unread.projectOK = false
+			if g := CheckReset(attested(cpu, pw), unread.make(keep, !keep)); g.Allowed {
+				t.Errorf("%s: project unreadable let a reset", name)
+			}
+			for what, r := range map[string]DownloadRequest{
+				"no who":        func() DownloadRequest { r := attested(cpu, pw); r.Attestation.By = ""; return r }(),
+				"no what":       func() DownloadRequest { r := attested(cpu, pw); r.Attestation.Text = " "; return r }(),
+				"software only": func() DownloadRequest { r := attested(cpu, pw); r.Hardware = false; return r }(),
+			} {
+				if g := CheckReset(r, newFacts(keep).make(keep, !keep)); g.Allowed {
+					t.Errorf("%s: %s let a reset", name, what)
+				}
+			}
+		}
+	}
+	n := newFacts(false)
+	if g := CheckReset(attested(AttestCPUAccessEnabled, pw), n.make(false, false)); g.Allowed || !strings.Contains(g.Why, "does not keep access control as found") || n.projectReads+n.recordReads != 0 {
+		t.Errorf("neither keep nor tiad's user: %+v, want refused before any read", g)
+	}
+	for _, keep := range []bool{true, false} {
+		if g := CheckReset(attested("", pw), newFacts(keep).make(keep, !keep)); g.Allowed || !strings.Contains(g.Why, `give attestation.cpuAccessControl "disabled" or "enabled"`) {
+			t.Errorf("keep %v, nothing attested: %+v", keep, g)
+		}
+		f := newFacts(keep)
+		if g := CheckReset(attested(AttestCPUAccessEnabled, ""), f.make(keep, !keep)); g.Why != resetRefused+ResetNoPassword || f.projectReads != 0 {
+			t.Errorf("keep %v, the logon route without a password: %+v (reads %d)", keep, g, f.projectReads)
+		}
+		r := attested(AttestCPUAccessEnabled, pw)
+		r.Secrets = nil
+		if g := CheckReset(r, newFacts(keep).make(keep, !keep)); g.Why != resetRefused+ResetNoPassword {
+			t.Errorf("keep %v, the logon route without secrets: %+v", keep, g)
+		}
+	}
+	for _, cpu := range []string{AttestCPUAccessDisabled, AttestCPUAccessEnabled} {
+		f := newFacts(false)
+		f.recorded = false
+		if g := CheckReset(attested(cpu, pw), f.make(false, true)); g.Why != resetRefused+ResetPasswordNotRecorded {
+			t.Errorf("attested %s, another password: %+v", cpu, g)
+		}
+		f = newFacts(false)
+		f.recordOK = false
+		if g := CheckReset(attested(cpu, pw), f.make(false, true)); g.Allowed || !strings.Contains(g.Why, "could not read the project's record") {
+			t.Errorf("attested %s, record unreadable: %+v", cpu, g)
+		}
+		facts := newFacts(false).make(false, true)
+		facts.PasswordRecorded = nil
+		if g := CheckReset(attested(cpu, pw), facts); g.Allowed {
+			t.Errorf("attested %s, no record reader: %+v", cpu, g)
+		}
+	}
+	// A session that applied fullAccessRecordOnly: refused for tiad's
+	// user before any read; keep is not concerned.
+	for _, cpu := range []string{AttestCPUAccessDisabled, AttestCPUAccessEnabled} {
+		ro := newFacts(false)
+		rf := ro.make(false, true)
+		rf.RecordOnly = true
+		if g := CheckReset(attested(cpu, pw), rf); g.Why != resetRefused+ResetRecordOnly || ro.projectReads+ro.recordReads != 0 {
+			t.Errorf("attested %s, record only: %+v (reads %d)", cpu, g, ro.projectReads+ro.recordReads)
+		}
+		kf := newFacts(true).make(true, false)
+		kf.RecordOnly = true
+		if g := CheckReset(attested(cpu, pw), kf); !g.Allowed {
+			t.Errorf("attested %s, keep, record only elsewhere: %+v", cpu, g)
+		}
+	}
+	up := newFacts(false).make(false, true)
+	up.UploadRoute, up.UploadedFrom = true, "192.0.2.10"
+	if g := CheckReset(attested("", pw), up); g.Allowed {
+		t.Errorf("the upload route let a reset to tiad's user: %+v", g)
+	}
+}
+
+// TestResetAt: the verdict when TIA asks. The logon route needs the
+// download logged on; the others a CPU that asked no credentials; a
+// refused gate stays refused.
+func TestResetAt(t *testing.T) {
+	logon := ResetGate{Allowed: true, Route: ResetRouteLogon}
+	if g := logon.At(true, true); g != logon {
+		t.Errorf("logon, logged on: %+v", g)
+	}
+	for _, asked := range []bool{false, true} {
+		if g := logon.At(false, asked); g.Allowed || g.Why != resetRefused+ResetNoLogon {
+			t.Errorf("logon, not logged on (asked %v): %+v", asked, g)
+		}
+	}
+	for _, route := range []string{ResetRouteAttestation, ResetRouteUpload} {
+		off := ResetGate{Allowed: true, Route: route}
+		if g := off.At(false, false); g != off {
+			t.Errorf("%s, no credentials asked: %+v", route, g)
+		}
+		// Asked and answered, or asked and refused (TIA may go on after a
+		// no): either shows the CPU's access control on.
+		for _, loggedOn := range []bool{true, false} {
+			if g := off.At(loggedOn, true); g.Allowed || !strings.Contains(g.Why, "so its access control is on, but the "+route+" route rests on it being off") {
+				t.Errorf("%s, the CPU asked credentials (logged on %v): %+v", route, loggedOn, g)
+			}
+		}
+	}
+	for _, g := range []ResetGate{{Why: "no"}, {Route: ResetRouteLogon}} {
+		if g.At(true, true).Allowed || g.At(false, false).Allowed {
+			t.Errorf("a refused gate let: %+v", g)
 		}
 	}
 }

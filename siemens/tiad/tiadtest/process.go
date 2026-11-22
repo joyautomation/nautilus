@@ -49,6 +49,9 @@ type Script struct {
 	// LoadDespiteCancel makes the fake TIA load even when the agent
 	// cancels: a misbehaving TIA, to prove the agent reports it.
 	LoadDespiteCancel bool `json:"loadDespiteCancel,omitempty"`
+	// OnlineGoesOn makes the download's TIA go on after the agent refused
+	// its credentials question going online, as the agent assumes TIA may.
+	OnlineGoesOn bool `json:"onlineGoesOn,omitempty"`
 	// AskFirst is how many times the fake's TIA asks its first check
 	// (nil: once, as TIA does; 0 asks nothing at all and loads; 2 asks
 	// the same configuration twice).

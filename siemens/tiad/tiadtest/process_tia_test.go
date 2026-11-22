@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1786,6 +1787,88 @@ func TestAgentJournalsTheUserManagementReset(t *testing.T) {
 	want(line(tiad.KindBadRequest), "cpuAccessControl=invalid}", "userManagementReset=unset")
 	if n, m := strings.Count(p.Log(), "Z audit download"), strings.Count(p.Log(), "audit download"); n != m {
 		t.Errorf("a forged audit line: %d of %d", n, m)
+	}
+}
+
+// TestAgentResetsAtTIAsCheckOnlyOnItsEvidence (#789 option 1): what the
+// agent journals when a reset let before TIA meets TIA's check. A CPU
+// that asked credentials refuses the attestation route even when tiad
+// answered them no and TIA went on (refused-at-check, no reset given,
+// nothing loaded); the logon route is given once tiad logged on.
+func TestAgentResetsAtTIAsCheckOnlyOnItsEvidence(t *testing.T) {
+	const bench = "192.0.2.10"
+	p := tiadtest.StartProcess(t, fakeBin(t), tiadtest.Config{Targets: []string{bench}})
+	c := p.Client()
+	installBench(t, c)
+	um := tiad.Question{ID: tiad.QuestionUserManagement, Message: "Delete user management data and disable access control in runtime", Detail: "UserManagementDownload"}
+	line := func(outcome string) string {
+		t.Helper()
+		log := waitLog(t, p, "outcome="+outcome)
+		var last string
+		for _, l := range strings.Split(log, "\n") {
+			if strings.Contains(l, "Z audit download") && strings.Contains(l, "outcome="+outcome) {
+				last = l
+			}
+		}
+		if last == "" {
+			t.Fatalf("no audit line with outcome=%s:\n%s", outcome, log)
+		}
+		return last
+	}
+	// Access control on: a station tiad made, loaded over a CPU attested
+	// off.
+	s, err := c.CreateProject(ctx, "bench", tiadtest.BenchStation(), tiadtest.BenchSecrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Compile(ctx, true, true); err != nil {
+		t.Fatal(err)
+	}
+	p.SetScript(t, tiadtest.Script{Questions: []tiad.Question{um}})
+	on := tiadtest.AcceptHardware(tiad.DownloadRequest{Secrets: tiadtest.BenchDownloadSecrets(), Address: bench, Hardware: true, Software: true, Announced: true,
+		Decisions: tiad.Decisions{StartAfter: tiad.Yes(), UserManagementResetToProject: tiad.Yes()}})
+	on.Attestation.CPUAccessControl = tiad.AttestCPUAccessDisabled
+	if res, err := s.Download(ctx, on); err != nil || res.UserManagementReset != tiad.ResetRouteAttestation {
+		t.Fatalf("turning access control on: %+v %v", res, err)
+	}
+	if err := s.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	r := tiadtest.RestoreSession(t, p)
+	loads := len(p.Loaded(t))
+
+	// Attested off, no password: the CPU asks credentials, tiad answers
+	// no, TIA goes on to its check. The attestation is contradicted: no
+	// reset, the download in doubt (a refusal going online), nothing
+	// loaded.
+	p.SetScript(t, tiadtest.Script{Questions: []tiad.Question{um}, OnlineGoesOn: true})
+	off := tiadtest.ResetLoad(bench)
+	off.Attestation.CPUAccessControl = tiad.AttestCPUAccessDisabled
+	off.Secrets = nil
+	_, err = r.Download(ctx, off)
+	if tiad.Kind(err) != tiad.KindOutcomeUnknown || slices.Contains(tiad.ActingAnswers(err), tiad.QuestionUserManagement) {
+		t.Fatalf("attested off over a CPU that asked credentials: %v (acting %v)", err, tiad.ActingAnswers(err))
+	}
+	l := line(tiad.KindOutcomeUnknown)
+	if !strings.Contains(l, "userManagementReset=refused-at-check:attestation") {
+		t.Errorf("the audit line lacks the refusal at TIA's check:\n%s", l)
+	}
+	if !strings.Contains(p.Log(), "audit user-management-reset address=\"192.0.2.10\" route=attestation refused when TIA asked") {
+		t.Errorf("no audit line for the refusal at TIA's check:\n%s", p.Log())
+	}
+	if n := len(p.Loaded(t)); n != loads {
+		t.Fatalf("a refused reset loaded: %d loads, want %d", n, loads)
+	}
+
+	// The restore by the logon route: given, journalled.
+	p.SetScript(t, tiadtest.Script{Questions: []tiad.Question{um}})
+	restore := tiadtest.ResetLoad(bench)
+	restore.Attestation.CPUAccessControl = tiad.AttestCPUAccessEnabled
+	if res, err := r.Download(ctx, restore); err != nil || res.UserManagementReset != tiad.ResetRouteLogon {
+		t.Fatalf("the restore: %+v %v", res, err)
+	}
+	if l := line("loaded"); !strings.Contains(l, "userManagementReset=given:logon") || !strings.Contains(l, "cpuAccessControl=enabled}") {
+		t.Errorf("the restore's audit line:\n%s", l)
 	}
 }
 

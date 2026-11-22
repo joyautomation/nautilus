@@ -73,6 +73,7 @@ type serverConfig struct {
 	productName      string
 	productURI       string
 	softwareVersion  string
+	redundancy       func() *Redundancy
 	buildNumber      string
 	buildDate        time.Time
 

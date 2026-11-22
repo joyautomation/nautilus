@@ -35,9 +35,11 @@ import (
 	"os"
 	"reflect"
 	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -150,17 +152,21 @@ type Server struct {
 	host string
 	port int
 
-	mu      sync.Mutex
-	srv     *opcserver.Server
-	ns      *namespace
-	cancel  context.CancelFunc
-	done    chan struct{}
-	up      bool
-	since   time.Time
-	lastErr error
-	url     string
-	version string
-	cert    CertInfo // the server certificate, when PKI is set
+	red atomic.Pointer[opcserver.Redundancy]
+	// announced is the ApplicationUri the server announces: the configured
+	// one, or the certificate's when that names another (Part 4 §7.1).
+	announced atomic.Pointer[string]
+	mu        sync.Mutex
+	srv       *opcserver.Server
+	ns        *namespace
+	cancel    context.CancelFunc
+	done      chan struct{}
+	up        bool
+	since     time.Time
+	lastErr   error
+	url       string
+	version   string
+	cert      CertInfo // the server certificate, when PKI is set
 
 	w *writeAccess // the write policy and audit; outlives Stop/Start
 }
@@ -317,6 +323,7 @@ func (s *Server) startOn(ctx context.Context, port int) error {
 		opcserver.ProductName(product),
 		opcserver.ProductURI(productURI),
 		opcserver.SoftwareVersion(build.version),
+		opcserver.RedundancyFunc(s.redundancyNow),
 		opcserver.BuildNumber(build.number),
 		opcserver.BuildDate(build.date),
 		opcserver.EnableSecurity("None", ua.MessageSecurityModeNone),
@@ -491,6 +498,40 @@ func loopbackHost(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// Redundancy is the server's part in a redundant set (see
+// uaserver.Redundancy): Support, every member's ApplicationUri, and this
+// member's ServiceLevel.
+type Redundancy = opcserver.Redundancy
+
+// SetRedundancy makes the server a member of a non-transparent redundant
+// set: RedundancySupport, ServerUriArray and a ServiceLevel that follows
+// r.ServiceLevel, which `naut run` takes from the elector. It takes effect
+// at once, running or not; nil leaves the set.
+func (s *Server) SetRedundancy(r *Redundancy) { s.red.Store(r) }
+
+// redundancyNow is the redundancy the nodes report. ServerUriArray names
+// this member by the ApplicationUri it announces, which is the certificate's
+// when an old certificate names another URI: a client that looks for the
+// server it is talking to in the array must find it there.
+func (s *Server) redundancyNow() *opcserver.Redundancy {
+	r := s.red.Load()
+	if r == nil {
+		return nil
+	}
+	a := s.announced.Load()
+	if a == nil || *a == s.opts.ApplicationURI {
+		return r
+	}
+	c := *r
+	c.ServerURIs = slices.Clone(r.ServerURIs)
+	for i, u := range c.ServerURIs {
+		if u == s.opts.ApplicationURI {
+			c.ServerURIs[i] = *a
+		}
+	}
+	return &c
+}
+
 // SetSoftwareVersion sets the version the server reports as
 // ServerStatus.BuildInfo.SoftwareVersion: the CLI passes its own, the one
 // `naut version` prints. Unset, it is the module version in the binary's
@@ -654,6 +695,7 @@ func (s *Server) secure(listen string, aliases []string) ([]opcserver.Option, er
 		appURI = info.ApplicationURI
 	}
 	s.cert = info
+	s.announced.Store(&appURI)
 	opts := []opcserver.Option{
 		opcserver.ApplicationURI(appURI),
 		opcserver.Certificate(der),

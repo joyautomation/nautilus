@@ -175,6 +175,27 @@ func ProductName(name string) Option {
 	}
 }
 
+// Redundancy is what a member of a non-transparent redundant set (Part 4
+// §6.6.2.4.5.2) tells its clients: RedundancySupport, the ApplicationUris of
+// the whole set (ServerUriArray) and its own ServiceLevel, read at every
+// Read so it follows the elector.
+type Redundancy struct {
+	// Support is the RedundancySupport enumeration (1 Cold, 2 Warm, 3 Hot).
+	Support int32
+	// ServerURIs are every member's ApplicationUri.
+	ServerURIs []string
+	// ServiceLevel is this member's, 0-255.
+	ServiceLevel func() byte
+}
+
+// RedundancyFunc names the redundancy to report; nil (or a func returning
+// nil) is a server that is not in a redundant set.
+func RedundancyFunc(f func() *Redundancy) Option {
+	return func(s *serverConfig) {
+		s.redundancy = f
+	}
+}
+
 func SoftwareVersion(name string) Option {
 	return func(s *serverConfig) {
 		s.softwareVersion = name

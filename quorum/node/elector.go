@@ -171,6 +171,11 @@ const (
 	// match again (or neither has any). Report only.
 	EventUsersDiffer EventKind = "redundancy.credentials.users"
 	EventTLSDiffers  EventKind = "redundancy.credentials.tls"
+	// EventContactsDiffer: the alarm contacts check (#715): the two
+	// controllers' alarm-contacts.json and alarm-secrets.json differ, or
+	// one cannot read its own. Report only, as the credential check is:
+	// never the vote, the lease or the write gate.
+	EventContactsDiffer EventKind = "redundancy.credentials.contacts"
 	// EventBoxChanged: the voter state was written on another box (#1029):
 	// treated as lost, so this controller starts uncommissioned. Detail
 	// says what changed and how to tell a NIC swap from a clone.
@@ -300,6 +305,8 @@ type Status struct {
 	ClientToken        ClientToken
 	// Users and TLS are what the credential check (#708) last found.
 	Users, TLS CredState
+	// Contacts is the alarm contacts check (#715), report only.
+	Contacts CredState
 	// StateWriteError is the last state write's error, "" while writes
 	// succeed.
 	StateWriteError string
@@ -383,20 +390,22 @@ type Elector struct {
 	fromSpare  string    // recommission --from-spare moved the state file here: restart naut
 	// lookedAt is an uncommissioned controller's last look (pace); paced:
 	// it has one.
-	lookedAt   quorum.Instant
-	paced      bool
-	storedBox  string   // the box the state file named
-	peerNonces []uint64 // the boot nonces the peer's name answered under, oldest first
-	helloDups  uint64
-	helloDupAt time.Time
-	token      ClientToken
-	users, tls CredState // the credential check (#708)
-	usersMsg   string    // the users condition last raised (it names who can't read)
-	tlsMsg     string    // the TLS condition last raised
-	writeErr   string
-	mismatch   map[string]string // the last lease-mismatch report per voter, to report each change once
-	durable    uint64            // the highest Seq known on disk
-	written    chan struct{}     // closed and replaced at every write report
+	lookedAt    quorum.Instant
+	paced       bool
+	storedBox   string   // the box the state file named
+	peerNonces  []uint64 // the boot nonces the peer's name answered under, oldest first
+	helloDups   uint64
+	helloDupAt  time.Time
+	token       ClientToken
+	users, tls  CredState // the credential check (#708)
+	usersMsg    string    // the users condition last raised (it names who can't read)
+	tlsMsg      string    // the TLS condition last raised
+	contacts    CredState // the alarm contacts check (#715)
+	contactsMsg string    // the contacts condition last raised
+	writeErr    string
+	mismatch    map[string]string // the last lease-mismatch report per voter, to report each change once
+	durable     uint64            // the highest Seq known on disk
+	written     chan struct{}     // closed and replaced at every write report
 	// spareSeq: the write of the spare flag in flight (Voter.MakeSpare),
 	// 0 when none. spare: the flag is durable (or was read at start), and
 	// this controller is silent (#1029 3c-2).
@@ -1453,11 +1462,16 @@ func (e *Elector) serveHello(w http.ResponseWriter, r *http.Request) {
 	if cr.UsersErr != "" {
 		us = credUnreadable
 	}
+	cs := credOK
+	if cr.ContactsErr != "" {
+		cs = credUnreadable
+	}
 	_ = json.NewEncoder(w).Encode(helloAnswer{Node: string(e.o.Self), MAC: tokenMAC(e.o.Token, c, e.o.Peer, e.o.Self, e.o.ClientToken),
 		Config: self.Config, Nonce: strconv.FormatUint(self.Nonce, 16), Caps: self.Caps, Log: self.Log,
 		InfoMAC: infoMAC(e.o.Token, c, e.o.Peer, e.o.Self, self),
 		Users:   us, UsersMAC: credMAC(e.o.Token, c, e.o.Peer, e.o.Self, "users", us, cr.Users),
-		TLS: credOK, TLSMAC: credMAC(e.o.Token, c, e.o.Peer, e.o.Self, "tls", credOK, cr.TLS)})
+		TLS: credOK, TLSMAC: credMAC(e.o.Token, c, e.o.Peer, e.o.Self, "tls", credOK, cr.TLS),
+		Contacts: cs, ContactsMAC: credMAC(e.o.Token, c, e.o.Peer, e.o.Self, contactsPart(), cs, cr.Contacts)})
 }
 
 // silent: a spare answers nobody, as if it were down (#1029 3c-2).
@@ -1556,6 +1570,57 @@ func (e *Elector) checkCredentials(c string, h helloAnswer, verified bool) {
 		e.log.Error("redundancy: this controller cannot read its users file, so the pair's users cannot be compared", "error", own.UsersErr)
 	}
 	e.reportCredentials(users, e.usersMessage(users, own.UsersErr), tls, e.tlsMessage(tls))
+	contacts := judgeCred(e.o.Token, c, e.o.Self, e.o.Peer, contactsPart(), h.Contacts, h.ContactsMAC, own.Contacts, own.ContactsErr, verified)
+	if contacts == CredUnreadable && own.ContactsErr != "" {
+		e.log.Error("redundancy: this controller cannot read its alarm contacts, so the pair's cannot be compared", "error", own.ContactsErr)
+	}
+	e.reportContacts(contacts, e.contactsMessage(contacts, own.ContactsErr))
+}
+
+// contactsPart is the contacts' credMAC part: its own label, so a users or
+// TLS MAC never verifies as contacts.
+func contactsPart() string {
+	if mut("contacts_part_users") {
+		return "users"
+	}
+	return "contacts"
+}
+
+// reportContacts records the contacts check and raises its event when its
+// message changed ("" clears the condition). Report only.
+func (e *Elector) reportContacts(st CredState, msg string) {
+	e.mu.Lock()
+	changed := msg != e.contactsMsg
+	e.contacts = st
+	if changed {
+		e.contactsMsg = msg
+		e.event(Event{Kind: EventContactsDiffer, Detail: msg})
+	}
+	e.mu.Unlock()
+	switch {
+	case changed && msg != "":
+		e.log.Warn("redundancy: " + msg)
+	case changed:
+		e.log.Info("redundancy: the alarm contacts condition cleared", "state", st.String())
+	}
+}
+
+// contactsMessage is the operator's text for the alarm contacts' state (""
+// when they match, neither has any, or nothing is known). Never a path,
+// an address or an OS error: /api/cluster shows it without a token.
+func (e *Elector) contactsMessage(st CredState, ownErr string) string {
+	switch st {
+	case CredDiffers:
+		return "alarm contacts differ from the peer: " + string(e.o.Self) + " and " + string(e.o.Peer) + " hold different alarm-contacts.json or alarm-secrets.json (or one has none). Copy both files from the controller that has the right ones into the other's state directory (scp -p, keeping them mode 0600 and owned by the service user; each reads them at its next page), or set the same entries on both with naut alarms contacts set and naut alarms secrets set. Until then, after a takeover a page may go to an old address, or not at all"
+	case CredUnreadable:
+		if ownErr != "" {
+			return "this controller (" + string(e.o.Self) + ") cannot read its alarm contacts, so the pair's cannot be compared: see its log"
+		}
+		return "the peer controller (" + string(e.o.Peer) + ") cannot read its alarm contacts, so the pair's cannot be compared: see its log"
+	case CredUnverified:
+		return e.unverifiedMessage("alarm contacts")
+	}
+	return ""
 }
 
 // answerVerified reports whether a hello answer proved itself under the
@@ -1576,6 +1641,7 @@ func (e *Elector) answerVerified(c string, h helloAnswer) (peerInfo, bool) {
 // cleared rather than left standing on a state nobody re-checks.
 func (e *Elector) credentialsUnknown() {
 	e.reportCredentials(CredUnknown, "", CredUnknown, "")
+	e.reportContacts(CredUnknown, "")
 }
 
 // reportCredentials records each part's state and raises its event when
@@ -1779,7 +1845,7 @@ func (e *Elector) Status() Status {
 		Commissioned: st.Incarnation != 0, Gen: st.Gen, Incarnation: st.Incarnation,
 		PendingGen: st.PendingGen, PendingInc: st.PendingInc, Floor: st.Floor, KnownFloor: e.a.KnownFloor(),
 		WitnessIncarnation: e.witInc, WitnessAge: -1, PeerAge: -1,
-		RecommissionNeeded: e.needOp && st.Incarnation == 0, ClientToken: e.token, Users: e.users, TLS: e.tls,
+		RecommissionNeeded: e.needOp && st.Incarnation == 0, ClientToken: e.token, Users: e.users, TLS: e.tls, Contacts: e.contacts,
 		StateWriteError: e.writeErr, Acquisitions: e.acquired, Duplicates: e.dupSeen,
 		ConfigDiffers: e.cfgDiffers, HelloDuplicates: e.helloDups, BoxChanged: e.boxChanged, BoxPending: e.boxPending,
 	}

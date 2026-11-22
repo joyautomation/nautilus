@@ -108,6 +108,10 @@ type episode struct {
 	// only the latest due step, never a burst of stale levels.
 	skipBelow int
 	late      bool
+	// lateWhy is why it joined late: a resend after a restart or a
+	// takeover when it was first seen in this leadership's first look (an
+	// occurrence carried across, #715), else a join late of its own.
+	lateWhy string
 	// people holds each step's recipients, resolved once, when the step
 	// first fell due: a roster's handover after that pages the new person
 	// at the next level, never with the levels already sent.
@@ -222,6 +226,17 @@ func New(o Options) (*Dispatcher, error) {
 	return d, nil
 }
 
+// Covers reports whether some policy's match covers d, at any time of day:
+// a pair's log keeps such an alarm's occurrence for a takeover (#715).
+func (d *Dispatcher) Covers(def alarm.Def) bool {
+	for i := range d.cfg.Policies {
+		if d.cfg.Policies[i].Match.Covers(def) {
+			return true
+		}
+	}
+	return false
+}
+
 // Close stops the sender: a send in flight is cancelled and what is
 // queued is dropped, so a hung channel cannot hold up a shutdown.
 func (d *Dispatcher) Close() {
@@ -290,7 +305,8 @@ func (d *Dispatcher) Tick(now time.Time) {
 		d.failing.Store(false)
 		return
 	}
-	if !d.termSeen || term != d.lastTerm {
+	firstLook := !d.termSeen || term != d.lastTerm
+	if firstLook {
 		// A new leadership: what an earlier one sent is not known here.
 		// Every escalation is seen afresh and joins late.
 		d.episodes = map[string]*episode{}
@@ -335,6 +351,12 @@ func (d *Dispatcher) Tick(now time.Time) {
 			ep.since = since
 			ep.people = map[int][]string{}
 			ep.skipBelow, ep.late = joinLate(p.steps, now.Sub(since), d.every)
+			ep.lateWhy = joinedLate
+			if firstLook {
+				// Only the leader sends, and what it sent is not kept: the
+				// current level goes again, once.
+				ep.lateWhy = d.resendWhy()
+			}
 		}
 		d.due(r, ep, now, term)
 	}
@@ -343,6 +365,23 @@ func (d *Dispatcher) Tick(now time.Time) {
 			d.end(id) // waits on nobody now: acknowledged, normal, shelved, gone
 		}
 	}
+}
+
+// Why a send joined late (Message.Reason, the notify row's reason).
+const (
+	joinedLate     = "joined late: earlier levels fell due before this controller saw the alarm"
+	ResendRestart  = "resend after restart"
+	ResendTakeover = "resend after takeover"
+)
+
+// resendWhy is a first look's late join: a takeover on a controller in an
+// election (a pair's or a lease's member starts as a takeover too), else
+// a restart.
+func (d *Dispatcher) resendWhy() string {
+	if d.gate != nil {
+		return ResendTakeover
+	}
+	return ResendRestart
 }
 
 // joinLate decides which of an escalation's due steps a controller that
@@ -403,7 +442,7 @@ func (d *Dispatcher) due(r alarm.Record, ep *episode, now time.Time, term uint64
 		lvl := ep.policy.Levels[s.Level]
 		reason := ""
 		if ep.late {
-			reason = "joined late: earlier levels fell due before this controller saw the alarm"
+			reason = ep.lateWhy
 		}
 		people, ok := ep.people[i]
 		if !ok {
@@ -415,7 +454,8 @@ func (d *Dispatcher) due(r alarm.Record, ep *episode, now time.Time, term uint64
 			if d.sends[k] == 0 {
 				d.sends[k] = done
 				d.eng.Notified(r.ID, alarm.Notice{Level: s.Level + 1, Via: strings.Join(lvl.Via, ","),
-					Result: alarm.NotifyNobodyOnCall, Reason: "nobody on call on " + strings.Join(lvl.Notify, ", ")})
+					Result: alarm.NotifyNobodyOnCall, Reason: "nobody on call on " + strings.Join(lvl.Notify, ", "),
+					Occurrence: r.Occurrence})
 			}
 			continue
 		}
@@ -539,7 +579,7 @@ func (d *Dispatcher) deliver(q queued) {
 	}
 	d.mu.Unlock()
 	d.eng.Notified(q.msg.Alarm.ID, alarm.Notice{Level: q.msg.Level, To: q.key.to, Via: q.key.via,
-		Result: result, Reason: reason})
+		Result: result, Reason: reason, Occurrence: q.msg.Alarm.Occurrence})
 }
 
 // transient reports a failure worth another attempt: no answer, no

@@ -390,15 +390,36 @@ namespace Tiad
     // check by resetting the CPU's user management to the project's
     // (decisions.userManagementResetToProject). A hardware load asks it,
     // TIA refuses keep there, and its reset deletes the CPU's users and
-    // sets its access control as the project has it (#789 stage 4
-    // logging window). tiad lets it only when that changes nothing that
-    // protects the CPU: a hardware download, a spec that keeps access
-    // control as found on a session that never set it, a project whose
-    // access control reads exactly Disabled, and evidence that the CPU's
-    // is off too: this session uploaded from that very CPU (the project's
-    // setting is the CPU's), or the operator attests it
-    // (attestation.cpuAccessControl "disabled"). An attestation that says
-    // enabled refuses whatever else holds. The upload route is off
+    // sets its access control and users as the project has them (#789
+    // stage 4 logging window). tiad lets it only on a hardware download,
+    // and only for a closed set of cases, every other refused:
+    //
+    //   project after the reset    CPU now (evidence)             route
+    //   Disabled, spec keep        off: attested "disabled"       attestation
+    //   Disabled, spec keep        off: uploaded here (OFF)       upload
+    //   Disabled, spec keep        on: tiad logged on             logon
+    //   tiad's user, spec          off: attested "disabled"       attestation
+    //     fullAccessUser
+    //   tiad's user, spec          on: tiad logged on             logon
+    //     fullAccessUser
+    //
+    // "spec keep" is cpu.accessControl keep on a session that never
+    // applied fullAccessUser, with the project's access control exactly
+    // Disabled: the reset leaves the CPU without access control. "tiad's
+    // user" is the session's current spec fullAccessUser, applied on this
+    // session, with the project's access control exactly
+    // EnabledWithAccessControl and the request's secrets.fullAccessPassword
+    // the one tiad's record of the user "nautilus" holds: after the reset
+    // the CPU's Full access user is the one tiad logs on as, with this
+    // password. The logon route ("enabled" attested) needs that password,
+    // and is decided in two steps: Check before anything reaches the CPU,
+    // then Gate.At when TIA asks the check, which lets it only if this
+    // download logged on as "nautilus" before (LoginUse.LoggedOn); the
+    // other routes rest on the CPU's access control being off, and Gate.At
+    // refuses them once the CPU asked credentials. The logon route is a
+    // loosening (#789 option 1, naut-lead 2026-11-22): it deletes every
+    // user the CPU holds, on the strength of tiad holding the CPU's Full
+    // access user's password. The upload route is off
     // (UploadRouteEnabled) until a bench upload proves its premise.
     public static class UserManagementRule
     {
@@ -415,22 +436,77 @@ namespace Tiad
         // ProjectDisabled is PlcAccessControlConfiguration's name for
         // access control off, exactly.
         public const string ProjectDisabled = "Disabled";
-        // The routes that show the CPU's access control is off.
-        public const string RouteUpload = "upload", RouteAttestation = "attestation";
+        // The routes that let a reset: the CPU's access control shown off
+        // (upload, attestation), or tiad logged on to it (logon).
+        public const string RouteUpload = "upload", RouteAttestation = "attestation", RouteLogon = "logon";
 
         // Gate is Check's verdict. Its zero value refuses: a download that
-        // never checked cannot reset.
+        // never checked cannot reset. A gate allowed by the logon route
+        // still needs At, when TIA asks.
         public sealed class Gate
         {
             public bool Allowed;
             public string Why = "", Route = "";
+
+            // At is the verdict when TIA asks its user-management check:
+            // loggedOn is whether this download logged on to the CPU as
+            // "nautilus" and nothing was refused since (LoginUse.LoggedOn);
+            // credentialsAsked whether TIA asked credentials in it at all,
+            // answered or not, or anything was answered no
+            // (LoginUse.MayHaveAskedCredentials). The logon route
+            // needs the logon; the others rest on the CPU's access control
+            // being off, which a CPU that asked credentials contradicts,
+            // whatever tiad answered.
+            public Gate At(bool loggedOn, bool credentialsAsked)
+            {
+                if (!Allowed) return this;
+                if (Route == RouteLogon && !loggedOn) return new Gate { Why = Refused + NoLogon, Route = "" };
+                if (Route != RouteLogon && (loggedOn || credentialsAsked)) return new Gate { Why = Refused + Contradicted(Route) };
+                return this;
+            }
+        }
+
+        // Facts is what the session shows Check. AccessControlKept is
+        // whether the session's spec keeps access control and no apply on
+        // it ever set it; FullAccessUserSet whether its spec is
+        // fullAccessUser and an apply on this session set it; UploadedFrom
+        // the address this session last uploaded from ("" for none);
+        // UploadRoute whether the upload route counts (UploadRouteEnabled,
+        // for the agent). ProjectAccessControl reads the project's
+        // PlcAccessControlConfiguration and PasswordRecorded whether the
+        // project's record of the user "nautilus" is of the request's
+        // password (null: unreadable); each is asked only once everything
+        // cheaper holds, PasswordRecorded only for tiad's user.
+        // RecordOnly is whether an apply on the session recorded the Full
+        // access password without setting it (fullAccessRecordOnly): the
+        // record then shows what tiad was told, not what TIA holds, so a
+        // reset to tiad's user is refused.
+        public sealed class Facts
+        {
+            public bool AccessControlKept, FullAccessUserSet, UploadRoute, RecordOnly;
+            public string UploadedFrom = "";
+            public Func<string> ProjectAccessControl;
+            public Func<bool?> PasswordRecorded;
         }
 
         const string Refused = "decisions.userManagementResetToProject (delete the CPU's user management data and set its access control as the project has it) is refused: ";
+        public const string NoLogon = "the logon route (attestation.cpuAccessControl \"enabled\") needs tiad logged on to the CPU as \"nautilus\" in this download before TIA asked, and it was not (the CPU asked no credentials, or tiad's answer was refused), so nothing shows tiad holds the CPU's Full access: if this agent's TIA instance went online to the CPU before, close every session (the agent then retires the instance) and download again; if the CPU's access control is off, attest \"disabled\"";
+        public const string NoPassword = "the logon route (attestation.cpuAccessControl \"enabled\") logs on to the CPU as \"nautilus\", and the request carries no secrets.fullAccessPassword";
+        public const string RecordOnlyRefused = "an apply on this session recorded secrets.fullAccessPassword as the user \"nautilus\"'s password without setting it (fullAccessRecordOnly), so tiad cannot show the project's user holds it: a reset to it could leave the CPU with a password this download cannot log on with, locking tiad out; apply on a session that sets the password";
+        public const string PasswordNotRecorded = "the request's secrets.fullAccessPassword is not the password tiad set or recorded for the project's user \"nautilus\": after the reset the CPU's Full access user would have a password this download cannot log on with";
+
+        static string Contradicted(string route)
+        {
+            return "the CPU asked credentials in this download, so its access control is on, but the " + route + " route rests on it being off: if it is on, attest \"enabled\" (the logon route)";
+        }
+
         static string Routes(bool uploadRoute)
         {
-            if (uploadRoute) return "tiad resets it only on a hardware download, with cpu.accessControl keep, a project whose access control is Disabled, and either an upload from this CPU in this session or attestation.cpuAccessControl \"disabled\"";
-            return "tiad resets it only on a hardware download, with cpu.accessControl keep, a project whose access control is Disabled, and attestation.cpuAccessControl \"disabled\" (" + UploadRouteWhy + ")";
+            string s = "tiad resets it only on a hardware download, to a project whose access control is Disabled under cpu.accessControl keep, or one whose user \"nautilus\" this session made (cpu.accessControl fullAccessUser, secrets.fullAccessPassword its recorded password), with attestation.cpuAccessControl \"disabled\"";
+            if (uploadRoute) s += " or an upload from this CPU in this session (to a Disabled project)";
+            s += ", or \"enabled\" with tiad logged on as \"nautilus\" in the download";
+            if (!uploadRoute) s += " (" + UploadRouteWhy + ")";
+            return s;
         }
 
         public static Question Question(string why)
@@ -443,15 +519,17 @@ namespace Tiad
             };
         }
 
-        // Check decides a reset for req. accessControlKept is whether the
-        // session's spec keeps access control and no apply on it ever set
-        // it; uploadedFrom the address this session last uploaded from
-        // ("" for none); uploadRoute whether the upload route counts
-        // (UploadRouteEnabled, for the agent); projectAccessControl reads
-        // the project's PlcAccessControlConfiguration, asked only once
-        // everything cheaper holds. A read that fails or reads nothing
-        // refuses.
+        // Check for a session that keeps access control (or not), as
+        // before tiad's own users could be reset to: FullAccessUserSet
+        // false.
         public static Gate Check(DownloadRequest req, bool accessControlKept, string uploadedFrom, bool uploadRoute, Func<string> projectAccessControl)
+        {
+            return Check(req, new Facts { AccessControlKept = accessControlKept, UploadedFrom = uploadedFrom ?? "", UploadRoute = uploadRoute, ProjectAccessControl = projectAccessControl });
+        }
+
+        // Check decides a reset for req before anything reaches the CPU. A
+        // read that fails or reads nothing refuses.
+        public static Gate Check(DownloadRequest req, Facts f)
         {
             var g = new Gate();
             if (req.Decisions.UserManagementResetToProject != true)
@@ -461,36 +539,71 @@ namespace Tiad
             }
             if (!req.Hardware)
             {
-                g.Why = Refused + "this download loads no hardware; " + Routes(uploadRoute);
+                g.Why = Refused + "this download loads no hardware; " + Routes(f.UploadRoute);
                 return g;
             }
-            if (!accessControlKept)
+            bool keep = f.AccessControlKept;
+            if (!keep && !f.FullAccessUserSet)
             {
-                g.Why = Refused + "the session's spec does not keep access control as found (cpu.accessControl keep on a session that never applied fullAccessUser); " + Routes(uploadRoute);
+                g.Why = Refused + "the session's spec does not keep access control as found (cpu.accessControl keep on a session that never applied fullAccessUser), nor is it fullAccessUser applied on this session; " + Routes(f.UploadRoute);
                 return g;
             }
-            if (req.Attestation.CpuAccessControl == Attestation.CpuAccessEnabled)
+            if (!keep && f.RecordOnly)
             {
-                g.Why = Refused + "the attestation says the CPU's access control is enabled, and a reset would turn it off and delete its users; tiad never resets a CPU whose access control is on";
+                g.Why = Refused + RecordOnlyRefused;
                 return g;
             }
+            bool enabled = req.Attestation.CpuAccessControl == Attestation.CpuAccessEnabled;
+            if (enabled && req.Secrets.FullAccessPassword == "")
+            {
+                g.Why = Refused + NoPassword;
+                return g;
+            }
+            string want = keep ? ProjectDisabled : AccessRule.Enabled;
             string project;
             try
             {
-                project = projectAccessControl == null ? null : projectAccessControl();
+                project = f.ProjectAccessControl == null ? null : f.ProjectAccessControl();
             }
             catch (TiadException e)
             {
                 if (e.Fatal) throw;
-                g.Why = Refused + "reading the project's access control failed (" + e.Message + "); " + Routes(uploadRoute);
+                g.Why = Refused + "reading the project's access control failed (" + e.Message + "); " + Routes(f.UploadRoute);
                 return g;
             }
-            if (project != ProjectDisabled)
+            if (project != want)
             {
-                g.Why = Refused + "the project's access control is " + (project == null ? "unreadable" : project == AccessRule.Absent ? "absent (no such setting)" : Json.Quote(project)) + ", not Disabled; " + Routes(uploadRoute);
+                g.Why = Refused + "the project's access control is " + (project == null ? "unreadable" : project == AccessRule.Absent ? "absent (no such setting)" : Json.Quote(project)) + ", not " + want +
+                    (keep ? "" : " (cpu.accessControl fullAccessUser)") + "; " + Routes(f.UploadRoute);
                 return g;
             }
-            if (uploadRoute && uploadedFrom != "" && uploadedFrom == req.Address)
+            if (!keep)
+            {
+                bool? recorded;
+                try
+                {
+                    recorded = f.PasswordRecorded == null ? null : f.PasswordRecorded();
+                }
+                catch (TiadException e)
+                {
+                    if (e.Fatal) throw;
+                    g.Why = Refused + "reading the project's record of the user \"nautilus\" failed (" + e.Message + ")";
+                    return g;
+                }
+                if (recorded != true)
+                {
+                    g.Why = Refused + (recorded == null ? "tiad could not read the project's record of the user \"nautilus\", so nothing shows the CPU's Full access user would have the password this download logs on with" : PasswordNotRecorded);
+                    return g;
+                }
+            }
+            bool uploaded = keep && f.UploadRoute && f.UploadedFrom != "" && f.UploadedFrom == req.Address;
+            if (enabled && req.Attestation.Given)
+            {
+                g.Allowed = true;
+                g.Route = RouteLogon;
+                return g;
+            }
+            if (!enabled && uploaded)
             {
                 g.Allowed = true;
                 g.Route = RouteUpload;
@@ -502,8 +615,8 @@ namespace Tiad
                 g.Route = RouteAttestation;
                 return g;
             }
-            if (uploadRoute) g.Why = Refused + "nothing shows the CPU's access control is off: upload from " + req.Address + " in this session first, or give attestation.cpuAccessControl \"disabled\" (with attestation.by and attestation.text), the operator's own observation of the CPU, never a value a caller fills in by default";
-            else g.Why = Refused + "nothing shows the CPU's access control is off: give attestation.cpuAccessControl \"disabled\" (with attestation.by and attestation.text), the operator's own observation of the CPU, never a value a caller fills in by default; " + UploadRouteWhy;
+            if (keep && f.UploadRoute) g.Why = Refused + "nothing shows the CPU's access control as it is now: upload from " + req.Address + " in this session first, or give attestation.cpuAccessControl \"disabled\" or \"enabled\" (with attestation.by and attestation.text), the operator's own observation of the CPU, never a value a caller fills in by default";
+            else g.Why = Refused + "nothing shows the CPU's access control as it is now: give attestation.cpuAccessControl \"disabled\" or \"enabled\" (with attestation.by and attestation.text), the operator's own observation of the CPU, never a value a caller fills in by default" + (keep ? "; " + UploadRouteWhy : "");
             return g;
         }
     }

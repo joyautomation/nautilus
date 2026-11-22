@@ -669,6 +669,7 @@ namespace Tiad
                         kept = pc.Others;
                     }
                     if (st.Cpu.AccessControl == StationRules.AccessFullAccessUser) s.AccessControlSet = true;
+                    if (recordOnly) s.AccessRecordOnly = true;
                     CheckPolicy(t, s.Handle, st, sec);
                     string cannot = t.CannotApply(st);
                     if (cannot != null) throw new TiaException(cannot);

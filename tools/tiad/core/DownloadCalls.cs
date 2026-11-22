@@ -48,10 +48,22 @@ namespace Tiad
         // software load is not refused: whether its CPU asks credentials
         // is not known before it goes online (section 3.9). Null when it
         // may go on.
+        // A real download that asks a user-management reset by the logon
+        // route (attestation.cpuAccessControl "enabled") has to log on
+        // too, before TIA asks the check (UserManagementRule.Gate.At):
+        // refused the same way.
         static TiadException LoginBlocked(Session s, DownloadRequest req, BlindTrust bt)
         {
-            if (bt == null || !req.Hardware || s.Station == null || s.Station.Cpu.AccessControl != StationRules.AccessFullAccessUser) return null;
-            return TiadException.BadRequest("{0}", OnlineLogin.BlockedBy(bt) + "; a hardware load of a fullAccessUser station has to log on for the compare after it, so nothing was sent to the CPU");
+            if (bt == null || !req.Hardware || s.Station == null) return null;
+            if (s.Station.Cpu.AccessControl == StationRules.AccessFullAccessUser)
+            {
+                return TiadException.BadRequest("{0}", OnlineLogin.BlockedBy(bt) + "; a hardware load of a fullAccessUser station has to log on for the compare after it, so nothing was sent to the CPU");
+            }
+            if (!req.DryRun && req.Decisions.UserManagementResetToProject == true && req.Attestation.CpuAccessControl == Attestation.CpuAccessEnabled)
+            {
+                return TiadException.BadRequest("{0}", OnlineLogin.BlockedBy(bt) + "; a user-management reset by the logon route (attestation.cpuAccessControl \"enabled\") has to log on to the CPU first, so nothing was sent to the CPU");
+            }
+            return null;
         }
 
         static TiadException Unknown(string why, List<string> acting)
@@ -95,6 +107,15 @@ namespace Tiad
         // WithActing is TIA's side's own outcome_unknown, which already
         // says the CPU is in doubt, with the acting answers tiad gave
         // named.
+        // WithReason adds why tiad refused a user-management reset when TIA
+        // asked (UserManagementRule.Gate.At) to a download that ended in
+        // doubt after it.
+        static TiadException WithReason(TiadException e, string why)
+        {
+            if (why == "") return e;
+            return new TiadException(e.Status, e.Kind, e.Message + "; at TIA's user-management check, " + why, e.Payload, e.Fatal);
+        }
+
         static TiadException WithActing(TiadException e, List<string> acting)
         {
             string c = DownloadChecks.Consequence(acting);
@@ -318,14 +339,31 @@ namespace Tiad
             var reset = new UserManagementRule.Gate();
             if (!req.DryRun && req.Decisions.UserManagementResetToProject == true)
             {
-                reset = UserManagementRule.Check(req, accessControlKept, s.UploadedFrom, UserManagementRule.UploadRouteEnabled, delegate
+                var facts = new UserManagementRule.Facts
                 {
-                    return OnSession(s, delegate(ITia t)
+                    AccessControlKept = accessControlKept,
+                    // The spec the project was last applied with, and an
+                    // apply on this session set it: the project's user
+                    // "nautilus" is tiad's.
+                    FullAccessUserSet = s.Station != null && s.Station.Cpu != null && s.Station.Cpu.AccessControl == StationRules.AccessFullAccessUser && s.AccessControlSet,
+                    RecordOnly = s.AccessRecordOnly,
+                    UploadedFrom = s.UploadedFrom,
+                    UploadRoute = UserManagementRule.UploadRouteEnabled,
+                    ProjectAccessControl = delegate
                     {
-                        ProjectCpu pc = t.ReadCpu(s.Handle);
-                        return pc == null ? null : pc.AccessControl;
-                    });
-                });
+                        return OnSession(s, delegate(ITia t)
+                        {
+                            ProjectCpu pc = t.ReadCpu(s.Handle);
+                            return pc == null ? null : pc.AccessControl;
+                        });
+                    },
+                    PasswordRecorded = delegate
+                    {
+                        string comment = OnSession(s, delegate(ITia t) { return t.UserComment(s.Handle, AccessSteps.UserName); });
+                        return (bool?)(records != null && records.Matches(comment, AccessSteps.UserName, req.Secrets.FullAccessPassword));
+                    },
+                };
+                reset = UserManagementRule.Check(req, facts);
                 if (!reset.Allowed)
                 {
                     resetAudit = "refused";
@@ -373,6 +411,14 @@ namespace Tiad
             // tiad's clock, never the request's.
             if (req.Hardware && !req.DryRun) req.Attestation.At = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ", System.Globalization.CultureInfo.InvariantCulture);
 
+            // The download's logon, made by the agent on the TIA thread just
+            // before TIA's call, so the user-management answer can read
+            // whether it logged on (UserManagementRule.Gate.At).
+            LoginUse use = null;
+            // atWhy is why a reset let before TIA was refused when TIA
+            // asked (UserManagementRule.Gate.At): a download that then ends
+            // in doubt says so.
+            string atWhy = "";
             bool haveProtection = req.Secrets.Protection != "";
             bool haveConfigurationPassword = req.Secrets.ConfigurationPassword != "";
             string given = "";
@@ -397,7 +443,17 @@ namespace Tiad
                 }
                 var one = new List<Question> { q };
                 int u = unanswered.Count, d = declined.Count;
-                DownloadRule.Resolve(one, req.Decisions, haveProtection, haveConfigurationPassword, accessControlKept, reset, unanswered, declined);
+                // The reset's verdict as it stands when TIA asks: the
+                // logon route needs this download logged on by now, the
+                // others a CPU that asked no credentials.
+                UserManagementRule.Gate now = reset;
+                if (q.Id == QuestionIds.UserManagement && reset.Allowed)
+                {
+                    now = reset.At(use != null && use.LoggedOn, use != null && use.MayHaveAskedCredentials);
+                    if (!now.Allowed) atWhy = now.Why;
+                    if (!now.Allowed) Log.Line("audit user-management-reset address={0} route={1} refused when TIA asked: {2}", Json.Quote(req.Address), reset.Route, Json.Quote(now.Why));
+                }
+                DownloadRule.Resolve(one, req.Decisions, haveProtection, haveConfigurationPassword, accessControlKept, now, unanswered, declined);
                 if (unanswered.Count > u || declined.Count > d)
                 {
                     cancelled = true;
@@ -455,8 +511,10 @@ namespace Tiad
                         // A dry run never starts the CPU, whatever the request
                         // says (#1154 review): if TIA loads it without asking,
                         // start-after is NoAction.
-                        return t.Download(s.Handle, req.Address, req.Hardware, req.Software, req.Secrets, req.DryRun ? (bool?)null : req.Decisions.StartAfter, answer,
-                            OnlineLogin.For(req.Secrets.FullAccessPassword, ranWith));
+                        // Its logon answers by the blind trust read here,
+                        // on the TIA thread.
+                        use = new LoginUse(OnlineLogin.For(req.Secrets.FullAccessPassword, ranWith), "download", req.Address);
+                        return t.Download(s.Handle, req.Address, req.Hardware, req.Software, req.Secrets, req.DryRun ? (bool?)null : req.Decisions.StartAfter, answer, use);
                     }
                     catch (Exception e)
                     {
@@ -487,7 +545,7 @@ namespace Tiad
                 {
                     outcome = Kinds.OutcomeUnknown;
                     MayHaveStarted(req, acting);
-                    throw WithActing(e, acting);
+                    throw WithReason(WithActing(e, acting), atWhy);
                 }
                 // TIA failed once it asked a check: whether it acted on an
                 // answer, or loaded, is unknown, so from there on a failure
@@ -496,14 +554,19 @@ namespace Tiad
                 {
                     outcome = Kinds.OutcomeUnknown;
                     MayHaveStarted(req, acting);
-                    throw UnknownAfter(e, acting);
+                    throw WithReason(UnknownAfter(e, acting), atWhy);
                 }
                 throw;
             }
             finally
             {
-                // A reset is journalled given only once tiad answered it.
+                // A reset is journalled given only once tiad answered it,
+                // and refused at TIA's check when Gate.At refused it there.
+                // The deploy record carries a given reset's route whatever
+                // the end.
                 if (given != "") resetAudit = "given:" + given;
+                else if (atWhy != "") resetAudit = "refused-at-check:" + reset.Route;
+                if (run != null) run.UserManagementReset = given;
                 rode = ranWith;
             }
             asked = Ids(askedQs);
@@ -547,7 +610,7 @@ namespace Tiad
             {
                 outcome = Kinds.OutcomeUnknown;
                 var at = unanswered.Count > 0 ? unanswered[0] : declined[0];
-                throw Unknown("tiad cancelled the download at TIA's " + at.Id + " check, which the request does not answer yes", acting);
+                throw WithReason(Unknown("tiad cancelled the download at TIA's " + at.Id + " check, which the request does not answer yes", acting), at.Id == QuestionIds.UserManagement ? atWhy : "");
             }
             if (unanswered.Count > 0)
             {

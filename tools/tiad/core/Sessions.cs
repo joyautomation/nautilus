@@ -39,6 +39,10 @@ namespace Tiad
         // so a download never keeps the CPU's online users for it (#1159
         // review).
         public bool AccessControlSet;
+        // AccessRecordOnly is set once an apply on this session asked for
+        // fullAccessRecordOnly, failed or not: its record shows what tiad
+        // was told, so UserManagementRule refuses a reset to tiad's user.
+        public bool AccessRecordOnly;
         // UploadedFrom is the address this session last uploaded from
         // successfully (its CPU's identity checked), "" for none: the
         // project's CPU settings are then that CPU's, a later apply that

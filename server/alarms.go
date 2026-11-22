@@ -5,7 +5,7 @@ package server
 //
 //	GET  /api/alarms                    active + unack-RTN + shelved, plus the summary
 //	GET  /api/alarms/journal?from&to&…  the append-only event log
-//	POST /api/alarms/ack       {"ids":[…]|{"all":true}, "by":"operator1"}
+//	POST /api/alarms/ack       {"ids":[…]|{"all":true}, "by":"operator1", "occurrences":{id: occ}}
 //	POST /api/alarms/shelve    {"id":…, "until"|"seconds":…, "by":…}
 //	POST /api/alarms/unshelve  {"id":…, "by":…}
 //
@@ -238,10 +238,17 @@ func containsFold(set []string, v string) bool {
 // ackRequest is POST /api/alarms/ack. Either a list of ids, or all: true —
 // the "acknowledge everything" button, which is a real thing operators do
 // and deserves to be one request rather than two thousand.
+//
+// Occurrences (#715, optional) names, for some of the ids, the occurrence
+// the person saw (Record.Occurrence): an alarm that is on another one now
+// (it returned to normal and activated again since) is refused, 409, and
+// nothing is acknowledged. An id it does not name is acked on whatever
+// occurrence it is on, as before. Ignored with all: true.
 type ackRequest struct {
-	IDs []string `json:"ids"`
-	All bool     `json:"all"`
-	By  string   `json:"by"`
+	IDs         []string          `json:"ids"`
+	All         bool              `json:"all"`
+	By          string            `json:"by"`
+	Occurrences map[string]string `json:"occurrences,omitempty"`
 }
 
 // ackAnswer is the answer to POST /api/alarms/ack: how many changed, and
@@ -283,12 +290,12 @@ func (s *Server) handleAlarmAck(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if s.alarmLog != nil {
-		s.alarmAckThroughLog(w, r, ids, s.recordBy(r, req.By))
+		s.alarmAckThroughLog(w, r, ids, req.Occurrences, s.recordBy(r, req.By))
 		return
 	}
-	acked, err := s.alarms.AckIDs(ids, s.recordBy(r, req.By))
+	acked, err := s.alarms.AckIDsAt(ids, req.Occurrences, s.recordBy(r, req.By))
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		http.Error(w, err.Error(), alarmErrStatus(err))
 		return
 	}
 	writeJSON(w, http.StatusOK, ackAnswer{Acked: len(acked), IDs: acked})
@@ -397,10 +404,14 @@ func (s *Server) alarmTag(id string) string {
 
 // alarmErrStatus maps an engine refusal to a status: an id that names no
 // alarm is a 404, as it is on ack; anything else (not shelvable, a shelf
-// deadline in the past, not shelved) is a request the alarm refused, a 400.
+// deadline in the past, not shelved) is a request the alarm refused, a 400;
+// an ack of an occurrence that has ended is a 409.
 func alarmErrStatus(err error) int {
 	if errors.Is(err, alarm.ErrNoAlarm) {
 		return http.StatusNotFound
+	}
+	if errors.Is(err, alarm.ErrOtherOccurrence) {
+		return http.StatusConflict
 	}
 	return http.StatusBadRequest
 }

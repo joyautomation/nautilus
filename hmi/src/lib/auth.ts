@@ -359,6 +359,48 @@ export interface AuthDeps {
  */
 export const LEAVE_RESET_MS = 15_000; // past the controller's 10 s start timeout
 
+/** A controller of a redundant pair as /api/cluster names it (#716). */
+export interface PeerLink {
+	name: string;
+	url: string;
+	leader: boolean;
+}
+
+/** How long a failover probe may take, and the least time between failover attempts. */
+export const FAILOVER_PROBE_MS = 3_000;
+export const FAILOVER_WAIT_MS = 5_000;
+
+/** Where the pair's controllers are kept (per origin, per tab), to find the other when this one is gone. */
+export const PEERS_KEY = 'nautilus.peers';
+
+/** The peers a /api/cluster body names, or []: only well-formed entries, whatever else the body holds. */
+export function parsePeers(body: unknown): PeerLink[] {
+	const raw = (body as { peers?: unknown } | null)?.peers;
+	if (!Array.isArray(raw)) return [];
+	const out: PeerLink[] = [];
+	for (const p of raw) {
+		if (p && typeof p.name === 'string' && typeof p.url === 'string') {
+			out.push({ name: p.name, url: p.url, leader: p.leader === true });
+		}
+	}
+	return out;
+}
+
+/**
+ * The peers to try when this page's controller is gone, in order: the one
+ * that was leading first, this page's own origin never, and (through
+ * leaderTarget) none that may not be opened.
+ */
+export function failoverTargets(peers: PeerLink[], current: string): string[] {
+	const ordered = [...peers.filter((p) => p.leader), ...peers.filter((p) => !p.leader)];
+	const out: string[] = [];
+	for (const p of ordered) {
+		const t = leaderTarget(p.url, current);
+		if (t && !out.includes(t)) out.push(t);
+	}
+	return out;
+}
+
 /** The first probe's wait after a stream error, and the longest. */
 export const PROBE_MIN_MS = 2_000;
 export const PROBE_MAX_MS = 60_000;
@@ -384,6 +426,10 @@ export class AuthSession {
 	#leaving = false;
 	#probeWait = PROBE_MIN_MS;
 	#nextProbe = 0;
+	#peers: PeerLink[] = [];
+	#peersAt = 0;
+	#failingOver = false;
+	#nextFailover = 0;
 
 	constructor(deps: AuthDeps) {
 		this.#d = deps;
@@ -434,6 +480,7 @@ export class AuthSession {
 			return this.me;
 		}
 		this.supported = true;
+		void this.learnPeers();
 		if (this.me.session) this.#hadSession = true;
 		this.#backFromProvider(this.me);
 		this.#changed();
@@ -678,6 +725,7 @@ export class AuthSession {
 	 * stays down.
 	 */
 	streamTrouble(): void {
+		void this.#failover();
 		const now = this.#now();
 		if (!this.supported || now < this.#nextProbe) return;
 		this.#nextProbe = now + this.#probeWait;
@@ -685,8 +733,85 @@ export class AuthSession {
 		void this.checkSignedOut();
 	}
 
+	/**
+	 * Remember the pair's controllers as this one names them (GET
+	 * /api/cluster), at most once a minute. A controller that is not part of
+	 * a pair names none and nothing changes; one that cannot be asked keeps
+	 * what was last learned.
+	 */
+	async learnPeers(): Promise<void> {
+		const now = this.#now();
+		if (this.#peersAt && now - this.#peersAt < 60_000) return;
+		this.#peersAt = now;
+		try {
+			const res = await this.#d.fetch('/api/cluster', { headers: { Accept: 'application/json' }, cache: 'no-store' });
+			if (!res.ok || !sameOriginResponse(res, this.#d.location().href)) return;
+			const peers = parsePeers(await res.json());
+			if (peers.length === 0) {
+				// No longer a pair here: a stale list must not send the page away.
+				this.#peers = [];
+				this.#d.storage?.setItem(PEERS_KEY, '[]');
+				return;
+			}
+			this.#peers = peers;
+			try {
+				this.#d.storage?.setItem(PEERS_KEY, JSON.stringify(peers));
+			} catch {
+				/* storage unusable: kept in memory only */
+			}
+		} catch {
+			/* unreachable or not JSON: keep what is known */
+		}
+	}
+
+	/**
+	 * This page's controller does not answer: go to the other one. Asked only
+	 * when /api/cluster itself fails to connect (a standby that answers is
+	 * proxying and needs no move), then the pair's other controllers are
+	 * tried in order (a no-cors request only says whether the host answers)
+	 * and the page is sent to the first that does, under the same loop guard
+	 * as a referral. The new controller signs the operator in again if it
+	 * must; the data is live at once, as a standby proxies reads.
+	 */
+	async #failover(): Promise<void> {
+		if (this.#failingOver || this.#leaving || this.#now() < this.#nextFailover) return;
+		if (this.#peers.length === 0) {
+			try {
+				this.#peers = parsePeers({ peers: JSON.parse(this.#d.storage?.getItem(PEERS_KEY) ?? 'null') });
+			} catch {
+				/* none kept */
+			}
+		}
+		const targets = failoverTargets(this.#peers, this.#d.location().href);
+		if (targets.length === 0 || !mayFollow(this.#d.storage, this.#now())) return;
+		this.#failingOver = true;
+		this.#nextFailover = this.#now() + FAILOVER_WAIT_MS;
+		try {
+			try {
+				const here = await this.#d.fetch('/api/cluster', { cache: 'no-store', signal: AbortSignal.timeout(FAILOVER_PROBE_MS) });
+				void here.body?.cancel();
+				// A proxy's 502-504 in front of a dead controller is not an answer.
+				if (here.status < 502 || here.status > 504) return; // it answers: the trouble is not a dead controller
+			} catch {
+				/* unreachable: go on */
+			}
+			for (const t of targets) {
+				try {
+					await this.#d.fetch(new URL('/api/cluster', t).href, { mode: 'no-cors', cache: 'no-store', signal: AbortSignal.timeout(FAILOVER_PROBE_MS) });
+				} catch {
+					continue;
+				}
+				if (markFollowed(this.#d.storage, this.#now())) this.#leave(t);
+				return;
+			}
+		} finally {
+			this.#failingOver = false;
+		}
+	}
+
 	/** The stream is open again: the next error probes at once. */
 	streamFine(): void {
+		void this.learnPeers();
 		this.#probeWait = PROBE_MIN_MS;
 		this.#nextProbe = 0;
 	}
