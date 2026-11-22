@@ -235,10 +235,7 @@ func TestReconcileEndsAWindowTheEngineDoesNotHold(t *testing.T) {
 	lead.Store(true)
 	PairAlarms{Engine: eng, Log: al}.RestoreAlarmsSynced(nil, false)
 	al.Reconcile()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) && !slices.ContainsFunc(*got, func(e oplog.Entry) bool { return e.Kind == oplog.KindInService }) {
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitWindowsEnded(t, al)
 	i := slices.IndexFunc(*got, func(e oplog.Entry) bool { return e.Kind == oplog.KindInService })
 	if i < 0 || (*got)[i].ID != "HiTempAlm" || (*got)[i].By != "system" || (*got)[i].Ref != 3 {
 		t.Fatalf("proposed %+v; want an in-service for HiTempAlm by system naming window 3", *got)
@@ -376,10 +373,7 @@ func TestReconcileEndsAnExpiredWindow(t *testing.T) {
 		t.Fatal(err)
 	}
 	al.Reconcile()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) && !slices.ContainsFunc(*got, func(e oplog.Entry) bool { return e.Kind == oplog.KindInService }) {
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitWindowsEnded(t, al)
 	if !slices.ContainsFunc(*got, func(e oplog.Entry) bool { return e.Kind == oplog.KindInService && e.Ref == 4 }) {
 		t.Fatalf("proposed %+v; want an in-service ending window 4", *got)
 	}
@@ -398,4 +392,24 @@ func TestHeldCapsAWindowAtItsGrant(t *testing.T) {
 	if h := al.Held(true, nil)["HiTemp"]; h.OOSLeftMs > time.Hour.Milliseconds() || h.OOSLeftMs <= 0 {
 		t.Fatalf("held %d ms left, want at most the 1 h granted", h.OOSLeftMs)
 	}
+}
+
+// waitWindowsEnded waits for Reconcile's background in-service to be
+// applied: the log holds no window and no proposal is in flight. The
+// recorded entries are appended inside the apply, before AlarmLog.Apply
+// takes l.mu, so once this saw the windows gone under l.mu (and the
+// proposer finish) the test may read them without a race.
+func waitWindowsEnded(t *testing.T, al *AlarmLog) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		al.mu.Lock()
+		n := len(al.oos) + len(al.ending)
+		al.mu.Unlock()
+		if n == 0 && !al.oosBusy.Load() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("Reconcile's in-service was not applied within 5 s")
 }
