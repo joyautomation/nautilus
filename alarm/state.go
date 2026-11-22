@@ -1,6 +1,8 @@
 package alarm
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -131,6 +133,31 @@ type instance struct {
 
 	started bool // seen at least one evaluation
 
+	// occ names the current occurrence (#715): a random ID drawn when the
+	// alarm activates out of Normal, kept until it next does. A flap
+	// between unack-active and unack-rtn is the same occurrence (it is one
+	// wait on a person, discharged by one ack); a return to normal ends
+	// it. An ack may name the occurrence it is for, and is refused by any
+	// other (Engine.AckIDsAt).
+	occ string
+
+	// carry is an occurrence recovered from the retain store or a pair's
+	// log at a restore (RestoreAlarms), held until the alarm's condition
+	// is read: true continues it (its ID, activation, wait and, unless a
+	// false reading came first, its ack), anything else ends it. See
+	// Engine.judgeCarry.
+	carry *carried
+
+	// judged and adoptable: since the last restore (a fresh engine, or
+	// ResetOperatorState), judged turns true at the first evaluation that
+	// reads the condition, and adoptable says the condition read true
+	// there and at every reading since, with no carried occurrence: the
+	// alarm has stood throughout, so it may be the occurrence a committed
+	// ack names (Engine.AckCommitted), which a takeover that could not
+	// read the log did not continue. Cleared by a false reading, an end
+	// (normal, suppressed) and an adoption.
+	judged, adoptable bool
+
 	// waitAt is when the alarm began waiting on a person: set as it
 	// enters an unacknowledged state from any other, kept while it moves
 	// between unack-active and unack-rtn (a latched alarm that flaps is
@@ -208,6 +235,9 @@ func (in *instance) step(now time.Time) []string {
 }
 
 func (in *instance) activate(now time.Time) {
+	if in.state == Normal || in.occ == "" || mutAlarm("occurrence_per_activation") {
+		in.occ = newOccurrence()
+	}
 	in.activeAt = now
 	in.rtnAt = time.Time{}
 	in.ackAt = time.Time{}
@@ -268,4 +298,33 @@ func (in *instance) displayName() string {
 		return in.lent
 	}
 	return in.def.Name
+}
+
+// carried is an occurrence held at a restore until the condition is read
+// (instance.carry).
+type carried struct {
+	occ      string
+	activeAt time.Time
+	waitAt   time.Time
+	acked    bool
+	ackBy    string
+	ackAt    time.Time
+	// sawFalse: a reading of false came first, inside the grace. The
+	// occurrence may still continue (the reading may be a driver's
+	// default before its first read), but never acknowledged: a new
+	// activation inside the grace must not arrive pre-acknowledged.
+	sawFalse bool
+	// falseUntil is the end of the grace for a false reading (Options.
+	// CarryGrace); holdUntil the end of the wait for a readable
+	// condition (Options.CarryHold).
+	falseUntil time.Time
+	holdUntil  time.Time
+}
+
+// newOccurrence draws an occurrence ID: 16 lowercase hex characters,
+// random, so an ID is never reused after a restart (a counter would be).
+func newOccurrence() string {
+	var b [8]byte
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
 }

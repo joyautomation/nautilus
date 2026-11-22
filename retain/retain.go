@@ -131,6 +131,14 @@ type AlarmRetain struct {
 	AckMs        int64  `json:"ackMs,omitempty"`
 	ShelfUntilMs int64  `json:"shelfUntilMs,omitempty"`
 	ShelfBy      string `json:"shelfBy,omitempty"`
+	// Occurrence, ActiveMs and WaitMs name the occurrence an alarm whose
+	// condition was present was on (#715): its ID, its activation and
+	// when it began waiting on a person (0: it was not). Honoured only if
+	// the field re-asserts the condition (alarm.Engine.RestoreAlarms); an
+	// ack with an occurrence applies to that occurrence alone.
+	Occurrence string `json:"occurrence,omitempty"`
+	ActiveMs   int64  `json:"activeMs,omitempty"`
+	WaitMs     int64  `json:"waitMs,omitempty"`
 }
 
 // AlarmRetainer is the alarm engine, as far as the retain saver and loader

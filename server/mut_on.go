@@ -23,6 +23,8 @@ import "os"
 //     commands take the write rule (same-origin with no credential);
 //   - retained_stale_ignored: a takeover restores a superseded log's
 //     retained substitutes (#1029 3c-3c-2a);
+//   - adopt_ignores_log: a late committed ack adopts the standing
+//     occurrence though the log shows its own ended (#715);
 //   - superseded_alarms_kept: a superseded log's acks and shelves are
 //     carried by a takeover, and kept by a leader that learns it.
 var mutOn = os.Getenv("QUORUM_MUT")

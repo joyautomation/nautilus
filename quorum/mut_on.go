@@ -280,6 +280,21 @@ var Mutations = []string{
 	"superseded_lead_keeps_substitutes", // naut: a controller that learns it is superseded keeps running the old history's substitutes until a takeover
 	"retained_stale_ignored",            // server: a takeover restores a superseded log's retained substitutes
 	"superseded_alarms_kept",            // server: a superseded log's acks and shelves are carried by a takeover
+	"occurrence_per_activation",         // alarm: a flap through unack-rtn draws a new occurrence (#715)
+	"ack_any_occurrence",                // alarm: an ack naming another occurrence is applied (#715)
+	"carry_on_false",                    // alarm: a carried occurrence continues after a false reading past the grace (#715)
+	"carry_ack_after_false",             // alarm: a carried ack rides a false reading inside the grace (#715)
+	"carry_unbounded",                   // alarm: an unreadable condition holds a carried occurrence forever (#715)
+	"carry_through_enable",              // alarm: enable false does not end a carried occurrence (#715)
+	"carry_wait_reset",                  // alarm: a carried occurrence's wait restarts, so escalation restarts at level 1 (#715)
+	"ack_clear_keeps_occurrence",        // server: an ack-clear leaves the ended occurrence in the view (#715)
+	"takeover_drops_occurrences",        // server: a synced takeover continues no occurrence (#715)
+	"ack_entry_unbound",                 // server: a pair's ack entry names no occurrence (#715)
+	"apply_ack_any_occurrence",          // server: a committed ack applies to whatever occurrence is on (#715)
+	"carry_end_silent",                  // alarm: an acknowledged carried occurrence that ends leaves no journal note (#715)
+	"adopt_off",                         // alarm: a committed ack never adopts the occurrence that stood through an unsynced takeover (#715)
+	"adopt_ignores_log",                 // server: a late ack adopts the standing occurrence though the log shows its own ended (#715)
+	"occurrences_not_synced",            // server: the leader proposes no occurrence-start or -end (#715)
 }
 
 var mutOn = os.Getenv("QUORUM_MUT")

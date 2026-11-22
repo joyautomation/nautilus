@@ -172,3 +172,49 @@ func TestStaleAlarms(t *testing.T) {
 		t.Errorf("old = %+v, want 48 h since t0 (the restart does not reset it)", got[1])
 	}
 }
+
+func withOcc(e alarm.Event, occ string) alarm.Event { e.Occurrence = occ; return e }
+
+// Rows that name their occurrence (#715) count as they come: a flap
+// through unack-rtn is an activation (chattering), and a restart that
+// continued the occurrence journalled none. A restart that did not
+// continue it began a new one, which counts.
+func TestActivationsWithOccurrences(t *testing.T) {
+	got := Activations([]alarm.Event{
+		act("A", 0),                            // before occurrences
+		act("A", time.Minute),                  // its restart: not counted
+		withOcc(act("A", 2*time.Minute), "o1"), // upgraded and restarted: a new occurrence
+		withOcc(rtn("A", 3*time.Minute), "o1"),
+		withOcc(act("A", 4*time.Minute), "o1"), // flap through unack-rtn: counts
+		withOcc(act("A", 5*time.Minute), "o2"), // a new occurrence, no rtn journalled between
+	})
+	want := []time.Duration{0, 2 * time.Minute, 4 * time.Minute, 5 * time.Minute}
+	if len(got) != len(want) {
+		t.Fatalf("got %d activations, want %d: %v", len(got), len(want), got)
+	}
+	for i, w := range want {
+		if got[i].TS != t0.Add(w).UnixMilli() {
+			t.Errorf("activation %d at %v, want %v", i, time.UnixMilli(got[i].TS).Sub(t0), w)
+		}
+	}
+}
+
+// A carried occurrence's age runs through a restart; the fresh engine's
+// startup suppression (no occurrence) does not end it; a new occurrence
+// with no end between starts the clock again.
+func TestStaleAlarmsWithOccurrences(t *testing.T) {
+	asOf := t0.Add(48 * time.Hour)
+	events := []alarm.Event{
+		withOcc(act("kept", 0), "k1"),
+		ev("kept", alarm.KindSuppress, 30*time.Hour), // restart, site not yet birthed
+		ev("kept", alarm.KindUnsuppress, 30*time.Hour+time.Second),
+		withOcc(act("new", 0), "n1"),
+		withOcc(act("new", 40*time.Hour), "n2"), // the restart did not continue n1
+		withOcc(act("gone", 0), "g1"),
+		withOcc(ev("gone", alarm.KindSuppress, time.Hour), "g1"), // a real suppression ends it
+	}
+	got := StaleAlarms(events, asOf, StaleAfter)
+	if len(got) != 1 || got[0].ID != "kept" || got[0].For != 48*time.Hour {
+		t.Fatalf("stale = %+v, want kept for 48 h only", got)
+	}
+}

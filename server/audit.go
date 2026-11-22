@@ -1081,6 +1081,12 @@ func ackTarget(_ *http.Request, body []byte) auditTarget {
 	decodeBody(body, &req)
 	target := strings.Join(req.IDs, ",")
 	t := auditTarget{target: target, detail: byDetail(req.By)}
+	if occ := namedOccurrences(req); len(occ) > 0 {
+		if t.detail == nil {
+			t.detail = map[string]any{}
+		}
+		t.detail["occurrences"] = occ
+	}
 	if req.All {
 		// One entry for the one request, target "*"; what it acknowledged
 		// goes in after (the alarm ids the answer lists), since "*" alone
@@ -1095,6 +1101,21 @@ func ackTarget(_ *http.Request, body []byte) auditTarget {
 		}
 	}
 	return t
+}
+
+// namedOccurrences is the occurrences an ack names for its own ids (#715),
+// bounded: never the whole of a map a client may have padded.
+func namedOccurrences(req ackRequest) map[string]string {
+	if req.All || len(req.Occurrences) == 0 {
+		return nil
+	}
+	out := map[string]string{}
+	for _, id := range req.IDs {
+		if occ, ok := req.Occurrences[id]; ok && len(out) < 256 {
+			out[id] = capText(occ, 32)
+		}
+	}
+	return out
 }
 
 func shelveTarget(_ *http.Request, body []byte) auditTarget {

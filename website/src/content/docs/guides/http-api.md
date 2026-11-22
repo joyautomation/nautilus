@@ -939,12 +939,16 @@ curl -s -X POST localhost:8080/api/alarms/ack -d '{"ids": ["HighLevel"], "by": "
 
 `{"all": true, "by": "operator1"}` acknowledges everything. `by` is
 recorded in the journal as given; the server does not authenticate it.
+`"occurrences": {"HighLevel": "5f2c09d1e7a4b366"}` (optional) names the
+occurrence the person saw (`occurrence` on the alarm's row): an alarm on
+another occurrence now is refused and nothing is acknowledged.
 
 | Status | When | Example body |
 | --- | --- | --- |
 | `200` | `{"acked": n}`, the number acknowledged (`0` is not an error) | |
 | `400` | Not JSON, or neither `ids` nor `"all": true` | `ack needs "ids" or "all": true — an empty ids list would silently ack nothing` |
 | `404` | An id is not an alarm | `no alarm "NoSuch"` |
+| `409` | An id in `occurrences` is on another occurrence now | `alarm "HighLevel": a new occurrence since; open the HMI to see it` |
 
 ### `POST /api/alarms/shelve` and `/unshelve`
 

@@ -53,8 +53,24 @@ type Options struct {
 	// endpoint drops events with a counter rather than stalling the scan.
 	Notify []Notifier
 
+	// CarryGrace and CarryHold bound how long an occurrence carried across
+	// a restart (RestoreAlarms) waits for its condition. A reading of true
+	// continues it; enable false ends it. A reading of false ends it once
+	// CarryGrace has passed since the restore: zero (a redundant pair,
+	// whose takeover already waits for live inputs) means the first false
+	// reading ends it; a standalone controller sets a grace, because its
+	// first scans may read a driver's defaults before its first read. A
+	// false reading inside the grace never lets an acknowledgement carry.
+	// An unreadable condition (a remote site not yet birthed) holds it up
+	// to CarryHold (default DefaultCarryHold), then ends it.
+	CarryGrace time.Duration
+	CarryHold  time.Duration
+
 	Log *slog.Logger
 }
+
+// DefaultCarryHold is Options.CarryHold when it is zero.
+const DefaultCarryHold = 2 * time.Minute
 
 // DefaultKeep is the in-memory journal depth when Options.Keep is zero.
 const DefaultKeep = 5000
@@ -91,6 +107,8 @@ type Engine struct {
 	dropped   atomic.Uint64
 	closeOnce sync.Once
 
+	carryGrace, carryHold time.Duration
+
 	// missing counts definitions whose condition path did not resolve on
 	// the last pass — the "how much of the fleet is dark" number, which
 	// deserves to be visible rather than inferred from a log.
@@ -122,13 +140,18 @@ func New(o Options) (*Engine, error) {
 	}
 
 	e := &Engine{
-		inst:      make([]instance, 0, len(o.Defs)),
-		byID:      make(map[string]int, len(o.Defs)),
-		read:      o.Read,
-		now:       now,
-		jrn:       jrn,
-		log:       log,
-		notifiers: o.Notify,
+		inst:       make([]instance, 0, len(o.Defs)),
+		byID:       make(map[string]int, len(o.Defs)),
+		read:       o.Read,
+		now:        now,
+		jrn:        jrn,
+		log:        log,
+		notifiers:  o.Notify,
+		carryGrace: o.CarryGrace,
+		carryHold:  o.CarryHold,
+	}
+	if e.carryHold <= 0 {
+		e.carryHold = DefaultCarryHold
 	}
 	for _, d := range o.Defs {
 		if d.ID == "" {
@@ -199,12 +222,17 @@ func (e *Engine) evalOne(in *instance, now time.Time) {
 		b, isBool := truth(v)
 		switch {
 		case !ok:
+			e.holdCarry(in, now)
 			e.suppress(in, now, "enable tag "+in.def.Enable+" is not in this project")
 			return
 		case !isBool:
+			e.holdCarry(in, now)
 			e.suppress(in, now, "enable tag "+in.def.Enable+" is not a BOOL")
 			return
 		case !b:
+			if !mutAlarm("carry_through_enable") {
+				e.endCarry(in, "enable "+in.def.Enable+" is false") // designed suppression ends it, as it does live
+			}
 			e.suppress(in, now, in.def.Enable+" is false")
 			return
 		}
@@ -213,17 +241,27 @@ func (e *Engine) evalOne(in *instance, now time.Time) {
 	v, ok := e.read(in.def.Tag)
 	if !ok {
 		e.missing++
+		e.holdCarry(in, now)
 		e.suppress(in, now, "no tag "+in.def.Tag+" (the site may never have birthed)")
 		return
 	}
 	raw, isBool := truth(v)
 	if !isBool {
+		e.holdCarry(in, now)
 		e.suppress(in, now, in.def.Tag+" is not a BOOL")
 		return
 	}
 
 	if in.state == Suppressed {
 		e.unsuppress(in, now)
+	}
+	if !in.judged {
+		in.judged, in.adoptable = true, raw && in.carry == nil
+	} else if !raw {
+		in.adoptable = false
+	}
+	if in.carry != nil {
+		e.judgeCarry(in, raw, now)
 	}
 
 	in.qualify(raw, now)
@@ -246,6 +284,7 @@ func (e *Engine) evalOne(in *instance, now time.Time) {
 }
 
 func (e *Engine) suppress(in *instance, now time.Time, reason string) {
+	in.adoptable = false
 	if in.state == Suppressed {
 		in.reason = reason // the reason can change (enable false → tag gone)
 		return
@@ -274,20 +313,24 @@ func (e *Engine) unsuppress(in *instance, now time.Time) {
 // now reads differently".
 func (e *Engine) emit(in *instance, now time.Time, kind, by string) {
 	e.rev++
+	if in.state == Normal {
+		in.adoptable = false // the occurrence that stood has ended
+	}
 	if !in.state.Unacked() {
 		in.waitAt = time.Time{}
 	} else if in.waitAt.IsZero() {
 		in.waitAt = now
 	}
 	ev := Event{
-		TS:       now.UnixMilli(),
-		ID:       in.def.ID,
-		Name:     in.displayName(),
-		Kind:     kind,
-		Priority: in.def.Priority,
-		Site:     in.def.Site,
-		State:    in.state.String(),
-		By:       by,
+		TS:         now.UnixMilli(),
+		ID:         in.def.ID,
+		Name:       in.displayName(),
+		Kind:       kind,
+		Priority:   in.def.Priority,
+		Site:       in.def.Site,
+		State:      in.state.String(),
+		By:         by,
+		Occurrence: in.occ,
 	}
 	if err := e.jrn.Append(ev); err != nil {
 		e.log.Warn("alarm journal append failed", "id", ev.ID, "kind", ev.Kind, "err", err)
@@ -341,6 +384,10 @@ type Record struct {
 	AckBy   string `json:"ackBy,omitempty"`
 	ShelfBy string `json:"shelfBy,omitempty"`
 
+	// Occurrence names the alarm's current (or, once normal, its last)
+	// occurrence: an ack may name it, and is then refused by any other.
+	Occurrence string `json:"occurrence,omitempty"`
+
 	Count  int    `json:"count"`            // activations since start, for flood detection
 	Reason string `json:"reason,omitempty"` // why suppressed
 }
@@ -353,6 +400,8 @@ func (in *instance) record() Record {
 		AckBy:  in.ackBy,
 		Count:  in.count,
 		Reason: in.reason,
+
+		Occurrence: in.occ,
 	}
 	r.Name = in.displayName() // the record is a view: the lent name, if any
 	if !in.activeAt.IsZero() {
@@ -533,10 +582,24 @@ func (e *Engine) Ack(ids []string, by string) (int, error) {
 	return len(acked), err
 }
 
+// ErrOtherOccurrence is the error an ack naming an occurrence wraps when
+// the alarm is on another one now (an HTTP 409): it returned to normal
+// and activated again since the person saw it.
+var ErrOtherOccurrence = errors.New("a new occurrence since; open the HMI to see it")
+
 // AckIDs is Ack that says which alarms it acknowledged (the ones that
 // actually changed), in the order it did them. The audit journal records
 // them for an acknowledge-all, whose target is only "*".
 func (e *Engine) AckIDs(ids []string, by string) ([]string, error) {
+	return e.AckIDsAt(ids, nil, by)
+}
+
+// AckIDsAt is AckIDs where occ names, for some of the ids, the occurrence
+// the ack is for: if any of those alarms is on another occurrence now,
+// nothing is acknowledged and the error wraps ErrOtherOccurrence. An id
+// occ does not name is acknowledged on whatever occurrence it is on (an
+// HMI that predates occurrences). With ids nil (all), occ is ignored.
+func (e *Engine) AckIDsAt(ids []string, occ map[string]string, by string) ([]string, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	now := e.now()
@@ -560,6 +623,9 @@ func (e *Engine) AckIDs(ids []string, by string) ([]string, error) {
 		if !ok {
 			return nil, fmt.Errorf("%w %q", ErrNoAlarm, id)
 		}
+		if err := e.inst[i].sameOccurrence(occ); err != nil {
+			return nil, err
+		}
 		idx = append(idx, i)
 	}
 	for _, i := range idx {
@@ -569,6 +635,47 @@ func (e *Engine) AckIDs(ids []string, by string) ([]string, error) {
 		}
 	}
 	return acked, nil
+}
+
+// AckCommitted applies an acknowledgement a pair's log committed for
+// occurrence occ of alarm id (activated at activeMs). On that occurrence
+// it acks as AckIDsAt does. On another, it is refused (ErrOtherOccurrence)
+// unless the alarm has stood since this engine's last restore (adoptable):
+// a takeover that could not catch the log up began a new occurrence for
+// it, and the log now proves the ack was of the occurrence that stood
+// through the takeover. The alarm then takes that occurrence's ID and
+// activation, and is acknowledged.
+func (e *Engine) AckCommitted(id, occ string, activeMs int64, by string) (bool, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	i, ok := e.byID[id]
+	if !ok {
+		return false, fmt.Errorf("%w %q", ErrNoAlarm, id)
+	}
+	in := &e.inst[i]
+	if occ != in.occ {
+		st := in.underShelf()
+		if !in.adoptable || in.occ == "" || st != UnackActive || occ == "" || activeMs <= 0 || mutAlarm("adopt_off") {
+			return false, fmt.Errorf("alarm %q: %w", id, ErrOtherOccurrence)
+		}
+		in.occ, in.activeAt, in.adoptable = occ, time.UnixMilli(activeMs), false
+	}
+	now := e.now()
+	if !in.ack(now, by) {
+		return false, nil
+	}
+	e.emit(in, now, KindAck, by)
+	return true, nil
+}
+
+// sameOccurrence refuses an ack occ names for another occurrence than
+// in's current one.
+func (in *instance) sameOccurrence(occ map[string]string) error {
+	want, named := occ[in.def.ID]
+	if !named || want == in.occ || mutAlarm("ack_any_occurrence") {
+		return nil
+	}
+	return fmt.Errorf("alarm %q: %w", in.def.ID, ErrOtherOccurrence)
 }
 
 // Shelve silences one alarm until a deadline. There is no permanent shelf:
@@ -663,6 +770,9 @@ type Notice struct {
 	Via    string // channel kind
 	Result string // NotifySent, NotifyFailed, NotifyNobodyOnCall
 	Reason string // optional: "joined late: …"
+	// Occurrence is the occurrence the notification was for, as the
+	// queued message carried it (not the alarm's current one).
+	Occurrence string
 }
 
 // Notified journals a KindNotify row for alarm id, with the alarm's name,
@@ -676,7 +786,7 @@ func (e *Engine) Notified(id string, n Notice) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	ev := Event{TS: e.now().UnixMilli(), ID: id, Kind: KindNotify, By: "system",
-		Level: n.Level, To: n.To, Via: n.Via, Result: n.Result, Reason: n.Reason}
+		Level: n.Level, To: n.To, Via: n.Via, Result: n.Result, Reason: n.Reason, Occurrence: n.Occurrence}
 	if i, ok := e.byID[id]; ok {
 		in := &e.inst[i]
 		ev.Name, ev.Priority, ev.Site, ev.State = in.displayName(), in.def.Priority, in.def.Site, in.state.String()
@@ -704,9 +814,11 @@ func (e *Engine) Journal(from, to time.Time, f Filter) ([]Event, error) {
 }
 
 // RetainedAlarms is the operator state worth persisting: acknowledgement
-// and shelf, keyed by definition id. Active and RTN are deliberately absent
-// — they re-derive from the field on the next scan, and a retained "active"
-// would be a claim about the plant made by a file.
+// and shelf, keyed by definition id, and for an alarm whose condition is
+// present, its occurrence: ID, activation and wait (#715), so a restart
+// neither re-pages from level 1 nor kills the links already sent. The
+// state itself is not kept: a retained occurrence is a claim the field
+// must re-assert (RestoreAlarms), never one the file makes alone.
 func (e *Engine) RetainedAlarms() map[string]retain.AlarmRetain {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -721,6 +833,22 @@ func (e *Engine) RetainedAlarms() map[string]retain.AlarmRetain {
 		}
 		if !in.shelfUntil.IsZero() {
 			r.ShelfUntilMs, r.ShelfBy = in.shelfUntil.UnixMilli(), in.shelfBy
+		}
+		if c := in.carry; c != nil {
+			// Still held from the last restore: kept as it came, so a
+			// second restart before the condition was read loses nothing.
+			r.Occurrence, r.ActiveMs = c.occ, c.activeAt.UnixMilli()
+			if !c.waitAt.IsZero() {
+				r.WaitMs = c.waitAt.UnixMilli()
+			}
+			if c.acked && !r.Acked {
+				r.Acked, r.AckBy, r.AckMs = true, c.ackBy, c.ackAt.UnixMilli()
+			}
+		} else if st := in.underShelf(); in.occ != "" && (st == UnackActive || st == AckActive) {
+			r.Occurrence, r.ActiveMs = in.occ, in.activeAt.UnixMilli()
+			if !in.waitAt.IsZero() {
+				r.WaitMs = in.waitAt.UnixMilli()
+			}
 		}
 		if r == (retain.AlarmRetain{}) {
 			continue // omit the overwhelming majority that are simply normal
@@ -764,7 +892,23 @@ func (e *Engine) RestoreAlarms(m map[string]retain.AlarmRetain) {
 			continue
 		}
 		in := &e.inst[i]
-		if r.Acked {
+		switch {
+		case r.Occurrence != "" && r.ActiveMs > 0:
+			// The occurrence the condition was present for, held until the
+			// condition is read (judgeCarry); its ack, if any, goes with it
+			// and applies to nothing else.
+			c := &carried{occ: r.Occurrence, activeAt: time.UnixMilli(r.ActiveMs),
+				falseUntil: now.Add(e.carryGrace), holdUntil: now.Add(e.carryHold)}
+			if r.WaitMs > 0 {
+				c.waitAt = time.UnixMilli(r.WaitMs)
+			}
+			if r.Acked {
+				c.acked, c.ackBy, c.ackAt = true, r.AckBy, time.UnixMilli(r.AckMs)
+			}
+			in.carry = c
+		case r.Acked:
+			// Written before occurrences: applied to the first activation,
+			// as it always was.
 			in.retainedAck, in.retainedAckBy = true, r.AckBy
 			in.retainedAckAt = time.UnixMilli(r.AckMs)
 		}
@@ -776,6 +920,90 @@ func (e *Engine) RestoreAlarms(m map[string]retain.AlarmRetain) {
 			}
 		}
 	}
+}
+
+// underShelf is in's state, or under a shelf the state it interrupted.
+func (in *instance) underShelf() State {
+	if in.state == Shelved {
+		return in.prior
+	}
+	return in.state
+}
+
+// holdCarry is a carried occurrence's evaluation with no condition to
+// read: it waits, up to its hold.
+func (e *Engine) holdCarry(in *instance, now time.Time) {
+	if in.carry != nil && !now.Before(in.carry.holdUntil) && !mutAlarm("carry_unbounded") {
+		e.endCarry(in, "its condition could not be read")
+	}
+}
+
+// judgeCarry decides a carried occurrence on a reading of its condition:
+// true continues it; false ends it, unless inside the grace, where it
+// waits on, no longer acknowledged.
+func (e *Engine) judgeCarry(in *instance, raw bool, now time.Time) {
+	c := in.carry
+	switch {
+	case raw:
+		in.carry = nil
+		e.carryOn(in, c, now)
+	case !now.Before(c.falseUntil) && !mutAlarm("carry_on_false"):
+		e.endCarry(in, "the field no longer asserted it")
+	default:
+		c.sawFalse = true
+	}
+}
+
+// endCarry ends in's carried occurrence. One that was acknowledged says
+// so in the journal (a system note, as Note writes): the ack is not
+// carried, so the alarm's next activation annunciates, and an operator
+// reading the journal should see why. Under e.mu.
+func (e *Engine) endCarry(in *instance, why string) {
+	c := in.carry
+	in.carry = nil
+	if c == nil || !c.acked || mutAlarm("carry_end_silent") {
+		return
+	}
+	ev := Event{TS: e.now().UnixMilli(), ID: "__nautilus.redundancy", Kind: "system", By: "system",
+		Name:       "ack of " + in.def.ID + " by " + c.ackBy + " not carried: its occurrence ended while this controller was stopped or taking over (" + why + ")",
+		Occurrence: c.occ}
+	if err := e.jrn.Append(ev); err != nil {
+		e.log.Warn("alarm journal append failed", "kind", ev.Kind, "err", err)
+	}
+}
+
+// carryOn continues the carried occurrence c: the condition is present
+// again, so the alarm is on it as it was, with its ID, activation and
+// wait, and acknowledged if it was (and no false reading came first). The
+// condition counts as qualified (it was before the restore): no on-delay.
+// Nothing is journalled and nobody is notified: from the plant's side
+// nothing happened, and a report counts no new activation.
+func (e *Engine) carryOn(in *instance, c *carried, now time.Time) {
+	target := &in.state
+	if in.state == Shelved {
+		target = &in.prior
+	}
+	if *target != Normal {
+		return // already on an occurrence (cannot happen before the first activation)
+	}
+	in.raw, in.rawSince, in.started, in.cond = true, now, true, true
+	in.occ, in.activeAt, in.rtnAt = c.occ, c.activeAt, time.Time{}
+	in.ackAt, in.ackBy = time.Time{}, ""
+	in.retainedAck = false
+	if c.acked && (!c.sawFalse || mutAlarm("carry_ack_after_false")) && in.def.AckRequired {
+		*target = AckActive
+		in.ackAt, in.ackBy = c.ackAt, c.ackBy
+	} else {
+		*target = in.collapse(UnackActive)
+	}
+	in.waitAt = time.Time{}
+	if in.state.Unacked() {
+		in.waitAt = now
+		if !c.waitAt.IsZero() && !mutAlarm("carry_wait_reset") {
+			in.waitAt = c.waitAt
+		}
+	}
+	e.rev++
 }
 
 // Snapshot and Restore are RetainedAlarms and RestoreAlarms under the names

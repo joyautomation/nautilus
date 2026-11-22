@@ -618,6 +618,11 @@ func (p *Project) alarms(rt *runtime.Runtime, durable bool, log *slog.Logger, sy
 		Keep:    p.Alarms.Journal.Keep,
 		Notify:  notify,
 		Log:     log,
+		// An occurrence carried across a restart (#715) continues if the
+		// field re-asserts its condition. A takeover waits for live inputs
+		// first, so its first false reading ends one; a standalone start
+		// does not, and may read a driver's defaults for its first scans.
+		CarryGrace: carryGrace(p.WriteGate == nil),
 	})
 	if err != nil {
 		out.Close()
@@ -738,4 +743,17 @@ func (p *Project) alarmNotifiers(log *slog.Logger) ([]alarm.Notifier, error) {
 		}
 	}
 	return out, nil
+}
+
+// StandaloneCarryGrace is how long a standalone controller's engine waits
+// past a false reading for a restored occurrence's condition (alarm.
+// Options.CarryGrace): its first scans may read inputs no driver has read
+// yet. Never an acknowledgement through it.
+const StandaloneCarryGrace = time.Minute
+
+func carryGrace(standalone bool) time.Duration {
+	if standalone {
+		return StandaloneCarryGrace
+	}
+	return 0
 }

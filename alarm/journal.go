@@ -53,6 +53,11 @@ type Event struct {
 	Site     string   `json:"site,omitempty"`
 	State    string   `json:"state,omitempty"` // the state arrived at
 	By       string   `json:"by,omitempty"`    // operator string, unauthenticated
+	// Occurrence names the occurrence the event belongs to (#715): one
+	// runs from an activation out of normal to the next return to normal.
+	// Empty on rows written before occurrences, and on an alarm that has
+	// had none since the engine started.
+	Occurrence string `json:"occurrence,omitempty"`
 
 	// The rest are set only on a KindNotify row (#715): the escalation
 	// level (1 is the first), who was notified (a principal: a user name

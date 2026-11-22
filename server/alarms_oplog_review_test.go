@@ -244,7 +244,7 @@ func TestReviewAckClearsBatched(t *testing.T) {
 	al.clrMu.Lock()
 	al.clrRunning = false
 	al.clrMu.Unlock()
-	al.queueClear("HiTemp") // already queued: no duplicate; starts the proposer
+	al.queueClear("HiTemp", "") // already queued: no duplicate; starts the proposer
 	deadline := time.Now().Add(2 * time.Second)
 	for al.Held(true, nil)["LoFlow"].Acked || al.Held(true, nil)["HiTemp"].Acked {
 		if time.Now().After(deadline) {

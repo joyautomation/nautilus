@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/joyautomation/nautilus/alarm"
+	"github.com/joyautomation/nautilus/internal/project"
 	"github.com/joyautomation/nautilus/server"
 )
 
@@ -31,6 +32,21 @@ func (r *pairRig) alarmState(n string) alarm.State {
 // heldAck reports whether member n's replicated alarm view holds an ack for
 // Trip (what a takeover there would carry).
 func (r *pairRig) heldAck(n string) bool { return r.nodes[n].al.Held(true, nil)["Trip"].Acked }
+
+// tripOnAtStart starts Trip true on every member, at every start: the
+// field asserts the condition on whichever controller takes over, as a
+// field input both read would. Since #715 an acknowledgement carries
+// across a takeover only with its occurrence, and an occurrence carries
+// only if the field re-asserts the condition at the takeover's first
+// evaluation (the takeover waited for live inputs); a setpoint written
+// after the takeover is a new occurrence.
+func tripOnAtStart(_ string, p *project.Project) {
+	for i := range p.Runtime.Tags {
+		if p.Runtime.Tags[i].Name == "Trip" {
+			p.Runtime.Tags[i].Init = true
+		}
+	}
+}
 
 func (r *pairRig) setTrip(t *testing.T, n string, v bool) {
 	t.Helper()
@@ -76,7 +92,7 @@ func (r *pairRig) handover(t *testing.T, from string) {
 // and the new leader's first activation of Trip comes up acknowledged
 // instead of re-annunciating.
 func TestPairAckCarriesAcrossASyncedTakeover(t *testing.T) {
-	r := newPairRig(t)
+	r := newPairRigWith(t, tripOnAtStart)
 	lead := r.leader()
 	stand := other(lead)
 	r.setTrip(t, lead, true)
@@ -87,6 +103,7 @@ func TestPairAckCarriesAcrossASyncedTakeover(t *testing.T) {
 	if s := r.alarmState(stand); s != alarm.Normal {
 		t.Fatalf("the standby's engine moved (%s): a standby only records, it doesn't journal", s)
 	}
+	occ := r.occurrence(lead)
 
 	r.handover(t, lead)
 	r.setTrip(t, stand, true)
@@ -94,6 +111,15 @@ func TestPairAckCarriesAcrossASyncedTakeover(t *testing.T) {
 	if s := r.alarmState(stand); s != alarm.AckActive {
 		t.Fatalf("Trip on the new leader is %s; want ack-active (the ack carried)", s)
 	}
+	if o := r.occurrence(stand); o != occ {
+		t.Fatalf("Trip on the new leader is on occurrence %s; want %s, the one acknowledged", o, occ)
+	}
+}
+
+// occurrence is member n's current occurrence of Trip.
+func (r *pairRig) occurrence(n string) string {
+	rec, _ := r.nodes[n].eng.Lookup("Trip")
+	return rec.Occurrence
 }
 
 // An acknowledgement the leader and the witness committed while the
@@ -101,7 +127,7 @@ func TestPairAckCarriesAcrossASyncedTakeover(t *testing.T) {
 // (#710 3b-4b): the standby's catch-up finds it on the witness, so Trip
 // comes up acknowledged on the new leader.
 func TestPairAckCarriesAcrossATakeoverAfterTheLeaderDied(t *testing.T) {
-	r := newPairRig(t)
+	r := newPairRigWith(t, tripOnAtStart)
 	lead := r.leader()
 	stand := other(lead)
 	r.setTrip(t, lead, true)
@@ -129,13 +155,14 @@ func TestPairAckCarriesAcrossATakeoverAfterTheLeaderDied(t *testing.T) {
 // both other copies count, its log syncs, the committed ack applies, and
 // writes go through.
 func TestPairUnsyncedTakeoverCarriesNoAcks(t *testing.T) {
-	r := newPairRig(t)
+	r := newPairRigWith(t, tripOnAtStart)
 	lead := r.leader()
 	stand := other(lead)
 	r.setTrip(t, lead, true)
 	pairWait(t, "Trip to annunciate", 5*time.Second, func() bool { return r.alarmState(lead) == alarm.UnackActive })
 	r.ackTrip(t, lead)
 	pairWait(t, "the standby to hold the ack", 5*time.Second, func() bool { return r.heldAck(stand) })
+	old := r.occurrence(lead)
 	r.nodes[stand].crash()
 	if err := os.Remove(filepath.Join(r.env[stand]["STATE_DIRECTORY"], pairLogFile)); err != nil {
 		t.Fatal(err)
@@ -174,7 +201,15 @@ func TestPairUnsyncedTakeoverCarriesNoAcks(t *testing.T) {
 	r.restart(lead)
 	pairWait(t, "the survivor's log to sync once both others count", 15*time.Second, func() bool { return r.nodes[stand].m.log.Synced() })
 	r.logReady(stand)
+	// The committed ack names the occurrence it was for (#715). The
+	// unsynced takeover could not continue it, but Trip has stood since:
+	// once the log proves the ack, the alarm takes that occurrence and is
+	// acknowledged (TestPairFieldDropsAtTheTakeover is the field that did
+	// not stand).
 	pairWait(t, "the committed ack to apply once synced", 5*time.Second, func() bool { return r.alarmState(stand) == alarm.AckActive })
+	if o := r.occurrence(stand); o != old {
+		t.Fatalf("Trip after the sync is on occurrence %s; want %s, the one acknowledged", o, old)
+	}
 	r.startedID(stand)
 	pairWait(t, "the log conditions to clear after the sync", 5*time.Second, func() bool {
 		for _, w := range r.nodes[stand].m.q.Status().Warnings {
@@ -218,5 +253,37 @@ func TestPairAckDoesNotCarryToANewOccurrence(t *testing.T) {
 	pairWait(t, "Trip active on the new leader", 5*time.Second, func() bool { return r.alarmState(stand) != alarm.Normal })
 	if s := r.alarmState(stand); s != alarm.UnackActive {
 		t.Fatalf("the new occurrence is %s on the new leader; want unack-active (it must annunciate)", s)
+	}
+}
+
+// The field drops at the takeover (#715): Trip was acknowledged on the old
+// leader, but reads false at the new leader's first evaluation and asserts
+// only later. That is a new occurrence: it annunciates unacknowledged, on
+// a new ID, and the new leader's journal says the carried ack was for an
+// occurrence that ended. (The tests above hold the field: the ack carries.)
+func TestPairFieldDropsAtTheTakeover(t *testing.T) {
+	r := newPairRig(t) // Trip starts false on both
+	lead := r.leader()
+	stand := other(lead)
+	r.setTrip(t, lead, true)
+	pairWait(t, "Trip to annunciate on the leader", 5*time.Second, func() bool { return r.alarmState(lead) == alarm.UnackActive })
+	r.ackTrip(t, lead)
+	pairWait(t, "the standby to hold the ack", 5*time.Second, func() bool { return r.heldAck(stand) })
+	old := r.occurrence(lead)
+
+	r.handover(t, lead)
+	pairWait(t, "the new leader's journal to say the ack was not carried", 5*time.Second, func() bool {
+		evs, _ := r.nodes[stand].eng.Journal(time.Time{}, time.Time{}, alarm.Filter{})
+		for _, e := range evs {
+			if strings.Contains(e.Name, "ack of Trip by op not carried") && e.Occurrence == old {
+				return true
+			}
+		}
+		return false
+	})
+	r.setTrip(t, stand, true)
+	pairWait(t, "Trip active on the new leader", 5*time.Second, func() bool { return r.alarmState(stand) != alarm.Normal })
+	if s, o := r.alarmState(stand), r.occurrence(stand); s != alarm.UnackActive || o == old || o == "" {
+		t.Fatalf("Trip on the new leader is %s on %q; want unack-active on a new occurrence (not %s)", s, o, old)
 	}
 }

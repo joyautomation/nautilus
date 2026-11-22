@@ -56,7 +56,7 @@ func TestReviewAckOfANormalAlarmEndToEnd(t *testing.T) {
 // again, by handback (synced) or because B died (unsynced): occurrence 2
 // must be unacknowledged on A (engine_not_reset turns it red).
 func staleEngineCase(t *testing.T, bDies bool) {
-	r := newPairRig(t)
+	r := newPairRigWith(t, tripOnAtStart)
 	a := r.leader()
 	b := other(a)
 	ha, hb := r.healthy(a), r.healthy(b)
