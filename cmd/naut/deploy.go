@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	goruntime "runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -71,6 +72,17 @@ install and update:
   -id <id>                the release's name on the box
                           (default <name>-<git describe>-<first 8 hex of its sha256>)
 
+  -dry-run                build, ask the box what it already has, say what would be sent (how
+                          many bytes, how it is sent, how long it takes) and send nothing
+  -bandwidth <rate>       the link speed the time estimate assumes, in bits per second (256k, 1M);
+                          default 256k
+  -limit <rate>           send no faster than this (128k): the link may carry other traffic
+
+  An update sends only what the box cannot rebuild: if the box's runtime is the one the
+  controller was built on, just the project (about a megabyte), else the whole controller,
+  gzipped. A send that is cut off resumes where the box left off when the command is run again
+  (or by itself, a few times). The box checks the controller's SHA-256 before it becomes a release.
+
 install only:
   -supervisor cron        no systemd and no root: everything runs as the SSH user, under -root,
                           started by <root>/keepalive.sh from that user's crontab (at boot and
@@ -116,6 +128,8 @@ func runDeploy(args []string) int {
 		runner, ctl, manifest, id, out string
 		supervisor, root               string
 		purge                          bool
+		xo                             xferOpts
+		bandwidth, limit               string
 	)
 	nargs := [2]int{1, 1} // positional arguments, min and max
 	switch cmd {
@@ -124,6 +138,9 @@ func runDeploy(args []string) int {
 		fs.StringVar(&ctl, "controller", "", "deploy this controller instead of building one")
 		fs.StringVar(&manifest, "m", "", manifestFlagUsage)
 		fs.StringVar(&id, "id", "", "the release's name on the box")
+		fs.BoolVar(&xo.dryRun, "dry-run", false, "say what would be sent, and send nothing")
+		fs.StringVar(&bandwidth, "bandwidth", "", "the link speed the estimate assumes (256k, 1M)")
+		fs.StringVar(&limit, "limit", "", "send no faster than this (128k)")
 		if cmd == "install" {
 			fs.StringVar(&supervisor, "supervisor", "", "cron: a box without systemd or root (see usage)")
 			fs.StringVar(&root, "root", "", "with -supervisor cron: the directory releases and state go in")
@@ -151,6 +168,20 @@ func runDeploy(args []string) int {
 	if strings.HasPrefix(pos[0], "-") {
 		fmt.Fprintf(os.Stderr, "naut deploy: %q is not an ssh target\n", pos[0])
 		return 2
+	}
+	for _, c := range []struct {
+		flag, val string
+		to        *int64
+	}{{"-bandwidth", bandwidth, &xo.bandwidth}, {"-limit", limit, &xo.limit}} {
+		if c.val == "" {
+			continue
+		}
+		n, err := parseRate(c.val)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "naut deploy: %s: %v\n", c.flag, err)
+			return 2
+		}
+		*c.to = n
 	}
 	if ctl != "" && len(pos) > 1 {
 		fmt.Fprintln(os.Stderr, "naut deploy: -controller and a project directory: give one")
@@ -188,7 +219,7 @@ func runDeploy(args []string) int {
 		if len(pos) > 1 {
 			dir = pos[1]
 		}
-		return deployRelease(b, cmd, dir, ctl, runner, manifest, id)
+		return deployRelease(b, cmd, dir, ctl, runner, manifest, id, xo)
 	case "backup":
 		if out == "" {
 			out = fmt.Sprintf("nautilus-retain-%s-%s.tgz", cleanID(b.target), time.Now().Format("20060102T150405"))
@@ -242,22 +273,30 @@ func runDeploy(args []string) int {
 	}
 }
 
-// deployRelease builds the project (or takes -controller), uploads it with
-// the unit, and runs install or update on the box.
-func deployRelease(b *sshBox, cmd, dir, ctl, runner, manifest, id string) int {
+// xferOpts are the slow-link options of install and update.
+type xferOpts struct {
+	dryRun           bool
+	bandwidth, limit int64 // bits per second; 0: none given
+}
+
+// deployRelease builds the project (or takes -controller), sends the box
+// what it cannot rebuild (the project alone when the box's runtime is the
+// one this was built on, else the controller, gzipped), and runs install or
+// update on the box.
+func deployRelease(b *sshBox, cmd, dir, ctl, runner, manifest, id string, xo xferOpts) int {
 	name, rev := "", ""
+	tmp, err := os.MkdirTemp("", "naut-deploy")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "naut deploy:", err)
+		return 1
+	}
+	defer os.RemoveAll(tmp)
 	if ctl == "" {
 		rt, err := deployRuntime(b, runner)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "naut deploy:", err)
 			return 1
 		}
-		tmp, err := os.MkdirTemp("", "naut-deploy")
-		if err != nil {
-			fmt.Fprintln(os.Stderr, "naut deploy:", err)
-			return 1
-		}
-		defer os.RemoveAll(tmp)
 		ctl = filepath.Join(tmp, "controller")
 		args := []string{"-o", ctl}
 		if manifest != "" {
@@ -291,14 +330,59 @@ func deployRelease(b *sshBox, cmd, dir, ctl, runner, manifest, id string) int {
 		fmt.Fprintln(os.Stderr, "naut deploy:", err)
 		return 2
 	}
-	f, err := os.Open(ctl)
-	if err != nil {
+	fmt.Fprintf(os.Stderr, "naut deploy: %s %s on %s\n", cmd, id, b.target)
+	if err := b.discover(); err != nil {
 		fmt.Fprintln(os.Stderr, "naut deploy:", err)
 		return 1
 	}
-	defer f.Close()
-	fmt.Fprintf(os.Stderr, "naut deploy: %s %s on %s\n", cmd, id, b.target)
-	if code := b.upload(f, id); code != 0 {
+
+	// what the box already has: an update can be built on its current runtime
+	var base boxBase
+	haveBase := false
+	if cmd == "update" && !b.helperLegacy {
+		bb, ok, err := b.base()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "naut deploy:", err)
+			return 1
+		}
+		base, haveBase = bb, ok
+	}
+	if haveBase && base.release == id {
+		fmt.Fprintf(os.Stderr, "naut deploy: %s is already the current release on %s: nothing to send\n", id, b.target)
+		if xo.dryRun {
+			return 0
+		}
+		return b.root(os.Stdout, cmd, id)
+	}
+	var t *transfer
+	if b.helperLegacy {
+		st, _ := os.Stat(ctl)
+		t = &transfer{kind: "legacy", whole: sum, size: st.Size(),
+			note: "the whole controller, uncompressed: this box's release helper predates the faster upload"}
+	} else if t, err = planTransfer(ctl, sum, tmp, base, haveBase); err != nil {
+		fmt.Fprintln(os.Stderr, "naut deploy:", err)
+		return 1
+	}
+	fmt.Fprintf(os.Stderr, "naut deploy: %s\n", t.summary(xo.bandwidth, xo.limit))
+	if b.helperLegacy {
+		fmt.Fprintf(os.Stderr, "naut deploy: to send only what changed, install the helper again once, as root on the box: naut deploy helper -user <ssh-user> <dir> (then copy what it writes, as naut deploy helper -h says)\n")
+	}
+	if xo.dryRun {
+		fmt.Fprintln(os.Stderr, "naut deploy: dry run: nothing was sent")
+		return 0
+	}
+
+	if t.kind == "legacy" {
+		f, err := os.Open(ctl)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "naut deploy:", err)
+			return 1
+		}
+		defer f.Close()
+		if code := b.upload(newThrottle(f, xo.limit), id); code != 0 {
+			return code
+		}
+	} else if code := b.sendController(t, ctl, id, xo.limit); code != 0 {
 		return code
 	}
 	if !b.cron && !b.helper { // set by now: the controller's upload discovered the mode; the helper has its own unit
@@ -307,6 +391,51 @@ func deployRelease(b *sshBox, cmd, dir, ctl, runner, manifest, id string) int {
 		}
 	}
 	return b.root(os.Stdout, cmd, id)
+}
+
+// sendController uploads the wire file and has the box rebuild the
+// controller from it, checking both hashes. A transfer the box found
+// damaged is sent once more from nothing; a rebuilt file that is not the
+// controller built (the box's runtime was not the one assumed) falls back to
+// the whole controller.
+func (b *sshBox) sendController(t *transfer, ctl, id string, limit int64) int {
+	tmp := filepath.Dir(t.wire)
+	for tries := 0; tries < 3; tries++ {
+		wireName := id + "." + t.wireSha[:12] + ".wire"
+		if err := b.uploadResumable(wireName, t.wire, t.wireSize, limit); err != nil {
+			fmt.Fprintln(os.Stderr, "naut deploy:", err)
+			return 1
+		}
+		code := b.root(os.Stdout, "assemble", wireName, t.wireSha, id, strconv.FormatInt(t.rsize, 10), t.whole)
+		switch code {
+		case 0:
+			return 0
+		case 4: // the upload was damaged and the box threw it away: again from nothing
+			fmt.Fprintln(os.Stderr, "naut deploy: the box found the upload damaged; sending it again")
+			continue
+		case 5:
+			if t.kind != "project" {
+				fmt.Fprintln(os.Stderr, "naut deploy: the controller rebuilt on the box does not match what was built")
+				return 1
+			}
+			fmt.Fprintln(os.Stderr, "naut deploy: the box's runtime is not the one expected; sending the whole controller")
+			full := *t
+			full.kind, full.rsize = "full", 0
+			full.wire = filepath.Join(tmp, "wire-full.gz")
+			var err error
+			if full.wireSize, full.wireSha, err = gzipRange(ctl, full.wire, 0); err != nil {
+				fmt.Fprintln(os.Stderr, "naut deploy:", err)
+				return 1
+			}
+			*t = full
+			fmt.Fprintf(os.Stderr, "naut deploy: %s\n", t.summary(0, limit))
+			continue
+		default:
+			return code
+		}
+	}
+	fmt.Fprintln(os.Stderr, "naut deploy: the box could not rebuild the controller")
+	return 1
 }
 
 // syncBackup is (*os.File).Sync, a variable so a test can see the backup
@@ -549,7 +678,10 @@ type sshBox struct {
 	// helper mode (#771): the SSH user is not root and may run only the
 	// release helper at helperPath as root (sudoers).
 	helper bool
-	known  bool // the mode is known: from install's flags, or discovered
+	// helperLegacy: the helper on the box is from before the slow-link
+	// upload: it runs every older command, and cannot rebuild a controller.
+	helperLegacy bool
+	known        bool // the mode is known: from install's flags, or discovered
 }
 
 // checkSupervisor vets install's -supervisor and -root. The root goes into
@@ -616,7 +748,9 @@ func (b *sshBox) discover() error {
 	if code := b.run(nil, &out, "sudo -n "+helperPath+" helper-version"); code != 0 {
 		return fmt.Errorf("%s: %s is there but sudo -n will not run it (exit %d): is the sudoers drop-in installed? (naut deploy helper -h)", b.target, helperPath, code)
 	}
-	if got := strings.TrimSpace(out.String()); got != helperVersion() {
+	if got := strings.TrimSpace(out.String()); got != helperVersion() && legacyHelperVersions[got] {
+		b.helperLegacy = true
+	} else if got != helperVersion() {
 		return fmt.Errorf("%s: the release helper is version %q, this naut's is %s: install it again from `naut deploy helper` (root on the box)", b.target, got, helperVersion())
 	}
 	return nil
@@ -707,6 +841,9 @@ func newSSHBox(target string) (*sshBox, error) {
 	opts, env := sshAuth()
 	// A box that is off the network fails in 10 s, not the TCP default.
 	opts = append(opts, "-o", "ConnectTimeout=10")
+	// A radio link that goes quiet is noticed in about a minute, not left
+	// hanging: the send then resumes (uploadResumable).
+	opts = append(opts, "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4")
 	b := &sshBox{target: target, opts: opts, env: env}
 	if goruntime.GOOS != "windows" {
 		d, err := os.MkdirTemp("", "naut-ssh")
