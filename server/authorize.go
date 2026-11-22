@@ -28,6 +28,8 @@ const (
 	PermNote       = auth.Note         // operator notes (#720)
 	PermSubstitute = auth.Substitute   // #707's substitutes
 	PermForce      = auth.Force        // forces, set and cleared
+	PermCheckout   = auth.Checkout     // I/O checkout results (#719)
+	PermSignoff    = auth.Signoff      // sealing a checkout run (#719)
 	PermSFC        = auth.SFC          // SFC step and transition commands
 	PermEdit       = auth.Edit         // online edits and rollbacks
 	PermActivate   = auth.Activate     // activating a commit
@@ -61,6 +63,9 @@ var actionPerm = map[string]string{
 	"program.rollback":         PermEdit,
 	"program.activate":         PermActivate,
 	"push.confirm-revocations": PermConfig,
+	"checkout.begin":           PermCheckout,
+	"checkout.result":          PermCheckout,
+	"checkout.abandon":         PermCheckout,
 	"note.add":                 PermNote,
 	"note.revise":              PermNote,
 	"note.retract":             PermNote,

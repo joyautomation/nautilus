@@ -1,0 +1,82 @@
+page: website/src/content/docs/guides/checkout.md
+title: I/O checkout and commissioning sign-off
+prefix: CHK
+claims:
+  - id: CHK-001
+    claim: >-
+      The checkout is optional: a project with no `checkout:` section gets no
+      checkout routes (they answer that it is not enabled for the project) and
+      naut check prints nothing about it.
+    source: "#i-o-checkout-and-commissioning-sign-off"
+    tests:
+      - go ./server TestCheckoutIsOffUnlessTheProjectEnablesIt
+      - go ./cmd/naut TestCheckoutIsOptIn
+      - go ./cmd/naut TestCheckHoldsTheCheckoutSheetToTheProject
+
+  - id: CHK-002
+    claim: >-
+      `naut checkout init` writes a row for each scalar input and output tag,
+      with the alias as its address, the equipment of an alarm on the tag and
+      the first auth area whose patterns match; struct and array tags are
+      reported as not listed.
+    source: "#the-sheet"
+    tests:
+      - go ./cmd/naut TestCheckoutInitWritesTheSheetFromTheProject
+
+  - id: CHK-003
+    claim: >-
+      naut check holds the sheet to the project: a point names a tag the
+      project has, a forced point is a declared output, a bad row is named, and
+      a single-person sign-off is a warning.
+    source: "#the-sheet"
+    tests:
+      - go ./cmd/naut TestCheckHoldsTheCheckoutSheetToTheProject
+      - go ./checkout TestSheetValidate
+
+  - id: CHK-004
+    claim: >-
+      A result carries what the controller read at the point's tag and its
+      quality, and the client cannot say what was seen; a fail and a note must
+      say why; one run is open at a time; an abandoned run takes no more
+      results and keeps the ones it has.
+    source: "#runs-and-results"
+    tests:
+      - go ./server TestCheckoutRunAndResults
+      - go ./checkout TestRunsAndResults
+
+  - id: CHK-005
+    claim: >-
+      Recording needs the checkout permission in the point's area, and a
+      person (a token records nothing); beginning and abandoning a run need it
+      for the whole controller; a refusal records nothing.
+    source: "#who"
+    tests:
+      - go ./server TestCheckoutWhoMayRecord
+      - go ./server TestCheckoutRecordingIsScopedToThePointsArea
+      - go ./server TestEveryAreaScopedActionChecksItsTarget
+
+  - id: CHK-006
+    claim: >-
+      The results file is chained by SHA-256 line to line and fsynced per
+      entry: a line edited, removed or moved is refused at start and never
+      repaired, and a last line cut short before it was acknowledged is cut
+      off.
+    source: "#runs-and-results"
+    tests:
+      - go ./checkout TestOpenRefusesATamperedFile
+      - go ./checkout TestOpenDropsATornLastLine
+    partial: true
+    note: >-
+      The file is fsynced per entry and its directory once at creation; a power
+      cut between a write and its sync is not simulated (the torn line is a
+      hand-made one).
+
+  - id: CHK-007
+    claim: >-
+      Every begin, result and abandon is an audit entry, accepted or refused,
+      and a redundant pair refuses the checkout until its results go through
+      the log.
+    source: "#who"
+    tests:
+      - go ./server TestEveryWritePathJournalsExactlyOneEntry
+      - go ./server TestCheckoutRefusedOnAPair

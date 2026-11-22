@@ -117,6 +117,10 @@ var actionClass = map[string]string{
 	// Ending the subscriptions a mass revocation held (#722): phones stop
 	// being paged on a person's word.
 	"push.confirm-revocations": strict,
+	// A checkout result is a person signing for a point (#719): never unrecorded.
+	"checkout.begin":   strict,
+	"checkout.result":  strict,
+	"checkout.abandon": strict,
 	// A note is operator intent with words (#720): never unrecorded.
 	"note.add":        strict,
 	"note.revise":     strict,

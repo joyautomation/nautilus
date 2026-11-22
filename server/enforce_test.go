@@ -181,8 +181,12 @@ func runAs(t *testing.T, row auditRow, tok string) (int, string, string, map[str
 		row.prep(t, srv)
 	}
 	enforce(t, srv)
+	path := row.path
+	if row.pathOf != nil {
+		path = row.pathOf(srv)
+	}
 	before, n := writeState(srv), len(srv.audit.ring.Recent())
-	rec := call(t, srv, row.method, row.path, row.body, func(r *http.Request) {
+	rec := call(t, srv, row.method, path, row.body, func(r *http.Request) {
 		for k, v := range row.header {
 			r.Header.Set(k, v)
 		}
@@ -379,7 +383,7 @@ func TestMe(t *testing.T) {
 		// The areas a caller's permissions name carry their tag patterns
 		// (the HMI kit greys out a control by them, #708 PR 7b); a caller
 		// holding none gets no areas field.
-		"f-secret": `"principal":"token:fenced","roles":["administrator"],"permissions":{"*":["read","sfc","edit","activate","deploy","config","audit","users","override","redundancy"],"nowhere":["write","ack","shelve","out-of-service","note","substitute","force"]},"areas":{"nowhere":["zzz_*"]}`,
+		"f-secret": `"principal":"token:fenced","roles":["administrator"],"permissions":{"*":["read","sfc","edit","activate","deploy","config","audit","users","override","redundancy","signoff"],"nowhere":["write","ack","shelve","out-of-service","note","substitute","force","checkout"]},"areas":{"nowhere":["zzz_*"]}`,
 		"v-secret": `"principal":"token:viewer","roles":["viewer"],"permissions":{"*":["read"]},"elevated"`,
 		"guess":    `"principal":"anonymous","roles":[],"permissions":{}`,
 	} {

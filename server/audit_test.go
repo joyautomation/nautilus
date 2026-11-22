@@ -274,9 +274,47 @@ func auditRows() []auditRow {
 			t.Fatal(err)
 		}
 	}
+	// the checkout rows: akhan (an engineer) signs in; prep begins a run the
+	// result and abandon rows act on
+	ckHdr := map[string]string{}
+	ckSrv := func(t *testing.T) *Server {
+		srv, _ := ckServer(t)
+		c := signIn(t, srv, "akhan")
+		ckHdr["Cookie"], ckHdr["Origin"] = c.Name+"="+c.Value, "http://localhost"
+		return srv
+	}
+	ckRun := func(t *testing.T, s *Server) {
+		if _, err := s.checkout.Store.Begin(false, "h", "T", "akhan", "user:akhan"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ckPath := func(tail string) func(*Server) string {
+		return func(s *Server) string {
+			r, _ := s.checkout.Store.Current()
+			return "/api/checkout/runs/" + r.ID + tail
+		}
+	}
 	none := plain(Options{})
 	tok := plain(Options{AuthToken: "s3cret"})
 	return []auditRow{
+		{name: "checkout begin", pattern: "POST /api/checkout/runs", server: ckSrv, person: true, header: ckHdr,
+			method: "POST", path: "/api/checkout/runs", body: `{"rehearsal":true}`,
+			action: "checkout.begin", target: "*", user: "user:akhan", source: "hmi", result: "ok"},
+		{name: "checkout begin with no credential", pattern: "POST /api/checkout/runs", server: ckSrv, person: true,
+			method: "POST", path: "/api/checkout/runs", body: `{}`,
+			action: "checkout.begin", target: "", user: "anonymous", source: "api", result: "refused"},
+		{name: "checkout result", pattern: "POST /api/checkout/runs/{id}/results", server: ckSrv, person: true, header: ckHdr, prep: ckRun,
+			method: "POST", pathOf: ckPath("/results"), body: `{"point":"SP","outcome":"pass"}`,
+			action: "checkout.result", target: "SP", user: "user:akhan", source: "hmi", result: "ok"},
+		{name: "checkout result with no credential", pattern: "POST /api/checkout/runs/{id}/results", server: ckSrv, person: true, prep: ckRun,
+			method: "POST", pathOf: ckPath("/results"), body: `{"point":"SP","outcome":"pass"}`,
+			action: "checkout.result", target: "", user: "anonymous", source: "api", result: "refused"},
+		{name: "checkout abandon", pattern: "POST /api/checkout/runs/{id}/abandon", server: ckSrv, person: true, header: ckHdr, prep: ckRun,
+			method: "POST", pathOf: ckPath("/abandon"), body: `{"reason":"wrong sheet"}`,
+			action: "checkout.abandon", target: "*", user: "user:akhan", source: "hmi", result: "ok"},
+		{name: "checkout abandon with no credential", pattern: "POST /api/checkout/runs/{id}/abandon", server: ckSrv, person: true, prep: ckRun,
+			method: "POST", pathOf: ckPath("/abandon"), body: `{"reason":"wrong sheet"}`,
+			action: "checkout.abandon", target: "", user: "anonymous", source: "api", result: "refused"},
 		{name: "tag write", pattern: "POST /api/tags", server: none,
 			method: "POST", path: "/api/tags", body: `{"name":"SP","value":70}`,
 			action: "tag.write", target: "SP", user: "anonymous", source: "api", result: "ok", before: 65.0, after: 70.0},
