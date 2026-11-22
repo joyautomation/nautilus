@@ -1381,6 +1381,13 @@ namespace Tiad.Fake
             return AccessSteps.Remove(new FakeAccess((FakeProject)project, script.Policy), made);
         }
 
+        public string UserComment(object project, string user)
+        {
+            script.Enter("UserComment");
+            var u = new FakeAccess((FakeProject)project, script.Policy);
+            return u.HasUser(user) ? u.Comment(user) : null;
+        }
+
         public string CannotApply(Station next)
         {
             string c = script.CannotApply;
@@ -1440,7 +1447,7 @@ namespace Tiad.Fake
         }
 
         public DownloadOutcome Download(object project, string address, bool hardware, bool software,
-            Secrets secrets, bool? startAfter, Func<Question, Answer> answer, OnlineLogin login)
+            Secrets secrets, bool? startAfter, Func<Question, Answer> answer, LoginUse use)
         {
             script.Enter("Download");
             var p = (FakeProject)project;
@@ -1505,7 +1512,6 @@ namespace Tiad.Fake
             // As tiad.Openness runs it: through DownloadSteps, the decider
             // answering TIA's pre-download callback once per check, in
             // order, as TIA calls it (#789 S2b: one at a time, no list).
-            var use = new LoginUse(login, "download", address);
             var refusedOnline = new List<string>();
             DownloadOutcome outcome = DownloadSteps.Run(decider, address,
                 delegate { },

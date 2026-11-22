@@ -59,6 +59,38 @@ func UploadedKeep(t *testing.T, a Target, address string) *tiad.Session {
 	return s
 }
 
+// restoreSession is a session holding the bench CPU's as-found project:
+// created with a keep spec, uploaded from the CPU (whose access control may
+// be on: the upload logs on), the spec kept, compiled. The project's
+// access control is Disabled and it holds no users (the fakes' upload, as
+// the bench's as-found archive).
+func restoreSession(t *testing.T, a Target) *tiad.Session {
+	t.Helper()
+	c := a.Client()
+	create := BenchStation()
+	create.CPU.AccessControl = tiad.AccessKeep
+	s, err := c.CreateProject(ctx, "restore", create, BenchSecrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.UploadWith(ctx, tiad.UploadRequest{Secrets: BenchLogin}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ApplyStation(ctx, adoptedStation(), BenchSecrets); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.PutFile(ctx, "src/Main.scl", []byte(programSCL)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Software(ctx, tiad.SoftwareRequest{Group: "nautilus", Sources: []string{"src/Main.scl"}, Prune: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Compile(ctx, true, true); err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
 // ResetLoad is a hardware load at address that answers the bench's
 // checks (and the device an upload keeps) and asks a user-management
 // reset.
@@ -94,10 +126,13 @@ func contractUserManagementReset(t *testing.T, start Starter) {
 		sw.Hardware, sw.Decisions.AcceptUnverifiedHardware, sw.Attestation = false, nil, nil
 		_, err := s.Download(ctx, sw)
 		wantResetRefused(t, "software only", err, "loads no hardware")
+		// An attestation that says enabled takes the logon route: without
+		// the password, refused before TIA.
 		on := ResetLoad(benchCPU)
 		on.Attestation.CPUAccessControl = tiad.AttestCPUAccessEnabled
+		on.Secrets = nil
 		_, err = s.Download(ctx, on)
-		wantResetRefused(t, "attested enabled", err, "never resets a CPU whose access control is on")
+		wantResetRefused(t, "attested enabled, no password", err, tiad.ResetNoPassword)
 		// Its place among tiad's own refusals: after the hardware gate
 		// and the kept devices, before start-after and the device pin.
 		hw := ResetLoad(benchCPU)
@@ -208,9 +243,9 @@ func contractUserManagementReset(t *testing.T, start Starter) {
 		s := UploadedKeep(t, a, otherCPU)
 		a.SetQuestions(t, benchHardwareChecks)
 		_, err := s.Download(ctx, ResetLoad(otherCPU))
-		says := `nothing shows the CPU's access control is off: give attestation.cpuAccessControl "disabled"`
+		says := `nothing shows the CPU's access control as it is now: give attestation.cpuAccessControl "disabled" or "enabled"`
 		if tiad.UploadRouteEnabled {
-			says = `nothing shows the CPU's access control is off: upload from ` + otherCPU + ` in this session first, or give attestation.cpuAccessControl "disabled"`
+			says = `nothing shows the CPU's access control as it is now: upload from ` + otherCPU + ` in this session first, or give attestation.cpuAccessControl "disabled" or "enabled"`
 		}
 		wantResetRefused(t, "uploaded from another address, no attestation", err, says)
 		att := ResetLoad(otherCPU)
@@ -221,6 +256,136 @@ func contractUserManagementReset(t *testing.T, start Starter) {
 		}
 		if res.Attestation == nil || res.Attestation.CPUAccessControl != tiad.AttestCPUAccessDisabled || res.Attestation.At == "" {
 			t.Fatalf("the attestation comes back with what it said of access control: %+v", res.Attestation)
+		}
+	})
+
+	t.Run("LogonRouteNeedsALogon", func(t *testing.T) {
+		// Attested enabled, with the password, on a CPU whose access
+		// control is off: let before TIA, but the CPU asks no
+		// credentials, so when TIA asks the check tiad refuses the reset.
+		// After stop-cpu that is in doubt, naming why; nothing loads and
+		// no reset is given.
+		a := start(t, Config{Targets: []string{benchCPU}})
+		s := UploadedKeep(t, a, benchCPU)
+		a.SetQuestions(t, benchHardwareChecks)
+		on := ResetLoad(benchCPU)
+		on.Attestation.CPUAccessControl = tiad.AttestCPUAccessEnabled
+		_, err := s.Download(ctx, on)
+		if tiad.Kind(err) != tiad.KindOutcomeUnknown || !strings.Contains(err.Error(), tiad.ResetNoLogon) || slices.Contains(tiad.ActingAnswers(err), tiad.QuestionUserManagement) {
+			t.Fatalf("attested enabled, no logon: %v (acting %v), want outcome_unknown naming why, no reset given", err, tiad.ActingAnswers(err))
+		}
+		// With user-management asked first, the same refusal is clean.
+		a.SetQuestions(t, []tiad.Question{qUserManagement, qStop})
+		_, err = s.Download(ctx, on)
+		if tiad.Kind(err) != tiad.KindDecisionRequired || questionIDs(tiad.Questions(err)) != tiad.QuestionUserManagement ||
+			!strings.Contains(tiad.Questions(err)[0].Message, tiad.ResetNoLogon) {
+			t.Fatalf("attested enabled, no logon, asked first: %v (questions %+v)", err, tiad.Questions(err))
+		}
+		if l := a.Loaded(t); len(l) != 0 {
+			t.Fatalf("a reset refused when TIA asked loaded %+v", l)
+		}
+	})
+
+	t.Run("AccessControlOn", func(t *testing.T) {
+		// #789 option 1: the window's three loads through tiad. A, turning
+		// access control on: a station tiad made (fullAccessUser), the
+		// CPU's access control attested off. B, a reload of it with the
+		// CPU's access control on: tiad logs on, then resets. C, the
+		// restore: an as-found project with access control off and no
+		// users, loaded over the CPU tiad turned on, logged on as
+		// "nautilus", a user the project being loaded does not hold.
+		a, s := compiledBench(t, start)
+		c := a.Client()
+		a.SetQuestions(t, benchHardwareChecks)
+		load := func(cpu string, secrets *tiad.Secrets) tiad.DownloadRequest {
+			r := AcceptHardware(tiad.DownloadRequest{Secrets: secrets, Address: benchCPU, Hardware: true, Software: true, Announced: true,
+				Decisions: tiad.Decisions{StopCPU: tiad.Yes(), Overwrite: tiad.Yes(), ConsistentDownload: tiad.Yes(), StartAfter: tiad.Yes(), UserManagementResetToProject: tiad.Yes()}})
+			r.Attestation.CPUAccessControl = cpu
+			return r
+		}
+		// Refused before TIA: a password the project's record of
+		// "nautilus" does not hold, and no word on the CPU's access
+		// control.
+		_, err := s.Download(ctx, load(tiad.AttestCPUAccessDisabled, &tiad.Secrets{FullAccessPassword: "Other-access-2026"}))
+		wantResetRefused(t, "turning it on, another password", err, tiad.ResetPasswordNotRecorded)
+		_, err = s.Download(ctx, load("", BenchDownloadSecrets()))
+		wantResetRefused(t, "turning it on, nothing attested", err, `give attestation.cpuAccessControl "disabled" or "enabled"`)
+		if l := a.Loaded(t); len(l) != 0 {
+			t.Fatalf("refused resets loaded %+v", l)
+		}
+		// A.
+		res, err := s.Download(ctx, load(tiad.AttestCPUAccessDisabled, BenchDownloadSecrets()))
+		if err != nil || !res.Downloaded || !res.CompareEqual || res.UserManagementReset != tiad.ResetRouteAttestation {
+			t.Fatalf("turning access control on: %+v %v", res, err)
+		}
+		if _, err := s.Compare(ctx); tiad.Kind(err) != tiad.KindOperationFailed || !strings.Contains(err.Error(), LoginNoPassword) {
+			t.Fatalf("the CPU asks credentials after A: compare without the password: %v", err)
+		}
+		// Attested disabled now: the CPU asks credentials and tiad logs
+		// on, which contradicts the attestation: no reset, in doubt after
+		// stop-cpu, nothing loaded.
+		_, err = s.Download(ctx, load(tiad.AttestCPUAccessDisabled, BenchDownloadSecrets()))
+		if tiad.Kind(err) != tiad.KindOutcomeUnknown || !strings.Contains(err.Error(), "so its access control is on, but the attestation route rests on it being off") ||
+			slices.Contains(tiad.ActingAnswers(err), tiad.QuestionUserManagement) {
+			t.Fatalf("attested disabled on a CPU that asks credentials: %v (acting %v)", err, tiad.ActingAnswers(err))
+		}
+		// B.
+		res, err = s.Download(ctx, load(tiad.AttestCPUAccessEnabled, BenchDownloadSecrets()))
+		if err != nil || !res.Downloaded || !res.CompareEqual || res.UserManagementReset != tiad.ResetRouteLogon {
+			t.Fatalf("a reload with access control on: %+v %v", res, err)
+		}
+		if list, err := c.Deploys(ctx, benchCPU); err != nil || len(list.Deploys) == 0 || list.Deploys[0].Outcome == nil || list.Deploys[0].Outcome.UserManagementReset != tiad.ResetRouteLogon {
+			t.Fatalf("the deploy record carries the logon route: %+v %v", list, err)
+		}
+		if l := a.Loaded(t); len(l) != 2 {
+			t.Fatalf("loaded %d, want A and B", len(l))
+		}
+		closeFirst(t, s)
+
+		// C. Refused before TIA: no password; a blind trust.
+		r := restoreSession(t, a)
+		a.SetQuestions(t, benchHardwareChecks)
+		restore := ResetLoad(benchCPU)
+		restore.Attestation.CPUAccessControl = tiad.AttestCPUAccessEnabled
+		noPw := restore
+		noPw.Secrets = nil
+		_, err = r.Download(ctx, noPw)
+		wantResetRefused(t, "the restore without a password", err, tiad.ResetNoPassword)
+		a.SetFingerprint(t, FingerprintScript{AsksTLS: true})
+		if fp, err := r.Fingerprint(ctx, tiad.FingerprintRequest{Secrets: BenchLogin, TrustUnverifiedCertificate: true}); err != nil || len(fp.TrustedBlindly) != 1 {
+			t.Fatalf("a read that trusts blindly: %+v %v", fp, err)
+		}
+		a.SetFingerprint(t, FingerprintScript{})
+		if _, err := r.Download(ctx, restore); tiad.Kind(err) != tiad.KindBadRequest || !strings.Contains(err.Error(), "has to log on to the CPU first, so nothing was sent to the CPU") {
+			t.Fatalf("the restore after a blind trust: %v", err)
+		}
+		// Closing every session retires the instance.
+		closeFirst(t, r)
+		r = restoreSession(t, a)
+		a.SetQuestions(t, benchHardwareChecks)
+		// A wrong password: refused going online, in doubt, no reset
+		// given, nothing loaded, and the deploy record says no reset.
+		wrong := restore
+		wrong.Secrets = &tiad.Secrets{FullAccessPassword: "Wrong-access-2026"}
+		_, err = r.Download(ctx, wrong)
+		if tiad.Kind(err) != tiad.KindOutcomeUnknown || !strings.Contains(err.Error(), LoginAskedAgain) || slices.Contains(tiad.ActingAnswers(err), tiad.QuestionUserManagement) {
+			t.Fatalf("the restore with a wrong password: %v (acting %v)", err, tiad.ActingAnswers(err))
+		}
+		if l := a.Loaded(t); len(l) != 2 {
+			t.Fatalf("a refused logon loaded: %d loads", len(l))
+		}
+		list, err := c.Deploys(ctx, benchCPU)
+		if err != nil || len(list.Deploys) == 0 || list.Deploys[0].Outcome == nil || list.Deploys[0].Outcome.UserManagementReset != "" {
+			t.Fatalf("the refused restore's deploy record: %+v %v", list, err)
+		}
+		// The restore: logged on as "nautilus", reset to a project with
+		// access control off and no users; the CPU then asks nothing.
+		res, err = r.Download(ctx, restore)
+		if err != nil || !res.Downloaded || !res.CompareEqual || res.UserManagementReset != tiad.ResetRouteLogon {
+			t.Fatalf("the restore: %+v %v", res, err)
+		}
+		if cmp, err := r.Compare(ctx); err != nil || !cmp.Equal {
+			t.Fatalf("a compare without a password after the restore: %+v %v", cmp, err)
 		}
 	})
 

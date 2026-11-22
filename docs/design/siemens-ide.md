@@ -557,9 +557,13 @@ The rules for applying a spec:
     ever kept access control: under `fullAccessUser`, or `keep` after
     `fullAccessUser` on the same session, it is refused. On a hardware
     load, where TIA refuses keep, it may answer reset to the project's
-    (`userManagementResetToProject`), only when the CPU's access control
-    is off and stays off (§3.5). Loading the users tiad set (a new
-    station's first live download) still waits for a proven answer. The rule is per session: a project an earlier
+    (`userManagementResetToProject`) only in the cases §3.5 lists: to a
+    project with access control off, or to the user `nautilus` this
+    session set with the request's password; over a CPU whose access
+    control is attested off, or one tiad has logged on to as `nautilus`
+    in the same download. A new station's first live download (its users
+    loaded over a CPU with access control off) goes that way; whether
+    TIA takes it is for the first bench window to show. The rule is per session: a project an earlier
     session set to `fullAccessUser`, saved, then reopened and kept, counts
     as found like any adopted project (it still holds tiad's Full access
     user). Its first hardware download with `userManagementKeepOnline`
@@ -735,7 +739,8 @@ Response: `{dryRun, downloaded, questions: [{id, message, detail, objects}], sta
 and on a download that loaded hardware `hardwareVerified: false`, a
 `warning` and the `attestation` as journalled (`{by, at, text,
 cpuAccessControl}`); on a download that reset the CPU's user management,
-`userManagementReset`, the route that let it (`upload` or `attestation`).
+`userManagementReset`, the route that let it (`upload`, `attestation` or
+`logon`).
 The example leaves `user-management` out: a software load answers it
 with `userManagementKeepOnline: true`, while a hardware load, where TIA
 refuses keep, needs `userManagementResetToProject` under its rule
@@ -759,10 +764,10 @@ both:
   limit is a `bad_request`, journalled by its size only. It may also
   say the CPU's access control as it is now, `cpuAccessControl`:
   `disabled` or `enabled` (any other word is a `bad_request`, journalled
-  as `invalid`); a user-management reset can rest on `disabled`
-  (`user-management`, below). It must be the operator's own observation
-  of the CPU, never a value a client fills in by default: it is the one
-  piece of evidence a reset rests on.
+  as `invalid`); a user-management reset rests on `disabled`, or on
+  `enabled` together with tiad's logon (`user-management`, below). It
+  must be the operator's own observation of the CPU, never a value a
+  client fills in by default.
 
 This holds on every CPU, the bench included: tiad cannot tell a bench
 CPU from a customer's, so it never tries. Without the opt-in the
@@ -1000,41 +1005,84 @@ behaviour. So, until then:
       management to the project's
       (`DownloadAllUserManagementDataResetToProject`, which TIA
       preselects on a hardware load and words "Delete user management
-      data and disable access control in runtime"). Acting: it deletes
-      the CPU's users and sets its access control as the project has it.
-      tiad gives it only when all of these hold, checked before anything
-      reaches the CPU (refused: `decision_required` for `user-management`,
-      naming why, "nothing was sent to the CPU", the attestation
-      unstamped), and the same verdict answers TIA's check:
-      - the download loads hardware (a software-only one is refused);
-      - the spec's `cpu.accessControl` is `keep` and no apply on the
-        session ever asked for `fullAccessUser`;
-      - the project's access control, read by tiad from the session's
-        project, is exactly `Disabled` (anything else, absent included,
-        is refused), so the reset leaves access control off;
-      - the CPU's access control is shown off too:
-        `attestation.cpuAccessControl: "disabled"`, the operator's
-        statement, with `by` and `text`.
-      A second route, this session having uploaded from that very
-      address (the project's setting is then the CPU's, and a later
-      `keep` apply keeps it), is built and tested but OFF
-      (`UploadRouteEnabled`, naut-lead 2026-11-21): it assumes an upload
-      brings the CPU's access control into the project, and only the
-      bench CPU (`Disabled`) has been uploaded. That a CPU with access
-      control on reads back as anything but `Disabled` is modelled by
-      the fakes only. It is turned on (agent and Go together) only with a
-      bench upload of such a CPU; until then every refusal says it is not
-      yet available.
-      An attestation that says `"enabled"` refuses, whatever else holds:
-      tiad never resets a CPU whose access control is on. A reset given,
-      then a cancel at a later check, is `outcome_unknown` naming
-      `user-management`. The audit line says what came of it
+      data and disable access control in runtime" when the project's
+      access control is off). Acting: it deletes every user the CPU
+      holds and sets its access control and users as the project has
+      them. tiad gives it only on a hardware download, and only for
+      these cases; everything else is refused:
+
+      | Project after the reset | The CPU now, and the evidence | Route |
+      |---|---|---|
+      | access control `Disabled`, spec `keep` | off: `attestation.cpuAccessControl: "disabled"` | `attestation` |
+      | access control `Disabled`, spec `keep` | off: this session uploaded from it (built, OFF) | `upload` |
+      | access control `Disabled`, spec `keep` | on: `"enabled"`, and tiad logged on as `nautilus` in this download | `logon` |
+      | tiad's `nautilus`, spec `fullAccessUser` | off: `"disabled"` | `attestation` |
+      | tiad's `nautilus`, spec `fullAccessUser` | on: `"enabled"`, and tiad logged on as `nautilus` in this download | `logon` |
+
+      - "spec `keep`": the spec's `cpu.accessControl` is `keep`, no
+        apply on the session ever asked for `fullAccessUser`, and the
+        project's access control, read by tiad, is exactly `Disabled`.
+        The reset leaves the CPU without access control.
+      - "tiad's `nautilus`": the spec is `fullAccessUser` as applied on
+        this session, the project's access control is exactly
+        `EnabledWithAccessControl`, and the request's
+        `secrets.fullAccessPassword` is the one tiad's record of the user
+        `nautilus` holds (§3.3). After the reset the CPU's Full access
+        user is the one tiad logs on as, with this password, so the
+        compare after the load can log on. A password the record does not
+        hold is refused: the CPU would end with a password the request
+        lacks.
+      - Every case needs `by` and `text` in the attestation, and
+        `cpuAccessControl` one of the two words. Nothing attested is
+        refused, naming both.
+      - Keep after `fullAccessUser` on the same session, a `keep`
+        project whose access control is on (an adopted CPU's users), and
+        `EnabledWithAccessControlViaAccessLevel` are refused.
+
+      The `logon` route is decided in two steps. Before anything reaches
+      the CPU, it needs `secrets.fullAccessPassword` and an agent
+      instance that trusts no certificate blindly (both refused as
+      `bad_request` or `decision_required`, "nothing was sent to the
+      CPU"). When TIA asks the check, tiad answers reset only if this
+      download logged on as `nautilus` (§3.9) and answered nothing no
+      since. TIA asking the check means the CPU took the logon. If the
+      CPU asked no credentials, tiad refuses the reset there, naming why
+      and the fix: retire the instance, in case it went online before,
+      or attest `disabled`. The other routes rest on the CPU's access
+      control being off, so a CPU that asked credentials in the download
+      refuses them the same way. A refusal at TIA's check after an
+      acting answer (`stop-cpu` on the bench's order) is
+      `outcome_unknown`, carrying the reason. The CPU's logon checks the
+      CPU's users, not the project's, so the restore of an as-found
+      project with no users logs on as `nautilus` all the same (the
+      fakes model it; the bench window proves it).
+
+      **A loosening (#789 option 1, naut-lead 2026-11-22, a tighten-later
+      candidate on #616).** Before this, tiad never reset a CPU whose
+      access control was on. The `logon` route does: it deletes every
+      user such a CPU holds, and may turn its access control off, on the
+      strength of tiad holding the password of a user the CPU took. It
+      exists so that every load of the access-control window, the restore
+      included, is tiad's (James: "never have to touch TIA Portal").
+
+      The upload route assumes an upload brings the CPU's access control
+      into the project, and only the bench CPU (`Disabled`) has been
+      uploaded. It is built and tested but OFF (`UploadRouteEnabled`,
+      naut-lead 2026-11-21), and turned on (agent and Go together) only
+      with a bench upload of a CPU with access control on that reads back
+      as not `Disabled`. Until then every refusal says it is not yet
+      available.
+
+      A reset given, then a cancel at a later check, is
+      `outcome_unknown` naming `user-management`. The audit line says
+      what came of it
       (`userManagementReset=unset|refused|allowed:<route>|given:<route>`:
       `unset` when no reset was asked or the download ended before tiad
       checked it; `given` once tiad answered TIA's check reset, even if
-      TIA then refused the write, the safe side),
-      and a successful download returns the route
-      (`userManagementReset`) for the deploy record.
+      TIA then refused the write, the safe side; a refusal at TIA's check
+      has its own `audit user-management-reset` line), and a successful
+      download returns the route (`userManagementReset`) for the deploy
+      record.
     Updating the CPU's users (`UpdateUserManagementDataButKeepOnlinePassword`)
     is never tiad's choice.
   - `identification-data` (`LoadIdentificationData`): answered only by
@@ -1561,6 +1609,21 @@ shows (the fakes ask again;
 TIA may fail going online instead, which tiad reports as a logon TIA
 failed after). The glue's log lines answer these in the first window on a
 CPU with access control on.
+
+**The download's logon carries a reset.** A download's logon is made by
+the agent itself, so its answer to TIA's user-management check can read
+whether the download logged on (§3.5, the `logon` route). For that route
+the bench window has to show three things before relying on it:
+- that TIA asks credentials going online before it asks the download's
+  checks;
+- that TIA does not ask credentials again within the same download after
+  a hardware load restarts the CPU, which tiad would refuse as
+  `AskedAgain`;
+- that the logon works when the project being loaded does not hold the
+  user, as in the restore of the as-found project.
+
+The window's stop criteria cover each: an `outcome_unknown` naming
+credentials or `user-management` stops it.
 
 **Not covered yet.** Changing the user's password (rotation): the
 download that loads a new password needs the old one to go online and the

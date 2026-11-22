@@ -1016,6 +1016,16 @@ namespace Tiad
             get { lock (mu) return answered; }
         }
 
+        // LoggedOn is true once the operation answered credentials and
+        // answered nothing no since (TIA asking again is answered no, and
+        // a write that failed cancels the operation): read when TIA asks a
+        // later check, the CPU took the logon (UserManagementRule's logon
+        // route).
+        public bool LoggedOn
+        {
+            get { lock (mu) return answered && !refused; }
+        }
+
         // Trusted records that a handler of this operation answered a
         // certificate question Trusted, blindly. Call it as soon as the
         // trust is written, before anything that may fail.
