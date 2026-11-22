@@ -155,7 +155,7 @@ func (o *Oncall) prepareAck() error {
 	// no space or control character): one it would not take makes every
 	// push page arrive with no link.
 	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" ||
-		!strings.HasPrefix(o.AckURL, u.Scheme+"://") || strings.ContainsFunc(o.AckURL, func(r rune) bool { return r == '@' || r == '\\' || unicode.IsSpace(r) || unicode.IsControl(r) }) {
+		!strings.HasPrefix(o.AckURL, u.Scheme+"://") || strings.ContainsFunc(o.AckURL, func(r rune) bool { return strings.ContainsRune("@\\?#", r) || unicode.IsSpace(r) || !unicode.IsPrint(r) }) {
 		return fmt.Errorf("alarms.oncall.ack-url: %q is not a plain URL of the HMI (want e.g. https://hmi.plant.example:8443, a lower-case scheme, no query, no user, no @, no spaces)", o.AckURL)
 	}
 	switch u.Scheme {
