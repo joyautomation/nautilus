@@ -14,6 +14,13 @@
 
 ### Added
 
+- **`<ParameterList/>`** (#718): the setpoint parameters (`GET /api/parameters`) as a table of the
+  plant's value, the manifest's `init:`, the range and a drift badge (`in step`, `plant ahead`,
+  `committed`, `repo ahead`, `conflict`), with who last edited it, a filter for only where plant and
+  repo differ, and the write-back mode. For a repo-ahead or conflict row, "Use repo value" asks the
+  controller what would change (a dry run through `POST /api/parameters/import`), confirms it, and
+  applies all or nothing; an operator's edit (plant ahead) is never reverted from here. Stacks to
+  cards below 640 px. `ParametersClient` and the pure helpers are exported.
 - **Modbus points in `<ConfigEditor/>`** (#711): each Modbus driver's manifest file shows its
   sources and points as tables. A point's table, address and scan class and a source's host, port
   and unit id are editable, because a live apply may change those and nothing else; format, scale,

@@ -348,3 +348,9 @@ export type {
 // The house faces (Space Grotesk / IBM Plex Mono / Righteous), self-hosted via
 // @fontsource, are the optional sibling — theme.css only NAMES the families:
 //   import '@joyautomation/nautilus-hmi/fonts.css';
+
+// Setpoint parameters kept in step with Git (#718): GET /api/parameters with a
+// drift badge, and "use the repo value" through POST /api/parameters/import.
+export { default as ParameterList } from './components/ParameterList.svelte';
+export { ParametersClient, driftBadge, drifted, rangeText, takeRepoSet, valueText, refusedText } from './parameters.js';
+export type { Parameter, DriftState, WriteBack, ImportResult, ImportAnswer, ParametersAnswer, ParametersClientOptions } from './parameters.js';
