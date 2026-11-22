@@ -347,6 +347,9 @@ func runProject(fsys fs.FS, manifest, label, dir string) int {
 	if proj.Auth != nil && (proj.Auth.HasUsers() || proj.Auth.OIDC()) {
 		sysAlarms = append(sysAlarms, usersAlarm(&srvRef))
 	}
+	if proj.Alarms != nil && proj.Alarms.Channels != nil && proj.Alarms.Channels.Push != nil {
+		sysAlarms = append(sysAlarms, pushHeldAlarm(&srvRef))
+	}
 	proj.PushSend = pushChannel(&srvRef)
 	alarmStateDir, err := openAlarmContacts(proj, dir, os.Getenv, os.Stderr, proj.Runtime.Coordinator != nil)
 	if err != nil {
@@ -849,6 +852,27 @@ func usersAlarm(srv *atomic.Pointer[server.Server]) project.SystemAlarm {
 		Active: func() bool {
 			s := srv.Load()
 			return s != nil && s.UsersFileDown()
+		},
+	}
+}
+
+// PushHeldAlarmID is the system alarm raised while the push subscriptions'
+// standing sweep is holding a mass revocation instead of deleting it.
+const PushHeldAlarmID = "nautilus.push-held"
+
+// pushHeldAlarm is raised while subscriptions are held: many people failed
+// standing at once, which a wrong users.json does.
+func pushHeldAlarm(srv *atomic.Pointer[server.Server]) project.SystemAlarm {
+	return project.SystemAlarm{
+		Def: alarm.Def{
+			ID: PushHeldAlarmID, Tag: "__nautilus.push-held",
+			Name:     "Push subscriptions held, not sent: many people stopped standing at once (check users.json, and the pair's users check)",
+			Priority: alarm.High, Class: "system",
+			AckRequired: true, AutoClear: true,
+		},
+		Active: func() bool {
+			s := srv.Load()
+			return s != nil && s.PushHeld() > 0
 		},
 	}
 }

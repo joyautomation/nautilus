@@ -71,6 +71,9 @@ type pushService struct {
 	sender *webpush.Sender
 	policy webpush.Policy
 
+	heldMu sync.Mutex
+	held   map[string]time.Time // rows a mass revocation is holding, by rowKey, since when
+
 	// add serializes changes to the registry with their durable save, so a
 	// failed save can put the rows back as they were.
 	add sync.Mutex
@@ -185,23 +188,104 @@ func (p *pushService) save(ctx context.Context) error {
 	return err
 }
 
-// sweep ends every subscription whose person no longer stands.
+// pushHoldFor is how long a mass revocation is held before it is carried
+// out: a variable for tests.
+var pushHoldFor = 10 * time.Minute
+
+func rowKey(r webpush.Row) string { return r.Principal + "\x00" + r.ID + "\x00" + r.Sealed }
+
+// sweep ends the subscriptions whose person no longer stands, except a mass
+// of them at once. A users file that reads fine but is wrong (a bad deploy
+// of users.json, a pair member with separately salted passwords) makes
+// many people fail at the same moment, and deleting their phones on its
+// word would silence the pager until each re-subscribes. So a pass that
+// would revoke more than half the rows, or every person's, across two or
+// more people, HOLDS them instead: kept, not sent, a condition raised
+// (PushHeld; the system alarm), and carried out only when a later sweep,
+// pushHoldFor on, still finds that row failing. A row that stands again is
+// released. One person's change, or a few among many, ends at once.
 func (p *pushService) sweep(ctx context.Context) {
 	if !p.s.rt.Leading() || !p.usersReadable() {
 		return
 	}
 	p.add.Lock()
 	defer p.add.Unlock()
-	gone := p.reg.RemoveWhere(func(r webpush.Row) bool { return !p.stands(r) })
-	if len(gone) == 0 {
+	now := p.s.sessions.clock()
+	rows := p.reg.Rows()
+	var failing []webpush.Row
+	people, failingPeople := map[string]bool{}, map[string]bool{}
+	for _, r := range rows {
+		people[r.Principal] = true
+		if !p.stands(r) {
+			failing = append(failing, r)
+			failingPeople[r.Principal] = true
+		}
+	}
+	mass := len(failingPeople) >= 2 && (len(failing)*2 > len(rows) || len(failingPeople) == len(people))
+
+	p.heldMu.Lock()
+	// A held row that stands again is released; the rest stay as they were first held.
+	still := map[string]time.Time{}
+	for _, r := range failing {
+		if t, ok := p.held[rowKey(r)]; ok {
+			still[rowKey(r)] = t
+		}
+	}
+	var end []webpush.Row
+	newlyHeld := 0
+	for _, r := range failing {
+		k := rowKey(r)
+		t, wasHeld := still[k]
+		switch {
+		case wasHeld && now.Sub(t) >= pushHoldFor:
+			end = append(end, r) // a later sweep agrees, row by row
+		case wasHeld || mass:
+			if !wasHeld {
+				still[k] = now
+				newlyHeld++
+			}
+		default:
+			end = append(end, r)
+		}
+	}
+	p.held = still
+	for _, r := range end {
+		delete(p.held, rowKey(r))
+	}
+	held := len(p.held)
+	p.heldMu.Unlock()
+
+	if newlyHeld > 0 {
+		p.s.audit.record(audit.Entry{
+			Source: audit.SourceSystem, User: "system", Action: "push.hold", Target: "push",
+			Detail: map[string]any{"rows": newlyHeld, "people": len(failingPeople), "of": len(rows),
+				"reason": "a pass would end more than half the subscriptions at once: held, not sent, until a later sweep agrees; check users.json (and that a pair carries the same one: the pair's users check)"},
+			Result: audit.ResultOK,
+		})
+		slog.Warn("push: a mass of subscriptions stopped standing at once; holding them, not deleting (check users.json and the pair's users check)", "held", held, "of", len(rows))
+	}
+	if len(end) == 0 {
 		return
 	}
-	for _, r := range gone {
+	p.reg.RemoveRows(end)
+	for _, r := range end {
 		p.pushEntry("push.unsubscribe", r, "the person no longer proves what they did when they subscribed (password changed, user removed or disabled, role revoked, OIDC account unpinned)", nil)
 	}
 	if err := p.save(ctx); err != nil {
-		slog.Warn("push: revoked subscriptions could not be saved; they are ended here and will be again at the next save", "count", len(gone), "error", err)
+		slog.Warn("push: revoked subscriptions could not be saved; they are ended here and will be again at the next save", "count", len(end), "error", err)
 	}
+}
+
+// PushHeld is how many subscriptions the standing sweep is holding rather
+// than deleting (see sweep): the condition's input.
+func (s *Server) PushHeld() int {
+	p := s.push
+	if p == nil {
+		return 0
+	}
+	p.heldMu.Lock()
+	defer p.heldMu.Unlock()
+	return len(p.held)
 }
 
 func (p *pushService) run(ctx context.Context) {
@@ -409,6 +493,9 @@ type PushHealth struct {
 	// Sealed are rows sealed under another push key: kept, not sent. A
 	// pair whose members hold different keys shows them on the standby.
 	Sealed int `json:"sealed"`
+	// Held are subscriptions a mass revocation is holding instead of
+	// deleting (check users.json and the pair's users check).
+	Held int `json:"held"`
 }
 
 func (s *Server) pushHealth() PushHealth {
@@ -417,7 +504,7 @@ func (s *Server) pushHealth() PushHealth {
 	for _, r := range rows {
 		people[r.Principal] = true
 	}
-	return PushHealth{KeyFingerprint: s.push.reg.KeyFingerprint(), Subscriptions: len(rows), People: len(people), Sealed: s.push.reg.Sealed()}
+	return PushHealth{KeyFingerprint: s.push.reg.KeyFingerprint(), Subscriptions: len(rows), People: len(people), Sealed: s.push.reg.Sealed(), Held: s.PushHeld()}
 }
 
 func (s *Server) handlePushHealth(w http.ResponseWriter, r *http.Request) {
@@ -446,7 +533,8 @@ type PushMessage struct {
 type PushResult struct {
 	Sent    int // pushes the push service accepted
 	Failed  int // pushes it refused or that did not get there
-	Pruned  int // subscriptions the service said are gone, or whose person no longer stands
+	Pruned  int // subscriptions the push service said are gone
+	Held    int // subscriptions whose person does not stand now: not sent, left to the sweep
 	Skipped int // subscriptions whose person may not read Target
 	Sealed  int // subscriptions under another push key: kept, not sent
 	// NoSubscription is true when the person has none at all: reported in
@@ -491,9 +579,9 @@ func (s *Server) PushSend(ctx context.Context, principal string, m PushMessage) 
 	var drop []webpush.Row
 	for _, row := range rows {
 		if !p.stands(row) {
-			res.Pruned++
-			drop = append(drop, row)
-			p.pushEntry("push.unsubscribe", row, "the person no longer proves what they did when they subscribed", nil)
+			// Not paged, and not deleted here: ending it is the sweep's, which
+			// holds a mass of them instead (a wrong users file).
+			res.Held++
 			continue
 		}
 		if !s.policy.Can(rowPrincipal(row), auth.Read, m.Target).Allowed {

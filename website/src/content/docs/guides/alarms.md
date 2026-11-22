@@ -435,9 +435,16 @@ browser playground has no state directory, so a project there with
   does: a changed password, a removed or disabled user or a revoked role
   stops the pages, with no session needed; signing out does not. (A
   users file that cannot be read ends nothing: nobody is paged, and
-  nothing is dropped, until it can be read. A pair needs the same
-  `users.json` on both boxes, as [auth](/guides/auth/) says, or a
-  takeover finds every password changed.) An OIDC person's groups are
+  nothing is dropped, until it can be read. One that reads fine but is
+  wrong, such as a bad deploy of `users.json` or a pair member whose
+  passwords were set separately, would fail many people at once, so the
+  sweep **holds** a pass that would end more than half the
+  subscriptions (across two or more people) instead of deleting them:
+  the rows are kept, not sent, the system alarm `nautilus.push-held`
+  rises and the journal says `push.hold`. Put the file right and they
+  stand again; only a later sweep, ten minutes on, that still finds them
+  failing ends them. A pair needs the same `users.json` on both boxes,
+  as [auth](/guides/auth/) says; its hello check reports a difference.) An OIDC person's groups are
   those of their last sign-in on the controller: a sign-in refreshes
   them, and a subscription not refreshed within 14 days stops, so
   someone removed from a group at the provider is not paged for ever. A push

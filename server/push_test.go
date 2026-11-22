@@ -558,8 +558,12 @@ func TestPushSendChecksStandingNow(t *testing.T) {
 	f.mu.Lock()
 	n := len(f.got)
 	f.mu.Unlock()
-	if n != 0 || res.Sent != 0 || res.Pruned != 1 {
+	if n != 0 || res.Sent != 0 || res.Held != 1 || res.Pruned != 0 {
 		t.Errorf("a person whose password was reset was paged: %+v, service saw %d", res, n)
+	}
+	// Not deleted by the send: ending it is the sweep's.
+	if len(rig.srv.push.reg.Of("user:jsmith")) != 1 {
+		t.Error("a send deleted a subscription")
 	}
 }
 
@@ -824,5 +828,99 @@ func TestPushUnsubscribeNotSavedIsNotMade(t *testing.T) {
 	rec := call(t, rig.srv, "DELETE", "/api/push/subscribe", `{"id":"`+made.ID+`"}`, withCookie(c.Value), ownOrigin, asJSON)
 	if rec.Code != http.StatusServiceUnavailable || len(rig.srv.push.reg.Of("user:jsmith")) != 1 {
 		t.Errorf("%d, rows %d", rec.Code, len(rig.srv.push.reg.Of("user:jsmith")))
+	}
+}
+
+// A users file that reads fine but is wrong makes many people fail standing
+// at once. The sweep holds those rows (kept, not sent, a condition) rather
+// than deleting everyone's phone; a row that stands again is released, and
+// only a later sweep that still finds it failing, pushHoldFor on, ends it.
+// One person among several still ends at once.
+func TestPushSweepHoldsAMassRevocation(t *testing.T) {
+	store := &subStore{}
+	rig := newPushRig(t, store, nil)
+	srv := rig.srv
+	for i, who := range []string{"jsmith", "akhan"} {
+		b, _ := subJSON(i + 1)
+		if rec := rig.subscribe(t, who, b); rec.Code != http.StatusCreated {
+			t.Fatal(rec.Body)
+		}
+	}
+	now := time.Now()
+	srv.sessions.now = func() time.Time { return now }
+	good, _ := os.ReadFile(rig.path)
+	setBoth := func() {
+		if err := users.Update(rig.path, "opsadmin", func(f *users.File) error {
+			f.SetPassword("jsmith", "wrong-deploy-1")
+			return f.SetPassword("akhan", "wrong-deploy-2")
+		}); err != nil {
+			t.Fatal(err)
+		}
+		srv.users.Reload()
+	}
+
+	// One person among two: ended at once (the guard is for a mass).
+	if err := users.Update(rig.path, "opsadmin", func(f *users.File) error { return f.SetPassword("akhan", "akhan-new-password") }); err != nil {
+		t.Fatal(err)
+	}
+	srv.users.Reload()
+	srv.push.sweep(context.Background())
+	if len(srv.push.reg.Of("user:akhan")) != 0 || len(srv.push.reg.Of("user:jsmith")) != 1 || srv.PushHeld() != 0 {
+		t.Fatalf("one person's change: akhan %d jsmith %d held %d", len(srv.push.reg.Of("user:akhan")), len(srv.push.reg.Of("user:jsmith")), srv.PushHeld())
+	}
+	b, _ := subJSON(9)
+	rig.subscribe(t, "jsmith", b)
+	os.WriteFile(rig.path, good, 0o600) // back to the deployed file: akhan's row was ended above, re-make it
+	srv.users.Reload()
+	c := signIn(t, srv, "akhan")
+	b2, _ := subJSON(10)
+	call(t, srv, "POST", "/api/push/subscribe", b2, withCookie(c.Value), ownOrigin, asJSON)
+	if len(srv.push.reg.Rows()) != 3 {
+		t.Fatalf("setup: %d rows", len(srv.push.reg.Rows()))
+	}
+
+	// Everyone fails at once: held, not deleted, not sent, condition up.
+	setBoth()
+	srv.push.sweep(context.Background())
+	if n := len(srv.push.reg.Rows()); n != 3 || srv.PushHeld() != 3 {
+		t.Fatalf("a mass revocation: %d rows kept, %d held; want 3 and 3", n, srv.PushHeld())
+	}
+	if !strings.Contains(storeText(store), `"sealed"`) {
+		t.Error("held rows are gone from the store")
+	}
+	var held *audit.Entry
+	for _, e := range srv.audit.ring.Recent() {
+		if e.Action == "push.hold" {
+			e := e
+			held = &e
+		}
+	}
+	if held == nil || !strings.Contains(fmt.Sprint(held.Detail["reason"]), "users.json") {
+		t.Errorf("the hold is not journalled naming users.json: %+v", held)
+	}
+	if h := srv.pushHealth(); h.Held != 3 || h.Subscriptions != 3 {
+		t.Errorf("health %+v", h)
+	}
+
+	// The file is put right: they stand again, and are released.
+	os.WriteFile(rig.path, good, 0o600)
+	srv.users.Reload()
+	srv.push.sweep(context.Background())
+	if srv.PushHeld() != 0 || len(srv.push.reg.Rows()) != 3 {
+		t.Fatalf("after the fix: held %d rows %d", srv.PushHeld(), len(srv.push.reg.Rows()))
+	}
+
+	// Wrong for good: the first sweep holds, a later one past the hold ends them.
+	setBoth()
+	srv.push.sweep(context.Background())
+	now = now.Add(pushHoldFor - time.Minute)
+	srv.push.sweep(context.Background())
+	if len(srv.push.reg.Rows()) != 3 {
+		t.Fatal("ended inside the hold")
+	}
+	now = now.Add(2 * time.Minute)
+	srv.push.sweep(context.Background())
+	if len(srv.push.reg.Rows()) != 0 || srv.PushHeld() != 0 {
+		t.Errorf("still failing after the hold: %d rows, %d held", len(srv.push.reg.Rows()), srv.PushHeld())
 	}
 }

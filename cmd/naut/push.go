@@ -135,7 +135,7 @@ func pushOutcome(res server.PushResult, err error) error {
 		return escalate.Failed(escalate.FailUnknown)
 	case res.Sent > 0:
 		return nil
-	case res.NoSubscription, res.Pruned > 0 && res.Failed == 0 && res.Sealed == 0 && res.Skipped == 0:
+	case res.NoSubscription, (res.Pruned > 0 || res.Held > 0) && res.Failed == 0 && res.Sealed == 0 && res.Skipped == 0:
 		return escalate.Failed(escalate.FailNoContact)
 	case res.Failed > 0:
 		return escalate.Failed(res.Class)
