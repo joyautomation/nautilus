@@ -71,6 +71,7 @@ type SessionLog struct {
 	tried   map[string]bool               // opens whose first attempt failed
 	file    string
 	running bool
+	poke    chan struct{} // wakes the worker: something new is owed
 	wake    chan struct{} // closed and replaced whenever something commits
 	done    chan struct{}
 }
@@ -78,7 +79,7 @@ type SessionLog struct {
 // NewSessionLog is a pair's session log; Attach gives it the log node.
 func NewSessionLog() *SessionLog {
 	return &SessionLog{ends: map[string]oplog.SessionEntry{}, opens: map[string]session{}, tried: map[string]bool{},
-		wake: make(chan struct{}), done: make(chan struct{})}
+		poke: make(chan struct{}, 1), wake: make(chan struct{}), done: make(chan struct{})}
 }
 
 // Attach sets the log that proposals go to and whose sync state gates
@@ -110,7 +111,17 @@ func (l *SessionLog) SetFile(path string) {
 			}
 		}
 	}
+	ss := l.ss.Load()
+	owed := make([]oplog.SessionEntry, 0, len(l.ends))
+	for _, e := range l.ends {
+		owed = append(owed, e)
+	}
 	l.mu.Unlock()
+	if ss != nil {
+		for _, e := range owed {
+			ss.tomb(e.Hash, time.UnixMilli(e.Expires))
+		}
+	}
 	l.kick()
 }
 
@@ -136,7 +147,17 @@ func (l *SessionLog) bind(ss *sessions) {
 	replay := l.replay
 	l.replay = nil
 	l.ss.Store(ss)
+	owed := make([]oplog.SessionEntry, 0, len(l.ends))
+	for _, e := range l.ends {
+		owed = append(owed, e)
+	}
 	l.mu.Unlock()
+	// An end this controller owes the log (it was signed out before a
+	// restart, and the end never committed) is a tombstone first: the log's
+	// own copy of the open must not bring the session back meanwhile.
+	for _, e := range owed {
+		ss.tomb(e.Hash, time.UnixMilli(e.Expires))
+	}
 	for _, e := range replay {
 		apply(ss, e)
 	}
@@ -215,7 +236,18 @@ func (l *SessionLog) persistLocked() {
 	}
 	b, _ := json.Marshal(list)
 	tmp := l.file + ".tmp"
-	if os.WriteFile(tmp, b, 0o600) == nil {
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return
+	}
+	_, werr := f.Write(b)
+	if serr := f.Sync(); werr == nil {
+		werr = serr
+	}
+	if cerr := f.Close(); werr == nil {
+		werr = cerr
+	}
+	if werr == nil {
 		_ = os.Rename(tmp, l.file)
 	}
 }
@@ -224,7 +256,14 @@ func (l *SessionLog) persistLocked() {
 func (l *SessionLog) kick() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.running || (len(l.ends) == 0 && len(l.opens) == 0) {
+	if l.running {
+		select { // the worker is between sweeps or in one: have it look again at once
+		case l.poke <- struct{}{}:
+		default:
+		}
+		return
+	}
+	if len(l.ends) == 0 && len(l.opens) == 0 {
 		return
 	}
 	select {
@@ -250,6 +289,7 @@ func (l *SessionLog) work() {
 		l.mu.Unlock()
 		select {
 		case <-time.After(sessionRetryEvery):
+		case <-l.poke:
 		case <-l.done:
 			l.mu.Lock()
 			l.running = false
@@ -324,6 +364,7 @@ func (l *SessionLog) endedSessions(ended []session, wait bool) {
 	l.committed(func() {
 		for _, se := range ended {
 			delete(l.opens, se.hash) // an open not yet sent is never sent
+			delete(l.tried, se.hash)
 			l.ends[se.hash] = entryOf(se, oplog.SessionEnd)
 		}
 		l.persistLocked()

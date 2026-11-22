@@ -2,8 +2,10 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http/httptest"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -374,5 +376,48 @@ func TestReplacingACookieDoesNotWaitForTheLog(t *testing.T) {
 	a.end(id) // the sign-in path
 	if d := time.Since(start); d > sessionEndWait/2 {
 		t.Errorf("replacing a cookie waited %v for the log", d)
+	}
+}
+
+// A sign-out whose end never committed before a restart: the log's own copy
+// of the open is replayed, and the cookie must stay dead until the end is sent.
+func TestOwedEndTombstonesTheReplayedOpen(t *testing.T) {
+	file := t.TempDir() + "/ends.json"
+	exp := time.Now().Add(time.Hour)
+	end := oplog.SessionEntry{Op: oplog.SessionEnd, Hash: "h1", User: "alice", Expires: exp.UnixMilli()}
+	b, _ := json.Marshal([]oplog.SessionEntry{end})
+	if err := os.WriteFile(file, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	l := NewSessionLog() // the new process: the log replays before the store exists
+	l.SetFile(file)
+	l.Apply(oplog.SessionEntryOf("system", oplog.SessionEntry{Op: oplog.SessionOpen, Hash: "h1", User: "alice", Expires: exp.UnixMilli()}))
+	ss := newSessions(time.Hour)
+	l.bind(ss)
+	if ss.has("h1") {
+		t.Error("a session signed out before the restart is honoured again from the replayed open")
+	}
+	l.Close()
+}
+
+// An end queued while the worker is between sweeps goes out at once, not
+// after the retry interval.
+func TestAnEndQueuedDuringASweepIsNotDelayed(t *testing.T) {
+	a, b, _, _, _ := pairOfStores(t)
+	old := sessionRetryEvery
+	_ = old
+	id, _ := a.open("alice", "c")
+	waitFor(t, "the open to reach b", func() bool { _, ok := b.lookup(id); return ok })
+	// sign in again at once (end of the old cookie, then a new open): both must
+	// reach b without waiting for a retry tick
+	start := time.Now()
+	a.end(id)
+	id2, _ := a.open("alice", "c")
+	waitFor(t, "the new session to reach b", func() bool { _, ok := b.lookup(id2); return ok })
+	if _, ok := b.lookup(id); ok {
+		t.Error("the replaced cookie still works on b")
+	}
+	if d := time.Since(start); d > sessionRetryEvery*3 {
+		t.Errorf("took %v: the worker was not poked", d)
 	}
 }

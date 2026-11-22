@@ -191,6 +191,17 @@ func (ss *sessions) tombLocked(se *session) {
 	}
 }
 
+// tomb remembers an end the log owes: the session is not honoured, and an
+// open of it is refused, until it would have expired.
+func (ss *sessions) tomb(hash string, until time.Time) {
+	ss.mu.Lock()
+	defer ss.mu.Unlock()
+	if ss.now().Before(until) {
+		ss.ended[hash] = until
+		delete(ss.byHash, hash)
+	}
+}
+
 // pruneLocked drops what has expired: ended hashes and sessions. ss.mu held.
 func (ss *sessions) pruneLocked() {
 	now := ss.now()
