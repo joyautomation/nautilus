@@ -205,6 +205,11 @@ via `alarms.journal(...)` and hands back fresh `events`; its CSV export is a cli
 box is ticked or Paged is the event filter; fetch them with
 `alarms.journal(from, to, { kinds: journalKinds(true) })` (the controller leaves them out of an unnamed query).
 
+Equipment out of service (#715): `<OutOfServicePanel alarms windows={alarms.outOfService} ontake onreturn/>` lists the
+windows (soonest to end first) and takes equipment out of service (a reason, a week at most; the controller
+asks for the password) or returns it. Suppressed rows in `<AlarmTable/>` show `<OutOfServiceBadge/>`. The
+client calls are `alarms.takeOutOfService(equipment, seconds, reason, by)` and `alarms.returnToService(equipment, by)`.
+
 ## Porting a legacy HMI
 
 The components above assume you are drawing a new screen. Porting an existing Ignition,

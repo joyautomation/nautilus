@@ -69,6 +69,16 @@ func (s *Server) handleAlarms(w http.ResponseWriter, r *http.Request) {
 	if list == nil {
 		list = []alarm.Record{}
 	}
+	// ?suppressed=1 adds the alarms that are suppressed, each with its kind,
+	// reason, who and until, so an HMI can show what is hidden and why
+	// (out of service, #715). Without it the list is as it always was.
+	if r.URL.Query().Get("suppressed") == "1" {
+		for _, rec := range s.alarms.Records() {
+			if rec.State == alarm.Suppressed {
+				list = append(list, rec)
+			}
+		}
+	}
 	writeJSON(w, http.StatusOK, alarmsResponse{
 		TS:      time.Now().UnixMilli(),
 		Summary: s.alarms.Summary(),
@@ -251,6 +261,12 @@ type ackRequest struct {
 	Occurrences map[string]string `json:"occurrences,omitempty"`
 }
 
+// everything reports an acknowledge-all: {"all": true}, or ids ["*"] (the
+// spelling Engine.Ack and the HMI's Ack All use).
+func (r ackRequest) everything() bool {
+	return r.All || (len(r.IDs) == 1 && r.IDs[0] == "*")
+}
+
 // ackAnswer is the answer to POST /api/alarms/ack: how many changed, and
 // which (the journal records them for an acknowledge-all).
 type ackAnswer struct {
@@ -272,7 +288,9 @@ func (s *Server) handleAlarmAck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ids := req.IDs
-	if req.All {
+	// The HMI's Ack All sends ids ["*"]: the same request as {"all": true},
+	// needing ack on the whole controller, not on an alarm named "*".
+	if req.everything() {
 		ids = nil // nil means everything, per Engine.Ack
 		if code, msg := s.authorize(r, PermAck, auth.All); code != 0 {
 			http.Error(w, msg, code)

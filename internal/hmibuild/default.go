@@ -395,7 +395,7 @@ const defaultLog = `<script>
 // defaultAlarms is the alarms page the bar's alarm banner opens: the
 // active ones, to acknowledge and shelve.
 const defaultAlarms = `<script>
-	import { AlarmTable } from '@joyautomation/nautilus-hmi';
+	import { AlarmTable, OutOfServicePanel } from '@joyautomation/nautilus-hmi';
 	import { alarms } from 'nx:default/client';
 	let now = $state(Date.now());
 	$effect(() => {
@@ -416,6 +416,13 @@ const defaultAlarms = `<script>
 			onack={(ids, by) => alarms.ack(ids, by)}
 			onshelve={(id, until, by) => alarms.shelve(id, Math.max(1, Math.round((until - Date.now()) / 1000)), by)}
 			onunshelve={(id, by) => alarms.unshelve(id, by)}
+		/>
+		<OutOfServicePanel
+			alarms={alarms.instances}
+			windows={alarms.outOfService}
+			{now}
+			ontake={(equipment, seconds, reason, by) => alarms.takeOutOfService(equipment, seconds, reason, by)}
+			onreturn={(equipment, by) => alarms.returnToService(equipment, by)}
 		/>
 	{/if}
 </div>

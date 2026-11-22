@@ -9,6 +9,7 @@
 // 404s → `supported` flips to `false` rather than throwing).
 import { kitFetch } from './kitfetch.js';
 import { refusalMessage } from './auth.js';
+import { listOutOfService, returnToService, takeOutOfService, type OutOfService } from './outofservice.js';
 import type { FrameSource } from './realtime.svelte.js';
 
 /** ISA-18.2 priority, JSON lowercase. Ordered low → high for sorting. */
@@ -140,6 +141,17 @@ export interface AlarmInstance {
 	shelfBy?: string;
 	/** Activations since restart — flood/chatter indicator. */
 	count?: number;
+	/** The piece of equipment it belongs to: out of service takes all of its alarms at once (#715). */
+	equipment?: string;
+	/** While suppressed: `out-of-service`, `designed`, `substituted` or `unreadable`. */
+	suppression?: string;
+	/** Why it is suppressed, in the controller's words (an out-of-service reason too). */
+	reason?: string;
+	/** Who took it out of service, and the epoch ms that ends (out of service only). */
+	suppressedBy?: string;
+	suppressUntilMs?: number;
+	/** Set when its suppress-when could not be read, so it is shown. */
+	warning?: string;
 }
 
 /** The newest unacknowledged alarm, carried on the summary for the banner
@@ -280,6 +292,8 @@ export class AlarmClient {
 	 * engine. Starts `true` (optimistic) until the first response is in, so a
 	 * banner can simply render nothing while `supported` is still unknown. */
 	supported = $state(true);
+	/** Equipment out of service, the soonest to end first (`GET /api/alarms/out-of-service`). */
+	outOfService = $state<OutOfService[]>([]);
 	/** True while a fetch of the full list is in flight. */
 	loading = $state(false);
 	/** Last fetch/ack/shelve error message, if any. Cleared on the next
@@ -301,7 +315,12 @@ export class AlarmClient {
 	}
 
 	get active(): AlarmInstance[] {
-		return this.instances.filter((a) => a.state !== 'shelved');
+		return this.instances.filter((a) => a.state !== 'shelved' && a.state !== 'suppressed');
+	}
+
+	/** Alarms hidden by suppression (out of service, designed, substituted), with why. */
+	get suppressed(): AlarmInstance[] {
+		return this.instances.filter((a) => a.state === 'suppressed');
 	}
 
 	get shelved(): AlarmInstance[] {
@@ -320,7 +339,7 @@ export class AlarmClient {
 	async refresh(): Promise<void> {
 		this.loading = true;
 		try {
-			const res = await kitFetch(this.#url, { headers: authHeaders(this.#token, false) });
+			const res = await kitFetch(`${this.#url}?suppressed=1`, { headers: authHeaders(this.#token, false) });
 			if (res.status === 404) {
 				this.supported = false;
 				this.error = null;
@@ -336,11 +355,35 @@ export class AlarmClient {
 			this.supported = true;
 			this.error = null;
 			this.#lastFetchedRev = body.summary?.rev ?? this.#lastFetchedRev;
+			await this.refreshOutOfService();
 		} catch {
 			this.error = 'fetch failed — controller unreachable';
 		} finally {
 			this.loading = false;
 		}
+	}
+
+	/** Read the out-of-service windows. A failed read keeps the last list. */
+	async refreshOutOfService(): Promise<void> {
+		const list = await listOutOfService(this.#url, authHeaders(this.#token, false));
+		if (list) this.outOfService = list;
+	}
+
+	/** `POST /api/alarms/out-of-service`: every alarm of `equipment` hidden for `seconds` (a week at most),
+	 * with a reason. Needs a fresh password; the kit's fetch asks for it. True when the controller took it. */
+	async takeOutOfService(equipment: string, seconds: number, reason: string, by: string): Promise<boolean> {
+		const r = await takeOutOfService(this.#url, { equipment, seconds, reason, by }, authHeaders(this.#token, true));
+		this.error = r.ok ? null : r.message;
+		if (r.ok) await this.refresh();
+		return r.ok;
+	}
+
+	/** `POST /api/alarms/in-service`. */
+	async returnToService(equipment: string, by: string): Promise<boolean> {
+		const r = await returnToService(this.#url, { equipment, by }, authHeaders(this.#token, true));
+		this.error = r.ok ? null : r.message;
+		if (r.ok) await this.refresh();
+		return r.ok;
 	}
 
 	/** `start()` mirrors `RealtimeClient` — call once on mount to seed the
