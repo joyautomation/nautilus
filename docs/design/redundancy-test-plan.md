@@ -855,6 +855,22 @@ addressed **by DNS name**: names that are not in any `NAUTILUS_ALLOWED_HOSTS`.
 
 Each case runs during F1, F3, F4, F12 and F27 in T3. F1 and F12 also run in T4.
 
+**Status (2026-11-22).** The T3 container harness does not exist yet, so these cases are
+covered below T3 and the rest are open:
+
+- Case 1 (browser): the kit's failover, peer learning and loop guard are unit-tested in
+  `hmi/tests/auth.test.ts`; `TestClientsOfARealPairFollowATakeover` runs a real pair and
+  checks that both controllers list both addresses and name the same leader before and
+  after a takeover, and records `t_api`. A headless browser followed a killed leader to the
+  other controller in a pair on loopback (by hand, not a regression test).
+- Case 3 (OPC UA): the ServiceLevel levels and the nodes are tested in `cmd/naut` and
+  `opcua/server`; a Go OPC UA client moving between two live controllers is open.
+- Case 4 (floating IP): the holder's behaviour is tested against a fake kernel and, under
+  `unshare -Urn`, the real netlink and ARP code; a real pair's gate drives it in `cmd/naut`.
+  The `arping -D` two-MAC observer and the kill/hang window measurement are open (they need
+  T3).
+- Cases 2, 5 and 6, `t_hmi` and `t_ua`: open.
+
 **HMI**
 
 1. **HMI in a browser.** The kit, configured with both addresses, follows `/api/cluster` to the
