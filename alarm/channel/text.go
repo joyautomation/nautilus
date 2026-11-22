@@ -83,9 +83,21 @@ func body(m escalate.Message) string {
 		line("Note: %s", r)
 	}
 	line("")
-	line("Acknowledge it in the HMI.")
+	if m.AckURL != "" {
+		line("Acknowledge it: %s", m.AckURL)
+		line("(The link opens a page that asks you to confirm. It works once, for this occurrence, as you.)")
+	} else {
+		line("Acknowledge it in the HMI.")
+	}
 	return b.String()
 }
+
+// smsMax is the most an SMS page says; the ack link, when there is one,
+// is kept whole and the words before it are cut to fit.
+const smsMax = 300
+
+// smsProseMin is the least prose an SMS keeps beside a long link.
+const smsProseMin = 60
 
 // smsText is one line, at most 300 characters.
 func smsText(m escalate.Message) string {
@@ -97,8 +109,12 @@ func smsText(m escalate.Message) string {
 	if r := clean(m.Reason); r != "" {
 		s += " " + r + "."
 	}
-	s += " Acknowledge it in the HMI."
-	return truncate(s, 300)
+	if m.AckURL == "" {
+		return truncate(s+" Acknowledge it in the HMI.", smsMax)
+	}
+	// The link is never cut (a cut link acknowledges nothing): the prose
+	// gives way to it.
+	return truncate(s, max(smsMax-1-len([]rune(m.AckURL)), smsProseMin)) + " " + m.AckURL
 }
 
 // voiceText is what the call says.

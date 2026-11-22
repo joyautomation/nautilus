@@ -224,6 +224,7 @@ check comes before the token check. See [Online edits](/guides/online-edits/).
 | `POST` | [`/api/alarms/ack`](#alarms) | Acknowledge |
 | `POST` | [`/api/alarms/shelve`](#alarms) | Shelve until a time |
 | `POST` | [`/api/alarms/unshelve`](#alarms) | Unshelve |
+| `GET`, `POST` | [`/alarm-ack/{token}`](#alarms) | An ack link from a page: confirm, then acknowledge |
 | `GET` | [`/api/program`](#programs) | The running program source and status |
 | `PUT` | [`/api/program`](#programs) | Warm-swap a new program source |
 | `POST` | [`/api/program/rollback`](#programs) | Back to the previous source |
@@ -949,6 +950,27 @@ another occurrence now is refused and nothing is acknowledged.
 | `400` | Not JSON, or neither `ids` nor `"all": true` | `ack needs "ids" or "all": true — an empty ids list would silently ack nothing` |
 | `404` | An id is not an alarm | `no alarm "NoSuch"` |
 | `409` | An id in `occurrences` is on another occurrence now | `alarm "HighLevel": a new occurrence since; open the HMI to see it` |
+
+### `GET` and `POST /alarm-ack/{token}`
+
+The link an email or SMS page carries (`alarms.oncall.ack-url`, see
+[alarms](/guides/alarms/#acknowledging-from-the-page)). It is a page for a
+person, not an API: GET answers HTML showing the alarm and an
+Acknowledge button and changes nothing; POST (the button) acknowledges
+that one occurrence as the person the link was sent to, and answers
+HTML. The token is the credential, so neither needs `NAUTILUS_TOKEN` or
+a sign-in (unless `ack-from-notification: sign-in`). The audit entry is
+`alarm.ack` with `detail.via: "link"`, the occurrence, the level, the
+channel and the link's ID; never the token.
+
+| Status | When |
+| --- | --- |
+| `200` | Acknowledged (POST), or the page (GET) |
+| `401` | `ack-from-notification: sign-in` and the browser is not signed in as the person |
+| `403` | The person is not an enabled user here, or does not hold `ack` for the alarm |
+| `404` | Not a link this controller signed, or it sends no links |
+| `409` | Already used, a new occurrence since, or the alarm waits on nobody |
+| `410` | Expired |
 
 ### `POST /api/alarms/shelve` and `/unshelve`
 

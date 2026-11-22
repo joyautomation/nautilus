@@ -796,6 +796,8 @@ func checkManifest(paths []string, manifestName string) (errs, warns int) {
 		if proj.Alarms.Channels != nil && proj.Alarms.Channels.Push != nil && (proj.Auth == nil || !(proj.Auth.HasUsers() || proj.Auth.OIDC())) {
 			cwarns = append(cwarns, "alarms.channels.push: nobody can sign in (no auth: users or auth.oidc), and a push subscription belongs to a signed-in person, so every page would fail no-contact: add an auth: block with users (naut users add)")
 		}
+		aerr2, awarn2 := ackLinkChecks(proj)
+		cerrs, cwarns = append(cerrs, aerr2...), append(cwarns, awarn2...)
 		for _, m := range cwarns {
 			warns++
 			fmt.Printf("%s: warning: %s\n", loc.file, m)

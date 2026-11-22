@@ -30,7 +30,7 @@ type rule struct {
 func rules(u universe) []rule {
 	return []rule{
 		{
-			from: []string{"io", "lang/ir", "hist", "oplog", "audit", "internal/securefile"},
+			from: []string{"io", "lang/ir", "hist", "oplog", "audit", "internal/securefile", "internal/pairkey", "alarm/acklink"},
 			to:   u.allBut(),
 			why:  "substrates and seams import no other nautilus package",
 		},
@@ -268,7 +268,7 @@ func TestContextMap(t *testing.T) {
 // stdlibOnly are packages that import nothing outside the standard library,
 // not even a third-party module: the audit journal's integrity rests on it
 // (docs/design/identity-audit.md §4).
-var stdlibOnly = []string{"audit", "internal/oidcseam"}
+var stdlibOnly = []string{"audit", "internal/oidcseam", "internal/pairkey", "alarm/acklink"}
 
 // moduleAllowed are the packages that may import, beyond the standard
 // library, only the named module path prefixes: auth/users takes argon2id

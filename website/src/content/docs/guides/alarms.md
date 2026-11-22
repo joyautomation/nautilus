@@ -495,6 +495,71 @@ browser playground has no state directory, so a project there with
 - **Each channel kind has its own sender,** so a mail server that hangs
   delays only email, never an SMS.
 
+### Acknowledging from the page
+
+Give the controller the address of the HMI as a person paged reaches it,
+and every email and SMS page carries a link that acknowledges the alarm:
+
+```yaml
+alarms:
+  oncall:
+    ack-url: https://hmi.plant.example:8443
+    # ack-from-notification: sign-in    # the default is link
+```
+
+- **Opening the link changes nothing.** It shows a page with the alarm
+  and an **Acknowledge** button; the button acknowledges. A mail scanner
+  that opens every link in a message acknowledges nothing.
+- **The link acts as the person it was sent to,** for that one
+  occurrence of that one alarm, once, for at most 24 hours. The alarm
+  journal records them as the one who acknowledged it, and the audit
+  trail records `alarm.ack` under them with `via: link`, the occurrence,
+  the level and the channel. A link is a credential: anyone who holds the
+  message can use it, as with any paging service.
+- **The person must still be allowed to.** Under an `auth:` block, the
+  link works only while the person is an enabled user who holds `ack` for
+  that alarm (an OIDC person: has signed in on the controller, and holds
+  it by name, since their groups are known only from a sign-in; a browser
+  signed in as them acts with its session). Otherwise the page says why
+  and acknowledges nothing. A browser signed in as them whose request
+  did not come from the controller's own page (a TLS proxy not in
+  `server.trusted-proxies`) has its sign-in ignored: the link alone
+  acts, and the audit entry says so.
+- **`ack-from-notification: sign-in`** makes a site require a sign-in:
+  the page asks the person to sign in as themselves, and only then
+  acknowledges. Behind a TLS proxy, list it in
+  `server.trusted-proxies`, or the press is refused (the refusal says
+  so). It needs someone able to sign in (`auth:` users or OIDC).
+- **The link stops working** once it has been used, once the alarm
+  returned to normal and activated again (a new occurrence), or after 24
+  hours. The page then says to open the HMI.
+- **https only.** The link must not cross the network in plaintext:
+  `ack-url` is `https://`, unless `ack-url-insecure: true` accepts that
+  (warned by `naut check`, journalled as `alarm.ack-url-insecure` at
+  every start). With no `ack-url`, pages say to acknowledge in the HMI.
+  A host name in `ack-url` must be one the controller answers by
+  (`server.allowed-hosts`, or `NAUTILUS_ALLOWED_HOSTS` on the box; an IP
+  address always is): `naut check` warns when the manifest does not list
+  it.
+- **A voice call carries no link,** and neither does a webhook: it goes
+  to a system, which must not act as the person.
+- **On a redundant pair** both controllers sign links with a key they
+  derive from `NAUTILUS_PEER_TOKEN`, so a link sent before a takeover
+  works after it, and a link used on one is refused on the other: the
+  acknowledgement's entry in the operator-intent log names the link. A
+  controller that is not half of a pair keeps its key in the state
+  directory (`alarm-link.key`, 0600, made at the first start that needs
+  it; deleting it ends every link already sent). `ack-url` may name
+  either controller of a pair, or an address in front of both: a standby
+  passes the link to the leader. Make `NAUTILUS_PEER_TOKEN` long and
+  random (`naut redundancy new-pair` does): each link is signed under a
+  key derived from it, and `naut run` warns about one shorter than 32
+  characters.
+- **The token is in the link's path,** so a reverse proxy in front of the
+  controller writes it to its access log, where it stays usable until it
+  is used or its 24 hours run out. Keep such logs as private as the
+  pages.
+
 Check a policy offline:
 
 ```sh

@@ -290,7 +290,7 @@ func (s *Server) handleAlarmAck(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if s.alarmLog != nil {
-		s.alarmAckThroughLog(w, r, ids, req.Occurrences, s.recordBy(r, req.By))
+		s.alarmAckThroughLog(w, r, ids, req.Occurrences, s.recordBy(r, req.By), "")
 		return
 	}
 	acked, err := s.alarms.AckIDsAt(ids, req.Occurrences, s.recordBy(r, req.By))

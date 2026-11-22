@@ -1208,6 +1208,10 @@ type Project struct {
 	// `naut run` sets it before NewAlarms: it forwards to the server's
 	// sender, which does not exist yet when the alarms are built.
 	PushSend func(ctx context.Context, m escalate.Message) error
+	// AckLink mints the ack link a page carries (#715,
+	// escalate.Options.AckLink): naut run hands in the server's, since the
+	// server holds the key and answers the link. Nil: pages carry none.
+	AckLink func(m escalate.Message, via string) string
 }
 
 // RetainNames resolves the retain section's defaults against the project

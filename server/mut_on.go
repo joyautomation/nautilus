@@ -43,6 +43,15 @@ import "os"
 //     scan;
 //   - superseded_alarms_kept: a superseded log's acks and shelves are
 //     carried by a takeover, and kept by a leader that learns it.
+//   - link_replay_applied: a committed ack naming a spent ack link is applied again (#715);
+//   - link_spent_unchecked: an ack link already used is not refused before it is proposed or applied (#715);
+//   - link_ignores_standing: an ack link acts for a user who is not enabled or not in the users file (#715);
+//   - link_sign_in_ignored: ack-from-notification: sign-in lets the link alone acknowledge (#715);
+//   - link_needs_write_rule: an ack link without an auth: block needs NAUTILUS_TOKEN too (#715);
+//   - link_not_forwarded: a standby answers an ack link itself instead of forwarding it to the leader (#715);
+//   - link_reason_html: a refused ack link is journalled with its page's HTML as the reason (#715);
+//   - link_acks_on_standby: a replica that does not lead acknowledges an ack link on its own engine (#715);
+//   - link_session_cookie_refused: a signed-in browser from another origin is refused on a link in link mode instead of the link alone acting (#715);
 var mutOn = os.Getenv("QUORUM_MUT")
 
 func mutServer(name string) bool { return name == mutOn }
