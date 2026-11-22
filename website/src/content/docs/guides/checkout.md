@@ -181,7 +181,8 @@ which rule, the controller's evidence about its devices and the key's
 fingerprint. A run that is not sealed prints as **DRAFT, NOT SIGNED OFF**. A
 sealed run's report is built from its sealed record, and is refused (500) if
 that record no longer verifies, so a page that says SEALED is one whose
-signature checked. The report loads nothing from anywhere and is served with a
+signature checked against the key the record carries (the page says when that is
+not this controller's current key). The report loads nothing from anywhere and is served with a
 content-security policy that allows no script.
 
 ## Signing off

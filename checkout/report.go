@@ -18,6 +18,10 @@ type Report struct {
 	Export Export
 	// Seal is the payload of the run's sealed record, nil for a run not sealed.
 	Seal *SealPayload
+	// CurrentKey is the fingerprint of the controller's signing key now: a
+	// sealed record signed by another key (the key file was replaced, or the
+	// record was) is shown as such, not as this controller's.
+	CurrentKey string
 }
 
 // ReportFromSealed builds the report of a sealed record: the export the
@@ -72,6 +76,7 @@ th{background:#eee} .fail{color:#b91c1c;font-weight:700} .mono{font-family:ui-mo
 <h1>{{if .Export.Title}}{{.Export.Title}}{{else}}I/O checkout{{end}}</h1>
 <div>Run <span class="mono">{{.Export.Run.ID}}</span>, begun {{when .Export.Run.At}} by {{.Export.Run.By}}{{if .Export.Rehearsal}} (rehearsal){{end}}</div>
 {{if .Seal}}<div class="banner sealed">SEALED: signed off by {{.Seal.Signer}} on {{when .Seal.SealedAt}} ({{.Seal.Mode}})</div>
+{{if ne .Seal.KeyFingerprint .CurrentKey}}<div class="banner draft">This record is signed by key {{.Seal.KeyFingerprint}}, which is not this controller's current signing key{{if .CurrentKey}} ({{.CurrentKey}}){{end}}: it is the controller's only if you recorded that fingerprint from it.</div>{{end}}
 {{else}}<div class="banner draft">DRAFT, NOT SIGNED OFF: {{.Export.Status}}</div>{{end}}
 <div class="notice">{{.Notice}}</div>
 {{if .Seal}}

@@ -66,3 +66,26 @@ func TestReportOfASealedRunNamesWhoSignedAndWhatItWasConnectedTo(t *testing.T) {
 		}
 	}
 }
+
+// A sealed record signed by another key than the controller's current one is
+// shown as such: the page's SEALED is a signature check, not a statement that
+// the key is this controller's.
+func TestReportSaysWhenTheKeyIsNotTheControllersCurrentOne(t *testing.T) {
+	s, _, run := sealedStore(t)
+	defer s.Close()
+	if _, err := s.Seal(sealIn(run, "bob")); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(s.SealedPath(run))
+	rep, _ := ReportFromSealed(b)
+	rep.CurrentKey = s.KeyFingerprint()
+	page, _ := rep.HTML()
+	if strings.Contains(string(page), "not this controller") {
+		t.Errorf("a record signed by the current key carries a warning")
+	}
+	rep.CurrentKey = "00000000-00000000-00000000-00000000"
+	page, _ = rep.HTML()
+	if !strings.Contains(string(page), "not this controller&#39;s current signing key") && !strings.Contains(string(page), "not this controller's current signing key") {
+		t.Errorf("a record signed by another key carries no warning:\n%s", page)
+	}
+}

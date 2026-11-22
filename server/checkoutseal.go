@@ -3,6 +3,7 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 
@@ -96,13 +97,19 @@ func (a *checkoutAPI) handleCheckoutReport(w http.ResponseWriter, r *http.Reques
 	if run.State == checkout.StateSealed {
 		b, err := a.co.Store.ReadSealed(run.ID)
 		if err == nil {
-			_, err = checkout.Verify(b, nil) // a record that does not verify is not printed as signed
+			var vr checkout.VerifyReport
+			// a record that does not verify is not printed as signed, nor one for another run
+			if vr, err = checkout.Verify(b, nil); err == nil && vr.Run != run.ID {
+				err = errors.New("the record is for another run")
+			}
 		}
 		if err == nil {
 			rep, err = checkout.ReportFromSealed(b)
+			rep.CurrentKey = a.co.Store.KeyFingerprint()
 		}
 		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "the sealed record could not be read back or does not verify: " + err.Error()})
+			// a fixed message: the error may name a path in the state directory
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "the sealed record is missing or does not verify: run naut checkout verify on it"})
 			return
 		}
 	} else {

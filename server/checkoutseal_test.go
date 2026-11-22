@@ -223,11 +223,21 @@ func TestCheckoutReport(t *testing.T) {
 	if rec := call(t, srv, "GET", "/api/checkout/runs/none/report", "", sup); rec.Code != http.StatusNotFound {
 		t.Errorf("no such run: %d", rec.Code)
 	}
+	// a record signed by the controller's own key says so without a warning
+	if strings.Contains(rec.Body.String(), "not this controller's current signing key") {
+		t.Errorf("a record signed by the controller's current key carries a key warning")
+	}
+	// a missing record is a fixed 500 that names no path
+	os.Rename(st.SealedPath(id), st.SealedPath(id)+".moved")
+	if rec := call(t, srv, "GET", "/api/checkout/runs/"+id+"/report", "", sup); rec.Code != http.StatusInternalServerError || strings.Contains(rec.Body.String(), "/tmp") {
+		t.Errorf("a missing record: %d %s", rec.Code, rec.Body)
+	}
+	os.Rename(st.SealedPath(id)+".moved", st.SealedPath(id))
 	// a sealed record that no longer verifies is not printed as signed
 	p := st.SealedPath(id)
 	b, _ := os.ReadFile(p)
 	os.WriteFile(p, []byte(strings.Replace(string(b), `"signer": "jsmith"`, `"signer": "eve"`, 1)), 0o600)
-	if rec := call(t, srv, "GET", "/api/checkout/runs/"+id+"/report", "", sup); rec.Code != http.StatusInternalServerError || !strings.Contains(rec.Body.String(), "does not verify") {
+	if rec := call(t, srv, "GET", "/api/checkout/runs/"+id+"/report", "", sup); rec.Code != http.StatusInternalServerError || !strings.Contains(rec.Body.String(), "does not verify") || strings.Contains(rec.Body.String(), "/tmp") {
 		t.Errorf("an altered record: %d %.200s", rec.Code, rec.Body)
 	}
 }
