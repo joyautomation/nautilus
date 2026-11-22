@@ -461,6 +461,9 @@ func (m *pairMember) Close() {
 		m.logStop()
 		<-m.logDone
 		m.log.Close()
+		if m.sess != nil {
+			m.sess.Close()
+		}
 	}
 	m.q.Node().Close()
 }
@@ -514,6 +517,7 @@ func (m *pairMember) startLog(rt *runtime.Runtime, wait time.Duration, eng *alar
 	m.nl = nl
 	sess := server.NewSessionLog()
 	m.sess = sess
+	sess.SetFile(filepath.Join(filepath.Dir(m.o.StatePath), "session-ends.json"))
 	apply := func(e oplog.Entry) error {
 		if done, err := nl.Apply(e); done {
 			return err

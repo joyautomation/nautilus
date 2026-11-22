@@ -93,7 +93,7 @@ func TestSignOutIsFailClosedAcrossAPair(t *testing.T) {
 	a, b, _, _, _ := pairOfStores(t)
 	id, _ := a.open("alice", "c")
 	waitFor(t, "the open to reach b", func() bool { _, ok := b.lookup(id); return ok })
-	a.end(id) // returns after the end committed
+	a.signOut(id) // returns after the end committed
 	if _, ok := b.lookup(id); ok {
 		t.Error("the other controller still honours a session that was signed out")
 	}
@@ -250,4 +250,129 @@ func TestSessionsOverTheRealLog(t *testing.T) {
 	p.gates[2].down.Store(false)
 	p.nodes[1].Heartbeat(t.Context())
 	eventually(t, "bob's session to replicate", func() bool { _, ok := stores[0].lookup(bid); return ok })
+}
+
+// Reading a cookie while the log commits session entries must not deadlock:
+// the log applies under its own lock and then takes the store's, so the store
+// must never ask the log anything under its lock (Fable review of #1211).
+func TestLookupsDuringCommitsDoNotDeadlock(t *testing.T) {
+	a, b, _, _, _ := pairOfStores(t)
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					b.lookup("some-cookie")
+					b.byHashLive("some-hash")
+				}
+			}
+		}()
+	}
+	done := make(chan struct{})
+	go func() {
+		for i := 0; i < 200; i++ {
+			id, _ := a.open("alice", "c")
+			a.signOut(id)
+		}
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(20 * time.Second):
+		t.Fatal("deadlock: sign-ins and sign-outs stopped while cookies were being read")
+	}
+	close(stop)
+	wg.Wait()
+}
+
+// A session ended here while its open was still owed to the log does not come
+// back when the open commits later.
+func TestLocalEndLeavesATombstone(t *testing.T) {
+	a, b, _, _, bus := pairOfStores(t)
+	bus.mu.Lock()
+	bus.readOnly = true
+	bus.mu.Unlock()
+	id, se := a.open("alice", "c")
+	a.signOut(id) // log read-only: the end is owed too
+	// an open that was in flight reaches the log after all
+	a.adopt(oplog.SessionEntry{Op: oplog.SessionOpen, Hash: se.hash, User: "alice", Expires: se.expires.UnixMilli(), Created: se.created.UnixMilli()})
+	if a.has(se.hash) {
+		t.Error("a session signed out locally came back when its open arrived")
+	}
+	_ = b
+}
+
+// The log's replay at start reaches the store when it is bound later.
+func TestReplayBeforeTheStoreIsBound(t *testing.T) {
+	l := NewSessionLog()
+	exp := time.Now().Add(time.Hour).UnixMilli()
+	l.Apply(oplog.SessionEntryOf("system", oplog.SessionEntry{Op: oplog.SessionOpen, Hash: "h1", User: "alice", Expires: exp}))
+	l.Apply(oplog.SessionEntryOf("system", oplog.SessionEntry{Op: oplog.SessionOpen, Hash: "h2", User: "bob", Expires: exp}))
+	l.Apply(oplog.SessionEntryOf("system", oplog.SessionEntry{Op: oplog.SessionEnd, Hash: "h2", Expires: exp}))
+	ss := newSessions(time.Hour)
+	l.bind(ss)
+	if !ss.has("h1") {
+		t.Error("an open replayed before the store existed was dropped")
+	}
+	if ss.has("h2") {
+		t.Error("an ended session came back from the replay")
+	}
+}
+
+// An end that could not commit is kept in a file, and a restart sends it.
+func TestOwedEndsSurviveARestart(t *testing.T) {
+	file := t.TempDir() + "/ends.json"
+	bus := &fakeBus{synced: true, readOnly: true}
+	ss := newSessions(time.Hour)
+	l := NewSessionLog()
+	l.SetFile(file)
+	l.bind(ss)
+	l.Attach(busEnd{bus})
+	bus.members = append(bus.members, l)
+	id, _ := ss.open("alice", "c")
+	ss.end(id)
+	time.Sleep(60 * time.Millisecond)
+	l.Close() // the process ends with the end still owed
+	// a new process: the log is back, the file is read, the end goes out
+	bus.mu.Lock()
+	bus.readOnly = false
+	bus.mu.Unlock()
+	ss2 := newSessions(time.Hour)
+	l2 := NewSessionLog()
+	l2.SetFile(file)
+	l2.bind(ss2)
+	l2.Attach(busEnd{bus})
+	bus.members = append(bus.members, l2)
+	waitFor(t, "the owed end to be sent", func() bool {
+		bus.mu.Lock()
+		defer bus.mu.Unlock()
+		for _, e := range bus.log {
+			if b, ok := e.SessionBody(); ok && b.Op == oplog.SessionEnd {
+				return true
+			}
+		}
+		return false
+	})
+	l2.Close()
+}
+
+// A sign-in that replaces a cookie, or evicts the oldest session, never waits
+// for the log.
+func TestReplacingACookieDoesNotWaitForTheLog(t *testing.T) {
+	a, _, _, _, bus := pairOfStores(t)
+	id, _ := a.open("alice", "c")
+	bus.mu.Lock()
+	bus.readOnly = true
+	bus.mu.Unlock()
+	start := time.Now()
+	a.end(id) // the sign-in path
+	if d := time.Since(start); d > sessionEndWait/2 {
+		t.Errorf("replacing a cookie waited %v for the log", d)
+	}
 }

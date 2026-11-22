@@ -396,7 +396,7 @@ func (s *Server) handleSignOut(w http.ResponseWriter, r *http.Request) {
 	cookie := s.cookieName(r)
 	if s.sessions != nil {
 		for _, c := range r.CookiesNamed(cookie) {
-			se, ok := s.sessions.end(c.Value)
+			se, ok := s.sessions.signOut(c.Value)
 			if !ok {
 				continue
 			}
