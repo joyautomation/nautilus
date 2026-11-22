@@ -84,6 +84,14 @@ func TestBuildsTheDefaultAppFromMimics(t *testing.T) {
 	if !regexp.MustCompile(`label:\s*"Configuration",\s*needs:\s*"config"`).MatchString(js.String()) {
 		t.Errorf("the Configuration screen is not gated with needs: config")
 	}
+	// the layout calls createAuth(): the pair's failover (/api/cluster) and
+	// the sign-in state (/api/me) are in the bundle, so a built-in screen
+	// follows the leader and the Ack-all dialog knows who is signed in
+	for _, want := range []string{"/api/me", "/api/cluster"} {
+		if !strings.Contains(js.String(), want) {
+			t.Errorf("the built default app lacks %q: the layout does not call createAuth()", want)
+		}
+	}
 	for _, want := range []string{"Sign out", "/api/parameters", "/api/config", "needs the config permission"} {
 		if !strings.Contains(js.String(), want) {
 			t.Errorf("the built default app lacks %q", want)
